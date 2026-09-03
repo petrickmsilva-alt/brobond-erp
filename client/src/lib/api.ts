@@ -24,10 +24,23 @@ export async function apiFetch(path: string, opts: RequestInit = {}) {
     },
   });
 
+  // Se for 401, só redireciona se NÃO estiver já na página de login
+  // Isso evita loop e permite que a tela de login mostre "Credenciais inválidas"
   if (res.status === 401) {
-    clearToken();
-    window.location.href = '/login';
-    throw new Error('Sessão expirada');
+    const isLoginRequest = path.includes('/auth/login');
+    const isOnLoginPage = window.location.pathname === '/login';
+
+    // Limpa token apenas se não for tentativa de login
+    if (!isLoginRequest) {
+      clearToken();
+      if (!isOnLoginPage) {
+        window.location.href = '/login';
+      }
+    }
+
+    // Tenta extrair mensagem de erro do body
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data && data.error) || (isLoginRequest ? 'Credenciais inválidas' : 'Sessão expirada'));
   }
 
   const data = await res.json().catch(() => ({}));

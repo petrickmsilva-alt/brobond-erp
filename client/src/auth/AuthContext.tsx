@@ -24,15 +24,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     apiFetch('/auth/me')
       .then((d) => setUser(d.user))
-      .catch(() => clearToken())
+      .catch(() => {
+        clearToken();
+        setUser(null);
+      })
       .finally(() => setLoading(false));
   }, []);
 
   async function login(email: string, password: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPassword = password.trim();
+
+    if (!normalizedEmail || !normalizedPassword) {
+      throw new Error('E-mail e senha são obrigatórios');
+    }
+
     const d = await apiFetch('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email: normalizedEmail, password: normalizedPassword }),
     });
+
+    if (!d.token || !d.user) {
+      throw new Error('Resposta inválida do servidor');
+    }
+
     setToken(d.token);
     setUser(d.user);
   }
@@ -40,6 +55,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   function logout() {
     clearToken();
     setUser(null);
+    // Redireciona para login após logout
+    window.location.href = '/login';
   }
 
   return (

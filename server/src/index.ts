@@ -9,8 +9,27 @@ import { RESOURCES } from './resources';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-app.use(cors());
+// CORS mais permissivo e explícito para Authorization
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Log simples de requisições em dev
+if (process.env.NODE_ENV !== 'production') {
+  app.use((req, _res, next) => {
+    if (req.path.startsWith('/api')) {
+      console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+    }
+    next();
+  });
+}
 
 // Health check (usado pelo Render)
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -46,11 +65,24 @@ app.get('/api/:resource', requireAuth, async (req, res) => {
 });
 
 // Em produção, serve o front buildado (mesmo serviço na Render)
+// Importante: deve vir DEPOIS das rotas /api
 if (process.env.NODE_ENV === 'production') {
   const dist = path.resolve(__dirname, '../../client/dist');
   app.use(express.static(dist));
-  app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
+  // SPA fallback: apenas para rotas que não são /api
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+    res.sendFile(path.join(dist, 'index.html'));
+  });
 }
+
+// Middleware de erro global
+app.use((err: any, _req: any, res: any, _next: any) => {
+  console.error('Erro não tratado:', err);
+  res.status(500).json({ error: 'Erro interno do servidor' });
+});
 
 const port = Number(process.env.PORT) || 3001;
 app.listen(port, '0.0.0.0', () => {
@@ -60,4 +92,5 @@ app.listen(port, '0.0.0.0', () => {
       ? '🗄️  Conectado ao Postgres.'
       : '⚠️  Sem DATABASE_URL — usando dados mock.'
   );
+  console.log(`🔐 Login padrão: admin@brobond.com.br / brobond123`);
 });

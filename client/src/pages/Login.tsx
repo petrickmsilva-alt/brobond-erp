@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { Logo } from '../components/Logo';
@@ -6,12 +6,19 @@ import { Logo } from '../components/Logo';
 const DEMO = { email: 'admin@brobond.com.br', password: 'brobond123' };
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, user, loading } = useAuth();
   const nav = useNavigate();
   const [email, setEmail] = useState(DEMO.email);
   const [password, setPassword] = useState(DEMO.password);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Se já estiver logado, redireciona para dashboard
+  useEffect(() => {
+    if (!loading && user) {
+      nav('/', { replace: true });
+    }
+  }, [user, loading, nav]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -19,12 +26,22 @@ export default function Login() {
     setBusy(true);
     try {
       await login(email, password);
-      nav('/');
+      // Navega para dashboard após login bem-sucedido
+      nav('/', { replace: true });
     } catch (e: any) {
       setErr(e.message || 'Falha no login');
     } finally {
       setBusy(false);
     }
+  }
+
+  if (loading) {
+    return <div className="h-full flex items-center justify-center text-slate-400">Carregando...</div>;
+  }
+
+  // Evita flash da tela de login se já estiver autenticado
+  if (user) {
+    return null;
   }
 
   return (
@@ -54,6 +71,8 @@ export default function Login() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-400"
+              autoComplete="email"
+              required
             />
           </div>
 
@@ -64,10 +83,16 @@ export default function Login() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-400"
+              autoComplete="current-password"
+              required
             />
           </div>
 
-          {err && <div className="text-red-600 text-sm">{err}</div>}
+          {err && (
+            <div className="bg-red-50 border border-red-200 text-red-600 text-sm px-3 py-2 rounded-lg">
+              {err}
+            </div>
+          )}
 
           <button
             disabled={busy}

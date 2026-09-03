@@ -2,6 +2,15 @@
 -- BROBOND ERP — dados iniciais (opcional)
 -- ============================================================
 
+-- Usuário admin padrão (senha: brobond123 - hash bcrypt)
+INSERT INTO usuarios (nome, email, senha_hash, perfil, ativo) VALUES
+  ('Admin BROBOND', 'admin@brobond.com.br', '$2a$10$E/sP3YB5/1618GJK5IKqh.JnHx1rfmePpNUmhcBaj7Keb0uDwqiCO', 'admin', TRUE)
+ON CONFLICT (email) DO UPDATE SET
+  nome = EXCLUDED.nome,
+  senha_hash = EXCLUDED.senha_hash,
+  perfil = EXCLUDED.perfil,
+  ativo = TRUE;
+
 INSERT INTO tamanhos (codigo, descricao) VALUES
   ('PP', 'Extra pequeno'),
   ('P', 'Pequeno'),
