@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Identidade BROBOND — CORES PLACEHOLDER (laranja).
+     Troque pelos valores RGB da logo real e tudo (menu, botões, login)
+     muda automaticamente. Formato: "R G B" (space-separated). */
+  --brand-50: 255 247 237;
+  --brand-100: 255 237 213;
+  --brand-400: 251 146 60;
+  --brand-500: 249 115 22;
+  --brand-600: 234 88 12;
+  --brand-700: 194 65 12;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-100 text-slate-800 antialiased;
+}
