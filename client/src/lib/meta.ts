@@ -1,0 +1,81 @@
+// Tipos dos metadados enviados por GET /api/meta (espelham server/src/resources.ts)
+import { createContext, useContext } from 'react';
+
+export type FieldType =
+  | 'text'
+  | 'textarea'
+  | 'email'
+  | 'phone'
+  | 'document'
+  | 'integer'
+  | 'number'
+  | 'money'
+  | 'percent'
+  | 'boolean'
+  | 'date'
+  | 'datetime'
+  | 'select'
+  | 'ref'
+  | 'password';
+
+export type Tone = 'green' | 'red' | 'amber' | 'blue' | 'slate';
+export type FieldOption = { value: string; label: string; tone?: Tone };
+
+export type Field = {
+  name: string;
+  label: string;
+  type: FieldType;
+  required?: boolean;
+  requiredOnCreate?: boolean;
+  unique?: boolean;
+  options?: FieldOption[];
+  ref?: string;
+  min?: number;
+  max?: number;
+  maxLength?: number;
+  default?: unknown;
+  list?: boolean;
+  form?: boolean;
+  readonly?: boolean;
+  search?: boolean;
+  virtual?: boolean;
+  hint?: string;
+  placeholder?: string;
+  wide?: boolean;
+};
+
+export type ResourceOps = { create: boolean; update: boolean; delete: boolean };
+
+export type ResourceMeta = {
+  key: string;
+  label: string;
+  singular: string;
+  labelFields: string[];
+  fields: Field[];
+  orderBy?: { field: string; dir: 'asc' | 'desc' };
+  ops: ResourceOps;
+  adminOnly?: boolean;
+  notice?: string;
+};
+
+export type Meta = {
+  resources: Record<string, ResourceMeta>;
+  mode: 'postgres' | 'memory';
+};
+
+export const MetaContext = createContext<Meta | null>(null);
+
+export function useMeta(): Meta {
+  const m = useContext(MetaContext);
+  if (!m) throw new Error('useMeta deve ser usado dentro de MetaProvider');
+  return m;
+}
+
+export type ListResult<T = Record<string, any>> = {
+  rows: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type Option = { value: number; label: string };

@@ -1,96 +1,227 @@
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { query, isDbConnected } from './db';
-import { login, requireAuth, me } from './auth';
-import { RESOURCES } from './resources';
+import { hasDatabaseUrl, isDbConnected, migrate } from './db';
+import { ADMIN_EMAIL, changePassword, currentUser, ensureAdmin, login, me, requireAuth } from './auth';
+import { getResource, publicMeta } from './resources';
+import {
+  checkAccess,
+  createRecord,
+  deleteRecord,
+  getRecord,
+  getStore,
+  listRecords,
+  optionsFor,
+  toHttpError,
+  updateRecord,
+} from './services';
+import { parseId } from './validate';
+import { HttpError } from './errors';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-// CORS mais permissivo e explícito para Authorization
+app.disable('x-powered-by');
 app.use(
   cors({
     origin: true,
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Log simples de requisições em dev
 if (process.env.NODE_ENV !== 'production') {
   app.use((req, _res, next) => {
-    if (req.path.startsWith('/api')) {
-      console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-    }
+    if (req.path.startsWith('/api')) console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
     next();
   });
 }
 
-// Health check (usado pelo Render)
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
+/** Envolve handlers async e encaminha erros para o middleware global. */
+const wrap =
+  (fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown> | unknown) =>
+  (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
 
-// Autenticação
-app.post('/api/auth/login', login);
-app.get('/api/auth/me', requireAuth, me);
+/** Carrega o recurso da rota (404 se não existir). */
+function resourceParam(req: Request, _res: Response, next: NextFunction) {
+  const r = getResource(req.params.resource);
+  if (!r) return next(new HttpError(404, 'Recurso não encontrado'));
+  (req as any).resource = r;
+  next();
+}
 
-// Dashboard (KPIs) — com DB conectado, troque pelos cálculos reais
-app.get('/api/dashboard', requireAuth, async (_req, res) => {
+// ----------------------------------------------------------------------------
+// Público
+// ----------------------------------------------------------------------------
+app.get('/api/health', (_req, res) =>
+  res.json({ ok: true, db: isDbConnected() ? 'postgres' : 'memory', version: '0.2.0' })
+);
+app.post('/api/auth/login', wrap(login));
+
+// ----------------------------------------------------------------------------
+// Autenticado
+// ----------------------------------------------------------------------------
+app.use('/api', wrap(requireAuth));
+
+app.get('/api/auth/me', me);
+app.post('/api/auth/change-password', wrap(changePassword));
+
+// Metadados dos módulos (campos, tipos, opções) — o front monta formulários com isso
+app.get('/api/meta', (req, res) => {
   res.json({
-    valorEstoque: 'R$ 0,00',
-    itensAlerta: 0,
-    producao: 0,
-    vendas: 0,
+    resources: publicMeta(),
+    mode: getStore().kind,
+    user: currentUser(req),
   });
 });
 
-// Leitura genérica de recursos (cadastros e listas)
-app.get('/api/:resource', requireAuth, async (req, res) => {
-  const r = RESOURCES[req.params.resource];
-  if (!r) return res.status(404).json({ error: 'Recurso não encontrado' });
+app.get(
+  '/api/dashboard',
+  wrap(async (_req, res) => {
+    res.json(await getStore().dashboard());
+  })
+);
 
-  try {
-    const { rows } = await query(
-      `SELECT * FROM ${r.table} ORDER BY 1 LIMIT 100`
+// Opções para selects (id + rótulo)
+app.get(
+  '/api/:resource/options',
+  resourceParam,
+  wrap(async (req, res) => {
+    const r = (req as any).resource;
+    checkAccess(r, currentUser(req), 'read');
+    res.json(await optionsFor(r));
+  })
+);
+
+// Listagem com busca, paginação e ordenação
+app.get(
+  '/api/:resource',
+  resourceParam,
+  wrap(async (req, res) => {
+    const r = (req as any).resource;
+    checkAccess(r, currentUser(req), 'read');
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 25));
+    const dir = String(req.query.dir || '').toLowerCase() === 'desc' ? 'desc' : String(req.query.dir || '').toLowerCase() === 'asc' ? 'asc' : undefined;
+    res.json(
+      await listRecords(r, {
+        q: typeof req.query.q === 'string' ? req.query.q : undefined,
+        page,
+        pageSize,
+        sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
+        dir,
+      })
     );
-    res.json(rows);
-  } catch {
-    // Sem banco (ou tabela ainda não criada): devolve mock
-    res.json(r.mock ?? []);
-  }
-});
+  })
+);
 
-// Em produção, serve o front buildado (mesmo serviço na Render)
-// Importante: deve vir DEPOIS das rotas /api
+app.get(
+  '/api/:resource/:id',
+  resourceParam,
+  wrap(async (req, res) => {
+    const r = (req as any).resource;
+    checkAccess(r, currentUser(req), 'read');
+    res.json(await getRecord(r, parseId(req.params.id)));
+  })
+);
+
+// Incluir
+app.post(
+  '/api/:resource',
+  resourceParam,
+  wrap(async (req, res) => {
+    const r = (req as any).resource;
+    const actor = currentUser(req);
+    checkAccess(r, actor, 'create');
+    res.status(201).json(await createRecord(r, req.body, actor));
+  })
+);
+
+// Salvar (editar)
+const updateHandler = wrap(async (req: Request, res: Response) => {
+  const r = (req as any).resource;
+  const actor = currentUser(req);
+  checkAccess(r, actor, 'update');
+  res.json(await updateRecord(r, parseId(req.params.id), req.body, actor));
+});
+app.put('/api/:resource/:id', resourceParam, updateHandler);
+app.patch('/api/:resource/:id', resourceParam, updateHandler);
+
+// Excluir
+app.delete(
+  '/api/:resource/:id',
+  resourceParam,
+  wrap(async (req, res) => {
+    const r = (req as any).resource;
+    const actor = currentUser(req);
+    checkAccess(r, actor, 'delete');
+    await deleteRecord(r, parseId(req.params.id), actor);
+    res.json({ ok: true });
+  })
+);
+
+// Rotas /api desconhecidas
+app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Rota não encontrada')));
+
+// ----------------------------------------------------------------------------
+// Front buildado (produção — mesmo serviço na Render). Depois das rotas /api.
+// ----------------------------------------------------------------------------
 if (process.env.NODE_ENV === 'production') {
   const dist = path.resolve(__dirname, '../../client/dist');
-  app.use(express.static(dist));
-  // SPA fallback: apenas para rotas que não são /api
+  app.use(express.static(dist, { maxAge: '1h', index: false }));
   app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api')) {
-      return next();
-    }
+    if (req.path.startsWith('/api')) return next();
     res.sendFile(path.join(dist, 'index.html'));
   });
 }
 
-// Middleware de erro global
-app.use((err: any, _req: any, res: any, _next: any) => {
-  console.error('Erro não tratado:', err);
-  res.status(500).json({ error: 'Erro interno do servidor' });
+// ----------------------------------------------------------------------------
+// Erros
+// ----------------------------------------------------------------------------
+app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+  if (err?.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'JSON inválido no corpo da requisição' });
+  }
+  const httpErr = toHttpError(err, (req as any).resource);
+  if (httpErr.status >= 500) console.error('Erro não tratado:', err);
+  res.status(httpErr.status).json({ error: httpErr.message, fields: httpErr.fields });
 });
 
-const port = Number(process.env.PORT) || 3001;
-app.listen(port, '0.0.0.0', () => {
-  console.log(`⚡ BROBOND API rodando em http://localhost:${port}`);
-  console.log(
-    isDbConnected()
-      ? '🗄️  Conectado ao Postgres.'
-      : '⚠️  Sem DATABASE_URL — usando dados mock.'
-  );
-  console.log(`🔐 Login padrão: admin@brobond.com.br / brobond123`);
+// ----------------------------------------------------------------------------
+// Boot
+// ----------------------------------------------------------------------------
+async function start() {
+  if (hasDatabaseUrl()) {
+    try {
+      await migrate();
+    } catch (e: any) {
+      console.error('❌ Falha ao migrar o banco:', e?.message || e);
+    }
+  }
+  await ensureAdmin();
+
+  const port = Number(process.env.PORT) || 3001;
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`⚡ BROBOND API rodando em http://localhost:${port}`);
+    console.log(
+      isDbConnected()
+        ? '🗄️  Conectado ao Postgres.'
+        : hasDatabaseUrl()
+          ? '⚠️  DATABASE_URL definida, mas a migração falhou — verifique a conexão.'
+          : '⚠️  Sem DATABASE_URL — MODO DEMONSTRAÇÃO (dados em memória, somem ao reiniciar).'
+    );
+    console.log(`🔐 Administrador: ${ADMIN_EMAIL}`);
+  });
+}
+
+start().catch((e) => {
+  console.error('Falha ao iniciar:', e);
+  process.exit(1);
 });

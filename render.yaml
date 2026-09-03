@@ -1,6 +1,7 @@
 # Blueprint de deploy na Render (https://render.com)
 # Serviço único: a API (Express) também serve o front buildado.
 # O banco Postgres é criado automaticamente e ligado via DATABASE_URL.
+# As tabelas (db/schema.sql) são criadas/migradas pela própria API ao iniciar.
 services:
   - type: web
     name: brobond-erp
@@ -25,6 +26,10 @@ services:
         value: admin@brobond.com.br
       - key: ADMIN_PASSWORD
         sync: false
+      # Só mude para "true" para recuperar o acesso do admin (redefine a senha
+      # para ADMIN_PASSWORD no próximo deploy). Volte para "false" em seguida.
+      - key: ADMIN_FORCE_PASSWORD
+        value: "false"
 
 databases:
   - name: brobond-db

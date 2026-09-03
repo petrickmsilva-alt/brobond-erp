@@ -1,52 +1,58 @@
 import { NavLink } from 'react-router-dom';
-import { MODULES, MODULE_GROUPS, Module } from '../modules';
+import { X } from 'lucide-react';
+import { MODULES, MODULE_GROUPS, type Module } from '../modules';
 import { Logo } from './Logo';
+import { useAuth } from '../auth/AuthContext';
 
-export default function Sidebar({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const top = MODULES.find((m) => m.group === null);
+export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { user, meta } = useAuth();
+  const isAdmin = user?.perfil === 'admin';
+  const visible = MODULES.filter((m) => !m.adminOnly || isAdmin);
+  const top = visible.find((m) => m.group === null);
 
   return (
     <>
-      {open && (
-        <div
-          className="fixed inset-0 bg-black/30 z-20 md:hidden"
-          onClick={onClose}
-        />
-      )}
+      {open && <div className="fixed inset-0 z-20 bg-navy-950/50 backdrop-blur-[1px] md:hidden" onClick={onClose} />}
       <aside
-        className={`fixed md:static z-30 h-full w-64 bg-white border-r border-slate-200 flex flex-col transition-all ${
-          open ? 'left-0' : '-left-64'
-        } md:left-0`}
+        className={`fixed z-30 flex h-full w-64 flex-col bg-navy-900 text-navy-100 transition-transform duration-200 md:static md:translate-x-0 ${
+          open ? 'translate-x-0' : '-translate-x-full'
+        }`}
       >
-        <div className="h-16 flex items-center px-5 border-b border-slate-200 shrink-0">
-          <Logo />
+        <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-5">
+          <Logo variant="light" height={30} withTagline={false} />
+          <button className="rounded-md p-1 text-navy-300 hover:bg-white/10 hover:text-white md:hidden" onClick={onClose} aria-label="Fechar menu">
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+        <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-4">
           {top && <NavItem m={top} onClose={onClose} />}
 
-          {MODULE_GROUPS.map((g) => (
-            <div key={g}>
-              <div className="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                {g}
+          {MODULE_GROUPS.map((g) => {
+            const items = visible.filter((m) => m.group === g);
+            if (!items.length) return null;
+            return (
+              <div key={g}>
+                <div className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-navy-400">{g}</div>
+                <div className="space-y-0.5">
+                  {items.map((m) => (
+                    <NavItem key={m.id} m={m} onClose={onClose} />
+                  ))}
+                </div>
               </div>
-              <div className="space-y-0.5">
-                {MODULES.filter((m) => m.group === g).map((m) => (
-                  <NavItem key={m.id} m={m} onClose={onClose} />
-                ))}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </nav>
 
-        <div className="p-4 text-[11px] text-slate-400 border-t border-slate-200 shrink-0">
-          BROBOND ERP v0.1
+        <div className="shrink-0 border-t border-white/10 px-5 py-3 text-[11px] text-navy-400">
+          <div className="flex items-center justify-between">
+            <span>BROBOND ERP v0.2</span>
+            {meta?.mode === 'memory' && (
+              <span className="rounded bg-brand-500/20 px-1.5 py-0.5 font-semibold text-brand-300" title="Sem banco de dados: os dados somem ao reiniciar o servidor">
+                DEMO
+              </span>
+            )}
+          </div>
         </div>
       </aside>
     </>
@@ -54,21 +60,24 @@ export default function Sidebar({
 }
 
 function NavItem({ m, onClose }: { m: Module; onClose: () => void }) {
+  const Icon = m.icon;
   return (
     <NavLink
       to={m.path}
       end={m.path === '/'}
       onClick={onClose}
       className={({ isActive }) =>
-        `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-          isActive
-            ? 'bg-orange-50 text-orange-700'
-            : 'text-slate-600 hover:bg-slate-100'
+        `group flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors ${
+          isActive ? 'bg-white/10 text-white shadow-inner' : 'text-navy-200 hover:bg-white/5 hover:text-white'
         }`
       }
     >
-      <span className="text-base">{m.icon}</span>
-      <span>{m.label}</span>
+      {({ isActive }) => (
+        <>
+          <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-brand-400' : 'text-navy-300 group-hover:text-brand-300'}`} strokeWidth={2} />
+          <span className="truncate">{m.label}</span>
+        </>
+      )}
     </NavLink>
   );
 }

@@ -1,23 +1,20 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Eye, EyeOff, Loader2, Lock, Mail, ShieldCheck, Boxes, Cog, Receipt } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { Logo } from '../components/Logo';
-
-const DEMO = { email: 'admin@brobond.com.br', password: 'brobond123' };
 
 export default function Login() {
   const { login, user, loading } = useAuth();
   const nav = useNavigate();
-  const [email, setEmail] = useState(DEMO.email);
-  const [password, setPassword] = useState(DEMO.password);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [show, setShow] = useState(false);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // Se já estiver logado, redireciona para dashboard
   useEffect(() => {
-    if (!loading && user) {
-      nav('/', { replace: true });
-    }
+    if (!loading && user) nav('/', { replace: true });
   }, [user, loading, nav]);
 
   async function submit(e: React.FormEvent) {
@@ -26,7 +23,6 @@ export default function Login() {
     setBusy(true);
     try {
       await login(email, password);
-      // Navega para dashboard após login bem-sucedido
       nav('/', { replace: true });
     } catch (e: any) {
       setErr(e.message || 'Falha no login');
@@ -36,73 +32,136 @@ export default function Login() {
   }
 
   if (loading) {
-    return <div className="h-full flex items-center justify-center text-slate-400">Carregando...</div>;
+    return (
+      <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-400">
+        <Loader2 className="h-4 w-4 animate-spin" /> Carregando...
+      </div>
+    );
   }
-
-  // Evita flash da tela de login se já estiver autenticado
-  if (user) {
-    return null;
-  }
+  if (user) return null;
 
   return (
-    <div className="h-full grid md:grid-cols-2">
-      <div className="hidden md:flex flex-col justify-center items-center bg-gradient-to-br from-brand-700 to-brand-500 text-white p-10">
-        <Logo />
-        <h1 className="mt-6 text-3xl font-bold text-center">
-          Controle de Estoque & Produção
-        </h1>
-        <p className="mt-2 text-slate-300 text-center max-w-sm">
-          Gestão completa da BROBOND: insumos, fabricação, custo e vendas em um
-          só lugar.
-        </p>
+    <div className="grid h-full lg:grid-cols-[1.1fr_1fr]">
+      {/* Painel institucional (azul-marinho) */}
+      <div className="relative hidden flex-col justify-between overflow-hidden bg-navy-900 p-12 text-white lg:flex">
+        <div
+          className="pointer-events-none absolute inset-0 opacity-[0.07]"
+          style={{
+            backgroundImage:
+              'linear-gradient(rgba(255,255,255,.6) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.6) 1px, transparent 1px)',
+            backgroundSize: '48px 48px',
+          }}
+        />
+        <div className="pointer-events-none absolute -right-32 -top-32 h-96 w-96 rounded-full bg-brand-500/20 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-40 -left-20 h-96 w-96 rounded-full bg-navy-500/30 blur-3xl" />
+
+        <div className="relative">
+          <Logo variant="light" height={64} />
+        </div>
+
+        <div className="relative max-w-md">
+          <h1 className="text-3xl font-bold leading-tight tracking-tight">
+            Controle de estoque e produção, <span className="text-brand-400">em um só lugar.</span>
+          </h1>
+          <p className="mt-4 text-[15px] leading-relaxed text-navy-200">
+            Cadastros, saldo por tamanho e local, ordens de fabricação, compras e vendas — com histórico completo de quem fez o quê.
+          </p>
+          <ul className="mt-8 space-y-3 text-sm text-navy-100">
+            <li className="flex items-center gap-3">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10"><Boxes className="h-4 w-4 text-brand-400" /></span>
+              Estoque físico por produto, grade e local
+            </li>
+            <li className="flex items-center gap-3">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10"><Cog className="h-4 w-4 text-brand-400" /></span>
+              Ordens de fabricação que alimentam o estoque
+            </li>
+            <li className="flex items-center gap-3">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10"><Receipt className="h-4 w-4 text-brand-400" /></span>
+              Compras, vendas e comissão de representantes
+            </li>
+            <li className="flex items-center gap-3">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10"><ShieldCheck className="h-4 w-4 text-brand-400" /></span>
+              Usuários com perfis de acesso e auditoria
+            </li>
+          </ul>
+        </div>
+
+        <div className="relative text-xs text-navy-400">© {new Date().getFullYear()} BROBOND Wear · Sistema de gestão interno</div>
       </div>
 
-      <div className="flex items-center justify-center p-6">
-        <form onSubmit={submit} className="w-full max-w-sm space-y-4">
-          <div className="md:hidden flex justify-center">
-            <Logo />
-          </div>
-          <h2 className="text-xl font-bold text-slate-800">Entrar</h2>
-
-          <div>
-            <label className="block text-sm text-slate-600 mb-1">E-mail</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-400"
-              autoComplete="email"
-              required
-            />
+      {/* Formulário */}
+      <div className="flex items-center justify-center bg-white p-6 sm:p-10">
+        <form onSubmit={submit} className="w-full max-w-sm animate-fade-in" noValidate>
+          <div className="mb-8 flex justify-center lg:hidden">
+            <Logo height={56} />
           </div>
 
-          <div>
-            <label className="block text-sm text-slate-600 mb-1">Senha</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-400"
-              autoComplete="current-password"
-              required
-            />
-          </div>
+          <h2 className="text-2xl font-bold text-navy-900">Acessar o sistema</h2>
+          <p className="mt-1 text-sm text-slate-500">Use o e-mail e a senha cadastrados pelo administrador.</p>
 
-          {err && (
-            <div className="bg-red-50 border border-red-200 text-red-600 text-sm px-3 py-2 rounded-lg">
-              {err}
+          <div className="mt-8 space-y-5">
+            <div>
+              <label htmlFor="email" className="label">
+                E-mail
+              </label>
+              <div className="relative">
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="input pl-9"
+                  placeholder="voce@brobond.com.br"
+                  autoComplete="username"
+                  autoFocus
+                  required
+                />
+              </div>
             </div>
-          )}
 
-          <button
-            disabled={busy}
-            className="w-full py-2.5 rounded-lg bg-brand-600 text-white font-semibold hover:bg-brand-700 disabled:opacity-60 transition-colors"
-          >
-            {busy ? 'Entrando...' : 'Entrar'}
-          </button>
+            <div>
+              <label htmlFor="password" className="label">
+                Senha
+              </label>
+              <div className="relative">
+                <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  id="password"
+                  type={show ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="input pl-9 pr-10"
+                  placeholder="Sua senha"
+                  autoComplete="current-password"
+                  required
+                />
+                <button
+                  type="button"
+                  className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 hover:text-slate-600"
+                  onClick={() => setShow((s) => !s)}
+                  tabIndex={-1}
+                  aria-label={show ? 'Ocultar senha' : 'Mostrar senha'}
+                >
+                  {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
 
-          <p className="text-xs text-slate-400 text-center">
-            Acesso demo: {DEMO.email} / {DEMO.password}
+            {err && (
+              <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+                {err}
+              </div>
+            )}
+
+            <button disabled={busy || !email || !password} className="btn-primary w-full py-2.5">
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+              {busy ? 'Entrando...' : 'Entrar'}
+            </button>
+          </div>
+
+          <p className="mt-8 text-center text-xs text-slate-400">
+            Esqueceu a senha? Peça ao administrador para redefini-la em <strong>Configurações › Usuários</strong>.
           </p>
         </form>
       </div>
