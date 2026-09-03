@@ -1,0 +1,25 @@
+# Verificação automática a cada push / pull request:
+# tipos (server + client), testes das regras de negócio e build do front.
+name: CI
+on:
+  push:
+    branches: ['**']
+  pull_request:
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Instalar dependências
+        run: npm run install:all
+      - name: Typecheck (API)
+        run: npm --prefix server run typecheck
+      - name: Typecheck (front)
+        run: npm --prefix client run typecheck
+      - name: Testes das regras de negócio
+        run: npm --prefix server test
+      - name: Build do front
+        run: npm --prefix client run build

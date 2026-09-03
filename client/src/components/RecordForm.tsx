@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Eraser, Eye, EyeOff, Loader2, Plus, Save } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import type { Field, Option, ResourceMeta } from '../lib/meta';
@@ -10,7 +10,7 @@ export type FormValues = Record<string, string | boolean>;
 export function initialValues(r: ResourceMeta, row?: Record<string, any> | null): FormValues {
   const out: FormValues = {};
   for (const f of r.fields) {
-    if (f.form === false || f.readonly) continue;
+    if (f.form === false || f.readonly || f.type === 'images') continue;
     if (row) {
       out[f.name] = f.type === 'boolean' ? Boolean(row[f.name]) : f.type === 'password' ? '' : toInputValue(f, row[f.name]);
     } else {
@@ -24,7 +24,7 @@ export function initialValues(r: ResourceMeta, row?: Record<string, any> | null)
 export function toPayload(r: ResourceMeta, values: FormValues, editing: boolean): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const f of r.fields) {
-    if (f.form === false || f.readonly) continue;
+    if (f.form === false || f.readonly || f.type === 'images') continue;
     const v = values[f.name];
     if (f.type === 'boolean') {
       out[f.name] = Boolean(v);
@@ -52,6 +52,7 @@ export function RecordForm({
   busy,
   refOptions,
   autoFocus = true,
+  before,
 }: {
   resource: ResourceMeta;
   values: FormValues;
@@ -63,9 +64,21 @@ export function RecordForm({
   busy: boolean;
   refOptions: Record<string, Option[]>;
   autoFocus?: boolean;
+  /** conteúdo exibido antes dos campos (ex.: galeria de fotos) */
+  before?: ReactNode;
 }) {
-  const fields = useMemo(() => resource.fields.filter((f) => f.form !== false && !f.readonly), [resource]);
+  const fields = useMemo(() => resource.fields.filter((f) => f.form !== false && !f.readonly && f.type !== 'images'), [resource]);
   const firstName = fields[0]?.name;
+  // Agrupa por seção preservando a ordem de aparição
+  const sections = useMemo(() => {
+    const out: { title: string | undefined; fields: Field[] }[] = [];
+    for (const f of fields) {
+      const last = out[out.length - 1];
+      if (last && last.title === f.section) last.fields.push(f);
+      else out.push({ title: f.section, fields: [f] });
+    }
+    return out;
+  }, [fields]);
 
   return (
     <form
@@ -77,22 +90,30 @@ export function RecordForm({
       className="space-y-4"
       noValidate
     >
-      <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-        {fields.map((f) => (
-          <div key={f.name} className={f.wide || f.type === 'textarea' ? 'sm:col-span-2' : ''}>
-            <FieldInput
-              field={f}
-              value={values[f.name]}
-              error={errors[f.name]}
-              onChange={(v) => onChange(f.name, v)}
-              options={f.type === 'ref' && f.ref ? refOptions[f.ref] : undefined}
-              editing={editing}
-              autoFocus={autoFocus && f.name === firstName}
-              disabled={busy}
-            />
+      {before}
+      {sections.map((sec, i) => (
+        <div key={sec.title ?? i}>
+          {sec.title && (
+            <h3 className="mb-3 mt-2 border-b border-slate-200 pb-1.5 text-xs font-bold uppercase tracking-wide text-navy-700">{sec.title}</h3>
+          )}
+          <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
+            {sec.fields.map((f) => (
+              <div key={f.name} className={f.wide || f.type === 'textarea' ? 'sm:col-span-2' : ''}>
+                <FieldInput
+                  field={f}
+                  value={values[f.name]}
+                  error={errors[f.name]}
+                  onChange={(v) => onChange(f.name, v)}
+                  options={f.type === 'ref' && f.ref ? refOptions[f.ref] : undefined}
+                  editing={editing}
+                  autoFocus={autoFocus && f.name === firstName}
+                  disabled={busy}
+                />
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      ))}
 
       <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-4">
         <button type="button" className="btn-secondary" onClick={onClear} disabled={busy} title="Limpar os campos do formulário">
@@ -201,6 +222,43 @@ function FieldInput({
     );
   }
 
+  if (f.type === 'color') {
+    const v = String(value ?? '');
+    const valid = /^#[0-9a-fA-F]{6}$/.test(v);
+    return (
+      <div>
+        {label}
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            className="h-10 w-12 cursor-pointer rounded-lg border border-slate-300 bg-white p-1"
+            value={valid ? v : '#888888'}
+            onChange={(e) => onChange(e.target.value.toUpperCase())}
+            disabled={disabled}
+            aria-label={`${f.label} (seletor)`}
+          />
+          <input
+            id={id}
+            type="text"
+            className={`${cls} font-mono uppercase`}
+            value={v}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="#1F3A5F"
+            maxLength={7}
+            disabled={disabled}
+            autoFocus={autoFocus}
+          />
+          {v && (
+            <button type="button" className="btn-icon" title="Limpar cor" onClick={() => onChange('')} disabled={disabled}>
+              <Eraser className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        {help}
+      </div>
+    );
+  }
+
   if (f.type === 'textarea') {
     return (
       <div>
@@ -278,6 +336,8 @@ function FieldInput({
 
 const REF_LABELS: Record<string, string> = {
   produtos: 'Produtos',
+  categorias: 'Categorias',
+  cores: 'Cores',
   tamanhos: 'Tamanhos / Grade',
   colecoes: 'Coleções',
   fornecedores: 'Fornecedores',

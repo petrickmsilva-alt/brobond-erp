@@ -1,7 +1,14 @@
 # Blueprint de deploy na Render (https://render.com)
 # Serviço único: a API (Express) também serve o front buildado.
-# O banco Postgres é criado automaticamente e ligado via DATABASE_URL.
 # As tabelas (db/schema.sql) são criadas/migradas pela própria API ao iniciar.
+#
+# BANCO DE DADOS: o Postgres gratuito da Render expira após 30 dias e apaga os
+# dados. Por isso DATABASE_URL é configurada manualmente no painel (sync: false)
+# apontando para um banco gratuito PERMANENTE — recomendação: Neon (neon.tech).
+# Se preferir o banco da Render (plano pago), troque por:
+#   - key: DATABASE_URL
+#     fromDatabase: { name: brobond-db, property: connectionString }
+# e reative a seção `databases` no fim do arquivo.
 services:
   - type: web
     name: brobond-erp
@@ -17,9 +24,12 @@ services:
       - key: PORT
         value: 10000
       - key: DATABASE_URL
-        fromDatabase:
-          name: brobond-db
-          property: connectionString
+        sync: false
+      # Fotos: "db" (no banco, padrão) ou "cloudinary" (+ CLOUDINARY_URL)
+      - key: UPLOAD_PROVIDER
+        value: db
+      - key: CLOUDINARY_URL
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: ADMIN_EMAIL
@@ -31,7 +41,7 @@ services:
       - key: ADMIN_FORCE_PASSWORD
         value: "false"
 
-databases:
-  - name: brobond-db
-    databaseName: brobond
-    plan: free
+# databases:
+#   - name: brobond-db
+#     databaseName: brobond
+#     plan: free   # ⚠️ expira em 30 dias — use apenas para testes

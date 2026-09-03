@@ -107,18 +107,67 @@ CREATE TABLE IF NOT EXISTS clientes (
   atualizado_em TIMESTAMPTZ
 );
 
+-- Categorias de produto (camisa, camiseta, calça, bermuda...)
+CREATE TABLE IF NOT EXISTS categorias (
+  id SERIAL PRIMARY KEY,
+  nome TEXT NOT NULL,
+  descricao TEXT,
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_categorias_nome ON categorias (LOWER(nome));
+
+-- Cores padronizadas (nome + código hexadecimal para a "bolinha" na tela)
+CREATE TABLE IF NOT EXISTS cores (
+  id SERIAL PRIMARY KEY,
+  nome TEXT NOT NULL,
+  hex TEXT,                                  -- ex.: #1F3A5F
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cores_nome ON cores (LOWER(nome));
+
 -- Produtos acabados
 CREATE TABLE IF NOT EXISTS produtos (
   id SERIAL PRIMARY KEY,
   sku TEXT UNIQUE NOT NULL,
   nome TEXT NOT NULL,
-  cor TEXT,
+  cor TEXT,                                  -- texto livre (compatibilidade)
+  cor_id INTEGER REFERENCES cores(id),       -- cor padronizada (cadastro Cores)
+  categoria_id INTEGER REFERENCES categorias(id),
   colecao_id INTEGER REFERENCES colecoes(id),
+  codigo_barras TEXT,                        -- EAN-13 / GTIN (etiquetas)
+  descricao TEXT,                            -- descrição comercial (catálogo)
+  composicao TEXT,                           -- ex.: 100% algodão
+  ncm TEXT,                                  -- classificação fiscal (NF-e futura)
+  peso_g INTEGER,                            -- peso da peça em gramas
   custo NUMERIC(12,2) DEFAULT 0,             -- custo unitário (valoriza o estoque)
   preco_venda NUMERIC(12,2) DEFAULT 0,
   ativo BOOLEAN DEFAULT TRUE,
   criado_em TIMESTAMPTZ DEFAULT now(),
   atualizado_em TIMESTAMPTZ
+);
+-- Arquivos anexados a registros (fotos de produtos, etc.)
+-- Os bytes ficam em `dados`/`thumb` quando não há provedor externo (Cloudinary).
+CREATE TABLE IF NOT EXISTS arquivos (
+  id SERIAL PRIMARY KEY,
+  recurso TEXT NOT NULL,                     -- 'produtos', 'insumos'...
+  registro_id INTEGER NOT NULL,
+  nome TEXT,                                 -- nome original do arquivo
+  mime TEXT,
+  tamanho_bytes INTEGER,
+  url TEXT,                                  -- imagem no provedor externo (CDN)
+  thumb_url TEXT,                            -- miniatura no provedor externo
+  externo_id TEXT,                           -- public_id no Cloudinary (para excluir)
+  dados BYTEA,                               -- imagem otimizada (quando armazenada no banco)
+  thumb BYTEA,                               -- miniatura (quando armazenada no banco)
+  token TEXT NOT NULL,                       -- segredo aleatório usado na URL pública da imagem
+  principal BOOLEAN DEFAULT FALSE,
+  ordem INTEGER DEFAULT 0,
+  criado_por INTEGER,
+  criado_em TIMESTAMPTZ DEFAULT now()
 );
 
 -- Estoque físico (saldo por produto + tamanho + local)
@@ -257,6 +306,13 @@ ALTER TABLE clientes       ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAUL
 ALTER TABLE clientes       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
 
 ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS cor TEXT;
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS cor_id INTEGER REFERENCES cores(id);
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS categoria_id INTEGER REFERENCES categorias(id);
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS codigo_barras TEXT;
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS descricao TEXT;
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS composicao TEXT;
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS ncm TEXT;
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS peso_g INTEGER;
 ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS custo NUMERIC(12,2) DEFAULT 0;
 ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
 ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
@@ -291,3 +347,21 @@ CREATE INDEX IF NOT EXISTS idx_estoques_produto     ON estoques (produto_id);
 CREATE INDEX IF NOT EXISTS idx_ordens_status        ON ordens_fabricacao (status);
 CREATE INDEX IF NOT EXISTS idx_vendas_status        ON vendas (status);
 CREATE INDEX IF NOT EXISTS idx_compras_status       ON compras (status);
+CREATE INDEX IF NOT EXISTS idx_arquivos_registro    ON arquivos (recurso, registro_id, principal DESC, ordem);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_produtos_codigo_barras ON produtos (codigo_barras) WHERE codigo_barras IS NOT NULL AND codigo_barras <> '';
+CREATE INDEX IF NOT EXISTS idx_produtos_categoria   ON produtos (categoria_id);
+CREATE INDEX IF NOT EXISTS idx_produtos_cor         ON produtos (cor_id);
+
+-- ------------------------------------------------------------
+-- 4) MIGRAÇÃO DE DADOS — cor em texto livre → cadastro de Cores
+--    (idempotente: só cria cores que ainda não existem e só preenche
+--     cor_id onde estiver vazio; o texto original é preservado)
+-- ------------------------------------------------------------
+INSERT INTO cores (nome)
+SELECT DISTINCT INITCAP(TRIM(cor)) FROM produtos
+WHERE cor IS NOT NULL AND TRIM(cor) <> ''
+  AND NOT EXISTS (SELECT 1 FROM cores c WHERE LOWER(c.nome) = LOWER(TRIM(produtos.cor)));
+
+UPDATE produtos p SET cor_id = c.id
+FROM cores c
+WHERE p.cor_id IS NULL AND p.cor IS NOT NULL AND LOWER(TRIM(p.cor)) = LOWER(c.nome);

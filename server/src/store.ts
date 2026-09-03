@@ -15,6 +15,25 @@ export type ListParams = {
   pageSize: number;
   sort?: string;
   dir?: 'asc' | 'desc';
+  /** filtro de igualdade por coluna (ex.: { produto_id: 3 }) */
+  filter?: Record<string, unknown>;
+};
+
+/** Metadados de um arquivo anexado (sem os bytes). */
+export type FileMeta = {
+  id: number;
+  recurso: string;
+  registro_id: number;
+  nome: string | null;
+  mime: string | null;
+  tamanho_bytes: number | null;
+  url: string | null;
+  thumb_url: string | null;
+  externo_id: string | null;
+  token: string;
+  principal: boolean;
+  ordem: number;
+  criado_em: string;
 };
 
 export type ListResult = {
@@ -71,6 +90,11 @@ export interface Store {
 
   findUserByEmail(email: string): Promise<Row | null>;
   touchLogin(userId: number): Promise<void>;
+
+  /** Arquivos (fotos) de um conjunto de registros — sem os bytes. */
+  filesFor(recurso: string, registroIds: number[], tx?: Tx): Promise<FileMeta[]>;
+  /** Um arquivo com os bytes (`dados`, `thumb`) para servir a imagem. */
+  fileById(id: number): Promise<Row | null>;
 }
 
 /** Rótulo legível de um registro (ex.: "CAM-001 — Camisa Polo" ou "#12"). */

@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { HttpError } from './errors';
 import { getStore } from './services';
 import type { Row } from './store';
+import { registerLoginFailure, registerLoginSuccess } from './security';
 
 const SECRET = process.env.JWT_SECRET || 'brobond-dev-secret';
 const TOKEN_TTL = process.env.JWT_TTL || '8h';
@@ -115,6 +116,7 @@ export async function login(req: Request, res: Response) {
     }
     if (await verifyPassword(password, row.senha_hash)) {
       const user = toAuthUser(row);
+      registerLoginSuccess(req);
       await store.touchLogin(user.id);
       await store
         .audit({
@@ -128,7 +130,7 @@ export async function login(req: Request, res: Response) {
         .catch(() => undefined);
       return res.json({ token: signToken(user), user });
     }
-    return res.status(401).json({ error: 'E-mail ou senha incorretos' });
+    return loginFailed(req, res, row);
   }
 
   // Acesso de emergência: banco indisponível e credenciais do administrador
@@ -139,7 +141,26 @@ export async function login(req: Request, res: Response) {
     return res.json({ token: signToken(user), user });
   }
 
-  return res.status(401).json({ error: 'E-mail ou senha incorretos' });
+  return loginFailed(req, res, null);
+}
+
+/** Resposta padrão de falha de login: conta a tentativa e registra bloqueio na auditoria. */
+async function loginFailed(req: Request, res: Response, row: Row | null) {
+  const left = registerLoginFailure(req);
+  if (left === 0) {
+    await getStore()
+      .audit({
+        usuario_id: row ? Number(row.id) : null,
+        usuario: row?.nome || normalizeEmail(req.body?.email) || null,
+        acao: 'login',
+        recurso: null,
+        registro_id: null,
+        descricao: `Login BLOQUEADO temporariamente por excesso de tentativas — ${normalizeEmail(req.body?.email)} (${clientIp(req) || 'ip desconhecido'})`,
+      })
+      .catch(() => undefined);
+  }
+  const hint = left > 0 && left <= 2 ? ` Restam ${left} tentativa${left === 1 ? '' : 's'}.` : '';
+  return res.status(401).json({ error: `E-mail ou senha incorretos.${hint}` });
 }
 
 // Cache curto para não consultar o usuário no banco a cada requisição,

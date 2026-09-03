@@ -70,9 +70,19 @@ export function formatCell(f: Field, row: Record<string, any>): string {
       return formatDateTime(v);
     case 'select':
       return f.options?.find((o) => o.value === String(v))?.label ?? String(v);
+    case 'images':
+      return Array.isArray(v) ? `${v.length} foto${v.length === 1 ? '' : 's'}` : '—';
     default:
       return String(v);
   }
+}
+
+export function formatBytes(n: unknown): string {
+  const b = Number(n);
+  if (!Number.isFinite(b)) return '—';
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
+  return `${(b / 1024 / 1024).toFixed(1)} MB`;
 }
 
 /** Converte valor vindo da API em valor de input (string) para o formulário. */

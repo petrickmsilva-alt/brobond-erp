@@ -41,8 +41,18 @@ function coerce(f: Field, raw: unknown): [unknown, string | null] {
     case 'document': {
       const s = String(raw).trim();
       if (f.maxLength && s.length > f.maxLength) return [s, `Máximo de ${f.maxLength} caracteres`];
+      if (f.pattern && !new RegExp(f.pattern).test(s)) return [s, f.patternMessage || 'Formato inválido'];
       return [s, null];
     }
+    case 'color': {
+      let s = String(raw).trim().toUpperCase();
+      if (s && !s.startsWith('#')) s = `#${s}`;
+      if (/^#[0-9A-F]{3}$/.test(s)) s = `#${s[1]}${s[1]}${s[2]}${s[2]}${s[3]}${s[3]}`;
+      if (!/^#[0-9A-F]{6}$/.test(s)) return [s, 'Informe a cor em hexadecimal (ex.: #1F3A5F)'];
+      return [s, null];
+    }
+    case 'images':
+      return [null, null];
     case 'email': {
       const s = String(raw).trim().toLowerCase();
       if (!EMAIL_RE.test(s)) return [s, 'E-mail inválido'];

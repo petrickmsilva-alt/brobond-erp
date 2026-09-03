@@ -16,7 +16,9 @@ export type FieldType =
   | 'datetime'
   | 'select'
   | 'ref'
-  | 'password';
+  | 'password'
+  | 'color'
+  | 'images';
 
 export type Tone = 'green' | 'red' | 'amber' | 'blue' | 'slate';
 export type FieldOption = { value: string; label: string; tone?: Tone };
@@ -42,6 +44,21 @@ export type Field = {
   hint?: string;
   placeholder?: string;
   wide?: boolean;
+  section?: string;
+  pattern?: string;
+  patternMessage?: string;
+};
+
+export type PublicFile = {
+  id: number;
+  nome: string | null;
+  mime: string | null;
+  tamanho_bytes: number | null;
+  url: string;
+  thumb_url: string;
+  principal: boolean;
+  ordem: number;
+  criado_em: string;
 };
 
 export type ResourceOps = { create: boolean; update: boolean; delete: boolean };
@@ -56,11 +73,15 @@ export type ResourceMeta = {
   ops: ResourceOps;
   adminOnly?: boolean;
   notice?: string;
+  images?: { max: number };
+  detail?: boolean;
 };
 
 export type Meta = {
   resources: Record<string, ResourceMeta>;
   mode: 'postgres' | 'memory';
+  uploads?: 'db' | 'cloudinary';
+  version?: string;
 };
 
 export const MetaContext = createContext<Meta | null>(null);

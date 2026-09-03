@@ -6,6 +6,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import ModulePage from './pages/ModulePage';
 import Settings from './pages/Settings';
+import ProductDetail from './pages/ProductDetail';
 import { MODULES } from './modules';
 
 function Loading() {
@@ -45,6 +46,7 @@ export default function App() {
         >
           <Route index element={<Dashboard />} />
           <Route path="config" element={<Settings />} />
+          <Route path="produtos/:id" element={<ProductDetail />} />
           {MODULES.filter((m) => m.path !== '/' && m.id !== 'config').map((m) => {
             const el = <ModulePage module={m} />;
             return <Route key={m.id} path={m.path.replace('/', '')} element={m.adminOnly ? <AdminOnly>{el}</AdminOnly> : el} />;

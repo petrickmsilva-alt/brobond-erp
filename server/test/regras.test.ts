@@ -1,0 +1,137 @@
+// Testes das regras de negócio (modo memória — não precisa de banco).
+// Rodar: npm test (na pasta server) ou npm test na raiz.
+import { test, before } from 'node:test';
+import assert from 'node:assert/strict';
+
+process.env.NODE_ENV = 'test';
+delete process.env.DATABASE_URL;
+
+const { RESOURCES } = await import('../src/resources');
+const { createRecord, updateRecord, deleteRecord, getRecord, listRecords, getStore } = await import('../src/services');
+const { validatePayload } = await import('../src/validate');
+const { HttpError } = await import('../src/errors');
+
+const admin = { id: 1, name: 'Admin', perfil: 'admin' as const };
+const operador = { id: 2, name: 'Op', perfil: 'operador' as const };
+
+async function expectHttp(fn: () => Promise<unknown>, status: number, re?: RegExp) {
+  try {
+    await fn();
+  } catch (e: any) {
+    assert.ok(e instanceof HttpError, `esperava HttpError, veio ${e?.constructor?.name}: ${e?.message}`);
+    assert.equal(e.status, status, `status ${e.status} ≠ ${status}: ${e.message}`);
+    if (re) assert.match(e.message, re);
+    return e;
+  }
+  assert.fail(`esperava erro ${status}`);
+}
+
+let produtoId: number;
+before(async () => {
+  getStore();
+  const p = await createRecord(RESOURCES.produtos, { sku: 'T-001', nome: 'Camisa Teste', custo: 10, preco_venda: 25, cor_id: 3, categoria_id: 1 }, admin);
+  produtoId = Number(p.id);
+});
+
+test('validação: EAN aceita 8/12/13/14 dígitos e rejeita o resto', () => {
+  for (const ok of ['12345678', '123456789012', '7891234567895', '12345678901234']) {
+    assert.equal(validatePayload(RESOURCES.produtos, { sku: 'x', nome: 'y', codigo_barras: ok }, 'create').codigo_barras, ok);
+  }
+  for (const bad of ['123', 'abc', '1234567890', '12345678901']) {
+    assert.throws(() => validatePayload(RESOURCES.produtos, { sku: 'x', nome: 'y', codigo_barras: bad }, 'create'), /8, 12, 13 ou 14/);
+  }
+  assert.throws(() => validatePayload(RESOURCES.produtos, { sku: 'x', nome: 'y', codigo_barras: '123456789012345' }, 'create'), /Máximo de 14/);
+});
+
+test('validação: cor hexadecimal normaliza #abc → #AABBCC e rejeita inválidas', () => {
+  assert.equal(validatePayload(RESOURCES.cores, { nome: 'a', hex: 'abc' }, 'create').hex, '#AABBCC');
+  assert.equal(validatePayload(RESOURCES.cores, { nome: 'a', hex: '#1f3a5f' }, 'create').hex, '#1F3A5F');
+  assert.throws(() => validatePayload(RESOURCES.cores, { nome: 'a', hex: 'zzz' }, 'create'), /hexadecimal/);
+});
+
+test('produto: rótulos de cor/categoria e amostra hex vêm na leitura', async () => {
+  const p = await getRecord(RESOURCES.produtos, produtoId);
+  assert.equal(p.cor_id__label, 'Azul marinho');
+  assert.equal(p.cor_id__color, '#1F3A5F');
+  assert.equal(p.categoria_id__label, 'Camisa');
+  assert.deepEqual(p.fotos, []);
+  assert.equal(p.foto_url, null);
+});
+
+test('produto: SKU e código de barras são únicos', async () => {
+  await updateRecord(RESOURCES.produtos, produtoId, { codigo_barras: '7891234567895' }, admin);
+  await expectHttp(() => createRecord(RESOURCES.produtos, { sku: 'T-001', nome: 'dup' }, admin), 409);
+  await expectHttp(() => createRecord(RESOURCES.produtos, { sku: 'T-002', nome: 'dup', codigo_barras: '7891234567895' }, admin), 409);
+});
+
+test('estoque: saída sem saldo é bloqueada; entrada cria saldo', async () => {
+  await expectHttp(() => createRecord(RESOURCES.movimentacoes, { tipo: 'saida', produto_id: produtoId, tamanho_id: 3, quantidade: 1 }, admin), 409, /Saldo insuficiente/);
+  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, quantidade: 10 }, admin);
+  const saldo = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId } });
+  assert.equal(saldo.rows.length, 1);
+  assert.equal(Number(saldo.rows[0].quantidade), 10);
+  await createRecord(RESOURCES.movimentacoes, { tipo: 'saida', produto_id: produtoId, tamanho_id: 3, quantidade: 4 }, admin);
+  const depois = await getRecord(RESOURCES.estoques, Number(saldo.rows[0].id));
+  assert.equal(Number(depois.quantidade), 6);
+});
+
+test('estoque: movimentações são imutáveis', async () => {
+  const movs = await listRecords(RESOURCES.movimentacoes, { page: 1, pageSize: 1 });
+  const id = Number(movs.rows[0].id);
+  const { checkAccess } = await import('../src/services');
+  assert.throws(() => checkAccess(RESOURCES.movimentacoes, admin, 'update'), /Não é possível alterar/);
+  assert.throws(() => checkAccess(RESOURCES.movimentacoes, admin, 'delete'), /Não é possível excluir/);
+  void id;
+});
+
+test('OP: concluir dá entrada no estoque; reabrir estorna; não exclui concluída', async () => {
+  const op = await createRecord(RESOURCES.ordens, { produto_id: produtoId, tamanho_id: 4, quantidade: 20, status: 'planejada' }, admin);
+  const antes = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: 4 } });
+  assert.equal(antes.rows.length, 0);
+  await updateRecord(RESOURCES.ordens, Number(op.id), { status: 'concluida' }, admin);
+  const dep = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: 4 } });
+  assert.equal(Number(dep.rows[0].quantidade), 20);
+  await expectHttp(() => deleteRecord(RESOURCES.ordens, Number(op.id), admin), 409, /concluída/i);
+  await updateRecord(RESOURCES.ordens, Number(op.id), { status: 'em_producao' }, admin);
+  const est = await getRecord(RESOURCES.estoques, Number(dep.rows[0].id));
+  assert.equal(Number(est.quantidade), 0);
+});
+
+test('permissões: operador não exclui; módulos admin-only bloqueiam gerente', async () => {
+  const { checkAccess } = await import('../src/services');
+  assert.throws(() => checkAccess(RESOURCES.produtos, operador, 'delete'), /Operadores não podem excluir/);
+  assert.throws(() => checkAccess(RESOURCES.usuarios, { ...operador, perfil: 'gerente' }, 'read'), /administradores/);
+  assert.doesNotThrow(() => checkAccess(RESOURCES.produtos, operador, 'create'));
+});
+
+test('usuários: não remove o último administrador', async () => {
+  const u = await createRecord(RESOURCES.usuarios, { nome: 'Único Admin', email: 'unico@x.com', perfil: 'admin', senha: '123456' }, admin);
+  await expectHttp(() => updateRecord(RESOURCES.usuarios, Number(u.id), { perfil: 'operador' }, { id: 99, name: 'outro', perfil: 'admin' }), 400, /único administrador/);
+});
+
+test('produto: excluir produto em uso é bloqueado (409); produto sem uso é excluído', async () => {
+  await expectHttp(() => deleteRecord(RESOURCES.produtos, produtoId, admin), 409, /em uso/);
+  const tmp = await createRecord(RESOURCES.produtos, { sku: 'TMP', nome: 'tmp' }, admin);
+  await deleteRecord(RESOURCES.produtos, Number(tmp.id), admin);
+  await expectHttp(() => getRecord(RESOURCES.produtos, Number(tmp.id)), 404);
+});
+
+test('arquivos: recurso interno não é exposto na API genérica nem no /meta', async () => {
+  const { getPublicResource, publicMeta } = await import('../src/resources');
+  assert.equal(getPublicResource('arquivos'), undefined);
+  assert.ok(!('arquivos' in publicMeta()));
+  assert.ok('produtos' in publicMeta());
+});
+
+test('segurança: rate limit bloqueia após 5 falhas e libera após sucesso', async () => {
+  const { loginRateLimit, registerLoginFailure, registerLoginSuccess } = await import('../src/security');
+  const req: any = { body: { email: 'rl@x.com' }, headers: {}, socket: { remoteAddress: '10.0.0.1' } };
+  let status = 0;
+  const res: any = { status: (s: number) => ((status = s), res), json: () => res, setHeader: () => res };
+  for (let i = 0; i < 5; i++) registerLoginFailure(req);
+  loginRateLimit(req, res, () => (status = 200));
+  assert.equal(status, 429);
+  registerLoginSuccess(req);
+  loginRateLimit(req, res, () => (status = 200));
+  assert.equal(status, 200);
+});

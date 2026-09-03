@@ -7,6 +7,7 @@ import { getResource, type Resource } from './resources';
 import { labelOf, type ListParams, type Payload, type Row, type Store, type Tx } from './store';
 import { validatePayload } from './validate';
 import type { AuthUser } from './auth';
+import { attachImages, removeAllFiles } from './uploads';
 
 let store: Store | null = null;
 
@@ -69,12 +70,15 @@ export function checkAccess(r: Resource, actor: Actor, op: 'read' | 'create' | '
 // Leitura
 // ----------------------------------------------------------------------------
 export async function listRecords(r: Resource, p: ListParams) {
-  return getStore().list(r, p);
+  const out = await getStore().list(r, p);
+  await attachImages(r, out.rows);
+  return out;
 }
 
 export async function getRecord(r: Resource, id: number) {
   const row = await getStore().get(r, id);
   if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+  await attachImages(r, [row]);
   return row;
 }
 
@@ -179,6 +183,7 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor): Promi
         throw new HttpError(409, 'Só é possível excluir saldos zerados. Lance uma saída/ajuste antes.');
       }
 
+      await removeAllFiles(r, id, tx);
       const ok = await s.remove(r, id, tx);
       if (!ok) throw new HttpError(404, `${r.singular} não encontrado(a).`);
       await audit(tx, actor, 'excluir', r, id, `${r.singular} ${labelOf(r, before)} excluído(a)`, sanitize(before));
