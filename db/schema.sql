@@ -1,30 +1,63 @@
 -- ============================================================
 -- BROBOND ERP — schema do banco (PostgreSQL)
--- Execute no seu banco Postgres (Render) com: psql $DATABASE_URL -f db/schema.sql
+--
+-- Este arquivo é IDEMPOTENTE: pode ser executado quantas vezes for preciso.
+-- A API executa este arquivo automaticamente ao iniciar (server/src/db.ts),
+-- então em um banco novo as tabelas são criadas sozinhas. Também pode ser
+-- aplicado manualmente:  psql "$DATABASE_URL" -f db/schema.sql
+--
+-- Seções:
+--   1) Tabelas (CREATE TABLE IF NOT EXISTS) — instalação nova
+--   2) Migrações (ALTER TABLE ... IF NOT EXISTS) — bancos já existentes
+--   3) Índices
 -- ============================================================
 
--- Cadastros base
+-- ------------------------------------------------------------
+-- 1) TABELAS
+-- ------------------------------------------------------------
+
+-- Usuários do sistema (login por e-mail + senha com hash bcrypt)
 CREATE TABLE IF NOT EXISTS usuarios (
   id SERIAL PRIMARY KEY,
   nome TEXT NOT NULL,
   email TEXT UNIQUE NOT NULL,
   senha_hash TEXT,
-  perfil TEXT DEFAULT 'usuario',
-  ativo BOOLEAN DEFAULT TRUE,
-  criado_em TIMESTAMPTZ DEFAULT now()
+  perfil TEXT NOT NULL DEFAULT 'operador',   -- admin, gerente, operador
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  ultimo_login TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+-- Trilha de auditoria: quem incluiu/alterou/excluiu o quê
+CREATE TABLE IF NOT EXISTS auditoria (
+  id SERIAL PRIMARY KEY,
+  data TIMESTAMPTZ NOT NULL DEFAULT now(),
+  usuario_id INTEGER,
+  usuario TEXT,
+  acao TEXT NOT NULL,                        -- criar, editar, excluir, login, senha
+  recurso TEXT,
+  registro_id INTEGER,
+  descricao TEXT,
+  dados JSONB
 );
 
 CREATE TABLE IF NOT EXISTS tamanhos (
   id SERIAL PRIMARY KEY,
-  codigo TEXT UNIQUE NOT NULL,   -- PP, P, M, G, GG
-  descricao TEXT
+  codigo TEXT UNIQUE NOT NULL,               -- PP, P, M, G, GG
+  descricao TEXT,
+  ordem INTEGER DEFAULT 0,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS colecoes (
   id SERIAL PRIMARY KEY,
   nome TEXT NOT NULL,
   temporada TEXT,
-  ano INTEGER
+  ano INTEGER,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS fornecedores (
@@ -34,16 +67,20 @@ CREATE TABLE IF NOT EXISTS fornecedores (
   contato TEXT,
   email TEXT,
   telefone TEXT,
-  ativo BOOLEAN DEFAULT TRUE
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS insumos (
   id SERIAL PRIMARY KEY,
   nome TEXT NOT NULL,
-  unidade TEXT DEFAULT 'un',     -- m, kg, un, etc.
+  unidade TEXT DEFAULT 'un',                 -- m, kg, un, etc.
   custo_medio NUMERIC(12,2) DEFAULT 0,
   fornecedor_id INTEGER REFERENCES fornecedores(id),
-  ativo BOOLEAN DEFAULT TRUE
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS representantes (
@@ -53,17 +90,21 @@ CREATE TABLE IF NOT EXISTS representantes (
   comissao_pct NUMERIC(5,2) DEFAULT 0,
   telefone TEXT,
   email TEXT,
-  ativo BOOLEAN DEFAULT TRUE
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS clientes (
   id SERIAL PRIMARY KEY,
   nome TEXT NOT NULL,
   cnpj_cpf TEXT,
-  tipo TEXT DEFAULT 'loja',      -- loja, atacadista, varejo
+  tipo TEXT DEFAULT 'loja',                  -- loja, atacadista, varejo
   telefone TEXT,
   email TEXT,
-  ativo BOOLEAN DEFAULT TRUE
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
 );
 
 -- Produtos acabados
@@ -71,12 +112,16 @@ CREATE TABLE IF NOT EXISTS produtos (
   id SERIAL PRIMARY KEY,
   sku TEXT UNIQUE NOT NULL,
   nome TEXT NOT NULL,
+  cor TEXT,
   colecao_id INTEGER REFERENCES colecoes(id),
+  custo NUMERIC(12,2) DEFAULT 0,             -- custo unitário (valoriza o estoque)
   preco_venda NUMERIC(12,2) DEFAULT 0,
-  ativo BOOLEAN DEFAULT TRUE
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
 );
 
--- Estoque físico (por produto + tamanho + local)
+-- Estoque físico (saldo por produto + tamanho + local)
 CREATE TABLE IF NOT EXISTS estoques (
   id SERIAL PRIMARY KEY,
   produto_id INTEGER REFERENCES produtos(id),
@@ -84,16 +129,21 @@ CREATE TABLE IF NOT EXISTS estoques (
   local TEXT DEFAULT 'almoxarifado',
   quantidade INTEGER DEFAULT 0,
   estoque_min INTEGER DEFAULT 0,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
   UNIQUE (produto_id, tamanho_id, local)
 );
 
+-- Movimentações (imutáveis — cada uma altera o saldo em `estoques`)
 CREATE TABLE IF NOT EXISTS movimentacoes (
   id SERIAL PRIMARY KEY,
-  tipo TEXT NOT NULL,            -- entrada, saida, ajuste
+  tipo TEXT NOT NULL,                        -- entrada, saida, ajuste
   produto_id INTEGER REFERENCES produtos(id),
   tamanho_id INTEGER REFERENCES tamanhos(id),
+  local TEXT DEFAULT 'almoxarifado',
   quantidade INTEGER NOT NULL,
   motivo TEXT,
+  usuario_id INTEGER,
   data TIMESTAMPTZ DEFAULT now()
 );
 
@@ -103,9 +153,11 @@ CREATE TABLE IF NOT EXISTS ordens_fabricacao (
   produto_id INTEGER REFERENCES produtos(id),
   tamanho_id INTEGER REFERENCES tamanhos(id),
   quantidade INTEGER NOT NULL,
-  status TEXT DEFAULT 'planejada', -- planejada, em_producao, concluida, cancelada
+  status TEXT DEFAULT 'planejada',           -- planejada, em_producao, concluida, cancelada
   inicio TIMESTAMPTZ,
-  previsao TIMESTAMPTZ
+  previsao TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
 );
 
 -- Ficha técnica / BOM (quanto de cada insumo vira 1 peça)
@@ -114,14 +166,25 @@ CREATE TABLE IF NOT EXISTS fichas_tecnicas (
   produto_id INTEGER REFERENCES produtos(id),
   mao_obra NUMERIC(12,2) DEFAULT 0,
   custos_indiretos NUMERIC(12,2) DEFAULT 0,
-  margem_pct NUMERIC(5,2) DEFAULT 0
+  margem_pct NUMERIC(5,2) DEFAULT 0,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
 );
 
-CREATE TABLE IF NOT EXISTS itens_ficha_tecnicica (
+-- Corrige o nome digitado errado em versões anteriores (itens_ficha_tecnicica)
+DO $$
+BEGIN
+  IF to_regclass('public.itens_ficha_tecnicica') IS NOT NULL
+     AND to_regclass('public.itens_ficha_tecnica') IS NULL THEN
+    ALTER TABLE itens_ficha_tecnicica RENAME TO itens_ficha_tecnica;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS itens_ficha_tecnica (
   id SERIAL PRIMARY KEY,
   ficha_id INTEGER REFERENCES fichas_tecnicas(id) ON DELETE CASCADE,
   insumo_id INTEGER REFERENCES insumos(id),
-  consumo NUMERIC(12,3) DEFAULT 0  -- ex.: 1.5 m de tecido por peça
+  consumo NUMERIC(12,3) DEFAULT 0            -- ex.: 1.5 m de tecido por peça
 );
 
 -- Compras de insumos
@@ -129,8 +192,11 @@ CREATE TABLE IF NOT EXISTS compras (
   id SERIAL PRIMARY KEY,
   fornecedor_id INTEGER REFERENCES fornecedores(id),
   data TIMESTAMPTZ DEFAULT now(),
-  status TEXT DEFAULT 'pendente',  -- pendente, recebido, cancelado
-  total NUMERIC(12,2) DEFAULT 0
+  status TEXT DEFAULT 'pendente',            -- pendente, recebido, cancelado
+  total NUMERIC(12,2) DEFAULT 0,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS itens_compra (
@@ -147,8 +213,11 @@ CREATE TABLE IF NOT EXISTS vendas (
   cliente_id INTEGER REFERENCES clientes(id),
   representante_id INTEGER REFERENCES representantes(id),
   data TIMESTAMPTZ DEFAULT now(),
-  status TEXT DEFAULT 'aberta',
-  total NUMERIC(12,2) DEFAULT 0
+  status TEXT DEFAULT 'aberta',              -- aberta, faturada, entregue, cancelada
+  total NUMERIC(12,2) DEFAULT 0,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS itens_venda (
@@ -159,3 +228,66 @@ CREATE TABLE IF NOT EXISTS itens_venda (
   quantidade INTEGER NOT NULL,
   preco_unitario NUMERIC(12,2) NOT NULL
 );
+
+-- ------------------------------------------------------------
+-- 2) MIGRAÇÕES — colunas novas em bancos criados com a versão anterior
+-- ------------------------------------------------------------
+ALTER TABLE usuarios       ADD COLUMN IF NOT EXISTS ultimo_login TIMESTAMPTZ;
+ALTER TABLE usuarios       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+ALTER TABLE usuarios       ALTER COLUMN perfil SET DEFAULT 'operador';
+UPDATE usuarios SET perfil = 'operador' WHERE perfil IS NULL OR perfil = 'usuario';
+
+ALTER TABLE tamanhos       ADD COLUMN IF NOT EXISTS ordem INTEGER DEFAULT 0;
+ALTER TABLE tamanhos       ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE tamanhos       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+ALTER TABLE colecoes       ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE colecoes       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+ALTER TABLE fornecedores   ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE fornecedores   ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+ALTER TABLE insumos        ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE insumos        ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+ALTER TABLE clientes       ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE clientes       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS cor TEXT;
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS custo NUMERIC(12,2) DEFAULT 0;
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+ALTER TABLE estoques       ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE estoques       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+ALTER TABLE movimentacoes  ADD COLUMN IF NOT EXISTS local TEXT DEFAULT 'almoxarifado';
+ALTER TABLE movimentacoes  ADD COLUMN IF NOT EXISTS usuario_id INTEGER;
+
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+ALTER TABLE fichas_tecnicas ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE fichas_tecnicas ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+ALTER TABLE compras        ADD COLUMN IF NOT EXISTS observacoes TEXT;
+ALTER TABLE compras        ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE compras        ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS observacoes TEXT;
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+
+-- ------------------------------------------------------------
+-- 3) ÍNDICES
+-- ------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_auditoria_data       ON auditoria (data DESC);
+CREATE INDEX IF NOT EXISTS idx_auditoria_recurso    ON auditoria (recurso, registro_id);
+CREATE INDEX IF NOT EXISTS idx_movimentacoes_prod   ON movimentacoes (produto_id, tamanho_id, data DESC);
+CREATE INDEX IF NOT EXISTS idx_estoques_produto     ON estoques (produto_id);
+CREATE INDEX IF NOT EXISTS idx_ordens_status        ON ordens_fabricacao (status);
+CREATE INDEX IF NOT EXISTS idx_vendas_status        ON vendas (status);
+CREATE INDEX IF NOT EXISTS idx_compras_status       ON compras (status);
