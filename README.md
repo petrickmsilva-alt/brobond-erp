@@ -137,6 +137,7 @@ e o CORS só aceita o próprio domínio (ou `CORS_ORIGINS`).
 ### API (resumo)
 
 ```
+GET    /api/health                     { ok, db, uploads, version } — pública (sem login)
 POST   /api/auth/login                 { email, password } → { token, user }
 GET    /api/auth/me
 POST   /api/auth/change-password       { senha_atual, senha_nova }
@@ -194,6 +195,7 @@ Ver [`docs/AUDITORIA-EVOLUCOES.md`](docs/AUDITORIA-EVOLUCOES.md). Situação:
 
 - [x] **Fase 1** — Fotos, categorias, cores, código de barras, detalhe do produto, etiquetas
 - [x] **Fase 6 (parcial)** — rate limit, cabeçalhos, CORS, JWT obrigatório, testes + CI
+- [x] **Correções 0.3.1** — Configurações exibe a versão real e o provedor de fotos; alerta quando o Cloudinary está configurado mas inválido; `/api/health` informa o provedor
 - [ ] Fase 2 — Itens de venda/compra, baixa de estoque, PDF do pedido, comissão
 - [ ] Fase 3 — OP por grade, ficha técnica com insumos, custo real, estoque de insumos
 - [ ] Fase 4 — Locais, transferência, visão em grade, inventário, leitor de código de barras
