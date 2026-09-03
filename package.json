@@ -1,0 +1,19 @@
+{
+  "name": "brobond-erp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ERP de controle de estoque e produção da BROBOND (roupas masculinas)",
+  "scripts": {
+    "dev": "concurrently -k -n SERVER,CLIENT -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "install:all": "npm --prefix server install && npm --prefix client install",
+    "build": "npm --prefix client install && npm --prefix client run build",
+    "start": "npm --prefix server install && npm --prefix server run start",
+    "typecheck": "npm --prefix server run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

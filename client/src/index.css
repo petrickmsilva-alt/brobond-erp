@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Identidade BROBOND — extraído da logo (charcoal #231F20 + âmbar #C9832E).
+     âmbar é a cor de marca; rampas geradas a partir dela.
+     Formato: "R G B" (space-separated) para uso com Tailwind. */
+  --brand-50: 251 238 223;   /* #FBEEDF */
+  --brand-100: 247 226 204;  /* #F7E2CC */
+  --brand-400: 219 160 90;   /* #DBA05A */
+  --brand-500: 201 131 46;   /* #C9832E — cor da logo */
+  --brand-600: 176 110 34;   /* #B06E22 */
+  --brand-700: 143 88 27;    /* #8F581B */
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-100 text-slate-800 antialiased;
+}
