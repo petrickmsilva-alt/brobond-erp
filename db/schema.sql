@@ -256,6 +256,27 @@ CREATE TABLE IF NOT EXISTS itens_compra (
   preco_unitario NUMERIC(12,2) NOT NULL
 );
 
+-- Estoque de insumos (matéria-prima) — saldo por insumo.
+CREATE TABLE IF NOT EXISTS estoque_insumos (
+  id SERIAL PRIMARY KEY,
+  insumo_id INTEGER UNIQUE REFERENCES insumos(id),
+  quantidade NUMERIC(12,3) DEFAULT 0,
+  estoque_min NUMERIC(12,3) DEFAULT 0,
+  atualizado_em TIMESTAMPTZ
+);
+
+-- Movimentações de insumos (entrada por compra, ajuste, saída por consumo de OP)
+CREATE TABLE IF NOT EXISTS movimentacoes_insumos (
+  id SERIAL PRIMARY KEY,
+  tipo TEXT NOT NULL,                        -- entrada, saida, ajuste
+  insumo_id INTEGER REFERENCES insumos(id),
+  quantidade NUMERIC(12,3) NOT NULL,
+  custo_unitario NUMERIC(12,2) DEFAULT 0,
+  motivo TEXT,
+  usuario_id INTEGER,
+  data TIMESTAMPTZ DEFAULT now()
+);
+
 -- Vendas
 CREATE TABLE IF NOT EXISTS vendas (
   id SERIAL PRIMARY KEY,
@@ -275,7 +296,9 @@ CREATE TABLE IF NOT EXISTS itens_venda (
   produto_id INTEGER REFERENCES produtos(id),
   tamanho_id INTEGER REFERENCES tamanhos(id),
   quantidade INTEGER NOT NULL,
-  preco_unitario NUMERIC(12,2) NOT NULL
+  preco_unitario NUMERIC(12,2) NOT NULL,
+  desconto_pct NUMERIC(5,2) DEFAULT 0,
+  subtotal NUMERIC(12,2) DEFAULT 0
 );
 
 -- ------------------------------------------------------------
@@ -337,6 +360,26 @@ ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS observacoes TEXT;
 ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
 ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
 
+-- Fase 2: pedidos de venda com itens, condição de pagamento, frete e comissão
+ALTER TABLE compras        ADD COLUMN IF NOT EXISTS condicao_pagamento TEXT;
+ALTER TABLE compras        ADD COLUMN IF NOT EXISTS frete NUMERIC(12,2) DEFAULT 0;
+ALTER TABLE compras        ADD COLUMN IF NOT EXISTS previsao_entrega DATE;
+ALTER TABLE compras        ADD COLUMN IF NOT EXISTS nota_fiscal TEXT;
+ALTER TABLE compras        ADD COLUMN IF NOT EXISTS recebida_em TIMESTAMPTZ;
+
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS condicao_pagamento TEXT;
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS desconto NUMERIC(12,2) DEFAULT 0;
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS frete NUMERIC(12,2) DEFAULT 0;
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS previsao_entrega DATE;
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS pedido_cliente TEXT;
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS local_saida TEXT DEFAULT 'almoxarifado';
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS comissao_pct NUMERIC(5,2);
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS comissao_valor NUMERIC(12,2);
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS faturada_em TIMESTAMPTZ;
+
+ALTER TABLE itens_venda    ADD COLUMN IF NOT EXISTS desconto_pct NUMERIC(5,2) DEFAULT 0;
+ALTER TABLE itens_venda    ADD COLUMN IF NOT EXISTS subtotal NUMERIC(12,2) DEFAULT 0;
+
 -- ------------------------------------------------------------
 -- 3) ÍNDICES
 -- ------------------------------------------------------------
@@ -351,6 +394,13 @@ CREATE INDEX IF NOT EXISTS idx_arquivos_registro    ON arquivos (recurso, regist
 CREATE UNIQUE INDEX IF NOT EXISTS uq_produtos_codigo_barras ON produtos (codigo_barras) WHERE codigo_barras IS NOT NULL AND codigo_barras <> '';
 CREATE INDEX IF NOT EXISTS idx_produtos_categoria   ON produtos (categoria_id);
 CREATE INDEX IF NOT EXISTS idx_produtos_cor         ON produtos (cor_id);
+
+-- Fase 2: itens de pedidos e estoque de insumos
+CREATE UNIQUE INDEX IF NOT EXISTS uq_estoque_insumos_insumo ON estoque_insumos (insumo_id);
+CREATE INDEX IF NOT EXISTS idx_itens_venda_venda     ON itens_venda (venda_id);
+CREATE INDEX IF NOT EXISTS idx_itens_compra_compra   ON itens_compra (compra_id);
+CREATE INDEX IF NOT EXISTS idx_mov_insumos_insumo    ON movimentacoes_insumos (insumo_id, data DESC);
+CREATE INDEX IF NOT EXISTS idx_vendas_faturada       ON vendas (faturada_em);
 
 -- ------------------------------------------------------------
 -- 4) MIGRAÇÃO DE DADOS — cor em texto livre → cadastro de Cores

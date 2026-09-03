@@ -159,6 +159,12 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         setFormOpen(false);
       } else {
         const created = await api.post<Record<string, any>>(`/${resource.key}`, payload);
+        if (resource.detail && !hasImages && created?.id) {
+          // Módulos com página de detalhe própria (vendas, compras): abre o pedido
+          toast.success(`${resource.singular} incluído(a). Adicione os itens do pedido.`);
+          navigate(`/${resource.key}/${created.id}`);
+          return;
+        }
         if (hasImages && created?.id) {
           // Abre o registro recém-criado em modo edição para permitir anexar fotos
           toast.success(`${resource.singular} incluído(a). Agora você pode adicionar as fotos.`);

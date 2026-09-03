@@ -241,6 +241,24 @@ export class PgStore implements Store {
     return res.rows[0];
   }
 
+  async adjustInsumoStock(insumoId: number, delta: number, tx?: Tx): Promise<Row> {
+    const res = await q(
+      `INSERT INTO estoque_insumos (insumo_id, quantidade, atualizado_em)
+       VALUES ($1, $2, now())
+       ON CONFLICT (insumo_id)
+       DO UPDATE SET quantidade = ROUND((estoque_insumos.quantidade + EXCLUDED.quantidade)::numeric, 3), atualizado_em = now()
+       RETURNING *`,
+      [insumoId, delta],
+      tx
+    );
+    return res.rows[0];
+  }
+
+  async insumoStock(insumoId: number, tx?: Tx): Promise<number> {
+    const res = await q(`SELECT quantidade FROM estoque_insumos WHERE insumo_id = $1`, [insumoId], tx);
+    return Number(res.rows[0]?.quantidade ?? 0);
+  }
+
   async audit(entry: AuditEntry, tx?: Tx): Promise<void> {
     await q(
       `INSERT INTO auditoria (usuario_id, usuario, acao, recurso, registro_id, descricao, dados)
@@ -268,6 +286,8 @@ export class PgStore implements Store {
           (SELECT COUNT(*) FROM ordens_fabricacao WHERE status IN ('planejada', 'em_producao'))::int AS producao,
           (SELECT COUNT(*) FROM vendas WHERE status = 'aberta')::int AS vendas_abertas,
           (SELECT COUNT(*) FROM compras WHERE status = 'pendente')::int AS compras_pendentes,
+          (SELECT COALESCE(SUM(total), 0) FROM vendas WHERE status IN ('faturada', 'entregue') AND faturada_em >= date_trunc('month', now()))::float AS vendas_mes,
+          (SELECT COALESCE(SUM(comissao_valor), 0) FROM vendas WHERE status IN ('faturada', 'entregue'))::float AS comissoes_pagar,
           (SELECT COUNT(*) FROM produtos)::int AS produtos,
           (SELECT COUNT(*) FROM clientes)::int AS clientes,
           (SELECT COUNT(*) FROM fornecedores)::int AS fornecedores,
@@ -307,6 +327,8 @@ export class PgStore implements Store {
       producao: Number(k.producao || 0),
       vendasAbertas: Number(k.vendas_abertas || 0),
       comprasPendentes: Number(k.compras_pendentes || 0),
+      vendasMes: Number(k.vendas_mes || 0),
+      comissoesPagar: Number(k.comissoes_pagar || 0),
       totais: {
         produtos: Number(k.produtos || 0),
         clientes: Number(k.clientes || 0),

@@ -8,6 +8,7 @@ import { labelOf, type ListParams, type Payload, type Row, type Store, type Tx }
 import { validatePayload } from './validate';
 import type { AuthUser } from './auth';
 import { attachImages, removeAllFiles } from './uploads';
+import { aplicarRegrasPedido } from './itens';
 
 let store: Store | null = null;
 
@@ -112,6 +113,9 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
         await s.adjustStock(Number(row.produto_id), Number(row.tamanho_id), 'almoxarifado', Number(row.quantidade), tx);
         await s.insert(getResource('movimentacoes')!, { tipo: 'entrada', produto_id: row.produto_id, tamanho_id: row.tamanho_id, local: 'almoxarifado', quantidade: Number(row.quantidade), motivo: `Produção concluída — OP #${row.id}`, usuario_id: actor.id || null }, tx);
       }
+      if (r.key === 'vendas' || r.key === 'compras') {
+        await aplicarRegrasPedido(r.key === 'vendas' ? 'venda' : 'compra', null, row, data, { id: actor.id || null, name: actor.name }, tx);
+      }
 
       await audit(tx, actor, 'criar', r, row.id, `${r.singular} ${labelOf(r, row)} incluído(a)`, sanitize(data));
       return (await s.get(r, row.id, tx)) ?? row;
@@ -155,6 +159,11 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
         await s.adjustStock(Number(before.produto_id), Number(before.tamanho_id), 'almoxarifado', -Number(before.quantidade), tx);
         await s.insert(getResource('movimentacoes')!, { tipo: 'saida', produto_id: before.produto_id, tamanho_id: before.tamanho_id, local: 'almoxarifado', quantidade: Number(before.quantidade), motivo: `Estorno — OP #${row.id} reaberta`, usuario_id: actor.id || null }, tx);
       }
+      // Vendas/Compras: faturamento/baixa de estoque, recebimento/custo médio e estornos
+      if (r.key === 'vendas' || r.key === 'compras') {
+        const full = (await s.get(r, id, tx)) ?? row;
+        await aplicarRegrasPedido(r.key === 'vendas' ? 'venda' : 'compra', before, full, data, { id: actor.id || null, name: actor.name }, tx);
+      }
 
       const campos = Object.keys(changes).join(', ');
       await audit(tx, actor, 'editar', r, id, `${r.singular} ${labelOf(r, row)} alterado(a) (${campos})`, changes);
@@ -178,6 +187,20 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor): Promi
       }
       if (r.key === 'ordens' && before.status === 'concluida') {
         throw new HttpError(409, 'Ordem concluída já deu entrada no estoque. Reabra ou cancele em vez de excluir.');
+      }
+      if (r.key === 'vendas' && ['faturada', 'entregue'].includes(String(before.status))) {
+        throw new HttpError(409, 'Pedido faturado já baixou o estoque. Cancele o pedido (estorna automaticamente) em vez de excluí-lo.');
+      }
+      if (r.key === 'compras' && before.status === 'recebido') {
+        throw new HttpError(409, 'Compra recebida já deu entrada nos insumos. Cancele a compra (estorna automaticamente) em vez de excluí-la.');
+      }
+      // Remove os itens do pedido junto (no Postgres o ON DELETE CASCADE faz;
+      // aqui garantimos o mesmo comportamento no modo demonstração).
+      if (r.key === 'vendas' || r.key === 'compras') {
+        const itensR = getResource(r.key === 'vendas' ? 'itens_venda' : 'itens_compra')!;
+        const col = r.key === 'vendas' ? 'venda_id' : 'compra_id';
+        const itens = await s.list(itensR, { page: 1, pageSize: 1000, filter: { [col]: id } }, tx);
+        for (const it of itens.rows) await s.remove(itensR, Number(it.id), tx);
       }
       if (r.key === 'estoques' && Number(before.quantidade) !== 0) {
         throw new HttpError(409, 'Só é possível excluir saldos zerados. Lance uma saída/ajuste antes.');

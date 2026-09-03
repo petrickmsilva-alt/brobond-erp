@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, Boxes, Cog, Factory, History, Receipt, Scissors, Shirt, ShoppingCart, Store, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Banknote, Boxes, Cog, Factory, Handshake, History, Receipt, Scissors, Shirt, ShoppingCart, Store, Wallet } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { ACAO_LABEL, formatDate, formatMoney, formatNumber, formatRelative } from '../lib/format';
@@ -14,6 +14,8 @@ type Dashboard = {
   producao: number;
   vendasAbertas: number;
   comprasPendentes: number;
+  vendasMes: number;
+  comissoesPagar: number;
   totais: { produtos: number; clientes: number; fornecedores: number; insumos: number };
   alertas: { produto: string; tamanho: string; local: string; quantidade: number; estoque_min: number }[];
   ordens: { id: number; produto: string; tamanho: string; quantidade: number; status: string; previsao: string | null }[];
@@ -42,10 +44,10 @@ export default function Dashboard() {
 
   const kpis = data
     ? [
+        { label: 'Vendas do mês (faturadas)', value: formatMoney(data.vendasMes), sub: `${formatNumber(data.vendasAbertas)} pedidos em aberto`, icon: Banknote, to: '/vendas', accent: 'bg-emerald-600' },
+        { label: 'Comissões a pagar', value: formatMoney(data.comissoesPagar), sub: 'sobre vendas faturadas', icon: Handshake, to: '/vendas', accent: 'bg-brand-500' },
         { label: 'Valor do estoque', value: formatMoney(data.valorEstoque), sub: `${formatNumber(data.pecasEstoque)} peças`, icon: Wallet, to: '/estoque', accent: 'bg-navy-800' },
-        { label: 'Itens em alerta', value: formatNumber(data.itensAlerta), sub: 'abaixo do mínimo', icon: AlertTriangle, to: '/estoque', accent: data.itensAlerta > 0 ? 'bg-red-600' : 'bg-emerald-600' },
-        { label: 'Produção em andamento', value: formatNumber(data.producao), sub: 'ordens abertas', icon: Cog, to: '/ordens', accent: 'bg-brand-500' },
-        { label: 'Vendas em aberto', value: formatNumber(data.vendasAbertas), sub: `${formatNumber(data.comprasPendentes)} compras pendentes`, icon: Receipt, to: '/vendas', accent: 'bg-navy-600' },
+        { label: 'Itens em alerta', value: formatNumber(data.itensAlerta), sub: 'abaixo do mínimo', icon: AlertTriangle, to: '/estoque', accent: data.itensAlerta > 0 ? 'bg-red-600' : 'bg-slate-500' },
       ]
     : [];
 

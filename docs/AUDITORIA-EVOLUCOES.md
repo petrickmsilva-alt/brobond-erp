@@ -147,12 +147,12 @@ Organizado em fases. Esforço em **dias úteis de desenvolvimento** (estimativa)
 
 ### FASE 2 — Vendas e Compras completas (≈ 6 dias)
 
-- [ ] **2.1 Itens do pedido de venda** (produto + tamanho + quantidade + preço unitário + desconto) com **total calculado**
-- [ ] **2.2 Baixa automática de estoque** ao faturar (e estorno ao cancelar), com bloqueio se não houver saldo
-- [ ] **2.3 Itens do pedido de compra** (insumo + quantidade + preço) com total calculado; ao "Receber" atualiza **custo médio ponderado** do insumo
-- [ ] **2.4 Campos comerciais:** condição de pagamento, desconto, frete, previsão de entrega, número do pedido do cliente
-- [ ] **2.5 PDF do pedido** (logo BROBOND, dados do cliente, itens em grade, totais) para enviar por WhatsApp/e-mail
-- [ ] **2.6 Comissão calculada** por venda faturada (usa `comissao_pct` do representante) + relatório por período
+- [x] **2.1 Itens do pedido de venda** (produto + tamanho + quantidade + preço unitário + desconto) com **total calculado**
+- [x] **2.2 Baixa automática de estoque** ao faturar (e estorno ao cancelar), com bloqueio se não houver saldo
+- [x] **2.3 Itens do pedido de compra** (insumo + quantidade + preço) com total calculado; ao "Receber" atualiza **custo médio ponderado** do insumo
+- [x] **2.4 Campos comerciais:** condição de pagamento, desconto, frete, previsão de entrega, número do pedido do cliente
+- [x] **2.5 PDF do pedido** (logo BROBOND, dados do cliente, itens em grade, totais) para enviar por WhatsApp/e-mail
+- [x] **2.6 Comissão calculada** por venda faturada (usa `comissao_pct` do representante) + relatório por período
 
 ### FASE 3 — Produção e custo real (≈ 5 dias)
 

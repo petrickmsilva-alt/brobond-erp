@@ -146,6 +146,23 @@ GET    /api/dashboard
 GET    /api/:recurso?q=&page=&pageSize=&sort=&dir=&f.campo=valor   (f.* = filtros de igualdade)
 GET    /api/:recurso/options           [{ value, label }] para selects
 GET    /api/produtos/:id/detalhe       fotos + grade de estoque + movimentações + OPs + custo
+GET    /api/vendas/:id/itens           itens do pedido (também /api/compras/:id/itens)
+POST   /api/vendas/:id/itens           adiciona item { produto_id, tamanho_id, quantidade, preco_unitario, desconto_pct }
+PUT    /api/vendas/:id/itens/:itemId   altera item
+DELETE /api/vendas/:id/itens/:itemId   remove item (o total do pedido é sempre recalculado)
+GET    /api/relatorios/comissoes?de=&ate=&representante_id=   comissões de representantes no período
+```
+
+**Regras de pedidos (vendas/compras):** o `total` é sempre calculado pelo servidor
+(itens + frete − desconto) e nunca aceito do cliente. Ao **faturar** uma venda, as
+peças saem do estoque (local de saída com fallback para o almoxarifado), a venda sem
+saldo é bloqueada (409 com a lista de itens) e a comissão do representante é
+congelada; cancelar um pedido faturado/entregue estorna a saída. Ao **receber** uma
+compra, os insumos entram no estoque de insumos e o `custo_medio` vira a média
+ponderada; cancelar uma compra recebida estorna a entrada. Itens de pedidos
+faturados/recebidos ficam bloqueados para edição.
+
+```
 GET    /api/:recurso/:id/arquivos      fotos do registro
 POST   /api/:recurso/:id/arquivos      { nome, mime, dados (base64), thumb (base64) }
 PUT    /api/:recurso/:id/arquivos/:fid { principal: true } ou { ordem: [ids...] }
@@ -196,7 +213,7 @@ Ver [`docs/AUDITORIA-EVOLUCOES.md`](docs/AUDITORIA-EVOLUCOES.md). Situação:
 - [x] **Fase 1** — Fotos, categorias, cores, código de barras, detalhe do produto, etiquetas
 - [x] **Fase 6 (parcial)** — rate limit, cabeçalhos, CORS, JWT obrigatório, testes + CI
 - [x] **Correções 0.3.1** — Configurações exibe a versão real e o provedor de fotos; alerta quando o Cloudinary está configurado mas inválido; `/api/health` informa o provedor
-- [ ] Fase 2 — Itens de venda/compra, baixa de estoque, PDF do pedido, comissão
+- [x] **Fase 2 (v0.4.0)** — Pedidos com itens e total calculado, faturamento com baixa de estoque (e estorno), compras com entrada de insumos e custo médio ponderado, impressão do pedido, comissões e relatório
 - [ ] Fase 3 — OP por grade, ficha técnica com insumos, custo real, estoque de insumos
 - [ ] Fase 4 — Locais, transferência, visão em grade, inventário, leitor de código de barras
 - [ ] Fase 5 — Exportação, filtros, relatórios, gráficos, importação

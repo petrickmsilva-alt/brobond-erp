@@ -7,6 +7,7 @@ import { ADMIN_EMAIL, changePassword, currentUser, ensureAdmin, login, me, requi
 import { getPublicResource, publicMeta } from './resources';
 import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider, uploadsConfigError } from './uploads';
 import { productDetail } from './detail';
+import { createItem, deleteItem, listItens, relatorioComissoes, updateItem } from './itens';
 import {
   checkAccess,
   createRecord,
@@ -25,7 +26,7 @@ import { assertProductionSecrets, corsOrigin, loginRateLimit, securityHeaders } 
 assertProductionSecrets();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '0.3.1';
+export const VERSION = '0.4.0';
 const app = express();
 
 app.disable('x-powered-by');
@@ -104,6 +105,19 @@ app.get(
 
 // Página de detalhe do produto (fotos, grade de estoque, movimentações, OPs, ficha)
 app.get('/api/produtos/:id/detalhe', wrap(productDetail));
+
+// Itens de pedidos de venda/compra (sub-recursos) — antes das rotas genéricas
+app.get('/api/vendas/:id/itens', wrap(listItens));
+app.post('/api/vendas/:id/itens', wrap(createItem));
+app.put('/api/vendas/:id/itens/:itemId', wrap(updateItem));
+app.delete('/api/vendas/:id/itens/:itemId', wrap(deleteItem));
+app.get('/api/compras/:id/itens', wrap(listItens));
+app.post('/api/compras/:id/itens', wrap(createItem));
+app.put('/api/compras/:id/itens/:itemId', wrap(updateItem));
+app.delete('/api/compras/:id/itens/:itemId', wrap(deleteItem));
+
+// Relatório de comissões de representantes (antes de /api/:resource/:id)
+app.get('/api/relatorios/comissoes', wrap(relatorioComissoes));
 
 // Fotos / anexos de um registro
 app.get('/api/:resource/:id/arquivos', wrap(listFiles));

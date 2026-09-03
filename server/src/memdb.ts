@@ -24,6 +24,16 @@ function norm(v: unknown): string {
   return v === null || v === undefined ? '' : String(v);
 }
 
+/** Arredonda para 3 casas decimais (quantidades de insumo). */
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
+/** Arredonda para 2 casas decimais (valores monetários). */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 export class MemStore implements Store {
   readonly kind = 'memory' as const;
   private tables = new Map<string, Table>();
@@ -241,6 +251,29 @@ export class MemStore implements Store {
     return this.insert(r, { produto_id: produtoId, tamanho_id: tamanhoId, local, quantidade: delta, estoque_min: 0 });
   }
 
+  async adjustInsumoStock(insumoId: number, delta: number): Promise<Row> {
+    const t = this.table('estoque_insumos');
+    for (const row of t.rows.values()) {
+      if (Number(row.insumo_id) === Number(insumoId)) {
+        row.quantidade = round3(Number(row.quantidade || 0) + delta);
+        row.atualizado_em = new Date().toISOString();
+        return { ...row };
+      }
+    }
+    const id = ++t.seq;
+    const row: Row = { id, insumo_id: insumoId, quantidade: round3(delta), estoque_min: 0, atualizado_em: new Date().toISOString() };
+    t.rows.set(id, row);
+    return { ...row };
+  }
+
+  async insumoStock(insumoId: number): Promise<number> {
+    const t = this.table('estoque_insumos');
+    for (const row of t.rows.values()) {
+      if (Number(row.insumo_id) === Number(insumoId)) return Number(row.quantidade || 0);
+    }
+    return 0;
+  }
+
   async audit(entry: AuditEntry): Promise<void> {
     const t = this.table('auditoria');
     const id = ++t.seq;
@@ -270,13 +303,20 @@ export class MemStore implements Store {
       .sort((a, b) => norm(b.data).localeCompare(norm(a.data)))
       .slice(0, 8)
       .map((a) => ({ data: a.data, usuario: a.usuario, acao: a.acao, recurso: a.recurso, descricao: a.descricao }));
+    const vendasRows = rows('vendas');
+    const faturadas = vendasRows.filter((v) => v.status === 'faturada' || v.status === 'entregue');
+    const mesAtual = new Date().toISOString().slice(0, 7);
     return {
       valorEstoque: estoques.reduce((s, e) => s + Number(e.quantidade || 0) * Number(produtos.get(e.produto_id)?.custo || 0), 0),
       pecasEstoque: estoques.reduce((s, e) => s + Number(e.quantidade || 0), 0),
       itensAlerta: estoques.filter((e) => Number(e.estoque_min) > 0 && Number(e.quantidade) <= Number(e.estoque_min)).length,
       producao: rows('ordens_fabricacao').filter((o) => ['planejada', 'em_producao'].includes(o.status)).length,
-      vendasAbertas: rows('vendas').filter((v) => v.status === 'aberta').length,
+      vendasAbertas: vendasRows.filter((v) => v.status === 'aberta').length,
       comprasPendentes: rows('compras').filter((c) => c.status === 'pendente').length,
+      vendasMes: faturadas
+        .filter((v) => String(v.faturada_em || '').slice(0, 7) === mesAtual)
+        .reduce((s, v) => s + Number(v.total || 0), 0),
+      comissoesPagar: faturadas.reduce((s, v) => s + Number(v.comissao_valor || 0), 0),
       totais: { produtos: produtos.size, clientes: rows('clientes').length, fornecedores: rows('fornecedores').length, insumos: rows('insumos').length },
       alertas,
       ordens,
