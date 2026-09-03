@@ -46,7 +46,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
 
         <div className="shrink-0 border-t border-white/10 px-5 py-3 text-[11px] text-navy-400">
           <div className="flex items-center justify-between">
-            <span>BROBOND ERP v0.2</span>
+            <span>BROBOND ERP{meta?.version ? ` v${meta.version.replace(/^v/, '')}` : ''}</span>
             {meta?.mode === 'memory' && (
               <span className="rounded bg-brand-500/20 px-1.5 py-0.5 font-semibold text-brand-300" title="Sem banco de dados: os dados somem ao reiniciar o servidor">
                 DEMO

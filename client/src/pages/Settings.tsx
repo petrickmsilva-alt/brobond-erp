@@ -88,6 +88,16 @@ export default function Settings() {
                 <dd className="font-medium text-slate-800">bcrypt</dd>
               </div>
             </dl>
+            {meta?.uploadsConfigError && (
+              <div className="mt-4">
+                <Alert tone="amber">
+                  O Cloudinary está configurado (<code>UPLOAD_PROVIDER=cloudinary</code>), mas a variável{' '}
+                  <code>CLOUDINARY_URL</code> não foi aceita — as fotos estão sendo salvas no banco de dados.
+                  Verifique na Render se o valor começa exatamente com <code>cloudinary://</code>, sem o nome da
+                  variável na frente, sem aspas nem espaços.
+                </Alert>
+              </div>
+            )}
             {meta?.mode === 'memory' && (
               <div className="mt-4">
                 <Alert tone="amber">Sem <code>DATABASE_URL</code> os dados são apagados ao reiniciar o servidor.</Alert>

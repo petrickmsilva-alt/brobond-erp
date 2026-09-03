@@ -81,6 +81,8 @@ export type Meta = {
   resources: Record<string, ResourceMeta>;
   mode: 'postgres' | 'memory';
   uploads?: 'db' | 'cloudinary';
+  /** true quando UPLOAD_PROVIDER=cloudinary mas a CLOUDINARY_URL é inválida */
+  uploadsConfigError?: boolean;
   version?: string;
 };
 

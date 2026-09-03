@@ -49,19 +49,41 @@ export type PublicFile = {
 // ----------------------------------------------------------------------------
 type Cloudinary = { cloud: string; key: string; secret: string };
 
+// Cache da configuração: avalia uma vez por processo e evita logar o aviso
+// repetidamente a cada upload/requisição de metadados.
+let cfgCache: { cfg: Cloudinary | null; invalidConfig: boolean } | null = null;
+
 function cloudinaryConfig(): Cloudinary | null {
-  if ((process.env.UPLOAD_PROVIDER || 'db').toLowerCase() !== 'cloudinary') return null;
-  const url = process.env.CLOUDINARY_URL || '';
-  const m = /^cloudinary:\/\/([^:]+):([^@]+)@(.+)$/.exec(url.trim());
-  if (!m) {
-    console.warn('⚠️  UPLOAD_PROVIDER=cloudinary mas CLOUDINARY_URL inválida — usando armazenamento no banco.');
-    return null;
+  if (!cfgCache) {
+    let cfg: Cloudinary | null = null;
+    let invalidConfig = false;
+    if ((process.env.UPLOAD_PROVIDER || 'db').toLowerCase() === 'cloudinary') {
+      const url = process.env.CLOUDINARY_URL || '';
+      const m = /^cloudinary:\/\/([^:]+):([^@]+)@(.+)$/.exec(url.trim());
+      if (!m) {
+        console.warn('⚠️  UPLOAD_PROVIDER=cloudinary mas CLOUDINARY_URL inválida — usando armazenamento no banco.');
+        invalidConfig = true;
+      } else {
+        cfg = { key: m[1], secret: m[2], cloud: m[3] };
+      }
+    }
+    cfgCache = { cfg, invalidConfig };
   }
-  return { key: m[1], secret: m[2], cloud: m[3] };
+  return cfgCache.cfg;
 }
 
 export function uploadProvider(): 'db' | 'cloudinary' {
   return cloudinaryConfig() ? 'cloudinary' : 'db';
+}
+
+/**
+ * true quando o proprietário pediu Cloudinary (UPLOAD_PROVIDER=cloudinary)
+ * mas a CLOUDINARY_URL está ausente/inválida — o sistema caiu de volta para
+ * o armazenamento no banco. Usado pela tela de Configurações para avisar.
+ */
+export function uploadsConfigError(): boolean {
+  cloudinaryConfig();
+  return !!cfgCache?.invalidConfig;
 }
 
 function sign(params: Record<string, string>, secret: string): string {

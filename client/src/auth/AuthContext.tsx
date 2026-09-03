@@ -23,7 +23,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshMeta = useCallback(async () => {
     const m = await api.get<Meta & { user: User }>('/meta');
-    setMeta({ resources: m.resources, mode: m.mode });
+    setMeta({
+      resources: m.resources,
+      mode: m.mode,
+      uploads: m.uploads,
+      uploadsConfigError: m.uploadsConfigError,
+      version: m.version,
+    });
     if (m.user) setUser(m.user);
   }, []);
 

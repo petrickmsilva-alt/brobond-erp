@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { hasDatabaseUrl, isDbConnected, migrate } from './db';
 import { ADMIN_EMAIL, changePassword, currentUser, ensureAdmin, login, me, requireAuth } from './auth';
 import { getPublicResource, publicMeta } from './resources';
-import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider } from './uploads';
+import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider, uploadsConfigError } from './uploads';
 import { productDetail } from './detail';
 import {
   checkAccess,
@@ -25,7 +25,7 @@ import { assertProductionSecrets, corsOrigin, loginRateLimit, securityHeaders } 
 assertProductionSecrets();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '0.3.0';
+export const VERSION = '0.3.1';
 const app = express();
 
 app.disable('x-powered-by');
@@ -69,7 +69,7 @@ function resourceParam(req: Request, _res: Response, next: NextFunction) {
 // Público
 // ----------------------------------------------------------------------------
 app.get('/api/health', (_req, res) =>
-  res.json({ ok: true, db: isDbConnected() ? 'postgres' : 'memory', version: VERSION })
+  res.json({ ok: true, db: isDbConnected() ? 'postgres' : 'memory', uploads: uploadProvider(), version: VERSION })
 );
 app.post('/api/auth/login', loginRateLimit, wrap(login));
 // Imagens armazenadas no banco: URL pública protegida por token aleatório
@@ -89,6 +89,7 @@ app.get('/api/meta', (req, res) => {
     resources: publicMeta(),
     mode: getStore().kind,
     uploads: uploadProvider(),
+    uploadsConfigError: uploadsConfigError(),
     version: VERSION,
     user: currentUser(req),
   });
