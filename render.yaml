@@ -7,7 +7,7 @@ services:
     runtime: node
     rootDir: server
     plan: free
-    buildCommand: npm install && npm --prefix ../client install && npm --prefix ../client run build
+    buildCommand: npm install && cd ../client && npm install && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
