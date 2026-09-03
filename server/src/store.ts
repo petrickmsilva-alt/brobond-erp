@@ -62,6 +62,8 @@ export type DashboardData = {
   producao: number;
   vendasAbertas: number;
   comprasPendentes: number;
+  vendasMes: number;
+  comissoesPagar: number;
   totais: { produtos: number; clientes: number; fornecedores: number; insumos: number };
   alertas: { produto: string; tamanho: string; local: string; quantidade: number; estoque_min: number }[];
   ordens: { id: number; produto: string; tamanho: string; quantidade: number; status: string; previsao: string | null }[];
@@ -84,6 +86,11 @@ export interface Store {
 
   /** Soma `delta` ao saldo (cria o registro de estoque se não existir). */
   adjustStock(produtoId: number, tamanhoId: number, local: string, delta: number, tx?: Tx): Promise<Row>;
+
+  /** Soma `delta` ao saldo do insumo (cria o registro se não existir) e atualiza `atualizado_em`. */
+  adjustInsumoStock(insumoId: number, delta: number, tx?: Tx): Promise<Row>;
+  /** Saldo atual de um insumo (0 se nunca movimentado). */
+  insumoStock(insumoId: number, tx?: Tx): Promise<number>;
 
   audit(entry: AuditEntry, tx?: Tx): Promise<void>;
   dashboard(): Promise<DashboardData>;

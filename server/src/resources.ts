@@ -556,6 +556,9 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Pedido de compra',
     labelFields: ['id'],
     ops: ALL_OPS,
+    detail: true,
+    notice:
+      'Ao marcar o pedido como "Recebido", os insumos entram no estoque e o custo médio de cada insumo é atualizado automaticamente. Cancelar um pedido recebido estorna a entrada.',
     fields: [
       { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores', required: true, search: true },
       { name: 'data', label: 'Data', type: 'date', required: true },
@@ -571,7 +574,12 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'cancelado', label: 'Cancelado', tone: 'red' },
         ],
       },
-      { name: 'total', label: 'Total (R$)', type: 'money', min: 0, default: 0 },
+      { name: 'total', label: 'Total (R$)', type: 'money', readonly: true, hint: 'Calculado a partir dos itens (e do frete).' },
+      { name: 'condicao_pagamento', label: 'Condição de pagamento', type: 'text', maxLength: 60, list: false, placeholder: 'À vista, 30/60 dias...' },
+      { name: 'frete', label: 'Frete (R$)', type: 'money', min: 0, default: 0, list: false },
+      { name: 'previsao_entrega', label: 'Previsão de entrega', type: 'date', list: false },
+      { name: 'nota_fiscal', label: 'Nota fiscal', type: 'text', maxLength: 60, list: false, placeholder: 'Número da NF' },
+      { name: 'recebida_em', label: 'Recebida em', type: 'datetime', readonly: true, form: false },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
       ...auditFields,
     ],
@@ -585,6 +593,9 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Pedido de venda',
     labelFields: ['id'],
     ops: ALL_OPS,
+    detail: true,
+    notice:
+      'Ao "Faturar", as peças saem do estoque (local de saída, com fallback para o almoxarifado) e a comissão do representante é congelada. Cancelar um pedido faturado/entregue estorna a saída.',
     fields: [
       { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes', required: true, search: true },
       { name: 'representante_id', label: 'Representante', type: 'ref', ref: 'representantes', search: true },
@@ -602,11 +613,104 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'cancelada', label: 'Cancelada', tone: 'red' },
         ],
       },
-      { name: 'total', label: 'Total (R$)', type: 'money', min: 0, default: 0 },
+      { name: 'total', label: 'Total (R$)', type: 'money', readonly: true, hint: 'Calculado a partir dos itens, desconto e frete — nunca é editável.' },
+      { name: 'condicao_pagamento', label: 'Condição de pagamento', type: 'text', maxLength: 60, list: false, placeholder: 'À vista, 30/60 dias...' },
+      { name: 'desconto', label: 'Desconto (R$)', type: 'money', min: 0, default: 0, list: false },
+      { name: 'frete', label: 'Frete (R$)', type: 'money', min: 0, default: 0, list: false },
+      { name: 'previsao_entrega', label: 'Previsão de entrega', type: 'date', list: false },
+      { name: 'pedido_cliente', label: 'Pedido do cliente', type: 'text', maxLength: 60, list: false, placeholder: 'Número do pedido no cliente' },
+      { name: 'local_saida', label: 'Local de saída', type: 'text', maxLength: 60, default: 'almoxarifado', list: false, hint: 'Local de onde as peças saem no faturamento. Se não houver saldo, tenta o almoxarifado.' },
+      { name: 'comissao_pct', label: 'Comissão (%)', type: 'percent', readonly: true, form: false },
+      { name: 'comissao_valor', label: 'Comissão (R$)', type: 'money', readonly: true, form: false },
+      { name: 'faturada_em', label: 'Faturada em', type: 'datetime', readonly: true, form: false },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
       ...auditFields,
     ],
     orderBy: { field: 'data', dir: 'desc' },
+  },
+
+  // ----------------------------------------------------------------
+  // Interno — itens de pedidos e estoque de insumos.
+  // Manipulados por pedidos.ts (sub-recursos), não pela API genérica.
+  // ----------------------------------------------------------------
+  itens_venda: {
+    key: 'itens_venda',
+    table: 'itens_venda',
+    label: 'Itens de venda',
+    singular: 'Item de venda',
+    labelFields: ['id'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'venda_id', label: 'Venda', type: 'integer' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
+      { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, min: 1 },
+      { name: 'preco_unitario', label: 'Preço unitário', type: 'money', required: true, min: 0 },
+      { name: 'desconto_pct', label: 'Desconto (%)', type: 'percent', min: 0, max: 100, default: 0 },
+      { name: 'subtotal', label: 'Subtotal', type: 'money', readonly: true },
+    ],
+  },
+
+  itens_compra: {
+    key: 'itens_compra',
+    table: 'itens_compra',
+    label: 'Itens de compra',
+    singular: 'Item de compra',
+    labelFields: ['id'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'compra_id', label: 'Compra', type: 'integer' },
+      { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos', required: true },
+      { name: 'quantidade', label: 'Quantidade', type: 'number', required: true, min: 0.001 },
+      { name: 'preco_unitario', label: 'Preço unitário', type: 'money', required: true, min: 0 },
+    ],
+  },
+
+  estoque_insumos: {
+    key: 'estoque_insumos',
+    table: 'estoque_insumos',
+    label: 'Estoque de insumos',
+    singular: 'Saldo de insumo',
+    labelFields: ['insumo_id'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos' },
+      { name: 'quantidade', label: 'Quantidade', type: 'number', default: 0 },
+      { name: 'estoque_min', label: 'Estoque mínimo', type: 'number', min: 0, default: 0 },
+      { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', readonly: true },
+    ],
+  },
+
+  movimentacoes_insumos: {
+    key: 'movimentacoes_insumos',
+    table: 'movimentacoes_insumos',
+    label: 'Movimentações de insumos',
+    singular: 'Movimentação de insumo',
+    labelFields: ['id'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      {
+        name: 'tipo',
+        label: 'Tipo',
+        type: 'select',
+        required: true,
+        options: [
+          { value: 'entrada', label: 'Entrada', tone: 'green' },
+          { value: 'saida', label: 'Saída', tone: 'red' },
+          { value: 'ajuste', label: 'Ajuste', tone: 'amber' },
+        ],
+      },
+      { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos', required: true },
+      { name: 'quantidade', label: 'Quantidade', type: 'number', required: true },
+      { name: 'custo_unitario', label: 'Custo unitário', type: 'money', min: 0, default: 0 },
+      { name: 'motivo', label: 'Motivo', type: 'text' },
+      { name: 'usuario_id', label: 'Usuário', type: 'integer' },
+      { name: 'data', label: 'Data', type: 'datetime', readonly: true },
+    ],
   },
 };
 
