@@ -9,6 +9,8 @@ import {
   Factory,
   Handshake,
   History,
+  Palette,
+  Layers,
   LayoutDashboard,
   Ruler,
   Scissors,
@@ -50,7 +52,9 @@ export const MODULES: Module[] = [
   },
 
   // Cadastros
-  { id: 'produtos', label: 'Produtos', icon: Shirt, group: 'Cadastros', path: '/produtos', resource: 'produtos', description: 'Catálogo de peças acabadas: SKU, cor, coleção, custo e preço.' },
+  { id: 'produtos', label: 'Produtos', icon: Shirt, group: 'Cadastros', path: '/produtos', resource: 'produtos', description: 'Catálogo de peças acabadas: fotos, SKU, categoria, cor, coleção, custo e preço.' },
+  { id: 'categorias', label: 'Categorias', icon: Layers, group: 'Cadastros', path: '/categorias', resource: 'categorias', description: 'Tipos de peça: camisa, camiseta, calça, bermuda...' },
+  { id: 'cores', label: 'Cores', icon: Palette, group: 'Cadastros', path: '/cores', resource: 'cores', description: 'Cores padronizadas com amostra visual.' },
   { id: 'insumos', label: 'Insumos', icon: Scissors, group: 'Cadastros', path: '/insumos', resource: 'insumos', description: 'Matéria-prima: tecido, botão, zíper, etiqueta e afins.' },
   { id: 'fornecedores', label: 'Fornecedores', icon: Factory, group: 'Cadastros', path: '/fornecedores', resource: 'fornecedores', description: 'Empresas de quem você compra insumos.' },
   { id: 'representantes', label: 'Representantes', icon: Handshake, group: 'Cadastros', path: '/representantes', resource: 'representantes', description: 'Vendedores externos, regiões e comissões.' },

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Inbox, Pencil, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Eye, Inbox, Pencil, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
-import { useMeta, type Field, type ListResult, type ResourceMeta } from '../lib/meta';
+import { useMeta, type Field, type ListResult, type PublicFile, type ResourceMeta } from '../lib/meta';
+import { ColorDot, ImageField, Lightbox, Thumb } from '../components/ImageField';
 import { formatCell } from '../lib/format';
 import type { Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
@@ -25,6 +27,9 @@ export default function ModulePage({ module }: { module: Module }) {
 function ResourceCrud({ module, resource }: { module: Module; resource: ResourceMeta }) {
   const { user } = useAuth();
   const toast = useToast();
+  const navigate = useNavigate();
+  const hasImages = !!resource.images;
+  const [zoom, setZoom] = useState<{ file: PublicFile; files: PublicFile[] } | null>(null);
   const isOperador = user?.perfil === 'operador';
   const canCreate = resource.ops.create;
   const canUpdate = resource.ops.update;
@@ -54,7 +59,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const [toDelete, setToDelete] = useState<Record<string, any> | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const listFields = useMemo(() => resource.fields.filter((f) => f.list !== false && !f.virtual && f.type !== 'password'), [resource]);
+  const listFields = useMemo(() => resource.fields.filter((f) => f.list !== false && !f.virtual && f.type !== 'password' && f.type !== 'images'), [resource]);
   const searchable = resource.fields.some((f) => f.search);
 
   useEffect(() => {
@@ -153,12 +158,20 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         toast.success(`${resource.singular} salvo(a) com sucesso.`);
         setFormOpen(false);
       } else {
-        await api.post(`/${resource.key}`, payload);
-        toast.success(`${resource.singular} incluído(a) com sucesso.`);
-        // Mantém o formulário aberto e limpo para o próximo cadastro
-        setValues(initialValues(resource));
-        setErrors({});
-        document.getElementById(`form-${resource.key}`)?.querySelector<HTMLElement>('input, select, textarea')?.focus();
+        const created = await api.post<Record<string, any>>(`/${resource.key}`, payload);
+        if (hasImages && created?.id) {
+          // Abre o registro recém-criado em modo edição para permitir anexar fotos
+          toast.success(`${resource.singular} incluído(a). Agora você pode adicionar as fotos.`);
+          setEditing(created);
+          setValues(initialValues(resource, created));
+          setErrors({});
+        } else {
+          toast.success(`${resource.singular} incluído(a) com sucesso.`);
+          // Mantém o formulário aberto e limpo para o próximo cadastro
+          setValues(initialValues(resource));
+          setErrors({});
+          document.getElementById(`form-${resource.key}`)?.querySelector<HTMLElement>('input, select, textarea')?.focus();
+        }
       }
       await load();
     } catch (e: any) {
@@ -282,6 +295,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
               <thead>
                 <tr>
                   <th className="w-16">#</th>
+                  {hasImages && <th className="w-14">Foto</th>}
                   {listFields.map((f) => (
                     <th key={f.name}>
                       <button className="inline-flex items-center gap-1 hover:text-navy-800" onClick={() => toggleSort(f)}>
@@ -290,21 +304,35 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                       </button>
                     </th>
                   ))}
-                  {(canUpdate || canDelete) && <th className="w-24 text-right">Ações</th>}
+                  {(canUpdate || canDelete || resource.detail) && <th className="w-28 text-right">Ações</th>}
                 </tr>
               </thead>
               <tbody>
                 {data.rows.map((row) => (
-                  <tr key={row.id} className={canUpdate ? 'cursor-pointer' : ''} onDoubleClick={() => canUpdate && openEdit(row)}>
+                  <tr
+                    key={row.id}
+                    className={canUpdate || resource.detail ? 'cursor-pointer' : ''}
+                    onDoubleClick={() => (resource.detail ? navigate(`/${resource.key}/${row.id}`) : canUpdate && openEdit(row))}
+                  >
                     <td className="font-mono text-xs text-slate-400">{row.id}</td>
+                    {hasImages && (
+                      <td>
+                        <Thumb src={row.foto_url} alt={rowLabel(resource, row)} onClick={row.fotos?.length ? () => setZoom({ file: row.fotos[0], files: row.fotos }) : undefined} />
+                      </td>
+                    )}
                     {listFields.map((f) => (
                       <td key={f.name} className={f.type === 'money' || f.type === 'number' || f.type === 'integer' || f.type === 'percent' ? 'text-right tabular-nums' : ''}>
                         <Cell f={f} row={row} />
                       </td>
                     ))}
-                    {(canUpdate || canDelete) && (
+                    {(canUpdate || canDelete || resource.detail) && (
                       <td className="text-right">
                         <div className="inline-flex items-center gap-1">
+                          {resource.detail && (
+                            <button className="btn-icon" onClick={() => navigate(`/${resource.key}/${row.id}`)} title="Ver detalhes" aria-label="Ver detalhes">
+                              <Eye className="h-4 w-4" />
+                            </button>
+                          )}
                           {canUpdate && (
                             <button className="btn-icon" onClick={() => openEdit(row)} title="Editar" aria-label="Editar">
                               <Pencil className="h-4 w-4" />
@@ -348,7 +376,13 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         open={formOpen}
         onClose={closeForm}
         title={editing ? `Editar ${resource.singular.toLowerCase()}` : `Novo ${resource.singular.toLowerCase()}`}
-        subtitle={editing ? `Registro #${editing.id}` : `Preencha os dados e clique em Incluir. Os campos com * são obrigatórios.`}
+        subtitle={
+          editing
+            ? `Registro #${editing.id}`
+            : hasImages
+              ? 'Preencha os dados e clique em Incluir. Depois de salvar você poderá adicionar as fotos.'
+              : `Preencha os dados e clique em Incluir. Os campos com * são obrigatórios.`
+        }
         size={resource.fields.filter((f) => f.form !== false && !f.readonly).length > 6 ? 'lg' : 'md'}
       >
         {formError && (
@@ -366,8 +400,18 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           editing={!!editing}
           busy={saving}
           refOptions={refOptions}
+          before={
+            hasImages && editing ? (
+              <div>
+                <span className="label">Fotos</span>
+                <ImageField key={editing.id} resource={resource} recordId={editing.id} initial={editing.fotos} canEdit={canUpdate} onChange={() => load()} />
+              </div>
+            ) : undefined
+          }
         />
       </Modal>
+
+      {zoom && <Lightbox file={zoom.file} files={zoom.files} onClose={() => setZoom(null)} onNav={(f) => setZoom({ ...zoom, file: f })} />}
 
       <ConfirmDialog
         open={!!toDelete}
@@ -406,8 +450,13 @@ function Cell({ f, row }: { f: Field; row: Record<string, any> }) {
     if (opt?.tone) return <Badge tone={opt.tone}>{opt.label}</Badge>;
     return <>{opt?.label ?? (v ?? '—')}</>;
   }
+  if (f.type === 'color') return <ColorDot hex={v} label={v} />;
   const text = formatCell(f, row);
-  if (f.type === 'ref' && text !== '—') return <span className="font-medium text-slate-800">{text}</span>;
+  if (f.type === 'ref' && text !== '—') {
+    const hex = row[`${f.name}__color`];
+    if (hex) return <span className="font-medium text-slate-800"><ColorDot hex={hex} label={text} /></span>;
+    return <span className="font-medium text-slate-800">{text}</span>;
+  }
   if (text === '—') return <span className="text-slate-300">—</span>;
   return <span className={f.type === 'text' && f.name === 'nome' ? 'font-medium text-slate-800' : ''}>{text}</span>;
 }

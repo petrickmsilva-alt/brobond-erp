@@ -8,6 +8,7 @@ import {
   labelOf,
   type AuditEntry,
   type DashboardData,
+  type FileMeta,
   type ListParams,
   type ListResult,
   type Option,
@@ -69,11 +70,15 @@ export class MemStore implements Store {
   private decorate(r: Resource, row: Row): Row {
     const out: Row = { ...row };
     delete out.senha_hash;
+    delete out.dados;
+    delete out.thumb;
     for (const f of r.fields) {
       if (f.type === 'ref' && f.ref) {
         const target = getResource(f.ref);
         const ref = target ? this.table(target.table).rows.get(Number(row[f.name])) : undefined;
         out[`${f.name}__label`] = target && ref ? labelOf(target, ref) : null;
+        const colorField = target?.fields.find((tf) => tf.type === 'color');
+        if (colorField) out[`${f.name}__color`] = ref ? ref[colorField.name] ?? null : null;
       }
     }
     return out;
@@ -96,6 +101,11 @@ export class MemStore implements Store {
   async list(r: Resource, p: ListParams): Promise<ListResult> {
     const term = (p.q || '').trim();
     let rows = [...this.table(r.table).rows.values()];
+    const cols0 = new Set(columnsOf(r).map((f) => f.name));
+    for (const [k, v] of Object.entries(p.filter || {})) {
+      if (!cols0.has(k) || v === undefined || v === null || v === '') continue;
+      rows = rows.filter((row) => norm(row[k]) === norm(v));
+    }
     if (term) rows = rows.filter((row) => this.matches(r, row, term));
     const cols = new Set(columnsOf(r).map((f) => f.name));
     const sort = p.sort && cols.has(p.sort) ? p.sort : r.orderBy?.field || 'id';
@@ -285,5 +295,18 @@ export class MemStore implements Store {
   async touchLogin(userId: number): Promise<void> {
     const row = this.table('usuarios').rows.get(userId);
     if (row) row.ultimo_login = new Date().toISOString();
+  }
+
+  async filesFor(recurso: string, registroIds: number[]): Promise<FileMeta[]> {
+    const ids = new Set(registroIds.map(Number));
+    return [...this.table('arquivos').rows.values()]
+      .filter((f) => f.recurso === recurso && ids.has(Number(f.registro_id)))
+      .sort((a, b) => Number(!!b.principal) - Number(!!a.principal) || Number(a.ordem) - Number(b.ordem) || a.id - b.id)
+      .map(({ dados: _d, thumb: _t, ...meta }) => meta as FileMeta);
+  }
+
+  async fileById(id: number): Promise<Row | null> {
+    const row = this.table('arquivos').rows.get(id);
+    return row ? { ...row } : null;
   }
 }

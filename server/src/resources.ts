@@ -26,7 +26,9 @@ export type FieldType =
   | 'datetime'
   | 'select'
   | 'ref' // chave estrangeira para outro recurso
-  | 'password';
+  | 'password'
+  | 'color' // cor em hexadecimal (#RRGGBB) — exibe uma "bolinha" colorida
+  | 'images'; // galeria de fotos do registro (virtual — tabela `arquivos`)
 
 export type Tone = 'green' | 'red' | 'amber' | 'blue' | 'slate';
 
@@ -63,6 +65,12 @@ export type Field = {
   placeholder?: string;
   /** ocupa a linha inteira no formulário */
   wide?: boolean;
+  /** agrupa campos em uma seção do formulário (ex.: 'Fiscal') */
+  section?: string;
+  /** expressão regular (string) que o valor deve satisfazer */
+  pattern?: string;
+  /** mensagem quando `pattern` não é satisfeito */
+  patternMessage?: string;
 };
 
 export type ResourceOps = { create: boolean; update: boolean; delete: boolean };
@@ -82,6 +90,12 @@ export type Resource = {
   notice?: string;
   /** dados iniciais do modo demonstração (sem banco) */
   mock?: Record<string, unknown>[];
+  /** recurso aceita fotos (galeria via tabela `arquivos`) */
+  images?: { max: number };
+  /** possui página de detalhe (/recurso/:id) */
+  detail?: boolean;
+  /** recurso interno: não aparece no menu nem na API genérica */
+  internal?: boolean;
 };
 
 const ALL_OPS: ResourceOps = { create: true, update: true, delete: true };
@@ -119,6 +133,37 @@ export const UNIDADES: FieldOption[] = [
 ];
 
 export const RESOURCES: Record<string, Resource> = {
+  // ----------------------------------------------------------------
+  // Interno — anexos (fotos). Manipulado por uploads.ts, não pela API genérica.
+  // ----------------------------------------------------------------
+  arquivos: {
+    key: 'arquivos',
+    table: 'arquivos',
+    label: 'Arquivos',
+    singular: 'Arquivo',
+    labelFields: ['nome'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'recurso', label: 'Recurso', type: 'text' },
+      { name: 'registro_id', label: 'Registro', type: 'integer' },
+      { name: 'nome', label: 'Nome', type: 'text' },
+      { name: 'mime', label: 'Tipo', type: 'text' },
+      { name: 'tamanho_bytes', label: 'Tamanho', type: 'integer' },
+      { name: 'url', label: 'URL', type: 'text' },
+      { name: 'thumb_url', label: 'Miniatura', type: 'text' },
+      { name: 'externo_id', label: 'ID externo', type: 'text' },
+      { name: 'dados', label: 'Dados', type: 'text' },
+      { name: 'thumb', label: 'Thumb', type: 'text' },
+      { name: 'token', label: 'Token', type: 'text' },
+      { name: 'principal', label: 'Principal', type: 'boolean', default: false },
+      { name: 'ordem', label: 'Ordem', type: 'integer', default: 0 },
+      { name: 'criado_por', label: 'Criado por', type: 'integer' },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true },
+    ],
+    orderBy: { field: 'ordem', dir: 'asc' },
+  },
+
   // ----------------------------------------------------------------
   // Configurações
   // ----------------------------------------------------------------
@@ -315,6 +360,53 @@ export const RESOURCES: Record<string, Resource> = {
     orderBy: { field: 'nome', dir: 'asc' },
   },
 
+  categorias: {
+    key: 'categorias',
+    table: 'categorias',
+    label: 'Categorias',
+    singular: 'Categoria',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'Camisa, Camiseta, Calça, Bermuda...' },
+      { name: 'descricao', label: 'Descrição', type: 'text', search: true, maxLength: 160 },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+    mock: [
+      { id: 1, nome: 'Camisa', descricao: 'Camisas sociais e casuais', ativo: true },
+      { id: 2, nome: 'Camiseta', descricao: 'Malha, gola careca e polo', ativo: true },
+      { id: 3, nome: 'Calça', descricao: 'Jeans, sarja e alfaiataria', ativo: true },
+      { id: 4, nome: 'Bermuda', descricao: '', ativo: true },
+      { id: 5, nome: 'Jaqueta', descricao: '', ativo: true },
+    ],
+  },
+
+  cores: {
+    key: 'cores',
+    table: 'cores',
+    label: 'Cores',
+    singular: 'Cor',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    notice: 'Cores padronizadas evitam duplicidade ("Azul", "azul", "AZUL"). O código hexadecimal mostra a amostra da cor nas listas.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 40, placeholder: 'Azul marinho, Preto, Off-white...' },
+      { name: 'hex', label: 'Amostra (hex)', type: 'color', maxLength: 7, hint: 'Ex.: #1F3A5F. Opcional.' },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+    mock: [
+      { id: 1, nome: 'Preto', hex: '#111111', ativo: true },
+      { id: 2, nome: 'Branco', hex: '#FFFFFF', ativo: true },
+      { id: 3, nome: 'Azul marinho', hex: '#1F3A5F', ativo: true },
+      { id: 4, nome: 'Cinza mescla', hex: '#9CA3AF', ativo: true },
+      { id: 5, nome: 'Verde militar', hex: '#4B5320', ativo: true },
+    ],
+  },
+
   produtos: {
     key: 'produtos',
     table: 'produtos',
@@ -322,13 +414,23 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Produto',
     labelFields: ['sku', 'nome'],
     ops: ALL_OPS,
+    images: { max: 5 },
+    detail: true,
     fields: [
+      { name: 'fotos', label: 'Fotos', type: 'images', virtual: true, form: false, hint: 'Até 5 fotos por produto. A primeira é a principal.' },
       { name: 'sku', label: 'SKU / Referência', type: 'text', required: true, unique: true, search: true, maxLength: 40, placeholder: 'Ex.: CAM-001' },
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
-      { name: 'cor', label: 'Cor', type: 'text', search: true, maxLength: 40 },
+      { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias', search: true },
       { name: 'colecao_id', label: 'Coleção', type: 'ref', ref: 'colecoes', search: true },
+      { name: 'cor_id', label: 'Cor (cadastro)', type: 'ref', ref: 'cores', search: true, hint: 'Cor padronizada, com amostra colorida.' },
+      { name: 'cor', label: 'Cor (texto livre)', type: 'text', search: true, maxLength: 40, list: false, hint: 'Use quando a cor ainda não estiver no cadastro (ex.: estampa).' },
       { name: 'custo', label: 'Custo unitário', type: 'money', min: 0, default: 0, hint: 'Base para o valor do estoque no Dashboard.' },
       { name: 'preco_venda', label: 'Preço de venda', type: 'money', min: 0, default: 0 },
+      { name: 'codigo_barras', label: 'Código de barras (EAN)', type: 'text', unique: true, search: true, maxLength: 14, list: false, placeholder: '7891234567890', pattern: '^(\\d{8}|\\d{12,14})$', patternMessage: 'Informe 8, 12, 13 ou 14 dígitos', hint: '8, 12, 13 ou 14 dígitos. Usado nas etiquetas.', section: 'Identificação e catálogo' },
+      { name: 'composicao', label: 'Composição', type: 'text', maxLength: 120, list: false, placeholder: '100% algodão', section: 'Identificação e catálogo' },
+      { name: 'descricao', label: 'Descrição comercial', type: 'textarea', maxLength: 2000, list: false, wide: true, hint: 'Texto usado no catálogo e nas propostas.', section: 'Identificação e catálogo' },
+      { name: 'ncm', label: 'NCM', type: 'text', maxLength: 10, list: false, placeholder: '6205.20.00', hint: 'Classificação fiscal (preparação para NF-e).', section: 'Fiscal e logística' },
+      { name: 'peso_g', label: 'Peso (g)', type: 'integer', min: 0, list: false, section: 'Fiscal e logística' },
       ativo,
       ...auditFields,
     ],
@@ -512,6 +614,12 @@ export function getResource(key: string): Resource | undefined {
   return Object.prototype.hasOwnProperty.call(RESOURCES, key) ? RESOURCES[key] : undefined;
 }
 
+/** Recurso exposto na API genérica (exclui os internos). */
+export function getPublicResource(key: string): Resource | undefined {
+  const r = getResource(key);
+  return r && !r.internal ? r : undefined;
+}
+
 /** Colunas reais do banco de um recurso (exclui campos virtuais). */
 export function columnsOf(r: Resource): Field[] {
   return r.fields.filter((f) => !f.virtual);
@@ -526,6 +634,7 @@ export function writableFields(r: Resource): Field[] {
 export function publicMeta() {
   const out: Record<string, Omit<Resource, 'mock' | 'table'>> = {};
   for (const r of Object.values(RESOURCES)) {
+    if (r.internal) continue;
     const { mock: _m, table: _t, ...rest } = r;
     out[r.key] = rest;
   }

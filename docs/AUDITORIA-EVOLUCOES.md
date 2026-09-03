@@ -3,8 +3,10 @@
 **Data:** 03/09/2026 · **Base auditada:** branch `main` (commit `2672fba`) · **Versão atual:** 0.2
 **Objetivo:** identificar o que falta para profissionalizar o sistema e propor um plano de mudanças **para aprovação**.
 
-> Como usar este documento: cada item tem uma caixa `[ ]`. Marque `[x]` no que aprovar,
-> risque o que não quiser e anote observações. Depois disso eu executo na ordem aprovada.
+> **Status (03/09/2026):** plano **aprovado integralmente** pelo proprietário. Decisões:
+> banco gratuito (Neon), fotos gratuitas (no banco, com opção Cloudinary), cor como
+> cadastro **e** texto livre, OP por tamanho **e** por grade, e-mail `jjustino.sousa@gmail.com`.
+> Itens marcados `[x]` já foram entregues.
 
 ---
 
@@ -127,7 +129,7 @@ Organizado em fases. Esforço em **dias úteis de desenvolvimento** (estimativa)
 
 ### FASE 1 — Catálogo profissional de produtos (≈ 5 dias)
 
-- [ ] **1.1 Fotos de produtos** (até 5 por produto, uma marcada como principal)
+- [x] **1.1 Fotos de produtos** (até 5 por produto, uma marcada como principal)
   - Novo tipo de campo `image`/`images` no `resources.ts` (reutilizável em qualquer módulo)
   - Upload com redimensionamento **no navegador** (máx. 1600 px, JPEG ~85 %) antes de enviar → arquivos leves
   - Miniatura na tabela de produtos e nos selects de produto (estoque, OP, venda)
@@ -137,11 +139,11 @@ Organizado em fases. Esforço em **dias úteis de desenvolvimento** (estimativa)
     - **Opção B: Cloudflare R2 / AWS S3** — mais barato em escala, mais configuração
     - **Opção C: dentro do Postgres (`bytea`)** — sem serviço externo, mas limita a ~300 KB por foto e pesa o banco (só recomendo como fallback do modo demonstração)
   - Tabela nova `arquivos` (id, recurso, registro_id, url, thumb_url, principal, ordem, criado_por) + auditoria de inclusão/remoção de fotos
-- [ ] **1.2 Cadastro de Categorias** (camisa, camiseta, calça, bermuda…) e campo `categoria_id` no produto
-- [ ] **1.3 Cadastro de Cores** (nome + código hex) e troca de `cor` texto por `cor_id`, com migração automática dos valores existentes
-- [ ] **1.4 Novos campos do produto:** `codigo_barras` (EAN-13, único), `descricao`, `composicao`, `ncm`, `peso_g`
-- [ ] **1.5 Página de detalhe do produto** (`/produtos/:id`): foto, dados, grade de estoque (tamanhos × locais), últimas movimentações, OPs abertas, ficha técnica/custo
-- [ ] **1.6 Etiqueta imprimível** com código de barras (SKU, nome, tamanho, cor, preço) — impressão em lote por OP ou por produto
+- [x] **1.2 Cadastro de Categorias** (camisa, camiseta, calça, bermuda…) e campo `categoria_id` no produto
+- [x] **1.3 Cadastro de Cores** (nome + código hex) e troca de `cor` texto por `cor_id`, com migração automática dos valores existentes
+- [x] **1.4 Novos campos do produto:** `codigo_barras` (EAN-13, único), `descricao`, `composicao`, `ncm`, `peso_g`
+- [x] **1.5 Página de detalhe do produto** (`/produtos/:id`): foto, dados, grade de estoque (tamanhos × locais), últimas movimentações, OPs abertas, ficha técnica/custo
+- [x] **1.6 Etiqueta imprimível** com código de barras (SKU, nome, tamanho, cor, preço) — impressão em lote por OP ou por produto
 
 ### FASE 2 — Vendas e Compras completas (≈ 6 dias)
 
@@ -178,12 +180,12 @@ Organizado em fases. Esforço em **dias úteis de desenvolvimento** (estimativa)
 
 ### FASE 6 — Segurança e robustez (≈ 2 dias) — recomendo fazer **junto com a Fase 1**
 
-- [ ] **6.1 Rate limit no login** + bloqueio temporário + evento na auditoria
-- [ ] **6.2 Exigir `JWT_SECRET` em produção**; restringir CORS ao domínio; adicionar `helmet`
+- [x] **6.1 Rate limit no login** + bloqueio temporário + evento na auditoria
+- [x] **6.2 Exigir `JWT_SECRET` em produção**; restringir CORS ao domínio; adicionar `helmet`
 - [ ] **6.3 "Esqueci minha senha"** por e-mail (SMTP HostGator) e **troca obrigatória no primeiro acesso**
 - [ ] **6.4 Remover fallback de senha em texto puro** (após confirmar que não há usuário antigo)
 - [ ] **6.5 Backup diário automático do Postgres** (job na Render → arquivo em Cloudflare R2/S3, retenção 30 dias) **ou** upgrade do banco para plano pago
-- [ ] **6.6 Testes automatizados das regras de estoque/OP/venda + GitHub Actions** (typecheck + testes a cada push; bloqueia deploy quebrado)
+- [x] **6.6 Testes automatizados das regras de estoque/OP/venda + GitHub Actions** (typecheck + testes a cada push; bloqueia deploy quebrado)
 - [ ] **6.7 Monitoramento de erros** (Sentry free) e versão única do sistema
 
 ### FASE 7 — Acabamento (≈ 2 dias, opcional)
@@ -197,12 +199,12 @@ Organizado em fases. Esforço em **dias úteis de desenvolvimento** (estimativa)
 
 ## 5. Decisões que preciso de você
 
-1. **Onde guardar as fotos?** ( ) Cloudinary (recomendo) ( ) Cloudflare R2 / S3 ( ) Dentro do Postgres
-2. **Banco de dados:** ( ) Migrar para plano pago da Render (≈US$ 7/mês, com backup) ( ) Manter free + backup automático externo
-3. **Ordem das fases:** a sugerida é **1 → 6 → 2 → 3 → 4 → 5 → 7**. Concorda ou prefere outra?
-4. **Cor:** transformar em cadastro (1.3) ou manter texto livre?
-5. **OP por grade (3.1):** muda a forma de lançar produção — a equipe está de acordo?
-6. **E-mail para reset de senha:** qual conta SMTP do HostGator usar (ex.: `sistema@brobond.com.br`)?
+1. **Fotos:** ✅ gratuito — no próprio banco por padrão; Cloudinary (25 GB grátis) opcional via variável de ambiente.
+2. **Banco de dados:** ✅ gratuito — **Neon** (permanente) em vez do free da Render (expira em 30 dias). Guia: `docs/CONFIGURACAO-GRATUITA.md`.
+3. **Ordem das fases:** ✅ 1 → 6 → 2 → 3 → 4 → 5 → 7 (todas aprovadas).
+4. **Cor:** ✅ as duas — cadastro com amostra colorida **e** campo de texto livre.
+5. **OP por grade:** ✅ as duas formas (por tamanho, como hoje, e por grade).
+6. **E-mail:** ✅ `jjustino.sousa@gmail.com` (Gmail → exige senha de app; ver guia).
 
 ---
 

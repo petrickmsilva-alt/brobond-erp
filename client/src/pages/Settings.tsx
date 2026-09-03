@@ -69,13 +69,17 @@ export default function Settings() {
             <dl className="mt-4 space-y-3 text-sm">
               <div className="flex items-center justify-between">
                 <dt className="text-slate-500">Versão</dt>
-                <dd className="font-medium text-slate-800">BROBOND ERP 0.2</dd>
+                <dd className="font-medium text-slate-800">BROBOND ERP {meta?.version ?? ''}</dd>
               </div>
               <div className="flex items-center justify-between">
                 <dt className="flex items-center gap-1.5 text-slate-500">
                   <Database className="h-3.5 w-3.5" /> Banco de dados
                 </dt>
                 <dd>{meta?.mode === 'postgres' ? <Badge tone="green">PostgreSQL</Badge> : <Badge tone="amber">Demonstração (memória)</Badge>}</dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt className="text-slate-500">Fotos</dt>
+                <dd>{meta?.uploads === 'cloudinary' ? <Badge tone="green">Cloudinary (CDN)</Badge> : <Badge tone="blue">No banco de dados</Badge>}</dd>
               </div>
               <div className="flex items-center justify-between">
                 <dt className="flex items-center gap-1.5 text-slate-500">

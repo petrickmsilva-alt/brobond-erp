@@ -14,7 +14,11 @@ export default function Layout() {
   const location = useLocation();
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const current = MODULES.find((m) => m.path === location.pathname) || MODULES.find((m) => m.path === '/');
+  // Rotas filhas (ex.: /produtos/12) pertencem ao módulo pai
+  const current =
+    MODULES.find((m) => m.path === location.pathname) ||
+    MODULES.filter((m) => m.path !== '/').find((m) => location.pathname.startsWith(m.path + '/')) ||
+    MODULES.find((m) => m.path === '/');
 
   useEffect(() => {
     if (!menu) return;

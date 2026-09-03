@@ -40,3 +40,36 @@ FROM (VALUES
 ) AS v(nome, unidade, custo, fornecedor)
 LEFT JOIN fornecedores f ON f.nome = v.fornecedor
 WHERE NOT EXISTS (SELECT 1 FROM insumos i WHERE i.nome = v.nome);
+
+-- Categorias de produto
+INSERT INTO categorias (nome, descricao)
+SELECT v.nome, v.descricao
+FROM (VALUES
+  ('Camisa',   'Camisas sociais e casuais'),
+  ('Camiseta', 'Malha, gola careca e polo'),
+  ('Calça',    'Jeans, sarja e alfaiataria'),
+  ('Bermuda',  'Bermudas e shorts'),
+  ('Jaqueta',  'Jaquetas, blusões e casacos')
+) AS v(nome, descricao)
+WHERE NOT EXISTS (SELECT 1 FROM categorias c WHERE LOWER(c.nome) = LOWER(v.nome));
+
+-- Cores padronizadas (nome + amostra hexadecimal)
+INSERT INTO cores (nome, hex)
+SELECT v.nome, v.hex
+FROM (VALUES
+  ('Preto',         '#111111'),
+  ('Branco',        '#FFFFFF'),
+  ('Off-white',     '#F3EFE6'),
+  ('Azul marinho',  '#1F3A5F'),
+  ('Azul claro',    '#8FB8DE'),
+  ('Cinza mescla',  '#9CA3AF'),
+  ('Chumbo',        '#4B5563'),
+  ('Verde militar', '#4B5320'),
+  ('Bege',          '#D6C6A8'),
+  ('Vinho',         '#6B1E2B')
+) AS v(nome, hex)
+WHERE NOT EXISTS (SELECT 1 FROM cores c WHERE LOWER(c.nome) = LOWER(v.nome));
+-- Preenche a amostra de cores que foram migradas do texto livre sem hex
+UPDATE cores c SET hex = v.hex
+FROM (VALUES ('preto','#111111'),('branco','#FFFFFF'),('azul marinho','#1F3A5F'),('cinza mescla','#9CA3AF'),('verde militar','#4B5320')) AS v(nome, hex)
+WHERE c.hex IS NULL AND LOWER(c.nome) = v.nome;

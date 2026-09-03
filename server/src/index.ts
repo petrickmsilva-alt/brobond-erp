@@ -4,7 +4,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hasDatabaseUrl, isDbConnected, migrate } from './db';
 import { ADMIN_EMAIL, changePassword, currentUser, ensureAdmin, login, me, requireAuth } from './auth';
-import { getResource, publicMeta } from './resources';
+import { getPublicResource, publicMeta } from './resources';
+import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider } from './uploads';
+import { productDetail } from './detail';
 import {
   checkAccess,
   createRecord,
@@ -18,20 +20,26 @@ import {
 } from './services';
 import { parseId } from './validate';
 import { HttpError } from './errors';
+import { assertProductionSecrets, corsOrigin, loginRateLimit, securityHeaders } from './security';
+
+assertProductionSecrets();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const VERSION = '0.3.0';
 const app = express();
 
 app.disable('x-powered-by');
+app.set('trust proxy', 1); // Render/proxies: IP real em X-Forwarded-For
+app.use(securityHeaders);
 app.use(
   cors({
-    origin: true,
+    origin: corsOrigin(),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '4mb' })); // fotos chegam em base64 (já reduzidas no navegador)
 app.use(express.urlencoded({ extended: true }));
 
 // Log simples de requisições em dev
@@ -51,7 +59,7 @@ const wrap =
 
 /** Carrega o recurso da rota (404 se não existir). */
 function resourceParam(req: Request, _res: Response, next: NextFunction) {
-  const r = getResource(req.params.resource);
+  const r = getPublicResource(req.params.resource);
   if (!r) return next(new HttpError(404, 'Recurso não encontrado'));
   (req as any).resource = r;
   next();
@@ -61,9 +69,11 @@ function resourceParam(req: Request, _res: Response, next: NextFunction) {
 // Público
 // ----------------------------------------------------------------------------
 app.get('/api/health', (_req, res) =>
-  res.json({ ok: true, db: isDbConnected() ? 'postgres' : 'memory', version: '0.2.0' })
+  res.json({ ok: true, db: isDbConnected() ? 'postgres' : 'memory', version: VERSION })
 );
-app.post('/api/auth/login', wrap(login));
+app.post('/api/auth/login', loginRateLimit, wrap(login));
+// Imagens armazenadas no banco: URL pública protegida por token aleatório
+app.get('/api/files/:id/:token', wrap(serveFile));
 
 // ----------------------------------------------------------------------------
 // Autenticado
@@ -78,6 +88,8 @@ app.get('/api/meta', (req, res) => {
   res.json({
     resources: publicMeta(),
     mode: getStore().kind,
+    uploads: uploadProvider(),
+    version: VERSION,
     user: currentUser(req),
   });
 });
@@ -88,6 +100,15 @@ app.get(
     res.json(await getStore().dashboard());
   })
 );
+
+// Página de detalhe do produto (fotos, grade de estoque, movimentações, OPs, ficha)
+app.get('/api/produtos/:id/detalhe', wrap(productDetail));
+
+// Fotos / anexos de um registro
+app.get('/api/:resource/:id/arquivos', wrap(listFiles));
+app.post('/api/:resource/:id/arquivos', wrap(uploadFile));
+app.put('/api/:resource/:id/arquivos/:fid', wrap(updateFile));
+app.delete('/api/:resource/:id/arquivos/:fid', wrap(deleteFile));
 
 // Opções para selects (id + rótulo)
 app.get(
@@ -110,6 +131,11 @@ app.get(
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 25));
     const dir = String(req.query.dir || '').toLowerCase() === 'desc' ? 'desc' : String(req.query.dir || '').toLowerCase() === 'asc' ? 'asc' : undefined;
+    // Filtros de igualdade: ?f.produto_id=3&f.status=aberta
+    const filter: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(req.query)) {
+      if (k.startsWith('f.') && typeof v === 'string' && v !== '') filter[k.slice(2)] = v;
+    }
     res.json(
       await listRecords(r, {
         q: typeof req.query.q === 'string' ? req.query.q : undefined,
@@ -117,6 +143,7 @@ app.get(
         pageSize,
         sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
         dir,
+        filter,
       })
     );
   })

@@ -9,6 +9,7 @@ import {
   labelOf,
   type AuditEntry,
   type DashboardData,
+  type FileMeta,
   type ListParams,
   type ListResult,
   type Option,
@@ -68,6 +69,8 @@ function refJoins(r: Resource) {
         ? `('#' || ${alias}.id)`
         : `concat_ws(' — ', ${target.labelFields.map((lf) => `NULLIF(${alias}.${lf}::text, '')`).join(', ')})`;
     selects.push(`${labelExpr} AS ${f.name}__label`);
+    const colorField = target.fields.find((tf) => tf.type === 'color');
+    if (colorField) selects.push(`${alias}.${colorField.name} AS ${f.name}__color`);
     joins.push(`LEFT JOIN ${target.table} ${alias} ON ${alias}.id = t.${f.name}`);
   });
   return { selects, joins, refs };
@@ -80,9 +83,17 @@ function orderClause(r: Resource, p: ListParams): string {
   return `ORDER BY t.${sort} ${dir} NULLS LAST, t.id DESC`;
 }
 
-function searchClause(r: Resource, qtext: string | undefined, params: unknown[], refs: ReturnType<typeof refJoins>['refs']): string {
+function searchClause(r: Resource, qtext: string | undefined, params: unknown[], refs: ReturnType<typeof refJoins>['refs'], filter?: Record<string, unknown>): string {
+  const conds: string[] = [];
+  // Filtros de igualdade (somente colunas reais do recurso)
+  const cols = new Set(columnsOf(r).map((f) => f.name));
+  for (const [k, v] of Object.entries(filter || {})) {
+    if (!cols.has(k) || v === undefined || v === null || v === '') continue;
+    params.push(v);
+    conds.push(`t.${k} = $${params.length}`);
+  }
   const term = (qtext || '').trim();
-  if (!term) return '';
+  if (!term) return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
   params.push(`%${term}%`);
   const idx = params.length;
   const parts: string[] = [];
@@ -99,8 +110,11 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
     }
   }
   if (/^\d+$/.test(term)) parts.push(`t.id = ${Number(term)}`);
-  return parts.length ? `WHERE (${parts.join(' OR ')})` : '';
+  if (parts.length) conds.push(`(${parts.join(' OR ')})`);
+  return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 }
+
+const FILE_META_COLS = 'id, recurso, registro_id, nome, mime, tamanho_bytes, url, thumb_url, externo_id, token, principal, ordem, criado_em';
 
 export class PgStore implements Store {
   readonly kind = 'postgres' as const;
@@ -112,12 +126,12 @@ export class PgStore implements Store {
   async list(r: Resource, p: ListParams, tx?: Tx): Promise<ListResult> {
     const { selects, joins, refs } = refJoins(r);
     const params: unknown[] = [];
-    const where = searchClause(r, p.q, params, refs);
+    const where = searchClause(r, p.q, params, refs, p.filter);
     const cols = columnsOf(r)
       .map((f) => `t.${f.name}`)
       .concat(['t.id'])
       .filter((c, i, a) => a.indexOf(c) === i)
-      .filter((c) => c !== 't.senha_hash');
+      .filter((c) => c !== 't.senha_hash' && c !== 't.dados' && c !== 't.thumb');
     const selectList = [...cols, ...selects].join(', ');
     const from = `FROM ${r.table} t ${joins.join(' ')} ${where}`;
 
@@ -139,7 +153,7 @@ export class PgStore implements Store {
       .map((f) => `t.${f.name}`)
       .concat(['t.id'])
       .filter((c, i, a) => a.indexOf(c) === i)
-      .filter((c) => c !== 't.senha_hash');
+      .filter((c) => c !== 't.senha_hash' && c !== 't.dados' && c !== 't.thumb');
     const res = await q(
       `SELECT ${[...cols, ...selects].join(', ')} FROM ${r.table} t ${joins.join(' ')} WHERE t.id = $1`,
       [id],
@@ -315,6 +329,21 @@ export class PgStore implements Store {
 
   async touchLogin(userId: number): Promise<void> {
     await query('UPDATE usuarios SET ultimo_login = now() WHERE id = $1', [userId]).catch(() => undefined);
+  }
+
+  async filesFor(recurso: string, registroIds: number[], tx?: Tx): Promise<FileMeta[]> {
+    if (!registroIds.length) return [];
+    const res = await q(
+      `SELECT ${FILE_META_COLS} FROM arquivos WHERE recurso = $1 AND registro_id = ANY($2::int[]) ORDER BY principal DESC, ordem ASC, id ASC`,
+      [recurso, registroIds],
+      tx
+    );
+    return res.rows as FileMeta[];
+  }
+
+  async fileById(id: number): Promise<Row | null> {
+    const res = await query('SELECT * FROM arquivos WHERE id = $1', [id]);
+    return res.rows[0] ?? null;
   }
 }
 
