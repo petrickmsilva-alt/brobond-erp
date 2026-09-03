@@ -13,7 +13,7 @@ export function Logo({ className = '' }: { className?: string }) {
         </div>
       ) : (
         <img
-          src="/logo.svg"
+          src="/logo.png"
           alt="BROBOND"
           className="h-9 w-9 rounded-lg object-contain bg-white shadow-sm"
           onError={() => setFailed(true)}
