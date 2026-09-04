@@ -56,6 +56,24 @@ function requireBcrypt(): any {
   return _bcrypt;
 }
 
+/** Coleção/categoria: colunas do cadastro, com fallback no JSONB `filtros` de versões antigas. */
+export function filtrosDoCatalogo(catalogo: Row): { colecao_id?: number; categoria_id?: number } {
+  const json =
+    catalogo.filtros && typeof catalogo.filtros === 'object' && !Array.isArray(catalogo.filtros)
+      ? (catalogo.filtros as Record<string, unknown>)
+      : {};
+  const pick = (v: unknown): number | undefined => {
+    const n = Number(v);
+    return Number.isInteger(n) && n > 0 ? n : undefined;
+  };
+  const colecao_id = pick(catalogo.colecao_id) ?? pick(json.colecao_id);
+  const categoria_id = pick(catalogo.categoria_id) ?? pick(json.categoria_id);
+  return {
+    ...(colecao_id ? { colecao_id } : {}),
+    ...(categoria_id ? { categoria_id } : {}),
+  };
+}
+
 export async function catalogoPublico(req: Request, res: Response) {
   const token = String(req.params.token || '').trim();
   if (!token || !/^[a-f0-9]{12,}$/i.test(token)) throw new HttpError(404, 'Catálogo não encontrado.');
@@ -69,7 +87,7 @@ export async function catalogoPublico(req: Request, res: Response) {
     return res.status(401).json({ error: 'senha_necessaria', mensagem: 'Este catálogo é protegido por senha.' });
   }
 
-  const filtros = (catalogo.filtros || {}) as { colecao_id?: number; categoria_id?: number };
+  const filtros = filtrosDoCatalogo(catalogo);
   const filter: Record<string, unknown> = {};
   if (filtros.colecao_id) filter.colecao_id = filtros.colecao_id;
   if (filtros.categoria_id) filter.categoria_id = filtros.categoria_id;

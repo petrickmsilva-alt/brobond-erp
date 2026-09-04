@@ -162,6 +162,63 @@ test('clientIp: extrai IP de X-Forwarded-For ou socket', async () => {
   assert.equal(clientIp(req3), '');
 });
 
+test('translatePgError: 42703 cita a coluna faltante', async () => {
+  const { translatePgError } = await import('../src/pgstore');
+  const err = translatePgError({ code: '42703', column: 'colecao_id', message: 'column t.colecao_id does not exist' });
+  assert.ok(err);
+  assert.equal(err.status, 500);
+  assert.match(err.message, /colecao_id/);
+  assert.match(err.message, /schema\.sql/);
+});
+
+test('todo campo não-virtual de resources.ts existe em db/schema.sql', async () => {
+  const { readFileSync } = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { RESOURCES, columnsOf } = await import('../src/resources');
+
+  const schemaPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../db/schema.sql');
+  const sql = readFileSync(schemaPath, 'utf8');
+  const cols = columnsFromSchema(sql);
+  const faltando: string[] = [];
+  for (const r of Object.values(RESOURCES)) {
+    const tableCols = cols.get(r.table);
+    assert.ok(tableCols, `tabela ${r.table} (recurso ${r.key}) não aparece no schema.sql`);
+    for (const f of columnsOf(r)) {
+      if (f.name === 'id') continue;
+      if (!tableCols!.has(f.name)) faltando.push(`${r.table}.${f.name} (recurso ${r.key})`);
+    }
+  }
+  assert.deepEqual(faltando, [], `colunas declaradas no recurso mas ausentes no schema:\n${faltando.join('\n')}`);
+});
+
+function columnsFromSchema(sql: string): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  const createRe = /CREATE TABLE IF NOT EXISTS (\w+)\s*\(([\s\S]*?)\)\s*;/gi;
+  let m: RegExpExecArray | null;
+  while ((m = createRe.exec(sql))) {
+    const table = m[1];
+    const set = map.get(table) ?? new Set<string>(['id']);
+    for (const line of m[2].split('\n')) {
+      const trimmed = line.trim().replace(/,$/, '');
+      if (!trimmed || trimmed.startsWith('--')) continue;
+      const col = trimmed.match(/^([a-z_][a-z0-9_]*)\s+/i);
+      if (!col) continue;
+      const name = col[1].toLowerCase();
+      if (['unique', 'primary', 'constraint', 'check', 'foreign'].includes(name)) continue;
+      set.add(name);
+    }
+    map.set(table, set);
+  }
+  const alterRe = /ALTER TABLE\s+(\w+)\s+ADD COLUMN IF NOT EXISTS (\w+)/gi;
+  while ((m = alterRe.exec(sql))) {
+    const set = map.get(m[1]) ?? new Set<string>();
+    set.add(m[2].toLowerCase());
+    map.set(m[1], set);
+  }
+  return map;
+}
+
 test('parseNumber do validate.ts aceita formatos pt-BR', async () => {
   const { parseNumber } = await import('../src/validate');
 

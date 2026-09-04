@@ -50,8 +50,17 @@ export function translatePgError(e: any, r?: Resource): HttpError | null {
       return new HttpError(400, 'Valor inválido em um dos campos.');
     case '42P01':
       return new HttpError(500, 'Tabela não encontrada no banco. Execute db/schema.sql.');
-    case '42703':
-      return new HttpError(500, 'Coluna não encontrada no banco. Execute db/schema.sql para migrar.');
+    case '42703': {
+      const col =
+        e.column ||
+        (String(e.message || '').match(/column "?([a-z0-9_.]+)"?/i) || [])[1];
+      return new HttpError(
+        500,
+        col
+          ? `Coluna "${col}" não encontrada no banco. Execute db/schema.sql para migrar.`
+          : 'Coluna não encontrada no banco. Execute db/schema.sql para migrar.'
+      );
+    }
     default:
       return null;
   }

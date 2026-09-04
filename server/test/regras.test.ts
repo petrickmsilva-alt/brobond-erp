@@ -116,6 +116,27 @@ test('produto: excluir produto em uso é bloqueado (409); produto sem uso é exc
   await expectHttp(() => getRecord(RESOURCES.produtos, Number(tmp.id)), 404);
 });
 
+test('catálogos públicos: cria com token, lista com rótulo da coleção e não vaza senha', async () => {
+  const cat = await createRecord(
+    RESOURCES.catalogos,
+    { nome: 'Catálogo Verão reps', colecao_id: 1, mostrar_preco: true, mostrar_saldo: false },
+    admin
+  );
+  assert.ok(typeof cat.token === 'string' && String(cat.token).length >= 24);
+  assert.equal(cat.colecao_id, 1);
+  assert.equal(cat.senha_hash, undefined);
+  const lista = await listRecords(RESOURCES.catalogos, { page: 1, pageSize: 50 });
+  const row = lista.rows.find((r) => Number(r.id) === Number(cat.id));
+  assert.ok(row, 'catálogo deve aparecer na listagem');
+  assert.equal(row!.colecao_id__label, 'Verão 2026');
+  assert.equal(row!.senha_hash, undefined);
+
+  const { filtrosDoCatalogo } = await import('../src/catalogos');
+  assert.deepEqual(filtrosDoCatalogo(row!), { colecao_id: 1 });
+  assert.deepEqual(filtrosDoCatalogo({ id: 0, filtros: { colecao_id: 2, categoria_id: 3 } }), { colecao_id: 2, categoria_id: 3 });
+  assert.deepEqual(filtrosDoCatalogo({ id: 0, colecao_id: 9, filtros: { colecao_id: 2 } }), { colecao_id: 9 });
+});
+
 test('arquivos: recurso interno não é exposto na API genérica nem no /meta', async () => {
   const { getPublicResource, publicMeta } = await import('../src/resources');
   assert.equal(getPublicResource('arquivos'), undefined);

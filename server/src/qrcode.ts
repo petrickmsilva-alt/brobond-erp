@@ -11,6 +11,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import QRCode from 'qrcode';
+import { filtrosDoCatalogo } from './catalogos';
 import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getStore } from './services';
@@ -33,7 +34,7 @@ async function gerarConteudoQR(produtoId: number): Promise<{ url: string; dados:
   const catalogos = await s.list(getResource('catalogos')!, { page: 1, pageSize: 100, filter: { ativo: true } });
   let urlPublica = '';
   for (const cat of catalogos.rows) {
-    const filtros = (cat.filtros || {}) as Record<string, unknown>;
+    const filtros = filtrosDoCatalogo(cat);
     const matchColecao = !filtros.colecao_id || Number(filtros.colecao_id) === Number(produto.colecao_id);
     const matchCategoria = !filtros.categoria_id || Number(filtros.categoria_id) === Number(produto.categoria_id);
     if (matchColecao && matchCategoria) {

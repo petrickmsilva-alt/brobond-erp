@@ -340,10 +340,8 @@ ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS custo NUMERIC(12,2) DEFAULT 
 ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
 ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
 
--- FIX 2026-09-04: estas duas colunas estavam no CREATE TABLE mas faltavam
--- na seção de migrações — bancos criados antes delas (como o da Render)
--- nunca as recebiam. Erro que isso corrige:
---   "column t.colecao_id does not exist" na rota GET /api/catalogos
+-- Estas duas colunas estavam no CREATE TABLE mas faltavam na seção de
+-- migrações — bancos criados antes delas nunca as recebiam.
 ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS colecao_id INTEGER REFERENCES colecoes(id);
 ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS preco_venda NUMERIC(12,2) DEFAULT 0;
 
@@ -480,7 +478,9 @@ CREATE TABLE IF NOT EXISTS catalogos (
   nome TEXT NOT NULL,
   token TEXT UNIQUE NOT NULL,
   senha_hash TEXT,                         -- opcional (acesso com senha)
-  filtros JSONB,                           -- { colecao_id?, categoria_id? }
+  colecao_id INTEGER REFERENCES colecoes(id),
+  categoria_id INTEGER REFERENCES categorias(id),
+  filtros JSONB,                           -- legado: { colecao_id?, categoria_id? }
   mostrar_preco BOOLEAN DEFAULT FALSE,
   mostrar_saldo BOOLEAN DEFAULT FALSE,
   ativo BOOLEAN DEFAULT TRUE,
@@ -488,6 +488,29 @@ CREATE TABLE IF NOT EXISTS catalogos (
   criado_em TIMESTAMPTZ DEFAULT now(),
   atualizado_em TIMESTAMPTZ
 );
+
+-- Bancos que já tinham a tabela sem as colunas (CREATE TABLE IF NOT EXISTS
+-- não altera o existente). Sem isso, GET /api/catalogos quebra com:
+--   "column t.colecao_id does not exist"
+ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS colecao_id INTEGER REFERENCES colecoes(id);
+ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS categoria_id INTEGER REFERENCES categorias(id);
+
+-- Copia filtros JSONB antigos para as colunas (só se a FK existir).
+UPDATE catalogos c
+SET colecao_id = x.id
+FROM colecoes x
+WHERE c.colecao_id IS NULL
+  AND c.filtros ? 'colecao_id'
+  AND (c.filtros->>'colecao_id') ~ '^[0-9]+$'
+  AND x.id = (c.filtros->>'colecao_id')::int;
+
+UPDATE catalogos c
+SET categoria_id = x.id
+FROM categorias x
+WHERE c.categoria_id IS NULL
+  AND c.filtros ? 'categoria_id'
+  AND (c.filtros->>'categoria_id') ~ '^[0-9]+$'
+  AND x.id = (c.filtros->>'categoria_id')::int;
 
 -- ------------------------------------------------------------
 -- 3) ÍNDICES
