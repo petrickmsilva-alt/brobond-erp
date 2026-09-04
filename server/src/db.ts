@@ -5,12 +5,37 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// ---------------------------------------------------------------------------
+// Normaliza o sslmode da URL do Postgres.
+//
+// A DATABASE_URL injetada pela Render traz `sslmode=require`. O driver `pg`
+// trata require/prefer/verify-ca como alias de verify-full e emite o
+// SECURITY WARNING no boot:
+//
+//   "The SSL modes 'prefer', 'require', and 'verify-ca' are treated as
+//    aliases for 'verify-full'..."
+//
+// Tornar `verify-full` explícito:
+//   • mantém EXATAMENTE o comportamento atual (conexão com certificado e
+//     host verificados — o modo mais seguro);
+//   • silencia o aviso no boot;
+//   • deixa a conexão imune à mudança de semântica da próxima versão do
+//     pg (v9), que passará a tratar `require` como o modo fraco do libpq.
+//
+// Se a URL não tiver sslmode, nada é alterado e o fallback `ssl` abaixo
+// continua valendo como antes.
+// ---------------------------------------------------------------------------
+const databaseUrl = (process.env.DATABASE_URL || '').replace(
+  /sslmode=(require|prefer|verify-ca)(&|$)/,
+  'sslmode=verify-full$2'
+);
+
 // Se DATABASE_URL não existir (ex.: dev local sem Postgres), o pool fica nulo
 // e a API funciona em MODO DEMONSTRAÇÃO com um banco em memória (memdb.ts):
 // tudo cadastra/edita/exclui normalmente, mas os dados somem ao reiniciar.
-export const pool: Pool | null = process.env.DATABASE_URL
+export const pool: Pool | null = databaseUrl
   ? new Pool({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: databaseUrl,
       ssl:
         process.env.NODE_ENV === 'production' || process.env.PGSSL === 'true'
           ? { rejectUnauthorized: false }
