@@ -63,6 +63,9 @@ import { listQualidade, createQualidade, relatorioQualidade } from './quality';
 import { predicaoDemanda, predicaoInsumos } from './prediction';
 import { rateLimitPortal, portalPedidos, portalPedidoDetalhe } from './portal';
 import { notificacoesStatus, verificarAlertasEstoque } from './notifications';
+import { openapiJSON, openapiUI } from './openapi';
+import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat';
+import { nfeDados, nfeEmitir, nfeStatus } from './nfe';
 
 assertProductionSecrets();
 initSentry();
@@ -206,6 +209,21 @@ app.post('/api/admin/scheduled/cron', wrap(cronScheduled));
 
 // Notificações (status)
 app.get('/api/admin/notificacoes/status', (_req, res) => res.json(notificacoesStatus()));
+
+// Documentação OpenAPI (pública)
+app.get('/api/docs/openapi.json', wrap(openapiJSON));
+app.get('/api/docs', wrap(openapiUI));
+
+// Chat interno
+app.get('/api/chat/conversas', wrap(listConversas));
+app.get('/api/chat/nao-lidas', wrap(countNaoLidas));
+app.get('/api/chat/:userId/mensagens', wrap(listMensagens));
+app.post('/api/chat/:userId/mensagens', wrap(sendMessage));
+
+// NF-e
+app.get('/api/vendas/:id/nfe/dados', wrap(nfeDados));
+app.post('/api/vendas/:id/nfe/emitir', wrap(nfeEmitir));
+app.get('/api/vendas/:id/nfe/status', wrap(nfeStatus));
 
 // Fase 3 — itens de OP por grade e insumos da ficha técnica (sub-recursos)
 app.get('/api/ordens/:id/itens', wrap(listItensOrdem));
