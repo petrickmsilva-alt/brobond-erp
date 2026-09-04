@@ -340,6 +340,13 @@ ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS custo NUMERIC(12,2) DEFAULT 
 ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
 ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
 
+-- FIX 2026-09-04: estas duas colunas estavam no CREATE TABLE mas faltavam
+-- na seção de migrações — bancos criados antes delas (como o da Render)
+-- nunca as recebiam. Erro que isso corrige:
+--   "column t.colecao_id does not exist" na rota GET /api/catalogos
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS colecao_id INTEGER REFERENCES colecoes(id);
+ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS preco_venda NUMERIC(12,2) DEFAULT 0;
+
 ALTER TABLE estoques       ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
 ALTER TABLE estoques       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
 
@@ -496,6 +503,8 @@ CREATE INDEX IF NOT EXISTS idx_arquivos_registro    ON arquivos (recurso, regist
 CREATE UNIQUE INDEX IF NOT EXISTS uq_produtos_codigo_barras ON produtos (codigo_barras) WHERE codigo_barras IS NOT NULL AND codigo_barras <> '';
 CREATE INDEX IF NOT EXISTS idx_produtos_categoria   ON produtos (categoria_id);
 CREATE INDEX IF NOT EXISTS idx_produtos_cor         ON produtos (cor_id);
+-- FIX 2026-09-04: índice para o filtro por coleção dos catálogos públicos
+CREATE INDEX IF NOT EXISTS idx_produtos_colecao     ON produtos (colecao_id);
 
 -- Fase 2: itens de pedidos e estoque de insumos
 CREATE UNIQUE INDEX IF NOT EXISTS uq_estoque_insumos_insumo ON estoque_insumos (insumo_id);
@@ -548,4 +557,4 @@ UPDATE movimentacoes m SET local_id = l.id
 FROM locais l WHERE m.local_id IS NULL AND l.nome = m.local;
 
 UPDATE movimentacoes m SET local_destino_id = l.id
-FROM locais l WHERE m.local_destino IS NOT NULL AND m.local_destino_id IS NULL AND l.nome = m.local_destino;
+FROM locais l WHERE m.local_destino IS NOT NULL AND m.local_destino = l.nome;
