@@ -66,6 +66,10 @@ import { notificacoesStatus, verificarAlertasEstoque } from './notifications';
 import { openapiJSON, openapiUI } from './openapi';
 import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat';
 import { nfeDados, nfeEmitir, nfeStatus } from './nfe';
+import { calcularFrete, consultarCEP } from './frete';
+import { marketplaceStatus, sincronizarPedidos } from './marketplace';
+import { initWebSocket, wsStatus } from './websocket';
+import { createServer } from 'node:http';
 
 assertProductionSecrets();
 initSentry();
@@ -224,6 +228,17 @@ app.post('/api/chat/:userId/mensagens', wrap(sendMessage));
 app.get('/api/vendas/:id/nfe/dados', wrap(nfeDados));
 app.post('/api/vendas/:id/nfe/emitir', wrap(nfeEmitir));
 app.get('/api/vendas/:id/nfe/status', wrap(nfeStatus));
+
+// Frete e CEP
+app.get('/api/frete/cep', wrap(consultarCEP));
+app.post('/api/frete/calcular', wrap(calcularFrete));
+
+// Marketplace
+app.get('/api/marketplace/status', wrap(marketplaceStatus));
+app.post('/api/marketplace/sincronizar', wrap(sincronizarPedidos));
+
+// WebSocket status
+app.get('/api/admin/ws/status', (_req, res) => res.json(wsStatus()));
 
 // Fase 3 — itens de OP por grade e insumos da ficha técnica (sub-recursos)
 app.get('/api/ordens/:id/itens', wrap(listItensOrdem));
@@ -388,7 +403,9 @@ async function start() {
   await migrarSenhasLegadas();
 
   const port = Number(process.env.PORT) || 3001;
-  app.listen(port, '0.0.0.0', () => {
+  const httpServer = createServer(app);
+  initWebSocket(httpServer);
+  httpServer.listen(port, '0.0.0.0', () => {
     console.log(`⚡ BROBOND API rodando em http://localhost:${port}`);
     console.log(
       isDbConnected()
