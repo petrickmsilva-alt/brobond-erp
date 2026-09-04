@@ -40,6 +40,9 @@ services:
       # para ADMIN_PASSWORD no próximo deploy). Volte para "false" em seguida.
       - key: ADMIN_FORCE_PASSWORD
         value: "false"
+      # Sentry (monitoramento de erros frontend) — crie em https://sentry.io
+      - key: VITE_SENTRY_DSN
+        sync: false
 
 # databases:
 #   - name: brobond-db

@@ -249,8 +249,13 @@ export default function OrderPage({ tipo }: { tipo: Tipo }) {
         actions={
           <div className="flex flex-wrap gap-2">
             {tipo === 'venda' && (
-              <button className="btn-secondary" onClick={() => imprimirPedido(tipo, pedido, itens, parceiroOpts, repOpts)}>
-                <Printer className="h-4 w-4" /> Imprimir
+              <button className="btn-secondary" onClick={() => window.open(`/api/vendas/${pedido.id}/pdf`, '_blank')}>
+                <Printer className="h-4 w-4" /> Imprimir PDF
+              </button>
+            )}
+            {tipo === 'compra' && (
+              <button className="btn-secondary" onClick={() => window.open(`/api/compras/${pedido.id}/pdf`, '_blank')}>
+                <Printer className="h-4 w-4" /> Imprimir PDF
               </button>
             )}
             {!fechado && !cancelado && (

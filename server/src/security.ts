@@ -8,12 +8,17 @@ import { clientIp } from './auth';
 
 const isProd = process.env.NODE_ENV === 'production';
 
-/** Aborta a inicialização em produção sem segredo forte do JWT. */
+/** Aborta a inicialização em produção sem segredo forte do JWT e sem ADMIN_PASSWORD. */
 export function assertProductionSecrets() {
   if (!isProd) return;
   const secret = process.env.JWT_SECRET || '';
   if (secret.length < 24 || secret === 'brobond-dev-secret') {
     console.error('❌ JWT_SECRET ausente ou fraco em produção. Defina um valor longo e aleatório (render.yaml já gera um).');
+    process.exit(1);
+  }
+  const adminPassword = process.env.ADMIN_PASSWORD || '';
+  if (!adminPassword || adminPassword.length < 8 || adminPassword === 'brobond123') {
+    console.error('❌ ADMIN_PASSWORD ausente ou fraca em produção. Defina uma senha com pelo menos 8 caracteres.');
     process.exit(1);
   }
 }

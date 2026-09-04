@@ -9,6 +9,9 @@ import { registerLoginFailure, registerLoginSuccess } from './security';
 import { validarPoliticaSenha } from './services';
 
 const SECRET = process.env.JWT_SECRET || 'brobond-dev-secret';
+if (!process.env.JWT_SECRET) {
+  console.warn('⚠️  JWT_SECRET não definido — usando valor padrão (NÃO use em produção).');
+}
 const TOKEN_TTL = process.env.JWT_TTL || '8h';
 export const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@brobond.com.br').trim().toLowerCase();
 export const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'brobond123').trim();

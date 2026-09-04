@@ -55,12 +55,20 @@ import {
 } from './producao';
 import { adminBackup, backupInfo } from './backup';
 import { catalogoPublico, rateLimitPublico } from './catalogos';
+import { vendaPDF, compraPDF } from './pdf';
+import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
+import { listAprovacoes, aprovarPedido, rejeitarPedido, countAprovacoes } from './approval';
+import { runScheduled, cronScheduled, scheduledStatus } from './scheduled';
+import { listQualidade, createQualidade, relatorioQualidade } from './quality';
+import { predicaoDemanda, predicaoInsumos } from './prediction';
+import { rateLimitPortal, portalPedidos, portalPedidoDetalhe } from './portal';
+import { notificacoesStatus, verificarAlertasEstoque } from './notifications';
 
 assertProductionSecrets();
 initSentry();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '0.5.0';
+export const VERSION = process.env.npm_package_version || '0.5.0';
 const app = express();
 
 app.disable('x-powered-by');
@@ -112,6 +120,9 @@ app.post('/api/auth/forgot', loginRateLimit, wrap(forgotPassword));
 app.post('/api/auth/reset', wrap(resetPassword));
 // Catálogo público (somente leitura; rate limit próprio)
 app.get('/api/publico/catalogo/:token', rateLimitPublico, wrap(catalogoPublico));
+// Portal do cliente (acompanhamento de pedidos por CPF/CNPJ)
+app.get('/api/portal/:token/pedidos', rateLimitPortal, wrap(portalPedidos));
+app.get('/api/portal/:token/pedido/:id', rateLimitPortal, wrap(portalPedidoDetalhe));
 // Imagens armazenadas no banco: URL pública protegida por token aleatório
 app.get('/api/files/:id/:token', wrap(serveFile));
 
@@ -162,6 +173,39 @@ app.delete('/api/compras/:id/itens/:itemId', wrap(deleteItem));
 
 // Relatório de comissões de representantes (antes de /api/:resource/:id)
 app.get('/api/relatorios/comissoes', wrap(relatorioComissoes));
+
+// PDF dos pedidos (antes das rotas genéricas)
+app.get('/api/vendas/:id/pdf', wrap(vendaPDF));
+app.get('/api/compras/:id/pdf', wrap(compraPDF));
+
+// QR Code de produtos
+app.get('/api/produtos/:id/qrcode', wrap(produtoQRCode));
+app.get('/api/produtos/:id/qrcode/svg', wrap(produtoQRCodeSVG));
+app.get('/api/produtos/:id/qrcode/dados', wrap(produtoQRDados));
+app.get('/api/produtos/:id/qrcode/etiqueta', wrap(produtoEtiquetaQR));
+
+// Qualidade (controle de defeitos em OPs)
+app.get('/api/ordens/:id/qualidade', wrap(listQualidade));
+app.post('/api/ordens/:id/qualidade', wrap(createQualidade));
+app.get('/api/relatorios/qualidade', wrap(relatorioQualidade));
+
+// Aprovações (workflow)
+app.get('/api/aprovacoes/count', wrap(countAprovacoes));
+app.get('/api/aprovacoes', wrap(listAprovacoes));
+app.post('/api/aprovacoes/:id/aprovar', wrap(aprovarPedido));
+app.post('/api/aprovacoes/:id/rejeitar', wrap(rejeitarPedido));
+
+// Previsão de demanda (IA)
+app.get('/api/predicao/demanda', wrap(predicaoDemanda));
+app.get('/api/predicao/insumos', wrap(predicaoInsumos));
+
+// Relatórios agendados (admin)
+app.get('/api/admin/scheduled/status', wrap(scheduledStatus));
+app.get('/api/admin/scheduled/run', wrap(runScheduled));
+app.post('/api/admin/scheduled/cron', wrap(cronScheduled));
+
+// Notificações (status)
+app.get('/api/admin/notificacoes/status', (_req, res) => res.json(notificacoesStatus()));
 
 // Fase 3 — itens de OP por grade e insumos da ficha técnica (sub-recursos)
 app.get('/api/ordens/:id/itens', wrap(listItensOrdem));

@@ -44,7 +44,7 @@ export function initSentry(): void {
     sentry.init({
       dsn,
       environment: process.env.NODE_ENV || 'development',
-      release: `brobond-erp@${process.env.npm_package_version || '0.4.0'}`,
+      release: `brobond-erp@${process.env.npm_package_version || '0.5.0'}`,
       tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE || 0),
     });
     log.info('Sentry ativo (SENTRY_DSN definido).');

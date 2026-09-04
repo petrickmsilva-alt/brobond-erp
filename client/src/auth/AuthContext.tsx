@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { api, apiFetch, clearToken, getToken, setToken } from '../lib/api';
 import { MetaContext, type Meta } from '../lib/meta';
+import { setSentryUser } from '../lib/sentry';
 
 export type Perfil = 'admin' | 'gerente' | 'operador';
 export type User = {
@@ -69,6 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!d.token || !d.user) throw new Error('Resposta inválida do servidor');
     setToken(d.token);
     setUser(d.user);
+    setSentryUser(d.user);
     await refreshMeta();
   }
 
@@ -76,6 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearToken();
     setUser(null);
     setMeta(null);
+    setSentryUser(null);
     window.location.href = '/login';
   }
 

@@ -40,9 +40,18 @@ export const pool: Pool | null = databaseUrl
         process.env.NODE_ENV === 'production' || process.env.PGSSL === 'true'
           ? { rejectUnauthorized: false }
           : undefined,
-      max: 10,
+      max: Number(process.env.PG_POOL_MAX) || 10,
+      connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT) || 5000,
+      idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT) || 30000,
     })
   : null;
+
+// Handler global de erros do pool (evita crash do processo quando uma conexão idle é derrubada)
+if (pool) {
+  pool.on('error', (err) => {
+    console.error('⚠️  Erro inesperado no pool do Postgres (conexão idle):', err?.message || err);
+  });
+}
 
 let ready = false;
 
