@@ -296,10 +296,10 @@ O ERP já tem esqueleto de NF-e (`nfe.ts`). Ligar ao faturar (`venda` faturada =
 | **F3 — Contas a receber/pagar + recorrência** | agenda 30 dias, vencimentos, parcelas, aluguel/energia/folha/facção recorrentes (geradas por botão/cron) | 3 dias | ✅ **entregue** |
 | **F4 — DRE gerencial** | receita − CMV − mão de obra − despesas − impostos − financeiras = resultado | 2 dias | ✅ **entregue** |
 | **F5 — Fluxo projetado** | projeção por semana/mês com dados reais | 2 dias | ⬜ |
-| **F6 — Pagamento online** | Mercado Pago/Asaas + webhook → marca recebido | 3–4 dias | ⬜ |
-| **F7 — Loja oficial (Nuvemshop/VTEX/Woo)** | webhook pedido → venda `site_varejo/site_atacado` | 4–7 dias | ⬜ |
-| **F8 — NF-e** | emitir ao faturar; rejeição/cancelamento trata financeiro | 3–5 dias | ⬜ |
-| **F9 — Integração contábil/financeira** | Omie/Bling/Nibo + exportação conciliada | 4–6 dias | ⬜ |
+| **F6 — Pagamento online** | API Pix **Banco Inter** + webhook → marca recebido | 3–4 dias | ⏳ **aguardando Inter (~30 dias)** |
+| **F7 — Loja oficial (Nuvemshop/VTEX/Woo)** | webhook pedido → venda `site_varejo/site_atacado` | 4–7 dias | ⏳ **aguardando sócio (terça)** |
+| **F8 — NF-e** | emitir ao faturar; rejeição/cancelamento trata financeiro | 3–5 dias | ⏳ **aguardando sócio** |
+| **F9 — Integração contábil/financeira** | Omie/Bling/Nibo + exportação conciliada | 4–6 dias | ⏳ **aguardando contador** |
 | **F10 — Relatório de investidores** | aportes, participação, distribuição, DRE por sócio | 2 dias | ⬜ |
 
 ### Ordem sugerida
@@ -309,6 +309,23 @@ O ERP já tem esqueleto de NF-e (`nfe.ts`). Ligar ao faturar (`venda` faturada =
 3. **F7** (loja oficial) — quando houver volume.
 4. **F8/F9** (NF-e e contábil) — antes de escalar.
 5. **F10** — sempre que tiver terceiros/investidores.
+
+### Status das integrações externas (decisão de 04/09/2026)
+
+As integrações que dependem de credenciais/terceiros foram **adiadas** — a equipe resolveu que essa parte muda pouco o dia a dia agora.
+
+| Item | Decisão / Pendência | Status |
+|---|---|---|
+| **F6 — PIX no site** | Pagamento via **API Pix do Banco Inter** (Conta Inter + CNPJ 52.426.369/0001-64). API já solicitada; prazo previsto de **~30 dias** para liberação (client_id/secret + certificado mTLS). | ⏳ **aguardando Inter** |
+| **F7 — Loja online** | Atacado já roda em **WooCommerce** (`atacado.brobond.com.br`); `brobond.com.br` está como domínio Wix sem site ativo. Responsável: **sócio (define até terça-feira)**. | ⏳ **aguardando sócio** |
+| **F8 — NF-e** | Sem NF-e gratuita oficial do governo para venda de produto. A resolver **com o sócio** (candidatos: Notaas grátis ~50/mês; NFe.io/Brasil NFe pagos; certificado A1 obrigatório). | ⏳ **aguardando sócio** |
+| **F9 — Contábil** | Na **reunião com o contador** definir Omie/Bling/Tiny/Conta Azul e período de exportação. | ⏳ **aguardando contador** |
+
+**Pendências que destravam F6–F9 (quando estiverem prontas, retomar nesta ordem):**
+1. **Inter → F6**: `client_id`, `client_secret`, `certificado .crt/.key` (mTLS), URL pública do webhook e escopos `cob.write` / `pix.write` / `webhook.write`.
+2. **WooCommerce → F7**: `Consumer Key` + `Consumer Secret` das lojas e definição de varejo/atacado (ERP como fonte única).
+3. **NF-e → F8**: provedor + token API + certificado A1 + dados fiscais (CNPJ, IE, regime, endereço) + NCM/CFOP dos produtos.
+4. **Contábil → F9**: provedor escolhido + `app_key`/`app_secret` + plano de contas e período de sincronização.
 
 ---
 
