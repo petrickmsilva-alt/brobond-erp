@@ -178,13 +178,26 @@ export const RESOURCES: Record<string, Resource> = {
     adminOnly: true,
     ops: ALL_OPS,
     notice:
-      'Prefira desativar um usuário a excluí-lo: o histórico de auditoria permanece vinculado ao nome.',
+      'Prefira desativar um usuário a excluí-lo: o histórico de auditoria permanece vinculado ao nome. A coluna "Senha" mostra o estado (definida pelo usuário ou provisória) — o valor nunca é exibido, é gravado em hash bcrypt. Para mudar a senha de alguém, use Editar › campo "Senha".',
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
       { name: 'email', label: 'E-mail', type: 'email', required: true, unique: true, search: true, maxLength: 160, hint: 'Usado para entrar no sistema.' },
       { name: 'perfil', label: 'Perfil', type: 'select', required: true, options: PERFIS, default: 'operador', hint: 'Administrador: tudo. Gerente: tudo, exceto usuários. Operador: não exclui registros.' },
       { ...ativo, hint: 'Usuários inativos não conseguem entrar.' },
-      { name: 'senha', label: 'Senha', type: 'password', virtual: true, requiredOnCreate: true, list: false, min: 6, hint: 'Mínimo de 8 caracteres, não pode ser igual ao e-mail nem óbvia. Ao editar, deixe em branco para manter a senha atual.' },
+      {
+        name: 'senha_status',
+        label: 'Senha',
+        type: 'select',
+        virtual: true,
+        list: true,
+        form: false,
+        options: [
+          { value: 'propria', label: 'Definida pelo usuário', tone: 'green' },
+          { value: 'provisoria', label: 'Provisória — troca pendente', tone: 'amber' },
+        ],
+        hint: 'A senha real nunca é exibida: ela é gravada em hash bcrypt (irreversível), igual ao login.',
+      },
+      { name: 'senha', label: 'Senha', type: 'password', virtual: true, requiredOnCreate: true, list: false, min: 6, hint: 'No editar, este campo MUDA a senha do usuário: preencha só se quiser definir uma nova (mínimo 8 caracteres); deixe em branco para manter a senha atual.' },
       { name: 'trocar_senha', label: 'Trocar senha no próximo acesso', type: 'boolean', default: false, list: false, hint: 'Ao marcar, o usuário é obrigado a definir uma senha nova no primeiro acesso.' },
       { name: 'ultimo_login', label: 'Último acesso', type: 'datetime', readonly: true, form: false },
       ...auditFields,
@@ -1045,6 +1058,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   categorias_financeiras: {
     key: 'categorias_financeiras',
+    minPerfil: 'gerente',
     table: 'categorias_financeiras',
     label: 'Categorias Financeiras',
     singular: 'Categoria financeira',
@@ -1100,6 +1114,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   contas_financeiras: {
     key: 'contas_financeiras',
+    minPerfil: 'gerente',
     table: 'contas_financeiras',
     label: 'Contas Financeiras',
     singular: 'Conta financeira',
@@ -1229,6 +1244,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   lancamentos_financeiros: {
     key: 'lancamentos_financeiros',
+    minPerfil: 'gerente',
     table: 'lancamentos_financeiros',
     label: 'Lançamentos Financeiros',
     singular: 'Lançamento financeiro',
@@ -1309,6 +1325,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   recorrencias_financeiras: {
     key: 'recorrencias_financeiras',
+    minPerfil: 'gerente',
     table: 'recorrencias_financeiras',
     label: 'Recorrências Financeiras',
     singular: 'Recorrência financeira',

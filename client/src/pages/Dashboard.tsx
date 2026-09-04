@@ -19,7 +19,7 @@ import { formatMoney, formatNumber } from '../lib/format';
 import { Alert, PageHeader, Spinner } from '../components/ui';
 import { BarrasVerticais } from '../components/Charts';
 
-type Dashboard = {
+type DashboardData = {
   valorEstoque: number;
   pecasEstoque: number;
   itensAlerta: number;
@@ -45,14 +45,14 @@ type ResumoFin = {
 
 export default function Dashboard() {
   const { user } = useAuth();
-  const [data, setData] = useState<Dashboard | null>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
   const [fin, setFin] = useState<ResumoFin | null>(null);
   const [error, setError] = useState('');
   const podeFin = user?.perfil === 'admin' || user?.perfil === 'gerente';
 
   useEffect(() => {
     api
-      .get<Dashboard>('/dashboard')
+      .get<DashboardData>('/dashboard')
       .then(setData)
       .catch((e) => setError(e.message));
 

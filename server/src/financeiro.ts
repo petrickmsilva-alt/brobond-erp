@@ -841,7 +841,7 @@ export async function resumoInvestidores(req: Request, res: Response) {
 function parseLinhasExtrato(body: Record<string, unknown>): { data: string; valor: number; descricao: string }[] {
   const linhas: { data: string; valor: number; descricao: string }[] = [];
   const add = (d: unknown, v: unknown, desc: unknown) => {
-    const valor = Math.abs(Number(String(v).replace(',', '.').replace(/[^\d.\-]/g, '')));
+    const valor = Math.abs(Number(String(v).replace(',', '.').replace(/[^\d.-]/g, '')));
     if (!isFinite(valor) || valor <= 0) return;
     const data = String(d || '').trim().slice(0, 10);
     linhas.push({ data, valor: r2(valor), descricao: String(desc || '').trim() });

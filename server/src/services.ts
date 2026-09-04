@@ -82,6 +82,7 @@ export function checkAccess(r: Resource, actor: Actor, op: 'read' | 'create' | '
 export async function listRecords(r: Resource, p: ListParams) {
   const out = await getStore().list(r, p);
   await attachImages(r, out.rows);
+  anotarStatusSenha(r, out.rows);
   return out;
 }
 
@@ -89,7 +90,18 @@ export async function getRecord(r: Resource, id: number) {
   const row = await getStore().get(r, id);
   if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
   await attachImages(r, [row]);
+  anotarStatusSenha(r, [row]);
   return row;
+}
+
+/**
+ * Coluna "Senha" da lista de usuários: mostra o ESTADO da senha, nunca o valor.
+ * A senha é guardada em hash bcrypt (mão única) — nem um administrador consegue
+ * vê-la. "Provisória" = troca obrigatória no próximo acesso (trocar_senha).
+ */
+function anotarStatusSenha(r: Resource, rows: Row[]) {
+  if (r.key !== 'usuarios') return;
+  for (const row of rows) row.senha_status = row.trocar_senha ? 'provisoria' : 'propria';
 }
 
 export async function optionsFor(r: Resource) {
@@ -165,6 +177,12 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (r.key === 'usuarios') await prepareUserPayload(data, before, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, before, actor);
       if (r.key === 'estoques') {
+        // Edição parcial (ex.: só estoque_min) mantém o local atual do saldo —
+        // sem isto o resolveLocal aplicaria o padrão "almoxarifado" e o
+        // ensureUniqueStock acusaria 409 contra o saldo de outro local.
+        if (before && (data.local === undefined || data.local === null || data.local === '') && !data.local_id && before.local) {
+          data.local = String(before.local);
+        }
         await resolveLocal(data, tx);
         await ensureUniqueStock(data, before, tx);
       }

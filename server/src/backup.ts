@@ -95,3 +95,91 @@ export async function backupInfo(_req: Request, res: Response) {
   }
   res.json({ kind: s.kind, registros, tabelas, historicoNeon: 'O plano grátis da Neon guarda 24 h de histórico' });
 }
+
+// ----------------------------------------------------------------------------
+// GET /api/admin/backup/xlsx — planilha completa (uma aba por tabela).
+// Funciona também em modo demonstração (usa o store, não o SQL direto).
+// ----------------------------------------------------------------------------
+const PLANILHA_ORDENADA = [
+  'produtos',
+  'categorias',
+  'cores',
+  'tamanhos',
+  'colecoes',
+  'insumos',
+  'fornecedores',
+  'representantes',
+  'clientes',
+  'locais',
+  'estoques',
+  'estoque_insumos',
+  'movimentacoes',
+  'movimentacoes_insumos',
+  'inventarios',
+  'itens_inventario',
+  'ordens',
+  'itens_ordem',
+  'fichas',
+  'itens_ficha_tecnica',
+  'compras',
+  'itens_compra',
+  'vendas',
+  'itens_venda',
+  'catalogos',
+  'lancamentos_financeiros',
+  'categorias_financeiras',
+  'contas_financeiras',
+  'investidores',
+  'aportes',
+  'recorrencias_financeiras',
+  'usuarios',
+  'auditoria',
+];
+
+export async function adminBackupXlsx(req: Request, res: Response) {
+  const actor = currentUser(req);
+  if (actor.perfil !== 'admin') throw new HttpError(403, 'Somente administradores fazem backup.');
+  const ExcelJS = (await import('exceljs')).default;
+  const s = getStore();
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'BROBOND ERP';
+  wb.created = new Date();
+
+  const chaves = Object.keys(RESOURCES).sort((a, b) => {
+    const ia = PLANILHA_ORDENADA.indexOf(a);
+    const ib = PLANILHA_ORDENADA.indexOf(b);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
+
+  let linhasTotais = 0;
+  for (const key of chaves) {
+    const r = RESOURCES[key as keyof typeof RESOURCES];
+    // tabelas auxiliares (sub-recursos) entram sem os campos virtuais/secretos
+    const colunas = r.fields.filter((f) => !f.virtual && f.type !== 'images' && f.type !== 'password');
+    const resultado = await s.list(r, { page: 1, pageSize: 10000 });
+    if (!resultado.rows.length) continue;
+    const ws = wb.addWorksheet(r.table.slice(0, 28));
+    const cabecalho = ['id', ...colunas.map((c) => c.name)];
+    ws.columns = cabecalho.map((c) => {
+      const f = colunas.find((x) => x.name === c);
+      return { header: c === 'id' ? 'id' : `${c}${f?.label && f.label !== c ? ` (${f.label})` : ''}`, key: c, width: Math.max(12, Math.min(36, c.length + 6)) };
+    });
+    ws.getRow(1).font = { bold: true };
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0F4FA' } };
+    for (const row of resultado.rows) {
+      const vals: Record<string, unknown> = {};
+      for (const c of cabecalho) {
+        const v = row[c];
+        vals[c] = v === null || v === undefined ? undefined : typeof v === 'object' && !(v instanceof Date) ? JSON.stringify(v) : v;
+      }
+      ws.addRow(vals);
+      linhasTotais++;
+    }
+  }
+
+  const buf = Buffer.from(await wb.xlsx.writeBuffer());
+  const data = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="brobond-completo-${data}.xlsx"`);
+  res.end(buf);
+}

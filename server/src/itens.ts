@@ -7,7 +7,6 @@
 //   PUT    /api/vendas/:id/itens/:itemId    altera item
 //   DELETE /api/vendas/:id/itens/:itemId    remove item
 //   (idem /api/compras/:id/itens)
-//   GET    /api/relatorios/comissoes        comissões por representante
 //
 // Regras:
 //   • total do pedido é SEMPRE calculado pelo servidor (o campo é readonly);
@@ -568,46 +567,4 @@ export async function aplicarRegrasPedido(
   } else if (eraRecebido && statusNovo === 'cancelado') {
     await estornarCompra(before!, actor, tx);
   }
-}
-
-// ----------------------------------------------------------------------------
-// Relatório de comissões
-// ----------------------------------------------------------------------------
-
-export async function relatorioComissoes(req: Request, res: Response) {
-  const actor = currentUser(req);
-  checkAccess(getResource('vendas')!, actor, 'read');
-  const s = getStore();
-  const de = typeof req.query.de === 'string' ? req.query.de : undefined;
-  const ate = typeof req.query.ate === 'string' ? req.query.ate : undefined;
-  const representanteId = req.query.representante_id ? Number(req.query.representante_id) : undefined;
-
-  const vendas = await s.list(
-    getResource('vendas')!,
-    { page: 1, pageSize: 1000, sort: 'faturada_em', dir: 'desc', filter: representanteId ? { representante_id: representanteId } : {} },
-    null
-  );
-  const linhas = new Map<number, { representante_id: number; representante: string; pedidos: number; valor_vendas: number; comissao: number }>();
-  for (const v of vendas.rows) {
-    if (!FATURADOS.includes(String(v.status))) continue;
-    const dataFat = String(v.faturada_em || '').slice(0, 10);
-    if (de && dataFat < de) continue;
-    if (ate && dataFat > ate) continue;
-    if (!v.representante_id) continue;
-    const rid = Number(v.representante_id);
-    const rep = await s.findOneWhere(getResource('representantes')!, { id: rid }, null);
-    const nome = rep ? labelOf(getResource('representantes')!, rep) : `#${rid}`;
-    const atual = linhas.get(rid) || { representante_id: rid, representante: nome, pedidos: 0, valor_vendas: 0, comissao: 0 };
-    atual.pedidos += 1;
-    atual.valor_vendas = round2(atual.valor_vendas + Number(v.total || 0));
-    atual.comissao = round2(atual.comissao + Number(v.comissao_valor || 0));
-    linhas.set(rid, atual);
-  }
-  const lista = [...linhas.values()].sort((a, b) => b.comissao - a.comissao);
-  res.json({
-    de: de ?? null,
-    ate: ate ?? null,
-    total_comissoes: round2(lista.reduce((s, l) => s + l.comissao, 0)),
-    linhas: lista,
-  });
 }
