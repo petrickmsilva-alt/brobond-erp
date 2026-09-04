@@ -558,3 +558,18 @@ FROM locais l WHERE m.local_id IS NULL AND l.nome = m.local;
 
 UPDATE movimentacoes m SET local_destino_id = l.id
 FROM locais l WHERE m.local_destino IS NOT NULL AND m.local_destino = l.nome;
+
+-- ------------------------------------------------------------
+-- FASE 8 — NF-e, chat e melhorias
+-- ------------------------------------------------------------
+
+-- NF-e (vendas)
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS nfe_numero TEXT;
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS nfe_emitida_em TIMESTAMPTZ;
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS nfe_provider TEXT;
+
+-- Status pendente_aprovacao (workflow de aprovação)
+-- (já coberto pelo status TEXT existente)
+
+-- Chat interno (usa tabela auditoria com recurso='chat')
+-- Nenhum schema novo necessário — auditoria já suporta JSONB

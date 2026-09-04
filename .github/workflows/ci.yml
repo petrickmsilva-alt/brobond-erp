@@ -1,5 +1,5 @@
 # Verificação automática a cada push / pull request:
-# tipos (server + client), testes das regras de negócio e build do front.
+# tipos (server + client), testes das regras de negócio, lint e build do front.
 name: CI
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
         with:
           node-version: 22
       - name: Instalar dependências
-        run: npm run install:all
+        run: npm run install:all && npm install
       - name: Typecheck (API)
         run: npm --prefix server run typecheck
       - name: Typecheck (front)

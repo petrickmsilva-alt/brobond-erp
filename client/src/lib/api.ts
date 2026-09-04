@@ -24,21 +24,59 @@ export class ApiError extends Error {
   }
 }
 
-// Helper de fetch que injeta o token JWT e trata 401 (desloga).
+// Timeout padrão para requisições à API (30s).
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+// Helper de fetch que injeta o token JWT, trata 401 (desloga), timeout e retry.
 export async function apiFetch<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken();
   let res: Response;
-  try {
-    res = await fetch(`/api${path}`, {
-      ...opts,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(opts.headers || {}),
-      },
-    });
-  } catch {
-    throw new ApiError(0, 'Sem conexão com o servidor. Verifique sua internet e tente novamente.');
+
+  // AbortController para timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+  // Retry para erros de rede ou 5xx (máximo 2 tentativas)
+  const maxRetries = 2;
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      res = await fetch(`/api${path}`, {
+        ...opts,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(opts.headers || {}),
+        },
+      });
+      clearTimeout(timeoutId);
+
+      // Não faz retry para 4xx (erro do cliente)
+      if (res.status >= 400 && res.status < 500) break;
+
+      // Faz retry apenas para 5xx ou erros de rede
+      if (res.ok || res.status < 500 || attempt === maxRetries) break;
+
+      // Aguarda antes de retry (exponential backoff: 1s, 2s)
+      await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+    } catch (e: any) {
+      clearTimeout(timeoutId);
+      lastError = e;
+      if (e.name === 'AbortError') {
+        throw new ApiError(0, 'Tempo limite da requisição excedido. Verifique sua conexão e tente novamente.');
+      }
+      if (attempt === maxRetries) {
+        throw new ApiError(0, 'Sem conexão com o servidor. Verifique sua internet e tente novamente.');
+      }
+      // Aguarda antes de retry
+      await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+    }
+  }
+
+  if (!res!) {
+    throw lastError || new ApiError(0, 'Sem conexão com o servidor.');
   }
 
   const data = await res.json().catch(() => ({}));

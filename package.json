@@ -12,9 +12,19 @@
     "build": "npm --prefix client install && npm --prefix client run build",
     "start": "npm --prefix server install && npm --prefix server run start",
     "typecheck": "npm --prefix server run typecheck && npm --prefix client run typecheck",
-    "test": "npm --prefix server test"
+    "test": "npm --prefix server test",
+    "lint": "eslint 'server/src/**/*.ts' 'client/src/**/*.{ts,tsx}'",
+    "lint:fix": "eslint 'server/src/**/*.ts' 'client/src/**/*.{ts,tsx}' --fix",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\" --ignore-path .prettierignore",
+    "format:check": "prettier --check \"**/*.{ts,tsx,json,md}\" --ignore-path .prettierignore"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
+    "@typescript-eslint/eslint-plugin": "^8.69.0",
+    "@typescript-eslint/parser": "^8.69.0",
+    "concurrently": "^9.1.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "prettier": "^3.2.0"
   }
 }
