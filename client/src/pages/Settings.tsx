@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Database, Eye, EyeOff, KeyRound, Loader2, Server, ShieldCheck, UserRound, Users } from 'lucide-react';
-import { api, ApiError } from '../lib/api';
+import { Database, Download, Eye, EyeOff, KeyRound, Loader2, LogOut, Server, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react';
+import { api, ApiError, downloadFile } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, PageHeader, useToast } from '../components/ui';
 
@@ -12,17 +12,40 @@ const PERFIL_DESC: Record<string, string> = {
   operador: 'Inclui e altera registros, mas não exclui.',
 };
 
+const PREF_KEY = 'brobond_prefs';
+
 export default function Settings() {
-  const { user, meta } = useAuth();
+  const { user, meta, refreshMeta, logout } = useAuth();
   const location = useLocation();
+  const [refreshing, setRefreshing] = useState(false);
+  const trocarPedido = new URLSearchParams(location.search).get('trocar') === '1';
+  const precisaTrocar = (user?.trocar_senha || trocarPedido) && !refreshing;
 
   useEffect(() => {
     if (location.hash === '#senha') document.getElementById('senha')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [location.hash]);
 
+  async function concluirTroca() {
+    await refreshMeta();
+    setRefreshing(true);
+    window.setTimeout(() => {
+      window.history.replaceState({}, '', '/config');
+      setRefreshing(false);
+    }, 400);
+  }
+
   return (
     <div className="p-4 sm:p-6">
-      <PageHeader title="Configurações" description="Sua conta, senha e informações do sistema." />
+      <PageHeader title="Configurações" description="Sua conta, senha, sessão e informações do sistema." />
+
+      {precisaTrocar && (
+        <div className="mb-4">
+          <Alert tone="amber">
+            <strong>Sua senha é provisória.</strong> Por segurança, defina uma nova senha abaixo antes de usar os outros módulos. Ela precisa ter pelo menos 8
+            caracteres e não pode ser uma palavra óbvia.
+          </Alert>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">
@@ -56,11 +79,33 @@ export default function Settings() {
             <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
               <KeyRound className="h-4 w-4 text-navy-400" /> Trocar senha
             </h2>
-            <ChangePasswordForm disabled={!user || user.id <= 0} />
+            <ChangePasswordForm disabled={!user || user.id <= 0} onChangeSenha={precisaTrocar ? concluirTroca : undefined} />
+          </section>
+
+          {/* Sessão e segurança */}
+          <section className="card p-5">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+              <LogOut className="h-4 w-4 text-navy-400" /> Sessão e dispositivos
+            </h2>
+            <p className="mt-2 text-sm text-slate-500">Cada dispositivo guarda um “token” de acesso. Encerrar todas as sessões derruba o login em outros aparelhos imediatamente (inclusive os que usam “Lembrar-me”).</p>
+            <button
+              className="btn-secondary mt-3"
+              onClick={async () => {
+                try {
+                  await api.post('/auth/logout-all', {});
+                } catch {
+                  /* segue mesmo se a API falhar: limpa o dispositivo local */
+                }
+                logout();
+              }}
+            >
+              <LogOut className="h-4 w-4 text-red-500" /> Sair de todos os dispositivos
+            </button>
           </section>
         </div>
 
         <div className="space-y-4">
+          <PreferenciasCard />
           {/* Sistema */}
           <section className="card p-5">
             <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
@@ -80,6 +125,10 @@ export default function Settings() {
               <div className="flex items-center justify-between">
                 <dt className="text-slate-500">Fotos</dt>
                 <dd>{meta?.uploads === 'cloudinary' ? <Badge tone="green">Cloudinary (CDN)</Badge> : <Badge tone="blue">No banco de dados</Badge>}</dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt className="text-slate-500">E-mail (recuperação)</dt>
+                <dd>{meta?.smtp?.configurado ? <Badge tone="green">SMTP configurado</Badge> : <Badge tone="slate">Sem SMTP (link no console)</Badge>}</dd>
               </div>
               <div className="flex items-center justify-between">
                 <dt className="flex items-center gap-1.5 text-slate-500">
@@ -118,6 +167,7 @@ export default function Settings() {
                 <Link to="/auditoria" className="btn-secondary justify-start">
                   <ShieldCheck className="h-4 w-4" /> Ver auditoria
                 </Link>
+                <BackupCard />
               </div>
             </section>
           )}
@@ -127,7 +177,7 @@ export default function Settings() {
   );
 }
 
-function ChangePasswordForm({ disabled }: { disabled: boolean }) {
+function ChangePasswordForm({ disabled, onChangeSenha }: { disabled: boolean; onChangeSenha?: () => void }) {
   const toast = useToast();
   const [atual, setAtual] = useState('');
   const [nova, setNova] = useState('');
@@ -150,7 +200,7 @@ function ChangePasswordForm({ disabled }: { disabled: boolean }) {
     setMsg('');
     const errs: Record<string, string> = {};
     if (!atual) errs.senha_atual = 'Informe a senha atual';
-    if (nova.length < 6) errs.senha_nova = 'Mínimo de 6 caracteres';
+    if (nova.length < 8) errs.senha_nova = 'Mínimo de 8 caracteres';
     if (nova !== confirma) errs.confirma = 'As senhas não conferem';
     if (nova && nova === atual) errs.senha_nova = 'A nova senha deve ser diferente da atual';
     setErrors(errs);
@@ -161,6 +211,7 @@ function ChangePasswordForm({ disabled }: { disabled: boolean }) {
       await api.post('/auth/change-password', { senha_atual: atual, senha_nova: nova });
       toast.success('Senha alterada com sucesso.');
       clear();
+      if (onChangeSenha) onChangeSenha();
     } catch (e: any) {
       if (e instanceof ApiError && e.fields) setErrors(e.fields);
       setMsg(e.message || 'Não foi possível alterar a senha.');
@@ -188,7 +239,7 @@ function ChangePasswordForm({ disabled }: { disabled: boolean }) {
             Nova senha
           </label>
           <input id="senha_nova" type={type} className={`input ${errors.senha_nova ? 'input-error' : ''}`} value={nova} onChange={(e) => setNova(e.target.value)} autoComplete="new-password" disabled={disabled || busy} />
-          {errors.senha_nova ? <p className="mt-1 text-xs font-medium text-red-600">{errors.senha_nova}</p> : <p className="mt-1 text-xs text-slate-400">Mínimo de 6 caracteres.</p>}
+          {errors.senha_nova ? <p className="mt-1 text-xs font-medium text-red-600">{errors.senha_nova}</p> : <p className="mt-1 text-xs text-slate-400">Mínimo de 8 caracteres, sem palavras óbvias.</p>}
         </div>
         <div>
           <label className="label" htmlFor="confirma">
@@ -212,5 +263,121 @@ function ChangePasswordForm({ disabled }: { disabled: boolean }) {
         </div>
       </div>
     </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Preferências por usuário (F7) — local no navegador + cópia no servidor (JSONB)
+// ---------------------------------------------------------------------------
+function PreferenciasCard() {
+  const toast = useToast();
+  const [locais, setLocais] = useState<{ value: number; label: string }[]>([]);
+  const [gradeLocal, setGradeLocal] = useState('');
+  const [carregou, setCarregou] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+
+  useEffect(() => {
+    api
+      .get<{ value: number; label: string }[]>('/locais/options')
+      .then((o) => {
+        setLocais(o);
+        // preferência local primeiro (navegador); servidor como backup
+        const local = JSON.parse(localStorage.getItem(PREF_KEY) || '{}');
+        if (local?.gradeLocal) setGradeLocal(local.gradeLocal);
+      })
+      .catch(() => {});
+    api
+      .get<{ preferencias: Record<string, any> }>('/auth/preferences')
+      .then((d) => {
+        setCarregou(true);
+        if (d.preferencias?.gradeLocal && !JSON.parse(localStorage.getItem(PREF_KEY) || '{}')?.gradeLocal) {
+          setGradeLocal(String(d.preferencias.gradeLocal));
+        }
+      })
+      .catch(() => setCarregou(true));
+  }, []);
+
+  useEffect(() => {
+    if (!gradeLocal || !carregou) return;
+    const timer = window.setTimeout(() => {
+      localStorage.setItem(PREF_KEY, JSON.stringify({ gradeLocal }));
+      api.put('/auth/preferences', { preferencias: { gradeLocal } }).catch(() => {});
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [gradeLocal, carregou]);
+
+  async function salvarTudo() {
+    setSalvando(true);
+    try {
+      localStorage.setItem(PREF_KEY, JSON.stringify({ gradeLocal }));
+      await api.put('/auth/preferences', { preferencias: { gradeLocal } });
+      toast.success('Preferências salvas neste usuário.');
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao salvar preferências.');
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <section className="card p-5">
+      <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+        <Settings2 className="h-4 w-4 text-navy-400" /> Preferências
+      </h2>
+      <p className="mt-2 text-sm text-slate-500">Aplicadas no seu usuário em qualquer dispositivo (ficam também salvas localmente).</p>
+      <label className="mt-3 block">
+        <span className="label">Local padrão na grade de estoque</span>
+        <select className="input" value={gradeLocal} onChange={(e) => setGradeLocal(e.target.value)}>
+          <option value="">Todos os locais (soma)</option>
+          {locais.map((o) => (
+            <option key={o.value} value={o.label}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button className="btn-secondary mt-3" onClick={salvarTudo} disabled={salvando}>
+        {salvando && <Loader2 className="h-4 w-4 animate-spin" />} Salvar preferências
+      </button>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Backup do banco (admin)
+// ---------------------------------------------------------------------------
+function BackupCard() {
+  const toast = useToast();
+  const [info, setInfo] = useState<{ kind: string; registros?: number; tabelas?: number } | null>(null);
+  useEffect(() => {
+    api
+      .get<{ kind: string; registros?: number; tabelas?: number }>('/admin/backup/info')
+      .then(setInfo)
+      .catch(() => {});
+  }, []);
+
+  if (!info) return null;
+  return (
+    <div className="mt-1 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <p className="text-xs text-slate-500">
+        {info.kind === 'postgres' ? (
+          <>
+            <strong>Backup do banco:</strong> {info.tabelas ?? '—'} tabelas · {info.registros ?? '—'} registros. Baixe um dump SQL completo (sem as fotos).
+          </>
+        ) : (
+          'Modo demonstração (memória): o backup em arquivo só existe com Postgres configurado.'
+        )}
+      </p>
+      {info.kind === 'postgres' && (
+        <button
+          className="btn-secondary mt-2 w-full justify-start text-xs"
+          onClick={() =>
+            downloadFile('/admin/backup', `brobond-backup-${new Date().toISOString().slice(0, 10)}.sql`).catch((e) => toast.error(e.message || 'Falha no backup.'))
+          }
+        >
+          <Download className="h-4 w-4" /> Baixar backup (.sql)
+        </button>
+      )}
+    </div>
   );
 }

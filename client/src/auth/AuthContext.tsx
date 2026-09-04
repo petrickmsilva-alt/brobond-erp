@@ -3,12 +3,20 @@ import { api, apiFetch, clearToken, getToken, setToken } from '../lib/api';
 import { MetaContext, type Meta } from '../lib/meta';
 
 export type Perfil = 'admin' | 'gerente' | 'operador';
-export type User = { id: number; name: string; email: string; perfil: Perfil };
+export type User = {
+  id: number;
+  name: string;
+  email: string;
+  perfil: Perfil;
+  /** senha padrão/legada: o sistema pede a troca no primeiro acesso */
+  trocar_senha?: boolean;
+  lembrar?: boolean;
+};
 
 type AuthContextValue = {
   user: User | null;
   meta: Meta | null;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, lembrar?: boolean) => Promise<void>;
   logout: () => void;
   refreshMeta: () => Promise<void>;
   loading: boolean;
@@ -29,6 +37,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       uploads: m.uploads,
       uploadsConfigError: m.uploadsConfigError,
       version: m.version,
+      smtp: m.smtp,
     });
     if (m.user) setUser(m.user);
   }, []);
@@ -51,13 +60,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .finally(() => setLoading(false));
   }, [refreshMeta]);
 
-  async function login(email: string, password: string) {
+  async function login(email: string, password: string, lembrar = false) {
     const normalizedEmail = email.trim().toLowerCase();
-    const normalizedPassword = password.trim();
-    if (!normalizedEmail || !normalizedPassword) {
+    if (!normalizedEmail || !password) {
       throw new Error('E-mail e senha são obrigatórios');
     }
-    const d = await api.post('/auth/login', { email: normalizedEmail, password: normalizedPassword });
+    const d = await api.post('/auth/login', { email: normalizedEmail, password, lembrar });
     if (!d.token || !d.user) throw new Error('Resposta inválida do servidor');
     setToken(d.token);
     setUser(d.user);

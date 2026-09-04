@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { ACAO_LABEL, formatDate, formatMoney, formatNumber, formatRelative } from '../lib/format';
 import { Alert, Badge, PageHeader, Spinner } from '../components/ui';
+import { BarrasHorizontais, BarrasVerticais } from '../components/Charts';
 import type { Tone } from '../lib/meta';
 
 type Dashboard = {
@@ -20,6 +21,10 @@ type Dashboard = {
   alertas: { produto: string; tamanho: string; local: string; quantidade: number; estoque_min: number }[];
   ordens: { id: number; produto: string; tamanho: string; quantidade: number; status: string; previsao: string | null }[];
   recentes: { data: string; usuario: string | null; acao: string; recurso: string | null; descricao: string }[];
+  vendasPorMes: { mes: string; total: number }[];
+  producaoPorSemana: { semana: string; pecas: number; ordens: number }[];
+  topProdutos: { produto: string; total: number }[];
+  insumosAlerta: { insumo: string; quantidade: number; estoque_min: number }[];
 };
 
 const STATUS_TONE: Record<string, Tone> = { planejada: 'slate', em_producao: 'blue', concluida: 'green', cancelada: 'red' };
@@ -112,6 +117,74 @@ export default function Dashboard() {
                 <span className="text-lg font-bold tabular-nums text-navy-900">{formatNumber(c.value)}</span>
               </Link>
             ))}
+          </div>
+
+          {/* Gráficos (Fase 5) */}
+          <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <section className="card p-4">
+              <h2 className="text-sm font-semibold text-navy-900">Vendas faturadas — últimos 12 meses</h2>
+              <div className="mt-3">
+                {data.vendasPorMes.length === 0 || data.vendasPorMes.every((v) => v.total === 0) ? (
+                  <p className="py-8 text-center text-sm text-slate-400">Sem vendas faturadas no período.</p>
+                ) : (
+                  <BarrasVerticais
+                    rotulos={data.vendasPorMes.map((v) => `${v.mes.slice(5)}/${v.mes.slice(2, 4)}`)}
+                    valores={data.vendasPorMes.map((v) => v.total)}
+                    formatar={formatMoney}
+                    titulo="Vendas por mês"
+                  />
+                )}
+              </div>
+            </section>
+            <section className="card p-4">
+              <h2 className="text-sm font-semibold text-navy-900">Produção concluída — últimas 8 semanas</h2>
+              <div className="mt-3">
+                {data.producaoPorSemana.length === 0 || data.producaoPorSemana.every((p) => p.pecas === 0) ? (
+                  <p className="py-8 text-center text-sm text-slate-400">Nenhuma OP concluída nas últimas 8 semanas.</p>
+                ) : (
+                  <BarrasVerticais
+                    rotulos={data.producaoPorSemana.map((s) => `${Number(s.semana.slice(8, 10))}/${Number(s.semana.slice(5, 7))}`)}
+                    valores={data.producaoPorSemana.map((s) => s.pecas)}
+                    formatar={(v) => `${formatNumber(v)} peças`}
+                    cor="#C9832E"
+                    titulo="Peças produzidas por semana"
+                  />
+                )}
+              </div>
+            </section>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <section className="card p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-navy-900">Top 10 produtos por faturamento</h2>
+                <Link to="/relatorios" className="text-xs font-medium text-navy-600 hover:underline">
+                  Ver curva ABC
+                </Link>
+              </div>
+              {data.topProdutos.length === 0 ? (
+                <p className="py-8 text-center text-sm text-slate-400">Sem faturamento ainda.</p>
+              ) : (
+                <BarrasHorizontais itens={data.topProdutos.map((p) => ({ rotulo: p.produto, valor: p.total }))} formatar={formatMoney} />
+              )}
+            </section>
+            <section className="card p-4">
+              <h2 className="mb-3 text-sm font-semibold text-navy-900">Insumos abaixo do mínimo</h2>
+              {data.insumosAlerta.length === 0 ? (
+                <p className="py-8 text-center text-sm text-slate-400">Nenhum insumo em alerta. 🎉</p>
+              ) : (
+                <ul className="space-y-2">
+                  {data.insumosAlerta.map((i, idx) => (
+                    <li key={idx} className="flex items-center justify-between rounded-lg bg-amber-50/70 px-3 py-2 text-sm">
+                      <span className="font-medium text-slate-800">{i.insumo}</span>
+                      <span className="tabular-nums text-slate-500">
+                        <strong className={Number(i.quantidade) <= 0 ? 'text-red-600' : 'text-amber-700'}>{formatNumber(i.quantidade)}</strong> / mín. {formatNumber(i.estoque_min)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
           </div>
 
           <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-3">

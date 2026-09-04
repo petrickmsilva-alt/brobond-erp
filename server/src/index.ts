@@ -3,7 +3,21 @@ import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hasDatabaseUrl, isDbConnected, migrate } from './db';
-import { ADMIN_EMAIL, changePassword, currentUser, ensureAdmin, login, me, requireAuth } from './auth';
+import {
+  ADMIN_EMAIL,
+  changePassword,
+  currentUser,
+  ensureAdmin,
+  forgotPassword,
+  getPreferences,
+  login,
+  logoutAll,
+  me,
+  migrarSenhasLegadas,
+  requireAuth,
+  resetPassword,
+  savePreferences,
+} from './auth';
 import { getPublicResource, publicMeta } from './resources';
 import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider, uploadsConfigError } from './uploads';
 import { productDetail } from './detail';
@@ -22,11 +36,31 @@ import {
 import { parseId } from './validate';
 import { HttpError } from './errors';
 import { assertProductionSecrets, corsOrigin, loginRateLimit, securityHeaders } from './security';
+import { initSentry, reportarErro } from './log';
+import { smtpConfigurado } from './mail';
+import { estoqueGrade, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario } from './estoque';
+import { relatorio } from './relatorios';
+import { exportarRecurso } from './export';
+import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
+import {
+  aplicarPrecoFicha,
+  createInsumoFicha,
+  createItemOrdem,
+  deleteInsumoFicha,
+  deleteItemOrdem,
+  listInsumosFicha,
+  listItensOrdem,
+  updateInsumoFicha,
+  updateItemOrdem,
+} from './producao';
+import { adminBackup, backupInfo } from './backup';
+import { catalogoPublico, rateLimitPublico } from './catalogos';
 
 assertProductionSecrets();
+initSentry();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = '0.4.0';
+export const VERSION = '0.5.0';
 const app = express();
 
 app.disable('x-powered-by');
@@ -73,6 +107,11 @@ app.get('/api/health', (_req, res) =>
   res.json({ ok: true, db: isDbConnected() ? 'postgres' : 'memory', uploads: uploadProvider(), version: VERSION })
 );
 app.post('/api/auth/login', loginRateLimit, wrap(login));
+// "Esqueci minha senha" — públicos (mesmo limite de tentativas do login)
+app.post('/api/auth/forgot', loginRateLimit, wrap(forgotPassword));
+app.post('/api/auth/reset', wrap(resetPassword));
+// Catálogo público (somente leitura; rate limit próprio)
+app.get('/api/publico/catalogo/:token', rateLimitPublico, wrap(catalogoPublico));
 // Imagens armazenadas no banco: URL pública protegida por token aleatório
 app.get('/api/files/:id/:token', wrap(serveFile));
 
@@ -83,6 +122,10 @@ app.use('/api', wrap(requireAuth));
 
 app.get('/api/auth/me', me);
 app.post('/api/auth/change-password', wrap(changePassword));
+app.post('/api/auth/logout-all', wrap(logoutAll));
+// Preferências por usuário (Fase 7 — JSONB no banco, espelhadas no navegador)
+app.get('/api/auth/preferences', wrap(getPreferences));
+app.put('/api/auth/preferences', wrap(savePreferences));
 
 // Metadados dos módulos (campos, tipos, opções) — o front monta formulários com isso
 app.get('/api/meta', (req, res) => {
@@ -93,6 +136,7 @@ app.get('/api/meta', (req, res) => {
     uploadsConfigError: uploadsConfigError(),
     version: VERSION,
     user: currentUser(req),
+    smtp: { configurado: smtpConfigurado() },
   });
 });
 
@@ -118,6 +162,35 @@ app.delete('/api/compras/:id/itens/:itemId', wrap(deleteItem));
 
 // Relatório de comissões de representantes (antes de /api/:resource/:id)
 app.get('/api/relatorios/comissoes', wrap(relatorioComissoes));
+
+// Fase 3 — itens de OP por grade e insumos da ficha técnica (sub-recursos)
+app.get('/api/ordens/:id/itens', wrap(listItensOrdem));
+app.post('/api/ordens/:id/itens', wrap(createItemOrdem));
+app.put('/api/ordens/:id/itens/:itemId', wrap(updateItemOrdem));
+app.delete('/api/ordens/:id/itens/:itemId', wrap(deleteItemOrdem));
+app.get('/api/fichas/:id/insumos', wrap(listInsumosFicha));
+app.post('/api/fichas/:id/insumos', wrap(createInsumoFicha));
+app.put('/api/fichas/:id/insumos/:itemId', wrap(updateInsumoFicha));
+app.delete('/api/fichas/:id/insumos/:itemId', wrap(deleteInsumoFicha));
+app.post('/api/fichas/:id/aplicar-preco', wrap(aplicarPrecoFicha));
+
+// Fase 4 — grade de estoque e inventário
+app.get('/api/estoques/grade', wrap(estoqueGrade));
+app.get('/api/inventarios/:id', wrap(getInventarioDetalhe));
+app.get('/api/inventarios/:id/itens', wrap(listItensInventario));
+app.put('/api/inventarios/:id/itens', wrap(updateItensInventario));
+app.post('/api/inventarios/:id/fechar', wrap(fecharInventario));
+
+// Fase 5 — relatórios, importação e exportação
+app.get('/api/relatorios/:nome', wrap(async (req, res) => relatorio(req, res, req.params.nome)));
+app.post('/api/importar/preview', wrap(previewImportacao));
+app.post('/api/importar/confirmar', wrap(confirmarImportacao));
+app.get('/api/importar/modelo', wrap(modeloImportacao));
+app.get('/api/:resource/export', wrap(async (req, res) => exportarRecurso(req, res, req.params.resource)));
+
+// Fase 6 — backup (admin)
+app.get('/api/admin/backup', wrap(adminBackup));
+app.get('/api/admin/backup/info', wrap(backupInfo));
 
 // Fotos / anexos de um registro
 app.get('/api/:resource/:id/arquivos', wrap(listFiles));
@@ -191,7 +264,9 @@ const updateHandler = wrap(async (req: Request, res: Response) => {
   const r = (req as any).resource;
   const actor = currentUser(req);
   checkAccess(r, actor, 'update');
-  res.json(await updateRecord(r, parseId(req.params.id), req.body, actor));
+  // ?forcar=true em OP concluída permite consumo de insumos sem saldo (gerente/admin)
+  const forcar = req.query.forcar === 'true' || req.query.forcar === '1';
+  res.json(await updateRecord(r, parseId(req.params.id), req.body, actor, { forcar }));
 });
 app.put('/api/:resource/:id', resourceParam, updateHandler);
 app.patch('/api/:resource/:id', resourceParam, updateHandler);
@@ -232,7 +307,7 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     return res.status(400).json({ error: 'JSON inválido no corpo da requisição' });
   }
   const httpErr = toHttpError(err, (req as any).resource);
-  if (httpErr.status >= 500) console.error('Erro não tratado:', err);
+  if (httpErr.status >= 500) reportarErro(err, { rota: `${req.method} ${req.path}` });
   res.status(httpErr.status).json({ error: httpErr.message, fields: httpErr.fields });
 });
 
@@ -248,6 +323,7 @@ async function start() {
     }
   }
   await ensureAdmin();
+  await migrarSenhasLegadas();
 
   const port = Number(process.env.PORT) || 3001;
   app.listen(port, '0.0.0.0', () => {

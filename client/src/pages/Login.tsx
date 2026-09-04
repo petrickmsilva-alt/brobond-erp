@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, Loader2, Lock, Mail, ShieldCheck, Boxes, Cog, Receipt } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { Logo } from '../components/Logo';
@@ -10,6 +10,7 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
+  const [lembrar, setLembrar] = useState(false);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -22,7 +23,7 @@ export default function Login() {
     setErr('');
     setBusy(true);
     try {
-      await login(email, password);
+      await login(email, password, lembrar);
       nav('/', { replace: true });
     } catch (e: any) {
       setErr(e.message || 'Falha no login');
@@ -154,6 +155,14 @@ export default function Login() {
               </div>
             )}
 
+            <label className="flex cursor-pointer items-center justify-between gap-2 text-sm text-slate-600">
+              <span className="flex items-center gap-2">
+                <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400" checked={lembrar} onChange={(e) => setLembrar(e.target.checked)} />
+                Lembrar-me por 30 dias
+              </span>
+              <span className="text-xs text-slate-400">neste dispositivo</span>
+            </label>
+
             <button disabled={busy || !email || !password} className="btn-primary w-full py-2.5">
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
               {busy ? 'Entrando...' : 'Entrar'}
@@ -161,7 +170,7 @@ export default function Login() {
           </div>
 
           <p className="mt-8 text-center text-xs text-slate-400">
-            Esqueceu a senha? Peça ao administrador para redefini-la em <strong>Configurações › Usuários</strong>.
+            Esqueceu a senha? <Link to="/esqueci" className="font-medium text-navy-700 underline-offset-2 hover:underline">Solicite um link de redefinição</Link> — ou peça ao administrador.
           </p>
         </form>
       </div>

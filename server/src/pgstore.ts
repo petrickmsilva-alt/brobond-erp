@@ -87,8 +87,26 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
   const conds: string[] = [];
   // Filtros de igualdade (somente colunas reais do recurso)
   const cols = new Set(columnsOf(r).map((f) => f.name));
+  const dateCols = new Set(r.fields.filter((f) => f.type === 'date' || f.type === 'datetime').map((f) => f.name));
   for (const [k, v] of Object.entries(filter || {})) {
-    if (!cols.has(k) || v === undefined || v === null || v === '') continue;
+    if (v === undefined || v === null || v === '') continue;
+    // Intervalo de datas: f.<campo>_de / f.<campo>_ate (ex.: f.data_de, f.data_ate)
+    const mDate = /^(.*?)_(de|ate)$/.exec(k);
+    if (mDate && dateCols.has(mDate[1]) && typeof v === 'string') {
+      const dia = v.slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) continue;
+      if (mDate[2] === 'de') {
+        params.push(dia);
+        conds.push(`t.${mDate[1]} >= $${params.length}::date`);
+      } else {
+        const d = new Date(`${dia}T00:00:00Z`);
+        d.setUTCDate(d.getUTCDate() + 1);
+        params.push(d.toISOString().slice(0, 10));
+        conds.push(`t.${mDate[1]} < $${params.length}::date`);
+      }
+      continue;
+    }
+    if (!cols.has(k)) continue;
     params.push(v);
     conds.push(`t.${k} = $${params.length}`);
   }
@@ -277,7 +295,7 @@ export class PgStore implements Store {
   }
 
   async dashboard(): Promise<DashboardData> {
-    const [kpis, alertas, ordens, recentes] = await Promise.all([
+    const [kpis, alertas, ordens, recentes, chart6, chart7, chart8, chart9] = await Promise.all([
       query(`
         SELECT
           COALESCE((SELECT SUM(e.quantidade * COALESCE(p.custo, 0)) FROM estoques e JOIN produtos p ON p.id = e.produto_id), 0)::float AS valor_estoque,
@@ -318,6 +336,44 @@ export class PgStore implements Store {
         ORDER BY data DESC
         LIMIT 8
       `),
+      // Fase 5 — vendas por mês (12 meses, completando os meses sem venda)
+      query(`
+        SELECT to_char(gs.mes, 'YYYY-MM') AS mes, COALESCE(SUM(v.total), 0)::float AS total
+        FROM generate_series(date_trunc('month', now()) - interval '11 months', date_trunc('month', now()), interval '1 month') AS gs(mes)
+        LEFT JOIN vendas v ON v.status IN ('faturada', 'entregue') AND date_trunc('month', COALESCE(v.faturada_em, v.data)) = gs.mes
+        GROUP BY gs.mes ORDER BY gs.mes ASC
+      `),
+      // Fase 5 — produção concluída por semana (8 semanas; OP por grade soma a grade)
+      query(`
+        SELECT to_char(gs.sem, 'YYYY-MM-DD') AS semana,
+               COALESCE(SUM(CASE
+                 WHEN o.tipo = 'grade' THEN (SELECT COALESCE(SUM(io.quantidade), 0) FROM itens_ordem io WHERE io.ordem_id = o.id)
+                 ELSE o.quantidade END), 0)::int AS pecas,
+               COUNT(o.id)::int AS ordens
+        FROM generate_series(date_trunc('week', now()) - interval '7 weeks', date_trunc('week', now()), interval '1 week') AS gs(sem)
+        LEFT JOIN ordens_fabricacao o
+          ON o.status = 'concluida' AND date_trunc('week', COALESCE(o.concluida_em, o.atualizado_em, o.criado_em)) = gs.sem
+        GROUP BY gs.sem ORDER BY gs.sem ASC
+      `),
+      // Fase 5 — top 10 produtos por faturamento (pedidos faturados/entregues)
+      query(`
+        SELECT concat_ws(' — ', p.sku, p.nome) AS produto, SUM(iv.subtotal)::float AS total
+        FROM itens_venda iv
+        JOIN vendas v ON v.id = iv.venda_id AND v.status IN ('faturada', 'entregue')
+        JOIN produtos p ON p.id = iv.produto_id
+        GROUP BY p.id, p.sku, p.nome
+        ORDER BY total DESC
+        LIMIT 10
+      `),
+      // Fase 3 — insumos abaixo do estoque mínimo
+      query(`
+        SELECT i.nome AS insumo, ei.quantidade, ei.estoque_min
+        FROM estoque_insumos ei
+        JOIN insumos i ON i.id = ei.insumo_id
+        WHERE ei.estoque_min > 0 AND ei.quantidade <= ei.estoque_min
+        ORDER BY (ei.quantidade - ei.estoque_min) ASC
+        LIMIT 8
+      `),
     ]);
     const k = kpis.rows[0] || {};
     return {
@@ -338,15 +394,34 @@ export class PgStore implements Store {
       alertas: alertas.rows,
       ordens: ordens.rows,
       recentes: recentes.rows,
+      vendasPorMes: chart6.rows.map((r: any) => ({ mes: String(r.mes), total: Number(r.total || 0) })),
+      producaoPorSemana: chart7.rows.map((r: any) => ({ semana: String(r.semana), pecas: Number(r.pecas || 0), ordens: Number(r.ordens || 0) })),
+      topProdutos: chart8.rows.map((r: any) => ({ produto: String(r.produto), total: Number(r.total || 0) })),
+      insumosAlerta: chart9.rows.map((r: any) => ({ insumo: String(r.insumo), quantidade: Number(r.quantidade || 0), estoque_min: Number(r.estoque_min || 0) })),
     };
   }
 
   async findUserByEmail(email: string): Promise<Row | null> {
     const res = await query(
-      'SELECT id, nome, email, senha_hash, perfil, ativo FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1',
+      'SELECT id, nome, email, senha_hash, perfil, ativo, trocar_senha, token_versao FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1',
       [email]
     );
     return res.rows[0] ?? null;
+  }
+
+  async listUsuariosRaw(): Promise<Row[]> {
+    const res = await query('SELECT id, nome, email, senha_hash, perfil, ativo, trocar_senha, token_versao FROM usuarios ORDER BY id');
+    return res.rows;
+  }
+
+  async getPreferences(userId: number): Promise<Record<string, unknown>> {
+    const res = await query('SELECT preferencias FROM usuarios WHERE id = $1', [userId]);
+    const raw = res.rows[0]?.preferencias;
+    return raw && typeof raw === 'object' ? raw : {};
+  }
+
+  async setPreferences(userId: number, prefs: Record<string, unknown>): Promise<void> {
+    await query('UPDATE usuarios SET preferencias = $1, atualizado_em = now() WHERE id = $2', [JSON.stringify(prefs), userId]);
   }
 
   async touchLogin(userId: number): Promise<void> {

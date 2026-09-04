@@ -48,7 +48,7 @@ export type Option = { value: number; label: string };
 export type AuditEntry = {
   usuario_id: number | null;
   usuario: string | null;
-  acao: 'criar' | 'editar' | 'excluir' | 'login' | 'senha';
+  acao: 'criar' | 'editar' | 'excluir' | 'login' | 'senha' | 'importar' | 'ajuste';
   recurso: string | null;
   registro_id: number | null;
   descricao: string;
@@ -68,6 +68,11 @@ export type DashboardData = {
   alertas: { produto: string; tamanho: string; local: string; quantidade: number; estoque_min: number }[];
   ordens: { id: number; produto: string; tamanho: string; quantidade: number; status: string; previsao: string | null }[];
   recentes: { data: string; usuario: string | null; acao: string; recurso: string | null; descricao: string }[];
+  /** Fase 5 — gráficos do Dashboard */
+  vendasPorMes: { mes: string; total: number }[];
+  producaoPorSemana: { semana: string; pecas: number; ordens: number }[];
+  topProdutos: { produto: string; total: number }[];
+  insumosAlerta: { insumo: string; quantidade: number; estoque_min: number }[];
 };
 
 export interface Store {
@@ -96,6 +101,11 @@ export interface Store {
   dashboard(): Promise<DashboardData>;
 
   findUserByEmail(email: string): Promise<Row | null>;
+  /** Todos os usuários com senha_hash (usado na migração de senhas legadas). */
+  listUsuariosRaw(): Promise<Row[]>;
+  /** Preferências por usuário (JSONB no Postgres). */
+  getPreferences(userId: number): Promise<Record<string, unknown>>;
+  setPreferences(userId: number, prefs: Record<string, unknown>): Promise<void>;
   touchLogin(userId: number): Promise<void>;
 
   /** Arquivos (fotos) de um conjunto de registros — sem os bytes. */

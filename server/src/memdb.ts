@@ -112,8 +112,22 @@ export class MemStore implements Store {
     const term = (p.q || '').trim();
     let rows = [...this.table(r.table).rows.values()];
     const cols0 = new Set(columnsOf(r).map((f) => f.name));
+    const dateCols0 = new Set(r.fields.filter((f) => f.type === 'date' || f.type === 'datetime').map((f) => f.name));
     for (const [k, v] of Object.entries(p.filter || {})) {
-      if (!cols0.has(k) || v === undefined || v === null || v === '') continue;
+      if (v === undefined || v === null || v === '') continue;
+      // Intervalo de datas: f.<campo>_de / f.<campo>_ate (ex.: f.data_de)
+      const mDate = /^(.*?)_(de|ate)$/.exec(k);
+      if (mDate && dateCols0.has(mDate[1])) {
+        const dia = String(v).slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) continue;
+        if (mDate[2] === 'de') {
+          rows = rows.filter((row) => norm(row[mDate[1]]).slice(0, 10) >= dia);
+        } else {
+          rows = rows.filter((row) => norm(row[mDate[1]]).slice(0, 10) <= dia);
+        }
+        continue;
+      }
+      if (!cols0.has(k)) continue;
       rows = rows.filter((row) => norm(row[k]) === norm(v));
     }
     if (term) rows = rows.filter((row) => this.matches(r, row, term));
@@ -306,6 +320,66 @@ export class MemStore implements Store {
     const vendasRows = rows('vendas');
     const faturadas = vendasRows.filter((v) => v.status === 'faturada' || v.status === 'entregue');
     const mesAtual = new Date().toISOString().slice(0, 7);
+
+    // Fase 5 — gráficos: 12 meses, 8 semanas, top 10 produtos, insumos em alerta
+    const chaveMes = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    const vendasPorMes: { mes: string; total: number }[] = [];
+    const hoje = new Date();
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() - i, 1));
+      const mes = chaveMes(d);
+      vendasPorMes.push({ mes, total: faturadas.filter((v) => String(v.faturada_em || '').slice(0, 7) === mes).reduce((s, v) => s + Number(v.total || 0), 0) });
+    }
+    const inicioSemana = (d: Date) => {
+      const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+      const dia = (x.getUTCDay() + 6) % 7; // segunda = 0
+      x.setUTCDate(x.getUTCDate() - dia);
+      return x;
+    };
+    const chaveDia = (d: Date) => d.toISOString().slice(0, 10);
+    const hojeSemana = inicioSemana(hoje);
+    const producaoPorSemana: { semana: string; pecas: number; ordens: number }[] = [];
+    const concluidas = rows('ordens_fabricacao').filter((o) => o.status === 'concluida');
+    const itensOrdem = rows('itens_ordem');
+    for (let i = 7; i >= 0; i--) {
+      const sem = new Date(hojeSemana.getTime() - i * 7 * 86400000);
+      const chave = chaveDia(sem);
+      const daSemana = concluidas.filter((o) => {
+        const base = o.concluida_em || o.atualizado_em || o.criado_em;
+        return inicioSemana(new Date(String(base))).toISOString().slice(0, 10) === chave;
+      });
+      producaoPorSemana.push({
+        semana: chave,
+        ordens: daSemana.length,
+        pecas: daSemana.reduce((acc, o) => {
+          if (String(o.tipo || 'tamanho') === 'grade') return acc + itensOrdem.filter((io) => Number(io.ordem_id) === Number(o.id)).reduce((a, io) => a + Number(io.quantidade || 0), 0);
+          return acc + Number(o.quantidade || 0);
+        }, 0),
+      });
+    }
+    const valorItensVenda = rows('itens_venda');
+    const faturadasIds = new Set(faturadas.map((v) => v.id));
+    const porProduto = new Map<number, number>();
+    for (const iv of valorItensVenda) {
+      if (!faturadasIds.has(Number(iv.venda_id))) continue;
+      const pid = Number(iv.produto_id);
+      porProduto.set(pid, (porProduto.get(pid) || 0) + Number(iv.subtotal || 0));
+    }
+    const topProdutos = [...porProduto.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([id, total]) => ({ produto: produtos.get(id) ? labelOf(RESOURCES.produtos, produtos.get(id)!) : `#${id}`, total }));
+    const estoqueInsumos = rows('estoque_insumos');
+    const insumosRows = rows('insumos');
+    const insumosAlerta = estoqueInsumos
+      .filter((ei) => Number(ei.estoque_min) > 0 && Number(ei.quantidade) <= Number(ei.estoque_min))
+      .sort((a, b) => a.quantidade - a.estoque_min - (b.quantidade - b.estoque_min))
+      .slice(0, 8)
+      .map((ei) => {
+        const ins = insumosRows.find((x) => Number(x.id) === Number(ei.insumo_id));
+        return { insumo: ins ? labelOf(RESOURCES.insumos, ins) : `#${ei.insumo_id}`, quantidade: Number(ei.quantidade || 0), estoque_min: Number(ei.estoque_min || 0) };
+      });
+
     return {
       valorEstoque: estoques.reduce((s, e) => s + Number(e.quantidade || 0) * Number(produtos.get(e.produto_id)?.custo || 0), 0),
       pecasEstoque: estoques.reduce((s, e) => s + Number(e.quantidade || 0), 0),
@@ -321,6 +395,10 @@ export class MemStore implements Store {
       alertas,
       ordens,
       recentes,
+      vendasPorMes,
+      producaoPorSemana,
+      topProdutos,
+      insumosAlerta,
     };
   }
 
@@ -330,6 +408,24 @@ export class MemStore implements Store {
       if (norm(row.email).toLowerCase() === e) return { ...row };
     }
     return null;
+  }
+
+  async listUsuariosRaw(): Promise<Row[]> {
+    return [...this.table('usuarios').rows.values()].map((r) => ({ ...r }));
+  }
+
+  async getPreferences(userId: number): Promise<Record<string, unknown>> {
+    const row = this.table('usuarios').rows.get(userId);
+    const prefs = row?.preferencias;
+    return prefs && typeof prefs === 'object' ? prefs : {};
+  }
+
+  async setPreferences(userId: number, prefs: Record<string, unknown>): Promise<void> {
+    const row = this.table('usuarios').rows.get(userId);
+    if (row) {
+      row.preferencias = prefs;
+      row.atualizado_em = new Date().toISOString();
+    }
   }
 
   async touchLogin(userId: number): Promise<void> {

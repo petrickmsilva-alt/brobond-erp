@@ -96,6 +96,8 @@ export type Resource = {
   detail?: boolean;
   /** recurso interno: não aparece no menu nem na API genérica */
   internal?: boolean;
+  /** perfil mínimo para acessar (admin > gerente > operador). Ex.: gerentePlus */
+  minPerfil?: 'gerente' | 'admin';
 };
 
 const ALL_OPS: ResourceOps = { create: true, update: true, delete: true };
@@ -182,7 +184,8 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'email', label: 'E-mail', type: 'email', required: true, unique: true, search: true, maxLength: 160, hint: 'Usado para entrar no sistema.' },
       { name: 'perfil', label: 'Perfil', type: 'select', required: true, options: PERFIS, default: 'operador', hint: 'Administrador: tudo. Gerente: tudo, exceto usuários. Operador: não exclui registros.' },
       { ...ativo, hint: 'Usuários inativos não conseguem entrar.' },
-      { name: 'senha', label: 'Senha', type: 'password', virtual: true, requiredOnCreate: true, list: false, min: 6, hint: 'Mínimo de 6 caracteres. Ao editar, deixe em branco para manter a senha atual.' },
+      { name: 'senha', label: 'Senha', type: 'password', virtual: true, requiredOnCreate: true, list: false, min: 6, hint: 'Mínimo de 8 caracteres, não pode ser igual ao e-mail nem óbvia. Ao editar, deixe em branco para manter a senha atual.' },
+      { name: 'trocar_senha', label: 'Trocar senha no próximo acesso', type: 'boolean', default: false, list: false, hint: 'Ao marcar, o usuário é obrigado a definir uma senha nova no primeiro acesso.' },
       { name: 'ultimo_login', label: 'Último acesso', type: 'datetime', readonly: true, form: false },
       ...auditFields,
     ],
@@ -212,6 +215,8 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'excluir', label: 'Exclusão', tone: 'red' },
           { value: 'login', label: 'Login', tone: 'slate' },
           { value: 'senha', label: 'Troca de senha', tone: 'amber' },
+          { value: 'importar', label: 'Importação', tone: 'blue' },
+          { value: 'ajuste', label: 'Ajuste de estoque', tone: 'amber' },
         ],
       },
       { name: 'recurso', label: 'Módulo', type: 'text', readonly: true, search: true },
@@ -224,6 +229,40 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   // Cadastros
   // ----------------------------------------------------------------
+  locais: {
+    key: 'locais',
+    table: 'locais',
+    label: 'Locais de estoque',
+    singular: 'Local',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    notice: 'Locais onde o estoque fica guardado (almoxarifado, loja, expedição, facção). As movimentações e o Estoque Físico usam estes locais no lugar do texto livre.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'almoxarifado, loja, expedição...' },
+      {
+        name: 'tipo',
+        label: 'Tipo',
+        type: 'select',
+        required: true,
+        default: 'almoxarifado',
+        options: [
+          { value: 'almoxarifado', label: 'Almoxarifado', tone: 'blue' },
+          { value: 'loja', label: 'Loja', tone: 'green' },
+          { value: 'expedicao', label: 'Expedição', tone: 'amber' },
+          { value: 'faccao', label: 'Facção', tone: 'slate' },
+        ],
+      },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+    mock: [
+      { id: 1, nome: 'almoxarifado', tipo: 'almoxarifado', ativo: true },
+      { id: 2, nome: 'loja', tipo: 'loja', ativo: true },
+      { id: 3, nome: 'expedicao', tipo: 'expedicao', ativo: true },
+    ],
+  },
+
   tamanhos: {
     key: 'tamanhos',
     table: 'tamanhos',
@@ -452,7 +491,8 @@ export const RESOURCES: Record<string, Resource> = {
     fields: [
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
       { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
-      { name: 'local', label: 'Local', type: 'text', required: true, default: 'almoxarifado', search: true, maxLength: 60, placeholder: 'almoxarifado, loja, expedição...' },
+      { name: 'local', label: 'Local', type: 'text', default: 'almoxarifado', search: true, maxLength: 60, placeholder: 'almoxarifado, loja, expedição...', list: false, hint: 'Preenchido automaticamente pelo seletor de local.' },
+      { name: 'local_id', label: 'Local', type: 'ref', ref: 'locais', search: true, hint: 'Use o cadastro de Locais em vez de digitar texto livre.' },
       { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, default: 0 },
       { name: 'estoque_min', label: 'Estoque mínimo', type: 'integer', min: 0, default: 0, hint: 'Abaixo disso o item entra em alerta no Dashboard.' },
       ...auditFields,
@@ -468,7 +508,7 @@ export const RESOURCES: Record<string, Resource> = {
     labelFields: ['tipo'],
     ops: { create: true, update: false, delete: false },
     notice:
-      'Toda movimentação atualiza o saldo do Estoque Físico e é imutável. Para corrigir um lançamento, faça um lançamento inverso.',
+      'Toda movimentação atualiza o saldo do Estoque Físico e é imutável. "Transferência" move peças entre locais em um único lançamento. Para corrigir, faça o lançamento inverso.',
     fields: [
       {
         name: 'tipo',
@@ -479,13 +519,17 @@ export const RESOURCES: Record<string, Resource> = {
         options: [
           { value: 'entrada', label: 'Entrada', tone: 'green' },
           { value: 'saida', label: 'Saída', tone: 'red' },
+          { value: 'transferencia', label: 'Transferência', tone: 'blue' },
           { value: 'ajuste', label: 'Ajuste', tone: 'amber' },
         ],
       },
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
       { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
-      { name: 'local', label: 'Local', type: 'text', required: true, default: 'almoxarifado', maxLength: 60 },
-      { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, hint: 'Entrada/saída: informe um valor positivo. Ajuste: use negativo para reduzir o saldo.' },
+      { name: 'local', label: 'Local de origem', type: 'text', default: 'almoxarifado', maxLength: 60, list: false, hint: 'Preenchido automaticamente pelo seletor de local.' },
+      { name: 'local_id', label: 'Local de origem', type: 'ref', ref: 'locais', search: true, hint: 'Use o cadastro de Locais em vez de digitar texto livre.' },
+      { name: 'local_destino', label: 'Local de destino', type: 'text', maxLength: 60, list: false, hint: 'Obrigatório em transferências.' },
+      { name: 'local_destino_id', label: 'Local de destino', type: 'ref', ref: 'locais', hint: 'Obrigatório em transferências.' },
+      { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, hint: 'Entrada: positivo (aumenta). Saída/transferência: positivo (diminui). Ajuste: positivo para acrescentar, negativo para reduzir.' },
       { name: 'motivo', label: 'Motivo', type: 'text', search: true, maxLength: 200, wide: true },
       { name: 'data', label: 'Data', type: 'datetime', readonly: true },
     ],
@@ -502,12 +546,24 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Ordem de fabricação',
     labelFields: ['id'],
     ops: ALL_OPS,
+    detail: true,
     notice:
-      'Ao mudar o status para "Concluída", as peças entram automaticamente no Estoque Físico (local almoxarifado).',
+      'OP "por tamanho": uma OP para um único tamanho. OP "por grade": quantidades de PP a GG na mesma OP. Ao concluir, as peças entram no Estoque Físico (almoxarifado) e o consumo de insumos da ficha técnica é baixado.',
     fields: [
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
-      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
-      { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, min: 1 },
+      {
+        name: 'tipo',
+        label: 'Tipo de OP',
+        type: 'select',
+        required: true,
+        default: 'tamanho',
+        options: [
+          { value: 'tamanho', label: 'Por tamanho' },
+          { value: 'grade', label: 'Por grade (PP–GG)' },
+        ],
+      },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', search: true, hint: 'Obrigatório em OP "por tamanho".' },
+      { name: 'quantidade', label: 'Quantidade', type: 'integer', min: 1, hint: 'Obrigatório em OP "por tamanho".' },
       {
         name: 'status',
         label: 'Status',
@@ -521,8 +577,22 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'cancelada', label: 'Cancelada', tone: 'red' },
         ],
       },
+      {
+        name: 'etapa',
+        label: 'Etapa',
+        type: 'select',
+        options: [
+          { value: 'corte', label: 'Corte', tone: 'slate' },
+          { value: 'costura', label: 'Costura', tone: 'blue' },
+          { value: 'acabamento', label: 'Acabamento', tone: 'amber' },
+          { value: 'revisao', label: 'Revisão', tone: 'green' },
+        ],
+      },
+      { name: 'faccao', label: 'Facção', type: 'text', maxLength: 80, search: true, placeholder: 'Facção responsável (opcional)' },
       { name: 'inicio', label: 'Início', type: 'date' },
       { name: 'previsao', label: 'Previsão de entrega', type: 'date' },
+      { name: 'concluida_em', label: 'Concluída em', type: 'datetime', readonly: true, form: false },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
       ...auditFields,
     ],
     orderBy: { field: 'id', dir: 'desc' },
@@ -535,12 +605,17 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Ficha técnica',
     labelFields: ['id'],
     ops: ALL_OPS,
-    notice: 'Cadastre aqui os custos de mão de obra, indiretos e a margem por produto. A lista de insumos por peça será o próximo passo.',
+    detail: true,
+    notice:
+      'Uma ficha por produto. A lista de insumos por peça (com perda) é mantida na página da ficha. O custo calculado e o preço sugerido são recalculados automaticamente e podem ser aplicados ao produto.',
     fields: [
-      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, unique: true, search: true, hint: 'Uma ficha técnica por produto.' },
       { name: 'mao_obra', label: 'Mão de obra (R$)', type: 'money', min: 0, default: 0 },
       { name: 'custos_indiretos', label: 'Custos indiretos (R$)', type: 'money', min: 0, default: 0 },
-      { name: 'margem_pct', label: 'Margem (%)', type: 'percent', min: 0, max: 1000, default: 0 },
+      { name: 'margem_pct', label: 'Margem (%)', type: 'percent', min: 0, max: 1000, default: 0, hint: 'Usada no preço sugerido: custo × (1 + margem/100).' },
+      { name: 'custo_calculado', label: 'Custo calculado (R$)', type: 'money', readonly: true, hint: 'Σ insumos (com perda × custo médio) + mão de obra + indiretos.' },
+      { name: 'preco_sugerido', label: 'Preço sugerido (R$)', type: 'money', readonly: true },
+      { name: 'calculado_em', label: 'Calculado em', type: 'datetime', readonly: true, form: false },
       ...auditFields,
     ],
     orderBy: { field: 'id', dir: 'desc' },
@@ -668,30 +743,73 @@ export const RESOURCES: Record<string, Resource> = {
     ],
   },
 
-  estoque_insumos: {
-    key: 'estoque_insumos',
-    table: 'estoque_insumos',
-    label: 'Estoque de insumos',
-    singular: 'Saldo de insumo',
-    labelFields: ['insumo_id'],
+  // ----------------------------------------------------------------
+  // Fase 3 — itens de OP por grade e insumos da ficha técnica
+  // (internos; manipulados por sub-recursos em producao.ts)
+  // ----------------------------------------------------------------
+  itens_ordem: {
+    key: 'itens_ordem',
+    table: 'itens_ordem',
+    label: 'Itens da OP (grade)',
+    singular: 'Item da OP',
+    labelFields: ['id'],
     internal: true,
     ops: READ_ONLY,
     fields: [
-      { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos' },
-      { name: 'quantidade', label: 'Quantidade', type: 'number', default: 0 },
-      { name: 'estoque_min', label: 'Estoque mínimo', type: 'number', min: 0, default: 0 },
-      { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', readonly: true },
+      { name: 'ordem_id', label: 'OP', type: 'integer' },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
+      { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, min: 0 },
+      { name: 'produzido', label: 'Produzido', type: 'integer', min: 0, default: 0, readonly: true, hint: 'Atualizado ao concluir a OP.' },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false },
     ],
+    orderBy: { field: 'tamanho_id', dir: 'asc' },
+  },
+
+  itens_ficha_tecnica: {
+    key: 'itens_ficha_tecnica',
+    table: 'itens_ficha_tecnica',
+    label: 'Insumos da ficha técnica',
+    singular: 'Insumo da ficha',
+    labelFields: ['id'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'ficha_id', label: 'Ficha', type: 'integer' },
+      { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos', required: true },
+      { name: 'consumo', label: 'Consumo por peça', type: 'number', required: true, min: 0.001, hint: 'Ex.: 1.5 m de tecido por peça.' },
+      { name: 'perda_pct', label: 'Perda (%)', type: 'percent', min: 0, max: 100, default: 0, hint: 'Acrescenta perda no custo: consumo × (1 + perda/100).' },
+    ],
+    orderBy: { field: 'id', dir: 'asc' },
+  },
+
+  // ----------------------------------------------------------------
+  // Fase 3 — Estoque de insumos (módulo público)
+  // ----------------------------------------------------------------
+  estoque_insumos: {
+    key: 'estoque_insumos',
+    table: 'estoque_insumos',
+    label: 'Estoque de Insumos',
+    singular: 'Saldo de insumo',
+    labelFields: ['insumo_id'],
+    ops: { create: false, update: true, delete: false },
+    notice: 'Saldo de matéria-prima. Entradas automáticas: compras recebidas e OPs concluídas consomem. Use "Movimentações de insumos" para lançamentos manuais e edite aqui apenas o estoque mínimo.',
+    fields: [
+      { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos', required: true, search: true, readonly: true },
+      { name: 'quantidade', label: 'Saldo', type: 'number', readonly: true, hint: 'Alterado apenas por movimentações (compra, ajuste, consumo de OP).' },
+      { name: 'estoque_min', label: 'Estoque mínimo', type: 'number', min: 0, default: 0, hint: 'Abaixo disso o insumo entra em alerta no Dashboard.' },
+      { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', readonly: true, list: false },
+    ],
+    orderBy: { field: 'insumo_id', dir: 'asc' },
   },
 
   movimentacoes_insumos: {
     key: 'movimentacoes_insumos',
     table: 'movimentacoes_insumos',
-    label: 'Movimentações de insumos',
+    label: 'Movimentações de Insumos',
     singular: 'Movimentação de insumo',
     labelFields: ['id'],
-    internal: true,
-    ops: READ_ONLY,
+    ops: { create: true, update: false, delete: false },
+    notice: 'Lançamentos manuais de insumos (entrada por compra é automática). Toda movimentação atualiza o saldo e é imutável.',
     fields: [
       {
         name: 'tipo',
@@ -705,12 +823,93 @@ export const RESOURCES: Record<string, Resource> = {
         ],
       },
       { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos', required: true },
-      { name: 'quantidade', label: 'Quantidade', type: 'number', required: true },
-      { name: 'custo_unitario', label: 'Custo unitário', type: 'money', min: 0, default: 0 },
-      { name: 'motivo', label: 'Motivo', type: 'text' },
-      { name: 'usuario_id', label: 'Usuário', type: 'integer' },
+      { name: 'quantidade', label: 'Quantidade', type: 'number', required: true, hint: 'Entrada/saída: positivo. Ajuste: negativo para reduzir o saldo.' },
+      { name: 'custo_unitario', label: 'Custo unitário', type: 'money', min: 0, default: 0, hint: 'Usado apenas como histórico.' },
+      { name: 'motivo', label: 'Motivo', type: 'text', search: true, maxLength: 200, wide: true },
       { name: 'data', label: 'Data', type: 'datetime', readonly: true },
     ],
+    orderBy: { field: 'data', dir: 'desc' },
+  },
+
+  // ----------------------------------------------------------------
+  // Fase 4 — Inventário
+  // ----------------------------------------------------------------
+  inventarios: {
+    key: 'inventarios',
+    table: 'inventarios',
+    label: 'Inventários',
+    singular: 'Inventário',
+    labelFields: ['id'],
+    ops: { create: true, update: true, delete: false },
+    notice: 'Abrir um inventário congela o saldo do local. A contagem é lançada item a item e o fechamento gera os ajustes automaticamente (somente gerente/admin).',
+    fields: [
+      { name: 'local', label: 'Local', type: 'text', list: false, maxLength: 60, default: 'almoxarifado' },
+      { name: 'local_id', label: 'Local', type: 'ref', ref: 'locais', required: true, search: true },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        required: true,
+        readonly: true,
+        options: [
+          { value: 'aberto', label: 'Aberto', tone: 'amber' },
+          { value: 'fechado', label: 'Fechado', tone: 'green' },
+        ],
+      },
+      { name: 'aberto_por', label: 'Aberto por', type: 'text', readonly: true },
+      { name: 'aberto_em', label: 'Aberto em', type: 'datetime', readonly: true },
+      { name: 'fechado_por', label: 'Fechado por', type: 'text', readonly: true, list: false },
+      { name: 'fechado_em', label: 'Fechado em', type: 'datetime', readonly: true, list: false },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+  },
+
+  itens_inventario: {
+    key: 'itens_inventario',
+    table: 'itens_inventario',
+    label: 'Itens do inventário',
+    singular: 'Item do inventário',
+    labelFields: ['id'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'inventario_id', label: 'Inventário', type: 'integer' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
+      { name: 'saldo_sistema', label: 'Saldo no sistema', type: 'integer', readonly: true },
+      { name: 'contado', label: 'Contado', type: 'integer', min: 0 },
+      { name: 'diferenca', label: 'Diferença', type: 'integer', readonly: true },
+    ],
+    orderBy: { field: 'id', dir: 'asc' },
+  },
+
+  // ----------------------------------------------------------------
+  // Fase 7 — Catálogos públicos
+  // ----------------------------------------------------------------
+  catalogos: {
+    key: 'catalogos',
+    table: 'catalogos',
+    label: 'Catálogos públicos',
+    singular: 'Catálogo',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    minPerfil: 'gerente',
+    notice: 'Um link público (somente leitura) com os produtos, fotos e preços — para enviar a clientes e representantes pelo WhatsApp.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 80, placeholder: 'Catálogo Verão 2026 — Representantes' },
+      { name: 'token', label: 'Token do link', type: 'text', readonly: true, hint: 'Gerado automaticamente. O link público é /catalogo/<token>.' },
+      { name: 'senha', label: 'Senha de acesso (opcional)', type: 'password', virtual: true, list: false, min: 8, hint: 'Se preenchida, quem abrir o link precisará digitar esta senha.' },
+      { name: 'colecao_id', label: 'Coleção (filtro)', type: 'ref', ref: 'colecoes', search: true, hint: 'Deixe vazio para todas as coleções.' },
+      { name: 'categoria_id', label: 'Categoria (filtro)', type: 'ref', ref: 'categorias', search: true, hint: 'Deixe vazio para todas as categorias.' },
+      { name: 'mostrar_preco', label: 'Mostrar preço', type: 'boolean', default: true, hint: 'Exibe o preço de venda no catálogo.' },
+      { name: 'mostrar_saldo', label: 'Mostrar saldo por tamanho', type: 'boolean', default: false, hint: 'Exibe quantas peças há de cada tamanho (estoque físico).' },
+      { name: 'expira_em', label: 'Expira em', type: 'date', hint: 'Opcional: o link deixa de funcionar após esta data.' },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
   },
 };
 

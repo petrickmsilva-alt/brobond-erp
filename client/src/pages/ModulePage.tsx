@@ -1,21 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Eye, Inbox, Pencil, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
-import { api, ApiError } from '../lib/api';
-import { useMeta, type Field, type ListResult, type PublicFile, type ResourceMeta } from '../lib/meta';
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Download, Eye, FileUp, Inbox, ListFilter, Pencil, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { api, ApiError, downloadFile } from '../lib/api';
+import { useMeta, type Field, type ListResult, type Option, type PublicFile, type ResourceMeta } from '../lib/meta';
 import { ColorDot, ImageField, Lightbox, Thumb } from '../components/ImageField';
 import { formatCell } from '../lib/format';
-import type { Module } from '../modules';
+import { DETALHE_DIRETO, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
+import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import PlannedModule from './PlannedModule';
+import EstoqueGradePage from './EstoqueGradePage';
+import InventarioModulePage from './InventarioModulePage';
+import CustoPage from './CustoPage';
+import RelatoriosPage from './RelatoriosPage';
+import AjudaPage from './AjudaPage';
 
 const PAGE_SIZE = 25;
 
 export default function ModulePage({ module }: { module: Module }) {
   const meta = useMeta();
   const resource = module.resource ? meta.resources[module.resource] : undefined;
+
+  if (module.id === 'estoque') return <EstoqueGradePage />;
+  if (module.id === 'inventario') return <InventarioModulePage />;
+  if (module.id === 'custo') return <CustoPage />;
+  if (module.id === 'relatorios') return <RelatoriosPage />;
+  if (module.id === 'ajuda') return <AjudaPage />;
 
   if (!module.resource || !resource) return <PlannedModule module={module} />;
   return <ResourceCrud key={resource.key} module={module} resource={resource} />;
@@ -55,12 +67,23 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const [optionsKey, setOptionsKey] = useState(0);
   const refOptions = useRefOptions(resource, optionsKey);
 
+  // Fase 5 — exportação, importação e filtros avançados
+  const importTipo = IMPORT_TIPOS.find((t) => t.recurso === resource.key);
+  const [importOpen, setImportOpen] = useState(false);
+  const [showFiltros, setShowFiltros] = useState(false);
+  const [filtros, setFiltros] = useState<Record<string, string>>({});
+
   // Exclusão
   const [toDelete, setToDelete] = useState<Record<string, any> | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   const listFields = useMemo(() => resource.fields.filter((f) => f.list !== false && !f.virtual && f.type !== 'password' && f.type !== 'images'), [resource]);
   const searchable = resource.fields.some((f) => f.search);
+  const filtroFields = useMemo(
+    () =>
+      resource.fields.filter((f) => f.form !== false && !f.readonly && (f.type === 'select' || f.type === 'ref' || f.type === 'boolean' || f.type === 'date')).slice(0, 8),
+    [resource]
+  );
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -70,17 +93,22 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     return () => window.clearTimeout(t);
   }, [q]);
 
+  const paramsAtuais = useMemo(() => {
+    const params = new URLSearchParams();
+    if (debouncedQ) params.set('q', debouncedQ);
+    if (sort) {
+      params.set('sort', sort.field);
+      params.set('dir', sort.dir);
+    }
+    for (const [k, v] of Object.entries(filtros)) if (v !== undefined && v !== '') params.set(`f.${k}`, v);
+    return params.toString();
+  }, [debouncedQ, sort, filtros]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
-      if (debouncedQ) params.set('q', debouncedQ);
-      if (sort) {
-        params.set('sort', sort.field);
-        params.set('dir', sort.dir);
-      }
-      const d = await api.get<ListResult>(`/${resource.key}?${params.toString()}`);
+      const d = await api.get<ListResult>(`/${resource.key}?page=${page}&pageSize=${PAGE_SIZE}${paramsAtuais ? `&${paramsAtuais}` : ''}`);
       setData(d);
       if (d.total > 0 && d.rows.length === 0 && page > 1) setPage(Math.max(1, Math.ceil(d.total / PAGE_SIZE)));
     } catch (e: any) {
@@ -88,7 +116,17 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     } finally {
       setLoading(false);
     }
-  }, [resource.key, page, debouncedQ, sort]);
+  }, [resource.key, page, paramsAtuais]);
+
+  /** Exporta a lista atual (honrando busca, ordenação e filtros). */
+  async function exportarLista(formato: 'csv' | 'xlsx') {
+    try {
+      await downloadFile(`/${resource.key}/export?format=${formato}&${paramsAtuais}`, `${resource.key}.${formato}`);
+      toast.success(`Exportação ${formato.toUpperCase()} gerada.`);
+    } catch (e: any) {
+      toast.error(e.message || 'Não foi possível exportar.');
+    }
+  }
 
   useEffect(() => {
     load();
@@ -105,6 +143,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   }
 
   function openEdit(row: Record<string, any>) {
+    // Módulos com página de detalhe própria (OP, ficha técnica): edita lá.
+    if (DETALHE_DIRETO.has(module.id)) {
+      navigate(`/${resource.key}/${row.id}`);
+      return;
+    }
     setEditing(row);
     setValues(initialValues(resource, row));
     setErrors({});
@@ -234,6 +277,29 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">Atualizar</span>
             </button>
+            {filtroFields.length > 0 && (
+              <button className={`btn-secondary ${Object.keys(filtros).length ? '!border-brand-400 !text-brand-700' : ''}`} onClick={() => setShowFiltros((v) => !v)} title="Filtros avançados">
+                <ListFilter className="h-4 w-4" />
+                <span className="hidden sm:inline">Filtros</span>
+                {Object.keys(filtros).length > 0 && (
+                  <span className="badge ml-1 !bg-brand-500 !text-white">{Object.keys(filtros).length}</span>
+                )}
+              </button>
+            )}
+            <button className="btn-secondary" onClick={() => exportarLista('csv')} disabled={loading} title="Exportar a lista atual em CSV (Excel)">
+              <Download className="h-4 w-4" />
+              <span className="hidden md:inline">CSV</span>
+            </button>
+            <button className="btn-secondary" onClick={() => exportarLista('xlsx')} disabled={loading} title="Exportar a lista atual em XLSX">
+              <Download className="h-4 w-4 text-emerald-600" />
+              <span className="hidden md:inline">XLSX</span>
+            </button>
+            {importTipo && !isOperador && (
+              <button className="btn-secondary" onClick={() => setImportOpen(true)} title={`Importar ${importTipo.label.toLowerCase()} de CSV/XLSX`}>
+                <FileUp className="h-4 w-4" />
+                <span className="hidden sm:inline">Importar</span>
+              </button>
+            )}
             {canCreate && (
               <button className="btn-accent" onClick={openCreate}>
                 <Plus className="h-4 w-4" /> Novo {resource.singular.toLowerCase()}
@@ -246,6 +312,28 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       {resource.notice && (
         <div className="mb-4">
           <Alert tone={readOnly ? 'slate' : 'blue'}>{resource.notice}</Alert>
+        </div>
+      )}
+
+      {showFiltros && filtroFields.length > 0 && (
+        <div className="card mb-4 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-bold text-navy-900">Filtros avançados</h3>
+            <button className="btn-ghost text-xs" onClick={() => { setFiltros({}); setPage(1); }}>
+              Limpar filtros
+            </button>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {filtroFields.map((f) => (
+              <FiltroCampo
+                key={f.name}
+                field={f}
+                filtros={filtros}
+                opcoes={f.type === 'ref' && f.ref ? refOptions[f.ref] : undefined}
+                onChange={(chave, valor) => setFiltros((prev) => ({ ...prev, [chave]: valor }))}
+              />
+            ))}
+          </div>
         </div>
       )}
 
@@ -296,7 +384,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         )}
 
         {!error && data && data.rows.length > 0 && (
-          <div className={`overflow-x-auto ${loading ? 'opacity-60' : ''}`}>
+          <div className={`hidden overflow-x-auto md:block ${loading ? 'opacity-60' : ''}`}>
             <table className="table">
               <thead>
                 <tr>
@@ -359,6 +447,51 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           </div>
         )}
 
+        {/* Celular (< 768 px): cartões em vez de tabela */}
+        {!error && data && data.rows.length > 0 && (
+          <ul className="divide-y divide-slate-100 md:hidden">
+            {data.rows.map((row) => {
+              const rotulo = rowLabel(resource, row);
+              return (
+                <li key={row.id} className="px-4 py-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <button
+                      className="min-w-0 text-left"
+                      onClick={() => (resource.detail || DETALHE_DIRETO.has(module.id) ? navigate(`/${resource.key}/${row.id}`) : canUpdate ? openEdit(row) : undefined)}
+                    >
+                      <div className="truncate text-sm font-semibold text-navy-900">{rotulo}</div>
+                      <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">
+                        {listFields.slice(0, 3).map((f) => (
+                          <span key={f.name}>
+                            <Cell f={f} row={row} />
+                          </span>
+                        ))}
+                      </div>
+                    </button>
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      {resource.detail && (
+                        <button className="btn-icon" onClick={() => navigate(`/${resource.key}/${row.id}`)} aria-label="Ver detalhes">
+                          <Eye className="h-4 w-4" />
+                        </button>
+                      )}
+                      {canUpdate && !resource.detail && (
+                        <button className="btn-icon" onClick={() => openEdit(row)} aria-label="Editar">
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button className="btn-icon hover:!bg-red-50 hover:!text-red-600" onClick={() => setToDelete(row)} aria-label="Excluir">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
         {/* Paginação */}
         {data && total > PAGE_SIZE && (
           <div className="flex items-center justify-between border-t border-slate-200 px-4 py-2.5 text-sm">
@@ -376,6 +509,22 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           </div>
         )}
       </div>
+
+      {/* Celular: botão flutuante (FAB) para incluir */}
+      {canCreate && (
+        <button
+          className="btn-accent fixed bottom-5 right-5 z-40 rounded-full px-4 py-3.5 shadow-modal md:hidden"
+          onClick={openCreate}
+          aria-label={`Novo ${resource.singular.toLowerCase()}`}
+        >
+          <Plus className="h-5 w-5" />
+          <span className="sr-only">Novo {resource.singular.toLowerCase()}</span>
+        </button>
+      )}
+
+      {importTipo && (
+        <ImportModal open={importOpen} onClose={() => setImportOpen(false)} tipoConfig={importTipo} onDone={() => load()} />
+      )}
 
       {/* Modal de cadastro / edição */}
       <Modal
@@ -437,6 +586,60 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         }
       />
     </div>
+  );
+}
+
+function FiltroCampo({
+  field,
+  filtros,
+  opcoes,
+  onChange,
+}: {
+  field: Field;
+  filtros: Record<string, string>;
+  opcoes?: Option[];
+  onChange: (chave: string, valor: string) => void;
+}) {
+  const id = `filtro-${field.name}`;
+  if (field.type === 'date') {
+    return (
+      <label className="block" htmlFor={id}>
+        <span className="label">{field.label}</span>
+        <div className="flex items-center gap-1.5 text-xs text-slate-400">
+          <input type="date" className="input" value={filtros[`${field.name}_de`] ?? ''} onChange={(e) => onChange(`${field.name}_de`, e.target.value)} aria-label={`${field.label} a partir de`} />
+          até
+          <input type="date" className="input" value={filtros[`${field.name}_ate`] ?? ''} onChange={(e) => onChange(`${field.name}_ate`, e.target.value)} aria-label={`${field.label} até`} />
+        </div>
+      </label>
+    );
+  }
+  const valor = filtros[field.name] ?? '';
+  return (
+    <label className="block" htmlFor={id}>
+      <span className="label">{field.label}</span>
+      {field.type === 'boolean' ? (
+        <select id={id} className="input" value={valor} onChange={(e) => onChange(field.name, e.target.value)}>
+          <option value="">Qualquer</option>
+          <option value="true">Sim</option>
+          <option value="false">Não</option>
+        </select>
+      ) : (
+        <select id={id} className="input" value={valor} onChange={(e) => onChange(field.name, e.target.value)}>
+          <option value="">Todos</option>
+          {field.type === 'select'
+            ? field.options?.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))
+            : opcoes?.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+        </select>
+      )}
+    </label>
   );
 }
 

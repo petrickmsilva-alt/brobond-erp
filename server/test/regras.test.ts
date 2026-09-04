@@ -105,7 +105,7 @@ test('permissões: operador não exclui; módulos admin-only bloqueiam gerente',
 });
 
 test('usuários: não remove o último administrador', async () => {
-  const u = await createRecord(RESOURCES.usuarios, { nome: 'Único Admin', email: 'unico@x.com', perfil: 'admin', senha: '123456' }, admin);
+  const u = await createRecord(RESOURCES.usuarios, { nome: 'Único Admin', email: 'unico@x.com', perfil: 'admin', senha: 'Forte#2024x' }, admin);
   await expectHttp(() => updateRecord(RESOURCES.usuarios, Number(u.id), { perfil: 'operador' }, { id: 99, name: 'outro', perfil: 'admin' }), 400, /único administrador/);
 });
 
