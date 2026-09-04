@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Eye, EyeOff, ImageOff, Lock, Shirt } from 'lucide-react';
+import { Eye, EyeOff, ImageOff, Lock, Minus, Plus, Send, Shirt, ShoppingBag, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Logo } from '../components/Logo';
 import { formatMoney, formatNumber } from '../lib/format';
@@ -14,12 +14,28 @@ type ProdutoCatalogo = {
   composicao: string | null;
   descricao: string | null;
   preco: number | null;
+  preco_tipo: 'varejo' | 'atacado' | null;
+  preco_venda: number | null;
+  preco_atacado: number | null;
+  disponivel_site: boolean;
   foto_url: string | null;
   fotos: { url: string; thumb_url: string }[];
-  tamanhos: { codigo: string; quantidade: number }[];
+  tamanhos: { tamanho_id: number; codigo: string; quantidade: number }[];
 };
 
-type CatResp = { nome: string; mostrar_preco: boolean; mostrar_saldo: boolean; total: number; produtos: ProdutoCatalogo[] };
+type CatResp = {
+  nome: string;
+  canal: string;
+  tabela_preco: string;
+  aceita_pedido_site: boolean;
+  como_comprar: string | null;
+  mostrar_preco: boolean;
+  mostrar_saldo: boolean;
+  total: number;
+  produtos: ProdutoCatalogo[];
+};
+
+type CartItem = { key: string; produto: ProdutoCatalogo; qtd: number; tamanho_id: number; tamanho_codigo: string };
 
 export default function CatalogoPublico() {
   const { token } = useParams();
@@ -28,6 +44,11 @@ export default function CatalogoPublico() {
   const [err, setErr] = useState('');
   const [data, setData] = useState<CatResp | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showSenha, setShowSenha] = useState(false);
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [selTamanho, setSelTamanho] = useState<Record<number, number>>({});
+  const [pedidoOpen, setPedidoOpen] = useState(false);
+  const [pedidoEnviado, setPedidoEnviado] = useState(false);
 
   const carregar = useCallback(
     async (comSenha: string) => {
@@ -55,7 +76,31 @@ export default function CatalogoPublico() {
     carregar('');
   }, [carregar]);
 
-  const [showSenha, setShowSenha] = useState(false);
+  function addToCart(p: ProdutoCatalogo, tamanho?: { tamanho_id: number; codigo: string }) {
+    const t = tamanho || p.tamanhos[0];
+    const key = `${p.id}:${t?.tamanho_id ?? 0}`;
+    setCart((prev) => {
+      const found = prev.find((i) => i.key === key);
+      if (found) return prev.map((i) => (i.key === key ? { ...i, qtd: i.qtd + 1 } : i));
+      return [...prev, { key, produto: p, qtd: 1, tamanho_id: t?.tamanho_id ?? 0, tamanho_codigo: t?.codigo ?? '' }];
+    });
+    setPedidoEnviado(false);
+  }
+
+  function changeQtd(key: string, delta: number) {
+    setCart((prev) =>
+      prev
+        .map((i) => (i.key === key ? { ...i, qtd: Math.max(1, i.qtd + delta) } : i))
+        .filter((i) => i.qtd > 0)
+    );
+  }
+
+  function removeFromCart(key: string) {
+    setCart((prev) => prev.filter((i) => i.key !== key));
+  }
+
+  const totalPedido = cart.reduce((s, i) => s + (i.produto.preco || 0) * i.qtd, 0);
+  const pedidoHabilitado = !!data?.aceita_pedido_site;
 
   if (err)
     return (
@@ -116,8 +161,19 @@ export default function CatalogoPublico() {
         <h1 className="mt-4 text-2xl font-bold tracking-tight">{data.nome}</h1>
         <p className="mt-1 text-sm text-navy-300">
           {data.total} produto{data.total === 1 ? '' : 's'}
+          {data.canal === 'atacado' ? ' · preços de atacado' : data.canal === 'varejo' ? ' · preços de varejo' : ''}
           {data.mostrar_preco ? ' · preços para revenda' : ''}
         </p>
+        {data.como_comprar && <p className="mx-auto mt-3 max-w-2xl whitespace-pre-line text-sm text-navy-200">{data.como_comprar}</p>}
+        {pedidoHabilitado && (
+          <button
+            className="mx-auto mt-4 inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-brand-600"
+            onClick={() => setPedidoOpen(true)}
+            disabled={!cart.length}
+          >
+            <ShoppingBag className="h-4 w-4" /> Montar pedido {cart.length > 0 && `(${cart.length})`}
+          </button>
+        )}
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
@@ -164,8 +220,61 @@ export default function CatalogoPublico() {
                       <span className="text-[11px] text-slate-300">sem tamanhos</span>
                     )}
                   </div>
-                  {data.mostrar_preco && p.preco !== null && <p className="mt-2 text-base font-bold tabular-nums text-brand-600">{formatMoney(p.preco)}</p>}
+
+                  {/* Preço varejo/atacado */}
+                  {data.mostrar_preco && p.preco !== null && (
+                    <div className="mt-2">
+                      <p className="text-base font-bold tabular-nums text-brand-600">{formatMoney(p.preco)}</p>
+                      {p.preco_atacado !== null && p.preco_atacado !== p.preco_venda && (
+                        <p className="text-[11px] tabular-nums text-slate-400">Atacado {formatMoney(p.preco_atacado)}</p>
+                      )}
+                      <span className="text-[10px] uppercase tracking-wide text-slate-400">{p.preco_tipo === 'atacado' ? 'Preço atacado' : 'Preço varejo'}</span>
+                    </div>
+                  )}
+
+                  {pedidoHabilitado && p.disponivel_site && p.tamanhos.length > 0 && (
+                    <select
+                      className="input mt-2 !py-1 text-xs"
+                      value={selTamanho[p.id] ?? p.tamanhos[0].tamanho_id}
+                      onChange={(e) => setSelTamanho((prev) => ({ ...prev, [p.id]: Number(e.target.value) }))}
+                      aria-label={`Tamanho de ${p.nome}`}
+                    >
+                      {p.tamanhos.map((t) => (
+                        <option key={t.tamanho_id} value={t.tamanho_id}>
+                          Tamanho {t.codigo}
+                          {data.mostrar_saldo ? ` · ${formatNumber(t.quantidade)}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
                   {p.descricao && <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-slate-400">{p.descricao}</p>}
+
+                  {pedidoHabilitado && p.disponivel_site && (
+                    (() => {
+                      const selected = p.tamanhos.find((t) => t.tamanho_id === (selTamanho[p.id] ?? p.tamanhos[0]?.tamanho_id));
+                      const item = cart.find((i) => i.produto.id === p.id && i.tamanho_id === selected?.tamanho_id);
+                      return (
+                        <div className="mt-2 flex items-center gap-1.5">
+                          {item ? (
+                            <>
+                              <button className="btn-secondary h-8 w-8 !p-0" onClick={() => changeQtd(item.key, -1)} disabled={item.qtd === 1} aria-label="Diminuir">
+                                <Minus className="h-3.5 w-3.5" />
+                              </button>
+                              <span className="w-7 text-center text-sm font-semibold tabular-nums">{item.qtd}</span>
+                              <button className="btn-secondary h-8 w-8 !p-0" onClick={() => changeQtd(item.key, 1)} aria-label="Aumentar">
+                                <Plus className="h-3.5 w-3.5" />
+                              </button>
+                            </>
+                          ) : (
+                            <button className="btn-secondary flex-1 justify-center !px-2 !py-1.5 text-xs" onClick={() => addToCart(p, selected)}>
+                              <Plus className="h-3.5 w-3.5" /> Pedir
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()
+                  )}
                 </div>
               </article>
             ))}
@@ -173,6 +282,155 @@ export default function CatalogoPublico() {
         )}
         <p className="mt-8 text-center text-[11px] text-slate-400">Catálogo gerado no BROBOND ERP · preços sujeitos a alteração sem aviso</p>
       </main>
+
+      {cart.length > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white px-4 py-3 shadow-[0_-8px_24px_rgba(0,0,0,.08)]">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-navy-900">{cart.length} produto(s)</p>
+              <p className="text-xs text-slate-400">Total {formatMoney(totalPedido)}</p>
+            </div>
+            <button className="btn-accent" onClick={() => setPedidoOpen(true)}>
+              <ShoppingBag className="h-4 w-4" /> Enviar pedido
+            </button>
+          </div>
+        </div>
+      )}
+
+      {pedidoOpen && (
+        <CatalogoPedidoModal
+          cart={cart}
+          total={totalPedido}
+          canal={data.canal}
+          onQty={changeQtd}
+          onRemove={removeFromCart}
+          onClose={() => setPedidoOpen(false)}
+          onEnviado={() => {
+            setPedidoOpen(false);
+            setPedidoEnviado(true);
+            setCart([]);
+          }}
+        />
+      )}
+
+      {pedidoEnviado && (
+        <div className="pointer-events-none fixed inset-0 z-40 flex items-end justify-center bg-black/30 p-4 sm:items-center" onClick={() => setPedidoEnviado(false)}>
+          <div className="pointer-events-auto card max-w-md !p-6 text-center" onClick={(e) => e.stopPropagation()}>
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+              <Send className="h-6 w-6" />
+            </div>
+            <h2 className="mt-3 text-lg font-bold text-navy-900">Pedido enviado!</h2>
+            <p className="mt-1 text-sm text-slate-500">Recebemos sua solicitação. Nossa equipe entra em contato para confirmar disponibilidade e finalizar.</p>
+            <button className="btn-primary mt-4 w-full justify-center" onClick={() => setPedidoEnviado(false)}>
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CatalogoPedidoModal({
+  cart,
+  total,
+  canal,
+  onQty,
+  onRemove,
+  onClose,
+  onEnviado,
+}: {
+  cart: CartItem[];
+  total: number;
+  canal: string;
+  onQty: (key: string, delta: number) => void;
+  onRemove: (key: string) => void;
+  onClose: () => void;
+  onEnviado: () => void;
+}) {
+  const [nome, setNome] = useState('');
+  const [email, setEmail] = useState('');
+  const [telefone, setTelefone] = useState('');
+  const [observacoes, setObservacoes] = useState('');
+  const [erro, setErro] = useState('');
+  const [busy, setBusy] = useState(false);
+  const { token } = useParams();
+
+  async function enviar() {
+    setErro('');
+    if (!nome.trim()) return setErro('Informe seu nome.');
+    if (!cart.length) return setErro('Adicione ao menos um produto.');
+    setBusy(true);
+    try {
+      await api.post(`/publico/catalogo/${token}/pedido`, {
+        nome,
+        email,
+        telefone,
+        canal: canal === 'atacado' ? 'atacado' : 'varejo',
+        observacoes,
+        itens: cart.map((i) => ({ produto_id: i.produto.id, tamanho_id: i.tamanho_id, quantidade: i.qtd, preco_unitario: i.produto.preco })),
+      });
+      onEnviado();
+    } catch (e: any) {
+      setErro(e instanceof ApiError ? e.message : 'Não foi possível enviar o pedido. Tente novamente.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-navy-950/50 p-0 sm:items-center sm:p-4">
+      <div className="card max-h-[92vh] w-full max-w-lg overflow-y-auto !rounded-b-none !rounded-t-2xl sm:!rounded-2xl !p-0">
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+          <div>
+            <h2 className="text-lg font-bold text-navy-900">Montar pedido</h2>
+            <p className="text-xs text-slate-400">Envie sua solicitação — a equipe confirma o pedido.</p>
+          </div>
+          <button className="btn-icon" onClick={onClose} aria-label="Fechar">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="max-h-[38vh] space-y-2 overflow-y-auto px-5 py-4">
+          {cart.length === 0 && <p className="py-6 text-center text-sm text-slate-400">Seu pedido está vazio.</p>}
+          {cart.map((i) => (
+            <div key={i.key} className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-navy-900">{i.produto.nome}</p>
+                <p className="text-[11px] tabular-nums text-slate-400">
+                  Tamanho {i.tamanho_codigo || '—'} · {i.produto.preco_tipo === 'atacado' ? 'Atacado' : 'Varejo'} · {formatMoney(i.produto.preco || 0)} · Total {formatMoney((i.produto.preco || 0) * i.qtd)}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <button className="btn-secondary h-7 w-7 !p-0" onClick={() => onQty(i.key, -1)} disabled={i.qtd === 1} aria-label="Diminuir">
+                  <Minus className="h-3 w-3" />
+                </button>
+                <span className="w-6 text-center text-xs font-semibold">{i.qtd}</span>
+                <button className="btn-secondary h-7 w-7 !p-0" onClick={() => onQty(i.key, 1)} aria-label="Aumentar">
+                  <Plus className="h-3 w-3" />
+                </button>
+                <button className="btn-icon h-7 w-7 hover:!bg-red-50 hover:!text-red-600" onClick={() => onRemove(i.key)} aria-label="Remover">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="space-y-3 border-t border-slate-100 px-5 py-4">
+          {erro && <p className="text-sm text-red-600">{erro}</p>}
+          <input className="input" placeholder="Seu nome *" value={nome} onChange={(e) => setNome(e.target.value)} />
+          <input className="input" placeholder="E-mail (opcional)" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input className="input" placeholder="Telefone / WhatsApp (opcional)" value={telefone} onChange={(e) => setTelefone(e.target.value)} />
+          <textarea className="input" placeholder="Observações (opcional)" rows={2} value={observacoes} onChange={(e) => setObservacoes(e.target.value)} />
+          <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+            <span className="text-sm text-slate-600">Total estimado</span>
+            <span className="text-base font-bold tabular-nums text-navy-900">{formatMoney(total)}</span>
+          </div>
+          <button className="btn-accent w-full justify-center" onClick={enviar} disabled={busy || !cart.length}>
+            <Send className="h-4 w-4" /> Enviar pedido {busy ? '...' : ''}
+          </button>
+          <p className="text-[11px] text-slate-400">Ao enviar, você autoriza o contato para confirmação. Não é pagamento online — a cobrança é combinada com a equipe.</p>
+        </div>
+      </div>
     </div>
   );
 }

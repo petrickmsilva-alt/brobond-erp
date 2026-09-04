@@ -10,10 +10,12 @@
 import type { Request, Response } from 'express';
 import { createRequire } from 'node:module';
 import { HttpError } from './errors';
-import { RESOURCES } from './resources';
-import { getStore } from './services';
+import { getResource, RESOURCES } from './resources';
+import { getStore, toHttpError } from './services';
 import type { Row } from './store';
+import { labelOf } from './store';
 import { attachImages } from './uploads';
+import { recalcularTotal } from './itens';
 
 const require = createRequire(import.meta.url);
 
@@ -102,18 +104,41 @@ export async function catalogoPublico(req: Request, res: Response) {
 
   const mostrarPreco = catalogo.mostrar_preco !== false;
   const mostrarSaldo = catalogo.mostrar_saldo === true;
+  const canal = String(catalogo.canal || 'todos');
+  const tabelaPreco = String(catalogo.tabela_preco || 'automatico');
+
+  // Preço exibido no catálogo: varejo, atacado, ambos ou automático conforme canal.
+  function precoDoProduto(p: Row): { preco: number | null; preco_tipo: 'varejo' | 'atacado' | null; preco_venda: number | null; preco_atacado: number | null } {
+    const varejo = Number(p.preco_venda || 0);
+    const atacado = Number(p.preco_atacado || p.preco_venda || 0);
+    if (!mostrarPreco) return { preco: null, preco_tipo: null, preco_venda: null, preco_atacado: null };
+    let tipo: 'varejo' | 'atacado';
+    if (tabelaPreco === 'ambos') tipo = 'varejo';
+    else if (tabelaPreco === 'varejo') tipo = 'varejo';
+    else if (tabelaPreco === 'atacado') tipo = 'atacado';
+    else tipo = canal === 'atacado' ? 'atacado' : 'varejo';
+    const preco = tipo === 'atacado' ? atacado : varejo;
+    return {
+      preco,
+      preco_tipo: tabelaPreco === 'ambos' ? null : tipo,
+      preco_venda: tabelaPreco === 'ambos' || tabelaPreco === 'varejo' || tabelaPreco === 'automatico' ? varejo : null,
+      preco_atacado: tabelaPreco === 'ambos' || tabelaPreco === 'atacado' || (tabelaPreco === 'automatico' && canal === 'atacado') ? atacado : null,
+    };
+  }
 
   const lista: Row[] = produtos.rows.map((p) => {
     const doProduto = estoques.rows.filter((e) => Number(e.produto_id) === Number(p.id));
-    const tamanhosLinha = mostrarSaldo
-      ? [...new Set(doProduto.map((e) => Number(e.tamanho_id)))]
-          .map((tid) => ({
-            codigo: tamCodigo.get(tid) || '',
-            quantidade: doProduto.filter((e) => Number(e.tamanho_id) === tid).reduce((a, e) => a + Number(e.quantidade || 0), 0),
-          }))
-          .filter((t) => t.quantidade > 0)
-          .sort((a, b) => (a.codigo < b.codigo ? -1 : 1))
-      : [];
+    // Sempre devolve os tamanhos com saldo para o cliente selecionar. A
+    // quantidade só aparece quando `mostrar_saldo` está habilitado.
+    const tamanhosLinha = [...new Set(doProduto.map((e) => Number(e.tamanho_id)))]
+      .map((tid) => ({
+        tamanho_id: tid,
+        codigo: tamCodigo.get(tid) || '',
+        quantidade: doProduto.filter((e) => Number(e.tamanho_id) === tid).reduce((a, e) => a + Number(e.quantidade || 0), 0),
+      }))
+      .filter((t) => t.quantidade > 0)
+      .sort((a, b) => (a.codigo < b.codigo ? -1 : 1));
+    const precos = precoDoProduto(p);
     return {
       id: Number(p.id),
       sku: p.sku,
@@ -122,7 +147,11 @@ export async function catalogoPublico(req: Request, res: Response) {
       cor_hex: p.cor_id__color ?? null,
       composicao: p.composicao ?? null,
       descricao: p.descricao ?? null,
-      preco: mostrarPreco ? Number(p.preco_venda || 0) : null,
+      preco: precos.preco,
+      preco_tipo: precos.preco_tipo,
+      preco_venda: precos.preco_venda,
+      preco_atacado: precos.preco_atacado,
+      disponivel_site: p.exibir_site !== false && p.ativo !== false,
       foto_url: p.foto_url ?? null,
       fotos: (p.fotos || []).map((f: any) => ({ url: f.url, thumb_url: f.thumb_url })),
       tamanhos: tamanhosLinha,
@@ -131,9 +160,144 @@ export async function catalogoPublico(req: Request, res: Response) {
 
   res.json({
     nome: catalogo.nome,
+    canal,
+    tabela_preco: tabelaPreco,
+    aceita_pedido_site: catalogo.aceita_pedido_site !== false,
+    como_comprar: catalogo.como_comprar ?? null,
     mostrar_preco: mostrarPreco,
     mostrar_saldo: mostrarSaldo,
     total: lista.length,
     produtos: lista,
   });
+}
+
+// ----------------------------------------------------------------------------
+// PEDIDO PELO CATÁLOGO — recebe um carrinho público e cria uma COTAÇÃO no ERP.
+// Sem login: o catálogo é somente leitura, mas pode gerar um pedido de venda
+// com status "cotacao" para o time aprovar e faturar (e linkar no financeiro).
+// ----------------------------------------------------------------------------
+export async function criarPedidoCatalogo(req: Request, res: Response) {
+  const token = String(req.params.token || '').trim();
+  if (!token || !/^[a-f0-9]{12,}$/i.test(token)) throw new HttpError(404, 'Catálogo não encontrado.');
+  const s = getStore();
+  const catalogo = await s.findOneWhere(RESOURCES.catalogos, { token });
+  if (!catalogo || catalogo.ativo === false) throw new HttpError(404, 'Catálogo não encontrado.');
+  if (catalogo.aceita_pedido_site === false) throw new HttpError(403, 'Este catálogo não aceita pedidos pelo site.');
+  if (catalogo.expira_em && new Date(String(catalogo.expira_em)).getTime() < Date.now()) throw new HttpError(404, 'Este catálogo expirou.');
+
+  const body = req.body || {};
+  if (catalogo.senha_hash && !ehMesmaSenha(typeof body.senha === 'string' ? body.senha : undefined, catalogo.senha_hash)) {
+    throw new HttpError(401, 'senha_necessaria');
+  }
+  const nome = String(body.nome || '').trim();
+  const email = String(body.email || '').trim().toLowerCase();
+  const telefone = String(body.telefone || '').trim();
+  const canal = ['atacado', 'varejo'].includes(String(body.canal || '')) ? String(body.canal) : 'varejo';
+  const itens = Array.isArray(body.itens) ? body.itens : [];
+  if (!nome) throw new HttpError(400, 'Informe o nome do cliente.', { nome: 'Campo obrigatório' });
+  if (!itens.length) throw new HttpError(400, 'Adicione ao menos um item ao pedido.');
+
+  const filtros = filtrosDoCatalogo(catalogo);
+  const filter: Record<string, unknown> = {};
+  if (filtros.colecao_id) filter.colecao_id = filtros.colecao_id;
+  if (filtros.categoria_id) filter.categoria_id = filtros.categoria_id;
+  const [produtosR, tamanhosR, estoquesR] = await Promise.all([
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter }),
+    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200 }),
+    s.list(RESOURCES.estoques, { page: 1, pageSize: 10000 }),
+  ]);
+  const produtoPorId = new Map<number, Row>(produtosR.rows.map((p) => [Number(p.id), p]));
+  const tamanhoPorId = new Map<number, Row>(tamanhosR.rows.map((t) => [Number(t.id), t]));
+
+  try {
+    const pedido = await s.transaction(async (tx) => {
+      const clientesR = RESOURCES.clientes;
+      let cliente = email ? await s.findOneWhere(clientesR, { email }, tx) : null;
+      if (!cliente) {
+        cliente = await s.findOneWhere(clientesR, { nome }, tx);
+      }
+      if (!cliente) {
+        cliente = await s.insert(clientesR, {
+          nome,
+          email: email || null,
+          cnpj_cpf: body.cnpj_cpf ?? null,
+          telefone: telefone || null,
+          tipo: canal === 'atacado' ? 'atacadista' : 'varejo',
+          ativo: true,
+        }, tx);
+      } else if (!cliente.email && email) {
+        await s.update(clientesR, Number(cliente.id), { email, telefone: telefone || cliente.telefone || null }, tx);
+        cliente = await s.get(clientesR, Number(cliente.id), tx) ?? cliente;
+      }
+
+      const vendaR = RESOURCES.vendas;
+      const venda = await s.insert(vendaR, {
+        cliente_id: Number(cliente.id),
+        data: new Date().toISOString().slice(0, 10),
+        status: 'cotacao',
+        canal_venda: canal === 'atacado' ? 'site_atacado' : 'site_varejo',
+        condicao_pagamento: 'Pendente',
+        fin_status: 'a_receber',
+        observacoes: [
+          body.observacoes ? String(body.observacoes).trim() : null,
+          `Pedido gerado pelo catálogo público "${catalogo.nome}"`,
+          telefone ? `Contato: ${telefone}` : null,
+          email ? `E-mail: ${email}` : null,
+        ].filter(Boolean).join('\n'),
+      }, tx);
+
+      const itensR = RESOURCES.itens_venda;
+      let subtotal = 0;
+      for (const raw of itens) {
+        const produtoId = Number(raw.produto_id);
+        let tamanhoId = Number(raw.tamanho_id);
+        const quantidade = Number(raw.quantidade);
+        const produto = produtoPorId.get(produtoId);
+        if (!produto || !Number.isInteger(quantidade) || quantidade <= 0) {
+          throw new HttpError(400, 'Há um item inválido no pedido. Atualize a página e tente novamente.');
+        }
+        // Se o cliente não selecionou tamanho, usa o primeiro com saldo (fallback).
+        if (!Number.isInteger(tamanhoId) || tamanhoId <= 0) {
+          const comSaldo = estoquesR.rows.find((e) => Number(e.produto_id) === produtoId && Number(e.quantidade) > 0);
+          tamanhoId = comSaldo ? Number(comSaldo.tamanho_id) : Number(tamanhoPorId.keys().next().value);
+        }
+        const tamanho = tamanhoPorId.get(tamanhoId);
+        if (!tamanho) {
+          throw new HttpError(400, 'Selecione um tamanho válido para o pedido.');
+        }
+        if (produto.exibir_site === false || produto.ativo === false) {
+          throw new HttpError(400, `O produto "${labelOf(RESOURCES.produtos, produto)}" não está disponível para pedido pelo site.`);
+        }
+        const preco = Number(canal === 'atacado' ? (produto.preco_atacado || produto.preco_venda || 0) : produto.preco_venda || 0);
+        const sub = Math.round(quantidade * preco * 100) / 100;
+        subtotal += sub;
+        await s.insert(itensR, {
+          venda_id: Number(venda.id),
+          produto_id: produtoId,
+          tamanho_id: tamanhoId,
+          quantidade,
+          preco_unitario: preco,
+          desconto_pct: 0,
+          subtotal: sub,
+        }, tx);
+      }
+      const total = await recalcularTotal('venda', Number(venda.id), tx);
+      await s.audit(
+        {
+          usuario_id: null,
+          usuario: 'Catálogo público',
+          acao: 'criar',
+          recurso: 'vendas',
+          registro_id: Number(venda.id),
+          descricao: `Cotação recebida pelo catálogo "${catalogo.nome}" — ${itens.length} item(ns), ${nome}`,
+          dados: { canal, total, subtotal },
+        },
+        tx
+      );
+      return { venda: await s.get(vendaR, Number(venda.id), tx) ?? venda, total };
+    });
+    res.status(201).json({ ok: true, mensagem: 'Pedido recebido! Nossa equipe vai confirmar disponibilidade e valores com você.', pedido_id: Number(pedido.venda.id), total: pedido.total });
+  } catch (e) {
+    throw toHttpError(e, RESOURCES.vendas);
+  }
 }
