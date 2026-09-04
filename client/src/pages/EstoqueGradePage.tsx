@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeftRight, Download, FileUp, Loader2, RefreshCw, Search, Warehouse } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, Boxes, ClipboardCheck, Download, FileUp, Loader2, Package, RefreshCw, Search, Warehouse, Wallet } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
 import { Alert, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
-import { formatNumber } from '../lib/format';
+import { formatMoney, formatNumber } from '../lib/format';
 
 type GradeResp = {
   colunas: { id: number; codigo: string }[];
@@ -12,7 +12,7 @@ type GradeResp = {
   locaisDisponiveis: string[];
   totalPecas: number;
   linhas: {
-    produto: { id: number; sku: string; nome: string; cor: string | null; cor_hex: string | null; categoria_id__label: string | null; foto_url: string | null };
+    produto: { id: number; sku: string; nome: string; cor: string | null; cor_hex: string | null; categoria_id__label: string | null; colecao_id__label: string | null; foto_url: string | null; preco_venda: number; custo: number };
     celulas: { tamanho_id: number; quantidade: number; estoque_min: number }[];
     total: number;
   }[];
@@ -34,6 +34,7 @@ export default function EstoqueGradePage() {
   const [colecaoId, setColecaoId] = useState('');
   const [categoriaId, setCategoriaId] = useState('');
   const [q, setQ] = useState('');
+  const [soAlertas, setSoAlertas] = useState(false);
   const [opts, setOpts] = useState<Record<string, { value: number; label: string }[]>>({});
   const [cel, setCel] = useState<Cel | null>(null);
   const tipoImport = IMPORT_TIPOS.find((t) => t.recurso === 'estoques');
@@ -91,12 +92,33 @@ export default function EstoqueGradePage() {
     }
   }, [local]);
 
+  // Cockpit — KPIs calculados a partir da própria grade
+  const alertasGrade = useMemo(() => {
+    if (!data) return [] as { produto: GradeResp['linhas'][number]['produto']; tamanho: string; quantidade: number; estoque_min: number; faltando: number }[];
+    const out: { produto: GradeResp['linhas'][number]['produto']; tamanho: string; quantidade: number; estoque_min: number; faltando: number }[] = [];
+    const codPorId = new Map(data.colunas.map((c) => [c.id, c.codigo]));
+    for (const l of data.linhas) {
+      for (const c of l.celulas) {
+        if (c.estoque_min > 0 && c.quantidade <= c.estoque_min) {
+          out.push({ produto: l.produto, tamanho: codPorId.get(c.tamanho_id) || `#${c.tamanho_id}`, quantidade: c.quantidade, estoque_min: c.estoque_min, faltando: c.estoque_min - c.quantidade });
+        }
+      }
+    }
+    return out.sort((a, b) => b.faltando - a.faltando);
+  }, [data]);
+
+  const valorEstoque = useMemo(() => (data ? data.linhas.reduce((a, l) => a + l.total * Number(l.produto.custo || 0), 0) : 0), [data]);
+  const valorVenda = useMemo(() => (data ? data.linhas.reduce((a, l) => a + l.total * Number(l.produto.preco_venda || 0), 0) : 0), [data]);
+
   const linhasVisiveis = useMemo(() => {
     if (!data) return [];
     const term = q.trim().toLowerCase();
-    if (!term) return data.linhas;
-    return data.linhas.filter((l) => `${l.produto.sku} ${l.produto.nome} ${l.produto.cor || ''} ${l.produto.categoria_id__label || ''}`.toLowerCase().includes(term));
-  }, [data, q]);
+    return data.linhas.filter((l) => {
+      if (soAlertas && !l.celulas.some((c) => c.estoque_min > 0 && c.quantidade <= c.estoque_min)) return false;
+      if (!term) return true;
+      return `${l.produto.sku} ${l.produto.nome} ${l.produto.cor || ''} ${l.produto.categoria_id__label || ''}`.toLowerCase().includes(term);
+    });
+  }, [data, q, soAlertas]);
 
   async function lancarMovimentacao() {
     if (!cel) return;
@@ -173,6 +195,75 @@ export default function EstoqueGradePage() {
 
       {data && (
         <>
+          {/* Cockpit do estoque — resumo em 4 cartões + atalhos */}
+          <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <CockpitKPI icon={Boxes} label="Peças em estoque" value={formatNumber(data.totalPecas)} sub={local ? `Local: ${local}` : `${data.locaisDisponiveis.length} local(is) ativo(s)`} accent="bg-navy-800" />
+            <CockpitKPI icon={Wallet} label="Valor a custo" value={formatMoney(valorEstoque)} sub={`A preço de venda: ${formatMoney(valorVenda)}`} accent="bg-brand-500" />
+            <CockpitKPI
+              icon={AlertTriangle}
+              label="Abaixo do mínimo"
+              value={formatNumber(alertasGrade.length)}
+              sub={alertasGrade.length ? `${formatNumber(alertasGrade.reduce((a, x) => a + x.faltando, 0))} peça(s) faltando` : 'Tudo acima do mínimo'}
+              accent={alertasGrade.length ? 'bg-red-600' : 'bg-slate-500'}
+              onClick={() => setSoAlertas((v) => !v)}
+              active={soAlertas}
+            />
+            <div className="card flex flex-col justify-between p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Atalhos</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <Link to="/movimentacoes" className="btn-secondary !px-2.5 !py-1.5 text-xs">
+                  <ArrowLeftRight className="h-3.5 w-3.5" /> Movimentar
+                </Link>
+                <Link to="/inventario" className="btn-secondary !px-2.5 !py-1.5 text-xs">
+                  <ClipboardCheck className="h-3.5 w-3.5" /> Inventário
+                </Link>
+                <Link to="/relatorios?relatorio=estoque-minimo" className="btn-secondary !px-2.5 !py-1.5 text-xs">
+                  <AlertTriangle className="h-3.5 w-3.5" /> Relatório de mínimos
+                </Link>
+              </div>
+            </div>
+          </div>
+
+          {/* Painel de alertas (só quando existe algo abaixo do mínimo) */}
+          {alertasGrade.length > 0 && soAlertas && (
+            <div className="card mb-4 overflow-hidden border-red-200">
+              <div className="flex items-center justify-between border-b border-slate-200 bg-red-50/60 px-4 py-2.5">
+                <h3 className="flex items-center gap-2 text-sm font-bold text-red-700">
+                  <AlertTriangle className="h-4 w-4" /> Abaixo do estoque mínimo ({alertasGrade.length})
+                </h3>
+                <Link to="/relatorios?relatorio=estoque-minimo" className="text-xs font-semibold text-red-700 underline-offset-2 hover:underline">
+                  Abrir relatório completo →
+                </Link>
+              </div>
+              <div className="max-h-48 overflow-auto">
+                <table className="table text-sm">
+                  <thead>
+                    <tr>
+                      <th>Produto</th>
+                      <th>Tam.</th>
+                      <th className="text-right">Saldo</th>
+                      <th className="text-right">Mínimo</th>
+                      <th className="text-right">Faltando</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {alertasGrade.slice(0, 20).map((a, i) => (
+                      <tr key={i}>
+                        <td className="font-medium text-navy-900">
+                          {a.produto.sku} — {a.produto.nome}
+                        </td>
+                        <td>{a.tamanho}</td>
+                        <td className="text-right tabular-nums">{formatNumber(a.quantidade)}</td>
+                        <td className="text-right tabular-nums">{formatNumber(a.estoque_min)}</td>
+                        <td className="text-right font-bold tabular-nums text-red-600">{formatNumber(a.faltando)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Controles */}
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <label className="block">
@@ -328,4 +419,48 @@ export default function EstoqueGradePage() {
       </Modal>
     </div>
   );
+}
+
+/** Cartão de KPI do cockpit (estilo Dashboard). */
+function CockpitKPI({
+  icon: Icon,
+  label,
+  value,
+  sub,
+  accent,
+  onClick,
+  active,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  sub: string;
+  accent: string;
+  onClick?: () => void;
+  active?: boolean;
+}) {
+  const inner = (
+    <>
+      <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white ${accent}`}>
+        <Icon className="h-5 w-5" />
+      </span>
+      <div className="min-w-0">
+        <div className="truncate text-xl font-bold tabular-nums text-navy-900">{value}</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+        <div className="truncate text-xs text-slate-400">{sub}</div>
+      </div>
+    </>
+  );
+  if (onClick) {
+    return (
+      <button
+        onClick={onClick}
+        className={`card flex items-center gap-3 p-4 text-left transition-colors ${active ? 'border-red-300 bg-red-50/40' : 'hover:border-navy-300'}`}
+        title={active ? 'Clique para voltar a ver todos os produtos' : 'Clique para ver só o que está abaixo do mínimo'}
+      >
+        {inner}
+      </button>
+    );
+  }
+  return <div className="card flex items-center gap-3 p-4">{inner}</div>;
 }

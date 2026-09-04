@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Database, Download, Eye, EyeOff, KeyRound, Loader2, LogOut, Server, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react';
+import { Database, Download, Eye, EyeOff, FileSpreadsheet, KeyRound, Loader2, LogOut, Server, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react';
 import { api, ApiError, downloadFile } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, PageHeader, useToast } from '../components/ui';
@@ -124,7 +124,13 @@ export default function Settings() {
               </div>
               <div className="flex items-center justify-between">
                 <dt className="text-slate-500">Fotos</dt>
-                <dd>{meta?.uploads === 'cloudinary' ? <Badge tone="green">Cloudinary (CDN)</Badge> : <Badge tone="blue">No banco de dados</Badge>}</dd>
+                <dd>
+                  {meta?.uploads === 'cloudinary' ? (
+                    <Badge tone="green">Cloudinary (CDN) — OK</Badge>
+                  ) : (
+                    <Badge tone="green">No banco de dados — OK</Badge>
+                  )}
+                </dd>
               </div>
               <div className="flex items-center justify-between">
                 <dt className="text-slate-500">E-mail (recuperação)</dt>
@@ -362,22 +368,30 @@ function BackupCard() {
       <p className="text-xs text-slate-500">
         {info.kind === 'postgres' ? (
           <>
-            <strong>Backup do banco:</strong> {info.tabelas ?? '—'} tabelas · {info.registros ?? '—'} registros. Baixe um dump SQL completo (sem as fotos).
+            <strong>Backup do banco:</strong> {info.tabelas ?? '—'} tabelas · {info.registros ?? '—'} registros. Dump SQL completo (sem as fotos) ou planilha XLSX com todas as tabelas.
           </>
         ) : (
-          'Modo demonstração (memória): o backup em arquivo só existe com Postgres configurado.'
+          'Modo demonstração (memória): o dump SQL só existe com Postgres, mas a planilha XLSX completa funciona aqui também.'
         )}
       </p>
-      {info.kind === 'postgres' && (
+      <div className="mt-2 flex flex-col gap-2">
+        {info.kind === 'postgres' && (
+          <button
+            className="btn-secondary w-full justify-start text-xs"
+            onClick={() =>
+              downloadFile('/admin/backup', `brobond-backup-${new Date().toISOString().slice(0, 10)}.sql`).catch((e) => toast.error(e.message || 'Falha no backup.'))
+            }
+          >
+            <Download className="h-4 w-4" /> Baixar backup (.sql)
+          </button>
+        )}
         <button
-          className="btn-secondary mt-2 w-full justify-start text-xs"
-          onClick={() =>
-            downloadFile('/admin/backup', `brobond-backup-${new Date().toISOString().slice(0, 10)}.sql`).catch((e) => toast.error(e.message || 'Falha no backup.'))
-          }
+          className="btn-secondary w-full justify-start text-xs"
+          onClick={() => downloadFile('/admin/backup/xlsx', `brobond-completo-${new Date().toISOString().slice(0, 10)}.xlsx`).catch((e) => toast.error(e.message || 'Falha na exportação.'))}
         >
-          <Download className="h-4 w-4" /> Baixar backup (.sql)
+          <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Exportar tudo (.xlsx)
         </button>
-      )}
+      </div>
     </div>
   );
 }

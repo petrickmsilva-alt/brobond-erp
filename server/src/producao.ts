@@ -575,3 +575,73 @@ export async function aplicarPrecoFicha(req: Request, res: Response) {
     throw toHttpError(e, ficha);
   }
 }
+
+// ----------------------------------------------------------------------------
+// GET /api/producao/painel — cockpit da Produção (KPIs para o topo da lista de OPs)
+// ----------------------------------------------------------------------------
+export async function producaoPainel(req: Request, res: Response) {
+  const actor = currentUser(req);
+  const { op } = recursoOrdem();
+  checkAccess(op, actor, 'read');
+  const s = getStore();
+  const [ordens, itensOrdem] = await Promise.all([
+    s.list(op, { page: 1, pageSize: 5000, sort: 'id', dir: 'desc' }),
+    s.list(getResource('itens_ordem')!, { page: 1, pageSize: 10000 }),
+  ]);
+  const pecasDa = (o: Row): number => {
+    if (String(o.tipo) === 'grade') {
+      return itensOrdem.rows.filter((i) => Number(i.ordem_id) === Number(o.id)).reduce((a, i) => a + Number(i.quantidade || 0), 0);
+    }
+    return Number(o.quantidade || 0);
+  };
+
+  const hoje = new Date().toISOString().slice(0, 10);
+  const mes = hoje.slice(0, 7);
+  const abertas = ordens.rows.filter((o) => ['planejada', 'em_producao'].includes(String(o.status)));
+  const atrasadas = abertas.filter((o) => o.previsao && String(o.previsao).slice(0, 10) < hoje);
+  const concluidasMes = ordens.rows.filter((o) => {
+    if (String(o.status) !== 'concluida') return false;
+    const d = String(o.concluida_em || o.atualizado_em || o.criado_em || '').slice(0, 7);
+    return d === mes;
+  });
+  const pecasMes = concluidasMes.reduce((a, o) => a + pecasDa(o), 0);
+  const pecasAbertas = abertas.reduce((a, o) => a + pecasDa(o), 0);
+
+  // Produção por semana (últimas 8 semanas, OPs concluídas)
+  const semanas: { semana: string; label: string; pecas: number }[] = [];
+  const agora = new Date();
+  for (let i = 7; i >= 0; i--) {
+    const d = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate() - i * 7 - agora.getDay() + 1);
+    const chave = d.toISOString().slice(0, 10);
+    semanas.push({ semana: chave, label: `${chave.slice(8, 10)}/${chave.slice(5, 7)}`, pecas: 0 });
+  }
+  for (const o of ordens.rows) {
+    if (String(o.status) !== 'concluida') continue;
+    const dia = String(o.concluida_em || o.atualizado_em || o.criado_em || '').slice(0, 10);
+    for (let i = semanas.length - 1; i >= 0; i--) {
+      const ini = semanas[i].semana;
+      const fim = i + 1 < semanas.length ? semanas[i + 1].semana : '9999-12-31';
+      if (dia >= ini && dia < fim) {
+        semanas[i].pecas += pecasDa(o);
+        break;
+      }
+    }
+  }
+
+  res.json({
+    planejadas: ordens.rows.filter((o) => String(o.status) === 'planejada').length,
+    emProducao: ordens.rows.filter((o) => String(o.status) === 'em_producao').length,
+    atrasadas: atrasadas.length,
+    pecasAbertas,
+    concluidasMes: concluidasMes.length,
+    pecasMes,
+    porSemana: semanas,
+    alertas: atrasadas.slice(0, 6).map((o) => ({
+      id: Number(o.id),
+      produto: o.produto_id__label || `#${o.produto_id}`,
+      previsao: o.previsao ? String(o.previsao).slice(0, 10) : null,
+      quantidade: pecasDa(o),
+      status: String(o.status),
+    })),
+  });
+}

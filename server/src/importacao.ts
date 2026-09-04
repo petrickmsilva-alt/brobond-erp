@@ -58,7 +58,7 @@ async function lerArquivo(body: Record<string, unknown>): Promise<Record<string,
         colunas.forEach((c: any, j) => {
           const raw = vals?.[j + 1];
           if (raw === undefined || raw === null) return;
-          let chave = String(c || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+          const chave = String(c || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
           if (raw instanceof Date) obj[chave] = raw.toISOString().slice(0, 10);
           else obj[chave] = String(raw).trim();
         });

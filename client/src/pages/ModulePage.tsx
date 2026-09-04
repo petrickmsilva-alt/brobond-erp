@@ -1,10 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Download, Eye, FileUp, Inbox, ListFilter, Pencil, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import {
+  AlertTriangle as AlertTriangleIcon,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  BarChart3 as BarChartIcon,
+  CheckCircle2 as CheckCircle2Icon,
+  Cog,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Eye,
+  Factory as FactoryIcon,
+  FileUp,
+  Inbox,
+  ListFilter,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { api, ApiError, downloadFile } from '../lib/api';
 import { useMeta, type Field, type ListResult, type Option, type PublicFile, type ResourceMeta } from '../lib/meta';
 import { ColorDot, ImageField, Lightbox, Thumb } from '../components/ImageField';
 import { formatCell } from '../lib/format';
+import { BarrasVerticais } from '../components/Charts';
 import { DETALHE_DIRETO, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
@@ -79,7 +102,9 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const [toDelete, setToDelete] = useState<Record<string, any> | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const listFields = useMemo(() => resource.fields.filter((f) => f.list !== false && !f.virtual && f.type !== 'password' && f.type !== 'images'), [resource]);
+  // Campos virtuais só entram na tabela se pedirem explicitamente (list: true),
+  // ex.: "Senha" em usuários, que mostra o estado e não o valor.
+  const listFields = useMemo(() => resource.fields.filter((f) => f.list !== false && (!f.virtual || f.list === true) && f.type !== 'password' && f.type !== 'images'), [resource]);
   const searchable = resource.fields.some((f) => f.search);
   const filtroFields = useMemo(
     () =>
@@ -310,6 +335,8 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           </>
         }
       />
+
+      {resource.key === 'ordens' && <ProducaoCockpit />}
 
       {resource.notice && (
         <div className="mb-4">
@@ -670,4 +697,124 @@ function Cell({ f, row }: { f: Field; row: Record<string, any> }) {
   }
   if (text === '—') return <span className="text-slate-300">—</span>;
   return <span className={f.type === 'text' && f.name === 'nome' ? 'font-medium text-slate-800' : ''}>{text}</span>;
+}
+
+// ----------------------------------------------------------------------------
+// Cockpit da Produção — KPIs das OPs no topo da lista de Ordens de Fabricação
+// ----------------------------------------------------------------------------
+type PainelProducao = {
+  planejadas: number;
+  emProducao: number;
+  atrasadas: number;
+  pecasAbertas: number;
+  concluidasMes: number;
+  pecasMes: number;
+  porSemana: { semana: string; label: string; pecas: number }[];
+  alertas: { id: number; produto: string; previsao: string | null; quantidade: number; status: string }[];
+};
+
+function ProducaoCockpit() {
+  const [painel, setPainel] = useState<PainelProducao | null>(null);
+
+  useEffect(() => {
+    api
+      .get<PainelProducao>('/producao/painel')
+      .then(setPainel)
+      .catch(() => {});
+  }, []);
+
+  if (!painel) return null;
+  const abertas = painel.planejadas + painel.emProducao;
+
+  return (
+    <div className="mb-4 space-y-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="card flex items-center gap-3 p-4">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-navy-800 text-white">
+            <Cog className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="text-xl font-bold tabular-nums text-navy-900">{abertas}</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">OPs abertas</div>
+            <div className="truncate text-xs text-slate-400">
+              {painel.planejadas} planejada(s) · {painel.emProducao} em produção · {formatCellNumber(painel.pecasAbertas)} peças
+            </div>
+          </div>
+        </div>
+        <div className={`card flex items-center gap-3 p-4 ${painel.atrasadas > 0 ? 'border-red-200 bg-red-50/40' : ''}`}>
+          <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white ${painel.atrasadas > 0 ? 'bg-red-600' : 'bg-slate-500'}`}>
+            <AlertTriangleIcon className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="text-xl font-bold tabular-nums text-navy-900">{painel.atrasadas}</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Atrasadas</div>
+            <div className="truncate text-xs text-slate-400">{painel.atrasadas > 0 ? 'Previsão de entrega vencida' : 'Nenhuma OP fora do prazo'}</div>
+          </div>
+        </div>
+        <div className="card flex items-center gap-3 p-4">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white">
+            <CheckCircle2Icon className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="text-xl font-bold tabular-nums text-navy-900">{painel.concluidasMes}</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Concluídas no mês</div>
+            <div className="truncate text-xs text-slate-400">{formatCellNumber(painel.pecasMes)} peças produzidas</div>
+          </div>
+        </div>
+        <div className="card flex flex-col justify-between p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Atalhos</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <Link to="/relatorios?relatorio=producao-periodo" className="btn-secondary !px-2.5 !py-1.5 text-xs">
+              <BarChartIcon className="h-3.5 w-3.5" /> Produção por período
+            </Link>
+            <Link to="/fichas" className="btn-secondary !px-2.5 !py-1.5 text-xs">
+              <FactoryIcon className="h-3.5 w-3.5" /> Fichas técnicas
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="card p-4 lg:col-span-2">
+          <h3 className="text-sm font-semibold text-navy-900">Peças produzidas — últimas 8 semanas</h3>
+          {painel.porSemana.every((s) => s.pecas === 0) ? (
+            <p className="py-6 text-center text-sm text-slate-400">Nenhuma OP concluída nas últimas semanas.</p>
+          ) : (
+            <BarrasVerticais rotulos={painel.porSemana.map((s) => s.label)} valores={painel.porSemana.map((s) => s.pecas)} formatar={formatCellNumber} titulo="Peças por semana" cor="#059669" />
+          )}
+        </div>
+        <div className="card overflow-hidden">
+          <div className="border-b border-slate-200 px-4 py-2.5">
+            <h3 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+              <AlertTriangleIcon className="h-4 w-4 text-red-500" /> OPs atrasadas
+            </h3>
+          </div>
+          {painel.alertas.length === 0 ? (
+            <p className="px-4 py-6 text-center text-sm text-slate-400">Nada atrasado. 🎉</p>
+          ) : (
+            <ul className="max-h-44 divide-y divide-slate-100 overflow-auto">
+              {painel.alertas.map((a) => (
+                <li key={a.id}>
+                  <Link to={`/ordens/${a.id}`} className="flex items-center justify-between gap-2 px-4 py-2 hover:bg-navy-50/50">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-navy-900">
+                        OP #{a.id} — {a.produto}
+                      </p>
+                      <p className="text-xs text-red-500">Previsão: {a.previsao ? String(a.previsao).split('-').reverse().join('/') : '—'}</p>
+                    </div>
+                    <span className="shrink-0 text-xs font-bold tabular-nums text-slate-500">{formatCellNumber(a.quantidade)} pçs</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatCellNumber(v: unknown): string {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString('pt-BR', { maximumFractionDigits: 3 }) : '—';
 }

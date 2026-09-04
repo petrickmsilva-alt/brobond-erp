@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, CalendarClock, Coins, CreditCard, HandCoins, Landmark, LineChart, Plus, RefreshCw, Repeat, ScanLine, TrendingDown, TrendingUp, Users, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, CalendarClock, Coins, CreditCard, Download, HandCoins, Landmark, LineChart, Plus, RefreshCw, Repeat, ScanLine, TrendingDown, TrendingUp, Users, Wallet } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatMoney } from '../lib/format';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
@@ -165,6 +165,23 @@ export default function FinanceiroPage() {
     }
   }
 
+  /** Exporta o resultado da conciliação em CSV (abre no Excel). */
+  function exportarConciliacao() {
+    if (!concResult) return;
+    const linhas = [
+      'Situação;Data;Valor;Descrição;Observação',
+      ...concResult.confirmados.map((l) => `Conciliado;${l.data};${String(l.valor).replace('.', ',')};${l.descricao};Lançamento #${l.lancamento_id}`),
+      ...concResult.naoConfirmados.map((l) => `Pendente;${l.data};${String(l.valor).replace('.', ',')};${l.descricao};${l.motivo}`),
+    ];
+    const blob = new Blob([`\uFEFF${linhas.join('\r\n')}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `conciliacao-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   useEffect(() => {
     load();
   }, [load]);
@@ -320,7 +337,12 @@ export default function FinanceiroPage() {
                     <h2 className="text-sm font-bold text-navy-900">Últimos lançamentos</h2>
                     <p className="text-xs text-slate-400">Livro-caixa integrado a vendas, compras, custos e aportes.</p>
                   </div>
-                  <button className="btn-secondary" onClick={() => setTab('dre')}>Ver DRE</button>
+                  <div className="flex gap-2">
+                    <Link to="/relatorios?relatorio=faturamento" className="btn-secondary" title="Faturamento mensal com comparação anual">
+                      <LineChart className="h-4 w-4" /> Faturamento
+                    </Link>
+                    <button className="btn-secondary" onClick={() => setTab('dre')}>Ver DRE</button>
+                  </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="table">
@@ -362,9 +384,19 @@ export default function FinanceiroPage() {
           {/* ---------------- DRE ---------------- */}
           {tab === 'dre' && (
             <section className="card overflow-hidden">
-              <div className="border-b border-slate-200 px-4 py-3">
-                <h2 className="text-sm font-bold text-navy-900">DRE gerencial — {data.mes}</h2>
-                <p className="text-xs text-slate-400">Receita, custo, despesas e resultado do mês (lançamentos confirmados).</p>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+                <div>
+                  <h2 className="text-sm font-bold text-navy-900">DRE gerencial — {data.mes}</h2>
+                  <p className="text-xs text-slate-400">Receita, custo, despesas e resultado do mês (lançamentos confirmados).</p>
+                </div>
+                <div className="flex gap-2">
+                  <Link to="/relatorios?relatorio=dre" className="btn-secondary !px-2.5 !py-1 text-xs" title="DRE de qualquer período, com exportação">
+                    <Download className="h-3.5 w-3.5" /> DRE por período
+                  </Link>
+                  <Link to="/relatorios?relatorio=razao-financeiro" className="btn-secondary !px-2.5 !py-1 text-xs" title="Livro-caixa com saldo acumulado e exportação">
+                    <Download className="h-3.5 w-3.5" /> Razão financeiro
+                  </Link>
+                </div>
               </div>
               <div className="grid gap-x-6 gap-y-1.5 px-4 py-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
                 <DreLinha label="Receita" value={data.dre.receita} tone="green" />
@@ -557,7 +589,12 @@ export default function FinanceiroPage() {
               </button>
               {concResult && (
                 <div className="mt-3 space-y-1.5 text-xs">
-                  <p className={`font-semibold ${concResult.confirmados.length > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>{concResult.confirmados.length} conciliado(s) · {concResult.naoConfirmados.length} pendente(s) de revisão</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className={`font-semibold ${concResult.confirmados.length > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>{concResult.confirmados.length} conciliado(s) · {concResult.naoConfirmados.length} pendente(s) de revisão</p>
+                    <button className="btn-secondary !px-2 !py-1 text-[11px]" onClick={exportarConciliacao} title="Baixar o resultado em CSV">
+                      <Download className="h-3.5 w-3.5" /> Exportar
+                    </button>
+                  </div>
                   {concResult.naoConfirmados.slice(0, 6).map((l, idx) => (
                     <p key={idx} className="rounded bg-amber-50 px-2 py-1 text-amber-700">• {l.data} · {formatMoney(l.valor)} · {l.motivo}</p>
                   ))}

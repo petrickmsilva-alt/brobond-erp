@@ -190,16 +190,17 @@ test('compra: receber sem itens é bloqueado', async () => {
 
 test('relatório de comissões soma apenas vendas faturadas/entregues no período', async () => {
   await ensureSetup();
-  const { relatorioComissoes } = await import('../src/itens');
+  const { relatorio } = await import('../src/relatorios');
   const req: any = { query: {}, user: admin };
   let payload: any = null;
   const res: any = { json: (d: any) => ((payload = d), res) };
-  await relatorioComissoes(req, res);
+  await relatorio(req, res, 'comissoes');
   assert.ok(payload, 'relatório deve responder JSON');
-  const linha = payload.linhas.find((l: any) => l.representante_id === representanteId);
-  // venda faturada e cancelada (= estornada) não conta; a do teste de
-  // faturamento+cancelamento também foi cancelada. Saldo esperado: 0 pedidos.
+  // venda faturada e cancelada (= estornada) não conta; as dos outros testes
+  // também foram canceladas. Estrutura nova: colunas/linhas + gráfico mensal.
   assert.ok(Array.isArray(payload.linhas));
-  assert.equal(typeof payload.total_comissoes, 'number');
-  void linha;
+  assert.ok(payload.colunas.some((c: any) => c.key === 'comissao'));
+  assert.ok(payload.grafico && Array.isArray(payload.grafico.rotulos) && payload.grafico.rotulos.length === 12);
+  const resumo = payload.resumo || {};
+  assert.equal(typeof resumo.comissao, 'number');
 });

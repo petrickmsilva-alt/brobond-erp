@@ -21,7 +21,7 @@ import {
 import { getPublicResource, publicMeta } from './resources';
 import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider, uploadsConfigError } from './uploads';
 import { productDetail } from './detail';
-import { createItem, deleteItem, listItens, relatorioComissoes, updateItem } from './itens';
+import { createItem, deleteItem, listItens, updateItem } from './itens';
 import {
   checkAccess,
   createRecord,
@@ -44,6 +44,7 @@ import { exportarRecurso } from './export';
 import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
 import {
   aplicarPrecoFicha,
+  producaoPainel,
   createInsumoFicha,
   createItemOrdem,
   deleteInsumoFicha,
@@ -53,7 +54,7 @@ import {
   updateInsumoFicha,
   updateItemOrdem,
 } from './producao';
-import { adminBackup, backupInfo } from './backup';
+import { adminBackup, adminBackupXlsx, backupInfo } from './backup';
 import { catalogoPublico, criarPedidoCatalogo, rateLimitPublico } from './catalogos';
 import { conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
 import { vendaPDF, compraPDF } from './pdf';
@@ -190,9 +191,6 @@ app.post('/api/compras/:id/itens', wrap(createItem));
 app.put('/api/compras/:id/itens/:itemId', wrap(updateItem));
 app.delete('/api/compras/:id/itens/:itemId', wrap(deleteItem));
 
-// Relatório de comissões de representantes (antes de /api/:resource/:id)
-app.get('/api/relatorios/comissoes', wrap(relatorioComissoes));
-
 // PDF dos pedidos (antes das rotas genéricas)
 app.get('/api/vendas/:id/pdf', wrap(vendaPDF));
 app.get('/api/compras/:id/pdf', wrap(compraPDF));
@@ -252,6 +250,9 @@ app.post('/api/marketplace/sincronizar', wrap(sincronizarPedidos));
 // WebSocket status
 app.get('/api/admin/ws/status', (_req, res) => res.json(wsStatus()));
 
+// Cockpit da Produção — KPIs das OPs (antes das rotas genéricas)
+app.get('/api/producao/painel', wrap(producaoPainel));
+
 // Fase 3 — itens de OP por grade e insumos da ficha técnica (sub-recursos)
 app.get('/api/ordens/:id/itens', wrap(listItensOrdem));
 app.post('/api/ordens/:id/itens', wrap(createItemOrdem));
@@ -279,6 +280,7 @@ app.get('/api/:resource/export', wrap(async (req, res) => exportarRecurso(req, r
 
 // Fase 6 — backup (admin)
 app.get('/api/admin/backup', wrap(adminBackup));
+app.get('/api/admin/backup/xlsx', wrap(adminBackupXlsx));
 app.get('/api/admin/backup/info', wrap(backupInfo));
 
 // Fotos / anexos de um registro

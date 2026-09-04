@@ -108,10 +108,10 @@ DNS apontando para a Render.
 | Cadastros | Insumos, Fornecedores, Representantes, Clientes, Tamanhos/Grade, Coleções | ✔ | ✔ | ✔ | Busca, ordenação, paginação, validação por campo |
 | Estoque | Estoque Físico | ✔ | ✔ | ✔ | Saldo único por produto+tamanho+local; alteração manual gera "ajuste"; só exclui saldo zerado |
 | Estoque | Movimentações | ✔ | — | — | Imutáveis. Entrada/saída/ajuste atualizam o saldo; saída sem saldo é bloqueada |
-| Estoque | Inventário | | | | Planejado |
+| Estoque | Inventário | | | | Contagem por local com congelamento de saldo, divergências e ajustes ao fechar |
 | Produção | Ordens de Fabricação | ✔ | ✔ | ✔ | Status "Concluída" dá entrada automática no estoque (e estorna se reaberta) |
 | Produção | Ficha Técnica / BOM | ✔ | ✔ | ✔ | Mão de obra, indiretos e margem por produto |
-| Produção | Custo de Fabricação | | | | Planejado |
+| Produção | Custo de Fabricação | | | | Calculadora de custo (insumos + mão de obra + indiretos) e preço sugerido |
 | Compras | Compras | ✔ | ✔ | ✔ | Pedido por fornecedor, status e total |
 | Vendas | Vendas | ✔ | ✔ | ✔ | Pedido por cliente/representante, canal (balcão, site varejo/atacado, marketplace), status e total |
 | Vendas | Catálogos públicos | ✔ | ✔ | ✔ | Link sem login com fotos e preços; opções varejo/atacado e **pedido pelo site** (gera cotação no ERP) |
@@ -120,7 +120,7 @@ DNS apontando para a Render.
 | Financeiro | Categorias / Contas | ✔ | ✔ | ✔ | Classificação (com classe na DRE) e contas (caixa, banco, Pix, cartão, boleto) |
 | Financeiro | Investidores / Aportes | ✔ | ✔ | ✔ | Sócios/investidores, capital inicial, rodada, reinvestimento, distribuição de lucro |
 | Financeiro | Recorrências | ✔ | ✔ | ✔ | Aluguel, energia, folha, facção etc. — geração automática (botão ou cron) |
-| Relatórios | Relatórios | | | | Planejado |
+| Relatórios | Relatórios | | | | Faturamento por período (comparação mensal/anual), vendas, comissões com gráfico mensal, curva ABC, posição de estoque, estoque abaixo do mínimo por local, movimentações, produção, insumos, DRE gerencial e razão financeiro (gerente). Exportação CSV/XLSX |
 | Configurações | Usuários | ✔ | ✔ | ✔ | Somente admin. Perfis, ativar/desativar, redefinir senha |
 | Configurações | Auditoria | | | | Somente admin. Quem incluiu/alterou/excluiu o quê, logins e trocas de senha |
 | Configurações | Configurações | | | | Minha conta, trocar senha, informações do sistema |
@@ -223,10 +223,11 @@ Ver [`docs/AUDITORIA-EVOLUCOES.md`](docs/AUDITORIA-EVOLUCOES.md). Situação:
 - [x] **Fase 6 (parcial)** — rate limit, cabeçalhos, CORS, JWT obrigatório, testes + CI
 - [x] **Correções 0.3.1** — Configurações exibe a versão real e o provedor de fotos; alerta quando o Cloudinary está configurado mas inválido; `/api/health` informa o provedor
 - [x] **Fase 2 (v0.4.0)** — Pedidos com itens e total calculado, faturamento com baixa de estoque (e estorno), compras com entrada de insumos e custo médio ponderado, impressão do pedido, comissões e relatório
-- [ ] Fase 3 — OP por grade, ficha técnica com insumos, custo real, estoque de insumos
-- [ ] Fase 4 — Locais, transferência, visão em grade, inventário, leitor de código de barras
-- [ ] Fase 5 — Exportação, filtros, relatórios, gráficos, importação
-- [ ] Fase 6 (restante) — "esqueci minha senha" por e-mail, backup automático
+- [x] **Fase 3** — OP por grade, ficha técnica com insumos, custo real, estoque de insumos
+- [x] **Fase 4** — Locais, transferência, visão em grade, inventário, leitor de código de barras
+- [x] **Fase 5** — Exportação, filtros, relatórios, gráficos, importação
+- [x] **Fase 6 (restante)** — "esqueci minha senha" por e-mail, backup (SQL e XLSX completo)
 - [x] Fase 7 (parcial) — Mobile em cards, PWA, catálogo público
 - [x] **Módulo Financeiro** — contas, categorias, lançamentos, painel, auto-lançamento de vendas/compras e aportes de investidores
 - [x] Comércio varejo/atacado — preço atacado, canal de venda e pedido pelo catálogo público (cotação)
+- [x] **v0.5.0 — Auditoria + cockpit** — versão unificada em 0.5.0; coluna "Senha" (estado) e troca de senha no Editar de Usuários; cockpit em Estoque e Produção; relatórios de faturamento (comparação mensal/anual), comissões com gráfico mensal, estoque abaixo do mínimo por local, DRE e razão financeiro (gerente/admin); exportação XLSX completa do sistema; correção do 409 falso ao editar estoque mínimo de outro local; API do financeiro restrita a gerente/admin (igual ao menu)
