@@ -7,7 +7,12 @@ import { useAuth } from '../auth/AuthContext';
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, meta } = useAuth();
   const isAdmin = user?.perfil === 'admin';
-  const visible = MODULES.filter((m) => !m.adminOnly || isAdmin);
+  const visible = MODULES.filter((m) => {
+    if (m.adminOnly && !isAdmin) return false;
+    if (m.minPerfil === 'admin' && !isAdmin) return false;
+    if (m.minPerfil === 'gerente' && !isAdmin && user?.perfil !== 'gerente') return false;
+    return true;
+  });
   const top = visible.find((m) => m.group === null);
 
   return (

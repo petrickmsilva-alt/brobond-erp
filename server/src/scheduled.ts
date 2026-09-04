@@ -22,6 +22,7 @@ import { getStore } from './services';
 import { getResource } from './resources';
 import { labelOf } from './store';
 import { HttpError } from './errors';
+import { processarRecorrencias } from './financeiro';
 import type { Request, Response } from 'express';
 import { currentUser } from './auth';
 
@@ -240,6 +241,8 @@ export async function runScheduled(req: Request, res: Response) {
     await relatorioAlertas();
     resultados.push('Alertas');
   }
+  const rec = await processarRecorrencias({ id: actor.id || null, name: actor.name });
+  if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrência(s) financeira(s)`);
 
   res.json({ ok: true, executados: resultados, smtp: smtpConfigurado() });
 }
@@ -257,6 +260,8 @@ export async function cronScheduled(req: Request, res: Response) {
   if (deveExecutar(getSchedule('POSICAO_ESTOQUE'))) { await relatorioPosicaoEstoque(); resultados.push('estoque'); }
   if (deveExecutar(getSchedule('VENDAS'))) { await relatorioVendas(); resultados.push('vendas'); }
   if (deveExecutar(getSchedule('ALERTAS'))) { await relatorioAlertas(); resultados.push('alertas'); }
+  const rec = await processarRecorrencias({ id: null, name: 'Agendador' });
+  if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrencia(s)`);
 
   res.json({ ok: true, executados: resultados });
 }

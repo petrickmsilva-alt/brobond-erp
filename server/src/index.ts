@@ -54,7 +54,8 @@ import {
   updateItemOrdem,
 } from './producao';
 import { adminBackup, backupInfo } from './backup';
-import { catalogoPublico, rateLimitPublico } from './catalogos';
+import { catalogoPublico, criarPedidoCatalogo, rateLimitPublico } from './catalogos';
+import { conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
 import { vendaPDF, compraPDF } from './pdf';
 import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
 import { listAprovacoes, aprovarPedido, rejeitarPedido, countAprovacoes } from './approval';
@@ -127,6 +128,8 @@ app.post('/api/auth/forgot', loginRateLimit, wrap(forgotPassword));
 app.post('/api/auth/reset', wrap(resetPassword));
 // Catálogo público (somente leitura; rate limit próprio)
 app.get('/api/publico/catalogo/:token', rateLimitPublico, wrap(catalogoPublico));
+// Pedido pelo catálogo — cria uma cotação de venda no ERP (sem login, rate limit)
+app.post('/api/publico/catalogo/:token/pedido', rateLimitPublico, wrap(criarPedidoCatalogo));
 // Portal do cliente (acompanhamento de pedidos por CPF/CNPJ)
 app.get('/api/portal/:token/pedidos', rateLimitPortal, wrap(portalPedidos));
 app.get('/api/portal/:token/pedido/:id', rateLimitPortal, wrap(portalPedidoDetalhe));
@@ -164,6 +167,15 @@ app.get(
     res.json(await getStore().dashboard());
   })
 );
+
+// Financeiro — resumo do fluxo de caixa, lançamento manual e recorrências
+app.get('/api/financeiro/resumo', wrap(resumoFinanceiro));
+app.post('/api/financeiro/lancamentos', wrap(criarLancamentoManual));
+app.post('/api/financeiro/recorrencias/gerar', wrap(gerarRecorrencias));
+app.get('/api/financeiro/rentabilidade', wrap(rentabilidade));
+app.get('/api/financeiro/investidores', wrap(resumoInvestidores));
+app.post('/api/financeiro/conciliacao', wrap(conciliarExtrato));
+app.post('/api/admin/financeiro/recorrencias', wrap(cronRecorrencias));
 
 // Página de detalhe do produto (fotos, grade de estoque, movimentações, OPs, ficha)
 app.get('/api/produtos/:id/detalhe', wrap(productDetail));

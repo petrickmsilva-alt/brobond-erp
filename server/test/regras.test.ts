@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
 
-const { RESOURCES } = await import('../src/resources');
+const { RESOURCES, getResource } = await import('../src/resources');
 const { createRecord, updateRecord, deleteRecord, getRecord, listRecords, getStore } = await import('../src/services');
 const { validatePayload } = await import('../src/validate');
 const { HttpError } = await import('../src/errors');
@@ -155,4 +155,48 @@ test('segurança: rate limit bloqueia após 5 falhas e libera após sucesso', as
   registerLoginSuccess(req);
   loginRateLimit(req, res, () => (status = 200));
   assert.equal(status, 200);
+});
+
+test('financeiro: aporte confirmado gera lançamento de investimento e estorno cancela', async () => {
+  const inv = await createRecord(RESOURCES.investidores, { nome: 'Anjo Teste', tipo: 'investidor' }, admin);
+  const aporte = await createRecord(RESOURCES.aportes, { investidor_id: Number(inv.id), data: '2026-09-04', tipo: 'aporte', valor: 5000, forma_pagamento: 'pix', status: 'confirmado' }, admin);
+  assert.ok(Number(aporte.fin_lancamento_id) > 0, 'aporte confirmado deve gerar lançamento');
+  const lancs = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'aporte', referencia_id: Number(aporte.id) } });
+  assert.equal(lancs.rows.length, 1);
+  assert.equal(lancs.rows[0].tipo, 'investimento');
+  assert.equal(Number(lancs.rows[0].valor), 5000);
+  await updateRecord(RESOURCES.aportes, Number(aporte.id), { status: 'estornado' }, admin);
+  const depois = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'aporte', referencia_id: Number(aporte.id) } });
+  assert.equal(depois.rows[0].status, 'cancelado');
+});
+
+test('financeiro: venda faturada carrega vencimento e parcelas no lançamento', async () => {
+  const cli = await createRecord(RESOURCES.clientes, { nome: 'Cliente Venc', tipo: 'loja' }, admin);
+  const venda = await createRecord(
+    RESOURCES.vendas,
+    { cliente_id: Number(cli.id), data: '2026-09-04', status: 'aberta', canal_venda: 'site_varejo', fin_status: 'a_receber', fin_vencimento: '2026-09-25', fin_parcelas: 3 },
+    admin
+  );
+  await getStore().insert(getResource('itens_venda')!, { venda_id: Number(venda.id), produto_id: 1, tamanho_id: 1, quantidade: 1, preco_unitario: 10, subtotal: 10 });
+  await getStore().adjustStock(1, 1, 'almoxarifado', 10);
+  await updateRecord(RESOURCES.vendas, Number(venda.id), { status: 'faturada' }, admin);
+  const lancs = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'venda', referencia_id: Number(venda.id) } });
+  assert.ok(lancs.rows.length >= 1);
+  const l = lancs.rows[0];
+  assert.equal(String(l.vencimento || '').slice(0, 10), '2026-09-25');
+  assert.equal(Number(l.parcela), 3);
+  assert.equal(Number(l.total_parcelas), 3);
+});
+
+test('financeiro: recorrência vencida é gerada como lançamento pendente', async () => {
+  const { processarRecorrencias } = await import('../src/financeiro');
+  const rec = await createRecord(RESOURCES.recorrencias_financeiras, { descricao: 'Aluguel teste', tipo: 'despesa', valor: 800, frequencia: 'mensal', dia: 1, proxima_geracao: '2026-08-01', status: 'ativo' }, admin);
+  const out = await processarRecorrencias({ id: admin.id, name: admin.name });
+  assert.ok(out.gerados >= 1);
+  const lancs = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'recorrencia', referencia_id: Number(rec.id) } });
+  assert.ok(lancs.rows.length >= 1);
+  assert.equal(lancs.rows[0].status, 'pendente');
+  assert.equal(lancs.rows[0].tipo, 'despesa');
+  const rec2 = await getRecord(RESOURCES.recorrencias_financeiras, Number(rec.id));
+  assert.ok(String(rec2.proxima_geracao || '') >= '2026-09-01', 'próxima geração atualizada para o futuro');
 });

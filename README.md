@@ -113,7 +113,13 @@ DNS apontando para a Render.
 | Produção | Ficha Técnica / BOM | ✔ | ✔ | ✔ | Mão de obra, indiretos e margem por produto |
 | Produção | Custo de Fabricação | | | | Planejado |
 | Compras | Compras | ✔ | ✔ | ✔ | Pedido por fornecedor, status e total |
-| Vendas | Vendas | ✔ | ✔ | ✔ | Pedido por cliente/representante, status e total |
+| Vendas | Vendas | ✔ | ✔ | ✔ | Pedido por cliente/representante, canal (balcão, site varejo/atacado, marketplace), status e total |
+| Vendas | Catálogos públicos | ✔ | ✔ | ✔ | Link sem login com fotos e preços; opções varejo/atacado e **pedido pelo site** (gera cotação no ERP) |
+| Financeiro | Financeiro | | | | Painel: fluxo de caixa, contas, resultado do mês, contas a receber/pagar, vendas por canal |
+| Financeiro | Lançamentos | ✔ | ✔ | ✔ | Livro-caixa (receita, despesa, investimento, estorno) com link automático em vendas, compras e aportes |
+| Financeiro | Categorias / Contas | ✔ | ✔ | ✔ | Classificação (com classe na DRE) e contas (caixa, banco, Pix, cartão, boleto) |
+| Financeiro | Investidores / Aportes | ✔ | ✔ | ✔ | Sócios/investidores, capital inicial, rodada, reinvestimento, distribuição de lucro |
+| Financeiro | Recorrências | ✔ | ✔ | ✔ | Aluguel, energia, folha, facção etc. — geração automática (botão ou cron) |
 | Relatórios | Relatórios | | | | Planejado |
 | Configurações | Usuários | ✔ | ✔ | ✔ | Somente admin. Perfis, ativar/desativar, redefinir senha |
 | Configurações | Auditoria | | | | Somente admin. Quem incluiu/alterou/excluiu o quê, logins e trocas de senha |
@@ -143,6 +149,9 @@ GET    /api/auth/me
 POST   /api/auth/change-password       { senha_atual, senha_nova }
 GET    /api/meta                       definição dos módulos (campos, tipos, opções)
 GET    /api/dashboard
+GET    /api/financeiro/resumo          fluxo de caixa, resultado do mês, a receber/pagar, por categoria
+GET    /api/publico/catalogo/:token    catálogo público (somente leitura)
+POST   /api/publico/catalogo/:token/pedido   cria COTAÇÃO de venda (site varejo/atacado)
 GET    /api/:recurso?q=&page=&pageSize=&sort=&dir=&f.campo=valor   (f.* = filtros de igualdade)
 GET    /api/:recurso/options           [{ value, label }] para selects
 GET    /api/produtos/:id/detalhe       fotos + grade de estoque + movimentações + OPs + custo
@@ -218,4 +227,6 @@ Ver [`docs/AUDITORIA-EVOLUCOES.md`](docs/AUDITORIA-EVOLUCOES.md). Situação:
 - [ ] Fase 4 — Locais, transferência, visão em grade, inventário, leitor de código de barras
 - [ ] Fase 5 — Exportação, filtros, relatórios, gráficos, importação
 - [ ] Fase 6 (restante) — "esqueci minha senha" por e-mail, backup automático
-- [ ] Fase 7 — Mobile em cards, PWA, catálogo público
+- [x] Fase 7 (parcial) — Mobile em cards, PWA, catálogo público
+- [x] **Módulo Financeiro** — contas, categorias, lançamentos, painel, auto-lançamento de vendas/compras e aportes de investidores
+- [x] Comércio varejo/atacado — preço atacado, canal de venda e pedido pelo catálogo público (cotação)

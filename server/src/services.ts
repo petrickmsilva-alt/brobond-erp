@@ -11,6 +11,7 @@ import type { AuthUser } from './auth';
 import { attachImages, removeAllFiles } from './uploads';
 import { aplicarRegrasPedido } from './itens';
 import { aplicarRegrasOrdem, recalcularFichaValores, validarOrdemPayload } from './producao';
+import { syncAporte, syncLancamentoCompra, syncLancamentoVenda } from './financeiro';
 
 const PERFIL_RANK: Record<string, number> = { operador: 1, gerente: 2, admin: 3 };
 
@@ -136,6 +137,11 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
       }
       if (r.key === 'vendas' || r.key === 'compras') {
         await aplicarRegrasPedido(r.key === 'vendas' ? 'venda' : 'compra', null, row, data, { id: actor.id || null, name: actor.name }, tx);
+        const full = (await s.get(r, row.id, tx)) ?? row;
+        await (r.key === 'vendas' ? syncLancamentoVenda : syncLancamentoCompra)(null, full, data, { id: actor.id || null, name: actor.name }, tx);
+      }
+      if (r.key === 'aportes') {
+        await syncAporte(null, row, actor, tx);
       }
 
       await audit(tx, actor, 'criar', r, row.id, `${r.singular} ${labelOf(r, row)} incluído(a)`, sanitize(data));
@@ -200,6 +206,12 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (r.key === 'vendas' || r.key === 'compras') {
         const full = (await s.get(r, id, tx)) ?? row;
         await aplicarRegrasPedido(r.key === 'vendas' ? 'venda' : 'compra', before, full, data, { id: actor.id || null, name: actor.name }, tx);
+        await (r.key === 'vendas' ? syncLancamentoVenda : syncLancamentoCompra)(before, full, data, { id: actor.id || null, name: actor.name }, tx);
+      }
+      // Aporte confirmado/estornado → lançamento financeiro automático
+      if (r.key === 'aportes' && (changes.status || changes.valor || changes.investidor_id || changes.conta_id || changes.forma_pagamento || changes.data)) {
+        const full = (await s.get(r, id, tx)) ?? row;
+        await syncAporte(before, full, actor, tx);
       }
 
       const campos = Object.keys(changes).join(', ');

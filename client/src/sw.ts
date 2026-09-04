@@ -2,7 +2,7 @@
 // Service Worker do BROBOND ERP — PWA com cache de assets e fallback offline.
 // Estratégia: Stale While Revalidate para assets estáticos; Network First para API.
 
-declare const self: ServiceWorkerGlobalScope;
+const sw = self as unknown as ServiceWorkerGlobalScope;
 
 const CACHE_NAME = 'brobond-v1';
 const STATIC_ASSETS = [
@@ -15,7 +15,7 @@ const STATIC_ASSETS = [
 ];
 
 // Install: pré-cache dos assets estáticos
-self.addEventListener('install', (event) => {
+sw.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(STATIC_ASSETS).catch(() => {
@@ -23,21 +23,21 @@ self.addEventListener('install', (event) => {
       });
     })
   );
-  self.skipWaiting();
+  sw.skipWaiting();
 });
 
 // Activate: limpa caches antigos
-self.addEventListener('activate', (event) => {
+sw.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
     )
   );
-  self.clients.claim();
+  sw.clients.claim();
 });
 
 // Fetch: estratégia por tipo de recurso
-self.addEventListener('fetch', (event) => {
+sw.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
@@ -86,7 +86,7 @@ self.addEventListener('fetch', (event) => {
 
         // Retorna cache imediatamente (se tiver), ou aguarda rede
         return cached || fetchPromise;
-      })
+      }) as Promise<Response>
     );
     return;
   }

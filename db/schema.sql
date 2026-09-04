@@ -513,6 +513,156 @@ WHERE c.categoria_id IS NULL
   AND x.id = (c.filtros->>'categoria_id')::int;
 
 -- ------------------------------------------------------------
+-- 2.9) COMÉRCIO — varejo/atacado, catálogo com pedido e exposição no site
+-- ------------------------------------------------------------
+
+-- Produto: preço de atacado, quantidade mínima, exibição no site/catálogo
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS preco_atacado NUMERIC(12,2) DEFAULT 0;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS atacado_min_qtd INTEGER DEFAULT 0;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS exibir_site BOOLEAN DEFAULT FALSE;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS destaque BOOLEAN DEFAULT FALSE;
+
+-- Venda: canal de venda e dados financeiros (a receber / recebido).
+-- A FK fin_conta_id é criada em 2.10, depois da tabela contas_financeiras.
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS canal_venda TEXT DEFAULT 'balcao';
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS fin_status TEXT DEFAULT 'a_receber';
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS fin_forma_pagamento TEXT;
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS fin_recebido_em DATE;
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS fin_documento TEXT;
+
+-- Compra: dados financeiros (a pagar / pago)
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_status TEXT DEFAULT 'a_pagar';
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_forma_pagamento TEXT;
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_pago_em DATE;
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_documento TEXT;
+
+-- Catálogo: canal (varejo/atacado), tabela de preço, pedido pelo site
+ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'todos';
+ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS tabela_preco TEXT DEFAULT 'automatico';
+ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS aceita_pedido_site BOOLEAN DEFAULT TRUE;
+ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS como_comprar TEXT;
+
+-- ------------------------------------------------------------
+-- 2.10) FINANCEIRO — livro-caixa, contas, categorias, investidores e aportes
+-- ------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS categorias_financeiras (
+  id SERIAL PRIMARY KEY,
+  nome TEXT NOT NULL,
+  tipo TEXT DEFAULT 'despesa',           -- receita | despesa | investimento
+  cor TEXT,
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_categorias_financeiras_nome ON categorias_financeiras (LOWER(nome));
+
+CREATE TABLE IF NOT EXISTS contas_financeiras (
+  id SERIAL PRIMARY KEY,
+  nome TEXT NOT NULL,
+  tipo TEXT DEFAULT 'caixa',             -- caixa | banco | pix | cartao | boleto | outro
+  saldo_inicial NUMERIC(12,2) DEFAULT 0,
+  ativo BOOLEAN DEFAULT TRUE,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_contas_financeiras_nome ON contas_financeiras (LOWER(nome));
+
+-- Liga vendas/compras à conta financeira. Criada após a tabela de contas
+-- para que a migração funcione também em instalações novas.
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS fin_conta_id INTEGER REFERENCES contas_financeiras(id);
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_conta_id INTEGER REFERENCES contas_financeiras(id);
+
+CREATE TABLE IF NOT EXISTS investidores (
+  id SERIAL PRIMARY KEY,
+  nome TEXT NOT NULL,
+  cnpj_cpf TEXT,
+  tipo TEXT DEFAULT 'investidor',        -- investidor | socio | emprestador
+  participacao_pct NUMERIC(5,2) DEFAULT 0,
+  email TEXT,
+  telefone TEXT,
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS aportes (
+  id SERIAL PRIMARY KEY,
+  investidor_id INTEGER REFERENCES investidores(id),
+  data DATE NOT NULL DEFAULT now(),
+  tipo TEXT DEFAULT 'aporte',            -- capital_inicial | aporte | reinvestimento | emprestimo_socio | distribuicao_lucro
+  valor NUMERIC(12,2) NOT NULL,
+  forma_pagamento TEXT DEFAULT 'pix',
+  conta_id INTEGER REFERENCES contas_financeiras(id),
+  status TEXT DEFAULT 'previsto',        -- previsto | confirmado | estornado
+  observacoes TEXT,
+  fin_lancamento_id INTEGER,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS lancamentos_financeiros (
+  id SERIAL PRIMARY KEY,
+  data DATE NOT NULL DEFAULT now(),
+  tipo TEXT NOT NULL DEFAULT 'despesa',  -- receita | despesa | investimento | estorno
+  categoria_id INTEGER REFERENCES categorias_financeiras(id),
+  conta_id INTEGER REFERENCES contas_financeiras(id),
+  descricao TEXT NOT NULL,
+  valor NUMERIC(12,2) NOT NULL,
+  forma_pagamento TEXT,
+  status TEXT DEFAULT 'confirmado',      -- confirmado | pendente | cancelado
+  referencia_tipo TEXT,                  -- venda | compra | aporte | outro
+  referencia_id INTEGER,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+-- Lançamento: vencimento, parcelas e vínculo com recorrência geradora
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS vencimento DATE;
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS parcela INTEGER DEFAULT 1;
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS total_parcelas INTEGER DEFAULT 1;
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS referencia_recorrencia_id INTEGER;
+
+-- Contas a receber/a pagar de vendas e compras
+ALTER TABLE vendas  ADD COLUMN IF NOT EXISTS fin_vencimento DATE;
+ALTER TABLE vendas  ADD COLUMN IF NOT EXISTS fin_parcelas INTEGER DEFAULT 1;
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_vencimento DATE;
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_parcelas INTEGER DEFAULT 1;
+
+-- Categoria: classe usada na DRE gerencial
+ALTER TABLE categorias_financeiras ADD COLUMN IF NOT EXISTS classificacao_dre TEXT DEFAULT 'despesas_operacionais';
+
+-- Recorrências financeiras: despesas/receitas fixas (aluguel, energia, folha...)
+CREATE TABLE IF NOT EXISTS recorrencias_financeiras (
+  id SERIAL PRIMARY KEY,
+  descricao TEXT NOT NULL,
+  tipo TEXT DEFAULT 'despesa',           -- receita | despesa | investimento
+  categoria_id INTEGER REFERENCES categorias_financeiras(id),
+  conta_id INTEGER REFERENCES contas_financeiras(id),
+  valor NUMERIC(12,2) NOT NULL,
+  forma_pagamento TEXT,
+  frequencia TEXT DEFAULT 'mensal',      -- semanal | mensal | anual
+  dia INTEGER DEFAULT 1,
+  proxima_geracao DATE,
+  status TEXT DEFAULT 'ativo',           -- ativo | inativo
+  ultimo_gerado_em TIMESTAMPTZ,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_recor_fin_proxima ON recorrencias_financeiras (status, proxima_geracao);
+CREATE INDEX IF NOT EXISTS idx_recor_fin_status   ON recorrencias_financeiras (status);
+
+CREATE INDEX IF NOT EXISTS idx_lanc_fin_data       ON lancamentos_financeiros (data DESC);
+CREATE INDEX IF NOT EXISTS idx_lanc_fin_tipo       ON lancamentos_financeiros (tipo, status);
+CREATE INDEX IF NOT EXISTS idx_lanc_fin_categoria  ON lancamentos_financeiros (categoria_id);
+CREATE INDEX IF NOT EXISTS idx_lanc_fin_conta      ON lancamentos_financeiros (conta_id);
+CREATE INDEX IF NOT EXISTS idx_lanc_fin_referencia ON lancamentos_financeiros (referencia_tipo, referencia_id);
+CREATE INDEX IF NOT EXISTS idx_aportes_data        ON aportes (data DESC);
+CREATE INDEX IF NOT EXISTS idx_aportes_invest      ON aportes (investidor_id);
+
+-- ------------------------------------------------------------
 -- 3) ÍNDICES
 -- ------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_auditoria_data       ON auditoria (data DESC);

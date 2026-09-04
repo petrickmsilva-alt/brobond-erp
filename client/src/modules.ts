@@ -25,6 +25,12 @@ import {
   Warehouse,
   Building2,
   Share2,
+  Wallet,
+  Landmark,
+  Coins,
+  PiggyBank,
+  CircleDollarSign,
+  Repeat,
 } from 'lucide-react';
 
 export type Module = {
@@ -39,6 +45,8 @@ export type Module = {
   description: string;
   /** visível apenas para administradores */
   adminOnly?: boolean;
+  /** perfil mínimo para acessar (gerente/admin) */
+  minPerfil?: 'gerente' | 'admin';
   /** módulo ainda sem funcionalidade (exibe página de planejamento) */
   planned?: string[];
 };
@@ -95,6 +103,23 @@ export const MODULES: Module[] = [
   { id: 'vendas', label: 'Vendas', icon: Receipt, group: 'Vendas', path: '/vendas', resource: 'vendas', description: 'Pedidos de venda com itens; ao faturar, as peças saem do estoque e a comissão é calculada.' },
   { id: 'catalogos', label: 'Catálogos públicos', icon: Share2, group: 'Vendas', path: '/catalogos', resource: 'catalogos', description: 'Compartilhe produtos com preço por link — sem login para o cliente.' },
 
+  // Financeiro
+  {
+    id: 'financeiro',
+    label: 'Financeiro',
+    icon: Wallet,
+    group: 'Financeiro',
+    path: '/financeiro',
+    minPerfil: 'gerente',
+    description: 'Fluxo de caixa, receitas, despesas, custos, contas a receber/pagar e aportes de investidores.',
+  },
+  { id: 'lancamentos', label: 'Lançamentos', icon: Coins, group: 'Financeiro', path: '/lancamentos', resource: 'lancamentos_financeiros', minPerfil: 'gerente', description: 'Livro-caixa: receitas, despesas, investimentos e estornos.' },
+  { id: 'categorias-financeiras', label: 'Categorias', icon: CircleDollarSign, group: 'Financeiro', path: '/categorias-financeiras', resource: 'categorias_financeiras', minPerfil: 'gerente', description: 'Classificação dos lançamentos financeiros.' },
+  { id: 'contas-financeiras', label: 'Contas', icon: Landmark, group: 'Financeiro', path: '/contas-financeiras', resource: 'contas_financeiras', minPerfil: 'gerente', description: 'Caixa, banco, Pix, cartão e boleto.' },
+  { id: 'investidores', label: 'Investidores / Sócios', icon: PiggyBank, group: 'Financeiro', path: '/investidores', resource: 'investidores', minPerfil: 'gerente', description: 'Quem aporta capital, participação e distribuição de lucros.' },
+  { id: 'aportes', label: 'Aportes', icon: Wallet, group: 'Financeiro', path: '/aportes', resource: 'aportes', minPerfil: 'gerente', description: 'Capital inicial, aportes, reinvestimento e empréstimo de sócio.' },
+  { id: 'recorrencias-financeiras', label: 'Recorrências', icon: Repeat, group: 'Financeiro', path: '/recorrencias-financeiras', resource: 'recorrencias_financeiras', minPerfil: 'gerente', description: 'Despesas/receitas fixas: aluguel, energia, folha, facção, assinaturas — geradas automaticamente.' },
+
   // Relatórios
   {
     id: 'relatorios',
@@ -112,10 +137,10 @@ export const MODULES: Module[] = [
   { id: 'ajuda', label: 'Ajuda', icon: HelpCircle, group: 'Configurações', path: '/ajuda', description: 'Guia rápido: como usar cada módulo do BROBOND ERP.' },
 ];
 
-export const MODULE_GROUPS = ['Cadastros', 'Estoque', 'Produção', 'Compras', 'Vendas', 'Relatórios', 'Configurações'];
+export const MODULE_GROUPS = ['Cadastros', 'Estoque', 'Produção', 'Compras', 'Vendas', 'Financeiro', 'Relatórios', 'Configurações'];
 
 /** Módulos que usam página própria (não CRUD genérico nem PlannedModule). */
-export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios'] as const;
+export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 'financeiro'] as const;
 
 /** Módulos cuja listagem abre diretamente a página de detalhe. */
 export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);

@@ -15,6 +15,7 @@ import EstoqueGradePage from './EstoqueGradePage';
 import InventarioModulePage from './InventarioModulePage';
 import CustoPage from './CustoPage';
 import RelatoriosPage from './RelatoriosPage';
+import FinanceiroPage from './FinanceiroPage';
 import AjudaPage from './AjudaPage';
 
 const PAGE_SIZE = 25;
@@ -27,6 +28,7 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'inventario') return <InventarioModulePage />;
   if (module.id === 'custo') return <CustoPage />;
   if (module.id === 'relatorios') return <RelatoriosPage />;
+  if (module.id === 'financeiro') return <FinanceiroPage />;
   if (module.id === 'ajuda') return <AjudaPage />;
 
   if (!module.resource || !resource) return <PlannedModule module={module} />;
