@@ -117,8 +117,9 @@ DNS apontando para a Render.
 | Vendas | Catálogos públicos | ✔ | ✔ | ✔ | Link sem login com fotos e preços; opções varejo/atacado e **pedido pelo site** (gera cotação no ERP) |
 | Financeiro | Financeiro | | | | Painel: fluxo de caixa, contas, resultado do mês, contas a receber/pagar, vendas por canal |
 | Financeiro | Lançamentos | ✔ | ✔ | ✔ | Livro-caixa (receita, despesa, investimento, estorno) com link automático em vendas, compras e aportes |
-| Financeiro | Categorias / Contas | ✔ | ✔ | ✔ | Classificação e contas (caixa, banco, Pix, cartão, boleto) |
+| Financeiro | Categorias / Contas | ✔ | ✔ | ✔ | Classificação (com classe na DRE) e contas (caixa, banco, Pix, cartão, boleto) |
 | Financeiro | Investidores / Aportes | ✔ | ✔ | ✔ | Sócios/investidores, capital inicial, rodada, reinvestimento, distribuição de lucro |
+| Financeiro | Recorrências | ✔ | ✔ | ✔ | Aluguel, energia, folha, facção etc. — geração automática (botão ou cron) |
 | Relatórios | Relatórios | | | | Planejado |
 | Configurações | Usuários | ✔ | ✔ | ✔ | Somente admin. Perfis, ativar/desativar, redefinir senha |
 | Configurações | Auditoria | | | | Somente admin. Quem incluiu/alterou/excluiu o quê, logins e trocas de senha |

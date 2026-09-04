@@ -92,9 +92,11 @@ Novo menu **Financeiro** com 6 módulos + painel:
 O painel já calcula:
 - saldo por conta (saldo inicial + entradas - saídas)
 - receitas, despesas, investimentos e resultado do mês
-- **a receber** (vendas faturadas/entregues não recebidas)
-- **a pagar** (compras recebidas não pagas)
+- **a receber** e **a pagar** (lançamentos pendentes, incluindo recorrências)
+- **agenda 30 dias** e **vencidos** (por vencimento/parcelas)
+- **DRE gerencial**: receita − CMV − mão de obra − operacionais − impostos − financeiras
 - fluxo por categoria, vendas por canal, últimos lançamentos
+- **recorrências** (aluguel, energia, folha, facção) geradas por botão ou cron
 
 ### 4.2 Varejo × Atacado e pedido pelo catálogo
 
@@ -291,8 +293,8 @@ O ERP já tem esqueleto de NF-e (`nfe.ts`). Ligar ao faturar (`venda` faturada =
 |---|---|---:|---|
 | **F1 — Fundação financeira** | Contas/categorias/lançamentos, painel, auto-posting vendas/compras/aporte | 2 dias | ✅ **entregue** |
 | **F2 — Comércio varejo/atacado** | preço atacado, canal de venda, catálogo com pedido/cotação | 2 dias | ✅ **entregue** |
-| **F3 — Contas a receber/pagar + recorrência** | agenda 30/60/90, aluguel/energia/folha recorrente | 2–3 dias | ⬜ |
-| **F4 — DRE gerencial** | receita − CMV/custo − despesas = resultado por mês | 1–2 dias | ⬜ |
+| **F3 — Contas a receber/pagar + recorrência** | agenda 30 dias, vencimentos, parcelas, aluguel/energia/folha/facção recorrentes (geradas por botão/cron) | 3 dias | ✅ **entregue** |
+| **F4 — DRE gerencial** | receita − CMV − mão de obra − despesas − impostos − financeiras = resultado | 2 dias | ✅ **entregue** |
 | **F5 — Fluxo projetado** | projeção por semana/mês com dados reais | 2 dias | ⬜ |
 | **F6 — Pagamento online** | Mercado Pago/Asaas + webhook → marca recebido | 3–4 dias | ⬜ |
 | **F7 — Loja oficial (Nuvemshop/VTEX/Woo)** | webhook pedido → venda `site_varejo/site_atacado` | 4–7 dias | ⬜ |

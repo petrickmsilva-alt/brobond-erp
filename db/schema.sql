@@ -618,6 +618,42 @@ CREATE TABLE IF NOT EXISTS lancamentos_financeiros (
   criado_em TIMESTAMPTZ DEFAULT now(),
   atualizado_em TIMESTAMPTZ
 );
+-- Lançamento: vencimento, parcelas e vínculo com recorrência geradora
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS vencimento DATE;
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS parcela INTEGER DEFAULT 1;
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS total_parcelas INTEGER DEFAULT 1;
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS referencia_recorrencia_id INTEGER;
+
+-- Contas a receber/a pagar de vendas e compras
+ALTER TABLE vendas  ADD COLUMN IF NOT EXISTS fin_vencimento DATE;
+ALTER TABLE vendas  ADD COLUMN IF NOT EXISTS fin_parcelas INTEGER DEFAULT 1;
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_vencimento DATE;
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_parcelas INTEGER DEFAULT 1;
+
+-- Categoria: classe usada na DRE gerencial
+ALTER TABLE categorias_financeiras ADD COLUMN IF NOT EXISTS classificacao_dre TEXT DEFAULT 'despesas_operacionais';
+
+-- Recorrências financeiras: despesas/receitas fixas (aluguel, energia, folha...)
+CREATE TABLE IF NOT EXISTS recorrencias_financeiras (
+  id SERIAL PRIMARY KEY,
+  descricao TEXT NOT NULL,
+  tipo TEXT DEFAULT 'despesa',           -- receita | despesa | investimento
+  categoria_id INTEGER REFERENCES categorias_financeiras(id),
+  conta_id INTEGER REFERENCES contas_financeiras(id),
+  valor NUMERIC(12,2) NOT NULL,
+  forma_pagamento TEXT,
+  frequencia TEXT DEFAULT 'mensal',      -- semanal | mensal | anual
+  dia INTEGER DEFAULT 1,
+  proxima_geracao DATE,
+  status TEXT DEFAULT 'ativo',           -- ativo | inativo
+  ultimo_gerado_em TIMESTAMPTZ,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_recor_fin_proxima ON recorrencias_financeiras (status, proxima_geracao);
+CREATE INDEX IF NOT EXISTS idx_recor_fin_status   ON recorrencias_financeiras (status);
+
 CREATE INDEX IF NOT EXISTS idx_lanc_fin_data       ON lancamentos_financeiros (data DESC);
 CREATE INDEX IF NOT EXISTS idx_lanc_fin_tipo       ON lancamentos_financeiros (tipo, status);
 CREATE INDEX IF NOT EXISTS idx_lanc_fin_categoria  ON lancamentos_financeiros (categoria_id);

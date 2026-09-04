@@ -30,6 +30,7 @@ import {
   Coins,
   PiggyBank,
   CircleDollarSign,
+  Repeat,
 } from 'lucide-react';
 
 export type Module = {
@@ -117,6 +118,7 @@ export const MODULES: Module[] = [
   { id: 'contas-financeiras', label: 'Contas', icon: Landmark, group: 'Financeiro', path: '/contas-financeiras', resource: 'contas_financeiras', minPerfil: 'gerente', description: 'Caixa, banco, Pix, cartão e boleto.' },
   { id: 'investidores', label: 'Investidores / Sócios', icon: PiggyBank, group: 'Financeiro', path: '/investidores', resource: 'investidores', minPerfil: 'gerente', description: 'Quem aporta capital, participação e distribuição de lucros.' },
   { id: 'aportes', label: 'Aportes', icon: Wallet, group: 'Financeiro', path: '/aportes', resource: 'aportes', minPerfil: 'gerente', description: 'Capital inicial, aportes, reinvestimento e empréstimo de sócio.' },
+  { id: 'recorrencias-financeiras', label: 'Recorrências', icon: Repeat, group: 'Financeiro', path: '/recorrencias-financeiras', resource: 'recorrencias_financeiras', minPerfil: 'gerente', description: 'Despesas/receitas fixas: aluguel, energia, folha, facção, assinaturas — geradas automaticamente.' },
 
   // Relatórios
   {

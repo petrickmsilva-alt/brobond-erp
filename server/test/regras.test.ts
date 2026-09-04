@@ -156,3 +156,29 @@ test('segurança: rate limit bloqueia após 5 falhas e libera após sucesso', as
   loginRateLimit(req, res, () => (status = 200));
   assert.equal(status, 200);
 });
+
+test('financeiro: aporte confirmado gera lançamento de investimento e estorno cancela', async () => {
+  const inv = await createRecord(RESOURCES.investidores, { nome: 'Anjo Teste', tipo: 'investidor' }, admin);
+  const aporte = await createRecord(RESOURCES.aportes, { investidor_id: Number(inv.id), data: '2026-09-04', tipo: 'aporte', valor: 5000, forma_pagamento: 'pix', status: 'confirmado' }, admin);
+  assert.ok(Number(aporte.fin_lancamento_id) > 0, 'aporte confirmado deve gerar lançamento');
+  const lancs = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'aporte', referencia_id: Number(aporte.id) } });
+  assert.equal(lancs.rows.length, 1);
+  assert.equal(lancs.rows[0].tipo, 'investimento');
+  assert.equal(Number(lancs.rows[0].valor), 5000);
+  await updateRecord(RESOURCES.aportes, Number(aporte.id), { status: 'estornado' }, admin);
+  const depois = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'aporte', referencia_id: Number(aporte.id) } });
+  assert.equal(depois.rows[0].status, 'cancelado');
+});
+
+test('financeiro: recorrência vencida é gerada como lançamento pendente', async () => {
+  const { processarRecorrencias } = await import('../src/financeiro');
+  const rec = await createRecord(RESOURCES.recorrencias_financeiras, { descricao: 'Aluguel teste', tipo: 'despesa', valor: 800, frequencia: 'mensal', dia: 1, proxima_geracao: '2026-08-01', status: 'ativo' }, admin);
+  const out = await processarRecorrencias({ id: admin.id, name: admin.name });
+  assert.ok(out.gerados >= 1);
+  const lancs = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'recorrencia', referencia_id: Number(rec.id) } });
+  assert.ok(lancs.rows.length >= 1);
+  assert.equal(lancs.rows[0].status, 'pendente');
+  assert.equal(lancs.rows[0].tipo, 'despesa');
+  const rec2 = await getRecord(RESOURCES.recorrencias_financeiras, Number(rec.id));
+  assert.ok(String(rec2.proxima_geracao || '') >= '2026-09-01', 'próxima geração atualizada para o futuro');
+});

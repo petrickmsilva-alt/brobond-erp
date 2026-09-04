@@ -55,7 +55,7 @@ import {
 } from './producao';
 import { adminBackup, backupInfo } from './backup';
 import { catalogoPublico, criarPedidoCatalogo, rateLimitPublico } from './catalogos';
-import { criarLancamentoManual, resumoFinanceiro } from './financeiro';
+import { cronRecorrencias, criarLancamentoManual, gerarRecorrencias, resumoFinanceiro } from './financeiro';
 import { vendaPDF, compraPDF } from './pdf';
 import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
 import { listAprovacoes, aprovarPedido, rejeitarPedido, countAprovacoes } from './approval';
@@ -168,9 +168,11 @@ app.get(
   })
 );
 
-// Financeiro — resumo do fluxo de caixa e lançamento manual rápido
+// Financeiro — resumo do fluxo de caixa, lançamento manual e recorrências
 app.get('/api/financeiro/resumo', wrap(resumoFinanceiro));
 app.post('/api/financeiro/lancamentos', wrap(criarLancamentoManual));
+app.post('/api/financeiro/recorrencias/gerar', wrap(gerarRecorrencias));
+app.post('/api/admin/financeiro/recorrencias', wrap(cronRecorrencias));
 
 // Página de detalhe do produto (fotos, grade de estoque, movimentações, OPs, ficha)
 app.get('/api/produtos/:id/detalhe', wrap(productDetail));
