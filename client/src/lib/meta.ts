@@ -84,6 +84,8 @@ export type Meta = {
   /** true quando UPLOAD_PROVIDER=cloudinary mas a CLOUDINARY_URL é inválida */
   uploadsConfigError?: boolean;
   version?: string;
+  /** SMTP configurado? (esqueci minha senha) */
+  smtp?: { configurado: boolean };
 };
 
 export const MetaContext = createContext<Meta | null>(null);

@@ -65,3 +65,43 @@ export const api = {
   put: <T = any>(path: string, body: unknown) => apiFetch<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
   del: <T = any>(path: string) => apiFetch<T>(path, { method: 'DELETE' }),
 };
+
+/**
+ * Baixa um arquivo do servidor (exportação CSV/XLSX, backup) com o token JWT
+ * e dispara o download no navegador. Usa o Content-Disposition do servidor
+ * quando presente.
+ */
+export async function downloadFile(path: string, fallbackName = 'download'): Promise<void> {
+  const token = getToken();
+  const res = await fetch(`/api${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data?.error || 'Não foi possível baixar o arquivo.', data?.fields);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+  const nome = m ? decodeURIComponent(m[1].replace(/"/g, '')) : fallbackName;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nome;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+/** Lê um arquivo local como texto (CSV) ou base64 (XLSX) para a importação. */
+export async function lerArquivoParaImportacao(file: File): Promise<{ conteudo: string; nome: string }> {
+  const isXlsx = /\.xlsx?$/i.test(file.name);
+  if (isXlsx) {
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    return { conteudo: btoa(bin), nome: file.name };
+  }
+  return { conteudo: await file.text(), nome: file.name };
+}

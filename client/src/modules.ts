@@ -8,6 +8,7 @@ import {
   Cog,
   Factory,
   Handshake,
+  HelpCircle,
   History,
   Palette,
   Layers,
@@ -22,6 +23,8 @@ import {
   Receipt,
   Users,
   Warehouse,
+  Building2,
+  Share2,
 } from 'lucide-react';
 
 export type Module = {
@@ -63,20 +66,16 @@ export const MODULES: Module[] = [
   { id: 'colecoes', label: 'Coleções', icon: Tags, group: 'Cadastros', path: '/colecoes', resource: 'colecoes', description: 'Coleções e temporadas.' },
 
   // Estoque
-  { id: 'estoque', label: 'Estoque Físico', icon: Warehouse, group: 'Estoque', path: '/estoque', resource: 'estoques', description: 'Saldo por produto, tamanho e local, com estoque mínimo.' },
-  { id: 'movimentacoes', label: 'Movimentações', icon: ArrowLeftRight, group: 'Estoque', path: '/movimentacoes', resource: 'movimentacoes', description: 'Entradas, saídas e ajustes — cada lançamento atualiza o saldo.' },
+  { id: 'estoque', label: 'Estoque Físico', icon: Warehouse, group: 'Estoque', path: '/estoque', description: 'Grade de saldo por produto × tamanho × local, com estoque mínimo.' },
+  { id: 'movimentacoes', label: 'Movimentações', icon: ArrowLeftRight, group: 'Estoque', path: '/movimentacoes', resource: 'movimentacoes', description: 'Entradas, saídas, ajustes e transferências — cada lançamento atualiza o saldo.' },
+  { id: 'locais', label: 'Locais de Estoque', icon: Building2, group: 'Estoque', path: '/locais', resource: 'locais', description: 'Almoxarifado, loja, expedição e facção onde as peças ficam guardadas.' },
   {
     id: 'inventario',
     label: 'Inventário',
     icon: ClipboardCheck,
     group: 'Estoque',
     path: '/inventario',
-    description: 'Contagem física e acerto de saldos.',
-    planned: [
-      'Abrir uma contagem por local (almoxarifado, loja, expedição)',
-      'Digitar a quantidade contada de cada produto/tamanho',
-      'Comparar com o saldo do sistema e gerar os ajustes automaticamente',
-    ],
+    description: 'Contagem física e acerto de saldos. Abra uma contagem por local, digite as quantidades e gere os ajustes.',
   },
 
   // Produção
@@ -88,17 +87,13 @@ export const MODULES: Module[] = [
     icon: Calculator,
     group: 'Produção',
     path: '/custo',
-    description: 'Insumos + mão de obra + indiretos → preço de custo.',
-    planned: [
-      'Lista de insumos por peça (consumo × custo médio)',
-      'Soma com mão de obra e custos indiretos da ficha técnica',
-      'Sugestão de preço de venda a partir da margem',
-    ],
+    description: 'Insumos + mão de obra + indiretos → preço de custo e preço sugerido de venda.',
   },
 
   // Compras / Vendas
   { id: 'compras', label: 'Compras', icon: ShoppingCart, group: 'Compras', path: '/compras', resource: 'compras', description: 'Pedidos de compra de insumos; ao receber, os insumos entram no estoque.' },
   { id: 'vendas', label: 'Vendas', icon: Receipt, group: 'Vendas', path: '/vendas', resource: 'vendas', description: 'Pedidos de venda com itens; ao faturar, as peças saem do estoque e a comissão é calculada.' },
+  { id: 'catalogos', label: 'Catálogos públicos', icon: Share2, group: 'Vendas', path: '/catalogos', resource: 'catalogos', description: 'Compartilhe produtos com preço por link — sem login para o cliente.' },
 
   // Relatórios
   {
@@ -107,22 +102,23 @@ export const MODULES: Module[] = [
     icon: BarChart3,
     group: 'Relatórios',
     path: '/relatorios',
-    description: 'Valoração de estoque, margem e giro.',
-    planned: [
-      'Posição de estoque por produto/tamanho/local (com valor)',
-      'Movimentações por período',
-      'Produção concluída por período e vendas por representante',
-      'Exportação em Excel/PDF',
-    ],
+    description: 'Posição de estoque, movimentações, produção, vendas, curva ABC e insumos mínimos.',
   },
 
   // Configurações
   { id: 'usuarios', label: 'Usuários', icon: Users, group: 'Configurações', path: '/usuarios', resource: 'usuarios', description: 'Quem acessa o sistema, perfis de permissão e senhas.', adminOnly: true },
   { id: 'auditoria', label: 'Auditoria', icon: History, group: 'Configurações', path: '/auditoria', resource: 'auditoria', description: 'Histórico de inclusões, alterações, exclusões e logins.', adminOnly: true },
-  { id: 'config', label: 'Configurações', icon: Settings, group: 'Configurações', path: '/config', description: 'Sua conta, senha e informações do sistema.' },
+  { id: 'config', label: 'Configurações', icon: Settings, group: 'Configurações', path: '/config', description: 'Sua conta, senha, preferências e informações do sistema.' },
+  { id: 'ajuda', label: 'Ajuda', icon: HelpCircle, group: 'Configurações', path: '/ajuda', description: 'Guia rápido: como usar cada módulo do BROBOND ERP.' },
 ];
 
 export const MODULE_GROUPS = ['Cadastros', 'Estoque', 'Produção', 'Compras', 'Vendas', 'Relatórios', 'Configurações'];
+
+/** Módulos que usam página própria (não CRUD genérico nem PlannedModule). */
+export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios'] as const;
+
+/** Módulos cuja listagem abre diretamente a página de detalhe. */
+export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
 
 export function findModuleByResource(resource: string): Module | undefined {
   return MODULES.find((m) => m.resource === resource);

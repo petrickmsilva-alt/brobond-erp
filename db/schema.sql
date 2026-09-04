@@ -381,6 +381,108 @@ ALTER TABLE itens_venda    ADD COLUMN IF NOT EXISTS desconto_pct NUMERIC(5,2) DE
 ALTER TABLE itens_venda    ADD COLUMN IF NOT EXISTS subtotal NUMERIC(12,2) DEFAULT 0;
 
 -- ------------------------------------------------------------
+-- 2.5) FASE 3 — Produção e custo real
+-- ------------------------------------------------------------
+
+-- Itens de uma OP "por grade": uma linha por tamanho.
+CREATE TABLE IF NOT EXISTS itens_ordem (
+  id SERIAL PRIMARY KEY,
+  ordem_id INTEGER REFERENCES ordens_fabricacao(id) ON DELETE CASCADE,
+  tamanho_id INTEGER REFERENCES tamanhos(id),
+  quantidade INTEGER NOT NULL DEFAULT 0,
+  produzido INTEGER NOT NULL DEFAULT 0,
+  criado_em TIMESTAMPTZ DEFAULT now()
+);
+
+-- Colunas novas de OP: tipo (tamanho | grade), etapa, facção, observações.
+ALTER TABLE ordens_fabricacao ALTER COLUMN tamanho_id DROP NOT NULL;
+ALTER TABLE ordens_fabricacao ALTER COLUMN quantidade DROP NOT NULL;
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT 'tamanho';
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS etapa TEXT;
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS faccao TEXT;
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS observacoes TEXT;
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS concluida_em TIMESTAMPTZ;
+
+-- Ficha técnica: perda de cada insumo + custo calculado + preço sugerido.
+ALTER TABLE itens_ficha_tecnica ADD COLUMN IF NOT EXISTS perda_pct NUMERIC(5,2) DEFAULT 0;
+ALTER TABLE fichas_tecnicas ADD COLUMN IF NOT EXISTS custo_calculado NUMERIC(12,2);
+ALTER TABLE fichas_tecnicas ADD COLUMN IF NOT EXISTS preco_sugerido NUMERIC(12,2);
+ALTER TABLE fichas_tecnicas ADD COLUMN IF NOT EXISTS calculado_em TIMESTAMPTZ;
+
+-- ------------------------------------------------------------
+-- 2.6) FASE 4 — Locais, transferências e inventário
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS locais (
+  id SERIAL PRIMARY KEY,
+  nome TEXT UNIQUE NOT NULL,
+  tipo TEXT DEFAULT 'almoxarifado',        -- almoxarifado | loja | expedicao | faccao
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+ALTER TABLE estoques      ADD COLUMN IF NOT EXISTS local_id INTEGER REFERENCES locais(id);
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS local_id INTEGER REFERENCES locais(id);
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS local_destino TEXT;
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS local_destino_id INTEGER REFERENCES locais(id);
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS transferencia_id INTEGER;
+CREATE INDEX IF NOT EXISTS idx_movimentacoes_transferencia ON movimentacoes (transferencia_id);
+
+-- Inventários (contagem física) e seus itens
+CREATE TABLE IF NOT EXISTS inventarios (
+  id SERIAL PRIMARY KEY,
+  local TEXT NOT NULL,
+  local_id INTEGER REFERENCES locais(id),
+  status TEXT DEFAULT 'aberto',            -- aberto | fechado
+  aberto_por TEXT,
+  aberto_em TIMESTAMPTZ DEFAULT now(),
+  fechado_por TEXT,
+  fechado_em TIMESTAMPTZ,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS itens_inventario (
+  id SERIAL PRIMARY KEY,
+  inventario_id INTEGER REFERENCES inventarios(id) ON DELETE CASCADE,
+  produto_id INTEGER REFERENCES produtos(id),
+  tamanho_id INTEGER REFERENCES tamanhos(id),
+  saldo_sistema INTEGER DEFAULT 0,
+  contado INTEGER,
+  diferenca INTEGER DEFAULT 0,
+  UNIQUE (inventario_id, produto_id, tamanho_id)
+);
+
+-- ------------------------------------------------------------
+-- 2.7) FASE 6 — Segurança de senhas e sessões
+-- ------------------------------------------------------------
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS reset_token_hash TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS reset_expira_em TIMESTAMPTZ;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trocar_senha BOOLEAN DEFAULT FALSE;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS token_versao INTEGER DEFAULT 0;
+
+-- Fase 7 — preferências por usuário (JSONB opcional)
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS preferencias JSONB DEFAULT '{}'::jsonb;
+
+-- ------------------------------------------------------------
+-- 2.8) FASE 7 — Catálogos públicos
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalogos (
+  id SERIAL PRIMARY KEY,
+  nome TEXT NOT NULL,
+  token TEXT UNIQUE NOT NULL,
+  senha_hash TEXT,                         -- opcional (acesso com senha)
+  filtros JSONB,                           -- { colecao_id?, categoria_id? }
+  mostrar_preco BOOLEAN DEFAULT FALSE,
+  mostrar_saldo BOOLEAN DEFAULT FALSE,
+  ativo BOOLEAN DEFAULT TRUE,
+  expira_em TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+-- ------------------------------------------------------------
 -- 3) ÍNDICES
 -- ------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_auditoria_data       ON auditoria (data DESC);
@@ -415,3 +517,35 @@ WHERE cor IS NOT NULL AND TRIM(cor) <> ''
 UPDATE produtos p SET cor_id = c.id
 FROM cores c
 WHERE p.cor_id IS NULL AND p.cor IS NOT NULL AND LOWER(TRIM(p.cor)) = LOWER(c.nome);
+
+-- Fase 3: ficha única por produto; itens de OP e grade
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fichas_tecnicas_produto ON fichas_tecnicas (produto_id);
+CREATE INDEX IF NOT EXISTS idx_itens_ordem_ordem       ON itens_ordem (ordem_id);
+CREATE INDEX IF NOT EXISTS idx_ficha_insumos_ficha     ON itens_ficha_tecnica (ficha_id);
+CREATE INDEX IF NOT EXISTS idx_inventario_status       ON inventarios (status);
+CREATE INDEX IF NOT EXISTS idx_itens_inventario_inv    ON itens_inventario (inventario_id);
+CREATE INDEX IF NOT EXISTS idx_catalogos_token         ON catalogos (token);
+
+-- ------------------------------------------------------------
+-- 4.1) MIGRAÇÃO DE DADOS — Locais de estoque
+--    Idempotente: cria os locais a partir dos textos livres usados em
+--    estoques e movimentações e preenche local_id onde estiver vazio.
+--    A coluna texto `local` é mantida (chave única existente), nada quebra.
+-- ------------------------------------------------------------
+INSERT INTO locais (nome, tipo)
+SELECT DISTINCT sub.local, 'almoxarifado'
+FROM (
+  SELECT local FROM estoques WHERE local IS NOT NULL AND TRIM(local) <> ''
+  UNION
+  SELECT local FROM movimentacoes WHERE local IS NOT NULL AND TRIM(local) <> ''
+) sub
+WHERE NOT EXISTS (SELECT 1 FROM locais l WHERE l.nome = sub.local);
+
+UPDATE estoques e SET local_id = l.id
+FROM locais l WHERE e.local_id IS NULL AND l.nome = e.local;
+
+UPDATE movimentacoes m SET local_id = l.id
+FROM locais l WHERE m.local_id IS NULL AND l.nome = m.local;
+
+UPDATE movimentacoes m SET local_destino_id = l.id
+FROM locais l WHERE m.local_destino IS NOT NULL AND m.local_destino_id IS NULL AND l.nome = m.local_destino;
