@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
 
-const { RESOURCES } = await import('../src/resources');
+const { RESOURCES, getResource } = await import('../src/resources');
 const { createRecord, updateRecord, deleteRecord, getRecord, listRecords, getStore } = await import('../src/services');
 const { validatePayload } = await import('../src/validate');
 const { HttpError } = await import('../src/errors');
@@ -168,6 +168,24 @@ test('financeiro: aporte confirmado gera lançamento de investimento e estorno c
   await updateRecord(RESOURCES.aportes, Number(aporte.id), { status: 'estornado' }, admin);
   const depois = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'aporte', referencia_id: Number(aporte.id) } });
   assert.equal(depois.rows[0].status, 'cancelado');
+});
+
+test('financeiro: venda faturada carrega vencimento e parcelas no lançamento', async () => {
+  const cli = await createRecord(RESOURCES.clientes, { nome: 'Cliente Venc', tipo: 'loja' }, admin);
+  const venda = await createRecord(
+    RESOURCES.vendas,
+    { cliente_id: Number(cli.id), data: '2026-09-04', status: 'aberta', canal_venda: 'site_varejo', fin_status: 'a_receber', fin_vencimento: '2026-09-25', fin_parcelas: 3 },
+    admin
+  );
+  await getStore().insert(getResource('itens_venda')!, { venda_id: Number(venda.id), produto_id: 1, tamanho_id: 1, quantidade: 1, preco_unitario: 10, subtotal: 10 });
+  await getStore().adjustStock(1, 1, 'almoxarifado', 10);
+  await updateRecord(RESOURCES.vendas, Number(venda.id), { status: 'faturada' }, admin);
+  const lancs = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'venda', referencia_id: Number(venda.id) } });
+  assert.ok(lancs.rows.length >= 1);
+  const l = lancs.rows[0];
+  assert.equal(String(l.vencimento || '').slice(0, 10), '2026-09-25');
+  assert.equal(Number(l.parcela), 3);
+  assert.equal(Number(l.total_parcelas), 3);
 });
 
 test('financeiro: recorrência vencida é gerada como lançamento pendente', async () => {

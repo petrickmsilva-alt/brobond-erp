@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowDownRight, ArrowUpRight, Coins, CreditCard, HandCoins, Plus, RefreshCw, Repeat, TrendingDown, TrendingUp, Wallet, CalendarClock, AlertTriangle } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, CalendarClock, Coins, CreditCard, HandCoins, LineChart, Landmark, Plus, RefreshCw, Repeat, ScanLine, TrendingDown, TrendingUp, Users, Wallet } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatMoney } from '../lib/format';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
@@ -48,6 +48,14 @@ type Recurrencia = {
   status: string;
 };
 
+type FluxoLinha = { periodo: string; label: string; entradas: number; saidas: number; liquido: number; acumulado: number };
+type FluxoProjetado = { saldoBase: number; semanal: FluxoLinha[]; mensal: FluxoLinha[] };
+type RentabilidadeItem = { produto: string; receita: number; cmv: number; margem: number; margem_pct: number; quantidade: number };
+type Rentabilidade = { receitaTotal: number; cmvTotal: number; margemTotal: number; margemPctTotal: number; quantidadeTotal: number; porProduto: RentabilidadeItem[]; porCanal: RentabilidadeItem[] };
+type InvestidorResumo = { id: number; nome: string; tipo: string; participacao_pct: number; totalAportado: number; totalDistribuido: number; posicao: number; quantidadeAportes: number; ultimoAporte: string | null };
+type InvestidoresResumo = { totalInvestido: number; totalDistribuido: number; aportesNoMes: number; porInvestidor: InvestidorResumo[] };
+type ConciliacaoResult = { ok: boolean; totalLinhas: number; confirmados: { data: string; valor: number; descricao: string; lancamento_id: number }[]; naoConfirmados: { data: string; valor: number; descricao: string; motivo: string }[] };
+
 type Resumo = {
   mes: string;
   saldoContas: { conta_id: number; nome: string; tipo: string; saldo: number }[];
@@ -73,6 +81,7 @@ type Resumo = {
   resultadoFinanceiro: number;
   resultadoGeral: number;
   recorrencias: Recurrencia[];
+  fluxoProjetado: FluxoProjetado;
   recentes: Lanc[];
   contasTotal: number;
   aportesTotal: number;
@@ -90,22 +99,48 @@ const CANAL_LABEL: Record<string, string> = {
 export default function FinanceiroPage() {
   const toast = useToast();
   const [data, setData] = useState<Resumo | null>(null);
+  const [rentab, setRentab] = useState<Rentabilidade | null>(null);
+  const [investidores, setInvestidores] = useState<InvestidoresResumo | null>(null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
   const [gerando, setGerando] = useState(false);
+  const [concTexto, setConcTexto] = useState('');
+  const [conciliando, setConciliando] = useState(false);
+  const [concResult, setConcResult] = useState<ConciliacaoResult | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setErr('');
     try {
-      const d = await api.get<Resumo>('/financeiro/resumo');
+      const [d, r, i] = await Promise.all([
+        api.get<Resumo>('/financeiro/resumo'),
+        api.get<Rentabilidade>('/financeiro/rentabilidade'),
+        api.get<InvestidoresResumo>('/financeiro/investidores'),
+      ]);
       setData(d);
+      setRentab(r);
+      setInvestidores(i);
     } catch (e: any) {
       setErr(e.message || 'Erro ao carregar o financeiro.');
     } finally {
       setLoading(false);
     }
   }, []);
+
+  async function conciliar() {
+    setConciliando(true);
+    setConcResult(null);
+    try {
+      const r = await api.post<ConciliacaoResult>('/financeiro/conciliacao', { texto: concTexto });
+      setConcResult(r);
+      toast.success(r.confirmados.length > 0 ? `${r.confirmados.length} lançamento(s) conciliado(s).` : 'Nenhum lançamento conciliado.');
+      if (r.confirmados.length > 0) await load();
+    } catch (e: any) {
+      toast.error(e.message || 'Não foi possível conciliar o extrato.');
+    } finally {
+      setConciliando(false);
+    }
+  }
 
   async function gerarRecorrencias() {
     setGerando(true);
@@ -205,6 +240,122 @@ export default function FinanceiroPage() {
               <span className={`text-base font-bold tabular-nums ${data.resultadoGeral >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(data.resultadoGeral)}</span>
             </div>
           </section>
+
+          {/* Fluxo projetado + Rentabilidade */}
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <section className="card p-4">
+              <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+                <LineChart className="h-4 w-4 text-navy-500" /> Fluxo de caixa projetado
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-400">Pendências e recorrências futuras sobre o saldo atual por semana/mês.</p>
+              <div className="mt-3 overflow-x-auto">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Período</th>
+                      <th className="text-right">Entradas</th>
+                      <th className="text-right">Saídas</th>
+                      <th className="text-right">Saldo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.fluxoProjetado.semanal.map((l) => (
+                      <tr key={l.periodo}>
+                        <td className="whitespace-nowrap text-xs text-slate-500">{l.label}</td>
+                        <td className="text-right text-xs tabular-nums text-emerald-600">{formatMoney(l.entradas)}</td>
+                        <td className="text-right text-xs tabular-nums text-red-600">{formatMoney(l.saidas)}</td>
+                        <td className={`text-right text-xs font-semibold tabular-nums ${l.acumulado >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(l.acumulado)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Link to="/recorrencias-financeiras" className="btn-secondary mt-3 w-full justify-center">Ver recorrências</Link>
+            </section>
+
+            <section className="card p-4">
+              <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+                <Landmark className="h-4 w-4 text-navy-500" /> Rentabilidade
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-400">Margem de vendas faturadas/entregues (receita − custo do produto).</p>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <AgendaKpi label="Receita" valor={rentab?.receitaTotal || 0} tone="green" />
+                <AgendaKpi label="CMV" valor={rentab?.cmvTotal || 0} tone="red" />
+                <AgendaKpi label="Margem" valor={rentab?.margemTotal || 0} tone="green" />
+                <AgendaKpi label="Margem %" valor={rentab?.margemPctTotal || 0} tone="green" />
+              </div>
+              <p className="mt-2 text-[11px] text-slate-400">{rentab?.quantidadeTotal || 0} peça(s) vendida(s)</p>
+              <div className="mt-2 space-y-1.5">
+                {(rentab?.porCanal || []).map((c) => (
+                  <div key={c.produto} className="flex justify-between text-xs">
+                    <span className="capitalize text-slate-500">{c.produto}</span>
+                    <span className="tabular-nums text-slate-700">{formatMoney(c.receita)} · margem {c.margem_pct.toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                {(rentab?.porProduto || []).slice(0, 6).map((p) => (
+                  <div key={p.produto} className="rounded-lg border border-slate-100 px-3 py-2">
+                    <p className="truncate text-xs font-medium text-navy-900">{p.produto}</p>
+                    <p className="text-[11px] text-slate-400">{p.quantidade} un · {p.margem_pct.toFixed(1)}% · {formatMoney(p.margem)}</p>
+                  </div>
+                ))}
+              </div>
+              <Link to="/relatorios" className="btn-secondary mt-3 w-full justify-center">Ver relatórios</Link>
+            </section>
+          </div>
+
+          {/* Investidores + Conciliação */}
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <section className="card p-4">
+              <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+                <Users className="h-4 w-4 text-navy-500" /> Investidores / Sócios
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-400">Aportes confirmados, participação e distribuição de lucro.</p>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <AgendaKpi label="Total investido" valor={investidores?.totalInvestido || 0} tone="green" />
+                <AgendaKpi label="No mês" valor={investidores?.aportesNoMes || 0} tone="blue" />
+                <AgendaKpi label="Distribuído" valor={investidores?.totalDistribuido || 0} tone="red" />
+              </div>
+              <ul className="mt-3 space-y-1.5">
+                {(investidores?.porInvestidor || []).length === 0 && <li className="text-xs text-slate-400">Nenhum investidor cadastrado ainda.</li>}
+                {(investidores?.porInvestidor || []).slice(0, 6).map((i) => (
+                  <li key={i.id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-navy-900">{i.nome}</p>
+                      <p className="text-[11px] text-slate-400">{i.participacao_pct}% · {i.quantidadeAportes} aporte(s) · {i.ultimoAporte || 'sem data'}</p>
+                    </div>
+                    <span className="shrink-0 text-sm font-semibold tabular-nums text-emerald-600">{formatMoney(i.totalAportado)}</span>
+                  </li>
+                ))}
+              </ul>
+              <Link to="/investidores" className="btn-secondary mt-3 w-full justify-center">Gerenciar investidores</Link>
+            </section>
+
+            <section className="card p-4">
+              <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+                <ScanLine className="h-4 w-4 text-navy-500" /> Conciliação bancária
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-400">Cole o extrato (data;valor;descrição) e o ERP casa com lançamentos pendentes.</p>
+              <textarea
+                className="input mt-3 h-28 resize-none font-mono text-xs"
+                placeholder={'2026-09-04;1800,00;ALUGUEL\n2026-09-04;320,00;ENERGIA'}
+                value={concTexto}
+                onChange={(e) => setConcTexto(e.target.value)}
+              />
+              <button className="btn-accent mt-2 w-full justify-center" onClick={conciliar} disabled={conciliando || !concTexto.trim()}>
+                <RefreshCw className={`h-4 w-4 ${conciliando ? 'animate-spin' : ''}`} /> Conciliar extrato
+              </button>
+              {concResult && (
+                <div className="mt-3 space-y-1.5 text-xs">
+                  <p className={`font-semibold ${concResult.confirmados.length > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>{concResult.confirmados.length} conciliado(s) · {concResult.naoConfirmados.length} pendente(s) de revisão</p>
+                  {concResult.naoConfirmados.slice(0, 4).map((l, idx) => (
+                    <p key={idx} className="rounded bg-amber-50 px-2 py-1 text-amber-700">• {l.data} · {formatMoney(l.valor)} · {l.motivo}</p>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
 
           <div className="mt-4 grid gap-4 lg:grid-cols-3">
             {/* Agenda 30 dias */}
@@ -390,8 +541,8 @@ function DreLinha({ label, value, tone, bold }: { label: string; value: number; 
   );
 }
 
-function AgendaKpi({ label, valor, tone }: { label: string; valor: number; tone: 'green' | 'red' | 'amber' }) {
-  const color = tone === 'green' ? 'text-emerald-600' : tone === 'red' ? 'text-red-600' : 'text-amber-600';
+function AgendaKpi({ label, valor, tone }: { label: string; valor: number; tone: 'green' | 'red' | 'amber' | 'blue' }) {
+  const color = tone === 'green' ? 'text-emerald-600' : tone === 'red' ? 'text-red-600' : tone === 'blue' ? 'text-blue-600' : 'text-amber-600';
   return (
     <div className="rounded-lg bg-slate-50 px-3 py-2">
       <p className={`text-base font-bold tabular-nums ${color}`}>{formatMoney(valor)}</p>

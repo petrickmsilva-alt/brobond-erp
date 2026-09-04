@@ -19,6 +19,85 @@ import { labelOf } from './store';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const hoje = () => new Date().toISOString().slice(0, 10);
+const addDias = (d: Date, n: number) => new Date(d.getTime() + n * 86400000);
+const fmtData = (d: Date) => d.toISOString().slice(0, 10);
+const primeiroDiaMes = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 12));
+
+/** Segunda-feira da semana da data (projeção semanal). */
+function inicioSemana(d: Date): Date {
+  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12));
+  const dia = t.getUTCDay(); // 0=domingo
+  const off = dia === 0 ? -6 : 1 - dia;
+  return addDias(t, off);
+}
+
+type EventoProjetado = { data: string; tipo: 'receita' | 'despesa'; descricao: string; valor: number };
+
+/** Próximas ocorrências de uma recorrência dentro do horizonte (projeção). */
+function ocorrenciasRecorrencia(r: Row, de: string, ate: string, max = 60): EventoProjetado[] {
+  const eventos: EventoProjetado[] = [];
+  let data = String(r.proxima_geracao || calcularProximaGeracao(r)).slice(0, 10);
+  if (data < de) data = calcularProximaGeracao(r, new Date(`${de}T12:00:00Z`));
+  const tipo = String(r.tipo || 'despesa') === 'receita' ? 'receita' : 'despesa';
+  let guard = 0;
+  while (data <= ate && eventos.length < max && guard++ < max * 2) {
+    eventos.push({ data, tipo, descricao: String(r.descricao || 'Recorrência'), valor: Number(r.valor || 0) });
+    data = calcularProximaGeracao(r, new Date(`${data}T12:00:00Z`));
+  }
+  return eventos;
+}
+
+/** Monta o fluxo projetado (semana/mês) a partir de pendentes + recorrências futuras. */
+function montarFluxoProjetado(pendentes: Row[], recorrencias: Row[], saldoBase: number) {
+  const de = hoje();
+  const ate = addDias(new Date(), 365).toISOString().slice(0, 10);
+  const eventos: EventoProjetado[] = pendentes
+    .filter((l) => ['receita', 'despesa'].includes(String(l.tipo)) && String(l.status) === 'pendente')
+    .filter((l) => (String(l.vencimento || l.data || '') >= de))
+    .map((l) => ({
+      data: String(l.vencimento || l.data || '').slice(0, 10),
+      tipo: String(l.tipo) === 'receita' ? 'receita' : 'despesa',
+      descricao: String(l.descricao || 'Conta em aberto'),
+      valor: Number(l.valor || 0),
+    }));
+  for (const r of recorrencias) {
+    if (String(r.status || 'ativo') !== 'ativo') continue;
+    eventos.push(...ocorrenciasRecorrencia(r, de, ate));
+  }
+  eventos.sort((a, b) => a.data.localeCompare(b.data));
+
+  const agrupar = (inicio: Date, periodo: 'semana' | 'mes', meses = 12) => {
+    const linhas: { periodo: string; label: string; entradas: number; saidas: number; liquido: number; acumulado: number }[] = [];
+    let acumulado = saldoBase;
+    let cursor = inicio;
+    const passos = periodo === 'semana' ? 12 : meses;
+    for (let i = 0; i < passos; i++) {
+      let fim: Date;
+      if (periodo === 'semana') {
+        fim = addDias(cursor, 7);
+      } else {
+        fim = primeiroDiaMes(addDias(cursor, 31));
+      }
+      const iniS = fmtData(cursor);
+      const fimS = fmtData(fim);
+      const noPeriodo = eventos.filter((e) => e.data >= iniS && e.data < fimS);
+      const entradas = r2(noPeriodo.filter((e) => e.tipo === 'receita').reduce((s, e) => s + e.valor, 0));
+      const saidas = r2(noPeriodo.filter((e) => e.tipo === 'despesa').reduce((s, e) => s + e.valor, 0));
+      const liquido = r2(entradas - saidas);
+      acumulado = r2(acumulado + liquido);
+      const label = periodo === 'semana' ? `Semana ${fmtData(cursor).slice(8, 10)}/${fmtData(cursor).slice(5, 7)}` : `${fmtData(cursor).slice(0, 7)}`;
+      linhas.push({ periodo: periodo === 'semana' ? iniS : fmtData(cursor).slice(0, 7), label, entradas, saidas, liquido, acumulado });
+      cursor = fim;
+    }
+    return linhas;
+  };
+
+  return {
+    saldoBase,
+    semanal: agrupar(inicioSemana(new Date()), 'semana'),
+    mensal: agrupar(primeiroDiaMes(new Date()), 'mes'),
+  };
+}
 
 function faturados(v: Row): boolean {
   return ['faturada', 'entregue'].includes(String(v.status));
@@ -106,11 +185,24 @@ export async function syncLancamentoVenda(
       Number(existente.valor) !== Number(after.total || 0) ||
       String(existente.status) !== status ||
       Number(existente.referencia_id || 0) !== id ||
-      String(existente.descricao || '') !== descricao;
+      String(existente.descricao || '') !== descricao ||
+      String(existente.vencimento || '') !== String(after.fin_vencimento || '') ||
+      Number(existente.parcela || 1) !== Number(after.fin_parcelas || 1);
     if (mudou) {
       await atualizarLancamento(
         Number(existente.id),
-        { ...existente, valor: Number(after.total || 0), status, conta_id: after.fin_conta_id ?? existente.conta_id ?? null, forma_pagamento: after.fin_forma_pagamento ?? existente.forma_pagamento ?? null, descricao, referencia_id: id },
+        {
+          ...existente,
+          valor: Number(after.total || 0),
+          status,
+          conta_id: after.fin_conta_id ?? existente.conta_id ?? null,
+          forma_pagamento: after.fin_forma_pagamento ?? existente.forma_pagamento ?? null,
+          descricao,
+          referencia_id: id,
+          vencimento: after.fin_vencimento ? String(after.fin_vencimento).slice(0, 10) : existente.vencimento ?? null,
+          parcela: Number(after.fin_parcelas || 1),
+          total_parcelas: Number(after.fin_parcelas || 1),
+        },
         actor,
         tx
       );
@@ -130,6 +222,9 @@ export async function syncLancamentoVenda(
       valor: Number(after.total || 0),
       forma_pagamento: after.fin_forma_pagamento ?? null,
       status: after.fin_status === 'recebido' ? 'confirmado' : 'pendente',
+      vencimento: after.fin_vencimento ? String(after.fin_vencimento).slice(0, 10) : null,
+      parcela: Number(after.fin_parcelas || 1),
+      total_parcelas: Number(after.fin_parcelas || 1),
       referencia_tipo: referencia,
       referencia_id: id,
       observacoes: `Canal: ${String(after.canal_venda || 'balcao')}`,
@@ -162,11 +257,24 @@ export async function syncLancamentoCompra(
       Number(existente.valor) !== Number(after.total || 0) ||
       String(existente.status) !== status ||
       Number(existente.referencia_id || 0) !== id ||
-      String(existente.descricao || '') !== descricao;
+      String(existente.descricao || '') !== descricao ||
+      String(existente.vencimento || '') !== String(after.fin_vencimento || '') ||
+      Number(existente.parcela || 1) !== Number(after.fin_parcelas || 1);
     if (mudou) {
       await atualizarLancamento(
         Number(existente.id),
-        { ...existente, valor: Number(after.total || 0), status, conta_id: after.fin_conta_id ?? existente.conta_id ?? null, forma_pagamento: after.fin_forma_pagamento ?? existente.forma_pagamento ?? null, descricao, referencia_id: id },
+        {
+          ...existente,
+          valor: Number(after.total || 0),
+          status,
+          conta_id: after.fin_conta_id ?? existente.conta_id ?? null,
+          forma_pagamento: after.fin_forma_pagamento ?? existente.forma_pagamento ?? null,
+          descricao,
+          referencia_id: id,
+          vencimento: after.fin_vencimento ? String(after.fin_vencimento).slice(0, 10) : existente.vencimento ?? null,
+          parcela: Number(after.fin_parcelas || 1),
+          total_parcelas: Number(after.fin_parcelas || 1),
+        },
         actor,
         tx
       );
@@ -186,6 +294,9 @@ export async function syncLancamentoCompra(
       valor: Number(after.total || 0),
       forma_pagamento: after.fin_forma_pagamento ?? null,
       status: after.fin_status === 'pago' ? 'confirmado' : 'pendente',
+      vencimento: after.fin_vencimento ? String(after.fin_vencimento).slice(0, 10) : null,
+      parcela: Number(after.fin_parcelas || 1),
+      total_parcelas: Number(after.fin_parcelas || 1),
       referencia_tipo: referencia,
       referencia_id: id,
     },
@@ -422,6 +533,9 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     status: String(r.status || 'ativo'),
   }));
 
+  const saldoBase = saldoContasTotal;
+  const fluxoProjetado = montarFluxoProjetado(lancR.rows, recorrenciasR.rows, saldoBase);
+
   const porCategoria = new Map<string, { categoria: string; receita: number; despesa: number; investimento: number }>();
   for (const l of confirmados) {
     const nome = nomeCat(l.categoria_id);
@@ -489,6 +603,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     resultadoFinanceiro,
     resultadoGeral,
     recorrencias,
+    fluxoProjetado,
     recentes,
     contasTotal: contasR.rows.filter((c) => c.ativo !== false).length,
     aportesTotal: aportesR.rows.filter((a) => String(a.status) === 'confirmado').reduce((s, a) => s + Number(a.valor || 0), 0),
@@ -599,6 +714,223 @@ export async function cronRecorrencias(req: Request, res: Response) {
   if (secret && token !== secret) throw new HttpError(401, 'Token inválido.');
   const out = await processarRecorrencias({ id: null, name: 'Agendador' });
   res.json({ ok: true, ...out });
+}
+
+// ----------------------------------------------------------------------------
+// RENTABILIDADE — margem por produto e por canal
+// ----------------------------------------------------------------------------
+
+export async function rentabilidade(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(getResource('vendas')!, actor, 'read');
+  checkAccess(getResource('produtos')!, actor, 'read');
+  checkAccess(getResource('fichas')!, actor, 'read');
+  const s = getStore();
+  const [vendasR, produtosR, fichasR, itensR] = await Promise.all([
+    s.list(getResource('vendas')!, { page: 1, pageSize: 10000 }),
+    s.list(getResource('produtos')!, { page: 1, pageSize: 10000 }),
+    s.list(getResource('fichas')!, { page: 1, pageSize: 10000 }),
+    s.list(getResource('itens_venda')!, { page: 1, pageSize: 100000 }),
+  ]);
+
+  const custoPorProduto = new Map<number, number>();
+  for (const p of produtosR.rows) custoPorProduto.set(Number(p.id), Number(p.custo || 0));
+  for (const f of fichasR.rows) {
+    const id = Number(f.produto_id || 0);
+    const custoFicha = Number(f.custo_calculado || 0);
+    if (id && custoFicha > 0) custoPorProduto.set(id, custoFicha);
+  }
+  const nomeProduto = new Map(produtosR.rows.map((p) => [Number(p.id), labelOf(getResource('produtos')!, p)]));
+
+  const vendas = vendasR.rows.filter((v) => ['faturada', 'entregue'].includes(String(v.status)));
+  const porProduto = new Map<number, { produto: string; receita: number; cmv: number; margem: number; quantidade: number }>();
+  const porCanal = new Map<string, { canal: string; receita: number; cmv: number; margem: number; quantidade: number }>();
+  let receitaTotal = 0;
+  let cmvTotal = 0;
+  let qtdTotal = 0;
+
+  for (const v of vendas) {
+    const canal = String(v.canal_venda || 'balcao');
+    for (const item of itensR.rows.filter((i) => Number(i.venda_id) === Number(v.id))) {
+      const pid = Number(item.produto_id || 0);
+      const qtd = Number(item.quantidade || 0);
+      const preco = Number(item.subtotal || (item.preco_unitario || 0) * qtd);
+      const custoU = custoPorProduto.get(pid) || 0;
+      const custo = r2(custoU * qtd);
+      const margem = r2(preco - custo);
+      receitaTotal += preco;
+      cmvTotal += custo;
+      qtdTotal += qtd;
+
+      const p = porProduto.get(pid) || { produto: nomeProduto.get(pid) || `#${pid}`, receita: 0, cmv: 0, margem: 0, quantidade: 0 };
+      p.receita += preco;
+      p.cmv += custo;
+      p.margem += margem;
+      p.quantidade += qtd;
+      porProduto.set(pid, p);
+
+      const c = porCanal.get(canal) || { canal, receita: 0, cmv: 0, margem: 0, quantidade: 0 };
+      c.receita += preco;
+      c.cmv += custo;
+      c.margem += margem;
+      c.quantidade += qtd;
+      porCanal.set(canal, c);
+    }
+  }
+
+  const arredonda = <T extends { receita: number; cmv: number; margem: number; quantidade: number }>(x: T): T => ({ ...x, receita: r2(x.receita), cmv: r2(x.cmv), margem: r2(x.margem), margem_pct: x.receita > 0 ? r2((x.margem / x.receita) * 100) : 0 } as T & { margem_pct: number });
+
+  res.json({
+    receitaTotal: r2(receitaTotal),
+    cmvTotal: r2(cmvTotal),
+    margemTotal: r2(receitaTotal - cmvTotal),
+    margemPctTotal: receitaTotal > 0 ? r2(((receitaTotal - cmvTotal) / receitaTotal) * 100) : 0,
+    quantidadeTotal: qtdTotal,
+    porProduto: [...porProduto.values()].map(arredonda).sort((a, b) => b.receita - a.receita),
+    porCanal: [...porCanal.values()].map(arredonda).sort((a, b) => b.receita - a.receita),
+  });
+}
+
+// ----------------------------------------------------------------------------
+// INVESTIDORES — resumo de aportes, participação e distribuição
+// ----------------------------------------------------------------------------
+
+export async function resumoInvestidores(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(getResource('investidores')!, actor, 'read');
+  checkAccess(getResource('aportes')!, actor, 'read');
+  const s = getStore();
+  const [investR, aportesR] = await Promise.all([
+    s.list(getResource('investidores')!, { page: 1, pageSize: 5000 }),
+    s.list(getResource('aportes')!, { page: 1, pageSize: 10000 }),
+  ]);
+
+  const confirmados = aportesR.rows.filter((a) => String(a.status) === 'confirmado');
+  const porInvestidor = investR.rows.map((inv) => {
+    const id = Number(inv.id);
+    const doInv = confirmados.filter((a) => Number(a.investidor_id) === id);
+    const aportes = doInv.filter((a) => String(a.tipo) !== 'distribuicao_lucro');
+    const distribuicao = doInv.filter((a) => String(a.tipo) === 'distribuicao_lucro');
+    const totalAportado = r2(aportes.reduce((s, a) => s + Number(a.valor || 0), 0));
+    const totalDistribuido = r2(distribuicao.reduce((s, a) => s + Number(a.valor || 0), 0));
+    return {
+      id,
+      nome: labelOf(getResource('investidores')!, inv),
+      tipo: String(inv.tipo || 'investidor'),
+      participacao_pct: Number(inv.participacao_pct || 0),
+      totalAportado,
+      totalDistribuido,
+      posicao: r2(totalAportado - totalDistribuido),
+      quantidadeAportes: aportes.length,
+      ultimoAporte: doInv.length ? String(doInv[doInv.length - 1].data || '') : null,
+    };
+  });
+
+  res.json({
+    totalInvestido: r2(confirmados.filter((a) => String(a.tipo) !== 'distribuicao_lucro').reduce((s, a) => s + Number(a.valor || 0), 0)),
+    totalDistribuido: r2(confirmados.filter((a) => String(a.tipo) === 'distribuicao_lucro').reduce((s, a) => s + Number(a.valor || 0), 0)),
+    aportesNoMes: r2(confirmados.filter((a) => String(a.data || '').slice(0, 7) === hoje().slice(0, 7)).reduce((s, a) => s + Number(a.valor || 0), 0)),
+    porInvestidor: porInvestidor.sort((a, b) => b.totalAportado - a.totalAportado),
+  });
+}
+
+// ----------------------------------------------------------------------------
+// CONCILIAÇÃO BANCÁRIA — importar extrato e casar com lançamentos pendentes
+// ----------------------------------------------------------------------------
+
+function parseLinhasExtrato(body: Record<string, unknown>): { data: string; valor: number; descricao: string }[] {
+  const linhas: { data: string; valor: number; descricao: string }[] = [];
+  const add = (d: unknown, v: unknown, desc: unknown) => {
+    const valor = Math.abs(Number(String(v).replace(',', '.').replace(/[^\d.\-]/g, '')));
+    if (!isFinite(valor) || valor <= 0) return;
+    const data = String(d || '').trim().slice(0, 10);
+    linhas.push({ data, valor: r2(valor), descricao: String(desc || '').trim() });
+  };
+
+  const raw = body.linhas;
+  if (Array.isArray(raw)) {
+    for (const l of raw as Record<string, unknown>[]) add(l.data, l.valor, l.descricao || l.desc || l.texto);
+    return linhas;
+  }
+  const texto = String(body.texto || body.csv || body.extrato || '');
+  for (const line of texto.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    // formato flexível: data;valor;descricao  ou  valor;descricao  ou valor,descricao
+    const parts = t.split(/[;,\t]/).map((x) => x.trim()).filter(Boolean);
+    if (parts.length >= 3) add(parts[0], parts[1], parts.slice(2).join(' '));
+    else if (parts.length === 2) {
+      const v = Number(parts[0].replace(',', '.'));
+      if (isFinite(v) && /^[\d.,]+$/.test(parts[0])) add(hoje(), parts[0], parts[1]);
+      else add(parts[0], parts[1], '');
+    }
+  }
+  return linhas;
+}
+
+export async function conciliarExtrato(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(getResource('lancamentos_financeiros')!, actor, 'update');
+  const s = getStore();
+  const linhas = parseLinhasExtrato(req.body || {});
+  if (linhas.length === 0) throw new HttpError(400, 'Nenhuma linha válida. Use: data;valor;descrição.');
+
+  const contaId = req.body.conta_id ?? null;
+  const formaPagamento = req.body.forma_pagamento ?? null;
+  const lancR = await s.list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 100000 });
+  const pendentes = lancR.rows.filter((l) => String(l.status) === 'pendente' && ['receita', 'despesa'].includes(String(l.tipo)));
+
+  const confirmados: { data: string; valor: number; descricao: string; lancamento_id: number }[] = [];
+  const naoConfirmados: { data: string; valor: number; descricao: string; motivo: string }[] = [];
+
+  for (const linha of linhas) {
+    const valor = Number(linha.valor);
+    const buscaDesc = (linha.descricao || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim();
+    let cand = pendentes.filter((l) => Math.abs(Number(l.valor || 0) - valor) < 0.01);
+    if (linha.data) cand = cand.filter((l) => String(l.vencimento || l.data || '').slice(0, 10) === linha.data);
+    if (buscaDesc && cand.length > 1) {
+      const sobreDesc = cand.filter((l) => buscaDesc.includes(String(l.descricao || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim()) || String(l.descricao || '').toLowerCase().includes(buscaDesc));
+      if (sobreDesc.length) cand = sobreDesc;
+    }
+    if (cand.length !== 1) {
+      naoConfirmados.push({ ...linha, motivo: cand.length === 0 ? 'Nenhum lançamento pendente com esse valor/data.' : 'Mais de um lançamento compatível — confira manualmente.' });
+      continue;
+    }
+
+    const l = cand[0];
+    const id = Number(l.id);
+    await s.update(getResource('lancamentos_financeiros')!, id, {
+      status: 'confirmado',
+      conta_id: contaId ?? l.conta_id ?? null,
+      forma_pagamento: formaPagamento ?? l.forma_pagamento ?? null,
+      observacoes: [String(l.observacoes || ''), `Conciliado em ${hoje()} (extrato)`].filter(Boolean).join('\n'),
+    });
+    await s.audit(
+      {
+        usuario_id: actor.id || null,
+        usuario: actor.name,
+        acao: 'editar',
+        recurso: 'lancamentos_financeiros',
+        registro_id: id,
+        descricao: `Lançamento conciliado pelo extrato — ${l.descricao}`,
+        dados: { conciliado: true, valor: Number(l.valor || 0) },
+      }
+    );
+
+    // mantém a fonte (venda/compra) consistente
+    const tipoRef = String(l.referencia_tipo || '');
+    const refId = Number(l.referencia_id || 0);
+    if (tipoRef === 'venda' && refId) {
+      await s.update(getResource('vendas')!, refId, { fin_status: 'recebido', fin_recebido_em: linha.data || hoje() });
+    } else if (tipoRef === 'compra' && refId) {
+      await s.update(getResource('compras')!, refId, { fin_status: 'pago', fin_pago_em: linha.data || hoje() });
+    }
+
+    pendentes.splice(pendentes.indexOf(l), 1);
+    confirmados.push({ data: linha.data || String(l.data || ''), valor, descricao: String(l.descricao || ''), lancamento_id: id });
+  }
+
+  res.json({ ok: true, totalLinhas: linhas.length, confirmados, naoConfirmados });
 }
 
 /** Lançamento manual simples (usado pela tela Financeiro). */

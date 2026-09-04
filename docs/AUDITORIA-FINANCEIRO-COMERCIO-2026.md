@@ -295,12 +295,14 @@ O ERP já tem esqueleto de NF-e (`nfe.ts`). Ligar ao faturar (`venda` faturada =
 | **F2 — Comércio varejo/atacado** | preço atacado, canal de venda, catálogo com pedido/cotação | 2 dias | ✅ **entregue** |
 | **F3 — Contas a receber/pagar + recorrência** | agenda 30 dias, vencimentos, parcelas, aluguel/energia/folha/facção recorrentes (geradas por botão/cron) | 3 dias | ✅ **entregue** |
 | **F4 — DRE gerencial** | receita − CMV − mão de obra − despesas − impostos − financeiras = resultado | 2 dias | ✅ **entregue** |
-| **F5 — Fluxo projetado** | projeção por semana/mês com dados reais | 2 dias | ⬜ |
+| **F5 — Fluxo projetado** | projeção por semana/mês com dados reais | 2 dias | ✅ **entregue** |
 | **F6 — Pagamento online** | API Pix **Banco Inter** + webhook → marca recebido | 3–4 dias | ⏳ **aguardando Inter (~30 dias)** |
 | **F7 — Loja oficial (Nuvemshop/VTEX/Woo)** | webhook pedido → venda `site_varejo/site_atacado` | 4–7 dias | ⏳ **aguardando sócio (terça)** |
 | **F8 — NF-e** | emitir ao faturar; rejeição/cancelamento trata financeiro | 3–5 dias | ⏳ **aguardando sócio** |
 | **F9 — Integração contábil/financeira** | Omie/Bling/Nibo + exportação conciliada | 4–6 dias | ⏳ **aguardando contador** |
-| **F10 — Relatório de investidores** | aportes, participação, distribuição, DRE por sócio | 2 dias | ⬜ |
+| **F10 — Relatório de investidores** | aportes, participação, distribuição, DRE por sócio | 2 dias | ✅ **entregue** |
+| **F11 — Conciliação bancária** | importar extrato (data;valor;descrição) e casar com lançamentos pendentes | 2 dias | ✅ **entregue** |
+| **F12 — Rentabilidade** | margem por produto e por canal (vendas faturadas − custo) | 1–2 dias | ✅ **entregue** |
 
 ### Ordem sugerida
 
@@ -313,6 +315,16 @@ O ERP já tem esqueleto de NF-e (`nfe.ts`). Ligar ao faturar (`venda` faturada =
 ### Status das integrações externas (decisão de 04/09/2026)
 
 As integrações que dependem de credenciais/terceiros foram **adiadas** — a equipe resolveu que essa parte muda pouco o dia a dia agora.
+
+### Entregas internais adicionais (04/09/2026, mesmo PR)
+
+- **Fluxo de caixa projetado**: semanal e mensal, com pendências + recorrências futuras sobre o saldo atual.
+- **Rentabilidade**: receita, CMV e margem por produto e por canal (vendas faturadas/entregues).
+- **Relatório de investidores**: total aportado, participação, distribuição de lucro e posição por sócio/investidor.
+- **Conciliação bancária**: colar extrato (`data;valor;descrição`) → casa com lançamentos pendentes, confirma o caixa e atualiza a venda/compra de origem.
+- **Correção**: lançamento gerado por venda/compra agora copia `vencimento` e parcelas do pedido.
+
+### Status das integrações externas (decisão de 04/09/2026)
 
 | Item | Decisão / Pendência | Status |
 |---|---|---|

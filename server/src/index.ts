@@ -55,7 +55,7 @@ import {
 } from './producao';
 import { adminBackup, backupInfo } from './backup';
 import { catalogoPublico, criarPedidoCatalogo, rateLimitPublico } from './catalogos';
-import { cronRecorrencias, criarLancamentoManual, gerarRecorrencias, resumoFinanceiro } from './financeiro';
+import { conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
 import { vendaPDF, compraPDF } from './pdf';
 import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
 import { listAprovacoes, aprovarPedido, rejeitarPedido, countAprovacoes } from './approval';
@@ -172,6 +172,9 @@ app.get(
 app.get('/api/financeiro/resumo', wrap(resumoFinanceiro));
 app.post('/api/financeiro/lancamentos', wrap(criarLancamentoManual));
 app.post('/api/financeiro/recorrencias/gerar', wrap(gerarRecorrencias));
+app.get('/api/financeiro/rentabilidade', wrap(rentabilidade));
+app.get('/api/financeiro/investidores', wrap(resumoInvestidores));
+app.post('/api/financeiro/conciliacao', wrap(conciliarExtrato));
 app.post('/api/admin/financeiro/recorrencias', wrap(cronRecorrencias));
 
 // Página de detalhe do produto (fotos, grade de estoque, movimentações, OPs, ficha)
