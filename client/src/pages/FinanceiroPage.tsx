@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, CalendarClock, Coins, CreditCard, HandCoins, LineChart, Landmark, Plus, RefreshCw, Repeat, ScanLine, TrendingDown, TrendingUp, Users, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, CalendarClock, Coins, CreditCard, HandCoins, Landmark, LineChart, Plus, RefreshCw, Repeat, ScanLine, TrendingDown, TrendingUp, Users, Wallet } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatMoney } from '../lib/format';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
@@ -24,7 +24,7 @@ type Lanc = {
 
 type ContaPendente = {
   id: number;
-  tipo: 'venda' | 'compra';
+  tipo: string;
   nome: string;
   valor: number;
   vencimento: string | null;
@@ -87,6 +87,15 @@ type Resumo = {
   aportesTotal: number;
 };
 
+const TABS = [
+  { id: 'visao', label: 'Visão geral' },
+  { id: 'dre', label: 'DRE' },
+  { id: 'fluxo', label: 'Fluxo projetado' },
+  { id: 'rentabilidade', label: 'Rentabilidade' },
+  { id: 'investidores', label: 'Investidores' },
+  { id: 'conciliacao', label: 'Conciliação' },
+];
+
 const CANAL_LABEL: Record<string, string> = {
   balcao: 'Balcão',
   representante: 'Representante',
@@ -101,6 +110,7 @@ export default function FinanceiroPage() {
   const [data, setData] = useState<Resumo | null>(null);
   const [rentab, setRentab] = useState<Rentabilidade | null>(null);
   const [investidores, setInvestidores] = useState<InvestidoresResumo | null>(null);
+  const [tab, setTab] = useState('visao');
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
   const [gerando, setGerando] = useState(false);
@@ -127,6 +137,19 @@ export default function FinanceiroPage() {
     }
   }, []);
 
+  async function gerarRecorrencias() {
+    setGerando(true);
+    try {
+      const r = await api.post<{ ok: boolean; gerados: number; descricoes: string[] }>('/financeiro/recorrencias/gerar', {});
+      toast.success(r.gerados > 0 ? `${r.gerados} recorrência(s) gerada(s).` : 'Nenhuma recorrência pendente.');
+      await load();
+    } catch (e: any) {
+      toast.error(e.message || 'Não foi possível gerar as recorrências.');
+    } finally {
+      setGerando(false);
+    }
+  }
+
   async function conciliar() {
     setConciliando(true);
     setConcResult(null);
@@ -139,19 +162,6 @@ export default function FinanceiroPage() {
       toast.error(e.message || 'Não foi possível conciliar o extrato.');
     } finally {
       setConciliando(false);
-    }
-  }
-
-  async function gerarRecorrencias() {
-    setGerando(true);
-    try {
-      const r = await api.post<{ ok: boolean; gerados: number; descricoes: string[] }>('/financeiro/recorrencias/gerar', {});
-      toast.success(r.gerados > 0 ? `${r.gerados} recorrência(s) gerada(s).` : 'Nenhuma recorrência pendente.');
-      await load();
-    } catch (e: any) {
-      toast.error(e.message || 'Não foi possível gerar as recorrências.');
-    } finally {
-      setGerando(false);
     }
   }
 
@@ -172,7 +182,7 @@ export default function FinanceiroPage() {
             Financeiro
           </span>
         }
-        description="Fluxo de caixa, receitas, despesas, custos, contas a receber/pagar e aportes de investidores."
+        description="Visão executiva do caixa e indicadores financeiros. Detalhes por aba."
         actions={
           <>
             <button className="btn-secondary" onClick={load} disabled={loading}>
@@ -199,114 +209,298 @@ export default function FinanceiroPage() {
 
       {data && (
         <>
-          {/* KPIs */}
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Kpi icon={<Wallet className="h-5 w-5" />} label="Saldo em contas" value={formatMoney(data.saldoContasTotal)} tone={pos(data.saldoContasTotal).replace('text-', '')} />
-            <Kpi icon={<TrendingUp className="h-5 w-5" />} label="Receitas no mês" value={formatMoney(data.receitasMes)} tone="emerald" />
-            <Kpi icon={<TrendingDown className="h-5 w-5" />} label="Despesas no mês" value={formatMoney(data.despesasMes)} tone="red" />
-            <Kpi icon={<CreditCard className="h-5 w-5" />} label="Resultado operacional do mês" value={formatMoney(data.resultadoOperacionalMes)} tone={data.resultadoOperacionalMes >= 0 ? 'emerald' : 'red'} />
+          {/* Tabs — mantém a página limpa; cada assunto tem seu lugar */}
+          <div className="mb-4 flex flex-wrap gap-1 rounded-xl border border-slate-200 bg-white p-1">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${tab === t.id ? 'bg-navy-800 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
+              >
+                {t.label}
+              </button>
+            ))}
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Kpi icon={<ArrowUpRight className="h-5 w-5" />} label="A receber" value={formatMoney(data.aReceber)} tone="amber" small />
-            <Kpi icon={<ArrowDownRight className="h-5 w-5" />} label="A pagar" value={formatMoney(data.aPagar)} tone="amber" small />
-            <Kpi icon={<HandCoins className="h-5 w-5" />} label="Aportes confirmados" value={formatMoney(data.aportesTotal)} tone="blue" small />
-            <Kpi icon={<CalendarClock className="h-5 w-5" />} label="Vencidos (rec. + pag.)" value={formatMoney(data.aReceberVencidas + data.aPagarVencidas)} tone="red" small />
-          </div>
+          {/* ---------------- VISÃO GERAL ---------------- */}
+          {tab === 'visao' && (
+            <>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <Kpi icon={<Wallet className="h-5 w-5" />} label="Saldo em contas" value={formatMoney(data.saldoContasTotal)} tone={pos(data.saldoContasTotal).replace('text-', '')} />
+                <Kpi icon={<TrendingUp className="h-5 w-5" />} label="Receitas no mês" value={formatMoney(data.receitasMes)} tone="emerald" />
+                <Kpi icon={<TrendingDown className="h-5 w-5" />} label="Despesas no mês" value={formatMoney(data.despesasMes)} tone="red" />
+                <Kpi icon={<CreditCard className="h-5 w-5" />} label="Resultado do mês" value={formatMoney(data.resultadoOperacionalMes)} tone={data.resultadoOperacionalMes >= 0 ? 'emerald' : 'red'} />
+              </div>
 
-          {/* DRE gerencial */}
-          <section className="card mt-4 overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <div>
+              <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <Kpi icon={<ArrowUpRight className="h-5 w-5" />} label="A receber" value={formatMoney(data.aReceber)} tone="amber" small />
+                <Kpi icon={<ArrowDownRight className="h-5 w-5" />} label="A pagar" value={formatMoney(data.aPagar)} tone="amber" small />
+                <Kpi icon={<HandCoins className="h-5 w-5" />} label="Aportes confirmados" value={formatMoney(data.aportesTotal)} tone="blue" small />
+                <Kpi icon={<CalendarClock className="h-5 w-5" />} label="Vencidos" value={formatMoney(data.aReceberVencidas + data.aPagarVencidas)} tone="red" small />
+              </div>
+
+              <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                <section className="card p-4">
+                  <h2 className="text-sm font-bold text-navy-900">Saldo por conta</h2>
+                  <div className="mt-3 space-y-2">
+                    {data.saldoContas.length === 0 && <p className="text-xs text-slate-400">Cadastre uma conta financeira.</p>}
+                    {data.saldoContas.map((c) => (
+                      <div key={c.conta_id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-navy-900">{c.nome}</p>
+                          <p className="text-[11px] capitalize text-slate-400">{c.tipo}</p>
+                        </div>
+                        <span className={`text-sm font-semibold tabular-nums ${c.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(c.saldo)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <Link to="/contas-financeiras" className="btn-secondary mt-3 w-full justify-center">Gerenciar contas</Link>
+                </section>
+
+                <section className="card p-4">
+                  <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+                    <AlertTriangle className="h-4 w-4 text-red-500" /> Contas em aberto
+                  </h2>
+                  <p className="mt-0.5 text-xs text-slate-400">Vencidos e próximos 30 dias.</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <AgendaKpi label="A receber (30d)" valor={data.aReceber30} tone="green" />
+                    <AgendaKpi label="A pagar (30d)" valor={data.aPagar30} tone="red" />
+                    <AgendaKpi label="Receb. vencidos" valor={data.aReceberVencidas} tone="red" />
+                    <AgendaKpi label="Pag. vencidos" valor={data.aPagarVencidas} tone="red" />
+                  </div>
+                  <div className="mt-3 space-y-1.5 text-xs">
+                    {data.aPagarLista.slice(0, 4).map((l) => (
+                      <div key={`p-${l.id}`} className="flex justify-between rounded bg-slate-50 px-2 py-1.5">
+                        <span className="truncate">{l.nome} {l.parcelas > 1 ? `(${l.parcelas}x)` : ''}</span>
+                        <span className="tabular-nums text-red-600">{formatMoney(l.valor)}</span>
+                      </div>
+                    ))}
+                    {data.aReceberLista.slice(0, 4).map((l) => (
+                      <div key={`r-${l.id}`} className="flex justify-between rounded bg-slate-50 px-2 py-1.5">
+                        <span className="truncate">{l.nome} {l.parcelas > 1 ? `(${l.parcelas}x)` : ''}</span>
+                        <span className="tabular-nums text-emerald-600">{formatMoney(l.valor)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <Link to="/vendas" className="btn-secondary flex-1 justify-center">Vendas</Link>
+                    <Link to="/compras" className="btn-secondary flex-1 justify-center">Compras</Link>
+                  </div>
+                </section>
+
+                <section className="card p-4">
+                  <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+                    <Repeat className="h-4 w-4 text-navy-500" /> Recorrências
+                  </h2>
+                  <p className="mt-0.5 text-xs text-slate-400">Aluguel, energia, folha, facção.</p>
+                  <div className="mt-3 space-y-2">
+                    {data.recorrencias.length === 0 && <p className="text-xs text-slate-400">Nenhuma recorrência cadastrada.</p>}
+                    {data.recorrencias.slice(0, 4).map((r) => (
+                      <div key={r.id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-navy-900">{r.descricao}</p>
+                          <p className="text-[11px] text-slate-400">{r.frequencia} · próxima {r.proxima_geracao || '—'}</p>
+                        </div>
+                        <span className={`shrink-0 text-sm font-bold tabular-nums ${r.tipo === 'despesa' ? 'text-red-600' : 'text-emerald-600'}`}>{formatMoney(r.valor)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <Link to="/recorrencias-financeiras" className="btn-secondary flex-1 justify-center">Gerenciar</Link>
+                    <button className="btn-secondary flex-1 justify-center" onClick={gerarRecorrencias} disabled={gerando}>
+                      <RefreshCw className={`h-4 w-4 ${gerando ? 'animate-spin' : ''}`} /> Gerar
+                    </button>
+                  </div>
+                </section>
+              </div>
+
+              <section className="card mt-4 overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                  <div>
+                    <h2 className="text-sm font-bold text-navy-900">Últimos lançamentos</h2>
+                    <p className="text-xs text-slate-400">Livro-caixa integrado a vendas, compras, custos e aportes.</p>
+                  </div>
+                  <button className="btn-secondary" onClick={() => setTab('dre')}>Ver DRE</button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Data</th>
+                        <th>Descrição</th>
+                        <th className="hidden md:table-cell">Categoria</th>
+                        <th className="text-right">Valor</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.recentes.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="py-8 text-center text-sm text-slate-400">Nenhum lançamento financeiro no sistema.</td>
+                        </tr>
+                      )}
+                      {data.recentes.slice(0, 8).map((l) => (
+                        <tr key={l.id}>
+                          <td className="whitespace-nowrap text-xs text-slate-500">{l.data}</td>
+                          <td className="max-w-[240px] truncate font-medium text-navy-900">{l.descricao}</td>
+                          <td className="hidden text-sm text-slate-600 md:table-cell">{l.categoria}</td>
+                          <td className={`text-right font-semibold tabular-nums ${l.tipo === 'despesa' ? 'text-red-600' : 'text-emerald-600'}`}>
+                            {l.tipo === 'despesa' ? '−' : '+'} {formatMoney(l.valor)}
+                          </td>
+                          <td>
+                            <Badge tone={l.status === 'confirmado' ? 'green' : l.status === 'pendente' ? 'amber' : 'red'}>{l.status === 'confirmado' ? 'Confirmado' : l.status === 'pendente' ? 'Pendente' : 'Cancelado'}</Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
+          )}
+
+          {/* ---------------- DRE ---------------- */}
+          {tab === 'dre' && (
+            <section className="card overflow-hidden">
+              <div className="border-b border-slate-200 px-4 py-3">
                 <h2 className="text-sm font-bold text-navy-900">DRE gerencial — {data.mes}</h2>
                 <p className="text-xs text-slate-400">Receita, custo, despesas e resultado do mês (lançamentos confirmados).</p>
               </div>
-              <span className="badge !bg-navy-50 !text-navy-700">Base: livro financeiro</span>
-            </div>
-            <div className="grid gap-x-6 gap-y-1.5 px-4 py-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
-              <DreLinha label="Receita" value={data.dre.receita} tone="green" />
-              <DreLinha label="Custo mercadoria/insumos (CMV)" value={-data.dre.cmv} tone="red" />
-              <DreLinha label="Mão de obra / produção" value={-data.dre.mao_obra} tone="red" />
-              <DreLinha label="Despesas operacionais" value={-data.dre.despesas_operacionais} tone="red" />
-              <DreLinha label="Impostos" value={-data.dre.impostos} tone="red" />
-              <DreLinha label="Despesas financeiras" value={-data.dre.despesas_financeiras} tone="red" />
-              <DreLinha label="Lucro bruto" value={data.lucroBruto} tone={data.lucroBruto >= 0 ? 'green' : 'red'} bold />
-              <DreLinha label="Resultado operacional" value={data.resultadoOperacional} tone={data.resultadoOperacional >= 0 ? 'green' : 'red'} bold />
-              <DreLinha label="Resultado financeiro" value={data.resultadoFinanceiro} tone={data.resultadoFinanceiro >= 0 ? 'green' : 'red'} bold />
-              <DreLinha label="Investimentos (aporte)" value={data.dre.investimentos} tone="blue" />
-            </div>
-            <div className="border-t border-slate-200 px-4 py-3 text-right text-sm">
-              <span className="mr-2 font-semibold text-slate-500">Resultado geral do mês</span>
-              <span className={`text-base font-bold tabular-nums ${data.resultadoGeral >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(data.resultadoGeral)}</span>
-            </div>
-          </section>
-
-          {/* Fluxo projetado + Rentabilidade */}
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <section className="card p-4">
-              <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
-                <LineChart className="h-4 w-4 text-navy-500" /> Fluxo de caixa projetado
-              </h2>
-              <p className="mt-0.5 text-xs text-slate-400">Pendências e recorrências futuras sobre o saldo atual por semana/mês.</p>
-              <div className="mt-3 overflow-x-auto">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Período</th>
-                      <th className="text-right">Entradas</th>
-                      <th className="text-right">Saídas</th>
-                      <th className="text-right">Saldo</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.fluxoProjetado.semanal.map((l) => (
-                      <tr key={l.periodo}>
-                        <td className="whitespace-nowrap text-xs text-slate-500">{l.label}</td>
-                        <td className="text-right text-xs tabular-nums text-emerald-600">{formatMoney(l.entradas)}</td>
-                        <td className="text-right text-xs tabular-nums text-red-600">{formatMoney(l.saidas)}</td>
-                        <td className={`text-right text-xs font-semibold tabular-nums ${l.acumulado >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(l.acumulado)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="grid gap-x-6 gap-y-1.5 px-4 py-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <DreLinha label="Receita" value={data.dre.receita} tone="green" />
+                <DreLinha label="Custo mercadoria/insumos (CMV)" value={-data.dre.cmv} tone="red" />
+                <DreLinha label="Mão de obra / produção" value={-data.dre.mao_obra} tone="red" />
+                <DreLinha label="Despesas operacionais" value={-data.dre.despesas_operacionais} tone="red" />
+                <DreLinha label="Impostos" value={-data.dre.impostos} tone="red" />
+                <DreLinha label="Despesas financeiras" value={-data.dre.despesas_financeiras} tone="red" />
+                <DreLinha label="Lucro bruto" value={data.lucroBruto} tone={data.lucroBruto >= 0 ? 'green' : 'red'} bold />
+                <DreLinha label="Resultado operacional" value={data.resultadoOperacional} tone={data.resultadoOperacional >= 0 ? 'green' : 'red'} bold />
+                <DreLinha label="Resultado financeiro" value={data.resultadoFinanceiro} tone={data.resultadoFinanceiro >= 0 ? 'green' : 'red'} bold />
+                <DreLinha label="Investimentos (aporte)" value={data.dre.investimentos} tone="blue" />
               </div>
-              <Link to="/recorrencias-financeiras" className="btn-secondary mt-3 w-full justify-center">Ver recorrências</Link>
+              <div className="border-t border-slate-200 px-4 py-3 text-right text-sm">
+                <span className="mr-2 font-semibold text-slate-500">Resultado geral do mês</span>
+                <span className={`text-base font-bold tabular-nums ${data.resultadoGeral >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(data.resultadoGeral)}</span>
+              </div>
+              <div className="grid gap-4 border-t border-slate-100 p-4 md:grid-cols-2">
+                <div>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Por categoria</h3>
+                  <ul className="space-y-1.5">
+                    {data.categorias.slice(0, 8).map((c) => (
+                      <li key={c.categoria} className="flex justify-between text-sm">
+                        <span className="truncate text-slate-600">{c.categoria}</span>
+                        <span className={`tabular-nums ${c.despesa > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{formatMoney(c.despesa > 0 ? -c.despesa : c.receita + c.investimento)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Vendas por canal (mês)</h3>
+                  <ul className="space-y-1.5">
+                    {data.vendasPorCanal.length === 0 && <li className="text-sm text-slate-400">Sem vendas faturadas no mês.</li>}
+                    {data.vendasPorCanal.map((c) => (
+                      <li key={c.canal} className="flex justify-between text-sm">
+                        <span className="text-slate-600">{CANAL_LABEL[c.canal] || c.canal}</span>
+                        <span className="tabular-nums text-emerald-600">{formatMoney(c.valor)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
             </section>
+          )}
 
+          {/* ---------------- FLUXO PROJETADO ---------------- */}
+          {tab === 'fluxo' && (
+            <section className="card overflow-hidden">
+              <div className="border-b border-slate-200 px-4 py-3">
+                <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+                  <LineChart className="h-4 w-4 text-navy-500" /> Fluxo de caixa projetado
+                </h2>
+                <p className="text-xs text-slate-400">Pendências e recorrências futuras sobre o saldo atual de {formatMoney(data.fluxoProjetado.saldoBase)}.</p>
+              </div>
+              <div className="grid gap-4 p-4 lg:grid-cols-2">
+                <div>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Semanal</h3>
+                  <table className="table">
+                    <thead><tr><th>Período</th><th className="text-right">Entradas</th><th className="text-right">Saídas</th><th className="text-right">Saldo</th></tr></thead>
+                    <tbody>
+                      {data.fluxoProjetado.semanal.map((l) => (
+                        <tr key={l.periodo}>
+                          <td className="text-xs text-slate-500">{l.label}</td>
+                          <td className="text-right text-xs tabular-nums text-emerald-600">{formatMoney(l.entradas)}</td>
+                          <td className="text-right text-xs tabular-nums text-red-600">{formatMoney(l.saidas)}</td>
+                          <td className={`text-right text-xs font-semibold tabular-nums ${l.acumulado >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(l.acumulado)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Mensal</h3>
+                  <table className="table">
+                    <thead><tr><th>Período</th><th className="text-right">Entradas</th><th className="text-right">Saídas</th><th className="text-right">Saldo</th></tr></thead>
+                    <tbody>
+                      {data.fluxoProjetado.mensal.map((l) => (
+                        <tr key={l.periodo}>
+                          <td className="text-xs text-slate-500">{l.label}</td>
+                          <td className="text-right text-xs tabular-nums text-emerald-600">{formatMoney(l.entradas)}</td>
+                          <td className="text-right text-xs tabular-nums text-red-600">{formatMoney(l.saidas)}</td>
+                          <td className={`text-right text-xs font-semibold tabular-nums ${l.acumulado >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(l.acumulado)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* ---------------- RENTABILIDADE ---------------- */}
+          {tab === 'rentabilidade' && (
             <section className="card p-4">
               <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
                 <Landmark className="h-4 w-4 text-navy-500" /> Rentabilidade
               </h2>
               <p className="mt-0.5 text-xs text-slate-400">Margem de vendas faturadas/entregues (receita − custo do produto).</p>
-              <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <AgendaKpi label="Receita" valor={rentab?.receitaTotal || 0} tone="green" />
                 <AgendaKpi label="CMV" valor={rentab?.cmvTotal || 0} tone="red" />
                 <AgendaKpi label="Margem" valor={rentab?.margemTotal || 0} tone="green" />
                 <AgendaKpi label="Margem %" valor={rentab?.margemPctTotal || 0} tone="green" />
               </div>
-              <p className="mt-2 text-[11px] text-slate-400">{rentab?.quantidadeTotal || 0} peça(s) vendida(s)</p>
-              <div className="mt-2 space-y-1.5">
+              <h3 className="mt-5 mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Por canal</h3>
+              <div className="grid gap-1.5 sm:grid-cols-2">
                 {(rentab?.porCanal || []).map((c) => (
-                  <div key={c.produto} className="flex justify-between text-xs">
-                    <span className="capitalize text-slate-500">{c.produto}</span>
-                    <span className="tabular-nums text-slate-700">{formatMoney(c.receita)} · margem {c.margem_pct.toFixed(1)}%</span>
+                  <div key={c.produto} className="flex justify-between rounded-lg border border-slate-100 px-3 py-2 text-sm">
+                    <span className="capitalize text-slate-600">{c.produto}</span>
+                    <span className="tabular-nums text-slate-700">{formatMoney(c.receita)} · {c.margem_pct.toFixed(1)}%</span>
                   </div>
                 ))}
               </div>
-              <div className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                {(rentab?.porProduto || []).slice(0, 6).map((p) => (
-                  <div key={p.produto} className="rounded-lg border border-slate-100 px-3 py-2">
-                    <p className="truncate text-xs font-medium text-navy-900">{p.produto}</p>
-                    <p className="text-[11px] text-slate-400">{p.quantidade} un · {p.margem_pct.toFixed(1)}% · {formatMoney(p.margem)}</p>
-                  </div>
-                ))}
+              <h3 className="mt-5 mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Por produto</h3>
+              <div className="overflow-x-auto">
+                <table className="table">
+                  <thead><tr><th>Produto</th><th className="text-right">Qtd.</th><th className="text-right">Receita</th><th className="text-right">CMV</th><th className="text-right">Margem</th><th className="text-right">%</th></tr></thead>
+                  <tbody>
+                    {(rentab?.porProduto || []).map((p) => (
+                      <tr key={p.produto}>
+                        <td className="max-w-[220px] truncate font-medium text-navy-900">{p.produto}</td>
+                        <td className="text-right tabular-nums text-slate-500">{p.quantidade}</td>
+                        <td className="text-right tabular-nums text-emerald-600">{formatMoney(p.receita)}</td>
+                        <td className="text-right tabular-nums text-red-600">{formatMoney(p.cmv)}</td>
+                        <td className="text-right font-semibold tabular-nums text-navy-900">{formatMoney(p.margem)}</td>
+                        <td className="text-right tabular-nums text-slate-500">{p.margem_pct.toFixed(1)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <Link to="/relatorios" className="btn-secondary mt-3 w-full justify-center">Ver relatórios</Link>
             </section>
-          </div>
+          )}
 
-          {/* Investidores + Conciliação */}
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          {/* ---------------- INVESTIDORES ---------------- */}
+          {tab === 'investidores' && (
             <section className="card p-4">
               <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
                 <Users className="h-4 w-4 text-navy-500" /> Investidores / Sócios
@@ -317,21 +511,36 @@ export default function FinanceiroPage() {
                 <AgendaKpi label="No mês" valor={investidores?.aportesNoMes || 0} tone="blue" />
                 <AgendaKpi label="Distribuído" valor={investidores?.totalDistribuido || 0} tone="red" />
               </div>
-              <ul className="mt-3 space-y-1.5">
-                {(investidores?.porInvestidor || []).length === 0 && <li className="text-xs text-slate-400">Nenhum investidor cadastrado ainda.</li>}
-                {(investidores?.porInvestidor || []).slice(0, 6).map((i) => (
-                  <li key={i.id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-navy-900">{i.nome}</p>
-                      <p className="text-[11px] text-slate-400">{i.participacao_pct}% · {i.quantidadeAportes} aporte(s) · {i.ultimoAporte || 'sem data'}</p>
-                    </div>
-                    <span className="shrink-0 text-sm font-semibold tabular-nums text-emerald-600">{formatMoney(i.totalAportado)}</span>
-                  </li>
-                ))}
-              </ul>
-              <Link to="/investidores" className="btn-secondary mt-3 w-full justify-center">Gerenciar investidores</Link>
+              <div className="mt-4 overflow-x-auto">
+                <table className="table">
+                  <thead><tr><th>Investidor / Sócio</th><th>Tipo</th><th className="text-right">Part. %</th><th className="text-right">Aportes</th><th className="text-right">Total aportado</th><th className="text-right">Distribuído</th><th className="text-right">Posição</th></tr></thead>
+                  <tbody>
+                    {(investidores?.porInvestidor || []).length === 0 && (
+                      <tr><td colSpan={7} className="py-8 text-center text-sm text-slate-400">Nenhum investidor cadastrado.</td></tr>
+                    )}
+                    {(investidores?.porInvestidor || []).map((i) => (
+                      <tr key={i.id}>
+                        <td className="font-medium text-navy-900">{i.nome}</td>
+                        <td className="capitalize text-slate-500">{i.tipo}</td>
+                        <td className="text-right tabular-nums text-slate-500">{i.participacao_pct}%</td>
+                        <td className="text-right tabular-nums text-slate-500">{i.quantidadeAportes}</td>
+                        <td className="text-right tabular-nums text-emerald-600">{formatMoney(i.totalAportado)}</td>
+                        <td className="text-right tabular-nums text-red-600">{formatMoney(i.totalDistribuido)}</td>
+                        <td className="text-right font-semibold tabular-nums text-navy-900">{formatMoney(i.posicao)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-3 flex gap-2">
+                <Link to="/investidores" className="btn-secondary flex-1 justify-center">Investidores</Link>
+                <Link to="/aportes" className="btn-secondary flex-1 justify-center">Aportes</Link>
+              </div>
             </section>
+          )}
 
+          {/* ---------------- CONCILIAÇÃO ---------------- */}
+          {tab === 'conciliacao' && (
             <section className="card p-4">
               <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
                 <ScanLine className="h-4 w-4 text-navy-500" /> Conciliação bancária
@@ -349,182 +558,13 @@ export default function FinanceiroPage() {
               {concResult && (
                 <div className="mt-3 space-y-1.5 text-xs">
                   <p className={`font-semibold ${concResult.confirmados.length > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>{concResult.confirmados.length} conciliado(s) · {concResult.naoConfirmados.length} pendente(s) de revisão</p>
-                  {concResult.naoConfirmados.slice(0, 4).map((l, idx) => (
+                  {concResult.naoConfirmados.slice(0, 6).map((l, idx) => (
                     <p key={idx} className="rounded bg-amber-50 px-2 py-1 text-amber-700">• {l.data} · {formatMoney(l.valor)} · {l.motivo}</p>
                   ))}
                 </div>
               )}
             </section>
-          </div>
-
-          <div className="mt-4 grid gap-4 lg:grid-cols-3">
-            {/* Agenda 30 dias */}
-            <section className="card p-4">
-              <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
-                <AlertTriangle className="h-4 w-4 text-red-500" /> Agenda 30 dias
-              </h2>
-              <p className="mt-0.5 text-xs text-slate-400">Vencidos, próximos e contas em aberto.</p>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <AgendaKpi label="A receber" valor={data.aReceber30} tone={data.aReceber30 >= 0 ? 'green' : 'red'} />
-                <AgendaKpi label="A pagar (30d)" valor={data.aPagar30} tone="red" />
-                <AgendaKpi label="Receb. vencidos" valor={data.aReceberVencidas} tone="red" />
-                <AgendaKpi label="Pag. vencidos" valor={data.aPagarVencidas} tone="red" />
-              </div>
-              <ul className="mt-3 space-y-1.5 font-mono text-[11px] text-slate-500">
-                {(data.aReceberLista.length === 0 && data.aPagarLista.length === 0) && <li className="text-slate-400">Nenhuma conta em aberto.</li>}
-                {data.aPagarLista.slice(0, 5).map((l) => (
-                  <li key={`p-${l.id}`} className="flex justify-between">
-                    <span className="truncate pr-2">▸ {l.nome} {l.parcelas > 1 ? `(${l.parcelas}x)` : ''}</span>
-                    <span className={l.vencimento && l.vencimento < data.mes ? 'text-red-600' : ''}>{formatMoney(l.valor)}</span>
-                  </li>
-                ))}
-                {data.aReceberLista.slice(0, 5).map((l) => (
-                  <li key={`r-${l.id}`} className="flex justify-between">
-                    <span className="truncate pr-2">◂ {l.nome} {l.parcelas > 1 ? `(${l.parcelas}x)` : ''}</span>
-                    <span className={`${l.vencimento && l.vencimento < data.mes ? 'text-red-600' : ''} text-emerald-600`}>{formatMoney(l.valor)}</span>
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-3 flex gap-2">
-                <Link to="/vendas" className="btn-secondary flex-1 justify-center">Vendas</Link>
-                <Link to="/compras" className="btn-secondary flex-1 justify-center">Compras</Link>
-              </div>
-            </section>
-
-            {/* Fluxo por categoria */}
-            <section className="card p-4">
-              <h2 className="text-sm font-bold text-navy-900">Fluxo por categoria</h2>
-              <p className="mt-0.5 text-xs text-slate-400">Lançamentos confirmados (acumulado)</p>
-              <div className="mt-3 space-y-2">
-                {data.categorias.length === 0 && <p className="text-xs text-slate-400">Nenhum lançamento ainda.</p>}
-                {data.categorias.map((c) => (
-                  <div key={c.categoria} className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-navy-900">{c.categoria}</p>
-                      <p className="text-[11px] text-slate-400">Entradas {formatMoney(c.receita + c.investimento)} · Saídas {formatMoney(c.despesa)}</p>
-                    </div>
-                    <span className={`shrink-0 text-sm font-bold tabular-nums ${c.despesa > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                      {formatMoney(c.despesa > 0 ? -c.despesa : c.receita + c.investimento)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            {/* Vendas por canal */}
-            <section className="card p-4">
-              <h2 className="text-sm font-bold text-navy-900">Vendas faturadas por canal</h2>
-              <p className="mt-0.5 text-xs text-slate-400">No mês atual</p>
-              <div className="mt-3 space-y-2">
-                {data.vendasPorCanal.length === 0 && <p className="text-xs text-slate-400">Ainda não há vendas faturadas no mês.</p>}
-                {data.vendasPorCanal.map((c) => (
-                  <div key={c.canal} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
-                    <span className="text-sm text-slate-700">{CANAL_LABEL[c.canal] || c.canal}</span>
-                    <span className="text-sm font-semibold tabular-nums text-emerald-600">{formatMoney(c.valor)}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 flex gap-2">
-                <Link to="/vendas" className="btn-secondary flex-1 justify-center">Ver vendas</Link>
-                <Link to="/catalogos" className="btn-secondary flex-1 justify-center">Catálogos</Link>
-              </div>
-            </section>
-
-            {/* Recorrências */}
-            <section className="card p-4">
-              <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
-                <Repeat className="h-4 w-4 text-navy-500" /> Recorrências
-              </h2>
-              <p className="mt-0.5 text-xs text-slate-400">Aluguel, energia, folha, facção, assinaturas.</p>
-              <div className="mt-3 space-y-2">
-                {data.recorrencias.length === 0 && <p className="text-xs text-slate-400">Nenhuma recorrência cadastrada.</p>}
-                {data.recorrencias.slice(0, 5).map((r) => (
-                  <div key={r.id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-navy-900">{r.descricao}</p>
-                      <p className="text-[11px] text-slate-400">{r.frequencia} · próxima {r.proxima_geracao || '—'}</p>
-                    </div>
-                    <span className={`shrink-0 text-sm font-bold tabular-nums ${r.tipo === 'despesa' ? 'text-red-600' : 'text-emerald-600'}`}>{formatMoney(r.valor)}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 flex gap-2">
-                <Link to="/recorrencias-financeiras" className="btn-secondary flex-1 justify-center">Gerenciar</Link>
-                <button className="btn-secondary flex-1 justify-center" onClick={gerarRecorrencias} disabled={gerando}>
-                  <RefreshCw className={`h-4 w-4 ${gerando ? 'animate-spin' : ''}`} /> Gerar
-                </button>
-              </div>
-            </section>
-
-            {/* Saldo por conta */}
-            <section className="card p-4">
-              <h2 className="text-sm font-bold text-navy-900">Saldo por conta</h2>
-              <p className="mt-0.5 text-xs text-slate-400">{data.contasTotal} conta(s) ativa(s)</p>
-              <div className="mt-3 space-y-2">
-                {data.saldoContas.length === 0 && <p className="text-xs text-slate-400">Cadastre uma conta financeira para acompanhar o caixa.</p>}
-                {data.saldoContas.map((c) => (
-                  <div key={c.conta_id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-navy-900">{c.nome}</p>
-                      <p className="text-[11px] capitalize text-slate-400">{c.tipo}</p>
-                    </div>
-                    <span className={`text-sm font-semibold tabular-nums ${c.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(c.saldo)}</span>
-                  </div>
-                ))}
-              </div>
-              <Link to="/contas-financeiras" className="btn-secondary mt-3 w-full justify-center">Gerenciar contas</Link>
-            </section>
-          </div>
-
-          {/* Últimos lançamentos */}
-          <section className="card mt-4 overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <div>
-                <h2 className="text-sm font-bold text-navy-900">Últimos lançamentos</h2>
-                <p className="text-xs text-slate-400">Livro-caixa integrado a vendas, compras, custos e aportes.</p>
-              </div>
-              <Link to="/lancamentos" className="btn-secondary">
-                <Plus className="h-4 w-4" /> <span className="hidden sm:inline">Novo lançamento</span>
-              </Link>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Data</th>
-                    <th>Descrição</th>
-                    <th className="hidden md:table-cell">Categoria</th>
-                    <th className="hidden lg:table-cell">Conta</th>
-                    <th className="text-right">Valor</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.recentes.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-sm text-slate-400">
-                        Nenhum lançamento financeiro no sistema. Inclua vendas, compras, custos ou um aporte.
-                      </td>
-                    </tr>
-                  )}
-                  {data.recentes.slice(0, 20).map((l) => (
-                    <tr key={l.id}>
-                      <td className="whitespace-nowrap text-xs text-slate-500">{l.data}</td>
-                      <td className="max-w-[260px] truncate font-medium text-navy-900">{l.descricao}</td>
-                      <td className="hidden text-sm text-slate-600 md:table-cell">{l.categoria}</td>
-                      <td className="hidden text-sm text-slate-500 lg:table-cell">{l.conta}</td>
-                      <td className={`text-right font-semibold tabular-nums ${l.tipo === 'despesa' ? 'text-red-600' : 'text-emerald-600'}`}>
-                        {l.tipo === 'despesa' ? '−' : '+'} {formatMoney(l.valor)}
-                      </td>
-                      <td>
-                        <Badge tone={l.status === 'confirmado' ? 'green' : l.status === 'pendente' ? 'amber' : 'red'}>{l.status === 'confirmado' ? 'Confirmado' : l.status === 'pendente' ? 'Pendente' : 'Cancelado'}</Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          )}
         </>
       )}
     </div>

@@ -324,6 +324,15 @@ As integrações que dependem de credenciais/terceiros foram **adiadas** — a e
 - **Conciliação bancária**: colar extrato (`data;valor;descrição`) → casa com lançamentos pendentes, confirma o caixa e atualiza a venda/compra de origem.
 - **Correção**: lançamento gerado por venda/compra agora copia `vencimento` e parcelas do pedido.
 
+### Layout do Dashboard (decisão de 04/09/2026)
+
+Para reduzir a poluição visual, os relatórios específicos de cada módulo **saíram do Dashboard central** e ficaram nos módulos/Relatórios:
+
+- **Dashboard central = cockpit executivo**: poucos KPIs, bloco "Precisa de atenção" (alertas acionáveis) e apenas um gráfico de tendência (vendas 12 meses).
+- **Financeiro = abas**: Visão geral, DRE, Fluxo projetado, Rentabilidade, Investidores, Conciliação.
+- **Estoque/Produção/Insumos**: detalhes ficam nos respectivos módulos e na tela **Relatórios** (posição de estoque, movimentações, produção, vendas, curva ABC, insumos abaixo do mínimo).
+- Link "Reports" de alertas abre direto no relatório via `?relatorio=referencia` (ex.: `insumos-minimo`).
+
 ### Status das integrações externas (decisão de 04/09/2026)
 
 | Item | Decisão / Pendência | Status |

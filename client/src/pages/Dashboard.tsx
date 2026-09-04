@@ -1,12 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, Banknote, Boxes, Cog, Factory, Handshake, History, Receipt, Scissors, Shirt, ShoppingCart, Store, Wallet } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowRight,
+  Banknote,
+  Boxes,
+  ChevronRight,
+  Cog,
+  Handshake,
+  Package,
+  Receipt,
+  ShoppingCart,
+  Wallet,
+} from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
-import { ACAO_LABEL, formatDate, formatMoney, formatNumber, formatRelative } from '../lib/format';
-import { Alert, Badge, PageHeader, Spinner } from '../components/ui';
-import { BarrasHorizontais, BarrasVerticais } from '../components/Charts';
-import type { Tone } from '../lib/meta';
+import { formatMoney, formatNumber } from '../lib/format';
+import { Alert, PageHeader, Spinner } from '../components/ui';
+import { BarrasVerticais } from '../components/Charts';
 
 type Dashboard = {
   valorEstoque: number;
@@ -17,31 +28,41 @@ type Dashboard = {
   comprasPendentes: number;
   vendasMes: number;
   comissoesPagar: number;
-  totais: { produtos: number; clientes: number; fornecedores: number; insumos: number };
-  alertas: { produto: string; tamanho: string; local: string; quantidade: number; estoque_min: number }[];
-  ordens: { id: number; produto: string; tamanho: string; quantidade: number; status: string; previsao: string | null }[];
-  recentes: { data: string; usuario: string | null; acao: string; recurso: string | null; descricao: string }[];
   vendasPorMes: { mes: string; total: number }[];
-  producaoPorSemana: { semana: string; pecas: number; ordens: number }[];
-  topProdutos: { produto: string; total: number }[];
+  alertas: { produto: string; tamanho: string; local: string; quantidade: number; estoque_min: number }[];
   insumosAlerta: { insumo: string; quantidade: number; estoque_min: number }[];
+  ordens: { id: number; produto: string; tamanho: string; quantidade: number; status: string; previsao: string | null }[];
+  totais: { produtos: number; clientes: number; fornecedores: number; insumos: number };
 };
 
-const STATUS_TONE: Record<string, Tone> = { planejada: 'slate', em_producao: 'blue', concluida: 'green', cancelada: 'red' };
-const STATUS_LABEL: Record<string, string> = { planejada: 'Planejada', em_producao: 'Em produção', concluida: 'Concluída', cancelada: 'Cancelada' };
-const ACAO_TONE: Record<string, Tone> = { criar: 'green', editar: 'blue', excluir: 'red', login: 'slate', senha: 'amber' };
+type ResumoFin = {
+  saldoContasTotal: number;
+  aReceberVencidas: number;
+  aPagarVencidas: number;
+  aPagar30: number;
+  aReceber30: number;
+};
 
 export default function Dashboard() {
-  const { user, meta } = useAuth();
+  const { user } = useAuth();
   const [data, setData] = useState<Dashboard | null>(null);
+  const [fin, setFin] = useState<ResumoFin | null>(null);
   const [error, setError] = useState('');
+  const podeFin = user?.perfil === 'admin' || user?.perfil === 'gerente';
 
   useEffect(() => {
     api
       .get<Dashboard>('/dashboard')
       .then(setData)
       .catch((e) => setError(e.message));
-  }, []);
+
+    if (podeFin) {
+      api
+        .get<ResumoFin>('/financeiro/resumo')
+        .then(setFin)
+        .catch(() => {});
+    }
+  }, [podeFin]);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
@@ -49,27 +70,32 @@ export default function Dashboard() {
 
   const kpis = data
     ? [
-        { label: 'Vendas do mês (faturadas)', value: formatMoney(data.vendasMes), sub: `${formatNumber(data.vendasAbertas)} pedidos em aberto`, icon: Banknote, to: '/vendas', accent: 'bg-emerald-600' },
-        { label: 'Comissões a pagar', value: formatMoney(data.comissoesPagar), sub: 'sobre vendas faturadas', icon: Handshake, to: '/vendas', accent: 'bg-brand-500' },
-        { label: 'Valor do estoque', value: formatMoney(data.valorEstoque), sub: `${formatNumber(data.pecasEstoque)} peças`, icon: Wallet, to: '/estoque', accent: 'bg-navy-800' },
+        { label: 'Vendas do mês', value: formatMoney(data.vendasMes), sub: `${formatNumber(data.vendasAbertas)} em aberto`, icon: Banknote, to: '/vendas', accent: 'bg-emerald-600' },
+        ...(podeFin
+          ? [{ label: 'Saldo em contas', value: formatMoney(fin?.saldoContasTotal ?? 0), sub: `${formatMoney(fin?.aReceber30 ?? 0)} a receber · ${formatMoney(fin?.aPagar30 ?? 0)} a pagar`, icon: Wallet, to: '/financeiro', accent: 'bg-navy-800' }]
+          : []),
+        { label: 'Valor do estoque', value: formatMoney(data.valorEstoque), sub: `${formatNumber(data.pecasEstoque)} peças`, icon: Package, to: '/estoque', accent: 'bg-brand-500' },
         { label: 'Itens em alerta', value: formatNumber(data.itensAlerta), sub: 'abaixo do mínimo', icon: AlertTriangle, to: '/estoque', accent: data.itensAlerta > 0 ? 'bg-red-600' : 'bg-slate-500' },
-      ]
+      ].slice(0, 4)
     : [];
 
-  const cadastros = data
+  const atencao = data
     ? [
-        { label: 'Produtos', value: data.totais.produtos, icon: Shirt, to: '/produtos' },
-        { label: 'Insumos', value: data.totais.insumos, icon: Scissors, to: '/insumos' },
-        { label: 'Clientes', value: data.totais.clientes, icon: Store, to: '/clientes' },
-        { label: 'Fornecedores', value: data.totais.fornecedores, icon: Factory, to: '/fornecedores' },
-      ]
+        { label: 'Estoque abaixo do mínimo', msg: `${data.alertas.length} item(ns)`, to: '/estoque', ativo: data.alertas.length > 0 },
+        { label: 'Insumos em alerta', msg: `${data.insumosAlerta.length} insumo(s)`, to: '/relatorios?relatorio=insumos-minimo', ativo: data.insumosAlerta.length > 0 },
+        { label: 'Contas a pagar vencidas', msg: formatMoney(fin?.aPagarVencidas ?? 0), to: '/financeiro', ativo: (fin?.aPagarVencidas ?? 0) > 0 },
+        { label: 'Contas a receber vencidas', msg: formatMoney(fin?.aReceberVencidas ?? 0), to: '/financeiro', ativo: (fin?.aReceberVencidas ?? 0) > 0 },
+        { label: 'Pedidos de venda em aberto', msg: `${data.vendasAbertas} pedido(s)`, to: '/vendas', ativo: data.vendasAbertas > 0 },
+        { label: 'Compras pendentes', msg: `${data.comprasPendentes} compra(s)`, to: '/compras', ativo: data.comprasPendentes > 0 },
+        { label: 'Ordens de fabricação abertas', msg: `${data.ordens.length} OP(s)`, to: '/ordens', ativo: data.ordens.length > 0 },
+      ].filter((a) => a.ativo)
     : [];
 
   return (
     <div className="p-4 sm:p-6">
       <PageHeader
         title={`${greeting}${firstName ? `, ${firstName}` : ''}`}
-        description="Resumo da operação BROBOND em tempo real."
+        description="Visão executiva da operação. Relatórios aprofundados ficam nos módulos e em Relatórios."
         actions={
           <Link to="/movimentacoes" className="btn-primary">
             <Boxes className="h-4 w-4" /> Lançar movimentação
@@ -77,21 +103,12 @@ export default function Dashboard() {
         }
       />
 
-      {meta?.mode === 'memory' && (
-        <div className="mb-4">
-          <Alert tone="amber">
-            <strong>Modo demonstração:</strong> o servidor está sem banco de dados (variável <code>DATABASE_URL</code>). Tudo funciona, mas os dados são apagados
-            ao reiniciar. Configure o Postgres para uso real.
-          </Alert>
-        </div>
-      )}
-
       {error && <Alert tone="red">{error}</Alert>}
       {!data && !error && <Spinner />}
 
       {data && (
         <>
-          {/* KPIs */}
+          {/* KPIs estratégicos */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {kpis.map((k) => (
               <Link key={k.label} to={k.to} className="card group flex items-center gap-4 p-5 transition-shadow hover:shadow-modal">
@@ -99,29 +116,42 @@ export default function Dashboard() {
                   <k.icon className="h-5 w-5" />
                 </span>
                 <div className="min-w-0">
-                  <div className="truncate text-2xl font-bold tabular-nums text-navy-900">{k.value}</div>
+                  <div className="truncate text-xl font-bold tabular-nums text-navy-900 sm:text-2xl">{k.value}</div>
                   <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{k.label}</div>
-                  <div className="text-xs text-slate-400">{k.sub}</div>
+                  <div className="truncate text-xs text-slate-400">{k.sub}</div>
                 </div>
               </Link>
             ))}
           </div>
 
-          {/* Cadastros */}
-          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            {cadastros.map((c) => (
-              <Link key={c.label} to={c.to} className="card flex items-center justify-between px-4 py-3 hover:bg-navy-50/50">
-                <span className="flex items-center gap-2 text-sm text-slate-600">
-                  <c.icon className="h-4 w-4 text-navy-400" /> {c.label}
-                </span>
-                <span className="text-lg font-bold tabular-nums text-navy-900">{formatNumber(c.value)}</span>
-              </Link>
-            ))}
-          </div>
+          {/* Precisa de atenção — apenas o que exige ação */}
+          <section className="card mt-4 overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-navy-900">
+                <AlertTriangle className="h-4 w-4 text-red-500" /> Precisa de atenção
+              </h2>
+              <span className="text-xs text-slate-400">O que exige ação hoje</span>
+            </div>
+            {atencao.length === 0 ? (
+              <p className="px-4 py-8 text-center text-sm text-slate-400">Nada exige ação imediata. 🎉</p>
+            ) : (
+              <div className="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4">
+                {atencao.map((a) => (
+                  <Link key={a.label} to={a.to} className="flex items-center justify-between gap-2 px-4 py-3 hover:bg-navy-50/50">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-navy-900">{a.label}</p>
+                      <p className="text-xs text-slate-400">{a.msg}</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />
+                  </Link>
+                ))}
+              </div>
+            )}
+          </section>
 
-          {/* Gráficos (Fase 5) */}
-          <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <section className="card p-4">
+          {/* Desempenho — um único gráfico de tendência */}
+          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <section className="card p-4 lg:col-span-2">
               <h2 className="text-sm font-semibold text-navy-900">Vendas faturadas — últimos 12 meses</h2>
               <div className="mt-3">
                 {data.vendasPorMes.length === 0 || data.vendasPorMes.every((v) => v.total === 0) ? (
@@ -136,157 +166,28 @@ export default function Dashboard() {
                 )}
               </div>
             </section>
+
             <section className="card p-4">
-              <h2 className="text-sm font-semibold text-navy-900">Produção concluída — últimas 8 semanas</h2>
-              <div className="mt-3">
-                {data.producaoPorSemana.length === 0 || data.producaoPorSemana.every((p) => p.pecas === 0) ? (
-                  <p className="py-8 text-center text-sm text-slate-400">Nenhuma OP concluída nas últimas 8 semanas.</p>
-                ) : (
-                  <BarrasVerticais
-                    rotulos={data.producaoPorSemana.map((s) => `${Number(s.semana.slice(8, 10))}/${Number(s.semana.slice(5, 7))}`)}
-                    valores={data.producaoPorSemana.map((s) => s.pecas)}
-                    formatar={(v) => `${formatNumber(v)} peças`}
-                    cor="#C9832E"
-                    titulo="Peças produzidas por semana"
-                  />
-                )}
-              </div>
-            </section>
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <section className="card p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-navy-900">Top 10 produtos por faturamento</h2>
-                <Link to="/relatorios" className="text-xs font-medium text-navy-600 hover:underline">
-                  Ver curva ABC
-                </Link>
-              </div>
-              {data.topProdutos.length === 0 ? (
-                <p className="py-8 text-center text-sm text-slate-400">Sem faturamento ainda.</p>
-              ) : (
-                <BarrasHorizontais itens={data.topProdutos.map((p) => ({ rotulo: p.produto, valor: p.total }))} formatar={formatMoney} />
-              )}
-            </section>
-            <section className="card p-4">
-              <h2 className="mb-3 text-sm font-semibold text-navy-900">Insumos abaixo do mínimo</h2>
-              {data.insumosAlerta.length === 0 ? (
-                <p className="py-8 text-center text-sm text-slate-400">Nenhum insumo em alerta. 🎉</p>
-              ) : (
-                <ul className="space-y-2">
-                  {data.insumosAlerta.map((i, idx) => (
-                    <li key={idx} className="flex items-center justify-between rounded-lg bg-amber-50/70 px-3 py-2 text-sm">
-                      <span className="font-medium text-slate-800">{i.insumo}</span>
-                      <span className="tabular-nums text-slate-500">
-                        <strong className={Number(i.quantidade) <= 0 ? 'text-red-600' : 'text-amber-700'}>{formatNumber(i.quantidade)}</strong> / mín. {formatNumber(i.estoque_min)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-          </div>
-
-          <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-3">
-            {/* Alertas de estoque */}
-            <Panel title="Estoque abaixo do mínimo" icon={AlertTriangle} to="/estoque" empty={data.alertas.length === 0} emptyText="Nenhum item abaixo do estoque mínimo.">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Produto</th>
-                    <th>Tam.</th>
-                    <th className="text-right">Saldo</th>
-                    <th className="text-right">Mín.</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.alertas.map((a, i) => (
-                    <tr key={i}>
-                      <td>
-                        <div className="max-w-[180px] truncate font-medium text-slate-800">{a.produto}</div>
-                        <div className="text-xs text-slate-400">{a.local}</div>
-                      </td>
-                      <td>{a.tamanho}</td>
-                      <td className="text-right font-semibold tabular-nums text-red-600">{a.quantidade}</td>
-                      <td className="text-right tabular-nums text-slate-500">{a.estoque_min}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Panel>
-
-            {/* Ordens em andamento */}
-            <Panel title="Ordens de fabricação abertas" icon={Cog} to="/ordens" empty={data.ordens.length === 0} emptyText="Nenhuma ordem planejada ou em produção.">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>OP</th>
-                    <th>Produto</th>
-                    <th className="text-right">Qtd.</th>
-                    <th>Previsão</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.ordens.map((o) => (
-                    <tr key={o.id}>
-                      <td className="font-mono text-xs text-slate-400">#{o.id}</td>
-                      <td>
-                        <div className="max-w-[160px] truncate font-medium text-slate-800">{o.produto}</div>
-                        <Badge tone={STATUS_TONE[o.status] || 'slate'}>{STATUS_LABEL[o.status] || o.status}</Badge>
-                        {o.tamanho && <span className="ml-1 text-xs text-slate-400">{o.tamanho}</span>}
-                      </td>
-                      <td className="text-right tabular-nums">{o.quantidade}</td>
-                      <td className="text-xs text-slate-500">{formatDate(o.previsao)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Panel>
-
-            {/* Atividade recente */}
-            <Panel title="Atividade recente" icon={History} to={user?.perfil === 'admin' ? '/auditoria' : undefined} empty={data.recentes.length === 0} emptyText="Nenhuma atividade registrada ainda.">
-              <ul className="divide-y divide-slate-100">
-                {data.recentes.map((r, i) => (
-                  <li key={i} className="flex items-start gap-3 px-4 py-2.5">
-                    <Badge tone={ACAO_TONE[r.acao] || 'slate'}>{ACAO_LABEL[r.acao] || r.acao}</Badge>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm text-slate-700">{r.descricao}</div>
-                      <div className="text-xs text-slate-400">
-                        {r.usuario || 'Sistema'} · {formatRelative(r.data)}
-                      </div>
-                    </div>
-                  </li>
-                ))}
+              <h2 className="text-sm font-semibold text-navy-900">Cadastros ativos</h2>
+              <p className="text-xs text-slate-400">Base cadastral em uma linha.</p>
+              <ul className="mt-3 space-y-2 text-sm">
+                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2"><span className="text-slate-500">Produtos</span><strong className="tabular-nums text-navy-900">{formatNumber(data.totais.produtos)}</strong></li>
+                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2"><span className="text-slate-500">Insumos</span><strong className="tabular-nums text-navy-900">{formatNumber(data.totais.insumos)}</strong></li>
+                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2"><span className="text-slate-500">Clientes</span><strong className="tabular-nums text-navy-900">{formatNumber(data.totais.clientes)}</strong></li>
+                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2"><span className="text-slate-500">Fornecedores</span><strong className="tabular-nums text-navy-900">{formatNumber(data.totais.fornecedores)}</strong></li>
               </ul>
-            </Panel>
+            </section>
           </div>
 
+          {/* Ações rápidas */}
           <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <QuickLink to="/produtos" icon={Shirt} title="Cadastrar produto" text="SKU, cor, coleção, custo e preço." />
+            <QuickLink to="/produtos" icon={Package} title="Cadastrar produto" text="SKU, cor, coleção, custo e preço." />
             <QuickLink to="/ordens" icon={Cog} title="Abrir ordem de fabricação" text="Ao concluir, as peças entram no estoque." />
             <QuickLink to="/compras" icon={ShoppingCart} title="Registrar compra" text="Pedidos de insumos por fornecedor." />
           </div>
         </>
       )}
     </div>
-  );
-}
-
-function Panel({ title, icon: Icon, to, empty, emptyText, children }: { title: string; icon: any; to?: string; empty: boolean; emptyText: string; children: React.ReactNode }) {
-  return (
-    <section className="card overflow-hidden">
-      <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-        <h2 className="flex items-center gap-2 text-sm font-semibold text-navy-900">
-          <Icon className="h-4 w-4 text-navy-400" /> {title}
-        </h2>
-        {to && (
-          <Link to={to} className="flex items-center gap-1 text-xs font-medium text-navy-600 hover:text-navy-800">
-            Ver tudo <ArrowRight className="h-3 w-3" />
-          </Link>
-        )}
-      </header>
-      {empty ? <p className="px-4 py-8 text-center text-sm text-slate-400">{emptyText}</p> : <div className="overflow-x-auto">{children}</div>}
-    </section>
   );
 }
 

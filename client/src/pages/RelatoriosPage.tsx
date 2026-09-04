@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { BarChart3, Download, Loader2, RefreshCw, Table2 } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
@@ -67,7 +68,9 @@ const CONTROLES: Record<string, Controle[]> = {
 
 export default function RelatoriosPage() {
   const toast = useToast();
-  const [nome, setNome] = useState('estoque-posicao');
+  const [params] = useSearchParams();
+  const inicial = RELATORIOS.some((r) => r.nome === (params.get('relatorio') || '')) ? params.get('relatorio')! : 'estoque-posicao';
+  const [nome, setNome] = useState(inicial);
   const [filtros, setFiltros] = useState<Filtros>({ grupo: 'produto', tipo: '', de: '', ate: '', local: '', por: 'cliente' });
   const [data, setData] = useState<RelResp | null>(null);
   const [error, setError] = useState('');
