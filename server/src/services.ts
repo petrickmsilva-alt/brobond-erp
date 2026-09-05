@@ -132,9 +132,11 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
         await ensureUniqueStock(data, null, tx);
       }
       if (r.key === 'inventarios') await resolveLocal(data, tx);
+      if (r.key === 'locais') await ensureLocalPadraoUnico(data, null, tx);
       if (r.key === 'ordens') await validarOrdemPayload(data, null);
 
       const row = await s.insert(r, data, tx);
+      if (r.key === 'locais') await garantirLocalPadrao(tx);
 
       if (r.key === 'estoques' && Number(row.quantidade) !== 0) {
         await s.insert(
@@ -206,6 +208,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (r.key === 'movimentacoes') throw new HttpError(405, 'Movimentações são imutáveis. Faça o lançamento inverso.');
       if (r.key === 'movimentacoes_insumos') throw new HttpError(405, 'Movimentações de insumos são imutáveis. Faça o lançamento inverso.');
       if (r.key === 'inventarios') await validarUpdateInventario(data, before);
+      if (r.key === 'locais') await ensureLocalPadraoUnico(data, before, tx);
       if (r.key === 'estoque_insumos') {
         // Único campo editável diretamente: estoque mínimo.
         const extra = Object.keys(data).filter((k) => k !== 'estoque_min' && k !== 'atualizado_em');
@@ -220,6 +223,8 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
 
       const row = await s.update(r, id, data, tx);
       if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+
+      if (r.key === 'locais') await garantirLocalPadrao(tx);
 
       // Estoque: alteração manual de quantidade vira movimentação de ajuste
       if (r.key === 'estoques' && changes.quantidade) {
@@ -269,6 +274,21 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor): Promi
         if (Number(before.id) === Number(actor.id)) throw new HttpError(400, 'Você não pode excluir o seu próprio usuário.');
         await ensureNotLastAdmin(before, { ativo: false, perfil: 'x' }, tx);
       }
+      if (r.key === 'locais') {
+        // Não deixar sem pátio de estoque: bloqueia excluir o último local ativo.
+        const ativos = await s.list(r, { page: 1, pageSize: 1000, filter: { ativo: true } }, tx);
+        const ehUltimoAtivo = ativos.rows.length <= 1 && Number(ativos.rows[0]?.id) === Number(before.id);
+        if (ehUltimoAtivo) {
+          throw new HttpError(409, 'Este é o único local ativo. Cadastre (ou reative) outro local antes de excluir o último.');
+        }
+        let usaEstoque = (await s.countWhere(getResource('estoques')!, { local: String(before.nome) }, tx)) > 0;
+        if (!usaEstoque) {
+          usaEstoque = (await s.countWhere(getResource('estoques')!, { local_id: Number(before.id) }, tx)) > 0;
+        }
+        if (usaEstoque) {
+          throw new HttpError(409, `O local "${String(before.nome)}" ainda tem saldo de estoque. Zere os saldos ou transfira as peças para outro local antes de excluir.`);
+        }
+      }
       if (r.key === 'ordens' && before.status === 'concluida') {
         throw new HttpError(409, 'Ordem concluída já deu entrada no estoque. Reabra ou cancele em vez de excluir.');
       }
@@ -297,6 +317,7 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor): Promi
       await removeAllFiles(r, id, tx);
       const ok = await s.remove(r, id, tx);
       if (!ok) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+      if (r.key === 'locais') await garantirLocalPadrao(tx);
       await audit(tx, actor, 'excluir', r, id, `${r.singular} ${labelOf(r, before)} excluído(a)`, sanitize(before));
     });
   } catch (e) {
@@ -380,11 +401,63 @@ async function ensureUniqueStock(data: Payload, before: Row | null, tx: Tx) {
   const merged = { ...(before || {}), ...data };
   if (!merged.produto_id || !merged.tamanho_id) return;
   const s = getStore();
-  const existing = await s.findOneWhere(getResource('estoques')!, { produto_id: merged.produto_id, tamanho_id: merged.tamanho_id, local: merged.local ?? 'almoxarifado' }, tx ?? undefined);
+  const local = merged.local ?? (await getDefaultLocal(tx));
+  const existing = await s.findOneWhere(getResource('estoques')!, { produto_id: merged.produto_id, tamanho_id: merged.tamanho_id, local }, tx ?? undefined);
   if (existing && (!before || Number(existing.id) !== Number(before.id))) {
     throw new HttpError(409, 'Já existe saldo para este produto, tamanho e local. Edite o registro existente ou lance uma movimentação.');
   }
 }
+
+/** Nome do Local padrão (origem das movimentações) ou 'almoxarifado' por segurança. */
+export async function getDefaultLocal(tx?: Tx): Promise<string> {
+  const info = await getDefaultLocalInfo(tx);
+  return info?.nome ?? 'almoxarifado';
+}
+
+/**
+ * Local padrão: o cadastrado com `padrao = true` e ativo; senão o primeiro
+ * local ativo (por nome); senão null (aí os fluxos usam 'almoxarifado').
+ * Substitui o antigo padrão fixo "almoxarifado".
+ */
+export async function getDefaultLocalInfo(tx?: Tx): Promise<{ id: number | null; nome: string } | null> {
+  const s = getStore();
+  const r = getResource('locais')!;
+  const padrao = await s.findOneWhere(r, { padrao: true }, tx ?? undefined);
+  if (padrao && ativoYn(padrao)) return { id: Number(padrao.id) || null, nome: String(padrao.nome) };
+  const ativos = await s.list(r, { page: 1, pageSize: 1, sort: 'nome', dir: 'asc', filter: { ativo: true } }, tx ?? undefined);
+  if (ativos.rows.length) return { id: Number(ativos.rows[0].id) || null, nome: String(ativos.rows[0].nome) };
+  return null;
+}
+
+function ativoYn(row: Row): boolean {
+  const v = row.ativo;
+  return v === true || v === 1 || v === '1' || v === 'true' || v === 'TRUE' || v === 'on' || v === 'sim';
+}
+
+/** Ao marcar um local como padrão, desmarca os demais (apenas um pode ser o padrão). */
+async function ensureLocalPadraoUnico(data: Payload, before: Row | null, tx: Tx): Promise<void> {
+  if (data.padrao !== true) return;
+  const s = getStore();
+  const r = getResource('locais')!;
+  const demais = await s.list(r, { page: 1, pageSize: 1000, filter: { padrao: true } }, tx ?? undefined);
+  for (const l of demais.rows) {
+    if (!before || Number(l.id) !== Number(before.id)) {
+      await s.update(r, Number(l.id), { padrao: false }, tx);
+    }
+  }
+}
+
+/** Garante que sempre exista um Local padrão ativo. */
+async function garantirLocalPadrao(tx: Tx): Promise<void> {
+  const s = getStore();
+  const r = getResource('locais')!;
+  const padrao = await s.findOneWhere(r, { padrao: true }, tx ?? undefined);
+  if (padrao && ativoYn(padrao)) return;
+  const ativos = await s.list(r, { page: 1, pageSize: 1, sort: 'nome', dir: 'asc', filter: { ativo: true } }, tx ?? undefined);
+  if (!ativos.rows.length) return;
+  await s.update(r, Number(ativos.rows[0].id), { padrao: true }, tx);
+}
+
 /** Preenche `local` (e `local_id`) a partir do cadastro de Locais. */
 async function resolveLocal(data: Payload, tx: Tx): Promise<void> {
   const s = getStore();
@@ -398,7 +471,7 @@ async function resolveLocal(data: Payload, tx: Tx): Promise<void> {
     if (!local) local = String(l.nome);
     data.local_id = localId;
   }
-  if (!local) local = 'almoxarifado';
+  if (!local) local = await getDefaultLocal(tx);
   if (local.length > 60) throw new HttpError(400, 'O nome do local é muito longo.', { local: 'Máximo de 60 caracteres' });
   data.local = local;
 }
@@ -503,7 +576,7 @@ async function createMovimentacaoInsumo(data: Payload, actor: Actor, tx: Tx): Pr
 /** Abrir inventário: congela o saldo do local em itens_inventario. */
 async function abrirInventarioSnapshot(row: Row, actor: Actor, tx: Tx) {
   const s = getStore();
-  const local = String(row.local || 'almoxarifado');
+  const local = row.local ? String(row.local) : await getDefaultLocal(tx);
   const aberto = await s.findOneWhere(getResource('inventarios')!, { local, status: 'aberto' }, tx);
   if (aberto && Number(aberto.id) !== Number(row.id)) {
     throw new HttpError(409, `Já existe um inventário aberto para o local "${local}" (inventário #${aberto.id}). Feche-o antes de abrir outro.`);

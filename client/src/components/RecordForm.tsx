@@ -7,14 +7,29 @@ import { maskDocument, maskPhone, toInputValue } from '../lib/format';
 export type FormValues = Record<string, string | boolean>;
 
 /** Valores iniciais do formulário (defaults do recurso ou registro existente). */
-export function initialValues(r: ResourceMeta, row?: Record<string, any> | null): FormValues {
+export function initialValues(
+  r: ResourceMeta,
+  row?: Record<string, any> | null,
+  defaultLocal?: { id: number | null; nome: string } | null
+): FormValues {
   const out: FormValues = {};
   for (const f of r.fields) {
     if (f.form === false || f.readonly || f.type === 'images') continue;
     if (row) {
       out[f.name] = f.type === 'boolean' ? Boolean(row[f.name]) : f.type === 'password' ? '' : toInputValue(f, row[f.name]);
     } else {
-      out[f.name] = f.type === 'boolean' ? Boolean(f.default ?? false) : f.default !== undefined && f.default !== null ? String(f.default) : '';
+      let def = f.default;
+      // Local padrão (origem das movimentações) substitui o antigo "almoxarifado".
+      if (defaultLocal) {
+        // Quando existe um seletor local_id (ref), ele é a fonte de verdade e o
+        // texto é preenchido pelo servidor — evita texto "local" ficar dessincronizado.
+        const temRefLocal = r.fields.some((g) => g.ref === 'locais' && (g.name === 'local_id' || g.name === 'local_saida_id'));
+        const ehOrigemTexto = (f.name === 'local' || f.name === 'local_saida') && f.type === 'text' && !temRefLocal;
+        const ehRefOrigem = f.name === 'local_id' && f.ref === 'locais';
+        if (ehOrigemTexto) def = defaultLocal.nome;
+        if (ehRefOrigem) def = defaultLocal.id != null ? String(defaultLocal.id) : '';
+      }
+      out[f.name] = f.type === 'boolean' ? Boolean(def ?? false) : def !== undefined && def !== null ? String(def) : '';
     }
   }
   return out;

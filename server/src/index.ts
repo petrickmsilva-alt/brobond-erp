@@ -36,6 +36,7 @@ import {
   checkAccess,
   createRecord,
   deleteRecord,
+  getDefaultLocalInfo,
   getRecord,
   getStore,
   listRecords,
@@ -184,18 +185,23 @@ app.post('/api/usuarios/:id/resetar-mfa', wrap(resetarMfaUsuario));
 app.get('/api/admin/auditoria/verificar', wrap(verificarAuditoriaHandler));
 
 // Metadados dos módulos (campos, tipos, opções) — o front monta formulários com isso
-app.get('/api/meta', (req, res) => {
-  res.json({
-    resources: publicMeta(),
-    mode: getStore().kind,
-    uploads: uploadProvider(),
-    uploadsConfigError: uploadsConfigError(),
-    version: VERSION,
-    user: currentUser(req),
-    smtp: { configurado: smtpConfigurado() },
-    auth: { hash: 'argon2id', mfa_admin_obrigatorio: true, reauth_ttl_segundos: Math.round(Number(process.env.REAUTH_TTL_MS) || 300_000) / 1000 },
-  });
-});
+app.get(
+  '/api/meta',
+  wrap(async (req, res) => {
+    res.json({
+      resources: publicMeta(),
+      mode: getStore().kind,
+      uploads: uploadProvider(),
+      uploadsConfigError: uploadsConfigError(),
+      version: VERSION,
+      user: currentUser(req),
+      smtp: { configurado: smtpConfigurado() },
+      // Local padrão (origem das movimentações) substitui o antigo "almoxarifado".
+      defaultLocal: await getDefaultLocalInfo(),
+      auth: { hash: 'argon2id', mfa_admin_obrigatorio: true, reauth_ttl_segundos: Math.round(Number(process.env.REAUTH_TTL_MS) || 300_000) / 1000 },
+    });
+  })
+);
 
 app.get(
   '/api/dashboard',

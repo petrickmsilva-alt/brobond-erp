@@ -26,7 +26,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
-import { checkAccess, getStore, toHttpError } from './services';
+import { checkAccess, getDefaultLocal, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
 import type { Payload, Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
@@ -157,11 +157,12 @@ async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
   }
 
   // --- 2) entrada no estoque por tamanho ---------------------------------------
+  const localPadrao = await getDefaultLocal(tx);
   for (const it of itens) {
-    await s.adjustStock(Number(op.produto_id), it.tamanho_id, 'almoxarifado', it.quantidade, tx);
+    await s.adjustStock(Number(op.produto_id), it.tamanho_id, localPadrao, it.quantidade, tx);
     await s.insert(
       getResource('movimentacoes')!,
-      { tipo: 'entrada', produto_id: op.produto_id, tamanho_id: it.tamanho_id, local: 'almoxarifado', quantidade: it.quantidade, motivo: `Produção concluída — OP #${id}`, usuario_id: actor.id || null },
+      { tipo: 'entrada', produto_id: op.produto_id, tamanho_id: it.tamanho_id, local: localPadrao, quantidade: it.quantidade, motivo: `Produção concluída — OP #${id}`, usuario_id: actor.id || null },
       tx
     );
   }
@@ -182,7 +183,7 @@ async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
       acao: 'editar',
       recurso: 'ordens',
       registro_id: id,
-      descricao: `OP #${id} concluída — entrada de ${totalPecas} peça(s) em almoxarifado e baixa de ${consumos.length} insumo(s) da ficha técnica${forcarNota}`,
+      descricao: `OP #${id} concluída — entrada de ${totalPecas} peça(s) em ${localPadrao} e baixa de ${consumos.length} insumo(s) da ficha técnica${forcarNota}`,
       dados: { pecas: totalPecas, insumos: consumos.length, forcar: emFalta.length > 0 },
     },
     tx

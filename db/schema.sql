@@ -423,9 +423,12 @@ CREATE TABLE IF NOT EXISTS locais (
   nome TEXT UNIQUE NOT NULL,
   tipo TEXT DEFAULT 'almoxarifado',        -- almoxarifado | loja | expedicao | faccao
   ativo BOOLEAN DEFAULT TRUE,
+  padrao BOOLEAN DEFAULT FALSE,            -- local padrão (origem das movimentações)
   criado_em TIMESTAMPTZ DEFAULT now(),
   atualizado_em TIMESTAMPTZ
 );
+
+ALTER TABLE locais ADD COLUMN IF NOT EXISTS padrao BOOLEAN DEFAULT FALSE;
 
 ALTER TABLE estoques      ADD COLUMN IF NOT EXISTS local_id INTEGER REFERENCES locais(id);
 ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS local_id INTEGER REFERENCES locais(id);
@@ -742,6 +745,14 @@ FROM locais l WHERE m.local_id IS NULL AND l.nome = m.local;
 
 UPDATE movimentacoes m SET local_destino_id = l.id
 FROM locais l WHERE m.local_destino IS NOT NULL AND m.local_destino = l.nome;
+
+-- Garante um Local padrão (origem das movimentações) nas bases existentes,
+-- marcando o primeiro local ativo quando nenhum ainda está marcado.
+UPDATE locais SET padrao = TRUE
+WHERE id = (
+  SELECT id FROM locais WHERE ativo IS NOT FALSE ORDER BY nome ASC LIMIT 1
+)
+AND NOT EXISTS (SELECT 1 FROM locais WHERE padrao = TRUE);
 
 -- ------------------------------------------------------------
 -- FASE 8 — NF-e, chat e melhorias

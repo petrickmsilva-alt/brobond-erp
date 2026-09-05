@@ -255,7 +255,7 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Local',
     labelFields: ['nome'],
     ops: ALL_OPS,
-    notice: 'Locais onde o estoque fica guardado (almoxarifado, loja, expedição, facção). As movimentações e o Estoque Físico usam estes locais no lugar do texto livre.',
+    notice: 'Locais onde o estoque fica guardado (almoxarifado, loja, expedição, facção). Marque um deles como Local padrão — ele vira a origem padrão das movimentações (entrada/saída/transferência) e do Estoque Físico, substituindo o antigo padrão fixo "almoxarifado". As movimentações e o Estoque Físico usam estes locais no lugar do texto livre.',
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'almoxarifado, loja, expedição...' },
       {
@@ -271,14 +271,21 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'faccao', label: 'Facção', tone: 'slate' },
         ],
       },
+      {
+        name: 'padrao',
+        label: 'Local padrão',
+        type: 'boolean',
+        default: false,
+        hint: 'Marque para usar este local como origem padrão das movimentações. Somente um local pode ser o padrão (ao marcar um novo, o anterior é desmarcado automaticamente).',
+      },
       ativo,
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
     mock: [
-      { id: 1, nome: 'almoxarifado', tipo: 'almoxarifado', ativo: true },
-      { id: 2, nome: 'loja', tipo: 'loja', ativo: true },
-      { id: 3, nome: 'expedicao', tipo: 'expedicao', ativo: true },
+      { id: 1, nome: 'almoxarifado', tipo: 'almoxarifado', ativo: true, padrao: true },
+      { id: 2, nome: 'loja', tipo: 'loja', ativo: true, padrao: false },
+      { id: 3, nome: 'expedicao', tipo: 'expedicao', ativo: true, padrao: false },
     ],
   },
 
@@ -514,7 +521,7 @@ export const RESOURCES: Record<string, Resource> = {
     fields: [
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
       { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
-      { name: 'local', label: 'Local', type: 'text', default: 'almoxarifado', search: true, maxLength: 60, placeholder: 'almoxarifado, loja, expedição...', list: false, hint: 'Preenchido automaticamente pelo seletor de local.' },
+      { name: 'local', label: 'Local', type: 'text', search: true, maxLength: 60, placeholder: 'almoxarifado, loja, expedição...', list: false, hint: 'Preenchido automaticamente pelo seletor de local. Deixe em branco para usar o Local padrão.' },
       { name: 'local_id', label: 'Local', type: 'ref', ref: 'locais', search: true, hint: 'Use o cadastro de Locais em vez de digitar texto livre.' },
       { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, default: 0 },
       { name: 'estoque_min', label: 'Estoque mínimo', type: 'integer', min: 0, default: 0, hint: 'Abaixo disso o item entra em alerta no Dashboard.' },
@@ -548,7 +555,7 @@ export const RESOURCES: Record<string, Resource> = {
       },
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
       { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
-      { name: 'local', label: 'Local de origem', type: 'text', default: 'almoxarifado', maxLength: 60, list: false, hint: 'Preenchido automaticamente pelo seletor de local.' },
+      { name: 'local', label: 'Local de origem', type: 'text', maxLength: 60, list: false, hint: 'Preenchido automaticamente pelo seletor de local. Deixe em branco para usar o Local padrão.' },
       { name: 'local_id', label: 'Local de origem', type: 'ref', ref: 'locais', search: true, hint: 'Use o cadastro de Locais em vez de digitar texto livre.' },
       { name: 'local_destino', label: 'Local de destino', type: 'text', maxLength: 60, list: false, hint: 'Obrigatório em transferências.' },
       { name: 'local_destino_id', label: 'Local de destino', type: 'ref', ref: 'locais', hint: 'Obrigatório em transferências.' },
@@ -575,7 +582,7 @@ export const RESOURCES: Record<string, Resource> = {
     ops: ALL_OPS,
     detail: true,
     notice:
-      'OP "por tamanho": uma OP para um único tamanho. OP "por grade": quantidades de PP a GG na mesma OP. Ao concluir, as peças entram no Estoque Físico (almoxarifado) e o consumo de insumos da ficha técnica é baixado.',
+      'OP "por tamanho": uma OP para um único tamanho. OP "por grade": quantidades de PP a GG na mesma OP. Ao concluir, as peças entram no Estoque Físico (no Local padrão) e o consumo de insumos da ficha técnica é baixado.',
     fields: [
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
       {
@@ -737,7 +744,7 @@ export const RESOURCES: Record<string, Resource> = {
     ops: ALL_OPS,
     detail: true,
     notice:
-      'Ao "Faturar", as peças saem do estoque (local de saída, com fallback para o almoxarifado) e a comissão do representante é congelada. Cancelar um pedido faturado/entregue estorna a saída.',
+      'Ao "Faturar", as peças saem do estoque (local de saída, com fallback para o Local padrão) e a comissão do representante é congelada. Cancelar um pedido faturado/entregue estorna a saída.',
     fields: [
       { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes', required: true, search: true },
       { name: 'representante_id', label: 'Representante', type: 'ref', ref: 'representantes', search: true },
@@ -820,7 +827,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'frete', label: 'Frete (R$)', type: 'money', min: 0, default: 0, list: false },
       { name: 'previsao_entrega', label: 'Previsão de entrega', type: 'date', list: false },
       { name: 'pedido_cliente', label: 'Pedido do cliente', type: 'text', maxLength: 60, list: false, placeholder: 'Número do pedido no cliente' },
-      { name: 'local_saida', label: 'Local de saída', type: 'text', maxLength: 60, default: 'almoxarifado', list: false, hint: 'Local de onde as peças saem no faturamento. Se não houver saldo, tenta o almoxarifado.' },
+      { name: 'local_saida', label: 'Local de saída', type: 'text', maxLength: 60, list: false, hint: 'Local de onde as peças saem no faturamento. Começa no Local padrão, mas você pode escolher outro. Se não houver saldo, tenta o Local padrão.' },
       { name: 'comissao_pct', label: 'Comissão (%)', type: 'percent', readonly: true, form: false },
       { name: 'comissao_valor', label: 'Comissão (R$)', type: 'money', readonly: true, form: false },
       { name: 'faturada_em', label: 'Faturada em', type: 'datetime', readonly: true, form: false },
@@ -969,7 +976,7 @@ export const RESOURCES: Record<string, Resource> = {
     ops: { create: true, update: true, delete: false },
     notice: 'Abrir um inventário congela o saldo do local. A contagem é lançada item a item e o fechamento gera os ajustes automaticamente (somente gerente/admin).',
     fields: [
-      { name: 'local', label: 'Local', type: 'text', list: false, maxLength: 60, default: 'almoxarifado' },
+      { name: 'local', label: 'Local', type: 'text', list: false, maxLength: 60, hint: 'Preenchido automaticamente pelo seletor de local.' },
       { name: 'local_id', label: 'Local', type: 'ref', ref: 'locais', required: true, search: true },
       {
         name: 'status',
