@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowLeftRight, Boxes, ClipboardCheck, Download, FileUp, Loader2, Package, RefreshCw, Search, Warehouse, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, Boxes, ClipboardCheck, Download, FileUp, History, Loader2, Package, RefreshCw, RotateCcw, Search, Warehouse, Wallet } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
-import { Alert, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmDialog, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import { formatMoney, formatNumber } from '../lib/format';
+import { formatDateTime } from '../lib/format';
 
 type GradeResp = {
   colunas: { id: number; codigo: string }[];
@@ -42,6 +43,10 @@ export default function EstoqueGradePage() {
   const [mov, setMov] = useState({ tipo: 'ajuste', quantidade: '1', motivo: 'Ajuste pela grade de estoque' });
   const [movErr, setMovErr] = useState('');
   const [salvando, setSalvando] = useState(false);
+  const [historico, setHistorico] = useState<any[]>([]);
+  const [carregandoHistorico, setCarregandoHistorico] = useState(false);
+  const [movParaEstornar, setMovParaEstornar] = useState<any>(null);
+  const [estornando, setEstornando] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -151,6 +156,41 @@ export default function EstoqueGradePage() {
     setCel({ produto: linha.produto, tamanho, quantidade: c?.quantidade ?? 0, estoque_min: c?.estoque_min ?? 0, local: localEscolhido });
     setMov({ tipo: 'ajuste', quantidade: '1', motivo: 'Ajuste pela grade de estoque' });
     setMovErr('');
+    // Carrega as últimas movimentações desta célula
+    carregarHistorico(linha.produto.id, tamanho.id);
+  }
+
+  async function carregarHistorico(produtoId: number, tamanhoId: number) {
+    setCarregandoHistorico(true);
+    setHistorico([]);
+    try {
+      const resp = await api.get<any>(
+        `/movimentacoes?pageSize=50&sort=id&dir=desc&f.produto_id=${produtoId}&f.tamanho_id=${tamanhoId}`
+      );
+      setHistorico((resp.rows || []).slice(0, 10));
+    } catch {
+      setHistorico([]);
+    } finally {
+      setCarregandoHistorico(false);
+    }
+  }
+
+  async function estornarMovimento(mov: any) {
+    setEstornando(true);
+    try {
+      await api.post(`/movimentacoes/${mov.id}/estornar`, {});
+      toast.success('Movimentação estornada. O saldo foi ajustado automaticamente.');
+      setMovParaEstornar(null);
+      if (cel) {
+        carregarHistorico(cel.produto.id, cel.tamanho.id);
+      }
+      await load();
+    } catch (e: any) {
+      toast.error(e.message || 'Não foi possível estornar.');
+      setMovParaEstornar(null);
+    } finally {
+      setEstornando(false);
+    }
   }
 
   return (
@@ -382,7 +422,7 @@ export default function EstoqueGradePage() {
       {tipoImport && <ImportModal open={importOpen} onClose={() => setImportOpen(false)} tipoConfig={tipoImport} onDone={() => load()} />}
 
       {/* Modal de movimentação a partir da célula */}
-      <Modal open={!!cel} onClose={() => setCel(null)} title="Lançar movimentação" subtitle={cel ? `${cel.produto.sku} — ${cel.produto.nome} · tam. ${cel.tamanho.codigo}` : ''} size="sm">
+      <Modal open={!!cel} onClose={() => setCel(null)} title="Lançar movimentação" subtitle={cel ? `${cel.produto.sku} — ${cel.produto.nome} · tam. ${cel.tamanho.codigo}` : ''} size="md">
         {movErr && <Alert tone="red">{movErr}</Alert>}
         {cel && (
           <div className="space-y-4">
@@ -414,9 +454,92 @@ export default function EstoqueGradePage() {
                 {salvando ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowLeftRight className="h-4 w-4" />} Lançar
               </button>
             </div>
+
+            {/* Histórico de movimentações recentes */}
+            <div className="mt-4 border-t border-slate-200 pt-4">
+              <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <History className="h-3.5 w-3.5" />
+                Últimas movimentações
+              </h4>
+              {carregandoHistorico ? (
+                <div className="flex items-center gap-2 py-3 text-xs text-slate-400">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Carregando...
+                </div>
+              ) : historico.length === 0 ? (
+                <p className="py-3 text-xs text-slate-400">Nenhuma movimentação registrada.</p>
+              ) : (
+                <div className="max-h-52 overflow-auto rounded-md border border-slate-200">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-slate-50">
+                      <tr className="text-left text-[10px] uppercase tracking-wide text-slate-400">
+                        <th className="px-2 py-1.5">#</th>
+                        <th className="px-2 py-1.5">Data</th>
+                        <th className="px-2 py-1.5">Tipo</th>
+                        <th className="px-2 py-1.5 text-right">Qtd</th>
+                        <th className="px-2 py-1.5">Motivo</th>
+                        <th className="px-2 py-1.5 text-center">Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {historico.map((m: any) => {
+                        const estornado = m.estornado === true || m.estornado === 1;
+                        const tipoLabel = m.tipo === 'entrada' ? 'Entrada' : m.tipo === 'saida' ? 'Saída' : m.tipo === 'ajuste' ? 'Ajuste' : m.tipo === 'transferencia' ? 'Transf.' : m.tipo;
+                        const tipoTone = m.tipo === 'entrada' ? 'green' : m.tipo === 'saida' ? 'red' : m.tipo === 'ajuste' ? 'amber' : 'blue';
+                        return (
+                          <tr key={m.id} className={estornado ? 'opacity-40' : ''}>
+                            <td className="px-2 py-1 font-mono text-slate-400">{m.id}</td>
+                            <td className="whitespace-nowrap px-2 py-1 text-slate-500">{formatDateTime(m.data)}</td>
+                            <td className="px-2 py-1">
+                              <Badge tone={estornado ? 'slate' : tipoTone}>{estornado ? 'Estornado' : tipoLabel}</Badge>
+                            </td>
+                            <td className="px-2 py-1 text-right font-semibold tabular-nums">{formatNumber(m.quantidade)}</td>
+                            <td className="max-w-[140px] truncate px-2 py-1 text-slate-500" title={m.motivo}>{m.motivo || '—'}</td>
+                            <td className="px-2 py-1 text-center">
+                              {!estornado && (
+                                <button
+                                  className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 transition-colors hover:bg-amber-50"
+                                  onClick={() => setMovParaEstornar(m)}
+                                  title="Estornar esta movimentação"
+                                >
+                                  <RotateCcw className="h-3 w-3" /> Estornar
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <p className="mt-1.5 text-[10px] text-slate-400">
+                Lançou errado? Clique em "Estornar" para reverter. O saldo é ajustado automaticamente e a movimentação original é preservada no histórico.
+              </p>
+            </div>
           </div>
         )}
       </Modal>
+
+      {/* Diálogo de confirmação de estorno */}
+      <ConfirmDialog
+        open={!!movParaEstornar}
+        title="Estornar movimentação?"
+        danger
+        confirmLabel="Estornar"
+        busy={estornando}
+        onCancel={() => !estornando && setMovParaEstornar(null)}
+        onConfirm={() => estornarMovimento(movParaEstornar)}
+        message={
+          <>
+            <p>
+              Deseja estornar a movimentação <strong>#{movParaEstornar?.id}</strong> ({movParaEstornar?.tipo} de {movParaEstornar?.quantidade} peça(s))?
+            </p>
+            <p className="mt-2 text-slate-600">
+              Será criado um lançamento inverso para reverter o efeito no estoque. A movimentação original será marcada como estornada e preservada no histórico.
+            </p>
+          </>
+        }
+      />
     </div>
   );
 }
