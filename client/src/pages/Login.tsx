@@ -142,6 +142,7 @@ export default function Login() {
                   className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 hover:text-slate-600"
                   onClick={() => setShow((s) => !s)}
                   tabIndex={-1}
+                  title={show ? 'Ocultar senha' : 'Mostrar senha'}
                   aria-label={show ? 'Ocultar senha' : 'Mostrar senha'}
                 >
                   {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}

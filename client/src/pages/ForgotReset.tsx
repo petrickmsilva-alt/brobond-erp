@@ -153,7 +153,7 @@ export function ResetPage() {
                 <div className="relative">
                   <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <input id="nova-senha" type={type} className="input pl-9 pr-10" value={senha} onChange={(e) => setSenha(e.target.value)} autoComplete="new-password" autoFocus required />
-                  <button type="button" className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400" onClick={() => setShow((s) => !s)} tabIndex={-1} aria-label={show ? 'Ocultar' : 'Mostrar'}>
+                  <button type="button" className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400" onClick={() => setShow((s) => !s)} tabIndex={-1} title={show ? 'Ocultar senha' : 'Mostrar senha'} aria-label={show ? 'Ocultar senha' : 'Mostrar senha'}>
                     {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>

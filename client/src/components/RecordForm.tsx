@@ -272,7 +272,20 @@ function FieldInput({
   if (f.type === 'password') {
     return (
       <div>
-        {label}
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <label htmlFor={id} className="label mb-0">
+            {f.label}
+            {required && <span className="ml-0.5 text-red-500">*</span>}
+          </label>
+          <button
+            type="button"
+            className="flex shrink-0 items-center gap-1 text-xs font-medium text-navy-600 hover:text-navy-800"
+            onClick={() => setShow((s) => !s)}
+            disabled={disabled}
+          >
+            {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />} {show ? 'Ocultar senha' : 'Mostrar senha'}
+          </button>
+        </div>
         <div className="relative">
           <input
             id={id}
@@ -285,7 +298,15 @@ function FieldInput({
             disabled={disabled}
             autoFocus={autoFocus}
           />
-          <button type="button" className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 hover:text-slate-600" onClick={() => setShow((s) => !s)} tabIndex={-1} aria-label={show ? 'Ocultar senha' : 'Mostrar senha'}>
+          <button
+            type="button"
+            className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 hover:text-slate-600"
+            onClick={() => setShow((s) => !s)}
+            tabIndex={-1}
+            disabled={disabled}
+            title={show ? 'Ocultar senha' : 'Mostrar senha'}
+            aria-label={show ? 'Ocultar senha' : 'Mostrar senha'}
+          >
             {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </button>
         </div>

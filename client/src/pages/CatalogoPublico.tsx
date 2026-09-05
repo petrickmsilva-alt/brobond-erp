@@ -138,7 +138,7 @@ export default function CatalogoPublico() {
                 autoFocus
                 required
               />
-              <button type="button" className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400" onClick={() => setShowSenha((s) => !s)} aria-label="Mostrar senha">
+              <button type="button" className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400" onClick={() => setShowSenha((s) => !s)} title={showSenha ? 'Ocultar senha' : 'Mostrar senha'} aria-label={showSenha ? 'Ocultar senha' : 'Mostrar senha'}>
                 {showSenha ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
             </div>
