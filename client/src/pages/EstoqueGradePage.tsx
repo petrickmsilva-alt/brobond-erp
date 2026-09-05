@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, ArrowLeftRight, Boxes, ClipboardCheck, Download, FileUp, History, Loader2, Package, RefreshCw, RotateCcw, Search, Warehouse, Wallet } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
@@ -45,6 +45,10 @@ export default function EstoqueGradePage() {
   const [salvando, setSalvando] = useState(false);
   const [historico, setHistorico] = useState<any[]>([]);
   const [carregandoHistorico, setCarregandoHistorico] = useState(false);
+  const [historicoErr, setHistoricoErr] = useState('');
+  // Identifica a requisição de histórico mais recente (evita que uma resposta
+  // atrasada de uma célula anterior sobrescreva a célula aberta agora).
+  const historicoReq = useRef(0);
   const [movParaEstornar, setMovParaEstornar] = useState<any>(null);
   const [estornando, setEstornando] = useState(false);
 
@@ -160,20 +164,30 @@ export default function EstoqueGradePage() {
     carregarHistorico(linha.produto.id, tamanho.id);
   }
 
-  async function carregarHistorico(produtoId: number, tamanhoId: number) {
+  const carregarHistorico = useCallback(async (produtoId: number, tamanhoId: number) => {
+    const req = ++historicoReq.current;
     setCarregandoHistorico(true);
+    setHistoricoErr('');
     setHistorico([]);
     try {
-      const resp = await api.get<any>(
-        `/movimentacoes?pageSize=50&sort=id&dir=desc&f.produto_id=${produtoId}&f.tamanho_id=${tamanhoId}`
-      );
-      setHistorico((resp.rows || []).slice(0, 10));
-    } catch {
+      const params = new URLSearchParams({
+        pageSize: '50',
+        sort: 'id',
+        dir: 'desc',
+        'f.produto_id': String(produtoId),
+        'f.tamanho_id': String(tamanhoId),
+      });
+      const resp = await api.get<any>(`/movimentacoes?${params.toString()}`);
+      if (req !== historicoReq.current) return; // resposta obsoleta
+      setHistorico(Array.isArray(resp?.rows) ? resp.rows.slice(0, 10) : []);
+    } catch (e: any) {
+      if (req !== historicoReq.current) return;
       setHistorico([]);
+      setHistoricoErr(e?.message || 'Não foi possível carregar o histórico desta célula.');
     } finally {
-      setCarregandoHistorico(false);
+      if (req === historicoReq.current) setCarregandoHistorico(false);
     }
-  }
+  }, []);
 
   async function estornarMovimento(mov: any) {
     setEstornando(true);
@@ -464,6 +478,18 @@ export default function EstoqueGradePage() {
               {carregandoHistorico ? (
                 <div className="flex items-center gap-2 py-3 text-xs text-slate-400">
                   <Loader2 className="h-3 w-3 animate-spin" /> Carregando...
+                </div>
+              ) : historicoErr ? (
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  <span className="flex-1">{historicoErr}</span>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-semibold text-amber-900 transition-colors hover:bg-amber-100"
+                    onClick={() => cel && carregarHistorico(cel.produto.id, cel.tamanho.id)}
+                  >
+                    <RefreshCw className="h-3 w-3" /> Tentar novamente
+                  </button>
                 </div>
               ) : historico.length === 0 ? (
                 <p className="py-3 text-xs text-slate-400">Nenhuma movimentação registrada.</p>

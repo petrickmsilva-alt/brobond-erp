@@ -434,6 +434,16 @@ ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS local_destino_id INTEGER REFE
 ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS transferencia_id INTEGER;
 CREATE INDEX IF NOT EXISTS idx_movimentacoes_transferencia ON movimentacoes (transferencia_id);
 
+-- Estorno de movimentações: a movimentação original é preservada e marcada como
+-- estornada, apontando para o lançamento inverso que reverteu o saldo.
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS estornado BOOLEAN DEFAULT false;
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS estornado_em TIMESTAMPTZ;
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS estornado_por TEXT;
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS movimentacao_estorno_id INTEGER REFERENCES movimentacoes(id);
+
+-- Consulta do histórico por célula da grade (produto + tamanho, mais recentes primeiro).
+CREATE INDEX IF NOT EXISTS idx_movimentacoes_produto_tamanho ON movimentacoes (produto_id, tamanho_id, id DESC);
+
 -- Inventários (contagem física) e seus itens
 CREATE TABLE IF NOT EXISTS inventarios (
   id SERIAL PRIMARY KEY,
