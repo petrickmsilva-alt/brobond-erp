@@ -117,8 +117,9 @@ DNS apontando para a Render.
 | Cadastros | **Produtos** | ✔ | ✔ | ✔ | **Até 5 fotos** (principal, ordem, zoom), categoria, cor padronizada **ou** texto livre, código de barras EAN único, composição, NCM, peso, descrição. **Página de detalhe** com grade de estoque, movimentações, OPs, custo/margem e **impressão de etiquetas** com código de barras |
 | Cadastros | **Categorias**, **Cores** (com amostra colorida) | ✔ | ✔ | ✔ | Nome único (ignora maiúsculas). Cores antigas em texto são migradas automaticamente |
 | Cadastros | Insumos, Fornecedores, Representantes, Clientes, Tamanhos/Grade, Coleções | ✔ | ✔ | ✔ | Busca, ordenação, paginação, validação por campo |
+| Estoque | **Locais** | ✔ | ✔ | ✔ | Almoxarifado, loja, expedição, facção... Marque um como **Local padrão** — ele vira a origem padrão das movimentações (substitui o antigo "almoxarifado" fixo). Só um pode ser o padrão |
 | Estoque | Estoque Físico | ✔ | ✔ | ✔ | Saldo único por produto+tamanho+local; alteração manual gera "ajuste"; só exclui saldo zerado |
-| Estoque | Movimentações | ✔ | — | — | Imutáveis. Entrada/saída/ajuste atualizam o saldo; saída sem saldo é bloqueada |
+| Estoque | Movimentações | ✔ | — | — | Imutáveis. Entrada/saída/ajuste/transferência usam o **Local padrão** quando o campo local fica em branco; saída sem saldo é bloqueada |
 | Estoque | Inventário | | | | Contagem por local com congelamento de saldo, divergências e ajustes ao fechar |
 | Produção | Ordens de Fabricação | ✔ | ✔ | ✔ | Status "Concluída" dá entrada automática no estoque (e estorna se reaberta) |
 | Produção | Ficha Técnica / BOM | ✔ | ✔ | ✔ | Mão de obra, indiretos e margem por produto |
@@ -189,7 +190,7 @@ GET    /api/relatorios/comissoes?de=&ate=&representante_id=   comissões de repr
 
 **Regras de pedidos (vendas/compras):** o `total` é sempre calculado pelo servidor
 (itens + frete − desconto) e nunca aceito do cliente. Ao **faturar** uma venda, as
-peças saem do estoque (local de saída com fallback para o almoxarifado), a venda sem
+peças saem do estoque (local de saída com fallback para o **Local padrão**), a venda sem
 saldo é bloqueada (409 com a lista de itens) e a comissão do representante é
 congelada; cancelar um pedido faturado/entregue estorna a saída. Ao **receber** uma
 compra, os insumos entram no estoque de insumos e o `custo_medio` vira a média

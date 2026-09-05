@@ -28,7 +28,7 @@ const GUIAS: { titulo: string; modulos: string[]; passos: string[] }[] = [
     modulos: ['ordens', 'fichas'],
     passos: [
       'Crie uma OP por tamanho único ou por grade (vários tamanhos na mesma OP).',
-      'Ao concluir, as peças entram no almoxarifado e os insumos da ficha são baixados (com a perda).',
+      'Ao concluir, as peças entram no Local padrão (configurável em Estoque → Locais) e os insumos da ficha são baixados (com a perda).',
       'Sem saldo de insumos? O sistema bloqueia — gerente/admin pode concluir com ?forcar=true, deixando o saldo negativo e auditado.',
       'Reabrir uma OP concluída estorna tudo automaticamente.',
     ],
@@ -37,7 +37,7 @@ const GUIAS: { titulo: string; modulos: string[]; passos: string[] }[] = [
     titulo: 'Estoque, locais e grade (F4)',
     modulos: ['locais', 'estoque', 'inventario', 'movimentacoes'],
     passos: [
-      'Cadastre locais (almoxarifado, loja, expedição, facção). O almoxarifado já existe.',
+      'Cadastre locais (almoxarifado, loja, expedição, facção). Marque um deles como "Local padrão" — ele passa a ser a origem padrão das movimentações (substitui o antigo padrão fixo "almoxarifado").',
       'A página “Estoque Físico — Grade” mostra a matriz produto × tamanho; clique numa célula para lançar entrada/saída/ajuste.',
       'Transferências: no módulo Movimentações, escolha “transferência”, origem e destino (a saída e a entrada são lançadas juntas).',
       'Inventário: abra uma contagem por local (congela os saldos), digite as contagens e feche — os ajustes são gerados uma única vez.',

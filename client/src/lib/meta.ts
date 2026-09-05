@@ -88,6 +88,8 @@ export type Meta = {
   smtp?: { configurado: boolean };
   /** Informações do fluxo de autenticação (hash, MFA, reautenticação) */
   auth?: { hash: string; mfa_admin_obrigatorio: boolean; reauth_ttl_segundos: number };
+  /** Local padrão (origem das movimentações) — substitui o antigo "almoxarifado". */
+  defaultLocal?: { id: number | null; nome: string } | null;
 };
 
 export const MetaContext = createContext<Meta | null>(null);

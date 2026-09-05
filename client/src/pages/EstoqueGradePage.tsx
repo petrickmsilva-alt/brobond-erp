@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, ArrowLeftRight, Boxes, ClipboardCheck, Download, FileUp, History, Loader2, Package, RefreshCw, RotateCcw, Search, Warehouse, Wallet } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
+import { useMeta } from '../lib/meta';
 import { Alert, Badge, ConfirmDialog, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import { formatMoney, formatNumber } from '../lib/format';
@@ -28,6 +29,7 @@ function num(v: unknown): number {
 
 export default function EstoqueGradePage() {
   const toast = useToast();
+  const meta = useMeta();
   const [data, setData] = useState<GradeResp | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -156,7 +158,7 @@ export default function EstoqueGradePage() {
 
   function abrirCelula(linha: GradeResp['linhas'][number], tamanho: { id: number; codigo: string }) {
     const c = linha.celulas.find((x) => x.tamanho_id === tamanho.id);
-    const localEscolhido = local || 'almoxarifado';
+    const localEscolhido = local || meta?.defaultLocal?.nome || 'almoxarifado';
     setCel({ produto: linha.produto, tamanho, quantidade: c?.quantidade ?? 0, estoque_min: c?.estoque_min ?? 0, local: localEscolhido });
     setMov({ tipo: 'ajuste', quantidade: '1', motivo: 'Ajuste pela grade de estoque' });
     setMovErr('');

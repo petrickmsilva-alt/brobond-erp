@@ -201,3 +201,28 @@ test('financeiro: recorrência vencida é gerada como lançamento pendente', asy
   const rec2 = await getRecord(RESOURCES.recorrencias_financeiras, Number(rec.id));
   assert.ok(String(rec2.proxima_geracao || '') >= '2026-09-01', 'próxima geração atualizada para o futuro');
 });
+
+test('locais: único Local padrão; movimentação sem local usa o padrão', async () => {
+  const s = getStore();
+  const { getDefaultLocal } = await import('../src/services');
+
+  // Garante estado inicial: almoxarifado é o padrão (mock).
+  await updateRecord(RESOURCES.locais, 1, { padrao: true }, admin);
+  assert.equal(await getDefaultLocal(), 'almoxarifado');
+
+  // Marca "loja" como padrão via CRUD -> almoxarifado deve ser desmarcado (apenas 1 padrão).
+  const loja = await s.findOneWhere(RESOURCES.locais, { nome: 'loja' });
+  await updateRecord(RESOURCES.locais, Number(loja.id), { padrao: true }, admin);
+  assert.equal(await getDefaultLocal(), 'loja', 'novo padrão de origem é a loja');
+  const almox = await s.findOneWhere(RESOURCES.locais, { nome: 'almoxarifado' });
+  assert.equal(almox?.padrao, false, 'ao marcar outro padrão, o anterior é desmarcado');
+
+  // Movimentação sem local informado cai no Local padrão.
+  const p = await createRecord(RESOURCES.produtos, { sku: 'T-PAD', nome: 'Teste Padrão', custo: 30, preco_venda: 90 }, admin);
+  const mov = await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: Number(p.id), tamanho_id: 3, quantidade: 5 }, admin);
+  assert.equal(String(mov.local), 'loja', 'entrada sem local usa o Local padrão');
+
+  // Restaura o padrão original.
+  await updateRecord(RESOURCES.locais, 1, { padrao: true }, admin);
+  assert.equal(await getDefaultLocal(), 'almoxarifado');
+});

@@ -72,6 +72,8 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const { user } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
+  const meta = useMeta();
+  const defaultLocal = meta?.defaultLocal ?? null;
   const hasImages = !!resource.images;
   const [zoom, setZoom] = useState<{ file: PublicFile; files: PublicFile[] } | null>(null);
   const isOperador = user?.perfil === 'operador';
@@ -92,7 +94,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   // Formulário (modal)
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Record<string, any> | null>(null);
-  const [values, setValues] = useState<FormValues>(() => initialValues(resource));
+  const [values, setValues] = useState<FormValues>(() => initialValues(resource, null, defaultLocal));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -236,7 +238,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   // --- formulário ---
   function openCreate() {
     setEditing(null);
-    setValues(initialValues(resource));
+    setValues(initialValues(resource, null, defaultLocal));
     setErrors({});
     setFormError('');
     setOptionsKey((k) => k + 1);
@@ -258,7 +260,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   }
 
   function clearForm() {
-    setValues(initialValues(resource, null));
+    setValues(initialValues(resource, null, defaultLocal));
     setErrors({});
     setFormError('');
   }
@@ -313,7 +315,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
             return;
           }
           toast.success(`${resource.singular} incluído(a). Convite de acesso enviado por e-mail.`);
-          setValues(initialValues(resource));
+          setValues(initialValues(resource, null, defaultLocal));
           setErrors({});
           await load();
           return;
@@ -333,7 +335,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         } else {
           toast.success(`${resource.singular} incluído(a) com sucesso.`);
           // Mantém o formulário aberto e limpo para o próximo cadastro
-          setValues(initialValues(resource));
+          setValues(initialValues(resource, null, defaultLocal));
           setErrors({});
           document.getElementById(`form-${resource.key}`)?.querySelector<HTMLElement>('input, select, textarea')?.focus();
         }

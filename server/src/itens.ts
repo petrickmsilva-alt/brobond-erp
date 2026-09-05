@@ -19,7 +19,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
-import { checkAccess, getStore, toHttpError } from './services';
+import { checkAccess, getDefaultLocal, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
 import type { Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
@@ -278,20 +278,21 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
   const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { venda_id: Number(pedido.id) } }, tx);
   if (!itens.rows.length) throw new HttpError(409, 'Adicione ao menos um item antes de faturar o pedido.');
 
-  const localSaida = String(pedido.local_saida || 'expedicao').trim() || 'expedicao';
-  // Escolhe, por item, o local com saldo: local de saída configurado → almoxarifado.
+  const localSaida = (String(pedido.local_saida || '').trim() || (await getDefaultLocal(tx)));
+  // Escolhe, por item, o local com saldo: local de saída configurado → Local padrão.
   const faltas: string[] = [];
   const plano: { item: Row; local: string; qtd: number }[] = [];
+  const localPadraoFallback = await getDefaultLocal(tx);
   for (const it of itens.rows) {
     const produtoId = Number(it.produto_id);
     const tamanhoId = Number(it.tamanho_id);
     const qtd = Number(it.quantidade);
     let local = localSaida;
     let disp = await saldo(produtoId, tamanhoId, localSaida, tx);
-    if (disp === null || disp < qtd) {
-      const alt = await saldo(produtoId, tamanhoId, 'almoxarifado', tx);
+    if ((disp === null || disp < qtd) && localSaida !== localPadraoFallback) {
+      const alt = await saldo(produtoId, tamanhoId, localPadraoFallback, tx);
       if (alt !== null && alt >= qtd && (disp === null || alt >= disp)) {
-        local = 'almoxarifado';
+        local = localPadraoFallback;
         disp = alt;
       }
     }

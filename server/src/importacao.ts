@@ -14,7 +14,7 @@ import type { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { HttpError } from './errors';
 import { RESOURCES, getResource, type Resource } from './resources';
-import { checkAccess, createRecord, getStore, toHttpError } from './services';
+import { checkAccess, createRecord, getDefaultLocal, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
 import type { Payload } from './store';
 import { parseCSV, parseNumeroTexto } from './csv';
@@ -165,7 +165,7 @@ async function normalizarLinha(tipo: TipoImportacao, linha: Record<string, strin
   return {
     produto_id: Number(produto.id),
     tamanho_id: Number(tamanho.id),
-    local: get('local') || 'almoxarifado',
+    local: get('local') || (await getDefaultLocal()),
     quantidade: parseNumeroTexto(get('quantidade', 'qtd', 'saldo')),
     estoque_min: parseNumeroTexto(get('estoque_min', 'minimo')),
   };
@@ -246,7 +246,7 @@ export async function confirmarImportacao(req: Request, res: Response) {
         try {
           const validated = validatePayload(recurso, payload, 'create');
           if (tipo === 'estoque') {
-            validated.local = String(validated.local || 'almoxarifado');
+            validated.local = String(validated.local || (await getDefaultLocal(tx)));
           }
           const row = await s.insert(recurso, validated, tx);
           if (tipo === 'estoque' && Number(row.quantidade) !== 0) {

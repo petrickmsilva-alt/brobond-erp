@@ -375,7 +375,7 @@ export default function OrdemDetail() {
           </div>
           <Alert tone={aberta ? 'blue' : 'slate'}>
             {status === 'planejada'
-              ? 'Ao concluir, a OP dá entrada das peças no estoque (almoxarifado) e baixa os insumos da ficha técnica, considerando a perda.'
+              ? 'Ao concluir, a OP dá entrada das peças no estoque (no Local padrão) e baixa os insumos da ficha técnica, considerando a perda.'
               : status === 'em_producao'
                 ? 'A OP já pode ser concluída: entrada de peças + baixa automática de insumos com a perda da ficha técnica.'
                 : status === 'concluida'

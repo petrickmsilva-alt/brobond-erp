@@ -12,7 +12,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { RESOURCES, getResource } from './resources';
-import { checkAccess, getRecord, getStore, toHttpError } from './services';
+import { checkAccess, getDefaultLocal, getRecord, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
 import type { Row } from './store';
 import { parseId } from './validate';
@@ -188,7 +188,7 @@ export async function fecharInventario(req: Request, res: Response) {
       if (String(inv.status) === 'fechado') {
         throw new HttpError(409, `O inventário #${id} já foi fechado em ${String(inv.fechado_em || '').slice(0, 16)}. Os ajustes só podem ser gerados uma vez.`);
       }
-      const local = String(inv.local || 'almoxarifado');
+      const local = inv.local ? String(inv.local) : await getDefaultLocal(tx);
       const itens = await s.list(RESOURCES.itens_inventario, { page: 1, pageSize: 5000, filter: { inventario_id: id } }, tx);
       let ajustes = 0;
       const detalhes: string[] = [];
@@ -284,7 +284,7 @@ export async function estornarMovimentacao(req: Request, res: Response) {
       const quantidade = Number(mov.quantidade);
       const produtoId = Number(mov.produto_id);
       const tamanhoId = Number(mov.tamanho_id);
-      const local = String(mov.local || 'almoxarifado');
+      const local = mov.local ? String(mov.local) : await getDefaultLocal(tx);
 
       // Calcula a movimentação inversa
       let tipoInverso: string;
