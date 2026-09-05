@@ -256,3 +256,125 @@ export async function getInventarioDetalhe(req: Request, res: Response) {
     resumo: { itens: itens.rows.length, contados, divergencias, totalSistema, totalContado },
   });
 }
+
+// ----------------------------------------------------------------------------
+// POST /api/movimentacoes/:id/estornar — estorna uma movimentação
+// ----------------------------------------------------------------------------
+export async function estornarMovimentacao(req: Request, res: Response) {
+  const actor = currentUser(req);
+  // Apenas gerente e admin podem estornar movimentações
+  if (actor.perfil !== 'admin' && actor.perfil !== 'gerente') {
+    throw new HttpError(403, 'Somente gerentes e administradores podem estornar movimentações.');
+  }
+  checkAccess(RESOURCES.movimentacoes, actor, 'create');
+  const id = parseId(req.params.id);
+  const s = getStore();
+
+  try {
+    const result = await s.transaction(async (tx) => {
+      const mov = await s.findOneWhere(RESOURCES.movimentacoes, { id }, tx);
+      if (!mov) throw new HttpError(404, 'Movimentação não encontrada.');
+
+      // Verifica se já foi estornada
+      if (mov.estornado === true || mov.estornado === 1) {
+        throw new HttpError(409, 'Esta movimentação já foi estornada.');
+      }
+
+      const tipo = String(mov.tipo);
+      const quantidade = Number(mov.quantidade);
+      const produtoId = Number(mov.produto_id);
+      const tamanhoId = Number(mov.tamanho_id);
+      const local = String(mov.local || 'almoxarifado');
+
+      // Calcula a movimentação inversa
+      let tipoInverso: string;
+      let quantidadeInversa: number;
+
+      if (tipo === 'entrada') {
+        tipoInverso = 'saida';
+        quantidadeInversa = quantidade;
+      } else if (tipo === 'saida') {
+        tipoInverso = 'entrada';
+        quantidadeInversa = quantidade;
+      } else if (tipo === 'ajuste') {
+        tipoInverso = 'ajuste';
+        quantidadeInversa = -quantidade;
+      } else if (tipo === 'transferencia') {
+        // Para transferência, precisamos inverter origem e destino
+        tipoInverso = 'transferencia';
+        quantidadeInversa = quantidade;
+      } else {
+        throw new HttpError(400, `Tipo de movimentação desconhecido: ${tipo}`);
+      }
+
+      // Ajusta o estoque (inverte o efeito original)
+      if (tipo === 'transferencia') {
+        const localDestino = String(mov.local_destino || '');
+        if (!localDestino) throw new HttpError(400, 'Transferência sem local de destino.');
+        // Inverte: volta do destino para a origem
+        await s.adjustStock(produtoId, tamanhoId, localDestino, -quantidade, tx);
+        await s.adjustStock(produtoId, tamanhoId, local, quantidade, tx);
+      } else {
+        // Para entrada/saida/ajuste, inverte o delta
+        const deltaOriginal = tipo === 'entrada' ? quantidade : tipo === 'saida' ? -quantidade : quantidade;
+        await s.adjustStock(produtoId, tamanhoId, local, -deltaOriginal, tx);
+      }
+
+      // Cria a movimentação de estorno
+      const estornoData: Record<string, unknown> = {
+        tipo: tipoInverso,
+        produto_id: produtoId,
+        tamanho_id: tamanhoId,
+        local: tipo === 'transferencia' ? String(mov.local_destino) : local,
+        local_id: tipo === 'transferencia' ? (mov.local_destino_id ?? null) : (mov.local_id ?? null),
+        quantidade: quantidadeInversa,
+        motivo: `Estorno da movimentação #${id}: ${mov.motivo || ''}`.trim(),
+        usuario_id: actor.id || null,
+      };
+
+      if (tipo === 'transferencia') {
+        estornoData.local_destino = local;
+        estornoData.local_destino_id = mov.local_id ?? null;
+      }
+
+      const movEstorno = await s.insert(RESOURCES.movimentacoes, estornoData, tx);
+
+      // Marca a movimentação original como estornada
+      await s.update(
+        RESOURCES.movimentacoes,
+        id,
+        {
+          estornado: true,
+          estornado_em: new Date().toISOString(),
+          estornado_por: actor.name,
+          movimentacao_estorno_id: movEstorno.id,
+        },
+        tx
+      );
+
+      // Registra na auditoria
+      await s.audit(
+        {
+          usuario_id: actor.id || null,
+          usuario: actor.name,
+          acao: 'estornar',
+          recurso: 'movimentacoes',
+          registro_id: id,
+          descricao: `Movimentação #${id} estornada (${tipo} de ${quantidade} peça(s))`,
+        },
+        tx
+      );
+
+      return {
+        ok: true,
+        movimentacao_original_id: id,
+        movimentacao_estorno_id: movEstorno.id,
+        tipo_inverso: tipoInverso,
+        quantidade_inversa: quantidadeInversa,
+      };
+    });
+    res.json(result);
+  } catch (e) {
+    throw toHttpError(e, RESOURCES.movimentacoes);
+  }
+}

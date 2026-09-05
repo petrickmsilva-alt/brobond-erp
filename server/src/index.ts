@@ -48,7 +48,7 @@ import { HttpError } from './errors';
 import { assertProductionSecrets, corsOrigin, loginRateLimit, securityHeaders } from './security';
 import { initSentry, reportarErro } from './log';
 import { smtpConfigurado } from './mail';
-import { estoqueGrade, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario } from './estoque';
+import { estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario } from './estoque';
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
 import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
@@ -305,6 +305,7 @@ app.get('/api/inventarios/:id', wrap(getInventarioDetalhe));
 app.get('/api/inventarios/:id/itens', wrap(listItensInventario));
 app.put('/api/inventarios/:id/itens', wrap(updateItensInventario));
 app.post('/api/inventarios/:id/fechar', wrap(fecharInventario));
+app.post('/api/movimentacoes/:id/estornar', wrap(estornarMovimentacao));
 
 // Fase 5 — relatórios, importação e exportação
 app.get('/api/relatorios/:nome', wrap(async (req, res) => relatorio(req, res, req.params.nome)));

@@ -24,6 +24,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Trash2,
   X,
@@ -107,6 +108,26 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   // Exclusão
   const [toDelete, setToDelete] = useState<Record<string, any> | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Estorno de movimentações
+  const [toEstornar, setToEstornar] = useState<Record<string, any> | null>(null);
+  const [estornando, setEstornando] = useState(false);
+
+  /** Estorna uma movimentação (cria lançamento inverso e marca como estornada). */
+  async function confirmarEstorno() {
+    if (!toEstornar) return;
+    setEstornando(true);
+    try {
+      await api.post(`/movimentacoes/${toEstornar.id}/estornar`, {});
+      toast.success('Movimentação estornada com sucesso. O lançamento inverso foi criado automaticamente.');
+      setToEstornar(null);
+      await load();
+    } catch (e: any) {
+      toast.error(e.message || 'Não foi possível estornar a movimentação.');
+    } finally {
+      setEstornando(false);
+    }
+  }
 
   // Fluxo profissional de acesso (somente no módulo Usuários):
   // convite por e-mail + senha temporária de EXIBIÇÃO ÚNICA (nunca recuperável).
@@ -502,7 +523,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                 {data.rows.map((row) => (
                   <tr
                     key={row.id}
-                    className={canUpdate || resource.detail ? 'cursor-pointer' : ''}
+                    className={`${canUpdate || resource.detail ? 'cursor-pointer' : ''} ${resource.key === 'movimentacoes' && row.estornado ? 'opacity-50 line-through' : ''}`}
                     onDoubleClick={() => (resource.detail ? navigate(`/${resource.key}/${row.id}`) : canUpdate && openEdit(row))}
                   >
                     <td className="font-mono text-xs text-slate-400">{row.id}</td>
@@ -535,6 +556,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                           {canUpdate && (
                             <button className="btn-icon" onClick={() => openEdit(row)} title="Editar" aria-label="Editar">
                               <Pencil className="h-4 w-4" />
+                            </button>
+                          )}
+                          {resource.key === 'movimentacoes' && !row.estornado && (user?.perfil === 'admin' || user?.perfil === 'gerente') && (
+                            <button className="btn-icon hover:!bg-amber-50 hover:!text-amber-600" onClick={() => setToEstornar(row)} title="Estornar movimentação (cria lançamento inverso)" aria-label="Estornar">
+                              <RotateCcw className="h-4 w-4" />
                             </button>
                           )}
                           {canDelete && (
@@ -590,6 +616,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                       {canUpdate && !resource.detail && (
                         <button className="btn-icon" onClick={() => openEdit(row)} aria-label="Editar">
                           <Pencil className="h-4 w-4" />
+                        </button>
+                      )}
+                      {resource.key === 'movimentacoes' && !row.estornado && (user?.perfil === 'admin' || user?.perfil === 'gerente') && (
+                        <button className="btn-icon hover:!bg-amber-50 hover:!text-amber-600" onClick={() => setToEstornar(row)} aria-label="Estornar">
+                          <RotateCcw className="h-4 w-4" />
                         </button>
                       )}
                       {canDelete && (
@@ -778,6 +809,26 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
               Você está prestes a excluir <strong>{toDelete ? rowLabel(resource, toDelete) : ''}</strong>. Esta ação não pode ser desfeita.
             </p>
             {resource.fields.some((f) => f.name === 'ativo') && <p className="mt-2 text-slate-500">Dica: se o registro já foi usado em outro módulo, prefira desmarcar "Ativo" ao editá-lo.</p>}
+          </>
+        }
+      />
+
+      <ConfirmDialog
+        open={!!toEstornar}
+        title="Estornar movimentação?"
+        danger
+        confirmLabel="Estornar"
+        busy={estornando}
+        onCancel={() => !estornando && setToEstornar(null)}
+        onConfirm={confirmarEstorno}
+        message={
+          <>
+            <p>
+              Você está prestes a estornar a movimentação <strong>#{toEstornar?.id}</strong> ({toEstornar?.tipo} de {toEstornar?.quantidade} peça(s)).
+            </p>
+            <p className="mt-2 text-slate-600">
+              Será criado automaticamente um <strong>lançamento inverso</strong> para reverter o efeito no estoque. A movimentação original será marcada como estornada e permanecerá no histórico para fins de auditoria.
+            </p>
           </>
         }
       />
