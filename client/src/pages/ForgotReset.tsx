@@ -13,9 +13,9 @@ function PublicShell({ children }: { children: React.ReactNode }) {
         <Logo variant="light" height={52} withTagline={false} />
         <div>
           <h1 className="text-2xl font-bold leading-tight">Recuperação de acesso</h1>
-          <p className="mt-3 text-sm text-navy-200">Segurança em primeiro lugar: tokens de redefinição têm validade de 1 hora e senhas ficam sempre com hash bcrypt.</p>
+          <p className="mt-3 text-sm text-navy-200">Segurança em primeiro lugar: tokens de redefinição têm validade de 1 hora e senhas ficam sempre em hash Argon2id (irreversível — ninguém pode vê-las).</p>
           <div className="mt-6 flex items-center gap-2 text-xs text-navy-300">
-            <ShieldCheck className="h-4 w-4 text-brand-400" /> BROBOND ERP — v0.5
+            <ShieldCheck className="h-4 w-4 text-brand-400" /> BROBOND ERP — v0.6
           </div>
         </div>
         <div className="text-xs text-navy-400">© {new Date().getFullYear()} BROBOND Wear</div>

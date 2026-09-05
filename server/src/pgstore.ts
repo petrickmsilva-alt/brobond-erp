@@ -4,17 +4,21 @@
 import type { PoolClient } from 'pg';
 import { pool, query, withTransaction } from './db';
 import { HttpError } from './errors';
-import { columnsOf, getResource, type Resource } from './resources';
+import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './resources';
+import { hashCadeiaAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import {
   labelOf,
   type AuditEntry,
+  type AuditoriaVerificacao,
   type DashboardData,
   type FileMeta,
   type ListParams,
   type ListResult,
   type Option,
   type Payload,
+  type RateState,
   type Row,
+  type Sessao,
   type Store,
   type Tx,
 } from './store';
@@ -141,6 +145,9 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
   return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 }
 
+/** Colunas secretas que nunca saem em consultas genéricas da API. */
+const COLUNAS_SECRETAS = new Set(['t.senha_hash', 't.mfa_secret', 't.convite_token_hash', 't.reset_token_hash', 't.dados', 't.thumb']);
+
 const FILE_META_COLS = 'id, recurso, registro_id, nome, mime, tamanho_bytes, url, thumb_url, externo_id, token, principal, ordem, criado_em';
 
 export class PgStore implements Store {
@@ -158,7 +165,7 @@ export class PgStore implements Store {
       .map((f) => `t.${f.name}`)
       .concat(['t.id'])
       .filter((c, i, a) => a.indexOf(c) === i)
-      .filter((c) => c !== 't.senha_hash' && c !== 't.senha_cifrada' && c !== 't.dados' && c !== 't.thumb');
+      .filter((c) => !COLUNAS_SECRETAS.has(c));
     const selectList = [...cols, ...selects].join(', ');
     const from = `FROM ${r.table} t ${joins.join(' ')} ${where}`;
 
@@ -180,7 +187,7 @@ export class PgStore implements Store {
       .map((f) => `t.${f.name}`)
       .concat(['t.id'])
       .filter((c, i, a) => a.indexOf(c) === i)
-      .filter((c) => c !== 't.senha_hash' && c !== 't.senha_cifrada' && c !== 't.dados' && c !== 't.thumb');
+      .filter((c) => !COLUNAS_SECRETAS.has(c));
     const res = await q(
       `SELECT ${[...cols, ...selects].join(', ')} FROM ${r.table} t ${joins.join(' ')} WHERE t.id = $1`,
       [id],
@@ -220,7 +227,7 @@ export class PgStore implements Store {
   }
 
   async insert(r: Resource, data: Payload, tx?: Tx): Promise<Row> {
-    const allowed = new Set(columnsOf(r).map((f) => f.name).concat(['senha_hash']));
+    const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
     const keys = Object.keys(data).filter((k) => allowed.has(k));
     const hasCriado = r.fields.some((f) => f.name === 'criado_em');
     const cols = keys.slice();
@@ -237,7 +244,7 @@ export class PgStore implements Store {
   }
 
   async update(r: Resource, id: number, data: Payload, tx?: Tx): Promise<Row | null> {
-    const allowed = new Set(columnsOf(r).map((f) => f.name).concat(['senha_hash']));
+    const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
     const keys = Object.keys(data).filter((k) => allowed.has(k) && k !== 'id');
     const sets = keys.map((k, i) => `${k} = $${i + 2}`);
     if (r.fields.some((f) => f.name === 'atualizado_em')) sets.push('atualizado_em = now()');
@@ -287,20 +294,37 @@ export class PgStore implements Store {
   }
 
   async audit(entry: AuditEntry, tx?: Tx): Promise<void> {
-    await q(
-      `INSERT INTO auditoria (usuario_id, usuario, acao, recurso, registro_id, descricao, dados)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        entry.usuario_id,
-        entry.usuario,
-        entry.acao,
-        entry.recurso,
-        entry.registro_id,
-        entry.descricao,
-        entry.dados === undefined ? null : JSON.stringify(entry.dados),
-      ],
-      tx
-    );
+    // Cadeia de hashes: preciso do hash do último evento; com lock para não
+    // bifurcar a cadeia quando dois eventos são gravados ao mesmo tempo.
+    const escrever = async (t: Tx) => {
+      await q(`SELECT pg_advisory_xact_lock(hashtext('brobond-auditoria'))`, [], t);
+      const prev = await q(`SELECT hash FROM auditoria WHERE hash IS NOT NULL ORDER BY id DESC LIMIT 1`, [], t);
+      const hash_anterior = prev.rows[0]?.hash ? String(prev.rows[0].hash) : '';
+      const hash = hashCadeiaAuditoria(hash_anterior, entry);
+      await q(
+        `INSERT INTO auditoria (usuario_id, usuario, acao, recurso, registro_id, descricao, dados, hash_anterior, hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          entry.usuario_id,
+          entry.usuario,
+          entry.acao,
+          entry.recurso,
+          entry.registro_id,
+          entry.descricao,
+          entry.dados === undefined ? null : JSON.stringify(entry.dados),
+          hash_anterior,
+          hash,
+        ],
+        t
+      );
+    };
+    if (tx) await escrever(tx);
+    else await withTransaction((client) => escrever(client));
+  }
+
+  async verificarAuditoria(): Promise<AuditoriaVerificacao> {
+    const res = await q(`SELECT * FROM auditoria ORDER BY id ASC LIMIT 100000`);
+    return verificarCadeiaAuditoria(res.rows);
   }
 
   async dashboard(): Promise<DashboardData> {
@@ -412,7 +436,7 @@ export class PgStore implements Store {
 
   async findUserByEmail(email: string): Promise<Row | null> {
     const res = await query(
-      'SELECT id, nome, email, senha_hash, perfil, ativo, trocar_senha, token_versao FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1',
+      'SELECT id, nome, email, senha_hash, perfil, ativo, trocar_senha, token_versao, mfa_secret, mfa_ativado_em, convite_expira_em, senha_definida_em FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1',
       [email]
     );
     return res.rows[0] ?? null;
@@ -435,6 +459,92 @@ export class PgStore implements Store {
 
   async touchLogin(userId: number): Promise<void> {
     await query('UPDATE usuarios SET ultimo_login = now() WHERE id = $1', [userId]).catch(() => undefined);
+  }
+
+  // ------------------------------------------------------------------
+  // Sessões (invalidação por dispositivo)
+  // ------------------------------------------------------------------
+  async criarSessao(s: Omit<Sessao, 'criada_em' | 'revogada_em'>): Promise<Sessao> {
+    const res = await q(
+      `INSERT INTO sessoes (id, usuario_id, expira_em, ip, user_agent) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [s.id, s.usuario_id, s.expira_em, s.ip, s.user_agent]
+    );
+    return res.rows[0];
+  }
+
+  async getSessao(id: string): Promise<Sessao | null> {
+    const res = await q(`SELECT * FROM sessoes WHERE id = $1 LIMIT 1`, [id]);
+    return res.rows[0] ?? null;
+  }
+
+  async listSessoesAtivas(usuarioId: number): Promise<Sessao[]> {
+    const res = await q(
+      `SELECT * FROM sessoes WHERE usuario_id = $1 AND revogada_em IS NULL AND expira_em > now() ORDER BY criada_em DESC LIMIT 50`,
+      [usuarioId]
+    );
+    return res.rows;
+  }
+
+  async revogarSessao(id: string): Promise<boolean> {
+    const res = await q(`UPDATE sessoes SET revogada_em = now() WHERE id = $1 AND revogada_em IS NULL`, [id]);
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  async revogarSessoes(usuarioId: number, exceto?: string): Promise<number> {
+    const res = await q(
+      `UPDATE sessoes SET revogada_em = now() WHERE usuario_id = $1 AND revogada_em IS NULL AND ($2::text IS NULL OR id <> $2)`,
+      [usuarioId, exceto ?? null]
+    );
+    return res.rowCount ?? 0;
+  }
+
+  async limparSessoesEncerradas(): Promise<void> {
+    await query(`DELETE FROM sessoes WHERE expira_em < now() - interval '7 days' OR revogada_em < now() - interval '7 days'`).catch(() => undefined);
+  }
+
+  // ------------------------------------------------------------------
+  // Rate limit persistente
+  // ------------------------------------------------------------------
+  async rateLimitEstado(chave: string, windowMs: number): Promise<RateState | null> {
+    const res = await q(`SELECT count, primeira_em, bloqueado_ate FROM login_tentativas WHERE chave = $1`, [chave]);
+    const row = res.rows[0];
+    if (!row) return null;
+    const agora = Date.now();
+    const primeira = new Date(row.primeira_em).getTime();
+    const bloqueado = row.bloqueado_ate ? new Date(row.bloqueado_ate).getTime() : 0;
+    if (agora - primeira > windowMs && bloqueado < agora) {
+      await q(`DELETE FROM login_tentativas WHERE chave = $1`, [chave]);
+      return null;
+    }
+    return { count: Number(row.count || 0), primeira_em: String(row.primeira_em), bloqueado_ate: row.bloqueado_ate ? String(row.bloqueado_ate) : null };
+  }
+
+  async rateLimitHit(chave: string, windowMs: number, max: number): Promise<{ restantes: number; bloqueado_ate: string | null }> {
+    const segundos = Math.ceil(windowMs / 1000);
+    const up = await q(
+      `INSERT INTO login_tentativas (chave, count, primeira_em)
+       VALUES ($1, 1, now())
+       ON CONFLICT (chave) DO UPDATE SET
+         count = CASE WHEN login_tentativas.primeira_em < now() - make_interval(secs => $2) THEN 1 ELSE login_tentativas.count + 1 END,
+         primeira_em = CASE WHEN login_tentativas.primeira_em < now() - make_interval(secs => $2) THEN now() ELSE login_tentativas.primeira_em END
+       RETURNING count`,
+      [chave, segundos]
+    );
+    const count = Number(up.rows[0]?.count || 0);
+    if (count < max) return { restantes: max - count, bloqueado_ate: null };
+    const blk = await q(
+      `UPDATE login_tentativas SET bloqueado_ate = now() + make_interval(secs => $2) WHERE chave = $1 RETURNING bloqueado_ate`,
+      [chave, segundos]
+    );
+    return { restantes: 0, bloqueado_ate: blk.rows[0]?.bloqueado_ate ? String(blk.rows[0].bloqueado_ate) : null };
+  }
+
+  async rateLimitReset(chave: string): Promise<void> {
+    await q(`DELETE FROM login_tentativas WHERE chave = $1`, [chave]);
+  }
+
+  async limparRateLimitsAntigos(): Promise<void> {
+    await query(`DELETE FROM login_tentativas WHERE COALESCE(bloqueado_ate, primeira_em) < now() - interval '24 hours'`).catch(() => undefined);
   }
 
   async filesFor(recurso: string, registroIds: number[], tx?: Tx): Promise<FileMeta[]> {

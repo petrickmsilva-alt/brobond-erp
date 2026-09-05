@@ -66,7 +66,7 @@ test('gerarResetToken gera string aleatória com entropia suficiente', async () 
   assert.ok(/^[a-f0-9]+$/i.test(t1)); // Somente caracteres hex
 });
 
-test('Rate limit: buckets acumulam contagem corretamente', async () => {
+test('Rate limit: buckets PERSISTENTES acumulam contagem corretamente', async () => {
   const { registerLoginFailure, registerLoginSuccess } = await import('../src/security');
 
   const req: any = {
@@ -76,17 +76,17 @@ test('Rate limit: buckets acumulam contagem corretamente', async () => {
   };
 
   // Primeira falha → restam 4
-  assert.equal(registerLoginFailure(req), 4);
+  assert.equal(await registerLoginFailure(req), 4);
   // Segunda → restam 3
-  assert.equal(registerLoginFailure(req), 3);
+  assert.equal(await registerLoginFailure(req), 3);
   // Terceira → restam 2
-  assert.equal(registerLoginFailure(req), 2);
+  assert.equal(await registerLoginFailure(req), 2);
 
   // Login com sucesso limpa o bucket
-  registerLoginSuccess(req);
+  await registerLoginSuccess(req);
 
   // Após sucesso, contador zera → restam 5 novamente
-  assert.equal(registerLoginFailure(req), 4);
+  assert.equal(await registerLoginFailure(req), 4);
 });
 
 test('assertProductionSecrets: não bloqueia fora de produção', async () => {

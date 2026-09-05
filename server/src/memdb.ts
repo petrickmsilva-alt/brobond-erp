@@ -3,17 +3,21 @@
 // unicidade, integridade referencial, busca, paginação e auditoria — assim o
 // sistema pode ser testado por completo antes de ligar o banco real.
 import { HttpError } from './errors';
-import { RESOURCES, columnsOf, getResource, type Resource } from './resources';
+import { COLUNAS_AUTENTICACAO, RESOURCES, columnsOf, getResource, type Resource } from './resources';
+import { hashCadeiaAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import {
   labelOf,
   type AuditEntry,
+  type AuditoriaVerificacao,
   type DashboardData,
   type FileMeta,
   type ListParams,
   type ListResult,
   type Option,
   type Payload,
+  type RateState,
   type Row,
+  type Sessao,
   type Store,
   type Tx,
 } from './store';
@@ -37,6 +41,9 @@ function round2(n: number): number {
 export class MemStore implements Store {
   readonly kind = 'memory' as const;
   private tables = new Map<string, Table>();
+  // Chaves textuais (sessões por JTI e buckets de rate limit) fora das tabelas numéricas.
+  private sessoes = new Map<string, Record<string, any>>();
+  private rateLimits = new Map<string, Record<string, any>>();
 
   constructor() {
     for (const r of Object.values(RESOURCES)) {
@@ -79,8 +86,11 @@ export class MemStore implements Store {
 
   private decorate(r: Resource, row: Row): Row {
     const out: Row = { ...row };
+    // Colunas secretas jamais saem da API: hash de senha, segredo MFA e tokens.
     delete out.senha_hash;
-    delete out.senha_cifrada;
+    delete out.mfa_secret;
+    delete out.convite_token_hash;
+    delete out.reset_token_hash;
     delete out.dados;
     delete out.thumb;
     for (const f of r.fields) {
@@ -216,7 +226,8 @@ export class MemStore implements Store {
     const id = ++t.seq;
     const row: Row = { id };
     for (const f of columnsOf(r)) row[f.name] = data[f.name] ?? (f.type === 'boolean' ? f.default ?? null : f.default ?? null);
-    if ('senha_hash' in data) row.senha_hash = data.senha_hash;
+    // Colunas internas de autenticação (hash/segredos/tokens) graváveis pela API interna.
+    for (const k of COLUNAS_AUTENTICACAO) if (k in data) row[k] = data[k];
     if (r.fields.some((f) => f.name === 'criado_em')) row.criado_em = new Date().toISOString();
     if (r.key === 'movimentacoes' || r.key === 'auditoria') row.data = row.data || new Date().toISOString();
     t.rows.set(id, row);
@@ -228,7 +239,7 @@ export class MemStore implements Store {
     const cur = t.rows.get(id);
     if (!cur) return null;
     this.checkConstraints(r, data, id);
-    const allowed = new Set(columnsOf(r).map((f) => f.name).concat(['senha_hash']));
+    const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
     for (const [k, v] of Object.entries(data)) if (allowed.has(k) && k !== 'id') cur[k] = v;
     if (r.fields.some((f) => f.name === 'atualizado_em')) cur.atualizado_em = new Date().toISOString();
     return { ...cur };
@@ -292,9 +303,17 @@ export class MemStore implements Store {
   async audit(entry: AuditEntry): Promise<void> {
     const t = this.table('auditoria');
     const id = ++t.seq;
-    t.rows.set(id, { id, data: new Date().toISOString(), ...entry, dados: entry.dados ?? null });
+    // Cadeia de hashes (tamper-evidence): hash_i = SHA-256(hash_{i-1} | payload).
+    const anterior = t.rows.get(t.rows.size ? Math.max(...t.rows.keys()) : 0);
+    const hash_anterior = anterior?.hash ? String(anterior.hash) : '';
+    const hash = hashCadeiaAuditoria(hash_anterior, entry);
+    t.rows.set(id, { id, data: new Date().toISOString(), ...entry, dados: entry.dados ?? null, hash_anterior, hash });
     // mantém só os últimos 2000 eventos em memória
     if (t.rows.size > 2000) t.rows.delete(Math.min(...t.rows.keys()));
+  }
+
+  async verificarAuditoria(): Promise<AuditoriaVerificacao> {
+    return verificarCadeiaAuditoria([...this.table('auditoria').rows.values()]);
   }
 
   async dashboard(): Promise<DashboardData> {
@@ -432,6 +451,97 @@ export class MemStore implements Store {
   async touchLogin(userId: number): Promise<void> {
     const row = this.table('usuarios').rows.get(userId);
     if (row) row.ultimo_login = new Date().toISOString();
+  }
+
+  // ------------------------------------------------------------------
+  // Sessões (invalidação por dispositivo)
+  // ------------------------------------------------------------------
+  async criarSessao(sessao: Omit<Sessao, 'criada_em' | 'revogada_em'>): Promise<Sessao> {
+    const agora = new Date().toISOString();
+    const row: Sessao = { ...sessao, criada_em: agora, revogada_em: null };
+    this.sessoes.set(row.id, { ...row });
+    return { ...row };
+  }
+
+  async getSessao(id: string): Promise<Sessao | null> {
+    const row = this.sessoes.get(id);
+    return row ? ({ ...row } as Sessao) : null;
+  }
+
+  async listSessoesAtivas(usuarioId: number): Promise<Sessao[]> {
+    const agora = Date.now();
+    return [...this.sessoes.values()]
+      .filter((s) => Number(s.usuario_id) === Number(usuarioId) && !s.revogada_em && new Date(s.expira_em).getTime() > agora)
+      .sort((a, b) => String(b.criada_em).localeCompare(String(a.criada_em)))
+      .map((s) => ({ ...s }) as Sessao);
+  }
+
+  async revogarSessao(id: string): Promise<boolean> {
+    const row = this.sessoes.get(id);
+    if (!row || row.revogada_em) return false;
+    row.revogada_em = new Date().toISOString();
+    return true;
+  }
+
+  async revogarSessoes(usuarioId: number, exceto?: string): Promise<number> {
+    let n = 0;
+    for (const s of this.sessoes.values()) {
+      if (Number(s.usuario_id) === Number(usuarioId) && !s.revogada_em && s.id !== exceto) {
+        s.revogada_em = new Date().toISOString();
+        n++;
+      }
+    }
+    return n;
+  }
+
+  async limparSessoesEncerradas(): Promise<void> {
+    const limite = Date.now() - 7 * 24 * 3600_000;
+    for (const [id, s] of this.sessoes) {
+      const fim = Math.max(new Date(s.expira_em).getTime(), s.revogada_em ? new Date(s.revogada_em).getTime() : 0);
+      if (fim < limite) this.sessoes.delete(id);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Rate limit persistente (memória no modo demonstração)
+  // ------------------------------------------------------------------
+  async rateLimitEstado(chave: string, windowMs: number): Promise<RateState | null> {
+    const row = this.rateLimits.get(chave);
+    if (!row) return null;
+    const agora = Date.now();
+    const primeira = new Date(row.primeira_em).getTime();
+    const bloqueado = row.bloqueado_ate ? new Date(row.bloqueado_ate).getTime() : 0;
+    if (agora - primeira > windowMs && bloqueado < agora) {
+      // Janela expirada: bucket zera.
+      this.rateLimits.delete(chave);
+      return null;
+    }
+    return { count: Number(row.count || 0), primeira_em: String(row.primeira_em), bloqueado_ate: row.bloqueado_ate ? String(row.bloqueado_ate) : null };
+  }
+
+  async rateLimitHit(chave: string, windowMs: number, max: number): Promise<{ restantes: number; bloqueado_ate: string | null }> {
+    const agora = Date.now();
+    let b = this.rateLimits.get(chave);
+    if (!b || agora - new Date(b.primeira_em).getTime() > windowMs) b = { chave, count: 0, primeira_em: new Date(agora).toISOString(), bloqueado_ate: null };
+    b.count = Number(b.count || 0) + 1;
+    let bloqueado_ate: string | null = b.bloqueado_ate ? String(b.bloqueado_ate) : null;
+    if (b.count >= max && (!bloqueado_ate || new Date(bloqueado_ate).getTime() < agora)) {
+      bloqueado_ate = new Date(agora + windowMs).toISOString();
+    }
+    this.rateLimits.set(chave, { chave, count: b.count, primeira_em: b.primeira_em, bloqueado_ate });
+    return { restantes: Math.max(0, max - b.count), bloqueado_ate };
+  }
+
+  async rateLimitReset(chave: string): Promise<void> {
+    this.rateLimits.delete(chave);
+  }
+
+  async limparRateLimitsAntigos(): Promise<void> {
+    const limite = Date.now() - 24 * 3600_000;
+    for (const [k, b] of this.rateLimits) {
+      const fim = Math.max(new Date(b.primeira_em).getTime(), b.bloqueado_ate ? new Date(b.bloqueado_ate).getTime() : 0);
+      if (fim < limite) this.rateLimits.delete(k);
+    }
   }
 
   async filesFor(recurso: string, registroIds: number[]): Promise<FileMeta[]> {

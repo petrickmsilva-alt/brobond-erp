@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Database, Download, Eye, EyeOff, FileSpreadsheet, KeyRound, Loader2, LogOut, Server, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react';
+import { Copy, Database, Download, Eye, EyeOff, FileSpreadsheet, KeyRound, Loader2, LogOut, Server, Settings2, ShieldCheck, Smartphone, UserRound, Users } from 'lucide-react';
 import { api, ApiError, downloadFile } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, PageHeader, useToast } from '../components/ui';
+import ReauthModal from '../components/ReauthModal';
 
 const PERFIL_LABEL: Record<string, string> = { admin: 'Administrador', gerente: 'Gerente', operador: 'Operador' };
 const PERFIL_DESC: Record<string, string> = {
@@ -82,26 +83,11 @@ export default function Settings() {
             <ChangePasswordForm disabled={!user || user.id <= 0} onChangeSenha={precisaTrocar ? concluirTroca : undefined} />
           </section>
 
-          {/* Sessão e segurança */}
-          <section className="card p-5">
-            <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
-              <LogOut className="h-4 w-4 text-navy-400" /> Sessão e dispositivos
-            </h2>
-            <p className="mt-2 text-sm text-slate-500">Cada dispositivo guarda um “token” de acesso. Encerrar todas as sessões derruba o login em outros aparelhos imediatamente (inclusive os que usam “Lembrar-me”).</p>
-            <button
-              className="btn-secondary mt-3"
-              onClick={async () => {
-                try {
-                  await api.post('/auth/logout-all', {});
-                } catch {
-                  /* segue mesmo se a API falhar: limpa o dispositivo local */
-                }
-                logout();
-              }}
-            >
-              <LogOut className="h-4 w-4 text-red-500" /> Sair de todos os dispositivos
-            </button>
-          </section>
+          {/* MFA (segundo fator) */}
+          <MfaCard />
+
+          {/* Sessões por dispositivo */}
+          <SessoesCard onSairDeTodos={logout} />
         </div>
 
         <div className="space-y-4">
@@ -140,7 +126,7 @@ export default function Settings() {
                 <dt className="flex items-center gap-1.5 text-slate-500">
                   <ShieldCheck className="h-3.5 w-3.5" /> Senhas
                 </dt>
-                <dd className="font-medium text-slate-800">bcrypt</dd>
+                <dd className="font-medium text-slate-800">Argon2id + MFA (admin)</dd>
               </div>
             </dl>
             {meta?.uploadsConfigError && (
@@ -180,6 +166,261 @@ export default function Settings() {
         </div>
       </div>
     </div>
+  );
+}
+
+type Sessao = { sid: string; atual: boolean; criada_em: string; expira_em: string; ip: string | null; user_agent: string | null };
+
+function dataCurta(iso: string): string {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '—' : d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+/** MFA/TOTP: ativação com QR; desativação exige reautenticação + código. */
+function MfaCard() {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [status, setStatus] = useState<{ ativado: boolean; obrigatorio: boolean } | null>(null);
+  const [setup, setSetup] = useState<{ segredo: string; qr: string } | null>(null);
+  const [codigo, setCodigo] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [erro, setErro] = useState('');
+  const [pedirReauth, setPedirReauth] = useState(false);
+
+  const carregar = useCallback(async () => {
+    try {
+      setStatus(await api.get('/auth/mfa/status'));
+    } catch {
+      setStatus({ ativado: false, obrigatorio: false });
+    }
+  }, []);
+  useEffect(() => {
+    if (user && user.id > 0) carregar();
+  }, [user, carregar]);
+
+  async function iniciarSetup() {
+    setBusy(true);
+    setErro('');
+    try {
+      const d = await api.post<{ segredo: string; qr: string }>('/auth/mfa/setup', {});
+      setSetup(d);
+    } catch (e: any) {
+      setErro(e instanceof ApiError ? e.message : 'Não foi possível iniciar o cadastro do MFA.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function ativar() {
+    if (!codigo) return;
+    setBusy(true);
+    setErro('');
+    try {
+      await api.post('/auth/mfa/ativar', { codigo });
+      toast.success('MFA ativado! A partir de agora o login pede o código do app autenticador.');
+      setSetup(null);
+      setCodigo('');
+      await carregar();
+    } catch (e: any) {
+      if (e instanceof ApiError && e.fields?.codigo) setErro(e.fields.codigo);
+      else setErro(e instanceof ApiError ? e.message : 'Código inválido.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function desativar() {
+    if (!codigo) {
+      setErro('Informe o código atual do app para desativar.');
+      return;
+    }
+    setBusy(true);
+    setErro('');
+    try {
+      await api.post('/auth/mfa/desativar', { codigo });
+      toast.success('MFA desativado. Sessões de outros dispositivos foram encerradas.');
+      setCodigo('');
+      await carregar();
+    } catch (e: any) {
+      if (e instanceof ApiError && e.code === 'reauth_necessaria') {
+        setPedirReauth(true);
+        setErro('');
+        return;
+      }
+      setErro(e instanceof ApiError ? e.message : 'Não foi possível desativar.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!user || user.id <= 0) return null;
+  const obrigatorio = status?.obrigatorio || user.perfil === 'admin';
+
+  return (
+    <section className="card p-5">
+      <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+        <Smartphone className="h-4 w-4 text-navy-400" /> Autenticação em dois fatores (MFA)
+      </h2>
+      {!status ? (
+        <p className="mt-2 flex items-center gap-2 text-sm text-slate-400">
+          <Loader2 className="h-4 w-4 animate-spin" /> Carregando...
+        </p>
+      ) : status.ativado ? (
+        <div className="mt-3 space-y-3">
+          <p className="flex items-center gap-2 text-sm text-slate-600">
+            <Badge tone="green">Ativado</Badge> Seu login exige o código de 6 dígitos do app autenticador.
+          </p>
+          {erro && <Alert tone="red">{erro}</Alert>}
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="w-36">
+              <label className="label" htmlFor="mfa-codigo-desativar">
+                Código atual
+              </label>
+              <input id="mfa-codigo-desativar" className="input font-mono" inputMode="numeric" maxLength={6} value={codigo} onChange={(e) => setCodigo(e.target.value.replace(/\D/g, ''))} placeholder="000000" />
+            </div>
+            <button className="btn-secondary" onClick={desativar} disabled={busy || codigo.length !== 6}>
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />} Desativar MFA
+            </button>
+          </div>
+          <p className="text-xs text-slate-400">Desativar exige a sua senha recente (reautenticação) e encerra as sessões de outros dispositivos.</p>
+        </div>
+      ) : (
+        <div className="mt-3 space-y-3">
+          <p className="text-sm text-slate-600">
+            {obrigatorio ? (
+              <>
+                <Badge tone="amber">Obrigatório para administradores</Badge> Proteja sua conta com um app autenticador (Google Authenticator, Aegis, 1Password…).
+              </>
+            ) : (
+              'Recomendado: adicione uma segunda camada de proteção ao seu acesso com um app autenticador.'
+            )}
+          </p>
+          {!setup ? (
+            <>
+              {erro && <Alert tone="red">{erro}</Alert>}
+              <button className="btn-primary" onClick={iniciarSetup} disabled={busy}>
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />} Ativar MFA
+              </button>
+            </>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex flex-col items-start gap-3 sm:flex-row">
+                <img src={setup.qr} alt="QR Code do app autenticador" className="h-40 w-40 rounded-lg border border-slate-200 p-1" />
+                <div className="flex-1 text-sm text-slate-600">
+                  <p>1. Escaneie o QR no seu app autenticador.</p>
+                  <p className="mt-1">
+                    2. Ou digite o segredo manualmente:{' '}
+                    <button className="font-mono text-xs underline-offset-2 hover:underline" onClick={() => navigator.clipboard.writeText(setup.segredo).then(() => toast.success('Segredo copiado.'))}>
+                      {setup.segredo.slice(0, 8)}… <Copy className="inline h-3 w-3" />
+                    </button>
+                  </p>
+                  <p className="mt-1">3. Informe o código de 6 dígitos que o app mostrar.</p>
+                </div>
+              </div>
+              {erro && <Alert tone="red">{erro}</Alert>}
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="w-36">
+                  <label className="label" htmlFor="mfa-codigo-ativar">
+                    Código atual
+                  </label>
+                  <input id="mfa-codigo-ativar" className="input font-mono" inputMode="numeric" maxLength={6} value={codigo} onChange={(e) => setCodigo(e.target.value.replace(/\D/g, ''))} placeholder="000000" />
+                </div>
+                <button className="btn-primary" onClick={ativar} disabled={busy || codigo.length !== 6}>
+                  {busy && <Loader2 className="h-4 w-4 animate-spin" />} Confirmar e ativar
+                </button>
+                <button className="btn-secondary" onClick={() => { setSetup(null); setErro(''); }}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      <ReauthModal
+        open={pedirReauth}
+        onClose={() => setPedirReauth(false)}
+        onConfirmed={() => setErro('')}
+        titulo="Autorizar desativação do MFA"
+      />
+    </section>
+  );
+}
+
+/** Lista de sessões ativas com revogação por dispositivo. */
+function SessoesCard({ onSairDeTodos }: { onSairDeTodos: () => void }) {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [sessoes, setSessoes] = useState<Sessao[] | null>(null);
+
+  const carregar = useCallback(async () => {
+    try {
+      const d = await api.get<{ sessoes: Sessao[] }>('/auth/sessoes');
+      setSessoes(d.sessoes);
+    } catch {
+      setSessoes([]);
+    }
+  }, []);
+  useEffect(() => {
+    if (user && user.id > 0) carregar();
+  }, [user, carregar]);
+
+  async function revogar(sid: string) {
+    try {
+      await api.post(`/auth/sessoes/${sid}/revogar`, {});
+      toast.success('Sessão revogada.');
+      await carregar();
+    } catch (e: any) {
+      toast.error(e instanceof ApiError ? e.message : 'Não foi possível revogar.');
+    }
+  }
+
+  async function sairDeTodos() {
+    try {
+      await api.post('/auth/logout-all', {});
+    } catch {
+      /* segue mesmo se a API falhar: limpa o dispositivo local */
+    }
+    onSairDeTodos();
+  }
+
+  if (!user || user.id <= 0) return null;
+
+  return (
+    <section className="card p-5">
+      <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+        <LogOut className="h-4 w-4 text-navy-400" /> Sessões e dispositivos
+      </h2>
+      <p className="mt-2 text-sm text-slate-500">Cada acesso cria uma sessão que pode ser revogada individualmente — derruba o token daquele dispositivo na hora.</p>
+      {!sessoes ? (
+        <p className="mt-3 flex items-center gap-2 text-sm text-slate-400">
+          <Loader2 className="h-4 w-4 animate-spin" /> Carregando...
+        </p>
+      ) : (
+        <ul className="mt-3 divide-y divide-slate-100">
+          {sessoes.map((s) => (
+            <li key={s.sid} className="flex items-center justify-between gap-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-slate-800">
+                  {s.atual && <Badge tone="green">Este dispositivo</Badge>} <span className="font-mono text-xs text-slate-400">{s.sid.slice(0, 8)}</span>{' '}
+                  <span className="text-slate-500">· {s.ip || 'ip desconhecido'}</span>
+                </p>
+                <p className="truncate text-xs text-slate-400">
+                  Entrou em {dataCurta(s.criada_em)} · {s.user_agent || 'agente desconhecido'}
+                </p>
+              </div>
+              {!s.atual && (
+                <button className="btn-secondary shrink-0 !px-2 !py-1 text-xs" onClick={() => revogar(s.sid)}>
+                  Revogar
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <button className="btn-secondary mt-3" onClick={sairDeTodos}>
+        <LogOut className="h-4 w-4 text-red-500" /> Sair de todos os dispositivos
+      </button>
+    </section>
   );
 }
 

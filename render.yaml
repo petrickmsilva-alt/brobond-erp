@@ -32,6 +32,10 @@ services:
         sync: false
       - key: JWT_SECRET
         generateValue: true
+      # Chave dedicada para CIFRAR os segredos MFA (TOTP) em repouso.
+      # Se ausente, deriva do JWT_SECRET — defina uma própria e não a troque.
+      - key: MFA_ENCRYPTION_KEY
+        generateValue: true
       - key: ADMIN_EMAIL
         value: admin@brobond.com.br
       - key: ADMIN_PASSWORD

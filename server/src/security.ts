@@ -1,10 +1,13 @@
 // Medidas de segurança da API (sem dependências externas):
 //   • cabeçalhos de proteção no navegador
 //   • CORS restrito (produção) — o front é servido pelo mesmo domínio
-//   • limite de tentativas de login por IP + e-mail
+//   • rate limit PERSISTENTE de tentativas de login por IP + e-mail
+//     (tabela login_tentativas — sobrevive a reinícios e a mais de uma instância)
 //   • exigência de JWT_SECRET em produção
 import type { NextFunction, Request, Response } from 'express';
+import { HttpError } from './errors';
 import { clientIp } from './auth';
+import { getStore } from './services';
 
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -16,17 +19,13 @@ export function assertProductionSecrets() {
     console.error('❌ JWT_SECRET ausente ou fraco em produção. Defina um valor longo e aleatório (render.yaml já gera um).');
     process.exit(1);
   }
-  const vaultKey = process.env.VAULT_KEY || '';
-  let vaultBytes = 0;
-  try { vaultBytes = /^[0-9a-f]{64}$/i.test(vaultKey) ? 32 : Buffer.from(vaultKey, 'base64').length; } catch { vaultBytes = 0; }
-  if (vaultBytes !== 32) {
-    console.error('❌ VAULT_KEY inválida em produção. Defina exatamente 32 bytes em base64 ou 64 caracteres hexadecimais.');
-    process.exit(1);
-  }
   const adminPassword = process.env.ADMIN_PASSWORD || '';
   if (!adminPassword || adminPassword.length < 8 || adminPassword === 'brobond123') {
     console.error('❌ ADMIN_PASSWORD ausente ou fraca em produção. Defina uma senha com pelo menos 8 caracteres.');
     process.exit(1);
+  }
+  if (!process.env.MFA_ENCRYPTION_KEY) {
+    console.warn('⚠️  MFA_ENCRYPTION_KEY não definida — os segredos TOTP serão cifrados com chave derivada de JWT_SECRET. Defina uma chave dedicada (e não troque o JWT_SECRET depois, ou será preciso resetar o MFA dos administradores).');
   }
 }
 
@@ -56,49 +55,93 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
 }
 
 // ----------------------------------------------------------------------------
-// Limite de tentativas de login
+// Rate limit PERSISTENTE (tabela login_tentativas no Postgres; Map em memória
+// no modo demonstração). Buckets por finalidade: login, reset, mfa, convite.
 // ----------------------------------------------------------------------------
+export type RateBucket = 'login' | 'reset' | 'mfa' | 'convite' | 'reauth';
+
 const WINDOW_MS = Number(process.env.LOGIN_WINDOW_MS) || 15 * 60_000; // 15 min
 const MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS) || 5;
-type Bucket = { count: number; first: number; blockedUntil: number };
-const buckets = new Map<string, Bucket>();
 
-function bucketKey(req: Request): string {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  return `${clientIp(req)}|${email}`;
+export function rateWindowMs(): number {
+  return WINDOW_MS;
+}
+export function rateMaxAttempts(): number {
+  return MAX_ATTEMPTS;
 }
 
-function prune() {
-  const now = Date.now();
-  for (const [k, b] of buckets) if (now - b.first > WINDOW_MS && b.blockedUntil < now) buckets.delete(k);
+export function rateKey(bucket: RateBucket, chave: string): string {
+  return `${bucket}|${chave}`;
 }
 
-/** Middleware: bloqueia após MAX_ATTEMPTS falhas dentro da janela. */
-export function loginRateLimit(req: Request, res: Response, next: NextFunction) {
-  if (buckets.size > 5000) prune();
-  const b = buckets.get(bucketKey(req));
-  const now = Date.now();
-  if (b && b.blockedUntil > now) {
-    const min = Math.ceil((b.blockedUntil - now) / 60_000);
-    res.setHeader('Retry-After', String(Math.ceil((b.blockedUntil - now) / 1000)));
-    return res.status(429).json({ error: `Muitas tentativas de login. Tente novamente em ${min} minuto${min === 1 ? '' : 's'}.` });
+/** Chave de login: IP + e-mail (igual ao comportamento anterior). */
+export function loginBucketKey(req: Request): string {
+  return rateKey('login', `${clientIp(req)}|${String(req.body?.email || '').trim().toLowerCase()}`);
+}
+
+/** Verifica se o bucket está bloqueado (lança 429). Uso em handlers wrap()-ados. */
+export async function exigirRateLimit(bucket: RateBucket, chave: string): Promise<void> {
+  try {
+    const estado = await getStore().rateLimitEstado(rateKey(bucket, chave), WINDOW_MS);
+    if (estado?.bloqueado_ate && new Date(estado.bloqueado_ate).getTime() > Date.now()) {
+      const seg = Math.ceil((new Date(estado.bloqueado_ate).getTime() - Date.now()) / 1000);
+      throw new HttpError(429, `Muitas tentativas. Tente novamente em ${seg} segundo${seg === 1 ? '' : 's'}.`);
+    }
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    // Banco de rate limit indisponível: segue (fail-open) — o login continua
+    // exigindo credenciais válidas; o problema é registrado no log.
+    console.warn('⚠️  Rate limit indisponível (fail-open):', (e as any)?.message || e);
   }
-  next();
+}
+
+/** Registra uma falha. Retorna quantas tentativas restam (0 = bloqueado agora). */
+export async function registrarFalha(bucket: RateBucket, chave: string): Promise<number> {
+  try {
+    const { restantes } = await getStore().rateLimitHit(rateKey(bucket, chave), WINDOW_MS, MAX_ATTEMPTS);
+    return restantes;
+  } catch (e) {
+    console.warn('⚠️  Rate limit indisponível ao registrar falha (fail-open):', (e as any)?.message || e);
+    return MAX_ATTEMPTS - 1;
+  }
+}
+
+/** Limpa o contador após sucesso. */
+export async function registrarSucesso(bucket: RateBucket, chave: string): Promise<void> {
+  try {
+    await getStore().rateLimitReset(rateKey(bucket, chave));
+  } catch {
+    // indiferente: bucket sujo expira sozinho na janela
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Compatibilidade com o fluxo de login (IP + e-mail)
+// ----------------------------------------------------------------------------
+
+/** Middleware de login: bloqueia após MAX_ATTEMPTS falhas dentro da janela. */
+export async function loginRateLimit(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const estado = await getStore().rateLimitEstado(loginBucketKey(req), WINDOW_MS);
+    if (estado?.bloqueado_ate && new Date(estado.bloqueado_ate).getTime() > Date.now()) {
+      const min = Math.ceil((new Date(estado.bloqueado_ate).getTime() - Date.now()) / 60_000);
+      res.setHeader('Retry-After', String(Math.ceil((new Date(estado.bloqueado_ate).getTime() - Date.now()) / 1000)));
+      return void res.status(429).json({ error: `Muitas tentativas de login. Tente novamente em ${min} minuto${min === 1 ? '' : 's'}.` });
+    }
+    next();
+  } catch (e) {
+    // fail-open: sem banco de rate limit o login segue (credenciais ainda obrigatórias)
+    console.warn('⚠️  Rate limit indisponível (fail-open):', (e as any)?.message || e);
+    next();
+  }
 }
 
 /** Registra uma falha de login. Retorna quantas tentativas restam (0 = bloqueado agora). */
-export function registerLoginFailure(req: Request): number {
-  const key = bucketKey(req);
-  const now = Date.now();
-  let b = buckets.get(key);
-  if (!b || now - b.first > WINDOW_MS) b = { count: 0, first: now, blockedUntil: 0 };
-  b.count += 1;
-  if (b.count >= MAX_ATTEMPTS) b.blockedUntil = now + WINDOW_MS;
-  buckets.set(key, b);
-  return Math.max(0, MAX_ATTEMPTS - b.count);
+export async function registerLoginFailure(req: Request): Promise<number> {
+  return registrarFalha('login', `${clientIp(req)}|${String(req.body?.email || '').trim().toLowerCase()}`);
 }
 
 /** Limpa o contador após login bem-sucedido. */
-export function registerLoginSuccess(req: Request) {
-  buckets.delete(bucketKey(req));
+export async function registerLoginSuccess(req: Request): Promise<void> {
+  return registrarSucesso('login', `${clientIp(req)}|${String(req.body?.email || '').trim().toLowerCase()}`);
 }

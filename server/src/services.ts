@@ -1,6 +1,6 @@
 // Camada de serviço: CRUD genérico + regras de negócio por módulo
 // (estoque, movimentações, ordens, usuários) + auditoria.
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
 import { MemStore } from './memdb';
 import { PgStore, isPgAvailable, translatePgError } from './pgstore';
@@ -95,13 +95,19 @@ export async function getRecord(r: Resource, id: number) {
 }
 
 /**
- * Coluna "Senha" da lista de usuários: mostra o ESTADO da senha, nunca o valor.
- * A senha é guardada em hash bcrypt (mão única) — nem um administrador consegue
- * vê-la. "Provisória" = troca obrigatória no próximo acesso (trocar_senha).
+ * Coluna "Senha" da lista de usuários: mostra o ESTADO do acesso, nunca o valor.
+ * A senha é guardada em hash Argon2id (mão única) — nem um administrador consegue
+ * vê-la ou recuperá-la.
+ *   • convite_pendente — usuário criado, aguardando definir a própria senha via convite;
+ *   • provisoria — senha temporária definida por admin (troca obrigatória no próximo acesso);
+ *   • propria — senha definida pelo próprio usuário.
  */
 function anotarStatusSenha(r: Resource, rows: Row[]) {
   if (r.key !== 'usuarios') return;
-  for (const row of rows) row.senha_status = row.trocar_senha ? 'provisoria' : 'propria';
+  for (const row of rows) {
+    row.senha_status = !row.senha_definida_em ? 'convite_pendente' : row.trocar_senha ? 'provisoria' : 'propria';
+    row.convite_expirado = row.convite_expira_em ? new Date(String(row.convite_expira_em)).getTime() < Date.now() : false;
+  }
 }
 
 export async function optionsFor(r: Resource) {
@@ -156,8 +162,19 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
         await syncAporte(null, row, actor, tx);
       }
 
+      // Convite de acesso: usuário criado sem senha recebe um link por e-mail
+      // para definir a própria senha (48 h). Sem SMTP, o link volta na resposta
+      // (modo demonstração/desenvolvimento) em vez de ficar só no console.
+      let conviteLink: string | undefined;
+      if (r.key === 'usuarios' && !row.senha_hash) {
+        const { gerarConvite } = await import('./usuariosAdmin');
+        conviteLink = await gerarConvite(row, { id: actor.id || 0, name: actor.name }, tx);
+      }
+
       await audit(tx, actor, 'criar', r, row.id, `${r.singular} ${labelOf(r, row)} incluído(a)`, sanitize(data));
-      return (await s.get(r, row.id, tx)) ?? row;
+      const final = (await s.get(r, row.id, tx)) ?? row;
+      if (conviteLink) (final as Row).convite_link = conviteLink;
+      return final;
     });
   } catch (e) {
     throw toHttpError(e, r);
@@ -294,7 +311,9 @@ function sanitize(row: Row | Payload): Row {
   const out: Row = { ...row };
   delete out.senha;
   delete out.senha_hash;
-  delete out.senha_cifrada;
+  delete out.mfa_secret;
+  delete out.convite_token_hash;
+  delete out.reset_token_hash;
   return out;
 }
 
@@ -314,14 +333,12 @@ export function validarPoliticaSenha(senha: string, email?: string): string | nu
 }
 
 async function prepareUserPayload(data: Payload, before: Row | null, actor: Actor) {
-  const { hashPassword, invalidateUserCache } = await import('./auth');
-  const temSenha = typeof data.senha === 'string' && data.senha.length > 0;
-  if (temSenha) {
-    const erro = validarPoliticaSenha(String(data.senha ?? ''), String(data.email ?? before?.email ?? ''));
-    if (erro) throw new HttpError(400, erro, { senha: erro });
-    data.senha_hash = await hashPassword(String(data.senha));
-    const { encryptVaultPassword } = await import('./passwordVault');
-    data.senha_cifrada = encryptVaultPassword(String(data.senha));
+  const { invalidateUserCache } = await import('./auth');
+  // A senha NUNCA é digitada pelo admin no cadastro/edição: novos usuários
+  // recebem um convite por e-mail e o admin pode gerar senha temporária de
+  // exibição única (endpoint próprio). Qualquer `senha` no payload é rejeitada.
+  if (typeof data.senha === 'string' && data.senha.length > 0) {
+    throw new HttpError(400, 'Senhas não são mais definidas neste formulário: convide o usuário por e-mail ou use "Gerar senha temporária" (exibição única).');
   }
   delete data.senha;
 
@@ -329,17 +346,9 @@ async function prepareUserPayload(data: Payload, before: Row | null, actor: Acto
     if (Number(before.id) === Number(actor.id)) {
       if (data.ativo === false) throw new HttpError(400, 'Você não pode desativar o seu próprio usuário.');
       if (data.perfil && data.perfil !== 'admin') throw new HttpError(400, 'Você não pode remover o seu próprio perfil de administrador.');
-      // Quem troca a própria senha conclui a obrigação de troca.
-      if (temSenha) data.trocar_senha = false;
-    } else if (temSenha) {
-      // Admin redefiniu a senha de outro usuário → troca obrigatória no 1º acesso.
-      data.trocar_senha = true;
     }
     await ensureNotLastAdmin(before, data, null);
     invalidateUserCache(Number(before.id));
-  } else if (temSenha) {
-    // Criação de usuário: senha provisória do admin → troca obrigatória no 1º acesso.
-    data.trocar_senha = true;
   }
 }
 

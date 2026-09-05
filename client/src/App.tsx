@@ -11,6 +11,7 @@ import OrderPage from './pages/OrderPage';
 import OrdemDetail from './pages/OrdemDetail';
 import FichaDetail from './pages/FichaDetail';
 import { ForgotPage, ResetPage } from './pages/ForgotReset';
+import Convite from './pages/Convite';
 import CatalogoPublico from './pages/CatalogoPublico';
 import { MODULES } from './modules';
 
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/esqueci" element={<ForgotPage />} />
         <Route path="/redefinir/:token" element={<ResetPage />} />
+        <Route path="/convite/:token" element={<Convite />} />
         <Route path="/catalogo/:token" element={<CatalogoPublico />} />
         <Route
           path="/"

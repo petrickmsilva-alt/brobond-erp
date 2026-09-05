@@ -203,33 +203,82 @@ test('cockpit de produção: KPIs das OPs com atrasadas e peças do mês', async
   assert.ok(payload.pecasAbertas >= 5);
 });
 
-test('usuários: lista traz status da senha (coluna Senha) sem expor valor', async () => {
+test('usuários: lista traz status do acesso (coluna Acesso) sem expor valor', async () => {
   await ensureSetup();
   // garante ao menos um usuário (o modo memória começa vazio nos testes)
   const antes = await listRecords(RESOURCES.usuarios, { page: 1, pageSize: 50 });
   if (!antes.rows.length) {
-    await createRecord(RESOURCES.usuarios, { nome: 'Usuario Lista', email: 'usuario.lista@brobond.com.br', perfil: 'operador', senha: 'SenhaForte123' }, admin);
+    await createRecord(RESOURCES.usuarios, { nome: 'Usuario Lista', email: 'usuario.lista@brobond.com.br', perfil: 'operador' }, admin);
   }
   const lista = await listRecords(RESOURCES.usuarios, { page: 1, pageSize: 50 });
   assert.ok(lista.rows.length >= 1);
   for (const row of lista.rows) {
-    assert.ok(['propria', 'provisoria'].includes(String(row.senha_status)), 'senha_status deve ser propia|provisoria');
+    assert.ok(['propria', 'provisoria', 'convite_pendente'].includes(String(row.senha_status)), 'senha_status deve ser propia|provisoria|convite_pendente');
     assert.ok(!('senha' in row), 'valor da senha jamais é retornado');
     assert.ok(!('senha_hash' in row), 'hash da senha jamais é retornado');
+    assert.ok(!('convite_token_hash' in row), 'hash do convite jamais é retornado');
+    assert.ok(!('mfa_secret' in row), 'segredo do MFA jamais é retornado');
   }
 });
 
-test('admin redefine senha do usuário → status vira provisória; troca própria → própria', async () => {
+/** Helpers de req/res mockados para handlers de autenticação. */
+function mockReq(user: any, body: any = {}, params: any = {}, ip = '127.0.0.1'): any {
+  return { user, body, params, headers: {}, socket: { remoteAddress: ip } };
+}
+function mockRes(): { res: any; json: () => any; status: () => any; payload: () => any; code: () => any } {
+  let _payload: any;
+  let _status = 0;
+  const res: any = {
+    json: (d: any) => {
+      _payload = d;
+      if (!_status) _status = 200;
+      return res;
+    },
+    status: (s: number) => {
+      _status = s;
+      return res;
+    },
+    setHeader: () => res,
+  };
+  return { res, json: () => _payload, status: () => _status, payload: () => _payload, code: () => _status };
+}
+
+test('fluxo profissional: convite → aceita → senha temporária de exibição única → provisória', async () => {
   await ensureSetup();
-  const novo = await createRecord(RESOURCES.usuarios, { nome: 'Usuario Teste Rel', email: 'usuario.rel@brobond.com.br', perfil: 'operador', senha: 'SenhaForte123' }, admin);
+  const { aceitarConvite, senhaTemporaria } = await import('../src/usuariosAdmin');
+  const { reautenticar } = await import('../src/auth');
+
+  // 1. Criação sem senha → convite pendente + link (sem SMTP em teste)
+  const novo: any = await createRecord(RESOURCES.usuarios, { nome: 'Usuario Convite', email: 'usuario.convite@brobond.com.br', perfil: 'gerente' }, admin);
   const criado = await getRecord(RESOURCES.usuarios, Number(novo.id));
-  assert.equal(criado.senha_status, 'provisoria', 'senha definida pelo admin exige troca no 1º acesso');
-  assert.equal(criado.trocar_senha, true);
-  // usuário troca a própria senha pelo Configurações
-  await updateRecord(RESOURCES.usuarios, Number(novo.id), { senha: 'OutraSenha456' }, { id: Number(novo.id), name: 'Usuario Teste Rel', perfil: 'operador' });
-  const depois = await getRecord(RESOURCES.usuarios, Number(novo.id));
-  assert.equal(depois.trocar_senha, false, 'quem troca a própria senha conclui a obrigação');
-  const depoisLista = await listRecords(RESOURCES.usuarios, { page: 1, pageSize: 50 });
-  const row = depoisLista.rows.find((r: any) => Number(r.id) === Number(novo.id));
-  assert.equal(row.senha_status, 'propria');
+  assert.equal(criado.senha_status, 'convite_pendente', 'sem senha, o acesso fica pendente de convite');
+  assert.ok(novo.convite_link, 'sem SMTP o link do convite volta na resposta (modo teste)');
+  const token = String(novo.convite_link).split('/').pop()!;
+
+  // 2. Aceite do convite define a própria senha
+  let r1 = mockRes();
+  await aceitarConvite(mockReq(null, { token, senha: 'MinhaSenha#2026' }), r1.res);
+  assert.equal(r1.code(), 200);
+  const depoisConvite = await getRecord(RESOURCES.usuarios, Number(novo.id));
+  assert.equal(depoisConvite.senha_status, 'propria', 'após aceitar o convite, a senha é do usuário');
+
+  // 3. Reautenticação do usuário (step-up) e senha temporária para outro usuário
+  const ator = { id: Number(novo.id), name: 'Usuario Convite', perfil: 'admin' as const };
+  let r2 = mockRes();
+  await reautenticar(mockReq(ator, { senha: 'MinhaSenha#2026' }), r2.res);
+  assert.equal(r2.code(), 200, 'reautenticação com senha correta');
+  const outro: any = await createRecord(RESOURCES.usuarios, { nome: 'Usuario Temp', email: 'usuario.temp@brobond.com.br', perfil: 'operador' }, ator);
+  let r3 = mockRes();
+  await senhaTemporaria(mockReq(ator, {}, { id: String(outro.id) }), r3.res);
+  const resposta = r3.json();
+  assert.ok(resposta.senha_temporaria, 'senha temporária é devolvida uma única vez');
+  assert.ok(resposta.senha_temporaria.length >= 8);
+  const temp = await getRecord(RESOURCES.usuarios, Number(outro.id));
+  assert.equal(temp.senha_status, 'provisoria', 'senha gerada pelo admin vira provisória');
+  assert.equal(temp.trocar_senha, true);
+  // hash no banco NUNCA é o texto puro nem reversível
+  const bruto = await getStore().listUsuariosRaw();
+  const rowBruta = bruto.find((u: any) => Number(u.id) === Number(outro.id));
+  assert.ok(String(rowBruta.senha_hash).startsWith('$argon2id$'), 'hash Argon2id no banco');
+  assert.notEqual(String(rowBruta.senha_hash), resposta.senha_temporaria);
 });

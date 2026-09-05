@@ -8,7 +8,7 @@ Monorepo com frontend (React) e backend (Node/Express + Postgres).
 | Camada | Tecnologia |
 |---|---|
 | Frontend | React + TypeScript + Vite + Tailwind CSS + lucide-react (ícones) |
-| Backend | Node.js + Express + JSON Web Token (JWT) + bcrypt |
+| Backend | Node.js + Express + JSON Web Token (JWT) + **Argon2id** (senhas) + **MFA/TOTP** (administradores) |
 | Banco | PostgreSQL (recomendado: **Neon**, gratuito e permanente) — ou modo demonstração em memória |
 | Fotos | No próprio banco (padrão) ou **Cloudinary** (gratuito, CDN) |
 | Hospedagem | Render (API + front) · HostGator (domínio/e-mail) |
@@ -31,11 +31,16 @@ brobond-erp/
 │       ├── services.ts     # regras de negócio (estoque, OP, usuários) + auditoria
 │       ├── uploads.ts      # fotos: upload, principal, ordem, remoção (banco ou Cloudinary)
 │       ├── detail.ts       # página de detalhe do produto (grade, movimentações, custo)
-│       ├── security.ts     # rate limit de login, cabeçalhos, CORS, JWT_SECRET obrigatório
+│       ├── security.ts     # rate limit PERSISTENTE, cabeçalhos, CORS, segredos de produção
+│       ├── password.ts     # hash Argon2id + migração gradual do bcrypt
+│       ├── totp.ts / mfa.ts# MFA (RFC 6238) — segredo cifrado em repouso
+│       ├── sessoes.ts      # sessões por dispositivo (invalidação)
+│       ├── usuariosAdmin.ts# convites, senha temporária (exibição única), reset de MFA
+│       ├── auditChain.ts   # cadeia de hashes da auditoria (tamper-evidence)
 │       ├── validate.ts     # validação/normalização do payload
 │       ├── pgstore.ts      # persistência PostgreSQL
 │       ├── memdb.ts        # persistência em memória (modo demonstração)
-│       ├── auth.ts         # login, JWT, bcrypt, perfis, troca de senha
+│       ├── auth.ts         # login (com MFA), JWT+sessões, reautenticação, perfis, troca de senha
 │       └── db.ts           # pool + migração automática (db/schema.sql)
 ├── db/                     # schema.sql (idempotente) + seed.sql (Postgres)
 ├── docs/                   # relatório de auditoria e guias (banco/fotos gratuitos)
@@ -82,9 +87,15 @@ psql "$DATABASE_URL" -f db/seed.sql     # (opcional) grade PP–GG, coleções e
 ```
 
 O usuário administrador é criado pela própria API a partir de
-`ADMIN_EMAIL`/`ADMIN_PASSWORD`, com a senha em **hash bcrypt**. Depois disso a
-senha pode ser trocada pela interface; para recuperar o acesso, defina
+`ADMIN_EMAIL`/`ADMIN_PASSWORD`, com a senha em **hash Argon2id** (irreversível).
+No primeiro login o administrador troca a senha e cadastra o **MFA obrigatório**
+(app autenticador + QR). Para recuperar o acesso, defina
 `ADMIN_FORCE_PASSWORD=true` em um deploy e volte para `false` em seguida.
+
+> 🔐 O fluxo completo de autenticação (Argon2id com migração do bcrypt, convites,
+> senha temporária de exibição única, MFA/TOTP, reautenticação, sessões,
+> rate limit persistente e auditoria com cadeia de hashes) está documentado em
+> [`docs/AUTENTICACAO.md`](docs/AUTENTICACAO.md).
 
 ## Deploy na Render
 
@@ -121,9 +132,9 @@ DNS apontando para a Render.
 | Financeiro | Investidores / Aportes | ✔ | ✔ | ✔ | Sócios/investidores, capital inicial, rodada, reinvestimento, distribuição de lucro |
 | Financeiro | Recorrências | ✔ | ✔ | ✔ | Aluguel, energia, folha, facção etc. — geração automática (botão ou cron) |
 | Relatórios | Relatórios | | | | Faturamento por período (comparação mensal/anual), vendas, comissões com gráfico mensal, curva ABC, posição de estoque, estoque abaixo do mínimo por local, movimentações, produção, insumos, DRE gerencial e razão financeiro (gerente). Exportação CSV/XLSX |
-| Configurações | Usuários | ✔ | ✔ | ✔ | Somente admin. Perfis, ativar/desativar, redefinir senha |
+| Configurações | Usuários | ✔ | ✔ | ✔ | Somente admin. Perfis, ativar/desativar, **convite por e-mail**, **senha temporária de exibição única**, reset de MFA |
 | Configurações | Auditoria | | | | Somente admin. Quem incluiu/alterou/excluiu o quê, logins e trocas de senha |
-| Configurações | Configurações | | | | Minha conta, trocar senha, informações do sistema |
+| Configurações | Configurações | | | | Minha conta, trocar senha, **MFA**, **sessões por dispositivo**, informações do sistema |
 
 ### Perfis de acesso
 
@@ -133,20 +144,34 @@ DNS apontando para a Render.
 | **Gerente** | Incluir, salvar e excluir em todos os módulos, exceto Usuários/Auditoria |
 | **Operador** | Incluir e salvar; **não exclui** registros |
 
-Regras de segurança: senhas sempre com bcrypt; `senha_hash` nunca sai da API;
-usuário desativado perde o acesso imediatamente (token rejeitado); não é
-possível desativar/rebaixar/excluir o próprio usuário nem o último administrador;
-**login bloqueado por 15 min após 5 tentativas erradas** (registrado na auditoria);
-cabeçalhos de proteção no navegador; em produção a API **não inicia sem `JWT_SECRET`**
-e o CORS só aceita o próprio domínio (ou `CORS_ORIGINS`).
+Regras de segurança: senhas sempre em **hash Argon2id** (migração gradual do bcrypt no
+login), **nunca exibidas nem recuperáveis** — não existe cofre de senhas; novos usuários
+recebem **convite por e-mail** para definir a própria senha; redefinições pelo admin usam
+**senha temporária de exibição única**; **MFA/TOTP obrigatório para administradores**;
+`senha_hash` e segredos (`mfa_secret`, tokens) nunca saem da API; **sessões revogáveis por
+dispositivo** (troca de senha/reset derrubam sessões); **reautenticação** para ações sensíveis;
+**rate limit persistente** (sobrevive a reinícios); auditoria com **cadeia de hashes**
+(tamper-evidence, verificável em `/api/admin/auditoria/verificar`); usuário desativado perde o
+acesso imediatamente; não é possível desativar/rebaixar/excluir o próprio usuário nem o último
+administrador; cabeçalhos de proteção; em produção a API **não inicia sem `JWT_SECRET`** e o
+CORS só aceita o próprio domínio (ou `CORS_ORIGINS`).
 
 ### API (resumo)
 
 ```
 GET    /api/health                     { ok, db, uploads, version } — pública (sem login)
-POST   /api/auth/login                 { email, password } → { token, user }
+POST   /api/auth/login                 { email, password } → { token, user } ou { mfa_*, mfa_ticket }
+POST   /api/auth/login/mfa             { mfa_ticket, codigo } → { token, user } (MFA/TOTP)
+POST   /api/auth/mfa/setup|ativar|desativar   MFA autogerenciado (QR + código)
+POST   /api/auth/reautenticar          { senha } → ações sensíveis por 5 min
+GET    /api/auth/sessoes               sessões ativas (+ POST .../revogar)
+POST   /api/auth/logout | logout-all   encerra a sessão atual | todas
+GET    /api/convites/:token            valida convite (+ POST /api/convites/aceitar)
+POST   /api/usuarios/:id/senha-temporaria    senha de exibição única (admin + reauth)
+POST   /api/usuarios/:id/resetar-mfa   limpa o MFA do usuário (admin + reauth)
+GET    /api/admin/auditoria/verificar  confere a cadeia de hashes da auditoria
 GET    /api/auth/me
-POST   /api/auth/change-password       { senha_atual, senha_nova }
+POST   /api/auth/change-password       { senha_atual, senha_nova } — derruba as outras sessões
 GET    /api/meta                       definição dos módulos (campos, tipos, opções)
 GET    /api/dashboard
 GET    /api/financeiro/resumo          fluxo de caixa, resultado do mês, a receber/pagar, por categoria
@@ -230,4 +255,5 @@ Ver [`docs/AUDITORIA-EVOLUCOES.md`](docs/AUDITORIA-EVOLUCOES.md). Situação:
 - [x] Fase 7 (parcial) — Mobile em cards, PWA, catálogo público
 - [x] **Módulo Financeiro** — contas, categorias, lançamentos, painel, auto-lançamento de vendas/compras e aportes de investidores
 - [x] Comércio varejo/atacado — preço atacado, canal de venda e pedido pelo catálogo público (cotação)
+- [x] **v0.6.0 — Fluxo profissional de autenticação** — fim do cofre de senhas (sem visualização nem armazenamento reversível; coluna `senha_cifrada` destruída); hash **Argon2id** com migração gradual do bcrypt no login; **convites por token** (48 h) para o usuário definir a própria senha; **senha temporária de exibição única** gerada pelo servidor; **MFA/TOTP obrigatório para administradores** (segredo cifrado em repouso, cadastro guiado com QR); **reautenticação (step-up)** para ações sensíveis; **sessões por dispositivo** com revogação individual; **rate limit persistente** no banco; **auditoria com cadeia de hashes** verificável; correção latente: tokens de redefinição não eram persistidos pelos stores. Detalhes em `docs/AUTENTICACAO.md`
 - [x] **v0.5.0 — Auditoria + cockpit** — versão unificada em 0.5.0; coluna "Senha" (estado) e troca de senha no Editar de Usuários; cockpit em Estoque e Produção; relatórios de faturamento (comparação mensal/anual), comissões com gráfico mensal, estoque abaixo do mínimo por local, DRE e razão financeiro (gerente/admin); exportação XLSX completa do sistema; correção do 409 falso ao editar estoque mínimo de outro local; API do financeiro restrita a gerente/admin (igual ao menu)

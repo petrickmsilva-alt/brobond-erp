@@ -19,6 +19,6 @@ export default defineConfig({
   },
   // Expõe variáveis VITE_ para o frontend (ex.: VITE_SENTRY_DSN)
   define: {
-    'import.meta.env.VITE_VERSION': JSON.stringify(process.env.npm_package_version || '0.5.0'),
+    'import.meta.env.VITE_VERSION': JSON.stringify(process.env.npm_package_version || '0.6.0'),
   },
 });

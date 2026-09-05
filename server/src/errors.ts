@@ -1,13 +1,16 @@
-// Erro HTTP com status e (opcionalmente) erros por campo — usado por validação e regras de negócio.
+// Erro HTTP com status e (opcionalmente) erros por campo e um código estável
+// para o front reagir (ex.: 'reauth_necessaria' → abrir modal de reautenticação).
 export class HttpError extends Error {
   status: number;
   fields?: Record<string, string>;
+  code?: string;
 
-  constructor(status: number, message: string, fields?: Record<string, string>) {
+  constructor(status: number, message: string, fields?: Record<string, string>, code?: string) {
     super(message);
     this.name = 'HttpError';
     this.status = status;
     this.fields = fields;
+    this.code = code;
   }
 }
 
