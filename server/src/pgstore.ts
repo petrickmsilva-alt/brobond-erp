@@ -158,7 +158,7 @@ export class PgStore implements Store {
       .map((f) => `t.${f.name}`)
       .concat(['t.id'])
       .filter((c, i, a) => a.indexOf(c) === i)
-      .filter((c) => c !== 't.senha_hash' && c !== 't.dados' && c !== 't.thumb');
+      .filter((c) => c !== 't.senha_hash' && c !== 't.senha_cifrada' && c !== 't.dados' && c !== 't.thumb');
     const selectList = [...cols, ...selects].join(', ');
     const from = `FROM ${r.table} t ${joins.join(' ')} ${where}`;
 
@@ -180,7 +180,7 @@ export class PgStore implements Store {
       .map((f) => `t.${f.name}`)
       .concat(['t.id'])
       .filter((c, i, a) => a.indexOf(c) === i)
-      .filter((c) => c !== 't.senha_hash' && c !== 't.dados' && c !== 't.thumb');
+      .filter((c) => c !== 't.senha_hash' && c !== 't.senha_cifrada' && c !== 't.dados' && c !== 't.thumb');
     const res = await q(
       `SELECT ${[...cols, ...selects].join(', ')} FROM ${r.table} t ${joins.join(' ')} WHERE t.id = $1`,
       [id],

@@ -80,6 +80,7 @@ export class MemStore implements Store {
   private decorate(r: Resource, row: Row): Row {
     const out: Row = { ...row };
     delete out.senha_hash;
+    delete out.senha_cifrada;
     delete out.dados;
     delete out.thumb;
     for (const f of r.fields) {

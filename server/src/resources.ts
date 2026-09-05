@@ -178,7 +178,7 @@ export const RESOURCES: Record<string, Resource> = {
     adminOnly: true,
     ops: ALL_OPS,
     notice:
-      'Prefira desativar um usuário a excluí-lo: o histórico de auditoria permanece vinculado ao nome. A coluna "Senha" mostra o estado (definida pelo usuário ou provisória) — o valor nunca é exibido, é gravado em hash bcrypt. Para mudar a senha de alguém, use Editar › campo "Senha".',
+      'Senhas continuam protegidas por hash bcrypt. As definidas após a ativação do cofre também podem ser visualizadas por um administrador após nova confirmação; senhas antigas não são recuperáveis.',
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
       { name: 'email', label: 'E-mail', type: 'email', required: true, unique: true, search: true, maxLength: 160, hint: 'Usado para entrar no sistema.' },
@@ -198,6 +198,7 @@ export const RESOURCES: Record<string, Resource> = {
         hint: 'A senha real nunca é exibida: ela é gravada em hash bcrypt (irreversível), igual ao login.',
       },
       { name: 'senha', label: 'Senha', type: 'password', virtual: true, requiredOnCreate: true, list: false, min: 6, hint: 'No editar, este campo MUDA a senha do usuário: preencha só se quiser definir uma nova (mínimo 8 caracteres); deixe em branco para manter a senha atual.' },
+      { name: 'senha_cifrada', label: 'Senha cifrada', type: 'text', list: false, form: false },
       { name: 'trocar_senha', label: 'Trocar senha no próximo acesso', type: 'boolean', default: false, list: false, hint: 'Ao marcar, o usuário é obrigado a definir uma senha nova no primeiro acesso.' },
       { name: 'ultimo_login', label: 'Último acesso', type: 'datetime', readonly: true, form: false },
       ...auditFields,
