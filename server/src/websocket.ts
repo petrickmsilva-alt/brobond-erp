@@ -29,17 +29,31 @@ export function initWebSocket(httpServer: HttpServer): SocketServer {
     transports: ['websocket', 'polling'],
   });
 
-  // Middleware de autenticação
-  io.use((socket, next) => {
+  // Middleware de autenticação (mesmo modelo do requireAuth: sessão válida ou nada)
+  io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token || String(socket.handshake.query?.token || '');
     if (!token) return next(new Error('Token não informado'));
+    let payload: any;
     try {
-      const payload = jwt.verify(token, JWT_SECRET) as AuthPayload;
-      (socket as any).user = payload;
-      next();
+      payload = jwt.verify(token, JWT_SECRET);
     } catch {
-      next(new Error('Token inválido'));
+      return next(new Error('Token inválido'));
     }
+    if (payload?.typ && payload.typ !== 'access') return next(new Error('Token inválido'));
+    if (payload?.id > 0) {
+      if (!payload.sid) return next(new Error('Sessão inválida — entre novamente.'));
+      try {
+        const { getStore } = await import('./services');
+        const sessao = await getStore().getSessao(String(payload.sid));
+        if (!sessao || sessao.revogada_em || new Date(sessao.expira_em).getTime() < Date.now()) {
+          return next(new Error('Sessão encerrada — entre novamente.'));
+        }
+      } catch {
+        // banco indisponível: mantém a conexão com base no token válido
+      }
+    }
+    (socket as any).user = payload;
+    next();
   });
 
   io.on('connection', (socket: Socket) => {

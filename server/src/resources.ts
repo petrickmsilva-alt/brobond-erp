@@ -178,15 +178,15 @@ export const RESOURCES: Record<string, Resource> = {
     adminOnly: true,
     ops: ALL_OPS,
     notice:
-      'Senhas continuam protegidas por hash bcrypt. As definidas após a ativação do cofre também podem ser visualizadas por um administrador após nova confirmação; senhas antigas não são recuperáveis.',
+      'Senhas protegidas por hash Argon2id (irreversível) — nunca exibidas nem recuperáveis. Novos usuários recebem um CONVITE por e-mail para definir a própria senha; o administrador pode gerar uma senha temporária de exibição única.',
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
-      { name: 'email', label: 'E-mail', type: 'email', required: true, unique: true, search: true, maxLength: 160, hint: 'Usado para entrar no sistema.' },
-      { name: 'perfil', label: 'Perfil', type: 'select', required: true, options: PERFIS, default: 'operador', hint: 'Administrador: tudo. Gerente: tudo, exceto usuários. Operador: não exclui registros.' },
+      { name: 'email', label: 'E-mail', type: 'email', required: true, unique: true, search: true, maxLength: 160, hint: 'Usado para o login e para o convite de acesso.' },
+      { name: 'perfil', label: 'Perfil', type: 'select', required: true, options: PERFIS, default: 'operador', hint: 'Administrador: tudo (com MFA obrigatório). Gerente: tudo, exceto usuários. Operador: não exclui registros.' },
       { ...ativo, hint: 'Usuários inativos não conseguem entrar.' },
       {
         name: 'senha_status',
-        label: 'Senha',
+        label: 'Acesso',
         type: 'select',
         virtual: true,
         list: true,
@@ -194,12 +194,14 @@ export const RESOURCES: Record<string, Resource> = {
         options: [
           { value: 'propria', label: 'Definida pelo usuário', tone: 'green' },
           { value: 'provisoria', label: 'Provisória — troca pendente', tone: 'amber' },
+          { value: 'convite_pendente', label: 'Convite pendente', tone: 'blue' },
         ],
-        hint: 'A senha real nunca é exibida: ela é gravada em hash bcrypt (irreversível), igual ao login.',
+        hint: 'A senha real nunca é exibida: é gravada em hash Argon2id (irreversível), igual ao login.',
       },
-      { name: 'senha', label: 'Senha', type: 'password', virtual: true, requiredOnCreate: true, list: false, min: 6, hint: 'No editar, este campo MUDA a senha do usuário: preencha só se quiser definir uma nova (mínimo 8 caracteres); deixe em branco para manter a senha atual.' },
-      { name: 'senha_cifrada', label: 'Senha cifrada', type: 'text', list: false, form: false },
+      { name: 'convite_expira_em', label: 'Convite expira em', type: 'datetime', readonly: true, form: false, list: false },
       { name: 'trocar_senha', label: 'Trocar senha no próximo acesso', type: 'boolean', default: false, list: false, hint: 'Ao marcar, o usuário é obrigado a definir uma senha nova no primeiro acesso.' },
+      { name: 'mfa_ativado_em', label: 'MFA ativado em', type: 'datetime', readonly: true, form: false, list: false, hint: 'Autenticação em dois fatores (TOTP) — obrigatória para administradores.' },
+      { name: 'senha_definida_em', label: 'Senha definida em', type: 'datetime', readonly: true, form: false, list: false },
       { name: 'ultimo_login', label: 'Último acesso', type: 'datetime', readonly: true, form: false },
       ...auditFields,
     ],
@@ -229,6 +231,9 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'excluir', label: 'Exclusão', tone: 'red' },
           { value: 'login', label: 'Login', tone: 'slate' },
           { value: 'senha', label: 'Troca de senha', tone: 'amber' },
+          { value: 'mfa', label: 'MFA (2FA)', tone: 'blue' },
+          { value: 'seguranca', label: 'Segurança', tone: 'red' },
+          { value: 'convite', label: 'Convite de acesso', tone: 'green' },
           { value: 'importar', label: 'Importação', tone: 'blue' },
           { value: 'ajuste', label: 'Ajuste de estoque', tone: 'amber' },
         ],
@@ -1414,6 +1419,13 @@ export function getPublicResource(key: string): Resource | undefined {
 export function columnsOf(r: Resource): Field[] {
   return r.fields.filter((f) => !f.virtual);
 }
+
+/**
+ * Colunas de autenticação que existem no banco mas NÃO aparecem como campos do
+ * recurso (segredos/tokens): o store aceita gravá-las via API interna, porém
+ * elas jamais voltam em consultas (ver COLUNAS_SECRETAS no pgstore/memdb).
+ */
+export const COLUNAS_AUTENTICACAO = ['senha_hash', 'mfa_secret', 'convite_token_hash', 'reset_token_hash', 'reset_expira_em', 'token_versao', 'senha_provisoria'];
 
 /** Campos que o usuário pode gravar (não virtuais, não somente leitura). */
 export function writableFields(r: Resource): Field[] {

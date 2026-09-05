@@ -86,6 +86,8 @@ export type Meta = {
   version?: string;
   /** SMTP configurado? (esqueci minha senha) */
   smtp?: { configurado: boolean };
+  /** Informações do fluxo de autenticação (hash, MFA, reautenticação) */
+  auth?: { hash: string; mfa_admin_obrigatorio: boolean; reauth_ttl_segundos: number };
 };
 
 export const MetaContext = createContext<Meta | null>(null);

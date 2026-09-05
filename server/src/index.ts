@@ -10,14 +10,24 @@ import {
   ensureAdmin,
   forgotPassword,
   getPreferences,
+  listarSessoes,
   login,
+  loginMFA,
+  logout,
   logoutAll,
   me,
   migrarSenhasLegadas,
+  mfaDesafio,
+  reautenticar,
   requireAuth,
   resetPassword,
+  revogarSessaoHandler,
   savePreferences,
+  verificarAuditoriaHandler,
 } from './auth';
+import { mfaStatus, mfaSetup, mfaAtivar, mfaDesativar } from './mfa';
+import { aceitarConvite, infoConvite, reenviarConvite, senhaTemporaria, resetarMfaUsuario } from './usuariosAdmin';
+import { limpezaPeriodica } from './sessoes';
 import { getPublicResource, publicMeta } from './resources';
 import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider, uploadsConfigError } from './uploads';
 import { productDetail } from './detail';
@@ -71,14 +81,13 @@ import { nfeDados, nfeEmitir, nfeStatus } from './nfe';
 import { calcularFrete, consultarCEP } from './frete';
 import { marketplaceStatus, sincronizarPedidos } from './marketplace';
 import { initWebSocket, wsStatus } from './websocket';
-import { requestVaultEmail, revealPassword } from './passwordVault';
 import { createServer } from 'node:http';
 
 assertProductionSecrets();
 initSentry();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = process.env.npm_package_version || '0.5.0';
+export const VERSION = process.env.npm_package_version || '0.6.0';
 const app = express();
 
 app.disable('x-powered-by');
@@ -125,9 +134,16 @@ app.get('/api/health', (_req, res) =>
   res.json({ ok: true, db: isDbConnected() ? 'postgres' : 'memory', uploads: uploadProvider(), version: VERSION })
 );
 app.post('/api/auth/login', loginRateLimit, wrap(login));
+// Segundo fator do login (TOTP): ticket de 10 min emitido no 1º passo.
+app.post('/api/auth/login/mfa', wrap(loginMFA));
+// QR/segredo do cadastro TOTP guiado (exige o ticket do 1º passo).
+app.post('/api/auth/mfa/desafio', wrap(mfaDesafio));
 // "Esqueci minha senha" — públicos (mesmo limite de tentativas do login)
 app.post('/api/auth/forgot', loginRateLimit, wrap(forgotPassword));
 app.post('/api/auth/reset', wrap(resetPassword));
+// Convites de acesso (público + rate limit): validar e aceitar
+app.get('/api/convites/:token', wrap(infoConvite));
+app.post('/api/convites/aceitar', loginRateLimit, wrap(aceitarConvite));
 // Catálogo público (somente leitura; rate limit próprio)
 app.get('/api/publico/catalogo/:token', rateLimitPublico, wrap(catalogoPublico));
 // Pedido pelo catálogo — cria uma cotação de venda no ERP (sem login, rate limit)
@@ -145,13 +161,27 @@ app.use('/api', wrap(requireAuth));
 
 app.get('/api/auth/me', me);
 app.post('/api/auth/change-password', wrap(changePassword));
+// Reautenticação (step-up): confirma a senha para ações sensíveis (5 min).
+app.post('/api/auth/reautenticar', wrap(reautenticar));
+// Sessões por dispositivo
+app.post('/api/auth/logout', wrap(logout));
 app.post('/api/auth/logout-all', wrap(logoutAll));
+app.get('/api/auth/sessoes', wrap(listarSessoes));
+app.post('/api/auth/sessoes/:sid/revogar', wrap(revogarSessaoHandler));
+// MFA/TOTP (autogerenciado)
+app.get('/api/auth/mfa/status', wrap(mfaStatus));
+app.post('/api/auth/mfa/setup', wrap(mfaSetup));
+app.post('/api/auth/mfa/ativar', wrap(mfaAtivar));
+app.post('/api/auth/mfa/desativar', wrap(mfaDesativar));
 // Preferências por usuário (Fase 7 — JSONB no banco, espelhadas no navegador)
 app.get('/api/auth/preferences', wrap(getPreferences));
 app.put('/api/auth/preferences', wrap(savePreferences));
-// Cofre de senhas: autorização pontual do administrador, nunca reutiliza a sessão como confirmação.
-app.post('/api/usuarios/:id/revelar-senha', wrap(revealPassword));
-app.post('/api/usuarios/cofre/solicitar-email', wrap(requestVaultEmail));
+// Administração de acesso: convite, senha temporária (exibição única), MFA de terceiros
+app.post('/api/usuarios/:id/senha-temporaria', wrap(senhaTemporaria));
+app.post('/api/usuarios/:id/reenviar-convite', wrap(reenviarConvite));
+app.post('/api/usuarios/:id/resetar-mfa', wrap(resetarMfaUsuario));
+// Auditoria segura: verificação da cadeia de hashes (admin)
+app.get('/api/admin/auditoria/verificar', wrap(verificarAuditoriaHandler));
 
 // Metadados dos módulos (campos, tipos, opções) — o front monta formulários com isso
 app.get('/api/meta', (req, res) => {
@@ -163,6 +193,7 @@ app.get('/api/meta', (req, res) => {
     version: VERSION,
     user: currentUser(req),
     smtp: { configurado: smtpConfigurado() },
+    auth: { hash: 'argon2id', mfa_admin_obrigatorio: true, reauth_ttl_segundos: Math.round(Number(process.env.REAUTH_TTL_MS) || 300_000) / 1000 },
   });
 });
 
@@ -403,7 +434,7 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   }
   const httpErr = toHttpError(err, (req as any).resource);
   if (httpErr.status >= 500) reportarErro(err, { rota: `${req.method} ${req.path}` });
-  res.status(httpErr.status).json({ error: httpErr.message, fields: httpErr.fields });
+  res.status(httpErr.status).json({ error: httpErr.message, fields: httpErr.fields, ...(httpErr.code ? { code: httpErr.code } : {}) });
 });
 
 // ----------------------------------------------------------------------------
@@ -419,6 +450,10 @@ async function start() {
   }
   await ensureAdmin();
   await migrarSenhasLegadas();
+  await limpezaPeriodica();
+  // Limpeza diária de sessões encerradas e buckets de rate limit velhos.
+  const limpeza = setInterval(() => void limpezaPeriodica().catch(() => undefined), 24 * 3600_000);
+  limpeza.unref?.();
 
   const port = Number(process.env.PORT) || 3001;
   const httpServer = createServer(app);

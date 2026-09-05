@@ -48,12 +48,29 @@ export type Option = { value: number; label: string };
 export type AuditEntry = {
   usuario_id: number | null;
   usuario: string | null;
-  acao: 'criar' | 'editar' | 'excluir' | 'login' | 'senha' | 'importar' | 'ajuste';
+  acao: 'criar' | 'editar' | 'excluir' | 'login' | 'senha' | 'mfa' | 'seguranca' | 'convite' | 'importar' | 'ajuste';
   recurso: string | null;
   registro_id: number | null;
   descricao: string;
   dados?: unknown;
 };
+
+/** Sessão de login (invalidação por dispositivo — JTI no JWT). */
+export type Sessao = {
+  id: string;
+  usuario_id: number;
+  criada_em: string;
+  expira_em: string;
+  revogada_em: string | null;
+  ip: string | null;
+  user_agent: string | null;
+};
+
+/** Estado do bucket persistente de rate limit. */
+export type RateState = { count: number; primeira_em: string; bloqueado_ate: string | null };
+
+/** Resultado da verificação da cadeia de hashes da auditoria. */
+export type AuditoriaVerificacao = { ok: boolean; total: number; verificadas: number; quebras: number[] };
 
 export type DashboardData = {
   valorEstoque: number;
@@ -98,6 +115,8 @@ export interface Store {
   insumoStock(insumoId: number, tx?: Tx): Promise<number>;
 
   audit(entry: AuditEntry, tx?: Tx): Promise<void>;
+  /** Verifica a cadeia de hashes da auditoria (integridade/tamper-evidence). */
+  verificarAuditoria(): Promise<AuditoriaVerificacao>;
   dashboard(): Promise<DashboardData>;
 
   findUserByEmail(email: string): Promise<Row | null>;
@@ -107,6 +126,24 @@ export interface Store {
   getPreferences(userId: number): Promise<Record<string, unknown>>;
   setPreferences(userId: number, prefs: Record<string, unknown>): Promise<void>;
   touchLogin(userId: number): Promise<void>;
+
+  // ---- Sessões (invalidação de sessões por dispositivo) ----
+  criarSessao(s: Omit<Sessao, 'criada_em' | 'revogada_em'>): Promise<Sessao>;
+  getSessao(id: string): Promise<Sessao | null>;
+  listSessoesAtivas(usuarioId: number): Promise<Sessao[]>;
+  revogarSessao(id: string): Promise<boolean>;
+  /** Revoga todas as sessões ativas do usuário; `exceto` preserva a sessão atual. */
+  revogarSessoes(usuarioId: number, exceto?: string): Promise<number>;
+  /** Remove sessões encerradas há mais de 7 dias (limpeza). */
+  limparSessoesEncerradas(): Promise<void>;
+
+  // ---- Rate limit persistente (sobrevive a reinícios) ----
+  rateLimitEstado(chave: string, windowMs: number): Promise<RateState | null>;
+  /** Registra uma tentativa; retorna (restantes, bloqueadoAté). */
+  rateLimitHit(chave: string, windowMs: number, max: number): Promise<{ restantes: number; bloqueado_ate: string | null }>;
+  rateLimitReset(chave: string): Promise<void>;
+  /** Remove buckets expirados há mais de 24 h (limpeza). */
+  limparRateLimitsAntigos(): Promise<void>;
 
   /** Arquivos (fotos) de um conjunto de registros — sem os bytes. */
   filesFor(recurso: string, registroIds: number[], tx?: Tx): Promise<FileMeta[]>;

@@ -18,7 +18,9 @@ import {
   Factory as FactoryIcon,
   FileUp,
   Inbox,
+  KeyRound,
   ListFilter,
+  Loader2,
   Pencil,
   Plus,
   RefreshCw,
@@ -34,6 +36,7 @@ import { BarrasVerticais } from '../components/Charts';
 import { DETALHE_DIRETO, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import ReauthModal from '../components/ReauthModal';
 import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import PlannedModule from './PlannedModule';
@@ -105,36 +108,51 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const [toDelete, setToDelete] = useState<Record<string, any> | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // Cofre de senhas (somente no módulo Usuários)
-  const [vaultUser, setVaultUser] = useState<Record<string, any> | null>(null);
-  const [vaultMethod, setVaultMethod] = useState<'password' | 'email'>('password');
-  const [vaultProof, setVaultProof] = useState('');
-  const [revealedPassword, setRevealedPassword] = useState('');
-  const [vaultVisible, setVaultVisible] = useState(true);
-  const [vaultBusy, setVaultBusy] = useState(false);
-  const [vaultError, setVaultError] = useState('');
-  const [cooldownUntil, setCooldownUntil] = useState(0);
-  const [clock, setClock] = useState(Date.now());
-  const cooldown = Math.max(0, Math.ceil((cooldownUntil - clock) / 1000));
-  useEffect(() => { if (!cooldown) return; const t = window.setInterval(() => setClock(Date.now()), 1000); return () => window.clearInterval(t); }, [cooldown]);
+  // Fluxo profissional de acesso (somente no módulo Usuários):
+  // convite por e-mail + senha temporária de EXIBIÇÃO ÚNICA (nunca recuperável).
+  const [senhaTempUser, setSenhaTempUser] = useState<Record<string, any> | null>(null);
+  const [senhaTempValor, setSenhaTempValor] = useState('');
+  const [conviteLink, setConviteLink] = useState('');
+  const [reauthAcao, setReauthAcao] = useState<null | 'senha-temporaria'>(null);
+  const [conviteBusyId, setConviteBusyId] = useState<number | null>(null);
 
-  function openVault(row: Record<string, any>) {
-    setVaultUser(row); setVaultMethod('password'); setVaultProof(''); setRevealedPassword(''); setVaultVisible(true); setVaultError('');
-  }
-  async function requestEmailCode() {
-    setVaultBusy(true); setVaultError('');
-    try { const d = await api.post<{ cooldownSeconds: number }>('/usuarios/cofre/solicitar-email', {}); setVaultMethod('email'); setCooldownUntil(Date.now() + d.cooldownSeconds * 1000); toast.success('Código enviado ao seu e-mail.'); }
-    catch (e: any) { setVaultError(e.message || 'Não foi possível enviar o código.'); }
-    finally { setVaultBusy(false); }
-  }
-  async function revealVaultPassword() {
-    if (!vaultUser) return; setVaultBusy(true); setVaultError('');
+  /** Reenviar convite de acesso (usuário ainda sem senha definida). */
+  async function reenviarConvite(row: Record<string, any>) {
+    setConviteBusyId(Number(row.id));
     try {
-      const body = vaultMethod === 'password' ? { adminPassword: vaultProof } : { emailCode: vaultProof };
-      const d = await api.post<{ password: string; cooldownSeconds: number }>(`/usuarios/${vaultUser.id}/revelar-senha`, body);
-      setRevealedPassword(d.password); setVaultProof(''); setCooldownUntil(Date.now() + d.cooldownSeconds * 1000);
-    } catch (e: any) { setVaultError(e.message || 'Não foi possível visualizar.'); setCooldownUntil(Date.now() + 30_000); }
-    finally { setVaultBusy(false); }
+      const d = await api.post<{ convite_link?: string }>(`/usuarios/${row.id}/reenviar-convite`, {});
+      if (d.convite_link) setConviteLink(d.convite_link);
+      else toast.success(`Convite reenviado para ${row.email}.`);
+      await load();
+    } catch (e: any) {
+      toast.error(e instanceof ApiError ? e.message : 'Não foi possível reenviar o convite.');
+    } finally {
+      setConviteBusyId(null);
+    }
+  }
+
+  /** 1º passo da senha temporária: reautenticação (o servidor exige senha recente). */
+  function pedirSenhaTemporaria(row: Record<string, any>) {
+    setSenhaTempUser(row);
+    setReauthAcao('senha-temporaria');
+  }
+
+  /** 2º passo: com a reautenticação validada, gera a senha (mostrada uma única vez). */
+  async function gerarSenhaTemporaria() {
+    if (!senhaTempUser) return;
+    try {
+      const d = await api.post<{ senha_temporaria: string; sessoes_encerradas: number }>(`/usuarios/${senhaTempUser.id}/senha-temporaria`, {});
+      setSenhaTempValor(d.senha_temporaria);
+      toast.success(`Senha temporária gerada para ${senhaTempUser.email}.`);
+      await load();
+    } catch (e: any) {
+      if (e instanceof ApiError && e.code === 'reauth_necessaria') {
+        setReauthAcao('senha-temporaria');
+        return;
+      }
+      toast.error(e instanceof ApiError ? e.message : 'Não foi possível gerar a senha temporária.');
+      setSenhaTempUser(null);
+    }
   }
 
   // Campos virtuais só entram na tabela se pedirem explicitamente (list: true),
@@ -264,6 +282,21 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         setFormOpen(false);
       } else {
         const created = await api.post<Record<string, any>>(`/${resource.key}`, payload);
+        if (resource.key === 'usuarios') {
+          // Convite por e-mail: com SMTP o link vai direto para o usuário;
+          // sem SMTP o link volta na resposta para ser entregue manualmente.
+          if (created?.convite_link) {
+            setFormOpen(false);
+            setConviteLink(String(created.convite_link));
+            await load();
+            return;
+          }
+          toast.success(`${resource.singular} incluído(a). Convite de acesso enviado por e-mail.`);
+          setValues(initialValues(resource));
+          setErrors({});
+          await load();
+          return;
+        }
         if (resource.detail && !hasImages && created?.id) {
           // Módulos com página de detalhe própria (vendas, compras): abre o pedido
           toast.success(`${resource.singular} incluído(a). Adicione os itens do pedido.`);
@@ -486,8 +519,13 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                     {(canUpdate || canDelete || resource.detail) && (
                       <td className="text-right">
                         <div className="inline-flex items-center gap-1">
-                          {resource.key === 'usuarios' && (
-                            <button className="btn-icon" onClick={() => openVault(row)} title="Ver senha" aria-label="Ver senha"><Eye className="h-4 w-4" /></button>
+                          {resource.key === 'usuarios' && canUpdate && !row.senha_definida_em && (
+                            <button className="btn-icon" onClick={() => reenviarConvite(row)} disabled={conviteBusyId === Number(row.id)} title="Reenviar convite de acesso" aria-label="Reenviar convite">
+                              {conviteBusyId === Number(row.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                            </button>
+                          )}
+                          {resource.key === 'usuarios' && canUpdate && !!row.senha_definida_em && (
+                            <button className="btn-icon" onClick={() => pedirSenhaTemporaria(row)} title="Gerar senha temporária (exibição única)" aria-label="Gerar senha temporária"><KeyRound className="h-4 w-4" /></button>
                           )}
                           {resource.detail && (
                             <button className="btn-icon" onClick={() => navigate(`/${resource.key}/${row.id}`)} title="Ver detalhes" aria-label="Ver detalhes">
@@ -536,8 +574,13 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                       </div>
                     </button>
                     <div className="flex shrink-0 items-center gap-0.5">
-                      {resource.key === 'usuarios' && (
-                        <button className="btn-icon" onClick={() => openVault(row)} aria-label="Ver senha"><Eye className="h-4 w-4" /></button>
+                      {resource.key === 'usuarios' && canUpdate && !row.senha_definida_em && (
+                        <button className="btn-icon" onClick={() => reenviarConvite(row)} disabled={conviteBusyId === Number(row.id)} aria-label="Reenviar convite">
+                          {conviteBusyId === Number(row.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                        </button>
+                      )}
+                      {resource.key === 'usuarios' && canUpdate && !!row.senha_definida_em && (
+                        <button className="btn-icon" onClick={() => pedirSenhaTemporaria(row)} aria-label="Gerar senha temporária"><KeyRound className="h-4 w-4" /></button>
                       )}
                       {resource.detail && (
                         <button className="btn-icon" onClick={() => navigate(`/${resource.key}/${row.id}`)} aria-label="Ver detalhes">
@@ -592,30 +635,86 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         </button>
       )}
 
-      <Modal open={!!vaultUser} onClose={() => !vaultBusy && setVaultUser(null)} title="Ver senha" subtitle={vaultUser ? `${vaultUser.nome} — autorização necessária para cada visualização` : ''} size="md">
+      {/* Reautenticação (step-up) para gerar senha temporária */}
+      <ReauthModal
+        open={reauthAcao === 'senha-temporaria'}
+        onClose={() => {
+          setReauthAcao(null);
+          if (!senhaTempValor) setSenhaTempUser(null);
+        }}
+        onConfirmed={gerarSenhaTemporaria}
+        titulo={senhaTempUser ? `Autorizar senha temporária — ${senhaTempUser.nome}` : 'Autorização necessária'}
+      />
+
+      {/* Senha temporária: EXIBIÇÃO ÚNICA — não existe como rever */}
+      <Modal
+        open={!!senhaTempUser && !!senhaTempValor}
+        onClose={() => {
+          setSenhaTempUser(null);
+          setSenhaTempValor('');
+        }}
+        title="Senha temporária gerada"
+        subtitle={senhaTempUser ? `${senhaTempUser.nome} — ${senhaTempUser.email}` : ''}
+        size="md"
+      >
         <div className="space-y-4">
-          <Alert tone="amber">Esta ação é registrada na Auditoria como “Visualização de senha”. Senhas antigas, anteriores ao cofre, não são recuperáveis.</Alert>
-          {revealedPassword ? (
-            <div className="space-y-3">
-              <label className="label">Senha</label>
-              <div className="flex gap-2">
-                <input className="input flex-1 font-mono" readOnly type={vaultVisible ? 'text' : 'password'} value={revealedPassword} />
-                <button className="btn-secondary" onClick={() => setVaultVisible((v) => !v)}>{vaultVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}{vaultVisible ? 'Ocultar' : 'Mostrar'}</button>
-                <button className="btn-secondary" onClick={async () => { await navigator.clipboard.writeText(revealedPassword); toast.success('Senha copiada.'); }}><Copy className="h-4 w-4" /> Copiar</button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="flex gap-2 border-b border-slate-200 pb-3">
-                <button className={vaultMethod === 'password' ? 'btn-primary' : 'btn-secondary'} onClick={() => { setVaultMethod('password'); setVaultProof(''); }} type="button">Senha do administrador</button>
-                <button className="btn-secondary" onClick={requestEmailCode} disabled={vaultBusy || cooldown > 0} type="button"><Mail className="h-4 w-4" /> Confirmar por e-mail</button>
-              </div>
-              <label className="label">{vaultMethod === 'password' ? 'Digite sua senha de administrador' : 'Código de 6 dígitos enviado ao seu e-mail'}</label>
-              <input className="input w-full" type={vaultMethod === 'password' ? 'password' : 'text'} inputMode={vaultMethod === 'email' ? 'numeric' : undefined} autoComplete="off" value={vaultProof} onChange={(e) => setVaultProof(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && revealVaultPassword()} />
-              {vaultError && <Alert tone="red">{vaultError}</Alert>}
-              <div className="flex justify-end"><button className="btn-primary" disabled={vaultBusy || cooldown > 0 || !vaultProof} onClick={revealVaultPassword}>{vaultBusy ? 'Verificando...' : cooldown ? `Aguarde ${cooldown}s` : 'Autorizar e ver senha'}</button></div>
-            </>
-          )}
+          <Alert tone="amber">
+            <strong>Guarde esta senha agora:</strong> ela é exibida <strong>uma única vez</strong>, não fica salva em lugar nenhum (só o hash irreversível) e não
+            pode ser vista nem por administradores depois desta tela. O usuário deverá trocá-la no próximo acesso.
+          </Alert>
+          <div className="flex gap-2">
+            <input className="input flex-1 font-mono" readOnly value={senhaTempValor} onFocus={(e) => e.currentTarget.select()} />
+            <button
+              className="btn-secondary"
+              onClick={async () => {
+                await navigator.clipboard.writeText(senhaTempValor);
+                toast.success('Senha copiada. Ela não será exibida novamente.');
+              }}
+              type="button"
+            >
+              <Copy className="h-4 w-4" /> Copiar
+            </button>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-slate-400">As sessões ativas deste usuário foram encerradas.</p>
+            <button
+              className="btn-primary"
+              onClick={() => {
+                setSenhaTempUser(null);
+                setSenhaTempValor('');
+              }}
+              type="button"
+            >
+              Fechei — não preciso mais dela
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Convite gerado sem SMTP: link para entregar manualmente */}
+      <Modal open={!!conviteLink} onClose={() => setConviteLink('')} title="Convite de acesso criado" subtitle="Este ambiente não tem SMTP configurado — entregue o link ao usuário." size="md">
+        <div className="space-y-4">
+          <Alert tone="blue">
+            O convite é válido por <strong>48 horas</strong> e só pode ser usado uma vez. Quem recebe define a própria senha (ela nunca passa pelo administrador).
+          </Alert>
+          <div className="flex gap-2">
+            <input className="input flex-1 font-mono text-xs" readOnly value={conviteLink} onFocus={(e) => e.currentTarget.select()} />
+            <button
+              className="btn-secondary"
+              onClick={async () => {
+                await navigator.clipboard.writeText(conviteLink);
+                toast.success('Link do convite copiado.');
+              }}
+              type="button"
+            >
+              <Copy className="h-4 w-4" /> Copiar
+            </button>
+          </div>
+          <div className="flex justify-end">
+            <button className="btn-primary" onClick={() => setConviteLink('')} type="button">
+              Concluído
+            </button>
+          </div>
         </div>
       </Modal>
 

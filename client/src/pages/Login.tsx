@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, Loader2, Lock, Mail, ShieldCheck, Boxes, Cog, Receipt } from 'lucide-react';
+import { Eye, EyeOff, Loader2, Lock, Mail, ShieldCheck, Boxes, Cog, Receipt, Smartphone, Copy } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { Logo } from '../components/Logo';
+import { Alert } from '../components/ui';
 
 export default function Login() {
-  const { login, user, loading } = useAuth();
+  const { login, mfaDesafio, concluirLoginMFA, user, loading } = useAuth();
   const nav = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -13,6 +14,13 @@ export default function Login() {
   const [lembrar, setLembrar] = useState(false);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  // MFA: 'mfa' = desafio TOTP; 'setup' = cadastro obrigatório (administradores).
+  const [etapa, setEtapa] = useState<'form' | 'mfa' | 'setup'>('form');
+  const [ticket, setTicket] = useState('');
+  const [codigo, setCodigo] = useState('');
+  const [qr, setQr] = useState('');
+  const [segredo, setSegredo] = useState('');
+  const [copiado, setCopiado] = useState(false);
 
   useEffect(() => {
     if (!loading && user) nav('/', { replace: true });
@@ -23,13 +31,61 @@ export default function Login() {
     setErr('');
     setBusy(true);
     try {
-      await login(email, password, lembrar);
+      const r = await login(email, password, lembrar);
+      if (r.mfa_required && r.mfa_ticket) {
+        setTicket(r.mfa_ticket);
+        setEtapa('mfa');
+        return;
+      }
+      if (r.mfa_setup_required && r.mfa_ticket) {
+        setTicket(r.mfa_ticket);
+        setQr('');
+        setSegredo('');
+        setEtapa('setup');
+        return;
+      }
       nav('/', { replace: true });
     } catch (e: any) {
       setErr(e.message || 'Falha no login');
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Busca o QR/segredo quando a etapa de cadastro MFA abre. */
+  useEffect(() => {
+    if (etapa !== 'setup' || qr || segredo) return;
+    (async () => {
+      try {
+        const d = await mfaDesafio(ticket);
+        setQr(d.qr);
+        setSegredo(d.segredo);
+      } catch (e: any) {
+        setErr(e.message || 'Não foi possível carregar o QR do autenticador.');
+      }
+    })();
+  }, [etapa, ticket, qr, segredo, mfaDesafio]);
+
+  async function confirmarCodigo(e?: React.FormEvent) {
+    e?.preventDefault();
+    setErr('');
+    setBusy(true);
+    try {
+      await concluirLoginMFA(ticket, codigo);
+      nav('/', { replace: true });
+    } catch (e: any) {
+      setErr(e.message || 'Código inválido.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function voltar() {
+    setEtapa('form');
+    setCodigo('');
+    setErr('');
+    setQr('');
+    setSegredo('');
   }
 
   if (loading) {
@@ -92,6 +148,82 @@ export default function Login() {
 
       {/* Formulário */}
       <div className="flex items-center justify-center bg-white p-6 sm:p-10">
+        {etapa !== 'form' && (
+          <form onSubmit={confirmarCodigo} className="w-full max-w-sm animate-fade-in" noValidate>
+            <div className="mb-8 flex justify-center lg:hidden">
+              <Logo height={56} />
+            </div>
+
+            <h2 className="flex items-center gap-2 text-2xl font-bold text-navy-900">
+              <Smartphone className="h-6 w-6 text-brand-500" /> Verificação em dois fatores
+            </h2>
+
+            {etapa === 'mfa' ? (
+              <p className="mt-1 text-sm text-slate-500">Digite o código de 6 dígitos do seu app autenticador para concluir o acesso.</p>
+            ) : (
+              <div className="mt-1 text-sm text-slate-500">
+                <p>
+                  <strong>Sua conta de administrador exige MFA.</strong> Escaneie o QR abaixo com um app autenticador (Google Authenticator, Aegis, 1Password…) e
+                  informe o código atual para ativar e entrar.
+                </p>
+                <div className="mt-4 flex flex-col items-center gap-3">
+                  {qr ? (
+                    <img src={qr} alt="QR Code do autenticador" className="h-48 w-48 rounded-lg border border-slate-200 bg-white p-1" />
+                  ) : (
+                    <div className="flex h-48 w-48 items-center justify-center rounded-lg border border-slate-200 text-slate-400">
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    </div>
+                  )}
+                  {segredo && (
+                    <button
+                      type="button"
+                      className="flex items-center gap-1.5 text-xs text-slate-500 underline-offset-2 hover:underline"
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(segredo);
+                        setCopiado(true);
+                        window.setTimeout(() => setCopiado(false), 2000);
+                      }}
+                    >
+                      <Copy className="h-3.5 w-3.5" /> {copiado ? 'Segredo copiado!' : 'Copiar segredo manualmente'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-6 space-y-5">
+              <div>
+                <label htmlFor="mfa-codigo" className="label">
+                  Código do app autenticador
+                </label>
+                <input
+                  id="mfa-codigo"
+                  className="input text-center font-mono text-lg tracking-[0.4em]"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  placeholder="000000"
+                  value={codigo}
+                  onChange={(e) => setCodigo(e.target.value.replace(/\D/g, ''))}
+                  autoFocus
+                />
+              </div>
+
+              {err && <Alert tone="red">{err}</Alert>}
+
+              <button disabled={busy || codigo.length !== 6} className="btn-primary w-full py-2.5">
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                {busy ? 'Verificando...' : etapa === 'mfa' ? 'Concluir acesso' : 'Ativar MFA e entrar'}
+              </button>
+
+              <button type="button" className="w-full text-center text-xs text-slate-400 hover:text-slate-600" onClick={voltar}>
+                Voltar para o login
+              </button>
+            </div>
+          </form>
+        )}
+
+        {etapa === 'form' && (
         <form onSubmit={submit} className="w-full max-w-sm animate-fade-in" noValidate>
           <div className="mb-8 flex justify-center lg:hidden">
             <Logo height={56} />
@@ -174,6 +306,7 @@ export default function Login() {
             Esqueceu a senha? <Link to="/esqueci" className="font-medium text-navy-700 underline-offset-2 hover:underline">Solicite um link de redefinição</Link> — ou peça ao administrador.
           </p>
         </form>
+        )}
       </div>
     </div>
   );

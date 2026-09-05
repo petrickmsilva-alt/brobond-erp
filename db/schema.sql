@@ -16,13 +16,13 @@
 -- 1) TABELAS
 -- ------------------------------------------------------------
 
--- Usuários do sistema (login por e-mail + senha com hash bcrypt)
+-- Usuários do sistema (login por e-mail + senha com hash Argon2id;
+-- hashes bcrypt antigos migram gradualmente no login)
 CREATE TABLE IF NOT EXISTS usuarios (
   id SERIAL PRIMARY KEY,
   nome TEXT NOT NULL,
   email TEXT UNIQUE NOT NULL,
   senha_hash TEXT,
-  senha_cifrada TEXT,
   perfil TEXT NOT NULL DEFAULT 'operador',   -- admin, gerente, operador
   ativo BOOLEAN NOT NULL DEFAULT TRUE,
   ultimo_login TIMESTAMPTZ,
@@ -748,5 +748,48 @@ ALTER TABLE vendas ADD COLUMN IF NOT EXISTS nfe_provider TEXT;
 -- Chat interno (usa tabela auditoria com recurso='chat')
 -- Nenhum schema novo necessário — auditoria já suporta JSONB
 
--- Cofre de senhas (AES-256-GCM; chave somente em VAULT_KEY)
-ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS senha_cifrada TEXT;
+-- ============================================================
+-- Fase 8 — Autenticação profissional
+-- ============================================================
+
+-- Sessões de login (invalidação por dispositivo — JTI no JWT)
+CREATE TABLE IF NOT EXISTS sessoes (
+  id TEXT PRIMARY KEY,
+  usuario_id INTEGER NOT NULL,
+  criada_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expira_em TIMESTAMPTZ NOT NULL,
+  revogada_em TIMESTAMPTZ,
+  ip TEXT,
+  user_agent TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessoes_usuario ON sessoes (usuario_id);
+
+-- Rate limit PERSISTENTE (login/reset/MFA/convites — sobrevive a reinícios)
+CREATE TABLE IF NOT EXISTS login_tentativas (
+  chave TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 0,
+  primeira_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  bloqueado_ate TIMESTAMPTZ
+);
+
+-- Auditoria segura: cadeia de hashes (tamper-evidence)
+ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS hash_anterior TEXT;
+ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS hash TEXT;
+
+-- MFA/TOTP (segredo gravado CIFRADO — chave em MFA_ENCRYPTION_KEY ou derivada de JWT_SECRET)
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS mfa_secret TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS mfa_ativado_em TIMESTAMPTZ;
+
+-- Convite de acesso (token só em hash; expiração)
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS convite_token_hash TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS convite_expira_em TIMESTAMPTZ;
+
+-- Estado da senha (provisória = gerada pelo admin, troca obrigatória)
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS senha_provisoria BOOLEAN DEFAULT FALSE;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS senha_definida_em TIMESTAMPTZ;
+UPDATE usuarios SET senha_definida_em = COALESCE(atualizado_em, criado_em, now())
+ WHERE senha_hash IS NOT NULL AND senha_definida_em IS NULL;
+
+-- Fim do cofre de senhas: a coluna de senha reversível é DESTRUÍDA.
+-- (As senhas ficam apenas em hash Argon2id/bcrypt — nunca recuperáveis.)
+ALTER TABLE usuarios DROP COLUMN IF EXISTS senha_cifrada;

@@ -144,16 +144,17 @@ test('arquivos: recurso interno não é exposto na API genérica nem no /meta', 
   assert.ok('produtos' in publicMeta());
 });
 
-test('segurança: rate limit bloqueia após 5 falhas e libera após sucesso', async () => {
+test('segurança: rate limit PERSISTENTE bloqueia após 5 falhas e libera após sucesso', async () => {
   const { loginRateLimit, registerLoginFailure, registerLoginSuccess } = await import('../src/security');
   const req: any = { body: { email: 'rl@x.com' }, headers: {}, socket: { remoteAddress: '10.0.0.1' } };
   let status = 0;
   const res: any = { status: (s: number) => ((status = s), res), json: () => res, setHeader: () => res };
-  for (let i = 0; i < 5; i++) registerLoginFailure(req);
-  loginRateLimit(req, res, () => (status = 200));
+  const proximo = () => (status = 200);
+  for (let i = 0; i < 5; i++) await registerLoginFailure(req);
+  await loginRateLimit(req, res, proximo);
   assert.equal(status, 429);
-  registerLoginSuccess(req);
-  loginRateLimit(req, res, () => (status = 200));
+  await registerLoginSuccess(req);
+  await loginRateLimit(req, res, proximo);
   assert.equal(status, 200);
 });
 

@@ -17,7 +17,12 @@ export type User = {
 type AuthContextValue = {
   user: User | null;
   meta: Meta | null;
-  login: (email: string, password: string, lembrar?: boolean) => Promise<void>;
+  /** 1º passo do login; quando o usuário tem/precisa de MFA, devolve o ticket em vez de entrar. */
+  login: (email: string, password: string, lembrar?: boolean) => Promise<{ mfa_required?: boolean; mfa_setup_required?: boolean; mfa_ticket?: string }>;
+  /** QR + segredo para o cadastro TOTP guiado (exige o ticket do 1º passo). */
+  mfaDesafio: (ticket: string) => Promise<{ segredo: string; uri: string; qr: string }>;
+  /** 2º passo do login (código TOTP) — conclui a sessão. */
+  concluirLoginMFA: (ticket: string, codigo: string) => Promise<void>;
   logout: () => void;
   refreshMeta: () => Promise<void>;
   loading: boolean;
@@ -67,6 +72,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('E-mail e senha são obrigatórios');
     }
     const d = await api.post('/auth/login', { email: normalizedEmail, password, lembrar });
+    // MFA: senha aceita, mas o login só termina com o código TOTP.
+    if (d.mfa_required || d.mfa_setup_required) {
+      return { mfa_required: d.mfa_required, mfa_setup_required: d.mfa_setup_required, mfa_ticket: d.mfa_ticket };
+    }
+    if (!d.token || !d.user) throw new Error('Resposta inválida do servidor');
+    setToken(d.token);
+    setUser(d.user);
+    setSentryUser(d.user);
+    await refreshMeta();
+    return {};
+  }
+
+  async function mfaDesafio(ticket: string) {
+    return api.post<{ segredo: string; uri: string; qr: string }>('/auth/mfa/desafio', { mfa_ticket: ticket });
+  }
+
+  async function concluirLoginMFA(ticket: string, codigo: string) {
+    const d = await api.post('/auth/login/mfa', { mfa_ticket: ticket, codigo });
     if (!d.token || !d.user) throw new Error('Resposta inválida do servidor');
     setToken(d.token);
     setUser(d.user);
@@ -83,7 +106,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <Ctx.Provider value={{ user, meta, login, logout, refreshMeta, loading }}>
+    <Ctx.Provider value={{ user, meta, login, mfaDesafio, concluirLoginMFA, logout, refreshMeta, loading }}>
       <MetaContext.Provider value={meta}>{children}</MetaContext.Provider>
     </Ctx.Provider>
   );
