@@ -183,6 +183,23 @@ export default function Settings() {
   );
 }
 
+/** Botão olhinho dentro do campo de senha: alterna entre mostrar e ocultar. */
+function PasswordEye({ show, onToggle, disabled }: { show: boolean; onToggle: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 hover:text-slate-600"
+      onClick={onToggle}
+      tabIndex={-1}
+      disabled={disabled}
+      title={show ? 'Ocultar senha' : 'Mostrar senha'}
+      aria-label={show ? 'Ocultar senha' : 'Mostrar senha'}
+    >
+      {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+    </button>
+  );
+}
+
 function ChangePasswordForm({ disabled, onChangeSenha }: { disabled: boolean; onChangeSenha?: () => void }) {
   const toast = useToast();
   const [atual, setAtual] = useState('');
@@ -237,21 +254,54 @@ function ChangePasswordForm({ disabled, onChangeSenha }: { disabled: boolean; on
           <label className="label" htmlFor="senha_atual">
             Senha atual
           </label>
-          <input id="senha_atual" type={type} className={`input ${errors.senha_atual ? 'input-error' : ''}`} value={atual} onChange={(e) => setAtual(e.target.value)} autoComplete="current-password" disabled={disabled || busy} />
+          <div className="relative">
+            <input
+              id="senha_atual"
+              type={type}
+              className={`input pr-10 ${errors.senha_atual ? 'input-error' : ''}`}
+              value={atual}
+              onChange={(e) => setAtual(e.target.value)}
+              autoComplete="current-password"
+              disabled={disabled || busy}
+            />
+            <PasswordEye show={show} onToggle={() => setShow((s) => !s)} disabled={disabled || busy} />
+          </div>
           {errors.senha_atual && <p className="mt-1 text-xs font-medium text-red-600">{errors.senha_atual}</p>}
         </div>
         <div>
           <label className="label" htmlFor="senha_nova">
             Nova senha
           </label>
-          <input id="senha_nova" type={type} className={`input ${errors.senha_nova ? 'input-error' : ''}`} value={nova} onChange={(e) => setNova(e.target.value)} autoComplete="new-password" disabled={disabled || busy} />
+          <div className="relative">
+            <input
+              id="senha_nova"
+              type={type}
+              className={`input pr-10 ${errors.senha_nova ? 'input-error' : ''}`}
+              value={nova}
+              onChange={(e) => setNova(e.target.value)}
+              autoComplete="new-password"
+              disabled={disabled || busy}
+            />
+            <PasswordEye show={show} onToggle={() => setShow((s) => !s)} disabled={disabled || busy} />
+          </div>
           {errors.senha_nova ? <p className="mt-1 text-xs font-medium text-red-600">{errors.senha_nova}</p> : <p className="mt-1 text-xs text-slate-400">Mínimo de 8 caracteres, sem palavras óbvias.</p>}
         </div>
         <div>
           <label className="label" htmlFor="confirma">
             Confirmar nova senha
           </label>
-          <input id="confirma" type={type} className={`input ${errors.confirma ? 'input-error' : ''}`} value={confirma} onChange={(e) => setConfirma(e.target.value)} autoComplete="new-password" disabled={disabled || busy} />
+          <div className="relative">
+            <input
+              id="confirma"
+              type={type}
+              className={`input pr-10 ${errors.confirma ? 'input-error' : ''}`}
+              value={confirma}
+              onChange={(e) => setConfirma(e.target.value)}
+              autoComplete="new-password"
+              disabled={disabled || busy}
+            />
+            <PasswordEye show={show} onToggle={() => setShow((s) => !s)} disabled={disabled || busy} />
+          </div>
           {errors.confirma && <p className="mt-1 text-xs font-medium text-red-600">{errors.confirma}</p>}
         </div>
       </div>
