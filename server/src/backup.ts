@@ -15,7 +15,7 @@ import { currentUser } from './auth';
 import { RESOURCES } from './resources';
 
 /** Colunas binárias de fotos que nunca entram no backup. */
-const EXCLUIR_COLUNAS = new Set(['dados', 'thumb', 'senha_hash']);
+const EXCLUIR_COLUNAS = new Set(['dados', 'thumb', 'senha_hash', 'senha_cifrada']);
 
 async function colunasDaTabela(tabela: string): Promise<string[]> {
   const { pool } = await import('./db');

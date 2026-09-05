@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
   nome TEXT NOT NULL,
   email TEXT UNIQUE NOT NULL,
   senha_hash TEXT,
+  senha_cifrada TEXT,
   perfil TEXT NOT NULL DEFAULT 'operador',   -- admin, gerente, operador
   ativo BOOLEAN NOT NULL DEFAULT TRUE,
   ultimo_login TIMESTAMPTZ,
@@ -746,3 +747,6 @@ ALTER TABLE vendas ADD COLUMN IF NOT EXISTS nfe_provider TEXT;
 
 -- Chat interno (usa tabela auditoria com recurso='chat')
 -- Nenhum schema novo necessário — auditoria já suporta JSONB
+
+-- Cofre de senhas (AES-256-GCM; chave somente em VAULT_KEY)
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS senha_cifrada TEXT;

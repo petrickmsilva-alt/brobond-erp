@@ -294,6 +294,7 @@ function sanitize(row: Row | Payload): Row {
   const out: Row = { ...row };
   delete out.senha;
   delete out.senha_hash;
+  delete out.senha_cifrada;
   return out;
 }
 
@@ -319,6 +320,8 @@ async function prepareUserPayload(data: Payload, before: Row | null, actor: Acto
     const erro = validarPoliticaSenha(String(data.senha ?? ''), String(data.email ?? before?.email ?? ''));
     if (erro) throw new HttpError(400, erro, { senha: erro });
     data.senha_hash = await hashPassword(String(data.senha));
+    const { encryptVaultPassword } = await import('./passwordVault');
+    data.senha_cifrada = encryptVaultPassword(String(data.senha));
   }
   delete data.senha;
 

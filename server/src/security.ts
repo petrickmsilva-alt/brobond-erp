@@ -16,6 +16,13 @@ export function assertProductionSecrets() {
     console.error('❌ JWT_SECRET ausente ou fraco em produção. Defina um valor longo e aleatório (render.yaml já gera um).');
     process.exit(1);
   }
+  const vaultKey = process.env.VAULT_KEY || '';
+  let vaultBytes = 0;
+  try { vaultBytes = /^[0-9a-f]{64}$/i.test(vaultKey) ? 32 : Buffer.from(vaultKey, 'base64').length; } catch { vaultBytes = 0; }
+  if (vaultBytes !== 32) {
+    console.error('❌ VAULT_KEY inválida em produção. Defina exatamente 32 bytes em base64 ou 64 caracteres hexadecimais.');
+    process.exit(1);
+  }
   const adminPassword = process.env.ADMIN_PASSWORD || '';
   if (!adminPassword || adminPassword.length < 8 || adminPassword === 'brobond123') {
     console.error('❌ ADMIN_PASSWORD ausente ou fraca em produção. Defina uma senha com pelo menos 8 caracteres.');

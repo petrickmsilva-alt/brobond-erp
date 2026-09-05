@@ -95,6 +95,7 @@ export async function ensureAdmin(): Promise<void> {
         nome: 'Administrador',
         email: ADMIN_EMAIL,
         senha_hash: await hashPassword(ADMIN_PASSWORD),
+        senha_cifrada: (await import('./passwordVault')).encryptVaultPassword(ADMIN_PASSWORD),
         perfil: 'admin',
         ativo: true,
         trocar_senha: true,
@@ -106,6 +107,7 @@ export async function ensureAdmin(): Promise<void> {
     const patch: Record<string, unknown> = {};
     if (!existing.senha_hash || process.env.ADMIN_FORCE_PASSWORD === 'true') {
       patch.senha_hash = await hashPassword(ADMIN_PASSWORD);
+      patch.senha_cifrada = (await import('./passwordVault')).encryptVaultPassword(ADMIN_PASSWORD);
     }
     if (existing.perfil !== 'admin') patch.perfil = 'admin';
     if (existing.ativo === false) patch.ativo = true;
@@ -280,7 +282,8 @@ export async function changePassword(req: Request, res: Response) {
     throw new HttpError(400, 'Senha atual incorreta.', { senha_atual: 'Senha incorreta' });
   }
   const novaHash = await hashPassword(nova);
-  await store.update(RESOURCES.usuarios, u.id, { senha_hash: novaHash, trocar_senha: false });
+  const { encryptVaultPassword } = await import('./passwordVault');
+  await store.update(RESOURCES.usuarios, u.id, { senha_hash: novaHash, senha_cifrada: encryptVaultPassword(nova), trocar_senha: false });
   await store.audit({
     usuario_id: u.id,
     usuario: u.name,
@@ -373,6 +376,7 @@ export async function resetPassword(req: Request, res: Response) {
   const versao = Number(row.token_versao || 0) + 1;
   await store.update(RESOURCES.usuarios, Number(row.id), {
     senha_hash: novaHash,
+    senha_cifrada: (await import('./passwordVault')).encryptVaultPassword(senha),
     reset_token_hash: null,
     reset_expira_em: null,
     trocar_senha: false,

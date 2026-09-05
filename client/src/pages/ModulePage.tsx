@@ -11,7 +11,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Copy,
   Eye,
+  EyeOff,
+  Mail,
   Factory as FactoryIcon,
   FileUp,
   Inbox,
@@ -101,6 +104,38 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   // Exclusão
   const [toDelete, setToDelete] = useState<Record<string, any> | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Cofre de senhas (somente no módulo Usuários)
+  const [vaultUser, setVaultUser] = useState<Record<string, any> | null>(null);
+  const [vaultMethod, setVaultMethod] = useState<'password' | 'email'>('password');
+  const [vaultProof, setVaultProof] = useState('');
+  const [revealedPassword, setRevealedPassword] = useState('');
+  const [vaultVisible, setVaultVisible] = useState(true);
+  const [vaultBusy, setVaultBusy] = useState(false);
+  const [vaultError, setVaultError] = useState('');
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [clock, setClock] = useState(Date.now());
+  const cooldown = Math.max(0, Math.ceil((cooldownUntil - clock) / 1000));
+  useEffect(() => { if (!cooldown) return; const t = window.setInterval(() => setClock(Date.now()), 1000); return () => window.clearInterval(t); }, [cooldown]);
+
+  function openVault(row: Record<string, any>) {
+    setVaultUser(row); setVaultMethod('password'); setVaultProof(''); setRevealedPassword(''); setVaultVisible(true); setVaultError('');
+  }
+  async function requestEmailCode() {
+    setVaultBusy(true); setVaultError('');
+    try { const d = await api.post<{ cooldownSeconds: number }>('/usuarios/cofre/solicitar-email', {}); setVaultMethod('email'); setCooldownUntil(Date.now() + d.cooldownSeconds * 1000); toast.success('Código enviado ao seu e-mail.'); }
+    catch (e: any) { setVaultError(e.message || 'Não foi possível enviar o código.'); }
+    finally { setVaultBusy(false); }
+  }
+  async function revealVaultPassword() {
+    if (!vaultUser) return; setVaultBusy(true); setVaultError('');
+    try {
+      const body = vaultMethod === 'password' ? { adminPassword: vaultProof } : { emailCode: vaultProof };
+      const d = await api.post<{ password: string; cooldownSeconds: number }>(`/usuarios/${vaultUser.id}/revelar-senha`, body);
+      setRevealedPassword(d.password); setVaultProof(''); setCooldownUntil(Date.now() + d.cooldownSeconds * 1000);
+    } catch (e: any) { setVaultError(e.message || 'Não foi possível visualizar.'); setCooldownUntil(Date.now() + 30_000); }
+    finally { setVaultBusy(false); }
+  }
 
   // Campos virtuais só entram na tabela se pedirem explicitamente (list: true),
   // ex.: "Senha" em usuários, que mostra o estado e não o valor.
@@ -451,6 +486,9 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                     {(canUpdate || canDelete || resource.detail) && (
                       <td className="text-right">
                         <div className="inline-flex items-center gap-1">
+                          {resource.key === 'usuarios' && (
+                            <button className="btn-icon" onClick={() => openVault(row)} title="Ver senha" aria-label="Ver senha"><Eye className="h-4 w-4" /></button>
+                          )}
                           {resource.detail && (
                             <button className="btn-icon" onClick={() => navigate(`/${resource.key}/${row.id}`)} title="Ver detalhes" aria-label="Ver detalhes">
                               <Eye className="h-4 w-4" />
@@ -498,6 +536,9 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                       </div>
                     </button>
                     <div className="flex shrink-0 items-center gap-0.5">
+                      {resource.key === 'usuarios' && (
+                        <button className="btn-icon" onClick={() => openVault(row)} aria-label="Ver senha"><Eye className="h-4 w-4" /></button>
+                      )}
                       {resource.detail && (
                         <button className="btn-icon" onClick={() => navigate(`/${resource.key}/${row.id}`)} aria-label="Ver detalhes">
                           <Eye className="h-4 w-4" />
@@ -550,6 +591,33 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           <span className="sr-only">Novo {resource.singular.toLowerCase()}</span>
         </button>
       )}
+
+      <Modal open={!!vaultUser} onClose={() => !vaultBusy && setVaultUser(null)} title="Ver senha" subtitle={vaultUser ? `${vaultUser.nome} — autorização necessária para cada visualização` : ''} size="md">
+        <div className="space-y-4">
+          <Alert tone="amber">Esta ação é registrada na Auditoria como “Visualização de senha”. Senhas antigas, anteriores ao cofre, não são recuperáveis.</Alert>
+          {revealedPassword ? (
+            <div className="space-y-3">
+              <label className="label">Senha</label>
+              <div className="flex gap-2">
+                <input className="input flex-1 font-mono" readOnly type={vaultVisible ? 'text' : 'password'} value={revealedPassword} />
+                <button className="btn-secondary" onClick={() => setVaultVisible((v) => !v)}>{vaultVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}{vaultVisible ? 'Ocultar' : 'Mostrar'}</button>
+                <button className="btn-secondary" onClick={async () => { await navigator.clipboard.writeText(revealedPassword); toast.success('Senha copiada.'); }}><Copy className="h-4 w-4" /> Copiar</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex gap-2 border-b border-slate-200 pb-3">
+                <button className={vaultMethod === 'password' ? 'btn-primary' : 'btn-secondary'} onClick={() => { setVaultMethod('password'); setVaultProof(''); }} type="button">Senha do administrador</button>
+                <button className="btn-secondary" onClick={requestEmailCode} disabled={vaultBusy || cooldown > 0} type="button"><Mail className="h-4 w-4" /> Confirmar por e-mail</button>
+              </div>
+              <label className="label">{vaultMethod === 'password' ? 'Digite sua senha de administrador' : 'Código de 6 dígitos enviado ao seu e-mail'}</label>
+              <input className="input w-full" type={vaultMethod === 'password' ? 'password' : 'text'} inputMode={vaultMethod === 'email' ? 'numeric' : undefined} autoComplete="off" value={vaultProof} onChange={(e) => setVaultProof(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && revealVaultPassword()} />
+              {vaultError && <Alert tone="red">{vaultError}</Alert>}
+              <div className="flex justify-end"><button className="btn-primary" disabled={vaultBusy || cooldown > 0 || !vaultProof} onClick={revealVaultPassword}>{vaultBusy ? 'Verificando...' : cooldown ? `Aguarde ${cooldown}s` : 'Autorizar e ver senha'}</button></div>
+            </>
+          )}
+        </div>
+      </Modal>
 
       {importTipo && (
         <ImportModal open={importOpen} onClose={() => setImportOpen(false)} tipoConfig={importTipo} onDone={() => load()} />

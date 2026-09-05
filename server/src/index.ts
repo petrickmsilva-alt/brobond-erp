@@ -71,6 +71,7 @@ import { nfeDados, nfeEmitir, nfeStatus } from './nfe';
 import { calcularFrete, consultarCEP } from './frete';
 import { marketplaceStatus, sincronizarPedidos } from './marketplace';
 import { initWebSocket, wsStatus } from './websocket';
+import { requestVaultEmail, revealPassword } from './passwordVault';
 import { createServer } from 'node:http';
 
 assertProductionSecrets();
@@ -148,6 +149,9 @@ app.post('/api/auth/logout-all', wrap(logoutAll));
 // Preferências por usuário (Fase 7 — JSONB no banco, espelhadas no navegador)
 app.get('/api/auth/preferences', wrap(getPreferences));
 app.put('/api/auth/preferences', wrap(savePreferences));
+// Cofre de senhas: autorização pontual do administrador, nunca reutiliza a sessão como confirmação.
+app.post('/api/usuarios/:id/revelar-senha', wrap(revealPassword));
+app.post('/api/usuarios/cofre/solicitar-email', wrap(requestVaultEmail));
 
 // Metadados dos módulos (campos, tipos, opções) — o front monta formulários com isso
 app.get('/api/meta', (req, res) => {
