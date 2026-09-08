@@ -206,6 +206,37 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
   const [achado, setAchado] = useState<{ produto_id: string; tamanho_id: string; contado: string }>({ produto_id: '', tamanho_id: '', contado: '1' });
   const [produtos, setProdutos] = useState<{ value: number; label: string }[]>([]);
   const [tamanhos, setTamanhos] = useState<{ value: number; label: string }[]>([]);
+  // No "achado", o tamanho precisa ser da grade do produto escolhido.
+  const [tamanhosAchado, setTamanhosAchado] = useState<{ value: number; label: string }[] | null>(null);
+  const [gradeAchado, setGradeAchado] = useState('');
+
+  useEffect(() => {
+    if (!achado.produto_id) {
+      setTamanhosAchado(null);
+      setGradeAchado('');
+      return;
+    }
+    let alive = true;
+    api
+      .get<{ grade: { id: number; nome: string } | null; tamanhos: { id: number; codigo: string }[] }>(`/produtos/${achado.produto_id}/tamanhos`)
+      .then((d) => {
+        if (!alive) return;
+        const lista = (d.tamanhos ?? []).map((t) => ({ value: t.id, label: t.codigo }));
+        setTamanhosAchado(lista);
+        setGradeAchado(d.grade?.nome ?? '');
+        if (!lista.length) return;
+        const validos = new Set(lista.map((t) => String(t.value)));
+        setAchado((a) => (!a.tamanho_id || validos.has(String(a.tamanho_id)) ? a : { ...a, tamanho_id: '' }));
+      })
+      .catch(() => {
+        if (!alive) return;
+        setTamanhosAchado(null);
+        setGradeAchado('');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [achado.produto_id]);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -232,6 +263,64 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
     const term = q.trim().toLowerCase();
     return term ? itens.filter((i) => `${i.produto_id__label || ''} ${i.tamanho_id__label || ''}`.toLowerCase().includes(term)) : itens;
   }, [itens, q]);
+
+  // Contagem agrupada por grade — mesma organização do Estoque Físico, para o
+  // time conferir camiseta com camiseta e calça com calça.
+  const grupos = useMemo(() => {
+    const buckets = new Map<number, ItemCont[]>();
+    for (const it of visiveis) {
+      const gid = Number(it.produto_id__grade_id) || 0;
+      const arr = buckets.get(gid);
+      if (arr) arr.push(it);
+      else buckets.set(gid, [it]);
+    }
+    const out = Array.from(buckets.entries()).map(([gradeId, doGrupo]) => ({
+      gradeId,
+      nome: gradeId === 0 ? 'Sem grade definida' : String(doGrupo[0].produto_id__grade_nome ?? `Grade #${gradeId}`),
+      itens: doGrupo,
+    }));
+    return out.sort((a, b) => (a.gradeId === 0 ? 1 : b.gradeId === 0 ? -1 : a.nome.localeCompare(b.nome, 'pt-BR')));
+  }, [visiveis]);
+
+  function linhaContagem(it: ItemCont) {
+    const saldo = Number(it.saldo_sistema || 0);
+    const editVal = editado.get(it.id);
+    const contado = editVal !== undefined ? (editVal === '' ? null : Number(editVal)) : it.contado === null || it.contado === undefined ? saldo : Number(it.contado);
+    const dif = (contado ?? saldo) - saldo;
+    return (
+      <tr key={it.id} className={dif !== 0 ? 'bg-amber-50/60' : ''}>
+        <td>
+          <Thumb src={it.produto_id__foto} alt={it.produto_id__label || ''} size={32} />
+        </td>
+        <td className="font-medium text-slate-800">{it.produto_id__label || `#${it.produto_id}`}</td>
+        <td className="text-center">{it.tamanho_id__label || `#${it.tamanho_id}`}</td>
+        <td className="text-right tabular-nums text-slate-600">{formatNumber(saldo)}</td>
+        <td className="text-right">
+          {aberto ? (
+            <input
+              type="number"
+              min={0}
+              className="input w-24 text-right"
+              value={editVal !== undefined ? editVal : it.contado === null || it.contado === undefined ? '' : String(it.contado)}
+              placeholder="—"
+              onChange={(e) => {
+                setEditado((m) => {
+                  const n = new Map(m);
+                  n.set(it.id, e.target.value);
+                  return n;
+                });
+              }}
+            />
+          ) : (
+            <span className="tabular-nums">{it.contado === null || it.contado === undefined ? saldo : formatNumber(it.contado)}</span>
+          )}
+        </td>
+        <td className="text-right font-semibold tabular-nums">
+          {dif === 0 ? <span className="text-slate-300">0</span> : dif > 0 ? <span className="text-emerald-600">+{dif}</span> : <span className="text-red-600">{dif}</span>}
+        </td>
+      </tr>
+    );
+  }
 
   const resumo = useMemo(() => {
     if (!itens) return null;
@@ -366,63 +455,35 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
         </span>
       </div>
 
-      {itens && (
-        <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th className="w-14">Foto</th>
-                  <th>Produto</th>
-                  <th className="text-center">Tam.</th>
-                  <th className="text-right">Saldo no sistema</th>
-                  <th className="text-right">Contado</th>
-                  <th className="text-right">Diferença</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visiveis.map((it) => {
-                  const saldo = Number(it.saldo_sistema || 0);
-                  const editVal = editado.get(it.id);
-                  const contado = editVal !== undefined ? (editVal === '' ? null : Number(editVal)) : it.contado === null || it.contado === undefined ? saldo : Number(it.contado);
-                  const dif = (contado ?? saldo) - saldo;
-                  return (
-                    <tr key={it.id} className={dif !== 0 ? 'bg-amber-50/60' : ''}>
-                      <td>
-                        <Thumb src={it.produto_id__foto} alt={it.produto_id__label || ''} size={32} />
-                      </td>
-                      <td className="font-medium text-slate-800">{it.produto_id__label || `#${it.produto_id}`}</td>
-                      <td className="text-center">{it.tamanho_id__label || `#${it.tamanho_id}`}</td>
-                      <td className="text-right tabular-nums text-slate-600">{formatNumber(saldo)}</td>
-                      <td className="text-right">
-                        {aberto ? (
-                          <input
-                            type="number"
-                            min={0}
-                            className="input w-24 text-right"
-                            value={editVal !== undefined ? editVal : it.contado === null || it.contado === undefined ? '' : String(it.contado)}
-                            placeholder="—"
-                            onChange={(e) => {
-                              setEditado((m) => {
-                                const n = new Map(m);
-                                n.set(it.id, e.target.value);
-                                return n;
-                              });
-                            }}
-                          />
-                        ) : (
-                          <span className="tabular-nums">{it.contado === null || it.contado === undefined ? saldo : formatNumber(it.contado)}</span>
-                        )}
-                      </td>
-                      <td className="text-right font-semibold tabular-nums">
-                        {dif === 0 ? <span className="text-slate-300">0</span> : dif > 0 ? <span className="text-emerald-600">+{dif}</span> : <span className="text-red-600">{dif}</span>}
-                      </td>
+      {itens === null ? null : grupos.length === 0 ? (
+        <div className="card p-10 text-center text-sm text-slate-400">Nenhuma linha de contagem neste filtro.</div>
+      ) : (
+        <div className="space-y-4">
+          {grupos.map((g) => (
+            <section key={g.gradeId} className="card overflow-hidden">
+              <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-100 bg-slate-50/70 px-4 py-2.5">
+                <ClipboardCheck className="h-4 w-4 shrink-0 text-navy-600" />
+                <h2 className="text-sm font-semibold text-navy-900">{g.nome}</h2>
+                <span className="text-xs text-slate-500">{g.itens.length} linha(s) de contagem</span>
+                {g.gradeId === 0 && <span className="ml-auto text-xs text-amber-700">defina a grade dos produtos para agrupar a conferência</span>}
+              </header>
+              <div className="overflow-x-auto">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th className="w-14">Foto</th>
+                      <th>Produto</th>
+                      <th className="text-center">Tam.</th>
+                      <th className="text-right">Saldo no sistema</th>
+                      <th className="text-right">Contado</th>
+                      <th className="text-right">Diferença</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  </thead>
+                  <tbody>{g.itens.map((it) => linhaContagem(it))}</tbody>
+                </table>
+              </div>
+            </section>
+          ))}
         </div>
       )}
 
@@ -447,9 +508,14 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
           </label>
           <label className="block">
             <span className="label">Tamanho</span>
+            {gradeAchado && (
+              <span className="mb-1 block text-xs text-slate-500">
+                Grade <strong className="font-semibold text-navy-700">{gradeAchado}</strong> — só os tamanhos dela.
+              </span>
+            )}
             <select className="input" value={achado.tamanho_id} onChange={(e) => setAchado((a) => ({ ...a, tamanho_id: e.target.value }))}>
               <option value="">Selecione...</option>
-              {tamanhos.map((o) => (
+              {(tamanhosAchado ?? tamanhos).map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>

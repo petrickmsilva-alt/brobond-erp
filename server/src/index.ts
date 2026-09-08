@@ -30,7 +30,7 @@ import { aceitarConvite, infoConvite, reenviarConvite, senhaTemporaria, resetarM
 import { limpezaPeriodica } from './sessoes';
 import { getPublicResource, publicMeta } from './resources';
 import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider, uploadsConfigError } from './uploads';
-import { productDetail } from './detail';
+import { produtoTamanhos, productDetail } from './detail';
 import { createItem, deleteItem, listItens, updateItem } from './itens';
 import {
   checkAccess,
@@ -46,7 +46,7 @@ import {
 } from './services';
 import { parseId } from './validate';
 import { HttpError } from './errors';
-import { assertProductionSecrets, corsOrigin, loginRateLimit, securityHeaders } from './security';
+import { assertProductionSecrets, bloquearSenhaProvisoria, corsOrigin, loginRateLimit, securityHeaders } from './security';
 import { initSentry, reportarErro } from './log';
 import { smtpConfigurado } from './mail';
 import { estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario } from './estoque';
@@ -160,6 +160,9 @@ app.get('/api/files/:id/:token', wrap(serveFile));
 // Autenticado
 // ----------------------------------------------------------------------------
 app.use('/api', wrap(requireAuth));
+// Conta com senha provisória (convite, reset ou admin padrão) só lê e só escreve
+// no próprio fluxo de troca de senha — ver bloquearSenhaProvisoria.
+app.use('/api', bloquearSenhaProvisoria);
 
 app.get('/api/auth/me', me);
 app.post('/api/auth/change-password', wrap(changePassword));
@@ -222,6 +225,8 @@ app.post('/api/admin/financeiro/recorrencias', wrap(cronRecorrencias));
 
 // Página de detalhe do produto (fotos, grade de estoque, movimentações, OPs, ficha)
 app.get('/api/produtos/:id/detalhe', wrap(productDetail));
+// Tamanhos da grade do produto (seletores de tamanho sem mistura de grades)
+app.get('/api/produtos/:id/tamanhos', wrap(produtoTamanhos));
 
 // Itens de pedidos de venda/compra (sub-recursos) — antes das rotas genéricas
 app.get('/api/vendas/:id/itens', wrap(listItens));

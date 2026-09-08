@@ -31,16 +31,10 @@ import { currentUser } from './auth';
 import type { Payload, Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
 import { labelOf } from './store';
+import { round2, round3 } from './utils';
 
 type Actor = { id: number | null; name: string; perfil?: string };
 type OrdemOpts = { forcar?: boolean };
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-function round3(n: number): number {
-  return Math.round(n * 1000) / 1000;
-}
 
 function recursoOrdem() {
   return { op: getResource('ordens')!, itens: getResource('itens_ordem')! };
@@ -213,7 +207,19 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx) {
     const qtd = Number(m.quantidade);
     if (qtd <= 0) continue;
     pecas += qtd;
-    await s.adjustStock(Number(m.produto_id), Number(m.tamanho_id), String(m.local || 'loja'), -qtd, tx);
+    // Reabrir a OP retira as peças que ela entrou no estoque. Se parte delas já
+    // foi vendida, o abatimento não cabe — e aí a abertura de uma OP não pode
+    // deixar saldo negativo atrás de si.
+    const localPeca = String(m.local || 'loja');
+    const aplicado = await s.tryAdjustStock(Number(m.produto_id), Number(m.tamanho_id), localPeca, -qtd, tx);
+    if (!aplicado) {
+      const saldo = await s.findOneWhere(getResource('estoques')!, { produto_id: Number(m.produto_id), tamanho_id: Number(m.tamanho_id), local: localPeca }, tx);
+      const atual = Number(saldo?.quantidade ?? 0);
+      throw new HttpError(
+        409,
+        `Não é possível reabrir a OP: ela entrou com ${qtd} peça(s) e só há ${atual} em "${localPeca}" (o resto já foi vendido/movimentado). Estorne as saídas correspondentes antes de reabrir.`
+      );
+    }
     await s.insert(
       getResource('movimentacoes')!,
       { tipo: 'saida', produto_id: m.produto_id, tamanho_id: m.tamanho_id, local: m.local, quantidade: qtd, motivo: `Estorno — OP #${id} reaberta`, usuario_id: actor.id || null },

@@ -25,6 +25,7 @@ import type { Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
 import { labelOf } from './store';
 import { attachImages } from './uploads';
+import { round2, round3 } from './utils';
 
 type TipoPedido = 'venda' | 'compra';
 
@@ -48,14 +49,6 @@ function pedidoConfig(tipo: TipoPedido) {
         statusFechado: ['recebido'],
         statusAtivo: ['pendente'],
       };
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-function round3(n: number): number {
-  return Math.round(n * 1000) / 1000;
 }
 
 // ----------------------------------------------------------------------------
@@ -313,7 +306,18 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
   }
 
   for (const p of plano) {
-    await s.adjustStock(Number(p.item.produto_id), Number(p.item.tamanho_id), p.local, -p.qtd, tx);
+    // Checar a disponibilidade e abater depois não basta: entre o `disp < qtd`
+    // acima e este loop outro pedido pode ter levado as peças. O abatimento é
+    // condicional na própria escrita.
+    const aplicado = await s.tryAdjustStock(Number(p.item.produto_id), Number(p.item.tamanho_id), p.local, -p.qtd, tx);
+    if (!aplicado) {
+      const saldo = await s.findOneWhere(getResource('estoques')!, { produto_id: Number(p.item.produto_id), tamanho_id: Number(p.item.tamanho_id), local: p.local }, tx);
+      const atual = Number(saldo?.quantidade ?? 0);
+      throw new HttpError(
+        409,
+        `O saldo mudou durante o faturamento: só há ${atual} peça(s) do produto ${p.item.produto_id} tam. ${p.item.tamanho_id} em "${p.local}", e o pedido precisa de ${p.qtd}. Confirme o estoque e fature de novo.`
+      );
+    }
     await s.insert(
       getResource('movimentacoes')!,
       {

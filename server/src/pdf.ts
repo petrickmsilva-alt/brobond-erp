@@ -17,8 +17,8 @@ import { currentUser } from './auth';
 import { parseId } from './validate';
 import { labelOf } from './store';
 import { attachImages } from './uploads';
+import { round2 } from './utils';
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
 const fmtMoney = (n: number) =>
   n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtDate = (v: unknown) => {

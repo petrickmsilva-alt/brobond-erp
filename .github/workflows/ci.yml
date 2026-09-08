@@ -1,5 +1,6 @@
 # Verificação automática a cada push / pull request:
-# tipos (server + client), testes das regras de negócio, lint e build do front.
+# tipos (server + client), testes das regras de negócio, lint, build do front e um job
+# de integração contra Postgres real (migrações + atomicidade de saldo).
 name: CI
 on:
   push:
@@ -21,5 +22,40 @@ jobs:
         run: npm --prefix client run typecheck
       - name: Testes das regras de negócio
         run: npm --prefix server test
+      - name: Lint
+        run: npm run lint
       - name: Build do front
         run: npm --prefix client run build
+
+  # As regras de saldo e o runner de migração só podem ser provados contra um
+  # Postgres de verdade (o modo demonstração não tem isolamento por transação).
+  # continue-on-error: o job informa, mas não segura o merge enquanto a suíte de
+  # integração estiver evoluindo — os testes de regra continuam obrigatórios acima.
+  testes-postgres:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: brobond
+          POSTGRES_PASSWORD: brobond
+          POSTGRES_DB: brobond_teste
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U brobond -d brobond_teste"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://brobond:brobond@localhost:5432/brobond_teste
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Instalar dependências da API
+        run: npm --prefix server install
+      - name: Migrations + concorrência de saldo no Postgres
+        run: npm --prefix server run test:pg

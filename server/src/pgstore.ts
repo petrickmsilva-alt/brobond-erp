@@ -275,6 +275,76 @@ export class PgStore implements Store {
     return res.rows[0];
   }
 
+  async tryUpdateIf(r: Resource, id: number, esperado: Payload, data: Payload, tx?: Tx): Promise<Row | null> {
+    const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
+    const params: unknown[] = [id];
+    const conds: string[] = [`id = $1`];
+    for (const [k, v] of Object.entries(esperado)) {
+      if (!allowed.has(k)) continue;
+      if (v === null || v === undefined) conds.push(`${k} IS NULL`);
+      else {
+        params.push(v);
+        conds.push(`${k} = $${params.length}`);
+      }
+    }
+    const keys = Object.keys(data).filter((k) => allowed.has(k) && k !== 'id');
+    const sets = keys.map((k, i) => `${k} = $${params.length + 1 + i}`);
+    if (r.fields.some((f) => f.name === 'atualizado_em')) sets.push('atualizado_em = now()');
+    if (!sets.length) return this.get(r, id, tx);
+    const res = await q(
+      `UPDATE ${r.table} SET ${sets.join(', ')} WHERE ${conds.join(' AND ')} RETURNING *`,
+      [...params, ...keys.map((k) => data[k])],
+      tx
+    );
+    return res.rows[0] ?? null;
+  }
+
+  async tryAdjustStock(produtoId: number, tamanhoId: number, local: string, delta: number, tx?: Tx, minimo = 0): Promise<Row | null> {
+    // Garante a linha do saldo (idempotente) e depois abate com a condição DENTRO
+    // do UPDATE: o WHERE é reavaliado contra a versão mais recente da linha (o
+    // UPDATE toma row lock), então duas transações concorrentes não passam as duas.
+    await q(
+      `INSERT INTO estoques (produto_id, tamanho_id, local, quantidade, criado_em)
+       VALUES ($1, $2, $3, 0, now())
+       ON CONFLICT (produto_id, tamanho_id, local) DO NOTHING`,
+      [produtoId, tamanhoId, local],
+      tx
+    );
+    if (delta === 0) {
+      const atual = await q(`SELECT * FROM estoques WHERE produto_id = $1 AND tamanho_id = $2 AND local = $3`, [produtoId, tamanhoId, local], tx);
+      return atual.rows[0] ?? null;
+    }
+    const res = await q(
+      `UPDATE estoques
+          SET quantidade = quantidade + $4, atualizado_em = now()
+        WHERE produto_id = $1 AND tamanho_id = $2 AND local = $3 AND quantidade + $4 >= $5
+        RETURNING *`,
+      [produtoId, tamanhoId, local, delta, minimo],
+      tx
+    );
+    return res.rows[0] ?? null;
+  }
+
+  async insertMany(r: Resource, rows: Payload[], tx?: Tx): Promise<Row[]> {
+    if (!rows.length) return [];
+    const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
+    const cols = Array.from(new Set(rows.flatMap((d) => Object.keys(d).filter((k) => allowed.has(k)))));
+    if (!cols.length) return rows.map(() => ({} as Row));
+    const hasCriado = r.fields.some((f) => f.name === 'criado_em') && !cols.includes('criado_em');
+    const all = hasCriado ? [...cols, 'criado_em'] : cols;
+    const params: unknown[] = [];
+    const tuples = rows.map((d) => {
+      const vals = cols.map((c) => {
+        params.push(d[c] ?? null);
+        return `$${params.length}`;
+      });
+      if (hasCriado) vals.push('now()');
+      return `(${vals.join(', ')})`;
+    });
+    const res = await q(`INSERT INTO ${r.table} (${all.join(', ')}) VALUES ${tuples.join(', ')} RETURNING *`, params, tx);
+    return res.rows as Row[];
+  }
+
   async adjustInsumoStock(insumoId: number, delta: number, tx?: Tx): Promise<Row> {
     const res = await q(
       `INSERT INTO estoque_insumos (insumo_id, quantidade, atualizado_em)

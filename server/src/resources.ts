@@ -936,6 +936,25 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'comissao_pct', label: 'Comissão (%)', type: 'percent', readonly: true, form: false },
       { name: 'comissao_valor', label: 'Comissão (R$)', type: 'money', readonly: true, form: false },
       { name: 'faturada_em', label: 'Faturada em', type: 'datetime', readonly: true, form: false },
+      // Estado fiscal: persistido apenas pelos endpoints de NF-e (o CRUD descarta
+      // estes campos), então a UI nunca mostra "emitida" para o que é simulação.
+      {
+        name: 'nfe_status',
+        label: 'NF-e',
+        type: 'select',
+        default: 'nao_emitida',
+        list: true,
+        form: false,
+        readonly: true,
+        options: [
+          { value: 'nao_emitida', label: 'NF-e não emitida', tone: 'slate' },
+          { value: 'simulada', label: 'NF-e simulada', tone: 'amber' },
+          { value: 'emitida', label: 'NF-e emitida', tone: 'green' },
+          { value: 'cancelada', label: 'NF-e cancelada', tone: 'red' },
+        ],
+      },
+      { name: 'nfe_numero', label: 'Número da NF-e', type: 'text', list: false, form: false, readonly: true },
+      { name: 'nfe_emitida_em', label: 'NF-e emitida em', type: 'datetime', list: false, form: false, readonly: true },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
       ...auditFields,
     ],

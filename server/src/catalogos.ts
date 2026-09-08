@@ -107,8 +107,8 @@ export async function catalogoPublico(req: Request, res: Response) {
   const mostrarMedidas = catalogo.mostrar_medidas === true;
 
   // Tabela de medidas (bulk): resolve a grade de cada produto e monta a tabela.
-  let medidasPorGrade: Map<number, { medidas: { id: number; nome: string; unidade: string }[]; linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[] }> = new Map();
-  let gradePorProduto: Map<number, number> = new Map();
+  const medidasPorGrade: Map<number, { medidas: { id: number; nome: string; unidade: string }[]; linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[] }> = new Map();
+  const gradePorProduto: Map<number, number> = new Map();
   if (mostrarMedidas) {
     const [categorias, gradeTamanhos, medidas, valores] = await Promise.all([
       s.list(RESOURCES.categorias, { page: 1, pageSize: 2000 }),

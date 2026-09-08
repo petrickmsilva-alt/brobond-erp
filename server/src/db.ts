@@ -1,5 +1,5 @@
 import { Pool, type PoolClient, type QueryResult } from 'pg';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -114,6 +114,65 @@ export async function migrate(): Promise<void> {
   }
   const sql = readFileSync(file, 'utf8');
   await pool.query(sql);
+  await aplicarMigrationsVersionadas();
   ready = true;
-  console.log('🗄️  Schema verificado/migrado (db/schema.sql).');
+  console.log('🗄️  Schema verificado/migrado (db/schema.sql + db/migrations).');
+}
+
+/** Caminhos possíveis de `db/<rel>` a partir de server/src, do build ou do repositório. */
+function candidatosDb(rel: string): string[] {
+  return [
+    path.resolve(__dirname, '../../db', rel),
+    path.resolve(process.cwd(), 'db', rel),
+    path.resolve(process.cwd(), '../db', rel),
+  ];
+}
+
+function existe(caminho: string): boolean {
+  try {
+    return statSync(caminho).isFile() || statSync(caminho).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Migrações versionadas (db/migrations/*.sql), aplicadas em ordem léxica e uma
+ * única vez por banco: o nome do arquivo fica registrado em `schema_migrations`.
+ *
+ * É isso que faltava para uma correção de schema chegar a quem JÁ tem banco: sem
+ * registro, só existia o db/schema.sql "aplique e reze", e coluna nova vinha com
+ * ALTER TABLE ... IF NOT EXISTS solto no fim do arquivo. Cada arquivo roda dentro
+ * da própria transação; se um falhar o boot aborta em vez de subir com o banco
+ * pela metade.
+ */
+async function aplicarMigrationsVersionadas(): Promise<void> {
+  if (!pool) return;
+  const dir = candidatosDb('migrations').find(existe);
+  if (!dir) return;
+  const nomes = readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  if (!nomes.length) return;
+  await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    id TEXT PRIMARY KEY,
+    aplicado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+  const antes = new Set((await pool.query('SELECT id FROM schema_migrations')).rows.map((r: { id: string }) => r.id));
+  for (const nome of nomes) {
+    if (antes.has(nome)) continue;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(readFileSync(path.join(dir, nome), 'utf8'));
+      await client.query('INSERT INTO schema_migrations (id) VALUES ($1)', [nome]);
+      await client.query('COMMIT');
+      console.log(`🗄️  Migração aplicada: ${nome}`);
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw new Error(`Migração ${nome} falhou — o serviço não sobe com o banco pela metade: ${(e as Error).message}`);
+    } finally {
+      client.release();
+    }
+  }
 }

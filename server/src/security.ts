@@ -41,15 +41,72 @@ export function corsOrigin(): boolean | string[] {
   return isProd ? [] : true;
 }
 
+/** Rotas que uma conta com senha provisória PODE usar (além de qualquer GET). */
+const SENHA_PROVISORIA_LIBERADA = /^\/auth\/(me|change-password|logout|logout-all|reautenticar|sessoes|mfa)(\/|$)/;
+
+/** true quando o caminho é seguro para quem ainda não trocou a senha recebida. */
+export function senhaProvisoriaLiberada(path: string): boolean {
+  return SENHA_PROVISORIA_LIBERADA.test(path);
+}
+
+/**
+ * Senha provisória (convite aceito, reset de senha ou admin padrão) só lê e só
+ * escreve no próprio fluxo de troca de senha/MFA. Sem isso, a senha inicial —
+ * que num deploy novo é pública (está no README) — já bastaria para movimentar
+ * estoque, fechar inventário e mexer no financeiro antes de qualquer troca.
+ */
+export function bloquearSenhaProvisoria(req: Request, res: Response, next: NextFunction): void {
+  const u = (req as { user?: { trocar_senha?: boolean } }).user;
+  if (u?.trocar_senha === true && req.method !== 'GET' && !senhaProvisoriaLiberada(req.path)) {
+    res.status(403).json({
+      error: 'Defina sua senha definitiva em Configurações → Senha antes de incluir ou alterar dados.',
+      code: 'SENHA_PROVISORIA',
+    });
+    return;
+  }
+  next();
+}
+
+/**
+ * Content-Security-Policy do app. O SPA é 100% same-origin (bundle, API,
+ * manifest) e o CSS do editor é autocontido; de fora entram só as fontes do
+ * Google e o Cloudinary (imagens/uploads). `style-src 'unsafe-inline'` é
+ * obrigatório porque o React escreve style="" nos elementos.
+ */
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https://res.cloudinary.com https://*.cloudinary.com",
+  "connect-src 'self' https://res.cloudinary.com https://*.cloudinary.com",
+  "worker-src 'self' blob:",
+  "child-src 'self' blob:",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",
+].join('; ');
+
 /** Cabeçalhos de proteção (equivalente enxuto do helmet). */
-export function securityHeaders(_req: Request, res: Response, next: NextFunction) {
+export function securityHeaders(req: Request, res: Response, next: NextFunction) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-DNS-Prefetch-Control', 'off');
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), payment=()');
+  // /api/docs é HTML estático que carrega o Swagger UI de um CDN com um script de
+  // bootstrap inline; não é superfície autenticada, então fica fora da CSP do
+  // app (os demais cabeçalhos continuam valendo para ele).
+  if (req.path !== '/api/docs') {
+    res.setHeader('Content-Security-Policy', isProd ? `${CSP}; upgrade-insecure-requests` : CSP);
+  }
+  // X-Frame-Options em qualquer ambiente (a CSP cobre os navegadores modernos,
+  // este é o cinto para os antigos): sem isso, em dev a tela de login podia ser
+  // embutida em um iframe de outro site.
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   if (isProd) {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   }
   next();
 }

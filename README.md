@@ -79,11 +79,16 @@ Abra http://localhost:5173 e entre com o administrador padrão:
 
 Com `DATABASE_URL` definida, a API **aplica `db/schema.sql` automaticamente ao
 iniciar** (o arquivo é idempotente: cria tabelas novas e adiciona colunas que
-faltam em bancos antigos). Não é preciso rodar nada à mão, mas se quiser:
+faltam em bancos antigos) e depois roda as **migrações versionadas** de
+`db/migrations/*.sql`. Cada arquivo é aplicado uma única vez — o nome fica
+registrado em `schema_migrations` — dentro da própria transação; se um falhar, o
+serviço **não sobe** (melhor fora do ar do que com o banco pela metade). Não é
+preciso rodar nada à mão, mas se quiser:
 
 ```bash
-psql "$DATABASE_URL" -f db/schema.sql   # tabelas / migração
+psql "$DATABASE_URL" -f db/schema.sql   # tabelas / colunas
 psql "$DATABASE_URL" -f db/seed.sql     # (opcional) grade PP–GG, coleções e fornecedores de exemplo
+ls db/migrations                        # regras que evoluem (CHECKs, índices, backfill)
 ```
 
 O usuário administrador é criado pela própria API a partir de
@@ -224,21 +229,47 @@ conflitos (duplicidade, registro em uso) como `409`.
 3. Toda inclusão/remoção de foto entra na **Auditoria**. Ao excluir um produto,
    as fotos são removidas junto.
 
+### NF-e (emissão fiscal)
+
+O ERP monta os dados da venda (emitente, item, cliente, totais) e expõe
+`GET /api/vendas/:id/nfe/dados`, `POST /api/vendas/:id/nfe/emitir` e
+`GET /api/vendas/:id/nfe/status`. **Não há cliente para nenhum emissor**
+(NFe.io, eNotas, Focus), então `emitir` só faz coisa quando `NFE_MODO=simulacao`:
+grava `vendas.nfe_status = 'simulada'` com número prefixado de `SIM-` e a
+resposta/auditoria dizem que não tem valor fiscal. Com provedor configurado e sem
+esse modo, a chamada devolve `503` em vez de inventar uma nota. O estado fiscal é
+escrito apenas por esses endpoints — o CRUD de vendas descarta `nfe_*`.
+
+| Variável | Uso |
+|---|---|
+| `NFE_PROVIDER` | `nfe.io` / `enotas` / `focus` — rótulo do serviço |
+| `NFE_API_KEY` | chave do emissor (ainda não consumida por cliente algum) |
+| `NFE_MODO=simulacao` | liga o fluxo de treino, sem valor fiscal |
+| `NFE_EMITENTE_CNPJ`, `NFE_EMITENTE_IE`, `NFE_EMITENTE_RAZAO` | dados do emitente no documento |
+
 ### Testes e CI
 
 ```bash
-npm test         # regras de negócio (estoque, OP, permissões, validação, rate limit)
+npm test                        # regras de negócio (estoque, OP, permissões, validação, rate limit)
+npm --prefix server run test:pg # suíte de integração: exige DATABASE_URL (sem ela, os testes se auto-pulam)
 npm run typecheck
+npm run lint                    # erros param o CI; avisos (any em handlers) não
 ```
 
-O GitHub Actions (`.github/workflows/ci.yml`) roda typecheck, testes e build a
-cada push — um PR com erro não passa.
+O GitHub Actions (`.github/workflows/ci.yml`) roda typecheck, testes, lint e build
+a cada push — um PR com erro não passa. Há ainda um job `testes-postgres` que sobe
+um `postgres:16` e roda `test:pg`: é o único lugar onde dá para provar que o abate
+de saldo é atômico sob concorrência (o modo demonstração não tem isolamento por
+transação) e que as migrações versionadas chegam a um banco existente. Ele está com
+`continue-on-error`, ou seja: informa, não segura o merge.
 
 ### Como adicionar um campo a um módulo
 
 1. Declare o campo em `server/src/resources.ts` (tipo, obrigatório, rótulo...).
 2. Adicione a coluna em `db/schema.sql` (na tabela **e** na seção de migrações
-   com `ADD COLUMN IF NOT EXISTS`).
+   com `ADD COLUMN IF NOT EXISTS`). Regra que precisa de `CHECK`, `UNIQUE`, rename
+   ou backfill vai num arquivo novo em `db/migrations/` (numerado, idempotente —
+   o schema.sql sozinho não faz o banco antigo evoluir).
 3. Pronto — formulário, tabela, validação e API passam a considerá-lo.
 
 ## Roteiro de evolução

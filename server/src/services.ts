@@ -185,6 +185,32 @@ export async function gradeDoProduto(produto: Row, tx?: Tx): Promise<GradeInfo |
   return { gradeId, gradeNome: String(grade.nome || `#${gradeId}`), tamanhos };
 }
 
+/**
+ * O tamanho precisa existir na grade efetiva do produto (a do produto, senão a
+ * da categoria). A tela já filtra, mas planilha de importação, integração e
+ * chamada direta à API não passam pela tela — é aqui que a mistura PP–GG com
+ * 36–48 para de verdade. Produto sem grade fica de fora (ainda não organizado).
+ */
+export async function validarTamanhoNaGrade(produtoId: number, tamanhoId: number, tx?: Tx): Promise<void> {
+  if (!produtoId || !tamanhoId) return;
+  const s = getStore();
+  const produto = await s.findOneWhere(RESOURCES.produtos, { id: produtoId }, tx);
+  if (!produto) return; // a validação de referência do payload cuida disso
+  const grade = await gradeDoProduto(produto, tx);
+  if (!grade || !grade.tamanhos.length) return;
+  if (grade.tamanhos.some((t) => t.id === tamanhoId)) return;
+  const tamanho = await s.findOneWhere(RESOURCES.tamanhos, { id: tamanhoId }, tx);
+  throw new HttpError(
+    400,
+    `O tamanho "${String(tamanho?.codigo ?? `#${tamanhoId}`)}" não faz parte da grade "${grade.gradeNome}" de ${String(produto.sku ?? `#${produtoId}`)}.`,
+    {
+      tamanho_id:
+        `A grade aceita: ${grade.tamanhos.map((t) => t.codigo).join(', ')}. ` +
+        'Se o produto pertence a outra grade, ajuste a grade no cadastro dele.',
+    }
+  );
+}
+
 // ----------------------------------------------------------------------------
 // Escrita (com regras por módulo)
 // ----------------------------------------------------------------------------
@@ -201,8 +227,17 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
       if (r.key === 'estoques') {
         await resolveLocal(data, tx);
         await ensureUniqueStock(data, null, tx);
+        await garantirSaldoNaoNegativo(data, null);
       }
-      if (r.key === 'inventarios') await resolveLocal(data, tx);
+      if (r.key === 'inventarios') {
+        await resolveLocal(data, tx);
+        // Abrir um inventário é sempre abrir: `status` é readonly na API e o
+        // DEFAULT 'aberto' só existe no Postgres, então no modo demonstração o
+        // registro nascia sem status e o snapshot do saldo nunca rodava.
+        if (data.status === undefined || data.status === null || data.status === '') data.status = 'aberto';
+      }
+      // O estado fiscal pertence aos endpoints de NF-e: o formulário não cria nota.
+      if (r.key === 'vendas') for (const k of ['nfe_status', 'nfe_numero', 'nfe_emitida_em', 'nfe_provider']) delete data[k];
       if (r.key === 'locais') await ensureLocalPadraoUnico(data, null, tx);
       if (r.key === 'ordens') await validarOrdemPayload(data, null);
 
@@ -280,10 +315,13 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
         }
         await resolveLocal(data, tx);
         await ensureUniqueStock(data, before, tx);
+        await garantirSaldoNaoNegativo(data, before);
       }
       if (r.key === 'movimentacoes') throw new HttpError(405, 'Movimentações são imutáveis. Faça o lançamento inverso.');
       if (r.key === 'movimentacoes_insumos') throw new HttpError(405, 'Movimentações de insumos são imutáveis. Faça o lançamento inverso.');
       if (r.key === 'inventarios') await validarUpdateInventario(data, before);
+      // Idem criação: editar à mão criaria uma NF-e "emitida" que não existe.
+      if (r.key === 'vendas') for (const k of ['nfe_status', 'nfe_numero', 'nfe_emitida_em', 'nfe_provider']) delete data[k];
       let renomeouLocal = false;
       if (r.key === 'locais') {
         renomeouLocal = await validarRenomeLocal(data, before, actor, tx);
@@ -520,6 +558,25 @@ async function ensureNotLastAdmin(before: Row, data: Payload, tx: Tx) {
   if (!others.length) throw new HttpError(400, 'Este é o único administrador ativo. Cadastre outro administrador antes.');
 }
 
+/**
+ * Espelha no código a constraint `estoques_quantidade_nao_negativo` (Postgres):
+ * no modo demonstração não há banco para segurar, e um saldo negativo editado à
+ * mão invalidaria tudo que a matriz de estoque mostra.
+ */
+async function garantirSaldoNaoNegativo(data: Payload, before: Row | null): Promise<void> {
+  if (data.quantidade === undefined || data.quantidade === null) return;
+  const qtd = Number(data.quantidade);
+  if (!Number.isFinite(qtd)) return; // a validação de tipo cuida disso
+  if (qtd < 0) {
+    const local = String(data.local ?? before?.local ?? 'estoque');
+    throw new HttpError(
+      400,
+      `O saldo não pode ser negativo. Para lançar uma diferença de contagem use uma Saída ou um Ajuste em "${local}".`,
+      { quantidade: 'Saldo não pode ser negativo' }
+    );
+  }
+}
+
 async function ensureUniqueStock(data: Payload, before: Row | null, tx: Tx) {
   const merged = { ...(before || {}), ...data };
   if (!merged.produto_id || !merged.tamanho_id) return;
@@ -740,6 +797,9 @@ async function createMovimentacao(data: Payload, actor: Actor, tx: Tx): Promise<
   const tamanhoId = Number(data.tamanho_id);
   const usuarioId = actor.id || null;
 
+  // Nenhum tamanho fora da grade do produto (ver validarTamanhoNaGrade).
+  await validarTamanhoNaGrade(produtoId, tamanhoId, tx);
+
   // Transferência entre locais: em UMA transação, saída na origem + entrada no
   // destino — duas linhas ligadas por transferencia_id.
   if (tipo === 'transferencia') {
@@ -754,14 +814,15 @@ async function createMovimentacao(data: Payload, actor: Actor, tx: Tx): Promise<
     const localDestino = String(destino.nome);
     if (localDestino === local) throw new HttpError(400, 'A origem e o destino da transferência devem ser locais diferentes.', { local_destino_id: 'Escolha outro local' });
 
-    const saldoOrigem = await s.findOneWhere(getResource('estoques')!, { produto_id: produtoId, tamanho_id: tamanhoId, local }, tx ?? undefined);
-    const atual = Number(saldoOrigem?.quantidade ?? 0);
-    if (atual < qtd) {
+    const motivo = data.motivo ? String(data.motivo) : `Transferência para ${localDestino}`;
+    // Retira na origem com a condição dentro do próprio UPDATE — ver tryAdjustStock.
+    const retirado = await s.tryAdjustStock(produtoId, tamanhoId, local, -qtd, tx);
+    if (!retirado) {
+      const origem = await s.findOneWhere(getResource('estoques')!, { produto_id: produtoId, tamanho_id: tamanhoId, local }, tx ?? undefined);
+      const atual = Number(origem?.quantidade ?? 0);
       throw new HttpError(409, `Saldo insuficiente para transferir: há ${atual} peça(s) em "${local}" e você quer transferir ${qtd}.`, { quantidade: `Saldo atual: ${atual}` });
     }
-    const motivo = data.motivo ? String(data.motivo) : `Transferência para ${localDestino}`;
     const saida = await s.insert(mov, { tipo: 'saida', produto_id: produtoId, tamanho_id: tamanhoId, local, local_id: data.local_id ?? null, local_destino: localDestino, local_destino_id: destId, quantidade: qtd, motivo, usuario_id: usuarioId }, tx);
-    await s.adjustStock(produtoId, tamanhoId, local, -qtd, tx);
     await s.insert(mov, { tipo: 'entrada', produto_id: produtoId, tamanho_id: tamanhoId, local: localDestino, local_id: destId, transferencia_id: Number(saida.id), quantidade: qtd, motivo: `Transferência de ${local}`, usuario_id: usuarioId }, tx);
     await s.adjustStock(produtoId, tamanhoId, localDestino, qtd, tx);
     await s.update(mov, Number(saida.id), { transferencia_id: Number(saida.id) }, tx);
@@ -770,14 +831,20 @@ async function createMovimentacao(data: Payload, actor: Actor, tx: Tx): Promise<
   }
 
   const delta = tipo === 'saida' ? -qtd : qtd;
-  const saldo = await s.findOneWhere(getResource('estoques')!, { produto_id: produtoId, tamanho_id: tamanhoId, local }, tx ?? undefined);
-  const atual = Number(saldo?.quantidade ?? 0);
-  if (atual + delta < 0) {
-    throw new HttpError(409, `Saldo insuficiente: há ${atual} peça(s) em "${local}" e a movimentação retiraria ${Math.abs(delta)}.`, { quantidade: `Saldo atual: ${atual}` });
+  if (delta < 0) {
+    // O abatimento é a primeira coisa e é condicional na própria escrita: checar
+    // o saldo antes e gravar depois deixaria duas vendas concorrentes tirarem a
+    // mesma peça (e o saldo virar negativo).
+    const aplicado = await s.tryAdjustStock(produtoId, tamanhoId, local, delta, tx);
+    if (!aplicado) {
+      const saldo = await s.findOneWhere(getResource('estoques')!, { produto_id: produtoId, tamanho_id: tamanhoId, local }, tx ?? undefined);
+      const atual = Number(saldo?.quantidade ?? 0);
+      throw new HttpError(409, `Saldo insuficiente: há ${atual} peça(s) em "${local}" e a movimentação retiraria ${Math.abs(delta)}.`, { quantidade: `Saldo atual: ${atual}` });
+    }
   }
 
   const row = await s.insert(mov, { ...data, local, local_id: data.local_id ?? null, local_destino: data.local_destino ?? null, local_destino_id: data.local_destino_id ?? null, usuario_id: usuarioId }, tx);
-  await s.adjustStock(produtoId, tamanhoId, local, delta, tx);
+  if (delta > 0) await s.adjustStock(produtoId, tamanhoId, local, delta, tx);
   const full = (await s.get(mov, row.id, tx)) ?? row;
   await audit(tx, actor, 'criar', mov, row.id, `${tipo === 'entrada' ? 'Entrada' : tipo === 'saida' ? 'Saída' : 'Ajuste'} de ${qtd} un. — ${full.produto_id__label ?? '#' + produtoId} ${full.tamanho_id__label ?? ''} (${local})`, sanitize(data));
   return full;
@@ -827,14 +894,27 @@ async function abrirInventarioSnapshot(row: Row, actor: Actor, tx: Tx) {
   if (aberto && Number(aberto.id) !== Number(row.id)) {
     throw new HttpError(409, `Já existe um inventário aberto para o local "${local}" (inventário #${aberto.id}). Feche-o antes de abrir outro.`);
   }
-  const estoques = await s.list(getResource('estoques')!, { page: 1, pageSize: 2000, filter: { local } }, tx);
-  const itensR = getResource('itens_inventario')!;
-  let n = 0;
-  for (const e of estoques.rows) {
-    if (Number(e.quantidade) === 0 && Number(e.estoque_min || 0) === 0) continue;
-    await s.insert(itensR, { inventario_id: Number(row.id), produto_id: e.produto_id, tamanho_id: e.tamanho_id, saldo_sistema: Number(e.quantidade), contado: null, diferenca: 0 }, tx);
-    n++;
+  const estoques = await s.list(getResource('estoques')!, { page: 1, pageSize: 20000, filter: { local } }, tx);
+  // 2000 era o teto antigo e virava contagem silenciosa pela metade num local
+  // maior — melhor recusar do que fechar um inventário incompleto.
+  if (estoques.total > estoques.rows.length) {
+    throw new HttpError(409, `O local "${local}" tem ${estoques.total} saldos e o snapshot só suporta ${estoques.rows.length} por inventário. Abra um inventário por produto/categoria.`);
   }
+  const itensR = getResource('itens_inventario')!;
+  const linhas = estoques.rows
+    .filter((e) => Number(e.quantidade) !== 0 || Number(e.estoque_min || 0) !== 0)
+    .map((e) => ({
+      inventario_id: Number(row.id),
+      produto_id: e.produto_id,
+      tamanho_id: e.tamanho_id,
+      saldo_sistema: Number(e.quantidade),
+      contado: null,
+      diferenca: 0,
+    }));
+  // Um INSERT por linha tornava abrir a contagem O(n) em round-trips (2 mil saldos
+  // = 2 mil ida-e-volta no Postgres). Em lote é um statement só.
+  await s.insertMany(itensR, linhas, tx);
+  const n = linhas.length;
   await s.update(getResource('inventarios')!, Number(row.id), { aberto_por: actor.name }, tx);
   await s.audit(
     { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'inventarios', registro_id: Number(row.id), descricao: `Inventário #${row.id} aberto no local "${local}" — ${n} itens com saldo congelado`, dados: { itens: n } },

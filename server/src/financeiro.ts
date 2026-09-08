@@ -16,8 +16,10 @@ import { checkAccess, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
 import type { Row, Tx } from './store';
 import { labelOf } from './store';
+import { round2, somaMoeda } from './utils';
 
-const r2 = (n: number) => Math.round(n * 100) / 100;
+const r2 = round2;
+
 const hoje = () => new Date().toISOString().slice(0, 10);
 const addDias = (d: Date, n: number) => new Date(d.getTime() + n * 86400000);
 const fmtData = (d: Date) => d.toISOString().slice(0, 10);
@@ -81,8 +83,8 @@ function montarFluxoProjetado(pendentes: Row[], recorrencias: Row[], saldoBase: 
       const iniS = fmtData(cursor);
       const fimS = fmtData(fim);
       const noPeriodo = eventos.filter((e) => e.data >= iniS && e.data < fimS);
-      const entradas = r2(noPeriodo.filter((e) => e.tipo === 'receita').reduce((s, e) => s + e.valor, 0));
-      const saidas = r2(noPeriodo.filter((e) => e.tipo === 'despesa').reduce((s, e) => s + e.valor, 0));
+      const entradas = somaMoeda(noPeriodo.filter((e) => e.tipo === 'receita').map((e) => e.valor));
+      const saidas = somaMoeda(noPeriodo.filter((e) => e.tipo === 'despesa').map((e) => e.valor));
       const liquido = r2(entradas - saidas);
       acumulado = r2(acumulado + liquido);
       const label = periodo === 'semana' ? `Semana ${fmtData(cursor).slice(8, 10)}/${fmtData(cursor).slice(5, 7)}` : `${fmtData(cursor).slice(0, 7)}`;
@@ -417,11 +419,11 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     }
     return { conta_id: Number(conta.id), nome: nomeConta(conta.id), tipo: String(conta.tipo || 'caixa'), saldo: r2(valor) };
   });
-  const saldoContasTotal = r2(saldoContas.reduce((sum, c) => sum + c.saldo, 0));
+  const saldoContasTotal = somaMoeda(saldoContas.map((c) => c.saldo));
 
-  const receitasMes = r2(confirmados.filter((l) => doMes(l) && l.tipo === 'receita').reduce((s, l) => s + Number(l.valor || 0), 0));
-  const despesasMes = r2(confirmados.filter((l) => doMes(l) && l.tipo === 'despesa').reduce((s, l) => s + Number(l.valor || 0), 0));
-  const investimentosMes = r2(confirmados.filter((l) => doMes(l) && l.tipo === 'investimento').reduce((s, l) => s + Number(l.valor || 0), 0));
+  const receitasMes = somaMoeda(confirmados.filter((l) => doMes(l) && l.tipo === 'receita').map((l) => Number(l.valor || 0)));
+  const despesasMes = somaMoeda(confirmados.filter((l) => doMes(l) && l.tipo === 'despesa').map((l) => Number(l.valor || 0)));
+  const investimentosMes = somaMoeda(confirmados.filter((l) => doMes(l) && l.tipo === 'investimento').map((l) => Number(l.valor || 0)));
   const resultadoOperacionalMes = r2(receitasMes - despesasMes);
   const resultadoCaixaMes = r2(resultadoOperacionalMes + investimentosMes);
 
@@ -467,7 +469,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     if (!s) return false;
     return s < hoje();
   };
-  const somaVencidas = (lista: { vencimento: unknown; valor: number }[]) => r2(lista.filter((l) => vencidas(l.vencimento)).reduce((s, l) => s + l.valor, 0));
+  const somaVencidas = (lista: { vencimento: unknown; valor: number }[]) => somaMoeda(lista.filter((l) => vencidas(l.vencimento)).map((l) => l.valor));
 
   const pendentesReceber = lancR.rows.filter((l) => String(l.status) === 'pendente' && String(l.tipo) === 'receita');
   const pendentesPagar = lancR.rows.filter((l) => String(l.status) === 'pendente' && String(l.tipo) === 'despesa');
@@ -502,8 +504,8 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     }))
     .sort((a, b) => (a.vencimento || '9999').localeCompare(b.vencimento || '9999'));
 
-  const aReceber = r2(aReceberLista.reduce((s, l) => s + l.valor, 0));
-  const aPagar = r2(aPagarLista.reduce((s, l) => s + l.valor, 0));
+  const aReceber = somaMoeda(aReceberLista.map((l) => l.valor));
+  const aPagar = somaMoeda(aPagarLista.map((l) => l.valor));
 
   const emJanela = (d: unknown, dias: number) => {
     const s = String(d || '').slice(0, 10);
@@ -514,8 +516,8 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     return s >= hojeS && s <= limite.toISOString().slice(0, 10);
   };
 
-  const aReceber30 = r2(aReceberLista.filter((l) => emJanela(l.vencimento, 30)).reduce((s, l) => s + l.valor, 0));
-  const aPagar30 = r2(aPagarLista.filter((l) => emJanela(l.vencimento, 30)).reduce((s, l) => s + l.valor, 0));
+  const aReceber30 = somaMoeda(aReceberLista.filter((l) => emJanela(l.vencimento, 30)).map((l) => l.valor));
+  const aPagar30 = somaMoeda(aPagarLista.filter((l) => emJanela(l.vencimento, 30)).map((l) => l.valor));
   const aReceberVencidas = somaVencidas(aReceberLista);
   const aPagarVencidas = somaVencidas(aPagarLista);
 
@@ -811,8 +813,8 @@ export async function resumoInvestidores(req: Request, res: Response) {
     const doInv = confirmados.filter((a) => Number(a.investidor_id) === id);
     const aportes = doInv.filter((a) => String(a.tipo) !== 'distribuicao_lucro');
     const distribuicao = doInv.filter((a) => String(a.tipo) === 'distribuicao_lucro');
-    const totalAportado = r2(aportes.reduce((s, a) => s + Number(a.valor || 0), 0));
-    const totalDistribuido = r2(distribuicao.reduce((s, a) => s + Number(a.valor || 0), 0));
+    const totalAportado = somaMoeda(aportes.map((a) => Number(a.valor || 0)));
+    const totalDistribuido = somaMoeda(distribuicao.map((a) => Number(a.valor || 0)));
     return {
       id,
       nome: labelOf(getResource('investidores')!, inv),
@@ -827,9 +829,9 @@ export async function resumoInvestidores(req: Request, res: Response) {
   });
 
   res.json({
-    totalInvestido: r2(confirmados.filter((a) => String(a.tipo) !== 'distribuicao_lucro').reduce((s, a) => s + Number(a.valor || 0), 0)),
-    totalDistribuido: r2(confirmados.filter((a) => String(a.tipo) === 'distribuicao_lucro').reduce((s, a) => s + Number(a.valor || 0), 0)),
-    aportesNoMes: r2(confirmados.filter((a) => String(a.data || '').slice(0, 7) === hoje().slice(0, 7)).reduce((s, a) => s + Number(a.valor || 0), 0)),
+    totalInvestido: somaMoeda(confirmados.filter((a) => String(a.tipo) !== 'distribuicao_lucro').map((a) => Number(a.valor || 0))),
+    totalDistribuido: somaMoeda(confirmados.filter((a) => String(a.tipo) === 'distribuicao_lucro').map((a) => Number(a.valor || 0))),
+    aportesNoMes: somaMoeda(confirmados.filter((a) => String(a.data || '').slice(0, 7) === hoje().slice(0, 7)).map((a) => Number(a.valor || 0))),
     porInvestidor: porInvestidor.sort((a, b) => b.totalAportado - a.totalAportado),
   });
 }
