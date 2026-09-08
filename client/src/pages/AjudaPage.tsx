@@ -15,6 +15,18 @@ const GUIAS: { titulo: string; modulos: string[]; passos: string[] }[] = [
     ],
   },
   {
+    titulo: 'Tabela de medidas (F4)',
+    modulos: ['medidas', 'grades', 'produtos'],
+    passos: [
+      'No painel “Situação das grades” veja de um olhar quais grades têm tabela completa, parcial ou sem tabela — e quando cada uma foi atualizada.',
+      'Monte a tabela por grade: escolha um modelo pronto (Camiseta, Calça, Bermuda...) para já criar as colunas certas, depois preencha os valores por tamanho.',
+      'Precisa repetir o mesmo modelo em outra grade? “Copiar de outra grade” traz colunas, valores e instruções de uma vez.',
+      'Preencha as “Instruções de medição” (como medir, tolerância) — elas aparecem para o cliente no catálogo, na etiqueta e na impressão.',
+      '“Imprimir” gera uma folha A4 pronta para o atendimento; “Copiar texto” cola a tabela formatada no WhatsApp/e-mail.',
+      'O catálogo público mostra a tabela de medidas de cada produto (ligado por padrão em catálogos novos) com unidade, instruções e data de atualização.',
+    ],
+  },
+  {
     titulo: 'Ficha técnica e custo (F3)',
     modulos: ['custo', 'fichas'],
     passos: [
@@ -77,7 +89,8 @@ const GUIAS: { titulo: string; modulos: string[]; passos: string[] }[] = [
     modulos: ['config', 'produtos'],
     passos: [
       'Use pelo celular: as listagens viram cartões com botão flutuante (+), e dá para instalar como aplicativo (PWA).',
-      'Crie catálogos públicos (módulo Catálogos) para compartilhar produtos com preço por link — sem login do cliente.',
+      'Crie catálogos públicos (módulo Catálogos) para compartilhar produtos com preço por link — sem login do cliente. Catálogos novos já nascem com a tabela de medidas visível em cada produto (dá para desligar no cadastro do catálogo).',
+      'No catálogo, tocar num produto abre o detalhe com todas as fotos, descrição completa e a tabela de medidas — e dá para copiar o link da peça (compartilhar o produto específico).',
       'As preferências que você salvar em Configurações ficam guardadas por usuário.',
     ],
   },

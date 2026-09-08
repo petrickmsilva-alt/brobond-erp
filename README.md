@@ -122,6 +122,7 @@ DNS apontando para a Render.
 | Cadastros | **Produtos** | ✔ | ✔ | ✔ | **Até 5 fotos** (principal, ordem, zoom), categoria, cor padronizada **ou** texto livre, código de barras EAN único, composição, NCM, peso, descrição. **Página de detalhe** com grade de estoque, movimentações, OPs, custo/margem e **impressão de etiquetas** com código de barras |
 | Cadastros | **Categorias**, **Cores** (com amostra colorida) | ✔ | ✔ | ✔ | Nome único (ignora maiúsculas). Cores antigas em texto são migradas automaticamente |
 | Cadastros | Insumos, Fornecedores, Representantes, Clientes, Tamanhos/Grade, Coleções | ✔ | ✔ | ✔ | Busca, ordenação, paginação, validação por campo |
+| Cadastros | **Tabela de Medidas** | | | | Por grade: painel de completude (quais grades estão sem tabela/parciais e quando atualizaram), **modelos prontos** (Camiseta, Calça, Bermuda...), **copiar de outra grade**, validação por unidade (cm/mm/pol), **instruções de medição para o cliente**, **imprimir A4** e copiar texto. No catálogo público cada produto abre com todas as fotos, descrição completa e a tabela (unidade, instruções, "atualizada em"); catálogo novo já nasce com a tabela visível |
 | Estoque | **Locais** | ✔ | ✔ | ✔ | Loja, expedição, facção... Marque um como **Local padrão** — ele vira a origem padrão das movimentações. Só um pode ser o padrão. Gestão livre: **admin** inclui/altera/exclui mesmo com o local em uso (renomear propaga o nome; excluir preserva o histórico) |
 | Estoque | Estoque Físico | ✔ | ✔ | ✔ | Saldo único por produto+tamanho+local; alteração manual gera "ajuste"; só exclui saldo zerado |
 | Estoque | Movimentações | ✔ | — | — | Imutáveis. Entrada/saída/ajuste/transferência usam o **Local padrão** quando o campo local fica em branco; saída sem saldo é bloqueada |
@@ -276,6 +277,7 @@ transação) e que as migrações versionadas chegam a um banco existente. Ele e
 
 Ver [`docs/AUDITORIA-EVOLUCOES.md`](docs/AUDITORIA-EVOLUCOES.md). Situação:
 
+- [x] **Auditoria do módulo Tabela de Medidas (2026-09-08)** — visão profissional para o time e o cliente: painel de completude das grades, modelos prontos de colunas, cópia entre grades, validação de valores por unidade (antes `-5` e `9999` eram gravados), trilha de auditoria na gravação, "atualizada em" em todo lugar, instruções de medição (como medir/tolerância), impressão A4 e cópia de texto; no catálogo público, detalhe do produto com todas as fotos, descrição completa, tabela de medidas com unidade/instruções/data e link compartilhável da peça; `CHECK` de integridade no banco (migração 0002). Detalhes em `docs/AUDITORIA-MEDIDAS-2026-09-08.md`
 - [x] **Fase 1** — Fotos, categorias, cores, código de barras, detalhe do produto, etiquetas
 - [x] **Fase 6 (parcial)** — rate limit, cabeçalhos, CORS, JWT obrigatório, testes + CI
 - [x] **Correções 0.3.1** — Configurações exibe a versão real e o provedor de fotos; alerta quando o Cloudinary está configurado mas inválido; `/api/health` informa o provedor

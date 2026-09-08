@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS grades (
   id SERIAL PRIMARY KEY,
   nome TEXT UNIQUE NOT NULL,                 -- "Camiseta PP-GG", "Calça 36-48"...
   descricao TEXT,
+  instrucoes_medidas TEXT,                   -- como medir + tolerância (vai para o cliente)
   ativo BOOLEAN DEFAULT TRUE,
   criado_em TIMESTAMPTZ DEFAULT now(),
   atualizado_em TIMESTAMPTZ
@@ -94,9 +95,11 @@ CREATE TABLE IF NOT EXISTS medida_valores (
   medida_id INTEGER REFERENCES medidas(id) ON DELETE CASCADE,
   tamanho_id INTEGER REFERENCES tamanhos(id) ON DELETE CASCADE,
   valor NUMERIC(12,2),
+  atualizado_em TIMESTAMPTZ,                 -- quando a célula foi preenchida/alterada
   UNIQUE (medida_id, tamanho_id)
 );
 CREATE INDEX IF NOT EXISTS idx_medida_valores_medida ON medida_valores (medida_id);
+CREATE INDEX IF NOT EXISTS idx_medida_valores_tamanho ON medida_valores (tamanho_id);
 
 CREATE TABLE IF NOT EXISTS colecoes (
   id SERIAL PRIMARY KEY,
@@ -882,3 +885,20 @@ ALTER TABLE usuarios DROP COLUMN IF EXISTS senha_cifrada;
 -- ------------------------------------------------------------
 ALTER TABLE categorias ADD COLUMN IF NOT EXISTS grade_id INTEGER REFERENCES grades(id);
 ALTER TABLE produtos   ADD COLUMN IF NOT EXISTS grade_id INTEGER REFERENCES grades(id);
+
+-- ------------------------------------------------------------
+-- 2.11) TABELA DE MEDIDAS — instruções para o cliente + trilha de atualização
+-- ------------------------------------------------------------
+
+-- Grade: texto "como medir" + tolerância, exibido junto da tabela de medidas
+-- (catálogo público, detalhe do produto, impressão, etiquetas).
+ALTER TABLE grades ADD COLUMN IF NOT EXISTS instrucoes_medidas TEXT;
+
+-- Cada valor de medida registra quando foi preenchido/alterado — o cliente vê
+-- "atualizada em" e o time sabe qual grade está desatualizada.
+ALTER TABLE medida_valores ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_medida_valores_tamanho ON medida_valores (tamanho_id);
+
+-- Novos catálogos nascem com a tabela de medidas visível (padrão da API; os
+-- catálogos já existentes não são alterados — a visibilidade é uma escolha).
+ALTER TABLE catalogos ALTER COLUMN mostrar_medidas SET DEFAULT TRUE;
