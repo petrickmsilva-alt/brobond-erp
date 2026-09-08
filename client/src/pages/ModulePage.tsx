@@ -810,7 +810,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
             <p>
               Você está prestes a excluir <strong>{toDelete ? rowLabel(resource, toDelete) : ''}</strong>. Esta ação não pode ser desfeita.
             </p>
-            {resource.fields.some((f) => f.name === 'ativo') && <p className="mt-2 text-slate-500">Dica: se o registro já foi usado em outro módulo, prefira desmarcar "Ativo" ao editá-lo.</p>}
+            {resource.key === 'locais' && toDelete ? (
+              <LocalExclusaoAviso local={toDelete} isAdmin={user?.perfil === 'admin'} />
+            ) : (
+              resource.fields.some((f) => f.name === 'ativo') && <p className="mt-2 text-slate-500">Dica: se o registro já foi usado em outro módulo, prefira desmarcar "Ativo" ao editá-lo.</p>
+            )}
           </>
         }
       />
@@ -834,6 +838,34 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           </>
         }
       />
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Aviso de exclusão de local de estoque — gestão livre, decisão do administrador
+// ----------------------------------------------------------------------------
+function LocalExclusaoAviso({ local, isAdmin }: { local: Record<string, any>; isAdmin: boolean }) {
+  const uso = Number(local.uso_saldos) > 0 || Number(local.uso_movimentacoes) > 0 || Number(local.uso_inventarios) > 0;
+  const ultimoAtivo = !!local.eh_ultimo_ativo;
+  const exigeAdmin = uso || ultimoAtivo;
+  return (
+    <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+      {uso ? (
+        <p>
+          Este local <strong>está em uso</strong>: {local.uso_saldos} saldo(s) no Estoque Físico, {local.uso_movimentacoes} movimentação(ões) e {local.uso_inventarios} inventário(s).
+        </p>
+      ) : (
+        <p>Nenhum saldo, movimentação ou inventário usa este local.</p>
+      )}
+      <p className="mt-1">
+        A decisão é do administrador: o local sai do cadastro e <strong>o histórico não é apagado</strong> — saldos e movimentações continuam no sistema com o nome do local.
+      </p>
+      {ultimoAtivo && (
+        <p className="mt-1 font-semibold">Atenção: este é o único local ativo. Depois de excluir, as movimentações usam "almoxarifado" como origem até você cadastrar (ou reativar) outro local.</p>
+      )}
+      {exigeAdmin && !isAdmin && <p className="mt-1 font-semibold">Somente um administrador pode excluir um local em uso (ou o último local ativo).</p>}
+      {!uso && !ultimoAtivo && <p className="mt-2 text-slate-500">Dica: se o local ainda vai ser usado mais tarde, prefira desmarcar "Ativo" ao editá-lo.</p>}
     </div>
   );
 }

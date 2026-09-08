@@ -255,9 +255,9 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Local',
     labelFields: ['nome'],
     ops: ALL_OPS,
-    notice: 'Locais onde o estoque fica guardado (almoxarifado, loja, expedição, facção). Marque um deles como Local padrão — ele vira a origem padrão das movimentações (entrada/saída/transferência) e do Estoque Físico, substituindo o antigo padrão fixo "almoxarifado". As movimentações e o Estoque Físico usam estes locais no lugar do texto livre.',
+    notice: 'Locais onde o estoque fica guardado (almoxarifado, loja, expedição, facção). Marque um deles como Local padrão — ele vira a origem padrão das movimentações (entrada/saída/transferência) e do Estoque Físico, substituindo o antigo padrão fixo "almoxarifado". Gestão livre: o administrador pode incluir, alterar e excluir um local mesmo que ele já esteja em uso — ao renomear, o novo nome é propagado para saldos, movimentações e inventários; ao excluir, o histórico permanece com o nome do local.',
     fields: [
-      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'almoxarifado, loja, expedição...' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'almoxarifado, loja, expedição...', hint: 'Pode ser alterado mesmo com o local em uso (decisão do administrador): o novo nome é aplicado em saldos, movimentações e inventários.' },
       {
         name: 'tipo',
         label: 'Tipo',

@@ -14,8 +14,29 @@
 2. **Só pode haver um Local padrão ativo.** Ao marcar um novo como `padrao`,
    o anterior é desmarcado automaticamente. Se você excluir o Local padrão
    (e houver outro local ativo), o primeiro local ativo restante assume a
-   função. Se tentar excluir o **único** local ativo, o sistema bloqueia
-   (é preciso manter ao menos um local).
+   função.
+
+## Gestão livre (decisão do administrador)
+
+O local **não fica preso ao sistema**: pode ser **incluído, alterado e
+excluído mesmo quando já está em uso** (saldos no Estoque Físico,
+movimentações, inventários, vendas). A decisão é do **administrador**:
+
+- **Renomear** um local em uso propaga o novo nome para todos os registros que
+  guardavam o nome antigo como texto (`estoques.local`, `movimentacoes.local`,
+  `movimentacoes.local_destino`, `inventarios.local`, `vendas.local_saida`).
+  O nome novo não pode colidir com outro local nem com saldos já gravados.
+- **Excluir** um local em uso desfaz apenas os vínculos (`local_id` → vazio);
+  saldos, movimentações e inventários **permanecem** no sistema com o nome do
+  local como histórico — nada é apagado. Se o local excluído era o padrão,
+  o primeiro local ativo restante assume (ou, não havendo nenhum, os fluxos
+  usam `"almoxarifado"` como último recurso).
+- **Gerentes** continuam podendo incluir/alterar locais e excluir locais sem
+  uso. Excluir/renomear um local **em uso** — ou excluir o **último local
+  ativo** — é decisão exclusiva do administrador (erro 403 para os demais).
+- A API de listagem anota cada local com `em_uso`, `uso_saldos`,
+  `uso_movimentacoes`, `uso_inventarios` e `eh_ultimo_ativo`; a interface
+  mostra esses números na confirmação de exclusão.
 
 3. **Fallback (mesmo sem marcar nada):** se nenhum local estiver marcado como
    `padrao`, o sistema usa o **primeiro local ativo** (por nome); se não houver

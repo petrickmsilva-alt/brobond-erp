@@ -38,6 +38,7 @@ const GUIAS: { titulo: string; modulos: string[]; passos: string[] }[] = [
     modulos: ['locais', 'estoque', 'inventario', 'movimentacoes'],
     passos: [
       'Cadastre locais (almoxarifado, loja, expedição, facção). Marque um deles como "Local padrão" — ele passa a ser a origem padrão das movimentações (substitui o antigo padrão fixo "almoxarifado").',
+      'Gestão livre: o administrador pode incluir, alterar e excluir um local mesmo que ele já esteja em uso. Renomear propaga o novo nome para saldos, movimentações e inventários; excluir mantém o histórico com o nome do local (só o cadastro sai).',
       'A página “Estoque Físico — Grade” mostra a matriz produto × tamanho; clique numa célula para lançar entrada/saída/ajuste.',
       'Transferências: no módulo Movimentações, escolha “transferência”, origem e destino (a saída e a entrada são lançadas juntas).',
       'Inventário: abra uma contagem por local (congela os saldos), digite as contagens e feche — os ajustes são gerados uma única vez.',
