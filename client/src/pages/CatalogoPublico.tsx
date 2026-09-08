@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Eye, EyeOff, ImageOff, Lock, Minus, Plus, Send, Shirt, ShoppingBag, X } from 'lucide-react';
+import { Eye, EyeOff, ImageOff, Lock, Minus, Plus, Ruler, Send, Shirt, ShoppingBag, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Logo } from '../components/Logo';
 import { formatMoney, formatNumber } from '../lib/format';
@@ -21,6 +21,7 @@ type ProdutoCatalogo = {
   foto_url: string | null;
   fotos: { url: string; thumb_url: string }[];
   tamanhos: { tamanho_id: number; codigo: string; quantidade: number }[];
+  medidas: { medidas: { id: number; nome: string; unidade: string }[]; linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[] } | null;
 };
 
 type CatResp = {
@@ -31,6 +32,7 @@ type CatResp = {
   como_comprar: string | null;
   mostrar_preco: boolean;
   mostrar_saldo: boolean;
+  mostrar_medidas: boolean;
   total: number;
   produtos: ProdutoCatalogo[];
 };
@@ -47,6 +49,7 @@ export default function CatalogoPublico() {
   const [showSenha, setShowSenha] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selTamanho, setSelTamanho] = useState<Record<number, number>>({});
+  const [medidasAbertas, setMedidasAbertas] = useState<Record<number, boolean>>({});
   const [pedidoOpen, setPedidoOpen] = useState(false);
   const [pedidoEnviado, setPedidoEnviado] = useState(false);
 
@@ -249,6 +252,49 @@ export default function CatalogoPublico() {
                   )}
 
                   {p.descricao && <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-slate-400">{p.descricao}</p>}
+
+                  {data.mostrar_medidas && p.medidas && p.medidas.medidas.length > 0 && (
+                    <div className="mt-2 border-t border-slate-100 pt-2">
+                      <button
+                        type="button"
+                        className="flex items-center gap-1 text-[11px] font-semibold text-navy-700 hover:underline"
+                        onClick={() => setMedidasAbertas((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
+                      >
+                        <Ruler className="h-3.5 w-3.5" /> Tabela de medidas
+                      </button>
+                      {medidasAbertas[p.id] && (
+                        <div className="mt-1.5 overflow-x-auto rounded border border-slate-100">
+                          <table className="w-full text-[10px]">
+                            <thead className="bg-slate-50 text-slate-500">
+                              <tr>
+                                <th className="px-1.5 py-1 text-left font-semibold">Tam.</th>
+                                {p.medidas.medidas.map((m) => (
+                                  <th key={m.id} className="px-1 py-1 text-center font-semibold">
+                                    {m.nome}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {p.medidas!.linhas.map((l) => (
+                                <tr key={l.tamanho_id} className="border-t border-slate-100">
+                                  <td className="px-1.5 py-1 font-semibold text-navy-900">{l.codigo}</td>
+                                  {p.medidas!.medidas.map((m) => {
+                                    const v = l.valores[String(m.id)];
+                                    return (
+                                      <td key={m.id} className="px-1 py-1 text-center tabular-nums text-slate-600">
+                                        {v === null || v === undefined ? '—' : formatNumber(v)}
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {pedidoHabilitado && p.disponivel_site && (
                     (() => {

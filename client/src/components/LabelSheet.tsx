@@ -6,6 +6,7 @@ import { Modal } from './ui';
 
 type Tam = { id: number; codigo: string };
 type Grade = { local: string; celulas: { tamanho_id: number; quantidade: number }[] }[];
+type Medidas = { medidas: { id: number; nome: string; unidade: string }[]; linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[] } | null;
 
 /**
  * Impressão de etiquetas do produto (código de barras + SKU/nome/tamanho/cor/preço).
@@ -19,6 +20,7 @@ export function LabelSheet({
   produto,
   tamanhos,
   grade,
+  medidas,
   user,
 }: {
   open: boolean;
@@ -26,10 +28,12 @@ export function LabelSheet({
   produto: Record<string, any>;
   tamanhos: Tam[];
   grade: Grade;
+  medidas?: Medidas;
   user?: string;
 }) {
   const [mode, setMode] = useState<'a4' | 'roll'>('a4');
   const [showPrice, setShowPrice] = useState(true);
+  const [showMedidas, setShowMedidas] = useState(false);
   const [qtd, setQtd] = useState<Record<number, number>>(() => {
     // sugestão: 1 por tamanho; se houver estoque, usa o saldo total do tamanho
     const out: Record<number, number> = {};
@@ -61,6 +65,27 @@ export function LabelSheet({
         ${showPrice && Number(produto.preco_venda) > 0 ? `<div class="price">${formatMoney(produto.preco_venda)}</div>` : ''}
       </div>`;
 
+    const medidasBlock =
+      showMedidas && medidas && medidas.medidas.length
+        ? `<div class="medidas">
+            <div class="medidas-title">Tabela de medidas — ${esc(produto.nome || '')}</div>
+            <table>
+              <thead><tr><th>Tamanho</th>${medidas.medidas.map((m) => `<th>${esc(m.nome)}</th>`).join('')}</tr></thead>
+              <tbody>${medidas.linhas
+                .map(
+                  (l) =>
+                    `<tr><td>${esc(l.codigo)}</td>${medidas!.medidas
+                      .map((m) => {
+                        const v = l.valores[String(m.id)];
+                        return `<td>${v === null || v === undefined ? '—' : v}</td>`;
+                      })
+                      .join('')}</tr>`
+                )
+                .join('')}</tbody>
+            </table>
+          </div>`
+        : '';
+
     const css =
       mode === 'a4'
         ? `@page{size:A4;margin:8mm 6mm}
@@ -71,7 +96,13 @@ export function LabelSheet({
            .name{font-size:9pt;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
            .meta{font-size:7.5pt;color:#333}
            .bc svg{width:100%;height:auto;max-height:13mm}
-           .price{font-size:11pt;font-weight:800;text-align:right}`
+           .price{font-size:11pt;font-weight:800;text-align:right}
+           .medidas{grid-column:1/-1;margin-top:3mm;page-break-inside:avoid;border:0.2mm dashed #bbb;padding:3mm}
+           .medidas-title{font-size:9pt;font-weight:800;letter-spacing:.5px;margin-bottom:2mm}
+           .medidas table{width:100%;border-collapse:collapse;font-size:8pt}
+           .medidas th,.medidas td{border:0.2mm solid #999;padding:1mm 2mm;text-align:center}
+           .medidas th{background:#eee;font-weight:700}
+           .medidas td:first-child,.medidas th:first-child{font-weight:700;text-align:left}`
         : `@page{size:50mm 30mm;margin:0}
            body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#000}
            .sheet{display:block}
@@ -83,7 +114,7 @@ export function LabelSheet({
            .price{font-size:9pt;font-weight:800;text-align:right}`;
 
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Etiquetas — ${esc(produto.sku || '')}</title><style>${css}</style></head>
-      <body><div class="sheet">${items.map((i) => label(i.size)).join('')}</div>
+      <body><div class="sheet">${items.map((i) => label(i.size)).join('')}${medidasBlock}</div>
       <script>window.onload=function(){setTimeout(function(){window.print()},150)}</script></body></html>`;
 
     const w = window.open('', '_blank', 'width=900,height=700');
@@ -153,6 +184,13 @@ export function LabelSheet({
             <span className="text-sm text-slate-700">Mostrar preço de venda</span>
           </label>
         </div>
+
+        {medidas && medidas.medidas.length > 0 && (
+          <label className="flex items-center gap-2">
+            <input type="checkbox" className="h-4 w-4 rounded border-slate-300" checked={showMedidas} onChange={(e) => setShowMedidas(e.target.checked)} />
+            <span className="text-sm text-slate-700">Incluir tabela de medidas (na folha A4)</span>
+          </label>
+        )}
         <p className="text-xs text-slate-400">Uma nova aba será aberta com as etiquetas e a caixa de impressão do navegador. Na impressão, desative "ajustar à página" e as margens extras.</p>
       </div>
     </Modal>

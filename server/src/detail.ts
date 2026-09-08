@@ -6,6 +6,7 @@ import type { Request, Response } from 'express';
 import { currentUser } from './auth';
 import { RESOURCES } from './resources';
 import { checkAccess, getRecord, getStore, gradeDoProduto } from './services';
+import { medidasDaGrade } from './medidas';
 import { parseId } from './validate';
 
 export async function productDetail(req: Request, res: Response) {
@@ -45,6 +46,7 @@ export async function productDetail(req: Request, res: Response) {
   const abaixoMinimo = estoques.rows.filter((e) => Number(e.estoque_min) > 0 && Number(e.quantidade) <= Number(e.estoque_min)).length;
 
   const ficha = fichas.rows[0] || null;
+  const medidas = gradeInfo ? await medidasDaGrade(gradeInfo.gradeId) : null;
   const custoBase = Number(produto.custo || 0);
   const custoFicha = ficha ? Number(ficha.mao_obra || 0) + Number(ficha.custos_indiretos || 0) : 0;
   const margem = ficha ? Number(ficha.margem_pct || 0) : 0;
@@ -57,6 +59,7 @@ export async function productDetail(req: Request, res: Response) {
     produto,
     estoque: { totalPecas, abaixoMinimo, valor: totalPecas * custoBase, colunas, grade },
     grade: gradeInfo ? { id: gradeInfo.gradeId, nome: gradeInfo.gradeNome } : null,
+    medidas,
     movimentacoes: movimentacoes.rows,
     ordens: { abertas: ordens.rows.filter((o) => ['planejada', 'em_producao'].includes(String(o.status))), recentes: ordens.rows.slice(0, 8) },
     custo: { ficha, custoBase, custoFicha, custoTotal, margem, precoSugerido, precoVenda, margemReal },

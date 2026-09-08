@@ -14,8 +14,45 @@ import { RESOURCES } from './resources';
 import { checkAccess, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
+import type { Tx } from './store';
 
 const UNIDADES = new Set(['cm', 'mm', 'pol']);
+
+/** Tabela de medidas pronta para exibição (colunas + linhas por tamanho). */
+export type TabelaMedidas = {
+  medidas: { id: number; nome: string; unidade: string }[];
+  linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[];
+};
+
+/** Resolve a tabela de medidas de uma grade (null se não houver medidas). */
+export async function medidasDaGrade(gradeId: number, tx?: Tx): Promise<TabelaMedidas | null> {
+  const s = getStore();
+  const [todosTamanhos, itens, medidas, valores] = await Promise.all([
+    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 1000 }, tx),
+    s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 500, filter: { grade_id: gradeId }, sort: 'ordem', dir: 'asc' }, tx),
+    s.list(RESOURCES.medidas, { page: 1, pageSize: 500, filter: { grade_id: gradeId }, sort: 'ordem', dir: 'asc' }, tx),
+    s.list(RESOURCES.medida_valores, { page: 1, pageSize: 20000 }, tx),
+  ]);
+  if (!medidas.rows.length) return null;
+  const codigoPor = new Map(todosTamanhos.rows.map((t) => [Number(t.id), String(t.codigo || '')]));
+  const medidaIds = new Set(medidas.rows.map((m) => Number(m.id)));
+  const valorPor = new Map<string, number | null>();
+  for (const v of valores.rows) {
+    if (medidaIds.has(Number(v.medida_id))) {
+      valorPor.set(`${v.medida_id}:${v.tamanho_id}`, v.valor === null || v.valor === undefined ? null : Number(v.valor));
+    }
+  }
+  const linhas = itens.rows.map((it) => {
+    const tid = Number(it.tamanho_id);
+    const valoresLinha: Record<string, number | null> = {};
+    for (const m of medidas.rows) valoresLinha[String(m.id)] = valorPor.get(`${m.id}:${tid}`) ?? null;
+    return { tamanho_id: tid, codigo: codigoPor.get(tid) ?? `#${tid}`, valores: valoresLinha };
+  });
+  return {
+    medidas: medidas.rows.map((m) => ({ id: Number(m.id), nome: String(m.nome), unidade: String(m.unidade || 'cm') })),
+    linhas,
+  };
+}
 
 export async function getMedidasGrade(req: Request, res: Response) {
   checkAccess(RESOURCES.grades, currentUser(req), 'read');

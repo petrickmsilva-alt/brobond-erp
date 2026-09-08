@@ -542,6 +542,7 @@ CREATE TABLE IF NOT EXISTS catalogos (
   filtros JSONB,                           -- legado: { colecao_id?, categoria_id? }
   mostrar_preco BOOLEAN DEFAULT FALSE,
   mostrar_saldo BOOLEAN DEFAULT FALSE,
+  mostrar_medidas BOOLEAN DEFAULT FALSE,
   ativo BOOLEAN DEFAULT TRUE,
   expira_em TIMESTAMPTZ,
   criado_em TIMESTAMPTZ DEFAULT now(),
@@ -600,6 +601,7 @@ ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'todos';
 ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS tabela_preco TEXT DEFAULT 'automatico';
 ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS aceita_pedido_site BOOLEAN DEFAULT TRUE;
 ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS como_comprar TEXT;
+ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS mostrar_medidas BOOLEAN DEFAULT FALSE;
 
 -- ------------------------------------------------------------
 -- 2.10) FINANCEIRO — livro-caixa, contas, categorias, investidores e aportes
