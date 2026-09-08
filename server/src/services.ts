@@ -83,6 +83,7 @@ export async function listRecords(r: Resource, p: ListParams) {
   const out = await getStore().list(r, p);
   await attachImages(r, out.rows);
   anotarStatusSenha(r, out.rows);
+  await anotarUsoLocal(r, out.rows);
   return out;
 }
 
@@ -91,6 +92,7 @@ export async function getRecord(r: Resource, id: number) {
   if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
   await attachImages(r, [row]);
   anotarStatusSenha(r, [row]);
+  await anotarUsoLocal(r, [row]);
   return row;
 }
 
@@ -208,7 +210,11 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (r.key === 'movimentacoes') throw new HttpError(405, 'Movimentações são imutáveis. Faça o lançamento inverso.');
       if (r.key === 'movimentacoes_insumos') throw new HttpError(405, 'Movimentações de insumos são imutáveis. Faça o lançamento inverso.');
       if (r.key === 'inventarios') await validarUpdateInventario(data, before);
-      if (r.key === 'locais') await ensureLocalPadraoUnico(data, before, tx);
+      let renomeouLocal = false;
+      if (r.key === 'locais') {
+        renomeouLocal = await validarRenomeLocal(data, before, actor, tx);
+        await ensureLocalPadraoUnico(data, before, tx);
+      }
       if (r.key === 'estoque_insumos') {
         // Único campo editável diretamente: estoque mínimo.
         const extra = Object.keys(data).filter((k) => k !== 'estoque_min' && k !== 'atualizado_em');
@@ -224,7 +230,12 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       const row = await s.update(r, id, data, tx);
       if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
 
-      if (r.key === 'locais') await garantirLocalPadrao(tx);
+      if (r.key === 'locais') {
+        await garantirLocalPadrao(tx);
+        // Local renomeado: propaga o novo nome para saldos, movimentações,
+        // inventários e vendas que guardavam o nome antigo como texto.
+        if (renomeouLocal) await propagarRenomeLocal(before, String(data.nome), tx);
+      }
 
       // Estoque: alteração manual de quantidade vira movimentação de ajuste
       if (r.key === 'estoques' && changes.quantidade) {
@@ -255,7 +266,11 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       }
 
       const campos = Object.keys(changes).join(', ');
-      await audit(tx, actor, 'editar', r, id, `${r.singular} ${labelOf(r, row)} alterado(a) (${campos})`, changes);
+      const descricao =
+        r.key === 'locais' && renomeouLocal
+          ? `${r.singular} "${String(before.nome)}" renomeado para "${String(data.nome)}" (saldos, movimentações, inventários e vendas atualizados com o novo nome)`
+          : `${r.singular} ${labelOf(r, row)} alterado(a) (${campos})`;
+      await audit(tx, actor, 'editar', r, id, descricao, changes);
       return (await s.get(r, id, tx)) ?? row;
     });
   } catch (e) {
@@ -274,20 +289,26 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor): Promi
         if (Number(before.id) === Number(actor.id)) throw new HttpError(400, 'Você não pode excluir o seu próprio usuário.');
         await ensureNotLastAdmin(before, { ativo: false, perfil: 'x' }, tx);
       }
+      let usoLocal: UsoLocal | null = null;
       if (r.key === 'locais') {
-        // Não deixar sem pátio de estoque: bloqueia excluir o último local ativo.
+        // A decisão é do administrador: o local pode ser excluído mesmo que o
+        // sistema o use (saldos, movimentações, inventários) — o histórico não é
+        // apagado, apenas o vínculo (FK) e o registro do cadastro. Gerente só
+        // pode excluir local sem uso e que não seja o último local ativo.
+        usoLocal = await usoDoLocal(before, tx);
         const ativos = await s.list(r, { page: 1, pageSize: 1000, filter: { ativo: true } }, tx);
         const ehUltimoAtivo = ativos.rows.length <= 1 && Number(ativos.rows[0]?.id) === Number(before.id);
-        if (ehUltimoAtivo) {
-          throw new HttpError(409, 'Este é o único local ativo. Cadastre (ou reative) outro local antes de excluir o último.');
+        if ((usoLocal.emUso || ehUltimoAtivo) && actor.perfil !== 'admin') {
+          throw new HttpError(
+            403,
+            usoLocal.emUso
+              ? `O local "${String(before.nome)}" está em uso (${usoLocal.saldos} saldo(s), ${usoLocal.movimentacoes} movimentação(ões), ${usoLocal.inventarios} inventário(s)). Excluí-lo é uma decisão do administrador.`
+              : 'Este é o único local ativo. Excluí-lo é uma decisão do administrador.'
+          );
         }
-        let usaEstoque = (await s.countWhere(getResource('estoques')!, { local: String(before.nome) }, tx)) > 0;
-        if (!usaEstoque) {
-          usaEstoque = (await s.countWhere(getResource('estoques')!, { local_id: Number(before.id) }, tx)) > 0;
-        }
-        if (usaEstoque) {
-          throw new HttpError(409, `O local "${String(before.nome)}" ainda tem saldo de estoque. Zere os saldos ou transfira as peças para outro local antes de excluir.`);
-        }
+        // Desfaz os vínculos de chave estrangeira: saldos, movimentações e
+        // inventários continuam com o nome do local como histórico em texto.
+        await desvincularLocal(before, tx);
       }
       if (r.key === 'ordens' && before.status === 'concluida') {
         throw new HttpError(409, 'Ordem concluída já deu entrada no estoque. Reabra ou cancele em vez de excluir.');
@@ -318,7 +339,11 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor): Promi
       const ok = await s.remove(r, id, tx);
       if (!ok) throw new HttpError(404, `${r.singular} não encontrado(a).`);
       if (r.key === 'locais') await garantirLocalPadrao(tx);
-      await audit(tx, actor, 'excluir', r, id, `${r.singular} ${labelOf(r, before)} excluído(a)`, sanitize(before));
+      const detalheUso =
+        usoLocal?.emUso
+          ? ` — em uso na exclusão: ${usoLocal.saldos} saldo(s), ${usoLocal.movimentacoes} movimentação(ões), ${usoLocal.inventarios} inventário(s) (histórico preservado com o nome do local)`
+          : '';
+      await audit(tx, actor, 'excluir', r, id, `${r.singular} ${labelOf(r, before)} excluído(a)${detalheUso}`, sanitize(before));
     });
   } catch (e) {
     throw toHttpError(e, r);
@@ -456,6 +481,130 @@ async function garantirLocalPadrao(tx: Tx): Promise<void> {
   const ativos = await s.list(r, { page: 1, pageSize: 1, sort: 'nome', dir: 'asc', filter: { ativo: true } }, tx ?? undefined);
   if (!ativos.rows.length) return;
   await s.update(r, Number(ativos.rows[0].id), { padrao: true }, tx);
+}
+
+// ----------------------------------------------------------------------------
+// Locais de estoque: gestão livre — a decisão é do administrador
+// ----------------------------------------------------------------------------
+// O local NÃO fica preso ao sistema: pode ser incluído, alterado e excluído
+// mesmo quando já está em uso (saldos, movimentações, inventários, vendas).
+//   • Renomear propaga o novo nome para todo o sistema (o nome do local é a
+//     chave de texto do estoque).
+//   • Excluir desfaz apenas os vínculos (chaves estrangeiras); o histórico
+//     permanece com o nome do local como texto — nada é apagado.
+// Gerente mantém o acesso normal, mas excluir/renomear local EM USO (ou excluir
+// o último local ativo) é decisão exclusiva do administrador.
+
+export type UsoLocal = { saldos: number; movimentacoes: number; inventarios: number; emUso: boolean };
+
+/** Conta registros de `r` que apontam para o local pelo texto (`colTexto`) ou pelo id (`colId`). */
+async function contarVinculos(r: Resource, colTexto: string, colId: string, nome: string, id: number, tx?: Tx): Promise<number> {
+  const s = getStore();
+  const porTexto = await s.countWhere(r, { [colTexto]: nome }, tx);
+  const porId = await s.countWhere(r, { [colId]: id }, tx);
+  const ambos = await s.countWhere(r, { [colTexto]: nome, [colId]: id }, tx);
+  return porTexto + porId - ambos;
+}
+
+/** Quantos saldos, movimentações e inventários usam o local (por nome ou id). */
+export async function usoDoLocal(local: Row, tx?: Tx): Promise<UsoLocal> {
+  const id = Number(local.id);
+  const nome = String(local.nome || '');
+  const saldos = await contarVinculos(getResource('estoques')!, 'local', 'local_id', nome, id, tx);
+  const movOrigem = await contarVinculos(getResource('movimentacoes')!, 'local', 'local_id', nome, id, tx);
+  const movDestino = await contarVinculos(getResource('movimentacoes')!, 'local_destino', 'local_destino_id', nome, id, tx);
+  const inventarios = await contarVinculos(getResource('inventarios')!, 'local', 'local_id', nome, id, tx);
+  const movimentacoes = movOrigem + movDestino;
+  return { saldos, movimentacoes, inventarios, emUso: saldos + movimentacoes + inventarios > 0 };
+}
+
+/** Anota cada local com o uso (a UI usa isso para avisar o administrador antes de excluir/renomear). */
+async function anotarUsoLocal(r: Resource, rows: Row[]): Promise<void> {
+  if (r.key !== 'locais' || !rows.length) return;
+  const s = getStore();
+  const ativos = await s.list(r, { page: 1, pageSize: 1, filter: { ativo: true } });
+  for (const row of rows) {
+    const uso = await usoDoLocal(row);
+    row.em_uso = uso.emUso;
+    row.uso_saldos = uso.saldos;
+    row.uso_movimentacoes = uso.movimentacoes;
+    row.uso_inventarios = uso.inventarios;
+    row.eh_ultimo_ativo = ativoYn(row) && ativos.total <= 1;
+  }
+}
+
+/**
+ * Valida a alteração de nome de um local. Retorna true quando o nome muda.
+ * Local em uso só o administrador renomeia; o nome novo não pode colidir com
+ * outro local nem com saldos já gravados (chave produto+tamanho+local).
+ */
+async function validarRenomeLocal(data: Payload, before: Row, actor: Actor, tx: Tx): Promise<boolean> {
+  if (data.nome === undefined || data.nome === null) return false;
+  const novo = String(data.nome).trim();
+  const antigo = String(before.nome || '');
+  if (!novo || novo === antigo) return false;
+  const s = getStore();
+  const uso = await usoDoLocal(before, tx);
+  if (uso.emUso && actor.perfil !== 'admin') {
+    throw new HttpError(
+      403,
+      `O local "${antigo}" está em uso (${uso.saldos} saldo(s), ${uso.movimentacoes} movimentação(ões), ${uso.inventarios} inventário(s)). Renomeá-lo é uma decisão do administrador.`
+    );
+  }
+  const outro = await s.findOneWhere(getResource('locais')!, { nome: novo }, tx);
+  if (outro && Number(outro.id) !== Number(before.id)) {
+    throw new HttpError(409, `Já existe outro local chamado "${novo}".`, { nome: 'Nome já cadastrado' });
+  }
+  const colisao = await s.countWhere(getResource('estoques')!, { local: novo }, tx);
+  if (colisao > 0) {
+    throw new HttpError(409, `Já existem saldos de estoque gravados com o nome "${novo}". Escolha outro nome para não misturar os estoques.`, { nome: 'Conflito com saldos existentes' });
+  }
+  return true;
+}
+
+/** Propaga o novo nome do local para os registros que guardavam o nome antigo como texto. */
+async function propagarRenomeLocal(before: Row, novo: string, tx: Tx): Promise<void> {
+  const antigo = String(before.nome || '');
+  await renomearOnde(getResource('estoques')!, 'local', antigo, novo, tx);
+  await renomearOnde(getResource('movimentacoes')!, 'local', antigo, novo, tx);
+  await renomearOnde(getResource('movimentacoes')!, 'local_destino', antigo, novo, tx);
+  await renomearOnde(getResource('inventarios')!, 'local', antigo, novo, tx);
+  await renomearOnde(getResource('vendas')!, 'local_saida', antigo, novo, tx);
+}
+
+/** Renomeia em lotes os registros que guardam o nome do local em `col`. */
+async function renomearOnde(r: Resource, col: string, antigo: string, novo: string, tx: Tx): Promise<void> {
+  const s = getStore();
+  for (;;) {
+    const rows = await s.list(r, { page: 1, pageSize: 1000, filter: { [col]: antigo }, sort: 'id', dir: 'asc' }, tx);
+    if (!rows.rows.length) break;
+    for (const row of rows.rows) await s.update(r, Number(row.id), { [col]: novo }, tx);
+    if (rows.rows.length < 1000) break;
+  }
+}
+
+/**
+ * Exclusão com o local em uso: zera as chaves estrangeiras (`*_id`) que apontam
+ * para o local. O nome do local permanece nos registros como texto — saldos,
+ * movimentações e inventários continuam legíveis e auditáveis.
+ */
+async function desvincularLocal(local: Row, tx: Tx): Promise<void> {
+  const id = Number(local.id);
+  await desvincularTodos(getResource('estoques')!, 'local_id', id, tx);
+  await desvincularTodos(getResource('movimentacoes')!, 'local_id', id, tx);
+  await desvincularTodos(getResource('movimentacoes')!, 'local_destino_id', id, tx);
+  await desvincularTodos(getResource('inventarios')!, 'local_id', id, tx);
+}
+
+/** Zera a coluna de vínculo em todos os registros que apontam para o local. */
+async function desvincularTodos(r: Resource, col: string, id: number, tx: Tx): Promise<void> {
+  const s = getStore();
+  for (;;) {
+    const rows = await s.list(r, { page: 1, pageSize: 1000, filter: { [col]: id }, sort: 'id', dir: 'asc' }, tx);
+    if (!rows.rows.length) break;
+    for (const row of rows.rows) await s.update(r, Number(row.id), { [col]: null }, tx);
+    if (rows.rows.length < 1000) break;
+  }
 }
 
 /** Preenche `local` (e `local_id`) a partir do cadastro de Locais. */

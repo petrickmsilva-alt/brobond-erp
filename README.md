@@ -117,7 +117,7 @@ DNS apontando para a Render.
 | Cadastros | **Produtos** | ✔ | ✔ | ✔ | **Até 5 fotos** (principal, ordem, zoom), categoria, cor padronizada **ou** texto livre, código de barras EAN único, composição, NCM, peso, descrição. **Página de detalhe** com grade de estoque, movimentações, OPs, custo/margem e **impressão de etiquetas** com código de barras |
 | Cadastros | **Categorias**, **Cores** (com amostra colorida) | ✔ | ✔ | ✔ | Nome único (ignora maiúsculas). Cores antigas em texto são migradas automaticamente |
 | Cadastros | Insumos, Fornecedores, Representantes, Clientes, Tamanhos/Grade, Coleções | ✔ | ✔ | ✔ | Busca, ordenação, paginação, validação por campo |
-| Estoque | **Locais** | ✔ | ✔ | ✔ | Almoxarifado, loja, expedição, facção... Marque um como **Local padrão** — ele vira a origem padrão das movimentações (substitui o antigo "almoxarifado" fixo). Só um pode ser o padrão |
+| Estoque | **Locais** | ✔ | ✔ | ✔ | Almoxarifado, loja, expedição, facção... Marque um como **Local padrão** — ele vira a origem padrão das movimentações (substitui o antigo "almoxarifado" fixo). Só um pode ser o padrão. Gestão livre: **admin** inclui/altera/exclui mesmo com o local em uso (renomear propaga o nome; excluir preserva o histórico) |
 | Estoque | Estoque Físico | ✔ | ✔ | ✔ | Saldo único por produto+tamanho+local; alteração manual gera "ajuste"; só exclui saldo zerado |
 | Estoque | Movimentações | ✔ | — | — | Imutáveis. Entrada/saída/ajuste/transferência usam o **Local padrão** quando o campo local fica em branco; saída sem saldo é bloqueada |
 | Estoque | Inventário | | | | Contagem por local com congelamento de saldo, divergências e ajustes ao fechar |
