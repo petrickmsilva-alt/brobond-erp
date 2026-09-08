@@ -381,6 +381,40 @@ export const RESOURCES: Record<string, Resource> = {
     ],
   },
 
+  // Interno — tabela de medidas: colunas (medidas) e valores por tamanho.
+  medidas: {
+    key: 'medidas',
+    table: 'medidas',
+    label: 'Medidas da grade',
+    singular: 'Medida',
+    labelFields: ['nome'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'grade_id', label: 'Grade', type: 'integer' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, maxLength: 60, placeholder: 'Largura (A), Comprimento (B), Manga (C)...' },
+      { name: 'unidade', label: 'Unidade', type: 'select', options: [{ value: 'cm', label: 'cm' }, { value: 'mm', label: 'mm' }, { value: 'pol', label: 'pol' }], default: 'cm' },
+      { name: 'ordem', label: 'Ordem', type: 'integer', min: 0, default: 0 },
+      ...auditFields,
+    ],
+    orderBy: { field: 'ordem', dir: 'asc' },
+  },
+
+  medida_valores: {
+    key: 'medida_valores',
+    table: 'medida_valores',
+    label: 'Valores de medida',
+    singular: 'Valor de medida',
+    labelFields: ['id'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'medida_id', label: 'Medida', type: 'integer' },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
+      { name: 'valor', label: 'Valor', type: 'number' },
+    ],
+  },
+
   colecoes: {
     key: 'colecoes',
     table: 'colecoes',

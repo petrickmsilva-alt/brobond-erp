@@ -42,6 +42,7 @@ import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type 
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import PlannedModule from './PlannedModule';
 import EstoqueGradePage from './EstoqueGradePage';
+import MedidasPage from './MedidasPage';
 import InventarioModulePage from './InventarioModulePage';
 import CustoPage from './CustoPage';
 import RelatoriosPage from './RelatoriosPage';
@@ -55,6 +56,7 @@ export default function ModulePage({ module }: { module: Module }) {
   const resource = module.resource ? meta.resources[module.resource] : undefined;
 
   if (module.id === 'estoque') return <EstoqueGradePage />;
+  if (module.id === 'medidas') return <MedidasPage />;
   if (module.id === 'inventario') return <InventarioModulePage />;
   if (module.id === 'custo') return <CustoPage />;
   if (module.id === 'relatorios') return <RelatoriosPage />;

@@ -118,3 +118,29 @@ UPDATE categorias SET grade_id = g.id FROM grades g
 WHERE g.nome = 'Calça 36-48' AND categorias.nome = 'Calça';
 UPDATE categorias SET grade_id = g.id FROM grades g
 WHERE g.nome = 'Bermuda 36-46' AND categorias.nome = 'Bermuda';
+
+-- ------------------------------------------------------------
+-- Tabela de medidas (exemplo: camiseta PP-GG)
+-- ------------------------------------------------------------
+INSERT INTO medidas (grade_id, nome, unidade, ordem)
+SELECT g.id, v.nome, v.unidade, v.ordem
+FROM (VALUES
+  ('Largura (A)',    'cm', 1),
+  ('Comprimento (B)', 'cm', 2),
+  ('Manga (C)',      'cm', 3)
+) AS v(nome, unidade, ordem)
+CROSS JOIN grades g
+WHERE g.nome = 'Camiseta PP-GG'
+  AND NOT EXISTS (SELECT 1 FROM medidas m WHERE m.grade_id = g.id AND m.nome = v.nome);
+
+INSERT INTO medida_valores (medida_id, tamanho_id, valor)
+SELECT m.id, t.id, v.valor
+FROM (VALUES
+  ('Largura (A)',    'PP', 46), ('Largura (A)',    'P', 48), ('Largura (A)',    'M', 51), ('Largura (A)',    'G', 54), ('Largura (A)',    'GG', 58),
+  ('Comprimento (B)', 'PP', 63), ('Comprimento (B)', 'P', 65), ('Comprimento (B)', 'M', 67), ('Comprimento (B)', 'G', 71), ('Comprimento (B)', 'GG', 74),
+  ('Manga (C)',      'PP', 10), ('Manga (C)',      'P', 11), ('Manga (C)',      'M', 14), ('Manga (C)',      'G', 16), ('Manga (C)',      'GG', 17)
+) AS v(medida_nome, tamanho_codigo, valor)
+JOIN grades g ON g.nome = 'Camiseta PP-GG'
+JOIN medidas m ON m.grade_id = g.id AND m.nome = v.medida_nome
+JOIN tamanhos t ON t.codigo = v.tamanho_codigo
+ON CONFLICT (medida_id, tamanho_id) DO UPDATE SET valor = EXCLUDED.valor;

@@ -75,6 +75,28 @@ CREATE TABLE IF NOT EXISTS grade_tamanhos (
 );
 CREATE INDEX IF NOT EXISTS idx_grade_tamanhos_grade ON grade_tamanhos (grade_id, ordem);
 
+-- Tabela de medidas (colunas da grade: largura, comprimento, manga, cintura...)
+CREATE TABLE IF NOT EXISTS medidas (
+  id SERIAL PRIMARY KEY,
+  grade_id INTEGER REFERENCES grades(id) ON DELETE CASCADE,
+  nome TEXT NOT NULL,                        -- "Largura (A)", "Comprimento (B)"...
+  unidade TEXT DEFAULT 'cm',                 -- cm, mm, pol
+  ordem INTEGER DEFAULT 0,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  UNIQUE (grade_id, nome)
+);
+
+-- Valor de cada medida para cada tamanho da grade
+CREATE TABLE IF NOT EXISTS medida_valores (
+  id SERIAL PRIMARY KEY,
+  medida_id INTEGER REFERENCES medidas(id) ON DELETE CASCADE,
+  tamanho_id INTEGER REFERENCES tamanhos(id) ON DELETE CASCADE,
+  valor NUMERIC(12,2),
+  UNIQUE (medida_id, tamanho_id)
+);
+CREATE INDEX IF NOT EXISTS idx_medida_valores_medida ON medida_valores (medida_id);
+
 CREATE TABLE IF NOT EXISTS colecoes (
   id SERIAL PRIMARY KEY,
   nome TEXT NOT NULL,

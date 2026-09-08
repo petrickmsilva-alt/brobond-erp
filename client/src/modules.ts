@@ -73,6 +73,7 @@ export const MODULES: Module[] = [
   { id: 'clientes', label: 'Clientes', icon: Store, group: 'Cadastros', path: '/clientes', resource: 'clientes', description: 'Lojas e atacadistas que compram de você.' },
   { id: 'tamanhos', label: 'Tamanhos', icon: Ruler, group: 'Cadastros', path: '/tamanhos', resource: 'tamanhos', description: 'Dicionário de tamanhos: PP, P, M, G, GG, 36, 38, 40...' },
   { id: 'grades', label: 'Grades', icon: LayoutGrid, group: 'Cadastros', path: '/grades', resource: 'grades', description: 'Conjuntos nomeados de tamanhos (Camiseta PP-GG, Calça 36-48, Calçado 34-44...) vinculados a produtos e categorias.' },
+  { id: 'medidas', label: 'Tabela de Medidas', icon: Ruler, group: 'Cadastros', path: '/medidas', description: 'Medidas por tamanho de cada grade (largura, comprimento, manga, cintura...).' },
   { id: 'colecoes', label: 'Coleções', icon: Tags, group: 'Cadastros', path: '/colecoes', resource: 'colecoes', description: 'Coleções e temporadas.' },
 
   // Estoque
