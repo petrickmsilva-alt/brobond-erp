@@ -13,6 +13,7 @@ import {
   Palette,
   Layers,
   LayoutDashboard,
+  LayoutGrid,
   Ruler,
   Scissors,
   Settings,
@@ -70,7 +71,8 @@ export const MODULES: Module[] = [
   { id: 'fornecedores', label: 'Fornecedores', icon: Factory, group: 'Cadastros', path: '/fornecedores', resource: 'fornecedores', description: 'Empresas de quem você compra insumos.' },
   { id: 'representantes', label: 'Representantes', icon: Handshake, group: 'Cadastros', path: '/representantes', resource: 'representantes', description: 'Vendedores externos, regiões e comissões.' },
   { id: 'clientes', label: 'Clientes', icon: Store, group: 'Cadastros', path: '/clientes', resource: 'clientes', description: 'Lojas e atacadistas que compram de você.' },
-  { id: 'tamanhos', label: 'Tamanhos / Grade', icon: Ruler, group: 'Cadastros', path: '/tamanhos', resource: 'tamanhos', description: 'Grade de tamanhos: PP, P, M, G, GG.' },
+  { id: 'tamanhos', label: 'Tamanhos', icon: Ruler, group: 'Cadastros', path: '/tamanhos', resource: 'tamanhos', description: 'Dicionário de tamanhos: PP, P, M, G, GG, 36, 38, 40...' },
+  { id: 'grades', label: 'Grades', icon: LayoutGrid, group: 'Cadastros', path: '/grades', resource: 'grades', description: 'Conjuntos nomeados de tamanhos (Camiseta PP-GG, Calça 36-48, Calçado 34-44...) vinculados a produtos e categorias.' },
   { id: 'colecoes', label: 'Coleções', icon: Tags, group: 'Cadastros', path: '/colecoes', resource: 'colecoes', description: 'Coleções e temporadas.' },
 
   // Estoque

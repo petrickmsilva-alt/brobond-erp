@@ -52,6 +52,29 @@ CREATE TABLE IF NOT EXISTS tamanhos (
   atualizado_em TIMESTAMPTZ
 );
 
+-- Grades de tamanhos: conjuntos NOMEADOS de tamanhos, na ordem correta.
+-- Ex.: "Camiseta PP-GG" (PP,P,M,G,GG), "Calça 36-48" (36..48), "Calçado 34-44".
+-- Cada produto (ou categoria) aponta para UMA grade, evitando que os tamanhos
+-- de tipos diferentes de peça se misturem no estoque.
+CREATE TABLE IF NOT EXISTS grades (
+  id SERIAL PRIMARY KEY,
+  nome TEXT UNIQUE NOT NULL,                 -- "Camiseta PP-GG", "Calça 36-48"...
+  descricao TEXT,
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+-- Itens de uma grade (muitos-para-muitos grade × tamanho, com ordem).
+CREATE TABLE IF NOT EXISTS grade_tamanhos (
+  id SERIAL PRIMARY KEY,
+  grade_id INTEGER REFERENCES grades(id) ON DELETE CASCADE,
+  tamanho_id INTEGER REFERENCES tamanhos(id) ON DELETE CASCADE,
+  ordem INTEGER DEFAULT 0,
+  UNIQUE (grade_id, tamanho_id)
+);
+CREATE INDEX IF NOT EXISTS idx_grade_tamanhos_grade ON grade_tamanhos (grade_id, ordem);
+
 CREATE TABLE IF NOT EXISTS colecoes (
   id SERIAL PRIMARY KEY,
   nome TEXT NOT NULL,
@@ -822,3 +845,9 @@ UPDATE usuarios SET senha_definida_em = COALESCE(atualizado_em, criado_em, now()
 -- Fim do cofre de senhas: a coluna de senha reversível é DESTRUÍDA.
 -- (As senhas ficam apenas em hash Argon2id/bcrypt — nunca recuperáveis.)
 ALTER TABLE usuarios DROP COLUMN IF EXISTS senha_cifrada;
+
+-- ------------------------------------------------------------
+-- Grades de tamanhos: vínculo com categoria (padrão) e produto (override)
+-- ------------------------------------------------------------
+ALTER TABLE categorias ADD COLUMN IF NOT EXISTS grade_id INTEGER REFERENCES grades(id);
+ALTER TABLE produtos   ADD COLUMN IF NOT EXISTS grade_id INTEGER REFERENCES grades(id);

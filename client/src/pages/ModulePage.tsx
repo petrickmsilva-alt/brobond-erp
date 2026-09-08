@@ -270,7 +270,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     setFormOpen(false);
   }
 
-  function onChange(name: string, value: string | boolean) {
+  function onChange(name: string, value: string | boolean | string[]) {
     setValues((v) => ({ ...v, [name]: value }));
     if (errors[name]) setErrors((e) => ({ ...e, [name]: '' }));
   }
@@ -282,7 +282,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       if (f.form === false || f.readonly) continue;
       const required = f.required || (!editing && f.requiredOnCreate);
       const v = values[f.name];
-      if (required && f.type !== 'boolean' && (v === undefined || String(v).trim() === '')) errs[f.name] = 'Campo obrigatório';
+      if (required && f.type === 'multiref') {
+        if (!Array.isArray(v) || v.length === 0) errs[f.name] = 'Selecione ao menos um item';
+      } else if (required && f.type !== 'boolean' && (v === undefined || String(v).trim() === '')) {
+        errs[f.name] = 'Campo obrigatório';
+      }
       if (f.type === 'password' && typeof v === 'string' && v && f.min && v.length < f.min) errs[f.name] = `Mínimo de ${f.min} caracteres`;
     }
     setErrors(errs);
@@ -941,6 +945,10 @@ function Cell({ f, row }: { f: Field; row: Record<string, any> }) {
     return <>{opt?.label ?? (v ?? '—')}</>;
   }
   if (f.type === 'color') return <ColorDot hex={v} label={v} />;
+  if (f.type === 'multiref') {
+    const label = row[`${f.name}__label`];
+    return <span className="text-slate-600">{label || (Array.isArray(v) ? `${v.length} item(ns)` : '—')}</span>;
+  }
   const text = formatCell(f, row);
   if (f.type === 'ref' && text !== '—') {
     const hex = row[`${f.name}__color`];

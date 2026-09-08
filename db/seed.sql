@@ -73,3 +73,48 @@ WHERE NOT EXISTS (SELECT 1 FROM cores c WHERE LOWER(c.nome) = LOWER(v.nome));
 UPDATE cores c SET hex = v.hex
 FROM (VALUES ('preto','#111111'),('branco','#FFFFFF'),('azul marinho','#1F3A5F'),('cinza mescla','#9CA3AF'),('verde militar','#4B5320')) AS v(nome, hex)
 WHERE c.hex IS NULL AND LOWER(c.nome) = v.nome;
+
+-- ------------------------------------------------------------
+-- Grades de tamanhos (conjuntos nomeados) — evita misturar
+-- tamanhos de camiseta (PP-GG) com calça/bermuda (36-48) etc.
+-- ------------------------------------------------------------
+
+-- Tamanhos numéricos (calças/bermudas) e tamanho único (acessórios)
+INSERT INTO tamanhos (codigo, descricao, ordem) VALUES
+  ('36', '36', 10),
+  ('38', '38', 11),
+  ('40', '40', 12),
+  ('42', '42', 13),
+  ('44', '44', 14),
+  ('46', '46', 15),
+  ('48', '48', 16),
+  ('Único', 'Tamanho único', 20)
+ON CONFLICT (codigo) DO UPDATE SET ordem = EXCLUDED.ordem;
+
+INSERT INTO grades (nome, descricao) VALUES
+  ('Camiseta PP-GG', 'Malha e camisaria básica'),
+  ('Calça 36-48',    'Jeans e sarja'),
+  ('Bermuda 36-46',  'Bermudas e shorts')
+ON CONFLICT (nome) DO NOTHING;
+
+INSERT INTO grade_tamanhos (grade_id, tamanho_id, ordem)
+SELECT g.id, t.id, v.ordem
+FROM (VALUES
+  ('Camiseta PP-GG', 'PP', 1), ('Camiseta PP-GG', 'P', 2), ('Camiseta PP-GG', 'M', 3),
+  ('Camiseta PP-GG', 'G', 4),  ('Camiseta PP-GG', 'GG', 5),
+  ('Calça 36-48', '36', 1), ('Calça 36-48', '38', 2), ('Calça 36-48', '40', 3),
+  ('Calça 36-48', '42', 4), ('Calça 36-48', '44', 5), ('Calça 36-48', '46', 6), ('Calça 36-48', '48', 7),
+  ('Bermuda 36-46', '36', 1), ('Bermuda 36-46', '38', 2), ('Bermuda 36-46', '40', 3),
+  ('Bermuda 36-46', '42', 4), ('Bermuda 36-46', '44', 5), ('Bermuda 36-46', '46', 6)
+) AS v(grade_nome, tamanho_codigo, ordem)
+JOIN grades g ON g.nome = v.grade_nome
+JOIN tamanhos t ON t.codigo = v.tamanho_codigo
+ON CONFLICT (grade_id, tamanho_id) DO NOTHING;
+
+-- Grade padrão por categoria (o produto pode sobrescrever)
+UPDATE categorias SET grade_id = g.id FROM grades g
+WHERE g.nome = 'Camiseta PP-GG' AND categorias.nome IN ('Camiseta', 'Camisa');
+UPDATE categorias SET grade_id = g.id FROM grades g
+WHERE g.nome = 'Calça 36-48' AND categorias.nome = 'Calça';
+UPDATE categorias SET grade_id = g.id FROM grades g
+WHERE g.nome = 'Bermuda 36-46' AND categorias.nome = 'Bermuda';

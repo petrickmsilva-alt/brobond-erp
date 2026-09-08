@@ -16,6 +16,7 @@ export type FieldType =
   | 'datetime'
   | 'select'
   | 'ref'
+  | 'multiref'
   | 'password'
   | 'color'
   | 'images';

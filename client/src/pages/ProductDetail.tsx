@@ -20,6 +20,7 @@ type Detail = {
     colunas: { id: number; codigo: string }[];
     grade: { local: string; total: number; celulas: { tamanho_id: number; quantidade: number; estoque_min: number; estoque_id: number | null }[] }[];
   };
+  grade: { id: number; nome: string } | null;
   movimentacoes: Record<string, any>[];
   ordens: { abertas: Record<string, any>[]; recentes: Record<string, any>[] };
   custo: { ficha: Record<string, any> | null; custoBase: number; custoFicha: number; custoTotal: number; margem: number; precoSugerido: number | null; precoVenda: number; margemReal: number | null };
@@ -205,6 +206,11 @@ export default function ProductDetail() {
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
               <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
                 <Boxes className="h-4 w-4 text-navy-400" /> Grade de estoque
+                {data.grade && (
+                  <span className="inline-flex items-center rounded bg-navy-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-navy-600">
+                    {data.grade.nome}
+                  </span>
+                )}
               </h2>
               <Link to="/movimentacoes" className="btn-secondary !py-1 text-xs">
                 <ArrowLeftRight className="h-3.5 w-3.5" /> Lançar movimentação

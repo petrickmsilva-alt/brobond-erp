@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
 import { MemStore } from './memdb';
 import { PgStore, isPgAvailable, translatePgError } from './pgstore';
-import { getResource, type Resource } from './resources';
+import { getResource, RESOURCES, type Resource } from './resources';
 import { labelOf, type ListParams, type Payload, type Row, type Store, type Tx } from './store';
 import { validatePayload } from './validate';
 import type { AuthUser } from './auth';
@@ -84,6 +84,7 @@ export async function listRecords(r: Resource, p: ListParams) {
   await attachImages(r, out.rows);
   anotarStatusSenha(r, out.rows);
   await anotarUsoLocal(r, out.rows);
+  await attachGradeTamanhos(r, out.rows);
   return out;
 }
 
@@ -93,6 +94,7 @@ export async function getRecord(r: Resource, id: number) {
   await attachImages(r, [row]);
   anotarStatusSenha(r, [row]);
   await anotarUsoLocal(r, [row]);
+  await attachGradeTamanhos(r, [row]);
   return row;
 }
 
@@ -117,6 +119,73 @@ export async function optionsFor(r: Resource) {
 }
 
 // ----------------------------------------------------------------------------
+// Grades de tamanhos (muitos-para-muitos grade × tamanho)
+// ----------------------------------------------------------------------------
+
+export type GradeInfo = {
+  gradeId: number;
+  gradeNome: string;
+  tamanhos: { id: number; codigo: string }[];
+};
+
+/** Anexa `tamanhos` (ids) e `tamanhos__label` (códigos) aos registros de grades. */
+async function attachGradeTamanhos(r: Resource, rows: Row[], tx?: Tx): Promise<void> {
+  if (r.key !== 'grades' || !rows.length) return;
+  const s = getStore();
+  const [todos, itens] = await Promise.all([
+    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 1000 }, tx),
+    s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 10000, sort: 'ordem', dir: 'asc' }, tx),
+  ]);
+  const codigoPor = new Map(todos.rows.map((t) => [Number(t.id), String(t.codigo || '')]));
+  const porGrade = new Map<number, number[]>();
+  for (const it of itens.rows) {
+    const g = Number(it.grade_id);
+    if (!porGrade.has(g)) porGrade.set(g, []);
+    porGrade.get(g)!.push(Number(it.tamanho_id));
+  }
+  for (const row of rows) {
+    const ids = porGrade.get(Number(row.id)) ?? [];
+    row.tamanhos = ids;
+    row.tamanhos__label = ids.map((id) => codigoPor.get(id) ?? `#${id}`).join(', ');
+  }
+}
+
+/** Substitui os tamanhos de uma grade pelos ids fornecidos (ordem = posição). */
+async function syncGradeTamanhos(gradeId: number, tamanhoIds: number[], tx: Tx): Promise<void> {
+  const s = getStore();
+  const existentes = await s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 1000, filter: { grade_id: gradeId } }, tx);
+  for (const it of existentes.rows) await s.remove(RESOURCES.grade_tamanhos, Number(it.id), tx);
+  let ordem = 1;
+  for (const t of tamanhoIds) {
+    await s.insert(RESOURCES.grade_tamanhos, { grade_id: gradeId, tamanho_id: t, ordem }, tx);
+    ordem += 1;
+  }
+}
+
+/** Resolve a grade efetiva de um produto (produto.grade_id ?? categoria.grade_id). */
+export async function gradeDoProduto(produto: Row, tx?: Tx): Promise<GradeInfo | null> {
+  const s = getStore();
+  let gradeId = Number(produto.grade_id) || 0;
+  if (!gradeId && Number(produto.categoria_id)) {
+    const cat = await s.findOneWhere(RESOURCES.categorias, { id: produto.categoria_id }, tx);
+    gradeId = Number(cat?.grade_id) || 0;
+  }
+  if (!gradeId) return null;
+  const grade = await s.findOneWhere(RESOURCES.grades, { id: gradeId }, tx);
+  if (!grade) return null;
+  const [todos, itens] = await Promise.all([
+    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 1000 }),
+    s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 1000, filter: { grade_id: gradeId }, sort: 'ordem', dir: 'asc' }, tx),
+  ]);
+  const codigoPor = new Map(todos.rows.map((t) => [Number(t.id), String(t.codigo || '')]));
+  const tamanhos = itens.rows.map((it) => ({
+    id: Number(it.tamanho_id),
+    codigo: codigoPor.get(Number(it.tamanho_id)) ?? `#${it.tamanho_id}`,
+  }));
+  return { gradeId, gradeNome: String(grade.nome || `#${gradeId}`), tamanhos };
+}
+
+// ----------------------------------------------------------------------------
 // Escrita (com regras por módulo)
 // ----------------------------------------------------------------------------
 export async function createRecord(r: Resource, body: unknown, actor: Actor): Promise<Row> {
@@ -137,8 +206,12 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
       if (r.key === 'locais') await ensureLocalPadraoUnico(data, null, tx);
       if (r.key === 'ordens') await validarOrdemPayload(data, null);
 
+      const gradeTamanhos = r.key === 'grades' ? ((data.tamanhos as number[]) || []) : null;
+      if (gradeTamanhos) delete data.tamanhos;
+
       const row = await s.insert(r, data, tx);
       if (r.key === 'locais') await garantirLocalPadrao(tx);
+      if (r.key === 'grades' && gradeTamanhos) await syncGradeTamanhos(Number(row.id), gradeTamanhos, tx);
 
       if (r.key === 'estoques' && Number(row.quantidade) !== 0) {
         await s.insert(
@@ -178,6 +251,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
       await audit(tx, actor, 'criar', r, row.id, `${r.singular} ${labelOf(r, row)} incluído(a)`, sanitize(data));
       const final = (await s.get(r, row.id, tx)) ?? row;
       if (conviteLink) (final as Row).convite_link = conviteLink;
+      await attachGradeTamanhos(r, [final], tx);
       return final;
     });
   } catch (e) {
@@ -224,11 +298,16 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       }
       if (r.key === 'ordens') await validarOrdemPayload(data, before);
 
+      const gradeTamanhos = r.key === 'grades' && data.tamanhos !== undefined ? ((data.tamanhos as number[]) || []) : null;
+      if (gradeTamanhos) delete data.tamanhos;
+
       const changes = diff(before, data);
-      if (!Object.keys(changes).length) return (await s.get(r, id, tx))!;
+      const mudouGrade = gradeTamanhos !== null;
+      if (!Object.keys(changes).length && !mudouGrade) return (await s.get(r, id, tx))!;
 
       const row = await s.update(r, id, data, tx);
       if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+      if (mudouGrade) await syncGradeTamanhos(id, gradeTamanhos, tx);
 
       if (r.key === 'locais') {
         await garantirLocalPadrao(tx);
@@ -271,7 +350,9 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
           ? `${r.singular} "${String(before.nome)}" renomeado para "${String(data.nome)}" (saldos, movimentações, inventários e vendas atualizados com o novo nome)`
           : `${r.singular} ${labelOf(r, row)} alterado(a) (${campos})`;
       await audit(tx, actor, 'editar', r, id, descricao, changes);
-      return (await s.get(r, id, tx)) ?? row;
+      const final = (await s.get(r, id, tx)) ?? row;
+      await attachGradeTamanhos(r, [final], tx);
+      return final;
     });
   } catch (e) {
     throw toHttpError(e, r);
@@ -333,6 +414,23 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor): Promi
       }
       if (r.key === 'estoques' && Number(before.quantidade) !== 0) {
         throw new HttpError(409, 'Só é possível excluir saldos zerados. Lance uma saída/ajuste antes.');
+      }
+      if (r.key === 'grades') {
+        // Grade em uso por categoria ou produto não pode ser excluída.
+        const [emCategorias, emProdutos] = await Promise.all([
+          s.countWhere(getResource('categorias')!, { grade_id: id }, tx),
+          s.countWhere(getResource('produtos')!, { grade_id: id }, tx),
+        ]);
+        if (emCategorias || emProdutos) {
+          throw new HttpError(
+            409,
+            `A grade "${String(before.nome)}" está em uso (${emCategorias} categoria(s) e ${emProdutos} produto(s)). Remova o vínculo antes de excluir.`
+          );
+        }
+        // Remove os tamanhos da grade (no Postgres o ON DELETE CASCADE já faz;
+        // aqui garantimos o mesmo no modo demonstração).
+        const itensGrade = await s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 1000, filter: { grade_id: id } }, tx);
+        for (const it of itensGrade.rows) await s.remove(RESOURCES.grade_tamanhos, Number(it.id), tx);
       }
 
       await removeAllFiles(r, id, tx);

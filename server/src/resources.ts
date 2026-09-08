@@ -26,6 +26,7 @@ export type FieldType =
   | 'datetime'
   | 'select'
   | 'ref' // chave estrangeira para outro recurso
+  | 'multiref' // lista de chaves estrangeiras (muitos-para-muitos; ex.: tamanhos de uma grade)
   | 'password'
   | 'color' // cor em hexadecimal (#RRGGBB) — exibe uma "bolinha" colorida
   | 'images'; // galeria de fotos do registro (virtual — tabela `arquivos`)
@@ -308,6 +309,75 @@ export const RESOURCES: Record<string, Resource> = {
       { id: 3, codigo: 'M', descricao: 'Médio', ordem: 3 },
       { id: 4, codigo: 'G', descricao: 'Grande', ordem: 4 },
       { id: 5, codigo: 'GG', descricao: 'Extra grande', ordem: 5 },
+      { id: 6, codigo: '36', descricao: 'Calça/Bermuda', ordem: 10 },
+      { id: 7, codigo: '38', descricao: 'Calça/Bermuda', ordem: 11 },
+      { id: 8, codigo: '40', descricao: 'Calça/Bermuda', ordem: 12 },
+      { id: 9, codigo: '42', descricao: 'Calça/Bermuda', ordem: 13 },
+      { id: 10, codigo: '44', descricao: 'Calça/Bermuda', ordem: 14 },
+      { id: 11, codigo: '46', descricao: 'Calça/Bermuda', ordem: 15 },
+      { id: 12, codigo: '48', descricao: 'Calça/Bermuda', ordem: 16 },
+      { id: 13, codigo: 'Único', descricao: 'Tamanho único', ordem: 20 },
+    ],
+  },
+
+  grades: {
+    key: 'grades',
+    table: 'grades',
+    label: 'Grades',
+    singular: 'Grade',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    notice:
+      'Uma grade é um conjunto nomeado de tamanhos na ordem correta (ex.: Camiseta PP–GG, Calça 36–48, Calçado 34–44). Vincule a grade à categoria (padrão) ou diretamente ao produto para que o estoque mostre apenas os tamanhos daquele tipo de peça.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'Camiseta PP-GG, Calça 36-48...' },
+      { name: 'tamanhos', label: 'Tamanhos', type: 'multiref', ref: 'tamanhos', virtual: true, required: true, list: true, wide: true, hint: 'Marque os tamanhos desta grade, na ordem em que devem aparecer. Reordene marcando na sequência desejada.' },
+      { name: 'descricao', label: 'Descrição', type: 'text', search: true, maxLength: 160 },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+    mock: [
+      { id: 1, nome: 'Camiseta PP-GG', descricao: 'Malha e camisaria básica', ativo: true },
+      { id: 2, nome: 'Calça 36-48', descricao: 'Jeans e sarja', ativo: true },
+      { id: 3, nome: 'Bermuda 36-46', descricao: 'Bermudas e shorts', ativo: true },
+    ],
+  },
+
+  // Interno — itens de uma grade (tamanhos vinculados, com ordem).
+  grade_tamanhos: {
+    key: 'grade_tamanhos',
+    table: 'grade_tamanhos',
+    label: 'Itens de grade',
+    singular: 'Item de grade',
+    labelFields: ['id'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'grade_id', label: 'Grade', type: 'integer' },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
+      { name: 'ordem', label: 'Ordem', type: 'integer', min: 0, default: 0 },
+    ],
+    orderBy: { field: 'ordem', dir: 'asc' },
+    mock: [
+      { id: 1, grade_id: 1, tamanho_id: 1, ordem: 1 },
+      { id: 2, grade_id: 1, tamanho_id: 2, ordem: 2 },
+      { id: 3, grade_id: 1, tamanho_id: 3, ordem: 3 },
+      { id: 4, grade_id: 1, tamanho_id: 4, ordem: 4 },
+      { id: 5, grade_id: 1, tamanho_id: 5, ordem: 5 },
+      { id: 6, grade_id: 2, tamanho_id: 6, ordem: 1 },
+      { id: 7, grade_id: 2, tamanho_id: 7, ordem: 2 },
+      { id: 8, grade_id: 2, tamanho_id: 8, ordem: 3 },
+      { id: 9, grade_id: 2, tamanho_id: 9, ordem: 4 },
+      { id: 10, grade_id: 2, tamanho_id: 10, ordem: 5 },
+      { id: 11, grade_id: 2, tamanho_id: 11, ordem: 6 },
+      { id: 12, grade_id: 2, tamanho_id: 12, ordem: 7 },
+      { id: 13, grade_id: 3, tamanho_id: 6, ordem: 1 },
+      { id: 14, grade_id: 3, tamanho_id: 7, ordem: 2 },
+      { id: 15, grade_id: 3, tamanho_id: 8, ordem: 3 },
+      { id: 16, grade_id: 3, tamanho_id: 9, ordem: 4 },
+      { id: 17, grade_id: 3, tamanho_id: 10, ordem: 5 },
+      { id: 18, grade_id: 3, tamanho_id: 11, ordem: 6 },
     ],
   },
 
@@ -434,6 +504,7 @@ export const RESOURCES: Record<string, Resource> = {
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'Camisa, Camiseta, Calça, Bermuda...' },
       { name: 'descricao', label: 'Descrição', type: 'text', search: true, maxLength: 160 },
+      { name: 'grade_id', label: 'Grade padrão', type: 'ref', ref: 'grades', search: true, hint: 'Grade de tamanhos usada por padrão nos produtos desta categoria (o produto pode sobrescrever).' },
       ativo,
       ...auditFields,
     ],
@@ -485,6 +556,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'sku', label: 'SKU / Referência', type: 'text', required: true, unique: true, search: true, maxLength: 40, placeholder: 'Ex.: CAM-001' },
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
       { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias', search: true },
+      { name: 'grade_id', label: 'Grade de tamanhos', type: 'ref', ref: 'grades', search: true, hint: 'Define os tamanhos deste produto no estoque. Se vazio, herda a grade padrão da categoria.' },
       { name: 'colecao_id', label: 'Coleção', type: 'ref', ref: 'colecoes', search: true },
       { name: 'cor_id', label: 'Cor (cadastro)', type: 'ref', ref: 'cores', search: true, hint: 'Cor padronizada, com amostra colorida.' },
       { name: 'cor', label: 'Cor (texto livre)', type: 'text', search: true, maxLength: 40, list: false, hint: 'Use quando a cor ainda não estiver no cadastro (ex.: estampa).' },
