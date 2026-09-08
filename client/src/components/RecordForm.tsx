@@ -19,7 +19,7 @@ export function initialValues(
       out[f.name] = f.type === 'boolean' ? Boolean(row[f.name]) : f.type === 'password' ? '' : toInputValue(f, row[f.name]);
     } else {
       let def = f.default;
-      // Local padrão (origem das movimentações) substitui o antigo "almoxarifado".
+      // Origem padrão dos formulários: o Local padrão configurado (quando houver).
       if (defaultLocal) {
         // Quando existe um seletor local_id (ref), ele é a fonte de verdade e o
         // texto é preenchido pelo servidor — evita texto "local" ficar dessincronizado.

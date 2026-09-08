@@ -862,7 +862,7 @@ function LocalExclusaoAviso({ local, isAdmin }: { local: Record<string, any>; is
         A decisão é do administrador: o local sai do cadastro e <strong>o histórico não é apagado</strong> — saldos e movimentações continuam no sistema com o nome do local.
       </p>
       {ultimoAtivo && (
-        <p className="mt-1 font-semibold">Atenção: este é o único local ativo. Depois de excluir, as movimentações usam "almoxarifado" como origem até você cadastrar (ou reativar) outro local.</p>
+        <p className="mt-1 font-semibold">Atenção: este é o único local ativo. Depois de excluir, as movimentações usam "loja" como origem até você cadastrar (ou reativar) outro local.</p>
       )}
       {exigeAdmin && !isAdmin && <p className="mt-1 font-semibold">Somente um administrador pode excluir um local em uso (ou o último local ativo).</p>}
       {!uso && !ultimoAtivo && <p className="mt-2 text-slate-500">Dica: se o local ainda vai ser usado mais tarde, prefira desmarcar "Ativo" ao editá-lo.</p>}

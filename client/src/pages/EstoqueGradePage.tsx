@@ -158,7 +158,7 @@ export default function EstoqueGradePage() {
 
   function abrirCelula(linha: GradeResp['linhas'][number], tamanho: { id: number; codigo: string }) {
     const c = linha.celulas.find((x) => x.tamanho_id === tamanho.id);
-    const localEscolhido = local || meta?.defaultLocal?.nome || 'almoxarifado';
+    const localEscolhido = local || meta?.defaultLocal?.nome || 'loja';
     setCel({ produto: linha.produto, tamanho, quantidade: c?.quantidade ?? 0, estoque_min: c?.estoque_min ?? 0, local: localEscolhido });
     setMov({ tipo: 'ajuste', quantidade: '1', motivo: 'Ajuste pela grade de estoque' });
     setMovErr('');

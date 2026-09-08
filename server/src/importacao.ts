@@ -303,7 +303,7 @@ export async function modeloImportacao(req: Request, res: Response) {
     },
     estoque: {
       cab: ['produto', 'tamanho', 'local', 'quantidade', 'estoque_min'],
-      ex: ['CAM-100', 'M', 'almoxarifado', '150', '20'],
+      ex: ['CAM-100', 'M', 'loja', '150', '20'],
     },
   };
   const modelo = MOD[tipo] || MOD.produtos;

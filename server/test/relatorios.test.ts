@@ -72,7 +72,7 @@ before(async () => {
 test('faturamento: consolida por mês e compara com o ano anterior', async () => {
   await ensureSetup();
   // estoque + venda faturada no mês corrente
-  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: tamanhoId, local: 'almoxarifado', quantidade: 20 }, admin);
+  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: tamanhoId, local: 'loja', quantidade: 20 }, admin);
   const v = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, data: '2026-09-01', representante_id: representanteId }, admin);
   vendaFaturadaId = Number(v.id);
   await addItem(vendaFaturadaId, { produto_id: produtoId, tamanho_id: tamanhoId, quantidade: 2, preco_unitario: 100 });
@@ -120,11 +120,11 @@ test('comissões: linhas por representante + série mensal de 12 meses', async (
 test('estoque mínimo: aponta saldo abaixo do mínimo por local com custo de reposição', async () => {
   await ensureSetup();
   // saldo 18 após as vendas; define mínimo 25 → faltando 7
-  const saldos = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: tamanhoId, local: 'almoxarifado' } });
+  const saldos = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: tamanhoId, local: 'loja' } });
   assert.ok(saldos.rows.length, 'deve existir saldo');
   await updateRecord(RESOURCES.estoques, Number(saldos.rows[0].id), { estoque_min: 25 }, admin);
   const payload = await callRelatorio('estoque-minimo');
-  const linha = payload.linhas.find((l: any) => String(l.produto).includes('REL-001') && l.local === 'almoxarifado');
+  const linha = payload.linhas.find((l: any) => String(l.produto).includes('REL-001') && l.local === 'loja');
   assert.ok(linha, 'produto abaixo do mínimo deve aparecer');
   assert.equal(Number(linha.saldo), 18);
   assert.equal(Number(linha.faltando), 7);
@@ -136,17 +136,17 @@ test('estoque mínimo: aponta saldo abaixo do mínimo por local com custo de rep
 
 test('regressão: editar só o estoque mínimo de saldo em outro local não dá 409', async () => {
   await ensureSetup();
-  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: tamanhoId, local: 'loja', quantidade: 2 }, admin);
-  const saldos = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: tamanhoId, local: 'loja' } });
+  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: tamanhoId, local: 'expedicao', quantidade: 2 }, admin);
+  const saldos = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: tamanhoId, local: 'expedicao' } });
   assert.equal(saldos.rows.length, 1);
-  // antes do fix: resolveLocal trocava o local por "almoxarifado" e o
-  // ensureUniqueStock devolvia 409 falso contra o saldo do almoxarifado
+  // antes do fix: resolveLocal trocava o local por "loja" e o
+  // ensureUniqueStock devolvia 409 falso contra o saldo da loja
   const atualizado = await updateRecord(RESOURCES.estoques, Number(saldos.rows[0].id), { estoque_min: 4 }, admin);
   assert.equal(Number(atualizado.estoque_min), 4);
-  assert.equal(atualizado.local, 'loja', 'o local não pode mudar numa edição parcial');
-  const deNovo = await callRelatorio('estoque-minimo', { local: 'loja' });
-  const linha = deNovo.linhas.find((l: any) => l.local === 'loja');
-  assert.ok(linha, 'saldo da loja aparece no mínimo por local');
+  assert.equal(atualizado.local, 'expedicao', 'o local não pode mudar numa edição parcial');
+  const deNovo = await callRelatorio('estoque-minimo', { local: 'expedicao' });
+  const linha = deNovo.linhas.find((l: any) => l.local === 'expedicao');
+  assert.ok(linha, 'saldo da expedição aparece no mínimo por local');
   assert.equal(Number(linha.faltando), 2);
 });
 

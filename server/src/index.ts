@@ -196,7 +196,7 @@ app.get(
       version: VERSION,
       user: currentUser(req),
       smtp: { configurado: smtpConfigurado() },
-      // Local padrão (origem das movimentações) substitui o antigo "almoxarifado".
+      // Local padrão (origem das movimentações) para o front pré-selecionar os formulários.
       defaultLocal: await getDefaultLocalInfo(),
       auth: { hash: 'argon2id', mfa_admin_obrigatorio: true, reauth_ttl_segundos: Math.round(Number(process.env.REAUTH_TTL_MS) || 300_000) / 1000 },
     });

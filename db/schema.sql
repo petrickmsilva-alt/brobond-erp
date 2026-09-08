@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS estoques (
   id SERIAL PRIMARY KEY,
   produto_id INTEGER REFERENCES produtos(id),
   tamanho_id INTEGER REFERENCES tamanhos(id),
-  local TEXT DEFAULT 'almoxarifado',
+  local TEXT DEFAULT 'loja',
   quantidade INTEGER DEFAULT 0,
   estoque_min INTEGER DEFAULT 0,
   criado_em TIMESTAMPTZ DEFAULT now(),
@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS movimentacoes (
   tipo TEXT NOT NULL,                        -- entrada, saida, ajuste
   produto_id INTEGER REFERENCES produtos(id),
   tamanho_id INTEGER REFERENCES tamanhos(id),
-  local TEXT DEFAULT 'almoxarifado',
+  local TEXT DEFAULT 'loja',
   quantidade INTEGER NOT NULL,
   motivo TEXT,
   usuario_id INTEGER,
@@ -349,7 +349,7 @@ ALTER TABLE produtos       ADD COLUMN IF NOT EXISTS preco_venda NUMERIC(12,2) DE
 ALTER TABLE estoques       ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
 ALTER TABLE estoques       ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMPTZ;
 
-ALTER TABLE movimentacoes  ADD COLUMN IF NOT EXISTS local TEXT DEFAULT 'almoxarifado';
+ALTER TABLE movimentacoes  ADD COLUMN IF NOT EXISTS local TEXT DEFAULT 'loja';
 ALTER TABLE movimentacoes  ADD COLUMN IF NOT EXISTS usuario_id INTEGER;
 
 ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT now();
@@ -378,7 +378,7 @@ ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS desconto NUMERIC(12,2) DEFAU
 ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS frete NUMERIC(12,2) DEFAULT 0;
 ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS previsao_entrega DATE;
 ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS pedido_cliente TEXT;
-ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS local_saida TEXT DEFAULT 'almoxarifado';
+ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS local_saida TEXT DEFAULT 'loja';
 ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS comissao_pct NUMERIC(5,2);
 ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS comissao_valor NUMERIC(12,2);
 ALTER TABLE vendas         ADD COLUMN IF NOT EXISTS faturada_em TIMESTAMPTZ;
@@ -421,7 +421,7 @@ ALTER TABLE fichas_tecnicas ADD COLUMN IF NOT EXISTS calculado_em TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS locais (
   id SERIAL PRIMARY KEY,
   nome TEXT UNIQUE NOT NULL,
-  tipo TEXT DEFAULT 'almoxarifado',        -- almoxarifado | loja | expedicao | faccao
+  tipo TEXT DEFAULT 'loja',        -- loja | expedicao | faccao
   ativo BOOLEAN DEFAULT TRUE,
   padrao BOOLEAN DEFAULT FALSE,            -- local padrão (origem das movimentações)
   criado_em TIMESTAMPTZ DEFAULT now(),
@@ -729,7 +729,7 @@ CREATE INDEX IF NOT EXISTS idx_catalogos_token         ON catalogos (token);
 --    A coluna texto `local` é mantida (chave única existente), nada quebra.
 -- ------------------------------------------------------------
 INSERT INTO locais (nome, tipo)
-SELECT DISTINCT sub.local, 'almoxarifado'
+SELECT DISTINCT sub.local, 'loja'
 FROM (
   SELECT local FROM estoques WHERE local IS NOT NULL AND TRIM(local) <> ''
   UNION
@@ -753,6 +753,154 @@ WHERE id = (
   SELECT id FROM locais WHERE ativo IS NOT FALSE ORDER BY nome ASC LIMIT 1
 )
 AND NOT EXISTS (SELECT 1 FROM locais WHERE padrao = TRUE);
+
+-- ------------------------------------------------------------
+-- 4.2) MIGRAÇÃO DE DADOS — local "almoxarifado" passa a se chamar "loja"
+--    Idempotente: numa base já migrada, nada é alterado.
+--    1. Funde os saldos do local antigo: variantes de caixa somam numa única
+--       linha por grupo e, havendo saldo da "loja" no mesmo produto+tamanho,
+--       somam nele (quantidade soma, estoque_min fica com o maior); as linhas
+--       de origem são removidas. Vale também para textos órfãos do histórico
+--       (cadastro excluído sob gestão livre).
+--    2. Renomeia o cadastro `locais` quando não há outra "loja"; se já há,
+--       reaponta as FKs (local_id, local_destino_id), transfere o Local
+--       padrão e remove o cadastro antigo. Comparações sem diferenciar
+--       maiúsculas/minúsculas.
+--    3. Propaga o novo nome nos textos das 5 tabelas e converte o Tipo
+--       antigo em "loja". Os DEFAULTs das colunas passam a "loja" junto.
+-- ------------------------------------------------------------
+-- Padrões de coluna acompanham o novo nome (só afeta bancos já existentes;
+-- instalações novas já criam as colunas com 'loja').
+ALTER TABLE estoques      ALTER COLUMN local       SET DEFAULT 'loja';
+ALTER TABLE movimentacoes ALTER COLUMN local       SET DEFAULT 'loja';
+ALTER TABLE vendas        ALTER COLUMN local_saida SET DEFAULT 'loja';
+ALTER TABLE locais        ALTER COLUMN tipo        SET DEFAULT 'loja';
+
+DO $$
+DECLARE
+  antigo_id INTEGER;
+  loja_id   INTEGER;
+BEGIN
+  -- 1) Fusão dos saldos do local antigo.
+  -- 1a) Dobra variantes de caixa ("almoxarifado" + "Almoxarifado") numa única
+  -- linha por grupo (produto + tamanho): quantidade soma, estoque_min fica
+  -- com o maior — sem isto o renome colidiria consigo mesmo no UNIQUE.
+  UPDATE estoques keeper
+  SET quantidade = dup.soma_qtd,
+      estoque_min = dup.max_min,
+      local_id = COALESCE(keeper.local_id, dup.qualquer_id),
+      atualizado_em = now()
+  FROM (
+    SELECT produto_id, tamanho_id,
+           SUM(COALESCE(quantidade, 0)) AS soma_qtd,
+           MAX(COALESCE(estoque_min, 0)) AS max_min,
+           MAX(local_id) AS qualquer_id,
+           MIN(id) AS keeper_id
+    FROM estoques
+    WHERE lower(local) = 'almoxarifado'
+    GROUP BY produto_id, tamanho_id
+    HAVING COUNT(*) > 1
+  ) dup
+  WHERE keeper.id = dup.keeper_id;
+
+  DELETE FROM estoques d
+  USING (
+    SELECT produto_id, tamanho_id, MIN(id) AS keeper_id
+    FROM estoques
+    WHERE lower(local) = 'almoxarifado'
+    GROUP BY produto_id, tamanho_id
+    HAVING COUNT(*) > 1
+  ) k
+  WHERE lower(d.local) = 'almoxarifado'
+    AND d.produto_id IS NOT DISTINCT FROM k.produto_id
+    AND d.tamanho_id IS NOT DISTINCT FROM k.tamanho_id
+    AND d.id <> k.keeper_id;
+
+  -- 1b) Soma no saldo da "loja" (mesmo produto + tamanho), uma única vez
+  -- por grupo mesmo que existam variantes de caixa ("Loja").
+  UPDATE estoques destino
+  SET quantidade = COALESCE(destino.quantidade, 0) + origem.soma_qtd,
+      estoque_min = GREATEST(COALESCE(destino.estoque_min, 0), origem.max_min),
+      atualizado_em = now()
+  FROM (
+    SELECT produto_id, tamanho_id,
+           SUM(COALESCE(quantidade, 0)) AS soma_qtd,
+           MAX(COALESCE(estoque_min, 0)) AS max_min
+    FROM estoques
+    WHERE lower(local) = 'almoxarifado'
+    GROUP BY produto_id, tamanho_id
+  ) origem
+  WHERE lower(destino.local) = 'loja'
+    AND destino.produto_id IS NOT DISTINCT FROM origem.produto_id
+    AND destino.tamanho_id IS NOT DISTINCT FROM origem.tamanho_id
+    AND destino.id = (
+      SELECT MIN(e.id) FROM estoques e
+      WHERE lower(e.local) = 'loja'
+        AND e.produto_id IS NOT DISTINCT FROM origem.produto_id
+        AND e.tamanho_id IS NOT DISTINCT FROM origem.tamanho_id
+    );
+
+  -- Remove as linhas de origem já somadas (as demais serão renomeadas).
+  DELETE FROM estoques origem
+  USING estoques destino
+  WHERE lower(origem.local) = 'almoxarifado'
+    AND lower(destino.local) = 'loja'
+    AND origem.produto_id IS NOT DISTINCT FROM destino.produto_id
+    AND origem.tamanho_id IS NOT DISTINCT FROM destino.tamanho_id;
+
+  -- 2) Cadastros: repete até não restar nenhum "almoxarifado" (qualquer caixa).
+  LOOP
+    SELECT id INTO antigo_id FROM locais WHERE lower(nome) = 'almoxarifado' ORDER BY id LIMIT 1;
+    EXIT WHEN NOT FOUND;
+    SELECT l.id INTO loja_id FROM locais l WHERE lower(l.nome) = 'loja' AND l.id <> antigo_id ORDER BY l.id LIMIT 1;
+
+    IF loja_id IS NULL THEN
+      -- Caso simples: renomeia (as FKs por id continuam válidas).
+      UPDATE locais SET nome = 'loja', atualizado_em = now() WHERE id = antigo_id;
+    ELSE
+      -- Caso fusão: reaponta as FKs para a "loja" ...
+      UPDATE estoques      SET local_id = loja_id WHERE local_id = antigo_id;
+      UPDATE movimentacoes SET local_id = loja_id WHERE local_id = antigo_id;
+      UPDATE movimentacoes SET local_destino_id = loja_id WHERE local_destino_id = antigo_id;
+      UPDATE inventarios   SET local_id = loja_id WHERE local_id = antigo_id;
+
+      -- ... transfere o Local padrão (só para "loja" ativa e se nenhum
+      -- terceiro local já for o padrão) ...
+      UPDATE locais destino
+      SET padrao = TRUE, atualizado_em = now()
+      FROM locais origem
+      WHERE destino.id = loja_id
+        AND origem.id = antigo_id
+        AND origem.padrao IS TRUE
+        AND destino.ativo IS NOT FALSE
+        AND NOT EXISTS (
+          SELECT 1 FROM locais l WHERE l.padrao IS TRUE AND l.id NOT IN (antigo_id, loja_id)
+        );
+
+      -- ... e remove o cadastro antigo.
+      DELETE FROM locais WHERE id = antigo_id;
+    END IF;
+  END LOOP;
+
+  -- 3) Propaga o novo nome nos textos das 5 tabelas (sem risco de colisão:
+  -- os saldos colidentes já foram somados no passo 1).
+  UPDATE estoques      SET local = 'loja', atualizado_em = now() WHERE lower(local) = 'almoxarifado';
+  UPDATE movimentacoes SET local = 'loja' WHERE lower(local) = 'almoxarifado';
+  UPDATE movimentacoes SET local_destino = 'loja' WHERE lower(local_destino) = 'almoxarifado';
+  UPDATE inventarios   SET local = 'loja', atualizado_em = now() WHERE lower(local) = 'almoxarifado';
+  UPDATE vendas        SET local_saida = 'loja', atualizado_em = now() WHERE lower(local_saida) = 'almoxarifado';
+
+  -- O Tipo antigo sai das opções: registros com ele viram "loja".
+  UPDATE locais SET tipo = 'loja', atualizado_em = now() WHERE lower(tipo) = 'almoxarifado';
+
+  -- Garante um Local padrão (o antigo pode ter sido removido sem sucessor
+  -- marcado, ex.: fusão onde nenhum dos dois era o padrão).
+  UPDATE locais SET padrao = TRUE
+  WHERE id = (
+    SELECT id FROM locais WHERE ativo IS NOT FALSE ORDER BY nome ASC LIMIT 1
+  )
+  AND NOT EXISTS (SELECT 1 FROM locais WHERE padrao IS TRUE);
+END $$;
 
 -- ------------------------------------------------------------
 -- FASE 8 — NF-e, chat e melhorias

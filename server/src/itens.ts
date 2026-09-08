@@ -10,8 +10,8 @@
 //
 // Regras:
 //   • total do pedido é SEMPRE calculado pelo servidor (o campo é readonly);
-//   • venda → ao faturar, sai do estoque (local de saída, fallback
-//     almoxarifado); cancelar pedido faturado/entregue estorna;
+//   • venda → ao faturar, sai do estoque (local de saída, com fallback
+//     para o Local padrão); cancelar pedido faturado/entregue estorna;
 //   • compra → ao receber, entra insumo no estoque e atualiza o custo médio
 //     ponderado; cancelar compra recebida estorna;
 //   • pedidos faturados/recebidos ficam travados para edição de itens.

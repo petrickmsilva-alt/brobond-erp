@@ -199,7 +199,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, before, actor);
       if (r.key === 'estoques') {
         // Edição parcial (ex.: só estoque_min) mantém o local atual do saldo —
-        // sem isto o resolveLocal aplicaria o padrão "almoxarifado" e o
+        // sem isto o resolveLocal aplicaria o padrão "loja" e o
         // ensureUniqueStock acusaria 409 contra o saldo de outro local.
         if (before && (data.local === undefined || data.local === null || data.local === '') && !data.local_id && before.local) {
           data.local = String(before.local);
@@ -433,16 +433,15 @@ async function ensureUniqueStock(data: Payload, before: Row | null, tx: Tx) {
   }
 }
 
-/** Nome do Local padrão (origem das movimentações) ou 'almoxarifado' por segurança. */
+/** Nome do Local padrão (origem das movimentações) ou 'loja' por segurança. */
 export async function getDefaultLocal(tx?: Tx): Promise<string> {
   const info = await getDefaultLocalInfo(tx);
-  return info?.nome ?? 'almoxarifado';
+  return info?.nome ?? 'loja';
 }
 
 /**
  * Local padrão: o cadastrado com `padrao = true` e ativo; senão o primeiro
- * local ativo (por nome); senão null (aí os fluxos usam 'almoxarifado').
- * Substitui o antigo padrão fixo "almoxarifado".
+ * local ativo (por nome); senão null (aí os fluxos usam 'loja' por segurança).
  */
 export async function getDefaultLocalInfo(tx?: Tx): Promise<{ id: number | null; nome: string } | null> {
   const s = getStore();

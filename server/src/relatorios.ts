@@ -73,7 +73,7 @@ async function relEstoquePosicao(req: Request, res: Response) {
   if (grupo === 'local') {
     const porLocal = new Map<string, { local: string; pecas: number; valor: number }>();
     for (const e of estoques.rows) {
-      const l = String(e.local || 'almoxarifado');
+      const l = String(e.local || 'loja');
       const p = produtos.rows.find((x) => Number(x.id) === Number(e.produto_id));
       const atual = porLocal.get(l) || { local: l, pecas: 0, valor: 0 };
       atual.pecas += Number(e.quantidade || 0);
@@ -567,7 +567,7 @@ async function relEstoqueMinimo(req: Request, res: Response) {
     linhas.push({
       produto: pNome.get(pid) || `#${pid}`,
       tamanho: tCod.get(Number(e.tamanho_id)) || '',
-      local: String(e.local || 'almoxarifado'),
+      local: String(e.local || 'loja'),
       saldo: Number(e.quantidade || 0),
       estoque_min: Number(e.estoque_min || 0),
       faltando,

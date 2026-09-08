@@ -255,17 +255,16 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Local',
     labelFields: ['nome'],
     ops: ALL_OPS,
-    notice: 'Locais onde o estoque fica guardado (almoxarifado, loja, expedição, facção). Marque um deles como Local padrão — ele vira a origem padrão das movimentações (entrada/saída/transferência) e do Estoque Físico, substituindo o antigo padrão fixo "almoxarifado". Gestão livre: o administrador pode incluir, alterar e excluir um local mesmo que ele já esteja em uso — ao renomear, o novo nome é propagado para saldos, movimentações e inventários; ao excluir, o histórico permanece com o nome do local.',
+    notice: 'Locais onde o estoque fica guardado (loja, expedição, facção). Marque um deles como Local padrão — ele vira a origem padrão das movimentações (entrada/saída/transferência) e do Estoque Físico. Gestão livre: o administrador pode incluir, alterar e excluir um local mesmo que ele já esteja em uso — ao renomear, o novo nome é propagado para saldos, movimentações e inventários; ao excluir, o histórico permanece com o nome do local.',
     fields: [
-      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'almoxarifado, loja, expedição...', hint: 'Pode ser alterado mesmo com o local em uso (decisão do administrador): o novo nome é aplicado em saldos, movimentações e inventários.' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'loja, expedição, facção...', hint: 'Pode ser alterado mesmo com o local em uso (decisão do administrador): o novo nome é aplicado em saldos, movimentações e inventários.' },
       {
         name: 'tipo',
         label: 'Tipo',
         type: 'select',
         required: true,
-        default: 'almoxarifado',
+        default: 'loja',
         options: [
-          { value: 'almoxarifado', label: 'Almoxarifado', tone: 'blue' },
           { value: 'loja', label: 'Loja', tone: 'green' },
           { value: 'expedicao', label: 'Expedição', tone: 'amber' },
           { value: 'faccao', label: 'Facção', tone: 'slate' },
@@ -283,9 +282,9 @@ export const RESOURCES: Record<string, Resource> = {
     ],
     orderBy: { field: 'nome', dir: 'asc' },
     mock: [
-      { id: 1, nome: 'almoxarifado', tipo: 'almoxarifado', ativo: true, padrao: true },
-      { id: 2, nome: 'loja', tipo: 'loja', ativo: true, padrao: false },
-      { id: 3, nome: 'expedicao', tipo: 'expedicao', ativo: true, padrao: false },
+      { id: 1, nome: 'loja', tipo: 'loja', ativo: true, padrao: true },
+      { id: 2, nome: 'expedicao', tipo: 'expedicao', ativo: true, padrao: false },
+      { id: 3, nome: 'faccao', tipo: 'faccao', ativo: true, padrao: false },
     ],
   },
 
@@ -521,7 +520,7 @@ export const RESOURCES: Record<string, Resource> = {
     fields: [
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
       { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
-      { name: 'local', label: 'Local', type: 'text', search: true, maxLength: 60, placeholder: 'almoxarifado, loja, expedição...', list: false, hint: 'Preenchido automaticamente pelo seletor de local. Deixe em branco para usar o Local padrão.' },
+      { name: 'local', label: 'Local', type: 'text', search: true, maxLength: 60, placeholder: 'loja, expedição, facção...', list: false, hint: 'Preenchido automaticamente pelo seletor de local. Deixe em branco para usar o Local padrão.' },
       { name: 'local_id', label: 'Local', type: 'ref', ref: 'locais', search: true, hint: 'Use o cadastro de Locais em vez de digitar texto livre.' },
       { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, default: 0 },
       { name: 'estoque_min', label: 'Estoque mínimo', type: 'integer', min: 0, default: 0, hint: 'Abaixo disso o item entra em alerta no Dashboard.' },
