@@ -357,17 +357,38 @@ export async function estornarMovimentacao(req: Request, res: Response) {
         throw new HttpError(400, `Tipo de movimentação desconhecido: ${tipo}`);
       }
 
+      /**
+       * Um estorno não pode deixar saldo negativo — é a mesma regra da saída
+       * normal. Sem isso, estornar uma entrada cujas peças já foram vendidas
+       * derrubava o saldo para baixo e a matriz de estoque perdia a verdade.
+       */
+      const garantirSaldoParaRetirada = async (loc: string, retirada: number) => {
+        if (retirada <= 0) return;
+        const linha = await s.findOneWhere(RESOURCES.estoques, { produto_id: produtoId, tamanho_id: tamanhoId, local: loc }, tx);
+        const atual = Number(linha?.quantidade ?? 0);
+        if (atual < retirada) {
+          throw new HttpError(
+            409,
+            `O estorno retiraria ${retirada} peça(s) de "${loc}", mas só há ${atual} em estoque. Estorne primeiro as movimentações que consumiram essas peças.`,
+            { quantidade: `Saldo atual: ${atual}` }
+          );
+        }
+      };
+
       // Ajusta o estoque (inverte o efeito original)
       if (tipo === 'transferencia') {
         const localDestino = String(mov.local_destino || '');
         if (!localDestino) throw new HttpError(400, 'Transferência sem local de destino.');
         // Inverte: volta do destino para a origem
+        await garantirSaldoParaRetirada(localDestino, quantidade);
         await s.adjustStock(produtoId, tamanhoId, localDestino, -quantidade, tx);
         await s.adjustStock(produtoId, tamanhoId, local, quantidade, tx);
       } else {
         // Para entrada/saida/ajuste, inverte o delta
         const deltaOriginal = tipo === 'entrada' ? quantidade : tipo === 'saida' ? -quantidade : quantidade;
-        await s.adjustStock(produtoId, tamanhoId, local, -deltaOriginal, tx);
+        const deltaInverso = -deltaOriginal;
+        await garantirSaldoParaRetirada(local, Math.max(0, -deltaInverso));
+        await s.adjustStock(produtoId, tamanhoId, local, deltaInverso, tx);
       }
 
       // Cria a movimentação de estorno

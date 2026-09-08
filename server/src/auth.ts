@@ -12,12 +12,24 @@ import { decifrarSegredoMfa, prepararDesafio, signMfaTicket, lerMfaTicket, cifra
 
 export { hashPassword, verifyPassword };
 
-const SECRET = process.env.JWT_SECRET || 'brobond-dev-secret';
+const isProd = process.env.NODE_ENV === 'production';
 if (!process.env.JWT_SECRET) {
+  // Com a chave padrão qualquer pessoa assina um JWT de admin. Em produção isso
+  // é falha de deploy: melhor o serviço não subir do que subir vulnerável.
+  if (isProd) {
+    throw new Error('JWT_SECRET é obrigatório em produção (a chave padrão permite forjar tokens de administrador). Defina a variável no painel e faça redeploy.');
+  }
   console.warn('⚠️  JWT_SECRET não definido — usando valor padrão (NÃO use em produção).');
 }
+const SECRET = process.env.JWT_SECRET || 'brobond-dev-secret';
 const TOKEN_TTL = process.env.JWT_TTL || '8h';
 export const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@brobond.com.br').trim().toLowerCase();
+if (!process.env.ADMIN_PASSWORD && isProd) {
+  // Sem ADMIN_PASSWORD o admin nasceria com a senha padrão, que é pública
+  // (está no README). O primeiro acesso exige troca de senha e MFA, mas o
+  // cadastro do MFA é self-service: com a senha padrão em mãos o portão cai.
+  throw new Error('ADMIN_PASSWORD é obrigatório em produção. Defina a senha inicial do administrador (ou ADMIN_EMAIL próprio) no painel e faça redeploy.');
+}
 export const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'brobond123').trim();
 const RESET_TTL_MIN = Number(process.env.RESET_TTL_MINUTES) || 60;
 export const REAUTH_TTL_MS = Number(process.env.REAUTH_TTL_MS) || 5 * 60_000;

@@ -185,6 +185,32 @@ export async function gradeDoProduto(produto: Row, tx?: Tx): Promise<GradeInfo |
   return { gradeId, gradeNome: String(grade.nome || `#${gradeId}`), tamanhos };
 }
 
+/**
+ * O tamanho precisa existir na grade efetiva do produto (a do produto, senão a
+ * da categoria). A tela já filtra, mas planilha de importação, integração e
+ * chamada direta à API não passam pela tela — é aqui que a mistura PP–GG com
+ * 36–48 para de verdade. Produto sem grade fica de fora (ainda não organizado).
+ */
+export async function validarTamanhoNaGrade(produtoId: number, tamanhoId: number, tx?: Tx): Promise<void> {
+  if (!produtoId || !tamanhoId) return;
+  const s = getStore();
+  const produto = await s.findOneWhere(RESOURCES.produtos, { id: produtoId }, tx);
+  if (!produto) return; // a validação de referência do payload cuida disso
+  const grade = await gradeDoProduto(produto, tx);
+  if (!grade || !grade.tamanhos.length) return;
+  if (grade.tamanhos.some((t) => t.id === tamanhoId)) return;
+  const tamanho = await s.findOneWhere(RESOURCES.tamanhos, { id: tamanhoId }, tx);
+  throw new HttpError(
+    400,
+    `O tamanho "${String(tamanho?.codigo ?? `#${tamanhoId}`)}" não faz parte da grade "${grade.gradeNome}" de ${String(produto.sku ?? `#${produtoId}`)}.`,
+    {
+      tamanho_id:
+        `A grade aceita: ${grade.tamanhos.map((t) => t.codigo).join(', ')}. ` +
+        'Se o produto pertence a outra grade, ajuste a grade no cadastro dele.',
+    }
+  );
+}
+
 // ----------------------------------------------------------------------------
 // Escrita (com regras por módulo)
 // ----------------------------------------------------------------------------
@@ -202,7 +228,13 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
         await resolveLocal(data, tx);
         await ensureUniqueStock(data, null, tx);
       }
-      if (r.key === 'inventarios') await resolveLocal(data, tx);
+      if (r.key === 'inventarios') {
+        await resolveLocal(data, tx);
+        // Abrir um inventário é sempre abrir: `status` é readonly na API e o
+        // DEFAULT 'aberto' só existe no Postgres, então no modo demonstração o
+        // registro nascia sem status e o snapshot do saldo nunca rodava.
+        if (data.status === undefined || data.status === null || data.status === '') data.status = 'aberto';
+      }
       if (r.key === 'locais') await ensureLocalPadraoUnico(data, null, tx);
       if (r.key === 'ordens') await validarOrdemPayload(data, null);
 
@@ -739,6 +771,9 @@ async function createMovimentacao(data: Payload, actor: Actor, tx: Tx): Promise<
   const produtoId = Number(data.produto_id);
   const tamanhoId = Number(data.tamanho_id);
   const usuarioId = actor.id || null;
+
+  // Nenhum tamanho fora da grade do produto (ver validarTamanhoNaGrade).
+  await validarTamanhoNaGrade(produtoId, tamanhoId, tx);
 
   // Transferência entre locais: em UMA transação, saída na origem + entrada no
   // destino — duas linhas ligadas por transferencia_id.
