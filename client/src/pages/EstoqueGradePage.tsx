@@ -10,6 +10,8 @@ import { formatDateTime } from '../lib/format';
 
 type GradeResp = {
   colunas: { id: number; codigo: string }[];
+  /** Colunas de cada grade, na ordem própria dela. Chave = id da grade. */
+  colunasPorGrade?: Record<string, { id: number; codigo: string }[]>;
   local: string;
   locaisDisponiveis: string[];
   totalPecas: number;
@@ -18,6 +20,18 @@ type GradeResp = {
     celulas: { tamanho_id: number; quantidade: number; estoque_min: number }[];
     total: number;
   }[];
+};
+
+type GradeLinha = GradeResp['linhas'][number];
+type GradeColuna = { id: number; codigo: string };
+
+/** Uma seção da tela: uma grade e suas linhas/colunas. */
+type GrupoGrade = {
+  gradeId: number;
+  nome: string;
+  colunas: GradeColuna[];
+  linhas: GradeLinha[];
+  total: number;
 };
 
 type Cel = { produto: GradeResp['linhas'][number]['produto']; tamanho: { id: number; codigo: string }; quantidade: number; estoque_min: number; local: string };
@@ -133,6 +147,89 @@ export default function EstoqueGradePage() {
       return `${l.produto.sku} ${l.produto.nome} ${l.produto.cor || ''} ${l.produto.categoria_id__label || ''}`.toLowerCase().includes(term);
     });
   }, [data, q, soAlertas]);
+
+  // Agrupa por grade: cada grade vira uma matriz com SOMENTE os seus tamanhos,
+  // na ordem cadastrada na grade. Sem isso, calça e camiseta dividir as mesmas
+  // colunas e a tela fica cheia de célula vazia.
+  const grupos = useMemo<GrupoGrade[]>(() => {
+    if (!data) return [];
+    const buckets = new Map<number, GradeLinha[]>();
+    for (const l of linhasVisiveis) {
+      const gid = l.produto.grade_id ?? 0;
+      const arr = buckets.get(gid);
+      if (arr) arr.push(l);
+      else buckets.set(gid, [l]);
+    }
+    const ordemGlobal = new Map(data.colunas.map((c, i) => [c.id, i]));
+    const codigoPor = new Map(data.colunas.map((c) => [c.id, c.codigo]));
+    const out: GrupoGrade[] = [];
+    for (const [gid, ls] of buckets) {
+      const daGrade = gid ? data.colunasPorGrade?.[String(gid)] : undefined;
+      const colunas =
+        daGrade && daGrade.length
+          ? daGrade
+          : Array.from(new Set(ls.flatMap((l) => l.celulas.map((c) => c.tamanho_id))))
+              .sort((a, b) => (ordemGlobal.get(a) ?? 999) - (ordemGlobal.get(b) ?? 999))
+              .map((id) => ({ id, codigo: codigoPor.get(id) ?? `#${id}` }));
+      out.push({
+        gradeId: gid,
+        nome: gid === 0 ? 'Sem grade definida' : ls[0].produto.grade_nome ?? `Grade #${gid}`,
+        colunas,
+        linhas: ls,
+        total: ls.reduce((a, l) => a + l.total, 0),
+      });
+    }
+    // Grades primeiro (ordem alfabética); "Sem grade" por último, como pendência de cadastro.
+    return out.sort((a, b) => (a.gradeId === 0 ? 1 : b.gradeId === 0 ? -1 : a.nome.localeCompare(b.nome, 'pt-BR')));
+  }, [data, linhasVisiveis]);
+
+  /** Linha da matriz. Recebe as colunas do grupo para não herdar a união global. */
+  function linhaRow(linha: GradeLinha, colunas: GradeColuna[]) {
+    const celulaPor = new Map(linha.celulas.map((c) => [c.tamanho_id, c]));
+    return (
+      <tr key={linha.produto.id}>
+        <td className="sticky left-0 max-w-[220px] bg-white">
+          <div className="font-medium text-navy-900">
+            {linha.produto.sku} — {linha.produto.nome}
+          </div>
+          <div className="text-xs text-slate-400">
+            {linha.produto.cor ? <span className="mr-2">{linha.produto.cor}</span> : null}
+            {linha.produto.categoria_id__label}
+          </div>
+          {!linha.produto.grade_nome && (
+            <div className="mt-0.5">
+              <span className="inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                sem grade
+              </span>
+            </div>
+          )}
+        </td>
+        {colunas.map((c) => {
+          const celula = celulaPor.get(c.id);
+          const qtd = celula?.quantidade ?? 0;
+          const alerta = qtd > 0 && qtd <= (celula?.estoque_min ?? 0);
+          return (
+            <td key={c.id} className="text-center">
+              <button
+                onClick={() => abrirCelula(linha, c)}
+                className={`min-w-[46px] rounded-md border px-1.5 py-1 text-xs font-semibold tabular-nums transition-colors ${
+                  qtd === 0
+                    ? 'border-slate-200 text-slate-300 hover:border-brand-400 hover:text-brand-600'
+                    : alerta
+                      ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                      : 'border-slate-200 text-navy-800 hover:border-brand-400 hover:bg-brand-50'
+                }`}
+                title={`${linha.produto.sku} tam. ${c.codigo}: ${qtd} peça(s)`}
+              >
+                {qtd}
+              </button>
+            </td>
+          );
+        })}
+        <td className="text-right font-bold tabular-nums text-navy-900">{formatNumber(linha.total)}</td>
+      </tr>
+    );
+  }
 
   async function lancarMovimentacao() {
     if (!cel) return;
@@ -383,75 +480,53 @@ export default function EstoqueGradePage() {
             </div>
           </div>
 
-          {/* Matriz */}
+          {/* Matriz — uma seção por grade, cada uma só com os seus tamanhos */}
           {linhasVisiveis.length === 0 ? (
             <div className="card p-10 text-center text-sm text-slate-400">Nenhum produto com estoque neste filtro.</div>
           ) : (
-            <div className="card overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="table text-sm">
-                  <thead>
-                    <tr>
-                      <th className="sticky left-0 bg-white text-left">Produto</th>
-                      {data.colunas.map((c) => (
-                        <th key={c.id} className="text-center">
-                          {c.codigo || `#${c.id}`}
-                        </th>
-                      ))}
-                      <th className="text-right">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {linhasVisiveis.map((linha) => (
-                      <tr key={linha.produto.id}>
-                        <td className="sticky left-0 max-w-[220px] bg-white">
-                          <div className="font-medium text-navy-900">
-                            {linha.produto.sku} — {linha.produto.nome}
-                          </div>
-                          <div className="text-xs text-slate-400">
-                            {linha.produto.cor ? <span className="mr-2">{linha.produto.cor}</span> : null}
-                            {linha.produto.categoria_id__label}
-                          </div>
-                          {linha.produto.grade_nome && (
-                            <div className="mt-0.5">
-                              <span className="inline-flex items-center rounded bg-navy-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-navy-600">
-                                {linha.produto.grade_nome}
-                              </span>
-                            </div>
-                          )}
-                        </td>
-                        {data.colunas.map((c) => {
-                          const celula = linha.celulas.find((x) => x.tamanho_id === c.id);
-                          const qtd = celula?.quantidade ?? 0;
-                          const alerta = qtd > 0 && qtd <= (celula?.estoque_min ?? 0);
-                          return (
-                            <td key={c.id} className="text-center">
-                              <button
-                                onClick={() => abrirCelula(linha, c)}
-                                className={`min-w-[46px] rounded-md border px-1.5 py-1 text-xs font-semibold tabular-nums transition-colors ${
-                                  qtd === 0
-                                    ? 'border-slate-200 text-slate-300 hover:border-brand-400 hover:text-brand-600'
-                                    : alerta
-                                      ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
-                                      : 'border-slate-200 text-navy-800 hover:border-brand-400 hover:bg-brand-50'
-                                }`}
-                                title={`${linha.produto.sku} tam. ${c.codigo}: ${qtd} peça(s)`}
-                              >
-                                {qtd}
-                              </button>
-                            </td>
-                          );
-                        })}
-                        <td className="text-right font-bold tabular-nums text-navy-900">{formatNumber(linha.total)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            <div className="space-y-4">
+              {grupos.map((g) => (
+                <section key={g.gradeId} className="card overflow-hidden">
+                  <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-100 bg-slate-50/70 px-4 py-2.5">
+                    <Boxes className="h-4 w-4 shrink-0 text-navy-600" />
+                    <h2 className="text-sm font-semibold text-navy-900">{g.nome}</h2>
+                    <span className="text-xs text-slate-500">
+                      {g.colunas.length} tamanho(s) · {g.linhas.length} produto(s) ·{' '}
+                      <strong className="tabular-nums text-navy-800">{formatNumber(g.total)}</strong> peça(s)
+                    </span>
+                    {g.gradeId === 0 && (
+                      <Link to="/produtos" className="ml-auto text-xs font-semibold text-brand-600 hover:underline">
+                        Organizar por grade →
+                      </Link>
+                    )}
+                  </header>
+                  {g.colunas.length === 0 ? (
+                    <p className="px-4 py-3 text-xs text-amber-700">Esta grade ainda não tem tamanhos cadastrados — ajuste em Grades para a matriz aparecer.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="table text-sm">
+                        <thead>
+                          <tr>
+                            <th className="sticky left-0 bg-white text-left">Produto</th>
+                            {g.colunas.map((c) => (
+                              <th key={c.id} className="text-center">
+                                {c.codigo || `#${c.id}`}
+                              </th>
+                            ))}
+                            <th className="text-right">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>{g.linhas.map((linha) => linhaRow(linha, g.colunas))}</tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+              ))}
             </div>
           )}
           <p className="mt-2 text-xs text-slate-400">
-            Célula amarela = saldo igual ou abaixo do estoque mínimo. Com “Todos os locais” os valores somam os locais; selecione um local para ver o saldo dele.
+            Cada grade tem a sua própria matriz, só com os tamanhos dela. Célula amarela = saldo igual ou abaixo do estoque mínimo. Com “Todos os locais” os valores somam os
+            locais; selecione um local para ver o saldo dele.
           </p>
         </>
       )}

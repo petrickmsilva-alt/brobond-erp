@@ -99,6 +99,11 @@ export async function estoqueGrade(req: Request, res: Response) {
 
   res.json({
     colunas,
+    // Colunas de cada grade na ordem própria dela (grade_tamanhos.ordem) — é o
+    // que permite à tela montar uma matriz por grade, cada uma com suas colunas.
+    colunasPorGrade: Object.fromEntries(
+      Array.from(tamsPorGrade.entries()).map(([gid, ids]) => [gid, ids.map((id) => ({ id, codigo: codigoPor.get(id) ?? `#${id}` }))])
+    ),
     local: local ?? 'todos',
     locaisDisponiveis: Array.from(new Set(estoques.rows.map((e) => String(e.local || 'loja')))).sort(),
     totalPecas: linhas.reduce((a, l) => a + l.total, 0),
@@ -123,15 +128,33 @@ export async function listItensInventario(req: Request, res: Response) {
   await getInventario(id);
   const s = getStore();
   const itens = await s.list(RESOURCES.itens_inventario, { page: 1, pageSize: 5000, filter: { inventario_id: id }, sort: 'id', dir: 'asc' });
-  // Anexa miniatura do produto para exibir na contagem.
-  const produtos = await s.list(RESOURCES.produtos, { page: 1, pageSize: 2000 });
+  // Anexa miniatura e a grade do produto: a contagem é agrupada por grade, do
+  // mesmo jeito que o Estoque Físico, para a conferência seguir a mesma ordem.
+  const [produtos, categorias, grades] = await Promise.all([
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000 }),
+    s.list(RESOURCES.categorias, { page: 1, pageSize: 2000 }),
+    s.list(RESOURCES.grades, { page: 1, pageSize: 2000 }),
+  ]);
   const { attachImages } = await import('./uploads');
   await attachImages(RESOURCES.produtos, produtos.rows);
   const fotoPor = new Map(produtos.rows.map((p) => [Number(p.id), p.foto_url ?? null]));
+  const produtoPor = new Map(produtos.rows.map((p) => [Number(p.id), p]));
+  const gradePorCategoria = new Map(categorias.rows.map((c) => [Number(c.id), Number(c.grade_id) || 0]));
+  const nomePorGrade = new Map(grades.rows.map((g) => [Number(g.id), String(g.nome || '')]));
+  /** Grade efetiva do produto: grade própria, senão a da categoria. */
+  const gradeEfetiva = (produtoId: unknown): number => {
+    const p = produtoPor.get(Number(produtoId));
+    if (!p) return 0;
+    return Number(p.grade_id) || gradePorCategoria.get(Number(p.categoria_id)) || 0;
+  };
   for (const it of itens.rows) {
     it.produto_id__foto = fotoPor.get(Number(it.produto_id)) ?? null;
-    it.produto_id__label = it.produto_id__label ?? (produtos.rows.find((p) => Number(p.id) === Number(it.produto_id)) ? labelOf(RESOURCES.produtos, produtos.rows.find((p) => Number(p.id) === Number(it.produto_id))!) : null);
+    const p = produtoPor.get(Number(it.produto_id));
+    it.produto_id__label = it.produto_id__label ?? (p ? labelOf(RESOURCES.produtos, p) : null);
     it.tamanho_id__label = it.tamanho_id__label ?? null;
+    const gid = gradeEfetiva(it.produto_id);
+    it.produto_id__grade_id = gid || null;
+    it.produto_id__grade_nome = gid ? nomePorGrade.get(gid) ?? `Grade #${gid}` : null;
     it.diferenca = it.contado === null || it.contado === undefined ? 0 : Number(it.contado) - Number(it.saldo_sistema);
   }
   res.json(itens.rows);

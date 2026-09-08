@@ -103,6 +103,51 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const [optionsKey, setOptionsKey] = useState(0);
   const refOptions = useRefOptions(resource, optionsKey);
 
+  // Movimentações: o tamanho deve vir da grade do produto escolhido — sem isso
+  // dá para lançar “PP” numa calça 36-48 e o saldo vira bagunça.
+  const gradeAware = resource.key === 'movimentacoes';
+  const produtoDoFormulario = gradeAware ? String(values.produto_id ?? '') : '';
+  const [tamanhosDaGrade, setTamanhosDaGrade] = useState<Option[] | null>(null);
+  const [gradeDoFormulario, setGradeDoFormulario] = useState('');
+  useEffect(() => {
+    if (!gradeAware || !produtoDoFormulario) {
+      setTamanhosDaGrade(null);
+      setGradeDoFormulario('');
+      return;
+    }
+    let alive = true;
+    api
+      .get<{ grade: { id: number; nome: string } | null; tamanhos: { id: number; codigo: string }[] }>(`/produtos/${produtoDoFormulario}/tamanhos`)
+      .then((d) => {
+        if (!alive) return;
+        const lista = (d.tamanhos ?? []).map((t) => ({ value: t.id, label: t.codigo }));
+        setTamanhosDaGrade(lista);
+        setGradeDoFormulario(d.grade?.nome ?? '');
+        if (!lista.length) return;
+        // Produto trocado e o tamanho anterior não pertence à nova grade → limpa.
+        const validos = new Set(lista.map((t) => t.value));
+        setValues((v) => {
+          const atual = Number(String(v.tamanho_id ?? ''));
+          if (!atual || validos.has(atual)) return v;
+          return { ...v, tamanho_id: '' };
+        });
+      })
+      .catch(() => {
+        if (!alive) return;
+        setTamanhosDaGrade(null);
+        setGradeDoFormulario('');
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gradeAware, produtoDoFormulario]);
+
+  const refOptionsForm = useMemo(
+    () => (gradeAware && tamanhosDaGrade && tamanhosDaGrade.length ? { ...refOptions, tamanhos: tamanhosDaGrade } : refOptions),
+    [gradeAware, tamanhosDaGrade, refOptions]
+  );
+
   // Fase 5 — exportação, importação e filtros avançados
   const importTipo = IMPORT_TIPOS.find((t) => t.recurso === resource.key);
   const [importOpen, setImportOpen] = useState(false);
@@ -780,6 +825,17 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
             <Alert tone="red">{formError}</Alert>
           </div>
         )}
+        {gradeAware && produtoDoFormulario && (
+          <p className="mb-3 rounded-md bg-navy-50 px-3 py-2 text-xs text-navy-700">
+            {gradeDoFormulario ? (
+              <>
+                Grade do produto: <strong className="font-semibold">{gradeDoFormulario}</strong>. O campo Tamanho lista apenas estes tamanhos.
+              </>
+            ) : (
+              <>Este produto ainda não tem grade definida — a lista mostra todos os tamanhos cadastrados.</>
+            )}
+          </p>
+        )}
         <RecordForm
           resource={resource}
           values={values}
@@ -789,7 +845,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           onClear={clearForm}
           editing={!!editing}
           busy={saving}
-          refOptions={refOptions}
+          refOptions={refOptionsForm}
           before={
             hasImages && editing ? (
               <div>

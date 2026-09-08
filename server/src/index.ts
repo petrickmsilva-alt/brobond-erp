@@ -30,7 +30,7 @@ import { aceitarConvite, infoConvite, reenviarConvite, senhaTemporaria, resetarM
 import { limpezaPeriodica } from './sessoes';
 import { getPublicResource, publicMeta } from './resources';
 import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider, uploadsConfigError } from './uploads';
-import { productDetail } from './detail';
+import { produtoTamanhos, productDetail } from './detail';
 import { createItem, deleteItem, listItens, updateItem } from './itens';
 import {
   checkAccess,
@@ -222,6 +222,8 @@ app.post('/api/admin/financeiro/recorrencias', wrap(cronRecorrencias));
 
 // Página de detalhe do produto (fotos, grade de estoque, movimentações, OPs, ficha)
 app.get('/api/produtos/:id/detalhe', wrap(productDetail));
+// Tamanhos da grade do produto (seletores de tamanho sem mistura de grades)
+app.get('/api/produtos/:id/tamanhos', wrap(produtoTamanhos));
 
 // Itens de pedidos de venda/compra (sub-recursos) — antes das rotas genéricas
 app.get('/api/vendas/:id/itens', wrap(listItens));

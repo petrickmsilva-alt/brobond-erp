@@ -4,10 +4,35 @@
 // modo demonstração.
 import type { Request, Response } from 'express';
 import { currentUser } from './auth';
+import { HttpError } from './errors';
 import { RESOURCES } from './resources';
 import { checkAccess, getRecord, getStore, gradeDoProduto } from './services';
 import { medidasDaGrade } from './medidas';
 import { parseId } from './validate';
+
+/**
+ * GET /api/produtos/:id/tamanhos — apenas os tamanhos da grade efetiva do
+ * produto (grade do produto, senão da categoria). Serve para os seletores de
+ * tamanho (Movimentações, contagem de Inventário) não misturarem PP–GG com
+ * 36–48. Sem grade definida, devolve a lista completa para não travar o uso.
+ */
+export async function produtoTamanhos(req: Request, res: Response) {
+  checkAccess(RESOURCES.produtos, currentUser(req), 'read');
+  const id = parseId(req.params.id);
+  const s = getStore();
+  const produto = await s.findOneWhere(RESOURCES.produtos, { id });
+  if (!produto) throw new HttpError(404, 'Produto não encontrado.');
+  const grade = await gradeDoProduto(produto);
+  if (grade) {
+    res.json({ grade: { id: grade.gradeId, nome: grade.gradeNome }, tamanhos: grade.tamanhos });
+    return;
+  }
+  const todos = await s.list(RESOURCES.tamanhos, { page: 1, pageSize: 500, sort: 'ordem', dir: 'asc' });
+  res.json({
+    grade: null,
+    tamanhos: todos.rows.map((t) => ({ id: Number(t.id), codigo: String(t.codigo || '') })),
+  });
+}
 
 export async function productDetail(req: Request, res: Response) {
   const r = RESOURCES.produtos;

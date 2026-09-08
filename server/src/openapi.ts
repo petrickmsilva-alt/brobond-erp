@@ -70,6 +70,7 @@ function generateOpenAPISpec() {
   }
 
   // Endpoints especiais
+  paths['/api/produtos/{id}/tamanhos'] = { get: { tags: ['Produtos'], summary: 'Tamanhos da grade efetiva do produto (grade do produto, senão da categoria)', security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }], responses: { '200': { description: 'OK' } } } };
   paths['/api/produtos/{id}/detalhe'] = { get: { tags: ['Produtos'], summary: 'Detalhe completo do produto (grade, movimentações, OPs, ficha)', security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }], responses: { '200': { description: 'OK' } } } };
   paths['/api/produtos/{id}/qrcode'] = { get: { tags: ['Produtos'], summary: 'QR Code do produto (PNG)', security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }, { name: 'size', in: 'query', schema: { type: 'integer', default: 300 } }], responses: { '200': { description: 'Imagem PNG', content: { 'image/png': {} } } } } };
   paths['/api/vendas/{id}/pdf'] = { get: { tags: ['Vendas'], summary: 'PDF do pedido de venda', security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }], responses: { '200': { description: 'PDF', content: { 'application/pdf': {} } } } } };
