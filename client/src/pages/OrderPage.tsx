@@ -683,7 +683,6 @@ function imprimirPedido(tipo: Tipo, pedido: Record<string, any>, itens: Item[], 
     </div>
     ${pedido.observacoes ? `<div class="obs"><b>Observações:</b><br>${esc(pedido.observacoes)}</div>` : ''}
     <div class="foot">Documento gerado pelo BROBOND ERP em ${formatDate(new Date().toISOString())}</div>
-    <script>window.onload=function(){setTimeout(function(){window.print()},200)}</script>
   </body></html>`;
 
   const w = window.open('', '_blank', 'width=900,height=700');
@@ -691,4 +690,14 @@ function imprimirPedido(tipo: Tipo, pedido: Record<string, any>, itens: Item[], 
   w.document.open();
   w.document.write(html);
   w.document.close();
+  // Imprime a partir da janela pai: <script> inline no documento impresso é
+  // bloqueado pela CSP do app.
+  setTimeout(() => {
+    try {
+      w.focus();
+      w.print();
+    } catch {
+      /* a janela foi fechada antes de imprimir */
+    }
+  }, 250);
 }

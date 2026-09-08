@@ -46,7 +46,7 @@ import {
 } from './services';
 import { parseId } from './validate';
 import { HttpError } from './errors';
-import { assertProductionSecrets, corsOrigin, loginRateLimit, securityHeaders } from './security';
+import { assertProductionSecrets, bloquearSenhaProvisoria, corsOrigin, loginRateLimit, securityHeaders } from './security';
 import { initSentry, reportarErro } from './log';
 import { smtpConfigurado } from './mail';
 import { estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario } from './estoque';
@@ -160,6 +160,9 @@ app.get('/api/files/:id/:token', wrap(serveFile));
 // Autenticado
 // ----------------------------------------------------------------------------
 app.use('/api', wrap(requireAuth));
+// Conta com senha provisória (convite, reset ou admin padrão) só lê e só escreve
+// no próprio fluxo de troca de senha — ver bloquearSenhaProvisoria.
+app.use('/api', bloquearSenhaProvisoria);
 
 app.get('/api/auth/me', me);
 app.post('/api/auth/change-password', wrap(changePassword));

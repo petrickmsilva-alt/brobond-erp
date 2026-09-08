@@ -13,9 +13,9 @@ import { enviarArquivo, type ColunaExport } from './export';
 import type { Row } from './store';
 import { labelOf } from './store';
 import { HttpError } from './errors';
+import { round2, somaMoeda } from './utils';
 
 const FATURADAS = ['faturada', 'entregue'];
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 function periodo(req: Request): { de: string | null; ate: string | null } {
   const de = typeof req.query.de === 'string' && req.query.de ? String(req.query.de).slice(0, 10) : null;
@@ -90,7 +90,7 @@ async function relEstoquePosicao(req: Request, res: Response) {
         { key: 'valor', label: 'Valor (custo)', tipo: 'money' },
       ],
       linhas,
-      resumo: { pecas: linhas.reduce((a, l) => a + l.pecas, 0), valor: round2(linhas.reduce((a, l) => a + l.valor, 0)) },
+      resumo: { pecas: linhas.reduce((a, l) => a + l.pecas, 0), valor: somaMoeda(linhas.map((l) => l.valor)) },
     });
   }
   if (grupo === 'categoria' || grupo === 'colecao') {
@@ -117,7 +117,7 @@ async function relEstoquePosicao(req: Request, res: Response) {
         { key: 'valor', label: 'Valor (custo)', tipo: 'money' },
       ],
       linhas,
-      resumo: { pecas: linhas.reduce((a, l) => a + l.pecas, 0), valor: round2(linhas.reduce((a, l) => a + l.valor, 0)) },
+      resumo: { pecas: linhas.reduce((a, l) => a + l.pecas, 0), valor: somaMoeda(linhas.map((l) => l.valor)) },
     });
   }
   const linhas = [...porProduto.values()].sort((a, b) => b.valor - a.valor);
@@ -130,7 +130,7 @@ async function relEstoquePosicao(req: Request, res: Response) {
       { key: 'valor', label: 'Valor (custo)', tipo: 'money' },
     ],
     linhas,
-    resumo: { pecas: linhas.reduce((a, l) => a + l.pecas, 0), valor: round2(linhas.reduce((a, l) => a + l.valor, 0)) },
+    resumo: { pecas: linhas.reduce((a, l) => a + l.pecas, 0), valor: somaMoeda(linhas.map((l) => l.valor)) },
   });
 }
 
@@ -301,7 +301,7 @@ async function relVendas(req: Request, res: Response) {
       { key: 'comissao', label: 'Comissão', tipo: 'money' },
     ],
     linhas,
-    resumo: { valor: round2(linhas.reduce((a, l) => a + l.valor, 0)), comissao: round2(linhas.reduce((a, l) => a + l.comissao, 0)) },
+    resumo: { valor: somaMoeda(linhas.map((l) => l.valor)), comissao: somaMoeda(linhas.map((l) => l.comissao)) },
   });
 }
 
@@ -471,7 +471,7 @@ async function relFaturamento(req: Request, res: Response) {
     ],
     linhas: comDados.length ? comDados.slice().reverse() : linhas,
     resumo: {
-      faturamento: round2(linhas.reduce((a, l) => a + l.faturamento, 0)),
+      faturamento: somaMoeda(linhas.map((l) => l.faturamento)),
       faturamento_ano: round2(fatAnoAtual),
       faturamento_ano_anterior: round2(fatAnoAnterior),
       variacao_ano_pct: variacaoAno,
@@ -537,8 +537,8 @@ async function relComissoes(req: Request, res: Response) {
     ],
     linhas: lista,
     resumo: {
-      comissao: round2(lista.reduce((a, l) => a + l.comissao, 0)),
-      valor: round2(lista.reduce((a, l) => a + l.valor_vendas, 0)),
+      comissao: somaMoeda(lista.map((l) => l.comissao)),
+      valor: somaMoeda(lista.map((l) => l.valor_vendas)),
     },
     grafico: { rotulos: meses.map((m) => `${m.slice(5)}/${m.slice(2, 4)}`), valores: meses.map((m) => porMes.get(m)?.comissao ?? 0), formato: 'money' },
   });
@@ -591,7 +591,7 @@ async function relEstoqueMinimo(req: Request, res: Response) {
     resumo: {
       itens: linhas.length,
       faltando: linhas.reduce((a, l) => a + Number(l.faltando), 0),
-      custo_repor: round2(linhas.reduce((a, l) => a + Number(l.custo_repor), 0)),
+      custo_repor: somaMoeda(linhas.map((l) => Number(l.custo_repor))),
     },
   });
 }

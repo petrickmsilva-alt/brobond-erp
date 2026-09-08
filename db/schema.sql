@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
   email TEXT UNIQUE NOT NULL,
   senha_hash TEXT,
   perfil TEXT NOT NULL DEFAULT 'operador',   -- admin, gerente, operador
+  CONSTRAINT usuarios_perfil_valido CHECK (perfil IN ('admin', 'gerente', 'operador')),
   ativo BOOLEAN NOT NULL DEFAULT TRUE,
   ultimo_login TIMESTAMPTZ,
   criado_em TIMESTAMPTZ DEFAULT now(),
@@ -226,7 +227,8 @@ CREATE TABLE IF NOT EXISTS estoques (
   estoque_min INTEGER DEFAULT 0,
   criado_em TIMESTAMPTZ DEFAULT now(),
   atualizado_em TIMESTAMPTZ,
-  UNIQUE (produto_id, tamanho_id, local)
+  UNIQUE (produto_id, tamanho_id, local),
+  CONSTRAINT estoques_quantidade_nao_negativo CHECK (quantidade >= 0)
 );
 
 -- Movimentações (imutáveis — cada uma altera o saldo em `estoques`)
@@ -239,7 +241,9 @@ CREATE TABLE IF NOT EXISTS movimentacoes (
   quantidade INTEGER NOT NULL,
   motivo TEXT,
   usuario_id INTEGER,
-  data TIMESTAMPTZ DEFAULT now()
+  data TIMESTAMPTZ DEFAULT now(),
+  CONSTRAINT movimentacoes_tipo_valido CHECK (tipo IN ('entrada', 'saida', 'transferencia', 'ajuste')),
+  CONSTRAINT movimentacoes_quantidade_nao_zero CHECK (quantidade <> 0)
 );
 
 -- Produção
@@ -498,6 +502,7 @@ CREATE TABLE IF NOT EXISTS inventarios (
   local TEXT NOT NULL,
   local_id INTEGER REFERENCES locais(id),
   status TEXT DEFAULT 'aberto',            -- aberto | fechado
+  CONSTRAINT inventarios_status_valido CHECK (status IN ('aberto', 'fechado')),
   aberto_por TEXT,
   aberto_em TIMESTAMPTZ DEFAULT now(),
   fechado_por TEXT,
@@ -817,6 +822,8 @@ ALTER TABLE locais        ALTER COLUMN tipo        SET DEFAULT 'loja';
 ALTER TABLE vendas ADD COLUMN IF NOT EXISTS nfe_numero TEXT;
 ALTER TABLE vendas ADD COLUMN IF NOT EXISTS nfe_emitida_em TIMESTAMPTZ;
 ALTER TABLE vendas ADD COLUMN IF NOT EXISTS nfe_provider TEXT;
+-- Estado real da nota: sem esta coluna, uma simulação aparecia como documento emitido.
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS nfe_status TEXT NOT NULL DEFAULT 'nao_emitida';
 
 -- Status pendente_aprovacao (workflow de aprovação)
 -- (já coberto pelo status TEXT existente)

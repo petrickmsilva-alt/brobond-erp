@@ -7,6 +7,17 @@ export function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Soma valores monetários em centavos inteiros e devolve reais já arredondados.
+ * Somar `number` direto acumulando centavos fracionários (0.1 + 0.2) é como o
+ * total "andava" um centavo numa agregação longa; aqui a soma é exata.
+ */
+export function somaMoeda(vals: number[]): number {
+  let centavos = 0;
+  for (const v of vals) centavos += Math.round((Number(v) || 0) * 100);
+  return centavos / 100;
+}
+
 /** Arredonda para 3 casas decimais (quantidades de insumo). */
 export function round3(n: number): number {
   return Math.round(n * 1000) / 1000;

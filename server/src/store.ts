@@ -109,6 +109,20 @@ export interface Store {
   /** Soma `delta` ao saldo (cria o registro de estoque se não existir). */
   adjustStock(produtoId: number, tamanhoId: number, local: string, delta: number, tx?: Tx): Promise<Row>;
 
+  /**
+   * Como `adjustStock`, mas só aplica se o saldo resultante não ficar abaixo de
+   * `minimo` (padrão 0) — e a checagem faz parte da escrita, na mesma
+   * instrução. `adjustStock` + `if (saldo < 0) throw` lido antes deixa uma
+   * janela entre ler e gravar: duas saídas concorrentes veem o mesmo saldo e
+   * ambas abatem. Retorna null quando o abatimento não cabe.
+   */
+  tryAdjustStock(produtoId: number, tamanhoId: number, local: string, delta: number, tx?: Tx, minimo?: number): Promise<Row | null>;
+
+  /** Vários inserts em uma ida ao banco (usado no snapshot do inventário). */
+  insertMany(r: Resource, rows: Payload[], tx?: Tx): Promise<Row[]>;
+  /** UPDATE atômico condicionado ao valor atual: 0 linhas alteradas → null. */
+  tryUpdateIf(r: Resource, id: number, esperado: Payload, data: Payload, tx?: Tx): Promise<Row | null>;
+
   /** Soma `delta` ao saldo do insumo (cria o registro se não existir) e atualiza `atualizado_em`. */
   adjustInsumoStock(insumoId: number, delta: number, tx?: Tx): Promise<Row>;
   /** Saldo atual de um insumo (0 se nunca movimentado). */

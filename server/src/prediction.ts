@@ -14,8 +14,8 @@ import { checkAccess, getRecord } from './services';
 import { currentUser } from './auth';
 import { labelOf } from './store';
 import type { Row } from './store';
+import { round2 } from './utils';
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * Calcula previsão de demanda para um produto.

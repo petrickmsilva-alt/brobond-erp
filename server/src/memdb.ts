@@ -21,6 +21,7 @@ import {
   type Store,
   type Tx,
 } from './store';
+import { round2 } from './utils';
 
 type Table = { seq: number; rows: Map<number, Row> };
 
@@ -31,11 +32,6 @@ function norm(v: unknown): string {
 /** Arredonda para 3 casas decimais (quantidades de insumo). */
 function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
-}
-
-/** Arredonda para 2 casas decimais (valores monetários). */
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }
 
 export class MemStore implements Store {
@@ -275,6 +271,41 @@ export class MemStore implements Store {
       }
     }
     return this.insert(r, { produto_id: produtoId, tamanho_id: tamanhoId, local, quantidade: delta, estoque_min: 0 });
+  }
+
+  async tryUpdateIf(r: Resource, id: number, esperado: Payload, data: Payload): Promise<Row | null> {
+    const cur = this.table(r.table).rows.get(id);
+    if (!cur) return null;
+    for (const [k, v] of Object.entries(esperado)) {
+      const atual = cur[k];
+      if (v === null || v === undefined) {
+        if (atual !== null && atual !== undefined) return null;
+      } else if (String(atual) !== String(v)) return null;
+    }
+    return this.update(r, id, data);
+  }
+
+  async tryAdjustStock(produtoId: number, tamanhoId: number, local: string, delta: number, _tx?: unknown, minimo = 0): Promise<Row | null> {
+    const r = RESOURCES.estoques;
+    const t = this.table(r.table);
+    const linha = [...t.rows.values()].find((row) => row.produto_id === produtoId && row.tamanho_id === tamanhoId && row.local === local);
+    if (!linha) {
+      if (delta < minimo) return null;
+      if (delta === 0) return null;
+      return this.insert(r, { produto_id: produtoId, tamanho_id: tamanhoId, local, quantidade: delta, estoque_min: 0 });
+    }
+    const atual = Number(linha.quantidade || 0);
+    if (atual + delta < minimo) return null;
+    if (delta === 0) return { ...linha };
+    linha.quantidade = atual + delta;
+    linha.atualizado_em = new Date().toISOString();
+    return { ...linha };
+  }
+
+  async insertMany(r: Resource, rows: Payload[]): Promise<Row[]> {
+    const out: Row[] = [];
+    for (const d of rows) out.push(await this.insert(r, d));
+    return out;
   }
 
   async adjustInsumoStock(insumoId: number, delta: number): Promise<Row> {

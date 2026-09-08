@@ -12,7 +12,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { RESOURCES, getResource } from './resources';
-import { checkAccess, getDefaultLocal, getRecord, getStore, toHttpError } from './services';
+import { checkAccess, getDefaultLocal, getRecord, getStore, toHttpError, validarTamanhoNaGrade } from './services';
 import { currentUser } from './auth';
 import type { Row } from './store';
 import { parseId } from './validate';
@@ -242,23 +242,45 @@ export async function fecharInventario(req: Request, res: Response) {
       const itens = await s.list(RESOURCES.itens_inventario, { page: 1, pageSize: 5000, filter: { inventario_id: id } }, tx);
       let ajustes = 0;
       const detalhes: string[] = [];
+      const deslocados: string[] = [];
       for (const it of itens.rows) {
+        // linha não contada não gera ajuste
+        if (it.contado === null || it.contado === undefined) continue;
         const saldoSistema = Number(it.saldo_sistema || 0);
-        const contado = it.contado === null || it.contado === undefined ? saldoSistema : Number(it.contado);
-        const delta = contado - saldoSistema;
-        if (delta === 0) continue;
+        const contado = Number(it.contado);
         const produtoId = Number(it.produto_id);
         const tamanhoId = Number(it.tamanho_id);
-        await s.adjustStock(produtoId, tamanhoId, local, delta, tx);
+        const p = await s.findOneWhere(RESOURCES.produtos, { id: produtoId }, tx);
+        const t = await s.findOneWhere(RESOURCES.tamanhos, { id: tamanhoId }, tx);
+        const nome = `${p ? labelOf(RESOURCES.produtos, p) : `#${produtoId}`}${t?.codigo ? ` ${t.codigo}` : ''}`;
+
+        // O alvo é o CONTADO, e o ponto de partida é o saldo de AGORA: se alguém
+        // movimentou o SKU com a contagem aberta, o saldo congelado na abertura já
+        // não representa a realidade — fechar sobre ele deixava o estoque errado
+        // (e, com sorte, negativo).
+        const linha = await s.findOneWhere(RESOURCES.estoques, { produto_id: produtoId, tamanho_id: tamanhoId, local }, tx);
+        const saldoAtual = Number(linha?.quantidade ?? 0);
+        if (saldoAtual !== saldoSistema) deslocados.push(`${nome}: congelado ${saldoSistema} → atual ${saldoAtual}`);
+        const delta = contado - saldoAtual;
+        if (delta === 0) continue;
+
+        // a mesma regra da API de movimentações vale para o ajuste do inventário
+        await validarTamanhoNaGrade(produtoId, tamanhoId, tx);
+
+        if (delta < 0) {
+          const aplicado = await s.tryAdjustStock(produtoId, tamanhoId, local, delta, tx);
+          if (!aplicado) {
+            throw new HttpError(409, `O inventário #${id} baixaria ${Math.abs(delta)} peça(s) de "${nome}", mas só há ${saldoAtual} em "${local}".`);
+          }
+        } else {
+          await s.adjustStock(produtoId, tamanhoId, local, delta, tx);
+        }
         await s.insert(
           RESOURCES.movimentacoes,
           { tipo: 'ajuste', produto_id: produtoId, tamanho_id: tamanhoId, local, quantidade: delta, motivo: `Inventário #${id}`, usuario_id: actor.id || null },
           tx
         );
-        const p = await s.findOneWhere(RESOURCES.produtos, { id: produtoId }, tx);
-        const t = await s.findOneWhere(RESOURCES.tamanhos, { id: tamanhoId }, tx);
-        const nome = p ? labelOf(RESOURCES.produtos, p) : `#${produtoId}`;
-        detalhes.push(`${nome}${t ? ` ${t.codigo}` : ''}: ${saldoSistema} → ${contado}`);
+        detalhes.push(`${nome}: ${saldoAtual} → ${contado}`);
         ajustes++;
       }
       await s.update(RESOURCES.inventarios, id, { status: 'fechado', fechado_por: actor.name, fechado_em: new Date().toISOString() }, tx);
@@ -269,12 +291,12 @@ export async function fecharInventario(req: Request, res: Response) {
           acao: 'ajuste',
           recurso: 'inventarios',
           registro_id: id,
-          descricao: `Inventário #${id} fechado no local "${local}" — ${ajustes} ajuste(s) gerado(s): ${detalhes.join('; ')}`,
-          dados: { ajustes, local },
+          descricao: `Inventário #${id} fechado no local "${local}" — ${ajustes} ajuste(s) gerado(s): ${detalhes.join('; ')}${deslocados.length ? ` | movimentação durante a contagem: ${deslocados.join('; ')}` : ''}`,
+          dados: { ajustes, local, deslocados },
         },
         tx
       );
-      return { ok: true, ajustes, fechado_em: new Date().toISOString() };
+      return { ok: true, ajustes, deslocados, fechado_em: new Date().toISOString() };
     });
     res.json(out);
   } catch (e) {
@@ -361,18 +383,19 @@ export async function estornarMovimentacao(req: Request, res: Response) {
        * Um estorno não pode deixar saldo negativo — é a mesma regra da saída
        * normal. Sem isso, estornar uma entrada cujas peças já foram vendidas
        * derrubava o saldo para baixo e a matriz de estoque perdia a verdade.
+       * O abate é condicional na própria escrita (tryAdjustStock), então duas
+       * requisições simultâneas não passam as duas.
        */
-      const garantirSaldoParaRetirada = async (loc: string, retirada: number) => {
-        if (retirada <= 0) return;
+      const retirar = async (loc: string, retirada: number) => {
+        const aplicado = await s.tryAdjustStock(produtoId, tamanhoId, loc, -retirada, tx);
+        if (aplicado) return;
         const linha = await s.findOneWhere(RESOURCES.estoques, { produto_id: produtoId, tamanho_id: tamanhoId, local: loc }, tx);
         const atual = Number(linha?.quantidade ?? 0);
-        if (atual < retirada) {
-          throw new HttpError(
-            409,
-            `O estorno retiraria ${retirada} peça(s) de "${loc}", mas só há ${atual} em estoque. Estorne primeiro as movimentações que consumiram essas peças.`,
-            { quantidade: `Saldo atual: ${atual}` }
-          );
-        }
+        throw new HttpError(
+          409,
+          `O estorno retiraria ${retirada} peça(s) de "${loc}", mas só há ${atual} em estoque. Estorne primeiro as movimentações que consumiram essas peças.`,
+          { quantidade: `Saldo atual: ${atual}` }
+        );
       };
 
       // Ajusta o estoque (inverte o efeito original)
@@ -380,15 +403,14 @@ export async function estornarMovimentacao(req: Request, res: Response) {
         const localDestino = String(mov.local_destino || '');
         if (!localDestino) throw new HttpError(400, 'Transferência sem local de destino.');
         // Inverte: volta do destino para a origem
-        await garantirSaldoParaRetirada(localDestino, quantidade);
-        await s.adjustStock(produtoId, tamanhoId, localDestino, -quantidade, tx);
+        await retirar(localDestino, quantidade);
         await s.adjustStock(produtoId, tamanhoId, local, quantidade, tx);
       } else {
         // Para entrada/saida/ajuste, inverte o delta
         const deltaOriginal = tipo === 'entrada' ? quantidade : tipo === 'saida' ? -quantidade : quantidade;
         const deltaInverso = -deltaOriginal;
-        await garantirSaldoParaRetirada(local, Math.max(0, -deltaInverso));
-        await s.adjustStock(produtoId, tamanhoId, local, deltaInverso, tx);
+        if (deltaInverso < 0) await retirar(local, -deltaInverso);
+        else await s.adjustStock(produtoId, tamanhoId, local, deltaInverso, tx);
       }
 
       // Cria a movimentação de estorno

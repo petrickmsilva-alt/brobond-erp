@@ -8,13 +8,13 @@ Método: leitura do código dos caminhos de escrita (estoque, movimentações, i
 | Dimensão | Nota | Comentário |
 |---|---|---|
 | Modelo de dados / ERP de confecção | bom | grades, tabela de medidas, locais, ficha/BOM, OP, estorno, catálogo público |
-| Integridade de estoque | **frágil** | saldo dependia de checagem fora de transação atômica; estorno furava o zero (**reproduzido**) |
+| Integridade de estoque | bom (era **frágil**) | estorno furava o zero e o abate não era atômico — os dois fechados neste PR, com teste de concorrência no Postgres |
 | Segurança de acesso | razoável | Argon2id, MFA/TOTP, sessões, reauth, rate limit persistente, cadeia de auditoria com hash |
-| Segurança de configuração | **frágil** | segredo/credencial padrão só geravam *warning* no boot (**corrigido**) |
-| Constraints no banco | baixo | **zero** `CHECK`/`ENUM`; toda a domínio vive na aplicação |
-| Testes | razoável → bom | 83 → 96 nesta entrega; ainda sem cobertura de financeiro, NF-e e importação |
-| Observabilidade / ops | razoável | log estruturado, health check, backup admin, migração idempotente no boot |
-| Maturidade fiscal | **enganosa** | NF-e grava número de nota sem chamar emissor (**não corrigido — decisão de produto**) |
+| Segurança de configuração | bom | o boot **já** abortava sem `JWT_SECRET`/`ADMIN_PASSWORD` em produção (`assertProductionSecrets`); minha afirmação anterior estava errada — ver §1.4. Faltava restringir a escrita com senha provisória (corrigido) |
+| Constraints no banco | razoável (era **zero**) | 7 `CHECK` de domínio + índice único de saldos, por migração versionada (`schema_migrations`) |
+| Testes | bom | 83 → 106 (2 exigem Postgres e rodam em job próprio); ainda sem cobertura de importação e do fluxo de caixa completo |
+| Observabilidade / ops | razoável → bom | log estruturado, health check, backup admin; migração agora versionada (`schema_migrations`) e falha no boot em vez de seguir pela metade |
+| Maturidade fiscal | honesto, mas incompleto | NF-e não forja mais documento: simulação é marcada e a emissão real devolve 503 (o cliente do emissor continua inexistente) |
 
 ## 1. Corrigido neste PR (com evidência)
 
@@ -36,81 +36,144 @@ Depois: `400` com lista do que a grade aceita (`server/src/services.ts`, `valida
 
 Depois: `createRecord` marca `status='aberto'` no create (`services.ts`) — mesma semântica do Postgres, e a paridade memdb/Postgres volta. Testes cobrem snapshot **e** fechamento.
 
-### 1.4 Deploy podia subir com credenciais e chave forjáveis — P1-segurança · *confirmado no código*
+### 1.4 ~~Deploy podia subir com segredos forjáveis~~ — RETRATADO
 
-`JWT_SECRET` ausente ⇒ assinava com `'brobond-dev-secret'` (só um `console.warn`); `ADMIN_PASSWORD` ausente ⇒ admin nascia com `brobond123`, senha que está publicada no README. Em ambos os casos o serviço subia e ficava "normal". Agora, com `NODE_ENV=production`, o boot **falha** com mensagem do que definir (`server/src/auth.ts`). Dev e teste seguem com fallback.
+A primeira versão deste relatório afirmou que `JWT_SECRET`/`ADMIN_PASSWORD` ausentes
+geravam só `console.warn`. **Está errado.** A checagem já existia no `main`:
+`assertProductionSecrets()` (`server/src/security.ts:15`, chamada no boot em
+`index.ts:88`) aborta com `exit(1)` quando `JWT_SECRET` tem menos de 24 caracteres
+ou é o valor padrão, quando `ADMIN_PASSWORD` falta/é fraca/é `brobond123`, e avisa
+sobre `MFA_ENCRYPTION_KEY`. O erro de método foi meu: procurei a constante dentro de
+`auth.ts` e generalizei a partir dali, sem rastrear o boot. O `throw` extra que eu
+tinha adicionado em `auth.ts` foi revertido neste PR (duplicaria a mesma regra em dois
+arquivos).
+
+Sobra daí um item real, mas menor: `SEED_DEMO` não existe neste repositório (só
+`db/seed.sql`, aplicado à mão) — não há, portanto, risco de "subir com dados de
+demo em produção" via variável esquecida. O que faltava de verdade na área era a
+restrição de conta com senha provisória, hoje no **P1-D** (corrigido).
 
 ### 1.5 Higiene
 
-`prefer-const` em `catalogos.ts:110-111` (2 erros de lint que vinham do #22) — `npm run lint` não gera mais erro nesses arquivos. Testes: +13 (`grades.test.ts`, `auditoria.test.ts`).
+`prefer-const` em `catalogos.ts:110-111` (2 erros de lint que vinham do #22) — `npm run lint` não gera mais erro nesses arquivos. Testes: +13 nesta primeira rodada (`grades.test.ts`, `auditoria.test.ts`); a segunda rodada (seção 2) levou a 106.
 
-## 2. Achados abertos (recomendações, em ordem de execução)
+## 2. Achados e o que foi feito no mesmo PR
 
-### P1-A · Saldo: checagem e escrita não são atômicas
+Status de cada um; *o que* mudou está no commit, não aqui — esta seção existe para
+registrar a decisão e o que ficou de fora.
 
-`createMovimentacao` lê o saldo (`findOneWhere`), decide, e só então chama `adjustStock`. No Postgres há um round-trip de rede entre os dois — duas vendas concorrentes do mesmo SKU podem ambas ver "saldo 1" e ambas abater. O `adjustStock` é atômico (`ON CONFLICT DO UPDATE`), a **decisão** não é.
+### P1-A · Saldo com checagem e escrita separadas — ✅ corrigido
 
-Sugestão: `UPDATE estoques SET quantidade = quantidade + $d WHERE id = $1 AND quantidade + $d >= 0 RETURNING *`; 0 linhas afetadas ⇒ `409`. Alternativa: `SELECT ... FOR UPDATE` na linha do estoque dentro da transação. Testar com 2 requisições simultâneas em Postgres real (aqui, no memdb single-thread, a janela não aparece — por isso o teste de concorrência precisa de PG).
+Novo método de store `tryAdjustStock(produto, tamanho, local, delta, tx, minimo)`
+(`store.ts`, `pgstore.ts`, `memdb.ts`): garante a linha do saldo e abate com a
+condição **dentro do `UPDATE`** (`... SET quantidade = quantidade + $4 WHERE ... AND
+quantidade + $4 >= $5 RETURNING *`); zero linhas ⇒ `null` ⇒ `409`. Passaram a usar
+isto: `createMovimentacao` (saída, ajuste negativo e transferência na origem), o
+estorno de inventário (`estoque.ts`), o faturamento de venda (`itens.ts:316`) e a
+reabertura de OP (`producao.ts:216`, que antes podia deixar estoque negativo ao
+"estornar" peças já vendidas — achado novo, não estava no relatório original).
+Prova de concorrência: `server/test/pg-concorrencia.test.ts` (job `testes-postgres`)
+— saldo 1, duas saídas simultâneas, exatamente uma vence. No memdb isso não é
+testável; ver o teste que documenta a limitação em `auditoria.test.ts`.
 
-### P1-B · Fechamento de inventário ignora o que se moveu durante a contagem
+### P1-B · Fechamento de inventário sobre saldo congelado — ✅ corrigido (opção b)
 
-O ajuste é `contado - saldo_sistema` (saldo **congelado na abertura**) aplicado sobre o saldo **atual**. Se alguém movimentar o SKU com a contagem aberta, o resultado não é o contado — e pode ficar negativo. `fecharInventario` ainda escreve em `movimentacoes` por `s.insert`, pulando `createMovimentacao` (e portanto as regras do item 1.2).
+`fecharInventario` agora recalcula `delta = contado − saldo_atual` (nunca sobre o
+congelado da abertura), recusa empurrar o saldo para negativo, valida o tamanho na
+grade antes de gerar o ajuste e devolve `deslocados[]` com o par *congelado → atual*
+de toda linha que se moveu durante a contagem (registrado também na auditoria). Não
+roteei por `createMovimentacao` porque o fechamento inteiro já corre dentro de uma
+transação e o serviço abriria outra — em vez disso ele chama as mesmas primitivas
+(`tryAdjustStock` + `insert` em `movimentacoes` com o mesmo formato).
 
-Sugestão (duas opções, escolher uma): (a) bloquear movimentações no local enquanto houver inventário aberto do local (o ERP de verdade faz isso, com exceção para o próprio contador); (b) no fechar, recalcular contra o saldo atual e, se divergir do congelado, exigir recontagem da linha. Em ambos, rotear o ajuste por `createMovimentacao`.
+### P1-C · NF-e — ✅ corrigido o engano; a integração continua pendente
 
-### P1-C · NF-e escreve número de nota sem emitir nada
+Decisão tomada: sem cliente de emissor, **não existe caminho para marcar nota como
+emitida**. `vendas.nfe_status` (`nao_emitida | simulada | emitida | cancelada`) é
+coluna nova; a simulação (`NFE_MODO=simulacao`) grava `simulada` + número `SIM-*` e
+diz na resposta e na auditoria que não tem valor fiscal; com provedor configurado e
+sem o modo, o endpoint devolve `503`; sem nada configurado, `409`. A escrita é
+condicionada ao valor lido (`tryUpdateIf`), então dois cliques não emitem duas notas,
+e o CRUD de vendas descarta `nfe_*` — ninguém forja "emitida" pela tela. Cancelamento
+/acerto continuam fora (dependem do emissor real).
 
-`nfeEmitir` (server/src/nfe.ts:116) monta os dados, grava a auditoria "emissão solicitada", gera `NFE-<id>-<timestamp>` e **persiste** `nfe_numero`, `nfe_emitida_em`, `nfe_provider` no pedido. A resposta diz "(simulação)", mas o registro fica indistinguível de uma nota emitida: bloqueia nova emissão (`já possui NF-e`), aparece como emitida em listagens e relatórios. Fiscalmente, número inventado em banco é o pior tipo de dado.
+### P1-D · Senha provisória com acesso total de escrita — ✅ corrigido
 
-Sugestão: coluna `nfe_status` (`não emitida | solicitada | simulada | autorizada`), não gravar número enquanto não houver chamada ao provedor, badge vermelho na tela, e só liberar `nfe_numero` real. É decisão de produto — por isso **não** alterei neste PR.
+`bloquearSenhaProvisoria` (`security.ts`) montado logo depois de `requireAuth`
+(`index.ts:163`): com `trocar_senha` ativo, só `GET` e o fluxo `/api/auth/{me,
+change-password,logout,logout-all,reautenticar,sessoes,mfa}`; o resto devolve `403`
+com `code: SENHA_PROVISORIA`. O front já mandava esse usuário para Configurações →
+Senha, então o fluxo normal não muda — quem insistir em API/ integrações recebe a
+regra explícita em vez de silêncio.
 
-### P1-D · Conta com senha provisória tem acesso total de escrita
+### P1-E · MFA que se auto-ativa — ⏸ depende de decisão
 
-`trocar_senha = true` não restringe nada na API: só alimenta o rótulo `senha_status`. Um convite aceito (ou o admin padrão) pode criar movimentações, fechar inventário e mexer em financeiro antes de trocar a senha.
+A correção honesta exige canal fora-de-banda (o segredo TOTP sair do JSON de
+`/api/auth/mfa/desafio` e ir por e-mail, com ativação só depois de reautenticação).
+Sem SMTP configurado no deploy do dono, isso quebra o primeiro acesso. Decisão dele;
+nenhum dos dois lados foi mexido neste PR.
 
-Sugestão: middleware negando `POST/PUT/PATCH/DELETE` (exceto `/api/auth/trocar-senha`, ` logout`, leituras) enquanto `trocar_senha` estiver ativo.
+### P2-A · CSP e moldura — ✅ cabeçalhos; ⏸ token em cookie
 
-### P1-E · O MFA do administrador se auto-ativa sem prova de posse
+CSP no `securityHeaders`: `default-src 'self'`, `script-src 'self'`, `object-src 'none'`,
+`base-uri 'self'`, `form-action 'self'`, `frame-ancestors 'self'`, fontes do Google e
+Cloudinary liberados onde o app realmente busca, `style-src 'unsafe-inline'` (o React
+escreve `style=""`), `upgrade-insecure-requests` em produção, e `X-Frame-Options` em
+qualquer ambiente. `/api/docs` fica fora da CSP (Swagger UI de CDN com script inline —
+página pública). Consequência unavoidable: a impressão de etiquetas e de pedido
+deixou de usar `<script>` inline na janela aberta e passou a disparar `print()` da
+janela pai (`LabelSheet.tsx`, `OrderPage.tsx`) — com CSP estrita o documento impresso
+perderia o auto-print. Token de `localStorage` → cookie `HttpOnly; SameSite=Lax`
+continua aberto: mexe em todo o front de auth e em qualquer integração que use o header.
 
-Fluxo verificado ponta a ponta com `curl`: `login` (só a senha) → `mfa_ticket` → `POST /api/auth/mfa/desafio` com o ticket devolve o **segredo TOTP** em JSON → o cliente gera o código → `POST /api/auth/login/mfa` valida → `auth.ts:274-287` grava `mfa_ativado_em` ali mesmo. Quem sabe a senha, portanto, ativa o próprio autenticador, passa no segundo fator e ainda passa a ser "usuário MFA" para sempre — o controle não agrega nada no momento em que mais importa (primeiro acesso de uma conta nova, exatamente o estado de um deploy recém-criado).
+### P2-B / P2-C · Constraints de domínio + migração versionada — ✅ feito
 
-Sugestão: o desafio de cadastro só depois de reautenticação; ativar MFA somente via `POST /api/auth/mfa/ativar` com código conferido; opcional enviar o segredo por canal fora da banda (e-mail de convite). Registrar na auditoria qualquer ativação.
+`db/migrations/0001_integridade_dominio.sql` cria, por um laço em `plpgsql`
+idempotente, os `CHECK`: saldo não negativo, `local` não vazio, `tipo` de
+movimentação, `quantidade <> 0`, status de inventário, perfil de usuário e
+`nfe_status`; e o índice único `(produto_id, tamanho_id, local)` quando não há
+duplicatas (com `NOTICE` dizendo o que fazer se houver). `NOT VALID` + `VALIDATE`
+tentado: dado legado ilegável não trava o boot, mas a gravação nova é verificada.
+O runner (`db.ts:aplicarMigrationsVersionadas`) cria `schema_migrations(id,
+aplicado_em)`, aplica em ordem léxica, um arquivo por transação, e aborta o boot em
+falha. Os mesmos `CHECK` foram espelhados inline no `schema.sql` (banco novo já
+nasce com eles) e a regra de saldo negativo está no CRUD (`garantirSaldoNaoNegativo`)
+para o modo demonstração não ficar mais frouxo que o Postgres.
 
-### P2-A · Superfície de XSS/CSRF do token
+### P2-D · Dois stores, um contrato — ✅ CI com Postgres incluído
 
-Token em `localStorage` (`client/src/lib/api.ts`) e sem `Content-Security-Policy`; `X-Frame-Options` só em produção. O único `dangerouslySetInnerHTML` do front (etiqueta, `LabelSheet.tsx:154`) está **protegido** por `escapeXml` no `barcodeSvg` — verificado, não há vetor ali. Sugestão: CSP com `default-src 'self'`, `frame-ancestors 'self'`, cookie `HttpOnly; SameSite=Lax` para o token (com o header ainda servindo APIs de integração), e `X-Frame-Options` sempre.
+Job `testes-postgres` (serviço `postgres:16`, `continue-on-error`) roda
+`npm --prefix server run test:pg`; o arquivo só existe rodando com `DATABASE_URL`,
+caso contrário se auto-pula — a suíte local não mudou de comportamento. Um passo de
+`lint` entrou no job principal.
 
-### P2-B · Banco sem constraints de domínio
+### P2-E · Round-trips e agregações — ✅ parte feita, ⏸ agregações SQL
 
-`grep -c CHECK db/schema.sql` = **0**. `status` de inventário, `tipo` de movimentação, `quantidade <> 0`, `quantidade >= 0`, `perfil` de usuário, `UNIQUE(grades.nome)` — tudo vive só no TypeScript. Bugs como o 1.1/1.3 existem porque o banco aceita qualquer coisa. Sugestão: `CHECK` onde a regra é imutável + `UNIQUE` de nomes de cadastro + `NOT NULL` em FKs obrigatórias; `ALTER TABLE ... ADD CONSTRAINT ... NOT VALID` para não travar dados legados, `VALIDATE` depois.
+O snapshot do inventário passou de um `INSERT` por linha para `insertMany` (um
+statement) e o teto deixou de ser 2000 (agora recusa explicitamente acima de 20000,
+em vez de contar metade do estoque em silêncio). As somas da matriz de estoque e dos
+relatórios continuam em JS sobre páginas carregadas: virar `SUM`/`GROUP BY` no SQL
+pede um método de agregação no contrato de store (e uma decisão sobre o que a matriz
+precisa mostrar por local) — ficou para a próxima rodada.
 
-### P2-C · Migração = schema.sql idempotente no boot
+### P2-F · Dinheiro — ✅ helper único e soma em centavos
 
-`db.ts` executa o arquivo inteiro na subida. Serve para criar, não para evoluir: não expressa rename/backfill, e uma falha no meio do arquivo deixa o banco pela metade, sem versionamento nem "já aplicado". Sugestão: arquivos numerados + tabela `schema_migrations`, `npm run migrate` no deploy, e o boot apenas **validando** a versão esperada (falha rápido, não conserta).
+`server/src/utils.ts` já tinha `round2`/`round3` e **ninguém importava**: 10 módulos
+reinventavam o arredondamento. Agora importam o compartilhado, e `somaMoeda(vals[])`
+acumula em centavos inteiros — usado nos 25 pontos de `financeiro.ts`/`relatorios.ts`
+que somavam valores e arredondavam no fim (o lugar onde o centavo andava).
 
-### P2-D · Dois stores com regras espelhadas
+### P2-G · Custo médio de produto acabado — ⏸ decisão de valuacao
 
-`pgstore.ts` e `memdb.ts` implementam o mesmo contrato; regra de negócio e comportamento de default escapam de um para o outro (o item 1.3 é um caso clássico). Sugestão: rodar a mesma suíte contra Postgres no CI (`services: postgres:16`) e manter o memdb como seed de demonstração, não como segunda implementação de referência.
+Continua como estava. Mexer em entrada de OP/devolução para custo médio ponderado
+muda o CMV e o valor de estoque exibidos no relatório que o dono usa hoje; precisa de
+uma régua dele (e de aceito de reprocessamento de histórico) antes de ser feito.
 
-### P2-E · Agregações em JS sobre páginas carregadas
+### P3 · Produto
 
-A matriz de estoque e os relatórios fazem `list(..., pageSize: 2000/5000/10000)` e somam em JS; `abrirInventarioSnapshot` insere linha a linha (até 2000 `INSERT` sequenciais). Com catálogo e histórico crescendo, isso vira latência e memória de processo. Sugestão: `INSERT ... SELECT` no snapshot, `SUM`/`GROUP BY` no SQL para totais, e paginação real (ou cursor) na matriz. Índices dos filtros quentes já existem (`idx_movimentacoes_produto_tamanho`, `idx_movimentacoes_prod`, `idx_estoques_produto`) — conferir apenas os de data+local.
-
-### P2-F · Dinheiro em float na camada de cálculo
-
-O schema usa `NUMERIC(12,2)` (certo), mas a aplicação calcula com `Number` + `Math.round(x*100)/100` espalhado (`financeiro.ts:20`, `catalogos.ts:316`, `detail.ts:79`...). Em agregação longa, o centavo anda. Sugestão: somar no SQL; onde somar em JS, usar centavos inteiros e formatar na borda; um único helper de arredondamento.
-
-### P2-G · Custo médio só de insumo
-
-`custo_medio` existe e é atualizado no recebimento/estorno de compra — para **insumos**. Produto acabado é valorizado por `produtos.custo` fixo, então o valor de estoque e o CMV não acompanham o custo real de produção. Sugestão: custo médio ponderado de acabado na entrada (OP concluída / devolução de venda), com `estoque_valorizacao` por local se quiser rigor de acerto de inventário.
-
-### P3 · Lacunas de "ERP profissional" (produto)
-
-- Reserva/alocação: pedido faturado desconta direto; não há saldo *disponível* (reservado vs. livre), então dois vendedores vendem a mesma peça.
-- Contagem cega por aplicação no inventário (o digitador não deveria ver o saldo do sistema) — hoje a tela mostra `Saldo no sistema` ao lado do campo de contagem, o que vicia a conferência.
-- Lote/cor/tamanho como eixos de relatório: a matriz tem grade, mas curva ABC/ruptura por grade ainda não é cidadão de primeira classe.
-- Ponto de reposição + sugestão de compra (existem `estoque_min` e previsão; falta o elo com pedido de compra automático).
-- Acerto/cancelamento de NF-e e carta de correção dependem da decisão do P1-C.
+Sem alteração: reserva/alocação de saldo (dois vendedores ainda podem vender a mesma
+peça — o P1-A só garante que o saldo não fica negativo), contagem cega no inventário,
+curva ABC por grade e ponto de reposição ligado a pedido de compra.
 
 ## 3. O que já está bom (não mexer por impulso)
 
@@ -121,11 +184,19 @@ O schema usa `NUMERIC(12,2)` (certo), mas a aplicação calcula com `Number` + `
 - SQL do store genérico interpola apenas identificadores de whitelist de recurso e parametriza valores — não encontrei injection em `sort`/`filter`/`search` (`orderClause`/`searchClause`).
 - `render.yaml` já gera `JWT_SECRET` e `MFA_ENCRYPTION_KEY` (`generateValue: true`).
 
-## 4. Ordem sugerida
+## 4. Próximos passos sugeridos
 
-1. P1-B + P1-A juntos (mesmo arquivo, mesmo teste de concorrência) — é o que ainda pode corromper estoque em produção.
-2. P1-D e P1-E (auth, ~1 dia somado, sem impacto no fluxo feliz de quem já trocou senha e ativou MFA).
-3. P1-C depois da sua decisão de produto (simulação explícita).
-4. P2-B + P2-C (constraints + versionamento de migração) antes de o histórico crescer.
-5. P2-D (CI com Postgres) como pré-requisito de 1.
-6. P2-A, P2-E, P2-F, P2-G, P3 no ritmo das sprints.
+1. **P1-E (MFA)** — definir o canal fora-de-banda (e-mail de convite com o QR, ou
+   código impresso). Aí sai a auto-ativação e o segredo some do `mfaDesafio`.
+2. **P2-E restante** — agregação no SQL (matriz/relatórios) com método `aggregate`
+   no contrato de store; medir com o catálogo real antes de escolher o shape.
+3. **P2-G** — valoração de acabado com custo médio ponderado, depois de acordado o
+   tratamento do histórico.
+4. **Reserva/alocação** — o próximo problema de estoque verdadeiro: saldo *livre* vs.
+   *vendido* (o P1-A fechou só o negativo).
+5. **Token em cookie HttpOnly** — remover o `localStorage` do front de auth.
+
+*Nota de método, que vale para a próxima auditoria:* o item 1.4 foi retractado
+porque generalizei a partir de um `grep` num único arquivo. Todos os achados desta
+rodada foram revalidados contra a base `9c14dae` (`git show 9c14dae:<arquivo>`) e,
+quando possível, reproduzidos por chamada HTTP antes de virar código.

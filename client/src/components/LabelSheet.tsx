@@ -114,14 +114,23 @@ export function LabelSheet({
            .price{font-size:9pt;font-weight:800;text-align:right}`;
 
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Etiquetas — ${esc(produto.sku || '')}</title><style>${css}</style></head>
-      <body><div class="sheet">${items.map((i) => label(i.size)).join('')}${medidasBlock}</div>
-      <script>window.onload=function(){setTimeout(function(){window.print()},150)}</script></body></html>`;
+      <body><div class="sheet">${items.map((i) => label(i.size)).join('')}${medidasBlock}</div></body></html>`;
 
     const w = window.open('', '_blank', 'width=900,height=700');
     if (!w) return alert('O navegador bloqueou a janela de impressão. Permita pop-ups para este site.');
     w.document.open();
     w.document.write(html);
     w.document.close();
+    // O gatilho de impressão vem da janela pai: um <script> inline dentro do
+    // documento impresso seria bloqueado pela CSP do app.
+    setTimeout(() => {
+      try {
+        w.focus();
+        w.print();
+      } catch {
+        /* a janela foi fechada antes de imprimir */
+      }
+    }, 250);
     void kind;
     void user;
   }
