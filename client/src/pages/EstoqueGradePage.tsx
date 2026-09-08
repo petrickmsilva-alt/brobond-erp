@@ -14,7 +14,7 @@ type GradeResp = {
   locaisDisponiveis: string[];
   totalPecas: number;
   linhas: {
-    produto: { id: number; sku: string; nome: string; cor: string | null; cor_hex: string | null; categoria_id__label: string | null; colecao_id__label: string | null; foto_url: string | null; preco_venda: number; custo: number };
+    produto: { id: number; sku: string; nome: string; cor: string | null; cor_hex: string | null; categoria_id__label: string | null; colecao_id__label: string | null; grade_id: number | null; grade_nome: string | null; foto_url: string | null; preco_venda: number; custo: number };
     celulas: { tamanho_id: number; quantidade: number; estoque_min: number }[];
     total: number;
   }[];
@@ -36,6 +36,7 @@ export default function EstoqueGradePage() {
   const [local, setLocal] = useState('');
   const [colecaoId, setColecaoId] = useState('');
   const [categoriaId, setCategoriaId] = useState('');
+  const [gradeId, setGradeId] = useState('');
   const [q, setQ] = useState('');
   const [soAlertas, setSoAlertas] = useState(false);
   const [opts, setOpts] = useState<Record<string, { value: number; label: string }[]>>({});
@@ -62,6 +63,7 @@ export default function EstoqueGradePage() {
       if (local) params.set('local', local);
       if (colecaoId) params.set('colecao_id', colecaoId);
       if (categoriaId) params.set('categoria_id', categoriaId);
+      if (gradeId) params.set('grade_id', gradeId);
       const d = await api.get<GradeResp>(`/estoques/grade?${params.toString()}`);
       setData(d);
       if (!local && d.locaisDisponiveis.length) setLocal((l) => l || '');
@@ -70,7 +72,7 @@ export default function EstoqueGradePage() {
     } finally {
       setLoading(false);
     }
-  }, [local, colecaoId, categoriaId]);
+  }, [local, colecaoId, categoriaId, gradeId]);
 
   useEffect(() => {
     load();
@@ -80,6 +82,7 @@ export default function EstoqueGradePage() {
     Promise.all([
       api.get<{ value: number; label: string }[]>('/colecoes/options').then((o) => ({ k: 'colecoes', o })),
       api.get<{ value: number; label: string }[]>('/categorias/options').then((o) => ({ k: 'categorias', o })),
+      api.get<{ value: number; label: string }[]>('/grades/options').then((o) => ({ k: 'grades', o })),
       api.get<{ value: number; label: string }[]>('/locais/options').then((o) => ({ k: 'locais', o })),
     ])
       .then((pairs) => setOpts(Object.fromEntries(pairs.map((p) => [p.k, p.o]))))
@@ -360,6 +363,17 @@ export default function EstoqueGradePage() {
                 ))}
               </select>
             </label>
+            <label className="block">
+              <span className="label">Grade</span>
+              <select className="input" value={gradeId} onChange={(e) => setGradeId(e.target.value)}>
+                <option value="">Todas</option>
+                {opts.grades?.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input className="input pl-9" placeholder="Buscar produto/SKU/cor..." value={q} onChange={(e) => setQ(e.target.value)} />
@@ -398,6 +412,13 @@ export default function EstoqueGradePage() {
                             {linha.produto.cor ? <span className="mr-2">{linha.produto.cor}</span> : null}
                             {linha.produto.categoria_id__label}
                           </div>
+                          {linha.produto.grade_nome && (
+                            <div className="mt-0.5">
+                              <span className="inline-flex items-center rounded bg-navy-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-navy-600">
+                                {linha.produto.grade_nome}
+                              </span>
+                            </div>
+                          )}
                         </td>
                         {data.colunas.map((c) => {
                           const celula = linha.celulas.find((x) => x.tamanho_id === c.id);

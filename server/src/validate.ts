@@ -72,6 +72,17 @@ function coerce(f: Field, raw: unknown): [unknown, string | null] {
       if (f.max !== undefined && n > f.max) return [n, `Máximo: ${f.max}`];
       return [n, null];
     }
+    case 'multiref': {
+      if (raw === null || raw === undefined) return [[], null];
+      if (!Array.isArray(raw)) return [raw, 'Informe uma lista de itens'];
+      const ids: number[] = [];
+      for (const it of raw) {
+        const n = parseNumber(it);
+        if (n === null || !Number.isInteger(n)) return [raw, 'Item inválido na lista'];
+        ids.push(n);
+      }
+      return [ids, null];
+    }
     case 'number':
     case 'money':
     case 'percent': {
@@ -138,7 +149,8 @@ export function validatePayload(
     }
 
     const required = f.required || (mode === 'create' && f.requiredOnCreate);
-    if (value === null) {
+    const blankValue = value === null || value === undefined || (Array.isArray(value) && value.length === 0);
+    if (blankValue) {
       if (required && (mode === 'create' || has)) {
         errors[f.name] = 'Campo obrigatório';
         continue;

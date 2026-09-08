@@ -50,6 +50,7 @@ import { assertProductionSecrets, corsOrigin, loginRateLimit, securityHeaders } 
 import { initSentry, reportarErro } from './log';
 import { smtpConfigurado } from './mail';
 import { estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario } from './estoque';
+import { getMedidasGrade, saveMedidasGrade } from './medidas';
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
 import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
@@ -307,6 +308,8 @@ app.post('/api/fichas/:id/aplicar-preco', wrap(aplicarPrecoFicha));
 
 // Fase 4 — grade de estoque e inventário
 app.get('/api/estoques/grade', wrap(estoqueGrade));
+app.get('/api/grades/:id/medidas', wrap(getMedidasGrade));
+app.put('/api/grades/:id/medidas', wrap(saveMedidasGrade));
 app.get('/api/inventarios/:id', wrap(getInventarioDetalhe));
 app.get('/api/inventarios/:id/itens', wrap(listItensInventario));
 app.put('/api/inventarios/:id/itens', wrap(updateItensInventario));

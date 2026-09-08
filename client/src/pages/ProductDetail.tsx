@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, ArrowLeftRight, Barcode, Boxes, ClipboardList, Cog, Pencil, Printer, Shirt, Tag, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowLeftRight, Barcode, Boxes, ClipboardList, Cog, Pencil, Printer, Ruler, Shirt, Tag, Wallet } from 'lucide-react';
 import { api } from '../lib/api';
 import { useMeta, type PublicFile } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
@@ -20,6 +20,8 @@ type Detail = {
     colunas: { id: number; codigo: string }[];
     grade: { local: string; total: number; celulas: { tamanho_id: number; quantidade: number; estoque_min: number; estoque_id: number | null }[] }[];
   };
+  grade: { id: number; nome: string } | null;
+  medidas: { medidas: { id: number; nome: string; unidade: string }[]; linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[] } | null;
   movimentacoes: Record<string, any>[];
   ordens: { abertas: Record<string, any>[]; recentes: Record<string, any>[] };
   custo: { ficha: Record<string, any> | null; custoBase: number; custoFicha: number; custoTotal: number; margem: number; precoSugerido: number | null; precoVenda: number; margemReal: number | null };
@@ -205,6 +207,11 @@ export default function ProductDetail() {
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
               <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
                 <Boxes className="h-4 w-4 text-navy-400" /> Grade de estoque
+                {data.grade && (
+                  <span className="inline-flex items-center rounded bg-navy-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-navy-600">
+                    {data.grade.nome}
+                  </span>
+                )}
               </h2>
               <Link to="/movimentacoes" className="btn-secondary !py-1 text-xs">
                 <ArrowLeftRight className="h-3.5 w-3.5" /> Lançar movimentação
@@ -248,6 +255,50 @@ export default function ProductDetail() {
               </div>
             )}
           </section>
+
+          {/* Tabela de medidas */}
+          {data.medidas && (
+            <section className="card overflow-hidden">
+              <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+                  <Ruler className="h-4 w-4 text-navy-400" /> Tabela de medidas
+                </h2>
+                <Link to="/medidas" className="text-xs font-medium text-navy-700 hover:underline">
+                  Editar medidas
+                </Link>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="table text-sm">
+                  <thead>
+                    <tr>
+                      <th className="text-left">Tamanho</th>
+                      {data.medidas.medidas.map((m) => (
+                        <th key={m.id} className="text-center">
+                          {m.nome}
+                          <span className="ml-1 text-[10px] font-normal text-slate-400">({m.unidade})</span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.medidas.linhas.map((l) => (
+                      <tr key={l.tamanho_id}>
+                        <td className="font-semibold text-navy-900">{l.codigo}</td>
+                        {data.medidas!.medidas.map((m) => {
+                          const v = l.valores[String(m.id)];
+                          return (
+                            <td key={m.id} className="text-center tabular-nums">
+                              {v === null || v === undefined ? <span className="text-slate-300">—</span> : formatNumber(v)}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
 
           {/* Custo */}
           <section className="card p-4">
@@ -349,7 +400,7 @@ export default function ProductDetail() {
         />
       </Modal>
 
-      <LabelSheet open={labels} onClose={() => setLabels(false)} produto={p} tamanhos={data.estoque.colunas} grade={data.estoque.grade} user={user?.name} />
+      <LabelSheet open={labels} onClose={() => setLabels(false)} produto={p} tamanhos={data.estoque.colunas} grade={data.estoque.grade} medidas={data.medidas} user={user?.name} />
 
       {!p.codigo_barras && (
         <p className="mt-4 flex items-center gap-1.5 text-xs text-slate-400">

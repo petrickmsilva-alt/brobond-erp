@@ -104,6 +104,48 @@ export async function catalogoPublico(req: Request, res: Response) {
 
   const mostrarPreco = catalogo.mostrar_preco !== false;
   const mostrarSaldo = catalogo.mostrar_saldo === true;
+  const mostrarMedidas = catalogo.mostrar_medidas === true;
+
+  // Tabela de medidas (bulk): resolve a grade de cada produto e monta a tabela.
+  let medidasPorGrade: Map<number, { medidas: { id: number; nome: string; unidade: string }[]; linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[] }> = new Map();
+  let gradePorProduto: Map<number, number> = new Map();
+  if (mostrarMedidas) {
+    const [categorias, gradeTamanhos, medidas, valores] = await Promise.all([
+      s.list(RESOURCES.categorias, { page: 1, pageSize: 2000 }),
+      s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 10000, sort: 'ordem', dir: 'asc' }),
+      s.list(RESOURCES.medidas, { page: 1, pageSize: 5000, sort: 'ordem', dir: 'asc' }),
+      s.list(RESOURCES.medida_valores, { page: 1, pageSize: 20000 }),
+    ]);
+    const gradePorCategoria = new Map(categorias.rows.map((c) => [Number(c.id), Number(c.grade_id) || 0]));
+    const tamsPorGrade = new Map<number, number[]>();
+    for (const it of gradeTamanhos.rows) {
+      const g = Number(it.grade_id);
+      if (!tamsPorGrade.has(g)) tamsPorGrade.set(g, []);
+      tamsPorGrade.get(g)!.push(Number(it.tamanho_id));
+    }
+    const medidasPorGradeRaw = new Map<number, { id: number; nome: string; unidade: string }[]>();
+    for (const m of medidas.rows) {
+      const g = Number(m.grade_id);
+      if (!medidasPorGradeRaw.has(g)) medidasPorGradeRaw.set(g, []);
+      medidasPorGradeRaw.get(g)!.push({ id: Number(m.id), nome: String(m.nome), unidade: String(m.unidade || 'cm') });
+    }
+    const valorPor = new Map<string, number | null>();
+    for (const v of valores.rows) {
+      valorPor.set(`${v.medida_id}:${v.tamanho_id}`, v.valor === null || v.valor === undefined ? null : Number(v.valor));
+    }
+    for (const [g, meds] of medidasPorGradeRaw) {
+      const linhas = (tamsPorGrade.get(g) ?? []).map((tid) => {
+        const valoresLinha: Record<string, number | null> = {};
+        for (const m of meds) valoresLinha[String(m.id)] = valorPor.get(`${m.id}:${tid}`) ?? null;
+        return { tamanho_id: tid, codigo: tamCodigo.get(tid) ?? `#${tid}`, valores: valoresLinha };
+      });
+      medidasPorGrade.set(g, { medidas: meds, linhas });
+    }
+    for (const p of produtos.rows) {
+      const g = Number(p.grade_id) || gradePorCategoria.get(Number(p.categoria_id)) || 0;
+      if (g) gradePorProduto.set(Number(p.id), g);
+    }
+  }
   const canal = String(catalogo.canal || 'todos');
   const tabelaPreco = String(catalogo.tabela_preco || 'automatico');
 
@@ -155,6 +197,7 @@ export async function catalogoPublico(req: Request, res: Response) {
       foto_url: p.foto_url ?? null,
       fotos: (p.fotos || []).map((f: any) => ({ url: f.url, thumb_url: f.thumb_url })),
       tamanhos: tamanhosLinha,
+      medidas: mostrarMedidas ? medidasPorGrade.get(gradePorProduto.get(Number(p.id)) ?? 0) ?? null : null,
     };
   });
 
@@ -166,6 +209,7 @@ export async function catalogoPublico(req: Request, res: Response) {
     como_comprar: catalogo.como_comprar ?? null,
     mostrar_preco: mostrarPreco,
     mostrar_saldo: mostrarSaldo,
+    mostrar_medidas: mostrarMedidas,
     total: lista.length,
     produtos: lista,
   });

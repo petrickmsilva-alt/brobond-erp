@@ -4,7 +4,7 @@ import { api, ApiError } from '../lib/api';
 import type { Field, Option, ResourceMeta } from '../lib/meta';
 import { maskDocument, maskPhone, toInputValue } from '../lib/format';
 
-export type FormValues = Record<string, string | boolean>;
+export type FormValues = Record<string, string | boolean | string[]>;
 
 /** Valores iniciais do formulário (defaults do recurso ou registro existente). */
 export function initialValues(
@@ -15,6 +15,10 @@ export function initialValues(
   const out: FormValues = {};
   for (const f of r.fields) {
     if (f.form === false || f.readonly || f.type === 'images') continue;
+    if (f.type === 'multiref') {
+      out[f.name] = row && Array.isArray(row[f.name]) ? row[f.name].map(String) : [];
+      continue;
+    }
     if (row) {
       out[f.name] = f.type === 'boolean' ? Boolean(row[f.name]) : f.type === 'password' ? '' : toInputValue(f, row[f.name]);
     } else {
@@ -45,6 +49,10 @@ export function toPayload(r: ResourceMeta, values: FormValues, editing: boolean)
       out[f.name] = Boolean(v);
       continue;
     }
+    if (f.type === 'multiref') {
+      out[f.name] = Array.isArray(v) ? v.map((x) => Number(x)).filter((x) => Number.isInteger(x)) : [];
+      continue;
+    }
     const s = typeof v === 'string' ? v.trim() : '';
     if (f.type === 'password') {
       if (s) out[f.name] = s;
@@ -72,7 +80,7 @@ export function RecordForm({
   resource: ResourceMeta;
   values: FormValues;
   errors: Record<string, string>;
-  onChange: (name: string, value: string | boolean) => void;
+  onChange: (name: string, value: string | boolean | string[]) => void;
   onSubmit: () => void;
   onClear: () => void;
   editing: boolean;
@@ -119,7 +127,7 @@ export function RecordForm({
                   value={values[f.name]}
                   error={errors[f.name]}
                   onChange={(v) => onChange(f.name, v)}
-                  options={f.type === 'ref' && f.ref ? refOptions[f.ref] : undefined}
+                  options={(f.type === 'ref' || f.type === 'multiref') && f.ref ? refOptions[f.ref] : undefined}
                   editing={editing}
                   autoFocus={autoFocus && f.name === firstName}
                   disabled={busy}
@@ -154,9 +162,9 @@ function FieldInput({
   disabled,
 }: {
   field: Field;
-  value: string | boolean | undefined;
+  value: string | boolean | string[] | undefined;
   error?: string;
-  onChange: (v: string | boolean) => void;
+  onChange: (v: string | boolean | string[]) => void;
   options?: Option[];
   editing: boolean;
   autoFocus?: boolean;
@@ -233,6 +241,47 @@ function FieldInput({
         ) : (
           help
         )}
+      </div>
+    );
+  }
+
+  if (f.type === 'multiref') {
+    const selecionados = Array.isArray(value) ? value.map(String) : [];
+    const loaded = options !== undefined;
+    const toggle = (id: string) => {
+      if (selecionados.includes(id)) onChange(selecionados.filter((x) => x !== id));
+      else onChange([...selecionados, id]);
+    };
+    return (
+      <div>
+        {label}
+        {!loaded ? (
+          <p className="text-sm text-slate-400">Carregando...</p>
+        ) : options.length === 0 ? (
+          <p className="text-sm text-brand-700">Cadastre primeiro em "{refLabel(f.ref)}".</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {options.map((o) => {
+              const ativo = selecionados.includes(String(o.value));
+              const idx = selecionados.indexOf(String(o.value));
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => toggle(String(o.value))}
+                  disabled={disabled}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+                    ativo ? 'border-navy-700 bg-navy-800 text-white' : 'border-slate-300 bg-white text-slate-600 hover:border-navy-500'
+                  }`}
+                >
+                  {ativo && idx >= 0 && <span className="text-[10px] font-bold opacity-70">{idx + 1}</span>}
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {help}
       </div>
     );
   }
@@ -388,7 +437,7 @@ function refLabel(ref?: string) {
 /** Carrega as opções de todos os campos de referência do recurso. */
 export function useRefOptions(resource: ResourceMeta, reloadKey = 0) {
   const [opts, setOpts] = useState<Record<string, Option[]>>({});
-  const refs = useMemo(() => Array.from(new Set(resource.fields.filter((f) => f.type === 'ref' && f.ref).map((f) => f.ref!))), [resource]);
+  const refs = useMemo(() => Array.from(new Set(resource.fields.filter((f) => (f.type === 'ref' || f.type === 'multiref') && f.ref).map((f) => f.ref!))), [resource]);
   const refsKey = refs.join(',');
 
   useEffect(() => {

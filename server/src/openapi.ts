@@ -50,7 +50,7 @@ function generateOpenAPISpec() {
     const properties: Record<string, any> = { id: { type: 'integer' } };
     for (const field of resource.fields) {
       if (field.virtual) continue;
-      const typeMap: Record<string, string> = { text: 'string', textarea: 'string', email: 'string', phone: 'string', document: 'string', integer: 'integer', number: 'number', money: 'number', percent: 'number', boolean: 'boolean', date: 'string', datetime: 'string', select: 'string', ref: 'integer', password: 'string', color: 'string' };
+      const typeMap: Record<string, string> = { text: 'string', textarea: 'string', email: 'string', phone: 'string', document: 'string', integer: 'integer', number: 'number', money: 'number', percent: 'number', boolean: 'boolean', date: 'string', datetime: 'string', select: 'string', ref: 'integer', multiref: 'array', password: 'string', color: 'string' };
       properties[field.name] = { type: typeMap[field.type] || 'string', description: field.label };
     }
     schemas[key] = { type: 'object', properties };

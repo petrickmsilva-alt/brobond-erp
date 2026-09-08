@@ -27,30 +27,55 @@ export async function estoqueGrade(req: Request, res: Response) {
   const s = getStore();
   const colecaoId = req.query.colecao_id ? Number(req.query.colecao_id) : undefined;
   const categoriaId = req.query.categoria_id ? Number(req.query.categoria_id) : undefined;
+  const gradeId = req.query.grade_id ? Number(req.query.grade_id) : undefined;
   const local = typeof req.query.local === 'string' && req.query.local ? String(req.query.local) : null;
 
-  const [produtos, tamanhos, estoques] = await Promise.all([
+  const [produtos, tamanhos, estoques, categorias, grades, gradeTamanhos] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter: colecaoId ? { colecao_id: colecaoId } : categoriaId ? { categoria_id: categoriaId } : {} }),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200, sort: 'ordem', dir: 'asc' }),
     s.list(RESOURCES.estoques, { page: 1, pageSize: 5000, filter: local ? { local } : {} }),
+    s.list(RESOURCES.categorias, { page: 1, pageSize: 2000 }),
+    s.list(RESOURCES.grades, { page: 1, pageSize: 2000 }),
+    s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 10000, sort: 'ordem', dir: 'asc' }),
   ]);
 
-  const colunas = tamanhos.rows.map((t) => ({ id: Number(t.id), codigo: String(t.codigo || '') }));
+  const codigoPor = new Map(tamanhos.rows.map((t) => [Number(t.id), String(t.codigo || '')]));
+  const gradePorCategoria = new Map(categorias.rows.map((c) => [Number(c.id), Number(c.grade_id) || 0]));
+  const nomePorGrade = new Map(grades.rows.map((g) => [Number(g.id), String(g.nome || '')]));
+  const tamsPorGrade = new Map<number, number[]>();
+  for (const it of gradeTamanhos.rows) {
+    const g = Number(it.grade_id);
+    if (!tamsPorGrade.has(g)) tamsPorGrade.set(g, []);
+    tamsPorGrade.get(g)!.push(Number(it.tamanho_id));
+  }
+
+  /** Grade efetiva de um produto: produto.grade_id ?? categoria.grade_id. */
+  const resolveGrade = (p: Row): number => Number(p.grade_id) || gradePorCategoria.get(Number(p.categoria_id)) || 0;
+
+  // Colunas da matriz: com filtro de grade, só aquela grade; senão, união de todos os tamanhos.
+  const colunas = gradeId
+    ? (tamsPorGrade.get(gradeId) ?? []).map((id) => ({ id, codigo: codigoPor.get(id) ?? `#${id}` }))
+    : tamanhos.rows.map((t) => ({ id: Number(t.id), codigo: String(t.codigo || '') }));
+
   const filtrados = produtos.rows.filter((p) => {
     if (colecaoId && Number(p.colecao_id) !== colecaoId) return false;
     if (categoriaId && Number(p.categoria_id) !== categoriaId) return false;
+    if (gradeId && resolveGrade(p) !== gradeId) return false;
     return true;
   });
 
   const linhas = filtrados.map((p) => {
     const doProduto = estoques.rows.filter((e) => Number(e.produto_id) === Number(p.id));
-    // Sem filtro de local: soma os locais. Com filtro: só aquele local.
-    const celulas = colunas.map((c) => {
+    const gradeDoP = resolveGrade(p);
+    // Sem filtro de grade, cada linha mostra apenas os tamanhos da própria grade
+    // (evita misturar PP–GG com 36–48); produtos sem grade mostram todos.
+    const idsLinha = gradeId ? colunas.map((c) => c.id) : gradeDoP ? tamsPorGrade.get(gradeDoP) ?? [] : colunas.map((c) => c.id);
+    const celulas = idsLinha.map((tid) => {
       const linhasLocal = local ? doProduto.filter((e) => String(e.local || 'loja') === local) : doProduto;
-      const daTamanho = linhasLocal.filter((e) => Number(e.tamanho_id) === c.id);
+      const daTamanho = linhasLocal.filter((e) => Number(e.tamanho_id) === tid);
       const quantidade = daTamanho.reduce((a, e) => a + Number(e.quantidade || 0), 0);
       const estoqueMin = daTamanho.reduce((a, e) => a + Number(e.estoque_min || 0), 0);
-      return { tamanho_id: c.id, quantidade, estoque_min: estoqueMin };
+      return { tamanho_id: tid, quantidade, estoque_min: estoqueMin };
     });
     return {
       produto: {
@@ -61,6 +86,8 @@ export async function estoqueGrade(req: Request, res: Response) {
         cor_hex: p.cor_id__color ?? null,
         categoria_id__label: p.categoria_id__label ?? null,
         colecao_id__label: p.colecao_id__label ?? null,
+        grade_id: gradeDoP || null,
+        grade_nome: gradeDoP ? nomePorGrade.get(gradeDoP) ?? null : null,
         foto_url: p.foto_url ?? null,
         preco_venda: Number(p.preco_venda || 0),
         custo: Number(p.custo || 0),

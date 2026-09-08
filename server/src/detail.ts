@@ -5,7 +5,8 @@
 import type { Request, Response } from 'express';
 import { currentUser } from './auth';
 import { RESOURCES } from './resources';
-import { checkAccess, getRecord, getStore } from './services';
+import { checkAccess, getRecord, getStore, gradeDoProduto } from './services';
+import { medidasDaGrade } from './medidas';
 import { parseId } from './validate';
 
 export async function productDetail(req: Request, res: Response) {
@@ -16,20 +17,24 @@ export async function productDetail(req: Request, res: Response) {
 
   const produto = await getRecord(r, id);
 
-  const [tamanhos, estoques, movimentacoes, ordens, fichas] = await Promise.all([
+  const [tamanhos, estoques, movimentacoes, ordens, fichas, gradeInfo] = await Promise.all([
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200 }),
     s.list(RESOURCES.estoques, { page: 1, pageSize: 1000, filter: { produto_id: id } }),
     s.list(RESOURCES.movimentacoes, { page: 1, pageSize: 15, filter: { produto_id: id }, sort: 'data', dir: 'desc' }),
     s.list(RESOURCES.ordens, { page: 1, pageSize: 50, filter: { produto_id: id }, sort: 'id', dir: 'desc' }),
     s.list(RESOURCES.fichas, { page: 1, pageSize: 1, filter: { produto_id: id } }),
+    gradeDoProduto(produto),
   ]);
 
-  // Grade: locais × tamanhos
+  // Grade: locais × tamanhos. Com grade definida (produto ou categoria),
+  // mostra somente os tamanhos daquela grade — sem misturar com outras.
   const locais = Array.from(new Set(estoques.rows.map((e) => String(e.local || 'loja')))).sort();
   const sizesUsed = new Set(estoques.rows.map((e) => Number(e.tamanho_id)));
-  const colunas = tamanhos.rows
-    .filter((t) => sizesUsed.has(Number(t.id)) || estoques.rows.length === 0)
-    .map((t) => ({ id: Number(t.id), codigo: String(t.codigo) }));
+  const colunas = gradeInfo
+    ? gradeInfo.tamanhos.map((t) => ({ id: t.id, codigo: t.codigo }))
+    : tamanhos.rows
+        .filter((t) => sizesUsed.has(Number(t.id)) || estoques.rows.length === 0)
+        .map((t) => ({ id: Number(t.id), codigo: String(t.codigo) }));
   const grade = locais.map((local) => {
     const celulas = colunas.map((c) => {
       const e = estoques.rows.find((x) => String(x.local || 'loja') === local && Number(x.tamanho_id) === c.id);
@@ -41,6 +46,7 @@ export async function productDetail(req: Request, res: Response) {
   const abaixoMinimo = estoques.rows.filter((e) => Number(e.estoque_min) > 0 && Number(e.quantidade) <= Number(e.estoque_min)).length;
 
   const ficha = fichas.rows[0] || null;
+  const medidas = gradeInfo ? await medidasDaGrade(gradeInfo.gradeId) : null;
   const custoBase = Number(produto.custo || 0);
   const custoFicha = ficha ? Number(ficha.mao_obra || 0) + Number(ficha.custos_indiretos || 0) : 0;
   const margem = ficha ? Number(ficha.margem_pct || 0) : 0;
@@ -52,6 +58,8 @@ export async function productDetail(req: Request, res: Response) {
   res.json({
     produto,
     estoque: { totalPecas, abaixoMinimo, valor: totalPecas * custoBase, colunas, grade },
+    grade: gradeInfo ? { id: gradeInfo.gradeId, nome: gradeInfo.gradeNome } : null,
+    medidas,
     movimentacoes: movimentacoes.rows,
     ordens: { abertas: ordens.rows.filter((o) => ['planejada', 'em_producao'].includes(String(o.status))), recentes: ordens.rows.slice(0, 8) },
     custo: { ficha, custoBase, custoFicha, custoTotal, margem, precoSugerido, precoVenda, margemReal },

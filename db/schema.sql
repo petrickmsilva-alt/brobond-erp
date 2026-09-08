@@ -52,6 +52,51 @@ CREATE TABLE IF NOT EXISTS tamanhos (
   atualizado_em TIMESTAMPTZ
 );
 
+-- Grades de tamanhos: conjuntos NOMEADOS de tamanhos, na ordem correta.
+-- Ex.: "Camiseta PP-GG" (PP,P,M,G,GG), "Calça 36-48" (36..48), "Calçado 34-44".
+-- Cada produto (ou categoria) aponta para UMA grade, evitando que os tamanhos
+-- de tipos diferentes de peça se misturem no estoque.
+CREATE TABLE IF NOT EXISTS grades (
+  id SERIAL PRIMARY KEY,
+  nome TEXT UNIQUE NOT NULL,                 -- "Camiseta PP-GG", "Calça 36-48"...
+  descricao TEXT,
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+-- Itens de uma grade (muitos-para-muitos grade × tamanho, com ordem).
+CREATE TABLE IF NOT EXISTS grade_tamanhos (
+  id SERIAL PRIMARY KEY,
+  grade_id INTEGER REFERENCES grades(id) ON DELETE CASCADE,
+  tamanho_id INTEGER REFERENCES tamanhos(id) ON DELETE CASCADE,
+  ordem INTEGER DEFAULT 0,
+  UNIQUE (grade_id, tamanho_id)
+);
+CREATE INDEX IF NOT EXISTS idx_grade_tamanhos_grade ON grade_tamanhos (grade_id, ordem);
+
+-- Tabela de medidas (colunas da grade: largura, comprimento, manga, cintura...)
+CREATE TABLE IF NOT EXISTS medidas (
+  id SERIAL PRIMARY KEY,
+  grade_id INTEGER REFERENCES grades(id) ON DELETE CASCADE,
+  nome TEXT NOT NULL,                        -- "Largura (A)", "Comprimento (B)"...
+  unidade TEXT DEFAULT 'cm',                 -- cm, mm, pol
+  ordem INTEGER DEFAULT 0,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  UNIQUE (grade_id, nome)
+);
+
+-- Valor de cada medida para cada tamanho da grade
+CREATE TABLE IF NOT EXISTS medida_valores (
+  id SERIAL PRIMARY KEY,
+  medida_id INTEGER REFERENCES medidas(id) ON DELETE CASCADE,
+  tamanho_id INTEGER REFERENCES tamanhos(id) ON DELETE CASCADE,
+  valor NUMERIC(12,2),
+  UNIQUE (medida_id, tamanho_id)
+);
+CREATE INDEX IF NOT EXISTS idx_medida_valores_medida ON medida_valores (medida_id);
+
 CREATE TABLE IF NOT EXISTS colecoes (
   id SERIAL PRIMARY KEY,
   nome TEXT NOT NULL,
@@ -497,6 +542,7 @@ CREATE TABLE IF NOT EXISTS catalogos (
   filtros JSONB,                           -- legado: { colecao_id?, categoria_id? }
   mostrar_preco BOOLEAN DEFAULT FALSE,
   mostrar_saldo BOOLEAN DEFAULT FALSE,
+  mostrar_medidas BOOLEAN DEFAULT FALSE,
   ativo BOOLEAN DEFAULT TRUE,
   expira_em TIMESTAMPTZ,
   criado_em TIMESTAMPTZ DEFAULT now(),
@@ -555,6 +601,7 @@ ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'todos';
 ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS tabela_preco TEXT DEFAULT 'automatico';
 ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS aceita_pedido_site BOOLEAN DEFAULT TRUE;
 ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS como_comprar TEXT;
+ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS mostrar_medidas BOOLEAN DEFAULT FALSE;
 
 -- ------------------------------------------------------------
 -- 2.10) FINANCEIRO — livro-caixa, contas, categorias, investidores e aportes
@@ -822,3 +869,9 @@ UPDATE usuarios SET senha_definida_em = COALESCE(atualizado_em, criado_em, now()
 -- Fim do cofre de senhas: a coluna de senha reversível é DESTRUÍDA.
 -- (As senhas ficam apenas em hash Argon2id/bcrypt — nunca recuperáveis.)
 ALTER TABLE usuarios DROP COLUMN IF EXISTS senha_cifrada;
+
+-- ------------------------------------------------------------
+-- Grades de tamanhos: vínculo com categoria (padrão) e produto (override)
+-- ------------------------------------------------------------
+ALTER TABLE categorias ADD COLUMN IF NOT EXISTS grade_id INTEGER REFERENCES grades(id);
+ALTER TABLE produtos   ADD COLUMN IF NOT EXISTS grade_id INTEGER REFERENCES grades(id);
