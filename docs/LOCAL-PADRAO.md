@@ -71,22 +71,3 @@ os formulários já com o Local padrão pré-selecionado.
 se nenhum local estiver marcado, marca automaticamente o primeiro local ativo
 como `padrao`. Portanto, num banco existente a migração acontece no primeiro
 `migrate()` ao subir a API.
-
-### Migração do nome de local ("almoxarifado" → "loja")
-
-A seção **4.2** do `db/schema.sql` renomeia o local antigo para **"loja"** em
-bases existentes (é a única parte do projeto que ainda cita o nome antigo, pois
-é ela que o converte). Idempotente — numa base já migrada, nada é alterado:
-
-1. Renomeia o cadastro `locais` quando não há outra "loja" (compara sem
-   diferenciar maiúsculas/minúsculas);
-2. Se já existia uma "loja", **soma os saldos** colidentes (quantidade soma,
-   `estoque_min` fica com o maior) e remove as linhas de origem;
-3. Propaga o novo nome para `estoques.local`, `movimentacoes.local`,
-   `movimentacoes.local_destino`, `inventarios.local` e `vendas.local_saida`;
-4. Reaponta as chaves estrangeiras (`local_id`/`local_destino_id`) e remove o
-   cadastro antigo; transfere o Local padrão quando o antigo era o padrão e,
-   se nenhum restar marcado, elege o primeiro local ativo;
-5. O **Tipo** "almoxarifado" sai da lista de opções (Loja, Expedição, Facção);
-   registros com ele viram "loja". Os padrões de coluna (`DEFAULT`) passam
-   a "loja" junto.
