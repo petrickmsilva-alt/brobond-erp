@@ -34,12 +34,17 @@ test('duas saídas concorrentes do mesmo saldo: exatamente uma vence', { skip },
   const sufixo = `${Date.now()}-${process.pid}`;
 
   const cat = await createRecord(RESOURCES.categorias, { nome: `pg-cat-${sufixo}` }, admin);
-  const tam = (await s.list(RESOURCES.tamanhos, { page: 1, pageSize: 1 })).rows[0];
-  assert.ok(tam, 'o seed precisa ter ao menos um tamanho');
+  // banco de teste vazio não tem seed: o tamanho é criado aqui se faltar
+  let tam = (await s.list(RESOURCES.tamanhos, { page: 1, pageSize: 1 })).rows[0];
+  let tamCriado: number | null = null;
+  if (!tam) {
+    tam = await createRecord(RESOURCES.tamanhos, { codigo: `P${sufixo.replace(/[^0-9]/g, '').slice(-8)}`, ordem: 999 }, admin);
+    tamCriado = Number(tam.id);
+  }
   const prod = await createRecord(RESOURCES.produtos, { sku: `PG-${sufixo}`, nome: 'PG Concorrência', categoria_id: Number(cat.id), custo: 1, preco_venda: 2 }, admin);
   const loc = await createRecord(RESOURCES.locais, { nome: `pg-${sufixo}` }, admin);
   const pid = Number(prod.id);
-  const tid = Number(tam.id);
+  const tid = Number(tam!.id);
   const lid = Number(loc.id);
 
   await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: pid, tamanho_id: tid, quantidade: 1, local_id: lid }, admin);
@@ -65,6 +70,7 @@ test('duas saídas concorrentes do mesmo saldo: exatamente uma vence', { skip },
     await pool!.query('DELETE FROM produtos WHERE id = $1', [pid]);
     await pool!.query('DELETE FROM categorias WHERE id = $1', [Number(cat.id)]);
     await pool!.query('DELETE FROM locais WHERE id = $1', [lid]);
+    if (tamCriado) await pool!.query('DELETE FROM tamanhos WHERE id = $1', [tamCriado]);
   }
 });
 
