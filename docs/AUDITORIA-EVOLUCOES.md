@@ -78,7 +78,7 @@ As tabelas `itens_venda`, `itens_compra` e `itens_ficha_tecnica` **já existem n
 
 | Achado | Risco |
 |---|---|
-| `local` é texto livre | "almoxarifado" ≠ "Almoxarifado" → saldos duplicados |
+| `local` é texto livre | "loja" ≠ "Loja" → saldos duplicados |
 | Sem transferência entre locais | Precisa de saída + entrada manuais |
 | Módulo Inventário vazio | Sem contagem física periódica |
 | Sem estoque de **insumos** (só de produtos acabados) | Falta tecido e ninguém sabe |

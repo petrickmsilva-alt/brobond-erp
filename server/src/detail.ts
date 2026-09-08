@@ -25,14 +25,14 @@ export async function productDetail(req: Request, res: Response) {
   ]);
 
   // Grade: locais × tamanhos
-  const locais = Array.from(new Set(estoques.rows.map((e) => String(e.local || 'almoxarifado')))).sort();
+  const locais = Array.from(new Set(estoques.rows.map((e) => String(e.local || 'loja')))).sort();
   const sizesUsed = new Set(estoques.rows.map((e) => Number(e.tamanho_id)));
   const colunas = tamanhos.rows
     .filter((t) => sizesUsed.has(Number(t.id)) || estoques.rows.length === 0)
     .map((t) => ({ id: Number(t.id), codigo: String(t.codigo) }));
   const grade = locais.map((local) => {
     const celulas = colunas.map((c) => {
-      const e = estoques.rows.find((x) => String(x.local || 'almoxarifado') === local && Number(x.tamanho_id) === c.id);
+      const e = estoques.rows.find((x) => String(x.local || 'loja') === local && Number(x.tamanho_id) === c.id);
       return { tamanho_id: c.id, quantidade: e ? Number(e.quantidade) : 0, estoque_min: e ? Number(e.estoque_min || 0) : 0, estoque_id: e ? Number(e.id) : null };
     });
     return { local, celulas, total: celulas.reduce((a, c) => a + c.quantidade, 0) };

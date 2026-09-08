@@ -213,7 +213,7 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx) {
     const qtd = Number(m.quantidade);
     if (qtd <= 0) continue;
     pecas += qtd;
-    await s.adjustStock(Number(m.produto_id), Number(m.tamanho_id), String(m.local || 'almoxarifado'), -qtd, tx);
+    await s.adjustStock(Number(m.produto_id), Number(m.tamanho_id), String(m.local || 'loja'), -qtd, tx);
     await s.insert(
       getResource('movimentacoes')!,
       { tipo: 'saida', produto_id: m.produto_id, tamanho_id: m.tamanho_id, local: m.local, quantidade: qtd, motivo: `Estorno — OP #${id} reaberta`, usuario_id: actor.id || null },

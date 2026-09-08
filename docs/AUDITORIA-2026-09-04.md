@@ -36,7 +36,7 @@ Fluxo real executado por HTTP na API (modo demonstração) e por testes automati
 | 10 | Recorrência vencida → lançamento pendente (botão ou cron) | ✅ | Teste "recorrência vencida é gerada" |
 | 11 | Dashboard/cockpits → KPIs reais (valor de estoque, alertas, vendas do mês) | ✅ | Fluxo HTTP: valorEstoque 960 = 16×60; vendasMes 450 |
 | 12 | **Financeiro na API vs. menu** | 🔴→✅ | **Falha encontrada e corrigida** (item 4.2 abaixo) |
-| 13 | **Edição de estoque mínimo em local ≠ almoxarifado** | 🔴→✅ | **Falha encontrada e corrigida** (item 4.1 abaixo) |
+| 13 | **Edição de estoque mínimo em local ≠ loja** | 🔴→✅ | **Falha encontrada e corrigida** (item 4.1 abaixo) |
 
 **Conclusão:** os módulos estão de fato integrados por transações únicas (venda/compra/OP/inventário tocam estoque + financeiro + auditoria dentro do mesmo `BEGIN/COMMIT`, com rollback em erro). O desenho "resources.ts como fonte única de verdade" mantém API, validação e formulários coerentes.
 
@@ -60,7 +60,7 @@ Fluxo real executado por HTTP na API (modo demonstração) e por testes automati
 ## 4. Bugs encontrados e corrigidos nesta auditoria
 
 ### 4.1 🔴 Correção de bug — editar estoque mínimo em outro local dava erro 409 falso
-Ao editar **somente** o `estoque_min` de um saldo guardado em local ≠ "almoxarifado" (ex.: loja), o `resolveLocal` completava o campo ausente com o padrão "almoxarifado" e o `ensureUniqueStock` acusava "Já existe saldo para este produto, tamanho e local" contra o saldo do almoxarifado — **bloqueando exatamente a tela de controle de estoque mínimo por local**. Corrigido em `services.ts`: edição parcial agora herda o local atual do saldo. Teste de regressão adicionado.
+Ao editar **somente** o `estoque_min` de um saldo guardado em local ≠ "loja" (ex.: expedicao), o `resolveLocal` completava o campo ausente com o padrão "loja" e o `ensureUniqueStock` acusava "Já existe saldo para este produto, tamanho e local" contra o saldo da loja — **bloqueando exatamente a tela de controle de estoque mínimo por local**. Corrigido em `services.ts`: edição parcial agora herda o local atual do saldo. Teste de regressão adicionado.
 
 ### 4.2 🔴 Correção de segurança/integração — API do financeiro aberta a operadores
 O menu esconde Financeiro/Lançamentos/Categorias/Contas/Recorrências de operadores (`minPerfil: gerente` no front), mas a **API aceitava** operador em `/api/lancamentos_financeiros` etc. Corrigido adicionando `minPerfil: 'gerente'` aos 4 recursos no servidor (o menu e a API agora falam a mesma língua; testado: operador recebe 403). Os novos relatórios DRE/razão herdaram a mesma trava.
@@ -88,7 +88,7 @@ Relatório **"Faturamento por período"** (Área de Relatórios › Vendas): 24 
 ### 5.3 Controle de estoque mínimo por local melhorado ✅
 - Relatório **"Estoque abaixo do mínimo por local"**: produto × tamanho × local com Saldo, Mínimo, **Faltando** e **Custo para repor** (faltando × custo do produto), com filtro por local e resumo (itens em alerta, peças faltando, custo total de reposição).
 - Cockpit do Estoque com painel de alertas e filtro rápido (item 5.1).
-- **Correção do bug 4.1**, que impedia justamente de editar o mínimo em locais fora do almoxarifado.
+- **Correção do bug 4.1**, que impedia justamente de editar o mínimo em locais fora da loja.
 
 ### 5.4 Relatório de comissões com gráfico mensal ✅
 Relatório **"Comissões (com gráfico mensal)"**: linhas por representante (pedidos, vendas, comissão) + **gráfico de barras com a evolução das comissões nos últimos 12 meses**, filtro por período e exportação CSV/XLSX. O relatório antigo da API foi absorvido por este (mesmo caminho `/api/relatorios/comissoes`, agora com exportação e série mensal).

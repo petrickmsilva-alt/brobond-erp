@@ -340,10 +340,10 @@ export default function OrderPage({ tipo }: { tipo: Tipo }) {
               <HeaderMoney label="Desconto (R$)" value={pedido.desconto ?? ''} disabled={fechado || cancelado || saving} onChange={(v) => saveHeader('desconto', v)} optional />
               <HeaderText
                 label="Local de saída"
-                value={pedido.local_saida || meta?.defaultLocal?.nome || 'almoxarifado'}
+                value={pedido.local_saida || meta?.defaultLocal?.nome || 'loja'}
                 disabled={fechado || cancelado || saving}
-                onChange={(v) => saveHeader('local_saida', v || meta?.defaultLocal?.nome || 'almoxarifado')}
-                placeholder={meta?.defaultLocal?.nome || 'expedicao / almoxarifado'}
+                onChange={(v) => saveHeader('local_saida', v || meta?.defaultLocal?.nome || 'loja')}
+                placeholder={meta?.defaultLocal?.nome || 'expedicao / loja'}
               />
               <HeaderText label="Pedido do cliente" value={pedido.pedido_cliente || ''} disabled={fechado || cancelado || saving} onChange={(v) => saveHeader('pedido_cliente', v || null)} placeholder="Nº no cliente" optional />
             </>

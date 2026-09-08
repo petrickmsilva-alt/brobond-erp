@@ -146,7 +146,7 @@ export async function notificarOPConcluida(ordemId: number, produtoId: number, t
         <tr><td style="padding:4px 0;color:#666;">Peças produzidas:</td><td style="padding:4px 0;font-weight:bold;">${totalPecas}</td></tr>
         <tr><td style="padding:4px 0;color:#666;">Concluída por:</td><td style="padding:4px 0;">${usuario}</td></tr>
       </table>
-      <p style="margin-top:16px;">As peças já estão disponíveis no estoque (almoxarifado).</p>`,
+      <p style="margin-top:16px;">As peças já estão disponíveis no estoque (loja).</p>`,
   });
 }
 

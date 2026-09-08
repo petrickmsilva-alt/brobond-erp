@@ -70,8 +70,8 @@ Foi criado um **sistema de estorno** que permite reverter movimentações de for
 - **Resultado**: Saldo volta ao valor anterior
 
 #### Exemplo 4: Transferência para local errado
-- **Original**: Transferência de 15 peças do Almoxarifado → Loja
-- **Estorno**: Cria transferência de 15 peças da Loja → Almoxarifado
+- **Original**: Transferência de 15 peças da Loja → Expedição
+- **Estorno**: Cria transferência de 15 peças da Expedição → Loja
 - **Resultado**: Peças voltam ao local original
 
 ---

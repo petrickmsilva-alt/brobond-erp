@@ -46,7 +46,7 @@ export async function estoqueGrade(req: Request, res: Response) {
     const doProduto = estoques.rows.filter((e) => Number(e.produto_id) === Number(p.id));
     // Sem filtro de local: soma os locais. Com filtro: só aquele local.
     const celulas = colunas.map((c) => {
-      const linhasLocal = local ? doProduto.filter((e) => String(e.local || 'almoxarifado') === local) : doProduto;
+      const linhasLocal = local ? doProduto.filter((e) => String(e.local || 'loja') === local) : doProduto;
       const daTamanho = linhasLocal.filter((e) => Number(e.tamanho_id) === c.id);
       const quantidade = daTamanho.reduce((a, e) => a + Number(e.quantidade || 0), 0);
       const estoqueMin = daTamanho.reduce((a, e) => a + Number(e.estoque_min || 0), 0);
@@ -73,7 +73,7 @@ export async function estoqueGrade(req: Request, res: Response) {
   res.json({
     colunas,
     local: local ?? 'todos',
-    locaisDisponiveis: Array.from(new Set(estoques.rows.map((e) => String(e.local || 'almoxarifado')))).sort(),
+    locaisDisponiveis: Array.from(new Set(estoques.rows.map((e) => String(e.local || 'loja')))).sort(),
     totalPecas: linhas.reduce((a, l) => a + l.total, 0),
     linhas,
   });

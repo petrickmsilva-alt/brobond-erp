@@ -99,13 +99,13 @@ test('venda: faturar sem saldo bloqueia com 409 listando os itens', async () => 
 
 test('venda: faturar baixa o estoque e cancelar estorna; comissão é congelada', async () => {
   await ensureSetup();
-  // Entrada de estoque: 10 peças no almoxarifado
-  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, local: 'almoxarifado', quantidade: 10 }, admin);
+  // Entrada de estoque: 10 peças na loja
+  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, local: 'loja', quantidade: 10 }, admin);
   const v = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, data: '2026-09-01', representante_id: representanteId, local_saida: 'expedicao' }, admin);
   await addItem(Number(v.id), { produto_id: produtoId, tamanho_id: 3, quantidade: 4, preco_unitario: 100 });
 
   await updateRecord(RESOURCES.vendas, Number(v.id), { status: 'faturada' }, admin);
-  const saldoDepois = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: 3, local: 'almoxarifado' } });
+  const saldoDepois = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: 3, local: 'loja' } });
   assert.equal(Number(saldoDepois.rows[0].quantidade), 6); // 10 − 4
   const fat = await getRecord(RESOURCES.vendas, Number(v.id));
   assert.ok(fat.faturada_em, 'faturada_em deve estar preenchida');
@@ -114,7 +114,7 @@ test('venda: faturar baixa o estoque e cancelar estorna; comissão é congelada'
 
   // Cancelar → estorna
   await updateRecord(RESOURCES.vendas, Number(v.id), { status: 'cancelada' }, admin);
-  const saldoEstorno = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: 3, local: 'almoxarifado' } });
+  const saldoEstorno = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: 3, local: 'loja' } });
   assert.equal(Number(saldoEstorno.rows[0].quantidade), 10);
   const canc = await getRecord(RESOURCES.vendas, Number(v.id));
   assert.equal(canc.faturada_em, null);
@@ -123,7 +123,7 @@ test('venda: faturar baixa o estoque e cancelar estorna; comissão é congelada'
 
 test('venda: itens não podem ser editados após faturar', async () => {
   await ensureSetup();
-  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 4, local: 'almoxarifado', quantidade: 5 }, admin);
+  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 4, local: 'loja', quantidade: 5 }, admin);
   const v = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, data: '2026-09-01' }, admin);
   const item = await addItem(Number(v.id), { produto_id: produtoId, tamanho_id: 4, quantidade: 2, preco_unitario: 100 });
   await updateRecord(RESOURCES.vendas, Number(v.id), { status: 'faturada' }, admin);
@@ -138,7 +138,7 @@ test('venda: itens não podem ser editados após faturar', async () => {
 
 test('venda: faturado não volta para aberto; cancelado é terminal', async () => {
   await ensureSetup();
-  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 5, local: 'almoxarifado', quantidade: 3 }, admin);
+  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 5, local: 'loja', quantidade: 3 }, admin);
   const v = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, data: '2026-09-01' }, admin);
   await addItem(Number(v.id), { produto_id: produtoId, tamanho_id: 5, quantidade: 1, preco_unitario: 100 });
   await updateRecord(RESOURCES.vendas, Number(v.id), { status: 'faturada' }, admin);

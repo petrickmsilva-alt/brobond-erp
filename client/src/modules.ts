@@ -76,7 +76,7 @@ export const MODULES: Module[] = [
   // Estoque
   { id: 'estoque', label: 'Estoque Físico', icon: Warehouse, group: 'Estoque', path: '/estoque', description: 'Grade de saldo por produto × tamanho × local, com estoque mínimo.' },
   { id: 'movimentacoes', label: 'Movimentações', icon: ArrowLeftRight, group: 'Estoque', path: '/movimentacoes', resource: 'movimentacoes', description: 'Entradas, saídas, ajustes e transferências — cada lançamento atualiza o saldo.' },
-  { id: 'locais', label: 'Locais de Estoque', icon: Building2, group: 'Estoque', path: '/locais', resource: 'locais', description: 'Almoxarifado, loja, expedição e facção onde as peças ficam guardadas.' },
+  { id: 'locais', label: 'Locais de Estoque', icon: Building2, group: 'Estoque', path: '/locais', resource: 'locais', description: 'Loja, expedição e facção onde as peças ficam guardadas.' },
   {
     id: 'inventario',
     label: 'Inventário',

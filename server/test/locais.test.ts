@@ -41,7 +41,7 @@ before(async () => {
   getStore();
   const p = await createRecord(RESOURCES.produtos, { sku: 'LOC-001', nome: 'Camisa Local', custo: 10, preco_venda: 25 }, admin);
   produtoId = Number(p.id);
-  const l = await createRecord(RESOURCES.locais, { nome: 'deposito-central', tipo: 'almoxarifado' }, admin);
+  const l = await createRecord(RESOURCES.locais, { nome: 'deposito-central', tipo: 'loja' }, admin);
   localId = Number(l.id);
   const mov = await createRecord(
     RESOURCES.movimentacoes,
@@ -143,7 +143,7 @@ test('renomear não pode colidir com saldos já gravados sob outro nome', async 
 });
 
 test('excluir o Local padrão promove o primeiro local ativo restante', async () => {
-  const p = await createRecord(RESOURCES.locais, { nome: 'padrao-temp', tipo: 'almoxarifado', padrao: true }, admin);
+  const p = await createRecord(RESOURCES.locais, { nome: 'padrao-temp', tipo: 'loja', padrao: true }, admin);
   assert.equal((await localPorNome('padrao-temp'))?.padrao, true);
   await deleteRecord(RESOURCES.locais, Number(p.id), admin);
   const lista = await listRecords(RESOURCES.locais, { page: 1, pageSize: 500 });
@@ -166,11 +166,11 @@ test('excluir o ÚLTIMO local ativo: gerente 403, admin decide; o sistema segue 
   const vazios = await listRecords(RESOURCES.locais, { page: 1, pageSize: 10 });
   assert.equal(vazios.rows.length, 0, 'cadastro pode ficar vazio (decisão do admin)');
 
-  // Sem nenhum local, as movimentações caem no fallback "almoxarifado" e nada quebra.
+  // Sem nenhum local, as movimentações caem no fallback "loja" e nada quebra.
   await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, quantidade: 1 }, admin);
   const saldos = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 100, filter: { produto_id: produtoId } });
   assert.ok(
-    saldos.rows.some((e: any) => String(e.local) === 'almoxarifado'),
+    saldos.rows.some((e: any) => String(e.local) === 'loja'),
     'fallback do local padrão funciona'
   );
 });
