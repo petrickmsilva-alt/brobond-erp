@@ -21,7 +21,13 @@ type Detail = {
     grade: { local: string; total: number; celulas: { tamanho_id: number; quantidade: number; estoque_min: number; estoque_id: number | null }[] }[];
   };
   grade: { id: number; nome: string } | null;
-  medidas: { medidas: { id: number; nome: string; unidade: string }[]; linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[] } | null;
+  medidas: {
+    medidas: { id: number; nome: string; unidade: string }[];
+    linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[];
+    instrucoes: string | null;
+    atualizada_em: string | null;
+    resumo: { celulas_total: number; celulas_preenchidas: number; pct: number };
+  } | null;
   movimentacoes: Record<string, any>[];
   ordens: { abertas: Record<string, any>[]; recentes: Record<string, any>[] };
   custo: { ficha: Record<string, any> | null; custoBase: number; custoFicha: number; custoTotal: number; margem: number; precoSugerido: number | null; precoVenda: number; margemReal: number | null };
@@ -296,6 +302,22 @@ export default function ProductDetail() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div className="flex flex-wrap items-start justify-between gap-3 border-t border-slate-100 px-4 py-3">
+                {data.medidas.instrucoes ? (
+                  <p className="max-w-2xl text-xs leading-relaxed text-slate-500">
+                    <b className="text-slate-600">Como medir:</b> {data.medidas.instrucoes}
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-400">
+                    {data.medidas.resumo.celulas_preenchidas < data.medidas.resumo.celulas_total
+                      ? `Tabela parcial (${data.medidas.resumo.celulas_preenchidas} de ${data.medidas.resumo.celulas_total} células).`
+                      : 'Tabela completa.'}
+                  </p>
+                )}
+                <span className="whitespace-nowrap text-[11px] text-slate-400">
+                  {data.medidas.atualizada_em ? `Atualizada em ${formatDateTime(data.medidas.atualizada_em)}` : 'Ainda sem valores registrados'}
+                </span>
               </div>
             </section>
           )}

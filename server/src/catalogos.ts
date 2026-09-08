@@ -16,6 +16,8 @@ import type { Row } from './store';
 import { labelOf } from './store';
 import { attachImages } from './uploads';
 import { recalcularTotal } from './itens';
+import { montarTabelaMedidas, tsIso } from './medidas';
+import type { TabelaMedidas } from './medidas';
 
 const require = createRequire(import.meta.url);
 
@@ -106,17 +108,21 @@ export async function catalogoPublico(req: Request, res: Response) {
   const mostrarSaldo = catalogo.mostrar_saldo === true;
   const mostrarMedidas = catalogo.mostrar_medidas === true;
 
-  // Tabela de medidas (bulk): resolve a grade de cada produto e monta a tabela.
-  const medidasPorGrade: Map<number, { medidas: { id: number; nome: string; unidade: string }[]; linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[] }> = new Map();
+  // Tabela de medidas (bulk): resolve a grade de cada produto e monta a tabela
+  // com o MESMO builder do módulo (medidas.ts), garantindo unidade, instruções
+  // de medição e "atualizada em" idênticos em toda a exposição ao cliente.
+  const medidasPorGrade: Map<number, TabelaMedidas> = new Map();
   const gradePorProduto: Map<number, number> = new Map();
   if (mostrarMedidas) {
-    const [categorias, gradeTamanhos, medidas, valores] = await Promise.all([
+    const [categorias, grades, gradeTamanhos, medidas, valores] = await Promise.all([
       s.list(RESOURCES.categorias, { page: 1, pageSize: 2000 }),
+      s.list(RESOURCES.grades, { page: 1, pageSize: 2000 }),
       s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 10000, sort: 'ordem', dir: 'asc' }),
       s.list(RESOURCES.medidas, { page: 1, pageSize: 5000, sort: 'ordem', dir: 'asc' }),
       s.list(RESOURCES.medida_valores, { page: 1, pageSize: 20000 }),
     ]);
     const gradePorCategoria = new Map(categorias.rows.map((c) => [Number(c.id), Number(c.grade_id) || 0]));
+    const gradePorId = new Map(grades.rows.map((g) => [Number(g.id), g]));
     const tamsPorGrade = new Map<number, number[]>();
     for (const it of gradeTamanhos.rows) {
       const g = Number(it.grade_id);
@@ -124,22 +130,42 @@ export async function catalogoPublico(req: Request, res: Response) {
       tamsPorGrade.get(g)!.push(Number(it.tamanho_id));
     }
     const medidasPorGradeRaw = new Map<number, { id: number; nome: string; unidade: string }[]>();
+    const datasColunasPorGrade = new Map<number, string[]>();
+    const gradeDaMedida = new Map<number, number>();
     for (const m of medidas.rows) {
       const g = Number(m.grade_id);
       if (!medidasPorGradeRaw.has(g)) medidasPorGradeRaw.set(g, []);
       medidasPorGradeRaw.get(g)!.push({ id: Number(m.id), nome: String(m.nome), unidade: String(m.unidade || 'cm') });
+      const t = tsIso(m.atualizado_em);
+      if (t) {
+        if (!datasColunasPorGrade.has(g)) datasColunasPorGrade.set(g, []);
+        datasColunasPorGrade.get(g)!.push(t);
+      }
+      gradeDaMedida.set(Number(m.id), g);
     }
     const valorPor = new Map<string, number | null>();
+    const datasPorGrade = new Map<number, string[]>();
     for (const v of valores.rows) {
-      valorPor.set(`${v.medida_id}:${v.tamanho_id}`, v.valor === null || v.valor === undefined ? null : Number(v.valor));
+      if (v.valor === null || v.valor === undefined) continue;
+      valorPor.set(`${v.medida_id}:${v.tamanho_id}`, Number(v.valor));
+      const t = tsIso(v.atualizado_em);
+      if (t) {
+        const g = gradeDaMedida.get(Number(v.medida_id));
+        if (g) {
+          if (!datasPorGrade.has(g)) datasPorGrade.set(g, []);
+          datasPorGrade.get(g)!.push(t);
+        }
+      }
     }
     for (const [g, meds] of medidasPorGradeRaw) {
-      const linhas = (tamsPorGrade.get(g) ?? []).map((tid) => {
-        const valoresLinha: Record<string, number | null> = {};
-        for (const m of meds) valoresLinha[String(m.id)] = valorPor.get(`${m.id}:${tid}`) ?? null;
-        return { tamanho_id: tid, codigo: tamCodigo.get(tid) ?? `#${tid}`, valores: valoresLinha };
-      });
-      medidasPorGrade.set(g, { medidas: meds, linhas });
+      const gradeRow = gradePorId.get(g);
+      const datas = [...(datasColunasPorGrade.get(g) ?? []), ...(datasPorGrade.get(g) ?? [])];
+      const tamanhoObjs = (tamsPorGrade.get(g) ?? []).map((tid) => ({
+        tamanho_id: tid,
+        codigo: tamCodigo.get(tid) ?? `#${tid}`,
+      }));
+      const instrucoes = String(gradeRow?.instrucoes_medidas || '').trim() || null;
+      medidasPorGrade.set(g, montarTabelaMedidas(meds, tamanhoObjs, valorPor, { instrucoes, datas }));
     }
     for (const p of produtos.rows) {
       const g = Number(p.grade_id) || gradePorCategoria.get(Number(p.categoria_id)) || 0;

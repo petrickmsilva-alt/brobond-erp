@@ -6,7 +6,21 @@ import { Modal } from './ui';
 
 type Tam = { id: number; codigo: string };
 type Grade = { local: string; celulas: { tamanho_id: number; quantidade: number }[] }[];
-type Medidas = { medidas: { id: number; nome: string; unidade: string }[]; linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[] } | null;
+type Medidas = {
+  medidas: { id: number; nome: string; unidade: string }[];
+  linhas: { tamanho_id: number; codigo: string; valores: Record<string, number | null> }[];
+  instrucoes?: string | null;
+  atualizada_em?: string | null;
+} | null;
+
+/** "2026-09-08T10:00:00Z" → "08/09/2026" (para a nota de rodapé da etiqueta). */
+function dataCurta(v: string | null | undefined): string {
+  if (!v) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  const d = new Date(String(v));
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('pt-BR');
+}
 
 /**
  * Impressão de etiquetas do produto (código de barras + SKU/nome/tamanho/cor/preço).
@@ -70,7 +84,7 @@ export function LabelSheet({
         ? `<div class="medidas">
             <div class="medidas-title">Tabela de medidas — ${esc(produto.nome || '')}</div>
             <table>
-              <thead><tr><th>Tamanho</th>${medidas.medidas.map((m) => `<th>${esc(m.nome)}</th>`).join('')}</tr></thead>
+              <thead><tr><th>Tamanho</th>${medidas.medidas.map((m) => `<th>${esc(m.nome)}<span class="un"> ${esc(m.unidade || '')}</span></th>`).join('')}</tr></thead>
               <tbody>${medidas.linhas
                 .map(
                   (l) =>
@@ -83,6 +97,8 @@ export function LabelSheet({
                 )
                 .join('')}</tbody>
             </table>
+            ${medidas.instrucoes ? `<div class="medidas-nota">${esc(medidas.instrucoes)}</div>` : ''}
+            ${medidas.atualizada_em ? `<div class="medidas-data">Atualizada em ${esc(dataCurta(medidas.atualizada_em))}</div>` : ''}
           </div>`
         : '';
 
@@ -102,7 +118,10 @@ export function LabelSheet({
            .medidas table{width:100%;border-collapse:collapse;font-size:8pt}
            .medidas th,.medidas td{border:0.2mm solid #999;padding:1mm 2mm;text-align:center}
            .medidas th{background:#eee;font-weight:700}
-           .medidas td:first-child,.medidas th:first-child{font-weight:700;text-align:left}`
+           .medidas td:first-child,.medidas th:first-child{font-weight:700;text-align:left}
+           .medidas .un{font-weight:400;font-size:6.5pt;color:#666}
+           .medidas-nota{font-size:7pt;color:#333;margin-top:2mm}
+           .medidas-data{font-size:6.5pt;color:#888;margin-top:1mm}`
         : `@page{size:50mm 30mm;margin:0}
            body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#000}
            .sheet{display:block}
