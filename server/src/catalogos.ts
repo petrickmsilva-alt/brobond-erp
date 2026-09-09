@@ -22,6 +22,7 @@ import { attachImages } from './uploads';
 import { recalcularTotal } from './itens';
 import { montarTabelaMedidas, tsIso } from './medidas';
 import type { TabelaMedidas } from './medidas';
+import { precoComPolitica, resolverPoliticaComercial } from './politicasComerciais';
 
 const require = createRequire(import.meta.url);
 
@@ -212,6 +213,7 @@ export async function catalogoPublico(req: Request, res: Response) {
   }
   const canal = String(catalogo.canal || 'todos');
   const tabelaPreco = String(catalogo.tabela_preco || 'automatico');
+  const politica = await resolverPoliticaComercial({ catalogo, clienteId: Number(resolvido.compartilhamento?.cliente_id) || null, canal: canal === 'atacado' ? 'atacado' : 'varejo' });
 
   // Preço exibido no catálogo: varejo, atacado, ambos ou automático conforme canal.
   function precoDoProduto(p: Row): { preco: number | null; preco_tipo: 'varejo' | 'atacado' | null; preco_venda: number | null; preco_atacado: number | null } {
@@ -223,12 +225,12 @@ export async function catalogoPublico(req: Request, res: Response) {
     else if (tabelaPreco === 'varejo') tipo = 'varejo';
     else if (tabelaPreco === 'atacado') tipo = 'atacado';
     else tipo = canal === 'atacado' ? 'atacado' : 'varejo';
-    const preco = tipo === 'atacado' ? atacado : varejo;
+    const preco = precoComPolitica(tipo === 'atacado' ? atacado : varejo, politica);
     return {
       preco,
       preco_tipo: tabelaPreco === 'ambos' ? null : tipo,
-      preco_venda: tabelaPreco === 'ambos' || tabelaPreco === 'varejo' || tabelaPreco === 'automatico' ? varejo : null,
-      preco_atacado: tabelaPreco === 'ambos' || tabelaPreco === 'atacado' || (tabelaPreco === 'automatico' && canal === 'atacado') ? atacado : null,
+      preco_venda: tabelaPreco === 'ambos' || tabelaPreco === 'varejo' || tabelaPreco === 'automatico' ? precoComPolitica(varejo, politica) : null,
+      preco_atacado: tabelaPreco === 'ambos' || tabelaPreco === 'atacado' || (tabelaPreco === 'automatico' && canal === 'atacado') ? precoComPolitica(atacado, politica) : null,
     };
   }
 
@@ -282,6 +284,7 @@ export async function catalogoPublico(req: Request, res: Response) {
     mostrar_preco: mostrarPreco,
     mostrar_saldo: mostrarSaldo,
     mostrar_medidas: mostrarMedidas,
+    politica_comercial: politica,
     total: lista.length,
     produtos: lista,
   });
@@ -311,6 +314,7 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
   const telefone = String(body.telefone || '').trim();
   const canalCatalogo = String(catalogo.canal || 'todos');
   const canal = canalCatalogo === 'atacado' ? 'atacado' : canalCatalogo === 'varejo' ? 'varejo' : (body.canal === 'atacado' ? 'atacado' : 'varejo');
+  const politica = await resolverPoliticaComercial({ catalogo, clienteId: Number(resolvido.compartilhamento?.cliente_id) || null, canal });
   const itens = Array.isArray(body.itens) ? body.itens : [];
   if (!nome) throw new HttpError(400, 'Informe o nome do cliente.', { nome: 'Campo obrigatório' });
   if (!itens.length) throw new HttpError(400, 'Adicione ao menos um item ao pedido.');
@@ -381,6 +385,8 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
         if (!produto || !Number.isInteger(quantidade) || quantidade <= 0 || quantidade > 9999) {
           throw new HttpError(400, 'Há um item inválido no pedido. Atualize a página e tente novamente.');
         }
+        if (politica?.produto_min_qtd && quantidade < politica.produto_min_qtd) throw new HttpError(400, `A política “${politica.nome}” exige ao menos ${politica.produto_min_qtd} peça(s) por item.`);
+        if (politica && quantidade % politica.multiplo_qtd !== 0) throw new HttpError(400, `A política “${politica.nome}” exige quantidades múltiplas de ${politica.multiplo_qtd}.`);
         // Se o cliente não selecionou tamanho, usa o primeiro com saldo (fallback).
         if (!Number.isInteger(tamanhoId) || tamanhoId <= 0) {
           const comSaldo = estoquesR.rows.find((e) => Number(e.produto_id) === produtoId && Number(e.quantidade) > 0);
@@ -393,7 +399,8 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
         if (produto.exibir_site === false || produto.ativo === false) {
           throw new HttpError(400, `O produto "${labelOf(RESOURCES.produtos, produto)}" não está disponível para pedido pelo site.`);
         }
-        const preco = Number(canal === 'atacado' ? (produto.preco_atacado || produto.preco_venda || 0) : produto.preco_venda || 0);
+        const precoBase = Number(canal === 'atacado' ? (produto.preco_atacado || produto.preco_venda || 0) : produto.preco_venda || 0);
+        const preco = precoComPolitica(precoBase, politica);
         const sub = Math.round(quantidade * preco * 100) / 100;
         subtotal += sub;
         await s.insert(itensR, {
@@ -406,6 +413,9 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
           subtotal: sub,
         }, tx);
       }
+      const totalPecas = itens.reduce((n: number, x: any) => n + Number(x.quantidade || 0), 0);
+      if (politica?.pedido_min_pecas && totalPecas < politica.pedido_min_pecas) throw new HttpError(400, `A política “${politica.nome}” exige pedido mínimo de ${politica.pedido_min_pecas} peças.`);
+      if (politica?.pedido_min_valor && subtotal < politica.pedido_min_valor) throw new HttpError(400, `A política “${politica.nome}” exige pedido mínimo de R$ ${politica.pedido_min_valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}.`);
       const total = await recalcularTotal('venda', Number(venda.id), tx);
       await s.audit(
         {

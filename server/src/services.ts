@@ -222,6 +222,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
       // Regras específicas
       if (r.key === 'usuarios') await prepareUserPayload(data, null, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, null, actor);
+      if (r.key === 'politicas_comerciais') prepararPoliticaComercial(data, null);
       if (r.key === 'movimentacoes') return createMovimentacao(data, actor, tx);
       if (r.key === 'movimentacoes_insumos') return createMovimentacaoInsumo(data, actor, tx);
       if (r.key === 'estoques') {
@@ -306,6 +307,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
 
       if (r.key === 'usuarios') await prepareUserPayload(data, before, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, before, actor);
+      if (r.key === 'politicas_comerciais') prepararPoliticaComercial(data, before);
       if (r.key === 'estoques') {
         // Edição parcial (ex.: só estoque_min) mantém o local atual do saldo —
         // sem isto o resolveLocal aplicaria o padrão "loja" e o
@@ -532,6 +534,17 @@ async function prepareUserPayload(data: Payload, before: Row | null, actor: Acto
     await ensureNotLastAdmin(before, data, null);
     invalidateUserCache(Number(before.id));
   }
+}
+
+
+function prepararPoliticaComercial(data: Payload, before: Row | null) {
+  const p = { ...(before || {}), ...data };
+  const escopo = String(p.escopo || 'geral');
+  const exigido: Record<string, string> = { canal: 'canal', colecao: 'colecao_id', catalogo: 'catalogo_id', cliente: 'cliente_id' };
+  const campo = exigido[escopo];
+  if (campo && !p[campo]) throw new HttpError(400, `Informe ${campo.replace('_id', '')} para o escopo selecionado.`, { [campo]: 'Campo obrigatório neste escopo' });
+  if (p.inicio_em && p.fim_em && String(p.inicio_em).slice(0, 10) > String(p.fim_em).slice(0, 10)) throw new HttpError(400, 'O início da vigência não pode ser posterior ao fim.', { fim_em: 'Data anterior ao início' });
+  if (Number(p.multiplo_qtd || 1) < 1) throw new HttpError(400, 'O múltiplo deve ser ao menos 1.', { multiplo_qtd: 'Mínimo 1' });
 }
 
 async function prepareCatalogosPayload(data: Payload, before: Row | null, _actor: Actor) {

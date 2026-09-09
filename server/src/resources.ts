@@ -1185,6 +1185,35 @@ export const RESOURCES: Record<string, Resource> = {
   },
 
   // ----------------------------------------------------------------
+  // Fase 3A — Políticas comerciais configuráveis por vigência e contexto
+  // ----------------------------------------------------------------
+  politicas_comerciais: {
+    key: 'politicas_comerciais', table: 'politicas_comerciais', label: 'Políticas comerciais', singular: 'Política comercial',
+    labelFields: ['nome'], ops: ALL_OPS, minPerfil: 'gerente',
+    notice: 'Regras sazonais de preço e pedido. A regra mais específica prevalece: cliente → catálogo → coleção → canal → geral.',
+    fields: [
+      { name: 'nome', label: 'Nome da política', type: 'text', required: true, search: true, maxLength: 120, wide: true, placeholder: 'Pré-venda Inverno 2027' },
+      { name: 'escopo', label: 'Aplicar por', type: 'select', required: true, default: 'geral', options: [
+        { value: 'geral', label: 'Regra geral' }, { value: 'canal', label: 'Canal' }, { value: 'colecao', label: 'Coleção' }, { value: 'catalogo', label: 'Catálogo' }, { value: 'cliente', label: 'Cliente específico' }
+      ] },
+      { name: 'canal', label: 'Canal', type: 'select', options: [{ value: 'todos', label: 'Todos' }, { value: 'varejo', label: 'Varejo' }, { value: 'atacado', label: 'Atacado' }] },
+      { name: 'colecao_id', label: 'Coleção', type: 'ref', ref: 'colecoes' },
+      { name: 'catalogo_id', label: 'Catálogo', type: 'ref', ref: 'catalogos' },
+      { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes' },
+      { name: 'inicio_em', label: 'Início da vigência', type: 'date' },
+      { name: 'fim_em', label: 'Fim da vigência', type: 'date' },
+      { name: 'prioridade', label: 'Prioridade', type: 'integer', default: 0, hint: 'Desempata regras do mesmo escopo. Maior número vence.' },
+      { name: 'desconto_pct', label: 'Desconto (%)', type: 'percent', default: 0, min: 0, max: 100 },
+      { name: 'pedido_min_valor', label: 'Pedido mínimo (R$)', type: 'money', default: 0, min: 0 },
+      { name: 'pedido_min_pecas', label: 'Pedido mínimo (peças)', type: 'integer', default: 0, min: 0 },
+      { name: 'produto_min_qtd', label: 'Mínimo por produto', type: 'integer', default: 0, min: 0 },
+      { name: 'multiplo_qtd', label: 'Múltiplo por item', type: 'integer', default: 1, min: 1 },
+      { name: 'reserva_horas', label: 'Reserva após aprovação (horas)', type: 'integer', default: 0, min: 0 },
+      ativo, ...auditFields,
+    ], orderBy: { field: 'prioridade', dir: 'desc' },
+  },
+
+  // ----------------------------------------------------------------
   // Fase 7 — Catálogos públicos
   // ----------------------------------------------------------------
   catalogos: {

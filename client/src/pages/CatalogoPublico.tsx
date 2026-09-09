@@ -59,6 +59,7 @@ type CatResp = {
   mostrar_preco: boolean;
   mostrar_saldo: boolean;
   mostrar_medidas: boolean;
+  politica_comercial: { nome: string; desconto_pct: number; pedido_min_valor: number; pedido_min_pecas: number; produto_min_qtd: number; multiplo_qtd: number } | null;
   total: number;
   produtos: ProdutoCatalogo[];
 };
@@ -255,6 +256,18 @@ export default function CatalogoPublico() {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-6 pb-24 sm:px-6">
+        {data.politica_comercial && (
+          <section className="mb-4 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-900">
+            <p className="font-bold">Condição comercial: {data.politica_comercial.nome}</p>
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-brand-800">
+              {data.politica_comercial.desconto_pct > 0 && <span>{formatNumber(data.politica_comercial.desconto_pct)}% de desconto aplicado</span>}
+              {data.politica_comercial.pedido_min_valor > 0 && <span>Pedido mínimo {formatMoney(data.politica_comercial.pedido_min_valor)}</span>}
+              {data.politica_comercial.pedido_min_pecas > 0 && <span>Mínimo de {data.politica_comercial.pedido_min_pecas} peças</span>}
+              {data.politica_comercial.produto_min_qtd > 0 && <span>Mínimo de {data.politica_comercial.produto_min_qtd} por item</span>}
+              {data.politica_comercial.multiplo_qtd > 1 && <span>Quantidades em múltiplos de {data.politica_comercial.multiplo_qtd}</span>}
+            </div>
+          </section>
+        )}
         {data.produtos.length > 0 && (
           <section className="mb-5 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm" aria-label="Busca e filtros">
             <div className="flex flex-col gap-3 sm:flex-row">

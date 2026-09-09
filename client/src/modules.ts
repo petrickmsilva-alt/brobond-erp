@@ -104,6 +104,7 @@ export const MODULES: Module[] = [
   // Compras / Vendas
   { id: 'compras', label: 'Compras', icon: ShoppingCart, group: 'Compras', path: '/compras', resource: 'compras', description: 'Pedidos de compra de insumos; ao receber, os insumos entram no estoque.' },
   { id: 'vendas', label: 'Vendas', icon: Receipt, group: 'Vendas', path: '/vendas', resource: 'vendas', description: 'Pedidos de venda com itens; ao faturar, as peças saem do estoque e a comissão é calculada.' },
+  { id: 'politicas-comerciais', label: 'Políticas comerciais', icon: Tags, group: 'Vendas', path: '/politicas-comerciais', resource: 'politicas_comerciais', minPerfil: 'gerente', description: 'Preços, mínimos, múltiplos e regras sazonais por canal, coleção, catálogo ou cliente.' },
   { id: 'catalogos', label: 'Catálogos públicos', icon: Share2, group: 'Vendas', path: '/catalogos', resource: 'catalogos', description: 'Compartilhe produtos com preço por link — sem login para o cliente.' },
 
   // Financeiro
