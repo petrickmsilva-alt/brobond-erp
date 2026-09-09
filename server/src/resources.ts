@@ -215,6 +215,13 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
       { name: 'email', label: 'E-mail', type: 'email', required: true, unique: true, search: true, maxLength: 160, hint: 'Usado para o login e para o convite de acesso.' },
       { name: 'perfil', label: 'Perfil', type: 'select', required: true, options: PERFIS, default: 'operador', hint: 'Administrador: tudo (com MFA obrigatório). Gerente: tudo, exceto usuários. Operador: não exclui registros.' },
+      { name: 'perm_catalogos', label: 'Gerenciar catálogos', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
+      { name: 'perm_compartilhar', label: 'Compartilhar catálogos', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
+      { name: 'perm_metricas', label: 'Ver métricas comerciais', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
+      { name: 'perm_politicas', label: 'Gerenciar políticas', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
+      { name: 'perm_aprovar', label: 'Aprovar exceções', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
+      { name: 'desconto_max_pct', label: 'Desconto máximo (%)', type: 'percent', min: 0, max: 100, section: 'Alçadas comerciais', hint: 'Vazio usa o padrão do perfil.' },
+      { name: 'venda_sem_aprovacao_ate', label: 'Venda sem aprovação até', type: 'money', min: 0, section: 'Alçadas comerciais', hint: 'Acima deste valor exige aprovação.' },
       { ...ativo, hint: 'Usuários inativos não conseguem entrar.' },
       {
         name: 'senha_status',

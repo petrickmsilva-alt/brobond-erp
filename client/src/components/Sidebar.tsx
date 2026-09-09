@@ -10,7 +10,9 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   const visible = MODULES.filter((m) => {
     if (m.adminOnly && !isAdmin) return false;
     if (m.minPerfil === 'admin' && !isAdmin) return false;
-    if (m.minPerfil === 'gerente' && !isAdmin && user?.perfil !== 'gerente') return false;
+    if (m.minPerfil === 'gerente' && !isAdmin && user?.perfil !== 'gerente') {
+      if (!(m.id === 'politicas-comerciais' && user?.perm_politicas === 'permitir')) return false;
+    }
     return true;
   });
   const top = visible.find((m) => m.group === null);

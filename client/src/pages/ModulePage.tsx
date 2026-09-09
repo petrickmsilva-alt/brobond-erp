@@ -82,9 +82,12 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const hasImages = !!resource.images;
   const [zoom, setZoom] = useState<{ file: PublicFile; files: PublicFile[] } | null>(null);
   const isOperador = user?.perfil === 'operador';
-  const canCreate = resource.ops.create;
-  const canUpdate = resource.ops.update;
-  const canDelete = resource.ops.delete && !isOperador;
+  const herdaComercial = user?.perfil === 'admin' || user?.perfil === 'gerente';
+  const permite = (v: string | undefined) => user?.perfil === 'admin' || v === 'permitir' || (v !== 'negar' && herdaComercial);
+  const podeGerirCatalogos = resource.key !== 'catalogos' || permite(user?.perm_catalogos);
+  const canCreate = resource.ops.create && podeGerirCatalogos;
+  const canUpdate = resource.ops.update && podeGerirCatalogos;
+  const canDelete = resource.ops.delete && !isOperador && podeGerirCatalogos;
   const readOnly = !canCreate && !canUpdate && !canDelete;
 
   // Lista
@@ -490,7 +493,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       />
 
       {resource.key === 'ordens' && <ProducaoCockpit />}
-      {resource.key === 'catalogos' && <CatalogoInsights />}
+      {resource.key === 'catalogos' && permite(user?.perm_metricas) && <CatalogoInsights />}
 
       {resource.notice && (
         <div className="mb-4">
@@ -605,7 +608,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                     {(canUpdate || canDelete || resource.detail) && (
                       <td className="text-right">
                         <div className="inline-flex items-center gap-1">
-                          {resource.key === 'catalogos' && (
+                          {resource.key === 'catalogos' && permite(user?.perm_compartilhar) && (
                             <button className="btn-icon !bg-brand-50 !text-brand-700 hover:!bg-brand-100" onClick={() => setCatalogoCompartilhar(row)} title="Compartilhar catálogo" aria-label="Compartilhar catálogo">
                               <Share2 className="h-4 w-4" />
                             </button>
@@ -670,7 +673,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                       </div>
                     </button>
                     <div className="flex shrink-0 items-center gap-0.5">
-                      {resource.key === 'catalogos' && (
+                      {resource.key === 'catalogos' && permite(user?.perm_compartilhar) && (
                         <button className="btn-icon !bg-brand-50 !text-brand-700" onClick={() => setCatalogoCompartilhar(row)} aria-label="Compartilhar catálogo">
                           <Share2 className="h-4 w-4" />
                         </button>

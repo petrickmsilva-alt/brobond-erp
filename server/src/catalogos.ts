@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
 import { getResource, RESOURCES } from './resources';
-import { checkAccess, getStore, toHttpError } from './services';
+import { checkAccess, exigirComercial, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
 import type { Row } from './store';
@@ -442,7 +442,7 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
 /** Central de compartilhamento: gera os ativos e registra a ação na auditoria. */
 export async function compartilharCatalogo(req: Request, res: Response) {
   const actor = currentUser(req);
-  checkAccess(RESOURCES.catalogos, actor, 'read');
+  exigirComercial(actor, 'compartilhar');
   const id = parseId(req.params.id);
   const s = getStore();
   const catalogo = await s.get(RESOURCES.catalogos, id);
@@ -501,7 +501,7 @@ export async function eventoCatalogo(req: Request, res: Response) {
 /** Painel gerencial da Fase 2B: funil e compartilhamentos recentes. */
 export async function inteligenciaCatalogos(req: Request, res: Response) {
   const actor = currentUser(req);
-  checkAccess(RESOURCES.catalogos, actor, 'read');
+  exigirComercial(actor, 'metricas');
   const s = getStore();
   const dias = Math.min(365, Math.max(1, Number(req.query.dias) || 30));
   const desde = Date.now() - dias * 86400000;
@@ -542,7 +542,7 @@ export async function inteligenciaCatalogos(req: Request, res: Response) {
 
 export async function revogarCompartilhamento(req: Request, res: Response) {
   const actor = currentUser(req);
-  checkAccess(RESOURCES.catalogos, actor, 'update');
+  exigirComercial(actor, 'compartilhar');
   const id = parseId(req.params.id);
   const s = getStore();
   const atual = await s.get(RESOURCES.catalogo_compartilhamentos, id);

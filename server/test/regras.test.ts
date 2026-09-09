@@ -137,6 +137,24 @@ test('catálogos públicos: cria com token, lista com rótulo da coleção e nã
   assert.deepEqual(filtrosDoCatalogo({ id: 0, colecao_id: 9, filtros: { colecao_id: 2 } }), { colecao_id: 9 });
 });
 
+test('fase 3B: permissões comerciais herdam perfil e aceitam concessão/negação individual', async () => {
+  const { podeComercial, checkAccess } = await import('../src/services');
+  const vendedor: any = { id: 77, name: 'Vendedor', perfil: 'operador', perm_compartilhar: 'permitir' };
+  assert.equal(podeComercial(vendedor, 'compartilhar'), true);
+  assert.equal(podeComercial(vendedor, 'politicas'), false);
+  assert.doesNotThrow(() => checkAccess(RESOURCES.catalogos, vendedor, 'read'));
+  assert.throws(() => checkAccess(RESOURCES.catalogos, vendedor, 'update'), /permissão comercial/);
+  const gerenteNegado: any = { id: 78, name: 'Gerente', perfil: 'gerente', perm_metricas: 'negar' };
+  assert.equal(podeComercial(gerenteNegado, 'metricas'), false);
+  assert.equal(podeComercial({ ...gerenteNegado, perfil: 'admin' }, 'metricas'), true);
+});
+
+test('fase 3B: permissão explícita controla aprovação de exceções', async () => {
+  const { podeAprovar } = await import('../src/approval');
+  assert.equal(podeAprovar({ id: 1, name: 'V', email: 'v@x', perfil: 'operador', perm_aprovar: 'permitir' }), true);
+  assert.equal(podeAprovar({ id: 2, name: 'G', email: 'g@x', perfil: 'gerente', perm_aprovar: 'negar' }), false);
+});
+
 test('fase 3A: política mais específica prevalece e preço é calculado pelo servidor', async () => {
   const cat = await createRecord(RESOURCES.catalogos, { nome: 'Catálogo Política', colecao_id: 1, canal: 'atacado' }, admin);
   await createRecord(RESOURCES.politicas_comerciais, { nome: 'Geral 3%', escopo: 'geral', desconto_pct: 3, multiplo_qtd: 1, ativo: true }, admin);

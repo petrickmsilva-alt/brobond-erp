@@ -23,7 +23,7 @@ const RESET_TTL_MIN = Number(process.env.RESET_TTL_MINUTES) || 60;
 export const REAUTH_TTL_MS = Number(process.env.REAUTH_TTL_MS) || 5 * 60_000;
 
 export type Perfil = 'admin' | 'gerente' | 'operador';
-export type AuthUser = { id: number; name: string; email: string; perfil: Perfil; trocar_senha?: boolean };
+export type AuthUser = { id: number; name: string; email: string; perfil: Perfil; trocar_senha?: boolean; perm_catalogos?: string; perm_compartilhar?: string; perm_metricas?: string; perm_politicas?: string; perm_aprovar?: string; desconto_max_pct?: number | null; venda_sem_aprovacao_ate?: number | null };
 
 export function normalizeEmail(email: unknown): string {
   return String(email ?? '').trim().toLowerCase();
@@ -55,6 +55,9 @@ function toAuthUser(row: Row): AuthUser {
   const perfil = (['admin', 'gerente', 'operador'] as Perfil[]).includes(row.perfil) ? row.perfil : 'operador';
   const user: AuthUser = { id: Number(row.id), name: row.nome || 'Usuário', email: row.email, perfil };
   if (row.trocar_senha === true) user.trocar_senha = true;
+  for (const k of ['perm_catalogos','perm_compartilhar','perm_metricas','perm_politicas','perm_aprovar'] as const) user[k] = String(row[k] || 'herdar');
+  user.desconto_max_pct = row.desconto_max_pct == null ? null : Number(row.desconto_max_pct);
+  user.venda_sem_aprovacao_ate = row.venda_sem_aprovacao_ate == null ? null : Number(row.venda_sem_aprovacao_ate);
   return user;
 }
 
