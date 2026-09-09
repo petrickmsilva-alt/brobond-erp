@@ -130,7 +130,14 @@ export async function exportarRecurso(req: Request, res: Response, resourceKey: 
 
   // Reúne todas as páginas
   const s = getStore();
-  const linhas: Row[] = [];
+  // Filtros virtuais de usuários (status consolidado + MFA) filtram em JS.
+  const filtroStatus = r.key === 'usuarios' && typeof filter.status === 'string' ? String(filter.status) : '';
+  const filtroMfa = r.key === 'usuarios' ? String(filter.mfa || '') : '';
+  if (r.key === 'usuarios') {
+    delete filter.status;
+    delete filter.mfa;
+  }
+  let linhas: Row[] = [];
   let page = 1;
   for (;;) {
     const resul = await s.list(r, { q, page, pageSize: 500, sort, dir, filter });
@@ -138,6 +145,30 @@ export async function exportarRecurso(req: Request, res: Response, resourceKey: 
     if (page * 500 >= resul.total) break;
     page++;
     if (page > 60) break; // trava de segurança: 30 mil linhas
+  }
+  if (r.key === 'usuarios' && (filtroStatus || filtroMfa)) {
+    const agora = Date.now();
+    const statusDe = (u: Row): string => {
+      const convExp = u.convite_expira_em ? new Date(String(u.convite_expira_em)).getTime() < agora : false;
+      const bloq = !!u.bloqueado_ate && new Date(String(u.bloqueado_ate)).getTime() > agora;
+      const exp = !!u.acesso_expira_em && new Date(String(u.acesso_expira_em)).getTime() < agora;
+      return u.ativo === false
+        ? 'inativo'
+        : bloq
+          ? 'bloqueado'
+          : exp
+            ? 'expirado'
+            : !u.senha_definida_em
+              ? convExp
+                ? 'convite_expirado'
+                : 'convite_pendente'
+              : u.trocar_senha
+                ? 'provisoria'
+                : 'ativo';
+    };
+    if (filtroStatus) linhas = linhas.filter((u) => statusDe(u) === filtroStatus);
+    if (filtroMfa === 'sim') linhas = linhas.filter((u) => !!u.mfa_ativado_em);
+    else if (filtroMfa === 'nao') linhas = linhas.filter((u) => !u.mfa_ativado_em);
   }
 
   const colunas: ColunaExport[] = [{ key: 'id', label: '#', tipo: 'number' }];

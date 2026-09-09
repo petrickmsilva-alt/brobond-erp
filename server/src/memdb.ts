@@ -479,9 +479,14 @@ export class MemStore implements Store {
     }
   }
 
-  async touchLogin(userId: number): Promise<void> {
+  async touchLogin(userId: number, ip?: string | null): Promise<void> {
     const row = this.table('usuarios').rows.get(userId);
-    if (row) row.ultimo_login = new Date().toISOString();
+    if (row) {
+      row.ultimo_login = new Date().toISOString();
+      if (ip) row.ultimo_ip = ip;
+      row.tentativas_falhas = 0;
+      row.ultimo_falha_em = null;
+    }
   }
 
   // ------------------------------------------------------------------

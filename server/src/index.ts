@@ -26,7 +26,7 @@ import {
   verificarAuditoriaHandler,
 } from './auth';
 import { mfaStatus, mfaSetup, mfaAtivar, mfaDesativar } from './mfa';
-import { aceitarConvite, infoConvite, reenviarConvite, senhaTemporaria, resetarMfaUsuario } from './usuariosAdmin';
+import { aceitarConvite, infoConvite, reenviarConvite, senhaTemporaria, resetarMfaUsuario, resumoUsuarios, atividadeUsuario, sessoesUsuario, desativarUsuario, ativarUsuario, desbloquearUsuario, encerrarSessoesUsuario, forcarTrocaSenha } from './usuariosAdmin';
 import { limpezaPeriodica } from './sessoes';
 import { getPublicResource, publicMeta } from './resources';
 import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider, uploadsConfigError } from './uploads';
@@ -188,6 +188,16 @@ app.put('/api/auth/preferences', wrap(savePreferences));
 app.post('/api/usuarios/:id/senha-temporaria', wrap(senhaTemporaria));
 app.post('/api/usuarios/:id/reenviar-convite', wrap(reenviarConvite));
 app.post('/api/usuarios/:id/resetar-mfa', wrap(resetarMfaUsuario));
+// Gestão profissional de usuários (admin): painel, ficha e ciclo de vida.
+// (Antes das rotas genéricas: /api/usuarios/resumo não pode cair em /:id.)
+app.get('/api/usuarios/resumo', wrap(resumoUsuarios));
+app.get('/api/usuarios/:id/atividade', wrap(atividadeUsuario));
+app.get('/api/usuarios/:id/sessoes', wrap(sessoesUsuario));
+app.post('/api/usuarios/:id/desativar', wrap(desativarUsuario));
+app.post('/api/usuarios/:id/ativar', wrap(ativarUsuario));
+app.post('/api/usuarios/:id/desbloquear', wrap(desbloquearUsuario));
+app.post('/api/usuarios/:id/encerrar-sessoes', wrap(encerrarSessoesUsuario));
+app.post('/api/usuarios/:id/forcar-troca-senha', wrap(forcarTrocaSenha));
 // Auditoria segura: verificação da cadeia de hashes (admin)
 app.get('/api/admin/auditoria/verificar', wrap(verificarAuditoriaHandler));
 

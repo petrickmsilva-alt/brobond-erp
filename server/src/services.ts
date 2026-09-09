@@ -100,12 +100,34 @@ export function checkAccess(r: Resource, actor: Actor, op: 'read' | 'create' | '
 // Leitura
 // ----------------------------------------------------------------------------
 export async function listRecords(r: Resource, p: ListParams) {
+  // Filtros virtuais do módulo Usuários (status consolidado + MFA): a tabela
+  // de usuários é pequena, então filtra em JS sobre a lista completa — com
+  // total e paginação corretos — em vez de aproximar na página atual.
+  if (r.key === 'usuarios' && (p.filter?.status || p.filter?.mfa)) {
+    return listUsuariosFiltrados(p);
+  }
   const out = await getStore().list(r, p);
   await attachImages(r, out.rows);
   anotarStatusSenha(r, out.rows);
   await anotarUsoLocal(r, out.rows);
   await attachGradeTamanhos(r, out.rows);
   return out;
+}
+
+/** Lista de usuários com filtro por status consolidado e/ou MFA (admin). */
+async function listUsuariosFiltrados(p: ListParams) {
+  const r = getResource('usuarios')!;
+  const { status, mfa, ...base } = p.filter || {};
+  const full = await getStore().list(r, { q: p.q, page: 1, pageSize: 5000, sort: p.sort, dir: p.dir, filter: base });
+  await attachImages(r, full.rows);
+  anotarStatusSenha(r, full.rows);
+  let rows = full.rows;
+  if (typeof status === 'string' && status) rows = rows.filter((row) => row.status_conta === status);
+  if (mfa === 'sim') rows = rows.filter((row) => !!row.mfa_ativado_em);
+  else if (mfa === 'nao') rows = rows.filter((row) => !row.mfa_ativado_em);
+  const total = rows.length;
+  const start = (p.page - 1) * p.pageSize;
+  return { rows: rows.slice(start, start + p.pageSize), total, page: p.page, pageSize: p.pageSize };
 }
 
 export async function getRecord(r: Resource, id: number) {
@@ -119,18 +141,38 @@ export async function getRecord(r: Resource, id: number) {
 }
 
 /**
- * Coluna "Senha" da lista de usuários: mostra o ESTADO do acesso, nunca o valor.
- * A senha é guardada em hash Argon2id (mão única) — nem um administrador consegue
- * vê-la ou recuperá-la.
- *   • convite_pendente — usuário criado, aguardando definir a própria senha via convite;
- *   • provisoria — senha temporária definida por admin (troca obrigatória no próximo acesso);
- *   • propria — senha definida pelo próprio usuário.
+ * Colunas "Senha" e "Status" da lista de usuários: mostram o ESTADO do acesso,
+ * nunca o valor. A senha é guardada em hash Argon2id (mão única) — nem um
+ * administrador consegue vê-la ou recuperá-la.
+ *   senha_status: convite_pendente | provisoria | propria
+ *   status_conta: ativo | convite_pendente | convite_expirado | provisoria |
+ *                 bloqueado | expirado | inativo
  */
 function anotarStatusSenha(r: Resource, rows: Row[]) {
   if (r.key !== 'usuarios') return;
+  const agora = Date.now();
   for (const row of rows) {
     row.senha_status = !row.senha_definida_em ? 'convite_pendente' : row.trocar_senha ? 'provisoria' : 'propria';
-    row.convite_expirado = row.convite_expira_em ? new Date(String(row.convite_expira_em)).getTime() < Date.now() : false;
+    const conviteExpirado = row.convite_expira_em ? new Date(String(row.convite_expira_em)).getTime() < agora : false;
+    row.convite_expirado = conviteExpirado;
+    const bloqueado = !!row.bloqueado_ate && new Date(String(row.bloqueado_ate)).getTime() > agora;
+    const expirado = !!row.acesso_expira_em && new Date(String(row.acesso_expira_em)).getTime() < agora;
+    row.conta_bloqueada = bloqueado;
+    row.acesso_expirado = expirado;
+    row.status_conta =
+      row.ativo === false
+        ? 'inativo'
+        : bloqueado
+          ? 'bloqueado'
+          : expirado
+            ? 'expirado'
+            : !row.senha_definida_em
+              ? conviteExpirado
+                ? 'convite_expirado'
+                : 'convite_pendente'
+              : row.trocar_senha
+                ? 'provisoria'
+                : 'ativo';
   }
 }
 
@@ -384,6 +426,11 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
       if (mudouGrade) await syncGradeTamanhos(id, gradeTamanhos, tx);
 
+      // Usuários: desativação/reativação/troca de perfil têm efeitos de segurança.
+      if (r.key === 'usuarios') {
+        await aplicarEfeitosUsuario(before, row, data, actor, tx);
+      }
+
       if (r.key === 'locais') {
         await garantirLocalPadrao(tx);
         // Local renomeado: propaga o novo nome para saldos, movimentações,
@@ -444,6 +491,21 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor): Promi
       if (r.key === 'usuarios') {
         if (Number(before.id) === Number(actor.id)) throw new HttpError(400, 'Você não pode excluir o seu próprio usuário.');
         await ensureNotLastAdmin(before, { ativo: false, perfil: 'x' }, tx);
+        // Conta que já foi usada não é apagada: a trilha de auditoria precisa
+        // dela. Desative em vez de excluir. Só contas virgens — que nunca
+        // acessaram, nunca agiram no sistema e nunca tiveram senha definida
+        // (convite pendente, ex.: cadastro duplicado por engano) — podem ser
+        // excluídas. Os eventos de criação/convite permanecem na trilha.
+        const temLogin = !!before.ultimo_login;
+        const teveSenha = !!before.senha_definida_em;
+        const eventosProprios = await s.countWhere(getResource('auditoria')!, { usuario_id: Number(before.id) }, tx);
+        if (temLogin || teveSenha || eventosProprios > 0) {
+          const detalhe = temLogin ? ', com acessos registrados' : teveSenha ? ', com credenciais emitidas' : '';
+          throw new HttpError(
+            409,
+            `“${String(before.nome || before.email)}” já tem histórico no sistema (${eventosProprios} evento(s) próprio(s)${detalhe}) e não pode ser excluído(a) — a trilha de auditoria depende deste registro. Desative a conta em vez disso.`
+          );
+        }
       }
       let usoLocal: UsoLocal | null = null;
       if (r.key === 'locais') {
@@ -561,14 +623,103 @@ async function prepareUserPayload(data: Payload, before: Row | null, actor: Acto
   }
   delete data.senha;
 
-  if (before) {
-    if (Number(before.id) === Number(actor.id)) {
-      if (data.ativo === false) throw new HttpError(400, 'Você não pode desativar o seu próprio usuário.');
-      if (data.perfil && data.perfil !== 'admin') throw new HttpError(400, 'Você não pode remover o seu próprio perfil de administrador.');
-    }
-    await ensureNotLastAdmin(before, data, null);
-    invalidateUserCache(Number(before.id));
+  if (!before) {
+    // Rastreabilidade: quem criou a conta.
+    (data as Record<string, unknown>).criado_por = actor.id || null;
+    return;
   }
+
+  if (Number(before.id) === Number(actor.id)) {
+    if (data.ativo === false) throw new HttpError(400, 'Você não pode desativar o seu próprio usuário.');
+    if (data.perfil && data.perfil !== 'admin') throw new HttpError(400, 'Você não pode remover o seu próprio perfil de administrador.');
+  }
+  await ensureNotLastAdmin(before, data, null);
+  invalidateUserCache(Number(before.id));
+}
+
+/**
+ * Efeitos colaterais da edição de um usuário (via CRUD genérico):
+ *   • desativação → carimba trilha (quando/por quem), derruba TODAS as sessões
+ *     e invalida os tokens (bump de token_versao);
+ *   • reativação → limpa trilha de desativação, bloqueio e falhas;
+ *   • troca de perfil → derruba as sessões (o novo perfil passa a valer no
+ *     próximo login, sem janela de permissão antiga).
+ */
+async function aplicarEfeitosUsuario(before: Row, row: Row, data: Payload, actor: Actor, tx: Tx): Promise<void> {
+  const s = getStore();
+  const r = getResource('usuarios')!;
+  const { revogarTodas } = await import('./sessoes');
+  const { invalidateUserCache } = await import('./auth');
+  const id = Number(row.id);
+
+  const desativou = before.ativo !== false && row.ativo === false;
+  const reativou = before.ativo === false && row.ativo !== false;
+  const perfilMudou = data.perfil !== undefined && data.perfil !== null && String(data.perfil) !== String(before.perfil);
+
+  if (desativou) {
+    const patch: Record<string, unknown> = { token_versao: Number(row.token_versao || 0) + 1 };
+    if (!row.desativado_em) patch.desativado_em = new Date().toISOString();
+    if (!row.desativado_por) patch.desativado_por = actor.name;
+    await s.update(r, id, patch, tx);
+    const sessoes = await revogarTodas(id);
+    await s.audit(
+      {
+        usuario_id: actor.id || null,
+        usuario: actor.name,
+        acao: 'seguranca',
+        recurso: 'usuarios',
+        registro_id: id,
+        descricao: `${String(before.nome || before.email)} DESATIVADO por ${actor.name}${sessoes ? ` — ${sessoes} sessão(ões) encerrada(s)` : ''}`,
+        dados: { sessoes_encerradas: sessoes },
+      },
+      tx
+    );
+  }
+  if (reativou) {
+    await s.update(
+      r,
+      id,
+      {
+        desativado_por: null,
+        desativado_em: null,
+        desativado_motivo: null,
+        bloqueado_ate: null,
+        motivo_bloqueio: null,
+        tentativas_falhas: 0,
+        ultimo_falha_em: null,
+      },
+      tx
+    );
+    await s.audit(
+      {
+        usuario_id: actor.id || null,
+        usuario: actor.name,
+        acao: 'seguranca',
+        recurso: 'usuarios',
+        registro_id: id,
+        descricao: `${String(before.nome || before.email)} REATIVADO por ${actor.name}`,
+      },
+      tx
+    );
+  }
+  if (perfilMudou && !desativou) {
+    const atual = (await s.findOneWhere(r, { id }, tx)) ?? row;
+    await s.update(r, id, { token_versao: Number(atual.token_versao || 0) + 1 }, tx);
+    const sessoes = await revogarTodas(id);
+    await s.audit(
+      {
+        usuario_id: actor.id || null,
+        usuario: actor.name,
+        acao: 'seguranca',
+        recurso: 'usuarios',
+        registro_id: id,
+        descricao: `Perfil de ${String(before.nome || before.email)} alterado de "${String(before.perfil)}" para "${String(data.perfil)}" por ${actor.name} — sessões encerradas (${sessoes}), novo perfil vale no próximo login`,
+        dados: { de: before.perfil, para: data.perfil, sessoes_encerradas: sessoes },
+      },
+      tx
+    );
+  }
+  if (desativou || reativou || perfilMudou) invalidateUserCache(id);
 }
 
 

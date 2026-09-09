@@ -21,6 +21,26 @@ export const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@brobond.com.br').t
 export const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'brobond123').trim();
 const RESET_TTL_MIN = Number(process.env.RESET_TTL_MINUTES) || 60;
 export const REAUTH_TTL_MS = Number(process.env.REAUTH_TTL_MS) || 5 * 60_000;
+// Bloqueio por usuário (além do rate limit por IP+e-mail): N senhas erradas
+// seguidas bloqueiam a CONTA por alguns minutos — trava força-bruta distribuída.
+export const USER_LOCK_MAX = Number(process.env.USER_LOCK_MAX_ATTEMPTS) || 5;
+export const USER_LOCK_MIN = Number(process.env.USER_LOCK_MINUTES) || 15;
+
+/** true quando o bloqueio temporário da conta ainda está vigente. */
+export function contaBloqueada(row: Row): boolean {
+  return !!row?.bloqueado_ate && new Date(String(row.bloqueado_ate)).getTime() > Date.now();
+}
+
+/** true quando o acesso temporário já venceu (acesso_expira_em no passado). */
+export function acessoExpirado(row: Row): boolean {
+  return !!row?.acesso_expira_em && new Date(String(row.acesso_expira_em)).getTime() < Date.now();
+}
+
+/** Minutos restantes de bloqueio (para a mensagem de erro). */
+function minutosDeBloqueio(row: Row): number {
+  const ms = new Date(String(row.bloqueado_ate)).getTime() - Date.now();
+  return Math.max(1, Math.ceil(ms / 60_000));
+}
 
 export type Perfil = 'admin' | 'gerente' | 'operador';
 export type AuthUser = { id: number; name: string; email: string; perfil: Perfil; trocar_senha?: boolean; perm_catalogos?: string; perm_compartilhar?: string; perm_metricas?: string; perm_politicas?: string; perm_aprovar?: string; desconto_max_pct?: number | null; venda_sem_aprovacao_ate?: number | null };
@@ -157,11 +177,25 @@ export async function login(req: Request, res: Response) {
     if (row.ativo === false) {
       return res.status(403).json({ error: 'Usuário desativado. Fale com o administrador.' });
     }
+    if (contaBloqueada(row)) {
+      return res.status(403).json({
+        error: `Acesso bloqueado temporariamente por excesso de tentativas incorretas. Tente novamente em ${minutosDeBloqueio(row)} minuto(s) ou fale com o administrador.`,
+      });
+    }
+    if (acessoExpirado(row)) {
+      return res.status(403).json({ error: 'Acesso expirado. Fale com o administrador para renovar.' });
+    }
     const verificacao = await verifyPasswordDetailed(password, row.senha_hash);
     if (verificacao.ok) {
       await registerLoginSuccess(req);
       const user = toAuthUser(row);
-      await store.touchLogin(user.id);
+      await store.touchLogin(user.id, clientIp(req) || null);
+      // Limpa bloqueio vencido que tenha ficado para trás.
+      if (row.bloqueado_ate) {
+        try {
+          await store.update((await import('./resources')).RESOURCES.usuarios, user.id, { bloqueado_ate: null, motivo_bloqueio: null });
+        } catch { /* indiferente */ }
+      }
 
       // Migração gradual: hash bcrypt válido → regrava em Argon2id (transparente).
       if (verificacao.rehash || !hashAtualizado(row.senha_hash)) {
@@ -251,6 +285,8 @@ export async function loginMFA(req: Request, res: Response) {
   const { RESOURCES } = await import('./resources');
   const row = await store.findOneWhere(RESOURCES.usuarios, { id: Number(payload.id) });
   if (!row || row.ativo === false) return res.status(401).json({ error: 'Usuário desativado ou removido.' });
+  if (contaBloqueada(row)) return res.status(403).json({ error: 'Acesso bloqueado temporariamente. Tente novamente em alguns minutos.' });
+  if (acessoExpirado(row)) return res.status(403).json({ error: 'Acesso expirado. Fale com o administrador para renovar.' });
 
   const { decifrarSegredoMfa } = await import('./mfa');
   const { verificarTOTP } = await import('./totp');
@@ -301,6 +337,8 @@ export async function mfaDesafio(req: Request, res: Response) {
   const { RESOURCES } = await import('./resources');
   const row = await store.findOneWhere(RESOURCES.usuarios, { id: Number(payload.id) });
   if (!row || row.ativo === false) throw new HttpError(401, 'Usuário desativado ou removido.');
+  if (contaBloqueada(row)) throw new HttpError(403, 'Acesso bloqueado temporariamente. Tente novamente em alguns minutos.');
+  if (acessoExpirado(row)) throw new HttpError(403, 'Acesso expirado. Fale com o administrador para renovar.');
   if (row.mfa_ativado_em) throw new HttpError(400, 'MFA já está ativado para este usuário. Apenas o código é necessário.');
   const dados = await prepararDesafio(row, async (segredo) => {
     await store.update(RESOURCES.usuarios, Number(row.id), { mfa_secret: cifrarSegredoMfa(segredo) });
@@ -312,6 +350,8 @@ export async function mfaDesafio(req: Request, res: Response) {
 /** Resposta padrão de falha de login: conta a tentativa e registra bloqueio na auditoria. */
 async function loginFailed(req: Request, res: Response, row: Row | null) {
   const left = await registerLoginFailure(req);
+  // Contador POR USUÁRIO: N falhas seguidas bloqueiam a conta por alguns minutos.
+  if (row) await registrarFalhaUsuario(row, clientIp(req));
   if (left === 0) {
     await getStore()
       .audit({
@@ -326,6 +366,39 @@ async function loginFailed(req: Request, res: Response, row: Row | null) {
   }
   const hint = left > 0 && left <= 2 ? ` Restam ${left} tentativa${left === 1 ? '' : 's'}.` : '';
   return res.status(401).json({ error: `E-mail ou senha incorretos.${hint}` });
+}
+
+/**
+ * Incrementa as falhas consecutivas do usuário; ao atingir USER_LOCK_MAX,
+ * bloqueia a conta por USER_LOCK_MIN minutos e registra na trilha.
+ */
+async function registrarFalhaUsuario(row: Row, ip: string): Promise<void> {
+  try {
+    const store = getStore();
+    const { RESOURCES } = await import('./resources');
+    const falhas = Number(row.tentativas_falhas || 0) + 1;
+    const patch: Record<string, unknown> = { tentativas_falhas: falhas, ultimo_falha_em: new Date().toISOString(), ultimo_ip: ip || null };
+    if (falhas >= USER_LOCK_MAX) {
+      patch.bloqueado_ate = new Date(Date.now() + USER_LOCK_MIN * 60_000).toISOString();
+      patch.motivo_bloqueio = `Bloqueio automático: ${falhas} tentativas incorretas seguidas`;
+    }
+    await store.update(RESOURCES.usuarios, Number(row.id), patch);
+    if (falhas >= USER_LOCK_MAX) {
+      await store
+        .audit({
+          usuario_id: Number(row.id),
+          usuario: String(row.nome || row.email),
+          acao: 'bloqueio',
+          recurso: 'usuarios',
+          registro_id: Number(row.id),
+          descricao: `Acesso de ${String(row.email)} BLOQUEADO automaticamente por ${USER_LOCK_MIN} min (${falhas} senhas incorretas seguidas — ${ip || 'ip desconhecido'})`,
+          dados: { tentativas: falhas, ip },
+        })
+        .catch(() => undefined);
+    }
+  } catch {
+    // Falha ao gravar o contador não pode quebrar o fluxo de login.
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -518,6 +591,15 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
           userCache.delete(payload.id);
           return res.status(401).json({ error: 'Usuário desativado ou removido.' });
         }
+        // Bloqueio temporário e expiração derrubam a sessão ativa em até 30 s.
+        if (contaBloqueada(row)) {
+          userCache.delete(payload.id);
+          return res.status(401).json({ error: 'Acesso bloqueado temporariamente. Entre novamente em alguns minutos.' });
+        }
+        if (acessoExpirado(row)) {
+          userCache.delete(payload.id);
+          return res.status(401).json({ error: 'Acesso expirado. Fale com o administrador para renovar.' });
+        }
         // "Sair de todos os dispositivos" incrementa token_versao → token antigo cai.
         if (Number(row.token_versao || 0) !== Number(payload.ver || 0)) {
           userCache.delete(payload.id);
@@ -671,6 +753,11 @@ export async function resetPassword(req: Request, res: Response) {
     senha_provisoria: false,
     senha_definida_em: new Date().toISOString(),
     token_versao: versao,
+    // Quem prova a identidade pelo e-mail desbloqueia a conta e zera as falhas.
+    bloqueado_ate: null,
+    motivo_bloqueio: null,
+    tentativas_falhas: 0,
+    ultimo_falha_em: null,
   });
   await revogarTodas(Number(row.id));
   await registrarSucesso('reset', ip);
