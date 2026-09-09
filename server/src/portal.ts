@@ -76,7 +76,10 @@ export async function portalPedidoDetalhe(req: Request, res: Response) {
   const tam = new Map(tamanhos.rows.map((t) => [Number(t.id), String(t.codigo || '')]));
   const prod = new Map(produtos.rows.map((p) => [Number(p.id), p]));
   const linhas = itens.rows.map((it) => { const p = prod.get(Number(it.produto_id)); return { produto_id: Number(it.produto_id), produto: p ? labelOf(RESOURCES.produtos, p) : `#${it.produto_id}`, sku: p?.sku || '', tamanho_id: Number(it.tamanho_id), tamanho: tam.get(Number(it.tamanho_id)) || '', quantidade: Number(it.quantidade || 0), preco_unitario: Number(it.preco_unitario || 0), desconto_pct: Number(it.desconto_pct || 0), subtotal: Number(it.subtotal || 0), foto: p?.foto_url || null }; });
-  res.json({ id: pedidoId, data: String(venda.data || '').slice(0, 10), status: String(venda.status), status_label: statusLabels[String(venda.status)] || venda.status, total: Number(venda.total || 0), frete: Number(venda.frete || 0), desconto: Number(venda.desconto || 0), previsao_entrega: venda.previsao_entrega || null, condicao_pagamento: venda.condicao_pagamento || null, observacoes: venda.observacoes || null, pode_decidir: venda.status === 'cotacao', itens: linhas, decisoes: decisoes.rows.map((d) => ({ decisao: d.decisao, responsavel: d.responsavel, mensagem: d.mensagem, criado_em: d.criado_em })) });
+  res.json({ id: pedidoId, data: String(venda.data || '').slice(0, 10), status: String(venda.status), status_label: statusLabels[String(venda.status)] || venda.status, total: Number(venda.total || 0), frete: Number(venda.frete || 0), desconto: Number(venda.desconto || 0), previsao_entrega: venda.previsao_entrega || null, condicao_pagamento: venda.condicao_pagamento || null, observacoes: venda.observacoes || null, pode_decidir: venda.status === 'cotacao', itens: linhas, documentos: [
+    venda.nfe_numero ? { tipo: 'NF-e', referencia: String(venda.nfe_numero) } : null,
+    venda.fin_documento ? { tipo: 'Financeiro', referencia: String(venda.fin_documento) } : null,
+  ].filter(Boolean), decisoes: decisoes.rows.map((d) => ({ decisao: d.decisao, responsavel: d.responsavel, mensagem: d.mensagem, criado_em: d.criado_em })) });
 }
 
 export async function decidirCotacao(req: Request, res: Response) {
@@ -99,4 +102,63 @@ export async function decidirCotacao(req: Request, res: Response) {
     await s.audit({ usuario_id: null, usuario: `Portal — ${responsavel}`, acao: 'editar', recurso: 'vendas', registro_id: id, descricao: `Cotação #${id}: cliente decidiu ${decisao}`, dados: { decisao, proposta_hash } }, tx);
   });
   res.json({ ok: true, mensagem: decisao === 'aceitar' ? 'Cotação aceita e pedido confirmado.' : decisao === 'recusar' ? 'Cotação recusada.' : 'Solicitação de alteração enviada.' });
+}
+
+/** Administração dos acessos: nunca devolve tokens antigos, apenas metadados. */
+export async function administrarAcessosPortal(req: Request, res: Response) {
+  const { currentUser } = await import('./auth');
+  const { checkAccess } = await import('./services');
+  const actor = currentUser(req); checkAccess(RESOURCES.clientes, actor, 'read');
+  const clienteId = Number(req.params.id);
+  const cliente = await getStore().get(RESOURCES.clientes, clienteId);
+  if (!cliente) throw new HttpError(404, 'Cliente não encontrado.');
+  const lista = await getStore().list(RESOURCES.portal_acessos, { page: 1, pageSize: 100, sort: 'criado_em', dir: 'desc', filter: { cliente_id: clienteId } });
+  const agora = Date.now();
+  res.json({ cliente: cliente.nome, acessos: lista.rows.map((a) => ({ id: Number(a.id), criado_em: a.criado_em, expira_em: a.expira_em, ultimo_acesso_em: a.ultimo_acesso_em, acessos: Number(a.acessos || 0), status: a.revogado_em ? 'revogado' : a.expira_em && new Date(String(a.expira_em)).getTime() < agora ? 'expirado' : 'ativo' })) });
+}
+
+export async function gerarAcessoPortal(req: Request, res: Response) {
+  const { currentUser } = await import('./auth'); const { checkAccess } = await import('./services');
+  const actor = currentUser(req); checkAccess(RESOURCES.clientes, actor, 'update');
+  const clienteId = Number(req.params.id); const s = getStore();
+  const cliente = await s.get(RESOURCES.clientes, clienteId); if (!cliente) throw new HttpError(404, 'Cliente não encontrado.');
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const base = String(process.env.APP_URL || (host ? `${proto}://${host}` : '')).replace(/\/$/, '');
+  const acesso = await criarAcessoPortal(clienteId, base, Number(req.body?.validade_dias) || 90);
+  await s.audit({ usuario_id: actor.id, usuario: actor.name, acao: 'criar', recurso: 'clientes', registro_id: clienteId, descricao: `Novo acesso seguro ao portal gerado para ${cliente.nome}`, dados: { expira_em: acesso.expira_em } });
+  res.status(201).json(acesso);
+}
+
+export async function revogarAcessoPortal(req: Request, res: Response) {
+  const { currentUser } = await import('./auth'); const { checkAccess } = await import('./services');
+  const actor = currentUser(req); checkAccess(RESOURCES.clientes, actor, 'update');
+  const clienteId = Number(req.params.id), acessoId = Number(req.params.acessoId); const s = getStore();
+  const acesso = await s.findOneWhere(RESOURCES.portal_acessos, { id: acessoId, cliente_id: clienteId });
+  if (!acesso) throw new HttpError(404, 'Acesso não encontrado.');
+  if (!acesso.revogado_em) await s.update(RESOURCES.portal_acessos, acessoId, { revogado_em: new Date().toISOString() });
+  await s.audit({ usuario_id: actor.id, usuario: actor.name, acao: 'editar', recurso: 'clientes', registro_id: clienteId, descricao: `Acesso #${acessoId} ao portal revogado`, dados: { acesso_id: acessoId } });
+  res.json({ ok: true });
+}
+
+export async function recomprarPedido(req: Request, res: Response) {
+  const { cliente } = await autenticar(String(req.params.token || '')); const originalId = Number(req.params.id); const s = getStore();
+  const original = await s.get(RESOURCES.vendas, originalId);
+  if (!original || Number(original.cliente_id) !== Number(cliente.id)) throw new HttpError(404, 'Pedido não encontrado.');
+  if (original.status === 'cancelada') throw new HttpError(409, 'Pedido cancelado não pode ser usado para recompra.');
+  const itens = await s.list(RESOURCES.itens_venda, { page: 1, pageSize: 500, filter: { venda_id: originalId } });
+  if (!itens.rows.length) throw new HttpError(409, 'O pedido não possui itens para recompra.');
+  const produtos = await s.list(RESOURCES.produtos, { page: 1, pageSize: 5000 }); const porId = new Map(produtos.rows.map((p) => [Number(p.id), p]));
+  const novo = await s.transaction(async (tx) => {
+    const venda = await s.insert(RESOURCES.vendas, { cliente_id: Number(cliente.id), data: new Date().toISOString().slice(0, 10), status: 'cotacao', canal_venda: original.canal_venda || 'site_varejo', condicao_pagamento: original.condicao_pagamento || 'Pendente', fin_status: 'a_receber', observacoes: `Recompra solicitada pelo portal a partir do pedido #${originalId}` }, tx);
+    for (const item of itens.rows) {
+      const p = porId.get(Number(item.produto_id)); if (!p || p.ativo === false || p.exibir_site === false) continue;
+      const atacado = original.canal_venda === 'site_atacado'; const preco = Number(atacado ? (p.preco_atacado || p.preco_venda || 0) : p.preco_venda || 0); const quantidade = Number(item.quantidade || 0);
+      await s.insert(RESOURCES.itens_venda, { venda_id: Number(venda.id), produto_id: Number(item.produto_id), tamanho_id: Number(item.tamanho_id), quantidade, preco_unitario: preco, desconto_pct: 0, subtotal: Math.round(preco * quantidade * 100) / 100 }, tx);
+    }
+    const { recalcularTotal } = await import('./itens'); const total = await recalcularTotal('venda', Number(venda.id), tx);
+    await s.audit({ usuario_id: null, usuario: `Portal — ${cliente.nome}`, acao: 'criar', recurso: 'vendas', registro_id: Number(venda.id), descricao: `Recompra do pedido #${originalId} solicitada pelo portal`, dados: { pedido_origem: originalId, total } }, tx);
+    return { id: Number(venda.id), total };
+  });
+  res.status(201).json({ ok: true, pedido_id: novo.id, total: novo.total, mensagem: 'Recompra criada como nova cotação para conferência.' });
 }

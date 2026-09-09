@@ -75,7 +75,7 @@ import { listAprovacoes, aprovarPedido, rejeitarPedido, countAprovacoes } from '
 import { runScheduled, cronScheduled, scheduledStatus } from './scheduled';
 import { listQualidade, createQualidade, relatorioQualidade } from './quality';
 import { predicaoDemanda, predicaoInsumos } from './prediction';
-import { rateLimitPortal, decidirCotacao, portalPedidos, portalPedidoDetalhe } from './portal';
+import { rateLimitPortal, administrarAcessosPortal, decidirCotacao, gerarAcessoPortal, portalPedidos, portalPedidoDetalhe, recomprarPedido, revogarAcessoPortal } from './portal';
 import { notificacoesStatus, verificarAlertasEstoque } from './notifications';
 import { openapiJSON, openapiUI } from './openapi';
 import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat';
@@ -155,6 +155,7 @@ app.post('/api/publico/catalogo/:token/evento', rateLimitPublico, wrap(eventoCat
 app.get('/api/portal/:token/pedidos', rateLimitPortal, wrap(portalPedidos));
 app.get('/api/portal/:token/pedido/:id', rateLimitPortal, wrap(portalPedidoDetalhe));
 app.post('/api/portal/:token/pedido/:id/decisao', rateLimitPortal, wrap(decidirCotacao));
+app.post('/api/portal/:token/pedido/:id/recomprar', rateLimitPortal, wrap(recomprarPedido));
 // Imagens armazenadas no banco: URL pública protegida por token aleatório
 app.get('/api/files/:id/:token', wrap(serveFile));
 
@@ -243,6 +244,11 @@ app.delete('/api/compras/:id/itens/:itemId', wrap(deleteItem));
 // PDF dos pedidos (antes das rotas genéricas)
 app.get('/api/vendas/:id/pdf', wrap(vendaPDF));
 app.get('/api/compras/:id/pdf', wrap(compraPDF));
+
+// Gestão administrativa dos acessos seguros ao portal
+app.get('/api/clientes/:id/portal-acessos', wrap(administrarAcessosPortal));
+app.post('/api/clientes/:id/portal-acessos', wrap(gerarAcessoPortal));
+app.post('/api/clientes/:id/portal-acessos/:acessoId/revogar', wrap(revogarAcessoPortal));
 
 // Inteligência comercial e gestão de compartilhamentos (antes do CRUD genérico)
 app.get('/api/catalogos/inteligencia', wrap(inteligenciaCatalogos));

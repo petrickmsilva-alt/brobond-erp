@@ -51,6 +51,7 @@ import FinanceiroPage from './FinanceiroPage';
 import AjudaPage from './AjudaPage';
 import CatalogoShareModal from '../components/CatalogoShareModal';
 import CatalogoInsights from '../components/CatalogoInsights';
+import PortalAccessModal from '../components/PortalAccessModal';
 
 const PAGE_SIZE = 25;
 
@@ -97,6 +98,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [page, setPage] = useState(1);
+  const [clientePortal, setClientePortal] = useState<Record<string, any> | null>(null);
   const [catalogoCompartilhar, setCatalogoCompartilhar] = useState<Record<string, any> | null>(null);
   const [sort, setSort] = useState<{ field: string; dir: 'asc' | 'desc' } | null>(null);
 
@@ -608,7 +610,13 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                     {(canUpdate || canDelete || resource.detail) && (
                       <td className="text-right">
                         <div className="inline-flex items-center gap-1">
-                          {resource.key === 'catalogos' && permite(user?.perm_compartilhar) && (
+                          {resource.key === 'clientes' && canUpdate && (
+                            <button className="btn-icon !bg-navy-50 !text-navy-700" onClick={() => setClientePortal(row)} title="Portal do cliente" aria-label="Portal do cliente"><KeyRound className="h-4 w-4" /></button>
+                          )}
+                          {resource.key === 'clientes' && canUpdate && (
+                        <button className="btn-icon !bg-navy-50 !text-navy-700" onClick={() => setClientePortal(row)} aria-label="Portal do cliente"><KeyRound className="h-4 w-4" /></button>
+                      )}
+                      {resource.key === 'catalogos' && permite(user?.perm_compartilhar) && (
                             <button className="btn-icon !bg-brand-50 !text-brand-700 hover:!bg-brand-100" onClick={() => setCatalogoCompartilhar(row)} title="Compartilhar catálogo" aria-label="Compartilhar catálogo">
                               <Share2 className="h-4 w-4" />
                             </button>
@@ -827,6 +835,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         </div>
       </Modal>
 
+      <PortalAccessModal cliente={clientePortal} onClose={() => setClientePortal(null)} />
       <CatalogoShareModal catalogo={catalogoCompartilhar} onClose={() => setCatalogoCompartilhar(null)} />
 
       {importTipo && (
