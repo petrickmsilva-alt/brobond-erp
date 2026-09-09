@@ -2,31 +2,30 @@
 // Módulo Usuários — gestão profissional de acesso (ERP).
 //
 //   • Painel: KPIs + alertas acionáveis (MFA, convites, bloqueios, expiração)
-//   • Lista rica: avatar, perfil, status consolidado, acesso, MFA, último login
-//   • Filtros server-side (perfil, situação, status, MFA) + busca + ordenação
+//   • Caixabox de Filtros de Alto Nível: filtros por usuário, perfil, status,
+//     senha, MFA, último acesso, situação com atalhos e chips dinâmicos
+//   • Tags & Badges de Alto Nível: formato caixa (rounded-md) com ícones e
+//     indicadores de status (sem textos espremidos em bolas)
 //   • Ficha do usuário: dados, segurança/sessões e trilha de auditoria
 //   • Ciclo de vida: convite, senha temporária (exibição única), ativar/
 //     desativar com motivo, desbloquear, encerrar sessões, troca forçada,
 //     reset de MFA — ações sensíveis com reautenticação (step-up)
-//   • UX: linhas clicáveis, menu de ações por linha, KPIs que filtram
-//     (liga/desliga), alertas com ação rápida e ficha auto-recarregável
-//   • Onda 3: gráfico de acessos 7 dias, ações em lote (troca/encerrar/
-//     desativar/exportar seleção), bloqueio manual com prazo, revogação de
-//     sessão individual, trilha com diff de alterações e ficha impressa
-//   • Onda 4: política de senha configurável, certificação de acessos
-//     (matriz + carimbo auditado), alertas de vencimento e XLSX da seleção
+//   • Onda 3/4: gráfico 7d, ações em lote, política de senha, certificação
 // ============================================================================
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Activity,
   AlertTriangle,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
   Ban,
   BellRing,
+  Briefcase,
   ChevronLeft,
-  ClipboardCheck,
   ChevronRight,
+  ClipboardCheck,
+  Clock,
   Copy,
   Download,
   Eye,
@@ -42,14 +41,16 @@ import {
   Pencil,
   Plus,
   Power,
-  Printer,
   PowerOff,
+  Printer,
   RefreshCw,
   Search,
-  ShieldCheck,
+  Shield,
   ShieldAlert,
+  ShieldCheck,
   Smartphone,
   Trash2,
+  User,
   UserRound,
   Users,
   X,
@@ -184,9 +185,9 @@ const ALERTA_META: Record<string, { label: string; tone: 'amber' | 'red' | 'blue
 };
 
 const AVATAR_BG: Record<string, string> = {
-  admin: 'bg-brand-500',
-  gerente: 'bg-navy-700',
-  operador: 'bg-slate-500',
+  admin: 'bg-brand-500 dark:bg-brand-600',
+  gerente: 'bg-navy-700 dark:bg-navy-600',
+  operador: 'bg-slate-600 dark:bg-slate-700',
 };
 
 function iniciais(nome: string): string {
@@ -196,11 +197,150 @@ function iniciais(nome: string): string {
   return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase();
 }
 
-function Avatar({ nome, perfil, tamanho = 'md' }: { nome: string; perfil: string; tamanho?: 'md' | 'lg' }) {
-  const cls = tamanho === 'lg' ? 'h-14 w-14 text-lg' : 'h-9 w-9 text-xs';
+/** Avatar estruturado em formato caixa box profissional. */
+function AvatarBox({ nome, perfil, tamanho = 'md' }: { nome: string; perfil: string; tamanho?: 'md' | 'lg' }) {
+  const cls = tamanho === 'lg' ? 'h-12 w-12 text-base rounded-xl' : 'h-9 w-9 text-xs rounded-lg';
   return (
-    <span className={`flex ${cls} shrink-0 items-center justify-center rounded-full font-bold text-white ${AVATAR_BG[perfil] || 'bg-slate-500'}`}>
+    <span className={`flex ${cls} shrink-0 items-center justify-center font-bold font-mono text-white shadow-2xs ${AVATAR_BG[perfil] || 'bg-slate-600'}`}>
       {iniciais(nome)}
+    </span>
+  );
+}
+
+/** Tag caixa box de Perfil profissional com ícone. */
+function TagPerfil({ perfil }: { perfil: string }) {
+  if (perfil === 'admin') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 shadow-2xs dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300">
+        <Shield className="h-3 w-3 text-amber-600 dark:text-amber-400" />
+        Administrador
+      </span>
+    );
+  }
+  if (perfil === 'gerente') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-blue-300/80 bg-blue-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-blue-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/60 dark:text-navy-200">
+        <Briefcase className="h-3 w-3 text-blue-600 dark:text-navy-300" />
+        Gerente
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-300/80 bg-slate-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700 shadow-2xs dark:border-navy-700 dark:bg-navy-800/40 dark:text-slate-300">
+      <User className="h-3 w-3 text-slate-500" />
+      Operador
+    </span>
+  );
+}
+
+/** Tag caixa box de Status da Conta com indicador visual de ponto. */
+function TagStatus({ row }: { row: Usuario }) {
+  const statusKey = row.status_conta || 'ativo';
+  if (row.ativo === false) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-300/80 bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600 shadow-2xs dark:border-navy-700 dark:bg-navy-800 dark:text-navy-400">
+        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+        Desativado
+      </span>
+    );
+  }
+  if (row.conta_bloqueada) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-red-300/80 bg-red-50 px-2.5 py-0.5 text-[11px] font-semibold text-red-900 shadow-2xs dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-300" title={row.bloqueado_ate ? `Até ${formatDateTime(row.bloqueado_ate)}` : row.motivo_bloqueio}>
+        <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+        Bloqueado
+      </span>
+    );
+  }
+  if (row.acesso_expirado) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-red-300/80 bg-red-50 px-2.5 py-0.5 text-[11px] font-semibold text-red-900 shadow-2xs dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-300">
+        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+        Acesso expirado
+      </span>
+    );
+  }
+  if (statusKey === 'convite_pendente') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-blue-300/80 bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/50 dark:text-navy-300">
+        <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+        Convite pendente
+      </span>
+    );
+  }
+  if (statusKey === 'convite_expirado') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 shadow-2xs dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+        Convite expirado
+      </span>
+    );
+  }
+  if (statusKey === 'provisoria') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 shadow-2xs dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+        Troca pendente
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/80 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-900 shadow-2xs dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300">
+      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+      Ativo
+    </span>
+  );
+}
+
+/** Tag caixa box de Estado da Senha. */
+function TagSenha({ row }: { row: Usuario }) {
+  const st = row.senha_status || 'propria';
+  if (st === 'convite_pendente') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-blue-300/80 bg-blue-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-blue-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/50 dark:text-navy-300" title="Aguardando usuário aceitar o convite por e-mail">
+        <Mail className="h-3 w-3 text-blue-600" />
+        Aguardando convite
+      </span>
+    );
+  }
+  if (st === 'provisoria' || row.trocar_senha) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 shadow-2xs dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300" title="Senha provisória — troca obrigatória no próximo login">
+        <KeyRound className="h-3 w-3 text-amber-600" />
+        Provisória
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/80 bg-emerald-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-900 shadow-2xs dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300" title="Senha definida pelo próprio usuário">
+      <ShieldCheck className="h-3 w-3 text-emerald-600" />
+      Própria
+    </span>
+  );
+}
+
+/** Tag caixa box de Estado do MFA. */
+function TagMfa({ row }: { row: Usuario }) {
+  if (row.mfa_ativado_em) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/80 bg-emerald-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-900 shadow-2xs dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300">
+        <Smartphone className="h-3 w-3 text-emerald-600" />
+        Ativado
+      </span>
+    );
+  }
+  if (row.perfil === 'admin') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-red-300/80 bg-red-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-red-900 shadow-2xs dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-300" title="MFA é obrigatório para administradores">
+        <ShieldAlert className="h-3 w-3 text-red-600" />
+        Pendente
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-300/80 bg-slate-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-slate-500 shadow-2xs dark:border-navy-700 dark:bg-navy-800/40 dark:text-navy-400">
+      <Smartphone className="h-3 w-3 text-slate-400" />
+      Não
     </span>
   );
 }
@@ -238,11 +378,14 @@ export default function UsuariosPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [sort, setSort] = useState<{ field: string; dir: 'asc' | 'desc' } | null>(null);
-  const [showFiltros, setShowFiltros] = useState(false);
+
+  // Filtros em Caixabox de Alto Nível
   const [fPerfil, setFPerfil] = useState('');
   const [fAtivo, setFAtivo] = useState('');
   const [fStatus, setFStatus] = useState('');
+  const [fSenha, setFSenha] = useState('');
   const [fMfa, setFMfa] = useState('');
+  const [fAcesso, setFAcesso] = useState('');
   const [fParado, setFParado] = useState('');
 
   // Formulário
@@ -292,7 +435,7 @@ export default function UsuariosPage() {
   const [deleting, setDeleting] = useState(false);
   const [confirmAcao, setConfirmAcao] = useState<{ tipo: 'encerrar' | 'mfa' | 'troca' | 'desbloquear'; row: Usuario } | null>(null);
 
-  const filtrosAtivos = [fPerfil, fAtivo, fStatus, fMfa, fParado].filter(Boolean).length;
+  const filtrosAtivos = [fPerfil, fAtivo, fStatus, fSenha, fMfa, fAcesso, fParado].filter(Boolean).length;
 
   const paramsAtuais = useMemo(() => {
     const params = new URLSearchParams();
@@ -304,10 +447,12 @@ export default function UsuariosPage() {
     if (fPerfil) params.set('f.perfil', fPerfil);
     if (fAtivo) params.set('f.ativo', fAtivo);
     if (fStatus) params.set('f.status', fStatus);
+    if (fSenha) params.set('f.senha', fSenha);
     if (fMfa) params.set('f.mfa', fMfa);
-    if (fParado) params.set('f.parado30d', fParado);
+    if (fAcesso) params.set('f.acesso', fAcesso);
+    else if (fParado) params.set('f.parado30d', fParado);
     return params.toString();
-  }, [debouncedQ, sort, fPerfil, fAtivo, fStatus, fMfa, fParado]);
+  }, [debouncedQ, sort, fPerfil, fAtivo, fStatus, fSenha, fMfa, fAcesso, fParado]);
 
   const carregarResumo = useCallback(async () => {
     setResumoLoading(true);
@@ -358,7 +503,9 @@ export default function UsuariosPage() {
     setFPerfil('');
     setFAtivo('');
     setFStatus('');
+    setFSenha('');
     setFMfa('');
+    setFAcesso('');
     setFParado('');
     setQ('');
     setDebouncedQ('');
@@ -760,7 +907,7 @@ export default function UsuariosPage() {
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-navy-800 text-white">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-navy-800 text-white shadow-xs">
               <Users className="h-5 w-5" />
             </span>
             Usuários
@@ -941,101 +1088,299 @@ export default function UsuariosPage() {
       {(resumoLoading || resumo) && (
         <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
           <div className="card p-4 lg:col-span-2">
-            <p className="mb-2 text-sm font-bold text-navy-900">Movimento de acessos — últimos 7 dias</p>
+            <p className="mb-2 text-sm font-bold text-navy-900 dark:text-white">Movimento de acessos — últimos 7 dias</p>
             {resumoLoading || !resumo ? <Spinner /> : <GraficoAcessos serie={resumo.serie_logins_7d || []} />}
           </div>
           <div className="card flex flex-col justify-center gap-3 p-4">
-            <p className="text-sm font-bold text-navy-900">Segurança nas últimas 24h</p>
+            <p className="text-sm font-bold text-navy-900 dark:text-white">Segurança nas últimas 24h</p>
             <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-100 text-red-600">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-100 text-red-600 dark:bg-red-950/40 dark:text-red-400">
                 <ShieldAlert className="h-5 w-5" />
               </span>
               <div>
-                <p className="text-xl font-bold tabular-nums text-navy-900">{resumoLoading ? '—' : (t?.falhas_24h ?? 0)}</p>
-                <p className="text-xs text-slate-500">tentativa(s) de login falha(s)</p>
+                <p className="text-xl font-bold tabular-nums text-navy-900 dark:text-white">{resumoLoading ? '—' : (t?.falhas_24h ?? 0)}</p>
+                <p className="text-xs text-slate-500 dark:text-navy-300">tentativa(s) de login falha(s)</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-navy-800 dark:text-navy-300">
                 <Lock className="h-5 w-5" />
               </span>
               <div>
-                <p className="text-xl font-bold tabular-nums text-navy-900">{resumoLoading ? '—' : (t?.bloqueados ?? 0)}</p>
-                <p className="text-xs text-slate-500">conta(s) bloqueada(s) agora</p>
+                <p className="text-xl font-bold tabular-nums text-navy-900 dark:text-white">{resumoLoading ? '—' : (t?.bloqueados ?? 0)}</p>
+                <p className="text-xs text-slate-500 dark:text-navy-300">conta(s) bloqueada(s) agora</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
                 <Smartphone className="h-5 w-5" />
               </span>
               <div>
-                <p className="text-xl font-bold tabular-nums text-navy-900">
+                <p className="text-xl font-bold tabular-nums text-navy-900 dark:text-white">
                   {resumoLoading ? '—' : resumo!.alertas.filter((a) => a.tipo === 'admin_sem_mfa').length}
                 </p>
-                <p className="text-xs text-slate-500">admin(s) sem MFA</p>
+                <p className="text-xs text-slate-500 dark:text-navy-300">admin(s) sem MFA</p>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Filtros */}
-      <div className="card mb-4 p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input className="input pl-9 pr-8" placeholder="Buscar por nome, e-mail, cargo..." value={q} onChange={(e) => setQ(e.target.value)} />
-            {q && (
-              <button className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" onClick={() => setQ('')} aria-label="Limpar busca">
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-          <select className="input w-auto" value={fPerfil} onChange={(e) => { setFPerfil(e.target.value); setPage(1); }} aria-label="Filtrar por perfil">
-            <option value="">Todos os perfis</option>
-            <option value="admin">Administrador</option>
-            <option value="gerente">Gerente</option>
-            <option value="operador">Operador</option>
-          </select>
-          <select className="input w-auto" value={fAtivo} onChange={(e) => { setFAtivo(e.target.value); setPage(1); }} aria-label="Filtrar por situação">
-            <option value="">Ativos e desativados</option>
-            <option value="true">Somente ativos</option>
-            <option value="false">Somente desativados</option>
-          </select>
-          <button className={`btn-secondary ${filtrosAtivos ? '!border-brand-400 !text-brand-700' : ''}`} onClick={() => setShowFiltros((v) => !v)}>
-            <ListFilter className="h-4 w-4" /> Filtros
-            {filtrosAtivos > 0 && <span className="badge ml-1 !bg-brand-500 !text-white">{filtrosAtivos}</span>}
+      {/* Sistema de Caixaboxes de Filtros de Alto Nível */}
+      <div className="card mb-4 p-3.5 space-y-3">
+        {/* Presets / Atalhos Rápidos de Filtro */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-semibold">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-navy-400 mr-1 flex items-center gap-1 shrink-0">
+            <ListFilter className="h-3.5 w-3.5" /> Caixabox:
+          </span>
+          <button
+            type="button"
+            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${!filtrosAtivos && !q ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
+            onClick={limparFiltros}
+          >
+            Todos os usuários ({t?.total ?? total})
           </button>
-          {filtrosAtivos > 0 && (
-            <button className="btn-ghost text-xs" onClick={limparFiltros}>
-              Limpar
-            </button>
-          )}
-          <div className="ml-auto text-xs text-slate-500">
-            {loading && !data ? 'Carregando...' : total === 0 ? 'Nenhum usuário' : `${from}–${to} de ${total} usuário${total === 1 ? '' : 's'}`}
+          <button
+            type="button"
+            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fAtivo === 'true' && !fPerfil && !fStatus && !fMfa && !fSenha && !fAcesso ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
+            onClick={() => { limparFiltros(); setFAtivo('true'); }}
+          >
+            Ativos ({t?.ativos ?? 0})
+          </button>
+          <button
+            type="button"
+            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fPerfil === 'admin' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
+            onClick={() => { limparFiltros(); setFPerfil('admin'); }}
+          >
+            Admins ({t?.admins ?? 0})
+          </button>
+          <button
+            type="button"
+            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fPerfil === 'gerente' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
+            onClick={() => { limparFiltros(); setFPerfil('gerente'); }}
+          >
+            Gerentes ({t?.gerentes ?? 0})
+          </button>
+          <button
+            type="button"
+            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fPerfil === 'operador' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
+            onClick={() => { limparFiltros(); setFPerfil('operador'); }}
+          >
+            Operadores ({t?.operadores ?? 0})
+          </button>
+          <button
+            type="button"
+            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fStatus === 'convite_pendente' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
+            onClick={() => { limparFiltros(); setFStatus('convite_pendente'); }}
+          >
+            Convites Pendentes ({t?.convites_pendentes ?? 0})
+          </button>
+          <button
+            type="button"
+            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fMfa === 'sim' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
+            onClick={() => { limparFiltros(); setFMfa('sim'); }}
+          >
+            Com MFA ({t?.mfa_ativos ?? 0})
+          </button>
+          <button
+            type="button"
+            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fStatus === 'bloqueado' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
+            onClick={() => { limparFiltros(); setFStatus('bloqueado'); }}
+          >
+            Bloqueados ({t?.bloqueados ?? 0})
+          </button>
+          <button
+            type="button"
+            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fAtivo === 'false' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
+            onClick={() => { limparFiltros(); setFAtivo('false'); }}
+          >
+            Desativados ({t?.inativos ?? 0})
+          </button>
+        </div>
+
+        {/* Caixaboxes de Seleção / Controles Principais das 6 Dimensões */}
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 pt-1">
+          {/* Caixabox Busca Usuário */}
+          <div className="relative xl:col-span-2">
+            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
+              <Search className="h-3 w-3 text-slate-400" /> Usuário
+            </label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                className="input pl-9 pr-8 !py-1.5 text-xs font-medium"
+                placeholder="Nome, e-mail ou cargo..."
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+              {q && (
+                <button className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" onClick={() => setQ('')} aria-label="Limpar busca">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Caixabox Perfil */}
+          <div>
+            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
+              <UserRound className="h-3 w-3 text-navy-500" /> Perfil
+            </label>
+            <select
+              className={`input !py-1.5 text-xs font-semibold ${fPerfil ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
+              value={fPerfil}
+              onChange={(e) => { setFPerfil(e.target.value); setPage(1); }}
+            >
+              <option value="">Todos os perfis</option>
+              <option value="admin">Administrador</option>
+              <option value="gerente">Gerente</option>
+              <option value="operador">Operador</option>
+            </select>
+          </div>
+
+          {/* Caixabox Status */}
+          <div>
+            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
+              <Activity className="h-3 w-3 text-emerald-600" /> Status
+            </label>
+            <select
+              className={`input !py-1.5 text-xs font-semibold ${fStatus ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
+              value={fStatus}
+              onChange={(e) => { setFStatus(e.target.value); setPage(1); }}
+            >
+              <option value="">Todos os status</option>
+              <option value="ativo">Ativo</option>
+              <option value="convite_pendente">Convite pendente</option>
+              <option value="convite_expirado">Convite expirado</option>
+              <option value="provisoria">Senha provisória</option>
+              <option value="bloqueado">Bloqueado</option>
+              <option value="expirado">Acesso expirado</option>
+              <option value="inativo">Desativado</option>
+            </select>
+          </div>
+
+          {/* Caixabox Senha */}
+          <div>
+            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
+              <KeyRound className="h-3 w-3 text-amber-600" /> Senha
+            </label>
+            <select
+              className={`input !py-1.5 text-xs font-semibold ${fSenha ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
+              value={fSenha}
+              onChange={(e) => { setFSenha(e.target.value); setPage(1); }}
+            >
+              <option value="">Todas as senhas</option>
+              <option value="propria">Definida pelo usuário</option>
+              <option value="provisoria">Provisória (troca pendente)</option>
+              <option value="convite_pendente">Aguardando convite</option>
+            </select>
+          </div>
+
+          {/* Caixabox MFA */}
+          <div>
+            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
+              <Smartphone className="h-3 w-3 text-blue-600" /> MFA (2 Fatores)
+            </label>
+            <select
+              className={`input !py-1.5 text-xs font-semibold ${fMfa ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
+              value={fMfa}
+              onChange={(e) => { setFMfa(e.target.value); setPage(1); }}
+            >
+              <option value="">Todos</option>
+              <option value="sim">Com MFA ativado</option>
+              <option value="nao">Sem MFA</option>
+            </select>
+          </div>
+
+          {/* Caixabox Último Acesso */}
+          <div>
+            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
+              <Clock className="h-3 w-3 text-violet-600" /> Último acesso
+            </label>
+            <select
+              className={`input !py-1.5 text-xs font-semibold ${fAcesso || fParado ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
+              value={fAcesso || (fParado === 'sim' ? 'parado30d' : '')}
+              onChange={(e) => {
+                const val = e.target.value;
+                setFAcesso(val);
+                if (val === 'parado30d') setFParado('sim');
+                else setFParado('');
+                setPage(1);
+              }}
+            >
+              <option value="">Todos os períodos</option>
+              <option value="recente">Nos últimos 7 dias</option>
+              <option value="parado30d">Parado há 30+ dias</option>
+              <option value="nunca">Nunca acessou</option>
+            </select>
+          </div>
+
+          {/* Caixabox Situação */}
+          <div>
+            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
+              <Power className="h-3 w-3 text-slate-600" /> Situação
+            </label>
+            <select
+              className={`input !py-1.5 text-xs font-semibold ${fAtivo ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
+              value={fAtivo}
+              onChange={(e) => { setFAtivo(e.target.value); setPage(1); }}
+            >
+              <option value="">Ativos e desativados</option>
+              <option value="true">Somente ativos</option>
+              <option value="false">Somente desativados</option>
+            </select>
           </div>
         </div>
-        {showFiltros && (
-          <div className="mt-3 grid grid-cols-1 gap-3 border-t border-slate-100 pt-3 sm:grid-cols-2 lg:grid-cols-4">
-            <label className="block">
-              <span className="label">Status da conta</span>
-              <select className="input" value={fStatus} onChange={(e) => { setFStatus(e.target.value); setPage(1); }}>
-                <option value="">Todos</option>
-                {Object.entries(STATUS_META).map(([v, m]) => (
-                  <option key={v} value={v}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block">
-              <span className="label">MFA (dois fatores)</span>
-              <select className="input" value={fMfa} onChange={(e) => { setFMfa(e.target.value); setPage(1); }}>
-                <option value="">Todos</option>
-                <option value="sim">Com MFA ativado</option>
-                <option value="nao">Sem MFA</option>
-              </select>
-            </label>
+
+        {/* Chips de Filtros Ativos */}
+        {(filtrosAtivos > 0 || debouncedQ) && (
+          <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 dark:border-navy-800 pt-2.5 mt-1 text-xs">
+            <span className="font-bold text-slate-500 dark:text-navy-300 uppercase tracking-wider text-[10px]">Filtros ativos:</span>
+            {debouncedQ && (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
+                <span className="text-slate-400 font-normal">Busca:</span> "{debouncedQ}"
+                <button onClick={() => setQ('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
+              </span>
+            )}
+            {fPerfil && (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
+                <span className="text-slate-400 font-normal">Perfil:</span> {PERFIL_META[fPerfil]?.label || fPerfil}
+                <button onClick={() => setFPerfil('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
+              </span>
+            )}
+            {fStatus && (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
+                <span className="text-slate-400 font-normal">Status:</span> {STATUS_META[fStatus]?.label || fStatus}
+                <button onClick={() => setFStatus('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
+              </span>
+            )}
+            {fSenha && (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
+                <span className="text-slate-400 font-normal">Senha:</span> {SENHA_META[fSenha]?.label || fSenha}
+                <button onClick={() => setFSenha('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
+              </span>
+            )}
+            {fMfa && (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
+                <span className="text-slate-400 font-normal">MFA:</span> {fMfa === 'sim' ? 'Com MFA' : 'Sem MFA'}
+                <button onClick={() => setFMfa('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
+              </span>
+            )}
+            {(fAcesso || fParado) && (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
+                <span className="text-slate-400 font-normal">Acesso:</span> {fAcesso === 'recente' ? 'Últimos 7 dias' : fAcesso === 'nunca' ? 'Nunca acessou' : 'Parado há 30+ dias'}
+                <button onClick={() => { setFAcesso(''); setFParado(''); }} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
+              </span>
+            )}
+            {fAtivo && (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
+                <span className="text-slate-400 font-normal">Situação:</span> {fAtivo === 'true' ? 'Somente ativos' : 'Somente desativados'}
+                <button onClick={() => setFAtivo('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
+              </span>
+            )}
+            <button className="btn-ghost !py-0.5 text-xs font-semibold text-brand-600 hover:text-brand-800 dark:text-brand-400 ml-auto" onClick={limparFiltros}>
+              Limpar todos os filtros
+            </button>
           </div>
         )}
       </div>
@@ -1124,13 +1469,10 @@ export default function UsuariosPage() {
               </thead>
               <tbody>
                 {data.rows.map((row) => {
-                  const perfil = PERFIL_META[row.perfil] || { label: row.perfil, tone: 'slate' as const };
-                  const status = STATUS_META[row.status_conta] || { label: row.status_conta || '—', tone: 'slate' as const };
-                  const senha = SENHA_META[row.senha_status] || { label: '—', tone: 'blue' as const };
                   const souEu = eu && Number(eu.id) === Number(row.id);
                   const ativo = row.ativo !== false;
                   return (
-                    <tr key={row.id} onClick={() => abrirFicha(Number(row.id))} title="Ver ficha completa" className={`cursor-pointer hover:bg-slate-50 ${!ativo ? 'opacity-70' : ''} ${selecionado(Number(row.id)) ? '!bg-brand-50/60' : ''}`}>
+                    <tr key={row.id} onClick={() => abrirFicha(Number(row.id))} title="Ver ficha completa" className={`cursor-pointer hover:bg-slate-50 dark:hover:bg-navy-800/50 ${!ativo ? 'opacity-70 bg-slate-50/50' : ''} ${selecionado(Number(row.id)) ? '!bg-brand-50/60' : ''}`}>
                       <td onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
@@ -1142,50 +1484,35 @@ export default function UsuariosPage() {
                       </td>
                       <td>
                         <div className="flex items-center gap-2.5">
-                          <Avatar nome={row.nome} perfil={row.perfil} />
+                          <AvatarBox nome={row.nome} perfil={row.perfil} />
                           <div className="min-w-0">
-                            <p className="truncate font-medium text-slate-800">
+                            <p className="truncate font-semibold text-navy-900 dark:text-white">
                               {row.nome} {souEu && <span className="text-xs font-normal text-slate-400">(você)</span>}
                             </p>
-                            <p className="truncate text-xs text-slate-500">{row.email}</p>
+                            <p className="truncate text-xs text-slate-500 dark:text-navy-300">{row.email}</p>
                             {row.cargo && <p className="truncate text-xs text-slate-400">{row.cargo}{row.departamento ? ` · ${row.departamento}` : ''}</p>}
                           </div>
                         </div>
                       </td>
                       <td>
-                        <Badge tone={perfil.tone}>{perfil.label}</Badge>
+                        <TagPerfil perfil={row.perfil} />
                       </td>
                       <td>
-                        <Badge tone={status.tone}>{status.label}</Badge>
-                        {row.conta_bloqueada && row.bloqueado_ate && (
-                          <p className="mt-0.5 text-[11px] text-red-500">até {formatDateTime(row.bloqueado_ate)}</p>
-                        )}
-                        {row.conta_bloqueada && row.bloqueio_manual && (
-                          <p className="mt-0.5 text-[11px] font-semibold text-red-500">bloqueio manual (sem prazo)</p>
-                        )}
+                        <TagStatus row={row} />
                       </td>
                       <td>
-                        <Badge tone={senha.tone}>{senha.label}</Badge>
-                        {row.senha_status === 'convite_pendente' && row.convite_expira_em && (
-                          <p className={`mt-0.5 text-[11px] ${row.convite_expirado ? 'text-red-500' : 'text-slate-400'}`} title={formatDateTime(row.convite_expira_em)}>
-                            {row.convite_expirado ? `expirou ${formatRelative(row.convite_expira_em)}` : `expira ${formatRelative(row.convite_expira_em)}`}
-                          </p>
-                        )}
+                        <TagSenha row={row} />
                         {row.tentativas_falhas > 0 && (
-                          <p className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-600">
+                          <p className="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-amber-600">
                             <AlertTriangle className="h-3 w-3" /> {row.tentativas_falhas} falha(s)
                           </p>
                         )}
                       </td>
                       <td>
-                        {row.mfa_ativado_em ? (
-                          <Badge tone="green">Ativado</Badge>
-                        ) : (
-                          <Badge tone="slate">Não</Badge>
-                        )}
+                        <TagMfa row={row} />
                       </td>
-                      <td className="whitespace-nowrap text-xs text-slate-500" title={formatDateTime(row.ultimo_login)}>
-                        {row.ultimo_login ? formatRelative(row.ultimo_login) : '—'}
+                      <td className="whitespace-nowrap text-xs font-medium text-slate-600 dark:text-navy-200" title={formatDateTime(row.ultimo_login)}>
+                        {row.ultimo_login ? formatRelative(row.ultimo_login) : <span className="text-slate-400 font-normal">Nunca acessou</span>}
                       </td>
                       <td className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="inline-flex items-center gap-0.5">
@@ -1221,12 +1548,9 @@ export default function UsuariosPage() {
 
         {/* Celular: cartões */}
         {!error && data && data.rows.length > 0 && (
-          <ul className="divide-y divide-slate-100 lg:hidden">
+          <ul className="divide-y divide-slate-100 lg:hidden dark:divide-navy-800">
             {data.rows.map((row) => {
-              const perfil = PERFIL_META[row.perfil] || { label: row.perfil, tone: 'slate' as const };
-              const status = STATUS_META[row.status_conta] || { label: row.status_conta || '—', tone: 'slate' as const };
               const souEu = eu && Number(eu.id) === Number(row.id);
-              const ativo = row.ativo !== false;
               return (
                 <li key={row.id} className={`px-4 py-3 ${selecionado(Number(row.id)) ? 'bg-brand-50/60' : ''}`}>
                   <div className="flex items-start gap-2.5">
@@ -1237,16 +1561,17 @@ export default function UsuariosPage() {
                       checked={selecionado(Number(row.id))}
                       onChange={() => toggleSelecao(row)}
                     />
-                    <Avatar nome={row.nome} perfil={row.perfil} />
+                    <AvatarBox nome={row.nome} perfil={row.perfil} />
                     <button className="min-w-0 flex-1 text-left" onClick={() => abrirFicha(Number(row.id))}>
-                      <p className="truncate text-sm font-semibold text-navy-900">
+                      <p className="truncate text-sm font-semibold text-navy-900 dark:text-white">
                         {row.nome} {souEu && <span className="font-normal text-slate-400">(você)</span>}
                       </p>
-                      <p className="truncate text-xs text-slate-500">{row.email}</p>
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        <Badge tone={perfil.tone}>{perfil.label}</Badge>
-                        <Badge tone={status.tone}>{status.label}</Badge>
-                        {row.mfa_ativado_em && <Badge tone="green">MFA</Badge>}
+                      <p className="truncate text-xs text-slate-500 dark:text-navy-300">{row.email}</p>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        <TagPerfil perfil={row.perfil} />
+                        <TagStatus row={row} />
+                        <TagSenha row={row} />
+                        <TagMfa row={row} />
                       </div>
                       <p className="mt-1 text-xs text-slate-400">
                         {row.ultimo_login ? `Último acesso ${formatRelative(row.ultimo_login)}` : 'Nunca acessou'}
@@ -1271,8 +1596,8 @@ export default function UsuariosPage() {
         )}
 
         {data && total > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-2.5 text-sm">
-            <span className="flex items-center gap-2 text-slate-500">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-2.5 text-sm dark:border-navy-800">
+            <span className="flex items-center gap-2 text-slate-500 dark:text-navy-300">
               <select
                 className="input !w-auto !py-1 text-xs"
                 value={pageSize}
@@ -1572,7 +1897,7 @@ export default function UsuariosPage() {
                   ['proibir_obvias', 'Barrar senhas óbvias (123456, senha, nome da marca…)'],
                 ] as const
               ).map(([k, label]) => (
-                <label key={k} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                <label key={k} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
                   <input
                     type="checkbox"
                     className="h-4 w-4 rounded border-slate-300"
@@ -1599,7 +1924,7 @@ export default function UsuariosPage() {
         size="lg"
       >
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1 text-sm" role="tablist" aria-label="Filtro da matriz">
+          <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1 text-sm dark:bg-navy-800" role="tablist" aria-label="Filtro da matriz">
             {(
               [
                 ['todas', `Todas (${certDados?.total ?? 0})`],
@@ -1612,7 +1937,7 @@ export default function UsuariosPage() {
                 type="button"
                 role="tab"
                 aria-selected={certFiltro === k}
-                className={`rounded-md px-2 py-1.5 font-medium ${certFiltro === k ? 'bg-white shadow text-navy-900' : 'text-slate-500'}`}
+                className={`rounded-md px-2 py-1.5 font-medium ${certFiltro === k ? 'bg-white shadow text-navy-900 dark:bg-navy-900 dark:text-white' : 'text-slate-500 dark:text-navy-300'}`}
                 onClick={() => setCertFiltro(k)}
               >
                 {label}
@@ -1638,24 +1963,22 @@ export default function UsuariosPage() {
             {(certDados?.linhas || [])
               .filter((l) => (certFiltro === 'pendentes' ? l.precisa_recertificar : certFiltro === 'certificadas' ? !l.precisa_recertificar && l.ativo : true))
               .map((l) => {
-                const perfil = PERFIL_META[l.perfil] || { label: l.perfil, tone: 'slate' as const };
-                const status = STATUS_META[l.status_conta] || { label: l.status_conta, tone: 'slate' as const };
                 const souEu = eu && Number(eu.id) === l.id;
                 return (
-                  <li key={l.id} className="rounded-lg border border-slate-200 p-2.5">
+                  <li key={l.id} className="rounded-lg border border-slate-200 p-2.5 dark:border-navy-800">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Avatar nome={l.nome} perfil={l.perfil} />
+                      <AvatarBox nome={l.nome} perfil={l.perfil} />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-navy-900">
+                        <p className="truncate text-sm font-semibold text-navy-900 dark:text-white">
                           {l.nome} {souEu && <span className="font-normal text-slate-400">(você)</span>}
                         </p>
                         <p className="truncate text-xs text-slate-500">{l.email}</p>
                       </div>
-                      <Badge tone={perfil.tone}>{perfil.label}</Badge>
-                      <Badge tone={status.tone}>{status.label}</Badge>
+                      <TagPerfil perfil={l.perfil} />
+                      <TagStatus row={l} />
                       {l.mfa ? <Badge tone="green">MFA</Badge> : <Badge tone="slate">Sem MFA</Badge>}
                     </div>
-                    <p className="mt-1.5 text-xs text-slate-500">
+                    <p className="mt-1.5 text-xs text-slate-500 dark:text-navy-300">
                       {l.certificado_em ? (
                         <>
                           Certificado {l.certificado_ha_dias === 0 ? 'hoje' : `há ${l.certificado_ha_dias} dia(s)`} por <strong>{l.certificado_por}</strong>
@@ -1946,14 +2269,14 @@ function Kpi({
       onClick={onClick}
       disabled={!onClick}
       aria-pressed={onClick ? !!ativo : undefined}
-      className={`card flex items-center gap-3 p-3 text-left sm:p-4 ${alerta ? 'border-red-200 bg-red-50/40' : ''} ${ativo ? 'ring-2 ring-navy-800 ring-offset-1' : ''} ${onClick ? 'transition-shadow hover:shadow-modal' : 'cursor-default'}`}
+      className={`card flex items-center gap-3 p-3 text-left sm:p-4 ${alerta ? 'border-red-200 bg-red-50/40 dark:border-red-900/40 dark:bg-red-950/30' : ''} ${ativo ? 'ring-2 ring-navy-800 dark:ring-brand-500 ring-offset-1 dark:ring-offset-navy-950' : ''} ${onClick ? 'transition-shadow hover:shadow-modal' : 'cursor-default'}`}
       title={onClick ? (ativo ? 'Clique para remover este filtro' : 'Clique para filtrar a lista') : undefined}
     >
       <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white sm:h-11 sm:w-11 ${cor}`}>{icone}</span>
       <div className="min-w-0">
-        <div className="text-xl font-bold tabular-nums text-navy-900">{valor === null ? <Loader2 className="h-5 w-5 animate-spin text-slate-300" /> : valor}</div>
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{rotulo}</div>
-        <div className="truncate text-xs text-slate-400">{dica}</div>
+        <div className="text-xl font-bold tabular-nums text-navy-900 dark:text-white">{valor === null ? <Loader2 className="h-5 w-5 animate-spin text-slate-300" /> : valor}</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-navy-300">{rotulo}</div>
+        <div className="truncate text-xs text-slate-400 dark:text-navy-400">{dica}</div>
       </div>
     </button>
   );
@@ -1965,9 +2288,9 @@ function Kpi({
 function Th({ label, field, sort, onSort }: { label: string; field: string; sort: { field: string; dir: 'asc' | 'desc' } | null; onSort: (f: string) => void }) {
   return (
     <th>
-      <button className="inline-flex items-center gap-1 hover:text-navy-800" onClick={() => onSort(field)}>
+      <button className="inline-flex items-center gap-1 hover:text-navy-800 dark:hover:text-white transition-colors font-semibold" onClick={() => onSort(field)}>
         {label}
-        {sort?.field === field ? sort.dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" /> : <ArrowUpDown className="h-3 w-3 opacity-30" />}
+        {sort?.field === field ? sort.dir === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-brand-600 dark:text-brand-400" /> : <ArrowDown className="h-3.5 w-3.5 text-brand-600 dark:text-brand-400" /> : <ArrowUpDown className="h-3 w-3 opacity-30" />}
       </button>
     </th>
   );
@@ -2028,16 +2351,16 @@ function MenuAcoes({ itens, aberto, onAbrir, onFechar }: { itens: MenuItem[]; ab
           />
           <div
             role="menu"
-            className="fixed z-40 max-h-[70vh] w-60 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-modal animate-fade-in"
+            className="fixed z-40 max-h-[70vh] w-60 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-modal animate-fade-in dark:bg-navy-900 dark:border-navy-800"
             style={pos ? { top: pos.top, right: pos.right } : { visibility: 'hidden' }}
           >
             {itens.map((it) => (
               <div key={it.key}>
-                {it.separadorAntes && <div className="mx-2 my-1 border-t border-slate-100" />}
+                {it.separadorAntes && <div className="mx-2 my-1 border-t border-slate-100 dark:border-navy-800" />}
                 <button
                   role="menuitem"
-                  className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm ${
-                    it.perigo ? 'text-red-600 hover:bg-red-50' : 'text-slate-700 hover:bg-slate-100'
+                  className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm font-medium ${
+                    it.perigo ? 'text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30' : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-navy-800'
                   }`}
                   disabled={it.busy}
                   onClick={() => {
@@ -2157,7 +2480,7 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
         )}
 
         <section>
-          <h3 className="mb-2 text-sm font-bold text-navy-900">Dados do usuário</h3>
+          <h3 className="mb-2 text-sm font-bold text-navy-900 dark:text-white">Dados do usuário</h3>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="label">Nome *</span>
@@ -2178,7 +2501,7 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
               </select>
             </label>
             {perfil === 'admin' && (
-              <p className="-mt-1 rounded-lg bg-amber-50 p-2 text-xs text-amber-800 ring-1 ring-amber-200 sm:col-span-2">
+              <p className="-mt-1 rounded-lg bg-amber-50 p-2 text-xs text-amber-800 ring-1 ring-amber-200 sm:col-span-2 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-800/60">
                 Administrador tem acesso total ao ERP e <strong>MFA obrigatório</strong> a partir do primeiro login.
               </p>
             )}
@@ -2198,7 +2521,7 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
         </section>
 
         <section>
-          <h3 className="mb-2 text-sm font-bold text-navy-900">Acesso</h3>
+          <h3 className="mb-2 text-sm font-bold text-navy-900 dark:text-white">Acesso</h3>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="label">Acesso expira em (opcional)</span>
@@ -2223,10 +2546,10 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
               </div>
             </label>
             {editing && (
-              <label className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <label className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-navy-800 dark:bg-navy-800/40">
                 <input type="checkbox" className="mt-1" checked={trocarSenha} onChange={(e) => setTrocarSenha(e.target.checked)} />
                 <span>
-                  <span className="text-sm font-medium text-slate-700">Exigir troca de senha no próximo acesso</span>
+                  <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Exigir troca de senha no próximo acesso</span>
                   <span className="block text-xs text-slate-400">O usuário só navega depois de definir uma senha nova.</span>
                 </span>
               </label>
@@ -2239,8 +2562,8 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
         </section>
 
         <section>
-          <h3 className="mb-2 text-sm font-bold text-navy-900">Permissões comerciais</h3>
-          <p className="mb-2 text-xs text-slate-500">“Herdar do perfil” usa a regra do perfil (gerente/admin têm acesso). Permite refinar por pessoa.</p>
+          <h3 className="mb-2 text-sm font-bold text-navy-900 dark:text-white">Permissões comerciais</h3>
+          <p className="mb-2 text-xs text-slate-500 dark:text-navy-300">“Herdar do perfil” usa a regra do perfil (gerente/admin têm acesso). Permite refinar por pessoa.</p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {[
               ['perm_catalogos', 'Gerenciar catálogos'],
@@ -2262,7 +2585,7 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
         </section>
 
         <section>
-          <h3 className="mb-2 text-sm font-bold text-navy-900">Alçadas comerciais</h3>
+          <h3 className="mb-2 text-sm font-bold text-navy-900 dark:text-white">Alçadas comerciais</h3>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="label">Desconto máximo (%)</span>
@@ -2357,14 +2680,14 @@ function FichaUsuarioModal({
       {u && perfil && status && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-3">
-            <Avatar nome={u.nome} perfil={u.perfil} tamanho="lg" />
+            <AvatarBox nome={u.nome} perfil={u.perfil} tamanho="lg" />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-1.5">
-                <Badge tone={perfil.tone}>{perfil.label}</Badge>
-                <Badge tone={status.tone}>{status.label}</Badge>
-                {u.mfa_ativado_em ? <Badge tone="green">MFA ativado</Badge> : <Badge tone="slate">Sem MFA</Badge>}
+                <TagPerfil perfil={u.perfil} />
+                <TagStatus row={u} />
+                <TagMfa row={u} />
               </div>
-              <p className="mt-1 text-sm text-slate-500">
+              <p className="mt-1 text-sm text-slate-500 dark:text-navy-300">
                 {u.cargo || '—'}{u.departamento ? ` · ${u.departamento}` : ''}{u.telefone ? ` · ${u.telefone}` : ''}
               </p>
             </div>
@@ -2395,7 +2718,7 @@ function FichaUsuarioModal({
             </div>
           </div>
 
-          <div className="flex gap-1 border-b border-slate-200">
+          <div className="flex gap-1 border-b border-slate-200 dark:border-navy-800">
             {(
               [
                 ['resumo', 'Resumo'],
@@ -2406,7 +2729,7 @@ function FichaUsuarioModal({
               <button
                 key={k}
                 onClick={() => setTab(k)}
-                className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${tab === k ? 'border-navy-800 text-navy-900' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+                className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${tab === k ? 'border-navy-800 text-navy-900 dark:border-brand-500 dark:text-white' : 'border-transparent text-slate-400 hover:text-slate-600 dark:text-navy-300'}`}
               >
                 {label}
               </button>
@@ -2417,70 +2740,70 @@ function FichaUsuarioModal({
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <dl className="space-y-2.5 text-sm">
                 <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">E-mail</dt>
-                  <dd className="font-medium text-slate-800">{u.email}</dd>
+                  <dt className="text-slate-500 dark:text-navy-300">E-mail</dt>
+                  <dd className="font-medium text-slate-800 dark:text-slate-200">{u.email}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Cargo</dt>
-                  <dd className="font-medium text-slate-800">{u.cargo || '—'}</dd>
+                  <dt className="text-slate-500 dark:text-navy-300">Cargo</dt>
+                  <dd className="font-medium text-slate-800 dark:text-slate-200">{u.cargo || '—'}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Departamento</dt>
-                  <dd className="font-medium text-slate-800">{u.departamento || '—'}</dd>
+                  <dt className="text-slate-500 dark:text-navy-300">Departamento</dt>
+                  <dd className="font-medium text-slate-800 dark:text-slate-200">{u.departamento || '—'}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Telefone</dt>
-                  <dd className="font-medium text-slate-800">{u.telefone || '—'}</dd>
+                  <dt className="text-slate-500 dark:text-navy-300">Telefone</dt>
+                  <dd className="font-medium text-slate-800 dark:text-slate-200">{u.telefone || '—'}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Criado em</dt>
-                  <dd className="font-medium text-slate-800">{formatDateTime(u.criado_em)}</dd>
+                  <dt className="text-slate-500 dark:text-navy-300">Criado em</dt>
+                  <dd className="font-medium text-slate-800 dark:text-slate-200">{formatDateTime(u.criado_em)}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Criado por</dt>
-                  <dd className="font-medium text-slate-800">{dados?.criador ? `${dados.criador.nome} (${dados.criador.email})` : '—'}</dd>
+                  <dt className="text-slate-500 dark:text-navy-300">Criado por</dt>
+                  <dd className="font-medium text-slate-800 dark:text-slate-200">{dados?.criador ? `${dados.criador.nome} (${dados.criador.email})` : '—'}</dd>
                 </div>
                 {u.acesso_expira_em && (
                   <div className="flex justify-between gap-2">
-                    <dt className="text-slate-500">Acesso expira em</dt>
-                    <dd className={`font-medium ${u.acesso_expirado ? 'text-red-600' : 'text-slate-800'}`}>{formatDateTime(u.acesso_expira_em)}</dd>
+                    <dt className="text-slate-500 dark:text-navy-300">Acesso expira em</dt>
+                    <dd className={`font-medium ${u.acesso_expirado ? 'text-red-600' : 'text-slate-800 dark:text-slate-200'}`}>{formatDateTime(u.acesso_expira_em)}</dd>
                   </div>
                 )}
               </dl>
               <dl className="space-y-2.5 text-sm">
                 <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Último acesso</dt>
-                  <dd className="font-medium text-slate-800">{u.ultimo_login ? `${formatDateTime(u.ultimo_login)} (${formatRelative(u.ultimo_login)})` : 'Nunca acessou'}</dd>
+                  <dt className="text-slate-500 dark:text-navy-300">Último acesso</dt>
+                  <dd className="font-medium text-slate-800 dark:text-slate-200">{u.ultimo_login ? `${formatDateTime(u.ultimo_login)} (${formatRelative(u.ultimo_login)})` : 'Nunca acessou'}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Último IP</dt>
-                  <dd className="font-mono text-xs text-slate-800">{u.ultimo_ip || '—'}</dd>
+                  <dt className="text-slate-500 dark:text-navy-300">Último IP</dt>
+                  <dd className="font-mono text-xs text-slate-800 dark:text-slate-200">{u.ultimo_ip || '—'}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Logins (30 dias)</dt>
-                  <dd className="font-medium tabular-nums text-slate-800">{dados?.estatisticas.logins_30d ?? 0}</dd>
+                  <dt className="text-slate-500 dark:text-navy-300">Logins (30 dias)</dt>
+                  <dd className="font-medium tabular-nums text-slate-800 dark:text-slate-200">{dados?.estatisticas.logins_30d ?? 0}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Eventos (30 dias)</dt>
-                  <dd className="font-medium tabular-nums text-slate-800">{dados?.estatisticas.eventos_30d ?? 0}</dd>
+                  <dt className="text-slate-500 dark:text-navy-300">Eventos (30 dias)</dt>
+                  <dd className="font-medium tabular-nums text-slate-800 dark:text-slate-200">{dados?.estatisticas.eventos_30d ?? 0}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <dt className="text-slate-500">Senha definida em</dt>
-                  <dd className="font-medium text-slate-800">{formatDateTime(u.senha_definida_em)}</dd>
+                  <dt className="text-slate-500 dark:text-navy-300">Senha definida em</dt>
+                  <dd className="font-medium text-slate-800 dark:text-slate-200">{formatDateTime(u.senha_definida_em)}</dd>
                 </div>
                 {u.desativado_em && (
                   <>
                     <div className="flex justify-between gap-2">
-                      <dt className="text-slate-500">Desativado em</dt>
-                      <dd className="font-medium text-slate-800">{formatDateTime(u.desativado_em)}</dd>
+                      <dt className="text-slate-500 dark:text-navy-300">Desativado em</dt>
+                      <dd className="font-medium text-slate-800 dark:text-slate-200">{formatDateTime(u.desativado_em)}</dd>
                     </div>
                     <div className="flex justify-between gap-2">
-                      <dt className="text-slate-500">Desativado por</dt>
-                      <dd className="font-medium text-slate-800">{u.desativado_por || '—'}</dd>
+                      <dt className="text-slate-500 dark:text-navy-300">Desativado por</dt>
+                      <dd className="font-medium text-slate-800 dark:text-slate-200">{u.desativado_por || '—'}</dd>
                     </div>
                     <div>
-                      <dt className="text-slate-500">Motivo</dt>
-                      <dd className="mt-0.5 rounded-md bg-slate-50 p-2 text-slate-700">{u.desativado_motivo || '—'}</dd>
+                      <dt className="text-slate-500 dark:text-navy-300">Motivo</dt>
+                      <dd className="mt-0.5 rounded-md bg-slate-50 p-2 text-slate-700 dark:bg-navy-800 dark:text-slate-200">{u.desativado_motivo || '—'}</dd>
                     </div>
                   </>
                 )}
@@ -2488,10 +2811,10 @@ function FichaUsuarioModal({
               {u.observacoes && (
                 <div className="sm:col-span-2">
                   <p className="label">Observações internas</p>
-                  <p className="rounded-md bg-slate-50 p-2.5 text-sm text-slate-700">{u.observacoes}</p>
+                  <p className="rounded-md bg-slate-50 p-2.5 text-sm text-slate-700 dark:bg-navy-800 dark:text-slate-200">{u.observacoes}</p>
                 </div>
               )}
-              <div className="sm:col-span-2 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+              <div className="sm:col-span-2 flex flex-wrap gap-2 border-t border-slate-100 dark:border-navy-800 pt-3">
                 {!souEu && (
                   <button
                     className="btn-secondary text-xs hover:!border-red-300 hover:!text-red-600"
@@ -2510,14 +2833,12 @@ function FichaUsuarioModal({
           {tab === 'seguranca' && (
             <div className="space-y-4">
               {/* Acesso / senha */}
-              <div className="rounded-lg border border-slate-200 p-3">
-                <h4 className="flex items-center gap-1.5 text-sm font-bold text-navy-900">
+              <div className="rounded-lg border border-slate-200 dark:border-navy-800 p-3">
+                <h4 className="flex items-center gap-1.5 text-sm font-bold text-navy-900 dark:text-white">
                   <KeyRound className="h-4 w-4 text-navy-400" /> Senha e acesso
                 </h4>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm">
-                  <Badge tone={(SENHA_META[u.senha_status] || { tone: 'blue' }).tone as 'green' | 'amber' | 'blue'}>
-                    {(SENHA_META[u.senha_status] || { label: '—' }).label}
-                  </Badge>
+                  <TagSenha row={u} />
                   {u.trocar_senha && <Badge tone="amber">Troca obrigatória</Badge>}
                   {u.senha_expirada && <Badge tone="red">Senha vencida</Badge>}
                   {!u.senha_expirada && typeof u.senha_vence_em_dias === 'number' && (
@@ -2551,11 +2872,11 @@ function FichaUsuarioModal({
               </div>
 
               {/* Certificação de acessos */}
-              <div className={`rounded-lg border p-3 ${u.acesso_certificado_em ? 'border-slate-200' : 'border-amber-200 bg-amber-50/50'}`}>
-                <h4 className="flex items-center gap-1.5 text-sm font-bold text-navy-900">
+              <div className={`rounded-lg border p-3 ${u.acesso_certificado_em ? 'border-slate-200 dark:border-navy-800' : 'border-amber-200 bg-amber-50/50 dark:border-amber-800/60 dark:bg-amber-950/30'}`}>
+                <h4 className="flex items-center gap-1.5 text-sm font-bold text-navy-900 dark:text-white">
                   <ClipboardCheck className="h-4 w-4 text-navy-400" /> Certificação de acessos
                 </h4>
-                <p className="mt-1 text-sm text-slate-600">
+                <p className="mt-1 text-sm text-slate-600 dark:text-navy-300">
                   {u.acesso_certificado_em ? (
                     <>
                       Certificado em {formatDateTime(u.acesso_certificado_em)} por <strong>{u.acesso_certificado_por || '—'}</strong>
@@ -2578,11 +2899,11 @@ function FichaUsuarioModal({
               </div>
 
               {/* Bloqueio */}
-              <div className={`rounded-lg border p-3 ${u.conta_bloqueada ? 'border-red-200 bg-red-50/50' : 'border-slate-200'}`}>
-                <h4 className="flex items-center gap-1.5 text-sm font-bold text-navy-900">
+              <div className={`rounded-lg border p-3 ${u.conta_bloqueada ? 'border-red-200 bg-red-50/50 dark:border-red-900/60 dark:bg-red-950/30' : 'border-slate-200 dark:border-navy-800'}`}>
+                <h4 className="flex items-center gap-1.5 text-sm font-bold text-navy-900 dark:text-white">
                   <ShieldAlert className="h-4 w-4 text-navy-400" /> Bloqueio e tentativas
                 </h4>
-                <p className="mt-1 text-sm text-slate-600">
+                <p className="mt-1 text-sm text-slate-600 dark:text-navy-300">
                   {u.conta_bloqueada ? (
                     <>
                       <Badge tone="red">{u.bloqueio_manual ? 'Bloqueio manual (sem prazo)' : `Bloqueado até ${formatDateTime(u.bloqueado_ate)}`}</Badge>
@@ -2611,11 +2932,11 @@ function FichaUsuarioModal({
               </div>
 
               {/* MFA */}
-              <div className="rounded-lg border border-slate-200 p-3">
-                <h4 className="flex items-center gap-1.5 text-sm font-bold text-navy-900">
+              <div className="rounded-lg border border-slate-200 dark:border-navy-800 p-3">
+                <h4 className="flex items-center gap-1.5 text-sm font-bold text-navy-900 dark:text-white">
                   <Smartphone className="h-4 w-4 text-navy-400" /> MFA (dois fatores)
                 </h4>
-                <p className="mt-1 text-sm text-slate-600">
+                <p className="mt-1 text-sm text-slate-600 dark:text-navy-300">
                   {u.mfa_ativado_em ? (
                     <>
                       Ativado em {formatDateTime(u.mfa_ativado_em)}. O login exige o código do app autenticador.
@@ -2645,18 +2966,18 @@ function FichaUsuarioModal({
               </div>
 
               {/* Sessões */}
-              <div className="rounded-lg border border-slate-200 p-3">
-                <h4 className="flex items-center gap-1.5 text-sm font-bold text-navy-900">
+              <div className="rounded-lg border border-slate-200 dark:border-navy-800 p-3">
+                <h4 className="flex items-center gap-1.5 text-sm font-bold text-navy-900 dark:text-white">
                   <MonitorSmartphone className="h-4 w-4 text-navy-400" /> Sessões ativas ({dados?.sessoes.length ?? 0})
                 </h4>
                 {!dados?.sessoes.length ? (
                   <p className="mt-1 text-sm text-slate-400">Nenhuma sessão ativa.</p>
                 ) : (
-                  <ul className="mt-2 divide-y divide-slate-100">
+                  <ul className="mt-2 divide-y divide-slate-100 dark:divide-navy-800">
                     {dados.sessoes.map((s) => (
                       <li key={s.sid} className="flex items-start justify-between gap-2 py-2 text-sm">
                         <div className="min-w-0">
-                          <p className="font-medium text-slate-800">
+                          <p className="font-medium text-slate-800 dark:text-slate-200">
                             <span className="font-mono text-xs text-slate-400" title={s.sid}>{String(s.sid).slice(0, 8)}</span> · {s.ip || 'ip desconhecido'}
                           </p>
                           <p className="truncate text-xs text-slate-400">
@@ -2689,15 +3010,15 @@ function FichaUsuarioModal({
           {tab === 'atividade' && (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div>
-                <h4 className="mb-2 text-sm font-bold text-navy-900">Últimos acessos ({dados?.acessos_total ?? 0})</h4>
+                <h4 className="mb-2 text-sm font-bold text-navy-900 dark:text-white">Últimos acessos ({dados?.acessos_total ?? 0})</h4>
                 {!dados?.acessos.length ? (
                   <p className="text-sm text-slate-400">Nenhum acesso registrado.</p>
                 ) : (
-                  <ol className="relative ml-1 max-h-72 space-y-3 overflow-auto border-l-2 border-slate-100 py-1 pl-4 pr-1">
+                  <ol className="relative ml-1 max-h-72 space-y-3 overflow-auto border-l-2 border-slate-100 dark:border-navy-800 py-1 pl-4 pr-1">
                     {dados.acessos.map((a) => (
-                      <li key={a.id} className="relative text-xs text-slate-600">
-                        <span className={`absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full ring-2 ring-white ${String(a.descricao || '').startsWith('Falha') ? 'bg-red-500' : 'bg-emerald-500'}`} />
-                        <p className="font-medium text-slate-700">{formatDateTime(a.data)}</p>
+                      <li key={a.id} className="relative text-xs text-slate-600 dark:text-navy-300">
+                        <span className={`absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full ring-2 ring-white dark:ring-navy-900 ${String(a.descricao || '').startsWith('Falha') ? 'bg-red-500' : 'bg-emerald-500'}`} />
+                        <p className="font-medium text-slate-700 dark:text-slate-200">{formatDateTime(a.data)}</p>
                         <p className="mt-0.5">{a.descricao}</p>
                       </li>
                     ))}
@@ -2706,7 +3027,7 @@ function FichaUsuarioModal({
               </div>
               <div>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <h4 className="text-sm font-bold text-navy-900">Trilha da conta ({dados?.historico_total ?? 0})</h4>
+                  <h4 className="text-sm font-bold text-navy-900 dark:text-white">Trilha da conta ({dados?.historico_total ?? 0})</h4>
                   {!!acoesDisponiveis.length && (
                     <select
                       className="input !w-auto !py-1 text-xs"
@@ -2728,11 +3049,11 @@ function FichaUsuarioModal({
                 ) : !historicoFiltrado.length ? (
                   <p className="text-sm text-slate-400">Nenhum evento deste tipo nos últimos registros.</p>
                 ) : (
-                  <ol className="relative ml-1 max-h-72 space-y-3 overflow-auto border-l-2 border-slate-100 py-1 pl-4 pr-1">
+                  <ol className="relative ml-1 max-h-72 space-y-3 overflow-auto border-l-2 border-slate-100 dark:border-navy-800 py-1 pl-4 pr-1">
                     {historicoFiltrado.map((h) => (
-                      <li key={h.id} className="relative text-xs text-slate-600">
-                        <span className={`absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full ring-2 ring-white ${ACAO_DOT[String(h.acao)] || 'bg-slate-300'}`} />
-                        <p className="font-medium text-slate-700">
+                      <li key={h.id} className="relative text-xs text-slate-600 dark:text-navy-300">
+                        <span className={`absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full ring-2 ring-white dark:ring-navy-900 ${ACAO_DOT[String(h.acao)] || 'bg-slate-300'}`} />
+                        <p className="font-medium text-slate-700 dark:text-slate-200">
                           {formatDateTime(h.data)} · {h.usuario || 'sistema'} · {ACAO_LABEL[h.acao] || h.acao}
                         </p>
                         <p className="mt-0.5">{h.descricao}</p>
@@ -2792,13 +3113,13 @@ function DiffMudancas({ dados }: { dados: Record<string, { de: unknown; para: un
   const entradas = Object.entries(dados || {}).filter(([, m]) => m && typeof m === 'object' && 'de' in m && 'para' in m);
   if (!entradas.length) return null;
   return (
-    <dl className="mt-1.5 space-y-1 rounded-md border border-slate-200 bg-white p-2">
+    <dl className="mt-1.5 space-y-1 rounded-md border border-slate-200 bg-white p-2 dark:border-navy-800 dark:bg-navy-950/50">
       {entradas.map(([campo, m]) => (
         <div key={campo} className="flex flex-wrap items-baseline gap-x-1.5 text-[11px] leading-5">
-          <dt className="font-semibold text-slate-500">{CAMPO_LABEL[campo] || campo}:</dt>
+          <dt className="font-semibold text-slate-500 dark:text-navy-300">{CAMPO_LABEL[campo] || campo}:</dt>
           <dd className="text-slate-400 line-through">{formatarValorDiff(campo, m.de)}</dd>
           <dd aria-hidden className="text-slate-300">→</dd>
-          <dd className="font-medium text-slate-700">{formatarValorDiff(campo, m.para)}</dd>
+          <dd className="font-medium text-slate-700 dark:text-slate-200">{formatarValorDiff(campo, m.para)}</dd>
         </div>
       ))}
     </dl>
@@ -2820,7 +3141,7 @@ function GraficoAcessos({ serie }: { serie: PontoSerie[] }) {
     <div>
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`Logins e falhas dos últimos 7 dias: ${totalLogins} logins, ${totalFalhas} falhas`}>
         {[0.25, 0.5, 0.75, 1].map((f) => (
-          <line key={f} x1={0} x2={W} y1={PAD_T + area * (1 - f)} y2={PAD_T + area * (1 - f)} className="stroke-slate-100" strokeWidth={1} />
+          <line key={f} x1={0} x2={W} y1={PAD_T + area * (1 - f)} y2={PAD_T + area * (1 - f)} className="stroke-slate-100 dark:stroke-navy-800" strokeWidth={1} />
         ))}
         {serie.map((p, i) => {
           const cx = gw * i + gw / 2;
@@ -2834,7 +3155,7 @@ function GraficoAcessos({ serie }: { serie: PontoSerie[] }) {
               <rect x={cx - 12} y={base - hL} width={11} height={Math.max(hL, p.logins ? 2 : 0)} rx={2} className="fill-emerald-500" />
               <rect x={cx + 1} y={base - hF} width={11} height={Math.max(hF, p.falhas ? 2 : 0)} rx={2} className="fill-red-400" />
               {p.logins > 0 && (
-                <text x={cx - 6.5} y={base - hL - 3} textAnchor="middle" className="fill-slate-500" fontSize={9}>
+                <text x={cx - 6.5} y={base - hL - 3} textAnchor="middle" className="fill-slate-500 dark:fill-navy-300" fontSize={9}>
                   {p.logins}
                 </text>
               )}
@@ -2843,14 +3164,14 @@ function GraficoAcessos({ serie }: { serie: PontoSerie[] }) {
                   {p.falhas}
                 </text>
               )}
-              <text x={cx} y={H - 8} textAnchor="middle" className="fill-slate-400" fontSize={10}>
+              <text x={cx} y={H - 8} textAnchor="middle" className="fill-slate-400 dark:fill-navy-400" fontSize={10}>
                 {rotulo}
               </text>
             </g>
           );
         })}
       </svg>
-      <div className="mt-1 flex items-center gap-4 text-xs text-slate-500">
+      <div className="mt-1 flex items-center gap-4 text-xs text-slate-500 dark:text-navy-300">
         <span className="flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" /> Logins ({totalLogins})
         </span>

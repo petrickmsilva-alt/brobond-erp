@@ -100,10 +100,10 @@ export function checkAccess(r: Resource, actor: Actor, op: 'read' | 'create' | '
 // Leitura
 // ----------------------------------------------------------------------------
 export async function listRecords(r: Resource, p: ListParams) {
-  // Filtros virtuais do módulo Usuários (status consolidado + MFA): a tabela
-  // de usuários é pequena, então filtra em JS sobre a lista completa — com
-  // total e paginação corretos — em vez de aproximar na página atual.
-  if (r.key === 'usuarios' && (p.filter?.status || p.filter?.mfa || p.filter?.parado30d)) {
+  // Filtros virtuais do módulo Usuários (status consolidado, MFA, senha, acesso):
+  // a tabela de usuários é pequena, então filtra em JS sobre a lista completa
+  // — com total e paginação corretos — em vez de aproximar na página atual.
+  if (r.key === 'usuarios' && (p.filter?.status || p.filter?.mfa || p.filter?.parado30d || p.filter?.senha || p.filter?.acesso)) {
     return listUsuariosFiltrados(p);
   }
   const out = await getStore().list(r, p);
@@ -114,21 +114,35 @@ export async function listRecords(r: Resource, p: ListParams) {
   return out;
 }
 
-/** Lista de usuários com filtro por status consolidado e/ou MFA (admin). */
+/** Lista de usuários com filtro por status consolidado, MFA, senha e/ou período de acesso (admin). */
 async function listUsuariosFiltrados(p: ListParams) {
   const r = getResource('usuarios')!;
-  const { status, mfa, parado30d, ...base } = p.filter || {};
+  const { status, mfa, parado30d, senha, acesso, ...base } = p.filter || {};
   const full = await getStore().list(r, { q: p.q, page: 1, pageSize: 5000, sort: p.sort, dir: p.dir, filter: base });
   await attachImages(r, full.rows);
   anotarStatusSenha(r, full.rows);
   let rows = full.rows;
   if (typeof status === 'string' && status) rows = rows.filter((row) => row.status_conta === status);
+  if (typeof senha === 'string' && senha) rows = rows.filter((row) => row.senha_status === senha);
   if (mfa === 'sim') rows = rows.filter((row) => !!row.mfa_ativado_em);
   else if (mfa === 'nao') rows = rows.filter((row) => !row.mfa_ativado_em);
-  // Parados há 30+ dias: mesma regra do KPI (conta ativa, com senha
-  // definida e sem login nos últimos 30 dias — ou que nunca logou).
-  if (parado30d === 'sim') {
-    const ha30d = Date.now() - 30 * 24 * 3600_000;
+
+  const agora = Date.now();
+  if (typeof acesso === 'string' && acesso) {
+    if (acesso === 'recente') {
+      rows = rows.filter((row) => row.ultimo_login && agora - new Date(String(row.ultimo_login)).getTime() <= 7 * 86400000);
+    } else if (acesso === 'parado30d') {
+      const ha30d = agora - 30 * 24 * 3600_000;
+      rows = rows.filter((row) => {
+        if (row.ativo === false || !row.senha_definida_em) return false;
+        const loginMs = row.ultimo_login ? new Date(String(row.ultimo_login)).getTime() : 0;
+        return !loginMs || loginMs < ha30d;
+      });
+    } else if (acesso === 'nunca') {
+      rows = rows.filter((row) => !row.ultimo_login);
+    }
+  } else if (parado30d === 'sim') {
+    const ha30d = agora - 30 * 24 * 3600_000;
     rows = rows.filter((row) => {
       if (row.ativo === false || !row.senha_definida_em) return false;
       const loginMs = row.ultimo_login ? new Date(String(row.ultimo_login)).getTime() : 0;
