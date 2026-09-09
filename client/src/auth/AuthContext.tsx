@@ -45,15 +45,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshMeta = useCallback(async () => {
     const m = await api.get<Meta & { user: User }>('/meta');
-    setMeta({
-      resources: m.resources,
-      mode: m.mode,
-      uploads: m.uploads,
-      uploadsConfigError: m.uploadsConfigError,
-      version: m.version,
-      smtp: m.smtp,
-    });
-    if (m.user) setUser(m.user);
+    // `user` vem junto de `/meta` quando há sessão — separa para não vazar no contexto de meta.
+    // Todo o resto (resources, mode, uploads, smtp, emailLinks, auth, defaultLocal, version)
+    // precisa ir para o `MetaContext`, senão Settings (emailLinks) e locais (defaultLocal) ficam nulos.
+    const { user: u, ...rest } = m as Meta & { user: User };
+    setMeta(rest as Meta);
+    if (u) setUser(u);
   }, []);
 
   useEffect(() => {
