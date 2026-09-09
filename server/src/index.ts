@@ -67,7 +67,7 @@ import {
   updateItemOrdem,
 } from './producao';
 import { adminBackup, adminBackupXlsx, backupInfo } from './backup';
-import { catalogoPublico, compartilharCatalogo, criarPedidoCatalogo, eventoCatalogo, rateLimitPublico } from './catalogos';
+import { catalogoPublico, compartilharCatalogo, criarPedidoCatalogo, eventoCatalogo, inteligenciaCatalogos, rateLimitPublico, revogarCompartilhamento } from './catalogos';
 import { conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
 import { vendaPDF, compraPDF } from './pdf';
 import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
@@ -242,6 +242,10 @@ app.delete('/api/compras/:id/itens/:itemId', wrap(deleteItem));
 // PDF dos pedidos (antes das rotas genéricas)
 app.get('/api/vendas/:id/pdf', wrap(vendaPDF));
 app.get('/api/compras/:id/pdf', wrap(compraPDF));
+
+// Inteligência comercial e gestão de compartilhamentos (antes do CRUD genérico)
+app.get('/api/catalogos/inteligencia', wrap(inteligenciaCatalogos));
+app.post('/api/catalogos/compartilhamentos/:id/revogar', wrap(revogarCompartilhamento));
 
 // Central profissional de compartilhamento de catálogos
 app.post('/api/catalogos/:id/compartilhar', wrap(compartilharCatalogo));

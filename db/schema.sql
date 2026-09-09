@@ -924,6 +924,8 @@ CREATE TABLE IF NOT EXISTS catalogo_eventos (
   compartilhamento_id BIGINT REFERENCES catalogo_compartilhamentos(id) ON DELETE CASCADE,
   catalogo_id INTEGER NOT NULL REFERENCES catalogos(id) ON DELETE CASCADE,
   produto_id INTEGER REFERENCES produtos(id) ON DELETE SET NULL,
+  pedido_id INTEGER REFERENCES vendas(id) ON DELETE SET NULL,
+  valor NUMERIC(12,2),
   tipo TEXT NOT NULL CHECK (tipo IN ('abertura','produto_visualizado','carrinho_iniciado','pedido_enviado')),
   dados JSONB NOT NULL DEFAULT '{}'::jsonb,
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now()

@@ -50,6 +50,7 @@ import RelatoriosPage from './RelatoriosPage';
 import FinanceiroPage from './FinanceiroPage';
 import AjudaPage from './AjudaPage';
 import CatalogoShareModal from '../components/CatalogoShareModal';
+import CatalogoInsights from '../components/CatalogoInsights';
 
 const PAGE_SIZE = 25;
 
@@ -489,6 +490,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       />
 
       {resource.key === 'ordens' && <ProducaoCockpit />}
+      {resource.key === 'catalogos' && <CatalogoInsights />}
 
       {resource.notice && (
         <div className="mb-4">

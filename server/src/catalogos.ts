@@ -421,7 +421,7 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
       );
       return { venda: await s.get(vendaR, Number(venda.id), tx) ?? venda, total };
     });
-    if (resolvido.compartilhamento) await s.insert(RESOURCES.catalogo_eventos, { compartilhamento_id: Number(resolvido.compartilhamento.id), catalogo_id: Number(catalogo.id), tipo: 'pedido_enviado', dados: { pedido_id: Number(pedido.venda.id), total: pedido.total } });
+    if (resolvido.compartilhamento) await s.insert(RESOURCES.catalogo_eventos, { compartilhamento_id: Number(resolvido.compartilhamento.id), catalogo_id: Number(catalogo.id), tipo: 'pedido_enviado', pedido_id: Number(pedido.venda.id), valor: Number(pedido.total), dados: {} });
     res.status(201).json({ ok: true, mensagem: 'Pedido recebido! Nossa equipe vai confirmar disponibilidade e valores com você.', pedido_id: Number(pedido.venda.id), total: pedido.total });
   } catch (e) {
     throw toHttpError(e, RESOURCES.vendas);
@@ -485,4 +485,59 @@ export async function eventoCatalogo(req: Request, res: Response) {
     produto_id: produtoId, tipo, dados: {},
   });
   res.status(204).end();
+}
+
+
+/** Painel gerencial da Fase 2B: funil e compartilhamentos recentes. */
+export async function inteligenciaCatalogos(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(RESOURCES.catalogos, actor, 'read');
+  const s = getStore();
+  const dias = Math.min(365, Math.max(1, Number(req.query.dias) || 30));
+  const desde = Date.now() - dias * 86400000;
+  const [compR, eventosR, catalogosR, clientesR, usuariosR] = await Promise.all([
+    s.list(RESOURCES.catalogo_compartilhamentos, { page: 1, pageSize: 10000, sort: 'criado_em', dir: 'desc' }),
+    s.list(RESOURCES.catalogo_eventos, { page: 1, pageSize: 50000, sort: 'criado_em', dir: 'desc' }),
+    s.list(RESOURCES.catalogos, { page: 1, pageSize: 2000 }),
+    s.list(RESOURCES.clientes, { page: 1, pageSize: 5000 }),
+    s.list(RESOURCES.usuarios, { page: 1, pageSize: 1000 }),
+  ]);
+  const comps = compR.rows.filter((x) => new Date(String(x.criado_em)).getTime() >= desde);
+  const ids = new Set(comps.map((x) => Number(x.id)));
+  const eventos = eventosR.rows.filter((x) => ids.has(Number(x.compartilhamento_id)));
+  const porTipo = (tipo: string) => eventos.filter((e) => e.tipo === tipo);
+  const abertos = new Set(porTipo('abertura').map((e) => Number(e.compartilhamento_id)));
+  const pedidos = porTipo('pedido_enviado');
+  const nomes = (rows: Row[]) => new Map(rows.map((x) => [Number(x.id), String(x.nome || x.email || `#${x.id}`)]));
+  const cats = nomes(catalogosR.rows), clientes = nomes(clientesR.rows), usuarios = nomes(usuariosR.rows);
+  const agora = Date.now();
+  const recentes = comps.slice(0, 100).map((c) => ({
+    id: Number(c.id), catalogo: cats.get(Number(c.catalogo_id)) || `#${c.catalogo_id}`,
+    cliente: c.cliente_id ? clientes.get(Number(c.cliente_id)) || `#${c.cliente_id}` : 'Compartilhamento geral',
+    vendedor: c.usuario_id ? usuarios.get(Number(c.usuario_id)) || `#${c.usuario_id}` : '—', canal: c.canal,
+    criado_em: c.criado_em, expira_em: c.expira_em, primeiro_acesso_em: c.primeiro_acesso_em,
+    ultimo_acesso_em: c.ultimo_acesso_em, acessos: Number(c.acessos || 0), revogado_em: c.revogado_em,
+    status: c.revogado_em ? 'revogado' : c.expira_em && new Date(String(c.expira_em)).getTime() < agora ? 'expirado' : 'ativo',
+  }));
+  const enviados = comps.length, visualizados = abertos.size, convertidos = new Set(pedidos.map((e) => Number(e.compartilhamento_id))).size;
+  res.json({ periodo_dias: dias, resumo: {
+    enviados, visualizados, convertidos,
+    taxa_abertura: enviados ? Math.round((visualizados / enviados) * 1000) / 10 : 0,
+    taxa_conversao: enviados ? Math.round((convertidos / enviados) * 1000) / 10 : 0,
+    produtos_visualizados: porTipo('produto_visualizado').length,
+    carrinhos_iniciados: new Set(porTipo('carrinho_iniciado').map((e) => Number(e.compartilhamento_id))).size,
+    valor_solicitado: pedidos.reduce((n, e) => n + Number(e.valor || 0), 0),
+  }, recentes });
+}
+
+export async function revogarCompartilhamento(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(RESOURCES.catalogos, actor, 'update');
+  const id = parseId(req.params.id);
+  const s = getStore();
+  const atual = await s.get(RESOURCES.catalogo_compartilhamentos, id);
+  if (!atual) throw new HttpError(404, 'Compartilhamento não encontrado.');
+  if (!atual.revogado_em) await s.update(RESOURCES.catalogo_compartilhamentos, id, { revogado_em: new Date().toISOString() });
+  await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'catalogos', registro_id: Number(atual.catalogo_id), descricao: `Link individual #${id} revogado`, dados: { compartilhamento_id: id } });
+  res.json({ ok: true });
 }

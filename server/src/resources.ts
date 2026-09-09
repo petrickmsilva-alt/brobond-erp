@@ -160,6 +160,8 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'compartilhamento_id', label: 'Compartilhamento', type: 'ref', ref: 'catalogo_compartilhamentos' },
       { name: 'catalogo_id', label: 'Catálogo', type: 'ref', ref: 'catalogos' },
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
+      { name: 'pedido_id', label: 'Pedido', type: 'ref', ref: 'vendas' },
+      { name: 'valor', label: 'Valor', type: 'money' },
       { name: 'tipo', label: 'Tipo', type: 'text' },
       { name: 'dados', label: 'Dados', type: 'text' },
       { name: 'criado_em', label: 'Criado em', type: 'datetime' },
