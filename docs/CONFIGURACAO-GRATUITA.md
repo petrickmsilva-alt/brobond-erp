@@ -121,6 +121,14 @@ convite (cabeçalho `X-Forwarded-Proto`/`Host`) e o aviso aparece no boot e em
 **Configurações › Sistema**; ainda assim, em produção **defina `APP_URL`** — é o
 único jeito de garantir o link certo se o ERP mudar de domínio, porta ou proxy.
 
+**Atenção ao valor:** em produção a `APP_URL` precisa ser um endereço público.
+`http://localhost:5173` (o valor que vem no `.env.example`, de desenvolvimento)
+produz um link “bonito” que não abre para ninguém — o sócio clica e vê **“URL
+inválida”**. Endereços internos (localhost, `127.0.0.1`, `10.x`, `192.168.x`,
+nome sem domínio, `.local`) são **descartados** pelo servidor: ele usa a origem
+da requisição, avisa no boot e mostra `APP_URL ignorada` em Configurações ›
+Sistema.
+
 Depois de corrigir a variável, **reenvie o convite** (Usuários → linha do usuário
 → Reenviar convite): o convite antigo continua quebrado porque o link já saiu.
 

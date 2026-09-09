@@ -36,7 +36,7 @@ export default function Convite() {
   const { token } = useParams();
   const nav = useNavigate();
   const [info, setInfo] = useState<Info | null>(null);
-  const [estado, setEstado] = useState<'carregando' | 'invalido' | 'pronto' | 'ok'>('carregando');
+  const [estado, setEstado] = useState<'carregando' | 'invalido' | 'expirado' | 'pronto' | 'ok'>('carregando');
   const [senha, setSenha] = useState('');
   const [confirma, setConfirma] = useState('');
   const [show, setShow] = useState(false);
@@ -49,7 +49,7 @@ export default function Convite() {
       try {
         const d = await api.get<Info>(`/convites/${token}`);
         setInfo(d);
-        setEstado(d.expirado ? 'invalido' : 'pronto');
+        setEstado(d.expirado ? 'expirado' : 'pronto');
       } catch {
         setEstado('invalido');
       }
@@ -92,9 +92,24 @@ export default function Convite() {
           </div>
         )}
 
+        {estado === 'expirado' && (
+          <div className="space-y-4 text-center">
+            <Alert tone="amber">
+              <strong>Este convite expirou.</strong> Os convites valem por 48 horas. Peça ao administrador para reenviar o acesso em{' '}
+              <strong>Configurações › Usuários</strong> — o novo e-mail chega na hora.
+            </Alert>
+            <Link to="/login" className="btn-secondary inline-flex">
+              Ir para o login
+            </Link>
+          </div>
+        )}
+
         {estado === 'invalido' && (
           <div className="space-y-4 text-center">
-            <Alert tone="red">Este convite é inválido ou expirou. Peça um novo convite ao administrador do sistema.</Alert>
+            <Alert tone="red">
+              <strong>Não conseguimos validar este link.</strong> Ele pode ter sido usado uma única vez, substituído por um convite mais recente ou cortado pelo
+              cliente de e-mail. Peça um novo convite ao administrador do sistema.
+            </Alert>
             <Link to="/login" className="btn-secondary inline-flex">
               Ir para o login
             </Link>

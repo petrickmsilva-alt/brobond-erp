@@ -22,7 +22,7 @@ delete process.env.SMTP_PASS;
 
 const { RESOURCES } = await import('../src/resources');
 const { getStore } = await import('../src/services');
-const { linkPublico, normalizarOrigem, origemDaRequisicao, urlAbsoluta, urlBasePublica } = await import('../src/urlPublica');
+const { linkPublico, normalizarOrigem, origemDaRequisicao, origemPublica, statusOrigem, urlAbsoluta, urlBasePublica } = await import('../src/urlPublica');
 
 const APP_URL_TESTE = 'https://erp.brobond.com.br';
 const SENHA_FORTE = () => `Reset#Seguro${Date.now()}`;
@@ -289,6 +289,81 @@ describe('Redefinição de senha — mesmo contrato de link', () => {
     });
   });
 });
+// ---------- 5) APP_URL de desenvolvimento em produção (a "URL inválida" real) ----------
+describe('APP_URL interna em produção — nunca vira link de e-mail', () => {
+  /** Roda o bloco com NODE_ENV=production (o filtro só vale em produção). */
+  function emProducao<T>(fn: () => T): T {
+    const antes = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      return fn();
+    } finally {
+      process.env.NODE_ENV = antes;
+    }
+  }
+
+  test('endereço que só existe dentro do servidor não é público', () => {
+    for (const host of [
+      'http://localhost:5173',
+      'http://localhost:3001',
+      'http://127.0.0.1:10000',
+      'http://10.0.0.5:10000',
+      'http://192.168.0.10',
+      'http://172.16.0.4',
+      'http://169.254.1.1',
+      'https://brobond-erp', // nome interno sem domínio
+      'https://erp.local',
+    ]) {
+      assert.equal(origemPublica(host), false, `"${host}" não pode basear link de e-mail`);
+    }
+    for (const host of ['https://erp.brobond.com.br', 'https://brobond-erp.onrender.com', 'http://erp.brobond.com.br:8080']) {
+      assert.equal(origemPublica(host), true, `"${host}" é um endereço público`);
+    }
+  });
+
+  test('APP_URL=localhost em produção é descartada: o link usa a origem da requisição', () => {
+    return emProducao(() =>
+      comAppUrl('http://localhost:5173', () => {
+        const link = linkPublico('convite/abc123', reqPublico());
+        assert.equal(link, 'https://erp.brobond.com.br/convite/abc123', 'localhost nunca chega ao e-mail');
+        assert.equal(statusOrigem(reqPublico()).appUrlIgnorada, true, 'a tela avisa que a APP_URL está sendo ignorada');
+        assert.equal(statusOrigem(reqPublico()).publica, true);
+      })
+    );
+  });
+
+  test('APP_URL=localhost em produção e sem requisição: sem origem inventada', () => {
+    return emProducao(() =>
+      comAppUrl('http://localhost:5173', () => {
+        assert.equal(urlBasePublica(), '', 'nada de link localhost para o destinatário');
+        assert.equal(linkPublico('convite/abc'), '/convite/abc');
+      })
+    );
+  });
+
+  test('APP_URL_PERMITIR_INTERNA desliga o filtro (ERP que só existe na rede interna)', () => {
+    return emProducao(() =>
+      comAppUrl('http://192.168.0.10:3001', () => {
+        const antes = process.env.APP_URL_PERMITIR_INTERNA;
+        process.env.APP_URL_PERMITIR_INTERNA = 'true';
+        try {
+          assert.equal(origemPublica('http://192.168.0.10:3001'), true);
+          assert.equal(urlBasePublica(), 'http://192.168.0.10:3001');
+        } finally {
+          if (antes === undefined) delete process.env.APP_URL_PERMITIR_INTERNA;
+          else process.env.APP_URL_PERMITIR_INTERNA = antes;
+        }
+      })
+    );
+  });
+
+  test('em desenvolvimento localhost continua valendo (não quebra o dev)', () => {
+    return comAppUrl('http://localhost:5173', () => {
+      assert.equal(urlBasePublica(), 'http://localhost:5173');
+    });
+  });
+});
+
 // ---------- 4) o token que chega sujo do e-mail ----------
 describe('Token copiado do link — tolerante à pontuação do cliente de e-mail', () => {
   test('limparToken remove o que a borda do link gruda no token', async () => {

@@ -91,8 +91,11 @@ export type Meta = {
    * Origem usada para montar os links que saem por e-mail (convite de acesso,
    * redefinição de senha). `configurada=false` significa que a base vem do
    * cabeçalho da requisição — funciona, mas quebra se o ERP mudar de endereço.
+   * `publica=false` (ou `appUrlIgnorada=true`) é o caso que chega ao
+   * destinatário como "URL inválida": a APP_URL configurada aponta para um
+   * endereço interno (localhost/IP privado) e por isso é descartada.
    */
-  emailLinks?: { configurada: boolean; base: string; aviso?: string };
+  emailLinks?: { configurada: boolean; base: string; publica: boolean; appUrlIgnorada: boolean; aviso?: string };
   /** Informações do fluxo de autenticação (hash, MFA, reautenticação) */
   auth?: { hash: string; mfa_admin_obrigatorio: boolean; reauth_ttl_segundos: number };
   /** Local padrão (origem das movimentações) — o front o usa para pré-selecionar os formulários. */

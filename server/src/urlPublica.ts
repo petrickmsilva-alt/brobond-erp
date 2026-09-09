@@ -29,6 +29,60 @@ import type { Request } from 'express';
 /** Porta do front no `npm run dev` (Vite) — ver client/vite.config.ts. */
 const DEV_FRONT_PORT = Number(process.env.DEV_FRONT_PORT) || 5173;
 const HOSTS_LOCAIS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]']);
+
+// ----------------------------------------------------------------------------
+// Endereço que NUNCA abre na máquina de quem recebeu o e-mail.
+//
+// Foi exatamente o defeito relatado em produção: APP_URL copiada do
+// .env.example (http://localhost:5173 — valor de desenvolvimento) para o
+// painel da Render. O link sai "bonito" (absoluto, com esquema) e mesmo assim
+// o sócio vê "URL inválida": localhost é a máquina DELE, não o servidor.
+// O mesmo vale para IP privado (10.x, 192.168.x), nome interno sem domínio
+// ("brobond-erp") e sufixos reservados (.local, .internal). Em produção esses
+// valores são DESCARTADOS — é melhor cair na origem da requisição (ou avisar)
+// do que entregar um link que não abre para ninguém.
+// ----------------------------------------------------------------------------
+const SUFIXOS_INTERNOS = ['.localhost', '.local', '.internal', '.test', '.invalid', '.example', '.home.arpa'];
+
+/** true quando o host só resolve dentro da rede local (ou da própria máquina). */
+export function hostInterno(hostname: string): boolean {
+  const h = String(hostname || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\[/, '')
+    .replace(/\]$/, '');
+  if (!h) return true;
+  if (h === 'localhost' || h === '::1' || h === '0.0.0.0') return true;
+  if (SUFIXOS_INTERNOS.some((s) => h.endsWith(s))) return true;
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (ipv4) {
+    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
+    if (a === 10 || a === 127) return true; // loopback / rede privada
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true; // link-local
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+    return false;
+  }
+  if (h.includes(':')) return true; // IPv6 literal: não utilizável como link de e-mail
+  if (!h.includes('.')) return true; // nome solto ("brobond-erp") não resolve na internet
+  return false;
+}
+
+/**
+ * Uma origem só serve para link de e-mail se quem recebe consegue alcançá-la.
+ * Com APP_URL_PERMITIR_INTERNA=true (ERP que só é acessado pela rede interna da
+ * fábrica, sem endereço público) o filtro é desligado de propósito.
+ */
+export function origemPublica(origem: string): boolean {
+  if (!origem) return false;
+  if (process.env.APP_URL_PERMITIR_INTERNA === 'true') return true;
+  try {
+    return !hostInterno(new URL(origem).hostname);
+  } catch {
+    return false;
+  }
+}
 // Host de cabeçalho: hostname normal ou literal IPv6 entre colchetes, com porta opcional.
 const HOST_VALIDO = /^([A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(:\d{1,5})?$/;
 
@@ -104,12 +158,38 @@ function ajustarParaDev(origem: string): string {
   return origem;
 }
 
-/** Base absoluta (sem barra final) para montar links do sistema. '' se impossível. */
+const avisosInternos = new Set<string>();
+/** Avisa uma vez por processo que uma origem interna foi descartada (evita flood). */
+function avisarOrigemInterna(fonte: string, origem: string): void {
+  const chave = `${fonte}|${origem}`;
+  if (avisosInternos.has(chave)) return;
+  avisosInternos.add(chave);
+  console.warn(
+    `⚠️  [url-publica] Origem interna descartada para os links de e-mail: ${fonte} aponta para "${origem}", que só existe dentro do servidor. ` +
+      'Quem recebe o convite/redefinição vê "URL inválida". Defina APP_URL com o endereço público do ERP (ex.: https://erp.brobond.com.br).'
+  );
+}
+
+/**
+ * Base absoluta (sem barra final) para montar links do sistema. '' se impossível.
+ *
+ * Em produção, uma origem interna (localhost, IP privado, nome sem domínio) é
+ * DESCARTADA: o link precisa abrir na máquina de quem recebeu o e-mail, não na
+ * do servidor. Em desenvolvimento localhost é o normal — por isso o filtro só vale
+ * com NODE_ENV=production.
+ */
 export function urlBasePublica(req?: Request | null): string {
+  const producao = process.env.NODE_ENV === 'production';
   const config = normalizarOrigem(process.env.APP_URL);
-  if (config) return config;
+  if (config) {
+    if (!producao || origemPublica(config)) return config;
+    avisarOrigemInterna('APP_URL', config);
+  }
   const daRequisicao = ajustarParaDev(origemDaRequisicao(req));
-  if (daRequisicao) return daRequisicao;
+  if (daRequisicao) {
+    if (!producao || origemPublica(daRequisicao)) return daRequisicao;
+    avisarOrigemInterna('o cabeçalho da requisição', daRequisicao);
+  }
   // Sem APP_URL e sem requisição (job/cron/script): em dev usa o Vite; em
   // produção devolve '' e o chamador avisa — link relativo é pior que nenhum.
   return process.env.NODE_ENV === 'production' ? '' : `http://localhost:${DEV_FRONT_PORT}`;
@@ -137,9 +217,30 @@ export function origemConfigurada(): boolean {
   return Boolean(normalizarOrigem(process.env.APP_URL));
 }
 
-/** Estado da origem pública — usado no diagnóstico de boot e em /api/meta. */
-export function statusOrigem(req?: Request | null): { configurada: boolean; base: string } {
-  return { configurada: origemConfigurada(), base: urlBasePublica(req) };
+/**
+ * Estado da origem pública — usado no diagnóstico de boot e em /api/meta.
+ *
+ * `publica: false` é o caso que vira "URL inválida" na mão de quem recebeu o
+ * e-mail: ou não há origem nenhuma (link relativo) ou a origem é interna
+ * (localhost/IP privado). `appUrlIgnorada` diz que a APP_URL configurada
+ * existe, mas está sendo descartada por apontar para um endereço interno —
+ * é o erro de configuração mais comum (valor de desenvolvimento em produção).
+ */
+export function statusOrigem(req?: Request | null): {
+  configurada: boolean;
+  base: string;
+  publica: boolean;
+  appUrlIgnorada: boolean;
+} {
+  const configurada = origemConfigurada();
+  const appUrl = normalizarOrigem(process.env.APP_URL);
+  const base = urlBasePublica(req);
+  return {
+    configurada,
+    base,
+    publica: origemPublica(base),
+    appUrlIgnorada: Boolean(appUrl) && appUrl !== base,
+  };
 }
 
 /**
@@ -151,7 +252,19 @@ export function statusOrigem(req?: Request | null): { configurada: boolean; base
  * (/api/meta → Configurações › Sistema).
  */
 export function revisarConfiguracaoOrigem(): string {
-  if (origemConfigurada()) return '';
+  if (origemConfigurada()) {
+    // APP_URL existe, mas aponta para dentro do servidor (localhost, IP
+    // privado, nome sem domínio): o link NUNCA abre para quem recebe o e-mail.
+    const appUrl = normalizarOrigem(process.env.APP_URL);
+    if (process.env.NODE_ENV === 'production' && appUrl && !origemPublica(appUrl)) {
+      const aviso =
+        `⚠️  APP_URL="${appUrl}" não é um endereço público — os links de e-mail (convite de acesso, redefinição de senha) não abrem para quem recebe ` +
+        '("URL inválida"). Defina APP_URL com o endereço público do ERP (ex.: https://erp.brobond.com.br).';
+      console.warn(aviso);
+      return aviso;
+    }
+    return '';
+  }
   if (process.env.NODE_ENV !== 'production') return ''; // dev: o link cai em http://localhost:5173 e funciona
   const aviso =
     '⚠️  APP_URL ausente — o endereço dos links de e-mail (convite de acesso, redefinição de senha) fica dependendo do cabeçalho Host da requisição. ' +
