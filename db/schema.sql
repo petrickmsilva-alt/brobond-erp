@@ -902,3 +902,89 @@ CREATE INDEX IF NOT EXISTS idx_medida_valores_tamanho ON medida_valores (tamanho
 -- Novos catálogos nascem com a tabela de medidas visível (padrão da API; os
 -- catálogos já existentes não são alterados — a visibilidade é uma escolha).
 ALTER TABLE catalogos ALTER COLUMN mostrar_medidas SET DEFAULT TRUE;
+-- Fase 2: compartilhamentos individualizados e eventos comerciais.
+CREATE TABLE IF NOT EXISTS catalogo_compartilhamentos (
+  id BIGSERIAL PRIMARY KEY,
+  catalogo_id INTEGER NOT NULL REFERENCES catalogos(id) ON DELETE CASCADE,
+  cliente_id INTEGER REFERENCES clientes(id) ON DELETE SET NULL,
+  usuario_id INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  canal TEXT NOT NULL DEFAULT 'link',
+  expira_em TIMESTAMPTZ,
+  revogado_em TIMESTAMPTZ,
+  primeiro_acesso_em TIMESTAMPTZ,
+  ultimo_acesso_em TIMESTAMPTZ,
+  acessos INTEGER NOT NULL DEFAULT 0 CHECK (acessos >= 0),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_catalogo_comp_catalogo ON catalogo_compartilhamentos(catalogo_id, criado_em DESC);
+CREATE INDEX IF NOT EXISTS idx_catalogo_comp_cliente ON catalogo_compartilhamentos(cliente_id, criado_em DESC);
+CREATE TABLE IF NOT EXISTS catalogo_eventos (
+  id BIGSERIAL PRIMARY KEY,
+  compartilhamento_id BIGINT REFERENCES catalogo_compartilhamentos(id) ON DELETE CASCADE,
+  catalogo_id INTEGER NOT NULL REFERENCES catalogos(id) ON DELETE CASCADE,
+  produto_id INTEGER REFERENCES produtos(id) ON DELETE SET NULL,
+  pedido_id INTEGER REFERENCES vendas(id) ON DELETE SET NULL,
+  valor NUMERIC(12,2),
+  tipo TEXT NOT NULL CHECK (tipo IN ('abertura','produto_visualizado','carrinho_iniciado','pedido_enviado')),
+  dados JSONB NOT NULL DEFAULT '{}'::jsonb,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_catalogo_eventos_funil ON catalogo_eventos(catalogo_id, tipo, criado_em DESC);
+-- Fase 3A: motor de políticas comerciais sazonais e hierárquicas.
+CREATE TABLE IF NOT EXISTS politicas_comerciais (
+  id SERIAL PRIMARY KEY,
+  nome TEXT NOT NULL,
+  escopo TEXT NOT NULL DEFAULT 'geral' CHECK (escopo IN ('geral','canal','colecao','catalogo','cliente')),
+  canal TEXT CHECK (canal IS NULL OR canal IN ('varejo','atacado','todos')),
+  colecao_id INTEGER REFERENCES colecoes(id) ON DELETE CASCADE,
+  catalogo_id INTEGER REFERENCES catalogos(id) ON DELETE CASCADE,
+  cliente_id INTEGER REFERENCES clientes(id) ON DELETE CASCADE,
+  inicio_em DATE,
+  fim_em DATE,
+  prioridade INTEGER NOT NULL DEFAULT 0,
+  desconto_pct NUMERIC(5,2) NOT NULL DEFAULT 0 CHECK (desconto_pct BETWEEN 0 AND 100),
+  pedido_min_valor NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (pedido_min_valor >= 0),
+  pedido_min_pecas INTEGER NOT NULL DEFAULT 0 CHECK (pedido_min_pecas >= 0),
+  produto_min_qtd INTEGER NOT NULL DEFAULT 0 CHECK (produto_min_qtd >= 0),
+  multiplo_qtd INTEGER NOT NULL DEFAULT 1 CHECK (multiplo_qtd >= 1),
+  reserva_horas INTEGER NOT NULL DEFAULT 0 CHECK (reserva_horas >= 0),
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_politicas_vigencia ON politicas_comerciais(ativo, inicio_em, fim_em);
+CREATE INDEX IF NOT EXISTS idx_politicas_contexto ON politicas_comerciais(escopo, catalogo_id, colecao_id, cliente_id, canal);
+-- Fase 3B: capacidades comerciais por usuário (herdar/permitir/negar) e alçadas.
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS perm_catalogos TEXT NOT NULL DEFAULT 'herdar' CHECK (perm_catalogos IN ('herdar','permitir','negar'));
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS perm_compartilhar TEXT NOT NULL DEFAULT 'herdar' CHECK (perm_compartilhar IN ('herdar','permitir','negar'));
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS perm_metricas TEXT NOT NULL DEFAULT 'herdar' CHECK (perm_metricas IN ('herdar','permitir','negar'));
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS perm_politicas TEXT NOT NULL DEFAULT 'herdar' CHECK (perm_politicas IN ('herdar','permitir','negar'));
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS perm_aprovar TEXT NOT NULL DEFAULT 'herdar' CHECK (perm_aprovar IN ('herdar','permitir','negar'));
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS desconto_max_pct NUMERIC(5,2) CHECK (desconto_max_pct IS NULL OR desconto_max_pct BETWEEN 0 AND 100);
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS venda_sem_aprovacao_ate NUMERIC(12,2) CHECK (venda_sem_aprovacao_ate IS NULL OR venda_sem_aprovacao_ate >= 0);
+-- Fase 4: acessos aleatórios revogáveis e decisões imutáveis sobre cotações.
+CREATE TABLE IF NOT EXISTS portal_acessos (
+  id BIGSERIAL PRIMARY KEY,
+  cliente_id INTEGER NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  expira_em TIMESTAMPTZ,
+  revogado_em TIMESTAMPTZ,
+  ultimo_acesso_em TIMESTAMPTZ,
+  acessos INTEGER NOT NULL DEFAULT 0 CHECK (acessos >= 0),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_portal_acessos_cliente ON portal_acessos(cliente_id, criado_em DESC);
+CREATE TABLE IF NOT EXISTS cotacao_decisoes (
+  id BIGSERIAL PRIMARY KEY,
+  venda_id INTEGER NOT NULL REFERENCES vendas(id) ON DELETE CASCADE,
+  cliente_id INTEGER NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+  decisao TEXT NOT NULL CHECK (decisao IN ('aceitar','recusar','alteracao')),
+  responsavel TEXT NOT NULL,
+  mensagem TEXT,
+  proposta_hash TEXT NOT NULL,
+  ip TEXT,
+  user_agent TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cotacao_decisoes_venda ON cotacao_decisoes(venda_id, criado_em DESC);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   ChevronLeft,
@@ -12,12 +12,16 @@ import {
   Minus,
   Plus,
   Ruler,
+  Search,
   Send,
   Shirt,
   ShoppingBag,
+  LayoutGrid,
+  Table2,
+  Upload,
   X,
 } from 'lucide-react';
-import { api, ApiError } from '../lib/api';
+import { api, apiFetch, ApiError } from '../lib/api';
 import { Logo } from '../components/Logo';
 import { useToast } from '../components/ui';
 import { formatDateTime, formatMoney, formatNumber } from '../lib/format';
@@ -45,7 +49,7 @@ type ProdutoCatalogo = {
   disponivel_site: boolean;
   foto_url: string | null;
   fotos: { url: string; thumb_url: string }[];
-  tamanhos: { tamanho_id: number; codigo: string; quantidade: number }[];
+  tamanhos: { tamanho_id: number; codigo: string; quantidade: number | null }[];
   medidas: MedidasCatalogo | null;
 };
 
@@ -58,6 +62,7 @@ type CatResp = {
   mostrar_preco: boolean;
   mostrar_saldo: boolean;
   mostrar_medidas: boolean;
+  politica_comercial: { nome: string; desconto_pct: number; pedido_min_valor: number; pedido_min_pecas: number; produto_min_qtd: number; multiplo_qtd: number } | null;
   total: number;
   produtos: ProdutoCatalogo[];
 };
@@ -78,16 +83,23 @@ export default function CatalogoPublico() {
   const [medidasAbertas, setMedidasAbertas] = useState<Record<number, boolean>>({});
   const [pedidoOpen, setPedidoOpen] = useState(false);
   const [pedidoEnviado, setPedidoEnviado] = useState(false);
+  const [portalUrl, setPortalUrl] = useState('');
   // Detalhe do produto (tudo que o cliente precisa em um só lugar)
   const [detalheId, setDetalheId] = useState<number | null>(null);
+  const [busca, setBusca] = useState('');
+  const [ordenacao, setOrdenacao] = useState<'nome' | 'menor_preco' | 'maior_preco'>('nome');
+  const [somenteDisponiveis, setSomenteDisponiveis] = useState(false);
+  const [modo, setModo] = useState<'vitrine' | 'rapido'>('vitrine');
+  const [rascunhoCarregado, setRascunhoCarregado] = useState(false);
 
   const carregar = useCallback(
     async (comSenha: string) => {
       setBusy(true);
       setErr('');
       try {
-        const q = comSenha ? `?senha=${encodeURIComponent(comSenha)}` : '';
-        const d = await api.get<CatResp>(`/publico/catalogo/${token}${q}`);
+        const d = await apiFetch<CatResp>(`/publico/catalogo/${token}`, {
+          headers: comSenha ? { 'X-Catalogo-Senha': comSenha } : {},
+        });
         setData(d);
         setPrecisaSenha(false);
       } catch (e: any) {
@@ -128,17 +140,30 @@ export default function CatalogoPublico() {
   }, [detalheId, data]);
 
   function abrirDetalhe(id: number, medidasAberta: boolean) {
+    if (detalheId !== id) api.post(`/publico/catalogo/${token}/evento`, { tipo: 'produto_visualizado', produto_id: id }).catch(() => {});
     setDetalheId(id);
     if (medidasAberta) setMedidasAbertas((prev) => ({ ...prev, [id]: true }));
   }
 
   function addToCart(p: ProdutoCatalogo, tamanho?: { tamanho_id: number; codigo: string }) {
     const t = tamanho || p.tamanhos[0];
+    if (cart.length === 0) api.post(`/publico/catalogo/${token}/evento`, { tipo: 'carrinho_iniciado', produto_id: p.id }).catch(() => {});
     const key = `${p.id}:${t?.tamanho_id ?? 0}`;
     setCart((prev) => {
       const found = prev.find((i) => i.key === key);
       if (found) return prev.map((i) => (i.key === key ? { ...i, qtd: i.qtd + 1 } : i));
       return [...prev, { key, produto: p, qtd: 1, tamanho_id: t?.tamanho_id ?? 0, tamanho_codigo: t?.codigo ?? '' }];
+    });
+    setPedidoEnviado(false);
+  }
+
+  function setQuantidade(p: ProdutoCatalogo, t: { tamanho_id: number; codigo: string }, qtd: number) {
+    const key = `${p.id}:${t.tamanho_id}`;
+    const quantidade = Math.max(0, Math.min(9999, Math.floor(qtd || 0)));
+    setCart((prev) => {
+      if (quantidade === 0) return prev.filter((i) => i.key !== key);
+      const found = prev.some((i) => i.key === key);
+      return found ? prev.map((i) => i.key === key ? { ...i, qtd: quantidade } : i) : [...prev, { key, produto: p, qtd: quantidade, tamanho_id: t.tamanho_id, tamanho_codigo: t.codigo }];
     });
     setPedidoEnviado(false);
   }
@@ -151,8 +176,39 @@ export default function CatalogoPublico() {
     setCart((prev) => prev.filter((i) => i.key !== key));
   }
 
+  // Rascunho local por catálogo: recompra e retomada mesmo após fechar o navegador.
+  useEffect(() => {
+    if (!data || rascunhoCarregado) return;
+    try {
+      const raw = JSON.parse(localStorage.getItem(`brobond_catalogo_rascunho_${token}`) || '[]') as { produto_id: number; tamanho_id: number; qtd: number }[];
+      const itens = raw.flatMap((x) => {
+        const p = data.produtos.find((v) => v.id === x.produto_id);
+        const t = p?.tamanhos.find((v) => v.tamanho_id === x.tamanho_id);
+        return p && t && x.qtd > 0 ? [{ key: `${p.id}:${t.tamanho_id}`, produto: p, qtd: x.qtd, tamanho_id: t.tamanho_id, tamanho_codigo: t.codigo }] : [];
+      });
+      if (itens.length) setCart(itens);
+    } catch { localStorage.removeItem(`brobond_catalogo_rascunho_${token}`); }
+    setRascunhoCarregado(true);
+  }, [data, token, rascunhoCarregado]);
+  useEffect(() => {
+    if (!rascunhoCarregado) return;
+    localStorage.setItem(`brobond_catalogo_rascunho_${token}`, JSON.stringify(cart.map((i) => ({ produto_id: i.produto.id, tamanho_id: i.tamanho_id, qtd: i.qtd }))));
+  }, [cart, token, rascunhoCarregado]);
+
   const totalPedido = cart.reduce((s, i) => s + (i.produto.preco || 0) * i.qtd, 0);
   const pedidoHabilitado = !!data?.aceita_pedido_site;
+  const produtosVisiveis = useMemo(() => {
+    if (!data) return [];
+    const termo = busca.trim().toLocaleLowerCase('pt-BR');
+    return data.produtos
+      .filter((p) => !termo || [p.nome, p.sku, p.cor, p.composicao].some((v) => v?.toLocaleLowerCase('pt-BR').includes(termo)))
+      .filter((p) => !somenteDisponiveis || p.tamanhos.length > 0)
+      .sort((a, b) => {
+        if (ordenacao === 'menor_preco') return (a.preco ?? Infinity) - (b.preco ?? Infinity);
+        if (ordenacao === 'maior_preco') return (b.preco ?? -Infinity) - (a.preco ?? -Infinity);
+        return a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' });
+      });
+  }, [data, busca, somenteDisponiveis, ordenacao]);
   const detalhe = detalheId !== null && data ? (data.produtos.find((p) => p.id === detalheId) ?? null) : null;
 
   if (err)
@@ -235,12 +291,53 @@ export default function CatalogoPublico() {
         )}
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+      <main className="mx-auto max-w-6xl px-4 py-6 pb-24 sm:px-6">
+        {data.politica_comercial && (
+          <section className="mb-4 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-900">
+            <p className="font-bold">Condição comercial: {data.politica_comercial.nome}</p>
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-brand-800">
+              {data.politica_comercial.desconto_pct > 0 && <span>{formatNumber(data.politica_comercial.desconto_pct)}% de desconto aplicado</span>}
+              {data.politica_comercial.pedido_min_valor > 0 && <span>Pedido mínimo {formatMoney(data.politica_comercial.pedido_min_valor)}</span>}
+              {data.politica_comercial.pedido_min_pecas > 0 && <span>Mínimo de {data.politica_comercial.pedido_min_pecas} peças</span>}
+              {data.politica_comercial.produto_min_qtd > 0 && <span>Mínimo de {data.politica_comercial.produto_min_qtd} por item</span>}
+              {data.politica_comercial.multiplo_qtd > 1 && <span>Quantidades em múltiplos de {data.politica_comercial.multiplo_qtd}</span>}
+            </div>
+          </section>
+        )}
+        {data.produtos.length > 0 && (
+          <section className="mb-5 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm" aria-label="Busca e filtros">
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <label className="relative flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input className="input !pl-9" type="search" placeholder="Buscar por produto, SKU, cor ou composição" value={busca} onChange={(e) => setBusca(e.target.value)} />
+              </label>
+              <select className="input sm:w-48" value={ordenacao} onChange={(e) => setOrdenacao(e.target.value as typeof ordenacao)} aria-label="Ordenar produtos">
+                <option value="nome">Nome: A–Z</option>
+                {data.mostrar_preco && <option value="menor_preco">Menor preço</option>}
+                {data.mostrar_preco && <option value="maior_preco">Maior preço</option>}
+              </select>
+              <label className="flex cursor-pointer items-center gap-2 whitespace-nowrap px-1 text-sm text-slate-600">
+                <input type="checkbox" checked={somenteDisponiveis} onChange={(e) => setSomenteDisponiveis(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-brand-600" />
+                Com estoque
+              </label>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-slate-400" aria-live="polite">{produtosVisiveis.length} de {data.total} produtos</p>
+              {pedidoHabilitado && <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+                <button className={`rounded-md px-2.5 py-1 text-xs font-semibold ${modo === 'vitrine' ? 'bg-white text-navy-800 shadow-sm' : 'text-slate-500'}`} onClick={() => setModo('vitrine')}><LayoutGrid className="mr-1 inline h-3.5 w-3.5" />Vitrine</button>
+                <button className={`rounded-md px-2.5 py-1 text-xs font-semibold ${modo === 'rapido' ? 'bg-white text-navy-800 shadow-sm' : 'text-slate-500'}`} onClick={() => setModo('rapido')}><Table2 className="mr-1 inline h-3.5 w-3.5" />Pedido rápido</button>
+              </div>}
+            </div>
+          </section>
+        )}
         {data.produtos.length === 0 ? (
           <p className="py-16 text-center text-sm text-slate-400">Este catálogo ainda não tem produtos.</p>
+        ) : modo === 'rapido' && pedidoHabilitado ? (
+          <PedidoRapido produtos={produtosVisiveis} cart={cart} politica={data.politica_comercial} mostrarSaldo={data.mostrar_saldo} onQuantidade={setQuantidade} />
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {data.produtos.map((p) => (
+            {produtosVisiveis.length === 0 && <p className="col-span-full py-16 text-center text-sm text-slate-500">Nenhum produto corresponde aos filtros.</p>}
+            {produtosVisiveis.map((p) => (
               <article
                 key={p.id}
                 className="card cursor-pointer overflow-hidden !p-0 transition-shadow hover:shadow-lg"
@@ -271,7 +368,7 @@ export default function CatalogoPublico() {
                         data.mostrar_saldo ? (
                           <span
                             key={t.codigo}
-                            className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${t.quantidade > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}
+                            className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${(t.quantidade ?? 0) > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}
                           >
                             {t.codigo}
                             <span className="ml-1 tabular-nums opacity-70">{formatNumber(t.quantidade)}</span>
@@ -421,10 +518,12 @@ export default function CatalogoPublico() {
           cart={cart}
           total={totalPedido}
           canal={data.canal}
+          senha={senha}
           onQty={changeQtd}
           onRemove={removeFromCart}
           onClose={() => setPedidoOpen(false)}
-          onEnviado={() => {
+          onEnviado={(url) => {
+            setPortalUrl(url);
             setPedidoOpen(false);
             setPedidoEnviado(true);
             setCart([]);
@@ -445,7 +544,8 @@ export default function CatalogoPublico() {
             <p className="mt-1 text-sm text-slate-500">
               Recebemos sua solicitação. Nossa equipe entra em contato para confirmar disponibilidade e finalizar.
             </p>
-            <button className="btn-primary mt-4 w-full justify-center" onClick={() => setPedidoEnviado(false)}>
+            {portalUrl && <a className="btn-accent mt-4 w-full justify-center" href={portalUrl}><ShoppingBag className="h-4 w-4" /> Acompanhar no portal</a>}
+            <button className="btn-primary mt-2 w-full justify-center" onClick={() => setPedidoEnviado(false)}>
               Fechar
             </button>
           </div>
@@ -718,6 +818,7 @@ function CatalogoPedidoModal({
   cart,
   total,
   canal,
+  senha,
   onQty,
   onRemove,
   onClose,
@@ -726,10 +827,11 @@ function CatalogoPedidoModal({
   cart: CartItem[];
   total: number;
   canal: string;
+  senha: string;
   onQty: (key: string, delta: number) => void;
   onRemove: (key: string) => void;
   onClose: () => void;
-  onEnviado: () => void;
+  onEnviado: (portalUrl: string) => void;
 }) {
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
@@ -745,8 +847,9 @@ function CatalogoPedidoModal({
     if (!cart.length) return setErro('Adicione ao menos um item ao pedido.');
     setBusy(true);
     try {
-      await api.post(`/publico/catalogo/${token}/pedido`, {
+      const resposta = await api.post<{ portal_url?: string }>(`/publico/catalogo/${token}/pedido`, {
         nome,
+        senha,
         email,
         telefone,
         canal: canal === 'atacado' ? 'atacado' : 'varejo',
@@ -758,7 +861,7 @@ function CatalogoPedidoModal({
           preco_unitario: i.produto.preco,
         })),
       });
-      onEnviado();
+      onEnviado(resposta.portal_url || '');
     } catch (e: any) {
       setErro(e instanceof ApiError ? e.message : 'Não foi possível enviar o pedido. Tente novamente.');
     } finally {
@@ -844,4 +947,40 @@ function CatalogoPedidoModal({
       </div>
     </div>
   );
+}
+
+function PedidoRapido({ produtos, cart, politica, mostrarSaldo, onQuantidade }: {
+  produtos: ProdutoCatalogo[]; cart: CartItem[];
+  politica: CatResp['politica_comercial']; mostrarSaldo: boolean;
+  onQuantidade: (p: ProdutoCatalogo, t: { tamanho_id: number; codigo: string }, qtd: number) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();
+  const qtd = (pid: number, tid: number) => cart.find((i) => i.produto.id === pid && i.tamanho_id === tid)?.qtd || 0;
+  async function importar(file?: File) {
+    if (!file) return;
+    const linhas = (await file.text()).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    let aplicados = 0;
+    for (const linha of linhas.slice(1)) {
+      const [sku, tamanho, quantidadeRaw] = linha.split(/[;,\t]/).map((x) => x.trim());
+      const p = produtos.find((x) => String(x.sku || '').toLocaleLowerCase('pt-BR') === sku.toLocaleLowerCase('pt-BR'));
+      const t = p?.tamanhos.find((x) => x.codigo.toLocaleLowerCase('pt-BR') === tamanho.toLocaleLowerCase('pt-BR'));
+      const quantidade = Number(quantidadeRaw);
+      if (p && t && Number.isInteger(quantidade) && quantidade >= 0) { onQuantidade(p, t, quantidade); aplicados++; }
+    }
+    toast[aplicados ? 'success' : 'error'](aplicados ? `${aplicados} quantidade(s) importada(s).` : 'Nenhuma linha válida. Use: SKU;Tamanho;Quantidade.');
+    if (fileRef.current) fileRef.current.value = '';
+  }
+  return <section className="card overflow-hidden !p-0">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+      <div><h2 className="text-sm font-bold text-navy-900">Pedido rápido por grade</h2><p className="text-xs text-slate-400">Digite as quantidades e use Tab para avançar. O rascunho é salvo automaticamente.</p></div>
+      <><input ref={fileRef} type="file" accept=".csv,.txt" className="hidden" onChange={(e) => importar(e.target.files?.[0])} /><button className="btn-secondary text-xs" onClick={() => fileRef.current?.click()}><Upload className="h-3.5 w-3.5" /> Importar CSV</button></>
+    </div>
+    {politica && (politica.produto_min_qtd > 0 || politica.multiplo_qtd > 1) && <p className="border-b border-brand-100 bg-brand-50 px-4 py-2 text-xs text-brand-800">{politica.produto_min_qtd > 0 ? `Mínimo ${politica.produto_min_qtd} por item. ` : ''}{politica.multiplo_qtd > 1 ? `Use múltiplos de ${politica.multiplo_qtd}.` : ''}</p>}
+    <div className="overflow-x-auto"><table className="table min-w-[700px]"><thead><tr><th className="sticky left-0 z-10 bg-slate-50">Produto</th><th>Preço</th><th>Grade / quantidades</th><th className="text-right">Subtotal</th></tr></thead><tbody>{produtos.map((p) => {
+      const itens = cart.filter((i) => i.produto.id === p.id); const sub = itens.reduce((n, i) => n + (p.preco || 0) * i.qtd, 0);
+      return <tr key={p.id}><td className="sticky left-0 bg-white"><div className="font-semibold text-navy-900">{p.nome}</div><div className="font-mono text-[10px] text-slate-400">{p.sku || 'sem SKU'}</div></td><td className="whitespace-nowrap font-semibold text-brand-700">{formatMoney(p.preco || 0)}</td><td><div className="flex flex-wrap gap-2">{p.tamanhos.map((t) => <label key={t.tamanho_id} className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1"><span className="min-w-6 text-center text-xs font-bold text-slate-600">{t.codigo}</span><input type="number" min={0} max={mostrarSaldo ? (t.quantidade ?? 9999) : 9999} step={politica?.multiplo_qtd || 1} value={qtd(p.id, t.tamanho_id) || ''} placeholder="0" onChange={(e) => onQuantidade(p, t, Number(e.target.value))} className="h-7 w-16 rounded border border-slate-200 bg-white px-1 text-center text-sm tabular-nums outline-none focus:border-brand-500" aria-label={`${p.nome}, tamanho ${t.codigo}`} /></label>)}</div></td><td className="text-right font-semibold tabular-nums text-navy-900">{formatMoney(sub)}</td></tr>;
+    })}</tbody></table></div>
+    {!produtos.length && <p className="py-12 text-center text-sm text-slate-400">Nenhum produto corresponde à busca.</p>}
+  </section>;
 }

@@ -136,6 +136,55 @@ export const UNIDADES: FieldOption[] = [
 ];
 
 export const RESOURCES: Record<string, Resource> = {
+  portal_acessos: {
+    key: 'portal_acessos', table: 'portal_acessos', label: 'Acessos do portal', singular: 'Acesso', labelFields: ['id'], internal: true, ops: READ_ONLY,
+    fields: [
+      { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes' }, { name: 'token_hash', label: 'Token', type: 'text', unique: true },
+      { name: 'expira_em', label: 'Expira em', type: 'datetime' }, { name: 'revogado_em', label: 'Revogado em', type: 'datetime' },
+      { name: 'ultimo_acesso_em', label: 'Último acesso', type: 'datetime' }, { name: 'acessos', label: 'Acessos', type: 'integer' },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime' },
+    ],
+  },
+  cotacao_decisoes: {
+    key: 'cotacao_decisoes', table: 'cotacao_decisoes', label: 'Decisões de cotação', singular: 'Decisão', labelFields: ['id'], internal: true, ops: READ_ONLY,
+    fields: [
+      { name: 'venda_id', label: 'Venda', type: 'ref', ref: 'vendas' }, { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes' },
+      { name: 'decisao', label: 'Decisão', type: 'text' }, { name: 'responsavel', label: 'Responsável', type: 'text' },
+      { name: 'mensagem', label: 'Mensagem', type: 'text' }, { name: 'proposta_hash', label: 'Hash', type: 'text' },
+      { name: 'ip', label: 'IP', type: 'text' }, { name: 'user_agent', label: 'Navegador', type: 'text' }, { name: 'criado_em', label: 'Criado em', type: 'datetime' },
+    ],
+  },
+  catalogo_compartilhamentos: {
+    key: 'catalogo_compartilhamentos', table: 'catalogo_compartilhamentos', label: 'Compartilhamentos de catálogo', singular: 'Compartilhamento',
+    labelFields: ['id'], internal: true, ops: READ_ONLY,
+    fields: [
+      { name: 'catalogo_id', label: 'Catálogo', type: 'ref', ref: 'catalogos' },
+      { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes' },
+      { name: 'usuario_id', label: 'Vendedor', type: 'ref', ref: 'usuarios' },
+      { name: 'token_hash', label: 'Token', type: 'text', unique: true },
+      { name: 'canal', label: 'Canal', type: 'text' },
+      { name: 'expira_em', label: 'Expira em', type: 'datetime' },
+      { name: 'revogado_em', label: 'Revogado em', type: 'datetime' },
+      { name: 'primeiro_acesso_em', label: 'Primeiro acesso', type: 'datetime' },
+      { name: 'ultimo_acesso_em', label: 'Último acesso', type: 'datetime' },
+      { name: 'acessos', label: 'Acessos', type: 'integer' },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime' },
+    ],
+  },
+  catalogo_eventos: {
+    key: 'catalogo_eventos', table: 'catalogo_eventos', label: 'Eventos de catálogo', singular: 'Evento',
+    labelFields: ['id'], internal: true, ops: READ_ONLY,
+    fields: [
+      { name: 'compartilhamento_id', label: 'Compartilhamento', type: 'ref', ref: 'catalogo_compartilhamentos' },
+      { name: 'catalogo_id', label: 'Catálogo', type: 'ref', ref: 'catalogos' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
+      { name: 'pedido_id', label: 'Pedido', type: 'ref', ref: 'vendas' },
+      { name: 'valor', label: 'Valor', type: 'money' },
+      { name: 'tipo', label: 'Tipo', type: 'text' },
+      { name: 'dados', label: 'Dados', type: 'text' },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime' },
+    ],
+  },
   // ----------------------------------------------------------------
   // Interno — anexos (fotos). Manipulado por uploads.ts, não pela API genérica.
   // ----------------------------------------------------------------
@@ -184,6 +233,13 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
       { name: 'email', label: 'E-mail', type: 'email', required: true, unique: true, search: true, maxLength: 160, hint: 'Usado para o login e para o convite de acesso.' },
       { name: 'perfil', label: 'Perfil', type: 'select', required: true, options: PERFIS, default: 'operador', hint: 'Administrador: tudo (com MFA obrigatório). Gerente: tudo, exceto usuários. Operador: não exclui registros.' },
+      { name: 'perm_catalogos', label: 'Gerenciar catálogos', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
+      { name: 'perm_compartilhar', label: 'Compartilhar catálogos', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
+      { name: 'perm_metricas', label: 'Ver métricas comerciais', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
+      { name: 'perm_politicas', label: 'Gerenciar políticas', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
+      { name: 'perm_aprovar', label: 'Aprovar exceções', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
+      { name: 'desconto_max_pct', label: 'Desconto máximo (%)', type: 'percent', min: 0, max: 100, section: 'Alçadas comerciais', hint: 'Vazio usa o padrão do perfil.' },
+      { name: 'venda_sem_aprovacao_ate', label: 'Venda sem aprovação até', type: 'money', min: 0, section: 'Alçadas comerciais', hint: 'Acima deste valor exige aprovação.' },
       { ...ativo, hint: 'Usuários inativos não conseguem entrar.' },
       {
         name: 'senha_status',
@@ -1151,6 +1207,35 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'diferenca', label: 'Diferença', type: 'integer', readonly: true },
     ],
     orderBy: { field: 'id', dir: 'asc' },
+  },
+
+  // ----------------------------------------------------------------
+  // Fase 3A — Políticas comerciais configuráveis por vigência e contexto
+  // ----------------------------------------------------------------
+  politicas_comerciais: {
+    key: 'politicas_comerciais', table: 'politicas_comerciais', label: 'Políticas comerciais', singular: 'Política comercial',
+    labelFields: ['nome'], ops: ALL_OPS, minPerfil: 'gerente',
+    notice: 'Regras sazonais de preço e pedido. A regra mais específica prevalece: cliente → catálogo → coleção → canal → geral.',
+    fields: [
+      { name: 'nome', label: 'Nome da política', type: 'text', required: true, search: true, maxLength: 120, wide: true, placeholder: 'Pré-venda Inverno 2027' },
+      { name: 'escopo', label: 'Aplicar por', type: 'select', required: true, default: 'geral', options: [
+        { value: 'geral', label: 'Regra geral' }, { value: 'canal', label: 'Canal' }, { value: 'colecao', label: 'Coleção' }, { value: 'catalogo', label: 'Catálogo' }, { value: 'cliente', label: 'Cliente específico' }
+      ] },
+      { name: 'canal', label: 'Canal', type: 'select', options: [{ value: 'todos', label: 'Todos' }, { value: 'varejo', label: 'Varejo' }, { value: 'atacado', label: 'Atacado' }] },
+      { name: 'colecao_id', label: 'Coleção', type: 'ref', ref: 'colecoes' },
+      { name: 'catalogo_id', label: 'Catálogo', type: 'ref', ref: 'catalogos' },
+      { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes' },
+      { name: 'inicio_em', label: 'Início da vigência', type: 'date' },
+      { name: 'fim_em', label: 'Fim da vigência', type: 'date' },
+      { name: 'prioridade', label: 'Prioridade', type: 'integer', default: 0, hint: 'Desempata regras do mesmo escopo. Maior número vence.' },
+      { name: 'desconto_pct', label: 'Desconto (%)', type: 'percent', default: 0, min: 0, max: 100 },
+      { name: 'pedido_min_valor', label: 'Pedido mínimo (R$)', type: 'money', default: 0, min: 0 },
+      { name: 'pedido_min_pecas', label: 'Pedido mínimo (peças)', type: 'integer', default: 0, min: 0 },
+      { name: 'produto_min_qtd', label: 'Mínimo por produto', type: 'integer', default: 0, min: 0 },
+      { name: 'multiplo_qtd', label: 'Múltiplo por item', type: 'integer', default: 1, min: 1 },
+      { name: 'reserva_horas', label: 'Reserva após aprovação (horas)', type: 'integer', default: 0, min: 0 },
+      ativo, ...auditFields,
+    ], orderBy: { field: 'prioridade', dir: 'desc' },
   },
 
   // ----------------------------------------------------------------

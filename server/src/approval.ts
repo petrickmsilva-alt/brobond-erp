@@ -20,8 +20,9 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource } from './resources';
-import { checkAccess, getStore, toHttpError } from './services';
+import { checkAccess, getStore, podeComercial, toHttpError } from './services';
 import { currentUser, requireAuth } from './auth';
+import type { AuthUser } from './auth';
 import type { Row, Tx } from './store';
 import { parseId } from './validate';
 import { labelOf } from './store';
@@ -46,9 +47,11 @@ export function precisaAprovacao(tipo: 'venda' | 'compra', total: number, descon
 }
 
 /** Retorna se um perfil pode aprovar pedidos. */
-export function podeAprovar(perfil: string): boolean {
-  return perfil === 'admin' || perfil === 'gerente';
+export function podeAprovar(perfilOuUsuario: string | AuthUser): boolean {
+  if (typeof perfilOuUsuario === 'string') return perfilOuUsuario === 'admin' || perfilOuUsuario === 'gerente';
+  return podeComercial(perfilOuUsuario, 'aprovar');
 }
+
 
 /**
  * Verifica se o pedido deve ir para "pendente_aprovacao" em vez de "aberta".
@@ -80,7 +83,7 @@ export async function verificarAprovacaoCriacao(
 /** GET /api/aprovacoes — lista pedidos pendentes de aprovação. */
 export async function listAprovacoes(req: Request, res: Response) {
   const actor = currentUser(req);
-  if (!podeAprovar(actor.perfil)) {
+  if (!podeAprovar(actor)) {
     throw new HttpError(403, 'Apenas gerentes e administradores podem ver a fila de aprovação.');
   }
 
@@ -113,7 +116,7 @@ export async function listAprovacoes(req: Request, res: Response) {
 /** POST /api/aprovacoes/:id/aprovar — aprova pedido. */
 export async function aprovarPedido(req: Request, res: Response) {
   const actor = currentUser(req);
-  if (!podeAprovar(actor.perfil)) {
+  if (!podeAprovar(actor)) {
     throw new HttpError(403, 'Apenas gerentes e administradores podem aprovar pedidos.');
   }
 
@@ -149,7 +152,7 @@ export async function aprovarPedido(req: Request, res: Response) {
 /** POST /api/aprovacoes/:id/rejeitar — rejeita pedido com motivo. */
 export async function rejeitarPedido(req: Request, res: Response) {
   const actor = currentUser(req);
-  if (!podeAprovar(actor.perfil)) {
+  if (!podeAprovar(actor)) {
     throw new HttpError(403, 'Apenas gerentes e administradores podem rejeitar pedidos.');
   }
 
@@ -194,7 +197,7 @@ export async function rejeitarPedido(req: Request, res: Response) {
 /** GET /api/aprovacoes/count — conta pendentes (para badge no menu). */
 export async function countAprovacoes(req: Request, res: Response) {
   const actor = currentUser(req);
-  if (!podeAprovar(actor.perfil)) return res.json({ count: 0 });
+  if (!podeAprovar(actor)) return res.json({ count: 0 });
 
   const s = getStore();
   const [vendas, compras] = await Promise.all([

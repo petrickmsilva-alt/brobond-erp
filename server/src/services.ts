@@ -32,7 +32,7 @@ export function toHttpError(e: any, r?: Resource): HttpError {
   return new HttpError(500, 'Erro interno do servidor');
 }
 
-type Actor = Pick<AuthUser, 'id' | 'name' | 'perfil'>;
+type Actor = Pick<AuthUser, 'id' | 'name' | 'perfil'> & Partial<AuthUser>;
 
 function audit(tx: Tx, actor: Actor, acao: 'criar' | 'editar' | 'excluir', r: Resource, id: number | null, descricao: string, dados?: unknown) {
   return getStore().audit(
@@ -59,9 +59,29 @@ function diff(before: Row, data: Payload): Record<string, { de: unknown; para: u
   return out;
 }
 
+export type CapacidadeComercial = 'catalogos' | 'compartilhar' | 'metricas' | 'politicas' | 'aprovar';
+
+export function podeComercial(actor: Actor, capacidade: CapacidadeComercial): boolean {
+  if (actor.perfil === 'admin') return true;
+  const valor = String(actor[`perm_${capacidade}` as keyof Actor] || 'herdar');
+  if (valor === 'permitir') return true;
+  if (valor === 'negar') return false;
+  return actor.perfil === 'gerente';
+}
+
+export function exigirComercial(actor: Actor, capacidade: CapacidadeComercial) {
+  if (!podeComercial(actor, capacidade)) throw new HttpError(403, 'Você não possui esta permissão comercial. Peça ao administrador para revisar sua alçada.');
+}
+
 export function checkAccess(r: Resource, actor: Actor, op: 'read' | 'create' | 'update' | 'delete') {
+  if (r.key === 'catalogos') {
+    if (op === 'read') {
+      if (!podeComercial(actor, 'catalogos') && !podeComercial(actor, 'compartilhar') && !podeComercial(actor, 'metricas')) exigirComercial(actor, 'catalogos');
+    } else exigirComercial(actor, 'catalogos');
+  }
+  if (r.key === 'politicas_comerciais') { exigirComercial(actor, 'politicas'); }
   const perfil = actor.perfil || 'operador';
-  if (r.minPerfil && (PERFIL_RANK[perfil] ?? 0) < PERFIL_RANK[r.minPerfil]) {
+  if (r.minPerfil && !['catalogos', 'politicas_comerciais'].includes(r.key) && (PERFIL_RANK[perfil] ?? 0) < PERFIL_RANK[r.minPerfil]) {
     throw new HttpError(403, r.minPerfil === 'admin' ? 'Apenas administradores acessam este módulo.' : 'Apenas gerentes e administradores acessam este módulo.');
   }
   if (r.adminOnly && perfil !== 'admin') {
@@ -222,6 +242,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
       // Regras específicas
       if (r.key === 'usuarios') await prepareUserPayload(data, null, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, null, actor);
+      if (r.key === 'politicas_comerciais') prepararPoliticaComercial(data, null);
       if (r.key === 'movimentacoes') return createMovimentacao(data, actor, tx);
       if (r.key === 'movimentacoes_insumos') return createMovimentacaoInsumo(data, actor, tx);
       if (r.key === 'estoques') {
@@ -306,6 +327,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
 
       if (r.key === 'usuarios') await prepareUserPayload(data, before, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, before, actor);
+      if (r.key === 'politicas_comerciais') prepararPoliticaComercial(data, before);
       if (r.key === 'estoques') {
         // Edição parcial (ex.: só estoque_min) mantém o local atual do saldo —
         // sem isto o resolveLocal aplicaria o padrão "loja" e o
@@ -321,7 +343,22 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (r.key === 'movimentacoes_insumos') throw new HttpError(405, 'Movimentações de insumos são imutáveis. Faça o lançamento inverso.');
       if (r.key === 'inventarios') await validarUpdateInventario(data, before);
       // Idem criação: editar à mão criaria uma NF-e "emitida" que não existe.
-      if (r.key === 'vendas') for (const k of ['nfe_status', 'nfe_numero', 'nfe_emitida_em', 'nfe_provider']) delete data[k];
+      if (r.key === 'vendas') {
+        for (const k of ['nfe_status', 'nfe_numero', 'nfe_emitida_em', 'nfe_provider']) delete data[k];
+        // Fase 3B: ao tentar faturar acima da alçada, encaminha para a fila em
+        // vez de confiar no cliente ou simplesmente perder o trabalho digitado.
+        if (['faturada', 'entregue'].includes(String(data.status || '')) && !podeComercial(actor, 'aprovar')) {
+          const total = Number(before.total || 0);
+          const desconto = Number(data.desconto ?? before.desconto ?? 0);
+          const descontoPct = total > 0 ? (desconto / (total + desconto)) * 100 : 0;
+          const limiteValor = actor.venda_sem_aprovacao_ate == null ? (actor.perfil === 'gerente' ? Infinity : 0) : Number(actor.venda_sem_aprovacao_ate);
+          const limiteDesconto = actor.desconto_max_pct == null ? (actor.perfil === 'gerente' ? 100 : 0) : Number(actor.desconto_max_pct);
+          if (total > limiteValor || descontoPct > limiteDesconto) {
+            data.status = 'pendente_aprovacao';
+            data.observacoes = [String(data.observacoes ?? before.observacoes ?? '').trim(), `Aguardando aprovação: alçada de ${actor.name} excedida.`].filter(Boolean).join('\n');
+          }
+        }
+      }
       let renomeouLocal = false;
       if (r.key === 'locais') {
         renomeouLocal = await validarRenomeLocal(data, before, actor, tx);
@@ -532,6 +569,17 @@ async function prepareUserPayload(data: Payload, before: Row | null, actor: Acto
     await ensureNotLastAdmin(before, data, null);
     invalidateUserCache(Number(before.id));
   }
+}
+
+
+function prepararPoliticaComercial(data: Payload, before: Row | null) {
+  const p = { ...(before || {}), ...data };
+  const escopo = String(p.escopo || 'geral');
+  const exigido: Record<string, string> = { canal: 'canal', colecao: 'colecao_id', catalogo: 'catalogo_id', cliente: 'cliente_id' };
+  const campo = exigido[escopo];
+  if (campo && !p[campo]) throw new HttpError(400, `Informe ${campo.replace('_id', '')} para o escopo selecionado.`, { [campo]: 'Campo obrigatório neste escopo' });
+  if (p.inicio_em && p.fim_em && String(p.inicio_em).slice(0, 10) > String(p.fim_em).slice(0, 10)) throw new HttpError(400, 'O início da vigência não pode ser posterior ao fim.', { fim_em: 'Data anterior ao início' });
+  if (Number(p.multiplo_qtd || 1) < 1) throw new HttpError(400, 'O múltiplo deve ser ao menos 1.', { multiplo_qtd: 'Mínimo 1' });
 }
 
 async function prepareCatalogosPayload(data: Payload, before: Row | null, _actor: Actor) {

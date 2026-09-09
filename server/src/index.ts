@@ -67,7 +67,7 @@ import {
   updateItemOrdem,
 } from './producao';
 import { adminBackup, adminBackupXlsx, backupInfo } from './backup';
-import { catalogoPublico, criarPedidoCatalogo, rateLimitPublico } from './catalogos';
+import { catalogoPublico, compartilharCatalogo, criarPedidoCatalogo, eventoCatalogo, inteligenciaCatalogos, rateLimitPublico, revogarCompartilhamento } from './catalogos';
 import { conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
 import { vendaPDF, compraPDF } from './pdf';
 import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
@@ -75,7 +75,7 @@ import { listAprovacoes, aprovarPedido, rejeitarPedido, countAprovacoes } from '
 import { runScheduled, cronScheduled, scheduledStatus } from './scheduled';
 import { listQualidade, createQualidade, relatorioQualidade } from './quality';
 import { predicaoDemanda, predicaoInsumos } from './prediction';
-import { rateLimitPortal, portalPedidos, portalPedidoDetalhe } from './portal';
+import { rateLimitPortal, administrarAcessosPortal, decidirCotacao, gerarAcessoPortal, portalPedidos, portalPedidoDetalhe, recomprarPedido, revogarAcessoPortal } from './portal';
 import { notificacoesStatus, verificarAlertasEstoque } from './notifications';
 import { openapiJSON, openapiUI } from './openapi';
 import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat';
@@ -150,9 +150,12 @@ app.post('/api/convites/aceitar', loginRateLimit, wrap(aceitarConvite));
 app.get('/api/publico/catalogo/:token', rateLimitPublico, wrap(catalogoPublico));
 // Pedido pelo catálogo — cria uma cotação de venda no ERP (sem login, rate limit)
 app.post('/api/publico/catalogo/:token/pedido', rateLimitPublico, wrap(criarPedidoCatalogo));
+app.post('/api/publico/catalogo/:token/evento', rateLimitPublico, wrap(eventoCatalogo));
 // Portal do cliente (acompanhamento de pedidos por CPF/CNPJ)
 app.get('/api/portal/:token/pedidos', rateLimitPortal, wrap(portalPedidos));
 app.get('/api/portal/:token/pedido/:id', rateLimitPortal, wrap(portalPedidoDetalhe));
+app.post('/api/portal/:token/pedido/:id/decisao', rateLimitPortal, wrap(decidirCotacao));
+app.post('/api/portal/:token/pedido/:id/recomprar', rateLimitPortal, wrap(recomprarPedido));
 // Imagens armazenadas no banco: URL pública protegida por token aleatório
 app.get('/api/files/:id/:token', wrap(serveFile));
 
@@ -241,6 +244,18 @@ app.delete('/api/compras/:id/itens/:itemId', wrap(deleteItem));
 // PDF dos pedidos (antes das rotas genéricas)
 app.get('/api/vendas/:id/pdf', wrap(vendaPDF));
 app.get('/api/compras/:id/pdf', wrap(compraPDF));
+
+// Gestão administrativa dos acessos seguros ao portal
+app.get('/api/clientes/:id/portal-acessos', wrap(administrarAcessosPortal));
+app.post('/api/clientes/:id/portal-acessos', wrap(gerarAcessoPortal));
+app.post('/api/clientes/:id/portal-acessos/:acessoId/revogar', wrap(revogarAcessoPortal));
+
+// Inteligência comercial e gestão de compartilhamentos (antes do CRUD genérico)
+app.get('/api/catalogos/inteligencia', wrap(inteligenciaCatalogos));
+app.post('/api/catalogos/compartilhamentos/:id/revogar', wrap(revogarCompartilhamento));
+
+// Central profissional de compartilhamento de catálogos
+app.post('/api/catalogos/:id/compartilhar', wrap(compartilharCatalogo));
 
 // QR Code de produtos
 app.get('/api/produtos/:id/qrcode', wrap(produtoQRCode));

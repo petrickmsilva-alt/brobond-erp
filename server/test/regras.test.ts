@@ -137,6 +137,64 @@ test('catálogos públicos: cria com token, lista com rótulo da coleção e nã
   assert.deepEqual(filtrosDoCatalogo({ id: 0, colecao_id: 9, filtros: { colecao_id: 2 } }), { colecao_id: 9 });
 });
 
+test('fase 4: tokens do portal usam SHA-256 completo e recursos são internos', async () => {
+  const { hashPortalToken } = await import('../src/portal');
+  const { getPublicResource, publicMeta } = await import('../src/resources');
+  const token = 'b'.repeat(64);
+  assert.equal(hashPortalToken(token).length, 64);
+  assert.notEqual(hashPortalToken(token), token);
+  assert.equal(getPublicResource('portal_acessos'), undefined);
+  assert.equal(getPublicResource('cotacao_decisoes'), undefined);
+  assert.ok(!('portal_acessos' in publicMeta()));
+});
+
+test('fase 3B: permissões comerciais herdam perfil e aceitam concessão/negação individual', async () => {
+  const { podeComercial, checkAccess } = await import('../src/services');
+  const vendedor: any = { id: 77, name: 'Vendedor', perfil: 'operador', perm_compartilhar: 'permitir' };
+  assert.equal(podeComercial(vendedor, 'compartilhar'), true);
+  assert.equal(podeComercial(vendedor, 'politicas'), false);
+  assert.doesNotThrow(() => checkAccess(RESOURCES.catalogos, vendedor, 'read'));
+  assert.throws(() => checkAccess(RESOURCES.catalogos, vendedor, 'update'), /permissão comercial/);
+  const gerenteNegado: any = { id: 78, name: 'Gerente', perfil: 'gerente', perm_metricas: 'negar' };
+  assert.equal(podeComercial(gerenteNegado, 'metricas'), false);
+  assert.equal(podeComercial({ ...gerenteNegado, perfil: 'admin' }, 'metricas'), true);
+});
+
+test('fase 3B: permissão explícita controla aprovação de exceções', async () => {
+  const { podeAprovar } = await import('../src/approval');
+  assert.equal(podeAprovar({ id: 1, name: 'V', email: 'v@x', perfil: 'operador', perm_aprovar: 'permitir' }), true);
+  assert.equal(podeAprovar({ id: 2, name: 'G', email: 'g@x', perfil: 'gerente', perm_aprovar: 'negar' }), false);
+});
+
+test('fase 3A: política mais específica prevalece e preço é calculado pelo servidor', async () => {
+  const cat = await createRecord(RESOURCES.catalogos, { nome: 'Catálogo Política', colecao_id: 1, canal: 'atacado' }, admin);
+  await createRecord(RESOURCES.politicas_comerciais, { nome: 'Geral 3%', escopo: 'geral', desconto_pct: 3, multiplo_qtd: 1, ativo: true }, admin);
+  await createRecord(RESOURCES.politicas_comerciais, { nome: 'Coleção 8%', escopo: 'colecao', colecao_id: 1, desconto_pct: 8, pedido_min_pecas: 12, multiplo_qtd: 3, ativo: true }, admin);
+  const { resolverPoliticaComercial, precoComPolitica } = await import('../src/politicasComerciais');
+  const politica = await resolverPoliticaComercial({ catalogo: cat, canal: 'atacado' });
+  assert.equal(politica?.nome, 'Coleção 8%');
+  assert.equal(politica?.pedido_min_pecas, 12);
+  assert.equal(politica?.multiplo_qtd, 3);
+  assert.equal(precoComPolitica(100, politica), 92);
+});
+
+test('fase 3A: política rejeita escopo incompleto e vigência invertida', async () => {
+  await expectHttp(() => createRecord(RESOURCES.politicas_comerciais, { nome: 'Inválida', escopo: 'cliente', multiplo_qtd: 1 }, admin), 400, /Informe cliente/);
+  await expectHttp(() => createRecord(RESOURCES.politicas_comerciais, { nome: 'Datas', escopo: 'geral', inicio_em: '2027-12-01', fim_em: '2027-01-01', multiplo_qtd: 1 }, admin), 400, /vigência/);
+});
+
+test('fase 2: recursos de inteligência do catálogo são internos e tokens usam hash irreversível', async () => {
+  const { getPublicResource, publicMeta } = await import('../src/resources');
+  const { hashTokenPublico } = await import('../src/catalogos');
+  assert.equal(getPublicResource('catalogo_compartilhamentos'), undefined);
+  assert.equal(getPublicResource('catalogo_eventos'), undefined);
+  assert.ok(!('catalogo_compartilhamentos' in publicMeta()));
+  const token = 'a'.repeat(48);
+  assert.equal(hashTokenPublico(token).length, 64);
+  assert.notEqual(hashTokenPublico(token), token);
+  assert.equal(hashTokenPublico(token), hashTokenPublico(token));
+});
+
 test('arquivos: recurso interno não é exposto na API genérica nem no /meta', async () => {
   const { getPublicResource, publicMeta } = await import('../src/resources');
   assert.equal(getPublicResource('arquivos'), undefined);

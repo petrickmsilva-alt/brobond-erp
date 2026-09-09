@@ -12,6 +12,13 @@ export type User = {
   /** senha padrão/legada: o sistema pede a troca no primeiro acesso */
   trocar_senha?: boolean;
   lembrar?: boolean;
+  perm_catalogos?: string;
+  perm_compartilhar?: string;
+  perm_metricas?: string;
+  perm_politicas?: string;
+  perm_aprovar?: string;
+  desconto_max_pct?: number | null;
+  venda_sem_aprovacao_ate?: number | null;
 };
 
 type AuthContextValue = {

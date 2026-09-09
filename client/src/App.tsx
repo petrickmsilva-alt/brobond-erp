@@ -13,6 +13,7 @@ import FichaDetail from './pages/FichaDetail';
 import { ForgotPage, ResetPage } from './pages/ForgotReset';
 import Convite from './pages/Convite';
 import CatalogoPublico from './pages/CatalogoPublico';
+import PortalCliente from './pages/PortalCliente';
 import { MODULES } from './modules';
 
 function Loading() {
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="/redefinir/:token" element={<ResetPage />} />
         <Route path="/convite/:token" element={<Convite />} />
         <Route path="/catalogo/:token" element={<CatalogoPublico />} />
+        <Route path="/portal/:token" element={<PortalCliente />} />
         <Route
           path="/"
           element={
