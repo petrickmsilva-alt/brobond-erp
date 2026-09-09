@@ -8,10 +8,13 @@
 // públicas por token (/api/files/:id/:token), então funcionam no link.
 // ============================================================
 import type { Request, Response } from 'express';
+import QRCode from 'qrcode';
 import { createRequire } from 'node:module';
 import { HttpError } from './errors';
 import { getResource, RESOURCES } from './resources';
-import { getStore, toHttpError } from './services';
+import { checkAccess, getStore, toHttpError } from './services';
+import { currentUser } from './auth';
+import { parseId } from './validate';
 import type { Row } from './store';
 import { labelOf } from './store';
 import { attachImages } from './uploads';
@@ -87,7 +90,11 @@ export async function catalogoPublico(req: Request, res: Response) {
   if (catalogo.expira_em && new Date(String(catalogo.expira_em)).getTime() < Date.now()) {
     throw new HttpError(404, 'Este catálogo expirou. Fale com quem o enviou.');
   }
-  if (catalogo.senha_hash && !ehMesmaSenha(typeof req.query.senha === 'string' ? req.query.senha : undefined, catalogo.senha_hash)) {
+  if (catalogo.senha_hash && !ehMesmaSenha(typeof req.headers['x-catalogo-senha'] === 'string'
+      ? req.headers['x-catalogo-senha']
+      : typeof req.query.senha === 'string'
+        ? req.query.senha
+        : undefined, catalogo.senha_hash)) {
     return res.status(401).json({ error: 'senha_necessaria', mensagem: 'Este catálogo é protegido por senha.' });
   }
 
@@ -194,7 +201,9 @@ export async function catalogoPublico(req: Request, res: Response) {
     };
   }
 
-  const lista: Row[] = produtos.rows.map((p) => {
+  const lista: Row[] = produtos.rows
+    .filter((p) => p.exibir_site !== false && p.ativo !== false)
+    .map((p) => {
     const doProduto = estoques.rows.filter((e) => Number(e.produto_id) === Number(p.id));
     // Sempre devolve os tamanhos com saldo para o cliente selecionar. A
     // quantidade só aparece quando `mostrar_saldo` está habilitado.
@@ -202,10 +211,15 @@ export async function catalogoPublico(req: Request, res: Response) {
       .map((tid) => ({
         tamanho_id: tid,
         codigo: tamCodigo.get(tid) || '',
-        quantidade: doProduto.filter((e) => Number(e.tamanho_id) === tid).reduce((a, e) => a + Number(e.quantidade || 0), 0),
+        quantidade_real: doProduto.filter((e) => Number(e.tamanho_id) === tid).reduce((a, e) => a + Number(e.quantidade || 0), 0),
       }))
-      .filter((t) => t.quantidade > 0)
-      .sort((a, b) => (a.codigo < b.codigo ? -1 : 1));
+      .filter((t) => t.quantidade_real > 0)
+      .sort((a, b) => {
+        const ai = tamanhos.rows.findIndex((x) => Number(x.id) === a.tamanho_id);
+        const bi = tamanhos.rows.findIndex((x) => Number(x.id) === b.tamanho_id);
+        return ai - bi;
+      })
+      .map((t) => ({ tamanho_id: t.tamanho_id, codigo: t.codigo, quantidade: mostrarSaldo ? t.quantidade_real : null }));
     const precos = precoDoProduto(p);
     return {
       id: Number(p.id),
@@ -262,10 +276,18 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
   const nome = String(body.nome || '').trim();
   const email = String(body.email || '').trim().toLowerCase();
   const telefone = String(body.telefone || '').trim();
-  const canal = ['atacado', 'varejo'].includes(String(body.canal || '')) ? String(body.canal) : 'varejo';
+  const canalCatalogo = String(catalogo.canal || 'todos');
+  const canal = canalCatalogo === 'atacado' ? 'atacado' : canalCatalogo === 'varejo' ? 'varejo' : (body.canal === 'atacado' ? 'atacado' : 'varejo');
   const itens = Array.isArray(body.itens) ? body.itens : [];
   if (!nome) throw new HttpError(400, 'Informe o nome do cliente.', { nome: 'Campo obrigatório' });
   if (!itens.length) throw new HttpError(400, 'Adicione ao menos um item ao pedido.');
+  if (itens.length > 100) throw new HttpError(400, 'O pedido excede o limite de 100 itens.');
+  const chaves = new Set<string>();
+  for (const item of itens) {
+    const chave = `${Number(item?.produto_id)}:${Number(item?.tamanho_id)}`;
+    if (chaves.has(chave)) throw new HttpError(400, 'Há itens duplicados no pedido. Atualize o catálogo e tente novamente.');
+    chaves.add(chave);
+  }
 
   const filtros = filtrosDoCatalogo(catalogo);
   const filter: Record<string, unknown> = {};
@@ -323,7 +345,7 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
         let tamanhoId = Number(raw.tamanho_id);
         const quantidade = Number(raw.quantidade);
         const produto = produtoPorId.get(produtoId);
-        if (!produto || !Number.isInteger(quantidade) || quantidade <= 0) {
+        if (!produto || !Number.isInteger(quantidade) || quantidade <= 0 || quantidade > 9999) {
           throw new HttpError(400, 'Há um item inválido no pedido. Atualize a página e tente novamente.');
         }
         // Se o cliente não selecionou tamanho, usa o primeiro com saldo (fallback).
@@ -370,4 +392,42 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
   } catch (e) {
     throw toHttpError(e, RESOURCES.vendas);
   }
+}
+
+
+/** Central de compartilhamento: gera os ativos e registra a ação na auditoria. */
+export async function compartilharCatalogo(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(RESOURCES.catalogos, actor, 'read');
+  const id = parseId(req.params.id);
+  const s = getStore();
+  const catalogo = await s.get(RESOURCES.catalogos, id);
+  if (!catalogo) throw new HttpError(404, 'Catálogo não encontrado.');
+  if (!catalogo.token) throw new HttpError(409, 'Este catálogo ainda não possui link público.');
+
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const base = String(process.env.APP_URL || (host ? `${proto}://${host}` : '')).replace(/\/$/, '');
+  const url = `${base}/catalogo/${catalogo.token}`;
+  const qr_data_url = await QRCode.toDataURL(url, {
+    width: 420,
+    margin: 2,
+    errorCorrectionLevel: 'M',
+    color: { dark: '#1B2A4A', light: '#FFFFFF' },
+  });
+  const canal = ['whatsapp', 'email', 'link', 'qrcode', 'visualizacao'].includes(String(req.body?.canal))
+    ? String(req.body.canal)
+    : 'link';
+  const clienteId = Number(req.body?.cliente_id) || null;
+  const cliente = clienteId ? await s.get(RESOURCES.clientes, clienteId) : null;
+  await s.audit({
+    usuario_id: actor.id || null,
+    usuario: actor.name,
+    acao: 'editar',
+    recurso: 'catalogos',
+    registro_id: id,
+    descricao: `Catálogo "${catalogo.nome}" compartilhado por ${canal}${cliente ? ` com ${cliente.nome}` : ''}`,
+    dados: { canal, cliente_id: clienteId, cliente: cliente?.nome ?? null },
+  });
+  res.json({ url, qr_data_url });
 }

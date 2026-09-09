@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   ChevronLeft,
@@ -12,12 +12,13 @@ import {
   Minus,
   Plus,
   Ruler,
+  Search,
   Send,
   Shirt,
   ShoppingBag,
   X,
 } from 'lucide-react';
-import { api, ApiError } from '../lib/api';
+import { api, apiFetch, ApiError } from '../lib/api';
 import { Logo } from '../components/Logo';
 import { useToast } from '../components/ui';
 import { formatDateTime, formatMoney, formatNumber } from '../lib/format';
@@ -45,7 +46,7 @@ type ProdutoCatalogo = {
   disponivel_site: boolean;
   foto_url: string | null;
   fotos: { url: string; thumb_url: string }[];
-  tamanhos: { tamanho_id: number; codigo: string; quantidade: number }[];
+  tamanhos: { tamanho_id: number; codigo: string; quantidade: number | null }[];
   medidas: MedidasCatalogo | null;
 };
 
@@ -80,14 +81,18 @@ export default function CatalogoPublico() {
   const [pedidoEnviado, setPedidoEnviado] = useState(false);
   // Detalhe do produto (tudo que o cliente precisa em um só lugar)
   const [detalheId, setDetalheId] = useState<number | null>(null);
+  const [busca, setBusca] = useState('');
+  const [ordenacao, setOrdenacao] = useState<'nome' | 'menor_preco' | 'maior_preco'>('nome');
+  const [somenteDisponiveis, setSomenteDisponiveis] = useState(false);
 
   const carregar = useCallback(
     async (comSenha: string) => {
       setBusy(true);
       setErr('');
       try {
-        const q = comSenha ? `?senha=${encodeURIComponent(comSenha)}` : '';
-        const d = await api.get<CatResp>(`/publico/catalogo/${token}${q}`);
+        const d = await apiFetch<CatResp>(`/publico/catalogo/${token}`, {
+          headers: comSenha ? { 'X-Catalogo-Senha': comSenha } : {},
+        });
         setData(d);
         setPrecisaSenha(false);
       } catch (e: any) {
@@ -153,6 +158,18 @@ export default function CatalogoPublico() {
 
   const totalPedido = cart.reduce((s, i) => s + (i.produto.preco || 0) * i.qtd, 0);
   const pedidoHabilitado = !!data?.aceita_pedido_site;
+  const produtosVisiveis = useMemo(() => {
+    if (!data) return [];
+    const termo = busca.trim().toLocaleLowerCase('pt-BR');
+    return data.produtos
+      .filter((p) => !termo || [p.nome, p.sku, p.cor, p.composicao].some((v) => v?.toLocaleLowerCase('pt-BR').includes(termo)))
+      .filter((p) => !somenteDisponiveis || p.tamanhos.length > 0)
+      .sort((a, b) => {
+        if (ordenacao === 'menor_preco') return (a.preco ?? Infinity) - (b.preco ?? Infinity);
+        if (ordenacao === 'maior_preco') return (b.preco ?? -Infinity) - (a.preco ?? -Infinity);
+        return a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' });
+      });
+  }, [data, busca, somenteDisponiveis, ordenacao]);
   const detalhe = detalheId !== null && data ? (data.produtos.find((p) => p.id === detalheId) ?? null) : null;
 
   if (err)
@@ -235,12 +252,33 @@ export default function CatalogoPublico() {
         )}
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+      <main className="mx-auto max-w-6xl px-4 py-6 pb-24 sm:px-6">
+        {data.produtos.length > 0 && (
+          <section className="mb-5 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm" aria-label="Busca e filtros">
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <label className="relative flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input className="input !pl-9" type="search" placeholder="Buscar por produto, SKU, cor ou composição" value={busca} onChange={(e) => setBusca(e.target.value)} />
+              </label>
+              <select className="input sm:w-48" value={ordenacao} onChange={(e) => setOrdenacao(e.target.value as typeof ordenacao)} aria-label="Ordenar produtos">
+                <option value="nome">Nome: A–Z</option>
+                {data.mostrar_preco && <option value="menor_preco">Menor preço</option>}
+                {data.mostrar_preco && <option value="maior_preco">Maior preço</option>}
+              </select>
+              <label className="flex cursor-pointer items-center gap-2 whitespace-nowrap px-1 text-sm text-slate-600">
+                <input type="checkbox" checked={somenteDisponiveis} onChange={(e) => setSomenteDisponiveis(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-brand-600" />
+                Com estoque
+              </label>
+            </div>
+            <p className="mt-2 text-xs text-slate-400" aria-live="polite">{produtosVisiveis.length} de {data.total} produtos</p>
+          </section>
+        )}
         {data.produtos.length === 0 ? (
           <p className="py-16 text-center text-sm text-slate-400">Este catálogo ainda não tem produtos.</p>
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {data.produtos.map((p) => (
+            {produtosVisiveis.length === 0 && <p className="col-span-full py-16 text-center text-sm text-slate-500">Nenhum produto corresponde aos filtros.</p>}
+            {produtosVisiveis.map((p) => (
               <article
                 key={p.id}
                 className="card cursor-pointer overflow-hidden !p-0 transition-shadow hover:shadow-lg"
@@ -271,7 +309,7 @@ export default function CatalogoPublico() {
                         data.mostrar_saldo ? (
                           <span
                             key={t.codigo}
-                            className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${t.quantidade > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}
+                            className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${(t.quantidade ?? 0) > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}
                           >
                             {t.codigo}
                             <span className="ml-1 tabular-nums opacity-70">{formatNumber(t.quantidade)}</span>
@@ -421,6 +459,7 @@ export default function CatalogoPublico() {
           cart={cart}
           total={totalPedido}
           canal={data.canal}
+          senha={senha}
           onQty={changeQtd}
           onRemove={removeFromCart}
           onClose={() => setPedidoOpen(false)}
@@ -718,6 +757,7 @@ function CatalogoPedidoModal({
   cart,
   total,
   canal,
+  senha,
   onQty,
   onRemove,
   onClose,
@@ -726,6 +766,7 @@ function CatalogoPedidoModal({
   cart: CartItem[];
   total: number;
   canal: string;
+  senha: string;
   onQty: (key: string, delta: number) => void;
   onRemove: (key: string) => void;
   onClose: () => void;
@@ -747,6 +788,7 @@ function CatalogoPedidoModal({
     try {
       await api.post(`/publico/catalogo/${token}/pedido`, {
         nome,
+        senha,
         email,
         telefone,
         canal: canal === 'atacado' ? 'atacado' : 'varejo',

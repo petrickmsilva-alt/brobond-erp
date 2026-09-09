@@ -26,6 +26,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Share2,
   Trash2,
   X,
 } from 'lucide-react';
@@ -48,6 +49,7 @@ import CustoPage from './CustoPage';
 import RelatoriosPage from './RelatoriosPage';
 import FinanceiroPage from './FinanceiroPage';
 import AjudaPage from './AjudaPage';
+import CatalogoShareModal from '../components/CatalogoShareModal';
 
 const PAGE_SIZE = 25;
 
@@ -91,6 +93,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [page, setPage] = useState(1);
+  const [catalogoCompartilhar, setCatalogoCompartilhar] = useState<Record<string, any> | null>(null);
   const [sort, setSort] = useState<{ field: string; dir: 'asc' | 'desc' } | null>(null);
 
   // Formulário (modal)
@@ -371,6 +374,13 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           await load();
           return;
         }
+        if (resource.key === 'catalogos' && created?.id) {
+          toast.success('Catálogo criado. Agora compartilhe o link com seus clientes.');
+          setFormOpen(false);
+          setCatalogoCompartilhar(created);
+          await load();
+          return;
+        }
         if (resource.detail && !hasImages && created?.id) {
           // Módulos com página de detalhe própria (vendas, compras): abre o pedido
           toast.success(`${resource.singular} incluído(a). Adicione os itens do pedido.`);
@@ -593,6 +603,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                     {(canUpdate || canDelete || resource.detail) && (
                       <td className="text-right">
                         <div className="inline-flex items-center gap-1">
+                          {resource.key === 'catalogos' && (
+                            <button className="btn-icon !bg-brand-50 !text-brand-700 hover:!bg-brand-100" onClick={() => setCatalogoCompartilhar(row)} title="Compartilhar catálogo" aria-label="Compartilhar catálogo">
+                              <Share2 className="h-4 w-4" />
+                            </button>
+                          )}
                           {resource.key === 'usuarios' && canUpdate && !row.senha_definida_em && (
                             <button className="btn-icon" onClick={() => reenviarConvite(row)} disabled={conviteBusyId === Number(row.id)} title="Reenviar convite de acesso" aria-label="Reenviar convite">
                               {conviteBusyId === Number(row.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
@@ -653,6 +668,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                       </div>
                     </button>
                     <div className="flex shrink-0 items-center gap-0.5">
+                      {resource.key === 'catalogos' && (
+                        <button className="btn-icon !bg-brand-50 !text-brand-700" onClick={() => setCatalogoCompartilhar(row)} aria-label="Compartilhar catálogo">
+                          <Share2 className="h-4 w-4" />
+                        </button>
+                      )}
                       {resource.key === 'usuarios' && canUpdate && !row.senha_definida_em && (
                         <button className="btn-icon" onClick={() => reenviarConvite(row)} disabled={conviteBusyId === Number(row.id)} aria-label="Reenviar convite">
                           {conviteBusyId === Number(row.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
@@ -801,6 +821,8 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           </div>
         </div>
       </Modal>
+
+      <CatalogoShareModal catalogo={catalogoCompartilhar} onClose={() => setCatalogoCompartilhar(null)} />
 
       {importTipo && (
         <ImportModal open={importOpen} onClose={() => setImportOpen(false)} tipoConfig={importTipo} onDone={() => load()} />

@@ -86,7 +86,10 @@ export async function apiFetch<T = any>(path: string, opts: RequestInit = {}): P
   if (res.status === 401) {
     const isLoginRequest = path.includes('/auth/login');
     const isOnLoginPage = window.location.pathname === '/login';
-    if (!isLoginRequest) {
+    const isPublicRequest = path.startsWith('/publico/');
+    // Endpoints públicos também usam 401 para senha de catálogo. Não apague a
+    // sessão nem redirecione o visitante para o login nesse caso.
+    if (!isLoginRequest && !isPublicRequest && token) {
       clearToken();
       if (!isOnLoginPage) window.location.href = '/login';
     }
