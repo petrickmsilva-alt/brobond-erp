@@ -130,14 +130,18 @@ export async function exportarRecurso(req: Request, res: Response, resourceKey: 
 
   // Reúne todas as páginas
   const s = getStore();
-  // Filtros virtuais de usuários (status consolidado, MFA, parados 30d) filtram em JS.
+  // Filtros virtuais de usuários (status consolidado, MFA, parados 30d, senha, acesso) filtram em JS.
   const filtroStatus = r.key === 'usuarios' && typeof filter.status === 'string' ? String(filter.status) : '';
   const filtroMfa = r.key === 'usuarios' ? String(filter.mfa || '') : '';
   const filtroParado = r.key === 'usuarios' ? String(filter.parado30d || '') : '';
+  const filtroSenha = r.key === 'usuarios' && typeof filter.senha === 'string' ? String(filter.senha) : '';
+  const filtroAcesso = r.key === 'usuarios' && typeof filter.acesso === 'string' ? String(filter.acesso) : '';
   if (r.key === 'usuarios') {
     delete filter.status;
     delete filter.mfa;
     delete filter.parado30d;
+    delete filter.senha;
+    delete filter.acesso;
   }
   // Exportar seleção: ?ids=1,2,3 (ações em lote do módulo Usuários).
   const idsSel = new Set<number>();
@@ -157,7 +161,7 @@ export async function exportarRecurso(req: Request, res: Response, resourceKey: 
     if (page > 60) break; // trava de segurança: 30 mil linhas
   }
   if (idsSel.size) linhas = linhas.filter((u) => idsSel.has(Number(u.id)));
-  if (r.key === 'usuarios' && (filtroStatus || filtroMfa || filtroParado)) {
+  if (r.key === 'usuarios' && (filtroStatus || filtroMfa || filtroParado || filtroSenha || filtroAcesso)) {
     const agora = Date.now();
     const statusDe = (u: Row): string => {
       const convExp = u.convite_expira_em ? new Date(String(u.convite_expira_em)).getTime() < agora : false;
@@ -177,16 +181,23 @@ export async function exportarRecurso(req: Request, res: Response, resourceKey: 
                 ? 'provisoria'
                 : 'ativo';
     };
+    const senhaDe = (u: Row): string => (!u.senha_definida_em ? 'convite_pendente' : u.trocar_senha ? 'provisoria' : 'propria');
+
     if (filtroStatus) linhas = linhas.filter((u) => statusDe(u) === filtroStatus);
+    if (filtroSenha) linhas = linhas.filter((u) => senhaDe(u) === filtroSenha);
     if (filtroMfa === 'sim') linhas = linhas.filter((u) => !!u.mfa_ativado_em);
     else if (filtroMfa === 'nao') linhas = linhas.filter((u) => !u.mfa_ativado_em);
-    if (filtroParado === 'sim') {
+    if (filtroAcesso === 'recente') {
+      linhas = linhas.filter((u) => u.ultimo_login && agora - new Date(String(u.ultimo_login)).getTime() <= 7 * 86400000);
+    } else if (filtroAcesso === 'parado30d' || filtroParado === 'sim') {
       const ha30d = agora - 30 * 24 * 3600_000;
       linhas = linhas.filter((u) => {
         if (u.ativo === false || !u.senha_definida_em) return false;
         const loginMs = u.ultimo_login ? new Date(String(u.ultimo_login)).getTime() : 0;
         return !loginMs || loginMs < ha30d;
       });
+    } else if (filtroAcesso === 'nunca') {
+      linhas = linhas.filter((u) => !u.ultimo_login);
     }
   }
 
