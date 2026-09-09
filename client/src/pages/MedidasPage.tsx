@@ -89,6 +89,8 @@ export default function MedidasPage() {
   const [colunaParaRemover, setColunaParaRemover] = useState<number | null>(null);
   const [modalCopiar, setModalCopiar] = useState(false);
   const [copiarDe, setCopiarDe] = useState('');
+  const [gradeParaTrocar, setGradeParaTrocar] = useState<string | null>(null);
+  const [confirmarSubstituirCopia, setConfirmarSubstituirCopia] = useState(false);
 
   const carregarResumo = useCallback(async () => {
     try {
@@ -146,9 +148,19 @@ export default function MedidasPage() {
 
   function selecionarGrade(id: string) {
     if (id === gradeId) return;
-    if ((sujo || instrucoesSuja) && !window.confirm('Há alterações não salvas. Sair da grade sem salvar?')) return;
+    if (sujo || instrucoesSuja) {
+      setGradeParaTrocar(id);
+      return;
+    }
     setGradeId(id);
     load(id);
+  }
+
+  function confirmarTrocaGrade() {
+    if (gradeParaTrocar === null) return;
+    setGradeId(gradeParaTrocar);
+    load(gradeParaTrocar);
+    setGradeParaTrocar(null);
   }
 
   // Aviso no navegador ao fechar/re carregar com alterações pendentes
@@ -226,11 +238,20 @@ export default function MedidasPage() {
     toast.success(`Modelo "${modelo.label}" aplicado — preencha os valores e salve.`);
   }
 
-  async function copiarDeGrade() {
+  function copiarDeGrade() {
     const src = Number(copiarDe);
     if (!src) return;
     const temConteudo = cols.some((c) => c.nome.trim()) || Object.values(val).some((v) => v.trim() !== '');
-    if (temConteudo && !window.confirm('Substituir a tabela atual de medidas pela de outra grade?')) return;
+    if (temConteudo) {
+      setConfirmarSubstituirCopia(true);
+      return;
+    }
+    executarCopiaDeGrade();
+  }
+
+  async function executarCopiaDeGrade() {
+    const src = Number(copiarDe);
+    if (!src) return;
     try {
       const d = await api.get<GradeMedidas>(`/grades/${src}/medidas`);
       const cs = d.medidas.map((m) => ({ nome: m.nome, unidade: m.unidade || 'cm' }));
@@ -248,6 +269,7 @@ export default function MedidasPage() {
       setSujo(true);
       setModalCopiar(false);
       setCopiarDe('');
+      setConfirmarSubstituirCopia(false);
       toast.success(`Tabela de "${d.grade.nome}" carregada — revise e clique em Salvar.`);
     } catch (e: any) {
       toast.error(e.message || 'Não foi possível carregar a tabela da grade.');
@@ -710,6 +732,28 @@ export default function MedidasPage() {
           )}
         </div>
       )}
+
+      {/* Confirmação: trocar de grade com alterações não salvas */}
+      <ConfirmDialog
+        open={gradeParaTrocar !== null}
+        title="Sair sem salvar?"
+        message="Há alterações não salvas nesta grade. Sair sem salvar descarta o que foi digitado."
+        confirmLabel="Sair sem salvar"
+        danger
+        onConfirm={confirmarTrocaGrade}
+        onCancel={() => setGradeParaTrocar(null)}
+      />
+
+      {/* Confirmação: substituir tabela atual ao copiar de outra grade */}
+      <ConfirmDialog
+        open={confirmarSubstituirCopia}
+        title="Substituir tabela atual"
+        message="Substituir a tabela atual de medidas pela de outra grade? Nada é gravado até você clicar em Salvar tabela."
+        confirmLabel="Substituir"
+        danger
+        onConfirm={executarCopiaDeGrade}
+        onCancel={() => setConfirmarSubstituirCopia(false)}
+      />
 
       {/* Confirmação: remover coluna com valores */}
       <ConfirmDialog

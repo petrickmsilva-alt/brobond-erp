@@ -18,6 +18,17 @@
       rel="stylesheet"
     />
     <title>BROBOND ERP</title>
+    <script>
+      // Aplica o tema (claro/escuro/automático) antes do CSS carregar, para evitar
+      // o "flash" de tela clara em quem usa modo escuro. Mesma lógica de src/lib/theme.ts.
+      (function () {
+        try {
+          var pref = localStorage.getItem('brobond_theme') || 'system';
+          var dark = pref === 'dark' || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

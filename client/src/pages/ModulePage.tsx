@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle as AlertTriangleIcon,
@@ -10,6 +10,7 @@ import {
   Cog,
   ChevronLeft,
   ChevronRight,
+  Columns3,
   Download,
   Copy,
   Eye,
@@ -24,6 +25,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Rows3,
   RotateCcw,
   Search,
   Share2,
@@ -41,35 +43,43 @@ import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, us
 import ReauthModal from '../components/ReauthModal';
 import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
+import { useLocalStorageBool, useLocalStorageSet } from '../lib/useLocalStorage';
 import PlannedModule from './PlannedModule';
-import EstoqueGradePage from './EstoqueGradePage';
-import MedidasPage from './MedidasPage';
-import InventarioModulePage from './InventarioModulePage';
-import CustoPage from './CustoPage';
-import RelatoriosPage from './RelatoriosPage';
-import FinanceiroPage from './FinanceiroPage';
-import AjudaPage from './AjudaPage';
 import CatalogoShareModal from '../components/CatalogoShareModal';
 import CatalogoInsights from '../components/CatalogoInsights';
 import PortalAccessModal from '../components/PortalAccessModal';
-import UsuariosPage from './UsuariosPage';
-import WebhooksPage from './WebhooksPage';
+
+// Páginas especializadas pesadas: carregadas sob demanda, só quando o módulo
+// correspondente é aberto — evitam engordar o bundle de quem só usa cadastros simples.
+const EstoqueGradePage = lazy(() => import('./EstoqueGradePage'));
+const MedidasPage = lazy(() => import('./MedidasPage'));
+const InventarioModulePage = lazy(() => import('./InventarioModulePage'));
+const CustoPage = lazy(() => import('./CustoPage'));
+const RelatoriosPage = lazy(() => import('./RelatoriosPage'));
+const FinanceiroPage = lazy(() => import('./FinanceiroPage'));
+const AjudaPage = lazy(() => import('./AjudaPage'));
+const UsuariosPage = lazy(() => import('./UsuariosPage'));
+const WebhooksPage = lazy(() => import('./WebhooksPage'));
 
 const PAGE_SIZE = 25;
+
+function SubPageLoading() {
+  return <Spinner label="Carregando módulo..." />;
+}
 
 export default function ModulePage({ module }: { module: Module }) {
   const meta = useMeta();
   const resource = module.resource ? meta.resources[module.resource] : undefined;
 
-  if (module.id === 'usuarios') return <UsuariosPage />;
-  if (module.id === 'webhooks') return <WebhooksPage />;
-  if (module.id === 'estoque') return <EstoqueGradePage />;
-  if (module.id === 'medidas') return <MedidasPage />;
-  if (module.id === 'inventario') return <InventarioModulePage />;
-  if (module.id === 'custo') return <CustoPage />;
-  if (module.id === 'relatorios') return <RelatoriosPage />;
-  if (module.id === 'financeiro') return <FinanceiroPage />;
-  if (module.id === 'ajuda') return <AjudaPage />;
+  if (module.id === 'usuarios') return <Suspense fallback={<SubPageLoading />}><UsuariosPage /></Suspense>;
+  if (module.id === 'webhooks') return <Suspense fallback={<SubPageLoading />}><WebhooksPage /></Suspense>;
+  if (module.id === 'estoque') return <Suspense fallback={<SubPageLoading />}><EstoqueGradePage /></Suspense>;
+  if (module.id === 'medidas') return <Suspense fallback={<SubPageLoading />}><MedidasPage /></Suspense>;
+  if (module.id === 'inventario') return <Suspense fallback={<SubPageLoading />}><InventarioModulePage /></Suspense>;
+  if (module.id === 'custo') return <Suspense fallback={<SubPageLoading />}><CustoPage /></Suspense>;
+  if (module.id === 'relatorios') return <Suspense fallback={<SubPageLoading />}><RelatoriosPage /></Suspense>;
+  if (module.id === 'financeiro') return <Suspense fallback={<SubPageLoading />}><FinanceiroPage /></Suspense>;
+  if (module.id === 'ajuda') return <Suspense fallback={<SubPageLoading />}><AjudaPage /></Suspense>;
 
   if (!module.resource || !resource) return <PlannedModule module={module} />;
   return <ResourceCrud key={resource.key} module={module} resource={resource} />;
@@ -240,13 +250,30 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
 
   // Campos virtuais só entram na tabela se pedirem explicitamente (list: true),
   // ex.: "Senha" em usuários, que mostra o estado e não o valor.
-  const listFields = useMemo(() => resource.fields.filter((f) => f.list !== false && (!f.virtual || f.list === true) && f.type !== 'password' && f.type !== 'images'), [resource]);
+  const allListFields = useMemo(() => resource.fields.filter((f) => f.list !== false && (!f.virtual || f.list === true) && f.type !== 'password' && f.type !== 'images'), [resource]);
   const searchable = resource.fields.some((f) => f.search);
   const filtroFields = useMemo(
     () =>
       resource.fields.filter((f) => f.form !== false && !f.readonly && (f.type === 'select' || f.type === 'ref' || f.type === 'boolean' || f.type === 'date')).slice(0, 8),
     [resource]
   );
+
+  // Colunas visíveis e densidade da tabela: preferências por recurso, persistidas
+  // no navegador — úteis em recursos com muitos campos (Produtos, Usuários), onde
+  // ver tudo de uma vez vira "parede de texto" em telas de notebook.
+  const [colunasOcultas, setColunasOcultas] = useLocalStorageSet(`brobond_colunas_ocultas_${resource.key}`);
+  const [compacta, setCompacta] = useLocalStorageBool('brobond_tabela_compacta', false);
+  const [colunasMenuOpen, setColunasMenuOpen] = useState(false);
+  const colunasMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!colunasMenuOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (colunasMenuRef.current && !colunasMenuRef.current.contains(e.target as Node)) setColunasMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [colunasMenuOpen]);
+  const listFields = useMemo(() => allListFields.filter((f) => !colunasOcultas.has(f.name)), [allListFields, colunasOcultas]);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -475,6 +502,45 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                 )}
               </button>
             )}
+            <button
+              className="btn-secondary hidden md:inline-flex"
+              onClick={() => setCompacta(!compacta)}
+              title={compacta ? 'Densidade confortável' : 'Densidade compacta'}
+            >
+              <Rows3 className="h-4 w-4" />
+            </button>
+            {allListFields.length > 3 && (
+              <div className="relative hidden md:block" ref={colunasMenuRef}>
+                <button
+                  className={`btn-secondary ${colunasOcultas.size ? '!border-brand-400 !text-brand-700' : ''}`}
+                  onClick={() => setColunasMenuOpen((v) => !v)}
+                  title="Escolher colunas visíveis"
+                  aria-haspopup="menu"
+                  aria-expanded={colunasMenuOpen}
+                >
+                  <Columns3 className="h-4 w-4" />
+                  <span className="hidden lg:inline">Colunas</span>
+                </button>
+                {colunasMenuOpen && (
+                  <div className="absolute right-0 z-20 mt-1 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-modal animate-fade-in" role="menu">
+                    <p className="px-2 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Colunas visíveis</p>
+                    <div className="max-h-64 overflow-y-auto">
+                      {allListFields.map((f) => (
+                        <label key={f.name} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
+                          <input
+                            type="checkbox"
+                            className="h-3.5 w-3.5 rounded border-slate-300 text-navy-800 focus:ring-navy-500/30"
+                            checked={!colunasOcultas.has(f.name)}
+                            onChange={() => setColunasOcultas(f.name)}
+                          />
+                          {f.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <button className="btn-secondary" onClick={() => exportarLista('csv')} disabled={loading} title="Exportar a lista atual em CSV (Excel)">
               <Download className="h-4 w-4" />
               <span className="hidden md:inline">CSV</span>
@@ -577,7 +643,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
 
         {!error && data && data.rows.length > 0 && (
           <div className={`hidden overflow-x-auto md:block ${loading ? 'opacity-60' : ''}`}>
-            <table className="table">
+            <table className={`table ${compacta ? 'table-compact' : ''}`}>
               <thead>
                 <tr>
                   <th className="w-16">#</th>

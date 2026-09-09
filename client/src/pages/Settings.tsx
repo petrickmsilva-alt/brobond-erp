@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Copy, Database, Download, Eye, EyeOff, FileSpreadsheet, KeyRound, Loader2, LogOut, Server, Settings2, ShieldCheck, Smartphone, UserRound, Users } from 'lucide-react';
+import { Copy, Database, Download, Eye, EyeOff, FileSpreadsheet, KeyRound, Loader2, LogOut, Monitor, Moon, Server, Settings2, ShieldCheck, Smartphone, Sun, UserRound, Users } from 'lucide-react';
 import { api, ApiError, downloadFile } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, Modal, PageHeader, useToast } from '../components/ui';
 import ReauthModal from '../components/ReauthModal';
+import { useTheme, type ThemePref } from '../lib/theme';
 
 const PERFIL_LABEL: Record<string, string> = { admin: 'Administrador', gerente: 'Gerente', operador: 'Operador' };
 const PERFIL_DESC: Record<string, string> = {
@@ -678,6 +679,38 @@ function ChangePasswordForm({ disabled, onChangeSenha }: { disabled: boolean; on
 // ---------------------------------------------------------------------------
 // Preferências por usuário (F7) — local no navegador + cópia no servidor (JSONB)
 // ---------------------------------------------------------------------------
+const TEMA_OPCOES: { value: ThemePref; label: string; icon: typeof Sun }[] = [
+  { value: 'light', label: 'Claro', icon: Sun },
+  { value: 'dark', label: 'Escuro', icon: Moon },
+  { value: 'system', label: 'Automático', icon: Monitor },
+];
+
+function TemaSelector() {
+  const [tema, setTema] = useTheme();
+  return (
+    <div className="mt-1.5 inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-navy-700 dark:bg-navy-800" role="radiogroup" aria-label="Aparência">
+      {TEMA_OPCOES.map((o) => {
+        const Icon = o.icon;
+        const ativo = tema === o.value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={ativo}
+            onClick={() => setTema(o.value)}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+              ativo ? 'bg-white text-navy-900 shadow-sm dark:bg-navy-700 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-navy-300 dark:hover:text-navy-200'
+            }`}
+          >
+            <Icon className="h-3.5 w-3.5" /> {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function PreferenciasCard() {
   const toast = useToast();
   const [locais, setLocais] = useState<{ value: number; label: string }[]>([]);
@@ -734,7 +767,13 @@ function PreferenciasCard() {
         <Settings2 className="h-4 w-4 text-navy-400" /> Preferências
       </h2>
       <p className="mt-2 text-sm text-slate-500">Aplicadas no seu usuário em qualquer dispositivo (ficam também salvas localmente).</p>
-      <label className="mt-3 block">
+
+      <div className="mt-3">
+        <span className="label">Aparência</span>
+        <TemaSelector />
+      </div>
+
+      <label className="mt-4 block">
         <span className="label">Local padrão na grade de estoque</span>
         <select className="input" value={gradeLocal} onChange={(e) => setGradeLocal(e.target.value)}>
           <option value="">Todos os locais (soma)</option>

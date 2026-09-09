@@ -875,7 +875,7 @@ export default function UsuariosPage() {
         />
         <Kpi
           icone={<Mail className="h-5 w-5" />}
-          cor="bg-blue-600"
+          cor="bg-navy-600"
           valor={resumoLoading ? null : (t?.convites_pendentes ?? 0)}
           rotulo="Convites pendentes"
           dica={t?.convites_expirados ? `${t.convites_expirados} expirado(s)` : 'Aguardando aceite'}
@@ -2758,7 +2758,7 @@ const ACAO_DOT: Record<string, string> = {
   seguranca: 'bg-red-400',
   senha: 'bg-amber-500',
   mfa: 'bg-violet-500',
-  convite: 'bg-blue-500',
+  convite: 'bg-navy-500',
   criar: 'bg-emerald-400',
   editar: 'bg-sky-500',
   excluir: 'bg-red-600',

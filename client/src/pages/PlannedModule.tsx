@@ -3,7 +3,14 @@ import { CheckCircle2, Construction } from 'lucide-react';
 import type { Module } from '../modules';
 import { PageHeader } from '../components/ui';
 
-/** Página para módulos ainda não implementados: mostra o que está previsto. */
+/**
+ * Página para módulos ainda não implementados: mostra o que está previsto.
+ * Hoje todo módulo sem `resource` (dashboard, estoque, inventário, custo,
+ * financeiro, relatórios, medidas, usuários, webhooks, ajuda, config) já tem
+ * um caso especial tratado em ModulePage antes de chegar aqui — este
+ * componente funciona como rede de segurança para quando um novo módulo for
+ * cadastrado em modules.ts sem `resource` e sem página própria ainda.
+ */
 export default function PlannedModule({ module }: { module: Module }) {
   const Icon = module.icon;
   return (

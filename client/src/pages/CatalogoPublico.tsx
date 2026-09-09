@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { api, apiFetch, ApiError } from '../lib/api';
 import { Logo } from '../components/Logo';
-import { useToast } from '../components/ui';
+import { Modal, useToast } from '../components/ui';
 import { formatDateTime, formatMoney, formatNumber } from '../lib/format';
 
 type MedidasCatalogo = {
@@ -86,6 +86,7 @@ export default function CatalogoPublico() {
   const [portalUrl, setPortalUrl] = useState('');
   // Detalhe do produto (tudo que o cliente precisa em um só lugar)
   const [detalheId, setDetalheId] = useState<number | null>(null);
+  const [linkParaCopiar, setLinkParaCopiar] = useState('');
   const [busca, setBusca] = useState('');
   const [ordenacao, setOrdenacao] = useState<'nome' | 'menor_preco' | 'maior_preco'>('nome');
   const [somenteDisponiveis, setSomenteDisponiveis] = useState(false);
@@ -506,12 +507,27 @@ export default function CatalogoPublico() {
               await navigator.clipboard.writeText(url);
               toast.success('Link do produto copiado — envie para o cliente.');
             } catch {
-              window.prompt('Copie o link do produto:', url);
+              setLinkParaCopiar(url);
             }
           }}
           onClose={() => setDetalheId(null)}
         />
       )}
+
+      <Modal
+        open={!!linkParaCopiar}
+        onClose={() => setLinkParaCopiar('')}
+        title="Link do produto"
+        subtitle="Não foi possível copiar automaticamente. Selecione e copie o link abaixo."
+        size="sm"
+        footer={
+          <button className="btn-secondary" onClick={() => setLinkParaCopiar('')}>
+            Fechar
+          </button>
+        }
+      >
+        <input className="input select-all font-mono text-xs" readOnly value={linkParaCopiar} onFocus={(e) => e.currentTarget.select()} />
+      </Modal>
 
       {pedidoOpen && (
         <CatalogoPedidoModal

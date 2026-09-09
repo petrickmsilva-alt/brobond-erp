@@ -154,3 +154,20 @@ export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
 export function findModuleByResource(resource: string): Module | undefined {
   return MODULES.find((m) => m.resource === resource);
 }
+
+/**
+ * Módulos visíveis para o usuário logado, respeitando perfil mínimo e permissões
+ * herdadas (mesma regra usada pela Sidebar e reaproveitada pelo CommandPalette,
+ * para nunca sugerir um destino que o usuário não pode acessar).
+ */
+export function visibleModules(user?: { perfil?: string; perm_politicas?: string } | null): Module[] {
+  const isAdmin = user?.perfil === 'admin';
+  return MODULES.filter((m) => {
+    if (m.adminOnly && !isAdmin) return false;
+    if (m.minPerfil === 'admin' && !isAdmin) return false;
+    if (m.minPerfil === 'gerente' && !isAdmin && user?.perfil !== 'gerente') {
+      if (!(m.id === 'politicas-comerciais' && user?.perm_politicas === 'permitir')) return false;
+    }
+    return true;
+  });
+}
