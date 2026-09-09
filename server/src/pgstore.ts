@@ -505,10 +505,9 @@ export class PgStore implements Store {
   }
 
   async findUserByEmail(email: string): Promise<Row | null> {
-    const res = await query(
-      'SELECT id, nome, email, senha_hash, perfil, ativo, trocar_senha, token_versao, mfa_secret, mfa_ativado_em, convite_expira_em, senha_definida_em FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1',
-      [email]
-    );
+    // SELECT * interno (nunca vai para o cliente): o login precisa do ciclo de
+    // vida completo (bloqueio, expiração, tentativas) e das permissões/alçadas.
+    const res = await query('SELECT * FROM usuarios WHERE LOWER(email) = LOWER($1) LIMIT 1', [email]);
     return res.rows[0] ?? null;
   }
 
@@ -527,8 +526,12 @@ export class PgStore implements Store {
     await query('UPDATE usuarios SET preferencias = $1, atualizado_em = now() WHERE id = $2', [JSON.stringify(prefs), userId]);
   }
 
-  async touchLogin(userId: number): Promise<void> {
-    await query('UPDATE usuarios SET ultimo_login = now() WHERE id = $1', [userId]).catch(() => undefined);
+  async touchLogin(userId: number, ip?: string | null): Promise<void> {
+    // Login com sucesso: registra acesso, IP e zera as falhas consecutivas.
+    await query(
+      'UPDATE usuarios SET ultimo_login = now(), ultimo_ip = COALESCE($2, ultimo_ip), tentativas_falhas = 0, ultimo_falha_em = NULL WHERE id = $1',
+      [userId, ip ?? null]
+    ).catch(() => undefined);
   }
 
   // ------------------------------------------------------------------

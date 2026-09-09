@@ -32,6 +32,7 @@ import {
   PiggyBank,
   CircleDollarSign,
   Repeat,
+  Webhook,
 } from 'lucide-react';
 
 export type Module = {
@@ -137,6 +138,7 @@ export const MODULES: Module[] = [
   // Configurações
   { id: 'usuarios', label: 'Usuários', icon: Users, group: 'Configurações', path: '/usuarios', resource: 'usuarios', description: 'Quem acessa o sistema, perfis de permissão e senhas.', adminOnly: true },
   { id: 'auditoria', label: 'Auditoria', icon: History, group: 'Configurações', path: '/auditoria', resource: 'auditoria', description: 'Histórico de inclusões, alterações, exclusões e logins.', adminOnly: true },
+  { id: 'webhooks', label: 'Webhooks', icon: Webhook, group: 'Configurações', path: '/webhooks', description: 'Integrações: avise sistemas externos sobre eventos de usuários.', adminOnly: true },
   { id: 'config', label: 'Configurações', icon: Settings, group: 'Configurações', path: '/config', description: 'Sua conta, senha, preferências e informações do sistema.' },
   { id: 'ajuda', label: 'Ajuda', icon: HelpCircle, group: 'Configurações', path: '/ajuda', description: 'Guia rápido: como usar cada módulo do BROBOND ERP.' },
 ];

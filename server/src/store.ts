@@ -48,7 +48,7 @@ export type Option = { value: number; label: string };
 export type AuditEntry = {
   usuario_id: number | null;
   usuario: string | null;
-  acao: 'criar' | 'editar' | 'excluir' | 'login' | 'senha' | 'mfa' | 'seguranca' | 'convite' | 'importar' | 'ajuste' | 'estornar';
+  acao: 'criar' | 'editar' | 'excluir' | 'login' | 'login_falha' | 'senha' | 'mfa' | 'seguranca' | 'bloqueio' | 'convite' | 'importar' | 'ajuste' | 'estornar';
   recurso: string | null;
   registro_id: number | null;
   descricao: string;
@@ -139,7 +139,7 @@ export interface Store {
   /** Preferências por usuário (JSONB no Postgres). */
   getPreferences(userId: number): Promise<Record<string, unknown>>;
   setPreferences(userId: number, prefs: Record<string, unknown>): Promise<void>;
-  touchLogin(userId: number): Promise<void>;
+  touchLogin(userId: number, ip?: string | null): Promise<void>;
 
   // ---- Sessões (invalidação de sessões por dispositivo) ----
   criarSessao(s: Omit<Sessao, 'criada_em' | 'revogada_em'>): Promise<Sessao>;

@@ -36,6 +36,17 @@ export function formatRelative(v: unknown): string {
   const d = new Date(String(v)).getTime();
   if (Number.isNaN(d)) return '—';
   const diff = Date.now() - d;
+  // Datas futuras (ex.: expiração de convite/acesso): "em X".
+  if (diff < 0) {
+    const min = Math.round(-diff / 60000);
+    if (min < 1) return 'agora';
+    if (min < 60) return `em ${min} min`;
+    const h = Math.round(min / 60);
+    if (h < 48) return `em ${h} h`;
+    const days = Math.round(h / 24);
+    if (days < 30) return `em ${days} d`;
+    return formatDate(v);
+  }
   const min = Math.round(diff / 60000);
   if (min < 1) return 'agora';
   if (min < 60) return `há ${min} min`;
@@ -139,5 +150,6 @@ export const ACAO_LABEL: Record<string, string> = {
   editar: 'Alteração',
   excluir: 'Exclusão',
   login: 'Login',
+  login_falha: 'Login (falha)',
   senha: 'Troca de senha',
 };

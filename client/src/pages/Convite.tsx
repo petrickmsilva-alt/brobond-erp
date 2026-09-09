@@ -6,6 +6,7 @@ import { CheckCircle2, Eye, EyeOff, Loader2, Lock, Mail, ShieldCheck } from 'luc
 import { api, ApiError } from '../lib/api';
 import { Alert } from '../components/ui';
 import { Logo } from '../components/Logo';
+import ForcaSenha, { type PoliticaPublica } from '../components/ForcaSenha';
 
 function PublicShell({ children }: { children: React.ReactNode }) {
   return (
@@ -41,6 +42,7 @@ export default function Convite() {
   const [show, setShow] = useState(false);
   const [erro, setErro] = useState('');
   const [busy, setBusy] = useState(false);
+  const [politica, setPolitica] = useState<PoliticaPublica | undefined>(undefined);
 
   useEffect(() => {
     (async () => {
@@ -50,6 +52,12 @@ export default function Convite() {
         setEstado(d.expirado ? 'invalido' : 'pronto');
       } catch {
         setEstado('invalido');
+      }
+      try {
+        const p = await api.get<{ politica: PoliticaPublica }>('/auth/politica-senha');
+        if (p.politica) setPolitica(p.politica);
+      } catch {
+        /* sem política: o medidor usa o padrão */
       }
     })();
   }, [token]);
@@ -133,6 +141,7 @@ export default function Convite() {
                     {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
+                <ForcaSenha senha={senha} email={info.email} nome={info.nome} policy={politica} />
               </div>
               <div>
                 <label className="label" htmlFor="convite-confirma">
@@ -150,7 +159,7 @@ export default function Convite() {
                     required
                   />
                 </div>
-                <p className="mt-1 text-xs text-slate-400">Mínimo de 8 caracteres, sem palavras óbvias.</p>
+                <p className="mt-1 text-xs text-slate-400">Repita a mesma senha para confirmar.</p>
               </div>
 
               {erro && <Alert tone="red">{erro}</Alert>}

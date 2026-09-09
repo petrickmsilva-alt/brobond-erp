@@ -16,6 +16,7 @@ import { gerarSegredoTOTP, uriTOTP, verificarTOTP } from './totp';
 import { getStore } from './services';
 import { RESOURCES } from './resources';
 import { revogarTodas } from './sessoes';
+import { gerarLoteCodigos, lerRegistro, restantesRegistro, serializarRegistro } from './mfaBackup';
 
 const TICKET_TTL = '10m';
 
@@ -89,9 +90,13 @@ export function sidAtual(req: Request): string | undefined {
 /** GET /api/auth/mfa/status */
 export async function mfaStatus(req: Request, res: Response) {
   const u = currentUser(req);
-  if (u.id <= 0) return res.json({ ativado: false, obrigatorio: true });
+  if (u.id <= 0) return res.json({ ativado: false, obrigatorio: true, backup_restantes: 0 });
   const row = await rowUsuario(u.id);
-  res.json({ ativado: !!row.mfa_ativado_em, obrigatorio: u.perfil === 'admin' });
+  res.json({
+    ativado: !!row.mfa_ativado_em,
+    obrigatorio: u.perfil === 'admin',
+    backup_restantes: restantesRegistro(lerRegistro(row.mfa_backup_hashes)),
+  });
 }
 
 /** POST /api/auth/mfa/setup — gera segredo pendente e devolve QR + URI. */
@@ -118,16 +123,49 @@ export async function mfaAtivar(req: Request, res: Response) {
   if (!verificarTOTP(segredo, req.body?.codigo)) {
     throw new HttpError(400, 'Código inválido. Confira o app autenticador e tente novamente.', { codigo: 'Código inválido' });
   }
-  await getStore().update(RESOURCES.usuarios, u.id, { mfa_ativado_em: new Date().toISOString() });
+  // Na ativação, o usuário recebe os códigos de recuperação (exibição única):
+  // sem eles, perder o celular significa perder o acesso.
+  const lote = gerarLoteCodigos();
+  await getStore().update(RESOURCES.usuarios, u.id, {
+    mfa_ativado_em: new Date().toISOString(),
+    mfa_backup_hashes: serializarRegistro(lote.registro),
+  });
   await getStore().audit({
     usuario_id: u.id,
     usuario: u.name,
     acao: 'mfa',
     recurso: 'usuarios',
     registro_id: u.id,
-    descricao: `${u.name} ativou o MFA (TOTP)`,
+    descricao: `${u.name} ativou o MFA (TOTP) — ${lote.codigos.length} códigos de recuperação emitidos`,
   });
-  res.json({ ok: true });
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, codigos: lote.codigos, backup_restantes: lote.codigos.length });
+}
+
+/**
+ * POST /api/auth/mfa/codigos — gera um NOVO lote de códigos de recuperação
+ * (exibição única, no-store). Invalida o lote anterior. Exige MFA ativo e
+ * reautenticação recente: quem gera os códigos entra sem o celular.
+ */
+export async function mfaCodigos(req: Request, res: Response) {
+  const { exigirReautenticacao } = await import('./auth');
+  const u = currentUser(req);
+  if (u.id <= 0) throw new HttpError(400, 'O acesso de emergência não gerencia MFA.');
+  exigirReautenticacao(req);
+  const row = await rowUsuario(u.id);
+  if (!row.mfa_ativado_em) throw new HttpError(400, 'Ative o MFA antes de gerar códigos de recuperação.');
+  const lote = gerarLoteCodigos();
+  await getStore().update(RESOURCES.usuarios, u.id, { mfa_backup_hashes: serializarRegistro(lote.registro) });
+  await getStore().audit({
+    usuario_id: u.id,
+    usuario: u.name,
+    acao: 'mfa',
+    recurso: 'usuarios',
+    registro_id: u.id,
+    descricao: `${u.name} gerou novos códigos de recuperação do MFA (lote anterior invalidado)`,
+  });
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, codigos: lote.codigos, backup_restantes: lote.codigos.length });
 }
 
 /** POST /api/auth/mfa/desativar — exige reautenticação recente + código válido. */
@@ -142,7 +180,7 @@ export async function mfaDesativar(req: Request, res: Response) {
   if (!segredo || !verificarTOTP(segredo, req.body?.codigo)) {
     throw new HttpError(400, 'Código inválido. Informe o código atual do app autenticador.', { codigo: 'Código inválido' });
   }
-  await getStore().update(RESOURCES.usuarios, u.id, { mfa_secret: null, mfa_ativado_em: null });
+  await getStore().update(RESOURCES.usuarios, u.id, { mfa_secret: null, mfa_ativado_em: null, mfa_backup_hashes: null });
   await revogarTodas(u.id, sidAtual(req));
   const { invalidateUserCache } = await import('./auth');
   invalidateUserCache(u.id);

@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, ShieldCheck } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Alert } from '../components/ui';
 import { Logo } from '../components/Logo';
+import ForcaSenha, { type PoliticaPublica } from '../components/ForcaSenha';
 
 function PublicShell({ children }: { children: React.ReactNode }) {
   return (
@@ -108,11 +109,24 @@ export function ResetPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [done, setDone] = useState(false);
+  const [politica, setPolitica] = useState<PoliticaPublica | undefined>(undefined);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const p = await api.get<{ politica: PoliticaPublica }>('/auth/politica-senha');
+        if (p.politica) setPolitica(p.politica);
+      } catch {
+        /* sem política: medidor e mínimo usam o padrão */
+      }
+    })();
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setErr('');
-    if (senha.length < 8) return setErr('A nova senha deve ter pelo menos 8 caracteres.');
+    const minimo = politica?.tamanho_minimo || 8;
+    if (senha.length < minimo) return setErr(`A nova senha deve ter pelo menos ${minimo} caracteres.`);
     if (senha !== confirma) return setErr('As senhas não conferem.');
     setBusy(true);
     try {
@@ -157,7 +171,8 @@ export function ResetPage() {
                     {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
-                <p className="mt-1 text-xs text-slate-400">Mínimo de 8 caracteres, sem palavras óbvias (senha, 123456, nome da marca...).</p>
+                <ForcaSenha senha={senha} policy={politica} />
+                <p className="mt-1 text-xs text-slate-400">A política da empresa pode exigir mais — o servidor valida de novo.</p>
               </div>
               <div>
                 <label className="label" htmlFor="confirma-senha">

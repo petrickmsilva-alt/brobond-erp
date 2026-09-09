@@ -28,8 +28,9 @@ type AuthContextValue = {
   login: (email: string, password: string, lembrar?: boolean) => Promise<{ mfa_required?: boolean; mfa_setup_required?: boolean; mfa_ticket?: string }>;
   /** QR + segredo para o cadastro TOTP guiado (exige o ticket do 1º passo). */
   mfaDesafio: (ticket: string) => Promise<{ segredo: string; uri: string; qr: string }>;
-  /** 2º passo do login (código TOTP) — conclui a sessão. */
-  concluirLoginMFA: (ticket: string, codigo: string) => Promise<void>;
+  /** 2º passo do login (código TOTP ou de recuperação) — conclui a sessão. Na 1ª ativação devolve os códigos de recuperação. */
+  concluirLoginMFA: (ticket: string, codigo: string) => Promise<{ mfa_backup_codigos?: string[]; mfa_backup_restantes?: number }>;
+
   logout: () => void;
   refreshMeta: () => Promise<void>;
   loading: boolean;
@@ -102,6 +103,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(d.user);
     setSentryUser(d.user);
     await refreshMeta();
+    return d;
   }
 
   function logout() {

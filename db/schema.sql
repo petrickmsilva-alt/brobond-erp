@@ -881,6 +881,31 @@ UPDATE usuarios SET senha_definida_em = COALESCE(atualizado_em, criado_em, now()
 ALTER TABLE usuarios DROP COLUMN IF EXISTS senha_cifrada;
 
 -- ------------------------------------------------------------
+-- 0008) USUÁRIOS PROFISSIONAL — cadastro, ciclo de vida e segurança
+-- (espelho do db/migrations/0008_usuarios_profissional.sql para bancos novos)
+-- ------------------------------------------------------------
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cargo TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS departamento TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telefone TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS observacoes TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado_ate TIMESTAMPTZ;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS motivo_bloqueio TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS tentativas_falhas INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_falha_em TIMESTAMPTZ;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_ip TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS acesso_expira_em TIMESTAMPTZ;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS criado_por INTEGER;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS desativado_por TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS desativado_em TIMESTAMPTZ;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS desativado_motivo TEXT;
+UPDATE usuarios SET tentativas_falhas = 0 WHERE tentativas_falhas IS NULL;
+CREATE INDEX IF NOT EXISTS idx_usuarios_ativo ON usuarios (ativo);
+CREATE INDEX IF NOT EXISTS idx_usuarios_perfil ON usuarios (perfil);
+CREATE INDEX IF NOT EXISTS idx_usuarios_bloqueado ON usuarios (bloqueado_ate) WHERE bloqueado_ate IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_usuarios_convite ON usuarios (convite_expira_em) WHERE convite_token_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_usuarios_ultimo_login ON usuarios (ultimo_login DESC NULLS LAST);
+
+-- ------------------------------------------------------------
 -- Grades de tamanhos: vínculo com categoria (padrão) e produto (override)
 -- ------------------------------------------------------------
 ALTER TABLE categorias ADD COLUMN IF NOT EXISTS grade_id INTEGER REFERENCES grades(id);
@@ -988,3 +1013,47 @@ CREATE TABLE IF NOT EXISTS cotacao_decisoes (
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_cotacao_decisoes_venda ON cotacao_decisoes(venda_id, criado_em DESC);
+
+-- 0009) USUÁRIOS ONDA 3 — bloqueio manual + códigos de recuperação do MFA
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueio_manual BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS mfa_backup_hashes TEXT;
+UPDATE usuarios SET bloqueio_manual = FALSE WHERE bloqueio_manual IS NULL;
+CREATE INDEX IF NOT EXISTS idx_usuarios_bloqueio_manual ON usuarios (bloqueio_manual) WHERE bloqueio_manual = TRUE;
+
+-- 0010) GOVERNANÇA ONDA 4 — histórico de senha, certificação, configurações, webhooks
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS senha_historico TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS acesso_certificado_em TIMESTAMPTZ;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS acesso_certificado_por TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS acesso_certificado_obs TEXT;
+CREATE TABLE IF NOT EXISTS configuracoes (
+  id SERIAL PRIMARY KEY,
+  chave TEXT NOT NULL UNIQUE,
+  valor TEXT NOT NULL DEFAULT '',
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_por TEXT
+);
+CREATE TABLE IF NOT EXISTS webhooks (
+  id SERIAL PRIMARY KEY,
+  nome TEXT NOT NULL,
+  url TEXT NOT NULL,
+  segredo_cifrado TEXT,
+  eventos TEXT NOT NULL DEFAULT '[]',
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  criado_por TEXT,
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS webhook_entregas (
+  id SERIAL PRIMARY KEY,
+  webhook_id INTEGER NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+  evento TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '',
+  estado TEXT NOT NULL DEFAULT 'erro',
+  tentativas INTEGER NOT NULL DEFAULT 1,
+  resposta_status INTEGER,
+  resposta_corpo TEXT,
+  erro TEXT,
+  criada_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  concluida_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_entregas_webhook ON webhook_entregas (webhook_id, id DESC);

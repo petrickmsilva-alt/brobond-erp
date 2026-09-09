@@ -84,7 +84,9 @@ export class MemStore implements Store {
     const out: Row = { ...row };
     // Colunas secretas jamais saem da API: hash de senha, segredo MFA e tokens.
     delete out.senha_hash;
+    delete out.senha_historico;
     delete out.mfa_secret;
+    delete out.mfa_backup_hashes;
     delete out.convite_token_hash;
     delete out.reset_token_hash;
     delete out.dados;
@@ -479,9 +481,14 @@ export class MemStore implements Store {
     }
   }
 
-  async touchLogin(userId: number): Promise<void> {
+  async touchLogin(userId: number, ip?: string | null): Promise<void> {
     const row = this.table('usuarios').rows.get(userId);
-    if (row) row.ultimo_login = new Date().toISOString();
+    if (row) {
+      row.ultimo_login = new Date().toISOString();
+      if (ip) row.ultimo_ip = ip;
+      row.tentativas_falhas = 0;
+      row.ultimo_falha_em = null;
+    }
   }
 
   // ------------------------------------------------------------------

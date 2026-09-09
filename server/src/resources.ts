@@ -228,11 +228,16 @@ export const RESOURCES: Record<string, Resource> = {
     adminOnly: true,
     ops: ALL_OPS,
     notice:
-      'Senhas protegidas por hash Argon2id (irreversível) — nunca exibidas nem recuperáveis. Novos usuários recebem um CONVITE por e-mail para definir a própria senha; o administrador pode gerar uma senha temporária de exibição única.',
+      'Senhas protegidas por hash Argon2id (irreversível) — nunca exibidas nem recuperáveis. Novos usuários recebem um CONVITE por e-mail para definir a própria senha; o administrador pode gerar uma senha temporária de exibição única. Desative em vez de excluir: a exclusão definitiva só é permitida para contas que nunca foram usadas.',
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
       { name: 'email', label: 'E-mail', type: 'email', required: true, unique: true, search: true, maxLength: 160, hint: 'Usado para o login e para o convite de acesso.' },
       { name: 'perfil', label: 'Perfil', type: 'select', required: true, options: PERFIS, default: 'operador', hint: 'Administrador: tudo (com MFA obrigatório). Gerente: tudo, exceto usuários. Operador: não exclui registros.' },
+      { name: 'cargo', label: 'Cargo / função', type: 'text', search: true, maxLength: 80, section: 'Dados profissionais', placeholder: 'Ex.: Vendedora, Estoquista, Costureira...', hint: 'Função da pessoa na empresa (aparece na ficha do usuário).' },
+      { name: 'departamento', label: 'Departamento', type: 'text', search: true, maxLength: 60, section: 'Dados profissionais', placeholder: 'Ex.: Vendas, Estoque, Produção, Financeiro...' },
+      { name: 'telefone', label: 'Telefone / WhatsApp', type: 'phone', maxLength: 20, section: 'Dados profissionais', list: false },
+      { name: 'observacoes', label: 'Observações internas', type: 'textarea', maxLength: 1000, list: false, wide: true, section: 'Dados profissionais', hint: 'Visível apenas para administradores. Ex.: turno, loja, responsável pela contratação.' },
+      { name: 'acesso_expira_em', label: 'Acesso expira em', type: 'datetime', list: false, section: 'Ciclo de vida', hint: 'Opcional: para acessos temporários (ex.: freelancer, safra). Vazio = sem expiração. Expirado bloqueia o login.' },
       { name: 'perm_catalogos', label: 'Gerenciar catálogos', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
       { name: 'perm_compartilhar', label: 'Compartilhar catálogos', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
       { name: 'perm_metricas', label: 'Ver métricas comerciais', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
@@ -240,7 +245,25 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'perm_aprovar', label: 'Aprovar exceções', type: 'select', default: 'herdar', section: 'Permissões comerciais', options: [{ value: 'herdar', label: 'Herdar do perfil' }, { value: 'permitir', label: 'Permitir' }, { value: 'negar', label: 'Negar' }] },
       { name: 'desconto_max_pct', label: 'Desconto máximo (%)', type: 'percent', min: 0, max: 100, section: 'Alçadas comerciais', hint: 'Vazio usa o padrão do perfil.' },
       { name: 'venda_sem_aprovacao_ate', label: 'Venda sem aprovação até', type: 'money', min: 0, section: 'Alçadas comerciais', hint: 'Acima deste valor exige aprovação.' },
-      { ...ativo, hint: 'Usuários inativos não conseguem entrar.' },
+      { ...ativo, hint: 'Usuários inativos não conseguem entrar. Ao desativar, informe o motivo e as sessões ativas são encerradas na hora.' },
+      {
+        name: 'status_conta',
+        label: 'Status',
+        type: 'select',
+        virtual: true,
+        list: true,
+        form: false,
+        options: [
+          { value: 'ativo', label: 'Ativo', tone: 'green' },
+          { value: 'convite_pendente', label: 'Convite pendente', tone: 'blue' },
+          { value: 'convite_expirado', label: 'Convite expirado', tone: 'amber' },
+          { value: 'provisoria', label: 'Senha provisória', tone: 'amber' },
+          { value: 'bloqueado', label: 'Bloqueado', tone: 'red' },
+          { value: 'expirado', label: 'Acesso expirado', tone: 'red' },
+          { value: 'inativo', label: 'Desativado', tone: 'slate' },
+        ],
+        hint: 'Situação consolidada da conta (calculada pelo servidor).',
+      },
       {
         name: 'senha_status',
         label: 'Acesso',
@@ -260,6 +283,16 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'mfa_ativado_em', label: 'MFA ativado em', type: 'datetime', readonly: true, form: false, list: false, hint: 'Autenticação em dois fatores (TOTP) — obrigatória para administradores.' },
       { name: 'senha_definida_em', label: 'Senha definida em', type: 'datetime', readonly: true, form: false, list: false },
       { name: 'ultimo_login', label: 'Último acesso', type: 'datetime', readonly: true, form: false },
+      { name: 'ultimo_ip', label: 'Último IP', type: 'text', readonly: true, form: false, list: false },
+      { name: 'tentativas_falhas', label: 'Tentativas falhas', type: 'integer', readonly: true, form: false, list: false, hint: 'Falhas de senha consecutivas (zera a cada login com sucesso).' },
+      { name: 'ultimo_falha_em', label: 'Última falha em', type: 'datetime', readonly: true, form: false, list: false },
+      { name: 'bloqueado_ate', label: 'Bloqueado até', type: 'datetime', readonly: true, form: false, list: false, hint: 'Bloqueio temporário por excesso de tentativas. Use "Desbloquear" na ficha do usuário.' },
+      { name: 'motivo_bloqueio', label: 'Motivo do bloqueio', type: 'text', readonly: true, form: false, list: false },
+      { name: 'bloqueio_manual', label: 'Bloqueio manual', type: 'boolean', readonly: true, form: false, list: false, hint: 'Bloqueio aplicado pelo administrador (sem prazo). Use "Desbloquear" na ficha do usuário.' },
+      { name: 'criado_por', label: 'Criado por (id)', type: 'integer', readonly: true, form: false, list: false },
+      { name: 'desativado_por', label: 'Desativado por', type: 'text', readonly: true, form: false, list: false },
+      { name: 'desativado_em', label: 'Desativado em', type: 'datetime', readonly: true, form: false, list: false },
+      { name: 'desativado_motivo', label: 'Motivo da desativação', type: 'text', readonly: true, form: false, list: false },
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
@@ -276,6 +309,7 @@ export const RESOURCES: Record<string, Resource> = {
     notice: 'Registro automático de tudo que é incluído, alterado ou excluído no sistema, e de quem fez.',
     fields: [
       { name: 'data', label: 'Data/hora', type: 'datetime', readonly: true },
+      { name: 'usuario_id', label: 'ID do usuário', type: 'integer', readonly: true, list: false, form: false },
       { name: 'usuario', label: 'Usuário', type: 'text', readonly: true, search: true },
       {
         name: 'acao',
@@ -287,12 +321,15 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'editar', label: 'Alteração', tone: 'blue' },
           { value: 'excluir', label: 'Exclusão', tone: 'red' },
           { value: 'login', label: 'Login', tone: 'slate' },
+          { value: 'login_falha', label: 'Login (falha)', tone: 'red' },
           { value: 'senha', label: 'Troca de senha', tone: 'amber' },
           { value: 'mfa', label: 'MFA (2FA)', tone: 'blue' },
           { value: 'seguranca', label: 'Segurança', tone: 'red' },
+          { value: 'bloqueio', label: 'Bloqueio de acesso', tone: 'red' },
           { value: 'convite', label: 'Convite de acesso', tone: 'green' },
           { value: 'importar', label: 'Importação', tone: 'blue' },
           { value: 'ajuste', label: 'Ajuste de estoque', tone: 'amber' },
+          { value: 'estornar', label: 'Estorno', tone: 'amber' },
         ],
       },
       { name: 'recurso', label: 'Módulo', type: 'text', readonly: true, search: true },
@@ -1657,7 +1694,7 @@ export function columnsOf(r: Resource): Field[] {
  * recurso (segredos/tokens): o store aceita gravá-las via API interna, porém
  * elas jamais voltam em consultas (ver COLUNAS_SECRETAS no pgstore/memdb).
  */
-export const COLUNAS_AUTENTICACAO = ['senha_hash', 'mfa_secret', 'convite_token_hash', 'reset_token_hash', 'reset_expira_em', 'token_versao', 'senha_provisoria'];
+export const COLUNAS_AUTENTICACAO = ['senha_hash', 'senha_historico', 'mfa_secret', 'mfa_backup_hashes', 'convite_token_hash', 'reset_token_hash', 'reset_expira_em', 'token_versao', 'senha_provisoria', 'acesso_certificado_em', 'acesso_certificado_por', 'acesso_certificado_obs'];
 
 /** Campos que o usuário pode gravar (não virtuais, não somente leitura). */
 export function writableFields(r: Resource): Field[] {

@@ -21,6 +21,39 @@ export const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@brobond.com.br').t
 export const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'brobond123').trim();
 const RESET_TTL_MIN = Number(process.env.RESET_TTL_MINUTES) || 60;
 export const REAUTH_TTL_MS = Number(process.env.REAUTH_TTL_MS) || 5 * 60_000;
+// Bloqueio por usuário (além do rate limit por IP+e-mail): N senhas erradas
+// seguidas bloqueiam a CONTA por alguns minutos — trava força-bruta distribuída.
+export const USER_LOCK_MAX = Number(process.env.USER_LOCK_MAX_ATTEMPTS) || 5;
+export const USER_LOCK_MIN = Number(process.env.USER_LOCK_MINUTES) || 15;
+
+/** true quando a conta está bloqueada: manual (admin, sem prazo) ou temporário vigente. */
+export function contaBloqueada(row: Row): boolean {
+  if (!row) return false;
+  if (row.bloqueio_manual === true) return true;
+  return !!row.bloqueado_ate && new Date(String(row.bloqueado_ate)).getTime() > Date.now();
+}
+
+/** Mensagem de veto conforme o tipo de bloqueio (manual mostra o motivo). */
+export function mensagemBloqueio(row: Row): string {
+  if (row?.bloqueio_manual === true) {
+    const motivo = String(row.motivo_bloqueio || '').trim();
+    return motivo
+      ? `Acesso bloqueado pelo administrador: ${motivo}`
+      : 'Acesso bloqueado pelo administrador. Fale com o administrador para liberar.';
+  }
+  return `Acesso bloqueado temporariamente por excesso de tentativas incorretas. Tente novamente em ${minutosDeBloqueio(row)} minuto(s) ou fale com o administrador.`;
+}
+
+/** true quando o acesso temporário já venceu (acesso_expira_em no passado). */
+export function acessoExpirado(row: Row): boolean {
+  return !!row?.acesso_expira_em && new Date(String(row.acesso_expira_em)).getTime() < Date.now();
+}
+
+/** Minutos restantes de bloqueio (para a mensagem de erro). */
+function minutosDeBloqueio(row: Row): number {
+  const ms = new Date(String(row.bloqueado_ate)).getTime() - Date.now();
+  return Math.max(1, Math.ceil(ms / 60_000));
+}
 
 export type Perfil = 'admin' | 'gerente' | 'operador';
 export type AuthUser = { id: number; name: string; email: string; perfil: Perfil; trocar_senha?: boolean; perm_catalogos?: string; perm_compartilhar?: string; perm_metricas?: string; perm_politicas?: string; perm_aprovar?: string; desconto_max_pct?: number | null; venda_sem_aprovacao_ate?: number | null };
@@ -157,11 +190,49 @@ export async function login(req: Request, res: Response) {
     if (row.ativo === false) {
       return res.status(403).json({ error: 'Usuário desativado. Fale com o administrador.' });
     }
+    if (contaBloqueada(row)) {
+      return res.status(403).json({ error: mensagemBloqueio(row) });
+    }
+    if (acessoExpirado(row)) {
+      return res.status(403).json({ error: 'Acesso expirado. Fale com o administrador para renovar.' });
+    }
     const verificacao = await verifyPasswordDetailed(password, row.senha_hash);
     if (verificacao.ok) {
       await registerLoginSuccess(req);
+      // Onda 4: senha vencida pela política vira troca obrigatória (antes do
+      // MFA, para valer nos dois fluxos). O aviso vai na resposta.
+      let senha_vence_em_dias: number | null = null;
+      let senha_expirada = false;
+      try {
+        const { obterPolitica, vencimentoSenha } = await import('./politicaSenha');
+        const venc = vencimentoSenha(row, await obterPolitica());
+        senha_vence_em_dias = venc.venceEmDias;
+        senha_expirada = venc.expirada;
+        if (venc.expirada && !row.trocar_senha) {
+          await store.update((await import('./resources')).RESOURCES.usuarios, Number(row.id), { trocar_senha: true });
+          row.trocar_senha = true;
+          await store
+            .audit({
+              usuario_id: Number(row.id),
+              usuario: String(row.nome || row.email),
+              acao: 'senha',
+              recurso: 'usuarios',
+              registro_id: Number(row.id),
+              descricao: `Senha de ${String(row.email)} vencida pela política — troca obrigatória no acesso`,
+            })
+            .catch(() => undefined);
+        }
+      } catch {
+        /* política indisponível: segue o login sem o aviso */
+      }
       const user = toAuthUser(row);
-      await store.touchLogin(user.id);
+      await store.touchLogin(user.id, clientIp(req) || null);
+      // Limpa bloqueio vencido que tenha ficado para trás.
+      if (row.bloqueado_ate) {
+        try {
+          await store.update((await import('./resources')).RESOURCES.usuarios, user.id, { bloqueado_ate: null, motivo_bloqueio: null });
+        } catch { /* indiferente */ }
+      }
 
       // Migração gradual: hash bcrypt válido → regrava em Argon2id (transparente).
       if (verificacao.rehash || !hashAtualizado(row.senha_hash)) {
@@ -199,10 +270,12 @@ export async function login(req: Request, res: Response) {
           ...(temMfaAtivado ? { mfa_required: true } : { mfa_setup_required: true }),
           mfa_ticket: signMfaTicket(user, lembrar),
           user: { id: user.id, name: user.name, email: user.email, perfil: user.perfil },
+          senha_vence_em_dias,
+          senha_expirada,
         });
       }
 
-      return emitirSessao(req, res, row, user, req.body?.lembrar === true);
+      return emitirSessao(req, res, row, user, req.body?.lembrar === true, { senha_vence_em_dias, senha_expirada });
     }
     return loginFailed(req, res, row);
   }
@@ -220,7 +293,7 @@ export async function login(req: Request, res: Response) {
 }
 
 /** Cria a sessão (registro + JTI no JWT), audita e responde. */
-async function emitirSessao(req: Request, res: Response, row: Row, user: AuthUser, lembrar: boolean) {
+async function emitirSessao(req: Request, res: Response, row: Row, user: AuthUser, lembrar: boolean, extra: Record<string, unknown> = {}) {
   const sid = await abrirSessao({ usuarioId: user.id, lembrar, req });
   const token = signToken(user, { ver: Number(row.token_versao || 0), sid, lembrar, expiresIn: lembrar ? '30d' : undefined });
   await getStore()
@@ -234,7 +307,7 @@ async function emitirSessao(req: Request, res: Response, row: Row, user: AuthUse
       dados: { sessao: sid.slice(0, 8) },
     })
     .catch(() => undefined);
-  return res.json({ token, user: { ...user, lembrar } });
+  return res.json({ token, user: { ...user, lembrar }, ...extra });
 }
 
 /** POST /api/auth/login/mfa — { mfa_ticket, codigo } conclui o login com TOTP. */
@@ -251,32 +324,36 @@ export async function loginMFA(req: Request, res: Response) {
   const { RESOURCES } = await import('./resources');
   const row = await store.findOneWhere(RESOURCES.usuarios, { id: Number(payload.id) });
   if (!row || row.ativo === false) return res.status(401).json({ error: 'Usuário desativado ou removido.' });
+  if (contaBloqueada(row)) return res.status(403).json({ error: mensagemBloqueio(row) });
+  if (acessoExpirado(row)) return res.status(403).json({ error: 'Acesso expirado. Fale com o administrador para renovar.' });
 
   const { decifrarSegredoMfa } = await import('./mfa');
   const { verificarTOTP } = await import('./totp');
   const segredo = decifrarSegredoMfa(row.mfa_secret);
   if (!segredo) return res.status(400).json({ error: 'Não há MFA pendente para este usuário.' });
 
+  // Código do app… ou código de recuperação (uso único, para quando o celular some).
+  let restantesBackup: number | null = null;
   if (!verificarTOTP(segredo, codigo)) {
-    const restantes = await registrarFalha('mfa', chaveMfa);
-    await store
-      .audit({
-        usuario_id: Number(row.id),
-        usuario: String(row.nome || row.email),
-        acao: 'login',
-        recurso: null,
-        registro_id: null,
-        descricao: `Código MFA inválido para ${String(row.email)} (${ip || 'ip desconhecido'})`,
-      })
-      .catch(() => undefined);
-    const dica = restantes > 0 && restantes <= 2 ? ` Restam ${restantes} tentativa${restantes === 1 ? '' : 's'}.` : '';
-    return res.status(401).json({ error: `Código MFA inválido.${dica}` });
-  }
-  await registrarSucesso('mfa', chaveMfa);
-
-  // Primeiro login de administrador: o código correto confirma o app autenticador.
-  if (!row.mfa_ativado_em) {
-    await store.update(RESOURCES.usuarios, Number(row.id), { mfa_ativado_em: new Date().toISOString() });
+    const { lerRegistro, consumirCodigo, serializarRegistro } = await import('./mfaBackup');
+    const consumido = consumirCodigo(lerRegistro(row.mfa_backup_hashes), codigo);
+    if (!consumido) {
+      const restantes = await registrarFalha('mfa', chaveMfa);
+      await store
+        .audit({
+          usuario_id: Number(row.id),
+          usuario: String(row.nome || row.email),
+          acao: 'login_falha',
+          recurso: null,
+          registro_id: null,
+          descricao: `Código MFA inválido para ${String(row.email)} (${ip || 'ip desconhecido'})`,
+        })
+        .catch(() => undefined);
+      const dica = restantes > 0 && restantes <= 2 ? ` Restam ${restantes} tentativa${restantes === 1 ? '' : 's'}.` : '';
+      return res.status(401).json({ error: `Código MFA inválido.${dica}` });
+    }
+    await store.update(RESOURCES.usuarios, Number(row.id), { mfa_backup_hashes: serializarRegistro(consumido.registro) });
+    restantesBackup = consumido.restantes;
     await store
       .audit({
         usuario_id: Number(row.id),
@@ -284,13 +361,50 @@ export async function loginMFA(req: Request, res: Response) {
         acao: 'mfa',
         recurso: 'usuarios',
         registro_id: Number(row.id),
-        descricao: `MFA (TOTP) ativado no primeiro login de ${String(row.email)}`,
+        descricao: `Login de ${String(row.email)} concluído com CÓDIGO DE RECUPERAÇÃO (restam ${consumido.restantes})`,
+        dados: { via: 'codigo_recuperacao', restantes: consumido.restantes },
+      })
+      .catch(() => undefined);
+  }
+  await registrarSucesso('mfa', chaveMfa);
+
+  // Primeiro login de administrador: o código correto confirma o app autenticador
+  // e emite os códigos de recuperação (exibição única, junto na resposta).
+  let codigosNovos: string[] | undefined;
+  if (!row.mfa_ativado_em) {
+    const { gerarLoteCodigos, serializarRegistro } = await import('./mfaBackup');
+    const lote = gerarLoteCodigos();
+    codigosNovos = lote.codigos;
+    await store.update(RESOURCES.usuarios, Number(row.id), {
+      mfa_ativado_em: new Date().toISOString(),
+      mfa_backup_hashes: serializarRegistro(lote.registro),
+    });
+    await store
+      .audit({
+        usuario_id: Number(row.id),
+        usuario: String(row.nome || row.email),
+        acao: 'mfa',
+        recurso: 'usuarios',
+        registro_id: Number(row.id),
+        descricao: `MFA (TOTP) ativado no primeiro login de ${String(row.email)} — ${lote.codigos.length} códigos de recuperação emitidos`,
       })
       .catch(() => undefined);
   }
 
   const user = toAuthUser(row);
-  return emitirSessao(req, res, row, user, payload.lembrar === true);
+  let avisoMfa: Record<string, unknown> = {};
+  try {
+    const { obterPolitica, vencimentoSenha } = await import('./politicaSenha');
+    const venc = vencimentoSenha(row, await obterPolitica());
+    avisoMfa = { senha_vence_em_dias: venc.venceEmDias, senha_expirada: venc.expirada };
+  } catch {
+    /* indiferente */
+  }
+  return emitirSessao(req, res, row, user, payload.lembrar === true, {
+    ...(codigosNovos ? { mfa_backup_codigos: codigosNovos } : {}),
+    ...(restantesBackup !== null ? { mfa_backup_restantes: restantesBackup } : {}),
+    ...avisoMfa,
+  });
 }
 
 /** POST /api/auth/mfa/desafio — { mfa_ticket } devolve QR + segredo do cadastro. */
@@ -301,6 +415,8 @@ export async function mfaDesafio(req: Request, res: Response) {
   const { RESOURCES } = await import('./resources');
   const row = await store.findOneWhere(RESOURCES.usuarios, { id: Number(payload.id) });
   if (!row || row.ativo === false) throw new HttpError(401, 'Usuário desativado ou removido.');
+  if (contaBloqueada(row)) throw new HttpError(403, mensagemBloqueio(row));
+  if (acessoExpirado(row)) throw new HttpError(403, 'Acesso expirado. Fale com o administrador para renovar.');
   if (row.mfa_ativado_em) throw new HttpError(400, 'MFA já está ativado para este usuário. Apenas o código é necessário.');
   const dados = await prepararDesafio(row, async (segredo) => {
     await store.update(RESOURCES.usuarios, Number(row.id), { mfa_secret: cifrarSegredoMfa(segredo) });
@@ -312,20 +428,68 @@ export async function mfaDesafio(req: Request, res: Response) {
 /** Resposta padrão de falha de login: conta a tentativa e registra bloqueio na auditoria. */
 async function loginFailed(req: Request, res: Response, row: Row | null) {
   const left = await registerLoginFailure(req);
+  // Contador POR USUÁRIO: N falhas seguidas bloqueiam a conta por alguns minutos.
+  if (row) await registrarFalhaUsuario(row, clientIp(req));
   if (left === 0) {
     await getStore()
       .audit({
         usuario_id: row ? Number(row.id) : null,
         usuario: row?.nome || normalizeEmail(req.body?.email) || null,
-        acao: 'login',
+        acao: 'login_falha',
         recurso: null,
         registro_id: null,
         descricao: `Login BLOQUEADO temporariamente por excesso de tentativas — ${normalizeEmail(req.body?.email)} (${clientIp(req) || 'ip desconhecido'})`,
       })
       .catch(() => undefined);
+  } else if (row) {
+    // Trilha de tentativas (alimenta o gráfico de segurança do módulo Usuários;
+    // a senha jamais é registrada). E-mails inexistentes não geram trilha.
+    await getStore()
+      .audit({
+        usuario_id: Number(row.id),
+        usuario: String(row.nome || row.email),
+        acao: 'login_falha',
+        recurso: null,
+        registro_id: null,
+        descricao: `Senha incorreta para ${String(row.email)} (${clientIp(req) || 'ip desconhecido'})`,
+      })
+      .catch(() => undefined);
   }
   const hint = left > 0 && left <= 2 ? ` Restam ${left} tentativa${left === 1 ? '' : 's'}.` : '';
   return res.status(401).json({ error: `E-mail ou senha incorretos.${hint}` });
+}
+
+/**
+ * Incrementa as falhas consecutivas do usuário; ao atingir USER_LOCK_MAX,
+ * bloqueia a conta por USER_LOCK_MIN minutos e registra na trilha.
+ */
+async function registrarFalhaUsuario(row: Row, ip: string): Promise<void> {
+  try {
+    const store = getStore();
+    const { RESOURCES } = await import('./resources');
+    const falhas = Number(row.tentativas_falhas || 0) + 1;
+    const patch: Record<string, unknown> = { tentativas_falhas: falhas, ultimo_falha_em: new Date().toISOString(), ultimo_ip: ip || null };
+    if (falhas >= USER_LOCK_MAX) {
+      patch.bloqueado_ate = new Date(Date.now() + USER_LOCK_MIN * 60_000).toISOString();
+      patch.motivo_bloqueio = `Bloqueio automático: ${falhas} tentativas incorretas seguidas`;
+    }
+    await store.update(RESOURCES.usuarios, Number(row.id), patch);
+    if (falhas >= USER_LOCK_MAX) {
+      await store
+        .audit({
+          usuario_id: Number(row.id),
+          usuario: String(row.nome || row.email),
+          acao: 'bloqueio',
+          recurso: 'usuarios',
+          registro_id: Number(row.id),
+          descricao: `Acesso de ${String(row.email)} BLOQUEADO automaticamente por ${USER_LOCK_MIN} min (${falhas} senhas incorretas seguidas — ${ip || 'ip desconhecido'})`,
+          dados: { tentativas: falhas, ip },
+        })
+        .catch(() => undefined);
+    }
+  } catch {
+    // Falha ao gravar o contador não pode quebrar o fluxo de login.
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -518,6 +682,15 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
           userCache.delete(payload.id);
           return res.status(401).json({ error: 'Usuário desativado ou removido.' });
         }
+        // Bloqueio temporário e expiração derrubam a sessão ativa em até 30 s.
+        if (contaBloqueada(row)) {
+          userCache.delete(payload.id);
+          return res.status(401).json({ error: `${mensagemBloqueio(row)} Sessão encerrada.` });
+        }
+        if (acessoExpirado(row)) {
+          userCache.delete(payload.id);
+          return res.status(401).json({ error: 'Acesso expirado. Fale com o administrador para renovar.' });
+        }
         // "Sair de todos os dispositivos" incrementa token_versao → token antigo cai.
         if (Number(row.token_versao || 0) !== Number(payload.ver || 0)) {
           userCache.delete(payload.id);
@@ -557,8 +730,27 @@ export function requireRole(...roles: Perfil[]) {
   };
 }
 
-export function me(req: Request, res: Response) {
-  res.json({ user: currentUser(req) });
+export async function me(req: Request, res: Response) {
+  // Enriquecido (best-effort, nunca lança — a rota não passa pelo wrap):
+  // aviso de vencimento da senha para o usuário se antecipar.
+  const user = currentUser(req);
+  const extra: Record<string, unknown> = {};
+  try {
+    if (user.id > 0) {
+      const { RESOURCES } = await import('./resources');
+      const row = await getStore().findOneWhere(RESOURCES.usuarios, { id: user.id });
+      if (row) {
+        const { obterPolitica, vencimentoSenha } = await import('./politicaSenha');
+        const venc = vencimentoSenha(row, await obterPolitica());
+        extra.senha_expira_em = venc.expiraEm;
+        extra.senha_vence_em_dias = venc.venceEmDias;
+        extra.senha_expirada = venc.expirada;
+      }
+    }
+  } catch {
+    /* indiferente */
+  }
+  res.json({ user, ...extra });
 }
 
 /** Troca de senha do próprio usuário (exige a senha atual; derruba as OUTRAS sessões). */
@@ -567,19 +759,22 @@ export async function changePassword(req: Request, res: Response) {
   const atual = String(req.body?.senha_atual ?? '');
   const nova = String(req.body?.senha_nova ?? '');
   if (u.id <= 0) throw new HttpError(400, 'O acesso de emergência não permite trocar a senha por aqui.');
-  const erro = validarSenhaNova(nova, u.email);
-  if (erro) throw new HttpError(400, erro, { senha_nova: erro });
 
   const store = getStore();
   const { RESOURCES } = await import('./resources');
   const row = await store.findOneWhere(RESOURCES.usuarios, { id: u.id });
   if (!row) throw new HttpError(404, 'Usuário não encontrado.');
+  // Política configurável + histórico (a nova senha não pode repetir as últimas).
+  const { validarSenhaUsuario, obterPolitica, empurrarHistorico } = await import('./politicaSenha');
+  const erro = await validarSenhaUsuario(nova, { email: u.email, historico: row.senha_historico, hashAtual: String(row.senha_hash || '') }, true);
+  if (erro) throw new HttpError(400, erro, { senha_nova: erro });
   if (!(await verifyPassword(atual, row.senha_hash))) {
     throw new HttpError(400, 'Senha atual incorreta.', { senha_atual: 'Senha incorreta' });
   }
   const novaHash = await hashPassword(nova);
   await store.update(RESOURCES.usuarios, u.id, {
     senha_hash: novaHash,
+    senha_historico: empurrarHistorico(row.senha_historico, String(row.senha_hash || ''), await obterPolitica()),
     trocar_senha: false,
     senha_provisoria: false,
     senha_definida_em: new Date().toISOString(),
@@ -657,12 +852,14 @@ export async function resetPassword(req: Request, res: Response) {
   if (!row.reset_expira_em || new Date(String(row.reset_expira_em)).getTime() < Date.now()) {
     throw new HttpError(400, 'Este link expirou. Peça um novo em "Esqueci minha senha".');
   }
-  const erro = validarSenhaNova(senha, row.email);
+  const { validarSenhaUsuario, obterPolitica, empurrarHistorico } = await import('./politicaSenha');
+  const erro = await validarSenhaUsuario(senha, { email: String(row.email), historico: row.senha_historico, hashAtual: String(row.senha_hash || '') }, true);
   if (erro) throw new HttpError(400, erro, { senha: erro });
   const novaHash = await hashPassword(senha);
   const versao = Number(row.token_versao || 0) + 1;
   await store.update(RESOURCES.usuarios, Number(row.id), {
     senha_hash: novaHash,
+    senha_historico: empurrarHistorico(row.senha_historico, String(row.senha_hash || ''), await obterPolitica()),
     reset_token_hash: null,
     reset_expira_em: null,
     convite_token_hash: null,
@@ -671,6 +868,11 @@ export async function resetPassword(req: Request, res: Response) {
     senha_provisoria: false,
     senha_definida_em: new Date().toISOString(),
     token_versao: versao,
+    // Quem prova a identidade pelo e-mail desbloqueia a conta e zera as falhas.
+    bloqueado_ate: null,
+    motivo_bloqueio: null,
+    tentativas_falhas: 0,
+    ultimo_falha_em: null,
   });
   await revogarTodas(Number(row.id));
   await registrarSucesso('reset', ip);
