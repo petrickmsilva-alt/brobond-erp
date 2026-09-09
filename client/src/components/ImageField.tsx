@@ -4,7 +4,7 @@ import { api, ApiError } from '../lib/api';
 import type { PublicFile, ResourceMeta } from '../lib/meta';
 import { prepareImage } from '../lib/images';
 import { formatBytes } from '../lib/format';
-import { useToast } from './ui';
+import { ConfirmDialog, useToast } from './ui';
 
 /**
  * Galeria de fotos de um registro já salvo: upload (arrastar/soltar, câmera),
@@ -32,6 +32,8 @@ export function ImageField({
   const [uploading, setUploading] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const [zoom, setZoom] = useState<PublicFile | null>(null);
+  const [toRemove, setToRemove] = useState<PublicFile | null>(null);
+  const [removing, setRemoving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
 
@@ -110,14 +112,22 @@ export function ImageField({
     }
   }
 
-  async function remove(f: PublicFile) {
-    if (!window.confirm('Remover esta foto?')) return;
+  function remove(f: PublicFile) {
+    setToRemove(f);
+  }
+
+  async function confirmarRemocao() {
+    if (!toRemove) return;
+    setRemoving(true);
     try {
-      await api.del(`/${resource.key}/${recordId}/arquivos/${f.id}`);
+      await api.del(`/${resource.key}/${recordId}/arquivos/${toRemove.id}`);
       apply(await api.get<PublicFile[]>(`/${resource.key}/${recordId}/arquivos`));
       toast.success('Foto removida.');
+      setToRemove(null);
     } catch (e: any) {
       toast.error(e.message);
+    } finally {
+      setRemoving(false);
     }
   }
 
@@ -214,6 +224,17 @@ export function ImageField({
       )}
 
       {zoom && <Lightbox file={zoom} files={files} onClose={() => setZoom(null)} onNav={setZoom} />}
+
+      <ConfirmDialog
+        open={!!toRemove}
+        title="Remover foto"
+        message="Tem certeza de que deseja remover esta foto? Essa ação não pode ser desfeita."
+        confirmLabel="Remover"
+        danger
+        busy={removing}
+        onConfirm={confirmarRemocao}
+        onCancel={() => setToRemove(null)}
+      />
     </div>
   );
 }

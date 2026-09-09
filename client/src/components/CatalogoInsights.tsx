@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { BarChart3, Eye, Link2, Link2Off, RefreshCw, ShoppingBag, Users } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatMoney } from '../lib/format';
-import { Alert, Badge, useToast } from './ui';
+import { Alert, Badge, ConfirmDialog, useToast } from './ui';
 
 type Insight = {
   periodo_dias: number;
@@ -18,6 +18,8 @@ export default function CatalogoInsights() {
   const [data, setData] = useState<Insight | null>(null);
   const [busy, setBusy] = useState(false);
   const [erro, setErro] = useState('');
+  const [revogando, setRevogando] = useState<number | null>(null);
+  const [aplicandoRevogacao, setAplicandoRevogacao] = useState(false);
   const load = useCallback(async () => {
     setBusy(true); setErro('');
     try { setData(await api.get<Insight>(`/catalogos/inteligencia?dias=${dias}`)); }
@@ -26,10 +28,23 @@ export default function CatalogoInsights() {
   }, [dias]);
   useEffect(() => { load(); }, [load]);
 
-  async function revogar(id: number) {
-    if (!window.confirm('Revogar este link? O cliente perderá o acesso imediatamente.')) return;
-    try { await api.post(`/catalogos/compartilhamentos/${id}/revogar`, {}); toast.success('Link revogado.'); await load(); }
-    catch (e) { toast.error(e instanceof ApiError ? e.message : 'Não foi possível revogar o link.'); }
+  function revogar(id: number) {
+    setRevogando(id);
+  }
+
+  async function confirmarRevogacao() {
+    if (revogando == null) return;
+    setAplicandoRevogacao(true);
+    try {
+      await api.post(`/catalogos/compartilhamentos/${revogando}/revogar`, {});
+      toast.success('Link revogado.');
+      setRevogando(null);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Não foi possível revogar o link.');
+    } finally {
+      setAplicandoRevogacao(false);
+    }
   }
 
   const r = data?.resumo;
@@ -53,6 +68,17 @@ export default function CatalogoInsights() {
           {data!.recentes.length === 0 ? <p className="px-4 py-8 text-center text-sm text-slate-400">Nenhum link individual no período.</p> : <div className="overflow-x-auto"><table className="table text-xs"><thead><tr><th>Cliente / catálogo</th><th>Responsável</th><th>Canal</th><th>Acessos</th><th>Último acesso</th><th>Status</th><th></th></tr></thead><tbody>{data!.recentes.map((x) => <tr key={x.id}><td><div className="font-semibold text-navy-900">{x.cliente}</div><div className="text-slate-400">{x.catalogo} · {formatDateTime(x.criado_em)}</div></td><td>{x.vendedor}</td><td className="capitalize">{x.canal}</td><td className="tabular-nums">{x.acessos}</td><td>{x.ultimo_acesso_em ? formatDateTime(x.ultimo_acesso_em) : 'Ainda não abriu'}</td><td><Badge tone={statusTone[x.status]}>{x.status}</Badge></td><td>{x.status === 'ativo' && <button className="btn-icon hover:!bg-red-50 hover:!text-red-600" onClick={() => revogar(x.id)} title="Revogar link" aria-label="Revogar link"><Link2Off className="h-4 w-4" /></button>}</td></tr>)}</tbody></table></div>}
         </div>
       </>}
+
+      <ConfirmDialog
+        open={revogando != null}
+        title="Revogar link"
+        message="Revogar este link? O cliente perderá o acesso imediatamente."
+        confirmLabel="Revogar"
+        danger
+        busy={aplicandoRevogacao}
+        onConfirm={confirmarRevogacao}
+        onCancel={() => setRevogando(null)}
+      />
     </section>
   );
 }

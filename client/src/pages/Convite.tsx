@@ -103,7 +103,7 @@ export default function Convite() {
 
         {estado === 'ok' && (
           <div className="space-y-3 text-center">
-            <CheckCircle2 className="mx-auto h-12 w-12 text-green-500" />
+            <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-500" />
             <h2 className="text-xl font-bold text-navy-900">Senha definida!</h2>
             <p className="text-sm text-slate-500">
               Seu acesso está ativo. Você será levado(a) à tela de login em instantes — se o seu usuário é administrador, o sistema pedirá a ativação do MFA no

@@ -609,7 +609,7 @@ export default function FinanceiroPage() {
 }
 
 function DreLinha({ label, value, tone, bold }: { label: string; value: number; tone: 'green' | 'red' | 'blue'; bold?: boolean }) {
-  const color = tone === 'green' ? 'text-emerald-600' : tone === 'red' ? 'text-red-600' : 'text-blue-600';
+  const color = tone === 'green' ? 'text-emerald-600' : tone === 'red' ? 'text-red-600' : 'text-navy-700';
   return (
     <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2">
       <span className="min-w-0 truncate text-xs text-slate-500">{label}</span>
@@ -619,7 +619,7 @@ function DreLinha({ label, value, tone, bold }: { label: string; value: number; 
 }
 
 function AgendaKpi({ label, valor, tone }: { label: string; valor: number; tone: 'green' | 'red' | 'amber' | 'blue' }) {
-  const color = tone === 'green' ? 'text-emerald-600' : tone === 'red' ? 'text-red-600' : tone === 'blue' ? 'text-blue-600' : 'text-amber-600';
+  const color = tone === 'green' ? 'text-emerald-600' : tone === 'red' ? 'text-red-600' : tone === 'blue' ? 'text-navy-700' : 'text-amber-600';
   return (
     <div className="rounded-lg bg-slate-50 px-3 py-2">
       <p className={`text-base font-bold tabular-nums ${color}`}>{formatMoney(valor)}</p>
@@ -629,7 +629,7 @@ function AgendaKpi({ label, valor, tone }: { label: string; valor: number; tone:
 }
 
 function Kpi({ icon, label, value, tone, small }: { icon: React.ReactNode; label: string; value: string; tone?: string; small?: boolean }) {
-  const tint = tone === 'emerald' ? 'bg-emerald-50 text-emerald-600' : tone === 'red' ? 'bg-red-50 text-red-600' : tone === 'amber' ? 'bg-amber-50 text-amber-600' : tone === 'blue' ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-600';
+  const tint = tone === 'emerald' ? 'bg-emerald-50 text-emerald-600' : tone === 'red' ? 'bg-red-50 text-red-600' : tone === 'amber' ? 'bg-amber-50 text-amber-600' : tone === 'blue' ? 'bg-navy-50 text-navy-700' : 'bg-slate-100 text-slate-600';
   return (
     <div className="card p-4">
       <div className={`mb-2 inline-flex h-9 w-9 items-center justify-center rounded-lg ${tint}`}>{icon}</div>
