@@ -1,5 +1,12 @@
 // ============================================================
-// Fase 6 — E-mail (esqueci minha senha).
+// E-mail transacional do ERP: convite de acesso, "esqueci minha senha"
+// e avisos periódicos.
+//
+// Regra de ouro: todo link enviado precisa ser ABSOLUTO (com protocolo e
+// domínio). Um link relativo ("/convite/abc") não tem para onde ir fora do
+// site — o Gmail/Outlook responde "URL inválida". Os links saem montados por
+// server/src/urlPublica.ts, e enviarEmail() avisa no log se algum href relativo
+// aparecer aqui dentro.
 //
 // SMTP opcional (nodemailer — dependência instalada em server/package.json):
 //   SMTP_HOST=smtp.gmail.com  SMTP_PORT=587  SMTP_USER=jjustino.sousa@gmail.com
@@ -17,9 +24,48 @@ export function smtpConfigurado(): boolean {
 
 type EmailMsg = { to: string; assunto: string; html: string };
 
+/** Escapa texto vindo do banco antes de montá-lo no HTML do e-mail. */
+export function escaparHtml(valor: unknown): string {
+  return String(valor ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Bloco de link para os e-mails do sistema. Sempre imprime a URL também em
+ * texto (copiável): se o botão falhar — cliente de e-mail que bloqueia
+ * links, pré-visualização que reescreve o href, corretor ortográfico que
+ * começa o endereço — quem recebe ainda consegue colar o endereço no navegador.
+ */
+export function blocoLinkEmail(url: string, rotulo: string): string {
+  const segura = escaparHtml(url);
+  return [
+    `<p style="margin:24px 0 8px;">`,
+    `<a href="${segura}" style="display:inline-block;background:#0f2c52;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;">${escaparHtml(rotulo)}</a>`,
+    `</p>`,
+    `<p style="margin:0 0 20px;font-size:13px;color:#64748b;">Se o botão não abrir, copie e cole este endereço no navegador:<br/><span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;color:#0f2c52;">${segura}</span></p>`,
+  ].join('');
+}
+
+/** Casca padrão (texto discreto, sem CSS externo) para os avisos transacionais. */
+export function corpoEmail(paragrafos: string[]): string {
+  return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;line-height:1.6;font-size:15px;">${paragrafos.join('')}</div>`;
+}
+
+/** true quando o HTML tem um href/src relativo — sempre um bug: fora do site, um caminho assim não resolve. */
+function temLinkRelativo(html: string): boolean {
+  return /(href|src)\s*=\s*["'](?!https?:|mailto:|tel:|#|data:)[^"']*["']/i.test(html);
+}
+
 /** Envia e-mail via SMTP. Sem SMTP, registra a mensagem no console. */
 export async function enviarEmail(msg: EmailMsg): Promise<'enviado' | 'console'> {
   const cfg = smtpConfigurado();
+  if (temLinkRelativo(msg.html)) {
+    console.warn('⚠️  [mail] Link relativo no e-mail — configure APP_URL: sem endereço público, quem recebe vê apenas "URL inválida".');
+  }
   const texto = msg.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   if (!cfg) {
     console.log(`[mail:sem-smtp] Para: ${msg.to} — ${msg.assunto}`);

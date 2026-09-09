@@ -2,6 +2,8 @@ import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
+import { limparToken } from './validate';
+import { avisarOrigemIndefinida, linkPublico, urlAbsoluta } from './urlPublica';
 import { getStore } from './services';
 import type { Row } from './store';
 import { loginBucketKey, registerLoginFailure, registerLoginSuccess, registrarFalha, registrarSucesso, exigirRateLimit } from './security';
@@ -800,7 +802,7 @@ export async function forgotPassword(req: Request, res: Response) {
   const email = normalizeEmail(req.body?.email);
   const store = getStore();
   const { RESOURCES } = await import('./resources');
-  const { enviarEmail } = await import('./mail');
+  const { enviarEmail, corpoEmail, blocoLinkEmail } = await import('./mail');
   try {
     if (email) {
       const row = await store.findUserByEmail(email);
@@ -818,12 +820,19 @@ export async function forgotPassword(req: Request, res: Response) {
             descricao: `Solicitação de redefinição de senha para ${email}`,
           })
           .catch(() => undefined);
-        const base = (process.env.APP_URL || '').replace(/\/+$/, '');
-        const link = `${base || ''}/redefinir/${token}`;
+        // Link SEMPRE absoluto: relativo ("/redefinir/…") o cliente de e-mail
+        // não resolve e a pessoa vê "URL inválida". Ver server/src/urlPublica.ts.
+        const link = linkPublico(`redefinir/${token}`, req);
+        if (!urlAbsoluta(link)) avisarOrigemIndefinida('redefinição de senha');
         await enviarEmail({
           to: email,
           assunto: 'BROBOND ERP — redefinição de senha',
-          html: `Olá! Recebemos um pedido para redefinir a senha do seu acesso ao BROBOND ERP.<br/><br/>Abra o link abaixo (válido por ${RESET_TTL_MIN} minutos):<br/><a href="${link}">${link}</a><br/><br/>Se você não pediu esta troca, ignore este e-mail.`,
+          html: corpoEmail([
+            `<p>Recebemos um pedido para redefinir a senha do seu acesso ao BROBOND ERP.</p>`,
+            `<p>Abra o link abaixo para escolher uma nova senha. Ele vale por <strong>${RESET_TTL_MIN} minutos</strong> e só pode ser usado uma vez.</p>`,
+            blocoLinkEmail(link, 'Redefinir minha senha'),
+            `<p style="font-size:13px;color:#64748b;">Se você não pediu esta troca, ignore este e-mail — sua senha atual continua válida.</p>`,
+          ]),
         });
       }
     }
@@ -836,7 +845,8 @@ export async function forgotPassword(req: Request, res: Response) {
 
 /** POST /api/auth/reset — { token, senha } redefine, derruba TODAS as sessões e limpa convites. */
 export async function resetPassword(req: Request, res: Response) {
-  const token = String(req.body?.token ?? '').trim();
+  // Idem convite: link colado no e-mail pode vir com "."/")" grudado no token.
+  const token = limparToken(req.body?.token);
   const senha = String(req.body?.senha ?? '');
   if (!token || !senha) throw new HttpError(400, 'Envie o token e a nova senha.');
   const ip = clientIp(req);

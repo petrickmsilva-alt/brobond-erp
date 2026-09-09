@@ -103,8 +103,26 @@ senha normal em sistemas — é preciso gerar uma **senha de app**:
    - `SMTP_USER` = `jjustino.sousa@gmail.com`
    - `SMTP_PASS` = a senha de app
    - `SMTP_FROM` = `BROBOND ERP <jjustino.sousa@gmail.com>`
+   - `APP_URL` = o endereço público do ERP — **obrigatório junto com o SMTP**: é a
+     base dos links que saem por e-mail. Na URL da Render, use algo como
+     `https://brobond-erp.onrender.com`; com domínio próprio, `https://erp.brobond.com.br`.
 
 > Nunca envie essa senha por chat ou e-mail; cadastre-a **somente** no painel da Render.
+
+### Por que o `APP_URL` importa tanto
+
+O convite de acesso e a redefinição de senha mandam um link
+(`…/convite/<token>`). Se o servidor não sabe o próprio endereço público, o link
+sai **pela metade** — sem `https://dominio` na frente — e o Gmail/Outlook responde
+**“URL inválida”** para quem clica (foi o que aconteceu com convites antigos).
+
+Desde a correção, sem `APP_URL` o servidor deduz o endereço de quem gerou o
+convite (cabeçalho `X-Forwarded-Proto`/`Host`) e o aviso aparece no boot e em
+**Configurações › Sistema**; ainda assim, em produção **defina `APP_URL`** — é o
+único jeito de garantir o link certo se o ERP mudar de domínio, porta ou proxy.
+
+Depois de corrigir a variável, **reenvie o convite** (Usuários → linha do usuário
+→ Reenviar convite): o convite antigo continua quebrado porque o link já saiu.
 
 ---
 
@@ -114,5 +132,6 @@ senha normal em sistemas — é preciso gerar uma **senha de app**:
 - [ ] `ADMIN_PASSWORD` definido (e trocado pela interface após o 1º login)
 - [ ] `JWT_SECRET` gerado pela Render (em produção a API **não inicia** sem ele)
 - [ ] Configurações › Sistema mostra **PostgreSQL** e a versão **0.3.0**
+- [ ] `SMTP_*` **e** `APP_URL` definidos juntos (e-mail com link que abre)
 - [ ] (Opcional) `UPLOAD_PROVIDER=cloudinary` + `CLOUDINARY_URL`
 - [ ] Banco gratuito antigo da Render pode ser apagado depois da migração

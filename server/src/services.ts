@@ -7,6 +7,7 @@ import { PgStore, isPgAvailable, translatePgError } from './pgstore';
 import { getResource, RESOURCES, type Resource } from './resources';
 import { labelOf, type ListParams, type Payload, type Row, type Store, type Tx } from './store';
 import { validatePayload } from './validate';
+import type { Request } from 'express';
 import type { AuthUser } from './auth';
 import { attachImages, removeAllFiles } from './uploads';
 import { aplicarRegrasPedido } from './itens';
@@ -300,9 +301,16 @@ export async function validarTamanhoNaGrade(produtoId: number, tamanhoId: number
 // ----------------------------------------------------------------------------
 // Escrita (com regras por módulo)
 // ----------------------------------------------------------------------------
-export async function createRecord(r: Resource, body: unknown, actor: Actor): Promise<Row> {
+/**
+ * `ctx.req` é opcional: serve para os links disparados por efeitos colaterais
+ * (convite de acesso por e-mail) saírem com a origem absoluta correta quando
+ * APP_URL não está configurada.
+ */
+export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
   const s = getStore();
+  let conviteLink: string | undefined;
+  let conviteEntregue = false;
   try {
     const criado = await s.transaction(async (tx) => {
       // Regras específicas
@@ -362,12 +370,14 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
       }
 
       // Convite de acesso: usuário criado sem senha recebe um link por e-mail
-      // para definir a própria senha (48 h). Sem SMTP, o link volta na resposta
-      // (modo demonstração/desenvolvimento) em vez de ficar só no console.
-      let conviteLink: string | undefined;
+      // para definir a própria senha (48 h). Quando o e-mail não pode sair
+      // (sem SMTP ou SMTP com falha), o link volta na resposta da criação
+      // (`convite_link`) para entrega manual, em vez de ficar só no console.
       if (r.key === 'usuarios' && !row.senha_hash) {
         const { gerarConvite } = await import('./usuariosAdmin');
-        conviteLink = await gerarConvite(row, { id: actor.id || 0, name: actor.name }, tx);
+        const convite = await gerarConvite(row, { id: actor.id || 0, name: actor.name }, tx, ctx.req);
+        conviteLink = convite.link;
+        conviteEntregue = convite.entregue;
       }
 
       await audit(tx, actor, 'criar', r, row.id, `${r.singular} ${labelOf(r, row)} incluído(a)`, sanitize(data));
@@ -388,7 +398,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
       void import('./webhooks')
         .then((m) => m.disparar('usuario.criado', conta))
         .catch(() => undefined);
-      if ((criado as Row).convite_link) {
+      if (conviteEntregue) {
         void import('./webhooks')
           .then((m) => m.disparar('usuario.convite_enviado', conta))
           .catch(() => undefined);

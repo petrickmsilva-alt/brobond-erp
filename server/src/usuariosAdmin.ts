@@ -14,10 +14,12 @@
 import type { Request, Response } from 'express';
 import { randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
+import { limparToken } from './validate';
 import { currentUser, exigirReautenticacao, hashPassword, hashResetToken, gerarResetToken, validarSenhaNova, invalidateUserCache, clientIp, contaBloqueada, sidAtual } from './auth';
 import { getStore } from './services';
 import { RESOURCES } from './resources';
-import { smtpConfigurado, enviarEmail } from './mail';
+import { blocoLinkEmail, corpoEmail, escaparHtml, enviarEmail } from './mail';
+import { avisarOrigemIndefinida, linkPublico, urlAbsoluta } from './urlPublica';
 import { revogarTodas, revogarUma } from './sessoes';
 import { lerRegistro, restantesRegistro } from './mfaBackup';
 import { exigirRateLimit, registrarFalha } from './security';
@@ -67,8 +69,20 @@ export function gerarSenhaTemporaria(bytes = 12): string {
   return out;
 }
 
-/** Grava o convite (hash + expiração) e envia o e-mail. Devolve o link apenas sem SMTP (dev). */
-export async function gerarConvite(row: Record<string, any>, actor: { id: number; name: string } | null, tx?: any): Promise<string | undefined> {
+/**
+ * Grava o convite (hash + expiração) e envia o e-mail.
+ *
+ * `req` é opcional, mas é ela que garante um link **absoluto** quando
+ * `APP_URL` não está configurada: sem origem, o e-mail sai com
+ * "/convite/<token>" e o cliente de e-mail avisa "URL inválida".
+ *
+ * `entregue` diz se o SMTP aceitou o envio; `link` vem preenchido apenas quando
+ * o e-mail NÃO saiu (sem SMTP ou falha) — assim a tela o entrega manualmente,
+ * em vez de fingir que funcionou.
+ */
+export type ResultadoConvite = { entregue: boolean; link?: string };
+
+export async function gerarConvite(row: Record<string, any>, actor: { id: number; name: string } | null, tx?: any, req?: Request): Promise<ResultadoConvite> {
   const store = getStore();
   const token = gerarResetToken();
   const expira = new Date(Date.now() + CONVITE_TTL_HORAS * 3600_000).toISOString();
@@ -78,13 +92,18 @@ export async function gerarConvite(row: Record<string, any>, actor: { id: number
     { convite_token_hash: hashResetToken(token), convite_expira_em: expira, trocar_senha: true },
     tx
   );
-  const base = (process.env.APP_URL || '').replace(/\/+$/, '');
-  const link = `${base}/convite/${token}`;
-  await enviarEmail({
-    to: String(row.email),
-    assunto: 'BROBOND ERP — convite de acesso',
-    html: `Olá ${String(row.nome || '')}! Você foi convidado(a) para acessar o BROBOND ERP.<br/><br/>Abra o link abaixo (válido por ${CONVITE_TTL_HORAS} horas) para definir a sua senha:<br/><a href="${link}">${link}</a><br/><br/>Se você não esperava este convite, ignore este e-mail.`,
-  });
+  const link = linkPublico(`convite/${token}`, req);
+  if (!urlAbsoluta(link)) avisarOrigemIndefinida('convite de acesso');
+  const email = String(row.email || '');
+  const primeiroNome = escaparHtml(String(row.nome || '').trim().split(/\s+/)[0] || email);
+  const html = corpoEmail([
+    `<p>Olá ${primeiroNome}!</p>`,
+    `<p>Você foi convidado(a) a acessar o BROBOND ERP. Abra o link abaixo para definir a sua senha — quem escolhe a senha é sempre você; ela não passa pelo administrador.</p>`,
+    `<p>O convite vale por <strong>${CONVITE_TTL_HORAS} horas</strong> e só pode ser usado uma vez.</p>`,
+    blocoLinkEmail(link, 'Aceitar convite e definir minha senha'),
+    `<p style="font-size:13px;color:#64748b;">Se você não esperava este convite, ignore este e-mail: nada muda no seu acesso.</p>`,
+  ]);
+  const entregue = (await enviarEmail({ to: email, assunto: 'BROBOND ERP — convite de acesso', html })) === 'enviado';
   await store
     .audit({
       usuario_id: actor?.id || null,
@@ -92,15 +111,18 @@ export async function gerarConvite(row: Record<string, any>, actor: { id: number
       acao: 'convite',
       recurso: 'usuarios',
       registro_id: Number(row.id),
-      descricao: `Convite de acesso enviado para ${String(row.email)} (válido por ${CONVITE_TTL_HORAS} h)`,
+      descricao: entregue
+        ? `Convite de acesso enviado para ${email} (válido por ${CONVITE_TTL_HORAS} h)`
+        : `Convite de acesso gerado para ${email} — e-mail não entregue (sem SMTP ou falha no SMTP); link liberado para entrega manual`,
     })
     .catch(() => undefined);
-  return smtpConfigurado() ? undefined : link;
+  return { entregue, ...(entregue ? {} : { link }) };
 }
 
 /** GET /api/convites/:token — valida o convite (dados mínimos para a tela). */
 export async function infoConvite(req: Request, res: Response) {
-  const token = String(req.params.token || '').trim();
+  // O token pode chegar com a pontuação que o cliente de e-mail grudou no link.
+  const token = limparToken(req.params.token);
   const store = getStore();
   const row = await store.findOneWhere(RESOURCES.usuarios, { convite_token_hash: hashResetToken(token) });
   if (!row || row.ativo === false) return res.status(404).json({ error: 'Convite inválido. Peça um novo convite ao administrador.' });
@@ -110,7 +132,7 @@ export async function infoConvite(req: Request, res: Response) {
 
 /** POST /api/convites/aceitar — { token, senha }: o usuário define a própria senha. */
 export async function aceitarConvite(req: Request, res: Response) {
-  const token = String(req.body?.token ?? '').trim();
+  const token = limparToken(req.body?.token);
   const senha = String(req.body?.senha ?? '');
   if (!token || !senha) throw new HttpError(400, 'Envie o token do convite e a nova senha.');
   const ip = clientIp(req);
@@ -161,9 +183,9 @@ export async function reenviarConvite(req: Request, res: Response) {
   const row = await store.findOneWhere(RESOURCES.usuarios, { id: Number(req.params.id) });
   if (!row) throw new HttpError(404, 'Usuário não encontrado.');
   if (row.senha_hash) throw new HttpError(409, 'Este usuário já definiu a senha. Use "Gerar senha temporária" para redefinir o acesso.');
-  const link = await gerarConvite(row, actor);
-  notificar('usuario.convite_enviado', dadosConta(row, actor));
-  res.json({ ok: true, ...(link ? { convite_link: link } : {}) });
+  const convite = await gerarConvite(row, actor, undefined, req);
+  if (convite.entregue) notificar('usuario.convite_enviado', dadosConta(row, actor));
+  res.json({ ok: true, ...(convite.link ? { convite_link: convite.link } : {}) });
 }
 
 /**
@@ -555,10 +577,10 @@ export async function ativarUsuario(req: Request, res: Response) {
   let convite_link: string | undefined;
   if (!row.senha_hash && !row.senha_definida_em) {
     const atual = (await store.findOneWhere(RESOURCES.usuarios, { id })) ?? row;
-    convite_link = await gerarConvite(atual, actor);
+    const convite = await gerarConvite(atual, actor, undefined, req);
+    convite_link = convite.link;
   }
   notificar('usuario.ativado', dadosConta(row, actor));
-  if (convite_link) notificar('usuario.convite_enviado', dadosConta(row, actor));
   res.json({ ok: true, ...(convite_link ? { convite_link } : {}) });
 }
 

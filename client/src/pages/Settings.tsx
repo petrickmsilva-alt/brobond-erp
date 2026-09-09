@@ -144,6 +144,18 @@ export default function Settings() {
                 <dt className="text-slate-500">E-mail (recuperação)</dt>
                 <dd>{meta?.smtp?.configurado ? <Badge tone="green">SMTP configurado</Badge> : <Badge tone="slate">Sem SMTP (link no console)</Badge>}</dd>
               </div>
+              <div className="flex items-center justify-between gap-3">
+                <dt className="text-slate-500">Links de e-mail (convite)</dt>
+                <dd className="text-right">
+                  {meta?.emailLinks?.configurada ? (
+                    <Badge tone="green">Endereço fixo (APP_URL): {meta.emailLinks.base}</Badge>
+                  ) : meta?.emailLinks?.base ? (
+                    <Badge tone="amber">Sem APP_URL — usando {meta.emailLinks.base}</Badge>
+                  ) : (
+                    <Badge tone="red">Sem origem definida — o link não abre</Badge>
+                  )}
+                </dd>
+              </div>
               <div className="flex items-center justify-between">
                 <dt className="flex items-center gap-1.5 text-slate-500">
                   <ShieldCheck className="h-3.5 w-3.5" /> Senhas
@@ -151,6 +163,16 @@ export default function Settings() {
                 <dd className="font-medium text-slate-800">Argon2id + MFA (admin)</dd>
               </div>
             </dl>
+            {meta?.emailLinks?.aviso ? (
+              <div className="mt-4">
+                <Alert tone="amber">
+                  <strong>Convites por e-mail podem abrir como “URL inválida”.</strong> O servidor não tem{' '}
+                  <code>APP_URL</code> configurada, então o endereço do link é deduzido de quem o gerou. Defina{' '}
+                  <code>APP_URL</code> com o endereço público do ERP (na Render: Environment → <code>APP_URL</code>, ex.{' '}
+                  <code>https://erp.brobond.com.br</code>) e reenvie o convite.
+                </Alert>
+              </div>
+            ) : null}
             {meta?.uploadsConfigError && (
               <div className="mt-4">
                 <Alert tone="amber">
