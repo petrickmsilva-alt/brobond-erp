@@ -136,6 +136,24 @@ export const UNIDADES: FieldOption[] = [
 ];
 
 export const RESOURCES: Record<string, Resource> = {
+  portal_acessos: {
+    key: 'portal_acessos', table: 'portal_acessos', label: 'Acessos do portal', singular: 'Acesso', labelFields: ['id'], internal: true, ops: READ_ONLY,
+    fields: [
+      { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes' }, { name: 'token_hash', label: 'Token', type: 'text', unique: true },
+      { name: 'expira_em', label: 'Expira em', type: 'datetime' }, { name: 'revogado_em', label: 'Revogado em', type: 'datetime' },
+      { name: 'ultimo_acesso_em', label: 'Último acesso', type: 'datetime' }, { name: 'acessos', label: 'Acessos', type: 'integer' },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime' },
+    ],
+  },
+  cotacao_decisoes: {
+    key: 'cotacao_decisoes', table: 'cotacao_decisoes', label: 'Decisões de cotação', singular: 'Decisão', labelFields: ['id'], internal: true, ops: READ_ONLY,
+    fields: [
+      { name: 'venda_id', label: 'Venda', type: 'ref', ref: 'vendas' }, { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes' },
+      { name: 'decisao', label: 'Decisão', type: 'text' }, { name: 'responsavel', label: 'Responsável', type: 'text' },
+      { name: 'mensagem', label: 'Mensagem', type: 'text' }, { name: 'proposta_hash', label: 'Hash', type: 'text' },
+      { name: 'ip', label: 'IP', type: 'text' }, { name: 'user_agent', label: 'Navegador', type: 'text' }, { name: 'criado_em', label: 'Criado em', type: 'datetime' },
+    ],
+  },
   catalogo_compartilhamentos: {
     key: 'catalogo_compartilhamentos', table: 'catalogo_compartilhamentos', label: 'Compartilhamentos de catálogo', singular: 'Compartilhamento',
     labelFields: ['id'], internal: true, ops: READ_ONLY,

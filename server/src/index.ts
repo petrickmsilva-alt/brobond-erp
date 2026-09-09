@@ -75,7 +75,7 @@ import { listAprovacoes, aprovarPedido, rejeitarPedido, countAprovacoes } from '
 import { runScheduled, cronScheduled, scheduledStatus } from './scheduled';
 import { listQualidade, createQualidade, relatorioQualidade } from './quality';
 import { predicaoDemanda, predicaoInsumos } from './prediction';
-import { rateLimitPortal, portalPedidos, portalPedidoDetalhe } from './portal';
+import { rateLimitPortal, decidirCotacao, portalPedidos, portalPedidoDetalhe } from './portal';
 import { notificacoesStatus, verificarAlertasEstoque } from './notifications';
 import { openapiJSON, openapiUI } from './openapi';
 import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat';
@@ -154,6 +154,7 @@ app.post('/api/publico/catalogo/:token/evento', rateLimitPublico, wrap(eventoCat
 // Portal do cliente (acompanhamento de pedidos por CPF/CNPJ)
 app.get('/api/portal/:token/pedidos', rateLimitPortal, wrap(portalPedidos));
 app.get('/api/portal/:token/pedido/:id', rateLimitPortal, wrap(portalPedidoDetalhe));
+app.post('/api/portal/:token/pedido/:id/decisao', rateLimitPortal, wrap(decidirCotacao));
 // Imagens armazenadas no banco: URL pública protegida por token aleatório
 app.get('/api/files/:id/:token', wrap(serveFile));
 

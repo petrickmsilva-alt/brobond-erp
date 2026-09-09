@@ -22,6 +22,7 @@ import { attachImages } from './uploads';
 import { recalcularTotal } from './itens';
 import { montarTabelaMedidas, tsIso } from './medidas';
 import type { TabelaMedidas } from './medidas';
+import { criarAcessoPortal } from './portal';
 import { precoComPolitica, resolverPoliticaComercial } from './politicasComerciais';
 
 const require = createRequire(import.meta.url);
@@ -432,7 +433,11 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
       return { venda: await s.get(vendaR, Number(venda.id), tx) ?? venda, total };
     });
     if (resolvido.compartilhamento) await s.insert(RESOURCES.catalogo_eventos, { compartilhamento_id: Number(resolvido.compartilhamento.id), catalogo_id: Number(catalogo.id), tipo: 'pedido_enviado', pedido_id: Number(pedido.venda.id), valor: Number(pedido.total), dados: {} });
-    res.status(201).json({ ok: true, mensagem: 'Pedido recebido! Nossa equipe vai confirmar disponibilidade e valores com você.', pedido_id: Number(pedido.venda.id), total: pedido.total });
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+    const base = String(process.env.APP_URL || (host ? `${proto}://${host}` : '')).replace(/\/$/, '');
+    const portal = await criarAcessoPortal(Number(pedido.venda.cliente_id), base, 90);
+    res.status(201).json({ ok: true, mensagem: 'Pedido recebido! Nossa equipe vai confirmar disponibilidade e valores com você.', pedido_id: Number(pedido.venda.id), total: pedido.total, portal_url: portal.url, portal_expira_em: portal.expira_em });
   } catch (e) {
     throw toHttpError(e, RESOURCES.vendas);
   }

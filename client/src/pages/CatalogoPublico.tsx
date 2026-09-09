@@ -83,6 +83,7 @@ export default function CatalogoPublico() {
   const [medidasAbertas, setMedidasAbertas] = useState<Record<number, boolean>>({});
   const [pedidoOpen, setPedidoOpen] = useState(false);
   const [pedidoEnviado, setPedidoEnviado] = useState(false);
+  const [portalUrl, setPortalUrl] = useState('');
   // Detalhe do produto (tudo que o cliente precisa em um só lugar)
   const [detalheId, setDetalheId] = useState<number | null>(null);
   const [busca, setBusca] = useState('');
@@ -521,7 +522,8 @@ export default function CatalogoPublico() {
           onQty={changeQtd}
           onRemove={removeFromCart}
           onClose={() => setPedidoOpen(false)}
-          onEnviado={() => {
+          onEnviado={(url) => {
+            setPortalUrl(url);
             setPedidoOpen(false);
             setPedidoEnviado(true);
             setCart([]);
@@ -542,7 +544,8 @@ export default function CatalogoPublico() {
             <p className="mt-1 text-sm text-slate-500">
               Recebemos sua solicitação. Nossa equipe entra em contato para confirmar disponibilidade e finalizar.
             </p>
-            <button className="btn-primary mt-4 w-full justify-center" onClick={() => setPedidoEnviado(false)}>
+            {portalUrl && <a className="btn-accent mt-4 w-full justify-center" href={portalUrl}><ShoppingBag className="h-4 w-4" /> Acompanhar no portal</a>}
+            <button className="btn-primary mt-2 w-full justify-center" onClick={() => setPedidoEnviado(false)}>
               Fechar
             </button>
           </div>
@@ -828,7 +831,7 @@ function CatalogoPedidoModal({
   onQty: (key: string, delta: number) => void;
   onRemove: (key: string) => void;
   onClose: () => void;
-  onEnviado: () => void;
+  onEnviado: (portalUrl: string) => void;
 }) {
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
@@ -844,7 +847,7 @@ function CatalogoPedidoModal({
     if (!cart.length) return setErro('Adicione ao menos um item ao pedido.');
     setBusy(true);
     try {
-      await api.post(`/publico/catalogo/${token}/pedido`, {
+      const resposta = await api.post<{ portal_url?: string }>(`/publico/catalogo/${token}/pedido`, {
         nome,
         senha,
         email,
@@ -858,7 +861,7 @@ function CatalogoPedidoModal({
           preco_unitario: i.produto.preco,
         })),
       });
-      onEnviado();
+      onEnviado(resposta.portal_url || '');
     } catch (e: any) {
       setErro(e instanceof ApiError ? e.message : 'Não foi possível enviar o pedido. Tente novamente.');
     } finally {

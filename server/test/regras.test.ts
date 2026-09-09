@@ -137,6 +137,17 @@ test('catálogos públicos: cria com token, lista com rótulo da coleção e nã
   assert.deepEqual(filtrosDoCatalogo({ id: 0, colecao_id: 9, filtros: { colecao_id: 2 } }), { colecao_id: 9 });
 });
 
+test('fase 4: tokens do portal usam SHA-256 completo e recursos são internos', async () => {
+  const { hashPortalToken } = await import('../src/portal');
+  const { getPublicResource, publicMeta } = await import('../src/resources');
+  const token = 'b'.repeat(64);
+  assert.equal(hashPortalToken(token).length, 64);
+  assert.notEqual(hashPortalToken(token), token);
+  assert.equal(getPublicResource('portal_acessos'), undefined);
+  assert.equal(getPublicResource('cotacao_decisoes'), undefined);
+  assert.ok(!('portal_acessos' in publicMeta()));
+});
+
 test('fase 3B: permissões comerciais herdam perfil e aceitam concessão/negação individual', async () => {
   const { podeComercial, checkAccess } = await import('../src/services');
   const vendedor: any = { id: 77, name: 'Vendedor', perfil: 'operador', perm_compartilhar: 'permitir' };
