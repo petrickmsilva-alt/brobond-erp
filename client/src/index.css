@@ -119,6 +119,14 @@ body {
     @apply bg-navy-50/60;
   }
 
+  /* Densidade compacta (alternada pelo usuário na barra de ferramentas da lista) */
+  .table-compact thead th {
+    @apply py-1.5;
+  }
+  .table-compact tbody td {
+    @apply py-1;
+  }
+
   /* Etiquetas de status */
   .badge {
     @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold;

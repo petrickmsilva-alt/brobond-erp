@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { ChevronDown, KeyRound, LogOut, Menu, UserRound } from 'lucide-react';
+import { ChevronDown, KeyRound, LogOut, Menu, Search, UserRound } from 'lucide-react';
 import Sidebar from './Sidebar';
+import CommandPalette from './CommandPalette';
 import { useAuth } from '../auth/AuthContext';
 import { MODULES } from '../modules';
 
@@ -10,9 +11,22 @@ const PERFIL_LABEL: Record<string, string> = { admin: 'Administrador', gerente: 
 export default function Layout() {
   const [open, setOpen] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const { user, logout } = useAuth();
   const location = useLocation();
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Busca global (Ctrl/Cmd+K), disponível em qualquer tela do sistema.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   // Rotas filhas (ex.: /produtos/12) pertencem ao módulo pai
   const current =
@@ -64,7 +78,19 @@ export default function Layout() {
             </nav>
           </div>
 
-          <div className="relative" ref={menuRef}>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              onClick={() => setPaletteOpen(true)}
+              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-sm text-slate-400 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-600 sm:px-3"
+              aria-label="Busca rápida"
+              title="Busca rápida (Ctrl/Cmd+K)"
+            >
+              <Search className="h-4 w-4" />
+              <span className="hidden md:inline">Buscar...</span>
+              <kbd className="hidden rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-400 md:inline">Ctrl K</kbd>
+            </button>
+
+            <div className="relative" ref={menuRef}>
             <button
               onClick={() => setMenu((v) => !v)}
               className="flex items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2 transition-colors hover:bg-slate-100"
@@ -96,6 +122,7 @@ export default function Layout() {
                 </button>
               </div>
             )}
+            </div>
           </div>
         </header>
 
@@ -103,6 +130,8 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }

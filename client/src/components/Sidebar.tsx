@@ -1,20 +1,12 @@
 import { NavLink } from 'react-router-dom';
 import { X } from 'lucide-react';
-import { MODULES, MODULE_GROUPS, type Module } from '../modules';
+import { MODULE_GROUPS, visibleModules, type Module } from '../modules';
 import { Logo } from './Logo';
 import { useAuth } from '../auth/AuthContext';
 
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, meta } = useAuth();
-  const isAdmin = user?.perfil === 'admin';
-  const visible = MODULES.filter((m) => {
-    if (m.adminOnly && !isAdmin) return false;
-    if (m.minPerfil === 'admin' && !isAdmin) return false;
-    if (m.minPerfil === 'gerente' && !isAdmin && user?.perfil !== 'gerente') {
-      if (!(m.id === 'politicas-comerciais' && user?.perm_politicas === 'permitir')) return false;
-    }
-    return true;
-  });
+  const visible = visibleModules(user);
   const top = visible.find((m) => m.group === null);
 
   return (
