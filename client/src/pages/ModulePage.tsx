@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle as AlertTriangleIcon,
@@ -42,34 +42,41 @@ import ReauthModal from '../components/ReauthModal';
 import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import PlannedModule from './PlannedModule';
-import EstoqueGradePage from './EstoqueGradePage';
-import MedidasPage from './MedidasPage';
-import InventarioModulePage from './InventarioModulePage';
-import CustoPage from './CustoPage';
-import RelatoriosPage from './RelatoriosPage';
-import FinanceiroPage from './FinanceiroPage';
-import AjudaPage from './AjudaPage';
 import CatalogoShareModal from '../components/CatalogoShareModal';
 import CatalogoInsights from '../components/CatalogoInsights';
 import PortalAccessModal from '../components/PortalAccessModal';
-import UsuariosPage from './UsuariosPage';
-import WebhooksPage from './WebhooksPage';
+
+// Páginas especializadas pesadas: carregadas sob demanda, só quando o módulo
+// correspondente é aberto — evitam engordar o bundle de quem só usa cadastros simples.
+const EstoqueGradePage = lazy(() => import('./EstoqueGradePage'));
+const MedidasPage = lazy(() => import('./MedidasPage'));
+const InventarioModulePage = lazy(() => import('./InventarioModulePage'));
+const CustoPage = lazy(() => import('./CustoPage'));
+const RelatoriosPage = lazy(() => import('./RelatoriosPage'));
+const FinanceiroPage = lazy(() => import('./FinanceiroPage'));
+const AjudaPage = lazy(() => import('./AjudaPage'));
+const UsuariosPage = lazy(() => import('./UsuariosPage'));
+const WebhooksPage = lazy(() => import('./WebhooksPage'));
 
 const PAGE_SIZE = 25;
+
+function SubPageLoading() {
+  return <Spinner label="Carregando módulo..." />;
+}
 
 export default function ModulePage({ module }: { module: Module }) {
   const meta = useMeta();
   const resource = module.resource ? meta.resources[module.resource] : undefined;
 
-  if (module.id === 'usuarios') return <UsuariosPage />;
-  if (module.id === 'webhooks') return <WebhooksPage />;
-  if (module.id === 'estoque') return <EstoqueGradePage />;
-  if (module.id === 'medidas') return <MedidasPage />;
-  if (module.id === 'inventario') return <InventarioModulePage />;
-  if (module.id === 'custo') return <CustoPage />;
-  if (module.id === 'relatorios') return <RelatoriosPage />;
-  if (module.id === 'financeiro') return <FinanceiroPage />;
-  if (module.id === 'ajuda') return <AjudaPage />;
+  if (module.id === 'usuarios') return <Suspense fallback={<SubPageLoading />}><UsuariosPage /></Suspense>;
+  if (module.id === 'webhooks') return <Suspense fallback={<SubPageLoading />}><WebhooksPage /></Suspense>;
+  if (module.id === 'estoque') return <Suspense fallback={<SubPageLoading />}><EstoqueGradePage /></Suspense>;
+  if (module.id === 'medidas') return <Suspense fallback={<SubPageLoading />}><MedidasPage /></Suspense>;
+  if (module.id === 'inventario') return <Suspense fallback={<SubPageLoading />}><InventarioModulePage /></Suspense>;
+  if (module.id === 'custo') return <Suspense fallback={<SubPageLoading />}><CustoPage /></Suspense>;
+  if (module.id === 'relatorios') return <Suspense fallback={<SubPageLoading />}><RelatoriosPage /></Suspense>;
+  if (module.id === 'financeiro') return <Suspense fallback={<SubPageLoading />}><FinanceiroPage /></Suspense>;
+  if (module.id === 'ajuda') return <Suspense fallback={<SubPageLoading />}><AjudaPage /></Suspense>;
 
   if (!module.resource || !resource) return <PlannedModule module={module} />;
   return <ResourceCrud key={resource.key} module={module} resource={resource} />;
