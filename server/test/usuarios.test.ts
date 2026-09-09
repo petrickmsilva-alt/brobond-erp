@@ -392,3 +392,45 @@ describe('Troca de perfil e exclusão com histórico', () => {
     await assert.rejects(() => deleteRecord(RESOURCES.usuarios, Number(autor.id), ator), (e: any) => e.status === 409);
   });
 });
+
+// ---------- Filtros virtuais da lista ----------
+describe('Filtros virtuais da lista (status, MFA, parados 30d)', () => {
+  test('filtram no servidor com total consistente', async () => {
+    const { listRecords } = await import('../src/services');
+    const store = getStore();
+    const dia = 24 * 3600_000;
+    const agora = Date.now();
+    const ids = (out: any) => out.rows.map((u: any) => Number(u.id));
+
+    const recente = await criarComSenha('operador', 'Recente#4821x');
+    await store.update(RESOURCES.usuarios, Number(recente.row.id), { ultimo_login: new Date(agora - 2 * dia).toISOString() });
+    const parado = await criarComSenha('operador', 'Parado#4821x');
+    await store.update(RESOURCES.usuarios, Number(parado.row.id), { ultimo_login: new Date(agora - 45 * dia).toISOString() });
+    const nunca = await criarComSenha('operador', 'Nunca#4821x'); // senha definida, nunca logou
+    const convite = await criarUsuario({ email: `convite.filtro.${Date.now()}@t.com` }); // sem senha
+    const mfa = await criarComSenha('operador', 'MfaFiltro#4821x');
+    await store.update(RESOURCES.usuarios, Number(mfa.row.id), { mfa_ativado_em: new Date().toISOString() });
+
+    const r = RESOURCES.usuarios;
+    const st = await listRecords(r, { page: 1, pageSize: 5000, filter: { status: 'convite_pendente' } });
+    assert.ok(ids(st).includes(Number(convite.id)));
+    assert.ok(!ids(st).includes(Number(recente.row.id)));
+
+    const mf = await listRecords(r, { page: 1, pageSize: 5000, filter: { mfa: 'sim' } });
+    assert.ok(ids(mf).includes(Number(mfa.row.id)));
+    assert.ok(!ids(mf).includes(Number(recente.row.id)));
+
+    const par = await listRecords(r, { page: 1, pageSize: 5000, filter: { parado30d: 'sim' } });
+    const pids = ids(par);
+    assert.ok(pids.includes(Number(parado.row.id)));
+    assert.ok(pids.includes(Number(nunca.row.id))); // nunca logou também é parado
+    assert.ok(!pids.includes(Number(recente.row.id)));
+    assert.ok(!pids.includes(Number(convite.id))); // sem senha não conta como parado
+    assert.equal(par.total, par.rows.length);
+
+    // paginação continua correta com filtro virtual
+    const pag1 = await listRecords(r, { page: 1, pageSize: 1, filter: { parado30d: 'sim' } });
+    assert.equal(pag1.rows.length, 1);
+    assert.equal(pag1.total, par.total);
+  });
+});

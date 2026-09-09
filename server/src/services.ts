@@ -103,7 +103,7 @@ export async function listRecords(r: Resource, p: ListParams) {
   // Filtros virtuais do módulo Usuários (status consolidado + MFA): a tabela
   // de usuários é pequena, então filtra em JS sobre a lista completa — com
   // total e paginação corretos — em vez de aproximar na página atual.
-  if (r.key === 'usuarios' && (p.filter?.status || p.filter?.mfa)) {
+  if (r.key === 'usuarios' && (p.filter?.status || p.filter?.mfa || p.filter?.parado30d)) {
     return listUsuariosFiltrados(p);
   }
   const out = await getStore().list(r, p);
@@ -117,7 +117,7 @@ export async function listRecords(r: Resource, p: ListParams) {
 /** Lista de usuários com filtro por status consolidado e/ou MFA (admin). */
 async function listUsuariosFiltrados(p: ListParams) {
   const r = getResource('usuarios')!;
-  const { status, mfa, ...base } = p.filter || {};
+  const { status, mfa, parado30d, ...base } = p.filter || {};
   const full = await getStore().list(r, { q: p.q, page: 1, pageSize: 5000, sort: p.sort, dir: p.dir, filter: base });
   await attachImages(r, full.rows);
   anotarStatusSenha(r, full.rows);
@@ -125,6 +125,16 @@ async function listUsuariosFiltrados(p: ListParams) {
   if (typeof status === 'string' && status) rows = rows.filter((row) => row.status_conta === status);
   if (mfa === 'sim') rows = rows.filter((row) => !!row.mfa_ativado_em);
   else if (mfa === 'nao') rows = rows.filter((row) => !row.mfa_ativado_em);
+  // Parados há 30+ dias: mesma regra do KPI (conta ativa, com senha
+  // definida e sem login nos últimos 30 dias — ou que nunca logou).
+  if (parado30d === 'sim') {
+    const ha30d = Date.now() - 30 * 24 * 3600_000;
+    rows = rows.filter((row) => {
+      if (row.ativo === false || !row.senha_definida_em) return false;
+      const loginMs = row.ultimo_login ? new Date(String(row.ultimo_login)).getTime() : 0;
+      return !loginMs || loginMs < ha30d;
+    });
+  }
   const total = rows.length;
   const start = (p.page - 1) * p.pageSize;
   return { rows: rows.slice(start, start + p.pageSize), total, page: p.page, pageSize: p.pageSize };

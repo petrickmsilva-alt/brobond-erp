@@ -8,15 +8,16 @@
 //   • Ciclo de vida: convite, senha temporária (exibição única), ativar/
 //     desativar com motivo, desbloquear, encerrar sessões, troca forçada,
 //     reset de MFA — ações sensíveis com reautenticação (step-up)
+//   • UX: linhas clicáveis, menu de ações por linha, KPIs que filtram
+//     (liga/desliga), alertas com ação rápida e ficha auto-recarregável
 // ============================================================================
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
   BellRing,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -30,6 +31,7 @@ import {
   LockOpen,
   Mail,
   MonitorSmartphone,
+  MoreVertical,
   Pencil,
   Plus,
   Power,
@@ -84,7 +86,20 @@ type Atividade = {
   estatisticas: { logins_30d: number; eventos_30d: number; tentativas_falhas: number; ultimo_falha_em: string | null; sessoes_ativas: number };
 };
 
-const PAGE_SIZE = 25;
+type TabFicha = 'resumo' | 'seguranca' | 'atividade';
+
+type MenuItem = {
+  key: string;
+  rotulo: string;
+  icone: React.ReactNode;
+  perigo?: boolean;
+  separadorAntes?: boolean;
+  busy?: boolean;
+  onClick: () => void;
+};
+
+const PAGE_SIZES = [10, 25, 50];
+const DEFAULT_PAGE_SIZE = 25;
 
 const PERFIL_META: Record<string, { label: string; tone: 'amber' | 'blue' | 'slate' }> = {
   admin: { label: 'Administrador', tone: 'amber' },
@@ -169,12 +184,14 @@ export default function UsuariosPage() {
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [sort, setSort] = useState<{ field: string; dir: 'asc' | 'desc' } | null>(null);
   const [showFiltros, setShowFiltros] = useState(false);
   const [fPerfil, setFPerfil] = useState('');
   const [fAtivo, setFAtivo] = useState('');
   const [fStatus, setFStatus] = useState('');
   const [fMfa, setFMfa] = useState('');
+  const [fParado, setFParado] = useState('');
 
   // Formulário
   const [formOpen, setFormOpen] = useState(false);
@@ -182,6 +199,8 @@ export default function UsuariosPage() {
 
   // Ficha
   const [fichaId, setFichaId] = useState<number | null>(null);
+  const [fichaTab, setFichaTab] = useState<TabFicha>('resumo');
+  const [fichaNonce, setFichaNonce] = useState(0);
 
   // Fluxos de acesso
   const [senhaTempUser, setSenhaTempUser] = useState<Usuario | null>(null);
@@ -192,11 +211,13 @@ export default function UsuariosPage() {
   const [desativarRow, setDesativarRow] = useState<Usuario | null>(null);
   const [motivo, setMotivo] = useState('');
   const [acaoBusy, setAcaoBusy] = useState<string | null>(null);
+  const [menuAberto, setMenuAberto] = useState<number | null>(null);
+  const [alertaBusy, setAlertaBusy] = useState<string | null>(null);
   const [toDelete, setToDelete] = useState<Usuario | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [confirmAcao, setConfirmAcao] = useState<{ tipo: 'encerrar' | 'mfa' | 'troca' | 'desbloquear'; row: Usuario } | null>(null);
 
-  const filtrosAtivos = [fPerfil, fAtivo, fStatus, fMfa].filter(Boolean).length;
+  const filtrosAtivos = [fPerfil, fAtivo, fStatus, fMfa, fParado].filter(Boolean).length;
 
   const paramsAtuais = useMemo(() => {
     const params = new URLSearchParams();
@@ -209,8 +230,9 @@ export default function UsuariosPage() {
     if (fAtivo) params.set('f.ativo', fAtivo);
     if (fStatus) params.set('f.status', fStatus);
     if (fMfa) params.set('f.mfa', fMfa);
+    if (fParado) params.set('f.parado30d', fParado);
     return params.toString();
-  }, [debouncedQ, sort, fPerfil, fAtivo, fStatus, fMfa]);
+  }, [debouncedQ, sort, fPerfil, fAtivo, fStatus, fMfa, fParado]);
 
   const carregarResumo = useCallback(async () => {
     setResumoLoading(true);
@@ -227,15 +249,15 @@ export default function UsuariosPage() {
     setLoading(true);
     setError('');
     try {
-      const d = await api.get<ListResult<Usuario>>(`/usuarios?page=${page}&pageSize=${PAGE_SIZE}${paramsAtuais ? `&${paramsAtuais}` : ''}`);
+      const d = await api.get<ListResult<Usuario>>(`/usuarios?page=${page}&pageSize=${pageSize}${paramsAtuais ? `&${paramsAtuais}` : ''}`);
       setData(d);
-      if (d.total > 0 && d.rows.length === 0 && page > 1) setPage(Math.max(1, Math.ceil(d.total / PAGE_SIZE)));
+      if (d.total > 0 && d.rows.length === 0 && page > 1) setPage(Math.max(1, Math.ceil(d.total / pageSize)));
     } catch (e: any) {
       setError(e.message || 'Erro ao carregar');
     } finally {
       setLoading(false);
     }
-  }, [page, paramsAtuais]);
+  }, [page, pageSize, paramsAtuais]);
 
   async function recarregarTudo() {
     await Promise.all([load(), carregarResumo()]);
@@ -262,6 +284,7 @@ export default function UsuariosPage() {
     setFAtivo('');
     setFStatus('');
     setFMfa('');
+    setFParado('');
     setQ('');
     setDebouncedQ('');
     setPage(1);
@@ -323,7 +346,7 @@ export default function UsuariosPage() {
         toast.success(`MFA de ${a.row.email} resetado. O usuário refaz o cadastro no próximo login.`);
       }
       setConfirmAcao(null);
-      setFichaId((f) => (f === id ? f : f)); // mantém a ficha aberta; ela recarrega
+      setFichaNonce((n) => n + 1); // a ficha aberta recarrega sozinha
       await recarregarTudo();
     } catch (e: any) {
       if (e instanceof ApiError && e.code === 'reauth_necessaria') {
@@ -352,6 +375,7 @@ export default function UsuariosPage() {
         toast.success(`Troca de senha marcada para ${row.email}.`);
       }
       setConfirmAcao(null);
+      setFichaNonce((n) => n + 1); // a ficha aberta recarrega sozinha
       await recarregarTudo();
     } catch (e: any) {
       toast.error(e instanceof ApiError ? e.message : 'Não foi possível concluir a ação.');
@@ -375,10 +399,103 @@ export default function UsuariosPage() {
     }
   }
 
+  function abrirFicha(id: number, tab: TabFicha = 'resumo') {
+    setFichaTab(tab);
+    setFichaId(id);
+  }
+
+  /** Abre o cadastro para edição a partir de um ID (usado pelos alertas). */
+  async function abrirEdicao(id: number, chaveBusy: string) {
+    setAlertaBusy(chaveBusy);
+    try {
+      const row = await api.get<Usuario>(`/usuarios/${id}`);
+      setEditing(row);
+      setFormOpen(true);
+    } catch (e: any) {
+      toast.error(e instanceof ApiError ? e.message : 'Não foi possível abrir o cadastro.');
+    } finally {
+      setAlertaBusy(null);
+    }
+  }
+
+  async function copiarEmail(row: Usuario) {
+    try {
+      await navigator.clipboard.writeText(String(row.email || ''));
+      toast.success('E-mail copiado.');
+    } catch {
+      toast.error('Não foi possível copiar.');
+    }
+  }
+
+  const fecharMenu = useCallback(() => setMenuAberto(null), []);
+
+  /** Itens do menu de ações de cada linha (tabela e celular). */
+  function menuItens(row: Usuario, souEu: boolean): MenuItem[] {
+    const id = Number(row.id);
+    const ativo = row.ativo !== false;
+    const itens: MenuItem[] = [
+      { key: 'ficha', rotulo: 'Ver ficha completa', icone: <Eye className="h-4 w-4" />, onClick: () => abrirFicha(id) },
+      { key: 'email', rotulo: 'Copiar e-mail', icone: <Copy className="h-4 w-4" />, onClick: () => copiarEmail(row) },
+    ];
+    if (!row.senha_definida_em && ativo) {
+      itens.push({
+        key: 'convite', rotulo: 'Reenviar convite', icone: <Mail className="h-4 w-4" />,
+        busy: conviteBusyId === id, onClick: () => reenviarConvite(row),
+      });
+    }
+    if (row.senha_definida_em && ativo && !souEu) {
+      itens.push({
+        key: 'senha', rotulo: 'Gerar senha temporária', icone: <KeyRound className="h-4 w-4" />,
+        busy: acaoBusy === `senha-${id}`, onClick: () => pedirSensivel('senha', row),
+      });
+    }
+    if (row.senha_definida_em && ativo && !row.trocar_senha) {
+      itens.push({
+        key: 'troca', rotulo: 'Forçar troca de senha', icone: <ShieldCheck className="h-4 w-4" />,
+        busy: acaoBusy === `troca-${id}`, onClick: () => setConfirmAcao({ tipo: 'troca', row }),
+      });
+    }
+    if (row.mfa_ativado_em && !souEu) {
+      itens.push({
+        key: 'mfa', rotulo: 'Resetar MFA', icone: <Smartphone className="h-4 w-4" />,
+        busy: acaoBusy === `mfa-${id}`, onClick: () => setConfirmAcao({ tipo: 'mfa', row }),
+      });
+    }
+    if (ativo && !souEu) {
+      itens.push({
+        key: 'encerrar', rotulo: 'Encerrar todas as sessões', icone: <Lock className="h-4 w-4" />,
+        busy: acaoBusy === `encerrar-${id}`, onClick: () => setConfirmAcao({ tipo: 'encerrar', row }),
+      });
+    }
+    if (row.conta_bloqueada || Number(row.tentativas_falhas || 0) > 0) {
+      itens.push({
+        key: 'desbloquear', rotulo: 'Desbloquear e zerar falhas', icone: <LockOpen className="h-4 w-4" />,
+        busy: acaoBusy === `desbloquear-${id}`, onClick: () => setConfirmAcao({ tipo: 'desbloquear', row }),
+      });
+    }
+    if (!souEu) {
+      itens.push(
+        ativo
+          ? {
+              key: 'desativar', rotulo: 'Desativar conta...', icone: <PowerOff className="h-4 w-4" />,
+              perigo: true, separadorAntes: true,
+              onClick: () => { setDesativarRow(row); setMotivo(''); },
+            }
+          : {
+              key: 'ativar', rotulo: 'Reativar conta', icone: <Power className="h-4 w-4" />,
+              separadorAntes: true, busy: acaoBusy === `ativar-${id}`,
+              onClick: () => pedirSensivel('ativar', row),
+            },
+        { key: 'excluir', rotulo: 'Excluir...', icone: <Trash2 className="h-4 w-4" />, perigo: true, onClick: () => setToDelete(row) }
+      );
+    }
+    return itens;
+  }
+
   const total = data?.total ?? 0;
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const from = total ? (page - 1) * PAGE_SIZE + 1 : 0;
-  const to = Math.min(total, page * PAGE_SIZE);
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const from = total ? (page - 1) * pageSize + 1 : 0;
+  const to = Math.min(total, page * pageSize);
   const t = resumo?.totais;
 
   return (
@@ -438,9 +555,37 @@ export default function UsuariosPage() {
                     {a.nome} <span className="block truncate text-xs font-normal text-slate-500">{a.email}</span>
                   </p>
                   <p className="text-xs text-slate-500">{a.detalhe}</p>
-                  <button className="btn-secondary mt-auto !px-2 !py-1 text-xs" onClick={() => setFichaId(a.usuario_id)}>
-                    <Eye className="h-3.5 w-3.5" /> Ver ficha
-                  </button>
+                  <div className="mt-auto flex gap-1.5">
+                    {a.tipo === 'convite_expirado' && (
+                      <button
+                        className="btn-secondary flex-1 !px-2 !py-1 text-xs"
+                        disabled={conviteBusyId === a.usuario_id}
+                        onClick={() => reenviarConvite({ id: a.usuario_id, nome: a.nome, email: a.email })}
+                      >
+                        {conviteBusyId === a.usuario_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />} Reenviar
+                      </button>
+                    )}
+                    {a.tipo === 'bloqueado' && (
+                      <button
+                        className="btn-secondary flex-1 !px-2 !py-1 text-xs"
+                        onClick={() => setConfirmAcao({ tipo: 'desbloquear', row: { id: a.usuario_id, nome: a.nome } })}
+                      >
+                        <LockOpen className="h-3.5 w-3.5" /> Desbloquear
+                      </button>
+                    )}
+                    {(a.tipo === 'acesso_expirado' || a.tipo === 'acesso_a_vencer') && (
+                      <button
+                        className="btn-secondary flex-1 !px-2 !py-1 text-xs"
+                        disabled={alertaBusy === `renovar-${a.usuario_id}`}
+                        onClick={() => abrirEdicao(a.usuario_id, `renovar-${a.usuario_id}`)}
+                      >
+                        {alertaBusy === `renovar-${a.usuario_id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pencil className="h-3.5 w-3.5" />} Renovar
+                      </button>
+                    )}
+                    <button className="btn-secondary flex-1 !px-2 !py-1 text-xs" onClick={() => abrirFicha(a.usuario_id, a.tipo === 'admin_sem_mfa' ? 'seguranca' : 'resumo')}>
+                      <Eye className="h-3.5 w-3.5" /> {a.tipo === 'admin_sem_mfa' ? 'Ver segurança' : 'Ver ficha'}
+                    </button>
+                  </div>
                 </li>
               );
             })}
@@ -456,8 +601,9 @@ export default function UsuariosPage() {
           valor={resumoLoading ? null : (t?.ativos ?? 0)}
           rotulo="Ativos"
           dica={t ? `${t.admins} admin · ${t.gerentes} gerente · ${t.operadores} operador` : ''}
+          ativo={fAtivo === 'true'}
           onClick={() => {
-            setFAtivo('true');
+            setFAtivo((v) => (v === 'true' ? '' : 'true'));
             setPage(1);
           }}
         />
@@ -468,8 +614,9 @@ export default function UsuariosPage() {
           rotulo="Convites pendentes"
           dica={t?.convites_expirados ? `${t.convites_expirados} expirado(s)` : 'Aguardando aceite'}
           alerta={(t?.convites_expirados ?? 0) > 0}
+          ativo={fStatus === 'convite_pendente'}
           onClick={() => {
-            setFStatus('convite_pendente');
+            setFStatus((v) => (v === 'convite_pendente' ? '' : 'convite_pendente'));
             setPage(1);
           }}
         />
@@ -479,8 +626,9 @@ export default function UsuariosPage() {
           valor={resumoLoading ? null : (t?.troca_pendente ?? 0)}
           rotulo="Troca pendente"
           dica="Senha provisória"
+          ativo={fStatus === 'provisoria'}
           onClick={() => {
-            setFStatus('provisoria');
+            setFStatus((v) => (v === 'provisoria' ? '' : 'provisoria'));
             setPage(1);
           }}
         />
@@ -490,8 +638,9 @@ export default function UsuariosPage() {
           valor={resumoLoading ? null : (t?.mfa_ativos ?? 0)}
           rotulo="Com MFA"
           dica={t ? `${t.sessoes_ativas ?? '—'} sessões ativas` : ''}
+          ativo={fMfa === 'sim'}
           onClick={() => {
-            setFMfa('sim');
+            setFMfa((v) => (v === 'sim' ? '' : 'sim'));
             setPage(1);
           }}
         />
@@ -502,8 +651,9 @@ export default function UsuariosPage() {
           rotulo="Bloqueados"
           dica={t?.acesso_expirado ? `${t.acesso_expirado} acesso(s) expirado(s)` : 'Tentativas incorretas'}
           alerta={(t?.bloqueados ?? 0) > 0}
+          ativo={fStatus === 'bloqueado'}
           onClick={() => {
-            setFStatus('bloqueado');
+            setFStatus((v) => (v === 'bloqueado' ? '' : 'bloqueado'));
             setPage(1);
           }}
         />
@@ -513,6 +663,11 @@ export default function UsuariosPage() {
           valor={resumoLoading ? null : (t?.sem_login_30d ?? 0)}
           rotulo="Parados 30+ dias"
           dica={t ? `${t.logins_hoje} login(s) hoje` : ''}
+          ativo={fParado === 'sim'}
+          onClick={() => {
+            setFParado((v) => (v === 'sim' ? '' : 'sim'));
+            setPage(1);
+          }}
         />
       </div>
 
@@ -612,7 +767,7 @@ export default function UsuariosPage() {
                   <Th label="Usuário" field="nome" sort={sort} onSort={toggleSort} />
                   <Th label="Perfil" field="perfil" sort={sort} onSort={toggleSort} />
                   <th>Status</th>
-                  <th>Acesso</th>
+                  <th>Senha</th>
                   <th>MFA</th>
                   <Th label="Último acesso" field="ultimo_login" sort={sort} onSort={toggleSort} />
                   <th className="w-44 text-right">Ações</th>
@@ -626,7 +781,7 @@ export default function UsuariosPage() {
                   const souEu = eu && Number(eu.id) === Number(row.id);
                   const ativo = row.ativo !== false;
                   return (
-                    <tr key={row.id} className={!ativo ? 'opacity-70' : ''}>
+                    <tr key={row.id} onClick={() => abrirFicha(Number(row.id))} title="Ver ficha completa" className={`cursor-pointer hover:bg-slate-50 ${!ativo ? 'opacity-70' : ''}`}>
                       <td>
                         <div className="flex items-center gap-2.5">
                           <Avatar nome={row.nome} perfil={row.perfil} />
@@ -650,6 +805,11 @@ export default function UsuariosPage() {
                       </td>
                       <td>
                         <Badge tone={senha.tone}>{senha.label}</Badge>
+                        {row.senha_status === 'convite_pendente' && row.convite_expira_em && (
+                          <p className={`mt-0.5 text-[11px] ${row.convite_expirado ? 'text-red-500' : 'text-slate-400'}`} title={formatDateTime(row.convite_expira_em)}>
+                            {row.convite_expirado ? `expirou ${formatRelative(row.convite_expira_em)}` : `expira ${formatRelative(row.convite_expira_em)}`}
+                          </p>
+                        )}
                         {row.tentativas_falhas > 0 && (
                           <p className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-600">
                             <AlertTriangle className="h-3 w-3" /> {row.tentativas_falhas} falha(s)
@@ -666,9 +826,9 @@ export default function UsuariosPage() {
                       <td className="whitespace-nowrap text-xs text-slate-500" title={formatDateTime(row.ultimo_login)}>
                         {row.ultimo_login ? formatRelative(row.ultimo_login) : '—'}
                       </td>
-                      <td className="text-right">
+                      <td className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="inline-flex items-center gap-0.5">
-                          <button className="btn-icon" onClick={() => setFichaId(Number(row.id))} title="Ver ficha completa" aria-label="Ver ficha">
+                          <button className="btn-icon" onClick={() => abrirFicha(Number(row.id))} title="Ver ficha completa" aria-label="Ver ficha">
                             <Eye className="h-4 w-4" />
                           </button>
                           <button
@@ -682,53 +842,12 @@ export default function UsuariosPage() {
                           >
                             <Pencil className="h-4 w-4" />
                           </button>
-                          {!row.senha_definida_em && ativo && (
-                            <button
-                              className="btn-icon"
-                              onClick={() => reenviarConvite(row)}
-                              disabled={conviteBusyId === Number(row.id)}
-                              title="Reenviar convite de acesso"
-                              aria-label="Reenviar convite"
-                            >
-                              {conviteBusyId === Number(row.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-                            </button>
-                          )}
-                          {!!row.senha_definida_em && ativo && !souEu && (
-                            <button
-                              className="btn-icon"
-                              onClick={() => pedirSensivel('senha', row)}
-                              disabled={acaoBusy === `senha-${row.id}`}
-                              title="Gerar senha temporária (exibição única)"
-                              aria-label="Gerar senha temporária"
-                            >
-                              {acaoBusy === `senha-${row.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-                            </button>
-                          )}
-                          {!souEu && (
-                            ativo ? (
-                              <button
-                                className="btn-icon hover:!bg-red-50 hover:!text-red-600"
-                                onClick={() => {
-                                  setDesativarRow(row);
-                                  setMotivo('');
-                                }}
-                                title="Desativar (com motivo)"
-                                aria-label="Desativar"
-                              >
-                                <PowerOff className="h-4 w-4" />
-                              </button>
-                            ) : (
-                              <button
-                                className="btn-icon hover:!bg-emerald-50 hover:!text-emerald-600"
-                                onClick={() => pedirSensivel('ativar', row)}
-                                disabled={acaoBusy === `ativar-${row.id}`}
-                                title="Reativar"
-                                aria-label="Reativar"
-                              >
-                                {acaoBusy === `ativar-${row.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Power className="h-4 w-4" />}
-                              </button>
-                            )
-                          )}
+                          <MenuAcoes
+                            itens={menuItens(row, !!souEu)}
+                            aberto={menuAberto === Number(row.id)}
+                            onAbrir={() => setMenuAberto(Number(row.id))}
+                            onFechar={fecharMenu}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -751,7 +870,7 @@ export default function UsuariosPage() {
                 <li key={row.id} className="px-4 py-3">
                   <div className="flex items-start gap-2.5">
                     <Avatar nome={row.nome} perfil={row.perfil} />
-                    <button className="min-w-0 flex-1 text-left" onClick={() => setFichaId(Number(row.id))}>
+                    <button className="min-w-0 flex-1 text-left" onClick={() => abrirFicha(Number(row.id))}>
                       <p className="truncate text-sm font-semibold text-navy-900">
                         {row.nome} {souEu && <span className="font-normal text-slate-400">(você)</span>}
                       </p>
@@ -769,23 +888,12 @@ export default function UsuariosPage() {
                       <button className="btn-icon" onClick={() => { setEditing(row); setFormOpen(true); }} aria-label="Editar">
                         <Pencil className="h-4 w-4" />
                       </button>
-                      {!souEu && ativo && (
-                        <button
-                          className="btn-icon hover:!bg-red-50 hover:!text-red-600"
-                          onClick={() => {
-                            setDesativarRow(row);
-                            setMotivo('');
-                          }}
-                          aria-label="Desativar"
-                        >
-                          <PowerOff className="h-4 w-4" />
-                        </button>
-                      )}
-                      {!souEu && !ativo && (
-                        <button className="btn-icon hover:!bg-emerald-50 hover:!text-emerald-600" onClick={() => pedirSensivel('ativar', row)} aria-label="Reativar">
-                          <Power className="h-4 w-4" />
-                        </button>
-                      )}
+                      <MenuAcoes
+                        itens={menuItens(row, !!souEu)}
+                        aberto={menuAberto === Number(row.id)}
+                        onAbrir={() => setMenuAberto(Number(row.id))}
+                        onFechar={fecharMenu}
+                      />
                     </div>
                   </div>
                 </li>
@@ -794,10 +902,27 @@ export default function UsuariosPage() {
           </ul>
         )}
 
-        {data && total > PAGE_SIZE && (
-          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-2.5 text-sm">
-            <span className="text-slate-500">
-              Página {page} de {pages}
+        {data && total > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-2.5 text-sm">
+            <span className="flex items-center gap-2 text-slate-500">
+              <select
+                className="input !w-auto !py-1 text-xs"
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setPage(1);
+                }}
+                aria-label="Itens por página"
+              >
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>
+                    {n} por página
+                  </option>
+                ))}
+              </select>
+              <span className="hidden sm:inline">
+                Página {page} de {pages}
+              </span>
             </span>
             <div className="flex items-center gap-1">
               <button className="btn-icon" disabled={page <= 1 || loading} onClick={() => setPage((p) => p - 1)} aria-label="Página anterior">
@@ -828,10 +953,45 @@ export default function UsuariosPage() {
         <Plus className="h-5 w-5" />
       </button>
 
+      {/* Ficha do usuário (antes dos modais de ação: eles abrem por cima dela) */}
+      {fichaId !== null && (
+        <FichaUsuarioModal
+          key={fichaId}
+          id={fichaId}
+          souEu={!!eu && Number(eu.id) === fichaId}
+          tabInicial={fichaTab}
+          refreshKey={fichaNonce}
+          onClose={() => setFichaId(null)}
+          onEdit={(row) => {
+            setFichaId(null);
+            setEditing(row);
+            setFormOpen(true);
+          }}
+          onConvite={reenviarConvite}
+          onSensivel={pedirSensivel}
+          onDesativar={(row) => {
+            setDesativarRow(row);
+            setMotivo('');
+          }}
+          onConfirmar={setConfirmAcao}
+          onExcluir={setToDelete}
+          onChanged={recarregarTudo}
+          busy={acaoBusy}
+          conviteBusyId={conviteBusyId}
+        />
+      )}
+
       {/* Reautenticação para ações sensíveis */}
       <ReauthModal
         open={!!reauth}
-        onClose={() => setReauth(null)}
+        onClose={() => {
+          // Cancelar a autorização não apaga o motivo já digitado.
+          if (reauth?.tipo === 'desativar') {
+            setDesativarRow(reauth.row);
+            setMotivo(reauth.motivo || '');
+          }
+          setReauth(null);
+        }}
         onConfirmed={() => {
           if (reauth) void executarSensivel(reauth);
           setReauth(null);
@@ -1034,26 +1194,6 @@ export default function UsuariosPage() {
         />
       )}
 
-      {/* Ficha do usuário */}
-      {fichaId !== null && (
-        <FichaUsuarioModal
-          id={fichaId}
-          souEu={!!eu && Number(eu.id) === fichaId}
-          onClose={() => setFichaId(null)}
-          onEdit={(row) => {
-            setFichaId(null);
-            setEditing(row);
-            setFormOpen(true);
-          }}
-          onConvite={reenviarConvite}
-          onSensivel={pedirSensivel}
-          onConfirmar={setConfirmAcao}
-          onExcluir={setToDelete}
-          onChanged={recarregarTudo}
-          busy={acaoBusy}
-          conviteBusyId={conviteBusyId}
-        />
-      )}
     </div>
   );
 }
@@ -1086,6 +1226,7 @@ function Kpi({
   rotulo,
   dica,
   alerta,
+  ativo,
   onClick,
 }: {
   icone: React.ReactNode;
@@ -1094,14 +1235,16 @@ function Kpi({
   rotulo: string;
   dica: string;
   alerta?: boolean;
+  ativo?: boolean;
   onClick?: () => void;
 }) {
   return (
     <button
       onClick={onClick}
       disabled={!onClick}
-      className={`card flex items-center gap-3 p-3 text-left sm:p-4 ${alerta ? 'border-red-200 bg-red-50/40' : ''} ${onClick ? 'transition-shadow hover:shadow-modal' : 'cursor-default'}`}
-      title={onClick ? 'Clique para filtrar a lista' : undefined}
+      aria-pressed={onClick ? !!ativo : undefined}
+      className={`card flex items-center gap-3 p-3 text-left sm:p-4 ${alerta ? 'border-red-200 bg-red-50/40' : ''} ${ativo ? 'ring-2 ring-navy-800 ring-offset-1' : ''} ${onClick ? 'transition-shadow hover:shadow-modal' : 'cursor-default'}`}
+      title={onClick ? (ativo ? 'Clique para remover este filtro' : 'Clique para filtrar a lista') : undefined}
     >
       <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white sm:h-11 sm:w-11 ${cor}`}>{icone}</span>
       <div className="min-w-0">
@@ -1124,6 +1267,89 @@ function Th({ label, field, sort, onSort }: { label: string; field: string; sort
         {sort?.field === field ? sort.dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" /> : <ArrowUpDown className="h-3 w-3 opacity-30" />}
       </button>
     </th>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Menu de ações da linha (posicionamento fixo: não é cortado pela tabela)
+// ----------------------------------------------------------------------------
+function MenuAcoes({ itens, aberto, onAbrir, onFechar }: { itens: MenuItem[]; aberto: boolean; onAbrir: () => void; onFechar: () => void }) {
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+
+  useEffect(() => {
+    if (!aberto) return;
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) {
+      // Abre para cima quando não há espaço abaixo (últimas linhas).
+      const altura = Math.min(itens.length * 40 + 16, window.innerHeight * 0.7);
+      const top = r.bottom + 6 + altura > window.innerHeight ? Math.max(8, r.top - 6 - altura) : r.bottom + 6;
+      setPos({ top, right: Math.max(8, window.innerWidth - r.right) });
+    }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onFechar();
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onFechar);
+    window.addEventListener('scroll', onFechar, true);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onFechar);
+      window.removeEventListener('scroll', onFechar, true);
+    };
+  }, [aberto, onFechar, itens.length]);
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        className="btn-icon"
+        onClick={(e) => {
+          e.stopPropagation();
+          aberto ? onFechar() : onAbrir();
+        }}
+        aria-label="Mais ações"
+        aria-haspopup="menu"
+        aria-expanded={aberto}
+        title="Mais ações"
+      >
+        <MoreVertical className="h-4 w-4" />
+      </button>
+      {aberto && (
+        <>
+          <div
+            className="fixed inset-0 z-30 cursor-default"
+            onClick={(e) => {
+              e.stopPropagation();
+              onFechar();
+            }}
+          />
+          <div
+            role="menu"
+            className="fixed z-40 max-h-[70vh] w-60 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-modal animate-fade-in"
+            style={pos ? { top: pos.top, right: pos.right } : { visibility: 'hidden' }}
+          >
+            {itens.map((it) => (
+              <div key={it.key}>
+                {it.separadorAntes && <div className="mx-2 my-1 border-t border-slate-100" />}
+                <button
+                  role="menuitem"
+                  className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm ${
+                    it.perigo ? 'text-red-600 hover:bg-red-50' : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                  disabled={it.busy}
+                  onClick={() => {
+                    onFechar();
+                    it.onClick();
+                  }}
+                >
+                  {it.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : it.icone}
+                  {it.rotulo}
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </>
   );
 }
 
@@ -1247,6 +1473,11 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
                 <option value="admin">Administrador — acesso total (MFA obrigatório)</option>
               </select>
             </label>
+            {perfil === 'admin' && (
+              <p className="-mt-1 rounded-lg bg-amber-50 p-2 text-xs text-amber-800 ring-1 ring-amber-200 sm:col-span-2">
+                Administrador tem acesso total ao ERP e <strong>MFA obrigatório</strong> a partir do primeiro login.
+              </p>
+            )}
             <label className="block">
               <span className="label">Telefone / WhatsApp</span>
               <input className="input" value={telefone} onChange={(e) => setTelefone(e.target.value)} placeholder="(11) 99999-9999" maxLength={20} />
@@ -1269,6 +1500,23 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
               <span className="label">Acesso expira em (opcional)</span>
               <input className="input" type="datetime-local" value={acessoExpira} onChange={(e) => setAcessoExpira(e.target.value)} />
               <p className="mt-1 text-xs text-slate-400">Para acessos temporários. Vazio = sem expiração.</p>
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {[7, 30, 90].map((dias) => (
+                  <button
+                    key={dias}
+                    type="button"
+                    className="btn-ghost !px-2 !py-0.5 text-xs"
+                    onClick={() => setAcessoExpira(fromISO(new Date(Date.now() + dias * 86400000).toISOString()))}
+                  >
+                    +{dias} dias
+                  </button>
+                ))}
+                {acessoExpira && (
+                  <button type="button" className="btn-ghost !px-2 !py-0.5 text-xs" onClick={() => setAcessoExpira('')}>
+                    Limpar
+                  </button>
+                )}
+              </div>
             </label>
             {editing && (
               <label className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -1334,10 +1582,13 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
 function FichaUsuarioModal({
   id,
   souEu,
+  tabInicial,
+  refreshKey,
   onClose,
   onEdit,
   onConvite,
   onSensivel,
+  onDesativar,
   onConfirmar,
   onExcluir,
   onChanged,
@@ -1346,20 +1597,24 @@ function FichaUsuarioModal({
 }: {
   id: number;
   souEu: boolean;
+  tabInicial: TabFicha;
+  refreshKey: number;
   onClose: () => void;
   onEdit: (row: Usuario) => void;
   onConvite: (row: Usuario) => void;
   onSensivel: (tipo: 'senha' | 'desativar' | 'ativar' | 'encerrar' | 'mfa', row: Usuario, motivo?: string) => void;
+  onDesativar: (row: Usuario) => void;
   onConfirmar: (c: { tipo: 'encerrar' | 'mfa' | 'troca' | 'desbloquear'; row: Usuario }) => void;
   onExcluir: (row: Usuario) => void;
   onChanged: () => void;
   busy: string | null;
   conviteBusyId: number | null;
 }) {
-  const [tab, setTab] = useState<'resumo' | 'seguranca' | 'atividade'>('resumo');
+  const [tab, setTab] = useState<TabFicha>(tabInicial);
   const [dados, setDados] = useState<Atividade | null>(null);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState('');
+  const [filtroAcao, setFiltroAcao] = useState('');
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -1375,7 +1630,10 @@ function FichaUsuarioModal({
 
   useEffect(() => {
     carregar();
-  }, [carregar]);
+  }, [carregar, refreshKey]);
+
+  const acoesDisponiveis = useMemo(() => [...new Set((dados?.historico || []).map((h) => String(h.acao)))], [dados]);
+  const historicoFiltrado = filtroAcao ? (dados?.historico || []).filter((h) => String(h.acao) === filtroAcao) : dados?.historico || [];
 
   const u = dados?.usuario;
   const perfil = u ? PERFIL_META[u.perfil] || { label: u.perfil, tone: 'slate' as const } : null;
@@ -1400,7 +1658,21 @@ function FichaUsuarioModal({
                 {u.cargo || '—'}{u.departamento ? ` · ${u.departamento}` : ''}{u.telefone ? ` · ${u.telefone}` : ''}
               </p>
             </div>
-            <div className="flex gap-1.5">
+            <div className="flex flex-wrap gap-1.5">
+              {!souEu &&
+                (ativo ? (
+                  <button className="btn-secondary !px-2.5 !py-1.5 text-xs hover:!border-red-300 hover:!text-red-600" onClick={() => onDesativar(u)}>
+                    <PowerOff className="h-3.5 w-3.5" /> Desativar
+                  </button>
+                ) : (
+                  <button
+                    className="btn-secondary !px-2.5 !py-1.5 text-xs hover:!border-emerald-300 hover:!text-emerald-600"
+                    onClick={() => onSensivel('ativar', u)}
+                    disabled={busy === `ativar-${u.id}`}
+                  >
+                    {busy === `ativar-${u.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Power className="h-3.5 w-3.5" />} Reativar
+                  </button>
+                ))}
               <button className="btn-secondary !px-2.5 !py-1.5 text-xs" onClick={() => onEdit(u)}>
                 <Pencil className="h-3.5 w-3.5" /> Editar
               </button>
@@ -1507,11 +1779,6 @@ function FichaUsuarioModal({
                 </div>
               )}
               <div className="sm:col-span-2 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-                {!souEu && ativo && (
-                  <button className="btn-secondary text-xs" onClick={() => onSensivel('ativar', u)} disabled>
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> Conta ativa
-                  </button>
-                )}
                 {!souEu && (
                   <button
                     className="btn-secondary text-xs hover:!border-red-300 hover:!text-red-600"
@@ -1540,7 +1807,9 @@ function FichaUsuarioModal({
                   </Badge>
                   {u.trocar_senha && <Badge tone="amber">Troca obrigatória</Badge>}
                   {u.convite_expira_em && !u.senha_definida_em && (
-                    <span className="text-xs text-slate-500">Convite {u.convite_expirado ? 'expirou' : 'expira'} em {formatDateTime(u.convite_expira_em)}</span>
+                    <span className="text-xs text-slate-500" title={formatDateTime(u.convite_expira_em)}>
+                      Convite {u.convite_expirado ? `expirou ${formatRelative(u.convite_expira_em)}` : `expira ${formatRelative(u.convite_expira_em)}`}
+                    </span>
                   )}
                 </div>
                 <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -1659,12 +1928,31 @@ function FichaUsuarioModal({
                 )}
               </div>
               <div>
-                <h4 className="mb-2 text-sm font-bold text-navy-900">Trilha da conta ({dados?.historico_total ?? 0})</h4>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-sm font-bold text-navy-900">Trilha da conta ({dados?.historico_total ?? 0})</h4>
+                  {!!acoesDisponiveis.length && (
+                    <select
+                      className="input !w-auto !py-1 text-xs"
+                      value={filtroAcao}
+                      onChange={(e) => setFiltroAcao(e.target.value)}
+                      aria-label="Filtrar eventos por tipo"
+                    >
+                      <option value="">Todos os eventos</option>
+                      {acoesDisponiveis.map((a) => (
+                        <option key={a} value={a}>
+                          {ACAO_LABEL[a] || a}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
                 {!dados?.historico.length ? (
                   <p className="text-sm text-slate-400">Nenhum evento sobre esta conta.</p>
+                ) : !historicoFiltrado.length ? (
+                  <p className="text-sm text-slate-400">Nenhum evento deste tipo nos últimos registros.</p>
                 ) : (
                   <ul className="max-h-72 space-y-2 overflow-auto pr-1">
-                    {dados.historico.map((h) => (
+                    {historicoFiltrado.map((h) => (
                       <li key={h.id} className="rounded-md bg-slate-50 p-2 text-xs text-slate-600">
                         <p className="font-medium text-slate-700">
                           {formatDateTime(h.data)} · {h.usuario || 'sistema'} · {ACAO_LABEL[h.acao] || h.acao}
