@@ -182,9 +182,9 @@ function FieldInput({
     </label>
   );
   const help = error ? (
-    <p className="mt-1 text-xs font-medium text-red-600">{error}</p>
+    <p className="mt-1 text-xs font-medium text-red-600" role="alert" aria-live="assertive">{error}</p>
   ) : f.hint ? (
-    <p className="mt-1 text-xs text-slate-400">{f.hint}</p>
+    <p className="mt-1 text-xs text-slate-400 dark:text-navy-300">{f.hint}</p>
   ) : null;
 
   if (f.type === 'boolean') {

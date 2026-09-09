@@ -116,9 +116,9 @@ export default function Dashboard() {
                   <k.icon className="h-5 w-5" />
                 </span>
                 <div className="min-w-0">
-                  <div className="truncate text-xl font-bold tabular-nums text-navy-900 sm:text-2xl">{k.value}</div>
-                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{k.label}</div>
-                  <div className="truncate text-xs text-slate-400">{k.sub}</div>
+                  <div className="truncate text-xl font-bold tabular-nums text-navy-900 dark:text-white sm:text-2xl">{k.value}</div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-navy-300">{k.label}</div>
+                  <div className="truncate text-xs text-slate-400 dark:text-navy-300">{k.sub}</div>
                 </div>
               </Link>
             ))}
@@ -126,23 +126,23 @@ export default function Dashboard() {
 
           {/* Precisa de atenção — apenas o que exige ação */}
           <section className="card mt-4 overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <h2 className="flex items-center gap-2 text-sm font-semibold text-navy-900">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-navy-800">
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-navy-900 dark:text-white">
                 <AlertTriangle className="h-4 w-4 text-red-500" /> Precisa de atenção
               </h2>
-              <span className="text-xs text-slate-400">O que exige ação hoje</span>
+              <span className="text-xs text-slate-400 dark:text-navy-300">O que exige ação hoje</span>
             </div>
             {atencao.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-slate-400">Nada exige ação imediata. 🎉</p>
+              <p className="px-4 py-8 text-center text-sm text-slate-400 dark:text-navy-300">Nada exige ação imediata. 🎉</p>
             ) : (
-              <div className="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4">
+              <div className="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4 dark:divide-navy-800">
                 {atencao.map((a) => (
-                  <Link key={a.label} to={a.to} className="flex items-center justify-between gap-2 px-4 py-3 hover:bg-navy-50/50">
+                  <Link key={a.label} to={a.to} className="flex items-center justify-between gap-2 px-4 py-3 hover:bg-navy-50/50 dark:hover:bg-navy-800/40">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-navy-900">{a.label}</p>
-                      <p className="text-xs text-slate-400">{a.msg}</p>
+                      <p className="truncate text-sm font-medium text-navy-900 dark:text-slate-100">{a.label}</p>
+                      <p className="text-xs text-slate-400 dark:text-navy-300">{a.msg}</p>
                     </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-300 dark:text-navy-600" />
                   </Link>
                 ))}
               </div>
@@ -152,10 +152,10 @@ export default function Dashboard() {
           {/* Desempenho — um único gráfico de tendência */}
           <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
             <section className="card p-4 lg:col-span-2">
-              <h2 className="text-sm font-semibold text-navy-900">Vendas faturadas — últimos 12 meses</h2>
+              <h2 className="text-sm font-semibold text-navy-900 dark:text-white">Vendas faturadas — últimos 12 meses</h2>
               <div className="mt-3">
                 {data.vendasPorMes.length === 0 || data.vendasPorMes.every((v) => v.total === 0) ? (
-                  <p className="py-8 text-center text-sm text-slate-400">Sem vendas faturadas no período.</p>
+                  <p className="py-8 text-center text-sm text-slate-400 dark:text-navy-300">Sem vendas faturadas no período.</p>
                 ) : (
                   <BarrasVerticais
                     rotulos={data.vendasPorMes.map((v) => `${v.mes.slice(5)}/${v.mes.slice(2, 4)}`)}
@@ -168,13 +168,13 @@ export default function Dashboard() {
             </section>
 
             <section className="card p-4">
-              <h2 className="text-sm font-semibold text-navy-900">Cadastros ativos</h2>
-              <p className="text-xs text-slate-400">Base cadastral em uma linha.</p>
+              <h2 className="text-sm font-semibold text-navy-900 dark:text-white">Cadastros ativos</h2>
+              <p className="text-xs text-slate-400 dark:text-navy-300">Base cadastral em uma linha.</p>
               <ul className="mt-3 space-y-2 text-sm">
-                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2"><span className="text-slate-500">Produtos</span><strong className="tabular-nums text-navy-900">{formatNumber(data.totais.produtos)}</strong></li>
-                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2"><span className="text-slate-500">Insumos</span><strong className="tabular-nums text-navy-900">{formatNumber(data.totais.insumos)}</strong></li>
-                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2"><span className="text-slate-500">Clientes</span><strong className="tabular-nums text-navy-900">{formatNumber(data.totais.clientes)}</strong></li>
-                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2"><span className="text-slate-500">Fornecedores</span><strong className="tabular-nums text-navy-900">{formatNumber(data.totais.fornecedores)}</strong></li>
+                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2 dark:border-navy-800"><span className="text-slate-500 dark:text-navy-300">Produtos</span><strong className="tabular-nums text-navy-900 dark:text-slate-100">{formatNumber(data.totais.produtos)}</strong></li>
+                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2 dark:border-navy-800"><span className="text-slate-500 dark:text-navy-300">Insumos</span><strong className="tabular-nums text-navy-900 dark:text-slate-100">{formatNumber(data.totais.insumos)}</strong></li>
+                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2 dark:border-navy-800"><span className="text-slate-500 dark:text-navy-300">Clientes</span><strong className="tabular-nums text-navy-900 dark:text-slate-100">{formatNumber(data.totais.clientes)}</strong></li>
+                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2 dark:border-navy-800"><span className="text-slate-500 dark:text-navy-300">Fornecedores</span><strong className="tabular-nums text-navy-900 dark:text-slate-100">{formatNumber(data.totais.fornecedores)}</strong></li>
               </ul>
             </section>
           </div>
@@ -193,15 +193,15 @@ export default function Dashboard() {
 
 function QuickLink({ to, icon: Icon, title, text }: { to: string; icon: any; title: string; text: string }) {
   return (
-    <Link to={to} className="card flex items-center gap-3 p-4 transition-colors hover:border-navy-300">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-navy-50 text-navy-700">
+    <Link to={to} className="card flex items-center gap-3 p-4 transition-colors hover:border-navy-300 dark:hover:border-navy-600">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-navy-50 text-navy-700 dark:bg-navy-800 dark:text-navy-300">
         <Icon className="h-5 w-5" />
       </span>
       <div className="min-w-0">
-        <div className="text-sm font-semibold text-slate-800">{title}</div>
-        <div className="truncate text-xs text-slate-500">{text}</div>
+        <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">{title}</div>
+        <div className="truncate text-xs text-slate-500 dark:text-navy-300">{text}</div>
       </div>
-      <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-slate-300" />
+      <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-slate-300 dark:text-navy-600" />
     </Link>
   );
 }

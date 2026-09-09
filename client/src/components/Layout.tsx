@@ -59,65 +59,71 @@ export default function Layout() {
       <Sidebar open={open} onClose={() => setOpen(false)} />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6">
+        <a
+          href="#conteudo-principal"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:rounded-lg focus:bg-navy-800 focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white focus:shadow-modal"
+        >
+          Pular para o conteúdo
+        </a>
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6 dark:border-navy-800 dark:bg-navy-900">
           <div className="flex min-w-0 items-center gap-3">
             <button className="btn-icon -ml-2 md:hidden" onClick={() => setOpen(true)} aria-label="Abrir menu">
               <Menu className="h-5 w-5" />
             </button>
             <nav className="flex min-w-0 items-center gap-2 text-sm">
-              <span className="hidden text-slate-400 sm:inline">BROBOND ERP</span>
+              <span className="hidden text-slate-400 sm:inline dark:text-navy-300">BROBOND ERP</span>
               {current && current.path !== '/' && (
                 <>
-                  <span className="hidden text-slate-300 sm:inline">/</span>
-                  {current.group && <span className="hidden text-slate-400 lg:inline">{current.group}</span>}
-                  {current.group && <span className="hidden text-slate-300 lg:inline">/</span>}
-                  <span className="truncate font-semibold text-navy-900">{current.label}</span>
+                  <span className="hidden text-slate-300 sm:inline dark:text-navy-700">/</span>
+                  {current.group && <span className="hidden text-slate-400 lg:inline dark:text-navy-300">{current.group}</span>}
+                  {current.group && <span className="hidden text-slate-300 lg:inline dark:text-navy-700">/</span>}
+                  <span className="truncate font-semibold text-navy-900 dark:text-white">{current.label}</span>
                 </>
               )}
-              {current?.path === '/' && <span className="font-semibold text-navy-900">Dashboard</span>}
+              {current?.path === '/' && <span className="font-semibold text-navy-900 dark:text-white">Dashboard</span>}
             </nav>
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
             <button
               onClick={() => setPaletteOpen(true)}
-              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-sm text-slate-400 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-600 sm:px-3"
+              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-sm text-slate-400 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-600 sm:px-3 dark:border-navy-700 dark:bg-navy-800 dark:text-navy-300 dark:hover:border-navy-600 dark:hover:bg-navy-700 dark:hover:text-navy-200"
               aria-label="Busca rápida"
               title="Busca rápida (Ctrl/Cmd+K)"
             >
               <Search className="h-4 w-4" />
               <span className="hidden md:inline">Buscar...</span>
-              <kbd className="hidden rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-400 md:inline">Ctrl K</kbd>
+              <kbd className="hidden rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-400 md:inline dark:border-navy-600 dark:bg-navy-900 dark:text-navy-300">Ctrl K</kbd>
             </button>
 
             <div className="relative" ref={menuRef}>
             <button
               onClick={() => setMenu((v) => !v)}
-              className="flex items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2 transition-colors hover:bg-slate-100"
+              className="flex items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2 transition-colors hover:bg-slate-100 dark:hover:bg-navy-800"
               aria-haspopup="menu"
               aria-expanded={menu}
             >
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-navy-800 text-xs font-bold text-white">{initials}</span>
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-navy-800 text-xs font-bold text-white dark:bg-brand-500">{initials}</span>
               <span className="hidden text-left sm:block">
-                <span className="block text-sm font-semibold leading-tight text-slate-800">{user?.name}</span>
-                <span className="block text-[11px] leading-tight text-slate-400">{PERFIL_LABEL[user?.perfil || ''] || user?.perfil}</span>
+                <span className="block text-sm font-semibold leading-tight text-slate-800 dark:text-slate-100">{user?.name}</span>
+                <span className="block text-[11px] leading-tight text-slate-400 dark:text-navy-300">{PERFIL_LABEL[user?.perfil || ''] || user?.perfil}</span>
               </span>
               <ChevronDown className="h-4 w-4 text-slate-400" />
             </button>
 
             {menu && (
-              <div className="absolute right-0 mt-1 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-modal animate-fade-in" role="menu">
-                <div className="border-b border-slate-100 px-4 py-3">
-                  <div className="text-sm font-semibold text-slate-800">{user?.name}</div>
-                  <div className="truncate text-xs text-slate-500">{user?.email}</div>
+              <div className="absolute right-0 mt-1 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-modal animate-fade-in dark:border-navy-700 dark:bg-navy-900" role="menu">
+                <div className="border-b border-slate-100 px-4 py-3 dark:border-navy-800">
+                  <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">{user?.name}</div>
+                  <div className="truncate text-xs text-slate-500 dark:text-navy-300">{user?.email}</div>
                 </div>
-                <Link to="/config" onClick={() => setMenu(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50" role="menuitem">
+                <Link to="/config" onClick={() => setMenu(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-navy-800" role="menuitem">
                   <UserRound className="h-4 w-4 text-slate-400" /> Minha conta
                 </Link>
-                <Link to="/config#senha" onClick={() => setMenu(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50" role="menuitem">
+                <Link to="/config#senha" onClick={() => setMenu(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-navy-800" role="menuitem">
                   <KeyRound className="h-4 w-4 text-slate-400" /> Trocar senha
                 </Link>
-                <button onClick={logout} className="flex w-full items-center gap-2 border-t border-slate-100 px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50" role="menuitem">
+                <button onClick={logout} className="flex w-full items-center gap-2 border-t border-slate-100 px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 dark:border-navy-800 dark:hover:bg-red-950/40" role="menuitem">
                   <LogOut className="h-4 w-4" /> Sair
                 </button>
               </div>
@@ -126,7 +132,7 @@ export default function Layout() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto">
+        <main id="conteudo-principal" className="flex-1 overflow-y-auto" tabIndex={-1}>
           <Outlet />
         </main>
       </div>
