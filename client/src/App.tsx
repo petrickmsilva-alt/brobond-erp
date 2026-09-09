@@ -23,6 +23,8 @@ const ResetPage = lazy(() => import('./pages/ForgotReset').then((m) => ({ defaul
 const Convite = lazy(() => import('./pages/Convite'));
 const CatalogoPublico = lazy(() => import('./pages/CatalogoPublico'));
 const PortalCliente = lazy(() => import('./pages/PortalCliente'));
+// Catálogo de componentes de UI, só para referência visual — não entra no menu.
+const ComponentCatalog = lazy(() => import('./pages/dev/ComponentCatalog'));
 
 function Loading() {
   return (
@@ -77,6 +79,7 @@ export default function App() {
             <Route path="compras/:id" element={<OrderPage tipo="compra" />} />
             <Route path="ordens/:id" element={<OrdemDetail />} />
             <Route path="fichas/:id" element={<FichaDetail />} />
+            <Route path="dev/componentes" element={<AdminOnly><ComponentCatalog /></AdminOnly>} />
             {MODULES.filter((m) => m.path !== '/' && m.id !== 'config').map((m) => {
               const el = <ModulePage module={m} />;
               return <Route key={m.id} path={m.path.replace('/', '')} element={m.adminOnly ? <AdminOnly>{el}</AdminOnly> : el} />;
