@@ -148,7 +148,11 @@ export default function Settings() {
                 <dt className="text-slate-500">Links de e-mail (convite)</dt>
                 <dd className="text-right">
                   {meta?.emailLinks?.configurada ? (
-                    <Badge tone="green">Endereço fixo (APP_URL): {meta.emailLinks.base}</Badge>
+                    meta.emailLinks.appUrlIgnorada ? (
+                      <Badge tone="red">APP_URL ignorada (endereço interno) — usando {meta.emailLinks.base}</Badge>
+                    ) : (
+                      <Badge tone="green">Endereço fixo (APP_URL): {meta.emailLinks.base}</Badge>
+                    )
                   ) : meta?.emailLinks?.base ? (
                     <Badge tone="amber">Sem APP_URL — usando {meta.emailLinks.base}</Badge>
                   ) : (
@@ -163,7 +167,16 @@ export default function Settings() {
                 <dd className="font-medium text-slate-800">Argon2id + MFA (admin)</dd>
               </div>
             </dl>
-            {meta?.emailLinks?.aviso ? (
+            {meta?.emailLinks?.appUrlIgnorada || (meta?.emailLinks && meta.emailLinks.base && meta.emailLinks.publica === false) ? (
+              <div className="mt-4">
+                <Alert tone="red">
+                  <strong>Os links de e-mail não abrem para quem recebe (“URL inválida”).</strong> O endereço configurado
+                  existe só dentro do servidor (localhost, IP privado ou nome sem domínio), então ele é descartado. Defina{' '}
+                  <code>APP_URL</code> com o endereço público do ERP (na Render: Environment → <code>APP_URL</code>, ex.{' '}
+                  <code>https://erp.brobond.com.br</code>) e reenvie o convite.
+                </Alert>
+              </div>
+            ) : meta?.emailLinks?.aviso ? (
               <div className="mt-4">
                 <Alert tone="amber">
                   <strong>Convites por e-mail podem abrir como “URL inválida”.</strong> O servidor não tem{' '}

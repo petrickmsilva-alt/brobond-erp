@@ -23,6 +23,7 @@ import {
   Ban,
   BellRing,
   Briefcase,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
@@ -49,6 +50,7 @@ import {
   Shield,
   ShieldAlert,
   ShieldCheck,
+  SlidersHorizontal,
   Smartphone,
   Trash2,
   User,
@@ -56,11 +58,13 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { api, ApiError, downloadFile } from '../lib/api';
 import type { ListResult } from '../lib/meta';
 import { formatDateTime, formatRelative } from '../lib/format';
 import { imprimirFicha } from '../lib/fichaPrint';
 import { useAuth } from '../auth/AuthContext';
+import { useLocalStorageBool } from '../lib/useLocalStorage';
 import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import ReauthModal from '../components/ReauthModal';
 
@@ -198,150 +202,172 @@ function iniciais(nome: string): string {
   return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase();
 }
 
-/** Avatar estruturado em formato caixa box profissional. */
-function AvatarBox({ nome, perfil, tamanho = 'md' }: { nome: string; perfil: string; tamanho?: 'md' | 'lg' }) {
-  const cls = tamanho === 'lg' ? 'h-12 w-12 text-base rounded-xl' : 'h-9 w-9 text-xs rounded-lg';
+// ----------------------------------------------------------------------------
+// Sistema visual de etiquetas do módulo (padrão "caixinha").
+//
+// Regra de ouro da Brobond: nenhuma informação de perfil/status/segurança vive
+// dentro de uma bolinha colorida. Cada dado é uma CAIXA — borda, fundo suave,
+// cantos de 6 px, rótulo em texto e o ícone dentro de uma caixinha de 16 px.
+// Assim a leitura é imediata em lista, ficha e celular, o significado nunca
+// depende só da cor (acessibilidade) e o visual fica alinhado ao resto do ERP.
+// ----------------------------------------------------------------------------
+type Tom = 'verde' | 'amarelo' | 'vermelho' | 'azul' | 'slate';
+
+const TONS: Record<Tom, { caixa: string; icone: string }> = {
+  verde: {
+    caixa: 'border-emerald-300/80 bg-emerald-50 text-emerald-900 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300',
+    icone: 'bg-emerald-600/15 text-emerald-600 dark:text-emerald-400',
+  },
+  amarelo: {
+    caixa: 'border-amber-300/80 bg-amber-50 text-amber-900 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300',
+    icone: 'bg-amber-500/20 text-amber-600 dark:text-amber-400',
+  },
+  vermelho: {
+    caixa: 'border-red-300/80 bg-red-50 text-red-900 dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-300',
+    icone: 'bg-red-600/15 text-red-600 dark:text-red-400',
+  },
+  azul: {
+    caixa: 'border-blue-300/80 bg-blue-50 text-blue-900 dark:border-navy-700 dark:bg-navy-800/60 dark:text-navy-200',
+    icone: 'bg-blue-600/15 text-blue-600 dark:text-navy-300',
+  },
+  slate: {
+    caixa: 'border-slate-300/80 bg-slate-50 text-slate-700 dark:border-navy-700 dark:bg-navy-800/40 dark:text-navy-200',
+    icone: 'bg-slate-500/15 text-slate-500 dark:text-navy-300',
+  },
+};
+
+/** Etiqueta em caixa: ícone em caixinha + rótulo textual (nunca só cor/bola). */
+function Tag({ tom, icone: Icone, rotulo, titulo }: { tom: Tom; icone: LucideIcon; rotulo: string; titulo?: string }) {
+  const t = TONS[tom];
   return (
-    <span className={`flex ${cls} shrink-0 items-center justify-center font-bold font-mono text-white shadow-2xs ${AVATAR_BG[perfil] || 'bg-slate-600'}`}>
+    <span title={titulo} className={`inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-semibold leading-5 shadow-2xs ${t.caixa}`}>
+      <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-[3px] ${t.icone}`} aria-hidden="true">
+        <Icone className="h-3 w-3" />
+      </span>
+      <span className="truncate">{rotulo}</span>
+    </span>
+  );
+}
+
+/** Avatar em caixa (cantos retos): as iniciais ficam numa plaqueta, não numa bola. */
+function AvatarBox({ nome, perfil, tamanho = 'md' }: { nome: string; perfil: string; tamanho?: 'md' | 'lg' }) {
+  const cls = tamanho === 'lg' ? 'h-12 w-12 rounded-md text-base' : 'h-9 w-9 rounded-md text-xs';
+  return (
+    <span
+      className={`flex ${cls} shrink-0 items-center justify-center border border-white/10 font-mono font-bold tracking-tight text-white shadow-2xs ${AVATAR_BG[perfil] || 'bg-slate-600'}`}
+      aria-hidden="true"
+    >
       {iniciais(nome)}
     </span>
   );
 }
 
-/** Tag caixa box de Perfil profissional com ícone. */
+/** Caixa de Perfil. */
 function TagPerfil({ perfil }: { perfil: string }) {
-  if (perfil === 'admin') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 shadow-2xs dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300">
-        <Shield className="h-3 w-3 text-amber-600 dark:text-amber-400" />
-        Administrador
-      </span>
-    );
-  }
-  if (perfil === 'gerente') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-blue-300/80 bg-blue-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-blue-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/60 dark:text-navy-200">
-        <Briefcase className="h-3 w-3 text-blue-600 dark:text-navy-300" />
-        Gerente
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-300/80 bg-slate-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700 shadow-2xs dark:border-navy-700 dark:bg-navy-800/40 dark:text-slate-300">
-      <User className="h-3 w-3 text-slate-500" />
-      Operador
-    </span>
-  );
+  if (perfil === 'admin') return <Tag tom="amarelo" icone={Shield} rotulo="Administrador" titulo="Acesso total, incluindo usuários e auditoria" />;
+  if (perfil === 'gerente') return <Tag tom="azul" icone={Briefcase} rotulo="Gerente" titulo="Inclui, altera e exclui em todos os módulos, exceto usuários e auditoria" />;
+  return <Tag tom="slate" icone={User} rotulo="Operador" titulo="Inclui e altera registros, mas não exclui" />;
 }
 
-/** Tag caixa box de Status da Conta com indicador visual de ponto. */
+/** Caixa de Situação da conta (ciclo de vida). */
 function TagStatus({ row }: { row: Usuario }) {
   const statusKey = row.status_conta || 'ativo';
-  if (row.ativo === false) {
+  if (row.ativo === false) return <Tag tom="slate" icone={PowerOff} rotulo="Desativado" />;
+  if (row.conta_bloqueada)
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-300/80 bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600 shadow-2xs dark:border-navy-700 dark:bg-navy-800 dark:text-navy-400">
-        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-        Desativado
-      </span>
+      <Tag
+        tom="vermelho"
+        icone={Ban}
+        rotulo="Bloqueado"
+        titulo={row.bloqueado_ate ? `Bloqueado até ${formatDateTime(row.bloqueado_ate)}${row.motivo_bloqueio ? ` — ${row.motivo_bloqueio}` : ''}` : row.motivo_bloqueio}
+      />
     );
-  }
-  if (row.conta_bloqueada) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-red-300/80 bg-red-50 px-2.5 py-0.5 text-[11px] font-semibold text-red-900 shadow-2xs dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-300" title={row.bloqueado_ate ? `Até ${formatDateTime(row.bloqueado_ate)}` : row.motivo_bloqueio}>
-        <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
-        Bloqueado
-      </span>
-    );
-  }
-  if (row.acesso_expirado) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-red-300/80 bg-red-50 px-2.5 py-0.5 text-[11px] font-semibold text-red-900 shadow-2xs dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-        Acesso expirado
-      </span>
-    );
-  }
-  if (statusKey === 'convite_pendente') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-blue-300/80 bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/50 dark:text-navy-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
-        Convite pendente
-      </span>
-    );
-  }
-  if (statusKey === 'convite_expirado') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 shadow-2xs dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-        Convite expirado
-      </span>
-    );
-  }
-  if (statusKey === 'provisoria') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 shadow-2xs dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-        Troca pendente
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/80 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-900 shadow-2xs dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300">
-      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-      Ativo
-    </span>
-  );
+  if (row.acesso_expirado) return <Tag tom="vermelho" icone={Clock} rotulo="Acesso expirado" titulo="A conta venceu — renove o prazo na edição do usuário" />;
+  if (statusKey === 'convite_pendente') return <Tag tom="azul" icone={Mail} rotulo="Convite pendente" titulo="E-mail enviado: aguardando o aceite (válido por 48 h)" />;
+  if (statusKey === 'convite_expirado') return <Tag tom="amarelo" icone={Mail} rotulo="Convite expirado" titulo="O convite venceu — reenvie pela ficha do usuário" />;
+  if (statusKey === 'provisoria') return <Tag tom="amarelo" icone={KeyRound} rotulo="Troca pendente" titulo="Senha provisória: troca obrigatória no próximo login" />;
+  return <Tag tom="verde" icone={CheckCircle2} rotulo="Ativo" />;
 }
 
-/** Tag caixa box de Estado da Senha. */
+/** Caixa do estado da senha. */
 function TagSenha({ row }: { row: Usuario }) {
   const st = row.senha_status || 'propria';
-  if (st === 'convite_pendente') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-blue-300/80 bg-blue-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-blue-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/50 dark:text-navy-300" title="Aguardando usuário aceitar o convite por e-mail">
-        <Mail className="h-3 w-3 text-blue-600" />
-        Aguardando convite
-      </span>
-    );
-  }
-  if (st === 'provisoria' || row.trocar_senha) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 shadow-2xs dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300" title="Senha provisória — troca obrigatória no próximo login">
-        <KeyRound className="h-3 w-3 text-amber-600" />
-        Provisória
-      </span>
-    );
-  }
+  if (st === 'convite_pendente') return <Tag tom="azul" icone={Mail} rotulo="Aguardando convite" titulo="Aguardando o usuário aceitar o convite por e-mail" />;
+  if (st === 'provisoria' || row.trocar_senha) return <Tag tom="amarelo" icone={KeyRound} rotulo="Provisória" titulo="Senha provisória — troca obrigatória no próximo login" />;
+  return <Tag tom="verde" icone={ShieldCheck} rotulo="Própria" titulo="Senha definida pelo próprio usuário" />;
+}
+
+/** Caixa do segundo fator (MFA). */
+function TagMfa({ row }: { row: Usuario }) {
+  if (row.mfa_ativado_em) return <Tag tom="verde" icone={Smartphone} rotulo="Ativado" titulo="Segundo fator ativo nesta conta" />;
+  if (row.perfil === 'admin') return <Tag tom="vermelho" icone={ShieldAlert} rotulo="Pendente" titulo="MFA é obrigatório para administradores" />;
+  return <Tag tom="slate" icone={Smartphone} rotulo="Não" titulo="Conta sem segundo fator" />;
+}
+
+// ----------------------------------------------------------------------------
+// Caixabox de filtro: cada dimensão é uma caixa autocontida (rótulo + controle
+// + limpeza individual). Filtro ativo muda a borda e o fundo — dá para ver de
+// relance quais dimensões estão estreitando a lista.
+// ----------------------------------------------------------------------------
+function CaixaFiltro({
+  rotulo,
+  icone: Icone,
+  ativo,
+  onLimpar,
+  children,
+  className = '',
+}: {
+  rotulo: string;
+  icone: LucideIcon;
+  ativo: boolean;
+  onLimpar?: () => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/80 bg-emerald-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-900 shadow-2xs dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300" title="Senha definida pelo próprio usuário">
-      <ShieldCheck className="h-3 w-3 text-emerald-600" />
-      Própria
-    </span>
+    <div
+      className={`rounded-lg border p-2.5 transition-colors ${
+        ativo
+          ? 'border-brand-400 bg-brand-50/60 dark:border-brand-600/60 dark:bg-brand-950/30'
+          : 'border-slate-200 bg-white hover:border-slate-300 dark:border-navy-700 dark:bg-navy-900 dark:hover:border-navy-600'
+      } ${className}`}
+    >
+      <div className="mb-1.5 flex items-center justify-between gap-1">
+        <span className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300">
+          <Icone className="h-3 w-3" /> {rotulo}
+        </span>
+        {ativo && onLimpar && (
+          <button
+            type="button"
+            onClick={onLimpar}
+            className="rounded p-0.5 text-slate-400 transition-colors hover:bg-white hover:text-red-600 dark:hover:bg-navy-800"
+            aria-label={`Limpar filtro ${rotulo}`}
+            title={`Limpar filtro ${rotulo}`}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+      {children}
+    </div>
   );
 }
 
-/** Tag caixa box de Estado do MFA. */
-function TagMfa({ row }: { row: Usuario }) {
-  if (row.mfa_ativado_em) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/80 bg-emerald-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-900 shadow-2xs dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-300">
-        <Smartphone className="h-3 w-3 text-emerald-600" />
-        Ativado
-      </span>
-    );
-  }
-  if (row.perfil === 'admin') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-md border border-red-300/80 bg-red-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-red-900 shadow-2xs dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-300" title="MFA é obrigatório para administradores">
-        <ShieldAlert className="h-3 w-3 text-red-600" />
-        Pendente
-      </span>
-    );
-  }
+/** Chip de filtro ativo: categoria + valor + remoção. */
+function ChipFiltro({ rotulo, valor, onRemover }: { rotulo: string; valor: string; onRemover: () => void }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-300/80 bg-slate-50/90 px-2.5 py-0.5 text-[11px] font-semibold text-slate-500 shadow-2xs dark:border-navy-700 dark:bg-navy-800/40 dark:text-navy-400">
-      <Smartphone className="h-3 w-3 text-slate-400" />
-      Não
+    <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 py-0.5 pl-2 pr-1 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
+      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-navy-400">{rotulo}</span>
+      <span className="truncate">{valor}</span>
+      <button
+        type="button"
+        onClick={onRemover}
+        className="rounded p-0.5 text-slate-400 transition-colors hover:bg-white hover:text-red-600 dark:hover:bg-navy-700"
+        aria-label={`Remover filtro ${rotulo}`}
+        title={`Remover filtro ${rotulo}`}
+      >
+        <X className="h-3 w-3" />
+      </button>
     </span>
   );
 }
@@ -390,6 +416,9 @@ export default function UsuariosPage() {
   const [fMfa, setFMfa] = useState('');
   const [fAcesso, setFAcesso] = useState('');
   const [fParado, setFParado] = useState('');
+  // O caixabox de filtros nasce aberto (é o coração do módulo) e a preferência
+  // de cada usuário é lembrada no navegador.
+  const [filtrosAbertos, setFiltrosAbertos] = useLocalStorageBool('brobond_usuarios_filtros_abertos', true);
 
   // Formulário
   const [formOpen, setFormOpen] = useState(false);
@@ -905,6 +934,20 @@ export default function UsuariosPage() {
   const to = Math.min(total, page * pageSize);
   const t = resumo?.totais;
 
+  // Visões rápidas: cada botão aplica (ou desfaz) um recorte pronto da base.
+  // São a porta de entrada da lista — os caixabox abaixo afinam o resultado.
+  const visoes: { id: string; rotulo: string; icone: LucideIcon; total: number; ativo: boolean; aplicar: () => void }[] = [
+    { id: 'todos', rotulo: 'Todos', icone: Users, total: t?.total ?? total, ativo: !filtrosAtivos && !q, aplicar: limparFiltros },
+    { id: 'ativos', rotulo: 'Ativos', icone: UserRound, total: t?.ativos ?? 0, ativo: fAtivo === 'true', aplicar: () => { limparFiltros(); setFAtivo('true'); } },
+    { id: 'admins', rotulo: 'Administradores', icone: Shield, total: t?.admins ?? 0, ativo: fPerfil === 'admin', aplicar: () => { limparFiltros(); setFPerfil('admin'); } },
+    { id: 'gerentes', rotulo: 'Gerentes', icone: Briefcase, total: t?.gerentes ?? 0, ativo: fPerfil === 'gerente', aplicar: () => { limparFiltros(); setFPerfil('gerente'); } },
+    { id: 'operadores', rotulo: 'Operadores', icone: User, total: t?.operadores ?? 0, ativo: fPerfil === 'operador', aplicar: () => { limparFiltros(); setFPerfil('operador'); } },
+    { id: 'convites', rotulo: 'Convites pendentes', icone: Mail, total: t?.convites_pendentes ?? 0, ativo: fStatus === 'convite_pendente', aplicar: () => { limparFiltros(); setFStatus('convite_pendente'); } },
+    { id: 'mfa', rotulo: 'Com MFA', icone: Smartphone, total: t?.mfa_ativos ?? 0, ativo: fMfa === 'sim', aplicar: () => { limparFiltros(); setFMfa('sim'); } },
+    { id: 'bloqueados', rotulo: 'Bloqueados', icone: Ban, total: t?.bloqueados ?? 0, ativo: fStatus === 'bloqueado', aplicar: () => { limparFiltros(); setFStatus('bloqueado'); } },
+    { id: 'inativos', rotulo: 'Desativados', icone: PowerOff, total: t?.inativos ?? 0, ativo: fAtivo === 'false', aplicar: () => { limparFiltros(); setFAtivo('false'); } },
+  ];
+
   return (
     <div className="p-4 sm:p-6">
       <PageHeader
@@ -1129,264 +1172,185 @@ export default function UsuariosPage() {
         </div>
       )}
 
-      {/* Sistema de Caixaboxes de Filtros de Alto Nível */}
-      <div className="card mb-4 p-3.5 space-y-3">
-        {/* Presets / Atalhos Rápidos de Filtro */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-semibold">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-navy-400 mr-1 flex items-center gap-1 shrink-0">
-            <ListFilter className="h-3.5 w-3.5" /> Caixabox:
-          </span>
-          <button
-            type="button"
-            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${!filtrosAtivos && !q ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
-            onClick={limparFiltros}
-          >
-            Todos os usuários ({t?.total ?? total})
-          </button>
-          <button
-            type="button"
-            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fAtivo === 'true' && !fPerfil && !fStatus && !fMfa && !fSenha && !fAcesso ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
-            onClick={() => { limparFiltros(); setFAtivo('true'); }}
-          >
-            Ativos ({t?.ativos ?? 0})
-          </button>
-          <button
-            type="button"
-            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fPerfil === 'admin' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
-            onClick={() => { limparFiltros(); setFPerfil('admin'); }}
-          >
-            Admins ({t?.admins ?? 0})
-          </button>
-          <button
-            type="button"
-            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fPerfil === 'gerente' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
-            onClick={() => { limparFiltros(); setFPerfil('gerente'); }}
-          >
-            Gerentes ({t?.gerentes ?? 0})
-          </button>
-          <button
-            type="button"
-            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fPerfil === 'operador' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
-            onClick={() => { limparFiltros(); setFPerfil('operador'); }}
-          >
-            Operadores ({t?.operadores ?? 0})
-          </button>
-          <button
-            type="button"
-            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fStatus === 'convite_pendente' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
-            onClick={() => { limparFiltros(); setFStatus('convite_pendente'); }}
-          >
-            Convites Pendentes ({t?.convites_pendentes ?? 0})
-          </button>
-          <button
-            type="button"
-            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fMfa === 'sim' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
-            onClick={() => { limparFiltros(); setFMfa('sim'); }}
-          >
-            Com MFA ({t?.mfa_ativos ?? 0})
-          </button>
-          <button
-            type="button"
-            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fStatus === 'bloqueado' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
-            onClick={() => { limparFiltros(); setFStatus('bloqueado'); }}
-          >
-            Bloqueados ({t?.bloqueados ?? 0})
-          </button>
-          <button
-            type="button"
-            className={`rounded-lg px-2.5 py-1.5 border transition-colors shrink-0 ${fAtivo === 'false' ? 'bg-navy-800 text-white border-navy-800 shadow-2xs' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-navy-900 dark:border-navy-700 dark:text-slate-300 dark:hover:bg-navy-800'}`}
-            onClick={() => { limparFiltros(); setFAtivo('false'); }}
-          >
-            Desativados ({t?.inativos ?? 0})
-          </button>
+      {/* Painel de consulta — barra de comando, visões e filtros em caixabox */}
+      <section className="card mb-4 overflow-hidden" aria-label="Consulta de usuários">
+        {/* Barra de comando */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-3 py-2.5 dark:border-navy-800 sm:px-4">
+          <div className="relative min-w-[200px] flex-1 sm:max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              className="input pl-9 pr-8 !py-1.5 text-sm"
+              placeholder="Buscar por nome, e-mail, cargo ou departamento..."
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              aria-label="Buscar usuário"
+            />
+            {q && (
+              <button className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 transition-colors hover:text-slate-600" onClick={() => setQ('')} aria-label="Limpar busca">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="ml-auto flex items-center gap-1.5">
+            <span className="mr-1 hidden text-xs tabular-nums text-slate-500 md:inline dark:text-navy-300">
+              {loading && !data
+                ? 'Carregando...'
+                : total === 0
+                  ? 'Nenhum usuário'
+                  : `${from}–${to} de ${total} usuário${total === 1 ? '' : 's'}`}
+            </span>
+            <button
+              type="button"
+              className={`btn-secondary !py-1.5 text-xs ${filtrosAtivos ? '!border-brand-400 !text-brand-700 dark:!text-brand-300' : ''}`}
+              onClick={() => setFiltrosAbertos(!filtrosAbertos)}
+              aria-expanded={filtrosAbertos}
+              aria-controls="painel-filtros-usuarios"
+              title={filtrosAbertos ? 'Ocultar os filtros avançados' : 'Mostrar os filtros avançados'}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Filtros</span>
+              {filtrosAtivos > 0 && <span className="badge ml-0.5 !bg-brand-500 !text-white">{filtrosAtivos}</span>}
+            </button>
+            {(filtrosAtivos > 0 || q) && (
+              <button type="button" className="btn-ghost !py-1.5 text-xs" onClick={limparFiltros} title="Limpar a busca e todos os filtros">
+                <X className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Limpar</span>
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Caixaboxes de Seleção / Controles Principais das 6 Dimensões */}
-        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 pt-1">
-          {/* Caixabox Busca Usuário */}
-          <div className="relative xl:col-span-2">
-            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
-              <Search className="h-3 w-3 text-slate-400" /> Usuário
-            </label>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                className="input pl-9 pr-8 !py-1.5 text-xs font-medium"
-                placeholder="Nome, e-mail ou cargo..."
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-              />
-              {q && (
-                <button className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" onClick={() => setQ('')} aria-label="Limpar busca">
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
+        {/* Visões rápidas (segmentado) */}
+        <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50/70 px-3 py-2 dark:border-navy-800 dark:bg-navy-950/40 sm:px-4">
+          <span className="hidden shrink-0 items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 sm:flex dark:text-navy-400">
+            <ListFilter className="h-3.5 w-3.5" /> Visão
+          </span>
+          <div className="flex gap-1 overflow-x-auto pb-0.5" role="tablist" aria-label="Recortes prontos da lista">
+            {visoes.map((v) => (
+              <button
+                key={v.id}
+                type="button"
+                role="tab"
+                aria-selected={v.ativo}
+                onClick={v.ativo && v.id !== 'todos' ? limparFiltros : v.aplicar}
+                title={v.ativo && v.id !== 'todos' ? 'Clique para remover este recorte' : undefined}
+                className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                  v.ativo
+                    ? 'border-navy-800 bg-navy-800 text-white shadow-sm dark:border-brand-500 dark:bg-brand-600'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-navy-700 dark:bg-navy-900 dark:text-navy-200 dark:hover:bg-navy-800'
+                }`}
+              >
+                <v.icone className="h-3.5 w-3.5" />
+                {v.rotulo}
+                <span
+                  className={`rounded px-1 py-px text-[10px] font-bold tabular-nums ${
+                    v.ativo ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500 dark:bg-navy-800 dark:text-navy-300'
+                  }`}
+                >
+                  {v.total}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Caixabox de filtros (dobra, para não roubar espaço da lista) */}
+        {filtrosAbertos && (
+          <div id="painel-filtros-usuarios" className="border-b border-slate-200 bg-slate-50/40 px-3 py-3 dark:border-navy-800 dark:bg-navy-950/20 sm:px-4">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <CaixaFiltro rotulo="Perfil" icone={UserRound} ativo={!!fPerfil} onLimpar={() => setFPerfil('')}>
+                <select className="input !py-1.5 text-xs font-semibold" value={fPerfil} onChange={(e) => { setFPerfil(e.target.value); setPage(1); }} aria-label="Filtrar por perfil">
+                  <option value="">Todos os perfis</option>
+                  <option value="admin">Administrador</option>
+                  <option value="gerente">Gerente</option>
+                  <option value="operador">Operador</option>
+                </select>
+              </CaixaFiltro>
+
+              <CaixaFiltro rotulo="Status da conta" icone={Activity} ativo={!!fStatus} onLimpar={() => setFStatus('')}>
+                <select className="input !py-1.5 text-xs font-semibold" value={fStatus} onChange={(e) => { setFStatus(e.target.value); setPage(1); }} aria-label="Filtrar por status da conta">
+                  <option value="">Todos os status</option>
+                  <option value="ativo">Ativo</option>
+                  <option value="convite_pendente">Convite pendente</option>
+                  <option value="convite_expirado">Convite expirado</option>
+                  <option value="provisoria">Troca de senha pendente</option>
+                  <option value="bloqueado">Bloqueado</option>
+                  <option value="expirado">Acesso expirado</option>
+                  <option value="inativo">Desativado</option>
+                </select>
+              </CaixaFiltro>
+
+              <CaixaFiltro rotulo="Senha" icone={KeyRound} ativo={!!fSenha} onLimpar={() => setFSenha('')}>
+                <select className="input !py-1.5 text-xs font-semibold" value={fSenha} onChange={(e) => { setFSenha(e.target.value); setPage(1); }} aria-label="Filtrar por situação da senha">
+                  <option value="">Todas as situações</option>
+                  <option value="propria">Definida pelo usuário</option>
+                  <option value="provisoria">Provisória (troca pendente)</option>
+                  <option value="convite_pendente">Aguardando convite</option>
+                </select>
+              </CaixaFiltro>
+
+              <CaixaFiltro rotulo="MFA (2 fatores)" icone={Smartphone} ativo={!!fMfa} onLimpar={() => setFMfa('')}>
+                <select className="input !py-1.5 text-xs font-semibold" value={fMfa} onChange={(e) => { setFMfa(e.target.value); setPage(1); }} aria-label="Filtrar por segundo fator">
+                  <option value="">Com ou sem MFA</option>
+                  <option value="sim">Com MFA ativado</option>
+                  <option value="nao">Sem MFA</option>
+                </select>
+              </CaixaFiltro>
+
+              <CaixaFiltro rotulo="Último acesso" icone={Clock} ativo={!!fAcesso || !!fParado} onLimpar={() => { setFAcesso(''); setFParado(''); }}>
+                <select
+                  className="input !py-1.5 text-xs font-semibold"
+                  value={fAcesso || (fParado === 'sim' ? 'parado30d' : '')}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFAcesso(val);
+                    setFParado(val === 'parado30d' ? 'sim' : '');
+                    setPage(1);
+                  }}
+                  aria-label="Filtrar por período do último acesso"
+                >
+                  <option value="">Qualquer período</option>
+                  <option value="recente">Nos últimos 7 dias</option>
+                  <option value="parado30d">Parado há 30+ dias</option>
+                  <option value="nunca">Nunca acessou</option>
+                </select>
+              </CaixaFiltro>
+
+              <CaixaFiltro rotulo="Situação" icone={Power} ativo={!!fAtivo} onLimpar={() => setFAtivo('')}>
+                <select className="input !py-1.5 text-xs font-semibold" value={fAtivo} onChange={(e) => { setFAtivo(e.target.value); setPage(1); }} aria-label="Filtrar por situação (ativo ou desativado)">
+                  <option value="">Ativos e desativados</option>
+                  <option value="true">Somente ativos</option>
+                  <option value="false">Somente desativados</option>
+                </select>
+              </CaixaFiltro>
             </div>
           </div>
+        )}
 
-          {/* Caixabox Perfil */}
-          <div>
-            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
-              <UserRound className="h-3 w-3 text-navy-500" /> Perfil
-            </label>
-            <select
-              className={`input !py-1.5 text-xs font-semibold ${fPerfil ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
-              value={fPerfil}
-              onChange={(e) => { setFPerfil(e.target.value); setPage(1); }}
-            >
-              <option value="">Todos os perfis</option>
-              <option value="admin">Administrador</option>
-              <option value="gerente">Gerente</option>
-              <option value="operador">Operador</option>
-            </select>
-          </div>
-
-          {/* Caixabox Status */}
-          <div>
-            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
-              <Activity className="h-3 w-3 text-emerald-600" /> Status
-            </label>
-            <select
-              className={`input !py-1.5 text-xs font-semibold ${fStatus ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
-              value={fStatus}
-              onChange={(e) => { setFStatus(e.target.value); setPage(1); }}
-            >
-              <option value="">Todos os status</option>
-              <option value="ativo">Ativo</option>
-              <option value="convite_pendente">Convite pendente</option>
-              <option value="convite_expirado">Convite expirado</option>
-              <option value="provisoria">Senha provisória</option>
-              <option value="bloqueado">Bloqueado</option>
-              <option value="expirado">Acesso expirado</option>
-              <option value="inativo">Desativado</option>
-            </select>
-          </div>
-
-          {/* Caixabox Senha */}
-          <div>
-            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
-              <KeyRound className="h-3 w-3 text-amber-600" /> Senha
-            </label>
-            <select
-              className={`input !py-1.5 text-xs font-semibold ${fSenha ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
-              value={fSenha}
-              onChange={(e) => { setFSenha(e.target.value); setPage(1); }}
-            >
-              <option value="">Todas as senhas</option>
-              <option value="propria">Definida pelo usuário</option>
-              <option value="provisoria">Provisória (troca pendente)</option>
-              <option value="convite_pendente">Aguardando convite</option>
-            </select>
-          </div>
-
-          {/* Caixabox MFA */}
-          <div>
-            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
-              <Smartphone className="h-3 w-3 text-blue-600" /> MFA (2 Fatores)
-            </label>
-            <select
-              className={`input !py-1.5 text-xs font-semibold ${fMfa ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
-              value={fMfa}
-              onChange={(e) => { setFMfa(e.target.value); setPage(1); }}
-            >
-              <option value="">Todos</option>
-              <option value="sim">Com MFA ativado</option>
-              <option value="nao">Sem MFA</option>
-            </select>
-          </div>
-
-          {/* Caixabox Último Acesso */}
-          <div>
-            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
-              <Clock className="h-3 w-3 text-violet-600" /> Último acesso
-            </label>
-            <select
-              className={`input !py-1.5 text-xs font-semibold ${fAcesso || fParado ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
-              value={fAcesso || (fParado === 'sim' ? 'parado30d' : '')}
-              onChange={(e) => {
-                const val = e.target.value;
-                setFAcesso(val);
-                if (val === 'parado30d') setFParado('sim');
-                else setFParado('');
-                setPage(1);
-              }}
-            >
-              <option value="">Todos os períodos</option>
-              <option value="recente">Nos últimos 7 dias</option>
-              <option value="parado30d">Parado há 30+ dias</option>
-              <option value="nunca">Nunca acessou</option>
-            </select>
-          </div>
-
-          {/* Caixabox Situação */}
-          <div>
-            <label className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-navy-300 flex items-center gap-1">
-              <Power className="h-3 w-3 text-slate-600" /> Situação
-            </label>
-            <select
-              className={`input !py-1.5 text-xs font-semibold ${fAtivo ? '!border-brand-500 !bg-brand-50/40 dark:!bg-brand-950/30' : ''}`}
-              value={fAtivo}
-              onChange={(e) => { setFAtivo(e.target.value); setPage(1); }}
-            >
-              <option value="">Ativos e desativados</option>
-              <option value="true">Somente ativos</option>
-              <option value="false">Somente desativados</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Chips de Filtros Ativos */}
+        {/* Filtros ativos — leitura do que está estreitando a lista */}
         {(filtrosAtivos > 0 || debouncedQ) && (
-          <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 dark:border-navy-800 pt-2.5 mt-1 text-xs">
-            <span className="font-bold text-slate-500 dark:text-navy-300 uppercase tracking-wider text-[10px]">Filtros ativos:</span>
-            {debouncedQ && (
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
-                <span className="text-slate-400 font-normal">Busca:</span> "{debouncedQ}"
-                <button onClick={() => setQ('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
-              </span>
-            )}
-            {fPerfil && (
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
-                <span className="text-slate-400 font-normal">Perfil:</span> {PERFIL_META[fPerfil]?.label || fPerfil}
-                <button onClick={() => setFPerfil('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
-              </span>
-            )}
-            {fStatus && (
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
-                <span className="text-slate-400 font-normal">Status:</span> {STATUS_META[fStatus]?.label || fStatus}
-                <button onClick={() => setFStatus('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
-              </span>
-            )}
-            {fSenha && (
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
-                <span className="text-slate-400 font-normal">Senha:</span> {SENHA_META[fSenha]?.label || fSenha}
-                <button onClick={() => setFSenha('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
-              </span>
-            )}
-            {fMfa && (
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
-                <span className="text-slate-400 font-normal">MFA:</span> {fMfa === 'sim' ? 'Com MFA' : 'Sem MFA'}
-                <button onClick={() => setFMfa('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
-              </span>
-            )}
+          <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:px-4">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-navy-400">Filtros ativos</span>
+            {debouncedQ && <ChipFiltro rotulo="Busca" valor={`"${debouncedQ}"`} onRemover={() => setQ('')} />}
+            {fPerfil && <ChipFiltro rotulo="Perfil" valor={PERFIL_META[fPerfil]?.label || fPerfil} onRemover={() => setFPerfil('')} />}
+            {fStatus && <ChipFiltro rotulo="Status" valor={STATUS_META[fStatus]?.label || fStatus} onRemover={() => setFStatus('')} />}
+            {fSenha && <ChipFiltro rotulo="Senha" valor={SENHA_META[fSenha]?.label || fSenha} onRemover={() => setFSenha('')} />}
+            {fMfa && <ChipFiltro rotulo="MFA" valor={fMfa === 'sim' ? 'Com MFA' : 'Sem MFA'} onRemover={() => setFMfa('')} />}
             {(fAcesso || fParado) && (
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
-                <span className="text-slate-400 font-normal">Acesso:</span> {fAcesso === 'recente' ? 'Últimos 7 dias' : fAcesso === 'nunca' ? 'Nunca acessou' : 'Parado há 30+ dias'}
-                <button onClick={() => { setFAcesso(''); setFParado(''); }} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
-              </span>
+              <ChipFiltro
+                rotulo="Acesso"
+                valor={fAcesso === 'recente' ? 'Últimos 7 dias' : fAcesso === 'nunca' ? 'Nunca acessou' : 'Parado há 30+ dias'}
+                onRemover={() => { setFAcesso(''); setFParado(''); }}
+              />
             )}
-            {fAtivo && (
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-navy-50/80 px-2 py-0.5 text-xs font-semibold text-navy-900 shadow-2xs dark:border-navy-700 dark:bg-navy-800/80 dark:text-navy-100">
-                <span className="text-slate-400 font-normal">Situação:</span> {fAtivo === 'true' ? 'Somente ativos' : 'Somente desativados'}
-                <button onClick={() => setFAtivo('')} className="text-slate-400 hover:text-slate-600 dark:hover:text-white" title="Remover"><X className="h-3 w-3" /></button>
-              </span>
-            )}
-            <button className="btn-ghost !py-0.5 text-xs font-semibold text-brand-600 hover:text-brand-800 dark:text-brand-400 ml-auto" onClick={limparFiltros}>
-              Limpar todos os filtros
+            {fAtivo && <ChipFiltro rotulo="Situação" valor={fAtivo === 'true' ? 'Somente ativos' : 'Somente desativados'} onRemover={() => setFAtivo('')} />}
+            <button type="button" className="btn-ghost ml-auto !py-0.5 text-xs font-semibold text-brand-600 hover:text-brand-800 dark:text-brand-400" onClick={limparFiltros}>
+              Limpar tudo
             </button>
           </div>
         )}
-      </div>
+      </section>
 
       {/* Barra de ações em lote */}
       {selecao.length > 0 && (
@@ -1518,7 +1482,7 @@ export default function UsuariosPage() {
                         {row.ultimo_login ? formatRelative(row.ultimo_login) : <span className="text-slate-400 font-normal">Nunca acessou</span>}
                       </td>
                       <td className="text-right" onClick={(e) => e.stopPropagation()}>
-                        <div className="inline-flex items-center gap-0.5">
+                        <div className="inline-flex items-center gap-0.5 rounded-md border border-slate-200 bg-white p-0.5 shadow-2xs dark:border-navy-700 dark:bg-navy-900">
                           <button className="btn-icon" onClick={() => abrirFicha(Number(row.id))} title="Ver ficha completa" aria-label="Ver ficha">
                             <Eye className="h-4 w-4" />
                           </button>
@@ -2109,12 +2073,19 @@ export default function UsuariosPage() {
           <Alert tone="blue">
             O convite é válido por <strong>48 horas</strong> e só pode ser usado uma vez. Quem recebe define a própria senha (ela nunca passa pelo administrador).
           </Alert>
-          {!meta?.emailLinks?.configurada && (
+          {meta?.emailLinks && (meta.emailLinks.appUrlIgnorada || (meta.emailLinks.base && meta.emailLinks.publica === false)) ? (
+            <Alert tone="red">
+              <strong>Este link não abre para o usuário.</strong> O endereço do ERP aponta para dentro do servidor
+              (localhost, IP privado ou nome sem domínio), então quem recebe vê “URL inválida”. Defina{' '}
+              <code>APP_URL</code> com o endereço público em{' '}
+              <Link to="/config" className="font-medium underline underline-offset-2">Configurações › Sistema</Link> e gere o convite novamente.
+            </Alert>
+          ) : !meta?.emailLinks?.configurada ? (
             <Alert tone="amber">
               Confira se o endereço abaixo é mesmo o público do ERP: sem <code>APP_URL</code>, o link usa o endereço desta sessão. O ajuste aparece em{' '}
               <Link to="/config" className="font-medium underline underline-offset-2">Configurações</Link>.
             </Alert>
-          )}
+          ) : null}
           <div className="flex gap-2">
             <input className="input flex-1 font-mono text-xs" readOnly value={conviteLink} onFocus={(e) => e.currentTarget.select()} />
             <button

@@ -15,6 +15,7 @@
 // Configurações avisa. Nenhuma exceção quebra o fluxo do "esqueci minha senha".
 // ============================================================
 import { createRequire } from 'node:module';
+import { hostInterno } from './urlPublica';
 
 const require = createRequire(import.meta.url);
 
@@ -55,16 +56,42 @@ export function corpoEmail(paragrafos: string[]): string {
   return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;line-height:1.6;font-size:15px;">${paragrafos.join('')}</div>`;
 }
 
-/** true quando o HTML tem um href/src relativo — sempre um bug: fora do site, um caminho assim não resolve. */
-function temLinkRelativo(html: string): boolean {
-  return /(href|src)\s*=\s*["'](?!https?:|mailto:|tel:|#|data:)[^"']*["']/i.test(html);
+/**
+ * Links que não abrem na mão de quem recebe o e-mail:
+ *   • relativos ("/convite/abc") — o cliente de e-mail não tem de onde partir;
+ *   • apontando para endereço interno (localhost, IP privado, nome sem
+ *     domínio) — abrem na máquina de quem lê, não no servidor.
+ * Usado só para avisar: o e-mail sai mesmo assim, mas o log diz o endereço
+ * exato que foi parar na caixa de entrada (é o que o suporte precisa).
+ */
+export function linksQueNaoAbrem(html: string): string[] {
+  const achados = new Set<string>();
+  for (const m of String(html || '').matchAll(/(?:href|src)\s*=\s*["']([^"']+)["']/gi)) {
+    const url = m[1]!.trim();
+    if (/^(mailto:|tel:|#|data:)/i.test(url)) continue;
+    if (!/^https?:\/\//i.test(url)) {
+      achados.add(url); // relativo
+      continue;
+    }
+    try {
+      if (hostInterno(new URL(url).hostname)) achados.add(url); // absoluto, mas interno
+    } catch {
+      achados.add(url);
+    }
+  }
+  return [...achados];
 }
 
 /** Envia e-mail via SMTP. Sem SMTP, registra a mensagem no console. */
 export async function enviarEmail(msg: EmailMsg): Promise<'enviado' | 'console'> {
   const cfg = smtpConfigurado();
-  if (temLinkRelativo(msg.html)) {
-    console.warn('⚠️  [mail] Link relativo no e-mail — configure APP_URL: sem endereço público, quem recebe vê apenas "URL inválida".');
+  const quebrados = linksQueNaoAbrem(msg.html);
+  if (quebrados.length) {
+    console.warn(
+      `⚠️  [mail] Link que não abre para quem recebe (${quebrados.join(', ')}) — ` +
+        'defina APP_URL com o endereço público do ERP (ex.: https://erp.brobond.com.br). ' +
+        'Sem isso o destinatário vê "URL inválida" ao clicar.'
+    );
   }
   const texto = msg.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   if (!cfg) {

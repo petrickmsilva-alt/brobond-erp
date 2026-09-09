@@ -114,7 +114,10 @@ No primeiro login o administrador troca a senha e cadastra o **MFA obrigatório*
    e de redefinição de senha: sem ela o e-mail sai com um link relativo
    (`/convite/abc…`) e o destinatário vê “URL inválida”. O servidor ainda deduz a
    origem da requisição como rede de segurança, e o estado aparece em
-   Configurações › Sistema.
+   Configurações › Sistema. **Em produção o endereço precisa ser público**:
+   `localhost`, IP privado (`10.x`, `192.168.x`), nome sem domínio ou `.local`
+   são descartados (o link assim só existe dentro do servidor) — o servidor avisa
+   no boot e mostra “APP_URL ignorada” em Configurações › Sistema.
 5. A cada `git push` na `main`, o Render faz o redeploy.
 
 O domínio (`brobond.com.br`) e o e-mail corporativo ficam no HostGator, com o
