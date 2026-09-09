@@ -136,6 +136,35 @@ export const UNIDADES: FieldOption[] = [
 ];
 
 export const RESOURCES: Record<string, Resource> = {
+  catalogo_compartilhamentos: {
+    key: 'catalogo_compartilhamentos', table: 'catalogo_compartilhamentos', label: 'Compartilhamentos de catálogo', singular: 'Compartilhamento',
+    labelFields: ['id'], internal: true, ops: READ_ONLY,
+    fields: [
+      { name: 'catalogo_id', label: 'Catálogo', type: 'ref', ref: 'catalogos' },
+      { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes' },
+      { name: 'usuario_id', label: 'Vendedor', type: 'ref', ref: 'usuarios' },
+      { name: 'token_hash', label: 'Token', type: 'text', unique: true },
+      { name: 'canal', label: 'Canal', type: 'text' },
+      { name: 'expira_em', label: 'Expira em', type: 'datetime' },
+      { name: 'revogado_em', label: 'Revogado em', type: 'datetime' },
+      { name: 'primeiro_acesso_em', label: 'Primeiro acesso', type: 'datetime' },
+      { name: 'ultimo_acesso_em', label: 'Último acesso', type: 'datetime' },
+      { name: 'acessos', label: 'Acessos', type: 'integer' },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime' },
+    ],
+  },
+  catalogo_eventos: {
+    key: 'catalogo_eventos', table: 'catalogo_eventos', label: 'Eventos de catálogo', singular: 'Evento',
+    labelFields: ['id'], internal: true, ops: READ_ONLY,
+    fields: [
+      { name: 'compartilhamento_id', label: 'Compartilhamento', type: 'ref', ref: 'catalogo_compartilhamentos' },
+      { name: 'catalogo_id', label: 'Catálogo', type: 'ref', ref: 'catalogos' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
+      { name: 'tipo', label: 'Tipo', type: 'text' },
+      { name: 'dados', label: 'Dados', type: 'text' },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime' },
+    ],
+  },
   // ----------------------------------------------------------------
   // Interno — anexos (fotos). Manipulado por uploads.ts, não pela API genérica.
   // ----------------------------------------------------------------

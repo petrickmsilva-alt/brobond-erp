@@ -4,7 +4,7 @@ import { api, ApiError } from '../lib/api';
 import { Alert, Modal, useToast } from './ui';
 
 type Cliente = { id: number; nome: string; telefone?: string | null; email?: string | null; ativo?: boolean };
-type ShareInfo = { url: string; qr_data_url: string };
+type ShareInfo = { url: string; qr_data_url: string; compartilhamento_id: number; expira_em: string };
 
 function soDigitos(v: string) {
   return v.replace(/\D/g, '');
@@ -17,6 +17,7 @@ export default function CatalogoShareModal({ catalogo, onClose }: { catalogo: Re
   const [destinatario, setDestinatario] = useState('');
   const [mensagem, setMensagem] = useState('');
   const [info, setInfo] = useState<ShareInfo | null>(null);
+  const [validadeDias, setValidadeDias] = useState('30');
   const [busy, setBusy] = useState(false);
   const cliente = useMemo(() => clientes.find((c) => c.id === Number(clienteId)) ?? null, [clientes, clienteId]);
 
@@ -39,11 +40,13 @@ export default function CatalogoShareModal({ catalogo, onClose }: { catalogo: Re
 
   async function preparar(canal: string): Promise<ShareInfo | null> {
     if (!catalogo) return null;
+    if (info) return info;
     setBusy(true);
     try {
       const d = await api.post<ShareInfo>(`/catalogos/${catalogo.id}/compartilhar`, {
         canal,
         cliente_id: cliente?.id ?? null,
+        validade_dias: Number(validadeDias),
       });
       setInfo(d);
       return d;
@@ -104,12 +107,18 @@ export default function CatalogoShareModal({ catalogo, onClose }: { catalogo: Re
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div className="space-y-4">
           {catalogo?.ativo === false && <Alert tone="amber">Este catálogo está inativo. Ative-o antes de enviar ao cliente.</Alert>}
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
             <label>
               <span className="label">Cliente (opcional)</span>
               <select className="input" value={clienteId} onChange={(e) => setClienteId(e.target.value)}>
                 <option value="">Compartilhamento geral</option>
                 {clientes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="label">Validade do link individual</span>
+              <select className="input" value={validadeDias} onChange={(e) => { setValidadeDias(e.target.value); setInfo(null); }}>
+                <option value="7">7 dias</option><option value="15">15 dias</option><option value="30">30 dias</option><option value="60">60 dias</option><option value="90">90 dias</option>
               </select>
             </label>
             <label>
@@ -149,7 +158,7 @@ export default function CatalogoShareModal({ catalogo, onClose }: { catalogo: Re
 
         <aside className="rounded-xl border border-slate-200 bg-slate-50 p-4">
           <h3 className="text-sm font-bold text-navy-900">QR Code do catálogo</h3>
-          <p className="mt-1 text-xs text-slate-500">Use em mostruários, feiras, cartões e materiais impressos.</p>
+          <p className="mt-1 text-xs text-slate-500">Cada geração cria um link individual, rastreável e revogável. Use em mostruários, feiras, cartões e materiais impressos.</p>
           {info ? (
             <>
               <img src={info.qr_data_url} alt={`QR Code do catálogo ${catalogo?.nome}`} className="mx-auto mt-4 aspect-square w-full max-w-52 rounded-lg border border-slate-200 bg-white p-2" />

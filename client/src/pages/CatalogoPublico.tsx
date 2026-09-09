@@ -133,12 +133,14 @@ export default function CatalogoPublico() {
   }, [detalheId, data]);
 
   function abrirDetalhe(id: number, medidasAberta: boolean) {
+    if (detalheId !== id) api.post(`/publico/catalogo/${token}/evento`, { tipo: 'produto_visualizado', produto_id: id }).catch(() => {});
     setDetalheId(id);
     if (medidasAberta) setMedidasAbertas((prev) => ({ ...prev, [id]: true }));
   }
 
   function addToCart(p: ProdutoCatalogo, tamanho?: { tamanho_id: number; codigo: string }) {
     const t = tamanho || p.tamanhos[0];
+    if (cart.length === 0) api.post(`/publico/catalogo/${token}/evento`, { tipo: 'carrinho_iniciado', produto_id: p.id }).catch(() => {});
     const key = `${p.id}:${t?.tamanho_id ?? 0}`;
     setCart((prev) => {
       const found = prev.find((i) => i.key === key);

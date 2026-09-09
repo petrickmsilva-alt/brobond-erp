@@ -137,6 +137,18 @@ test('catálogos públicos: cria com token, lista com rótulo da coleção e nã
   assert.deepEqual(filtrosDoCatalogo({ id: 0, colecao_id: 9, filtros: { colecao_id: 2 } }), { colecao_id: 9 });
 });
 
+test('fase 2: recursos de inteligência do catálogo são internos e tokens usam hash irreversível', async () => {
+  const { getPublicResource, publicMeta } = await import('../src/resources');
+  const { hashTokenPublico } = await import('../src/catalogos');
+  assert.equal(getPublicResource('catalogo_compartilhamentos'), undefined);
+  assert.equal(getPublicResource('catalogo_eventos'), undefined);
+  assert.ok(!('catalogo_compartilhamentos' in publicMeta()));
+  const token = 'a'.repeat(48);
+  assert.equal(hashTokenPublico(token).length, 64);
+  assert.notEqual(hashTokenPublico(token), token);
+  assert.equal(hashTokenPublico(token), hashTokenPublico(token));
+});
+
 test('arquivos: recurso interno não é exposto na API genérica nem no /meta', async () => {
   const { getPublicResource, publicMeta } = await import('../src/resources');
   assert.equal(getPublicResource('arquivos'), undefined);

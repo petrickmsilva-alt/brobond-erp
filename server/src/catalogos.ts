@@ -10,6 +10,7 @@
 import type { Request, Response } from 'express';
 import QRCode from 'qrcode';
 import { createRequire } from 'node:module';
+import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
 import { getResource, RESOURCES } from './resources';
 import { checkAccess, getStore, toHttpError } from './services';
@@ -81,11 +82,28 @@ export function filtrosDoCatalogo(catalogo: Row): { colecao_id?: number; categor
   };
 }
 
+
+export function hashTokenPublico(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+async function resolverTokenCatalogo(token: string): Promise<{ catalogo: Row | null; compartilhamento: Row | null }> {
+  const s = getStore();
+  const direto = await s.findOneWhere(RESOURCES.catalogos, { token });
+  if (direto) return { catalogo: direto, compartilhamento: null };
+  const compartilhamento = await s.findOneWhere(RESOURCES.catalogo_compartilhamentos, { token_hash: hashTokenPublico(token) });
+  if (!compartilhamento || compartilhamento.revogado_em || (compartilhamento.expira_em && new Date(String(compartilhamento.expira_em)).getTime() < Date.now())) {
+    return { catalogo: null, compartilhamento: null };
+  }
+  return { catalogo: await s.get(RESOURCES.catalogos, Number(compartilhamento.catalogo_id)), compartilhamento };
+}
+
 export async function catalogoPublico(req: Request, res: Response) {
   const token = String(req.params.token || '').trim();
   if (!token || !/^[a-f0-9]{12,}$/i.test(token)) throw new HttpError(404, 'Catálogo não encontrado.');
   const s = getStore();
-  const catalogo = await s.findOneWhere(RESOURCES.catalogos, { token });
+  const resolvido = await resolverTokenCatalogo(token);
+  const catalogo = resolvido.catalogo;
   if (!catalogo || catalogo.ativo === false) throw new HttpError(404, 'Catálogo não encontrado.');
   if (catalogo.expira_em && new Date(String(catalogo.expira_em)).getTime() < Date.now()) {
     throw new HttpError(404, 'Este catálogo expirou. Fale com quem o enviou.');
@@ -96,6 +114,19 @@ export async function catalogoPublico(req: Request, res: Response) {
         ? req.query.senha
         : undefined, catalogo.senha_hash)) {
     return res.status(401).json({ error: 'senha_necessaria', mensagem: 'Este catálogo é protegido por senha.' });
+  }
+
+  if (resolvido.compartilhamento) {
+    const c = resolvido.compartilhamento;
+    const agora = new Date().toISOString();
+    await s.update(RESOURCES.catalogo_compartilhamentos, Number(c.id), {
+      primeiro_acesso_em: c.primeiro_acesso_em || agora,
+      ultimo_acesso_em: agora,
+      acessos: Number(c.acessos || 0) + 1,
+    });
+    await s.insert(RESOURCES.catalogo_eventos, {
+      compartilhamento_id: Number(c.id), catalogo_id: Number(catalogo.id), tipo: 'abertura', dados: {},
+    });
   }
 
   const filtros = filtrosDoCatalogo(catalogo);
@@ -243,6 +274,7 @@ export async function catalogoPublico(req: Request, res: Response) {
 
   res.json({
     nome: catalogo.nome,
+    compartilhamento: resolvido.compartilhamento ? { individual: true, cliente_id: resolvido.compartilhamento.cliente_id ?? null } : null,
     canal,
     tabela_preco: tabelaPreco,
     aceita_pedido_site: catalogo.aceita_pedido_site !== false,
@@ -264,7 +296,8 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
   const token = String(req.params.token || '').trim();
   if (!token || !/^[a-f0-9]{12,}$/i.test(token)) throw new HttpError(404, 'Catálogo não encontrado.');
   const s = getStore();
-  const catalogo = await s.findOneWhere(RESOURCES.catalogos, { token });
+  const resolvido = await resolverTokenCatalogo(token);
+  const catalogo = resolvido.catalogo;
   if (!catalogo || catalogo.ativo === false) throw new HttpError(404, 'Catálogo não encontrado.');
   if (catalogo.aceita_pedido_site === false) throw new HttpError(403, 'Este catálogo não aceita pedidos pelo site.');
   if (catalogo.expira_em && new Date(String(catalogo.expira_em)).getTime() < Date.now()) throw new HttpError(404, 'Este catálogo expirou.');
@@ -388,6 +421,7 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
       );
       return { venda: await s.get(vendaR, Number(venda.id), tx) ?? venda, total };
     });
+    if (resolvido.compartilhamento) await s.insert(RESOURCES.catalogo_eventos, { compartilhamento_id: Number(resolvido.compartilhamento.id), catalogo_id: Number(catalogo.id), tipo: 'pedido_enviado', dados: { pedido_id: Number(pedido.venda.id), total: pedido.total } });
     res.status(201).json({ ok: true, mensagem: 'Pedido recebido! Nossa equipe vai confirmar disponibilidade e valores com você.', pedido_id: Number(pedido.venda.id), total: pedido.total });
   } catch (e) {
     throw toHttpError(e, RESOURCES.vendas);
@@ -408,18 +442,24 @@ export async function compartilharCatalogo(req: Request, res: Response) {
   const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
   const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
   const base = String(process.env.APP_URL || (host ? `${proto}://${host}` : '')).replace(/\/$/, '');
-  const url = `${base}/catalogo/${catalogo.token}`;
+  const tokenIndividual = randomBytes(24).toString('hex');
+  const dias = Math.min(365, Math.max(1, Number(req.body?.validade_dias) || 30));
+  const expiraEm = new Date(Date.now() + dias * 86400000).toISOString();
+  const canal = ['whatsapp', 'email', 'link', 'qrcode', 'visualizacao'].includes(String(req.body?.canal)) ? String(req.body.canal) : 'link';
+  const clienteId = Number(req.body?.cliente_id) || null;
+  const cliente = clienteId ? await s.get(RESOURCES.clientes, clienteId) : null;
+  if (clienteId && !cliente) throw new HttpError(400, 'Cliente selecionado não foi encontrado.');
+  const compartilhamento = await s.insert(RESOURCES.catalogo_compartilhamentos, {
+    catalogo_id: id, cliente_id: clienteId, usuario_id: actor.id || null,
+    token_hash: hashTokenPublico(tokenIndividual), canal, expira_em: expiraEm, acessos: 0,
+  });
+  const url = `${base}/catalogo/${tokenIndividual}`;
   const qr_data_url = await QRCode.toDataURL(url, {
     width: 420,
     margin: 2,
     errorCorrectionLevel: 'M',
     color: { dark: '#1B2A4A', light: '#FFFFFF' },
   });
-  const canal = ['whatsapp', 'email', 'link', 'qrcode', 'visualizacao'].includes(String(req.body?.canal))
-    ? String(req.body.canal)
-    : 'link';
-  const clienteId = Number(req.body?.cliente_id) || null;
-  const cliente = clienteId ? await s.get(RESOURCES.clientes, clienteId) : null;
   await s.audit({
     usuario_id: actor.id || null,
     usuario: actor.name,
@@ -427,7 +467,22 @@ export async function compartilharCatalogo(req: Request, res: Response) {
     recurso: 'catalogos',
     registro_id: id,
     descricao: `Catálogo "${catalogo.nome}" compartilhado por ${canal}${cliente ? ` com ${cliente.nome}` : ''}`,
-    dados: { canal, cliente_id: clienteId, cliente: cliente?.nome ?? null },
+    dados: { canal, cliente_id: clienteId, cliente: cliente?.nome ?? null, compartilhamento_id: Number(compartilhamento.id), expira_em: expiraEm },
   });
-  res.json({ url, qr_data_url });
+  res.json({ url, qr_data_url, compartilhamento_id: Number(compartilhamento.id), expira_em: expiraEm });
+}
+
+
+export async function eventoCatalogo(req: Request, res: Response) {
+  const token = String(req.params.token || '').trim();
+  const resolvido = await resolverTokenCatalogo(token);
+  if (!resolvido.catalogo || !resolvido.compartilhamento) throw new HttpError(404, 'Compartilhamento não encontrado.');
+  const tipo = String(req.body?.tipo || '');
+  if (!['produto_visualizado', 'carrinho_iniciado'].includes(tipo)) throw new HttpError(400, 'Evento inválido.');
+  const produtoId = Number(req.body?.produto_id) || null;
+  await getStore().insert(RESOURCES.catalogo_eventos, {
+    compartilhamento_id: Number(resolvido.compartilhamento.id), catalogo_id: Number(resolvido.catalogo.id),
+    produto_id: produtoId, tipo, dados: {},
+  });
+  res.status(204).end();
 }
