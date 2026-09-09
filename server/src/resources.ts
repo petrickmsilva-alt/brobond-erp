@@ -1694,7 +1694,7 @@ export function columnsOf(r: Resource): Field[] {
  * recurso (segredos/tokens): o store aceita gravá-las via API interna, porém
  * elas jamais voltam em consultas (ver COLUNAS_SECRETAS no pgstore/memdb).
  */
-export const COLUNAS_AUTENTICACAO = ['senha_hash', 'mfa_secret', 'mfa_backup_hashes', 'convite_token_hash', 'reset_token_hash', 'reset_expira_em', 'token_versao', 'senha_provisoria'];
+export const COLUNAS_AUTENTICACAO = ['senha_hash', 'senha_historico', 'mfa_secret', 'mfa_backup_hashes', 'convite_token_hash', 'reset_token_hash', 'reset_expira_em', 'token_versao', 'senha_provisoria', 'acesso_certificado_em', 'acesso_certificado_por', 'acesso_certificado_obs'];
 
 /** Campos que o usuário pode gravar (não virtuais, não somente leitura). */
 export function writableFields(r: Resource): Field[] {

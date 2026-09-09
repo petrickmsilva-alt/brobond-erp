@@ -652,3 +652,185 @@ describe('Resumo: série 7 dias e export da seleção', () => {
     assert.ok(par.corpo().length > 0);
   });
 });
+
+// ---------- Onda 4: política de senha configurável ----------
+describe('Política de senha configurável (Onda 4)', () => {
+  test('padrão reproduz a regra antiga; PUT valida limites e exige admin+reauth', async () => {
+    const { obterPoliticaSenha, salvarPoliticaSenha } = await import('../src/usuariosAdmin');
+    const { POLITICA_SENHA_PADRAO, salvarPolitica } = await import('../src/politicaSenha');
+    const admin = await criarComSenha('admin', 'PolAdm#1000x');
+    const ator = await reauthComo(admin.row, 'PolAdm#1000x');
+
+    const rGet = mockRes();
+    await obterPoliticaSenha(mockReq(ator), rGet.res);
+    assert.equal(rGet.code(), 200);
+    assert.deepEqual(rGet.payload().politica, POLITICA_SENHA_PADRAO);
+    assert.ok(rGet.payload().limites.tamanho_minimo);
+
+    const op = { id: 9999, name: 'Op', perfil: 'operador' as const };
+    await assert.rejects(() => obterPoliticaSenha(mockReq(op), mockRes().res), (e: any) => e.status === 403);
+
+    for (const ruim of [{ tamanho_minimo: 3 }, { tamanho_minimo: 99 }, { historico_qtd: 11 }, { expiracao_dias: 5 }, { expiracao_dias: 400 }]) {
+      await assert.rejects(() => salvarPoliticaSenha(mockReq(ator, ruim), mockRes().res), (e: any) => e.status === 400);
+    }
+    const rPut = mockRes();
+    await salvarPoliticaSenha(mockReq(ator, { tamanho_minimo: 12, exigir_numero: true, historico_qtd: 3, expiracao_dias: 90 }), rPut.res);
+    assert.equal(rPut.code(), 200);
+    assert.equal(rPut.payload().politica.tamanho_minimo, 12);
+    assert.equal(rPut.payload().politica.exigir_numero, true);
+
+    const outro = await criarComSenha('admin', 'PolOutro#1000x');
+    const fresco = { id: Number(outro.row.id), name: String(outro.row.nome), perfil: 'admin' as const };
+    await assert.rejects(
+      () => salvarPoliticaSenha(mockReq(fresco, { tamanho_minimo: 10 }), mockRes().res),
+      (e: any) => e.code === 'reauth_necessaria',
+      'sem reautenticação não grava'
+    );
+    await salvarPolitica(POLITICA_SENHA_PADRAO, 'teste'); // restaura o padrão
+  });
+
+  test('composição configurada é cobrada na troca; pública sai sem login', async () => {
+    const { changePassword } = await import('../src/auth');
+    const { politicaSenhaPublica } = await import('../src/usuariosAdmin');
+    const { salvarPolitica, POLITICA_SENHA_PADRAO } = await import('../src/politicaSenha');
+    await salvarPolitica({ ...POLITICA_SENHA_PADRAO, tamanho_minimo: 12, exigir_numero: true, exigir_simbolo: true, exigir_maiuscula_minuscula: true }, 'teste');
+    try {
+      const u = await criarComSenha('operador', 'CompBase#1000x');
+      const ator = { id: Number(u.row.id), name: String(u.row.nome), email: String(u.row.email), perfil: 'operador' as const };
+      await assert.rejects(
+        () => changePassword(mockReq(ator, { senha_atual: 'CompBase#1000x', senha_nova: 'curta1!' }), mockRes().res),
+        /pelo menos 12 caracteres/
+      );
+      await assert.rejects(
+        () => changePassword(mockReq(ator, { senha_atual: 'CompBase#1000x', senha_nova: 'longasemsimb-num1' }), mockRes().res),
+        /maiúsculas e minúsculas/
+      );
+      const rOk = mockRes();
+      await changePassword(mockReq(ator, { senha_atual: 'CompBase#1000x', senha_nova: 'NovaForte#2000x' }), rOk.res);
+      assert.equal(rOk.code(), 200);
+
+      const rPub = mockRes();
+      await politicaSenhaPublica(mockReq(null), rPub.res);
+      assert.equal(rPub.payload().politica.tamanho_minimo, 12);
+      assert.equal(rPub.payload().politica.exigir_numero, true);
+      assert.ok(!('historico_qtd' in rPub.payload().politica), 'pública só leva composição');
+    } finally {
+      await salvarPolitica(POLITICA_SENHA_PADRAO, 'teste');
+    }
+  });
+
+  test('histórico impede reutilizar senha recente; igual à atual é vetada', async () => {
+    const { changePassword } = await import('../src/auth');
+    const { salvarPolitica, POLITICA_SENHA_PADRAO } = await import('../src/politicaSenha');
+    await salvarPolitica({ ...POLITICA_SENHA_PADRAO, historico_qtd: 3 }, 'teste');
+    try {
+      const u = await criarComSenha('operador', 'HistA#1000xxx');
+      const ator = { id: Number(u.row.id), name: String(u.row.nome), email: String(u.row.email), perfil: 'operador' as const };
+      const troca = (atual: string, nova: string) => changePassword(mockReq(ator, { senha_atual: atual, senha_nova: nova }), mockRes().res);
+      await troca('HistA#1000xxx', 'HistB#2000xxx');
+      await troca('HistB#2000xxx', 'HistC#3000xxx');
+      await assert.rejects(() => troca('HistC#3000xxx', 'HistA#1000xxx'), /já foi usada recentemente/);
+      await assert.rejects(() => troca('HistC#3000xxx', 'HistC#3000xxx'), /diferente da atual/);
+      const raw = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(u.row.id) });
+      assert.equal(JSON.parse(String(raw!.senha_historico)).length, 2, 'duas anteriores guardadas');
+      const primeira = (await getStore().list(RESOURCES.usuarios, { page: 1, pageSize: 1 })).rows[0];
+      assert.ok(!('senha_historico' in primeira), 'histórico nunca sai na listagem');
+    } finally {
+      await salvarPolitica(POLITICA_SENHA_PADRAO, 'teste');
+    }
+  });
+
+  test('senha vencida vira troca obrigatória no login; /me avisa o prazo', async () => {
+    const { login, me } = await import('../src/auth');
+    const { salvarPolitica, POLITICA_SENHA_PADRAO } = await import('../src/politicaSenha');
+    await salvarPolitica({ ...POLITICA_SENHA_PADRAO, expiracao_dias: 90 }, 'teste');
+    try {
+      const velho = await criarComSenha('operador', 'ExpVelha#1000x');
+      await getStore().update(RESOURCES.usuarios, Number(velho.row.id), { senha_definida_em: new Date(Date.now() - 100 * 86400000).toISOString() });
+      const rLogin = mockRes();
+      await login(mockReq(null, { email: velho.row.email, password: 'ExpVelha#1000x' }, {}, '198.51.100.61'), rLogin.res);
+      assert.equal(rLogin.code(), 200);
+      assert.equal(rLogin.payload().user.trocar_senha, true, 'vencida cobra troca');
+      assert.equal(rLogin.payload().senha_expirada, true);
+      const travado = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(velho.row.id) });
+      assert.equal(travado!.trocar_senha, true, 'persistiu a cobrança');
+
+      const novo = await criarComSenha('operador', 'ExpNova#1000x');
+      const ator = { id: Number(novo.row.id), name: String(novo.row.nome), email: String(novo.row.email), perfil: 'operador' as const };
+      const rMe = mockRes();
+      await me(mockReq(ator), rMe.res);
+      assert.equal(rMe.payload().senha_expirada, false);
+      assert.ok(rMe.payload().senha_vence_em_dias >= 89 && rMe.payload().senha_vence_em_dias <= 90, 'fresca vence em ~90 dias');
+    } finally {
+      await salvarPolitica(POLITICA_SENHA_PADRAO, 'teste');
+    }
+  });
+});
+
+// ---------- Onda 4: certificação de acessos ----------
+describe('Certificação de acessos (Onda 4)', () => {
+  test('certificar carimba + audita; próprio acesso, inativa e sem senha vetados', async () => {
+    const { certificarUsuario } = await import('../src/usuariosAdmin');
+    const admin = await criarComSenha('admin', 'CertAdm#1000x');
+    const ator = await reauthComo(admin.row, 'CertAdm#1000x');
+    const alvo = await criarComSenha('operador', 'CertAlvo#1000x');
+
+    const r = mockRes();
+    await certificarUsuario(mockReq(ator, { observacao: 'Revisão trimestral OK' }, { id: String(alvo.row.id) }), r.res);
+    assert.equal(r.code(), 200);
+    const raw = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(alvo.row.id) });
+    assert.ok(raw!.acesso_certificado_em);
+    assert.equal(raw!.acesso_certificado_por, ator.name);
+    assert.equal(raw!.acesso_certificado_obs, 'Revisão trimestral OK');
+    const trilha = await getStore().list(RESOURCES.auditoria, { page: 1, pageSize: 5, sort: 'data', dir: 'desc', filter: { acao: 'seguranca', registro_id: Number(alvo.row.id) } });
+    assert.ok(trilha.rows.some((e: any) => String(e.descricao).includes('CERTIFICADO')), 'carimbo auditado');
+
+    await assert.rejects(
+      () => certificarUsuario(mockReq(ator, {}, { id: String(admin.row.id) }), mockRes().res),
+      /próprio acesso/,
+      'quatro olhos: ninguém certifica a si mesmo'
+    );
+    const inativo = await criarComSenha('operador', 'CertInat#1000x');
+    await getStore().update(RESOURCES.usuarios, Number(inativo.row.id), { ativo: false });
+    await assert.rejects(
+      () => certificarUsuario(mockReq(ator, {}, { id: String(inativo.row.id) }), mockRes().res),
+      (e: any) => e.status === 409
+    );
+    const semSenha = await criarUsuario({});
+    await assert.rejects(
+      () => certificarUsuario(mockReq(ator, {}, { id: String(semSenha.id) }), mockRes().res),
+      (e: any) => e.status === 409
+    );
+  });
+
+  test('matriz traz pendências + vencidas; export CSV sem segredos', async () => {
+    const { certificacaoUsuarios, exportarCertificacao, certificarUsuario } = await import('../src/usuariosAdmin');
+    const admin = await criarComSenha('admin', 'MatAdm#1000xx');
+    const ator = await reauthComo(admin.row, 'MatAdm#1000xx');
+    const a = await criarComSenha('operador', 'MatA#1000xxxx');
+    const b = await criarComSenha('operador', 'MatB#1000xxxx');
+    await certificarUsuario(mockReq(ator, {}, { id: String(a.row.id) }), mockRes().res);
+    await getStore().update(RESOURCES.usuarios, Number(b.row.id), {
+      acesso_certificado_em: new Date(Date.now() - 400 * 86400000).toISOString(),
+      acesso_certificado_por: 'ex-admin',
+    });
+
+    const r = mockRes();
+    await certificacaoUsuarios(mockReq(ator), r.res);
+    assert.equal(r.code(), 200);
+    const linhas = r.payload().linhas as any[];
+    const la = linhas.find((l) => l.id === Number(a.row.id))!;
+    const lb = linhas.find((l) => l.id === Number(b.row.id))!;
+    assert.equal(la.precisa_recertificar, false);
+    assert.equal(la.certificado_por, ator.name);
+    assert.equal(lb.precisa_recertificar, true, 'certificação de 400 dias venceu');
+    assert.ok(r.payload().pendentes >= 1);
+
+    let buf = '';
+    const res: any = { setHeader: () => res, end: (d: any) => { buf = String(d); return res; } };
+    await exportarCertificacao({ query: { format: 'csv' }, user: ator } as any, res);
+    assert.ok(buf.includes(String(a.row.email)));
+    assert.ok(buf.includes('Recertificação vencida'));
+    assert.ok(!buf.includes('senha_hash'), 'sem segredos');
+  });
+});

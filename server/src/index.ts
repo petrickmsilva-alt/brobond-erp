@@ -26,7 +26,8 @@ import {
   verificarAuditoriaHandler,
 } from './auth';
 import { mfaStatus, mfaSetup, mfaAtivar, mfaDesativar, mfaCodigos } from './mfa';
-import { aceitarConvite, infoConvite, reenviarConvite, senhaTemporaria, resetarMfaUsuario, resumoUsuarios, atividadeUsuario, sessoesUsuario, desativarUsuario, ativarUsuario, desbloquearUsuario, bloquearUsuario, encerrarSessoesUsuario, revogarSessaoUsuario, forcarTrocaSenha } from './usuariosAdmin';
+import { aceitarConvite, infoConvite, reenviarConvite, senhaTemporaria, resetarMfaUsuario, resumoUsuarios, atividadeUsuario, sessoesUsuario, desativarUsuario, ativarUsuario, desbloquearUsuario, bloquearUsuario, encerrarSessoesUsuario, revogarSessaoUsuario, forcarTrocaSenha, politicaSenhaPublica, obterPoliticaSenha, salvarPoliticaSenha, certificacaoUsuarios, exportarCertificacao, certificarUsuario } from './usuariosAdmin';
+import { listarWebhooks, criarWebhook, atualizarWebhook, excluirWebhook, testarWebhook, listarEntregas, reenviarEntrega } from './webhooks';
 import { limpezaPeriodica } from './sessoes';
 import { getPublicResource, publicMeta } from './resources';
 import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider, uploadsConfigError } from './uploads';
@@ -146,6 +147,8 @@ app.post('/api/auth/reset', wrap(resetPassword));
 // Convites de acesso (público + rate limit): validar e aceitar
 app.get('/api/convites/:token', wrap(infoConvite));
 app.post('/api/convites/aceitar', loginRateLimit, wrap(aceitarConvite));
+// Regras públicas da política de senha (medidor das telas de convite/reset)
+app.get('/api/auth/politica-senha', wrap(politicaSenhaPublica));
 // Catálogo público (somente leitura; rate limit próprio)
 app.get('/api/publico/catalogo/:token', rateLimitPublico, wrap(catalogoPublico));
 // Pedido pelo catálogo — cria uma cotação de venda no ERP (sem login, rate limit)
@@ -192,6 +195,20 @@ app.post('/api/usuarios/:id/resetar-mfa', wrap(resetarMfaUsuario));
 // Gestão profissional de usuários (admin): painel, ficha e ciclo de vida.
 // (Antes das rotas genéricas: /api/usuarios/resumo não pode cair em /:id.)
 app.get('/api/usuarios/resumo', wrap(resumoUsuarios));
+// Onda 4: política de senha + certificação (antes das rotas genéricas)
+app.get('/api/usuarios/politica-senha', wrap(obterPoliticaSenha));
+app.put('/api/usuarios/politica-senha', wrap(salvarPoliticaSenha));
+app.get('/api/usuarios/certificacao', wrap(certificacaoUsuarios));
+app.get('/api/usuarios/certificacao/export', wrap(exportarCertificacao));
+app.post('/api/usuarios/:id/certificar', wrap(certificarUsuario));
+// Onda 4: webhooks de eventos de usuário (admin)
+app.get('/api/webhooks', wrap(listarWebhooks));
+app.post('/api/webhooks', wrap(criarWebhook));
+app.put('/api/webhooks/:id', wrap(atualizarWebhook));
+app.delete('/api/webhooks/:id', wrap(excluirWebhook));
+app.post('/api/webhooks/:id/testar', wrap(testarWebhook));
+app.get('/api/webhooks/:id/entregas', wrap(listarEntregas));
+app.post('/api/webhooks/entregas/:id/reenviar', wrap(reenviarEntrega));
 app.get('/api/usuarios/:id/atividade', wrap(atividadeUsuario));
 app.get('/api/usuarios/:id/sessoes', wrap(sessoesUsuario));
 app.post('/api/usuarios/:id/desativar', wrap(desativarUsuario));

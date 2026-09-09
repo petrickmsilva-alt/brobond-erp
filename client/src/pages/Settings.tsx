@@ -26,6 +26,21 @@ export default function Settings() {
     if (location.hash === '#senha') document.getElementById('senha')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [location.hash]);
 
+  // Onda 4: aviso de vencimento da senha (vem de /auth/me, calculado no servidor).
+  const [avisoSenha, setAvisoSenha] = useState<{ senha_vence_em_dias: number | null; senha_expirada: boolean } | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const d = await api.get<{ senha_vence_em_dias?: number | null; senha_expirada?: boolean }>('/auth/me');
+        if (typeof d.senha_vence_em_dias === 'number' || d.senha_expirada) {
+          setAvisoSenha({ senha_vence_em_dias: d.senha_vence_em_dias ?? null, senha_expirada: d.senha_expirada === true });
+        }
+      } catch {
+        /* sem aviso: política sem expiração ou /me indisponível */
+      }
+    })();
+  }, []);
+
   async function concluirTroca() {
     await refreshMeta();
     setRefreshing(true);
@@ -76,6 +91,12 @@ export default function Settings() {
           </section>
 
           {/* Trocar senha */}
+          {avisoSenha && !user?.trocar_senha && (
+            <Alert tone={avisoSenha.senha_vence_em_dias !== null && avisoSenha.senha_vence_em_dias <= 7 ? 'amber' : 'blue'}>
+              Sua senha {avisoSenha.senha_vence_em_dias === 1 ? 'vence amanhã' : `vence em ${avisoSenha.senha_vence_em_dias} dias`} (política da empresa).
+              Troque abaixo para não ficar sem acesso.
+            </Alert>
+          )}
           <section id="senha" className="card p-5 scroll-mt-6">
             <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
               <KeyRound className="h-4 w-4 text-navy-400" /> Trocar senha

@@ -13,6 +13,8 @@
 //   • Onda 3: gráfico de acessos 7 dias, ações em lote (troca/encerrar/
 //     desativar/exportar seleção), bloqueio manual com prazo, revogação de
 //     sessão individual, trilha com diff de alterações e ficha impressa
+//   • Onda 4: política de senha configurável, certificação de acessos
+//     (matriz + carimbo auditado), alertas de vencimento e XLSX da seleção
 // ============================================================================
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -23,6 +25,7 @@ import {
   Ban,
   BellRing,
   ChevronLeft,
+  ClipboardCheck,
   ChevronRight,
   Copy,
   Download,
@@ -77,11 +80,42 @@ type Totais = {
   sem_login_30d: number;
   logins_hoje: number;
   falhas_24h: number;
+  senhas_expiradas: number;
+  senhas_a_vencer: number;
+  nao_certificados: number;
   sessoes_ativas: number | null;
 };
 
+/** Política de senha configurável (GET/PUT /api/usuarios/politica-senha). */
+type PoliticaSenha = {
+  tamanho_minimo: number;
+  exigir_maiuscula_minuscula: boolean;
+  exigir_numero: boolean;
+  exigir_simbolo: boolean;
+  proibir_obvias: boolean;
+  historico_qtd: number;
+  expiracao_dias: number;
+};
+
+/** Uma linha da matriz de certificação de acessos. */
+type LinhaCertificacao = {
+  id: number;
+  nome: string;
+  email: string;
+  perfil: string;
+  ativo: boolean;
+  status_conta: string;
+  mfa: boolean;
+  ultimo_login: string | null;
+  certificado_em: string | null;
+  certificado_por: string | null;
+  certificado_obs: string | null;
+  certificado_ha_dias: number | null;
+  precisa_recertificar: boolean;
+};
+
 /** Ações sensíveis (exigem reautenticação do administrador logado). */
-type TipoSensivel = 'senha' | 'desativar' | 'ativar' | 'encerrar' | 'mfa' | 'bloquear' | 'sessao';
+type TipoSensivel = 'senha' | 'desativar' | 'ativar' | 'encerrar' | 'mfa' | 'bloquear' | 'sessao' | 'certificar';
 
 /** Ação em lote pendente de confirmação (e de reautenticação, quando sensível). */
 type LoteAcao = { acao: 'desativar' | 'encerrar' | 'troca'; ids: number[]; motivo?: string };
@@ -142,6 +176,8 @@ const SENHA_META: Record<string, { label: string; tone: 'green' | 'amber' | 'blu
 const ALERTA_META: Record<string, { label: string; tone: 'amber' | 'red' | 'blue' }> = {
   admin_sem_mfa: { label: 'Admin sem MFA', tone: 'red' },
   bloqueado: { label: 'Bloqueado', tone: 'red' },
+  senha_expirada: { label: 'Senha vencida', tone: 'red' },
+  senha_a_vencer: { label: 'Senha a vencer', tone: 'amber' },
   acesso_expirado: { label: 'Acesso expirado', tone: 'red' },
   convite_expirado: { label: 'Convite expirado', tone: 'amber' },
   acesso_a_vencer: { label: 'Acesso a vencer', tone: 'amber' },
@@ -235,6 +271,20 @@ export default function UsuariosPage() {
   const [bloquearRow, setBloquearRow] = useState<Usuario | null>(null);
   const [bloquearMotivo, setBloquearMotivo] = useState('');
   const [bloquearDuracao, setBloquearDuracao] = useState('');
+  // Onda 4: política de senha + certificação de acessos.
+  const [politicaAberta, setPoliticaAberta] = useState(false);
+  const [politicaForm, setPoliticaForm] = useState<PoliticaSenha | null>(null);
+  const [politicaLimites, setPoliticaLimites] = useState<{ tamanho_minimo: { min: number; max: number }; historico_qtd: { min: number; max: number }; expiracao_dias: { min: number; max: number } } | null>(null);
+  const [politicaLoading, setPoliticaLoading] = useState(false);
+  const [politicaSaving, setPoliticaSaving] = useState(false);
+  const [politicaErro, setPoliticaErro] = useState('');
+  const [politicaPendente, setPoliticaPendente] = useState(false);
+  const [certAberto, setCertAberto] = useState(false);
+  const [certDados, setCertDados] = useState<{ total: number; ativos: number; certificados: number; pendentes: number; validade_dias: number; linhas: LinhaCertificacao[] } | null>(null);
+  const [certLoading, setCertLoading] = useState(false);
+  const [certFiltro, setCertFiltro] = useState<'todas' | 'pendentes' | 'certificadas'>('todas');
+  const [certificarRow, setCertificarRow] = useState<Usuario | null>(null);
+  const [certObs, setCertObs] = useState('');
   const [acaoBusy, setAcaoBusy] = useState<string | null>(null);
   const [menuAberto, setMenuAberto] = useState<number | null>(null);
   const [alertaBusy, setAlertaBusy] = useState<string | null>(null);
@@ -375,9 +425,13 @@ export default function UsuariosPage() {
       } else if (a.tipo === 'sessao' && a.sid) {
         await api.post(`/usuarios/${id}/sessoes/${encodeURIComponent(a.sid)}/encerrar`, {});
         toast.success('Sessão revogada. Os demais dispositivos continuam conectados.');
+      } else if (a.tipo === 'certificar') {
+        await api.post(`/usuarios/${id}/certificar`, { observacao: a.motivo || '' });
+        toast.success(`Acesso de ${a.row.nome} certificado.`);
       }
       setConfirmAcao(null);
       setFichaNonce((n) => n + 1); // a ficha aberta recarrega sozinha
+      if (certAberto) void recarregarCert();
       await recarregarTudo();
     } catch (e: any) {
       if (e instanceof ApiError && e.code === 'reauth_necessaria') {
@@ -479,12 +533,77 @@ export default function UsuariosPage() {
     setLotePendente({ acao, ids });
   }
 
-  async function exportarSelecao() {
+  async function exportarSelecao(formato: 'csv' | 'xlsx' = 'csv') {
     try {
-      await downloadFile(`/usuarios/export?format=csv&ids=${selecao.map((u) => Number(u.id)).join(',')}`, 'usuarios-selecao.csv');
+      await downloadFile(`/usuarios/export?format=${formato}&ids=${selecao.map((u) => Number(u.id)).join(',')}`, `usuarios-selecao.${formato}`);
       toast.success(`Seleção exportada (${selecao.length} conta(s)).`);
     } catch (e: any) {
       toast.error(e.message || 'Não foi possível exportar a seleção.');
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Onda 4: política de senha + certificação
+  // ------------------------------------------------------------------
+  async function abrirPolitica() {
+    setPoliticaAberta(true);
+    setPoliticaLoading(true);
+    setPoliticaErro('');
+    try {
+      const d = await api.get<{ politica: PoliticaSenha; limites: NonNullable<typeof politicaLimites> }>('/usuarios/politica-senha');
+      setPoliticaForm(d.politica);
+      setPoliticaLimites(d.limites);
+    } catch (e: any) {
+      setPoliticaErro(e instanceof ApiError ? e.message : 'Não foi possível carregar a política.');
+    } finally {
+      setPoliticaLoading(false);
+    }
+  }
+
+  /** Grava a política (chamado direto e após a reautenticação confirmar). */
+  async function salvarPolitica() {
+    if (!politicaForm) return;
+    setPoliticaErro('');
+    setPoliticaSaving(true);
+    try {
+      await api.put('/usuarios/politica-senha', politicaForm);
+      setPoliticaAberta(false);
+      toast.success('Política de senha atualizada. Vale para as próximas senhas e logins.');
+      await recarregarTudo();
+    } catch (e: any) {
+      if (e instanceof ApiError && e.code === 'reauth_necessaria') {
+        setPoliticaPendente(true);
+        return;
+      }
+      setPoliticaErro(e instanceof ApiError ? e.message : 'Não foi possível salvar a política.');
+    } finally {
+      setPoliticaSaving(false);
+    }
+  }
+
+  async function recarregarCert() {
+    setCertLoading(true);
+    try {
+      setCertDados(await api.get<NonNullable<typeof certDados>>('/usuarios/certificacao'));
+    } catch (e: any) {
+      toast.error(e instanceof ApiError ? e.message : 'Não foi possível carregar a certificação.');
+    } finally {
+      setCertLoading(false);
+    }
+  }
+
+  function abrirCertificacao() {
+    setCertAberto(true);
+    setCertFiltro('todas');
+    void recarregarCert();
+  }
+
+  async function exportarCertificacao(formato: 'csv' | 'xlsx') {
+    try {
+      await downloadFile(`/usuarios/certificacao/export?format=${formato}`, `certificacao-acessos.${formato}`);
+      toast.success('Matriz de certificação exportada.');
+    } catch (e: any) {
+      toast.error(e.message || 'Não foi possível exportar.');
     }
   }
 
@@ -586,6 +705,12 @@ export default function UsuariosPage() {
         busy: acaoBusy === `mfa-${id}`, onClick: () => setConfirmAcao({ tipo: 'mfa', row }),
       });
     }
+    if (row.senha_definida_em && ativo && !souEu) {
+      itens.push({
+        key: 'certificar', rotulo: 'Certificar acesso...', icone: <ClipboardCheck className="h-4 w-4" />,
+        busy: acaoBusy === `certificar-${id}`, onClick: () => { setCertificarRow(row); setCertObs(''); },
+      });
+    }
     if (ativo && !souEu) {
       itens.push({
         key: 'encerrar', rotulo: 'Encerrar todas as sessões', icone: <Lock className="h-4 w-4" />,
@@ -656,6 +781,15 @@ export default function UsuariosPage() {
               <Download className="h-4 w-4 text-emerald-600" />
               <span className="hidden md:inline">XLSX</span>
             </button>
+            <button className="btn-secondary" onClick={abrirPolitica} title="Composição, histórico e expiração das senhas">
+              <KeyRound className="h-4 w-4" />
+              <span className="hidden md:inline">Política de senha</span>
+            </button>
+            <button className="btn-secondary" onClick={abrirCertificacao} title="Revisão periódica de quem tem acesso a quê">
+              <ClipboardCheck className="h-4 w-4" />
+              <span className="hidden md:inline">Certificação</span>
+              {(t?.nao_certificados ?? 0) > 0 && <span className="badge ml-1 !bg-amber-500 !text-white">{t!.nao_certificados}</span>}
+            </button>
             <button
               className="btn-accent"
               onClick={() => {
@@ -714,8 +848,8 @@ export default function UsuariosPage() {
                         {alertaBusy === `renovar-${a.usuario_id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pencil className="h-3.5 w-3.5" />} Renovar
                       </button>
                     )}
-                    <button className="btn-secondary flex-1 !px-2 !py-1 text-xs" onClick={() => abrirFicha(a.usuario_id, a.tipo === 'admin_sem_mfa' ? 'seguranca' : 'resumo')}>
-                      <Eye className="h-3.5 w-3.5" /> {a.tipo === 'admin_sem_mfa' ? 'Ver segurança' : 'Ver ficha'}
+                    <button className="btn-secondary flex-1 !px-2 !py-1 text-xs" onClick={() => abrirFicha(a.usuario_id, a.tipo === 'admin_sem_mfa' || a.tipo.startsWith('senha_') ? 'seguranca' : 'resumo')}>
+                      <Eye className="h-3.5 w-3.5" /> {a.tipo === 'admin_sem_mfa' || a.tipo.startsWith('senha_') ? 'Ver segurança' : 'Ver ficha'}
                     </button>
                   </div>
                 </li>
@@ -922,8 +1056,11 @@ export default function UsuariosPage() {
           <button className="btn-secondary !py-1.5 text-xs hover:!border-red-300 hover:!text-red-600" onClick={() => iniciarLote('desativar')} disabled={!!bulkBusy}>
             {bulkBusy === 'desativar' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PowerOff className="h-3.5 w-3.5" />} Desativar...
           </button>
-          <button className="btn-secondary !py-1.5 text-xs" onClick={exportarSelecao}>
+          <button className="btn-secondary !py-1.5 text-xs" onClick={() => exportarSelecao('csv')}>
             <Download className="h-3.5 w-3.5" /> Exportar CSV
+          </button>
+          <button className="btn-secondary !py-1.5 text-xs" onClick={() => exportarSelecao('xlsx')}>
+            <Download className="h-3.5 w-3.5 text-emerald-600" /> Exportar XLSX
           </button>
           <button className="btn-ghost !py-1.5 text-xs" onClick={() => setSelecao([])}>
             <X className="h-3.5 w-3.5" /> Limpar
@@ -1199,6 +1336,10 @@ export default function UsuariosPage() {
             setFormOpen(true);
           }}
           onConvite={reenviarConvite}
+          onCertificar={(row) => {
+            setCertificarRow(row);
+            setCertObs('');
+          }}
           onSensivel={pedirSensivel}
           onBloquear={(row) => {
             setBloquearRow(row);
@@ -1222,12 +1363,16 @@ export default function UsuariosPage() {
 
       {/* Reautenticação para ações sensíveis */}
       <ReauthModal
-        open={!!reauth || !!lotePendente}
+        open={!!reauth || !!lotePendente || politicaPendente}
         onClose={() => {
           // Cancelar a autorização não apaga o motivo já digitado.
           if (reauth?.tipo === 'desativar') {
             setDesativarRow(reauth.row);
             setMotivo(reauth.motivo || '');
+          }
+          if (reauth?.tipo === 'certificar') {
+            setCertificarRow(reauth.row);
+            setCertObs(reauth.motivo || '');
           }
           if (lotePendente?.acao === 'desativar') {
             setLoteDesativarIds(lotePendente.ids);
@@ -1235,14 +1380,17 @@ export default function UsuariosPage() {
           }
           setReauth(null);
           setLotePendente(null);
+          setPoliticaPendente(false);
         }}
         onConfirmed={() => {
           if (reauth) void executarSensivel(reauth);
           else if (lotePendente) void executarLote(lotePendente);
+          else if (politicaPendente) void salvarPolitica();
           setReauth(null);
           setLotePendente(null);
+          setPoliticaPendente(false);
         }}
-        titulo={reauth ? tituloReauth(reauth.tipo, reauth.row) : lotePendente ? tituloLote(lotePendente) : 'Autorização necessária'}
+        titulo={reauth ? tituloReauth(reauth.tipo, reauth.row) : lotePendente ? tituloLote(lotePendente) : politicaPendente ? 'Autorizar política de senha' : 'Autorização necessária'}
       />
 
       {/* Desativar com motivo (individual ou em lote) */}
@@ -1350,6 +1498,232 @@ export default function UsuariosPage() {
             </select>
           </label>
         </div>
+      </Modal>
+
+      {/* Política de senha configurável */}
+      <Modal
+        open={politicaAberta}
+        onClose={() => !politicaSaving && setPoliticaAberta(false)}
+        title="Política de senha"
+        subtitle="Vale para convites, resets e trocas. A expiração cobra a troca no login."
+        size="md"
+        footer={
+          <>
+            <button className="btn-secondary" onClick={() => setPoliticaAberta(false)} disabled={politicaSaving}>
+              Cancelar
+            </button>
+            <button className="btn-primary" onClick={salvarPolitica} disabled={politicaSaving || politicaLoading || !politicaForm}>
+              {politicaSaving && <Loader2 className="h-4 w-4 animate-spin" />} Salvar política
+            </button>
+          </>
+        }
+      >
+        {politicaLoading || !politicaForm ? (
+          <Spinner />
+        ) : (
+          <div className="space-y-4">
+            {politicaErro && <Alert tone="red">{politicaErro}</Alert>}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <label className="block">
+                <span className="label">Tamanho mínimo</span>
+                <input
+                  type="number"
+                  className="input"
+                  min={politicaLimites?.tamanho_minimo.min || 6}
+                  max={politicaLimites?.tamanho_minimo.max || 64}
+                  value={politicaForm.tamanho_minimo}
+                  onChange={(e) => setPoliticaForm({ ...politicaForm, tamanho_minimo: Number(e.target.value) })}
+                />
+              </label>
+              <label className="block">
+                <span className="label">Histórico (não repetir)</span>
+                <input
+                  type="number"
+                  className="input"
+                  min={0}
+                  max={politicaLimites?.historico_qtd.max || 10}
+                  value={politicaForm.historico_qtd}
+                  onChange={(e) => setPoliticaForm({ ...politicaForm, historico_qtd: Number(e.target.value) })}
+                />
+                <span className="mt-0.5 block text-[11px] text-slate-400">0 = desligado</span>
+              </label>
+              <label className="block">
+                <span className="label">Expiração da senha</span>
+                <select
+                  className="input"
+                  value={politicaForm.expiracao_dias}
+                  onChange={(e) => setPoliticaForm({ ...politicaForm, expiracao_dias: Number(e.target.value) })}
+                >
+                  <option value={0}>Nunca expira</option>
+                  <option value={30}>30 dias</option>
+                  <option value={60}>60 dias</option>
+                  <option value={90}>90 dias</option>
+                  <option value={180}>180 dias</option>
+                  <option value={365}>365 dias</option>
+                </select>
+              </label>
+            </div>
+            <div className="space-y-1.5">
+              {(
+                [
+                  ['exigir_maiuscula_minuscula', 'Exigir maiúsculas e minúsculas'],
+                  ['exigir_numero', 'Exigir ao menos um número'],
+                  ['exigir_simbolo', 'Exigir ao menos um símbolo (!@#…)'],
+                  ['proibir_obvias', 'Barrar senhas óbvias (123456, senha, nome da marca…)'],
+                ] as const
+              ).map(([k, label]) => (
+                <label key={k} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-slate-300"
+                    checked={politicaForm[k]}
+                    onChange={(e) => setPoliticaForm({ ...politicaForm, [k]: e.target.checked })}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <Alert tone="blue">
+              Senhas temporárias (geradas pelo sistema) seguem isentas. Salvar exige a sua senha (reautenticação) e fica na auditoria.
+            </Alert>
+          </div>
+        )}
+      </Modal>
+
+      {/* Certificação de acessos */}
+      <Modal
+        open={certAberto}
+        onClose={() => setCertAberto(false)}
+        title="Certificação de acessos"
+        subtitle={certDados ? `${certDados.certificados} de ${certDados.ativos} acessos certificados · validade de ${certDados.validade_dias} dias` : 'Quem tem acesso a quê, e quando foi revisado.'}
+        size="lg"
+      >
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1 text-sm" role="tablist" aria-label="Filtro da matriz">
+            {(
+              [
+                ['todas', `Todas (${certDados?.total ?? 0})`],
+                ['pendentes', `Pendentes (${certDados?.pendentes ?? 0})`],
+                ['certificadas', `Certificadas (${certDados?.certificados ?? 0})`],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                role="tab"
+                aria-selected={certFiltro === k}
+                className={`rounded-md px-2 py-1.5 font-medium ${certFiltro === k ? 'bg-white shadow text-navy-900' : 'text-slate-500'}`}
+                onClick={() => setCertFiltro(k)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="ml-auto flex gap-1.5">
+            <button className="btn-secondary !px-2.5 !py-1.5 text-xs" onClick={() => exportarCertificacao('csv')} title="Exportar a matriz em CSV">
+              <Download className="h-3.5 w-3.5" /> CSV
+            </button>
+            <button className="btn-secondary !px-2.5 !py-1.5 text-xs" onClick={() => exportarCertificacao('xlsx')} title="Exportar a matriz em XLSX">
+              <Download className="h-3.5 w-3.5 text-emerald-600" /> XLSX
+            </button>
+            <button className="btn-secondary !px-2.5 !py-1.5 text-xs" onClick={recarregarCert} disabled={certLoading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${certLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        </div>
+        {certLoading && !certDados ? (
+          <Spinner />
+        ) : (
+          <ul className={`max-h-[55vh] space-y-2 overflow-auto pr-1 ${certLoading ? 'opacity-60' : ''}`}>
+            {(certDados?.linhas || [])
+              .filter((l) => (certFiltro === 'pendentes' ? l.precisa_recertificar : certFiltro === 'certificadas' ? !l.precisa_recertificar && l.ativo : true))
+              .map((l) => {
+                const perfil = PERFIL_META[l.perfil] || { label: l.perfil, tone: 'slate' as const };
+                const status = STATUS_META[l.status_conta] || { label: l.status_conta, tone: 'slate' as const };
+                const souEu = eu && Number(eu.id) === l.id;
+                return (
+                  <li key={l.id} className="rounded-lg border border-slate-200 p-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Avatar nome={l.nome} perfil={l.perfil} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-navy-900">
+                          {l.nome} {souEu && <span className="font-normal text-slate-400">(você)</span>}
+                        </p>
+                        <p className="truncate text-xs text-slate-500">{l.email}</p>
+                      </div>
+                      <Badge tone={perfil.tone}>{perfil.label}</Badge>
+                      <Badge tone={status.tone}>{status.label}</Badge>
+                      {l.mfa ? <Badge tone="green">MFA</Badge> : <Badge tone="slate">Sem MFA</Badge>}
+                    </div>
+                    <p className="mt-1.5 text-xs text-slate-500">
+                      {l.certificado_em ? (
+                        <>
+                          Certificado {l.certificado_ha_dias === 0 ? 'hoje' : `há ${l.certificado_ha_dias} dia(s)`} por <strong>{l.certificado_por}</strong>
+                          {l.certificado_obs ? ` — ${l.certificado_obs}` : ''}
+                          {l.precisa_recertificar && <span className="font-semibold text-amber-600"> · validade vencida, recertifique</span>}
+                        </>
+                      ) : l.ativo ? (
+                        <span className="font-medium text-slate-500">Nunca certificado</span>
+                      ) : (
+                        <span className="text-slate-400">Conta desativada</span>
+                      )}
+                      {' '}· {l.ultimo_login ? `último acesso ${formatRelative(l.ultimo_login)}` : 'nunca acessou'}
+                    </p>
+                    {l.precisa_recertificar && !souEu && (
+                      <button
+                        className="btn-secondary mt-1.5 !px-2.5 !py-1 text-xs"
+                        onClick={() => { setCertificarRow({ id: l.id, nome: l.nome, email: l.email }); setCertObs(''); }}
+                        disabled={acaoBusy === `certificar-${l.id}`}
+                      >
+                        {acaoBusy === `certificar-${l.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ClipboardCheck className="h-3.5 w-3.5" />} Certificar
+                      </button>
+                    )}
+                    {l.precisa_recertificar && !!souEu && (
+                      <p className="mt-1 text-xs text-slate-400">Seu acesso precisa de outro administrador (quatro olhos).</p>
+                    )}
+                  </li>
+                );
+              })}
+          </ul>
+        )}
+      </Modal>
+
+      {/* Certificar acesso (com observação opcional) */}
+      <Modal
+        open={!!certificarRow}
+        onClose={() => setCertificarRow(null)}
+        title={`Certificar acesso de ${certificarRow?.nome || ''}?`}
+        subtitle="Você confirma que revisou perfil, permissões e necessidade deste acesso. O carimbo fica na auditoria."
+        size="sm"
+        footer={
+          <>
+            <button className="btn-secondary" onClick={() => setCertificarRow(null)}>
+              Cancelar
+            </button>
+            <button
+              className="btn-primary"
+              onClick={() => {
+                if (!certificarRow) return;
+                pedirSensivel('certificar', certificarRow, { motivo: certObs.trim() || undefined });
+                setCertificarRow(null);
+              }}
+            >
+              <ClipboardCheck className="h-4 w-4" /> Certificar acesso
+            </button>
+          </>
+        }
+      >
+        <label className="block">
+          <span className="label">Observação (opcional)</span>
+          <textarea
+            className="input"
+            rows={2}
+            value={certObs}
+            onChange={(e) => setCertObs(e.target.value)}
+            placeholder="Ex.: revisão trimestral — perfil conferido com o RH"
+            autoFocus
+          />
+        </label>
       </Modal>
 
       {/* Senha temporária: exibição única */}
@@ -1528,6 +1902,8 @@ function tituloReauth(tipo: string, row: Usuario): string {
       return `Bloquear acesso — ${nome}`;
     case 'sessao':
       return `Revogar sessão — ${nome}`;
+    case 'certificar':
+      return `Certificar acesso — ${nome}`;
     default:
       return 'Autorização necessária';
   }
@@ -1914,6 +2290,7 @@ function FichaUsuarioModal({
   onClose,
   onEdit,
   onConvite,
+  onCertificar,
   onSensivel,
   onBloquear,
   onImprimir,
@@ -1931,6 +2308,7 @@ function FichaUsuarioModal({
   onClose: () => void;
   onEdit: (row: Usuario) => void;
   onConvite: (row: Usuario) => void;
+  onCertificar: (row: Usuario) => void;
   onSensivel: (tipo: TipoSensivel, row: Usuario, opts?: { motivo?: string; sid?: string; duracao?: string }) => void;
   onBloquear: (row: Usuario) => void;
   onImprimir: (dados: Atividade) => void;
@@ -2140,6 +2518,12 @@ function FichaUsuarioModal({
                     {(SENHA_META[u.senha_status] || { label: '—' }).label}
                   </Badge>
                   {u.trocar_senha && <Badge tone="amber">Troca obrigatória</Badge>}
+                  {u.senha_expirada && <Badge tone="red">Senha vencida</Badge>}
+                  {!u.senha_expirada && typeof u.senha_vence_em_dias === 'number' && (
+                    <span className={`text-xs ${u.senha_vence_em_dias <= 7 ? 'font-semibold text-amber-600' : 'text-slate-500'}`}>
+                      Senha vence em {u.senha_vence_em_dias} dia(s)
+                    </span>
+                  )}
                   {u.convite_expira_em && !u.senha_definida_em && (
                     <span className="text-xs text-slate-500" title={formatDateTime(u.convite_expira_em)}>
                       Convite {u.convite_expirado ? `expirou ${formatRelative(u.convite_expira_em)}` : `expira ${formatRelative(u.convite_expira_em)}`}
@@ -2163,6 +2547,33 @@ function FichaUsuarioModal({
                     </button>
                   )}
                 </div>
+              </div>
+
+              {/* Certificação de acessos */}
+              <div className={`rounded-lg border p-3 ${u.acesso_certificado_em ? 'border-slate-200' : 'border-amber-200 bg-amber-50/50'}`}>
+                <h4 className="flex items-center gap-1.5 text-sm font-bold text-navy-900">
+                  <ClipboardCheck className="h-4 w-4 text-navy-400" /> Certificação de acessos
+                </h4>
+                <p className="mt-1 text-sm text-slate-600">
+                  {u.acesso_certificado_em ? (
+                    <>
+                      Certificado em {formatDateTime(u.acesso_certificado_em)} por <strong>{u.acesso_certificado_por || '—'}</strong>
+                      {u.acesso_certificado_obs ? ` — ${u.acesso_certificado_obs}` : ''}
+                      {Date.now() - new Date(String(u.acesso_certificado_em)).getTime() > 365 * 86400000 && (
+                        <span className="font-semibold text-amber-600"> · validade de 12 meses vencida, recertifique</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-xs">Nunca certificado — confirme perfil, permissões e necessidade deste acesso.</span>
+                  )}
+                </p>
+                {ativo && !!u.senha_definida_em && !souEu && (
+                  <button className="btn-secondary mt-2 !px-2.5 !py-1.5 text-xs" onClick={() => onCertificar(u)} disabled={busy === `certificar-${u.id}`}>
+                    {busy === `certificar-${u.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ClipboardCheck className="h-3.5 w-3.5" />}
+                    {u.acesso_certificado_em ? 'Recertificar' : 'Certificar acesso...'}
+                  </button>
+                )}
+                {souEu && <p className="mt-1 text-xs text-slate-400">Seu acesso precisa de outro administrador (quatro olhos).</p>}
               </div>
 
               {/* Bloqueio */}

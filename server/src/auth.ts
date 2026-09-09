@@ -199,6 +199,32 @@ export async function login(req: Request, res: Response) {
     const verificacao = await verifyPasswordDetailed(password, row.senha_hash);
     if (verificacao.ok) {
       await registerLoginSuccess(req);
+      // Onda 4: senha vencida pela política vira troca obrigatória (antes do
+      // MFA, para valer nos dois fluxos). O aviso vai na resposta.
+      let senha_vence_em_dias: number | null = null;
+      let senha_expirada = false;
+      try {
+        const { obterPolitica, vencimentoSenha } = await import('./politicaSenha');
+        const venc = vencimentoSenha(row, await obterPolitica());
+        senha_vence_em_dias = venc.venceEmDias;
+        senha_expirada = venc.expirada;
+        if (venc.expirada && !row.trocar_senha) {
+          await store.update((await import('./resources')).RESOURCES.usuarios, Number(row.id), { trocar_senha: true });
+          row.trocar_senha = true;
+          await store
+            .audit({
+              usuario_id: Number(row.id),
+              usuario: String(row.nome || row.email),
+              acao: 'senha',
+              recurso: 'usuarios',
+              registro_id: Number(row.id),
+              descricao: `Senha de ${String(row.email)} vencida pela política — troca obrigatória no acesso`,
+            })
+            .catch(() => undefined);
+        }
+      } catch {
+        /* política indisponível: segue o login sem o aviso */
+      }
       const user = toAuthUser(row);
       await store.touchLogin(user.id, clientIp(req) || null);
       // Limpa bloqueio vencido que tenha ficado para trás.
@@ -244,10 +270,12 @@ export async function login(req: Request, res: Response) {
           ...(temMfaAtivado ? { mfa_required: true } : { mfa_setup_required: true }),
           mfa_ticket: signMfaTicket(user, lembrar),
           user: { id: user.id, name: user.name, email: user.email, perfil: user.perfil },
+          senha_vence_em_dias,
+          senha_expirada,
         });
       }
 
-      return emitirSessao(req, res, row, user, req.body?.lembrar === true);
+      return emitirSessao(req, res, row, user, req.body?.lembrar === true, { senha_vence_em_dias, senha_expirada });
     }
     return loginFailed(req, res, row);
   }
@@ -364,9 +392,18 @@ export async function loginMFA(req: Request, res: Response) {
   }
 
   const user = toAuthUser(row);
+  let avisoMfa: Record<string, unknown> = {};
+  try {
+    const { obterPolitica, vencimentoSenha } = await import('./politicaSenha');
+    const venc = vencimentoSenha(row, await obterPolitica());
+    avisoMfa = { senha_vence_em_dias: venc.venceEmDias, senha_expirada: venc.expirada };
+  } catch {
+    /* indiferente */
+  }
   return emitirSessao(req, res, row, user, payload.lembrar === true, {
     ...(codigosNovos ? { mfa_backup_codigos: codigosNovos } : {}),
     ...(restantesBackup !== null ? { mfa_backup_restantes: restantesBackup } : {}),
+    ...avisoMfa,
   });
 }
 
@@ -693,8 +730,27 @@ export function requireRole(...roles: Perfil[]) {
   };
 }
 
-export function me(req: Request, res: Response) {
-  res.json({ user: currentUser(req) });
+export async function me(req: Request, res: Response) {
+  // Enriquecido (best-effort, nunca lança — a rota não passa pelo wrap):
+  // aviso de vencimento da senha para o usuário se antecipar.
+  const user = currentUser(req);
+  const extra: Record<string, unknown> = {};
+  try {
+    if (user.id > 0) {
+      const { RESOURCES } = await import('./resources');
+      const row = await getStore().findOneWhere(RESOURCES.usuarios, { id: user.id });
+      if (row) {
+        const { obterPolitica, vencimentoSenha } = await import('./politicaSenha');
+        const venc = vencimentoSenha(row, await obterPolitica());
+        extra.senha_expira_em = venc.expiraEm;
+        extra.senha_vence_em_dias = venc.venceEmDias;
+        extra.senha_expirada = venc.expirada;
+      }
+    }
+  } catch {
+    /* indiferente */
+  }
+  res.json({ user, ...extra });
 }
 
 /** Troca de senha do próprio usuário (exige a senha atual; derruba as OUTRAS sessões). */
@@ -703,19 +759,22 @@ export async function changePassword(req: Request, res: Response) {
   const atual = String(req.body?.senha_atual ?? '');
   const nova = String(req.body?.senha_nova ?? '');
   if (u.id <= 0) throw new HttpError(400, 'O acesso de emergência não permite trocar a senha por aqui.');
-  const erro = validarSenhaNova(nova, u.email);
-  if (erro) throw new HttpError(400, erro, { senha_nova: erro });
 
   const store = getStore();
   const { RESOURCES } = await import('./resources');
   const row = await store.findOneWhere(RESOURCES.usuarios, { id: u.id });
   if (!row) throw new HttpError(404, 'Usuário não encontrado.');
+  // Política configurável + histórico (a nova senha não pode repetir as últimas).
+  const { validarSenhaUsuario, obterPolitica, empurrarHistorico } = await import('./politicaSenha');
+  const erro = await validarSenhaUsuario(nova, { email: u.email, historico: row.senha_historico, hashAtual: String(row.senha_hash || '') }, true);
+  if (erro) throw new HttpError(400, erro, { senha_nova: erro });
   if (!(await verifyPassword(atual, row.senha_hash))) {
     throw new HttpError(400, 'Senha atual incorreta.', { senha_atual: 'Senha incorreta' });
   }
   const novaHash = await hashPassword(nova);
   await store.update(RESOURCES.usuarios, u.id, {
     senha_hash: novaHash,
+    senha_historico: empurrarHistorico(row.senha_historico, String(row.senha_hash || ''), await obterPolitica()),
     trocar_senha: false,
     senha_provisoria: false,
     senha_definida_em: new Date().toISOString(),
@@ -793,12 +852,14 @@ export async function resetPassword(req: Request, res: Response) {
   if (!row.reset_expira_em || new Date(String(row.reset_expira_em)).getTime() < Date.now()) {
     throw new HttpError(400, 'Este link expirou. Peça um novo em "Esqueci minha senha".');
   }
-  const erro = validarSenhaNova(senha, row.email);
+  const { validarSenhaUsuario, obterPolitica, empurrarHistorico } = await import('./politicaSenha');
+  const erro = await validarSenhaUsuario(senha, { email: String(row.email), historico: row.senha_historico, hashAtual: String(row.senha_hash || '') }, true);
   if (erro) throw new HttpError(400, erro, { senha: erro });
   const novaHash = await hashPassword(senha);
   const versao = Number(row.token_versao || 0) + 1;
   await store.update(RESOURCES.usuarios, Number(row.id), {
     senha_hash: novaHash,
+    senha_historico: empurrarHistorico(row.senha_historico, String(row.senha_hash || ''), await obterPolitica()),
     reset_token_hash: null,
     reset_expira_em: null,
     convite_token_hash: null,

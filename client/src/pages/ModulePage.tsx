@@ -53,6 +53,7 @@ import CatalogoShareModal from '../components/CatalogoShareModal';
 import CatalogoInsights from '../components/CatalogoInsights';
 import PortalAccessModal from '../components/PortalAccessModal';
 import UsuariosPage from './UsuariosPage';
+import WebhooksPage from './WebhooksPage';
 
 const PAGE_SIZE = 25;
 
@@ -61,6 +62,7 @@ export default function ModulePage({ module }: { module: Module }) {
   const resource = module.resource ? meta.resources[module.resource] : undefined;
 
   if (module.id === 'usuarios') return <UsuariosPage />;
+  if (module.id === 'webhooks') return <WebhooksPage />;
   if (module.id === 'estoque') return <EstoqueGradePage />;
   if (module.id === 'medidas') return <MedidasPage />;
   if (module.id === 'inventario') return <InventarioModulePage />;

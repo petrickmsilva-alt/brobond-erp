@@ -145,7 +145,7 @@ Cada login cria um registro em `sessoes` com um **JTI** (24 bytes aleatórios); 
 
 ## 11. Política de senha
 
-Inalterada em espírito, agora aplicada em **todos** os pontos de definição de senha (convite, temporária, troca própria, redefinição): mínimo de 8 caracteres, ≠ e-mail/não contém a parte local do e-mail, fora da lista de senhas óbvias e sem repetição de um só caractere. Senha temporária gerada tem 16+ caracteres com classes garantidas.
+Configurável pelo administrador (Usuários → Política de senha; `GET/PUT /api/usuarios/politica-senha`, gravação com reautenticação). O padrão reproduz a regra original — mínimo 8, ≠ e-mail, fora da lista de óbvias — e pode endurecer: tamanho 6–64, maiúsculas+minúsculas, número, símbolo, histórico (não repetir as últimas N, até 10) e expiração (30–365 dias ou nunca). Aplicada em **todos** os pontos de definição de senha do usuário (convite, troca própria, redefinição); senhas temporárias (geradas, 16+ caracteres) seguem isentas. Senha vencida vira troca obrigatória no login (com aviso de "vence em X dias" em `/auth/me` e nas Configurações) e alimenta os alertas do painel. As regras de composição são públicas (`GET /api/auth/politica-senha`, sem login) para o medidor das telas de convite/reset.
 
 ## 12. Referência de endpoints
 
@@ -159,11 +159,12 @@ Inalterada em espírito, agora aplicada em **todos** os pontos de definição de
 | POST | `/api/auth/reset` | `{ token, senha }` → troca e derruba todas as sessões |
 | GET | `/api/convites/:token` | valida convite (nome, e-mail, expirado) |
 | POST | `/api/convites/aceitar` | `{ token, senha }` → define a própria senha |
+| GET | `/api/auth/politica-senha` | regras de composição (medidor de senha, sem login) |
 
 ### Autenticados
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/api/auth/me` | usuário logado |
+| GET | `/api/auth/me` | usuário logado + aviso de vencimento da senha |
 | POST | `/api/auth/change-password` | troca própria (exige senha atual; derruba outras sessões) |
 | POST | `/api/auth/reautenticar` | step-up de 5 min |
 | POST | `/api/auth/logout` / `logout-all` | encerra atual / todas |
@@ -178,6 +179,16 @@ Inalterada em espírito, agora aplicada em **todos** os pontos de definição de
 | POST | `/api/usuarios/:id/reenviar-convite` | novo link de convite |
 | POST | `/api/usuarios/:id/resetar-mfa` | limpa MFA (reauth) |
 | GET | `/api/admin/auditoria/verificar` | confere a cadeia de hashes |
+| GET/PUT | `/api/usuarios/politica-senha` | política de senha (gravação com reauth) |
+| GET | `/api/usuarios/certificacao` (+ `/export?format=csv\|xlsx`) | matriz quem-tem-o-quê |
+| POST | `/api/usuarios/:id/certificar` | carimbo de revisão (reauth; nunca o próprio) |
+| GET/POST/PUT/DELETE | `/api/webhooks`, `/api/webhooks/:id` | gestão de webhooks (mutação com reauth) |
+| POST | `/api/webhooks/:id/testar` | evento de teste + resultado |
+| GET/POST | `/api/webhooks/:id/entregas`, `/api/webhooks/entregas/:id/reenviar` | log e reenvio |
+
+### Webhooks (contrato da entrega)
+
+POST JSON `{ evento, ocorrido_em, dados }` com headers `X-Brobond-Event` e `X-Brobond-Signature: sha256=HMAC_SHA256(segredo, corpo_bruto)`. Eventos: `usuario.criado`, `usuario.convite_enviado`, `usuario.desativado`, `usuario.ativado`, `usuario.bloqueado`, `usuario.desbloqueado`, `usuario.senha_temporaria`, `usuario.mfa_resetado`, `usuario.acesso_certificado` (+ `webhook.teste`). Timeout 6 s; HTTP 2xx = ok; log das 200 entregas mais recentes por webhook, com reenvio manual. O segredo sai da API uma única vez (criação/regeneração) e dorme cifrado (AES-GCM).
 
 ## 13. Variáveis de ambiente
 

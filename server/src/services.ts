@@ -290,7 +290,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
   const data = validatePayload(r, body, 'create');
   const s = getStore();
   try {
-    return await s.transaction(async (tx) => {
+    const criado = await s.transaction(async (tx) => {
       // Regras específicas
       if (r.key === 'usuarios') await prepareUserPayload(data, null, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, null, actor);
@@ -362,6 +362,25 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor): Pr
       await attachGradeTamanhos(r, [final], tx);
       return final;
     });
+    // Pós-commit: integrações (fire-and-forget — nunca derrubam a resposta).
+    if (r.key === 'usuarios') {
+      const conta = {
+        usuario_id: Number(criado.id),
+        nome: String(criado.nome || ''),
+        email: String(criado.email || ''),
+        perfil: String(criado.perfil || ''),
+        por: String(actor.name || ''),
+      };
+      void import('./webhooks')
+        .then((m) => m.disparar('usuario.criado', conta))
+        .catch(() => undefined);
+      if ((criado as Row).convite_link) {
+        void import('./webhooks')
+          .then((m) => m.disparar('usuario.convite_enviado', conta))
+          .catch(() => undefined);
+      }
+    }
+    return criado;
   } catch (e) {
     throw toHttpError(e, r);
   }
