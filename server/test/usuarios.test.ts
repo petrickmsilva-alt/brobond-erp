@@ -434,3 +434,221 @@ describe('Filtros virtuais da lista (status, MFA, parados 30d)', () => {
     assert.equal(pag1.total, par.total);
   });
 });
+
+// ---------- Onda 3: códigos de recuperação do MFA ----------
+describe('MFA: códigos de recuperação (uso único)', () => {
+  test('lote tem formato, unicidade e consumo único', async () => {
+    const { gerarLoteCodigos, consumirCodigo, restantesRegistro, normalizarCodigo } = await import('../src/mfaBackup');
+    const lote = gerarLoteCodigos();
+    assert.equal(lote.codigos.length, 10);
+    assert.ok(lote.codigos.every((c) => /^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(c)), 'formato XXXX-XXXX sem ambíguos');
+    assert.equal(new Set(lote.codigos).size, 10, 'sem repetição no lote');
+    assert.equal(restantesRegistro(lote.registro), 10);
+    const c1 = await consumirCodigo(lote.registro, lote.codigos[0].toLowerCase().replace('-', ''));
+    assert.ok(c1 && c1.restantes === 9, 'aceita com outra caixa/espaço');
+    assert.equal(await consumirCodigo(lote.registro, lote.codigos[0]), null, 'não reutiliza');
+    assert.equal(await consumirCodigo(lote.registro, 'ZZZZ-ZZZZ'), null, 'código estranho falha');
+    assert.equal(normalizarCodigo('ab12-cd34'), 'AB12CD34');
+  });
+
+  test('ativação emite códigos; login com código consome; regenerar invalida o lote', async () => {
+    const { mfaSetup, mfaAtivar, mfaCodigos, decifrarSegredoMfa } = await import('../src/mfa');
+    const { codigoTOTP } = await import('../src/totp');
+    const { login, loginMFA } = await import('../src/auth');
+    const { restantesRegistro, lerRegistro } = await import('../src/mfaBackup');
+
+    const { row } = await criarComSenha('operador', 'Backup#4821x');
+    const ator = { id: Number(row.id), name: String(row.nome), email: String(row.email), perfil: 'operador' as const };
+    await mfaSetup(mockReq(ator), mockRes().res);
+    const pendente = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(row.id) });
+    const rAtivar = mockRes();
+    await mfaAtivar(mockReq(ator, { codigo: codigoTOTP(decifrarSegredoMfa(pendente!.mfa_secret)!) }), rAtivar.res);
+    assert.equal(rAtivar.code(), 200);
+    const codigos = rAtivar.payload().codigos as string[];
+    assert.equal(codigos.length, 10, 'ativação devolve os 10 códigos (exibição única)');
+
+    // login com o 1º código de recuperação
+    let r = mockRes();
+    await login(mockReq(null, { email: row.email, password: 'Backup#4821x' }, {}, '198.51.100.31'), r.res);
+    assert.equal(r.payload().mfa_required, true);
+    const rMfa = mockRes();
+    await loginMFA(mockReq(null, { mfa_ticket: r.payload().mfa_ticket, codigo: codigos[0] }, {}, '198.51.100.31'), rMfa.res);
+    assert.equal(rMfa.code(), 200, 'código de recuperação conclui o login');
+    assert.ok(rMfa.payload().token);
+    const depois = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(row.id) });
+    assert.equal(restantesRegistro(lerRegistro(depois!.mfa_backup_hashes)), 9);
+
+    // reutilizar o mesmo código falha
+    r = mockRes();
+    await login(mockReq(null, { email: row.email, password: 'Backup#4821x' }, {}, '198.51.100.32'), r.res);
+    const rReuso = mockRes();
+    await loginMFA(mockReq(null, { mfa_ticket: r.payload().mfa_ticket, codigo: codigos[0] }, {}, '198.51.100.32'), rReuso.res);
+    assert.equal(rReuso.code(), 401, 'código usado não vale de novo');
+
+    // regenerar (com reauth) invalida o lote anterior
+    await reauthComo(row, 'Backup#4821x');
+    const rCod = mockRes();
+    await mfaCodigos(mockReq(ator), rCod.res);
+    assert.equal(rCod.code(), 200);
+    assert.equal((rCod.payload().codigos as string[]).length, 10);
+    const renovado = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(row.id) });
+    assert.equal(restantesRegistro(lerRegistro(renovado!.mfa_backup_hashes)), 10);
+    r = mockRes();
+    await login(mockReq(null, { email: row.email, password: 'Backup#4821x' }, {}, '198.51.100.33'), r.res);
+    const rVelho = mockRes();
+    await loginMFA(mockReq(null, { mfa_ticket: r.payload().mfa_ticket, codigo: codigos[1] }, {}, '198.51.100.33'), rVelho.res);
+    assert.equal(rVelho.code(), 401, 'lote antigo morre na regeneração');
+  });
+
+  test('desativar e resetar o MFA limpam os códigos', async () => {
+    const { mfaSetup, mfaAtivar, mfaDesativar, decifrarSegredoMfa } = await import('../src/mfa');
+    const { codigoTOTP } = await import('../src/totp');
+    const { resetarMfaUsuario } = await import('../src/usuariosAdmin');
+    const { lerRegistro } = await import('../src/mfaBackup');
+
+    const a = await criarComSenha('operador', 'LimpaA#4821x');
+    const atorA = { id: Number(a.row.id), name: String(a.row.nome), email: String(a.row.email), perfil: 'operador' as const };
+    await mfaSetup(mockReq(atorA), mockRes().res);
+    const pend = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(a.row.id) });
+    await mfaAtivar(mockReq(atorA, { codigo: codigoTOTP(decifrarSegredoMfa(pend!.mfa_secret)!) }), mockRes().res);
+    await reauthComo(a.row, 'LimpaA#4821x');
+    const seg = decifrarSegredoMfa((await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(a.row.id) }))!.mfa_secret)!;
+    await mfaDesativar(mockReq(atorA, { codigo: codigoTOTP(seg) }), mockRes().res);
+    const limpo = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(a.row.id) });
+    assert.equal(limpo!.mfa_backup_hashes, null, 'desativar limpa os códigos');
+
+    const b = await criarComSenha('operador', 'LimpaB#4821x');
+    const atorB = { id: Number(b.row.id), name: String(b.row.nome), email: String(b.row.email), perfil: 'operador' as const };
+    await mfaSetup(mockReq(atorB), mockRes().res);
+    const pendB = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(b.row.id) });
+    await mfaAtivar(mockReq(atorB, { codigo: codigoTOTP(decifrarSegredoMfa(pendB!.mfa_secret)!) }), mockRes().res);
+    const admin = await criarComSenha('admin', 'LimpaAdm#4821x');
+    const atorAdm = await reauthComo(admin.row, 'LimpaAdm#4821x');
+    await resetarMfaUsuario(mockReq(atorAdm, {}, { id: String(b.row.id) }), mockRes().res);
+    const resetado = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(b.row.id) });
+    assert.equal(resetado!.mfa_backup_hashes, null, 'reset do admin invalida os códigos');
+  });
+});
+
+// ---------- Onda 3: bloqueio manual + revogação individual ----------
+describe('Bloqueio manual e revogação de sessão individual', () => {
+  test('bloquear trava login com motivo; desbloquear libera; guards valem', async () => {
+    const { bloquearUsuario, desbloquearUsuario } = await import('../src/usuariosAdmin');
+    const { login } = await import('../src/auth');
+    const admin = await criarComSenha('admin', 'BloqAdm#4821x');
+    const ator = await reauthComo(admin.row, 'BloqAdm#4821x');
+    const alvo = await criarComSenha('operador', 'BloqAlvo#4821x');
+
+    const rBloq = mockRes();
+    await bloquearUsuario(mockReq(ator, { motivo: 'Suspeita de fraude no caixa' }, { id: String(alvo.row.id) }), rBloq.res);
+    assert.equal(rBloq.code(), 200);
+    assert.equal(rBloq.payload().manual, true);
+    const raw = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(alvo.row.id) });
+    assert.equal(raw!.bloqueio_manual, true);
+
+    const rLogin = mockRes();
+    await login(mockReq(null, { email: alvo.row.email, password: 'BloqAlvo#4821x' }, {}, '198.51.100.41'), rLogin.res);
+    assert.equal(rLogin.code(), 403);
+    assert.match(rLogin.payload().error, /bloqueado pelo administrador: Suspeita de fraude/i);
+
+    await assert.rejects(
+      () => bloquearUsuario(mockReq(ator, { motivo: 'x' }, { id: String(alvo.row.id) }), mockRes().res),
+      /já está bloqueado/i
+    );
+    await assert.rejects(
+      () => bloquearUsuario(mockReq(ator, { motivo: 'x' }, { id: String(admin.row.id) }), mockRes().res),
+      /próprio acesso/i
+    );
+
+    await desbloquearUsuario(mockReq(ator, {}, { id: String(alvo.row.id) }), mockRes().res);
+    const livre = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(alvo.row.id) });
+    assert.equal(livre!.bloqueio_manual, false);
+    const rOk = mockRes();
+    await login(mockReq(null, { email: alvo.row.email, password: 'BloqAlvo#4821x' }, {}, '198.51.100.42'), rOk.res);
+    assert.equal(rOk.code(), 200, 'desbloqueado entra');
+  });
+
+  test('bloqueio com duração grava bloqueado_ate (temporário, não manual)', async () => {
+    const { bloquearUsuario } = await import('../src/usuariosAdmin');
+    const admin = await criarComSenha('admin', 'BloqDur#4821x');
+    const ator = await reauthComo(admin.row, 'BloqDur#4821x');
+    const alvo = await criarComSenha('operador', 'BloqTmp#4821x');
+    const r = mockRes();
+    await bloquearUsuario(mockReq(ator, { motivo: 'Averiguação', duracao_minutos: 60 }, { id: String(alvo.row.id) }), r.res);
+    assert.equal(r.payload().manual, false);
+    const raw = await getStore().findOneWhere(RESOURCES.usuarios, { id: Number(alvo.row.id) });
+    assert.ok(new Date(String(raw!.bloqueado_ate)).getTime() > Date.now());
+    assert.notEqual(raw!.bloqueio_manual, true);
+    await assert.rejects(
+      () => bloquearUsuario(mockReq(ator, { motivo: 'x', duracao_minutos: 999999 }, { id: String(alvo.row.id) }), mockRes().res),
+      /já está bloqueado/i
+    );
+  });
+
+  test('admin revoga UMA sessão; as outras seguem; sid alheio dá 404', async () => {
+    const { abrirSessao } = await import('../src/sessoes');
+    const { revogarSessaoUsuario } = await import('../src/usuariosAdmin');
+    const admin = await criarComSenha('admin', 'RevAdm#4821x');
+    const ator = await reauthComo(admin.row, 'RevAdm#4821x');
+    const alvo = await criarComSenha('operador', 'RevAlvo#4821x');
+    const sid1 = await abrirSessao({ usuarioId: Number(alvo.row.id), lembrar: false, req: mockReq(null) });
+    const sid2 = await abrirSessao({ usuarioId: Number(alvo.row.id), lembrar: false, req: mockReq(null) });
+    const r = mockRes();
+    await revogarSessaoUsuario(mockReq(ator, {}, { id: String(alvo.row.id), sid: sid1 }), r.res);
+    assert.equal(r.code(), 200);
+    const ativas = await getStore().listSessoesAtivas(Number(alvo.row.id));
+    assert.equal(ativas.length, 1);
+    assert.equal(ativas[0].id, sid2, 'só a escolhida caiu');
+    await assert.rejects(
+      () => revogarSessaoUsuario(mockReq(ator, {}, { id: String(admin.row.id), sid: sid2 }), mockRes().res),
+      (e: any) => e.status === 404,
+      'sid de outro usuário não revoga'
+    );
+  });
+});
+
+// ---------- Onda 3: série de acessos + export da seleção ----------
+describe('Resumo: série 7 dias e export da seleção', () => {
+  test('serie_logins_7d e falhas_24h refletem a trilha', async () => {
+    const { resumoUsuarios } = await import('../src/usuariosAdmin');
+    const { login } = await import('../src/auth');
+    const admin = await criarComSenha('admin', 'SerieAdm#4821x');
+    const ator = { id: Number(admin.row.id), name: 'Admin', perfil: 'admin' as const };
+    const u = await criarComSenha('operador', 'SerieUsr#4821x');
+    await login(mockReq(null, { email: u.row.email, password: 'SerieUsr#4821x' }, {}, '198.51.100.51'), mockRes().res);
+    await login(mockReq(null, { email: u.row.email, password: 'errada-1' }, {}, '198.51.100.52'), mockRes().res);
+    const r = mockRes();
+    await resumoUsuarios(mockReq(ator), r.res);
+    assert.equal(r.code(), 200);
+    const serie = r.payload().serie_logins_7d as { dia: string; logins: number; falhas: number }[];
+    assert.equal(serie.length, 7);
+    const hoje = new Date().toISOString().slice(0, 10);
+    const b = serie.find((x) => x.dia === hoje)!;
+    assert.ok(b.logins >= 1, 'login de hoje entra na série');
+    assert.ok(b.falhas >= 1, 'falha de hoje entra na série');
+    assert.ok(r.payload().totais.falhas_24h >= 1, 'KPI falhas_24h');
+  });
+
+  test('export aceita ?ids= (seleção) e f.parado30d', async () => {
+    const { exportarRecurso } = await import('../src/export');
+    const admin = await criarComSenha('admin', 'ExpAdm#4821x');
+    const ator = { id: Number(admin.row.id), name: 'Admin', email: String(admin.row.email), perfil: 'admin' as const };
+    const a = await criarComSenha('operador', 'ExpA#4821x');
+    const b = await criarComSenha('operador', 'ExpB#4821x');
+    function mockExport(query: Record<string, string>) {
+      let buf = '';
+      const res: any = { setHeader: () => res, end: (d: any) => { buf = String(d); return res; } };
+      return { req: { query, user: ator } as any, res, corpo: () => buf };
+    }
+    const sel = mockExport({ format: 'csv', ids: `${a.row.id},${b.row.id}` });
+    await exportarRecurso(sel.req, sel.res, 'usuarios');
+    assert.ok(sel.corpo().includes(String(a.row.email)), 'seleção traz A');
+    assert.ok(sel.corpo().includes(String(b.row.email)), 'seleção traz B');
+    assert.ok(!sel.corpo().includes('senha_hash'), 'sem segredos');
+    const linhas = sel.corpo().trim().split('\n');
+    assert.equal(linhas.length, 3, 'cabeçalho + 2 linhas');
+    const par = mockExport({ format: 'csv', 'f.parado30d': 'sim' });
+    await exportarRecurso(par.req, par.res, 'usuarios');
+    assert.ok(par.corpo().length > 0);
+  });
+});

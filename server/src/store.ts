@@ -48,7 +48,7 @@ export type Option = { value: number; label: string };
 export type AuditEntry = {
   usuario_id: number | null;
   usuario: string | null;
-  acao: 'criar' | 'editar' | 'excluir' | 'login' | 'senha' | 'mfa' | 'seguranca' | 'bloqueio' | 'convite' | 'importar' | 'ajuste' | 'estornar';
+  acao: 'criar' | 'editar' | 'excluir' | 'login' | 'login_falha' | 'senha' | 'mfa' | 'seguranca' | 'bloqueio' | 'convite' | 'importar' | 'ajuste' | 'estornar';
   recurso: string | null;
   registro_id: number | null;
   descricao: string;

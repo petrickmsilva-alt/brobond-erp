@@ -165,7 +165,7 @@ function anotarStatusSenha(r: Resource, rows: Row[]) {
     row.senha_status = !row.senha_definida_em ? 'convite_pendente' : row.trocar_senha ? 'provisoria' : 'propria';
     const conviteExpirado = row.convite_expira_em ? new Date(String(row.convite_expira_em)).getTime() < agora : false;
     row.convite_expirado = conviteExpirado;
-    const bloqueado = !!row.bloqueado_ate && new Date(String(row.bloqueado_ate)).getTime() > agora;
+    const bloqueado = row.bloqueio_manual === true || (!!row.bloqueado_ate && new Date(String(row.bloqueado_ate)).getTime() > agora);
     const expirado = !!row.acesso_expira_em && new Date(String(row.acesso_expira_em)).getTime() < agora;
     row.conta_bloqueada = bloqueado;
     row.acesso_expirado = expirado;

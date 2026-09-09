@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, Loader2, Lock, Mail, ShieldCheck, Boxes, Cog, Receipt, Smartphone, Copy } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, Loader2, Lock, Mail, ShieldCheck, Boxes, Cog, Receipt, Smartphone, Copy } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { Logo } from '../components/Logo';
 import { Alert } from '../components/ui';
@@ -14,8 +14,11 @@ export default function Login() {
   const [lembrar, setLembrar] = useState(false);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
-  // MFA: 'mfa' = desafio TOTP; 'setup' = cadastro obrigatório (administradores).
-  const [etapa, setEtapa] = useState<'form' | 'mfa' | 'setup'>('form');
+  // MFA: 'mfa' = desafio TOTP; 'setup' = cadastro obrigatório (administradores);
+  // 'codigos' = exibe os códigos de recuperação recém-emitidos (exibição única).
+  const [etapa, setEtapa] = useState<'form' | 'mfa' | 'setup' | 'codigos'>('form');
+  const [modoCodigo, setModoCodigo] = useState<'totp' | 'backup'>('totp');
+  const [codigosRecuperacao, setCodigosRecuperacao] = useState<string[] | null>(null);
   const [ticket, setTicket] = useState('');
   const [codigo, setCodigo] = useState('');
   const [qr, setQr] = useState('');
@@ -66,12 +69,26 @@ export default function Login() {
     })();
   }, [etapa, ticket, qr, segredo, mfaDesafio]);
 
+  function formatarBackup(v: string): string {
+    const limpo = v.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+    return limpo.length > 4 ? `${limpo.slice(0, 4)}-${limpo.slice(4)}` : limpo;
+  }
+
+  const codigoValido = modoCodigo === 'totp' ? codigo.length === 6 : codigo.replace(/[^A-Z0-9]/gi, '').length === 8;
+
   async function confirmarCodigo(e?: React.FormEvent) {
     e?.preventDefault();
     setErr('');
     setBusy(true);
     try {
-      await concluirLoginMFA(ticket, codigo);
+      const d = await concluirLoginMFA(ticket, codigo);
+      // 1ª ativação: o servidor emite os códigos de recuperação junto —
+      // é a única chance de guardá-los.
+      if (etapa === 'setup' && d.mfa_backup_codigos?.length) {
+        setCodigosRecuperacao(d.mfa_backup_codigos);
+        setEtapa('codigos');
+        return;
+      }
       nav('/', { replace: true });
     } catch (e: any) {
       setErr(e.message || 'Código inválido.');
@@ -82,10 +99,12 @@ export default function Login() {
 
   function voltar() {
     setEtapa('form');
+    setModoCodigo('totp');
     setCodigo('');
     setErr('');
     setQr('');
     setSegredo('');
+    setCodigosRecuperacao(null);
   }
 
   if (loading) {
@@ -148,7 +167,7 @@ export default function Login() {
 
       {/* Formulário */}
       <div className="flex items-center justify-center bg-white p-6 sm:p-10">
-        {etapa !== 'form' && (
+        {(etapa === 'mfa' || etapa === 'setup') && (
           <form onSubmit={confirmarCodigo} className="w-full max-w-sm animate-fade-in" noValidate>
             <div className="mb-8 flex justify-center lg:hidden">
               <Logo height={56} />
@@ -192,26 +211,72 @@ export default function Login() {
             )}
 
             <div className="mt-6 space-y-5">
+              {etapa === 'mfa' && (
+                <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1 text-sm" role="tablist" aria-label="Tipo de código">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={modoCodigo === 'totp'}
+                    className={`rounded-md px-2 py-1.5 font-medium ${modoCodigo === 'totp' ? 'bg-white shadow text-navy-900' : 'text-slate-500'}`}
+                    onClick={() => {
+                      setModoCodigo('totp');
+                      setCodigo('');
+                      setErr('');
+                    }}
+                  >
+                    App autenticador
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={modoCodigo === 'backup'}
+                    className={`rounded-md px-2 py-1.5 font-medium ${modoCodigo === 'backup' ? 'bg-white shadow text-navy-900' : 'text-slate-500'}`}
+                    onClick={() => {
+                      setModoCodigo('backup');
+                      setCodigo('');
+                      setErr('');
+                    }}
+                  >
+                    Recuperação
+                  </button>
+                </div>
+              )}
               <div>
                 <label htmlFor="mfa-codigo" className="label">
-                  Código do app autenticador
+                  {modoCodigo === 'totp' ? 'Código do app autenticador' : 'Código de recuperação'}
                 </label>
-                <input
-                  id="mfa-codigo"
-                  className="input text-center font-mono text-lg tracking-[0.4em]"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={6}
-                  placeholder="000000"
-                  value={codigo}
-                  onChange={(e) => setCodigo(e.target.value.replace(/\D/g, ''))}
-                  autoFocus
-                />
+                {modoCodigo === 'totp' ? (
+                  <input
+                    id="mfa-codigo"
+                    className="input text-center font-mono text-lg tracking-[0.4em]"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    placeholder="000000"
+                    value={codigo}
+                    onChange={(e) => setCodigo(e.target.value.replace(/\D/g, ''))}
+                    autoFocus
+                  />
+                ) : (
+                  <>
+                    <input
+                      id="mfa-codigo"
+                      className="input text-center font-mono text-lg tracking-[0.2em]"
+                      autoComplete="off"
+                      maxLength={9}
+                      placeholder="XXXX-XXXX"
+                      value={codigo}
+                      onChange={(e) => setCodigo(formatarBackup(e.target.value))}
+                      autoFocus
+                    />
+                    <p className="mt-1 text-xs text-slate-400">Sem o celular? Cada código de recuperação vale um acesso. Gerencie os seus em Configurações → MFA.</p>
+                  </>
+                )}
               </div>
 
               {err && <Alert tone="red">{err}</Alert>}
 
-              <button disabled={busy || codigo.length !== 6} className="btn-primary w-full py-2.5">
+              <button disabled={busy || !codigoValido} className="btn-primary w-full py-2.5">
                 {busy && <Loader2 className="h-4 w-4 animate-spin" />}
                 {busy ? 'Verificando...' : etapa === 'mfa' ? 'Concluir acesso' : 'Ativar MFA e entrar'}
               </button>
@@ -221,6 +286,44 @@ export default function Login() {
               </button>
             </div>
           </form>
+        )}
+
+        {etapa === 'codigos' && codigosRecuperacao && (
+          <div className="w-full max-w-sm animate-fade-in">
+            <div className="mb-8 flex justify-center lg:hidden">
+              <Logo height={56} />
+            </div>
+            <h2 className="flex items-center gap-2 text-2xl font-bold text-navy-900">
+              <KeyRound className="h-6 w-6 text-brand-500" /> Guarde os códigos de recuperação
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Seu MFA está ativado. Estes <strong>10 códigos</strong> são o seu acesso reserva — cada um vale <strong>um login</strong> sem o celular. Eles aparecem{' '}
+              <strong>somente agora</strong>.
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              {codigosRecuperacao.map((c) => (
+                <span key={c} className="rounded-md bg-white px-2 py-1.5 text-center font-mono text-sm font-semibold tracking-wider text-navy-900 ring-1 ring-slate-200">
+                  {c}
+                </span>
+              ))}
+            </div>
+            <div className="mt-4 space-y-2.5">
+              <button
+                type="button"
+                className="btn-secondary w-full py-2"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(codigosRecuperacao.join('\n'));
+                  setCopiado(true);
+                  window.setTimeout(() => setCopiado(false), 2000);
+                }}
+              >
+                <Copy className="h-4 w-4" /> {copiado ? 'Códigos copiados!' : 'Copiar os 10 códigos'}
+              </button>
+              <button className="btn-primary w-full py-2.5" onClick={() => nav('/', { replace: true })}>
+                Guardei — entrar no sistema
+              </button>
+            </div>
+          </div>
         )}
 
         {etapa === 'form' && (

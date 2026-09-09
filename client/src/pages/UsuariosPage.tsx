@@ -10,6 +10,9 @@
 //     reset de MFA — ações sensíveis com reautenticação (step-up)
 //   • UX: linhas clicáveis, menu de ações por linha, KPIs que filtram
 //     (liga/desliga), alertas com ação rápida e ficha auto-recarregável
+//   • Onda 3: gráfico de acessos 7 dias, ações em lote (troca/encerrar/
+//     desativar/exportar seleção), bloqueio manual com prazo, revogação de
+//     sessão individual, trilha com diff de alterações e ficha impressa
 // ============================================================================
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -17,6 +20,7 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  Ban,
   BellRing,
   ChevronLeft,
   ChevronRight,
@@ -35,6 +39,7 @@ import {
   Pencil,
   Plus,
   Power,
+  Printer,
   PowerOff,
   RefreshCw,
   Search,
@@ -49,6 +54,7 @@ import {
 import { api, ApiError, downloadFile } from '../lib/api';
 import type { ListResult } from '../lib/meta';
 import { formatDateTime, formatRelative } from '../lib/format';
+import { imprimirFicha } from '../lib/fichaPrint';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import ReauthModal from '../components/ReauthModal';
@@ -70,8 +76,18 @@ type Totais = {
   acesso_expirado: number;
   sem_login_30d: number;
   logins_hoje: number;
+  falhas_24h: number;
   sessoes_ativas: number | null;
 };
+
+/** Ações sensíveis (exigem reautenticação do administrador logado). */
+type TipoSensivel = 'senha' | 'desativar' | 'ativar' | 'encerrar' | 'mfa' | 'bloquear' | 'sessao';
+
+/** Ação em lote pendente de confirmação (e de reautenticação, quando sensível). */
+type LoteAcao = { acao: 'desativar' | 'encerrar' | 'troca'; ids: number[]; motivo?: string };
+
+/** Um dia da série de acessos (gráfico de 7 dias do painel). */
+type PontoSerie = { dia: string; logins: number; falhas: number };
 
 type Alerta = { tipo: string; usuario_id: number; nome: string; email: string; detalhe: string };
 
@@ -174,7 +190,7 @@ export default function UsuariosPage() {
   const toast = useToast();
 
   // Painel
-  const [resumo, setResumo] = useState<{ totais: Totais; alertas: Alerta[] } | null>(null);
+  const [resumo, setResumo] = useState<{ totais: Totais; alertas: Alerta[]; serie_logins_7d: PontoSerie[] } | null>(null);
   const [resumoLoading, setResumoLoading] = useState(true);
 
   // Lista
@@ -207,9 +223,18 @@ export default function UsuariosPage() {
   const [senhaTempValor, setSenhaTempValor] = useState('');
   const [conviteLink, setConviteLink] = useState('');
   const [conviteBusyId, setConviteBusyId] = useState<number | null>(null);
-  const [reauth, setReauth] = useState<{ tipo: 'senha' | 'desativar' | 'ativar' | 'encerrar' | 'mfa'; row: Usuario; motivo?: string } | null>(null);
+  const [reauth, setReauth] = useState<{ tipo: TipoSensivel; row: Usuario; motivo?: string; sid?: string; duracao?: string } | null>(null);
   const [desativarRow, setDesativarRow] = useState<Usuario | null>(null);
   const [motivo, setMotivo] = useState('');
+  // Seleção em lote (persiste entre páginas) + ação em lote pendente.
+  const [selecao, setSelecao] = useState<Usuario[]>([]);
+  const [bulkBusy, setBulkBusy] = useState<LoteAcao['acao'] | null>(null);
+  const [loteDesativarIds, setLoteDesativarIds] = useState<number[] | null>(null);
+  const [lotePendente, setLotePendente] = useState<LoteAcao | null>(null);
+  // Bloqueio manual de acesso.
+  const [bloquearRow, setBloquearRow] = useState<Usuario | null>(null);
+  const [bloquearMotivo, setBloquearMotivo] = useState('');
+  const [bloquearDuracao, setBloquearDuracao] = useState('');
   const [acaoBusy, setAcaoBusy] = useState<string | null>(null);
   const [menuAberto, setMenuAberto] = useState<number | null>(null);
   const [alertaBusy, setAlertaBusy] = useState<string | null>(null);
@@ -322,9 +347,9 @@ export default function UsuariosPage() {
   }
 
   /** Executa a ação sensível (chamado após a reautenticação confirmar). */
-  async function executarSensivel(a: { tipo: 'senha' | 'desativar' | 'ativar' | 'encerrar' | 'mfa'; row: Usuario; motivo?: string }) {
+  async function executarSensivel(a: { tipo: TipoSensivel; row: Usuario; motivo?: string; sid?: string; duracao?: string }) {
     const id = Number(a.row.id);
-    setAcaoBusy(`${a.tipo}-${id}`);
+    setAcaoBusy(a.tipo === 'sessao' && a.sid ? `sessao-${a.sid}` : `${a.tipo}-${id}`);
     try {
       if (a.tipo === 'senha') {
         const d = await api.post<{ senha_temporaria: string }>(`/usuarios/${id}/senha-temporaria`, {});
@@ -344,6 +369,12 @@ export default function UsuariosPage() {
       } else if (a.tipo === 'mfa') {
         await api.post(`/usuarios/${id}/resetar-mfa`, {});
         toast.success(`MFA de ${a.row.email} resetado. O usuário refaz o cadastro no próximo login.`);
+      } else if (a.tipo === 'bloquear') {
+        await api.post(`/usuarios/${id}/bloquear`, { motivo: a.motivo || '', ...(a.duracao ? { duracao_minutos: Number(a.duracao) } : {}) });
+        toast.success(`${a.row.nome} bloqueado(a).${a.duracao ? '' : ' O acesso só volta com desbloqueio manual.'}`);
+      } else if (a.tipo === 'sessao' && a.sid) {
+        await api.post(`/usuarios/${id}/sessoes/${encodeURIComponent(a.sid)}/encerrar`, {});
+        toast.success('Sessão revogada. Os demais dispositivos continuam conectados.');
       }
       setConfirmAcao(null);
       setFichaNonce((n) => n + 1); // a ficha aberta recarrega sozinha
@@ -359,8 +390,102 @@ export default function UsuariosPage() {
     }
   }
 
-  function pedirSensivel(tipo: 'senha' | 'desativar' | 'ativar' | 'encerrar' | 'mfa', row: Usuario, motivo?: string) {
-    setReauth({ tipo, row, motivo });
+  function pedirSensivel(tipo: TipoSensivel, row: Usuario, opts?: { motivo?: string; sid?: string; duracao?: string }) {
+    setReauth({ tipo, row, ...opts });
+  }
+
+  // ------------------------------------------------------------------
+  // Ações em lote (checkboxes da lista)
+  // ------------------------------------------------------------------
+  const selecionado = useCallback((id: number) => selecao.some((u) => Number(u.id) === id), [selecao]);
+
+  function toggleSelecao(row: Usuario) {
+    const id = Number(row.id);
+    setSelecao((sel) => (sel.some((u) => Number(u.id) === id) ? sel.filter((u) => Number(u.id) !== id) : [...sel, row]));
+  }
+
+  function togglePagina(rows: Usuario[]) {
+    const idsPagina = new Set(rows.map((r) => Number(r.id)));
+    const todos = rows.length > 0 && rows.every((r) => selecionado(Number(r.id)));
+    setSelecao((sel) => (todos ? sel.filter((u) => !idsPagina.has(Number(u.id))) : [...sel.filter((u) => !idsPagina.has(Number(u.id))), ...rows]));
+  }
+
+  /** Filtra os elegíveis por ação (o servidor valida de novo, um por um). */
+  function elegiveis(acao: LoteAcao['acao']): { rows: Usuario[]; ignorados: number } {
+    const rows = selecao.filter((u) => {
+      if (eu && Number(eu.id) === Number(u.id)) return false; // nunca mexe na própria conta
+      if (u.ativo === false) return false;
+      if (acao === 'troca') return !!u.senha_definida_em && !u.trocar_senha;
+      return true;
+    });
+    return { rows, ignorados: selecao.length - rows.length };
+  }
+
+  async function executarLote(lote: LoteAcao) {
+    setBulkBusy(lote.acao);
+    let ok = 0;
+    const erros: string[] = [];
+    let parouPorReauth = false;
+    let i = 0;
+    for (; i < lote.ids.length; i++) {
+      const id = lote.ids[i];
+      try {
+        if (lote.acao === 'desativar') await api.post(`/usuarios/${id}/desativar`, { motivo: lote.motivo || '' });
+        else if (lote.acao === 'encerrar') await api.post(`/usuarios/${id}/encerrar-sessoes`, {});
+        else await api.post(`/usuarios/${id}/forcar-troca-senha`, {});
+        ok++;
+      } catch (e: any) {
+        if (e instanceof ApiError && e.code === 'reauth_necessaria') {
+          parouPorReauth = true;
+          break; // reautentica e retoma do ponto onde parou
+        }
+        erros.push(`#${id}: ${e instanceof ApiError ? e.message : 'falhou'}`);
+      }
+    }
+    setBulkBusy(null);
+    if (parouPorReauth) {
+      setLotePendente({ ...lote, ids: lote.ids.slice(i) });
+      return;
+    }
+    setLotePendente(null);
+    if (ok > 0) {
+      setSelecao((sel) => sel.filter((u) => !lote.ids.includes(Number(u.id))));
+      setFichaNonce((n) => n + 1);
+      await recarregarTudo();
+      toast.success(`${ok} de ${lote.ids.length} conta(s) concluída(s).`);
+    }
+    if (erros.length) toast.error(erros.slice(0, 3).join(' · ') + (erros.length > 3 ? ` (+${erros.length - 3} outro(s))` : ''));
+    if (!ok && !erros.length) toast.error('Nenhuma conta foi processada.');
+  }
+
+  function iniciarLote(acao: LoteAcao['acao']) {
+    const { rows, ignorados } = elegiveis(acao);
+    if (!rows.length) {
+      toast.error('Nenhuma conta elegível na seleção (a sua, desativadas e — na troca — sem senha ou já marcadas ficam de fora).');
+      return;
+    }
+    if (ignorados > 0) toast.success(`${ignorados} conta(s) ignorada(s): fora do perfil desta ação.`);
+    const ids = rows.map((u) => Number(u.id));
+    if (acao === 'desativar') {
+      setLoteDesativarIds(ids);
+      setMotivo('');
+      return;
+    }
+    if (acao === 'troca') {
+      void executarLote({ acao, ids });
+      return;
+    }
+    // encerrar sessões é sensível: pré-autoriza antes de executar
+    setLotePendente({ acao, ids });
+  }
+
+  async function exportarSelecao() {
+    try {
+      await downloadFile(`/usuarios/export?format=csv&ids=${selecao.map((u) => Number(u.id)).join(',')}`, 'usuarios-selecao.csv');
+      toast.success(`Seleção exportada (${selecao.length} conta(s)).`);
+    } catch (e: any) {
+      toast.error(e.message || 'Não foi possível exportar a seleção.');
+    }
   }
 
   async function acaoSimples(tipo: 'desbloquear' | 'troca', row: Usuario) {
@@ -471,6 +596,13 @@ export default function UsuariosPage() {
       itens.push({
         key: 'desbloquear', rotulo: 'Desbloquear e zerar falhas', icone: <LockOpen className="h-4 w-4" />,
         busy: acaoBusy === `desbloquear-${id}`, onClick: () => setConfirmAcao({ tipo: 'desbloquear', row }),
+      });
+    }
+    if (ativo && !row.conta_bloqueada && !souEu) {
+      itens.push({
+        key: 'bloquear', rotulo: 'Bloquear acesso...', icone: <Ban className="h-4 w-4" />, perigo: true,
+        busy: acaoBusy === `bloquear-${id}`,
+        onClick: () => { setBloquearRow(row); setBloquearMotivo(''); setBloquearDuracao(''); },
       });
     }
     if (!souEu) {
@@ -671,6 +803,48 @@ export default function UsuariosPage() {
         />
       </div>
 
+      {/* Movimento de acessos + segurança (24h) */}
+      {(resumoLoading || resumo) && (
+        <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+          <div className="card p-4 lg:col-span-2">
+            <p className="mb-2 text-sm font-bold text-navy-900">Movimento de acessos — últimos 7 dias</p>
+            {resumoLoading || !resumo ? <Spinner /> : <GraficoAcessos serie={resumo.serie_logins_7d || []} />}
+          </div>
+          <div className="card flex flex-col justify-center gap-3 p-4">
+            <p className="text-sm font-bold text-navy-900">Segurança nas últimas 24h</p>
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-100 text-red-600">
+                <ShieldAlert className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="text-xl font-bold tabular-nums text-navy-900">{resumoLoading ? '—' : (t?.falhas_24h ?? 0)}</p>
+                <p className="text-xs text-slate-500">tentativa(s) de login falha(s)</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                <Lock className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="text-xl font-bold tabular-nums text-navy-900">{resumoLoading ? '—' : (t?.bloqueados ?? 0)}</p>
+                <p className="text-xs text-slate-500">conta(s) bloqueada(s) agora</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+                <Smartphone className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="text-xl font-bold tabular-nums text-navy-900">
+                  {resumoLoading ? '—' : resumo!.alertas.filter((a) => a.tipo === 'admin_sem_mfa').length}
+                </p>
+                <p className="text-xs text-slate-500">admin(s) sem MFA</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Filtros */}
       <div className="card mb-4 p-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -732,6 +906,31 @@ export default function UsuariosPage() {
         )}
       </div>
 
+      {/* Barra de ações em lote */}
+      {selecao.length > 0 && (
+        <div className="card mb-3 flex flex-wrap items-center gap-2 border-brand-200 bg-brand-50/60 p-3">
+          <p className="mr-auto text-sm font-semibold text-navy-900">
+            {selecao.length} conta(s) selecionada(s)
+            <span className="ml-1.5 font-normal text-slate-500">a sua conta e as desativadas ficam sempre de fora</span>
+          </p>
+          <button className="btn-secondary !py-1.5 text-xs" onClick={() => iniciarLote('troca')} disabled={!!bulkBusy}>
+            {bulkBusy === 'troca' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />} Forçar troca
+          </button>
+          <button className="btn-secondary !py-1.5 text-xs" onClick={() => iniciarLote('encerrar')} disabled={!!bulkBusy}>
+            {bulkBusy === 'encerrar' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />} Encerrar sessões
+          </button>
+          <button className="btn-secondary !py-1.5 text-xs hover:!border-red-300 hover:!text-red-600" onClick={() => iniciarLote('desativar')} disabled={!!bulkBusy}>
+            {bulkBusy === 'desativar' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PowerOff className="h-3.5 w-3.5" />} Desativar...
+          </button>
+          <button className="btn-secondary !py-1.5 text-xs" onClick={exportarSelecao}>
+            <Download className="h-3.5 w-3.5" /> Exportar CSV
+          </button>
+          <button className="btn-ghost !py-1.5 text-xs" onClick={() => setSelecao([])}>
+            <X className="h-3.5 w-3.5" /> Limpar
+          </button>
+        </div>
+      )}
+
       {/* Lista */}
       <div className="card overflow-hidden">
         {error && (
@@ -764,6 +963,19 @@ export default function UsuariosPage() {
             <table className="table">
               <thead>
                 <tr>
+                  <th className="w-10">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-slate-300"
+                      aria-label="Selecionar página"
+                      checked={data.rows.length > 0 && data.rows.every((r) => selecionado(Number(r.id)))}
+                      ref={(el) => {
+                        if (el) el.indeterminate = data.rows.some((r) => selecionado(Number(r.id))) && !data.rows.every((r) => selecionado(Number(r.id)));
+                      }}
+                      onChange={() => togglePagina(data.rows)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </th>
                   <Th label="Usuário" field="nome" sort={sort} onSort={toggleSort} />
                   <Th label="Perfil" field="perfil" sort={sort} onSort={toggleSort} />
                   <th>Status</th>
@@ -781,7 +993,16 @@ export default function UsuariosPage() {
                   const souEu = eu && Number(eu.id) === Number(row.id);
                   const ativo = row.ativo !== false;
                   return (
-                    <tr key={row.id} onClick={() => abrirFicha(Number(row.id))} title="Ver ficha completa" className={`cursor-pointer hover:bg-slate-50 ${!ativo ? 'opacity-70' : ''}`}>
+                    <tr key={row.id} onClick={() => abrirFicha(Number(row.id))} title="Ver ficha completa" className={`cursor-pointer hover:bg-slate-50 ${!ativo ? 'opacity-70' : ''} ${selecionado(Number(row.id)) ? '!bg-brand-50/60' : ''}`}>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-300"
+                          aria-label={`Selecionar ${row.nome}`}
+                          checked={selecionado(Number(row.id))}
+                          onChange={() => toggleSelecao(row)}
+                        />
+                      </td>
                       <td>
                         <div className="flex items-center gap-2.5">
                           <Avatar nome={row.nome} perfil={row.perfil} />
@@ -801,6 +1022,9 @@ export default function UsuariosPage() {
                         <Badge tone={status.tone}>{status.label}</Badge>
                         {row.conta_bloqueada && row.bloqueado_ate && (
                           <p className="mt-0.5 text-[11px] text-red-500">até {formatDateTime(row.bloqueado_ate)}</p>
+                        )}
+                        {row.conta_bloqueada && row.bloqueio_manual && (
+                          <p className="mt-0.5 text-[11px] font-semibold text-red-500">bloqueio manual (sem prazo)</p>
                         )}
                       </td>
                       <td>
@@ -867,8 +1091,15 @@ export default function UsuariosPage() {
               const souEu = eu && Number(eu.id) === Number(row.id);
               const ativo = row.ativo !== false;
               return (
-                <li key={row.id} className="px-4 py-3">
+                <li key={row.id} className={`px-4 py-3 ${selecionado(Number(row.id)) ? 'bg-brand-50/60' : ''}`}>
                   <div className="flex items-start gap-2.5">
+                    <input
+                      type="checkbox"
+                      className="mt-2 h-4 w-4 shrink-0 rounded border-slate-300"
+                      aria-label={`Selecionar ${row.nome}`}
+                      checked={selecionado(Number(row.id))}
+                      onChange={() => toggleSelecao(row)}
+                    />
                     <Avatar nome={row.nome} perfil={row.perfil} />
                     <button className="min-w-0 flex-1 text-left" onClick={() => abrirFicha(Number(row.id))}>
                       <p className="truncate text-sm font-semibold text-navy-900">
@@ -969,6 +1200,14 @@ export default function UsuariosPage() {
           }}
           onConvite={reenviarConvite}
           onSensivel={pedirSensivel}
+          onBloquear={(row) => {
+            setBloquearRow(row);
+            setBloquearMotivo('');
+            setBloquearDuracao('');
+          }}
+          onImprimir={(dados) => {
+            if (!imprimirFicha(dados, eu?.name || 'Administrador')) toast.error('O navegador bloqueou a janela de impressão. Permita popups e tente de novo.');
+          }}
           onDesativar={(row) => {
             setDesativarRow(row);
             setMotivo('');
@@ -983,44 +1222,66 @@ export default function UsuariosPage() {
 
       {/* Reautenticação para ações sensíveis */}
       <ReauthModal
-        open={!!reauth}
+        open={!!reauth || !!lotePendente}
         onClose={() => {
           // Cancelar a autorização não apaga o motivo já digitado.
           if (reauth?.tipo === 'desativar') {
             setDesativarRow(reauth.row);
             setMotivo(reauth.motivo || '');
           }
+          if (lotePendente?.acao === 'desativar') {
+            setLoteDesativarIds(lotePendente.ids);
+            setMotivo(lotePendente.motivo || '');
+          }
           setReauth(null);
+          setLotePendente(null);
         }}
         onConfirmed={() => {
           if (reauth) void executarSensivel(reauth);
+          else if (lotePendente) void executarLote(lotePendente);
           setReauth(null);
+          setLotePendente(null);
         }}
-        titulo={reauth ? tituloReauth(reauth.tipo, reauth.row) : 'Autorização necessária'}
+        titulo={reauth ? tituloReauth(reauth.tipo, reauth.row) : lotePendente ? tituloLote(lotePendente) : 'Autorização necessária'}
       />
 
-      {/* Desativar com motivo */}
+      {/* Desativar com motivo (individual ou em lote) */}
       <Modal
-        open={!!desativarRow}
-        onClose={() => setDesativarRow(null)}
-        title={`Desativar ${desativarRow?.nome || ''}?`}
+        open={!!desativarRow || !!loteDesativarIds}
+        onClose={() => {
+          setDesativarRow(null);
+          setLoteDesativarIds(null);
+        }}
+        title={loteDesativarIds ? `Desativar ${loteDesativarIds.length} contas?` : `Desativar ${desativarRow?.nome || ''}?`}
         subtitle="O acesso é desligado na hora e todas as sessões são encerradas. O histórico é preservado."
         size="sm"
         footer={
           <>
-            <button className="btn-secondary" onClick={() => setDesativarRow(null)}>
+            <button
+              className="btn-secondary"
+              onClick={() => {
+                setDesativarRow(null);
+                setLoteDesativarIds(null);
+              }}
+            >
               Cancelar
             </button>
             <button
               className="btn-danger"
               disabled={!motivo.trim()}
               onClick={() => {
+                if (loteDesativarIds) {
+                  setLotePendente({ acao: 'desativar', ids: loteDesativarIds, motivo: motivo.trim() });
+                  setLoteDesativarIds(null);
+                  setDesativarRow(null);
+                  return;
+                }
                 if (!desativarRow) return;
-                pedirSensivel('desativar', desativarRow, motivo.trim());
+                pedirSensivel('desativar', desativarRow, { motivo: motivo.trim() });
                 setDesativarRow(null);
               }}
             >
-              Desativar conta
+              Desativar {loteDesativarIds ? `${loteDesativarIds.length} contas` : 'conta'}
             </button>
           </>
         }
@@ -1037,6 +1298,58 @@ export default function UsuariosPage() {
           />
           <p className="mt-1 text-xs text-slate-400">Obrigatório: fica registrado na auditoria com quem e quando desativou.</p>
         </label>
+      </Modal>
+
+      {/* Bloqueio manual de acesso */}
+      <Modal
+        open={!!bloquearRow}
+        onClose={() => setBloquearRow(null)}
+        title={`Bloquear acesso de ${bloquearRow?.nome || ''}?`}
+        subtitle="Conta bloqueada não entra no sistema — nem com a senha e o MFA certos. Use em suspeitas de fraude ou vazamento."
+        size="sm"
+        footer={
+          <>
+            <button className="btn-secondary" onClick={() => setBloquearRow(null)}>
+              Cancelar
+            </button>
+            <button
+              className="btn-danger"
+              disabled={!bloquearMotivo.trim()}
+              onClick={() => {
+                if (!bloquearRow) return;
+                pedirSensivel('bloquear', bloquearRow, { motivo: bloquearMotivo.trim(), duracao: bloquearDuracao || undefined });
+                setBloquearRow(null);
+              }}
+            >
+              <Ban className="h-4 w-4" /> Bloquear acesso
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <label className="block">
+            <span className="label">Motivo do bloqueio *</span>
+            <textarea
+              className="input"
+              rows={3}
+              value={bloquearMotivo}
+              onChange={(e) => setBloquearMotivo(e.target.value)}
+              placeholder="Ex.: suspeita de fraude no caixa — acesso suspenso até a apuração"
+              autoFocus
+            />
+            <p className="mt-1 text-xs text-slate-400">Obrigatório: aparece na tela de login do usuário e na auditoria.</p>
+          </label>
+          <label className="block">
+            <span className="label">Prazo</span>
+            <select className="input" value={bloquearDuracao} onChange={(e) => setBloquearDuracao(e.target.value)}>
+              <option value="">Sem prazo — até alguém desbloquear</option>
+              <option value="60">1 hora</option>
+              <option value="480">8 horas</option>
+              <option value="1440">24 horas</option>
+              <option value="10080">7 dias</option>
+            </select>
+          </label>
+        </div>
       </Modal>
 
       {/* Senha temporária: exibição única */}
@@ -1211,9 +1524,23 @@ function tituloReauth(tipo: string, row: Usuario): string {
       return `Encerrar sessões — ${nome}`;
     case 'mfa':
       return `Resetar MFA — ${nome}`;
+    case 'bloquear':
+      return `Bloquear acesso — ${nome}`;
+    case 'sessao':
+      return `Revogar sessão — ${nome}`;
     default:
       return 'Autorização necessária';
   }
+}
+
+const LOTE_LABEL: Record<LoteAcao['acao'], string> = {
+  desativar: 'desativação',
+  encerrar: 'encerramento de sessões',
+  troca: 'troca forçada de senha',
+};
+
+function tituloLote(lote: LoteAcao): string {
+  return `Autorizar ${LOTE_LABEL[lote.acao]} em ${lote.ids.length} conta(s)`;
 }
 
 // ----------------------------------------------------------------------------
@@ -1588,6 +1915,8 @@ function FichaUsuarioModal({
   onEdit,
   onConvite,
   onSensivel,
+  onBloquear,
+  onImprimir,
   onDesativar,
   onConfirmar,
   onExcluir,
@@ -1602,7 +1931,9 @@ function FichaUsuarioModal({
   onClose: () => void;
   onEdit: (row: Usuario) => void;
   onConvite: (row: Usuario) => void;
-  onSensivel: (tipo: 'senha' | 'desativar' | 'ativar' | 'encerrar' | 'mfa', row: Usuario, motivo?: string) => void;
+  onSensivel: (tipo: TipoSensivel, row: Usuario, opts?: { motivo?: string; sid?: string; duracao?: string }) => void;
+  onBloquear: (row: Usuario) => void;
+  onImprimir: (dados: Atividade) => void;
   onDesativar: (row: Usuario) => void;
   onConfirmar: (c: { tipo: 'encerrar' | 'mfa' | 'troca' | 'desbloquear'; row: Usuario }) => void;
   onExcluir: (row: Usuario) => void;
@@ -1678,6 +2009,9 @@ function FichaUsuarioModal({
               </button>
               <button className="btn-secondary !px-2.5 !py-1.5 text-xs" onClick={() => { carregar(); onChanged(); }}>
                 <RefreshCw className="h-3.5 w-3.5" /> Atualizar
+              </button>
+              <button className="btn-secondary !px-2.5 !py-1.5 text-xs" onClick={() => dados && onImprimir(dados)} title="Imprimir o dossiê completo (RH/arquivo)">
+                <Printer className="h-3.5 w-3.5" /> Imprimir ficha
               </button>
             </div>
           </div>
@@ -1839,7 +2173,7 @@ function FichaUsuarioModal({
                 <p className="mt-1 text-sm text-slate-600">
                   {u.conta_bloqueada ? (
                     <>
-                      <Badge tone="red">Bloqueado até {formatDateTime(u.bloqueado_ate)}</Badge>
+                      <Badge tone="red">{u.bloqueio_manual ? 'Bloqueio manual (sem prazo)' : `Bloqueado até ${formatDateTime(u.bloqueado_ate)}`}</Badge>
                       <span className="ml-2 text-xs">{u.motivo_bloqueio}</span>
                     </>
                   ) : (
@@ -1850,11 +2184,18 @@ function FichaUsuarioModal({
                     </span>
                   )}
                 </p>
-                {(u.conta_bloqueada || Number(u.tentativas_falhas || 0) > 0) && (
-                  <button className="btn-secondary mt-2 !px-2.5 !py-1.5 text-xs" onClick={() => onConfirmar({ tipo: 'desbloquear', row: u })} disabled={busy === `desbloquear-${u.id}`}>
-                    {busy === `desbloquear-${u.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LockOpen className="h-3.5 w-3.5" />} Desbloquear e zerar falhas
-                  </button>
-                )}
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {(u.conta_bloqueada || Number(u.tentativas_falhas || 0) > 0) && (
+                    <button className="btn-secondary !px-2.5 !py-1.5 text-xs" onClick={() => onConfirmar({ tipo: 'desbloquear', row: u })} disabled={busy === `desbloquear-${u.id}`}>
+                      {busy === `desbloquear-${u.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LockOpen className="h-3.5 w-3.5" />} Desbloquear e zerar falhas
+                    </button>
+                  )}
+                  {ativo && !u.conta_bloqueada && !souEu && (
+                    <button className="btn-secondary !px-2.5 !py-1.5 text-xs hover:!border-red-300 hover:!text-red-600" onClick={() => onBloquear(u)} disabled={busy === `bloquear-${u.id}`}>
+                      {busy === `bloquear-${u.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />} Bloquear acesso...
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* MFA */}
@@ -1864,7 +2205,13 @@ function FichaUsuarioModal({
                 </h4>
                 <p className="mt-1 text-sm text-slate-600">
                   {u.mfa_ativado_em ? (
-                    <>Ativado em {formatDateTime(u.mfa_ativado_em)}. O login exige o código do app autenticador.</>
+                    <>
+                      Ativado em {formatDateTime(u.mfa_ativado_em)}. O login exige o código do app autenticador.
+                      <span className="mt-0.5 block text-xs text-slate-500">
+                        {Number(u.mfa_backup_restantes ?? 0)} código(s) de recuperação restantes
+                        {Number(u.mfa_backup_restantes ?? 0) === 0 && ' — oriente o usuário a gerar um lote em Configurações → MFA.'}
+                      </span>
+                    </>
                   ) : u.perfil === 'admin' ? (
                     <span className="flex items-center gap-1.5">
                       <Badge tone="red">Pendente — obrigatório para administradores</Badge>
@@ -1873,6 +2220,11 @@ function FichaUsuarioModal({
                     'Não ativado (opcional para este perfil).'
                   )}
                 </p>
+                {u.mfa_ativado_em && Number(u.mfa_backup_restantes ?? 0) === 0 && !souEu && (
+                  <p className="mt-1 flex items-start gap-1 text-xs text-amber-600">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Sem códigos válidos: se o usuário perder o celular, só o reset do MFA devolve o acesso.
+                  </p>
+                )}
                 {(u.mfa_ativado_em || u.mfa_secret) && !souEu && (
                   <button className="btn-secondary mt-2 !px-2.5 !py-1.5 text-xs" onClick={() => onConfirmar({ tipo: 'mfa', row: u })} disabled={busy === `mfa-${u.id}`}>
                     {busy === `mfa-${u.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Smartphone className="h-3.5 w-3.5" />} Resetar MFA
@@ -1890,13 +2242,25 @@ function FichaUsuarioModal({
                 ) : (
                   <ul className="mt-2 divide-y divide-slate-100">
                     {dados.sessoes.map((s) => (
-                      <li key={s.sid} className="py-2 text-sm">
-                        <p className="font-medium text-slate-800">
-                          <span className="font-mono text-xs text-slate-400">{s.sid}</span> · {s.ip || 'ip desconhecido'}
-                        </p>
-                        <p className="truncate text-xs text-slate-400">
-                          Entrou em {formatDateTime(s.criada_em)} · expira em {formatDateTime(s.expira_em)} · {s.user_agent || 'agente desconhecido'}
-                        </p>
+                      <li key={s.sid} className="flex items-start justify-between gap-2 py-2 text-sm">
+                        <div className="min-w-0">
+                          <p className="font-medium text-slate-800">
+                            <span className="font-mono text-xs text-slate-400" title={s.sid}>{String(s.sid).slice(0, 8)}</span> · {s.ip || 'ip desconhecido'}
+                          </p>
+                          <p className="truncate text-xs text-slate-400">
+                            Entrou em {formatDateTime(s.criada_em)} · expira em {formatDateTime(s.expira_em)} · {s.user_agent || 'agente desconhecido'}
+                          </p>
+                        </div>
+                        {!souEu && (
+                          <button
+                            className="btn-ghost shrink-0 !px-2 !py-1 text-xs hover:!text-red-600"
+                            title="Revogar apenas esta sessão (os demais dispositivos continuam conectados)"
+                            onClick={() => onSensivel('sessao', u, { sid: s.sid })}
+                            disabled={busy === `sessao-${s.sid}`}
+                          >
+                            {busy === `sessao-${s.sid}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />} Revogar
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -1917,14 +2281,15 @@ function FichaUsuarioModal({
                 {!dados?.acessos.length ? (
                   <p className="text-sm text-slate-400">Nenhum acesso registrado.</p>
                 ) : (
-                  <ul className="max-h-72 space-y-2 overflow-auto pr-1">
+                  <ol className="relative ml-1 max-h-72 space-y-3 overflow-auto border-l-2 border-slate-100 py-1 pl-4 pr-1">
                     {dados.acessos.map((a) => (
-                      <li key={a.id} className="rounded-md bg-slate-50 p-2 text-xs text-slate-600">
+                      <li key={a.id} className="relative text-xs text-slate-600">
+                        <span className={`absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full ring-2 ring-white ${String(a.descricao || '').startsWith('Falha') ? 'bg-red-500' : 'bg-emerald-500'}`} />
                         <p className="font-medium text-slate-700">{formatDateTime(a.data)}</p>
                         <p className="mt-0.5">{a.descricao}</p>
                       </li>
                     ))}
-                  </ul>
+                  </ol>
                 )}
               </div>
               <div>
@@ -1951,16 +2316,18 @@ function FichaUsuarioModal({
                 ) : !historicoFiltrado.length ? (
                   <p className="text-sm text-slate-400">Nenhum evento deste tipo nos últimos registros.</p>
                 ) : (
-                  <ul className="max-h-72 space-y-2 overflow-auto pr-1">
+                  <ol className="relative ml-1 max-h-72 space-y-3 overflow-auto border-l-2 border-slate-100 py-1 pl-4 pr-1">
                     {historicoFiltrado.map((h) => (
-                      <li key={h.id} className="rounded-md bg-slate-50 p-2 text-xs text-slate-600">
+                      <li key={h.id} className="relative text-xs text-slate-600">
+                        <span className={`absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full ring-2 ring-white ${ACAO_DOT[String(h.acao)] || 'bg-slate-300'}`} />
                         <p className="font-medium text-slate-700">
                           {formatDateTime(h.data)} · {h.usuario || 'sistema'} · {ACAO_LABEL[h.acao] || h.acao}
                         </p>
                         <p className="mt-0.5">{h.descricao}</p>
+                        {h.dados && typeof h.dados === 'object' && <DiffMudancas dados={h.dados} />}
                       </li>
                     ))}
-                  </ul>
+                  </ol>
                 )}
               </div>
             </div>
@@ -1971,11 +2338,124 @@ function FichaUsuarioModal({
   );
 }
 
+// Cor do ponto da timeline por tipo de evento.
+const ACAO_DOT: Record<string, string> = {
+  login: 'bg-emerald-500',
+  login_falha: 'bg-red-500',
+  bloqueio: 'bg-red-500',
+  seguranca: 'bg-red-400',
+  senha: 'bg-amber-500',
+  mfa: 'bg-violet-500',
+  convite: 'bg-blue-500',
+  criar: 'bg-emerald-400',
+  editar: 'bg-sky-500',
+  excluir: 'bg-red-600',
+};
+
+// Rótulos amigáveis dos campos do cadastro (diff do "antes × depois").
+const CAMPO_LABEL: Record<string, string> = {
+  nome: 'Nome', email: 'E-mail', perfil: 'Perfil', ativo: 'Situação da conta',
+  cargo: 'Cargo', departamento: 'Departamento', telefone: 'Telefone',
+  observacoes: 'Observações internas', acesso_expira_em: 'Acesso expira em',
+  desconto_max_pct: 'Desconto máximo', venda_sem_aprovacao_ate: 'Venda sem aprovação até',
+  perm_catalogos: 'Permissão: catálogos', perm_compartilhar: 'Permissão: compartilhar',
+  perm_metricas: 'Permissão: métricas', perm_politicas: 'Permissão: políticas',
+  perm_aprovar: 'Permissão: aprovar',
+};
+
+const PERFIL_SIMPLES: Record<string, string> = { admin: 'Administrador', gerente: 'Gerente', operador: 'Operador' };
+
+function formatarValorDiff(campo: string, v: unknown): string {
+  if (v === null || v === undefined || v === '') return '—';
+  if (typeof v === 'boolean') return campo === 'ativo' ? (v ? 'Ativa' : 'Desativada') : v ? 'Sim' : 'Não';
+  if (campo === 'perfil') return PERFIL_SIMPLES[String(v)] || String(v);
+  if (campo === 'acesso_expira_em') return formatDateTime(String(v));
+  if (campo === 'desconto_max_pct') return `${v}%`;
+  const s = String(v);
+  return s.length > 80 ? `${s.slice(0, 80)}…` : s;
+}
+
+/** Diff "antes × depois" de um evento de alteração do cadastro. */
+function DiffMudancas({ dados }: { dados: Record<string, { de: unknown; para: unknown }> }) {
+  const entradas = Object.entries(dados || {}).filter(([, m]) => m && typeof m === 'object' && 'de' in m && 'para' in m);
+  if (!entradas.length) return null;
+  return (
+    <dl className="mt-1.5 space-y-1 rounded-md border border-slate-200 bg-white p-2">
+      {entradas.map(([campo, m]) => (
+        <div key={campo} className="flex flex-wrap items-baseline gap-x-1.5 text-[11px] leading-5">
+          <dt className="font-semibold text-slate-500">{CAMPO_LABEL[campo] || campo}:</dt>
+          <dd className="text-slate-400 line-through">{formatarValorDiff(campo, m.de)}</dd>
+          <dd aria-hidden className="text-slate-300">→</dd>
+          <dd className="font-medium text-slate-700">{formatarValorDiff(campo, m.para)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** Gráfico de barras (SVG puro) com logins × falhas dos últimos 7 dias. */
+function GraficoAcessos({ serie }: { serie: PontoSerie[] }) {
+  const totalLogins = serie.reduce((a, p) => a + p.logins, 0);
+  const totalFalhas = serie.reduce((a, p) => a + p.falhas, 0);
+  const max = Math.max(1, ...serie.map((p) => Math.max(p.logins, p.falhas)));
+  const W = 560;
+  const H = 176;
+  const PAD_T = 16;
+  const PAD_B = 24;
+  const area = H - PAD_T - PAD_B;
+  const gw = W / Math.max(1, serie.length);
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`Logins e falhas dos últimos 7 dias: ${totalLogins} logins, ${totalFalhas} falhas`}>
+        {[0.25, 0.5, 0.75, 1].map((f) => (
+          <line key={f} x1={0} x2={W} y1={PAD_T + area * (1 - f)} y2={PAD_T + area * (1 - f)} className="stroke-slate-100" strokeWidth={1} />
+        ))}
+        {serie.map((p, i) => {
+          const cx = gw * i + gw / 2;
+          const hL = (p.logins / max) * area;
+          const hF = (p.falhas / max) * area;
+          const base = PAD_T + area;
+          const rotulo = `${p.dia.slice(8, 10)}/${p.dia.slice(5, 7)}`;
+          return (
+            <g key={p.dia}>
+              <title>{`${rotulo}: ${p.logins} login(s), ${p.falhas} falha(s)`}</title>
+              <rect x={cx - 12} y={base - hL} width={11} height={Math.max(hL, p.logins ? 2 : 0)} rx={2} className="fill-emerald-500" />
+              <rect x={cx + 1} y={base - hF} width={11} height={Math.max(hF, p.falhas ? 2 : 0)} rx={2} className="fill-red-400" />
+              {p.logins > 0 && (
+                <text x={cx - 6.5} y={base - hL - 3} textAnchor="middle" className="fill-slate-500" fontSize={9}>
+                  {p.logins}
+                </text>
+              )}
+              {p.falhas > 0 && (
+                <text x={cx + 6.5} y={base - hF - 3} textAnchor="middle" className="fill-red-500" fontSize={9}>
+                  {p.falhas}
+                </text>
+              )}
+              <text x={cx} y={H - 8} textAnchor="middle" className="fill-slate-400" fontSize={10}>
+                {rotulo}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="mt-1 flex items-center gap-4 text-xs text-slate-500">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" /> Logins ({totalLogins})
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm bg-red-400" /> Falhas ({totalFalhas})
+        </span>
+      </div>
+    </div>
+  );
+}
+
 const ACAO_LABEL: Record<string, string> = {
   criar: 'inclusão',
   editar: 'alteração',
   excluir: 'exclusão',
   login: 'login',
+  login_falha: 'login (falha)',
   senha: 'senha',
   mfa: 'MFA',
   seguranca: 'segurança',

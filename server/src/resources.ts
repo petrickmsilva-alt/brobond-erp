@@ -288,6 +288,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'ultimo_falha_em', label: 'Última falha em', type: 'datetime', readonly: true, form: false, list: false },
       { name: 'bloqueado_ate', label: 'Bloqueado até', type: 'datetime', readonly: true, form: false, list: false, hint: 'Bloqueio temporário por excesso de tentativas. Use "Desbloquear" na ficha do usuário.' },
       { name: 'motivo_bloqueio', label: 'Motivo do bloqueio', type: 'text', readonly: true, form: false, list: false },
+      { name: 'bloqueio_manual', label: 'Bloqueio manual', type: 'boolean', readonly: true, form: false, list: false, hint: 'Bloqueio aplicado pelo administrador (sem prazo). Use "Desbloquear" na ficha do usuário.' },
       { name: 'criado_por', label: 'Criado por (id)', type: 'integer', readonly: true, form: false, list: false },
       { name: 'desativado_por', label: 'Desativado por', type: 'text', readonly: true, form: false, list: false },
       { name: 'desativado_em', label: 'Desativado em', type: 'datetime', readonly: true, form: false, list: false },
@@ -320,6 +321,7 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'editar', label: 'Alteração', tone: 'blue' },
           { value: 'excluir', label: 'Exclusão', tone: 'red' },
           { value: 'login', label: 'Login', tone: 'slate' },
+          { value: 'login_falha', label: 'Login (falha)', tone: 'red' },
           { value: 'senha', label: 'Troca de senha', tone: 'amber' },
           { value: 'mfa', label: 'MFA (2FA)', tone: 'blue' },
           { value: 'seguranca', label: 'Segurança', tone: 'red' },
@@ -1692,7 +1694,7 @@ export function columnsOf(r: Resource): Field[] {
  * recurso (segredos/tokens): o store aceita gravá-las via API interna, porém
  * elas jamais voltam em consultas (ver COLUNAS_SECRETAS no pgstore/memdb).
  */
-export const COLUNAS_AUTENTICACAO = ['senha_hash', 'mfa_secret', 'convite_token_hash', 'reset_token_hash', 'reset_expira_em', 'token_versao', 'senha_provisoria'];
+export const COLUNAS_AUTENTICACAO = ['senha_hash', 'mfa_secret', 'mfa_backup_hashes', 'convite_token_hash', 'reset_token_hash', 'reset_expira_em', 'token_versao', 'senha_provisoria'];
 
 /** Campos que o usuário pode gravar (não virtuais, não somente leitura). */
 export function writableFields(r: Resource): Field[] {

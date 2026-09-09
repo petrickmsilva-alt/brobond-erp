@@ -25,8 +25,8 @@ import {
   savePreferences,
   verificarAuditoriaHandler,
 } from './auth';
-import { mfaStatus, mfaSetup, mfaAtivar, mfaDesativar } from './mfa';
-import { aceitarConvite, infoConvite, reenviarConvite, senhaTemporaria, resetarMfaUsuario, resumoUsuarios, atividadeUsuario, sessoesUsuario, desativarUsuario, ativarUsuario, desbloquearUsuario, encerrarSessoesUsuario, forcarTrocaSenha } from './usuariosAdmin';
+import { mfaStatus, mfaSetup, mfaAtivar, mfaDesativar, mfaCodigos } from './mfa';
+import { aceitarConvite, infoConvite, reenviarConvite, senhaTemporaria, resetarMfaUsuario, resumoUsuarios, atividadeUsuario, sessoesUsuario, desativarUsuario, ativarUsuario, desbloquearUsuario, bloquearUsuario, encerrarSessoesUsuario, revogarSessaoUsuario, forcarTrocaSenha } from './usuariosAdmin';
 import { limpezaPeriodica } from './sessoes';
 import { getPublicResource, publicMeta } from './resources';
 import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider, uploadsConfigError } from './uploads';
@@ -181,6 +181,7 @@ app.get('/api/auth/mfa/status', wrap(mfaStatus));
 app.post('/api/auth/mfa/setup', wrap(mfaSetup));
 app.post('/api/auth/mfa/ativar', wrap(mfaAtivar));
 app.post('/api/auth/mfa/desativar', wrap(mfaDesativar));
+app.post('/api/auth/mfa/codigos', wrap(mfaCodigos));
 // Preferências por usuário (Fase 7 — JSONB no banco, espelhadas no navegador)
 app.get('/api/auth/preferences', wrap(getPreferences));
 app.put('/api/auth/preferences', wrap(savePreferences));
@@ -196,7 +197,9 @@ app.get('/api/usuarios/:id/sessoes', wrap(sessoesUsuario));
 app.post('/api/usuarios/:id/desativar', wrap(desativarUsuario));
 app.post('/api/usuarios/:id/ativar', wrap(ativarUsuario));
 app.post('/api/usuarios/:id/desbloquear', wrap(desbloquearUsuario));
+app.post('/api/usuarios/:id/bloquear', wrap(bloquearUsuario));
 app.post('/api/usuarios/:id/encerrar-sessoes', wrap(encerrarSessoesUsuario));
+app.post('/api/usuarios/:id/sessoes/:sid/encerrar', wrap(revogarSessaoUsuario));
 app.post('/api/usuarios/:id/forcar-troca-senha', wrap(forcarTrocaSenha));
 // Auditoria segura: verificação da cadeia de hashes (admin)
 app.get('/api/admin/auditoria/verificar', wrap(verificarAuditoriaHandler));

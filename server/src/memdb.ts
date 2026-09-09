@@ -85,6 +85,7 @@ export class MemStore implements Store {
     // Colunas secretas jamais saem da API: hash de senha, segredo MFA e tokens.
     delete out.senha_hash;
     delete out.mfa_secret;
+    delete out.mfa_backup_hashes;
     delete out.convite_token_hash;
     delete out.reset_token_hash;
     delete out.dados;

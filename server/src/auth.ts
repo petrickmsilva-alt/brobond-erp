@@ -26,9 +26,22 @@ export const REAUTH_TTL_MS = Number(process.env.REAUTH_TTL_MS) || 5 * 60_000;
 export const USER_LOCK_MAX = Number(process.env.USER_LOCK_MAX_ATTEMPTS) || 5;
 export const USER_LOCK_MIN = Number(process.env.USER_LOCK_MINUTES) || 15;
 
-/** true quando o bloqueio temporário da conta ainda está vigente. */
+/** true quando a conta está bloqueada: manual (admin, sem prazo) ou temporário vigente. */
 export function contaBloqueada(row: Row): boolean {
-  return !!row?.bloqueado_ate && new Date(String(row.bloqueado_ate)).getTime() > Date.now();
+  if (!row) return false;
+  if (row.bloqueio_manual === true) return true;
+  return !!row.bloqueado_ate && new Date(String(row.bloqueado_ate)).getTime() > Date.now();
+}
+
+/** Mensagem de veto conforme o tipo de bloqueio (manual mostra o motivo). */
+export function mensagemBloqueio(row: Row): string {
+  if (row?.bloqueio_manual === true) {
+    const motivo = String(row.motivo_bloqueio || '').trim();
+    return motivo
+      ? `Acesso bloqueado pelo administrador: ${motivo}`
+      : 'Acesso bloqueado pelo administrador. Fale com o administrador para liberar.';
+  }
+  return `Acesso bloqueado temporariamente por excesso de tentativas incorretas. Tente novamente em ${minutosDeBloqueio(row)} minuto(s) ou fale com o administrador.`;
 }
 
 /** true quando o acesso temporário já venceu (acesso_expira_em no passado). */
@@ -178,9 +191,7 @@ export async function login(req: Request, res: Response) {
       return res.status(403).json({ error: 'Usuário desativado. Fale com o administrador.' });
     }
     if (contaBloqueada(row)) {
-      return res.status(403).json({
-        error: `Acesso bloqueado temporariamente por excesso de tentativas incorretas. Tente novamente em ${minutosDeBloqueio(row)} minuto(s) ou fale com o administrador.`,
-      });
+      return res.status(403).json({ error: mensagemBloqueio(row) });
     }
     if (acessoExpirado(row)) {
       return res.status(403).json({ error: 'Acesso expirado. Fale com o administrador para renovar.' });
@@ -254,7 +265,7 @@ export async function login(req: Request, res: Response) {
 }
 
 /** Cria a sessão (registro + JTI no JWT), audita e responde. */
-async function emitirSessao(req: Request, res: Response, row: Row, user: AuthUser, lembrar: boolean) {
+async function emitirSessao(req: Request, res: Response, row: Row, user: AuthUser, lembrar: boolean, extra: Record<string, unknown> = {}) {
   const sid = await abrirSessao({ usuarioId: user.id, lembrar, req });
   const token = signToken(user, { ver: Number(row.token_versao || 0), sid, lembrar, expiresIn: lembrar ? '30d' : undefined });
   await getStore()
@@ -268,7 +279,7 @@ async function emitirSessao(req: Request, res: Response, row: Row, user: AuthUse
       dados: { sessao: sid.slice(0, 8) },
     })
     .catch(() => undefined);
-  return res.json({ token, user: { ...user, lembrar } });
+  return res.json({ token, user: { ...user, lembrar }, ...extra });
 }
 
 /** POST /api/auth/login/mfa — { mfa_ticket, codigo } conclui o login com TOTP. */
@@ -285,7 +296,7 @@ export async function loginMFA(req: Request, res: Response) {
   const { RESOURCES } = await import('./resources');
   const row = await store.findOneWhere(RESOURCES.usuarios, { id: Number(payload.id) });
   if (!row || row.ativo === false) return res.status(401).json({ error: 'Usuário desativado ou removido.' });
-  if (contaBloqueada(row)) return res.status(403).json({ error: 'Acesso bloqueado temporariamente. Tente novamente em alguns minutos.' });
+  if (contaBloqueada(row)) return res.status(403).json({ error: mensagemBloqueio(row) });
   if (acessoExpirado(row)) return res.status(403).json({ error: 'Acesso expirado. Fale com o administrador para renovar.' });
 
   const { decifrarSegredoMfa } = await import('./mfa');
@@ -293,26 +304,28 @@ export async function loginMFA(req: Request, res: Response) {
   const segredo = decifrarSegredoMfa(row.mfa_secret);
   if (!segredo) return res.status(400).json({ error: 'Não há MFA pendente para este usuário.' });
 
+  // Código do app… ou código de recuperação (uso único, para quando o celular some).
+  let restantesBackup: number | null = null;
   if (!verificarTOTP(segredo, codigo)) {
-    const restantes = await registrarFalha('mfa', chaveMfa);
-    await store
-      .audit({
-        usuario_id: Number(row.id),
-        usuario: String(row.nome || row.email),
-        acao: 'login',
-        recurso: null,
-        registro_id: null,
-        descricao: `Código MFA inválido para ${String(row.email)} (${ip || 'ip desconhecido'})`,
-      })
-      .catch(() => undefined);
-    const dica = restantes > 0 && restantes <= 2 ? ` Restam ${restantes} tentativa${restantes === 1 ? '' : 's'}.` : '';
-    return res.status(401).json({ error: `Código MFA inválido.${dica}` });
-  }
-  await registrarSucesso('mfa', chaveMfa);
-
-  // Primeiro login de administrador: o código correto confirma o app autenticador.
-  if (!row.mfa_ativado_em) {
-    await store.update(RESOURCES.usuarios, Number(row.id), { mfa_ativado_em: new Date().toISOString() });
+    const { lerRegistro, consumirCodigo, serializarRegistro } = await import('./mfaBackup');
+    const consumido = consumirCodigo(lerRegistro(row.mfa_backup_hashes), codigo);
+    if (!consumido) {
+      const restantes = await registrarFalha('mfa', chaveMfa);
+      await store
+        .audit({
+          usuario_id: Number(row.id),
+          usuario: String(row.nome || row.email),
+          acao: 'login_falha',
+          recurso: null,
+          registro_id: null,
+          descricao: `Código MFA inválido para ${String(row.email)} (${ip || 'ip desconhecido'})`,
+        })
+        .catch(() => undefined);
+      const dica = restantes > 0 && restantes <= 2 ? ` Restam ${restantes} tentativa${restantes === 1 ? '' : 's'}.` : '';
+      return res.status(401).json({ error: `Código MFA inválido.${dica}` });
+    }
+    await store.update(RESOURCES.usuarios, Number(row.id), { mfa_backup_hashes: serializarRegistro(consumido.registro) });
+    restantesBackup = consumido.restantes;
     await store
       .audit({
         usuario_id: Number(row.id),
@@ -320,13 +333,41 @@ export async function loginMFA(req: Request, res: Response) {
         acao: 'mfa',
         recurso: 'usuarios',
         registro_id: Number(row.id),
-        descricao: `MFA (TOTP) ativado no primeiro login de ${String(row.email)}`,
+        descricao: `Login de ${String(row.email)} concluído com CÓDIGO DE RECUPERAÇÃO (restam ${consumido.restantes})`,
+        dados: { via: 'codigo_recuperacao', restantes: consumido.restantes },
+      })
+      .catch(() => undefined);
+  }
+  await registrarSucesso('mfa', chaveMfa);
+
+  // Primeiro login de administrador: o código correto confirma o app autenticador
+  // e emite os códigos de recuperação (exibição única, junto na resposta).
+  let codigosNovos: string[] | undefined;
+  if (!row.mfa_ativado_em) {
+    const { gerarLoteCodigos, serializarRegistro } = await import('./mfaBackup');
+    const lote = gerarLoteCodigos();
+    codigosNovos = lote.codigos;
+    await store.update(RESOURCES.usuarios, Number(row.id), {
+      mfa_ativado_em: new Date().toISOString(),
+      mfa_backup_hashes: serializarRegistro(lote.registro),
+    });
+    await store
+      .audit({
+        usuario_id: Number(row.id),
+        usuario: String(row.nome || row.email),
+        acao: 'mfa',
+        recurso: 'usuarios',
+        registro_id: Number(row.id),
+        descricao: `MFA (TOTP) ativado no primeiro login de ${String(row.email)} — ${lote.codigos.length} códigos de recuperação emitidos`,
       })
       .catch(() => undefined);
   }
 
   const user = toAuthUser(row);
-  return emitirSessao(req, res, row, user, payload.lembrar === true);
+  return emitirSessao(req, res, row, user, payload.lembrar === true, {
+    ...(codigosNovos ? { mfa_backup_codigos: codigosNovos } : {}),
+    ...(restantesBackup !== null ? { mfa_backup_restantes: restantesBackup } : {}),
+  });
 }
 
 /** POST /api/auth/mfa/desafio — { mfa_ticket } devolve QR + segredo do cadastro. */
@@ -337,7 +378,7 @@ export async function mfaDesafio(req: Request, res: Response) {
   const { RESOURCES } = await import('./resources');
   const row = await store.findOneWhere(RESOURCES.usuarios, { id: Number(payload.id) });
   if (!row || row.ativo === false) throw new HttpError(401, 'Usuário desativado ou removido.');
-  if (contaBloqueada(row)) throw new HttpError(403, 'Acesso bloqueado temporariamente. Tente novamente em alguns minutos.');
+  if (contaBloqueada(row)) throw new HttpError(403, mensagemBloqueio(row));
   if (acessoExpirado(row)) throw new HttpError(403, 'Acesso expirado. Fale com o administrador para renovar.');
   if (row.mfa_ativado_em) throw new HttpError(400, 'MFA já está ativado para este usuário. Apenas o código é necessário.');
   const dados = await prepararDesafio(row, async (segredo) => {
@@ -357,10 +398,23 @@ async function loginFailed(req: Request, res: Response, row: Row | null) {
       .audit({
         usuario_id: row ? Number(row.id) : null,
         usuario: row?.nome || normalizeEmail(req.body?.email) || null,
-        acao: 'login',
+        acao: 'login_falha',
         recurso: null,
         registro_id: null,
         descricao: `Login BLOQUEADO temporariamente por excesso de tentativas — ${normalizeEmail(req.body?.email)} (${clientIp(req) || 'ip desconhecido'})`,
+      })
+      .catch(() => undefined);
+  } else if (row) {
+    // Trilha de tentativas (alimenta o gráfico de segurança do módulo Usuários;
+    // a senha jamais é registrada). E-mails inexistentes não geram trilha.
+    await getStore()
+      .audit({
+        usuario_id: Number(row.id),
+        usuario: String(row.nome || row.email),
+        acao: 'login_falha',
+        recurso: null,
+        registro_id: null,
+        descricao: `Senha incorreta para ${String(row.email)} (${clientIp(req) || 'ip desconhecido'})`,
       })
       .catch(() => undefined);
   }
@@ -594,7 +648,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
         // Bloqueio temporário e expiração derrubam a sessão ativa em até 30 s.
         if (contaBloqueada(row)) {
           userCache.delete(payload.id);
-          return res.status(401).json({ error: 'Acesso bloqueado temporariamente. Entre novamente em alguns minutos.' });
+          return res.status(401).json({ error: `${mensagemBloqueio(row)} Sessão encerrada.` });
         }
         if (acessoExpirado(row)) {
           userCache.delete(payload.id);

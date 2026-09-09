@@ -150,5 +150,6 @@ export const ACAO_LABEL: Record<string, string> = {
   editar: 'Alteração',
   excluir: 'Exclusão',
   login: 'Login',
+  login_falha: 'Login (falha)',
   senha: 'Troca de senha',
 };

@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { Copy, Database, Download, Eye, EyeOff, FileSpreadsheet, KeyRound, Loader2, LogOut, Server, Settings2, ShieldCheck, Smartphone, UserRound, Users } from 'lucide-react';
 import { api, ApiError, downloadFile } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, PageHeader, useToast } from '../components/ui';
+import { Alert, Badge, Modal, PageHeader, useToast } from '../components/ui';
 import ReauthModal from '../components/ReauthModal';
 
 const PERFIL_LABEL: Record<string, string> = { admin: 'Administrador', gerente: 'Gerente', operador: 'Operador' };
@@ -180,12 +180,15 @@ function dataCurta(iso: string): string {
 function MfaCard() {
   const { user } = useAuth();
   const toast = useToast();
-  const [status, setStatus] = useState<{ ativado: boolean; obrigatorio: boolean } | null>(null);
+  const [status, setStatus] = useState<{ ativado: boolean; obrigatorio: boolean; backup_restantes?: number } | null>(null);
   const [setup, setSetup] = useState<{ segredo: string; qr: string } | null>(null);
   const [codigo, setCodigo] = useState('');
   const [busy, setBusy] = useState(false);
   const [erro, setErro] = useState('');
   const [pedirReauth, setPedirReauth] = useState(false);
+  const [codigosNovos, setCodigosNovos] = useState<string[] | null>(null);
+  const [gerarBusy, setGerarBusy] = useState(false);
+  const [aposReauth, setAposReauth] = useState<'codigos' | null>(null);
 
   const carregar = useCallback(async () => {
     try {
@@ -216,17 +219,49 @@ function MfaCard() {
     setBusy(true);
     setErro('');
     try {
-      await api.post('/auth/mfa/ativar', { codigo });
+      const d = await api.post<{ codigos?: string[] }>('/auth/mfa/ativar', { codigo });
       toast.success('MFA ativado! A partir de agora o login pede o código do app autenticador.');
       setSetup(null);
       setCodigo('');
       await carregar();
+      if (d.codigos?.length) setCodigosNovos(d.codigos);
+
     } catch (e: any) {
       if (e instanceof ApiError && e.fields?.codigo) setErro(e.fields.codigo);
       else setErro(e instanceof ApiError ? e.message : 'Código inválido.');
     } finally {
       setBusy(false);
     }
+  }
+
+  async function gerarCodigos() {
+    setGerarBusy(true);
+    setErro('');
+    try {
+      const d = await api.post<{ codigos: string[] }>('/auth/mfa/codigos', {});
+      setCodigosNovos(d.codigos);
+      await carregar();
+    } catch (e: any) {
+      if (e instanceof ApiError && e.code === 'reauth_necessaria') {
+        setAposReauth('codigos');
+        setPedirReauth(true);
+        setErro('');
+        return;
+      }
+      setErro(e instanceof ApiError ? e.message : 'Não foi possível gerar os códigos.');
+    } finally {
+      setGerarBusy(false);
+    }
+  }
+
+  function baixarCodigos() {
+    if (!codigosNovos) return;
+    const blob = new Blob([`BROBOND ERP — códigos de recuperação do MFA (${user?.email || ''})\nGerados em ${new Date().toLocaleString('pt-BR')}. Cada código vale UM acesso. Guarde em local seguro.\n\n${codigosNovos.join('\n')}\n`], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'brobond-codigos-recuperacao.txt';
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   async function desativar() {
@@ -270,6 +305,22 @@ function MfaCard() {
           <p className="flex items-center gap-2 text-sm text-slate-600">
             <Badge tone="green">Ativado</Badge> Seu login exige o código de 6 dígitos do app autenticador.
           </p>
+          <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+            <p className="flex items-center gap-1.5 text-sm font-semibold text-navy-900">
+              <KeyRound className="h-4 w-4 text-navy-400" /> Códigos de recuperação
+            </p>
+            <p className="mt-1 text-sm text-slate-600">
+              {status.backup_restantes === 0 ? (
+                <>Você <strong>não tem códigos válidos</strong> — se perder o celular, perde o acesso. Gere um lote agora.</>
+              ) : (
+                <>Você tem <strong>{status.backup_restantes ?? 0} código(s)</strong> válidos para emergências (cada um vale um acesso).</>
+              )}
+            </p>
+            <button className="btn-secondary mt-2 !px-2.5 !py-1.5 text-xs" onClick={gerarCodigos} disabled={gerarBusy}>
+              {gerarBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Gerar novos códigos
+            </button>
+            <p className="mt-1 text-xs text-slate-400">Gerar invalida o lote anterior. Exige a sua senha (reautenticação).</p>
+          </div>
           {erro && <Alert tone="red">{erro}</Alert>}
           <div className="flex flex-wrap items-end gap-2">
             <div className="w-36">
@@ -338,10 +389,50 @@ function MfaCard() {
       )}
       <ReauthModal
         open={pedirReauth}
-        onClose={() => setPedirReauth(false)}
-        onConfirmed={() => setErro('')}
-        titulo="Autorizar desativação do MFA"
+        onClose={() => {
+          setPedirReauth(false);
+          setAposReauth(null);
+        }}
+        onConfirmed={() => {
+          setErro('');
+          if (aposReauth === 'codigos') {
+            setAposReauth(null);
+            void gerarCodigos();
+          }
+        }}
+        titulo={aposReauth === 'codigos' ? 'Autorizar novos códigos de recuperação' : 'Autorizar desativação do MFA'}
       />
+      <Modal open={!!codigosNovos} onClose={() => setCodigosNovos(null)} title="Códigos de recuperação" subtitle="Exibição única: guarde agora, cada código vale um acesso." size="md">
+        <div className="space-y-4">
+          <Alert tone="amber">
+            Estes códigos <strong>não aparecem de novo</strong>. Sem eles (e sem o celular), só o administrador — com reset do MFA — devolve o seu acesso.
+          </Alert>
+          <div className="grid grid-cols-2 gap-1.5">
+            {(codigosNovos || []).map((c) => (
+              <span key={c} className="rounded-md bg-slate-50 px-2 py-1.5 text-center font-mono text-sm font-semibold tracking-wider text-navy-900 ring-1 ring-slate-200">
+                {c}
+              </span>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="btn-secondary"
+              onClick={async () => {
+                await navigator.clipboard.writeText((codigosNovos || []).join('\n'));
+                toast.success('Códigos copiados.');
+              }}
+            >
+              <Copy className="h-4 w-4" /> Copiar todos
+            </button>
+            <button className="btn-secondary" onClick={baixarCodigos}>
+              <Download className="h-4 w-4" /> Baixar .txt
+            </button>
+            <button className="btn-primary ml-auto" onClick={() => setCodigosNovos(null)}>
+              Guardei — fechar
+            </button>
+          </div>
+        </div>
+      </Modal>
     </section>
   );
 }

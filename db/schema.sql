@@ -1013,3 +1013,9 @@ CREATE TABLE IF NOT EXISTS cotacao_decisoes (
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_cotacao_decisoes_venda ON cotacao_decisoes(venda_id, criado_em DESC);
+
+-- 0009) USUÁRIOS ONDA 3 — bloqueio manual + códigos de recuperação do MFA
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueio_manual BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS mfa_backup_hashes TEXT;
+UPDATE usuarios SET bloqueio_manual = FALSE WHERE bloqueio_manual IS NULL;
+CREATE INDEX IF NOT EXISTS idx_usuarios_bloqueio_manual ON usuarios (bloqueio_manual) WHERE bloqueio_manual = TRUE;

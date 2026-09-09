@@ -47,6 +47,7 @@ ok(/^\d{6}$/.test(codigo), `código TOTP computado (${codigo})`);
 // Conclui login com MFA
 r = await req('POST', '/api/auth/login/mfa', { mfa_ticket: ticket, codigo });
 ok(r.status === 200 && r.data.token, 'login/mfa emite token');
+ok(Array.isArray(r.data.mfa_backup_codigos) && r.data.mfa_backup_codigos.length === 10, '1ª ativação emite 10 códigos de recuperação');
 const adminToken = r.data.token;
 
 // Próximo login pede mfa_required
@@ -126,6 +127,56 @@ r = await req('GET', '/api/auth/me', null, segundoToken);
 ok(r.status === 401, 'sessão revogada não autentica mais');
 r = await req('GET', '/api/auth/me', null, adminToken);
 ok(r.status === 200, 'sessão atual sobrevive à revogação da outra');
+
+// Onda 3: códigos de recuperação, bloqueio manual, revogação pontual, série e export
+console.log('— Onda 3: códigos, bloqueio, série e lote');
+r = await req('GET', '/api/auth/mfa/status', null, adminToken);
+ok(r.data.ativado === true && r.data.backup_restantes === 10, `status MFA informa 10 códigos restantes (${r.data.backup_restantes})`);
+r = await req('POST', '/api/auth/mfa/codigos', {}, adminToken);
+ok(Array.isArray(r.data.codigos) && r.data.codigos.length === 10 && /^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(r.data.codigos[0]), 'regeneração de códigos devolve lote novo no formato XXXX-XXXX');
+const loteNovo = r.data.codigos;
+r2fa = await req('POST', '/api/auth/login', { email: adminEmail, password: adminSenha });
+r2 = await req('POST', '/api/auth/login/mfa', { mfa_ticket: r2fa.data.mfa_ticket, codigo: loteNovo[0] });
+ok(r2.status === 200 && !!r2.data.token && r2.data.mfa_backup_restantes === 9, 'login com código de recuperação consome 1 uso (restam 9)');
+const backupToken = r2.data.token;
+r2fa = await req('POST', '/api/auth/login', { email: adminEmail, password: adminSenha });
+r2 = await req('POST', '/api/auth/login/mfa', { mfa_ticket: r2fa.data.mfa_ticket, codigo: loteNovo[0] });
+ok(r2.status === 401, 'código de recuperação usado não vale de novo');
+
+// Bloqueio manual da operadora (reautentica de novo por segurança)
+r = await req('POST', '/api/auth/reautenticar', { senha: adminSenha }, adminToken);
+ok(r.status === 200, 'reautenticação renovada para o bloqueio');
+r = await req('POST', `/api/usuarios/${mariaId}/bloquear`, { motivo: 'Suspeita de fraude (smoke)' }, adminToken);
+ok(r.status === 200 && r.data.manual === true, 'bloqueio manual sem prazo aplicado');
+r = await req('POST', '/api/auth/login', { email: 'maria@smoke.com.br', password: senhaTemp });
+ok(r.status === 403 && /bloqueado pelo administrador: Suspeita de fraude/.test(r.data.error || ''), 'login bloqueado cita o motivo');
+r = await req('POST', `/api/usuarios/${mariaId}/desbloquear`, {}, adminToken);
+ok(r.status === 200, 'desbloqueio libera a conta');
+r = await req('POST', '/api/auth/login', { email: 'maria@smoke.com.br', password: senhaTemp });
+ok(r.status === 200 && !!r.data.token, 'operadora entra após o desbloqueio');
+const maria0 = r.data.token;
+const mariaA = (await req('POST', '/api/auth/login', { email: 'maria@smoke.com.br', password: senhaTemp })).data.token;
+const mariaB = (await req('POST', '/api/auth/login', { email: 'maria@smoke.com.br', password: senhaTemp })).data.token;
+
+// Revogação pontual: só UMA das sessões da operadora cai
+r = await req('GET', '/api/auth/sessoes', null, mariaA);
+const antes = (r.data.sessoes || []).length;
+ok(antes >= 3, `operadora com várias sessões abertas (${antes})`);
+const sidAlvo = (r.data.sessoes || []).find((x) => !x.atual)?.sid;
+r = await req('POST', `/api/usuarios/${mariaId}/sessoes/${sidAlvo}/encerrar`, {}, adminToken);
+ok(r.status === 200 && r.data.sessoes_restantes === antes - 1, `admin revoga 1 sessão da operadora (restam ${r.data.sessoes_restantes})`);
+r = await req('GET', '/api/auth/sessoes', null, mariaA);
+ok(r.status === 200 && (r.data.sessoes || []).length === antes - 1, 'relistagem confirma: só a escolhida caiu');
+r = await req('GET', '/api/auth/me', null, backupToken);
+ok(r.status === 200, 'sessão via código de recuperação segue válida');
+
+// Série de acessos + export da seleção
+r = await req('GET', '/api/usuarios/resumo', null, adminToken);
+ok(r.status === 200 && Array.isArray(r.data.serie_logins_7d) && r.data.serie_logins_7d.length === 7, 'resumo traz a série de 7 dias');
+ok((r.data.totais?.falhas_24h ?? 0) >= 1, `falhas de login das 24h contabilizadas (${r.data.totais?.falhas_24h})`);
+const expRes = await fetch(`${BASE}/api/usuarios/export?format=csv&ids=${mariaId}`, { headers: { Authorization: `Bearer ${adminToken}` } });
+const expTxt = await expRes.text();
+ok(expRes.status === 200 && expTxt.includes('maria@smoke.com.br') && !expTxt.includes('senha_hash'), 'export ?ids= traz só a seleção, sem segredos');
 
 // Logout do admin
 r = await req('POST', '/api/auth/logout', {}, adminToken);

@@ -3,8 +3,9 @@
 //   • Convite por token (e-mail): o usuário define a PRÓPRIA senha.
 //   • Senha temporária gerada pelo servidor, exibida UMA única vez.
 //   • Reset do MFA de um usuário (por administrador, com reautenticação).
-//   • Ciclo de vida: ativar/desativar (com motivo), desbloquear, expiração,
-//     encerramento de sessões, troca forçada de senha.
+//   • Ciclo de vida: ativar/desativar (com motivo), bloqueio manual ou
+//     automático, desbloqueio, expiração, revogação de sessão individual
+//     ou total, troca forçada de senha.
 //   • Painel: resumo gerencial (KPIs + alertas) e ficha do usuário
 //     (segurança, sessões, acessos e trilha de auditoria).
 //   • Nenhuma senha trafega em texto puro além da exibição única; nenhuma
@@ -13,11 +14,12 @@
 import type { Request, Response } from 'express';
 import { randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
-import { currentUser, exigirReautenticacao, hashPassword, hashResetToken, gerarResetToken, validarSenhaNova, invalidateUserCache, clientIp } from './auth';
+import { currentUser, exigirReautenticacao, hashPassword, hashResetToken, gerarResetToken, validarSenhaNova, invalidateUserCache, clientIp, contaBloqueada, sidAtual } from './auth';
 import { getStore } from './services';
 import { RESOURCES } from './resources';
 import { smtpConfigurado, enviarEmail } from './mail';
-import { revogarTodas } from './sessoes';
+import { revogarTodas, revogarUma } from './sessoes';
+import { lerRegistro, restantesRegistro } from './mfaBackup';
 import { exigirRateLimit, registrarFalha } from './security';
 
 const CONVITE_TTL_HORAS = Number(process.env.INVITE_TTL_HOURS) || 48;
@@ -182,6 +184,7 @@ function sanitizarUsuario(row: Record<string, any>): Record<string, any> {
   delete out.mfa_secret;
   delete out.convite_token_hash;
   delete out.reset_token_hash;
+  delete out.mfa_backup_hashes;
   delete out.preferencias;
   return out;
 }
@@ -190,7 +193,7 @@ function sanitizarUsuario(row: Record<string, any>): Record<string, any> {
 function statusConta(row: Record<string, any>): { status_conta: string; convite_expirado: boolean; conta_bloqueada: boolean; acesso_expirado: boolean } {
   const agora = Date.now();
   const convite_expirado = row.convite_expira_em ? new Date(String(row.convite_expira_em)).getTime() < agora : false;
-  const conta_bloqueada = !!row.bloqueado_ate && new Date(String(row.bloqueado_ate)).getTime() > agora;
+  const conta_bloqueada = row.bloqueio_manual === true || (!!row.bloqueado_ate && new Date(String(row.bloqueado_ate)).getTime() > agora);
   const acesso_expirado = !!row.acesso_expira_em && new Date(String(row.acesso_expira_em)).getTime() < agora;
   const status_conta =
     row.ativo === false
@@ -252,6 +255,7 @@ export async function resumoUsuarios(req: Request, res: Response) {
     acesso_expirado: 0,
     sem_login_30d: 0,
     logins_hoje: 0,
+    falhas_24h: 0,
     sessoes_ativas: 0 as number | null,
   };
   const alertas: { tipo: string; usuario_id: number; nome: string; email: string; detalhe: string }[] = [];
@@ -302,10 +306,36 @@ export async function resumoUsuarios(req: Request, res: Response) {
     t.sessoes_ativas = null;
   }
 
+  // Série de acessos dos últimos 7 dias (gráfico do painel) + falhas 24h.
+  // Sai direto da trilha de auditoria; limitada a 2 mil eventos por tipo
+  // (muito acima do volume real de logins de um ERP).
+  const serie_logins_7d: { dia: string; logins: number; falhas: number }[] = [];
+  for (let i = 6; i >= 0; i--) {
+    serie_logins_7d.push({ dia: new Date(agora - i * 86400000).toISOString().slice(0, 10), logins: 0, falhas: 0 });
+  }
+  const porDia = new Map(serie_logins_7d.map((d) => [d.dia, d]));
+  try {
+    const [ok, falhas] = await Promise.all([
+      store.list(RESOURCES.auditoria, { page: 1, pageSize: 2000, sort: 'data', dir: 'desc', filter: { acao: 'login' } }),
+      store.list(RESOURCES.auditoria, { page: 1, pageSize: 2000, sort: 'data', dir: 'desc', filter: { acao: 'login_falha' } }),
+    ]);
+    for (const e of ok.rows) {
+      const b = porDia.get(String(e.data).slice(0, 10));
+      if (b) b.logins++;
+    }
+    let f24 = 0;
+    for (const e of falhas.rows) {
+      const b = porDia.get(String(e.data).slice(0, 10));
+      if (b) b.falhas++;
+      if (agora - new Date(String(e.data)).getTime() < 86400000) f24++;
+    }
+    t.falhas_24h = f24;
+  } catch { /* gráfico vazio não pode quebrar o painel */ }
+
   // Alertas mais graves primeiro.
   const peso: Record<string, number> = { admin_sem_mfa: 0, bloqueado: 1, acesso_expirado: 2, convite_expirado: 3, acesso_a_vencer: 4 };
   alertas.sort((a, b) => (peso[a.tipo] ?? 9) - (peso[b.tipo] ?? 9));
-  res.json({ totais: t, alertas: alertas.slice(0, 50) });
+  res.json({ totais: t, alertas: alertas.slice(0, 50), serie_logins_7d });
 }
 
 /**
@@ -341,10 +371,14 @@ export async function atividadeUsuario(req: Request, res: Response) {
   const logins30d = eventos30d.filter((e: Record<string, any>) => e.acao === 'login').length;
 
   res.json({
-    usuario: { ...sanitizarUsuario(row), ...statusConta(row) },
+    usuario: {
+      ...sanitizarUsuario(row),
+      ...statusConta(row),
+      mfa_backup_restantes: restantesRegistro(lerRegistro(row.mfa_backup_hashes)),
+    },
     criador,
     sessoes: (sessoes as Record<string, any>[]).map((s) => ({
-      sid: String(s.id).slice(0, 8),
+      sid: String(s.id),
       criada_em: s.criada_em,
       expira_em: s.expira_em,
       ip: s.ip,
@@ -447,6 +481,7 @@ export async function ativarUsuario(req: Request, res: Response) {
     desativado_em: null,
     desativado_motivo: null,
     bloqueado_ate: null,
+    bloqueio_manual: false,
     motivo_bloqueio: null,
     tentativas_falhas: 0,
     ultimo_falha_em: null,
@@ -470,7 +505,7 @@ export async function ativarUsuario(req: Request, res: Response) {
   res.json({ ok: true, ...(convite_link ? { convite_link } : {}) });
 }
 
-/** POST /api/usuarios/:id/desbloquear — limpa o bloqueio temporário e as falhas. */
+/** POST /api/usuarios/:id/desbloquear — limpa bloqueio (manual ou temporário) e falhas. */
 export async function desbloquearUsuario(req: Request, res: Response) {
   const actor = currentUser(req);
   exigirAdmin(actor, 'desbloqueiam usuários.');
@@ -478,10 +513,12 @@ export async function desbloquearUsuario(req: Request, res: Response) {
   const id = parseIdParam(req);
   const row = await store.findOneWhere(RESOURCES.usuarios, { id });
   if (!row) throw new HttpError(404, 'Usuário não encontrado.');
-  if (!row.bloqueado_ate && !Number(row.tentativas_falhas || 0)) throw new HttpError(400, 'Este usuário não está bloqueado.');
+  if (!contaBloqueada(row) && !Number(row.tentativas_falhas || 0)) throw new HttpError(400, 'Este usuário não está bloqueado.');
 
+  const eraManual = row.bloqueio_manual === true;
   await store.update(RESOURCES.usuarios, id, {
     bloqueado_ate: null,
+    bloqueio_manual: false,
     motivo_bloqueio: null,
     tentativas_falhas: 0,
     ultimo_falha_em: null,
@@ -492,10 +529,53 @@ export async function desbloquearUsuario(req: Request, res: Response) {
     acao: 'bloqueio',
     recurso: 'usuarios',
     registro_id: id,
-    descricao: `${String(row.nome || row.email)} DESBLOQUEADO por ${actor.name} (bloqueio temporário e falhas zerados)`,
+    descricao: `${String(row.nome || row.email)} DESBLOQUEADO por ${actor.name} (bloqueio ${eraManual ? 'manual removido' : 'temporário e falhas zerados'})`,
   });
   invalidateUserCache(id);
   res.json({ ok: true });
+}
+
+/**
+ * POST /api/usuarios/:id/bloquear — { motivo, duracao_minutos? } trava o
+ * acesso na hora (login e sessões ativas caem em até 30 s). Sem duração, o
+ * bloqueio é manual e só sai com "Desbloquear". Exige reautenticação e não
+ * vale para si mesmo. Para desligamento definitivo, desative a conta.
+ */
+export async function bloquearUsuario(req: Request, res: Response) {
+  const actor = currentUser(req);
+  exigirAdmin(actor, 'bloqueiam usuários.');
+  exigirReautenticacao(req);
+  const store = getStore();
+  const id = parseIdParam(req);
+  const row = await store.findOneWhere(RESOURCES.usuarios, { id });
+  if (!row) throw new HttpError(404, 'Usuário não encontrado.');
+  if (Number(row.id) === Number(actor.id)) throw new HttpError(400, 'Você não pode bloquear o seu próprio acesso.');
+  if (row.ativo === false) throw new HttpError(400, 'Este usuário já está desativado.');
+  if (contaBloqueada(row)) throw new HttpError(400, 'Este usuário já está bloqueado.');
+  const motivo = String(req.body?.motivo ?? '').trim().slice(0, 300);
+  if (!motivo) throw new HttpError(400, 'Informe o motivo do bloqueio.', { motivo: 'Campo obrigatório' });
+  const rawDur = req.body?.duracao_minutos;
+  const duracao = rawDur === undefined || rawDur === null || rawDur === '' ? null : Number(rawDur);
+  if (duracao !== null && (!Number.isInteger(duracao) || duracao < 1 || duracao > 43200)) {
+    throw new HttpError(400, 'Duração inválida: informe de 1 minuto a 30 dias, ou vazio para bloqueio sem prazo.', { duracao_minutos: 'Valor inválido' });
+  }
+
+  const patch: Record<string, unknown> = { motivo_bloqueio: motivo };
+  if (duracao === null) patch.bloqueio_manual = true;
+  else patch.bloqueado_ate = new Date(Date.now() + duracao * 60_000).toISOString();
+  await store.update(RESOURCES.usuarios, id, patch);
+  const prazo = duracao === null ? 'sem prazo (até desbloqueio manual)' : `por ${duracao >= 1440 ? `${Math.round(duracao / 1440)} dia(s)` : duracao >= 60 ? `${Math.round(duracao / 60)} hora(s)` : `${duracao} minuto(s)`}`;
+  await store.audit({
+    usuario_id: actor.id,
+    usuario: actor.name,
+    acao: 'bloqueio',
+    recurso: 'usuarios',
+    registro_id: id,
+    descricao: `${String(row.nome || row.email)} BLOQUEADO por ${actor.name} ${prazo} — motivo: ${motivo}`,
+    dados: { motivo, duracao_minutos: duracao, manual: duracao === null },
+  });
+  invalidateUserCache(id);
+  res.json({ ok: true, manual: duracao === null });
 }
 
 /**
@@ -557,6 +637,38 @@ export async function forcarTrocaSenha(req: Request, res: Response) {
   res.json({ ok: true });
 }
 
+/**
+ * POST /api/usuarios/:id/sessoes/:sid/encerrar — revoga UMA sessão específica
+ * (ex.: só o celular extraviado). Exige reautenticação. A sessão atual do
+ * próprio admin sai por Configurações → Sessões.
+ */
+export async function revogarSessaoUsuario(req: Request, res: Response) {
+  const actor = currentUser(req);
+  exigirAdmin(actor, 'revogam sessões de usuários.');
+  exigirReautenticacao(req);
+  const store = getStore();
+  const id = parseIdParam(req);
+  const row = await store.findOneWhere(RESOURCES.usuarios, { id });
+  if (!row) throw new HttpError(404, 'Usuário não encontrado.');
+  const sid = String(req.params.sid || '');
+  const sessao = await store.getSessao(sid);
+  if (!sessao || Number(sessao.usuario_id) !== id) throw new HttpError(404, 'Sessão não encontrada.');
+  if (sid === sidAtual(req)) throw new HttpError(400, 'Esta é a sua sessão atual — use Sair ou Configurações → Sessões.');
+  await revogarUma(sid);
+  await store.audit({
+    usuario_id: actor.id,
+    usuario: actor.name,
+    acao: 'seguranca',
+    recurso: 'usuarios',
+    registro_id: id,
+    descricao: `Sessão de ${String(row.nome || row.email)} revogada por ${actor.name} (${sessao.ip || 'ip desconhecido'})`,
+    dados: { sessao: sid.slice(0, 8) },
+  });
+  invalidateUserCache(id);
+  const restantes = (await store.listSessoesAtivas(id)).length;
+  res.json({ ok: true, sessoes_restantes: restantes });
+}
+
 /** POST /api/usuarios/:id/resetar-mfa — admin limpa o MFA do usuário (reautenticação exigida). */
 export async function resetarMfaUsuario(req: Request, res: Response) {
   const actor = currentUser(req);
@@ -566,7 +678,7 @@ export async function resetarMfaUsuario(req: Request, res: Response) {
   const row = await store.findOneWhere(RESOURCES.usuarios, { id: Number(req.params.id) });
   if (!row) throw new HttpError(404, 'Usuário não encontrado.');
   if (!row.mfa_ativado_em && !row.mfa_secret) throw new HttpError(400, 'Este usuário não possui MFA configurado.');
-  await store.update(RESOURCES.usuarios, Number(row.id), { mfa_secret: null, mfa_ativado_em: null });
+  await store.update(RESOURCES.usuarios, Number(row.id), { mfa_secret: null, mfa_ativado_em: null, mfa_backup_hashes: null });
   const sessoes = await revogarTodas(Number(row.id));
   await store.audit({
     usuario_id: actor.id,
@@ -574,7 +686,7 @@ export async function resetarMfaUsuario(req: Request, res: Response) {
     acao: 'mfa',
     recurso: 'usuarios',
     registro_id: Number(row.id),
-    descricao: `MFA de ${String(row.email)} resetado por ${actor.name} (reautenticado) — o usuário refaz o cadastro no próximo login`,
+    descricao: `MFA de ${String(row.email)} resetado por ${actor.name} (reautenticado, códigos de recuperação invalidados) — o usuário refaz o cadastro no próximo login`,
     dados: { sessoes_encerradas: sessoes },
   });
   invalidateUserCache(Number(row.id));
