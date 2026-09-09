@@ -5,6 +5,7 @@ import { RESOURCES } from './resources';
 import { getStore } from './services';
 import { labelOf, type Row } from './store';
 import { attachImages } from './uploads';
+import { normalizarOrigem, urlBasePublica } from './urlPublica';
 
 const RATE_LIMIT = 60;
 const JANELA_MS = 10 * 60 * 1000;
@@ -34,7 +35,9 @@ export async function criarAcessoPortal(clienteId: number, baseUrl: string, vali
   const token = randomBytes(32).toString('hex');
   const expira_em = new Date(Date.now() + Math.min(365, Math.max(1, validadeDias)) * 86400000).toISOString();
   await getStore().insert(RESOURCES.portal_acessos, { cliente_id: clienteId, token_hash: hashPortalToken(token), expira_em, acessos: 0 });
-  return { token, url: `${baseUrl.replace(/\/$/, '')}/portal/${token}`, expira_em };
+  // normalizarOrigem: aceita base com ou sem esquema/barra final (e rejeita valor malformado).
+  const base = normalizarOrigem(baseUrl);
+  return { token, url: `${base}/portal/${token}`, expira_em };
 }
 
 async function autenticar(token: string): Promise<{ cliente: Row; acesso: Row | null }> {
@@ -122,9 +125,8 @@ export async function gerarAcessoPortal(req: Request, res: Response) {
   const actor = currentUser(req); checkAccess(RESOURCES.clientes, actor, 'update');
   const clienteId = Number(req.params.id); const s = getStore();
   const cliente = await s.get(RESOURCES.clientes, clienteId); if (!cliente) throw new HttpError(404, 'Cliente não encontrado.');
-  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-  const base = String(process.env.APP_URL || (host ? `${proto}://${host}` : '')).replace(/\/$/, '');
+  // Origem pública centralizada (APP_URL → cabeçalhos da requisição) — ver urlPublica.ts.
+  const base = urlBasePublica(req);
   const acesso = await criarAcessoPortal(clienteId, base, Number(req.body?.validade_dias) || 90);
   await s.audit({ usuario_id: actor.id, usuario: actor.name, acao: 'criar', recurso: 'clientes', registro_id: clienteId, descricao: `Novo acesso seguro ao portal gerado para ${cliente.nome}`, dados: { expira_em: acesso.expira_em } });
   res.status(201).json(acesso);

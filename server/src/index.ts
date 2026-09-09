@@ -50,6 +50,7 @@ import { HttpError } from './errors';
 import { assertProductionSecrets, bloquearSenhaProvisoria, corsOrigin, loginRateLimit, securityHeaders } from './security';
 import { initSentry, reportarErro } from './log';
 import { smtpConfigurado } from './mail';
+import { revisarConfiguracaoOrigem, statusOrigem } from './urlPublica';
 import { estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario } from './estoque';
 import { getMedidasGrade, resumoMedidasGrades, saveMedidasGrade } from './medidas';
 import { relatorio } from './relatorios';
@@ -87,6 +88,9 @@ import { initWebSocket, wsStatus } from './websocket';
 import { createServer } from 'node:http';
 
 assertProductionSecrets();
+// Links de e-mail (convite de acesso, redefinição) só funcionam com origem absoluta.
+// Avisamos no boot em vez de deixar o usuário descobrir que o link é "URL inválida".
+const AVISO_ORIGEM = revisarConfiguracaoOrigem();
 initSentry();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -233,6 +237,10 @@ app.get(
       version: VERSION,
       user: currentUser(req),
       smtp: { configurado: smtpConfigurado() },
+      // Origem usada nos links de e-mail (convite/redefinição). APP_URL ausente
+      // significa link derivado da requisição; `aviso` vem preenchido quando isso
+      // pode resultar em URL inválida para quem recebeu o e-mail.
+      emailLinks: { ...statusOrigem(req), aviso: AVISO_ORIGEM },
       // Local padrão (origem das movimentações) para o front pré-selecionar os formulários.
       defaultLocal: await getDefaultLocalInfo(),
       auth: { hash: 'argon2id', mfa_admin_obrigatorio: true, reauth_ttl_segundos: Math.round(Number(process.env.REAUTH_TTL_MS) || 300_000) / 1000 },
@@ -442,7 +450,7 @@ app.post(
     const r = (req as any).resource;
     const actor = currentUser(req);
     checkAccess(r, actor, 'create');
-    res.status(201).json(await createRecord(r, req.body, actor));
+    res.status(201).json(await createRecord(r, req.body, actor, { req }));
   })
 );
 

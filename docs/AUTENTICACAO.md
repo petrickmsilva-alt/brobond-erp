@@ -62,8 +62,9 @@ O modelo anterior gravava uma segunda cópia cifrada da senha (`senha_cifrada`, 
 Novos usuários **não recebem senha do administrador**. Em vez disso:
 
 1. O admin cadastra o usuário (nome, e-mail, perfil) — **sem campo de senha no formulário** (o payload com `senha` é rejeitado).
-2. O servidor gera um **token de 256 bits**, grava apenas o **hash SHA-256** (`convite_token_hash`) com validade de **48 h** (`INVITE_TTL_HOURS`) e envia o link `APP_URL/convite/<token>` por e-mail.
-   - Sem SMTP configurado (dev/demonstração), o link volta na resposta da criação (`convite_link`) para entrega manual — o mesmo comportamento do "esqueci minha senha" sem SMTP (link no console).
+2. O servidor gera um **token de 256 bits**, grava apenas o **hash SHA-256** (`convite_token_hash`) com validade de **48 h** (`INVITE_TTL_HOURS`) e envia o link `<origem>/convite/<token>` por e-mail.
+   - A origem vem de **`APP_URL`**; sem ela, é deduzida da requisição que gerou o convite (`X-Forwarded-Proto`/`Host`), e em desenvolvimento cai em `http://localhost:5173`. O link é sempre **absoluto** — um link relativo (`/convite/abc`) não abre em cliente de e-mail ("URL inválida"). Centralizado em `server/src/urlPublica.ts`, com diagnóstico no boot e em Configurações › Sistema.
+   - Sem SMTP (dev/demonstração) **ou quando o envio falha**, o link volta na resposta da criação (`convite_link`) para entrega manual, e a auditoria registra que o e-mail não foi entregue.
 3. O usuário abre o link (página pública com rate limit), que mostra nome/e-mail e permite **definir a própria senha** (validada pela política).
 4. O aceite limpa o token (uso único), grava o hash Argon2id, define `senha_definida_em` e registra o evento `convite` na auditoria.
 5. O admin pode **reenviar o convite** (`POST /api/usuarios/:id/reenviar-convite`) enquanto a senha não existir; cada reenvio invalida o token anterior.

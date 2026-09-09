@@ -23,6 +23,7 @@ import { recalcularTotal } from './itens';
 import { montarTabelaMedidas, tsIso } from './medidas';
 import type { TabelaMedidas } from './medidas';
 import { criarAcessoPortal } from './portal';
+import { urlBasePublica } from './urlPublica';
 import { precoComPolitica, resolverPoliticaComercial } from './politicasComerciais';
 
 const require = createRequire(import.meta.url);
@@ -433,9 +434,8 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
       return { venda: await s.get(vendaR, Number(venda.id), tx) ?? venda, total };
     });
     if (resolvido.compartilhamento) await s.insert(RESOURCES.catalogo_eventos, { compartilhamento_id: Number(resolvido.compartilhamento.id), catalogo_id: Number(catalogo.id), tipo: 'pedido_enviado', pedido_id: Number(pedido.venda.id), valor: Number(pedido.total), dados: {} });
-    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
-    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-    const base = String(process.env.APP_URL || (host ? `${proto}://${host}` : '')).replace(/\/$/, '');
+    // Origem pública centralizada (APP_URL → cabeçalhos da requisição) — ver urlPublica.ts.
+    const base = urlBasePublica(req);
     const portal = await criarAcessoPortal(Number(pedido.venda.cliente_id), base, 90);
     res.status(201).json({ ok: true, mensagem: 'Pedido recebido! Nossa equipe vai confirmar disponibilidade e valores com você.', pedido_id: Number(pedido.venda.id), total: pedido.total, portal_url: portal.url, portal_expira_em: portal.expira_em });
   } catch (e) {
@@ -454,9 +454,8 @@ export async function compartilharCatalogo(req: Request, res: Response) {
   if (!catalogo) throw new HttpError(404, 'Catálogo não encontrado.');
   if (!catalogo.token) throw new HttpError(409, 'Este catálogo ainda não possui link público.');
 
-  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-  const base = String(process.env.APP_URL || (host ? `${proto}://${host}` : '')).replace(/\/$/, '');
+  // Origem pública centralizada (APP_URL → cabeçalhos da requisição) — ver urlPublica.ts.
+  const base = urlBasePublica(req);
   const tokenIndividual = randomBytes(24).toString('hex');
   const dias = Math.min(365, Math.max(1, Number(req.body?.validade_dias) || 30));
   const expiraEm = new Date(Date.now() + dias * 86400000).toISOString();

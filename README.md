@@ -109,7 +109,13 @@ No primeiro login o administrador troca a senha e cadastra o **MFA obrigatório*
    e um banco Postgres gratuito, já ligado via `DATABASE_URL`.
 3. Defina `DATABASE_URL` (Neon), `ADMIN_PASSWORD` e, se quiser fotos em CDN,
    `UPLOAD_PROVIDER=cloudinary` + `CLOUDINARY_URL` nas variáveis de ambiente.
-4. A cada `git push` na `main`, o Render faz o redeploy.
+4. **Com SMTP configurado, defina também `APP_URL`** com o endereço público do
+   ERP (ex. `https://erp.brobond.com.br`). É a base dos links de convite de acesso
+   e de redefinição de senha: sem ela o e-mail sai com um link relativo
+   (`/convite/abc…`) e o destinatário vê “URL inválida”. O servidor ainda deduz a
+   origem da requisição como rede de segurança, e o estado aparece em
+   Configurações › Sistema.
+5. A cada `git push` na `main`, o Render faz o redeploy.
 
 O domínio (`brobond.com.br`) e o e-mail corporativo ficam no HostGator, com o
 DNS apontando para a Render.

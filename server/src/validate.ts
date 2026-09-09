@@ -124,11 +124,7 @@ export type ValidatedPayload = Record<string, unknown>;
  *   mas não permite apagar um campo obrigatório.
  * Lança HttpError(400) com `fields` quando houver problemas.
  */
-export function validatePayload(
-  r: Resource,
-  body: unknown,
-  mode: 'create' | 'update'
-): ValidatedPayload {
+export function validatePayload(r: Resource, body: unknown, mode: 'create' | 'update'): ValidatedPayload {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw new HttpError(400, 'Corpo da requisição inválido');
   }
@@ -167,6 +163,27 @@ export function validatePayload(
     throw new HttpError(400, `Verifique os campos: ${first}`, errors);
   }
   return out;
+}
+
+/**
+ * Limpa um token vindo de um link de e-mail (convite / redefinição de senha).
+ *
+ * Clientes de e-mail e leitores de texto gostam de colar pontuação no fim do
+ * endereço — "https://…/convite/abc.", "…/convite/abc)" (parêntese do próprio
+ * parágrafo), quebra de linha em links longos. O token é sempre hex, então o
+ * que sobra entre as bordas é lixo de transporte, não parte do segredo.
+ * A comparação continua sendo por hash: nada aqui enfraquece a validação.
+ */
+const TOKEN_ESQUERDA = /^[\s<[{("'`]+/;
+const TOKEN_DIREITA = /[\s>)\]}"'`.,;:!?]+$/;
+
+export function limparToken(v: unknown): string {
+  return String(v ?? '')
+    .trim()
+    .replace(TOKEN_ESQUERDA, '')
+    .replace(TOKEN_DIREITA, '')
+    .replace(/\/+$/, '')
+    .trim();
 }
 
 /** Valida um id de rota. */

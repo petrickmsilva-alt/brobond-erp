@@ -25,6 +25,14 @@ services:
         value: 10000
       - key: DATABASE_URL
         sync: false
+      # Endereço público do ERP: base dos links enviados por e-mail (convite de
+      # acesso, redefinição de senha), do portal do cliente e das etiquetas QR.
+      # Defina no painel com o domínio que os usuários realmente usam, ex.
+      # https://brobond-erp.onrender.com ou https://erp.brobond.com.br.
+      # Sem isso o link usa o cabeçalho da requisição (Render: ok; domínio
+      # próprio atrás de proxy: pode sair errado e virar "URL inválida").
+      - key: APP_URL
+        sync: false
       # Fotos: "db" (no banco, padrão) ou "cloudinary" (+ CLOUDINARY_URL)
       - key: UPLOAD_PROVIDER
         value: db

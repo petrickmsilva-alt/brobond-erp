@@ -17,6 +17,7 @@
 //     (matriz + carimbo auditado), alertas de vencimento e XLSX da seleção
 // ============================================================================
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowDown,
@@ -222,7 +223,9 @@ function fromISO(v: unknown): string {
 }
 
 export default function UsuariosPage() {
-  const { user: eu } = useAuth();
+  // `meta` vem do contexto de auth: é dele que lemos smtp/emailLinks (diagnóstico
+  // dos links de convite) — null durante o carregamento, por isso o uso é todo opcional.
+  const { user: eu, meta } = useAuth();
   const toast = useToast();
 
   // Painel
@@ -1771,12 +1774,24 @@ export default function UsuariosPage() {
         </div>
       </Modal>
 
-      {/* Convite sem SMTP */}
-      <Modal open={!!conviteLink} onClose={() => setConviteLink('')} title="Convite de acesso criado" subtitle="Este ambiente não tem SMTP configurado — entregue o link ao usuário." size="md">
+      {/* Convite que não pôde ser entregue por e-mail (sem SMTP ou SMTP com falha) */}
+      <Modal
+        open={!!conviteLink}
+        onClose={() => setConviteLink('')}
+        title="Convite de acesso criado — entrega manual"
+        subtitle="O e-mail automático não saiu (sem SMTP ou falha no SMTP). Envie o link abaixo para o usuário."
+        size="md"
+      >
         <div className="space-y-4">
           <Alert tone="blue">
             O convite é válido por <strong>48 horas</strong> e só pode ser usado uma vez. Quem recebe define a própria senha (ela nunca passa pelo administrador).
           </Alert>
+          {!meta?.emailLinks?.configurada && (
+            <Alert tone="amber">
+              Confira se o endereço abaixo é mesmo o público do ERP: sem <code>APP_URL</code>, o link usa o endereço desta sessão. O ajuste aparece em{' '}
+              <Link to="/config" className="font-medium underline underline-offset-2">Configurações</Link>.
+            </Alert>
+          )}
           <div className="flex gap-2">
             <input className="input flex-1 font-mono text-xs" readOnly value={conviteLink} onFocus={(e) => e.currentTarget.select()} />
             <button

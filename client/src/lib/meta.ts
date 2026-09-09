@@ -87,6 +87,12 @@ export type Meta = {
   version?: string;
   /** SMTP configurado? (esqueci minha senha) */
   smtp?: { configurado: boolean };
+  /**
+   * Origem usada para montar os links que saem por e-mail (convite de acesso,
+   * redefinição de senha). `configurada=false` significa que a base vem do
+   * cabeçalho da requisição — funciona, mas quebra se o ERP mudar de endereço.
+   */
+  emailLinks?: { configurada: boolean; base: string; aviso?: string };
   /** Informações do fluxo de autenticação (hash, MFA, reautenticação) */
   auth?: { hash: string; mfa_admin_obrigatorio: boolean; reauth_ttl_segundos: number };
   /** Local padrão (origem das movimentações) — o front o usa para pré-selecionar os formulários. */
