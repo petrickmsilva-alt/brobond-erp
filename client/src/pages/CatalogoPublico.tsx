@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   ChevronLeft,
@@ -16,6 +16,9 @@ import {
   Send,
   Shirt,
   ShoppingBag,
+  LayoutGrid,
+  Table2,
+  Upload,
   X,
 } from 'lucide-react';
 import { api, apiFetch, ApiError } from '../lib/api';
@@ -85,6 +88,8 @@ export default function CatalogoPublico() {
   const [busca, setBusca] = useState('');
   const [ordenacao, setOrdenacao] = useState<'nome' | 'menor_preco' | 'maior_preco'>('nome');
   const [somenteDisponiveis, setSomenteDisponiveis] = useState(false);
+  const [modo, setModo] = useState<'vitrine' | 'rapido'>('vitrine');
+  const [rascunhoCarregado, setRascunhoCarregado] = useState(false);
 
   const carregar = useCallback(
     async (comSenha: string) => {
@@ -151,6 +156,17 @@ export default function CatalogoPublico() {
     setPedidoEnviado(false);
   }
 
+  function setQuantidade(p: ProdutoCatalogo, t: { tamanho_id: number; codigo: string }, qtd: number) {
+    const key = `${p.id}:${t.tamanho_id}`;
+    const quantidade = Math.max(0, Math.min(9999, Math.floor(qtd || 0)));
+    setCart((prev) => {
+      if (quantidade === 0) return prev.filter((i) => i.key !== key);
+      const found = prev.some((i) => i.key === key);
+      return found ? prev.map((i) => i.key === key ? { ...i, qtd: quantidade } : i) : [...prev, { key, produto: p, qtd: quantidade, tamanho_id: t.tamanho_id, tamanho_codigo: t.codigo }];
+    });
+    setPedidoEnviado(false);
+  }
+
   function changeQtd(key: string, delta: number) {
     setCart((prev) => prev.map((i) => (i.key === key ? { ...i, qtd: Math.max(1, i.qtd + delta) } : i)).filter((i) => i.qtd > 0));
   }
@@ -158,6 +174,25 @@ export default function CatalogoPublico() {
   function removeFromCart(key: string) {
     setCart((prev) => prev.filter((i) => i.key !== key));
   }
+
+  // Rascunho local por catálogo: recompra e retomada mesmo após fechar o navegador.
+  useEffect(() => {
+    if (!data || rascunhoCarregado) return;
+    try {
+      const raw = JSON.parse(localStorage.getItem(`brobond_catalogo_rascunho_${token}`) || '[]') as { produto_id: number; tamanho_id: number; qtd: number }[];
+      const itens = raw.flatMap((x) => {
+        const p = data.produtos.find((v) => v.id === x.produto_id);
+        const t = p?.tamanhos.find((v) => v.tamanho_id === x.tamanho_id);
+        return p && t && x.qtd > 0 ? [{ key: `${p.id}:${t.tamanho_id}`, produto: p, qtd: x.qtd, tamanho_id: t.tamanho_id, tamanho_codigo: t.codigo }] : [];
+      });
+      if (itens.length) setCart(itens);
+    } catch { localStorage.removeItem(`brobond_catalogo_rascunho_${token}`); }
+    setRascunhoCarregado(true);
+  }, [data, token, rascunhoCarregado]);
+  useEffect(() => {
+    if (!rascunhoCarregado) return;
+    localStorage.setItem(`brobond_catalogo_rascunho_${token}`, JSON.stringify(cart.map((i) => ({ produto_id: i.produto.id, tamanho_id: i.tamanho_id, qtd: i.qtd }))));
+  }, [cart, token, rascunhoCarregado]);
 
   const totalPedido = cart.reduce((s, i) => s + (i.produto.preco || 0) * i.qtd, 0);
   const pedidoHabilitado = !!data?.aceita_pedido_site;
@@ -285,11 +320,19 @@ export default function CatalogoPublico() {
                 Com estoque
               </label>
             </div>
-            <p className="mt-2 text-xs text-slate-400" aria-live="polite">{produtosVisiveis.length} de {data.total} produtos</p>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-slate-400" aria-live="polite">{produtosVisiveis.length} de {data.total} produtos</p>
+              {pedidoHabilitado && <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+                <button className={`rounded-md px-2.5 py-1 text-xs font-semibold ${modo === 'vitrine' ? 'bg-white text-navy-800 shadow-sm' : 'text-slate-500'}`} onClick={() => setModo('vitrine')}><LayoutGrid className="mr-1 inline h-3.5 w-3.5" />Vitrine</button>
+                <button className={`rounded-md px-2.5 py-1 text-xs font-semibold ${modo === 'rapido' ? 'bg-white text-navy-800 shadow-sm' : 'text-slate-500'}`} onClick={() => setModo('rapido')}><Table2 className="mr-1 inline h-3.5 w-3.5" />Pedido rápido</button>
+              </div>}
+            </div>
           </section>
         )}
         {data.produtos.length === 0 ? (
           <p className="py-16 text-center text-sm text-slate-400">Este catálogo ainda não tem produtos.</p>
+        ) : modo === 'rapido' && pedidoHabilitado ? (
+          <PedidoRapido produtos={produtosVisiveis} cart={cart} politica={data.politica_comercial} mostrarSaldo={data.mostrar_saldo} onQuantidade={setQuantidade} />
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
             {produtosVisiveis.length === 0 && <p className="col-span-full py-16 text-center text-sm text-slate-500">Nenhum produto corresponde aos filtros.</p>}
@@ -901,4 +944,40 @@ function CatalogoPedidoModal({
       </div>
     </div>
   );
+}
+
+function PedidoRapido({ produtos, cart, politica, mostrarSaldo, onQuantidade }: {
+  produtos: ProdutoCatalogo[]; cart: CartItem[];
+  politica: CatResp['politica_comercial']; mostrarSaldo: boolean;
+  onQuantidade: (p: ProdutoCatalogo, t: { tamanho_id: number; codigo: string }, qtd: number) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();
+  const qtd = (pid: number, tid: number) => cart.find((i) => i.produto.id === pid && i.tamanho_id === tid)?.qtd || 0;
+  async function importar(file?: File) {
+    if (!file) return;
+    const linhas = (await file.text()).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    let aplicados = 0;
+    for (const linha of linhas.slice(1)) {
+      const [sku, tamanho, quantidadeRaw] = linha.split(/[;,\t]/).map((x) => x.trim());
+      const p = produtos.find((x) => String(x.sku || '').toLocaleLowerCase('pt-BR') === sku.toLocaleLowerCase('pt-BR'));
+      const t = p?.tamanhos.find((x) => x.codigo.toLocaleLowerCase('pt-BR') === tamanho.toLocaleLowerCase('pt-BR'));
+      const quantidade = Number(quantidadeRaw);
+      if (p && t && Number.isInteger(quantidade) && quantidade >= 0) { onQuantidade(p, t, quantidade); aplicados++; }
+    }
+    toast[aplicados ? 'success' : 'error'](aplicados ? `${aplicados} quantidade(s) importada(s).` : 'Nenhuma linha válida. Use: SKU;Tamanho;Quantidade.');
+    if (fileRef.current) fileRef.current.value = '';
+  }
+  return <section className="card overflow-hidden !p-0">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+      <div><h2 className="text-sm font-bold text-navy-900">Pedido rápido por grade</h2><p className="text-xs text-slate-400">Digite as quantidades e use Tab para avançar. O rascunho é salvo automaticamente.</p></div>
+      <><input ref={fileRef} type="file" accept=".csv,.txt" className="hidden" onChange={(e) => importar(e.target.files?.[0])} /><button className="btn-secondary text-xs" onClick={() => fileRef.current?.click()}><Upload className="h-3.5 w-3.5" /> Importar CSV</button></>
+    </div>
+    {politica && (politica.produto_min_qtd > 0 || politica.multiplo_qtd > 1) && <p className="border-b border-brand-100 bg-brand-50 px-4 py-2 text-xs text-brand-800">{politica.produto_min_qtd > 0 ? `Mínimo ${politica.produto_min_qtd} por item. ` : ''}{politica.multiplo_qtd > 1 ? `Use múltiplos de ${politica.multiplo_qtd}.` : ''}</p>}
+    <div className="overflow-x-auto"><table className="table min-w-[700px]"><thead><tr><th className="sticky left-0 z-10 bg-slate-50">Produto</th><th>Preço</th><th>Grade / quantidades</th><th className="text-right">Subtotal</th></tr></thead><tbody>{produtos.map((p) => {
+      const itens = cart.filter((i) => i.produto.id === p.id); const sub = itens.reduce((n, i) => n + (p.preco || 0) * i.qtd, 0);
+      return <tr key={p.id}><td className="sticky left-0 bg-white"><div className="font-semibold text-navy-900">{p.nome}</div><div className="font-mono text-[10px] text-slate-400">{p.sku || 'sem SKU'}</div></td><td className="whitespace-nowrap font-semibold text-brand-700">{formatMoney(p.preco || 0)}</td><td><div className="flex flex-wrap gap-2">{p.tamanhos.map((t) => <label key={t.tamanho_id} className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1"><span className="min-w-6 text-center text-xs font-bold text-slate-600">{t.codigo}</span><input type="number" min={0} max={mostrarSaldo ? (t.quantidade ?? 9999) : 9999} step={politica?.multiplo_qtd || 1} value={qtd(p.id, t.tamanho_id) || ''} placeholder="0" onChange={(e) => onQuantidade(p, t, Number(e.target.value))} className="h-7 w-16 rounded border border-slate-200 bg-white px-1 text-center text-sm tabular-nums outline-none focus:border-brand-500" aria-label={`${p.nome}, tamanho ${t.codigo}`} /></label>)}</div></td><td className="text-right font-semibold tabular-nums text-navy-900">{formatMoney(sub)}</td></tr>;
+    })}</tbody></table></div>
+    {!produtos.length && <p className="py-12 text-center text-sm text-slate-400">Nenhum produto corresponde à busca.</p>}
+  </section>;
 }
