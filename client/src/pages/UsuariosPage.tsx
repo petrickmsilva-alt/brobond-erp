@@ -2007,7 +2007,8 @@ function MenuAcoes({ itens, aberto, onAbrir, onFechar }: { itens: MenuItem[]; ab
         className="btn-icon"
         onClick={(e) => {
           e.stopPropagation();
-          aberto ? onFechar() : onAbrir();
+          if (aberto) onFechar();
+          else onAbrir();
         }}
         aria-label="Mais ações"
         aria-haspopup="menu"

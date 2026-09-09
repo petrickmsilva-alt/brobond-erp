@@ -264,7 +264,7 @@ export async function listarWebhooks(req: Request, res: Response) {
   const ha24h = Date.now() - 24 * 3600_000;
   const itens = [];
   for (const w of todos.rows || []) {
-    let contadores = { entregas_24h: 0, erros_24h: 0, ultima_entrega_em: null as string | null, ultimo_estado: null as string | null };
+    const contadores = { entregas_24h: 0, erros_24h: 0, ultima_entrega_em: null as string | null, ultimo_estado: null as string | null };
     try {
       const ent = await store.list(R_ENTREGAS, { page: 1, pageSize: 500, sort: 'id', dir: 'desc', filter: { webhook_id: Number(w.id) } });
       const rows = ent.rows || [];
