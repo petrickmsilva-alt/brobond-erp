@@ -50,7 +50,8 @@ import { HttpError } from './errors';
 import { assertProductionSecrets, bloquearSenhaProvisoria, corsOrigin, loginRateLimit, securityHeaders } from './security';
 import { initSentry, reportarErro } from './log';
 import { smtpConfigurado } from './mail';
-import { revisarConfiguracaoOrigem, statusOrigem } from './urlPublica';
+import { carregarOrigemDoBanco, revisarConfiguracaoOrigem, statusOrigemAsync } from './urlPublica';
+import { obterEnderecoPublico, removerEnderecoPublico, salvarEnderecoPublico } from './configSistema';
 import { estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario } from './estoque';
 import { getMedidasGrade, resumoMedidasGrades, saveMedidasGrade } from './medidas';
 import { relatorio } from './relatorios';
@@ -205,6 +206,11 @@ app.put('/api/usuarios/politica-senha', wrap(salvarPoliticaSenha));
 app.get('/api/usuarios/certificacao', wrap(certificacaoUsuarios));
 app.get('/api/usuarios/certificacao/export', wrap(exportarCertificacao));
 app.post('/api/usuarios/:id/certificar', wrap(certificarUsuario));
+// Endereço público do ERP (base dos links de e-mail/portal/QR) — configuração
+// self-service do admin: resolve o "URL inválida" sem redeploy (configSistema.ts).
+app.get('/api/admin/config/endereco-publico', wrap(obterEnderecoPublico));
+app.put('/api/admin/config/endereco-publico', wrap(salvarEnderecoPublico));
+app.delete('/api/admin/config/endereco-publico', wrap(removerEnderecoPublico));
 // Onda 4: webhooks de eventos de usuário (admin)
 app.get('/api/webhooks', wrap(listarWebhooks));
 app.post('/api/webhooks', wrap(criarWebhook));
@@ -240,7 +246,7 @@ app.get(
       // Origem usada nos links de e-mail (convite/redefinição). APP_URL ausente
       // significa link derivado da requisição; `aviso` vem preenchido quando isso
       // pode resultar em URL inválida para quem recebeu o e-mail.
-      emailLinks: { ...statusOrigem(req), aviso: AVISO_ORIGEM },
+      emailLinks: { ...(await statusOrigemAsync(req)), aviso: AVISO_ORIGEM },
       // Local padrão (origem das movimentações) para o front pré-selecionar os formulários.
       defaultLocal: await getDefaultLocalInfo(),
       auth: { hash: 'argon2id', mfa_admin_obrigatorio: true, reauth_ttl_segundos: Math.round(Number(process.env.REAUTH_TTL_MS) || 300_000) / 1000 },
@@ -519,6 +525,10 @@ async function start() {
   }
   await ensureAdmin();
   await migrarSenhasLegadas();
+  // Endereço público salvo no banco (Configurações › Sistema): já entra no
+  // cache do urlPublica.ts antes da primeira requisição, para o primeiro
+  // convite do processo já sair com a base certa.
+  await carregarOrigemDoBanco(true);
   await limpezaPeriodica();
   // Limpeza diária de sessões encerradas e buckets de rate limit velhos.
   const limpeza = setInterval(() => void limpezaPeriodica().catch(() => undefined), 24 * 3600_000);

@@ -5,7 +5,7 @@ import { RESOURCES } from './resources';
 import { getStore } from './services';
 import { labelOf, type Row } from './store';
 import { attachImages } from './uploads';
-import { normalizarOrigem, urlBasePublica } from './urlPublica';
+import { normalizarOrigem, urlBasePublicaAsync } from './urlPublica';
 
 const RATE_LIMIT = 60;
 const JANELA_MS = 10 * 60 * 1000;
@@ -126,7 +126,7 @@ export async function gerarAcessoPortal(req: Request, res: Response) {
   const clienteId = Number(req.params.id); const s = getStore();
   const cliente = await s.get(RESOURCES.clientes, clienteId); if (!cliente) throw new HttpError(404, 'Cliente não encontrado.');
   // Origem pública centralizada (APP_URL → cabeçalhos da requisição) — ver urlPublica.ts.
-  const base = urlBasePublica(req);
+  const base = await urlBasePublicaAsync(req);
   const acesso = await criarAcessoPortal(clienteId, base, Number(req.body?.validade_dias) || 90);
   await s.audit({ usuario_id: actor.id, usuario: actor.name, acao: 'criar', recurso: 'clientes', registro_id: clienteId, descricao: `Novo acesso seguro ao portal gerado para ${cliente.nome}`, dados: { expira_em: acesso.expira_em } });
   res.status(201).json(acesso);

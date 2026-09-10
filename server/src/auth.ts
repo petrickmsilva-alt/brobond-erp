@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
 import { limparToken } from './validate';
-import { avisarOrigemIndefinida, linkPublico, urlAbsoluta } from './urlPublica';
+import { avisarOrigemIndefinida, linkPublicoAsync, urlAbsoluta } from './urlPublica';
 import { getStore } from './services';
 import type { Row } from './store';
 import { loginBucketKey, registerLoginFailure, registerLoginSuccess, registrarFalha, registrarSucesso, exigirRateLimit } from './security';
@@ -511,6 +511,17 @@ export function limparReautenticacao(id: number): void {
   reautenticados.delete(id);
 }
 
+/**
+ * Abre (ou renova) a janela de reautenticação do usuário. Devolve o instante
+ * em que ela expira. É o único ponto que escreve no mapa — usado pelo
+ * `POST /api/auth/reautenticar` e pelos testes das rotas sensíveis.
+ */
+export function registrarReautenticacao(id: number, ttlMs: number = REAUTH_TTL_MS): number {
+  const validoAte = Date.now() + ttlMs;
+  reautenticados.set(id, validoAte);
+  return validoAte;
+}
+
 /** POST /api/auth/reautenticar — { senha } libera ações sensíveis por 5 min. */
 export async function reautenticar(req: Request, res: Response) {
   const u = currentUser(req);
@@ -540,8 +551,7 @@ export async function reautenticar(req: Request, res: Response) {
     throw new HttpError(401, 'Senha incorreta.', { senha: 'Senha incorreta' });
   }
   await registrarSucesso('reauth', `${clientIp(req)}|${u.id}`);
-  const validoAte = Date.now() + REAUTH_TTL_MS;
-  reautenticados.set(u.id, validoAte);
+  const validoAte = registrarReautenticacao(u.id);
   await getStore()
     .audit({
       usuario_id: u.id || null,
@@ -822,7 +832,7 @@ export async function forgotPassword(req: Request, res: Response) {
           .catch(() => undefined);
         // Link SEMPRE absoluto: relativo ("/redefinir/…") o cliente de e-mail
         // não resolve e a pessoa vê "URL inválida". Ver server/src/urlPublica.ts.
-        const link = linkPublico(`redefinir/${token}`, req);
+        const link = await linkPublicoAsync(`redefinir/${token}`, req);
         if (!urlAbsoluta(link)) avisarOrigemIndefinida('redefinição de senha');
         await enviarEmail({
           to: email,

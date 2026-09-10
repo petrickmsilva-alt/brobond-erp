@@ -15,7 +15,7 @@
 // ============================================================
 import { getStore } from './services';
 import { verifyPassword } from './password';
-import type { Resource } from './resources';
+import { R_CONFIGURACOES } from './configuracoes';
 
 export type PoliticaSenha = {
   /** Tamanho mínimo (6–64). Padrão 8. */
@@ -53,22 +53,9 @@ export const LIMITES_POLITICA = {
 
 const CHAVE = 'politica_senha';
 
-/** Recurso interno (fora de RESOURCES: sem CRUD genérico, só via endpoints próprios). */
-export const R_CONFIGURACOES: Resource = {
-  key: 'configuracoes',
-  table: 'configuracoes',
-  label: 'Configurações',
-  singular: 'Configuração',
-  labelFields: ['chave'],
-  internal: true,
-  ops: { create: false, update: false, delete: false },
-  fields: [
-    { name: 'chave', label: 'Chave', type: 'text' },
-    { name: 'valor', label: 'Valor', type: 'textarea' },
-    { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', readonly: true },
-    { name: 'atualizado_por', label: 'Atualizado por', type: 'text', readonly: true },
-  ],
-};
+// Recurso compartilhado com as demais configurações do sistema (endereço
+// público do ERP, etc.) — definido em configuracoes.ts.
+export { R_CONFIGURACOES } from './configuracoes';
 
 function normalizarPolitica(v: unknown): PoliticaSenha {
   const p = { ...POLITICA_SENHA_PADRAO, ...((v && typeof v === 'object' ? v : {}) as Partial<PoliticaSenha>) };

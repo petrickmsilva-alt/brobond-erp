@@ -19,7 +19,7 @@ import { currentUser, exigirReautenticacao, hashPassword, hashResetToken, gerarR
 import { getStore } from './services';
 import { RESOURCES } from './resources';
 import { blocoLinkEmail, corpoEmail, escaparHtml, enviarEmail } from './mail';
-import { avisarOrigemIndefinida, linkPublico, urlAbsoluta } from './urlPublica';
+import { avisarOrigemIndefinida, linkPublicoAsync, urlAbsoluta } from './urlPublica';
 import { revogarTodas, revogarUma } from './sessoes';
 import { lerRegistro, restantesRegistro } from './mfaBackup';
 import { exigirRateLimit, registrarFalha } from './security';
@@ -92,7 +92,7 @@ export async function gerarConvite(row: Record<string, any>, actor: { id: number
     { convite_token_hash: hashResetToken(token), convite_expira_em: expira, trocar_senha: true },
     tx
   );
-  const link = linkPublico(`convite/${token}`, req);
+  const link = await linkPublicoAsync(`convite/${token}`, req);
   if (!urlAbsoluta(link)) avisarOrigemIndefinida('convite de acesso');
   const email = String(row.email || '');
   const primeiroNome = escaparHtml(String(row.nome || '').trim().split(/\s+/)[0] || email);

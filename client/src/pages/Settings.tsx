@@ -1,7 +1,30 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Copy, Database, Download, Eye, EyeOff, FileSpreadsheet, KeyRound, Loader2, LogOut, Monitor, Moon, Server, Settings2, ShieldCheck, Smartphone, Sun, UserRound, Users } from 'lucide-react';
+import {
+  Copy,
+  Database,
+  Download,
+  Eye,
+  EyeOff,
+  FileSpreadsheet,
+  Globe,
+  KeyRound,
+  Loader2,
+  LogOut,
+  Monitor,
+  Moon,
+  Save,
+  Server,
+  Settings2,
+  ShieldCheck,
+  Smartphone,
+  Sun,
+  Trash2,
+  UserRound,
+  Users,
+} from 'lucide-react';
 import { api, ApiError, downloadFile } from '../lib/api';
+import type { Meta } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, Modal, PageHeader, useToast } from '../components/ui';
 import ReauthModal from '../components/ReauthModal';
@@ -171,21 +194,21 @@ export default function Settings() {
               <div className="mt-4">
                 <Alert tone="red">
                   <strong>Os links de e-mail não abrem para quem recebe (“URL inválida”).</strong> O endereço configurado
-                  existe só dentro do servidor (localhost, IP privado ou nome sem domínio), então ele é descartado. Defina{' '}
-                  <code>APP_URL</code> com o endereço público do ERP (na Render: Environment → <code>APP_URL</code>, ex.{' '}
-                  <code>https://erp.brobond.com.br</code>) e reenvie o convite.
+                  existe só dentro do servidor (localhost, IP privado ou nome sem domínio), então ele é descartado. Salve
+                  abaixo o endereço público do ERP (ex. <code>https://erp.brobond.com.br</code>) e reenvie o convite.
                 </Alert>
               </div>
             ) : meta?.emailLinks?.aviso ? (
               <div className="mt-4">
                 <Alert tone="amber">
                   <strong>Convites por e-mail podem abrir como “URL inválida”.</strong> O servidor não tem{' '}
-                  <code>APP_URL</code> configurada, então o endereço do link é deduzido de quem o gerou. Defina{' '}
-                  <code>APP_URL</code> com o endereço público do ERP (na Render: Environment → <code>APP_URL</code>, ex.{' '}
-                  <code>https://erp.brobond.com.br</code>) e reenvie o convite.
+                  <code>APP_URL</code> configurada, então o endereço do link é deduzido de quem o gerou. Salve abaixo o
+                  endereço público do ERP (ex. <code>https://erp.brobond.com.br</code>) e reenvie o convite — sem precisar
+                  mexer na Render.
                 </Alert>
               </div>
             ) : null}
+            <EnderecoPublicoCard onSaved={refreshMeta} />
             {meta?.uploadsConfigError && (
               <div className="mt-4">
                 <Alert tone="amber">
@@ -222,6 +245,178 @@ export default function Settings() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Endereço público do ERP (base dos links que saem por e-mail)
+//
+// Antes, corrigir um convite que abria como “URL inválida” exigia abrir o
+// painel da Render, definir APP_URL e fazer redeploy. Aqui o próprio
+// administrador resolve: o valor é gravado no banco e passa a valer para
+// convites, redefinição de senha, portal do cliente, catálogo e QR code.
+//
+// O endereço detectado nesta sessão aparece apenas como SUGESTÃO: o servidor
+// nunca o grava sozinho, porque Host/X-Forwarded-Host é controlado por quem
+// faz a requisição — confiar nele permitiria apontar links com token de acesso
+// para outro domínio.
+// ----------------------------------------------------------------------------
+type StatusEndereco = NonNullable<Meta['emailLinks']>;
+
+const FONTE_TEXTO: Record<string, string> = {
+  env: 'APP_URL (variável de ambiente)',
+  banco: 'salvo aqui em Configurações',
+  requisicao: 'endereço desta sessão (não fixo)',
+  dev: 'desenvolvimento (localhost)',
+};
+
+function fonteLabel(fonte?: string): string {
+  return FONTE_TEXTO[fonte ?? ''] ?? 'nenhuma origem definida';
+}
+
+function EnderecoPublicoCard({ onSaved }: { onSaved: () => void }) {
+  const { user, meta } = useAuth();
+  const toast = useToast();
+  const admin = user?.perfil === 'admin';
+  const [status, setStatus] = useState<StatusEndereco | null>(meta?.emailLinks ?? null);
+  const [pendentes, setPendentes] = useState(0);
+  const [valor, setValor] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [erro, setErro] = useState('');
+  const [reauth, setReauth] = useState<{ remover: boolean } | null>(null);
+
+  const carregar = useCallback(async () => {
+    if (!admin) return;
+    try {
+      const d = await api.get<{ status: StatusEndereco; convitesPendentes: number }>('/admin/config/endereco-publico');
+      setStatus(d.status);
+      setPendentes(Number(d.convitesPendentes) || 0);
+      // Não sobrescreve o que o admin já está digitando.
+      setValor((v) => v || d.status.doBanco || d.status.sugerida || '');
+    } catch {
+      setStatus(meta?.emailLinks ?? null);
+    }
+  }, [admin, meta?.emailLinks]);
+
+  useEffect(() => {
+    void carregar();
+  }, [carregar]);
+
+  async function executar(remover: boolean) {
+    setBusy(true);
+    setErro('');
+    try {
+      const d = remover
+        ? await api.del<{ status: StatusEndereco }>('/admin/config/endereco-publico')
+        : await api.put<{ status: StatusEndereco; convitesPendentes: number }>('/admin/config/endereco-publico', { valor });
+      setStatus(d.status);
+      if (!remover) setPendentes(Number((d as { convitesPendentes?: number }).convitesPendentes) || 0);
+      setValor(d.status.doBanco || '');
+      toast.success(
+        remover
+          ? 'Endereço salvo removido — valendo APP_URL/endereço da sessão.'
+          : `Endereço público definido: ${d.status.base}`
+      );
+      onSaved(); // /api/meta recarrega: o badge do Sistema reflete na hora
+    } catch (e: any) {
+      if (e instanceof ApiError && e.code === 'reauth_necessaria') {
+        setReauth({ remover }); // reautentica e repete a ação
+        return;
+      }
+      setErro(e instanceof ApiError ? e.message : 'Não foi possível salvar o endereço.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const base = status?.base || meta?.emailLinks?.base || '';
+  const sugerida = status?.sugerida || meta?.emailLinks?.sugerida || '';
+  const fonte = status?.fonte ?? meta?.emailLinks?.fonte;
+
+  if (!admin) {
+    return (
+      <p className="mt-4 text-xs text-slate-400">
+        Endereço usado nos links de e-mail: <span className="font-medium text-slate-600">{base || 'não definido'}</span>{' '}
+        ({fonteLabel(fonte)}). Só um administrador pode alterá-lo.
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-5 border-t border-slate-100 pt-4 dark:border-navy-700">
+      <h3 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">
+        <Globe className="h-3.5 w-3.5" /> Endereço público do ERP
+      </h3>
+      <p className="mt-1 text-xs text-slate-500">
+        É o endereço que entra nos links de convite, redefinição de senha, portal do cliente e QR code. Se ele apontar para
+        dentro do servidor (localhost, IP privado), quem recebe o e-mail vê “URL inválida”.
+      </p>
+      <div className="mt-3 space-y-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-slate-500">Valendo agora:</span>
+          {base ? (
+            <Badge tone={status?.publica === false ? 'red' : 'green'}>
+              {base} — {fonteLabel(fonte)}
+            </Badge>
+          ) : (
+            <Badge tone="red">nenhum endereço definido</Badge>
+          )}
+        </div>
+        <div>
+          <label className="label" htmlFor="endereco-publico">
+            Endereço público (ex.: https://erp.brobond.com.br)
+          </label>
+          <input
+            id="endereco-publico"
+            className="input w-full"
+            placeholder="https://erp.brobond.com.br"
+            value={valor}
+            onChange={(e) => setValor(e.target.value)}
+            disabled={busy}
+          />
+          {sugerida && sugerida !== valor && (
+            <button type="button" className="mt-1 text-xs text-navy-600 underline underline-offset-2 hover:text-navy-800" onClick={() => setValor(sugerida)}>
+              Usar o endereço desta sessão ({sugerida})
+            </button>
+          )}
+        </div>
+        {erro && <Alert tone="red">{erro}</Alert>}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex gap-2">
+            <button className="btn-primary" type="button" disabled={busy || !valor.trim()} onClick={() => void executar(false)}>
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+              <Save className="h-4 w-4" /> Salvar endereço
+            </button>
+            {status?.doBanco && (
+              <button className="btn-secondary" type="button" disabled={busy} onClick={() => void executar(true)}>
+                <Trash2 className="h-4 w-4" /> Remover salvo
+              </button>
+            )}
+          </div>
+          <span className="text-[11px] text-slate-400">Exige a sua senha (reautenticação) e fica na auditoria.</span>
+        </div>
+        {pendentes > 0 && (
+          <Alert tone="amber">
+            Endereço salvo vale para os <strong>próximos</strong> envios:{' '}
+            {pendentes === 1 ? 'há 1 convite pendente' : `há ${pendentes} convites pendentes`} que precisa(m) ser{' '}
+            <Link to="/usuarios" className="font-medium underline underline-offset-2">
+              reenviados
+            </Link>{' '}
+            (o link antigo já saiu com o endereço errado).
+          </Alert>
+        )}
+      </div>
+      <ReauthModal
+        open={!!reauth}
+        onClose={() => setReauth(null)}
+        titulo="Confirmar alteração do endereço público"
+        onConfirmed={() => {
+          const acao = reauth?.remover ?? false;
+          setReauth(null);
+          void executar(acao);
+        }}
+      />
     </div>
   );
 }

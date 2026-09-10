@@ -18,7 +18,7 @@ import { checkAccess, getStore } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
 import { attachImages } from './uploads';
-import { linkPublico } from './urlPublica';
+import { linkPublicoAsync } from './urlPublica';
 
 /**
  * Gera o conteúdo do QR code para um produto: URL pública (se houver catálogo
@@ -62,7 +62,7 @@ async function gerarConteudoQR(produtoId: number, req?: Request): Promise<{ url:
 
   // URL que o QR code aponta: dados JSON codificados em base64 na URL
   // (ou a URL do catálogo se disponível)
-  const url = linkPublico(urlPublica || `api/produtos/${produtoId}/qrcode/dados`, req);
+  const url = await linkPublicoAsync(urlPublica || `api/produtos/${produtoId}/qrcode/dados`, req);
 
   return { url, dados };
 }

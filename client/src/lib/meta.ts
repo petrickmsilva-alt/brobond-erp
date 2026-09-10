@@ -92,10 +92,26 @@ export type Meta = {
    * redefinição de senha). `configurada=false` significa que a base vem do
    * cabeçalho da requisição — funciona, mas quebra se o ERP mudar de endereço.
    * `publica=false` (ou `appUrlIgnorada=true`) é o caso que chega ao
-   * destinatário como "URL inválida": a APP_URL configurada aponta para um
-   * endereço interno (localhost/IP privado) e por isso é descartada.
+   * destinatório como "URL inválida": a origem aponta para um endereço interno
+   * (localhost/IP privado) e por isso é descartada.
+   *
+   * `fonte` diz de onde saiu a base: 'env' (APP_URL), 'banco' (endereço salvo
+   * pelo admin em Configurações › Sistema), 'requisicao' (endereço da sessão)
+   * ou 'dev'. `sugerida` é o endereço detectado nesta sessão — só sugestão, o
+   * servidor nunca o grava sozinho (Host é controlado por quem requisita).
    */
-  emailLinks?: { configurada: boolean; base: string; publica: boolean; appUrlIgnorada: boolean; aviso?: string };
+  emailLinks?: {
+    configurada: boolean;
+    base: string;
+    publica: boolean;
+    appUrlIgnorada: boolean;
+    fonte?: 'env' | 'banco' | 'requisicao' | 'dev' | '';
+    doBanco?: string;
+    doAmbiente?: string;
+    sugerida?: string;
+    permitirInterna?: boolean;
+    aviso?: string;
+  };
   /** Informações do fluxo de autenticação (hash, MFA, reautenticação) */
   auth?: { hash: string; mfa_admin_obrigatorio: boolean; reauth_ttl_segundos: number };
   /** Local padrão (origem das movimentações) — o front o usa para pré-selecionar os formulários. */
