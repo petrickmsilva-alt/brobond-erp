@@ -6,6 +6,7 @@ import { pool, query, withTransaction } from './db';
 import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './resources';
 import { hashCadeiaAuditoria, verificarCadeiaAuditoria } from './auditChain';
+import { valorizarEstoque } from './valorizacao';
 import {
   labelOf,
   type AuditEntry,
@@ -398,7 +399,7 @@ export class PgStore implements Store {
   }
 
   async dashboard(): Promise<DashboardData> {
-    const [kpis, alertas, ordens, recentes, chart6, chart7, chart8, chart9] = await Promise.all([
+    const [kpis, alertas, ordens, recentes, chart6, chart7, chart8, chart9, saldos] = await Promise.all([
       query(`
         SELECT
           COALESCE((SELECT SUM(e.quantidade * COALESCE(p.custo, 0)) FROM estoques e JOIN produtos p ON p.id = e.produto_id), 0)::float AS valor_estoque,
@@ -477,11 +478,36 @@ export class PgStore implements Store {
         ORDER BY (ei.quantidade - ei.estoque_min) ASC
         LIMIT 8
       `),
+      // Valorização em três bases (custo × atacado × varejo) — saldo por produto,
+      // somando todos os tamanhos e locais; o cálculo fica em valorizacao.ts.
+      query(`
+        SELECT p.id, concat_ws(' — ', p.sku, p.nome) AS produto, c.nome AS colecao,
+               SUM(e.quantidade)::int AS pecas,
+               COALESCE(p.custo, 0)::float AS custo,
+               COALESCE(p.preco_venda, 0)::float AS preco_venda,
+               COALESCE(p.preco_atacado, 0)::float AS preco_atacado
+        FROM estoques e
+        JOIN produtos p ON p.id = e.produto_id
+        LEFT JOIN colecoes c ON c.id = p.colecao_id
+        GROUP BY p.id, p.sku, p.nome, c.nome, p.custo, p.preco_venda, p.preco_atacado
+        HAVING SUM(e.quantidade) > 0
+      `),
     ]);
     const k = kpis.rows[0] || {};
     return {
       valorEstoque: Number(k.valor_estoque || 0),
       pecasEstoque: Number(k.pecas_estoque || 0),
+      valorizacao: valorizarEstoque(
+        saldos.rows.map((r) => ({
+          id: Number(r.id),
+          produto: String(r.produto),
+          colecao: r.colecao ? String(r.colecao) : null,
+          pecas: Number(r.pecas || 0),
+          custo: r.custo,
+          preco_venda: r.preco_venda,
+          preco_atacado: r.preco_atacado,
+        }))
+      ),
       itensAlerta: Number(k.itens_alerta || 0),
       producao: Number(k.producao || 0),
       vendasAbertas: Number(k.vendas_abertas || 0),

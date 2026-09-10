@@ -5,6 +5,7 @@
 import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, RESOURCES, columnsOf, getResource, type Resource } from './resources';
 import { hashCadeiaAuditoria, verificarCadeiaAuditoria } from './auditChain';
+import { valorizarEstoque } from './valorizacao';
 import {
   labelOf,
   type AuditEntry,
@@ -433,9 +434,33 @@ export class MemStore implements Store {
         return { insumo: ins ? labelOf(RESOURCES.insumos, ins) : `#${ei.insumo_id}`, quantidade: Number(ei.quantidade || 0), estoque_min: Number(ei.estoque_min || 0) };
       });
 
+    // Valorização em três bases (custo × atacado × varejo): saldo por produto
+    // somando todos os tamanhos e locais; o cálculo fica em valorizacao.ts.
+    const colecoes = new Map(rows('colecoes').map((c) => [Number(c.id), String(c.nome || '')]));
+    const saldoPorProduto = new Map<number, number>();
+    for (const e of estoques) {
+      const pid = Number(e.produto_id);
+      saldoPorProduto.set(pid, (saldoPorProduto.get(pid) || 0) + Number(e.quantidade || 0));
+    }
+    const valorizacao = valorizarEstoque(
+      [...saldoPorProduto.entries()].map(([pid, pecas]) => {
+        const p = produtos.get(pid);
+        return {
+          id: pid,
+          produto: prodLabel(pid),
+          colecao: p?.colecao_id ? colecoes.get(Number(p.colecao_id)) ?? null : null,
+          pecas,
+          custo: p?.custo,
+          preco_venda: p?.preco_venda,
+          preco_atacado: p?.preco_atacado,
+        };
+      })
+    );
+
     return {
       valorEstoque: estoques.reduce((s, e) => s + Number(e.quantidade || 0) * Number(produtos.get(e.produto_id)?.custo || 0), 0),
       pecasEstoque: estoques.reduce((s, e) => s + Number(e.quantidade || 0), 0),
+      valorizacao,
       itensAlerta: estoques.filter((e) => Number(e.estoque_min) > 0 && Number(e.quantidade) <= Number(e.estoque_min)).length,
       producao: rows('ordens_fabricacao').filter((o) => ['planejada', 'em_producao'].includes(o.status)).length,
       vendasAbertas: vendasRows.filter((v) => v.status === 'aberta').length,

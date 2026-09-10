@@ -127,7 +127,7 @@ DNS apontando para a Render.
 
 | Grupo | Módulo | Incluir | Salvar | Excluir | Observações |
 |---|---|:-:|:-:|:-:|---|
-| — | Dashboard | | | | KPIs reais: valor do estoque, alertas de mínimo, OPs abertas, vendas/compras, atividade recente |
+| — | Dashboard | | | | KPIs reais: **estoque valorizado em três bases** — custo de produção, atacado e varejo — por unidade, por coleção e todas as peças; alertas de mínimo, OPs abertas, vendas/compras |
 | Cadastros | **Produtos** | ✔ | ✔ | ✔ | **Até 5 fotos** (principal, ordem, zoom), categoria, cor padronizada **ou** texto livre, código de barras EAN único, composição, NCM, peso, descrição. **Página de detalhe** com grade de estoque, movimentações, OPs, custo/margem e **impressão de etiquetas** com código de barras |
 | Cadastros | **Categorias**, **Cores** (com amostra colorida) | ✔ | ✔ | ✔ | Nome único (ignora maiúsculas). Cores antigas em texto são migradas automaticamente |
 | Cadastros | Insumos, Fornecedores, Representantes, Clientes, Tamanhos/Grade, Coleções | ✔ | ✔ | ✔ | Busca, ordenação, paginação, validação por campo |
@@ -189,7 +189,7 @@ GET    /api/admin/auditoria/verificar  confere a cadeia de hashes da auditoria
 GET    /api/auth/me
 POST   /api/auth/change-password       { senha_atual, senha_nova } — derruba as outras sessões
 GET    /api/meta                       definição dos módulos (campos, tipos, opções)
-GET    /api/dashboard
+GET    /api/dashboard                  KPIs + `valorizacao` (custo × atacado × varejo; por produto, coleção e total)
 GET    /api/financeiro/resumo          fluxo de caixa, resultado do mês, a receber/pagar, por categoria
 GET    /api/publico/catalogo/:token    catálogo público (somente leitura)
 POST   /api/publico/catalogo/:token/pedido   cria COTAÇÃO de venda (site varejo/atacado)

@@ -72,9 +72,44 @@ export type RateState = { count: number; primeira_em: string; bloqueado_ate: str
 /** Resultado da verificação da cadeia de hashes da auditoria. */
 export type AuditoriaVerificacao = { ok: boolean; total: number; verificadas: number; quebras: number[] };
 
+/** Limite de produtos detalhados na valorização do Dashboard (o restante fica no relatório). */
+export const VALORIZACAO_MAX_PRODUTOS = 200;
+
+/**
+ * Valorização do estoque em três bases — custo de produção (produtos.custo),
+ * atacado (preco_atacado; sem atacado cadastrado vale o varejo, como no
+ * catálogo/portal) e varejo (preco_venda) — nos três níveis: unidade (por
+ * produto), coleção e todas as peças em estoque.
+ */
+export type ValorizacaoEstoque = {
+  pecas: number;
+  custo: number;
+  atacado: number;
+  varejo: number;
+  /** Produtos com saldo > 0 (para avisar quando a lista abaixo foi cortada). */
+  produtosComSaldo: number;
+  /** Produtos com saldo e sem preço de atacado (valorizados pelo varejo). */
+  semPrecoAtacado: number;
+  colecoes: { colecao: string; pecas: number; custo: number; atacado: number; varejo: number }[];
+  produtos: {
+    id: number;
+    produto: string;
+    colecao: string | null;
+    pecas: number;
+    custo_unit: number;
+    atacado_unit: number;
+    varejo_unit: number;
+    atacado_definido: boolean;
+    custo: number;
+    atacado: number;
+    varejo: number;
+  }[];
+};
+
 export type DashboardData = {
   valorEstoque: number;
   pecasEstoque: number;
+  valorizacao: ValorizacaoEstoque;
   itensAlerta: number;
   producao: number;
   vendasAbertas: number;
