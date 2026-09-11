@@ -70,7 +70,7 @@ import {
   updateItemOrdem,
 } from './producao';
 import { adminBackup, adminBackupXlsx, backupInfo } from './backup';
-import { catalogoPublico, compartilharCatalogo, criarPedidoCatalogo, eventoCatalogo, inteligenciaCatalogos, rateLimitPublico, revogarCompartilhamento } from './catalogos';
+import { catalogoEmbed, catalogoPublico, compartilharCatalogo, criarPedidoCatalogo, eventoCatalogo, inteligenciaCatalogos, rateLimitPublico, revogarCompartilhamento } from './catalogos';
 import { conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
 import { vendaPDF, compraPDF } from './pdf';
 import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
@@ -85,6 +85,7 @@ import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat
 import { nfeDados, nfeEmitir, nfeStatus } from './nfe';
 import { calcularFrete, consultarCEP } from './frete';
 import { marketplaceStatus, sincronizarPedidos } from './marketplace';
+import { importarPedidosLoja, produtosLoja, sincronizarEstoqueLoja, statusLoja } from './loja';
 import { initWebSocket, wsStatus } from './websocket';
 import { createServer } from 'node:http';
 
@@ -101,6 +102,18 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1); // Render/proxies: IP real em X-Forwarded-For
 app.use(securityHeaders);
+// Endpoints públicos também são consumidos por FORA do ERP: o site de varejo
+// (brobond.com.br) busca o catálogo por JavaScript e o incorpora em iframe.
+// Liberamos a leitura por CORS (sem credenciais, sem cookie) — os dados do
+// catálogo já são públicos pelo próprio token do link.
+app.use('/api/publico', (req: Request, res: Response, next: NextFunction) => {
+  res.removeHeader('Access-Control-Allow-Credentials'); // ACAO "*" não combina com credenciais
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
+});
 app.use(
   cors({
     origin: corsOrigin(),
@@ -109,6 +122,13 @@ app.use(
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
+// O cors() global roda depois do middleware público e recoloca
+// Access-Control-Allow-Credentials: ele não combina com Allow-Origin "*"
+// (navegador ignora). Endpoints públicos são anônimos — sem cookie, sem sessão.
+app.use('/api/publico', (_req: Request, res: Response, next: NextFunction) => {
+  res.removeHeader('Access-Control-Allow-Credentials');
+  next();
+});
 app.use(express.json({ limit: '4mb' })); // fotos chegam em base64 (já reduzidas no navegador)
 app.use(express.urlencoded({ extended: true }));
 
@@ -156,6 +176,8 @@ app.post('/api/convites/aceitar', loginRateLimit, wrap(aceitarConvite));
 app.get('/api/auth/politica-senha', wrap(politicaSenhaPublica));
 // Catálogo público (somente leitura; rate limit próprio)
 app.get('/api/publico/catalogo/:token', rateLimitPublico, wrap(catalogoPublico));
+// Versão incorporável (iframe) do catálogo — usada no site de varejo.
+app.get('/api/publico/catalogo/:token/embed', rateLimitPublico, wrap(catalogoEmbed));
 // Pedido pelo catálogo — cria uma cotação de venda no ERP (sem login, rate limit)
 app.post('/api/publico/catalogo/:token/pedido', rateLimitPublico, wrap(criarPedidoCatalogo));
 app.post('/api/publico/catalogo/:token/evento', rateLimitPublico, wrap(eventoCatalogo));
@@ -352,6 +374,11 @@ app.post('/api/frete/calcular', wrap(calcularFrete));
 // Marketplace
 app.get('/api/marketplace/status', wrap(marketplaceStatus));
 app.post('/api/marketplace/sincronizar', wrap(sincronizarPedidos));
+// Loja virtual própria (WordPress + WooCommerce) — brobond.com.br
+app.get('/api/marketplace/loja/status', wrap(statusLoja));
+app.get('/api/marketplace/loja/produtos', wrap(produtosLoja));
+app.post('/api/marketplace/loja/pedidos', wrap(importarPedidosLoja));
+app.post('/api/marketplace/loja/estoque', wrap(sincronizarEstoqueLoja));
 
 // WebSocket status
 app.get('/api/admin/ws/status', (_req, res) => res.json(wsStatus()));

@@ -24,6 +24,7 @@ import { montarTabelaMedidas, tsIso } from './medidas';
 import type { TabelaMedidas } from './medidas';
 import { criarAcessoPortal } from './portal';
 import { urlBasePublicaAsync } from './urlPublica';
+import { urlLoja } from './loja';
 import { precoComPolitica, resolverPoliticaComercial } from './politicasComerciais';
 
 const require = createRequire(import.meta.url);
@@ -554,4 +555,206 @@ export async function revogarCompartilhamento(req: Request, res: Response) {
   if (!atual.revogado_em) await s.update(RESOURCES.catalogo_compartilhamentos, id, { revogado_em: new Date().toISOString() });
   await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'catalogos', registro_id: Number(atual.catalogo_id), descricao: `Link individual #${id} revogado`, dados: { compartilhamento_id: id } });
   res.json({ ok: true });
+}
+
+// ----------------------------------------------------------------------------
+// CATÁLOGO INCORPORÁVEL (iframe) — usado pelo site de varejo/atacado
+//
+// O ERP já expõe o catálogo por token (JSON). Este endpoint devolve a MESMA
+// vitrine em HTML pronta para ser embutida em outra página:
+//
+//   <iframe src="https://<erp>/api/publico/catalogo/<token>/embed"
+//           style="width:100%;height:900px;border:0"></iframe>
+//
+// Detalhes que importam:
+//   • os cabeçalhos globais bloqueiam iframe (CSP frame-ancestors 'self' e
+//     X-Frame-Options SAMEORIGIN). Aqui eles são substituídos por uma lista
+//     explícita (CATALOGO_EMBED_ORIGENS, padrão: o endereço da loja), então só
+//     os sites autorizados conseguem incorporar — nunca "qualquer um";
+//   • a página é estática (sem script, sem fonte externa): obedece à CSP e
+//     carrega até em conexão fraca;
+//   • o botão "Comprar" leva para a busca do produto na loja pelo SKU — assim
+//     a vitrine do ERP alimenta o carrinho do WooCommerce sem duplicar cadastro.
+// ----------------------------------------------------------------------------
+function escHtml(valor: unknown): string {
+  return String(valor ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function brl(valor: number | null | undefined): string {
+  if (valor === null || valor === undefined || !Number.isFinite(Number(valor))) return '';
+  return Number(valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+/** Origens autorizadas a incorporar o catálogo (lista explícita, nunca "*"). */
+export function origensEmbed(): string[] {
+  const bruto = String(process.env.CATALOGO_EMBED_ORIGENS || process.env.WOOCOMMERCE_URL || '');
+  return bruto
+    .split(',')
+    .map((o) => {
+      try {
+        return new URL(o.trim()).origin;
+      } catch {
+        return '';
+      }
+    })
+    .filter(Boolean);
+}
+
+export async function catalogoEmbed(req: Request, res: Response) {
+  const token = String(req.params.token || '').trim();
+  if (!token || !/^[a-f0-9]{12,}$/i.test(token)) throw new HttpError(404, 'Catálogo não encontrado.');
+  const s = getStore();
+  const resolvido = await resolverTokenCatalogo(token);
+  const catalogo = resolvido.catalogo;
+  if (!catalogo || catalogo.ativo === false) throw new HttpError(404, 'Catálogo não encontrado.');
+  if (catalogo.expira_em && new Date(String(catalogo.expira_em)).getTime() < Date.now()) {
+    throw new HttpError(404, 'Este catálogo expirou. Fale com quem o enviou.');
+  }
+
+  // Substitui os cabeçalhos globais: permite o iframe só nas origens da lista.
+  const permitidas = origensEmbed();
+  if (permitidas.length) {
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        "img-src 'self' data: https:",
+        "style-src 'unsafe-inline'",
+        "object-src 'none'",
+        `frame-ancestors 'self' ${permitidas.join(' ')}`,
+      ].join('; ')
+    );
+    res.removeHeader('X-Frame-Options'); // allowlist só existe no CSP; este cabeçalho é tudo-ou-nada
+  }
+
+  const senhaInformada = typeof req.query.senha === 'string' ? req.query.senha : undefined;
+  const senhaOk = !catalogo.senha_hash || ehMesmaSenha(senhaInformada, catalogo.senha_hash);
+  if (!senhaOk) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res
+      .status(200)
+      .send(
+        `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escHtml(catalogo.nome)} — catálogo protegido</title>
+<body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8fafc;color:#0f172a">
+<form method="get" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;box-shadow:0 1px 3px rgba(15,23,42,.08);width:min(360px,90vw)">
+<h1 style="font-size:16px;margin:0 0 4px">${escHtml(catalogo.nome)}</h1>
+<p style="margin:0 0 16px;font-size:13px;color:#64748b">Este catálogo é protegido por senha.</p>
+<input type="password" name="senha" placeholder="Senha do catálogo" autofocus required style="width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">
+<button type="submit" style="margin-top:12px;width:100%;padding:10px 12px;border:0;border-radius:8px;background:#0f2c52;color:#fff;font-weight:600;font-size:14px;cursor:pointer">Abrir catálogo</button>
+</form></body></html>`
+      );
+    return;
+  }
+
+  // Mesmo critério do endpoint JSON: conta o acesso do compartilhamento.
+  if (resolvido.compartilhamento) {
+    const c = resolvido.compartilhamento;
+    const agora = new Date().toISOString();
+    await s.update(RESOURCES.catalogo_compartilhamentos, Number(c.id), {
+      primeiro_acesso_em: c.primeiro_acesso_em || agora,
+      ultimo_acesso_em: agora,
+      acessos: Number(c.acessos || 0) + 1,
+    });
+    await s.insert(RESOURCES.catalogo_eventos, {
+      compartilhamento_id: Number(c.id),
+      catalogo_id: Number(catalogo.id),
+      tipo: 'abertura',
+      dados: { embed: true },
+    });
+  }
+
+  const filtros = filtrosDoCatalogo(catalogo);
+  const filter: Record<string, unknown> = {};
+  if (filtros.colecao_id) filter.colecao_id = filtros.colecao_id;
+  if (filtros.categoria_id) filter.categoria_id = filtros.categoria_id;
+  const [produtos, estoques, tamanhos] = await Promise.all([
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 500, filter, sort: 'nome', dir: 'asc' }),
+    s.list(RESOURCES.estoques, { page: 1, pageSize: 6000 }),
+    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200, sort: 'ordem', dir: 'asc' }),
+  ]);
+  await attachImages(RESOURCES.produtos, produtos.rows);
+  const tamCodigo = new Map(tamanhos.rows.map((t) => [Number(t.id), String(t.codigo || '')]));
+
+  const canal = String(catalogo.canal || 'todos');
+  const canalEfetivo: 'atacado' | 'varejo' = canal === 'atacado' ? 'atacado' : 'varejo';
+  const politica = await resolverPoliticaComercial({ catalogo, clienteId: Number(resolvido.compartilhamento?.cliente_id) || null, canal: canalEfetivo });
+  const mostrarPreco = catalogo.mostrar_preco !== false;
+  const mostrarSaldo = catalogo.mostrar_saldo === true;
+
+  const loja = urlLoja();
+  const base = await urlBasePublicaAsync(req);
+  const linkCatalogo = `${base}/catalogo/${encodeURIComponent(token)}`;
+
+  const cards = produtos.rows
+    .filter((p) => p.exibir_site !== false && p.ativo !== false)
+    .map((p) => {
+      const doProduto = estoques.rows.filter((e) => Number(e.produto_id) === Number(p.id));
+      const tamanhosLinha = [...new Set(doProduto.map((e) => Number(e.tamanho_id)))]
+        .map((tid) => ({
+          codigo: tamCodigo.get(tid) || '',
+          saldo: doProduto.filter((e) => Number(e.tamanho_id) === tid).reduce((a, e) => a + Number(e.quantidade || 0), 0),
+        }))
+        .filter((t) => t.saldo > 0);
+      const varejo = Number(p.preco_venda || 0);
+      const atacado = Number(p.preco_atacado || p.preco_venda || 0);
+      const preco = precoComPolitica(canalEfetivo === 'atacado' ? atacado : varejo, politica);
+      const sku = String(p.sku || '').trim();
+      const foto = String(p.foto_url || (Array.isArray(p.fotos) ? p.fotos[0]?.url : '') || '');
+      const urlCompra = loja
+        ? `${loja}/?post_type=product&s=${encodeURIComponent(sku || String(p.nome || ''))}`
+        : linkCatalogo;
+      return `<article style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;display:flex;flex-direction:column">
+  <div style="aspect-ratio:3/4;background:#f1f5f9;display:flex;align-items:center;justify-content:center;overflow:hidden">
+    ${foto ? `<img src="${escHtml(foto)}" alt="${escHtml(p.nome)}" loading="lazy" style="width:100%;height:100%;object-fit:cover">` : '<span style="color:#94a3b8;font-size:12px">sem foto</span>'}
+  </div>
+  <div style="padding:12px;display:flex;flex-direction:column;gap:6px;flex:1">
+    <strong style="font-size:14px;line-height:1.3">${escHtml(p.nome)}</strong>
+    <span style="font-size:11px;color:#64748b;font-family:ui-monospace,Menlo,monospace">${escHtml(sku)}</span>
+    ${mostrarPreco && preco ? `<span style="font-size:16px;font-weight:700;color:#0f2c52">${escHtml(brl(preco))}</span>` : ''}
+    ${tamanhosLinha.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px">${tamanhosLinha
+      .map(
+        (t) =>
+          `<span style="font-size:11px;border:1px solid #cbd5e1;border-radius:6px;padding:2px 6px;color:#334155">${escHtml(t.codigo)}${mostrarSaldo ? ` · ${t.saldo}` : ''}</span>`
+      )
+      .join('')}</div>` : '<span style="font-size:11px;color:#94a3b8">sem saldo</span>'}
+    <a href="${escHtml(urlCompra)}" target="_blank" rel="noopener" style="margin-top:auto;text-align:center;text-decoration:none;background:#0f2c52;color:#fff;border-radius:8px;padding:9px 12px;font-size:13px;font-weight:600">${loja ? 'Comprar' : 'Ver no catálogo'}</a>
+  </div>
+</article>`;
+    })
+    .join('');
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(`<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escHtml(catalogo.nome)} — catálogo</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;color:#0f172a}
+  header{padding:16px 20px;border-bottom:1px solid #e2e8f0;background:#fff;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;justify-content:space-between}
+  header h1{font-size:17px;margin:0}
+  header p{margin:0;font-size:12px;color:#64748b}
+  main{padding:16px 20px;display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
+  footer{padding:12px 20px 24px;font-size:12px;color:#64748b;text-align:center}
+  footer a{color:#0f2c52;font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <h1>${escHtml(catalogo.nome)}</h1>
+  <p>${canalEfetivo === 'atacado' ? 'Tabela de atacado' : 'Tabela de varejo'} · ${produtos.rows.length} produto(s)</p>
+</header>
+<main>${cards || '<p style="color:#64748b">Nenhum produto disponível neste catálogo.</p>'}</main>
+<footer><a href="${escHtml(linkCatalogo)}" target="_blank" rel="noopener">Abrir o catálogo completo</a></footer>
+</body>
+</html>`);
 }

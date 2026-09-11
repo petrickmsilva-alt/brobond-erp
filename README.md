@@ -129,6 +129,22 @@ No primeiro login o administrador troca a senha e cadastra o **MFA obrigatório*
 O domínio (`brobond.com.br`) e o e-mail corporativo ficam no HostGator, com o
 DNS apontando para a Render.
 
+### Loja virtual (varejo/atacado)
+
+O ERP conversa com a loja (WordPress + WooCommerce) pela REST API:
+
+- `POST /api/marketplace/loja/pedidos` — importa os pedidos do site como
+  **Vendas** (`status=cotacao`), sem duplicar (o nº do pedido fica em
+  `pedido_cliente` como `WOO-<id>`);
+- `POST /api/marketplace/loja/estoque` — empurra o saldo do ERP para a loja;
+- `GET /api/marketplace/loja/produtos` — relatório SKU do ERP × loja;
+- o **catálogo público** do ERP pode ser incorporado no site por `<iframe>`
+  (`/api/publico/catalogo/<token>/embed`), com o botão “Comprar” levando para a
+  loja.
+
+Configuração, regras de casamento de SKU e o passo a passo da correção do botão
+“Adicionar ao carrinho” da home: **`docs/INTEGRACAO-LOJA.md`**.
+
 ## Módulos
 
 | Grupo | Módulo | Incluir | Salvar | Excluir | Observações |

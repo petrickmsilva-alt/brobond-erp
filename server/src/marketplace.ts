@@ -1,11 +1,15 @@
 // Marketplace — integracao com Shopee e Mercado Livre.
 // POST /api/marketplace/sincronizar   — importa pedidos do marketplace
 // GET  /api/marketplace/status        — status da integracao
+//
+// A loja propria (WordPress + WooCommerce) tem modulo dedicado em loja.ts:
+// importa pedidos da loja e empurra o saldo do ERP para ela.
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getStore } from './services';
 import { getResource } from './resources';
 import { currentUser } from './auth';
+import { configLoja } from './loja';
 import type { Row } from './store';
 
 type MarketplaceConfig = { provider: string; token: string; ativo: boolean };
@@ -19,9 +23,13 @@ function getConfig(): { shopee: MarketplaceConfig | null; mercadolivre: Marketpl
 
 export function marketplaceStatus(_req: Request, res: Response) {
   const cfg = getConfig();
+  const loja = configLoja();
   res.json({
     shopee: cfg.shopee ? { configurado: true, ativo: cfg.shopee.ativo } : { configurado: false },
     mercadolivre: cfg.mercadolivre ? { configurado: true, ativo: cfg.mercadolivre.ativo } : { configurado: false },
+    // Loja própria (brobond.com.br): pedidos + estoque são sincronizados pelos
+    // endpoints /api/marketplace/loja/* — ver loja.ts.
+    loja: loja ? { configurado: true, ativo: true, url: loja.url } : { configurado: false },
   });
 }
 
