@@ -213,7 +213,12 @@ export class PgStore implements Store {
   }
 
   async findOneWhere(r: Resource, where: Payload, tx?: Tx): Promise<Row | null> {
-    const keys = Object.keys(where).filter((k) => columnsOf(r).some((f) => f.name === k) || k === 'id');
+    // Colunas de autenticação (convite_token_hash, reset_token_hash etc.) são
+    // graváveis via API interna e precisam ser consultáveis por ela — o fluxo de
+    // convite/redefinição depende exatamente disso. Sem elas o filtro ficava vazio
+    // e o método retornava null, invalidando TODO convite/link em produção.
+    const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
+    const keys = Object.keys(where).filter((k) => allowed.has(k) || k === 'id');
     if (!keys.length) return null;
     const cond = keys.map((k, i) => `${k} = $${i + 1}`).join(' AND ');
     const res = await q(`SELECT * FROM ${r.table} WHERE ${cond} LIMIT 1`, keys.map((k) => where[k]), tx);
@@ -221,7 +226,8 @@ export class PgStore implements Store {
   }
 
   async countWhere(r: Resource, where: Payload, tx?: Tx): Promise<number> {
-    const keys = Object.keys(where).filter((k) => columnsOf(r).some((f) => f.name === k) || k === 'id');
+    const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
+    const keys = Object.keys(where).filter((k) => allowed.has(k) || k === 'id');
     const cond = keys.length ? `WHERE ${keys.map((k, i) => `${k} = $${i + 1}`).join(' AND ')}` : '';
     const res = await q(`SELECT COUNT(*)::int AS n FROM ${r.table} ${cond}`, keys.map((k) => where[k]), tx);
     return res.rows[0]?.n ?? 0;
