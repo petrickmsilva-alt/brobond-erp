@@ -109,19 +109,41 @@ No primeiro login o administrador troca a senha e cadastra o **MFA obrigatório*
    e um banco Postgres gratuito, já ligado via `DATABASE_URL`.
 3. Defina `DATABASE_URL` (Neon), `ADMIN_PASSWORD` e, se quiser fotos em CDN,
    `UPLOAD_PROVIDER=cloudinary` + `CLOUDINARY_URL` nas variáveis de ambiente.
-4. **Com SMTP configurado, defina também `APP_URL`** com o endereço público do
-   ERP (ex. `https://erp.brobond.com.br`). É a base dos links de convite de acesso
-   e de redefinição de senha: sem ela o e-mail sai com um link relativo
-   (`/convite/abc…`) e o destinatário vê “URL inválida”. O servidor ainda deduz a
-   origem da requisição como rede de segurança, e o estado aparece em
-   Configurações › Sistema. **Em produção o endereço precisa ser público**:
-   `localhost`, IP privado (`10.x`, `192.168.x`), nome sem domínio ou `.local`
-   são descartados (o link assim só existe dentro do servidor) — o servidor avisa
-   no boot e mostra “APP_URL ignorada” em Configurações › Sistema.
+4. **Com SMTP configurado, defina o endereço público do ERP** (ex.
+   `https://erp.brobond.com.br`). Ele é a base dos links de convite de acesso e
+   de redefinição de senha: sem ele o e-mail sai com um link relativo
+   (`/convite/abc…`) e o destinatário vê “URL inválida”. Duas formas, na ordem
+   de precedência:
+   - variável `APP_URL` na Render (Environment); ou
+   - **Configurações › Sistema › Endereço público do ERP**, salvo pela
+     própria interface (vai para a tabela `configuracoes`) — resolve na hora,
+     sem redeploy nem acesso ao painel.
+
+   O servidor ainda deduz a origem da requisição como rede de segurança. **Em
+   produção o endereço precisa ser público**: `localhost`, IP privado (`10.x`,
+   `192.168.x`), nome sem domínio ou `.local` são descartados (o link assim só
+   existe dentro do servidor) — o servidor avisa no boot e mostra “APP_URL
+   ignorada” em Configurações › Sistema.
 5. A cada `git push` na `main`, o Render faz o redeploy.
 
 O domínio (`brobond.com.br`) e o e-mail corporativo ficam no HostGator, com o
 DNS apontando para a Render.
+
+### Loja virtual (varejo/atacado)
+
+O ERP conversa com a loja (WordPress + WooCommerce) pela REST API:
+
+- `POST /api/marketplace/loja/pedidos` — importa os pedidos do site como
+  **Vendas** (`status=cotacao`), sem duplicar (o nº do pedido fica em
+  `pedido_cliente` como `WOO-<id>`);
+- `POST /api/marketplace/loja/estoque` — empurra o saldo do ERP para a loja;
+- `GET /api/marketplace/loja/produtos` — relatório SKU do ERP × loja;
+- o **catálogo público** do ERP pode ser incorporado no site por `<iframe>`
+  (`/api/publico/catalogo/<token>/embed`), com o botão “Comprar” levando para a
+  loja.
+
+Configuração, regras de casamento de SKU e o passo a passo da correção do botão
+“Adicionar ao carrinho” da home: **`docs/INTEGRACAO-LOJA.md`**.
 
 ## Módulos
 

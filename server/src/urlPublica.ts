@@ -12,19 +12,26 @@
 //   1. APP_URL               — origem canônica configurada (produção: defina!)
 //                              aceita com ou sem esquema ("brobond.com.br"
 //                              vira "https://brobond.com.br") e sem a barra final.
-//   2. origem da requisição   — X-Forwarded-Proto/Host (Render/proxy) ou Host.
+//   2. endereço salvo no banco — o administrador grava em Configurações ›
+//                              Sistema (tabela `configuracoes`, chave
+//                              `app_url`). Resolve na hora: sem variável de
+//                              ambiente e sem redeploy na Render.
+//   3. origem da requisição   — X-Forwarded-Proto/Host (Render/proxy) ou Host.
 //                              É exatamente o endereço por onde o admin está
 //                              navegando, então o link do convite sai correto
 //                              mesmo com APP_URL ausente.
-//   3. desenvolvimento         — http://localhost:5173 (Vite) quando não há
+//   4. desenvolvimento         — http://localhost:5173 (Vite) quando não há
 //                              requisição (cron, script) e o front não é servido
 //                              pela API.
 //
 // Nenhum valor de cabeçalho é confiado às cegas: o host precisa ser um
 // hostname normal (ou IPv6 entre colchetes) com porta opcional — Host
 // adulterado, com caminho ou com CRLF é descartado e cai para o fallback.
+// O endereço do banco NUNCA é deduzido sozinho: ele só entra quando alguém
+// (admin, com reautenticação) salvou — ver configSistema.ts.
 // ============================================================
 import type { Request } from 'express';
+import { CHAVE_APP_URL, lerConfig } from './configuracoes';
 
 /** Porta do front no `npm run dev` (Vite) — ver client/vite.config.ts. */
 const DEV_FRONT_PORT = Number(process.env.DEV_FRONT_PORT) || 5173;
@@ -170,6 +177,85 @@ function avisarOrigemInterna(fonte: string, origem: string): void {
   );
 }
 
+// ----------------------------------------------------------------------------
+// Endereço público gravado pelo administrador (tabela `configuracoes`).
+//
+// Por que existe: o aviso "defina APP_URL na Render" exigia acesso ao painel e
+// um redeploy — e, até lá, cada convite saía com o endereço deduzido da sessão
+// de quem gerou (atrás de proxy isso pode sair errado e virar "URL inválida").
+// Gravando no banco, o próprio ERP resolve: o admin salva o endereço público em
+// Configurações › Sistema e o próximo convite já sai certo.
+//
+// A leitura é assíncrona (banco) e o valor fica em cache por até 60 s — o link
+// é montado em funções async, então os chamadores usam as variantes `…Async`.
+// ----------------------------------------------------------------------------
+type CacheOrigem = { valor: string; carregadoEm: number };
+const TTL_CACHE_ORIGEM_MS = Number(process.env.APP_URL_CACHE_MS) || 60_000;
+let cacheOrigem: CacheOrigem | null = null;
+let carregandoOrigem: Promise<string> | null = null;
+
+/**
+ * Endereço público salvo no banco ('' se nunca foi configurado ou se o banco
+ * está fora do ar — nesse caso mantém o último valor conhecido do cache).
+ */
+export async function carregarOrigemDoBanco(forcar = false): Promise<string> {
+  if (!forcar && cacheOrigem && Date.now() - cacheOrigem.carregadoEm < TTL_CACHE_ORIGEM_MS) return cacheOrigem.valor;
+  // Duas chamadas simultâneas compartilham a mesma leitura (não disparam 2 queries).
+  if (carregandoOrigem) return carregandoOrigem;
+  carregandoOrigem = (async () => {
+    try {
+      const valor = normalizarOrigem(await lerConfig(CHAVE_APP_URL));
+      cacheOrigem = { valor, carregadoEm: Date.now() };
+      return valor;
+    } catch {
+      return cacheOrigem?.valor ?? '';
+    } finally {
+      carregandoOrigem = null;
+    }
+  })();
+  return carregandoOrigem;
+}
+
+/** Valor já carregado no cache ('' antes da primeira leitura). */
+export function origemDoBanco(): string {
+  return cacheOrigem?.valor ?? '';
+}
+
+/** Atualiza o cache depois que o admin salva/apaga o endereço (não espera o TTL). */
+export function registrarOrigemDoBanco(valor: string): void {
+  cacheOrigem = { valor: normalizarOrigem(valor), carregadoEm: Date.now() };
+}
+
+/**
+ * Aceita um endereço público informado pelo administrador.
+ *
+ * Validações (em ordem): precisa existir; precisa ser http(s) utilizável; e, em
+ * produção, precisa ser ALCANÇÁVEL por quem recebe o e-mail — localhost, IP
+ * privado e nome sem domínio são recusados (a menos que o ERP seja interno de
+ * propósito: APP_URL_PERMITIR_INTERNA=true).
+ */
+export function validarOrigemPublica(
+  valor: unknown
+): { ok: true; origem: string } | { ok: false; erro: string } {
+  const bruto = String(valor ?? '').trim();
+  if (!bruto) return { ok: false, erro: 'Informe o endereço público do ERP (ex.: https://erp.brobond.com.br).' };
+  if (bruto.length > 300) return { ok: false, erro: 'Endereço longo demais (máximo de 300 caracteres).' };
+  const origem = normalizarOrigem(bruto);
+  if (!origem) {
+    return {
+      ok: false,
+      erro: 'Endereço inválido. Use o formato https://erp.brobond.com.br (sem caminho, sem espaço e sem usuário/senha na URL).',
+    };
+  }
+  if (process.env.NODE_ENV === 'production' && !origemPublica(origem)) {
+    return {
+      ok: false,
+      erro: `"${origem}" não é um endereço público: localhost, IP privado e nome sem domínio só existem dentro do servidor, e o link não abre para quem recebe o e-mail ("URL inválida"). Use o domínio que os usuários digitam no navegador (ex.: https://erp.brobond.com.br).`,
+    };
+  }
+  return { ok: true, origem };
+}
+
 /**
  * Base absoluta (sem barra final) para montar links do sistema. '' se impossível.
  *
@@ -179,11 +265,23 @@ function avisarOrigemInterna(fonte: string, origem: string): void {
  * com NODE_ENV=production.
  */
 export function urlBasePublica(req?: Request | null): string {
+  return urlBasePublicaCom(origemDoBanco(), req);
+}
+
+/** Mesma regra de `urlBasePublica`, recebendo o endereço do banco já carregado. */
+function urlBasePublicaCom(doBanco: string, req?: Request | null): string {
   const producao = process.env.NODE_ENV === 'production';
   const config = normalizarOrigem(process.env.APP_URL);
   if (config) {
     if (!producao || origemPublica(config)) return config;
     avisarOrigemInterna('APP_URL', config);
+  }
+  // Endereço escolhido pelo admin na interface (gravado no banco). Vale tanto
+  // quanto o APP_URL e evita o redeploy só para corrigir um link de convite.
+  const salva = ajustarParaDev(normalizarOrigem(doBanco));
+  if (salva) {
+    if (!producao || origemPublica(salva)) return salva;
+    avisarOrigemInterna('o endereço salvo em Configurações › Sistema', salva);
   }
   const daRequisicao = ajustarParaDev(origemDaRequisicao(req));
   if (daRequisicao) {
@@ -202,6 +300,23 @@ export function linkPublico(caminho: string, req?: Request | null): string {
   return base ? `${base}${caminhoSeguro}` : caminhoSeguro;
 }
 
+/** Como `urlBasePublica`, mas garante a leitura do endereço salvo no banco. */
+export async function urlBasePublicaAsync(req?: Request | null): Promise<string> {
+  const doBanco = await carregarOrigemDoBanco();
+  return urlBasePublicaCom(doBanco, req);
+}
+
+/**
+ * Como `linkPublico`, mas carregando antes o endereço salvo pelo administrador.
+ * É a variante que os fluxos de e-mail usam (convite, redefinição): uma leitura
+ * de banco a mais é irrelevante perto de enviar um convite com link quebrado.
+ */
+export async function linkPublicoAsync(caminho: string, req?: Request | null): Promise<string> {
+  const caminhoSeguro = `/${String(caminho ?? '').replace(/^\/+/, '')}`;
+  const base = await urlBasePublicaAsync(req);
+  return base ? `${base}${caminhoSeguro}` : caminhoSeguro;
+}
+
 /** true quando o valor é uma URL http(s) absoluta (com origem). */
 export function urlAbsoluta(valor: string): boolean {
   try {
@@ -217,6 +332,65 @@ export function origemConfigurada(): boolean {
   return Boolean(normalizarOrigem(process.env.APP_URL));
 }
 
+export type FonteOrigem = 'env' | 'banco' | 'requisicao' | 'dev' | '';
+
+/** Estado completo da origem (usado em /api/meta e no endpoint de diagnóstico). */
+export type StatusOrigem = {
+  /** APP_URL (variável de ambiente) presente e utilizável? */
+  configurada: boolean;
+  /** Endereço que está valendo agora (base dos links). */
+  base: string;
+  /** A base atual é alcançável por quem recebe o e-mail? */
+  publica: boolean;
+  /** APP_URL existe, mas foi descartada (aponta para endereço interno). */
+  appUrlIgnorada: boolean;
+  /** De onde veio a `base`: env (APP_URL), banco (Configurações), requisição ou dev. */
+  fonte: FonteOrigem;
+  /** Endereço salvo pelo administrador no banco ('' = nunca configurado). */
+  doBanco: string;
+  /** APP_URL como está no ambiente ('' = ausente/inutilizável) — não é segredo. */
+  doAmbiente: string;
+  /**
+   * Endereço detectado nesta sessão (o que o navegador está usando).
+   * É apenas SUGESTÃO para o admin confirmar na tela: nunca é gravado sozinho
+   * — o cabeçalho Host é controlado por quem faz a requisição, e confiar nele
+   * permitiria enviar tokens de convite/reset para o domínio de um atacante.
+   */
+  sugerida: string;
+  /** APP_URL_PERMITIR_INTERNA ligada (ERP só na rede interna). */
+  permitirInterna: boolean;
+};
+
+function montarStatus(doBanco: string, req?: Request | null): StatusOrigem {
+  const producao = process.env.NODE_ENV === 'production';
+  const doAmbiente = normalizarOrigem(process.env.APP_URL);
+  const envUtil = Boolean(doAmbiente) && (!producao || origemPublica(doAmbiente));
+  const bancoUtil = Boolean(doBanco) && (!producao || origemPublica(doBanco));
+  const daRequisicao = ajustarParaDev(origemDaRequisicao(req));
+  const reqUtil = Boolean(daRequisicao) && (!producao || origemPublica(daRequisicao));
+  const base = urlBasePublicaCom(doBanco, req);
+  const fonte: FonteOrigem = base
+    ? envUtil && base === doAmbiente
+      ? 'env'
+      : bancoUtil && base === ajustarParaDev(doBanco)
+        ? 'banco'
+        : reqUtil && base === daRequisicao
+          ? 'requisicao'
+          : 'dev'
+    : '';
+  return {
+    configurada: origemConfigurada(),
+    base,
+    publica: origemPublica(base),
+    appUrlIgnorada: Boolean(doAmbiente) && !envUtil,
+    fonte,
+    doBanco,
+    doAmbiente,
+    sugerida: daRequisicao,
+    permitirInterna: process.env.APP_URL_PERMITIR_INTERNA === 'true',
+  };
+}
+
 /**
  * Estado da origem pública — usado no diagnóstico de boot e em /api/meta.
  *
@@ -226,21 +400,13 @@ export function origemConfigurada(): boolean {
  * existe, mas está sendo descartada por apontar para um endereço interno —
  * é o erro de configuração mais comum (valor de desenvolvimento em produção).
  */
-export function statusOrigem(req?: Request | null): {
-  configurada: boolean;
-  base: string;
-  publica: boolean;
-  appUrlIgnorada: boolean;
-} {
-  const configurada = origemConfigurada();
-  const appUrl = normalizarOrigem(process.env.APP_URL);
-  const base = urlBasePublica(req);
-  return {
-    configurada,
-    base,
-    publica: origemPublica(base),
-    appUrlIgnorada: Boolean(appUrl) && appUrl !== base,
-  };
+export function statusOrigem(req?: Request | null): StatusOrigem {
+  return montarStatus(origemDoBanco(), req);
+}
+
+/** Como `statusOrigem`, garantindo a leitura do endereço salvo no banco. */
+export async function statusOrigemAsync(req?: Request | null): Promise<StatusOrigem> {
+  return montarStatus(await carregarOrigemDoBanco(), req);
 }
 
 /**
@@ -259,7 +425,7 @@ export function revisarConfiguracaoOrigem(): string {
     if (process.env.NODE_ENV === 'production' && appUrl && !origemPublica(appUrl)) {
       const aviso =
         `⚠️  APP_URL="${appUrl}" não é um endereço público — os links de e-mail (convite de acesso, redefinição de senha) não abrem para quem recebe ` +
-        '("URL inválida"). Defina APP_URL com o endereço público do ERP (ex.: https://erp.brobond.com.br).';
+        '("URL inválida"). Defina APP_URL com o endereço público do ERP (ex.: https://erp.brobond.com.br) ou salve o endereço em Configurações › Sistema.';
       console.warn(aviso);
       return aviso;
     }
@@ -269,7 +435,7 @@ export function revisarConfiguracaoOrigem(): string {
   const aviso =
     '⚠️  APP_URL ausente — o endereço dos links de e-mail (convite de acesso, redefinição de senha) fica dependendo do cabeçalho Host da requisição. ' +
     'Se um proxy não o enviar, o link sai relativo ("/convite/…") e quem recebe vê "URL inválida". Defina APP_URL com o endereço público do ERP ' +
-    '(ex.: https://erp.brobond.com.br).';
+    '(ex.: https://erp.brobond.com.br) ou salve o endereço em Configurações › Sistema (não exige redeploy).';
   console.warn(aviso);
   return aviso;
 }

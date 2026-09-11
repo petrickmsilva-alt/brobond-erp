@@ -2076,8 +2076,8 @@ export default function UsuariosPage() {
           {meta?.emailLinks && (meta.emailLinks.appUrlIgnorada || (meta.emailLinks.base && meta.emailLinks.publica === false)) ? (
             <Alert tone="red">
               <strong>Este link não abre para o usuário.</strong> O endereço do ERP aponta para dentro do servidor
-              (localhost, IP privado ou nome sem domínio), então quem recebe vê “URL inválida”. Defina{' '}
-              <code>APP_URL</code> com o endereço público em{' '}
+              (localhost, IP privado ou nome sem domínio), então quem recebe vê “URL inválida”. Salve o endereço
+              público em{' '}
               <Link to="/config" className="font-medium underline underline-offset-2">Configurações › Sistema</Link> e gere o convite novamente.
             </Alert>
           ) : !meta?.emailLinks?.configurada ? (

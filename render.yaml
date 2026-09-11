@@ -31,6 +31,9 @@ services:
       # https://brobond-erp.onrender.com ou https://erp.brobond.com.br.
       # Sem isso o link usa o cabeçalho da requisição (Render: ok; domínio
       # próprio atrás de proxy: pode sair errado e virar "URL inválida").
+      # Alternativa sem redeploy: o admin salva o endereço pela própria
+      # interface (Configurações › Sistema › Endereço público do ERP); o valor
+      # vai para a tabela `configuracoes` e APP_URL continua com a precedência.
       - key: APP_URL
         sync: false
       # Fotos: "db" (no banco, padrão) ou "cloudinary" (+ CLOUDINARY_URL)

@@ -116,10 +116,16 @@ O convite de acesso e a redefinição de senha mandam um link
 sai **pela metade** — sem `https://dominio` na frente — e o Gmail/Outlook responde
 **“URL inválida”** para quem clica (foi o que aconteceu com convites antigos).
 
-Desde a correção, sem `APP_URL` o servidor deduz o endereço de quem gerou o
-convite (cabeçalho `X-Forwarded-Proto`/`Host`) e o aviso aparece no boot e em
-**Configurações › Sistema**; ainda assim, em produção **defina `APP_URL`** — é o
-único jeito de garantir o link certo se o ERP mudar de domínio, porta ou proxy.
+**Como resolver (sem depender da Render):** abra **Configurações › Sistema ›
+Endereço público do ERP**, informe `https://erp.brobond.com.br` e salve — o
+valor é gravado na tabela `configuracoes` e passa a valer na hora, para os
+próximos envios. Para fixar também na infraestrutura (e não depender do banco),
+defina a variável `APP_URL` na Render; ela tem precedência sobre o valor salvo.
+
+Sem nenhum dos dois, o servidor deduz o endereço de quem gerou o convite
+(cabeçalho `X-Forwarded-Proto`/`Host`) e o aviso aparece no boot e em
+**Configurações › Sistema**. Definir um dos dois é o único jeito de garantir o
+link certo se o ERP mudar de domínio, porta ou proxy.
 
 **Atenção ao valor:** em produção a `APP_URL` precisa ser um endereço público.
 `http://localhost:5173` (o valor que vem no `.env.example`, de desenvolvimento)
@@ -129,7 +135,7 @@ nome sem domínio, `.local`) são **descartados** pelo servidor: ele usa a orige
 da requisição, avisa no boot e mostra `APP_URL ignorada` em Configurações ›
 Sistema.
 
-Depois de corrigir a variável, **reenvie o convite** (Usuários → linha do usuário
+Depois de corrigir o endereço, **reenvie o convite** (Usuários → linha do usuário
 → Reenviar convite): o convite antigo continua quebrado porque o link já saiu.
 
 ---
