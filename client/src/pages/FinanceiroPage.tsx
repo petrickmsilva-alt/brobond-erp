@@ -66,6 +66,7 @@ type Resumo = {
   investimentosMes: number;
   taxasMes: number;
   semaforo: { status: 'verde' | 'amarelo' | 'vermelho'; minAcumulado: number; periodo: string | null };
+  serieMensal: { mes: string; label: string; receita: number; despesa: number; investimento: number; resultado: number }[];
   resultadoOperacionalMes: number;
   resultadoCaixaMes: number;
   aReceber: number;
@@ -124,7 +125,7 @@ export default function FinanceiroPage() {
   const [conciliando, setConciliando] = useState(false);
   const [concResult, setConcResult] = useState<ConciliacaoResult | null>(null);
   const [baixaAlvo, setBaixaAlvo] = useState<{ lanc: ContaPendente; lado: 'receita' | 'despesa' } | null>(null);
-  const [baixaForm, setBaixaForm] = useState({ data: '', conta_id: '', forma_pagamento: '', juros: '', multa: '', desconto: '' });
+  const [baixaForm, setBaixaForm] = useState({ data: '', conta_id: '', forma_pagamento: '', valor: '', juros: '', multa: '', desconto: '' });
   const [baixando, setBaixando] = useState(false);
 
   const load = useCallback(async () => {
@@ -162,7 +163,7 @@ export default function FinanceiroPage() {
   /** Abre a baixa: receber (receita) ou pagar (despesa) um título pendente. */
   function abrirBaixa(lanc: ContaPendente, lado: 'receita' | 'despesa') {
     setBaixaAlvo({ lanc, lado });
-    setBaixaForm({ data: new Date().toISOString().slice(0, 10), conta_id: '', forma_pagamento: '', juros: '', multa: '', desconto: '' });
+    setBaixaForm({ data: new Date().toISOString().slice(0, 10), conta_id: '', forma_pagamento: '', valor: '', juros: '', multa: '', desconto: '' });
   }
 
   async function confirmarBaixa() {
@@ -170,15 +171,22 @@ export default function FinanceiroPage() {
     const num = (s: string) => Number(String(s).replace(',', '.')) || 0;
     setBaixando(true);
     try {
-      await api.post(`/financeiro/lancamentos/${baixaAlvo.lanc.id}/baixar`, {
+      const r = await api.post<{ parcial?: boolean; restante?: number }>(`/financeiro/lancamentos/${baixaAlvo.lanc.id}/baixar`, {
         data: baixaForm.data || undefined,
         conta_id: baixaForm.conta_id ? Number(baixaForm.conta_id) : undefined,
         forma_pagamento: baixaForm.forma_pagamento || undefined,
+        valor: baixaForm.valor ? num(baixaForm.valor) : undefined,
         juros: num(baixaForm.juros),
         multa: num(baixaForm.multa),
         desconto: num(baixaForm.desconto),
       });
-      toast.success(baixaAlvo.lado === 'receita' ? 'Recebimento baixado.' : 'Pagamento baixado.');
+      toast.success(
+        r.parcial
+          ? `Baixa parcial registrada — restante ${formatMoney(r.restante || 0)}.`
+          : baixaAlvo.lado === 'receita'
+            ? 'Recebimento baixado.'
+            : 'Pagamento baixado.'
+      );
       setBaixaAlvo(null);
       await load();
     } catch (e: any) {
@@ -568,6 +576,26 @@ export default function FinanceiroPage() {
                   </ul>
                 </div>
               </div>
+              {(data.serieMensal || []).length > 0 && (
+                <div className="border-t border-slate-100 p-4">
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Comparativo — últimos 6 meses (confirmado, líquido)</h3>
+                  <div className="overflow-x-auto">
+                    <table className="table">
+                      <thead><tr><th>Mês</th><th className="text-right">Receita</th><th className="text-right">Despesa</th><th className="text-right">Resultado</th></tr></thead>
+                      <tbody>
+                        {data.serieMensal.map((m) => (
+                          <tr key={m.mes} className={m.mes === data.mes ? 'bg-navy-50/60 font-semibold' : undefined}>
+                            <td className="text-xs text-slate-500">{m.label}{m.mes === data.mes ? ' (atual)' : ''}</td>
+                            <td className="text-right text-xs tabular-nums text-emerald-600">{formatMoney(m.receita)}</td>
+                            <td className="text-right text-xs tabular-nums text-red-600">{formatMoney(m.despesa)}</td>
+                            <td className={`text-right text-xs font-semibold tabular-nums ${m.resultado >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(m.resultado)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </section>
           )}
 
@@ -706,7 +734,9 @@ export default function FinanceiroPage() {
               <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
                 <ScanLine className="h-4 w-4 text-navy-500" /> Conciliação bancária
               </h2>
-              <p className="mt-0.5 text-xs text-slate-400">Cole o extrato (data;valor;descrição) e o ERP casa com lançamentos pendentes.</p>
+              <p className="mt-0.5 text-xs text-slate-400">
+                Cole o extrato em texto (data;valor;descrição) <strong>ou o arquivo OFX do Internet Banking</strong> (Banco Inter, Nubank, Sicoob...) — o ERP casa com os lançamentos pendentes.
+              </p>
               <textarea
                 className="input mt-3 h-28 resize-none font-mono text-xs"
                 placeholder={'2026-09-04;1800,00;ALUGUEL\n2026-09-04;320,00;ENERGIA'}
@@ -768,6 +798,17 @@ export default function FinanceiroPage() {
                       <option value="transferencia">Transferência</option>
                       <option value="outros">Outros</option>
                     </select>
+                  </label>
+                  <label className="col-span-2 text-xs font-medium text-slate-500">
+                    Valor agora (opcional — deixe vazio para quitar)
+                    <input type="text" inputMode="decimal" className="input mt-1" placeholder={formatMoney(baixaAlvo.lanc.valor)} value={baixaForm.valor} onChange={(e) => setBaixaForm({ ...baixaForm, valor: e.target.value })} />
+                    {(() => {
+                      const pago = Number(String(baixaForm.valor).replace(',', '.')) || 0;
+                      if (pago > 0 && pago < baixaAlvo.lanc.valor) {
+                        return <span className="mt-1 block text-[11px] font-semibold text-amber-600">Baixa parcial: restará {formatMoney(baixaAlvo.lanc.valor - pago)} em aberto neste título.</span>;
+                      }
+                      return null;
+                    })()}
                   </label>
                   <label className="text-xs font-medium text-slate-500">
                     Juros (R$)

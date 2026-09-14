@@ -1527,6 +1527,7 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Lançamento financeiro',
     labelFields: ['descricao'],
     ops: ALL_OPS,
+    images: { max: 4 },
     notice: 'Livro-caixa: receitas, despesas, investimentos e estornos. Lançamentos automáticos de vendas, compras e aportes podem ser editados aqui.',
     fields: [
       { name: 'data', label: 'Data', type: 'date', required: true, search: true },
@@ -1595,6 +1596,7 @@ export const RESOURCES: Record<string, Resource> = {
         ],
       },
       { name: 'referencia_id', label: 'Registro de origem', type: 'integer', list: false },
+      { name: 'comprovantes', label: 'Comprovantes', type: 'images', virtual: true, form: false, hint: 'Até 4 fotos: comprovante Pix, boleto, recibo...' },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
       ...auditFields,
     ],

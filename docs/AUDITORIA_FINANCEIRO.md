@@ -141,6 +141,38 @@ completa 221 ✅, typecheck API+front ✅, build ✅.
 
 ---
 
+## 4.8 Onda C — escala e rotina de fechamento (entregue)
+
+### Baixa parcial (o título que recebe aos poucos)
+A baixa aceita **valor parcial**: o título recebe/paga a parte informada em
+lançamento confirmado próprio ("Recebimento/Pagamento parcial — restante R$ X")
+e **segue pendente pelo saldo restante**, sem perder a trilha. Juros/multa valem
+também na parcial; **desconto só na quitação total** (abater dívida em parcela
+intermediária inflaria o saldo além do título). A venda/compra só é marcada
+como recebida/paga na quitação final.
+
+### Conciliação OFX (achado de integração de extrato — resolvido)
+A aba Conciliação aceita agora, além do texto `data;valor;descrição`, o **extrato
+OFX do Internet Banking** (Banco Inter, Nubank, Sicoob, Sicredi...): basta colar
+o conteúdo do arquivo. Cada lançamento confirmado registra a fonte
+(`extrato OFX` ou `extrato texto/CSV`) na trilha.
+
+### Comparativo mensal (achado #10 parcial — resolvido)
+Aba DRE: tabela **"Comparativo — últimos 6 meses"** com receita, despesa e
+resultado confirmados (líquido de taxas), mês corrente destacado.
+
+### Anexos em lançamentos (achado de comprovação — resolvido)
+Cada lançamento aceita **até 4 fotos de comprovante** (Pix, boleto, recibo) —
+mesmo armazenamento seguro das fotos de produto (banco ou Cloudinary), com
+trilha de auditoria por inclusão/remoção. *(Documentos PDF/OFX ficam para a
+Onda D com armazenamento de documentos.)*
+
+**Verificação da Onda C:** 6 testes novos ✅ (parcial com caixa/a receber
+fechando no centavo, quitação do saldo, desconto bloqueado na parcial, OFX,
+série de 6 meses, galeria em lançamentos), suite 227 ✅, typecheck ✅, build ✅.
+
+---
+
 ## 5. Como usar no dia a dia
 
 **Mover dinheiro:** Financeiro → Transferências → *Nova transferência*.
@@ -163,15 +195,18 @@ mostra o resultado por área todo mês.
 Parcelamento real, baixa dedicada com juros/multa/desconto, aging do contas a
 receber e confirmação de que a DRE por período já existia em Relatórios.
 
-### Onda C — escala e integrações (próxima prioridade)
-1. **Baixa parcial**: pagamentos parciais com saldo restante rastreado por título.
-2. **Anexos** (comprovante/boleto) no lançamento usando o módulo de arquivos existente.
-3. Importação de extrato **OFX/CNAB** mantendo arquivo e trilha de conciliação.
-4. **Maker-checker** (alçada): lançamento/transferência acima de R$ X exige confirmação de segundo usuário.
-5. Parametrizar taxas por forma de pagamento (crédito 1x, 2–6x, débito, Pix MP) com sugestão automática do `taxa_pct`.
-6. Previsão de recebimento do cartão por agenda (D+1/D+30) em vez de vencimento único.
-7. API/webhook do Mercado Pago: baixa automática do pedido → lançamento → conciliação.
-8. Comparativo DRE/fluxo mês a mês dentro da aba DRE (hoje via Relatórios por período).
+### Onda C — escala e rotina de fechamento ✅ entregue neste commit
+Baixa parcial com saldo rastreado no título, anexos (fotos de comprovante) em
+lançamentos, conciliação de extrato **OFX** com trilha da fonte, e comparativo
+dos últimos 6 meses na aba DRE.
+
+### Onda D — automação e integrações (próxima prioridade)
+1. **Maker-checker** (alçada): lançamento/transferência acima de R$ X exige confirmação de segundo usuário.
+2. Parametrizar taxas por forma de pagamento (crédito 1x, 2–6x, débito, Pix MP) com sugestão automática do `taxa_pct`.
+3. Previsão de recebimento do cartão por agenda (D+1/D+30) em vez de vencimento único.
+4. API/webhook do Mercado Pago: baixa automática do pedido → lançamento → conciliação.
+5. Armazenamento de **documentos** (PDF de boleto/NF, arquivo OFX original) ligado ao lançamento — hoje o anexo cobre fotos.
+6. **CNAB** (mensalidades/carnês em lote) se a operação adotar boletos registrados.
 
 > Regra de ouro que orienta o roadmap: **o banco é a verdade**. Toda evolução
 > deve aproximar o livro-caixa do extrato, e não o contrário.

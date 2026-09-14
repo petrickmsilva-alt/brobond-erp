@@ -706,6 +706,19 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     periodo: semanaMin ? semanaMin.label : null,
   };
 
+  // Comparativo mensal: últimos 6 meses de operação confirmada (líquido).
+  const serieMensal: { mes: string; label: string; receita: number; despesa: number; investimento: number; resultado: number }[] = [];
+  for (let k = 5; k >= 0; k--) {
+    const alvo = primeiroDiaMes(new Date());
+    alvo.setUTCMonth(alvo.getUTCMonth() - k);
+    const chave = alvo.toISOString().slice(0, 7);
+    const doMesK = operacionais.filter((l) => String(l.data || '').slice(0, 7) === chave);
+    const rec = somaMoeda(doMesK.filter((l) => l.tipo === 'receita').map((l) => liquidoDe(l)));
+    const desp = somaMoeda(doMesK.filter((l) => l.tipo === 'despesa').map((l) => Number(l.valor || 0)));
+    const inv = somaMoeda(doMesK.filter((l) => l.tipo === 'investimento').map((l) => liquidoDe(l)));
+    serieMensal.push({ mes: chave, label: `${chave.slice(5, 7)}/${chave.slice(2, 4)}`, receita: rec, despesa: desp, investimento: inv, resultado: r2(rec - desp) });
+  }
+
   const porCategoria = new Map<string, { categoria: string; receita: number; despesa: number; investimento: number }>();
   for (const l of operacionais) {
     const nome = nomeCat(l.categoria_id);
@@ -772,6 +785,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     investimentosMes,
     taxasMes,
     semaforo,
+    serieMensal,
     resultadoOperacionalMes,
     resultadoCaixaMes,
     aReceber,
@@ -1037,7 +1051,31 @@ export async function resumoInvestidores(req: Request, res: Response) {
 // CONCILIAÇÃO BANCÁRIA — importar extrato e casar com lançamentos pendentes
 // ----------------------------------------------------------------------------
 
+/** Extrai os lançamentos de um extrato OFX (Internet Banking) colado. */
+function parseOFX(conteudo: string): { data: string; valor: number; descricao: string }[] {
+  const linhas: { data: string; valor: number; descricao: string }[] = [];
+  const blocos = conteudo.match(/<STMTTRN>[\s\S]*?(?=<STMTTRN>|<\/STMTTRN>|$)/gi) || [];
+  for (const bloco of blocos) {
+    const dataM = bloco.match(/<DTPOSTED>(\d{8})/i);
+    const valorM = bloco.match(/<TRNAMT>(-?[\d]+(?:\.\d+)?)/i);
+    const descM = bloco.match(/<NAME>([^<]+)/i) || bloco.match(/<MEMO>([^<]+)/i);
+    if (!valorM) continue;
+    const valor = Math.abs(Number(valorM[1]));
+    if (!Number.isFinite(valor) || valor <= 0) continue;
+    const data = dataM ? `${dataM[1].slice(0, 4)}-${dataM[1].slice(4, 6)}-${dataM[1].slice(6, 8)}` : '';
+    linhas.push({ data, valor: r2(valor), descricao: descM ? descM[1].trim() : '' });
+  }
+  return linhas;
+}
+
+/** Verdadeiro quando o conteúdo parece um arquivo OFX/SGML de extrato. */
+function pareceOFX(conteudo: string): boolean {
+  return /OFXHEADER|<OFX>/i.test(conteudo);
+}
+
 function parseLinhasExtrato(body: Record<string, unknown>): { data: string; valor: number; descricao: string }[] {
+  const textoCompleto = String(body.texto || body.csv || body.extrato || body.ofx || '');
+  if (pareceOFX(textoCompleto)) return parseOFX(textoCompleto);
   const linhas: { data: string; valor: number; descricao: string }[] = [];
   const add = (d: unknown, v: unknown, desc: unknown) => {
     const valor = Math.abs(Number(String(v).replace(',', '.').replace(/[^\d.-]/g, '')));
@@ -1071,8 +1109,10 @@ export async function conciliarExtrato(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('lancamentos_financeiros')!, actor, 'update');
   const s = getStore();
+  const conteudoBruto = String(req.body?.texto || req.body?.csv || req.body?.extrato || req.body?.ofx || '');
+  const fonte = pareceOFX(conteudoBruto) ? 'OFX' : 'texto/CSV';
   const linhas = parseLinhasExtrato(req.body || {});
-  if (linhas.length === 0) throw new HttpError(400, 'Nenhuma linha válida. Use: data;valor;descrição.');
+  if (linhas.length === 0) throw new HttpError(400, 'Nenhuma linha válida. Use: data;valor;descrição — ou cole um extrato OFX do Internet Banking.');
 
   const contaId = req.body.conta_id ?? null;
   const formaPagamento = req.body.forma_pagamento ?? null;
@@ -1105,7 +1145,7 @@ export async function conciliarExtrato(req: Request, res: Response) {
       status: 'confirmado',
       conta_id: contaId ?? l.conta_id ?? null,
       forma_pagamento: formaPagamento ?? l.forma_pagamento ?? null,
-      observacoes: [String(l.observacoes || ''), `Conciliado em ${hoje()} (extrato)`].filter(Boolean).join('\n'),
+      observacoes: [String(l.observacoes || ''), `Conciliado em ${hoje()} (extrato ${fonte})`].filter(Boolean).join('\n'),
     });
     await s.audit(
       {
@@ -1155,6 +1195,13 @@ export async function baixarLancamento(req: Request, res: Response) {
   for (const [nome, v] of [['juros', juros], ['multa', multa], ['desconto', desconto]] as const) {
     if (!Number.isFinite(v) || v < 0) throw new HttpError(400, `Informe ${nome} maior ou igual a zero.`, { [nome]: 'Valor inválido' });
   }
+  // Baixa parcial: valor informado < valor do título → recebe/paga parte e o
+  // principal continua pendente com o saldo restante (rastreado no título).
+  const temValorParcial = body.valor !== undefined && body.valor !== null && body.valor !== '';
+  const valorParcial = temValorParcial ? Number(String(body.valor).replace(',', '.')) : null;
+  if (valorParcial !== null && (!Number.isFinite(valorParcial) || valorParcial <= 0)) {
+    throw new HttpError(400, 'Informe o valor da baixa parcial maior que zero.', { valor: 'Valor inválido' });
+  }
   const dataBaixa = String(body.data || hoje()).slice(0, 10);
 
   const s = getStore();
@@ -1173,13 +1220,52 @@ export async function baixarLancamento(req: Request, res: Response) {
     const formaBaixa = body.forma_pagamento ?? lanc.forma_pagamento ?? null;
     const jurosMulta = r2(juros + multa);
     const filhos: number[] = [];
+    const valorTitulo = Number(lanc.valor || 0);
+    const ehParcial = valorParcial !== null && valorParcial < valorTitulo;
 
-    // 1) Confirma o principal na conta/forma escolhidas, com a trilha da baixa.
+    // 1) Principal: baixa total confirma; baixa parcial reduz o título e ele
+    //    segue pendente pelo saldo restante (o recebido sai em lançamento filho).
+    const restante = ehParcial ? r2(valorTitulo - Number(valorParcial)) : 0;
     const notas = [
       String(lanc.observacoes || ''),
-      `Baixa em ${dataBaixa}${jurosMulta > 0 ? ` · juros/multa ${formatoMoeda(jurosMulta)}` : ''}${desconto > 0 ? ` · desconto ${formatoMoeda(desconto)}` : ''} · por ${actor.name || '—'}`,
+      ehParcial
+        ? `Baixa parcial em ${dataBaixa}: ${formatoMoeda(Number(valorParcial))} · restante ${formatoMoeda(restante)} · por ${actor.name || '—'}`
+        : `Baixa em ${dataBaixa}${jurosMulta > 0 ? ` · juros/multa ${formatoMoeda(jurosMulta)}` : ''}${desconto > 0 ? ` · desconto ${formatoMoeda(desconto)}` : ''} · por ${actor.name || '—'}`,
     ].filter(Boolean);
-    const atualizado = await atualizarLancamento(id, { ...lanc, status: 'confirmado', conta_id: contaBaixa, forma_pagamento: formaBaixa, observacoes: notas.join('\n') }, actor, tx);
+    const atualizado = await atualizarLancamento(
+      id,
+      ehParcial
+        ? { ...lanc, valor: restante, valor_liquido: calcularLiquido(restante, Number(lanc.taxa_pct || 0)), conta_id: contaBaixa, forma_pagamento: formaBaixa, observacoes: notas.join('\n') }
+        : { ...lanc, status: 'confirmado', conta_id: contaBaixa, forma_pagamento: formaBaixa, observacoes: notas.join('\n') },
+      actor,
+      tx
+    );
+
+    // Baixa parcial: o valor efetivamente movimentado sai em lançamento filho
+    // confirmado na mesma categoria (DRE coerente), com o saldo no histórico.
+    if (ehParcial) {
+      const parcial = await criarLancamento(
+        {
+          data: dataBaixa,
+          tipo,
+          categoria_id: lanc.categoria_id ?? null,
+          centro_custo_id: lanc.centro_custo_id ?? null,
+          conta_id: contaBaixa,
+          descricao: `${tipo === 'receita' ? 'Recebimento' : 'Pagamento'} parcial — ${String(lanc.descricao)} · restante ${formatoMoeda(restante)}`,
+          valor: r2(Number(valorParcial)),
+          taxa_pct: 0,
+          valor_liquido: r2(Number(valorParcial)),
+          forma_pagamento: formaBaixa,
+          status: 'confirmado',
+          referencia_tipo: 'baixa',
+          referencia_id: id,
+          observacoes: `Baixa parcial do lançamento #${id} (título de ${formatoMoeda(valorTitulo)})`,
+        },
+        actor,
+        tx
+      );
+      filhos.push(Number(parcial.id));
+    }
 
     // 2) Filhotes do acerto: caixa e DRE batem com o extrato.
     const catRecFin = (await categoriaPorClasse('receitas_financeiras', tx)) ?? (await categoriaPadrao('receita', tx));
@@ -1206,6 +1292,11 @@ export async function baixarLancamento(req: Request, res: Response) {
       );
       filhos.push(Number(filho.id));
     }
+    // Desconto abate dívida: só faz sentido na quitação total (na parcial
+    // ele inflaria o saldo restante além do valor do título).
+    if (desconto > 0 && ehParcial) {
+      throw new HttpError(400, 'Na baixa parcial não cabe desconto — aplique-o quando quitar o saldo restante do título.', { desconto: 'Use na quitação total' });
+    }
     if (desconto > 0) {
       // Desconto em receita = saída financeira; em despesa = ganho financeiro.
       const tipoFilho = tipo === 'receita' ? 'despesa' : 'receita';
@@ -1231,13 +1322,16 @@ export async function baixarLancamento(req: Request, res: Response) {
       filhos.push(Number(filho.id));
     }
 
-    // 3) Mantém a origem consistente (mesma regra do conciliador).
-    const refTipo = String(lanc.referencia_tipo || '');
-    const refId = Number(lanc.referencia_id || 0);
-    if (refTipo === 'venda' && refId) {
-      await s.update(getResource('vendas')!, refId, { fin_status: 'recebido', fin_recebido_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, tx);
-    } else if (refTipo === 'compra' && refId) {
-      await s.update(getResource('compras')!, refId, { fin_status: 'pago', fin_pago_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, tx);
+    // 3) Mantém a origem consistente (mesma regra do conciliador) — só na
+    //    quitação total: com saldo parcial o pedido segue "a receber/a pagar".
+    if (!ehParcial) {
+      const refTipo = String(lanc.referencia_tipo || '');
+      const refId = Number(lanc.referencia_id || 0);
+      if (refTipo === 'venda' && refId) {
+        await s.update(getResource('vendas')!, refId, { fin_status: 'recebido', fin_recebido_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, tx);
+      } else if (refTipo === 'compra' && refId) {
+        await s.update(getResource('compras')!, refId, { fin_status: 'pago', fin_pago_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, tx);
+      }
     }
     await s.audit(
       {
@@ -1246,12 +1340,14 @@ export async function baixarLancamento(req: Request, res: Response) {
         acao: 'editar',
         recurso: 'lancamentos_financeiros',
         registro_id: id,
-        descricao: `Baixa — ${String(lanc.descricao)} · valor ${formatoMoeda(Number(lanc.valor || 0))}${jurosMulta > 0 ? ` + juros/multa ${formatoMoeda(jurosMulta)}` : ''}${desconto > 0 ? ` − desconto ${formatoMoeda(desconto)}` : ''}`,
-        dados: { baixa: true, data: dataBaixa, juros, multa, desconto, conta_id: contaBaixa, forma_pagamento: formaBaixa, filhos },
+        descricao: ehParcial
+          ? `Baixa parcial — ${String(lanc.descricao)} · recebido ${formatoMoeda(Number(valorParcial))} de ${formatoMoeda(valorTitulo)} · restante ${formatoMoeda(restante)}`
+          : `Baixa — ${String(lanc.descricao)} · valor ${formatoMoeda(Number(lanc.valor || 0))}${jurosMulta > 0 ? ` + juros/multa ${formatoMoeda(jurosMulta)}` : ''}${desconto > 0 ? ` − desconto ${formatoMoeda(desconto)}` : ''}`,
+        dados: { baixa: true, parcial: ehParcial, data: dataBaixa, valor_pago: ehParcial ? Number(valorParcial) : valorTitulo, restante, juros, multa, desconto, conta_id: contaBaixa, forma_pagamento: formaBaixa, filhos },
       },
       tx
     );
-    return { lancamento: atualizado, filhos };
+    return { lancamento: atualizado, filhos, parcial: ehParcial, restante };
   });
 
   res.json({ ok: true, ...resultado });
