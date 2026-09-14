@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, CalendarClock, Coins, CreditCard, Download, HandCoins, Landmark, LineChart, Plus, RefreshCw, Repeat, ScanLine, TrendingDown, TrendingUp, Users, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowRightLeft, ArrowUpRight, CalendarClock, Coins, CreditCard, Download, HandCoins, Landmark, LineChart, Plus, RefreshCw, Repeat, ScanLine, TrendingDown, TrendingUp, Users, Wallet } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatMoney } from '../lib/format';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
@@ -58,11 +58,13 @@ type ConciliacaoResult = { ok: boolean; totalLinhas: number; confirmados: { data
 
 type Resumo = {
   mes: string;
-  saldoContas: { conta_id: number; nome: string; tipo: string; saldo: number }[];
+  saldoContas: { conta_id: number; nome: string; tipo: string; saldo: number; previsto: number }[];
   saldoContasTotal: number;
   receitasMes: number;
   despesasMes: number;
   investimentosMes: number;
+  taxasMes: number;
+  semaforo: { status: 'verde' | 'amarelo' | 'vermelho'; minAcumulado: number; periodo: string | null };
   resultadoOperacionalMes: number;
   resultadoCaixaMes: number;
   aReceber: number;
@@ -74,8 +76,9 @@ type Resumo = {
   aReceberLista: ContaPendente[];
   aPagarLista: ContaPendente[];
   categorias: { categoria: string; receita: number; despesa: number; investimento: number }[];
+  porCentroCusto: { centro: string; receita: number; despesa: number; investimento: number }[];
   vendasPorCanal: { canal: string; valor: number }[];
-  dre: { receita: number; cmv: number; mao_obra: number; despesas_operacionais: number; despesas_financeiras: number; impostos: number; investimentos: number };
+  dre: { receita: number; cmv: number; mao_obra: number; despesas_operacionais: number; despesas_financeiras: number; impostos: number; investimentos: number; taxas_operadoras: number };
   lucroBruto: number;
   resultadoOperacional: number;
   resultadoFinanceiro: number;
@@ -210,6 +213,10 @@ export default function FinanceiroPage() {
               <Coins className="h-4 w-4" />
               <span className="hidden sm:inline">Lançamentos</span>
             </Link>
+            <Link to="/transferencias" className="btn-secondary" title="Mover dinheiro entre contas (Caixa → Banco Inter, Mercado Pago → Banco Inter)">
+              <ArrowRightLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">Transferir</span>
+            </Link>
             <Link to="/aportes" className="btn-accent">
               <HandCoins className="h-4 w-4" /> Aportes
             </Link>
@@ -242,6 +249,15 @@ export default function FinanceiroPage() {
           {/* ---------------- VISÃO GERAL ---------------- */}
           {tab === 'visao' && (
             <>
+              {data.semaforo && data.semaforo.status !== 'verde' && (
+                <div className="mb-4">
+                  <Alert tone={data.semaforo.status === 'vermelho' ? 'red' : 'amber'}>
+                    {data.semaforo.status === 'vermelho'
+                      ? `Atenção: a projeção de caixa fica NEGATIVA em ${formatMoney(data.semaforo.minAcumulado)}${data.semaforo.periodo ? ` na ${data.semaforo.periodo.toLowerCase()}` : ''}. Antecipe recebíveis ou renegocie pagamentos.`
+                      : `Caixa apertado à frente: o acumulado projetado cai para ${formatMoney(data.semaforo.minAcumulado)}${data.semaforo.periodo ? ` na ${data.semaforo.periodo.toLowerCase()}` : ''} — queda de mais de 30% sobre o saldo atual.`}
+                  </Alert>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <Kpi icon={<Wallet className="h-5 w-5" />} label="Saldo em contas" value={formatMoney(data.saldoContasTotal)} tone={pos(data.saldoContasTotal).replace('text-', '')} />
                 <Kpi icon={<TrendingUp className="h-5 w-5" />} label="Receitas no mês" value={formatMoney(data.receitasMes)} tone="emerald" />
@@ -249,9 +265,10 @@ export default function FinanceiroPage() {
                 <Kpi icon={<CreditCard className="h-5 w-5" />} label="Resultado do mês" value={formatMoney(data.resultadoOperacionalMes)} tone={data.resultadoOperacionalMes >= 0 ? 'emerald' : 'red'} />
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-5">
                 <Kpi icon={<ArrowUpRight className="h-5 w-5" />} label="A receber" value={formatMoney(data.aReceber)} tone="amber" small />
                 <Kpi icon={<ArrowDownRight className="h-5 w-5" />} label="A pagar" value={formatMoney(data.aPagar)} tone="amber" small />
+                <Kpi icon={<CreditCard className="h-5 w-5" />} label="Taxas MP/cartão (mês)" value={formatMoney(data.taxasMes || 0)} tone="red" small />
                 <Kpi icon={<HandCoins className="h-5 w-5" />} label="Aportes confirmados" value={formatMoney(data.aportesTotal)} tone="blue" small />
                 <Kpi icon={<CalendarClock className="h-5 w-5" />} label="Vencidos" value={formatMoney(data.aReceberVencidas + data.aPagarVencidas)} tone="red" small />
               </div>
@@ -265,7 +282,12 @@ export default function FinanceiroPage() {
                       <div key={c.conta_id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium text-navy-900">{c.nome}</p>
-                          <p className="text-[11px] capitalize text-slate-400">{c.tipo}</p>
+                          <p className="text-[11px] capitalize text-slate-400">
+                            {c.tipo}
+                            {c.previsto !== undefined && c.previsto !== c.saldo && (
+                              <span className={c.previsto >= 0 ? 'text-slate-400' : 'text-red-500'}> · previsto {formatMoney(c.previsto)}</span>
+                            )}
+                          </p>
                         </div>
                         <span className={`text-sm font-semibold tabular-nums ${c.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(c.saldo)}</span>
                       </div>
@@ -405,6 +427,7 @@ export default function FinanceiroPage() {
                 <DreLinha label="Despesas operacionais" value={-data.dre.despesas_operacionais} tone="red" />
                 <DreLinha label="Impostos" value={-data.dre.impostos} tone="red" />
                 <DreLinha label="Despesas financeiras" value={-data.dre.despesas_financeiras} tone="red" />
+                <DreLinha label="Taxas de operadoras (MP/cartão)" value={-data.dre.taxas_operadoras} tone="red" />
                 <DreLinha label="Lucro bruto" value={data.lucroBruto} tone={data.lucroBruto >= 0 ? 'green' : 'red'} bold />
                 <DreLinha label="Resultado operacional" value={data.resultadoOperacional} tone={data.resultadoOperacional >= 0 ? 'green' : 'red'} bold />
                 <DreLinha label="Resultado financeiro" value={data.resultadoFinanceiro} tone={data.resultadoFinanceiro >= 0 ? 'green' : 'red'} bold />
@@ -414,7 +437,7 @@ export default function FinanceiroPage() {
                 <span className="mr-2 font-semibold text-slate-500">Resultado geral do mês</span>
                 <span className={`text-base font-bold tabular-nums ${data.resultadoGeral >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(data.resultadoGeral)}</span>
               </div>
-              <div className="grid gap-4 border-t border-slate-100 p-4 md:grid-cols-2">
+              <div className="grid gap-4 border-t border-slate-100 p-4 md:grid-cols-2 lg:grid-cols-3">
                 <div>
                   <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Por categoria</h3>
                   <ul className="space-y-1.5">
@@ -425,6 +448,22 @@ export default function FinanceiroPage() {
                       </li>
                     ))}
                   </ul>
+                </div>
+                <div>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Por centro de custo (mês)</h3>
+                  <ul className="space-y-1.5">
+                    {(data.porCentroCusto || []).length === 0 && <li className="text-sm text-slate-400">Vincule centros de custo aos lançamentos.</li>}
+                    {(data.porCentroCusto || []).slice(0, 8).map((c) => {
+                      const liquido = c.receita + c.investimento - c.despesa;
+                      return (
+                        <li key={c.centro} className="flex justify-between text-sm" title={`Receita ${formatMoney(c.receita + c.investimento)} · Despesa ${formatMoney(c.despesa)}`}>
+                          <span className="truncate text-slate-600">{c.centro}</span>
+                          <span className={`tabular-nums ${liquido >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(liquido)}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <Link to="/centros-custo" className="mt-2 inline-block text-xs font-medium text-navy-600 hover:underline">Gerenciar centros de custo →</Link>
                 </div>
                 <div>
                   <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Vendas por canal (mês)</h3>

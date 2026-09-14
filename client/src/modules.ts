@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   ArrowLeftRight,
+  ArrowRightLeft,
   BarChart3,
   Calculator,
   ClipboardCheck,
@@ -30,6 +31,7 @@ import {
   Landmark,
   Coins,
   PiggyBank,
+  PieChart,
   CircleDollarSign,
   Repeat,
   Webhook,
@@ -121,6 +123,8 @@ export const MODULES: Module[] = [
   { id: 'lancamentos', label: 'Lançamentos', icon: Coins, group: 'Financeiro', path: '/lancamentos', resource: 'lancamentos_financeiros', minPerfil: 'gerente', description: 'Livro-caixa: receitas, despesas, investimentos e estornos.' },
   { id: 'categorias-financeiras', label: 'Categorias', icon: CircleDollarSign, group: 'Financeiro', path: '/categorias-financeiras', resource: 'categorias_financeiras', minPerfil: 'gerente', description: 'Classificação dos lançamentos financeiros.' },
   { id: 'contas-financeiras', label: 'Contas', icon: Landmark, group: 'Financeiro', path: '/contas-financeiras', resource: 'contas_financeiras', minPerfil: 'gerente', description: 'Caixa, banco, Pix, cartão e boleto.' },
+  { id: 'transferencias', label: 'Transferências', icon: ArrowRightLeft, group: 'Financeiro', path: '/transferencias', resource: 'transferencias_financeiras', minPerfil: 'gerente', description: 'Mova dinheiro entre contas (Caixa → Banco Inter, Mercado Pago → Banco Inter) sem poluir receitas e despesas.' },
+  { id: 'centros-custo', label: 'Centros de custo', icon: PieChart, group: 'Financeiro', path: '/centros-custo', resource: 'centros_custo', minPerfil: 'gerente', description: 'Rateio gerencial por área: Loja, Produção/Facção, Administrativo, Marketing.' },
   { id: 'investidores', label: 'Investidores / Sócios', icon: PiggyBank, group: 'Financeiro', path: '/investidores', resource: 'investidores', minPerfil: 'gerente', description: 'Quem aporta capital, participação e distribuição de lucros.' },
   { id: 'aportes', label: 'Aportes', icon: Wallet, group: 'Financeiro', path: '/aportes', resource: 'aportes', minPerfil: 'gerente', description: 'Capital inicial, aportes, reinvestimento e empréstimo de sócio.' },
   { id: 'recorrencias-financeiras', label: 'Recorrências', icon: Repeat, group: 'Financeiro', path: '/recorrencias-financeiras', resource: 'recorrencias_financeiras', minPerfil: 'gerente', description: 'Despesas/receitas fixas: aluguel, energia, folha, facção, assinaturas — geradas automaticamente.' },

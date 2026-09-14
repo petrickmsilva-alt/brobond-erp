@@ -120,6 +120,47 @@ async function lancamentoExistente(tipo: string, refId: number, tx?: Tx): Promis
   return lista.rows[0] ?? null;
 }
 
+/**
+ * Líquido que realmente movimenta a conta: bruto − taxa da operadora
+ * (Mercado Pago, cartão...). Sem taxa, líquido = bruto.
+ */
+export function calcularLiquido(valor: number, taxaPct: number): number {
+  const v = Number(valor || 0);
+  const t = Number(taxaPct || 0);
+  if (!(t > 0)) return r2(v);
+  return r2(v - (v * t) / 100);
+}
+
+/** Líquido de um lançamento já salvo (histórico sem taxa usa o bruto). */
+function liquidoDe(l: Row): number {
+  const liq = Number(l.valor_liquido);
+  return Number.isFinite(liq) && liq > 0 ? liq : Number(l.valor || 0);
+}
+
+/** Transferências são neutras no DRE: o dinheiro só mudou de conta. */
+function ehTransferencia(l: Row): boolean {
+  return String(l.referencia_tipo || '') === 'transferencia';
+}
+
+/**
+ * Garante taxa_pct e valor_liquido coerentes no payload de um lançamento.
+ * Chamado pelos ganchos de criação/edição (services.ts) e pelo POST manual.
+ * Se o usuário informou valor_liquido explicitamente (ajuste de centavos),
+ * respeita; senão calcula bruto − taxa. Líquido nunca passa do bruto.
+ */
+export function hookTaxaLancamento(data: Row, before?: Row | null): void {
+  const valor = Number(data.valor ?? before?.valor ?? 0);
+  const taxa = Math.min(99.99, Math.max(0, Number(data.taxa_pct ?? before?.taxa_pct ?? 0)));
+  data.taxa_pct = r2(taxa);
+  if (data.valor_liquido === undefined || data.valor_liquido === null || data.valor_liquido === '') {
+    data.valor_liquido = calcularLiquido(valor, taxa);
+  } else {
+    const liq = Number(data.valor_liquido);
+    if (!Number.isFinite(liq) || liq < 0) data.valor_liquido = calcularLiquido(valor, taxa);
+    else if (liq > valor) data.valor_liquido = r2(valor);
+  }
+}
+
 async function criarLancamento(data: Row, actor: { id: number | null; name: string }, tx: Tx): Promise<Row> {
   const s = getStore();
   const r = getResource('lancamentos_financeiros')!;
@@ -363,6 +404,83 @@ export async function syncAporte(
   await s.update(getResource('aportes')!, id, { fin_lancamento_id: Number(lanc.id) }, tx);
 }
 
+/**
+ * Sincroniza o PAR ESPELHO de uma TRANSFERÊNCIA entre contas:
+ *   • conta de origem  → lançamento DESPESA (referencia_tipo 'transferencia')
+ *   • conta de destino → lançamento RECEITA (mesmo vínculo)
+ * O resumo financeiro exclui esses pares do DRE e de receitas/despesas —
+ * eles só mudam o dinheiro de lugar. Cancelar a transferência cancela o par;
+ * o histórico nunca é apagado. Chamado pelos ganchos de services.ts.
+ */
+export async function syncTransferencia(before: Row | null, after: Row, actor: { id: number | null; name: string }, tx: Tx): Promise<void> {
+  const s = getStore();
+  const id = Number(after.id);
+  const rLanc = getResource('lancamentos_financeiros')!;
+  const rContas = getResource('contas_financeiras')!;
+  const origemId = Number(after.conta_origem_id || 0);
+  const destinoId = Number(after.conta_destino_id || 0);
+  if (!origemId || !destinoId) throw new HttpError(400, 'Informe as contas de origem e de destino.');
+  if (origemId === destinoId) throw new HttpError(400, 'Origem e destino precisam ser contas diferentes.', { conta_destino_id: 'Escolha outra conta' });
+  const valor = Number(after.valor || 0);
+  if (!Number.isFinite(valor) || valor <= 0) throw new HttpError(400, 'Informe um valor maior que zero.', { valor: 'Valor inválido' });
+
+  const data = String(after.data || hoje()).slice(0, 10);
+  const status = String(after.status) === 'cancelado' ? 'cancelado' : 'confirmado';
+  const nomeConta = async (cid: number) => {
+    const c = await s.findOneWhere(rContas, { id: cid }, tx);
+    return c ? String(c.nome || `Conta #${cid}`) : `Conta #${cid}`;
+  };
+  const [nomeOrigem, nomeDestino] = [await nomeConta(origemId), await nomeConta(destinoId)];
+  const descBase = String(after.descricao || '').trim() || `Transferência #${id} — ${nomeOrigem} → ${nomeDestino}`;
+
+  let saidaId = after.lancamento_saida_id ? Number(after.lancamento_saida_id) : null;
+  let entradaId = after.lancamento_entrada_id ? Number(after.lancamento_entrada_id) : null;
+
+  const dadosSaida: Row = {
+    data,
+    tipo: 'despesa',
+    categoria_id: null,
+    centro_custo_id: null,
+    conta_id: origemId,
+    descricao: `${descBase} · saída → ${nomeDestino}`,
+    valor: r2(valor),
+    taxa_pct: 0,
+    valor_liquido: r2(valor),
+    forma_pagamento: 'transferencia',
+    status,
+    vencimento: data,
+    parcela: 1,
+    total_parcelas: 1,
+    referencia_tipo: 'transferencia',
+    referencia_id: id,
+    observacoes: `Espelho automático da transferência #${id}. Neutra no DRE.`,
+  };
+  const dadosEntrada: Row = { ...dadosSaida, tipo: 'receita', conta_id: destinoId, descricao: `${descBase} · entrada ⇐ ${nomeOrigem}` };
+
+  if (saidaId) {
+    const atual = await s.get(rLanc, saidaId, tx);
+    if (atual) await atualizarLancamento(saidaId, { ...atual, ...dadosSaida }, actor, tx);
+    else saidaId = null;
+  }
+  if (!saidaId) {
+    const saida = await criarLancamento(dadosSaida, actor, tx);
+    saidaId = Number(saida.id);
+  }
+  if (entradaId) {
+    const atual = await s.get(rLanc, entradaId, tx);
+    if (atual) await atualizarLancamento(entradaId, { ...atual, ...dadosEntrada }, actor, tx);
+    else entradaId = null;
+  }
+  if (!entradaId) {
+    const entrada = await criarLancamento(dadosEntrada, actor, tx);
+    entradaId = Number(entrada.id);
+  }
+
+  if (Number(after.lancamento_saida_id || 0) !== saidaId || Number(after.lancamento_entrada_id || 0) !== entradaId) {
+    await s.update(getResource('transferencias_financeiras')!, id, { lancamento_saida_id: saidaId, lancamento_entrada_id: entradaId }, tx);
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Painel financeiro (fluxo de caixa + DRE simplificada + contas a pagar/receber)
 // ----------------------------------------------------------------------------
@@ -376,7 +494,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
   checkAccess(getResource('contas_financeiras')!, actor, 'read');
 
   const s = getStore();
-  const [lancR, vendasR, comprasR, aportesR, contasR, categoriasR, clientesR, fornecedoresR, recorrenciasR] = await Promise.all([
+  const [lancR, vendasR, comprasR, aportesR, contasR, categoriasR, clientesR, fornecedoresR, recorrenciasR, centrosR] = await Promise.all([
     s.list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 10000, sort: 'data', dir: 'desc' }),
     s.list(getResource('vendas')!, { page: 1, pageSize: 10000 }),
     s.list(getResource('compras')!, { page: 1, pageSize: 10000 }),
@@ -386,6 +504,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     s.list(getResource('clientes')!, { page: 1, pageSize: 2000 }),
     s.list(getResource('fornecedores')!, { page: 1, pageSize: 2000 }),
     s.list(getResource('recorrencias_financeiras')!, { page: 1, pageSize: 1000, filter: { status: 'ativo' } }),
+    s.list(getResource('centros_custo')!, { page: 1, pageSize: 1000 }),
   ]);
 
   const mes = new Date().toISOString().slice(0, 7);
@@ -407,29 +526,42 @@ export async function resumoFinanceiro(req: Request, res: Response) {
   };
 
   const confirmados = lancR.rows.filter((l) => String(l.status) === 'confirmado');
+  // Resultado ignora transferências: elas só mudam o dinheiro de conta.
+  const operacionais = confirmados.filter((l) => !ehTransferencia(l));
+  const pendentesOper = lancR.rows.filter((l) => String(l.status) === 'pendente' && !ehTransferencia(l));
   const doMes = (l: Row) => String(l.data || '').slice(0, 7) === mes;
 
-  // Saldo por conta = saldo inicial + entradas − saídas (confirmados)
+  // Saldo por conta = saldo inicial + entradas (líquidas, já sem taxa) − saídas.
+  // "Previsto" soma o que está pendente (bruto) — a visão do caixa futuro.
   const saldoContas = contasR.rows.map((conta) => {
+    const cid = Number(conta.id);
     let valor = Number(conta.saldo_inicial || 0);
     for (const l of confirmados) {
-      if (Number(l.conta_id || 0) !== Number(conta.id)) continue;
+      if (Number(l.conta_id || 0) !== cid) continue;
       const entrada = ['receita', 'investimento'].includes(String(l.tipo));
-      valor += entrada ? Number(l.valor || 0) : -Number(l.valor || 0);
+      valor += entrada ? liquidoDe(l) : -Number(l.valor || 0);
     }
-    return { conta_id: Number(conta.id), nome: nomeConta(conta.id), tipo: String(conta.tipo || 'caixa'), saldo: r2(valor) };
+    let previsto = valor;
+    for (const l of pendentesOper) {
+      if (Number(l.conta_id || 0) !== cid) continue;
+      const entrada = ['receita', 'investimento'].includes(String(l.tipo));
+      previsto += entrada ? liquidoDe(l) : -Number(l.valor || 0);
+    }
+    return { conta_id: cid, nome: nomeConta(cid), tipo: String(conta.tipo || 'caixa'), saldo: r2(valor), previsto: r2(previsto) };
   });
   const saldoContasTotal = somaMoeda(saldoContas.map((c) => c.saldo));
 
-  const receitasMes = somaMoeda(confirmados.filter((l) => doMes(l) && l.tipo === 'receita').map((l) => Number(l.valor || 0)));
-  const despesasMes = somaMoeda(confirmados.filter((l) => doMes(l) && l.tipo === 'despesa').map((l) => Number(l.valor || 0)));
-  const investimentosMes = somaMoeda(confirmados.filter((l) => doMes(l) && l.tipo === 'investimento').map((l) => Number(l.valor || 0)));
+  const receitasMes = somaMoeda(operacionais.filter((l) => doMes(l) && l.tipo === 'receita').map((l) => liquidoDe(l)));
+  const despesasMes = somaMoeda(operacionais.filter((l) => doMes(l) && l.tipo === 'despesa').map((l) => Number(l.valor || 0)));
+  const investimentosMes = somaMoeda(operacionais.filter((l) => doMes(l) && l.tipo === 'investimento').map((l) => liquidoDe(l)));
+  const taxasMes = somaMoeda(operacionais.filter((l) => doMes(l) && ['receita', 'investimento'].includes(String(l.tipo))).map((l) => r2(Number(l.valor || 0) - liquidoDe(l))));
   const resultadoOperacionalMes = r2(receitasMes - despesasMes);
   const resultadoCaixaMes = r2(resultadoOperacionalMes + investimentosMes);
 
   // DRE gerencial do mês — classificado pela categoria do lançamento.
-  const dre = { receita: 0, cmv: 0, mao_obra: 0, despesas_operacionais: 0, despesas_financeiras: 0, impostos: 0, investimentos: 0 };
-  for (const l of confirmados) {
+  // Receita aqui é BRUTA; a taxa da operadora aparece em linha própria.
+  const dre = { receita: 0, cmv: 0, mao_obra: 0, despesas_operacionais: 0, despesas_financeiras: 0, impostos: 0, investimentos: 0, taxas_operadoras: 0 };
+  for (const l of operacionais) {
     if (!doMes(l)) continue;
     const classe = classeCat(l);
     const valor = Number(l.valor || 0);
@@ -441,6 +573,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     else if (classe === 'investimento') dre.investimentos += valor;
     else dre.despesas_operacionais += valor;
   }
+  dre.taxas_operadoras = taxasMes;
   dre.receita = r2(dre.receita);
   dre.cmv = r2(dre.cmv);
   dre.mao_obra = r2(dre.mao_obra);
@@ -450,7 +583,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
   dre.investimentos = r2(dre.investimentos);
   const lucroBruto = r2(dre.receita - dre.cmv);
   const resultadoOperacional = r2(lucroBruto - dre.mao_obra - dre.despesas_operacionais - dre.impostos);
-  const resultadoFinanceiro = r2(resultadoOperacional - dre.despesas_financeiras);
+  const resultadoFinanceiro = r2(resultadoOperacional - dre.despesas_financeiras - dre.taxas_operadoras);
   const resultadoGeral = r2(resultadoFinanceiro + dre.investimentos);
 
   // Contas a receber/pagar em aberto = lançamentos PENDENTES do livro financeiro
@@ -471,8 +604,8 @@ export async function resumoFinanceiro(req: Request, res: Response) {
   };
   const somaVencidas = (lista: { vencimento: unknown; valor: number }[]) => somaMoeda(lista.filter((l) => vencidas(l.vencimento)).map((l) => l.valor));
 
-  const pendentesReceber = lancR.rows.filter((l) => String(l.status) === 'pendente' && String(l.tipo) === 'receita');
-  const pendentesPagar = lancR.rows.filter((l) => String(l.status) === 'pendente' && String(l.tipo) === 'despesa');
+  const pendentesReceber = pendentesOper.filter((l) => String(l.tipo) === 'receita');
+  const pendentesPagar = pendentesOper.filter((l) => String(l.tipo) === 'despesa');
 
   const aReceberLista = pendentesReceber
     .map((l) => ({
@@ -538,8 +671,19 @@ export async function resumoFinanceiro(req: Request, res: Response) {
   const saldoBase = saldoContasTotal;
   const fluxoProjetado = montarFluxoProjetado(lancR.rows, recorrenciasR.rows, saldoBase);
 
+  // Semáforo de caixa: pior acumulado das próximas 12 semanas de projeção.
+  // vermelho = caixa negativa; amarelo = queda de mais de 30% do saldo atual.
+  const acumulados = fluxoProjetado.semanal.map((s2) => s2.acumulado);
+  const minAcumulado = acumulados.length ? Math.min(...acumulados) : saldoBase;
+  const semanaMin = fluxoProjetado.semanal.find((s2) => s2.acumulado === minAcumulado);
+  const semaforo = {
+    status: minAcumulado < 0 ? 'vermelho' : minAcumulado < saldoBase * 0.7 ? 'amarelo' : 'verde',
+    minAcumulado: r2(minAcumulado),
+    periodo: semanaMin ? semanaMin.label : null,
+  };
+
   const porCategoria = new Map<string, { categoria: string; receita: number; despesa: number; investimento: number }>();
-  for (const l of confirmados) {
+  for (const l of operacionais) {
     const nome = nomeCat(l.categoria_id);
     const item = porCategoria.get(nome) || { categoria: nome, receita: 0, despesa: 0, investimento: 0 };
     if (l.tipo === 'receita') item.receita = r2(item.receita + Number(l.valor || 0));
@@ -548,6 +692,21 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     porCategoria.set(nome, item);
   }
   const categorias = [...porCategoria.values()].sort((a, b) => b.despesa + b.receita + b.investimento - (a.despesa + a.receita + a.investimento));
+
+  // Resultado por centro de custo (mês): o raio-x Loja × Produção × Adm.
+  const ccPorId = new Map<number, Row>(centrosR.rows.map((c) => [Number(c.id), c]));
+  const porCentro = new Map<string, { centro: string; receita: number; despesa: number; investimento: number }>();
+  for (const l of operacionais) {
+    if (!doMes(l)) continue;
+    const cc = ccPorId.get(Number(l.centro_custo_id || 0));
+    const nome = cc ? String(cc.nome || 'Sem centro de custo') : 'Sem centro de custo';
+    const item = porCentro.get(nome) || { centro: nome, receita: 0, despesa: 0, investimento: 0 };
+    if (l.tipo === 'receita') item.receita = r2(item.receita + liquidoDe(l));
+    if (l.tipo === 'despesa') item.despesa = r2(item.despesa + Number(l.valor || 0));
+    if (l.tipo === 'investimento') item.investimento = r2(item.investimento + liquidoDe(l));
+    porCentro.set(nome, item);
+  }
+  const porCentroCusto = [...porCentro.values()].sort((a, b) => b.despesa + b.receita - (a.despesa + a.receita));
 
   const porCanal = [
     { canal: 'balcao', valor: 0 },
@@ -587,6 +746,8 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     receitasMes,
     despesasMes,
     investimentosMes,
+    taxasMes,
+    semaforo,
     resultadoOperacionalMes,
     resultadoCaixaMes,
     aReceber,
@@ -598,6 +759,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     aReceberLista,
     aPagarLista,
     categorias,
+    porCentroCusto,
     vendasPorCanal: porCanal.filter((p) => p.valor > 0),
     dre,
     lucroBruto,
@@ -660,34 +822,44 @@ export async function processarRecorrencias(actor: { id: number | null; name: st
     const data = proxima;
     const categoria = rec.categoria_id ?? null;
     const conta = rec.conta_id ?? null;
-    await s.transaction(async (tx) => {
-      const r2 = getResource('lancamentos_financeiros')!;
-      const row = await s.insert(
-        r2,
-        {
-          data,
-          tipo: String(rec.tipo || 'despesa'),
-          categoria_id: categoria,
-          conta_id: conta,
-          descricao: String(rec.descricao || 'Lançamento recorrente'),
-          valor: Number(rec.valor || 0),
-          forma_pagamento: rec.forma_pagamento ?? null,
-          status: 'pendente',
-          vencimento: data,
-          parcela: 1,
-          total_parcelas: 1,
-          referencia_tipo: 'recorrencia',
-          referencia_id: Number(rec.id),
-          referencia_recorrencia_id: Number(rec.id),
-          observacoes: `Gerado automaticamente (${rec.frequencia})`,
-        },
-        tx
-      );
-      await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name || 'Sistema', acao: 'criar', recurso: 'lancamentos_financeiros', registro_id: Number(row.id), descricao: `Lançamento recorrente — ${rec.descricao}`, dados: { recorrencia_id: Number(rec.id), valor: Number(rec.valor || 0) } },
-        tx
-      );
-    });
+    try {
+      await s.transaction(async (tx) => {
+        const r2 = getResource('lancamentos_financeiros')!;
+        const row = await s.insert(
+          r2,
+          {
+            data,
+            tipo: String(rec.tipo || 'despesa'),
+            categoria_id: categoria,
+            conta_id: conta,
+            centro_custo_id: rec.centro_custo_id ?? null,
+            descricao: String(rec.descricao || 'Lançamento recorrente'),
+            valor: Number(rec.valor || 0),
+            taxa_pct: 0,
+            valor_liquido: Number(rec.valor || 0),
+            forma_pagamento: rec.forma_pagamento ?? null,
+            status: 'pendente',
+            vencimento: data,
+            parcela: 1,
+            total_parcelas: 1,
+            referencia_tipo: 'recorrencia',
+            referencia_id: Number(rec.id),
+            referencia_recorrencia_id: Number(rec.id),
+            observacoes: `Gerado automaticamente (${rec.frequencia})`,
+          },
+          tx
+        );
+        await s.audit(
+          { usuario_id: actor.id || null, usuario: actor.name || 'Sistema', acao: 'criar', recurso: 'lancamentos_financeiros', registro_id: Number(row.id), descricao: `Lançamento recorrente — ${rec.descricao}`, dados: { recorrencia_id: Number(rec.id), valor: Number(rec.valor || 0) } },
+          tx
+        );
+      });
+    } catch (e: any) {
+      // Outra execução (cron + botão) gerou a mesma competência primeiro:
+      // o índice único (recorrencia, vencimento) barra a duplicata — segue.
+      if (e?.code === '23505') continue;
+      throw e;
+    }
 
     // Calcula a próxima geração e atualiza a recorrência.
     const prox = calcularProximaGeracao(rec, new Date(`${proxima}T12:00:00Z`));
@@ -889,6 +1061,9 @@ export async function conciliarExtrato(req: Request, res: Response) {
     const valor = Number(linha.valor);
     const buscaDesc = (linha.descricao || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim();
     let cand = pendentes.filter((l) => Math.abs(Number(l.valor || 0) - valor) < 0.01);
+    // Extrato de operadora (Mercado Pago/cartão) mostra o valor já sem taxa:
+    // casa também pelo valor líquido registrado no lançamento.
+    if (cand.length === 0) cand = pendentes.filter((l) => Math.abs(liquidoDe(l) - valor) < 0.01);
     if (linha.data) cand = cand.filter((l) => String(l.vencimento || l.data || '').slice(0, 10) === linha.data);
     if (buscaDesc && cand.length > 1) {
       const sobreDesc = cand.filter((l) => buscaDesc.includes(String(l.descricao || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim()) || String(l.descricao || '').toLowerCase().includes(buscaDesc));
@@ -952,8 +1127,10 @@ export async function criarLancamentoManual(req: Request, res: Response) {
         tipo: ['receita', 'despesa', 'investimento', 'estorno'].includes(String(body.tipo)) ? String(body.tipo) : 'despesa',
         categoria_id: body.categoria_id ?? null,
         conta_id: body.conta_id ?? null,
+        centro_custo_id: body.centro_custo_id ?? null,
         descricao: String(body.descricao).trim(),
         valor: r2(valor),
+        taxa_pct: Number(body.taxa_pct || 0),
         forma_pagamento: body.forma_pagamento ?? null,
         status: String(body.status || 'confirmado'),
         vencimento: body.vencimento ? String(body.vencimento).slice(0, 10) : null,
@@ -963,6 +1140,8 @@ export async function criarLancamentoManual(req: Request, res: Response) {
         referencia_id: body.referencia_id ?? null,
         observacoes: body.observacoes ?? null,
       };
+      if (body.valor_liquido !== undefined && body.valor_liquido !== null && body.valor_liquido !== '') data.valor_liquido = Number(body.valor_liquido);
+      hookTaxaLancamento(data);
       const inserted = await s.insert(getResource('lancamentos_financeiros')!, data, tx);
       await s.audit(
         { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'lancamentos_financeiros', registro_id: Number(inserted.id), descricao: `Lançamento manual — ${data.descricao} (${data.tipo})`, dados: { valor: data.valor } },

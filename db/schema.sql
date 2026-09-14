@@ -732,6 +732,69 @@ CREATE INDEX IF NOT EXISTS idx_aportes_data        ON aportes (data DESC);
 CREATE INDEX IF NOT EXISTS idx_aportes_invest      ON aportes (investidor_id);
 
 -- ------------------------------------------------------------
+-- 2.11) FINANCEIRO PROFISSIONAL — centros de custo, plano de
+-- contas hierárquico, taxas de operadora e transferências
+-- ------------------------------------------------------------
+
+-- Centros de custo (Loja, Produção/Facção, Administrativo, Marketing...)
+CREATE TABLE IF NOT EXISTS centros_custo (
+  id SERIAL PRIMARY KEY,
+  codigo TEXT NOT NULL,
+  nome TEXT NOT NULL,
+  descricao TEXT,
+  ativo BOOLEAN DEFAULT TRUE,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_centros_custo_codigo ON centros_custo (LOWER(codigo));
+CREATE UNIQUE INDEX IF NOT EXISTS uq_centros_custo_nome   ON centros_custo (LOWER(nome));
+
+-- Plano de contas hierárquico: categoria pode ter categoria-pai
+ALTER TABLE categorias_financeiras ADD COLUMN IF NOT EXISTS pai_id INTEGER REFERENCES categorias_financeiras(id);
+
+-- Lançamento: centro de custo e taxas de operadora (Mercado Pago, cartão...)
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS centro_custo_id INTEGER REFERENCES centros_custo(id);
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS taxa_pct NUMERIC(5,2) DEFAULT 0;
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS valor_liquido NUMERIC(12,2);
+
+-- Recorrência: centro de custo padrão para os lançamentos gerados
+ALTER TABLE recorrencias_financeiras ADD COLUMN IF NOT EXISTS centro_custo_id INTEGER REFERENCES centros_custo(id);
+
+-- Transferências entre contas (Caixa → Banco Inter, Mercado Pago → Banco...).
+-- Espelhadas como par de lançamentos do tipo 'transferencia' (neutros no DRE).
+CREATE TABLE IF NOT EXISTS transferencias_financeiras (
+  id SERIAL PRIMARY KEY,
+  data DATE NOT NULL DEFAULT now(),
+  conta_origem_id INTEGER NOT NULL REFERENCES contas_financeiras(id),
+  conta_destino_id INTEGER NOT NULL REFERENCES contas_financeiras(id),
+  valor NUMERIC(12,2) NOT NULL,
+  descricao TEXT,
+  status TEXT DEFAULT 'confirmado',      -- confirmado | cancelado
+  lancamento_saida_id INTEGER,
+  lancamento_entrada_id INTEGER,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_transf_fin_data    ON transferencias_financeiras (data DESC);
+CREATE INDEX IF NOT EXISTS idx_transf_fin_origem  ON transferencias_financeiras (conta_origem_id);
+CREATE INDEX IF NOT EXISTS idx_transf_fin_destino ON transferencias_financeiras (conta_destino_id);
+
+-- Recorrência não gera duplicata concorrente (cron + botão ao mesmo tempo).
+-- Defensivo: se houver duplicata histórica, o índice é adiado (NOTICE) para
+-- não derrubar o boot — a limpeza vira exceção operacional registrada.
+DO $$
+BEGIN
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_lanc_fin_recorrencia_vencimento
+    ON lancamentos_financeiros (referencia_recorrencia_id, vencimento)
+    WHERE referencia_recorrencia_id IS NOT NULL;
+EXCEPTION WHEN unique_violation THEN
+  RAISE NOTICE 'uq_lanc_fin_recorrencia_vencimento adiado: existem duplicatas de recorrência para revisar.';
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_lanc_fin_centro_custo ON lancamentos_financeiros (centro_custo_id);
+
+-- ------------------------------------------------------------
 -- 3) ÍNDICES
 -- ------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_auditoria_data       ON auditoria (data DESC);
