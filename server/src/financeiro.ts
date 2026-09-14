@@ -113,12 +113,106 @@ async function categoriaPadrao(tipo: 'receita' | 'despesa' | 'investimento', tx?
   return lista.rows[0] ?? null;
 }
 
+/** Busca a primeira categoria de uma classe do DRE (ex.: receitas_financeiras). */
+async function categoriaPorClasse(classe: string, tx?: Tx): Promise<Row | null> {
+  const s = getStore();
+  const r = getResource('categorias_financeiras')!;
+  const lista = await s.list(r, { page: 1, pageSize: 1, filter: { classificacao_dre: classe } }, tx);
+  return lista.rows[0] ?? null;
+}
+
 async function lancamentoExistente(tipo: string, refId: number, tx?: Tx): Promise<Row | null> {
   const s = getStore();
   const r = getResource('lancamentos_financeiros')!;
   const lista = await s.list(r, { page: 1, pageSize: 10, filter: { referencia_tipo: tipo, referencia_id: refId } }, tx);
   return lista.rows[0] ?? null;
 }
+
+/** Todas as parcelas (lançamentos) de uma origem — base da reconciliação. */
+async function parcelasDaOrigem(tipo: string, refId: number, tx?: Tx): Promise<Row[]> {
+  const s = getStore();
+  const r = getResource('lancamentos_financeiros')!;
+  const lista = await s.list(r, { page: 1, pageSize: 500, filter: { referencia_tipo: tipo, referencia_id: refId } }, tx);
+  return lista.rows;
+}
+
+/** Soma meses à data preservando o dia (31 jan + 1m = 28/29 fev, não 3 mar). */
+function addMeses(dataISO: string, meses: number): string {
+  const d = new Date(`${dataISO}T12:00:00Z`);
+  const dia = d.getUTCDate();
+  const alvo = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + meses, 1, 12));
+  const ultimoDia = new Date(Date.UTC(alvo.getUTCFullYear(), alvo.getUTCMonth() + 1, 0, 12)).getUTCDate();
+  alvo.setUTCDate(Math.min(dia, ultimoDia));
+  return alvo.toISOString().slice(0, 10);
+}
+
+/**
+ * Reconcilia o contas a receber/pagar de uma venda/compra como PARCELA REAL:
+ * fin_parcelas = N gera N lançamentos (1/N..N/N) com vencimentos mensais, a
+ * última absorvendo os centavos da divisão. Edição do pedido atualiza as
+ * parcelas; redução do plano cancela as parcelas excedentes (histórico).
+ * Baixas já confirmadas (conciliação/baixa manual) não são revertidas —
+ * só o cancelamento/faturamento global do pedido redefine o status.
+ */
+async function reconciliarParcelasPedido(
+  referencia: 'venda' | 'compra',
+  after: Row,
+  descricaoBase: string,
+  dataBase: string,
+  tipo: 'receita' | 'despesa',
+  categoriaId: number | null,
+  actor: { id: number | null; name: string },
+  tx: Tx,
+  extraObs?: string | null
+): Promise<void> {
+  const id = Number(after.id);
+  const finCancelado = ['cancelado', 'cancelada'].includes(String(after.fin_status)) || ['cancelado', 'cancelada'].includes(String(after.status));
+  const finLiquidado = ['recebido', 'pago'].includes(String(after.fin_status));
+  const total = Math.max(0, Number(after.total || 0));
+  const n = Math.max(1, Math.min(60, Math.trunc(Number(after.fin_parcelas || 1) || 1)));
+  const baseVenc = (String(after.fin_vencimento || '').slice(0, 10) || dataBase).slice(0, 10);
+  const valorParcela = r2(total / n);
+  const existentes = await parcelasDaOrigem(referencia, id, tx);
+
+  for (let i = 1; i <= n; i++) {
+    const valor = i === n ? r2(total - valorParcela * (n - 1)) : valorParcela;
+    const alvo = existentes.find((l) => Number(l.parcela || 1) === i);
+    const dados: Row = {
+      data: i === 1 || !alvo ? dataBase : String(alvo.data || dataBase).slice(0, 10),
+      tipo,
+      categoria_id: categoriaId,
+      conta_id: after.fin_conta_id ?? alvo?.conta_id ?? null,
+      descricao: n > 1 ? `${descricaoBase} (${i}/${n})` : descricaoBase,
+      valor,
+      forma_pagamento: after.fin_forma_pagamento ?? alvo?.forma_pagamento ?? null,
+      vencimento: addMeses(baseVenc, i - 1),
+      parcela: i,
+      total_parcelas: n,
+      referencia_tipo: referencia,
+      referencia_id: id,
+      observacoes: alvo?.observacoes ?? extraObs ?? null,
+    };
+    if (alvo) {
+      // Status: cancelamento global zera tudo; liquidação global confirma tudo;
+      // fora isso a parcela confirmada por baixa/conciliação é intocável.
+      let status = String(alvo.status || 'pendente');
+      if (finCancelado) status = 'cancelado';
+      else if (finLiquidado) status = 'confirmado';
+      else if (status === 'cancelado') status = 'pendente';
+      await atualizarLancamento(Number(alvo.id), { ...alvo, ...dados, status }, actor, tx);
+    } else {
+      const status = finCancelado ? 'cancelado' : finLiquidado ? 'confirmado' : 'pendente';
+      await criarLancamento({ ...dados, status, taxa_pct: 0, valor_liquido: valor }, actor, tx);
+    }
+  }
+  // Parcelas excedentes (plano encolheu): cancelamento preserva a trilha.
+  for (const l of existentes) {
+    if (Number(l.parcela || 1) > n && String(l.status) !== 'cancelado') {
+      await atualizarLancamento(Number(l.id), { ...l, status: 'cancelado', observacoes: [String(l.observacoes || ''), `Parcela cancelada: plano reduzido para ${n}x em ${hoje()}`].filter(Boolean).join('\n') }, actor, tx);
+    }
+  }
+}
+
 
 /**
  * Líquido que realmente movimenta a conta: bruto − taxa da operadora
@@ -202,7 +296,7 @@ async function atualizarLancamento(id: number, data: Row, actor: { id: number | 
 }
 
 /**
- * Sincroniza o lançamento financeiro de uma VENDA.
+ * Sincroniza o contas a receber de uma VENDA como parcelas reais.
  * Chamado dentro da transação do pedido (services.ts).
  */
 export async function syncLancamentoVenda(
@@ -214,71 +308,27 @@ export async function syncLancamentoVenda(
 ): Promise<void> {
   const id = Number(after.id);
   const s = getStore();
-  const vendasR = getResource('vendas')!;
   const cliente = after.cliente_id ? await s.findOneWhere(getResource('clientes')!, { id: Number(after.cliente_id) }, tx) : null;
-  const descricao = before
-    ? `Venda #${id} — ${cliente ? labelOf(getResource('clientes')!, cliente) : ''}`
-    : `Venda #${id} criada — ${cliente ? labelOf(getResource('clientes')!, cliente) : ''}`;
-  const referencia = 'venda';
-  const existente = await lancamentoExistente(referencia, id, tx);
+  const descricao = `Venda #${id} — ${cliente ? labelOf(getResource('clientes')!, cliente) : ''}`;
+  const tinha = await lancamentoExistente('venda', id, tx);
+  if (!tinha && !faturados(after)) return;
 
-  if (existente) {
-    const status = after.fin_status === 'recebido' ? 'confirmado' : after.fin_status === 'cancelado' ? 'cancelado' : 'pendente';
-    const mudou =
-      Number(existente.valor) !== Number(after.total || 0) ||
-      String(existente.status) !== status ||
-      Number(existente.referencia_id || 0) !== id ||
-      String(existente.descricao || '') !== descricao ||
-      String(existente.vencimento || '') !== String(after.fin_vencimento || '') ||
-      Number(existente.parcela || 1) !== Number(after.fin_parcelas || 1);
-    if (mudou) {
-      await atualizarLancamento(
-        Number(existente.id),
-        {
-          ...existente,
-          valor: Number(after.total || 0),
-          status,
-          conta_id: after.fin_conta_id ?? existente.conta_id ?? null,
-          forma_pagamento: after.fin_forma_pagamento ?? existente.forma_pagamento ?? null,
-          descricao,
-          referencia_id: id,
-          vencimento: after.fin_vencimento ? String(after.fin_vencimento).slice(0, 10) : existente.vencimento ?? null,
-          parcela: Number(after.fin_parcelas || 1),
-          total_parcelas: Number(after.fin_parcelas || 1),
-        },
-        actor,
-        tx
-      );
-    }
-    return;
-  }
-
-  if (!faturados(after)) return;
   const cat = await categoriaPadrao('receita', tx);
-  await criarLancamento(
-    {
-      data: String(after.faturada_em || after.data || hoje()).slice(0, 10),
-      tipo: 'receita',
-      categoria_id: cat?.id ?? null,
-      conta_id: after.fin_conta_id ?? null,
-      descricao,
-      valor: Number(after.total || 0),
-      forma_pagamento: after.fin_forma_pagamento ?? null,
-      status: after.fin_status === 'recebido' ? 'confirmado' : 'pendente',
-      vencimento: after.fin_vencimento ? String(after.fin_vencimento).slice(0, 10) : null,
-      parcela: Number(after.fin_parcelas || 1),
-      total_parcelas: Number(after.fin_parcelas || 1),
-      referencia_tipo: referencia,
-      referencia_id: id,
-      observacoes: `Canal: ${String(after.canal_venda || 'balcao')}`,
-    },
+  await reconciliarParcelasPedido(
+    'venda',
+    after,
+    descricao,
+    String(after.faturada_em || after.data || hoje()).slice(0, 10),
+    'receita',
+    cat?.id ?? null,
     actor,
-    tx
+    tx,
+    `Canal: ${String(after.canal_venda || 'balcao')}`
   );
 }
 
 /**
- * Sincroniza o lançamento financeiro de uma COMPRA.
+ * Sincroniza o contas a pagar de uma COMPRA como parcelas reais.
  */
 export async function syncLancamentoCompra(
   before: Row | null,
@@ -291,61 +341,11 @@ export async function syncLancamentoCompra(
   const s = getStore();
   const fornecedor = after.fornecedor_id ? await s.findOneWhere(getResource('fornecedores')!, { id: Number(after.fornecedor_id) }, tx) : null;
   const descricao = `Compra #${id} — ${fornecedor ? labelOf(getResource('fornecedores')!, fornecedor) : ''}`;
-  const referencia = 'compra';
-  const existente = await lancamentoExistente(referencia, id, tx);
+  const tinha = await lancamentoExistente('compra', id, tx);
+  if (!tinha && String(after.status) !== 'recebido') return;
 
-  if (existente) {
-    const status = after.fin_status === 'pago' ? 'confirmado' : after.fin_status === 'cancelado' ? 'cancelado' : 'pendente';
-    const mudou =
-      Number(existente.valor) !== Number(after.total || 0) ||
-      String(existente.status) !== status ||
-      Number(existente.referencia_id || 0) !== id ||
-      String(existente.descricao || '') !== descricao ||
-      String(existente.vencimento || '') !== String(after.fin_vencimento || '') ||
-      Number(existente.parcela || 1) !== Number(after.fin_parcelas || 1);
-    if (mudou) {
-      await atualizarLancamento(
-        Number(existente.id),
-        {
-          ...existente,
-          valor: Number(after.total || 0),
-          status,
-          conta_id: after.fin_conta_id ?? existente.conta_id ?? null,
-          forma_pagamento: after.fin_forma_pagamento ?? existente.forma_pagamento ?? null,
-          descricao,
-          referencia_id: id,
-          vencimento: after.fin_vencimento ? String(after.fin_vencimento).slice(0, 10) : existente.vencimento ?? null,
-          parcela: Number(after.fin_parcelas || 1),
-          total_parcelas: Number(after.fin_parcelas || 1),
-        },
-        actor,
-        tx
-      );
-    }
-    return;
-  }
-
-  if (String(after.status) !== 'recebido') return;
   const cat = await categoriaPadrao('despesa', tx);
-  await criarLancamento(
-    {
-      data: String(after.recebida_em || after.data || hoje()).slice(0, 10),
-      tipo: 'despesa',
-      categoria_id: cat?.id ?? null,
-      conta_id: after.fin_conta_id ?? null,
-      descricao,
-      valor: Number(after.total || 0),
-      forma_pagamento: after.fin_forma_pagamento ?? null,
-      status: after.fin_status === 'pago' ? 'confirmado' : 'pendente',
-      vencimento: after.fin_vencimento ? String(after.fin_vencimento).slice(0, 10) : null,
-      parcela: Number(after.fin_parcelas || 1),
-      total_parcelas: Number(after.fin_parcelas || 1),
-      referencia_tipo: referencia,
-      referencia_id: id,
-    },
-    actor,
-    tx
-  );
+  await reconciliarParcelasPedido('compra', after, descricao, String(after.recebida_em || after.data || hoje()).slice(0, 10), 'despesa', cat?.id ?? null, actor, tx, null);
 }
 
 /**
@@ -560,7 +560,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
 
   // DRE gerencial do mês — classificado pela categoria do lançamento.
   // Receita aqui é BRUTA; a taxa da operadora aparece em linha própria.
-  const dre = { receita: 0, cmv: 0, mao_obra: 0, despesas_operacionais: 0, despesas_financeiras: 0, impostos: 0, investimentos: 0, taxas_operadoras: 0 };
+  const dre = { receita: 0, cmv: 0, mao_obra: 0, despesas_operacionais: 0, despesas_financeiras: 0, receitas_financeiras: 0, impostos: 0, investimentos: 0, taxas_operadoras: 0 };
   for (const l of operacionais) {
     if (!doMes(l)) continue;
     const classe = classeCat(l);
@@ -569,6 +569,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     else if (classe === 'cmv') dre.cmv += valor;
     else if (classe === 'mao_obra') dre.mao_obra += valor;
     else if (classe === 'despesas_financeiras') dre.despesas_financeiras += valor;
+    else if (classe === 'receitas_financeiras') dre.receitas_financeiras += valor;
     else if (classe === 'impostos') dre.impostos += valor;
     else if (classe === 'investimento') dre.investimentos += valor;
     else dre.despesas_operacionais += valor;
@@ -579,11 +580,12 @@ export async function resumoFinanceiro(req: Request, res: Response) {
   dre.mao_obra = r2(dre.mao_obra);
   dre.despesas_operacionais = r2(dre.despesas_operacionais);
   dre.despesas_financeiras = r2(dre.despesas_financeiras);
+  dre.receitas_financeiras = r2(dre.receitas_financeiras);
   dre.impostos = r2(dre.impostos);
   dre.investimentos = r2(dre.investimentos);
   const lucroBruto = r2(dre.receita - dre.cmv);
   const resultadoOperacional = r2(lucroBruto - dre.mao_obra - dre.despesas_operacionais - dre.impostos);
-  const resultadoFinanceiro = r2(resultadoOperacional - dre.despesas_financeiras - dre.taxas_operadoras);
+  const resultadoFinanceiro = r2(resultadoOperacional - dre.despesas_financeiras - dre.taxas_operadoras + dre.receitas_financeiras);
   const resultadoGeral = r2(resultadoFinanceiro + dre.investimentos);
 
   // Contas a receber/pagar em aberto = lançamentos PENDENTES do livro financeiro
@@ -639,6 +641,28 @@ export async function resumoFinanceiro(req: Request, res: Response) {
 
   const aReceber = somaMoeda(aReceberLista.map((l) => l.valor));
   const aPagar = somaMoeda(aPagarLista.map((l) => l.valor));
+
+  // Aging do contas a receber: quanto está vencido e há quanto tempo, por faixa.
+  // Sem vencimento registrado entra como "a vencer" (conservador).
+  const hojeMs = Date.parse(hoje());
+  const agingFaixas = { a_vencer: 0, vencido_1_30: 0, vencido_31_60: 0, vencido_61_90: 0, vencido_90_mais: 0 };
+  const agingCliente = new Map<string, { nome: string; total: number; vencido: number }>();
+  for (const l of aReceberLista) {
+    const atraso = l.vencimento ? Math.floor((hojeMs - Date.parse(String(l.vencimento))) / 86400000) : 0;
+    if (atraso <= 0) agingFaixas.a_vencer = r2(agingFaixas.a_vencer + l.valor);
+    else if (atraso <= 30) agingFaixas.vencido_1_30 = r2(agingFaixas.vencido_1_30 + l.valor);
+    else if (atraso <= 60) agingFaixas.vencido_31_60 = r2(agingFaixas.vencido_31_60 + l.valor);
+    else if (atraso <= 90) agingFaixas.vencido_61_90 = r2(agingFaixas.vencido_61_90 + l.valor);
+    else agingFaixas.vencido_90_mais = r2(agingFaixas.vencido_90_mais + l.valor);
+    const cli = agingCliente.get(l.nome) || { nome: l.nome, total: 0, vencido: 0 };
+    cli.total = r2(cli.total + l.valor);
+    if (atraso > 0) cli.vencido = r2(cli.vencido + l.valor);
+    agingCliente.set(l.nome, cli);
+  }
+  const agingReceber = {
+    faixas: agingFaixas,
+    clientes: [...agingCliente.values()].sort((a, b) => b.total - a.total).slice(0, 8),
+  };
 
   const emJanela = (d: unknown, dias: number) => {
     const s = String(d || '').slice(0, 10);
@@ -758,6 +782,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     aPagarVencidas,
     aReceberLista,
     aPagarLista,
+    agingReceber,
     categorias,
     porCentroCusto,
     vendasPorCanal: porCanal.filter((p) => p.valor > 0),
@@ -1108,6 +1133,132 @@ export async function conciliarExtrato(req: Request, res: Response) {
   }
 
   res.json({ ok: true, totalLinhas: linhas.length, confirmados, naoConfirmados });
+}
+
+// ----------------------------------------------------------------------------
+// BAIXA DEDICADA — receber/pagar um lançamento pendente com juros, multa e
+// desconto, sem editar a origem (venda/compra). O valor da origem permanece:
+// o acerto acontece por LANÇAMENTOS FILHOS ('baixa'), que mantêm o extrato e
+// o DRE exatos (caixa bate centavo a centavo com o que entrou/saiu da conta).
+// ----------------------------------------------------------------------------
+
+export async function baixarLancamento(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(getResource('lancamentos_financeiros')!, actor, 'update');
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, 'Lançamento inválido.');
+
+  const body = req.body || {};
+  const juros = Number(body.juros || 0);
+  const multa = Number(body.multa || 0);
+  const desconto = Number(body.desconto || 0);
+  for (const [nome, v] of [['juros', juros], ['multa', multa], ['desconto', desconto]] as const) {
+    if (!Number.isFinite(v) || v < 0) throw new HttpError(400, `Informe ${nome} maior ou igual a zero.`, { [nome]: 'Valor inválido' });
+  }
+  const dataBaixa = String(body.data || hoje()).slice(0, 10);
+
+  const s = getStore();
+  const resultado = await s.transaction(async (tx) => {
+    const lancR = getResource('lancamentos_financeiros')!;
+    const lanc = await s.get(lancR, id, tx);
+    if (!lanc) throw new HttpError(404, 'Lançamento não encontrado.');
+    if (String(lanc.status) !== 'pendente') {
+      throw new HttpError(409, `Apenas lançamentos pendentes podem ser baixados (este está "${String(lanc.status)}").`);
+    }
+    const tipo = String(lanc.tipo);
+    if (!['receita', 'despesa'].includes(tipo)) throw new HttpError(400, 'Baixa aplicável apenas a receitas e despesas.');
+    if (ehTransferencia(lanc)) throw new HttpError(400, 'Transferências são gerenciadas pelo módulo Transferências.');
+
+    const contaBaixa = body.conta_id ?? lanc.conta_id ?? null;
+    const formaBaixa = body.forma_pagamento ?? lanc.forma_pagamento ?? null;
+    const jurosMulta = r2(juros + multa);
+    const filhos: number[] = [];
+
+    // 1) Confirma o principal na conta/forma escolhidas, com a trilha da baixa.
+    const notas = [
+      String(lanc.observacoes || ''),
+      `Baixa em ${dataBaixa}${jurosMulta > 0 ? ` · juros/multa ${formatoMoeda(jurosMulta)}` : ''}${desconto > 0 ? ` · desconto ${formatoMoeda(desconto)}` : ''} · por ${actor.name || '—'}`,
+    ].filter(Boolean);
+    const atualizado = await atualizarLancamento(id, { ...lanc, status: 'confirmado', conta_id: contaBaixa, forma_pagamento: formaBaixa, observacoes: notas.join('\n') }, actor, tx);
+
+    // 2) Filhotes do acerto: caixa e DRE batem com o extrato.
+    const catRecFin = (await categoriaPorClasse('receitas_financeiras', tx)) ?? (await categoriaPadrao('receita', tx));
+    const catDespFin = (await categoriaPorClasse('despesas_financeiras', tx)) ?? (await categoriaPadrao('despesa', tx));
+    if (jurosMulta > 0) {
+      const filho = await criarLancamento(
+        {
+          data: dataBaixa,
+          tipo,
+          categoria_id: tipo === 'receita' ? catRecFin?.id ?? null : catDespFin?.id ?? null,
+          conta_id: contaBaixa,
+          descricao: `${tipo === 'receita' ? 'Juros/multa recebidos' : 'Juros/multa pagos'} — ${String(lanc.descricao)}`,
+          valor: jurosMulta,
+          taxa_pct: 0,
+          valor_liquido: jurosMulta,
+          forma_pagamento: formaBaixa,
+          status: 'confirmado',
+          referencia_tipo: 'baixa',
+          referencia_id: id,
+          observacoes: `Gerado na baixa do lançamento #${id}`,
+        },
+        actor,
+        tx
+      );
+      filhos.push(Number(filho.id));
+    }
+    if (desconto > 0) {
+      // Desconto em receita = saída financeira; em despesa = ganho financeiro.
+      const tipoFilho = tipo === 'receita' ? 'despesa' : 'receita';
+      const filho = await criarLancamento(
+        {
+          data: dataBaixa,
+          tipo: tipoFilho,
+          categoria_id: tipoFilho === 'receita' ? catRecFin?.id ?? null : catDespFin?.id ?? null,
+          conta_id: contaBaixa,
+          descricao: `${tipo === 'receita' ? 'Desconto concedido' : 'Desconto obtido'} — ${String(lanc.descricao)}`,
+          valor: r2(desconto),
+          taxa_pct: 0,
+          valor_liquido: r2(desconto),
+          forma_pagamento: formaBaixa,
+          status: 'confirmado',
+          referencia_tipo: 'baixa',
+          referencia_id: id,
+          observacoes: `Gerado na baixa do lançamento #${id}`,
+        },
+        actor,
+        tx
+      );
+      filhos.push(Number(filho.id));
+    }
+
+    // 3) Mantém a origem consistente (mesma regra do conciliador).
+    const refTipo = String(lanc.referencia_tipo || '');
+    const refId = Number(lanc.referencia_id || 0);
+    if (refTipo === 'venda' && refId) {
+      await s.update(getResource('vendas')!, refId, { fin_status: 'recebido', fin_recebido_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, tx);
+    } else if (refTipo === 'compra' && refId) {
+      await s.update(getResource('compras')!, refId, { fin_status: 'pago', fin_pago_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, tx);
+    }
+    await s.audit(
+      {
+        usuario_id: actor.id || null,
+        usuario: actor.name,
+        acao: 'editar',
+        recurso: 'lancamentos_financeiros',
+        registro_id: id,
+        descricao: `Baixa — ${String(lanc.descricao)} · valor ${formatoMoeda(Number(lanc.valor || 0))}${jurosMulta > 0 ? ` + juros/multa ${formatoMoeda(jurosMulta)}` : ''}${desconto > 0 ? ` − desconto ${formatoMoeda(desconto)}` : ''}`,
+        dados: { baixa: true, data: dataBaixa, juros, multa, desconto, conta_id: contaBaixa, forma_pagamento: formaBaixa, filhos },
+      },
+      tx
+    );
+    return { lancamento: atualizado, filhos };
+  });
+
+  res.json({ ok: true, ...resultado });
+}
+
+function formatoMoeda(v: number): string {
+  return `R$ ${r2(v).toFixed(2).replace('.', ',')}`;
 }
 
 /** Lançamento manual simples (usado pela tela Financeiro). */

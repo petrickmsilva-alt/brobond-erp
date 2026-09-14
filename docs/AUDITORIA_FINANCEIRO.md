@@ -103,6 +103,44 @@ Lançamentos ganharam `taxa_pct` e `valor_liquido`:
 
 ---
 
+## 4.7 Onda B — contas a pagar/receber de verdade (entregue)
+
+### Parcelamento real (achado #4 — resolvido)
+Venda/compra com **N parcelas agora gera N lançamentos** (1/N, 2/N ... N/N) com
+**vencimentos mensais reais**, a última parcela absorvendo os centavos da divisão
+(ex.: R$ 100 ÷ 3 ⇒ 33,33 + 33,33 + 33,34). A soma das parcelas é sempre exata.
+Vencimento em 31/01 pula para 28/02 (nunca vira 03/03).
+
+- **Editar** total/parcelas do pedido **reconcilia** as parcelas (atualiza as que existem, cria as que faltam); reduzir o plano **cancela** as excedentes com histórico.
+- **Cancelar o pedido cancela todas as parcelas**, mesmo que a situação financeira não tenha sido mexida.
+- Parcela já **confirmada por baixa/conciliação não é revertida** por edições posteriores do pedido.
+
+### Baixa dedicada (achado #9 — resolvido)
+Novo endpoint e tela de **recebimento/pagamento**: a partir da aba
+**"A receber / pagar"** do Financeiro, cada título tem o botão **Baixar**, com
+data, conta, forma de pagamento, **juros, multa e desconto**.
+
+- O principal é confirmado sem alterar o valor da origem;
+- juros/multa/desconto viram **lançamentos filhos** (referência `baixa`) nas classes
+  de receitas/despesas financeiras — **o caixa e o DRE fecham centavo a centavo com o extrato**;
+- a origem fica consistente: venda → "recebido", compra → "pago", com data da baixa;
+- DRE ganhou a linha **"Receitas financeiras (juros/multa)"**;
+- só se baixa título **pendente**; transferências passam pelo módulo próprio.
+
+### Aging do contas a receber (achado complementar — resolvido)
+A mesma aba abre com **envelhecimento por faixa** (a vencer, 1–30, 31–60, 61–90
+e 90+ dias) e os **maiores clientes em aberto** com quanto está vencido de cada um.
+
+### DRE por período (achado #10 parcial — verificado: já existia)
+Relatórios › **DRE gerencial** aceita qualquer período com exportação; o link fica
+na própria aba DRE do Financeiro ("DRE por período").
+
+**Verificação da Onda B:** 9 testes novos ✅ (parcelas reais + centavos exatos + fim de mês +
+reconciliação + cancelamento + baixa com caixa fechando no centavo + aging), suite
+completa 221 ✅, typecheck API+front ✅, build ✅.
+
+---
+
 ## 5. Como usar no dia a dia
 
 **Mover dinheiro:** Financeiro → Transferências → *Nova transferência*.
@@ -121,21 +159,19 @@ mostra o resultado por área todo mês.
 
 ## 6. Roadmap sugerido
 
-### Onda B — contas a pagar/receber real (próxima prioridade)
-1. **Parcelamento real**: venda/compra com N parcelas gera N lançamentos com
-   vencimentos mensais (hoje `parcela = total` distorce a projeção).
-2. **Baixa dedicada** (receber/pagar) com juros, multa, desconto e baixa parcial —
-   congelando data/conta/forma do recebimento sem editar a venda.
-3. **Aging de clientes** (0–30, 31–60, 61–90, 90+) com inadimplência por cliente.
-4. DRE/fluxo por **período escolhido** com comparativo mês a mês.
-5. Anexos (comprovante/boleto) no lançamento usando o módulo de arquivos existente.
+### Onda B — contas a pagar/receber real ✅ entregue neste commit
+Parcelamento real, baixa dedicada com juros/multa/desconto, aging do contas a
+receber e confirmação de que a DRE por período já existia em Relatórios.
 
-### Onda C — escala e integrações
-6. Importação de extrato **OFX/CNAB** mantendo arquivo e trilha de conciliação.
-7. **Maker-checker** (alçada): lançamento/transferência acima de R$ X exige confirmação de segundo usuário.
-8. Parametrizar taxas por forma de pagamento (crédito 1x, 2–6x, débito, Pix MP) com sugestão automática do `taxa_pct`.
-9. Previsão de recebimento do cartão por agenda (D+1/D+30) em vez de vencimento único.
-10. API/webhook do Mercado Pago: baixa automática do pedido → lançamento → conciliação.
+### Onda C — escala e integrações (próxima prioridade)
+1. **Baixa parcial**: pagamentos parciais com saldo restante rastreado por título.
+2. **Anexos** (comprovante/boleto) no lançamento usando o módulo de arquivos existente.
+3. Importação de extrato **OFX/CNAB** mantendo arquivo e trilha de conciliação.
+4. **Maker-checker** (alçada): lançamento/transferência acima de R$ X exige confirmação de segundo usuário.
+5. Parametrizar taxas por forma de pagamento (crédito 1x, 2–6x, débito, Pix MP) com sugestão automática do `taxa_pct`.
+6. Previsão de recebimento do cartão por agenda (D+1/D+30) em vez de vencimento único.
+7. API/webhook do Mercado Pago: baixa automática do pedido → lançamento → conciliação.
+8. Comparativo DRE/fluxo mês a mês dentro da aba DRE (hoje via Relatórios por período).
 
 > Regra de ouro que orienta o roadmap: **o banco é a verdade**. Toda evolução
 > deve aproximar o livro-caixa do extrato, e não o contrário.

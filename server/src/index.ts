@@ -71,7 +71,7 @@ import {
 } from './producao';
 import { adminBackup, adminBackupXlsx, backupInfo } from './backup';
 import { catalogoEmbed, catalogoPublico, compartilharCatalogo, criarPedidoCatalogo, eventoCatalogo, inteligenciaCatalogos, rateLimitPublico, revogarCompartilhamento } from './catalogos';
-import { conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
+import { baixarLancamento, conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
 import { vendaPDF, compraPDF } from './pdf';
 import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
 import { listAprovacoes, aprovarPedido, rejeitarPedido, countAprovacoes } from './approval';
@@ -286,6 +286,7 @@ app.get(
 // Financeiro — resumo do fluxo de caixa, lançamento manual e recorrências
 app.get('/api/financeiro/resumo', wrap(resumoFinanceiro));
 app.post('/api/financeiro/lancamentos', wrap(criarLancamentoManual));
+app.post('/api/financeiro/lancamentos/:id/baixar', wrap(baixarLancamento));
 app.post('/api/financeiro/recorrencias/gerar', wrap(gerarRecorrencias));
 app.get('/api/financeiro/rentabilidade', wrap(rentabilidade));
 app.get('/api/financeiro/investidores', wrap(resumoInvestidores));

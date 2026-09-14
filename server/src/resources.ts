@@ -1366,6 +1366,7 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'mao_obra', label: 'Mão de obra / produção', tone: 'amber' },
           { value: 'despesas_operacionais', label: 'Despesas operacionais', tone: 'red' },
           { value: 'despesas_financeiras', label: 'Despesas financeiras / juros', tone: 'red' },
+          { value: 'receitas_financeiras', label: 'Receitas financeiras / juros e multa', tone: 'green' },
           { value: 'impostos', label: 'Impostos e taxas', tone: 'red' },
           { value: 'investimento', label: 'Investimento / aporte', tone: 'blue' },
         ],

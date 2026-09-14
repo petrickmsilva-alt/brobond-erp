@@ -29,6 +29,7 @@ type ContaPendente = {
   valor: number;
   vencimento: string | null;
   parcelas: number;
+  total_parcelas?: number;
   status: string;
   referencia_tipo: string;
   referencia_id: number;
@@ -75,10 +76,11 @@ type Resumo = {
   aPagarVencidas: number;
   aReceberLista: ContaPendente[];
   aPagarLista: ContaPendente[];
+  agingReceber: { faixas: { a_vencer: number; vencido_1_30: number; vencido_31_60: number; vencido_61_90: number; vencido_90_mais: number }; clientes: { nome: string; total: number; vencido: number }[] };
   categorias: { categoria: string; receita: number; despesa: number; investimento: number }[];
   porCentroCusto: { centro: string; receita: number; despesa: number; investimento: number }[];
   vendasPorCanal: { canal: string; valor: number }[];
-  dre: { receita: number; cmv: number; mao_obra: number; despesas_operacionais: number; despesas_financeiras: number; impostos: number; investimentos: number; taxas_operadoras: number };
+  dre: { receita: number; cmv: number; mao_obra: number; despesas_operacionais: number; despesas_financeiras: number; receitas_financeiras: number; impostos: number; investimentos: number; taxas_operadoras: number };
   lucroBruto: number;
   resultadoOperacional: number;
   resultadoFinanceiro: number;
@@ -92,6 +94,7 @@ type Resumo = {
 
 const TABS = [
   { id: 'visao', label: 'Visão geral' },
+  { id: 'receberpagar', label: 'A receber / pagar' },
   { id: 'dre', label: 'DRE' },
   { id: 'fluxo', label: 'Fluxo projetado' },
   { id: 'rentabilidade', label: 'Rentabilidade' },
@@ -120,6 +123,9 @@ export default function FinanceiroPage() {
   const [concTexto, setConcTexto] = useState('');
   const [conciliando, setConciliando] = useState(false);
   const [concResult, setConcResult] = useState<ConciliacaoResult | null>(null);
+  const [baixaAlvo, setBaixaAlvo] = useState<{ lanc: ContaPendente; lado: 'receita' | 'despesa' } | null>(null);
+  const [baixaForm, setBaixaForm] = useState({ data: '', conta_id: '', forma_pagamento: '', juros: '', multa: '', desconto: '' });
+  const [baixando, setBaixando] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -150,6 +156,35 @@ export default function FinanceiroPage() {
       toast.error(e.message || 'Não foi possível gerar as recorrências.');
     } finally {
       setGerando(false);
+    }
+  }
+
+  /** Abre a baixa: receber (receita) ou pagar (despesa) um título pendente. */
+  function abrirBaixa(lanc: ContaPendente, lado: 'receita' | 'despesa') {
+    setBaixaAlvo({ lanc, lado });
+    setBaixaForm({ data: new Date().toISOString().slice(0, 10), conta_id: '', forma_pagamento: '', juros: '', multa: '', desconto: '' });
+  }
+
+  async function confirmarBaixa() {
+    if (!baixaAlvo) return;
+    const num = (s: string) => Number(String(s).replace(',', '.')) || 0;
+    setBaixando(true);
+    try {
+      await api.post(`/financeiro/lancamentos/${baixaAlvo.lanc.id}/baixar`, {
+        data: baixaForm.data || undefined,
+        conta_id: baixaForm.conta_id ? Number(baixaForm.conta_id) : undefined,
+        forma_pagamento: baixaForm.forma_pagamento || undefined,
+        juros: num(baixaForm.juros),
+        multa: num(baixaForm.multa),
+        desconto: num(baixaForm.desconto),
+      });
+      toast.success(baixaAlvo.lado === 'receita' ? 'Recebimento baixado.' : 'Pagamento baixado.');
+      setBaixaAlvo(null);
+      await load();
+    } catch (e: any) {
+      toast.error(e.message || 'Não foi possível dar baixa.');
+    } finally {
+      setBaixando(false);
     }
   }
 
@@ -403,6 +438,60 @@ export default function FinanceiroPage() {
             </>
           )}
 
+          {/* ---------------- A RECEBER / PAGAR ---------------- */}
+          {tab === 'receberpagar' && (
+            <>
+              <section className="card mb-4 overflow-hidden">
+                <div className="border-b border-slate-200 px-4 py-3">
+                  <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+                    <AlertTriangle className="h-4 w-4 text-red-500" /> Envelhecimento do contas a receber
+                  </h2>
+                  <p className="text-xs text-slate-400">Inadimplência por faixa de atraso e maiores devedores.</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-5">
+                  <AgendaKpi label="A vencer" valor={data.agingReceber?.faixas.a_vencer || 0} tone="green" />
+                  <AgendaKpi label="Vencido 1–30d" valor={data.agingReceber?.faixas.vencido_1_30 || 0} tone="amber" />
+                  <AgendaKpi label="Vencido 31–60d" valor={data.agingReceber?.faixas.vencido_31_60 || 0} tone="red" />
+                  <AgendaKpi label="Vencido 61–90d" valor={data.agingReceber?.faixas.vencido_61_90 || 0} tone="red" />
+                  <AgendaKpi label="Vencido 90d+" valor={data.agingReceber?.faixas.vencido_90_mais || 0} tone="red" />
+                </div>
+                {(data.agingReceber?.clientes || []).length > 0 && (
+                  <div className="border-t border-slate-100 px-4 pb-3 pt-2">
+                    <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Maiores em aberto</h3>
+                    <ul className="grid gap-1 sm:grid-cols-2">
+                      {data.agingReceber!.clientes.slice(0, 6).map((c) => (
+                        <li key={c.nome} className="flex items-center justify-between rounded bg-slate-50 px-2.5 py-1.5 text-xs">
+                          <span className="truncate text-slate-600">{c.nome}</span>
+                          <span className="shrink-0 tabular-nums">
+                            <span className="font-semibold text-navy-900">{formatMoney(c.total)}</span>
+                            {c.vencido > 0 && <span className="ml-1.5 text-red-600">({formatMoney(c.vencido)} venc.)</span>}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </section>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <TitulosCard
+                  titulo="Contas a receber"
+                  tom="receita"
+                  lista={data.aReceberLista}
+                  total={data.aReceber}
+                  onBaixar={(l) => abrirBaixa(l, 'receita')}
+                />
+                <TitulosCard
+                  titulo="Contas a pagar"
+                  tom="despesa"
+                  lista={data.aPagarLista}
+                  total={data.aPagar}
+                  onBaixar={(l) => abrirBaixa(l, 'despesa')}
+                />
+              </div>
+            </>
+          )}
+
           {/* ---------------- DRE ---------------- */}
           {tab === 'dre' && (
             <section className="card overflow-hidden">
@@ -427,6 +516,7 @@ export default function FinanceiroPage() {
                 <DreLinha label="Despesas operacionais" value={-data.dre.despesas_operacionais} tone="red" />
                 <DreLinha label="Impostos" value={-data.dre.impostos} tone="red" />
                 <DreLinha label="Despesas financeiras" value={-data.dre.despesas_financeiras} tone="red" />
+                <DreLinha label="Receitas financeiras (juros/multa)" value={data.dre.receitas_financeiras} tone="green" />
                 <DreLinha label="Taxas de operadoras (MP/cartão)" value={-data.dre.taxas_operadoras} tone="red" />
                 <DreLinha label="Lucro bruto" value={data.lucroBruto} tone={data.lucroBruto >= 0 ? 'green' : 'red'} bold />
                 <DreLinha label="Resultado operacional" value={data.resultadoOperacional} tone={data.resultadoOperacional >= 0 ? 'green' : 'red'} bold />
@@ -641,9 +731,125 @@ export default function FinanceiroPage() {
               )}
             </section>
           )}
+
+          {/* ---------------- MODAL DE BAIXA ---------------- */}
+          {baixaAlvo && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/40 p-4" onClick={() => !baixando && setBaixaAlvo(null)}>
+              <div className="card w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+                <h2 className="text-sm font-bold text-navy-900">{baixaAlvo.lado === 'receita' ? 'Receber' : 'Pagar'} — {formatMoney(baixaAlvo.lanc.valor)}</h2>
+                <p className="mt-0.5 truncate text-xs text-slate-400">
+                  {baixaAlvo.lanc.nome}
+                  {baixaAlvo.lanc.total_parcelas && baixaAlvo.lanc.total_parcelas > 1 ? ` · parcela ${baixaAlvo.lanc.parcelas}/${baixaAlvo.lanc.total_parcelas}` : ''}
+                  {baixaAlvo.lanc.vencimento ? ` · venc. ${baixaAlvo.lanc.vencimento}` : ''}
+                </p>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <label className="text-xs font-medium text-slate-500">
+                    Data da baixa
+                    <input type="date" className="input mt-1" value={baixaForm.data} onChange={(e) => setBaixaForm({ ...baixaForm, data: e.target.value })} />
+                  </label>
+                  <label className="text-xs font-medium text-slate-500">
+                    Conta
+                    <select className="input mt-1" value={baixaForm.conta_id} onChange={(e) => setBaixaForm({ ...baixaForm, conta_id: e.target.value })}>
+                      <option value="">Manter atual</option>
+                      {data.saldoContas.map((c) => (
+                        <option key={c.conta_id} value={c.conta_id}>{c.nome}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="col-span-2 text-xs font-medium text-slate-500">
+                    Forma de pagamento
+                    <select className="input mt-1" value={baixaForm.forma_pagamento} onChange={(e) => setBaixaForm({ ...baixaForm, forma_pagamento: e.target.value })}>
+                      <option value="">Manter atual</option>
+                      <option value="pix">Pix</option>
+                      <option value="cartao_credito">Cartão de crédito</option>
+                      <option value="cartao_debito">Cartão de débito</option>
+                      <option value="boleto">Boleto</option>
+                      <option value="dinheiro">Dinheiro</option>
+                      <option value="transferencia">Transferência</option>
+                      <option value="outros">Outros</option>
+                    </select>
+                  </label>
+                  <label className="text-xs font-medium text-slate-500">
+                    Juros (R$)
+                    <input type="text" inputMode="decimal" className="input mt-1" placeholder="0,00" value={baixaForm.juros} onChange={(e) => setBaixaForm({ ...baixaForm, juros: e.target.value })} />
+                  </label>
+                  <label className="text-xs font-medium text-slate-500">
+                    Multa (R$)
+                    <input type="text" inputMode="decimal" className="input mt-1" placeholder="0,00" value={baixaForm.multa} onChange={(e) => setBaixaForm({ ...baixaForm, multa: e.target.value })} />
+                  </label>
+                  <label className="col-span-2 text-xs font-medium text-slate-500">
+                    Desconto (R$)
+                    <input type="text" inputMode="decimal" className="input mt-1" placeholder="0,00" value={baixaForm.desconto} onChange={(e) => setBaixaForm({ ...baixaForm, desconto: e.target.value })} />
+                  </label>
+                </div>
+                {(Number(String(baixaForm.juros).replace(',', '.')) > 0 || Number(String(baixaForm.multa).replace(',', '.')) > 0 || Number(String(baixaForm.desconto).replace(',', '.')) > 0) && (
+                  <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                    Líquido na conta:{' '}
+                    <strong className="text-navy-900 tabular-nums">
+                      {formatMoney(
+                        baixaAlvo.lanc.valor +
+                          (Number(String(baixaForm.juros).replace(',', '.')) || 0) +
+                          (Number(String(baixaForm.multa).replace(',', '.')) || 0) -
+                          (Number(String(baixaForm.desconto).replace(',', '.')) || 0)
+                      )}
+                    </strong>{' '}
+                    — juros/multa e desconto viram lançamentos financeiros próprios (o DRE mostra cada um na linha certa).
+                  </p>
+                )}
+                <div className="mt-4 flex gap-2">
+                  <button className="btn-secondary flex-1 justify-center" onClick={() => setBaixaAlvo(null)} disabled={baixando}>Cancelar</button>
+                  <button className="btn-accent flex-1 justify-center" onClick={confirmarBaixa} disabled={baixando}>
+                    {baixando ? 'Baixando...' : `${baixaAlvo.lado === 'receita' ? 'Confirmar recebimento' : 'Confirmar pagamento'}`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
+  );
+}
+
+/** Card de títulos em aberto (receitas ou despesas) com ação de baixa. */
+function TitulosCard({ titulo, tom, lista, total, onBaixar }: { titulo: string; tom: 'receita' | 'despesa'; lista: ContaPendente[]; total: number; onBaixar: (l: ContaPendente) => void }) {
+  const cor = tom === 'receita' ? 'text-emerald-600' : 'text-red-600';
+  const hojeS = new Date().toISOString().slice(0, 10);
+  return (
+    <section className="card overflow-hidden">
+      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+        <h2 className="text-sm font-bold text-navy-900">{titulo}</h2>
+        <span className={`text-sm font-bold tabular-nums ${cor}`}>{formatMoney(total)}</span>
+      </div>
+      <div className="max-h-[420px] divide-y divide-slate-50 overflow-y-auto">
+        {lista.length === 0 && <p className="px-4 py-8 text-center text-sm text-slate-400">Nada em aberto. 🎉</p>}
+        {lista.slice(0, 60).map((l) => {
+          const atraso = l.vencimento ? Math.floor((Date.parse(hojeS) - Date.parse(l.vencimento)) / 86400000) : 0;
+          const vencido = atraso > 0;
+          return (
+            <div key={l.id} className="flex items-center justify-between gap-2 px-4 py-2.5">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-navy-900">
+                  {l.nome}
+                  {l.total_parcelas && l.total_parcelas > 1 && <span className="ml-1 text-[11px] font-normal text-slate-400">({l.parcelas}/{l.total_parcelas})</span>}
+                </p>
+                <p className={`text-[11px] ${vencido ? 'font-semibold text-red-600' : 'text-slate-400'}`}>
+                  {l.vencimento ? `venc. ${l.vencimento}` : 'sem vencimento'}
+                  {vencido && ` · ${atraso}d em atraso`}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className={`text-sm font-semibold tabular-nums ${cor}`}>{formatMoney(l.valor)}</span>
+                <button className="btn-secondary !px-2.5 !py-1 text-[11px]" onClick={() => onBaixar(l)} title={tom === 'receita' ? 'Registrar recebimento' : 'Registrar pagamento'}>
+                  <HandCoins className="h-3.5 w-3.5" /> Baixar
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        {lista.length > 60 && <p className="px-4 py-2 text-center text-[11px] text-slate-400">+ {lista.length - 60} título(s) — filtre no módulo Lançamentos</p>}
+      </div>
+    </section>
   );
 }
 
