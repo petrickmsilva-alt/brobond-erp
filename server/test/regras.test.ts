@@ -240,11 +240,14 @@ test('financeiro: venda faturada carrega vencimento e parcelas no lançamento', 
   await getStore().adjustStock(1, 1, 'loja', 10);
   await updateRecord(RESOURCES.vendas, Number(venda.id), { status: 'faturada' }, admin);
   const lancs = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'venda', referencia_id: Number(venda.id) } });
-  assert.ok(lancs.rows.length >= 1);
-  const l = lancs.rows[0];
-  assert.equal(String(l.vencimento || '').slice(0, 10), '2026-09-25');
-  assert.equal(Number(l.parcela), 3);
-  assert.equal(Number(l.total_parcelas), 3);
+  // Parcelamento real (Onda B): 3 parcelas reais, vencimentos mensais a partir do informado
+  assert.equal(lancs.rows.length, 3);
+  const ordenadas = [...lancs.rows].sort((a, b) => Number(a.parcela) - Number(b.parcela));
+  assert.deepEqual(ordenadas.map((p) => Number(p.parcela)), [1, 2, 3]);
+  assert.deepEqual(ordenadas.map((p) => Number(p.total_parcelas)), [3, 3, 3]);
+  assert.equal(String(ordenadas[0].vencimento || '').slice(0, 10), '2026-09-25');
+  assert.equal(String(ordenadas[1].vencimento || '').slice(0, 10), '2026-10-25');
+  assert.equal(String(ordenadas[2].vencimento || '').slice(0, 10), '2026-11-25');
 });
 
 test('financeiro: recorrência vencida é gerada como lançamento pendente', async () => {

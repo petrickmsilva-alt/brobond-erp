@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, CalendarClock, Coins, CreditCard, Download, HandCoins, Landmark, LineChart, Plus, RefreshCw, Repeat, ScanLine, TrendingDown, TrendingUp, Users, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowRightLeft, ArrowUpRight, CalendarClock, Coins, CreditCard, Download, HandCoins, Landmark, LineChart, Plus, RefreshCw, Repeat, ScanLine, TrendingDown, TrendingUp, Users, Wallet } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatMoney } from '../lib/format';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
@@ -29,6 +29,7 @@ type ContaPendente = {
   valor: number;
   vencimento: string | null;
   parcelas: number;
+  total_parcelas?: number;
   status: string;
   referencia_tipo: string;
   referencia_id: number;
@@ -58,11 +59,14 @@ type ConciliacaoResult = { ok: boolean; totalLinhas: number; confirmados: { data
 
 type Resumo = {
   mes: string;
-  saldoContas: { conta_id: number; nome: string; tipo: string; saldo: number }[];
+  saldoContas: { conta_id: number; nome: string; tipo: string; saldo: number; previsto: number }[];
   saldoContasTotal: number;
   receitasMes: number;
   despesasMes: number;
   investimentosMes: number;
+  taxasMes: number;
+  semaforo: { status: 'verde' | 'amarelo' | 'vermelho'; minAcumulado: number; periodo: string | null };
+  serieMensal: { mes: string; label: string; receita: number; despesa: number; investimento: number; resultado: number }[];
   resultadoOperacionalMes: number;
   resultadoCaixaMes: number;
   aReceber: number;
@@ -73,9 +77,11 @@ type Resumo = {
   aPagarVencidas: number;
   aReceberLista: ContaPendente[];
   aPagarLista: ContaPendente[];
+  agingReceber: { faixas: { a_vencer: number; vencido_1_30: number; vencido_31_60: number; vencido_61_90: number; vencido_90_mais: number }; clientes: { nome: string; total: number; vencido: number }[] };
   categorias: { categoria: string; receita: number; despesa: number; investimento: number }[];
+  porCentroCusto: { centro: string; receita: number; despesa: number; investimento: number }[];
   vendasPorCanal: { canal: string; valor: number }[];
-  dre: { receita: number; cmv: number; mao_obra: number; despesas_operacionais: number; despesas_financeiras: number; impostos: number; investimentos: number };
+  dre: { receita: number; cmv: number; mao_obra: number; despesas_operacionais: number; despesas_financeiras: number; receitas_financeiras: number; impostos: number; investimentos: number; taxas_operadoras: number };
   lucroBruto: number;
   resultadoOperacional: number;
   resultadoFinanceiro: number;
@@ -89,6 +95,7 @@ type Resumo = {
 
 const TABS = [
   { id: 'visao', label: 'Visão geral' },
+  { id: 'receberpagar', label: 'A receber / pagar' },
   { id: 'dre', label: 'DRE' },
   { id: 'fluxo', label: 'Fluxo projetado' },
   { id: 'rentabilidade', label: 'Rentabilidade' },
@@ -117,6 +124,9 @@ export default function FinanceiroPage() {
   const [concTexto, setConcTexto] = useState('');
   const [conciliando, setConciliando] = useState(false);
   const [concResult, setConcResult] = useState<ConciliacaoResult | null>(null);
+  const [baixaAlvo, setBaixaAlvo] = useState<{ lanc: ContaPendente; lado: 'receita' | 'despesa' } | null>(null);
+  const [baixaForm, setBaixaForm] = useState({ data: '', conta_id: '', forma_pagamento: '', valor: '', juros: '', multa: '', desconto: '' });
+  const [baixando, setBaixando] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -147,6 +157,42 @@ export default function FinanceiroPage() {
       toast.error(e.message || 'Não foi possível gerar as recorrências.');
     } finally {
       setGerando(false);
+    }
+  }
+
+  /** Abre a baixa: receber (receita) ou pagar (despesa) um título pendente. */
+  function abrirBaixa(lanc: ContaPendente, lado: 'receita' | 'despesa') {
+    setBaixaAlvo({ lanc, lado });
+    setBaixaForm({ data: new Date().toISOString().slice(0, 10), conta_id: '', forma_pagamento: '', valor: '', juros: '', multa: '', desconto: '' });
+  }
+
+  async function confirmarBaixa() {
+    if (!baixaAlvo) return;
+    const num = (s: string) => Number(String(s).replace(',', '.')) || 0;
+    setBaixando(true);
+    try {
+      const r = await api.post<{ parcial?: boolean; restante?: number }>(`/financeiro/lancamentos/${baixaAlvo.lanc.id}/baixar`, {
+        data: baixaForm.data || undefined,
+        conta_id: baixaForm.conta_id ? Number(baixaForm.conta_id) : undefined,
+        forma_pagamento: baixaForm.forma_pagamento || undefined,
+        valor: baixaForm.valor ? num(baixaForm.valor) : undefined,
+        juros: num(baixaForm.juros),
+        multa: num(baixaForm.multa),
+        desconto: num(baixaForm.desconto),
+      });
+      toast.success(
+        r.parcial
+          ? `Baixa parcial registrada — restante ${formatMoney(r.restante || 0)}.`
+          : baixaAlvo.lado === 'receita'
+            ? 'Recebimento baixado.'
+            : 'Pagamento baixado.'
+      );
+      setBaixaAlvo(null);
+      await load();
+    } catch (e: any) {
+      toast.error(e.message || 'Não foi possível dar baixa.');
+    } finally {
+      setBaixando(false);
     }
   }
 
@@ -210,6 +256,10 @@ export default function FinanceiroPage() {
               <Coins className="h-4 w-4" />
               <span className="hidden sm:inline">Lançamentos</span>
             </Link>
+            <Link to="/transferencias" className="btn-secondary" title="Mover dinheiro entre contas (Caixa → Banco Inter, Mercado Pago → Banco Inter)">
+              <ArrowRightLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">Transferir</span>
+            </Link>
             <Link to="/aportes" className="btn-accent">
               <HandCoins className="h-4 w-4" /> Aportes
             </Link>
@@ -242,6 +292,15 @@ export default function FinanceiroPage() {
           {/* ---------------- VISÃO GERAL ---------------- */}
           {tab === 'visao' && (
             <>
+              {data.semaforo && data.semaforo.status !== 'verde' && (
+                <div className="mb-4">
+                  <Alert tone={data.semaforo.status === 'vermelho' ? 'red' : 'amber'}>
+                    {data.semaforo.status === 'vermelho'
+                      ? `Atenção: a projeção de caixa fica NEGATIVA em ${formatMoney(data.semaforo.minAcumulado)}${data.semaforo.periodo ? ` na ${data.semaforo.periodo.toLowerCase()}` : ''}. Antecipe recebíveis ou renegocie pagamentos.`
+                      : `Caixa apertado à frente: o acumulado projetado cai para ${formatMoney(data.semaforo.minAcumulado)}${data.semaforo.periodo ? ` na ${data.semaforo.periodo.toLowerCase()}` : ''} — queda de mais de 30% sobre o saldo atual.`}
+                  </Alert>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <Kpi icon={<Wallet className="h-5 w-5" />} label="Saldo em contas" value={formatMoney(data.saldoContasTotal)} tone={pos(data.saldoContasTotal).replace('text-', '')} />
                 <Kpi icon={<TrendingUp className="h-5 w-5" />} label="Receitas no mês" value={formatMoney(data.receitasMes)} tone="emerald" />
@@ -249,9 +308,10 @@ export default function FinanceiroPage() {
                 <Kpi icon={<CreditCard className="h-5 w-5" />} label="Resultado do mês" value={formatMoney(data.resultadoOperacionalMes)} tone={data.resultadoOperacionalMes >= 0 ? 'emerald' : 'red'} />
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-5">
                 <Kpi icon={<ArrowUpRight className="h-5 w-5" />} label="A receber" value={formatMoney(data.aReceber)} tone="amber" small />
                 <Kpi icon={<ArrowDownRight className="h-5 w-5" />} label="A pagar" value={formatMoney(data.aPagar)} tone="amber" small />
+                <Kpi icon={<CreditCard className="h-5 w-5" />} label="Taxas MP/cartão (mês)" value={formatMoney(data.taxasMes || 0)} tone="red" small />
                 <Kpi icon={<HandCoins className="h-5 w-5" />} label="Aportes confirmados" value={formatMoney(data.aportesTotal)} tone="blue" small />
                 <Kpi icon={<CalendarClock className="h-5 w-5" />} label="Vencidos" value={formatMoney(data.aReceberVencidas + data.aPagarVencidas)} tone="red" small />
               </div>
@@ -265,7 +325,12 @@ export default function FinanceiroPage() {
                       <div key={c.conta_id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium text-navy-900">{c.nome}</p>
-                          <p className="text-[11px] capitalize text-slate-400">{c.tipo}</p>
+                          <p className="text-[11px] capitalize text-slate-400">
+                            {c.tipo}
+                            {c.previsto !== undefined && c.previsto !== c.saldo && (
+                              <span className={c.previsto >= 0 ? 'text-slate-400' : 'text-red-500'}> · previsto {formatMoney(c.previsto)}</span>
+                            )}
+                          </p>
                         </div>
                         <span className={`text-sm font-semibold tabular-nums ${c.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(c.saldo)}</span>
                       </div>
@@ -381,6 +446,60 @@ export default function FinanceiroPage() {
             </>
           )}
 
+          {/* ---------------- A RECEBER / PAGAR ---------------- */}
+          {tab === 'receberpagar' && (
+            <>
+              <section className="card mb-4 overflow-hidden">
+                <div className="border-b border-slate-200 px-4 py-3">
+                  <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
+                    <AlertTriangle className="h-4 w-4 text-red-500" /> Envelhecimento do contas a receber
+                  </h2>
+                  <p className="text-xs text-slate-400">Inadimplência por faixa de atraso e maiores devedores.</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-5">
+                  <AgendaKpi label="A vencer" valor={data.agingReceber?.faixas.a_vencer || 0} tone="green" />
+                  <AgendaKpi label="Vencido 1–30d" valor={data.agingReceber?.faixas.vencido_1_30 || 0} tone="amber" />
+                  <AgendaKpi label="Vencido 31–60d" valor={data.agingReceber?.faixas.vencido_31_60 || 0} tone="red" />
+                  <AgendaKpi label="Vencido 61–90d" valor={data.agingReceber?.faixas.vencido_61_90 || 0} tone="red" />
+                  <AgendaKpi label="Vencido 90d+" valor={data.agingReceber?.faixas.vencido_90_mais || 0} tone="red" />
+                </div>
+                {(data.agingReceber?.clientes || []).length > 0 && (
+                  <div className="border-t border-slate-100 px-4 pb-3 pt-2">
+                    <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Maiores em aberto</h3>
+                    <ul className="grid gap-1 sm:grid-cols-2">
+                      {data.agingReceber!.clientes.slice(0, 6).map((c) => (
+                        <li key={c.nome} className="flex items-center justify-between rounded bg-slate-50 px-2.5 py-1.5 text-xs">
+                          <span className="truncate text-slate-600">{c.nome}</span>
+                          <span className="shrink-0 tabular-nums">
+                            <span className="font-semibold text-navy-900">{formatMoney(c.total)}</span>
+                            {c.vencido > 0 && <span className="ml-1.5 text-red-600">({formatMoney(c.vencido)} venc.)</span>}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </section>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <TitulosCard
+                  titulo="Contas a receber"
+                  tom="receita"
+                  lista={data.aReceberLista}
+                  total={data.aReceber}
+                  onBaixar={(l) => abrirBaixa(l, 'receita')}
+                />
+                <TitulosCard
+                  titulo="Contas a pagar"
+                  tom="despesa"
+                  lista={data.aPagarLista}
+                  total={data.aPagar}
+                  onBaixar={(l) => abrirBaixa(l, 'despesa')}
+                />
+              </div>
+            </>
+          )}
+
           {/* ---------------- DRE ---------------- */}
           {tab === 'dre' && (
             <section className="card overflow-hidden">
@@ -405,6 +524,8 @@ export default function FinanceiroPage() {
                 <DreLinha label="Despesas operacionais" value={-data.dre.despesas_operacionais} tone="red" />
                 <DreLinha label="Impostos" value={-data.dre.impostos} tone="red" />
                 <DreLinha label="Despesas financeiras" value={-data.dre.despesas_financeiras} tone="red" />
+                <DreLinha label="Receitas financeiras (juros/multa)" value={data.dre.receitas_financeiras} tone="green" />
+                <DreLinha label="Taxas de operadoras (MP/cartão)" value={-data.dre.taxas_operadoras} tone="red" />
                 <DreLinha label="Lucro bruto" value={data.lucroBruto} tone={data.lucroBruto >= 0 ? 'green' : 'red'} bold />
                 <DreLinha label="Resultado operacional" value={data.resultadoOperacional} tone={data.resultadoOperacional >= 0 ? 'green' : 'red'} bold />
                 <DreLinha label="Resultado financeiro" value={data.resultadoFinanceiro} tone={data.resultadoFinanceiro >= 0 ? 'green' : 'red'} bold />
@@ -414,7 +535,7 @@ export default function FinanceiroPage() {
                 <span className="mr-2 font-semibold text-slate-500">Resultado geral do mês</span>
                 <span className={`text-base font-bold tabular-nums ${data.resultadoGeral >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(data.resultadoGeral)}</span>
               </div>
-              <div className="grid gap-4 border-t border-slate-100 p-4 md:grid-cols-2">
+              <div className="grid gap-4 border-t border-slate-100 p-4 md:grid-cols-2 lg:grid-cols-3">
                 <div>
                   <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Por categoria</h3>
                   <ul className="space-y-1.5">
@@ -425,6 +546,22 @@ export default function FinanceiroPage() {
                       </li>
                     ))}
                   </ul>
+                </div>
+                <div>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Por centro de custo (mês)</h3>
+                  <ul className="space-y-1.5">
+                    {(data.porCentroCusto || []).length === 0 && <li className="text-sm text-slate-400">Vincule centros de custo aos lançamentos.</li>}
+                    {(data.porCentroCusto || []).slice(0, 8).map((c) => {
+                      const liquido = c.receita + c.investimento - c.despesa;
+                      return (
+                        <li key={c.centro} className="flex justify-between text-sm" title={`Receita ${formatMoney(c.receita + c.investimento)} · Despesa ${formatMoney(c.despesa)}`}>
+                          <span className="truncate text-slate-600">{c.centro}</span>
+                          <span className={`tabular-nums ${liquido >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(liquido)}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <Link to="/centros-custo" className="mt-2 inline-block text-xs font-medium text-navy-600 hover:underline">Gerenciar centros de custo →</Link>
                 </div>
                 <div>
                   <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Vendas por canal (mês)</h3>
@@ -439,6 +576,26 @@ export default function FinanceiroPage() {
                   </ul>
                 </div>
               </div>
+              {(data.serieMensal || []).length > 0 && (
+                <div className="border-t border-slate-100 p-4">
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Comparativo — últimos 6 meses (confirmado, líquido)</h3>
+                  <div className="overflow-x-auto">
+                    <table className="table">
+                      <thead><tr><th>Mês</th><th className="text-right">Receita</th><th className="text-right">Despesa</th><th className="text-right">Resultado</th></tr></thead>
+                      <tbody>
+                        {data.serieMensal.map((m) => (
+                          <tr key={m.mes} className={m.mes === data.mes ? 'bg-navy-50/60 font-semibold' : undefined}>
+                            <td className="text-xs text-slate-500">{m.label}{m.mes === data.mes ? ' (atual)' : ''}</td>
+                            <td className="text-right text-xs tabular-nums text-emerald-600">{formatMoney(m.receita)}</td>
+                            <td className="text-right text-xs tabular-nums text-red-600">{formatMoney(m.despesa)}</td>
+                            <td className={`text-right text-xs font-semibold tabular-nums ${m.resultado >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(m.resultado)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </section>
           )}
 
@@ -577,7 +734,9 @@ export default function FinanceiroPage() {
               <h2 className="flex items-center gap-2 text-sm font-bold text-navy-900">
                 <ScanLine className="h-4 w-4 text-navy-500" /> Conciliação bancária
               </h2>
-              <p className="mt-0.5 text-xs text-slate-400">Cole o extrato (data;valor;descrição) e o ERP casa com lançamentos pendentes.</p>
+              <p className="mt-0.5 text-xs text-slate-400">
+                Cole o extrato em texto (data;valor;descrição) <strong>ou o arquivo OFX do Internet Banking</strong> (Banco Inter, Nubank, Sicoob...) — o ERP casa com os lançamentos pendentes.
+              </p>
               <textarea
                 className="input mt-3 h-28 resize-none font-mono text-xs"
                 placeholder={'2026-09-04;1800,00;ALUGUEL\n2026-09-04;320,00;ENERGIA'}
@@ -602,9 +761,136 @@ export default function FinanceiroPage() {
               )}
             </section>
           )}
+
+          {/* ---------------- MODAL DE BAIXA ---------------- */}
+          {baixaAlvo && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/40 p-4" onClick={() => !baixando && setBaixaAlvo(null)}>
+              <div className="card w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+                <h2 className="text-sm font-bold text-navy-900">{baixaAlvo.lado === 'receita' ? 'Receber' : 'Pagar'} — {formatMoney(baixaAlvo.lanc.valor)}</h2>
+                <p className="mt-0.5 truncate text-xs text-slate-400">
+                  {baixaAlvo.lanc.nome}
+                  {baixaAlvo.lanc.total_parcelas && baixaAlvo.lanc.total_parcelas > 1 ? ` · parcela ${baixaAlvo.lanc.parcelas}/${baixaAlvo.lanc.total_parcelas}` : ''}
+                  {baixaAlvo.lanc.vencimento ? ` · venc. ${baixaAlvo.lanc.vencimento}` : ''}
+                </p>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <label className="text-xs font-medium text-slate-500">
+                    Data da baixa
+                    <input type="date" className="input mt-1" value={baixaForm.data} onChange={(e) => setBaixaForm({ ...baixaForm, data: e.target.value })} />
+                  </label>
+                  <label className="text-xs font-medium text-slate-500">
+                    Conta
+                    <select className="input mt-1" value={baixaForm.conta_id} onChange={(e) => setBaixaForm({ ...baixaForm, conta_id: e.target.value })}>
+                      <option value="">Manter atual</option>
+                      {data.saldoContas.map((c) => (
+                        <option key={c.conta_id} value={c.conta_id}>{c.nome}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="col-span-2 text-xs font-medium text-slate-500">
+                    Forma de pagamento
+                    <select className="input mt-1" value={baixaForm.forma_pagamento} onChange={(e) => setBaixaForm({ ...baixaForm, forma_pagamento: e.target.value })}>
+                      <option value="">Manter atual</option>
+                      <option value="pix">Pix</option>
+                      <option value="cartao_credito">Cartão de crédito</option>
+                      <option value="cartao_debito">Cartão de débito</option>
+                      <option value="boleto">Boleto</option>
+                      <option value="dinheiro">Dinheiro</option>
+                      <option value="transferencia">Transferência</option>
+                      <option value="outros">Outros</option>
+                    </select>
+                  </label>
+                  <label className="col-span-2 text-xs font-medium text-slate-500">
+                    Valor agora (opcional — deixe vazio para quitar)
+                    <input type="text" inputMode="decimal" className="input mt-1" placeholder={formatMoney(baixaAlvo.lanc.valor)} value={baixaForm.valor} onChange={(e) => setBaixaForm({ ...baixaForm, valor: e.target.value })} />
+                    {(() => {
+                      const pago = Number(String(baixaForm.valor).replace(',', '.')) || 0;
+                      if (pago > 0 && pago < baixaAlvo.lanc.valor) {
+                        return <span className="mt-1 block text-[11px] font-semibold text-amber-600">Baixa parcial: restará {formatMoney(baixaAlvo.lanc.valor - pago)} em aberto neste título.</span>;
+                      }
+                      return null;
+                    })()}
+                  </label>
+                  <label className="text-xs font-medium text-slate-500">
+                    Juros (R$)
+                    <input type="text" inputMode="decimal" className="input mt-1" placeholder="0,00" value={baixaForm.juros} onChange={(e) => setBaixaForm({ ...baixaForm, juros: e.target.value })} />
+                  </label>
+                  <label className="text-xs font-medium text-slate-500">
+                    Multa (R$)
+                    <input type="text" inputMode="decimal" className="input mt-1" placeholder="0,00" value={baixaForm.multa} onChange={(e) => setBaixaForm({ ...baixaForm, multa: e.target.value })} />
+                  </label>
+                  <label className="col-span-2 text-xs font-medium text-slate-500">
+                    Desconto (R$)
+                    <input type="text" inputMode="decimal" className="input mt-1" placeholder="0,00" value={baixaForm.desconto} onChange={(e) => setBaixaForm({ ...baixaForm, desconto: e.target.value })} />
+                  </label>
+                </div>
+                {(Number(String(baixaForm.juros).replace(',', '.')) > 0 || Number(String(baixaForm.multa).replace(',', '.')) > 0 || Number(String(baixaForm.desconto).replace(',', '.')) > 0) && (
+                  <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                    Líquido na conta:{' '}
+                    <strong className="text-navy-900 tabular-nums">
+                      {formatMoney(
+                        baixaAlvo.lanc.valor +
+                          (Number(String(baixaForm.juros).replace(',', '.')) || 0) +
+                          (Number(String(baixaForm.multa).replace(',', '.')) || 0) -
+                          (Number(String(baixaForm.desconto).replace(',', '.')) || 0)
+                      )}
+                    </strong>{' '}
+                    — juros/multa e desconto viram lançamentos financeiros próprios (o DRE mostra cada um na linha certa).
+                  </p>
+                )}
+                <div className="mt-4 flex gap-2">
+                  <button className="btn-secondary flex-1 justify-center" onClick={() => setBaixaAlvo(null)} disabled={baixando}>Cancelar</button>
+                  <button className="btn-accent flex-1 justify-center" onClick={confirmarBaixa} disabled={baixando}>
+                    {baixando ? 'Baixando...' : `${baixaAlvo.lado === 'receita' ? 'Confirmar recebimento' : 'Confirmar pagamento'}`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
+  );
+}
+
+/** Card de títulos em aberto (receitas ou despesas) com ação de baixa. */
+function TitulosCard({ titulo, tom, lista, total, onBaixar }: { titulo: string; tom: 'receita' | 'despesa'; lista: ContaPendente[]; total: number; onBaixar: (l: ContaPendente) => void }) {
+  const cor = tom === 'receita' ? 'text-emerald-600' : 'text-red-600';
+  const hojeS = new Date().toISOString().slice(0, 10);
+  return (
+    <section className="card overflow-hidden">
+      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+        <h2 className="text-sm font-bold text-navy-900">{titulo}</h2>
+        <span className={`text-sm font-bold tabular-nums ${cor}`}>{formatMoney(total)}</span>
+      </div>
+      <div className="max-h-[420px] divide-y divide-slate-50 overflow-y-auto">
+        {lista.length === 0 && <p className="px-4 py-8 text-center text-sm text-slate-400">Nada em aberto. 🎉</p>}
+        {lista.slice(0, 60).map((l) => {
+          const atraso = l.vencimento ? Math.floor((Date.parse(hojeS) - Date.parse(l.vencimento)) / 86400000) : 0;
+          const vencido = atraso > 0;
+          return (
+            <div key={l.id} className="flex items-center justify-between gap-2 px-4 py-2.5">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-navy-900">
+                  {l.nome}
+                  {l.total_parcelas && l.total_parcelas > 1 && <span className="ml-1 text-[11px] font-normal text-slate-400">({l.parcelas}/{l.total_parcelas})</span>}
+                </p>
+                <p className={`text-[11px] ${vencido ? 'font-semibold text-red-600' : 'text-slate-400'}`}>
+                  {l.vencimento ? `venc. ${l.vencimento}` : 'sem vencimento'}
+                  {vencido && ` · ${atraso}d em atraso`}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className={`text-sm font-semibold tabular-nums ${cor}`}>{formatMoney(l.valor)}</span>
+                <button className="btn-secondary !px-2.5 !py-1 text-[11px]" onClick={() => onBaixar(l)} title={tom === 'receita' ? 'Registrar recebimento' : 'Registrar pagamento'}>
+                  <HandCoins className="h-3.5 w-3.5" /> Baixar
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        {lista.length > 60 && <p className="px-4 py-2 text-center text-[11px] text-slate-400">+ {lista.length - 60} título(s) — filtre no módulo Lançamentos</p>}
+      </div>
+    </section>
   );
 }
 

@@ -12,7 +12,7 @@ import type { AuthUser } from './auth';
 import { attachImages, removeAllFiles } from './uploads';
 import { aplicarRegrasPedido } from './itens';
 import { aplicarRegrasOrdem, recalcularFichaValores, validarOrdemPayload } from './producao';
-import { syncAporte, syncLancamentoCompra, syncLancamentoVenda } from './financeiro';
+import { hookTaxaLancamento, syncAporte, syncLancamentoCompra, syncLancamentoVenda, syncTransferencia } from './financeiro';
 
 const PERFIL_RANK: Record<string, number> = { operador: 1, gerente: 2, admin: 3 };
 
@@ -306,6 +306,21 @@ export async function validarTamanhoNaGrade(produtoId: number, tamanhoId: number
  * (convite de acesso por e-mail) saírem com a origem absoluta correta quando
  * APP_URL não está configurada.
  */
+/** Plano de contas em dois níveis: a categoria-pai não pode ser a própria nem ter avô. */
+async function validarCategoriaPai(r: Resource, data: Row, before: Row | null, tx: Tx): Promise<void> {
+  if (data.pai_id === undefined || data.pai_id === null || data.pai_id === '') return;
+  const s = getStore();
+  const paiId = Number(data.pai_id);
+  if (before && paiId === Number(before.id)) {
+    throw new HttpError(400, 'A categoria não pode ser pai de si mesma.', { pai_id: 'Escolha outra categoria' });
+  }
+  const pai = await s.findOneWhere(r, { id: paiId }, tx);
+  if (!pai) throw new HttpError(404, 'Categoria-pai não encontrada.', { pai_id: 'Categoria inexistente' });
+  if (pai.pai_id) {
+    throw new HttpError(400, `“${String(pai.nome)}” já é uma subcategoria — o plano de contas tem dois níveis. Vincule a uma categoria principal.`, { pai_id: 'Já é subcategoria' });
+  }
+}
+
 export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
   const s = getStore();
@@ -335,6 +350,12 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       if (r.key === 'vendas') for (const k of ['nfe_status', 'nfe_numero', 'nfe_emitida_em', 'nfe_provider']) delete data[k];
       if (r.key === 'locais') await ensureLocalPadraoUnico(data, null, tx);
       if (r.key === 'ordens') await validarOrdemPayload(data, null);
+      // Lançamento: taxa da operadora → líquido calculado antes de gravar
+      if (r.key === 'lancamentos_financeiros') hookTaxaLancamento(data, null);
+      if (r.key === 'categorias_financeiras') await validarCategoriaPai(r, data, null, tx);
+      if (r.key === 'transferencias_financeiras' && Number(data.conta_origem_id) === Number(data.conta_destino_id)) {
+        throw new HttpError(400, 'Origem e destino precisam ser contas diferentes.', { conta_destino_id: 'Escolha outra conta' });
+      }
 
       const gradeTamanhos = r.key === 'grades' ? ((data.tamanhos as number[]) || []) : null;
       if (gradeTamanhos) delete data.tamanhos;
@@ -367,6 +388,11 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       }
       if (r.key === 'aportes') {
         await syncAporte(null, row, actor, tx);
+      }
+      // Transferência → par espelho (saída na origem, entrada no destino)
+      if (r.key === 'transferencias_financeiras') {
+        const full = (await s.get(r, row.id, tx)) ?? row;
+        await syncTransferencia(null, full, actor, tx);
       }
 
       // Convite de acesso: usuário criado sem senha recebe um link por e-mail
@@ -467,6 +493,16 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
         }
       }
       if (r.key === 'ordens') await validarOrdemPayload(data, before);
+      // Lançamento: edição de valor/taxa recalcula o líquido
+      if (r.key === 'lancamentos_financeiros') hookTaxaLancamento(data, before);
+      if (r.key === 'categorias_financeiras') await validarCategoriaPai(r, data, before, tx);
+      if (r.key === 'transferencias_financeiras') {
+        const origem = Number(data.conta_origem_id ?? before.conta_origem_id ?? 0);
+        const destino = Number(data.conta_destino_id ?? before.conta_destino_id ?? 0);
+        if (origem && destino && origem === destino) {
+          throw new HttpError(400, 'Origem e destino precisam ser contas diferentes.', { conta_destino_id: 'Escolha outra conta' });
+        }
+      }
 
       const gradeTamanhos = r.key === 'grades' && data.tamanhos !== undefined ? ((data.tamanhos as number[]) || []) : null;
       if (gradeTamanhos) delete data.tamanhos;
@@ -517,6 +553,11 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (r.key === 'aportes' && (changes.status || changes.valor || changes.investidor_id || changes.conta_id || changes.forma_pagamento || changes.data)) {
         const full = (await s.get(r, id, tx)) ?? row;
         await syncAporte(before, full, actor, tx);
+      }
+      // Transferência editada/cancelada → atualiza o par espelho no livro-caixa
+      if (r.key === 'transferencias_financeiras') {
+        const full = (await s.get(r, id, tx)) ?? row;
+        await syncTransferencia(before, full, actor, tx);
       }
 
       const campos = Object.keys(changes).join(', ');
@@ -583,6 +624,42 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor): Promi
       }
       if (r.key === 'ordens' && before.status === 'concluida') {
         throw new HttpError(409, 'Ordem concluída já deu entrada no estoque. Reabra ou cancele em vez de excluir.');
+      }
+      // Integridade do histórico financeiro: cadastros em uso se desativam,
+      // não se excluem (a trilha de auditoria e o saldo dependem deles).
+      if (r.key === 'contas_financeiras') {
+        const emUso =
+          (await s.countWhere(getResource('lancamentos_financeiros')!, { conta_id: id }, tx)) +
+          (await s.countWhere(getResource('transferencias_financeiras')!, { conta_origem_id: id }, tx)) +
+          (await s.countWhere(getResource('transferencias_financeiras')!, { conta_destino_id: id }, tx)) +
+          (await s.countWhere(getResource('recorrencias_financeiras')!, { conta_id: id }, tx)) +
+          (await s.countWhere(getResource('aportes')!, { conta_id: id }, tx)) +
+          (await s.countWhere(getResource('vendas')!, { fin_conta_id: id }, tx)) +
+          (await s.countWhere(getResource('compras')!, { fin_conta_id: id }, tx));
+        if (emUso > 0) {
+          throw new HttpError(409, `A conta "${String(before.nome)}" está em uso por ${emUso} registro(s) de lançamentos, transferências, vendas/compras, aportes ou recorrências. Desative-a em vez de excluir — o histórico financeiro depende dela.`);
+        }
+      }
+      if (r.key === 'categorias_financeiras') {
+        const filhas = await s.countWhere(r, { pai_id: id }, tx);
+        const emUso =
+          (await s.countWhere(getResource('lancamentos_financeiros')!, { categoria_id: id }, tx)) +
+          (await s.countWhere(getResource('recorrencias_financeiras')!, { categoria_id: id }, tx));
+        if (filhas > 0 || emUso > 0) {
+          const motivo = filhas > 0 ? `${filhas} subcategoria(s)` : `${emUso} lançamento(s)/recorrência(s)`;
+          throw new HttpError(409, `A categoria "${String(before.nome)}" está em uso por ${motivo}. Desative-a em vez de excluir — o histórico financeiro depende dela.`);
+        }
+      }
+      if (r.key === 'centros_custo') {
+        const emUso =
+          (await s.countWhere(getResource('lancamentos_financeiros')!, { centro_custo_id: id }, tx)) +
+          (await s.countWhere(getResource('recorrencias_financeiras')!, { centro_custo_id: id }, tx));
+        if (emUso > 0) {
+          throw new HttpError(409, `O centro de custo "${String(before.nome)}" está em uso por ${emUso} lançamento(s)/recorrência(s). Desative-o em vez de excluir.`);
+        }
+      }
+      if (r.key === 'transferencias_financeiras' && String(before.status) !== 'cancelado') {
+        throw new HttpError(409, 'Transferência confirmada já movimentou as contas. Cancele-a (o par é estornado preservando o histórico) em vez de excluir.');
       }
       if (r.key === 'vendas' && ['faturada', 'entregue'].includes(String(before.status))) {
         throw new HttpError(409, 'Pedido faturado já baixou o estoque. Cancele o pedido (estorna automaticamente) em vez de excluí-lo.');
