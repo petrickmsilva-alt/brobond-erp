@@ -85,6 +85,7 @@ import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat
 import { nfeDados, nfeEmitir, nfeStatus } from './nfe';
 import { calcularFrete, consultarCEP } from './frete';
 import { marketplaceStatus, sincronizarPedidos } from './marketplace';
+import { connectorsRouter, initConnectors, publicConnectorsRouter } from './connectors';
 import { importarPedidosLoja, produtosLoja, sincronizarEstoqueLoja, statusLoja } from './loja';
 import { initWebSocket, wsStatus } from './websocket';
 import { createServer } from 'node:http';
@@ -129,6 +130,16 @@ app.use('/api/publico', (_req: Request, res: Response, next: NextFunction) => {
   res.removeHeader('Access-Control-Allow-Credentials');
   next();
 });
+// Conectores de marketplace: callbacks de OAuth e webhooks de pedido chegam
+// de FORA (Mercado Livre, Mercado Pago, Shopee, TikTok), sem cookie e sem
+// Bearer. O router é montado aqui — depois do cors(), ANTES do express.json()
+// e muito antes de requireAuth/bloquearSenhaProvisoria — por dois motivos:
+// (1) a sessão do ERP nunca pode barrar um provedor externo e (2) a assinatura
+// HMAC é calculada sobre os BYTES CRUS, que o parser JSON destruiria. Segmento
+// que não seja um dos quatro provedores cai no next() e segue para as rotas de
+// sempre (inclusive o CRUD autenticado de /api/webhooks).
+app.use(publicConnectorsRouter);
+
 app.use(express.json({ limit: '4mb' })); // fotos chegam em base64 (já reduzidas no navegador)
 app.use(express.urlencoded({ extended: true }));
 
@@ -372,6 +383,9 @@ app.get('/api/vendas/:id/nfe/status', wrap(nfeStatus));
 app.get('/api/frete/cep', wrap(consultarCEP));
 app.post('/api/frete/calcular', wrap(calcularFrete));
 
+// Conectores oficiais (Mercado Livre, Mercado Pago, Shopee, TikTok)
+app.use('/api/connectors', connectorsRouter);
+
 // Marketplace
 app.get('/api/marketplace/status', wrap(marketplaceStatus));
 app.post('/api/marketplace/sincronizar', wrap(sincronizarPedidos));
@@ -551,6 +565,8 @@ async function start() {
       console.error('❌ Falha ao migrar o banco:', e?.message || e);
     }
   }
+  // Liga o módulo de conectores ao pool do Postgres e à trilha de auditoria.
+  initConnectors();
   await ensureAdmin();
   await migrarSenhasLegadas();
   // Endereço público salvo no banco (Configurações › Sistema): já entra no

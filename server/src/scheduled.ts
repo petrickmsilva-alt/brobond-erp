@@ -18,6 +18,8 @@
 //           POST /api/admin/scheduled/cron — chamado por cron externo (ex.: cron-job.org)
 // ============================================================
 import { enviarEmail, smtpConfigurado } from './mail';
+import { hasDatabaseUrl } from './db';
+import { saleIngestionService } from '../../modules/connectors/index';
 import { getStore } from './services';
 import { getResource } from './resources';
 import { labelOf } from './store';
@@ -223,6 +225,23 @@ async function relatorioAlertas(): Promise<void> {
 // ----------------------------------------------------------------------------
 
 /** GET /api/admin/scheduled/run — executa todos os relatórios agendados (admin). */
+/**
+ * Varredura de recuperação da ingestão de marketplace: reprocessa os
+ * webhooks que ficaram pendentes (provedor fora do ar, token em
+ * renovação, reinício do processo no meio da gravação). Nunca lança — o
+ * agendador não pode cair por causa de um conector.
+ */
+async function recuperarPedidosPendentes(): Promise<number> {
+  if (!hasDatabaseUrl()) return 0;
+  try {
+    const { processed } = await saleIngestionService.processPendingSaleEvents({ limit: 50 });
+    return processed;
+  } catch (e: any) {
+    console.warn('⚠️  Varredura de pedidos pendentes falhou:', e?.message || e);
+    return 0;
+  }
+}
+
 export async function runScheduled(req: Request, res: Response) {
   const actor = currentUser(req);
   if (actor.perfil !== 'admin') throw new HttpError(403, 'Apenas administradores.');
@@ -243,6 +262,8 @@ export async function runScheduled(req: Request, res: Response) {
   }
   const rec = await processarRecorrencias({ id: actor.id || null, name: actor.name });
   if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrência(s) financeira(s)`);
+  const pedidos = await recuperarPedidosPendentes();
+  if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace recuperado(s)`);
 
   res.json({ ok: true, executados: resultados, smtp: smtpConfigurado() });
 }
@@ -262,6 +283,8 @@ export async function cronScheduled(req: Request, res: Response) {
   if (deveExecutar(getSchedule('ALERTAS'))) { await relatorioAlertas(); resultados.push('alertas'); }
   const rec = await processarRecorrencias({ id: null, name: 'Agendador' });
   if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrencia(s)`);
+  const pedidos = await recuperarPedidosPendentes();
+  if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace`);
 
   res.json({ ok: true, executados: resultados });
 }
