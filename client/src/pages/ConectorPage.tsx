@@ -73,7 +73,14 @@ export default function ConectorPage({ module }: { module: Module }) {
     setBusy('auth');
     setError('');
     try {
-      const r = await api.post<{ authorizationUrl: string }>(`/connectors/${slug}/autorizar`, {});
+      // redirect_uri DINÂMICO: a origem onde o ERP está rodando — num deploy
+      // da Render é o host unificado https://brobond-erp.onrender.com. O
+      // backend valida a origem, deriva o caminho canônico
+      // /api/connectors/<slug>/callback e persiste a URI com o state para
+      // repeti-la na troca do código (contrato byte a byte do OAuth).
+      const r = await api.post<{ authorizationUrl: string }>(`/connectors/${slug}/autorizar`, {
+        redirect_uri: window.location.origin,
+      });
       if (r?.authorizationUrl) window.location.href = r.authorizationUrl;
     } catch (e) {
       setError((e as Error).message);

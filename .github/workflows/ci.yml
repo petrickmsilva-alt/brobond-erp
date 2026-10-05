@@ -64,5 +64,13 @@ jobs:
       # _prisma_migrations.
       - name: Instalar CLI Prisma (raiz)
         run: npm install --include=dev --no-audit --no-fund
+      # P3005 ("database schema is not empty"): sem histórico em
+      # _prisma_migrations o `migrate deploy` se recusa a rodar em banco
+      # já populado pelo boot. A fusão (20261005120000) já foi aplicada
+      # pelo runner do ERP com o MESMO SQL — marcar como baseline é o
+      # procedimento oficial (https://pris.ly/d/migrate-baseline) e é
+      # idempotente: se já está registrada, seguimos para o deploy.
+      - name: Baseline da fusão (o boot do ERP já aplicou o mesmo SQL)
+        run: npx prisma migrate resolve --applied "20261005120000_fusion_commerce_into_erp" || echo "baseline já registrado — seguindo"
       - name: Migration Prisma fusion_commerce_into_erp (dual-track)
         run: npx prisma migrate deploy

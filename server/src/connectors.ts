@@ -3,7 +3,8 @@
 // Autenticado (sessão do ERP):
 //   GET    /api/connectors                      — cartões dos 4 canais
 //   GET    /api/connectors/:provider            — status de um canal
-//   POST   /api/connectors/:provider/autorizar  — inicia o OAuth
+//   POST   /api/connectors/:provider/autorizar  — inicia o OAuth (aceita o
+//          redirect_uri dinâmico: a origem da Render onde o painel roda)
 //   POST   /api/connectors/mercadopago/conectar — credenciais de produção
 //   POST   /api/connectors/:provider/sincronizar— rodada de catálogo
 //   DELETE /api/connectors/:provider            — desconecta
@@ -174,7 +175,11 @@ connectorsRouter.post(
   run(async (req, res) => {
     assertConnectorsDatabase();
     const actor = currentUser(req);
-    res.json(await connectorService.startAuthorization(actor.id, providerParam(req)));
+    // `redirect_uri` dinâmico: a ORIGEM em que o navegador do operador está
+    // (na Render, https://brobond-erp.onrender.com). O caminho canônico do
+    // callback é derivado e validado no módulo — nunca montado no cliente.
+    const redirectBase = typeof req.body?.redirect_uri === 'string' ? req.body.redirect_uri : '';
+    res.json(await connectorService.startAuthorization(actor.id, providerParam(req), { redirectBase }));
   })
 );
 

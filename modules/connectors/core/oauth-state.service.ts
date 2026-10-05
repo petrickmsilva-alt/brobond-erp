@@ -36,15 +36,20 @@ export interface ConnectorOAuthStateDependencies {
 }
 
 export interface ConnectorOAuthStateService {
-  /** Emite um state opaco novo para um provedor de um responsável. */
-  issue(usuarioId: number, provider: ConnectorProviderName): Promise<string>;
+  /**
+   * Emite um state opaco novo para um provedor de um responsável. Quando a
+   * autorização usou um `redirect_uri` dinâmico (origem do painel), ele é
+   * gravado junto: a troca do código PRECISA repetir a MESMA URI byte a
+   * byte — esse é o contrato do OAuth do Mercado Livre/Shopee.
+   */
+  issue(usuarioId: number, provider: ConnectorProviderName, metadata?: { redirectUri?: string | null }): Promise<string>;
   /**
    * Consome o state apresentado por um callback OAuth. Ele — e só ele —
    * determina o responsável; é de uso único e com prazo.
    *
    * @throws {ConnectorOAuthStateError} state inválido, expirado ou repetido.
    */
-  consume(state: string, provider: ConnectorProviderName): Promise<{ usuarioId: number }>;
+  consume(state: string, provider: ConnectorProviderName): Promise<{ usuarioId: number; redirectUri: string | null }>;
 }
 
 export function createConnectorOAuthStateService(
@@ -55,7 +60,7 @@ export function createConnectorOAuthStateService(
   const randomState = deps.randomState ?? (() => randomBytes(32).toString('base64url'));
 
   return {
-    async issue(usuarioId, provider) {
+    async issue(usuarioId, provider, metadata) {
       assertUsuarioId(usuarioId);
       const state = randomState();
       const current = now();
@@ -66,9 +71,16 @@ export function createConnectorOAuthStateService(
         [usuarioId, provider, current]
       );
       await db.query(
-        `INSERT INTO connector_oauth_states (id, usuario_id, provider, state_hash, expires_at, created_at)
-         VALUES ($1, $2, $3, $4, $5, now())`,
-        [connectorCuid(), usuarioId, provider, hashConnectorOAuthState(state), new Date(current.getTime() + OAUTH_STATE_TTL_MS)]
+        `INSERT INTO connector_oauth_states (id, usuario_id, provider, state_hash, redirect_uri, expires_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, now())`,
+        [
+          connectorCuid(),
+          usuarioId,
+          provider,
+          hashConnectorOAuthState(state),
+          metadata?.redirectUri?.trim() || null,
+          new Date(current.getTime() + OAUTH_STATE_TTL_MS),
+        ]
       );
       return state;
     },
@@ -85,7 +97,7 @@ export function createConnectorOAuthStateService(
       const { rows } = await db.query<Record<string, unknown>>(
         `DELETE FROM connector_oauth_states
          WHERE state_hash = $1 AND provider = $2 AND expires_at > $3
-         RETURNING usuario_id`,
+         RETURNING usuario_id, redirect_uri`,
         [stateHash, provider, current]
       );
       const row = rows[0];
@@ -95,7 +107,10 @@ export function createConnectorOAuthStateService(
         await db.query(`DELETE FROM connector_oauth_states WHERE state_hash = $1`, [stateHash]);
         throw new ConnectorOAuthStateError('O estado de autorização é inválido ou expirou. Inicie a conexão novamente.');
       }
-      return { usuarioId: Number(row.usuario_id) };
+      return {
+        usuarioId: Number(row.usuario_id),
+        redirectUri: row.redirect_uri === null || row.redirect_uri === undefined ? null : String(row.redirect_uri),
+      };
     },
   };
 }

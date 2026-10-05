@@ -10,7 +10,7 @@ export default [
   },
   js.configs.recommended,
   {
-    files: ['server/src/**/*.ts', 'modules/**/*.ts', 'client/src/**/*.{ts,tsx}'],
+    files: ['server/src/**/*.ts', 'modules/**/*.ts', 'packages/*/src/**/*.ts', 'client/src/**/*.{ts,tsx}'],
     languageOptions: {
       parser: tsparser,
       parserOptions: {

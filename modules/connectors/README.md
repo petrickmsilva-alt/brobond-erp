@@ -67,6 +67,15 @@ Autenticadas (sessão do ERP):
 GET    /api/connectors                        cartões dos 4 canais
 GET    /api/connectors/:provider              status de um canal
 POST   /api/connectors/:provider/autorizar    inicia o OAuth (devolve a URL)
+                                               • body opcional: { redirect_uri }
+                                                 — a ORIGEM onde o painel está
+                                                 rodando (na Render,
+                                                 https://brobond-erp.onrender.com).
+                                                 Validada no servidor; o caminho
+                                                 canônico /api/connectors/<slug>/callback
+                                                 é derivado AQUI e a URI escolhida
+                                                 é persistida com o state para a
+                                                 troca do código repeti-la byte a byte.
 POST   /api/connectors/mercadopago/conectar   { accessToken, publicKey }
 POST   /api/connectors/:provider/sincronizar  rodada manual de catálogo
 DELETE /api/connectors/:provider              desconecta e apaga as credenciais

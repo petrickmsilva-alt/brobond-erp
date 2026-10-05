@@ -32,8 +32,10 @@ import {
   CONNECTOR_PROVIDER_DESCRIPTIONS,
   CONNECTOR_PROVIDER_LABELS,
   CONNECTOR_PROVIDER_REQUIRED_ENV,
+  CONNECTOR_PROVIDER_SLUGS,
   type ConnectorProviderName,
 } from './providers';
+import { resolveDynamicCallbackUri } from './app-url';
 import type { ConnectorRow, ConnectorStatusDTO } from './types';
 
 import {
@@ -190,32 +192,45 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
     /**
      * Inicia o fluxo OAuth de um provedor: emite o state CSRF (amarrado ao
      * `usuarioId`) e devolve a URL de consentimento.
+     *
+     * `options.redirectBase` é a ORIGEM dinâmica enviada pelo painel
+     * (`window.location.origin` — num deploy da Render,
+     * `https://brobond-erp.onrender.com`, o host unificado do ERP). Ela é
+     * validada (https público em produção) e o caminho canônico do callback
+     * é derivado NO SERVIDOR; a URI escolhida é persistida com o state para
+     * que a troca do código repita exatamente o mesmo valor byte a byte.
+     * Sem base válida, cai na resolução estática do ambiente.
      */
-    async startAuthorization(usuarioId: number, provider: ConnectorProviderName): Promise<StartAuthorizationResult> {
+    async startAuthorization(
+      usuarioId: number,
+      provider: ConnectorProviderName,
+      options: { redirectBase?: string | null } = {}
+    ): Promise<StartAuthorizationResult> {
       if (CONNECTOR_PROVIDER_AUTH_MODEL[provider] !== 'oauth2') {
         throw new ConnectorError(`O conector "${provider}" é conectado por credenciais de produção, não por OAuth.`, provider);
       }
       assertEncryptionKey();
-      const missing = connectorConfigurationMissing(provider);
+      const dynamicRedirectUri = resolveDynamicCallbackUri(options.redirectBase, CONNECTOR_PROVIDER_SLUGS[provider]);
+      const missing = connectorConfigurationMissing(provider, dynamicRedirectUri);
       if (missing.length) {
         throw new ConnectorError(`Configuração incompleta do conector: ${missing.join(', ')}.`, provider);
       }
-      const state = await oauthStates.issue(usuarioId, provider);
+      const state = await oauthStates.issue(usuarioId, provider, { redirectUri: dynamicRedirectUri });
       switch (provider) {
         case 'MERCADOLIVRE': {
           const { resolveMercadoLivreRedirectUri } = await import('../mercadolivre/mercadolivre.service');
           return {
             provider,
-            authorizationUrl: buildMercadoLivreAuthorizationUrl(state),
-            redirectUri: resolveMercadoLivreRedirectUri(),
+            authorizationUrl: buildMercadoLivreAuthorizationUrl(state, undefined, dynamicRedirectUri),
+            redirectUri: resolveMercadoLivreRedirectUri(undefined, dynamicRedirectUri),
           };
         }
         case 'SHOPEE': {
           const { getShopeeRedirectUri } = await import('../shopee/shopee.service');
           return {
             provider,
-            authorizationUrl: buildShopeeAuthorizationUrl(state),
-            redirectUri: getShopeeRedirectUri(),
+            authorizationUrl: buildShopeeAuthorizationUrl(state, undefined, dynamicRedirectUri),
+            redirectUri: getShopeeRedirectUri(undefined, dynamicRedirectUri),
           };
         }
         case 'TIKTOK': {
@@ -241,11 +256,13 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
       input: { code: string; state: string; shopId?: string | null }
     ): Promise<{ usuarioId: number; connector: ConnectorRow }> {
       assertEncryptionKey();
-      const { usuarioId } = await oauthStates.consume(input.state, provider);
+      const { usuarioId, redirectUri } = await oauthStates.consume(input.state, provider);
 
       switch (provider) {
         case 'MERCADOLIVRE': {
-          const tokens = await exchangeMercadoLivreCode(input.code);
+          // O redirect_uri da troca é o MESMO da autorização (persistido no
+          // state): a Meli compara os dois valores byte a byte.
+          const tokens = await exchangeMercadoLivreCode(input.code, undefined, redirectUri);
           const identity = await fetchMercadoLivreIdentity(tokens.accessToken);
           const connector = await repository.upsertConnection(usuarioId, provider, {
             status: 'CONNECTED',
@@ -455,7 +472,7 @@ function isProductionCallbackUrl(value: string | undefined): boolean {
   }
 }
 
-function connectorConfigurationMissing(provider: ConnectorProviderName): string[] {
+function connectorConfigurationMissing(provider: ConnectorProviderName, dynamicRedirectUri?: string | null): string[] {
   const missing = CONNECTOR_PROVIDER_REQUIRED_ENV[provider].filter((name) => !process.env[name]?.trim());
   if (!hasConnectorEncryptionKey()) missing.push('CONNECTOR_ENCRYPTION_KEY (32 bytes em base64 ou 64 hex)');
   if (CONNECTOR_PROVIDER_AUTH_MODEL[provider] === 'oauth2' && process.env.NODE_ENV === 'production') {
@@ -464,7 +481,9 @@ function connectorConfigurationMissing(provider: ConnectorProviderName): string[
       : provider === 'TIKTOK'
         ? process.env.TIKTOK_REDIRECT_URI?.trim()
         : process.env.SHOPEE_REDIRECT_URI?.trim();
-    if (!isProductionCallbackUrl(explicitRedirect) && !isProductionCallbackUrl(process.env.APP_URL)) {
+    // O redirect dinâmico do painel (origem da Render, validado) também
+    // satisfaz o requisito de callback público em HTTPS.
+    if (!isProductionCallbackUrl(explicitRedirect) && !isProductionCallbackUrl(process.env.APP_URL) && !dynamicRedirectUri) {
       missing.push('APP_URL ou REDIRECT_URI público em HTTPS');
     }
   }

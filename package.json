@@ -8,11 +8,12 @@
     "dev": "concurrently -k -n SERVER,CLIENT -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "npm --workspace server run dev",
     "dev:client": "npm --workspace client run dev",
+    "install:all": "npm install",
     "build": "npm --workspace client run build",
     "typecheck": "npm run typecheck:domain && npm --workspace server run typecheck && npm --workspace client run typecheck",
     "typecheck:domain": "npm --workspace @brobond/domain run typecheck",
     "test": "npm --workspace server test && npm --workspace client test",
-    "lint": "eslint 'server/src/**/*.ts' 'packages/**/*.ts' 'client/src/**/*.{ts,tsx}'",
+    "lint": "eslint 'server/src/**/*.ts' 'modules/**/*.ts' 'packages/*/src/**/*.ts' 'client/src/**/*.{ts,tsx}'",
     "db:validate": "prisma validate",
     "db:generate": "prisma generate",
     "db:deploy": "prisma migrate deploy"

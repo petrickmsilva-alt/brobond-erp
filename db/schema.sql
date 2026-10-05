@@ -1225,9 +1225,15 @@ CREATE TABLE IF NOT EXISTS connector_oauth_states (
   usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
   provider "connector_provider" NOT NULL,
   state_hash TEXT NOT NULL,
+  -- redirect_uri escolhido na autorização (origem dinâmica do painel, ex.:
+  -- https://brobond-erp.onrender.com/api/connectors/<slug>/callback). A
+  -- troca do código reusa EXATAMENTE este valor (contrato byte a byte).
+  redirect_uri TEXT,
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Bancos criados antes desta coluna (boot com schema.sql antigo):
+ALTER TABLE connector_oauth_states ADD COLUMN IF NOT EXISTS redirect_uri TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS connector_oauth_states_state_hash_key
   ON connector_oauth_states (state_hash);
