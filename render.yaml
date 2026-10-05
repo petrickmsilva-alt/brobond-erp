@@ -58,6 +58,31 @@ services:
       # Sentry (monitoramento de erros frontend) — crie em https://sentry.io
       - key: VITE_SENTRY_DSN
         sync: false
+      # ── Conectores multicanal (módulo commerce — Fase 1 da fusão) ──
+      # Opcionais: sem valor o conector fica DESCONNECTED e nada quebra.
+      # Configure no painel quando conectar cada canal. A chave de
+      # cifragem é OBRIGATÓRIA ao ativar o primeiro conector (32 bytes
+      # base64: openssl rand -base64 32) e não deve ser trocada depois.
+      - key: CONNECTOR_ENCRYPTION_KEY
+        sync: false
+      - key: TIKTOK_CLIENT_KEY
+        sync: false
+      - key: TIKTOK_CLIENT_SECRET
+        sync: false
+      - key: TIKTOK_REDIRECT_URI
+        sync: false
+      - key: SHOPEE_PARTNER_ID
+        sync: false
+      - key: SHOPEE_PARTNER_KEY
+        sync: false
+      - key: MERCADOLIVRE_CLIENT_ID
+        sync: false
+      - key: MERCADOLIVRE_CLIENT_SECRET
+        sync: false
+      - key: MERCADOPAGO_ACCESS_TOKEN
+        sync: false
+      - key: MERCADOPAGO_PUBLIC_KEY
+        sync: false
 
 # databases:
 #   - name: brobond-db

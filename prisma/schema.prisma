@@ -1,0 +1,500 @@
+// ==================================================================
+// BROBOND AI ERP — Schema Prisma unificado
+// ==================================================================
+//
+// FASE 1 DA FUSÃO DO ECOSSISTEMA (2026-10-05)
+//
+// O brobond-erp é a BASE PRINCIPAL do ecossistema Brobond AI ERP e
+// recebe, a partir desta migration, o motor comercial do projeto
+// brobond-ai-commerce como módulo de conectores multicanal
+// (modules/connectors/).
+//
+// ORIGEM DOS MODELOS
+// ------------------
+//   • Modelos âncora (Usuario, Produto, Tamanho): mapeiam 1:1 as
+//     tabelas EXISTENTES do ERP (db/schema.sql). Eles existem para
+//     dar às tabelas do commerce as chaves estrangeiras corretas —
+//     nenhum campo de segurança de login foi alterado.
+//   • Modelos de conectores e vendas (Connector, ConnectorEvent,
+//     ConnectorOAuthState, Sale, SaleItem) + enums (ConnectionStatus,
+//     SaleChannel, ConnectorProvider, SaleStatus): extraídos do
+//     prisma/schema.prisma do brobond-ai-commerce e adaptados à
+//     tenancy do ERP (organizationId → usuarioId, ver abaixo).
+//
+// CONTRATO DE MIGRATION (DUAL-TRACK) — LEIA ANTES DE MIGRAR
+// ---------------------------------------------------------
+// O ERP aplica db/schema.sql + db/migrations/*.sql no boot
+// (server/src/db.ts) e NÃO é gerenciado pelo `prisma migrate dev`.
+// A migration desta fase,
+//   prisma/migrations/20261005120000_fusion_commerce_into_erp/,
+// é idempotente e cria APENAS os objetos do commerce — ela assume que
+// as tabelas do ERP (usuarios, produtos, tamanhos, ...) já existem.
+//
+//   • Banco novo             : o boot do ERP cria tudo (db/schema.sql
+//                              agora espelha a fusão).
+//   • Banco de produção      : `prisma migrate deploy` OU o próprio
+//                              boot do ERP (db/migrations/0012_…)
+//                              aplicam a fusão — os dois caminhos são
+//                              seguros e convergem para o mesmo
+//                              estado (SQL idempotente).
+//   • NUNCA rode `prisma migrate dev` contra este banco: o shadow
+//     database do Prisma não conhece as tabelas do ERP e a ferramenta
+//     tentaria reescrevê-las. Mudanças no schema passam por
+//     db/schema.sql + db/migrations (lado ERP) ou por migrations
+//     Prisma criadas com --create-only e revisadas (lado commerce).
+//
+// TENANCY: Organization → Usuario
+// --------------------------------
+// No commerce, todo registro pertencia a uma Organization (SaaS
+// multi-tenant). O ERP é single-company: a fronteira de identidade é
+// a tabela `usuarios` (login por e-mail + Argon2id, MFA, sessões).
+// Por isso `organizationId` virou `usuarioId` (FK → usuarios.id):
+//   • Connector.usuarioId      — operador responsável pela conexão;
+//   • Sale.usuarioId           — operador que importou/sincronizou a
+//                                venda (proveniência);
+//   • ConnectorEvent.usuarioId — mesmo contrato do conector.
+// A ação ON DELETE é RESTRICT (não CASCADE como no commerce): no ERP
+// usuários são DESATIVADOS (colunas ativo/desativado_em), nunca
+// apagados; um DELETE acidental em usuarios não pode destruir
+// credenciais de marketplace nem histórico de vendas. Exceção:
+// ConnectorOAuthState é efêmero (estado CSRF de minutos) e mantém
+// CASCADE.
+
+generator client {
+  provider        = "prisma-client-js"
+  engineType      = "client"
+  previewFeatures = ["queryCompiler", "driverAdapters"]
+  // Mesma configuração do brobond-ai-commerce (Prisma 6.12 + adapter
+  // @prisma/adapter-pg): nenhuma engine Rust em runtime. O servidor do
+  // ERP já usa o driver `pg` — na Fase 2 o cliente Prisma será criado
+  // sobre o MESMO pool (modules/connectors).
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================================================================
+// PARTE 1 — MODELOS ÂNCORA DO ERP (db/schema.sql)
+// ==================================================================
+// Espelho fiel das tabelas existentes, coluna por coluna, apenas com
+// o necessário para os relacionamentos da fusão. Estes modelos são
+// INTROSPECTION-ONLY: nenhuma migration Prisma deve alterá-los.
+// Campos de segurança (senha_hash, mfa_*, reset_*, convite_*,
+// token_versao, sessões) permanecem EXATAMENTE como o middleware de
+// login espera — o Prisma não toca neles.
+
+/// Usuários do ERP — tabela `usuarios` (login, perfis, MFA, cofre de
+/// senha, governança). É a âncora de tenancy da fusão.
+model Usuario {
+  id            Int     @id @default(autoincrement()) @map("id")
+  nome          String  @map("nome")
+  email         String  @unique @map("email")
+  senhaHash     String? @map("senha_hash")
+  perfil        String  @default("operador") @map("perfil") // admin, gerente, operador
+  ativo         Boolean @default(true) @map("ativo")
+  ultimoLogin   DateTime? @map("ultimo_login") @db.Timestamptz
+  criadoEm      DateTime? @default(now()) @map("criado_em") @db.Timestamptz
+  atualizadoEm  DateTime? @map("atualizado_em") @db.Timestamptz
+
+  // Redefinição de senha / tokens de acesso
+  resetTokenHash String?   @map("reset_token_hash")
+  resetExpiraEm  DateTime? @map("reset_expira_em") @db.Timestamptz
+  trocarSenha    Boolean?  @default(false) @map("trocar_senha")
+  tokenVersao    Int?      @default(0) @map("token_versao")
+  preferencias   Json?     @default(dbgenerated("'{}'::jsonb")) @map("preferencias")
+
+  // MFA/TOTP (segredo gravado cifrado)
+  mfaSecret       String?   @map("mfa_secret")
+  mfaAtivadoEm    DateTime? @map("mfa_ativado_em") @db.Timestamptz
+  mfaBackupHashes String?   @map("mfa_backup_hashes")
+
+  // Convite de acesso (token só em hash; expiração)
+  conviteTokenHash String?   @map("convite_token_hash")
+  conviteExpiraEm  DateTime? @map("convite_expira_em") @db.Timestamptz
+
+  // Cofre de senhas / ciclo de vida
+  senhaProvisoria Boolean?   @default(false) @map("senha_provisoria")
+  senhaDefinidaEm DateTime?  @map("senha_definida_em") @db.Timestamptz
+  senhaHistorico  String?    @map("senha_historico")
+
+  // Cadastro
+  cargo        String? @map("cargo")
+  departamento String? @map("departamento")
+  telefone     String? @map("telefone")
+  observacoes  String? @map("observacoes")
+
+  // Segurança de login
+  bloqueadoAte    DateTime? @map("bloqueado_ate") @db.Timestamptz
+  motivoBloqueio  String?   @map("motivo_bloqueio")
+  bloqueioManual  Boolean   @default(false) @map("bloqueio_manual")
+  tentativasFalhas Int      @default(0) @map("tentativas_falhas")
+  ultimoFalhaEm   DateTime? @map("ultimo_falha_em") @db.Timestamptz
+  ultimoIp        String?   @map("ultimo_ip")
+  acessoExpiraEm  DateTime? @map("acesso_expira_em") @db.Timestamptz
+
+  // Trilha de criação/desativação
+  criadoPor         Int?      @map("criado_por")
+  desativadoPor     String?   @map("desativado_por")
+  desativadoEm      DateTime? @map("desativado_em") @db.Timestamptz
+  desativadoMotivo  String?   @map("desativado_motivo")
+
+  // Certificação de acesso (governança)
+  acessoCertificadoEm  DateTime? @map("acesso_certificado_em") @db.Timestamptz
+  acessoCertificadoPor String?   @map("acesso_certificado_por")
+  acessoCertificadoObs String?   @map("acesso_certificado_obs")
+
+  // Permissões comerciais e alçadas (herdar/permitir/negar)
+  permCatalogos      String  @default("herdar") @map("perm_catalogos")
+  permCompartilhar   String  @default("herdar") @map("perm_compartilhar")
+  permMetricas       String  @default("herdar") @map("perm_metricas")
+  permPoliticas      String  @default("herdar") @map("perm_politicas")
+  permAprovar        String  @default("herdar") @map("perm_aprovar")
+  descontoMaxPct     Decimal? @map("desconto_max_pct") @db.Decimal(5, 2)
+  vendaSemAprovacaoAte Decimal? @map("venda_sem_aprovacao_ate") @db.Decimal(12, 2)
+
+  // ── Fusão commerce (Fase 1): relações de tenancy ──
+  connectors         Connector[]
+  connectorEvents    ConnectorEvent[]
+  connectorOAuthStates ConnectorOAuthState[]
+  sales              Sale[]
+
+  @@map("usuarios")
+}
+
+/// Catálogo de produtos do ERP — tabela `produtos`. Âncora dos itens
+/// de venda multicanal (SaleItem.productId) para que cada pedido de
+/// marketplace aponte para o produto/estoque daqui.
+model Produto {
+  id            Int      @id @default(autoincrement()) @map("id")
+  sku           String   @unique @map("sku")
+  nome          String   @map("nome")
+  cor           String?  @map("cor")
+  corId         Int?     @map("cor_id")
+  categoriaId   Int?     @map("categoria_id")
+  colecaoId     Int?     @map("colecao_id")
+  gradeId       Int?     @map("grade_id")
+  codigoBarras  String?  @map("codigo_barras")
+  descricao     String?  @map("descricao")
+  composicao    String?  @map("composicao")
+  ncm           String?  @map("ncm")
+  pesoG         Int?     @map("peso_g")
+  custo         Decimal? @default(0) @map("custo") @db.Decimal(12, 2)
+  precoVenda    Decimal? @default(0) @map("preco_venda") @db.Decimal(12, 2)
+  precoAtacado  Decimal? @default(0) @map("preco_atacado") @db.Decimal(12, 2)
+  atacadoMinQtd Int?     @default(0) @map("atacado_min_qtd")
+  exibirSite    Boolean? @default(false) @map("exibir_site")
+  destaque      Boolean? @default(false) @map("destaque")
+  ativo         Boolean? @default(true) @map("ativo")
+  criadoEm      DateTime? @default(now()) @map("criado_em") @db.Timestamptz
+  atualizadoEm  DateTime? @map("atualizado_em") @db.Timestamptz
+
+  // ── Fusão commerce (Fase 1) ──
+  saleItems SaleItem[]
+
+  @@map("produtos")
+}
+
+/// Tamanhos (PP, P, M, G, GG…) — tabela `tamanhos`. Âncora da
+/// variação de cada item de venda multicanal (o ERP vende peças
+/// dimensionadas; pedidos Shopee/Mercado Livre/TikTok trazem o
+/// tamanho como variante).
+model Tamanho {
+  id          Int       @id @default(autoincrement()) @map("id")
+  codigo      String    @unique @map("codigo")
+  descricao   String?   @map("descricao")
+  ordem       Int?      @default(0) @map("ordem")
+  criadoEm    DateTime? @default(now()) @map("criado_em") @db.Timestamptz
+  atualizadoEm DateTime? @map("atualizado_em") @db.Timestamptz
+
+  // ── Fusão commerce (Fase 1) ──
+  saleItems SaleItem[]
+
+  @@map("tamanhos")
+}
+
+// ==================================================================
+// PARTE 2 — MOTOR COMERCIAL (extraído do brobond-ai-commerce)
+// ==================================================================
+// Modelos core de conectores e vendas, adaptados do
+// prisma/schema.prisma do brobond-ai-commerce (PR005/PR012/PR013/
+// PR014). As adaptações estão marcadas com "FUSÃO:".
+
+// ------------------------------------------------------------------
+// Enums
+// ------------------------------------------------------------------
+
+/// Status do ciclo de vida de uma venda (fonte: commerce, PR013).
+enum SaleStatus {
+  PENDING
+  PAID
+  REFUNDED
+  CANCELLED
+
+  @@map("sale_status")
+}
+
+/// Canal de origem da receita (fonte: commerce, PR013 — Hub
+/// Multicanal). `BROBOND` é a loja própria; os demais espelham
+/// `ConnectorProvider` 1:1 para que TODO pedido sincronizado por um
+/// conector carregue a plataforma exata em que foi vendido —
+/// obrigatório para o dashboardsplit de receita
+/// "Brobond × Mercado Livre × Shopee × TikTok Shop × Mercado Pago".
+enum SaleChannel {
+  BROBOND
+  TIKTOK
+  INSTAGRAM
+  SHOPEE
+  MERCADOLIVRE
+  MERCADOPAGO
+
+  @@map("sale_channel")
+}
+
+/// Plataforma com a qual um conector conversa (fonte: commerce,
+/// PR012 — Real Marketplace Integrations). Apenas APIs oficiais:
+/// TikTok Shop Partner Center, Meta Graph API (Instagram Shopping),
+/// Shopee Open Platform v2 (HMAC), Mercado Livre OAuth2 (Meli) e
+/// credenciais de API do Mercado Pago.
+enum ConnectorProvider {
+  TIKTOK
+  INSTAGRAM
+  SHOPEE
+  MERCADOLIVRE
+  MERCADOPAGO
+
+  @@map("connector_provider")
+}
+
+/// Ciclo de vida da credencial de uma conexão `Connector` (fonte:
+/// commerce, PR012/PR016.2).
+///   DISCONNECTED     — sem credencial válida
+///   CONNECTED        — credencial válida
+///   EXPIRED          — token expirado sem sucesso no refresh
+///   ERROR            — última chamada ao provedor falhou
+///   PENDING_APPROVAL — app/loja TikTok ainda em análise no Seller
+///                      Center (operacionalmente esperado; NUNCA é
+///                      falha de servidor)
+///   REAUTH_REQUIRED  — credencial não pode mais ser decifrada (ex.:
+///                      troca de CONNECTOR_ENCRYPTION_KEY); só
+///                      reconectar re-cifra com a chave atual
+///   SANDBOX_ACTIVE   — modo sandbox do TikTok Developers (PR017);
+///                      plenamente funcional, nunca é falha
+enum ConnectionStatus {
+  DISCONNECTED
+  CONNECTED
+  EXPIRED
+  ERROR
+  PENDING_APPROVAL
+  REAUTH_REQUIRED
+  SANDBOX_ACTIVE
+
+  @@map("connection_status")
+}
+
+// ------------------------------------------------------------------
+// Conectores multicanal
+// ------------------------------------------------------------------
+
+/// Uma integração ativa com um marketplace/meio de pagamento
+/// (fonte: commerce PR012 — modelo unificado `Connector`).
+///
+/// FUSÃO: `organizationId` → `usuarioId` (FK → usuarios.id). A
+/// unicidade (usuario, provedor) preserva o contrato do commerce
+/// — um conector por provedor por responsável.
+model Connector {
+  id String @id @default(cuid())
+
+  // Responsável ERP — REQUIRED. FUSÃO: era Organization (Cascade);
+  // no ERP a ação é RESTRICT (usuário se desativa, não se apaga).
+  usuarioId Int    @map("usuario_id")
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
+
+  provider ConnectorProvider
+  status   ConnectionStatus @default(DISCONNECTED)
+
+  /// Identidade no provedor: shop id do TikTok, id da conta Instagram
+  /// Business, shop_id da Shopee, user id do Mercado Livre ou
+  /// collector id do Mercado Pago.
+  shopId   String? @map("shop_id")
+  shopName String? @map("shop_name")
+
+  /// Cifras AES-256-GCM (`v1.iv.tag.valor`, base64url). JAMAIS texto
+  /// puro — a chave é CONNECTOR_ENCRYPTION_KEY.
+  accessToken  String? @db.Text @map("access_token")
+  refreshToken String? @db.Text @map("refresh_token")
+  clientSecret String? @db.Text @map("client_secret")
+  /// Chave pública do Mercado Pago usada no checkout. Também cifrada
+  /// — o painel recebe apenas uma prévia mascarada.
+  publicKey    String? @db.Text @map("public_key")
+
+  /// Expiração do access token. `null` para credenciais não
+  /// expiráveis.
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz
+
+  /// Métricas REAIS consolidadas de sincronização — os KPIs dos
+  /// cartões de conector (importados · duplicados · falhas).
+  importedCount   Int @default(0) @map("imported_count")
+  duplicatedCount Int @default(0) @map("duplicated_count")
+  failedCount     Int @default(0) @map("failed_count")
+  /// Quantas execuções de sincronização este conector já teve.
+  syncCount       Int @default(0) @map("sync_count")
+
+  lastSyncAt DateTime? @map("last_sync_at") @db.Timestamptz
+  lastError  String?   @map("last_error")
+
+  /// Extras não-secretos do provedor (escopos, site id, nickname…).
+  metadata Json?
+
+  events ConnectorEvent[]
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([usuarioId, provider])
+  @@index([usuarioId, status])
+  @@index([provider, shopId])
+  @@map("connectors")
+}
+
+/// Evento bruto ingerido (webhook/polling) com deduplicação por
+/// (responsável, provedor, id externo) — fontes: commerce PR012.
+/// FUSÃO: tenancy organizationId → usuarioId (RESTRICT); o vínculo
+/// com o conector permanece SET NULL (o evento sobrevive à remoção
+/// do conector como trilha de ingestão).
+model ConnectorEvent {
+  id String @id @default(cuid())
+
+  usuarioId Int    @map("usuario_id")
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
+
+  connectorId String?    @map("connector_id")
+  connector   Connector? @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+
+  provider        ConnectorProvider
+  externalEventId String          @map("external_event_id")
+  topic           String?
+  payload         Json?
+  processedAt     DateTime?       @map("processed_at") @db.Timestamptz
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz
+
+  @@unique([usuarioId, provider, externalEventId])
+  @@index([usuarioId, provider, createdAt])
+  @@index([connectorId])
+  @@map("connector_events")
+}
+
+/// Estado CSRF efêmero do fluxo OAuth de conexão (fonte: commerce
+/// PR012). Guarda apenas o SHA-256 do state; expira em minutos.
+/// FUSÃO: mantém CASCADE — dado descartável por natureza.
+model ConnectorOAuthState {
+  id String @id @default(cuid())
+
+  usuarioId Int    @map("usuario_id")
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  provider  ConnectorProvider
+  stateHash String   @unique @map("state_hash")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([usuarioId, provider, expiresAt])
+  @@map("connector_oauth_states")
+}
+
+// ------------------------------------------------------------------
+// Vendas multicanal
+// ------------------------------------------------------------------
+
+/// Uma venda/receita originada em qualquer canal (fonte: commerce
+/// PR013/PR014 — Hub Multicanal + Motor Financeiro Unificado).
+///
+/// FUSÃO: `organizationId` → `usuarioId` (FK → usuarios.id) com
+/// RESTRICT — histórico de receita nunca é apagado em cascata. Os
+/// vínculos com Product/CreatorProfile/Campaign do commerce foram
+/// substituídos por `items SaleItem[]`, que ligam o pedido ao
+/// catálogo real do ERP (produtos + tamanhos).
+///
+/// Valores em CENTAVOS (Int) — convenção do motor financeiro do
+/// commerce (BRL inteiro evita erro de ponto flutuante).
+model Sale {
+  id          String     @id @default(cuid())
+  reference   String     @unique @default(cuid())
+  quantity    Int        @default(1)
+  amountCents Int        @default(0) @map("amount_cents")
+  currency    String     @default("BRL")
+  status      SaleStatus @default(PENDING)
+  occurredAt  DateTime   @default(now()) @map("occurred_at") @db.Timestamptz
+
+  /// Plataforma de origem desta receita. Padrão `BROBOND` (checkout
+  /// da loja própria); a sincronização de marketplaces etiqueta a
+  /// plataforma real (SHOPEE, MERCADOLIVRE, MERCADOPAGO, TIKTOK…).
+  channel SaleChannel @default(BROBOND)
+
+  /// Id do pedido na plataforma de origem (pack/order id do Mercado
+  /// Livre, order sn da Shopee, order id do TikTok Shop…). `null`
+  /// para o checkout próprio, onde `reference` já é o id canônico.
+  externalOrderId String? @map("external_order_id")
+
+  // Responsável ERP (proveniência da importação/sincronização).
+  usuarioId Int    @map("usuario_id")
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
+
+  items SaleItem[]
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  /// Chave de idempotência da ingestão de marketplaces (PR014):
+  /// uma linha por (responsável, canal, pedido externo). Webhooks
+  /// são at-least-once, então o upsert aterrissa nesta chave em vez
+  /// de inserir às cegas. `externalOrderId` é `null` no checkout
+  /// próprio — Postgres trata NULLs como distintos em índices
+  /// únicos, então essas linhas ficam fora da chave.
+  @@unique([usuarioId, channel, externalOrderId])
+  @@index([status])
+  @@index([usuarioId])
+  @@index([usuarioId, status])
+  @@index([usuarioId, channel])
+  @@index([channel, occurredAt])
+  @@map("sales")
+}
+
+/// Item de uma venda multicanal. FUSÃO: modelo NOVO — o commerce
+/// ligava a Sale diretamente a um Product (venda de 1 item); no ERP
+/// um pedido de marketplace é composto por N itens, cada um apontado
+/// ao produto (`produtos`) e tamanho (`tamanhos`) do catálogo real,
+/// espelhando a semântica de itens_venda.
+model SaleItem {
+  id String @id @default(cuid())
+
+  saleId String @map("sale_id")
+  sale   Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  /// Produto do catálogo ERP. SET NULL: a linha da venda sobrevive
+  /// (histórico fiscal) mesmo se o produto for excluído depois.
+  productId Int?     @map("product_id")
+  product   Produto? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  /// Tamanho da peça (variante). SET NULL pela mesma razão.
+  sizeId Int?      @map("size_id")
+  size   Tamanho? @relation(fields: [sizeId], references: [id], onDelete: SetNull)
+
+  /// Nome literal da variante no marketplace ("Camiseta M — Preto"),
+  /// preservado quando ainda não há casamento com produto/tamanho
+  /// do ERP (o match é feito pelo motor de conectores na Fase 2).
+  variacaoExterna String? @map("variacao_externa")
+
+  quantity        Int @default(1)
+  unitPriceCents  Int @default(0) @map("unit_price_cents")
+  discountCents   Int @default(0) @map("discount_cents")
+  subtotalCents   Int @default(0) @map("subtotal_cents")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([saleId])
+  @@index([productId])
+  @@index([sizeId])
+  @@map("sale_items")
+}

@@ -1,6 +1,10 @@
-# BROBOND ERP
+# BROBOND AI ERP
 
-Sistema de controle de estoque e produção para a **BROBOND** (roupas masculinas).
+Sistema de controle de estoque, produção e financeiro para a **BROBOND** (roupas masculinas) —
+e **base principal do ecossistema Brobond AI**: desde a Fase 1 da fusão (out/2026) o motor
+comercial do `brobond-ai-commerce` vive aqui como módulo de conectores multicanal (Shopee,
+Mercado Livre, Mercado Pago, TikTok). Veja [docs/FUSAO-COMMERCE-FASE-1.md](docs/FUSAO-COMMERCE-FASE-1.md).
+
 Monorepo com frontend (React) e backend (Node/Express + Postgres).
 
 ## Stack
@@ -42,11 +46,13 @@ brobond-erp/
 │       ├── memdb.ts        # persistência em memória (modo demonstração)
 │       ├── auth.ts         # login (com MFA), JWT+sessões, reautenticação, perfis, troca de senha
 │       └── db.ts           # pool + migração automática (db/schema.sql)
-├── db/                     # schema.sql (idempotente) + seed.sql (Postgres)
+├── db/                     # schema.sql (idempotente) + migrations versionadas + seed.sql (Postgres)
+├── prisma/                 # schema Prisma unificado + migration da fusão commerce (Fase 1)
+├── modules/connectors/     # (reservado) conectores multicanal — chegam na Fase 2
 ├── docs/                   # relatório de auditoria e guias (banco/fotos gratuitos)
 ├── .github/workflows/      # CI: typecheck + testes + build a cada push
 ├── render.yaml             # deploy na Render (blueprint)
-└── package.json            # scripts raiz (dev com concurrently)
+└── package.json            # scripts raiz (dev com concurrently + db:* do Prisma)
 ```
 
 ## Como rodar localmente

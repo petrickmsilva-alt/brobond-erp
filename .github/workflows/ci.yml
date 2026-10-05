@@ -22,6 +22,8 @@ jobs:
         run: npm --prefix client run typecheck
       - name: Testes das regras de negócio
         run: npm --prefix server test
+      - name: Validar schema Prisma unificado (fusão commerce)
+        run: npx prisma validate
       - name: Lint
         run: npm run lint
       - name: Build do front
@@ -59,3 +61,11 @@ jobs:
         run: npm --prefix server install
       - name: Migrations + concorrência de saldo no Postgres
         run: npm --prefix server run test:pg
+      # Dual-track da fusão: o boot do ERP já criou as tabelas do commerce
+      # (db/schema.sql + db/migrations/0012); a migration Prisma precisa
+      # aplicar por cima sem erro (SQL idempotente) e ser registrada em
+      # _prisma_migrations.
+      - name: Instalar CLI Prisma (raiz)
+        run: npm install --include=dev --no-audit --no-fund
+      - name: Migration Prisma fusion_commerce_into_erp (dual-track)
+        run: npx prisma migrate deploy
