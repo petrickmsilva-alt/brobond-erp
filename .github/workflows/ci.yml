@@ -31,11 +31,8 @@ jobs:
 
   # As regras de saldo e o runner de migração só podem ser provados contra um
   # Postgres de verdade (o modo demonstração não tem isolamento por transação).
-  # continue-on-error: o job informa, mas não segura o merge enquanto a suíte de
-  # integração estiver evoluindo — os testes de regra continuam obrigatórios acima.
   testes-postgres:
     runs-on: ubuntu-latest
-    continue-on-error: true
     services:
       postgres:
         image: postgres:16

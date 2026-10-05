@@ -419,6 +419,7 @@ model ConnectorOAuthState {
 /// Valores em CENTAVOS (Int) — convenção do motor financeiro do
 /// commerce (BRL inteiro evita erro de ponto flutuante).
 model Sale {
+  tenantId    String     @map("tenant_id") @db.Uuid
   id          String     @id @default(cuid())
   reference   String     @unique @default(cuid())
   quantity    Int        @default(1)
@@ -452,7 +453,8 @@ model Sale {
   /// de inserir às cegas. `externalOrderId` é `null` no checkout
   /// próprio — Postgres trata NULLs como distintos em índices
   /// únicos, então essas linhas ficam fora da chave.
-  @@unique([usuarioId, channel, externalOrderId])
+  @@unique([channel, externalOrderId])
+  @@index([tenantId, channel])
   @@index([status])
   @@index([usuarioId])
   @@index([usuarioId, status])
@@ -467,6 +469,7 @@ model Sale {
 /// ao produto (`produtos`) e tamanho (`tamanhos`) do catálogo real,
 /// espelhando a semântica de itens_venda.
 model SaleItem {
+  tenantId String @map("tenant_id") @db.Uuid
   id String @id @default(cuid())
 
   saleId String @map("sale_id")

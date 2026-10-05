@@ -1,0 +1,1 @@
+{"name":"@brobond/infra","version":"1.0.0","private":true,"type":"module","dependencies":{"@brobond/domain":"file:../domain"},"devDependencies":{"typescript":"^5.6.2"},"scripts":{"typecheck":"tsc --noEmit"}}

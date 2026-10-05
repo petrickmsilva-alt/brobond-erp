@@ -1,41 +1,22 @@
 {
-  "name": "brobond-erp",
-  "version": "0.7.0",
+  "name": "brobond-ai-erp",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Brobond AI ERP — base principal do ecossistema BROBOND (roupas masculinas): estoque, produção e financeiro + módulo de conectores multicanal (motor do brobond-ai-commerce)",
+  "workspaces": ["packages/*", "server", "client"],
   "scripts": {
     "dev": "concurrently -k -n SERVER,CLIENT -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
-    "dev:server": "npm --prefix server run dev",
-    "dev:client": "npm --prefix client run dev",
-    "install:all": "npm --prefix server install && npm --prefix client install",
-    "build": "npm --prefix client install && npm --prefix client run build",
-    "start": "npm --prefix server install && npm --prefix server run start",
-    "typecheck": "npm --prefix server run typecheck && npm --prefix client run typecheck",
-    "test": "npm --prefix server test && npm --prefix client test",
-    "test:server": "npm --prefix server test",
-    "test:client": "npm --prefix client test",
-    "lint": "eslint 'server/src/**/*.ts' 'modules/**/*.ts' 'client/src/**/*.{ts,tsx}'",
-    "lint:fix": "eslint 'server/src/**/*.ts' 'modules/**/*.ts' 'client/src/**/*.{ts,tsx}' --fix",
-    "format": "prettier --write \"**/*.{ts,tsx,json,md}\" --ignore-path .prettierignore",
-    "format:check": "prettier --check \"**/*.{ts,tsx,json,md}\" --ignore-path .prettierignore",
+    "dev:server": "npm --workspace server run dev",
+    "dev:client": "npm --workspace client run dev",
+    "build": "npm --workspace client run build",
+    "typecheck": "npm run typecheck:domain && npm --workspace server run typecheck && npm --workspace client run typecheck",
+    "typecheck:domain": "npm --workspace @brobond/domain run typecheck",
+    "test": "npm --workspace server test && npm --workspace client test",
+    "lint": "eslint 'server/src/**/*.ts' 'packages/**/*.ts' 'client/src/**/*.{ts,tsx}'",
     "db:validate": "prisma validate",
-    "db:format": "prisma format",
     "db:generate": "prisma generate",
-    "db:deploy": "prisma migrate deploy",
-    "db:status": "prisma migrate status"
+    "db:deploy": "prisma migrate deploy"
   },
-  "prisma": {
-    "schema": "prisma/schema.prisma"
-  },
-  "devDependencies": {
-    "@typescript-eslint/eslint-plugin": "^8.69.0",
-    "@typescript-eslint/parser": "^8.69.0",
-    "concurrently": "^9.1.0",
-    "eslint": "^9.39.5",
-    "eslint-plugin-react": "^7.37.5",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "prettier": "^3.2.0",
-    "prisma": "6.12.0"
-  }
+  "prisma": { "schema": "prisma/schema.prisma" },
+  "devDependencies": { "@typescript-eslint/eslint-plugin": "^8.69.0", "@typescript-eslint/parser": "^8.69.0", "concurrently": "^9.1.0", "eslint": "^9.39.5", "eslint-plugin-react": "^7.37.5", "eslint-plugin-react-hooks": "^7.1.1", "prettier": "^3.2.0", "prisma": "6.12.0" }
 }
