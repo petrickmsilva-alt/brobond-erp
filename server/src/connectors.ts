@@ -3,7 +3,8 @@
 // Autenticado (sessão do ERP):
 //   GET    /api/connectors                      — cartões dos 4 canais
 //   GET    /api/connectors/:provider            — status de um canal
-//   POST   /api/connectors/:provider/autorizar  — inicia o OAuth
+//   POST   /api/connectors/:provider/autorizar  — inicia o OAuth (aceita o
+//          redirect_uri dinâmico: a origem da Render onde o painel roda)
 //   POST   /api/connectors/mercadopago/conectar — credenciais de produção
 //   POST   /api/connectors/:provider/sincronizar— rodada de catálogo
 //   DELETE /api/connectors/:provider            — desconecta
@@ -133,6 +134,16 @@ connectorsRouter.get(
 );
 
 connectorsRouter.post(
+  '/mercadopago/conectar-ambiente',
+  run(async (req, res) => {
+    assertConnectorsDatabase();
+    const actor = currentUser(req);
+    const connector = await connectorService.connectMercadoPagoFromEnvironment(actor.id);
+    res.json({ ok: true, connector: await connectorService.getStatus(actor.id, connector.provider) });
+  })
+);
+
+connectorsRouter.post(
   '/mercadopago/conectar',
   run(async (req, res) => {
     assertConnectorsDatabase();
@@ -164,7 +175,11 @@ connectorsRouter.post(
   run(async (req, res) => {
     assertConnectorsDatabase();
     const actor = currentUser(req);
-    res.json(await connectorService.startAuthorization(actor.id, providerParam(req)));
+    // `redirect_uri` dinâmico: a ORIGEM em que o navegador do operador está
+    // (na Render, https://brobond-erp.onrender.com). O caminho canônico do
+    // callback é derivado e validado no módulo — nunca montado no cliente.
+    const redirectBase = typeof req.body?.redirect_uri === 'string' ? req.body.redirect_uri : '';
+    res.json(await connectorService.startAuthorization(actor.id, providerParam(req), { redirectBase }));
   })
 );
 
@@ -261,9 +276,13 @@ publicConnectorsRouter.all('/api/connectors/:provider/callback', rawBody, (req: 
   if (!provider) return next(); // slug desconhecido segue o fluxo normal (404 do /api)
   void (async () => {
     const query = queryRecord(req);
-    const code = query.code ?? '';
-    const state = query.state ?? '';
-    const erroProvedor = query.error ?? query.error_description ?? '';
+    // Alguns callbacks da TikTok Shop chegam como formulário POST; outros,
+    // inclusive Mercado Livre, usam query string.
+    const form = new URLSearchParams(rawBodyString(req));
+    const value = (name: string) => query[name] ?? form.get(name) ?? '';
+    const code = value('code') || value('auth_code');
+    const state = value('state');
+    const erroProvedor = value('error_description') || value('error');
     try {
       if (!hasDatabaseUrl()) {
         throw new ConnectorError('Conectores exigem banco de dados configurado (DATABASE_URL).', provider);

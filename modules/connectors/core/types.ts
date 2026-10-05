@@ -132,6 +132,8 @@ export interface ConnectorStatusDTO {
   syncCount: number;
   hasAccessToken: boolean;
   hasRefreshToken: boolean;
+  /** Há um par Mercado Pago no ambiente que pode ser ativado sem expor segredos ao navegador. */
+  environmentCredentialsAvailable: boolean;
   /** Prévia mascarada da public key do Mercado Pago, quando houver. */
   publicKeyPreview: string | null;
   requiresReauth: boolean;

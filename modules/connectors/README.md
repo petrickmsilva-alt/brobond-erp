@@ -10,7 +10,7 @@ dos quatro canais suportados.
 | **Mercado Livre** | OAuth 2.0 (`redirect_uri` estático)       | notificação → re-fetch na API          |
 | **Mercado Pago**  | credenciais de produção coladas no painel | webhook assinado (HMAC)                |
 | **Shopee**        | OAuth (partner sign)                      | push assinado (HMAC sobre URL + corpo) |
-| **TikTok**        | Login Kit v2 + Shop Partner Center        | webhook assinado (HMAC)                |
+| **TikTok**        | OAuth da loja no Shop Partner Center      | webhook assinado (HMAC)                |
 
 > A **Nuvemshop foi removida do ecossistema**. Não existe builder, slug,
 > rótulo, enum de canal nem ramo de persistência para ela: `parseConnectorProvider('nuvemshop')`
@@ -67,6 +67,15 @@ Autenticadas (sessão do ERP):
 GET    /api/connectors                        cartões dos 4 canais
 GET    /api/connectors/:provider              status de um canal
 POST   /api/connectors/:provider/autorizar    inicia o OAuth (devolve a URL)
+                                               • body opcional: { redirect_uri }
+                                                 — a ORIGEM onde o painel está
+                                                 rodando (na Render,
+                                                 https://brobond-erp.onrender.com).
+                                                 Validada no servidor; o caminho
+                                                 canônico /api/connectors/<slug>/callback
+                                                 é derivado AQUI e a URI escolhida
+                                                 é persistida com o state para a
+                                                 troca do código repeti-la byte a byte.
 POST   /api/connectors/mercadopago/conectar   { accessToken, publicKey }
 POST   /api/connectors/:provider/sincronizar  rodada manual de catálogo
 DELETE /api/connectors/:provider              desconecta e apaga as credenciais

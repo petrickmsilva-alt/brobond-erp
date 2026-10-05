@@ -13,10 +13,12 @@
  * -------------------------------------------------------
  * A Meli valida o `redirect_uri` DUAS vezes — em `/authorization` e na
  * troca do código — e os dois valores precisam ser idênticos byte a byte
- * e iguais ao cadastrado no DevCenter. Por isso o valor é ESTÁTICO,
- * resolvido só do ambiente (`MERCADOLIVRE_REDIRECT_URI` ou `APP_URL` +
- * `/api/connectors/mercadolivre/callback`). NADA é derivado da
- * requisição de entrada.
+ * e iguais ao cadastrado no DevCenter. O valor é resolvido só do ambiente
+ * (`MERCADOLIVRE_REDIRECT_URI` ou `APP_URL` + `/api/connectors/mercadolivre/callback`),
+ * com UMA exceção controlada: o `redirectUriOverride` resolvido a partir da
+ * origem enviada pelo painel autenticado (na Render, o host unificado
+ * `https://brobond-erp.onrender.com`), validado no servidor e persistido
+ * com o state CSRF — a troca do código reusa exatamente a mesma URI.
  */
 
 import { ConnectorConfigError, ProviderApiError } from '../core/errors';
@@ -62,8 +64,13 @@ export function hasMercadoLivreCredentials(env: AppUrlEnv = process.env): boolea
 /**
  * O `redirect_uri` apresentado à Meli — ESTÁTICO, só do ambiente. Precisa
  * estar cadastrado VERBATIM no DevCenter.
+ *
+ * `override` é o redirect dinâmico resolvido pelo painel (origem da Render +
+ * caminho canônico), validado e persistido com o state: quando presente, é
+ * ele que vale nas duas pernas do OAuth.
  */
-export function resolveMercadoLivreRedirectUri(env: AppUrlEnv = process.env): string {
+export function resolveMercadoLivreRedirectUri(env: AppUrlEnv = process.env, override?: string | null): string {
+  if (override && /^https?:\/\/[^/]+/i.test(override)) return override;
   return resolveStaticRedirectUri(['MERCADOLIVRE_REDIRECT_URI'], CONNECTOR_PROVIDER_SLUGS.MERCADOLIVRE, env);
 }
 
@@ -74,7 +81,7 @@ export function resolveMercadoLivreRedirectUri(env: AppUrlEnv = process.env): st
  * deliberadamente não é normalizado.
  */
 function normalizeAuthorizationClientId(clientId: string): string {
-  return clientId.trim().toLowerCase().replace(/\/+$/, '');
+  return clientId.trim().replace(/\/+$/, '');
 }
 
 /**
@@ -86,11 +93,15 @@ function normalizeAuthorizationClientId(clientId: string): string {
  * comercial. Por isso a requisição é deliberadamente estrita: campos de
  * protocolo + o state CSRF de uso único.
  */
-export function buildMercadoLivreAuthorizationUrl(state: string, config: MercadoLivreConfig = getMercadoLivreConfig()): string {
+export function buildMercadoLivreAuthorizationUrl(
+  state: string,
+  config: MercadoLivreConfig = getMercadoLivreConfig(),
+  redirectUriOverride?: string | null
+): string {
   const url = new URL('/authorization', config.authBaseUrl.trim().toLowerCase());
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', normalizeAuthorizationClientId(config.clientId));
-  url.searchParams.set('redirect_uri', resolveMercadoLivreRedirectUri());
+  url.searchParams.set('redirect_uri', resolveMercadoLivreRedirectUri(undefined, redirectUriOverride));
   url.searchParams.set('state', state);
   return url.toString();
 }
@@ -190,9 +201,10 @@ async function meliTokenRequest(
 /** Troca o `code` de autorização por tokens (code grant oficial). */
 export async function exchangeMercadoLivreCode(
   code: string,
-  config: MercadoLivreConfig = getMercadoLivreConfig()
+  config: MercadoLivreConfig = getMercadoLivreConfig(),
+  redirectUriOverride?: string | null
 ): Promise<MercadoLivreTokenSet> {
-  const redirectUri = resolveMercadoLivreRedirectUri();
+  const redirectUri = resolveMercadoLivreRedirectUri(undefined, redirectUriOverride);
   return meliTokenRequest(config, { grant_type: 'authorization_code', code, redirect_uri: redirectUri }, redirectUri);
 }
 

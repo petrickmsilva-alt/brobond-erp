@@ -71,27 +71,35 @@ before(async () => {
 
 test('faturamento: consolida por mês e compara com o ano anterior', async () => {
   await ensureSetup();
+  // Datas RELATIVAS ao mês corrente: `faturada_em` é gravado como "agora" no
+  // momento da faturação, então a venda atual sempre aterrissa no mês corrente
+  // e a do ano anterior precisa ficar exatamente 12 meses atrás. Datas fixas
+  // (ex.: '2026-09-01') fazem o teste quebrar na virada de cada mês.
+  const agora = new Date();
+  const aaaamm = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const mesAtual = aaaamm(agora);
+  const mesAnoAnterior = aaaamm(new Date(agora.getFullYear() - 1, agora.getMonth(), 1));
+
   // estoque + venda faturada no mês corrente
   await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: tamanhoId, local: 'loja', quantidade: 20 }, admin);
-  const v = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, data: '2026-09-01', representante_id: representanteId }, admin);
+  const v = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, data: `${mesAtual}-01`, representante_id: representanteId }, admin);
   vendaFaturadaId = Number(v.id);
   await addItem(vendaFaturadaId, { produto_id: produtoId, tamanho_id: tamanhoId, quantidade: 2, preco_unitario: 100 });
   await updateRecord(RESOURCES.vendas, vendaFaturadaId, { status: 'faturada' }, admin);
 
   // venda "entregue" no mesmo mês do ANO ANTERIOR (faturada_em vazio → usa data)
   const s = getStore();
-  const v2 = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, data: '2025-09-10', representante_id: representanteId }, admin);
+  const v2 = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, data: `${mesAnoAnterior}-10`, representante_id: representanteId }, admin);
   await addItem(Number(v2.id), { produto_id: produtoId, tamanho_id: tamanhoId, quantidade: 1, preco_unitario: 100 });
   await s.transaction(async (tx) => {
     await s.update(RESOURCES.vendas, Number(v2.id), { status: 'entregue', faturada_em: null, total: 100, comissao_valor: 10 }, tx);
   });
 
   const payload = await callRelatorio('faturamento');
-  const mesAtual = new Date().toISOString().slice(0, 7);
   const linhaAtual = payload.linhas.find((l: any) => l.mes === mesAtual);
   assert.ok(linhaAtual, 'deve ter linha do mês corrente');
   assert.equal(Number(linhaAtual.faturamento), 200); // 2 × 100
-  const linhaAnoAnterior = payload.linhas.find((l: any) => l.mes === '2025-09');
+  const linhaAnoAnterior = payload.linhas.find((l: any) => l.mes === mesAnoAnterior);
   assert.ok(linhaAnoAnterior, 'deve ter linha do mesmo mês no ano anterior');
   assert.equal(Number(linhaAnoAnterior.faturamento), 100);
   assert.equal(Number(linhaAnoAnterior.ano_anterior), 0);
@@ -113,7 +121,8 @@ test('comissões: linhas por representante + série mensal de 12 meses', async (
   assert.ok(payload.grafico.rotulas === undefined, 'campo é rotulos');
   assert.equal(payload.grafico.rotulos.length, 12);
   const somaGrafico = payload.grafico.valores.reduce((a: number, b: number) => a + b, 0);
-  // o gráfico cobre os últimos 12 meses: a venda de 2025-09 (ano anterior) fica fora
+  // o gráfico cobre os últimos 12 meses: a venda do ano anterior (exatamente
+  // 12 meses atrás) fica fora — só a comissão do mês corrente (10% de 200) entra
   assert.equal(Number(somaGrafico.toFixed(2)), 20);
 });
 

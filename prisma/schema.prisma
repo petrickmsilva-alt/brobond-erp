@@ -396,8 +396,13 @@ model ConnectorOAuthState {
 
   provider  ConnectorProvider
   stateHash String   @unique @map("state_hash")
-  expiresAt DateTime @map("expires_at") @db.Timestamptz
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  /// Redirect_uri escolhido na autorização (origem dinâmica do painel
+  /// validada + caminho canônico do callback). Reutilizado VERBATIM na
+  /// troca do código — o OAuth do Mercado Livre compara as duas pernas
+  /// byte a byte.
+  redirectUri String? @map("redirect_uri")
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   @@index([usuarioId, provider, expiresAt])
   @@map("connector_oauth_states")

@@ -27,6 +27,7 @@ type ConnectorStatus = {
   duplicatedCount: number;
   failedCount: number;
   syncCount: number;
+  environmentCredentialsAvailable: boolean;
   publicKeyPreview: string | null;
   requiresReauth: boolean;
   updatedAt: string | null;
@@ -72,10 +73,31 @@ export default function ConectorPage({ module }: { module: Module }) {
     setBusy('auth');
     setError('');
     try {
-      const r = await api.post<{ authorizationUrl: string }>(`/connectors/${slug}/autorizar`, {});
+      // redirect_uri DINÂMICO: a origem onde o ERP está rodando — num deploy
+      // da Render é o host unificado https://brobond-erp.onrender.com. O
+      // backend valida a origem, deriva o caminho canônico
+      // /api/connectors/<slug>/callback e persiste a URI com o state para
+      // repeti-la na troca do código (contrato byte a byte do OAuth).
+      const r = await api.post<{ authorizationUrl: string }>(`/connectors/${slug}/autorizar`, {
+        redirect_uri: window.location.origin,
+      });
       if (r?.authorizationUrl) window.location.href = r.authorizationUrl;
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function conectarMercadoPagoDoAmbiente() {
+    setBusy('mp-env');
+    setError('');
+    try {
+      const r = await api.post<{ connector: ConnectorStatus }>('/connectors/mercadopago/conectar-ambiente', {});
+      setStatus(r.connector);
+      setMsg('Credenciais do ambiente validadas e ativadas com segurança.');
+    } catch (err) {
+      setError((err as Error).message);
     } finally {
       setBusy('');
     }
@@ -192,6 +214,15 @@ export default function ConectorPage({ module }: { module: Module }) {
 
             {status.authModel === 'credentials' && (
               <form onSubmit={conectarMercadoPago} className="mt-5 grid grid-cols-1 gap-3 border-t border-slate-800/60 pt-5 sm:grid-cols-2">
+                {status.environmentCredentialsAvailable && !status.connected && (
+                  <div className="sm:col-span-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+                    <p className="mb-2 text-xs text-emerald-300">O Render já possui MERCADOPAGO_ACCESS_TOKEN e MERCADOPAGO_PUBLIC_KEY.</p>
+                    <button className="btn-accent" type="button" onClick={conectarMercadoPagoDoAmbiente} disabled={busy === 'mp-env'}>
+                      {busy === 'mp-env' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+                      Validar e usar credenciais do Render
+                    </button>
+                  </div>
+                )}
                 <div>
                   <label className="label" htmlFor="mp-token">Access Token de produção</label>
                   <input id="mp-token" className="input font-mono" value={token} onChange={(e) => setToken(e.target.value)} placeholder="APP_USR-..." />

@@ -13,15 +13,13 @@
 import type { ConnectorHealth, FetchCatalogOptions, NormalizedContent, ProviderConnector } from '../core/connector.interface';
 import { CONNECTOR_PROVIDER_REQUIRED_ENV } from '../core/providers';
 import { connectorService } from '../core/connector.service';
-import { fetchTikTokProducts, hasTikTokLoginCredentials, hasTikTokShopCredentials, isTikTokSandboxMode } from './tiktok.service';
+import { fetchTikTokProducts, hasTikTokShopCredentials, isTikTokSandboxMode } from './tiktok.service';
 
 export class TikTokConnector implements ProviderConnector {
   readonly provider = 'TIKTOK' as const;
   readonly name = 'TikTok Shop';
 
   async fetchCatalog(options: FetchCatalogOptions): Promise<NormalizedContent[]> {
-    // Sem a app vendedora aprovada não há API de catálogo para chamar.
-    if (!hasTikTokShopCredentials()) return [];
     const { accessToken } = await connectorService.getValidAccessToken(options.usuarioId, this.provider);
     const status = await connectorService.getStatus(options.usuarioId, this.provider);
     const shopCipher = typeof status.shopId === 'string' && status.shopId ? status.shopId : undefined;
@@ -30,20 +28,17 @@ export class TikTokConnector implements ProviderConnector {
 
   async testConnection(): Promise<ConnectorHealth> {
     const missingEnv = CONNECTOR_PROVIDER_REQUIRED_ENV.TIKTOK.filter((name) => !process.env[name]?.trim());
-    const login = hasTikTokLoginCredentials();
     const shop = hasTikTokShopCredentials();
     const sandbox = isTikTokSandboxMode();
     return {
       provider: this.provider,
-      ok: login,
+      ok: shop,
       missingEnv,
-      message: !login
-        ? `Configure ${missingEnv.join(' e ')} no servidor para conectar uma conta.`
+      message: !shop
+        ? `Configure ${missingEnv.join(' e ')} do Shop Partner Center para conectar uma loja.`
         : sandbox
-          ? 'Sandbox do TikTok Developers ativo — o fluxo é funcional com as contas de teste cadastradas.'
-          : shop
-            ? 'Integração oficial pronta (Login Kit + Shop Partner Center).'
-            : 'Login Kit pronto. A app vendedora do Shop Partner Center ainda não foi configurada (TIKTOK_APP_KEY/TIKTOK_APP_SECRET): o canal conecta, mas fica aguardando aprovação para pedidos.',
+          ? 'Sandbox da TikTok Shop ativo — use uma loja de teste autorizada no Partner Center.'
+          : 'Integração TikTok Shop pronta para autorizar uma loja vendedora.',
     };
   }
 }

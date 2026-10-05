@@ -64,8 +64,12 @@ export function hasShopeeCredentials(env: AppUrlEnv = process.env): boolean {
  * O `redirect` apresentado à Shopee — ESTÁTICO, só do ambiente
  * (`SHOPEE_REDIRECT_URI` ou `APP_URL` + o caminho canônico). Precisa
  * bater byte a byte com o callback cadastrado no Partner Center.
+ *
+ * `override` é o redirect dinâmico resolvido do painel (origem da Render +
+ * caminho canônico), validado no servidor antes de chegar aqui.
  */
-export function getShopeeRedirectUri(env: AppUrlEnv = process.env): string {
+export function getShopeeRedirectUri(env: AppUrlEnv = process.env, override?: string | null): string {
+  if (override && /^https?:\/\/[^/]+/i.test(override)) return override;
   return resolveStaticRedirectUri(['SHOPEE_REDIRECT_URI'], CONNECTOR_PROVIDER_SLUGS.SHOPEE, env);
 }
 
@@ -91,11 +95,11 @@ export function shopeeSign(
  * a Shopee devolve a URL inteira, então é assim que o callback público
  * descobre a qual responsável a loja pertence sem depender de sessão.
  */
-export function buildShopeeAuthorizationUrl(state: string, config: ShopeeConfig = getShopeeConfig()): string {
+export function buildShopeeAuthorizationUrl(state: string, config: ShopeeConfig = getShopeeConfig(), redirectUriOverride?: string | null): string {
   const path = '/api/v2/shop/auth_partner';
   const timestamp = Math.floor(Date.now() / 1000);
   const url = new URL(path, config.apiBaseUrl);
-  const redirect = new URL(getShopeeRedirectUri());
+  const redirect = new URL(getShopeeRedirectUri(undefined, redirectUriOverride));
   redirect.searchParams.set('state', state);
   url.searchParams.set('partner_id', String(config.partnerId));
   url.searchParams.set('timestamp', String(timestamp));

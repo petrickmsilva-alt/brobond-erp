@@ -108,7 +108,7 @@ base (`${APP_URL}/api/connectors/<canal>/callback`).
 | Canal         | Variáveis                                                                                                             |
 | ------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Todos         | `CONNECTOR_ENCRYPTION_KEY` (AES-256-GCM das credenciais em repouso)                                                   |
-| TikTok        | `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REDIRECT_URI` (+ `TIKTOK_APP_KEY/SECRET` do Shop Partner Center) |
+| TikTok Shop   | `TIKTOK_SERVICE_ID`, `TIKTOK_APP_KEY`, `TIKTOK_APP_SECRET`, `TIKTOK_REDIRECT_URI` (todos do Shop Partner Center) |
 | Shopee        | `SHOPEE_PARTNER_ID`, `SHOPEE_PARTNER_KEY` (+ `SHOPEE_API_BASE_URL` — Brasil usa host dedicado)                        |
 | Mercado Livre | `MERCADOLIVRE_CLIENT_ID`, `MERCADOLIVRE_CLIENT_SECRET` (+ redirect/webhook/overrides)                                 |
 | Mercado Pago  | `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_PUBLIC_KEY` (+ `MERCADOPAGO_WEBHOOK_SECRET`)                                 |

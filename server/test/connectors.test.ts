@@ -3,6 +3,9 @@
 //   • registro estrito dos 4 provedores (Nuvemshop não existe mais)
 //   • criptografia AES-256-GCM dos tokens em repouso
 //   • assinaturas de webhook (Mercado Pago, Shopee, TikTok)
+//   • callbacks OAuth apontando ESTRITAMENTE para o host unificado
+//     da Render (https://brobond-erp.onrender.com/api/connectors/...)
+//   • redirect_uri dinâmico do painel (origem da Render validada)
 //   • upsert IDEMPOTENTE de venda com banco de dados fingido
 //   • casamento de item com produtos/tamanhos do ERP
 // Modo memória: o módulo só fala SQL por uma porta injetável, então
@@ -14,13 +17,19 @@ import { createHmac } from 'node:crypto';
 
 process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
-process.env.CONNECTOR_ENCRYPTION_KEY = 'a'.repeat(64);
+// Chave de cifra do ambiente de mock: string Base64 VÁLIDA e ESTÁVEL que
+// decodifica para exatamente 32 bytes (o crypto.service aceita base64 ou
+// 64 hex; aqui travamos o formato base64 documentado no render.yaml —
+// `openssl rand -base64 32`). É o mesmo valor em toda a suíte para que a
+// ida e volta AES-256-GCM seja determinística.
+process.env.CONNECTOR_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=';
 
 const {
   CONNECTOR_PROVIDERS,
   parseConnectorProvider,
   isConnectorProviderName,
   saleChannelFromConnectorProvider,
+  decodeConnectorEncryptionKey,
   encryptConnectorSecret,
   decryptConnectorSecret,
   maskConnectorSecretPreview,
@@ -28,17 +37,44 @@ const {
   getConnectorFromInput,
   listConnectors,
   REGISTERED_CONNECTOR_COUNT,
+  createConnectorService,
+  createConnectorOAuthStateService,
   createSalesService,
   marketplaceSaleReference,
   normalizeSaleCurrency,
   matchCatalogItem,
   isSaleIngestionEvent,
+  appUrl,
+  connectorCallbackPath,
   connectorWebhookPath,
+  resolveDynamicCallbackUri,
 } = await import('../../modules/connectors/index');
 
-const { verifyShopeeWebhookSignature } = await import('../../modules/connectors/shopee/shopee.service');
-const { verifyTikTokWebhookSignature } = await import('../../modules/connectors/tiktok/tiktok.service');
+const { getShopeeRedirectUri, verifyShopeeWebhookSignature } = await import('../../modules/connectors/shopee/shopee.service');
+const { buildTikTokAuthorizationUrl, resolveTikTokRedirectUri, verifyTikTokWebhookSignature } = await import('../../modules/connectors/tiktok/tiktok.service');
+const { buildMercadoLivreAuthorizationUrl, resolveMercadoLivreRedirectUri } = await import('../../modules/connectors/mercadolivre/mercadolivre.service');
 const { verifyMercadoPagoWebhookSignature } = await import('../../modules/connectors/mercadopago/mercadopago.service');
+
+/** Host unificado do ERP na Render — único domínio aceito nos callbacks. */
+const HOST_UNIFICADO = 'https://brobond-erp.onrender.com';
+
+/** Roda o bloco com variáveis de ambiente sobrescritas e restaura tudo depois. */
+async function comEnv(valores: Record<string, string | undefined>, fn: () => void | Promise<void>): Promise<void> {
+  const antes = new Map<string, string | undefined>();
+  for (const nome of Object.keys(valores)) {
+    antes.set(nome, process.env[nome]);
+    if (valores[nome] === undefined) delete process.env[nome];
+    else process.env[nome] = valores[nome];
+  }
+  try {
+    await fn();
+  } finally {
+    for (const [nome, valor] of antes) {
+      if (valor === undefined) delete process.env[nome];
+      else process.env[nome] = valor;
+    }
+  }
+}
 
 // ------------------------------------------------------------
 // Banco de mentira: guarda as consultas e devolve o que mandarmos.
@@ -93,7 +129,181 @@ describe('Conectores — registro de provedores', () => {
   });
 });
 
+// ------------------------------------------------------------
+// Host unificado: TODO callback OAuth do ERP mora em
+// https://brobond-erp.onrender.com/api/connectors/<slug>/callback.
+// As URIs antigas do brobond-ai-commerce não existem mais — uma asserção
+// que apontar para outro host aqui é bug, não configuração.
+// ------------------------------------------------------------
+describe('Conectores — callback OAuth no host unificado da Render', () => {
+  const REDIRECT_ML = `${HOST_UNIFICADO}/api/connectors/mercadolivre/callback`;
+
+  test('o caminho canônico de callback é /api/connectors/<slug>/callback para os 4 canais', () => {
+    assert.equal(connectorCallbackPath('mercadolivre'), '/api/connectors/mercadolivre/callback');
+    assert.equal(connectorCallbackPath('mercadopago'), '/api/connectors/mercadopago/callback');
+    assert.equal(connectorCallbackPath('shopee'), '/api/connectors/shopee/callback');
+    assert.equal(connectorCallbackPath('tiktok'), '/api/connectors/tiktok/callback');
+  });
+
+  test('com APP_URL da Render, o redirect de cada provedor aponta estritamente para o host unificado', () => {
+    return comEnv({ APP_URL: HOST_UNIFICADO, MERCADOLIVRE_REDIRECT_URI: undefined }, () => {
+      assert.equal(resolveMercadoLivreRedirectUri(), REDIRECT_ML);
+      assert.equal(getShopeeRedirectUri(), `${HOST_UNIFICADO}/api/connectors/shopee/callback`);
+      assert.equal(resolveTikTokRedirectUri(), `${HOST_UNIFICADO}/api/connectors/tiktok/callback`);
+    });
+  });
+
+  test('a URL de autorização do Mercado Livre embute o redirect_uri do host unificado', () => {
+    return comEnv(
+      { APP_URL: HOST_UNIFICADO, MERCADOLIVRE_CLIENT_ID: '1234567890', MERCADOLIVRE_CLIENT_SECRET: 'segredo-app', MERCADOLIVRE_REDIRECT_URI: undefined },
+      () => {
+        const url = new URL(buildMercadoLivreAuthorizationUrl('csrf-1'));
+        assert.equal(url.origin, 'https://auth.mercadolivre.com.br');
+        assert.equal(url.searchParams.get('redirect_uri'), REDIRECT_ML);
+        assert.equal(url.searchParams.get('state'), 'csrf-1');
+      }
+    );
+  });
+
+  test('o redirect_uri explícito do provedor segue valendo quando não há base dinâmica', () => {
+    return comEnv({ APP_URL: HOST_UNIFICADO, MERCADOLIVRE_REDIRECT_URI: `${HOST_UNIFICADO}/api/connectors/mercadolivre/callback` }, () => {
+      assert.equal(resolveMercadoLivreRedirectUri(), REDIRECT_ML);
+    });
+  });
+
+  test('webhook público do Mercado Pago também é montado no host unificado', () => {
+    return comEnv({ APP_URL: HOST_UNIFICADO }, () => {
+      assert.equal(appUrl(connectorWebhookPath('mercadopago')), `${HOST_UNIFICADO}/api/webhooks/mercadopago`);
+      assert.equal(appUrl(connectorWebhookPath('mercadolivre')), `${HOST_UNIFICADO}/api/webhooks/mercadolivre`);
+    });
+  });
+});
+
+// ------------------------------------------------------------
+// Redirect_uri DINÂMICO: o painel envia a origem onde o navegador está
+// (na Render, o host unificado). O servidor valida, deriva o caminho
+// canônico e persiste a URI com o state para repeti-la na troca.
+// ------------------------------------------------------------
+describe('Conectores — redirect_uri dinâmico lido da Render', () => {
+  const REDIRECT_ML = `${HOST_UNIFICADO}/api/connectors/mercadolivre/callback`;
+
+  test('origem da Render vira o callback canônico no host unificado', () => {
+    return comEnv({ APP_URL: 'https://erp-antigo.example.com', NODE_ENV: undefined }, () => {
+      assert.equal(resolveDynamicCallbackUri(HOST_UNIFICADO, 'mercadolivre'), REDIRECT_ML);
+      // barra final e callback pronto também normalizam para o MESMO valor
+      assert.equal(resolveDynamicCallbackUri(`${HOST_UNIFICADO}/`, 'mercadolivre'), REDIRECT_ML);
+      assert.equal(resolveDynamicCallbackUri(REDIRECT_ML, 'mercadolivre'), REDIRECT_ML);
+      // dev local continua funcionando
+      assert.equal(
+        resolveDynamicCallbackUri('http://localhost:5173', 'mercadolivre'),
+        'http://localhost:5173/api/connectors/mercadolivre/callback'
+      );
+    });
+  });
+
+  test('valor inválido nunca vira redirect: lixo, esquema estranho e caminho estranho são rejeitados', () => {
+    return comEnv({ NODE_ENV: undefined }, () => {
+      assert.equal(resolveDynamicCallbackUri('', 'mercadolivre'), null);
+      assert.equal(resolveDynamicCallbackUri('   ', 'mercadolivre'), null);
+      assert.equal(resolveDynamicCallbackUri('javascript:alert(1)', 'mercadolivre'), null);
+      assert.equal(resolveDynamicCallbackUri('ftp://evil.example.com', 'mercadolivre'), null);
+      assert.equal(resolveDynamicCallbackUri(`${HOST_UNIFICADO}/outra/pagina`, 'mercadolivre'), null);
+      assert.equal(resolveDynamicCallbackUri(undefined, 'mercadolivre'), null);
+    });
+  });
+
+  test('em produção só https público é aceito como base dinâmica', () => {
+    return comEnv({ NODE_ENV: 'production' }, () => {
+      assert.equal(resolveDynamicCallbackUri(HOST_UNIFICADO, 'mercadolivre'), REDIRECT_ML);
+      assert.equal(resolveDynamicCallbackUri('http://localhost:5173', 'mercadolivre'), null);
+      assert.equal(resolveDynamicCallbackUri('http://10.0.0.7:10000', 'mercadolivre'), null);
+      assert.equal(resolveDynamicCallbackUri('https://localhost', 'mercadolivre'), null);
+    });
+  });
+
+  test('o state OAuth carrega o redirect_uri escolhido e o devolve inteiro na consumição', async () => {
+    const linhas: Array<Record<string, unknown>> = [];
+    const db = {
+      async query(sql: string, params: readonly unknown[] = []) {
+        const responder = (): Array<Record<string, unknown>> => {
+          if (sql.includes('DELETE FROM connector_oauth_states') && sql.includes('expires_at <= $3')) return []; // limpeza
+          if (sql.startsWith('INSERT INTO connector_oauth_states')) {
+            linhas.push({ usuario_id: params[1], redirect_uri: params[4] ?? null });
+            return [];
+          }
+          if (sql.includes('RETURNING usuario_id, redirect_uri')) {
+            const linha = linhas.shift();
+            return linha ? [linha] : [];
+          }
+          return [];
+        };
+        const rows = responder();
+        return { rows, rowCount: rows.length };
+      },
+    };
+    const states = createConnectorOAuthStateService(db, {
+      now: () => new Date('2026-10-05T12:00:00Z'),
+      randomState: () => 'state-unificado-1',
+    });
+    const state = await states.issue(7, 'MERCADOLIVRE', { redirectUri: REDIRECT_ML });
+    assert.equal(state, 'state-unificado-1');
+    const consumido = await states.consume(state, 'MERCADOLIVRE');
+    assert.equal(consumido.usuarioId, 7);
+    assert.equal(consumido.redirectUri, REDIRECT_ML);
+  });
+
+  test('startAuthorization usa a origem da Render e a repassa ao state e à URL do provedor', async () => {
+    const emitidos: Array<{ usuarioId: number; provider: string; redirectUri: string | null }> = [];
+    const oauthStates = {
+      issue: async (usuarioId: number, provider: string, metadata?: { redirectUri?: string | null }) => {
+        emitidos.push({ usuarioId, provider, redirectUri: metadata?.redirectUri ?? null });
+        return 'state-dinamico';
+      },
+      consume: async () => {
+        throw new Error('não deve consumir state neste teste');
+      },
+    };
+    const service = createConnectorService({ repository: {} as never, oauthStates: oauthStates as never });
+    return comEnv(
+      { APP_URL: 'https://erp-antigo.example.com', MERCADOLIVRE_CLIENT_ID: '1234567890', MERCADOLIVRE_CLIENT_SECRET: 'segredo-app', MERCADOLIVRE_REDIRECT_URI: undefined },
+      async () => {
+        const resultado = await service.startAuthorization(7, 'MERCADOLIVRE', { redirectBase: HOST_UNIFICADO });
+        assert.equal(resultado.redirectUri, REDIRECT_ML, 'o redirect devolvido é o do host unificado');
+        assert.deepEqual(emitidos, [{ usuarioId: 7, provider: 'MERCADOLIVRE', redirectUri: REDIRECT_ML }], 'o state persiste a URI para a troca');
+        const url = new URL(resultado.authorizationUrl);
+        assert.equal(url.origin, 'https://auth.mercadolivre.com.br');
+        assert.equal(url.searchParams.get('redirect_uri'), REDIRECT_ML);
+      }
+    );
+  });
+
+  test('base dinâmica inválida cai de volta na resolução estática do ambiente', async () => {
+    const oauthStates = {
+      issue: async () => 'state-estatico',
+      consume: async () => {
+        throw new Error('não deve consumir state neste teste');
+      },
+    };
+    const service = createConnectorService({ repository: {} as never, oauthStates: oauthStates as never });
+    return comEnv(
+      { APP_URL: HOST_UNIFICADO, MERCADOLIVRE_CLIENT_ID: '1234567890', MERCADOLIVRE_CLIENT_SECRET: 'segredo-app', MERCADOLIVRE_REDIRECT_URI: undefined },
+      async () => {
+        const resultado = await service.startAuthorization(7, 'MERCADOLIVRE', { redirectBase: 'https://evil.example.com/outra' });
+        assert.equal(resultado.redirectUri, REDIRECT_ML, 'ignorou a base inválida e usou o APP_URL unificado');
+      }
+    );
+  });
+});
+
 describe('Conectores — tokens cifrados em repouso', () => {
+  test('a chave de teste é uma string Base64 válida de exatamente 32 bytes', () => {
+    const chave = process.env.CONNECTOR_ENCRYPTION_KEY!;
+    // Base64 canônico (com padding) — nada de passphrase solta disfarçada.
+    assert.match(chave, /^[A-Za-z0-9+/]+={0,2}$/);
+    assert.equal(Buffer.from(chave, 'base64').length, 32, 'a chave injetada precisa decodificar para 32 bytes');
+    assert.equal(decodeConnectorEncryptionKey(chave).length, 32, 'o crypto.service aceita a chave base64 da suíte');
+  });
+
   test('ida e volta AES-256-GCM preserva o segredo', () => {
     const segredo = 'APP_USR-1234567890-abcdef';
     const cifrado = encryptConnectorSecret(segredo);
@@ -124,12 +334,30 @@ describe('Conectores — assinatura dos webhooks', () => {
   test('Shopee: assinatura válida passa, alterada no corpo falha', () => {
     process.env.SHOPEE_PARTNER_ID = '1001';
     process.env.SHOPEE_PARTNER_KEY = 'chave-parceiro';
-    const url = 'https://erp.brobond.com.br/api/webhooks/shopee';
+    // Webhook registrado no painel da Shopee apontando para o host unificado.
+    const url = `${HOST_UNIFICADO}/api/webhooks/shopee`;
     const body = JSON.stringify({ code: 3, shop_id: 777, data: { ordersn: 'SN1' } });
     const assinatura = createHmac('sha256', 'chave-parceiro').update(`${url}|${body}`).digest('hex');
     assert.equal(verifyShopeeWebhookSignature(body, url, assinatura), true);
     assert.equal(verifyShopeeWebhookSignature(`${body} `, url, assinatura), false);
     assert.equal(verifyShopeeWebhookSignature(body, url, 'deadbeef'), false);
+  });
+
+  test('TikTok Shop: autorização usa service_id do Partner Center, não Login Kit', () => {
+    const url = new URL(
+      buildTikTokAuthorizationUrl('csrf-state', {
+        serviceId: 'service-123',
+        appKey: 'app-key',
+        appSecret: 'app-secret',
+        redirectUri: `${HOST_UNIFICADO}/api/connectors/tiktok/callback`,
+        authorizeUrl: 'https://services.tiktokshop.com/open/authorize',
+        tokenBaseUrl: 'https://auth.tiktok-shops.com',
+      })
+    );
+    assert.equal(url.origin, 'https://services.tiktokshop.com');
+    assert.equal(url.searchParams.get('service_id'), 'service-123');
+    assert.equal(url.searchParams.get('state'), 'csrf-state');
+    assert.equal(url.searchParams.has('client_key'), false);
   });
 
   test('TikTok: assinatura sobre appKey + corpo cru', () => {
