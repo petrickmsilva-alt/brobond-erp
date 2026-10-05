@@ -131,7 +131,7 @@ app.use('/api/publico', (_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 // Conectores de marketplace: callbacks de OAuth e webhooks de pedido chegam
-// de FORA (Mercado Livre, Mercado Pago, Shopee, TikTok), sem cookie e sem
+// de FORA (Mercado Livre, Mercado Pago, Nuvemshop), sem cookie e sem
 // Bearer. O router é montado aqui — depois do cors(), ANTES do express.json()
 // e muito antes de requireAuth/bloquearSenhaProvisoria — por dois motivos:
 // (1) a sessão do ERP nunca pode barrar um provedor externo e (2) a assinatura
@@ -383,7 +383,7 @@ app.get('/api/vendas/:id/nfe/status', wrap(nfeStatus));
 app.get('/api/frete/cep', wrap(consultarCEP));
 app.post('/api/frete/calcular', wrap(calcularFrete));
 
-// Conectores oficiais (Mercado Livre, Mercado Pago, Shopee, TikTok)
+// Conectores oficiais (Mercado Livre, Mercado Pago, Nuvemshop)
 app.use('/api/connectors', connectorsRouter);
 
 // Marketplace

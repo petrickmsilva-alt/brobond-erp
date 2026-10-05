@@ -2,8 +2,14 @@
 
 Sistema de controle de estoque, produção e financeiro para a **BROBOND** (roupas masculinas) —
 e **base principal do ecossistema Brobond AI**: desde a Fase 1 da fusão (out/2026) o motor
-comercial do `brobond-ai-commerce` vive aqui como módulo de conectores multicanal (Shopee,
-Mercado Livre, Mercado Pago, TikTok). Veja [docs/FUSAO-COMMERCE-FASE-1.md](docs/FUSAO-COMMERCE-FASE-1.md).
+comercial do `brobond-ai-commerce` vive aqui como módulo de conectores multicanal —
+**Mercado Livre, Mercado Pago e Nuvemshop**. Veja [docs/FUSAO-COMMERCE-FASE-1.md](docs/FUSAO-COMMERCE-FASE-1.md).
+
+> **Hub Omnichannel (05/10/2026):** os conectores nativos de **Shopee** e **TikTok** foram
+> removidos do monorepo por decisão de negócio (restrições e barreiras burocráticas das APIs
+> deles). A **Nuvemshop** entra como **plataforma-ponte** da triangulação de vendas, inclusive
+> para o catálogo exibido no TikTok. O expurgo de código + banco está em
+> `prisma/migrations/20261005150000_drop_shopee_and_tiktok_connectors`.
 
 Monorepo com frontend (React) e backend (Node/Express + Postgres).
 

@@ -1,20 +1,24 @@
 /**
- * Registro de provedores dos conectores multicanal — Fase 2 da fusão
- * commerce → ERP.
+ * Registro de provedores dos conectores multicanal — Hub Omnichannel.
  *
  * Fonte: `modules/marketplace/core/providers.ts` do brobond-ai-commerce
- * (PR012). ADAPTAÇÕES DESTA FASE:
+ * (PR012). ADAPTAÇÕES VIGENTES:
  *
- *   • O ERP opera com QUATRO provedores core — MERCADOLIVRE, MERCADOPAGO,
- *     SHOPEE e TIKTOK. O Instagram Shopping permanece no enum do banco
- *     (`connector_provider`) por compatibilidade com a migration da Fase 1,
- *     mas NÃO é um provedor registrado: o `connector.factory.ts` é estrito
- *     e nunca resolve um adaptador para ele.
- *   • O conector da Nuvemshop do commerce foi REMOVIDO do ecossistema. Não
- *     existe `NUVEMSHOP` em lugar nenhum deste módulo: nem no registro, nem
- *     no mapeador central, nem na persistência. Qualquer `provider`
- *     desconhecido (inclusive o literal "nuvemshop") é rejeitado por
- *     `parseConnectorProvider()` antes de tocar o banco.
+ *   • DECISÃO DE NEGÓCIO (2026-10-05): os conectores nativos de SHOPEE e
+ *     TIKTOK foram REMOVIDOS do ecossistema por causa das barreiras
+ *     burocráticas das APIs deles. Não existe `SHOPEE` nem `TIKTOK` em
+ *     lugar nenhum deste módulo — nem no registro, nem no mapeador
+ *     central, nem na persistência (os valores saíram dos enums
+ *     `connector_provider`/`sale_channel` na migration
+ *     `drop_shopee_and_tiktok_connectors`).
+ *   • O TRIO DE PRODUÇÃO é MERCADOLIVRE, MERCADOPAGO e NUVEMSHOP. A
+ *     Nuvemshop é a PLATAFORMA-PONTE da triangulação de vendas: o
+ *     catálogo que ela publica (inclusive o exibido no TikTok) e os
+ *     pedidos que ela fecha são a fonte do canal.
+ *   • O Instagram Shopping permanece no enum do banco por compatibilidade
+ *     com a Fase 1, mas NÃO é um provedor registrado: o
+ *     `connector.factory.ts` é estrito e nunca resolve um adaptador para
+ *     ele.
  *   • A tenancy é `usuarioId` (FK → `usuarios.id` do ERP) e não mais
  *     `organizationId`.
  *
@@ -27,10 +31,10 @@
 // ------------------------------------------------------------------
 
 /**
- * Os QUATRO provedores remanescentes do motor comercial. A ordem é a
- * ordem de exibição no painel de conectores.
+ * O TRIO de produção do motor comercial. A ordem é a ordem de exibição
+ * no painel de conectores.
  */
-export const CONNECTOR_PROVIDERS = ['MERCADOLIVRE', 'MERCADOPAGO', 'SHOPEE', 'TIKTOK'] as const;
+export const CONNECTOR_PROVIDERS = ['MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP'] as const;
 
 export type ConnectorProviderName = (typeof CONNECTOR_PROVIDERS)[number];
 
@@ -38,24 +42,21 @@ export type ConnectorProviderName = (typeof CONNECTOR_PROVIDERS)[number];
 export const CONNECTOR_PROVIDER_LABELS: Record<ConnectorProviderName, string> = {
   MERCADOLIVRE: 'Mercado Livre',
   MERCADOPAGO: 'Mercado Pago',
-  SHOPEE: 'Shopee',
-  TIKTOK: 'TikTok Shop',
+  NUVEMSHOP: 'Nuvemshop',
 };
 
 /** Descrição curta exibida sob o título do cartão. */
 export const CONNECTOR_PROVIDER_DESCRIPTIONS: Record<ConnectorProviderName, string> = {
   MERCADOLIVRE: 'Meli API oficial — OAuth2 com rotação automática de refresh token.',
   MERCADOPAGO: 'Checkout e faturamento via Access Token de produção.',
-  SHOPEE: 'Shopee Open Platform v2 com assinatura HMAC-SHA256.',
-  TIKTOK: 'TikTok Shop Partner Center — OAuth2 oficial para pedidos e catálogo.',
+  NUVEMSHOP: 'Plataforma-ponte do Hub: OAuth2 oficial com catálogo e pedidos para a triangulação de vendas.',
 };
 
 /** O que o operador conecta, por provedor (objeto da chamada para ação). */
 export const CONNECTOR_PROVIDER_ACCOUNT_LABELS: Record<ConnectorProviderName, string> = {
   MERCADOLIVRE: 'Conta do Mercado Livre',
   MERCADOPAGO: 'Credenciais do Mercado Pago',
-  SHOPEE: 'Conta da Shopee',
-  TIKTOK: 'Conta do TikTok',
+  NUVEMSHOP: 'Loja da Nuvemshop',
 };
 
 /** Rótulo do botão conectar/reconectar de um provedor. */
@@ -70,8 +71,7 @@ export function connectorConnectLabel(provider: ConnectorProviderName, connected
 export const CONNECTOR_PROVIDER_SLUGS: Record<ConnectorProviderName, string> = {
   MERCADOLIVRE: 'mercadolivre',
   MERCADOPAGO: 'mercadopago',
-  SHOPEE: 'shopee',
-  TIKTOK: 'tiktok',
+  NUVEMSHOP: 'nuvemshop',
 };
 
 /**
@@ -86,15 +86,16 @@ const CONNECTOR_PROVIDER_ALIASES: Record<string, ConnectorProviderName> = {
   mercadopago: 'MERCADOPAGO',
   'mercado-pago': 'MERCADOPAGO',
   mp: 'MERCADOPAGO',
-  shopee: 'SHOPEE',
-  tiktok: 'TIKTOK',
-  'tiktok-shop': 'TIKTOK',
+  nuvemshop: 'NUVEMSHOP',
+  'nuvem-shop': 'NUVEMSHOP',
+  tiendanube: 'NUVEMSHOP',
 };
 
 /**
  * Converte o segmento `:provider` da rota (ou qualquer entrada externa)
  * no provedor canônico. Retorna `null` — nunca lança — para entrada
- * desconhecida: a rota responde 404 e nada chega ao banco.
+ * desconhecida: a rota responde 404 e nada chega ao banco. Os literais
+ * "shopee" e "tiktok" dos conectores removidos caem exatamente aqui.
  */
 export function parseConnectorProvider(value: unknown): ConnectorProviderName | null {
   if (typeof value !== 'string') return null;
@@ -103,7 +104,7 @@ export function parseConnectorProvider(value: unknown): ConnectorProviderName | 
   return CONNECTOR_PROVIDER_ALIASES[normalized] ?? null;
 }
 
-/** Type guard: o valor é um dos quatro provedores registrados? */
+/** Type guard: o valor é um dos três provedores registrados? */
 export function isConnectorProviderName(value: unknown): value is ConnectorProviderName {
   return typeof value === 'string' && (CONNECTOR_PROVIDERS as readonly string[]).includes(value as ConnectorProviderName);
 }
@@ -122,16 +123,25 @@ export type ConnectorAuthModel = 'oauth2' | 'credentials';
 export const CONNECTOR_PROVIDER_AUTH_MODEL: Record<ConnectorProviderName, ConnectorAuthModel> = {
   MERCADOLIVRE: 'oauth2',
   MERCADOPAGO: 'credentials',
-  SHOPEE: 'oauth2',
-  TIKTOK: 'oauth2',
+  NUVEMSHOP: 'oauth2',
 };
 
 /** Variáveis de ambiente obrigatórias da APLICAÇÃO, por provedor. */
 export const CONNECTOR_PROVIDER_REQUIRED_ENV: Record<ConnectorProviderName, readonly string[]> = {
   MERCADOLIVRE: ['MERCADOLIVRE_CLIENT_ID', 'MERCADOLIVRE_CLIENT_SECRET'],
   MERCADOPAGO: [],
-  SHOPEE: ['SHOPEE_PARTNER_ID', 'SHOPEE_PARTNER_KEY'],
-  TIKTOK: ['TIKTOK_SERVICE_ID', 'TIKTOK_APP_KEY', 'TIKTOK_APP_SECRET'],
+  NUVEMSHOP: ['NUVEMSHOP_CLIENT_ID', 'NUVEMSHOP_CLIENT_SECRET'],
+};
+
+/**
+ * Variável de `redirect_uri` explícito de cada provedor OAuth. Usada na
+ * checagem de prontidão de produção (um callback público em HTTPS).
+ * `null` para quem não fala OAuth.
+ */
+export const CONNECTOR_PROVIDER_REDIRECT_ENV: Record<ConnectorProviderName, string | null> = {
+  MERCADOLIVRE: 'MERCADOLIVRE_REDIRECT_URI',
+  MERCADOPAGO: null,
+  NUVEMSHOP: 'NUVEMSHOP_REDIRECT_URI',
 };
 
 // ------------------------------------------------------------------
@@ -168,7 +178,7 @@ export function isConnectionStatusName(value: unknown): value is ConnectionStatu
 // Canal de venda (enum `sale_channel` do banco)
 // ------------------------------------------------------------------
 
-export const SALE_CHANNELS = ['BROBOND', 'TIKTOK', 'INSTAGRAM', 'SHOPEE', 'MERCADOLIVRE', 'MERCADOPAGO'] as const;
+export const SALE_CHANNELS = ['BROBOND', 'INSTAGRAM', 'MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP'] as const;
 
 export type SaleChannelName = (typeof SALE_CHANNELS)[number];
 

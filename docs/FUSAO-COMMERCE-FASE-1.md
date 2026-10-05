@@ -1,5 +1,13 @@
 # Fusão Commerce → ERP — Fase 1 (Brobond AI ERP)
 
+> ⚠️ **DOCUMENTO HISTÓRICO (Fase 1, out/2026).** Em 05/10/2026 a diretoria removeu os
+> conectores nativos de **Shopee** e **TikTok** do ecossistema (barreiras burocráticas das
+> APIs) e colocou a **Nuvemshop** como plataforma-ponte da triangulação de vendas. Tudo que
+> este documento descreve sobre esses dois canais — enums `SHOPEE`/`TIKTOK`, variáveis
+> `SHOPEE_*`/`TIKTOK_*`, pastas `modules/connectors/{shopee,tiktok}` — **não existe mais**.
+> O estado atual está em [`modules/connectors/README.md`](../modules/connectors/README.md) e
+> na migration `drop_shopee_and_tiktok_connectors`.
+
 > **Decisão arquitetural (Diretoria, 2026-10-05):** o `brobond-erp` é a **base
 > principal** do ecossistema e passa a se chamar **Brobond AI ERP**. O
 > `brobond-ai-commerce` é integrado a ele como **módulo de conectores

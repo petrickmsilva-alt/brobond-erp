@@ -28,9 +28,8 @@ import { connectorRepository, type ConnectorRepository } from '../core/connector
 import { connectorErrorMessage, WebhookSignatureError } from '../core/errors';
 import type { ConnectorProviderName } from '../core/providers';
 import type { JsonObject } from '../core/types';
-import { verifyShopeeWebhookSignature } from '../shopee/shopee.service';
 import { verifyMercadoPagoWebhookSignature } from '../mercadopago/mercadopago.service';
-import { verifyTikTokWebhookSignature } from '../tiktok/tiktok.service';
+import { NUVEMSHOP_WEBHOOK_SIGNATURE_HEADER, verifyNuvemshopWebhookSignature } from '../nuvemshop/nuvemshop.service';
 import { isSaleIngestionEvent, saleIngestionService, type SaleIngestionService } from '../ingestion/sale-ingestion.service';
 
 /** Requisição de webhook, independente de framework. */
@@ -41,7 +40,8 @@ export interface WebhookRequest {
   rawBody: string;
   /**
    * URL absoluta do endpoint, montada a partir do `APP_URL` ESTÁTICO —
-   * nunca do `Host` da requisição (a Shopee assina a URL cadastrada).
+   * nunca do `Host` da requisição (provedor que assina a URL cadastrada
+   * no painel dele nunca vê o host do proxy).
    */
   url: string;
   /** Query string já decodificada. */
@@ -126,56 +126,38 @@ function parseMercadoPagoEvent(request: WebhookRequest): ParsedWebhookEvent {
   return { externalEventId: `mp:${id}`, topic: type, shopId: userId, payload: body };
 }
 
-/** Shopee push: HMAC-SHA256(partner_key, webhook_url + raw_body) em `authorization`. */
-function parseShopeeEvent(request: WebhookRequest): ParsedWebhookEvent {
-  if (!verifyShopeeWebhookSignature(request.rawBody, request.url, request.headers.authorization ?? null)) {
-    throw new WebhookSignatureError('SHOPEE');
+/**
+ * Nuvemshop: HMAC-SHA256 HEX do CORPO CRU com o client secret do app, no
+ * cabeçalho `x-linkedstore-hmac-sha256`. O payload é propositalmente
+ * magro (`store_id`, `event`, `id`) — a ingestão busca o pedido
+ * autoritativo pela API oficial.
+ */
+function parseNuvemshopEvent(request: WebhookRequest): ParsedWebhookEvent {
+  const signature = request.headers[NUVEMSHOP_WEBHOOK_SIGNATURE_HEADER] ?? null;
+  if (!verifyNuvemshopWebhookSignature(request.rawBody, signature)) {
+    throw new WebhookSignatureError('NUVEMSHOP');
   }
   const body = parseJsonBody(request.rawBody);
-  const code = body.code !== undefined ? String(body.code) : 'unknown';
-  const shopId = body.shop_id !== undefined ? String(body.shop_id) : null;
-  const timestamp = body.timestamp !== undefined ? String(body.timestamp) : '0';
-  const data = asRecord(body.data);
-  const orderSn = typeof data.ordersn === 'string' ? data.ordersn : String(data.order_sn ?? '-');
+  const event = body.event !== undefined ? String(body.event) : 'unknown';
+  const storeId = body.store_id !== undefined ? String(body.store_id) : null;
+  const resourceId = body.id !== undefined ? String(body.id) : '-';
   return {
-    externalEventId: `shopee:${code}:${shopId ?? '-'}:${orderSn}:${timestamp}`,
-    topic: code,
-    shopId,
-    payload: body,
-  };
-}
-
-/** TikTok Shop: HMAC-SHA256(appSecret, appKey + rawBody) em `authorization`. */
-function parseTikTokEvent(request: WebhookRequest): ParsedWebhookEvent {
-  const verified = verifyTikTokWebhookSignature({
-    rawBody: request.rawBody,
-    signature: request.headers.authorization ?? null,
-  });
-  if (!verified) throw new WebhookSignatureError('TIKTOK');
-  const body = parseJsonBody(request.rawBody);
-  const type = body.type !== undefined ? String(body.type) : 'unknown';
-  const shopId = body.shop_id !== undefined ? String(body.shop_id) : null;
-  const timestamp = body.timestamp !== undefined ? String(body.timestamp) : '0';
-  const data = asRecord(body.data);
-  const orderId = data.order_id !== undefined ? String(data.order_id) : '-';
-  return {
-    externalEventId: `tiktok:${type}:${shopId ?? '-'}:${orderId}:${timestamp}`,
-    topic: type,
-    shopId,
+    externalEventId: `nuvemshop:${event}:${storeId ?? '-'}:${resourceId}`,
+    topic: event,
+    shopId: storeId,
     payload: body,
   };
 }
 
 /**
- * Mapa provedor → parser. EXAUSTIVO sobre os quatro provedores: o
+ * Mapa provedor → parser. EXAUSTIVO sobre o TRIO de produção: o
  * compilador recusa uma chave a mais ou a menos. Não há entrada morta
- * para o conector removido da Nuvemshop nem para o Instagram.
+ * para os conectores removidos (Shopee, TikTok) nem para o Instagram.
  */
 const PARSERS: Record<ConnectorProviderName, (request: WebhookRequest) => ParsedWebhookEvent> = {
   MERCADOLIVRE: parseMercadoLivreEvent,
   MERCADOPAGO: parseMercadoPagoEvent,
-  SHOPEE: parseShopeeEvent,
-  TIKTOK: parseTikTokEvent,
+  NUVEMSHOP: parseNuvemshopEvent,
 };
 
 // ------------------------------------------------------------------

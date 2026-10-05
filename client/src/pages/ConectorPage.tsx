@@ -33,11 +33,16 @@ type ConnectorStatus = {
   updatedAt: string | null;
 };
 
+/**
+ * Provedor → slug das rotas `/api/connectors/<slug>/…`. Espelha
+ * `CONNECTOR_PROVIDER_SLUGS` do módulo de conectores: o TRIO de produção
+ * e nada além dele. Shopee e TikTok saíram do ecossistema (decisão da
+ * diretoria, 2026-10-05) — a triangulação passa pela Nuvemshop.
+ */
 const PATH: Record<string, string> = {
   MERCADOLIVRE: 'mercadolivre',
   MERCADOPAGO: 'mercadopago',
-  SHOPEE: 'shopee',
-  TIKTOK: 'tiktok',
+  NUVEMSHOP: 'nuvemshop',
 };
 
 function formatDate(value: string | null) {

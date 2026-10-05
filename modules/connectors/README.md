@@ -1,22 +1,27 @@
 # `modules/connectors` — conectores oficiais de marketplace
 
-Módulo portado do **brobond-ai-commerce** (`modules/marketplace` +
-`modules/connectors/tiktok`) para o **Brobond AI ERP** na Fase 2 da fusão.
-Ele concentra OAuth, credenciais cifradas, webhooks e ingestão de pedidos
-dos quatro canais suportados.
+Módulo portado do **brobond-ai-commerce** (`modules/marketplace`) para o
+**Brobond AI ERP** na Fase 2 da fusão. Ele concentra OAuth, credenciais
+cifradas, webhooks e ingestão de pedidos do **trio de produção**.
 
-| Canal             | Autenticação                              | Pedidos chegam por                     |
-| ----------------- | ----------------------------------------- | -------------------------------------- |
-| **Mercado Livre** | OAuth 2.0 (`redirect_uri` estático)       | notificação → re-fetch na API          |
-| **Mercado Pago**  | credenciais de produção coladas no painel | webhook assinado (HMAC)                |
-| **Shopee**        | OAuth (partner sign)                      | push assinado (HMAC sobre URL + corpo) |
-| **TikTok**        | OAuth da loja no Shop Partner Center      | webhook assinado (HMAC)                |
+| Canal             | Autenticação                              | Pedidos chegam por                       |
+| ----------------- | ----------------------------------------- | ---------------------------------------- |
+| **Mercado Livre** | OAuth 2.0 (`redirect_uri` estático)       | notificação → re-fetch na API            |
+| **Mercado Pago**  | credenciais de produção coladas no painel | webhook assinado (HMAC)                  |
+| **Nuvemshop**     | OAuth 2.0 (token **permanente**)          | webhook magro assinado (HMAC) → re-fetch |
 
-> A **Nuvemshop foi removida do ecossistema**. Não existe builder, slug,
-> rótulo, enum de canal nem ramo de persistência para ela: `parseConnectorProvider('nuvemshop')`
-> devolve `null` e `connector.factory.ts` é tipado como
+> **Shopee e TikTok foram removidos do ecossistema** (decisão da diretoria,
+> 2026-10-05 — restrições e barreiras burocráticas das APIs deles). Não
+> existe builder, slug, rótulo, enum de canal nem ramo de persistência para
+> eles: `parseConnectorProvider('shopee')` e `parseConnectorProvider('tiktok')`
+> devolvem `null`, os valores saíram dos enums do banco na migration
+> `drop_shopee_and_tiktok_connectors`, e `connector.factory.ts` é tipado como
 > `Record<ConnectorProviderName, …>`, de modo que uma chave a mais ou a
 > menos **quebra a compilação**.
+>
+> A **Nuvemshop é a plataforma-ponte** da triangulação de vendas: o catálogo
+> publicado por ela (inclusive o exibido na vitrine do TikTok) e os pedidos
+> que ela fecha são a fonte desses canais.
 
 ## Decisões estruturais
 
@@ -36,7 +41,7 @@ dos quatro canais suportados.
 
 ```
 core/
-  providers.ts            registro estrito dos 4 canais, slugs, enums e rótulos
+  providers.ts            registro estrito do trio, slugs, enums e rótulos
   errors.ts               erros de domínio com status HTTP embutido
   crypto.service.ts       AES-256-GCM (CONNECTOR_ENCRYPTION_KEY) + HMAC + máscara
   types.ts                linhas do banco e DTOs do painel
@@ -64,7 +69,7 @@ webhooks/handlers.ts      verificação de assinatura, dedupe e resolução de d
 Autenticadas (sessão do ERP):
 
 ```
-GET    /api/connectors                        cartões dos 4 canais
+GET    /api/connectors                        cartões do trio de canais
 GET    /api/connectors/:provider              status de um canal
 POST   /api/connectors/:provider/autorizar    inicia o OAuth (devolve a URL)
                                                • body opcional: { redirect_uri }
@@ -97,7 +102,7 @@ Elas são montadas **depois do `cors()` e antes do `express.json()`** porque:
 
 A segurança não vem da sessão e sim do `state` de uso único (callback) e da
 assinatura do provedor + `shop_id` já gravado no conector (webhook). Um
-segmento `:provider` que não seja um dos quatro slugs cai em `next()`, de modo
+segmento `:provider` que não seja um dos três slugs cai em `next()`, de modo
 que o **CRUD autenticado pré-existente de `/api/webhooks` continua intacto**.
 
 ## Idempotência
@@ -117,8 +122,9 @@ que o **CRUD autenticado pré-existente de `/api/webhooks` continua intacto**.
 Já descritas em `server/.env.example`: `CONNECTOR_ENCRYPTION_KEY` (32 bytes em
 hex — obrigatória para conectar qualquer canal), `APP_URL`,
 `MERCADOLIVRE_CLIENT_ID/SECRET`, `MERCADOPAGO_ACCESS_TOKEN/PUBLIC_KEY`,
-`SHOPEE_PARTNER_ID/KEY`, `TIKTOK_CLIENT_KEY/SECRET` (+ `TIKTOK_APP_KEY/SECRET`
-para a app vendedora) e os segredos opcionais de webhook.
+`NUVEMSHOP_CLIENT_ID/SECRET` + `NUVEMSHOP_REDIRECT_URI` (o webhook da
+Nuvemshop é assinado com o próprio client secret — não há segredo separado)
+e os segredos opcionais de webhook dos demais canais.
 
 ## Testes
 

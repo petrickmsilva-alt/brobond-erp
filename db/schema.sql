@@ -1128,8 +1128,8 @@ CREATE INDEX IF NOT EXISTS idx_webhook_entregas_webhook ON webhook_entregas (web
 --  migration Prisma prisma/migrations/20261005120000_fusion_commerce_into_erp/)
 --
 -- Motor comercial do brobond-ai-commerce como módulo de conectores
--- multicanal: conectores (TikTok Shop, Instagram, Shopee, Mercado
--- Livre, Mercado Pago), eventos, estados OAuth e vendas multicanal
+-- multicanal: conectores (Mercado Livre, Mercado Pago, Nuvemshop e o
+-- Instagram ainda sem adaptador), eventos, estados OAuth e vendas
 -- com itens casados no catálogo do ERP (produtos/tamanhos). FK de
 -- tenancy aponta para usuarios (RESTRICT — nada de login é alterado).
 -- ============================================================
@@ -1144,11 +1144,11 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE "sale_channel" AS ENUM ('BROBOND', 'TIKTOK', 'INSTAGRAM', 'SHOPEE', 'MERCADOLIVRE', 'MERCADOPAGO');
+  CREATE TYPE "sale_channel" AS ENUM ('BROBOND', 'INSTAGRAM', 'MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE "connector_provider" AS ENUM ('TIKTOK', 'INSTAGRAM', 'SHOPEE', 'MERCADOLIVRE', 'MERCADOPAGO');
+  CREATE TYPE "connector_provider" AS ENUM ('INSTAGRAM', 'MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -1163,7 +1163,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- ------------------------------------------------------------------
 
 -- Uma integração ativa com marketplace/meio de pagamento
--- (TikTok Shop, Instagram Shopping, Shopee, Mercado Livre, Mercado Pago).
+-- (Mercado Livre, Mercado Pago, Nuvemshop, Instagram Shopping).
 -- Credenciais SEMPRE cifradas em AES-256-GCM (CONNECTOR_ENCRYPTION_KEY).
 CREATE TABLE IF NOT EXISTS connectors (
   id TEXT PRIMARY KEY,                       -- cuid() gerado pelo Prisma
@@ -1244,8 +1244,8 @@ CREATE INDEX IF NOT EXISTS connector_oauth_states_usuario_id_provider_expires_at
 -- VENDAS MULTICANAL
 -- ------------------------------------------------------------------
 
--- Receita originada em qualquer canal (loja própria, Shopee, Mercado
--- Livre, Mercado Pago, TikTok Shop, Instagram). Valores em CENTAVOS
+-- Receita originada em qualquer canal (loja própria, Mercado Livre,
+-- Mercado Pago, Nuvemshop, Instagram). Valores em CENTAVOS
 -- (convenção do motor financeiro do commerce — Int, sem erro de
 -- ponto flutuante). A venda do ERP B2B/offline continua em `vendas`;
 -- `sales` é o lado multicanal sincronizado pelos conectores.

@@ -37,8 +37,8 @@ import {
   Webhook,
   Briefcase,
   CreditCard,
+  Cloud,
   Instagram,
-  Music2,
   Package,
   Plug,
   ShoppingBag,
@@ -61,7 +61,7 @@ export type Module = {
   /** módulo ainda sem funcionalidade (exibe página de planejamento) */
   planned?: string[];
   /** provedor do Hub Omnichannel quando o módulo é um conector multicanal */
-  connector?: 'MERCADOLIVRE' | 'MERCADOPAGO' | 'SHOPEE' | 'TIKTOK';
+  connector?: 'MERCADOLIVRE' | 'MERCADOPAGO' | 'NUVEMSHOP';
 };
 
 // Fonte única de verdade para o menu lateral E as rotas.
@@ -120,16 +120,6 @@ export const MODULES: Module[] = [
     description: 'Conexão OAuth2 oficial com o Mercado Livre: importação de pedidos e sincronização de vendas.',
   },
   {
-    id: 'conector-shopee',
-    label: 'Shopee',
-    icon: Store,
-    group: 'Hub Omnichannel',
-    path: '/conectores/shopee',
-    minPerfil: 'gerente',
-    connector: 'SHOPEE',
-    description: 'Shopee Open Platform v2 com assinatura HMAC-SHA256: pedidos e status da loja.',
-  },
-  {
     id: 'conector-mercadopago',
     label: 'Mercado Pago',
     icon: CreditCard,
@@ -140,14 +130,15 @@ export const MODULES: Module[] = [
     description: 'Checkout e faturamento via Access Token de produção do Mercado Pago.',
   },
   {
-    id: 'conector-tiktok',
-    label: 'TikTok Shopping',
-    icon: Music2,
+    id: 'conector-nuvemshop',
+    label: 'Nuvemshop',
+    icon: Cloud,
     group: 'Hub Omnichannel',
-    path: '/conectores/tiktok',
+    path: '/conectores/nuvemshop',
     minPerfil: 'gerente',
-    connector: 'TIKTOK',
-    description: 'TikTok Shop Partner Center: conexão OAuth2 oficial com catálogo e pedidos da loja.',
+    connector: 'NUVEMSHOP',
+    description:
+      'Plataforma-ponte do Hub: conexão OAuth2 oficial com a Nuvemshop para triangulação de vendas (catálogo e pedidos, inclusive os da vitrine do TikTok).',
   },
   {
     id: 'conector-instagram',

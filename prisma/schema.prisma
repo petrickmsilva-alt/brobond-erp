@@ -198,7 +198,7 @@ model Produto {
 
 /// Tamanhos (PP, P, M, G, GG…) — tabela `tamanhos`. Âncora da
 /// variação de cada item de venda multicanal (o ERP vende peças
-/// dimensionadas; pedidos Shopee/Mercado Livre/TikTok trazem o
+/// dimensionadas; pedidos do Mercado Livre e da Nuvemshop trazem o
 /// tamanho como variante).
 model Tamanho {
   id          Int       @id @default(autoincrement()) @map("id")
@@ -239,30 +239,30 @@ enum SaleStatus {
 /// Multicanal). `BROBOND` é a loja própria; os demais espelham
 /// `ConnectorProvider` 1:1 para que TODO pedido sincronizado por um
 /// conector carregue a plataforma exata em que foi vendido —
-/// obrigatório para o dashboardsplit de receita
-/// "Brobond × Mercado Livre × Shopee × TikTok Shop × Mercado Pago".
+/// obrigatório para o dashboard split de receita
+/// "Brobond × Mercado Livre × Mercado Pago × Nuvemshop".
 enum SaleChannel {
   BROBOND
-  TIKTOK
   INSTAGRAM
-  SHOPEE
   MERCADOLIVRE
   MERCADOPAGO
+  NUVEMSHOP
 
   @@map("sale_channel")
 }
 
 /// Plataforma com a qual um conector conversa (fonte: commerce,
 /// PR012 — Real Marketplace Integrations). Apenas APIs oficiais:
-/// TikTok Shop Partner Center, Meta Graph API (Instagram Shopping),
-/// Shopee Open Platform v2 (HMAC), Mercado Livre OAuth2 (Meli) e
-/// credenciais de API do Mercado Pago.
+/// Mercado Livre OAuth2 (Meli), credenciais de API do Mercado Pago,
+/// Nuvemshop/Tiendanube OAuth2 (plataforma-ponte da triangulação de
+/// vendas) e Meta Graph API (Instagram Shopping, ainda sem adaptador).
+/// SHOPEE e TIKTOK foram removidos na migration
+/// `drop_shopee_and_tiktok_connectors` (2026-10-05).
 enum ConnectorProvider {
-  TIKTOK
   INSTAGRAM
-  SHOPEE
   MERCADOLIVRE
   MERCADOPAGO
+  NUVEMSHOP
 
   @@map("connector_provider")
 }
@@ -273,14 +273,14 @@ enum ConnectorProvider {
 ///   CONNECTED        — credencial válida
 ///   EXPIRED          — token expirado sem sucesso no refresh
 ///   ERROR            — última chamada ao provedor falhou
-///   PENDING_APPROVAL — app/loja TikTok ainda em análise no Seller
-///                      Center (operacionalmente esperado; NUNCA é
+///   PENDING_APPROVAL — app/loja ainda em análise no painel da
+///                      plataforma (operacionalmente esperado; NUNCA é
 ///                      falha de servidor)
 ///   REAUTH_REQUIRED  — credencial não pode mais ser decifrada (ex.:
 ///                      troca de CONNECTOR_ENCRYPTION_KEY); só
 ///                      reconectar re-cifra com a chave atual
-///   SANDBOX_ACTIVE   — modo sandbox do TikTok Developers (PR017);
-///                      plenamente funcional, nunca é falha
+///   SANDBOX_ACTIVE   — modo sandbox/loja de testes da plataforma
+///                      (PR017); plenamente funcional, nunca é falha
 enum ConnectionStatus {
   DISCONNECTED
   CONNECTED
@@ -314,9 +314,9 @@ model Connector {
   provider ConnectorProvider
   status   ConnectionStatus @default(DISCONNECTED)
 
-  /// Identidade no provedor: shop id do TikTok, id da conta Instagram
-  /// Business, shop_id da Shopee, user id do Mercado Livre ou
-  /// collector id do Mercado Pago.
+  /// Identidade no provedor: user id (id da loja) da Nuvemshop, id da
+  /// conta Instagram Business, user id do Mercado Livre ou collector
+  /// id do Mercado Pago.
   shopId   String? @map("shop_id")
   shopName String? @map("shop_name")
 
@@ -435,12 +435,13 @@ model Sale {
 
   /// Plataforma de origem desta receita. Padrão `BROBOND` (checkout
   /// da loja própria); a sincronização de marketplaces etiqueta a
-  /// plataforma real (SHOPEE, MERCADOLIVRE, MERCADOPAGO, TIKTOK…).
+  /// plataforma real (MERCADOLIVRE, MERCADOPAGO, NUVEMSHOP…).
   channel SaleChannel @default(BROBOND)
 
   /// Id do pedido na plataforma de origem (pack/order id do Mercado
-  /// Livre, order sn da Shopee, order id do TikTok Shop…). `null`
-  /// para o checkout próprio, onde `reference` já é o id canônico.
+  /// Livre, id do pagamento do Mercado Pago, id do pedido da
+  /// Nuvemshop…). `null` para o checkout próprio, onde `reference` já
+  /// é o id canônico.
   externalOrderId String? @map("external_order_id")
 
   // Responsável ERP (proveniência da importação/sincronização).

@@ -1,4 +1,7 @@
-export type SalesChannel = 'COUNTER' | 'REPRESENTATIVE' | 'WOOCOMMERCE' | 'MERCADOLIVRE' | 'SHOPEE' | 'TIKTOK_SHOP';
+// Canais de venda do domínio. SHOPEE e TIKTOK_SHOP saíram com a remoção
+// dos conectores nativos (2026-10-05); a triangulação desses canais chega
+// pela NUVEMSHOP, a plataforma-ponte do Hub Omnichannel.
+export type SalesChannel = 'COUNTER' | 'REPRESENTATIVE' | 'WOOCOMMERCE' | 'MERCADOLIVRE' | 'MERCADOPAGO' | 'NUVEMSHOP';
 
 export interface OrderItemProps { productId: number; sizeId?: number; sku: string; quantity: number; unitPriceCents: number; }
 export class OrderItem {

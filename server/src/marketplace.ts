@@ -1,6 +1,12 @@
-// Marketplace — integracao com Shopee e Mercado Livre.
+// Marketplace (LEGADO) — sincronizacao simples por token de API.
 // POST /api/marketplace/sincronizar   — importa pedidos do marketplace
 // GET  /api/marketplace/status        — status da integracao
+//
+// EXPURGO 2026-10-05: o ramo da Shopee saiu junto com o conector nativo
+// (decisao da diretoria — barreiras burocraticas da API). O canal de
+// marketplace oficial do ERP e o modulo modules/connectors (Mercado
+// Livre, Mercado Pago e Nuvemshop, a plataforma-ponte da triangulacao);
+// este arquivo permanece apenas pelo endpoint legado por token.
 //
 // A loja propria (WordPress + WooCommerce) tem modulo dedicado em loja.ts:
 // importa pedidos da loja e empurra o saldo do ERP para ela.
@@ -14,9 +20,8 @@ import type { Row } from './store';
 
 type MarketplaceConfig = { provider: string; token: string; ativo: boolean };
 
-function getConfig(): { shopee: MarketplaceConfig | null; mercadolivre: MarketplaceConfig | null } {
+function getConfig(): { mercadolivre: MarketplaceConfig | null } {
   return {
-    shopee: process.env.SHOPEE_TOKEN ? { provider: 'shopee', token: process.env.SHOPEE_TOKEN, ativo: true } : null,
     mercadolivre: process.env.MERCADOLIVRE_TOKEN ? { provider: 'mercadolivre', token: process.env.MERCADOLIVRE_TOKEN, ativo: true } : null,
   };
 }
@@ -25,7 +30,6 @@ export function marketplaceStatus(_req: Request, res: Response) {
   const cfg = getConfig();
   const loja = configLoja();
   res.json({
-    shopee: cfg.shopee ? { configurado: true, ativo: cfg.shopee.ativo } : { configurado: false },
     mercadolivre: cfg.mercadolivre ? { configurado: true, ativo: cfg.mercadolivre.ativo } : { configurado: false },
     // Loja própria (brobond.com.br): pedidos + estoque são sincronizados pelos
     // endpoints /api/marketplace/loja/* — ver loja.ts.
@@ -37,39 +41,15 @@ export async function sincronizarPedidos(req: Request, res: Response) {
   const actor = currentUser(req);
   const cfg = getConfig();
   const provider = String(req.body?.provider || '');
-  if (!provider || (!cfg.shopee && !cfg.mercadolivre)) {
-    throw new HttpError(409, 'Nenhum marketplace configurado. Defina SHOPEE_TOKEN ou MERCADOLIVRE_TOKEN.');
+  if (!provider || !cfg.mercadolivre) {
+    throw new HttpError(409, 'Nenhum marketplace configurado. Defina MERCADOLIVRE_TOKEN.');
   }
 
   const s = getStore();
   const resultados: Row[] = [];
 
   // Simulacao: em producao, chamaria a API do marketplace
-  // Shopee: GET https://partner.shopeemobile.com/api/v2/orders/get_order_list
   // Mercado Livre: GET https://api.mercadolibre.com/orders/search?seller={seller_id}
-
-  if (provider === 'shopee' && cfg.shopee) {
-    // Integracao real com Shopee (requer token de parceiro)
-    try {
-      const resp = await fetch('https://partner.shopeemobile.com/api/v2/orders/get_order_list', {
-        headers: { 'Authorization': `Bearer ${cfg.shopee.token}`, 'Content-Type': 'application/json' },
-        method: 'POST',
-        body: JSON.stringify({ time_range: { start_time: Math.floor(Date.now() / 1000) - 86400 * 7, end_time: Math.floor(Date.now() / 1000) } }),
-      });
-      // Se a API responder, parseamos os pedidos
-      if (resp.ok) {
-        const data = (await resp.json()) as any;
-        // Criaria vendas no sistema para cada pedido
-        if (data.response?.orders) {
-          for (const order of data.response.orders) {
-            resultados.push({ origem: 'shopee', order_sn: order.order_sn, status: order.status });
-          }
-        }
-      }
-    } catch (e: any) {
-      console.warn('Shopee sync error:', e?.message);
-    }
-  }
 
   if (provider === 'mercadolivre' && cfg.mercadolivre) {
     try {

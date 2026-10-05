@@ -9,9 +9,11 @@
  *     faturamento e quem recebe a venda importada é o OPERADOR do ERP.
  *   • Auditoria por gancho injetado (`core/audit.ts`) em vez de
  *     `prisma.auditLog`.
- *   • A Nuvemshop do commerce NÃO existe aqui: o mapa de refresh é
- *     exaustivo sobre os QUATRO provedores remanescentes e o TypeScript
- *     garante isso em tempo de compilação (`satisfies Record<…>`).
+ *   • Shopee e TikTok foram REMOVIDOS do ecossistema (decisão da
+ *     diretoria, 2026-10-05): o mapa de refresh é exaustivo sobre o TRIO
+ *     DE PRODUÇÃO — MERCADOLIVRE, MERCADOPAGO e NUVEMSHOP — e o
+ *     TypeScript garante isso em tempo de compilação
+ *     (`satisfies Record<…>`).
  */
 
 import { auditConnector } from './audit';
@@ -31,6 +33,7 @@ import {
   CONNECTOR_PROVIDER_AUTH_MODEL,
   CONNECTOR_PROVIDER_DESCRIPTIONS,
   CONNECTOR_PROVIDER_LABELS,
+  CONNECTOR_PROVIDER_REDIRECT_ENV,
   CONNECTOR_PROVIDER_REQUIRED_ENV,
   CONNECTOR_PROVIDER_SLUGS,
   type ConnectorProviderName,
@@ -49,14 +52,7 @@ import {
   hasPersistedMercadoPagoCredentials,
   validateMercadoPagoAccessToken,
 } from '../mercadopago/mercadopago.service';
-import { buildShopeeAuthorizationUrl, exchangeShopeeCode, fetchShopeeShopInfo, refreshShopeeToken } from '../shopee/shopee.service';
-import {
-  buildTikTokAuthorizationUrl,
-  exchangeTikTokCode,
-  fetchTikTokAuthorizedShop,
-  isTikTokSandboxMode,
-  refreshTikTokToken,
-} from '../tiktok/tiktok.service';
+import { buildNuvemshopAuthorizationUrl, exchangeNuvemshopCode, fetchNuvemshopStore } from '../nuvemshop/nuvemshop.service';
 
 /** Margem de renovação: um token que vence em menos de 5 min é rotacionado. */
 const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
@@ -125,10 +121,10 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
   const now = deps.now ?? (() => new Date());
 
   /**
-   * Rotação de token por provedor. O mapa é EXAUSTIVO sobre os quatro
-   * provedores: incluir um quinto (ou tentar reintroduzir um removido,
-   * como a Nuvemshop) quebra a compilação em vez de virar um `undefined`
-   * silencioso em produção.
+   * Rotação de token por provedor. O mapa é EXAUSTIVO sobre o TRIO de
+   * produção: incluir um quarto (ou tentar reintroduzir um removido,
+   * como Shopee/TikTok) quebra a compilação em vez de virar um
+   * `undefined` silencioso em produção.
    */
   const TOKEN_REFRESHERS = {
     MERCADOLIVRE: async (connector: ConnectorRow, refreshToken: string) => {
@@ -140,28 +136,13 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
         shopId: connector.shopId,
       };
     },
-    SHOPEE: async (connector: ConnectorRow, refreshToken: string) => {
-      if (!connector.shopId) throw new ConnectorConfigError('shopId', 'SHOPEE');
-      const tokens = await refreshShopeeToken(refreshToken, connector.shopId);
-      return {
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        expiresAt: tokens.expiresAt,
-        shopId: connector.shopId,
-      };
-    },
-    TIKTOK: async (connector: ConnectorRow, refreshToken: string) => {
-      const tokens = await refreshTikTokToken(refreshToken);
-      return {
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        expiresAt: tokens.expiresAt,
-        shopId: connector.shopId,
-      };
-    },
     // O Access Token de produção do Mercado Pago não expira: não há o que
     // rotacionar — trocar a credencial é ato manual do operador.
     MERCADOPAGO: null,
+    // O token da Nuvemshop também é PERMANENTE (só morre quando um novo é
+    // emitido ou quando o lojista desinstala o app): não existe refresh
+    // token para rotacionar — reinstalar/reautorizar é o caminho.
+    NUVEMSHOP: null,
   } satisfies Record<
     ConnectorProviderName,
     | null
@@ -225,20 +206,16 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
             redirectUri: resolveMercadoLivreRedirectUri(undefined, dynamicRedirectUri),
           };
         }
-        case 'SHOPEE': {
-          const { getShopeeRedirectUri } = await import('../shopee/shopee.service');
+        case 'NUVEMSHOP': {
+          const { resolveNuvemshopRedirectUri } = await import('../nuvemshop/nuvemshop.service');
+          // A Nuvemshop não aceita `redirect_uri` na URL de autorização: a
+          // URL de redirecionamento é a cadastrada no Portal de Parceiros.
+          // Resolvemos o valor mesmo assim para devolvê-lo ao painel — é
+          // exatamente o endereço que precisa estar registrado lá.
           return {
             provider,
-            authorizationUrl: buildShopeeAuthorizationUrl(state, undefined, dynamicRedirectUri),
-            redirectUri: getShopeeRedirectUri(undefined, dynamicRedirectUri),
-          };
-        }
-        case 'TIKTOK': {
-          const { resolveTikTokRedirectUri } = await import('../tiktok/tiktok.service');
-          return {
-            provider,
-            authorizationUrl: buildTikTokAuthorizationUrl(state),
-            redirectUri: resolveTikTokRedirectUri(),
+            authorizationUrl: buildNuvemshopAuthorizationUrl(state),
+            redirectUri: resolveNuvemshopRedirectUri(undefined, dynamicRedirectUri),
           };
         }
         default:
@@ -283,51 +260,28 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
           return { usuarioId, connector };
         }
 
-        case 'SHOPEE': {
-          const shopId = (input.shopId ?? '').trim();
-          if (!shopId) {
-            throw new ConnectorError('A Shopee não informou o shop_id no callback de autorização.', provider);
-          }
-          const tokens = await exchangeShopeeCode(input.code, shopId);
-          const { shopName } = await fetchShopeeShopInfo(tokens.accessToken, shopId);
+        case 'NUVEMSHOP': {
+          const tokens = await exchangeNuvemshopCode(input.code);
+          const store = await fetchNuvemshopStore(tokens.accessToken, tokens.storeId);
           const connector = await repository.upsertConnection(usuarioId, provider, {
             status: 'CONNECTED',
             accessToken: encryptConnectorSecret(tokens.accessToken),
-            refreshToken: encryptConnectorSecret(tokens.refreshToken),
-            expiresAt: tokens.expiresAt,
-            shopId,
-            shopName,
+            // Token PERMANENTE: não há refresh token nem validade para
+            // guardar — gravar um `expiresAt` falso só provocaria uma
+            // renovação impossível.
+            refreshToken: null,
+            expiresAt: null,
+            // `user_id` da Nuvemshop = id da loja, exigido em toda chamada.
+            shopId: tokens.storeId,
+            shopName: store.storeName,
+            metadata: { scope: tokens.scope, storeUrl: store.storeUrl },
           });
           await auditConnector({
-            action: 'SHOPEE_CONNECTED',
+            action: 'NUVEMSHOP_CONNECTED',
             usuarioId,
             provider,
             connectorId: connector.id,
-            metadata: { shopId, shopName },
-          });
-          return { usuarioId, connector };
-        }
-
-        case 'TIKTOK': {
-          const tokens = await exchangeTikTokCode(input.code);
-          const shop = await fetchTikTokAuthorizedShop(tokens.accessToken);
-          const status = isTikTokSandboxMode() ? 'SANDBOX_ACTIVE' : 'CONNECTED';
-          const connector = await repository.upsertConnection(usuarioId, provider, {
-            status,
-            accessToken: encryptConnectorSecret(tokens.accessToken),
-            refreshToken: tokens.refreshToken ? encryptConnectorSecret(tokens.refreshToken) : null,
-            expiresAt: tokens.expiresAt,
-            // As APIs da Shop exigem shop_cipher, não o open_id do Login Kit.
-            shopId: shop.shopCipher,
-            shopName: shop.shopName,
-            metadata: { scope: tokens.scope, openId: tokens.openId, sandbox: isTikTokSandboxMode() },
-          });
-          await auditConnector({
-            action: 'TIKTOK_CONNECTED',
-            usuarioId,
-            provider,
-            connectorId: connector.id,
-            metadata: { shopCipherConfigured: true, status },
+            metadata: { storeId: tokens.storeId, storeName: store.storeName },
           });
           return { usuarioId, connector };
         }
@@ -476,11 +430,8 @@ function connectorConfigurationMissing(provider: ConnectorProviderName, dynamicR
   const missing = CONNECTOR_PROVIDER_REQUIRED_ENV[provider].filter((name) => !process.env[name]?.trim());
   if (!hasConnectorEncryptionKey()) missing.push('CONNECTOR_ENCRYPTION_KEY (32 bytes em base64 ou 64 hex)');
   if (CONNECTOR_PROVIDER_AUTH_MODEL[provider] === 'oauth2' && process.env.NODE_ENV === 'production') {
-    const explicitRedirect = provider === 'MERCADOLIVRE'
-      ? process.env.MERCADOLIVRE_REDIRECT_URI?.trim()
-      : provider === 'TIKTOK'
-        ? process.env.TIKTOK_REDIRECT_URI?.trim()
-        : process.env.SHOPEE_REDIRECT_URI?.trim();
+    const redirectEnvName = CONNECTOR_PROVIDER_REDIRECT_ENV[provider];
+    const explicitRedirect = redirectEnvName ? process.env[redirectEnvName]?.trim() : undefined;
     // O redirect dinâmico do painel (origem da Render, validado) também
     // satisfaz o requisito de callback público em HTTPS.
     if (!isProductionCallbackUrl(explicitRedirect) && !isProductionCallbackUrl(process.env.APP_URL) && !dynamicRedirectUri) {

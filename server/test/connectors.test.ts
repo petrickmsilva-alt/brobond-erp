@@ -1,8 +1,9 @@
 // ============================================================
 // Testes do módulo de conectores de marketplace (Fase 2):
-//   • registro estrito dos 4 provedores (Nuvemshop não existe mais)
+//   • registro estrito do TRIO de produção — MERCADOLIVRE, MERCADOPAGO
+//     e NUVEMSHOP (Shopee e TikTok não existem mais)
 //   • criptografia AES-256-GCM dos tokens em repouso
-//   • assinaturas de webhook (Mercado Pago, Shopee, TikTok)
+//   • assinaturas de webhook (Mercado Pago, Nuvemshop)
 //   • callbacks OAuth apontando ESTRITAMENTE para o host unificado
 //     da Render (https://brobond-erp.onrender.com/api/connectors/...)
 //   • redirect_uri dinâmico do painel (origem da Render validada)
@@ -50,8 +51,9 @@ const {
   resolveDynamicCallbackUri,
 } = await import('../../modules/connectors/index');
 
-const { getShopeeRedirectUri, verifyShopeeWebhookSignature } = await import('../../modules/connectors/shopee/shopee.service');
-const { buildTikTokAuthorizationUrl, resolveTikTokRedirectUri, verifyTikTokWebhookSignature } = await import('../../modules/connectors/tiktok/tiktok.service');
+const { buildNuvemshopAuthorizationUrl, resolveNuvemshopRedirectUri, verifyNuvemshopWebhookSignature } = await import(
+  '../../modules/connectors/nuvemshop/nuvemshop.service'
+);
 const { buildMercadoLivreAuthorizationUrl, resolveMercadoLivreRedirectUri } = await import('../../modules/connectors/mercadolivre/mercadolivre.service');
 const { verifyMercadoPagoWebhookSignature } = await import('../../modules/connectors/mercadopago/mercadopago.service');
 
@@ -93,22 +95,32 @@ function fakeDb(responder: (sql: string, params: readonly unknown[]) => any[]) {
 }
 
 describe('Conectores — registro de provedores', () => {
-  test('conhece exatamente os quatro canais suportados', () => {
-    assert.deepEqual([...CONNECTOR_PROVIDERS].sort(), ['MERCADOLIVRE', 'MERCADOPAGO', 'SHOPEE', 'TIKTOK']);
-    assert.equal(REGISTERED_CONNECTOR_COUNT, 4);
-    assert.equal(listConnectors().length, 4);
+  test('conhece exatamente o trio de produção', () => {
+    assert.deepEqual([...CONNECTOR_PROVIDERS].sort(), ['MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP']);
+    assert.equal(REGISTERED_CONNECTOR_COUNT, 3);
+    assert.equal(listConnectors().length, 3);
   });
 
-  test('a Nuvemshop foi removida e não resolve em lugar nenhum', () => {
-    assert.equal(parseConnectorProvider('nuvemshop'), null);
-    assert.equal(isConnectorProviderName('NUVEMSHOP'), false);
-    assert.equal(getConnectorFromInput('nuvemshop'), null);
+  test('Shopee e TikTok foram removidos e não resolvem em lugar nenhum', () => {
+    for (const literal of ['shopee', 'SHOPEE', 'tiktok', 'TikTok', 'tiktok-shop']) {
+      assert.equal(parseConnectorProvider(literal), null);
+      assert.equal(getConnectorFromInput(literal), null);
+    }
+    assert.equal(isConnectorProviderName('SHOPEE'), false);
+    assert.equal(isConnectorProviderName('TIKTOK'), false);
+  });
+
+  test('a Nuvemshop entrou como plataforma-ponte', () => {
+    assert.equal(parseConnectorProvider('nuvemshop'), 'NUVEMSHOP');
+    assert.equal(parseConnectorProvider('tiendanube'), 'NUVEMSHOP');
+    assert.equal(isConnectorProviderName('NUVEMSHOP'), true);
+    assert.equal(getConnectorFromInput('nuvemshop')?.provider, 'NUVEMSHOP');
   });
 
   test('aceita apelidos de URL e rejeita lixo', () => {
     assert.equal(parseConnectorProvider('mercado-livre'), 'MERCADOLIVRE');
-    assert.equal(parseConnectorProvider('TikTok'), 'TIKTOK');
-    assert.equal(parseConnectorProvider('shopee'), 'SHOPEE');
+    assert.equal(parseConnectorProvider('Nuvemshop'), 'NUVEMSHOP');
+    assert.equal(parseConnectorProvider('nuvem-shop'), 'NUVEMSHOP');
     assert.equal(parseConnectorProvider(''), null);
     assert.equal(parseConnectorProvider(42), null);
   });
@@ -121,7 +133,7 @@ describe('Conectores — registro de provedores', () => {
       assert.equal(typeof connector.fetchCatalog, 'function');
       assert.ok(saleChannelFromConnectorProvider(provider));
     }
-    assert.equal(saleChannelFromConnectorProvider('SHOPEE'), 'SHOPEE');
+    assert.equal(saleChannelFromConnectorProvider('NUVEMSHOP'), 'NUVEMSHOP');
   });
 
   test('o caminho público do webhook é derivado do slug', () => {
@@ -138,18 +150,16 @@ describe('Conectores — registro de provedores', () => {
 describe('Conectores — callback OAuth no host unificado da Render', () => {
   const REDIRECT_ML = `${HOST_UNIFICADO}/api/connectors/mercadolivre/callback`;
 
-  test('o caminho canônico de callback é /api/connectors/<slug>/callback para os 4 canais', () => {
+  test('o caminho canônico de callback é /api/connectors/<slug>/callback para o trio', () => {
     assert.equal(connectorCallbackPath('mercadolivre'), '/api/connectors/mercadolivre/callback');
     assert.equal(connectorCallbackPath('mercadopago'), '/api/connectors/mercadopago/callback');
-    assert.equal(connectorCallbackPath('shopee'), '/api/connectors/shopee/callback');
-    assert.equal(connectorCallbackPath('tiktok'), '/api/connectors/tiktok/callback');
+    assert.equal(connectorCallbackPath('nuvemshop'), '/api/connectors/nuvemshop/callback');
   });
 
   test('com APP_URL da Render, o redirect de cada provedor aponta estritamente para o host unificado', () => {
     return comEnv({ APP_URL: HOST_UNIFICADO, MERCADOLIVRE_REDIRECT_URI: undefined }, () => {
       assert.equal(resolveMercadoLivreRedirectUri(), REDIRECT_ML);
-      assert.equal(getShopeeRedirectUri(), `${HOST_UNIFICADO}/api/connectors/shopee/callback`);
-      assert.equal(resolveTikTokRedirectUri(), `${HOST_UNIFICADO}/api/connectors/tiktok/callback`);
+      assert.equal(resolveNuvemshopRedirectUri(), `${HOST_UNIFICADO}/api/connectors/nuvemshop/callback`);
     });
   });
 
@@ -331,42 +341,33 @@ describe('Conectores — tokens cifrados em repouso', () => {
 });
 
 describe('Conectores — assinatura dos webhooks', () => {
-  test('Shopee: assinatura válida passa, alterada no corpo falha', () => {
-    process.env.SHOPEE_PARTNER_ID = '1001';
-    process.env.SHOPEE_PARTNER_KEY = 'chave-parceiro';
-    // Webhook registrado no painel da Shopee apontando para o host unificado.
-    const url = `${HOST_UNIFICADO}/api/webhooks/shopee`;
-    const body = JSON.stringify({ code: 3, shop_id: 777, data: { ordersn: 'SN1' } });
-    const assinatura = createHmac('sha256', 'chave-parceiro').update(`${url}|${body}`).digest('hex');
-    assert.equal(verifyShopeeWebhookSignature(body, url, assinatura), true);
-    assert.equal(verifyShopeeWebhookSignature(`${body} `, url, assinatura), false);
-    assert.equal(verifyShopeeWebhookSignature(body, url, 'deadbeef'), false);
+  test('Nuvemshop: HMAC-SHA256 hex do corpo cru com o client secret', () => {
+    return comEnv({ NUVEMSHOP_CLIENT_SECRET: 'segredo-app-nuvem' }, () => {
+      const body = JSON.stringify({ store_id: 2093261, event: 'order/paid', id: 450789469 });
+      const assinatura = createHmac('sha256', 'segredo-app-nuvem').update(body).digest('hex');
+      assert.equal(verifyNuvemshopWebhookSignature(body, assinatura), true);
+      // Um byte a mais no corpo invalida a entrega inteira.
+      assert.equal(verifyNuvemshopWebhookSignature(`${body} `, assinatura), false);
+      assert.equal(verifyNuvemshopWebhookSignature(body, 'deadbeef'), false);
+      assert.equal(verifyNuvemshopWebhookSignature(body, null), false);
+    });
   });
 
-  test('TikTok Shop: autorização usa service_id do Partner Center, não Login Kit', () => {
-    const url = new URL(
-      buildTikTokAuthorizationUrl('csrf-state', {
-        serviceId: 'service-123',
-        appKey: 'app-key',
-        appSecret: 'app-secret',
-        redirectUri: `${HOST_UNIFICADO}/api/connectors/tiktok/callback`,
-        authorizeUrl: 'https://services.tiktokshop.com/open/authorize',
-        tokenBaseUrl: 'https://auth.tiktok-shops.com',
-      })
-    );
-    assert.equal(url.origin, 'https://services.tiktokshop.com');
-    assert.equal(url.searchParams.get('service_id'), 'service-123');
-    assert.equal(url.searchParams.get('state'), 'csrf-state');
-    assert.equal(url.searchParams.has('client_key'), false);
+  test('Nuvemshop: sem client secret no ambiente, nenhuma assinatura é aceita', () => {
+    return comEnv({ NUVEMSHOP_CLIENT_SECRET: undefined }, () => {
+      const body = JSON.stringify({ store_id: 1, event: 'order/paid', id: 2 });
+      const assinatura = createHmac('sha256', 'qualquer').update(body).digest('hex');
+      assert.equal(verifyNuvemshopWebhookSignature(body, assinatura), false);
+    });
   });
 
-  test('TikTok: assinatura sobre appKey + corpo cru', () => {
-    process.env.TIKTOK_APP_KEY = 'app-key';
-    process.env.TIKTOK_APP_SECRET = 'app-secret';
-    const body = JSON.stringify({ type: 1, shop_id: 'abc', data: { order_id: '99' } });
-    const assinatura = createHmac('sha256', 'app-secret').update(`app-key${body}`).digest('hex');
-    assert.equal(verifyTikTokWebhookSignature({ rawBody: body, signature: assinatura }), true);
-    assert.equal(verifyTikTokWebhookSignature({ rawBody: body, signature: 'xx' }), false);
+  test('Nuvemshop: a URL de autorização leva o app id no caminho e o state CSRF', () => {
+    return comEnv({ NUVEMSHOP_CLIENT_ID: '4321', NUVEMSHOP_CLIENT_SECRET: 'segredo-app-nuvem' }, () => {
+      const url = new URL(buildNuvemshopAuthorizationUrl('csrf-state'));
+      assert.equal(url.origin, 'https://www.nuvemshop.com.br');
+      assert.equal(url.pathname, '/apps/4321/authorize');
+      assert.equal(url.searchParams.get('state'), 'csrf-state');
+    });
   });
 
   test('Mercado Pago: manifesto ts/v1 do cabeçalho x-signature', () => {
@@ -396,7 +397,7 @@ describe('Conectores — assinatura dos webhooks', () => {
 
 describe('Conectores — ingestão idempotente de vendas', () => {
   test('a referência da venda é determinística por canal + pedido', () => {
-    assert.equal(marketplaceSaleReference('SHOPEE', 'SN-1'), 'shopee:SN-1');
+    assert.equal(marketplaceSaleReference('NUVEMSHOP', 'NS-1'), 'nuvemshop:NS-1');
     assert.equal(normalizeSaleCurrency('usd'), 'USD');
     assert.equal(normalizeSaleCurrency('xx'), 'BRL');
   });
@@ -409,14 +410,14 @@ describe('Conectores — ingestão idempotente de vendas', () => {
           return [
             {
               id: 's1',
-              reference: 'shopee:SN-1',
+              reference: 'nuvemshop:NS-1',
               quantity: 3,
               amount_cents: 9900,
               currency: 'BRL',
               status: 'PAID',
               occurred_at: new Date('2026-01-10T12:00:00Z'),
-              channel: 'SHOPEE',
-              external_order_id: 'SN-1',
+              channel: 'NUVEMSHOP',
+              external_order_id: 'NS-1',
               usuario_id: 7,
               created_at: new Date(),
               updated_at: new Date(),
@@ -428,8 +429,8 @@ describe('Conectores — ingestão idempotente de vendas', () => {
     );
 
     const result = await sales.upsertIngestedSale(7, {
-      channel: 'SHOPEE' as any,
-      externalOrderId: 'SN-1',
+      channel: 'NUVEMSHOP' as any,
+      externalOrderId: 'NS-1',
       amountCents: 9900,
       currency: 'BRL',
       status: 'PAID' as any,
@@ -452,14 +453,14 @@ describe('Conectores — ingestão idempotente de vendas', () => {
         return [
           {
             id: 's1',
-            reference: 'shopee:SN-1',
+            reference: 'nuvemshop:NS-1',
             quantity: 3,
             amount_cents: 9900,
             currency: 'BRL',
             status: 'PAID',
             occurred_at: new Date('2026-01-10T12:00:00Z'),
-            channel: 'SHOPEE',
-            external_order_id: 'SN-1',
+            channel: 'NUVEMSHOP',
+            external_order_id: 'NS-1',
             usuario_id: 7,
             created_at: new Date(),
             updated_at: new Date(),
@@ -471,8 +472,8 @@ describe('Conectores — ingestão idempotente de vendas', () => {
     const sales = createSalesService(() => db);
 
     const result = await sales.upsertIngestedSale(7, {
-      channel: 'SHOPEE' as any,
-      externalOrderId: 'SN-1',
+      channel: 'NUVEMSHOP' as any,
+      externalOrderId: 'NS-1',
       amountCents: 9900,
       currency: 'BRL',
       status: 'PAID' as any,
@@ -557,8 +558,9 @@ describe('Conectores — tópicos que carregam venda', () => {
   test('reconhece os tópicos de pedido de cada provedor', () => {
     assert.equal(isSaleIngestionEvent('MERCADOLIVRE', 'orders_v2'), true);
     assert.equal(isSaleIngestionEvent('MERCADOPAGO', 'payment'), true);
-    assert.equal(isSaleIngestionEvent('SHOPEE', '3'), true);
-    assert.equal(isSaleIngestionEvent('TIKTOK', '1'), true);
+    assert.equal(isSaleIngestionEvent('NUVEMSHOP', 'order/paid'), true);
+    assert.equal(isSaleIngestionEvent('NUVEMSHOP', 'order/cancelled'), true);
+    assert.equal(isSaleIngestionEvent('NUVEMSHOP', 'product/updated'), false);
     assert.equal(isSaleIngestionEvent('MERCADOPAGO', 'plan'), false);
     assert.equal(isSaleIngestionEvent('MERCADOLIVRE', null), false);
   });
