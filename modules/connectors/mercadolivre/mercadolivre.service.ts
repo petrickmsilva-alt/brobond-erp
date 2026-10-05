@@ -74,7 +74,7 @@ export function resolveMercadoLivreRedirectUri(env: AppUrlEnv = process.env): st
  * deliberadamente não é normalizado.
  */
 function normalizeAuthorizationClientId(clientId: string): string {
-  return clientId.trim().toLowerCase().replace(/\/+$/, '');
+  return clientId.trim().replace(/\/+$/, '');
 }
 
 /**

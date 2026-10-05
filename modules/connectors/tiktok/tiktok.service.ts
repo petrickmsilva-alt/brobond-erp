@@ -1,21 +1,9 @@
 /**
- * TikTok — Login Kit v2 (OAuth do usuário) + TikTok Shop Partner Center
- * (API do vendedor), SOMENTE servidor.
+ * TikTok Shop — OAuth do vendedor e Open API oficial, somente servidor.
  *
- * Fonte: `modules/connectors/tiktok/**` + `modules/marketplace/tiktok/
- * tiktok-bridge.service.ts` do brobond-ai-commerce (PR009/PR012/PR017),
- * consolidados em um único serviço porque no ERP os dois lados gravam na
- * MESMA linha de `connectors` (provedor TIKTOK) — não há mais a tabela
- * `TikTokAccount` separada do commerce.
- *
- * Dois conjuntos de credenciais, de propósito:
- *   • `TIKTOK_CLIENT_KEY`/`TIKTOK_CLIENT_SECRET` — Login Kit v2, o fluxo
- *     OAuth que conecta a conta (escopo `user.info.stats`);
- *   • `TIKTOK_APP_KEY`/`TIKTOK_APP_SECRET` — app vendedora do Shop
- *     Partner Center, usada para assinar as chamadas de pedido e para
- *     verificar a assinatura dos webhooks. Enquanto a aprovação comercial
- *     não sai, o conector fica `PENDING_APPROVAL` — isso é estado
- *     operacional esperado, NUNCA falha de servidor.
+ * IMPORTANTE: TikTok Login Kit (developers.tiktok.com) autentica um perfil
+ * social e NÃO concede acesso a pedidos/produtos da TikTok Shop. Este módulo
+ * usa as credenciais do Shop Partner Center: SERVICE_ID, APP_KEY e APP_SECRET.
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -25,22 +13,14 @@ import type { NormalizedContent } from '../core/connector.interface';
 import { CONNECTOR_PROVIDER_SLUGS } from '../core/providers';
 
 const PROVIDER = 'TIKTOK' as const;
-
-/** Host de consentimento padrão (família tiktok.com). */
-export const TIKTOK_AUTHORIZE_URL = 'https://www.tiktok.com/v2/auth/authorize/';
-/** Host de token padrão (família tiktokapis.com). */
-export const TIKTOK_TOKEN_URL = 'https://open.tiktokapis.com/v2/oauth/token/';
-/** Host da API do Login Kit (metadados de usuário). */
-export const TIKTOK_LOGIN_API_BASE_URL = 'https://open.tiktokapis.com';
-/** Host da API do TikTok Shop (pedidos, produtos). */
+export const TIKTOK_SHOP_AUTHORIZE_URL = 'https://services.tiktokshop.com/open/authorize';
+export const TIKTOK_SHOP_TOKEN_BASE_URL = 'https://auth.tiktok-shops.com';
 export const TIKTOK_SHOP_API_BASE_URL = 'https://open-api.tiktokglobalshop.com';
-/** Escopo exatamente igual ao salvo no painel de desenvolvedores. */
-export const TIKTOK_DEFAULT_SCOPE = 'user.info.stats';
 
 function read(name: string, env: AppUrlEnv = process.env): string | undefined {
   const value = env[name];
   const trimmed = typeof value === 'string' ? value.trim() : '';
-  return trimmed.length > 0 ? trimmed : undefined;
+  return trimmed || undefined;
 }
 
 function requiredEnv(name: string): string {
@@ -49,62 +29,43 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-export interface TikTokLoginConfig {
-  readonly clientKey: string;
-  readonly clientSecret: string;
+export interface TikTokShopOAuthConfig {
+  readonly serviceId: string;
+  readonly appKey: string;
+  readonly appSecret: string;
   readonly redirectUri: string;
-  readonly scope: string;
   readonly authorizeUrl: string;
-  readonly tokenUrl: string;
+  readonly tokenBaseUrl: string;
 }
 
-/**
- * O `redirect_uri` do Login Kit — ESTÁTICO. O TikTok compara o valor byte
- * a byte entre a autorização e a troca do código; uma barra final a mais
- * já é outro callback registrado.
- */
 export function resolveTikTokRedirectUri(env: AppUrlEnv = process.env): string {
   return resolveStaticRedirectUri(['TIKTOK_REDIRECT_URI'], CONNECTOR_PROVIDER_SLUGS.TIKTOK, env);
 }
 
-export function getTikTokLoginConfig(): TikTokLoginConfig {
+export function getTikTokShopOAuthConfig(): TikTokShopOAuthConfig {
   return {
-    clientKey: requiredEnv('TIKTOK_CLIENT_KEY'),
-    clientSecret: requiredEnv('TIKTOK_CLIENT_SECRET'),
+    serviceId: requiredEnv('TIKTOK_SERVICE_ID'),
+    appKey: requiredEnv('TIKTOK_APP_KEY'),
+    appSecret: requiredEnv('TIKTOK_APP_SECRET'),
     redirectUri: resolveTikTokRedirectUri(),
-    scope: read('TIKTOK_SCOPES') ?? TIKTOK_DEFAULT_SCOPE,
-    authorizeUrl: read('TIKTOK_AUTH_BASE_URL') ? `${read('TIKTOK_AUTH_BASE_URL')}/v2/auth/authorize/` : TIKTOK_AUTHORIZE_URL,
-    tokenUrl: TIKTOK_TOKEN_URL,
+    authorizeUrl: read('TIKTOK_AUTHORIZATION_URL') ?? TIKTOK_SHOP_AUTHORIZE_URL,
+    tokenBaseUrl: read('TIKTOK_TOKEN_BASE_URL') ?? TIKTOK_SHOP_TOKEN_BASE_URL,
   };
 }
 
-/** `true` quando as duas credenciais do Login Kit estão no ambiente. */
+/** Compatibilidade nominal: agora significa credenciais OAuth da TikTok Shop. */
 export function hasTikTokLoginCredentials(env: AppUrlEnv = process.env): boolean {
-  return Boolean(read('TIKTOK_CLIENT_KEY', env) && read('TIKTOK_CLIENT_SECRET', env));
+  return hasTikTokShopCredentials(env);
 }
 
-/** `true` quando a app vendedora do Shop Partner Center está configurada. */
 export function hasTikTokShopCredentials(env: AppUrlEnv = process.env): boolean {
-  return Boolean(read('TIKTOK_APP_KEY', env) && read('TIKTOK_APP_SECRET', env));
+  return Boolean(read('TIKTOK_SERVICE_ID', env) && read('TIKTOK_APP_KEY', env) && read('TIKTOK_APP_SECRET', env));
 }
 
-/**
- * Sandbox do TikTok Developers: plenamente funcional e NUNCA uma falha.
- * O conector fica `SANDBOX_ACTIVE` para o painel mostrar o estado real.
- */
 export function isTikTokSandboxMode(env: AppUrlEnv = process.env): boolean {
-  const clientKey = (read('TIKTOK_CLIENT_KEY', env) ?? '').toLowerCase();
-  if (!clientKey) return false;
   const flag = (read('TIKTOK_SANDBOX', env) ?? read('TIKTOK_SANDBOX_MODE', env) ?? '').toLowerCase();
-  if (['1', 'true', 'yes', 'on', 'enabled', 'sandbox'].includes(flag)) return true;
-  const sandboxClientKey = (read('TIKTOK_SANDBOX_CLIENT_KEY', env) ?? '').toLowerCase();
-  if (sandboxClientKey && clientKey === sandboxClientKey) return true;
-  return clientKey.startsWith('sb') || clientKey.includes('sandbox');
+  return ['1', 'true', 'yes', 'on', 'enabled', 'sandbox'].includes(flag);
 }
-
-// ------------------------------------------------------------------
-// OAuth (Login Kit v2)
-// ------------------------------------------------------------------
 
 export interface TikTokTokenSet {
   accessToken: string;
@@ -115,131 +76,85 @@ export interface TikTokTokenSet {
   refreshExpiresAt: Date | null;
 }
 
-interface TikTokRawTokenPayload {
+interface TikTokShopTokenData {
   access_token?: unknown;
   refresh_token?: unknown;
+  access_token_expire_in?: unknown;
+  refresh_token_expire_in?: unknown;
   open_id?: unknown;
-  scope?: unknown;
-  expires_in?: unknown;
-  refresh_expires_in?: unknown;
-  error?: unknown;
-  error_description?: unknown;
+  seller_name?: unknown;
+  granted_scopes?: unknown;
 }
-
-function toPositiveSeconds(value: unknown): number | null {
-  const parsed = typeof value === 'string' ? Number(value) : typeof value === 'number' ? value : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+interface TikTokShopTokenResponse extends TikTokShopTokenData {
+  code?: number;
+  message?: string;
+  data?: TikTokShopTokenData;
 }
 
 function asNonEmptyString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-/** URL de consentimento do Login Kit v2 (com o state CSRF do ERP). */
-export function buildTikTokAuthorizationUrl(state: string, config: TikTokLoginConfig = getTikTokLoginConfig()): string {
+/** Aceita tanto TTL em segundos quanto timestamp Unix retornado por versões da API. */
+function expirationDate(value: unknown, fallbackSeconds: number): Date {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return new Date(Date.now() + fallbackSeconds * 1000);
+  return parsed > 1_000_000_000 ? new Date(parsed * 1000) : new Date(Date.now() + parsed * 1000);
+}
+
+/** URL oficial de autorização de vendedor da TikTok Shop. */
+export function buildTikTokAuthorizationUrl(state: string, config: TikTokShopOAuthConfig = getTikTokShopOAuthConfig()): string {
   const url = new URL(config.authorizeUrl);
-  url.searchParams.set('client_key', config.clientKey);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', config.scope);
-  url.searchParams.set('redirect_uri', config.redirectUri);
+  url.searchParams.set('service_id', config.serviceId);
+  // O callback continua protegido pelo state de uso único do ERP.
   url.searchParams.set('state', state);
   return url.toString();
 }
 
-async function tiktokTokenRequest(config: TikTokLoginConfig, form: Record<string, string>): Promise<TikTokTokenSet> {
-  const body = new URLSearchParams({
-    client_key: config.clientKey,
-    client_secret: config.clientSecret,
-    ...form,
-  });
-
+async function tiktokShopTokenRequest(
+  operation: 'get' | 'refresh',
+  params: Record<string, string>,
+  config: TikTokShopOAuthConfig = getTikTokShopOAuthConfig()
+): Promise<TikTokTokenSet> {
+  const url = new URL(`/api/v2/token/${operation}`, config.tokenBaseUrl);
+  url.search = new URLSearchParams({ app_key: config.appKey, app_secret: config.appSecret, ...params }).toString();
   let response: Response;
   try {
-    response = await fetch(config.tokenUrl, {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      body,
-      cache: 'no-store',
-    });
+    response = await fetch(url, { method: 'GET', headers: { accept: 'application/json' }, cache: 'no-store' });
   } catch {
-    throw new ProviderApiError('Falha de rede ao contatar o TikTok.', 503, PROVIDER);
+    throw new ProviderApiError('Falha de rede ao contatar a TikTok Shop.', 503, PROVIDER);
   }
-  const payload = (await response.json().catch(() => undefined)) as TikTokRawTokenPayload | undefined;
-  const accessToken = asNonEmptyString(payload?.access_token);
-  const expiresIn = toPositiveSeconds(payload?.expires_in);
-  if (!response.ok || !accessToken || !expiresIn) {
+  const payload = (await response.json().catch(() => undefined)) as TikTokShopTokenResponse | undefined;
+  const data = payload?.data ?? payload;
+  const accessToken = asNonEmptyString(data?.access_token);
+  if (!response.ok || (payload?.code !== undefined && payload.code !== 0) || !accessToken) {
     const status = response.status || 502;
-    throw new ProviderApiError(
-      asNonEmptyString(payload?.error_description) ?? asNonEmptyString(payload?.error) ?? 'O TikTok rejeitou a troca de token.',
-      status,
-      PROVIDER,
-      { requiresReauth: status < 500 && status !== 429 }
-    );
+    throw new ProviderApiError(payload?.message || 'A TikTok Shop rejeitou a troca do código de autorização.', status, PROVIDER, {
+      requiresReauth: status < 500 && status !== 429,
+    });
   }
-  const refreshExpiresIn = toPositiveSeconds(payload?.refresh_expires_in);
+  const scopes = Array.isArray(data?.granted_scopes)
+    ? data.granted_scopes.filter((v): v is string => typeof v === 'string').join(',')
+    : asNonEmptyString(data?.granted_scopes) ?? '';
   return {
     accessToken,
-    refreshToken: asNonEmptyString(payload?.refresh_token),
-    openId: asNonEmptyString(payload?.open_id),
-    scope: asNonEmptyString(payload?.scope) ?? config.scope,
-    expiresAt: new Date(Date.now() + expiresIn * 1000),
-    refreshExpiresAt: refreshExpiresIn ? new Date(Date.now() + refreshExpiresIn * 1000) : null,
+    refreshToken: asNonEmptyString(data?.refresh_token),
+    openId: asNonEmptyString(data?.open_id),
+    scope: scopes,
+    expiresAt: expirationDate(data?.access_token_expire_in, 24 * 3600),
+    refreshExpiresAt: data?.refresh_token_expire_in ? expirationDate(data.refresh_token_expire_in, 365 * 24 * 3600) : null,
   };
 }
 
-/** Troca o `code` de autorização por tokens (Login Kit v2). */
-export async function exchangeTikTokCode(code: string, config: TikTokLoginConfig = getTikTokLoginConfig()): Promise<TikTokTokenSet> {
-  return tiktokTokenRequest(config, {
-    code,
-    grant_type: 'authorization_code',
-    redirect_uri: config.redirectUri,
-  });
+export async function exchangeTikTokCode(code: string, config: TikTokShopOAuthConfig = getTikTokShopOAuthConfig()): Promise<TikTokTokenSet> {
+  return tiktokShopTokenRequest('get', { auth_code: code, grant_type: 'authorized_code' }, config);
 }
 
-/**
- * Rotaciona o access token (vive 24h; o refresh token, 365 dias). Sem
- * este caminho, toda conta conectada há mais de um dia caía em EXPIRED e
- * o painel pedia uma reautorização inútil a cada "Sincronizar".
- */
 export async function refreshTikTokToken(
   refreshToken: string,
-  config: TikTokLoginConfig = getTikTokLoginConfig()
+  config: TikTokShopOAuthConfig = getTikTokShopOAuthConfig()
 ): Promise<TikTokTokenSet> {
-  return tiktokTokenRequest(config, { grant_type: 'refresh_token', refresh_token: refreshToken });
-}
-
-interface TikTokUserInfoResponse {
-  data?: { user?: { open_id?: string; display_name?: string; username?: string } };
-  error?: { code?: string; message?: string };
-}
-
-/** Identidade do titular da conta — dado não secreto gravado no conector. */
-export async function fetchTikTokIdentity(accessToken: string): Promise<{ openId: string | null; displayName: string | null }> {
-  const url = new URL('/v2/user/info/', TIKTOK_LOGIN_API_BASE_URL);
-  url.searchParams.set('fields', 'open_id,display_name,username');
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      headers: { authorization: `Bearer ${accessToken}` },
-      cache: 'no-store',
-    });
-  } catch {
-    throw new ProviderApiError('Falha de rede ao contatar o TikTok.', 503, PROVIDER);
-  }
-  const payload = (await response.json().catch(() => undefined)) as TikTokUserInfoResponse | undefined;
-  if (!response.ok) {
-    // A identidade é complementar: um erro aqui não invalida o token que
-    // o provedor acabou de emitir.
-    return { openId: null, displayName: null };
-  }
-  const user = payload?.data?.user;
-  return {
-    openId: user?.open_id ?? null,
-    displayName: user?.display_name ?? user?.username ?? null,
-  };
+  return tiktokShopTokenRequest('refresh', { refresh_token: refreshToken, grant_type: 'refresh_token' }, config);
 }
 
 // ------------------------------------------------------------------
@@ -308,6 +223,22 @@ async function tiktokShopRequest<T>(path: string, options: TikTokShopRequestOpti
     });
   }
   return (payload?.data ?? ({} as T)) as T;
+}
+
+/** Loja autorizada e seu `shop_cipher`, obrigatório nas APIs de catálogo/pedido. */
+export async function fetchTikTokAuthorizedShop(accessToken: string): Promise<{ shopCipher: string; shopName: string | null }> {
+  const data = await tiktokShopRequest<{
+    shops?: Array<{ cipher?: string; id?: string; name?: string; shop_name?: string }>;
+  }>('/authorization/202309/shops', { accessToken });
+  const shop = data.shops?.find((candidate) => candidate.cipher);
+  if (!shop?.cipher) {
+    throw new ProviderApiError(
+      'A autorização não retornou uma loja TikTok Shop. Confirme se a conta é vendedora e se o app possui o escopo Shop Authorized Information.',
+      502,
+      PROVIDER
+    );
+  }
+  return { shopCipher: shop.cipher, shopName: shop.name ?? shop.shop_name ?? null };
 }
 
 // ------------------------------------------------------------------

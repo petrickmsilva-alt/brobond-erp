@@ -37,7 +37,7 @@ const {
 } = await import('../../modules/connectors/index');
 
 const { verifyShopeeWebhookSignature } = await import('../../modules/connectors/shopee/shopee.service');
-const { verifyTikTokWebhookSignature } = await import('../../modules/connectors/tiktok/tiktok.service');
+const { buildTikTokAuthorizationUrl, verifyTikTokWebhookSignature } = await import('../../modules/connectors/tiktok/tiktok.service');
 const { verifyMercadoPagoWebhookSignature } = await import('../../modules/connectors/mercadopago/mercadopago.service');
 
 // ------------------------------------------------------------
@@ -130,6 +130,23 @@ describe('Conectores — assinatura dos webhooks', () => {
     assert.equal(verifyShopeeWebhookSignature(body, url, assinatura), true);
     assert.equal(verifyShopeeWebhookSignature(`${body} `, url, assinatura), false);
     assert.equal(verifyShopeeWebhookSignature(body, url, 'deadbeef'), false);
+  });
+
+  test('TikTok Shop: autorização usa service_id do Partner Center, não Login Kit', () => {
+    const url = new URL(
+      buildTikTokAuthorizationUrl('csrf-state', {
+        serviceId: 'service-123',
+        appKey: 'app-key',
+        appSecret: 'app-secret',
+        redirectUri: 'https://erp.example.com/api/connectors/tiktok/callback',
+        authorizeUrl: 'https://services.tiktokshop.com/open/authorize',
+        tokenBaseUrl: 'https://auth.tiktok-shops.com',
+      })
+    );
+    assert.equal(url.origin, 'https://services.tiktokshop.com');
+    assert.equal(url.searchParams.get('service_id'), 'service-123');
+    assert.equal(url.searchParams.get('state'), 'csrf-state');
+    assert.equal(url.searchParams.has('client_key'), false);
   });
 
   test('TikTok: assinatura sobre appKey + corpo cru', () => {

@@ -133,6 +133,16 @@ connectorsRouter.get(
 );
 
 connectorsRouter.post(
+  '/mercadopago/conectar-ambiente',
+  run(async (req, res) => {
+    assertConnectorsDatabase();
+    const actor = currentUser(req);
+    const connector = await connectorService.connectMercadoPagoFromEnvironment(actor.id);
+    res.json({ ok: true, connector: await connectorService.getStatus(actor.id, connector.provider) });
+  })
+);
+
+connectorsRouter.post(
   '/mercadopago/conectar',
   run(async (req, res) => {
     assertConnectorsDatabase();
@@ -261,9 +271,13 @@ publicConnectorsRouter.all('/api/connectors/:provider/callback', rawBody, (req: 
   if (!provider) return next(); // slug desconhecido segue o fluxo normal (404 do /api)
   void (async () => {
     const query = queryRecord(req);
-    const code = query.code ?? '';
-    const state = query.state ?? '';
-    const erroProvedor = query.error ?? query.error_description ?? '';
+    // Alguns callbacks da TikTok Shop chegam como formulário POST; outros,
+    // inclusive Mercado Livre, usam query string.
+    const form = new URLSearchParams(rawBodyString(req));
+    const value = (name: string) => query[name] ?? form.get(name) ?? '';
+    const code = value('code') || value('auth_code');
+    const state = value('state');
+    const erroProvedor = value('error_description') || value('error');
     try {
       if (!hasDatabaseUrl()) {
         throw new ConnectorError('Conectores exigem banco de dados configurado (DATABASE_URL).', provider);

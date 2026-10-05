@@ -47,7 +47,7 @@ export const CONNECTOR_PROVIDER_DESCRIPTIONS: Record<ConnectorProviderName, stri
   MERCADOLIVRE: 'Meli API oficial — OAuth2 com rotação automática de refresh token.',
   MERCADOPAGO: 'Checkout e faturamento via Access Token de produção.',
   SHOPEE: 'Shopee Open Platform v2 com assinatura HMAC-SHA256.',
-  TIKTOK: 'TikTok Login Kit v2 / TikTok Shop Partner Center (OAuth2 oficial).',
+  TIKTOK: 'TikTok Shop Partner Center — OAuth2 oficial para pedidos e catálogo.',
 };
 
 /** O que o operador conecta, por provedor (objeto da chamada para ação). */
@@ -131,7 +131,7 @@ export const CONNECTOR_PROVIDER_REQUIRED_ENV: Record<ConnectorProviderName, read
   MERCADOLIVRE: ['MERCADOLIVRE_CLIENT_ID', 'MERCADOLIVRE_CLIENT_SECRET'],
   MERCADOPAGO: [],
   SHOPEE: ['SHOPEE_PARTNER_ID', 'SHOPEE_PARTNER_KEY'],
-  TIKTOK: ['TIKTOK_CLIENT_KEY', 'TIKTOK_CLIENT_SECRET'],
+  TIKTOK: ['TIKTOK_SERVICE_ID', 'TIKTOK_APP_KEY', 'TIKTOK_APP_SECRET'],
 };
 
 // ------------------------------------------------------------------

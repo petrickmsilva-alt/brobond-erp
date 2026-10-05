@@ -51,8 +51,7 @@ import { buildShopeeAuthorizationUrl, exchangeShopeeCode, fetchShopeeShopInfo, r
 import {
   buildTikTokAuthorizationUrl,
   exchangeTikTokCode,
-  fetchTikTokIdentity,
-  hasTikTokShopCredentials,
+  fetchTikTokAuthorizedShop,
   isTikTokSandboxMode,
   refreshTikTokToken,
 } from '../tiktok/tiktok.service';
@@ -155,7 +154,7 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         expiresAt: tokens.expiresAt,
-        shopId: tokens.openId ?? connector.shopId,
+        shopId: connector.shopId,
       };
     },
     // O Access Token de produção do Mercado Pago não expira: não há o que
@@ -197,6 +196,10 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
         throw new ConnectorError(`O conector "${provider}" é conectado por credenciais de produção, não por OAuth.`, provider);
       }
       assertEncryptionKey();
+      const missing = connectorConfigurationMissing(provider);
+      if (missing.length) {
+        throw new ConnectorError(`Configuração incompleta do conector: ${missing.join(', ')}.`, provider);
+      }
       const state = await oauthStates.issue(usuarioId, provider);
       switch (provider) {
         case 'MERCADOLIVRE': {
@@ -290,25 +293,24 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
 
         case 'TIKTOK': {
           const tokens = await exchangeTikTokCode(input.code);
-          const identity = await fetchTikTokIdentity(tokens.accessToken);
-          // Sandbox é estado funcional, não erro; sem a app vendedora
-          // aprovada o canal fica PENDING_APPROVAL (também não é falha).
-          const status = isTikTokSandboxMode() ? 'SANDBOX_ACTIVE' : hasTikTokShopCredentials() ? 'CONNECTED' : 'PENDING_APPROVAL';
+          const shop = await fetchTikTokAuthorizedShop(tokens.accessToken);
+          const status = isTikTokSandboxMode() ? 'SANDBOX_ACTIVE' : 'CONNECTED';
           const connector = await repository.upsertConnection(usuarioId, provider, {
             status,
             accessToken: encryptConnectorSecret(tokens.accessToken),
             refreshToken: tokens.refreshToken ? encryptConnectorSecret(tokens.refreshToken) : null,
             expiresAt: tokens.expiresAt,
-            shopId: tokens.openId ?? identity.openId,
-            shopName: identity.displayName,
-            metadata: { scope: tokens.scope, sandbox: isTikTokSandboxMode() },
+            // As APIs da Shop exigem shop_cipher, não o open_id do Login Kit.
+            shopId: shop.shopCipher,
+            shopName: shop.shopName,
+            metadata: { scope: tokens.scope, openId: tokens.openId, sandbox: isTikTokSandboxMode() },
           });
           await auditConnector({
             action: 'TIKTOK_CONNECTED',
             usuarioId,
             provider,
             connectorId: connector.id,
-            metadata: { openId: connector.shopId, status },
+            metadata: { shopCipherConfigured: true, status },
           });
           return { usuarioId, connector };
         }
@@ -316,6 +318,15 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
         default:
           throw new ConnectorError(`O conector "${provider}" não possui fluxo OAuth.`, provider);
       }
+    },
+
+    /** Ativa para este operador o par provisionado no ambiente do servidor. */
+    async connectMercadoPagoFromEnvironment(usuarioId: number): Promise<ConnectorRow> {
+      const credentials = getMercadoPagoEnvironmentCredentials();
+      if (!credentials) {
+        throw new ConnectorConfigError('MERCADOPAGO_ACCESS_TOKEN e MERCADOPAGO_PUBLIC_KEY', 'MERCADOPAGO');
+      }
+      return this.connectMercadoPago(usuarioId, credentials);
     },
 
     /**
@@ -435,13 +446,39 @@ function assertEncryptionKey(): void {
   }
 }
 
+function isProductionCallbackUrl(value: string | undefined): boolean {
+  try {
+    const url = new URL((value ?? '').trim());
+    return url.protocol === 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1' && url.hostname.includes('.');
+  } catch {
+    return false;
+  }
+}
+
+function connectorConfigurationMissing(provider: ConnectorProviderName): string[] {
+  const missing = CONNECTOR_PROVIDER_REQUIRED_ENV[provider].filter((name) => !process.env[name]?.trim());
+  if (!hasConnectorEncryptionKey()) missing.push('CONNECTOR_ENCRYPTION_KEY (32 bytes em base64 ou 64 hex)');
+  if (CONNECTOR_PROVIDER_AUTH_MODEL[provider] === 'oauth2' && process.env.NODE_ENV === 'production') {
+    const explicitRedirect = provider === 'MERCADOLIVRE'
+      ? process.env.MERCADOLIVRE_REDIRECT_URI?.trim()
+      : provider === 'TIKTOK'
+        ? process.env.TIKTOK_REDIRECT_URI?.trim()
+        : process.env.SHOPEE_REDIRECT_URI?.trim();
+    if (!isProductionCallbackUrl(explicitRedirect) && !isProductionCallbackUrl(process.env.APP_URL)) {
+      missing.push('APP_URL ou REDIRECT_URI público em HTTPS');
+    }
+  }
+  return [...new Set(missing)];
+}
+
 /** Projeção segura de uma linha de `connectors` para o painel. */
 export function toConnectorStatusDTO(provider: ConnectorProviderName, row: ConnectorRow | null): ConnectorStatusDTO {
-  const missingEnv = CONNECTOR_PROVIDER_REQUIRED_ENV[provider].filter((name) => !process.env[name]?.trim());
-  // O Mercado Pago aceita credencial por painel OU por ambiente: ele só
-  // está "não configurado" quando não tem nenhuma das duas.
-  const configured =
-    provider === 'MERCADOPAGO' ? Boolean(row?.accessToken) || getMercadoPagoEnvironmentCredentials() !== null : missingEnv.length === 0;
+  const missingEnv = connectorConfigurationMissing(provider);
+  // O Mercado Pago aceita credencial por painel OU por ambiente, mas todos
+  // os caminhos persistidos exigem uma chave de cifra válida.
+  const configured = provider === 'MERCADOPAGO'
+    ? hasConnectorEncryptionKey() && (Boolean(row?.accessToken) || getMercadoPagoEnvironmentCredentials() !== null)
+    : missingEnv.length === 0;
   const status = row?.status ?? 'DISCONNECTED';
   return {
     provider,
@@ -464,9 +501,18 @@ export function toConnectorStatusDTO(provider: ConnectorProviderName, row: Conne
     syncCount: row?.syncCount ?? 0,
     hasAccessToken: Boolean(row?.accessToken),
     hasRefreshToken: Boolean(row?.refreshToken),
+    environmentCredentialsAvailable: provider === 'MERCADOPAGO' && getMercadoPagoEnvironmentCredentials() !== null,
     // Prévia mascarada: o painel nunca recebe a chave pública inteira a
     // partir da cifra — só a confirmação visual de que há uma gravada.
-    publicKeyPreview: row?.publicKey ? maskConnectorSecretPreview(row.publicKey) : null,
+    publicKeyPreview: row?.publicKey
+      ? (() => {
+          try {
+            return maskConnectorSecretPreview(decryptConnectorSecret(row.publicKey));
+          } catch {
+            return null;
+          }
+        })()
+      : null,
     requiresReauth: status === 'REAUTH_REQUIRED' || status === 'EXPIRED',
     updatedAt: row?.updatedAt ? row.updatedAt.toISOString() : null,
   };

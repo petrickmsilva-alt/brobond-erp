@@ -147,7 +147,7 @@ export const MODULES: Module[] = [
     path: '/conectores/tiktok',
     minPerfil: 'gerente',
     connector: 'TIKTOK',
-    description: 'TikTok Login Kit v2 / TikTok Shop Partner Center (OAuth2 oficial).',
+    description: 'TikTok Shop Partner Center: conexão OAuth2 oficial com catálogo e pedidos da loja.',
   },
   {
     id: 'conector-instagram',

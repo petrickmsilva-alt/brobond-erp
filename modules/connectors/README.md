@@ -10,7 +10,7 @@ dos quatro canais suportados.
 | **Mercado Livre** | OAuth 2.0 (`redirect_uri` estático)       | notificação → re-fetch na API          |
 | **Mercado Pago**  | credenciais de produção coladas no painel | webhook assinado (HMAC)                |
 | **Shopee**        | OAuth (partner sign)                      | push assinado (HMAC sobre URL + corpo) |
-| **TikTok**        | Login Kit v2 + Shop Partner Center        | webhook assinado (HMAC)                |
+| **TikTok**        | OAuth da loja no Shop Partner Center      | webhook assinado (HMAC)                |
 
 > A **Nuvemshop foi removida do ecossistema**. Não existe builder, slug,
 > rótulo, enum de canal nem ramo de persistência para ela: `parseConnectorProvider('nuvemshop')`
