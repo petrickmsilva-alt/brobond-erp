@@ -13,13 +13,13 @@ function apply(pref: ThemePref) {
   document.documentElement.classList.toggle('dark', dark);
 }
 
-/** Lê a preferência salva (ou 'system' se nunca escolhida) e já aplica antes do primeiro paint. */
+/** Lê a preferência salva (ou 'dark' — padrão Brobond AI ERP — se nunca escolhida). */
 export function getStoredTheme(): ThemePref {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'system';
+    return raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'dark';
   } catch {
-    return 'system';
+    return 'dark';
   }
 }
 

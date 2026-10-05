@@ -55,7 +55,7 @@ export default function Layout() {
     .join('');
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full bg-navy-50 dark:bg-transparent">
       <Sidebar open={open} onClose={() => setOpen(false)} />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -65,7 +65,7 @@ export default function Layout() {
         >
           Pular para o conteúdo
         </a>
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6 dark:border-navy-800 dark:bg-navy-900">
+        <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6 dark:border-slate-800/60 dark:bg-[#090d16]/80 dark:backdrop-blur-md">
           <div className="flex min-w-0 items-center gap-3">
             <button className="btn-icon -ml-2 md:hidden" onClick={() => setOpen(true)} aria-label="Abrir menu">
               <Menu className="h-5 w-5" />
@@ -87,13 +87,13 @@ export default function Layout() {
           <div className="flex items-center gap-2 sm:gap-3">
             <button
               onClick={() => setPaletteOpen(true)}
-              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-sm text-slate-400 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-600 sm:px-3 dark:border-navy-700 dark:bg-navy-800 dark:text-navy-300 dark:hover:border-navy-600 dark:hover:bg-navy-700 dark:hover:text-navy-200"
+              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-sm text-slate-400 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-600 sm:px-3 dark:border-slate-800/60 dark:bg-slate-900/50 dark:text-slate-400 dark:hover:border-slate-700 dark:hover:bg-slate-800/60 dark:hover:text-slate-200"
               aria-label="Busca rápida"
               title="Busca rápida (Ctrl/Cmd+K)"
             >
               <Search className="h-4 w-4" />
               <span className="hidden md:inline">Buscar...</span>
-              <kbd className="hidden rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-400 md:inline dark:border-navy-600 dark:bg-navy-900 dark:text-navy-300">Ctrl K</kbd>
+              <kbd className="hidden rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-400 md:inline dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-400">Ctrl K</kbd>
             </button>
 
             <div className="relative" ref={menuRef}>
@@ -132,7 +132,7 @@ export default function Layout() {
           </div>
         </header>
 
-        <main id="conteudo-principal" className="flex-1 overflow-y-auto" tabIndex={-1}>
+        <main id="conteudo-principal" className="flex-1 overflow-y-auto bg-transparent" tabIndex={-1}>
           <Outlet />
         </main>
       </div>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -96,12 +97,12 @@ export default function Dashboard() {
 
   const kpis = data
     ? [
-        { label: 'Vendas do mês', value: formatMoney(data.vendasMes), sub: `${formatNumber(data.vendasAbertas)} em aberto`, icon: Banknote, to: '/vendas', accent: 'bg-emerald-600' },
+        { label: 'Vendas do mês', value: formatMoney(data.vendasMes), sub: `${formatNumber(data.vendasAbertas)} em aberto`, icon: Banknote, to: '/vendas', accent: 'text-emerald-600 dark:text-emerald-400', badge: 'Receita' },
         ...(podeFin
-          ? [{ label: 'Saldo em contas', value: formatMoney(fin?.saldoContasTotal ?? 0), sub: `${formatMoney(fin?.aReceber30 ?? 0)} a receber · ${formatMoney(fin?.aPagar30 ?? 0)} a pagar`, icon: Wallet, to: '/financeiro', accent: 'bg-navy-800' }]
+          ? [{ label: 'Saldo em contas', value: formatMoney(fin?.saldoContasTotal ?? 0), sub: `${formatMoney(fin?.aReceber30 ?? 0)} a receber · ${formatMoney(fin?.aPagar30 ?? 0)} a pagar`, icon: Wallet, to: '/financeiro', accent: 'text-sky-600 dark:text-sky-400', badge: 'Caixa' }]
           : []),
-        { label: 'Itens em alerta', value: formatNumber(data.itensAlerta), sub: 'abaixo do mínimo', icon: AlertTriangle, to: '/estoque', accent: data.itensAlerta > 0 ? 'bg-red-600' : 'bg-slate-500' },
-        { label: 'Peças em estoque', value: formatNumber(data.pecasEstoque), sub: `${formatNumber(data.valorizacao?.produtosComSaldo ?? 0)} produto(s) com saldo`, icon: Package, to: '/estoque', accent: 'bg-brand-500' },
+        { label: 'Itens em alerta', value: formatNumber(data.itensAlerta), sub: 'abaixo do mínimo', icon: AlertTriangle, to: '/estoque', accent: data.itensAlerta > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-300', badge: 'Alerta' },
+        { label: 'Peças em estoque', value: formatNumber(data.pecasEstoque), sub: `${formatNumber(data.valorizacao?.produtosComSaldo ?? 0)} produto(s) com saldo`, icon: Package, to: '/estoque', accent: 'text-brand-600 dark:text-brand-400', badge: 'Estoque' },
       ].slice(0, 4)
     : [];
 
@@ -110,9 +111,9 @@ export default function Dashboard() {
   const val = data?.valorizacao;
   const custos = val
     ? [
-        { key: 'custo' as const, label: 'Custo de produção', value: val.custo, sub: 'Ficha técnica: insumos + mão de obra + indiretos', icon: Factory, accent: 'bg-navy-800', to: '/custo' },
-        { key: 'atacado' as const, label: 'Custo no atacado', value: val.atacado, sub: val.semPrecoAtacado > 0 ? `${formatNumber(val.semPrecoAtacado)} produto(s) sem preço de atacado (usa varejo)` : 'Preço de atacado × peças em estoque', icon: Boxes, accent: 'bg-brand-500', to: '/relatorios?relatorio=estoque-posicao' },
-        { key: 'varejo' as const, label: 'Custo no varejo', value: val.varejo, sub: 'Preço de venda × peças em estoque', icon: Store, accent: 'bg-emerald-600', to: '/relatorios?relatorio=estoque-posicao' },
+        { key: 'custo' as const, label: 'Custo de produção', value: val.custo, sub: 'Ficha técnica: insumos + mão de obra + indiretos', icon: Factory, accent: 'text-sky-600 dark:text-sky-400', badge: 'Produção', to: '/custo' },
+        { key: 'atacado' as const, label: 'Custo no atacado', value: val.atacado, sub: val.semPrecoAtacado > 0 ? `${formatNumber(val.semPrecoAtacado)} produto(s) sem preço de atacado (usa varejo)` : 'Preço de atacado × peças em estoque', icon: Boxes, accent: 'text-brand-600 dark:text-brand-400', badge: 'Atacado', to: '/relatorios?relatorio=estoque-posicao' },
+        { key: 'varejo' as const, label: 'Custo no varejo', value: val.varejo, sub: 'Preço de venda × peças em estoque', icon: Store, accent: 'text-emerald-600 dark:text-emerald-400', badge: 'Varejo', to: '/relatorios?relatorio=estoque-posicao' },
       ]
     : [];
 
@@ -148,32 +149,24 @@ export default function Dashboard() {
           {/* KPIs estratégicos */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {kpis.map((k) => (
-              <Link key={k.label} to={k.to} className="card group flex items-center gap-4 p-5 transition-shadow hover:shadow-modal">
-                <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-white ${k.accent}`}>
-                  <k.icon className="h-5 w-5" />
-                </span>
-                <div className="min-w-0">
-                  <div className="truncate text-xl font-bold tabular-nums text-navy-900 dark:text-white sm:text-2xl">{k.value}</div>
-                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-navy-300">{k.label}</div>
-                  <div className="truncate text-xs text-slate-400 dark:text-navy-300">{k.sub}</div>
-                </div>
-              </Link>
+              <KpiCard key={k.label} to={k.to} icon={k.icon} badge={k.badge} accent={k.accent} label={k.label} value={k.value} sub={k.sub} />
             ))}
           </div>
 
           {/* Estoque valorizado — custo de produção × atacado × varejo */}
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
             {custos.map((c) => (
-              <Link key={c.key} to={c.to} className="card group flex items-center gap-4 p-5 transition-shadow hover:shadow-modal" data-testid={`kpi-${c.key}`}>
-                <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-white ${c.accent}`}>
-                  <c.icon className="h-5 w-5" />
-                </span>
-                <div className="min-w-0">
-                  <div className="truncate text-xl font-bold tabular-nums text-navy-900 dark:text-white sm:text-2xl">{formatMoney(c.value)}</div>
-                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-navy-300">{c.label}</div>
-                  <div className="truncate text-xs text-slate-400 dark:text-navy-300" title={c.sub}>{c.sub}</div>
-                </div>
-              </Link>
+              <KpiCard
+                key={c.key}
+                testId={`kpi-${c.key}`}
+                to={c.to}
+                icon={c.icon}
+                badge={c.badge}
+                accent={c.accent}
+                label={c.label}
+                value={formatMoney(c.value)}
+                sub={c.sub}
+              />
             ))}
           </div>
 
@@ -418,6 +411,54 @@ function QuickLink({ to, icon: Icon, title, text }: { to: string; icon: any; tit
         <div className="truncate text-xs text-slate-500 dark:text-navy-300">{text}</div>
       </div>
       <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-slate-300 dark:text-navy-600" />
+    </Link>
+  );
+}
+
+/**
+ * Cartão de KPI do padrão "Brobond AI ERP": superfície escura translúcida e
+ * uniforme (sem blocos sólidos de cor), com o destaque cromático só na
+ * tipografia monoespaçada do valor e num badge sutil no topo do cartão.
+ */
+function KpiCard({
+  to,
+  icon: Icon,
+  label,
+  value,
+  sub,
+  accent,
+  badge,
+  testId,
+}: {
+  to: string;
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  sub: string;
+  accent: string;
+  badge?: string;
+  testId?: string;
+}) {
+  return (
+    <Link
+      to={to}
+      data-testid={testId}
+      className="card group relative overflow-hidden p-5 transition-colors hover:border-slate-700 dark:hover:bg-slate-900/70"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <span className={`inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] dark:border-slate-800/60 dark:bg-slate-800/40 ${accent}`}>
+          <Icon className="h-3 w-3" />
+          {badge ?? label}
+        </span>
+        <ArrowRight className="h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 dark:text-slate-600" />
+      </div>
+      <div className={`kpi-value mt-3 truncate ${accent}`} title={value}>
+        {value}
+      </div>
+      <div className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</div>
+      <div className="truncate text-xs text-slate-400 dark:text-slate-500" title={sub}>
+        {sub}
+      </div>
     </Link>
   );
 }

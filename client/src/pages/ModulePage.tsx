@@ -60,6 +60,7 @@ const FinanceiroPage = lazy(() => import('./FinanceiroPage'));
 const AjudaPage = lazy(() => import('./AjudaPage'));
 const UsuariosPage = lazy(() => import('./UsuariosPage'));
 const WebhooksPage = lazy(() => import('./WebhooksPage'));
+const ConectorPage = lazy(() => import('./ConectorPage'));
 
 const PAGE_SIZE = 25;
 
@@ -71,6 +72,7 @@ export default function ModulePage({ module }: { module: Module }) {
   const meta = useMeta();
   const resource = module.resource ? meta.resources[module.resource] : undefined;
 
+  if (module.connector) return <Suspense fallback={<SubPageLoading />}><ConectorPage module={module} /></Suspense>;
   if (module.id === 'usuarios') return <Suspense fallback={<SubPageLoading />}><UsuariosPage /></Suspense>;
   if (module.id === 'webhooks') return <Suspense fallback={<SubPageLoading />}><WebhooksPage /></Suspense>;
   if (module.id === 'estoque') return <Suspense fallback={<SubPageLoading />}><EstoqueGradePage /></Suspense>;

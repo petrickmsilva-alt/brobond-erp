@@ -18,7 +18,7 @@ export default function PlannedModule({ module }: { module: Module }) {
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-navy-800 text-white">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-800/60 bg-slate-900/60 text-brand-400">
               <Icon className="h-5 w-5" />
             </span>
             {module.label}
@@ -29,18 +29,18 @@ export default function PlannedModule({ module }: { module: Module }) {
 
       <div className="card p-6 sm:p-8">
         <div className="flex items-start gap-4">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-600">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-500/10 text-brand-400">
             <Construction className="h-5 w-5" />
           </div>
           <div className="min-w-0">
-            <h2 className="text-base font-bold text-navy-900">Módulo em desenvolvimento</h2>
-            <p className="mt-1 text-sm text-slate-500">
+            <h2 className="text-base font-bold text-navy-900 dark:text-white">Módulo em desenvolvimento</h2>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
               Este módulo será construído sobre os cadastros que já funcionam. O que está previsto:
             </p>
             {module.planned && (
               <ul className="mt-4 space-y-2">
                 {module.planned.map((p) => (
-                  <li key={p} className="flex items-start gap-2 text-sm text-slate-700">
+                  <li key={p} className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
                     <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-navy-300" />
                     {p}
                   </li>

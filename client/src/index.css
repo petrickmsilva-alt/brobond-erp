@@ -33,6 +33,10 @@
   --brand-800: 108 66 20;   /* #6C4214 */
 
   --charcoal: 35 31 32;     /* #231F20 */
+
+  /* Fase 3 — "Brobond AI ERP" Dark Premium: cinza-carbono profundo */
+  --carbon-900: #0b0f19;    /* fundo global */
+  --carbon-950: #090d16;    /* sidebar / header */
 }
 
 /* ------------------------------------------------------------------
@@ -54,8 +58,16 @@ body,
 }
 
 body {
-  @apply bg-navy-50 text-slate-800 antialiased transition-colors dark:bg-navy-950 dark:text-slate-200;
+  @apply bg-navy-50 text-slate-800 antialiased transition-colors dark:text-slate-200;
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+/* Fundo global do Dark Premium: carbono uniforme, sem blocos cinza-claro. */
+.dark body {
+  background-color: var(--carbon-900);
+  background-image: radial-gradient(1200px 600px at 15% -10%, rgba(201, 131, 46, 0.06), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(58, 86, 133, 0.1), transparent 55%);
+  background-attachment: fixed;
 }
 
 /* Barra de rolagem discreta (WebKit) */
@@ -77,7 +89,7 @@ body {
       placeholder:text-slate-400 transition-colors
       focus:border-navy-500 focus:outline-none focus:ring-2 focus:ring-navy-500/20
       disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500
-      dark:border-navy-700 dark:bg-navy-900 dark:text-slate-100 dark:placeholder:text-navy-500
+      dark:border-slate-800/60 dark:bg-slate-900/60 dark:text-slate-100 dark:placeholder:text-slate-500
       dark:disabled:bg-navy-800 dark:disabled:text-navy-500;
   }
   .input-error {
@@ -116,18 +128,26 @@ body {
   }
 
   /* Cartões e tabelas */
+  /* Superfície translúcida com borda ultrafina (1px) — Dark Premium. */
   .card {
-    @apply rounded-xl border border-slate-200 bg-white shadow-card dark:border-navy-800 dark:bg-navy-900;
+    @apply rounded-xl border border-slate-200 bg-white shadow-card
+      dark:border-slate-800/60 dark:bg-slate-900/50 dark:shadow-none dark:backdrop-blur-md;
+  }
+
+  /* Valores financeiros/quantitativos: monoespaçada de alta legibilidade. */
+  .kpi-value {
+    @apply font-mono text-2xl font-semibold tabular-nums tracking-tight;
+    font-variant-numeric: tabular-nums;
   }
   .table {
     @apply w-full text-sm;
   }
   .table thead th {
     @apply sticky top-0 z-[1] whitespace-nowrap border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500
-      dark:border-navy-700 dark:bg-navy-800/60 dark:text-navy-300;
+      dark:border-slate-800/60 dark:bg-slate-900/60 dark:text-slate-400;
   }
   .table tbody td {
-    @apply border-b border-slate-100 px-4 py-2.5 align-middle text-slate-700 dark:border-navy-800 dark:text-slate-300;
+    @apply border-b border-slate-100 px-4 py-2.5 align-middle text-slate-700 dark:border-slate-800/60 dark:text-slate-300;
   }
   .table tbody tr:last-child td {
     @apply border-b-0;
