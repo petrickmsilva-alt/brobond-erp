@@ -156,14 +156,32 @@ const SALE_STATUS_LABEL: Record<string, string> = {
 // ----------------------------------------------------------------------------
 
 /** Superfície de vidro padrão de TODOS os blocos do painel. */
-const GLASS = 'rounded-xl bg-slate-900/40 backdrop-blur-md border border-slate-800/80';
+const GLASS = 'rounded-xl bg-slate-950/85 backdrop-blur-xl border border-slate-800/90 shadow-[0_8px_32px_rgba(0,0,0,0.7)]';
 
-function Panel({ title, subtitle, children, className = '' }: { title: string; subtitle?: string; children: React.ReactNode; className?: string }) {
+function Panel({
+  title,
+  subtitle,
+  children,
+  className = '',
+  accent = false,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  className?: string;
+  accent?: boolean;
+}) {
   return (
     <section className={`${GLASS} flex flex-col ${className}`}>
-      <header className="flex items-baseline justify-between gap-3 border-b border-slate-800/80 px-5 py-3.5">
-        <h2 className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-300">{title}</h2>
-        {subtitle && <span className="font-mono text-[11px] tabular-nums text-slate-500">{subtitle}</span>}
+      <header className="flex items-baseline justify-between gap-3 border-b border-slate-800/90 px-5 py-3.5">
+        <h2 className={`text-[11px] font-bold uppercase tracking-[0.14em] ${accent ? 'text-cyan-300 drop-shadow-[0_0_6px_rgba(34,211,238,0.35)]' : 'text-slate-200'}`}>
+          {title}
+        </h2>
+        {subtitle && (
+          <span className={`font-mono text-[11px] font-bold tabular-nums ${accent ? 'text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.4)]' : 'text-slate-400'}`}>
+            {subtitle}
+          </span>
+        )}
       </header>
       <div className="flex min-h-[13rem] flex-1 flex-col">{children}</div>
     </section>
@@ -174,25 +192,26 @@ function Panel({ title, subtitle, children, className = '' }: { title: string; s
 function PanelEmpty({ icon, message, hint }: { icon: React.ReactNode; message: string; hint?: string }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
-      <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full border border-slate-800/80 bg-slate-800/40 text-slate-500">{icon}</div>
-      <p className="text-sm font-semibold text-slate-300">{message}</p>
-      {hint && <p className="mt-1 max-w-xs text-xs text-slate-500">{hint}</p>}
+      <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full border border-slate-700/80 bg-slate-950/90 text-slate-500 shadow-[0_0_24px_rgba(15,23,42,0.8)]">{icon}</div>
+      <p className="text-sm font-semibold text-slate-200">{message}</p>
+      {hint && <p className="mt-1 max-w-xs text-xs text-slate-400">{hint}</p>}
     </div>
   );
 }
 
-/** Cartão de KPI com contador monoespaçado tabular. */
-function Kpi({ label, value, tone = 'slate' }: { label: string; value: string; tone?: 'slate' | 'emerald' | 'amber' | 'red' }) {
+/** Cartão de KPI com contador monoespaçado tabular e glow semântico. */
+function Kpi({ label, value, tone = 'slate' }: { label: string; value: string; tone?: 'slate' | 'emerald' | 'amber' | 'red' | 'cyan' }) {
   const tones = {
     slate: 'text-slate-100',
-    emerald: 'text-emerald-400',
-    amber: 'text-amber-400',
-    red: 'text-red-400',
+    emerald: 'text-emerald-400 drop-shadow-[0_0_6px_rgba(52,211,153,0.4)]',
+    amber: 'text-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.5)]',
+    red: 'text-rose-500 font-bold drop-shadow-[0_0_6px_rgba(244,63,94,0.4)]',
+    cyan: 'text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.4)]',
   } as const;
   return (
     <div className={`${GLASS} px-4 py-3.5`}>
-      <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{label}</div>
-      <div className={`mt-1.5 truncate font-mono text-2xl font-semibold tabular-nums tracking-tight ${tones[tone]}`} title={value}>
+      <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{label}</div>
+      <div className={`mt-1.5 truncate font-mono text-2xl font-black tabular-nums tracking-tight ${tones[tone]}`} title={value}>
         {value}
       </div>
     </div>
@@ -202,13 +221,15 @@ function Kpi({ label, value, tone = 'slate' }: { label: string; value: string; t
 /** Pulsação "live" dos canais validados. */
 function LivePulse({ label, tone = 'green' }: { label: string; tone?: 'green' | 'amber' }) {
   const dot = tone === 'green' ? 'bg-green-500' : 'bg-amber-400';
-  const text = tone === 'green' ? 'text-green-400' : 'text-amber-300';
-  const ring = tone === 'green' ? 'border-green-500/30 bg-green-500/10' : 'border-amber-400/30 bg-amber-400/10';
+  const text = tone === 'green' ? 'text-green-300 drop-shadow-[0_0_7px_rgba(74,222,128,0.55)]' : 'text-amber-300';
+  const ring = tone === 'green'
+    ? 'border-green-500/40 bg-green-950/90 shadow-[0_0_18px_rgba(34,197,94,0.18)]'
+    : 'border-amber-400/30 bg-amber-950/80';
   return (
     <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 ${ring}`}>
       <span className="relative flex h-2.5 w-2.5">
         <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${dot} opacity-75`} />
-        <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${dot}`} />
+        <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${dot} shadow-[0_0_8px_rgba(34,197,94,0.75)]`} />
       </span>
       <span className={`text-[11px] font-bold uppercase tracking-[0.14em] ${text}`}>{label}</span>
     </span>
@@ -357,7 +378,7 @@ export default function ConectorPage({ module }: { module: Module }) {
   const syncing = busy === 'sync';
 
   return (
-    <div className="space-y-4 p-4 sm:p-6">
+    <div className="min-h-full space-y-4 bg-slate-950/35 p-4 sm:p-6">
       {/* ---------------------------------------------------------------- */}
       {/* Cabeçalho do canal: logomarca oficial + pulsação live            */}
       {/* ---------------------------------------------------------------- */}
@@ -366,7 +387,7 @@ export default function ConectorPage({ module }: { module: Module }) {
           {isConnectorBrandId(provider) ? (
             <ConnectorBrand brand={provider} className="h-12 w-12 shrink-0 rounded-xl shadow-lg shadow-black/30" />
           ) : (
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-slate-800/80 bg-slate-900/60 text-brand-400">
+            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-slate-700/90 bg-slate-950/90 text-brand-300 shadow-[0_0_20px_rgba(0,0,0,0.55)]">
               <Icon className="h-6 w-6" />
             </span>
           )}
@@ -403,7 +424,7 @@ export default function ConectorPage({ module }: { module: Module }) {
 
       {/* Erro: inline e DISPENSÁVEL (X), nunca uma barra global fixa. */}
       {error && (
-        <div className="flex items-start gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300" role="alert">
+        <div className="flex items-start gap-2 rounded-xl border border-rose-500/50 bg-rose-950/75 px-4 py-3 text-sm text-rose-300 shadow-[0_8px_24px_rgba(0,0,0,0.45)]" role="alert">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span className="flex-1">{error}</span>
           <button className="text-red-300/70 transition-colors hover:text-red-200" onClick={() => setError('')} aria-label="Fechar aviso">
@@ -416,7 +437,7 @@ export default function ConectorPage({ module }: { module: Module }) {
 
       {/* Prontidão de ambiente (sem jamais exibir valores de credencial). */}
       {status && !status.configured && (
-        <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
+        <div className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-950/75 px-4 py-3 text-xs text-amber-300 shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             Variáveis de ambiente pendentes no servidor (Render): <strong className="font-mono">{status.missingEnv.join(', ') || '—'}</strong>. As chaves são lidas e
@@ -434,9 +455,9 @@ export default function ConectorPage({ module }: { module: Module }) {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
             <Kpi label="Pedidos Importados" value={String(status?.importedCount ?? 0)} tone="emerald" />
             <Kpi label="Pedidos Ignorados" value={String(status?.duplicatedCount ?? 0)} tone="amber" />
-            <Kpi label="Falhas" value={String(status?.failedCount ?? 0)} tone={(status?.failedCount ?? 0) > 0 ? 'red' : 'slate'} />
-            <Kpi label="Receita do Canal" value={formatMoney(panel.revenueCents)} />
-            <Kpi label="Última Sincronização" value={formatDate(status?.lastSyncAt ?? null)} />
+            <Kpi label="Falhas" value={String(status?.failedCount ?? 0)} tone="red" />
+            <Kpi label="Receita do Canal" value={formatMoney(panel.revenueCents)} tone="amber" />
+            <Kpi label="Última Sincronização" value={formatDate(status?.lastSyncAt ?? null)} tone="cyan" />
           </div>
 
           {/* ------------------------------------------------------------ */}
@@ -467,7 +488,7 @@ export default function ConectorPage({ module }: { module: Module }) {
               )}
             </Panel>
 
-            <Panel title="Webhooks — eventos recebidos" subtitle={`${panel.eventCount} no total`}>
+            <Panel title="Webhooks — eventos recebidos" subtitle={`${panel.eventCount} no total`} accent>
               {panel.events.length === 0 ? (
                 <PanelEmpty
                   icon={<Webhook className="h-6 w-6" />}
@@ -541,8 +562,12 @@ export default function ConectorPage({ module }: { module: Module }) {
             )}
 
             <div className="flex flex-wrap items-center gap-3 border-t border-slate-800/80 px-5 py-4">
-              <button className="btn-neon" onClick={sincronizar} disabled={readinessOnly || !connected || syncing}>
-                {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Sincronizar conteúdo da plataforma
+              <button
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2 text-sm font-bold text-slate-950 shadow-lg shadow-orange-500/20 transition-all hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
+                onClick={sincronizar}
+                disabled={readinessOnly || !connected || syncing}
+              >
+                {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Sincronizar vendas na plataforma
               </button>
               <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
                 <Inbox className="h-3.5 w-3.5" />
