@@ -1,19 +1,29 @@
 // ============================================================================
 // Sidebar — Fase 3 "Brobond AI ERP" (Dark Mode Premium).
 //
-// Os links do ERP foram reorganizados em 9 grandes categorias: o Dashboard
-// (link direto, sempre no topo) e 9 blocos colapsáveis (accordion). O estado
-// aberto/fechado é React local + persistência em localStorage, com a categoria
-// da rota atual sempre expandida automaticamente.
+// A navegação preserva a identidade Dark Slate de alto contraste e separa as
+// áreas de HUB COMMERCE e OPERAÇÕES ERP com rótulos explícitos de seção. O
+// estado aberto/fechado dos accordions permanece em React local + persistência
+// em localStorage, com a categoria da rota atual sempre expandida automaticamente.
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { ChevronDown, X } from 'lucide-react';
-import { GROUP_META, MODULE_GROUPS, visibleModules, type Module, type ModuleGroup } from '../modules';
+import { GROUP_META, visibleModules, type Module, type ModuleGroup } from '../modules';
 import { Logo } from './Logo';
 import { useAuth } from '../auth/AuthContext';
 
 const STORAGE_KEY = 'brobond_nav_groups';
+
+const COMMERCE_GROUPS = ['Hub Omnichannel', 'Gestão de Commerce', 'Ecossistema Creators'] as const satisfies readonly ModuleGroup[];
+
+const ERP_GROUPS = [
+  'Engenharia & Catálogo',
+  'Operações & Fábrica',
+  'Suprimentos',
+  'Inteligência Financeira',
+  'Relatórios & Auditoria',
+] as const satisfies readonly ModuleGroup[];
 
 function readOpen(): string[] {
   try {
@@ -33,8 +43,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   // Categoria dona da rota atual — fica sempre expandida.
   const activeGroup = useMemo(() => {
     const path = location.pathname;
-    const hit =
-      visible.find((m) => m.path === path) || visible.filter((m) => m.path !== '/').find((m) => path.startsWith(m.path + '/'));
+    const hit = visible.find((m) => m.path === path) || visible.filter((m) => m.path !== '/').find((m) => path.startsWith(m.path + '/'));
     return (hit?.group as ModuleGroup | undefined) ?? undefined;
   }, [location.pathname, visible]);
 
@@ -56,6 +65,23 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
     setOpenGroups((prev) => (prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]));
   }, []);
 
+  const renderGroup = (group: ModuleGroup) => {
+    const items = visible.filter((m) => m.group === group);
+    if (!items.length) return null;
+
+    return (
+      <NavGroup
+        key={group}
+        group={group}
+        items={items}
+        isOpen={openGroups.includes(group) || activeGroup === group}
+        isActive={activeGroup === group}
+        onClose={onClose}
+        onToggle={toggle}
+      />
+    );
+  };
+
   return (
     <>
       {open && <div className="fixed inset-0 z-20 bg-black/60 backdrop-blur-sm md:hidden" onClick={onClose} />}
@@ -76,49 +102,13 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto px-2.5 py-4" aria-label="Navegação principal">
+          <SectionLabel>HUB COMMERCE</SectionLabel>
           {top && <NavItem m={top} onClose={onClose} />}
+          {COMMERCE_GROUPS.map(renderGroup)}
 
-          {MODULE_GROUPS.map((g) => {
-            const items = visible.filter((m) => m.group === g);
-            if (!items.length) return null;
-            const isOpen = openGroups.includes(g) || activeGroup === g;
-            const info = GROUP_META[g];
-            const GroupIcon = info.icon;
-            const panelId = `nav-${g.replace(/[^a-zA-Z]+/g, '-').toLowerCase()}`;
-            return (
-              <div key={g} className="pt-0.5">
-                <button
-                  type="button"
-                  onClick={() => toggle(g)}
-                  aria-expanded={isOpen}
-                  aria-controls={panelId}
-                  className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12.5px] font-semibold tracking-wide transition-colors ${
-                    activeGroup === g ? 'bg-white/[0.06] text-white' : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-100'
-                  }`}
-                >
-                  <GroupIcon className={`h-4 w-4 shrink-0 ${activeGroup === g ? 'text-brand-400' : 'text-slate-500 group-hover:text-brand-400'}`} strokeWidth={2} />
-                  <span className="flex-1 truncate">
-                    <span className="mr-1.5" aria-hidden>
-                      {info.emoji}
-                    </span>
-                    {g}
-                  </span>
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">{items.length}</span>
-                  <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                <div
-                  id={panelId}
-                  hidden={!isOpen}
-                  className="mt-0.5 space-y-0.5 border-l border-slate-800/60 pl-2.5 ml-4"
-                >
-                  {items.map((m) => (
-                    <NavItem key={m.id} m={m} onClose={onClose} />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+          <div className="border-t border-slate-800/60 my-4 mx-3" aria-hidden="true" />
+          <SectionLabel className="mt-2">OPERAÇÕES ERP</SectionLabel>
+          {ERP_GROUPS.map(renderGroup)}
         </nav>
 
         <div className="shrink-0 border-t border-slate-800/60 px-5 py-3 text-[11px] text-slate-500">
@@ -139,6 +129,63 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   );
 }
 
+function SectionLabel({ children, className = '' }: { children: string; className?: string }) {
+  return <p className={`mb-2 px-4 text-[10px] font-bold uppercase tracking-widest text-slate-500 ${className}`}>{children}</p>;
+}
+
+function NavGroup({
+  group,
+  items,
+  isOpen,
+  isActive,
+  onClose,
+  onToggle,
+}: {
+  group: ModuleGroup;
+  items: Module[];
+  isOpen: boolean;
+  isActive: boolean;
+  onClose: () => void;
+  onToggle: (group: string) => void;
+}) {
+  const info = GROUP_META[group];
+  const GroupIcon = info.icon;
+  const panelId = `nav-${group.replace(/[^a-zA-Z]+/g, '-').toLowerCase()}`;
+
+  return (
+    <div className="pt-0.5">
+      <button
+        type="button"
+        onClick={() => onToggle(group)}
+        aria-expanded={isOpen}
+        aria-controls={panelId}
+        className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[12.5px] font-semibold tracking-wide transition-colors ${
+          isActive ? 'bg-white/[0.06] text-white' : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-100'
+        }`}
+      >
+        <GroupIcon
+          className={`h-4 w-4 shrink-0 ${isActive ? 'text-brand-400' : 'text-slate-500 group-hover:text-brand-400'}`}
+          strokeWidth={2}
+        />
+        <span className="flex-1 truncate">
+          <span className="mr-1.5" aria-hidden>
+            {info.emoji}
+          </span>
+          {group}
+        </span>
+        <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">{items.length}</span>
+        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      <div id={panelId} hidden={!isOpen} className="mt-0.5 space-y-0.5 border-l border-slate-800/60 pl-2.5 ml-4">
+        {items.map((m) => (
+          <NavItem key={m.id} m={m} onClose={onClose} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function NavItem({ m, onClose }: { m: Module; onClose: () => void }) {
   const Icon = m.icon;
   return (
@@ -156,7 +203,10 @@ function NavItem({ m, onClose }: { m: Module; onClose: () => void }) {
     >
       {({ isActive }) => (
         <>
-          <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-brand-400' : 'text-slate-500 group-hover:text-brand-300'}`} strokeWidth={2} />
+          <Icon
+            className={`h-4 w-4 shrink-0 ${isActive ? 'text-brand-400' : 'text-slate-500 group-hover:text-brand-300'}`}
+            strokeWidth={2}
+          />
           <span className="truncate">{m.label}</span>
         </>
       )}
