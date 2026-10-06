@@ -3,6 +3,8 @@
 // Autenticado (sessão do ERP):
 //   GET    /api/connectors                      — cartões do trio de canais
 //   GET    /api/connectors/:provider            — status de um canal
+//   GET    /api/connectors/:provider/painel     — status + telemetria
+//          analítica (vendas, eventos de webhook, conteúdo importado)
 //   POST   /api/connectors/:provider/autorizar  — inicia o OAuth (aceita o
 //          redirect_uri dinâmico: a origem da Render onde o painel roda)
 //   POST   /api/connectors/mercadopago/conectar — credenciais de produção
@@ -27,6 +29,7 @@ import {
   CONNECTOR_PROVIDER_LABELS,
   ConnectorError,
   connectorErrorMessage,
+  connectorPanelService,
   connectorService,
   connectorSyncService,
   handleProviderWebhook,
@@ -167,6 +170,23 @@ connectorsRouter.get(
     assertConnectorsDatabase();
     const actor = currentUser(req);
     res.json(await connectorService.getStatus(actor.id, providerParam(req)));
+  })
+);
+
+connectorsRouter.get(
+  '/:provider/painel',
+  run(async (req, res) => {
+    assertConnectorsDatabase();
+    const actor = currentUser(req);
+    const provider = providerParam(req);
+    const limite = Number(req.query.limite ?? 10);
+    // O painel é SOMENTE LEITURA: status (sem segredos) + telemetria
+    // analítica (vendas, eventos de webhook e conteúdo importado).
+    const [connector, panel] = await Promise.all([
+      connectorService.getStatus(actor.id, provider),
+      connectorPanelService.getPanel(actor.id, provider, limite),
+    ]);
+    res.json({ connector, panel });
   })
 );
 

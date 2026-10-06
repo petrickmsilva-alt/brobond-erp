@@ -18,7 +18,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const push = useCallback((kind: ToastKind, message: string) => {
     const id = ++seq.current;
     setToasts((t) => [...t, { id, kind, message }]);
-    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 6000 : 3500);
+    // Avisos positivos/informativos somem sozinhos em 3s (e todos têm
+    // botão de fechar): nenhum aviso sobrevive à troca de tela.
+    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 6000 : 3000);
   }, []);
 
   const value = useMemo(() => ({ push }), [push]);

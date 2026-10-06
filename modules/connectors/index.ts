@@ -20,6 +20,7 @@ export * from './core/oauth-state.service';
 export * from './core/connector.service';
 export * from './core/connector.factory';
 export * from './core/sync.service';
+export * from './core/panel.service';
 export * from './ingestion/catalog-matcher';
 export * from './ingestion/sales.service';
 export * from './ingestion/sale-ingestion.service';
