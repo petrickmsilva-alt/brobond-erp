@@ -21,6 +21,7 @@ export * from './core/connector.service';
 export * from './core/connector.factory';
 export * from './core/sync.service';
 export * from './core/panel.service';
+export * from './core/sale-events';
 export * from './instagram/index';
 export * from './ingestion/catalog-matcher';
 export * from './ingestion/sales.service';

@@ -1144,8 +1144,14 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE "sale_channel" AS ENUM ('BROBOND', 'INSTAGRAM_SHOPPING', 'MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP');
+  -- LOJA_FISICA (motor analítico "1. MEU NEGÓCIOS"): vendas presenciais
+  -- registradas manualmente — completa os grupos Loja Física / E-commerce
+  -- (BROBOND, INSTAGRAM_SHOPPING, NUVEMSHOP, MERCADOPAGO) / Marketplaces
+  -- (MERCADOLIVRE).
+  CREATE TYPE "sale_channel" AS ENUM ('BROBOND', 'INSTAGRAM_SHOPPING', 'MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP', 'LOJA_FISICA');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- Bancos que já têm o enum (criado antes do canal de loja física):
+ALTER TYPE "sale_channel" ADD VALUE IF NOT EXISTS 'LOJA_FISICA';
 
 DO $$ BEGIN
   CREATE TYPE "connector_provider" AS ENUM ('INSTAGRAM', 'MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP');
@@ -1295,3 +1301,85 @@ CREATE TABLE IF NOT EXISTS sale_items (
 CREATE INDEX IF NOT EXISTS sale_items_sale_id_idx ON sale_items (sale_id);
 CREATE INDEX IF NOT EXISTS sale_items_product_id_idx ON sale_items (product_id);
 CREATE INDEX IF NOT EXISTS sale_items_size_id_idx ON sale_items (size_id);
+
+-- ------------------------------------------------------------------
+-- MOTOR ANALÍTICO "1. MEU NEGÓCIOS" (migration 0016)
+--
+--   1) Margem por pedido em `sales`: lucro bruto = valor líquido −
+--      CMV (ficha técnica) − impostos (alíquota/NCM) − frete pago,
+--      materializado nas colunas reais gross_profit_cents/margin_pct.
+--   2) Curva ABC contínua (80/15/5) persistida em `produto_abc`.
+--   3) Filtros estritos de BI: De/Até, empresa_id e canal agrupado
+--      (Loja Física / E-commerce / Marketplaces).
+-- Espelha db/migrations/0016_meu_negocios_motor_analitico.sql —
+-- idempotente para bancos existentes.
+-- ------------------------------------------------------------------
+
+-- EMPRESAS — multi-empresa pronta; BROBOND é a empresa padrão (id 1)
+CREATE TABLE IF NOT EXISTS empresas (
+  id SERIAL PRIMARY KEY,
+  nome TEXT NOT NULL,
+  razao_social TEXT,
+  cnpj TEXT,
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+INSERT INTO empresas (id, nome, razao_social)
+VALUES (1, 'BROBOND', 'BROBOND CONFECÇÕES LTDA')
+ON CONFLICT (id) DO NOTHING;
+
+SELECT setval(
+  pg_get_serial_sequence('empresas', 'id'),
+  GREATEST((SELECT COALESCE(MAX(id), 1) FROM empresas), 1),
+  true
+);
+
+CREATE INDEX IF NOT EXISTS empresas_ativo_idx ON empresas (ativo);
+
+-- IMPOSTOS POR NCM — chaves de 8/6/4/2 dígitos; NULL = alíquota padrão.
+-- O motor usa sempre a chave mais longa que casa com produtos.ncm; o
+-- índice parcial garante uma única linha-padrão.
+CREATE TABLE IF NOT EXISTS impostos_ncm (
+  id SERIAL PRIMARY KEY,
+  ncm TEXT UNIQUE,
+  descricao TEXT,
+  aliquota_pct NUMERIC(5,2) NOT NULL DEFAULT 0 CHECK (aliquota_pct >= 0 AND aliquota_pct <= 100),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS impostos_ncm_ncm_idx ON impostos_ncm (ncm);
+CREATE UNIQUE INDEX IF NOT EXISTS impostos_ncm_padrao_unico ON impostos_ncm ((true)) WHERE ncm IS NULL;
+
+-- SALES — colunas do motor de margem (empresa + frete + cálculo real)
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS freight_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS net_cents INTEGER;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS cmv_cents INTEGER;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS tax_cents INTEGER;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS gross_profit_cents INTEGER;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS margin_pct NUMERIC(12,4);
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS margem_calculada_em TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS sales_empresa_channel_occurred_idx
+  ON sales (empresa_id, channel, occurred_at);
+CREATE INDEX IF NOT EXISTS sales_empresa_status_occurred_idx
+  ON sales (empresa_id, status, occurred_at);
+
+-- CURVA ABC — classificação contínua por produto/empresa
+CREATE TABLE IF NOT EXISTS produto_abc (
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  faturamento_cents BIGINT NOT NULL DEFAULT 0,
+  pct_total NUMERIC(12,4) NOT NULL DEFAULT 0,
+  pct_acumulado NUMERIC(12,4) NOT NULL DEFAULT 0,
+  classe TEXT NOT NULL CHECK (classe IN ('A', 'B', 'C')),
+  janela_de TIMESTAMPTZ,
+  janela_ate TIMESTAMPTZ,
+  calculado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (empresa_id, produto_id)
+);
+
+CREATE INDEX IF NOT EXISTS produto_abc_classe_idx ON produto_abc (empresa_id, classe);

@@ -22,6 +22,7 @@
 
 import { runInTransaction, type ConnectorDatabase } from '../core/database';
 import { connectorCuid } from '../core/id';
+import { notifySaleIngested } from '../core/sale-events';
 import type { SaleChannelName, SaleStatusName } from '../core/providers';
 import type { SaleRow } from '../core/types';
 import { matchCatalogItem } from './catalog-matcher';
@@ -132,7 +133,7 @@ export function createSalesService(resolveDb: () => ConnectorDatabase) {
       const quantity = positiveInt(input.quantity, 1);
       const reference = marketplaceSaleReference(input.channel, input.externalOrderId);
 
-      return runInTransaction(db, async (tx) => {
+      const result = await runInTransaction(db, async (tx) => {
         const { rows: existingRows } = await tx.query<SaleRawRow>(
           `SELECT ${SALE_COLUMNS} FROM sales
            WHERE usuario_id = $1 AND channel = $2::sale_channel AND external_order_id = $3
@@ -221,6 +222,15 @@ export function createSalesService(resolveDb: () => ConnectorDatabase) {
 
         return { sale, outcome: existing ? ('updated' as const) : ('created' as const), itemCount };
       });
+
+      // Motor analítico "1. MEU NEGÓCIOS": avisa o servidor que a venda
+      // mudou (fora da transação — o recálculo de margem/ABC é best
+      // effort e jamais pode reverter uma ingestão confirmada).
+      // Reentrega idêntica (`unchanged`) não precisa de recálculo.
+      if (result.outcome !== 'unchanged') {
+        await notifySaleIngested({ saleId: result.sale.id, outcome: result.outcome, channel: result.sale.channel });
+      }
+      return result;
     },
 
     /** Vendas recentes de um canal (tela de detalhe do conector). */

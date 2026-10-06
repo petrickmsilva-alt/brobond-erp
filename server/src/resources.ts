@@ -382,6 +382,62 @@ export const RESOURCES: Record<string, Resource> = {
     ],
   },
 
+  // MOTOR ANALÍTICO 1. MEU NEGÓCIOS (migration 0016) — empresas e alíquotas.
+  // As vendas multicanal (`sales`) pertencem a uma empresa; os relatórios de
+  // BI filtram por empresa_id. A BROBOND é a empresa padrão (id 1), criada
+  // pela migration e espelhada no modo demonstração.
+  empresas: {
+    key: 'empresas',
+    table: 'empresas',
+    label: 'Empresas',
+    singular: 'Empresa',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    notice:
+      'Empresas do grupo para o motor analítico 1. MEU NEGÓCIOS: cada venda multicanal pertence a uma empresa e os relatórios de BI (margem, curva ABC, dashboard) filtram por ela. A BROBOND (id 1) é a empresa padrão — não a exclua.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 80, placeholder: 'BROBOND' },
+      { name: 'razao_social', label: 'Razão social', type: 'text', maxLength: 140, list: false },
+      { name: 'cnpj', label: 'CNPJ', type: 'document', maxLength: 20, list: false, placeholder: '00.000.000/0000-00' },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+    mock: [{ id: 1, nome: 'BROBOND', razao_social: 'BROBOND CONFECÇÕES LTDA', ativo: true }],
+  },
+
+  // Alíquotas de imposto por NCM — alimentam o cálculo de lucro bruto real
+  // (imposto = Σ subtotal do item × alíquota do NCM do produto).
+  impostos_ncm: {
+    key: 'impostos_ncm',
+    table: 'impostos_ncm',
+    label: 'Alíquotas por NCM',
+    singular: 'Alíquota NCM',
+    labelFields: ['ncm'],
+    ops: ALL_OPS,
+    minPerfil: 'gerente',
+    notice:
+      'Alíquotas usadas pelo motor 1. MEU NEGÓCIOS para calcular os impostos de cada venda: a chave é o NCM do produto (apenas dígitos). Cadastre o NCM completo (8 dígitos, ex.: 61091000), um prefixo (6 ou 4 ou 2 dígitos, ex.: 6109 ou 61) ou DEIXE VAZIO para definir a alíquota padrão dos NCMs não cadastrados. O motor aplica sempre a chave mais longa que casa com o NCM do produto; sem nenhuma, o imposto é 0%.',
+    fields: [
+      {
+        name: 'ncm',
+        label: 'NCM (chave)',
+        type: 'text',
+        maxLength: 8,
+        unique: true,
+        search: true,
+        pattern: '^(|[0-9]{2,8})$',
+        patternMessage: 'NCM inválido: use apenas dígitos (2 a 8) ou deixe vazio para a alíquota padrão.',
+        placeholder: '61091000, 6109, 61... (vazio = padrão)',
+        hint: 'Chave de casamento com o NCM do produto. Vazio = alíquota padrão para NCMs sem cadastro.',
+      },
+      { name: 'descricao', label: 'Descrição', type: 'text', maxLength: 120, placeholder: 'Camisetas de malha de algodão — carga tributária' },
+      { name: 'aliquota_pct', label: 'Alíquota (%)', type: 'percent', required: true, min: 0, max: 100, default: 0, hint: 'Percentual aplicado sobre o subtotal de cada item com este NCM.' },
+      ...auditFields,
+    ],
+    orderBy: { field: 'ncm', dir: 'asc' },
+  },
+
   tamanhos: {
     key: 'tamanhos',
     table: 'tamanhos',

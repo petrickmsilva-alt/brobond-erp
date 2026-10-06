@@ -25,6 +25,7 @@ import { getResource } from './resources';
 import { labelOf } from './store';
 import { HttpError } from './errors';
 import { processarRecorrencias } from './financeiro';
+import { atualizarMotorNegocios } from './negocios';
 import type { Request, Response } from 'express';
 import { currentUser } from './auth';
 
@@ -281,6 +282,13 @@ export async function runScheduled(req: Request, res: Response) {
   if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrência(s) financeira(s)`);
   const pedidos = await recuperarPedidosPendentes();
   if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace recuperado(s)`);
+
+  // Motor 1. MEU NEGÓCIOS: margens e curva ABC sempre frescas — a rotina
+  // roda junto com o cron de agendados (segunda via do ciclo contínuo).
+  const motor = await atualizarMotorNegocios();
+  if (motor.margens > 0 || motor.abc > 0) {
+    resultados.push(`Motor MEU NEGÓCIOS: ${motor.margens} margem(ns), ${motor.abc} produto(s) na curva ABC`);
+  }
 
   res.json({ ok: true, executados: resultados, smtp: smtpConfigurado() });
 }

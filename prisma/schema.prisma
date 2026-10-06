@@ -193,6 +193,9 @@ model Produto {
   // ── Fusão commerce (Fase 1) ──
   saleItems SaleItem[]
 
+  // ── Motor analítico "1. MEU NEGÓCIOS" (Fase 0016) ──
+  produtoAbcs ProdutoAbc[]
+
   @@map("produtos")
 }
 
@@ -251,6 +254,7 @@ enum SaleChannel {
   MERCADOLIVRE
   MERCADOPAGO
   NUVEMSHOP
+  LOJA_FISICA
 
   @@map("sale_channel")
 }
@@ -449,6 +453,33 @@ model Sale {
   /// é o id canônico.
   externalOrderId String? @map("external_order_id")
 
+  // ── Motor analítico "1. MEU NEGÓCIOS" (migration 0016) ──
+  /// Empresa da venda (multi-empresa; BROBOND é a padrão, id 1).
+  empresaId Int     @default(1) @map("empresa_id")
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+
+  /// Frete PAGO (custo) em centavos — entra no cálculo do lucro bruto.
+  freightCents Int @default(0) @map("freight_cents")
+
+  /// Valor LÍQUIDO do pedido (total pago, líquido de descontos de
+  /// item) — base da margem.
+  netCents Int? @map("net_cents")
+
+  /// CMV: custo médio dos produtos pela ficha técnica (insumos ×
+  /// custo médio + mão de obra + indiretos), em centavos.
+  cmvCents Int? @map("cmv_cents")
+
+  /// Impostos calculados por alíquota/NCM dos produtos, em centavos.
+  taxCents Int? @map("tax_cents")
+
+  /// Lucro bruto REAL: netCents − cmvCents − taxCents − freightCents.
+  grossProfitCents Int? @map("gross_profit_cents")
+
+  /// Margem percentual = grossProfitCents / netCents × 100 (0 quando
+  /// netCents = 0).
+  marginPct          Decimal?   @map("margin_pct") @db.Decimal(12, 4)
+  margemCalculadaEm  DateTime?  @map("margem_calculada_em") @db.Timestamptz
+
   // Responsável ERP (proveniência da importação/sincronização).
   usuarioId Int    @map("usuario_id")
   usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
@@ -471,6 +502,8 @@ model Sale {
   @@index([usuarioId, status])
   @@index([usuarioId, channel])
   @@index([channel, occurredAt])
+  @@index([empresaId, channel, occurredAt])
+  @@index([empresaId, status, occurredAt])
   @@map("sales")
 }
 
@@ -511,4 +544,71 @@ model SaleItem {
   @@index([productId])
   @@index([sizeId])
   @@map("sale_items")
+}
+
+// ------------------------------------------------------------------
+// MOTOR ANALÍTICO "1. MEU NEGÓCIOS" (migration 0016 / prisma
+// 20261006180000_meu_negocios_motor_analitico)
+//
+// Margem por pedido (sales.*Cents/marginPct), curva ABC contínua
+// (produto_abc) e filtros estritos de BI (empresa_id + canal).
+// ------------------------------------------------------------------
+
+/// Empresas do grupo — a BROBOND é a empresa padrão (id 1). Cada
+/// venda (`sales.empresa_id`) pertence a uma empresa; os agregadores
+/// de BI filtram por ela.
+model Empresa {
+  id          Int       @id @default(autoincrement()) @map("id")
+  nome        String    @map("nome")
+  razaoSocial String?   @map("razao_social")
+  cnpj        String?   @map("cnpj")
+  ativo       Boolean   @default(true) @map("ativo")
+  criadoEm    DateTime? @default(now()) @map("criado_em") @db.Timestamptz
+  atualizadoEm DateTime? @map("atualizado_em") @db.Timestamptz
+
+  sales       Sale[]
+  produtoAbcs ProdutoAbc[]
+
+  @@index([ativo])
+  @@map("empresas")
+}
+
+/// Alíquotas de imposto por NCM. `ncm` é a chave de casamento com
+/// produtos.ncm (apenas dígitos): 8 dígitos = NCM exato; 6/4/2 =
+/// prefixo; NULL = alíquota PADRÃO (linha única, garantida pelo índice
+/// parcial `impostos_ncm_padrao_unico` criado na migration). O motor
+/// aplica sempre a chave mais longa que casa; sem nenhuma linha, 0%.
+model ImpostosNcm {
+  id          Int       @id @default(autoincrement()) @map("id")
+  ncm         String?   @map("ncm")
+  descricao   String?   @map("descricao")
+  aliquotaPct Decimal   @default(0) @map("aliquota_pct") @db.Decimal(5, 2)
+  criadoEm    DateTime? @default(now()) @map("criado_em") @db.Timestamptz
+  atualizadoEm DateTime? @map("atualizado_em") @db.Timestamptz
+
+  @@unique([ncm])
+  @@index([ncm])
+  @@map("impostos_ncm")
+}
+
+/// Curva ABC contínua por produto/empresa: faturamento acumulado
+/// ordenado decrescentemente, com Classe A até cruzar 80% do total,
+/// Classe B até 95% e Classe C nos 5% restantes. Recalculada pela
+/// rotina em segundo plano (boot + cron + pós-ingestão).
+model ProdutoAbc {
+  empresaId       Int       @map("empresa_id")
+  empresa         Empresa   @relation(fields: [empresaId], references: [id])
+  produtoId       Int       @map("produto_id")
+  produto         Produto   @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+  faturamentoCents BigInt   @default(0) @map("faturamento_cents")
+  pctTotal        Decimal   @default(0) @map("pct_total") @db.Decimal(12, 4)
+  pctAcumulado    Decimal   @default(0) @map("pct_acumulado") @db.Decimal(12, 4)
+  classe          String    @map("classe")
+  janelaDe        DateTime? @map("janela_de") @db.Timestamptz
+  janelaAte       DateTime? @map("janela_ate") @db.Timestamptz
+  calculadoEm     DateTime  @default(now()) @map("calculado_em") @db.Timestamptz
+
+  @@id([empresaId, produtoId])
+  @@index([empresaId, classe])
+  @@map("produto_abc")
 }

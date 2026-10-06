@@ -87,6 +87,16 @@ import { calcularFrete, consultarCEP } from './frete';
 import { marketplaceStatus, sincronizarPedidos } from './marketplace';
 import { connectorsRouter, initConnectors, publicConnectorsRouter } from './connectors';
 import { importarPedidosLoja, produtosLoja, sincronizarEstoqueLoja, statusLoja } from './loja';
+import {
+  initNegociosEngine,
+  negociosABC,
+  negociosABCRecalcular,
+  negociosCanais,
+  negociosMargens,
+  negociosMargensRecalcular,
+  negociosResumo,
+  negociosVendaManual,
+} from './negocios';
 import { initWebSocket, wsStatus } from './websocket';
 import { createServer } from 'node:http';
 
@@ -386,6 +396,17 @@ app.post('/api/frete/calcular', wrap(calcularFrete));
 // Conectores oficiais (Mercado Livre, Mercado Pago, Nuvemshop)
 app.use('/api/connectors', connectorsRouter);
 
+// 1. MEU NEGÓCIOS — motor analítico real (margem por pedido, curva ABC
+// contínua e agregadores de BI com filtros estritos De/Até, empresa_id e
+// canal: Loja Física, E-commerce, Marketplaces).
+app.get('/api/negocios/canais', wrap(negociosCanais));
+app.get('/api/negocios/resumo', wrap(negociosResumo));
+app.get('/api/negocios/margens', wrap(negociosMargens));
+app.post('/api/negocios/margens/recalcular', wrap(negociosMargensRecalcular));
+app.get('/api/negocios/abc', wrap(negociosABC));
+app.post('/api/negocios/abc/recalcular', wrap(negociosABCRecalcular));
+app.post('/api/negocios/vendas', wrap(negociosVendaManual));
+
 // Marketplace
 app.get('/api/marketplace/status', wrap(marketplaceStatus));
 app.post('/api/marketplace/sincronizar', wrap(sincronizarPedidos));
@@ -567,6 +588,9 @@ async function start() {
   }
   // Liga o módulo de conectores ao pool do Postgres e à trilha de auditoria.
   initConnectors();
+  // Motor analítico 1. MEU NEGÓCIOS: recalcula margens/curva ABC em segundo
+  // plano (ciclo no boot + intervalo + pós-ingestão de marketplaces).
+  initNegociosEngine();
   await ensureAdmin();
   await migrarSenhasLegadas();
   // Endereço público salvo no banco (Configurações › Sistema): já entra no
