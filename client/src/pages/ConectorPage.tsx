@@ -5,7 +5,8 @@
 // `brobond-ai-commerce`, agora unificada no monorepo mestre. A MESMA
 // estrutura vale para os QUATRO canais do Hub (Mercado Livre, Mercado
 // Pago, Nuvemshop e Instagram Shopping) — nenhum conector tem layout
-// próprio:
+// próprio nem estado especial: desde 2026-10-06 os quatro têm motor no
+// servidor e a página consulta todos por `/connectors/<slug>/painel`.
 //
 //   a) bloco superior de KPIs (5 colunas, contadores monoespaçados);
 //   b) bloco central dividido — "Vendas do canal" | "Webhooks — eventos
@@ -110,15 +111,16 @@ type ConnectorPanel = {
 
 /**
  * Provedor → slug das rotas `/api/connectors/<slug>/…`. Espelha
- * `CONNECTOR_PROVIDER_SLUGS` do módulo de conectores: o TRIO de produção
- * com motor no servidor. O Instagram Shopping tem bloco analítico igual
- * aos demais, mas ainda não tem adaptador — por isso não entra no mapa
- * e a página nunca chama a API para ele.
+ * `CONNECTOR_PROVIDER_SLUGS` do módulo de conectores: os QUATRO canais
+ * de produção, todos com motor no servidor. O Instagram entrou no mapa
+ * em 2026-10-06, quando ganhou conector próprio ligado à Graph API da
+ * Meta — a página consulta a API dele como a de qualquer outro canal.
  */
 const PATH: Record<string, string> = {
   MERCADOLIVRE: 'mercadolivre',
   MERCADOPAGO: 'mercadopago',
   NUVEMSHOP: 'nuvemshop',
+  INSTAGRAM: 'instagram',
 };
 
 // ----------------------------------------------------------------------------
@@ -218,20 +220,23 @@ function Kpi({ label, value, tone = 'slate' }: { label: string; value: string; t
   );
 }
 
-/** Pulsação "live" dos canais validados. */
-function LivePulse({ label, tone = 'green' }: { label: string; tone?: 'green' | 'amber' }) {
-  const dot = tone === 'green' ? 'bg-green-500' : 'bg-amber-400';
-  const text = tone === 'green' ? 'text-green-300 drop-shadow-[0_0_7px_rgba(74,222,128,0.55)]' : 'text-amber-300';
-  const ring = tone === 'green'
-    ? 'border-green-500/40 bg-green-950/90 shadow-[0_0_18px_rgba(34,197,94,0.18)]'
-    : 'border-amber-400/30 bg-amber-950/80';
+/**
+ * Pulsação "live" de um canal CONECTADO.
+ *
+ * O badge ocre de homologação deixou de existir: não há mais canal em
+ * modo de prontidão no Hub. Esta pulsação é ligada ao estado REAL da
+ * conexão (`status.connected`, que vem do banco), nunca fixada no
+ * código — um canal desconectado mostra o rótulo de status dele, e um
+ * canal conectado mostra o verde pulsante.
+ */
+function LivePulse({ label }: { label: string }) {
   return (
-    <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 ${ring}`}>
+    <span className="inline-flex items-center gap-2 rounded-full border border-green-500/40 bg-green-950/90 px-3 py-1.5 shadow-[0_0_18px_rgba(34,197,94,0.18)]">
       <span className="relative flex h-2.5 w-2.5">
-        <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${dot} opacity-75`} />
-        <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${dot} shadow-[0_0_8px_rgba(34,197,94,0.75)]`} />
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-500 opacity-75" />
+        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.75)]" />
       </span>
-      <span className={`text-[11px] font-bold uppercase tracking-[0.14em] ${text}`}>{label}</span>
+      <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-green-300 drop-shadow-[0_0_7px_rgba(74,222,128,0.55)]">{label}</span>
     </span>
   );
 }
@@ -240,7 +245,7 @@ function LivePulse({ label, tone = 'green' }: { label: string; tone?: 'green' | 
 // Página
 // ----------------------------------------------------------------------------
 
-/** Painel vazio canônico — usado pelo Instagram e enquanto carrega. */
+/** Painel vazio canônico — estado inicial enquanto a consulta carrega. */
 const EMPTY_PANEL: ConnectorPanel = {
   provider: '',
   revenueCents: 0,
@@ -254,8 +259,6 @@ const EMPTY_PANEL: ConnectorPanel = {
 export default function ConectorPage({ module }: { module: Module }) {
   const provider = String(module.connector ?? '');
   const slug = PATH[provider] ?? provider.toLowerCase();
-  /** Canal sem adaptador no servidor: bloco analítico em modo prontidão. */
-  const readinessOnly = !PATH[provider];
 
   const [status, setStatus] = useState<ConnectorStatus | null>(null);
   const [panel, setPanel] = useState<ConnectorPanel>(EMPTY_PANEL);
@@ -266,11 +269,6 @@ export default function ConectorPage({ module }: { module: Module }) {
   const envAttempt = useRef('');
 
   const load = useCallback(() => {
-    if (readinessOnly) {
-      setPanel(EMPTY_PANEL);
-      setStatus(null);
-      return;
-    }
     setError('');
     api
       .get<{ connector: ConnectorStatus; panel: ConnectorPanel }>(`/connectors/${slug}/painel`)
@@ -279,7 +277,7 @@ export default function ConectorPage({ module }: { module: Module }) {
         setPanel(r.panel ?? EMPTY_PANEL);
       })
       .catch((e: ApiError) => setError(e.message || 'Não foi possível carregar o conector.'));
-  }, [readinessOnly, slug]);
+  }, [slug]);
 
   // Troca de aba entre conectores: zera TUDO (inclusive avisos) antes de
   // recarregar — nenhum resquício de um canal aparece no outro.
@@ -398,23 +396,21 @@ export default function ConectorPage({ module }: { module: Module }) {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {readinessOnly ? (
-            <LivePulse tone="amber" label="API DA META EM HOMOLOGAÇÃO" />
-          ) : connected ? (
+          {connected ? (
             <LivePulse label="CONECTADO COM SUCESSO" />
           ) : (
             status && <Badge tone={status.requiresReauth ? 'amber' : 'slate'}>{status.statusLabel}</Badge>
           )}
-          {status && !readinessOnly && (
+          {status && (
             <Badge tone={status.authModel === 'oauth2' ? 'blue' : 'slate'}>{status.authModel === 'oauth2' ? 'OAuth2' : 'Credenciais do ambiente'}</Badge>
           )}
-          {!readinessOnly && status?.authModel === 'oauth2' && (
+          {status?.authModel === 'oauth2' && (
             <button className="btn-secondary" onClick={autorizar} disabled={!status.configured || busy === 'auth'}>
               {busy === 'auth' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
               {connected ? 'Reautorizar' : 'Conectar conta'}
             </button>
           )}
-          {!readinessOnly && connected && (
+          {connected && (
             <button className="btn-secondary" onClick={desconectar} disabled={busy === 'off'}>
               {busy === 'off' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Unplug className="h-4 w-4" />} Desconectar
             </button>
@@ -433,7 +429,7 @@ export default function ConectorPage({ module }: { module: Module }) {
         </div>
       )}
 
-      {!status && !error && !readinessOnly && <Spinner label="Consultando o conector..." />}
+      {!status && !error && <Spinner label="Consultando o conector..." />}
 
       {/* Prontidão de ambiente (sem jamais exibir valores de credencial). */}
       {status && !status.configured && (
@@ -447,7 +443,7 @@ export default function ConectorPage({ module }: { module: Module }) {
       )}
       {status?.lastError && <p className="px-1 text-xs text-red-400">Último erro: {status.lastError}</p>}
 
-      {(status || readinessOnly) && (
+      {status && (
         <>
           {/* ------------------------------------------------------------ */}
           {/* a) Bloco de KPIs superiores — 5 colunas                      */}
@@ -524,11 +520,7 @@ export default function ConectorPage({ module }: { module: Module }) {
               <PanelEmpty
                 icon={<PackageSearch className="h-6 w-6" />}
                 message="Nenhum conteúdo importado"
-                hint={
-                  readinessOnly
-                    ? 'O catálogo do Instagram Shopping entra no Hub assim que a API da Meta for liberada para esta conta comercial.'
-                    : 'Itens de pedido casados com o catálogo do ERP aparecem aqui após a sincronização.'
-                }
+                hint="Itens de pedido casados com o catálogo do ERP aparecem aqui após a sincronização."
               />
             ) : (
               <div className="overflow-x-auto">
@@ -565,17 +557,13 @@ export default function ConectorPage({ module }: { module: Module }) {
               <button
                 className="inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2 text-sm font-bold text-slate-950 shadow-lg shadow-orange-500/20 transition-all hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
                 onClick={sincronizar}
-                disabled={readinessOnly || !connected || syncing}
+                disabled={!connected || syncing}
               >
                 {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Sincronizar vendas na plataforma
               </button>
               <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
                 <Inbox className="h-3.5 w-3.5" />
-                {readinessOnly
-                  ? 'Disponível quando a API da Meta aprovar a conta comercial.'
-                  : connected
-                    ? `Loja: ${status?.shopName || status?.shopId || '—'}`
-                    : 'Conecte o canal para liberar a sincronização.'}
+                {connected ? `Loja: ${status?.shopName || status?.shopId || '—'}` : 'Conecte o canal para liberar a sincronização.'}
               </span>
             </div>
           </Panel>

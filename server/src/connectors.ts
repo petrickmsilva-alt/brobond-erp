@@ -1,7 +1,7 @@
 // Conectores de marketplace — camada HTTP do módulo `modules/connectors`.
 //
 // Autenticado (sessão do ERP):
-//   GET    /api/connectors                      — cartões do trio de canais
+//   GET    /api/connectors                      — cartões dos quatro canais
 //   GET    /api/connectors/:provider            — status de um canal
 //   GET    /api/connectors/:provider/painel     — status + telemetria
 //          analítica (vendas, eventos de webhook, conteúdo importado)
@@ -15,6 +15,11 @@
 //   GET|POST /api/connectors/:provider/callback — retorno do OAuth
 //   GET|POST /api/webhooks/:provider            — pedidos em tempo real
 //
+// O INSTAGRAM tem controller próprio
+// (`modules/connectors/instagram/instagram.controller.ts`), montado
+// ANTES do despachante genérico: a Meta exige handshake `hub.challenge`
+// em texto puro e assina com `x-hub-signature-256`.
+//
 // O módulo é agnóstico de framework: tudo que o Express conhece dele
 // entra por `modules/connectors/index.ts`. Aqui ficam apenas tradução de
 // HTTP, injeção do banco/auditoria e as regras de montagem.
@@ -23,6 +28,7 @@ import { currentUser } from './auth';
 import { hasDatabaseUrl, pool, withTransaction } from './db';
 import { HttpError } from './errors';
 import { getStore } from './services';
+import { instagramWebhookRouter } from './modules/connectors/instagram/instagram.controller';
 import {
   appUrl,
   connectorWebhookPath,
@@ -33,6 +39,7 @@ import {
   connectorService,
   connectorSyncService,
   handleProviderWebhook,
+  instagramConnectorService,
   parseConnectorProvider,
   setConnectorAuditLogger,
   setConnectorDatabase,
@@ -182,9 +189,16 @@ connectorsRouter.get(
     const limite = Number(req.query.limite ?? 10);
     // O painel é SOMENTE LEITURA: status (sem segredos) + telemetria
     // analítica (vendas, eventos de webhook e conteúdo importado).
+    //
+    // O Instagram responde pelas CONSULTAS DO PRÓPRIO SERVIÇO
+    // (`InstagramConnectorService`): mesma forma de DTO, origem de dados
+    // independente — é ele que alimenta "Pedidos Importados", "Receita
+    // do Canal" e a caixa "Webhooks — eventos recebidos" do canal.
     const [connector, panel] = await Promise.all([
       connectorService.getStatus(actor.id, provider),
-      connectorPanelService.getPanel(actor.id, provider, limite),
+      provider === 'INSTAGRAM'
+        ? instagramConnectorService.getPanel(actor.id, limite)
+        : connectorPanelService.getPanel(actor.id, provider, limite),
     ]);
     res.json({ connector, panel });
   })
@@ -242,6 +256,12 @@ connectorsRouter.delete(
  *     responsável resolvido pelo `shop_id` já gravado no conector.
  */
 export const publicConnectorsRouter: Router = Router();
+
+// O Instagram entra PRIMEIRO: handshake `hub.challenge` em texto puro e
+// assinatura `x-hub-signature-256` não cabem no despachante genérico.
+// Ele responde apenas por `/api/webhooks/instagram`; todo o resto segue
+// o fluxo de sempre.
+publicConnectorsRouter.use(instagramWebhookRouter);
 
 /**
  * Corpo CRU. Toda assinatura é calculada sobre os bytes exatos — depois

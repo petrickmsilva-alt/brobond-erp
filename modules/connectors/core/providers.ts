@@ -11,14 +11,18 @@
  *     central, nem na persistência (os valores saíram dos enums
  *     `connector_provider`/`sale_channel` na migration
  *     `drop_shopee_and_tiktok_connectors`).
- *   • O TRIO DE PRODUÇÃO é MERCADOLIVRE, MERCADOPAGO e NUVEMSHOP. A
- *     Nuvemshop é a PLATAFORMA-PONTE da triangulação de vendas: o
+ *   • A NUVEMSHOP é a PLATAFORMA-PONTE da triangulação de vendas: o
  *     catálogo que ela publica (inclusive o exibido no TikTok) e os
  *     pedidos que ela fecha são a fonte do canal.
- *   • O Instagram Shopping permanece no enum do banco por compatibilidade
- *     com a Fase 1, mas NÃO é um provedor registrado: o
- *     `connector.factory.ts` é estrito e nunca resolve um adaptador para
- *     ele.
+ *   • INSTAGRAM SHOPPING (2026-10-06): o canal passou a ter conector
+ *     PRÓPRIO e independente (`instagram/`), ligado direto à Graph API
+ *     da Meta — OAuth2 oficial, webhook assinado e catálogo de Product
+ *     Tagging. A Meta NÃO expõe pedido de Instagram para terceiros (o
+ *     checkout nativo foi descontinuado em 2025 e a Commerce Order
+ *     Management API some de todas as versões em 2026-10-27), então o
+ *     canal entra como motor de INTERAÇÃO + catálogo, com o caminho de
+ *     receita pronto e dirigido por payload. Ver
+ *     `instagram/instagram.service.ts`.
  *   • A tenancy é `usuarioId` (FK → `usuarios.id` do ERP) e não mais
  *     `organizationId`.
  *
@@ -31,10 +35,10 @@
 // ------------------------------------------------------------------
 
 /**
- * O TRIO de produção do motor comercial. A ordem é a ordem de exibição
- * no painel de conectores.
+ * Os QUATRO canais de produção do motor comercial. A ordem é a ordem de
+ * exibição no painel de conectores.
  */
-export const CONNECTOR_PROVIDERS = ['MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP'] as const;
+export const CONNECTOR_PROVIDERS = ['MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP', 'INSTAGRAM'] as const;
 
 export type ConnectorProviderName = (typeof CONNECTOR_PROVIDERS)[number];
 
@@ -43,6 +47,7 @@ export const CONNECTOR_PROVIDER_LABELS: Record<ConnectorProviderName, string> = 
   MERCADOLIVRE: 'Mercado Livre',
   MERCADOPAGO: 'Mercado Pago',
   NUVEMSHOP: 'Nuvemshop',
+  INSTAGRAM: 'Instagram Shopping',
 };
 
 /** Descrição curta exibida sob o título do cartão. */
@@ -50,6 +55,8 @@ export const CONNECTOR_PROVIDER_DESCRIPTIONS: Record<ConnectorProviderName, stri
   MERCADOLIVRE: 'Meli API oficial — OAuth2 com rotação automática de refresh token.',
   MERCADOPAGO: 'Checkout e faturamento via Access Token de produção.',
   NUVEMSHOP: 'Plataforma-ponte do Hub: OAuth2 oficial com catálogo e pedidos para a triangulação de vendas.',
+  INSTAGRAM:
+    'Graph API da Meta — conexão direta com a conta comercial: catálogo da sacolinha e webhook assinado de interações em tempo real.',
 };
 
 /** O que o operador conecta, por provedor (objeto da chamada para ação). */
@@ -57,6 +64,7 @@ export const CONNECTOR_PROVIDER_ACCOUNT_LABELS: Record<ConnectorProviderName, st
   MERCADOLIVRE: 'Conta do Mercado Livre',
   MERCADOPAGO: 'Credenciais do Mercado Pago',
   NUVEMSHOP: 'Loja da Nuvemshop',
+  INSTAGRAM: 'Conta Comercial do Instagram',
 };
 
 /** Rótulo do botão conectar/reconectar de um provedor. */
@@ -72,6 +80,7 @@ export const CONNECTOR_PROVIDER_SLUGS: Record<ConnectorProviderName, string> = {
   MERCADOLIVRE: 'mercadolivre',
   MERCADOPAGO: 'mercadopago',
   NUVEMSHOP: 'nuvemshop',
+  INSTAGRAM: 'instagram',
 };
 
 /**
@@ -89,6 +98,10 @@ const CONNECTOR_PROVIDER_ALIASES: Record<string, ConnectorProviderName> = {
   nuvemshop: 'NUVEMSHOP',
   'nuvem-shop': 'NUVEMSHOP',
   tiendanube: 'NUVEMSHOP',
+  instagram: 'INSTAGRAM',
+  'instagram-shopping': 'INSTAGRAM',
+  ig: 'INSTAGRAM',
+  meta: 'INSTAGRAM',
 };
 
 /**
@@ -124,6 +137,7 @@ export const CONNECTOR_PROVIDER_AUTH_MODEL: Record<ConnectorProviderName, Connec
   MERCADOLIVRE: 'oauth2',
   MERCADOPAGO: 'credentials',
   NUVEMSHOP: 'oauth2',
+  INSTAGRAM: 'oauth2',
 };
 
 /** Variáveis de ambiente obrigatórias da APLICAÇÃO, por provedor. */
@@ -131,6 +145,9 @@ export const CONNECTOR_PROVIDER_REQUIRED_ENV: Record<ConnectorProviderName, read
   MERCADOLIVRE: ['MERCADOLIVRE_CLIENT_ID', 'MERCADOLIVRE_CLIENT_SECRET'],
   MERCADOPAGO: [],
   NUVEMSHOP: ['NUVEMSHOP_CLIENT_ID', 'NUVEMSHOP_CLIENT_SECRET'],
+  // O verify token não entra aqui: ele só é exigido para REGISTRAR o
+  // webhook na Meta, não para conectar a conta.
+  INSTAGRAM: ['INSTAGRAM_APP_ID', 'INSTAGRAM_APP_SECRET'],
 };
 
 /**
@@ -142,6 +159,7 @@ export const CONNECTOR_PROVIDER_REDIRECT_ENV: Record<ConnectorProviderName, stri
   MERCADOLIVRE: 'MERCADOLIVRE_REDIRECT_URI',
   MERCADOPAGO: null,
   NUVEMSHOP: 'NUVEMSHOP_REDIRECT_URI',
+  INSTAGRAM: 'INSTAGRAM_REDIRECT_URI',
 };
 
 // ------------------------------------------------------------------
@@ -178,7 +196,7 @@ export function isConnectionStatusName(value: unknown): value is ConnectionStatu
 // Canal de venda (enum `sale_channel` do banco)
 // ------------------------------------------------------------------
 
-export const SALE_CHANNELS = ['BROBOND', 'INSTAGRAM', 'MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP'] as const;
+export const SALE_CHANNELS = ['BROBOND', 'INSTAGRAM_SHOPPING', 'MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP'] as const;
 
 export type SaleChannelName = (typeof SALE_CHANNELS)[number];
 
@@ -187,10 +205,26 @@ export const SALE_STATUSES = ['PENDING', 'PAID', 'REFUNDED', 'CANCELLED'] as con
 export type SaleStatusName = (typeof SALE_STATUSES)[number];
 
 /**
- * O canal de uma venda sincronizada é idêntico ao provedor do conector —
- * os enums foram desenhados 1:1 na Fase 1, então o mapeamento não pode
- * divergir.
+ * Provedor do conector → canal gravado em `sales.channel`.
+ *
+ * Três canais são 1:1 com o provedor (os enums foram desenhados assim na
+ * Fase 1). A ÚNICA divergência é deliberada e vem da diretoria: o
+ * provedor `INSTAGRAM` (conta comercial da Meta) grava receita no canal
+ * `INSTAGRAM_SHOPPING` — o rótulo renomeado na migração
+ * `0015_instagram_shopping_channel`, que nomeia a vitrine, não a rede
+ * social.
+ *
+ * O mapa é `Record<ConnectorProviderName, SaleChannelName>`: provedor
+ * novo sem canal — ou canal que não exista no enum — QUEBRA A
+ * COMPILAÇÃO em vez de virar `undefined` em produção.
  */
+const SALE_CHANNEL_BY_PROVIDER: Record<ConnectorProviderName, SaleChannelName> = {
+  MERCADOLIVRE: 'MERCADOLIVRE',
+  MERCADOPAGO: 'MERCADOPAGO',
+  NUVEMSHOP: 'NUVEMSHOP',
+  INSTAGRAM: 'INSTAGRAM_SHOPPING',
+};
+
 export function saleChannelFromConnectorProvider(provider: ConnectorProviderName): SaleChannelName {
-  return provider;
+  return SALE_CHANNEL_BY_PROVIDER[provider];
 }

@@ -67,11 +67,10 @@ export type Module = {
   /**
    * Provedor do Hub Omnichannel quando o módulo é um conector multicanal.
    *
-   * `INSTAGRAM` é o quarto bloco do Hub: ele usa EXATAMENTE o mesmo painel
-   * analítico dos outros três (gabarito do brobond-ai-commerce), porém em
-   * modo de PRONTIDÃO — a API da Meta ainda não tem adaptador no servidor,
-   * então a página não chama `/api/connectors/instagram` e exibe o estado
-   * de homologação com os mesmos blocos e empty states.
+   * Os QUATRO canais usam EXATAMENTE o mesmo painel analítico (gabarito
+   * do brobond-ai-commerce) e o mesmo contrato de API: desde 2026-10-06
+   * o `INSTAGRAM` também tem motor no servidor (Graph API da Meta), e a
+   * página consulta `/api/connectors/instagram/painel` como a dos demais.
    */
   connector?: 'MERCADOLIVRE' | 'MERCADOPAGO' | 'NUVEMSHOP' | 'INSTAGRAM';
 };
@@ -160,12 +159,8 @@ export const MODULES: Module[] = [
     path: '/conectores/instagram',
     minPerfil: 'gerente',
     connector: 'INSTAGRAM',
-    description: 'Vitrine e catálogo do Instagram Shopping — painel analítico do canal com o status de prontidão da API da Meta.',
-    planned: [
-      'Login com a conta comercial do Instagram (Meta Business).',
-      'Publicação do catálogo de produtos com preço e grade.',
-      'Importação de pedidos do Checkout do Instagram.',
-    ],
+    description:
+      'Conexão direta com a Graph API da Meta: catálogo da sacolinha, webhook assinado de interações em tempo real e ingestão de pedido no canal INSTAGRAM_SHOPPING.',
   },
 
   // 🛒 Gestão de Commerce — esqueleto das operações digitais e fulfillment

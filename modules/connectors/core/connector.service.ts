@@ -9,9 +9,8 @@
  *     faturamento e quem recebe a venda importada é o OPERADOR do ERP.
  *   • Auditoria por gancho injetado (`core/audit.ts`) em vez de
  *     `prisma.auditLog`.
- *   • Shopee e TikTok foram REMOVIDOS do ecossistema (decisão da
- *     diretoria, 2026-10-05): o mapa de refresh é exaustivo sobre o TRIO
- *     DE PRODUÇÃO — MERCADOLIVRE, MERCADOPAGO e NUVEMSHOP — e o
+ *   • O mapa de refresh é exaustivo sobre os QUATRO canais de produção
+ *     — MERCADOLIVRE, MERCADOPAGO, NUVEMSHOP e INSTAGRAM — e o
  *     TypeScript garante isso em tempo de compilação
  *     (`satisfies Record<…>`).
  */
@@ -53,6 +52,13 @@ import {
   validateMercadoPagoAccessToken,
 } from '../mercadopago/mercadopago.service';
 import { buildNuvemshopAuthorizationUrl, exchangeNuvemshopCode, fetchNuvemshopStore } from '../nuvemshop/nuvemshop.service';
+import {
+  buildInstagramAuthorizationUrl,
+  exchangeInstagramCode,
+  exchangeInstagramLongLivedToken,
+  fetchInstagramBusinessAccount,
+  resolveInstagramRedirectUri,
+} from '../instagram/instagram.service';
 
 /** Margem de renovação: um token que vence em menos de 5 min é rotacionado. */
 const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
@@ -121,12 +127,27 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
   const now = deps.now ?? (() => new Date());
 
   /**
-   * Rotação de token por provedor. O mapa é EXAUSTIVO sobre o TRIO de
-   * produção: incluir um quarto (ou tentar reintroduzir um removido,
-   * como Shopee/TikTok) quebra a compilação em vez de virar um
-   * `undefined` silencioso em produção.
+   * Rotação de token por provedor. O mapa é EXAUSTIVO sobre os QUATRO
+   * canais de produção: incluir um quinto (ou tentar reintroduzir um
+   * removido, como Shopee/TikTok) quebra a compilação em vez de virar
+   * um `undefined` silencioso em produção.
    */
   const TOKEN_REFRESHERS = {
+    /**
+     * Instagram/Meta: não existe refresh token. O token de LONGA
+     * duração (60 dias) é renovado trocando-o por ele mesmo
+     * (`grant_type=fb_exchange_token`) enquanto estiver válido — por
+     * isso o "refresh token" guardado é o PRÓPRIO token longo.
+     */
+    INSTAGRAM: async (connector: ConnectorRow, refreshToken: string) => {
+      const tokens = await exchangeInstagramLongLivedToken(refreshToken);
+      return {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.accessToken,
+        expiresAt: tokens.expiresAt,
+        shopId: connector.shopId,
+      };
+    },
     MERCADOLIVRE: async (connector: ConnectorRow, refreshToken: string) => {
       const tokens = await refreshMercadoLivreToken(refreshToken);
       return {
@@ -206,6 +227,16 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
             redirectUri: resolveMercadoLivreRedirectUri(undefined, dynamicRedirectUri),
           };
         }
+        case 'INSTAGRAM': {
+          // A Meta EXIGE que o `redirect_uri` esteja na lista branca do
+          // app e que as duas pernas usem exatamente o mesmo valor.
+          const redirectUri = resolveInstagramRedirectUri(process.env, dynamicRedirectUri);
+          return {
+            provider,
+            authorizationUrl: buildInstagramAuthorizationUrl(state, undefined, redirectUri),
+            redirectUri,
+          };
+        }
         case 'NUVEMSHOP': {
           const { resolveNuvemshopRedirectUri } = await import('../nuvemshop/nuvemshop.service');
           // A Nuvemshop não aceita `redirect_uri` na URL de autorização: a
@@ -256,6 +287,37 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
             provider,
             connectorId: connector.id,
             metadata: { sellerId: identity.userId, nickname: identity.nickname },
+          });
+          return { usuarioId, connector };
+        }
+
+        case 'INSTAGRAM': {
+          // `redirectUri` vem do state persistido: a troca do código
+          // repete byte a byte a URI usada no consentimento.
+          const shortLived = await exchangeInstagramCode(input.code, resolveInstagramRedirectUri(process.env, redirectUri));
+          // Token curto (1h) é inútil para um conector: convertemos já
+          // para o de longa duração (60 dias), que é o renovável.
+          const longLived = await exchangeInstagramLongLivedToken(shortLived.accessToken);
+          const account = await fetchInstagramBusinessAccount(longLived.accessToken);
+          const connector = await repository.upsertConnection(usuarioId, provider, {
+            status: 'CONNECTED',
+            accessToken: encryptConnectorSecret(longLived.accessToken),
+            // A Meta não emite refresh token: o próprio token longo é o
+            // material de renovação (`fb_exchange_token`).
+            refreshToken: encryptConnectorSecret(longLived.accessToken),
+            expiresAt: longLived.expiresAt,
+            // Conta profissional do Instagram: é o `entry.id` de todo
+            // webhook e, portanto, a chave de resolução do dono.
+            shopId: account.igUserId,
+            shopName: account.username ? `@${account.username}` : account.name,
+            metadata: { pageId: account.pageId, pageName: account.pageName, username: account.username },
+          });
+          await auditConnector({
+            action: 'INSTAGRAM_CONNECTED',
+            usuarioId,
+            provider,
+            connectorId: connector.id,
+            metadata: { igUserId: account.igUserId, username: account.username, pageId: account.pageId },
           });
           return { usuarioId, connector };
         }

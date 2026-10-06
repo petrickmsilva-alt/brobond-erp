@@ -150,15 +150,30 @@ function parseNuvemshopEvent(request: WebhookRequest): ParsedWebhookEvent {
 }
 
 /**
- * Mapa provedor → parser. EXAUSTIVO sobre o TRIO de produção: o
- * compilador recusa uma chave a mais ou a menos. Não há entrada morta
- * para os conectores removidos (Shopee, TikTok) nem para o Instagram.
+ * Provedores que passam por ESTE despachante genérico. O Instagram fica
+ * de fora POR PROJETO: o canal tem motor próprio
+ * (`instagram/instagram.connector.service.ts`), com handshake
+ * `hub.challenge`, assinatura `x-hub-signature-256` e payload
+ * multi-entrada da Meta — nada disso cabe no contrato de um parser
+ * "um corpo, um evento" sem contaminar os outros três canais.
  */
-const PARSERS: Record<ConnectorProviderName, (request: WebhookRequest) => ParsedWebhookEvent> = {
+export type GenericWebhookProvider = Exclude<ConnectorProviderName, 'INSTAGRAM'>;
+
+/**
+ * Mapa provedor → parser. EXAUSTIVO sobre os canais genéricos: o
+ * compilador recusa uma chave a mais ou a menos. Não há entrada morta
+ * para os conectores removidos (Shopee, TikTok).
+ */
+const PARSERS: Record<GenericWebhookProvider, (request: WebhookRequest) => ParsedWebhookEvent> = {
   MERCADOLIVRE: parseMercadoLivreEvent,
   MERCADOPAGO: parseMercadoPagoEvent,
   NUVEMSHOP: parseNuvemshopEvent,
 };
+
+/** Este provedor é tratado pelo despachante genérico? */
+export function isGenericWebhookProvider(provider: ConnectorProviderName): provider is GenericWebhookProvider {
+  return provider !== 'INSTAGRAM';
+}
 
 // ------------------------------------------------------------------
 // Ingestão
@@ -179,6 +194,11 @@ export function createWebhookHandlers(deps: WebhookHandlerDependencies = {}) {
      * provedor; só `WebhookSignatureError` sobe (a rota mapeia para 401).
      */
     async handleProviderWebhook(provider: ConnectorProviderName, request: WebhookRequest): Promise<WebhookIngestResult> {
+      // Instagram nunca chega aqui: a rota pública o encaminha para o
+      // serviço dedicado antes deste despachante. Se chegar, é bug de
+      // montagem de rota — e recusar é mais seguro que adivinhar.
+      if (!isGenericWebhookProvider(provider)) throw new WebhookSignatureError(provider);
+
       const parse = PARSERS[provider];
       if (!parse) throw new WebhookSignatureError(provider);
 

@@ -7,11 +7,16 @@
  *
  *   • Tenancy `usuarioId` em todo o caminho (o responsável é resolvido
  *     pelo `shop_id` guardado no conector, nunca por entrada do chamador).
- *   • O TRIO de produção alimenta o motor — Mercado Livre, Mercado Pago
- *     e Nuvemshop, com o detalhe de pedido buscado na API oficial de
- *     cada um. Shopee e TikTok saíram do ecossistema (decisão da
- *     diretoria, 2026-10-05): a triangulação de vendas desses canais
- *     chega agora pela NUVEMSHOP, a plataforma-ponte do Hub.
+ *   • TRÊS canais alimentam ESTE motor — Mercado Livre, Mercado Pago e
+ *     Nuvemshop, com o detalhe de pedido buscado na API oficial de cada
+ *     um. Shopee e TikTok saíram do ecossistema (decisão da diretoria,
+ *     2026-10-05): a triangulação de vendas desses canais chega agora
+ *     pela NUVEMSHOP, a plataforma-ponte do Hub.
+ *   • O INSTAGRAM não passa por aqui DE PROPÓSITO: ele tem motor
+ *     próprio (`instagram/instagram.connector.service.ts`), porque a
+ *     Meta não expõe pedido em webhook nem endpoint de re-fetch de
+ *     pedido — o que chega são interações. `SALE_INGESTION_PROVIDERS`
+ *     omite `INSTAGRAM` e os `switch` deste arquivo são default-safe.
  *   • A venda passa a ter ITENS casados com `produtos`/`tamanhos`.
  *   • Sem BullMQ/Redis: o ERP é um processo só. O webhook grava o evento
  *     (durável, idempotente) e processa em seguida; o que falhar fica com

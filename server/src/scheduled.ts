@@ -19,7 +19,7 @@
 // ============================================================
 import { enviarEmail, smtpConfigurado } from './mail';
 import { hasDatabaseUrl } from './db';
-import { saleIngestionService } from '../../modules/connectors/index';
+import { instagramConnectorService, saleIngestionService } from '../../modules/connectors/index';
 import { getStore } from './services';
 import { getResource } from './resources';
 import { labelOf } from './store';
@@ -230,16 +230,33 @@ async function relatorioAlertas(): Promise<void> {
  * webhooks que ficaram pendentes (provedor fora do ar, token em
  * renovação, reinício do processo no meio da gravação). Nunca lança — o
  * agendador não pode cair por causa de um conector.
+ *
+ * São DUAS varreduras independentes, em dois `try` separados de
+ * propósito: o Instagram tem motor próprio (`instagramConnectorService`,
+ * fora do despachante genérico) e uma falha dele não pode impedir a
+ * recuperação do Mercado Livre / Mercado Pago / Nuvemshop — nem o
+ * contrário.
  */
 async function recuperarPedidosPendentes(): Promise<number> {
   if (!hasDatabaseUrl()) return 0;
+
+  let total = 0;
+
   try {
     const { processed } = await saleIngestionService.processPendingSaleEvents({ limit: 50 });
-    return processed;
+    total += processed;
   } catch (e: any) {
     console.warn('⚠️  Varredura de pedidos pendentes falhou:', e?.message || e);
-    return 0;
   }
+
+  try {
+    const { processed } = await instagramConnectorService.processPendingEvents({ limit: 50 });
+    total += processed;
+  } catch (e: any) {
+    console.warn('⚠️  Varredura de eventos pendentes do Instagram falhou:', e?.message || e);
+  }
+
+  return total;
 }
 
 export async function runScheduled(req: Request, res: Response) {

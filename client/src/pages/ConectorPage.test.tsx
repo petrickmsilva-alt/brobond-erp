@@ -5,6 +5,11 @@
 // canais: KPIs superiores, bloco central dividido, bloco inferior largo,
 // pulsação "CONECTADO COM SUCESSO" e — ponto de compliance — a AUSÊNCIA
 // definitiva de campos de credencial do Mercado Pago em tela.
+//
+// Desde 2026-10-06 o Instagram Shopping deixou de ser bloco de
+// prontidão: tem conector próprio ligado à Graph API da Meta, consulta
+// a mesma rota de painel dos outros e NÃO existe mais nenhum selo de
+// homologação na tela.
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -110,14 +115,48 @@ describe('ConectorPage — gabarito analítico do Hub', () => {
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/connectors/mercadopago/conectar-ambiente', {}));
   });
 
-  it('Instagram Shopping usa o mesmo bloco analítico, em modo de prontidão da Meta', async () => {
-    renderPage(moduleOf('conector-instagram'));
+  it('Instagram Shopping consulta o conector real e pulsa em verde quando conectado', async () => {
+    apiGet.mockResolvedValue({
+      connector: statusFixture({ provider: 'INSTAGRAM', label: 'Instagram Shopping', shopName: '@brobond' }),
+      panel: { ...EMPTY_PANEL, provider: 'INSTAGRAM' },
+    });
 
-    expect(await screen.findByText('API DA META EM HOMOLOGAÇÃO')).toBeInTheDocument();
+    const { container } = renderPage(moduleOf('conector-instagram'));
+
+    // O canal tem motor no servidor: a página fala com a rota dele.
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/connectors/instagram/painel'));
+    expect(await screen.findByText('CONECTADO COM SUCESSO')).toBeInTheDocument();
+    expect(container.querySelector('.animate-ping.bg-green-500')).not.toBeNull();
     expect(screen.getByText('Nenhuma venda registrada')).toBeInTheDocument();
     expect(screen.getByText('Nenhum evento recebido')).toBeInTheDocument();
     expect(screen.getByText('Nenhum conteúdo importado')).toBeInTheDocument();
-    // Canal sem adaptador: a página NUNCA chama /api/connectors/instagram.
-    expect(apiGet).not.toHaveBeenCalled();
+  });
+
+  it('o selo ocre de homologação da Meta não existe mais em nenhum canal', async () => {
+    for (const id of ['conector-instagram', 'conector-mercadolivre', 'conector-mercadopago', 'conector-nuvemshop']) {
+      const { unmount } = renderPage(moduleOf(id));
+      await screen.findByText('Pedidos Importados');
+      expect(screen.queryByText(/HOMOLOGAÇÃO/i)).toBeNull();
+      unmount();
+    }
+  });
+
+  it('Instagram desconectado mostra o status real do canal, nunca a pulsação verde', async () => {
+    apiGet.mockResolvedValue({
+      connector: statusFixture({
+        provider: 'INSTAGRAM',
+        status: 'DISCONNECTED',
+        statusLabel: 'Desconectado',
+        connected: false,
+        shopId: null,
+        shopName: null,
+      }),
+      panel: { ...EMPTY_PANEL, provider: 'INSTAGRAM' },
+    });
+
+    renderPage(moduleOf('conector-instagram'));
+
+    expect(await screen.findByText('Desconectado')).toBeInTheDocument();
+    expect(screen.queryByText('CONECTADO COM SUCESSO')).toBeNull();
   });
 });

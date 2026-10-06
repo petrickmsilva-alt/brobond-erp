@@ -1,7 +1,18 @@
 // Canais de venda do domínio. SHOPEE e TIKTOK_SHOP saíram com a remoção
 // dos conectores nativos (2026-10-05); a triangulação desses canais chega
 // pela NUVEMSHOP, a plataforma-ponte do Hub Omnichannel.
-export type SalesChannel = 'COUNTER' | 'REPRESENTATIVE' | 'WOOCOMMERCE' | 'MERCADOLIVRE' | 'MERCADOPAGO' | 'NUVEMSHOP';
+//
+// INSTAGRAM_SHOPPING (2026-10-06) nomeia a vitrine da conta comercial da
+// Meta — é o mesmo rótulo do enum `sale_channel` do banco, para que o
+// agregado e a tabela `sales` nunca divirjam.
+export type SalesChannel =
+  | 'COUNTER'
+  | 'REPRESENTATIVE'
+  | 'WOOCOMMERCE'
+  | 'MERCADOLIVRE'
+  | 'MERCADOPAGO'
+  | 'NUVEMSHOP'
+  | 'INSTAGRAM_SHOPPING';
 
 export interface OrderItemProps { productId: number; sizeId?: number; sku: string; quantity: number; unitPriceCents: number; }
 export class OrderItem {

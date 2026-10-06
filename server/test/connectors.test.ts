@@ -1,9 +1,14 @@
 // ============================================================
 // Testes do módulo de conectores de marketplace (Fase 2):
-//   • registro estrito do TRIO de produção — MERCADOLIVRE, MERCADOPAGO
-//     e NUVEMSHOP (Shopee e TikTok não existem mais)
+//   • registro estrito dos QUATRO canais de produção — MERCADOLIVRE,
+//     MERCADOPAGO, NUVEMSHOP e INSTAGRAM (Shopee e TikTok não existem
+//     mais)
 //   • criptografia AES-256-GCM dos tokens em repouso
-//   • assinaturas de webhook (Mercado Pago, Nuvemshop)
+//   • assinaturas de webhook (Mercado Pago, Nuvemshop, Instagram/Meta)
+//   • conector do Instagram: handshake hub.challenge, assinatura
+//     x-hub-signature-256, parsing do payload multi-entrada da Meta,
+//     canal INSTAGRAM_SHOPPING e o contrato de "nada é inventado"
+//     (interação NUNCA vira venda)
 //   • callbacks OAuth apontando ESTRITAMENTE para o host unificado
 //     da Render (https://brobond-erp.onrender.com/api/connectors/...)
 //   • redirect_uri dinâmico do painel (origem da Render validada)
@@ -56,6 +61,17 @@ const { buildNuvemshopAuthorizationUrl, resolveNuvemshopRedirectUri, verifyNuvem
 );
 const { buildMercadoLivreAuthorizationUrl, resolveMercadoLivreRedirectUri } = await import('../../modules/connectors/mercadolivre/mercadolivre.service');
 const { verifyMercadoPagoWebhookSignature } = await import('../../modules/connectors/mercadopago/mercadopago.service');
+const {
+  InstagramConnectorService,
+  INSTAGRAM_SALE_CHANNEL,
+  buildInstagramAuthorizationUrl,
+  isInstagramSaleTopic,
+  mapInstagramOrderPayload,
+  parseInstagramWebhookPayload,
+  resolveInstagramRedirectUri,
+  verifyInstagramWebhookChallenge,
+  verifyInstagramWebhookSignature,
+} = await import('../../modules/connectors/instagram/index');
 
 /** Host unificado do ERP na Render — único domínio aceito nos callbacks. */
 const HOST_UNIFICADO = 'https://brobond-erp.onrender.com';
@@ -95,10 +111,18 @@ function fakeDb(responder: (sql: string, params: readonly unknown[]) => any[]) {
 }
 
 describe('Conectores — registro de provedores', () => {
-  test('conhece exatamente o trio de produção', () => {
-    assert.deepEqual([...CONNECTOR_PROVIDERS].sort(), ['MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP']);
-    assert.equal(REGISTERED_CONNECTOR_COUNT, 3);
-    assert.equal(listConnectors().length, 3);
+  test('conhece exatamente os quatro canais de produção', () => {
+    assert.deepEqual([...CONNECTOR_PROVIDERS].sort(), ['INSTAGRAM', 'MERCADOLIVRE', 'MERCADOPAGO', 'NUVEMSHOP']);
+    assert.equal(REGISTERED_CONNECTOR_COUNT, 4);
+    assert.equal(listConnectors().length, 4);
+  });
+
+  test('o Instagram Shopping tem adaptador próprio e resolve pelos apelidos de URL', () => {
+    assert.equal(parseConnectorProvider('instagram'), 'INSTAGRAM');
+    assert.equal(parseConnectorProvider('Instagram-Shopping'), 'INSTAGRAM');
+    assert.equal(isConnectorProviderName('INSTAGRAM'), true);
+    assert.equal(getConnectorFromInput('instagram')?.provider, 'INSTAGRAM');
+    assert.equal(connectorWebhookPath('instagram'), '/api/webhooks/instagram');
   });
 
   test('Shopee e TikTok foram removidos e não resolvem em lugar nenhum', () => {
@@ -134,6 +158,8 @@ describe('Conectores — registro de provedores', () => {
       assert.ok(saleChannelFromConnectorProvider(provider));
     }
     assert.equal(saleChannelFromConnectorProvider('NUVEMSHOP'), 'NUVEMSHOP');
+    // O provedor é a CONTA (INSTAGRAM); o canal da receita é a VITRINE.
+    assert.equal(saleChannelFromConnectorProvider('INSTAGRAM'), 'INSTAGRAM_SHOPPING');
   });
 
   test('o caminho público do webhook é derivado do slug', () => {
@@ -563,5 +589,434 @@ describe('Conectores — tópicos que carregam venda', () => {
     assert.equal(isSaleIngestionEvent('NUVEMSHOP', 'product/updated'), false);
     assert.equal(isSaleIngestionEvent('MERCADOPAGO', 'plan'), false);
     assert.equal(isSaleIngestionEvent('MERCADOLIVRE', null), false);
+    // O Instagram não passa pelo despachante genérico: tem motor próprio.
+    assert.equal(isSaleIngestionEvent('INSTAGRAM', 'comments'), false);
+  });
+});
+
+// ============================================================
+// INSTAGRAM SHOPPING — conector independente (Graph API da Meta)
+//
+// Estes testes travam DUAS coisas ao mesmo tempo:
+//   1. o contrato técnico real da Meta (handshake hub.challenge,
+//      assinatura `sha256=` sobre os bytes crus, payload multi-entrada
+//      com `changes[]` e `messaging[]`);
+//   2. o CONTRATO DE HONESTIDADE do painel: interação não é receita.
+//      Comentário, menção, DM e clique de sacolinha entram na caixa de
+//      eventos e NUNCA viram linha em `sales`. Um teste que passe a
+//      aceitar venda fabricada aqui é regressão de produto, não de
+//      código.
+// ============================================================
+
+/** App secret e verify token usados em toda a suíte do Instagram. */
+const IG_APP_SECRET = 'segredo-do-app-da-meta';
+const IG_VERIFY_TOKEN = 'token-combinado-com-a-meta';
+
+/** Assina um corpo cru exatamente como a Meta faria. */
+function assinaturaMeta(body: string, secret = IG_APP_SECRET): string {
+  return `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
+}
+
+describe('Instagram — handshake e assinatura do webhook da Meta', () => {
+  test('o handshake devolve o hub.challenge quando o verify token confere', () => {
+    return comEnv({ INSTAGRAM_WEBHOOK_VERIFY_TOKEN: IG_VERIFY_TOKEN }, () => {
+      const challenge = verifyInstagramWebhookChallenge({
+        'hub.mode': 'subscribe',
+        'hub.verify_token': IG_VERIFY_TOKEN,
+        'hub.challenge': '1158201444',
+      });
+      assert.equal(challenge, '1158201444');
+    });
+  });
+
+  test('token errado, modo errado ou ambiente sem token recusam o cadastro', () => {
+    return comEnv({ INSTAGRAM_WEBHOOK_VERIFY_TOKEN: IG_VERIFY_TOKEN }, () => {
+      assert.equal(
+        verifyInstagramWebhookChallenge({ 'hub.mode': 'subscribe', 'hub.verify_token': 'outro', 'hub.challenge': '1' }),
+        null
+      );
+      assert.equal(
+        verifyInstagramWebhookChallenge({ 'hub.mode': 'unsubscribe', 'hub.verify_token': IG_VERIFY_TOKEN, 'hub.challenge': '1' }),
+        null
+      );
+      return comEnv({ INSTAGRAM_WEBHOOK_VERIFY_TOKEN: undefined }, () => {
+        assert.equal(
+          verifyInstagramWebhookChallenge({ 'hub.mode': 'subscribe', 'hub.verify_token': IG_VERIFY_TOKEN, 'hub.challenge': '1' }),
+          null
+        );
+      });
+    });
+  });
+
+  test('x-hub-signature-256: HMAC-SHA256 do corpo CRU com o app secret', () => {
+    return comEnv({ INSTAGRAM_APP_SECRET: IG_APP_SECRET }, () => {
+      const body = JSON.stringify({ object: 'instagram', entry: [{ id: '17841400000000000', time: 1790000000, changes: [] }] });
+      assert.equal(verifyInstagramWebhookSignature(body, assinaturaMeta(body)), true);
+      // Um byte a mais no corpo invalida a entrega inteira.
+      assert.equal(verifyInstagramWebhookSignature(`${body} `, assinaturaMeta(body)), false);
+      // Hex sem o prefixo `sha256=` é formato de outro provedor.
+      assert.equal(verifyInstagramWebhookSignature(body, createHmac('sha256', IG_APP_SECRET).update(body).digest('hex')), false);
+      assert.equal(verifyInstagramWebhookSignature(body, assinaturaMeta(body, 'segredo-errado')), false);
+      assert.equal(verifyInstagramWebhookSignature(body, null), false);
+    });
+  });
+
+  test('sem app secret no ambiente, nenhuma assinatura é aceita', () => {
+    return comEnv({ INSTAGRAM_APP_SECRET: undefined }, () => {
+      const body = '{}';
+      assert.equal(verifyInstagramWebhookSignature(body, assinaturaMeta(body)), false);
+    });
+  });
+
+  test('a URL de consentimento usa o diálogo oficial da Meta com o redirect do host unificado', () => {
+    return comEnv(
+      { INSTAGRAM_APP_ID: '1234567890', INSTAGRAM_APP_SECRET: IG_APP_SECRET, APP_URL: HOST_UNIFICADO, INSTAGRAM_REDIRECT_URI: undefined },
+      () => {
+        const url = new URL(buildInstagramAuthorizationUrl('csrf-state', undefined, resolveInstagramRedirectUri()));
+        assert.equal(url.origin, 'https://www.facebook.com');
+        assert.ok(url.pathname.endsWith('/dialog/oauth'));
+        assert.equal(url.searchParams.get('client_id'), '1234567890');
+        assert.equal(url.searchParams.get('state'), 'csrf-state');
+        assert.equal(url.searchParams.get('redirect_uri'), `${HOST_UNIFICADO}/api/connectors/instagram/callback`);
+        assert.ok(url.searchParams.get('scope')?.includes('instagram_basic'));
+      }
+    );
+  });
+});
+
+describe('Instagram — normalização do payload da Meta', () => {
+  test('lê changes[] e messaging[] da mesma entrega e deduplica por chave estável', () => {
+    const eventos = parseInstagramWebhookPayload({
+      object: 'instagram',
+      entry: [
+        {
+          id: '17841400000000000',
+          time: 1790000000,
+          changes: [{ field: 'comments', value: { id: 'c-1', text: 'quanto custa?', from: { id: 'u-9', username: 'cliente' } } }],
+        },
+        {
+          id: '17841400000000000',
+          time: 1790000001,
+          messaging: [
+            {
+              sender: { id: 'u-9' },
+              recipient: { id: '17841400000000000' },
+              timestamp: 1790000001000,
+              // Clique na sacolinha que abre a DM: é REFERRAL, não pedido.
+              referral: { ref: 'produto-123', source: 'SHOPPING', type: 'OPEN_THREAD' },
+            },
+          ],
+        },
+      ],
+    });
+
+    assert.equal(eventos.length, 2);
+    assert.equal(eventos[0].topic, 'comments');
+    assert.equal(eventos[0].igUserId, '17841400000000000');
+    assert.equal(eventos[0].externalEventId, 'instagram:comments:17841400000000000:c-1');
+    assert.equal(eventos[1].topic, 'messaging_referral');
+
+    // Reentrega do MESMO corpo gera a MESMA chave de dedupe.
+    const reentrega = parseInstagramWebhookPayload({
+      object: 'instagram',
+      entry: [{ id: '17841400000000000', time: 1790000000, changes: [{ field: 'comments', value: { id: 'c-1' } }] }],
+    });
+    assert.equal(reentrega[0].externalEventId, eventos[0].externalEventId);
+  });
+
+  test('corpo de outro objeto da Meta não produz evento nenhum', () => {
+    assert.deepEqual(parseInstagramWebhookPayload({ object: 'page', entry: [{ id: '1', changes: [{ field: 'feed', value: {} }] }] }), []);
+    assert.deepEqual(parseInstagramWebhookPayload({}), []);
+  });
+});
+
+describe('Instagram — o caminho de receita é dirigido por payload', () => {
+  test('NENHUMA interação da Meta é convertida em venda', () => {
+    // Estes são os campos que o objeto `instagram` realmente emite.
+    const interacoes = [
+      { field: 'comments', value: { id: 'c-1', text: 'eu quero!' } },
+      { field: 'mentions', value: { media_id: 'm-1', comment_id: 'c-2' } },
+      { field: 'messages', value: { sender: { id: 'u-1' }, message: { mid: 'mid-1', text: 'vou comprar' } } },
+      { field: 'messaging_referral', value: { referral: { ref: 'produto-123', source: 'SHOPPING' } } },
+      { field: 'story_insights', value: { impressions: 42, reach: 40 } },
+    ];
+    for (const payload of interacoes) {
+      assert.equal(mapInstagramOrderPayload(payload), null, `${payload.field} jamais pode virar receita`);
+    }
+    // E nenhum desses tópicos entra no motor financeiro.
+    for (const payload of interacoes) assert.equal(isInstagramSaleTopic(payload.field), false);
+  });
+
+  test('um pedido COMPLETO é convertido para o contrato de ingestão do ERP', () => {
+    const order = mapInstagramOrderPayload({
+      field: 'orders',
+      value: {
+        order: {
+          id: 'IG-ORDER-77',
+          order_status: { state: 'COMPLETED' },
+          created: '2026-10-01T15:04:05+0000',
+          order_total: { amount: '249.90', currency: 'BRL' },
+          items: [
+            { retailer_id: 'CAM-AZ', product_name: 'Camisa Azul', quantity: 2, price_per_unit: { amount: '99.95', currency: 'BRL' }, variant: 'M' },
+            { retailer_id: 'MEI-PR', product_name: 'Meia Preta', quantity: 1, price_per_unit: { amount: '50.00', currency: 'BRL' } },
+          ],
+        },
+      },
+    });
+
+    assert.ok(order);
+    assert.equal(order!.id, 'IG-ORDER-77');
+    assert.equal(order!.status, 'PAID');
+    assert.equal(order!.currency, 'BRL');
+    assert.equal(order!.totalAmountCents, 24990);
+    assert.equal(order!.items.length, 2);
+    assert.equal(order!.items[0].sku, 'CAM-AZ');
+    assert.equal(order!.items[0].unitPriceCents, 9995);
+    assert.equal(order!.items[0].sizeLabel, 'M');
+    assert.equal(isInstagramSaleTopic('orders'), true);
+  });
+
+  test('pedido sem item ou sem identificador externo é descartado', () => {
+    assert.equal(mapInstagramOrderPayload({ value: { order: { id: 'IG-1', items: [] } } }), null);
+    assert.equal(mapInstagramOrderPayload({ value: { order: { items: [{ retailer_id: 'X', quantity: 1 }] } } }), null);
+  });
+});
+
+describe('Instagram — ingestão idempotente no canal INSTAGRAM_SHOPPING', () => {
+  test('o canal gravado em sales é estritamente INSTAGRAM_SHOPPING', () => {
+    assert.equal(INSTAGRAM_SALE_CHANNEL, 'INSTAGRAM_SHOPPING');
+    assert.equal(marketplaceSaleReference(INSTAGRAM_SALE_CHANNEL, 'IG-ORDER-77'), 'instagram_shopping:IG-ORDER-77');
+  });
+
+  test('o pedido entra em sales pelo upsert guardado pela chave única', async () => {
+    const db = fakeDb((sql) => {
+      if (sql.includes('FROM sales')) return [];
+      if (sql.startsWith('INSERT INTO sales')) {
+        return [
+          {
+            id: 'ig-sale-1',
+            reference: 'instagram_shopping:IG-ORDER-77',
+            quantity: 3,
+            amount_cents: 24990,
+            currency: 'BRL',
+            status: 'PAID',
+            occurred_at: new Date('2026-10-01T15:04:05Z'),
+            channel: 'INSTAGRAM_SHOPPING',
+            external_order_id: 'IG-ORDER-77',
+            usuario_id: 7,
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        ];
+      }
+      return [];
+    });
+
+    const contadores: any[] = [];
+    const service = new InstagramConnectorService({
+      resolveDb: () => db,
+      repository: {
+        incrementIngestionCounters: async (usuarioId: number, provider: string, counters: unknown) => {
+          contadores.push({ usuarioId, provider, counters });
+          return null;
+        },
+      } as any,
+    });
+
+    const order = mapInstagramOrderPayload({
+      value: {
+        order: {
+          id: 'IG-ORDER-77',
+          order_status: { state: 'COMPLETED' },
+          order_total: { amount: '249.90', currency: 'BRL' },
+          items: [
+            { retailer_id: 'CAM-AZ', product_name: 'Camisa Azul', quantity: 2, price_per_unit: { amount: '99.95' } },
+            { retailer_id: 'MEI-PR', product_name: 'Meia Preta', quantity: 1, price_per_unit: { amount: '50.00' } },
+          ],
+        },
+      },
+    });
+
+    const result = await service.ingestOrder(7, order!);
+    assert.equal(result.saleId, 'ig-sale-1');
+    assert.equal(result.outcome, 'created');
+    assert.equal(result.amountCents, 24990);
+
+    const insert = db.log.find((q: any) => q.sql.startsWith('INSERT INTO sales'));
+    assert.ok(insert.sql.includes('ON CONFLICT (usuario_id, channel, external_order_id)'));
+    assert.ok(insert.params.includes('INSTAGRAM_SHOPPING'));
+    // O KPI "Pedidos Importados" do cartão vem DAQUI — contagem real.
+    assert.deepEqual(contadores[0], { usuarioId: 7, provider: 'INSTAGRAM', counters: { imported: 1, duplicated: 0, failed: 0 } });
+  });
+
+  test('entrega forjada não chega ao banco', async () => {
+    return comEnv({ INSTAGRAM_APP_SECRET: IG_APP_SECRET }, async () => {
+      const service = new InstagramConnectorService({
+        resolveDb: () => fakeDb(() => []),
+        repository: {} as any,
+      });
+      await assert.rejects(
+        () =>
+          service.handleWebhook({
+            headers: { 'x-hub-signature-256': 'sha256=' + '0'.repeat(64) },
+            rawBody: JSON.stringify({ object: 'instagram', entry: [] }),
+            query: {},
+          }),
+        /Assinatura de webhook inválida/
+      );
+    });
+  });
+
+  test('entrega assinada de interação vira EVENTO, nunca venda', async () => {
+    return comEnv({ INSTAGRAM_APP_SECRET: IG_APP_SECRET }, async () => {
+      const body = JSON.stringify({
+        object: 'instagram',
+        entry: [
+          {
+            id: '17841400000000000',
+            time: 1790000000,
+            changes: [{ field: 'comments', value: { id: 'c-1', text: 'quanto custa?' } }],
+          },
+        ],
+      });
+
+      const gravados: any[] = [];
+      const processados: string[] = [];
+      const db = fakeDb(() => []);
+      const service = new InstagramConnectorService({
+        resolveDb: () => db,
+        repository: {
+          findByShopId: async (provider: string, shopId: string) => {
+            assert.equal(provider, 'INSTAGRAM');
+            assert.equal(shopId, '17841400000000000');
+            return { id: 'conn-1', usuarioId: 7, provider: 'INSTAGRAM', shopId };
+          },
+          hasEvent: async () => false,
+          recordEvent: async (_usuarioId: number, event: unknown) => {
+            gravados.push(event);
+            return null;
+          },
+          markEventProcessed: async (_u: number, _p: string, externalEventId: string) => {
+            processados.push(externalEventId);
+          },
+        } as any,
+      });
+
+      const result = await service.handleWebhook({
+        headers: { 'x-hub-signature-256': assinaturaMeta(body) },
+        rawBody: body,
+        query: {},
+      });
+
+      assert.deepEqual({ accepted: result.accepted, duplicates: result.duplicates, ignored: result.ignored }, { accepted: 1, duplicates: 0, ignored: 0 });
+      assert.equal(result.orders.length, 0, 'interação JAMAIS produz venda');
+      assert.equal(gravados[0].topic, 'comments');
+      assert.equal(gravados[0].provider, 'INSTAGRAM');
+      assert.equal(processados.length, 1);
+      // Nenhuma consulta a `sales` foi disparada por um comentário.
+      assert.equal(db.log.length, 0);
+    });
+  });
+
+  test('reentrega da mesma chave é reconhecida e descartada', async () => {
+    return comEnv({ INSTAGRAM_APP_SECRET: IG_APP_SECRET }, async () => {
+      const body = JSON.stringify({
+        object: 'instagram',
+        entry: [{ id: '17841400000000000', time: 1790000000, changes: [{ field: 'comments', value: { id: 'c-1' } }] }],
+      });
+      const service = new InstagramConnectorService({
+        resolveDb: () => fakeDb(() => []),
+        repository: {
+          findByShopId: async () => ({ id: 'conn-1', usuarioId: 7, provider: 'INSTAGRAM', shopId: '17841400000000000' }),
+          hasEvent: async () => true,
+          recordEvent: async () => {
+            throw new Error('reentrega NUNCA pode gravar de novo');
+          },
+        } as any,
+      });
+
+      const result = await service.handleWebhook({ headers: { 'x-hub-signature-256': assinaturaMeta(body) }, rawBody: body, query: {} });
+      assert.equal(result.duplicates, 1);
+      assert.equal(result.accepted, 0);
+    });
+  });
+
+  test('conta do Instagram sem dono no ERP é ignorada em silêncio', async () => {
+    return comEnv({ INSTAGRAM_APP_SECRET: IG_APP_SECRET }, async () => {
+      const body = JSON.stringify({
+        object: 'instagram',
+        entry: [{ id: '17841499999999999', time: 1790000000, changes: [{ field: 'mentions', value: { media_id: 'm-1' } }] }],
+      });
+      const service = new InstagramConnectorService({
+        resolveDb: () => fakeDb(() => []),
+        repository: { findByShopId: async () => null } as any,
+      });
+      const result = await service.handleWebhook({ headers: { 'x-hub-signature-256': assinaturaMeta(body) }, rawBody: body, query: {} });
+      assert.deepEqual({ accepted: result.accepted, ignored: result.ignored }, { accepted: 0, ignored: 1 });
+    });
+  });
+});
+
+describe('Instagram — consultas que alimentam o painel analítico', () => {
+  test('receita, pedidos e eventos saem de consultas reais escopadas ao operador', async () => {
+    const db = fakeDb((sql) => {
+      if (sql.includes('COALESCE(SUM(amount_cents)')) return [{ total: '24990' }];
+      if (sql.includes('COUNT(*) AS total') && sql.includes('FROM sales')) return [{ total: '1' }];
+      if (sql.includes('COUNT(*) AS total') && sql.includes('connector_events')) return [{ total: '12' }];
+      if (sql.includes('FROM sales')) {
+        return [
+          {
+            id: 'ig-sale-1',
+            reference: 'instagram_shopping:IG-ORDER-77',
+            external_order_id: 'IG-ORDER-77',
+            status: 'PAID',
+            quantity: 3,
+            amount_cents: 24990,
+            currency: 'BRL',
+            occurred_at: new Date('2026-10-01T15:04:05Z'),
+          },
+        ];
+      }
+      if (sql.includes('FROM sale_items')) return [];
+      return [];
+    });
+
+    const service = new InstagramConnectorService({
+      resolveDb: () => db,
+      repository: {
+        listRecentEvents: async () => [
+          { id: 'e1', externalEventId: 'instagram:comments:1:c-1', topic: 'comments', processedAt: new Date(), createdAt: new Date() },
+        ],
+      } as any,
+    });
+
+    const panel = await service.getPanel(7, 10);
+    assert.equal(panel.provider, 'INSTAGRAM');
+    assert.equal(panel.revenueCents, 24990);
+    assert.equal(panel.salesCount, 1);
+    assert.equal(panel.eventCount, 12);
+    assert.equal(panel.events[0].topic, 'comments');
+    assert.equal(panel.sales[0].externalOrderId, 'IG-ORDER-77');
+
+    // TODA consulta do painel é escopada ao operador e ao canal.
+    for (const q of db.log) {
+      assert.equal(q.params[0], 7);
+      if (q.sql.includes('sale_channel')) assert.ok(q.params.includes('INSTAGRAM_SHOPPING'));
+    }
+  });
+
+  test('canal sem dado nenhum devolve ZERO — nunca um número estimado', async () => {
+    const service = new InstagramConnectorService({
+      resolveDb: () => fakeDb(() => []),
+      repository: { listRecentEvents: async () => [] } as any,
+    });
+    const panel = await service.getPanel(7, 10);
+    assert.deepEqual(
+      { revenueCents: panel.revenueCents, salesCount: panel.salesCount, eventCount: panel.eventCount },
+      { revenueCents: 0, salesCount: 0, eventCount: 0 }
+    );
+    assert.deepEqual(panel.sales, []);
+    assert.deepEqual(panel.events, []);
+    assert.deepEqual(panel.importedContent, []);
   });
 });

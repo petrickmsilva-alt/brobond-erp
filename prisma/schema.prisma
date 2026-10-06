@@ -240,10 +240,14 @@ enum SaleStatus {
 /// `ConnectorProvider` 1:1 para que TODO pedido sincronizado por um
 /// conector carregue a plataforma exata em que foi vendido —
 /// obrigatório para o dashboard split de receita
-/// "Brobond × Mercado Livre × Mercado Pago × Nuvemshop".
+/// "Brobond × Mercado Livre × Mercado Pago × Nuvemshop × Instagram".
+/// `INSTAGRAM_SHOPPING` nomeia a VITRINE (a sacolinha da conta
+/// comercial), não a rede social: valor renomeado na migration
+/// `instagram_shopping_channel` (2026-10-06), quando o canal ganhou
+/// conector próprio.
 enum SaleChannel {
   BROBOND
-  INSTAGRAM
+  INSTAGRAM_SHOPPING
   MERCADOLIVRE
   MERCADOPAGO
   NUVEMSHOP
@@ -255,7 +259,8 @@ enum SaleChannel {
 /// PR012 — Real Marketplace Integrations). Apenas APIs oficiais:
 /// Mercado Livre OAuth2 (Meli), credenciais de API do Mercado Pago,
 /// Nuvemshop/Tiendanube OAuth2 (plataforma-ponte da triangulação de
-/// vendas) e Meta Graph API (Instagram Shopping, ainda sem adaptador).
+/// vendas) e Meta Graph API (Instagram Shopping — conector próprio
+/// desde 2026-10-06).
 /// SHOPEE e TIKTOK foram removidos na migration
 /// `drop_shopee_and_tiktok_connectors` (2026-10-05).
 enum ConnectorProvider {

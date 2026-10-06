@@ -5,11 +5,14 @@
  * Fonte: `modules/connectors/core/connector.factory.ts` do
  * brobond-ai-commerce (PR005/PR012).
  *
- * ESTADO ATUAL (decisão da diretoria, 2026-10-05): o mapa trata
- * ESTRITAMENTE o TRIO DE PRODUÇÃO — MERCADOLIVRE, MERCADOPAGO e
- * NUVEMSHOP — sem nenhuma referência morta:
+ * ESTADO ATUAL: o mapa trata ESTRITAMENTE os QUATRO canais de produção
+ * — MERCADOLIVRE, MERCADOPAGO, NUVEMSHOP e INSTAGRAM — sem nenhuma
+ * referência morta:
  *
- *   • saíram `MOCK` e `INSTAGRAM` (nunca foram motores de pedido do ERP);
+ *   • saiu `MOCK` (nunca foi motor de pedido do ERP);
+ *   • ENTROU `INSTAGRAM` (2026-10-06): conector próprio e isolado,
+ *     ligado direto à Graph API da Meta — catálogo de Product Tagging e
+ *     webhook assinado. Nenhum dos outros três é tocado por ele;
  *   • saíram os conectores nativos de SHOPEE e TIKTOK, removidos do
  *     ecossistema por causa das barreiras burocráticas das APIs deles —
  *     não há builder, import, slug, rótulo nem ramo de persistência
@@ -25,6 +28,7 @@
  * `switch` fora daqui.
  */
 
+import { InstagramConnector } from '../instagram/instagram.connector';
 import { MercadoLivreConnector } from '../mercadolivre/mercadolivre.connector';
 import { MercadoPagoConnector } from '../mercadopago/mercadopago.connector';
 import { NuvemshopConnector } from '../nuvemshop/nuvemshop.connector';
@@ -41,6 +45,7 @@ const CONNECTOR_BUILDERS: Record<ConnectorProviderName, () => ProviderConnector>
   MERCADOLIVRE: () => new MercadoLivreConnector(),
   MERCADOPAGO: () => new MercadoPagoConnector(),
   NUVEMSHOP: () => new NuvemshopConnector(),
+  INSTAGRAM: () => new InstagramConnector(),
 };
 
 const instances = new Map<ConnectorProviderName, ProviderConnector>();
