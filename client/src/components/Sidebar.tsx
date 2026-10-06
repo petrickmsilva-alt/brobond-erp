@@ -1,8 +1,8 @@
 // ============================================================================
 // Sidebar — Fase 3 "Brobond AI ERP" (Dark Mode Premium).
 //
-// Os 40+ links do ERP foram reorganizados em 8 grandes categorias: o Dashboard
-// (link direto, sempre no topo) e 7 blocos colapsáveis (accordion). O estado
+// Os links do ERP foram reorganizados em 9 grandes categorias: o Dashboard
+// (link direto, sempre no topo) e 9 blocos colapsáveis (accordion). O estado
 // aberto/fechado é React local + persistência em localStorage, com a categoria
 // da rota atual sempre expandida automaticamente.
 // ============================================================================

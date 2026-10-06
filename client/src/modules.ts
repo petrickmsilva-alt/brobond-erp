@@ -42,6 +42,10 @@ import {
   Package,
   Plug,
   ShoppingBag,
+  Bot,
+  Megaphone,
+  TrendingUp,
+  Truck,
 } from 'lucide-react';
 
 export type Module = {
@@ -135,7 +139,7 @@ export const MODULES: Module[] = [
     path: '/conectores/mercado-pago',
     minPerfil: 'gerente',
     connector: 'MERCADOPAGO',
-    description: 'Checkout e faturamento via Access Token de produção do Mercado Pago.',
+    description: 'Checkout e faturamento via credenciais provisionadas no ambiente seguro do servidor.',
   },
   {
     id: 'conector-nuvemshop',
@@ -163,6 +167,21 @@ export const MODULES: Module[] = [
       'Importação de pedidos do Checkout do Instagram.',
     ],
   },
+
+  // 🛒 Gestão de Commerce — esqueleto das operações digitais e fulfillment
+  // Esses módulos são páginas de prontidão: a rota e o contrato visual ficam
+  // disponíveis desde já, sem inventar chamadas de API antes do domínio estar
+  // implementado.
+  { id: 'commerce-produtos', label: 'Produtos', icon: Package, group: 'Gestão de Commerce', path: '/commerce/produtos', description: 'Catálogo omnichannel, variantes, SKUs e publicação por canal.', planned: ['Catálogo unificado para todos os canais.', 'Variações, estoque disponível e regras de publicação.', 'Fila de publicação com histórico por canal.'] },
+  { id: 'commerce-pedidos', label: 'Pedidos', icon: ShoppingCart, group: 'Gestão de Commerce', path: '/commerce/pedidos', description: 'Orquestração de pedidos, status de pagamento e expedição.', planned: ['Inbox único de pedidos de todos os canais.', 'Reserva de estoque e atualização de status.', 'Roteamento para separação e expedição.'] },
+  { id: 'commerce-trends', label: 'Trends', icon: TrendingUp, group: 'Gestão de Commerce', path: '/commerce/trends', description: 'Tendências de vendas, produtos e performance por canal.', planned: ['Curvas de demanda por SKU e canal.', 'Comparativos de receita e conversão.', 'Alertas de oportunidade baseados no histórico.'] },
+  { id: 'commerce-delivery', label: '📦 Delivery', icon: Truck, group: 'Gestão de Commerce', path: '/commerce/delivery', description: 'Fila de Envios de Kits de Moda e acompanhamento de entrega.', planned: ['Fila de kits prontos para expedição.', 'Etiquetas, transportadora e rastreio.', 'Atualização de entrega para o pedido de origem.'] },
+
+  // 👥 Ecossistema Creators — relacionamento, matching e campanhas
+  { id: 'creators', label: 'Creators', icon: Users, group: 'Ecossistema Creators', path: '/creators', description: 'Base de creators, perfis, nichos e métricas de audiência.', planned: ['Cadastro e enriquecimento de perfis.', 'Métricas de alcance, afinidade e performance.', 'Histórico de parcerias e entregas.'] },
+  { id: 'creator-matches', label: 'Matches', icon: Handshake, group: 'Ecossistema Creators', path: '/matches', description: 'Matching entre creators e campanhas com inteligência de afinidade.', planned: ['Recomendação de creators por objetivo e público.', 'Score de afinidade por campanha.', 'Aprovação e histórico dos matches.'] },
+  { id: 'outreach-ai', label: 'Outreach AI', icon: Bot, group: 'Ecossistema Creators', path: '/outreach-ai', description: 'Abordagens assistidas por IA para iniciar conversas com creators.', planned: ['Briefing contextual por creator.', 'Mensagens assistidas com aprovação humana.', 'Histórico de contatos e respostas.'] },
+  { id: 'campanhas', label: 'Campanhas', icon: Megaphone, group: 'Ecossistema Creators', path: '/campanhas', description: 'Planejamento e acompanhamento de campanhas com creators.', planned: ['Briefing, cronograma e orçamento.', 'Entregáveis e aprovações por campanha.', 'Resultados, conversões e ROI.'] },
 
   // 💼 Comercial & Vendas
   { id: 'vendas', label: 'Vendas', icon: Receipt, group: 'Comercial & Vendas', path: '/vendas', resource: 'vendas', description: 'Pedidos de venda com itens; ao faturar, as peças saem do estoque e a comissão é calculada.' },
@@ -211,13 +230,15 @@ export const MODULES: Module[] = [
 ];
 
 /**
- * As 8 grandes categorias colapsáveis da Sidebar (Fase 3 — padrão visual
+ * As 9 grandes categorias colapsáveis da Sidebar (Fase 3 — padrão visual
  * "Brobond AI ERP"). A ordem aqui é a ordem dos accordions na navegação.
  */
 export const MODULE_GROUPS = [
   'Engenharia & Catálogo',
   'Operações & Fábrica',
   'Hub Omnichannel',
+  'Gestão de Commerce',
+  'Ecossistema Creators',
   'Comercial & Vendas',
   'Suprimentos',
   'Inteligência Financeira',
@@ -231,6 +252,8 @@ export const GROUP_META: Record<ModuleGroup, { emoji: string; icon: LucideIcon }
   'Engenharia & Catálogo': { emoji: '📦', icon: Package },
   'Operações & Fábrica': { emoji: '🏭', icon: Factory },
   'Hub Omnichannel': { emoji: '🔌', icon: Plug },
+  'Gestão de Commerce': { emoji: '🛒', icon: ShoppingCart },
+  'Ecossistema Creators': { emoji: '👥', icon: Users },
   'Comercial & Vendas': { emoji: '💼', icon: Briefcase },
   Suprimentos: { emoji: '🛒', icon: ShoppingCart },
   'Inteligência Financeira': { emoji: '💰', icon: Wallet },
