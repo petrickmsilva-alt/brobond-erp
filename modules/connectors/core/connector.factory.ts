@@ -5,14 +5,17 @@
  * Fonte: `modules/connectors/core/connector.factory.ts` do
  * brobond-ai-commerce (PR005/PR012).
  *
- * ADAPTAÇÃO DESTA FASE (exigência do diretor): o mapa trata APENAS os
- * QUATRO provedores remanescentes, de forma ESTRITA e sem referências
- * mortas:
+ * DECISÃO ESTRATÉGICA DO DIRETOR (2026-10-05): o mapa trata APENAS o
+ * TRIO de produção, de forma ESTRITA e sem referências mortas:
  *
  *   • saíram `MOCK` e `INSTAGRAM` (nunca foram motores de pedido do ERP);
- *   • saiu o conector da NUVEMSHOP, removido do ecossistema — não há
- *     builder, import, slug, rótulo nem ramo de persistência sobrando
- *     para ele em lugar nenhum do módulo;
+ *   • saíram `SHOPEE` e `TIKTOK` — conectores nativos desprovisionados
+ *     por restrições/barreiras burocráticas de suas APIs. Não há builder,
+ *     import, slug, rótulo nem ramo de persistência para eles em lugar
+ *     nenhum do módulo;
+ *   • entrou a `NUVEMSHOP` — a nova plataforma-ponte do Hub Omnichannel,
+ *     responsável pela triangulação de vendas (incluindo o catálogo do
+ *     TikTok) em uma única integração oficial;
  *   • o tipo do mapa é `Record<ConnectorProviderName, () =>
  *     ProviderConnector>`: esquecer um provedor OU acrescentar uma chave
  *     que não exista no registro QUEBRA A COMPILAÇÃO. A exaustividade é
@@ -25,8 +28,7 @@
 
 import { MercadoLivreConnector } from '../mercadolivre/mercadolivre.connector';
 import { MercadoPagoConnector } from '../mercadopago/mercadopago.connector';
-import { ShopeeConnector } from '../shopee/shopee.connector';
-import { TikTokConnector } from '../tiktok/tiktok.connector';
+import { NuvemshopConnector } from '../nuvemshop/nuvemshop.connector';
 import type { ProviderConnector } from './connector.interface';
 import { ConnectorNotRegisteredError } from './errors';
 import { CONNECTOR_PROVIDERS, parseConnectorProvider, type ConnectorProviderName } from './providers';
@@ -34,13 +36,12 @@ import { CONNECTOR_PROVIDERS, parseConnectorProvider, type ConnectorProviderName
 /**
  * Provedor → construtor do adaptador. As instâncias são cacheadas por
  * provedor, então o mapeador é estável
- * (`getConnector('SHOPEE') === getConnector('SHOPEE')`).
+ * (`getConnector('NUVEMSHOP') === getConnector('NUVEMSHOP')`).
  */
 const CONNECTOR_BUILDERS: Record<ConnectorProviderName, () => ProviderConnector> = {
   MERCADOLIVRE: () => new MercadoLivreConnector(),
   MERCADOPAGO: () => new MercadoPagoConnector(),
-  SHOPEE: () => new ShopeeConnector(),
-  TIKTOK: () => new TikTokConnector(),
+  NUVEMSHOP: () => new NuvemshopConnector(),
 };
 
 const instances = new Map<ConnectorProviderName, ProviderConnector>();
@@ -64,9 +65,9 @@ export function getConnector(provider: ConnectorProviderName): ProviderConnector
 
 /**
  * Resolve o conector a partir de um valor externo (segmento de rota,
- * corpo de requisição). Entrada desconhecida — inclusive o literal
- * "nuvemshop" do conector removido — devolve `null`, nunca um adaptador
- * fantasma.
+ * corpo de requisição). Entrada desconhecida — inclusive os literais
+ * "shopee" e "tiktok" dos conectores desprovisionados — devolve `null`,
+ * nunca um adaptador fantasma.
  */
 export function getConnectorFromInput(value: unknown): ProviderConnector | null {
   const provider = parseConnectorProvider(value);

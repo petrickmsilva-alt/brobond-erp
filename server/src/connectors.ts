@@ -1,7 +1,7 @@
 // Conectores de marketplace — camada HTTP do módulo `modules/connectors`.
 //
 // Autenticado (sessão do ERP):
-//   GET    /api/connectors                      — cartões dos 4 canais
+//   GET    /api/connectors                      — cartões dos 3 canais
 //   GET    /api/connectors/:provider            — status de um canal
 //   POST   /api/connectors/:provider/autorizar  — inicia o OAuth (aceita o
 //          redirect_uri dinâmico: a origem da Render onde o painel roda)
@@ -212,7 +212,7 @@ connectorsRouter.delete(
 /**
  * Router PÚBLICO. Montado ANTES de `requireAuth`/`bloquearSenhaProvisoria`
  * porque quem bate nele é o provedor externo, não o navegador do
- * operador: Mercado Livre, Mercado Pago, Shopee e TikTok chegam sem
+ * operador: Mercado Livre, Mercado Pago e Nuvemshop chegam sem
  * cookie e sem Bearer. O bloqueio de sessão aqui transformaria todo
  * webhook em 401 e toda conexão em erro.
  *
@@ -276,7 +276,7 @@ publicConnectorsRouter.all('/api/connectors/:provider/callback', rawBody, (req: 
   if (!provider) return next(); // slug desconhecido segue o fluxo normal (404 do /api)
   void (async () => {
     const query = queryRecord(req);
-    // Alguns callbacks da TikTok Shop chegam como formulário POST; outros,
+    // Alguns callbacks de provedor chegam como formulário POST; outros,
     // inclusive Mercado Livre, usam query string.
     const form = new URLSearchParams(rawBodyString(req));
     const value = (name: string) => query[name] ?? form.get(name) ?? '';
@@ -330,8 +330,8 @@ publicConnectorsRouter.all('/api/webhooks/:provider', rawBody, (req: Request, re
   const provider = parseConnectorProvider(req.params.provider);
   if (!provider) return next();
 
-  // GET é handshake/liveness: provedores (Shopee, TikTok) validam a URL
-  // antes de habilitar o push.
+  // GET é handshake/liveness: provedores (Nuvemshop, Mercado Livre)
+  // validam a URL antes de habilitar o push.
   if (req.method === 'GET' || req.method === 'HEAD') {
     res.status(200).json({ ok: true, provider, endpoint: connectorWebhookPath(req.params.provider) });
     return;
@@ -350,8 +350,8 @@ publicConnectorsRouter.all('/api/webhooks/:provider', rawBody, (req: Request, re
       const result = await handleProviderWebhook(provider, {
         headers: headerRecord(req),
         rawBody: rawBodyString(req),
-        // URL ESTÁTICA (APP_URL): a Shopee assina a URL cadastrada no
-        // painel dela, não o Host que chega no proxy.
+        // URL ESTÁTICA (APP_URL): o provedor assina a URL cadastrada no
+        // painel dele, não o Host que chega no proxy.
         url: appUrl(connectorWebhookPath(req.params.provider)),
         query: queryRecord(req),
       });

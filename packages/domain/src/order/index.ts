@@ -1,4 +1,4 @@
-export type SalesChannel = 'COUNTER' | 'REPRESENTATIVE' | 'WOOCOMMERCE' | 'MERCADOLIVRE' | 'SHOPEE' | 'TIKTOK_SHOP';
+export type SalesChannel = 'COUNTER' | 'REPRESENTATIVE' | 'WOOCOMMERCE' | 'MERCADOLIVRE' | 'NUVEMSHOP';
 
 export interface OrderItemProps { productId: number; sizeId?: number; sku: string; quantity: number; unitPriceCents: number; }
 export class OrderItem {

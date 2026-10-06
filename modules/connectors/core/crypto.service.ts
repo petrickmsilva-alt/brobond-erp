@@ -100,7 +100,7 @@ export function hashConnectorOAuthState(state: string): string {
   return createHash('sha256').update(state, 'utf8').digest('hex');
 }
 
-/** HMAC-SHA256 (hex) — usado pelos assinadores da Shopee e do Mercado Pago. */
+/** HMAC-SHA256 (hex) — usado pelo assinador do Mercado Pago (e, futuramente, da Nuvemshop). */
 export function hmacSha256Hex(secret: string, payload: string): string {
   return createHmac('sha256', secret).update(payload, 'utf8').digest('hex');
 }

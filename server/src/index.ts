@@ -131,12 +131,12 @@ app.use('/api/publico', (_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 // Conectores de marketplace: callbacks de OAuth e webhooks de pedido chegam
-// de FORA (Mercado Livre, Mercado Pago, Shopee, TikTok), sem cookie e sem
+// de FORA (Mercado Livre, Mercado Pago, Nuvemshop), sem cookie e sem
 // Bearer. O router é montado aqui — depois do cors(), ANTES do express.json()
 // e muito antes de requireAuth/bloquearSenhaProvisoria — por dois motivos:
 // (1) a sessão do ERP nunca pode barrar um provedor externo e (2) a assinatura
 // HMAC é calculada sobre os BYTES CRUS, que o parser JSON destruiria. Segmento
-// que não seja um dos quatro provedores cai no next() e segue para as rotas de
+// que não seja um dos três provedores cai no next() e segue para as rotas de
 // sempre (inclusive o CRUD autenticado de /api/webhooks).
 app.use(publicConnectorsRouter);
 
@@ -383,7 +383,8 @@ app.get('/api/vendas/:id/nfe/status', wrap(nfeStatus));
 app.get('/api/frete/cep', wrap(consultarCEP));
 app.post('/api/frete/calcular', wrap(calcularFrete));
 
-// Conectores oficiais (Mercado Livre, Mercado Pago, Shopee, TikTok)
+// Conectores oficiais (Mercado Livre, Mercado Pago, Nuvemshop — a
+// plataforma-ponte da triangulação de vendas; Shopee/TikTok desprovisionados)
 app.use('/api/connectors', connectorsRouter);
 
 // Marketplace

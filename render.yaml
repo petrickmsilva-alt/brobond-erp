@@ -63,20 +63,17 @@ services:
       # Configure no painel quando conectar cada canal. A chave de
       # cifragem é OBRIGATÓRIA ao ativar o primeiro conector (32 bytes
       # base64: openssl rand -base64 32) e não deve ser trocada depois.
+      # Shopee e TikTok foram DESPROVISIONADOS (decisão do Diretor):
+      # a triangulação de vendas passa pela Nuvemshop.
       - key: CONNECTOR_ENCRYPTION_KEY
         sync: false
-      # TikTok SHOP Partner Center (não confundir com Login Kit/social).
-      - key: TIKTOK_SERVICE_ID
+      # Nuvemshop — plataforma-ponte do Hub Omnichannel (Developer
+      # Center: developers.nuvemshop.com.br).
+      - key: NUVEMSHOP_CLIENT_ID
         sync: false
-      - key: TIKTOK_APP_KEY
+      - key: NUVEMSHOP_CLIENT_SECRET
         sync: false
-      - key: TIKTOK_APP_SECRET
-        sync: false
-      - key: TIKTOK_REDIRECT_URI
-        sync: false
-      - key: SHOPEE_PARTNER_ID
-        sync: false
-      - key: SHOPEE_PARTNER_KEY
+      - key: NUVEMSHOP_REDIRECT_URI
         sync: false
       - key: MERCADOLIVRE_CLIENT_ID
         sync: false

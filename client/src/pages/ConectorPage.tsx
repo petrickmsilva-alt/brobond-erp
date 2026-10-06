@@ -36,8 +36,7 @@ type ConnectorStatus = {
 const PATH: Record<string, string> = {
   MERCADOLIVRE: 'mercadolivre',
   MERCADOPAGO: 'mercadopago',
-  SHOPEE: 'shopee',
-  TIKTOK: 'tiktok',
+  NUVEMSHOP: 'nuvemshop',
 };
 
 function formatDate(value: string | null) {

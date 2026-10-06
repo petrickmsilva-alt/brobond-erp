@@ -21,7 +21,7 @@
 | 3   | Mesma migration no runner versionado do ERP (boot aplica sozinho)                                   | `db/migrations/0012_fusion_commerce_into_erp.sql`            |
 | 4   | Espelho da fusão no bootstrap idempotente (instalações novas)                                       | `db/schema.sql` (seção 0012)                                 |
 | 5   | Pasta do módulo reservada para receber os conectores na Fase 2                                      | `modules/connectors/`                                        |
-| 6   | Variáveis de ambiente do Mercado Livre, Shopee, Mercado Pago e TikTok                               | `server/.env.example` (+ chaves opcionais no `render.yaml`)  |
+| 6   | Variáveis de ambiente do Mercado Livre, Mercado Pago e Nuvemshop (Shopee/TikTok desprovisionados)   | `server/.env.example` (+ chaves opcionais no `render.yaml`)  |
 | 7   | Toolchain Prisma (CLI 6.12.0 — mesma versão do commerce) + scripts `db:*`                           | `package.json` (raiz)                                        |
 | 8   | CI: `prisma validate` no job principal e `prisma migrate deploy` no job Postgres                    | `.github/workflows/ci.yml`                                   |
 
@@ -68,11 +68,18 @@ O ERP é **single-company**: a fronteira de identidade é a tabela `usuarios`
 
 ## 4. Modelo de dados injetado
 
-**Enums** — `SaleChannel` (BROBOND, TIKTOK, INSTAGRAM, **SHOPEE,
-MERCADOLIVRE, MERCADOPAGO**), `SaleStatus` (PENDING, PAID, REFUNDED,
-CANCELLED), `ConnectorProvider` (TIKTOK, INSTAGRAM, SHOPEE, MERCADOLIVRE,
-MERCADOPAGO), `ConnectionStatus` (DISCONNECTED, CONNECTED, EXPIRED, ERROR,
+**Enums** — `SaleChannel` (BROBOND, INSTAGRAM, **MERCADOLIVRE,
+MERCADOPAGO, NUVEMSHOP**), `SaleStatus` (PENDING, PAID, REFUNDED,
+CANCELLED), `ConnectorProvider` (INSTAGRAM, **MERCADOLIVRE, MERCADOPAGO,
+NUVEMSHOP**), `ConnectionStatus` (DISCONNECTED, CONNECTED, EXPIRED, ERROR,
 PENDING_APPROVAL, REAUTH_REQUIRED, SANDBOX_ACTIVE).
+
+> 🔄 **Atualização (2026-10-05, decisão do Diretor):** SHOPEE e TIKTOK foram
+> removidos de `SaleChannel` e `ConnectorProvider` pela migration
+> `drop_shopee_and_tiktok_connectors` (os registros antigos são apagados via
+> `DELETE` antes da reescrita dos enums). A NUVEMSHOP entra como
+> plataforma-ponte para a triangulação de vendas — incluindo o catálogo do
+> TikTok — formando o trio de produção MERCADOLIVRE · MERCADOPAGO · NUVEMSHOP.
 
 ```
 usuarios (ERP, intacta) ──RESTRICT──┬─ connectors ──SET NULL── connector_events
@@ -108,10 +115,12 @@ base (`${APP_URL}/api/connectors/<canal>/callback`).
 | Canal         | Variáveis                                                                                                             |
 | ------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Todos         | `CONNECTOR_ENCRYPTION_KEY` (AES-256-GCM das credenciais em repouso)                                                   |
-| TikTok Shop   | `TIKTOK_SERVICE_ID`, `TIKTOK_APP_KEY`, `TIKTOK_APP_SECRET`, `TIKTOK_REDIRECT_URI` (todos do Shop Partner Center) |
-| Shopee        | `SHOPEE_PARTNER_ID`, `SHOPEE_PARTNER_KEY` (+ `SHOPEE_API_BASE_URL` — Brasil usa host dedicado)                        |
+| Nuvemshop     | `NUVEMSHOP_CLIENT_ID`, `NUVEMSHOP_CLIENT_SECRET`, `NUVEMSHOP_REDIRECT_URI` (Developer Center — plataforma-ponte)      |
 | Mercado Livre | `MERCADOLIVRE_CLIENT_ID`, `MERCADOLIVRE_CLIENT_SECRET` (+ redirect/webhook/overrides)                                 |
 | Mercado Pago  | `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_PUBLIC_KEY` (+ `MERCADOPAGO_WEBHOOK_SECRET`)                                 |
+
+> 🔄 As chaves `TIKTOK_*` e `SHOPEE_*` saíram do `server/.env.example` e do
+> `render.yaml` junto com o desprovisionamento dos conectores nativos.
 
 > ⚠️ A `CONNECTOR_ENCRYPTION_KEY` não deve ser trocada depois de conectar
 > contas: a nova chave não decifra o que a antiga cifrou (conector fica
@@ -128,8 +137,8 @@ base (`${APP_URL}/api/connectors/<canal>/callback`).
    novas do commerce. O login (`usuarios`/`sessoes`/`login_tentativas`) está
    intacto.
 3. **Integridade comportamental** — 30+ testes: FKs inválidas rejeitadas,
-   enums restritos aos valores contratados (incl. SHOPEE/MERCADOLIVRE/
-   MERCADOPAGO/TIKTOK), uniques de idempotência (reentrega de webhook
+   enums restritos aos valores contratados (hoje MERCADOLIVRE/
+   MERCADOPAGO/NUVEMSHOP), uniques de idempotência (reentrega de webhook
    rejeitada; pedido repetido em canal diferente aceito; venda própria com
    `external_order_id` NULL não colide), CASCADE/RESTRICT/SET NULL conforme a
    tabela acima, defaults (`DISCONNECTED`, `BROBOND`, `BRL`, contadores 0).
@@ -164,8 +173,8 @@ npm --prefix server run test:pg   # com DATABASE_URL apontada (boot real)
 - **Fase 3** — painel de conectores no front do ERP (status, KPIs, fluxo
   OAuth por canal) e ingestão de pedidos (`sales`/`sale_items`) com casamento
   de catálogo (`produtos`/`tamanhos`).
-- **Fase 4** — dashboards multicanal (split Brobond × Mercado Livre × Shopee ×
-  TikTok × Mercado Pago) e conciliação com o financeiro do ERP.
+- **Fase 4** — dashboards multicanal (split Brobond × Mercado Livre ×
+  Mercado Pago × Nuvemshop) e conciliação com o financeiro do ERP.
 
 > Nota sobre o nome: o pacote continua `brobond-erp` (scripts e deploys não
 > mudam); a identidade "Brobond AI ERP" está na descrição do projeto e nesta

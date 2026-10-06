@@ -1,22 +1,26 @@
 # `modules/connectors` — conectores oficiais de marketplace
 
-Módulo portado do **brobond-ai-commerce** (`modules/marketplace` +
-`modules/connectors/tiktok`) para o **Brobond AI ERP** na Fase 2 da fusão.
-Ele concentra OAuth, credenciais cifradas, webhooks e ingestão de pedidos
-dos quatro canais suportados.
+Módulo portado do **brobond-ai-commerce** (`modules/marketplace`) para o
+**Brobond AI ERP** na Fase 2 da fusão. Ele concentra OAuth, credenciais
+cifradas, webhooks e ingestão de pedidos do **trio de produção**.
+
+> 🔄 **Decisão do Diretor (2026-10-05):** os conectores nativos de **Shopee**
+> e **TikTok** foram **desprovisionados** (barreiras burocráticas de suas
+> APIs). A **Nuvemshop** entra como **plataforma-ponte** do Hub Omnichannel:
+> a triangulação de vendas — incluindo o catálogo do TikTok — passa por uma
+> única integração oficial.
 
 | Canal             | Autenticação                              | Pedidos chegam por                     |
 | ----------------- | ----------------------------------------- | -------------------------------------- |
 | **Mercado Livre** | OAuth 2.0 (`redirect_uri` estático)       | notificação → re-fetch na API          |
 | **Mercado Pago**  | credenciais de produção coladas no painel | webhook assinado (HMAC)                |
-| **Shopee**        | OAuth (partner sign)                      | push assinado (HMAC sobre URL + corpo) |
-| **TikTok**        | OAuth da loja no Shop Partner Center      | webhook assinado (HMAC)                |
+| **Nuvemshop**     | OAuth 2.0 (plataforma-ponte)              | webhook (parser fail-closed até o serviço oficial) |
 
-> A **Nuvemshop foi removida do ecossistema**. Não existe builder, slug,
-> rótulo, enum de canal nem ramo de persistência para ela: `parseConnectorProvider('nuvemshop')`
-> devolve `null` e `connector.factory.ts` é tipado como
-> `Record<ConnectorProviderName, …>`, de modo que uma chave a mais ou a
-> menos **quebra a compilação**.
+Não existe builder, slug, rótulo, enum de canal nem ramo de persistência
+para Shopee/TikTok: `parseConnectorProvider('shopee')` e
+`parseConnectorProvider('tiktok')` devolvem `null`, e o
+`connector.factory.ts` é tipado como `Record<ConnectorProviderName, …>`,
+de modo que uma chave a mais ou a menos **quebra a compilação**.
 
 ## Decisões estruturais
 
@@ -36,7 +40,7 @@ dos quatro canais suportados.
 
 ```
 core/
-  providers.ts            registro estrito dos 4 canais, slugs, enums e rótulos
+  providers.ts            registro estrito do trio, slugs, enums e rótulos
   errors.ts               erros de domínio com status HTTP embutido
   crypto.service.ts       AES-256-GCM (CONNECTOR_ENCRYPTION_KEY) + HMAC + máscara
   types.ts                linhas do banco e DTOs do painel
@@ -50,8 +54,9 @@ core/
   connector.service.ts    conectar, renovar token, status, desconectar
   connector.factory.ts    provedor → adaptador (exaustivo, sem referência morta)
   sync.service.ts         rodada manual de catálogo + contadores reais
-<canal>/<canal>.service.ts    API oficial do provedor (OAuth, pedidos, assinatura)
-<canal>/<canal>.connector.ts  adaptador que implementa ProviderConnector
+mercadolivre/|mercadopago/   implementações oficiais (service + connector)
+nuvemshop/                    plataforma-ponte: connector registrado + estrutura
+                              para o nuvemshop.service.ts (ver nuvemshop/README.md)
 ingestion/
   catalog-matcher.ts      casa o item com produtos e tamanhos do ERP
   sales.service.ts        upsert IDEMPOTENTE em sales / sale_items
@@ -64,7 +69,7 @@ webhooks/handlers.ts      verificação de assinatura, dedupe e resolução de d
 Autenticadas (sessão do ERP):
 
 ```
-GET    /api/connectors                        cartões dos 4 canais
+GET    /api/connectors                        cartões dos 3 canais
 GET    /api/connectors/:provider              status de um canal
 POST   /api/connectors/:provider/autorizar    inicia o OAuth (devolve a URL)
                                                • body opcional: { redirect_uri }
@@ -97,7 +102,7 @@ Elas são montadas **depois do `cors()` e antes do `express.json()`** porque:
 
 A segurança não vem da sessão e sim do `state` de uso único (callback) e da
 assinatura do provedor + `shop_id` já gravado no conector (webhook). Um
-segmento `:provider` que não seja um dos quatro slugs cai em `next()`, de modo
+segmento `:provider` que não seja um dos três slugs cai em `next()`, de modo
 que o **CRUD autenticado pré-existente de `/api/webhooks` continua intacto**.
 
 ## Idempotência
@@ -115,13 +120,14 @@ que o **CRUD autenticado pré-existente de `/api/webhooks` continua intacto**.
 ## Variáveis de ambiente
 
 Já descritas em `server/.env.example`: `CONNECTOR_ENCRYPTION_KEY` (32 bytes em
-hex — obrigatória para conectar qualquer canal), `APP_URL`,
-`MERCADOLIVRE_CLIENT_ID/SECRET`, `MERCADOPAGO_ACCESS_TOKEN/PUBLIC_KEY`,
-`SHOPEE_PARTNER_ID/KEY`, `TIKTOK_CLIENT_KEY/SECRET` (+ `TIKTOK_APP_KEY/SECRET`
-para a app vendedora) e os segredos opcionais de webhook.
+base64/hex — obrigatória para conectar qualquer canal), `APP_URL`,
+`MERCADOLIVRE_CLIENT_ID/SECRET`, `MERCADOPAGO_ACCESS_TOKEN/PUBLIC_KEY` e
+`NUVEMSHOP_CLIENT_ID/SECRET` + `NUVEMSHOP_REDIRECT_URI` (plataforma-ponte).
+As chaves `SHOPEE_*` e `TIKTOK_*` foram removidas no desprovisionamento.
 
 ## Testes
 
-`server/test/connectors.test.ts` cobre registro estrito dos provedores,
-criptografia em repouso, as três famílias de assinatura de webhook, o upsert
-idempotente (com banco fingido) e o casamento de catálogo.
+`server/test/connectors.test.ts` cobre registro estrito do trio (e a rejeição
+dos slugs desprovisionados), criptografia em repouso, a assinatura de webhook
+do Mercado Pago, o upsert idempotente (com banco fingido) e o casamento de
+catálogo.

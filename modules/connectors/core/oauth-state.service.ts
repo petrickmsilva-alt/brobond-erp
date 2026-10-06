@@ -40,7 +40,7 @@ export interface ConnectorOAuthStateService {
    * Emite um state opaco novo para um provedor de um responsável. Quando a
    * autorização usou um `redirect_uri` dinâmico (origem do painel), ele é
    * gravado junto: a troca do código PRECISA repetir a MESMA URI byte a
-   * byte — esse é o contrato do OAuth do Mercado Livre/Shopee.
+   * byte — esse é o contrato do OAuth do Mercado Livre.
    */
   issue(usuarioId: number, provider: ConnectorProviderName, metadata?: { redirectUri?: string | null }): Promise<string>;
   /**

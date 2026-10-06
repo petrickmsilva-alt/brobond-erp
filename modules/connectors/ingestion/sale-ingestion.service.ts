@@ -7,9 +7,12 @@
  *
  *   • Tenancy `usuarioId` em todo o caminho (o responsável é resolvido
  *     pelo `shop_id` guardado no conector, nunca por entrada do chamador).
- *   • Os QUATRO provedores alimentam o motor — o commerce só ingeria
- *     Mercado Livre e Mercado Pago; Shopee e TikTok Shop entram agora,
- *     com o detalhe de pedido buscado na API oficial de cada um.
+ *   • DECISÃO DO DIRETOR (2026-10-05): os conectores nativos de SHOPEE e
+ *     TIKTOK foram desprovisionados — a triangulação de vendas deles
+ *     passa pela NUVEMSHOP (plataforma-ponte). Hoje ingerem o motor
+ *     Mercado Livre e Mercado Pago; a Nuvemshop entra na lista (com o
+ *     detalhe de pedido buscado na API oficial dela) quando o
+ *     `nuvemshop.service.ts` estiver ativo.
  *   • A venda passa a ter ITENS casados com `produtos`/`tamanhos`.
  *   • Sem BullMQ/Redis: o ERP é um processo só. O webhook grava o evento
  *     (durável, idempotente) e processa em seguida; o que falhar fica com
@@ -33,8 +36,6 @@ import {
   resolveMercadoLivreNotificationOrderId,
 } from '../mercadolivre/mercadolivre.service';
 import { fetchMercadoPagoPayment, mercadoPagoStatusToSaleStatus } from '../mercadopago/mercadopago.service';
-import { fetchShopeeOrder, shopeeOrderStatusToSaleStatus } from '../shopee/shopee.service';
-import { fetchTikTokOrder, tiktokOrderStatusToSaleStatus } from '../tiktok/tiktok.service';
 import { createSalesService, type IngestedSaleItemInput, type SalesService } from './sales.service';
 
 // ------------------------------------------------------------------
@@ -51,14 +52,12 @@ export const MERCADOLIVRE_SALE_TOPICS = ['orders', 'orders_v2', 'payments', 'shi
 /** Tipos de notificação do Mercado Pago que carregam pagamento. */
 export const MERCADOPAGO_SALE_TOPICS = ['payment'] as const;
 
-/** Códigos de push da Shopee ligados a pedido (3 = order status update). */
-export const SHOPEE_SALE_TOPICS = ['3', '4', '15'] as const;
-
-/** Tópicos de webhook do TikTok Shop ligados a pedido. */
-export const TIKTOK_SALE_TOPICS = ['1', 'order_status_change'] as const;
-
-/** Provedores cujos webhooks alimentam o motor financeiro. */
-export const SALE_INGESTION_PROVIDERS: readonly ConnectorProviderName[] = ['MERCADOLIVRE', 'MERCADOPAGO', 'SHOPEE', 'TIKTOK'];
+/**
+ * Provedores cujos webhooks alimentam o motor financeiro. A NUVEMSHOP
+ * (plataforma-ponte da triangulação de vendas) entra aqui — com seus
+ * tópicos de pedido — junto com o `nuvemshop.service.ts`.
+ */
+export const SALE_INGESTION_PROVIDERS: readonly ConnectorProviderName[] = ['MERCADOLIVRE', 'MERCADOPAGO'];
 
 /** Este par (provedor, tópico) carrega dado de venda? */
 export function isSaleIngestionEvent(provider: ConnectorProviderName, topic: string | null): boolean {
@@ -69,10 +68,6 @@ export function isSaleIngestionEvent(provider: ConnectorProviderName, topic: str
       return (MERCADOLIVRE_SALE_TOPICS as readonly string[]).includes(normalized);
     case 'MERCADOPAGO':
       return (MERCADOPAGO_SALE_TOPICS as readonly string[]).includes(normalized);
-    case 'SHOPEE':
-      return (SHOPEE_SALE_TOPICS as readonly string[]).includes(normalized);
-    case 'TIKTOK':
-      return (TIKTOK_SALE_TOPICS as readonly string[]).includes(normalized);
     default:
       return false;
   }
@@ -191,63 +186,6 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
     };
   }
 
-  async function resolveShopeeDraft(usuarioId: number, payload: JsonObject): Promise<IngestedSaleDraft | null> {
-    const data = asRecord(payload.data);
-    const orderSn = typeof data.ordersn === 'string' ? data.ordersn : typeof data.order_sn === 'string' ? data.order_sn : '';
-    if (!orderSn) return null;
-
-    const { accessToken, shopId } = await service.getValidAccessToken(usuarioId, 'SHOPEE');
-    if (!shopId) return null;
-    const order = await fetchShopeeOrder(accessToken, shopId, orderSn);
-
-    const items: IngestedSaleItemInput[] = order.items.map((item) => ({
-      sku: item.sku,
-      title: item.title,
-      variacaoExterna: item.variacaoExterna,
-      sizeLabel: item.sizeLabel,
-      quantity: item.quantity,
-      unitPriceCents: item.unitPriceCents,
-    }));
-
-    return {
-      externalOrderId: order.orderSn,
-      amountCents: order.totalAmountCents,
-      currency: order.currency,
-      status: shopeeOrderStatusToSaleStatus(order.status),
-      quantity: totalQuantity(items),
-      occurredAt: order.createdAt,
-      items,
-    };
-  }
-
-  async function resolveTikTokDraft(usuarioId: number, payload: JsonObject): Promise<IngestedSaleDraft | null> {
-    const data = asRecord(payload.data);
-    const orderId = typeof data.order_id === 'string' ? data.order_id : data.order_id !== undefined ? String(data.order_id) : '';
-    if (!orderId) return null;
-
-    const { accessToken, shopId } = await service.getValidAccessToken(usuarioId, 'TIKTOK');
-    const order = await fetchTikTokOrder(accessToken, orderId, shopId);
-
-    const items: IngestedSaleItemInput[] = order.items.map((item) => ({
-      sku: item.sku,
-      title: item.title,
-      variacaoExterna: item.variacaoExterna,
-      sizeLabel: item.sizeLabel,
-      quantity: item.quantity,
-      unitPriceCents: item.unitPriceCents,
-    }));
-
-    return {
-      externalOrderId: order.id,
-      amountCents: order.totalAmountCents,
-      currency: order.currency,
-      status: tiktokOrderStatusToSaleStatus(order.status),
-      quantity: totalQuantity(items),
-      occurredAt: order.createdAt,
-      items,
-    };
-  }
-
   async function resolveDraft(
     usuarioId: number,
     provider: ConnectorProviderName,
@@ -259,10 +197,6 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
         return resolveMercadoLivreDraft(usuarioId, topic, payload);
       case 'MERCADOPAGO':
         return resolveMercadoPagoDraft(usuarioId, payload);
-      case 'SHOPEE':
-        return resolveShopeeDraft(usuarioId, payload);
-      case 'TIKTOK':
-        return resolveTikTokDraft(usuarioId, payload);
       default:
         return null;
     }
