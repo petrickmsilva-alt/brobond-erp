@@ -9,6 +9,11 @@ export type Row = Record<string, any>;
 export type Payload = Record<string, unknown>;
 export type Tx = PoolClient | null;
 
+export type TransactionOptions = {
+  /** Nível mais forte para operações de estoque/expedição concorrentes. */
+  isolation?: 'read committed' | 'repeatable read' | 'serializable';
+};
+
 export type ListParams = {
   q?: string;
   page: number;
@@ -129,7 +134,7 @@ export type DashboardData = {
 
 export interface Store {
   readonly kind: 'postgres' | 'memory';
-  transaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T>;
+  transaction<T>(fn: (tx: Tx) => Promise<T>, options?: TransactionOptions): Promise<T>;
 
   list(r: Resource, p: ListParams, tx?: Tx): Promise<ListResult>;
   get(r: Resource, id: number, tx?: Tx): Promise<Row | null>;

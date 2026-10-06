@@ -2,10 +2,10 @@
 // para o front reagir (ex.: 'reauth_necessaria' → abrir modal de reautenticação).
 export class HttpError extends Error {
   status: number;
-  fields?: Record<string, string>;
+  fields?: Record<string, unknown>;
   code?: string;
 
-  constructor(status: number, message: string, fields?: Record<string, string>, code?: string) {
+  constructor(status: number, message: string, fields?: Record<string, unknown>, code?: string) {
     super(message);
     this.name = 'HttpError';
     this.status = status;

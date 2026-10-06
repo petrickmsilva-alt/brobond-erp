@@ -20,6 +20,7 @@ import {
   type Row,
   type Sessao,
   type Store,
+  type TransactionOptions,
   type Tx,
 } from './store';
 import { round2 } from './utils';
@@ -71,7 +72,7 @@ export class MemStore implements Store {
     return copy;
   }
 
-  async transaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+  async transaction<T>(fn: (tx: Tx) => Promise<T>, _options?: TransactionOptions): Promise<T> {
     const backup = this.snapshot();
     try {
       return await fn(null);

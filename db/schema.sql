@@ -305,8 +305,44 @@ CREATE TABLE IF NOT EXISTS itens_compra (
   id SERIAL PRIMARY KEY,
   compra_id INTEGER REFERENCES compras(id) ON DELETE CASCADE,
   insumo_id INTEGER REFERENCES insumos(id),
+  produto_id INTEGER REFERENCES produtos(id),
+  tamanho_id INTEGER REFERENCES tamanhos(id),
+  codigo_fornecedor TEXT,
   quantidade NUMERIC(12,3) NOT NULL,
-  preco_unitario NUMERIC(12,2) NOT NULL
+  preco_unitario NUMERIC(12,2) NOT NULL,
+  unidade TEXT,
+  ncm TEXT,
+  cfop TEXT,
+  dados_fiscais JSONB,
+  local TEXT,
+  CONSTRAINT itens_compra_origem_check CHECK (insumo_id IS NOT NULL OR produto_id IS NOT NULL)
+);
+
+-- De-para persistente: o mesmo código pode ser usado por fornecedores
+-- diferentes, mas não pode apontar para dois produtos dentro do mesmo fornecedor.
+CREATE TABLE IF NOT EXISTS produto_fornecedor_skus (
+  id SERIAL PRIMARY KEY,
+  fornecedor_id INTEGER NOT NULL REFERENCES fornecedores(id),
+  codigo_fornecedor TEXT NOT NULL,
+  produto_id INTEGER NOT NULL REFERENCES produtos(id),
+  tamanho_id INTEGER REFERENCES tamanhos(id),
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  UNIQUE (fornecedor_id, codigo_fornecedor)
+);
+
+-- Idempotência da entrada de NF-e: uma chave fiscal não pode gerar duas compras.
+CREATE TABLE IF NOT EXISTS importacoes_nfe (
+  id SERIAL PRIMARY KEY,
+  chave_acesso TEXT UNIQUE NOT NULL,
+  xml_hash TEXT NOT NULL,
+  compra_id INTEGER REFERENCES compras(id),
+  fornecedor_id INTEGER REFERENCES fornecedores(id),
+  numero TEXT,
+  serie TEXT,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  dados_fiscais JSONB,
+  importado_em TIMESTAMPTZ DEFAULT now()
 );
 
 -- Estoque de insumos (matéria-prima) — saldo por insumo.
@@ -487,7 +523,9 @@ ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS local_id INTEGER REFERENCES l
 ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS local_destino TEXT;
 ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS local_destino_id INTEGER REFERENCES locais(id);
 ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS transferencia_id INTEGER;
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS compra_id INTEGER REFERENCES compras(id);
 CREATE INDEX IF NOT EXISTS idx_movimentacoes_transferencia ON movimentacoes (transferencia_id);
+CREATE INDEX IF NOT EXISTS idx_movimentacoes_compra ON movimentacoes (compra_id);
 
 -- Estorno de movimentações: a movimentação original é preservada e marcada como
 -- estornada, apontando para o lançamento inverso que reverteu o saldo.
@@ -603,6 +641,7 @@ ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_status TEXT DEFAULT 'a_pagar';
 ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_forma_pagamento TEXT;
 ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_pago_em DATE;
 ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_documento TEXT;
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS local_entrada TEXT;
 
 -- Catálogo: canal (varejo/atacado), tabela de preço, pedido pelo site
 ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS canal TEXT DEFAULT 'todos';
@@ -698,6 +737,7 @@ ALTER TABLE vendas  ADD COLUMN IF NOT EXISTS fin_vencimento DATE;
 ALTER TABLE vendas  ADD COLUMN IF NOT EXISTS fin_parcelas INTEGER DEFAULT 1;
 ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_vencimento DATE;
 ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_parcelas INTEGER DEFAULT 1;
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS fin_parcelas_detalhes JSONB;
 
 -- Categoria: classe usada na DRE gerencial
 ALTER TABLE categorias_financeiras ADD COLUMN IF NOT EXISTS classificacao_dre TEXT DEFAULT 'despesas_operacionais';
@@ -812,9 +852,42 @@ CREATE INDEX IF NOT EXISTS idx_produtos_cor         ON produtos (cor_id);
 CREATE INDEX IF NOT EXISTS idx_produtos_colecao     ON produtos (colecao_id);
 
 -- Fase 2: itens de pedidos e estoque de insumos
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS produto_id INTEGER REFERENCES produtos(id);
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS tamanho_id INTEGER REFERENCES tamanhos(id);
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS codigo_fornecedor TEXT;
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS unidade TEXT;
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS ncm TEXT;
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS cfop TEXT;
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS dados_fiscais JSONB;
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS local TEXT;
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS local_entrada TEXT;
+CREATE TABLE IF NOT EXISTS produto_fornecedor_skus (
+  id SERIAL PRIMARY KEY,
+  fornecedor_id INTEGER NOT NULL REFERENCES fornecedores(id),
+  codigo_fornecedor TEXT NOT NULL,
+  produto_id INTEGER NOT NULL REFERENCES produtos(id),
+  tamanho_id INTEGER REFERENCES tamanhos(id),
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  UNIQUE (fornecedor_id, codigo_fornecedor)
+);
+CREATE TABLE IF NOT EXISTS importacoes_nfe (
+  id SERIAL PRIMARY KEY,
+  chave_acesso TEXT UNIQUE NOT NULL,
+  xml_hash TEXT NOT NULL,
+  compra_id INTEGER REFERENCES compras(id),
+  fornecedor_id INTEGER REFERENCES fornecedores(id),
+  numero TEXT,
+  serie TEXT,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  dados_fiscais JSONB,
+  importado_em TIMESTAMPTZ DEFAULT now()
+);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_estoque_insumos_insumo ON estoque_insumos (insumo_id);
 CREATE INDEX IF NOT EXISTS idx_itens_venda_venda     ON itens_venda (venda_id);
 CREATE INDEX IF NOT EXISTS idx_itens_compra_compra   ON itens_compra (compra_id);
+CREATE INDEX IF NOT EXISTS idx_produto_fornecedor_sku ON produto_fornecedor_skus (fornecedor_id, codigo_fornecedor);
+CREATE INDEX IF NOT EXISTS idx_importacoes_nfe_compra ON importacoes_nfe (compra_id);
 CREATE INDEX IF NOT EXISTS idx_mov_insumos_insumo    ON movimentacoes_insumos (insumo_id, data DESC);
 CREATE INDEX IF NOT EXISTS idx_vendas_faturada       ON vendas (faturada_em);
 

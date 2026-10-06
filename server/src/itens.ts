@@ -417,6 +417,43 @@ async function receberCompra(pedido: Row, actor: { id: number | null; name: stri
   if (!itens.rows.length) throw new HttpError(409, 'Adicione ao menos um item antes de marcar a compra como recebida.');
 
   for (const it of itens.rows) {
+    // Compras lançadas pelo XML podem conter produto acabado. Elas entram no
+    // estoque físico por produto/tamanho e atualizam o custo de reposição do
+    // produto; compras antigas de insumos seguem pelo estoque de matéria-prima.
+    if (it.produto_id !== null && it.produto_id !== undefined && it.produto_id !== '') {
+      const produtoId = Number(it.produto_id);
+      const tamanhoId = Number(it.tamanho_id);
+      const qtd = Math.trunc(Number(it.quantidade));
+      const preco = Number(it.preco_unitario);
+      if (!produtoId || !tamanhoId || !(qtd > 0) || !Number.isFinite(preco) || preco < 0) {
+        throw new HttpError(422, `Item de produto inválido na compra #${pedido.id}.`);
+      }
+      const local = String(it.local || pedido.local_entrada || (await getDefaultLocal(tx)));
+      const estoques = await s.list(getResource('estoques')!, { page: 1, pageSize: 10000, filter: { produto_id: produtoId } }, tx);
+      const saldoAtual = estoques.rows.reduce((sum, row) => sum + Number(row.quantidade || 0), 0);
+      const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId }, tx);
+      if (!produto) throw new HttpError(422, `Produto ${produtoId} não encontrado na compra #${pedido.id}.`);
+      const custoAtual = Number(produto.custo || 0);
+      const novoCusto = saldoAtual + qtd > 0 ? round2((saldoAtual * custoAtual + qtd * preco) / (saldoAtual + qtd)) : round2(preco);
+      await s.adjustStock(produtoId, tamanhoId, local, qtd, tx);
+      await s.update(getResource('produtos')!, produtoId, { custo: novoCusto }, tx);
+      await s.insert(
+        getResource('movimentacoes')!,
+        {
+          tipo: 'entrada',
+          produto_id: produtoId,
+          tamanho_id: tamanhoId,
+          local,
+          quantidade: qtd,
+          motivo: `Compra #${pedido.id}${pedido.nota_fiscal ? ` — NF ${pedido.nota_fiscal}` : ''}`,
+          compra_id: Number(pedido.id),
+          usuario_id: actor.id || null,
+        },
+        tx
+      );
+      continue;
+    }
+
     const insumoId = Number(it.insumo_id);
     const qtd = round3(Number(it.quantidade));
     const preco = Number(it.preco_unitario);
@@ -448,15 +485,48 @@ async function receberCompra(pedido: Row, actor: { id: number | null; name: stri
       acao: 'editar',
       recurso: 'compras',
       registro_id: Number(pedido.id),
-      descricao: `Compra #${pedido.id} recebida — ${itens.rows.length} insumo(s) entraram no estoque e o custo médio foi atualizado`,
-      dados: { recebida_em: new Date().toISOString() },
+      descricao: `Compra #${pedido.id} recebida — ${itens.rows.length} item(ns) entraram no estoque e o custo de reposição foi atualizado`,
+      dados: { recebida_em: new Date().toISOString(), produtos: itens.rows.filter((it) => it.produto_id).length },
     },
     tx
   );
 }
-
 async function estornarCompra(pedido: Row, actor: { id: number | null; name: string }, tx: Tx) {
   const s = getStore();
+
+  // Entrada de produto acabado originada pelo importador de NF-e. A baixa é
+  // condicional para nunca transformar um estoque já consumido em negativo.
+  const entradasProdutos = (await s.list(
+    getResource('movimentacoes')!,
+    { page: 1, pageSize: 1000, sort: 'id', dir: 'desc', filter: { tipo: 'entrada', compra_id: Number(pedido.id) } },
+    tx
+  )).rows;
+  const itensCompra = (await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { compra_id: Number(pedido.id) } }, tx)).rows;
+  for (const m of entradasProdutos) {
+    const produtoId = Number(m.produto_id);
+    const tamanhoId = Number(m.tamanho_id);
+    const qtd = Math.trunc(Number(m.quantidade));
+    const itemOrigem = itensCompra.find((item) => Number(item.produto_id) === produtoId && Number(item.tamanho_id) === tamanhoId);
+    const aplicado = await s.tryAdjustStock(produtoId, tamanhoId, String(m.local), -qtd, tx);
+    if (!aplicado) {
+      throw new HttpError(409, `Não é possível cancelar a compra #${pedido.id}: o produto ${produtoId} já foi consumido no local "${m.local}".`);
+    }
+    const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId }, tx);
+    const estoqueTotal = (await s.list(getResource('estoques')!, { page: 1, pageSize: 10000, filter: { produto_id: produtoId } }, tx)).rows.reduce((sum, row) => sum + Number(row.quantidade || 0), 0);
+    const preco = Number(itemOrigem?.preco_unitario || 0);
+    const saldoAntes = estoqueTotal + qtd;
+    const custoAnterior = saldoAntes > 0 && saldoAntes - qtd > 0 ? round2((Number(produto?.custo || 0) * saldoAntes - qtd * preco) / (saldoAntes - qtd)) : 0;
+    await s.update(getResource('produtos')!, produtoId, { custo: Math.max(0, custoAnterior) }, tx);
+    await s.insert(
+      getResource('movimentacoes')!,
+      {
+        tipo: 'saida', produto_id: produtoId, tamanho_id: tamanhoId, local: m.local, quantidade: qtd,
+        compra_id: Number(pedido.id), motivo: `Estorno — Compra #${pedido.id} cancelada`, usuario_id: actor.id || null,
+      },
+      tx
+    );
+  }
+
   const movs = await s.list(
     getResource('movimentacoes_insumos')!,
     { page: 1, pageSize: 1000, sort: 'id', dir: 'desc', filter: { tipo: 'entrada', motivo: `Compra #${pedido.id}` } },

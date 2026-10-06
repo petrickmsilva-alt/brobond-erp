@@ -188,7 +188,7 @@ export async function previewImportacao(req: Request, res: Response) {
     const linhas = await lerArquivo((req.body || {}) as Record<string, unknown>);
     if (!linhas.length) throw new HttpError(400, 'A planilha está vazia ou sem linhas de dados.');
     const validas: Payload[] = [];
-    const erros: { linha: number; mensagem: string; campos?: Record<string, string> }[] = [];
+    const erros: { linha: number; mensagem: string; campos?: Record<string, unknown> }[] = [];
     for (let i = 0; i < linhas.length; i++) {
       try {
         const payload = await normalizarLinha(tipo, linhas[i]);

@@ -172,10 +172,12 @@ async function reconciliarParcelasPedido(
   const n = Math.max(1, Math.min(60, Math.trunc(Number(after.fin_parcelas || 1) || 1)));
   const baseVenc = (String(after.fin_vencimento || '').slice(0, 10) || dataBase).slice(0, 10);
   const valorParcela = r2(total / n);
+  const detalhes = Array.isArray(after.fin_parcelas_detalhes) ? after.fin_parcelas_detalhes as Row[] : [];
   const existentes = await parcelasDaOrigem(referencia, id, tx);
 
   for (let i = 1; i <= n; i++) {
-    const valor = i === n ? r2(total - valorParcela * (n - 1)) : valorParcela;
+    const detalhe = detalhes.find((item) => Number(item.parcela || 0) === i) || detalhes[i - 1];
+    const valor = detalhe && Number.isFinite(Number(detalhe.valor)) ? r2(Number(detalhe.valor)) : i === n ? r2(total - valorParcela * (n - 1)) : valorParcela;
     const alvo = existentes.find((l) => Number(l.parcela || 1) === i);
     const dados: Row = {
       data: i === 1 || !alvo ? dataBase : String(alvo.data || dataBase).slice(0, 10),
@@ -185,7 +187,7 @@ async function reconciliarParcelasPedido(
       descricao: n > 1 ? `${descricaoBase} (${i}/${n})` : descricaoBase,
       valor,
       forma_pagamento: after.fin_forma_pagamento ?? alvo?.forma_pagamento ?? null,
-      vencimento: addMeses(baseVenc, i - 1),
+      vencimento: detalhe?.vencimento ? String(detalhe.vencimento).slice(0, 10) : addMeses(baseVenc, i - 1),
       parcela: i,
       total_parcelas: n,
       referencia_tipo: referencia,

@@ -21,6 +21,7 @@ import {
   type Row,
   type Sessao,
   type Store,
+  type TransactionOptions,
   type Tx,
 } from './store';
 
@@ -154,8 +155,8 @@ const FILE_META_COLS = 'id, recurso, registro_id, nome, mime, tamanho_bytes, url
 export class PgStore implements Store {
   readonly kind = 'postgres' as const;
 
-  transaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
-    return withTransaction((client: PoolClient) => fn(client));
+  transaction<T>(fn: (tx: Tx) => Promise<T>, options?: TransactionOptions): Promise<T> {
+    return withTransaction((client: PoolClient) => fn(client), options?.isolation || 'serializable');
   }
 
   async list(r: Resource, p: ListParams, tx?: Tx): Promise<ListResult> {

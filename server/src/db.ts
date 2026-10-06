@@ -72,11 +72,11 @@ export async function query<T extends Record<string, any> = any>(
 }
 
 /** Executa `fn` dentro de uma transação. */
-export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>, isolation: 'read committed' | 'repeatable read' | 'serializable' = 'serializable'): Promise<T> {
   if (!pool) throw new Error('NO_DB');
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query(`BEGIN ISOLATION LEVEL ${isolation.toUpperCase()}`);
     const result = await fn(client);
     await client.query('COMMIT');
     return result;

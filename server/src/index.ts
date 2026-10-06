@@ -83,6 +83,7 @@ import { notificacoesStatus, verificarAlertasEstoque } from './notifications';
 import { openapiJSON, openapiUI } from './openapi';
 import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat';
 import { nfeDados, nfeEmitir, nfeStatus } from './nfe';
+import { importarXmlCompra, packingCheck } from './suprimentos';
 import { calcularFrete, consultarCEP } from './frete';
 import { marketplaceStatus, sincronizarPedidos } from './marketplace';
 import { connectorsRouter, initConnectors, publicConnectorsRouter } from './connectors';
@@ -318,6 +319,18 @@ app.post('/api/admin/financeiro/recorrencias', wrap(cronRecorrencias));
 app.get('/api/produtos/:id/detalhe', wrap(productDetail));
 // Tamanhos da grade do produto (seletores de tamanho sem mistura de grades)
 app.get('/api/produtos/:id/tamanhos', wrap(produtoTamanhos));
+
+// Suprimentos e expedição — as duas operações são transacionais.
+// O parser cru é montado apenas nesta rota para aceitar XML direto e
+// multipart/form-data (o express.json global já foi executado antes).
+app.post('/api/suprimentos/compras/importar-xml', express.raw({ limit: '12mb', type: () => true }), wrap(importarXmlCompra));
+// Packing check: valida o array de leituras antes da transição para faturada.
+app.post('/api/vendas/:id/packing-check', wrap(packingCheck));
+// Nomes alternativos usados por integrações do módulo de expedição.
+app.post('/api/vendas/:id/conferir', wrap(packingCheck));
+app.post('/api/vendas/:id/checkout', wrap(packingCheck));
+app.post('/api/pedidos/:id/packing-check', wrap(packingCheck));
+app.post('/api/expedicao/packing-check', wrap(packingCheck));
 
 // Itens de pedidos de venda/compra (sub-recursos) — antes das rotas genéricas
 app.get('/api/vendas/:id/itens', wrap(listItens));
