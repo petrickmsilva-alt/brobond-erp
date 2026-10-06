@@ -13,10 +13,12 @@ services:
   - type: web
     name: brobond-erp
     runtime: node
-    rootDir: server
+    # Use the repository root so npm resolves the monorepo workspaces and
+    # installs the server runtime (including tsx) before the start command.
+    rootDir: .
     plan: free
-    buildCommand: npm install --include=dev && cd ../client && npm install --include=dev && npm run build
-    startCommand: npm start
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm --workspace server start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV

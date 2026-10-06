@@ -592,6 +592,24 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
 // Boot
 // ----------------------------------------------------------------------------
 async function start() {
+  const port = Number(process.env.PORT) || 3001;
+  const httpServer = createServer(app);
+  initWebSocket(httpServer);
+
+  // Render only considers a deployment ready after it can connect to PORT.
+  // Start listening before database migrations and other boot tasks: a slow or
+  // temporarily unavailable Postgres must not make the platform report
+  // "no open ports detected". The health endpoint remains available while the
+  // application finishes its initialization.
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(port, '0.0.0.0', () => {
+      httpServer.removeListener('error', reject);
+      console.log(`⚡ BROBOND API rodando em http://0.0.0.0:${port}`);
+      resolve();
+    });
+  });
+
   if (hasDatabaseUrl()) {
     try {
       await migrate();
@@ -615,20 +633,14 @@ async function start() {
   const limpeza = setInterval(() => void limpezaPeriodica().catch(() => undefined), 24 * 3600_000);
   limpeza.unref?.();
 
-  const port = Number(process.env.PORT) || 3001;
-  const httpServer = createServer(app);
-  initWebSocket(httpServer);
-  httpServer.listen(port, '0.0.0.0', () => {
-    console.log(`⚡ BROBOND API rodando em http://localhost:${port}`);
-    console.log(
-      isDbConnected()
-        ? '🗄️  Conectado ao Postgres.'
-        : hasDatabaseUrl()
-          ? '⚠️  DATABASE_URL definida, mas a migração falhou — verifique a conexão.'
-          : '⚠️  Sem DATABASE_URL — MODO DEMONSTRAÇÃO (dados em memória, somem ao reiniciar).'
-    );
-    console.log(`🔐 Administrador: ${ADMIN_EMAIL}`);
-  });
+  console.log(
+    isDbConnected()
+      ? '🗄️  Conectado ao Postgres.'
+      : hasDatabaseUrl()
+        ? '⚠️  DATABASE_URL definida, mas a migração falhou — verifique a conexão.'
+        : '⚠️  Sem DATABASE_URL — MODO DEMONSTRAÇÃO (dados em memória, somem ao reiniciar).'
+  );
+  console.log(`🔐 Administrador: ${ADMIN_EMAIL}`);
 }
 
 start().catch((e) => {
