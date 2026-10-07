@@ -1499,7 +1499,13 @@ export async function efetuarBaixa(
     return { lancamento: atualizado, filhos, parcial: ehParcial, restante };
   };
   if (tx) return executar(tx);
-  return s.transaction(executar);
+  try {
+    return await s.transaction(executar);
+  } catch (e) {
+    // Conflito de concorrência (duas baixas simultâneas) chega aqui como erro
+    // cru do Postgres (40001/40P01) — traduz para 409 limpo, nunca 500.
+    throw toHttpError(e, getResource('lancamentos_financeiros'));
+  }
 }
 
 export async function baixarLancamento(req: Request, res: Response) {

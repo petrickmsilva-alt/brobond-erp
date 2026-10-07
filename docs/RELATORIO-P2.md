@@ -22,7 +22,7 @@
 | Servidor — APIs e regras de negócio | ✅ concluído |
 | Multiempresa no financeiro | ✅ re-auditada; vazamentos fechados e testados A×B |
 | Testes de memória | ✅ 488 passam / 0 falham (24 novos de P2) |
-| Testes PostgreSQL (concorrência + índices únicos) | ✅ 6 novos, rodam no job `testes-postgres` do CI |
+| Testes PostgreSQL (concorrência + índices únicos) | ✅ **43/43 executados contra Postgres real** (18.4 local — 6 novos + toda a suíte PG pré-existente; o CI roda o mesmo conjunto em postgres:16) |
 | Typecheck / lint / build client | ✅ verdes |
 | `prisma validate` | ⚠️ não roda neste sandbox (download do schema-engine bloqueado pela rede); schema Prisma **não foi tocado** — financeiro não vive no Prisma |
 | Gateway real (MercadoPago) | ⚠️ adapter pronto, mas só exercitado com o mock em teste (ver §9) |
@@ -57,6 +57,7 @@ Re-auditoria completa antes de escrever qualquer linha. Isto estava correto e
 | §13 | **OFX persistente**: parser existia, mas a importação não persistia linha/FITID nem impedia reimportação | `extrato.ts` — tabela `fin_extrato_transacoes`, hash por linha, FITID guardado |
 | §6 | **Caixa**: venda de caixa **fechado** podia ser cancelada por qualquer perfil; fechamento sem campo de justificativa | Bloqueio 409 pós-fechamento (admin ainda pode, com trilha `RETROATIVO`); justificativa no fechamento |
 | §4 | **Baixa sem guarda de estado**: duas baixas simultâneas podiam passar | `tryUpdateIf(status='pendente')` — transição condicional atômica |
+| §20 | **Store Postgres**: `update`/`tryUpdateIf` quebravam com 42601 quando o payload espelhava a linha inteira (`atualizado_em` duplicado), e conflito de serialização (40001) escapava sem tradução — o perdedor de uma corrida via 500 | `pgstore.ts` filtra colunas geridas pelo store; `efetuarBaixa` traduz conflito em 409 limpo |
 
 ---
 
@@ -145,9 +146,10 @@ POST /api/financeiro/cnab/importar
 
 **Alterados**
 - `db/schema.sql` (espelho da 0025)
-- `server/src/financeiro.ts` (escopo multiempresa, `efetuarBaixa` com guarda atômica, ganchos de comissão, recebíveis)
+- `server/src/financeiro.ts` (escopo multiempresa, `efetuarBaixa` com guarda atômica e tradução de conflito, ganchos de comissão, recebíveis)
 - `server/src/pdv.ts` (bloqueio retroativo pós-fechamento, justificativa)
 - `server/src/index.ts` (rotas + montagem do `publicGatewayRouter` **antes** do `express.json`)
+- `server/src/pgstore.ts` (correção: `update`/`tryUpdateIf` não atribuem mais colunas de carimbo geridas pelo store)
 
 ---
 
@@ -177,8 +179,13 @@ POST /api/financeiro/cnab/importar
 
 ### PostgreSQL real (`server/test/pg-p2.test.ts` — job `testes-postgres` do CI)
 
+**Executados de verdade contra um Postgres real (18.4) neste ambiente — 43/43
+verdes, incluindo toda a suíte PG pré-existente.** No CI o mesmo conjunto roda
+em `postgres:16`.
+
 - migration 0025 aplicada (5 tabelas + 4 índices únicos);
-- **duas baixas simultâneas no mesmo título → exatamente uma vence**;
+- **duas baixas simultâneas no mesmo título → exatamente uma vence** (a perdedora
+  recebe 409 limpo, nunca 500);
 - evento de webhook duplicado bate na trava;
 - linha de extrato repetida bate na trava;
 - comissão não efetiva além da apuração (saldo do livro);

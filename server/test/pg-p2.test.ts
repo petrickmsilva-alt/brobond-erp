@@ -101,7 +101,8 @@ test('P2 pg: comissão não se efetiva duas vezes pelo mesmo lançamento', { ski
   const { RESOURCES, s } = await boot();
   const com = await import('../src/comissoes');
   const sufixo = `${Date.now()}-${process.pid}`;
-  const venda = await s.insert(RESOURCES.vendas, { empresa_id: 1, status: 'faturada', data: new Date().toISOString().slice(0, 10), total: 100, fin_parcelas: 1, comissao_pct: 10, comissao_valor: 10 });
+  const rep = await s.insert(RESOURCES.representantes, { empresa_id: 1, nome: `PG Rep ${sufixo}`, comissao_pct: 10, ativo: true });
+  const venda = await s.insert(RESOURCES.vendas, { empresa_id: 1, status: 'faturada', data: new Date().toISOString().slice(0, 10), total: 100, fin_parcelas: 1, representante_id: rep.id, comissao_pct: 10, comissao_valor: 10 });
   const lanc = await s.insert(RESOURCES.lancamentos_financeiros, { empresa_id: 1, data: new Date().toISOString().slice(0, 10), tipo: 'receita', descricao: `PG comissão ${sufixo}`, valor: 100, status: 'pendente', referencia_tipo: 'venda', referencia_id: venda.id });
 
   const primeira = await s.transaction(async (tx) => com.registrarComissaoPorRecebimento(venda!, Number(lanc.id), 100, 'baixa', { id: null, name: 'PG' }, tx));
