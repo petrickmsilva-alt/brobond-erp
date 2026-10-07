@@ -46,6 +46,8 @@ import {
   Megaphone,
   TrendingUp,
   Truck,
+  Scale,
+  FileText,
 } from 'lucide-react';
 
 export type Module = {
@@ -184,6 +186,8 @@ export const MODULES: Module[] = [
   { id: 'clientes', label: 'Clientes', icon: Store, group: 'Comercial & Vendas', path: '/clientes', resource: 'clientes', description: 'Lojas e atacadistas que compram de você.' },
   { id: 'representantes', label: 'Representantes', icon: Handshake, group: 'Comercial & Vendas', path: '/representantes', resource: 'representantes', description: 'Vendedores externos, regiões e comissões.' },
   { id: 'catalogos', label: 'Catálogos públicos', icon: Share2, group: 'Comercial & Vendas', path: '/catalogos', resource: 'catalogos', description: 'Compartilhe produtos com preço por link — sem login para o cliente.' },
+  { id: 'regras-fiscais', label: 'Regras fiscais', icon: Scale, group: 'Comercial & Vendas', path: '/regras-fiscais', resource: 'regras_fiscais', minPerfil: 'gerente', description: 'CFOP, CST/CSOSN e alíquotas por NCM, UF e operação — sem alíquota escrita no código.' },
+  { id: 'documentos-fiscais', label: 'Documentos fiscais', icon: FileText, group: 'Comercial & Vendas', path: '/documentos-fiscais', resource: 'documentos_fiscais', description: 'NF-e e NFC-e emitidas, rejeitadas ou pendentes, com chave, protocolo e DANFE.' },
 
   // 🛒 Suprimentos
   { id: 'compras', label: 'Compras', icon: ShoppingCart, group: 'Suprimentos', path: '/compras', resource: 'compras', description: 'Pedidos de compra de insumos; ao receber, os insumos entram no estoque.' },

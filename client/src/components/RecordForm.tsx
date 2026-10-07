@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Eraser, Eye, EyeOff, Loader2, Plus, Save } from 'lucide-react';
+import { Eraser, Eye, EyeOff, Loader2, MapPin, Plus, Save } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import type { Field, Option, ResourceMeta } from '../lib/meta';
-import { maskDocument, maskPhone, toInputValue } from '../lib/format';
+import { maskCep, maskDocument, maskPhone, toInputValue } from '../lib/format';
 
 export type FormValues = Record<string, string | boolean | string[]>;
 
@@ -92,6 +92,59 @@ export function RecordForm({
 }) {
   const fields = useMemo(() => resource.fields.filter((f) => f.form !== false && !f.readonly && f.type !== 'images'), [resource]);
   const firstName = fields[0]?.name;
+  const nomesDoForm = useMemo(() => new Set(fields.map((f) => f.name)), [fields]);
+  const [cepBuscando, setCepBuscando] = useState(false);
+  const [cepAviso, setCepAviso] = useState<string | null>(null);
+
+  /**
+   * Busca o CEP e preenche o endereço.
+   *
+   * Só escreve em campo VAZIO: quem já digitou o complemento ou corrigiu o
+   * logradouro não perde o que escreveu. O `codigo_municipio` (IBGE) é a razão
+   * principal desta busca — sem ele a NF-e é rejeitada, e ninguém sabe esse
+   * número de cabeça.
+   */
+  async function buscarCep(valorCep: string) {
+    const digitos = String(valorCep || '').replace(/\D/g, '');
+    if (digitos.length !== 8) {
+      setCepAviso('Informe os 8 dígitos do CEP.');
+      return;
+    }
+    setCepBuscando(true);
+    setCepAviso(null);
+    try {
+      const endereco = await api.get<Record<string, string | null>>(`/cep/${digitos}`);
+      const mapa: Record<string, unknown> = {
+        logradouro: endereco.logradouro,
+        bairro: endereco.bairro,
+        cidade: endereco.cidade,
+        uf: endereco.uf,
+        codigo_municipio: endereco.codigo_municipio,
+        complemento: endereco.complemento,
+      };
+      let preenchidos = 0;
+      for (const [campo, valor] of Object.entries(mapa)) {
+        if (!valor || !nomesDoForm.has(campo)) continue;
+        const atual = values[campo];
+        if (atual !== undefined && atual !== null && String(atual).trim() !== '') continue;
+        onChange(campo, String(valor));
+        preenchidos += 1;
+      }
+      setCepAviso(
+        preenchidos
+          ? `Endereço preenchido (${endereco.cidade}/${endereco.uf}).`
+          : 'CEP encontrado — os campos já estavam preenchidos e foram mantidos.'
+      );
+    } catch (e) {
+      setCepAviso(
+        e instanceof ApiError && e.status === 404
+          ? 'CEP não encontrado. Preencha o endereço manualmente.'
+          : 'Não foi possível consultar o CEP agora. Preencha o endereço manualmente.'
+      );
+    } finally {
+      setCepBuscando(false);
+    }
+  }
   // Agrupa por seção preservando a ordem de aparição
   const sections = useMemo(() => {
     const out: { title: string | undefined; fields: Field[] }[] = [];
@@ -131,6 +184,9 @@ export function RecordForm({
                   editing={editing}
                   autoFocus={autoFocus && f.name === firstName}
                   disabled={busy}
+                  onBuscarCep={f.type === 'cep' ? buscarCep : undefined}
+                  buscandoCep={cepBuscando}
+                  avisoCep={f.type === 'cep' ? cepAviso : null}
                 />
               </div>
             ))}
@@ -160,6 +216,9 @@ function FieldInput({
   editing,
   autoFocus,
   disabled,
+  onBuscarCep,
+  buscandoCep,
+  avisoCep,
 }: {
   field: Field;
   value: string | boolean | string[] | undefined;
@@ -169,6 +228,10 @@ function FieldInput({
   editing: boolean;
   autoFocus?: boolean;
   disabled?: boolean;
+  /** Presente apenas no campo de CEP: dispara a busca de endereço. */
+  onBuscarCep?: (cep: string) => void;
+  buscandoCep?: boolean;
+  avisoCep?: string | null;
 }) {
   const id = `f-${f.name}`;
   const required = f.required || (!editing && f.requiredOnCreate);
@@ -381,13 +444,16 @@ function FieldInput({
 
   const inputType =
     f.type === 'email' ? 'email' : f.type === 'date' ? 'date' : f.type === 'datetime' ? 'datetime-local' : f.type === 'integer' ? 'number' : 'text';
-  const inputMode = f.type === 'money' || f.type === 'number' || f.type === 'percent' ? 'decimal' : f.type === 'integer' ? 'numeric' : f.type === 'phone' || f.type === 'document' ? 'tel' : undefined;
+  const inputMode = f.type === 'money' || f.type === 'number' || f.type === 'percent' ? 'decimal' : f.type === 'integer' ? 'numeric' : f.type === 'phone' || f.type === 'document' || f.type === 'cep' ? 'tel' : undefined;
   const prefix = f.type === 'money' ? 'R$' : undefined;
   const suffix = f.type === 'percent' ? '%' : undefined;
 
   const handle = (raw: string) => {
     if (f.type === 'document') return onChange(maskDocument(raw));
     if (f.type === 'phone') return onChange(maskPhone(raw));
+    if (f.type === 'cep') return onChange(maskCep(raw));
+    // UF é sempre maiúscula: o servidor valida contra a lista oficial.
+    if (f.type === 'uf') return onChange(raw.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2));
     onChange(raw);
   };
 
@@ -413,7 +479,20 @@ function FieldInput({
           autoFocus={autoFocus}
         />
         {suffix && <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-sm text-slate-400">{suffix}</span>}
+        {onBuscarCep && (
+          <button
+            type="button"
+            className="absolute inset-y-0 right-0 flex items-center gap-1 px-3 text-xs font-semibold text-navy-700 hover:text-navy-900 disabled:opacity-50"
+            onClick={() => onBuscarCep(String(value ?? ''))}
+            disabled={disabled || buscandoCep}
+            title="Buscar o endereço a partir do CEP"
+          >
+            {buscandoCep ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
+            Buscar
+          </button>
+        )}
       </div>
+      {avisoCep && <p className="mt-1 text-xs text-slate-500">{avisoCep}</p>}
       {help}
     </div>
   );

@@ -11,6 +11,7 @@ import { validarPoliticaSenha } from './services';
 import { hashPassword, verifyPassword, verifyPasswordDetailed, hashAtualizado } from './password';
 import { abrirSessao, revogarTodas, revogarUma, listSessoesAtivas as listarAtivas } from './sessoes';
 import { decifrarSegredoMfa, prepararDesafio, signMfaTicket, lerMfaTicket, cifrarSegredoMfa } from './mfa';
+import { EMPRESA_PADRAO, empresasDoUsuario } from './empresasAcesso';
 
 export { hashPassword, verifyPassword };
 
@@ -58,7 +59,31 @@ function minutosDeBloqueio(row: Row): number {
 }
 
 export type Perfil = 'admin' | 'gerente' | 'operador';
-export type AuthUser = { id: number; name: string; email: string; perfil: Perfil; trocar_senha?: boolean; perm_catalogos?: string; perm_compartilhar?: string; perm_metricas?: string; perm_politicas?: string; perm_aprovar?: string; desconto_max_pct?: number | null; venda_sem_aprovacao_ate?: number | null };
+export type AuthUser = {
+  id: number;
+  name: string;
+  email: string;
+  perfil: Perfil;
+  trocar_senha?: boolean;
+  perm_catalogos?: string;
+  perm_compartilhar?: string;
+  perm_metricas?: string;
+  perm_politicas?: string;
+  perm_aprovar?: string;
+  desconto_max_pct?: number | null;
+  venda_sem_aprovacao_ate?: number | null;
+  // ---- MULTIEMPRESA (ver empresa.ts) ----
+  /** Empresa padrão do usuário (coluna `usuarios.empresa_id`). */
+  empresa_id?: number;
+  /** Permissão explícita de ver o grupo consolidado. */
+  pode_consolidar?: boolean;
+  /** Empresas concedidas (tabela `usuario_empresas`). */
+  empresas?: number[];
+  /** Empresa escolhida no seletor — vive na SESSÃO (claim `emp` do JWT). */
+  empresa_sessao?: number | null;
+  /** Pedido explícito de leitura consolidada nesta requisição. */
+  consolidar?: boolean;
+};
 
 export function normalizeEmail(email: unknown): string {
   return String(email ?? '').trim().toLowerCase();
@@ -89,6 +114,10 @@ function extractToken(header: string): string {
 function toAuthUser(row: Row): AuthUser {
   const perfil = (['admin', 'gerente', 'operador'] as Perfil[]).includes(row.perfil) ? row.perfil : 'operador';
   const user: AuthUser = { id: Number(row.id), name: row.nome || 'Usuário', email: row.email, perfil };
+  // MULTIEMPRESA: a empresa padrão e a permissão de consolidar vêm SEMPRE da
+  // linha do usuário no banco — revalidadas a cada requisição pelo requireAuth.
+  user.empresa_id = Number(row.empresa_id) > 0 ? Number(row.empresa_id) : EMPRESA_PADRAO;
+  user.pode_consolidar = row.pode_consolidar === true;
   if (row.trocar_senha === true) user.trocar_senha = true;
   for (const k of ['perm_catalogos','perm_compartilhar','perm_metricas','perm_politicas','perm_aprovar'] as const) user[k] = String(row[k] || 'herdar');
   user.desconto_max_pct = row.desconto_max_pct == null ? null : Number(row.desconto_max_pct);
@@ -96,10 +125,25 @@ function toAuthUser(row: Row): AuthUser {
   return user;
 }
 
-export type SignOpts = { ver?: number; sid?: string; typ?: 'access' | 'mfa'; lembrar?: boolean; expiresIn?: string | number };
+export type SignOpts = {
+  ver?: number;
+  sid?: string;
+  typ?: 'access' | 'mfa';
+  lembrar?: boolean;
+  expiresIn?: string | number;
+  /** MULTIEMPRESA: empresa escolhida no seletor — persiste na SESSÃO. */
+  emp?: number | null;
+};
 
 export function signToken(user: AuthUser, opts: SignOpts = {}): string {
   const payload: Record<string, unknown> = { ...user, typ: opts.typ || 'access' };
+  // O claim `emp` é a única coisa que o token diz sobre empresa. Tudo mais
+  // (empresa padrão, grants, permissão de consolidar) é relido do banco a cada
+  // requisição, então revogar acesso a uma empresa tem efeito imediato.
+  delete payload.empresas;
+  delete payload.empresa_sessao;
+  delete payload.consolidar;
+  if (opts.emp !== undefined && opts.emp !== null) payload.emp = Number(opts.emp);
   if (opts.ver !== undefined) payload.ver = opts.ver;
   if (opts.sid) payload.sid = opts.sid;
   if (opts.lembrar !== undefined) payload.lembrar = opts.lembrar;
@@ -722,6 +766,23 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       }
     }
   }
+
+  // ------------------------------------------------------------------
+  // MULTIEMPRESA: resolve a empresa ATIVA da requisição.
+  //
+  //   • `empresa_id` e `pode_consolidar` vêm da linha do usuário (acima);
+  //   • `empresas` são as concessões vigentes — relidas do banco, para que
+  //     revogar um acesso derrube o seletor em segundos;
+  //   • o claim `emp` do token é o seletor de empresa da SESSÃO e só vence se
+  //     estiver entre as concessões;
+  //   • consolidar é opt-in por requisição (`?consolidado=1`) E exige a
+  //     permissão explícita — nunca é o padrão silencioso.
+  // ------------------------------------------------------------------
+  const empClaim = Number((verificado as Record<string, unknown>).emp);
+  payload.empresas = await empresasDoUsuario(payload.id, payload.empresa_id);
+  payload.empresa_sessao = empClaim > 0 && payload.empresas.includes(empClaim) ? empClaim : null;
+  const pedidoConsolidado = String(req.query?.consolidado ?? req.headers['x-empresa-consolidado'] ?? '');
+  payload.consolidar = ['1', 'true', 'sim'].includes(pedidoConsolidado.toLowerCase());
 
   (req as any).user = payload;
   (req as any).sid = payload.sid;

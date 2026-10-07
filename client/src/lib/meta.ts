@@ -19,6 +19,8 @@ export type FieldType =
   | 'multiref'
   | 'password'
   | 'color'
+  | 'uf'
+  | 'cep'
   | 'images';
 
 export type Tone = 'green' | 'red' | 'amber' | 'blue' | 'slate';
@@ -48,6 +50,7 @@ export type Field = {
   section?: string;
   pattern?: string;
   patternMessage?: string;
+  documento?: 'cpf' | 'cnpj' | 'ambos';
 };
 
 export type PublicFile = {

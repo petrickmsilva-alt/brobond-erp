@@ -24,8 +24,26 @@ import {
   type Tx,
 } from './store';
 import { round2 } from './utils';
+import { EMPRESA_PADRAO } from './empresa';
 
 type Table = { seq: number; rows: Map<number, Row> };
+
+/**
+ * Tabelas filhas que herdam `empresa_id` do pai — espelho exato dos triggers
+ * `trg_empresa_*` criados pela migration 0017 no Postgres.
+ */
+const HERANCA_EMPRESA: Record<string, { pai: string; fk: string }> = {
+  itens_venda: { pai: 'vendas', fk: 'venda_id' },
+  itens_compra: { pai: 'compras', fk: 'compra_id' },
+  itens_ordem: { pai: 'ordens_fabricacao', fk: 'ordem_id' },
+  itens_inventario: { pai: 'inventarios', fk: 'inventario_id' },
+  itens_ficha_tecnica: { pai: 'fichas_tecnicas', fk: 'ficha_id' },
+  estoques: { pai: 'produtos', fk: 'produto_id' },
+  movimentacoes: { pai: 'produtos', fk: 'produto_id' },
+  estoque_insumos: { pai: 'insumos', fk: 'insumo_id' },
+  movimentacoes_insumos: { pai: 'insumos', fk: 'insumo_id' },
+  produto_composicao: { pai: 'produtos', fk: 'produto_id' },
+};
 
 function norm(v: unknown): string {
   return v === null || v === undefined ? '' : String(v);
@@ -48,11 +66,39 @@ export class MemStore implements Store {
       const t = this.table(r.table);
       for (const m of r.mock || []) {
         const id = Number(m.id) || t.seq + 1;
-        t.rows.set(id, { ...m, id, criado_em: new Date().toISOString() });
+        // MULTIEMPRESA: os dados de demonstração pertencem à empresa padrão —
+        // o mesmo DEFAULT 1 que o Postgres aplica nas colunas `empresa_id`.
+        const empresa = r.empresa ? { empresa_id: Number(m.empresa_id) || EMPRESA_PADRAO } : null;
+        t.rows.set(id, { ...m, ...empresa, id, criado_em: new Date().toISOString() });
         t.seq = Math.max(t.seq, id);
       }
     }
     this.table('auditoria');
+  }
+
+  /**
+   * Espelha o trigger `brobond_herdar_empresa` do Postgres: tabelas filhas
+   * herdam a empresa do registro-pai, de modo que nem o app nem um teste
+   * consigam criar um item órfão de escopo.
+   */
+  private herdarEmpresa(r: Resource, row: Row): void {
+    if (!r.empresa) return;
+    const spec = HERANCA_EMPRESA[r.table];
+    if (spec) {
+      const fk = Number(row[spec.fk]);
+      if (fk > 0) {
+        const pai = this.table(spec.pai).rows.get(fk);
+        if (pai && pai.empresa_id !== undefined && pai.empresa_id !== null) {
+          row.empresa_id = Number(pai.empresa_id);
+          return;
+        }
+      }
+    }
+    if (row.empresa_id === undefined || row.empresa_id === null || row.empresa_id === '') {
+      row.empresa_id = EMPRESA_PADRAO;
+    } else {
+      row.empresa_id = Number(row.empresa_id);
+    }
   }
 
   private table(name: string): Table {
@@ -230,6 +276,7 @@ export class MemStore implements Store {
     for (const k of COLUNAS_AUTENTICACAO) if (k in data) row[k] = data[k];
     if (r.fields.some((f) => f.name === 'criado_em')) row.criado_em = new Date().toISOString();
     if (r.key === 'movimentacoes' || r.key === 'auditoria') row.data = row.data || new Date().toISOString();
+    this.herdarEmpresa(r, row);
     t.rows.set(id, row);
     return { ...row };
   }
@@ -242,6 +289,7 @@ export class MemStore implements Store {
     const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
     for (const [k, v] of Object.entries(data)) if (allowed.has(k) && k !== 'id') cur[k] = v;
     if (r.fields.some((f) => f.name === 'atualizado_em')) cur.atualizado_em = new Date().toISOString();
+    this.herdarEmpresa(r, cur);
     return { ...cur };
   }
 

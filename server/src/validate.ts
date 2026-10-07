@@ -1,6 +1,7 @@
 import { HttpError } from './errors';
 import type { Field, Resource } from './resources';
 import { writableFields } from './resources';
+import { apenasDigitos, erroDocumento, ufValida } from './documentos';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -37,12 +38,31 @@ function coerce(f: Field, raw: unknown): [unknown, string | null] {
   switch (f.type) {
     case 'text':
     case 'textarea':
-    case 'phone':
-    case 'document': {
+    case 'phone': {
       const s = String(raw).trim();
       if (f.maxLength && s.length > f.maxLength) return [s, `Máximo de ${f.maxLength} caracteres`];
       if (f.pattern && !new RegExp(f.pattern).test(s)) return [s, f.patternMessage || 'Formato inválido'];
       return [s, null];
+    }
+    case 'document': {
+      // CPF/CNPJ com DÍGITO VERIFICADOR conferido — e normalizado para só
+      // dígitos, que é como o documento entra no XML da NF-e e nos índices.
+      const s = String(raw).trim();
+      if (f.pattern && !new RegExp(f.pattern).test(s)) return [s, f.patternMessage || 'Formato inválido'];
+      const digitos = apenasDigitos(s);
+      const erro = erroDocumento(digitos, f.documento || 'ambos');
+      if (erro) return [s, erro];
+      return [digitos, null];
+    }
+    case 'uf': {
+      const s = String(raw).trim().toUpperCase();
+      if (!ufValida(s)) return [s, 'UF inválida (ex.: SP, MG, RS)'];
+      return [s, null];
+    }
+    case 'cep': {
+      const d = apenasDigitos(raw);
+      if (d.length !== 8) return [String(raw).trim(), 'CEP inválido (8 dígitos)'];
+      return [d, null];
     }
     case 'color': {
       let s = String(raw).trim().toUpperCase();

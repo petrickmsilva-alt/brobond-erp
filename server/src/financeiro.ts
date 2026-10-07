@@ -21,6 +21,23 @@ import { round2, somaMoeda } from './utils';
 const r2 = round2;
 
 const hoje = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * Data em 'YYYY-MM-DD' a partir do que o banco devolver.
+ *
+ * O Postgres entrega TIMESTAMPTZ como `Date`, e `String(date).slice(0,10)`
+ * produziria "Mon Oct 06" — que depois explode em `new Date(...)`. O memdb
+ * entrega string ISO. Esta função aceita os dois e, no que não for data,
+ * devolve null para quem chamou decidir o fallback.
+ */
+function dataISO(valor: unknown): string | null {
+  if (!valor) return null;
+  if (valor instanceof Date) return Number.isNaN(valor.getTime()) ? null : valor.toISOString().slice(0, 10);
+  const texto = String(valor);
+  if (/^\d{4}-\d{2}-\d{2}/.test(texto)) return texto.slice(0, 10);
+  const parsed = new Date(texto);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
 const addDias = (d: Date, n: number) => new Date(d.getTime() + n * 86400000);
 const fmtData = (d: Date) => d.toISOString().slice(0, 10);
 const primeiroDiaMes = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 12));
@@ -320,7 +337,7 @@ export async function syncLancamentoVenda(
     'venda',
     after,
     descricao,
-    String(after.faturada_em || after.data || hoje()).slice(0, 10),
+    dataISO(after.faturada_em) || dataISO(after.data) || hoje(),
     'receita',
     cat?.id ?? null,
     actor,
@@ -347,7 +364,7 @@ export async function syncLancamentoCompra(
   if (!tinha && String(after.status) !== 'recebido') return;
 
   const cat = await categoriaPadrao('despesa', tx);
-  await reconciliarParcelasPedido('compra', after, descricao, String(after.recebida_em || after.data || hoje()).slice(0, 10), 'despesa', cat?.id ?? null, actor, tx, null);
+  await reconciliarParcelasPedido('compra', after, descricao, dataISO(after.recebida_em) || dataISO(after.data) || hoje(), 'despesa', cat?.id ?? null, actor, tx, null);
 }
 
 /**

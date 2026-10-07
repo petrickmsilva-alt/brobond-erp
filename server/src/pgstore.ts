@@ -49,6 +49,16 @@ export function translatePgError(e: any, r?: Resource): HttpError | null {
     }
     case '23502':
       return new HttpError(400, `O campo "${e.column}" é obrigatório.`);
+    case '40001':
+    case '40P01':
+      // serialization_failure / deadlock_detected — duas transações disputaram
+      // as mesmas linhas (ex.: duas saídas do mesmo saldo). Não é falha do
+      // servidor: é conflito de concorrência, e nada foi gravado. Sem esta
+      // tradução o usuário via 500 numa operação que apenas perdeu a corrida.
+      return new HttpError(
+        409,
+        'Outra operação alterou estes dados ao mesmo tempo. Nada foi gravado — confira os valores e tente novamente.'
+      );
     case '22P02':
     case '22003':
     case '22007':

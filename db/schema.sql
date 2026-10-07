@@ -1456,3 +1456,787 @@ CREATE TABLE IF NOT EXISTS produto_abc (
 );
 
 CREATE INDEX IF NOT EXISTS produto_abc_classe_idx ON produto_abc (empresa_id, classe);
+
+-- ==================================================================
+-- BLOCO P0 — MULTIEMPRESA, CADASTRO DE PRODUTO, TRIBUTAÇÃO E
+-- DOCUMENTOS FISCAIS (migrations 0017 a 0020)
+--
+-- Espelha db/migrations/0017..0020 — idempotente, aplicado a cada
+-- boot antes das migrations versionadas.
+-- ==================================================================
+
+-- ---- 0017_multiempresa_isolamento ----
+
+-- ----------------------------------------------------------------------------
+-- 1) Empresa: campos necessários para o cadastro fiscal/operacional
+-- ----------------------------------------------------------------------------
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS nome_fantasia TEXT;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS ie TEXT;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS im TEXT;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS crt TEXT;                -- 1 Simples | 2 Simples excesso | 3 Regime normal
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS cep TEXT;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS logradouro TEXT;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS numero TEXT;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS complemento TEXT;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS bairro TEXT;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS cidade TEXT;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS codigo_municipio TEXT;   -- IBGE (NF-e)
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS uf TEXT;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS telefone TEXT;
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS email TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_empresas_cnpj
+  ON empresas (regexp_replace(cnpj, '[^0-9]', '', 'g'))
+  WHERE cnpj IS NOT NULL AND regexp_replace(cnpj, '[^0-9]', '', 'g') <> '';
+
+-- ----------------------------------------------------------------------------
+-- 2) Usuário: empresa padrão, consolidação e empresas autorizadas
+-- ----------------------------------------------------------------------------
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS empresa_id INTEGER REFERENCES empresas(id);
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS pode_consolidar BOOLEAN NOT NULL DEFAULT FALSE;
+
+UPDATE usuarios SET empresa_id = 1 WHERE empresa_id IS NULL;
+ALTER TABLE usuarios ALTER COLUMN empresa_id SET DEFAULT 1;
+
+-- Administradores consolidam por padrão (compatibilidade: hoje eles já veem tudo).
+UPDATE usuarios SET pode_consolidar = TRUE WHERE perfil = 'admin' AND pode_consolidar = FALSE;
+
+-- Empresas que cada usuário pode acessar além da padrão.
+CREATE TABLE IF NOT EXISTS usuario_empresas (
+  id SERIAL PRIMARY KEY,
+  usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  UNIQUE (usuario_id, empresa_id)
+);
+CREATE INDEX IF NOT EXISTS usuario_empresas_empresa_idx ON usuario_empresas (empresa_id);
+CREATE INDEX IF NOT EXISTS usuario_empresas_usuario_idx ON usuario_empresas (usuario_id);
+
+-- Todo usuário existente recebe acesso explícito à sua empresa padrão.
+INSERT INTO usuario_empresas (usuario_id, empresa_id)
+SELECT id, COALESCE(empresa_id, 1) FROM usuarios
+ON CONFLICT (usuario_id, empresa_id) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 3) empresa_id nas tabelas RAIZ (a empresa é definida pelo escopo do ator)
+-- ----------------------------------------------------------------------------
+-- Raízes: a empresa vem do escopo do ator (carimbada pelo servidor).
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS clientes_empresa_idx ON clientes (empresa_id);
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS fornecedores_empresa_idx ON fornecedores (empresa_id);
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS produtos_empresa_idx ON produtos (empresa_id);
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS representantes_empresa_idx ON representantes (empresa_id);
+ALTER TABLE insumos ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS insumos_empresa_idx ON insumos (empresa_id);
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS vendas_empresa_idx ON vendas (empresa_id);
+ALTER TABLE compras ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS compras_empresa_idx ON compras (empresa_id);
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS ordens_fabricacao_empresa_idx ON ordens_fabricacao (empresa_id);
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS inventarios_empresa_idx ON inventarios (empresa_id);
+ALTER TABLE locais ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS locais_empresa_idx ON locais (empresa_id);
+ALTER TABLE catalogos ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS catalogos_empresa_idx ON catalogos (empresa_id);
+ALTER TABLE fichas_tecnicas ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS fichas_tecnicas_empresa_idx ON fichas_tecnicas (empresa_id);
+ALTER TABLE colecoes ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS colecoes_empresa_idx ON colecoes (empresa_id);
+ALTER TABLE categorias_financeiras ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS categorias_financeiras_empresa_idx ON categorias_financeiras (empresa_id);
+ALTER TABLE contas_financeiras ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS contas_financeiras_empresa_idx ON contas_financeiras (empresa_id);
+ALTER TABLE centros_custo ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS centros_custo_empresa_idx ON centros_custo (empresa_id);
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS lancamentos_financeiros_empresa_idx ON lancamentos_financeiros (empresa_id);
+ALTER TABLE recorrencias_financeiras ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS recorrencias_financeiras_empresa_idx ON recorrencias_financeiras (empresa_id);
+ALTER TABLE transferencias_financeiras ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS transferencias_financeiras_empresa_idx ON transferencias_financeiras (empresa_id);
+ALTER TABLE investidores ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS investidores_empresa_idx ON investidores (empresa_id);
+ALTER TABLE aportes ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS aportes_empresa_idx ON aportes (empresa_id);
+ALTER TABLE produto_fornecedor_skus ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS produto_fornecedor_skus_empresa_idx ON produto_fornecedor_skus (empresa_id);
+ALTER TABLE importacoes_nfe ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS importacoes_nfe_empresa_idx ON importacoes_nfe (empresa_id);
+ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS auditoria_empresa_idx ON auditoria (empresa_id);
+
+-- ----------------------------------------------------------------------------
+-- 4) empresa_id nas tabelas FILHAS + trigger que deriva do pai
+--
+-- O app nunca precisa (nem pode) informar a empresa aqui: ela vem sempre do
+-- registro-pai. Isso mantém `adjustStock`, importações e qualquer SQL direto
+-- coerentes por construção.
+-- ----------------------------------------------------------------------------
+-- Filhas: a empresa é derivada do pai pelos triggers logo abaixo.
+ALTER TABLE itens_venda ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS itens_venda_empresa_idx ON itens_venda (empresa_id);
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS itens_compra_empresa_idx ON itens_compra (empresa_id);
+ALTER TABLE itens_ordem ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS itens_ordem_empresa_idx ON itens_ordem (empresa_id);
+ALTER TABLE itens_inventario ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS itens_inventario_empresa_idx ON itens_inventario (empresa_id);
+ALTER TABLE itens_ficha_tecnica ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS itens_ficha_tecnica_empresa_idx ON itens_ficha_tecnica (empresa_id);
+ALTER TABLE estoques ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS estoques_empresa_idx ON estoques (empresa_id);
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS movimentacoes_empresa_idx ON movimentacoes (empresa_id);
+ALTER TABLE estoque_insumos ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS estoque_insumos_empresa_idx ON estoque_insumos (empresa_id);
+ALTER TABLE movimentacoes_insumos ADD COLUMN IF NOT EXISTS empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id);
+CREATE INDEX IF NOT EXISTS movimentacoes_insumos_empresa_idx ON movimentacoes_insumos (empresa_id);
+
+-- Função genérica: herda empresa_id da tabela-pai indicada nos argumentos do
+-- trigger (TG_ARGV[0] = tabela pai, TG_ARGV[1] = coluna FK na tabela filha).
+CREATE OR REPLACE FUNCTION brobond_herdar_empresa() RETURNS trigger AS $$
+DECLARE
+  pai_tabela TEXT := TG_ARGV[0];
+  fk_coluna  TEXT := TG_ARGV[1];
+  fk_valor   INTEGER;
+  empresa    INTEGER;
+BEGIN
+  EXECUTE format('SELECT ($1).%I', fk_coluna) INTO fk_valor USING NEW;
+  IF fk_valor IS NULL THEN
+    RETURN NEW;
+  END IF;
+  EXECUTE format('SELECT empresa_id FROM %I WHERE id = $1', pai_tabela)
+    INTO empresa USING fk_valor;
+  IF empresa IS NOT NULL THEN
+    NEW.empresa_id := empresa;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+DECLARE
+  spec TEXT[];
+  specs TEXT[][] := ARRAY[
+    ARRAY['itens_venda', 'vendas', 'venda_id'],
+    ARRAY['itens_compra', 'compras', 'compra_id'],
+    ARRAY['itens_ordem', 'ordens_fabricacao', 'ordem_id'],
+    ARRAY['itens_inventario', 'inventarios', 'inventario_id'],
+    ARRAY['itens_ficha_tecnica', 'fichas_tecnicas', 'ficha_id'],
+    ARRAY['estoques', 'produtos', 'produto_id'],
+    ARRAY['movimentacoes', 'produtos', 'produto_id'],
+    ARRAY['estoque_insumos', 'insumos', 'insumo_id'],
+    ARRAY['movimentacoes_insumos', 'insumos', 'insumo_id']
+  ];
+BEGIN
+  FOREACH spec SLICE 1 IN ARRAY specs LOOP
+    IF to_regclass(spec[1]) IS NOT NULL
+       AND EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name = spec[1] AND column_name = spec[3]) THEN
+      EXECUTE format('DROP TRIGGER IF EXISTS %I ON %I', 'trg_empresa_' || spec[1], spec[1]);
+      EXECUTE format(
+        'CREATE TRIGGER %I BEFORE INSERT OR UPDATE ON %I
+           FOR EACH ROW EXECUTE FUNCTION brobond_herdar_empresa(%L, %L)',
+        'trg_empresa_' || spec[1], spec[1], spec[2], spec[3]);
+      -- Backfill dos registros já existentes.
+      EXECUTE format(
+        'UPDATE %I f SET empresa_id = p.empresa_id FROM %I p
+          WHERE p.id = f.%I AND f.empresa_id IS DISTINCT FROM p.empresa_id',
+        spec[1], spec[2], spec[3]);
+    END IF;
+  END LOOP;
+END $$;
+
+-- ----------------------------------------------------------------------------
+-- 5) Índices compostos das consultas mais quentes (empresa + filtro habitual)
+-- ----------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS vendas_empresa_status_idx    ON vendas (empresa_id, status);
+CREATE INDEX IF NOT EXISTS vendas_empresa_data_idx      ON vendas (empresa_id, data DESC);
+CREATE INDEX IF NOT EXISTS compras_empresa_status_idx   ON compras (empresa_id, status);
+CREATE INDEX IF NOT EXISTS estoques_empresa_produto_idx ON estoques (empresa_id, produto_id);
+CREATE INDEX IF NOT EXISTS movimentacoes_empresa_data_idx ON movimentacoes (empresa_id, data DESC);
+CREATE INDEX IF NOT EXISTS lanc_fin_empresa_data_idx    ON lancamentos_financeiros (empresa_id, data DESC);
+CREATE INDEX IF NOT EXISTS auditoria_empresa_data_idx   ON auditoria (empresa_id, data DESC);
+
+-- ---- 0018_produto_cadastro_completo ----
+
+-- ----------------------------------------------------------------------------
+-- 1) Identificação e classificação
+-- ----------------------------------------------------------------------------
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS formato TEXT NOT NULL DEFAULT 'simples';
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'mercadoria';
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS condicao TEXT NOT NULL DEFAULT 'novo';
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS unidade TEXT NOT NULL DEFAULT 'un';
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS marca TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS tags TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS descricao_curta TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS observacoes_internas TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS producao TEXT NOT NULL DEFAULT 'propria';
+
+DO $$ BEGIN
+  ALTER TABLE produtos ADD CONSTRAINT produtos_formato_valido
+    CHECK (formato IN ('simples', 'variacao', 'kit'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE produtos ADD CONSTRAINT produtos_condicao_valida
+    CHECK (condicao IN ('novo', 'usado', 'recondicionado'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE produtos ADD CONSTRAINT produtos_producao_valida
+    CHECK (producao IN ('propria', 'terceiros'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ----------------------------------------------------------------------------
+-- 2) Variação: SKU filho determinístico (pai + eixos cor/tamanho)
+-- ----------------------------------------------------------------------------
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS produto_pai_id INTEGER REFERENCES produtos(id) ON DELETE RESTRICT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS variacao_chave TEXT;   -- ex.: 'PRETA|M' (determinística)
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS variacao_tamanho_id INTEGER REFERENCES tamanhos(id);
+
+CREATE INDEX IF NOT EXISTS produtos_pai_idx ON produtos (produto_pai_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_produtos_variacao
+  ON produtos (produto_pai_id, variacao_chave)
+  WHERE produto_pai_id IS NOT NULL;
+
+-- Um filho não pode ser pai (apenas um nível de variação).
+DO $$ BEGIN
+  ALTER TABLE produtos ADD CONSTRAINT produtos_variacao_coerente
+    CHECK (produto_pai_id IS NULL OR formato = 'variacao');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ----------------------------------------------------------------------------
+-- 3) Dimensões, peso e embalagem (frete e NF-e)
+-- ----------------------------------------------------------------------------
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS peso_liquido_g INTEGER;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS peso_bruto_g INTEGER;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS largura_mm INTEGER;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS altura_mm INTEGER;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS profundidade_mm INTEGER;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS volumes INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS itens_por_caixa INTEGER;
+
+-- `peso_g` (legado) continua existindo e vira a fonte do peso líquido quando
+-- este ainda não foi preenchido — compatibilidade com etiquetas e frete.
+UPDATE produtos SET peso_liquido_g = peso_g WHERE peso_liquido_g IS NULL AND peso_g IS NOT NULL;
+
+-- ----------------------------------------------------------------------------
+-- 4) Estoque, localização e suprimento
+-- ----------------------------------------------------------------------------
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS estoque_min INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS estoque_max INTEGER;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS localizacao TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS fornecedor_id INTEGER REFERENCES fornecedores(id);
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS codigo_fornecedor TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS custo_habitual NUMERIC(12,2) DEFAULT 0;
+
+DO $$ BEGIN
+  ALTER TABLE produtos ADD CONSTRAINT produtos_estoque_faixa
+    CHECK (estoque_max IS NULL OR estoque_max >= estoque_min);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE INDEX IF NOT EXISTS produtos_fornecedor_idx ON produtos (fornecedor_id);
+
+-- ----------------------------------------------------------------------------
+-- 5) GTIN tributário (o GTIN comercial já é `codigo_barras`)
+-- ----------------------------------------------------------------------------
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS gtin_tributario TEXT;
+
+-- ----------------------------------------------------------------------------
+-- 6) Composição / kit — lista de componentes de um produto formato='kit'
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS produto_composicao (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  componente_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+  quantidade NUMERIC(12,3) NOT NULL DEFAULT 1 CHECK (quantidade > 0),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  UNIQUE (produto_id, componente_id),
+  CONSTRAINT produto_composicao_sem_autorreferencia CHECK (produto_id <> componente_id)
+);
+CREATE INDEX IF NOT EXISTS produto_composicao_componente_idx ON produto_composicao (componente_id);
+CREATE INDEX IF NOT EXISTS produto_composicao_empresa_idx ON produto_composicao (empresa_id);
+
+DROP TRIGGER IF EXISTS trg_empresa_produto_composicao ON produto_composicao;
+CREATE TRIGGER trg_empresa_produto_composicao
+  BEFORE INSERT OR UPDATE ON produto_composicao
+  FOR EACH ROW EXECUTE FUNCTION brobond_herdar_empresa('produtos', 'produto_id');
+
+-- ----------------------------------------------------------------------------
+-- 7) SKU é único POR EMPRESA (e não mais globalmente)
+--
+-- Duas empresas do grupo podem ter o mesmo código interno. Substituímos a
+-- unicidade global por uma por empresa — sem perder a proteção.
+-- O mesmo vale para o código de barras.
+-- ----------------------------------------------------------------------------
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'produtos_sku_key') THEN
+    ALTER TABLE produtos DROP CONSTRAINT produtos_sku_key;
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'produtos_sku_key não removida: %', SQLERRM;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_produtos_sku_empresa ON produtos (empresa_id, sku);
+
+DROP INDEX IF EXISTS uq_produtos_codigo_barras;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_produtos_codigo_barras_empresa
+  ON produtos (empresa_id, codigo_barras)
+  WHERE codigo_barras IS NOT NULL AND codigo_barras <> '';
+
+-- ---- 0019_tributacao_fiscal ----
+
+-- ----------------------------------------------------------------------------
+-- 1) Cadastro tributário do produto
+-- ----------------------------------------------------------------------------
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS cest TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS origem TEXT NOT NULL DEFAULT '0';  -- 0..8 (NF-e)
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS cfop_saida TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS icms_cst TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS icms_aliquota NUMERIC(5,2);
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS pis_cst TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS pis_aliquota NUMERIC(5,2);
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS cofins_cst TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS cofins_aliquota NUMERIC(5,2);
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ipi_cst TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ipi_aliquota NUMERIC(5,2);
+
+DO $$ BEGIN
+  ALTER TABLE produtos ADD CONSTRAINT produtos_origem_valida CHECK (origem ~ '^[0-8]$');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE produtos ADD CONSTRAINT produtos_cest_valido
+    CHECK (cest IS NULL OR cest = '' OR regexp_replace(cest, '[^0-9]', '', 'g') ~ '^[0-9]{7}$');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ----------------------------------------------------------------------------
+-- 2) Regras fiscais — camada extensível, por empresa
+--
+-- Resolução: filtra as regras vigentes e aplicáveis, ordena por
+-- especificidade (prioridade DESC, comprimento do NCM DESC, UF específica
+-- antes de curinga) e aplica a primeira.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS regras_fiscais (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id) ON DELETE CASCADE,
+  nome TEXT NOT NULL,
+  -- Critérios de casamento (NULL/'' = curinga)
+  ncm TEXT,                                   -- prefixo de 2 a 8 dígitos
+  uf_destino TEXT,                            -- 'SP', 'MG'... NULL = qualquer
+  operacao TEXT NOT NULL DEFAULT 'saida',     -- saida | entrada
+  modelo TEXT,                                -- '55' NF-e | '65' NFC-e | NULL = ambos
+  consumidor_final BOOLEAN,                   -- NULL = indiferente
+  regime TEXT,                                -- crt da empresa: 1 | 2 | 3 | NULL
+  -- Resultado fiscal
+  cfop TEXT,
+  icms_cst TEXT,
+  icms_aliquota NUMERIC(5,2),
+  icms_reducao_pct NUMERIC(5,2),
+  icms_mod_bc TEXT,
+  csosn TEXT,                                 -- Simples Nacional
+  pis_cst TEXT,
+  pis_aliquota NUMERIC(5,2),
+  cofins_cst TEXT,
+  cofins_aliquota NUMERIC(5,2),
+  ipi_cst TEXT,
+  ipi_aliquota NUMERIC(5,2),
+  -- Governança
+  prioridade INTEGER NOT NULL DEFAULT 0,
+  vigencia_inicio DATE,
+  vigencia_fim DATE,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  CONSTRAINT regras_fiscais_ncm_valido
+    CHECK (ncm IS NULL OR ncm = '' OR ncm ~ '^[0-9]{2,8}$'),
+  CONSTRAINT regras_fiscais_uf_valida
+    CHECK (uf_destino IS NULL OR uf_destino = '' OR uf_destino ~ '^[A-Z]{2}$'),
+  CONSTRAINT regras_fiscais_operacao_valida
+    CHECK (operacao IN ('saida', 'entrada')),
+  CONSTRAINT regras_fiscais_vigencia_coerente
+    CHECK (vigencia_fim IS NULL OR vigencia_inicio IS NULL OR vigencia_fim >= vigencia_inicio)
+);
+
+CREATE INDEX IF NOT EXISTS regras_fiscais_empresa_idx ON regras_fiscais (empresa_id, ativo, operacao);
+CREATE INDEX IF NOT EXISTS regras_fiscais_ncm_idx ON regras_fiscais (ncm);
+
+-- ----------------------------------------------------------------------------
+-- 3) Configuração fiscal da empresa (emitente, provedor, ambiente, séries)
+--
+-- SEGREDOS NUNCA EM TEXTO PURO: `certificado_senha_cifrada`,
+-- `provider_token_cifrado` e `csc_token_cifrado` guardam AES-256-GCM
+-- (mesmo esquema do MFA/webhooks). O certificado A1 em si fica FORA do banco:
+-- `certificado_ref` aponta para o cofre/arquivo gerenciado pelo provedor.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS empresa_fiscal_config (
+  empresa_id INTEGER PRIMARY KEY REFERENCES empresas(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT 'nenhum',     -- nenhum | focus | plugnotas
+  ambiente TEXT NOT NULL DEFAULT 'homologacao',-- homologacao | producao
+  provider_token_cifrado TEXT,
+  provider_base_url TEXT,
+  certificado_ref TEXT,
+  certificado_senha_cifrada TEXT,
+  certificado_validade DATE,
+  csc_id TEXT,                                 -- NFC-e
+  csc_token_cifrado TEXT,
+  serie_nfe INTEGER NOT NULL DEFAULT 1,
+  proximo_numero_nfe INTEGER NOT NULL DEFAULT 1,
+  serie_nfce INTEGER NOT NULL DEFAULT 1,
+  proximo_numero_nfce INTEGER NOT NULL DEFAULT 1,
+  natureza_operacao_padrao TEXT NOT NULL DEFAULT 'Venda de mercadoria',
+  cfop_padrao_dentro_uf TEXT NOT NULL DEFAULT '5102',
+  cfop_padrao_fora_uf TEXT NOT NULL DEFAULT '6102',
+  habilitado BOOLEAN NOT NULL DEFAULT FALSE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  CONSTRAINT empresa_fiscal_provider_valido CHECK (provider IN ('nenhum', 'focus', 'plugnotas')),
+  CONSTRAINT empresa_fiscal_ambiente_valido CHECK (ambiente IN ('homologacao', 'producao')),
+  CONSTRAINT empresa_fiscal_series_positivas CHECK (serie_nfe > 0 AND serie_nfce > 0),
+  CONSTRAINT empresa_fiscal_numeros_positivos CHECK (proximo_numero_nfe > 0 AND proximo_numero_nfce > 0)
+);
+
+-- Toda empresa nasce com configuração fiscal DESABILITADA — nada é emitido
+-- enquanto um humano não configurar provedor, certificado e ambiente.
+INSERT INTO empresa_fiscal_config (empresa_id)
+SELECT id FROM empresas
+ON CONFLICT (empresa_id) DO NOTHING;
+
+-- ---- 0020_documentos_fiscais ----
+
+CREATE TABLE IF NOT EXISTS documentos_fiscais (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+
+  -- Origem no ERP (a venda continua sendo a fonte; o documento é um satélite)
+  venda_id INTEGER REFERENCES vendas(id) ON DELETE SET NULL,
+  modelo TEXT NOT NULL DEFAULT '55',           -- 55 = NF-e | 65 = NFC-e
+  operacao TEXT NOT NULL DEFAULT 'saida',      -- saida | entrada
+  natureza_operacao TEXT,
+
+  -- Máquina de estados
+  status TEXT NOT NULL DEFAULT 'rascunho',
+  motivo TEXT,                                 -- rejeição/erro legível
+  tentativas INTEGER NOT NULL DEFAULT 0,
+
+  -- Numeração (só preenchida quando o documento sai para o provedor)
+  serie INTEGER,
+  numero INTEGER,
+  chave_acesso TEXT,
+  protocolo TEXT,
+  autorizado_em TIMESTAMPTZ,
+  cancelado_em TIMESTAMPTZ,
+  cancelamento_protocolo TEXT,
+  cancelamento_justificativa TEXT,
+
+  -- Provedor
+  provider TEXT NOT NULL DEFAULT 'nenhum',
+  provider_ref TEXT,                           -- id do documento no provedor
+  ambiente TEXT NOT NULL DEFAULT 'homologacao',
+
+  -- Documentos armazenados
+  xml TEXT,
+  xml_cancelamento TEXT,
+  danfe_url TEXT,
+  danfe_pdf BYTEA,
+
+  -- Totais congelados no momento do envio (auditoria fiscal)
+  valor_produtos NUMERIC(12,2),
+  valor_frete NUMERIC(12,2),
+  valor_desconto NUMERIC(12,2),
+  valor_total NUMERIC(12,2),
+  valor_icms NUMERIC(12,2),
+  valor_pis NUMERIC(12,2),
+  valor_cofins NUMERIC(12,2),
+  valor_ipi NUMERIC(12,2),
+
+  -- Efeitos colaterais: aplicados UMA ÚNICA VEZ, na autorização
+  estoque_baixado_em TIMESTAMPTZ,
+  financeiro_lancado_em TIMESTAMPTZ,
+
+  idempotency_key TEXT,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+
+  CONSTRAINT documentos_fiscais_modelo_valido CHECK (modelo IN ('55', '65')),
+  CONSTRAINT documentos_fiscais_operacao_valida CHECK (operacao IN ('saida', 'entrada')),
+  CONSTRAINT documentos_fiscais_ambiente_valido CHECK (ambiente IN ('homologacao', 'producao')),
+  CONSTRAINT documentos_fiscais_status_valido CHECK (status IN (
+    'rascunho', 'pendente', 'processando', 'autorizado',
+    'rejeitado', 'cancelado', 'inutilizado', 'erro'
+  )),
+  -- Autorizado EXIGE prova do provedor: chave + protocolo. Sem isso o estado
+  -- é inalcançável — o banco impede a NF-e fantasma.
+  CONSTRAINT documentos_fiscais_autorizado_tem_prova CHECK (
+    status <> 'autorizado'
+    OR (chave_acesso IS NOT NULL AND protocolo IS NOT NULL
+        AND numero IS NOT NULL AND serie IS NOT NULL
+        AND provider <> 'nenhum')
+  ),
+  CONSTRAINT documentos_fiscais_cancelado_tem_origem CHECK (
+    status <> 'cancelado' OR chave_acesso IS NOT NULL
+  ),
+  CONSTRAINT documentos_fiscais_chave_formato CHECK (
+    chave_acesso IS NULL OR chave_acesso ~ '^[0-9]{44}$'
+  )
+);
+
+-- Uma chave de acesso é única no universo — e aqui também.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documentos_fiscais_chave
+  ON documentos_fiscais (chave_acesso) WHERE chave_acesso IS NOT NULL;
+
+-- Numeração não se repete dentro da empresa/modelo/série/ambiente.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documentos_fiscais_numeracao
+  ON documentos_fiscais (empresa_id, modelo, serie, numero, ambiente)
+  WHERE numero IS NOT NULL;
+
+-- Idempotência da emissão.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documentos_fiscais_idempotency
+  ON documentos_fiscais (empresa_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+-- Uma venda não pode ter dois documentos vivos do mesmo modelo.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documentos_fiscais_venda_viva
+  ON documentos_fiscais (venda_id, modelo)
+  WHERE venda_id IS NOT NULL AND status IN ('rascunho', 'pendente', 'processando', 'autorizado');
+
+CREATE INDEX IF NOT EXISTS documentos_fiscais_empresa_status_idx
+  ON documentos_fiscais (empresa_id, status, criado_em DESC);
+CREATE INDEX IF NOT EXISTS documentos_fiscais_venda_idx ON documentos_fiscais (venda_id);
+
+-- ----------------------------------------------------------------------------
+-- Histórico/auditoria imutável do documento: toda transição vira uma linha.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS documentos_fiscais_eventos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  documento_id INTEGER NOT NULL REFERENCES documentos_fiscais(id) ON DELETE CASCADE,
+  de_status TEXT,
+  para_status TEXT NOT NULL,
+  evento TEXT NOT NULL,                        -- emitir | consultar | cancelar | inutilizar | rejeicao | erro
+  mensagem TEXT,
+  payload JSONB,                               -- resposta bruta do provedor (sem segredos)
+  usuario_id INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS documentos_fiscais_eventos_doc_idx
+  ON documentos_fiscais_eventos (documento_id, criado_em DESC);
+
+DROP TRIGGER IF EXISTS trg_empresa_documentos_fiscais_eventos ON documentos_fiscais_eventos;
+CREATE TRIGGER trg_empresa_documentos_fiscais_eventos
+  BEFORE INSERT OR UPDATE ON documentos_fiscais_eventos
+  FOR EACH ROW EXECUTE FUNCTION brobond_herdar_empresa('documentos_fiscais', 'documento_id');
+
+-- ----------------------------------------------------------------------------
+-- Inutilização de faixa de numeração (obrigação acessória)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS inutilizacoes_fiscais (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  modelo TEXT NOT NULL DEFAULT '55',
+  serie INTEGER NOT NULL,
+  numero_inicial INTEGER NOT NULL,
+  numero_final INTEGER NOT NULL,
+  justificativa TEXT NOT NULL,
+  ambiente TEXT NOT NULL DEFAULT 'homologacao',
+  status TEXT NOT NULL DEFAULT 'pendente',     -- pendente | homologado | rejeitado | erro
+  protocolo TEXT,
+  motivo TEXT,
+  provider TEXT NOT NULL DEFAULT 'nenhum',
+  xml TEXT,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  CONSTRAINT inutilizacoes_faixa_valida CHECK (numero_final >= numero_inicial AND numero_inicial > 0),
+  CONSTRAINT inutilizacoes_justificativa_minima CHECK (char_length(justificativa) >= 15),
+  CONSTRAINT inutilizacoes_status_valido CHECK (status IN ('pendente', 'homologado', 'rejeitado', 'erro')),
+  CONSTRAINT inutilizacoes_modelo_valido CHECK (modelo IN ('55', '65'))
+);
+
+CREATE INDEX IF NOT EXISTS inutilizacoes_empresa_idx ON inutilizacoes_fiscais (empresa_id, modelo, serie);
+
+-- ----------------------------------------------------------------------------
+-- Venda: ligação com o documento fiscal vigente.
+-- `nfe_status` legado permanece (a UI atual depende dele) e passa a ser
+-- espelho do documento — nunca escrito à mão.
+-- ----------------------------------------------------------------------------
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS documento_fiscal_id INTEGER REFERENCES documentos_fiscais(id) ON DELETE SET NULL;
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS nfe_chave TEXT;
+CREATE INDEX IF NOT EXISTS vendas_documento_fiscal_idx ON vendas (documento_fiscal_id);
+
+-- ---- 0021_cadastros_pessoas ----
+
+-- ----------------------------------------------------------------------------
+-- 1) CLIENTES — PF/PJ, fiscal, endereço e comercial
+-- ----------------------------------------------------------------------------
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS pessoa TEXT NOT NULL DEFAULT 'pj';   -- pf | pj | estrangeiro
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS razao_social TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS nome_fantasia TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS rg_ie TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS indicador_ie TEXT NOT NULL DEFAULT '9'; -- 1 contribuinte | 2 isento | 9 não contribuinte
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS im TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS suframa TEXT;
+
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS cep TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS logradouro TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS numero TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS complemento TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS bairro TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS cidade TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS codigo_municipio TEXT;              -- IBGE
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS uf TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS pais TEXT NOT NULL DEFAULT 'Brasil';
+
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS whatsapp TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS limite_credito NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS representante_id INTEGER REFERENCES representantes(id);
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS observacoes TEXT;
+
+DO $$ BEGIN
+  ALTER TABLE clientes ADD CONSTRAINT clientes_pessoa_valida CHECK (pessoa IN ('pf', 'pj', 'estrangeiro'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE clientes ADD CONSTRAINT clientes_indicador_ie_valido CHECK (indicador_ie IN ('1', '2', '9'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE clientes ADD CONSTRAINT clientes_uf_valida
+    CHECK (uf IS NULL OR uf = '' OR uf ~ '^[A-Z]{2}$');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE clientes ADD CONSTRAINT clientes_limite_credito_nao_negativo CHECK (limite_credito >= 0);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Backfill conservador: quem já tem CPF (11 dígitos) é PF; o resto segue PJ,
+-- que é o default histórico do cadastro.
+UPDATE clientes
+   SET pessoa = 'pf'
+ WHERE pessoa = 'pj'
+   AND cnpj_cpf IS NOT NULL
+   AND length(regexp_replace(cnpj_cpf, '[^0-9]', '', 'g')) = 11;
+
+-- Documento único POR EMPRESA (duas empresas do grupo podem atender o mesmo
+-- cliente). Índice parcial: cadastro sem documento continua permitido.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_clientes_documento_empresa
+  ON clientes (empresa_id, regexp_replace(cnpj_cpf, '[^0-9]', '', 'g'))
+  WHERE cnpj_cpf IS NOT NULL AND regexp_replace(cnpj_cpf, '[^0-9]', '', 'g') <> '';
+
+CREATE INDEX IF NOT EXISTS clientes_representante_idx ON clientes (representante_id);
+
+-- ----------------------------------------------------------------------------
+-- 2) FORNECEDORES — espelho fiscal/comercial do cliente
+-- ----------------------------------------------------------------------------
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS pessoa TEXT NOT NULL DEFAULT 'pj';
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS razao_social TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS nome_fantasia TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS ie TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS indicador_ie TEXT NOT NULL DEFAULT '1';
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS im TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS cep TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS logradouro TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS numero TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS complemento TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS bairro TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS cidade TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS codigo_municipio TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS uf TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS whatsapp TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS prazo_entrega_dias INTEGER;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS condicao_pagamento TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS observacoes TEXT;
+
+DO $$ BEGIN
+  ALTER TABLE fornecedores ADD CONSTRAINT fornecedores_pessoa_valida CHECK (pessoa IN ('pf', 'pj', 'estrangeiro'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE fornecedores ADD CONSTRAINT fornecedores_indicador_ie_valido CHECK (indicador_ie IN ('1', '2', '9'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE fornecedores ADD CONSTRAINT fornecedores_uf_valida
+    CHECK (uf IS NULL OR uf = '' OR uf ~ '^[A-Z]{2}$');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fornecedores_documento_empresa
+  ON fornecedores (empresa_id, regexp_replace(cnpj, '[^0-9]', '', 'g'))
+  WHERE cnpj IS NOT NULL AND regexp_replace(cnpj, '[^0-9]', '', 'g') <> '';
+
+-- Contatos adicionais do fornecedor (compras, financeiro, expedição...).
+CREATE TABLE IF NOT EXISTS fornecedor_contatos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  fornecedor_id INTEGER NOT NULL REFERENCES fornecedores(id) ON DELETE CASCADE,
+  nome TEXT NOT NULL,
+  cargo TEXT,
+  email TEXT,
+  telefone TEXT,
+  whatsapp TEXT,
+  principal BOOLEAN NOT NULL DEFAULT FALSE,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS fornecedor_contatos_fornecedor_idx ON fornecedor_contatos (fornecedor_id);
+CREATE INDEX IF NOT EXISTS fornecedor_contatos_empresa_idx ON fornecedor_contatos (empresa_id);
+
+DROP TRIGGER IF EXISTS trg_empresa_fornecedor_contatos ON fornecedor_contatos;
+CREATE TRIGGER trg_empresa_fornecedor_contatos
+  BEFORE INSERT OR UPDATE ON fornecedor_contatos
+  FOR EACH ROW EXECUTE FUNCTION brobond_herdar_empresa('fornecedores', 'fornecedor_id');
+
+-- ----------------------------------------------------------------------------
+-- 3) REPRESENTANTES → VENDEDORES / FUNCIONÁRIOS
+--
+-- A entidade existente é EVOLUÍDA (regra: não duplicar). `comissao_pct`,
+-- `regiao`, `telefone` e `email` continuam valendo como estão.
+-- ----------------------------------------------------------------------------
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS cpf TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS cargo TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS usuario_id INTEGER REFERENCES usuarios(id) ON DELETE SET NULL;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS whatsapp TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS admissao DATE;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS desligamento DATE;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS observacoes TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_representantes_cpf_empresa
+  ON representantes (empresa_id, regexp_replace(cpf, '[^0-9]', '', 'g'))
+  WHERE cpf IS NOT NULL AND regexp_replace(cpf, '[^0-9]', '', 'g') <> '';
+
+-- Um usuário do sistema representa no máximo um vendedor por empresa.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_representantes_usuario_empresa
+  ON representantes (empresa_id, usuario_id)
+  WHERE usuario_id IS NOT NULL;
+
+DO $$ BEGIN
+  ALTER TABLE representantes ADD CONSTRAINT representantes_desligamento_coerente
+    CHECK (desligamento IS NULL OR admissao IS NULL OR desligamento >= admissao);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ---- 0022_fiscal_config_id ----
+ALTER TABLE empresa_fiscal_config ADD COLUMN IF NOT EXISTS id SERIAL;
+DO $$ BEGIN
+  ALTER TABLE empresa_fiscal_config ADD CONSTRAINT empresa_fiscal_config_id_unico UNIQUE (id);
+EXCEPTION WHEN duplicate_table THEN NULL; WHEN duplicate_object THEN NULL; END $$;
+
+-- ---- 0023_fiscal_provider_extensivel ----
+ALTER TABLE empresa_fiscal_config DROP CONSTRAINT IF EXISTS empresa_fiscal_provider_valido;
+DO $$ BEGIN
+  ALTER TABLE empresa_fiscal_config ADD CONSTRAINT empresa_fiscal_provider_valido
+    CHECK (provider ~ '^[a-z0-9_]{2,20}$');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

@@ -29,6 +29,8 @@ export type FieldType =
   | 'multiref' // lista de chaves estrangeiras (muitos-para-muitos; ex.: tamanhos de uma grade)
   | 'password'
   | 'color' // cor em hexadecimal (#RRGGBB) — exibe uma "bolinha" colorida
+  | 'uf' // unidade federativa (SP, MG...) — validada contra a lista oficial
+  | 'cep' // CEP brasileiro (normalizado para 8 dígitos)
   | 'images'; // galeria de fotos do registro (virtual — tabela `arquivos`)
 
 export type Tone = 'green' | 'red' | 'amber' | 'blue' | 'slate';
@@ -72,6 +74,11 @@ export type Field = {
   pattern?: string;
   /** mensagem quando `pattern` não é satisfeito */
   patternMessage?: string;
+  /**
+   * Para `type: 'document'`: restringe o documento aceito. O padrão ('ambos')
+   * aceita CPF ou CNPJ. Em qualquer caso o dígito verificador É conferido.
+   */
+  documento?: 'cpf' | 'cnpj' | 'ambos';
 };
 
 export type ResourceOps = { create: boolean; update: boolean; delete: boolean };
@@ -99,6 +106,13 @@ export type Resource = {
   internal?: boolean;
   /** perfil mínimo para acessar (admin > gerente > operador). Ex.: gerentePlus */
   minPerfil?: 'gerente' | 'admin';
+  /**
+   * MULTIEMPRESA: a tabela tem `empresa_id` e o recurso é isolado por empresa.
+   * Toda listagem ganha o filtro da empresa ativa, todo acesso por id é
+   * verificado e a empresa é carimbada pelo servidor na criação.
+   * Ver server/src/empresa.ts.
+   */
+  empresa?: boolean;
 };
 
 const ALL_OPS: ResourceOps = { create: true, update: true, delete: true };
@@ -121,6 +135,33 @@ export const PERFIS: FieldOption[] = [
   { value: 'gerente', label: 'Gerente', tone: 'blue' },
   { value: 'operador', label: 'Operador', tone: 'slate' },
 ];
+
+/** Indicador da Inscrição Estadual do destinatário (campo indIEDest da NF-e). */
+export const INDICADOR_IE: FieldOption[] = [
+  { value: '1', label: '1 — Contribuinte de ICMS', tone: 'green' },
+  { value: '2', label: '2 — Isento de Inscrição Estadual', tone: 'amber' },
+  { value: '9', label: '9 — Não contribuinte', tone: 'slate' },
+];
+
+export const PESSOA: FieldOption[] = [
+  { value: 'pj', label: 'Pessoa jurídica', tone: 'blue' },
+  { value: 'pf', label: 'Pessoa física', tone: 'slate' },
+  { value: 'estrangeiro', label: 'Estrangeiro', tone: 'amber' },
+];
+
+/** Bloco de endereço reaproveitado por clientes, fornecedores e empresas. */
+function camposEndereco(section = 'Endereço'): Field[] {
+  return [
+    { name: 'cep', label: 'CEP', type: 'cep', maxLength: 9, list: false, section, placeholder: '00000-000', hint: 'Preencha o CEP e use “Buscar CEP” para completar o endereço.' },
+    { name: 'logradouro', label: 'Logradouro', type: 'text', maxLength: 160, list: false, wide: true, section },
+    { name: 'numero', label: 'Número', type: 'text', maxLength: 20, list: false, section },
+    { name: 'complemento', label: 'Complemento', type: 'text', maxLength: 80, list: false, section },
+    { name: 'bairro', label: 'Bairro', type: 'text', maxLength: 80, list: false, section },
+    { name: 'cidade', label: 'Cidade', type: 'text', maxLength: 80, list: false, search: true, section },
+    { name: 'uf', label: 'UF', type: 'uf', maxLength: 2, list: false, section },
+    { name: 'codigo_municipio', label: 'Código IBGE do município', type: 'text', maxLength: 7, list: false, section, hint: 'Obrigatório na NF-e. Preenchido pela busca de CEP.' },
+  ];
+}
 
 export const UNIDADES: FieldOption[] = [
   { value: 'un', label: 'Unidade (un)' },
@@ -344,6 +385,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   locais: {
     key: 'locais',
+    empresa: true,
     table: 'locais',
     label: 'Locais de estoque',
     singular: 'Local',
@@ -397,8 +439,23 @@ export const RESOURCES: Record<string, Resource> = {
       'Empresas do grupo para o motor analítico 1. MEU NEGÓCIOS: cada venda multicanal pertence a uma empresa e os relatórios de BI (margem, curva ABC, dashboard) filtram por ela. A BROBOND (id 1) é a empresa padrão — não a exclua.',
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 80, placeholder: 'BROBOND' },
-      { name: 'razao_social', label: 'Razão social', type: 'text', maxLength: 140, list: false },
-      { name: 'cnpj', label: 'CNPJ', type: 'document', maxLength: 20, list: false, placeholder: '00.000.000/0000-00' },
+      { name: 'razao_social', label: 'Razão social', type: 'text', maxLength: 140, list: false, wide: true },
+      { name: 'nome_fantasia', label: 'Nome fantasia', type: 'text', maxLength: 140, list: false },
+      { name: 'cnpj', label: 'CNPJ', type: 'document', documento: 'cnpj', maxLength: 20, list: false, placeholder: '00.000.000/0000-00' },
+      { name: 'ie', label: 'Inscrição estadual', type: 'text', maxLength: 30, list: false, section: 'Fiscal' },
+      { name: 'im', label: 'Inscrição municipal', type: 'text', maxLength: 30, list: false, section: 'Fiscal' },
+      {
+        name: 'crt', label: 'Regime tributário (CRT)', type: 'select', list: false, section: 'Fiscal',
+        options: [
+          { value: '1', label: '1 — Simples Nacional' },
+          { value: '2', label: '2 — Simples Nacional, excesso de sublimite' },
+          { value: '3', label: '3 — Regime normal' },
+        ],
+        hint: 'Define se a NF-e sai com CSOSN (Simples) ou CST de ICMS (normal).',
+      },
+      ...camposEndereco(),
+      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, list: false, section: 'Contato' },
+      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, list: false, section: 'Contato' },
       ativo,
       ...auditFields,
     ],
@@ -436,6 +493,26 @@ export const RESOURCES: Record<string, Resource> = {
       ...auditFields,
     ],
     orderBy: { field: 'ncm', dir: 'asc' },
+  },
+
+  // MULTIEMPRESA — empresas que cada usuário pode acessar. Interno: a
+  // concessão é administrada pelos endpoints /api/empresas/*, não por CRUD
+  // genérico (conceder empresa é decisão de segurança, não de cadastro).
+  usuario_empresas: {
+    key: 'usuario_empresas',
+    table: 'usuario_empresas',
+    label: 'Acesso a empresas',
+    singular: 'Acesso a empresa',
+    labelFields: ['id'],
+    internal: true,
+    ops: ALL_OPS,
+    adminOnly: true,
+    fields: [
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios', required: true },
+      { name: 'empresa_id', label: 'Empresa', type: 'ref', ref: 'empresas', required: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'id', dir: 'asc' },
   },
 
   tamanhos: {
@@ -577,6 +654,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   colecoes: {
     key: 'colecoes',
+    empresa: true,
     table: 'colecoes',
     label: 'Coleções',
     singular: 'Coleção',
@@ -605,6 +683,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   fornecedores: {
     key: 'fornecedores',
+    empresa: true,
     table: 'fornecedores',
     label: 'Fornecedores',
     singular: 'Fornecedor',
@@ -612,11 +691,54 @@ export const RESOURCES: Record<string, Resource> = {
     ops: ALL_OPS,
     fields: [
       { name: 'nome', label: 'Razão social / Nome', type: 'text', required: true, search: true, maxLength: 160, wide: true },
-      { name: 'cnpj', label: 'CNPJ', type: 'document', search: true, maxLength: 20 },
-      { name: 'contato', label: 'Pessoa de contato', type: 'text', maxLength: 80 },
-      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20 },
-      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160 },
+      { name: 'pessoa', label: 'Tipo de pessoa', type: 'select', required: true, default: 'pj', options: PESSOA },
+      { name: 'cnpj', label: 'CNPJ / CPF', type: 'document', search: true, maxLength: 20 },
+      { name: 'razao_social', label: 'Razão social', type: 'text', maxLength: 160, list: false, wide: true, search: true },
+      { name: 'nome_fantasia', label: 'Nome fantasia', type: 'text', maxLength: 160, list: false, search: true },
+
+      // ---------------- Fiscal (necessário na NF-e de entrada) ----------------
+      { name: 'ie', label: 'Inscrição estadual', type: 'text', maxLength: 30, list: false, search: true, section: 'Fiscal' },
+      { name: 'indicador_ie', label: 'Indicador de IE', type: 'select', required: true, default: '1', list: false, section: 'Fiscal', options: INDICADOR_IE },
+      { name: 'im', label: 'Inscrição municipal', type: 'text', maxLength: 30, list: false, section: 'Fiscal' },
+
+      ...camposEndereco(),
+
+      // ---------------- Contato ----------------
+      { name: 'contato', label: 'Pessoa de contato', type: 'text', maxLength: 80, section: 'Contato' },
+      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, section: 'Contato' },
+      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, section: 'Contato' },
+      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, section: 'Contato' },
+
+      // ---------------- Comercial ----------------
+      { name: 'prazo_entrega_dias', label: 'Prazo de entrega (dias)', type: 'integer', min: 0, list: false, section: 'Comercial' },
+      { name: 'condicao_pagamento', label: 'Condição de pagamento', type: 'text', maxLength: 60, list: false, section: 'Comercial', placeholder: '30/60/90 dias' },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Comercial' },
+
       ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+  },
+
+  // Contatos adicionais do fornecedor (compras, financeiro, expedição).
+  fornecedor_contatos: {
+    key: 'fornecedor_contatos',
+    table: 'fornecedor_contatos',
+    label: 'Contatos do fornecedor',
+    singular: 'Contato do fornecedor',
+    labelFields: ['nome'],
+    empresa: true,
+    ops: ALL_OPS,
+    internal: true,
+    fields: [
+      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores', required: true, search: true },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
+      { name: 'cargo', label: 'Cargo / Setor', type: 'text', maxLength: 60 },
+      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160 },
+      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20 },
+      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20 },
+      { name: 'principal', label: 'Contato principal', type: 'boolean', default: false },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 1000, list: false, wide: true },
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
@@ -624,6 +746,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   insumos: {
     key: 'insumos',
+    empresa: true,
     table: 'insumos',
     label: 'Insumos',
     singular: 'Insumo',
@@ -642,6 +765,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   representantes: {
     key: 'representantes',
+    empresa: true,
     table: 'representantes',
     label: 'Representantes',
     singular: 'Representante',
@@ -649,10 +773,17 @@ export const RESOURCES: Record<string, Resource> = {
     ops: ALL_OPS,
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, wide: true },
+      { name: 'cpf', label: 'CPF', type: 'document', documento: 'cpf', search: true, maxLength: 14 },
+      { name: 'cargo', label: 'Cargo', type: 'text', maxLength: 60, search: true, placeholder: 'Vendedor, Representante, Gerente comercial...' },
       { name: 'regiao', label: 'Região', type: 'text', search: true, maxLength: 80 },
-      { name: 'comissao_pct', label: 'Comissão (%)', type: 'percent', min: 0, max: 100, default: 0 },
-      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20 },
-      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160 },
+      { name: 'comissao_pct', label: 'Comissão padrão (%)', type: 'percent', min: 0, max: 100, default: 0, hint: 'A comissão é paga sobre faturas efetivamente LIQUIDADAS, não sobre a venda criada.' },
+      { name: 'usuario_id', label: 'Usuário do sistema', type: 'ref', ref: 'usuarios', list: false, search: true, section: 'Acesso', hint: 'Vincule para que a pessoa veja as próprias vendas e comissões ao entrar no ERP.' },
+      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, section: 'Contato' },
+      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, section: 'Contato' },
+      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, section: 'Contato' },
+      { name: 'admissao', label: 'Admissão', type: 'date', list: false, section: 'Situação' },
+      { name: 'desligamento', label: 'Desligamento', type: 'date', list: false, section: 'Situação', hint: 'Preencher aqui NÃO apaga o histórico de vendas nem as comissões já apuradas.' },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Situação' },
       ativo,
       ...auditFields,
     ],
@@ -661,6 +792,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   clientes: {
     key: 'clientes',
+    empresa: true,
     table: 'clientes',
     label: 'Clientes',
     singular: 'Cliente',
@@ -668,7 +800,10 @@ export const RESOURCES: Record<string, Resource> = {
     ops: ALL_OPS,
     fields: [
       { name: 'nome', label: 'Nome / Razão social', type: 'text', required: true, search: true, maxLength: 160, wide: true },
-      { name: 'cnpj_cpf', label: 'CNPJ / CPF', type: 'document', search: true, maxLength: 20 },
+      { name: 'pessoa', label: 'Tipo de pessoa', type: 'select', required: true, default: 'pj', options: PESSOA },
+      { name: 'cnpj_cpf', label: 'CNPJ / CPF', type: 'document', search: true, maxLength: 20, hint: 'O dígito verificador é conferido no cadastro — documento inválido é recusado pela SEFAZ na hora de faturar.' },
+      { name: 'razao_social', label: 'Razão social', type: 'text', maxLength: 160, list: false, wide: true, search: true },
+      { name: 'nome_fantasia', label: 'Nome fantasia', type: 'text', maxLength: 160, list: false, search: true },
       {
         name: 'tipo',
         label: 'Tipo',
@@ -680,8 +815,25 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'varejo', label: 'Varejo' },
         ],
       },
-      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20 },
-      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160 },
+
+      // ---------------- Fiscal ----------------
+      { name: 'rg_ie', label: 'RG / Inscrição estadual', type: 'text', maxLength: 30, list: false, search: true, section: 'Fiscal' },
+      { name: 'indicador_ie', label: 'Indicador de IE', type: 'select', required: true, default: '9', list: false, section: 'Fiscal', options: INDICADOR_IE, hint: 'Campo indIEDest da NF-e. Errar aqui é a rejeição mais comum em venda para empresa.' },
+      { name: 'im', label: 'Inscrição municipal', type: 'text', maxLength: 30, list: false, section: 'Fiscal' },
+      { name: 'suframa', label: 'SUFRAMA', type: 'text', maxLength: 20, list: false, section: 'Fiscal' },
+
+      ...camposEndereco(),
+
+      // ---------------- Contato ----------------
+      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, section: 'Contato' },
+      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, section: 'Contato' },
+      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, section: 'Contato' },
+
+      // ---------------- Comercial ----------------
+      { name: 'limite_credito', label: 'Limite de crédito', type: 'money', min: 0, default: 0, list: false, section: 'Comercial', hint: 'Zero = sem limite definido.' },
+      { name: 'representante_id', label: 'Vendedor padrão', type: 'ref', ref: 'representantes', list: false, search: true, section: 'Comercial' },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Comercial' },
+
       ativo,
       ...auditFields,
     ],
@@ -738,6 +890,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   produtos: {
     key: 'produtos',
+    empresa: true,
     table: 'produtos',
     label: 'Produtos',
     singular: 'Produto',
@@ -763,12 +916,316 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'codigo_barras', label: 'Código de barras (EAN)', type: 'text', unique: true, search: true, maxLength: 14, list: false, placeholder: '7891234567890', pattern: '^(\\d{8}|\\d{12,14})$', patternMessage: 'Informe 8, 12, 13 ou 14 dígitos', hint: '8, 12, 13 ou 14 dígitos. Usado nas etiquetas.', section: 'Identificação e catálogo' },
       { name: 'composicao', label: 'Composição', type: 'text', maxLength: 120, list: false, placeholder: '100% algodão', section: 'Identificação e catálogo' },
       { name: 'descricao', label: 'Descrição comercial', type: 'textarea', maxLength: 2000, list: false, wide: true, hint: 'Texto usado no catálogo e nas propostas.', section: 'Identificação e catálogo' },
-      { name: 'ncm', label: 'NCM', type: 'text', maxLength: 10, list: false, placeholder: '6205.20.00', hint: 'Classificação fiscal (preparação para NF-e).', section: 'Fiscal e logística' },
-      { name: 'peso_g', label: 'Peso (g)', type: 'integer', min: 0, list: false, section: 'Fiscal e logística' },
+      { name: 'descricao_curta', label: 'Descrição curta', type: 'text', maxLength: 180, list: false, wide: true, section: 'Identificação e catálogo', hint: 'Uma linha — usada em listas, marketplaces e no PDV.' },
+      { name: 'marca', label: 'Marca', type: 'text', maxLength: 60, list: false, search: true, section: 'Identificação e catálogo' },
+      { name: 'tags', label: 'Tags', type: 'text', maxLength: 240, list: false, wide: true, search: true, section: 'Identificação e catálogo', placeholder: 'verão, básico, promoção', hint: 'Separe por vírgula. Ajuda na busca e nos filtros.' },
+      { name: 'observacoes_internas', label: 'Observações internas', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Identificação e catálogo', hint: 'Nunca sai em catálogo, proposta ou nota — é só para a equipe.' },
+
+      // ---------------- Classificação ----------------
+      {
+        name: 'formato', label: 'Formato', type: 'select', default: 'simples', section: 'Classificação',
+        hint: 'Com variação, o produto vira um PAI e cada combinação (cor × tamanho) ganha o próprio SKU e o próprio estoque.',
+        options: [
+          { value: 'simples', label: 'Simples', tone: 'slate' },
+          { value: 'variacao', label: 'Com variação / grade', tone: 'blue' },
+          { value: 'kit', label: 'Composição / kit', tone: 'amber' },
+        ],
+      },
+      {
+        name: 'tipo', label: 'Tipo de produto', type: 'select', default: 'mercadoria', list: false, section: 'Classificação',
+        options: [
+          { value: 'mercadoria', label: 'Mercadoria para revenda' },
+          { value: 'materia_prima', label: 'Matéria-prima' },
+          { value: 'produto_acabado', label: 'Produto acabado' },
+          { value: 'embalagem', label: 'Embalagem' },
+          { value: 'servico', label: 'Serviço' },
+          { value: 'outro', label: 'Outro' },
+        ],
+      },
+      {
+        name: 'condicao', label: 'Condição', type: 'select', default: 'novo', list: false, section: 'Classificação',
+        options: [
+          { value: 'novo', label: 'Novo' },
+          { value: 'usado', label: 'Usado' },
+          { value: 'recondicionado', label: 'Recondicionado' },
+        ],
+      },
+      {
+        name: 'producao', label: 'Produção', type: 'select', default: 'propria', list: false, section: 'Classificação',
+        options: [
+          { value: 'propria', label: 'Própria' },
+          { value: 'terceiros', label: 'Terceiros' },
+        ],
+      },
+      { name: 'unidade', label: 'Unidade de medida', type: 'select', default: 'un', list: false, section: 'Classificação', options: UNIDADES },
+      { name: 'produto_pai_id', label: 'Produto pai', type: 'ref', ref: 'produtos', list: false, readonly: true, form: false, section: 'Classificação', hint: 'Preenchido automaticamente nas variações geradas a partir do produto pai.' },
+      { name: 'variacao_chave', label: 'Variação', type: 'text', maxLength: 120, list: false, readonly: true, form: false, section: 'Classificação' },
+      { name: 'variacao_tamanho_id', label: 'Tamanho da variação', type: 'ref', ref: 'tamanhos', list: false, readonly: true, form: false, section: 'Classificação' },
+
+      // ---------------- Fiscal ----------------
+      { name: 'ncm', label: 'NCM', type: 'text', maxLength: 10, list: false, placeholder: '6205.20.00', hint: 'Classificação fiscal — obrigatória na NF-e.', section: 'Fiscal' },
+      { name: 'cest', label: 'CEST', type: 'text', maxLength: 10, list: false, placeholder: '28.038.00', section: 'Fiscal', hint: 'Obrigatório quando o produto está sujeito a substituição tributária.' },
+      {
+        name: 'origem', label: 'Origem da mercadoria', type: 'select', default: '0', list: false, section: 'Fiscal',
+        options: [
+          { value: '0', label: '0 — Nacional' },
+          { value: '1', label: '1 — Estrangeira, importação direta' },
+          { value: '2', label: '2 — Estrangeira, adquirida no mercado interno' },
+          { value: '3', label: '3 — Nacional, conteúdo de importação > 40%' },
+          { value: '4', label: '4 — Nacional, processos produtivos básicos' },
+          { value: '5', label: '5 — Nacional, conteúdo de importação <= 40%' },
+          { value: '6', label: '6 — Estrangeira, importação direta sem similar nacional' },
+          { value: '7', label: '7 — Estrangeira, mercado interno sem similar nacional' },
+          { value: '8', label: '8 — Nacional, conteúdo de importação > 70%' },
+        ],
+      },
+      { name: 'cfop_saida', label: 'CFOP padrão de saída', type: 'text', maxLength: 4, list: false, section: 'Fiscal', placeholder: '5102', pattern: '^(|[0-9]{4})$', patternMessage: 'CFOP tem 4 dígitos (ex.: 5102)', hint: 'Deixe vazio para usar a regra fiscal da empresa.' },
+      { name: 'icms_cst', label: 'CST/CSOSN do ICMS', type: 'text', maxLength: 4, list: false, section: 'Fiscal' },
+      { name: 'icms_aliquota', label: 'ICMS (%)', type: 'percent', min: 0, max: 100, list: false, section: 'Fiscal' },
+      { name: 'pis_cst', label: 'CST do PIS', type: 'text', maxLength: 3, list: false, section: 'Fiscal' },
+      { name: 'pis_aliquota', label: 'PIS (%)', type: 'percent', min: 0, max: 100, list: false, section: 'Fiscal' },
+      { name: 'cofins_cst', label: 'CST do COFINS', type: 'text', maxLength: 3, list: false, section: 'Fiscal' },
+      { name: 'cofins_aliquota', label: 'COFINS (%)', type: 'percent', min: 0, max: 100, list: false, section: 'Fiscal' },
+      { name: 'ipi_cst', label: 'CST do IPI', type: 'text', maxLength: 3, list: false, section: 'Fiscal' },
+      { name: 'ipi_aliquota', label: 'IPI (%)', type: 'percent', min: 0, max: 100, list: false, section: 'Fiscal' },
+      { name: 'gtin_tributario', label: 'GTIN tributário', type: 'text', maxLength: 14, list: false, section: 'Fiscal', pattern: '^(|\\d{8}|\\d{12,14})$', patternMessage: 'Informe 8, 12, 13 ou 14 dígitos', hint: 'Normalmente igual ao GTIN/EAN; difere em produtos vendidos por fração ou caixa.' },
+
+      // ---------------- Logística ----------------
+      { name: 'peso_g', label: 'Peso (g) — legado', type: 'integer', min: 0, list: false, form: false, section: 'Logística' },
+      { name: 'peso_liquido_g', label: 'Peso líquido (g)', type: 'integer', min: 0, list: false, section: 'Logística' },
+      { name: 'peso_bruto_g', label: 'Peso bruto (g)', type: 'integer', min: 0, list: false, section: 'Logística', hint: 'Com embalagem — é este que a transportadora cobra.' },
+      { name: 'largura_mm', label: 'Largura (mm)', type: 'integer', min: 0, list: false, section: 'Logística' },
+      { name: 'altura_mm', label: 'Altura (mm)', type: 'integer', min: 0, list: false, section: 'Logística' },
+      { name: 'profundidade_mm', label: 'Profundidade (mm)', type: 'integer', min: 0, list: false, section: 'Logística' },
+      { name: 'volumes', label: 'Volumes', type: 'integer', min: 1, default: 1, list: false, section: 'Logística' },
+      { name: 'itens_por_caixa', label: 'Itens por caixa', type: 'integer', min: 0, list: false, section: 'Logística' },
+
+      // ---------------- Estoque e suprimento ----------------
+      { name: 'estoque_min', label: 'Estoque mínimo', type: 'integer', min: 0, default: 0, list: false, section: 'Estoque e suprimento', hint: 'Dispara alerta e alimenta a sugestão de compra.' },
+      { name: 'estoque_max', label: 'Estoque máximo', type: 'integer', min: 0, list: false, section: 'Estoque e suprimento', hint: 'Teto de reposição. Precisa ser maior ou igual ao mínimo.' },
+      { name: 'localizacao', label: 'Localização física', type: 'text', maxLength: 60, list: false, section: 'Estoque e suprimento', placeholder: 'Corredor B, prateleira 3' },
+      { name: 'fornecedor_id', label: 'Fornecedor principal', type: 'ref', ref: 'fornecedores', list: false, search: true, section: 'Estoque e suprimento' },
+      { name: 'codigo_fornecedor', label: 'Código no fornecedor', type: 'text', maxLength: 60, list: false, search: true, section: 'Estoque e suprimento', hint: 'Usado no de-para da NF-e de entrada.' },
+      { name: 'custo_habitual', label: 'Custo habitual', type: 'money', min: 0, default: 0, list: false, section: 'Estoque e suprimento', hint: 'Referência de compra. O custo que valoriza o estoque continua sendo “Custo unitário”.' },
+
       ativo,
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
+  },
+
+  // Componentes de um produto formato='kit'.
+  produto_composicao: {
+    key: 'produto_composicao',
+    table: 'produto_composicao',
+    label: 'Composição do produto',
+    singular: 'Componente',
+    labelFields: ['id'],
+    internal: true,
+    empresa: true,
+    ops: ALL_OPS,
+    fields: [
+      { name: 'produto_id', label: 'Kit', type: 'ref', ref: 'produtos', required: true },
+      { name: 'componente_id', label: 'Componente', type: 'ref', ref: 'produtos', required: true },
+      { name: 'quantidade', label: 'Quantidade', type: 'number', required: true, min: 0.001, default: 1 },
+      ...auditFields,
+    ],
+    orderBy: { field: 'id', dir: 'asc' },
+  },
+
+  // Regras fiscais — a camada extensível que evita alíquota hardcoded.
+  regras_fiscais: {
+    key: 'regras_fiscais',
+    table: 'regras_fiscais',
+    label: 'Regras fiscais',
+    singular: 'Regra fiscal',
+    labelFields: ['nome'],
+    empresa: true,
+    ops: ALL_OPS,
+    minPerfil: 'gerente',
+    notice:
+      'Regras resolvem a tributação da NF-e/NFC-e quando o produto não define a sua. Os campos em branco são CURINGA (valem para tudo). O motor aplica a regra MAIS ESPECÍFICA: maior prioridade, depois NCM mais longo, depois UF específica antes de curinga. Nada aqui altera o cálculo de margem do módulo 1. MEU NEGÓCIOS, que continua usando as Alíquotas por NCM.',
+    fields: [
+      { name: 'nome', label: 'Nome da regra', type: 'text', required: true, search: true, maxLength: 120, wide: true, placeholder: 'Venda interna SP — vestuário' },
+      { name: 'ncm', label: 'NCM (prefixo)', type: 'text', maxLength: 8, search: true, section: 'Quando aplicar', pattern: '^(|[0-9]{2,8})$', patternMessage: 'Use de 2 a 8 dígitos, ou deixe vazio', hint: 'Vazio = qualquer NCM.' },
+      { name: 'uf_destino', label: 'UF de destino', type: 'uf', section: 'Quando aplicar', hint: 'Vazio = qualquer UF.' },
+      { name: 'operacao', label: 'Operação', type: 'select', required: true, default: 'saida', section: 'Quando aplicar', options: [ { value: 'saida', label: 'Saída' }, { value: 'entrada', label: 'Entrada' } ] },
+      { name: 'modelo', label: 'Modelo do documento', type: 'select', section: 'Quando aplicar', options: [ { value: '55', label: 'NF-e (55)' }, { value: '65', label: 'NFC-e (65)' } ], hint: 'Vazio = vale para os dois.' },
+      { name: 'consumidor_final', label: 'Somente consumidor final', type: 'boolean', list: false, section: 'Quando aplicar' },
+      { name: 'regime', label: 'Regime tributário (CRT)', type: 'select', list: false, section: 'Quando aplicar', options: [ { value: '1', label: '1 — Simples Nacional' }, { value: '2', label: '2 — Simples Nacional, excesso de sublimite' }, { value: '3', label: '3 — Regime normal' } ] },
+      { name: 'cfop', label: 'CFOP', type: 'text', maxLength: 4, section: 'Resultado', pattern: '^(|[0-9]{4})$', patternMessage: 'CFOP tem 4 dígitos' },
+      { name: 'icms_cst', label: 'CST do ICMS', type: 'text', maxLength: 3, list: false, section: 'Resultado' },
+      { name: 'csosn', label: 'CSOSN (Simples)', type: 'text', maxLength: 4, list: false, section: 'Resultado' },
+      { name: 'icms_aliquota', label: 'ICMS (%)', type: 'percent', min: 0, max: 100, section: 'Resultado' },
+      { name: 'icms_reducao_pct', label: 'Redução da base de ICMS (%)', type: 'percent', min: 0, max: 100, list: false, section: 'Resultado' },
+      { name: 'icms_mod_bc', label: 'Modalidade da base do ICMS', type: 'text', maxLength: 2, list: false, section: 'Resultado' },
+      { name: 'pis_cst', label: 'CST do PIS', type: 'text', maxLength: 3, list: false, section: 'Resultado' },
+      { name: 'pis_aliquota', label: 'PIS (%)', type: 'percent', min: 0, max: 100, list: false, section: 'Resultado' },
+      { name: 'cofins_cst', label: 'CST do COFINS', type: 'text', maxLength: 3, list: false, section: 'Resultado' },
+      { name: 'cofins_aliquota', label: 'COFINS (%)', type: 'percent', min: 0, max: 100, list: false, section: 'Resultado' },
+      { name: 'ipi_cst', label: 'CST do IPI', type: 'text', maxLength: 3, list: false, section: 'Resultado' },
+      { name: 'ipi_aliquota', label: 'IPI (%)', type: 'percent', min: 0, max: 100, list: false, section: 'Resultado' },
+      { name: 'prioridade', label: 'Prioridade', type: 'integer', default: 0, section: 'Governança', hint: 'Maior vence. Use para forçar uma exceção sobre a regra geral.' },
+      { name: 'vigencia_inicio', label: 'Vigência — início', type: 'date', list: false, section: 'Governança' },
+      { name: 'vigencia_fim', label: 'Vigência — fim', type: 'date', list: false, section: 'Governança' },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Governança' },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'prioridade', dir: 'desc' },
+  },
+
+  // Configuração de emissão por empresa. Os tokens ficam CIFRADOS e nunca
+  // voltam pela API — por isso só a API dedicada (/api/fiscal/config) escreve
+  // aqui; o CRUD genérico fica fora de alcance (internal).
+  empresa_fiscal_config: {
+    key: 'empresa_fiscal_config',
+    table: 'empresa_fiscal_config',
+    label: 'Configuração fiscal',
+    singular: 'Configuração fiscal',
+    labelFields: ['provider'],
+    ops: { create: false, update: false, delete: false },
+    internal: true,
+    adminOnly: true,
+    fields: [
+      { name: 'empresa_id', label: 'Empresa', type: 'ref', ref: 'empresas' },
+      { name: 'provider', label: 'Provedor', type: 'text', maxLength: 20 },
+      { name: 'ambiente', label: 'Ambiente', type: 'text', maxLength: 20 },
+      { name: 'provider_base_url', label: 'URL base', type: 'text', maxLength: 200 },
+      // Colunas de segredo: declaradas para que a camada de persistência saiba
+      // gravá-las, mas inalcançáveis pela API — o recurso é `internal` e
+      // `ops` nega tudo. Só `fiscal.ts` lê, e ele devolve apenas a máscara.
+      { name: 'provider_token_cifrado', label: 'Token do provedor (cifrado)', type: 'text', list: false, form: false },
+      { name: 'certificado_senha_cifrada', label: 'Senha do certificado (cifrada)', type: 'text', list: false, form: false },
+      { name: 'csc_token_cifrado', label: 'CSC (cifrado)', type: 'text', list: false, form: false },
+      { name: 'certificado_ref', label: 'Referência do certificado', type: 'text', maxLength: 200 },
+      { name: 'certificado_validade', label: 'Validade do certificado', type: 'date' },
+      { name: 'csc_id', label: 'ID do CSC', type: 'text', maxLength: 20 },
+      { name: 'serie_nfe', label: 'Série NF-e', type: 'integer' },
+      { name: 'proximo_numero_nfe', label: 'Próximo número NF-e', type: 'integer' },
+      { name: 'serie_nfce', label: 'Série NFC-e', type: 'integer' },
+      { name: 'proximo_numero_nfce', label: 'Próximo número NFC-e', type: 'integer' },
+      { name: 'natureza_operacao_padrao', label: 'Natureza da operação padrão', type: 'text', maxLength: 120 },
+      { name: 'cfop_padrao_dentro_uf', label: 'CFOP dentro do estado', type: 'text', maxLength: 4 },
+      { name: 'cfop_padrao_fora_uf', label: 'CFOP fora do estado', type: 'text', maxLength: 4 },
+      { name: 'habilitado', label: 'Emissão habilitada', type: 'boolean' },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true },
+      { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', readonly: true },
+    ],
+    orderBy: { field: 'empresa_id', dir: 'asc' },
+  },
+
+  // Documentos fiscais: leitura pela UI, escrita SÓ pela máquina de estados
+  // de fiscal.ts. Por isso `ops` nega create/update/delete no CRUD genérico.
+  documentos_fiscais: {
+    key: 'documentos_fiscais',
+    table: 'documentos_fiscais',
+    label: 'Documentos fiscais',
+    singular: 'Documento fiscal',
+    labelFields: ['numero'],
+    empresa: true,
+    ops: { create: false, update: false, delete: false },
+    notice:
+      'Somente leitura. O documento é criado e alterado pelo fluxo de emissão (Venda → Emitir NF-e). Status “autorizado” só existe com chave e protocolo devolvidos pela SEFAZ através do provedor.',
+    fields: [
+      { name: 'venda_id', label: 'Venda', type: 'ref', ref: 'vendas', search: true },
+      { name: 'modelo', label: 'Modelo', type: 'select', options: [ { value: '55', label: 'NF-e (55)' }, { value: '65', label: 'NFC-e (65)' } ] },
+      { name: 'operacao', label: 'Operação', type: 'select', options: [ { value: 'saida', label: 'Saída' }, { value: 'entrada', label: 'Entrada' } ] },
+      { name: 'natureza_operacao', label: 'Natureza da operação', type: 'text', maxLength: 120, list: false },
+      {
+        name: 'status', label: 'Status', type: 'select',
+        options: [
+          { value: 'rascunho', label: 'Rascunho', tone: 'slate' },
+          { value: 'pendente', label: 'Pendente', tone: 'amber' },
+          { value: 'processando', label: 'Processando', tone: 'blue' },
+          { value: 'autorizado', label: 'Autorizado', tone: 'green' },
+          { value: 'rejeitado', label: 'Rejeitado', tone: 'red' },
+          { value: 'cancelado', label: 'Cancelado', tone: 'red' },
+          { value: 'inutilizado', label: 'Inutilizado', tone: 'slate' },
+          { value: 'erro', label: 'Erro', tone: 'red' },
+        ],
+      },
+      { name: 'motivo', label: 'Motivo', type: 'textarea', list: false, wide: true },
+      { name: 'serie', label: 'Série', type: 'integer' },
+      { name: 'numero', label: 'Número', type: 'integer', search: true },
+      { name: 'chave_acesso', label: 'Chave de acesso', type: 'text', maxLength: 44, search: true, wide: true },
+      { name: 'protocolo', label: 'Protocolo', type: 'text', maxLength: 40, list: false },
+      { name: 'autorizado_em', label: 'Autorizado em', type: 'datetime' },
+      { name: 'cancelado_em', label: 'Cancelado em', type: 'datetime', list: false },
+      { name: 'cancelamento_protocolo', label: 'Protocolo do cancelamento', type: 'text', maxLength: 40, list: false },
+      { name: 'cancelamento_justificativa', label: 'Justificativa do cancelamento', type: 'textarea', list: false, wide: true },
+      { name: 'provider', label: 'Provedor', type: 'text', maxLength: 20 },
+      { name: 'provider_ref', label: 'Referência no provedor', type: 'text', maxLength: 120, list: false },
+      { name: 'ambiente', label: 'Ambiente', type: 'select', options: [ { value: 'homologacao', label: 'Homologação', tone: 'amber' }, { value: 'producao', label: 'Produção', tone: 'green' } ] },
+      { name: 'danfe_url', label: 'DANFE', type: 'text', maxLength: 400, list: false },
+      { name: 'valor_produtos', label: 'Produtos', type: 'money', list: false },
+      { name: 'valor_frete', label: 'Frete', type: 'money', list: false },
+      { name: 'valor_desconto', label: 'Desconto', type: 'money', list: false },
+      { name: 'valor_total', label: 'Total', type: 'money' },
+      { name: 'valor_icms', label: 'ICMS', type: 'money', list: false },
+      { name: 'valor_pis', label: 'PIS', type: 'money', list: false },
+      { name: 'valor_cofins', label: 'COFINS', type: 'money', list: false },
+      { name: 'valor_ipi', label: 'IPI', type: 'money', list: false },
+      { name: 'tentativas', label: 'Tentativas', type: 'integer', list: false },
+      { name: 'estoque_baixado_em', label: 'Estoque baixado em', type: 'datetime', list: false },
+      { name: 'financeiro_lancado_em', label: 'Financeiro lançado em', type: 'datetime', list: false },
+      { name: 'idempotency_key', label: 'Chave de idempotência', type: 'text', maxLength: 120, list: false },
+      { name: 'criado_por', label: 'Criado por', type: 'ref', ref: 'usuarios', list: false },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true },
+      { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', readonly: true },
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+  },
+
+  documentos_fiscais_eventos: {
+    key: 'documentos_fiscais_eventos',
+    table: 'documentos_fiscais_eventos',
+    label: 'Eventos do documento fiscal',
+    singular: 'Evento fiscal',
+    labelFields: ['evento'],
+    empresa: true,
+    ops: { create: false, update: false, delete: false },
+    internal: true,
+    fields: [
+      { name: 'documento_id', label: 'Documento', type: 'ref', ref: 'documentos_fiscais', required: true },
+      { name: 'de_status', label: 'De', type: 'text', maxLength: 20 },
+      { name: 'para_status', label: 'Para', type: 'text', maxLength: 20, required: true },
+      { name: 'evento', label: 'Evento', type: 'text', maxLength: 20, required: true },
+      { name: 'mensagem', label: 'Mensagem', type: 'textarea', wide: true },
+      { name: 'payload', label: 'Resposta do provedor', type: 'textarea', list: false, wide: true },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true },
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+  },
+
+  inutilizacoes_fiscais: {
+    key: 'inutilizacoes_fiscais',
+    table: 'inutilizacoes_fiscais',
+    label: 'Inutilizações de numeração',
+    singular: 'Inutilização',
+    labelFields: ['serie'],
+    empresa: true,
+    ops: { create: false, update: false, delete: false },
+    minPerfil: 'gerente',
+    notice:
+      'Inutilizar comunica à SEFAZ que uma faixa de numeração não será usada. É uma obrigação acessória — a solicitação é feita em Fiscal → Inutilizar numeração.',
+    fields: [
+      { name: 'modelo', label: 'Modelo', type: 'select', options: [ { value: '55', label: 'NF-e (55)' }, { value: '65', label: 'NFC-e (65)' } ] },
+      { name: 'serie', label: 'Série', type: 'integer', required: true },
+      { name: 'numero_inicial', label: 'Número inicial', type: 'integer', required: true },
+      { name: 'numero_final', label: 'Número final', type: 'integer', required: true },
+      { name: 'justificativa', label: 'Justificativa', type: 'textarea', required: true, maxLength: 255, wide: true, hint: 'Mínimo de 15 caracteres, exigência da SEFAZ.' },
+      { name: 'ambiente', label: 'Ambiente', type: 'text', maxLength: 20 },
+      { name: 'status', label: 'Status', type: 'select', options: [ { value: 'pendente', label: 'Pendente', tone: 'amber' }, { value: 'homologado', label: 'Homologado', tone: 'green' }, { value: 'rejeitado', label: 'Rejeitado', tone: 'red' }, { value: 'erro', label: 'Erro', tone: 'red' } ] },
+      { name: 'protocolo', label: 'Protocolo', type: 'text', maxLength: 40 },
+      { name: 'motivo', label: 'Motivo', type: 'textarea', list: false, wide: true },
+      { name: 'provider', label: 'Provedor', type: 'text', maxLength: 20 },
+      { name: 'criado_por', label: 'Criado por', type: 'ref', ref: 'usuarios', list: false },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true },
+      { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', readonly: true },
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
   },
 
   // ----------------------------------------------------------------
@@ -776,6 +1233,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   estoques: {
     key: 'estoques',
+    empresa: true,
     table: 'estoques',
     label: 'Estoque Físico',
     singular: 'Saldo de estoque',
@@ -797,6 +1255,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   movimentacoes: {
     key: 'movimentacoes',
+    empresa: true,
     table: 'movimentacoes',
     label: 'Movimentações',
     singular: 'Movimentação',
@@ -841,6 +1300,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   ordens: {
     key: 'ordens',
+    empresa: true,
     table: 'ordens_fabricacao',
     label: 'Ordens de Fabricação',
     singular: 'Ordem de fabricação',
@@ -900,6 +1360,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   fichas: {
     key: 'fichas',
+    empresa: true,
     table: 'fichas_tecnicas',
     label: 'Ficha Técnica / BOM',
     singular: 'Ficha técnica',
@@ -926,6 +1387,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   compras: {
     key: 'compras',
+    empresa: true,
     table: 'compras',
     label: 'Compras',
     singular: 'Pedido de compra',
@@ -1005,6 +1467,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   vendas: {
     key: 'vendas',
+    empresa: true,
     table: 'vendas',
     label: 'Vendas',
     singular: 'Pedido de venda',
@@ -1118,6 +1581,10 @@ export const RESOURCES: Record<string, Resource> = {
       },
       { name: 'nfe_numero', label: 'Número da NF-e', type: 'text', list: false, form: false, readonly: true },
       { name: 'nfe_emitida_em', label: 'NF-e emitida em', type: 'datetime', list: false, form: false, readonly: true },
+      { name: 'nfe_provider', label: 'Provedor da NF-e', type: 'text', maxLength: 20, list: false, form: false, readonly: true },
+      // Preenchidos exclusivamente pela máquina de estados de fiscal.ts.
+      { name: 'documento_fiscal_id', label: 'Documento fiscal', type: 'ref', ref: 'documentos_fiscais', list: false, form: false, readonly: true },
+      { name: 'nfe_chave', label: 'Chave de acesso da NF-e', type: 'text', maxLength: 44, list: false, form: false, readonly: true },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
       ...auditFields,
     ],
@@ -1130,6 +1597,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   itens_venda: {
     key: 'itens_venda',
+    empresa: true,
     table: 'itens_venda',
     label: 'Itens de venda',
     singular: 'Item de venda',
@@ -1149,6 +1617,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   itens_compra: {
     key: 'itens_compra',
+    empresa: true,
     table: 'itens_compra',
     label: 'Itens de compra',
     singular: 'Item de compra',
@@ -1173,6 +1642,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   produto_fornecedor_skus: {
     key: 'produto_fornecedor_skus',
+    empresa: true,
     table: 'produto_fornecedor_skus',
     label: 'De-para de SKUs de fornecedor',
     singular: 'De-para de SKU',
@@ -1191,6 +1661,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   importacoes_nfe: {
     key: 'importacoes_nfe',
+    empresa: true,
     table: 'importacoes_nfe',
     label: 'Importações de NF-e',
     singular: 'Importação de NF-e',
@@ -1216,6 +1687,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   itens_ordem: {
     key: 'itens_ordem',
+    empresa: true,
     table: 'itens_ordem',
     label: 'Itens da OP (grade)',
     singular: 'Item da OP',
@@ -1234,6 +1706,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   itens_ficha_tecnica: {
     key: 'itens_ficha_tecnica',
+    empresa: true,
     table: 'itens_ficha_tecnica',
     label: 'Insumos da ficha técnica',
     singular: 'Insumo da ficha',
@@ -1254,6 +1727,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   estoque_insumos: {
     key: 'estoque_insumos',
+    empresa: true,
     table: 'estoque_insumos',
     label: 'Estoque de Insumos',
     singular: 'Saldo de insumo',
@@ -1271,6 +1745,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   movimentacoes_insumos: {
     key: 'movimentacoes_insumos',
+    empresa: true,
     table: 'movimentacoes_insumos',
     label: 'Movimentações de Insumos',
     singular: 'Movimentação de insumo',
@@ -1303,6 +1778,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   inventarios: {
     key: 'inventarios',
+    empresa: true,
     table: 'inventarios',
     label: 'Inventários',
     singular: 'Inventário',
@@ -1335,6 +1811,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   itens_inventario: {
     key: 'itens_inventario',
+    empresa: true,
     table: 'itens_inventario',
     label: 'Itens do inventário',
     singular: 'Item do inventário',
@@ -1386,6 +1863,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   catalogos: {
     key: 'catalogos',
+    empresa: true,
     table: 'catalogos',
     label: 'Catálogos públicos',
     singular: 'Catálogo',
@@ -1439,6 +1917,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   categorias_financeiras: {
     key: 'categorias_financeiras',
+    empresa: true,
     minPerfil: 'gerente',
     table: 'categorias_financeiras',
     label: 'Categorias Financeiras',
@@ -1497,6 +1976,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   contas_financeiras: {
     key: 'contas_financeiras',
+    empresa: true,
     minPerfil: 'gerente',
     table: 'contas_financeiras',
     label: 'Contas Financeiras',
@@ -1535,6 +2015,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   investidores: {
     key: 'investidores',
+    empresa: true,
     table: 'investidores',
     label: 'Investidores / Sócios',
     singular: 'Investidor ou sócio',
@@ -1567,6 +2048,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   aportes: {
     key: 'aportes',
+    empresa: true,
     table: 'aportes',
     label: 'Aportes de Investidores',
     singular: 'Aporte',
@@ -1627,6 +2109,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   lancamentos_financeiros: {
     key: 'lancamentos_financeiros',
+    empresa: true,
     minPerfil: 'gerente',
     table: 'lancamentos_financeiros',
     label: 'Lançamentos Financeiros',
@@ -1714,6 +2197,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   recorrencias_financeiras: {
     key: 'recorrencias_financeiras',
+    empresa: true,
     minPerfil: 'gerente',
     table: 'recorrencias_financeiras',
     label: 'Recorrências Financeiras',
@@ -1793,6 +2277,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   centros_custo: {
     key: 'centros_custo',
+    empresa: true,
     minPerfil: 'gerente',
     table: 'centros_custo',
     label: 'Centros de Custo',
@@ -1817,6 +2302,7 @@ export const RESOURCES: Record<string, Resource> = {
 
   transferencias_financeiras: {
     key: 'transferencias_financeiras',
+    empresa: true,
     minPerfil: 'gerente',
     table: 'transferencias_financeiras',
     label: 'Transferências entre Contas',
@@ -1864,9 +2350,26 @@ export function getPublicResource(key: string): Resource | undefined {
   return r && !r.internal ? r : undefined;
 }
 
+/**
+ * Coluna de escopo multiempresa. Não é um campo do formulário: o usuário nunca
+ * escolhe a empresa de um registro — o servidor carimba (ver empresa.ts). Ela
+ * entra apenas como COLUNA, para que o store saiba selecioná-la, filtrá-la e
+ * gravá-la.
+ */
+const EMPRESA_COLUMN: Field = {
+  name: 'empresa_id',
+  label: 'Empresa',
+  type: 'integer',
+  readonly: true,
+  list: false,
+  form: false,
+};
+
 /** Colunas reais do banco de um recurso (exclui campos virtuais). */
 export function columnsOf(r: Resource): Field[] {
-  return r.fields.filter((f) => !f.virtual);
+  const cols = r.fields.filter((f) => !f.virtual);
+  if (r.empresa && !cols.some((f) => f.name === 'empresa_id')) cols.push(EMPRESA_COLUMN);
+  return cols;
 }
 
 /**

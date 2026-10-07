@@ -36,6 +36,7 @@ import { createItem, deleteItem, listItens, updateItem } from './itens';
 import {
   checkAccess,
   createRecord,
+  escopoDe,
   deleteRecord,
   getDefaultLocalInfo,
   getRecord,
@@ -83,6 +84,19 @@ import { notificacoesStatus, verificarAlertasEstoque } from './notifications';
 import { openapiJSON, openapiUI } from './openapi';
 import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat';
 import { nfeDados, nfeEmitir, nfeStatus } from './nfe';
+import {
+  emitirDocumento,
+  previaDocumento,
+  situacaoFiscalVenda,
+  eventosDocumento,
+  consultarDocumento,
+  cancelarDocumento,
+  inutilizarNumeracao,
+  obterConfigFiscal,
+  salvarConfigFiscal,
+} from './fiscal';
+import { consultarCepHandler } from './cep';
+import { gerarVariacoes, listarVariacoes, previaVariacoes } from './variacoes';
 import { importarXmlCompra, packingCheck } from './suprimentos';
 import { calcularFrete, consultarCEP } from './frete';
 import { marketplaceStatus, sincronizarPedidos } from './marketplace';
@@ -99,6 +113,7 @@ import {
   negociosVendaManual,
 } from './negocios';
 import { initWebSocket, wsStatus } from './websocket';
+import { concederEmpresa, empresaAtiva, listarEmpresasDoUsuario, revogarEmpresa, trocarEmpresaAtiva } from './empresasApi';
 import { createServer } from 'node:http';
 
 assertProductionSecrets();
@@ -397,14 +412,41 @@ app.get('/api/chat/nao-lidas', wrap(countNaoLidas));
 app.get('/api/chat/:userId/mensagens', wrap(listMensagens));
 app.post('/api/chat/:userId/mensagens', wrap(sendMessage));
 
-// NF-e
+// NF-e — endpoints legados (preparação dos dados e modo simulação explícito).
+// Continuam no ar para não quebrar a UI atual; a emissão REAL é /fiscal/*.
 app.get('/api/vendas/:id/nfe/dados', wrap(nfeDados));
 app.post('/api/vendas/:id/nfe/emitir', wrap(nfeEmitir));
 app.get('/api/vendas/:id/nfe/status', wrap(nfeStatus));
 
+// PRODUTOS — variações (SKUs filhos) geradas de forma determinística.
+app.get('/api/produtos/:id/variacoes', wrap(listarVariacoes));
+app.get('/api/produtos/:id/variacoes/previa', wrap(previaVariacoes));
+app.post('/api/produtos/:id/variacoes', wrap(gerarVariacoes));
+
+// FISCAL — NF-e (55) e NFC-e (65) atrás do FiscalProvider.
+// `autorizado` só existe com chave + protocolo devolvidos pela SEFAZ.
+app.get('/api/vendas/:id/fiscal', wrap(situacaoFiscalVenda));
+app.get('/api/vendas/:id/fiscal/previa', wrap(previaDocumento));
+app.post('/api/vendas/:id/fiscal/emitir', wrap(emitirDocumento));
+app.get('/api/fiscal/documentos/:id/eventos', wrap(eventosDocumento));
+app.post('/api/fiscal/documentos/:id/consultar', wrap(consultarDocumento));
+app.post('/api/fiscal/documentos/:id/cancelar', wrap(cancelarDocumento));
+app.post('/api/fiscal/inutilizar', wrap(inutilizarNumeracao));
+app.get('/api/fiscal/config', wrap(obterConfigFiscal));
+app.put('/api/fiscal/config', wrap(salvarConfigFiscal));
+
 // Frete e CEP
+app.get('/api/cep/:cep', wrap(consultarCepHandler));
 app.get('/api/frete/cep', wrap(consultarCEP));
 app.post('/api/frete/calcular', wrap(calcularFrete));
+
+// MULTIEMPRESA — seletor de empresa (persistente na sessão) e concessões.
+// Precisam vir ANTES das rotas genéricas /api/:resource.
+app.get('/api/empresas/ativa', wrap(empresaAtiva));
+app.post('/api/empresas/ativa', wrap(trocarEmpresaAtiva));
+app.get('/api/usuarios/:id/empresas', wrap(listarEmpresasDoUsuario));
+app.post('/api/usuarios/:id/empresas', wrap(concederEmpresa));
+app.delete('/api/usuarios/:id/empresas/:empresaId', wrap(revogarEmpresa));
 
 // Conectores oficiais (Mercado Livre, Mercado Pago, Nuvemshop)
 app.use('/api/connectors', connectorsRouter);
@@ -482,7 +524,7 @@ app.get(
   wrap(async (req, res) => {
     const r = (req as any).resource;
     checkAccess(r, currentUser(req), 'read');
-    res.json(await optionsFor(r));
+    res.json(await optionsFor(r, escopoDe(currentUser(req))));
   })
 );
 
@@ -502,14 +544,20 @@ app.get(
       if (k.startsWith('f.') && typeof v === 'string' && v !== '') filter[k.slice(2)] = v;
     }
     res.json(
-      await listRecords(r, {
-        q: typeof req.query.q === 'string' ? req.query.q : undefined,
-        page,
-        pageSize,
-        sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
-        dir,
-        filter,
-      })
+      await listRecords(
+        r,
+        {
+          q: typeof req.query.q === 'string' ? req.query.q : undefined,
+          page,
+          pageSize,
+          sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
+          dir,
+          filter,
+        },
+        // MULTIEMPRESA: o recorte do ator é aplicado dentro do serviço — um
+        // `?f.empresa_id=` enviado pelo cliente é descartado lá.
+        escopoDe(currentUser(req))
+      )
     );
   })
 );
@@ -520,7 +568,7 @@ app.get(
   wrap(async (req, res) => {
     const r = (req as any).resource;
     checkAccess(r, currentUser(req), 'read');
-    res.json(await getRecord(r, parseId(req.params.id)));
+    res.json(await getRecord(r, parseId(req.params.id), escopoDe(currentUser(req))));
   })
 );
 
@@ -532,7 +580,7 @@ app.post(
     const r = (req as any).resource;
     const actor = currentUser(req);
     checkAccess(r, actor, 'create');
-    res.status(201).json(await createRecord(r, req.body, actor, { req }));
+    res.status(201).json(await createRecord(r, req.body, actor, { req, escopo: escopoDe(actor) }));
   })
 );
 
@@ -543,7 +591,7 @@ const updateHandler = wrap(async (req: Request, res: Response) => {
   checkAccess(r, actor, 'update');
   // ?forcar=true em OP concluída permite consumo de insumos sem saldo (gerente/admin)
   const forcar = req.query.forcar === 'true' || req.query.forcar === '1';
-  res.json(await updateRecord(r, parseId(req.params.id), req.body, actor, { forcar }));
+  res.json(await updateRecord(r, parseId(req.params.id), req.body, actor, { forcar, escopo: escopoDe(actor) }));
 });
 app.put('/api/:resource/:id', resourceParam, updateHandler);
 app.patch('/api/:resource/:id', resourceParam, updateHandler);
@@ -556,7 +604,7 @@ app.delete(
     const r = (req as any).resource;
     const actor = currentUser(req);
     checkAccess(r, actor, 'delete');
-    await deleteRecord(r, parseId(req.params.id), actor);
+    await deleteRecord(r, parseId(req.params.id), actor, escopoDe(actor));
     res.json({ ok: true });
   })
 );

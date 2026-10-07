@@ -137,6 +137,12 @@ export function maskDocument(v: string): string {
     .replace(/(\d{4})(\d{1,2})$/, '$1-$2');
 }
 
+/** CEP: 00000-000 (o servidor guarda só os dígitos). */
+export function maskCep(v: string): string {
+  const d = v.replace(/\D/g, '').slice(0, 8);
+  return d.length > 5 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
+}
+
 export function maskPhone(v: string): string {
   const d = v.replace(/\D/g, '').slice(0, 11);
   if (d.length <= 10) {

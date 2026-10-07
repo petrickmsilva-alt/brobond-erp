@@ -13,6 +13,16 @@ import { attachImages, removeAllFiles } from './uploads';
 import { aplicarRegrasPedido } from './itens';
 import { aplicarRegrasOrdem, recalcularFichaValores, validarOrdemPayload } from './producao';
 import { hookTaxaLancamento, syncAporte, syncLancamentoCompra, syncLancamentoVenda, syncTransferencia } from './financeiro';
+import {
+  aplicarFiltroEmpresa,
+  assertRegistroDaEmpresa,
+  carimbarEmpresa,
+  escopoDoAtor,
+  protegerEmpresaNaEdicao,
+  temEscopoEmpresa,
+  validarReferenciasDaEmpresa,
+  type EscopoEmpresa,
+} from './empresa';
 
 const PERFIL_RANK: Record<string, number> = { operador: 1, gerente: 2, admin: 3 };
 
@@ -34,6 +44,35 @@ export function toHttpError(e: any, r?: Resource): HttpError {
 }
 
 type Actor = Pick<AuthUser, 'id' | 'name' | 'perfil'> & Partial<AuthUser>;
+
+/**
+ * MULTIEMPRESA: o escopo é SEMPRE derivado do ator (ou explicitamente nulo
+ * para chamadas internas que já recortam por outro caminho). Nunca do corpo
+ * da requisição. Ver empresa.ts.
+ */
+export type { EscopoEmpresa };
+
+/** Aceita tanto um ator quanto um escopo já resolvido (ou nada). */
+export type EscopoOuAtor = Actor | EscopoEmpresa | null | undefined;
+
+/**
+ * Normaliza o 3º parâmetro das funções de CRUD.
+ *
+ *   • `undefined` → SEM recorte. Reservado a chamadas internas que já filtram
+ *     por outro caminho (jobs, BI, endpoints públicos por token).
+ *   • um escopo → usado como está.
+ *   • um ator → o escopo é derivado dele (nunca do corpo da requisição).
+ */
+export function comoEscopo(x: EscopoOuAtor): EscopoEmpresa | undefined {
+  if (x === undefined || x === null) return undefined;
+  if (typeof (x as EscopoEmpresa).empresaId === 'number') return x as EscopoEmpresa;
+  return escopoDoAtor(x as any);
+}
+
+/** Escopo do ator — atalho explícito para as rotas HTTP. */
+export function escopoDe(actor: Actor | null | undefined): EscopoEmpresa {
+  return escopoDoAtor(actor as any);
+}
 
 function audit(tx: Tx, actor: Actor, acao: 'criar' | 'editar' | 'excluir', r: Resource, id: number | null, descricao: string, dados?: unknown) {
   return getStore().audit(
@@ -100,14 +139,18 @@ export function checkAccess(r: Resource, actor: Actor, op: 'read' | 'create' | '
 // ----------------------------------------------------------------------------
 // Leitura
 // ----------------------------------------------------------------------------
-export async function listRecords(r: Resource, p: ListParams) {
+export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: EscopoOuAtor) {
+  const escopo = comoEscopo(escopoOuAtor);
   // Filtros virtuais do módulo Usuários (status consolidado, MFA, senha, acesso):
   // a tabela de usuários é pequena, então filtra em JS sobre a lista completa
   // — com total e paginação corretos — em vez de aproximar na página atual.
   if (r.key === 'usuarios' && (p.filter?.status || p.filter?.mfa || p.filter?.parado30d || p.filter?.senha || p.filter?.acesso)) {
     return listUsuariosFiltrados(p);
   }
-  const out = await getStore().list(r, p);
+  // MULTIEMPRESA: o recorte entra como filtro obrigatório (AND) e descarta
+  // qualquer `f.empresa_id` que o cliente tenha tentado injetar.
+  const params: ListParams = { ...p, filter: aplicarFiltroEmpresa(r, p.filter, escopo) };
+  const out = await getStore().list(r, params);
   await attachImages(r, out.rows);
   anotarStatusSenha(r, out.rows);
   await anotarUsoLocal(r, out.rows);
@@ -155,9 +198,12 @@ async function listUsuariosFiltrados(p: ListParams) {
   return { rows: rows.slice(start, start + p.pageSize), total, page: p.page, pageSize: p.pageSize };
 }
 
-export async function getRecord(r: Resource, id: number) {
+export async function getRecord(r: Resource, id: number, escopoOuAtor?: EscopoOuAtor) {
+  const escopo = comoEscopo(escopoOuAtor);
   const row = await getStore().get(r, id);
   if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+  // Registro de outra empresa responde 404 — 403 já vazaria que ele existe.
+  assertRegistroDaEmpresa(r, row, escopo);
   await attachImages(r, [row]);
   anotarStatusSenha(r, [row]);
   await anotarUsoLocal(r, [row]);
@@ -201,8 +247,19 @@ function anotarStatusSenha(r: Resource, rows: Row[]) {
   }
 }
 
-export async function optionsFor(r: Resource) {
-  return getStore().options(r);
+export async function optionsFor(r: Resource, escopoOuAtor?: EscopoOuAtor) {
+  const escopo = comoEscopo(escopoOuAtor);
+  if (!temEscopoEmpresa(r)) return getStore().options(r);
+  // Selects só oferecem registros da empresa ativa: escolher é o primeiro
+  // passo para referenciar, e referenciar entre empresas é proibido.
+  const filtro = aplicarFiltroEmpresa(r, undefined, escopo);
+  if (!filtro) return getStore().options(r);
+  const { rows } = await getStore().list(r, { page: 1, pageSize: 2000, filter: filtro, sort: r.orderBy?.field, dir: r.orderBy?.dir });
+  const temAtivo = r.fields.some((f) => f.name === 'ativo');
+  return rows.map((row) => ({
+    value: Number(row.id),
+    label: labelOf(r, row) + (temAtivo && row.ativo === false ? ' (inativo)' : ''),
+  }));
 }
 
 // ----------------------------------------------------------------------------
@@ -321,9 +378,12 @@ async function validarCategoriaPai(r: Resource, data: Row, before: Row | null, t
   }
 }
 
-export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request } = {}): Promise<Row> {
+export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
   const s = getStore();
+  // MULTIEMPRESA: a empresa do novo registro é decidida pelo SERVIDOR.
+  const escopo = ctx.escopo === undefined ? escopoDe(actor) : comoEscopo(ctx.escopo);
+  carimbarEmpresa(r, data, escopo);
   let conviteLink: string | undefined;
   let conviteEntregue = false;
   try {
@@ -359,6 +419,10 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
 
       const gradeTamanhos = r.key === 'grades' ? ((data.tamanhos as number[]) || []) : null;
       if (gradeTamanhos) delete data.tamanhos;
+
+      // Nenhum id enviado pelo cliente fura o escopo: toda referência para um
+      // recurso com empresa precisa pertencer à MESMA empresa ativa.
+      await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, t) => s.findOneWhere(alvo, { id: alvoId }, t), tx);
 
       const row = await s.insert(r, data, tx);
       if (r.key === 'locais') await garantirLocalPadrao(tx);
@@ -436,15 +500,20 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
   }
 }
 
-export type UpdateOpts = { forcar?: boolean };
+export type UpdateOpts = { forcar?: boolean; escopo?: EscopoOuAtor };
 
 export async function updateRecord(r: Resource, id: number, body: unknown, actor: Actor, opts: UpdateOpts = {}): Promise<Row> {
   const data = validatePayload(r, body, 'update');
   const s = getStore();
+  // A empresa de um registro NUNCA muda por um PUT.
+  protegerEmpresaNaEdicao(r, data);
+  const escopo = opts.escopo === undefined ? escopoDe(actor) : comoEscopo(opts.escopo);
   try {
     return await s.transaction(async (tx) => {
       const before = await s.findOneWhere(r, { id }, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+      assertRegistroDaEmpresa(r, before, escopo);
+      await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, t) => s.findOneWhere(alvo, { id: alvoId }, t), tx);
 
       if (r.key === 'usuarios') await prepareUserPayload(data, before, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, before, actor);
@@ -575,12 +644,14 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
   }
 }
 
-export async function deleteRecord(r: Resource, id: number, actor: Actor): Promise<void> {
+export async function deleteRecord(r: Resource, id: number, actor: Actor, escopoOpt?: EscopoOuAtor): Promise<void> {
   const s = getStore();
+  const escopo = escopoOpt === undefined ? escopoDe(actor) : comoEscopo(escopoOpt);
   try {
     await s.transaction(async (tx) => {
       const before = await s.findOneWhere(r, { id }, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+      assertRegistroDaEmpresa(r, before, escopo);
 
       if (r.key === 'usuarios') {
         if (Number(before.id) === Number(actor.id)) throw new HttpError(400, 'Você não pode excluir o seu próprio usuário.');
