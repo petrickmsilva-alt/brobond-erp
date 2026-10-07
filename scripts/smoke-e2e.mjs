@@ -3,7 +3,8 @@
 //
 // Os testes unitários chamam os handlers diretamente; nenhum deles cobre o boot
 // do Express, o wiring de rotas nem a cadeia de middleware. Este script cobre
-// exatamente esse vão (§21).
+// exatamente esse vão (§21): superfícies da P1 e da P2 (gateway de pagamento,
+// webhooks de entrada idempotentes, extrato OFX persistente, CNAB, comissões).
 //
 // O admin recém-criado chega com MFA pendente E senha provisória. As duas travas
 // existem de propósito — `bloquearSenhaProvisoria` (server/src/security.ts)
@@ -153,6 +154,61 @@ check('GET /compras', compras.status === 200, `status ${compras.status}`);
 const sug = await req('GET', '/suprimentos/sugestao-compra');
 check('GET /suprimentos/sugestao-compra nunca é automática', sug.status === 200 && sug.json?.automatico === false,
   `automatico=${sug.json?.automatico}, itens=${sug.json?.total_itens}`);
+
+// ---------------------------------------------------------------- P2 §7/§8 gateway de pagamento (adapter + webhooks)
+const provs = await req('GET', '/financeiro/gateway/providers');
+check('GET /financeiro/gateway/providers', provs.status === 200, `status ${provs.status}`);
+
+// Config é ação sensível: sem reautenticação recente, 403.
+const cfgSemReauth = await req('PUT', '/financeiro/gateway/config', { provider: 'mock', ambiente: 'teste', credenciais: { fake: '1' } });
+check('PUT gateway/config sem re-auth → 403', cfgSemReauth.status === 403, `status ${cfgSemReauth.status} code=${cfgSemReauth.json?.code}`);
+
+const reauth = await req('POST', '/auth/reautenticar', { senha: SENHA_NOVA });
+check('POST /auth/reautenticar', reauth.status === 200, `status ${reauth.status} ${msg(reauth.json)}`);
+
+const cfgMock = await req('PUT', '/financeiro/gateway/config', { provider: 'mock', ambiente: 'teste', credenciais: { fake: '1' } });
+check('PUT gateway/config com re-auth → 200', cfgMock.status === 200 && cfgMock.json?.tem_credenciais === true, `status ${cfgMock.status} ${msg(cfgMock.json)}`);
+
+// Cobrança PIX: idempotente pela chave do chamador.
+const chaveCob = `smoke-p2-${Date.now()}`;
+const cob1 = await req('POST', '/financeiro/gateway/cobrancas', { provider: 'mock', metodo: 'pix', valor: 120, descricao: 'Smoke P2', payer_email: 'smoke@p2.dev', idempotency_key: chaveCob });
+check('POST cobrança PIX → 201 + QR code', cob1.status === 201 && !!cob1.json?.cobranca?.qr_code, `status ${cob1.status} ${msg(cob1.json)}`);
+const cob2 = await req('POST', '/financeiro/gateway/cobrancas', { provider: 'mock', metodo: 'pix', valor: 120, descricao: 'Smoke P2', payer_email: 'smoke@p2.dev', idempotency_key: chaveCob });
+check('mesma chave → idempotente (mesma cobrança)', cob2.status === 200 && cob2.json?.idempotente === true && cob2.json?.cobranca?.id === cob1.json?.cobranca?.id, `status ${cob2.status}`);
+
+// Webhook PÚBLICO de pagamento: processa UMA vez; a mesma notificação é duplicado.
+const refCob = cob1.json?.cobranca?.provider_ref;
+const wh1 = await req('POST', '/gateway/webhooks/mock', { event: 'payment.paid', data: { id: refCob }, status: 'pago' }, null);
+check('webhook pago → processado', wh1.status === 200 && wh1.json?.processado === true, `status ${wh1.status} ${JSON.stringify(wh1.json || {}).slice(0, 80)}`);
+const wh2 = await req('POST', '/gateway/webhooks/mock', { event: 'payment.paid', data: { id: refCob }, status: 'pago' }, null);
+check('mesma notificação de novo → duplicado (sem 2ª baixa)', wh2.status === 200 && wh2.json?.duplicado === true, `status ${wh2.status}`);
+const cobPaga = await req('GET', `/financeiro/gateway/cobrancas/${cob1.json?.cobranca?.id}`);
+check('cobrança ficou paga', cobPaga.status === 200 && cobPaga.json?.cobranca?.status === 'paga', `status=${cobPaga.json?.cobranca?.status}`);
+const evs = await req('GET', '/financeiro/gateway/webhooks');
+check('eventos de webhook auditáveis', evs.status === 200 && (evs.json?.eventos || []).some((e) => e.status === 'processado'), `status ${evs.status}`);
+
+// ---------------------------------------------------------------- P2 §5/§10 relatórios novos
+const comissoes = await req('GET', '/financeiro/comissoes');
+check('GET /financeiro/comissoes', comissoes.status === 200, `status ${comissoes.status}`);
+const recebiveis = await req('GET', '/financeiro/cartao/recebiveis');
+check('GET /financeiro/cartao/recebiveis', recebiveis.status === 200, `status ${recebiveis.status}`);
+
+// ---------------------------------------------------------------- P2 §13 extrato persistente (OFX + FITID)
+const conta = await req('POST', '/contas_financeiras', { nome: `Banco Smoke P2 ${Date.now()}`, tipo: 'banco', saldo_inicial: 0 });
+check('POST conta financeira', [200, 201].includes(conta.status) && !!conta.json?.id, `status ${conta.status} ${msg(conta.json)}`);
+const h = new Date();
+const dOfx = `${h.getFullYear()}${String(h.getMonth() + 1).padStart(2, '0')}${String(h.getDate()).padStart(2, '0')}`;
+const ofx = `OFXHEADER:100\nDATA:OFXSGML\n<OFX>\n<BANKTRANLIST>\n<STMTTRN>\n<TRNTYPE>CREDIT\n<DTPOSTED>${dOfx}120000\n<TRNAMT>555.55\n<FITID>SMOKE-FITID-${Date.now()}\n<NAME>Cliente Smoke\n</STMTTRN>\n</BANKTRANLIST>\n</OFX>`;
+const imp1 = await req('POST', '/financeiro/extrato/importar', { texto: ofx, conta_id: conta.json?.id });
+check('import OFX → 1 linha nova', [200, 201].includes(imp1.status) && imp1.json?.importadas === 1, `status ${imp1.status} ${msg(imp1.json)}`);
+const imp2 = await req('POST', '/financeiro/extrato/importar', { texto: ofx, conta_id: conta.json?.id });
+check('reimport OFX → FITID bloqueia duplicata', imp2.json?.importadas === 0 && imp2.json?.duplicadas === 1, `importadas=${imp2.json?.importadas} duplicadas=${imp2.json?.duplicadas}`);
+const extrato = await req('GET', '/financeiro/extrato');
+check('GET /financeiro/extrato', extrato.status === 200, `status ${extrato.status}`);
+
+// ---------------------------------------------------------------- P2 §12 CNAB (adapter de parsers)
+const parsers = await req('GET', '/financeiro/cnab/parsers');
+check('GET /financeiro/cnab/parsers (cnab240 presente)', parsers.status === 200 && JSON.stringify(parsers.json || '').includes('cnab240'), `status ${parsers.status}`);
 
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);

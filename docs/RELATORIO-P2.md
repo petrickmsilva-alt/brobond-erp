@@ -23,6 +23,7 @@
 | Multiempresa no financeiro | ✅ re-auditada; vazamentos fechados e testados A×B |
 | Testes de memória | ✅ 488 passam / 0 falham (24 novos de P2) |
 | Testes PostgreSQL (concorrência + índices únicos) | ✅ **43/43 executados contra Postgres real** (18.4 local — 6 novos + toda a suíte PG pré-existente; o CI roda o mesmo conjunto em postgres:16) |
+| Smoke ponta a ponta (HTTP real, Express bootado) | ✅ **39/39 verificações** em `scripts/smoke-e2e.mjs` (login+MFA+senha, gateway, webhook idempotente, OFX/FITID, CNAB) |
 | Typecheck / lint / build client | ✅ verdes |
 | `prisma validate` | ⚠️ não roda neste sandbox (download do schema-engine bloqueado pela rede); schema Prisma **não foi tocado** — financeiro não vive no Prisma |
 | Gateway real (MercadoPago) | ⚠️ adapter pronto, mas só exercitado com o mock em teste (ver §9) |
@@ -151,6 +152,7 @@ POST /api/financeiro/cnab/importar
 - `server/src/pdv.ts` (bloqueio retroativo pós-fechamento, justificativa)
 - `server/src/index.ts` (rotas + montagem do `publicGatewayRouter` **antes** do `express.json`)
 - `server/src/pgstore.ts` (correção: `update`/`tryUpdateIf` não atribuem mais colunas de carimbo geridas pelo store)
+- `scripts/smoke-e2e.mjs` (estendido com as superfícies da P2 — 39 verificações)
 
 ---
 
@@ -202,6 +204,13 @@ Arquivo por arquivo é o modelo correto para integração com banco único.
 `npm --workspace server test`: **488 passam / 0 falham / 17 pulados** (os
 pulos são os testes que exigem PostgreSQL real e se auto-excluem sem
 `DATABASE_URL`). Typecheck verde; lint com **0 erros**; build do client verde.
+
+`node scripts/smoke-e2e.mjs` contra o Express bootado em modo demonstração:
+**39/39 verificações** — percurso real de acesso (MFA + senha definitiva) e as
+superfícies da P2: config de gateway com re-autenticação, cobrança PIX
+idempotente, webhook de pagamento que baixa o título **uma vez** (repetição vira
+`duplicado`), eventos auditáveis, extrato OFX com FITID anti-duplicata e
+parsers CNAB.
 
 ---
 
