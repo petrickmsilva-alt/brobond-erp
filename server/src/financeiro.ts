@@ -13,10 +13,23 @@ import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getStore, toHttpError } from './services';
-import { currentUser } from './auth';
+import { currentUser, type AuthUser } from './auth';
 import type { Row, Tx } from './store';
 import { labelOf } from './store';
 import { round2, somaMoeda } from './utils';
+import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, EMPRESA_PADRAO, type EscopoEmpresa } from './empresa';
+import { estornarComissoesDaVenda, registrarComissaoPorRecebimento } from './comissoes';
+
+/**
+ * Empresa de um registro, com fallback para a empresa padrão (linhas antigas
+ * ou modo demonstração). Todo lançamento automático carimba a empresa da
+ * ORIGEM (venda, compra, aporte, transferência, recorrência): sem isso o
+ * livro-caixa vaza entre empresas.
+ */
+function empresaDe(row: Row | null | undefined): number {
+  const e = Number(row?.empresa_id || 0);
+  return e > 0 ? e : EMPRESA_PADRAO;
+}
 
 const r2 = round2;
 
@@ -191,6 +204,7 @@ async function reconciliarParcelasPedido(
   const valorParcela = r2(total / n);
   const detalhes = Array.isArray(after.fin_parcelas_detalhes) ? after.fin_parcelas_detalhes as Row[] : [];
   const existentes = await parcelasDaOrigem(referencia, id, tx);
+  const parcelasFinais: { lancamento_id: number; valor: number }[] = [];
 
   for (let i = 1; i <= n; i++) {
     const detalhe = detalhes.find((item) => Number(item.parcela || 0) === i) || detalhes[i - 1];
@@ -219,15 +233,33 @@ async function reconciliarParcelasPedido(
       else if (finLiquidado) status = 'confirmado';
       else if (status === 'cancelado') status = 'pendente';
       await atualizarLancamento(Number(alvo.id), { ...alvo, ...dados, status }, actor, tx);
+      parcelasFinais.push({ lancamento_id: Number(alvo.id), valor });
     } else {
       const status = finCancelado ? 'cancelado' : finLiquidado ? 'confirmado' : 'pendente';
-      await criarLancamento({ ...dados, status, taxa_pct: 0, valor_liquido: valor }, actor, tx);
+      const criado = await criarLancamento({ ...dados, status, taxa_pct: 0, valor_liquido: valor, empresa_id: empresaDe(after) }, actor, tx);
+      parcelasFinais.push({ lancamento_id: Number(criado.id), valor });
     }
   }
   // Parcelas excedentes (plano encolheu): cancelamento preserva a trilha.
   for (const l of existentes) {
     if (Number(l.parcela || 1) > n && String(l.status) !== 'cancelado') {
       await atualizarLancamento(Number(l.id), { ...l, status: 'cancelado', observacoes: [String(l.observacoes || ''), `Parcela cancelada: plano reduzido para ${n}x em ${hoje()}`].filter(Boolean).join('\n') }, actor, tx);
+    }
+  }
+
+  // COMISSÕES (P2 §5) — efetivadas conforme RECEBIMENTO, nunca pelo pedido:
+  //   • liquidação global (venda recebida no balcão/PDV ou marcada recebida)
+  //     efetiva a comissão proporcional a cada parcela confirmada;
+  //   • cancelamento estorna o que já foi efetivado.
+  // Idempotente: uma efetivação por (venda, lançamento) + saldo limitado pela
+  // apuração congelada no faturamento (ver comissoes.ts).
+  if (referencia === 'venda') {
+    if (finCancelado) {
+      await estornarComissoesDaVenda(after, actor, `Venda #${id} cancelada`, tx);
+    } else if (finLiquidado && after.representante_id && Number(after.comissao_valor || 0) > 0) {
+      for (const p of parcelasFinais) {
+        await registrarComissaoPorRecebimento(after, p.lancamento_id, p.valor, 'liquidacao', actor, tx);
+      }
     }
   }
 }
@@ -277,6 +309,7 @@ export function hookTaxaLancamento(data: Row, before?: Row | null): void {
 async function criarLancamento(data: Row, actor: { id: number | null; name: string }, tx: Tx): Promise<Row> {
   const s = getStore();
   const r = getResource('lancamentos_financeiros')!;
+  if (data.empresa_id === undefined || data.empresa_id === null) data.empresa_id = EMPRESA_PADRAO;
   const row = await s.insert(r, data, tx);
   await s.audit(
     {
@@ -406,6 +439,7 @@ export async function syncAporte(
   const cat = await categoriaPadrao('investimento', tx);
   const lanc = await criarLancamento(
     {
+      empresa_id: empresaDe(after),
       data: String(after.data || hoje()).slice(0, 10),
       tipo: 'investimento',
       categoria_id: cat?.id ?? null,
@@ -456,6 +490,7 @@ export async function syncTransferencia(before: Row | null, after: Row, actor: {
   let entradaId = after.lancamento_entrada_id ? Number(after.lancamento_entrada_id) : null;
 
   const dadosSaida: Row = {
+    empresa_id: empresaDe(after),
     data,
     tipo: 'despesa',
     categoria_id: null,
@@ -511,19 +546,24 @@ export async function resumoFinanceiro(req: Request, res: Response) {
   checkAccess(getResource('compras')!, actor, 'read');
   checkAccess(getResource('aportes')!, actor, 'read');
   checkAccess(getResource('contas_financeiras')!, actor, 'read');
+  // MULTIEMPRESA (P2 §16): o resumo é do ESCOPO do ator. O id da empresa não
+  // vem do cliente; o filtro é imposto pelo servidor em cada listagem.
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const filtroDe = (key: string, extra?: Record<string, unknown>) =>
+    aplicarFiltroEmpresa(getResource(key)!, extra, escopo);
 
   const s = getStore();
   const [lancR, vendasR, comprasR, aportesR, contasR, categoriasR, clientesR, fornecedoresR, recorrenciasR, centrosR] = await Promise.all([
-    s.list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 10000, sort: 'data', dir: 'desc' }),
-    s.list(getResource('vendas')!, { page: 1, pageSize: 10000 }),
-    s.list(getResource('compras')!, { page: 1, pageSize: 10000 }),
-    s.list(getResource('aportes')!, { page: 1, pageSize: 10000 }),
-    s.list(getResource('contas_financeiras')!, { page: 1, pageSize: 1000 }),
-    s.list(getResource('categorias_financeiras')!, { page: 1, pageSize: 1000 }),
-    s.list(getResource('clientes')!, { page: 1, pageSize: 2000 }),
-    s.list(getResource('fornecedores')!, { page: 1, pageSize: 2000 }),
-    s.list(getResource('recorrencias_financeiras')!, { page: 1, pageSize: 1000, filter: { status: 'ativo' } }),
-    s.list(getResource('centros_custo')!, { page: 1, pageSize: 1000 }),
+    s.list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 10000, sort: 'data', dir: 'desc', filter: filtroDe('lancamentos_financeiros') }),
+    s.list(getResource('vendas')!, { page: 1, pageSize: 10000, filter: filtroDe('vendas') }),
+    s.list(getResource('compras')!, { page: 1, pageSize: 10000, filter: filtroDe('compras') }),
+    s.list(getResource('aportes')!, { page: 1, pageSize: 10000, filter: filtroDe('aportes') }),
+    s.list(getResource('contas_financeiras')!, { page: 1, pageSize: 1000, filter: filtroDe('contas_financeiras') }),
+    s.list(getResource('categorias_financeiras')!, { page: 1, pageSize: 1000, filter: filtroDe('categorias_financeiras') }),
+    s.list(getResource('clientes')!, { page: 1, pageSize: 2000, filter: filtroDe('clientes') }),
+    s.list(getResource('fornecedores')!, { page: 1, pageSize: 2000, filter: filtroDe('fornecedores') }),
+    s.list(getResource('recorrencias_financeiras')!, { page: 1, pageSize: 1000, filter: filtroDe('recorrencias_financeiras', { status: 'ativo' }) }),
+    s.list(getResource('centros_custo')!, { page: 1, pageSize: 1000, filter: filtroDe('centros_custo') }),
   ]);
 
   const mes = new Date().toISOString().slice(0, 7);
@@ -863,11 +903,16 @@ function calcularProximaGeracao(r: Row, base?: Date): string {
   return m.toISOString().slice(0, 10);
 }
 
-/** Gera lançamentos das recorrências vencidas (chamado manual ou pelo cron). */
-export async function processarRecorrencias(actor: { id: number | null; name: string }): Promise<{ gerados: number; descricoes: string[] }> {
+/**
+ * Gera lançamentos das recorrências vencidas (chamado manual ou pelo cron).
+ * Com escopo, processa só a empresa do ator (botão na tela); sem escopo
+ * (cron), percorre todas as empresas — cada lançamento nasce na empresa da
+ * própria recorrência.
+ */
+export async function processarRecorrencias(actor: { id: number | null; name: string }, escopo?: EscopoEmpresa): Promise<{ gerados: number; descricoes: string[] }> {
   const s = getStore();
   const r = getResource('recorrencias_financeiras')!;
-  const lista = await s.list(r, { page: 1, pageSize: 1000, filter: { status: 'ativo' } });
+  const lista = await s.list(r, { page: 1, pageSize: 1000, filter: aplicarFiltroEmpresa(r, { status: 'ativo' }, escopo) });
   const hojeS = hoje();
   const gerados: string[] = [];
   let total = 0;
@@ -886,6 +931,7 @@ export async function processarRecorrencias(actor: { id: number | null; name: st
         const row = await s.insert(
           r2,
           {
+            empresa_id: empresaDe(rec),
             data,
             tipo: String(rec.tipo || 'despesa'),
             categoria_id: categoria,
@@ -935,7 +981,7 @@ export async function gerarRecorrencias(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('lancamentos_financeiros')!, actor, 'create');
   checkAccess(getResource('recorrencias_financeiras')!, actor, 'read');
-  const out = await processarRecorrencias({ id: actor.id || null, name: actor.name });
+  const out = await processarRecorrencias({ id: actor.id || null, name: actor.name }, escopoDoAtor(actor as unknown as AuthUser));
   res.json({ ok: true, ...out });
 }
 
@@ -957,12 +1003,13 @@ export async function rentabilidade(req: Request, res: Response) {
   checkAccess(getResource('vendas')!, actor, 'read');
   checkAccess(getResource('produtos')!, actor, 'read');
   checkAccess(getResource('fichas')!, actor, 'read');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const s = getStore();
   const [vendasR, produtosR, fichasR, itensR] = await Promise.all([
-    s.list(getResource('vendas')!, { page: 1, pageSize: 10000 }),
-    s.list(getResource('produtos')!, { page: 1, pageSize: 10000 }),
-    s.list(getResource('fichas')!, { page: 1, pageSize: 10000 }),
-    s.list(getResource('itens_venda')!, { page: 1, pageSize: 100000 }),
+    s.list(getResource('vendas')!, { page: 1, pageSize: 10000, filter: aplicarFiltroEmpresa(getResource('vendas')!, undefined, escopo) }),
+    s.list(getResource('produtos')!, { page: 1, pageSize: 10000, filter: aplicarFiltroEmpresa(getResource('produtos')!, undefined, escopo) }),
+    s.list(getResource('fichas')!, { page: 1, pageSize: 10000, filter: aplicarFiltroEmpresa(getResource('fichas')!, undefined, escopo) }),
+    s.list(getResource('itens_venda')!, { page: 1, pageSize: 100000, filter: aplicarFiltroEmpresa(getResource('itens_venda')!, undefined, escopo) }),
   ]);
 
   const custoPorProduto = new Map<number, number>();
@@ -1031,10 +1078,11 @@ export async function resumoInvestidores(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('investidores')!, actor, 'read');
   checkAccess(getResource('aportes')!, actor, 'read');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const s = getStore();
   const [investR, aportesR] = await Promise.all([
-    s.list(getResource('investidores')!, { page: 1, pageSize: 5000 }),
-    s.list(getResource('aportes')!, { page: 1, pageSize: 10000 }),
+    s.list(getResource('investidores')!, { page: 1, pageSize: 5000, filter: aplicarFiltroEmpresa(getResource('investidores')!, undefined, escopo) }),
+    s.list(getResource('aportes')!, { page: 1, pageSize: 10000, filter: aplicarFiltroEmpresa(getResource('aportes')!, undefined, escopo) }),
   ]);
 
   const confirmados = aportesR.rows.filter((a) => String(a.status) === 'confirmado');
@@ -1070,32 +1118,40 @@ export async function resumoInvestidores(req: Request, res: Response) {
 // CONCILIAÇÃO BANCÁRIA — importar extrato e casar com lançamentos pendentes
 // ----------------------------------------------------------------------------
 
-/** Extrai os lançamentos de um extrato OFX (Internet Banking) colado. */
-function parseOFX(conteudo: string): { data: string; valor: number; descricao: string }[] {
-  const linhas: { data: string; valor: number; descricao: string }[] = [];
+export type LinhaExtrato = { data: string; valor: number; descricao: string; fitid?: string | null; direcao?: 'entrada' | 'saida' };
+
+/**
+ * Extrai os lançamentos de um extrato OFX (Internet Banking) colado.
+ * O FITID (identificador da transação no banco) é preservado — é ele que
+ * impede a mesma transação de ser importada/conciliada duas vezes.
+ */
+export function parseOFX(conteudo: string): LinhaExtrato[] {
+  const linhas: LinhaExtrato[] = [];
   const blocos = conteudo.match(/<STMTTRN>[\s\S]*?(?=<STMTTRN>|<\/STMTTRN>|$)/gi) || [];
   for (const bloco of blocos) {
     const dataM = bloco.match(/<DTPOSTED>(\d{8})/i);
     const valorM = bloco.match(/<TRNAMT>(-?[\d]+(?:\.\d+)?)/i);
     const descM = bloco.match(/<NAME>([^<]+)/i) || bloco.match(/<MEMO>([^<]+)/i);
+    const fitidM = bloco.match(/<FITID>([^<\r\n]+)/i);
     if (!valorM) continue;
-    const valor = Math.abs(Number(valorM[1]));
+    const bruto = Number(valorM[1]);
+    const valor = Math.abs(bruto);
     if (!Number.isFinite(valor) || valor <= 0) continue;
     const data = dataM ? `${dataM[1].slice(0, 4)}-${dataM[1].slice(4, 6)}-${dataM[1].slice(6, 8)}` : '';
-    linhas.push({ data, valor: r2(valor), descricao: descM ? descM[1].trim() : '' });
+    linhas.push({ data, valor: r2(valor), descricao: descM ? descM[1].trim() : '', fitid: fitidM ? fitidM[1].trim() : null, direcao: bruto >= 0 ? 'entrada' : 'saida' });
   }
   return linhas;
 }
 
 /** Verdadeiro quando o conteúdo parece um arquivo OFX/SGML de extrato. */
-function pareceOFX(conteudo: string): boolean {
+export function pareceOFX(conteudo: string): boolean {
   return /OFXHEADER|<OFX>/i.test(conteudo);
 }
 
-function parseLinhasExtrato(body: Record<string, unknown>): { data: string; valor: number; descricao: string }[] {
+export function parseLinhasExtrato(body: Record<string, unknown>): LinhaExtrato[] {
   const textoCompleto = String(body.texto || body.csv || body.extrato || body.ofx || '');
   if (pareceOFX(textoCompleto)) return parseOFX(textoCompleto);
-  const linhas: { data: string; valor: number; descricao: string }[] = [];
+  const linhas: LinhaExtrato[] = [];
   const add = (d: unknown, v: unknown, desc: unknown) => {
     const valor = Math.abs(Number(String(v).replace(',', '.').replace(/[^\d.-]/g, '')));
     if (!isFinite(valor) || valor <= 0) return;
@@ -1124,9 +1180,33 @@ function parseLinhasExtrato(body: Record<string, unknown>): { data: string; valo
   return linhas;
 }
 
+/**
+ * Matching de conciliação (P2 §14): casa UMA linha do extrato com lançamentos
+ * pendentes por valor (ou líquido, para extrato de operadora), data e
+ * descrição. Critério confiável = candidato ÚNICO; ambiguidade não casa
+ * (vai para conferência manual — nunca conciliação automática).
+ */
+export function casarLinhaExtrato(linha: { data?: string; valor: number; descricao?: string }, pendentes: Row[]): Row | null {
+  const valor = Number(linha.valor);
+  const buscaDesc = String(linha.descricao || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim();
+  let cand = pendentes.filter((l) => Math.abs(Number(l.valor || 0) - valor) < 0.01);
+  // Extrato de operadora (Mercado Pago/cartão) mostra o valor já sem taxa:
+  // casa também pelo valor líquido registrado no lançamento.
+  if (cand.length === 0) cand = pendentes.filter((l) => Math.abs(liquidoDe(l) - valor) < 0.01);
+  // Data é critério eliminatório (não sugestivo): linha com data só casa com
+  // título vencendo/emitido NAQUELA data. Menos que isso é conciliar no chute.
+  if (linha.data) cand = cand.filter((l) => String(l.vencimento || l.data || '').slice(0, 10) === linha.data);
+  if (buscaDesc && cand.length > 1) {
+    const sobreDesc = cand.filter((l) => buscaDesc.includes(String(l.descricao || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim()) || String(l.descricao || '').toLowerCase().includes(buscaDesc));
+    if (sobreDesc.length) cand = sobreDesc;
+  }
+  return cand.length === 1 ? cand[0] : null;
+}
+
 export async function conciliarExtrato(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('lancamentos_financeiros')!, actor, 'update');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const s = getStore();
   const conteudoBruto = String(req.body?.texto || req.body?.csv || req.body?.extrato || req.body?.ofx || '');
   const fonte = pareceOFX(conteudoBruto) ? 'OFX' : 'texto/CSV';
@@ -1134,8 +1214,13 @@ export async function conciliarExtrato(req: Request, res: Response) {
   if (linhas.length === 0) throw new HttpError(400, 'Nenhuma linha válida. Use: data;valor;descrição — ou cole um extrato OFX do Internet Banking.');
 
   const contaId = req.body.conta_id ?? null;
+  if (contaId) {
+    // Conta informada precisa ser da empresa do ator.
+    assertRegistroDaEmpresa(getResource('contas_financeiras')!, await s.get(getResource('contas_financeiras')!, Number(contaId)), escopo);
+  }
   const formaPagamento = req.body.forma_pagamento ?? null;
-  const lancR = await s.list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 100000 });
+  // MULTIEMPRESA: só casa com títulos do escopo do ator.
+  const lancR = await s.list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 100000, filter: aplicarFiltroEmpresa(getResource('lancamentos_financeiros')!, undefined, escopo) });
   const pendentes = lancR.rows.filter((l) => String(l.status) === 'pendente' && ['receita', 'despesa'].includes(String(l.tipo)));
 
   const confirmados: { data: string; valor: number; descricao: string; lancamento_id: number }[] = [];
@@ -1143,49 +1228,20 @@ export async function conciliarExtrato(req: Request, res: Response) {
 
   for (const linha of linhas) {
     const valor = Number(linha.valor);
-    const buscaDesc = (linha.descricao || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim();
-    let cand = pendentes.filter((l) => Math.abs(Number(l.valor || 0) - valor) < 0.01);
-    // Extrato de operadora (Mercado Pago/cartão) mostra o valor já sem taxa:
-    // casa também pelo valor líquido registrado no lançamento.
-    if (cand.length === 0) cand = pendentes.filter((l) => Math.abs(liquidoDe(l) - valor) < 0.01);
-    if (linha.data) cand = cand.filter((l) => String(l.vencimento || l.data || '').slice(0, 10) === linha.data);
-    if (buscaDesc && cand.length > 1) {
-      const sobreDesc = cand.filter((l) => buscaDesc.includes(String(l.descricao || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim()) || String(l.descricao || '').toLowerCase().includes(buscaDesc));
-      if (sobreDesc.length) cand = sobreDesc;
-    }
-    if (cand.length !== 1) {
-      naoConfirmados.push({ ...linha, motivo: cand.length === 0 ? 'Nenhum lançamento pendente com esse valor/data.' : 'Mais de um lançamento compatível — confira manualmente.' });
+    const l = casarLinhaExtrato(linha, pendentes);
+    if (!l) {
+      const cand = pendentes.filter((x) => Math.abs(Number(x.valor || 0) - valor) < 0.01 || Math.abs(liquidoDe(x) - valor) < 0.01);
+      naoConfirmados.push({ data: linha.data, valor, descricao: linha.descricao || '', motivo: cand.length === 0 ? 'Nenhum lançamento pendente com esse valor/data.' : 'Mais de um lançamento compatível — confira manualmente.' });
       continue;
     }
 
-    const l = cand[0];
     const id = Number(l.id);
-    await s.update(getResource('lancamentos_financeiros')!, id, {
-      status: 'confirmado',
-      conta_id: contaId ?? l.conta_id ?? null,
-      forma_pagamento: formaPagamento ?? l.forma_pagamento ?? null,
-      observacoes: [String(l.observacoes || ''), `Conciliado em ${hoje()} (extrato ${fonte})`].filter(Boolean).join('\n'),
-    });
-    await s.audit(
-      {
-        usuario_id: actor.id || null,
-        usuario: actor.name,
-        acao: 'editar',
-        recurso: 'lancamentos_financeiros',
-        registro_id: id,
-        descricao: `Lançamento conciliado pelo extrato — ${l.descricao}`,
-        dados: { conciliado: true, valor: Number(l.valor || 0) },
-      }
+    // Baixa total atômica (guarda `pendente`) + origem consistente + comissão.
+    await efetuarBaixa(
+      { id: actor.id || null, name: actor.name },
+      id,
+      { data: linha.data || hoje(), conta_id: contaId ?? l.conta_id ?? null, forma_pagamento: formaPagamento ?? l.forma_pagamento ?? null, origem: 'conciliacao', nota: `Conciliado em ${hoje()} (extrato ${fonte})` }
     );
-
-    // mantém a fonte (venda/compra) consistente
-    const tipoRef = String(l.referencia_tipo || '');
-    const refId = Number(l.referencia_id || 0);
-    if (tipoRef === 'venda' && refId) {
-      await s.update(getResource('vendas')!, refId, { fin_status: 'recebido', fin_recebido_em: linha.data || hoje() });
-    } else if (tipoRef === 'compra' && refId) {
-      await s.update(getResource('compras')!, refId, { fin_status: 'pago', fin_pago_em: linha.data || hoje() });
-    }
 
     pendentes.splice(pendentes.indexOf(l), 1);
     confirmados.push({ data: linha.data || String(l.data || ''), valor, descricao: String(l.descricao || ''), lancamento_id: id });
@@ -1195,69 +1251,129 @@ export async function conciliarExtrato(req: Request, res: Response) {
 }
 
 // ----------------------------------------------------------------------------
-// BAIXA DEDICADA — receber/pagar um lançamento pendente com juros, multa e
-// desconto, sem editar a origem (venda/compra). O valor da origem permanece:
-// o acerto acontece por LANÇAMENTOS FILHOS ('baixa'), que mantêm o extrato e
-// o DRE exatos (caixa bate centavo a centavo com o que entrou/saiu da conta).
+// RECEBÍVEIS DE CARTÃO (P2 §10) — agenda do que a operadora vai repassar:
+// bruto, taxa e líquido por vencimento, usando o que já está no livro
+// (lançamentos pendentes com forma cartão). Sem motor paralelo.
+// ----------------------------------------------------------------------------
+export async function recebiveisCartao(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(getResource('lancamentos_financeiros')!, actor, 'read');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const s = getStore();
+  const lancR = await s.list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 50000, filter: aplicarFiltroEmpresa(getResource('lancamentos_financeiros')!, undefined, escopo) });
+  const cartao = lancR.rows.filter(
+    (l) => String(l.status) === 'pendente' && ['cartao_credito', 'cartao_debito'].includes(String(l.forma_pagamento || '')) && ['receita', 'despesa'].includes(String(l.tipo)) && !ehTransferencia(l)
+  );
+  const porDia = new Map<string, { vencimento: string; bruto: number; taxas: number; liquido: number; titulos: number }>();
+  for (const l of cartao) {
+    const chave = String(l.vencimento || l.data || '').slice(0, 10) || 'sem_vencimento';
+    const item = porDia.get(chave) || { vencimento: chave, bruto: 0, taxas: 0, liquido: 0, titulos: 0 };
+    item.bruto = r2(item.bruto + Number(l.valor || 0));
+    item.liquido = r2(item.liquido + liquidoDe(l));
+    item.titulos += 1;
+    porDia.set(chave, item);
+  }
+  const linhas = [...porDia.values()].map((i) => ({ ...i, taxas: r2(i.bruto - i.liquido) })).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
+  res.json({
+    titulos: cartao.length,
+    bruto: somaMoeda(linhas.map((l) => l.bruto)),
+    taxas: somaMoeda(linhas.map((l) => l.taxas)),
+    liquido: somaMoeda(linhas.map((l) => l.liquido)),
+    por_vencimento: linhas,
+  });
+}
+
+// ----------------------------------------------------------------------------
+// BAIXA DEDICADA (LIQUIDAÇÃO) — receber/pagar um lançamento pendente com
+// juros, multa e desconto, sem editar a origem (venda/compra). O valor da
+// origem permanece: o acerto acontece por LANÇAMENTOS FILHOS ('baixa'), que
+// mantêm o extrato e o DRE exatos (caixa bate centavo a centavo com o que
+// entrou/saiu da conta).
+//
+// P2: o núcleo virou `efetuarBaixa`, reutilizado pela API, pelo webhook do
+// gateway, pelo CNAB e pelo extrato. Garantias:
+//   • transacional e atômica — o status só muda por `tryUpdateIf` na condição
+//     `pendente`: dois pagamentos simultâneos nunca baixam duas vezes;
+//   • data, valor, conta, método, operador, taxas, referência e auditoria;
+//   • comissão efetivada junto com o recebimento (proporcional, P2 §5).
 // ----------------------------------------------------------------------------
 
-export async function baixarLancamento(req: Request, res: Response) {
-  const actor = currentUser(req);
-  checkAccess(getResource('lancamentos_financeiros')!, actor, 'update');
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, 'Lançamento inválido.');
+export type OpcoesBaixa = {
+  /** Aceita número ou string do corpo HTTP; normalizado dentro da baixa. */
+  valor?: unknown;
+  juros?: number;
+  multa?: number;
+  desconto?: number;
+  data?: string;
+  conta_id?: unknown;
+  forma_pagamento?: unknown;
+  /** manual (tela) | gateway | webhook | cnab | extrato | conciliacao */
+  origem?: string;
+  /** Observação extra no histórico (ex.: referência do gateway/CNAB). */
+  nota?: string;
+};
 
-  const body = req.body || {};
-  const juros = Number(body.juros || 0);
-  const multa = Number(body.multa || 0);
-  const desconto = Number(body.desconto || 0);
-  for (const [nome, v] of [['juros', juros], ['multa', multa], ['desconto', desconto]] as const) {
-    if (!Number.isFinite(v) || v < 0) throw new HttpError(400, `Informe ${nome} maior ou igual a zero.`, { [nome]: 'Valor inválido' });
-  }
-  // Baixa parcial: valor informado < valor do título → recebe/paga parte e o
-  // principal continua pendente com o saldo restante (rastreado no título).
-  const temValorParcial = body.valor !== undefined && body.valor !== null && body.valor !== '';
-  const valorParcial = temValorParcial ? Number(String(body.valor).replace(',', '.')) : null;
-  if (valorParcial !== null && (!Number.isFinite(valorParcial) || valorParcial <= 0)) {
-    throw new HttpError(400, 'Informe o valor da baixa parcial maior que zero.', { valor: 'Valor inválido' });
-  }
-  const dataBaixa = String(body.data || hoje()).slice(0, 10);
-
+/**
+ * Núcleo transacional da baixa. Com `tx` roda dentro da transação do chamador
+ * (webhook/CNAB); sem ela abre a própria.
+ */
+export async function efetuarBaixa(
+  actor: { id: number | null; name: string },
+  lancamentoId: number,
+  opcoes: OpcoesBaixa,
+  tx?: Tx
+): Promise<{ lancamento: Row; filhos: number[]; parcial: boolean; restante: number }> {
   const s = getStore();
-  const resultado = await s.transaction(async (tx) => {
+  const executar = async (txi: Tx) => {
     const lancR = getResource('lancamentos_financeiros')!;
-    const lanc = await s.get(lancR, id, tx);
+    const lanc = await s.get(lancR, lancamentoId, txi);
     if (!lanc) throw new HttpError(404, 'Lançamento não encontrado.');
     if (String(lanc.status) !== 'pendente') {
       throw new HttpError(409, `Apenas lançamentos pendentes podem ser baixados (este está "${String(lanc.status)}").`);
     }
+    const juros = Math.max(0, Number(opcoes.juros || 0));
+    const multa = Math.max(0, Number(opcoes.multa || 0));
+    const desconto = Math.max(0, Number(opcoes.desconto || 0));
     const tipo = String(lanc.tipo);
     if (!['receita', 'despesa'].includes(tipo)) throw new HttpError(400, 'Baixa aplicável apenas a receitas e despesas.');
     if (ehTransferencia(lanc)) throw new HttpError(400, 'Transferências são gerenciadas pelo módulo Transferências.');
 
-    const contaBaixa = body.conta_id ?? lanc.conta_id ?? null;
-    const formaBaixa = body.forma_pagamento ?? lanc.forma_pagamento ?? null;
+    const contaBaixa = opcoes.conta_id ?? lanc.conta_id ?? null;
+    const formaBaixa = opcoes.forma_pagamento ?? lanc.forma_pagamento ?? null;
+    const dataBaixa = String(opcoes.data || hoje()).slice(0, 10);
+    const origem = opcoes.origem || 'manual';
     const jurosMulta = r2(juros + multa);
     const filhos: number[] = [];
     const valorTitulo = Number(lanc.valor || 0);
-    const ehParcial = valorParcial !== null && valorParcial < valorTitulo;
+    const valorInformado = opcoes.valor === undefined || opcoes.valor === null || opcoes.valor === '' ? null : Number(String(opcoes.valor).replace(',', '.'));
+    if (valorInformado !== null && (!Number.isFinite(valorInformado) || valorInformado <= 0)) {
+      throw new HttpError(400, 'Informe o valor da baixa parcial maior que zero.', { valor: 'Valor inválido' });
+    }
+    const ehParcial = valorInformado !== null && valorInformado < valorTitulo;
+    if (valorInformado !== null && valorInformado > valorTitulo + 0.009) {
+      throw new HttpError(400, `O valor da baixa (${valorInformado.toFixed(2)}) não pode exceder o saldo do título (${valorTitulo.toFixed(2)}).`, { valor: 'Maior que o título' });
+    }
 
     // 1) Principal: baixa total confirma; baixa parcial reduz o título e ele
-    //    segue pendente pelo saldo restante (o recebido sai em lançamento filho).
-    const restante = ehParcial ? r2(valorTitulo - Number(valorParcial)) : 0;
+    //    segue pendente pelo saldo restante. A troca de estado é CONDICIONAL
+    //    (`tryUpdateIf` exige `pendente`) — duas baixas simultâneas não
+    //    passam daqui; só a primeira confirma.
+    const restante = ehParcial ? r2(valorTitulo - Number(valorInformado)) : 0;
+    const notaExtra = opcoes.nota ? `\n${opcoes.nota}` : '';
     const notas = [
       String(lanc.observacoes || ''),
       ehParcial
-        ? `Baixa parcial em ${dataBaixa}: ${formatoMoeda(Number(valorParcial))} · restante ${formatoMoeda(restante)} · por ${actor.name || '—'}`
-        : `Baixa em ${dataBaixa}${jurosMulta > 0 ? ` · juros/multa ${formatoMoeda(jurosMulta)}` : ''}${desconto > 0 ? ` · desconto ${formatoMoeda(desconto)}` : ''} · por ${actor.name || '—'}`,
+        ? `Baixa parcial em ${dataBaixa}: ${formatoMoeda(Number(valorInformado))} · restante ${formatoMoeda(restante)} · por ${actor.name || '—'} (${origem})`
+        : `Baixa em ${dataBaixa}${jurosMulta > 0 ? ` · juros/multa ${formatoMoeda(jurosMulta)}` : ''}${desconto > 0 ? ` · desconto ${formatoMoeda(desconto)}` : ''} · por ${actor.name || '—'} (${origem})`,
     ].filter(Boolean);
-    const atualizado = await atualizarLancamento(
-      id,
-      ehParcial
-        ? { ...lanc, valor: restante, valor_liquido: calcularLiquido(restante, Number(lanc.taxa_pct || 0)), conta_id: contaBaixa, forma_pagamento: formaBaixa, observacoes: notas.join('\n') }
-        : { ...lanc, status: 'confirmado', conta_id: contaBaixa, forma_pagamento: formaBaixa, observacoes: notas.join('\n') },
-      actor,
-      tx
+    const patch: Row = ehParcial
+      ? { ...lanc, valor: restante, valor_liquido: calcularLiquido(restante, Number(lanc.taxa_pct || 0)), conta_id: contaBaixa, forma_pagamento: formaBaixa, observacoes: notas.join('\n') + notaExtra }
+      : { ...lanc, status: 'confirmado', conta_id: contaBaixa, forma_pagamento: formaBaixa, observacoes: notas.join('\n') + notaExtra };
+    const atualizado = await s.tryUpdateIf(lancR, lancamentoId, { status: 'pendente' }, patch, txi);
+    if (!atualizado) throw new HttpError(409, 'Este título foi baixado por outra operação. Recarregue e confira.');
+    await s.audit(
+      { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: lancR.key, registro_id: lancamentoId, descricao: ehParcial ? `Baixa parcial em andamento — ${String(lanc.descricao)}` : `Lançamento confirmado pela baixa — ${String(lanc.descricao)}`, dados: { origem, parcial: ehParcial } },
+      txi
     );
 
     // Baixa parcial: o valor efetivamente movimentado sai em lançamento filho
@@ -1271,24 +1387,25 @@ export async function baixarLancamento(req: Request, res: Response) {
           centro_custo_id: lanc.centro_custo_id ?? null,
           conta_id: contaBaixa,
           descricao: `${tipo === 'receita' ? 'Recebimento' : 'Pagamento'} parcial — ${String(lanc.descricao)} · restante ${formatoMoeda(restante)}`,
-          valor: r2(Number(valorParcial)),
+          valor: r2(Number(valorInformado)),
           taxa_pct: 0,
-          valor_liquido: r2(Number(valorParcial)),
+          valor_liquido: r2(Number(valorInformado)),
           forma_pagamento: formaBaixa,
           status: 'confirmado',
           referencia_tipo: 'baixa',
-          referencia_id: id,
-          observacoes: `Baixa parcial do lançamento #${id} (título de ${formatoMoeda(valorTitulo)})`,
+          referencia_id: lancamentoId,
+          observacoes: `Baixa parcial do lançamento #${lancamentoId} (título de ${formatoMoeda(valorTitulo)}) · origem ${origem}`,
+          empresa_id: empresaDe(lanc),
         },
         actor,
-        tx
+        txi
       );
       filhos.push(Number(parcial.id));
     }
 
     // 2) Filhotes do acerto: caixa e DRE batem com o extrato.
-    const catRecFin = (await categoriaPorClasse('receitas_financeiras', tx)) ?? (await categoriaPadrao('receita', tx));
-    const catDespFin = (await categoriaPorClasse('despesas_financeiras', tx)) ?? (await categoriaPadrao('despesa', tx));
+    const catRecFin = (await categoriaPorClasse('receitas_financeiras', txi)) ?? (await categoriaPadrao('receita', txi));
+    const catDespFin = (await categoriaPorClasse('despesas_financeiras', txi)) ?? (await categoriaPadrao('despesa', txi));
     if (jurosMulta > 0) {
       const filho = await criarLancamento(
         {
@@ -1303,11 +1420,12 @@ export async function baixarLancamento(req: Request, res: Response) {
           forma_pagamento: formaBaixa,
           status: 'confirmado',
           referencia_tipo: 'baixa',
-          referencia_id: id,
-          observacoes: `Gerado na baixa do lançamento #${id}`,
+          referencia_id: lancamentoId,
+          observacoes: `Gerado na baixa do lançamento #${lancamentoId}`,
+          empresa_id: empresaDe(lanc),
         },
         actor,
-        tx
+        txi
       );
       filhos.push(Number(filho.id));
     }
@@ -1332,42 +1450,90 @@ export async function baixarLancamento(req: Request, res: Response) {
           forma_pagamento: formaBaixa,
           status: 'confirmado',
           referencia_tipo: 'baixa',
-          referencia_id: id,
-          observacoes: `Gerado na baixa do lançamento #${id}`,
+          referencia_id: lancamentoId,
+          observacoes: `Gerado na baixa do lançamento #${lancamentoId}`,
+          empresa_id: empresaDe(lanc),
         },
         actor,
-        tx
+        txi
       );
       filhos.push(Number(filho.id));
     }
 
     // 3) Mantém a origem consistente (mesma regra do conciliador) — só na
     //    quitação total: com saldo parcial o pedido segue "a receber/a pagar".
+    const valorPago = ehParcial ? Number(valorInformado) : valorTitulo;
     if (!ehParcial) {
       const refTipo = String(lanc.referencia_tipo || '');
       const refId = Number(lanc.referencia_id || 0);
       if (refTipo === 'venda' && refId) {
-        await s.update(getResource('vendas')!, refId, { fin_status: 'recebido', fin_recebido_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, tx);
+        await s.update(getResource('vendas')!, refId, { fin_status: 'recebido', fin_recebido_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, txi);
       } else if (refTipo === 'compra' && refId) {
-        await s.update(getResource('compras')!, refId, { fin_status: 'pago', fin_pago_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, tx);
+        await s.update(getResource('compras')!, refId, { fin_status: 'pago', fin_pago_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, txi);
       }
     }
+
+    // 4) COMISSÃO (P2 §5): efetivada junto com o recebimento — proporcional
+    //    ao principal pago (juros/multa são receita financeira, não venda).
+    if (String(lanc.referencia_tipo || '') === 'venda' && Number(lanc.referencia_id || 0) > 0) {
+      const venda = await s.get(getResource('vendas')!, Number(lanc.referencia_id), txi);
+      if (venda && empresaDe(venda) === empresaDe(lanc)) {
+        await registrarComissaoPorRecebimento(venda, lancamentoId, valorPago, origem === 'manual' ? 'baixa' : origem, actor, txi);
+      }
+    }
+
     await s.audit(
       {
         usuario_id: actor.id || null,
         usuario: actor.name,
         acao: 'editar',
-        recurso: 'lancamentos_financeiros',
-        registro_id: id,
+        recurso: lancR.key,
+        registro_id: lancamentoId,
         descricao: ehParcial
-          ? `Baixa parcial — ${String(lanc.descricao)} · recebido ${formatoMoeda(Number(valorParcial))} de ${formatoMoeda(valorTitulo)} · restante ${formatoMoeda(restante)}`
-          : `Baixa — ${String(lanc.descricao)} · valor ${formatoMoeda(Number(lanc.valor || 0))}${jurosMulta > 0 ? ` + juros/multa ${formatoMoeda(jurosMulta)}` : ''}${desconto > 0 ? ` − desconto ${formatoMoeda(desconto)}` : ''}`,
-        dados: { baixa: true, parcial: ehParcial, data: dataBaixa, valor_pago: ehParcial ? Number(valorParcial) : valorTitulo, restante, juros, multa, desconto, conta_id: contaBaixa, forma_pagamento: formaBaixa, filhos },
+          ? `Baixa parcial — ${String(lanc.descricao)} · recebido ${formatoMoeda(Number(valorInformado))} de ${formatoMoeda(valorTitulo)} · restante ${formatoMoeda(restante)} (${origem})`
+          : `Baixa — ${String(lanc.descricao)} · valor ${formatoMoeda(Number(lanc.valor || 0))}${jurosMulta > 0 ? ` + juros/multa ${formatoMoeda(jurosMulta)}` : ''}${desconto > 0 ? ` − desconto ${formatoMoeda(desconto)}` : ''} (${origem})`,
+        dados: { baixa: true, parcial: ehParcial, origem, data: dataBaixa, valor_pago: valorPago, restante, juros, multa, desconto, conta_id: contaBaixa, forma_pagamento: formaBaixa, filhos },
       },
-      tx
+      txi
     );
     return { lancamento: atualizado, filhos, parcial: ehParcial, restante };
-  });
+  };
+  if (tx) return executar(tx);
+  return s.transaction(executar);
+}
+
+export async function baixarLancamento(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(getResource('lancamentos_financeiros')!, actor, 'update');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, 'Lançamento inválido.');
+
+  const body = req.body || {};
+  const juros = Number(body.juros || 0);
+  const multa = Number(body.multa || 0);
+  const desconto = Number(body.desconto || 0);
+  for (const [nome, v] of [['juros', juros], ['multa', multa], ['desconto', desconto]] as const) {
+    if (!Number.isFinite(v) || v < 0) throw new HttpError(400, `Informe ${nome} maior ou igual a zero.`, { [nome]: 'Valor inválido' });
+  }
+
+  const s = getStore();
+  // Multiempresa: título de outra empresa responde 404 antes de qualquer efeito.
+  assertRegistroDaEmpresa(getResource('lancamentos_financeiros')!, await s.get(getResource('lancamentos_financeiros')!, id), escopo);
+  const resultado = await efetuarBaixa(
+    { id: actor.id || null, name: actor.name },
+    id,
+    {
+      valor: body.valor,
+      juros,
+      multa,
+      desconto,
+      data: body.data ? String(body.data) : undefined,
+      conta_id: body.conta_id,
+      forma_pagamento: body.forma_pagamento,
+      origem: 'manual',
+    }
+  );
 
   res.json({ ok: true, ...resultado });
 }
@@ -1380,6 +1546,7 @@ function formatoMoeda(v: number): string {
 export async function criarLancamentoManual(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('lancamentos_financeiros')!, actor, 'create');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const body = req.body || {};
   const valor = Number(body.valor);
   if (!Number.isFinite(valor) || valor <= 0) throw new HttpError(400, 'Informe um valor maior que zero.', { valor: 'Valor inválido' });
@@ -1389,6 +1556,8 @@ export async function criarLancamentoManual(req: Request, res: Response) {
   try {
     const row = await s.transaction(async (tx) => {
       const data: Row = {
+        // A empresa é carimbada pelo servidor — nunca vem do corpo.
+        empresa_id: escopo.empresaId,
         data: String(body.data || hoje()).slice(0, 10),
         tipo: ['receita', 'despesa', 'investimento', 'estorno'].includes(String(body.tipo)) ? String(body.tipo) : 'despesa',
         categoria_id: body.categoria_id ?? null,

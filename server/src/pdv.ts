@@ -230,6 +230,9 @@ export async function fecharCaixa(req: Request, res: Response) {
       const resumo = await resumoCaixa(id, escopo, tx);
       const esperado = num(resumo.esperado_em_dinheiro);
       const diferenca = round2(contado - esperado);
+      // Justificativa da diferença (P2 §6): entra na trilha do fechamento.
+      const justificativa = body.justificativa ? ` · justificativa: ${String(body.justificativa).slice(0, 300)}` : '';
+      const observacoes = [body.observacoes ? String(body.observacoes).slice(0, 500) : caixa.observacoes ?? null, justificativa ? `Fechamento${justificativa}` : null].filter(Boolean).join('\n') || null;
       const fechado = await s.tryUpdateIf(
         R_CAIXA(),
         id,
@@ -241,7 +244,7 @@ export async function fecharCaixa(req: Request, res: Response) {
           valor_sistema: esperado,
           diferenca,
           fechado_por: actor.id || null,
-          observacoes: body.observacoes ? String(body.observacoes).slice(0, 500) : caixa.observacoes ?? null,
+          observacoes,
         },
         tx
       );
@@ -735,6 +738,35 @@ export async function cancelarVendaPdv(req: Request, res: Response) {
     const out = await s.transaction(async (tx) => {
       const venda = assertRegistroDaEmpresa(getResource('vendas')!, await s.get(getResource('vendas')!, id, tx), escopo);
       if (String(venda.status) === 'cancelada') throw new HttpError(409, 'Esta venda já está cancelada.');
+
+      // P2 §6 — caixa fechado é histórico imutável. Cancelar uma venda de um
+      // caixa FECHADO reescreve o resumo já conferido (esperado × contado ×
+      // diferença): proibido, salvo permissão administrativa EXPLÍCITA — e
+      // ainda assim com auditoria marcando a retroatividade.
+      if (venda.pdv_caixa_id) {
+        const caixa = await s.get(R_CAIXA(), Number(venda.pdv_caixa_id), tx);
+        if (caixa && String(caixa.status) === 'fechado') {
+          if (actor.perfil !== 'admin') {
+            throw new HttpError(
+              409,
+              `A venda #${id} pertence ao caixa "${caixa.numero}", fechado em ${String(caixa.fechamento_em || '').slice(0, 16)}. Alteração retroativa em caixa fechado exige perfil administrador.`
+            );
+          }
+          await s.audit(
+            {
+              usuario_id: actor.id || null,
+              usuario: actor.name,
+              acao: 'editar',
+              recurso: 'pdv_caixas',
+              registro_id: Number(caixa.id),
+              descricao: `ATENÇÃO: cancelamento RETROATIVO da venda #${id} no caixa fechado "${caixa.numero}" autorizado por administrador (${actor.name})`,
+              dados: { venda_id: id, retroativo: true, fechamento_em: caixa.fechamento_em },
+            },
+            tx
+          );
+        }
+      }
+
       const docVivo = await s.list(
         getResource('documentos_fiscais')!,
         { page: 1, pageSize: 5, filter: { venda_id: id, status: 'autorizado' } },

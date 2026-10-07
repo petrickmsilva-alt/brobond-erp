@@ -72,7 +72,22 @@ import {
 } from './producao';
 import { adminBackup, adminBackupXlsx, backupInfo } from './backup';
 import { catalogoEmbed, catalogoPublico, compartilharCatalogo, criarPedidoCatalogo, eventoCatalogo, inteligenciaCatalogos, rateLimitPublico, revogarCompartilhamento } from './catalogos';
-import { baixarLancamento, conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
+import { baixarLancamento, conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, recebiveisCartao, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
+import { comissoesDaVenda, resumoComissoes } from './comissoes';
+import {
+  cancelarCobranca,
+  configurarGateway,
+  criarCobranca,
+  cronWebhooks,
+  detalheCobranca,
+  estornarCobranca,
+  listarCobrancas,
+  listarEventosWebhook,
+  listarGateways,
+  reprocessarEvento,
+} from './gateway';
+import { conciliarLinhaManual, importarExtrato, listarExtrato, marcarDivergencia } from './extrato';
+import { importarCnab, listarParsersHandler } from './cnab';
 import { vendaPDF, compraPDF } from './pdf';
 import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
 import { listAprovacoes, aprovarPedido, rejeitarPedido, countAprovacoes } from './approval';
@@ -168,6 +183,7 @@ import {
 } from './compras';
 import { marketplaceStatus, sincronizarPedidos } from './marketplace';
 import { connectorsRouter, initConnectors, publicConnectorsRouter } from './connectors';
+import { publicGatewayRouter } from './gateway';
 import { importarPedidosLoja, produtosLoja, sincronizarEstoqueLoja, statusLoja } from './loja';
 import {
   initNegociosEngine,
@@ -232,6 +248,11 @@ app.use('/api/publico', (_req: Request, res: Response, next: NextFunction) => {
 // que não seja um dos quatro provedores cai no next() e segue para as rotas de
 // sempre (inclusive o CRUD autenticado de /api/webhooks).
 app.use(publicConnectorsRouter);
+// P2: webhooks de GATEWAY DE PAGAMENTO também chegam de fora, sem sessão, com
+// assinatura sobre os bytes crus. Mesmo padrão do router de conectores: monta
+// antes do express.json() e do requireAuth. Provedor desconhecido cai no 404
+// do próprio router; nada aqui afeta as rotas autenticadas.
+app.use(publicGatewayRouter);
 
 app.use(express.json({ limit: '4mb' })); // fotos chegam em base64 (já reduzidas no navegador)
 app.use(express.urlencoded({ extended: true }));
@@ -396,6 +417,35 @@ app.get('/api/financeiro/rentabilidade', wrap(rentabilidade));
 app.get('/api/financeiro/investidores', wrap(resumoInvestidores));
 app.post('/api/financeiro/conciliacao', wrap(conciliarExtrato));
 app.post('/api/admin/financeiro/recorrencias', wrap(cronRecorrencias));
+
+// P2 — comissões efetivadas por recebimento
+app.get('/api/financeiro/comissoes', wrap(resumoComissoes));
+app.get('/api/financeiro/comissoes/venda/:id', wrap(comissoesDaVenda));
+
+// P2 — recebíveis de cartão (bruto × taxa × líquido por vencimento)
+app.get('/api/financeiro/cartao/recebiveis', wrap(recebiveisCartao));
+
+// P2 — gateway de pagamento (adapters): config, cobranças, webhooks
+app.get('/api/financeiro/gateway/providers', wrap(listarGateways));
+app.put('/api/financeiro/gateway/config', wrap(configurarGateway));
+app.post('/api/financeiro/gateway/cobrancas', wrap(criarCobranca));
+app.get('/api/financeiro/gateway/cobrancas', wrap(listarCobrancas));
+app.get('/api/financeiro/gateway/cobrancas/:id', wrap(detalheCobranca));
+app.post('/api/financeiro/gateway/cobrancas/:id/cancelar', wrap(cancelarCobranca));
+app.post('/api/financeiro/gateway/cobrancas/:id/estornar', wrap(estornarCobranca));
+app.get('/api/financeiro/gateway/webhooks', wrap(listarEventosWebhook));
+app.post('/api/financeiro/gateway/webhooks/:id/reprocessar', wrap(reprocessarEvento));
+app.post('/api/admin/financeiro/gateway/webhooks/processar', wrap(cronWebhooks));
+
+// P2 — extrato bancário persistente (OFX/CSV) e conciliação
+app.post('/api/financeiro/extrato/importar', wrap(importarExtrato));
+app.get('/api/financeiro/extrato', wrap(listarExtrato));
+app.post('/api/financeiro/extrato/:id/conciliar', wrap(conciliarLinhaManual));
+app.post('/api/financeiro/extrato/:id/divergir', wrap(marcarDivergencia));
+
+// P2 — CNAB: camada de parsers e importação de retorno
+app.get('/api/financeiro/cnab/parsers', wrap(listarParsersHandler));
+app.post('/api/financeiro/cnab/importar', wrap(importarCnab));
 
 // Página de detalhe do produto (fotos, grade de estoque, movimentações, OPs, ficha)
 app.get('/api/produtos/:id/detalhe', wrap(productDetail));
