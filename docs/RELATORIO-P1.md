@@ -22,8 +22,9 @@
 | Multiempresa | ✅ re-auditado, 2 vazamentos fechados |
 | Testes (memória + PostgreSQL real + telas) | ✅ verdes |
 | Typecheck / lint / build | ✅ verdes |
-| Client — telas dedicadas (PDV, expedição, sugestão) | ✅ **construídas e testadas** |
+| Client — telas dedicadas | ✅ **5 construídas e testadas**: PDV (+ NFC-e), Expedição, Sugestão de compra, Devoluções, Logística |
 | Client — menu | ✅ 10 entradas, grupo novo `Logística & Expedição` |
+| Smoke test ponta a ponta (HTTP real) | ✅ 22/22 contra o Express bootado |
 | **Integração de frete com provedor real** | ⚠️ **só test double** (ver §4.1) |
 | **`movimentacoes.venda_id`** | ⚠️ adiado para a P2 (ver §4.2) |
 
