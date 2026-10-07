@@ -12,6 +12,8 @@ import { getStore } from './services';
 import { getResource } from './resources';
 import { checkAccess, getRecord } from './services';
 import { currentUser } from './auth';
+import type { AuthUser } from './auth';
+import { escopoDoAtor } from './empresa';
 import { labelOf } from './store';
 import type { Row } from './store';
 import { round2 } from './utils';
@@ -40,12 +42,17 @@ export async function predicaoDemanda(req: Request, res: Response) {
   checkAccess(getResource('produtos')!, actor, 'read');
 
   const s = getStore();
+  // MULTIEMPRESA: a previsão é da empresa ativa. Sem o recorte, o histórico de
+  // vendas, o estoque e as OPs das OUTRAS empresas entravam no cálculo — e a
+  // previsão de A saía contaminada pelos números de B.
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const empresaId = escopo.empresaId;
   const dias = Math.min(180, Math.max(7, Number(req.query.dias) || 30));
   const categoriaId = req.query.categoria_id ? Number(req.query.categoria_id) : undefined;
   const colecaoId = req.query.colecao_id ? Number(req.query.colecao_id) : undefined;
 
   // Busca todos os produtos ativos
-  const filter: Record<string, unknown> = { ativo: true };
+  const filter: Record<string, unknown> = { ativo: true, empresa_id: empresaId };
   if (categoriaId) filter.categoria_id = categoriaId;
   if (colecaoId) filter.colecao_id = colecaoId;
   const produtos = await s.list(getResource('produtos')!, { page: 1, pageSize: 2000, filter });
@@ -55,16 +62,16 @@ export async function predicaoDemanda(req: Request, res: Response) {
   seisMesesAtras.setMonth(seisMesesAtras.getMonth() - 6);
   const seisMesesStr = seisMesesAtras.toISOString().slice(0, 10);
 
-  const vendas = await s.list(getResource('vendas')!, { page: 1, pageSize: 5000, sort: 'faturada_em', dir: 'asc' });
+  const vendas = await s.list(getResource('vendas')!, { page: 1, pageSize: 5000, sort: 'faturada_em', dir: 'asc', filter: { empresa_id: empresaId } });
   const vendasFaturadas = vendas.rows.filter(
     (v) => ['faturada', 'entregue'].includes(String(v.status)) && String(v.faturada_em || v.data || '') >= seisMesesStr
   );
 
   // Busca itens de todas as vendas faturadas
-  const itensVenda = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 20000 });
+  const itensVenda = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 20000, filter: { empresa_id: empresaId } });
 
   // Busca estoque atual
-  const estoques = await s.list(getResource('estoques')!, { page: 1, pageSize: 10000 });
+  const estoques = await s.list(getResource('estoques')!, { page: 1, pageSize: 10000, filter: { empresa_id: empresaId } });
   const saldoPorProduto = new Map<number, number>();
   for (const e of estoques.rows) {
     const pid = Number(e.produto_id);
@@ -72,7 +79,7 @@ export async function predicaoDemanda(req: Request, res: Response) {
   }
 
   // Busca OPs em andamento
-  const ordens = await s.list(getResource('ordens')!, { page: 1, pageSize: 2000, filter: { status: 'em_producao' } });
+  const ordens = await s.list(getResource('ordens')!, { page: 1, pageSize: 2000, filter: { status: 'em_producao', empresa_id: empresaId } });
   const producaoPorProduto = new Map<number, number>();
   for (const o of ordens.rows) {
     const pid = Number(o.produto_id);
@@ -160,14 +167,17 @@ export async function predicaoInsumos(req: Request, res: Response) {
   checkAccess(getResource('produtos')!, actor, 'read');
 
   const s = getStore();
+  // MULTIEMPRESA: idem predicaoDemanda — cada empresa prevê com os seus números.
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const empresaId = escopo.empresaId;
   // Primeiro, pega a previsão de demanda
   const dias = Math.min(180, Math.max(7, Number(req.query.dias) || 30));
 
   // Reutiliza a lógica de demanda (simplificada aqui)
-  const produtos = await s.list(getResource('produtos')!, { page: 1, pageSize: 2000, filter: { ativo: true } });
-  const vendas = await s.list(getResource('vendas')!, { page: 1, pageSize: 5000 });
-  const itensVenda = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 20000 });
-  const estoques = await s.list(getResource('estoques')!, { page: 1, pageSize: 10000 });
+  const produtos = await s.list(getResource('produtos')!, { page: 1, pageSize: 2000, filter: { ativo: true, empresa_id: empresaId } });
+  const vendas = await s.list(getResource('vendas')!, { page: 1, pageSize: 5000, filter: { empresa_id: empresaId } });
+  const itensVenda = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 20000, filter: { empresa_id: empresaId } });
+  const estoques = await s.list(getResource('estoques')!, { page: 1, pageSize: 10000, filter: { empresa_id: empresaId } });
 
   // Calcula necessidade de produção por produto (simplificado)
   const saldoPorProduto = new Map<number, number>();
@@ -193,11 +203,11 @@ export async function predicaoInsumos(req: Request, res: Response) {
   const insumoNecessario = new Map<number, { insumo_id: number; nome: string; unidade: string; quantidade: number; saldo: number; faltante: number }>();
 
   for (const [pid, qtdProd] of necessidadePorProduto) {
-    const fichas = await s.list(getResource('fichas')!, { page: 1, pageSize: 1, filter: { produto_id: pid } });
+    const fichas = await s.list(getResource('fichas')!, { page: 1, pageSize: 1, filter: { produto_id: pid, empresa_id: empresaId } });
     if (!fichas.rows.length) continue;
     const ficha = fichas.rows[0];
 
-    const itensFicha = await s.list(getResource('itens_ficha_tecnica')!, { page: 1, pageSize: 500, filter: { ficha_id: Number(ficha.id) } });
+    const itensFicha = await s.list(getResource('itens_ficha_tecnica')!, { page: 1, pageSize: 500, filter: { ficha_id: Number(ficha.id), empresa_id: empresaId } });
     for (const item of itensFicha.rows) {
       const insId = Number(item.insumo_id);
       const consumo = Number(item.consumo || 0);
@@ -212,8 +222,8 @@ export async function predicaoInsumos(req: Request, res: Response) {
   }
 
   // Busca dados dos insumos e saldo
-  const insumos = await s.list(getResource('insumos')!, { page: 1, pageSize: 2000 });
-  const estoqueIns = await s.list(getResource('estoque_insumos')!, { page: 1, pageSize: 2000 });
+  const insumos = await s.list(getResource('insumos')!, { page: 1, pageSize: 2000, filter: { empresa_id: empresaId } });
+  const estoqueIns = await s.list(getResource('estoque_insumos')!, { page: 1, pageSize: 2000, filter: { empresa_id: empresaId } });
   const saldoInsMap = new Map(estoqueIns.rows.map((e) => [Number(e.insumo_id), Number(e.quantidade || 0)]));
 
   const resultado = [...insumoNecessario.values()].map((item) => {

@@ -20,7 +20,8 @@ import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
 import { checkAccess, getDefaultLocal, getStore, toHttpError } from './services';
-import { currentUser } from './auth';
+import { currentUser, type AuthUser } from './auth';
+import { assertRegistroDaEmpresa, escopoDoAtor, validarReferenciasDaEmpresa, type EscopoEmpresa } from './empresa';
 import type { Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
 import { labelOf } from './store';
@@ -55,11 +56,18 @@ function pedidoConfig(tipo: TipoPedido) {
 // Itens do pedido
 // ----------------------------------------------------------------------------
 
-async function getPedido(tipo: TipoPedido, id: number, tx?: Tx): Promise<Row> {
+/**
+ * Lê o pedido e garante que ele pertence à empresa do ator.
+ *
+ * MULTIEMPRESA: sem esta checagem, `/api/vendas/9/itens` devolvia os itens de
+ * qualquer empresa — a rota genérica de vendas tem escopo, o sub-recurso de
+ * itens não tinha. O 404 (e não 403) é de propósito: confirmar que o id existe
+ * na outra empresa já seria vazamento.
+ */
+async function getPedido(tipo: TipoPedido, id: number, escopo?: EscopoEmpresa, tx?: Tx): Promise<Row> {
   const { parent } = pedidoConfig(tipo);
   const row = await getStore().findOneWhere(parent, { id }, tx);
-  if (!row) throw new HttpError(404, `${parent.singular} não encontrado(a).`);
-  return row;
+  return assertRegistroDaEmpresa(parent, row, escopo);
 }
 
 function assertPedidoAberto(tipo: TipoPedido, pedido: Row) {
@@ -76,13 +84,15 @@ function assertPedidoAberto(tipo: TipoPedido, pedido: Row) {
 export async function listItens(req: Request, res: Response) {
   const tipo = tipoFromPath(req.path);
   const r = pedidoConfig(tipo).itens;
-  checkAccess(pedidoConfig(tipo).parent, currentUser(req), 'read');
+  const actor = currentUser(req);
+  checkAccess(pedidoConfig(tipo).parent, actor, 'read');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const id = parseId(req.params.id);
-  await getPedido(tipo, id);
-  const out = await getStore().list(r, { page: 1, pageSize: 500, sort: 'id', dir: 'asc', filter: { [pedidoConfig(tipo).parentCol]: id } });
+  await getPedido(tipo, id, escopo);
+  const out = await getStore().list(r, { page: 1, pageSize: 500, sort: 'id', dir: 'asc', filter: { [pedidoConfig(tipo).parentCol]: id, empresa_id: escopo.empresaId } });
   // Nas vendas, anexa a miniatura do produto em cada item para exibir na tabela.
   if (tipo === 'venda') {
-    const produtos = await getStore().list(getResource('produtos')!, { page: 1, pageSize: 2000 }, null);
+    const produtos = await getStore().list(getResource('produtos')!, { page: 1, pageSize: 2000, filter: { empresa_id: escopo.empresaId } }, null);
     await attachImages(getResource('produtos')!, produtos.rows, null);
     const fotoPorProduto = new Map<number, string | null>(produtos.rows.map((p) => [Number(p.id), p.foto_url ?? null]));
     for (const it of out.rows) it.produto_id__foto = fotoPorProduto.get(Number(it.produto_id)) ?? null;
@@ -95,14 +105,18 @@ export async function createItem(req: Request, res: Response) {
   const cfg = pedidoConfig(tipo);
   const actor = currentUser(req);
   checkAccess(cfg.parent, actor, 'update');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const id = parseId(req.params.id);
   const s = getStore();
   try {
     const full = await s.transaction(async (tx) => {
-      const pedido = await getPedido(tipo, id, tx);
+      const pedido = await getPedido(tipo, id, escopo, tx);
       assertPedidoAberto(tipo, pedido);
       const data = validatePayload(cfg.itens, req.body, 'create');
-      const payload: Row = { ...data, [cfg.parentCol]: id };
+      // MULTIEMPRESA: a empresa é carimbada pelo servidor e as referências
+      // (produto/insumo/tamanho) são conferidas contra a empresa ativa.
+      const payload: Row = { ...data, [cfg.parentCol]: id, empresa_id: escopo.empresaId };
+      await validarReferenciasDaEmpresa(cfg.itens, payload, escopo, (r, rid, t) => s.get(r, rid, t), tx);
       if (tipo === 'venda') {
         const qtd = Number(payload.quantidade);
         const preco = Number(payload.preco_unitario);
@@ -137,16 +151,18 @@ export async function updateItem(req: Request, res: Response) {
   const cfg = pedidoConfig(tipo);
   const actor = currentUser(req);
   checkAccess(cfg.parent, actor, 'update');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
   const s = getStore();
   try {
     const full = await s.transaction(async (tx) => {
-      const pedido = await getPedido(tipo, id, tx);
+      const pedido = await getPedido(tipo, id, escopo, tx);
       assertPedidoAberto(tipo, pedido);
-      const before = await s.findOneWhere(cfg.itens, { id: itemId, [cfg.parentCol]: id }, tx);
+      const before = await s.findOneWhere(cfg.itens, { id: itemId, [cfg.parentCol]: id, empresa_id: escopo.empresaId }, tx);
       if (!before) throw new HttpError(404, 'Item não encontrado neste pedido.');
       const data = validatePayload(cfg.itens, req.body, 'update');
+      delete data.empresa_id;
       if (tipo === 'venda') {
         const merged = { ...before, ...data };
         const qtd = Number(merged.quantidade);
@@ -182,14 +198,15 @@ export async function deleteItem(req: Request, res: Response) {
   const cfg = pedidoConfig(tipo);
   const actor = currentUser(req);
   checkAccess(cfg.parent, actor, 'update');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
   const s = getStore();
   try {
     await s.transaction(async (tx) => {
-      const pedido = await getPedido(tipo, id, tx);
+      const pedido = await getPedido(tipo, id, escopo, tx);
       assertPedidoAberto(tipo, pedido);
-      const before = await s.findOneWhere(cfg.itens, { id: itemId, [cfg.parentCol]: id }, tx);
+      const before = await s.findOneWhere(cfg.itens, { id: itemId, [cfg.parentCol]: id, empresa_id: escopo.empresaId }, tx);
       if (!before) throw new HttpError(404, 'Item não encontrado neste pedido.');
       await s.remove(cfg.itens, itemId, tx);
       await recalcularTotal(tipo, id, tx);

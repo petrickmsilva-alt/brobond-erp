@@ -9,8 +9,9 @@
 import { createHash } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
-import { currentUser } from './auth';
+import { currentUser, type AuthUser } from './auth';
 import { checkAccess, getDefaultLocal, getStore } from './services';
+import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
 import { getResource } from './resources';
 import { parseId } from './validate';
 import type { Row } from './store';
@@ -300,19 +301,23 @@ async function resolveLocal(input: ImportBody, tx: any): Promise<string> {
   return getDefaultLocal(tx);
 }
 
-async function resolveSupplier(parsed: ParsedNfe, input: ImportBody, tx: any): Promise<Row> {
+/**
+ * MULTIEMPRESA: o fornecedor é procurado e criado DENTRO da empresa ativa.
+ * Sem o filtro, uma NF-e importada na Empresa B casava com o fornecedor da
+ * Empresa A pelo CNPJ — e a compra nascia apontando para um cadastro alheio.
+ */
+async function resolveSupplier(parsed: ParsedNfe, input: ImportBody, escopo: EscopoEmpresa, tx: any): Promise<Row> {
   const s = getStore();
   if (input.fornecedor_id) {
-    const supplier = await s.findOneWhere(fornecedores, { id: Number(input.fornecedor_id) }, tx);
-    if (!supplier) throw new HttpError(400, 'O fornecedor informado não existe.');
-    return supplier;
+    const supplier = await s.get(fornecedores, Number(input.fornecedor_id), tx);
+    return assertRegistroDaEmpresa(fornecedores, supplier, escopo);
   }
-  const all = await s.list(fornecedores, { page: 1, pageSize: 5000 }, tx);
+  const all = await s.list(fornecedores, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } }, tx);
   const cnpj = digits(parsed.emitenteCnpj);
   const found = all.rows.find((row) => digits(row.cnpj) === cnpj && cnpj);
   if (found) return found;
   if (!parsed.emitenteNome) throw new HttpError(422, 'A NF-e não informa a razão social do fornecedor.');
-  return s.insert(fornecedores, { nome: parsed.emitenteNome, cnpj: parsed.emitenteCnpj, ativo: true }, tx);
+  return s.insert(fornecedores, { empresa_id: escopo.empresaId, nome: parsed.emitenteNome, cnpj: parsed.emitenteCnpj, ativo: true }, tx);
 }
 
 async function resolveProductAndSize(
@@ -320,10 +325,13 @@ async function resolveProductAndSize(
   supplierId: number,
   input: ImportBody,
   mapping: MappingInput,
+  escopo: EscopoEmpresa,
   tx: any
 ): Promise<{ produto: Row; tamanho: Row }> {
   const s = getStore();
-  const productRows = (await s.list(produtos, { page: 1, pageSize: 10000 }, tx)).rows;
+  // MULTIEMPRESA: o de-para só casa com produto da empresa ativa. Sem isso, um
+  // SKU igual cadastrado em outra empresa era aceito e o estoque subia lá.
+  const productRows = (await s.list(produtos, { page: 1, pageSize: 10000, filter: { empresa_id: escopo.empresaId } }, tx)).rows;
   const sizeRows = (await s.list(tamanhos, { page: 1, pageSize: 1000 }, tx)).rows;
   const code = item.codigoFornecedor;
   const stored = await s.findOneWhere(mappings, { fornecedor_id: supplierId, codigo_fornecedor: code }, tx);
@@ -349,7 +357,7 @@ async function resolveProductAndSize(
   return { produto: product, tamanho: size };
 }
 
-async function upsertMapping(supplierId: number, code: string, productId: number, sizeId: number, tx: any) {
+async function upsertMapping(supplierId: number, code: string, productId: number, sizeId: number, empresaId: number, tx: any) {
   const s = getStore();
   const current = await s.findOneWhere(mappings, { fornecedor_id: supplierId, codigo_fornecedor: code }, tx);
   if (current) {
@@ -358,7 +366,7 @@ async function upsertMapping(supplierId: number, code: string, productId: number
     }
     return current;
   }
-  return s.insert(mappings, { fornecedor_id: supplierId, codigo_fornecedor: code, produto_id: productId, tamanho_id: sizeId }, tx);
+  return s.insert(mappings, { empresa_id: empresaId, fornecedor_id: supplierId, codigo_fornecedor: code, produto_id: productId, tamanho_id: sizeId }, tx);
 }
 
 async function updateReplacementCost(product: Row, quantity: number, unitCost: number, tx: any) {
@@ -375,6 +383,7 @@ async function updateReplacementCost(product: Row, quantity: number, unitCost: n
 export async function importarXmlCompra(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(compras, actor, 'create');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const { xml, input } = requestInput(req);
   const parsed = parseXml(xml);
   const hash = createHash('sha256').update(xml, 'utf8').digest('hex');
@@ -384,7 +393,7 @@ export async function importarXmlCompra(req: Request, res: Response) {
     if (already) {
       throw new HttpError(409, `A NF-e ${parsed.numero || parsed.chaveAcesso} já foi importada.`, { compra_id: already.compra_id, importacao_id: already.id });
     }
-    const supplier = await resolveSupplier(parsed, input, tx);
+    const supplier = await resolveSupplier(parsed, input, escopo, tx);
     const local = await resolveLocal(input, tx);
     const requestedMappings = mappingEntries(input);
     const resolved: { item: XmlFiscalItem; product: Row; size: Row; code: string; mapping: MappingInput }[] = [];
@@ -392,12 +401,13 @@ export async function importarXmlCompra(req: Request, res: Response) {
       if (!item.codigoFornecedor) throw new HttpError(422, `O item ${item.numero} não possui cProd.`);
       if (!(item.quantidade > 0) || !Number.isInteger(item.quantidade)) throw new HttpError(422, `A quantidade do item ${item.numero} deve ser um número inteiro positivo para entrada de produto.`);
       const mapping = asMapping(requestedMappings.get(item.codigoFornecedor));
-      const pair = await resolveProductAndSize(item, Number(supplier.id), input, mapping, tx);
+      const pair = await resolveProductAndSize(item, Number(supplier.id), input, mapping, escopo, tx);
       resolved.push({ item, product: pair.produto, size: pair.tamanho, code: item.codigoFornecedor, mapping });
     }
 
     const total = parsed.totalNota || round2(resolved.reduce((sum, line) => sum + line.item.quantidade * line.item.valorUnitario, 0) + parsed.frete - parsed.desconto);
     const compra = await s.insert(compras, {
+      empresa_id: escopo.empresaId,
       fornecedor_id: Number(supplier.id),
       data: parsed.emissao || new Date().toISOString(),
       status: 'recebido',
@@ -415,6 +425,7 @@ export async function importarXmlCompra(req: Request, res: Response) {
     for (const line of resolved) {
       const unit = line.item.valorUnitario || (line.item.quantidade ? round2(line.item.valorProduto / line.item.quantidade) : 0);
       const item = await s.insert(itensCompra, {
+        empresa_id: escopo.empresaId,
         compra_id: Number(compra.id),
         produto_id: Number(line.product.id),
         tamanho_id: Number(line.size.id),
@@ -429,7 +440,7 @@ export async function importarXmlCompra(req: Request, res: Response) {
         local: local,
       }, tx);
       createdItems.push(item);
-      await upsertMapping(Number(supplier.id), line.code, Number(line.product.id), Number(line.size.id), tx);
+      await upsertMapping(Number(supplier.id), line.code, Number(line.product.id), Number(line.size.id), escopo.empresaId, tx);
       // Calcula contra o saldo anterior; só depois materializa a entrada, para
       // que a própria compra não seja contada duas vezes no custo médio.
       await updateReplacementCost(line.product, line.item.quantidade, unit, tx);
@@ -441,6 +452,7 @@ export async function importarXmlCompra(req: Request, res: Response) {
     // repetiria o saldo; o movimento explícito preserva a trilha física da NF-e.
     for (const line of resolved) {
       await s.insert(getResource('movimentacoes')!, {
+        empresa_id: escopo.empresaId,
         tipo: 'entrada', produto_id: Number(line.product.id), tamanho_id: Number(line.size.id), local,
         quantidade: Math.trunc(line.item.quantidade), motivo: `NF-e ${parsed.numero || parsed.chaveAcesso} — Compra #${compra.id}`,
         compra_id: Number(compra.id), usuario_id: actor.id || null,
@@ -450,6 +462,7 @@ export async function importarXmlCompra(req: Request, res: Response) {
     const after = (await s.get(compras, Number(compra.id), tx)) || compra;
     await syncLancamentoCompra(null, after, { status: 'recebido' }, { id: actor.id || null, name: actor.name }, tx);
     const imported = await s.insert(imports, {
+      empresa_id: escopo.empresaId,
       chave_acesso: parsed.chaveAcesso,
       xml_hash: hash,
       compra_id: Number(compra.id),
@@ -519,16 +532,18 @@ function sameBarcodeMultiset(expected: string[], received: string[]): boolean {
 export async function packingCheck(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'update');
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const id = parseId(req.params.id ?? req.body?.venda_id ?? req.body?.vendaId);
   const received = packingCheckBody(Array.isArray(req.body) ? req.body : req.body?.barcodes ?? req.body?.codigos_barras ?? req.body?.codigos ?? req.body?.codigos_lidos);
   const s = getStore();
   const result = await s.transaction(async (tx) => {
-    const venda = await s.findOneWhere(getResource('vendas')!, { id }, tx);
-    if (!venda) throw new HttpError(404, 'Pedido de venda não encontrado.');
+    // MULTIEMPRESA: 404 (e não 403) quando o pedido é de outra empresa —
+    // confirmar que o id existe lá já seria vazamento.
+    const venda = assertRegistroDaEmpresa(getResource('vendas')!, await s.findOneWhere(getResource('vendas')!, { id }, tx), escopo);
     if (['faturada', 'entregue'].includes(String(venda.status))) throw new HttpError(409, 'Este pedido já foi liberado para faturamento.');
     if (String(venda.status) === 'cancelada') throw new HttpError(409, 'Pedido cancelado não pode passar pela conferência.');
-    const items = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 10000, filter: { venda_id: id }, sort: 'id', dir: 'asc' }, tx);
-    const productRows = (await s.list(produtos, { page: 1, pageSize: 10000 }, tx)).rows;
+    const items = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 10000, filter: { venda_id: id, empresa_id: escopo.empresaId }, sort: 'id', dir: 'asc' }, tx);
+    const productRows = (await s.list(produtos, { page: 1, pageSize: 10000, filter: { empresa_id: escopo.empresaId } }, tx)).rows;
     const byId = new Map(productRows.map((product) => [Number(product.id), product]));
     const expected: string[] = [];
     const missing: { produto_id: number; sku: string | null; quantidade: number }[] = [];
@@ -543,9 +558,34 @@ export async function packingCheck(req: Request, res: Response) {
     }
     if (missing.length) throw new HttpError(409, 'Não é possível conferir: há itens do pedido sem código de barras cadastrado.', { itens_sem_codigo: missing });
     if (!sameBarcodeMultiset(expected, received)) {
+      // A divergência fica registrada MESMO com a conferência abortada — é
+      // justamente o caso abortado que a operação precisa investigar depois.
+      const faltando = expected.filter((code) => !received.includes(code));
+      const sobrando = received.filter((code) => !expected.includes(code));
+      const divergencia = await s.insert(getResource('divergencias_conferencia')!, {
+        empresa_id: escopo.empresaId,
+        venda_id: id,
+        esperado: expected,
+        lido: received,
+        faltando,
+        sobrando,
+        usuario_id: actor.id || null,
+      }, tx);
+      await s.audit({
+        usuario_id: actor.id || null,
+        usuario: actor.name,
+        acao: 'editar',
+        recurso: 'vendas',
+        registro_id: id,
+        descricao: `Venda #${id}: divergência na conferência (packing check)`,
+        dados: { divergencia_id: divergencia.id, faltando, sobrando },
+      }, tx);
       throw new HttpError(422, 'A conferência física não coincide byte a byte com os itens do pedido. Nenhuma baixa foi realizada.', {
+        divergencia_id: divergencia.id,
         esperado: expected,
         lidos: received,
+        faltando,
+        sobrando,
         quantidade_esperada: expected.length,
         quantidade_lida: received.length,
       });

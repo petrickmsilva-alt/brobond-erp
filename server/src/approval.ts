@@ -21,6 +21,7 @@ import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getStore, podeComercial, toHttpError } from './services';
+import { assertRegistroDaEmpresa, escopoDoAtor } from './empresa';
 import { currentUser, requireAuth } from './auth';
 import type { AuthUser } from './auth';
 import type { Row, Tx } from './store';
@@ -88,13 +89,16 @@ export async function listAprovacoes(req: Request, res: Response) {
   }
 
   const s = getStore();
+  // MULTIEMPRESA: a fila é da empresa ativa. Sem este filtro o gerente de uma
+  // empresa via — e podia aprovar — os pedidos pendentes das outras.
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const tipo = typeof req.query.tipo === 'string' ? req.query.tipo : undefined; // 'venda' | 'compra' | undefined (ambos)
 
   const resultados: Row[] = [];
 
   const buscar = async (resourceKey: string) => {
     const r = getResource(resourceKey)!;
-    const lista = await s.list(r, { page: 1, pageSize: 200, sort: 'criado_em', dir: 'desc', filter: { status: 'pendente_aprovacao' } });
+    const lista = await s.list(r, { page: 1, pageSize: 200, sort: 'criado_em', dir: 'desc', filter: { status: 'pendente_aprovacao', empresa_id: escopo.empresaId } });
     for (const row of lista.rows) {
       resultados.push({
         ...row,
@@ -121,13 +125,15 @@ export async function aprovarPedido(req: Request, res: Response) {
   }
 
   const s = getStore();
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const tipo = String(req.params.tipo || req.body.tipo || 'venda'); // 'venda' ou 'compra'
   const resourceKey = tipo === 'compra' ? 'compras' : 'vendas';
   const r = getResource(resourceKey)!;
   const id = parseId(req.params.id);
 
-  const pedido = await s.get(r, id);
-  if (!pedido) throw new HttpError(404, 'Pedido não encontrado.');
+  // 404 (e não 403): dizer "não encontrado" é o que impede a empresa A de
+  // descobrir que o id existe na empresa B.
+  const pedido = assertRegistroDaEmpresa(r, await s.get(r, id), escopo);
   if (String(pedido.status) !== 'pendente_aprovacao') {
     throw new HttpError(409, 'Este pedido não está pendente de aprovação.');
   }
@@ -157,6 +163,7 @@ export async function rejeitarPedido(req: Request, res: Response) {
   }
 
   const s = getStore();
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const tipo = String(req.params.tipo || req.body.tipo || 'venda');
   const resourceKey = tipo === 'compra' ? 'compras' : 'vendas';
   const r = getResource(resourceKey)!;
@@ -165,8 +172,7 @@ export async function rejeitarPedido(req: Request, res: Response) {
 
   if (!motivo) throw new HttpError(400, 'Informe o motivo da rejeição.', { motivo: 'Campo obrigatório' });
 
-  const pedido = await s.get(r, id);
-  if (!pedido) throw new HttpError(404, 'Pedido não encontrado.');
+  const pedido = assertRegistroDaEmpresa(r, await s.get(r, id), escopo);
   if (String(pedido.status) !== 'pendente_aprovacao') {
     throw new HttpError(409, 'Este pedido não está pendente de aprovação.');
   }
@@ -200,9 +206,10 @@ export async function countAprovacoes(req: Request, res: Response) {
   if (!podeAprovar(actor)) return res.json({ count: 0 });
 
   const s = getStore();
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const [vendas, compras] = await Promise.all([
-    s.countWhere(getResource('vendas')!, { status: 'pendente_aprovacao' }),
-    s.countWhere(getResource('compras')!, { status: 'pendente_aprovacao' }),
+    s.countWhere(getResource('vendas')!, { status: 'pendente_aprovacao', empresa_id: escopo.empresaId }),
+    s.countWhere(getResource('compras')!, { status: 'pendente_aprovacao', empresa_id: escopo.empresaId }),
   ]);
 
   res.json({ vendas, compras, total: vendas + compras });

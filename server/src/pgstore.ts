@@ -102,7 +102,8 @@ function refJoins(r: Resource) {
 }
 
 function orderClause(r: Resource, p: ListParams): string {
-  const cols = new Set(columnsOf(r).map((f) => f.name));
+  // `id` é ordenável (ver memdb.ts): trilhas de eventos pedem sort: 'id'.
+  const cols = new Set(columnsOf(r).map((f) => f.name).concat('id'));
   const sort = p.sort && cols.has(p.sort) ? p.sort : r.orderBy?.field && cols.has(r.orderBy.field) ? r.orderBy.field : 'id';
   const dir = (p.dir || r.orderBy?.dir || 'asc').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
   return `ORDER BY t.${sort} ${dir} NULLS LAST, t.id DESC`;

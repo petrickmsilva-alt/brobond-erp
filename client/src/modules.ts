@@ -188,10 +188,22 @@ export const MODULES: Module[] = [
   { id: 'catalogos', label: 'Catálogos públicos', icon: Share2, group: 'Comercial & Vendas', path: '/catalogos', resource: 'catalogos', description: 'Compartilhe produtos com preço por link — sem login para o cliente.' },
   { id: 'regras-fiscais', label: 'Regras fiscais', icon: Scale, group: 'Comercial & Vendas', path: '/regras-fiscais', resource: 'regras_fiscais', minPerfil: 'gerente', description: 'CFOP, CST/CSOSN e alíquotas por NCM, UF e operação — sem alíquota escrita no código.' },
   { id: 'documentos-fiscais', label: 'Documentos fiscais', icon: FileText, group: 'Comercial & Vendas', path: '/documentos-fiscais', resource: 'documentos_fiscais', description: 'NF-e e NFC-e emitidas, rejeitadas ou pendentes, com chave, protocolo e DANFE.' },
+  { id: 'listas-preco', label: 'Listas de preço', icon: Tags, group: 'Comercial & Vendas', path: '/listas-preco', resource: 'listas_preco', minPerfil: 'gerente', description: 'Tabelas de preço por produto e variação, com vigência, prioridade e histórico. O preço usado na venda é gravado no item e nunca recalculado.' },
+  { id: 'propostas', label: 'Propostas comerciais', icon: FileText, group: 'Comercial & Vendas', path: '/propostas', resource: 'propostas', description: 'Rascunho → enviada → aprovada → convertida em pedido. A conversão é idempotente: uma proposta nunca vira dois pedidos.' },
+  { id: 'pdv-caixas', label: 'Caixas do PDV', icon: CreditCard, group: 'Comercial & Vendas', path: '/pdv-caixas', resource: 'pdv_caixas', minPerfil: 'gerente', description: 'Abertura e fechamento de caixa, suprimentos, sangrias e a diferença entre o esperado e o contado.' },
+  { id: 'pdv', label: 'PDV — venda balcão', icon: Receipt, group: 'Comercial & Vendas', path: '/pdv', description: 'Venda de balcão por código de barras, SKU, desconto e pagamento. O servidor recalcula preço, desconto, frete, impostos e total — a tela mostra apenas prévia.' },
 
   // 🛒 Suprimentos
   { id: 'compras', label: 'Compras', icon: ShoppingCart, group: 'Suprimentos', path: '/compras', resource: 'compras', description: 'Pedidos de compra de insumos; ao receber, os insumos entram no estoque.' },
   { id: 'fornecedores', label: 'Fornecedores', icon: Factory, group: 'Suprimentos', path: '/fornecedores', resource: 'fornecedores', description: 'Empresas de quem você compra insumos.' },
+  { id: 'compra-recebimentos', label: 'Recebimentos de compra', icon: Warehouse, group: 'Suprimentos', path: '/compra-recebimentos', resource: 'compra_recebimentos', description: 'Recebimentos parciais e totais dos pedidos de compra. O estoque sobe exatamente pelo recebido — nunca pelo pedido.' },
+  { id: 'sugestao-compra', label: 'Sugestão de compra', icon: Calculator, group: 'Suprimentos', path: '/sugestao-compra', minPerfil: 'gerente', description: 'O que comprar a partir do estoque atual, mínimo e máximo, do consumo, dos pedidos em aberto e das compras em trânsito. Nunca gera pedido sozinha.' },
+
+  // 🚚 Logística & Expedição — P1
+  { id: 'expedicao', label: 'Expedição', icon: ClipboardList, group: 'Logística & Expedição', path: '/expedicao', description: 'Separação → conferência → embalagem → expedição. Conferência por código de barras, com divergência registrada e auditada.' },
+  { id: 'divergencias', label: 'Divergências de conferência', icon: ClipboardCheck, group: 'Logística & Expedição', path: '/divergencias', resource: 'divergencias_conferencia', description: 'Itens faltando ou sobrando na conferência, com o esperado, o lido e a resolução aplicada.' },
+  { id: 'envios', label: 'Logística e envios', icon: Truck, group: 'Logística & Expedição', path: '/envios', resource: 'envios', minPerfil: 'gerente', description: 'Cotação, geração de envio, etiqueta e rastreio por transportadora. Credenciais só em configuração segura — nunca no código.' },
+  { id: 'devolucoes', label: 'Devoluções e reversa', icon: Repeat, group: 'Logística & Expedição', path: '/devolucoes', resource: 'devolucoes', description: 'Solicitação → autorização → rastreio → recebimento → conferência. Só item em bom estado volta ao estoque. As ações disponíveis vêm do servidor.' },
 
   // 💰 Inteligência Financeira
   {
@@ -240,6 +252,7 @@ export const MODULE_GROUPS = [
   'Ecossistema Creators',
   'Comercial & Vendas',
   'Suprimentos',
+  'Logística & Expedição',
   'Inteligência Financeira',
   'Relatórios & Auditoria',
 ] as const;
@@ -255,12 +268,13 @@ export const GROUP_META: Record<ModuleGroup, { emoji: string; icon: LucideIcon }
   'Ecossistema Creators': { emoji: '👥', icon: Users },
   'Comercial & Vendas': { emoji: '💼', icon: Briefcase },
   Suprimentos: { emoji: '🛒', icon: ShoppingCart },
+  'Logística & Expedição': { emoji: '🚚', icon: Truck },
   'Inteligência Financeira': { emoji: '💰', icon: Wallet },
   'Relatórios & Auditoria': { emoji: '📊', icon: BarChart3 },
 };
 
 /** Módulos que usam página própria (não CRUD genérico nem PlannedModule). */
-export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 'financeiro'] as const;
+export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 'financeiro', 'pdv', 'expedicao', 'sugestao-compra', 'devolucoes', 'envios'] as const;
 
 /** Módulos cuja listagem abre diretamente a página de detalhe. */
 export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);

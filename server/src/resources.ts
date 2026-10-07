@@ -31,7 +31,8 @@ export type FieldType =
   | 'color' // cor em hexadecimal (#RRGGBB) — exibe uma "bolinha" colorida
   | 'uf' // unidade federativa (SP, MG...) — validada contra a lista oficial
   | 'cep' // CEP brasileiro (normalizado para 8 dígitos)
-  | 'images'; // galeria de fotos do registro (virtual — tabela `arquivos`)
+  | 'images' // galeria de fotos do registro (virtual — tabela `arquivos`)
+  | 'json'; // coluna JSONB: o valor passa como está (objeto/lista), sem coerção
 
 export type Tone = 'green' | 'red' | 'amber' | 'blue' | 'slate';
 
@@ -129,6 +130,13 @@ const auditFields: Field[] = [
   { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false },
   { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', readonly: true, list: false },
 ];
+
+/**
+ * Tabelas de trilha (eventos, log, histórico) são APPEND-ONLY: a linha nasce e
+ * nunca é editada, então não existe `atualizado_em` no banco. Declarar o campo
+ * faria o store tentar selecionar uma coluna que não existe.
+ */
+const auditAppendOnly: Field[] = [{ name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false }];
 
 export const PERFIS: FieldOption[] = [
   { value: 'admin', label: 'Administrador', tone: 'amber' },
@@ -1407,10 +1415,14 @@ export const RESOURCES: Record<string, Resource> = {
         default: 'pendente',
         options: [
           { value: 'pendente', label: 'Pendente', tone: 'amber' },
+          { value: 'aprovado', label: 'Aprovado', tone: 'blue' },
+          { value: 'parcial', label: 'Recebido parcialmente', tone: 'blue' },
           { value: 'recebido', label: 'Recebido', tone: 'green' },
           { value: 'cancelado', label: 'Cancelado', tone: 'red' },
         ],
       },
+      { name: 'aprovada_em', label: 'Aprovada em', type: 'datetime', readonly: true, form: false, list: false },
+      { name: 'aprovada_por', label: 'Aprovada por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
       { name: 'total', label: 'Total (R$)', type: 'money', readonly: true, hint: 'Calculado a partir dos itens (e do frete).' },
       { name: 'condicao_pagamento', label: 'Condição de pagamento', type: 'text', maxLength: 60, list: false, placeholder: 'À vista, 30/60 dias...' },
       { name: 'frete', label: 'Frete (R$)', type: 'money', min: 0, default: 0, list: false },
@@ -1502,6 +1514,7 @@ export const RESOURCES: Record<string, Resource> = {
         search: true,
         options: [
           { value: 'balcao', label: 'Balcão / Loja', tone: 'slate' },
+          { value: 'pdv', label: 'PDV', tone: 'green' },
           { value: 'representante', label: 'Representante', tone: 'blue' },
           { value: 'whatsapp', label: 'WhatsApp / Indicação', tone: 'green' },
           { value: 'site_varejo', label: 'Site — Varejo', tone: 'amber' },
@@ -1585,6 +1598,25 @@ export const RESOURCES: Record<string, Resource> = {
       // Preenchidos exclusivamente pela máquina de estados de fiscal.ts.
       { name: 'documento_fiscal_id', label: 'Documento fiscal', type: 'ref', ref: 'documentos_fiscais', list: false, form: false, readonly: true },
       { name: 'nfe_chave', label: 'Chave de acesso da NF-e', type: 'text', maxLength: 44, list: false, form: false, readonly: true },
+      // ---- P1: amarração com proposta, PDV, expedição e logística ----
+      // Preenchidos pelos endpoints próprios; o CRUD genérico não os escreve.
+      {
+        name: 'expedicao_etapa',
+        label: 'Expedição',
+        type: 'select',
+        default: 'pendente',
+        readonly: true,
+        options: [
+          { value: 'pendente', label: 'Aguardando', tone: 'slate' },
+          { value: 'separacao', label: 'Em separação', tone: 'amber' },
+          { value: 'conferida', label: 'Conferida', tone: 'blue' },
+          { value: 'embalada', label: 'Embalada', tone: 'blue' },
+          { value: 'expedida', label: 'Expedida', tone: 'green' },
+        ],
+      },
+      { name: 'proposta_id', label: 'Proposta de origem', type: 'ref', ref: 'propostas', list: false, form: false, readonly: true },
+      { name: 'pdv_caixa_id', label: 'Caixa do PDV', type: 'ref', ref: 'pdv_caixas', list: false, form: false, readonly: true },
+      { name: 'envio_id', label: 'Envio', type: 'ref', ref: 'envios', list: false, form: false, readonly: true },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
       ...auditFields,
     ],
@@ -1612,6 +1644,10 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'preco_unitario', label: 'Preço unitário', type: 'money', required: true, min: 0 },
       { name: 'desconto_pct', label: 'Desconto (%)', type: 'percent', min: 0, max: 100, default: 0 },
       { name: 'subtotal', label: 'Subtotal', type: 'money', readonly: true },
+      // P1: o preço usado fica CONGELADO — mudar a lista de preço depois não
+      // reescreve a venda. É isso que torna a venda auditável no tempo.
+      { name: 'lista_preco_id', label: 'Lista de preço', type: 'ref', ref: 'listas_preco', list: false, readonly: true },
+      { name: 'preco_tabela', label: 'Preço de tabela', type: 'money', list: false, readonly: true },
     ],
   },
 
@@ -1631,6 +1667,9 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
       { name: 'codigo_fornecedor', label: 'Código do fornecedor', type: 'text', list: false },
       { name: 'quantidade', label: 'Quantidade', type: 'number', required: true, min: 0.001 },
+      // P1: recebimento parcial. Atualizada por UPDATE condicional no
+      // recebimento — nunca por edição direta, para não exceder o pedido.
+      { name: 'quantidade_recebida', label: 'Recebida', type: 'number', default: 0, readonly: true, hint: 'Soma dos recebimentos parciais. Nunca excede a quantidade pedida.' },
       { name: 'preco_unitario', label: 'Preço unitário', type: 'money', required: true, min: 0 },
       { name: 'unidade', label: 'Unidade', type: 'text', list: false },
       { name: 'ncm', label: 'NCM', type: 'text', list: false },
@@ -2336,6 +2375,508 @@ export const RESOURCES: Record<string, Resource> = {
     orderBy: { field: 'data', dir: 'desc' },
     mock: [
       { id: 1, data: '2026-09-01', conta_origem_id: 1, conta_destino_id: 2, valor: 500, descricao: 'Depósito do caixa no banco', status: 'confirmado' },
+    ],
+  },
+
+  // ----------------------------------------------------------------
+  // FASE P1 — listas de preço, propostas, PDV, logística, expedição,
+  // devolução e recebimento parcial de compras.
+  // ----------------------------------------------------------------
+
+  listas_preco: {
+    key: 'listas_preco',
+    empresa: true,
+    table: 'listas_preco',
+    label: 'Listas de Preço',
+    singular: 'Lista de preço',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    detail: true,
+    notice:
+      'A lista ATIVA com MAIOR prioridade e dentro da vigência vence; em empate, a mais recente. O preço aplicado é congelado no item da venda — mudar a lista depois não reescreve o que já foi vendido.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 80, placeholder: 'Atacado SP, Varejo balcão, Black Friday...' },
+      { name: 'descricao', label: 'Descrição', type: 'textarea', maxLength: 500, list: false, wide: true },
+      { name: 'prioridade', label: 'Prioridade', type: 'integer', default: 0, hint: 'Maior vence. Empate: a lista mais recente.' },
+      { name: 'inicio_em', label: 'Válida de', type: 'date' },
+      { name: 'fim_em', label: 'Válida até', type: 'date' },
+      ativo,
+      { name: 'criado_por', label: 'Criado por', type: 'ref', ref: 'usuarios', list: false, form: false, readonly: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'prioridade', dir: 'desc' },
+  },
+
+  lista_preco_itens: {
+    key: 'lista_preco_itens',
+    empresa: true,
+    internal: true,
+    table: 'lista_preco_itens',
+    label: 'Preços da Lista',
+    singular: 'Preço da lista',
+    labelFields: ['produto_id'],
+    ops: { create: false, update: false, delete: false },
+    fields: [
+      { name: 'lista_id', label: 'Lista', type: 'ref', ref: 'listas_preco' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
+      { name: 'preco', label: 'Preço (R$)', type: 'money', min: 0 },
+      ...auditFields,
+    ],
+  },
+
+  listas_preco_historico: {
+    key: 'listas_preco_historico',
+    empresa: true,
+    internal: true,
+    table: 'listas_preco_historico',
+    label: 'Histórico de Preços',
+    singular: 'Mudança de preço',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'lista_id', label: 'Lista', type: 'ref', ref: 'listas_preco' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
+      { name: 'preco_anterior', label: 'Preço anterior', type: 'money' },
+      { name: 'preco_novo', label: 'Preço novo', type: 'money' },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+  },
+
+  propostas: {
+    key: 'propostas',
+    empresa: true,
+    table: 'propostas',
+    label: 'Propostas Comerciais',
+    singular: 'Proposta',
+    labelFields: ['id'],
+    ops: { create: true, update: false, delete: true },
+    detail: true,
+    notice:
+      'Rascunho → Enviada → Aprovada → Convertida em pedido. O total é calculado pelo servidor e a conversão é idempotente: repetir a conversão devolve o mesmo pedido, nunca um segundo.',
+    fields: [
+      { name: 'numero', label: 'Número', type: 'text', maxLength: 40, search: true },
+      { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes', required: true, search: true },
+      { name: 'representante_id', label: 'Vendedor', type: 'ref', ref: 'representantes', search: true },
+      { name: 'data', label: 'Data', type: 'date', required: true },
+      { name: 'valida_ate', label: 'Válida até', type: 'date', hint: 'Obrigatória para enviar. Aprovada e vencida vira "expirada".' },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        required: true,
+        default: 'rascunho',
+        form: false,
+        readonly: true,
+        options: [
+          { value: 'rascunho', label: 'Rascunho', tone: 'slate' },
+          { value: 'enviada', label: 'Enviada', tone: 'blue' },
+          { value: 'aprovada', label: 'Aprovada', tone: 'amber' },
+          { value: 'convertida', label: 'Convertida', tone: 'green' },
+          { value: 'recusada', label: 'Recusada', tone: 'red' },
+          { value: 'cancelada', label: 'Cancelada', tone: 'red' },
+          { value: 'expirada', label: 'Expirada', tone: 'slate' },
+        ],
+      },
+      { name: 'condicao_pagamento', label: 'Condição de pagamento', type: 'text', maxLength: 60, list: false, placeholder: 'À vista, 30/60 dias...' },
+      { name: 'desconto', label: 'Desconto (R$)', type: 'money', min: 0, default: 0, list: false },
+      { name: 'frete', label: 'Frete (R$)', type: 'money', min: 0, default: 0, list: false },
+      { name: 'total', label: 'Total (R$)', type: 'money', readonly: true, hint: 'Calculado pelo servidor a partir dos itens.' },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
+      { name: 'venda_id', label: 'Pedido gerado', type: 'ref', ref: 'vendas', readonly: true, form: false, list: false },
+      { name: 'convertido_em', label: 'Convertida em', type: 'datetime', readonly: true, form: false, list: false },
+      { name: 'convertido_por', label: 'Convertida por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
+      { name: 'recusado_motivo', label: 'Motivo da recusa', type: 'text', readonly: true, form: false, list: false },
+      { name: 'recusado_em', label: 'Recusada em', type: 'datetime', readonly: true, form: false, list: false },
+      { name: 'cancelado_em', label: 'Cancelada em', type: 'datetime', readonly: true, form: false, list: false },
+      { name: 'criado_por', label: 'Criado por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
+      ...auditFields,
+    ],
+    orderBy: { field: 'data', dir: 'desc' },
+  },
+
+  proposta_itens: {
+    key: 'proposta_itens',
+    empresa: true,
+    internal: true,
+    table: 'proposta_itens',
+    label: 'Itens da Proposta',
+    singular: 'Item da proposta',
+    labelFields: ['produto_id'],
+    ops: { create: false, update: false, delete: false },
+    fields: [
+      { name: 'proposta_id', label: 'Proposta', type: 'ref', ref: 'propostas' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
+      { name: 'quantidade', label: 'Quantidade', type: 'number', min: 0 },
+      { name: 'preco_unitario', label: 'Preço unitário', type: 'money', min: 0 },
+      { name: 'desconto_pct', label: 'Desconto (%)', type: 'percent', min: 0, max: 100 },
+      { name: 'subtotal', label: 'Subtotal', type: 'money', readonly: true },
+      { name: 'lista_preco_id', label: 'Lista de preço', type: 'ref', ref: 'listas_preco', readonly: true, form: false },
+      { name: 'preco_tabela', label: 'Preço de tabela', type: 'money', readonly: true, form: false },
+    ],
+  },
+
+  proposta_eventos: {
+    key: 'proposta_eventos',
+    empresa: true,
+    internal: true,
+    table: 'proposta_eventos',
+    label: 'Eventos da Proposta',
+    singular: 'Evento da proposta',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'proposta_id', label: 'Proposta', type: 'ref', ref: 'propostas' },
+      { name: 'de_status', label: 'De', type: 'text' },
+      { name: 'para_status', label: 'Para', type: 'text' },
+      { name: 'mensagem', label: 'Mensagem', type: 'text' },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'criado_em', dir: 'asc' },
+  },
+
+  pdv_caixas: {
+    key: 'pdv_caixas',
+    empresa: true,
+    table: 'pdv_caixas',
+    label: 'Caixas do PDV',
+    singular: 'Caixa do PDV',
+    labelFields: ['numero'],
+    // Abertura, suprimento, sangria e fechamento mexem em DINHEIRO: são de
+    // gerência. O operador vende no caixa aberto; quem responde pela gaveta é
+    // gerente ou admin. (O CRUD genérico continua fechado — ver checkFluxo.)
+    minPerfil: 'gerente',
+    ops: { create: false, update: false, delete: false },
+    detail: true,
+    notice:
+      'Abra o caixa com o troco inicial e feche informando o valor contado. O sistema compara com o esperado (abertura + dinheiro + suprimentos − sangrias) e registra a diferença — fechar não apaga a divergência.',
+    fields: [
+      { name: 'numero', label: 'Terminal', type: 'text', required: true, search: true, maxLength: 40 },
+      { name: 'usuario_id', label: 'Operador', type: 'ref', ref: 'usuarios', search: true },
+      { name: 'local', label: 'Local de saída', type: 'text', maxLength: 60, list: false },
+      { name: 'abertura_em', label: 'Aberto em', type: 'datetime', readonly: true },
+      { name: 'fechamento_em', label: 'Fechado em', type: 'datetime', readonly: true },
+      { name: 'valor_abertura', label: 'Troco inicial (R$)', type: 'money', min: 0, readonly: true },
+      { name: 'valor_fechamento', label: 'Contado (R$)', type: 'money', readonly: true },
+      { name: 'valor_sistema', label: 'Esperado (R$)', type: 'money', readonly: true },
+      { name: 'diferenca', label: 'Diferença (R$)', type: 'money', readonly: true },
+      // Quem fechou. A coluna existe desde a 0024; sem declará-la o campo era
+      // descartado no INSERT/UPDATE (os dois stores montam a lista de colunas a
+      // partir daqui) e o fechamento ficava sem autor registrado.
+      { name: 'fechado_por', label: 'Fechado por', type: 'ref', ref: 'usuarios', readonly: true, list: false },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        required: true,
+        default: 'aberto',
+        readonly: true,
+        options: [
+          { value: 'aberto', label: 'Aberto', tone: 'green' },
+          { value: 'fechado', label: 'Fechado', tone: 'slate' },
+          { value: 'cancelado', label: 'Cancelado', tone: 'red' },
+        ],
+      },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false, wide: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'abertura_em', dir: 'desc' },
+  },
+
+  pdv_pagamentos: {
+    key: 'pdv_pagamentos',
+    empresa: true,
+    internal: true,
+    table: 'pdv_pagamentos',
+    label: 'Pagamentos do PDV',
+    singular: 'Pagamento',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'venda_id', label: 'Venda', type: 'ref', ref: 'vendas' },
+      { name: 'caixa_id', label: 'Caixa', type: 'ref', ref: 'pdv_caixas' },
+      { name: 'forma', label: 'Forma', type: 'text' },
+      { name: 'valor', label: 'Valor', type: 'money' },
+      { name: 'parcelas', label: 'Parcelas', type: 'integer' },
+      { name: 'nsu', label: 'NSU / comprovante', type: 'text' },
+      { name: 'bandeira', label: 'Bandeira', type: 'text' },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+  },
+
+  pdv_caixa_movimentos: {
+    key: 'pdv_caixa_movimentos',
+    empresa: true,
+    internal: true,
+    table: 'pdv_caixa_movimentos',
+    label: 'Movimentos do Caixa',
+    singular: 'Movimento do caixa',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'caixa_id', label: 'Caixa', type: 'ref', ref: 'pdv_caixas' },
+      { name: 'tipo', label: 'Tipo', type: 'select', options: [{ value: 'suprimento', label: 'Suprimento (troco)' }, { value: 'sangria', label: 'Sangria (retirada)' }] },
+      { name: 'valor', label: 'Valor', type: 'money' },
+      { name: 'motivo', label: 'Motivo', type: 'text' },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+  },
+
+  envios: {
+    key: 'envios',
+    empresa: true,
+    table: 'envios',
+    label: 'Envios',
+    singular: 'Envio',
+    labelFields: ['id'],
+    ops: { create: false, update: true, delete: false },
+    detail: true,
+    notice:
+      'O envio só é marcado como "postado" quando existe código de rastreamento ou referência do provedor. Sem transportadora configurada, ele fica PENDENTE com o motivo — o sistema nunca finge que postou.',
+    fields: [
+      { name: 'venda_id', label: 'Pedido', type: 'ref', ref: 'vendas', search: true },
+      { name: 'provider', label: 'Provedor', type: 'text', maxLength: 20, search: true },
+      { name: 'servico', label: 'Serviço', type: 'text', maxLength: 40 },
+      { name: 'codigo_rastreamento', label: 'Rastreamento', type: 'text', maxLength: 60, search: true },
+      { name: 'provider_ref', label: 'Ref. no provedor', type: 'text', list: false, form: false, readonly: true },
+      { name: 'etiqueta_url', label: 'Etiqueta', type: 'text', list: false, form: false },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        required: true,
+        default: 'pendente',
+        options: [
+          { value: 'pendente', label: 'Pendente', tone: 'amber' },
+          { value: 'cotado', label: 'Cotado', tone: 'blue' },
+          { value: 'gerado', label: 'Gerado', tone: 'blue' },
+          { value: 'postado', label: 'Postado', tone: 'green' },
+          { value: 'em_transito', label: 'Em trânsito', tone: 'green' },
+          { value: 'entregue', label: 'Entregue', tone: 'green' },
+          { value: 'devolvido', label: 'Devolvido', tone: 'amber' },
+          { value: 'extraviado', label: 'Extraviado', tone: 'red' },
+          { value: 'cancelado', label: 'Cancelado', tone: 'red' },
+          { value: 'erro', label: 'Erro', tone: 'red' },
+        ],
+      },
+      { name: 'custo', label: 'Custo (R$)', type: 'money', min: 0 },
+      { name: 'peso_g', label: 'Peso (g)', type: 'integer', list: false, form: false },
+      { name: 'volumes', label: 'Volumes', type: 'integer', list: false, form: false },
+      { name: 'cep_destino', label: 'CEP destino', type: 'cep', list: false, form: false },
+      { name: 'prazo_dias', label: 'Prazo (dias)', type: 'integer', list: false },
+      { name: 'erro', label: 'Erro / motivo', type: 'text', list: false, form: false, readonly: true },
+      // A coluna existe desde a 0024 e carrega o índice parcial único
+      // (empresa_id, idempotency_key). Sem declará-la aqui, os dois stores
+      // montam a lista de colunas a partir deste array e o INSERT a descartava —
+      // a busca por chave nunca achava nada e cada chamada criava uma remessa
+      // nova, quebrando justamente a idempotência que ela garante.
+      { name: 'idempotency_key', label: 'Chave de idempotência', type: 'text', maxLength: 120, list: false, form: false, readonly: true },
+      { name: 'criado_por', label: 'Gerado por', type: 'ref', ref: 'usuarios', readonly: true, list: false, form: false },
+      ...auditFields,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+  },
+
+  envio_eventos: {
+    key: 'envio_eventos',
+    empresa: true,
+    internal: true,
+    table: 'envio_eventos',
+    label: 'Eventos do Envio',
+    singular: 'Evento do envio',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'envio_id', label: 'Envio', type: 'ref', ref: 'envios' },
+      { name: 'de_status', label: 'De', type: 'text' },
+      { name: 'para_status', label: 'Para', type: 'text' },
+      { name: 'codigo', label: 'Código', type: 'text' },
+      { name: 'mensagem', label: 'Mensagem', type: 'text' },
+      { name: 'local', label: 'Local', type: 'text' },
+      // Payload bruto do evento vindo do provedor (JSONB). Sem declará-lo o
+      // INSERT descartava a evidência que o provedor devolveu no rastreio.
+      { name: 'payload', label: 'Dados do provedor', type: 'json', readonly: true, form: false, list: false },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'criado_em', dir: 'asc' },
+  },
+
+  expedicao_eventos: {
+    key: 'expedicao_eventos',
+    empresa: true,
+    internal: true,
+    table: 'expedicao_eventos',
+    label: 'Eventos de Expedição',
+    singular: 'Evento de expedição',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'venda_id', label: 'Pedido', type: 'ref', ref: 'vendas' },
+      { name: 'etapa', label: 'Etapa', type: 'text' },
+      { name: 'de_etapa', label: 'De', type: 'text' },
+      { name: 'resultado', label: 'Resultado', type: 'select', options: [{ value: 'ok', label: 'OK', tone: 'green' }, { value: 'divergencia', label: 'Divergência', tone: 'red' }, { value: 'erro', label: 'Erro', tone: 'red' }] },
+      { name: 'mensagem', label: 'Mensagem', type: 'text' },
+      // Detalhe estruturado do evento (JSONB): o que foi lido na conferência,
+      // o que divergiu, o motivo da divergência.
+      { name: 'dados', label: 'Dados do evento', type: 'json', readonly: true, form: false, list: false },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'criado_em', dir: 'asc' },
+  },
+
+  divergencias_conferencia: {
+    key: 'divergencias_conferencia',
+    empresa: true,
+    table: 'divergencias_conferencia',
+    label: 'Divergências de Conferência',
+    singular: 'Divergência',
+    labelFields: ['id'],
+    ops: { create: false, update: true, delete: false },
+    notice: 'Registrada automaticamente quando a conferência física não bate com o pedido — inclusive quando a conferência é abortada. É a auditoria da separação.',
+    fields: [
+      { name: 'venda_id', label: 'Pedido', type: 'ref', ref: 'vendas', search: true },
+      { name: 'usuario_id', label: 'Conferido por', type: 'ref', ref: 'usuarios' },
+      // O QUE divergiu. `esperado`/`lido` são NOT NULL no banco: sem declará-las
+      // aqui o INSERT descartava o conteúdo e a conferência reprovada era
+      // gravada sem nenhum rastro do motivo — exatamente o que a auditoria da
+      // divergência existe para impedir.
+      { name: 'esperado', label: 'Esperado', type: 'json', required: true, form: false, list: false },
+      { name: 'lido', label: 'Lido', type: 'json', required: true, form: false, list: false },
+      { name: 'faltando', label: 'Faltando', type: 'json', form: false, list: false },
+      { name: 'sobrando', label: 'Sobrando', type: 'json', form: false, list: false },
+      { name: 'resolvido_em', label: 'Resolvida em', type: 'datetime', readonly: true },
+      { name: 'resolvido_por', label: 'Resolvida por', type: 'ref', ref: 'usuarios', readonly: true, form: false },
+      { name: 'resolucao', label: 'Resolução', type: 'text', maxLength: 500, list: false, wide: true },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+  },
+
+  devolucoes: {
+    key: 'devolucoes',
+    empresa: true,
+    table: 'devolucoes',
+    label: 'Devoluções',
+    singular: 'Devolução',
+    labelFields: ['id'],
+    ops: { create: false, update: false, delete: false },
+    detail: true,
+    notice:
+      'Solicitada → Autorizada → Em trânsito → Recebida. Mercadoria sem código de rastreamento NÃO entra no estoque, e o estoque só sobe uma vez por devolução.',
+    fields: [
+      { name: 'numero', label: 'Número', type: 'text', maxLength: 40, search: true },
+      { name: 'venda_id', label: 'Pedido original', type: 'ref', ref: 'vendas', search: true },
+      { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes', search: true },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        required: true,
+        default: 'solicitada',
+        readonly: true,
+        options: [
+          { value: 'solicitada', label: 'Solicitada', tone: 'blue' },
+          { value: 'autorizada', label: 'Autorizada', tone: 'amber' },
+          { value: 'em_transito', label: 'Em trânsito', tone: 'amber' },
+          { value: 'recebida', label: 'Recebida', tone: 'green' },
+          { value: 'recusada', label: 'Recusada', tone: 'red' },
+          { value: 'cancelada', label: 'Cancelada', tone: 'red' },
+        ],
+      },
+      {
+        name: 'tipo',
+        label: 'Tipo',
+        type: 'select',
+        default: 'devolucao',
+        options: [
+          { value: 'devolucao', label: 'Devolução' },
+          { value: 'troca', label: 'Troca' },
+          { value: 'garantia', label: 'Garantia' },
+          { value: 'arrependimento', label: 'Arrependimento (CDC 7 dias)' },
+        ],
+      },
+      { name: 'motivo', label: 'Motivo', type: 'text', required: true, maxLength: 500, wide: true },
+      { name: 'autorizacao_codigo', label: 'Código de autorização', type: 'text', maxLength: 60, list: false, readonly: true },
+      { name: 'codigo_rastreamento', label: 'Rastreamento', type: 'text', maxLength: 60, search: true },
+      { name: 'transportadora', label: 'Transportadora', type: 'text', maxLength: 80, list: false },
+      { name: 'autorizada_em', label: 'Autorizada em', type: 'datetime', readonly: true, form: false, list: false },
+      { name: 'autorizado_por', label: 'Autorizada por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
+      { name: 'recebido_por', label: 'Recebida por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
+      { name: 'criado_por', label: 'Solicitada por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
+      { name: 'documento_fiscal_id', label: 'Documento fiscal', type: 'ref', ref: 'documentos_fiscais', readonly: true, form: false, list: false },
+      { name: 'recebida_em', label: 'Recebida em', type: 'datetime', readonly: true, form: false },
+      { name: 'local_entrada', label: 'Armazém de entrada', type: 'text', maxLength: 60, list: false, readonly: true },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+  },
+
+  devolucao_itens: {
+    key: 'devolucao_itens',
+    empresa: true,
+    internal: true,
+    table: 'devolucao_itens',
+    label: 'Itens da Devolução',
+    singular: 'Item da devolução',
+    labelFields: ['produto_id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'devolucao_id', label: 'Devolução', type: 'ref', ref: 'devolucoes' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
+      { name: 'quantidade_solicitada', label: 'Solicitada', type: 'number' },
+      { name: 'quantidade_recebida', label: 'Recebida', type: 'number' },
+      { name: 'estado', label: 'Estado', type: 'select', options: [{ value: 'bom', label: 'Bom', tone: 'green' }, { value: 'avariado', label: 'Avariado', tone: 'red' }, { value: 'usado', label: 'Usado', tone: 'amber' }, { value: 'faltando_acessorio', label: 'Faltando acessório', tone: 'amber' }] },
+      { name: 'devolucao_estoque', label: 'Entrou no estoque', type: 'boolean', readonly: true, form: false },
+      // Rastreabilidade: qual item do pedido original está sendo devolvido.
+      { name: 'item_venda_id', label: 'Item do pedido', type: 'ref', ref: 'itens_venda', readonly: true, form: false, list: false },
+    ],
+  },
+
+  compra_recebimentos: {
+    key: 'compra_recebimentos',
+    empresa: true,
+    table: 'compra_recebimentos',
+    label: 'Recebimentos de Compra',
+    singular: 'Recebimento',
+    labelFields: ['id'],
+    ops: { create: false, update: false, delete: false },
+    notice: 'Cada recebimento parcial é uma linha. O estoque sobe exatamente pela quantidade recebida, nunca pela pedida.',
+    fields: [
+      { name: 'compra_id', label: 'Pedido de compra', type: 'ref', ref: 'compras', search: true },
+      { name: 'data', label: 'Data', type: 'datetime' },
+      { name: 'local', label: 'Armazém', type: 'text', maxLength: 60 },
+      { name: 'documento', label: 'Chave de idempotência', type: 'text', maxLength: 60, list: false, form: false },
+      { name: 'total', label: 'Total (R$)', type: 'money', readonly: true },
+      { name: 'usuario_id', label: 'Recebido por', type: 'ref', ref: 'usuarios' },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false, wide: true },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'data', dir: 'desc' },
+  },
+
+  compra_recebimento_itens: {
+    key: 'compra_recebimento_itens',
+    empresa: true,
+    internal: true,
+    table: 'compra_recebimento_itens',
+    label: 'Itens do Recebimento',
+    singular: 'Item do recebimento',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'recebimento_id', label: 'Recebimento', type: 'ref', ref: 'compra_recebimentos' },
+      { name: 'item_compra_id', label: 'Item da compra', type: 'ref', ref: 'itens_compra' },
+      { name: 'quantidade', label: 'Quantidade', type: 'number' },
     ],
   },
 };

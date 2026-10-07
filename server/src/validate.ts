@@ -130,6 +130,10 @@ function coerce(f: Field, raw: unknown): [unknown, string | null] {
       if (f.options && !f.options.some((o) => o.value === s)) return [s, 'Opção inválida'];
       return [s, null];
     }
+    case 'json':
+      // Coluna JSONB: o store grava o valor como está. Coagir para String
+      // escreveria "[object Object]" onde o banco espera JSON.
+      return [raw, null];
     default:
       return [raw, null];
   }

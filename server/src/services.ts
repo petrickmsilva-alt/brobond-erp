@@ -136,6 +136,22 @@ export function checkAccess(r: Resource, actor: Actor, op: 'read' | 'create' | '
   }
 }
 
+/**
+ * Alçada dos ENDPOINTS DE FLUXO (abrir caixa, converter proposta, autorizar
+ * devolução, receber compra, expedir...).
+ *
+ * Diferente de `checkAccess(r, 'create'|'update'|'delete')`, não consulta
+ * `r.ops` — e não é descuido. `r.ops` fechado existe justamente para impedir
+ * que o CRUD genérico (POST/PUT /api/:recurso) crie ou edite esses registros
+ * POR FORA do fluxo: um PUT em `pdv_caixas` não pode fechar caixa, um PUT em
+ * `devolucoes` não pode autorizar. Aqui o endpoint É o caminho legítimo, então
+ * o que vale é a alçada da pessoa: minPerfil, adminOnly e as permissões
+ * comerciais continuam todas sendo conferidas (é o que o `read` já faz).
+ */
+export function checkFluxo(r: Resource, actor: Actor): void {
+  checkAccess(r, actor, 'read');
+}
+
 // ----------------------------------------------------------------------------
 // Leitura
 // ----------------------------------------------------------------------------

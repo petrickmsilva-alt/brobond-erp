@@ -188,7 +188,10 @@ export class MemStore implements Store {
       rows = rows.filter((row) => norm(row[k]) === norm(v));
     }
     if (term) rows = rows.filter((row) => this.matches(r, row, term));
-    const cols = new Set(columnsOf(r).map((f) => f.name));
+    // `id` é ordenável mesmo não aparecendo em `fields`: é a ordem real de
+    // inserção, e trilhas de eventos dependem dela (o fallback por criado_em
+    // embaralha eventos gravados no mesmo milissegundo).
+    const cols = new Set(columnsOf(r).map((f) => f.name).concat('id'));
     const sort = p.sort && cols.has(p.sort) ? p.sort : r.orderBy?.field || 'id';
     const dir = (p.dir || r.orderBy?.dir || 'asc') === 'desc' ? -1 : 1;
     rows.sort((a, b) => {

@@ -99,6 +99,73 @@ import { consultarCepHandler } from './cep';
 import { gerarVariacoes, listarVariacoes, previaVariacoes } from './variacoes';
 import { importarXmlCompra, packingCheck } from './suprimentos';
 import { calcularFrete, consultarCEP } from './frete';
+// ------------------------- FASE P1 ------------------------------------------
+import {
+  gravarItensLista,
+  historicoLista,
+  listarItensLista,
+  precoProduto,
+  removerItemLista,
+  resolverLista,
+} from './listasPreco';
+import {
+  aprovarProposta,
+  cancelarProposta,
+  converterProposta,
+  criarProposta,
+  detalharProposta,
+  enviarProposta,
+  eventosProposta,
+  listarItens as listarItensProposta,
+  recusarProposta,
+  reescreverItens as reescreverItensProposta,
+} from './propostas';
+import {
+  abrirCaixa,
+  buscarProduto as pdvBuscarProduto,
+  caixaAberto,
+  cancelarVendaPdv,
+  fecharCaixa,
+  movimentoCaixa,
+  pagamentosVenda,
+  resumoCaixaHandler,
+  venderPdv,
+} from './pdv';
+import {
+  atualizarStatusEnvio,
+  buscarPorCodigo as buscarEnvioPorCodigo,
+  cancelarEnvio,
+  cotarFrete,
+  envioDaVenda,
+  eventosEnvio,
+  gerarEnvio,
+  obterConfigHandler as obterConfigLogisticaHandler,
+  rastrearEnvio,
+  salvarConfigHandler as salvarConfigLogisticaHandler,
+} from './logistica';
+import {
+  autorizarDevolucao,
+  cancelarDevolucao,
+  conferirPedido,
+  criarDevolucao,
+  embalarPedido,
+  expedirPedido,
+  listarDivergencias,
+  obterDevolucao,
+  receberDevolucao,
+  recusarDevolucao,
+  registrarRastreamento,
+  resolverDivergencia,
+  separarPedido,
+  situacaoExpedicao,
+} from './expedicao';
+import {
+  aprovarCompra,
+  gerarCompraDaSugestao,
+  listarRecebimentos,
+  receberParcial,
+  sugestaoCompra,
+} from './compras';
 import { marketplaceStatus, sincronizarPedidos } from './marketplace';
 import { connectorsRouter, initConnectors, publicConnectorsRouter } from './connectors';
 import { importarPedidosLoja, produtosLoja, sincronizarEstoqueLoja, statusLoja } from './loja';
@@ -439,6 +506,82 @@ app.put('/api/fiscal/config', wrap(salvarConfigFiscal));
 app.get('/api/cep/:cep', wrap(consultarCepHandler));
 app.get('/api/frete/cep', wrap(consultarCEP));
 app.post('/api/frete/calcular', wrap(calcularFrete));
+
+// ==========================================================================
+// FASE P1 — listas de preço, propostas, PDV, logística, expedição e compras
+// Todas ANTES das rotas genéricas /api/:resource.
+// ==========================================================================
+
+// ---- Listas de preço ----
+// GET /api/listas-preco/resolver precisa vir antes de /api/listas_preco/:id.
+app.get('/api/listas-preco/resolver', wrap(resolverLista));
+app.get('/api/listas-preco/:id/itens', wrap(listarItensLista));
+app.put('/api/listas-preco/:id/itens', wrap(gravarItensLista));
+app.delete('/api/listas-preco/:id/itens/:produtoId', wrap(removerItemLista));
+app.get('/api/listas-preco/:id/historico', wrap(historicoLista));
+app.get('/api/produtos/:id/preco', wrap(precoProduto));
+
+// ---- Propostas comerciais ----
+app.post('/api/propostas', wrap(criarProposta));
+app.get('/api/propostas/:id', wrap(detalharProposta));
+app.get('/api/propostas/:id/itens', wrap(listarItensProposta));
+app.post('/api/propostas/:id/itens', wrap(reescreverItensProposta));
+app.get('/api/propostas/:id/eventos', wrap(eventosProposta));
+app.post('/api/propostas/:id/enviar', wrap(enviarProposta));
+app.post('/api/propostas/:id/aprovar', wrap(aprovarProposta));
+app.post('/api/propostas/:id/recusar', wrap(recusarProposta));
+app.post('/api/propostas/:id/cancelar', wrap(cancelarProposta));
+app.post('/api/propostas/:id/converter', wrap(converterProposta));
+
+// ---- PDV ----
+app.get('/api/pdv/caixas/aberto', wrap(caixaAberto));
+app.post('/api/pdv/caixas', wrap(abrirCaixa));
+app.get('/api/pdv/caixas/:id/resumo', wrap(resumoCaixaHandler));
+app.post('/api/pdv/caixas/:id/movimentos', wrap(movimentoCaixa));
+app.post('/api/pdv/caixas/:id/fechar', wrap(fecharCaixa));
+app.get('/api/pdv/buscar', wrap(pdvBuscarProduto));
+app.post('/api/pdv/vendas', wrap(venderPdv));
+app.post('/api/pdv/vendas/:id/cancelar', wrap(cancelarVendaPdv));
+app.get('/api/pdv/vendas/:id/pagamentos', wrap(pagamentosVenda));
+
+// ---- Logística ----
+app.get('/api/logistica/config', wrap(obterConfigLogisticaHandler));
+app.put('/api/logistica/config', wrap(salvarConfigLogisticaHandler));
+app.get('/api/logistica/frete', wrap(cotarFrete));
+app.get('/api/envios/rastreio/:codigo', wrap(buscarEnvioPorCodigo));
+app.get('/api/envios/:id/eventos', wrap(eventosEnvio));
+app.post('/api/envios/:id/rastrear', wrap(rastrearEnvio));
+app.post('/api/envios/:id/status', wrap(atualizarStatusEnvio));
+app.post('/api/envios/:id/cancelar', wrap(cancelarEnvio));
+app.get('/api/vendas/:id/envio', wrap(envioDaVenda));
+app.post('/api/vendas/:id/envio', wrap(gerarEnvio));
+
+// ---- Expedição (separação → conferência → embalagem → expedição) ----
+app.get('/api/vendas/:id/expedicao', wrap(situacaoExpedicao));
+app.post('/api/vendas/:id/expedicao/separar', wrap(separarPedido));
+app.post('/api/vendas/:id/expedicao/conferir', wrap(conferirPedido));
+app.post('/api/vendas/:id/expedicao/embalar', wrap(embalarPedido));
+app.post('/api/vendas/:id/expedicao/expedir', wrap(expedirPedido));
+app.get('/api/expedicao/divergencias', wrap(listarDivergencias));
+app.post('/api/expedicao/divergencias/:id/resolver', wrap(resolverDivergencia));
+
+// ---- Logística reversa ----
+app.post('/api/devolucoes', wrap(criarDevolucao));
+app.get('/api/devolucoes/:id', wrap(obterDevolucao));
+app.post('/api/devolucoes/:id/autorizar', wrap(autorizarDevolucao));
+app.post('/api/devolucoes/:id/rastreamento', wrap(registrarRastreamento));
+app.post('/api/devolucoes/:id/receber', wrap(receberDevolucao));
+app.post('/api/devolucoes/:id/recusar', wrap(recusarDevolucao));
+app.post('/api/devolucoes/:id/cancelar', wrap(cancelarDevolucao));
+
+// ---- Compras: aprovação e recebimento parcial ----
+app.post('/api/compras/:id/aprovar', wrap(aprovarCompra));
+app.get('/api/compras/:id/recebimentos', wrap(listarRecebimentos));
+app.post('/api/compras/:id/receber', wrap(receberParcial));
+
+// ---- Sugestão de compra (só calcula; gerar exige ação explícita) ----
+app.get('/api/suprimentos/sugestao-compra', wrap(sugestaoCompra));
+app.post('/api/suprimentos/sugestao-compra/gerar', wrap(gerarCompraDaSugestao));
 
 // MULTIEMPRESA — seletor de empresa (persistente na sessão) e concessões.
 // Precisam vir ANTES das rotas genéricas /api/:resource.
