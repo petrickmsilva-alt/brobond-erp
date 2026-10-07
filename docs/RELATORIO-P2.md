@@ -184,6 +184,11 @@ POST /api/financeiro/cnab/importar
 verdes, incluindo toda a suíte PG pré-existente.** No CI o mesmo conjunto roda
 em `postgres:16`.
 
+A suíte PG roda com `--test-concurrency=1`: todos os arquivos compartilham UM
+banco, e arquivos em paralelo disputavam locks serializáveis/dados semeáveis
+entre si (falhas intermitentes de 40P01/40001/chave duplicada vistas no CI).
+Arquivo por arquivo é o modelo correto para integração com banco único.
+
 - migration 0025 aplicada (5 tabelas + 4 índices únicos);
 - **duas baixas simultâneas no mesmo título → exatamente uma vence** (a perdedora
   recebe 409 limpo, nunca 500);
