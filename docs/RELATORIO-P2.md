@@ -58,6 +58,7 @@ Re-auditoria completa antes de escrever qualquer linha. Isto estava correto e
 | §6 | **Caixa**: venda de caixa **fechado** podia ser cancelada por qualquer perfil; fechamento sem campo de justificativa | Bloqueio 409 pós-fechamento (admin ainda pode, com trilha `RETROATIVO`); justificativa no fechamento |
 | §4 | **Baixa sem guarda de estado**: duas baixas simultâneas podiam passar | `tryUpdateIf(status='pendente')` — transição condicional atômica |
 | §20 | **Store Postgres**: `update`/`tryUpdateIf` quebravam com 42601 quando o payload espelhava a linha inteira (`atualizado_em` duplicado), e conflito de serialização (40001) escapava sem tradução — o perdedor de uma corrida via 500 | `pgstore.ts` filtra colunas geridas pelo store; `efetuarBaixa` traduz conflito em 409 limpo |
+| §20 | **Boot concorrente**: dois processos subindo juntos podiam aplicar o bootstrap (schema.sql + migrações) ao mesmo tempo — blocos `DO $$` e o registro em `schema_migrations` corriam em paralelo e o perdedor morria à toa (padrão compatível com a falha do job `testes-postgres`) | `db.ts` serializa o bootstrap inteiro com advisory lock de sessão; validado com banco zerado e 7 boots paralelos (43/43 ×2) |
 
 ---
 
