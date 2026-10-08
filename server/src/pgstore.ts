@@ -7,6 +7,7 @@ import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './resources';
 import { hashCadeiaAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
+import { sqlCivil } from './fuso';
 import {
   labelOf,
   type AuditEntry,
@@ -429,7 +430,7 @@ export class PgStore implements Store {
           (SELECT COUNT(*) FROM ordens_fabricacao WHERE status IN ('planejada', 'em_producao'))::int AS producao,
           (SELECT COUNT(*) FROM vendas WHERE status = 'aberta')::int AS vendas_abertas,
           (SELECT COUNT(*) FROM compras WHERE status = 'pendente')::int AS compras_pendentes,
-          (SELECT COALESCE(SUM(total), 0) FROM vendas WHERE status IN ('faturada', 'entregue') AND faturada_em >= date_trunc('month', now()))::float AS vendas_mes,
+          (SELECT COALESCE(SUM(total), 0) FROM vendas WHERE status IN ('faturada', 'entregue') AND faturada_em >= timezone('America/Sao_Paulo', date_trunc('month', ${sqlCivil('now()')})))::float AS vendas_mes,
           (SELECT COALESCE(SUM(comissao_valor), 0) FROM vendas WHERE status IN ('faturada', 'entregue'))::float AS comissoes_pagar,
           (SELECT COUNT(*) FROM produtos)::int AS produtos,
           (SELECT COUNT(*) FROM clientes)::int AS clientes,
@@ -461,23 +462,27 @@ export class PgStore implements Store {
         ORDER BY data DESC
         LIMIT 8
       `),
-      // Fase 5 — vendas por mês (12 meses, completando os meses sem venda)
+      // Fase 5 — vendas por mês (12 meses, completando os meses sem venda).
+      // MÊS CIVIL em America/Sao_Paulo (ver fuso.ts): a série e o agrupamento
+      // usam o timestamp civil; antes eram UTC e 21:00–23:59 BR do último dia
+      // do mês caía no mês seguinte.
       query(`
         SELECT to_char(gs.mes, 'YYYY-MM') AS mes, COALESCE(SUM(v.total), 0)::float AS total
-        FROM generate_series(date_trunc('month', now()) - interval '11 months', date_trunc('month', now()), interval '1 month') AS gs(mes)
-        LEFT JOIN vendas v ON v.status IN ('faturada', 'entregue') AND date_trunc('month', COALESCE(v.faturada_em, v.data)) = gs.mes
+        FROM generate_series(date_trunc('month', ${sqlCivil('now()')}) - interval '11 months', date_trunc('month', ${sqlCivil('now()')}), interval '1 month') AS gs(mes)
+        LEFT JOIN vendas v ON v.status IN ('faturada', 'entregue') AND date_trunc('month', ${sqlCivil('COALESCE(v.faturada_em, v.data)')}) = gs.mes
         GROUP BY gs.mes ORDER BY gs.mes ASC
       `),
-      // Fase 5 — produção concluída por semana (8 semanas; OP por grade soma a grade)
+      // Fase 5 — produção concluída por semana (8 semanas; OP por grade soma a grade).
+      // SEMANA CIVIL em America/Sao_Paulo (segunda a domingo, horário de Brasília).
       query(`
         SELECT to_char(gs.sem, 'YYYY-MM-DD') AS semana,
                COALESCE(SUM(CASE
                  WHEN o.tipo = 'grade' THEN (SELECT COALESCE(SUM(io.quantidade), 0) FROM itens_ordem io WHERE io.ordem_id = o.id)
                  ELSE o.quantidade END), 0)::int AS pecas,
                COUNT(o.id)::int AS ordens
-        FROM generate_series(date_trunc('week', now()) - interval '7 weeks', date_trunc('week', now()), interval '1 week') AS gs(sem)
+        FROM generate_series(date_trunc('week', ${sqlCivil('now()')}) - interval '7 weeks', date_trunc('week', ${sqlCivil('now()')}), interval '1 week') AS gs(sem)
         LEFT JOIN ordens_fabricacao o
-          ON o.status = 'concluida' AND date_trunc('week', COALESCE(o.concluida_em, o.atualizado_em, o.criado_em)) = gs.sem
+          ON o.status = 'concluida' AND date_trunc('week', ${sqlCivil('COALESCE(o.concluida_em, o.atualizado_em, o.criado_em)')}) = gs.sem
         GROUP BY gs.sem ORDER BY gs.sem ASC
       `),
       // Fase 5 — top 10 produtos por faturamento (pedidos faturados/entregues)
