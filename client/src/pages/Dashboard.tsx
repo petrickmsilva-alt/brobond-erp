@@ -1,139 +1,138 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { LucideIcon } from 'lucide-react';
+// ============================================================================
+// Meu Negócio — Dashboard (Etapa 2 do redesign).
+//
+// Fonte dos dados: o motor analítico do servidor (/api/negocios/*), os
+// indicadores operacionais de /api/dashboard e o resumo financeiro de
+// /api/financeiro/resumo. A tela NÃO recalcula margem, CMV, impostos, curva ABC
+// nem estoque: apenas organiza e apresenta o que o servidor calculou.
+//
+// Regras:
+//   • a empresa é sempre a empresa ativa (validada pelo servidor). Sem empresa
+//     identificada, os indicadores comerciais não são exibidos — nunca se
+//     misturam dados de empresas diferentes;
+//   • cada bloco tem carregamento, erro (com nova tentativa) e vazio próprios;
+//   • variações comparam com o período anterior de mesma duração.
+// ============================================================================
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  AlertTriangle,
-  ArrowRight,
-  Banknote,
-  Boxes,
-  ChevronRight,
-  Cog,
-  Factory,
-  Package,
-  Search,
-  ShoppingCart,
-  Store,
-  Wallet,
-} from 'lucide-react';
-import { api } from '../lib/api';
+import { Banknote, Boxes, ChevronRight, Cog, Factory, Package, ShoppingCart, Store, Wallet, Receipt, Warehouse } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { formatMoney, formatNumber } from '../lib/format';
-import { Alert, PageHeader, Spinner } from '../components/ui';
-import { BarrasVerticais } from '../components/Charts';
+import { PageHeader, Alert } from '../components/ui';
+import { CardHeader, ErrorState, LoadingState, StatCard } from '../components/ui-kit';
+import { centavosParaReais, formatMoney, formatNumber, formatPct } from '../lib/format';
+import { janelaDoPeriodo, variacaoPct } from '../lib/periodo';
+import type { FiltrosDashboard } from '../components/dashboard/DashboardFilters';
+import { useApiQuery } from '../lib/useApiQuery';
+import DashboardFilters from '../components/dashboard/DashboardFilters';
+import SalesChart from '../components/dashboard/SalesChart';
+import MarginCard from '../components/dashboard/MarginCard';
+import AbcCard from '../components/dashboard/AbcCard';
+import AlertsCard, { type Alerta } from '../components/dashboard/AlertsCard';
+import { CanaisCard, TopProdutosCard } from '../components/dashboard/ChannelsTopCards';
+import ValorizacaoPainel from '../components/dashboard/ValorizacaoPainel';
+import type { AbcResp, CanaisResp, DashboardData, EmpresaAtivaResp, ResumoBI, ResumoFin } from '../components/dashboard/types';
 
-/** Valorização do estoque em três bases: custo de produção, atacado e varejo. */
-type Valorizacao = {
-  pecas: number;
-  custo: number;
-  atacado: number;
-  varejo: number;
-  produtosComSaldo: number;
-  semPrecoAtacado: number;
-  colecoes: { colecao: string; pecas: number; custo: number; atacado: number; varejo: number }[];
-  produtos: {
-    id: number;
-    produto: string;
-    colecao: string | null;
-    pecas: number;
-    custo_unit: number;
-    atacado_unit: number;
-    varejo_unit: number;
-    atacado_definido: boolean;
-    custo: number;
-    atacado: number;
-    varejo: number;
-  }[];
-};
-
-type DashboardData = {
-  valorEstoque: number;
-  pecasEstoque: number;
-  valorizacao: Valorizacao;
-  itensAlerta: number;
-  producao: number;
-  vendasAbertas: number;
-  comprasPendentes: number;
-  vendasMes: number;
-  comissoesPagar: number;
-  vendasPorMes: { mes: string; total: number }[];
-  alertas: { produto: string; tamanho: string; local: string; quantidade: number; estoque_min: number }[];
-  insumosAlerta: { insumo: string; quantidade: number; estoque_min: number }[];
-  ordens: { id: number; produto: string; tamanho: string; quantidade: number; status: string; previsao: string | null }[];
-  totais: { produtos: number; clientes: number; fornecedores: number; insumos: number };
-};
-
-type ResumoFin = {
-  saldoContasTotal: number;
-  aReceberVencidas: number;
-  aPagarVencidas: number;
-  aPagar30: number;
-  aReceber30: number;
-};
+const ESCOPO_NAO_IDENTIFICADO = 'Não foi possível identificar a empresa ativa. Os indicadores comerciais ficam ocultos para não misturar dados de empresas. Tente recarregar a página.';
 
 export default function Dashboard() {
   const { user } = useAuth();
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [fin, setFin] = useState<ResumoFin | null>(null);
-  const [error, setError] = useState('');
   const podeFin = user?.perfil === 'admin' || user?.perfil === 'gerente';
+  const [hoje] = useState(() => new Date());
+  const [filtros, setFiltros] = useState<FiltrosDashboard>({ preset: '30d', custom: { de: '', ate: '' }, canal: '' });
 
-  useEffect(() => {
-    api
-      .get<DashboardData>('/dashboard')
-      .then(setData)
-      .catch((e) => setError(e.message));
+  // ---- Fontes ----------------------------------------------------------------
+  const empresaQ = useApiQuery<EmpresaAtivaResp>('/empresas/ativa');
+  const canaisQ = useApiQuery<CanaisResp>('/negocios/canais');
+  const dashQ = useApiQuery<DashboardData>('/dashboard');
+  const finQ = useApiQuery<ResumoFin>(podeFin ? '/financeiro/resumo' : null);
 
-    if (podeFin) {
-      api
-        .get<ResumoFin>('/financeiro/resumo')
-        .then(setFin)
-        .catch(() => {});
-    }
-  }, [podeFin]);
+  // Escopo de empresa: consolidado (só quando o perfil pode) ou a empresa ativa.
+  // Sem nenhum dos dois, a consulta comercial fica desligada.
+  const escopo: string | null = useMemo(() => {
+    const e = empresaQ.data;
+    if (!e) return null;
+    if (e.consolidado) return '';
+    if (e.empresa_id === null) return null;
+    return `empresa_id=${e.empresa_id}`;
+  }, [empresaQ.data]);
 
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+  const janela = useMemo(() => janelaDoPeriodo(filtros.preset, hoje, filtros.custom), [filtros.preset, filtros.custom, hoje]);
+  const canalQS = filtros.canal ? `canal=${encodeURIComponent(filtros.canal)}` : '';
+  const juntar = (...partes: string[]) => partes.filter(Boolean).join('&');
+
+  const pathAtual = janela && escopo !== null ? `/negocios/resumo?${juntar(`de=${janela.de}`, `ate=${janela.ate}`, escopo, canalQS)}` : null;
+  const pathAnterior = janela && escopo !== null ? `/negocios/resumo?${juntar(`de=${janela.prevDe}`, `ate=${janela.prevAte}`, escopo, canalQS)}` : null;
+  const pathAbc = escopo !== null ? (escopo ? `/negocios/abc?${escopo}` : '/negocios/abc') : null;
+
+  const atualQ = useApiQuery<ResumoBI>(pathAtual);
+  const anteriorQ = useApiQuery<ResumoBI>(pathAnterior);
+  const abcQ = useApiQuery<AbcResp>(pathAbc);
+
+  const cur = atualQ.data;
+  const ant = anteriorQ.data;
+  const dash = dashQ.data;
+  const fin = finQ.data;
+
+  // ---- Variações (comparação entre dois resumos do servidor) -----------------
+  const deltas = {
+    faturamento: cur && ant ? variacaoPct(cur.kpis.faturamentoCents, ant.kpis.faturamentoCents) : null,
+    pedidos: cur && ant ? variacaoPct(cur.kpis.pedidos, ant.kpis.pedidos) : null,
+    ticket: cur && ant ? variacaoPct(cur.kpis.ticketMedioCents, ant.kpis.ticketMedioCents) : null,
+    margemPp: cur && ant ? cur.kpis.margemPct - ant.kpis.margemPct : null,
+  };
+
+  // ---- Alertas "Precisa de atenção" ------------------------------------------
+  const hojeISO = useMemo(() => {
+    const d = hoje;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }, [hoje]);
+
+  const alertas: Alerta[] = [];
+  const semVerificacao: string[] = ['contas que vencem hoje e compras atrasadas (sem consulta disponível)'];
+  if (dash) {
+    if (dash.itensAlerta > 0)
+      alertas.push({ id: 'estoque-min', rotulo: 'Itens abaixo do estoque mínimo', detalhe: `${formatNumber(dash.itensAlerta)} item(ns) de produto × tamanho × local`, to: '/estoque' });
+    if (dash.insumosAlerta.length > 0)
+      alertas.push({ id: 'insumos-min', rotulo: 'Insumos abaixo do mínimo', detalhe: `${formatNumber(dash.insumosAlerta.length)} insumo(s)`, to: '/relatorios?relatorio=insumos-minimo' });
+    const atrasadas = dash.ordens.filter((o) => o.previsao && o.previsao.slice(0, 10) < hojeISO).length;
+    if (atrasadas > 0) alertas.push({ id: 'ops-atraso', rotulo: 'Ordens de fabricação em atraso', detalhe: `${formatNumber(atrasadas)} OP(s) com prazo vencido`, to: '/ordens' });
+    if (dash.comprasPendentes > 0) alertas.push({ id: 'compras', rotulo: 'Compras pendentes', detalhe: `${formatNumber(dash.comprasPendentes)} compra(s)`, to: '/compras' });
+  } else {
+    semVerificacao.push('estoque, produção e compras');
+  }
+  if (cur && cur.kpis.pedidosPendentes > 0)
+    alertas.push({ id: 'aguardando-pgto', rotulo: 'Pedidos aguardando pagamento', detalhe: `${formatNumber(cur.kpis.pedidosPendentes)} no período`, to: '/vendas' });
+  if (podeFin && fin) {
+    if (fin.aPagarVencidas > 0) alertas.push({ id: 'pagar-venc', rotulo: 'Contas a pagar vencidas', detalhe: formatMoney(fin.aPagarVencidas), to: '/financeiro' });
+    if (fin.aReceberVencidas > 0) alertas.push({ id: 'receber-venc', rotulo: 'Contas a receber vencidas', detalhe: formatMoney(fin.aReceberVencidas), to: '/financeiro' });
+  } else if (!podeFin) {
+    semVerificacao.push('contas a pagar e a receber (perfil gerente)');
+  }
+
+  // ---- Helpers de exibição ---------------------------------------------------
+  const grupos = canaisQ.data?.grupos.map((g) => ({ grupo: g.grupo, label: g.label })) ?? [];
+  const janelaTexto = janela ? `${formatData(janela.de)} a ${formatData(janela.ate)}` : 'intervalo inválido';
+  const erroCustom = filtros.preset === 'personalizado' && !janela ? 'Informe um intervalo válido: a data inicial deve ser anterior ou igual à final.' : null;
+
+  const pontosMes = (cur?.porMes ?? []).map((m) => ({
+    mes: m.mes,
+    faturamento: centavosParaReais(m.faturamentoCents),
+    lucro: centavosParaReais(m.lucroBrutoCents),
+  }));
+
+  const greeting = (() => {
+    const h = new Date().getHours();
+    return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
+  })();
   const firstName = (user?.name || '').split(' ')[0];
 
-  const kpis = data
-    ? [
-        { label: 'Vendas do mês', value: formatMoney(data.vendasMes), sub: `${formatNumber(data.vendasAbertas)} em aberto`, icon: Banknote, to: '/vendas', accent: 'text-emerald-600 dark:text-emerald-400', badge: 'Receita' },
-        ...(podeFin
-          ? [{ label: 'Saldo em contas', value: formatMoney(fin?.saldoContasTotal ?? 0), sub: `${formatMoney(fin?.aReceber30 ?? 0)} a receber · ${formatMoney(fin?.aPagar30 ?? 0)} a pagar`, icon: Wallet, to: '/financeiro', accent: 'text-sky-600 dark:text-sky-400', badge: 'Caixa' }]
-          : []),
-        { label: 'Itens em alerta', value: formatNumber(data.itensAlerta), sub: 'abaixo do mínimo', icon: AlertTriangle, to: '/estoque', accent: data.itensAlerta > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-300', badge: 'Alerta' },
-        { label: 'Peças em estoque', value: formatNumber(data.pecasEstoque), sub: `${formatNumber(data.valorizacao?.produtosComSaldo ?? 0)} produto(s) com saldo`, icon: Package, to: '/estoque', accent: 'text-brand-600 dark:text-brand-400', badge: 'Estoque' },
-      ].slice(0, 4)
-    : [];
-
-  // Estoque valorizado nas três bases — o mesmo saldo lido a custo de produção,
-  // a preço de atacado e a preço de varejo.
-  const val = data?.valorizacao;
-  const custos = val
-    ? [
-        { key: 'custo' as const, label: 'Custo de produção', value: val.custo, sub: 'Ficha técnica: insumos + mão de obra + indiretos', icon: Factory, accent: 'text-sky-600 dark:text-sky-400', badge: 'Produção', to: '/custo' },
-        { key: 'atacado' as const, label: 'Custo no atacado', value: val.atacado, sub: val.semPrecoAtacado > 0 ? `${formatNumber(val.semPrecoAtacado)} produto(s) sem preço de atacado (usa varejo)` : 'Preço de atacado × peças em estoque', icon: Boxes, accent: 'text-brand-600 dark:text-brand-400', badge: 'Atacado', to: '/relatorios?relatorio=estoque-posicao' },
-        { key: 'varejo' as const, label: 'Custo no varejo', value: val.varejo, sub: 'Preço de venda × peças em estoque', icon: Store, accent: 'text-emerald-600 dark:text-emerald-400', badge: 'Varejo', to: '/relatorios?relatorio=estoque-posicao' },
-      ]
-    : [];
-
-  const atencao = data
-    ? [
-        { label: 'Estoque abaixo do mínimo', msg: `${data.alertas.length} item(ns)`, to: '/estoque', ativo: data.alertas.length > 0 },
-        { label: 'Insumos em alerta', msg: `${data.insumosAlerta.length} insumo(s)`, to: '/relatorios?relatorio=insumos-minimo', ativo: data.insumosAlerta.length > 0 },
-        { label: 'Contas a pagar vencidas', msg: formatMoney(fin?.aPagarVencidas ?? 0), to: '/financeiro', ativo: (fin?.aPagarVencidas ?? 0) > 0 },
-        { label: 'Contas a receber vencidas', msg: formatMoney(fin?.aReceberVencidas ?? 0), to: '/financeiro', ativo: (fin?.aReceberVencidas ?? 0) > 0 },
-        { label: 'Pedidos de venda em aberto', msg: `${data.vendasAbertas} pedido(s)`, to: '/vendas', ativo: data.vendasAbertas > 0 },
-        { label: 'Compras pendentes', msg: `${data.comprasPendentes} compra(s)`, to: '/compras', ativo: data.comprasPendentes > 0 },
-        { label: 'Ordens de fabricação abertas', msg: `${data.ordens.length} OP(s)`, to: '/ordens', ativo: data.ordens.length > 0 },
-      ].filter((a) => a.ativo)
-    : [];
+  const val = dash?.valorizacao;
 
   return (
-    <div className="p-4 sm:p-6">
+    <div className="space-y-4 p-4 sm:p-6">
       <PageHeader
         title={`${greeting}${firstName ? `, ${firstName}` : ''}`}
-        description="Visão executiva da operação. Relatórios aprofundados ficam nos módulos e em Relatórios."
+        description="Meu Negócio: como a operação está agora, com comparação ao período anterior."
         actions={
           <Link to="/movimentacoes" className="btn-primary">
             <Boxes className="h-4 w-4" /> Lançar movimentação
@@ -141,324 +140,244 @@ export default function Dashboard() {
         }
       />
 
-      {error && <Alert tone="red">{error}</Alert>}
-      {!data && !error && <Spinner />}
+      <DashboardFilters
+        valor={filtros}
+        onChange={setFiltros}
+        grupos={grupos}
+        empresa={empresaQ.data?.empresa ?? null}
+        janelaTexto={janelaTexto}
+        erroCustom={erroCustom}
+      />
 
-      {data && (
-        <>
-          {/* KPIs estratégicos */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {kpis.map((k) => (
-              <KpiCard key={k.label} to={k.to} icon={k.icon} badge={k.badge} accent={k.accent} label={k.label} value={k.value} sub={k.sub} />
-            ))}
-          </div>
-
-          {/* Estoque valorizado — custo de produção × atacado × varejo */}
-          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-            {custos.map((c) => (
-              <KpiCard
-                key={c.key}
-                testId={`kpi-${c.key}`}
-                to={c.to}
-                icon={c.icon}
-                badge={c.badge}
-                accent={c.accent}
-                label={c.label}
-                value={formatMoney(c.value)}
-                sub={c.sub}
-              />
-            ))}
-          </div>
-
-          {val && <ValorizacaoPainel val={val} />}
-
-          {/* Precisa de atenção — apenas o que exige ação */}
-          <section className="card mt-4 overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-navy-800">
-              <h2 className="flex items-center gap-2 text-sm font-semibold text-navy-900 dark:text-white">
-                <AlertTriangle className="h-4 w-4 text-red-500" /> Precisa de atenção
-              </h2>
-              <span className="text-xs text-slate-400 dark:text-navy-300">O que exige ação hoje</span>
+      {/* 1. KPIs comerciais do período */}
+      {empresaQ.error || (empresaQ.data && empresaQ.data.empresa_id === null && !empresaQ.data.consolidado) ? (
+        <Alert tone="red">{ESCOPO_NAO_IDENTIFICADO}</Alert>
+      ) : (
+        <section aria-label="Indicadores do período">
+          {atualQ.error && !atualQ.loading ? (
+            <div className="rounded-xl border border-line bg-surface shadow-card">
+              <ErrorState message={atualQ.error} onRetry={atualQ.reload} title="Não foi possível carregar os indicadores do período" />
             </div>
-            {atencao.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-slate-400 dark:text-navy-300">Nada exige ação imediata. 🎉</p>
-            ) : (
-              <div className="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4 dark:divide-navy-800">
-                {atencao.map((a) => (
-                  <Link key={a.label} to={a.to} className="flex items-center justify-between gap-2 px-4 py-3 hover:bg-navy-50/50 dark:hover:bg-navy-800/40">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-navy-900 dark:text-slate-100">{a.label}</p>
-                      <p className="text-xs text-slate-400 dark:text-navy-300">{a.msg}</p>
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-300 dark:text-navy-600" />
-                  </Link>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Desempenho — um único gráfico de tendência */}
-          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <section className="card p-4 lg:col-span-2">
-              <h2 className="text-sm font-semibold text-navy-900 dark:text-white">Vendas faturadas — últimos 12 meses</h2>
-              <div className="mt-3">
-                {data.vendasPorMes.length === 0 || data.vendasPorMes.every((v) => v.total === 0) ? (
-                  <p className="py-8 text-center text-sm text-slate-400 dark:text-navy-300">Sem vendas faturadas no período.</p>
-                ) : (
-                  <BarrasVerticais
-                    rotulos={data.vendasPorMes.map((v) => `${v.mes.slice(5)}/${v.mes.slice(2, 4)}`)}
-                    valores={data.vendasPorMes.map((v) => v.total)}
-                    formatar={formatMoney}
-                    titulo="Vendas por mês"
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {atualQ.loading || !cur ? (
+                ['Faturamento', 'Pedidos', 'Ticket médio', 'Margem bruta'].map((l) => (
+                  <div key={l} className="rounded-xl border border-line bg-surface p-4 shadow-card">
+                    <LoadingState rows={2} label={`Carregando ${l.toLowerCase()}`} />
+                  </div>
+                ))
+              ) : (
+                <>
+                  <StatCard testId="kpi-faturamento" label="Faturamento" value={formatMoney(centavosParaReais(cur.kpis.faturamentoCents))} delta={deltas.faturamento} icon={Banknote} hint="receita líquida" to="/vendas" />
+                  <StatCard testId="kpi-pedidos" label="Pedidos" value={formatNumber(cur.kpis.pedidos)} delta={deltas.pedidos} icon={Receipt} hint="faturados" to="/vendas" />
+                  <StatCard testId="kpi-ticket" label="Ticket médio" value={formatMoney(centavosParaReais(cur.kpis.ticketMedioCents))} delta={deltas.ticket} icon={Wallet} hint="por pedido" to="/vendas" />
+                  <StatCard
+                    testId="kpi-margem"
+                    label="Margem bruta"
+                    value={formatPct(cur.kpis.margemPct)}
+                    delta={deltas.margemPp}
+                    deltaUnit=" p.p."
+                    icon={Package}
+                    hint="lucro ÷ receita"
+                    to="/relatorios"
                   />
-                )}
-              </div>
-            </section>
-
-            <section className="card p-4">
-              <h2 className="text-sm font-semibold text-navy-900 dark:text-white">Cadastros ativos</h2>
-              <p className="text-xs text-slate-400 dark:text-navy-300">Base cadastral em uma linha.</p>
-              <ul className="mt-3 space-y-2 text-sm">
-                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2 dark:border-navy-800"><span className="text-slate-500 dark:text-navy-300">Produtos</span><strong className="tabular-nums text-navy-900 dark:text-slate-100">{formatNumber(data.totais.produtos)}</strong></li>
-                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2 dark:border-navy-800"><span className="text-slate-500 dark:text-navy-300">Insumos</span><strong className="tabular-nums text-navy-900 dark:text-slate-100">{formatNumber(data.totais.insumos)}</strong></li>
-                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2 dark:border-navy-800"><span className="text-slate-500 dark:text-navy-300">Clientes</span><strong className="tabular-nums text-navy-900 dark:text-slate-100">{formatNumber(data.totais.clientes)}</strong></li>
-                <li className="flex justify-between rounded-lg border border-slate-100 px-3 py-2 dark:border-navy-800"><span className="text-slate-500 dark:text-navy-300">Fornecedores</span><strong className="tabular-nums text-navy-900 dark:text-slate-100">{formatNumber(data.totais.fornecedores)}</strong></li>
-              </ul>
-            </section>
-          </div>
-
-          {/* Ações rápidas */}
-          <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <QuickLink to="/produtos" icon={Package} title="Cadastrar produto" text="SKU, cor, coleção, custo e preço." />
-            <QuickLink to="/ordens" icon={Cog} title="Abrir ordem de fabricação" text="Ao concluir, as peças entram no estoque." />
-            <QuickLink to="/compras" icon={ShoppingCart} title="Registrar compra" text="Pedidos de insumos por fornecedor." />
-          </div>
-        </>
+                </>
+              )}
+            </div>
+          )}
+          {anteriorQ.error && <p className="mt-2 text-xs text-muted">Comparação com o período anterior indisponível agora.</p>}
+        </section>
       )}
+
+      {/* 2. Desempenho: faturamento por mês + margem */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <section aria-labelledby="vendas-titulo" className="rounded-xl border border-line bg-surface shadow-card dark:shadow-none lg:col-span-2">
+          <CardHeader title={<span id="vendas-titulo">Faturamento por mês</span>} icon={Banknote} subtitle="Pedidos faturados do período, por mês" />
+          <div className="p-4">
+            {atualQ.loading ? (
+              <LoadingState label="Carregando faturamento" />
+            ) : atualQ.error ? (
+              <IndisponivelPeriodo />
+            ) : !cur || pontosMes.length === 0 || pontosMes.every((p) => p.faturamento === 0) ? (
+              <p className="py-10 text-center text-sm text-muted">Nenhuma venda faturada neste período.</p>
+            ) : (
+              <SalesChart pontos={pontosMes} />
+            )}
+          </div>
+        </section>
+
+        {cur ? (
+          <MarginCard kpis={cur.kpis} />
+        ) : (
+          <section className="rounded-xl border border-line bg-surface shadow-card dark:shadow-none">
+            <CardHeader title="Margem do período" icon={Factory} />
+            {atualQ.error ? <IndisponivelPeriodo /> : <LoadingState label="Carregando margem" />}
+          </section>
+        )}
+      </div>
+
+      {/* 3. Atenção + canais */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <AlertsCard alertas={alertas} semVerificacao={semVerificacao} />
+        <section className="lg:col-span-2">
+          {cur ? (
+            <CanaisCard porCanal={cur.porCanal} />
+          ) : (
+            <div className="rounded-xl border border-line bg-surface shadow-card dark:shadow-none">
+              <CardHeader title="Canais de venda" icon={ShoppingCart} />
+              {atualQ.error ? <IndisponivelPeriodo /> : <LoadingState label="Carregando canais" />}
+            </div>
+          )}
+        </section>
+      </div>
+
+      {/* 4. Curva ABC + top produtos */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <AbcCard abc={abcQ.data} loading={abcQ.loading} error={abcQ.error} onRetry={abcQ.reload} />
+        </div>
+        {cur ? (
+          <TopProdutosCard itens={cur.topProdutos} />
+        ) : (
+          <div className="rounded-xl border border-line bg-surface shadow-card dark:shadow-none">
+            <CardHeader title="Produtos mais vendidos" icon={Package} />
+            {atualQ.error ? <IndisponivelPeriodo /> : <LoadingState label="Carregando produtos" />}
+          </div>
+        )}
+      </div>
+
+      {/* 5. Operação agora (indicadores operacionais, sem período) */}
+      <section aria-label="Operação agora">
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Operação agora</h2>
+        {dashQ.error && !dashQ.loading ? (
+          <div className="rounded-xl border border-line bg-surface shadow-card">
+            <ErrorState message={dashQ.error} onRetry={dashQ.reload} title="Não foi possível carregar a operação" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+            {dashQ.loading || !dash ? (
+              [0, 1, 2, 3].map((i) => (
+                <div key={i} className="rounded-xl border border-line bg-surface p-4 shadow-card">
+                  <LoadingState rows={2} label="Carregando operação" />
+                </div>
+              ))
+            ) : (
+              <>
+                {podeFin && fin && (
+                  <StatCard testId="op-saldo" label="Saldo em contas" value={formatMoney(fin.saldoContasTotal)} icon={Wallet} hint={`${formatMoney(fin.aReceber30)} a receber em 30 dias`} to="/financeiro" />
+                )}
+                <StatCard testId="op-pecas" label="Peças em estoque" value={formatNumber(dash.pecasEstoque)} icon={Warehouse} hint={`${formatNumber(dash.valorizacao.produtosComSaldo)} produto(s) com saldo`} to="/estoque" />
+                <StatCard testId="op-ordens" label="Ordens de fabricação" value={formatNumber(dash.ordens.length)} icon={Cog} hint="abertas" to="/ordens" />
+                <StatCard testId="op-vendas" label="Pedidos em aberto" value={formatNumber(dash.vendasAbertas)} icon={ShoppingCart} hint="todos os períodos" to="/vendas" />
+              </>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* 6. Estoque valorizado — produção × atacado × varejo */}
+      <section aria-label="Estoque valorizado">
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Estoque valorizado</h2>
+        {dashQ.loading || !val ? (
+          dashQ.error ? (
+            <div className="rounded-xl border border-line bg-surface shadow-card"><ErrorState message={dashQ.error} onRetry={dashQ.reload} /></div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="rounded-xl border border-line bg-surface p-4 shadow-card">
+                  <LoadingState rows={2} label="Carregando valorização" />
+                </div>
+              ))}
+            </div>
+          )
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <StatCard
+                testId="kpi-custo"
+                label="Custo de produção"
+                value={formatMoney(val.custo)}
+                icon={Factory}
+                hint="Ficha técnica: insumos + mão de obra + indiretos"
+                to="/custo"
+              />
+              <StatCard
+                testId="kpi-atacado"
+                label="Custo no atacado"
+                value={formatMoney(val.atacado)}
+                icon={Boxes}
+                hint={val.semPrecoAtacado > 0 ? `${formatNumber(val.semPrecoAtacado)} produto(s) sem preço de atacado (usa varejo)` : 'Preço de atacado × peças em estoque'}
+                to="/relatorios?relatorio=estoque-posicao"
+              />
+              <StatCard testId="kpi-varejo" label="Custo no varejo" value={formatMoney(val.varejo)} icon={Store} hint="Preço de venda × peças em estoque" to="/relatorios?relatorio=estoque-posicao" />
+            </div>
+            <div className="mt-4">
+              <ValorizacaoPainel val={val} />
+            </div>
+          </>
+        )}
+      </section>
+
+      {/* 7. Base cadastral e ações rápidas */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <section aria-labelledby="cadastros-titulo" className="rounded-xl border border-line bg-surface shadow-card dark:shadow-none">
+          <CardHeader title={<span id="cadastros-titulo">Base cadastral</span>} subtitle="Cadastros ativos no sistema" />
+          {dash ? (
+            <dl className="divide-y divide-line px-4">
+              {[
+                ['Produtos', dash.totais.produtos, '/produtos'],
+                ['Insumos', dash.totais.insumos, '/insumos'],
+                ['Clientes', dash.totais.clientes, '/clientes'],
+                ['Fornecedores', dash.totais.fornecedores, '/fornecedores'],
+              ].map(([rotulo, valor, to]) => (
+                <div key={rotulo as string} className="flex items-center justify-between py-2.5">
+                  <dt>
+                    <Link to={to as string} className="text-sm text-ink-soft hover:text-ink hover:underline">
+                      {rotulo}
+                    </Link>
+                  </dt>
+                  <dd className="font-mono text-sm font-semibold tabular-nums text-ink">{formatNumber(valor)}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : dashQ.error ? (
+            <ErrorState message={dashQ.error} onRetry={dashQ.reload} />
+          ) : (
+            <LoadingState label="Carregando cadastros" />
+          )}
+        </section>
+
+        <div className="grid grid-cols-1 gap-3 lg:col-span-2">
+          <QuickLink to="/produtos" icon={Package} title="Cadastrar produto" text="SKU, cor, coleção, custo e preço." />
+          <QuickLink to="/ordens" icon={Cog} title="Abrir ordem de fabricação" text="Ao concluir, as peças entram no estoque." />
+          <QuickLink to="/compras" icon={ShoppingCart} title="Registrar compra" text="Pedidos de insumos por fornecedor." />
+        </div>
+      </div>
     </div>
   );
 }
 
-type Nivel = 'unidade' | 'colecao' | 'total';
-
-const NIVEIS: { key: Nivel; label: string; desc: string }[] = [
-  { key: 'unidade', label: 'Por unidade', desc: 'Custo da unidade de cada produto e o total das peças em estoque dele.' },
-  { key: 'colecao', label: 'Por coleção', desc: 'Custo do valor total de cada coleção (peças em estoque dos produtos dela).' },
-  { key: 'total', label: 'Todas as peças', desc: 'Custo de todas as peças no estoque, somando tamanhos, locais e coleções.' },
-];
-
-const BASES = [
-  { key: 'custo' as const, label: 'Produção', cor: 'text-navy-900 dark:text-white' },
-  { key: 'atacado' as const, label: 'Atacado', cor: 'text-brand-700 dark:text-brand-400' },
-  { key: 'varejo' as const, label: 'Varejo', cor: 'text-emerald-700 dark:text-emerald-400' },
-];
-
-/** Painel "Estoque valorizado": as três bases (produção, atacado, varejo) em três níveis. */
-function ValorizacaoPainel({ val }: { val: Valorizacao }) {
-  const [nivel, setNivel] = useState<Nivel>('colecao');
-  const [q, setQ] = useState('');
-
-  const produtos = useMemo(() => {
-    const term = q.trim().toLowerCase();
-    if (!term) return val.produtos;
-    return val.produtos.filter((p) => `${p.produto} ${p.colecao || ''}`.toLowerCase().includes(term));
-  }, [val.produtos, q]);
-
-  const semSaldo = val.produtosComSaldo === 0;
-  const atual = NIVEIS.find((n) => n.key === nivel)!;
-
-  return (
-    <section className="card mt-4 overflow-hidden" data-testid="valorizacao">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-navy-800">
-        <div className="min-w-0">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-navy-900 dark:text-white">
-            <Package className="h-4 w-4 text-brand-500" /> Estoque valorizado
-          </h2>
-          <p className="text-xs text-slate-400 dark:text-navy-300">{atual.desc}</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {nivel === 'unidade' && (
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-              <input className="input !py-1.5 pl-8 text-xs sm:w-56" placeholder="Buscar produto ou coleção..." value={q} onChange={(e) => setQ(e.target.value)} aria-label="Buscar produto" />
-            </div>
-          )}
-          <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1 text-xs dark:bg-navy-800" role="tablist" aria-label="Nível da valorização">
-            {NIVEIS.map((n) => (
-              <button
-                key={n.key}
-                type="button"
-                role="tab"
-                aria-selected={nivel === n.key}
-                className={`whitespace-nowrap rounded-md px-2.5 py-1.5 font-medium ${nivel === n.key ? 'bg-white text-navy-900 shadow dark:bg-navy-900 dark:text-white' : 'text-slate-500 dark:text-navy-300'}`}
-                onClick={() => setNivel(n.key)}
-              >
-                {n.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {semSaldo ? (
-        <p className="px-4 py-8 text-center text-sm text-slate-400 dark:text-navy-300">Nenhuma peça em estoque para valorizar.</p>
-      ) : nivel === 'total' ? (
-        <div className="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-3 sm:divide-x sm:divide-y-0 dark:divide-navy-800">
-          {BASES.map((b) => (
-            <div key={b.key} className="px-4 py-5 text-center">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-navy-300">Custo de todas as peças · {b.label}</div>
-              <div className={`mt-1 text-2xl font-bold tabular-nums ${b.cor}`}>{formatMoney(val[b.key])}</div>
-              <div className="mt-1 text-xs text-slate-400 dark:text-navy-300">
-                {formatNumber(val.pecas)} peças · média {formatMoney(val.pecas ? val[b.key] / val.pecas : 0)}/peça
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="max-h-[420px] overflow-auto">
-          <table className="table table-compact">
-            <thead>
-              <tr>
-                <th>{nivel === 'colecao' ? 'Coleção' : 'Produto'}</th>
-                {nivel === 'unidade' && <th className="hidden md:table-cell">Coleção</th>}
-                <th className="text-right">Peças</th>
-                {nivel === 'unidade' && (
-                  <>
-                    <th className="text-right">Custo unit.</th>
-                    <th className="text-right">Atacado unit.</th>
-                    <th className="text-right">Varejo unit.</th>
-                  </>
-                )}
-                <th className="text-right">Produção</th>
-                <th className="text-right">Atacado</th>
-                <th className="text-right">Varejo</th>
-              </tr>
-            </thead>
-            <tbody>
-              {nivel === 'colecao'
-                ? val.colecoes.map((c) => (
-                    <tr key={c.colecao}>
-                      <td className="font-medium text-navy-900 dark:text-slate-100">{c.colecao}</td>
-                      <td className="text-right tabular-nums">{formatNumber(c.pecas)}</td>
-                      <td className="text-right tabular-nums font-semibold">{formatMoney(c.custo)}</td>
-                      <td className="text-right tabular-nums">{formatMoney(c.atacado)}</td>
-                      <td className="text-right tabular-nums">{formatMoney(c.varejo)}</td>
-                    </tr>
-                  ))
-                : produtos.map((p) => (
-                    <tr key={p.id}>
-                      <td>
-                        <Link to={`/produtos/${p.id}`} className="font-medium text-navy-900 hover:underline dark:text-slate-100">
-                          {p.produto}
-                        </Link>
-                      </td>
-                      <td className="hidden text-slate-500 md:table-cell dark:text-navy-300">{p.colecao || '—'}</td>
-                      <td className="text-right tabular-nums">{formatNumber(p.pecas)}</td>
-                      <td className="text-right tabular-nums">{formatMoney(p.custo_unit)}</td>
-                      <td className="text-right tabular-nums" title={p.atacado_definido ? undefined : 'Sem preço de atacado cadastrado — usa o preço de varejo'}>
-                        {formatMoney(p.atacado_unit)}
-                        {!p.atacado_definido && <span className="ml-1 text-[10px] text-amber-600">*</span>}
-                      </td>
-                      <td className="text-right tabular-nums">{formatMoney(p.varejo_unit)}</td>
-                      <td className="text-right tabular-nums font-semibold">{formatMoney(p.custo)}</td>
-                      <td className="text-right tabular-nums">{formatMoney(p.atacado)}</td>
-                      <td className="text-right tabular-nums">{formatMoney(p.varejo)}</td>
-                    </tr>
-                  ))}
-              {nivel === 'unidade' && produtos.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="py-6 text-center text-slate-400 dark:text-navy-300">Nenhum produto encontrado.</td>
-                </tr>
-              )}
-            </tbody>
-            <tfoot>
-              <tr className="bg-slate-50 font-semibold dark:bg-navy-800/60">
-                <td className="px-4 py-2 text-navy-900 dark:text-white">Todas as peças</td>
-                {nivel === 'unidade' && <td className="hidden md:table-cell" />}
-                <td className="px-4 py-2 text-right tabular-nums">{formatNumber(val.pecas)}</td>
-                {nivel === 'unidade' && <td colSpan={3} />}
-                <td className="px-4 py-2 text-right tabular-nums text-navy-900 dark:text-white">{formatMoney(val.custo)}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{formatMoney(val.atacado)}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{formatMoney(val.varejo)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-2 text-xs text-slate-400 dark:border-navy-800 dark:text-navy-300">
-        <span>
-          Produção = custo unitário do produto (ficha técnica). Atacado/varejo = preço de tabela × peças.
-          {val.semPrecoAtacado > 0 && <> * Sem preço de atacado cadastrado, vale o preço de varejo.</>}
-          {nivel === 'unidade' && val.produtosComSaldo > val.produtos.length && <> Exibindo os {formatNumber(val.produtos.length)} produtos de maior custo (de {formatNumber(val.produtosComSaldo)}).</>}
-        </span>
-        <Link to="/relatorios?relatorio=estoque-posicao" className="inline-flex items-center gap-1 font-medium text-navy-700 hover:underline dark:text-navy-200">
-          Relatório completo <ArrowRight className="h-3 w-3" />
-        </Link>
-      </div>
-    </section>
-  );
+/** Seções dependentes do período mostram isto; quem tenta de novo é o bloco de indicadores acima. */
+function IndisponivelPeriodo() {
+  return <p className="px-4 py-8 text-center text-sm text-muted">Indisponível: veja o aviso dos indicadores e use "Tentar novamente".</p>;
 }
 
-function QuickLink({ to, icon: Icon, title, text }: { to: string; icon: any; title: string; text: string }) {
+function formatData(iso: string) {
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+function QuickLink({ to, icon: Icon, title, text }: { to: string; icon: typeof Package; title: string; text: string }) {
   return (
-    <Link to={to} className="card flex items-center gap-3 p-4 transition-colors hover:border-navy-300 dark:hover:border-navy-600">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-navy-50 text-navy-700 dark:bg-navy-800 dark:text-navy-300">
-        <Icon className="h-5 w-5" />
+    <Link to={to} className="flex items-center gap-3 rounded-xl border border-line bg-surface p-4 shadow-card transition-colors hover:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:shadow-none">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-canvas text-ink-soft">
+        <Icon className="h-5 w-5" aria-hidden="true" />
       </span>
       <div className="min-w-0">
-        <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">{title}</div>
-        <div className="truncate text-xs text-slate-500 dark:text-navy-300">{text}</div>
+        <div className="text-sm font-semibold text-ink">{title}</div>
+        <div className="truncate text-xs text-muted">{text}</div>
       </div>
-      <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-slate-300 dark:text-navy-600" />
-    </Link>
-  );
-}
-
-/**
- * Cartão de KPI do padrão "Brobond AI ERP": superfície escura translúcida e
- * uniforme (sem blocos sólidos de cor), com o destaque cromático só na
- * tipografia monoespaçada do valor e num badge sutil no topo do cartão.
- */
-function KpiCard({
-  to,
-  icon: Icon,
-  label,
-  value,
-  sub,
-  accent,
-  badge,
-  testId,
-}: {
-  to: string;
-  icon: LucideIcon;
-  label: string;
-  value: string;
-  sub: string;
-  accent: string;
-  badge?: string;
-  testId?: string;
-}) {
-  return (
-    <Link
-      to={to}
-      data-testid={testId}
-      className="card group relative overflow-hidden p-5 transition-colors hover:border-slate-700 dark:hover:bg-slate-900/70"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <span className={`inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] dark:border-slate-800/60 dark:bg-slate-800/40 ${accent}`}>
-          <Icon className="h-3 w-3" />
-          {badge ?? label}
-        </span>
-        <ArrowRight className="h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 dark:text-slate-600" />
-      </div>
-      <div className={`kpi-value mt-3 truncate ${accent}`} title={value}>
-        {value}
-      </div>
-      <div className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</div>
-      <div className="truncate text-xs text-slate-400 dark:text-slate-500" title={sub}>
-        {sub}
-      </div>
+      <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
     </Link>
   );
 }
