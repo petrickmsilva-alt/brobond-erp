@@ -14,7 +14,7 @@
 //   • nenhuma ação dispara sozinha: ações em lote só expõem callbacks.
 // ============================================================================
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ArrowDown, ArrowUp, MoreHorizontal } from 'lucide-react';
+import { ArrowDown, ArrowUp, Calendar, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, MoreHorizontal } from 'lucide-react';
 import {
   descreverDiaBR,
   diaDaSemana,
@@ -766,9 +766,7 @@ export function DatePicker({
         className={cx('input flex items-center justify-between text-left tabular-nums', invalid && 'input-error', !value && 'text-slate-400 dark:text-slate-500')}
       >
         <span>{value ? formatarDiaBR(value) : placeholder}</span>
-        <span aria-hidden="true" className="text-xs text-slate-400">
-          📅
-        </span>
+        <Calendar className="h-4 w-4 text-slate-400" aria-hidden="true" />
       </button>
 
       {aberto && (
