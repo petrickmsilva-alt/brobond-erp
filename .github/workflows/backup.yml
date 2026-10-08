@@ -1,0 +1,160 @@
+# ============================================================================
+# BROBOND ERP — backup diário do Postgres
+#
+# Roda todo dia às 04:00 UTC (o cron do GitHub Actions é SEMPRE em UTC), gera
+# um dump em formato custom comprimido com zstd, prova que ele é restaurável e
+# guarda o artefato por 90 dias. Se qualquer passo falhar, abre uma issue.
+#
+# Segredo necessário (Settings › Secrets and variables › Actions):
+#   DATABASE_URL — URL de conexão do Postgres de produção
+#
+# A prova de restore cria e apaga um banco temporário `brobond_restore_check_*`
+# no MESMO servidor. Isso exige o privilégio CREATEDB no usuário da
+# DATABASE_URL. Se o usuário não tiver, defina o secret SKIP_RESTORE_CHECK=1
+# para pular a prova — mas saiba que aí o dump deixa de ser testado.
+# ============================================================================
+name: Backup do Postgres
+
+on:
+  schedule:
+    # 04:00 UTC, todos os dias.
+    - cron: '0 4 * * *'
+  # Disparo manual pela aba Actions (útil para testar sem esperar o cron).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Necessário só para o passo de alerta abrir/atualizar a issue.
+  issues: write
+
+# Nunca deixa dois backups rodando ao mesmo tempo. `cancel-in-progress: false`
+# é de propósito: um backup em andamento não deve ser cancelado no meio, senão
+# o dump sai truncado.
+concurrency:
+  group: backup-postgres-diario
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Dump + zstd + prova de restore
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SKIP_RESTORE_CHECK: ${{ vars.SKIP_RESTORE_CHECK || '0' }}
+      BACKUP_DIR: ${{ github.workspace }}/backups
+
+    steps:
+      - name: Exigir o segredo DATABASE_URL
+        run: |
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::O segredo DATABASE_URL não está configurado neste repositório."
+            echo "Configure em Settings › Secrets and variables › Actions › New repository secret."
+            exit 1
+          fi
+          echo "Segredo DATABASE_URL presente."
+
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar postgresql-client e zstd
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client zstd
+          pg_dump --version
+          pg_restore --version
+          zstd --version
+
+      - name: Executar o backup
+        id: backup
+        # `shell: bash` liga o pipefail do runner — sem ele, `ls | head` engole
+        # a falha do ls e o passo seguiria com o nome do artefato vazio.
+        shell: bash
+        run: |
+          chmod +x scripts/backup-postgres.sh
+          ./scripts/backup-postgres.sh
+          # Nome do artefato vem do arquivo gerado: backup-<stamp>.
+          arquivo="$(ls -1t "${BACKUP_DIR}"/brobond-*.dump.zst 2>/dev/null | head -1 || true)"
+          if [ -z "${arquivo}" ]; then
+            echo "::error::O script terminou mas nenhum dump foi gerado em ${BACKUP_DIR}."
+            exit 1
+          fi
+          {
+            echo "arquivo=${arquivo}"
+            echo "nome=backup-$(basename "${arquivo}" .dump.zst)"
+            echo "tamanho=$(du -h "${arquivo}" | cut -f1)"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Resumo da execução
+        if: always()
+        run: |
+          {
+            echo "## 🗄️ Backup do Postgres"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Passo de backup | ${{ steps.backup.outcome || 'não executado' }} |"
+            echo "| Arquivo   | \`${{ steps.backup.outputs.arquivo || 'não gerado' }}\` |"
+            echo "| Tamanho   | ${{ steps.backup.outputs.tamanho || '—' }} |"
+            echo "| Retenção do artefato | 90 dias |"
+            echo ""
+            echo "O log completo do script traz a contagem de tabelas da prova de restore."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Publicar o dump como artefato (90 dias)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.backup.outputs.nome || 'backup-indisponivel' }}
+          path: ${{ steps.backup.outputs.arquivo }}
+          retention-days: 90
+          # O dump já saiu comprimido com zstd; recomprimir no upload só gasta
+          # CPU e não reduz quase nada.
+          compression-level: 0
+          # Sem arquivo = erro, nunca um artefato vazio que parece sucesso.
+          if-no-files-found: error
+
+      - name: Abrir issue alertando a falha
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          ROTULO='backup-falhou'
+
+          # O rótulo pode não existir ainda num repositório novo.
+          gh label create "${ROTULO}" \
+            --description 'O backup diário do Postgres falhou' \
+            --color 'D93F0B' --force
+
+          # Não empilha uma issue por dia: se já existe uma aberta, só comenta.
+          EXISTENTE="$(gh issue list --state open --label "${ROTULO}" \
+            --search 'Backup diário do Postgres falhou' \
+            --json number --jq '.[0].number // empty')"
+
+          CORPO=$(cat <<EOF
+          O workflow **Backup do Postgres** falhou em $(date -u '+%Y-%m-%d %H:%M UTC').
+
+          - Execução: ${RUN_URL}
+          - Arquivo: \`${GITHUB_WORKFLOW}\` / job \`backup\`
+
+          **O que fazer**
+          1. Abrir a execução acima e ler o log do passo *Executar o backup*.
+          2. \`pg_dump\` falhando = banco inacessível ou credencial trocada.
+          3. \`pg_restore\` falhando = dump inválido; o usuário precisa de \`CREATEDB\`
+             para a prova de restore, ou \`SKIP_RESTORE_CHECK=1\` enquanto isso é resolvido.
+          4. Enquanto isto estiver aberto, **não há backup recente**. Trate como incidente.
+          EOF
+          )
+
+          if [ -n "${EXISTENTE}" ]; then
+            gh issue comment "${EXISTENTE}" --body "Ainda falhando: ${RUN_URL}"
+            echo "Issue #${EXISTENTE} já existia — comentário adicionado."
+          else
+            gh issue create \
+              --title "Backup diário do Postgres falhou" \
+              --label "${ROTULO}" \
+              --body "${CORPO}"
+            echo "Issue criada."
+          fi

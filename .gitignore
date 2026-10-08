@@ -8,6 +8,12 @@ build/
 # Testes
 coverage/
 
+# Backups do Postgres (scripts/backup-postgres.sh)
+# Contêm dado de cliente (documento, endereço, financeiro) — nunca no Git.
+backups/
+*.dump
+*.dump.zst
+
 # Ambiente
 .env
 .env.local

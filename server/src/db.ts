@@ -2,6 +2,7 @@ import { Pool, type PoolClient, type QueryResult } from 'pg';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { withSchemaMigrationLock } from './db/advisory-lock';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -119,15 +120,15 @@ export async function migrate(): Promise<void> {
   // boot do perdedor à toa. Um advisory lock de sessão serializa tudo; o
   // segundo processo espera e, quando entra, encontra tudo já aplicado
   // (IF NOT EXISTS / ON CONFLICT DO NOTHING).
-  const lockClient = await pool.connect();
-  try {
-    await lockClient.query(`SELECT pg_advisory_lock(hashtext('brobond_schema_bootstrap'))`);
+  //
+  // O lock mora em src/db/advisory-lock.ts, com chave fixa 727272 e prazo de
+  // espera: se alguém travar segurando o lock, o boot aborta com diagnóstico
+  // em vez de pendurar para sempre. NÃO troque a chave sem ler o aviso de
+  // deploy que está lá.
+  await withSchemaMigrationLock(pool, async (lockClient) => {
     await lockClient.query(sql);
     await aplicarMigrationsVersionadas(lockClient);
-  } finally {
-    await lockClient.query(`SELECT pg_advisory_unlock(hashtext('brobond_schema_bootstrap'))`).catch(() => undefined);
-    lockClient.release();
-  }
+  });
   ready = true;
   console.log('🗄️  Schema verificado/migrado (db/schema.sql + db/migrations).');
 }

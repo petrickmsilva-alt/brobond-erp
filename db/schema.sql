@@ -1618,7 +1618,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SET search_path = pg_catalog, public;
 
 DO $$
 DECLARE
@@ -2732,7 +2732,7 @@ RETURNS NUMERIC AS $$
   FROM compra_recebimento_itens cri
   JOIN compra_recebimentos cr ON cr.id = cri.recebimento_id
   WHERE cri.item_compra_id = item_id;
-$$ LANGUAGE sql IMMUTABLE;
+$$ LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, public;
 
 ALTER TABLE itens_compra DROP CONSTRAINT IF EXISTS itens_compra_nao_excede_pedido;
 DO $$ BEGIN
