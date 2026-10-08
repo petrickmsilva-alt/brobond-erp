@@ -1,0 +1,270 @@
+diff --git a/scripts/backup-postgres.sh b/scripts/backup-postgres.sh
+new file mode 100755
+--- /dev/null
++++ b/scripts/backup-postgres.sh
+@@ -0,0 +1,77 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# ============================================================================
++# Backup automatizado do Postgres — Brobond ERP
++#
++# Uso:
++#   DATABASE_URL=postgres://... BACKUP_DIR=/backups ./scripts/backup-postgres.sh
++#
++# O que faz:
++#   1. pg_dump em formato custom
++#   2. Compressão zstd
++#   3. Validação do dump (restore em banco temporário)
++#   4. Retenção configurável (padrão: 30 dias)
++# ============================================================================
++
++: "${DATABASE_URL:?Defina DATABASE_URL}"
++: "${BACKUP_DIR:=/backups}"
++: "${RETENTION_DAYS:=30}"
++: "${VALIDATE_RESTORE:=true}"
++
++STAMP="$(date +%F_%H-%M-%S)"
++FILE="${BACKUP_DIR}/brobond-${STAMP}.dump.zst"
++LOCK="/tmp/brobond-backup.lock"
++
++mkdir -p "${BACKUP_DIR}"
++
++# Evita dois backups simultâneos
++exec 9>"${LOCK}"
++if ! flock -n 9; then
++  echo "Outro backup em andamento — abortando."
++  exit 0
++fi
++
++# Monta a URL por banco preservando a query string (?sslmode=require etc.)
++QUERY_STRING=""
++case "${DATABASE_URL}" in
++  *\?*) QUERY_STRING="${DATABASE_URL#*\?}" ;;
++esac
++BASE_PREFIX="${DATABASE_URL%%\?*}"
++BASE_PREFIX="${BASE_PREFIX%/*}"
++
++url_for() {
++  if [ -n "${QUERY_STRING}" ]; then
++    printf '%s/%s?%s' "${BASE_PREFIX}" "$1" "${QUERY_STRING}"
++  else
++    printf '%s/%s' "${BASE_PREFIX}" "$1"
++  fi
++}
++
++echo "[backup] Iniciando ${STAMP}"
++
++pg_dump --format=custom --no-owner --no-privileges "${DATABASE_URL}" \
++  | zstd -T0 -19 -o "${FILE}"
++
++echo "[backup] Dump gerado: ${FILE} ($(du -h "${FILE}" | cut -f1))"
++
++if [ "${VALIDATE_RESTORE}" = "true" ]; then
++  TMPDB="brobond_restore_check_${STAMP}"
++  ADMIN_URL="$(url_for postgres)"
++
++  cleanup() {
++    psql "${ADMIN_URL}" -qc "DROP DATABASE IF EXISTS \"${TMPDB}\"" >/dev/null 2>&1 || true
++  }
++  trap cleanup EXIT
++
++  psql "${ADMIN_URL}" -qc "CREATE DATABASE \"${TMPDB}\"" >/dev/null
++  zstd -dc "${FILE}" | pg_restore --dbname="$(url_for "${TMPDB}")" --exit-on-error
++  echo "[backup] Restore de validação OK"
++
++  cleanup
++  trap - EXIT
++fi
++
++find "${BACKUP_DIR}" -name 'brobond-*.dump.zst' -mtime "+${RETENTION_DAYS}" -delete
++echo "[backup] Retenção aplicada: ${RETENTION_DAYS} dias"
++echo "[backup] Concluído"
+diff --git a/.github/workflows/backup.yml b/.github/workflows/backup.yml
+new file mode 100644
+--- /dev/null
++++ b/.github/workflows/backup.yml
+@@ -0,0 +1,49 @@
++name: Backup diário do Postgres
++
++on:
++  schedule:
++    - cron: '0 4 * * *'   # 04:00 UTC todo dia
++ +      - uses: actions/checkout workflow_dispatch: {}
++
++concurrency:
++  group: backup-postgres
++  cancel-in-progress: false
++
++jobs:
++  backup:
++    runs-on: ubuntu-l@v4
++
++      - name: Instalar dependências
++        run: sudo apt-get update && sudo apt-get install -y postgresql-client zstd
++
++      - name: Gerar backup
++        env:
++          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
++          BACKUP_DIR: ${{ runner.temp }}/backups
++          RETENTION_DAYS: '30'
++          VALIDATE_RESTORE: 'true'
++        run: bash scripts/backup-postgres.sh
++
++      - name: Persistir artefato (90 dias)
++        uses: actions/upload-artifact@v4
++        with:
++          name: brobond-backup-${{ github.run_id }}
++          path: ${{ runner.temp }}/backups/*.dump.zst
++          retention-days: 90
++          if-no-files-found: error
++
++      - name: Alerta em caso de falha
++        if: failure()
++        uses: actions/github-script@v7
++        with:
++          script: |
++            await github.rest.issues.create({
++              owner: context.repo.owner,
++              repo: context.repo.repo,
++              title: 'FALHA NO BACKUP AUTOMÁTICO',
++              labels: ['crítico', 'backup'],
++              body: 'Backup diário falhou em ' + new Date().toISOString() + '. Verifique imediatamente.'
++            });
+diff --git a/server/src/db/advisory-lock.ts b/server/src/db/advisory-lock.ts
+new file mode 100644
+--- /dev/null
++++ b/server/src/db/advisory-lock.ts
+@@ -0,0 +1,40 @@
++import type { PrismaClient } from '@prisma/client';
++
++/**
++ * Advisory lock para impedir migrações concorrentes.
++ *
++ * Uso:
++ *   await withAdvisoryLock(prisma, async () => {
++ *     await aplicarMigracoes(prisma);
++ *   });
++ */
++
++const LOCK_KEY = 727272;
++
++export async function withAdvisoryLock<T>(
++  prisma: PrismaClient,
++  fn: () => Promise<T>,
++  timeoutMs = 60_000
++): Promise<T> {
++  const deadline = Date.now() + timeoutMs;
++
++  for (;;) {
++    const rows = await prisma.$queryRaw<{ locked: boolean }[]>`
++      SELECT pg_try_advisory_lock(${LOCK_KEY}) AS locked
++    `;
++    if (rows[0]?.locked) break;
++
++    if (Date.now() > deadline) {
++      throw new Error(
++        `Não foi possível adquirir advisory lock (${LOCK_KEY}) em ${timeoutMs}ms`
++      );
++    }
++    await new Promise((resolve) => setTimeout(resolve, 500));
++  }
++
++  try {
++    return await fn();
++  } finally {
++    await prisma.$queryRaw`SELECT pg_advisory_unlock(${LOCK_KEY})`;
++  }
++}
+diff --git a/docs/AUDITORIA.md b/docs/AUDITORIA.md
+new file mode 100644
+--- /dev/null
++++ b/docs/AUDITORIA.md
+@@ -0,0 +1,93 @@
++# Auditoria —atest
++    timeout-minutes: 30
++    steps:
+ Brobond ERP
++
++> Auditoria baseada na documentação do repositório (README, estrutura, rotas e
++> roadmap). Itens marcados com **(verificar no código)** exigem inspeção direta
++> para confirmação. Data: 2026-10-08.
++
++## Tags sugeridas
++
++`erp` `inventory-management` `react` `typescript` `nodejs` `express`
++`postgresql` `prisma` `monorepo` `jwt` `mfa-totp` `garment-industry`
++`omnichannel` `woocommerce` `mercado-livre` `brazil` `nf-e`
++
++## Status por dimensão
++
++| Dimensão | Avaliação |
++| --- | --- |
++| Maturidade funcional | Alta — módulos de estoque, produção, vendas, financeiro e BI |
++| Maturidade de segurança | Boa para o porte (Argon2id, MFA, sessões, auditoria com hash chain) |
++| Maturidade fiscal | Baixa — NF-e apenas em simulação, sem emissor real |
++| Maturidade operacional | Média — CI existe, sem monitoramento nem alerta |
++| Risco de perda de dados | Alto — mitigado pelo backup diário aplicado neste patch |
++| Dívida técnica | Média — dois sistemas de migração, testes de integração não obrigatórios |
++
++## Bugs e problemas
++
++### Críticos
++
++| # | Problema | Impacto | Status |
++| --- | --- | --- | --- |
++| B1 | Credenciais padrão documentadas no README (`brobond123`) | Acesso total ao sistema | pendente |
++| B2 | NF-e sem emissor real — `NFE_API_KEY` nunca consumida | Bloqueio de compliance fiscal | pendente |
++| B3 | Sem backup automatizado + Postgres gratuito apaga dados em 30 dias | Perda irreversível | corrigido neste patch |
++| B4 | Testes de integração com `continue-on-error` | Oversell, estoque negativo | pendente (bloco B) |
++
++### Altos
++
++| # | Problema | Impacto |
++| --- | --- | --- |
++| B5 | Migrações rodam no boot sem advisory lock (verificar) | Corrupção de schema em deploy |
++| B6 | Dois sistemas de evolução de banco (`schema.sql` + `migrations/`) | Divergência de schema |
++| B7 | `APP_URL` deduzida da requisição como fallback (verificar) | Host header injection |
++| B8 | Tokens de convite/reset sem uso único nem revog alerta deação (verificar) | Replay, brute force |
++| B9 | Contradição: conectores na Fase 1 vs Fase 2 | Onboarding quebrado |
++| B10 | Catálogo público por token sem rotação (verificar) | Vazamento de preço |
++
++### Médios
++
++| # | Problema |
++| --- | --- |
++| B11 | Roadmap com ordem e versionamento inconsistentes |
++| B12 | Upload de fotos em base64 sem limite de body (verificar) |
++| B13 | API sem versionamento e sem OpenAPI |
++| B14 | WooCommerce sem webhook — importação manual (verificar) |
++| B15 | Só 3 perfis, sem segregação por módulo nem por empresa |
++| B16 | Tipagem monetária não declarada (`DECIMAL` vs `float`) (verificar) |
++| B17 | LGPD não tratada (retenção, consentimento, exclusão) |
++| B18 | Política de força de senha e bloqueio não documentadas (verificar) |
++
++### Baixos / dívida técnica
++
++- B19: sem testes de frontend no CI
++- B20: `any` aceito no lint — erosão de type safety
++- B21: sem observabilidade (APM, alertas, monitorência de código órfão após remoção de Shopee/TikTok
++- B23: roadmap sem critério de aceite
++
++## Plano de correção
++
++### Imediato
++
++1. Backup automatizado diário (aplicado neste patch)
++2. Trocar credencial de exemplo e exigir senha nova no primeiro login
++3. Remover `continue-on-error` do job `testes-postgres`
++4. Definir provedor real de NF-e ou sinalizar simulação na UI
++
++### Curto prazo (30 dias)
++
++5. Advisory lock nas migrações (helper aplicado neste patch — falta integrar)
++6 falha
+- server/src/db/advisory-lock.ts: helper de advisory lock (B5)
+- docs/AUDITORIA.md: auditoria versionada com status por item
+
+Ref.: itens B3, B5, B23 da auditoria"
+
+git push -u origin fix/auditoria-bloco-a
