@@ -11,6 +11,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit } from './empresa';
 import { getStore } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
@@ -116,6 +117,7 @@ export async function sendMessage(req: Request, res: Response) {
     registro_id: paraId,
     descricao: `Mensagem de ${actor.name} para ${destinatario.nome}`,
     dados: { de_id: actor.id, de_nome: actor.name, para_id: paraId, para_nome: destinatario.nome, texto, lido: false },
+    empresa_id: empresaDoAtorAudit(actor),
   });
 
   res.status(201).json({ ok: true });

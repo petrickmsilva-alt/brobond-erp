@@ -394,7 +394,10 @@ export class MemStore implements Store {
     const anterior = t.rows.get(t.rows.size ? Math.max(...t.rows.keys()) : 0);
     const hash_anterior = anterior?.hash ? String(anterior.hash) : '';
     const hash = hashCadeiaAuditoria(hash_anterior, entry);
-    t.rows.set(id, { id, data: new Date().toISOString(), ...entry, dados: entry.dados ?? null, hash_anterior, hash });
+    // O tipo exige empresa_id, mas chamadas legadas/diretas (testes, jobs)
+    // podem omitir em runtime: nunca grava sem empresa (coluna NOT NULL).
+    const empresa_id = entry.empresa_id ?? EMPRESA_PADRAO;
+    t.rows.set(id, { id, data: new Date().toISOString(), ...entry, empresa_id, dados: entry.dados ?? null, hash_anterior, hash });
     // mantém só os últimos 2000 eventos em memória
     if (t.rows.size > 2000) t.rows.delete(Math.min(...t.rows.keys()));
   }

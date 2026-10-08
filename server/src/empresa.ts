@@ -94,6 +94,56 @@ function normalizarPermitidas(actor: AtorEmpresa, padrao: number): number[] {
   return [...new Set(lista)];
 }
 
+/**
+ * O que a auditoria precisa saber de um ator: só os campos de empresa. Tudo
+ * opcional de propósito — aceita AuthUser, Actor, linha de usuário (Row) e
+ * até o ator mínimo {id, name} dos fluxos internos (que cai na padrão).
+ */
+export type AtorAudit = {
+  id?: number | null;
+  name?: string | null;
+  empresa_id?: number | null;
+  pode_consolidar?: boolean;
+  empresas?: number[];
+  empresa_sessao?: number | null;
+  consolidar?: boolean;
+};
+
+/**
+ * Empresa de um evento de auditoria a partir do ATOR: o escopo da sessão no
+ * momento do evento (empresa ativa). Usado quando a operação não tem um
+ * registro-alvo com empresa própria (login, MFA, chat, troca de empresa...).
+ * Ator sem empresa (jobs do sistema, ator mínimo {id, name}) cai na padrão.
+ */
+export function empresaDoAtorAudit(actor: AtorAudit | null | undefined): number {
+  return escopoDoAtor(actor as AtorEmpresa).empresaId;
+}
+
+/**
+ * Empresa EXPLÍCITA com fallback para o ator: para eventos sobre linhas de
+ * tabelas internas sem Resource com escopo (cobranças de gateway, eventos de
+ * comissão) — a empresa do fato quando conhecida, senão a da sessão.
+ */
+export function empresaExplicitaAudit(empresaId: unknown, actor: AtorAudit | null | undefined): number {
+  const n = Number(empresaId);
+  return Number.isInteger(n) && n > 0 ? n : empresaDoAtorAudit(actor);
+}
+
+/**
+ * Empresa de um evento de auditoria sobre um REGISTRO: a empresa do PRÓPRIO
+ * registro quando o recurso tem escopo — inclusive em modo consolidado, onde
+ * o ator pode tocar um registro de outra empresa — senão a do ator.
+ * Recebe a linha ANTES da operação (update/delete) ou a linha carimbada
+ * (create), nunca dado lido depois.
+ */
+export function empresaDoRegistroAudit(r: Resource, row: Row | null | undefined, actor: AtorAudit | null | undefined): number {
+  if (row && temEscopoEmpresa(r)) {
+    const dono = Number(row.empresa_id);
+    if (Number.isInteger(dono) && dono > 0) return dono;
+  }
+  return empresaDoAtorAudit(actor);
+}
+
 /** O ator pode operar nesta empresa? */
 export function podeAcessarEmpresa(actor: AtorEmpresa | null | undefined, empresaId: number): boolean {
   const escopo = escopoDoAtor(actor);

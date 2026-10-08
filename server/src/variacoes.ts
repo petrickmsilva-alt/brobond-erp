@@ -25,7 +25,7 @@ import { checkAccess, getStore, createRecord } from './services';
 import { currentUser, type AuthUser } from './auth';
 import { parseId } from './validate';
 import type { Row, Tx } from './store';
-import { assertRegistroDaEmpresa, escopoDoAtor } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, empresaDoRegistroAudit } from './empresa';
 
 const R_PRODUTOS = () => getResource('produtos')!;
 
@@ -294,6 +294,7 @@ export async function gerarVariacoes(req: Request, res: Response) {
       recurso: 'produtos',
       registro_id: produtoId,
       descricao: `${criadas.length} variação(ões) gerada(s) a partir de ${pai.sku}${mantidas.length ? ` (${mantidas.length} já existiam)` : ''}`,
+      empresa_id: empresaDoRegistroAudit(R_PRODUTOS(), pai, actor),
       dados: { criadas: criadas.map((p) => p.sku), mantidas: mantidas.map((m) => m.sku) },
     });
   }

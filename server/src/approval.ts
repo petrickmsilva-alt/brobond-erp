@@ -21,7 +21,7 @@ import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getStore, podeComercial, toHttpError } from './services';
-import { assertRegistroDaEmpresa, escopoDoAtor } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, empresaDoRegistroAudit } from './empresa';
 import { currentUser, requireAuth } from './auth';
 import type { AuthUser } from './auth';
 import type { Row, Tx } from './store';
@@ -148,6 +148,7 @@ export async function aprovarPedido(req: Request, res: Response) {
       recurso: resourceKey,
       registro_id: id,
       descricao: `${r.singular} #${id} APROVADO por ${actor.name} (valor: R$ ${fmtMoney(Number(pedido.total || 0))})`,
+      empresa_id: empresaDoRegistroAudit(r, pedido, actor),
       dados: { acao: 'aprovar', aprovador: actor.name },
     }, tx);
   });
@@ -194,6 +195,7 @@ export async function rejeitarPedido(req: Request, res: Response) {
       registro_id: id,
       descricao: `${r.singular} #${id} REJEITADO por ${actor.name}: ${motivo}`,
       dados: { acao: 'rejeitar', motivo, rejeitado_por: actor.name },
+      empresa_id: empresaDoRegistroAudit(r, pedido, actor),
     }, tx);
   });
 

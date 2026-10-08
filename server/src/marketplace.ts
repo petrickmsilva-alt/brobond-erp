@@ -12,6 +12,7 @@
 // importa pedidos da loja e empurra o saldo do ERP para ela.
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit } from './empresa';
 import { getStore } from './services';
 import { getResource } from './resources';
 import { currentUser } from './auth';
@@ -77,6 +78,7 @@ export async function sincronizarPedidos(req: Request, res: Response) {
     registro_id: null,
     descricao: `Sincronizacao ${provider}: ${resultados.length} pedido(s) importado(s)`,
     dados: { provider, pedidos: resultados.length },
+    empresa_id: empresaDoAtorAudit(actor),
   });
 
   res.json({ provider, sincronizados: resultados.length, pedidos: resultados });

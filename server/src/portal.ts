@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit, empresaDoRegistroAudit } from './empresa';
 import { RESOURCES } from './resources';
 import { getStore } from './services';
 import { labelOf, type Row } from './store';
@@ -102,7 +103,7 @@ export async function decidirCotacao(req: Request, res: Response) {
     await s.insert(RESOURCES.cotacao_decisoes, { venda_id: id, cliente_id: Number(cliente.id), decisao, responsavel, mensagem: mensagem || null, proposta_hash, ip: String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim(), user_agent: String(req.headers['user-agent'] || '').slice(0, 500) }, tx);
     const status = decisao === 'aceitar' ? 'aberta' : decisao === 'recusar' ? 'cancelada' : 'cotacao';
     await s.update(RESOURCES.vendas, id, { status, observacoes: [venda.observacoes, `[Portal: ${responsavel} — ${decisao}${mensagem ? `: ${mensagem}` : ''}]`].filter(Boolean).join('\n') }, tx);
-    await s.audit({ usuario_id: null, usuario: `Portal — ${responsavel}`, acao: 'editar', recurso: 'vendas', registro_id: id, descricao: `Cotação #${id}: cliente decidiu ${decisao}`, dados: { decisao, proposta_hash } }, tx);
+    await s.audit({ usuario_id: null, usuario: `Portal — ${responsavel}`, acao: 'editar', recurso: 'vendas', registro_id: id, descricao: `Cotação #${id}: cliente decidiu ${decisao}`, dados: { decisao, proposta_hash }, empresa_id: empresaDoRegistroAudit(RESOURCES.clientes, cliente, null) }, tx);
   });
   res.json({ ok: true, mensagem: decisao === 'aceitar' ? 'Cotação aceita e pedido confirmado.' : decisao === 'recusar' ? 'Cotação recusada.' : 'Solicitação de alteração enviada.' });
 }
@@ -128,7 +129,7 @@ export async function gerarAcessoPortal(req: Request, res: Response) {
   // Origem pública centralizada (APP_URL → cabeçalhos da requisição) — ver urlPublica.ts.
   const base = await urlBasePublicaAsync(req);
   const acesso = await criarAcessoPortal(clienteId, base, Number(req.body?.validade_dias) || 90);
-  await s.audit({ usuario_id: actor.id, usuario: actor.name, acao: 'criar', recurso: 'clientes', registro_id: clienteId, descricao: `Novo acesso seguro ao portal gerado para ${cliente.nome}`, dados: { expira_em: acesso.expira_em } });
+  await s.audit({ usuario_id: actor.id, usuario: actor.name, acao: 'criar', recurso: 'clientes', registro_id: clienteId, descricao: `Novo acesso seguro ao portal gerado para ${cliente.nome}`, dados: { expira_em: acesso.expira_em }, empresa_id: empresaDoRegistroAudit(RESOURCES.clientes, cliente, actor) });
   res.status(201).json(acesso);
 }
 
@@ -139,7 +140,7 @@ export async function revogarAcessoPortal(req: Request, res: Response) {
   const acesso = await s.findOneWhere(RESOURCES.portal_acessos, { id: acessoId, cliente_id: clienteId });
   if (!acesso) throw new HttpError(404, 'Acesso não encontrado.');
   if (!acesso.revogado_em) await s.update(RESOURCES.portal_acessos, acessoId, { revogado_em: new Date().toISOString() });
-  await s.audit({ usuario_id: actor.id, usuario: actor.name, acao: 'editar', recurso: 'clientes', registro_id: clienteId, descricao: `Acesso #${acessoId} ao portal revogado`, dados: { acesso_id: acessoId } });
+  await s.audit({ usuario_id: actor.id, usuario: actor.name, acao: 'editar', recurso: 'clientes', registro_id: clienteId, descricao: `Acesso #${acessoId} ao portal revogado`, dados: { acesso_id: acessoId }, empresa_id: empresaDoAtorAudit(actor) });
   res.json({ ok: true });
 }
 
@@ -159,7 +160,7 @@ export async function recomprarPedido(req: Request, res: Response) {
       await s.insert(RESOURCES.itens_venda, { venda_id: Number(venda.id), produto_id: Number(item.produto_id), tamanho_id: Number(item.tamanho_id), quantidade, preco_unitario: preco, desconto_pct: 0, subtotal: Math.round(preco * quantidade * 100) / 100 }, tx);
     }
     const { recalcularTotal } = await import('./itens'); const total = await recalcularTotal('venda', Number(venda.id), tx);
-    await s.audit({ usuario_id: null, usuario: `Portal — ${cliente.nome}`, acao: 'criar', recurso: 'vendas', registro_id: Number(venda.id), descricao: `Recompra do pedido #${originalId} solicitada pelo portal`, dados: { pedido_origem: originalId, total } }, tx);
+    await s.audit({ usuario_id: null, usuario: `Portal — ${cliente.nome}`, acao: 'criar', recurso: 'vendas', registro_id: Number(venda.id), descricao: `Recompra do pedido #${originalId} solicitada pelo portal`, dados: { pedido_origem: originalId, total }, empresa_id: empresaDoRegistroAudit(RESOURCES.clientes, cliente, null) }, tx);
     return { id: Number(venda.id), total };
   });
   res.status(201).json({ ok: true, pedido_id: novo.id, total: novo.total, mensagem: 'Recompra criada como nova cotação para conferência.' });

@@ -25,6 +25,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit } from './empresa';
 import { checkAccess, getStore } from './services';
 import { RESOURCES } from './resources';
 import { currentUser } from './auth';
@@ -463,6 +464,7 @@ export async function importarPedidosLoja(req: Request, res: Response) {
       registro_id: null,
       descricao: `Importação da loja (${cfg.url}, status ${status}, ${dias} dias): ${importados.length} pedido(s) novo(s), ${ignorados.length} já importado(s), ${pendentes.length} pendente(s)`,
       dados: { origem: 'woocommerce', status, dias, importados, ignorados, pendentes },
+      empresa_id: empresaDoAtorAudit(actor),
     })
     .catch(() => undefined);
 
@@ -606,6 +608,7 @@ export async function sincronizarEstoqueLoja(req: Request, res: Response) {
       registro_id: null,
       descricao: `Estoque enviado para a loja (${cfg.url}): ${atualizados.length} SKU(s) atualizado(s), ${naoEncontrados.length} sem correspondência`,
       dados: { origem: 'woocommerce', atualizados: atualizados.length, nao_encontrados: naoEncontrados },
+      empresa_id: empresaDoAtorAudit(actor),
     })
     .catch(() => undefined);
 

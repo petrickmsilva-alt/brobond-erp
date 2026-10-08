@@ -36,6 +36,7 @@
 import type { Request, Response } from 'express';
 import type { PoolClient } from 'pg';
 import { hasDatabaseUrl, query, withTransaction } from './db';
+import { empresaExplicitaAudit, escopoDoAtor, exigirEmpresaPermitida } from './empresa';
 import { RESOURCES } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, type AuthUser } from './auth';
@@ -315,6 +316,22 @@ export function parseFiltrosBi(q: Record<string, unknown>): FiltrosBi {
   }
 
   return { de, ate, empresaId, canal, canais, status, ids: null };
+}
+
+/**
+ * MULTIEMPRESA (Etapa 2.1): o BI segue a política existente de escopo.
+ *
+ *   • empresa pedida (?empresa_id=) precisa ser CONCEDIDA ao ator (403 se
+ *     não for) — antes, qualquer gerente lia o faturamento de qualquer
+ *     empresa trocando o parâmetro;
+ *   • sem empresa pedida, vale a empresa ATIVA da sessão;
+ *   • leitura do grupo inteiro só em consolidação autorizada
+ *     (?consolidado=1 + privilégio pode_consolidar).
+ */
+function escopoEmpresaBi(actor: AuthUser, empresaPedida: number | null): number | null {
+  if (empresaPedida !== null) return exigirEmpresaPermitida(actor, empresaPedida);
+  const escopo = escopoDoAtor(actor);
+  return escopo.consolidado ? null : escopo.empresaId;
 }
 
 // ----------------------------------------------------------------------------
@@ -1218,7 +1235,7 @@ export type VendaManualPayload = {
 };
 
 /** Normaliza e valida o payload da venda manual (400 em qualquer inconsistência). */
-export async function validarVendaManual(body: unknown): Promise<VendaManualInput> {
+export async function validarVendaManual(body: unknown, actor: AuthUser): Promise<VendaManualInput> {
   const payload = (body || {}) as VendaManualPayload;
   const canalBruto = String(payload.canal || 'LOJA_FISICA').trim();
   if (!(CANAIS_VENDA as readonly string[]).includes(canalBruto)) {
@@ -1226,9 +1243,13 @@ export async function validarVendaManual(body: unknown): Promise<VendaManualInpu
   }
   const canal = canalBruto as CanalVenda;
 
-  let empresaId = 1;
+  // MULTIEMPRESA (Etapa 2.1): sem empresa informada, a venda cai na empresa
+  // ATIVA da sessão (antes caía sempre na 1); empresa informada precisa ser
+  // concedida ao ator — ninguém planta venda em empresa alheia.
+  const escopo = escopoDoAtor(actor);
+  let empresaId = escopo.empresaId;
   if (payload.empresa_id !== undefined && payload.empresa_id !== null && payload.empresa_id !== '') {
-    empresaId = inteiroObrigatorio(payload.empresa_id, 'empresa_id', 1);
+    empresaId = exigirEmpresaPermitida(actor, inteiroObrigatorio(payload.empresa_id, 'empresa_id', 1));
   }
 
   const statusBruto = String(payload.status || 'PAID').trim();
@@ -1365,6 +1386,7 @@ export async function negociosResumo(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'read');
   const filtros = parseFiltrosBi(queryDeRequisicao(req));
+  filtros.empresaId = escopoEmpresaBi(actor, filtros.empresaId);
   const repo = repoNegocios();
   const [vendas, itens, abc] = await Promise.all([
     repo.listarVendas(filtros, LIMITE_VENDAS_BI, 0),
@@ -1380,6 +1402,7 @@ export async function negociosMargens(req: Request, res: Response) {
   checkAccess(RESOURCES.vendas, actor, 'read');
   exigirGerente(actor);
   const filtros = parseFiltrosBi(queryDeRequisicao(req));
+  filtros.empresaId = escopoEmpresaBi(actor, filtros.empresaId);
   const limit = Math.min(1000, Math.max(1, Number(primeiroValor(req.query.limit)) || 200));
   const offset = Math.max(0, Number(primeiroValor(req.query.offset)) || 0);
   const repo = repoNegocios();
@@ -1420,6 +1443,7 @@ export async function negociosABC(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'read');
   const filtros = parseFiltrosBi(queryDeRequisicao(req));
+  filtros.empresaId = escopoEmpresaBi(actor, filtros.empresaId);
   const classe = primeiroValor(req.query.classe);
   if (classe !== null && classe !== '' && !['A', 'B', 'C'].includes(classe)) {
     throw new HttpError(400, `Filtro inválido: classe deve ser A, B ou C (recebi "${classe}").`);
@@ -1458,7 +1482,7 @@ export async function negociosVendaManual(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'create');
   if (!actor?.id) throw new HttpError(401, 'Usuário autenticado é obrigatório para registrar uma venda manual.');
-  const input = await validarVendaManual(req.body);
+  const input = await validarVendaManual(req.body, actor);
   const repo = repoNegocios();
   const venda = await repo.criarVendaManual(input, actor);
   // Curva ABC atualizada na hora — classificação contínua.
@@ -1471,6 +1495,7 @@ export async function negociosVendaManual(req: Request, res: Response) {
     registro_id: null,
     descricao: `Venda manual ${venda.reference} (${CANAL_LABEL[venda.canal] || venda.canal}) — R$ ${(venda.amountCents / 100).toFixed(2)} em ${venda.quantidade} peça(s)`,
     dados: { id: venda.id, canal: venda.canal, empresa_id: venda.empresaId, amount_cents: venda.amountCents, frete_cents: venda.freightCents },
+    empresa_id: empresaExplicitaAudit(venda.empresaId, actor),
   });
   const itens = await repo.listarItensVenda({ de: null, ate: null, empresaId: null, canal: null, canais: null, status: null, ids: [venda.id] });
   res.status(201).json({ venda, itens });

@@ -18,6 +18,7 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit } from './empresa';
 import { currentUser, exigirReautenticacao } from './auth';
 import { getStore } from './services';
 import type { Resource } from './resources';
@@ -318,6 +319,7 @@ export async function criarWebhook(req: Request, res: Response) {
       recurso: 'webhooks',
       registro_id: Number(row.id),
       descricao: `Webhook "${nome}" criado por ${actor.name} (${ev.eventos.length} evento(s))`,
+      empresa_id: empresaDoAtorAudit(actor),
     })
     .catch(() => undefined);
   res.status(201).json({ ...(publicar(row) as object), segredo });
@@ -367,6 +369,7 @@ export async function atualizarWebhook(req: Request, res: Response) {
       recurso: 'webhooks',
       registro_id: id,
       descricao: `Webhook "${String(atual.nome)}" alterado por ${actor.name}${segredoNovo ? ' (segredo regenerado)' : ''}`,
+      empresa_id: empresaDoAtorAudit(actor),
     })
     .catch(() => undefined);
   res.json({ ...((row ? publicar(row) : publicar({ ...atual, ...patch })) as object), ...(segredoNovo ? { segredo: segredoNovo } : {}) });
@@ -398,6 +401,7 @@ export async function excluirWebhook(req: Request, res: Response) {
       recurso: 'webhooks',
       registro_id: id,
       descricao: `Webhook "${String(atual.nome)}" excluído por ${actor.name}`,
+      empresa_id: empresaDoAtorAudit(actor),
     })
     .catch(() => undefined);
   res.json({ ok: true });

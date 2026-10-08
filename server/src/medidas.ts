@@ -18,6 +18,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit } from './empresa';
 import { RESOURCES } from './resources';
 import { checkAccess, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
@@ -375,6 +376,7 @@ export async function saveMedidasGrade(req: Request, res: Response) {
             acao: 'editar',
             recurso: 'grades',
             registro_id: id,
+            empresa_id: empresaDoAtorAudit(actor),
             descricao: `Tabela de medidas de "${String(grade.nome)}" atualizada — colunas: +${colunasNovas.length}${colunasRemovidas.length ? ` −${colunasRemovidas.length}` : ''} · valores: ${valoresCriados + valoresAlterados} gravado(s), ${valoresRemovidos} removido(s)`,
             dados: {
               colunas_novas: colunasNovas,

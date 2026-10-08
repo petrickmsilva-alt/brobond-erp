@@ -331,16 +331,52 @@ test('filtros estritos: canal por grupo (Loja Física/E-commerce/Marketplaces) e
 
 test('filtros estritos: empresa_id isola o faturamento da empresa', async () => {
   const empresa2 = Number((await createRecord(RESOURCES.empresas, { nome: 'Brobond Filial' }, admin)).id);
+  const gerenteMulti = { ...gerente, empresa_id: 1, empresas: [1, empresa2] };
   await vender({ canal: 'LOJA_FISICA', empresa_id: 1, occurred_at: '2026-04-01', itens: [{ product_id: p1, quantity: 1, unit_price_cents: 1000 }] });
-  await vender({ canal: 'BROBOND', empresa_id: empresa2, occurred_at: '2026-04-02', itens: [{ product_id: p2, quantity: 1, unit_price_cents: 4000 }] });
+  await vender({ canal: 'BROBOND', empresa_id: empresa2, occurred_at: '2026-04-02', itens: [{ product_id: p2, quantity: 1, unit_price_cents: 4000 }] }, gerenteMulti);
 
   const daEmpresa1 = await chamar(negociosResumo, mockReq(gerente, { empresa_id: '1' }));
   assert.equal(daEmpresa1.payload.kpis.faturamentoCents, 7000, 'jan 1000 + fev 2000 + mar 3000 + abr 1000 — nada da filial');
-  const daEmpresa2 = await chamar(negociosResumo, mockReq(gerente, { empresa_id: String(empresa2) }));
+  const daEmpresa2 = await chamar(negociosResumo, mockReq(gerenteMulti, { empresa_id: String(empresa2) }));
   assert.equal(daEmpresa2.payload.kpis.faturamentoCents, 4000, 'só a venda da filial');
   assert.equal(daEmpresa2.payload.kpis.pedidos, 1);
-  const semRegistro = await chamar(negociosResumo, mockReq(gerente, { empresa_id: '999' }));
-  assert.equal(semRegistro.payload.kpis.faturamentoCents, 0, 'empresa sem vendas retorna zero (não erro)');
+  // Empresa inexistente/não concedida: 403 (não revela se o id existe).
+  await assert.rejects(() => chamar(negociosResumo, mockReq(gerente, { empresa_id: '999' })), /não tem acesso/);
+});
+
+test('BI multiempresa: empresa não concedida responde 403 (resumo, margens, ABC, venda manual)', async () => {
+  const outra = Number((await createRecord(RESOURCES.empresas, { nome: 'Filial 403' }, admin)).id);
+  const soA = { ...gerente, empresa_id: 1, empresas: [1] };
+  await assert.rejects(() => chamar(negociosResumo, mockReq(soA, { empresa_id: String(outra) })), /não tem acesso/);
+  await assert.rejects(() => chamar(negociosMargens, mockReq(soA, { empresa_id: String(outra) })), /não tem acesso/);
+  await assert.rejects(() => chamar(negociosABC, mockReq(soA, { empresa_id: String(outra) })), /não tem acesso/);
+  await assert.rejects(
+    () => vender({ canal: 'LOJA_FISICA', empresa_id: outra, itens: [{ product_id: p1, quantity: 1, unit_price_cents: 100 }] }, soA),
+    /não tem acesso/
+  );
+});
+
+test('BI multiempresa: sem empresa_id filtra pela ativa; consolidado autorizado soma tudo', async () => {
+  const filial = Number((await createRecord(RESOURCES.empresas, { nome: 'Filial BI' }, admin)).id);
+  const gerenteA = { ...gerente, empresa_id: 1, empresas: [1] };
+  const gerenteB = { ...gerente, id: 22, empresa_id: filial, empresas: [filial] };
+  const auditor = { ...gerente, id: 23, empresa_id: 1, empresas: [1, filial], pode_consolidar: true, consolidar: true };
+  const antesCons = await chamar(negociosResumo, mockReq(auditor, {}));
+  await vender({ canal: 'LOJA_FISICA', empresa_id: 1, itens: [{ product_id: p1, quantity: 1, unit_price_cents: 1000 }] }, gerenteA);
+  await vender({ canal: 'LOJA_FISICA', empresa_id: filial, itens: [{ product_id: p1, quantity: 1, unit_price_cents: 5000 }] }, gerenteB);
+
+  const soB = await chamar(negociosResumo, mockReq(gerenteB, {}));
+  assert.equal(soB.payload.kpis.faturamentoCents, 5000, 'sem empresa_id, a filial vê só a filial');
+  const tudo = await chamar(negociosResumo, mockReq(auditor, {}));
+  assert.equal(tudo.payload.kpis.faturamentoCents - antesCons.payload.kpis.faturamentoCents, 6000, 'consolidado soma todas as empresas');
+
+  const abcB = await chamar(negociosABC, mockReq(gerenteB, {}));
+  assert.ok(abcB.payload.linhas.length > 0, 'a filial tem linhas na curva ABC');
+  assert.ok(abcB.payload.linhas.every((l: any) => l.empresaId === filial), 'ABC sem empresa_id filtra pela ativa');
+
+  // Venda manual sem empresa cai na ATIVA (antes caía sempre na 1).
+  const { payload } = await vender({ canal: 'LOJA_FISICA', itens: [{ product_id: p1, quantity: 1, unit_price_cents: 700 }] }, gerenteB);
+  assert.equal(payload.venda.empresaId, filial);
 });
 
 test('filtros estritos: status filtra a listagem de margens', async () => {
@@ -537,7 +573,6 @@ test('venda manual: payload inválido é rejeitado com 400 e mensagem clara', as
     { itens: [{ product_id: p1, quantity: 1, unit_price_cents: 1000, discount_cents: 99999 }] },
     { itens: [{ product_id: p1, quantity: 1, unit_price_cents: 1000, size_id: 987654 }] },
     { itens: [{ product_id: p1, quantity: 1, unit_price_cents: 1000 }], freight_cents: -10 },
-    { itens: [{ product_id: p1, quantity: 1, unit_price_cents: 1000 }], empresa_id: 777 },
     { itens: [{ product_id: p1, quantity: 1, unit_price_cents: 1000 }], status: 'REFUNDED' },
     { itens: [{ product_id: p1, quantity: 1, unit_price_cents: 1000 }], occurred_at: 'ontem' },
     { itens: [{ product_id: p1, quantity: 1, unit_price_cents: 1000 }], currency: 'reais' },

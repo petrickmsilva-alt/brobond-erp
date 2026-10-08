@@ -8,6 +8,7 @@ import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './r
 import { hashCadeiaAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
 import { sqlCivil } from './fuso';
+import { EMPRESA_PADRAO } from './empresa';
 import {
   labelOf,
   type AuditEntry,
@@ -394,9 +395,12 @@ export class PgStore implements Store {
       const prev = await q(`SELECT hash FROM auditoria WHERE hash IS NOT NULL ORDER BY id DESC LIMIT 1`, [], t);
       const hash_anterior = prev.rows[0]?.hash ? String(prev.rows[0].hash) : '';
       const hash = hashCadeiaAuditoria(hash_anterior, entry);
+      // O tipo exige empresa_id; o fallback protege chamadas legadas/diretas
+      // em runtime (a coluna é NOT NULL desde a migration 0017).
+      const empresaId = entry.empresa_id ?? EMPRESA_PADRAO;
       await q(
-        `INSERT INTO auditoria (usuario_id, usuario, acao, recurso, registro_id, descricao, dados, hash_anterior, hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        `INSERT INTO auditoria (usuario_id, usuario, acao, recurso, registro_id, descricao, dados, hash_anterior, hash, empresa_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           entry.usuario_id,
           entry.usuario,
@@ -407,6 +411,7 @@ export class PgStore implements Store {
           entry.dados === undefined ? null : JSON.stringify(entry.dados),
           hash_anterior,
           hash,
+          empresaId,
         ],
         t
       );

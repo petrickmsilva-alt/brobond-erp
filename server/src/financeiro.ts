@@ -17,7 +17,7 @@ import { currentUser, type AuthUser } from './auth';
 import type { Row, Tx } from './store';
 import { labelOf } from './store';
 import { round2, somaMoeda } from './utils';
-import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, EMPRESA_PADRAO, type EscopoEmpresa } from './empresa';
+import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, EMPRESA_PADRAO, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { estornarComissoesDaVenda, registrarComissaoPorRecebimento } from './comissoes';
 
 /**
@@ -319,6 +319,7 @@ async function criarLancamento(data: Row, actor: { id: number | null; name: stri
       recurso: r.key,
       registro_id: Number(row.id),
       descricao: `Lançamento financeiro criado — ${data.descricao} (${data.tipo})`,
+      empresa_id: empresaDoRegistroAudit(r, row, actor),
       dados: { tipo: data.tipo, valor: data.valor, referencia_tipo: data.referencia_tipo, referencia_id: data.referencia_id },
     },
     tx
@@ -339,6 +340,7 @@ async function atualizarLancamento(id: number, data: Row, actor: { id: number | 
         recurso: r.key,
         registro_id: id,
         descricao: `Lançamento financeiro atualizado — ${data.descricao || ''}`,
+        empresa_id: empresaDoRegistroAudit(r, updated, actor),
         dados: data,
       },
       tx
@@ -954,7 +956,7 @@ export async function processarRecorrencias(actor: { id: number | null; name: st
           tx
         );
         await s.audit(
-          { usuario_id: actor.id || null, usuario: actor.name || 'Sistema', acao: 'criar', recurso: 'lancamentos_financeiros', registro_id: Number(row.id), descricao: `Lançamento recorrente — ${rec.descricao}`, dados: { recorrencia_id: Number(rec.id), valor: Number(rec.valor || 0) } },
+          { usuario_id: actor.id || null, usuario: actor.name || 'Sistema', acao: 'criar', recurso: 'lancamentos_financeiros', registro_id: Number(row.id), descricao: `Lançamento recorrente — ${rec.descricao}`, dados: { recorrencia_id: Number(rec.id), valor: Number(rec.valor || 0) }, empresa_id: empresaDe(rec) },
           tx
         );
       });
@@ -1372,7 +1374,7 @@ export async function efetuarBaixa(
     const atualizado = await s.tryUpdateIf(lancR, lancamentoId, { status: 'pendente' }, patch, txi);
     if (!atualizado) throw new HttpError(409, 'Este título foi baixado por outra operação. Recarregue e confira.');
     await s.audit(
-      { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: lancR.key, registro_id: lancamentoId, descricao: ehParcial ? `Baixa parcial em andamento — ${String(lanc.descricao)}` : `Lançamento confirmado pela baixa — ${String(lanc.descricao)}`, dados: { origem, parcial: ehParcial } },
+      { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: lancR.key, registro_id: lancamentoId, descricao: ehParcial ? `Baixa parcial em andamento — ${String(lanc.descricao)}` : `Lançamento confirmado pela baixa — ${String(lanc.descricao)}`, dados: { origem, parcial: ehParcial }, empresa_id: empresaDoRegistroAudit(lancR, lanc, actor) },
       txi
     );
 
@@ -1492,6 +1494,7 @@ export async function efetuarBaixa(
         descricao: ehParcial
           ? `Baixa parcial — ${String(lanc.descricao)} · recebido ${formatoMoeda(Number(valorInformado))} de ${formatoMoeda(valorTitulo)} · restante ${formatoMoeda(restante)} (${origem})`
           : `Baixa — ${String(lanc.descricao)} · valor ${formatoMoeda(Number(lanc.valor || 0))}${jurosMulta > 0 ? ` + juros/multa ${formatoMoeda(jurosMulta)}` : ''}${desconto > 0 ? ` − desconto ${formatoMoeda(desconto)}` : ''} (${origem})`,
+          empresa_id: empresaDoRegistroAudit(lancR, lanc, actor),
         dados: { baixa: true, parcial: ehParcial, origem, data: dataBaixa, valor_pago: valorPago, restante, juros, multa, desconto, conta_id: contaBaixa, forma_pagamento: formaBaixa, filhos },
       },
       txi
@@ -1585,7 +1588,7 @@ export async function criarLancamentoManual(req: Request, res: Response) {
       hookTaxaLancamento(data);
       const inserted = await s.insert(getResource('lancamentos_financeiros')!, data, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'lancamentos_financeiros', registro_id: Number(inserted.id), descricao: `Lançamento manual — ${data.descricao} (${data.tipo})`, dados: { valor: data.valor } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'lancamentos_financeiros', registro_id: Number(inserted.id), descricao: `Lançamento manual — ${data.descricao} (${data.tipo})`, dados: { valor: data.valor }, empresa_id: empresaDoRegistroAudit(getResource('lancamentos_financeiros')!, inserted, actor) },
         tx
       );
       return inserted;
