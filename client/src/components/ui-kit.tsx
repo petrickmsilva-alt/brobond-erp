@@ -6,9 +6,9 @@
 //   • estado nunca depende só de cor: sempre há texto (ou ícone + texto);
 //   • loading / erro / vazio têm componente próprio e reutilizável.
 // ============================================================================
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, Minus, RotateCcw, Search, X, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Minus, RotateCcw, Search, X, type LucideIcon } from 'lucide-react';
 
 // ----------------------------------------------------------------------------
 // Superfícies
@@ -324,5 +324,480 @@ export function Tooltip({ content, children }: { content: string; children: Reac
         {content}
       </span>
     </span>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Abas (tabs) — alternância entre visões do mesmo bloco
+// ----------------------------------------------------------------------------
+
+/**
+ * Abas acessíveis (tablist/tab) com navegação por setas (esquerda/direita,
+ * Home/End) além do clique/toque. Usado onde o bloco tem visões alternativas
+ * (ex.: níveis do estoque valorizado).
+ */
+export function Tabs<T extends string>({
+  tabs,
+  value,
+  onChange,
+  label,
+}: {
+  tabs: { key: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  label: string;
+}) {
+  const atual = Math.max(
+    0,
+    tabs.findIndex((t) => t.key === value)
+  );
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    let proximo: number | null = null;
+    if (e.key === 'ArrowRight') proximo = (atual + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft') proximo = (atual - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') proximo = 0;
+    else if (e.key === 'End') proximo = tabs.length - 1;
+    if (proximo !== null) {
+      e.preventDefault();
+      onChange(tabs[proximo].key);
+      // O foco acompanha a aba (padrão WAI-APG de ativação automática).
+      // currentTarget é a tablist (dona do onKeyDown); os filhos são as abas.
+      (e.currentTarget.children[proximo] as HTMLElement | undefined)?.focus();
+    }
+  };
+
+  return (
+    <div role="tablist" aria-label={label} className="grid auto-cols-fr grid-flow-col gap-1 rounded-lg bg-canvas p-1 text-xs" onKeyDown={onKeyDown}>
+      {tabs.map((t, i) => (
+        <button
+          key={t.key}
+          type="button"
+          role="tab"
+          aria-selected={t.key === value}
+          tabIndex={i === atual ? 0 : -1}
+          onClick={() => onChange(t.key)}
+          className={`whitespace-nowrap rounded-md px-2.5 py-1.5 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+            t.key === value ? 'bg-surface text-ink shadow-card dark:shadow-none' : 'text-muted hover:text-ink-soft'
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Combobox — seleção com busca (listas vindas do servidor)
+// ----------------------------------------------------------------------------
+
+export type ComboboxOption = { value: string; label: string; hint?: string };
+
+/**
+ * Seleção em lista com filtro por texto. Acessível: input com role=combobox,
+ * lista com role=listbox/option, navegação por setas + Enter/Esc, e a lista
+ * fecha ao clicar fora. As opções vêm do chamador (ex.: grupos de canal do
+ * /api/negocios/canais) — o componente nunca inventa opção.
+ */
+export function Combobox({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder = 'Selecionar…',
+  hint,
+  id: idProp,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: ComboboxOption[];
+  placeholder?: string;
+  hint?: string;
+  id?: string;
+}) {
+  const baseId = useId();
+  const id = idProp ?? `${baseId}-combo`;
+  const listId = `${baseId}-lista`;
+  const hintId = `${baseId}-dica`;
+  const selecionada = options.find((o) => o.value === value) ?? null;
+
+  const [aberta, setAberta] = useState(false);
+  const [texto, setTexto] = useState<string | null>(null); // null = mostra o rótulo selecionado
+  const [destaque, setDestaque] = useState(0);
+  const caixaRef = useRef<HTMLDivElement>(null);
+
+  const normalizar = (s: string) => s.trim().toLowerCase();
+  const filtradas = texto === null || texto === '' ? options : options.filter((o) => normalizar(o.label).includes(normalizar(texto)));
+  const visivel = texto ?? selecionada?.label ?? '';
+
+  // Fecha ao clicar fora; ao fechar sem escolher, volta ao rótulo selecionado.
+  useEffect(() => {
+    if (!aberta) return;
+    const onDoc = (e: MouseEvent) => {
+      if (caixaRef.current && !caixaRef.current.contains(e.target as Node)) {
+        setAberta(false);
+        setTexto(null);
+      }
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [aberta]);
+
+  const escolher = (v: string) => {
+    onChange(v);
+    setAberta(false);
+    setTexto(null);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setAberta(true);
+      setDestaque((d) => Math.min(filtradas.length - 1, (aberta ? d : -1) + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setDestaque((d) => Math.max(0, d - 1));
+    } else if (e.key === 'Enter') {
+      if (aberta && filtradas[destaque]) {
+        e.preventDefault();
+        escolher(filtradas[destaque].value);
+      }
+    } else if (e.key === 'Escape') {
+      setAberta(false);
+      setTexto(null);
+    }
+  };
+
+  return (
+    <div ref={caixaRef} className="relative min-w-[11rem]">
+      <label htmlFor={id} className="label">
+        {label}
+      </label>
+      <div className="relative">
+        <input
+          id={id}
+          role="combobox"
+          aria-expanded={aberta}
+          aria-controls={listId}
+          aria-activedescendant={aberta && filtradas[destaque] ? `${listId}-${destaque}` : undefined}
+          aria-describedby={hint ? hintId : undefined}
+          autoComplete="off"
+          placeholder={placeholder}
+          value={visivel}
+          onChange={(e) => {
+            setTexto(e.target.value);
+            setAberta(true);
+            setDestaque(0);
+          }}
+          // Ao focar, limpa o campo para receber o filtro (sem isso, o texto
+          // novo seria grudado ao rótulo exibido). A opção atual continua
+          // marcada na lista; sair sem escolher restaura o rótulo.
+          onFocus={() => {
+            setTexto('');
+            setAberta(true);
+            setDestaque(0);
+          }}
+          onKeyDown={onKeyDown}
+          onBlur={() => {
+            // Saiu sem escolher (Tab ou clique fora): fecha e restaura o rótulo.
+            // (Escolher com o mouse usa mousedown com preventDefault, que não
+            // dispara blur — não há corrida aqui.)
+            setAberta(false);
+            setTexto(null);
+          }}
+          className="input pr-8"
+        />
+        <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden="true" />
+      </div>
+      {hint && (
+        <p id={hintId} className="mt-1 text-xs text-muted">
+          {hint}
+        </p>
+      )}
+      {aberta && (
+        <ul
+          id={listId}
+          role="listbox"
+          aria-label={label}
+          className="absolute z-30 mt-1 max-h-60 w-full overflow-auto rounded-lg border border-line bg-surface py-1 shadow-modal"
+        >
+          {filtradas.length === 0 && (
+            <li className="px-3 py-2 text-sm text-muted" aria-disabled="true">
+              Nenhuma opção encontrada.
+            </li>
+          )}
+          {filtradas.map((o, i) => (
+            <li
+              key={o.value}
+              id={`${listId}-${i}`}
+              role="option"
+              aria-selected={o.value === value}
+              onMouseDown={(e) => {
+                // mousedown (antes do blur) para escolher antes de fechar.
+                e.preventDefault();
+                escolher(o.value);
+              }}
+              onMouseEnter={() => setDestaque(i)}
+              className={`flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm ${
+                i === destaque ? 'bg-canvas text-ink' : 'text-ink-soft'
+              }`}
+            >
+              <span>
+                {o.label}
+                {o.hint && <span className="block text-xs text-muted">{o.hint}</span>}
+              </span>
+              {o.value === value && <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Data e intervalo de datas
+// ----------------------------------------------------------------------------
+
+/**
+ * Campo de data com rótulo, dica e erro acessíveis. Usa o seletor nativo do
+ * navegador (type=date): funciona com teclado, leitor de tela e traz o
+ * calendário próprio do celular — sem reinventar calendário.
+ */
+export function DatePicker({
+  label,
+  value,
+  onChange,
+  hint,
+  error,
+  min,
+  max,
+  id: idProp,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  hint?: string;
+  error?: string | null;
+  min?: string;
+  max?: string;
+  id?: string;
+}) {
+  const baseId = useId();
+  const id = idProp ?? `${baseId}-data`;
+  const descId = `${baseId}-desc`;
+  const temDesc = hint || error;
+  return (
+    <div>
+      <label htmlFor={id} className="label">
+        <span className="inline-flex items-center gap-1.5">
+          <CalendarDays className="h-3.5 w-3.5 text-muted" aria-hidden="true" />
+          {label}
+        </span>
+      </label>
+      <input
+        id={id}
+        type="date"
+        value={value}
+        min={min}
+        max={max}
+        onChange={(e) => onChange(e.target.value)}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={temDesc ? descId : undefined}
+        className={`input ${error ? '!border-danger' : ''}`}
+      />
+      {temDesc && (
+        <p id={descId} className={`mt-1 text-xs ${error ? 'text-danger' : 'text-muted'}`}>
+          {error ?? hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Intervalo de datas (De/Até) com legenda e erro do intervalo. O erro (ex.:
+ * data inicial depois da final) é anunciado (aria-live) e associado ao grupo.
+ */
+export function DateRangePicker({
+  legend,
+  de,
+  ate,
+  onChange,
+  error,
+  hint,
+}: {
+  legend: string;
+  de: string;
+  ate: string;
+  onChange: (v: { de: string; ate: string }) => void;
+  error?: string | null;
+  hint?: string;
+}) {
+  const baseId = useId();
+  // group + contents (em vez de fieldset): mesma semântica anunciada, sem o
+  // bug histórico de fieldset com display:contents em alguns navegadores.
+  return (
+    <div role="group" aria-label={legend} className="contents">
+      <DatePicker label="De" value={de} onChange={(v) => onChange({ de: v, ate })} max={ate || undefined} />
+      <DatePicker label="Até" value={ate} onChange={(v) => onChange({ de, ate: v })} min={de || undefined} />
+      {(error || hint) && (
+        <p id={`${baseId}-erro`} aria-live="polite" className={`w-full text-xs ${error ? 'text-danger' : 'text-muted'}`}>
+          {error ?? hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Tabela de dados + paginação
+// ----------------------------------------------------------------------------
+
+export type DataTableColumn<T> = {
+  key: string;
+  header: string;
+  align?: 'left' | 'right' | 'center';
+  render: (row: T) => ReactNode;
+};
+
+const ALIGN: Record<string, string> = { left: 'text-left', right: 'text-right', center: 'text-center' };
+
+/**
+ * Tabela de dados com cabeçalho, legenda para leitor de tela e estado vazio.
+ * As linhas e a ordenação vêm prontas do chamador (em geral, do servidor).
+ */
+export function DataTable<T>({
+  columns,
+  rows,
+  caption,
+  empty,
+  getRowKey,
+}: {
+  columns: DataTableColumn<T>[];
+  rows: T[];
+  caption: string;
+  empty: ReactNode;
+  getRowKey: (row: T, index: number) => string | number;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="table">
+        <caption className="sr-only">{caption}</caption>
+        <thead>
+          <tr>
+            {columns.map((c) => (
+              <th key={c.key} scope="col" className={ALIGN[c.align ?? 'left']}>
+                {c.header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr>
+              <td colSpan={columns.length} className="py-8 text-center text-sm text-muted">
+                {empty}
+              </td>
+            </tr>
+          ) : (
+            rows.map((row, i) => (
+              <tr key={getRowKey(row, i)}>
+                {columns.map((c) => (
+                  <td key={c.key} className={ALIGN[c.align ?? 'left']}>
+                    {c.render(row)}
+                  </td>
+                ))}
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Paginação acessível (nav + aria-current na página atual, botões
+ * desabilitados nos extremos). Controlada: o chamador detém `page` e fatia
+ * as linhas (ou consulta a página no servidor).
+ */
+export function Pagination({
+  page,
+  totalPages,
+  onChange,
+  label = 'Paginação',
+}: {
+  page: number;
+  totalPages: number;
+  onChange: (p: number) => void;
+  label?: string;
+}) {
+  if (totalPages <= 1) return null;
+  const atual = Math.min(Math.max(1, page), totalPages);
+
+  // Janela de páginas: mostra todas até 7; acima disso, 1 … janela … N.
+  const janela: (number | '…')[] = [];
+  if (totalPages <= 7) {
+    for (let p = 1; p <= totalPages; p++) janela.push(p);
+  } else {
+    const inicio = Math.max(2, Math.min(totalPages - 3, atual - 1));
+    janela.push(1);
+    if (inicio > 2) janela.push('…');
+    for (let p = inicio; p <= Math.min(totalPages - 1, inicio + 2); p++) janela.push(p);
+    if (inicio + 2 < totalPages - 1) janela.push('…');
+    janela.push(totalPages);
+  }
+
+  const btn = 'btn-icon !h-8 !w-8 shrink-0';
+  return (
+    <nav aria-label={label} className="flex flex-wrap items-center justify-center gap-1 border-t border-line px-4 py-2.5">
+      <button type="button" className={btn} disabled={atual === 1} onClick={() => onChange(1)} aria-label="Primeira página">
+        <ChevronsLeft className="h-4 w-4" aria-hidden="true" />
+      </button>
+      <button type="button" className={btn} disabled={atual === 1} onClick={() => onChange(atual - 1)} aria-label="Página anterior">
+        <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+      </button>
+      {janela.map((p, i) =>
+        p === '…' ? (
+          <span key={`e${i}`} aria-hidden="true" className="px-1 text-xs text-muted">
+            …
+          </span>
+        ) : (
+          <button
+            key={p}
+            type="button"
+            onClick={() => onChange(p)}
+            aria-label={`Página ${p}`}
+            aria-current={p === atual ? 'page' : undefined}
+            className={`h-8 min-w-8 rounded-lg px-2 text-sm tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+              p === atual ? 'bg-primary font-semibold text-white dark:bg-accent dark:text-ink' : 'text-ink-soft hover:bg-canvas'
+            }`}
+          >
+            {p}
+          </button>
+        )
+      )}
+      <button
+        type="button"
+        className={btn}
+        disabled={atual === totalPages}
+        onClick={() => onChange(atual + 1)}
+        aria-label="Próxima página"
+      >
+        <ChevronRight className="h-4 w-4" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className={btn}
+        disabled={atual === totalPages}
+        onClick={() => onChange(totalPages)}
+        aria-label="Última página"
+      >
+        <ChevronsRight className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </nav>
   );
 }

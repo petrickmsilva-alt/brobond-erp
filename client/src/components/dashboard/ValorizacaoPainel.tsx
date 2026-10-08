@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Package, Search } from 'lucide-react';
+import { Tabs } from '../ui-kit';
 import { formatMoney, formatNumber } from '../../lib/format';
 import type { Valorizacao } from './types';
 
@@ -48,20 +49,7 @@ export default function ValorizacaoPainel({ val }: { val: Valorizacao }) {
               <input className="input !py-1.5 pl-8 text-xs sm:w-56" placeholder="Buscar produto ou coleção..." value={q} onChange={(e) => setQ(e.target.value)} aria-label="Buscar produto" />
             </div>
           )}
-          <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1 text-xs dark:bg-navy-800" role="tablist" aria-label="Nível da valorização">
-            {NIVEIS.map((n) => (
-              <button
-                key={n.key}
-                type="button"
-                role="tab"
-                aria-selected={nivel === n.key}
-                className={`whitespace-nowrap rounded-md px-2.5 py-1.5 font-medium ${nivel === n.key ? 'bg-white text-navy-900 shadow dark:bg-navy-900 dark:text-white' : 'text-slate-500 dark:text-navy-300'}`}
-                onClick={() => setNivel(n.key)}
-              >
-                {n.label}
-              </button>
-            ))}
-          </div>
+          <Tabs tabs={NIVEIS.map((n) => ({ key: n.key, label: n.label }))} value={nivel} onChange={setNivel} label="Nível da valorização" />
         </div>
       </div>
 

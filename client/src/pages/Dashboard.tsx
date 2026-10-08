@@ -15,7 +15,7 @@
 // ============================================================================
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Banknote, Boxes, ChevronRight, Cog, Factory, Package, ShoppingCart, Store, Wallet, Receipt, Warehouse } from 'lucide-react';
+import { Banknote, Boxes, ChevronRight, Cog, Factory, Package, RotateCcw, ShoppingCart, Store, Wallet, Receipt, Warehouse } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { PageHeader, Alert } from '../components/ui';
 import { CardHeader, ErrorState, LoadingState, StatCard } from '../components/ui-kit';
@@ -88,7 +88,7 @@ export default function Dashboard() {
   }, [hoje]);
 
   const alertas: Alerta[] = [];
-  const semVerificacao: string[] = ['contas que vencem hoje e compras atrasadas (sem consulta disponível)'];
+  const semVerificacao: string[] = ['compras atrasadas por data (o painel recebe só a quantidade de pendentes, sem datas)'];
   if (dash) {
     if (dash.itensAlerta > 0)
       alertas.push({ id: 'estoque-min', rotulo: 'Itens abaixo do estoque mínimo', detalhe: `${formatNumber(dash.itensAlerta)} item(ns) de produto × tamanho × local`, to: '/estoque' });
@@ -105,6 +105,15 @@ export default function Dashboard() {
   if (podeFin && fin) {
     if (fin.aPagarVencidas > 0) alertas.push({ id: 'pagar-venc', rotulo: 'Contas a pagar vencidas', detalhe: formatMoney(fin.aPagarVencidas), to: '/financeiro' });
     if (fin.aReceberVencidas > 0) alertas.push({ id: 'receber-venc', rotulo: 'Contas a receber vencidas', detalhe: formatMoney(fin.aReceberVencidas), to: '/financeiro' });
+    // Vencem hoje: filtro por data sobre as listas que o próprio resumo entrega
+    // (mesmo padrão do alerta de OPs em atraso — nada é recalculado).
+    const vencemHoje = (lista: { vencimento: string | null; valor: number }[]) => lista.filter((l) => l.vencimento === hojeISO);
+    const pagarHoje = vencemHoje(fin.aPagarLista);
+    const receberHoje = vencemHoje(fin.aReceberLista);
+    if (pagarHoje.length > 0)
+      alertas.push({ id: 'pagar-hoje', rotulo: 'Contas a pagar vencem hoje', detalhe: `${formatNumber(pagarHoje.length)} conta(s) · ${formatMoney(somaValores(pagarHoje))}`, to: '/financeiro' });
+    if (receberHoje.length > 0)
+      alertas.push({ id: 'receber-hoje', rotulo: 'Contas a receber vencem hoje', detalhe: `${formatNumber(receberHoje.length)} conta(s) · ${formatMoney(somaValores(receberHoje))}`, to: '/financeiro' });
   } else if (!podeFin) {
     semVerificacao.push('contas a pagar e a receber (perfil gerente)');
   }
@@ -128,15 +137,35 @@ export default function Dashboard() {
 
   const val = dash?.valorizacao;
 
+  // Atualização global: refaz as consultas raiz (empresa, canais, operação,
+  // financeiro). As comerciais (resumo atual/anterior, ABC) reagem sozinhas —
+  // ao recarregar a empresa o escopo passa por null e volta, disparando-as de
+  // novo. Recarregá-las aqui também geraria chamadas duplicadas em voo.
+  const raizes = [empresaQ, canaisQ, dashQ, finQ];
+  const carregandoAlgum = [...raizes, atualQ, anteriorQ, abcQ].some((q) => q.loading);
+  const atualizarTudo = () => raizes.forEach((q) => q.reload());
+
   return (
     <div className="space-y-4 p-4 sm:p-6">
       <PageHeader
-        title={`${greeting}${firstName ? `, ${firstName}` : ''}`}
-        description="Meu Negócio: como a operação está agora, com comparação ao período anterior."
+        title="Meu Negócio"
+        description={`${greeting}${firstName ? `, ${firstName}` : ''} — como a operação está agora, com comparação ao período anterior.`}
         actions={
-          <Link to="/movimentacoes" className="btn-primary">
-            <Boxes className="h-4 w-4" /> Lançar movimentação
-          </Link>
+          <>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={atualizarTudo}
+              disabled={carregandoAlgum}
+              aria-label="Recarregar todos os blocos do painel"
+              title="Recarregar todos os blocos"
+            >
+              <RotateCcw className="h-4 w-4" aria-hidden="true" /> Atualizar
+            </button>
+            <Link to="/movimentacoes" className="btn-primary">
+              <Boxes className="h-4 w-4" /> Lançar movimentação
+            </Link>
+          </>
         }
       />
 
@@ -365,6 +394,11 @@ function IndisponivelPeriodo() {
 function formatData(iso: string) {
   const [y, m, d] = iso.split('-');
   return `${d}/${m}/${y}`;
+}
+
+/** Soma de exibição (mesmo padrão das participações por canal): os valores são do servidor. */
+function somaValores(lista: { valor: number }[]) {
+  return lista.reduce((s, l) => s + l.valor, 0);
 }
 
 function QuickLink({ to, icon: Icon, title, text }: { to: string; icon: typeof Package; title: string; text: string }) {

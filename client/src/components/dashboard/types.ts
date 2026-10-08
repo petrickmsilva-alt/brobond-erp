@@ -91,11 +91,14 @@ export type DashboardData = {
   totais: { produtos: number; clientes: number; fornecedores: number; insumos: number };
 };
 
-/** GET /api/financeiro/resumo — gerente/admin. */
+/** GET /api/financeiro/resumo — gerente/admin (só os campos usados pelo painel). */
 export type ResumoFin = {
   saldoContasTotal: number;
   aReceberVencidas: number;
   aPagarVencidas: number;
   aPagar30: number;
   aReceber30: number;
+  /** Contas em aberto com vencimento — base do alerta "vencem hoje". */
+  aReceberLista: { vencimento: string | null; valor: number }[];
+  aPagarLista: { vencimento: string | null; valor: number }[];
 };

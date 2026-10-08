@@ -171,12 +171,54 @@ describe('Dashboard — motor analítico', () => {
   });
 
   it('filtro de canal é enviado ao servidor', async () => {
+    const user = userEvent.setup();
     montarApi();
     renderDashboard();
     await screen.findByTestId('kpi-faturamento');
-    await userEvent.selectOptions(screen.getByLabelText('Canal'), 'ecommerce');
+    await user.click(screen.getByRole('combobox', { name: 'Canal' }));
+    await user.click(await screen.findByRole('option', { name: 'E-commerce' }));
     expect(await screen.findByText(/Comparado ao período anterior/)).toBeInTheDocument();
     expect(chamadasResumo().some((u) => u.includes('canal=ecommerce'))).toBe(true);
+  });
+
+  it('botão Atualizar refaz todas as consultas da tela', async () => {
+    const user = userEvent.setup();
+    montarApi();
+    renderDashboard();
+    await screen.findByTestId('kpi-faturamento');
+    const antes = apiGet.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Recarregar todos os blocos do painel' }));
+    await screen.findByTestId('kpi-faturamento');
+    // 4 raízes (empresa, canais, dashboard, financeiro) + 3 comerciais que
+    // reagem ao escopo (resumo atual, resumo anterior e ABC) — sem duplicadas.
+    const novas = apiGet.mock.calls.slice(antes).map((c) => String(c[0]));
+    expect(novas).toHaveLength(7);
+    expect(new Set(novas).size).toBe(7);
+  });
+
+  it('alerta as contas a pagar e a receber que vencem hoje (listas do resumo financeiro)', async () => {
+    const hoje = new Date();
+    const iso = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-${String(hoje.getDate()).padStart(2, '0')}`;
+    montarApi({
+      '/financeiro/resumo': async () =>
+        ({
+          saldoContasTotal: 0,
+          aReceberVencidas: 0,
+          aPagarVencidas: 0,
+          aPagar30: 0,
+          aReceber30: 0,
+          aPagarLista: [
+            { vencimento: iso, valor: 100 },
+            { vencimento: '2026-01-01', valor: 50 },
+          ],
+          aReceberLista: [{ vencimento: iso, valor: 200 }],
+        }) as never,
+    });
+    renderDashboard();
+    expect(await screen.findByText('Contas a pagar vencem hoje')).toBeInTheDocument();
+    expect(screen.getByText('Contas a receber vencem hoje')).toBeInTheDocument();
+    // Só o que vence hoje entra na conta (R$ 100,00 — os R$ 50,00 de janeiro, não).
+    expect(screen.getByText(/1 conta\(s\) · R\$ 100,00/)).toBeInTheDocument();
   });
 
   it('período personalizado com datas invertidas não dispara consulta inválida', async () => {

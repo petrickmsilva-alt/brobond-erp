@@ -1,7 +1,8 @@
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { BarChart3 } from 'lucide-react';
-import { CardHeader, ErrorState, LoadingState } from '../ui-kit';
-import { centavosParaReais, formatMoney, formatPct } from '../../lib/format';
+import { CardHeader, DataTable, ErrorState, LoadingState, Pagination, type DataTableColumn } from '../ui-kit';
+import { centavosParaReais, formatMoney, formatNumber, formatPct } from '../../lib/format';
 import type { AbcResp } from './types';
 
 const CLASSES = ['A', 'B', 'C'] as const;
@@ -15,7 +16,58 @@ const DESCRICAO: Record<'A' | 'B' | 'C', string> = {
  * Curva ABC da empresa (motor do servidor). É o histórico acumulado da empresa:
  * o endpoint não filtra por período, e a tela deixa isso explícito.
  */
+type LinhaAbc = AbcResp['linhas'][number];
+
+const POR_PAGINA = 10;
+
+const COLUNAS: DataTableColumn<LinhaAbc>[] = [
+  {
+    key: 'produto',
+    header: 'Produto',
+    render: (l) => (
+      <Link to={`/produtos/${l.produtoId}`} className="font-medium text-ink hover:underline">
+        {l.produto || l.sku || `Produto #${l.produtoId}`}
+      </Link>
+    ),
+  },
+  {
+    key: 'receita',
+    header: 'Receita',
+    align: 'right',
+    render: (l) => <span className="font-mono tabular-nums">{formatMoney(centavosParaReais(l.faturamentoCents))}</span>,
+  },
+  {
+    key: 'participacao',
+    header: 'Participação',
+    align: 'right',
+    render: (l) => <span className="font-mono tabular-nums">{formatPct(l.pctTotal)}</span>,
+  },
+  {
+    key: 'classe',
+    header: 'Classe',
+    render: (l) => (
+      <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded bg-line/60 px-1.5 text-[11px] font-bold text-ink">
+        {l.classe}
+      </span>
+    ),
+  },
+];
+
 export default function AbcCard({ abc, loading, error, onRetry }: { abc: AbcResp | null; loading: boolean; error: string | null; onRetry: () => void }) {
+  const [pagina, setPagina] = useState(1);
+  // Novo retrato do servidor → volta à primeira página para não exibir página vazia.
+  useEffect(() => {
+    setPagina(1);
+  }, [abc]);
+
+  // A ordem vem pronta do servidor (maior receita primeiro); aqui só se fatia a página.
+  const totalPaginas = abc ? Math.max(1, Math.ceil(abc.linhas.length / POR_PAGINA)) : 1;
+  const paginaSegura = Math.min(pagina, totalPaginas);
+  const linhasPagina = useMemo(
+    () => (abc ? abc.linhas.slice((paginaSegura - 1) * POR_PAGINA, paginaSegura * POR_PAGINA) : []),
+    [abc, paginaSegura],
+  );
+
   return (
     <section aria-labelledby="abc-titulo" className="flex flex-col rounded-xl border border-line bg-surface shadow-card dark:shadow-none">
       <CardHeader
@@ -55,36 +107,20 @@ export default function AbcCard({ abc, loading, error, onRetry }: { abc: AbcResp
                 })}
               </ul>
 
-              <div className="mt-4 overflow-x-auto border-t border-line">
-                <table className="table table-compact">
-                  <caption className="sr-only">Top produtos por receita, com participação e classe</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Produto</th>
-                      <th scope="col" className="text-right">Receita</th>
-                      <th scope="col" className="text-right">Participação</th>
-                      <th scope="col">Classe</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...abc.linhas].sort((a, b) => b.faturamentoCents - a.faturamentoCents).slice(0, 10).map((l) => (
-                      <tr key={l.produtoId}>
-                        <td className="max-w-[16rem] truncate">
-                          <Link to={`/produtos/${l.produtoId}`} className="font-medium text-ink hover:underline">
-                            {l.produto || l.sku || `Produto #${l.produtoId}`}
-                          </Link>
-                        </td>
-                        <td className="text-right font-mono tabular-nums">{formatMoney(centavosParaReais(l.faturamentoCents))}</td>
-                        <td className="text-right font-mono tabular-nums">{formatPct(l.pctTotal)}</td>
-                        <td>
-                          <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded bg-line/60 px-1.5 text-[11px] font-bold text-ink">
-                            {l.classe}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="mt-4 border-t border-line">
+                <DataTable
+                  columns={COLUNAS}
+                  rows={linhasPagina}
+                  caption={`Produtos por receita, página ${paginaSegura} de ${totalPaginas}`}
+                  empty="Ainda não há vendas faturadas para classificar."
+                  getRowKey={(l) => l.produtoId}
+                />
+                {abc.linhas.length > POR_PAGINA && (
+                  <p className="border-t border-line px-4 pt-2.5 text-xs text-muted" aria-live="polite">
+                    Mostrando {formatNumber(linhasPagina.length)} de {formatNumber(abc.linhas.length)} produtos classificados.
+                  </p>
+                )}
+                <Pagination page={paginaSegura} totalPages={totalPaginas} onChange={setPagina} label="Paginação da curva ABC" />
               </div>
             </>
           )}

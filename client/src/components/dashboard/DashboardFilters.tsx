@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { FilterBar } from '../ui-kit';
+import { Combobox, DateRangePicker, FilterBar } from '../ui-kit';
 import { PRESETS_PERIODO, type PresetPeriodo } from '../../lib/periodo';
 
 export type FiltrosDashboard = {
@@ -29,9 +29,6 @@ export default function DashboardFilters({
   erroCustom: string | null;
 }) {
   const idPeriodo = useId();
-  const idCanal = useId();
-  const idDe = useId();
-  const idAte = useId();
   const personalizado = valor.preset === 'personalizado';
 
   return (
@@ -51,35 +48,22 @@ export default function DashboardFilters({
         </div>
 
         {personalizado && (
-          <>
-            <div>
-              <label htmlFor={idDe} className="label">
-                De
-              </label>
-              <input id={idDe} type="date" className="input" value={valor.custom.de} onChange={(e) => onChange({ ...valor, custom: { ...valor.custom, de: e.target.value } })} />
-            </div>
-            <div>
-              <label htmlFor={idAte} className="label">
-                Até
-              </label>
-              <input id={idAte} type="date" className="input" value={valor.custom.ate} onChange={(e) => onChange({ ...valor, custom: { ...valor.custom, ate: e.target.value } })} />
-            </div>
-          </>
+          <DateRangePicker
+            legend="Período personalizado"
+            de={valor.custom.de}
+            ate={valor.custom.ate}
+            onChange={(custom) => onChange({ ...valor, custom })}
+            hint="Intervalo fechado: inclui os dias inicial e final."
+          />
         )}
 
-        <div className="min-w-[11rem]">
-          <label htmlFor={idCanal} className="label">
-            Canal
-          </label>
-          <select id={idCanal} className="input" value={valor.canal} onChange={(e) => onChange({ ...valor, canal: e.target.value })}>
-            <option value="">Todos os canais</option>
-            {grupos.map((g) => (
-              <option key={g.grupo} value={g.grupo}>
-                {g.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        <Combobox
+          label="Canal"
+          value={valor.canal}
+          onChange={(canal) => onChange({ ...valor, canal })}
+          options={[{ value: '', label: 'Todos os canais' }, ...grupos.map((g) => ({ value: g.grupo, label: g.label }))]}
+          placeholder="Buscar canal…"
+        />
 
         <div className="min-w-[10rem]">
           <span className="label">Empresa</span>
