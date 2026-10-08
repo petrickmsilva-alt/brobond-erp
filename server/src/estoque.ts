@@ -12,7 +12,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { RESOURCES, getResource } from './resources';
-import { checkAccess, getDefaultLocal, getRecord, getStore, toHttpError, validarTamanhoNaGrade } from './services';
+import { checkAccess, getDefaultLocal, getRecord, getStore, toHttpError, validarTamanhoNaGrade , storeDoAtor } from './services';
 import { currentUser } from './auth';
 import type { Row } from './store';
 import { parseId } from './validate';
@@ -24,7 +24,7 @@ import { labelOf } from './store';
 export async function estoqueGrade(req: Request, res: Response) {
   const r = RESOURCES.estoques;
   checkAccess(r, currentUser(req), 'read');
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const colecaoId = req.query.colecao_id ? Number(req.query.colecao_id) : undefined;
   const categoriaId = req.query.categoria_id ? Number(req.query.categoria_id) : undefined;
   const gradeId = req.query.grade_id ? Number(req.query.grade_id) : undefined;
@@ -126,7 +126,7 @@ export async function listItensInventario(req: Request, res: Response) {
   checkAccess(RESOURCES.inventarios, currentUser(req), 'read');
   const id = parseId(req.params.id);
   await getInventario(id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const itens = await s.list(RESOURCES.itens_inventario, { page: 1, pageSize: 5000, filter: { inventario_id: id }, sort: 'id', dir: 'asc' });
   // Anexa miniatura e a grade do produto: a contagem é agrupada por grade, do
   // mesmo jeito que o Estoque Físico, para a conferência seguir a mesma ordem.
@@ -169,7 +169,7 @@ export async function updateItensInventario(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.inventarios, actor, 'update');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   try {
     const out = await s.transaction(async (tx) => {
       const inv = await s.findOneWhere(RESOURCES.inventarios, { id }, tx);
@@ -230,7 +230,7 @@ export async function fecharInventario(req: Request, res: Response) {
   }
   checkAccess(RESOURCES.inventarios, actor, 'update');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   try {
     const out = await s.transaction(async (tx) => {
       const inv = await s.findOneWhere(RESOURCES.inventarios, { id }, tx);
@@ -309,7 +309,7 @@ export async function getInventarioDetalhe(req: Request, res: Response) {
   checkAccess(RESOURCES.inventarios, currentUser(req), 'read');
   const id = parseId(req.params.id);
   const inv = await getRecord(RESOURCES.inventarios, id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const itens = await s.list(RESOURCES.itens_inventario, { page: 1, pageSize: 5000, filter: { inventario_id: id } });
   let contados = 0;
   let divergencias = 0;
@@ -340,7 +340,7 @@ export async function estornarMovimentacao(req: Request, res: Response) {
   }
   checkAccess(RESOURCES.movimentacoes, actor, 'create');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
 
   try {
     const result = await s.transaction(async (tx) => {

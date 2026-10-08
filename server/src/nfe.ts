@@ -24,7 +24,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource } from './resources';
-import { checkAccess, getStore } from './services';
+import { checkAccess, escopoDe, storeDoAtor, type EscopoOuAtor } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
 import { labelOf } from './store';
@@ -34,9 +34,15 @@ import { round2 } from './utils';
 const fmtMoney = round2;
 
 
-/** Prepara os dados da venda no formato da NF-e. */
-async function prepararDadosNFe(vendaId: number): Promise<Record<string, unknown>> {
-  const s = getStore();
+/**
+ * Prepara os dados da venda no formato da NF-e.
+ *
+ * MULTIEMPRESA: recebe o escopo (ou o ator) porque a venda, o cliente, os
+ * itens e os produtos são recortados por empresa — a NF-e de uma venda da
+ * Empresa B não pode ser montada com o cadastro da Empresa A.
+ */
+async function prepararDadosNFe(vendaId: number, escopo: EscopoOuAtor): Promise<Record<string, unknown>> {
+  const s = storeDoAtor(escopo);
   const venda = await s.get(getResource('vendas')!, vendaId);
   if (!venda) throw new HttpError(404, 'Pedido não encontrado.');
 
@@ -116,7 +122,7 @@ export async function nfeDados(req: Request, res: Response) {
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
 
-  const dados = await prepararDadosNFe(id);
+  const dados = await prepararDadosNFe(id, escopoDe(currentUser(req)));
   res.json(dados);
 }
 
@@ -141,7 +147,7 @@ export async function nfeEmitir(req: Request, res: Response) {
   const r = getResource('vendas')!;
   checkAccess(r, actor, 'update');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
 
   const apiKey = (process.env.NFE_API_KEY || '').trim();
   const provider = (process.env.NFE_PROVIDER || '').trim();
@@ -163,7 +169,7 @@ export async function nfeEmitir(req: Request, res: Response) {
   if (statusAtual === 'emitida') throw new HttpError(409, `Este pedido já tem NF-e emitida${venda.nfe_numero ? ` (${venda.nfe_numero})` : ''}.`);
   if (statusAtual === 'simulada') throw new HttpError(409, `Este pedido já tem uma simulação de NF-e (${venda.nfe_numero || 'sem número'}).`);
 
-  const dados = await prepararDadosNFe(id);
+  const dados = await prepararDadosNFe(id, escopoDe(currentUser(req)));
   const numero = `SIM-${id}-${Date.now().toString(36).toUpperCase()}`;
   const emitidaEm = new Date().toISOString();
 
@@ -202,7 +208,7 @@ export async function nfeStatus(req: Request, res: Response) {
   const r = getResource('vendas')!;
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
 
   const venda = await s.get(r, id);
   if (!venda) throw new HttpError(404, 'Pedido não encontrado.');

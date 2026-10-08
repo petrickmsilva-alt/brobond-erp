@@ -25,7 +25,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
-import { checkAccess, getStore } from './services';
+import { checkAccess, storeDoAtor } from './services';
 import { RESOURCES } from './resources';
 import { currentUser } from './auth';
 import { recalcularTotal } from './itens';
@@ -168,7 +168,8 @@ export async function statusLoja(req: Request, res: Response) {
 export async function produtosLoja(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.produtos, actor, 'read');
-  const s = getStore();
+  // MULTIEMPRESA: o diagnóstico compara SKU/saldo da EMPRESA ATIVA com a loja.
+  const s = storeDoAtor(actor);
   const [produtosR, estoquesR, tamanhosR] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, sort: 'sku', dir: 'asc' }),
     s.list(RESOURCES.estoques, { page: 1, pageSize: 20000 }),
@@ -293,7 +294,8 @@ function rotuloLinha(linha: LinhaWoo): string {
 export async function importarPedidosLoja(req: Request, res: Response) {
   const actor = exigirPermissaoVenda(req, 'create');
   const cfg = exigirConfigurada();
-  const s = getStore();
+  // MULTIEMPRESA: o pedido da loja entra na empresa ativa do operador.
+  const s = storeDoAtor(actor);
 
   const dias = Math.min(90, Math.max(1, Number(req.body?.dias) || 7));
   const status = String(req.body?.status || statusImportacao()).trim() || 'processing';
@@ -504,7 +506,8 @@ function chavesSku(skuProduto: string, codigoTamanho: string): string[] {
 export async function sincronizarEstoqueLoja(req: Request, res: Response) {
   const actor = exigirPermissaoVenda(req, 'update');
   const cfg = exigirConfigurada();
-  const s = getStore();
+  // MULTIEMPRESA: só o saldo da empresa ativa é publicado na loja.
+  const s = storeDoAtor(actor);
 
   const [produtosR, tamanhosR, estoquesR] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 5000 }),

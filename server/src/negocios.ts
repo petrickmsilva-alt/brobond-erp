@@ -39,6 +39,7 @@ import { hasDatabaseUrl, query, withTransaction } from './db';
 import { RESOURCES } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, type AuthUser } from './auth';
+import { escopoDoAtor, exigirEmpresaPermitida } from './empresa';
 import { HttpError } from './errors';
 import { setOnSaleIngested } from '../../modules/connectors/index';
 
@@ -265,6 +266,31 @@ function parseDataEstrita(valor: unknown, campo: 'De' | 'Até'): string | null {
     throw new HttpError(400, `Período inválido: "${campo}" não é uma data real (recebi "${dia}").`);
   }
   return dia;
+}
+
+/**
+ * MULTIEMPRESA (§18): o filtro `empresa_id` da query é do USUÁRIO, mas quem
+ * decide o que ele pode ver é o servidor.
+ *
+ *   • empresa pedida explicitamente → só se estiver concedida ao ator (403);
+ *   • sem filtro → a empresa ATIVA da sessão (nunca "todas");
+ *   • consolidado (grupo inteiro) → exige `pode_consolidar` E pedido explícito
+ *     (`?consolidar=1`), exatamente como no CRUD genérico.
+ *
+ * Antes desta correção, `/api/negocios/resumo|margens|abc` aceitavam
+ * `?empresa_id=` de qualquer origem e, sem o parâmetro, varriam TODAS as
+ * empresas do grupo — um gerente da Empresa A lia a receita da Empresa B.
+ */
+export function empresaDoEscopoBi(actor: AuthUser, pedida: number | null): number | null {
+  const escopo = escopoDoAtor(actor as any);
+  if (pedida !== null) {
+    exigirEmpresaPermitida(actor as any, pedida);
+    return pedida;
+  }
+  // `consolidado` já é o resultado de `pode_consolidar` + `?consolidado=1`
+  // (claim resolvido em `currentUser`) — não se pede consolidação por fora.
+  if (escopo.consolidado) return null;
+  return escopo.empresaId;
 }
 
 /** Valida e normaliza os filtros estritos de período/empresa/canal/status. */
@@ -1365,6 +1391,8 @@ export async function negociosResumo(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'read');
   const filtros = parseFiltrosBi(queryDeRequisicao(req));
+  // MULTIEMPRESA: o escopo sai do ATOR, nunca da query.
+  filtros.empresaId = empresaDoEscopoBi(actor, filtros.empresaId);
   const repo = repoNegocios();
   const [vendas, itens, abc] = await Promise.all([
     repo.listarVendas(filtros, LIMITE_VENDAS_BI, 0),
@@ -1380,6 +1408,7 @@ export async function negociosMargens(req: Request, res: Response) {
   checkAccess(RESOURCES.vendas, actor, 'read');
   exigirGerente(actor);
   const filtros = parseFiltrosBi(queryDeRequisicao(req));
+  filtros.empresaId = empresaDoEscopoBi(actor, filtros.empresaId);
   const limit = Math.min(1000, Math.max(1, Number(primeiroValor(req.query.limit)) || 200));
   const offset = Math.max(0, Number(primeiroValor(req.query.offset)) || 0);
   const repo = repoNegocios();
@@ -1420,6 +1449,7 @@ export async function negociosABC(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'read');
   const filtros = parseFiltrosBi(queryDeRequisicao(req));
+  filtros.empresaId = empresaDoEscopoBi(actor, filtros.empresaId);
   const classe = primeiroValor(req.query.classe);
   if (classe !== null && classe !== '' && !['A', 'B', 'C'].includes(classe)) {
     throw new HttpError(400, `Filtro inválido: classe deve ser A, B ou C (recebi "${classe}").`);
@@ -1459,6 +1489,11 @@ export async function negociosVendaManual(req: Request, res: Response) {
   checkAccess(RESOURCES.vendas, actor, 'create');
   if (!actor?.id) throw new HttpError(401, 'Usuário autenticado é obrigatório para registrar uma venda manual.');
   const input = await validarVendaManual(req.body);
+  // MULTIEMPRESA: sem `empresa_id` no corpo, a venda nasce na empresa ativa;
+  // com `empresa_id`, ele precisa estar CONCEDIDO ao ator (403 se não).
+  const escopo = escopoDoAtor(actor as any);
+  if (!(req.body || {}).empresa_id) input.empresaId = escopo.empresaId;
+  exigirEmpresaPermitida(actor as any, input.empresaId);
   const repo = repoNegocios();
   const venda = await repo.criarVendaManual(input, actor);
   // Curva ABC atualizada na hora — classificação contínua.

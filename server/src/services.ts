@@ -52,8 +52,23 @@ type Actor = Pick<AuthUser, 'id' | 'name' | 'perfil'> & Partial<AuthUser>;
  */
 export type { EscopoEmpresa };
 
+/**
+ * Ator "frouxo" — módulos como produção montam o ator à mão e o `id` pode
+ * ser nulo (rotina interna). O que importa para o escopo é a empresa.
+ */
+export type AtorEscopo = {
+  id?: number | null;
+  name?: string | null;
+  perfil?: string;
+  empresa_id?: number | null;
+  pode_consolidar?: boolean;
+  empresa_sessao?: number | null;
+  empresas?: number[];
+  consolidar?: boolean;
+};
+
 /** Aceita tanto um ator quanto um escopo já resolvido (ou nada). */
-export type EscopoOuAtor = Actor | EscopoEmpresa | null | undefined;
+export type EscopoOuAtor = Actor | AtorEscopo | EscopoEmpresa | null | undefined;
 
 /**
  * Normaliza o 3º parâmetro das funções de CRUD.
@@ -72,6 +87,69 @@ export function comoEscopo(x: EscopoOuAtor): EscopoEmpresa | undefined {
 /** Escopo do ator — atalho explícito para as rotas HTTP. */
 export function escopoDe(actor: Actor | null | undefined): EscopoEmpresa {
   return escopoDoAtor(actor as any);
+}
+
+/**
+ * STORE COM RECORTE DE EMPRESA — para os módulos que falam DIRETO com o
+ * store (relatórios, estoque, produção, detalhe do produto, exportação,
+ * importação, loja/conectores).
+ *
+ * Por que existe: `listRecords` já aplica o escopo, mas os módulos
+ * especializados chamavam `getStore().list(...)` cru — e no store cru a
+ * ausência de `filter.empresa_id` significa "todas as empresas". Era um
+ * vazamento silencioso: a Empresa A enxergava o estoque, as vendas e os
+ * lançamentos da Empresa B.
+ *
+ * Aqui o recorte é aplicado NA PORTA, uma vez só:
+ *   • `list`/`findOneWhere`/`countWhere` recebem `empresa_id` obrigatório
+ *     (somado ao filtro do chamador; um `empresa_id` injetado é descartado);
+ *   • `get` responde `null` para registro de outra empresa (o chamador já
+ *     traduz isso em 404 — nunca 403, que confirmaria a existência);
+ *   • `insert` carimba a empresa do escopo; `update` recusa registro de fora.
+ *
+ * O resto da interface passa direto (auditoria, sessões, rate limit etc.).
+ */
+export function storeDoAtor(atorOuEscopo: EscopoOuAtor): Store {
+  const escopo = comoEscopo(atorOuEscopo);
+  const s = getStore();
+  // Proxy (e não spread): o store é uma CLASSE — espalhar perderia os
+  // métodos do protótipo. Aqui só as operações com escopo são
+  // interceptadas; todo o resto (auditoria, sessões, rate limit,
+  // transações) segue direto para a instância original.
+  const interceptados: Record<string, (...args: any[]) => any> = {
+    list: (r: Resource, p: ListParams, tx?: Tx) => s.list(r, { ...p, filter: aplicarFiltroEmpresa(r, p.filter, escopo) }, tx),
+    findOneWhere: (r: Resource, where: Payload, tx?: Tx) =>
+      where ? s.findOneWhere(r, aplicarFiltroEmpresa(r, where, escopo) ?? {}, tx) : s.findOneWhere(r, where, tx),
+    countWhere: (r: Resource, where: Payload, tx?: Tx) =>
+      where ? s.countWhere(r, aplicarFiltroEmpresa(r, where, escopo) ?? {}, tx) : s.countWhere(r, where, tx),
+    get: async (r: Resource, id: number, tx?: Tx) => {
+      const row = await s.get(r, id, tx);
+      return row && registroVisivel(r, row, escopo) ? row : null;
+    },
+    insert: (r: Resource, data: Payload, tx?: Tx) => s.insert(r, carimbarEmpresa(r, { ...data }, escopo), tx),
+    update: async (r: Resource, id: number, data: Payload, tx?: Tx) => {
+      const antes = await s.get(r, id, tx);
+      if (antes && !registroVisivel(r, antes, escopo)) return null;
+      return s.update(r, id, protegerEmpresaNaEdicao(r, { ...data }), tx);
+    },
+  };
+  return new Proxy(s, {
+    get(target, prop) {
+      const nome = typeof prop === 'string' ? prop : '';
+      const override = interceptados[nome];
+      if (override) return override;
+      const valor = Reflect.get(target, prop, target) as unknown;
+      return typeof valor === 'function' ? (valor as (...a: unknown[]) => unknown).bind(target) : valor;
+    },
+  }) as Store;
+}
+
+/** O registro pertence à empresa do escopo (ou o recurso não tem escopo)? */
+function registroVisivel(r: Resource, row: Row, escopo: EscopoEmpresa | undefined): boolean {
+  if (!temEscopoEmpresa(r) || !escopo) return true;
+  if (escopo.consolidado) return true;
+  const dono = row.empresa_id === null || row.empresa_id === undefined ? 1 : Number(row.empresa_id);
+  return dono === escopo.empresaId;
 }
 
 function audit(tx: Tx, actor: Actor, acao: 'criar' | 'editar' | 'excluir', r: Resource, id: number | null, descricao: string, dados?: unknown) {

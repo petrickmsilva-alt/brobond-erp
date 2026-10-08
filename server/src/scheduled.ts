@@ -20,7 +20,7 @@
 import { enviarEmail, smtpConfigurado } from './mail';
 import { hasDatabaseUrl } from './db';
 import { instagramConnectorService, saleIngestionService } from '../../modules/connectors/index';
-import { getStore } from './services';
+import { escopoDe, getStore, storeDoAtor, type EscopoOuAtor } from './services';
 import { getResource } from './resources';
 import { labelOf } from './store';
 import { HttpError } from './errors';
@@ -28,6 +28,8 @@ import { processarRecorrencias } from './financeiro';
 import { atualizarMotorNegocios } from './negocios';
 import type { Request, Response } from 'express';
 import { currentUser } from './auth';
+// Hub de e-commerce: operações de canal vencidas para nova tentativa (§16).
+import { retentativasPendentes } from './commerce';
 
 const fmtMoney = (n: number) => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtNumber = (n: number) => n.toLocaleString('pt-BR');
@@ -82,8 +84,10 @@ async function enviarRelatorio(assunto: string, html: string): Promise<void> {
 // Relatórios individuais
 // ----------------------------------------------------------------------------
 
-async function relatorioPosicaoEstoque(): Promise<void> {
-  const s = getStore();
+async function relatorioPosicaoEstoque(escopo?: EscopoOuAtor): Promise<void> {
+  // MULTIEMPRESA: disparado por um admin, o relatório sai da empresa ATIVA
+  // dele; o cron do sistema (sem ator) mantém o consolidado do grupo.
+  const s = escopo ? storeDoAtor(escopo) : getStore();
   const [produtos, estoques] = await Promise.all([
     s.list(getResource('produtos')!, { page: 1, pageSize: 2000 }),
     s.list(getResource('estoques')!, { page: 1, pageSize: 5000 }),
@@ -135,8 +139,8 @@ async function relatorioPosicaoEstoque(): Promise<void> {
   await enviarRelatorio(`Posição de Estoque — ${new Date().toLocaleDateString('pt-BR')}`, html);
 }
 
-async function relatorioVendas(): Promise<void> {
-  const s = getStore();
+async function relatorioVendas(escopo?: EscopoOuAtor): Promise<void> {
+  const s = escopo ? storeDoAtor(escopo) : getStore();
   const dias = getSchedule('VENDAS') === 'daily' ? 1 : 7;
   const desde = new Date();
   desde.setDate(desde.getDate() - dias);
@@ -175,8 +179,8 @@ async function relatorioVendas(): Promise<void> {
   await enviarRelatorio(`Vendas — últimos ${dias} dia${dias > 1 ? 's' : ''}`, html);
 }
 
-async function relatorioAlertas(): Promise<void> {
-  const s = getStore();
+async function relatorioAlertas(escopo?: EscopoOuAtor): Promise<void> {
+  const s = escopo ? storeDoAtor(escopo) : getStore();
   const [estoques, insumosEst] = await Promise.all([
     s.list(getResource('estoques')!, { page: 1, pageSize: 5000 }),
     s.list(getResource('estoque_insumos')!, { page: 1, pageSize: 2000 }),
@@ -266,22 +270,26 @@ export async function runScheduled(req: Request, res: Response) {
 
   const resultados: string[] = [];
 
+  const escopoDoAdmin = escopoDe(actor);
   if (deveExecutar(getSchedule('POSICAO_ESTOQUE'))) {
-    await relatorioPosicaoEstoque();
+    await relatorioPosicaoEstoque(escopoDoAdmin);
     resultados.push('Posição de estoque');
   }
   if (deveExecutar(getSchedule('VENDAS'))) {
-    await relatorioVendas();
+    await relatorioVendas(escopoDoAdmin);
     resultados.push('Vendas');
   }
   if (deveExecutar(getSchedule('ALERTAS'))) {
-    await relatorioAlertas();
+    await relatorioAlertas(escopoDoAdmin);
     resultados.push('Alertas');
   }
   const rec = await processarRecorrencias({ id: actor.id || null, name: actor.name });
   if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrência(s) financeira(s)`);
   const pedidos = await recuperarPedidosPendentes();
   if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace recuperado(s)`);
+
+  const retryCanais = await retentativasPendentes();
+  if (retryCanais > 0) resultados.push(`${retryCanais} operação(ões) de canal pendente(s) de nova tentativa`);
 
   // Motor 1. MEU NEGÓCIOS: margens e curva ABC sempre frescas — a rotina
   // roda junto com o cron de agendados (segunda via do ciclo contínuo).
@@ -310,6 +318,9 @@ export async function cronScheduled(req: Request, res: Response) {
   if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrencia(s)`);
   const pedidos = await recuperarPedidosPendentes();
   if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace`);
+
+  const retryCanaisCron = await retentativasPendentes();
+  if (retryCanaisCron > 0) resultados.push(`${retryCanaisCron} operacao(oes) de canal pendente(s)`);
 
   res.json({ ok: true, executados: resultados });
 }

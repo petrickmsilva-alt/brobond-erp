@@ -109,7 +109,7 @@ async function tamanhosDaGrade(gradeId: number | null, tx?: Tx): Promise<{ id: n
 }
 
 /** Campos que a variação herda do pai — tudo o que é do produto, não da peça. */
-const HERDADOS = [
+export const HERDADOS = [
   'categoria_id',
   'colecao_id',
   'fornecedor_id',

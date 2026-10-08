@@ -6,7 +6,7 @@ import type { Request, Response } from 'express';
 import { currentUser } from './auth';
 import { HttpError } from './errors';
 import { RESOURCES } from './resources';
-import { checkAccess, getRecord, getStore, gradeDoProduto } from './services';
+import { checkAccess, getRecord, getStore, gradeDoProduto , storeDoAtor, escopoDe } from './services';
 import { medidasDaGrade } from './medidas';
 import { parseId } from './validate';
 
@@ -19,7 +19,7 @@ import { parseId } from './validate';
 export async function produtoTamanhos(req: Request, res: Response) {
   checkAccess(RESOURCES.produtos, currentUser(req), 'read');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const produto = await s.findOneWhere(RESOURCES.produtos, { id });
   if (!produto) throw new HttpError(404, 'Produto não encontrado.');
   const grade = await gradeDoProduto(produto);
@@ -38,9 +38,10 @@ export async function productDetail(req: Request, res: Response) {
   const r = RESOURCES.produtos;
   checkAccess(r, currentUser(req), 'read');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
 
-  const produto = await getRecord(r, id);
+  // MULTIEMPRESA: produto de outra empresa responde 404 (não 403).
+  const produto = await getRecord(r, id, escopoDe(currentUser(req)));
 
   const [tamanhos, estoques, movimentacoes, ordens, fichas, gradeInfo] = await Promise.all([
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200 }),

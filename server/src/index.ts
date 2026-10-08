@@ -57,7 +57,7 @@ import { estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDeta
 import { getMedidasGrade, resumoMedidasGrades, saveMedidasGrade } from './medidas';
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
-import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
+import { confirmarImportacao, listarLotesImportacao, modeloImportacao, previewImportacao } from './importacao';
 import {
   aplicarPrecoFicha,
   producaoPainel,
@@ -185,6 +185,19 @@ import { marketplaceStatus, sincronizarPedidos } from './marketplace';
 import { connectorsRouter, initConnectors, publicConnectorsRouter } from './connectors';
 import { publicGatewayRouter } from './gateway';
 import { importarPedidosLoja, produtosLoja, sincronizarEstoqueLoja, statusLoja } from './loja';
+// Hub de e-commerce (Fase P3 §2-§7): canais com contrato comum, sincronização
+// ERP ↔ canal, logs/retry por operação e webhook assinado por canal.
+import {
+  canaisComercio,
+  importarPedidosComercio,
+  listarLogsComercio,
+  listarPedidosExternosComercio,
+  processarRetentativasComercio,
+  publicarEstoqueComercio,
+  publicarPrecoComercio,
+  publicCommerceRouter,
+  testarCanalComercio,
+} from './commerce';
 import {
   initNegociosEngine,
   negociosABC,
@@ -253,6 +266,10 @@ app.use(publicConnectorsRouter);
 // antes do express.json() e do requireAuth. Provedor desconhecido cai no 404
 // do próprio router; nada aqui afeta as rotas autenticadas.
 app.use(publicGatewayRouter);
+// Hub de e-commerce: webhooks dos canais (WooCommerce/Nuvemshop/Mercado Livre)
+// chegam de fora, com assinatura sobre os bytes crus — montado pelo mesmo
+// motivo dos conectores, antes do express.json() e do requireAuth.
+app.use(publicCommerceRouter);
 
 app.use(express.json({ limit: '4mb' })); // fotos chegam em base64 (já reduzidas no navegador)
 app.use(express.urlencoded({ extended: true }));
@@ -518,6 +535,16 @@ app.post('/api/admin/scheduled/cron', wrap(cronScheduled));
 
 // Notificações (status)
 app.get('/api/admin/notificacoes/status', (_req, res) => res.json(notificacoesStatus()));
+// Verificação de estoque mínimo do ESCOPO do administrador (a empresa ativa):
+// o cron de sistema usa a mesma função sem escopo e vê o grupo consolidado.
+app.get(
+  '/api/admin/notificacoes/verificar',
+  wrap(async (req, res) => {
+    const actor = currentUser(req);
+    if (actor.perfil === 'operador') throw new HttpError(403, 'Apenas gerente ou administrador.');
+    res.json(await verificarAlertasEstoque(escopoDe(actor)));
+  })
+);
 
 // Documentação OpenAPI (pública)
 app.get('/api/docs/openapi.json', wrap(openapiJSON));
@@ -664,6 +691,16 @@ app.get('/api/marketplace/loja/produtos', wrap(produtosLoja));
 app.post('/api/marketplace/loja/pedidos', wrap(importarPedidosLoja));
 app.post('/api/marketplace/loja/estoque', wrap(sincronizarEstoqueLoja));
 
+// Hub de e-commerce (P3 §2-§7) — canais com contrato comum
+app.get('/api/commerce/canais', wrap(canaisComercio));
+app.post('/api/commerce/canais/:canal/testar', wrap(testarCanalComercio));
+app.post('/api/commerce/canais/:canal/pedidos/importar', wrap(importarPedidosComercio));
+app.post('/api/commerce/canais/:canal/estoque/publicar', wrap(publicarEstoqueComercio));
+app.post('/api/commerce/canais/:canal/preco/publicar', wrap(publicarPrecoComercio));
+app.get('/api/commerce/logs', wrap(listarLogsComercio));
+app.get('/api/commerce/pedidos-externos', wrap(listarPedidosExternosComercio));
+app.post('/api/commerce/retentativas/processar', wrap(processarRetentativasComercio));
+
 // WebSocket status
 app.get('/api/admin/ws/status', (_req, res) => res.json(wsStatus()));
 
@@ -697,6 +734,8 @@ app.get('/api/relatorios/:nome', wrap(async (req, res) => relatorio(req, res, re
 app.post('/api/importar/preview', wrap(previewImportacao));
 app.post('/api/importar/confirmar', wrap(confirmarImportacao));
 app.get('/api/importar/modelo', wrap(modeloImportacao));
+// Trilha da migração (§11): lotes executados, com contadores e erros por linha.
+app.get('/api/importar/lotes', wrap(listarLotesImportacao));
 app.get('/api/:resource/export', wrap(async (req, res) => exportarRecurso(req, res, req.params.resource)));
 
 // Fase 6 — backup (admin)

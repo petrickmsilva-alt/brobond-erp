@@ -205,6 +205,13 @@ async function reconciliarParcelasPedido(
   const detalhes = Array.isArray(after.fin_parcelas_detalhes) ? after.fin_parcelas_detalhes as Row[] : [];
   const existentes = await parcelasDaOrigem(referencia, id, tx);
   const parcelasFinais: { lancamento_id: number; valor: number }[] = [];
+  // RASTREABILIDADE DO TÍTULO (§12): o contas a pagar/receber guarda a PESSOA
+  // (fornecedor/cliente), o DOCUMENTO (nº do título/duplicata da nota) e a
+  // ORIGEM. Sem esses três, conciliar a migração vira arqueologia: a parcela
+  // some no meio de dezenas de lançamentos iguais. O valor nunca é presumido.
+  const pessoaTipo = referencia === 'compra' ? 'fornecedor' : 'cliente';
+  const pessoaId = Number(referencia === 'compra' ? after.fornecedor_id : after.cliente_id) || null;
+  const documentoBase = referencia === 'compra' ? String(after.nota_fiscal || '').trim() || null : null;
 
   for (let i = 1; i <= n; i++) {
     const detalhe = detalhes.find((item) => Number(item.parcela || 0) === i) || detalhes[i - 1];
@@ -223,6 +230,9 @@ async function reconciliarParcelasPedido(
       total_parcelas: n,
       referencia_tipo: referencia,
       referencia_id: id,
+      pessoa_tipo: pessoaTipo,
+      pessoa_id: pessoaId,
+      documento: detalhe?.numero ? String(detalhe.numero).slice(0, 60) : documentoBase,
       observacoes: alvo?.observacoes ?? extraObs ?? null,
     };
     if (alvo) {

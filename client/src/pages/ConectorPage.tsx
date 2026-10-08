@@ -256,6 +256,144 @@ const EMPTY_PANEL: ConnectorPanel = {
   importedContent: [],
 };
 
+// ----------------------------------------------------------------------------
+// Hub de e-commerce (Fase P3 §2-§7): sincronização ERP ↔ CANAL.
+//
+// O painel acima mostra o que o CANAL mandou. Este bloco faz o caminho de
+// volta do ERP: importar pedidos, publicar saldo, publicar preço e reprocessar
+// o que ficou pendente — sempre pelo contrato comum `/api/commerce/...`, nunca
+// por código específico de plataforma na tela.
+// ----------------------------------------------------------------------------
+
+type HubLog = {
+  id: number;
+  provider: string;
+  operacao: string;
+  status: string;
+  erro: string | null;
+  tentativa: number;
+  criado_em: string | null;
+  proxima_tentativa_em: string | null;
+};
+
+type HubResumo = {
+  enviados?: number;
+  atualizados?: number;
+  semMapeamento?: string[];
+  importados?: unknown[];
+  ignorados?: unknown[];
+  pendentes?: unknown[];
+  falhas?: unknown[];
+  encontrados?: number;
+};
+
+function HubSyncPanel({ canal }: { canal: string }) {
+  const [logs, setLogs] = useState<HubLog[]>([]);
+  const [pendentes, setPendentes] = useState(0);
+  const [busy, setBusy] = useState('');
+  const [resultado, setResultado] = useState('');
+  const [erro, setErro] = useState('');
+
+  const carregar = useCallback(() => {
+    // Defensivo de propósito: o bloco é complementar — se a consulta falhar, o
+    // painel do canal continua de pé (nada de tela quebrada por integração).
+    try {
+      void api
+        .get<{ logs: HubLog[]; pendentes_retry: number }>(`/commerce/logs?canal=${canal}&limite=8`)
+        .then((r) => {
+          setLogs(Array.isArray(r?.logs) ? r.logs : []);
+          setPendentes(Number(r?.pendentes_retry || 0));
+        })
+        .catch(() => undefined);
+    } catch {
+      /* painel do canal segue funcionando */
+    }
+  }, [canal]);
+
+  useEffect(() => {
+    carregar();
+  }, [carregar]);
+
+  async function acao(rotulo: string, caminho: string, corpo: Record<string, unknown> = {}) {
+    setBusy(rotulo);
+    setErro('');
+    setResultado('');
+    try {
+      const r = await api.post<HubResumo>(caminho, corpo);
+      const partes: string[] = [];
+      if (r?.encontrados !== undefined) partes.push(`${r.encontrados} pedido(s) no canal`);
+      if (r?.importados) partes.push(`${r.importados.length} novo(s)`);
+      if (r?.ignorados) partes.push(`${r.ignorados.length} já existente(s)`);
+      if (r?.pendentes?.length) partes.push(`${r.pendentes.length} pendente(s)`);
+      if (r?.enviados !== undefined) partes.push(`${r.enviados} SKU(s) enviados`);
+      if (r?.atualizados !== undefined) partes.push(`${r.atualizados} atualizado(s)`);
+      if (r?.semMapeamento?.length) partes.push(`${r.semMapeamento.length} sem mapeamento`);
+      if (r?.falhas?.length) partes.push(`${r.falhas.length} falha(s)`);
+      setResultado(partes.length ? partes.join(' · ') : 'Concluído.');
+      carregar();
+    } catch (e) {
+      setErro((e as ApiError)?.message || 'A operação não foi concluída.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  const slugLower = canal.toLowerCase();
+
+  return (
+    <Panel title="Sincronização ERP ↔ canal" subtitle="pedidos, saldo, preço e retentativas" accent>
+      <div className="flex flex-wrap items-center gap-3 border-b border-slate-800/80 px-5 py-4">
+        <button
+          className="btn-secondary"
+          onClick={() => acao('pedidos', `/commerce/canais/${slugLower}/pedidos/importar`, { dias: 30, limite: 50 })}
+          disabled={busy !== ''}
+        >
+          {busy === 'pedidos' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Inbox className="h-4 w-4" />} Importar pedidos (30 dias)
+        </button>
+        <button className="btn-secondary" onClick={() => acao('estoque', `/commerce/canais/${slugLower}/estoque/publicar`)} disabled={busy !== ''}>
+          {busy === 'estoque' ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageSearch className="h-4 w-4" />} Publicar saldo
+        </button>
+        <button className="btn-secondary" onClick={() => acao('preco', `/commerce/canais/${slugLower}/preco/publicar`)} disabled={busy !== ''}>
+          {busy === 'preco' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Publicar preços
+        </button>
+        {pendentes > 0 && (
+          <button className="btn-secondary" onClick={() => acao('retry', '/commerce/retentativas/processar')} disabled={busy !== ''}>
+            {busy === 'retry' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Reprocessar {pendentes} pendência(s)
+          </button>
+        )}
+      </div>
+
+      {erro && <p className="px-5 py-2 text-xs text-red-400">{erro}</p>}
+      {resultado && <p className="px-5 py-2 text-xs text-emerald-400">{resultado}</p>}
+
+      {logs.length === 0 ? (
+        <PanelEmpty
+          icon={<Webhook className="h-6 w-6" />}
+          message="Sem operações registradas"
+          hint="Cada importação, publicação ou webhook grava aqui provedor, operação, status, tentativa e erro — sem nenhum segredo."
+        />
+      ) : (
+        <ul className="divide-y divide-slate-800/70">
+          {logs.map((log) => (
+            <li key={log.id} className="flex items-center justify-between gap-3 px-5 py-2.5">
+              <div className="min-w-0">
+                <div className="truncate font-mono text-xs text-slate-300">{log.operacao}</div>
+                {log.erro && <div className="mt-0.5 truncate text-[11px] text-red-400/90">{log.erro}</div>}
+              </div>
+              <div className="shrink-0 text-right">
+                <div className="font-mono text-[11px] tabular-nums text-slate-400">{formatShortDate(log.criado_em)}</div>
+                <div className={`text-[10px] font-bold uppercase tracking-wider ${log.status === 'ok' ? 'text-emerald-400' : log.status === 'erro' ? 'text-red-400' : 'text-amber-400'}`}>
+                  {log.status} · tentativa {log.tentativa}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
 export default function ConectorPage({ module }: { module: Module }) {
   const provider = String(module.connector ?? '');
   const slug = PATH[provider] ?? provider.toLowerCase();
@@ -567,6 +705,9 @@ export default function ConectorPage({ module }: { module: Module }) {
               </span>
             </div>
           </Panel>
+
+          {/* d) Sincronização ERP ↔ canal (Fase P3) — só nos canais do hub. */}
+          {(provider === 'MERCADOLIVRE' || provider === 'NUVEMSHOP') && <HubSyncPanel canal={provider} />}
         </>
       )}
     </div>

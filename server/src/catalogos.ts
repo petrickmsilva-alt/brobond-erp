@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
 import { getResource, RESOURCES } from './resources';
-import { checkAccess, exigirComercial, getStore, toHttpError } from './services';
+import { checkAccess, exigirComercial, getStore, toHttpError , storeDoAtor } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
 import type { Row } from './store';
@@ -92,6 +92,9 @@ export function hashTokenPublico(token: string): string {
 }
 
 async function resolverTokenCatalogo(token: string): Promise<{ catalogo: Row | null; compartilhamento: Row | null }> {
+  // ACESSO PÚBLICO POR TOKEN: quem chama aqui não tem sessão (o cliente da
+  // loja abre o link). O recorte é o próprio token secreto — não há empresa
+  // ativa para filtrar, e é por isso que este caminho usa o store CRU.
   const s = getStore();
   const direto = await s.findOneWhere(RESOURCES.catalogos, { token });
   if (direto) return { catalogo: direto, compartilhamento: null };
@@ -105,7 +108,7 @@ async function resolverTokenCatalogo(token: string): Promise<{ catalogo: Row | n
 export async function catalogoPublico(req: Request, res: Response) {
   const token = String(req.params.token || '').trim();
   if (!token || !/^[a-f0-9]{12,}$/i.test(token)) throw new HttpError(404, 'Catálogo não encontrado.');
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const resolvido = await resolverTokenCatalogo(token);
   const catalogo = resolvido.catalogo;
   if (!catalogo || catalogo.ativo === false) throw new HttpError(404, 'Catálogo não encontrado.');
@@ -301,7 +304,7 @@ export async function catalogoPublico(req: Request, res: Response) {
 export async function criarPedidoCatalogo(req: Request, res: Response) {
   const token = String(req.params.token || '').trim();
   if (!token || !/^[a-f0-9]{12,}$/i.test(token)) throw new HttpError(404, 'Catálogo não encontrado.');
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const resolvido = await resolverTokenCatalogo(token);
   const catalogo = resolvido.catalogo;
   if (!catalogo || catalogo.ativo === false) throw new HttpError(404, 'Catálogo não encontrado.');
@@ -450,7 +453,7 @@ export async function compartilharCatalogo(req: Request, res: Response) {
   const actor = currentUser(req);
   exigirComercial(actor, 'compartilhar');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const catalogo = await s.get(RESOURCES.catalogos, id);
   if (!catalogo) throw new HttpError(404, 'Catálogo não encontrado.');
   if (!catalogo.token) throw new HttpError(409, 'Este catálogo ainda não possui link público.');
@@ -507,7 +510,7 @@ export async function eventoCatalogo(req: Request, res: Response) {
 export async function inteligenciaCatalogos(req: Request, res: Response) {
   const actor = currentUser(req);
   exigirComercial(actor, 'metricas');
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const dias = Math.min(365, Math.max(1, Number(req.query.dias) || 30));
   const desde = Date.now() - dias * 86400000;
   const [compR, eventosR, catalogosR, clientesR, usuariosR] = await Promise.all([
@@ -549,7 +552,7 @@ export async function revogarCompartilhamento(req: Request, res: Response) {
   const actor = currentUser(req);
   exigirComercial(actor, 'compartilhar');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const atual = await s.get(RESOURCES.catalogo_compartilhamentos, id);
   if (!atual) throw new HttpError(404, 'Compartilhamento não encontrado.');
   if (!atual.revogado_em) await s.update(RESOURCES.catalogo_compartilhamentos, id, { revogado_em: new Date().toISOString() });
@@ -608,7 +611,7 @@ export function origensEmbed(): string[] {
 export async function catalogoEmbed(req: Request, res: Response) {
   const token = String(req.params.token || '').trim();
   if (!token || !/^[a-f0-9]{12,}$/i.test(token)) throw new HttpError(404, 'Catálogo não encontrado.');
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const resolvido = await resolverTokenCatalogo(token);
   const catalogo = resolvido.catalogo;
   if (!catalogo || catalogo.ativo === false) throw new HttpError(404, 'Catálogo não encontrado.');

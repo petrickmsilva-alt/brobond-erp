@@ -13,6 +13,7 @@
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import ConectorPage from './ConectorPage';
 import { ToastProvider } from '../components/ui';
 import { MODULES, type Module } from '../modules';
@@ -158,5 +159,38 @@ describe('ConectorPage — gabarito analítico do Hub', () => {
 
     expect(await screen.findByText('Desconectado')).toBeInTheDocument();
     expect(screen.queryByText('CONECTADO COM SUCESSO')).toBeNull();
+  });
+
+  it('bloco de sincronização ERP ↔ canal: importa pedidos pela rota do hub e mostra o log', async () => {
+    renderPage(moduleOf('conector-nuvemshop'));
+    await screen.findByText('Pedidos Importados');
+
+    // O bloco do hub aparece só nos canais sincronizáveis (ML e Nuvemshop).
+    expect(screen.getByText('Sincronização ERP ↔ canal')).toBeInTheDocument();
+
+    // Log de integração devolvido pela API aparece com operação e tentativa.
+    apiGet.mockResolvedValue({
+      connector: statusFixture({ provider: 'NUVEMSHOP' }),
+      panel: EMPTY_PANEL,
+      logs: [{ id: 1, provider: 'NUVEMSHOP', operacao: 'pedido.importar', status: 'ok', erro: null, tentativa: 1, criado_em: '2026-10-08T12:00:00.000Z', proxima_tentativa_em: null }],
+      pendentes_retry: 0,
+    });
+    expect(apiGet).toHaveBeenCalledWith('/connectors/nuvemshop/painel');
+
+    apiPost.mockResolvedValue({ ok: true, encontrados: 2, importados: [1], ignorados: [2], pendentes: [] });
+    const botao = screen.getByRole('button', { name: /Importar pedidos/i });
+    await userEvent.click(botao);
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/commerce/canais/nuvemshop/pedidos/importar', { dias: 30, limite: 50 }));
+    expect(await screen.findByText(/2 pedido\(s\) no canal/)).toBeInTheDocument();
+  });
+
+  it('Mercado Pago não ganha bloco de sincronização de e-commerce (não é canal de venda)', async () => {
+    apiGet.mockResolvedValue({
+      connector: statusFixture({ provider: 'MERCADOPAGO', authModel: 'credentials', connected: false, environmentCredentialsAvailable: false }),
+      panel: EMPTY_PANEL,
+    });
+    renderPage(moduleOf('conector-mercadopago'));
+    await screen.findByText('Pedidos Importados');
+    expect(screen.queryByText('Sincronização ERP ↔ canal')).toBeNull();
   });
 });

@@ -7,7 +7,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { RESOURCES } from './resources';
-import { checkAccess, getStore } from './services';
+import { checkAccess, getStore , storeDoAtor } from './services';
 import { currentUser } from './auth';
 import { enviarArquivo, type ColunaExport } from './export';
 import type { Row } from './store';
@@ -47,7 +47,7 @@ async function responder(
 // 1) Posição de estoque valorizada (por produto/categoria/coleção/local)
 // ----------------------------------------------------------------------------
 async function relEstoquePosicao(req: Request, res: Response) {
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const grupo = String(req.query.grupo || 'produto');
   const { de: _de, ate: _ate } = periodo(req);
   void _de;
@@ -138,7 +138,7 @@ async function relEstoquePosicao(req: Request, res: Response) {
 // 2) Movimentações por período
 // ----------------------------------------------------------------------------
 async function relMovimentacoes(req: Request, res: Response) {
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const { de, ate } = periodo(req);
   const tipo = typeof req.query.tipo === 'string' && req.query.tipo ? String(req.query.tipo) : null;
   const local = typeof req.query.local === 'string' && req.query.local ? String(req.query.local) : null;
@@ -186,7 +186,7 @@ async function relMovimentacoes(req: Request, res: Response) {
 // 3) Produção concluída por período
 // ----------------------------------------------------------------------------
 async function relProducao(req: Request, res: Response) {
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const { de, ate } = periodo(req);
   const [produtos] = await Promise.all([s.list(RESOURCES.produtos, { page: 1, pageSize: 2000 })]);
   const pNome = new Map(produtos.rows.map((p) => [Number(p.id), labelOf(RESOURCES.produtos, p)]));
@@ -230,7 +230,7 @@ async function relProducao(req: Request, res: Response) {
 // 4) Vendas por cliente / representante / coleção / categoria
 // ----------------------------------------------------------------------------
 async function relVendas(req: Request, res: Response) {
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const { de, ate } = periodo(req);
   const por = String(req.query.por || 'cliente');
   const [vendas, itensVenda, clientes, representantes, produtos, categorias, colecoes] = await Promise.all([
@@ -309,7 +309,7 @@ async function relVendas(req: Request, res: Response) {
 // 5) Curva ABC de produtos (80/15/5 por faturamento)
 // ----------------------------------------------------------------------------
 async function relABC(req: Request, res: Response) {
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const { de, ate } = periodo(req);
   const [produtos, vendas, itensVenda] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 2000 }),
@@ -366,7 +366,7 @@ async function relABC(req: Request, res: Response) {
 // 6) Insumos abaixo do estoque mínimo
 // ----------------------------------------------------------------------------
 async function relInsumosMinimo(req: Request, res: Response) {
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const [insumos, estoques] = await Promise.all([
     s.list(RESOURCES.insumos, { page: 1, pageSize: 2000 }),
     s.list(RESOURCES.estoque_insumos, { page: 1, pageSize: 2000 }),
@@ -404,7 +404,7 @@ async function relInsumosMinimo(req: Request, res: Response) {
 // 7) Faturamento por período — mensal com comparação mensal e anual
 // ------------------------------------------------------------------------------
 async function relFaturamento(req: Request, res: Response) {
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const { de, ate } = periodo(req);
   const vendas = await s.list(RESOURCES.vendas, { page: 1, pageSize: 10000 });
   const faturadas = vendas.rows.filter((v) => FATURADAS.includes(String(v.status)));
@@ -484,7 +484,7 @@ async function relFaturamento(req: Request, res: Response) {
 // 8) Comissões por representante + evolução mensal (gráfico)
 // ------------------------------------------------------------------------------
 async function relComissoes(req: Request, res: Response) {
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const { de, ate } = periodo(req);
   const representanteId = req.query.representante_id ? Number(req.query.representante_id) : undefined;
   const [vendas, representantes] = await Promise.all([
@@ -548,7 +548,7 @@ async function relComissoes(req: Request, res: Response) {
 // 9) Estoque mínimo por local (produtos acabados)
 // ------------------------------------------------------------------------------
 async function relEstoqueMinimo(req: Request, res: Response) {
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const local = typeof req.query.local === 'string' && req.query.local ? String(req.query.local) : null;
   const [produtos, tamanhos, estoques] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 2000 }),
@@ -601,7 +601,7 @@ async function relEstoqueMinimo(req: Request, res: Response) {
 // ------------------------------------------------------------------------------
 async function relRazao(req: Request, res: Response) {
   checkAccess(RESOURCES.lancamentos_financeiros, currentUser(req), 'read');
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const { de, ate } = periodo(req);
   const tipo = typeof req.query.tipo === 'string' && req.query.tipo ? String(req.query.tipo) : null;
   const [lancs, categorias, contas] = await Promise.all([
@@ -660,7 +660,7 @@ async function relRazao(req: Request, res: Response) {
 // ------------------------------------------------------------------------------
 async function relDRE(req: Request, res: Response) {
   checkAccess(RESOURCES.lancamentos_financeiros, currentUser(req), 'read');
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const { de, ate } = periodo(req);
   const [lancs, categorias] = await Promise.all([
     s.list(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 10000, sort: 'data', dir: 'asc' }),

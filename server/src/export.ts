@@ -8,7 +8,7 @@ import type { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { HttpError } from './errors';
 import { getPublicResource, type Resource } from './resources';
-import { checkAccess, getStore } from './services';
+import { checkAccess, getStore , storeDoAtor } from './services';
 import { currentUser } from './auth';
 import type { Row } from './store';
 
@@ -129,7 +129,7 @@ export async function exportarRecurso(req: Request, res: Response, resourceKey: 
   const q = typeof req.query.q === 'string' ? req.query.q : undefined;
 
   // Reúne todas as páginas
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   // Filtros virtuais de usuários (status consolidado, MFA, parados 30d, senha, acesso) filtram em JS.
   const filtroStatus = r.key === 'usuarios' && typeof filter.status === 'string' ? String(filter.status) : '';
   const filtroMfa = r.key === 'usuarios' ? String(filter.mfa || '') : '';

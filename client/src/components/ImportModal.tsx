@@ -3,14 +3,27 @@ import { CheckCircle2, Download, FileUp, Inbox, Loader2, UploadCloud, X } from '
 import { api, downloadFile, lerArquivoParaImportacao, ApiError } from '../lib/api';
 import { Alert, Modal, useToast } from './ui';
 
-export type TipoImport = 'produtos' | 'clientes' | 'fornecedores' | 'insumos' | 'estoque';
+export type TipoImport =
+  | 'produtos'
+  | 'variacoes'
+  | 'composicoes'
+  | 'clientes'
+  | 'fornecedores'
+  | 'insumos'
+  | 'estoque'
+  | 'titulos'
+  | 'pedidos';
 
 export const IMPORT_TIPOS: { tipo: TipoImport; label: string; recurso: string; singular: string }[] = [
   { tipo: 'produtos', label: 'Produtos', recurso: 'produtos', singular: 'produto' },
+  { tipo: 'variacoes', label: 'Variações (cor × tamanho)', recurso: 'produtos', singular: 'variação' },
+  { tipo: 'composicoes', label: 'Composição de kits', recurso: 'produto_composicao', singular: 'componente' },
   { tipo: 'clientes', label: 'Clientes', recurso: 'clientes', singular: 'cliente' },
   { tipo: 'fornecedores', label: 'Fornecedores', recurso: 'fornecedores', singular: 'fornecedor' },
   { tipo: 'insumos', label: 'Insumos', recurso: 'insumos', singular: 'insumo' },
   { tipo: 'estoque', label: 'Saldos iniciais de estoque', recurso: 'estoques', singular: 'saldo de estoque' },
+  { tipo: 'titulos', label: 'Títulos financeiros em aberto', recurso: 'lancamentos_financeiros', singular: 'título' },
+  { tipo: 'pedidos', label: 'Histórico de pedidos', recurso: 'vendas', singular: 'pedido' },
 ];
 
 type PreviewResp = {
@@ -81,8 +94,13 @@ export function ImportModal({
   const [preview, setPreview] = useState<PreviewResp | null>(null);
   const [error, setError] = useState('');
   const [confirmando, setConfirmando] = useState(false);
-  const [resultado, setResultado] = useState<{ importados: number; pulados: number } | null>(null);
+  const [resultado, setResultado] = useState<{ importados: number; atualizados: number; pulados: number } | null>(null);
   const [linhaArquivo, setLinhaArquivo] = useState(0);
+  // O conteúdo que foi analisado é o MESMO que será importado: a confirmação
+  // reenvia o arquivo (o servidor revalida do zero — nada de amostra).
+  const [conteudoEnviado, setConteudoEnviado] = useState('');
+  const [erroLiberado, setErroLiberado] = useState(false);
+  const [errosAbortados, setErrosAbortados] = useState<{ linha: number; mensagem: string }[]>([]);
 
   useEffect(() => {
     if (open) {
@@ -92,6 +110,9 @@ export function ImportModal({
       setResultado(null);
       setError('');
       setLinhaArquivo(0);
+      setConteudoEnviado('');
+      setErroLiberado(false);
+      setErrosAbortados([]);
     }
   }, [open, tipoConfig.tipo]);
 
@@ -102,6 +123,9 @@ export function ImportModal({
     try {
       const resp = await api.post<PreviewResp>('/importar/preview', { tipo: tipoConfig.tipo, conteudo, nome });
       setPreview(resp);
+      setConteudoEnviado(conteudo);
+      setErroLiberado(false);
+      setErrosAbortados([]);
       if (!resp.validas) toast.info('Nenhuma linha válida. Confira os erros abaixo e ajuste a planilha.');
     } catch (e: any) {
       setError(e instanceof ApiError ? e.message : 'Não foi possível ler o arquivo.');
@@ -110,20 +134,38 @@ export function ImportModal({
     }
   }
 
-  async function confirmar() {
-    if (!preview?.amostra?.length) return;
+  async function confirmar(liberarErros = false) {
+    if (!preview?.validas || !conteudoEnviado) return;
     setConfirmando(true);
     setError('');
     try {
-      const resp = await api.post<{ ok: boolean; importados: number; pulados: number }>('/importar/confirmar', {
+      // Tudo-ou-nada: o servidor aborta a transação se QUALQUER linha tiver
+      // erro. Só quando o usuário autoriza explicitamente é que as linhas
+      // inválidas ficam de fora — e cada uma volta com o motivo.
+      const resp = await api.post<{
+        ok: boolean;
+        importados: number;
+        atualizados: number;
+        pulados: number;
+        erros: { linha: number; mensagem: string }[];
+      }>('/importar/confirmar', {
         tipo: tipoConfig.tipo,
-        linhas: preview.amostra,
+        conteudo: conteudoEnviado,
+        ignorarErros: erroLiberado || liberarErros,
       });
-      setResultado({ importados: resp.importados, pulados: resp.pulados || 0 });
+      setResultado({ importados: resp.importados, atualizados: resp.atualizados || 0, pulados: resp.pulados || 0 });
       toast.success(`${resp.importados} ${tipoConfig.label.toLowerCase()} importado(s).`);
       onDone();
     } catch (e: any) {
-      setError(e instanceof ApiError ? e.message : 'Não foi possível concluir a importação.');
+      if (e instanceof ApiError && e.status === 422) {
+        // Importação abortada por linhas com erro: mostra a lista e deixa o
+        // usuário decidir entre corrigir o arquivo ou importar só o válido.
+        const campos = (e.fields || {}) as { erros?: { linha: number; mensagem: string }[] };
+        if (Array.isArray(campos.erros)) setErrosAbortados(campos.erros);
+        setError(e.message);
+      } else {
+        setError(e instanceof ApiError ? e.message : 'Não foi possível concluir a importação.');
+      }
     } finally {
       setConfirmando(false);
     }
@@ -152,9 +194,9 @@ export function ImportModal({
           <button className="btn-secondary" onClick={() => downloadFile(`/importar/modelo?tipo=${tipoConfig.tipo}`, `modelo-${tipoConfig.tipo}.csv`).catch((e) => toast.error(e.message))}>
             <Download className="h-4 w-4" /> Baixar modelo
           </button>
-          <button className="btn-accent" onClick={confirmar} disabled={confirmando || !preview?.amostra?.length || !!resultado}>
+          <button className="btn-accent" onClick={() => confirmar()} disabled={confirmando || !preview?.validas || !!resultado}>
             {confirmando ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-            Confirmar importação ({preview?.amostra.length ?? 0})
+            Confirmar importação ({preview?.validas ?? 0})
           </button>
         </>
       }
@@ -220,7 +262,27 @@ export function ImportModal({
             {resultado && (
               <Alert tone="green">
                 <strong>Importação concluída:</strong> {resultado.importados} {tipoConfig.singular}(s) incluído(s)
-                {resultado.pulados > 0 ? ` · ${resultado.pulados} linha(s) ignorada(s) por duplicidade ou invalidade.` : '.'}
+                {resultado.atualizados > 0 ? ` · ${resultado.atualizados} atualizado(s)` : ''}
+                {resultado.pulados > 0 ? ` · ${resultado.pulados} linha(s) já existiam no ERP (ignoradas).` : '.'}
+              </Alert>
+            )}
+
+            {errosAbortados.length > 0 && !resultado && (
+              <Alert tone="red">
+                <p className="font-semibold">Nada foi importado: {errosAbortados.length} linha(s) com erro.</p>
+                <p className="mt-1">
+                  Corrija a planilha e analise de novo, ou importe somente as linhas válidas — as {errosAbortados.length} abaixo ficam de fora e voltam no relatório.
+                </p>
+                <button
+                  className="btn-secondary mt-2 text-xs"
+                  disabled={confirmando}
+                  onClick={() => {
+                    setErroLiberado(true);
+                    void confirmar(true);
+                  }}
+                >
+                  Importar somente as linhas válidas
+                </button>
               </Alert>
             )}
 

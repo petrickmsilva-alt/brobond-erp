@@ -12,7 +12,7 @@ import type { Request, Response } from 'express';
 import PDFDocument from 'pdfkit';
 import { HttpError } from './errors';
 import { getResource } from './resources';
-import { checkAccess, getStore } from './services';
+import { checkAccess, getStore , storeDoAtor } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
 import { labelOf } from './store';
@@ -56,7 +56,7 @@ export async function vendaPDF(req: Request, res: Response) {
   const r = getResource('vendas')!;
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
 
   const venda = await s.get(r, id);
   if (!venda) throw new HttpError(404, 'Pedido de venda não encontrado.');
@@ -216,7 +216,7 @@ export async function compraPDF(req: Request, res: Response) {
   const r = getResource('compras')!;
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
 
   const compra = await s.get(r, id);
   if (!compra) throw new HttpError(404, 'Pedido de compra não encontrado.');

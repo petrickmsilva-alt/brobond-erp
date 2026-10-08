@@ -331,16 +331,35 @@ test('filtros estritos: canal por grupo (Loja Física/E-commerce/Marketplaces) e
 
 test('filtros estritos: empresa_id isola o faturamento da empresa', async () => {
   const empresa2 = Number((await createRecord(RESOURCES.empresas, { nome: 'Brobond Filial' }, admin)).id);
+  // A filial só pode receber venda manual de quem TEM a filial concedida.
+  const auditorDoGrupo = { ...gerente, empresa_id: 1, empresas: [1, empresa2], pode_consolidar: true };
   await vender({ canal: 'LOJA_FISICA', empresa_id: 1, occurred_at: '2026-04-01', itens: [{ product_id: p1, quantity: 1, unit_price_cents: 1000 }] });
-  await vender({ canal: 'BROBOND', empresa_id: empresa2, occurred_at: '2026-04-02', itens: [{ product_id: p2, quantity: 1, unit_price_cents: 4000 }] });
+  await vender({ canal: 'BROBOND', empresa_id: empresa2, occurred_at: '2026-04-02', itens: [{ product_id: p2, quantity: 1, unit_price_cents: 4000 }] }, auditorDoGrupo);
 
   const daEmpresa1 = await chamar(negociosResumo, mockReq(gerente, { empresa_id: '1' }));
   assert.equal(daEmpresa1.payload.kpis.faturamentoCents, 7000, 'jan 1000 + fev 2000 + mar 3000 + abr 1000 — nada da filial');
-  const daEmpresa2 = await chamar(negociosResumo, mockReq(gerente, { empresa_id: String(empresa2) }));
+
+  // MULTIEMPRESA (§18): o gerente da Empresa 1 NÃO lê a filial — nem por
+  // filtro explícito, nem por omissão.
+  await assert.rejects(
+    () => chamar(negociosResumo, mockReq(gerente, { empresa_id: String(empresa2) })),
+    (e: any) => e.status === 403,
+    'empresa não concedida precisa responder 403'
+  );
+  const semFiltro = await chamar(negociosResumo, mockReq(gerente, {}));
+  assert.equal(semFiltro.payload.filtros.empresa_id, 1, 'sem filtro, o padrão é a empresa ATIVA — nunca todas');
+
+  // Quem tem a filial concedida lê a filial (e só ela).
+  const daEmpresa2 = await chamar(negociosResumo, mockReq(auditorDoGrupo, { empresa_id: String(empresa2) }));
   assert.equal(daEmpresa2.payload.kpis.faturamentoCents, 4000, 'só a venda da filial');
   assert.equal(daEmpresa2.payload.kpis.pedidos, 1);
-  const semRegistro = await chamar(negociosResumo, mockReq(gerente, { empresa_id: '999' }));
-  assert.equal(semRegistro.payload.kpis.faturamentoCents, 0, 'empresa sem vendas retorna zero (não erro)');
+
+  // Consolidado é privilégio EXPLÍCITO: `pode_consolidar` + `?consolidado=1`
+  // (o `currentUser` resolve o pedido e o entrega na claim `consolidar`).
+  const grupo = await chamar(negociosResumo, mockReq({ ...auditorDoGrupo, consolidar: true }, {}));
+  assert.equal(grupo.payload.kpis.faturamentoCents, 11000, 'o grupo inteiro soma 7000 da matriz + 4000 da filial');
+  const semPedidoExplicito = await chamar(negociosResumo, mockReq(auditorDoGrupo, {}));
+  assert.equal(semPedidoExplicito.payload.kpis.faturamentoCents, 7000, 'sem `consolidar=1` a leitura é da empresa ativa');
 });
 
 test('filtros estritos: status filtra a listagem de margens', async () => {

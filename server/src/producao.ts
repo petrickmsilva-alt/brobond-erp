@@ -26,9 +26,9 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
-import { checkAccess, getDefaultLocal, getStore, toHttpError } from './services';
+import { checkAccess, getDefaultLocal, getStore, toHttpError , storeDoAtor, type EscopoOuAtor } from './services';
 import { currentUser } from './auth';
-import type { Payload, Row, Tx } from './store';
+import type { Payload, Row, Store, Tx } from './store';
 import { parseId, validatePayload } from './validate';
 import { labelOf } from './store';
 import { round2, round3 } from './utils';
@@ -72,8 +72,8 @@ export async function validarOrdemPayload(data: Payload, before: Row | null): Pr
 }
 
 /** Itens efetivos de produção (grade → itens_ordem; tamanho → linha única). */
-async function itensProducao(op: Row, tx?: Tx): Promise<{ tamanho_id: number; quantidade: number }[]> {
-  const s = getStore();
+async function itensProducao(op: Row, tx?: Tx, escopo?: EscopoOuAtor): Promise<{ tamanho_id: number; quantidade: number }[]> {
+  const s = storeDoAtor(escopo);
   const tipo = String(op.tipo || 'tamanho');
   if (tipo === 'grade') {
     const itens = await s.list(recursoOrdem().itens, { page: 1, pageSize: 200, filter: { ordem_id: Number(op.id) } }, tx);
@@ -84,8 +84,8 @@ async function itensProducao(op: Row, tx?: Tx): Promise<{ tamanho_id: number; qu
 }
 
 /** Encontra a ficha técnica do produto (única por produto). */
-async function fichaDoProduto(produtoId: number, tx?: Tx): Promise<Row | null> {
-  const s = getStore();
+async function fichaDoProduto(produtoId: number, tx?: Tx, escopo?: EscopoOuAtor): Promise<Row | null> {
+  const s = storeDoAtor(escopo);
   return s.findOneWhere(recursoFicha().ficha, { produto_id: produtoId }, tx);
 }
 
@@ -94,9 +94,10 @@ async function fichaDoProduto(produtoId: number, tx?: Tx): Promise<Row | null> {
 // ----------------------------------------------------------------------------
 
 async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
-  const s = getStore();
+  // O ator carrega a empresa ativa: o escopo do filho é o do pai já validado.
+  const s = storeDoAtor(actor);
   const id = Number(op.id);
-  const itens = await itensProducao(op, tx);
+  const itens = await itensProducao(op, tx, actor);
   const totalPecas = itens.reduce((a, i) => a + i.quantidade, 0);
   if (!itens.length || totalPecas <= 0) {
     throw new HttpError(409, 'Adicione ao menos um tamanho com quantidade antes de concluir a OP.');
@@ -104,7 +105,7 @@ async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
   const forcar = opts.forcar === true && (actor.perfil === 'admin' || actor.perfil === 'gerente');
 
   // --- 1) consumo de insumos da ficha técnica ---------------------------------
-  const ficha = await fichaDoProduto(Number(op.produto_id), tx);
+  const ficha = await fichaDoProduto(Number(op.produto_id), tx, actor);
   const consumos: { insumo_id: number; necessidade: number; motivo: string; custo_unitario: number; nome: string; unidade: string; faltando: number }[] = [];
   if (ficha) {
     const linhas = await s.list(recursoFicha().itens, { page: 1, pageSize: 500, filter: { ficha_id: Number(ficha.id) } }, tx);
@@ -164,7 +165,7 @@ async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
   // produzido = quantidade da grade (histórico)
   if (String(op.tipo || 'tamanho') === 'grade') {
     for (const it of itens) {
-      await s.update(recursoOrdem().itens, await itemIdPorTamanho(id, it.tamanho_id, tx), { produzido: it.quantidade }, tx);
+      await s.update(recursoOrdem().itens, await itemIdPorTamanho(id, it.tamanho_id, tx, actor), { produzido: it.quantidade }, tx);
     }
   }
 
@@ -185,15 +186,15 @@ async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
 }
 
 /** Busca o id do item de grade por tamanho (para atualizar produzido). */
-async function itemIdPorTamanho(ordemId: number, tamanhoId: number, tx?: Tx): Promise<number> {
-  const s = getStore();
+async function itemIdPorTamanho(ordemId: number, tamanhoId: number, tx?: Tx, escopo?: EscopoOuAtor): Promise<number> {
+  const s = storeDoAtor(escopo);
   const itens = await s.list(recursoOrdem().itens, { page: 1, pageSize: 200, filter: { ordem_id: ordemId, tamanho_id: tamanhoId } }, tx);
   if (!itens.rows.length) throw new HttpError(404, 'Item da OP não encontrado.');
   return Number(itens.rows[0].id);
 }
 
 async function estornarOrdem(op: Row, actor: Actor, tx: Tx) {
-  const s = getStore();
+  const s = storeDoAtor(actor);
   const id = Number(op.id);
 
   // Estorna as entradas de estoque da conclusão.
@@ -299,8 +300,10 @@ export async function aplicarRegrasOrdem(
 // Itens da OP (grade) — sub-recurso /api/ordens/:id/itens
 // ----------------------------------------------------------------------------
 
-async function getOrdem(id: number, tx?: Tx): Promise<Row> {
-  const row = await getStore().findOneWhere(recursoOrdem().op, { id }, tx);
+async function getOrdem(id: number, s: Store = getStore(), tx?: Tx): Promise<Row> {
+  // O store chega de fora (já recortado pela empresa do ator): OP de outra
+  // empresa responde 404 — a checagem é de DADOS, não de tela.
+  const row = await s.findOneWhere(recursoOrdem().op, { id }, tx);
   if (!row) throw new HttpError(404, 'Ordem de fabricação não encontrada.');
   return row;
 }
@@ -316,8 +319,9 @@ export async function listItensOrdem(req: Request, res: Response) {
   const { op, itens } = recursoOrdem();
   checkAccess(op, currentUser(req), 'read');
   const id = parseId(req.params.id);
-  await getOrdem(id);
-  const out = await getStore().list(itens, { page: 1, pageSize: 200, sort: 'tamanho_id', dir: 'asc', filter: { ordem_id: id } });
+  const s = storeDoAtor(currentUser(req));
+  await getOrdem(id, s);
+  const out = await s.list(itens, { page: 1, pageSize: 200, sort: 'tamanho_id', dir: 'asc', filter: { ordem_id: id } });
   res.json(out.rows);
 }
 
@@ -326,10 +330,10 @@ export async function createItemOrdem(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(op, actor, 'update');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, tx);
+      const ordem = await getOrdem(id, s, tx);
       if (String(ordem.tipo || 'tamanho') !== 'grade') {
         throw new HttpError(409, 'Esta OP é "por tamanho". Use os campos tamanho/quantidade da própria OP. Converta para "por grade" para usar a grade PP–GG.');
       }
@@ -360,10 +364,10 @@ export async function updateItemOrdem(req: Request, res: Response) {
   checkAccess(op, actor, 'update');
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, tx);
+      const ordem = await getOrdem(id, s, tx);
       assertOrdemEditavel(ordem);
       const before = await s.findOneWhere(itens, { id: itemId, ordem_id: id }, tx);
       if (!before) throw new HttpError(404, 'Item não encontrado nesta OP.');
@@ -387,10 +391,10 @@ export async function deleteItemOrdem(req: Request, res: Response) {
   checkAccess(op, actor, 'update');
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   try {
     await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, tx);
+      const ordem = await getOrdem(id, s, tx);
       assertOrdemEditavel(ordem);
       const before = await s.findOneWhere(itens, { id: itemId, ordem_id: id }, tx);
       if (!before) throw new HttpError(404, 'Item não encontrado nesta OP.');
@@ -411,8 +415,8 @@ export async function deleteItemOrdem(req: Request, res: Response) {
 // ----------------------------------------------------------------------------
 
 /** Recalcula custo_calculado e preco_sugerido de uma ficha. */
-export async function recalcularFichaValores(fichaId: number, tx?: Tx): Promise<Row | null> {
-  const s = getStore();
+export async function recalcularFichaValores(fichaId: number, tx?: Tx, escopo?: EscopoOuAtor): Promise<Row | null> {
+  const s = storeDoAtor(escopo);
   const { ficha, itens } = recursoFicha();
   const f = await s.findOneWhere(ficha, { id: fichaId }, tx);
   if (!f) return null;
@@ -433,8 +437,9 @@ export async function recalcularFichaValores(fichaId: number, tx?: Tx): Promise<
   return updated;
 }
 
-async function getFicha(id: number, tx?: Tx): Promise<Row> {
-  const row = await getStore().findOneWhere(recursoFicha().ficha, { id }, tx);
+async function getFicha(id: number, s: Store = getStore(), tx?: Tx): Promise<Row> {
+  // Idem OP: ficha de outra empresa não existe para este ator (404).
+  const row = await s.findOneWhere(recursoFicha().ficha, { id }, tx);
   if (!row) throw new HttpError(404, 'Ficha técnica não encontrada.');
   return row;
 }
@@ -443,8 +448,9 @@ export async function listInsumosFicha(req: Request, res: Response) {
   const { ficha, itens } = recursoFicha();
   checkAccess(ficha, currentUser(req), 'read');
   const id = parseId(req.params.id);
-  await getFicha(id);
-  const out = await getStore().list(itens, { page: 1, pageSize: 200, filter: { ficha_id: id } });
+  const s = storeDoAtor(currentUser(req));
+  await getFicha(id, s);
+  const out = await s.list(itens, { page: 1, pageSize: 200, filter: { ficha_id: id } });
   res.json(out.rows);
 }
 
@@ -453,13 +459,13 @@ export async function createInsumoFicha(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(ficha, actor, 'update');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   try {
     const out = await s.transaction(async (tx) => {
-      await getFicha(id, tx);
+      await getFicha(id, s, tx);
       const data = validatePayload(itens, req.body, 'create');
       const item = await s.insert(itens, { ...data, ficha_id: id }, tx);
-      const f = await recalcularFichaValores(id, tx);
+      const f = await recalcularFichaValores(id, tx, actor);
       const ins = await s.findOneWhere(getResource('insumos')!, { id: Number(data.insumo_id) }, tx);
       await s.audit(
         {
@@ -486,15 +492,15 @@ export async function updateInsumoFicha(req: Request, res: Response) {
   checkAccess(ficha, actor, 'update');
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   try {
     const out = await s.transaction(async (tx) => {
-      await getFicha(id, tx);
+      await getFicha(id, s, tx);
       const before = await s.findOneWhere(itens, { id: itemId, ficha_id: id }, tx);
       if (!before) throw new HttpError(404, 'Insumo não encontrado nesta ficha.');
       const data = validatePayload(itens, req.body, 'update');
       const item = await s.update(itens, itemId, data, tx);
-      const f = await recalcularFichaValores(id, tx);
+      const f = await recalcularFichaValores(id, tx, actor);
       await s.audit(
         {
           usuario_id: actor.id || null,
@@ -520,14 +526,14 @@ export async function deleteInsumoFicha(req: Request, res: Response) {
   checkAccess(ficha, actor, 'update');
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   try {
     await s.transaction(async (tx) => {
-      await getFicha(id, tx);
+      await getFicha(id, s, tx);
       const before = await s.findOneWhere(itens, { id: itemId, ficha_id: id }, tx);
       if (!before) throw new HttpError(404, 'Insumo não encontrado nesta ficha.');
       await s.remove(itens, itemId, tx);
-      const f = await recalcularFichaValores(id, tx);
+      const f = await recalcularFichaValores(id, tx, actor);
       await s.audit(
         {
           usuario_id: actor.id || null,
@@ -552,10 +558,10 @@ export async function aplicarPrecoFicha(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(ficha, actor, 'update');
   const id = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   try {
     const out = await s.transaction(async (tx) => {
-      const f = await getFicha(id, tx);
+      const f = await getFicha(id, s, tx);
       const produtoId = Number(f.produto_id);
       if (!produtoId) throw new HttpError(400, 'A ficha não está vinculada a um produto.');
       const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId }, tx);
@@ -590,7 +596,7 @@ export async function producaoPainel(req: Request, res: Response) {
   const actor = currentUser(req);
   const { op } = recursoOrdem();
   checkAccess(op, actor, 'read');
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const [ordens, itensOrdem] = await Promise.all([
     s.list(op, { page: 1, pageSize: 5000, sort: 'id', dir: 'desc' }),
     s.list(getResource('itens_ordem')!, { page: 1, pageSize: 10000 }),

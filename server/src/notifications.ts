@@ -16,7 +16,7 @@
 //   NOTIFICAR_PEDIDO=true       (padrão: false)
 // ============================================================
 import { enviarEmail, smtpConfigurado } from './mail';
-import { getStore } from './services';
+import { escopoDe, getStore, storeDoAtor, type EscopoOuAtor } from './services';
 import { getResource } from './resources';
 import { labelOf } from './store';
 
@@ -192,9 +192,16 @@ export async function notificarCompraRecebida(compraId: number, fornecedorId: nu
   });
 }
 
-/** Verificação periódica de estoques mínimos (chamada pelo dashboard ou cron). */
-export async function verificarAlertasEstoque(): Promise<{ produtos: number; insumos: number }> {
-  const s = getStore();
+/**
+ * Verificação de estoques mínimos (dashboard admin ou cron).
+ *
+ * MULTIEMPRESA: com um escopo, a contagem é SÓ da empresa ativa — o resumo de
+ * uma empresa nunca soma o estoque de outra. Sem escopo (cron de sistema), a
+ * contagem é consolidada de propósito: é o panorama do grupo, não uma tela de
+ * empresa.
+ */
+export async function verificarAlertasEstoque(escopo?: EscopoOuAtor): Promise<{ produtos: number; insumos: number }> {
+  const s = escopo ? storeDoAtor(escopo) : getStore();
   let produtos = 0;
   let insumos = 0;
 

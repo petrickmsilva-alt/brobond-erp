@@ -1256,6 +1256,10 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'local_id', label: 'Local', type: 'ref', ref: 'locais', search: true, hint: 'Use o cadastro de Locais em vez de digitar texto livre.' },
       { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, default: 0 },
       { name: 'estoque_min', label: 'Estoque mínimo', type: 'integer', min: 0, default: 0, hint: 'Abaixo disso o item entra em alerta no Dashboard.' },
+      // Rastreabilidade da migração (§11): de onde veio este saldo. Preenchido
+      // pela importação (nunca pelo formulário) e visível no extrato do produto.
+      { name: 'origem', label: 'Origem', type: 'text', maxLength: 40, form: false, list: false },
+      { name: 'lote_importacao_id', label: 'Lote de importação', type: 'integer', form: false, list: false },
       ...auditFields,
     ],
     orderBy: { field: 'produto_id', dir: 'asc' },
@@ -1298,6 +1302,12 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'estornado_em', label: 'Estornado em', type: 'datetime', list: false },
       { name: 'estornado_por', label: 'Estornado por', type: 'text', list: false },
       { name: 'movimentacao_estorno_id', label: 'Movimentação de estorno', type: 'ref', ref: 'movimentacoes', list: false },
+      // Campos internos gravados por importação/estorno (§11, §13). Não
+      // aparecem no formulário: quem escreve é o servidor, com o lote do arquivo.
+      { name: 'usuario_id', label: 'Usuário', type: 'integer', form: false, list: false },
+      { name: 'origem', label: 'Origem', type: 'text', maxLength: 40, form: false, list: false },
+      { name: 'custo_unitario', label: 'Custo unitário', type: 'money', form: false, list: false },
+      { name: 'lote_importacao_id', label: 'Lote de importação', type: 'integer', form: false, list: false },
       { name: 'data', label: 'Data', type: 'datetime', readonly: true },
     ],
     orderBy: { field: 'data', dir: 'desc' },
@@ -1618,6 +1628,10 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'pdv_caixa_id', label: 'Caixa do PDV', type: 'ref', ref: 'pdv_caixas', list: false, form: false, readonly: true },
       { name: 'envio_id', label: 'Envio', type: 'ref', ref: 'envios', list: false, form: false, readonly: true },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
+      // Origem da venda: quem a criou (importação de histórico, loja virtual,
+      // marketplace). O canal vê; o formulário não edita.
+      { name: 'origem', label: 'Origem', type: 'text', maxLength: 40, form: false, list: false },
+      { name: 'lote_importacao_id', label: 'Lote de importação', type: 'integer', form: false, list: false },
       ...auditFields,
     ],
     orderBy: { field: 'data', dir: 'desc' },
@@ -1627,6 +1641,157 @@ export const RESOURCES: Record<string, Resource> = {
   // Interno — itens de pedidos e estoque de insumos.
   // Manipulados por pedidos.ts (sub-recursos), não pela API genérica.
   // ----------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Lote de importação/migração (§11, §13, §14): trilha append-only de cada
+  // planilha executada — empresa, usuário, arquivo, hash do conteúdo, contadores
+  // e o relatório de erros. Interno: só a importação e a listagem dedicada leem.
+  // ---------------------------------------------------------------------------
+  importacoes_lotes: {
+    key: 'importacoes_lotes',
+    empresa: true,
+    table: 'importacoes_lotes',
+    label: 'Lotes de importação',
+    singular: 'Lote de importação',
+    labelFields: ['tipo'],
+    internal: true,
+    ops: { create: true, update: true, delete: false },
+    fields: [
+      { name: 'usuario_id', label: 'Usuário', type: 'integer', form: false, list: false },
+      { name: 'tipo', label: 'Tipo', type: 'text', maxLength: 40, required: true, form: false, list: false },
+      { name: 'arquivo', label: 'Arquivo', type: 'text', maxLength: 200, form: false, list: false },
+      { name: 'origem_hash', label: 'Hash do conteúdo', type: 'text', maxLength: 64, form: false, list: false },
+      { name: 'total', label: 'Total de linhas', type: 'integer', min: 0, form: false, list: false },
+      { name: 'importados', label: 'Importados', type: 'integer', min: 0, form: false, list: false },
+      { name: 'ignorados', label: 'Já existiam', type: 'integer', min: 0, form: false, list: false },
+      { name: 'erros', label: 'Linhas com erro', type: 'integer', min: 0, form: false, list: false },
+      { name: 'status', label: 'Status', type: 'text', maxLength: 20, form: false, list: false },
+      { name: 'detalhes', label: 'Detalhes', type: 'json', form: false, list: false },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false },
+      { name: 'concluido_em', label: 'Concluído em', type: 'datetime', form: false, list: false },
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+  },
+
+  // ---------------------------------------------------------------------------
+  // Mapeamento EXPLÍCITO ERP ↔ canal de venda (§3): cada canal tem o próprio
+  // modelo de produto/pedido; aqui fica a tabela de correspondência que o hub
+  // usa em vez de adivinhar (SKU ↔ id do item no marketplace).
+  // ---------------------------------------------------------------------------
+  commerce_mapeamentos: {
+    key: 'commerce_mapeamentos',
+    empresa: true,
+    table: 'commerce_mapeamentos',
+    label: 'Mapeamentos de canal',
+    singular: 'Mapeamento',
+    labelFields: ['chave_interna', 'externo_id'],
+    ops: ALL_OPS,
+    fields: [
+      {
+        name: 'canal',
+        label: 'Canal',
+        type: 'select',
+        required: true,
+        options: [
+          { value: 'MERCADOLIVRE', label: 'Mercado Livre' },
+          { value: 'NUVEMSHOP', label: 'Nuvemshop' },
+          { value: 'WOOCOMMERCE', label: 'WooCommerce / site' },
+        ],
+      },
+      {
+        name: 'recurso',
+        label: 'Tipo',
+        type: 'select',
+        required: true,
+        default: 'produto',
+        options: [
+          { value: 'produto', label: 'Produto/variedade' },
+          { value: 'variacao', label: 'Variação (SKU filho)' },
+          { value: 'pedido', label: 'Pedido' },
+          { value: 'envio', label: 'Envio/rastreio' },
+        ],
+      },
+      { name: 'chave_interna', label: 'Chave interna (SKU)', type: 'text', maxLength: 120, search: true },
+      { name: 'interno_id', label: 'Id interno', type: 'integer', list: false },
+      { name: 'externo_id', label: 'Id externo', type: 'text', required: true, maxLength: 120, search: true },
+      { name: 'metadata', label: 'Metadados', type: 'json', form: false, list: false },
+      ...auditFields,
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+  },
+
+
+  // ---------------------------------------------------------------------------
+  // Vínculo PEDIDO EXTERNO ↔ VENDA do ERP: é a tabela que dá a idempotência do
+  // hub (§5). O índice único (empresa_id, provider, external_order_id) garante
+  // que o mesmo pedido do canal nunca vire duas vendas — mesmo com webhook
+  // duplicado, polling simultâneo ou retry.
+  // ---------------------------------------------------------------------------
+  commerce_pedidos_externos: {
+    key: 'commerce_pedidos_externos',
+    empresa: true,
+    table: 'commerce_pedidos_externos',
+    label: 'Pedidos externos',
+    singular: 'Pedido externo',
+    labelFields: ['provider', 'external_order_id'],
+    internal: true,
+    ops: { create: true, update: true, delete: false },
+    fields: [
+      { name: 'provider', label: 'Canal', type: 'text', required: true, maxLength: 40, form: false, list: false },
+      { name: 'external_order_id', label: 'Pedido no canal', type: 'text', required: true, maxLength: 120, form: false, list: false },
+      { name: 'venda_id', label: 'Venda no ERP', type: 'integer', form: false, list: false },
+      { name: 'status_externo', label: 'Status no canal', type: 'text', maxLength: 60, form: false, list: false },
+      { name: 'status_erp', label: 'Status no ERP', type: 'text', maxLength: 60, form: false, list: false },
+      { name: 'referencia_erp', label: 'Referência no ERP', type: 'text', maxLength: 120, form: false, list: false },
+      { name: 'payload', label: 'Pedido no canal', type: 'json', form: false, list: false },
+      { name: 'importado_em', label: 'Importado em', type: 'datetime', readonly: true, list: false },
+      { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', form: false, list: false },
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+  },
+
+  // ---------------------------------------------------------------------------
+  // Log de integração (§15): cada operação de canal grava canal, operação,
+  // request id, id externo, status, tentativa, duração, erro e a próxima
+  // tentativa (retry com backoff §16). NUNCA guarda token/senha/segredo.
+  // ---------------------------------------------------------------------------
+  integration_logs: {
+    key: 'integration_logs',
+    empresa: true,
+    table: 'integration_logs',
+    label: 'Logs de integração',
+    singular: 'Log de integração',
+    labelFields: ['provider', 'operacao'],
+    internal: true,
+    ops: { create: true, update: true, delete: false },
+    fields: [
+      { name: 'provider', label: 'Canal', type: 'text', required: true, maxLength: 40, form: false, list: false },
+      { name: 'operacao', label: 'Operação', type: 'text', required: true, maxLength: 60, form: false, list: false },
+      { name: 'request_id', label: 'Request id', type: 'text', maxLength: 80, form: false, list: false },
+      { name: 'external_id', label: 'Id externo', type: 'text', maxLength: 120, form: false, list: false },
+      { name: 'entidade', label: 'Entidade', type: 'text', maxLength: 120, form: false, list: false },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        required: true,
+        default: 'ok',
+        options: [
+          { value: 'ok', label: 'OK', tone: 'green' },
+          { value: 'ignorado', label: 'Ignorado (duplicado)' },
+          { value: 'pendente', label: 'Pendente' },
+          { value: 'erro', label: 'Erro', tone: 'red' },
+          { value: 'nao_suportado', label: 'Não suportado' },
+        ],
+      },
+      { name: 'tentativa', label: 'Tentativa', type: 'integer', min: 1, default: 1, form: false, list: false },
+      { name: 'duracao_ms', label: 'Duração (ms)', type: 'integer', min: 0, form: false, list: false },
+      { name: 'erro', label: 'Erro', type: 'textarea', maxLength: 1000, form: false, list: false },
+      { name: 'proxima_tentativa_em', label: 'Próxima tentativa', type: 'datetime', form: false, list: false },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false },
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+  },
+
   itens_venda: {
     key: 'itens_venda',
     empresa: true,
@@ -2224,6 +2389,15 @@ export const RESOURCES: Record<string, Resource> = {
         ],
       },
       { name: 'referencia_id', label: 'Registro de origem', type: 'integer', list: false },
+      // Documento/NF do título: a migração do contas a receber/pagar preserva o
+      // número original (§14) e o financeiro reencontra o título pelo documento.
+      { name: 'documento', label: 'Documento', type: 'text', maxLength: 60, search: true, hint: 'Nº do documento original (NF, boleto, contrato). Importado quando informado.' },
+      // Origem e vínculo com a pessoa: gravados pela importação; pessoa_id
+      // aponta para clientes/fornecedores conforme pessoa_tipo.
+      { name: 'origem', label: 'Origem', type: 'text', maxLength: 40, form: false, list: false },
+      { name: 'pessoa_tipo', label: 'Tipo de pessoa', type: 'text', maxLength: 20, form: false, list: false },
+      { name: 'pessoa_id', label: 'Pessoa', type: 'integer', form: false, list: false },
+      { name: 'lote_importacao_id', label: 'Lote de importação', type: 'integer', form: false, list: false },
       { name: 'comprovantes', label: 'Comprovantes', type: 'images', virtual: true, form: false, hint: 'Até 4 fotos: comprovante Pix, boleto, recibo...' },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
       ...auditFields,

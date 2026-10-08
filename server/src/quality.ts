@@ -15,7 +15,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource } from './resources';
-import { checkAccess, getStore } from './services';
+import { checkAccess, getStore , storeDoAtor } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
 import { labelOf } from './store';
@@ -43,7 +43,7 @@ export async function listQualidade(req: Request, res: Response) {
   const r = getResource('ordens')!;
   checkAccess(r, actor, 'read');
   const ordemId = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
 
   // Verifica se a OP existe
   const op = await s.get(r, ordemId);
@@ -80,7 +80,7 @@ export async function createQualidade(req: Request, res: Response) {
   const r = getResource('ordens')!;
   checkAccess(r, actor, 'update');
   const ordemId = parseId(req.params.id);
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
 
   const op = await s.get(r, ordemId);
   if (!op) throw new HttpError(404, 'Ordem de fabricação não encontrada.');
@@ -132,7 +132,7 @@ export async function updateQualidade(req: Request, res: Response) {
 export async function relatorioQualidade(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('ordens')!, actor, 'read');
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
 
   const de = typeof req.query.de === 'string' ? req.query.de : undefined;
   const ate = typeof req.query.ate === 'string' ? req.query.ate : undefined;

@@ -14,7 +14,7 @@ import QRCode from 'qrcode';
 import { filtrosDoCatalogo } from './catalogos';
 import { HttpError } from './errors';
 import { getResource } from './resources';
-import { checkAccess, getStore } from './services';
+import { checkAccess, getStore , storeDoAtor } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
 import { attachImages } from './uploads';
@@ -29,7 +29,9 @@ import { linkPublicoAsync } from './urlPublica';
  * de e-mail: ver server/src/urlPublica.ts).
  */
 async function gerarConteudoQR(produtoId: number, req?: Request): Promise<{ url: string; dados: Record<string, unknown> }> {
-  const s = getStore();
+  // MULTIEMPRESA: sem requisição (uso interno) o escopo é o do chamador;
+  // com requisição, o produto é recortado pela empresa ativa.
+  const s = req ? storeDoAtor(currentUser(req)) : getStore();
   const produto = await s.get(getResource('produtos')!, produtoId);
   if (!produto) throw new HttpError(404, 'Produto não encontrado.');
 
@@ -135,7 +137,7 @@ export async function produtoEtiquetaQR(req: Request, res: Response) {
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
 
-  const s = getStore();
+  const s = storeDoAtor(currentUser(req));
   const produto = await s.get(r, id);
   if (!produto) throw new HttpError(404, 'Produto não encontrado.');
 
