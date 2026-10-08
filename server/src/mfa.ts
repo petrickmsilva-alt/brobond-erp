@@ -11,6 +11,7 @@ import type { Request, Response } from 'express';
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
 import QRCode from 'qrcode';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit } from './empresa';
 import { currentUser, signToken, verifyToken, type AuthUser } from './auth';
 import { gerarSegredoTOTP, uriTOTP, verificarTOTP } from './totp';
 import { getStore } from './services';
@@ -137,6 +138,7 @@ export async function mfaAtivar(req: Request, res: Response) {
     recurso: 'usuarios',
     registro_id: u.id,
     descricao: `${u.name} ativou o MFA (TOTP) — ${lote.codigos.length} códigos de recuperação emitidos`,
+    empresa_id: empresaDoAtorAudit(u),
   });
   res.setHeader('Cache-Control', 'no-store');
   res.json({ ok: true, codigos: lote.codigos, backup_restantes: lote.codigos.length });
@@ -163,6 +165,7 @@ export async function mfaCodigos(req: Request, res: Response) {
     recurso: 'usuarios',
     registro_id: u.id,
     descricao: `${u.name} gerou novos códigos de recuperação do MFA (lote anterior invalidado)`,
+    empresa_id: empresaDoAtorAudit(u),
   });
   res.setHeader('Cache-Control', 'no-store');
   res.json({ ok: true, codigos: lote.codigos, backup_restantes: lote.codigos.length });
@@ -191,6 +194,7 @@ export async function mfaDesativar(req: Request, res: Response) {
     recurso: 'usuarios',
     registro_id: u.id,
     descricao: `${u.name} desativou o próprio MFA (com reautenticação) — sessões de outros dispositivos encerradas`,
+    empresa_id: empresaDoAtorAudit(u),
   });
   res.json({ ok: true });
 }

@@ -22,7 +22,7 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, checkFluxo, getDefaultLocal, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2 } from './utils';
 import { aplicarRegrasPedido } from './itens';
@@ -89,7 +89,7 @@ async function avancarEtapa(venda: Row, alvo: Etapa, actor: { id: number | null;
   if (!atualizada) throw new HttpError(409, 'O pedido mudou durante a operação. Recarregue e tente de novo.');
   await registrarEvento(Number(venda.id), alvo === 'conferida' ? 'conferencia' : alvo, atual, 'ok', mensagem, actor, escopo.empresaId, tx);
   await s.audit(
-    { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'vendas', registro_id: Number(venda.id), descricao: `Venda #${venda.id}: expedição ${atual} → ${alvo}`, dados: { de: atual, para: alvo } },
+    { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'vendas', registro_id: Number(venda.id), descricao: `Venda #${venda.id}: expedição ${atual} → ${alvo}`, dados: { de: atual, para: alvo }, empresa_id: empresaDoRegistroAudit(getResource('vendas')!, venda, actor) },
     tx
   );
   return atualizada;
@@ -297,7 +297,7 @@ export async function conferirPedido(req: Request, res: Response) {
           { faltando: comparacao.faltando, sobrando: comparacao.sobrando, divergencia_id: divergencia.id }
         );
         await s.audit(
-          { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'vendas', registro_id: vendaId, descricao: `Venda #${vendaId}: divergência na conferência`, dados: { divergencia_id: divergencia.id, faltando: comparacao.faltando, sobrando: comparacao.sobrando } },
+          { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'vendas', registro_id: vendaId, descricao: `Venda #${vendaId}: divergência na conferência`, dados: { divergencia_id: divergencia.id, faltando: comparacao.faltando, sobrando: comparacao.sobrando }, empresa_id: empresaDoRegistroAudit(R_DIVERGENCIA(), divergencia, actor) },
           tx
         );
         return divergencia;
@@ -507,7 +507,7 @@ export async function criarDevolucao(req: Request, res: Response) {
         );
       }
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'devolucoes', registro_id: Number(devolucao.id), descricao: `Devolução #${devolucao.id} solicitada para a venda #${vendaId} — ${solicitados.length} item(ns)`, dados: { venda_id: vendaId, motivo, tipo } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'devolucoes', registro_id: Number(devolucao.id), descricao: `Devolução #${devolucao.id} solicitada para a venda #${vendaId} — ${solicitados.length} item(ns)`, dados: { venda_id: vendaId, motivo, tipo }, empresa_id: empresaDoRegistroAudit(R_DEVOLUCAO(), devolucao, actor) },
         tx
       );
       return devolucao;
@@ -575,7 +575,7 @@ export async function autorizarDevolucao(req: Request, res: Response) {
       const atualizada = await s.tryUpdateIf(R_DEVOLUCAO(), id, { status: 'solicitada' }, patch, tx);
       if (!atualizada) throw new HttpError(409, 'A devolução mudou durante a autorização. Recarregue.');
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'devolucoes', registro_id: id, descricao: `Devolução #${id} autorizada`, dados: { autorizacao_codigo: patch.autorizacao_codigo ?? null } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'devolucoes', registro_id: id, descricao: `Devolução #${id} autorizada`, dados: { autorizacao_codigo: patch.autorizacao_codigo ?? null }, empresa_id: empresaDoRegistroAudit(R_DEVOLUCAO(), dev, actor) },
         tx
       );
       return atualizada;
@@ -609,7 +609,7 @@ export async function registrarRastreamento(req: Request, res: Response) {
     const atualizada = await s.tryUpdateIf(R_DEVOLUCAO(), id, { status: String(dev.status) }, patch, tx);
     if (!atualizada) throw new HttpError(409, 'A devolução mudou durante a atualização. Recarregue.');
     await s.audit(
-      { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'devolucoes', registro_id: id, descricao: `Devolução #${id}: rastreamento ${codigo}`, dados: { codigo_rastreamento: codigo } },
+      { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'devolucoes', registro_id: id, descricao: `Devolução #${id}: rastreamento ${codigo}`, dados: { codigo_rastreamento: codigo }, empresa_id: empresaDoRegistroAudit(R_DEVOLUCAO(), dev, actor) },
       tx
     );
     return atualizada;
@@ -730,6 +730,7 @@ export async function receberDevolucao(req: Request, res: Response) {
           registro_id: id,
           descricao: `Devolução #${id} recebida: ${totalRecebido} unidade(s), ${entradas.length} entrada(s) de estoque em "${local}"`,
           dados: { total_recebido: totalRecebido, entradas, ajuste_financeiro: ajusteFinanceiro },
+          empresa_id: empresaDoRegistroAudit(R_DEVOLUCAO(), dev, actor),
         },
         tx
       );
@@ -764,7 +765,7 @@ async function fecharDevolucao(req: Request, res: Response, para: 'recusada' | '
     const atualizada = await s.tryUpdateIf(R_DEVOLUCAO(), id, { status: String(dev.status) }, { status: para }, tx);
     if (!atualizada) throw new HttpError(409, 'A devolução mudou. Recarregue.');
     await s.audit(
-      { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'devolucoes', registro_id: id, descricao: `Devolução #${id} ${para} — ${motivo}`, dados: { motivo } },
+      { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'devolucoes', registro_id: id, descricao: `Devolução #${id} ${para} — ${motivo}`, dados: { motivo }, empresa_id: empresaDoRegistroAudit(R_DEVOLUCAO(), dev, actor) },
       tx
     );
     return atualizada;

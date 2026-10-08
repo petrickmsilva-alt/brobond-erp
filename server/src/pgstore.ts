@@ -8,6 +8,8 @@ import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './r
 import { hashCadeiaAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
 import type { EscopoEmpresa } from './empresa';
+import { sqlCivil } from './fuso';
+import { EMPRESA_PADRAO } from './empresa';
 import {
   labelOf,
   type AuditEntry,
@@ -394,9 +396,12 @@ export class PgStore implements Store {
       const prev = await q(`SELECT hash FROM auditoria WHERE hash IS NOT NULL ORDER BY id DESC LIMIT 1`, [], t);
       const hash_anterior = prev.rows[0]?.hash ? String(prev.rows[0].hash) : '';
       const hash = hashCadeiaAuditoria(hash_anterior, entry);
+      // O tipo exige empresa_id; o fallback protege chamadas legadas/diretas
+      // em runtime (a coluna é NOT NULL desde a migration 0017).
+      const empresaId = entry.empresa_id ?? EMPRESA_PADRAO;
       await q(
-        `INSERT INTO auditoria (usuario_id, usuario, acao, recurso, registro_id, descricao, dados, hash_anterior, hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        `INSERT INTO auditoria (usuario_id, usuario, acao, recurso, registro_id, descricao, dados, hash_anterior, hash, empresa_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           entry.usuario_id,
           entry.usuario,
@@ -407,6 +412,7 @@ export class PgStore implements Store {
           entry.dados === undefined ? null : JSON.stringify(entry.dados),
           hash_anterior,
           hash,
+          empresaId,
         ],
         t
       );
@@ -441,7 +447,7 @@ export class PgStore implements Store {
           (SELECT COUNT(*) FROM ordens_fabricacao WHERE status IN ('planejada', 'em_producao')${w('ordens_fabricacao')})::int AS producao,
           (SELECT COUNT(*) FROM vendas WHERE status = 'aberta'${w('vendas')})::int AS vendas_abertas,
           (SELECT COUNT(*) FROM compras WHERE status = 'pendente'${w('compras')})::int AS compras_pendentes,
-          (SELECT COALESCE(SUM(total), 0) FROM vendas WHERE status IN ('faturada', 'entregue') AND faturada_em >= date_trunc('month', now())${w('vendas')})::float AS vendas_mes,
+          (SELECT COALESCE(SUM(total), 0) FROM vendas WHERE status IN ('faturada', 'entregue') AND faturada_em >= timezone('America/Sao_Paulo', date_trunc('month', ${sqlCivil('now()')}))${w('vendas')})::float AS vendas_mes,
           (SELECT COALESCE(SUM(comissao_valor), 0) FROM vendas WHERE status IN ('faturada', 'entregue')${w('vendas')})::float AS comissoes_pagar,
           (SELECT COUNT(*) FROM produtos WHERE TRUE${w('produtos')})::int AS produtos,
           (SELECT COUNT(*) FROM clientes WHERE TRUE${w('clientes')})::int AS clientes,
@@ -473,23 +479,25 @@ export class PgStore implements Store {
         ORDER BY data DESC
         LIMIT 8
       `, p),
-      // Fase 5 — vendas por mês (12 meses, completando os meses sem venda)
+      // Fase 5 — vendas por mês (12 meses, completando os meses sem venda).
+      // MÊS CIVIL em America/Sao_Paulo: cada instante é agrupado no calendário brasileiro.
       query(`
         SELECT to_char(gs.mes, 'YYYY-MM') AS mes, COALESCE(SUM(v.total), 0)::float AS total
-        FROM generate_series(date_trunc('month', now()) - interval '11 months', date_trunc('month', now()), interval '1 month') AS gs(mes)
-        LEFT JOIN vendas v ON v.status IN ('faturada', 'entregue') AND date_trunc('month', COALESCE(v.faturada_em, v.data)) = gs.mes${w('v')}
+        FROM generate_series(date_trunc('month', ${sqlCivil('now()')}) - interval '11 months', date_trunc('month', ${sqlCivil('now()')}), interval '1 month') AS gs(mes)
+        LEFT JOIN vendas v ON v.status IN ('faturada', 'entregue') AND date_trunc('month', ${sqlCivil('COALESCE(v.faturada_em, v.data)')}) = gs.mes${w('v')}
         GROUP BY gs.mes ORDER BY gs.mes ASC
       `, p),
-      // Fase 5 — produção concluída por semana (8 semanas; OP por grade soma a grade)
+      // Fase 5 — produção concluída por semana (8 semanas; OP por grade soma a grade).
+      // SEMANA CIVIL em America/Sao_Paulo (segunda a domingo, horário de Brasília).
       query(`
         SELECT to_char(gs.sem, 'YYYY-MM-DD') AS semana,
                COALESCE(SUM(CASE
                  WHEN o.tipo = 'grade' THEN (SELECT COALESCE(SUM(io.quantidade), 0) FROM itens_ordem io WHERE io.ordem_id = o.id)
                  ELSE o.quantidade END), 0)::int AS pecas,
                COUNT(o.id)::int AS ordens
-        FROM generate_series(date_trunc('week', now()) - interval '7 weeks', date_trunc('week', now()), interval '1 week') AS gs(sem)
+        FROM generate_series(date_trunc('week', ${sqlCivil('now()')}) - interval '7 weeks', date_trunc('week', ${sqlCivil('now()')}), interval '1 week') AS gs(sem)
         LEFT JOIN ordens_fabricacao o
-          ON o.status = 'concluida' AND date_trunc('week', COALESCE(o.concluida_em, o.atualizado_em, o.criado_em)) = gs.sem${w('o')}
+          ON o.status = 'concluida' AND date_trunc('week', ${sqlCivil('COALESCE(o.concluida_em, o.atualizado_em, o.criado_em)')}) = gs.sem${w('o')}
         GROUP BY gs.sem ORDER BY gs.sem ASC
       `, p),
       // Fase 5 — top 10 produtos por faturamento (pedidos faturados/entregues)

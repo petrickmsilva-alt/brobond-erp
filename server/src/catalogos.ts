@@ -12,6 +12,7 @@ import QRCode from 'qrcode';
 import { createRequire } from 'node:module';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit, empresaDoRegistroAudit } from './empresa';
 import { getResource, RESOURCES } from './resources';
 import { checkAccess, exigirComercial, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
@@ -429,6 +430,7 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
           registro_id: Number(venda.id),
           descricao: `Cotação recebida pelo catálogo "${catalogo.nome}" — ${itens.length} item(ns), ${nome}`,
           dados: { canal, total, subtotal },
+          empresa_id: empresaDoRegistroAudit(RESOURCES.catalogos, catalogo, null),
         },
         tx
       );
@@ -483,6 +485,7 @@ export async function compartilharCatalogo(req: Request, res: Response) {
     registro_id: id,
     descricao: `Catálogo "${catalogo.nome}" compartilhado por ${canal}${cliente ? ` com ${cliente.nome}` : ''}`,
     dados: { canal, cliente_id: clienteId, cliente: cliente?.nome ?? null, compartilhamento_id: Number(compartilhamento.id), expira_em: expiraEm },
+    empresa_id: empresaDoRegistroAudit(RESOURCES.catalogos, catalogo, actor),
   });
   res.json({ url, qr_data_url, compartilhamento_id: Number(compartilhamento.id), expira_em: expiraEm });
 }
@@ -553,7 +556,7 @@ export async function revogarCompartilhamento(req: Request, res: Response) {
   const atual = await s.get(RESOURCES.catalogo_compartilhamentos, id);
   if (!atual) throw new HttpError(404, 'Compartilhamento não encontrado.');
   if (!atual.revogado_em) await s.update(RESOURCES.catalogo_compartilhamentos, id, { revogado_em: new Date().toISOString() });
-  await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'catalogos', registro_id: Number(atual.catalogo_id), descricao: `Link individual #${id} revogado`, dados: { compartilhamento_id: id } });
+  await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'catalogos', registro_id: Number(atual.catalogo_id), descricao: `Link individual #${id} revogado`, dados: { compartilhamento_id: id }, empresa_id: empresaDoAtorAudit(actor) });
   res.json({ ok: true });
 }
 

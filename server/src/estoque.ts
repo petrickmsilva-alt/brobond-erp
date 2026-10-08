@@ -11,6 +11,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
+import { empresaDoRegistroAudit } from './empresa';
 import { RESOURCES, getResource } from './resources';
 import { checkAccess, getDefaultLocal, getRecord, getStore, toHttpError, validarTamanhoNaGrade } from './services';
 import { currentUser } from './auth';
@@ -210,7 +211,7 @@ export async function updateItensInventario(req: Request, res: Response) {
       }
       if (alterados > 0) {
         await s.audit(
-          { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'inventarios', registro_id: id, descricao: `Inventário #${id}: contagem atualizada (${alterados} linha(s))` },
+          { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'inventarios', registro_id: id, descricao: `Inventário #${id}: contagem atualizada (${alterados} linha(s))`, empresa_id: empresaDoRegistroAudit(RESOURCES.inventarios, inv, actor) },
           tx
         );
       }
@@ -293,6 +294,7 @@ export async function fecharInventario(req: Request, res: Response) {
           registro_id: id,
           descricao: `Inventário #${id} fechado no local "${local}" — ${ajustes} ajuste(s) gerado(s): ${detalhes.join('; ')}${deslocados.length ? ` | movimentação durante a contagem: ${deslocados.join('; ')}` : ''}`,
           dados: { ajustes, local, deslocados },
+          empresa_id: empresaDoRegistroAudit(RESOURCES.inventarios, inv, actor),
         },
         tx
       );
@@ -454,6 +456,7 @@ export async function estornarMovimentacao(req: Request, res: Response) {
           recurso: 'movimentacoes',
           registro_id: id,
           descricao: `Movimentação #${id} estornada (${tipo} de ${quantidade} peça(s))`,
+          empresa_id: empresaDoRegistroAudit(RESOURCES.movimentacoes, mov, actor),
         },
         tx
       );

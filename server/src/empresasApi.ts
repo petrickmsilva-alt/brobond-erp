@@ -86,6 +86,7 @@ export async function trocarEmpresaAtiva(req: Request, res: Response) {
     registro_id: alvo,
     descricao: `${actor.name} passou a operar na empresa “${String(empresa.nome)}”`,
     dados: { empresa_id: alvo },
+    empresa_id: alvo,
   });
 
   res.json({ ok: true, token, empresa_id: alvo, empresa: empresa.nome });
@@ -141,6 +142,7 @@ export async function concederEmpresa(req: Request, res: Response) {
       registro_id: usuarioId,
       descricao: `Acesso à empresa “${String(empresa.nome)}” concedido a ${String(usuario.nome || usuario.email)}`,
       dados: { empresa_id: empresaId },
+      empresa_id: empresaId,
     });
   }
   invalidarCacheEmpresas(usuarioId);
@@ -174,6 +176,7 @@ export async function revogarEmpresa(req: Request, res: Response) {
       registro_id: usuarioId,
       descricao: `Acesso à empresa #${empresaId} revogado de ${String(usuario.nome || usuario.email)}`,
       dados: { empresa_id: empresaId },
+      empresa_id: empresaId,
     });
   }
   invalidarCacheEmpresas(usuarioId);

@@ -159,3 +159,15 @@ export const ACAO_LABEL: Record<string, string> = {
   login_falha: 'Login (falha)',
   senha: 'Troca de senha',
 };
+
+/** Valores do motor financeiro vêm em centavos inteiros; a tela mostra reais. */
+export function centavosParaReais(c: unknown): number {
+  const n = Number(c);
+  return Number.isFinite(n) ? n / 100 : NaN;
+}
+
+/** Percentual com uma casa decimal (0–100). */
+export function formatPct(v: unknown): string {
+  const n = Number(v);
+  return Number.isFinite(n) ? `${n.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : '—';
+}

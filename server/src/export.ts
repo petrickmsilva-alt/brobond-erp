@@ -8,7 +8,8 @@ import type { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { HttpError } from './errors';
 import { getPublicResource, type Resource } from './resources';
-import { checkAccess, getStore } from './services';
+import { aplicarFiltroEmpresa } from './empresa';
+import { checkAccess, escopoDe, getStore } from './services';
 import { currentUser } from './auth';
 import type { Row } from './store';
 
@@ -151,10 +152,14 @@ export async function exportarRecurso(req: Request, res: Response, resourceKey: 
       if (Number.isInteger(n) && n > 0) idsSel.add(n);
     }
   }
+  // MULTIEMPRESA (Etapa 2.1): a exportação usa o MESMO recorte da listagem —
+  // sem isto, /api/auditoria/export (e qualquer recurso com escopo) vazava
+  // dados de todas as empresas. Consolidação segue o privilégio existente.
+  const filtroEscopo = aplicarFiltroEmpresa(r, filter, escopoDe(currentUser(req)));
   let linhas: Row[] = [];
   let page = 1;
   for (;;) {
-    const resul = await s.list(r, { q, page, pageSize: 500, sort, dir, filter });
+    const resul = await s.list(r, { q, page, pageSize: 500, sort, dir, filter: filtroEscopo });
     linhas.push(...resul.rows);
     if (page * 500 >= resul.total) break;
     page++;

@@ -32,6 +32,22 @@ export default {
           800: 'rgb(var(--brand-800) / <alpha-value>)',
         },
         charcoal: 'rgb(var(--charcoal) / <alpha-value>)',
+        // Tokens semânticos (src/index.css): use estes nomes nos componentes.
+        surface: 'rgb(var(--surface) / <alpha-value>)',
+        canvas: 'rgb(var(--canvas) / <alpha-value>)',
+        line: 'rgb(var(--line) / <alpha-value>)',
+        ink: 'rgb(var(--ink) / <alpha-value>)',
+        'ink-soft': 'rgb(var(--ink-soft) / <alpha-value>)',
+        muted: 'rgb(var(--muted) / <alpha-value>)',
+        primary: {
+          DEFAULT: 'rgb(var(--primary) / <alpha-value>)',
+          fg: 'rgb(var(--primary-fg) / <alpha-value>)',
+        },
+        accent: 'rgb(var(--accent) / <alpha-value>)',
+        success: 'rgb(var(--success) / <alpha-value>)',
+        warning: 'rgb(var(--warning) / <alpha-value>)',
+        danger: 'rgb(var(--danger) / <alpha-value>)',
+        info: 'rgb(var(--info) / <alpha-value>)',
       },
       fontFamily: {
         sans: [

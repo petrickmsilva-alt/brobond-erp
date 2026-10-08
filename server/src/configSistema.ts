@@ -22,6 +22,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit } from './empresa';
 import { currentUser, exigirReautenticacao } from './auth';
 import { getStore } from './services';
 import { RESOURCES } from './resources';
@@ -76,6 +77,7 @@ export async function salvarEnderecoPublico(req: Request, res: Response) {
       registro_id: null,
       descricao: `Endereço público do ERP alterado para ${v.origem} (base dos links de e-mail, portal e QR)`,
       dados: { chave: CHAVE_APP_URL, antes, depois: v.origem },
+      empresa_id: empresaDoAtorAudit(actor),
     })
     .catch(() => undefined);
 
@@ -103,6 +105,7 @@ export async function removerEnderecoPublico(req: Request, res: Response) {
       registro_id: null,
       descricao: 'Endereço público salvo removido — os links voltam a usar APP_URL e, na falta dela, a origem da requisição',
       dados: { chave: CHAVE_APP_URL, antes: antes || '(não configurado)' },
+      empresa_id: empresaDoAtorAudit(actor),
     })
     .catch(() => undefined);
   res.json({ ok: true, status: await statusOrigemAsync(req) });

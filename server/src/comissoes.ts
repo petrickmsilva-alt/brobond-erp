@@ -134,6 +134,7 @@ export async function registrarComissaoPorRecebimento(
       recurso: 'comissoes_eventos',
       registro_id: Number(evento.id),
       descricao: `Comissão efetivada — venda #${vendaId} · ${valor.toFixed(2)} (${origem})`,
+      empresa_id: empresaDe(venda),
       dados: { venda_id: vendaId, lancamento_id: lancamentoId, valor, base: round2(valorRecebido), origem },
     },
     tx
@@ -211,6 +212,7 @@ export async function registrarEstornoComissao(
       recurso: 'comissoes_eventos',
       registro_id: Number(evento.id),
       descricao: `Comissão estornada — venda #${vendaId} · ${valor.toFixed(2)} (${origem}: ${motivo})`,
+      empresa_id: empresaDe(venda),
       dados: { venda_id: vendaId, valor, base: round2(Number(valorBaseEstornado || 0)), origem, motivo },
     },
     tx

@@ -11,7 +11,7 @@ import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { currentUser, type AuthUser } from './auth';
 import { checkAccess, getDefaultLocal, getStore } from './services';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { getResource } from './resources';
 import { parseId } from './validate';
 import type { Row } from './store';
@@ -480,6 +480,7 @@ export async function importarXmlCompra(req: Request, res: Response) {
       registro_id: Number(compra.id),
       descricao: `NF-e ${parsed.numero || parsed.chaveAcesso} importada — ${resolved.length} produto(s), entrada em "${local}"`,
       dados: { importacao_id: imported.id, chave_acesso: parsed.chaveAcesso, compra_id: compra.id, itens: createdItems.map((item) => item.id) },
+      empresa_id: empresaDoRegistroAudit(compras, compra, actor),
     }, tx);
     return { compra, imported, supplier, local, resolved, parsed };
   }, { isolation: 'serializable' });
@@ -578,6 +579,7 @@ export async function packingCheck(req: Request, res: Response) {
         recurso: 'vendas',
         registro_id: id,
         descricao: `Venda #${id}: divergência na conferência (packing check)`,
+        empresa_id: empresaDoRegistroAudit(getResource('vendas')!, venda, actor),
         dados: { divergencia_id: divergencia.id, faltando, sobrando },
       }, tx);
       throw new HttpError(422, 'A conferência física não coincide byte a byte com os itens do pedido. Nenhuma baixa foi realizada.', {

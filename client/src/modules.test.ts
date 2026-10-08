@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MODULES, MODULE_GROUPS, visibleModules } from './modules';
+import { GROUP_META, MODULES, MODULE_GROUPS, visibleModules } from './modules';
 
 describe('visibleModules', () => {
   it('operador não vê módulos adminOnly nem exclusivos de gerente', () => {
@@ -44,5 +44,19 @@ describe('visibleModules', () => {
     const visiveis = visibleModules(null);
     expect(visiveis.some((m) => m.adminOnly)).toBe(false);
     expect(visiveis.some((m) => m.minPerfil === 'gerente')).toBe(false);
+  });
+
+  it('todo módulo com área de negócio pertence a um grupo declarado e com metadados de Sidebar', () => {
+    const orfaos = MODULES.filter((m) => m.group !== null && !(MODULE_GROUPS as readonly string[]).includes(m.group));
+    expect(orfaos.map((m) => m.id)).toEqual([]);
+    for (const g of MODULE_GROUPS) expect(GROUP_META[g]).toBeDefined();
+  });
+
+  it('a navegação ERP usa as áreas de negócio (Meu Negócio, Cadastros, Vendas, Estoque, Financeiro...)', () => {
+    const areas = new Set(MODULES.map((m) => m.group).filter(Boolean));
+    for (const a of ['Cadastros', 'Vendas', 'Compras', 'Estoque', 'Produção', 'Financeiro', 'Relatórios', 'Integrações', 'Configurações']) {
+      expect(areas.has(a)).toBe(true);
+    }
+    expect(MODULES.find((m) => m.id === 'dashboard')?.label).toBe('Meu Negócio');
   });
 });

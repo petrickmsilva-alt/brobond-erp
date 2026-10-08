@@ -36,7 +36,7 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, checkFluxo, getDefaultLocal, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2 } from './utils';
 import { aplicarRegrasPedido } from './itens';
@@ -90,7 +90,7 @@ export async function abrirCaixa(req: Request, res: Response) {
         tx
       );
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'pdv_caixas', registro_id: Number(criado.id), descricao: `Caixa "${numero}" aberto com ${valorAbertura.toFixed(2)} de troco inicial`, dados: { numero, valor_abertura: valorAbertura, local } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'pdv_caixas', registro_id: Number(criado.id), descricao: `Caixa "${numero}" aberto com ${valorAbertura.toFixed(2)} de troco inicial`, dados: { numero, valor_abertura: valorAbertura, local }, empresa_id: empresaDoRegistroAudit(R_CAIXA(), criado, actor) },
         tx
       );
       return criado;
@@ -195,7 +195,7 @@ export async function movimentoCaixa(req: Request, res: Response) {
       tx
     );
     await s.audit(
-      { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'pdv_caixas', registro_id: id, descricao: `${tipo === 'suprimento' ? 'Suprimento' : 'Sangria'} de ${valor.toFixed(2)} no caixa #${id}`, dados: { tipo, valor } },
+      { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'pdv_caixas', registro_id: id, descricao: `${tipo === 'suprimento' ? 'Suprimento' : 'Sangria'} de ${valor.toFixed(2)} no caixa #${id}`, dados: { tipo, valor }, empresa_id: empresaDoRegistroAudit(R_CAIXA(), caixa, actor) },
       tx
     );
     return criado;
@@ -257,6 +257,7 @@ export async function fecharCaixa(req: Request, res: Response) {
           recurso: 'pdv_caixas',
           registro_id: id,
           descricao: `Caixa #${id} fechado: contado ${contado.toFixed(2)}, esperado ${esperado.toFixed(2)}, diferença ${diferenca.toFixed(2)}`,
+          empresa_id: empresaDoRegistroAudit(R_CAIXA(), caixa, actor),
           dados: { valor_fechamento: contado, valor_sistema: esperado, diferenca, vendas: resumo.quantidade_vendas },
         },
         tx
@@ -661,6 +662,7 @@ export async function venderPdv(req: Request, res: Response) {
           recurso: 'vendas',
           registro_id: Number(venda.id),
           descricao: `Venda PDV #${venda.id} — ${resolvidas.length} item(ns), total ${total.toFixed(2)}, pago ${totalPago.toFixed(2)}${troco ? `, troco ${troco.toFixed(2)}` : ''}`,
+          empresa_id: empresaDoRegistroAudit(getResource('vendas')!, venda, actor),
           dados: { caixa_id: caixa.id, subtotal_itens: subtotalItens, desconto: descontoCupom, frete, total, total_pago: totalPago, troco, divergencias, faturada: faturar },
         },
         tx
@@ -760,6 +762,7 @@ export async function cancelarVendaPdv(req: Request, res: Response) {
               recurso: 'pdv_caixas',
               registro_id: Number(caixa.id),
               descricao: `ATENÇÃO: cancelamento RETROATIVO da venda #${id} no caixa fechado "${caixa.numero}" autorizado por administrador (${actor.name})`,
+              empresa_id: empresaDoRegistroAudit(R_CAIXA(), caixa, actor),
               dados: { venda_id: id, retroativo: true, fechamento_em: caixa.fechamento_em },
             },
             tx
@@ -787,7 +790,7 @@ export async function cancelarVendaPdv(req: Request, res: Response) {
       const depois = (await s.get(getResource('vendas')!, id, tx)) || cancelada;
       await syncLancamentoVenda(antes, depois, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'vendas', registro_id: id, descricao: `Venda PDV #${id} cancelada — motivo: ${motivo}`, dados: { motivo, caixa_id: antes.pdv_caixa_id ?? null } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'vendas', registro_id: id, descricao: `Venda PDV #${id} cancelada — motivo: ${motivo}`, dados: { motivo, caixa_id: antes.pdv_caixa_id ?? null }, empresa_id: empresaDoRegistroAudit(getResource('vendas')!, venda, actor) },
         tx
       );
       return depois;

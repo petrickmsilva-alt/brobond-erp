@@ -14,6 +14,7 @@
 import type { Request, Response } from 'express';
 import { randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit, empresaExplicitaAudit } from './empresa';
 import { limparToken } from './validate';
 import { currentUser, exigirReautenticacao, hashPassword, hashResetToken, gerarResetToken, validarSenhaNova, invalidateUserCache, clientIp, contaBloqueada, sidAtual } from './auth';
 import { getStore } from './services';
@@ -114,6 +115,7 @@ export async function gerarConvite(row: Record<string, any>, actor: { id: number
       descricao: entregue
         ? `Convite de acesso enviado para ${email} (válido por ${CONVITE_TTL_HORAS} h)`
         : `Convite de acesso gerado para ${email} — e-mail não entregue (sem SMTP ou falha no SMTP); link liberado para entrega manual`,
+      empresa_id: empresaExplicitaAudit(row.empresa_id, actor),
     })
     .catch(() => undefined);
   return { entregue, ...(entregue ? {} : { link }) };
@@ -169,6 +171,7 @@ export async function aceitarConvite(req: Request, res: Response) {
       registro_id: Number(row.id),
       descricao: `Convite aceito — ${String(row.email)} definiu a própria senha`,
       dados: { metodo: 'convite' },
+      empresa_id: empresaExplicitaAudit(row.empresa_id, null),
     })
     .catch(() => undefined);
   invalidateUserCache(Number(row.id));
@@ -224,6 +227,7 @@ export async function senhaTemporaria(req: Request, res: Response) {
     registro_id: Number(row.id),
     descricao: `Senha temporária gerada para ${String(row.email)} (exibição única)${sessoes ? ` — ${sessoes} sessão(ões) encerrada(s)` : ''}`,
     dados: { metodo: 'senha_temporaria', sessoes_encerradas: sessoes },
+    empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(Number(row.id));
   notificar('usuario.senha_temporaria', dadosConta(row, actor, { sessoes_encerradas: sessoes }));
@@ -531,6 +535,7 @@ export async function desativarUsuario(req: Request, res: Response) {
     registro_id: id,
     descricao: `${String(row.nome || row.email)} DESATIVADO por ${actor.name} — motivo: ${motivo}${sessoes ? ` (${sessoes} sessão(ões) encerrada(s))` : ''}`,
     dados: { motivo, sessoes_encerradas: sessoes },
+    empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
   notificar('usuario.desativado', dadosConta(row, actor, { motivo, sessoes_encerradas: sessoes }));
@@ -570,6 +575,7 @@ export async function ativarUsuario(req: Request, res: Response) {
     recurso: 'usuarios',
     registro_id: id,
     descricao: `${String(row.nome || row.email)} REATIVADO por ${actor.name}`,
+    empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
 
@@ -609,6 +615,7 @@ export async function desbloquearUsuario(req: Request, res: Response) {
     recurso: 'usuarios',
     registro_id: id,
     descricao: `${String(row.nome || row.email)} DESBLOQUEADO por ${actor.name} (bloqueio ${eraManual ? 'manual removido' : 'temporário e falhas zerados'})`,
+    empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
   notificar('usuario.desbloqueado', dadosConta(row, actor, { bloqueio_manual: eraManual }));
@@ -653,6 +660,7 @@ export async function bloquearUsuario(req: Request, res: Response) {
     registro_id: id,
     descricao: `${String(row.nome || row.email)} BLOQUEADO por ${actor.name} ${prazo} — motivo: ${motivo}`,
     dados: { motivo, duracao_minutos: duracao, manual: duracao === null },
+    empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
   notificar('usuario.bloqueado', dadosConta(row, actor, { motivo, manual: duracao === null, duracao_minutos: duracao }));
@@ -685,6 +693,7 @@ export async function encerrarSessoesUsuario(req: Request, res: Response) {
     registro_id: id,
     descricao: `Todas as sessões de ${String(row.nome || row.email)} encerradas por ${actor.name} (${sessoes} sessão(ões))`,
     dados: { sessoes_encerradas: sessoes, token_versao: versao },
+    empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
   res.json({ ok: true, sessoes_encerradas: sessoes });
@@ -713,6 +722,7 @@ export async function forcarTrocaSenha(req: Request, res: Response) {
     recurso: 'usuarios',
     registro_id: id,
     descricao: `Troca de senha forçada para ${String(row.email)} por ${actor.name} — troca obrigatória no próximo acesso`,
+    empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
   res.json({ ok: true });
@@ -744,6 +754,7 @@ export async function revogarSessaoUsuario(req: Request, res: Response) {
     registro_id: id,
     descricao: `Sessão de ${String(row.nome || row.email)} revogada por ${actor.name} (${sessao.ip || 'ip desconhecido'})`,
     dados: { sessao: sid.slice(0, 8) },
+    empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
   const restantes = (await store.listSessoesAtivas(id)).length;
@@ -768,6 +779,7 @@ export async function resetarMfaUsuario(req: Request, res: Response) {
     recurso: 'usuarios',
     registro_id: Number(row.id),
     descricao: `MFA de ${String(row.email)} resetado por ${actor.name} (reautenticado, códigos de recuperação invalidados) — o usuário refaz o cadastro no próximo login`,
+    empresa_id: empresaDoAtorAudit(actor),
     dados: { sessoes_encerradas: sessoes },
   });
   invalidateUserCache(Number(row.id));
@@ -811,6 +823,7 @@ export async function salvarPoliticaSenha(req: Request, res: Response) {
       registro_id: null,
       descricao: `Política de senha alterada por ${actor.name}: mínimo ${politica.tamanho_minimo}, histórico ${politica.historico_qtd}, expiração ${politica.expiracao_dias ? `${politica.expiracao_dias}d` : 'nunca'}`,
       dados: { antes, depois: politica },
+      empresa_id: empresaDoAtorAudit(actor),
     })
     .catch(() => undefined);
   const { LIMITES_POLITICA } = await import('./politicaSenha');
@@ -930,6 +943,7 @@ export async function certificarUsuario(req: Request, res: Response) {
     registro_id: id,
     descricao: `Acesso de ${String(row.nome || row.email)} CERTIFICADO por ${actor.name}${observacao ? ` — ${observacao}` : ''}`,
     dados: { observacao: observacao || null },
+    empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
   notificar('usuario.acesso_certificado', dadosConta(row, actor, { observacao: observacao || null }));

@@ -16,7 +16,7 @@ import type { Resource } from './resources';
 import { getResource } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor } from './empresa';
+import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, empresaDoRegistroAudit } from './empresa';
 import { round2 } from './utils';
 import { casarLinhaExtrato, efetuarBaixa, pareceOFX, parseLinhasExtrato, type LinhaExtrato } from './financeiro';
 import type { Row } from './store';
@@ -146,6 +146,7 @@ export async function importarExtrato(req: Request, res: Response) {
     registro_id: contaId,
     descricao: `Extrato ${fonte.toUpperCase()} importado na conta "${conta.nome}": ${importadas.length} linha(s) nova(s), ${duplicadas} duplicada(s) ignorada(s), ${conciliadas.length} conciliada(s)`,
     dados: { conta_id: contaId, fonte, importadas: importadas.length, duplicadas, conciliadas: conciliadas.length },
+    empresa_id: empresaDoRegistroAudit(getResource('contas_financeiras')!, conta, actor),
   });
 
   res.json({ ok: true, fonte, conta_id: contaId, importadas: importadas.length, duplicadas, conciliadas: conciliadas.length, conciliadas_detalhe: conciliadas, pendentes: pendentesDeConciliar });
@@ -216,6 +217,7 @@ export async function marcarDivergencia(req: Request, res: Response) {
     recurso: 'fin_extrato_transacoes',
     registro_id: Number(linha.id),
     descricao: `Divergência registrada na linha de extrato #${linha.id} (${Number(linha.valor || 0).toFixed(2)} — ${String(linha.descricao || '').slice(0, 60)})`,
+    empresa_id: empresaDoRegistroAudit(R_EXTRATO, linha, actor),
     dados: { motivo },
   });
   res.json({ ok: true, extrato_id: Number(linha.id), status: 'divergente' });

@@ -14,6 +14,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
+import { empresaDoRegistroAudit } from './empresa';
 import { getResource } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser } from './auth';
@@ -112,6 +113,7 @@ export async function createQualidade(req: Request, res: Response) {
     registro_id: ordemId,
     descricao: `Defeito registrado na OP #${ordemId} (${opLabel}): ${defeitoLabel} na etapa "${etapa}" — ${quantidade} peça(s)`,
     dados: { etapa, defeito, quantidade, observacoes, responsavel, resolvido: false },
+    empresa_id: empresaDoRegistroAudit(r, op, actor),
   });
 
   res.status(201).json({ ok: true, message: 'Defeito registrado.' });
