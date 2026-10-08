@@ -37,7 +37,7 @@ import { checkAccess, getStore, escopoDe } from './services';
 import { currentUser, type AuthUser } from './auth';
 import { parseId } from './validate';
 import { labelOf, type Row, type Tx } from './store';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoAtorAudit, empresaDoRegistroAudit } from './empresa';
 import { aplicarRegrasPedido } from './itens';
 import { syncLancamentoVenda } from './financeiro';
 import { cifrarSegredo, decifrarSegredo, mascararSegredo, pareceCifrado, chaveFraca } from './segredos';
@@ -655,6 +655,7 @@ async function aplicarEfeitosDaAutorizacao(doc: Row, actor: { id: number | null;
       recurso: 'vendas',
       registro_id: Number(venda.id),
       descricao: `${doc.modelo === '65' ? 'NFC-e' : 'NF-e'} nº ${doc.numero} AUTORIZADA (chave ${doc.chave_acesso}) — venda faturada, estoque baixado e financeiro lançado`,
+      empresa_id: empresaDoRegistroAudit(R_VENDA(), venda, actor),
       dados: { documento_fiscal_id: doc.id, chave: doc.chave_acesso, protocolo: doc.protocolo, provider: doc.provider, ambiente: doc.ambiente },
     },
     tx
@@ -823,6 +824,7 @@ export async function cancelarDocumento(req: Request, res: Response) {
         recurso: 'documentos_fiscais',
         registro_id: Number(doc.id),
         descricao: `Documento fiscal nº ${doc.numero} (chave ${doc.chave_acesso}) CANCELADO na SEFAZ — ${justificativa}`,
+        empresa_id: empresaDoRegistroAudit(R_DOC(), doc, actor),
         dados: { protocolo: resposta.protocolo, justificativa },
       },
       tx
@@ -894,6 +896,7 @@ export async function inutilizarNumeracao(req: Request, res: Response) {
     recurso: 'inutilizacoes_fiscais',
     registro_id: Number(registro.id),
     descricao: `Inutilização ${homologado ? 'HOMOLOGADA' : 'solicitada'} — modelo ${modelo}, série ${serie}, nº ${inicial} a ${final}`,
+    empresa_id: empresaDoRegistroAudit(R_INUT(), registro, actor),
     dados: { justificativa, protocolo: resposta.protocolo ?? null, status: resposta.status },
   });
 
@@ -1028,6 +1031,7 @@ export async function salvarConfigFiscal(req: Request, res: Response) {
     recurso: 'empresa_fiscal_config',
     registro_id: Number(config.id),
     descricao: `Configuração fiscal da empresa ${escopo.empresaId} alterada (provedor ${atualizado?.provider}, ambiente ${atualizado?.ambiente}, ${atualizado?.habilitado ? 'HABILITADA' : 'desabilitada'})`,
+    empresa_id: empresaDoAtorAudit(actor),
     // Jamais os segredos — apenas quais campos foram tocados.
     dados: { campos: Object.keys(patch) },
   });

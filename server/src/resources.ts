@@ -349,6 +349,9 @@ export const RESOURCES: Record<string, Resource> = {
 
   auditoria: {
     key: 'auditoria',
+    // MULTIEMPRESA (Etapa 2.1): o feed filtra pela empresa ativa via
+    // aplicarFiltroEmpresa; consolidação segue o privilégio existente.
+    empresa: true,
     table: 'auditoria',
     label: 'Auditoria',
     singular: 'Evento',
@@ -358,6 +361,8 @@ export const RESOURCES: Record<string, Resource> = {
     notice: 'Registro automático de tudo que é incluído, alterado ou excluído no sistema, e de quem fez.',
     fields: [
       { name: 'data', label: 'Data/hora', type: 'datetime', readonly: true },
+      // Somente leitura: carimbada pelo servidor no momento do evento.
+      { name: 'empresa_id', label: 'Empresa', type: 'ref', ref: 'empresas', readonly: true },
       { name: 'usuario_id', label: 'ID do usuário', type: 'integer', readonly: true, list: false, form: false },
       { name: 'usuario', label: 'Usuário', type: 'text', readonly: true, search: true },
       {

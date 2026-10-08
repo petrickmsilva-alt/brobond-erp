@@ -59,6 +59,14 @@ export type AuditEntry = {
   registro_id: number | null;
   descricao: string;
   dados?: unknown;
+  /**
+   * MULTIEMPRESA (Etapa 2.1): toda entrada de auditoria carrega a empresa do
+   * fato registrado, resolvida NO MOMENTO DO EVENTO (ver empresaDoEventoAudit
+   * em empresa.ts) — nunca inferida depois a partir de dados que podem ter
+   * mudado. O feed (/api/auditoria) filtra por ela via `empresa: true` do
+   * recurso. Obrigatório: o tipo exige para nenhum call site esquecer.
+   */
+  empresa_id: number;
 };
 
 /** Sessão de login (invalidação por dispositivo — JTI no JWT). */

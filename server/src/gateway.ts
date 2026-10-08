@@ -30,7 +30,7 @@ import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, exigirReautenticacao, type AuthUser } from './auth';
-import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor } from './empresa';
+import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, empresaDoRegistroAudit, empresaExplicitaAudit } from './empresa';
 import { round2 } from './utils';
 import { calcularLiquido, efetuarBaixa } from './financeiro';
 import { registrarEstornoComissao } from './comissoes';
@@ -551,6 +551,7 @@ export async function configurarGateway(req: Request, res: Response) {
     registro_id: Number(row.id),
     descricao: `Configuração de gateway "${provider}" salva por ${actor.name} (ambiente ${ambiente}${body.credenciais ? '; credenciais atualizadas' : ''}${body.webhook_secret ? '; segredo de webhook atualizado' : ''})`,
     dados: { provider, ambiente },
+    empresa_id: empresaDoRegistroAudit(R_GATEWAY_CONFIGS, row, actor),
   });
   res.json({ ok: true, provider, ambiente, ativo: row.ativo !== false, tem_credenciais: !!row.credenciais_cifradas, tem_segredo_webhook: !!row.webhook_segredo_cifrado });
 }
@@ -669,6 +670,7 @@ export async function criarCobranca(req: Request, res: Response) {
     registro_id: Number(row.id),
     descricao: `Cobrança ${metodo} de ${valor.toFixed(2)} criada via ${providerId} (${resultado.provider_ref})`,
     dados: { provider: providerId, metodo, valor, idempotency_key: idempotencyKey, lancamento_id: dados.lancamento_id, venda_id: dados.venda_id },
+    empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, row, actor),
   });
   res.status(201).json({ ok: true, cobranca: publicaCobranca(row) });
 }
@@ -718,6 +720,7 @@ export async function cancelarCobranca(req: Request, res: Response) {
     recurso: 'gateway_cobrancas',
     registro_id: Number(row.id),
     descricao: `Cobrança #${row.id} cancelada no ${row.provider} (${row.provider_ref})`,
+    empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, row, actor),
     dados: { status: 'cancelada' },
   });
   res.json({ ok: true, cobranca: publicaCobranca(atualizada) });
@@ -750,6 +753,7 @@ export async function estornarCobranca(req: Request, res: Response) {
       recurso: 'gateway_cobrancas',
       registro_id: Number(row.id),
       descricao: `Cobrança #${row.id} ESTORNADA no ${row.provider} (${row.provider_ref})${valor ? ` — valor parcial ${round2(valor).toFixed(2)}` : ''}`,
+      empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, row, actor),
       dados: { status: 'estornada', valor: valor ?? Number(row.valor), estorno_lancamento_id: estornoLancamentoId },
     }, tx);
     return { atualizada, estornoLancamentoId };
@@ -804,6 +808,7 @@ async function reverterFinanceiroDaCobranca(
         recurso: 'lancamentos_financeiros',
         registro_id: estornoId,
         descricao: `Lançamento de estorno — cobrança #${cobranca.id} (${cobranca.provider})`,
+        empresa_id: empresaDoRegistroAudit(getResourceLancamentos(), estorno, actor),
         dados: { valor, lancamento_origem: lancId },
       }, tx);
     }
@@ -892,7 +897,7 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
             recebido_em: new Date().toISOString(),
           });
       const registroId = jaRejeitado ? Number(jaRejeitado.id) : Number((evento as Row).id);
-      await s.audit({ usuario_id: null, usuario: 'webhook', acao: 'seguranca', recurso: 'gateway_webhook_events', registro_id: registroId, descricao: `Webhook ${providerId} rejeitado: assinatura inválida (evento ${parsed.evento_id})`, dados: { provider: providerId, evento_id: parsed.evento_id } });
+      await s.audit({ usuario_id: null, usuario: 'webhook', acao: 'seguranca', recurso: 'gateway_webhook_events', registro_id: registroId, descricao: `Webhook ${providerId} rejeitado: assinatura inválida (evento ${parsed.evento_id})`, dados: { provider: providerId, evento_id: parsed.evento_id }, empresa_id: empresaExplicitaAudit(empresaId, null) });
       return res.status(401).json({ error: 'Assinatura inválida.' });
     }
 
@@ -1047,7 +1052,7 @@ async function aplicarIntencao(providerId: string, cobranca: Row, intencao: Inte
         );
       }
     }
-    await s.audit({ usuario_id: null, usuario: `webhook:${providerId}`, acao: 'editar', recurso: 'gateway_cobrancas', registro_id: Number(cobranca.id), descricao: `Cobrança #${cobranca.id} confirmada PAGA pelo webhook ${providerId} (${cobranca.provider_ref})`, dados: { intencao, evento_id: eventoId } }, tx);
+    await s.audit({ usuario_id: null, usuario: `webhook:${providerId}`, acao: 'editar', recurso: 'gateway_cobrancas', registro_id: Number(cobranca.id), descricao: `Cobrança #${cobranca.id} confirmada PAGA pelo webhook ${providerId} (${cobranca.provider_ref})`, dados: { intencao, evento_id: eventoId }, empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, cobranca, null) }, tx);
     return { lancamento_id: lancId || null };
   }
 
@@ -1056,7 +1061,7 @@ async function aplicarIntencao(providerId: string, cobranca: Row, intencao: Inte
     const novoStatus = intencao === 'expirada' ? 'expirada' : 'cancelada';
     await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(cobranca.id), { status: statusAtual }, { status: novoStatus, webhook_evento_id: String(eventoId), atualizado_em: new Date().toISOString() }, tx);
     // O título segue pendente no financeiro: a cobrança expirou, a dívida não.
-    await s.audit({ usuario_id: null, usuario: `webhook:${providerId}`, acao: 'editar', recurso: 'gateway_cobrancas', registro_id: Number(cobranca.id), descricao: `Cobrança #${cobranca.id} marcada ${novoStatus.toUpperCase()} pelo webhook ${providerId}`, dados: { intencao, evento_id: eventoId } }, tx);
+    await s.audit({ usuario_id: null, usuario: `webhook:${providerId}`, acao: 'editar', recurso: 'gateway_cobrancas', registro_id: Number(cobranca.id), descricao: `Cobrança #${cobranca.id} marcada ${novoStatus.toUpperCase()} pelo webhook ${providerId}`, dados: { intencao, evento_id: eventoId }, empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, cobranca, null) }, tx);
     return { lancamento_id: lancId || null };
   }
 
@@ -1066,7 +1071,7 @@ async function aplicarIntencao(providerId: string, cobranca: Row, intencao: Inte
   const estornada = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(cobranca.id), { status: 'paga' }, { status: 'estornada', webhook_evento_id: String(eventoId), atualizado_em: new Date().toISOString() }, tx);
   if (estornada) {
     await reverterFinanceiroDaCobranca(cobranca, Number(cobranca.valor), { id: null, name: `webhook:${providerId}` }, tx);
-    await s.audit({ usuario_id: null, usuario: `webhook:${providerId}`, acao: 'editar', recurso: 'gateway_cobrancas', registro_id: Number(cobranca.id), descricao: `Cobrança #${cobranca.id} ESTORNADA notificada pelo webhook ${providerId}`, dados: { intencao, evento_id: eventoId } }, tx);
+    await s.audit({ usuario_id: null, usuario: `webhook:${providerId}`, acao: 'editar', recurso: 'gateway_cobrancas', registro_id: Number(cobranca.id), descricao: `Cobrança #${cobranca.id} ESTORNADA notificada pelo webhook ${providerId}`, dados: { intencao, evento_id: eventoId }, empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, cobranca, null) }, tx);
   }
   return { lancamento_id: lancId || null };
 }
@@ -1096,7 +1101,7 @@ export async function reprocessarEvento(req: Request, res: Response) {
   }
   try {
     const out = await processarEvento(evento);
-    await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'gateway_webhook_events', registro_id: Number(evento.id), descricao: `Evento de webhook reprocessado manualmente (${evento.provider}/${evento.evento_id})`, dados: { resultado: out.resultado } });
+    await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'gateway_webhook_events', registro_id: Number(evento.id), descricao: `Evento de webhook reprocessado manualmente (${evento.provider}/${evento.evento_id})`, dados: { resultado: out.resultado }, empresa_id: empresaDoRegistroAudit(R_GATEWAY_WEBHOOK_EVENTS, evento, actor) });
     res.json({ ok: true, resultado: out.resultado });
   } catch (e: any) {
     throw new HttpError(409, `Reprocessamento falhou: ${String(e?.message || e).slice(0, 200)}`);

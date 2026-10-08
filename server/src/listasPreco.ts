@@ -20,7 +20,7 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2 } from './utils';
 import type { Row, Tx } from './store';
@@ -261,6 +261,7 @@ export async function gravarItensLista(req: Request, res: Response) {
         registro_id: id,
         descricao: `Lista "${lista.nome}": ${criados} preço(s) criado(s), ${alterados} alterado(s)`,
         dados: { criados, alterados, inalterados, erros },
+        empresa_id: empresaDoRegistroAudit(R_LISTA(), lista, actor),
       },
       tx
     );
@@ -279,7 +280,7 @@ export async function removerItemLista(req: Request, res: Response) {
   const produtoId = parseId(req.params.produtoId);
   const s = getStore();
   await s.transaction(async (tx) => {
-    assertRegistroDaEmpresa(R_LISTA(), await s.get(R_LISTA(), id, tx), escopo);
+    const lista = assertRegistroDaEmpresa(R_LISTA(), await s.get(R_LISTA(), id, tx), escopo);
     const item = await s.findOneWhere(R_LISTA_ITEM(), { lista_id: id, produto_id: produtoId }, tx);
     if (!item) throw new HttpError(404, 'Este produto não tem preço nesta lista.');
     await s.remove(R_LISTA_ITEM(), Number(item.id), tx);
@@ -289,7 +290,7 @@ export async function removerItemLista(req: Request, res: Response) {
       tx
     );
     await s.audit(
-      { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'listas_preco', registro_id: id, descricao: `Preço do produto #${produtoId} removido da lista`, dados: { produto_id: produtoId } },
+      { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'listas_preco', registro_id: id, descricao: `Preço do produto #${produtoId} removido da lista`, dados: { produto_id: produtoId }, empresa_id: empresaDoRegistroAudit(R_LISTA(), lista, actor) },
       tx
     );
   });

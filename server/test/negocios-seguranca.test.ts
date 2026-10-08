@@ -42,6 +42,7 @@ const app = express();
 app.use(express.json());
 app.post('/api/auth/login', wrap(login as any));
 app.post('/api/empresas/ativa', requireAuth, wrap(trocarEmpresaAtiva as any));
+app.get('/api/negocios/canais', requireAuth, wrap(neg.negociosCanais as any));
 app.get('/api/negocios/resumo', requireAuth, wrap(neg.negociosResumo as any));
 app.get('/api/negocios/abc', requireAuth, wrap(neg.negociosABC as any));
 app.get('/api/negocios/margens', requireAuth, wrap(neg.negociosMargens as any));
@@ -163,6 +164,10 @@ test('A) empresa autorizada: GET /api/negocios/resumo?empresa_id=A → 200 só c
   assert.equal(r.body.filtros.empresa_id, EMPRESA_A);
   assert.equal(r.body.kpis.faturamentoCents, 10_000, 'a venda da B (99.000) não aparece');
   assert.equal(r.body.kpis.pedidos, 1);
+
+  const canais = await request(app).get(`/api/negocios/canais?empresa_id=${EMPRESA_A}`).set('Authorization', `Bearer ${ana.token}`);
+  assert.equal(canais.status, 200, 'o escopo explícito autorizado é aceito também no catálogo de canais');
+  assert.ok(Array.isArray(canais.body.grupos));
 });
 
 test('B) empresa NÃO autorizada: GET /api/negocios/resumo?empresa_id=B → 403 e nenhum dado', async () => {
@@ -198,6 +203,13 @@ test('B) escrita cruzada: POST /api/negocios/vendas com empresa_id=B por usuári
 
   const depois = await request(app).get(`/api/negocios/resumo?empresa_id=${EMPRESA_B}`).set('Authorization', `Bearer ${multi.token}`);
   assert.equal(depois.body.kpis.pedidos, 0, 'a venda recusada não foi gravada na B');
+});
+
+test('B) GET /api/negocios/canais?empresa_id=B valida concessão apesar de retornar só metadados', async () => {
+  const { ana } = await prepararAtores();
+  const r = await request(app).get(`/api/negocios/canais?empresa_id=${EMPRESA_B}`).set('Authorization', `Bearer ${ana.token}`);
+  assert.equal(r.status, 403);
+  assert.equal(r.body.grupos, undefined);
 });
 
 test('B) empresa inexistente e não concedida também responde 403 (sem enumerar empresas)', async () => {

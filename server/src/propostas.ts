@@ -34,7 +34,7 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, validarReferenciasDaEmpresa, type EscopoEmpresa } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, validarReferenciasDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2 } from './utils';
 import { precoDe } from './listasPreco';
@@ -271,7 +271,7 @@ export async function criarProposta(req: Request, res: Response) {
       await s.update(R_PROPOSTA(), Number(proposta.id), { total }, tx);
       await registrarEvento(Number(proposta.id), null, 'rascunho', `Proposta criada com ${itens.length} item(ns), total ${total.toFixed(2)}.`, { id: actor.id || null, name: actor.name }, escopo.empresaId, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'propostas', registro_id: Number(proposta.id), descricao: `Proposta #${proposta.id} criada (${itens.length} item(ns), R$ ${total.toFixed(2)})`, dados: { cliente_id: clienteId, itens: itens.length, total } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'propostas', registro_id: Number(proposta.id), descricao: `Proposta #${proposta.id} criada (${itens.length} item(ns), R$ ${total.toFixed(2)})`, dados: { cliente_id: clienteId, itens: itens.length, total }, empresa_id: empresaDoRegistroAudit(R_PROPOSTA(), proposta, actor) },
         tx
       );
       const completa = (await s.get(R_PROPOSTA(), Number(proposta.id), tx)) || proposta;
@@ -348,7 +348,7 @@ export async function reescreverItens(req: Request, res: Response) {
       const total = totalDe(subtotal, num(proposta.desconto), num(proposta.frete));
       await s.update(R_PROPOSTA(), id, { total }, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'propostas', registro_id: id, descricao: `Proposta #${id}: itens reescritos (${itens.length}), total ${total.toFixed(2)}`, dados: { itens: itens.length, total } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'propostas', registro_id: id, descricao: `Proposta #${id}: itens reescritos (${itens.length}), total ${total.toFixed(2)}`, dados: { itens: itens.length, total }, empresa_id: empresaDoRegistroAudit(R_PROPOSTA(), proposta, actor) },
         tx
       );
       return total;
@@ -416,7 +416,7 @@ async function transicionar(req: Request, res: Response, para: 'enviada' | 'apro
       if (!atualizada) throw new HttpError(409, 'A proposta mudou enquanto você operava. Recarregue e tente de novo.');
       await registrarEvento(id, String(proposta.status), para, mensagem, { id: actor.id || null, name: actor.name }, escopo.empresaId, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'propostas', registro_id: id, descricao: `Proposta #${id}: ${proposta.status} → ${para}`, dados: { de: proposta.status, para, mensagem } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'propostas', registro_id: id, descricao: `Proposta #${id}: ${proposta.status} → ${para}`, dados: { de: proposta.status, para, mensagem }, empresa_id: empresaDoRegistroAudit(R_PROPOSTA(), proposta, actor) },
         tx
       );
       return atualizada;
@@ -508,11 +508,11 @@ export async function converterProposta(req: Request, res: Response) {
 
       await registrarEvento(id, 'aprovada', 'convertida', `Convertida no pedido de venda #${venda.id}.`, { id: actor.id || null, name: actor.name }, escopo.empresaId, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'propostas', registro_id: id, descricao: `Proposta #${id} convertida no pedido #${venda.id}`, dados: { venda_id: Number(venda.id) } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'propostas', registro_id: id, descricao: `Proposta #${id} convertida no pedido #${venda.id}`, dados: { venda_id: Number(venda.id) }, empresa_id: empresaDoRegistroAudit(R_PROPOSTA(), proposta, actor) },
         tx
       );
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'vendas', registro_id: Number(venda.id), descricao: `Pedido #${venda.id} criado a partir da proposta #${id}`, dados: { proposta_id: id } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'vendas', registro_id: Number(venda.id), descricao: `Pedido #${venda.id} criado a partir da proposta #${id}`, dados: { proposta_id: id }, empresa_id: empresaDoRegistroAudit(getResource('vendas')!, venda, actor) },
         tx
       );
       return { venda_id: Number(venda.id), venda, idempotente: false };

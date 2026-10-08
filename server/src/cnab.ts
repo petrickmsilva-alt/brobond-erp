@@ -21,7 +21,7 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor } from './empresa';
+import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, empresaDoAtorAudit } from './empresa';
 import { round2 } from './utils';
 import { efetuarBaixa } from './financeiro';
 import { hashLinhaExtrato, R_EXTRATO } from './extrato';
@@ -321,6 +321,7 @@ export async function importarCnab(req: Request, res: Response) {
     registro_id: contaId,
     descricao: `CNAB (${parser.id}) importado na conta "${conta.nome}": ${novas} linha(s), ${liquidadas} liquidação(ões), ${divergentes} divergência(s), ${duplicadas} duplicada(s)`,
     dados: { conta_id: contaId, parser: parser.id, novas, liquidadas, divergentes, duplicadas },
+    empresa_id: empresaDoAtorAudit(actor),
   });
 
   res.json({ ok: true, parser: parser.id, conta_id: contaId, total_linhas: linhas.length, novas, duplicadas, liquidadas, divergentes, detalhes });

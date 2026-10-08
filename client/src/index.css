@@ -37,6 +37,41 @@
   /* Fase 3 — "Brobond AI ERP" Dark Premium: cinza-carbono profundo */
   --carbon-900: #0b0f19;    /* fundo global */
   --carbon-950: #090d16;    /* sidebar / header */
+
+  /* ------------------------------------------------------------------
+     Tokens semânticos (Design System — Etapa 1).
+     Componentes novos usam SEMPRE estes nomes, nunca hexadecimais soltos.
+     Formato "R G B". O bloco .dark redefine os mesmos nomes.
+     ------------------------------------------------------------------ */
+  --surface: 255 255 255;      /* cartões e painéis */
+  --canvas: 240 244 250;       /* fundo da página */
+  --line: 226 232 240;         /* bordas e divisórias */
+  --ink: 15 35 64;             /* títulos e valores */
+  --ink-soft: 51 65 85;        /* texto corrido */
+  --muted: 100 116 139;        /* rótulos e legendas */
+  --primary: 15 35 64;         /* ação principal */
+  --primary-fg: 255 255 255;
+  --accent: 201 131 46;        /* destaque da marca (âmbar) */
+  --success: 4 120 87;
+  --warning: 180 83 9;
+  --danger: 185 28 28;
+  --info: 3 105 161;
+}
+
+.dark {
+  --surface: 15 23 42;
+  --canvas: 9 13 22;
+  --line: 30 41 59;
+  --ink: 241 245 249;
+  --ink-soft: 203 213 225;
+  --muted: 148 163 184;
+  --primary: 36 62 106;
+  --primary-fg: 255 255 255;
+  --accent: 219 160 90;
+  --success: 52 211 153;
+  --warning: 251 191 36;
+  --danger: 248 113 113;
+  --info: 56 189 248;
 }
 
 /* ------------------------------------------------------------------

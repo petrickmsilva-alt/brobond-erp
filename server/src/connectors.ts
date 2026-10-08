@@ -25,8 +25,10 @@
 // HTTP, injeção do banco/auditoria e as regras de montagem.
 import express, { Router, type NextFunction, type Request, type Response } from 'express';
 import { currentUser } from './auth';
+import { empresaExplicitaAudit } from './empresa';
 import { hasDatabaseUrl, pool, withTransaction } from './db';
 import { HttpError } from './errors';
+import { getResource } from './resources';
 import { getStore } from './services';
 import { instagramWebhookRouter } from './modules/connectors/instagram/instagram.controller';
 import {
@@ -79,6 +81,14 @@ export function initConnectors(): void {
   });
 
   setConnectorAuditLogger(async (entry) => {
+    // A tabela connectors é por usuário: a empresa do evento é a do dono.
+    let empresaId: number | null = null;
+    try {
+      const dono = entry.usuarioId ? await getStore().findOneWhere(getResource('usuarios')!, { id: entry.usuarioId }) : null;
+      if (dono && Number(dono.empresa_id) > 0) empresaId = Number(dono.empresa_id);
+    } catch {
+      /* best-effort: sem empresa resolvida cai na padrão */
+    }
     await getStore().audit({
       usuario_id: entry.usuarioId || null,
       usuario: null,
@@ -87,6 +97,7 @@ export function initConnectors(): void {
       registro_id: null,
       descricao: `${CONNECTOR_PROVIDER_LABELS[entry.provider]}: ${entry.action}`,
       dados: { connectorId: entry.connectorId ?? null, ...(entry.metadata ?? {}) },
+      empresa_id: empresaExplicitaAudit(empresaId, null),
     });
   });
 }

@@ -23,6 +23,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
+import { empresaDoRegistroAudit } from './empresa';
 import { getResource } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser } from './auth';
@@ -179,6 +180,7 @@ export async function nfeEmitir(req: Request, res: Response) {
         registro_id: id,
         descricao: `NF-e SIMULADA ${numero} registrada na venda #${id} (provedor ${provider || '-'}, sem valor fiscal)`,
         dados: { acao: 'nfe_simular', provider, numero, simulacao: true },
+        empresa_id: empresaDoRegistroAudit(r, venda, actor),
       },
       tx
     );

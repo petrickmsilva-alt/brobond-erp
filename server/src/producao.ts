@@ -25,6 +25,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
+import { empresaDoRegistroAudit } from './empresa';
 import { getResource, type Resource } from './resources';
 import { checkAccess, getDefaultLocal, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
@@ -179,6 +180,7 @@ async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
       registro_id: id,
       descricao: `OP #${id} concluída — entrada de ${totalPecas} peça(s) em ${localPadrao} e baixa de ${consumos.length} insumo(s) da ficha técnica${forcarNota}`,
       dados: { pecas: totalPecas, insumos: consumos.length, forcar: emFalta.length > 0 },
+      empresa_id: empresaDoRegistroAudit(recursoOrdem().op, op, actor),
     },
     tx
   );
@@ -263,6 +265,7 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx) {
       recurso: 'ordens',
       registro_id: id,
       descricao: `OP #${id} reaberta/cancelada — estorno de ${pecas} peça(s) e de ${insumos} consumo(s) de insumos`,
+      empresa_id: empresaDoRegistroAudit(recursoOrdem().op, op, actor),
       dados: { pecas, insumos },
     },
     tx
@@ -343,7 +346,7 @@ export async function createItemOrdem(req: Request, res: Response) {
       }
       const item = await s.insert(itens, { ...data, ordem_id: id, produzido: 0 }, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'ordens', registro_id: id, descricao: `OP #${id}: tamanho adicionado à grade (${qtd} un.)` },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'ordens', registro_id: id, descricao: `OP #${id}: tamanho adicionado à grade (${qtd} un.)`, empresa_id: empresaDoRegistroAudit(recursoOrdem().op, ordem, actor) },
         tx
       );
       return (await s.get(itens, Number(item.id), tx)) ?? item;
@@ -370,7 +373,7 @@ export async function updateItemOrdem(req: Request, res: Response) {
       const data = validatePayload(itens, req.body, 'update');
       const item = await s.update(itens, itemId, data, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'ordens', registro_id: id, descricao: `OP #${id}: item ${itemId} alterado` },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'ordens', registro_id: id, descricao: `OP #${id}: item ${itemId} alterado`, empresa_id: empresaDoRegistroAudit(recursoOrdem().op, ordem, actor) },
         tx
       );
       return (await s.get(itens, itemId, tx)) ?? item;
@@ -396,7 +399,7 @@ export async function deleteItemOrdem(req: Request, res: Response) {
       if (!before) throw new HttpError(404, 'Item não encontrado nesta OP.');
       await s.remove(itens, itemId, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'ordens', registro_id: id, descricao: `OP #${id}: tamanho removido da grade` },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'ordens', registro_id: id, descricao: `OP #${id}: tamanho removido da grade`, empresa_id: empresaDoRegistroAudit(recursoOrdem().op, ordem, actor) },
         tx
       );
     });
@@ -469,6 +472,7 @@ export async function createInsumoFicha(req: Request, res: Response) {
           recurso: 'fichas',
           registro_id: id,
           descricao: `Ficha #${id}: insumo ${ins ? labelOf(getResource('insumos')!, ins) : `#${data.insumo_id}`} incluído (consumo ${Number(data.consumo)}${data.perda_pct ? `, perda ${data.perda_pct}%` : ''}) — custo recalculado para R$ ${f?.custo_calculado ?? 0}`,
+          empresa_id: empresaDoRegistroAudit(recursoFicha().ficha, f, actor),
         },
         tx
       );
@@ -503,6 +507,7 @@ export async function updateInsumoFicha(req: Request, res: Response) {
           recurso: 'fichas',
           registro_id: id,
           descricao: `Ficha #${id}: insumo ${itemId} alterado — custo recalculado para R$ ${f?.custo_calculado ?? 0}`,
+          empresa_id: empresaDoRegistroAudit(recursoFicha().ficha, f, actor),
         },
         tx
       );
@@ -536,6 +541,7 @@ export async function deleteInsumoFicha(req: Request, res: Response) {
           recurso: 'fichas',
           registro_id: id,
           descricao: `Ficha #${id}: insumo ${itemId} removido — custo recalculado para R$ ${f?.custo_calculado ?? 0}`,
+          empresa_id: empresaDoRegistroAudit(recursoFicha().ficha, f, actor),
         },
         tx
       );
@@ -572,6 +578,7 @@ export async function aplicarPrecoFicha(req: Request, res: Response) {
           registro_id: produtoId,
           descricao: `Custo e preço aplicados da ficha #${id} ao produto ${labelOf(getResource('produtos')!, produto)} — custo R$ ${custo}, preço sugerido R$ ${preco}`,
           dados: { ficha_id: id, custo, preco_venda: preco },
+          empresa_id: empresaDoRegistroAudit(recursoFicha().ficha, f, actor),
         },
         tx
       );

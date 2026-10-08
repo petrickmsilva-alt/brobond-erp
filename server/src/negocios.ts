@@ -41,11 +41,11 @@
 import type { Request, Response } from 'express';
 import type { PoolClient } from 'pg';
 import { hasDatabaseUrl, query, withTransaction } from './db';
+import { empresaExplicitaAudit, escopoDoAtor, exigirEmpresaPermitida } from './empresa';
 import { RESOURCES } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, type AuthUser } from './auth';
 import { HttpError } from './errors';
-import { escopoDoAtor, exigirEmpresaPermitida } from './empresa';
 import { setOnSaleIngested } from '../../modules/connectors/index';
 
 // ----------------------------------------------------------------------------
@@ -1281,7 +1281,7 @@ export type VendaManualPayload = {
  * MULTIEMPRESA: `empresa_id` do corpo exige concessão do ator (403); sem ele, a
  * venda vai para a empresa ativa da sessão do ator.
  */
-export async function validarVendaManual(body: unknown, actor?: AuthUser | null): Promise<VendaManualInput> {
+export async function validarVendaManual(body: unknown, actor: AuthUser): Promise<VendaManualInput> {
   const payload = (body || {}) as VendaManualPayload;
   const canalBruto = String(payload.canal || 'LOJA_FISICA').trim();
   if (!(CANAIS_VENDA as readonly string[]).includes(canalBruto)) {
@@ -1289,10 +1289,13 @@ export async function validarVendaManual(body: unknown, actor?: AuthUser | null)
   }
   const canal = canalBruto as CanalVenda;
 
-  let empresaId = escopoDoAtor(actor as unknown as AuthUser).empresaId;
+  // MULTIEMPRESA (Etapa 2.1): sem empresa informada, a venda cai na empresa
+  // ATIVA da sessão (antes caía sempre na 1); empresa informada precisa ser
+  // concedida ao ator — ninguém planta venda em empresa alheia.
+  const escopo = escopoDoAtor(actor);
+  let empresaId = escopo.empresaId;
   if (payload.empresa_id !== undefined && payload.empresa_id !== null && payload.empresa_id !== '') {
-    empresaId = inteiroObrigatorio(payload.empresa_id, 'empresa_id', 1);
-    exigirEmpresaPermitida(actor as unknown as AuthUser, empresaId);
+    empresaId = exigirEmpresaPermitida(actor, inteiroObrigatorio(payload.empresa_id, 'empresa_id', 1));
   }
 
   const statusBruto = String(payload.status || 'PAID').trim();
@@ -1411,8 +1414,15 @@ function filtrosEco(f: FiltrosBi) {
   };
 }
 
-/** GET /api/negocios/canais — mapa de canais × grupos (para filtros da UI). */
-export async function negociosCanais(_req: Request, res: Response) {
+/** GET /api/negocios/canais — mapa estático de canais × grupos (para filtros da UI).
+ * Embora o catálogo de canais não contenha dados de empresa, aplica o mesmo
+ * RBAC e valida qualquer `empresa_id` pedido; não é uma via para enumerar
+ * empresas nem um atalho em torno do escopo multiempresa.
+ */
+export async function negociosCanais(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(RESOURCES.vendas, actor, 'read');
+  aplicarEscopoEmpresaBi(actor, parseFiltrosBi(queryDeRequisicao(req)));
   res.json({
     grupos: (Object.keys(GRUPOS_CANAL) as CanalGrupo[]).map((grupo) => ({
       grupo,
@@ -1535,6 +1545,7 @@ export async function negociosVendaManual(req: Request, res: Response) {
     registro_id: null,
     descricao: `Venda manual ${venda.reference} (${CANAL_LABEL[venda.canal] || venda.canal}) — R$ ${(venda.amountCents / 100).toFixed(2)} em ${venda.quantidade} peça(s)`,
     dados: { id: venda.id, canal: venda.canal, empresa_id: venda.empresaId, amount_cents: venda.amountCents, frete_cents: venda.freightCents },
+    empresa_id: empresaExplicitaAudit(venda.empresaId, actor),
   });
   const itens = await repo.listarItensVenda({ de: null, ate: null, empresaId: null, canal: null, canais: null, status: null, ids: [venda.id] });
   res.status(201).json({ venda, itens });

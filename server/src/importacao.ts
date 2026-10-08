@@ -13,6 +13,7 @@
 import type { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit } from './empresa';
 import { RESOURCES, getResource, type Resource } from './resources';
 import { checkAccess, createRecord, getDefaultLocal, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
@@ -271,6 +272,7 @@ export async function confirmarImportacao(req: Request, res: Response) {
           registro_id: null,
           descricao: `Importação de ${importados} ${etiqueta[tipo]}${pulados ? ` (${pulados} linha(s) ignoradas por já existirem ou estarem inválidas)` : ''}`,
           dados: { tipo, importados, pulados, ids: ids.slice(0, 100) },
+          empresa_id: empresaDoAtorAudit(actor),
         },
         tx
       );

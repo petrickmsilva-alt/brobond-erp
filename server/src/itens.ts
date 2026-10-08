@@ -21,7 +21,7 @@ import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
 import { checkAccess, getDefaultLocal, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, validarReferenciasDaEmpresa, type EscopoEmpresa } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, validarReferenciasDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import type { Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
 import { labelOf } from './store';
@@ -134,6 +134,7 @@ export async function createItem(req: Request, res: Response) {
           recurso: cfg.parent.key,
           registro_id: id,
           descricao: `Item incluído no ${cfg.parent.singular.toLowerCase()} #${id}: ${await itemLabel(tipo, out, tx)}`,
+          empresa_id: empresaDoRegistroAudit(cfg.parent, pedido, actor),
           dados: { item_id: Number(item.id) },
         },
         tx
@@ -181,6 +182,7 @@ export async function updateItem(req: Request, res: Response) {
           recurso: cfg.parent.key,
           registro_id: id,
           descricao: `Item alterado no ${cfg.parent.singular.toLowerCase()} #${id}: ${await itemLabel(tipo, out, tx)}`,
+          empresa_id: empresaDoRegistroAudit(cfg.parent, pedido, actor),
           dados: { item_id: itemId },
         },
         tx
@@ -218,6 +220,7 @@ export async function deleteItem(req: Request, res: Response) {
           recurso: cfg.parent.key,
           registro_id: id,
           descricao: `Item removido do ${cfg.parent.singular.toLowerCase()} #${id} (${await itemLabel(tipo, before, tx)})`,
+          empresa_id: empresaDoRegistroAudit(cfg.parent, pedido, actor),
           dados: { item_id: itemId },
         },
         tx
@@ -373,6 +376,7 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
       recurso: 'vendas',
       registro_id: Number(pedido.id),
       descricao: `Venda #${pedido.id} faturada — ${plano.length} item(ns) baixado(s) do estoque${comissaoValor ? `; comissão ${comissaoValor.toFixed(2)}` : ''}`,
+      empresa_id: empresaDoRegistroAudit(getResource('vendas')!, pedido, actor),
       dados: { faturada_em: new Date().toISOString(), comissao_pct: comissaoPct, comissao_valor: comissaoValor },
     },
     tx
@@ -418,6 +422,7 @@ async function estornarVenda(pedido: Row, actor: { id: number | null; name: stri
       recurso: 'vendas',
       registro_id: Number(pedido.id),
       descricao: `Venda #${pedido.id} cancelada — estorno de ${saidas.length} saída(s) de estoque`,
+      empresa_id: empresaDoRegistroAudit(getResource('vendas')!, pedido, actor),
       dados: { estornadas: saidas.length },
     },
     tx
@@ -503,6 +508,7 @@ async function receberCompra(pedido: Row, actor: { id: number | null; name: stri
       recurso: 'compras',
       registro_id: Number(pedido.id),
       descricao: `Compra #${pedido.id} recebida — ${itens.rows.length} item(ns) entraram no estoque e o custo de reposição foi atualizado`,
+      empresa_id: empresaDoRegistroAudit(getResource('compras')!, pedido, actor),
       dados: { recebida_em: new Date().toISOString(), produtos: itens.rows.filter((it) => it.produto_id).length },
     },
     tx
@@ -585,6 +591,7 @@ async function estornarCompra(pedido: Row, actor: { id: number | null; name: str
       recurso: 'compras',
       registro_id: Number(pedido.id),
       descricao: `Compra #${pedido.id} cancelada — estorno de ${entradas.length} entrada(s) de insumos`,
+      empresa_id: empresaDoRegistroAudit(getResource('compras')!, pedido, actor),
       dados: { estornadas: entradas.length },
     },
     tx

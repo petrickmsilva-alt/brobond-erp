@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import { ChevronDown, KeyRound, LogOut, Menu, Search, UserRound } from 'lucide-react';
 import Sidebar from './Sidebar';
 import CommandPalette from './CommandPalette';
+import CompanySwitcher from './CompanySwitcher';
 import { useAuth } from '../auth/AuthContext';
 import { MODULES } from '../modules';
 
@@ -15,6 +16,8 @@ export default function Layout() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const menuRef = useRef<HTMLDivElement>(null);
+  // Trocar a empresa ativa remonta a tela corrente: nenhum dado da empresa anterior fica visível.
+  const [escopoVersao, setEscopoVersao] = useState(0);
 
   // Busca global (Ctrl/Cmd+K), disponível em qualquer tela do sistema.
   useEffect(() => {
@@ -85,6 +88,7 @@ export default function Layout() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
+            <CompanySwitcher onChange={() => setEscopoVersao((v) => v + 1)} />
             <button
               onClick={() => setPaletteOpen(true)}
               className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-sm text-slate-400 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-600 sm:px-3 dark:border-slate-800/60 dark:bg-slate-900/50 dark:text-slate-400 dark:hover:border-slate-700 dark:hover:bg-slate-800/60 dark:hover:text-slate-200"
@@ -133,7 +137,9 @@ export default function Layout() {
         </header>
 
         <main id="conteudo-principal" className="flex-1 overflow-y-auto bg-transparent" tabIndex={-1}>
-          <Outlet />
+          <div key={escopoVersao} className="min-h-full">
+            <Outlet />
+          </div>
         </main>
       </div>
 

@@ -22,6 +22,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
+import { empresaDoRegistroAudit } from './empresa';
 import { getPublicResource, getResource, type Resource } from './resources';
 import { getStore, checkAccess, toHttpError } from './services';
 import { currentUser } from './auth';
@@ -275,7 +276,7 @@ export async function uploadFile(req: Request, res: Response) {
       }
       const row = await s.insert(arquivos, payload, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: r.key, registro_id: id, descricao: `Foto "${nome}" incluída em ${r.singular} ${labelFor(r, rec)}`, dados: { foto: nome, bytes: dados.length } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: r.key, registro_id: id, descricao: `Foto "${nome}" incluída em ${r.singular} ${labelFor(r, rec)}`, dados: { foto: nome, bytes: dados.length }, empresa_id: empresaDoRegistroAudit(r, rec, actor) },
         tx
       );
       return row;
@@ -341,7 +342,7 @@ export async function deleteFile(req: Request, res: Response) {
       const cfg = cloudinaryConfig();
       if (cfg && f.externo_id) await cloudinaryDestroy(cfg, f.externo_id);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: r.key, registro_id: id, descricao: `Foto "${f.nome}" removida de ${r.singular} ${labelFor(r, rec)}` },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: r.key, registro_id: id, descricao: `Foto "${f.nome}" removida de ${r.singular} ${labelFor(r, rec)}`, empresa_id: empresaDoRegistroAudit(r, rec, actor) },
         tx
       );
     });

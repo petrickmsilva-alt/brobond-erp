@@ -25,6 +25,7 @@ import {
 } from './store';
 import { round2 } from './utils';
 import { EMPRESA_PADRAO, type EscopoEmpresa } from './empresa';
+import { chaveSemanaCivil, diaCivil, inicioSemanaCivil, mesCivil, mesCivilDeslocado } from './fuso';
 
 /** Tabelas do painel que carregam `empresa_id` (migration 0017). */
 const TABELAS_DO_PAINEL_COM_EMPRESA = new Set([
@@ -399,7 +400,10 @@ export class MemStore implements Store {
     const anterior = t.rows.get(t.rows.size ? Math.max(...t.rows.keys()) : 0);
     const hash_anterior = anterior?.hash ? String(anterior.hash) : '';
     const hash = hashCadeiaAuditoria(hash_anterior, entry);
-    t.rows.set(id, { id, data: new Date().toISOString(), ...entry, dados: entry.dados ?? null, hash_anterior, hash });
+    // O tipo exige empresa_id, mas chamadas legadas/diretas (testes, jobs)
+    // podem omitir em runtime: nunca grava sem empresa (coluna NOT NULL).
+    const empresa_id = entry.empresa_id ?? EMPRESA_PADRAO;
+    t.rows.set(id, { id, data: new Date().toISOString(), ...entry, empresa_id, dados: entry.dados ?? null, hash_anterior, hash });
     // mantém só os últimos 2000 eventos em memória
     if (t.rows.size > 2000) t.rows.delete(Math.min(...t.rows.keys()));
   }
@@ -437,34 +441,39 @@ export class MemStore implements Store {
       .map((a) => ({ data: a.data, usuario: a.usuario, acao: a.acao, recurso: a.recurso, descricao: a.descricao }));
     const vendasRows = rows('vendas');
     const faturadas = vendasRows.filter((v) => v.status === 'faturada' || v.status === 'entregue');
-    const mesAtual = new Date().toISOString().slice(0, 7);
+    // Agrupamentos por MÊS/SEMANA CIVIL em America/Sao_Paulo (ver fuso.ts):
+    // antes eram UTC — 21:00–23:59 BR do último dia do mês caía no mês
+    // seguinte, e a semana civil era deslocada.
+    const mesAtual = mesCivil(new Date());
 
     // Fase 5 — gráficos: 12 meses, 8 semanas, top 10 produtos, insumos em alerta
-    const chaveMes = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    const chaveMes = (d: Date) => mesCivil(d);
+    // Mesma regra do SQL (COALESCE de faturada_em para data).
+    const quandoFaturada = (v: Row) => v.faturada_em || v.data || null;
     const vendasPorMes: { mes: string; total: number }[] = [];
     const hoje = new Date();
     for (let i = 11; i >= 0; i--) {
-      const d = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() - i, 1));
-      const mes = chaveMes(d);
-      vendasPorMes.push({ mes, total: faturadas.filter((v) => String(v.faturada_em || '').slice(0, 7) === mes).reduce((s, v) => s + Number(v.total || 0), 0) });
+      const mes = mesCivilDeslocado(hoje, -i);
+      vendasPorMes.push({
+        mes,
+        total: faturadas
+          .filter((v) => {
+            const quando = quandoFaturada(v);
+            return quando !== null && chaveMes(new Date(String(quando))) === mes;
+          })
+          .reduce((s, v) => s + Number(v.total || 0), 0),
+      });
     }
-    const inicioSemana = (d: Date) => {
-      const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-      const dia = (x.getUTCDay() + 6) % 7; // segunda = 0
-      x.setUTCDate(x.getUTCDate() - dia);
-      return x;
-    };
-    const chaveDia = (d: Date) => d.toISOString().slice(0, 10);
-    const hojeSemana = inicioSemana(hoje);
+    const hojeSemana = inicioSemanaCivil(hoje);
     const producaoPorSemana: { semana: string; pecas: number; ordens: number }[] = [];
     const concluidas = rows('ordens_fabricacao').filter((o) => o.status === 'concluida');
     const itensOrdem = rows('itens_ordem');
     for (let i = 7; i >= 0; i--) {
       const sem = new Date(hojeSemana.getTime() - i * 7 * 86400000);
-      const chave = chaveDia(sem);
+      const chave = diaCivil(sem);
       const daSemana = concluidas.filter((o) => {
         const base = o.concluida_em || o.atualizado_em || o.criado_em;
-        return inicioSemana(new Date(String(base))).toISOString().slice(0, 10) === chave;
+        return base ? chaveSemanaCivil(String(base)) === chave : false;
       });
       producaoPorSemana.push({
         semana: chave,
@@ -530,7 +539,7 @@ export class MemStore implements Store {
       vendasAbertas: vendasRows.filter((v) => v.status === 'aberta').length,
       comprasPendentes: rows('compras').filter((c) => c.status === 'pendente').length,
       vendasMes: faturadas
-        .filter((v) => String(v.faturada_em || '').slice(0, 7) === mesAtual)
+        .filter((v) => v.faturada_em != null && v.faturada_em !== '' && mesCivil(String(v.faturada_em)) === mesAtual)
         .reduce((s, v) => s + Number(v.total || 0), 0),
       comissoesPagar: faturadas.reduce((s, v) => s + Number(v.comissao_valor || 0), 0),
       totais: { produtos: produtos.size, clientes: rows('clientes').length, fornecedores: rows('fornecedores').length, insumos: rows('insumos').length },

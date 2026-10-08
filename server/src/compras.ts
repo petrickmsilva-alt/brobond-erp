@@ -26,7 +26,7 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getDefaultLocal, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2, round3 } from './utils';
 import { syncLancamentoCompra } from './financeiro';
@@ -66,7 +66,7 @@ export async function aprovarCompra(req: Request, res: Response) {
       const atualizada = await s.tryUpdateIf(r, id, { status: 'pendente' }, { status: 'aprovado', aprovada_em: new Date().toISOString(), aprovada_por: actor.id || null }, tx);
       if (!atualizada) throw new HttpError(409, 'O pedido mudou durante a aprovação. Recarregue.');
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'compras', registro_id: id, descricao: `Pedido de compra #${id} aprovado (total ${num(compra.total).toFixed(2)})`, dados: { total: num(compra.total) } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'compras', registro_id: id, descricao: `Pedido de compra #${id} aprovado (total ${num(compra.total).toFixed(2)})`, dados: { total: num(compra.total) }, empresa_id: empresaDoRegistroAudit(r, compra, actor) },
         tx
       );
       return atualizada;
@@ -247,6 +247,7 @@ export async function receberParcial(req: Request, res: Response) {
           registro_id: id,
           descricao: `Compra #${id}: recebimento ${completo ? 'TOTAL' : 'PARCIAL'} de ${entradas.reduce((acc, e) => acc + e.quantidade, 0)} unidade(s) em "${local}"`,
           dados: { recebimento_id: Number(recebimento.id), entradas, total, status: novoStatus },
+          empresa_id: empresaDoRegistroAudit(r, compra, actor),
         },
         tx
       );
@@ -542,7 +543,7 @@ export async function gerarCompraDaSugestao(req: Request, res: Response) {
       }
       await s.update(r, Number(compra.id), { total }, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'compras', registro_id: Number(compra.id), descricao: `Pedido de compra #${compra.id} gerado da sugestão — ${criados.length} item(ns), total ${total.toFixed(2)}`, dados: { fornecedor_id: fornecedorId, itens: criados, total } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'compras', registro_id: Number(compra.id), descricao: `Pedido de compra #${compra.id} gerado da sugestão — ${criados.length} item(ns), total ${total.toFixed(2)}`, dados: { fornecedor_id: fornecedorId, itens: criados, total }, empresa_id: empresaDoRegistroAudit(r, compra, actor) },
         tx
       );
       const final = (await s.get(r, Number(compra.id), tx)) || compra;

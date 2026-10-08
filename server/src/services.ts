@@ -17,6 +17,8 @@ import {
   aplicarFiltroEmpresa,
   assertRegistroDaEmpresa,
   carimbarEmpresa,
+  empresaDoAtorAudit,
+  empresaDoRegistroAudit,
   escopoDoAtor,
   protegerEmpresaNaEdicao,
   temEscopoEmpresa,
@@ -74,9 +76,28 @@ export function escopoDe(actor: Actor | null | undefined): EscopoEmpresa {
   return escopoDoAtor(actor as any);
 }
 
-function audit(tx: Tx, actor: Actor, acao: 'criar' | 'editar' | 'excluir', r: Resource, id: number | null, descricao: string, dados?: unknown) {
+function audit(
+  tx: Tx,
+  actor: Actor,
+  acao: 'criar' | 'editar' | 'excluir',
+  r: Resource,
+  id: number | null,
+  descricao: string,
+  dados?: unknown,
+  /** Linha do registro (create: carimbada; update/delete: ANTES) — a empresa do evento sai dela. */
+  row?: Row | null
+) {
   return getStore().audit(
-    { usuario_id: actor.id || null, usuario: actor.name, acao, recurso: r.key, registro_id: id, descricao, dados },
+    {
+      usuario_id: actor.id || null,
+      usuario: actor.name,
+      acao,
+      recurso: r.key,
+      registro_id: id,
+      descricao,
+      dados,
+      empresa_id: empresaDoRegistroAudit(r, row ?? null, actor),
+    },
     tx
   );
 }
@@ -486,7 +507,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
         conviteEntregue = convite.entregue;
       }
 
-      await audit(tx, actor, 'criar', r, row.id, `${r.singular} ${labelOf(r, row)} incluído(a)`, sanitize(data));
+      await audit(tx, actor, 'criar', r, row.id, `${r.singular} ${labelOf(r, row)} incluído(a)`, sanitize(data), row);
       const final = (await s.get(r, row.id, tx)) ?? row;
       if (conviteLink) (final as Row).convite_link = conviteLink;
       await attachGradeTamanhos(r, [final], tx);
@@ -650,7 +671,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
         r.key === 'locais' && renomeouLocal
           ? `${r.singular} "${String(before.nome)}" renomeado para "${String(data.nome)}" (saldos, movimentações, inventários e vendas atualizados com o novo nome)`
           : `${r.singular} ${labelOf(r, row)} alterado(a) (${campos})`;
-      await audit(tx, actor, 'editar', r, id, descricao, changes);
+      await audit(tx, actor, 'editar', r, id, descricao, changes, before);
       const final = (await s.get(r, id, tx)) ?? row;
       await attachGradeTamanhos(r, [final], tx);
       return final;
@@ -795,7 +816,7 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
         usoLocal?.emUso
           ? ` — em uso na exclusão: ${usoLocal.saldos} saldo(s), ${usoLocal.movimentacoes} movimentação(ões), ${usoLocal.inventarios} inventário(s) (histórico preservado com o nome do local)`
           : '';
-      await audit(tx, actor, 'excluir', r, id, `${r.singular} ${labelOf(r, before)} excluído(a)${detalheUso}`, sanitize(before));
+      await audit(tx, actor, 'excluir', r, id, `${r.singular} ${labelOf(r, before)} excluído(a)${detalheUso}`, sanitize(before), before);
     });
   } catch (e) {
     throw toHttpError(e, r);
@@ -888,6 +909,7 @@ async function aplicarEfeitosUsuario(before: Row, row: Row, data: Payload, actor
         registro_id: id,
         descricao: `${String(before.nome || before.email)} DESATIVADO por ${actor.name}${sessoes ? ` — ${sessoes} sessão(ões) encerrada(s)` : ''}`,
         dados: { sessoes_encerradas: sessoes },
+        empresa_id: empresaDoAtorAudit(actor),
       },
       tx
     );
@@ -915,6 +937,7 @@ async function aplicarEfeitosUsuario(before: Row, row: Row, data: Payload, actor
         recurso: 'usuarios',
         registro_id: id,
         descricao: `${String(before.nome || before.email)} REATIVADO por ${actor.name}`,
+        empresa_id: empresaDoAtorAudit(actor),
       },
       tx
     );
@@ -932,6 +955,7 @@ async function aplicarEfeitosUsuario(before: Row, row: Row, data: Payload, actor
         registro_id: id,
         descricao: `Perfil de ${String(before.nome || before.email)} alterado de "${String(before.perfil)}" para "${String(data.perfil)}" por ${actor.name} — sessões encerradas (${sessoes}), novo perfil vale no próximo login`,
         dados: { de: before.perfil, para: data.perfil, sessoes_encerradas: sessoes },
+        empresa_id: empresaDoAtorAudit(actor),
       },
       tx
     );
@@ -1242,7 +1266,7 @@ async function createMovimentacao(data: Payload, actor: Actor, tx: Tx): Promise<
     await s.insert(mov, { tipo: 'entrada', produto_id: produtoId, tamanho_id: tamanhoId, local: localDestino, local_id: destId, transferencia_id: Number(saida.id), quantidade: qtd, motivo: `Transferência de ${local}`, usuario_id: usuarioId }, tx);
     await s.adjustStock(produtoId, tamanhoId, localDestino, qtd, tx);
     await s.update(mov, Number(saida.id), { transferencia_id: Number(saida.id) }, tx);
-    await audit(tx, actor, 'criar', mov, Number(saida.id), `Transferência de ${qtd} un. de "${local}" para "${localDestino}" — ${await produtoTamanhoLabel(produtoId, tamanhoId, tx)}`, sanitize({ ...data, local, local_destino: localDestino }));
+    await audit(tx, actor, 'criar', mov, Number(saida.id), `Transferência de ${qtd} un. de "${local}" para "${localDestino}" — ${await produtoTamanhoLabel(produtoId, tamanhoId, tx)}`, sanitize({ ...data, local, local_destino: localDestino }), saida);
     return (await s.get(mov, Number(saida.id), tx)) ?? saida;
   }
 
@@ -1262,7 +1286,7 @@ async function createMovimentacao(data: Payload, actor: Actor, tx: Tx): Promise<
   const row = await s.insert(mov, { ...data, local, local_id: data.local_id ?? null, local_destino: data.local_destino ?? null, local_destino_id: data.local_destino_id ?? null, usuario_id: usuarioId }, tx);
   if (delta > 0) await s.adjustStock(produtoId, tamanhoId, local, delta, tx);
   const full = (await s.get(mov, row.id, tx)) ?? row;
-  await audit(tx, actor, 'criar', mov, row.id, `${tipo === 'entrada' ? 'Entrada' : tipo === 'saida' ? 'Saída' : 'Ajuste'} de ${qtd} un. — ${full.produto_id__label ?? '#' + produtoId} ${full.tamanho_id__label ?? ''} (${local})`, sanitize(data));
+  await audit(tx, actor, 'criar', mov, row.id, `${tipo === 'entrada' ? 'Entrada' : tipo === 'saida' ? 'Saída' : 'Ajuste'} de ${qtd} un. — ${full.produto_id__label ?? '#' + produtoId} ${full.tamanho_id__label ?? ''} (${local})`, sanitize(data), row);
   return full;
 }
 
@@ -1298,7 +1322,7 @@ async function createMovimentacaoInsumo(data: Payload, actor: Actor, tx: Tx): Pr
   const ins = await s.findOneWhere(getResource('insumos')!, { id: insumoId }, tx);
   const nome = ins ? labelOf(getResource('insumos')!, ins) : `#${insumoId}`;
   const un = ins?.unidade || 'un';
-  await audit(tx, actor, 'criar', mov, row.id, `${tipo === 'entrada' ? 'Entrada' : tipo === 'saida' ? 'Saída' : 'Ajuste'} de ${qtd} ${un} de ${nome}${data.motivo ? ` — ${data.motivo}` : ''}`, sanitize(data));
+  await audit(tx, actor, 'criar', mov, row.id, `${tipo === 'entrada' ? 'Entrada' : tipo === 'saida' ? 'Saída' : 'Ajuste'} de ${qtd} ${un} de ${nome}${data.motivo ? ` — ${data.motivo}` : ''}`, sanitize(data), row);
   return row;
 }
 
@@ -1333,7 +1357,7 @@ async function abrirInventarioSnapshot(row: Row, actor: Actor, tx: Tx) {
   const n = linhas.length;
   await s.update(getResource('inventarios')!, Number(row.id), { aberto_por: actor.name }, tx);
   await s.audit(
-    { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'inventarios', registro_id: Number(row.id), descricao: `Inventário #${row.id} aberto no local "${local}" — ${n} itens com saldo congelado`, dados: { itens: n } },
+    { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'inventarios', registro_id: Number(row.id), descricao: `Inventário #${row.id} aberto no local "${local}" — ${n} itens com saldo congelado`, dados: { itens: n }, empresa_id: empresaDoRegistroAudit(getResource('inventarios')!, row, actor) },
     tx
   );
 }

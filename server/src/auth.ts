@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
+import { empresaDoAtorAudit, empresaExplicitaAudit } from './empresa';
 import { limparToken } from './validate';
 import { avisarOrigemIndefinida, linkPublicoAsync, urlAbsoluta } from './urlPublica';
 import { getStore } from './services';
@@ -265,6 +266,7 @@ export async function login(req: Request, res: Response) {
               recurso: 'usuarios',
               registro_id: Number(row.id),
               descricao: `Senha de ${String(row.email)} vencida pela política — troca obrigatória no acesso`,
+              empresa_id: empresaDoAtorAudit(row),
             })
             .catch(() => undefined);
         }
@@ -293,6 +295,7 @@ export async function login(req: Request, res: Response) {
               registro_id: user.id,
               descricao: 'Hash da senha migrado para Argon2id no login (migração gradual)',
               dados: { de: verificacao.rehash ? 'bcrypt' : 'argon2id-parametros-antigos', para: 'argon2id' },
+              empresa_id: empresaDoAtorAudit(user),
             })
             .catch(() => undefined);
         } catch (e: any) {
@@ -350,6 +353,7 @@ async function emitirSessao(req: Request, res: Response, row: Row, user: AuthUse
       recurso: null,
       registro_id: null,
       descricao: `Login concluído de ${user.email} (${clientIp(req) || 'ip desconhecido'})${lembrar ? ' com "Lembrar-me" (30 dias)' : ''}`,
+      empresa_id: empresaDoAtorAudit(user),
       dados: { sessao: sid.slice(0, 8) },
     })
     .catch(() => undefined);
@@ -393,6 +397,7 @@ export async function loginMFA(req: Request, res: Response) {
           recurso: null,
           registro_id: null,
           descricao: `Código MFA inválido para ${String(row.email)} (${ip || 'ip desconhecido'})`,
+          empresa_id: empresaDoAtorAudit(row),
         })
         .catch(() => undefined);
       const dica = restantes > 0 && restantes <= 2 ? ` Restam ${restantes} tentativa${restantes === 1 ? '' : 's'}.` : '';
@@ -409,6 +414,7 @@ export async function loginMFA(req: Request, res: Response) {
         registro_id: Number(row.id),
         descricao: `Login de ${String(row.email)} concluído com CÓDIGO DE RECUPERAÇÃO (restam ${consumido.restantes})`,
         dados: { via: 'codigo_recuperacao', restantes: consumido.restantes },
+        empresa_id: empresaDoAtorAudit(row),
       })
       .catch(() => undefined);
   }
@@ -433,6 +439,7 @@ export async function loginMFA(req: Request, res: Response) {
         recurso: 'usuarios',
         registro_id: Number(row.id),
         descricao: `MFA (TOTP) ativado no primeiro login de ${String(row.email)} — ${lote.codigos.length} códigos de recuperação emitidos`,
+        empresa_id: empresaDoAtorAudit(row),
       })
       .catch(() => undefined);
   }
@@ -485,6 +492,7 @@ async function loginFailed(req: Request, res: Response, row: Row | null) {
         recurso: null,
         registro_id: null,
         descricao: `Login BLOQUEADO temporariamente por excesso de tentativas — ${normalizeEmail(req.body?.email)} (${clientIp(req) || 'ip desconhecido'})`,
+        empresa_id: empresaExplicitaAudit(row?.empresa_id, null),
       })
       .catch(() => undefined);
   } else if (row) {
@@ -498,6 +506,7 @@ async function loginFailed(req: Request, res: Response, row: Row | null) {
         recurso: null,
         registro_id: null,
         descricao: `Senha incorreta para ${String(row.email)} (${clientIp(req) || 'ip desconhecido'})`,
+        empresa_id: empresaDoAtorAudit(row),
       })
       .catch(() => undefined);
   }
@@ -530,6 +539,7 @@ async function registrarFalhaUsuario(row: Row, ip: string): Promise<void> {
           registro_id: Number(row.id),
           descricao: `Acesso de ${String(row.email)} BLOQUEADO automaticamente por ${USER_LOCK_MIN} min (${falhas} senhas incorretas seguidas — ${ip || 'ip desconhecido'})`,
           dados: { tentativas: falhas, ip },
+          empresa_id: empresaDoAtorAudit(row),
         })
         .catch(() => undefined);
     }
@@ -590,6 +600,7 @@ export async function reautenticar(req: Request, res: Response) {
         recurso: 'usuarios',
         registro_id: u.id || null,
         descricao: `Reautenticação FALHOU (senha incorreta) — ${u.email} (${clientIp(req) || 'ip desconhecido'})`,
+        empresa_id: empresaDoAtorAudit(u),
       })
       .catch(() => undefined);
     throw new HttpError(401, 'Senha incorreta.', { senha: 'Senha incorreta' });
@@ -604,6 +615,7 @@ export async function reautenticar(req: Request, res: Response) {
       recurso: 'usuarios',
       registro_id: u.id || null,
       descricao: `Reautenticação confirmada — ações sensíveis liberadas por ${Math.round(REAUTH_TTL_MS / 60_000)} min`,
+      empresa_id: empresaDoAtorAudit(u),
     })
     .catch(() => undefined);
   res.json({ ok: true, valido_ate: new Date(validoAte).toISOString(), ttl_segundos: Math.round(REAUTH_TTL_MS / 1000) });
@@ -645,6 +657,7 @@ export async function logoutAll(req: Request, res: Response) {
     recurso: 'usuarios',
     registro_id: u.id,
     descricao: `${u.name} encerrou a sessão em todos os dispositivos`,
+    empresa_id: empresaDoAtorAudit(u),
     dados: { token_versao: novo },
   });
   invalidateUserCache(u.id);
@@ -687,6 +700,7 @@ export async function revogarSessaoHandler(req: Request, res: Response) {
       recurso: 'usuarios',
       registro_id: u.id,
       descricao: `${u.name} revogou uma sessão (${sessao.ip || 'ip desconhecido'})`,
+      empresa_id: empresaDoAtorAudit(u),
       dados: { sessao: sid.slice(0, 8) },
     })
     .catch(() => undefined);
@@ -863,6 +877,7 @@ export async function changePassword(req: Request, res: Response) {
     recurso: 'usuarios',
     registro_id: u.id,
     descricao: `${u.name} trocou a própria senha${outras ? ` — ${outras} sessão(ões) de outros dispositivos encerrada(s)` : ''}`,
+    empresa_id: empresaDoAtorAudit(u),
   });
   invalidateUserCache(u.id);
   res.json({ ok: true, sessoes_encerradas: outras });
@@ -889,6 +904,7 @@ export async function forgotPassword(req: Request, res: Response) {
             recurso: 'usuarios',
             registro_id: Number(row.id),
             descricao: `Solicitação de redefinição de senha para ${email}`,
+            empresa_id: empresaDoAtorAudit(row),
           })
           .catch(() => undefined);
         // Link SEMPRE absoluto: relativo ("/redefinir/…") o cliente de e-mail
@@ -966,6 +982,7 @@ export async function resetPassword(req: Request, res: Response) {
       registro_id: Number(row.id),
       descricao: `Senha redefinida via link de recuperação (${String(row.email)}) — todas as sessões encerradas`,
       dados: { metodo: 'reset' },
+      empresa_id: empresaDoAtorAudit(row),
     })
     .catch(() => undefined);
   invalidateUserCache(Number(row.id));
@@ -1002,6 +1019,7 @@ export async function migrarSenhasLegadas(): Promise<number> {
             recurso: 'usuarios',
             registro_id: Number(u.id),
             descricao: `Senha legada (texto puro) invalidada — recuperação obrigatória via "Esqueci minha senha"`,
+            empresa_id: empresaDoAtorAudit(u),
           })
           .catch(() => undefined);
         migrados++;

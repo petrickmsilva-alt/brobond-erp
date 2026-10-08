@@ -34,7 +34,7 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2 } from './utils';
 import { cifrarSegredo, decifrarSegredo, mascararSegredo, pareceCifrado } from './segredos';
@@ -879,7 +879,7 @@ export async function gerarEnvio(req: Request, res: Response) {
       const patch = { envio_id: Number(criado.id), frete: custo > 0 ? custo : venda.frete, total: round2(num(venda.total) - num(venda.frete) + (custo > 0 ? custo : num(venda.frete))) };
       await s.update(getResource('vendas')!, vendaId, patch, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'envios', registro_id: Number(criado.id), descricao: `Envio gerado para a venda #${vendaId} via ${provedor.nome} (custo ${custo.toFixed(2)})`, dados: { provider: provedor.slug, codigo: dados.codigo_rastreamento, custo } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'envios', registro_id: Number(criado.id), descricao: `Envio gerado para a venda #${vendaId} via ${provedor.nome} (custo ${custo.toFixed(2)})`, dados: { provider: provedor.slug, codigo: dados.codigo_rastreamento, custo }, empresa_id: empresaDoRegistroAudit(R_ENVIO(), criado, actor) },
         tx
       );
       const final = (await s.get(R_ENVIO(), Number(criado.id), tx)) || criado;
@@ -1049,7 +1049,7 @@ export async function atualizarStatusEnvio(req: Request, res: Response) {
       if (!atualizado) throw new HttpError(409, 'O envio mudou durante a atualização. Recarregue.');
       await registrarEventoEnvio(id, String(envio.status), para, { mensagem: body.mensagem ? String(body.mensagem).slice(0, 500) : `Status atualizado manualmente para ${para}.` }, { id: actor.id || null, name: actor.name }, escopo.empresaId, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'envios', registro_id: id, descricao: `Envio #${id}: ${envio.status} → ${para}`, dados: { de: envio.status, para } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'envios', registro_id: id, descricao: `Envio #${id}: ${envio.status} → ${para}`, dados: { de: envio.status, para }, empresa_id: empresaDoRegistroAudit(R_ENVIO(), envio, actor) },
         tx
       );
       return atualizado;
@@ -1089,7 +1089,7 @@ export async function cancelarEnvio(req: Request, res: Response) {
       if (!atualizado) throw new HttpError(409, 'O envio mudou durante o cancelamento. Recarregue.');
       await registrarEventoEnvio(id, String(envio.status), 'cancelado', { mensagem }, { id: actor.id || null, name: actor.name }, escopo.empresaId, tx);
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'envios', registro_id: id, descricao: `Envio #${id} cancelado — ${motivo}`, dados: { motivo } },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'envios', registro_id: id, descricao: `Envio #${id} cancelado — ${motivo}`, dados: { motivo }, empresa_id: empresaDoRegistroAudit(R_ENVIO(), envio, actor) },
         tx
       );
       return atualizado;
