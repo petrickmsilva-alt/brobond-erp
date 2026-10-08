@@ -285,3 +285,58 @@ test('filtros estritos de BI: De/Até inclusivos, canal por grupo e empresa_id (
     await c.pool!.query(`DELETE FROM impostos_ncm WHERE aliquota_pct = 0 AND ncm IS NULL`);
   }
 });
+
+test('fuso do negócio (PG): De/Até e data seguem o dia civil de Brasília, nas fronteiras', { skip }, async () => {
+  const { negociosVendaManual, negociosResumo } = await import('../src/negocios');
+  const sufixo = `f${Date.now() % 1e9}`;
+  const c = await cenario(sufixo);
+  const gerente = c.gerente;
+  const saleIds: string[] = [];
+  try {
+    const criar = async (iso: string) => {
+      const r = await chamar(negociosVendaManual, mockReq(gerente, {}, {
+        canal: 'LOJA_FISICA',
+        occurred_at: iso,
+        itens: [{ product_id: c.p4, quantity: 1, unit_price_cents: 100 }],
+      }));
+      assert.equal(r.code, 201, JSON.stringify(r.payload));
+      saleIds.push(r.payload.venda.id);
+      return r.payload.venda;
+    };
+    const dia = async (de: string, ate: string = de) => {
+      const r = await chamar(negociosResumo, mockReq(gerente, { de, ate }));
+      return r.payload.kpis.pedidos as number;
+    };
+
+    // Fronteiras de 08/10/2026 em Brasília = [03:00Z de 08, 03:00Z de 09).
+    const inicio = await criar('2026-10-08T03:00:00.000Z'); // 00:00 BRT dia 08 → dentro
+    const fim = await criar('2026-10-09T02:59:59.999Z'); // 23:59:59,999 BRT dia 08 → dentro
+    const virada = await criar('2026-10-09T01:30:00.000Z'); // 22:30 BRT dia 08 → dentro (UTC seria dia 09)
+    const dia09 = await criar('2026-10-09T03:00:00.000Z'); // 00:00 BRT dia 09 → fora do dia 08
+    const antes = await criar('2026-10-08T02:59:59.999Z'); // 23:59:59,999 BRT dia 07 → fora do dia 08
+
+    assert.equal(inicio.data, '2026-10-08');
+    assert.equal(fim.data, '2026-10-08');
+    assert.equal(virada.data, '2026-10-08');
+    assert.equal(dia09.data, '2026-10-09');
+    assert.equal(antes.data, '2026-10-07');
+
+    assert.equal(await dia('2026-10-08'), 3, 'início, fim e virada UTC/Brasília no dia 08');
+    assert.equal(await dia('2026-10-09'), 1, 'só a meia-noite do dia 09');
+    assert.equal(await dia('2026-10-07'), 1, 'só o 23:59:59,999 do dia 07');
+
+    // Virada de mês: 31/10 às 22h BRT = 01/11 UTC → outubro.
+    const fimOutubro = await criar('2026-11-01T01:00:00.000Z');
+    assert.equal(fimOutubro.mes, '2026-10');
+    assert.equal(await dia('2026-10-31'), 1);
+    assert.equal(await dia('2026-11-01'), 0);
+
+    // Virada de ano: 31/12 às 21h30 BRT = 01/01 UTC → 2026-12.
+    const fimAno = await criar('2027-01-01T00:30:00.000Z');
+    assert.equal(fimAno.data, '2026-12-31');
+    assert.equal(await dia('2026-12-31'), 1);
+    assert.equal(await dia('2027-01-01'), 0);
+  } finally {
+    await c.limpar(saleIds);
+  }
+});

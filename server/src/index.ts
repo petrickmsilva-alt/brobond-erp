@@ -3,6 +3,7 @@ import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hasDatabaseUrl, isDbConnected, migrate } from './db';
+import { escopoDoAtor } from './empresa';
 import {
   ADMIN_EMAIL,
   changePassword,
@@ -403,8 +404,9 @@ app.get(
 
 app.get(
   '/api/dashboard',
-  wrap(async (_req, res) => {
-    res.json(await getStore().dashboard());
+  wrap(async (req, res) => {
+    // MULTIEMPRESA: o painel é da empresa ativa do ator (nunca de todas por padrão).
+    res.json(await getStore().dashboard(escopoDoAtor(currentUser(req))));
   })
 );
 

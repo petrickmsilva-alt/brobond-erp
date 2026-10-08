@@ -24,8 +24,13 @@
 //      segundo plano (boot + intervalo + pós-ingestão + cron).
 //
 //   3) AGREGADORES DE BI com filtros ESTRITOS: período De/Até
-//      (data UTC de occurred_at), empresa_id e canal de venda
-//      agrupado em Loja Física / E-commerce / Marketplaces.
+//      (dia CIVIL de America/Sao_Paulo, não UTC), empresa e canal de
+//      venda agrupado em Loja Física / E-commerce / Marketplaces.
+//
+//   4) MULTIEMPRESA: a empresa das leituras é decidida no SERVIDOR
+//      (aplicarEscopoEmpresaBi). `empresa_id` da query é apenas um
+//      PEDIDO, validado contra as concessões do ator (403 se negado).
+//      Sem pedido, vale a empresa ativa da sessão — nunca todas.
 //
 // Duas implementações do mesmo contrato (padrão store.ts do ERP):
 //   • SQL (Postgres — produção/DATABASE_URL): queries reais;
@@ -40,6 +45,7 @@ import { RESOURCES } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, type AuthUser } from './auth';
 import { HttpError } from './errors';
+import { escopoDoAtor, exigirEmpresaPermitida } from './empresa';
 import { setOnSaleIngested } from '../../modules/connectors/index';
 
 // ----------------------------------------------------------------------------
@@ -177,6 +183,57 @@ export function grupoDoCanal(canal: string): CanalGrupo {
 }
 
 // ----------------------------------------------------------------------------
+// Fuso do negócio: o DIA CIVIL é o de America/Sao_Paulo (Brasília).
+//
+// O filtro De/Até e o campo `data` de cada venda seguem o dia civil local.
+// Sem isso, uma venda às 22h de Brasília (01h UTC do dia seguinte) caía no
+// dia errado e no mês errado. Brasil não usa horário de verão desde 2019,
+// então o deslocamento é fixo em UTC−03:00.
+// ----------------------------------------------------------------------------
+
+/** Deslocamento de Brasília em relação ao UTC, em horas (UTC−03:00). */
+export const DESLOCAMENTO_NEGOCIO_HORAS = 3;
+
+/** Instante UTC em que começa o dia civil `dia` (AAAA-MM-DD) em Brasília. */
+export function inicioDiaNegocio(dia: string): Date {
+  const [ano, mes, diaDoMes] = dia.split('-').map(Number);
+  return new Date(Date.UTC(ano, mes - 1, diaDoMes, DESLOCAMENTO_NEGOCIO_HORAS, 0, 0, 0));
+}
+
+/** Instante UTC em que termina (exclusivo) o dia civil `dia` em Brasília. */
+export function fimExclusivoDiaNegocio(dia: string): Date {
+  return new Date(inicioDiaNegocio(dia).getTime() + 24 * 3600_000);
+}
+
+/** Dia civil (AAAA-MM-DD) de Brasília ao qual pertence um instante. */
+export function diaDoNegocio(instante: Date): string {
+  return new Date(instante.getTime() - DESLOCAMENTO_NEGOCIO_HORAS * 3600_000).toISOString().slice(0, 10);
+}
+
+// ----------------------------------------------------------------------------
+// Escopo de empresa das leituras de BI (MULTIEMPRESA)
+// ----------------------------------------------------------------------------
+
+/**
+ * Decide a empresa de uma leitura de BI a partir do ATOR autenticado.
+ *
+ *   • `empresa_id` pedido → exige concessão (403 se o ator não tem acesso);
+ *   • sem pedido → empresa ativa da sessão (nunca "todas as empresas");
+ *   • consolidar → só com `pode_consolidar` E `?consolidado=1` (escopo.consolidado).
+ *
+ * O valor vindo do cliente nunca vira autorização por si só.
+ */
+export function aplicarEscopoEmpresaBi(actor: AuthUser | null | undefined, filtros: FiltrosBi): FiltrosBi {
+  if (filtros.empresaId !== null) {
+    exigirEmpresaPermitida(actor as unknown as AuthUser, filtros.empresaId);
+    return filtros;
+  }
+  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  if (escopo.consolidado) return filtros;
+  return { ...filtros, empresaId: escopo.empresaId };
+}
+
+// ----------------------------------------------------------------------------
 // 3) Tipos de entrada/saída (contrato da API)
 // ----------------------------------------------------------------------------
 
@@ -189,7 +246,7 @@ export type VendaNegocios = {
   canalLabel: string;
   canalGrupo: CanalGrupo;
   grupoLabel: string;
-  /** Data UTC (YYYY-MM-DD) — a mesma usada nos filtros De/Até. */
+  /** Dia civil de Brasília (YYYY-MM-DD) — o mesmo usado nos filtros De/Até. */
   data: string;
   mes: string;
   occurredAt: string;
@@ -353,7 +410,8 @@ function paraVendaNegocios(r: Record<string, any>): VendaNegocios {
   const canal = canalDeLinha(r);
   const grupo = grupoDoCanal(canal);
   const occurredAt = r.occurred_at instanceof Date ? r.occurred_at.toISOString() : String(r.occurred_at || '');
-  const data = occurredAt.slice(0, 10);
+  const instante = new Date(occurredAt);
+  const data = Number.isNaN(instante.getTime()) ? '' : diaDoNegocio(instante);
   return {
     id: String(r.id),
     reference: String(r.reference || ''),
@@ -400,12 +458,12 @@ function condicoesDeVenda(f: FiltrosBi, params: unknown[]): string[] {
     conds.push(`s.status::text = $${params.length}`);
   }
   if (f.de) {
-    params.push(f.de);
-    conds.push(`s.occurred_at >= timezone('UTC', $${params.length}::date::timestamp)`);
+    params.push(inicioDiaNegocio(f.de).toISOString());
+    conds.push(`s.occurred_at >= $${params.length}::timestamptz`);
   }
   if (f.ate) {
-    params.push(f.ate);
-    conds.push(`s.occurred_at < timezone('UTC', ($${params.length}::date + 1)::timestamp)`);
+    params.push(fimExclusivoDiaNegocio(f.ate).toISOString());
+    conds.push(`s.occurred_at < $${params.length}::timestamptz`);
   }
   if (f.empresaId) {
     params.push(f.empresaId);
@@ -554,25 +612,25 @@ const sqlRepo: NegociosRepo = {
     const params: unknown[] = [];
     const janelaConds: string[] = [];
     if (janela?.de) {
-      params.push(janela.de);
-      janelaConds.push(`s.occurred_at >= timezone('UTC', $${params.length}::date::timestamp)`);
+      params.push(inicioDiaNegocio(janela.de).toISOString());
+      janelaConds.push(`s.occurred_at >= $${params.length}::timestamptz`);
     }
     if (janela?.ate) {
-      params.push(janela.ate);
-      janelaConds.push(`s.occurred_at < timezone('UTC', ($${params.length}::date + 1)::timestamp)`);
+      params.push(fimExclusivoDiaNegocio(janela.ate).toISOString());
+      janelaConds.push(`s.occurred_at < $${params.length}::timestamptz`);
     }
     const janelaWhere = janelaConds.length ? `AND ${janelaConds.join(' AND ')}` : '';
 
-    // Limites da janela gravados na classificação (meia-noite UTC do dia).
+    // Limites da janela gravados na classificação (início do dia civil de Brasília).
     const finalParams = [...params];
     let idxDe = 0;
     let idxAte = 0;
     if (janela?.de) {
-      finalParams.push(`${janela.de}T00:00:00.000Z`);
+      finalParams.push(inicioDiaNegocio(janela.de).toISOString());
       idxDe = finalParams.length;
     }
     if (janela?.ate) {
-      finalParams.push(`${janela.ate}T00:00:00.000Z`);
+      finalParams.push(inicioDiaNegocio(janela.ate).toISOString());
       idxAte = finalParams.length;
     }
 
@@ -892,7 +950,7 @@ async function chavesAliquotaMemoria(): Promise<Map<string, number>> {
 }
 
 function passaFiltrosMemoria(v: MemVenda, f: FiltrosBi): boolean {
-  const data = v.occurred_at.toISOString().slice(0, 10);
+  const data = diaDoNegocio(v.occurred_at);
   if (f.ids && !f.ids.includes(v.id)) return false;
   if (f.status && v.status !== f.status) return false;
   if (f.de && data < f.de) return false;
@@ -949,8 +1007,8 @@ const memRepo: NegociosRepo = {
     const faturamento = new Map<string, { empresa_id: number; produto_id: number; faturamento_cents: number }>();
     for (const v of memoria.vendas) {
       if (v.status !== STATUS_FATURAMENTO) continue;
-      // Mesma semântica do SQL: data UTC de occurred_at entre De e Até (inclusivos).
-      const data = v.occurred_at.toISOString().slice(0, 10);
+      // Mesma semântica do SQL: dia civil de Brasília entre De e Até (inclusivos).
+      const data = diaDoNegocio(v.occurred_at);
       if (janela?.de && data < janela.de) continue;
       if (janela?.ate && data > janela.ate) continue;
       for (const item of memoria.itens.filter((i) => i.sale_id === v.id)) {
@@ -1217,8 +1275,13 @@ export type VendaManualPayload = {
   itens?: { product_id?: unknown; size_id?: unknown; quantity?: unknown; unit_price_cents?: unknown; discount_cents?: unknown }[];
 };
 
-/** Normaliza e valida o payload da venda manual (400 em qualquer inconsistência). */
-export async function validarVendaManual(body: unknown): Promise<VendaManualInput> {
+/**
+ * Normaliza e valida o payload da venda manual (400 em qualquer inconsistência).
+ *
+ * MULTIEMPRESA: `empresa_id` do corpo exige concessão do ator (403); sem ele, a
+ * venda vai para a empresa ativa da sessão do ator.
+ */
+export async function validarVendaManual(body: unknown, actor?: AuthUser | null): Promise<VendaManualInput> {
   const payload = (body || {}) as VendaManualPayload;
   const canalBruto = String(payload.canal || 'LOJA_FISICA').trim();
   if (!(CANAIS_VENDA as readonly string[]).includes(canalBruto)) {
@@ -1226,9 +1289,10 @@ export async function validarVendaManual(body: unknown): Promise<VendaManualInpu
   }
   const canal = canalBruto as CanalVenda;
 
-  let empresaId = 1;
+  let empresaId = escopoDoAtor(actor as unknown as AuthUser).empresaId;
   if (payload.empresa_id !== undefined && payload.empresa_id !== null && payload.empresa_id !== '') {
     empresaId = inteiroObrigatorio(payload.empresa_id, 'empresa_id', 1);
+    exigirEmpresaPermitida(actor as unknown as AuthUser, empresaId);
   }
 
   const statusBruto = String(payload.status || 'PAID').trim();
@@ -1242,7 +1306,7 @@ export async function validarVendaManual(body: unknown): Promise<VendaManualInpu
   } else {
     const bruto = String(payload.occurred_at).trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(bruto)) {
-      occurredAt = new Date(`${bruto}T12:00:00.000Z`); // meio-dia UTC: data estável em qualquer fuso
+      occurredAt = new Date(`${bruto}T12:00:00.000Z`); // meio-dia UTC = 09h em Brasília: mesmo dia civil
     } else {
       occurredAt = new Date(bruto);
     }
@@ -1364,7 +1428,7 @@ export async function negociosCanais(_req: Request, res: Response) {
 export async function negociosResumo(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'read');
-  const filtros = parseFiltrosBi(queryDeRequisicao(req));
+  const filtros = aplicarEscopoEmpresaBi(actor, parseFiltrosBi(queryDeRequisicao(req)));
   const repo = repoNegocios();
   const [vendas, itens, abc] = await Promise.all([
     repo.listarVendas(filtros, LIMITE_VENDAS_BI, 0),
@@ -1379,7 +1443,7 @@ export async function negociosMargens(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'read');
   exigirGerente(actor);
-  const filtros = parseFiltrosBi(queryDeRequisicao(req));
+  const filtros = aplicarEscopoEmpresaBi(actor, parseFiltrosBi(queryDeRequisicao(req)));
   const limit = Math.min(1000, Math.max(1, Number(primeiroValor(req.query.limit)) || 200));
   const offset = Math.max(0, Number(primeiroValor(req.query.offset)) || 0);
   const repo = repoNegocios();
@@ -1419,7 +1483,7 @@ export async function negociosMargensRecalcular(req: Request, res: Response) {
 export async function negociosABC(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'read');
-  const filtros = parseFiltrosBi(queryDeRequisicao(req));
+  const filtros = aplicarEscopoEmpresaBi(actor, parseFiltrosBi(queryDeRequisicao(req)));
   const classe = primeiroValor(req.query.classe);
   if (classe !== null && classe !== '' && !['A', 'B', 'C'].includes(classe)) {
     throw new HttpError(400, `Filtro inválido: classe deve ser A, B ou C (recebi "${classe}").`);
@@ -1458,7 +1522,7 @@ export async function negociosVendaManual(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'create');
   if (!actor?.id) throw new HttpError(401, 'Usuário autenticado é obrigatório para registrar uma venda manual.');
-  const input = await validarVendaManual(req.body);
+  const input = await validarVendaManual(req.body, actor);
   const repo = repoNegocios();
   const venda = await repo.criarVendaManual(input, actor);
   // Curva ABC atualizada na hora — classificação contínua.

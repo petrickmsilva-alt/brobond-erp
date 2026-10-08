@@ -2,6 +2,7 @@
 // Há duas implementações:
 //   • pgstore.ts — PostgreSQL (produção / DATABASE_URL definida)
 //   • memdb.ts   — banco em memória (modo demonstração, sem DATABASE_URL)
+import type { EscopoEmpresa } from './empresa';
 import type { PoolClient } from 'pg';
 import type { Resource } from './resources';
 
@@ -171,7 +172,8 @@ export interface Store {
   audit(entry: AuditEntry, tx?: Tx): Promise<void>;
   /** Verifica a cadeia de hashes da auditoria (integridade/tamper-evidence). */
   verificarAuditoria(): Promise<AuditoriaVerificacao>;
-  dashboard(): Promise<DashboardData>;
+  /** Painel: com escopo de empresa, lê só aquela empresa (MULTIEMPRESA). */
+  dashboard(escopo?: EscopoEmpresa | null): Promise<DashboardData>;
 
   findUserByEmail(email: string): Promise<Row | null>;
   /** Todos os usuários com senha_hash (usado na migração de senhas legadas). */

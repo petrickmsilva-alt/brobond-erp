@@ -7,6 +7,7 @@ import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './resources';
 import { hashCadeiaAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
+import type { EscopoEmpresa } from './empresa';
 import {
   labelOf,
   type AuditEntry,
@@ -419,55 +420,66 @@ export class PgStore implements Store {
     return verificarCadeiaAuditoria(res.rows);
   }
 
-  async dashboard(): Promise<DashboardData> {
+  /**
+   * Painel "Meu negócio": agregados sobre as tabelas com `empresa_id`.
+   *
+   * MULTIEMPRESA: com `escopo` de uma empresa (padrão), cada consulta recebe
+   * `empresa_id = $1`; sem recorte (escopo consolidado autorizado ou chamada de
+   * sistema sem escopo) mantém a leitura do grupo inteiro.
+   */
+  async dashboard(escopo?: EscopoEmpresa | null): Promise<DashboardData> {
+    const emp = escopo && !escopo.consolidado ? escopo.empresaId : null;
+    const p: unknown[] = emp === null ? [] : [emp];
+    // Condição de empresa por alias de tabela ('' quando não há recorte).
+    const w = (alias: string) => (emp === null ? '' : ` AND ${alias}.empresa_id = $1`);
     const [kpis, alertas, ordens, recentes, chart6, chart7, chart8, chart9, saldos] = await Promise.all([
       query(`
         SELECT
-          COALESCE((SELECT SUM(e.quantidade * COALESCE(p.custo, 0)) FROM estoques e JOIN produtos p ON p.id = e.produto_id), 0)::float AS valor_estoque,
-          COALESCE((SELECT SUM(quantidade) FROM estoques), 0)::int AS pecas_estoque,
-          (SELECT COUNT(*) FROM estoques WHERE estoque_min > 0 AND quantidade <= estoque_min)::int AS itens_alerta,
-          (SELECT COUNT(*) FROM ordens_fabricacao WHERE status IN ('planejada', 'em_producao'))::int AS producao,
-          (SELECT COUNT(*) FROM vendas WHERE status = 'aberta')::int AS vendas_abertas,
-          (SELECT COUNT(*) FROM compras WHERE status = 'pendente')::int AS compras_pendentes,
-          (SELECT COALESCE(SUM(total), 0) FROM vendas WHERE status IN ('faturada', 'entregue') AND faturada_em >= date_trunc('month', now()))::float AS vendas_mes,
-          (SELECT COALESCE(SUM(comissao_valor), 0) FROM vendas WHERE status IN ('faturada', 'entregue'))::float AS comissoes_pagar,
-          (SELECT COUNT(*) FROM produtos)::int AS produtos,
-          (SELECT COUNT(*) FROM clientes)::int AS clientes,
-          (SELECT COUNT(*) FROM fornecedores)::int AS fornecedores,
-          (SELECT COUNT(*) FROM insumos)::int AS insumos
-      `),
+          COALESCE((SELECT SUM(e.quantidade * COALESCE(p.custo, 0)) FROM estoques e JOIN produtos p ON p.id = e.produto_id WHERE TRUE${w('e')}), 0)::float AS valor_estoque,
+          COALESCE((SELECT SUM(quantidade) FROM estoques WHERE TRUE${w('estoques')}), 0)::int AS pecas_estoque,
+          (SELECT COUNT(*) FROM estoques WHERE estoque_min > 0 AND quantidade <= estoque_min${w('estoques')})::int AS itens_alerta,
+          (SELECT COUNT(*) FROM ordens_fabricacao WHERE status IN ('planejada', 'em_producao')${w('ordens_fabricacao')})::int AS producao,
+          (SELECT COUNT(*) FROM vendas WHERE status = 'aberta'${w('vendas')})::int AS vendas_abertas,
+          (SELECT COUNT(*) FROM compras WHERE status = 'pendente'${w('compras')})::int AS compras_pendentes,
+          (SELECT COALESCE(SUM(total), 0) FROM vendas WHERE status IN ('faturada', 'entregue') AND faturada_em >= date_trunc('month', now())${w('vendas')})::float AS vendas_mes,
+          (SELECT COALESCE(SUM(comissao_valor), 0) FROM vendas WHERE status IN ('faturada', 'entregue')${w('vendas')})::float AS comissoes_pagar,
+          (SELECT COUNT(*) FROM produtos WHERE TRUE${w('produtos')})::int AS produtos,
+          (SELECT COUNT(*) FROM clientes WHERE TRUE${w('clientes')})::int AS clientes,
+          (SELECT COUNT(*) FROM fornecedores WHERE TRUE${w('fornecedores')})::int AS fornecedores,
+          (SELECT COUNT(*) FROM insumos WHERE TRUE${w('insumos')})::int AS insumos
+      `, p),
       query(`
         SELECT concat_ws(' — ', p.sku, p.nome) AS produto, t.codigo AS tamanho, e.local, e.quantidade, e.estoque_min
         FROM estoques e
         JOIN produtos p ON p.id = e.produto_id
         LEFT JOIN tamanhos t ON t.id = e.tamanho_id
-        WHERE e.estoque_min > 0 AND e.quantidade <= e.estoque_min
+        WHERE e.estoque_min > 0 AND e.quantidade <= e.estoque_min${w('e')}
         ORDER BY (e.quantidade - e.estoque_min) ASC
         LIMIT 8
-      `),
+      `, p),
       query(`
         SELECT o.id, concat_ws(' — ', p.sku, p.nome) AS produto, t.codigo AS tamanho, o.quantidade, o.status, o.previsao
         FROM ordens_fabricacao o
         LEFT JOIN produtos p ON p.id = o.produto_id
         LEFT JOIN tamanhos t ON t.id = o.tamanho_id
-        WHERE o.status IN ('planejada', 'em_producao')
+        WHERE o.status IN ('planejada', 'em_producao')${w('o')}
         ORDER BY o.previsao ASC NULLS LAST, o.id DESC
         LIMIT 8
-      `),
+      `, p),
       query(`
         SELECT data, usuario, acao, recurso, descricao
         FROM auditoria
-        WHERE acao <> 'login'
+        WHERE acao <> 'login'${w('auditoria')}
         ORDER BY data DESC
         LIMIT 8
-      `),
+      `, p),
       // Fase 5 — vendas por mês (12 meses, completando os meses sem venda)
       query(`
         SELECT to_char(gs.mes, 'YYYY-MM') AS mes, COALESCE(SUM(v.total), 0)::float AS total
         FROM generate_series(date_trunc('month', now()) - interval '11 months', date_trunc('month', now()), interval '1 month') AS gs(mes)
-        LEFT JOIN vendas v ON v.status IN ('faturada', 'entregue') AND date_trunc('month', COALESCE(v.faturada_em, v.data)) = gs.mes
+        LEFT JOIN vendas v ON v.status IN ('faturada', 'entregue') AND date_trunc('month', COALESCE(v.faturada_em, v.data)) = gs.mes${w('v')}
         GROUP BY gs.mes ORDER BY gs.mes ASC
-      `),
+      `, p),
       // Fase 5 — produção concluída por semana (8 semanas; OP por grade soma a grade)
       query(`
         SELECT to_char(gs.sem, 'YYYY-MM-DD') AS semana,
@@ -477,28 +489,28 @@ export class PgStore implements Store {
                COUNT(o.id)::int AS ordens
         FROM generate_series(date_trunc('week', now()) - interval '7 weeks', date_trunc('week', now()), interval '1 week') AS gs(sem)
         LEFT JOIN ordens_fabricacao o
-          ON o.status = 'concluida' AND date_trunc('week', COALESCE(o.concluida_em, o.atualizado_em, o.criado_em)) = gs.sem
+          ON o.status = 'concluida' AND date_trunc('week', COALESCE(o.concluida_em, o.atualizado_em, o.criado_em)) = gs.sem${w('o')}
         GROUP BY gs.sem ORDER BY gs.sem ASC
-      `),
+      `, p),
       // Fase 5 — top 10 produtos por faturamento (pedidos faturados/entregues)
       query(`
         SELECT concat_ws(' — ', p.sku, p.nome) AS produto, SUM(iv.subtotal)::float AS total
         FROM itens_venda iv
-        JOIN vendas v ON v.id = iv.venda_id AND v.status IN ('faturada', 'entregue')
+        JOIN vendas v ON v.id = iv.venda_id AND v.status IN ('faturada', 'entregue')${w('v')}
         JOIN produtos p ON p.id = iv.produto_id
         GROUP BY p.id, p.sku, p.nome
         ORDER BY total DESC
         LIMIT 10
-      `),
+      `, p),
       // Fase 3 — insumos abaixo do estoque mínimo
       query(`
         SELECT i.nome AS insumo, ei.quantidade, ei.estoque_min
         FROM estoque_insumos ei
         JOIN insumos i ON i.id = ei.insumo_id
-        WHERE ei.estoque_min > 0 AND ei.quantidade <= ei.estoque_min
+        WHERE ei.estoque_min > 0 AND ei.quantidade <= ei.estoque_min${w('ei')}
         ORDER BY (ei.quantidade - ei.estoque_min) ASC
         LIMIT 8
-      `),
+      `, p),
       // Valorização em três bases (custo × atacado × varejo) — saldo por produto,
       // somando todos os tamanhos e locais; o cálculo fica em valorizacao.ts.
       query(`
@@ -510,9 +522,10 @@ export class PgStore implements Store {
         FROM estoques e
         JOIN produtos p ON p.id = e.produto_id
         LEFT JOIN colecoes c ON c.id = p.colecao_id
+        WHERE TRUE${w('e')}
         GROUP BY p.id, p.sku, p.nome, c.nome, p.custo, p.preco_venda, p.preco_atacado
         HAVING SUM(e.quantidade) > 0
-      `),
+      `, p),
     ]);
     const k = kpis.rows[0] || {};
     return {

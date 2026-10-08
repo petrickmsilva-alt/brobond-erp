@@ -24,7 +24,13 @@ import {
   type Tx,
 } from './store';
 import { round2 } from './utils';
-import { EMPRESA_PADRAO } from './empresa';
+import { EMPRESA_PADRAO, type EscopoEmpresa } from './empresa';
+
+/** Tabelas do painel que carregam `empresa_id` (migration 0017). */
+const TABELAS_DO_PAINEL_COM_EMPRESA = new Set([
+  'estoques', 'ordens_fabricacao', 'vendas', 'compras', 'produtos', 'clientes', 'fornecedores', 'insumos',
+  'estoque_insumos', 'itens_venda', 'itens_ordem', 'colecoes', 'auditoria',
+]);
 
 type Table = { seq: number; rows: Map<number, Row> };
 
@@ -402,8 +408,14 @@ export class MemStore implements Store {
     return verificarCadeiaAuditoria([...this.table('auditoria').rows.values()]);
   }
 
-  async dashboard(): Promise<DashboardData> {
-    const rows = (name: string) => [...this.table(name).rows.values()];
+  async dashboard(escopo?: EscopoEmpresa | null): Promise<DashboardData> {
+    // MULTIEMPRESA: mesma regra do pgstore — só as tabelas com empresa_id são
+    // recortadas; tabelas globais (tamanhos, etc.) seguem inteiras.
+    const emp = escopo && !escopo.consolidado ? escopo.empresaId : null;
+    const rows = (name: string) =>
+      [...this.table(name).rows.values()].filter(
+        (r) => emp === null || !TABELAS_DO_PAINEL_COM_EMPRESA.has(name) || Number(r.empresa_id ?? EMPRESA_PADRAO) === emp
+      );
     const produtos = new Map(rows('produtos').map((p) => [p.id, p]));
     const tamanhos = new Map(rows('tamanhos').map((t) => [t.id, t]));
     const estoques = rows('estoques');
