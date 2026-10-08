@@ -62,7 +62,16 @@ jobs:
       - name: Instalar dependências da API
         run: npm --prefix server install
       - name: Migrations + concorrência de saldo no Postgres
-        run: npm --prefix server run test:pg
+        # Em caso de falha, ecoa o diagnóstico como annotation do check-run:
+        # é a única janela para o log quando o download de artefatos não está
+        # disponível. (node --test fala TAP; falhas saem como "not ok".)
+        run: |
+          set -o pipefail
+          npm --prefix server run test:pg 2>&1 | tee /tmp/testpg.log || {
+            DIAG="$( { grep -E "^not ok|failureType|^  error|code: |name: |Migração .* falhou|Error \[|ERR_" /tmp/testpg.log | head -40; echo "--- cauda ---"; tail -40 /tmp/testpg.log; } | sed 's/%/%25/g' )"
+            echo "::error title=testpg falhou::${DIAG//$'\n'/%0A}"
+            exit 1
+          }
       # Dual-track da fusão: o boot do ERP já criou as tabelas do commerce
       # (db/schema.sql + db/migrations/0012); a migration Prisma precisa
       # aplicar por cima sem erro (SQL idempotente) e ser registrada em

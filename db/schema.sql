@@ -2839,3 +2839,143 @@ CREATE INDEX IF NOT EXISTS envios_empresa_venda_idx     ON envios (empresa_id, v
 CREATE INDEX IF NOT EXISTS devolucoes_empresa_cliente_idx ON devolucoes (empresa_id, cliente_id);
 CREATE INDEX IF NOT EXISTS compra_recebimentos_empresa_idx ON compra_recebimentos (empresa_id, data DESC);
 CREATE INDEX IF NOT EXISTS vendas_empresa_expedicao_idx ON vendas (empresa_id, expedicao_etapa);
+
+-- ---------------------------------------------------------------------------
+-- § P2 — FINANCEIRO: GATEWAYS, WEBHOOKS DE ENTRADA, COMISSÕES POR
+-- RECEBIMENTO, EXTRATO PERSISTENTE (OFX/CSV/CNAB) E IDEMPOTÊNCIA
+-- Espelho da migration db/migrations/0025_p2_financeiro_gateways.sql
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS gateway_configs (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  provider TEXT NOT NULL,
+  ambiente TEXT NOT NULL DEFAULT 'producao',
+  credenciais_cifradas TEXT,
+  webhook_segredo_cifrado TEXT,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_gateway_configs_empresa_provider
+  ON gateway_configs (empresa_id, LOWER(provider));
+
+CREATE TABLE IF NOT EXISTS gateway_cobrancas (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  provider TEXT NOT NULL,
+  metodo TEXT NOT NULL,
+  venda_id INTEGER REFERENCES vendas(id),
+  lancamento_id INTEGER REFERENCES lancamentos_financeiros(id),
+  conta_id INTEGER REFERENCES contas_financeiras(id),
+  valor NUMERIC(12,2) NOT NULL,
+  taxa_pct NUMERIC(5,2) NOT NULL DEFAULT 0,
+  valor_liquido NUMERIC(12,2),
+  parcelas INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'pendente',
+  provider_ref TEXT,
+  idempotency_key TEXT,
+  expires_em TIMESTAMPTZ,
+  nosso_numero TEXT,
+  linha_digitavel TEXT,
+  qr_code TEXT,
+  copia_cola TEXT,
+  nsu TEXT,
+  webhook_evento_id TEXT,
+  payload JSONB,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_cobrancas_empresa ON gateway_cobrancas (empresa_id, status);
+CREATE INDEX IF NOT EXISTS idx_gateway_cobrancas_venda   ON gateway_cobrancas (venda_id);
+CREATE INDEX IF NOT EXISTS idx_gateway_cobrancas_lanc    ON gateway_cobrancas (lancamento_id);
+CREATE INDEX IF NOT EXISTS idx_gateway_cobrancas_ref     ON gateway_cobrancas (provider, provider_ref);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_gateway_cobrancas_idempotencia
+  ON gateway_cobrancas (empresa_id, LOWER(provider), idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_gateway_cobrancas_valor') THEN
+    ALTER TABLE gateway_cobrancas ADD CONSTRAINT ck_gateway_cobrancas_valor CHECK (valor > 0) NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_gateway_cobrancas_metodo') THEN
+    ALTER TABLE gateway_cobrancas ADD CONSTRAINT ck_gateway_cobrancas_metodo
+      CHECK (metodo IN ('pix','boleto','cartao_credito','cartao_debito')) NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_gateway_cobrancas_status') THEN
+    ALTER TABLE gateway_cobrancas ADD CONSTRAINT ck_gateway_cobrancas_status
+      CHECK (status IN ('pendente','autorizada','paga','expirada','cancelada','estornada','falhou')) NOT VALID;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS gateway_webhook_events (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER REFERENCES empresas(id),
+  provider TEXT NOT NULL,
+  evento_id TEXT NOT NULL,
+  evento TEXT,
+  payload JSONB,
+  assinatura_ok BOOLEAN NOT NULL DEFAULT FALSE,
+  status TEXT NOT NULL DEFAULT 'recebido',
+  tentativas INTEGER NOT NULL DEFAULT 0,
+  proxima_tentativa_em TIMESTAMPTZ,
+  ultima_tentativa_em TIMESTAMPTZ,
+  erro TEXT,
+  cobranca_id INTEGER,
+  lancamento_id INTEGER,
+  recebido_em TIMESTAMPTZ DEFAULT now(),
+  processado_em TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_gateway_webhook_evento
+  ON gateway_webhook_events (LOWER(provider), evento_id);
+CREATE INDEX IF NOT EXISTS idx_gateway_webhook_retry
+  ON gateway_webhook_events (status, proxima_tentativa_em);
+
+CREATE TABLE IF NOT EXISTS comissoes_eventos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  venda_id INTEGER NOT NULL REFERENCES vendas(id),
+  representante_id INTEGER REFERENCES representantes(id),
+  lancamento_id INTEGER REFERENCES lancamentos_financeiros(id),
+  tipo TEXT NOT NULL,
+  base NUMERIC(12,2) NOT NULL,
+  pct NUMERIC(5,2) NOT NULL,
+  valor NUMERIC(12,2) NOT NULL,
+  origem TEXT,
+  usuario TEXT,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_comissoes_eventos_venda ON comissoes_eventos (venda_id);
+CREATE INDEX IF NOT EXISTS idx_comissoes_eventos_rep   ON comissoes_eventos (empresa_id, representante_id);
+
+CREATE TABLE IF NOT EXISTS fin_extrato_transacoes (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  conta_id INTEGER REFERENCES contas_financeiras(id),
+  origem TEXT NOT NULL DEFAULT 'ofx',
+  linha_hash TEXT NOT NULL,
+  fitid TEXT,
+  data DATE,
+  valor NUMERIC(12,2) NOT NULL,
+  direcao TEXT NOT NULL DEFAULT 'entrada',
+  descricao TEXT,
+  documento TEXT,
+  codigo_movimento TEXT,
+  lancamento_id INTEGER REFERENCES lancamentos_financeiros(id),
+  status TEXT NOT NULL DEFAULT 'importada',
+  motivo TEXT,
+  conciliado_em TIMESTAMPTZ,
+  importado_em TIMESTAMPTZ DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_extrato_linha ON fin_extrato_transacoes (conta_id, linha_hash);
+CREATE INDEX IF NOT EXISTS idx_extrato_empresa_status ON fin_extrato_transacoes (empresa_id, status);
+CREATE INDEX IF NOT EXISTS idx_extrato_conta_data ON fin_extrato_transacoes (conta_id, data DESC);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_extrato_valor_positivo') THEN
+    ALTER TABLE fin_extrato_transacoes ADD CONSTRAINT ck_extrato_valor_positivo CHECK (valor > 0) NOT VALID;
+  END IF;
+END $$;

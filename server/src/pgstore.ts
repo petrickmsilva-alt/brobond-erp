@@ -264,7 +264,10 @@ export class PgStore implements Store {
 
   async update(r: Resource, id: number, data: Payload, tx?: Tx): Promise<Row | null> {
     const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
-    const keys = Object.keys(data).filter((k) => allowed.has(k) && k !== 'id');
+    // criado_em/atualizado_em são geridos pelo store: payloads que espelham a
+    // linha inteira (padrão patch-then-save) não podem atribuí-los de novo —
+    // "multiple assignments to same column" (42601).
+    const keys = Object.keys(data).filter((k) => allowed.has(k) && k !== 'id' && k !== 'atualizado_em' && k !== 'criado_em');
     const sets = keys.map((k, i) => `${k} = $${i + 2}`);
     if (r.fields.some((f) => f.name === 'atualizado_em')) sets.push('atualizado_em = now()');
     if (!sets.length) return this.get(r, id, tx);
@@ -306,7 +309,7 @@ export class PgStore implements Store {
         conds.push(`${k} = $${params.length}`);
       }
     }
-    const keys = Object.keys(data).filter((k) => allowed.has(k) && k !== 'id');
+    const keys = Object.keys(data).filter((k) => allowed.has(k) && k !== 'id' && k !== 'atualizado_em' && k !== 'criado_em');
     const sets = keys.map((k, i) => `${k} = $${params.length + 1 + i}`);
     if (r.fields.some((f) => f.name === 'atualizado_em')) sets.push('atualizado_em = now()');
     if (!sets.length) return this.get(r, id, tx);

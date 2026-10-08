@@ -113,8 +113,21 @@ export async function migrate(): Promise<void> {
     return;
   }
   const sql = readFileSync(file, 'utf8');
-  await pool.query(sql);
-  await aplicarMigrationsVersionadas();
+  // Boots simultâneos (processos de teste em paralelo, várias réplicas) não
+  // podem aplicar o bootstrap ao MESMO tempo: schema.sql e as migrações têm
+  // blocos DO $$ (ADD CONSTRAINT) e INSERT de registro que, corridos, matam o
+  // boot do perdedor à toa. Um advisory lock de sessão serializa tudo; o
+  // segundo processo espera e, quando entra, encontra tudo já aplicado
+  // (IF NOT EXISTS / ON CONFLICT DO NOTHING).
+  const lockClient = await pool.connect();
+  try {
+    await lockClient.query(`SELECT pg_advisory_lock(hashtext('brobond_schema_bootstrap'))`);
+    await lockClient.query(sql);
+    await aplicarMigrationsVersionadas(lockClient);
+  } finally {
+    await lockClient.query(`SELECT pg_advisory_unlock(hashtext('brobond_schema_bootstrap'))`).catch(() => undefined);
+    lockClient.release();
+  }
   ready = true;
   console.log('🗄️  Schema verificado/migrado (db/schema.sql + db/migrations).');
 }
@@ -146,7 +159,7 @@ function existe(caminho: string): boolean {
  * da própria transação; se um falhar o boot aborta em vez de subir com o banco
  * pela metade.
  */
-async function aplicarMigrationsVersionadas(): Promise<void> {
+async function aplicarMigrationsVersionadas(client: PoolClient): Promise<void> {
   if (!pool) return;
   const dir = candidatosDb('migrations').find(existe);
   if (!dir) return;
@@ -154,25 +167,26 @@ async function aplicarMigrationsVersionadas(): Promise<void> {
     .filter((f) => f.endsWith('.sql'))
     .sort();
   if (!nomes.length) return;
-  await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+  // O chamador (migrate) já segura o advisory lock de bootstrap — não há
+  // corrida aqui. ON CONFLICT é apenas cinto e suspensório.
+  await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id TEXT PRIMARY KEY,
     aplicado_em TIMESTAMPTZ NOT NULL DEFAULT now()
   )`);
-  const antes = new Set((await pool.query('SELECT id FROM schema_migrations')).rows.map((r: { id: string }) => r.id));
+  const aplicadas = new Set(
+    (await client.query('SELECT id FROM schema_migrations')).rows.map((r: { id: string }) => r.id)
+  );
   for (const nome of nomes) {
-    if (antes.has(nome)) continue;
-    const client = await pool.connect();
+    if (aplicadas.has(nome)) continue;
     try {
       await client.query('BEGIN');
       await client.query(readFileSync(path.join(dir, nome), 'utf8'));
-      await client.query('INSERT INTO schema_migrations (id) VALUES ($1)', [nome]);
+      await client.query('INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [nome]);
       await client.query('COMMIT');
       console.log(`🗄️  Migração aplicada: ${nome}`);
     } catch (e) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw new Error(`Migração ${nome} falhou — o serviço não sobe com o banco pela metade: ${(e as Error).message}`);
-    } finally {
-      client.release();
     }
   }
 }
