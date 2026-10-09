@@ -17,15 +17,7 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > corrigidos **8** bugs de produção — o mais grave, `receberParcial` devolvendo
 > **500** no PostgreSQL real para qualquer compra com `fin_vencimento`.
 >
-> **Gate E4.2 (2026-10-09):** o CI executou a matriz HTTP autenticada contra
-> PostgreSQL real no run [38003682898](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38003682898), mas terminou em **90 pass, 1 fail,
-> 0 skipped**. A falha foi uma comparação de SKU sensível a maiúsculas no
-> harness `/marketplace/loja/produtos`; a rota serializa SKUs em maiúsculas.
-> O harness foi alinhado à normalização sem relaxar a exigência A presente/B
-> ausente. A reexecução PostgreSQL ainda está pendente; portanto E4.2 continua
-> **NÃO APROVADO** e `GAP-ESTQ-MULTIEMPRESA` permanece aberto. E4.3–E4.6 e os
-> gaps P1/P2 separados continuam fora deste gate. Estado, limitações e
-> resultados exatos: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
+> **Gate E4.2 (2026-10-09):** os runs [38003682898](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38003682898) e [38004716773](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38004716773) executaram PostgreSQL real e terminaram, cada um, em **90 pass, 1 fail, 0 skipped**. A comparação de SKU do primeiro harness foi corrigida e passou; o segundo falhou porque o teste esperava HTTP 200 ao renomear, como gerente, um local B já em uso, comportamento que a aplicação corretamente rejeita com HTTP 403. O harness agora move o rename para antes do uso; a nova execução ainda está pendente. E4.2 segue **NÃO APROVADO** e `GAP-ESTQ-MULTIEMPRESA` permanece aberto. E4.3–E4.6 e os gaps P1/P2 separados continuam fora deste gate. Estado, limitações e resultados exatos: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
 
 Este é o **registro oficial do que falta**. Regra de manutenção:
 

@@ -375,6 +375,25 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   assert.equal(homonimos.rowCount, 2, 'PostgreSQL precisa aceitar nomes homônimos entre empresas');
   assert.deepEqual(homonimos.rows.map((row: any) => Number(row.empresa_id)), [empresaA, empresaB]);
 
+  // O gerente pode renomear um local ainda sem uso. Faça isso antes de B criar
+  // saldo/movimento/inventário: para local em uso a regra de produção exige
+  // administrador, independentemente do tenant.
+  const nomeRenomeadoB = `${localNome} RENOMEADO B`;
+  const renameB = await http(baseUrl, 'PUT', `/locais/${localBId}`, tokenB, { nome: nomeRenomeadoB, empresa_id: empresaA });
+  statusIs(renameB, 200, 'renomear somente o local B ainda sem uso');
+  assert.equal(Number(renameB.body?.empresa_id), empresaB);
+  assert.equal(String(renameB.body?.nome), nomeRenomeadoB);
+  const metaBRenomeado = await http(baseUrl, 'GET', '/meta', tokenB);
+  statusIs(metaBRenomeado, 200, 'default B após rename antes do uso');
+  assert.equal(Number(metaBRenomeado.body?.defaultLocal?.id), localBId);
+  assert.equal(String(metaBRenomeado.body?.defaultLocal?.nome), nomeRenomeadoB);
+  const locaisAposRenameB = await query('SELECT id, empresa_id, nome, padrao FROM locais WHERE id = ANY($1::int[]) ORDER BY empresa_id', [[localAId, localBId]]);
+  assert.deepEqual(locaisAposRenameB.rows.map((row: any) => ({ id: Number(row.id), empresa_id: Number(row.empresa_id), nome: String(row.nome), padrao: row.padrao })), [
+    { id: localAId, empresa_id: empresaA, nome: localNome, padrao: true },
+    { id: localBId, empresa_id: empresaB, nome: nomeRenomeadoB, padrao: true },
+  ]);
+  localEvidence.push(`B renomeou seu local ainda sem uso para ${nomeRenomeadoB}; PostgreSQL preservou A=${localNome}, empresa_id/default de B e defaultLocal B=${localBId}.`);
+
   const skuB = `E42B${suffixCompact}`;
   const produtoB = await create(baseUrl, '/produtos', tokenB, {
     sku: skuB, nome: `Produto HTTP B ${suffix}`, grade_id: Number(grade.id), custo: 15, preco_venda: 30, empresa_id: empresaA,
@@ -393,7 +412,7 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   const caixaBId = Number(caixaB.id);
   assert.equal(Number(caixaB.empresa_id), empresaB);
   assert.equal(Number(caixaB.local_id), localBId);
-  assert.equal(String(caixaB.local), localNome);
+  assert.equal(String(caixaB.local), nomeRenomeadoB);
 
   const movimentoB = await create(baseUrl, '/movimentacoes', tokenB, {
     tipo: 'entrada', produto_id: produtoBId, tamanho_id: null, quantidade: 8, empresa_id: empresaA,
@@ -420,8 +439,8 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   assert.ok(inventarioBItens.body.some((item: any) => Number(item.produto_id) === produtoBId && item.tamanho_id == null));
   assert.ok(inventarioBItens.body.every((item: any) => Number(item.empresa_id) === empresaB));
 
-  // A -> B -> A: renomeia A enquanto B preserva o mesmo nome homônimo; o
-  // default e os vínculos existentes de B não podem mudar.
+  // A -> B -> A: renomeia A depois do rename independente de B; o default e
+  // os vínculos existentes de B não podem mudar.
   tokenA = await switchCompany(baseUrl, tokenB, empresaA);
   const empresaAtivaARetorno = await http(baseUrl, 'GET', '/empresas/ativa', tokenA);
   statusIs(empresaAtivaARetorno, 200, 'retorno à empresa A');
@@ -438,9 +457,9 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   const localsAfterRename = await query('SELECT id, empresa_id, nome, padrao FROM locais WHERE id = ANY($1::int[]) ORDER BY empresa_id', [[localAId, localBId]]);
   assert.deepEqual(localsAfterRename.rows.map((row: any) => ({ id: Number(row.id), empresa_id: Number(row.empresa_id), nome: String(row.nome), padrao: row.padrao })), [
     { id: localAId, empresa_id: empresaA, nome: nomeRenomeadoA, padrao: true },
-    { id: localBId, empresa_id: empresaB, nome: localNome, padrao: true },
+    { id: localBId, empresa_id: empresaB, nome: nomeRenomeadoB, padrao: true },
   ]);
-  localEvidence.push(`A/B homônimos em PostgreSQL: A local_id=${localAId}, B local_id=${localBId}; defaults A=${localAId}, B=${localBId}; rename A=${nomeRenomeadoA} preservou B=${localNome}`);
+  localEvidence.push(`A/B homônimos em PostgreSQL: A local_id=${localAId}, B local_id=${localBId}; defaults A=${localAId}, B=${localBId}; rename A=${nomeRenomeadoA} preservou B=${nomeRenomeadoB}`);
 
   const caixaA = await create(baseUrl, '/pdv/caixas', tokenA, {
     numero: caixaNumero, valor_abertura: 0, local_id: localAId, empresa_id: empresaB,
@@ -452,7 +471,7 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   const caixasNoBanco = await query('SELECT id, empresa_id, local_id, local FROM pdv_caixas WHERE id = ANY($1::int[]) ORDER BY empresa_id', [[caixaAId, caixaBId]]);
   assert.deepEqual(caixasNoBanco.rows.map((row: any) => ({ id: Number(row.id), empresa_id: Number(row.empresa_id), local_id: Number(row.local_id), local: String(row.local) })), [
     { id: caixaAId, empresa_id: empresaA, local_id: localAId, local: nomeRenomeadoA },
-    { id: caixaBId, empresa_id: empresaB, local_id: localBId, local: localNome },
+    { id: caixaBId, empresa_id: empresaB, local_id: localBId, local: nomeRenomeadoB },
   ]);
 
   const produtoImportacaoA = await create(baseUrl, '/produtos', tokenA, {
@@ -532,7 +551,7 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
     produtos: [produtoAId, produtoBId, produtoImportacaoAId],
     skus: [String(produtoA.sku), String(produtoB.sku), String(produtoImportacaoA.sku)],
     locais: [localAId, localBId],
-    nomesLocais: [localNome, nomeRenomeadoA],
+    nomesLocais: [localNome, nomeRenomeadoA, nomeRenomeadoB],
     inventarios: [inventarioAId, inventarioBId],
     caixas: [caixaAId, caixaBId],
     numerosCaixa: [caixaNumero, `${caixaNumero}-X`],
@@ -574,7 +593,7 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
     numero: `${caixaNumero}-X`, valor_abertura: 0, local_id: localAId, empresa_id: empresaB,
   }), 404, 'B abre caixa em local A', noForeignText);
   await assertNoPartialWrite(ids, () => http(baseUrl, 'POST', '/importar/confirmar', tokenB, {
-    tipo: 'estoque', linhas: [{ empresa_id: empresaA, produto_id: produtoAId, tamanho_id: null, local_id: localBId, local: localNome, quantidade: 3 }],
+    tipo: 'estoque', linhas: [{ empresa_id: empresaA, produto_id: produtoAId, tamanho_id: null, local_id: localBId, local: nomeRenomeadoB, quantidade: 3 }],
   }), 404, 'importação B rejeita produto estrangeiro sem escrita parcial', noForeignText);
 
   const gradeB = await http(baseUrl, 'GET', '/estoques/grade?f.empresa_id=' + empresaA, tokenB);
@@ -619,7 +638,7 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   statusIs(filtroA, 200, 'A tenta forjar filtro de empresa B');
   assert.ok(filtroA.body.rows.every((row: any) => Number(row.empresa_id) === empresaA));
   assert.ok(filtroA.body.rows.some((row: any) => Number(row.id) === localAId && String(row.nome) === nomeRenomeadoA));
-  const noForeignTextB = [empresaBNome, String(produtoB.sku), localNome];
+  const noForeignTextB = [empresaBNome, String(produtoB.sku), localNome, nomeRenomeadoB];
   await assertNoPartialWrite(ids, () => http(baseUrl, 'GET', `/produtos/${produtoBId}`, tokenA), 404, 'A lê ID de produto B', noForeignTextB);
   await assertNoPartialWrite(ids, () => http(baseUrl, 'GET', `/locais/${localBId}`, tokenA), 404, 'A lê ID de local B', noForeignTextB);
   await assertNoPartialWrite(ids, () => http(baseUrl, 'GET', `/inventarios/${inventarioBId}`, tokenA), 404, 'A lê inventário B', noForeignTextB);
@@ -721,7 +740,7 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   const pdvFinal = await query('SELECT id, empresa_id, local_id, local FROM pdv_caixas WHERE id = ANY($1::int[]) ORDER BY empresa_id', [[caixaAId, caixaBId]]);
   assert.deepEqual(pdvFinal.rows.map((row: any) => ({ id: Number(row.id), empresa_id: Number(row.empresa_id), local_id: Number(row.local_id), local: String(row.local) })), [
     { id: caixaAId, empresa_id: empresaA, local_id: localAId, local: nomeRenomeadoA },
-    { id: caixaBId, empresa_id: empresaB, local_id: localBId, local: localNome },
+    { id: caixaBId, empresa_id: empresaB, local_id: localBId, local: nomeRenomeadoB },
   ]);
   const movA = await query('SELECT id, empresa_id, produto_id, tamanho_id, local_id FROM movimentacoes WHERE empresa_id = $1 AND produto_id = ANY($2::int[]) ORDER BY id', [empresaA, [produtoAId, produtoImportacaoAId]]);
   assert.ok(movA.rows.length >= 5);
@@ -729,22 +748,16 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   assert.ok(movA.rows.some((row: any) => row.tamanho_id === null));
   assert.ok(movA.rows.some((row: any) => Number(row.tamanho_id) === Number(tamanho.id)));
 
-  // Completa a prova de rename em ambos os sentidos: A já foi renomeada e B
-  // permaneceu homônima; agora B renomeia seu próprio local e A deve continuar
-  // com o nome/default já persistidos em PostgreSQL.
+  // Confirma no fim que o rename B feito antes de qualquer uso persistiu após
+  // os fluxos de estoque/inventário, sem alterar o nome/default de A.
   tokenB = await switchCompany(baseUrl, tokenA, empresaB);
-  const localBAntesRename = await http(baseUrl, 'GET', `/locais/${localBId}`, tokenB);
-  statusIs(localBAntesRename, 200, 'B consulta o homônimo antes do próprio rename');
-  assert.equal(String(localBAntesRename.body?.nome), localNome);
-  const nomeRenomeadoB = `${localNome} RENOMEADO B`;
-  const renameB = await http(baseUrl, 'PUT', `/locais/${localBId}`, tokenB, { nome: nomeRenomeadoB, empresa_id: empresaA });
-  statusIs(renameB, 200, 'renomear somente o local B');
-  assert.equal(Number(renameB.body?.empresa_id), empresaB);
-  assert.equal(String(renameB.body?.nome), nomeRenomeadoB);
-  const metaBRenomeado = await http(baseUrl, 'GET', '/meta', tokenB);
-  statusIs(metaBRenomeado, 200, 'default B após rename');
-  assert.equal(Number(metaBRenomeado.body?.defaultLocal?.id), localBId);
-  assert.equal(String(metaBRenomeado.body?.defaultLocal?.nome), nomeRenomeadoB);
+  const localBFinal = await http(baseUrl, 'GET', `/locais/${localBId}`, tokenB);
+  statusIs(localBFinal, 200, 'B consulta seu local após os fluxos');
+  assert.equal(String(localBFinal.body?.nome), nomeRenomeadoB);
+  const metaBFinal = await http(baseUrl, 'GET', '/meta', tokenB);
+  statusIs(metaBFinal, 200, 'default B após os fluxos');
+  assert.equal(Number(metaBFinal.body?.defaultLocal?.id), localBId);
+  assert.equal(String(metaBFinal.body?.defaultLocal?.nome), nomeRenomeadoB);
   const locaisFinais = await query('SELECT id, empresa_id, nome, padrao FROM locais WHERE id = ANY($1::int[]) ORDER BY empresa_id', [[localAId, localBId]]);
   assert.deepEqual(locaisFinais.rows.map((row: any) => ({ id: Number(row.id), empresa_id: Number(row.empresa_id), nome: String(row.nome), padrao: row.padrao })), [
     { id: localAId, empresa_id: empresaA, nome: nomeRenomeadoA, padrao: true },
@@ -764,7 +777,7 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   statusIs(metaAAposRenameB, 200, 'default A após rename de B');
   assert.equal(Number(metaAAposRenameB.body?.defaultLocal?.id), localAId);
   assert.equal(String(metaAAposRenameB.body?.defaultLocal?.nome), nomeRenomeadoA);
-  localEvidence.push(`PostgreSQL final: A local_id=${localAId}, nome=${nomeRenomeadoA}, default=true; B local_id=${localBId}, nome=${nomeRenomeadoB}, default=true. A renomeou primeiro sem mudar B; B renomeou depois sem mudar A; há exatamente um default em cada empresa.`);
+  localEvidence.push(`PostgreSQL final: A local_id=${localAId}, nome=${nomeRenomeadoA}, default=true; B local_id=${localBId}, nome=${nomeRenomeadoB}, default=true. Ambos os renames foram por HTTP em locais ainda sem uso e cada default permaneceu no tenant correto durante os fluxos; há exatamente um default por empresa.`);
 
   gateCompleted = true;
 });
