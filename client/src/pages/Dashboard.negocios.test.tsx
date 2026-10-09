@@ -8,6 +8,7 @@ import { MemoryRouter } from 'react-router-dom';
 import Dashboard from './Dashboard';
 import * as AuthContext from '../auth/AuthContext';
 import { api } from '../lib/api';
+import { dataISO } from '../lib/periodo';
 
 vi.mock('../auth/AuthContext', async () => {
   const actual = await vi.importActual<typeof AuthContext>('../auth/AuthContext');
@@ -197,8 +198,12 @@ describe('Dashboard — motor analítico', () => {
   });
 
   it('alerta as contas a pagar e a receber que vencem hoje (listas do resumo financeiro)', async () => {
-    const hoje = new Date();
-    const iso = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-${String(hoje.getDate()).padStart(2, '0')}`;
+    // A tela compara `vencimento` com o dia civil de America/Sao_Paulo
+    // (dataISO, lib/periodo) — não com o dia local do dispositivo. Montar o
+    // fixture com o dia local faria o teste falhar todos os dias entre 00:00 e
+    // 03:00 UTC (quando São Paulo ainda está no dia anterior). Usa a MESMA
+    // função da tela para o fixture nunca descolar do que ela calcula.
+    const iso = dataISO(new Date());
     montarApi({
       '/financeiro/resumo': async () =>
         ({
