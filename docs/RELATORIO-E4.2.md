@@ -7,76 +7,88 @@
 
 ## Veredito
 
-**NÃO APROVADO.** O CI executou a matriz contra PostgreSQL real em duas tentativas; ambas terminaram com **90 pass, 1 fail, 0 skipped (91 testes)**. A comparação de SKU do primeiro harness foi corrigida e passou na segunda tentativa. A falha mais recente é outra expectativa incorreta do harness: ele esperava HTTP 200 ao renomear, como gerente, um local B já usado por saldo/movimentação/inventário; a aplicação retornou 403, conforme a regra de produção que reserva rename de local em uso a administrador.
+**E4.2 APROVADO TECNICAMENTE** no CI PostgreSQL real do run [38005819077](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38005819077): `testes-postgres` e `verificar` concluíram com sucesso e a suíte completa não teve falhas. A contagem é **91 pass, 0 fail, 0 skipped**. O footer TAP dessa execução não ficou exposto pela API do Actions; os 91 testes são a mesma suíte (sem mudança de declarações) que totalizou 91 nos dois runs anteriores, e o step final executou com sucesso, com `DATABASE_URL` configurado e sem skips de pré-condição. Essa origem da contagem está explicitada abaixo; não se atribui duração TAP não observada.
 
-A correção atual, ainda aguardando CI, move o rename HTTP de B para antes de qualquer uso desse local, mantendo o ator gerente, o `empresa_id` falsificado, as asserções de tenant/default e a prova de que o rename de A não altera B. Não se alterou código de produção, workflow nem imagem de CI. O veredito permanece **NÃO APROVADO** até o rerun real passar sem falhas/skips indevidos e todos os critérios de aceite serem comprovados.
+As duas falhas anteriores foram preservadas e corrigidas apenas no harness: (1) comparação literal de SKU que ignorava a normalização uppercase da rota; (2) tentativa do perfil gerente de renomear, após uso, um local cujo rename é reservado a administrador. A correção posicionou o rename B permitido antes do uso e preservou a cobertura HTTP de tenant/default. Nos commits que trataram essas falhas, só mudaram harness/documentação; não se alteraram produção, workflow ou imagem de CI. As mudanças de produção originais de E4.2 permanecem restritas a esse escopo.
+
+A aprovação é **somente do gate E4.2**; não aprova release global nem fecha gaps fora de escopo. A regressão P1 de devolução total e `GAP-ESTQ-VENDA-ID` crítico permanecem abertos, e `pdv_caixas.local/local_id` segue P2 separado. O PR #46 permanece aberto, sem merge/fechamento; E4.3 não foi iniciado.
 
 ## Escopo e harness
 
-`server/test/pg/e42-http.test.ts` inicia `server/src/index.ts` como processo filho e percorre HTTP real, autenticação/login, JWT, middleware, rotas Express, serviços e PostgreSQL. Exige `GET /api/health` com `db=postgres`, persiste o usuário e concessões no banco, e troca a empresa ativa pelas rotas da aplicação. Não injeta `req.user`, não chama handlers diretamente e não aceita MemStore como prova. Os cenários de rejeição comparam snapshots PostgreSQL antes/depois, incluindo dados de tenant, registros relacionados e auditoria.
+`server/test/pg/e42-http.test.ts` inicia `server/src/index.ts` como processo filho e percorre HTTP real, autenticação/login, JWT, middleware, rotas Express, serviços e PostgreSQL. Exige `GET /api/health` com `db=postgres`, persiste usuário/concessões no banco e troca a empresa ativa pelas rotas da aplicação. Não injeta `req.user`, não chama handlers diretamente e não aceita MemStore como prova. As rejeições cross-tenant comparam snapshots PostgreSQL antes/depois, incluindo registros relacionados e auditoria.
 
-`server/test/pg/e42-tenant.test.ts` é a cobertura PostgreSQL complementar pelo runner/migration existentes; injeta ator/request e chama handlers/serviços, portanto não substitui a matriz HTTP. Nos dois runs reportados passou, incluindo a reaplicação controlada da migration 0030 e a preservação de `local_id=NULL` em caixa legada.
+`server/test/pg/e42-tenant.test.ts` é cobertura PostgreSQL complementar pelo runner/migration existentes; injeta ator/request e chama handlers/serviços, portanto não substitui a matriz HTTP. Na execução final passou, incluindo a reaplicação controlada da migration 0030 e a preservação de `local_id=NULL` em caixa legada.
 
-Nenhuma migration de produção foi criada neste gate. A migration E4.2 é `0030_e42_locais_estoque_multempresa.sql`, já existente no workspace. A regressão de devolução total, `GAP-ESTQ-VENDA-ID` e o ciclo de vida P2 de `pdv_caixas.local/local_id` continuam separados, sem correção neste PR.
+Nenhuma migration de produção foi criada neste gate. A migration E4.2 é `0030_e42_locais_estoque_multempresa.sql`, já existente no workspace. Devolução total, `GAP-ESTQ-VENDA-ID` e ciclo de vida P2 de `pdv_caixas.local/local_id` continuam separados, sem correção neste PR.
 
 ## EXECUÇÃO DEFINITIVA — POSTGRESQL REAL
 
-### Runs observados
+### Histórico dos runs
 
-| Run | Commit | Serviço PostgreSQL | Resultado TAP do job PostgreSQL | Duração TAP / job | Conclusão |
+| Run | Commit | PostgreSQL | Resultado do job `testes-postgres` | Duração observada | Resultado |
 |---|---|---|---|---|---|
-| [38003682898](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38003682898) | `188961fac8c553bffe94ed725618aa5057f33242` | `postgres:16`, banco efêmero do job `brobond_teste` | **91 testes; 90 pass; 1 fail; 0 skipped; 0 cancelled; 0 todo** | `463965.612748 ms` / ~8m08s | Falhou na comparação sensível a maiúsculas do SKU A em `/marketplace/loja/produtos`. |
-| [38004716773](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38004716773) | `cd819d8120f1ffeeebcb44ceb38af95664d6feb5` | `postgres:16`, banco efêmero do job `brobond_teste` | **91 testes; 90 pass; 1 fail; 0 skipped; 0 cancelled; 0 todo** | `471523.460259 ms` / ~8m22s | A comparação de SKU passou; falhou depois ao esperar 200 para rename de local B em uso. |
+| [38003682898](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38003682898) | `188961fac8c553bffe94ed725618aa5057f33242` | Serviço `postgres:16`; banco efêmero do job `brobond_teste` | **91 testes; 90 pass; 1 fail; 0 skipped; 0 cancelled; 0 todo** | TAP `463965.612748 ms`; job ~8m08s | Falhou na comparação literal de SKU A no diagnóstico Woo. |
+| [38004716773](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38004716773) | `cd819d8120f1ffeeebcb44ceb38af95664d6feb5` | Serviço `postgres:16`; banco efêmero do job `brobond_teste` | **91 testes; 90 pass; 1 fail; 0 skipped; 0 cancelled; 0 todo** | TAP `471523.460259 ms`; job ~8m22s | SKU normalizado passou; falhou expectativa de HTTP 200 no rename de local B em uso. |
+| [38005819077](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38005819077) | `19ea1b4c939470557b8d3278567ff5cf184a0e8c` | Serviço `postgres:16`; banco efêmero do job `brobond_teste` | **91 pass; 0 fail; 0 skipped; 0 cancelled; 0 todo** | Job `testes-postgres` 8m37s; step PG ~7m53s | **Sucesso**; `verificar`, suíte PG e etapas Prisma dual-track concluíram. |
 
-O job `verificar` passou nos dois runs. O job PostgreSQL inicializou os containers e executou a suíte real; portanto, as falhas acima **não** são de infraestrutura nem casos não executados. O valor exato minor de `server_version` foi consultado pelo harness, mas não está disponível nas anotações/API retornadas ao agente; registra-se somente a tag principal `postgres:16`, sem inventar versão minor. Nenhuma string de conexão ou credencial é registrada aqui.
+**Proveniência da contagem final:** a API/log acessível do Actions confirmou sucesso do step no run 38005819077, mas não retornou o footer TAP nem o valor minor de `server_version`. O total de 91 vem dos footers observados nos dois runs anteriores; entre o segundo e o final não foram adicionados/removidos testes, somente assertions/dados no mesmo teste. O comando final encerrou com exit 0; o job fornece `DATABASE_URL`, e os testes PG condicionais usam essa variável para desabilitar o skip. Assim, 91 pass/0 fail/0 skipped é uma contagem derivada do mesmo conjunto de testes e do sucesso final, não um footer recuperado. A imagem declara PostgreSQL major 16; o minor exato não é inventado. Nenhuma string de conexão ou credencial é registrada.
 
-Em ambos os runs, o harness executou `migrate()`, confirmou health check HTTP com `db=postgres`, a migration `0030`, tabelas, FKs e índices E4.2. O teste complementar de upgrade também passou: removeu `local_id` para simular estado legado, inseriu uma caixa sem vínculo, removeu o registro da migration 0030, executou novamente `migrate()` e verificou que a migration foi registrada e que o `local_id` legado permaneceu `NULL`, sem backfill por nome. **Limite:** o runner aplica `db/schema.sql` antes das migrations versionadas; isso não prova a migration 0030 isolada sobre uma instalação pré-0030 intacta nem substitui upgrade de cópia de produção.
+### Bootstrap e upgrade observados
 
-### Falhas, causa e ajuste restrito ao harness
+O workflow iniciou serviço PostgreSQL descartável e a suíte real executou `migrate()`, health check HTTP `db=postgres`, verificação da migration `0030`, tabelas, FKs e índices E4.2. O teste complementar simulou upgrade no banco PostgreSQL real: removeu `local_id`, inseriu uma caixa legada sem vínculo, removeu o registro da migration 0030, executou novamente o `migrate()` de produção e confirmou que a migration foi registrada e o `local_id` legado continuou `NULL`, sem backfill por nome.
 
-**Run 38003682898 — comparação de SKU.** O teste `E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços + PostgreSQL` recebeu HTTP 200 em `GET /marketplace/loja/produtos`, mas falhou na asserção literal de que a resposta continha `String(produtoA.sku)`. O corpo exato não foi preservado na anotação consultável; não se conclui que o produto estivesse ausente nem que houvesse vazamento. O código de `server/src/loja.ts` serializa `sku` após `.trim().toUpperCase()`, enquanto o SKU da fixture pode conter caracteres minúsculos no sufixo UUID. O harness foi alinhado comparando `produtoA.sku.toUpperCase()` e continuando a exigir que `produtoB.sku.toUpperCase()` não apareça.
+**Limite do upgrade:** o runner aplica `db/schema.sql` antes das migrations versionadas; a execução não prova a migration 0030 isolada sobre uma instalação pré-0030 intacta nem substitui upgrade de cópia de produção. O resultado observado é o cenário real do runner existente no banco efêmero do job.
 
-**Run 38004716773 — rename B.** Após a normalização de SKU, todas as asserções HTTP anteriores, inclusive a leitura local Woo A/B e os bloqueios de integração, passaram. A falha seguinte ocorreu em `server/test/pg/e42-http.test.ts:741`: o harness esperou HTTP 200 no rename do local B, mas observou **403**. A resposta explicava que o local tinha 1 saldo, 1 movimentação e 1 inventário e que renomeá-lo era decisão de administrador. O ator autenticado desse cenário é gerente. `server/src/services.ts` confirma a regra: `validarRenomeLocal` rejeita com 403 (`uso.emUso && actor.perfil !== 'admin'`). Isso é comportamento esperado da aplicação, não defeito de escopo/tenant.
+### Falhas anteriores e correções do harness
 
-O ajuste atual move o rename de B para logo após a criação/validação dos locais homônimos e antes de criar saldo, movimento ou inventário em B. Assim, o gerente exercita o rename permitido de um local ainda sem uso. As verificações continuam exigindo que A permaneça inalterada, que `empresa_id` venha do ator, que o default de B mantenha seu ID e que o nome/default de cada tenant persistam durante os fluxos posteriores. **A versão com esse ajuste ainda não foi executada no CI PostgreSQL.**
+**Run 38003682898 — SKU.** `GET /marketplace/loja/produtos` respondeu HTTP 200, mas a comparação literal `String(produtoA.sku)` falhou. O corpo não foi preservado na anotação acessível, então a primeira falha não prova ausência do produto nem vazamento. `server/src/loja.ts` serializa o SKU com `.trim().toUpperCase()`; a fixture pode conter letras minúsculas no sufixo UUID. O harness passou a comparar a forma uppercase e a continuar exigindo inclusão de A e exclusão de B. No run 38004716773 essas verificações passaram.
 
-Os dois runs executaram todos os testes sem skips; o teste de upgrade/complementar terminou `ok`. No segundo run, a falha ocorreu no fim do teste HTTP, depois das verificações de SKU Woo, dos endpoints/ações Woo, conectores, snapshots zero-write e estado final de caixas/movimentos; os asserts finais posteriores à tentativa de rename B não foram alcançados. Cada tentativa permanece no histórico deste relatório, sem apagar falhas anteriores.
+**Run 38004716773 — rename B.** O teste tentou renomear B depois de criar saldo, movimento e inventário, usando o perfil gerente. O endpoint respondeu HTTP 403 (esperado 200 pelo harness) e informou que o local estava em uso por 1 saldo, 1 movimentação e 1 inventário. `server/src/services.ts::validarRenomeLocal` confirma a regra de produção: renomear local em uso exige administrador. Não era bug de escopo. O harness foi reposicionado para renomear B por HTTP logo após criar/validar os locais homônimos, antes de qualquer uso, mantendo gerente, spoof de `empresa_id`, verificação do default e assertiva de que A não muda. O run final passou.
 
-## EVIDÊNCIA DE ACEITE HTTP + POSTGRESQL
+## MATRIZ DOS 20 ITENS DE EVIDÊNCIA DO GATE
 
-A tabela descreve o último run efetivamente observado (`38004716773`). **“Passou até a falha” não aprova a matriz completa.**
+Todos os itens abaixo foram percorridos pela suíte final com exit 0. A contagem de testes segue a proveniência acima; o resumo por cenário também aparece no `GITHUB_STEP_SUMMARY` do job.
 
-| Cenário | Rotas / mecanismo | Evidência observada no run 38004716773 |
-|---|---|---|
-| Bootstrap e integridade E4.2 | `migrate()`, `/api/health`, `schema_migrations`, tabelas, FKs e índices | Passou: health confirmou `db=postgres`; migration 0030 registrada; asserções estruturais passaram. PostgreSQL real via serviço `postgres:16`. |
-| Upgrade legado | Runner `migrate()` existente; caixa antiga com `local_id=NULL` | Passou no teste PG complementar: 0030 reaplicada/registrada e `local_id` ficou NULL. Limite de `schema.sql` antes das migrations descrito acima. |
-| Login, middleware e seletor A→B→A | `/api/auth/login`, `/api/empresas/ativa`, `/api/locais` | Passou: rota protegida sem sessão, login persistido e tokens/empresa ativa foram exercitados. |
-| Spoof de empresa, locais e defaults | POST/PUT produtos e locais; `/api/meta` | Passou até a falha: `empresa_id` veio do ator; locais homônimos/defaults e rename de A foram exercitados; rename de A preservou B. O rename B posterior de local já em uso foi rejeitado corretamente com 403 pelo perfil gerente, mas o harness esperava 200. |
-| Estoque e inventário | `/api/movimentacoes`, `/api/inventarios`, itens/fechamento | Passou até a falha: células com e sem tamanho, saldos, importação em A, fechamento do inventário A e estado B foram verificados em PostgreSQL. |
-| Referências cross-tenant e zero-write | Produtos, locais, inventários, PDV, movimentos e importação | Passou: rejeições anteriores e posteriores entre A/B foram exercitadas; **19 snapshots PostgreSQL antes==depois** incluíram registros/auditoria. |
-| Relatórios e exportações | Relatórios JSON, `/estoques/export?format=csv|xlsx`, grade | Passou em A e B: verificações de escopo/conteúdo JSON/CSV/XLSX executadas. |
-| WooCommerce e conectores | `/marketplace/loja/{status,produtos,pedidos,estoque}`, `/connectors` | Passou no run 38004716773: A teve status `200/configurado=false`; diagnóstico HTTP 200 incluiu SKU A e excluiu SKU B; mutações A responderam 409 sem credenciais; B recebeu 404 para status/leitura/mutações vinculadas a A; `/connectors` A respondeu 200. Sem chamada/credencial externa. |
+| # | Evidência | Resultado final |
+|---:|---|---|
+| 1 | Banco PostgreSQL efêmero do job iniciado e usado pelo runner real | Passou |
+| 2 | Health HTTP confirma `db=postgres`; não aceita memória | Passou |
+| 3 | Migration 0030 registrada e estrutura de tabelas, FKs e índices E4.2 conferida | Passou |
+| 4 | Upgrade pelo runner existente preserva `pdv_caixas.local_id=NULL` legado | Passou, com limite de bootstrap descrito acima |
+| 5 | Rota protegida sem token retorna 401 | Passou |
+| 6 | Login real de usuário persistido no PostgreSQL emite sessão/JWT | Passou |
+| 7 | Seletor A→B→A e empresa ativa confirmados por HTTP | Passou |
+| 8 | `empresa_id` falsificado em criação/alteração de produto/local não transfere ownership | Passou |
+| 9 | Locais homônimos podem existir em A/B com defaults independentes | Passou |
+| 10 | Rename HTTP de B permitido antes do uso não altera local/default A | Passou |
+| 11 | Rename HTTP de A preserva nome, default e dados de B | Passou |
+| 12 | Caixa PDV A/B persiste ownership e `local_id` do tenant correto | Passou; ciclo de vida P2 segue fora do gate |
+| 13 | `tamanho_id IS NULL` e tamanho preenchido permanecem células distintas com saldos conferidos | Passou |
+| 14 | Inventários A/B, contagem/fechamento e saldos finais conferidos no PostgreSQL | Passou |
+| 15 | Preview/confirmação válida de importação grava estoque/movimento em A | Passou |
+| 16 | Importações e referências estrangeiras são rejeitadas sem escrita parcial | Passou |
+| 17 | IDs estrangeiros em produto/local/inventário/caixa e mutações cruzadas são rejeitados | Passou |
+| 18 | 19 snapshots PostgreSQL antes/depois, inclusive auditoria, permanecem idênticos nas rejeições | Passou |
+| 19 | Filtros forjados não ampliam grade/relatórios; JSON, CSV e XLSX ficam isolados por tenant | Passou |
+| 20 | Woo A inclui SKU A e exclui B; sem credencial POST A=409; B não acessa Woo de A (404); `/connectors` autenticado=200 | Passou; nenhuma chamada externa/credencial usada |
 
-### Estado dos gates
+## Gates CI e locais
 
 | Gate | Resultado observado |
 |---|---|
-| CI `verificar` nos runs 38003682898 e 38004716773 | Sucesso: typecheck API/front, testes de regras, validação do schema Prisma, lint e build do front concluíram. Anotações existentes de lint não falharam o job. |
-| CI `testes-postgres` nos runs 38003682898 e 38004716773 | PostgreSQL real iniciou e executou a suíte: 90/91 passaram, 1 falhou, 0 skipped em cada run. Etapas Prisma seguintes (instalação/baseline/deploy) foram skipped após o step de testes falhar. |
-| Typecheck strict isolado do harness atual | Exit 0 para `e42-http.test.ts` e `e42-tenant.test.ts`. Compilação apenas; não substitui rerun PostgreSQL. |
-| `git diff --check` no harness atual | Exit 0. |
-| Testes locais sem `DATABASE_URL` (histórico desta sessão) | `npm test`: servidor 638 pass/0 fail/63 skipped; cliente 226/226. `npm run test:pg`: 0 pass, 2 falhas de pré-condição, 63 skipped; não foi prova PostgreSQL. |
-| Outros gates locais (histórico desta sessão) | Typecheck geral exit 0; lint 0 erros/401 avisos; build 2.102 módulos; smoke 126/126 em MemStore; `audit:menu` exit 0; `npm audit` exit 1 com 22 vulnerabilidades. Esses resultados não substituem E4.2. |
+| CI run 38005819077 — `verificar` | Sucesso: typecheck API/front, testes de regras, validação schema Prisma, lint e build do front. Avisos preexistentes não falharam o job. |
+| CI run 38005819077 — `testes-postgres` | Sucesso contra PostgreSQL real; 91 pass/0 fail/0 skipped conforme contagem derivada e explicada; etapas posteriores Prisma install/baseline/deploy passaram. |
+| Typecheck strict isolado do harness | Exit 0 para `e42-http.test.ts` e `e42-tenant.test.ts`. |
+| `git diff --check` | Exit 0. |
+| Gates locais anteriores sem `DATABASE_URL` | `npm test`: servidor 638 pass/0 fail/63 skipped; cliente 226/226. `npm run test:pg`: 0 pass, 2 falhas de pré-condição, 63 skipped; não foi prova PG e não substitui os runs remotos. |
+| Outros gates locais anteriores | Typecheck geral exit 0; lint 0 erros/401 avisos; build 2.102 módulos; smoke 126/126 em MemStore; `audit:menu` exit 0; `npm audit` exit 1 com 22 vulnerabilidades. Escopo separado. |
 
-## LIMITAÇÕES E ESCOPO
+## Limitações, gaps e decisão de release
 
-- A correção atual do caso de rename B ainda não foi validada no CI. O veredito não pode antecipar seu resultado.
-- A resposta/corpo do primeiro run e o minor de `server_version` não foram recuperados pelas anotações/API consultadas. Nenhum resultado foi inventado.
-- Não houve credenciais WooCommerce nem homologação externa; a matriz cobre status/leitura local e decisões sem conexão externa.
-- Os testes locais sem `DATABASE_URL` permanecem registrados como ausência de pré-condição, nunca como pass. Em contrapartida, os dois runs citados executaram PostgreSQL real e falharam em asserções do teste.
-- A regressão P1 de devolução total permanece aberta e fora deste gate; `GAP-ESTQ-VENDA-ID` continua crítico e separado; `pdv_caixas.local/local_id` continua P2 separado. Nenhum deles foi corrigido ou reclassificado por esta execução.
-- `npm audit` reportou 22 vulnerabilidades no gate local; não foram feitas atualizações amplas de dependências neste PR.
+- O footer TAP e o minor exato de `server_version` do run final não ficaram acessíveis pela API/log consultado. O resultado final não inventa esses campos: major PostgreSQL 16 e contagem 91 derivada são explicitados acima.
+- Nenhuma credencial WooCommerce ou homologação externa foi usada; foram provados somente caminhos locais/sem credencial.
+- E4.2 aprovação técnica não fecha a decisão global de release: permanece P1 a regressão de devolução total (saldo 5 → venda 2 → 3 → devolução 2 → 7, esperado 5), fora deste gate; `GAP-ESTQ-VENDA-ID` permanece crítico e separado; `pdv_caixas.local/local_id` permanece P2 separado. Nenhum foi corrigido/reclassificado.
+- `npm audit` local registrou 22 vulnerabilidades; não houve atualização ampla de dependências neste PR.
+- PR #46 continua aberto; não houve merge/fechamento. E4.3 não foi iniciado.
 
-## Decisão
-
-Manter `GAP-ESTQ-MULTIEMPRESA` e o gate E4.2 **abertos**. Registrar as duas falhas observadas, aguardar CI PostgreSQL real para a nova posição do rename B e exigir que a matriz completa passe sem falhas/skips indevidos e com todos os critérios comprovados. **Não fazer merge/fechar o PR #46 e não iniciar E4.3.**
+**Decisão:** aceitar tecnicamente o gate **E4.2** com base no CI PostgreSQL real e nos 20 itens acima; manter os gaps P1/crítico/P2 e a decisão de release global separados. A conclusão não autoriza merge nem início de E4.3.

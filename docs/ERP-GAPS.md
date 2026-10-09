@@ -17,7 +17,7 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > corrigidos **8** bugs de produção — o mais grave, `receberParcial` devolvendo
 > **500** no PostgreSQL real para qualquer compra com `fin_vencimento`.
 >
-> **Gate E4.2 (2026-10-09):** os runs [38003682898](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38003682898) e [38004716773](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38004716773) executaram PostgreSQL real e terminaram, cada um, em **90 pass, 1 fail, 0 skipped**. A comparação de SKU do primeiro harness foi corrigida e passou; o segundo falhou porque o teste esperava HTTP 200 ao renomear, como gerente, um local B já em uso, comportamento que a aplicação corretamente rejeita com HTTP 403. O harness agora move o rename para antes do uso; a nova execução ainda está pendente. E4.2 segue **NÃO APROVADO** e `GAP-ESTQ-MULTIEMPRESA` permanece aberto. E4.3–E4.6 e os gaps P1/P2 separados continuam fora deste gate. Estado, limitações e resultados exatos: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
+> **Gate E4.2 (2026-10-09):** a execução final do CI contra PostgreSQL real, [run 38005819077](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38005819077), passou nos jobs `testes-postgres` e `verificar`; a suíte tem **91 pass, 0 fail, 0 skipped** (a contagem final é derivada, pois o footer TAP não ficou exposto pela API; proveniência em [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md)). As falhas anteriores dos runs 38003682898 e 38004716773 foram preservadas e corrigidas apenas no harness. E4.2 está **APROVADO TECNICAMENTE**; PR #46 permanece aberto, sem merge, e o acompanhamento do gap não autoriza avanço a E4.3 nem altera os gaps P1/P2 separados. Estado, limites e evidência: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
 
 Este é o **registro oficial do que falta**. Regra de manutenção:
 
@@ -235,14 +235,14 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
 
 ## E4 — ESTOQUE AVANÇADO
 
-### `GAP-ESTQ-MULTIEMPRESA` — ownership nos fluxos especializados de estoque · **ACEITE PENDENTE**
+### `GAP-ESTQ-MULTIEMPRESA` — ownership nos fluxos especializados de estoque · **GATE E4.2 APROVADO TECNICAMENTE; PR ABERTO**
 - **Tipo:** backend + banco + gate HTTP/PostgreSQL.
 - **Escopo de implementação revisado:** grade/detalhe/tamanhos; inventário; movimentações; importação; relatórios/exportações; WooCommerce; ownership de caixas PDV.
-- **Implementação no workspace:** handlers usam escopo de empresa, a migration existente `0030_e42_locais_estoque_multempresa.sql` e o espelho em `db/schema.sql` estabelecem as constraints e índices do gate. A implementação por si só não fecha este gap.
-- **Limite da evidência anterior:** `server/test/pg/e42-tenant.test.ts` chama handlers/services diretamente e injeta `req.user`; não comprova autenticação/middleware/rota Express. O smoke HTTP executa em modo demonstração e não comprova PostgreSQL. Os resultados históricos anotados abaixo foram substituídos pelo estado do gate desta sessão em [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
-- **Harness acrescentado:** `server/test/pg/e42-http.test.ts` percorre login, troca de empresa e rotas reais do app, com health check fail-fast exigindo `db=postgres`; compara estado PG antes/depois das rejeições. **Não executado nesta sessão**: sem resultado observado não há aprovação.
-- **Critério para fechar:** executar o harness e a suíte `npm run test:pg` contra PostgreSQL real, validar bootstrap vazio e upgrade pelo runner existente, conferir zero-write e publicar resultados HTTP/PG observados. Falta, portanto, evidência de execução/infraestrutura — não uma migration documental nova.
-- **Limites preservados:** E4.3–E4.6, transferência formal, reservas, custo/CMV, devolução e mínimo/máximo avançado seguem fora deste gate.
+- **Implementação no workspace:** handlers usam escopo de empresa; a migration existente `0030_e42_locais_estoque_multempresa.sql` e o espelho em `db/schema.sql` estabelecem constraints/índices. A aprovação foi baseada na evidência executada, não na implementação isolada.
+- **Evidência final:** o run [38005819077](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38005819077) executou o harness HTTP autenticado e a suíte PostgreSQL real; jobs `testes-postgres` e `verificar` passaram. A contagem da suíte foi 91 pass/0 fail/0 skipped, derivada da invariância do total observado nos dois runs anteriores e do exit 0 do step final; detalhes/proveniência e falhas anteriores estão em [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
+- **Limite do upgrade:** o runner `migrate()` aplica `db/schema.sql` antes das migrations versionadas; a prova executada preserva `pdv_caixas.local_id=NULL` no upgrade simulado, mas não prova a migration 0030 isolada sobre uma cópia intacta de schema pré-0030. O PostgreSQL minor exato não ficou disponível na API do Actions; a imagem/versão major observada é `postgres:16`.
+- **Estado do PR:** #46 continua aberto, sem merge/fechamento por decisão de escopo. Este status técnico não autoriza iniciar E4.3.
+- **Limites preservados:** E4.3–E4.6, transferência formal, reservas, custo/CMV, devolução e mínimo/máximo avançado seguem fora deste gate. Os gaps P1/crítico/P2 separados permanecem abertos.
 
 ### `GAP-ESTQ-DEVOLUCAO-TOTAL` — saldo após devolução total · **P1 / BLOQUEADOR GLOBAL DE RELEASE**
 - **Origem:** gap preexistente documentado na E4.1; não faz parte do aceite E4.2 e não foi alterado neste gate.
@@ -252,7 +252,7 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
 
 ### `GAP-ESTQ-PDV-LOCAL-TEXTO` — ciclo de vida de `pdv_caixas.local` / `local_id` · **P2**
 - **Estado:** fora do gate funcional E4.2. O campo legado `pdv_caixas.local` continua ao lado de `local_id`; a migration não faz backfill por nome e caixas antigas permanecem com `local_id IS NULL` até decisão administrativa explícita.
-- **Segurança multiempresa:** a abertura/leitura usa `empresa_id` e, para vínculos canônicos, o par `(empresa_id, local_id)`. O novo harness contém verificações HTTP de ownership com caixas A/B, mas permanece **não executado** sem PostgreSQL nesta sessão; isso não fecha o gap de ciclo de vida.
+- **Segurança multiempresa:** a abertura/leitura usa `empresa_id` e, para vínculos canônicos, o par `(empresa_id, local_id)`. O harness HTTP executado no run 38005819077 verificou ownership A/B de caixas e `local_id` no PostgreSQL; isso não fecha o gap separado de ciclo de vida/rename de caixa legado.
 - **Aceite futuro:** definir e testar o comportamento de rename/legado de caixa sem inferir local por texto, sem alterar dados de outra empresa. Não implementar neste PR.
 
 ### `GAP-ESTQ-VENDA-ID` — vínculo formal venda → estoque · **CRÍTICO**
