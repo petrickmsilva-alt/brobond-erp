@@ -8,8 +8,8 @@
 // ============================================================================
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { appendFile } from 'node:fs/promises';
 import ExcelJS from 'exceljs';
-import { readFile } from 'node:fs/promises';
 
 if (!process.env.DATABASE_URL) {
   throw new Error('pg-e42-tenant.test.ts exige DATABASE_URL e PostgreSQL real; não é permitido pular esta matriz.');
@@ -78,20 +78,43 @@ test('E4.2: referências cruzadas A → B → A não leem, escrevem, ajustam sal
   const { migrate, query, pool } = await import('../../src/db');
   await migrate();
   assert.ok(pool, 'o teste deve estar conectado a um PostgreSQL real');
+  const databaseInfo = await query('SELECT current_database() AS database_name, current_setting(\'server_version\') AS server_version');
+  const migrationsBeforeUpgrade = await query('SELECT id FROM schema_migrations ORDER BY id');
+  const migrationsBeforeIds = migrationsBeforeUpgrade.rows.map((row: any) => String(row.id));
 
   // Simula upgrade a partir de uma instalação anterior à coluna de vínculo do
   // PDV: o preflight precisa rodar sem referenciar a coluna ainda inexistente,
   // recriá-la e preservar NULL em registros antigos (sem backfill por nome).
-  const migration0030 = await readFile(new URL('../../../db/migrations/0030_e42_locais_estoque_multempresa.sql', import.meta.url), 'utf8');
+  const migration0030 = '0030_e42_locais_estoque_multempresa.sql';
   const caixaLegada = `E42-LEGACY-${Date.now()}-${process.pid}`;
   await query('ALTER TABLE pdv_caixas DROP COLUMN local_id CASCADE');
   await query(
     `INSERT INTO pdv_caixas (empresa_id, numero, local, valor_abertura, status) VALUES (1, $1, 'local legado sem vínculo', 0, 'aberto')`,
     [caixaLegada]
   );
-  await query(migration0030);
+  // Force the production migration runner to process 0030 again. migrate()
+  // first applies the idempotent schema bootstrap, then executes the versioned
+  // SQL inside its normal transaction and restores the ledger entry.
+  await query('DELETE FROM schema_migrations WHERE id = $1', [migration0030]);
+  await migrate();
   const caixaAtualizada = await query('SELECT local_id FROM pdv_caixas WHERE numero = $1', [caixaLegada]);
   assert.equal(caixaAtualizada.rows[0]?.local_id, null, 'a migration não pode inferir vínculo para uma caixa histórica');
+  const migrationAplicada = await query('SELECT id FROM schema_migrations WHERE id = $1', [migration0030]);
+  assert.equal(migrationAplicada.rowCount, 1, 'o runner existente deve registrar a migration 0030');
+  const migrationsAfterUpgrade = await query('SELECT id FROM schema_migrations ORDER BY id');
+  const migrationsAfterIds = migrationsAfterUpgrade.rows.map((row: any) => String(row.id));
+  const upgradeEvidence = [
+    '## E4.2 — evidência do upgrade pelo runner existente',
+    `- Resultado: migration 0030 reaplicada e registrada; caixa legado id textual=${caixaLegada} manteve local_id=NULL.`,
+    `- PostgreSQL: ${databaseInfo.rows[0]?.server_version}; banco descartável do job=${databaseInfo.rows[0]?.database_name}.`,
+    `- Antes: ${migrationsBeforeIds.length} migrations registradas [${migrationsBeforeIds.join(', ')}].`,
+    `- Ação existente: DROP COLUMN local_id CASCADE, inserção de caixa legada, remoção do registro 0030 e chamada do migrate() de produção.`,
+    `- Depois: ${migrationsAfterIds.length} migrations registradas [${migrationsAfterIds.join(', ')}]; 0030=${migrationAplicada.rows[0]?.id}; local_id=${caixaAtualizada.rows[0]?.local_id ?? 'NULL'}.`,
+    '- Limite: migrate() aplica db/schema.sql antes das migrations versionadas; portanto isto não prova 0030 isolada sobre schema pré-0030. O runner não expõe os NOTICE do PostgreSQL como resultado estruturado; nenhum erro de migração foi lançado.',
+  ].join('\n');
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    await appendFile(process.env.GITHUB_STEP_SUMMARY, `\n${upgradeEvidence}\n`, 'utf8');
+  }
   await query('DELETE FROM pdv_caixas WHERE numero = $1', [caixaLegada]);
 
   const { RESOURCES } = await import('../../src/resources');

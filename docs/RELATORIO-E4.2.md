@@ -1,80 +1,68 @@
-# Relatório E4.2 — Isolamento multiempresa dos fluxos de estoque
+# Relatório E4.2 — Gate de aceite e evidência de release
 
 **Repositório:** `petrickmsilva-alt/brobond-erp`
 **Branch:** `arena/4cb6e53b-brobond-erp`
-**Data:** 2026-10-09
-**Escopo:** E4.2; não abrange E4.3–E4.6.
+**Data da execução:** 2026-10-09
+**Escopo:** somente o gate de aceite E4.2; sem ampliar para E4.3–E4.6.
 
-## Resultado
+## Veredito
 
-Os fluxos especializados de estoque revisados usam o escopo canônico do ator e referências tenant-scoped. Um ID de outra empresa responde 404 sem confirmar o tenant-alvo. Referências compostas incompatíveis também são recusadas no PostgreSQL. Os testes exercitam tentativas A → B → A, verificando leituras, escritas, saldos, contagens e arquivos/exportações.
+**E4.2 não aprovado nesta sessão: falta a evidência obrigatória atravessando HTTP, autenticação real, middleware, rotas Express, handlers/serviços e PostgreSQL real.** O harness foi adicionado e compilado, mas não foi executado porque não há `DATABASE_URL` nem PostgreSQL disponível neste ambiente. Nenhum status HTTP ou estado PostgreSQL do harness E4.2 pode ser declarado observado.
 
-A integração WooCommerce só opera quando `WOOCOMMERCE_EMPRESA_ID` vincula explicitamente a integração a um tenant. Sem vínculo, os endpoints bloqueiam a operação com 409; para outro tenant, respondem 404.
+O smoke em modo demonstração, os testes unitários e o typecheck não substituem essa prova. A migration `0030_e42_locais_estoque_multempresa.sql` e o espelho em `db/schema.sql` foram revisados estaticamente; não foi observada aplicação em banco vazio ou upgrade real nesta sessão.
 
-## Implementação
+## Escopo e harness
 
-### Rotas e referências
+`server/test/pg/e42-http.test.ts` inicia o `server/src/index.ts` real como processo filho, exige `GET /api/health` com `db=postgres`, autentica por login real com usuário persistido no PostgreSQL e usa os tokens/JWT emitidos pela aplicação para trocar a empresa ativa. Não injeta `req.user`, não chama handlers/services diretamente e não aceita MemStore como prova. Os snapshots de zero-write incluem linhas dos tenants A/B e registros correlacionados por IDs/marcadores de teste, inclusive escrita/auditoria; a comparação é feita diretamente no PostgreSQL.
 
-Handlers especializados usam `escopoDe(currentUser(req))`; leituras e alterações por ID aplicam o filtro de empresa antes de usar os registros. As validações de referências relacionadas cobrem o recurso raiz e os alvos tenant-scoped (produto, local, compra, recebimento, item, OP, insumo e outros conforme o fluxo). Referências compartilhadas, como tamanhos, permanecem globais por definição do domínio.
+`server/test/pg/e42-tenant.test.ts` permanece como cobertura PG complementar de serviços/handlers e de migration pelo runner `migrate()`. Por injetar ator/request, seus resultados, quando executados, não substituem a matriz HTTP. Neste ambiente ela também não foi executada.
 
-A cobertura inclui:
+Nenhuma migration adicional foi criada neste gate. A migration E4.2 em revisão é a `0030` já existente no workspace. A regressão de devolução total, `GAP-ESTQ-VENDA-ID` e o ciclo de vida P2 de `pdv_caixas.local/local_id` permanecem separados e sem correção neste PR.
 
-- grade de estoque, detalhe de produto e consulta de tamanhos;
-- snapshot, detalhe, itens, contagem e fechamento de inventário;
-- criação e estorno de movimentações; movimentações manuais de insumos;
-- preview, confirmação e modelo de importação de estoque;
-- relatórios de posição e movimentações, além de exportações JSON/CSV/XLSX;
-- endpoints WooCommerce de status, diagnóstico, importação de pedidos e sincronização de estoque;
-- leituras especializadas do PDV tocadas pela alteração de escopo.
+## EVIDÊNCIA DE ACEITE HTTP + POSTGRESQL
 
-A página de detalhe do produto também valida as referências das linhas relacionadas que devolve (estoques, movimentações, OPs e ficha técnica), em vez de validar apenas o produto-raiz.
+A tabela descreve a evidência que o harness pretende produzir. **“Não observado” significa que o cenário não foi executado; não é pass, falha funcional nem evidência documental de aceite.**
 
-### Locais e integridade no banco
+| Cenário | Rota(s) / mecanismo | A/B | HTTP esperado | HTTP observado | PostgreSQL esperado | PostgreSQL observado |
+|---|---|---|---|---|---|---|
+| Bootstrap vazio e upgrade | `migrate()` existente; `GET /api/health` | N/A | Health `200`, `db=postgres` | Não observado; harness não iniciou | Schema/migration `0030` registrados; upgrade preserva `pdv_caixas.local_id IS NULL` legado, sem backfill heurístico | Não observado; nenhum banco disponível |
+| Autenticação e seletor | `POST /api/auth/login`, `GET/POST /api/empresas/ativa`, `GET /api/locais` | A → B → A | Login e seletor `200`; rota protegida sem token `401`; token novo representa a empresa ativa | Não observado; harness não executado | Usuário e concessões persistidos para A/B; ownership permanece na empresa de origem | Não observado |
+| Falsificação/alteração de empresa | `POST /api/locais`, `POST /api/produtos`, `PUT /api/produtos/:id`, `PUT /api/locais/:id` | A envia B e B envia A | Criações `201`, alterações próprias `200`; `empresa_id` retornado vem do ator | Não observado | `empresa_id` real não muda por body; locais/produtos permanecem no tenant correto | Não observado |
+| Locais, homônimos, defaults e rename | `/locais`, `GET /api/meta`, `PUT /api/locais/:id` | A e B; rename em A | Leitura/meta e rename próprios `200`; cada tenant mantém seu local/default | Não observado | Dois nomes iguais permitidos em tenants distintos; padrão e rename de A não alteram B | Não observado |
+| IDs e referências cross-tenant; zero-write | `GET /api/produtos/:id`, `/locais/:id`, `/inventarios/:id`, `/pdv/caixas/:id/resumo`; `POST /api/movimentacoes`, `/api/pdv/caixas`, `/api/importar/confirmar`; fechamento de inventário | A → B e B → A | IDs/referências alheios `404`; snapshots PG antes/depois idênticos após rejeições | Não observado | Nenhum saldo, movimento, inventário, caixa, referência ou auditoria parcial gravado | Não observado |
+| Saldos e inventário | `POST /api/movimentacoes`, `POST /api/inventarios`, `GET/PUT /api/inventarios/:id/itens`, `POST /api/inventarios/:id/fechar` | A e B | Rotas próprias `201/200`; leitura/fechamento estrangeiros `404` | Não observado | `tamanho_id IS NULL` e tamanho preenchido são células distintas; inventário e ajustes ficam no tenant/local correto | Não observado |
+| Importação | `POST /api/importar/preview`, `POST /api/importar/confirmar` | Sucesso em A; referência estrangeira em B | Preview/confirmação válida `200`; importação com produto estrangeiro `404` | Não observado | `empresa_id=A`, produto/tamanho/local/saldo e movimento persistidos em A; rejeição estrangeira sem write parcial | Não observado |
+| Relatórios, exportações e integrações locais | `/api/relatorios/estoque-posicao`, `/api/relatorios/movimentacoes-periodo`, `/api/estoques/export?format=csv|xlsx`, `/api/marketplace/loja/{status,produtos,pedidos,estoque}`, `/api/connectors` | A e B | A vê somente A; B não acessa integração vinculada a A (`404`); sem credenciais, mutações Woo bloqueadas (`409`) antes de chamada externa | Não observado; não foram usadas credenciais reais nem homologação externa | JSON/CSV/XLSX sem dados de B na resposta de A; nenhuma escrita externa ou local indevida | Não observado |
 
-A migration versionada `db/migrations/0030_e42_locais_estoque_multempresa.sql` e o espelho em `db/schema.sql`:
+### Resultado observado do gate PG nesta sessão
 
-- substituem a unicidade global de nome por `UNIQUE (empresa_id, nome)` e garantem no máximo um local padrão por empresa;
-- incluem `pdv_caixas.local_id` e vínculos compostos que exigem que o ID de local pertença à mesma empresa;
-- adicionam FKs compostas para relações de estoque, movimentações, inventário, compras/recebimentos e insumos onde o schema já modela esses vínculos;
-- criam unicidade para as células canônicas de saldo com tamanho e sem tamanho, usando o ID de local;
-- rodam diagnósticos antes das alterações incompatíveis: nomes/padrões/linhas duplicados, dados obrigatórios ausentes, ownership divergente, local estrangeiro e nome textual inconsistente.
+`npm run test:pg` foi executado sem `DATABASE_URL`: **65 testes carregados, 0 pass, 2 fail, 63 skipped, exit code 1**. Os 63 testes PG preexistentes foram skipped pela ausência de `DATABASE_URL`; os dois módulos E4.2 falharam intencionalmente no carregamento com mensagens exigindo PostgreSQL real. **Nenhum cenário E4.2 chegou a executar uma asserção HTTP ou PostgreSQL.** Os skips não foram contabilizados como pass.
 
-O preflight aborta com diagnóstico quando encontra conflitos que impedem a integridade. Registros históricos com `local_id` ausente são preservados e reportados; caixas PDV legadas não recebem vínculo inferido por nome. Não há backfill heurístico, reatribuição automática ou escolha arbitrária de linha.
-
-### Célula sem tamanho
-
-`tamanho_id = NULL` é uma célula própria, única por empresa/produto/local canônico. Os índices parciais distinguem a chave sem tamanho daquela com tamanho. O PostgreSQL usa `ON CONFLICT` sobre a chave canônica para entradas e uma atualização condicional/atômica para saídas. A matriz PG testa entradas concorrentes convergindo para uma linha e duas saídas concorrentes sobre saldo 5, em que exatamente uma retirada de 4 vence e o saldo termina em 1.
-
-### WooCommerce
-
-O tenant permitido é configurado por `WOOCOMMERCE_EMPRESA_ID`. A checagem ocorre antes de qualquer chamada externa; tenant diferente recebe 404. Sem variável de vínculo, a integração fica bloqueada. O teste não configura credenciais remotas e prova somente a decisão local de autorização/bloqueio.
-
-## Evidência PostgreSQL e migração
-
-O teste obrigatório `server/test/pg/e42-tenant.test.ts` falha explicitamente se `DATABASE_URL` estiver ausente; não transforma falta de PostgreSQL em `skip`.
-
-- A matriz A → B → A cobre produtos, locais homônimos, default local independente, saldo sem tamanho, movimento e estorno, grade/detalhe, inventário e contagem/fechamento, insumos, importação, relatórios/exportações e Woo.
-- As tentativas cruzadas verificam 404 e ausência de linhas/saldo/contagem/arquivo estrangeiro; B e A continuam conseguindo ler os próprios registros depois das tentativas.
-- FKs compostas são testadas diretamente contra PostgreSQL, com rejeição das combinações empresa A → local/produto B.
-- Em banco PostgreSQL vazio, o bootstrap aplicou `db/schema.sql` e as migrações `0001` a `0030`; a matriz passou **1/1**. O teste então removeu `pdv_caixas.local_id`, inseriu uma caixa legada, reexecutou a migration 0030 e confirmou `local_id IS NULL` — não houve backfill por nome.
-- O mesmo caso E4.2 passou **1/1** no banco de integração usado pela suíte.
-
-## Gates executados em 2026-10-09
+## Gates executados
 
 | Gate | Resultado observado |
 |---|---|
-| `npm test` | Servidor: **638 pass, 0 fail, 63 skipped** (701 testes; 51 suites). Cliente: **226 pass**, 22 arquivos de teste. Exit code 0. |
-| `npm run test:pg` | PostgreSQL real: **90 pass, 0 fail, 0 skipped**. Exit code 0. Inclui a matriz E4.2. |
-| E4.2 em banco vazio + upgrade | **1 pass, 0 fail, 0 skipped**; migrações `0001`–`0030` aplicadas, migration 0030 reexecutada sem inferência para a caixa legada. |
-| `npm run typecheck` | Passou para domain, server e client. |
-| `npm run lint` | Exit code 0; **0 erros e 401 avisos** reportados pelo ESLint. |
-| `npm run build` | Passou; Vite transformou **2102 módulos** e gerou os artefatos PWA. |
-| `npm run smoke` | **126/126 verificações** passaram em servidor Express real no modo demonstração. |
-| `npm run audit:menu` | Exit code 0; sem erros. **6 avisos** classificados pelo auditor (3 RBAC/menu, rota health pública e 2 recursos sem menu). |
-| `git diff --check` | Passou, sem whitespace errors. |
+| `npm test` | Exit 0. Servidor: **638 pass, 0 fail, 63 skipped** (701 testes; 51 suites). Cliente: **226 pass** (22 arquivos). Skips mantidos separados dos passes. |
+| `npm run test:pg` | Exit 1; **0 pass, 2 fail de pré-condição, 63 skipped** (65 testes carregados). Sem PostgreSQL, sem evidência E4.2. |
+| `npm run typecheck` | Exit 0; domain, server e client passaram. |
+| Typecheck isolado dos dois arquivos E4.2 | Exit 0 com TypeScript strict; valida compilação, não execução funcional. |
+| `npm run lint` | Exit 0; **0 erros, 401 avisos**. |
+| `npm run build` | Exit 0; Vite transformou **2102 módulos** e gerou PWA com **55 entradas** de precache. |
+| `npm run smoke` | **126/126 verificações** passaram contra Express real em modo demonstração. Usa MemStore; não é evidência E4.2/PostgreSQL. |
+| `npm run audit:menu` | Exit 0; sem erros e **6 avisos** classificados (3 RBAC/menu, health pública, 2 recursos sem menu). |
+| `npm audit` | Exit 1; **22 vulnerabilidades** (9 moderadas, 8 altas, 5 críticas). Não foram feitas atualizações amplas de dependências neste gate. |
+| `git diff --check` | Exit 0; sem erros de whitespace. |
 
-Os skips da suíte unitária são os skips existentes do conjunto server; os testes PG foram executados separadamente com `DATABASE_URL` e não foram pulados.
+## LIMITAÇÕES
 
-## Limites preservados
+- `DATABASE_URL` não está configurado. Não há `psql`, `pg_isready`, `postgres`, `initdb` ou Docker disponível para criar/consultar um PostgreSQL local.
+- Consequentemente, não houve execução real de `npm run test:pg`, do harness HTTP E4.2, de bootstrap em banco vazio, do upgrade pela migration runner, de constraints, de snapshots antes/depois ou de estado de estoque/importação no PostgreSQL. A tentativa de `npm run test:pg` terminou com os números acima; não foi convertida em skip geral nem mascarada.
+- O runner `migrate()` aplica `db/schema.sql` antes das migrations versionadas. Assim, o teste complementar `e42-tenant.test.ts`, quando disponível, reprocessa a migration `0030` após o bootstrap do schema; ele não prova a migration 0030 isolada sobre um schema pré-0030. Nesta sessão, nenhum upgrade foi observado.
+- O smoke passou apenas no modo de demonstração/MemStore. Não prova constraints, persistência, rollback ou ownership em PostgreSQL.
+- Nenhuma credencial WooCommerce/integrador real e nenhuma homologação externa foram usadas. O harness remove essas credenciais e cobre somente as decisões locais que não exigem chamada externa.
+- A falha remota de CI conhecida, `Docker pull failed with exit code 1`, ocorreu antes de checkout/testes: **INFRAESTRUTURA — TESTE NÃO EXECUTADO**, não pass nem falha funcional. Deve ser acompanhada separadamente da execução local.
+- Permanecem bloqueios globais de release fora do aceite E4.2: regressão P1 de devolução total, `GAP-ESTQ-VENDA-ID` crítico e vulnerabilidades reportadas por `npm audit`. O ciclo de vida `pdv_caixas.local/local_id` permanece P2 separado.
 
-Este resultado fecha somente o isolamento/ownership E4.2. Permanecem fora desta entrega: entidade formal de transferência de estoque, reservas, lotes/validade/séries, nova política de custo/CMV, novas regras de devolução, mínimo/máximo avançado e demais itens E4.3–E4.6. O preflight pode bloquear uma instalação legada até que um administrador resolva explicitamente dados duplicados ou inconsistentes; nenhum dado ambíguo é corrigido automaticamente.
+## Decisão
+
+Manter `GAP-ESTQ-MULTIEMPRESA` e este gate **abertos**. A implementação/harness e os gates estáticos são úteis, mas não aprovam E4.2. Fechar somente após a execução, em PostgreSQL real e descartável, da matriz HTTP autenticada, da suíte PG sem skips/falhas relevantes e da validação observada de banco vazio + upgrade. Não fazer merge com base nos resultados desta sessão.

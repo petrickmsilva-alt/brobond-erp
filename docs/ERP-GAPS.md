@@ -17,13 +17,14 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > corrigidos **8** bugs de produção — o mais grave, `receberParcial` devolvendo
 > **500** no PostgreSQL real para qualquer compra com `fin_vencimento`.
 >
-> **Atualização E4.2 (2026-10-09):** o isolamento multiempresa dos fluxos
-> especializados de estoque foi implementado e validado. A nova entrada
-> `GAP-ESTQ-MULTIEMPRESA` registra a entrega como fechada, com migration 0030,
-> matriz A → B → A em PostgreSQL real, bootstrap vazio + upgrade, regressões e
-> gates. Os gaps E4 de transferência formal, reserva, rastreabilidade e demais
-> etapas E4.3–E4.6 permanecem fora do escopo e abertos conforme seus critérios.
-> Evidência e resultados exatos: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
+> **Gate E4.2 (2026-10-09):** a implementação e a migration 0030 estão no
+> workspace, mas o aceite **HTTP + autenticação real + PostgreSQL real ainda
+> não foi executado nesta sessão**. O teste `server/test/pg/e42-http.test.ts`
+> foi acrescentado para reutilizar o app real; sem PostgreSQL disponível, o
+> harness falha explicitamente e não converte ausência de infraestrutura em
+> `skip` ou `pass`. `GAP-ESTQ-MULTIEMPRESA` permanece aberto até a evidência
+> executada. E4.3–E4.6 e os gaps P1/P2 separados continuam fora deste gate.
+> Estado, limitações e resultados exatos: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
 
 Este é o **registro oficial do que falta**. Regra de manutenção:
 
@@ -45,7 +46,7 @@ Classificação do tipo de gap (seção 3 da especificação):
 |---|---|---|---|
 | **E2 — Produção** | 8 | **0** ✅ | **0** |
 | **E3 — Compras** | 6 | **0** ✅ | **0** |
-| **E4 — Estoque avançado** | 6 | 4 | 1 |
+| **E4 — Estoque avançado** | 8 | 7 | 1 |
 | **E5 — Financeiro avançado** | 2 | 2 | 0 |
 | **E6 — Fiscal** | 2 | 2 | 0 |
 | **E7 — Logística** | 1 | 1 | 0 |
@@ -55,7 +56,7 @@ Classificação do tipo de gap (seção 3 da especificação):
 | **E11 — UX final** | 2 | 2 | 0 |
 | **E12 — Homologação** | 3 | 3 | 3 |
 | Transversais | 3 | 3 | 0 |
-| **Total** | **44** | **28** | **7** |
+| **Total** | **46** | **31** | **7** |
 
 ---
 
@@ -241,13 +242,25 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
 
 ## E4 — ESTOQUE AVANÇADO
 
-### `GAP-ESTQ-MULTIEMPRESA` — ownership nos fluxos especializados de estoque · ✅ **RESOLVIDO na E4.2**
-- **Tipo:** backend + banco + testes PostgreSQL
-- **Escopo entregue:** grade e detalhe/tamanhos; inventário (snapshot, detalhe, itens, contagem e fechamento); movimento manual e estorno; movimentação de insumos; preview/confirmação/modelo de importação; relatórios e exportações; endpoints WooCommerce indicados e leituras especializadas do PDV.
-- **Como foi resolvido:** handlers usam `escopoDe(currentUser(req))`, consultas por ID aplicam filtro tenant-scoped e referências relacionadas são verificadas. A migration `0030_e42_locais_estoque_multempresa.sql` + `db/schema.sql` troca a unicidade global de local por `(empresa_id, nome)`, mantém o padrão por empresa, adiciona FKs compostas, diagnóstico pré-DDL e índices de saldo canônico com/sem tamanho. WooCommerce exige `WOOCOMMERCE_EMPRESA_ID`. Não há backfill heurístico; vínculos legados ambíguos continuam sem ID canônico.
-- **Prova PostgreSQL:** `server/test/pg/e42-tenant.test.ts` executa A → B → A, referências estrangeiras, saldos, estorno, inventário, imports/exports e Woo. O bootstrap foi aplicado em database vazio (migrações `0001`–`0030`) e passou **1/1**; o mesmo teste remove `pdv_caixas.local_id`, reinsere a migration 0030 e confirma que o ID legado permanece `NULL`. `npm run test:pg`: **90 pass, 0 fail, 0 skipped**.
-- **Gates:** `npm test` server **638 pass/0 fail/63 skipped** e client **226/226**; `npm run typecheck`, `npm run build`, `npm run smoke` (**126/126**), `npm run audit:menu` e `git diff --check` passaram. Lint: **0 erros, 401 avisos**. Resultados detalhados: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
-- **Fora do fechamento:** E4.3–E4.6, transferência formal, reserva, lote/validade/série, nova política de custo/CMV, devolução nova e mínimo/máximo avançado permanecem fora do escopo.
+### `GAP-ESTQ-MULTIEMPRESA` — ownership nos fluxos especializados de estoque · **ACEITE PENDENTE**
+- **Tipo:** backend + banco + gate HTTP/PostgreSQL.
+- **Escopo de implementação revisado:** grade/detalhe/tamanhos; inventário; movimentações; importação; relatórios/exportações; WooCommerce; ownership de caixas PDV.
+- **Implementação no workspace:** handlers usam escopo de empresa, a migration existente `0030_e42_locais_estoque_multempresa.sql` e o espelho em `db/schema.sql` estabelecem as constraints e índices do gate. A implementação por si só não fecha este gap.
+- **Limite da evidência anterior:** `server/test/pg/e42-tenant.test.ts` chama handlers/services diretamente e injeta `req.user`; não comprova autenticação/middleware/rota Express. O smoke HTTP executa em modo demonstração e não comprova PostgreSQL. Os resultados históricos anotados abaixo foram substituídos pelo estado do gate desta sessão em [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
+- **Harness acrescentado:** `server/test/pg/e42-http.test.ts` percorre login, troca de empresa e rotas reais do app, com health check fail-fast exigindo `db=postgres`; compara estado PG antes/depois das rejeições. **Não executado nesta sessão**: sem resultado observado não há aprovação.
+- **Critério para fechar:** executar o harness e a suíte `npm run test:pg` contra PostgreSQL real, validar bootstrap vazio e upgrade pelo runner existente, conferir zero-write e publicar resultados HTTP/PG observados. Falta, portanto, evidência de execução/infraestrutura — não uma migration documental nova.
+- **Limites preservados:** E4.3–E4.6, transferência formal, reservas, custo/CMV, devolução e mínimo/máximo avançado seguem fora deste gate.
+
+### `GAP-ESTQ-DEVOLUCAO-TOTAL` — saldo após devolução total · **P1 / BLOQUEADOR GLOBAL DE RELEASE**
+- **Origem:** gap preexistente documentado na E4.1; não faz parte do aceite E4.2 e não foi alterado neste gate.
+- **Regressão conhecida:** saldo inicial 5 → venda de 2 → saldo 3 → devolução total de 2 → observado 7; esperado 5. A entrada da devolução duplica o saldo que deveria apenas retornar ao inicial.
+- **Tratamento neste PR:** manter aberto e separado; não corrigir nem usar como critério para aprovar tecnicamente E4.2. Continua bloqueando a decisão de release global até correção e teste próprios.
+- **Aceite futuro:** reproduzir o ciclo com PostgreSQL real, corrigir a regra de contabilização sem regressão parcial/total e verificar saldo 5 ao final, preservando isolamento A/B.
+
+### `GAP-ESTQ-PDV-LOCAL-TEXTO` — ciclo de vida de `pdv_caixas.local` / `local_id` · **P2**
+- **Estado:** fora do gate funcional E4.2. O campo legado `pdv_caixas.local` continua ao lado de `local_id`; a migration não faz backfill por nome e caixas antigas permanecem com `local_id IS NULL` até decisão administrativa explícita.
+- **Segurança multiempresa:** a abertura/leitura usa `empresa_id` e, para vínculos canônicos, o par `(empresa_id, local_id)`. O novo harness contém verificações HTTP de ownership com caixas A/B, mas permanece **não executado** sem PostgreSQL nesta sessão; isso não fecha o gap de ciclo de vida.
+- **Aceite futuro:** definir e testar o comportamento de rename/legado de caixa sem inferir local por texto, sem alterar dados de outra empresa. Não implementar neste PR.
 
 ### `GAP-ESTQ-VENDA-ID` — vínculo formal venda → estoque · **CRÍTICO**
 - **Tipo:** banco
