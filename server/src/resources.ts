@@ -1299,6 +1299,12 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, hint: 'Entrada: positivo (aumenta). Saída/transferência: positivo (diminui). Ajuste: positivo para acrescentar, negativo para reduzir.' },
       { name: 'motivo', label: 'Motivo', type: 'text', search: true, maxLength: 200, wide: true },
       { name: 'compra_id', label: 'Compra', type: 'integer', list: false },
+      // E3.1 (GAP-COMP-CUSTOS): vínculo com o recebimento e com a linha da compra.
+      // Sem eles, o estorno de um produto recebido em dois lotes de preço
+      // diferente não tem como saber qual preço desfazer.
+      { name: 'recebimento_id', label: 'Recebimento', type: 'ref', ref: 'compra_recebimentos', list: false, hint: 'Preenchido automaticamente quando a entrada vem de um recebimento de compra.' },
+      { name: 'item_compra_id', label: 'Item da compra', type: 'ref', ref: 'itens_compra', list: false },
+      { name: 'custo_unitario', label: 'Custo unitário', type: 'money', min: 0, list: false, hint: 'Custo efetivo da entrada (preço + frete rateado + imposto que compõe custo). Base do estorno.' },
       // E2: vínculo FORMAL com a OP. Antes a entrada de produto acabado só era
       // achada pelo texto do motivo ('Produção concluída — OP #N'); o motivo
       // continua sendo escrito para leitura, mas o vínculo agora é a FK.
@@ -1702,6 +1708,12 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'ncm', label: 'NCM', type: 'text', list: false },
       { name: 'cfop', label: 'CFOP', type: 'text', list: false },
       { name: 'dados_fiscais', label: 'Dados fiscais', type: 'text', list: false },
+      // E3.1 (GAP-COMP-CUSTOS): parcela do frete da compra e imposto que compõe
+      // custo atribuídos a esta linha. Gravados pela regra canônica de
+      // recebimento (custoRecebimento.ts), não à mão — editar aqui desalinha o
+      // custo efetivo que ficou na movimentação.
+      { name: 'custo_frete_rateado', label: 'Frete rateado', type: 'money', min: 0, default: 0, readonly: true, form: false, list: false, hint: 'Parte do frete da compra atribuída a esta linha, proporcional ao valor. Preenchido no recebimento.' },
+      { name: 'custo_impostos', label: 'Impostos no custo', type: 'money', min: 0, default: 0, readonly: true, form: false, list: false, hint: 'Somente imposto NÃO recuperável informado. O ERP não calcula imposto de compra por conta própria.' },
       { name: 'local', label: 'Local de entrada', type: 'text', list: false },
     ],
   },
@@ -1904,7 +1916,15 @@ export const RESOURCES: Record<string, Resource> = {
       },
       { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos', required: true },
       { name: 'quantidade', label: 'Quantidade', type: 'number', required: true, hint: 'Entrada/saída: positivo. Ajuste: negativo para reduzir o saldo.' },
-      { name: 'custo_unitario', label: 'Custo unitário', type: 'money', min: 0, default: 0, hint: 'Usado apenas como histórico.' },
+      // E3.1: NÃO é mais "apenas histórico" — é o valor usado para desfazer o
+      // custo médio no estorno. Editá-lo manualmente desalinha a contabilidade.
+      { name: 'custo_unitario', label: 'Custo unitário', type: 'money', min: 0, default: 0, hint: 'Custo efetivo da entrada (preço + frete rateado + imposto que compõe custo). É a base do estorno do custo médio.' },
+      // E3.1: vínculo estrutural. Antes o estorno localizava a entrada pelo TEXTO
+      // do motivo, e o recebimento parcial (que grava "Recebimento parcial —
+      // Compra #N") nunca era encontrado — a entrada ficava sem estorno.
+      { name: 'compra_id', label: 'Compra', type: 'ref', ref: 'compras', list: false, search: true },
+      { name: 'recebimento_id', label: 'Recebimento', type: 'ref', ref: 'compra_recebimentos', list: false },
+      { name: 'item_compra_id', label: 'Item da compra', type: 'ref', ref: 'itens_compra', list: false },
       { name: 'motivo', label: 'Motivo', type: 'text', search: true, maxLength: 200, wide: true },
       // E2: vínculo FORMAL com a OP que consumiu o insumo (antes só o texto do
       // motivo ligava as duas coisas, e o estorno dependia de dar match nele).

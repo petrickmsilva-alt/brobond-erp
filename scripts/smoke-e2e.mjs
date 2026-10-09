@@ -368,6 +368,57 @@ check('E3: cancelar cotação aberta → 200 cancelada', cancelada2.status === 2
 const cotSemAuth = await req('GET', '/cotacoes_compra?page=1&pageSize=1', null, null);
 check('E3: /cotacoes_compra sem token → 401', cotSemAuth.status === 401, `status ${cotSemAuth.status}`);
 
+// ------------------------------------------------- E3.1 CUSTO DE RECEBIMENTO
+// O que se prova por HTTP: receber em dois lotes NÃO cobra o frete duas vezes,
+// o custo médio ponderado é devolvido na resposta e cancelar devolve o estoque.
+{
+  const forn = await req('POST', '/fornecedores', { nome: 'Fornecedor Custo E31', cnpj: '11222333000181' });
+  const insumo = await req('POST', '/insumos', { nome: 'Insumo Custo E31', unidade: 'un', custo_medio: 0 });
+  const fornId = forn.json?.id;
+  const insumoId = insumo.json?.id;
+  check('E3.1: fornecedor e insumo criados', Boolean(fornId && insumoId), `forn=${fornId} insumo=${insumoId}`);
+
+  const compra = await req('POST', '/compras', { fornecedor_id: fornId, data: new Date().toISOString().slice(0, 10), frete: 400 });
+  const compraId = compra.json?.id;
+  check('E3.1: compra com frete criada', compra.status === 201 && Boolean(compraId), `status ${compra.status} ${msg(compra.json)}`);
+
+  const item = await req('POST', `/compras/${compraId}/itens`, { insumo_id: insumoId, quantidade: 100, preco_unitario: 50 });
+  const itemId = item.json?.id;
+  check('E3.1: item adicionado', item.status === 201 && Boolean(itemId), `status ${item.status} ${msg(item.json)}`);
+
+  const r1 = await req('POST', `/compras/${compraId}/receber`, { itens: [{ item_compra_id: itemId, quantidade: 40 }] });
+  const custos1 = r1.json?.custos?.[0];
+  check('E3.1: 1º lote (40 un) recebido', r1.status === 201, `status ${r1.status} ${msg(r1.json)}`);
+  check('E3.1: resposta traz o custo efetivo aplicado', Number(custos1?.custo_unitario_efetivo) === 54, `efetivo=${custos1?.custo_unitario_efetivo} (preço 50 + frete 160/40)`);
+  check('E3.1: resposta traz o antes/depois do custo médio', Number(custos1?.custo_medio_antes) === 0 && Number(custos1?.custo_medio_depois) === 54, `antes=${custos1?.custo_medio_antes} depois=${custos1?.custo_medio_depois}`);
+  check('E3.1: compra fica parcial', r1.json?.status === 'parcial', `status=${r1.json?.status}`);
+
+  const r2 = await req('POST', `/compras/${compraId}/receber`, { itens: [{ item_compra_id: itemId, quantidade: 60 }] });
+  const custos2 = r2.json?.custos?.[0];
+  // Se o frete fosse rateado de novo por inteiro, o 2º lote daria 90/un e o
+  // custo médio iria a 75,6 — não 54.
+  check('E3.1: 2º lote (60 un) recebido', r2.status === 201, `status ${r2.status} ${msg(r2.json)}`);
+  check('E3.1: frete NÃO é cobrado duas vezes', Number(custos2?.custo_unitario_efetivo) === 54, `efetivo=${custos2?.custo_unitario_efetivo} (90 seria frete em dobro)`);
+  check('E3.1: custo médio final = 54', Number(custos2?.custo_medio_depois) === 54, `depois=${custos2?.custo_medio_depois}`);
+  check('E3.1: compra fica recebida', r2.json?.status === 'recebido', `status=${r2.json?.status}`);
+
+  const insumoDepois = await req('GET', `/insumos/${insumoId}`);
+  check('E3.1: custo médio gravado no insumo', Number(insumoDepois.json?.custo_medio) === 54, `custo_medio=${insumoDepois.json?.custo_medio}`);
+
+  const estoque = await req('GET', '/movimentacoes_insumos');
+  const entradas = (estoque.json?.rows || []).filter((m) => Number(m.insumo_id) === Number(insumoId) && m.tipo === 'entrada');
+  check('E3.1: cada lote é uma movimentação com custo', entradas.length === 2 && entradas.every((m) => Number(m.custo_unitario) === 54), `entradas=${entradas.length} custos=${entradas.map((m) => m.custo_unitario).join(',')}`);
+  check('E3.1: movimentação tem vínculo com a compra', entradas.every((m) => Number(m.compra_id) === Number(compraId)), `compra_id=${entradas.map((m) => m.compra_id).join(',')}`);
+
+  const receberDeNovo = await req('POST', `/compras/${compraId}/receber`, { itens: [{ item_compra_id: itemId, quantidade: 10 }] });
+  check('E3.1: receber além do pedido é recusado', receberDeNovo.status >= 400, `status ${receberDeNovo.status} ${msg(receberDeNovo.json)}`);
+
+  const cancel = await req('PUT', `/compras/${compraId}`, { status: 'cancelado' });
+  check('E3.1: cancelar compra recebida → estorno', cancel.status === 200, `status ${cancel.status} ${msg(cancel.json)}`);
+  const insumoEstornado = await req('GET', `/insumos/${insumoId}`);
+  check('E3.1: custo médio restaurado pelo estorno', Number(insumoEstornado.json?.custo_medio) === 0, `custo_medio=${insumoEstornado.json?.custo_medio}`);
+}
+
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);
 check('sem token → 401', semToken.status === 401, `status ${semToken.status}`);

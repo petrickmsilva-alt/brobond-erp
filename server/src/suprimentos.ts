@@ -17,6 +17,7 @@ import { parseId } from './validate';
 import type { Row } from './store';
 import { aplicarRegrasPedido } from './itens';
 import { syncLancamentoCompra, syncLancamentoVenda } from './financeiro';
+import { aplicarEntradaDeCompra } from './custoRecebimento';
 import { round2, round3 } from './utils';
 
 const compras = getResource('compras')!;
@@ -369,17 +370,6 @@ async function upsertMapping(supplierId: number, code: string, productId: number
   return s.insert(mappings, { empresa_id: empresaId, fornecedor_id: supplierId, codigo_fornecedor: code, produto_id: productId, tamanho_id: sizeId }, tx);
 }
 
-async function updateReplacementCost(product: Row, quantity: number, unitCost: number, tx: any) {
-  const s = getStore();
-  const balances = await s.list(getResource('estoques')!, { page: 1, pageSize: 10000, filter: { produto_id: Number(product.id) } }, tx);
-  const stock = balances.rows.reduce((sum, row) => sum + Number(row.quantidade || 0), 0);
-  const currentCost = Number(product.custo || 0);
-  const newCost = stock + quantity > 0 ? round2((stock * currentCost + quantity * unitCost) / (stock + quantity)) : round2(unitCost);
-  await s.update(produtos, Number(product.id), { custo: newCost }, tx);
-  product.custo = newCost;
-  return newCost;
-}
-
 export async function importarXmlCompra(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(compras, actor, 'create');
@@ -412,6 +402,9 @@ export async function importarXmlCompra(req: Request, res: Response) {
       data: parsed.emissao || new Date().toISOString(),
       status: 'recebido',
       total,
+      // vFrete vem do XML. Antes só entrava somado no `total` e a coluna
+      // `frete` ficava zerada — o rateio de custo não tinha de onde sair.
+      frete: round2(parsed.frete || 0),
       nota_fiscal: parsed.numero,
       local_entrada: local,
       observacoes: `NF-e importada${parsed.chaveAcesso ? ` — chave ${parsed.chaveAcesso}` : ''}${parsed.serie ? ` — série ${parsed.serie}` : ''}`,
@@ -441,23 +434,34 @@ export async function importarXmlCompra(req: Request, res: Response) {
       }, tx);
       createdItems.push(item);
       await upsertMapping(Number(supplier.id), line.code, Number(line.product.id), Number(line.size.id), escopo.empresaId, tx);
-      // Calcula contra o saldo anterior; só depois materializa a entrada, para
-      // que a própria compra não seja contada duas vezes no custo médio.
-      await updateReplacementCost(line.product, line.item.quantidade, unit, tx);
-      await s.adjustStock(Number(line.product.id), Number(line.size.id), local, Math.trunc(line.item.quantidade), tx);
     }
 
-    // A importação aplica a entrada de produto acabado aqui, dentro da mesma
-    // transação. Não chamamos o recebimento genérico da compra porque ele
-    // repetiria o saldo; o movimento explícito preserva a trilha física da NF-e.
-    for (const line of resolved) {
-      await s.insert(getResource('movimentacoes')!, {
-        empresa_id: escopo.empresaId,
-        tipo: 'entrada', produto_id: Number(line.product.id), tamanho_id: Number(line.size.id), local,
-        quantidade: Math.trunc(line.item.quantidade), motivo: `NF-e ${parsed.numero || parsed.chaveAcesso} — Compra #${compra.id}`,
-        compra_id: Number(compra.id), usuario_id: actor.id || null,
-      }, tx);
-    }
+    // REGRA CANÔNICA DE CUSTO (server/src/custoRecebimento.ts). Esta função
+    // tinha a terceira cópia da média ponderada (`updateReplacementCost`) e não
+    // rateava o frete da NF-e. Agora é a mesma rotina do recebimento total e do
+    // parcial: custo efetivo, movimentação com custo, custo médio e auditoria.
+    //
+    // Continua sendo aplicada AQUI, dentro desta transação, e não pelo
+    // recebimento genérico — chamar os dois dobraria o saldo.
+    await aplicarEntradaDeCompra({
+      compraId: Number(compra.id),
+      empresaId: escopo.empresaId,
+      recebimentoId: null,
+      linhas: createdItems.map((item) => ({
+        item_compra_id: Number(item.id),
+        insumo_id: null,
+        produto_id: Number(item.produto_id),
+        tamanho_id: Number(item.tamanho_id),
+        quantidade: round3(Number(item.quantidade)),
+        preco_unitario: Number(item.preco_unitario),
+        local,
+      })),
+      freteTotal: round2(Number(compra.frete || parsed.frete || 0)),
+      actor: { id: actor.id || null, name: actor.name },
+      motivo: `NF-e ${parsed.numero || parsed.chaveAcesso} — Compra #${compra.id}`,
+      tx,
+      escopo,
+    });
     await s.update(compras, Number(compra.id), { recebida_em: new Date().toISOString() }, tx);
     const after = (await s.get(compras, Number(compra.id), tx)) || compra;
     await syncLancamentoCompra(null, after, { status: 'recebido' }, { id: actor.id || null, name: actor.name }, tx);

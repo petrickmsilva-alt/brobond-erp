@@ -21,7 +21,8 @@ import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
 import { checkAccess, getDefaultLocal, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, validarReferenciasDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, escopoDeSistema, validarReferenciasDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
+import { aplicarEntradaDeCompra, estornarEntradasDeCompra } from './custoRecebimento';
 import type { Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
 import { labelOf } from './store';
@@ -433,169 +434,67 @@ async function estornarVenda(pedido: Row, actor: { id: number | null; name: stri
 // Compra → recebimento (entrada de insumos + custo médio ponderado) e estorno
 // ----------------------------------------------------------------------------
 
-async function receberCompra(pedido: Row, actor: { id: number | null; name: string }, tx: Tx) {
+async function receberCompra(pedido: Row, actor: { id: number | null; name: string }, tx: Tx, escopo: EscopoEmpresa) {
   const s = getStore();
   const itens = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { compra_id: Number(pedido.id) } }, tx);
   if (!itens.rows.length) throw new HttpError(409, 'Adicione ao menos um item antes de marcar a compra como recebida.');
 
-  for (const it of itens.rows) {
-    // Compras lançadas pelo XML podem conter produto acabado. Elas entram no
-    // estoque físico por produto/tamanho e atualizam o custo de reposição do
-    // produto; compras antigas de insumos seguem pelo estoque de matéria-prima.
-    if (it.produto_id !== null && it.produto_id !== undefined && it.produto_id !== '') {
-      const produtoId = Number(it.produto_id);
-      const tamanhoId = Number(it.tamanho_id);
-      const qtd = Math.trunc(Number(it.quantidade));
-      const preco = Number(it.preco_unitario);
-      if (!produtoId || !tamanhoId || !(qtd > 0) || !Number.isFinite(preco) || preco < 0) {
-        throw new HttpError(422, `Item de produto inválido na compra #${pedido.id}.`);
-      }
-      const local = String(it.local || pedido.local_entrada || (await getDefaultLocal(tx)));
-      const estoques = await s.list(getResource('estoques')!, { page: 1, pageSize: 10000, filter: { produto_id: produtoId } }, tx);
-      const saldoAtual = estoques.rows.reduce((sum, row) => sum + Number(row.quantidade || 0), 0);
-      const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId }, tx);
-      if (!produto) throw new HttpError(422, `Produto ${produtoId} não encontrado na compra #${pedido.id}.`);
-      const custoAtual = Number(produto.custo || 0);
-      const novoCusto = saldoAtual + qtd > 0 ? round2((saldoAtual * custoAtual + qtd * preco) / (saldoAtual + qtd)) : round2(preco);
-      await s.adjustStock(produtoId, tamanhoId, local, qtd, tx);
-      await s.update(getResource('produtos')!, produtoId, { custo: novoCusto }, tx);
-      await s.insert(
-        getResource('movimentacoes')!,
-        {
-          tipo: 'entrada',
-          produto_id: produtoId,
-          tamanho_id: tamanhoId,
-          local,
-          quantidade: qtd,
-          motivo: `Compra #${pedido.id}${pedido.nota_fiscal ? ` — NF ${pedido.nota_fiscal}` : ''}`,
-          compra_id: Number(pedido.id),
-          usuario_id: actor.id || null,
-        },
-        tx
-      );
-      continue;
-    }
-
-    const insumoId = Number(it.insumo_id);
+  // Só o que AINDA falta receber. Antes isto entrava com a quantidade CHEIA de
+  // cada item: uma compra já recebida em parte que fosse marcada como "recebida"
+  // recebia tudo de novo e estourava o pedido (40 já recebidos + 100 = 140).
+  const pendentes = itens.rows.map((it) => {
     const qtd = round3(Number(it.quantidade));
-    const preco = Number(it.preco_unitario);
-    const saldoAtual = round3(await s.insumoStock(insumoId, tx));
-    const insumo = await s.findOneWhere(getResource('insumos')!, { id: insumoId }, tx);
-    const custoAtual = Number(insumo?.custo_medio || 0);
-    const novoCusto = saldoAtual + qtd > 0 ? round2((saldoAtual * custoAtual + qtd * preco) / (saldoAtual + qtd)) : preco;
-
-    await s.adjustInsumoStock(insumoId, qtd, tx);
-    await s.update(getResource('insumos')!, insumoId, { custo_medio: novoCusto }, tx);
-    await s.insert(
-      getResource('movimentacoes_insumos')!,
-      {
-        tipo: 'entrada',
-        insumo_id: insumoId,
-        quantidade: qtd,
-        custo_unitario: preco,
-        motivo: `Compra #${pedido.id}`,
-        usuario_id: actor.id || null,
-      },
-      tx
-    );
+    const recebida = round3(Number(it.quantidade_recebida || 0));
+    return { it, falta: round3(qtd - recebida) };
+  });
+  if (!pendentes.some((p) => p.falta > 0)) {
+    throw new HttpError(409, `A compra #${pedido.id} já foi totalmente recebida. Estorne um recebimento antes de receber de novo.`);
   }
+
+  // REGRA CANÔNICA (server/src/custoRecebimento.ts). Esta função costumava ter
+  // a sua própria cópia da média ponderada — agora delega, para que recebimento
+  // total, parcial e importação de XML tratem custo exatamente igual.
+  await aplicarEntradaDeCompra({
+    compraId: Number(pedido.id),
+    empresaId: Number(pedido.empresa_id),
+    recebimentoId: null,
+    linhas: pendentes
+      .filter((p) => p.falta > 0)
+      .map(({ it, falta }) => ({
+        item_compra_id: Number(it.id),
+        insumo_id: it.insumo_id === null || it.insumo_id === undefined || it.insumo_id === '' ? null : Number(it.insumo_id),
+        produto_id: it.produto_id === null || it.produto_id === undefined || it.produto_id === '' ? null : Number(it.produto_id),
+        tamanho_id: it.tamanho_id === null || it.tamanho_id === undefined || it.tamanho_id === '' ? null : Number(it.tamanho_id),
+        quantidade: falta,
+        preco_unitario: Number(it.preco_unitario),
+        local: String(it.local || pedido.local_entrada || ''),
+      })),
+    freteTotal: Number(pedido.frete || 0),
+    actor: { id: actor.id || null, name: actor.name },
+    motivo: `Compra #${pedido.id}${pedido.nota_fiscal ? ` — NF ${pedido.nota_fiscal}` : ''}`,
+    tx,
+    escopo,
+  });
+
   await s.update(getResource('compras')!, Number(pedido.id), { recebida_em: new Date().toISOString() }, tx);
-  await s.audit(
-    {
-      usuario_id: actor.id || null,
-      usuario: actor.name,
-      acao: 'editar',
-      recurso: 'compras',
-      registro_id: Number(pedido.id),
-      descricao: `Compra #${pedido.id} recebida — ${itens.rows.length} item(ns) entraram no estoque e o custo de reposição foi atualizado`,
-      empresa_id: empresaDoRegistroAudit(getResource('compras')!, pedido, actor),
-      dados: { recebida_em: new Date().toISOString(), produtos: itens.rows.filter((it) => it.produto_id).length },
-    },
-    tx
-  );
 }
-async function estornarCompra(pedido: Row, actor: { id: number | null; name: string }, tx: Tx) {
+async function estornarCompra(pedido: Row, actor: { id: number | null; name: string }, tx: Tx, escopo: EscopoEmpresa) {
   const s = getStore();
 
-  // Entrada de produto acabado originada pelo importador de NF-e. A baixa é
-  // condicional para nunca transformar um estoque já consumido em negativo.
-  const entradasProdutos = (await s.list(
-    getResource('movimentacoes')!,
-    { page: 1, pageSize: 1000, sort: 'id', dir: 'desc', filter: { tipo: 'entrada', compra_id: Number(pedido.id) } },
-    tx
-  )).rows;
-  const itensCompra = (await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { compra_id: Number(pedido.id) } }, tx)).rows;
-  for (const m of entradasProdutos) {
-    const produtoId = Number(m.produto_id);
-    const tamanhoId = Number(m.tamanho_id);
-    const qtd = Math.trunc(Number(m.quantidade));
-    const itemOrigem = itensCompra.find((item) => Number(item.produto_id) === produtoId && Number(item.tamanho_id) === tamanhoId);
-    const aplicado = await s.tryAdjustStock(produtoId, tamanhoId, String(m.local), -qtd, tx);
-    if (!aplicado) {
-      throw new HttpError(409, `Não é possível cancelar a compra #${pedido.id}: o produto ${produtoId} já foi consumido no local "${m.local}".`);
-    }
-    const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId }, tx);
-    const estoqueTotal = (await s.list(getResource('estoques')!, { page: 1, pageSize: 10000, filter: { produto_id: produtoId } }, tx)).rows.reduce((sum, row) => sum + Number(row.quantidade || 0), 0);
-    const preco = Number(itemOrigem?.preco_unitario || 0);
-    const saldoAntes = estoqueTotal + qtd;
-    const custoAnterior = saldoAntes > 0 && saldoAntes - qtd > 0 ? round2((Number(produto?.custo || 0) * saldoAntes - qtd * preco) / (saldoAntes - qtd)) : 0;
-    await s.update(getResource('produtos')!, produtoId, { custo: Math.max(0, custoAnterior) }, tx);
-    await s.insert(
-      getResource('movimentacoes')!,
-      {
-        tipo: 'saida', produto_id: produtoId, tamanho_id: tamanhoId, local: m.local, quantidade: qtd,
-        compra_id: Number(pedido.id), motivo: `Estorno — Compra #${pedido.id} cancelada`, usuario_id: actor.id || null,
-      },
-      tx
-    );
-  }
+  // REGRA CANÔNICA INVERSA. Antes esta função procurava as entradas de insumo
+  // pelo TEXTO do motivo ('Compra #N') e o recebimento parcial grava
+  // 'Recebimento parcial — Compra #N' — então cancelar uma compra recebida
+  // parcialmente devolvia o estoque de produtos e deixava o de insumos para
+  // cima, com o custo médio alterado para sempre.
+  await estornarEntradasDeCompra({
+    compraId: Number(pedido.id),
+    actor: { id: actor.id || null, name: actor.name },
+    motivo: `Estorno — Compra #${pedido.id} cancelada`,
+    tx,
+    escopo,
+  });
 
-  const movs = await s.list(
-    getResource('movimentacoes_insumos')!,
-    { page: 1, pageSize: 1000, sort: 'id', dir: 'desc', filter: { tipo: 'entrada', motivo: `Compra #${pedido.id}` } },
-    tx
-  );
-  const entradas = movs.rows.filter((m) => String(m.motivo) === `Compra #${pedido.id}`);
-  for (const m of entradas) {
-    const insumoId = Number(m.insumo_id);
-    const qtd = round3(Number(m.quantidade));
-    const preco = Number(m.custo_unitario || 0);
-    const saldoAtual = round3(await s.insumoStock(insumoId, tx));
-    const insumo = await s.findOneWhere(getResource('insumos')!, { id: insumoId }, tx);
-    const custoAtual = Number(insumo?.custo_medio || 0);
-    // Reverte a média ponderada: C_ant = (C_novo × S_novo − q × p) / (S_novo − q)
-    const saldoAnt = round3(saldoAtual - qtd);
-    const custoAnt = saldoAnt > 0 ? round2((custoAtual * saldoAtual - qtd * preco) / saldoAnt) : 0;
-
-    await s.adjustInsumoStock(insumoId, -qtd, tx);
-    await s.update(getResource('insumos')!, insumoId, { custo_medio: Math.max(0, custoAnt) }, tx);
-    await s.insert(
-      getResource('movimentacoes_insumos')!,
-      {
-        tipo: 'saida',
-        insumo_id: insumoId,
-        quantidade: qtd,
-        custo_unitario: preco,
-        motivo: `Estorno — Compra #${pedido.id} cancelada`,
-        usuario_id: actor.id || null,
-      },
-      tx
-    );
-  }
   await s.update(getResource('compras')!, Number(pedido.id), { recebida_em: null }, tx);
-  await s.audit(
-    {
-      usuario_id: actor.id || null,
-      usuario: actor.name,
-      acao: 'editar',
-      recurso: 'compras',
-      registro_id: Number(pedido.id),
-      descricao: `Compra #${pedido.id} cancelada — estorno de ${entradas.length} entrada(s) de insumos`,
-      empresa_id: empresaDoRegistroAudit(getResource('compras')!, pedido, actor),
-      dados: { estornadas: entradas.length },
-    },
-    tx
-  );
 }
 
 // ----------------------------------------------------------------------------
@@ -608,6 +507,10 @@ const FATURADOS = ['faturada', 'entregue'];
  * Aplica os efeitos de transição de status de uma venda/compra.
  * Deve ser chamado DENTRO da transação do serviço, após o insert/update do
  * cabeçalho. `data` é o payload enviado pelo cliente.
+ *
+ * `escopo` é a empresa do ATOR (não a da linha). Ele desce até a regra canônica
+ * de custo para que o recebimento revalide o pedido contra a empresa de quem
+ * está operando — derivá-lo da própria linha tornaria a checagem tautológica.
  */
 export async function aplicarRegrasPedido(
   tipo: TipoPedido,
@@ -615,7 +518,8 @@ export async function aplicarRegrasPedido(
   after: Row,
   data: Record<string, unknown>,
   actor: { id: number | null; name: string },
-  tx: Tx
+  tx: Tx,
+  escopo?: EscopoEmpresa
 ): Promise<void> {
   // Recalcula o total quando desconto/frete mudam (os itens recalcam sozinhos).
   if (tipo === 'venda' && (data.desconto !== undefined || data.frete !== undefined)) {
@@ -658,12 +562,20 @@ export async function aplicarRegrasPedido(
   }
   const eraRecebido = statusAnterior === 'recebido';
   const ehRecebido = statusNovo === 'recebido';
-  if (eraRecebido && !ehRecebido && statusNovo !== 'cancelado') {
+  // Status em que JÁ entrou estoque. 'parcial' conta: recebeu uma parte, então
+  // cancelar tem que devolver essa parte — antes só 'recebido' estornava e uma
+  // compra recebida pela metade ficava com o estoque de insumo para cima.
+  const tinhaEntrada = statusAnterior === 'recebido' || statusAnterior === 'parcial';
+  if (tinhaEntrada && !ehRecebido && statusNovo !== 'cancelado') {
     throw new HttpError(409, 'Compra recebida não pode voltar para pendente. Para desfazer o recebimento, cancele a compra (o estoque de insumos é estornado).');
   }
+  // Sem escopo do ator (chamada interna antiga), cai no escopo da linha. Só é
+  // aceitável porque services.ts — o único caminho de compra — valida o pedido
+  // contra o escopo do ator ANTES de chegar aqui (assertRegistroDaEmpresa).
+  const escopoCompra = escopo ?? escopoDeSistema(Number(after.empresa_id));
   if ((!before || !eraRecebido) && ehRecebido) {
-    await receberCompra(after, actor, tx);
-  } else if (eraRecebido && statusNovo === 'cancelado') {
-    await estornarCompra(before!, actor, tx);
+    await receberCompra(after, actor, tx, escopoCompra);
+  } else if (tinhaEntrada && statusNovo === 'cancelado') {
+    await estornarCompra(before!, actor, tx, escopoCompra);
   }
 }

@@ -27,7 +27,7 @@ Classificação do tipo de gap (seção 3 da especificação):
 | Fase | Gaps | Abertos | Críticos abertos |
 |---|---|---|---|
 | **E2 — Produção** | 8 | **0** ✅ | **0** |
-| **E3 — Compras** | 5 | 4 | **0** |
+| **E3 — Compras** | 5 | **3** | **0** |
 | **E4 — Estoque avançado** | 5 | 5 | 2 |
 | **E5 — Financeiro avançado** | 2 | 2 | 0 |
 | **E6 — Fiscal** | 2 | 2 | 0 |
@@ -38,7 +38,7 @@ Classificação do tipo de gap (seção 3 da especificação):
 | **E11 — UX final** | 2 | 2 | 0 |
 | **E12 — Homologação** | 3 | 3 | 3 |
 | Transversais | 3 | 3 | 0 |
-| **Total** | **42** | **33** | **8** |
+| **Total** | **42** | **32** | **8** |
 
 ---
 
@@ -125,7 +125,7 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
 - **Aceite:** `cotacoes` + `cotacao_itens` + `cotacao_fornecedores` com `empresa_id`, decisão que gera pedido de compra de forma idempotente.
 - **Como foi fechado (migration 0027):** `cotacoes_compra`, `cotacao_compra_itens`, `cotacao_compra_fornecedores`, `cotacao_compra_precos` — todas com `empresa_id`. Idempotência da decisão garantida em **duas** camadas: `tryUpdateIf` no status (CAS) e o índice único parcial `cotacoes_compra_compra_uniq … WHERE compra_id IS NOT NULL`. Prova real de corrida em `server/test/pg-cotacoes-compra.test.ts`: **3 decisões simultâneas → exatamente 1 pedido**. Nenhum preço é estimado: item sem cotação bloqueia a decisão (409), e proposta com `disponivel: false` aparece riscada no comparativo sem competir no menor preço.
 
-### `GAP-COMP-CUSTOS` — repasse de custo divergente entre os dois caminhos de recebimento
+### `GAP-COMP-CUSTOS` — repasse de custo divergente entre os dois caminhos de recebimento · ✅ **FECHADO na E3.1**
 - **Tipo:** backend
 - **Correção da evidência (re-auditado na E3):** a afirmação original ("não há rotina que
   atualize o custo médio") está **errada**. Existem DOIS caminhos de recebimento e eles se
@@ -141,6 +141,42 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
 - **Aceite:** os dois caminhos convergem para a mesma rotina de custo médio ponderado,
   `custo_unitario` sempre gravado na movimentação, frete rateado por valor de linha, trilha
   de auditoria e teste de arredondamento em centavos.
+- **Como foi fechado (migration 0028 + `server/src/custoRecebimento.ts`):** os QUATRO
+  caminhos de recebimento (`receberParcial`, `receberCompra`, `estornarCompra` e
+  `importarXmlCompra`) agora delegam a **uma** rotina. Regra:
+  `C_novo = (S_ant×C_ant + q×C_efetivo)/(S_ant+q)`, com
+  `C_efetivo = preço + (freteRateado + impostos)/q`.
+  Frete rateado **por valor da linha**, resíduo na última linha (`Σ rateio === frete` ao
+  centavo). Imposto **só** o informado — nada é derivado de NCM/CFOP. Lock `FOR UPDATE` no
+  insumo/produto, e dois índices únicos parciais
+  `uq_mov_{insumos,produtos}_entrada_por_recebimento` sobre `(recebimento_id, item_compra_id)`
+  como segunda trava de idempotência no banco. O estorno localiza as entradas por `compra_id`
+  (nunca por texto de motivo), usa o `custo_unitario` da própria movimentação e **recusa com
+  409** se o estoque já foi consumido ou se o custo ficaria negativo — não zera nada.
+- **Bugs encontrados AO FECHAR este gap** (todos provados por teste antes de corrigir):
+  1. **Frete cobrado duas vezes.** Cada recebimento parcial rateava o frete **inteiro** da
+     compra de novo: 100 un a R$ 50 com R$ 400 de frete, recebidas em 40+60, davam custo médio
+     **58** em vez de **54**. Agora o frete é rateado uma única vez ao longo de todos os
+     lotes, proporcional ao valor recebido, e `itens_compra.custo_frete_rateado` **acumula**.
+  2. **`receberCompra` ignorava `quantidade_recebida`.** Uma compra já recebida em parte que
+     fosse marcada como `recebida` recebia a quantidade **cheia** de novo (40 já recebidos +
+     100 = 140). Agora entra só o que falta.
+  3. **`parcial → cancelado` não estornava.** O gatilho só cobria `recebido → cancelado`,
+     então cancelar uma compra recebida pela metade deixava o estoque de insumo para cima
+     para sempre.
+  4. **Pedido de valor zero devolvia 500.** `reconciliarParcelasPedido` criava parcela de
+     R$ 0,00 e estourava `ck_lanc_fin_valor_positivo`. Afetava compra **e** venda (brinde,
+     amostra). Agora valor zero não gera conta a pagar/receber.
+  5. **`itens_compra.custo_frete_rateado` e `custo_impostos` eram impossíveis de gravar.** As
+     colunas foram criadas na 0027 mas nunca declaradas no recurso — e `pgstore.update`
+     descarta em silêncio coluna não declarada (`pgstore.ts:251-273`).
+- **Prova:** `server/test/custo-recebimento.test.ts` (**19** testes, incluindo 40+60 ≡ 100 e
+  lotes de preço diferente) e `server/test/pg-custo-recebimento.test.ts` (**16** testes no
+  PostgreSQL real: constraints 23514/23505, três corridas reais, rollback, estorno,
+  idempotência e multiempresa A → B → A).
+- **Continua aberto (fora deste gap):** a **tela** de recebimento mostrando recebido ×
+  pendente, custo unitário, frete, imposto, custo efetivo e impacto no estoque. O backend já
+  devolve tudo isso em `custos` na resposta do `POST /api/compras/:id/receber`; falta a UI.
 
 ### `GAP-COMP-XML-MENU` — importação de XML sem entrada navegável e sem teste
 - **Tipo:** menu + testes

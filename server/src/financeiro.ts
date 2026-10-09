@@ -206,38 +206,55 @@ async function reconciliarParcelasPedido(
   const existentes = await parcelasDaOrigem(referencia, id, tx);
   const parcelasFinais: { lancamento_id: number; valor: number }[] = [];
 
-  for (let i = 1; i <= n; i++) {
-    const detalhe = detalhes.find((item) => Number(item.parcela || 0) === i) || detalhes[i - 1];
-    const valor = detalhe && Number.isFinite(Number(detalhe.valor)) ? r2(Number(detalhe.valor)) : i === n ? r2(total - valorParcela * (n - 1)) : valorParcela;
-    const alvo = existentes.find((l) => Number(l.parcela || 1) === i);
-    const dados: Row = {
-      data: i === 1 || !alvo ? dataBase : String(alvo.data || dataBase).slice(0, 10),
-      tipo,
-      categoria_id: categoriaId,
-      conta_id: after.fin_conta_id ?? alvo?.conta_id ?? null,
-      descricao: n > 1 ? `${descricaoBase} (${i}/${n})` : descricaoBase,
-      valor,
-      forma_pagamento: after.fin_forma_pagamento ?? alvo?.forma_pagamento ?? null,
-      vencimento: detalhe?.vencimento ? String(detalhe.vencimento).slice(0, 10) : addMeses(baseVenc, i - 1),
-      parcela: i,
-      total_parcelas: n,
-      referencia_tipo: referencia,
-      referencia_id: id,
-      observacoes: alvo?.observacoes ?? extraObs ?? null,
-    };
-    if (alvo) {
-      // Status: cancelamento global zera tudo; liquidação global confirma tudo;
-      // fora isso a parcela confirmada por baixa/conciliação é intocável.
-      let status = String(alvo.status || 'pendente');
-      if (finCancelado) status = 'cancelado';
-      else if (finLiquidado) status = 'confirmado';
-      else if (status === 'cancelado') status = 'pendente';
-      await atualizarLancamento(Number(alvo.id), { ...alvo, ...dados, status }, actor, tx);
-      parcelasFinais.push({ lancamento_id: Number(alvo.id), valor });
-    } else {
-      const status = finCancelado ? 'cancelado' : finLiquidado ? 'confirmado' : 'pendente';
-      const criado = await criarLancamento({ ...dados, status, taxa_pct: 0, valor_liquido: valor, empresa_id: empresaDe(after) }, actor, tx);
-      parcelasFinais.push({ lancamento_id: Number(criado.id), valor });
+  if (total <= 0) {
+    // Compra/venda de valor zero NÃO gera conta a pagar/receber: o banco exige
+    // valor > 0 (ck_lanc_fin_valor_positivo) e uma parcela de R$ 0 não é uma
+    // obrigação financeira — é brinde, amostra ou pedido ainda sem itens.
+    // Antes isto estourava o CHECK e o recebimento da compra devolvia 500.
+    for (const l of existentes) {
+      if (String(l.status) !== 'cancelado') {
+        await atualizarLancamento(
+          Number(l.id),
+          { ...l, status: 'cancelado', observacoes: [String(l.observacoes || ''), `Parcela cancelada em ${hoje()}: ${referencia} #${id} sem valor financeiro`].filter(Boolean).join('\n') },
+          actor,
+          tx
+        );
+      }
+    }
+  } else {
+    for (let i = 1; i <= n; i++) {
+      const detalhe = detalhes.find((item) => Number(item.parcela || 0) === i) || detalhes[i - 1];
+      const valor = detalhe && Number.isFinite(Number(detalhe.valor)) ? r2(Number(detalhe.valor)) : i === n ? r2(total - valorParcela * (n - 1)) : valorParcela;
+      const alvo = existentes.find((l) => Number(l.parcela || 1) === i);
+      const dados: Row = {
+        data: i === 1 || !alvo ? dataBase : String(alvo.data || dataBase).slice(0, 10),
+        tipo,
+        categoria_id: categoriaId,
+        conta_id: after.fin_conta_id ?? alvo?.conta_id ?? null,
+        descricao: n > 1 ? `${descricaoBase} (${i}/${n})` : descricaoBase,
+        valor,
+        forma_pagamento: after.fin_forma_pagamento ?? alvo?.forma_pagamento ?? null,
+        vencimento: detalhe?.vencimento ? String(detalhe.vencimento).slice(0, 10) : addMeses(baseVenc, i - 1),
+        parcela: i,
+        total_parcelas: n,
+        referencia_tipo: referencia,
+        referencia_id: id,
+        observacoes: alvo?.observacoes ?? extraObs ?? null,
+      };
+      if (alvo) {
+        // Status: cancelamento global zera tudo; liquidação global confirma tudo;
+        // fora isso a parcela confirmada por baixa/conciliação é intocável.
+        let status = String(alvo.status || 'pendente');
+        if (finCancelado) status = 'cancelado';
+        else if (finLiquidado) status = 'confirmado';
+        else if (status === 'cancelado') status = 'pendente';
+        await atualizarLancamento(Number(alvo.id), { ...alvo, ...dados, status }, actor, tx);
+        parcelasFinais.push({ lancamento_id: Number(alvo.id), valor });
+      } else {
+        const status = finCancelado ? 'cancelado' : finLiquidado ? 'confirmado' : 'pendente';
+        const criado = await criarLancamento({ ...dados, status, taxa_pct: 0, valor_liquido: valor, empresa_id: empresaDe(after) }, actor, tx);
+        parcelasFinais.push({ lancamento_id: Number(criado.id), valor });
+      }
     }
   }
   // Parcelas excedentes (plano encolheu): cancelamento preserva a trilha.

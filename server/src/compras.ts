@@ -30,6 +30,7 @@ import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoReg
 import { parseId } from './validate';
 import { round2, round3 } from './utils';
 import { syncLancamentoCompra } from './financeiro';
+import { aplicarEntradaDeCompra } from './custoRecebimento';
 import type { Row, Tx } from './store';
 
 export const R_RECEBIMENTO = () => getResource('compra_recebimentos')!;
@@ -177,7 +178,7 @@ export async function receberParcial(req: Request, res: Response) {
           produto_id: item.produto_id === null || item.produto_id === undefined ? null : Number(item.produto_id),
           insumo_id: item.insumo_id === null || item.insumo_id === undefined ? null : Number(item.insumo_id),
           tamanho_id: item.tamanho_id === null || item.tamanho_id === undefined ? null : Number(item.tamanho_id),
-          quantidade: Math.trunc(linha.quantidade),
+          quantidade: round3(linha.quantidade),
           item_id: linha.item_compra_id,
         });
       }
@@ -203,25 +204,35 @@ export async function receberParcial(req: Request, res: Response) {
         await s.insert(R_RECEBIMENTO_ITEM(), { empresa_id: escopo.empresaId, recebimento_id: Number(recebimento.id), item_compra_id: e.item_id, quantidade: e.quantidade }, tx);
       }
 
-      // ---- estoque: sobe EXATAMENTE o que foi recebido ----
-      for (const e of entradas) {
-        if (e.quantidade <= 0) continue;
-        if (e.produto_id) {
-          await s.adjustStock(e.produto_id, e.tamanho_id as number, local, e.quantidade, tx);
-          await s.insert(
-            getResource('movimentacoes')!,
-            { tipo: 'entrada', produto_id: e.produto_id, tamanho_id: e.tamanho_id, local, quantidade: e.quantidade, motivo: `Recebimento parcial — Compra #${id}`, compra_id: id, usuario_id: actor.id || null },
-            tx
-          );
-        } else if (e.insumo_id) {
-          await s.adjustInsumoStock(e.insumo_id, e.quantidade, tx);
-          await s.insert(
-            getResource('movimentacoes_insumos')!,
-            { tipo: 'entrada', insumo_id: e.insumo_id, quantidade: e.quantidade, motivo: `Recebimento parcial — Compra #${id}`, usuario_id: actor.id || null },
-            tx
-          );
-        }
-      }
+      // ---- estoque + CUSTO: uma única regra canônica ----
+      //
+      // Antes este bloco subia o estoque e NÃO atualizava `insumos.custo_medio`
+      // nem gravava `custo_unitario` na movimentação. Como o CMV do Meu Negócio
+      // sai de `custo_medio` (negocios.ts:511), toda compra recebida por aqui
+      // deixava a margem errada sem nenhum erro na tela.
+      //
+      // Agora chama a MESMA rotina do recebimento total — custo efetivo
+      // (preço + frete rateado + imposto informado), movimentação com custo,
+      // custo médio ponderado e auditoria, tudo nesta transação.
+      const custosAplicados = await aplicarEntradaDeCompra({
+        compraId: id,
+        empresaId: escopo.empresaId,
+        recebimentoId: Number(recebimento.id),
+        linhas: entradas.map((e) => ({
+          item_compra_id: e.item_id,
+          insumo_id: e.insumo_id,
+          produto_id: e.produto_id,
+          tamanho_id: e.tamanho_id,
+          quantidade: e.quantidade,
+          preco_unitario: num(porId.get(e.item_id)?.preco_unitario ?? 0),
+          local,
+        })),
+        freteTotal: num(compra.frete),
+        actor: { id: actor.id || null, name: actor.name },
+        motivo: `Recebimento parcial — Compra #${id}`,
+        tx,
+        escopo,
+      });
 
       // ---- status: parcial até tudo chegar ----
       const itensDepois = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { compra_id: id } }, tx);
@@ -251,7 +262,7 @@ export async function receberParcial(req: Request, res: Response) {
         },
         tx
       );
-      return { recebimento, idempotente: false, entradas, total, completo, status: novoStatus };
+      return { recebimento, idempotente: false, entradas, total, completo, status: novoStatus, custos: custosAplicados };
     }, { isolation: 'serializable' });
 
     res.status(out.idempotente ? 200 : 201).json({
@@ -259,6 +270,7 @@ export async function receberParcial(req: Request, res: Response) {
       idempotente: out.idempotente,
       recebimento: out.recebimento,
       entradas_estoque: out.entradas,
+      custos: out.idempotente ? undefined : out.custos,
       total: out.total,
       status: out.idempotente ? undefined : out.status,
       mensagem: out.idempotente
