@@ -30,6 +30,7 @@ import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoReg
 import { parseId } from './validate';
 import { round2, round3 } from './utils';
 import { syncLancamentoCompra } from './financeiro';
+import { aplicarEntradaDeCompra } from './custoRecebimento';
 import type { Row, Tx } from './store';
 
 export const R_RECEBIMENTO = () => getResource('compra_recebimentos')!;
@@ -108,6 +109,17 @@ function normalizarLinhas(bruto: unknown): LinhaRecebimento[] {
  * com n derivado dos itens e quantidades). Repetir a MESMA requisição devolve o
  * MESMO recebimento; o estoque não sobe duas vezes.
  */
+/**
+ * Sinal interno da PRÉVIA de recebimento: o cálculo roda pela MESMA rotina
+ * canônica de custo e a transação é abortada de propósito, levando o resultado
+ * para fora. Não é erro e nada é gravado.
+ */
+class PrevisaoRecebimento extends Error {
+  constructor(readonly payload: unknown) {
+    super('previsao');
+  }
+}
+
 export async function receberParcial(req: Request, res: Response) {
   const actor = currentUser(req);
   const r = getResource('compras')!;
@@ -116,6 +128,11 @@ export async function receberParcial(req: Request, res: Response) {
   const id = parseId(req.params.id);
   const body = (req.body || {}) as Record<string, unknown>;
   const linhas = normalizarLinhas(body.itens);
+  // `previsao: true` (ou `?previsao=1`) calcula o impacto SEM gravar: é o que a
+  // tela mostra antes de o usuário confirmar. Usa a regra canônica de verdade,
+  // então o número projetado é o que será aplicado — não uma re-implementação no
+  // cliente que poderia divergir.
+  const previsao = body.previsao === true || req.query?.previsao === '1' || req.query?.previsao === 'true';
   const s = getStore();
 
   const chave = String(
@@ -177,7 +194,7 @@ export async function receberParcial(req: Request, res: Response) {
           produto_id: item.produto_id === null || item.produto_id === undefined ? null : Number(item.produto_id),
           insumo_id: item.insumo_id === null || item.insumo_id === undefined ? null : Number(item.insumo_id),
           tamanho_id: item.tamanho_id === null || item.tamanho_id === undefined ? null : Number(item.tamanho_id),
-          quantidade: Math.trunc(linha.quantidade),
+          quantidade: round3(linha.quantidade),
           item_id: linha.item_compra_id,
         });
       }
@@ -203,24 +220,56 @@ export async function receberParcial(req: Request, res: Response) {
         await s.insert(R_RECEBIMENTO_ITEM(), { empresa_id: escopo.empresaId, recebimento_id: Number(recebimento.id), item_compra_id: e.item_id, quantidade: e.quantidade }, tx);
       }
 
-      // ---- estoque: sobe EXATAMENTE o que foi recebido ----
-      for (const e of entradas) {
-        if (e.quantidade <= 0) continue;
-        if (e.produto_id) {
-          await s.adjustStock(e.produto_id, e.tamanho_id as number, local, e.quantidade, tx);
-          await s.insert(
-            getResource('movimentacoes')!,
-            { tipo: 'entrada', produto_id: e.produto_id, tamanho_id: e.tamanho_id, local, quantidade: e.quantidade, motivo: `Recebimento parcial — Compra #${id}`, compra_id: id, usuario_id: actor.id || null },
-            tx
-          );
-        } else if (e.insumo_id) {
-          await s.adjustInsumoStock(e.insumo_id, e.quantidade, tx);
-          await s.insert(
-            getResource('movimentacoes_insumos')!,
-            { tipo: 'entrada', insumo_id: e.insumo_id, quantidade: e.quantidade, motivo: `Recebimento parcial — Compra #${id}`, usuario_id: actor.id || null },
-            tx
-          );
-        }
+      // ---- estoque + CUSTO: uma única regra canônica ----
+      //
+      // Antes este bloco subia o estoque e NÃO atualizava `insumos.custo_medio`
+      // nem gravava `custo_unitario` na movimentação. Como o CMV do Meu Negócio
+      // sai de `custo_medio` (negocios.ts:511), toda compra recebida por aqui
+      // deixava a margem errada sem nenhum erro na tela.
+      //
+      // Agora chama a MESMA rotina do recebimento total — custo efetivo
+      // (preço + frete rateado + imposto informado), movimentação com custo,
+      // custo médio ponderado e auditoria, tudo nesta transação.
+      const custosAplicados = await aplicarEntradaDeCompra({
+        compraId: id,
+        empresaId: escopo.empresaId,
+        recebimentoId: Number(recebimento.id),
+        linhas: entradas.map((e) => ({
+          item_compra_id: e.item_id,
+          insumo_id: e.insumo_id,
+          produto_id: e.produto_id,
+          tamanho_id: e.tamanho_id,
+          quantidade: e.quantidade,
+          preco_unitario: num(porId.get(e.item_id)?.preco_unitario ?? 0),
+          local,
+        })),
+        freteTotal: num(compra.frete),
+        actor: { id: actor.id || null, name: actor.name },
+        motivo: `Recebimento parcial — Compra #${id}`,
+        tx,
+        escopo,
+      });
+
+      if (previsao) {
+        const itensProjetados = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { compra_id: id } }, tx);
+        throw new PrevisaoRecebimento({
+          ok: true,
+          previsao: true,
+          aplicado: false,
+          compra_id: id,
+          local,
+          custos: custosAplicados,
+          total,
+          itens: itensProjetados.rows.map((i) => ({
+            item_compra_id: Number(i.id),
+            quantidade: num(i.quantidade),
+            quantidade_recebida: num(i.quantidade_recebida),
+            restante: round3(num(i.quantidade) - num(i.quantidade_recebida)),
+          })),
+          // O financeiro só nasce quando a compra fica completa — dizer isso na
+          // prévia evita a surpresa de a conta aparecer depois.
+          completo: itensProjetados.rows.every((i) => round3(num(i.quantidade_recebida)) >= round3(num(i.quantidade)) - 1e-6),
+        });
       }
 
       // ---- status: parcial até tudo chegar ----
@@ -251,7 +300,7 @@ export async function receberParcial(req: Request, res: Response) {
         },
         tx
       );
-      return { recebimento, idempotente: false, entradas, total, completo, status: novoStatus };
+      return { recebimento, idempotente: false, entradas, total, completo, status: novoStatus, custos: custosAplicados };
     }, { isolation: 'serializable' });
 
     res.status(out.idempotente ? 200 : 201).json({
@@ -259,6 +308,7 @@ export async function receberParcial(req: Request, res: Response) {
       idempotente: out.idempotente,
       recebimento: out.recebimento,
       entradas_estoque: out.entradas,
+      custos: out.idempotente ? undefined : out.custos,
       total: out.total,
       status: out.idempotente ? undefined : out.status,
       mensagem: out.idempotente
@@ -268,6 +318,12 @@ export async function receberParcial(req: Request, res: Response) {
           : 'Recebimento parcial registrado: o estoque subiu apenas pela quantidade recebida.',
     });
   } catch (e) {
+    // A prévia aborta a transação de propósito: devolve 200 com o impacto e nada
+    // foi gravado. Não passa por toHttpError porque não é um erro.
+    if (e instanceof PrevisaoRecebimento) {
+      res.status(200).json(e.payload);
+      return;
+    }
     throw toHttpError(e, r);
   }
 }

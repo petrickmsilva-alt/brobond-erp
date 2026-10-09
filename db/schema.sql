@@ -2979,3 +2979,609 @@ BEGIN
     ALTER TABLE fin_extrato_transacoes ADD CONSTRAINT ck_extrato_valor_positivo CHECK (valor > 0) NOT VALID;
   END IF;
 END $$;
+
+-- ---- 0026_producao_completa (FASE E2 — produção completa) ----
+--
+-- ESPELHO de db/migrations/0026_producao_completa.sql. O boot aplica este
+-- arquivo primeiro e depois as migrações versionadas; manter os dois iguais é o
+-- que garante que um banco novo e um banco antigo terminem idênticos.
+-- Tudo aqui é aditivo e idempotente.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- A) MÁQUINA DE ESTADOS
+--
+-- Fluxo da especificação:
+--   PLANEJADA → LIBERADA → EM_PRODUÇÃO → PARCIAL → CONCLUÍDA   (+ CANCELADA)
+--
+-- `liberada` e `parcial` são estados NOVOS. Os quatro que já existiam
+-- (planejada, em_producao, concluida, cancelada) continuam valendo com o mesmo
+-- significado — nenhuma linha existente muda de sentido.
+-- ----------------------------------------------------------------------------
+-- NULL vira 'planejada' (o DEFAULT da coluna já é esse; só garante o histórico).
+UPDATE ordens_fabricacao SET status = 'planejada' WHERE status IS NULL;
+
+-- Diagnóstico ANTES de criar a constraint: se houver status fora do vocabulário,
+-- a migration falha com a lista dos ids em vez de um erro críptico de CHECK.
+DO $$
+DECLARE
+  invalidos TEXT;
+BEGIN
+  SELECT string_agg(id || ':' || status, ', ' ORDER BY id)
+    INTO invalidos
+    FROM ordens_fabricacao
+   WHERE status NOT IN ('planejada', 'liberada', 'em_producao', 'parcial', 'concluida', 'cancelada');
+  IF invalidos IS NOT NULL THEN
+    RAISE EXCEPTION
+      '0026_producao_completa: status inválido em ordens_fabricacao (%). Corrija esses registros antes de subir — a máquina de estados da E2 só aceita planejada, liberada, em_producao, parcial, concluida e cancelada.',
+      invalidos;
+  END IF;
+END $$;
+
+ALTER TABLE ordens_fabricacao DROP CONSTRAINT IF EXISTS ordens_fabricacao_status_valido;
+ALTER TABLE ordens_fabricacao ADD CONSTRAINT ordens_fabricacao_status_valido CHECK (
+  status IN ('planejada', 'liberada', 'em_producao', 'parcial', 'concluida', 'cancelada')
+);
+
+-- ----------------------------------------------------------------------------
+-- B) PERDAS, PRODUZIDO E CUSTOS
+--
+-- Semântica (é o que o serviço implementa — a coluna só guarda):
+--   • quantidade_produzida  peças BOAS apontadas na OP (soma dos apontamentos);
+--   • quantidade_perdida    peças refugadas — consumiram insumo e não viram
+--                           estoque. É isso que faz a perda custar dinheiro;
+--   • custo_previsto        gravado na LIBERAÇÃO: peças planejadas × custo da
+--                           ficha técnica naquele momento. Congelado de
+--                           propósito: mudar a ficha depois não reescreve o
+--                           que foi orçado;
+--   • custo_real            insumos realmente baixados + mão de obra e
+--                           indiretos reconhecidos na proporção processada.
+-- ----------------------------------------------------------------------------
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS quantidade_produzida INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS quantidade_perdida   INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS custo_previsto NUMERIC(12,2);
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS custo_real     NUMERIC(12,2) NOT NULL DEFAULT 0;
+
+ALTER TABLE ordens_fabricacao DROP CONSTRAINT IF EXISTS ordens_fabricacao_qtd_nao_negativa;
+ALTER TABLE ordens_fabricacao ADD CONSTRAINT ordens_fabricacao_qtd_nao_negativa CHECK (
+  quantidade_produzida >= 0 AND quantidade_perdida >= 0 AND custo_real >= 0
+);
+
+-- Perda por tamanho na OP "por grade": espelho de itens_ordem.produzido.
+-- Derivável dos apontamentos, mas mantido aqui porque a grade da OP lê a linha.
+ALTER TABLE itens_ordem ADD COLUMN IF NOT EXISTS perdido INTEGER NOT NULL DEFAULT 0;
+
+-- ----------------------------------------------------------------------------
+-- C) RESPONSÁVEL, LOCAL DE PRODUÇÃO E MARCOS DE TEMPO
+--
+-- `faccao` (texto livre) continua existindo: é quem faz fora. `local_producao_id`
+-- é onde a peça fica enquanto é produzida — a entrada de produto acabado na
+-- conclusão usa este local quando ele existe, e cai no Local padrão quando não.
+-- ----------------------------------------------------------------------------
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS responsavel_id      INTEGER REFERENCES usuarios(id);
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS local_producao_id   INTEGER REFERENCES locais(id);
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS liberada_em         TIMESTAMPTZ;
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS liberada_por        INTEGER REFERENCES usuarios(id);
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS iniciada_em         TIMESTAMPTZ;
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS cancelada_em        TIMESTAMPTZ;
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS cancelada_por       INTEGER REFERENCES usuarios(id);
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS motivo_cancelamento TEXT;
+
+-- Índice das consultas do painel e do planejamento (empresa + status).
+CREATE INDEX IF NOT EXISTS ordens_fabricacao_empresa_status_idx
+  ON ordens_fabricacao (empresa_id, status);
+CREATE INDEX IF NOT EXISTS ordens_fabricacao_empresa_previsao_idx
+  ON ordens_fabricacao (empresa_id, previsao);
+
+-- ----------------------------------------------------------------------------
+-- D) VÍNCULO FORMAL OP → ESTOQUE  (GAP-ESTQ-ORDEM-ID)
+--
+-- Antes: a entrada de produto acabado era achada por TEXTO
+-- (`motivo = 'Produção concluída — OP #N'`, server/src/producao.ts). Renomear a
+-- string quebrava o estorno em silêncio. Agora a coluna existe, tem FK e índice;
+-- o texto continua sendo escrito para legibilidade na tela de Movimentações.
+--
+-- ON DELETE SET NULL: apagar a OP não pode apagar a história do estoque.
+-- ----------------------------------------------------------------------------
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS ordem_id INTEGER REFERENCES ordens_fabricacao(id) ON DELETE SET NULL;
+
+-- Backfill seguro: só preenche quando o id extraído do motivo REALMENTE existe
+-- em ordens_fabricacao. Motivo sem padrão, ou com id órfão, fica NULL — nunca
+-- se inventa vínculo.
+UPDATE movimentacoes m
+   SET ordem_id = x.oid::int
+  FROM (
+    SELECT mm.id, (regexp_match(mm.motivo, 'OP #(\d+)'))[1] AS oid
+      FROM movimentacoes mm
+     WHERE mm.ordem_id IS NULL
+       AND mm.motivo ~ 'OP #[0-9]+'
+  ) x
+ WHERE m.id = x.id
+   AND x.oid IS NOT NULL
+   AND EXISTS (SELECT 1 FROM ordens_fabricacao o WHERE o.id = x.oid::int);
+
+CREATE INDEX IF NOT EXISTS movimentacoes_ordem_idx       ON movimentacoes (ordem_id);
+CREATE INDEX IF NOT EXISTS movimentacoes_empresa_ordem_idx ON movimentacoes (empresa_id, ordem_id);
+
+-- ----------------------------------------------------------------------------
+-- E) VÍNCULO FORMAL OP → INSUMOS  (GAP-PROD-CONSUMO-VINCULO)
+-- ----------------------------------------------------------------------------
+ALTER TABLE movimentacoes_insumos ADD COLUMN IF NOT EXISTS ordem_id INTEGER REFERENCES ordens_fabricacao(id) ON DELETE SET NULL;
+
+UPDATE movimentacoes_insumos mi
+   SET ordem_id = x.oid::int
+  FROM (
+    SELECT mm.id, (regexp_match(mm.motivo, 'OP #(\d+)'))[1] AS oid
+      FROM movimentacoes_insumos mm
+     WHERE mm.ordem_id IS NULL
+       AND mm.motivo ~ 'OP #[0-9]+'
+  ) x
+ WHERE mi.id = x.id
+   AND x.oid IS NOT NULL
+   AND EXISTS (SELECT 1 FROM ordens_fabricacao o WHERE o.id = x.oid::int);
+
+CREATE INDEX IF NOT EXISTS movimentacoes_insumos_ordem_idx         ON movimentacoes_insumos (ordem_id);
+CREATE INDEX IF NOT EXISTS movimentacoes_insumos_empresa_ordem_idx ON movimentacoes_insumos (empresa_id, ordem_id);
+
+-- ----------------------------------------------------------------------------
+-- F) TRILHA DE TRANSIÇÕES DA OP  (GAP-PROD-EVENTOS)
+--
+-- Append-only, no mesmo formato das demais trilhas do ERP (expedicao_eventos,
+-- envio_eventos, proposta_eventos). A empresa é DERIVADA da OP por trigger:
+-- até um INSERT em SQL cru cai na empresa certa.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ordens_eventos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  ordem_id INTEGER NOT NULL REFERENCES ordens_fabricacao(id) ON DELETE CASCADE,
+  evento TEXT NOT NULL,
+  de_status TEXT,
+  para_status TEXT,
+  mensagem TEXT,
+  dados JSONB,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT ordens_eventos_evento_valido CHECK (evento IN (
+    'criada', 'liberada', 'iniciada', 'apontamento', 'perda', 'consumo',
+    'parcial', 'concluida', 'reaberta', 'cancelada', 'atalho', 'edicao'
+  ))
+);
+
+CREATE INDEX IF NOT EXISTS ordens_eventos_ordem_idx   ON ordens_eventos (ordem_id, criado_em);
+CREATE INDEX IF NOT EXISTS ordens_eventos_empresa_idx ON ordens_eventos (empresa_id, ordem_id, criado_em DESC);
+
+-- ----------------------------------------------------------------------------
+-- G) APONTAMENTOS DE PRODUÇÃO  (GAP-PROD-APONTAMENTOS)
+--
+-- Um apontamento é o que o chão de fábrica informa: "fiz N peças boas e
+-- refuguei M neste tamanho". É ele que alimenta quantidade_produzida,
+-- quantidade_perdida e o custo real — e é ele que consome insumo durante a
+-- produção, em vez de tudo de uma vez na conclusão.
+--
+-- `idempotency_key` evita o duplo apontamento do mesmo turno quando a rede
+-- repete o POST (mesmo mecanismo de `envios`).
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ordens_apontamentos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  ordem_id INTEGER NOT NULL REFERENCES ordens_fabricacao(id) ON DELETE CASCADE,
+  tamanho_id INTEGER REFERENCES tamanhos(id),
+  quantidade_produzida INTEGER NOT NULL DEFAULT 0,
+  quantidade_perdida INTEGER NOT NULL DEFAULT 0,
+  observacoes TEXT,
+  idempotency_key TEXT,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  apontado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT ordens_apontamentos_qtd_valida CHECK (
+    quantidade_produzida >= 0
+    AND quantidade_perdida >= 0
+    AND (quantidade_produzida > 0 OR quantidade_perdida > 0)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ordens_apontamentos_idem_uniq
+  ON ordens_apontamentos (empresa_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS ordens_apontamentos_ordem_idx   ON ordens_apontamentos (ordem_id, apontado_em);
+CREATE INDEX IF NOT EXISTS ordens_apontamentos_empresa_idx ON ordens_apontamentos (empresa_id, ordem_id, apontado_em DESC);
+
+-- ----------------------------------------------------------------------------
+-- Herança de empresa por trigger (mesma função de 0017, novos pares).
+-- Reutiliza brobond_herdar_empresa, que já existe no schema.
+-- ----------------------------------------------------------------------------
+DROP TRIGGER IF EXISTS trg_empresa_ordens_eventos ON ordens_eventos;
+CREATE TRIGGER trg_empresa_ordens_eventos
+  BEFORE INSERT OR UPDATE ON ordens_eventos
+  FOR EACH ROW EXECUTE FUNCTION brobond_herdar_empresa('ordens_fabricacao', 'ordem_id');
+
+DROP TRIGGER IF EXISTS trg_empresa_ordens_apontamentos ON ordens_apontamentos;
+CREATE TRIGGER trg_empresa_ordens_apontamentos
+  BEFORE INSERT OR UPDATE ON ordens_apontamentos
+  FOR EACH ROW EXECUTE FUNCTION brobond_herdar_empresa('ordens_fabricacao', 'ordem_id');
+-- ============================================================================
+-- 0027 — FASE E3: compras — cotação de fornecedor e custo de recebimento
+--
+-- Ataca GAP-COMP-COTACOES (crítico) e dá suporte a GAP-COMP-CUSTOS
+-- (docs/ERP-GAPS.md).
+--
+-- DOMÍNIO — não confundir com o que já existe:
+--   • `cotacao_decisoes` (schema.sql:1139) é do PORTAL DO CLIENTE: tem
+--     `venda_id NOT NULL REFERENCES vendas(id)` e registra a decisão do cliente
+--     sobre uma cotação de VENDA. Não tem nada a ver com fornecedor.
+--   • As tabelas desta migration são de COMPRA: vários fornecedores cotando o
+--     mesmo carrinho de insumos/produtos, e o comprador escolhendo por item.
+--
+-- Blocos:
+--   A) cotacoes_compra               — o processo de cotação
+--   B) cotacao_compra_itens          — o que está sendo cotado (carrinho)
+--   C) cotacao_compra_fornecedores   — quem foi convidado a cotar
+--   D) cotacao_compra_precos         — a resposta de cada fornecedor por item
+--   E) custo de recebimento          — rateio de frete no item da compra
+--
+-- Aditiva e reversível: nenhuma tabela existente é renomeada, nenhuma coluna é
+-- removida, nenhum CHECK existente é enfraquecido.
+--
+-- Idempotente: pode ser aplicada duas vezes, em banco limpo e em banco migrado.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- A) COTAÇÃO DE COMPRA
+--
+-- Fluxo: RASCUNHO → COTANDO → DECIDIDA   (+ CANCELADA)
+--
+-- `compra_id` é o pedido de compra gerado pela decisão. É UNIQUE de propósito:
+-- é o que torna a geração do pedido IDEMPOTENTE no banco, e não só na aplicação.
+-- Duas decisões simultâneas da mesma cotação não conseguem criar dois pedidos —
+-- a segunda estoura no índice único.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cotacoes_compra (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  titulo TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'rascunho',
+  prazo_validade DATE,
+  previsao_compra DATE,
+  observacoes TEXT,
+  -- Decisão
+  decidida_em TIMESTAMPTZ,
+  decidida_por INTEGER REFERENCES usuarios(id),
+  compra_id INTEGER REFERENCES compras(id) ON DELETE SET NULL,
+  criterio TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS cotacoes_compra_empresa_idx ON cotacoes_compra (empresa_id, status);
+CREATE INDEX IF NOT EXISTS cotacoes_compra_previsao_idx ON cotacoes_compra (empresa_id, previsao_compra);
+
+-- Um pedido de compra por cotação. UNIQUE = idempotência garantida no banco.
+CREATE UNIQUE INDEX IF NOT EXISTS cotacoes_compra_compra_uniq
+  ON cotacoes_compra (compra_id) WHERE compra_id IS NOT NULL;
+
+DO $$ BEGIN
+  ALTER TABLE cotacoes_compra ADD CONSTRAINT cotacoes_compra_status_valido CHECK (
+    status IN ('rascunho', 'cotando', 'decidida', 'cancelada')
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- O critério de escolha precisa ser declarável, senão a decisão vira arbitrária.
+DO $$ BEGIN
+  ALTER TABLE cotacoes_compra ADD CONSTRAINT cotacoes_compra_criterio_valido CHECK (
+    criterio IS NULL OR criterio IN ('menor_preco', 'menor_preco_total', 'prazo', 'qualidade')
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ----------------------------------------------------------------------------
+-- B) ITENS DA COTAÇÃO (o carrinho que os fornecedores vão orçar)
+--
+-- Mesma regra de `itens_compra`: ou insumo, ou produto. A escolha por item fica
+-- em `escolhido_*`, preenchida na decisão.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cotacao_compra_itens (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  cotacao_id INTEGER NOT NULL REFERENCES cotacoes_compra(id) ON DELETE CASCADE,
+  insumo_id INTEGER REFERENCES insumos(id),
+  produto_id INTEGER REFERENCES produtos(id),
+  quantidade NUMERIC(12,3) NOT NULL,
+  unidade TEXT,
+  -- Preenchidos na decisão: quem ganhou este item e por quanto.
+  escolhido_fornecedor_id INTEGER REFERENCES fornecedores(id),
+  escolhido_preco NUMERIC(12,2),
+  CONSTRAINT cotacao_compra_itens_origem_check CHECK (insumo_id IS NOT NULL OR produto_id IS NOT NULL),
+  CONSTRAINT cotacao_compra_itens_qtd_positiva CHECK (quantidade > 0)
+);
+
+CREATE INDEX IF NOT EXISTS cotacao_compra_itens_idx ON cotacao_compra_itens (cotacao_id);
+CREATE INDEX IF NOT EXISTS cotacao_compra_itens_empresa_idx ON cotacao_compra_itens (empresa_id);
+
+-- ----------------------------------------------------------------------------
+-- C) FORNECEDORES CONVIDADOS
+--
+-- UNIQUE (cotacao, fornecedor): convidar o mesmo fornecedor duas vezes para a
+-- mesma cotação é erro, não duas cotações paralelas.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cotacao_compra_fornecedores (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  cotacao_id INTEGER NOT NULL REFERENCES cotacoes_compra(id) ON DELETE CASCADE,
+  fornecedor_id INTEGER NOT NULL REFERENCES fornecedores(id),
+  status TEXT NOT NULL DEFAULT 'convidado',
+  convidado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  respondeu_em TIMESTAMPTZ,
+  prazo_entrega_dias INTEGER,
+  condicao_pagamento TEXT,
+  frete NUMERIC(12,2) DEFAULT 0,
+  validade_proposta DATE,
+  observacoes TEXT,
+  CONSTRAINT cotacao_compra_fornecedores_qtd CHECK (prazo_entrega_dias IS NULL OR prazo_entrega_dias >= 0),
+  CONSTRAINT cotacao_compra_fornecedores_frete CHECK (frete >= 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS cotacao_compra_fornecedores_uniq
+  ON cotacao_compra_fornecedores (cotacao_id, fornecedor_id);
+CREATE INDEX IF NOT EXISTS cotacao_compra_fornecedores_empresa_idx
+  ON cotacao_compra_fornecedores (empresa_id);
+
+DO $$ BEGIN
+  ALTER TABLE cotacao_compra_fornecedores ADD CONSTRAINT cotacao_compra_fornecedores_status_valido CHECK (
+    status IN ('convidado', 'cotado', 'recusado')
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ----------------------------------------------------------------------------
+-- D) PREÇOS POR FORNECEDOR × ITEM
+--
+-- É aqui que mora a comparação. UNIQUE (convite, item): um fornecedor não pode
+-- mandar dois preços para o mesmo item — se mudar de ideia, EDITA.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cotacao_compra_precos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  convite_id INTEGER NOT NULL REFERENCES cotacao_compra_fornecedores(id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES cotacao_compra_itens(id) ON DELETE CASCADE,
+  preco_unitario NUMERIC(12,2) NOT NULL,
+  prazo_entrega_dias INTEGER,
+  disponivel BOOLEAN NOT NULL DEFAULT true,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  CONSTRAINT cotacao_compra_precos_preco_positivo CHECK (preco_unitario >= 0),
+  CONSTRAINT cotacao_compra_precos_prazo CHECK (prazo_entrega_dias IS NULL OR prazo_entrega_dias >= 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS cotacao_compra_precos_uniq
+  ON cotacao_compra_precos (convite_id, item_id);
+CREATE INDEX IF NOT EXISTS cotacao_compra_precos_empresa_idx ON cotacao_compra_precos (empresa_id);
+CREATE INDEX IF NOT EXISTS cotacao_compra_precos_item_idx ON cotacao_compra_precos (item_id);
+
+-- ----------------------------------------------------------------------------
+-- E) CUSTO DE RECEBIMENTO — rateio de frete
+--
+-- `itens_compra` ganha o custo de aquisição rateado. Ele existe porque o custo
+-- médio do insumo NÃO pode ser calculado só com `preco_unitario`: frete e
+-- imposto fazem parte do que a empresa pagou para ter o insumo na porta.
+--
+-- Coluna nova, `DEFAULT 0`, aditiva: nada que já existe muda de valor. O rateio
+-- passa a ser escrito pelo recebimento (server/src/compras.ts), não por esta
+-- migration — aqui só existe o lugar para guardá-lo.
+-- ----------------------------------------------------------------------------
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS custo_frete_rateado NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS custo_impostos NUMERIC(12,2) NOT NULL DEFAULT 0;
+
+DO $$ BEGIN
+  ALTER TABLE itens_compra ADD CONSTRAINT itens_compra_custos_positivos CHECK (
+    custo_frete_rateado >= 0 AND custo_impostos >= 0
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Auditar repasse de custo é auditar dinheiro: sem índice, a trilha por compra
+-- vira varredura de tabela inteira assim que houver histórico.
+CREATE INDEX IF NOT EXISTS itens_compra_custo_idx ON itens_compra (compra_id, insumo_id);
+
+
+-- ============================================================================
+-- ESPELHO DE db/migrations/0028_compras_custo_canonico.sql
+-- Mantido aqui para que um banco criado direto do schema.sql fique idêntico
+-- a um banco migrado incrementalmente. Não editar sem editar a migration.
+-- ============================================================================
+
+-- ============================================================================
+-- 0028 — FASE E3.1: custo canônico de recebimento de compra
+--
+-- Fecha GAP-COMP-CUSTOS (docs/ERP-GAPS.md).
+--
+-- O PROBLEMA (auditado, não suposto)
+-- ----------------------------------
+-- Existiam TRÊS caminhos de recebimento e cada um tratava custo de um jeito:
+--
+--   1. receberCompra   (server/src/itens.ts:436)  — atualizava custo_medio e
+--                                                   gravava custo_unitario.
+--   2. receberParcial  (server/src/compras.ts:111) — NÃO atualizava custo_medio
+--                                                   e gravava a movimentação SEM
+--                                                   custo_unitario.
+--   3. importarXmlCompra (server/src/suprimentos.ts:383) — terceira cópia da
+--                                                   média ponderada, só produto.
+--
+-- Consequência concreta: o CMV do "Meu Negócio" é calculado a partir de
+-- `insumos.custo_medio` (server/src/negocios.ts:511 — Σ consumo × (1+perda) ×
+-- custo_medio). Compra recebida pelo caminho parcial subia o estoque sem mover
+-- o custo médio, então a margem de todo produto cuja ficha usa aquele insumo
+-- saía errada — silenciosamente.
+--
+-- E o estorno era pior: estornarCompra localizava as entradas de insumo pelo
+-- TEXTO do motivo (`'Compra #N'`), mas o recebimento parcial grava
+-- `'Recebimento parcial — Compra #N'`. Ou seja, cancelar uma compra recebida
+-- parcialmente devolvia o estoque de PRODUTOS e deixava o de INSUMOS para cima,
+-- com o custo médio alterado para sempre.
+--
+-- O QUE ESTA MIGRATION FAZ
+-- ------------------------
+-- Cria os VÍNCULOS ESTRUTURAIS que permitem uma única regra canônica:
+--
+--   • movimentacoes_insumos.compra_id ......... achar as entradas de insumo por
+--                                               pedido, não por texto de motivo;
+--   • movimentacoes_insumos.recebimento_id .... saber QUAL recebimento gerou a
+--                                               entrada (essencial quando o
+--                                               mesmo item chega em 2 lotes com
+--                                               custos diferentes);
+--   • movimentacoes.recebimento_id ............ o mesmo para produto acabado;
+--   • movimentacoes.custo_unitario ............ produto também passa a ter o
+--                                               custo gravado na movimentação —
+--                                               sem isso o estorno teria que
+--                                               adivinhar o preço;
+--   • índice único parcial .................... trava no BANCO contra duas
+--                                               entradas de estoque para a mesma
+--                                               linha do mesmo recebimento.
+--
+-- A REGRA DE CÁLCULO NÃO MORA AQUI. Ela mora em server/src/custoRecebimento.ts.
+-- Esta migration só garante que os dados necessários existem e são íntegros.
+--
+-- Aditiva e reversível: nenhuma coluna removida, nenhum CHECK enfraquecido.
+-- Idempotente: pode ser aplicada em banco limpo e em banco já migrado.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- A) VÍNCULO ESTRUTURAL: movimentação de insumo → compra e recebimento
+-- ----------------------------------------------------------------------------
+ALTER TABLE movimentacoes_insumos ADD COLUMN IF NOT EXISTS compra_id INTEGER REFERENCES compras(id);
+ALTER TABLE movimentacoes_insumos ADD COLUMN IF NOT EXISTS recebimento_id INTEGER REFERENCES compra_recebimentos(id);
+ALTER TABLE movimentacoes_insumos ADD COLUMN IF NOT EXISTS item_compra_id INTEGER REFERENCES itens_compra(id);
+
+-- ----------------------------------------------------------------------------
+-- B) VÍNCULO ESTRUTURAL + CUSTO: movimentação de produto → recebimento
+--
+-- custo_unitario em `movimentacoes` é NOVO. Sem ele, o estorno de um produto
+-- recebido em dois lotes de preço diferente não tem como saber qual preço
+-- desfazer — e "voltar ao custo anterior" seria chute.
+-- ----------------------------------------------------------------------------
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS recebimento_id INTEGER REFERENCES compra_recebimentos(id);
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS item_compra_id INTEGER REFERENCES itens_compra(id);
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS custo_unitario NUMERIC(12,2);
+
+-- Custo unitário nunca é negativo em nenhuma das duas tabelas.
+ALTER TABLE movimentacoes DROP CONSTRAINT IF EXISTS movimentacoes_custo_unitario_nao_negativo;
+ALTER TABLE movimentacoes ADD CONSTRAINT movimentacoes_custo_unitario_nao_negativo CHECK (custo_unitario IS NULL OR custo_unitario >= 0);
+
+-- Em movimentacoes_insumos a coluna já existia com DEFAULT 0. O CHECK só é
+-- adicionado se não houver linha histórica negativa — adicionar às cegas
+-- derrubaria a migração (e o serviço) em banco de produção com dado antigo.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'movimentacoes_insumos_custo_nao_negativo'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM movimentacoes_insumos WHERE custo_unitario < 0
+  ) THEN
+    ALTER TABLE movimentacoes_insumos
+      ADD CONSTRAINT movimentacoes_insumos_custo_nao_negativo CHECK (custo_unitario >= 0);
+  END IF;
+END $$;
+
+-- ----------------------------------------------------------------------------
+-- C) ÍNDICES
+--
+-- O estorno percorre as entradas de um pedido/recebimento; sem índice isso é
+-- varredura de tabela inteira dentro de uma transação serializable.
+-- ----------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS movimentacoes_insumos_compra_idx
+  ON movimentacoes_insumos (compra_id, tipo);
+CREATE INDEX IF NOT EXISTS movimentacoes_insumos_recebimento_idx
+  ON movimentacoes_insumos (recebimento_id, tipo);
+CREATE INDEX IF NOT EXISTS movimentacoes_recebimento_idx
+  ON movimentacoes (recebimento_id, tipo);
+
+-- ----------------------------------------------------------------------------
+-- D) TRAVA DE DUPLICIDADE NO BANCO
+--
+-- Uma linha de recebimento gera UMA entrada de estoque por insumo e UMA por
+-- produto. A idempotência de aplicação já é garantida por
+-- `compra_recebimentos.documento`; este índice é a segunda camada — se algum
+-- caminho novo esquecer a checagem, o banco recusa em vez de dobrar o estoque.
+--
+-- Parcial (WHERE recebimento_id IS NOT NULL): movimentos que não vêm de
+-- recebimento de compra — produção, ajuste, transferência, venda — continuam
+-- livres, e NULL não colide.
+-- ----------------------------------------------------------------------------
+-- Chave = a LINHA da compra, não o insumo: duas linhas do mesmo pedido podem
+-- comprar o MESMO insumo (código de fornecedor ou condição diferente), e isso é
+-- legítimo. Bloquear por insumo quebraria esse caso.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mov_insumos_entrada_por_recebimento
+  ON movimentacoes_insumos (recebimento_id, item_compra_id)
+  WHERE recebimento_id IS NOT NULL AND tipo = 'entrada';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mov_produtos_entrada_por_recebimento
+  ON movimentacoes (recebimento_id, item_compra_id)
+  WHERE recebimento_id IS NOT NULL AND tipo = 'entrada';
+
+-- ----------------------------------------------------------------------------
+-- E) RETROAJUSTE (backfill) — liga o que já existe, sem inventar vínculo
+--
+-- As entradas de insumo anteriores a esta migration só podem ser ligadas ao
+-- pedido pelo TEXTO do motivo, que é o único vínculo que elas têm. Fazemos isso
+-- de forma estrita: só quando o motivo é exatamente 'Compra #N' E o pedido N
+-- existe. O que não casa fica NULL — ligação inventada é pior que ligação
+-- ausente, porque o estorno passaria a desfazer o movimento errado.
+--
+-- NÃO fazemos backfill de custo_unitario nem de recebimento_id: o custo histórico
+-- não é recuperável (o preço do item pode ter sido editado depois) e o
+-- recebimento de origem não está registrado. Deixar NULL é honesto; preencher
+-- seria fabricar contabilidade.
+-- ----------------------------------------------------------------------------
+UPDATE movimentacoes_insumos mi
+SET compra_id = x.oid
+FROM (
+  SELECT mi2.id AS mid,
+         (regexp_match(mi2.motivo, '^Compra #(\d+)$'))[1]::int AS oid
+  FROM movimentacoes_insumos mi2
+  WHERE mi2.compra_id IS NULL
+    AND mi2.tipo = 'entrada'
+    AND mi2.motivo ~ '^Compra #[0-9]+$'
+) x
+WHERE mi.id = x.mid
+  AND EXISTS (SELECT 1 FROM compras c WHERE c.id = x.oid);
+
+-- O mesmo para o vínculo por recebimento nas entradas PARCIAIS de insumo: o
+-- motivo 'Recebimento parcial — Compra #N' identifica o pedido, e o
+-- recebimento é o único daquela compra com a mesma data/hora da movimentação.
+-- Sem correspondência inequívoca, fica NULL.
+UPDATE movimentacoes_insumos mi
+SET compra_id = x.oid
+FROM (
+  SELECT mi2.id AS mid,
+         (regexp_match(mi2.motivo, '^Recebimento parcial — Compra #(\d+)$'))[1]::int AS oid
+  FROM movimentacoes_insumos mi2
+  WHERE mi2.compra_id IS NULL
+    AND mi2.tipo = 'entrada'
+    AND mi2.motivo ~ '^Recebimento parcial — Compra #[0-9]+$'
+) x
+WHERE mi.id = x.mid
+  AND EXISTS (SELECT 1 FROM compras c WHERE c.id = x.oid);
+
+
+-- ============================================================================
+-- 0029 — DE-PARA DE SKU DE FORNECEDOR COMPLETO  (E3.2 · GAP-COMP-DEPARA-MENU)
+-- espelho de db/migrations/0029_compras_depara_completo.sql
+-- ============================================================================
+
+-- ---- 1) colunas -----------------------------------------------------------
+ALTER TABLE produto_fornecedor_skus ADD COLUMN IF NOT EXISTS descricao TEXT;
+ALTER TABLE produto_fornecedor_skus ADD COLUMN IF NOT EXISTS unidade   TEXT;
+ALTER TABLE produto_fornecedor_skus ADD COLUMN IF NOT EXISTS ativo     BOOLEAN NOT NULL DEFAULT true;
+
+-- A descrição do fornecedor costuma vir em caixa alta e com espaços duplos no
+-- XML; normalizar na gravação é responsabilidade da aplicação, não do banco.
+-- Aqui só garantimos que texto vazio não vire um valor "fantasma".
+UPDATE produto_fornecedor_skus SET descricao = NULL WHERE btrim(COALESCE(descricao, '')) = '';
+UPDATE produto_fornecedor_skus SET unidade   = NULL WHERE btrim(COALESCE(unidade, ''))   = '';
+
+-- ---- 2) índice de busca ---------------------------------------------------
+-- O de-para é consultado o tempo todo pelo par (fornecedor, código) — esse já é
+-- UNIQUE. O que faltava era achar pelo PRODUTO: "de quais fornecedores eu
+-- compro este SKU?" e a pesquisa por descrição na tela.
+CREATE INDEX IF NOT EXISTS produto_fornecedor_skus_produto_idx
+  ON produto_fornecedor_skus (produto_id);
+CREATE INDEX IF NOT EXISTS produto_fornecedor_skus_ativos_idx
+  ON produto_fornecedor_skus (empresa_id, ativo)
+  WHERE ativo;

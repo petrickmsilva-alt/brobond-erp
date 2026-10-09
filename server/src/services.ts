@@ -483,7 +483,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
         await abrirInventarioSnapshot(row, actor, tx);
       }
       if (r.key === 'vendas' || r.key === 'compras') {
-        await aplicarRegrasPedido(r.key === 'vendas' ? 'venda' : 'compra', null, row, data, { id: actor.id || null, name: actor.name }, tx);
+        await aplicarRegrasPedido(r.key === 'vendas' ? 'venda' : 'compra', null, row, data, { id: actor.id || null, name: actor.name }, tx, escopo);
         const full = (await s.get(r, row.id, tx)) ?? row;
         await (r.key === 'vendas' ? syncLancamentoVenda : syncLancamentoCompra)(null, full, data, { id: actor.id || null, name: actor.name }, tx);
       }
@@ -652,7 +652,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       // Vendas/Compras: faturamento/baixa de estoque, recebimento/custo médio e estornos
       if (r.key === 'vendas' || r.key === 'compras') {
         const full = (await s.get(r, id, tx)) ?? row;
-        await aplicarRegrasPedido(r.key === 'vendas' ? 'venda' : 'compra', before, full, data, { id: actor.id || null, name: actor.name }, tx);
+        await aplicarRegrasPedido(r.key === 'vendas' ? 'venda' : 'compra', before, full, data, { id: actor.id || null, name: actor.name }, tx, escopo);
         await (r.key === 'vendas' ? syncLancamentoVenda : syncLancamentoCompra)(before, full, data, { id: actor.id || null, name: actor.name }, tx);
       }
       // Aporte confirmado/estornado → lançamento financeiro automático

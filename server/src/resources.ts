@@ -1299,6 +1299,16 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, hint: 'Entrada: positivo (aumenta). Saída/transferência: positivo (diminui). Ajuste: positivo para acrescentar, negativo para reduzir.' },
       { name: 'motivo', label: 'Motivo', type: 'text', search: true, maxLength: 200, wide: true },
       { name: 'compra_id', label: 'Compra', type: 'integer', list: false },
+      // E3.1 (GAP-COMP-CUSTOS): vínculo com o recebimento e com a linha da compra.
+      // Sem eles, o estorno de um produto recebido em dois lotes de preço
+      // diferente não tem como saber qual preço desfazer.
+      { name: 'recebimento_id', label: 'Recebimento', type: 'ref', ref: 'compra_recebimentos', list: false, hint: 'Preenchido automaticamente quando a entrada vem de um recebimento de compra.' },
+      { name: 'item_compra_id', label: 'Item da compra', type: 'ref', ref: 'itens_compra', list: false },
+      { name: 'custo_unitario', label: 'Custo unitário', type: 'money', min: 0, list: false, hint: 'Custo efetivo da entrada (preço + frete rateado + imposto que compõe custo). Base do estorno.' },
+      // E2: vínculo FORMAL com a OP. Antes a entrada de produto acabado só era
+      // achada pelo texto do motivo ('Produção concluída — OP #N'); o motivo
+      // continua sendo escrito para leitura, mas o vínculo agora é a FK.
+      { name: 'ordem_id', label: 'Ordem de fabricação', type: 'ref', ref: 'ordens', search: true, hint: 'Preenchido automaticamente quando a movimentação vem de uma OP.' },
       { name: 'estornado', label: 'Estornado', type: 'boolean', default: false, list: false },
       { name: 'estornado_em', label: 'Estornado em', type: 'datetime', list: false },
       { name: 'estornado_por', label: 'Estornado por', type: 'text', list: false },
@@ -1345,10 +1355,13 @@ export const RESOURCES: Record<string, Resource> = {
         default: 'planejada',
         options: [
           { value: 'planejada', label: 'Planejada', tone: 'slate' },
+          { value: 'liberada', label: 'Liberada', tone: 'amber' },
           { value: 'em_producao', label: 'Em produção', tone: 'blue' },
+          { value: 'parcial', label: 'Parcial', tone: 'blue' },
           { value: 'concluida', label: 'Concluída', tone: 'green' },
           { value: 'cancelada', label: 'Cancelada', tone: 'red' },
         ],
+        hint: 'Fluxo: planejada → liberada → em produção → parcial → concluída. Use os botões da ficha da OP; trocar o status à mão também é válido, mas a transição é conferida no servidor.',
       },
       {
         name: 'etapa',
@@ -1362,9 +1375,24 @@ export const RESOURCES: Record<string, Resource> = {
         ],
       },
       { name: 'faccao', label: 'Facção', type: 'text', maxLength: 80, search: true, placeholder: 'Facção responsável (opcional)' },
+      { name: 'responsavel_id', label: 'Responsável', type: 'ref', ref: 'usuarios', search: true, hint: 'Quem responde pela OP no chão de fábrica.' },
+      { name: 'local_producao_id', label: 'Local de produção', type: 'ref', ref: 'locais', hint: 'Onde a peça é produzida. A entrada de produto acabado usa este local; sem ele, usa o Local padrão.' },
       { name: 'inicio', label: 'Início', type: 'date' },
       { name: 'previsao', label: 'Previsão de entrega', type: 'date' },
+      // ---- E2: produção, perdas e custo. Tudo readonly — quem escreve é o
+      // fluxo (liberar / apontar / concluir), nunca o formulário. Editar à mão
+      // descolaria o número do estoque e das movimentações que o sustentam.
+      { name: 'quantidade_produzida', label: 'Produzido', type: 'integer', readonly: true, default: 0, hint: 'Peças boas apontadas (soma dos apontamentos).' },
+      { name: 'quantidade_perdida', label: 'Perdido', type: 'integer', readonly: true, default: 0, hint: 'Peças refugadas: consumiram insumo e não entraram no estoque.' },
+      { name: 'custo_previsto', label: 'Custo previsto', type: 'money', readonly: true, form: false, hint: 'Gravado na liberação: peças planejadas × custo da ficha técnica naquele momento.' },
+      { name: 'custo_real', label: 'Custo real', type: 'money', readonly: true, hint: 'Insumos realmente baixados + mão de obra e indiretos reconhecidos.' },
+      { name: 'liberada_em', label: 'Liberada em', type: 'datetime', readonly: true, form: false, list: false },
+      { name: 'liberada_por', label: 'Liberada por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
+      { name: 'iniciada_em', label: 'Iniciada em', type: 'datetime', readonly: true, form: false, list: false },
       { name: 'concluida_em', label: 'Concluída em', type: 'datetime', readonly: true, form: false },
+      { name: 'cancelada_em', label: 'Cancelada em', type: 'datetime', readonly: true, form: false, list: false },
+      { name: 'cancelada_por', label: 'Cancelada por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
+      { name: 'motivo_cancelamento', label: 'Motivo do cancelamento', type: 'textarea', maxLength: 500, readonly: true, form: false, wide: true },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
       ...auditFields,
     ],
@@ -1680,6 +1708,12 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'ncm', label: 'NCM', type: 'text', list: false },
       { name: 'cfop', label: 'CFOP', type: 'text', list: false },
       { name: 'dados_fiscais', label: 'Dados fiscais', type: 'text', list: false },
+      // E3.1 (GAP-COMP-CUSTOS): parcela do frete da compra e imposto que compõe
+      // custo atribuídos a esta linha. Gravados pela regra canônica de
+      // recebimento (custoRecebimento.ts), não à mão — editar aqui desalinha o
+      // custo efetivo que ficou na movimentação.
+      { name: 'custo_frete_rateado', label: 'Frete rateado', type: 'money', min: 0, default: 0, readonly: true, form: false, list: false, hint: 'Parte do frete da compra atribuída a esta linha, proporcional ao valor. Preenchido no recebimento.' },
+      { name: 'custo_impostos', label: 'Impostos no custo', type: 'money', min: 0, default: 0, readonly: true, form: false, list: false, hint: 'Somente imposto NÃO recuperável informado. O ERP não calcula imposto de compra por conta própria.' },
       { name: 'local', label: 'Local de entrada', type: 'text', list: false },
     ],
   },
@@ -1688,16 +1722,24 @@ export const RESOURCES: Record<string, Resource> = {
     key: 'produto_fornecedor_skus',
     empresa: true,
     table: 'produto_fornecedor_skus',
-    label: 'De-para de SKUs de fornecedor',
-    singular: 'De-para de SKU',
-    labelFields: ['codigo_fornecedor'],
-    internal: true,
-    ops: READ_ONLY,
+    label: 'De-para de produtos do fornecedor',
+    singular: 'De-para de produto',
+    labelFields: ['codigo_fornecedor', 'descricao'],
+    // E3.2: deixou de ser interno. O de-para é cadastro que o comprador mantém
+    // todo dia — antes só o importador de XML o usava, sem tela. Continua sendo
+    // ASSOCIAÇÃO: não cria produto, só aponta para um já existente.
+    //
+    // Sem `delete` de propósito: apagar destruiria o rastro das importações que
+    // usaram o de-para. O caminho é `ativo: false`.
+    ops: { create: true, update: true, delete: false },
     fields: [
-      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores' },
-      { name: 'codigo_fornecedor', label: 'Código do fornecedor', type: 'text' },
-      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
-      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
+      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores', required: true },
+      { name: 'codigo_fornecedor', label: 'Código do fornecedor', type: 'text', required: true, hint: 'O cProd que vem na NF-e deste fornecedor. Único por fornecedor.' },
+      { name: 'descricao', label: 'Descrição do fornecedor', type: 'text', hint: 'Como o fornecedor descreve o item. Serve para conferir o de-para sem abrir a nota.' },
+      { name: 'produto_id', label: 'Produto interno', type: 'ref', ref: 'produtos', required: true, hint: 'O SKU do ERP que este código representa.' },
+      { name: 'tamanho_id', label: 'Variação', type: 'ref', ref: 'tamanhos', hint: 'Deixe vazio se o produto não tem variação.' },
+      { name: 'unidade', label: 'Unidade do fornecedor', type: 'text', hint: 'UN, CX, PC, KG, M… A quantidade da NF só faz sentido diante dela.' },
+      { name: 'ativo', label: 'Ativo', type: 'boolean', default: true, hint: 'Inative um de-para obsoleto em vez de apagar: o histórico das importações que o usaram fica preservado.' },
       { name: 'criado_em', label: 'Criado em', type: 'datetime', list: false },
       { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', list: false },
     ],
@@ -1742,10 +1784,82 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'ordem_id', label: 'OP', type: 'integer' },
       { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
       { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, min: 0 },
-      { name: 'produzido', label: 'Produzido', type: 'integer', min: 0, default: 0, readonly: true, hint: 'Atualizado ao concluir a OP.' },
+      { name: 'produzido', label: 'Produzido', type: 'integer', min: 0, default: 0, readonly: true, hint: 'Atualizado pelos apontamentos e ao concluir a OP.' },
+      { name: 'perdido', label: 'Perdido', type: 'integer', min: 0, default: 0, readonly: true, list: false, hint: 'Peças refugadas neste tamanho.' },
       { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false },
     ],
     orderBy: { field: 'tamanho_id', dir: 'asc' },
+  },
+
+  // E2 — trilha de transições da OP. Append-only: a linha nasce e nunca é
+  // editada, exatamente como expedicao_eventos / proposta_eventos.
+  ordens_eventos: {
+    key: 'ordens_eventos',
+    empresa: true,
+    internal: true,
+    table: 'ordens_eventos',
+    label: 'Eventos da OP',
+    singular: 'Evento da OP',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'ordem_id', label: 'OP', type: 'ref', ref: 'ordens' },
+      {
+        name: 'evento',
+        label: 'Evento',
+        type: 'select',
+        options: [
+          { value: 'criada', label: 'Criada', tone: 'slate' },
+          { value: 'liberada', label: 'Liberada', tone: 'amber' },
+          { value: 'iniciada', label: 'Iniciada', tone: 'blue' },
+          { value: 'apontamento', label: 'Apontamento', tone: 'blue' },
+          { value: 'perda', label: 'Perda', tone: 'red' },
+          { value: 'consumo', label: 'Consumo de insumo', tone: 'amber' },
+          { value: 'parcial', label: 'Parcial', tone: 'blue' },
+          { value: 'concluida', label: 'Concluída', tone: 'green' },
+          { value: 'reaberta', label: 'Reaberta', tone: 'amber' },
+          { value: 'cancelada', label: 'Cancelada', tone: 'red' },
+          { value: 'atalho', label: 'Atalho de fluxo', tone: 'amber' },
+          { value: 'edicao', label: 'Edição', tone: 'slate' },
+        ],
+      },
+      { name: 'de_status', label: 'De', type: 'text', list: false },
+      { name: 'para_status', label: 'Para', type: 'text', list: false },
+      { name: 'mensagem', label: 'Mensagem', type: 'text' },
+      { name: 'dados', label: 'Dados do evento', type: 'json', readonly: true, form: false, list: false },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      ...auditAppendOnly,
+    ],
+    // id, não criado_em: eventos do mesmo instante (apontamento + perda) precisam
+    // de ordem estável, e o id é monotônico numa trilha append-only.
+    orderBy: { field: 'id', dir: 'asc' },
+  },
+
+  // E2 — apontamento de produção. Também append-only e criado APENAS pelo
+  // endpoint de fluxo (POST /api/ordens/:id/apontamentos): é ele que consome
+  // insumo e acumula produzido/perdido, então um INSERT direto descolaria a OP
+  // do estoque.
+  ordens_apontamentos: {
+    key: 'ordens_apontamentos',
+    empresa: true,
+    internal: true,
+    table: 'ordens_apontamentos',
+    label: 'Apontamentos de produção',
+    singular: 'Apontamento',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'ordem_id', label: 'OP', type: 'ref', ref: 'ordens' },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
+      { name: 'quantidade_produzida', label: 'Produzido', type: 'integer', min: 0 },
+      { name: 'quantidade_perdida', label: 'Perdido', type: 'integer', min: 0 },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500 },
+      { name: 'idempotency_key', label: 'Chave de idempotência', type: 'text', maxLength: 120, readonly: true, form: false, list: false },
+      { name: 'usuario_id', label: 'Apontado por', type: 'ref', ref: 'usuarios' },
+      // `apontado_em` (não `criado_em`): é o carimbo que a operação usa.
+      { name: 'apontado_em', label: 'Apontado em', type: 'datetime', readonly: true, list: false },
+    ],
+    orderBy: { field: 'apontado_em', dir: 'asc' },
   },
 
   itens_ficha_tecnica: {
@@ -1810,8 +1924,19 @@ export const RESOURCES: Record<string, Resource> = {
       },
       { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos', required: true },
       { name: 'quantidade', label: 'Quantidade', type: 'number', required: true, hint: 'Entrada/saída: positivo. Ajuste: negativo para reduzir o saldo.' },
-      { name: 'custo_unitario', label: 'Custo unitário', type: 'money', min: 0, default: 0, hint: 'Usado apenas como histórico.' },
+      // E3.1: NÃO é mais "apenas histórico" — é o valor usado para desfazer o
+      // custo médio no estorno. Editá-lo manualmente desalinha a contabilidade.
+      { name: 'custo_unitario', label: 'Custo unitário', type: 'money', min: 0, default: 0, hint: 'Custo efetivo da entrada (preço + frete rateado + imposto que compõe custo). É a base do estorno do custo médio.' },
+      // E3.1: vínculo estrutural. Antes o estorno localizava a entrada pelo TEXTO
+      // do motivo, e o recebimento parcial (que grava "Recebimento parcial —
+      // Compra #N") nunca era encontrado — a entrada ficava sem estorno.
+      { name: 'compra_id', label: 'Compra', type: 'ref', ref: 'compras', list: false, search: true },
+      { name: 'recebimento_id', label: 'Recebimento', type: 'ref', ref: 'compra_recebimentos', list: false },
+      { name: 'item_compra_id', label: 'Item da compra', type: 'ref', ref: 'itens_compra', list: false },
       { name: 'motivo', label: 'Motivo', type: 'text', search: true, maxLength: 200, wide: true },
+      // E2: vínculo FORMAL com a OP que consumiu o insumo (antes só o texto do
+      // motivo ligava as duas coisas, e o estorno dependia de dar match nele).
+      { name: 'ordem_id', label: 'Ordem de fabricação', type: 'ref', ref: 'ordens', search: true, hint: 'Preenchido automaticamente no consumo por OP.' },
       { name: 'data', label: 'Data', type: 'datetime', readonly: true },
     ],
     orderBy: { field: 'data', dir: 'desc' },
@@ -2882,6 +3007,129 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'recebimento_id', label: 'Recebimento', type: 'ref', ref: 'compra_recebimentos' },
       { name: 'item_compra_id', label: 'Item da compra', type: 'ref', ref: 'itens_compra' },
       { name: 'quantidade', label: 'Quantidade', type: 'number' },
+    ],
+  },
+
+  // ==========================================================================
+  // E3 — COTAÇÃO DE COMPRA (fornecedor)
+  //
+  // Não confundir com `cotacao_decisoes`, que é do PORTAL DO CLIENTE (tem
+  // `venda_id NOT NULL REFERENCES vendas(id)`): aquela registra a decisão do
+  // cliente sobre uma cotação de venda. Estas quatro são de compra — vários
+  // fornecedores orçando o mesmo carrinho e o comprador escolhendo por item.
+  //
+  // `status` e o pedido gerado são controlados pelo serviço
+  // (server/src/cotacoesCompra.ts), não pelo CRUD genérico: decidir gera pedido
+  // de compra e mexe em dinheiro, então não pode ser um PUT livre.
+  // ==========================================================================
+  cotacoes_compra: {
+    key: 'cotacoes_compra',
+    empresa: true,
+    table: 'cotacoes_compra',
+    label: 'Cotações de Compra',
+    singular: 'Cotação de compra',
+    labelFields: ['titulo'],
+    ops: { create: true, update: true, delete: true },
+    detail: true,
+    notice:
+      'Convite a fornecedores para orçar o mesmo carrinho. A decisão escolhe por item e gera o pedido de compra — uma vez gerado, não gera de novo.',
+    fields: [
+      { name: 'titulo', label: 'Título', type: 'text', required: true, maxLength: 160, search: true },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        required: true,
+        default: 'rascunho',
+        readonly: true,
+        options: [
+          { value: 'rascunho', label: 'Rascunho', tone: 'slate' },
+          { value: 'cotando', label: 'Aguardando fornecedores', tone: 'amber' },
+          { value: 'decidida', label: 'Decidida', tone: 'green' },
+          { value: 'cancelada', label: 'Cancelada', tone: 'red' },
+        ],
+      },
+      { name: 'criterio', label: 'Critério de escolha', type: 'select', options: [
+        { value: 'menor_preco', label: 'Menor preço por item', tone: 'blue' },
+        { value: 'menor_preco_total', label: 'Menor preço total (fornecedor único)', tone: 'blue' },
+        { value: 'prazo', label: 'Melhor prazo', tone: 'amber' },
+        { value: 'qualidade', label: 'Qualidade/parceria (decisão manual)', tone: 'slate' },
+      ] },
+      { name: 'prazo_validade', label: 'Validade das propostas', type: 'date' },
+      { name: 'previsao_compra', label: 'Previsão de compra', type: 'date' },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false, wide: true },
+      { name: 'compra_id', label: 'Pedido gerado', type: 'ref', ref: 'compras', readonly: true, form: false },
+      { name: 'decidida_em', label: 'Decidida em', type: 'datetime', readonly: true, list: false },
+      { name: 'decidida_por', label: 'Decidida por', type: 'ref', ref: 'usuarios', readonly: true, list: false },
+      ...auditFields,
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+  },
+
+  cotacao_compra_itens: {
+    key: 'cotacao_compra_itens',
+    empresa: true,
+    internal: true,
+    table: 'cotacao_compra_itens',
+    label: 'Itens da Cotação',
+    singular: 'Item da cotação',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'cotacao_id', label: 'Cotação', type: 'ref', ref: 'cotacoes_compra' },
+      { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
+      { name: 'quantidade', label: 'Quantidade', type: 'number' },
+      { name: 'unidade', label: 'Unidade', type: 'text', maxLength: 20 },
+      { name: 'escolhido_fornecedor_id', label: 'Fornecedor escolhido', type: 'ref', ref: 'fornecedores' },
+      { name: 'escolhido_preco', label: 'Preço escolhido (R$)', type: 'money' },
+    ],
+  },
+
+  cotacao_compra_fornecedores: {
+    key: 'cotacao_compra_fornecedores',
+    empresa: true,
+    internal: true,
+    table: 'cotacao_compra_fornecedores',
+    label: 'Fornecedores da Cotação',
+    singular: 'Fornecedor da cotação',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'cotacao_id', label: 'Cotação', type: 'ref', ref: 'cotacoes_compra' },
+      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores' },
+      { name: 'status', label: 'Situação', type: 'select', options: [
+        { value: 'convidado', label: 'Convidado', tone: 'slate' },
+        { value: 'cotado', label: 'Cotou', tone: 'green' },
+        { value: 'recusado', label: 'Recusou', tone: 'red' },
+      ] },
+      { name: 'convidado_em', label: 'Convidado em', type: 'datetime' },
+      { name: 'respondeu_em', label: 'Respondeu em', type: 'datetime', list: false },
+      { name: 'prazo_entrega_dias', label: 'Prazo de entrega (dias)', type: 'integer' },
+      { name: 'condicao_pagamento', label: 'Condição de pagamento', type: 'text', maxLength: 120 },
+      { name: 'frete', label: 'Frete (R$)', type: 'money' },
+      { name: 'validade_proposta', label: 'Validade da proposta', type: 'date', list: false },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false },
+    ],
+  },
+
+  cotacao_compra_precos: {
+    key: 'cotacao_compra_precos',
+    empresa: true,
+    internal: true,
+    table: 'cotacao_compra_precos',
+    label: 'Preços Cotados',
+    singular: 'Preço cotado',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'convite_id', label: 'Convite', type: 'ref', ref: 'cotacao_compra_fornecedores' },
+      { name: 'item_id', label: 'Item', type: 'ref', ref: 'cotacao_compra_itens' },
+      { name: 'preco_unitario', label: 'Preço unitário (R$)', type: 'money' },
+      { name: 'prazo_entrega_dias', label: 'Prazo (dias)', type: 'integer' },
+      { name: 'disponivel', label: 'Tem disponibilidade', type: 'boolean' },
+      { name: 'observacoes', label: 'Observações', type: 'text', maxLength: 500, list: false },
+      ...auditFields,
     ],
   },
 };

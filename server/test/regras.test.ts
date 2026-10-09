@@ -237,6 +237,13 @@ test('financeiro: venda faturada carrega vencimento e parcelas no lançamento', 
     admin
   );
   await getStore().insert(getResource('itens_venda')!, { venda_id: Number(venda.id), produto_id: 1, tamanho_id: 1, quantidade: 1, preco_unitario: 10, subtotal: 10 });
+  // O store cru não recalcula o total — o handler de itens_venda (itens.ts:128)
+  // é quem chama recalcularTotal. Sem isto a venda ia para o financeiro com
+  // total 0 e o teste passava criando 3 parcelas de R$ 0,00, que o banco nem
+  // aceita (ck_lanc_fin_valor_positivo). Aqui o teste é sobre o PLANO de
+  // parcelas, então o total precisa ser real.
+  const { recalcularTotal } = await import('../src/itens');
+  await recalcularTotal('venda', Number(venda.id));
   await getStore().adjustStock(1, 1, 'loja', 10);
   await updateRecord(RESOURCES.vendas, Number(venda.id), { status: 'faturada' }, admin);
   const lancs = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'venda', referencia_id: Number(venda.id) } });

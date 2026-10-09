@@ -61,7 +61,16 @@ import { exportarRecurso } from './export';
 import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
 import {
   aplicarPrecoFicha,
+  cancelarOrdem,
+  concluirOrdemHandler,
+  criarApontamento,
+  iniciarOrdem,
+  liberarOrdem,
+  listApontamentos,
+  listEventosOrdem,
+  planejamentoProducao,
   producaoPainel,
+  reabrirOrdem,
   createInsumoFicha,
   createItemOrdem,
   deleteInsumoFicha,
@@ -182,6 +191,18 @@ import {
   receberParcial,
   sugestaoCompra,
 } from './compras';
+import {
+  abrirCotacao,
+  atualizarItemCotacao,
+  cancelarCotacao,
+  comparativoCotacao,
+  convidarFornecedores,
+  cotarFornecedor,
+  criarItemCotacao,
+  decidirCotacaoCompra,
+  recusarCotacao,
+  removerItemCotacao,
+} from './cotacoesCompra';
 import { marketplaceStatus, sincronizarPedidos } from './marketplace';
 import { connectorsRouter, initConnectors, publicConnectorsRouter } from './connectors';
 import { publicGatewayRouter } from './gateway';
@@ -631,6 +652,20 @@ app.post('/api/compras/:id/aprovar', wrap(aprovarCompra));
 app.get('/api/compras/:id/recebimentos', wrap(listarRecebimentos));
 app.post('/api/compras/:id/receber', wrap(receberParcial));
 
+// ---- Cotação de compra (E3): rascunho → cotando → decidida ----
+// O pedido de compra só nasce em /decidir, e nasce uma única vez
+// (CAS no status + índice único em cotacoes_compra.compra_id).
+app.get('/api/cotacoes-compra/:id/comparativo', wrap(comparativoCotacao));
+app.post('/api/cotacoes-compra/:id/itens', wrap(criarItemCotacao));
+app.put('/api/cotacoes-compra/:id/itens/:itemId', wrap(atualizarItemCotacao));
+app.delete('/api/cotacoes-compra/:id/itens/:itemId', wrap(removerItemCotacao));
+app.post('/api/cotacoes-compra/:id/convidar', wrap(convidarFornecedores));
+app.post('/api/cotacoes-compra/:id/abrir', wrap(abrirCotacao));
+app.post('/api/cotacoes-compra/:id/cotar', wrap(cotarFornecedor));
+app.post('/api/cotacoes-compra/:id/recusar', wrap(recusarCotacao));
+app.post('/api/cotacoes-compra/:id/decidir', wrap(decidirCotacaoCompra));
+app.post('/api/cotacoes-compra/:id/cancelar', wrap(cancelarCotacao));
+
 // ---- Sugestão de compra (só calcula; gerar exige ação explícita) ----
 app.get('/api/suprimentos/sugestao-compra', wrap(sugestaoCompra));
 app.post('/api/suprimentos/sugestao-compra/gerar', wrap(gerarCompraDaSugestao));
@@ -671,12 +706,25 @@ app.get('/api/admin/ws/status', (_req, res) => res.json(wsStatus()));
 
 // Cockpit da Produção — KPIs das OPs (antes das rotas genéricas)
 app.get('/api/producao/painel', wrap(producaoPainel));
+// E2 — plano de produção por semana + necessidade de insumos (MRP com dado real).
+app.get('/api/producao/planejamento', wrap(planejamentoProducao));
 
 // Fase 3 — itens de OP por grade e insumos da ficha técnica (sub-recursos)
 app.get('/api/ordens/:id/itens', wrap(listItensOrdem));
 app.post('/api/ordens/:id/itens', wrap(createItemOrdem));
 app.put('/api/ordens/:id/itens/:itemId', wrap(updateItemOrdem));
 app.delete('/api/ordens/:id/itens/:itemId', wrap(deleteItemOrdem));
+// E2 — fluxo da OP: liberação, apontamentos (com perda), conclusão, cancelamento
+// e reabertura. Todas as rotas ficam ANTES das genéricas para que
+// /api/ordens/:id/apontamentos não caia em /api/:resource/:id.
+app.post('/api/ordens/:id/liberar', wrap(liberarOrdem));
+app.post('/api/ordens/:id/iniciar', wrap(iniciarOrdem));
+app.get('/api/ordens/:id/apontamentos', wrap(listApontamentos));
+app.post('/api/ordens/:id/apontamentos', wrap(criarApontamento));
+app.get('/api/ordens/:id/eventos', wrap(listEventosOrdem));
+app.post('/api/ordens/:id/concluir', wrap(concluirOrdemHandler));
+app.post('/api/ordens/:id/cancelar', wrap(cancelarOrdem));
+app.post('/api/ordens/:id/reabrir', wrap(reabrirOrdem));
 app.get('/api/fichas/:id/insumos', wrap(listInsumosFicha));
 app.post('/api/fichas/:id/insumos', wrap(createInsumoFicha));
 app.put('/api/fichas/:id/insumos/:itemId', wrap(updateInsumoFicha));

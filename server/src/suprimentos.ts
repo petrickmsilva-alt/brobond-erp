@@ -17,6 +17,7 @@ import { parseId } from './validate';
 import type { Row } from './store';
 import { aplicarRegrasPedido } from './itens';
 import { syncLancamentoCompra, syncLancamentoVenda } from './financeiro';
+import { aplicarEntradaDeCompra } from './custoRecebimento';
 import { round2, round3 } from './utils';
 
 const compras = getResource('compras')!;
@@ -79,7 +80,25 @@ type ImportBody = {
   fornecedor_id?: number;
   de_para?: Record<string, MappingInput | number | string> | { codigo_fornecedor: string; produto_id?: number; sku?: string; tamanho_id?: number; tamanho?: string }[];
   mapeamentos?: ImportBody['de_para'];
+  /**
+   * `false` = só PRÉ-VALIDAR: resolve fornecedor, itens e de-para dentro de uma
+   * transação que é desfeita, e devolve o que ACONTECERIA. A tela precisa
+   * mostrar as divergências antes de gravar — importar direto não dá volta.
+   * Ausente ou `true` = importar de verdade (comportamento de sempre).
+   */
+  aplicar?: boolean;
 };
+
+/**
+ * Sinal interno: a pré-validação roda o caminho REAL de importação e então
+ * aborta a transação de propósito, carregando o resultado para fora. Não é um
+ * erro — é como se devolve um "e se?" sem gravar nada.
+ */
+class PrevisualizacaoXml extends Error {
+  constructor(readonly payload: unknown) {
+    super('previsualizacao');
+  }
+}
 
 function decodeXml(value: string): string {
   return value
@@ -235,6 +254,8 @@ function requestInput(req: Request): { xml: string; input: ImportBody } {
         try { (input as any)[part.name] = JSON.parse(value); } catch { throw new HttpError(400, `${part.name} deve ser um JSON válido.`); }
       } else if (part.name === 'local_id' || part.name === 'tamanho_id' || part.name === 'fornecedor_id') {
         (input as any)[part.name] = Number(value);
+      } else if (part.name === 'aplicar') {
+        (input as any).aplicar = !/^(false|0|nao|não)$/i.test(value.trim());
       } else if (part.name in input || ['local', 'tamanho'].includes(part.name)) {
         (input as any)[part.name] = value;
       }
@@ -369,17 +390,6 @@ async function upsertMapping(supplierId: number, code: string, productId: number
   return s.insert(mappings, { empresa_id: empresaId, fornecedor_id: supplierId, codigo_fornecedor: code, produto_id: productId, tamanho_id: sizeId }, tx);
 }
 
-async function updateReplacementCost(product: Row, quantity: number, unitCost: number, tx: any) {
-  const s = getStore();
-  const balances = await s.list(getResource('estoques')!, { page: 1, pageSize: 10000, filter: { produto_id: Number(product.id) } }, tx);
-  const stock = balances.rows.reduce((sum, row) => sum + Number(row.quantidade || 0), 0);
-  const currentCost = Number(product.custo || 0);
-  const newCost = stock + quantity > 0 ? round2((stock * currentCost + quantity * unitCost) / (stock + quantity)) : round2(unitCost);
-  await s.update(produtos, Number(product.id), { custo: newCost }, tx);
-  product.custo = newCost;
-  return newCost;
-}
-
 export async function importarXmlCompra(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(compras, actor, 'create');
@@ -388,7 +398,9 @@ export async function importarXmlCompra(req: Request, res: Response) {
   const parsed = parseXml(xml);
   const hash = createHash('sha256').update(xml, 'utf8').digest('hex');
   const s = getStore();
-  const result = await s.transaction(async (tx) => {
+  // A pré-validação aborta a transação de propósito; `.then(ok, erro)` mantém o
+  // tipo estreito sem `as` e sem variável anulável espalhada pelo handler.
+  const desfecho = await s.transaction(async (tx) => {
     const already = await s.findOneWhere(imports, { chave_acesso: parsed.chaveAcesso }, tx);
     if (already) {
       throw new HttpError(409, `A NF-e ${parsed.numero || parsed.chaveAcesso} já foi importada.`, { compra_id: already.compra_id, importacao_id: already.id });
@@ -397,21 +409,92 @@ export async function importarXmlCompra(req: Request, res: Response) {
     const local = await resolveLocal(input, tx);
     const requestedMappings = mappingEntries(input);
     const resolved: { item: XmlFiscalItem; product: Row; size: Row; code: string; mapping: MappingInput }[] = [];
+    // Pré-validação: em vez de parar no primeiro problema, coleta TODOS. Quem
+    // está na tela precisa ver a lista inteira de pendências de uma vez para
+    // resolver o de-para; descobrir um erro por tentativa seria insuportável.
+    const previsualizando = input.aplicar === false;
+    const pendencias: { numero: number; codigo_fornecedor: string; descricao: string; motivo: string }[] = [];
     for (const item of parsed.itens) {
-      if (!item.codigoFornecedor) throw new HttpError(422, `O item ${item.numero} não possui cProd.`);
-      if (!(item.quantidade > 0) || !Number.isInteger(item.quantidade)) throw new HttpError(422, `A quantidade do item ${item.numero} deve ser um número inteiro positivo para entrada de produto.`);
+      const semCodigo = !item.codigoFornecedor;
+      const qtdInvalida = !(item.quantidade > 0) || !Number.isInteger(item.quantidade);
       const mapping = asMapping(requestedMappings.get(item.codigoFornecedor));
-      const pair = await resolveProductAndSize(item, Number(supplier.id), input, mapping, escopo, tx);
-      resolved.push({ item, product: pair.produto, size: pair.tamanho, code: item.codigoFornecedor, mapping });
+      if (previsualizando && (semCodigo || qtdInvalida)) {
+        pendencias.push({
+          numero: item.numero,
+          codigo_fornecedor: item.codigoFornecedor || '',
+          descricao: item.descricao || '',
+          motivo: semCodigo ? 'O item não possui cProd (código do fornecedor).' : 'A quantidade precisa ser um número inteiro positivo para entrada de produto.',
+        });
+        continue;
+      }
+      if (semCodigo) throw new HttpError(422, `O item ${item.numero} não possui cProd.`);
+      if (qtdInvalida) throw new HttpError(422, `A quantidade do item ${item.numero} deve ser um número inteiro positivo para entrada de produto.`);
+      try {
+        const pair = await resolveProductAndSize(item, Number(supplier.id), input, mapping, escopo, tx);
+        resolved.push({ item, product: pair.produto, size: pair.tamanho, code: item.codigoFornecedor, mapping });
+      } catch (e) {
+        if (!previsualizando) throw e;
+        const detalhe = (e as any)?.details as { codigo_fornecedor?: string } | undefined;
+        pendencias.push({
+          numero: item.numero,
+          codigo_fornecedor: detalhe?.codigo_fornecedor ?? item.codigoFornecedor ?? '',
+          descricao: item.descricao || '',
+          motivo: e instanceof Error ? e.message : 'Falha no de-para.',
+        });
+      }
     }
 
     const total = parsed.totalNota || round2(resolved.reduce((sum, line) => sum + line.item.quantidade * line.item.valorUnitario, 0) + parsed.frete - parsed.desconto);
+
+    // ---- PRÉ-VALIDAÇÃO: devolve o que ACONTECERIA e desfaz tudo ------------
+    // A transação é abortada de propósito — nada é gravado. É o mesmo parser, o
+    // mesmo resolveSupplier e o mesmo resolveProductAndSize da importação real,
+    // então o que aparece aqui é o que aconteceria de fato, não uma simulação
+    // paralela que poderia divergir.
+    if (previsualizando) {
+      throw new PrevisualizacaoXml({
+        ok: true,
+        aplicado: false,
+        fornecedor: { id: supplier.id, nome: supplier.nome, cnpj: supplier.cnpj || null },
+        local,
+        nota: {
+          chave_acesso: parsed.chaveAcesso,
+          numero: parsed.numero,
+          serie: parsed.serie,
+          emissao: parsed.emissao,
+          total: parsed.totalNota,
+          frete: round2(parsed.frete || 0),
+          desconto: round2(parsed.desconto || 0),
+        },
+        total,
+        itens: resolved.map(({ item, product, size, code }) => ({
+          numero: item.numero,
+          codigo_fornecedor: code,
+          descricao_fornecedor: item.descricao || null,
+          produto_id: product.id,
+          sku: product.sku,
+          produto: product.nome || product.sku,
+          tamanho_id: size.id,
+          tamanho: size.codigo,
+          unidade: item.unidade || null,
+          quantidade: item.quantidade,
+          valor_unitario: item.valorUnitario,
+          subtotal: round2(item.quantidade * item.valorUnitario),
+        })),
+        pendencias,
+        pode_importar: pendencias.length === 0,
+      });
+    }
+
     const compra = await s.insert(compras, {
       empresa_id: escopo.empresaId,
       fornecedor_id: Number(supplier.id),
       data: parsed.emissao || new Date().toISOString(),
       status: 'recebido',
       total,
+      // vFrete vem do XML. Antes só entrava somado no `total` e a coluna
+      // `frete` ficava zerada — o rateio de custo não tinha de onde sair.
+      frete: round2(parsed.frete || 0),
       nota_fiscal: parsed.numero,
       local_entrada: local,
       observacoes: `NF-e importada${parsed.chaveAcesso ? ` — chave ${parsed.chaveAcesso}` : ''}${parsed.serie ? ` — série ${parsed.serie}` : ''}`,
@@ -441,23 +524,34 @@ export async function importarXmlCompra(req: Request, res: Response) {
       }, tx);
       createdItems.push(item);
       await upsertMapping(Number(supplier.id), line.code, Number(line.product.id), Number(line.size.id), escopo.empresaId, tx);
-      // Calcula contra o saldo anterior; só depois materializa a entrada, para
-      // que a própria compra não seja contada duas vezes no custo médio.
-      await updateReplacementCost(line.product, line.item.quantidade, unit, tx);
-      await s.adjustStock(Number(line.product.id), Number(line.size.id), local, Math.trunc(line.item.quantidade), tx);
     }
 
-    // A importação aplica a entrada de produto acabado aqui, dentro da mesma
-    // transação. Não chamamos o recebimento genérico da compra porque ele
-    // repetiria o saldo; o movimento explícito preserva a trilha física da NF-e.
-    for (const line of resolved) {
-      await s.insert(getResource('movimentacoes')!, {
-        empresa_id: escopo.empresaId,
-        tipo: 'entrada', produto_id: Number(line.product.id), tamanho_id: Number(line.size.id), local,
-        quantidade: Math.trunc(line.item.quantidade), motivo: `NF-e ${parsed.numero || parsed.chaveAcesso} — Compra #${compra.id}`,
-        compra_id: Number(compra.id), usuario_id: actor.id || null,
-      }, tx);
-    }
+    // REGRA CANÔNICA DE CUSTO (server/src/custoRecebimento.ts). Esta função
+    // tinha a terceira cópia da média ponderada (`updateReplacementCost`) e não
+    // rateava o frete da NF-e. Agora é a mesma rotina do recebimento total e do
+    // parcial: custo efetivo, movimentação com custo, custo médio e auditoria.
+    //
+    // Continua sendo aplicada AQUI, dentro desta transação, e não pelo
+    // recebimento genérico — chamar os dois dobraria o saldo.
+    await aplicarEntradaDeCompra({
+      compraId: Number(compra.id),
+      empresaId: escopo.empresaId,
+      recebimentoId: null,
+      linhas: createdItems.map((item) => ({
+        item_compra_id: Number(item.id),
+        insumo_id: null,
+        produto_id: Number(item.produto_id),
+        tamanho_id: Number(item.tamanho_id),
+        quantidade: round3(Number(item.quantidade)),
+        preco_unitario: Number(item.preco_unitario),
+        local,
+      })),
+      freteTotal: round2(Number(compra.frete || parsed.frete || 0)),
+      actor: { id: actor.id || null, name: actor.name },
+      motivo: `NF-e ${parsed.numero || parsed.chaveAcesso} — Compra #${compra.id}`,
+      tx,
+      escopo,
+    });
     await s.update(compras, Number(compra.id), { recebida_em: new Date().toISOString() }, tx);
     const after = (await s.get(compras, Number(compra.id), tx)) || compra;
     await syncLancamentoCompra(null, after, { status: 'recebido' }, { id: actor.id || null, name: actor.name }, tx);
@@ -483,7 +577,19 @@ export async function importarXmlCompra(req: Request, res: Response) {
       empresa_id: empresaDoRegistroAudit(compras, compra, actor),
     }, tx);
     return { compra, imported, supplier, local, resolved, parsed };
-  }, { isolation: 'serializable' });
+  }, { isolation: 'serializable' }).then(
+    (data) => ({ previsualizacao: false as const, data }),
+    (e: unknown) => {
+      if (e instanceof PrevisualizacaoXml) return { previsualizacao: true as const, data: e.payload };
+      throw e;
+    }
+  );
+  if (desfecho.previsualizacao) {
+    // Nada foi gravado — a transação foi desfeita.
+    res.status(200).json(desfecho.data);
+    return;
+  }
+  const result = desfecho.data;
 
   res.status(201).json({
     ok: true,
