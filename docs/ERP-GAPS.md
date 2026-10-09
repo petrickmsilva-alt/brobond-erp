@@ -27,7 +27,7 @@ Classificação do tipo de gap (seção 3 da especificação):
 | Fase | Gaps | Abertos | Críticos abertos |
 |---|---|---|---|
 | **E2 — Produção** | 8 | **0** ✅ | **0** |
-| **E3 — Compras** | 5 | 5 | 1 |
+| **E3 — Compras** | 5 | 4 | **0** |
 | **E4 — Estoque avançado** | 5 | 5 | 2 |
 | **E5 — Financeiro avançado** | 2 | 2 | 0 |
 | **E6 — Fiscal** | 2 | 2 | 0 |
@@ -38,7 +38,7 @@ Classificação do tipo de gap (seção 3 da especificação):
 | **E11 — UX final** | 2 | 2 | 0 |
 | **E12 — Homologação** | 3 | 3 | 3 |
 | Transversais | 3 | 3 | 0 |
-| **Total** | **42** | **34** | **9** |
+| **Total** | **42** | **33** | **8** |
 
 ---
 
@@ -119,15 +119,28 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
 
 ## E3 — COMPRAS
 
-### `GAP-COMP-COTACOES` — sem cotação de compra · **CRÍTICO**
+### `GAP-COMP-COTACOES` — sem cotação de compra · ✅ **FECHADO na E3**
 - **Tipo:** ausência completa
-- **Evidência:** `grep -c "CREATE TABLE IF NOT EXISTS cotacoes" db/schema.sql` → **0**. Existe `cotacao_decisoes` (`db/schema.sql:1141`), mas ela pertence ao **portal do cliente** (`venda_id NOT NULL REFERENCES vendas(id)`, campo `responsavel`) — é a decisão do cliente sobre uma cotação de venda, **não** uma cotação de fornecedor. Não confundir os dois domínios.
+- **Evidência (antes):** `grep -c "CREATE TABLE IF NOT EXISTS cotacoes" db/schema.sql` → **0**. Existe `cotacao_decisoes` (`db/schema.sql:1141`), mas ela pertence ao **portal do cliente** (`venda_id NOT NULL REFERENCES vendas(id)`, campo `responsavel`) — é a decisão do cliente sobre uma cotação de venda, **não** uma cotação de fornecedor. Não confundir os dois domínios. O mesmo vale para o handler `decidirCotacao` de `server/src/portal.ts`, que continua sendo o do portal; o novo é `decidirCotacaoCompra`.
 - **Aceite:** `cotacoes` + `cotacao_itens` + `cotacao_fornecedores` com `empresa_id`, decisão que gera pedido de compra de forma idempotente.
+- **Como foi fechado (migration 0027):** `cotacoes_compra`, `cotacao_compra_itens`, `cotacao_compra_fornecedores`, `cotacao_compra_precos` — todas com `empresa_id`. Idempotência da decisão garantida em **duas** camadas: `tryUpdateIf` no status (CAS) e o índice único parcial `cotacoes_compra_compra_uniq … WHERE compra_id IS NOT NULL`. Prova real de corrida em `server/test/pg-cotacoes-compra.test.ts`: **3 decisões simultâneas → exatamente 1 pedido**. Nenhum preço é estimado: item sem cotação bloqueia a decisão (409), e proposta com `disponivel: false` aparece riscada no comparativo sem competir no menor preço.
 
-### `GAP-COMP-CUSTOS` — sem repasse de custo do recebimento
+### `GAP-COMP-CUSTOS` — repasse de custo divergente entre os dois caminhos de recebimento
 - **Tipo:** backend
-- **Evidência:** `insumos.custo_medio` existe e é lido pelo cálculo de custo (`producao.ts:121`), mas não há rotina que atualize o custo médio a partir do recebimento com nota (impostos e frete rateados). `grep -n "custo_medio" server/src/compras.ts` → sem escrita.
-- **Aceite:** recebimento com NF recalcula o custo médio ponderado, com trilha de auditoria e teste de arredondamento em centavos.
+- **Correção da evidência (re-auditado na E3):** a afirmação original ("não há rotina que
+  atualize o custo médio") está **errada**. Existem DOIS caminhos de recebimento e eles se
+  comportam diferente:
+  • `receberCompra` (`server/src/itens.ts:436`, acionado pela mudança de status para
+    `recebido`) **recalcula** `insumos.custo_medio` por média ponderada (`itens.ts:484-488`)
+    e grava `custo_unitario: preco` na movimentação.
+  • `receberParcial` (`server/src/compras.ts:111`) **não toca** em `custo_medio` e insere a
+    `movimentacoes_insumos` **sem `custo_unitario`** (verificado lendo `compras.ts:216-222`).
+  Ou seja: receber parcialmente deixa o custo médio do insumo defasado e a movimentação sem
+  custo — e é justamente o caminho que a tela de recebimento parcial usa.
+  Além disso, **nenhum** dos dois rateia `compras.frete` nem os impostos do item no custo.
+- **Aceite:** os dois caminhos convergem para a mesma rotina de custo médio ponderado,
+  `custo_unitario` sempre gravado na movimentação, frete rateado por valor de linha, trilha
+  de auditoria e teste de arredondamento em centavos.
 
 ### `GAP-COMP-XML-MENU` — importação de XML sem entrada navegável e sem teste
 - **Tipo:** menu + testes

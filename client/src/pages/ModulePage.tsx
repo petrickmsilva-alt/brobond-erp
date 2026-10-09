@@ -61,6 +61,7 @@ const FinanceiroPage = lazy(() => import('./FinanceiroPage'));
 const AjudaPage = lazy(() => import('./AjudaPage'));
 const PdvPage = lazy(() => import('./PdvPage'));
 const ExpedicaoPage = lazy(() => import('./ExpedicaoPage'));
+const CotacoesCompraPage = lazy(() => import('./CotacoesCompraPage'));
 const SugestaoCompraPage = lazy(() => import('./SugestaoCompraPage'));
 const DevolucoesPage = lazy(() => import('./DevolucoesPage'));
 const LogisticaPage = lazy(() => import('./LogisticaPage'));
@@ -95,6 +96,7 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'ajuda') return <Suspense fallback={<SubPageLoading />}><AjudaPage /></Suspense>;
   if (module.id === 'pdv') return <Suspense fallback={<SubPageLoading />}><PdvPage /></Suspense>;
   if (module.id === 'expedicao') return <Suspense fallback={<SubPageLoading />}><ExpedicaoPage /></Suspense>;
+  if (module.id === 'cotacoes-compra') return <Suspense fallback={<SubPageLoading />}><CotacoesCompraPage /></Suspense>;
   if (module.id === 'sugestao-compra') return <Suspense fallback={<SubPageLoading />}><SugestaoCompraPage /></Suspense>;
   if (module.id === 'devolucoes') return <Suspense fallback={<SubPageLoading />}><DevolucoesPage /></Suspense>;
   if (module.id === 'envios') return <Suspense fallback={<SubPageLoading />}><LogisticaPage /></Suspense>;

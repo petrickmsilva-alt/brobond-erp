@@ -2981,6 +2981,129 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'quantidade', label: 'Quantidade', type: 'number' },
     ],
   },
+
+  // ==========================================================================
+  // E3 — COTAÇÃO DE COMPRA (fornecedor)
+  //
+  // Não confundir com `cotacao_decisoes`, que é do PORTAL DO CLIENTE (tem
+  // `venda_id NOT NULL REFERENCES vendas(id)`): aquela registra a decisão do
+  // cliente sobre uma cotação de venda. Estas quatro são de compra — vários
+  // fornecedores orçando o mesmo carrinho e o comprador escolhendo por item.
+  //
+  // `status` e o pedido gerado são controlados pelo serviço
+  // (server/src/cotacoesCompra.ts), não pelo CRUD genérico: decidir gera pedido
+  // de compra e mexe em dinheiro, então não pode ser um PUT livre.
+  // ==========================================================================
+  cotacoes_compra: {
+    key: 'cotacoes_compra',
+    empresa: true,
+    table: 'cotacoes_compra',
+    label: 'Cotações de Compra',
+    singular: 'Cotação de compra',
+    labelFields: ['titulo'],
+    ops: { create: true, update: true, delete: true },
+    detail: true,
+    notice:
+      'Convite a fornecedores para orçar o mesmo carrinho. A decisão escolhe por item e gera o pedido de compra — uma vez gerado, não gera de novo.',
+    fields: [
+      { name: 'titulo', label: 'Título', type: 'text', required: true, maxLength: 160, search: true },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        required: true,
+        default: 'rascunho',
+        readonly: true,
+        options: [
+          { value: 'rascunho', label: 'Rascunho', tone: 'slate' },
+          { value: 'cotando', label: 'Aguardando fornecedores', tone: 'amber' },
+          { value: 'decidida', label: 'Decidida', tone: 'green' },
+          { value: 'cancelada', label: 'Cancelada', tone: 'red' },
+        ],
+      },
+      { name: 'criterio', label: 'Critério de escolha', type: 'select', options: [
+        { value: 'menor_preco', label: 'Menor preço por item', tone: 'blue' },
+        { value: 'menor_preco_total', label: 'Menor preço total (fornecedor único)', tone: 'blue' },
+        { value: 'prazo', label: 'Melhor prazo', tone: 'amber' },
+        { value: 'qualidade', label: 'Qualidade/parceria (decisão manual)', tone: 'slate' },
+      ] },
+      { name: 'prazo_validade', label: 'Validade das propostas', type: 'date' },
+      { name: 'previsao_compra', label: 'Previsão de compra', type: 'date' },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false, wide: true },
+      { name: 'compra_id', label: 'Pedido gerado', type: 'ref', ref: 'compras', readonly: true, form: false },
+      { name: 'decidida_em', label: 'Decidida em', type: 'datetime', readonly: true, list: false },
+      { name: 'decidida_por', label: 'Decidida por', type: 'ref', ref: 'usuarios', readonly: true, list: false },
+      ...auditFields,
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+  },
+
+  cotacao_compra_itens: {
+    key: 'cotacao_compra_itens',
+    empresa: true,
+    internal: true,
+    table: 'cotacao_compra_itens',
+    label: 'Itens da Cotação',
+    singular: 'Item da cotação',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'cotacao_id', label: 'Cotação', type: 'ref', ref: 'cotacoes_compra' },
+      { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
+      { name: 'quantidade', label: 'Quantidade', type: 'number' },
+      { name: 'unidade', label: 'Unidade', type: 'text', maxLength: 20 },
+      { name: 'escolhido_fornecedor_id', label: 'Fornecedor escolhido', type: 'ref', ref: 'fornecedores' },
+      { name: 'escolhido_preco', label: 'Preço escolhido (R$)', type: 'money' },
+    ],
+  },
+
+  cotacao_compra_fornecedores: {
+    key: 'cotacao_compra_fornecedores',
+    empresa: true,
+    internal: true,
+    table: 'cotacao_compra_fornecedores',
+    label: 'Fornecedores da Cotação',
+    singular: 'Fornecedor da cotação',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'cotacao_id', label: 'Cotação', type: 'ref', ref: 'cotacoes_compra' },
+      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores' },
+      { name: 'status', label: 'Situação', type: 'select', options: [
+        { value: 'convidado', label: 'Convidado', tone: 'slate' },
+        { value: 'cotado', label: 'Cotou', tone: 'green' },
+        { value: 'recusado', label: 'Recusou', tone: 'red' },
+      ] },
+      { name: 'convidado_em', label: 'Convidado em', type: 'datetime' },
+      { name: 'respondeu_em', label: 'Respondeu em', type: 'datetime', list: false },
+      { name: 'prazo_entrega_dias', label: 'Prazo de entrega (dias)', type: 'integer' },
+      { name: 'condicao_pagamento', label: 'Condição de pagamento', type: 'text', maxLength: 120 },
+      { name: 'frete', label: 'Frete (R$)', type: 'money' },
+      { name: 'validade_proposta', label: 'Validade da proposta', type: 'date', list: false },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false },
+    ],
+  },
+
+  cotacao_compra_precos: {
+    key: 'cotacao_compra_precos',
+    empresa: true,
+    internal: true,
+    table: 'cotacao_compra_precos',
+    label: 'Preços Cotados',
+    singular: 'Preço cotado',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'convite_id', label: 'Convite', type: 'ref', ref: 'cotacao_compra_fornecedores' },
+      { name: 'item_id', label: 'Item', type: 'ref', ref: 'cotacao_compra_itens' },
+      { name: 'preco_unitario', label: 'Preço unitário (R$)', type: 'money' },
+      { name: 'prazo_entrega_dias', label: 'Prazo (dias)', type: 'integer' },
+      { name: 'disponivel', label: 'Tem disponibilidade', type: 'boolean' },
+      { name: 'observacoes', label: 'Observações', type: 'text', maxLength: 500, list: false },
+      ...auditFields,
+    ],
+  },
 };
 
 export function getResource(key: string): Resource | undefined {

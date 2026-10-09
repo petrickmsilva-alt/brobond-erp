@@ -133,7 +133,7 @@ e continuam abertos — ver `docs/ERP-GAPS.md`.
 | Sugestão de compra | Estoque atual × mínimo × consumo × em aberto × em trânsito; nunca gera pedido sozinha | ✅ (cálculo puro) | ✅ `/suprimentos/sugestao-compra[/gerar]` | ✅ `SugestaoCompraPage.tsx` | ✅ `SugestaoCompraPage.test.tsx` | — | 🟢 |
 | Importação NF-e/XML | Validar fornecedor, CNPJ, itens, SKU, NCM, impostos, de-para, empresa | ✅ `importacoes_nfe` | ✅ `/suprimentos/compras/importar-xml` (`importarXmlCompra`, `suprimentos.ts:383`) | ⚠️ **sem entrada própria no menu** | ❌ **handler sem nenhuma cobertura** | — | 🔴 `GAP-COMP-XML-MENU` |
 | De-Para fornecedor × SKU | Traduz SKU do fornecedor para SKU do ERP | ✅ `produto_fornecedor_skus` | ✅ CRUD (sub-recurso) | ⚠️ **sem entrada própria no menu** | ❌ | — | 🔴 `GAP-COMP-DEPARA-MENU` |
-| **Cotações de compra** | Cotação → decisão → pedido | ❌ no banco real só existe `cotacao_decisoes`, que é do **portal do cliente** (`venda_id NOT NULL REFERENCES vendas`) | ❌ | ❌ | ❌ | — | 🔴 `GAP-COMP-COTACOES` |
+| **Cotações de compra** | Cotação → convite → comparativo → decisão → pedido | ✅ `cotacoes_compra`, `cotacao_compra_itens`, `cotacao_compra_fornecedores`, `cotacao_compra_precos` (0027); índice único parcial em `compra_id` | ✅ `/cotacoes-compra/:id/{comparativo,itens,convidar,abrir,cotar,recusar,decidir,cancelar}` | ✅ `CotacoesCompraPage.tsx` | ✅ `cotacoes-compra.test.ts` (16) + `pg-cotacoes-compra.test.ts` (7, corrida real) | — | 🟢 |
 | **Atualização de custos** | Repassar custo recebido ao custo médio do insumo | ⚠️ `insumos.custo_medio` existe; sem rotina de repasse auditada | ⚠️ | ❌ | ❌ | — | 🔴 `GAP-COMP-CUSTOS` |
 
 ### 3.5 Estoque

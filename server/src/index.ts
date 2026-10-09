@@ -191,6 +191,18 @@ import {
   receberParcial,
   sugestaoCompra,
 } from './compras';
+import {
+  abrirCotacao,
+  atualizarItemCotacao,
+  cancelarCotacao,
+  comparativoCotacao,
+  convidarFornecedores,
+  cotarFornecedor,
+  criarItemCotacao,
+  decidirCotacaoCompra,
+  recusarCotacao,
+  removerItemCotacao,
+} from './cotacoesCompra';
 import { marketplaceStatus, sincronizarPedidos } from './marketplace';
 import { connectorsRouter, initConnectors, publicConnectorsRouter } from './connectors';
 import { publicGatewayRouter } from './gateway';
@@ -639,6 +651,20 @@ app.post('/api/devolucoes/:id/cancelar', wrap(cancelarDevolucao));
 app.post('/api/compras/:id/aprovar', wrap(aprovarCompra));
 app.get('/api/compras/:id/recebimentos', wrap(listarRecebimentos));
 app.post('/api/compras/:id/receber', wrap(receberParcial));
+
+// ---- Cotação de compra (E3): rascunho → cotando → decidida ----
+// O pedido de compra só nasce em /decidir, e nasce uma única vez
+// (CAS no status + índice único em cotacoes_compra.compra_id).
+app.get('/api/cotacoes-compra/:id/comparativo', wrap(comparativoCotacao));
+app.post('/api/cotacoes-compra/:id/itens', wrap(criarItemCotacao));
+app.put('/api/cotacoes-compra/:id/itens/:itemId', wrap(atualizarItemCotacao));
+app.delete('/api/cotacoes-compra/:id/itens/:itemId', wrap(removerItemCotacao));
+app.post('/api/cotacoes-compra/:id/convidar', wrap(convidarFornecedores));
+app.post('/api/cotacoes-compra/:id/abrir', wrap(abrirCotacao));
+app.post('/api/cotacoes-compra/:id/cotar', wrap(cotarFornecedor));
+app.post('/api/cotacoes-compra/:id/recusar', wrap(recusarCotacao));
+app.post('/api/cotacoes-compra/:id/decidir', wrap(decidirCotacaoCompra));
+app.post('/api/cotacoes-compra/:id/cancelar', wrap(cancelarCotacao));
 
 // ---- Sugestão de compra (só calcula; gerar exige ação explícita) ----
 app.get('/api/suprimentos/sugestao-compra', wrap(sugestaoCompra));

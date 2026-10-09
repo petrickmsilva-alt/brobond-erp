@@ -204,6 +204,7 @@ export const MODULES: Module[] = [
   // 🛒 Suprimentos
   { id: 'compras', label: 'Compras', icon: ShoppingCart, group: 'Compras', path: '/compras', resource: 'compras', description: 'Pedidos de compra de insumos; ao receber, os insumos entram no estoque.' },
   { id: 'fornecedores', label: 'Fornecedores', icon: Factory, group: 'Compras', path: '/fornecedores', resource: 'fornecedores', description: 'Empresas de quem você compra insumos.' },
+  { id: 'cotacoes-compra', label: 'Cotação de compra', icon: Scale, group: 'Compras', path: '/cotacoes-compra', resource: 'cotacoes_compra', description: 'Peça preço a vários fornecedores, compare lado a lado e gere o pedido de compra uma única vez. Nenhum preço é estimado: item sem resposta bloqueia a decisão.' },
   { id: 'compra-recebimentos', label: 'Recebimentos de compra', icon: Warehouse, group: 'Compras', path: '/compra-recebimentos', resource: 'compra_recebimentos', description: 'Recebimentos parciais e totais dos pedidos de compra. O estoque sobe exatamente pelo recebido — nunca pelo pedido.' },
   { id: 'sugestao-compra', label: 'Sugestão de compra', icon: Calculator, group: 'Compras', path: '/sugestao-compra', minPerfil: 'gerente', description: 'O que comprar a partir do estoque atual, mínimo e máximo, do consumo, dos pedidos em aberto e das compras em trânsito. Nunca gera pedido sozinha.' },
 
@@ -289,7 +290,7 @@ export const GROUP_META: Record<ModuleGroup, { icon: LucideIcon; /** seção da 
 };
 
 /** Módulos que usam página própria (não CRUD genérico nem PlannedModule). */
-export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 'financeiro', 'pdv', 'expedicao', 'sugestao-compra', 'devolucoes', 'envios'] as const;
+export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 'financeiro', 'pdv', 'expedicao', 'cotacoes-compra', 'sugestao-compra', 'devolucoes', 'envios'] as const;
 
 /** Módulos cuja listagem abre diretamente a página de detalhe. */
 export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);

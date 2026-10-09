@@ -286,6 +286,88 @@ check('E2: GET /producao/planejamento responde o plano', plano.status === 200 &&
 const semPlano = await req('GET', '/producao/planejamento?de=2031-01-05&ate=2031-01-11');
 check('E2: período sem OP vem vazio (não inventa número)', semPlano.status === 200 && semPlano.json?.resumo?.ops === 0 && semPlano.json?.insumos?.length === 0, `ops=${semPlano.json?.resumo?.ops}`);
 
+// ---------------------------------------------------------------- E3 cotação de compra
+// O fluxo inteiro por HTTP: rascunho → itens → convite → cotação → decisão →
+// pedido. E a regra que não pode quebrar: decidir duas vezes NÃO duplica.
+const listaCot = await req('GET', '/cotacoes_compra?page=1&pageSize=5');
+check('E3: GET /cotacoes_compra', listaCot.status === 200 && Array.isArray(listaCot.json?.rows), `status ${listaCot.status}`);
+
+// Insumo e fornecedor: usa o que já existe no demo, cria se não houver.
+let insumos = await req('GET', '/insumos?page=1&pageSize=1');
+let insumoId = Number(insumos.json?.rows?.[0]?.id ?? 0);
+if (!insumoId) {
+  const criado = await req('POST', '/insumos', { nome: 'Insumo Smoke E3', unidade: 'un' });
+  insumoId = Number(criado.json?.id ?? 0);
+}
+check('E3: insumo disponível para cotar', insumoId > 0, `insumo_id=${insumoId}`);
+
+let forns = await req('GET', '/fornecedores?page=1&pageSize=1');
+let fornId = Number(forns.json?.rows?.[0]?.id ?? 0);
+if (!fornId) {
+  const criado = await req('POST', '/fornecedores', { nome: 'Fornecedor Smoke E3' });
+  fornId = Number(criado.json?.id ?? 0);
+}
+check('E3: fornecedor disponível para convidar', fornId > 0, `fornecedor_id=${fornId}`);
+
+const cotNova = await req('POST', '/cotacoes_compra', { titulo: `Smoke E3 ${Date.now()}`, criterio: 'menor_preco' });
+const cotId = Number(cotNova.json?.id ?? 0);
+check('E3: POST /cotacoes_compra → 201 em rascunho', cotNova.status === 201 && cotNova.json?.status === 'rascunho', `status ${cotNova.status} ${msg(cotNova.json)}`);
+
+// Sem item, convidar é recusado: convite sem carrinho não tem o que orçar.
+const conviteSemItem = await req('POST', `/cotacoes-compra/${cotId}/convidar`, { fornecedor_ids: [fornId] });
+check('E3: convidar sem item → 409', conviteSemItem.status === 409, `status ${conviteSemItem.status} ${msg(conviteSemItem.json)}`);
+
+const itemCot = await req('POST', `/cotacoes-compra/${cotId}/itens`, { insumo_id: insumoId, quantidade: 10 });
+const cotItemId = Number(itemCot.json?.id ?? 0);
+check('E3: POST item da cotação → 201', itemCot.status === 201 && cotItemId > 0, `status ${itemCot.status} ${msg(itemCot.json)}`);
+
+const itemDup = await req('POST', `/cotacoes-compra/${cotId}/itens`, { insumo_id: insumoId, quantidade: 5 });
+check('E3: item duplicado na mesma cotação → 409', itemDup.status === 409, `status ${itemDup.status} ${msg(itemDup.json)}`);
+
+const convite = await req('POST', `/cotacoes-compra/${cotId}/convidar`, { fornecedor_ids: [fornId] });
+check('E3: POST convidar → 201 e abre a cotação', convite.status === 201 && convite.json?.convidados === 1, `status ${convite.status} ${msg(convite.json)}`);
+
+const convites = await req('GET', `/cotacoes-compra/${cotId}/comparativo`);
+const conviteId = Number(convites.json?.fornecedores?.[0]?.convite_id ?? 0);
+check('E3: GET comparativo lista o convidado', convites.status === 200 && conviteId > 0, `status ${convites.status}`);
+
+// Item sem cotação bloqueia a decisão — o sistema não inventa preço.
+const decideCedo = await req('POST', `/cotacoes-compra/${cotId}/decidir`, {});
+check('E3: decidir com item sem cotação → 409', decideCedo.status === 409, `status ${decideCedo.status} ${msg(decideCedo.json)}`);
+
+const cotou = await req('POST', `/cotacoes-compra/${cotId}/cotar`, { convite_id: conviteId, precos: [{ item_id: cotItemId, preco_unitario: 12.5, prazo_entrega_dias: 7 }] });
+check('E3: POST cotar → 201', cotou.status === 201, `status ${cotou.status} ${msg(cotou.json)}`);
+
+const comp2 = await req('GET', `/cotacoes-compra/${cotId}/comparativo`);
+check('E3: comparativo traz o menor preço real', comp2.json?.itens?.[0]?.menor_preco === 12.5 && comp2.json?.itens?.[0]?.cotacoes_recebidas === 1, `menor=${comp2.json?.itens?.[0]?.menor_preco}`);
+check('E3: comparativo não inventa economia com uma só cotação', comp2.json?.resumo?.economia_potencial_total === 0, `economia=${comp2.json?.resumo?.economia_potencial_total}`);
+
+const decidido = await req('POST', `/cotacoes-compra/${cotId}/decidir`, {});
+const compraGerada = Number(decidido.json?.compra_id ?? 0);
+check('E3: POST decidir → 201 e gera pedido', decidido.status === 201 && compraGerada > 0 && decidido.json?.idempotente === false, `status ${decidido.status} compra=${compraGerada} ${msg(decidido.json)}`);
+
+const pedidoGerado = await req('GET', `/compras/${compraGerada}`);
+check('E3: pedido gerado nasce pendente com total 125', pedidoGerado.status === 200 && pedidoGerado.json?.status === 'pendente' && Number(pedidoGerado.json?.total) === 125, `status=${pedidoGerado.json?.status} total=${pedidoGerado.json?.total}`);
+
+// A regra mais importante: repetir não cria um segundo pedido.
+const decidido2 = await req('POST', `/cotacoes-compra/${cotId}/decidir`, {});
+check('E3: decidir de novo → 200 idempotente, mesmo pedido', decidido2.status === 200 && Number(decidido2.json?.compra_id) === compraGerada && decidido2.json?.idempotente === true, `compra=${decidido2.json?.compra_id} idempotente=${decidido2.json?.idempotente}`);
+
+const cotDecidida = await req('GET', `/cotacoes_compra/${cotId}`);
+check('E3: cotação fica decidida e aponta para o pedido', cotDecidida.json?.status === 'decidida' && Number(cotDecidida.json?.compra_id) === compraGerada, `status=${cotDecidida.json?.status}`);
+
+// Cancelar uma cotação que já gerou pedido é recusado (a trilha da escolha fica).
+const cancelaDecidida = await req('POST', `/cotacoes-compra/${cotId}/cancelar`, { motivo: 'smoke' });
+check('E3: cancelar cotação já decidida → 409', cancelaDecidida.status === 409, `status ${cancelaDecidida.status} ${msg(cancelaDecidida.json)}`);
+
+// Uma segunda cotação, cancelada antes de decidir, não cria pedido.
+const cot2 = await req('POST', '/cotacoes_compra', { titulo: `Smoke E3 cancel ${Date.now()}` });
+const cancelada2 = await req('POST', `/cotacoes-compra/${Number(cot2.json?.id)}/cancelar`, { motivo: 'smoke: desistência' });
+check('E3: cancelar cotação aberta → 200 cancelada', cancelada2.status === 200 && cancelada2.json?.status === 'cancelada', `status ${cancelada2.status} ${msg(cancelada2.json)}`);
+
+const cotSemAuth = await req('GET', '/cotacoes_compra?page=1&pageSize=1', null, null);
+check('E3: /cotacoes_compra sem token → 401', cotSemAuth.status === 401, `status ${cotSemAuth.status}`);
+
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);
 check('sem token → 401', semToken.status === 401, `status ${semToken.status}`);
