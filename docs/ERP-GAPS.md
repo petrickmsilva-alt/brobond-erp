@@ -17,14 +17,15 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > corrigidos **8** bugs de produção — o mais grave, `receberParcial` devolvendo
 > **500** no PostgreSQL real para qualquer compra com `fin_vencimento`.
 >
-> **Gate E4.2 (2026-10-09):** a implementação e a migration 0030 estão no
-> workspace, mas o aceite **HTTP + autenticação real + PostgreSQL real ainda
-> não foi executado nesta sessão**. O teste `server/test/pg/e42-http.test.ts`
-> foi acrescentado para reutilizar o app real; sem PostgreSQL disponível, o
-> harness falha explicitamente e não converte ausência de infraestrutura em
-> `skip` ou `pass`. `GAP-ESTQ-MULTIEMPRESA` permanece aberto até a evidência
-> executada. E4.3–E4.6 e os gaps P1/P2 separados continuam fora deste gate.
-> Estado, limitações e resultados exatos: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
+> **Gate E4.2 (2026-10-09):** o CI executou a matriz HTTP autenticada contra
+> PostgreSQL real no run [38003682898](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38003682898), mas terminou em **90 pass, 1 fail,
+> 0 skipped**. A falha foi uma comparação de SKU sensível a maiúsculas no
+> harness `/marketplace/loja/produtos`; a rota serializa SKUs em maiúsculas.
+> O harness foi alinhado à normalização sem relaxar a exigência A presente/B
+> ausente. A reexecução PostgreSQL ainda está pendente; portanto E4.2 continua
+> **NÃO APROVADO** e `GAP-ESTQ-MULTIEMPRESA` permanece aberto. E4.3–E4.6 e os
+> gaps P1/P2 separados continuam fora deste gate. Estado, limitações e
+> resultados exatos: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
 
 Este é o **registro oficial do que falta**. Regra de manutenção:
 

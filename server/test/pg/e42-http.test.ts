@@ -701,8 +701,8 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   assert.equal(wooStatusA.body?.configurado, false);
   const wooProductsA = await http(baseUrl, 'GET', '/marketplace/loja/produtos', tokenA);
   statusIs(wooProductsA, 200, 'diagnóstico local de produtos Woo A sem credenciais');
-  assert.ok(JSON.stringify(wooProductsA.body).includes(String(produtoA.sku)));
-  assert.ok(!JSON.stringify(wooProductsA.body).includes(String(produtoB.sku)));
+  assert.ok(JSON.stringify(wooProductsA.body).includes(String(produtoA.sku).toUpperCase()));
+  assert.ok(!JSON.stringify(wooProductsA.body).includes(String(produtoB.sku).toUpperCase()));
   statusIs(await http(baseUrl, 'POST', '/marketplace/loja/pedidos', tokenA, {}), 409, 'importação Woo exige credenciais reais');
   statusIs(await http(baseUrl, 'POST', '/marketplace/loja/estoque', tokenA, {}), 409, 'sincronização Woo exige credenciais reais');
   const wooStatusB = await http(baseUrl, 'GET', '/marketplace/loja/status', tokenB);
