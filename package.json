@@ -13,7 +13,10 @@
     "typecheck": "npm run typecheck:domain && npm --workspace server run typecheck && npm --workspace client run typecheck",
     "typecheck:domain": "npm --workspace @brobond/domain run typecheck",
     "test": "npm --workspace server test && npm --workspace client test",
-    "lint": "eslint 'server/src/**/*.ts' 'modules/**/*.ts' 'packages/*/src/**/*.ts' 'client/src/**/*.{ts,tsx}'",
+    "test:pg": "npm --workspace server run test:pg",
+    "audit:menu": "node --import tsx scripts/auditar-menu.ts",
+    "smoke": "node scripts/smoke-e2e.mjs",
+    "lint": "eslint 'server/src/**/*.ts' 'modules/**/*.ts' 'packages/*/src/**/*.ts' 'client/src/**/*.{ts,tsx}' 'scripts/**/*.ts'",
     "db:validate": "prisma validate",
     "db:generate": "prisma generate",
     "db:deploy": "prisma migrate deploy"
