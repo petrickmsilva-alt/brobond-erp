@@ -109,6 +109,17 @@ function normalizarLinhas(bruto: unknown): LinhaRecebimento[] {
  * com n derivado dos itens e quantidades). Repetir a MESMA requisição devolve o
  * MESMO recebimento; o estoque não sobe duas vezes.
  */
+/**
+ * Sinal interno da PRÉVIA de recebimento: o cálculo roda pela MESMA rotina
+ * canônica de custo e a transação é abortada de propósito, levando o resultado
+ * para fora. Não é erro e nada é gravado.
+ */
+class PrevisaoRecebimento extends Error {
+  constructor(readonly payload: unknown) {
+    super('previsao');
+  }
+}
+
 export async function receberParcial(req: Request, res: Response) {
   const actor = currentUser(req);
   const r = getResource('compras')!;
@@ -117,6 +128,11 @@ export async function receberParcial(req: Request, res: Response) {
   const id = parseId(req.params.id);
   const body = (req.body || {}) as Record<string, unknown>;
   const linhas = normalizarLinhas(body.itens);
+  // `previsao: true` (ou `?previsao=1`) calcula o impacto SEM gravar: é o que a
+  // tela mostra antes de o usuário confirmar. Usa a regra canônica de verdade,
+  // então o número projetado é o que será aplicado — não uma re-implementação no
+  // cliente que poderia divergir.
+  const previsao = body.previsao === true || req.query?.previsao === '1' || req.query?.previsao === 'true';
   const s = getStore();
 
   const chave = String(
@@ -234,6 +250,28 @@ export async function receberParcial(req: Request, res: Response) {
         escopo,
       });
 
+      if (previsao) {
+        const itensProjetados = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { compra_id: id } }, tx);
+        throw new PrevisaoRecebimento({
+          ok: true,
+          previsao: true,
+          aplicado: false,
+          compra_id: id,
+          local,
+          custos: custosAplicados,
+          total,
+          itens: itensProjetados.rows.map((i) => ({
+            item_compra_id: Number(i.id),
+            quantidade: num(i.quantidade),
+            quantidade_recebida: num(i.quantidade_recebida),
+            restante: round3(num(i.quantidade) - num(i.quantidade_recebida)),
+          })),
+          // O financeiro só nasce quando a compra fica completa — dizer isso na
+          // prévia evita a surpresa de a conta aparecer depois.
+          completo: itensProjetados.rows.every((i) => round3(num(i.quantidade_recebida)) >= round3(num(i.quantidade)) - 1e-6),
+        });
+      }
+
       // ---- status: parcial até tudo chegar ----
       const itensDepois = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { compra_id: id } }, tx);
       const completo = itensDepois.rows.every((i) => round3(num(i.quantidade_recebida)) >= round3(num(i.quantidade)) - 1e-6);
@@ -280,6 +318,12 @@ export async function receberParcial(req: Request, res: Response) {
           : 'Recebimento parcial registrado: o estoque subiu apenas pela quantidade recebida.',
     });
   } catch (e) {
+    // A prévia aborta a transação de propósito: devolve 200 com o impacto e nada
+    // foi gravado. Não passa por toHttpError porque não é um erro.
+    if (e instanceof PrevisaoRecebimento) {
+      res.status(200).json(e.payload);
+      return;
+    }
     throw toHttpError(e, r);
   }
 }

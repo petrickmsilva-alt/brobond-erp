@@ -80,7 +80,25 @@ type ImportBody = {
   fornecedor_id?: number;
   de_para?: Record<string, MappingInput | number | string> | { codigo_fornecedor: string; produto_id?: number; sku?: string; tamanho_id?: number; tamanho?: string }[];
   mapeamentos?: ImportBody['de_para'];
+  /**
+   * `false` = só PRÉ-VALIDAR: resolve fornecedor, itens e de-para dentro de uma
+   * transação que é desfeita, e devolve o que ACONTECERIA. A tela precisa
+   * mostrar as divergências antes de gravar — importar direto não dá volta.
+   * Ausente ou `true` = importar de verdade (comportamento de sempre).
+   */
+  aplicar?: boolean;
 };
+
+/**
+ * Sinal interno: a pré-validação roda o caminho REAL de importação e então
+ * aborta a transação de propósito, carregando o resultado para fora. Não é um
+ * erro — é como se devolve um "e se?" sem gravar nada.
+ */
+class PrevisualizacaoXml extends Error {
+  constructor(readonly payload: unknown) {
+    super('previsualizacao');
+  }
+}
 
 function decodeXml(value: string): string {
   return value
@@ -236,6 +254,8 @@ function requestInput(req: Request): { xml: string; input: ImportBody } {
         try { (input as any)[part.name] = JSON.parse(value); } catch { throw new HttpError(400, `${part.name} deve ser um JSON válido.`); }
       } else if (part.name === 'local_id' || part.name === 'tamanho_id' || part.name === 'fornecedor_id') {
         (input as any)[part.name] = Number(value);
+      } else if (part.name === 'aplicar') {
+        (input as any).aplicar = !/^(false|0|nao|não)$/i.test(value.trim());
       } else if (part.name in input || ['local', 'tamanho'].includes(part.name)) {
         (input as any)[part.name] = value;
       }
@@ -378,7 +398,9 @@ export async function importarXmlCompra(req: Request, res: Response) {
   const parsed = parseXml(xml);
   const hash = createHash('sha256').update(xml, 'utf8').digest('hex');
   const s = getStore();
-  const result = await s.transaction(async (tx) => {
+  // A pré-validação aborta a transação de propósito; `.then(ok, erro)` mantém o
+  // tipo estreito sem `as` e sem variável anulável espalhada pelo handler.
+  const desfecho = await s.transaction(async (tx) => {
     const already = await s.findOneWhere(imports, { chave_acesso: parsed.chaveAcesso }, tx);
     if (already) {
       throw new HttpError(409, `A NF-e ${parsed.numero || parsed.chaveAcesso} já foi importada.`, { compra_id: already.compra_id, importacao_id: already.id });
@@ -387,15 +409,83 @@ export async function importarXmlCompra(req: Request, res: Response) {
     const local = await resolveLocal(input, tx);
     const requestedMappings = mappingEntries(input);
     const resolved: { item: XmlFiscalItem; product: Row; size: Row; code: string; mapping: MappingInput }[] = [];
+    // Pré-validação: em vez de parar no primeiro problema, coleta TODOS. Quem
+    // está na tela precisa ver a lista inteira de pendências de uma vez para
+    // resolver o de-para; descobrir um erro por tentativa seria insuportável.
+    const previsualizando = input.aplicar === false;
+    const pendencias: { numero: number; codigo_fornecedor: string; descricao: string; motivo: string }[] = [];
     for (const item of parsed.itens) {
-      if (!item.codigoFornecedor) throw new HttpError(422, `O item ${item.numero} não possui cProd.`);
-      if (!(item.quantidade > 0) || !Number.isInteger(item.quantidade)) throw new HttpError(422, `A quantidade do item ${item.numero} deve ser um número inteiro positivo para entrada de produto.`);
+      const semCodigo = !item.codigoFornecedor;
+      const qtdInvalida = !(item.quantidade > 0) || !Number.isInteger(item.quantidade);
       const mapping = asMapping(requestedMappings.get(item.codigoFornecedor));
-      const pair = await resolveProductAndSize(item, Number(supplier.id), input, mapping, escopo, tx);
-      resolved.push({ item, product: pair.produto, size: pair.tamanho, code: item.codigoFornecedor, mapping });
+      if (previsualizando && (semCodigo || qtdInvalida)) {
+        pendencias.push({
+          numero: item.numero,
+          codigo_fornecedor: item.codigoFornecedor || '',
+          descricao: item.descricao || '',
+          motivo: semCodigo ? 'O item não possui cProd (código do fornecedor).' : 'A quantidade precisa ser um número inteiro positivo para entrada de produto.',
+        });
+        continue;
+      }
+      if (semCodigo) throw new HttpError(422, `O item ${item.numero} não possui cProd.`);
+      if (qtdInvalida) throw new HttpError(422, `A quantidade do item ${item.numero} deve ser um número inteiro positivo para entrada de produto.`);
+      try {
+        const pair = await resolveProductAndSize(item, Number(supplier.id), input, mapping, escopo, tx);
+        resolved.push({ item, product: pair.produto, size: pair.tamanho, code: item.codigoFornecedor, mapping });
+      } catch (e) {
+        if (!previsualizando) throw e;
+        const detalhe = (e as any)?.details as { codigo_fornecedor?: string } | undefined;
+        pendencias.push({
+          numero: item.numero,
+          codigo_fornecedor: detalhe?.codigo_fornecedor ?? item.codigoFornecedor ?? '',
+          descricao: item.descricao || '',
+          motivo: e instanceof Error ? e.message : 'Falha no de-para.',
+        });
+      }
     }
 
     const total = parsed.totalNota || round2(resolved.reduce((sum, line) => sum + line.item.quantidade * line.item.valorUnitario, 0) + parsed.frete - parsed.desconto);
+
+    // ---- PRÉ-VALIDAÇÃO: devolve o que ACONTECERIA e desfaz tudo ------------
+    // A transação é abortada de propósito — nada é gravado. É o mesmo parser, o
+    // mesmo resolveSupplier e o mesmo resolveProductAndSize da importação real,
+    // então o que aparece aqui é o que aconteceria de fato, não uma simulação
+    // paralela que poderia divergir.
+    if (previsualizando) {
+      throw new PrevisualizacaoXml({
+        ok: true,
+        aplicado: false,
+        fornecedor: { id: supplier.id, nome: supplier.nome, cnpj: supplier.cnpj || null },
+        local,
+        nota: {
+          chave_acesso: parsed.chaveAcesso,
+          numero: parsed.numero,
+          serie: parsed.serie,
+          emissao: parsed.emissao,
+          total: parsed.totalNota,
+          frete: round2(parsed.frete || 0),
+          desconto: round2(parsed.desconto || 0),
+        },
+        total,
+        itens: resolved.map(({ item, product, size, code }) => ({
+          numero: item.numero,
+          codigo_fornecedor: code,
+          descricao_fornecedor: item.descricao || null,
+          produto_id: product.id,
+          sku: product.sku,
+          produto: product.nome || product.sku,
+          tamanho_id: size.id,
+          tamanho: size.codigo,
+          unidade: item.unidade || null,
+          quantidade: item.quantidade,
+          valor_unitario: item.valorUnitario,
+          subtotal: round2(item.quantidade * item.valorUnitario),
+        })),
+        pendencias,
+        pode_importar: pendencias.length === 0,
+      });
+    }
+
     const compra = await s.insert(compras, {
       empresa_id: escopo.empresaId,
       fornecedor_id: Number(supplier.id),
@@ -487,7 +577,19 @@ export async function importarXmlCompra(req: Request, res: Response) {
       empresa_id: empresaDoRegistroAudit(compras, compra, actor),
     }, tx);
     return { compra, imported, supplier, local, resolved, parsed };
-  }, { isolation: 'serializable' });
+  }, { isolation: 'serializable' }).then(
+    (data) => ({ previsualizacao: false as const, data }),
+    (e: unknown) => {
+      if (e instanceof PrevisualizacaoXml) return { previsualizacao: true as const, data: e.payload };
+      throw e;
+    }
+  );
+  if (desfecho.previsualizacao) {
+    // Nada foi gravado — a transação foi desfeita.
+    res.status(200).json(desfecho.data);
+    return;
+  }
+  const result = desfecho.data;
 
   res.status(201).json({
     ok: true,

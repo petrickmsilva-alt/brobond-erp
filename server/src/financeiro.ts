@@ -68,7 +68,7 @@ type EventoProjetado = { data: string; tipo: 'receita' | 'despesa'; descricao: s
 /** Próximas ocorrências de uma recorrência dentro do horizonte (projeção). */
 function ocorrenciasRecorrencia(r: Row, de: string, ate: string, max = 60): EventoProjetado[] {
   const eventos: EventoProjetado[] = [];
-  let data = String(r.proxima_geracao || calcularProximaGeracao(r)).slice(0, 10);
+  let data = dataISO(r.proxima_geracao) || calcularProximaGeracao(r);
   if (data < de) data = calcularProximaGeracao(r, new Date(`${de}T12:00:00Z`));
   const tipo = String(r.tipo || 'despesa') === 'receita' ? 'receita' : 'despesa';
   let guard = 0;
@@ -87,7 +87,7 @@ function montarFluxoProjetado(pendentes: Row[], recorrencias: Row[], saldoBase: 
     .filter((l) => ['receita', 'despesa'].includes(String(l.tipo)) && String(l.status) === 'pendente')
     .filter((l) => (String(l.vencimento || l.data || '') >= de))
     .map((l) => ({
-      data: String(l.vencimento || l.data || '').slice(0, 10),
+      data: dataISO(l.vencimento) || dataISO(l.data) || hoje(),
       tipo: String(l.tipo) === 'receita' ? 'receita' : 'despesa',
       descricao: String(l.descricao || 'Conta em aberto'),
       valor: Number(l.valor || 0),
@@ -167,8 +167,11 @@ async function parcelasDaOrigem(tipo: string, refId: number, tx?: Tx): Promise<R
 }
 
 /** Soma meses à data preservando o dia (31 jan + 1m = 28/29 fev, não 3 mar). */
-function addMeses(dataISO: string, meses: number): string {
-  const d = new Date(`${dataISO}T12:00:00Z`);
+function addMeses(dataBaseISO: string, meses: number): string {
+  const d = new Date(`${dataBaseISO}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) {
+    throw new HttpError(422, `A data de vencimento "${dataBaseISO}" não é válida (esperado AAAA-MM-DD).`);
+  }
   const dia = d.getUTCDate();
   const alvo = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + meses, 1, 12));
   const ultimoDia = new Date(Date.UTC(alvo.getUTCFullYear(), alvo.getUTCMonth() + 1, 0, 12)).getUTCDate();
@@ -200,7 +203,11 @@ async function reconciliarParcelasPedido(
   const finLiquidado = ['recebido', 'pago'].includes(String(after.fin_status));
   const total = Math.max(0, Number(after.total || 0));
   const n = Math.max(1, Math.min(60, Math.trunc(Number(after.fin_parcelas || 1) || 1)));
-  const baseVenc = (String(after.fin_vencimento || '').slice(0, 10) || dataBase).slice(0, 10);
+  // `fin_vencimento` é coluna DATE: o Postgres devolve um objeto `Date`, e
+  // `String(date).slice(0,10)` produz "Mon Nov 09" — data inválida que estourava
+  // `addMeses` com RangeError e devolvia 500 em qualquer compra/venda com
+  // vencimento. `dataISO` já trata os dois formatos.
+  const baseVenc = dataISO(after.fin_vencimento) || dataBase;
   const valorParcela = r2(total / n);
   const detalhes = Array.isArray(after.fin_parcelas_detalhes) ? after.fin_parcelas_detalhes as Row[] : [];
   const existentes = await parcelasDaOrigem(referencia, id, tx);
@@ -227,14 +234,14 @@ async function reconciliarParcelasPedido(
       const valor = detalhe && Number.isFinite(Number(detalhe.valor)) ? r2(Number(detalhe.valor)) : i === n ? r2(total - valorParcela * (n - 1)) : valorParcela;
       const alvo = existentes.find((l) => Number(l.parcela || 1) === i);
       const dados: Row = {
-        data: i === 1 || !alvo ? dataBase : String(alvo.data || dataBase).slice(0, 10),
+        data: i === 1 || !alvo ? dataBase : dataISO(alvo.data) || dataBase,
         tipo,
         categoria_id: categoriaId,
         conta_id: after.fin_conta_id ?? alvo?.conta_id ?? null,
         descricao: n > 1 ? `${descricaoBase} (${i}/${n})` : descricaoBase,
         valor,
         forma_pagamento: after.fin_forma_pagamento ?? alvo?.forma_pagamento ?? null,
-        vencimento: detalhe?.vencimento ? String(detalhe.vencimento).slice(0, 10) : addMeses(baseVenc, i - 1),
+        vencimento: dataISO(detalhe?.vencimento) || addMeses(baseVenc, i - 1),
         parcela: i,
         total_parcelas: n,
         referencia_tipo: referencia,

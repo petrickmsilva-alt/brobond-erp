@@ -1,12 +1,21 @@
 # BROBOND ERP — GAPS
 
-**Fase E1 — Auditoria estrutural. Fase E2 — Produção executada.**
+**Fase E1 — Auditoria estrutural. Fases E2, E3, E3.1 e E3.2 executadas.**
 Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3ee997-brobond-erp`
 
 > **Atualização E2:** os 8 gaps de Produção estão fechados com evidência
 > executada (migração em banco vazio, 33 testes novos de servidor, 14 de tela,
 > 24 verificações de smoke HTTP). A seção de cada gap guarda o que faltava,
 > como foi comprovado que faltava e como foi resolvido.
+>
+> **Atualização E3 / E3.1 / E3.2:** os 6 gaps de Compras estão fechados —
+> cotação de compra (0027), custo de recebimento canônico (0028), tela de
+> recebimento, importação de NF-e com prévia, de-para de fornecedor (0029) e
+> contas a pagar visíveis na compra. Evidência executada: 29 migrações em banco
+> vazio (97 tabelas), 89 testes no PostgreSQL real, 226 testes de tela e smoke
+> HTTP ponta a ponta com **126/126** verificações. Junto foram encontrados e
+> corrigidos **8** bugs de produção — o mais grave, `receberParcial` devolvendo
+> **500** no PostgreSQL real para qualquer compra com `fin_vencimento`.
 
 Este é o **registro oficial do que falta**. Regra de manutenção:
 
@@ -27,7 +36,7 @@ Classificação do tipo de gap (seção 3 da especificação):
 | Fase | Gaps | Abertos | Críticos abertos |
 |---|---|---|---|
 | **E2 — Produção** | 8 | **0** ✅ | **0** |
-| **E3 — Compras** | 5 | **3** | **0** |
+| **E3 — Compras** | 6 | **0** ✅ | **0** |
 | **E4 — Estoque avançado** | 5 | 5 | 2 |
 | **E5 — Financeiro avançado** | 2 | 2 | 0 |
 | **E6 — Fiscal** | 2 | 2 | 0 |
@@ -38,7 +47,7 @@ Classificação do tipo de gap (seção 3 da especificação):
 | **E11 — UX final** | 2 | 2 | 0 |
 | **E12 — Homologação** | 3 | 3 | 3 |
 | Transversais | 3 | 3 | 0 |
-| **Total** | **42** | **32** | **8** |
+| **Total** | **43** | **29** | **8** |
 
 ---
 
@@ -174,26 +183,51 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
   lotes de preço diferente) e `server/test/pg-custo-recebimento.test.ts` (**16** testes no
   PostgreSQL real: constraints 23514/23505, três corridas reais, rollback, estorno,
   idempotência e multiempresa A → B → A).
-- **Continua aberto (fora deste gap):** a **tela** de recebimento mostrando recebido ×
-  pendente, custo unitário, frete, imposto, custo efetivo e impacto no estoque. O backend já
-  devolve tudo isso em `custos` na resposta do `POST /api/compras/:id/receber`; falta a UI.
+- **A tela faltante foi entregue na E3.2:** `client/src/components/RecebimentoCompraModal.tsx`
+  mostra recebido × pendente por item, custo unitário, frete, imposto, custo efetivo, impacto
+  projetado no custo médio e no estoque, e exige prévia antes de confirmar. Ver
+  `GAP-COMP-RECEBIMENTO-UI`.
 
-### `GAP-COMP-XML-MENU` — importação de XML sem entrada navegável e sem teste
+### `GAP-COMP-XML-MENU` — importação de XML sem entrada navegável e sem teste · ✅ **FECHADO na E3.2**
 - **Tipo:** menu + testes
-- **Evidência:** `POST /api/suprimentos/compras/importar-xml` existe e o handler é `importarXmlCompra` (`server/src/suprimentos.ts:383`), mas:
-  • `grep -rn "importarXmlCompra\|importar-xml" server/test/ scripts/` → **zero ocorrências**. O parser de NF-e de entrada **não tem nenhuma cobertura**. (As ocorrências de `nfeProc` em `fiscal.test.ts` são da **emissão** de NF-e, outro caminho.)
-  • `MODULES` (`client/src/modules.ts`) não tem entrada para importação de NF-e.
-- **Aceite:** testes do parser (fornecedor, CNPJ, itens, SKU, NCM, quantidade, preço, impostos, de-para, empresa) + item no menu **Compras** com preview, validação e erros por linha.
+- **Evidência (antes):** `POST /api/suprimentos/compras/importar-xml` existe e o handler é `importarXmlCompra` (`server/src/suprimentos.ts:383`), mas:
+  • `grep -rn "importarXmlCompra\|importar-xml" server/test/ scripts/` → **zero ocorrências**. O parser de NF-e de entrada **não tinha nenhuma cobertura**. (As ocorrências de `nfeProc` em `fiscal.test.ts` são da **emissão** de NF-e, outro caminho.)
+  • `MODULES` (`client/src/modules.ts`) não tinha entrada para importação de NF-e.
+- **Como foi fechado:** menu **Compras → Importar NF-e** (`modules.ts` id `importar-nfe-compra`, recurso `compras`), página `client/src/pages/ImportarNfePage.tsx` com upload multipart, **prévia obrigatória antes de importar** e lista de pendências por item. No backend, `importarXmlCompra` ganhou o modo `aplicar: false`, que roda **a rotina real dentro de uma transação desfeita** — a prévia não é um cálculo paralelo, é o próprio import com rollback. `resolveProductAndSize` deixou de abortar no primeiro item sem de-para: agora acumula **todas** as pendências e devolve 422 com `details.codigo_fornecedor`, para o comprador resolver de uma vez.
+- **Prova:** `server/test/compras-xml-depara.test.ts` (**11** testes com fixture de NF-e real — leiaute `nfeProc/infNFe/ide/emit/det/imposto/ICMSTot/dup`): prévia não grava nada, lista todas as pendências, 422 sem de-para, arquivo que não é NF-e recusado, import real gera compra `recebido` com `compras.frete` gravado + estoque + custo + `mov.custo_unitario`, **409 na segunda importação da mesma `chave_acesso` sem dobrar o estoque**, e isolamento A → B → A com 404. A fixture é dado de teste e nunca é exibida como resposta de provedor.
 
-### `GAP-COMP-DEPARA-MENU` — de-para fornecedor × SKU sem entrada navegável nem teste
+### `GAP-COMP-DEPARA-MENU` — de-para fornecedor × SKU sem entrada navegável nem teste · ✅ **FECHADO na E3.2**
 - **Tipo:** menu + testes
-- **Evidência:** o recurso `produto_fornecedor_skus` existe em `RESOURCES` com CRUD, mas `grep -c "produto_fornecedor_skus" server/test/compras.test.ts` → **0**, e nenhuma entrada de menu o alcança (`npm run audit:menu` não avisa porque ele está na lista de sub-recursos).
-- **Aceite:** manutenção do de-para acessível pela tela do fornecedor e/ou pela importação de XML, com teste de resolução de SKU.
+- **Evidência (antes):** o recurso `produto_fornecedor_skus` existia em `RESOURCES` com CRUD, mas `grep -c "produto_fornecedor_skus" server/test/compras.test.ts` → **0**, e nenhuma entrada de menu o alcançava — ele era `internal: true`, então invisível por construção.
+- **Como foi fechado (migration 0029):** o recurso saiu de `internal` e ganhou entrada própria **Compras → De-para de fornecedor** (`id: depara-fornecedor`, `resource: produto_fornecedor_skus`), reutilizando o `ModulePage` genérico — não foi criada uma segunda grade. Colunas novas `descricao`, `unidade` e `ativo` (`BOOLEAN NOT NULL DEFAULT true`), mais os índices `produto_fornecedor_skus_produto_idx` e `produto_fornecedor_skus_ativos_idx`. **Sem `delete` de propósito** (`ops: { create, update, delete: false }`): apagar destruiria o rastro das importações que usaram o de-para; o caminho é `ativo: false`.
+- **Prova:** CRUD em `server/test/compras-xml-depara.test.ts`; o `UNIQUE (empresa_id, fornecedor_id, codigo_fornecedor)` só existe no PostgreSQL real, então a recusa por duplicidade (23505) e o escopo separado A × B são provados em `server/test/pg-compras-e32.test.ts`.
 
-### `GAP-COMP-CONTAS-MENU` — contas a pagar geradas pela compra sem trilha visível
+### `GAP-COMP-CONTAS-MENU` — contas a pagar geradas pela compra sem trilha visível · ✅ **FECHADO na E3.2**
 - **Tipo:** ux
-- **Evidência:** a compra gera lançamento financeiro (`financeiro.ts`), mas não há navegação da compra para a conta gerada.
-- **Aceite:** link compra → conta a pagar e conta a pagar → compra de origem.
+- **Evidência (antes):** a compra gerava lançamento financeiro (`financeiro.ts`), mas não havia navegação da compra para a conta gerada — o comprador não tinha como saber que a obrigação existia, muito menos qual parcela venceu.
+- **Como foi fechado:** bloco **Contas a pagar** dentro da própria tela da compra (`ContasAPagarDaCompra` em `client/src/pages/OrderPage.tsx`, renderizado para `tipo === 'compra'`), listando parcela, vencimento, valor, forma e status, com totais a pagar / pago / em aberto e atalho textual para **Financeiro → Lançamentos**. A UI **só lê**: `GET /lancamentos_financeiros?f.referencia_tipo=compra&f.referencia_id=<id>`. Nenhum segundo motor de parcelamento foi criado — continua sendo `syncLancamentoCompra`/`reconciliarParcelasPedido`, e a baixa continua no Financeiro. Vazio diferenciado para compra parcial ("nenhuma conta a pagar gerada até o recebimento total") e compra já recebida.
+- **Bug encontrado AO FECHAR este gap:** **`receberParcial` devolvia 500 no PostgreSQL real para qualquer compra com `fin_vencimento`.** Colunas `date` voltam do driver como `Date`, e `addMeses` (`financeiro.ts:176`) fazia aritmética de string sobre elas, estourando `RangeError` dentro de `reconciliarParcelasPedido` → `syncLancamentoCompra` → `compras.ts:249`. Os `pg-*.test.ts` antigos nunca pegaram porque nenhum deles setava `fin_vencimento`. Corrigido com `dataISO()` em cinco pontos e `HttpError(422)` para vencimento inválido. Regressão em `server/test/pg-compras-e32.test.ts`.
+- **Prova:** smoke ponta a ponta (`scripts/smoke-e2e.mjs`, bloco E3.2): compra `30/60/90` com vencimento 2026-11-09 → parcial não gera conta a pagar → completo gera **3** parcelas somando exatamente o total, numeradas `1/3, 2/3, 3/3`, vencimentos `2026-11-09, 2026-12-09, 2027-01-09`, todas `pendente/despesa` com `referencia_tipo='compra'` → baixa da 1ª pelo Financeiro → cancelamento da compra cancela as três.
+
+### `GAP-COMP-RECEBIMENTO-UI` — recebimento sem tela (só troca de status) · ✅ **FECHADO na E3.2**
+- **Tipo:** frontend + backend (prévia)
+- **Evidência (antes):** o único jeito de receber era mudar o status da compra para `recebido`,
+  o que recebia a quantidade **cheia** sem conferência. `POST /api/compras/:id/receber` e
+  `GET /api/compras/:id/recebimentos` existiam, mas nenhum componente do front os chamava
+  (`grep -rn "compras/.*receber" client/src` → zero).
+- **Como foi fechado:** `RecebimentoCompraModal` (~560 ln) aberto pela própria tela da compra
+  por botão dividido ("Registrar recebimento" / "Recebimentos"). Mostra o que já entrou por
+  item, deixa informar quantidade, local, frete e imposto por linha, e calcula **antes** o
+  custo efetivo e o custo médio resultante. Excesso e quantidade negativa são recusados **no
+  cliente, sem chamar a API**. No backend, `receberParcial` ganhou o modo `previsao: true`,
+  que devolve `200 { aplicado: false, custos[], itens[], completo, local }` rodando a rotina
+  canônica em transação desfeita — mesma abordagem da prévia de XML, para que o número exibido
+  seja o número que será gravado.
+- **Prova:** `client/src/components/RecebimentoCompraModal.test.tsx` (**17** testes: contadores,
+  parcial 100/40/20/40, custo efetivo 54,63 com média 10 → 54,63, frete 160 e impostos vindos
+  da API, prévia obrigatória, recusa sem chamada de rede, aviso de que a parcial não gera conta
+  a pagar e a completa gera, vazio, "nenhum recebimento", erro + retry nos três caminhos) e
+  `server/test/pg-compras-e32.test.ts` (**10** testes no PostgreSQL real).
 
 ---
 

@@ -382,6 +382,7 @@ check('E3: /cotacoes_compra sem token → 401', cotSemAuth.status === 401, `stat
   const compraId = compra.json?.id;
   check('E3.1: compra com frete criada', compra.status === 201 && Boolean(compraId), `status ${compra.status} ${msg(compra.json)}`);
 
+  if (!compraId) console.error('DEBUG compra:', JSON.stringify(compra.json));
   const item = await req('POST', `/compras/${compraId}/itens`, { insumo_id: insumoId, quantidade: 100, preco_unitario: 50 });
   const itemId = item.json?.id;
   check('E3.1: item adicionado', item.status === 201 && Boolean(itemId), `status ${item.status} ${msg(item.json)}`);
@@ -418,6 +419,114 @@ check('E3: /cotacoes_compra sem token → 401', cotSemAuth.status === 401, `stat
   const insumoEstornado = await req('GET', `/insumos/${insumoId}`);
   check('E3.1: custo médio restaurado pelo estorno', Number(insumoEstornado.json?.custo_medio) === 0, `custo_medio=${insumoEstornado.json?.custo_medio}`);
 }
+
+// ------------------------------------ E3.2 CADEIA COMPLETA + CONTAS A PAGAR
+// Fornecedor → Compra → Recebimento → Estoque → Custo → Conta a pagar → Parcelas.
+await (async () => {
+  const forn = await req('POST', '/fornecedores', { nome: 'Fornecedor Cadeia E32', cnpj: '99888777000100' });
+  const insumo = await req('POST', '/insumos', { nome: 'Insumo Cadeia E32', unidade: 'un', custo_medio: 0 });
+  const fornId = forn.json?.id;
+  const insumoId = insumo.json?.id;
+  check('E3.2: cadeia — fornecedor e insumo', Boolean(fornId && insumoId), `forn=${fornId} insumo=${insumoId} ${msg(forn.json)} ${msg(insumo.json)}`);
+  if (!fornId || !insumoId) return;
+
+  const compra = await req('POST', '/compras', {
+    fornecedor_id: fornId,
+    data: new Date().toISOString().slice(0, 10),
+    frete: 400,
+    condicao_pagamento: '30/60/90',
+    fin_parcelas: 3,
+    fin_vencimento: '2026-11-09',
+    fin_forma_pagamento: 'boleto',
+  });
+  const compraId = compra.json?.id;
+  check('E3.2: cadeia — compra com condição de pagamento criada', compra.status === 201 && Boolean(compraId), `status ${compra.status} ${msg(compra.json)}`);
+  if (!compraId) return;
+
+  const item = await req('POST', `/compras/${compraId}/itens`, { insumo_id: insumoId, quantidade: 100, preco_unitario: 50 });
+  const itemId = item.json?.id;
+  check('E3.2: cadeia — item criado', item.status === 201 && Boolean(itemId), `status ${item.status} ${msg(item.json)}`);
+  if (!itemId) return;
+
+  // Antes de receber não existe obrigação financeira.
+  const antes = await req('GET', `/lancamentos_financeiros?f.referencia_tipo=compra&f.referencia_id=${compraId}&pageSize=50`);
+  check('E3.2: compra pendente não gera conta a pagar', (antes.json?.rows || []).length === 0, `parcelas=${(antes.json?.rows || []).length}`);
+
+  // Prévia: calcula sem gravar.
+  const previa = await req('POST', `/compras/${compraId}/receber`, { previsao: true, itens: [{ item_compra_id: itemId, quantidade: 40 }] });
+  check('E3.2: prévia devolve 200 e aplicado=false', previa.status === 200 && previa.json?.aplicado === false, `status ${previa.status} ${msg(previa.json)}`);
+  check('E3.2: prévia projeta o custo efetivo', Number(previa.json?.custos?.[0]?.custo_unitario_efetivo) === 54, `efetivo=${previa.json?.custos?.[0]?.custo_unitario_efetivo}`);
+  const saldoPrevia = await req('GET', `/insumos/${insumoId}`);
+  check('E3.2: prévia NÃO movimenta estoque', Number(saldoPrevia.json?.custo_medio) === 0, `custo_medio=${saldoPrevia.json?.custo_medio}`);
+
+  // Recebimento parcial de verdade.
+  const r1 = await req('POST', `/compras/${compraId}/receber`, { itens: [{ item_compra_id: itemId, quantidade: 40 }] });
+  check('E3.2: 1º lote recebido (parcial)', r1.status === 201 && r1.json?.status === 'parcial', `status ${r1.status}/${r1.json?.status} ${msg(r1.json)}`);
+  const parc1 = await req('GET', `/lancamentos_financeiros?f.referencia_tipo=compra&f.referencia_id=${compraId}&pageSize=50`);
+  check('E3.2: parcial ainda não gera conta a pagar', (parc1.json?.rows || []).length === 0, `parcelas=${(parc1.json?.rows || []).length}`);
+
+  // Completa o pedido.
+  const r2 = await req('POST', `/compras/${compraId}/receber`, { itens: [{ item_compra_id: itemId, quantidade: 60 }] });
+  check('E3.2: 2º lote completa o pedido', r2.status === 201 && r2.json?.status === 'recebido', `status ${r2.status}/${r2.json?.status} ${msg(r2.json)}`);
+
+  // Estoque e custo.
+  const insumoFinal = await req('GET', `/insumos/${insumoId}`);
+  check('E3.2: custo médio final = 54 (frete não cobrado duas vezes)', Number(insumoFinal.json?.custo_medio) === 54, `custo_medio=${insumoFinal.json?.custo_medio}`);
+
+  // Contas a pagar.
+  const parcelas = await req('GET', `/lancamentos_financeiros?f.referencia_tipo=compra&f.referencia_id=${compraId}&pageSize=50`);
+  const rows = [...(parcelas.json?.rows || [])].sort((x, y) => Number(x.parcela) - Number(y.parcela));
+  check('E3.2: compra completa gera 3 contas a pagar', rows.length === 3, `parcelas=${rows.length}`);
+  if (rows.length === 0) return;
+  const soma = rows.reduce((acc, pr) => acc + Number(pr.valor || 0), 0);
+  check('E3.2: soma das parcelas fecha no total 5400', Math.round(soma * 100) / 100 === 5400, `soma=${soma}`);
+  check('E3.2: parcelas numeradas 1/3, 2/3, 3/3', rows.map((pr) => `${pr.parcela}/${pr.total_parcelas}`).join(',') === '1/3,2/3,3/3', rows.map((pr) => `${pr.parcela}/${pr.total_parcelas}`).join(','));
+  const vences = rows.map((pr) => String(pr.vencimento || '').slice(0, 10));
+  check('E3.2: vencimentos mensais a partir do informado', vences.join(',') === '2026-11-09,2026-12-09,2027-01-09', vences.join(','));
+  check('E3.2: parcelas nascem pendentes e são despesa', rows.every((pr) => pr.status === 'pendente' && pr.tipo === 'despesa'), rows.map((pr) => `${pr.status}/${pr.tipo}`).join(','));
+  check('E3.2: parcela tem vínculo estrutural com a compra', rows.every((pr) => pr.referencia_tipo === 'compra' && Number(pr.referencia_id) === Number(compraId)), 'ok');
+
+  // Baixa de uma parcela pelo núcleo financeiro existente (não há segundo motor).
+  const baixa = await req('PUT', `/lancamentos_financeiros/${rows[0].id}`, { status: 'confirmado' });
+  check('E3.2: baixa da 1ª parcela pelo financeiro', baixa.status === 200, `status ${baixa.status} ${msg(baixa.json)}`);
+  const depoisBaixa = await req('GET', `/lancamentos_financeiros?f.referencia_tipo=compra&f.referencia_id=${compraId}&pageSize=50`);
+  const conf = (depoisBaixa.json?.rows || []).filter((pr) => pr.status === 'confirmado').length;
+  check('E3.2: baixa confirmada aparece no plano', conf === 1, `confirmadas=${conf}`);
+
+  // Estornar a compra cancela as contas a pagar.
+  const cancel = await req('PUT', `/compras/${compraId}`, { status: 'cancelado' });
+  check('E3.2: cancelar a compra recebida', cancel.status === 200, `status ${cancel.status} ${msg(cancel.json)}`);
+  const aposCancelar = await req('GET', `/lancamentos_financeiros?f.referencia_tipo=compra&f.referencia_id=${compraId}&pageSize=50`);
+  const canceladas = (aposCancelar.json?.rows || []).filter((pr) => pr.status === 'cancelado').length;
+  check('E3.2: contas a pagar canceladas junto com a compra', canceladas >= 1, `canceladas=${canceladas}`);
+})();
+
+// -------------------------------------------- E3.2 DE-PARA E XML NO MENU
+{
+  const depara = await req('GET', '/produto_fornecedor_skus');
+  check('E3.2: de-para é navegável pela API', depara.status === 200, `status ${depara.status}`);
+
+  const forn = await req('POST', '/fornecedores', { nome: 'Fornecedor DePara', cnpj: '66555444000100' });
+  const prod = await req('POST', '/produtos', { nome: 'Produto DePara', sku: `SKU-DEPARA-${Date.now()}` });
+  const criado = await req('POST', '/produto_fornecedor_skus', {
+    fornecedor_id: forn.json?.id,
+    codigo_fornecedor: 'COD-FORN-XYZ',
+    produto_id: prod.json?.id,
+    descricao: 'Descrição do fornecedor',
+    unidade: 'CX',
+    ativo: true,
+  });
+  check('E3.2: de-para criado com descrição e unidade', criado.status === 201 && criado.json?.descricao === 'Descrição do fornecedor' && criado.json?.unidade === 'CX', `status ${criado.status} ${msg(criado.json)}`);
+
+  const inativado = await req('PUT', `/produto_fornecedor_skus/${criado.json?.id}`, { ativo: false });
+  check('E3.2: de-para pode ser inativado', inativado.status === 200 && inativado.json?.ativo === false, `status ${inativado.status} ativo=${inativado.json?.ativo}`);
+
+  const semXml = await req('POST', '/suprimentos/compras/importar-xml', { xml: '<html>não é nfe</html>' });
+  check('E3.2: XML inválido é recusado com 422', semXml.status === 422, `status ${semXml.status}`);
+  const semNada = await req('POST', '/suprimentos/compras/importar-xml', {});
+  check('E3.2: importação sem arquivo é recusada', semNada.status >= 400, `status ${semNada.status}`);
+}
+
 
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);

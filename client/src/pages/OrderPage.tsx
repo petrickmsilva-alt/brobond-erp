@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Loader2, Plus, Printer, Save, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Loader2, Plus, Printer, RefreshCw, Save, Trash2, X } from 'lucide-react';
 import { api } from '../lib/api';
 import { useMeta, type Option, type ResourceMeta } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, PageHeader, Spinner, useToast } from '../components/ui';
 import { Thumb } from '../components/ImageField';
+import RecebimentoCompraModal from '../components/RecebimentoCompraModal';
 import { formatDate, formatMoney } from '../lib/format';
 
 type Tipo = 'venda' | 'compra';
@@ -55,6 +56,7 @@ export default function OrderPage({ tipo }: { tipo: Tipo }) {
   const [busyItem, setBusyItem] = useState<number | 'new' | null>(null);
   const [toDelete, setToDelete] = useState<Item | null>(null);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [recebendo, setRecebendo] = useState(false);
 
   // rótulos para selects
   const [parceiroOpts, setParceiroOpts] = useState<Option[]>([]);
@@ -258,10 +260,18 @@ export default function OrderPage({ tipo }: { tipo: Tipo }) {
                 <Printer className="h-4 w-4" /> Imprimir PDF
               </button>
             )}
-            {!fechado && !cancelado && (
-              <button className="btn-primary" disabled={!!actionStatus} onClick={() => mudarStatus(tipo === 'venda' ? 'faturada' : 'recebido')}>
+            {!fechado && !cancelado && tipo === 'venda' && (
+              <button className="btn-primary" disabled={!!actionStatus} onClick={() => mudarStatus('faturada')}>
                 {actionStatus ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                {tipo === 'venda' ? 'Faturar pedido' : 'Marcar como recebido'}
+                Faturar pedido
+              </button>
+            )}
+            {!fechado && !cancelado && tipo === 'compra' && (
+              // E3.2: substitui o "Marcar como recebido" que recebia o pedido
+              // INTEIRO sem mostrar quantidade nem custo. O recebimento real é
+              // por quantidade, com prévia do custo e do estoque.
+              <button className="btn-primary" onClick={() => setRecebendo(true)}>
+                <Save className="h-4 w-4" /> Receber compra
               </button>
             )}
             {!cancelado && (
@@ -508,6 +518,17 @@ export default function OrderPage({ tipo }: { tipo: Tipo }) {
         </div>
       </div>
 
+      {/* E3.2 — Contas a pagar geradas pelo recebimento. Lê o motor financeiro
+          existente (P2): não existe um segundo financeiro aqui, só a exibição
+          das parcelas que o recebimento já cria em lancamentos_financeiros. */}
+      {tipo === 'compra' && (
+        <ContasAPagarDaCompra compraId={Number(pedidoId)} pedido={pedido} />
+      )}
+
+      {tipo === 'compra' && recebendo && (
+        <RecebimentoCompraModal compraId={Number(pedidoId)} onClose={() => setRecebendo(false)} onRecebido={() => void load()} />
+      )}
+
       <ConfirmDialog
         open={!!toDelete}
         title="Remover item?"
@@ -557,6 +578,132 @@ function HeaderDate({ label, value, onChange, disabled, optional }: { label: str
       </span>
       <input type="date" className="input" value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} />
     </label>
+  );
+}
+
+/**
+ * Contas a pagar geradas por esta compra — E3.2 (`GAP-COMP-CONTAS-MENU`).
+ *
+ * Não há motor financeiro novo aqui. O recebimento completo já chama
+ * `syncLancamentoCompra` → `reconciliarParcelasPedido`, que cria as parcelas em
+ * `lancamentos_financeiros` com `referencia_tipo='compra'` e o vínculo por
+ * `referencia_id` (FK de verdade, não texto). Esta tela só LÊ essas parcelas.
+ *
+ * Enquanto a compra está parcial nenhuma parcela existe — e a tela diz isso, em
+ * vez de inventar um plano que ainda não foi gerado.
+ */
+function ContasAPagarDaCompra({ compraId, pedido }: { compraId: number; pedido: Record<string, any> }) {
+  const [parcelas, setParcelas] = useState<Record<string, any>[]>([]);
+  const [carregando, setCarregando] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
+
+  const carregar = useCallback(async () => {
+    setCarregando(true);
+    setErro(null);
+    try {
+      const r = await api.get<{ rows: Record<string, any>[] }>(
+        `/lancamentos_financeiros?f.referencia_tipo=compra&f.referencia_id=${compraId}&pageSize=100`
+      );
+      const rows = [...(r.rows || [])].sort((a, b) => Number(a.parcela || 1) - Number(b.parcela || 1));
+      setParcelas(rows);
+    } catch (e: any) {
+      setErro(e?.message || 'Não foi possível carregar as contas a pagar.');
+    } finally {
+      setCarregando(false);
+    }
+  }, [compraId]);
+
+  useEffect(() => {
+    void carregar();
+  }, [carregar, pedido?.status, pedido?.fin_status]);
+
+  const total = parcelas.reduce((a, p) => a + Number(p.valor || 0), 0);
+  const pagas = parcelas.filter((p) => String(p.status) === 'confirmado');
+  const totalPago = pagas.reduce((a, p) => a + Number(p.valor || 0), 0);
+
+  return (
+    <div className="card mt-4 overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+        <h2 className="text-sm font-bold text-navy-900">Contas a pagar</h2>
+        <div className="flex items-center gap-2">
+          {pedido.condicao_pagamento && <Badge tone="slate">{pedido.condicao_pagamento}</Badge>}
+          <button className="btn-icon" onClick={() => void carregar()} title="Recarregar" aria-label="Recarregar contas a pagar">
+            <RefreshCw className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="px-4 py-3">
+        {carregando && <Spinner label="Carregando contas a pagar..." />}
+
+        {!carregando && erro && (
+          <div className="space-y-2">
+            <Alert tone="red">{erro}</Alert>
+            <button className="btn-secondary" onClick={() => void carregar()}>
+              <RefreshCw className="h-4 w-4" /> Tentar novamente
+            </button>
+          </div>
+        )}
+
+        {!carregando && !erro && parcelas.length === 0 && (
+          <p className="text-sm text-slate-500">
+            {String(pedido.status) === 'recebido'
+              ? 'Esta compra não gerou conta a pagar. Verifique o valor total do pedido — pedido de valor zero não gera obrigação financeira.'
+              : 'Nenhuma conta a pagar ainda. O financeiro é gerado quando a compra for totalmente recebida — enquanto estiver parcial, não existe obrigação a pagar.'}
+          </p>
+        )}
+
+        {!carregando && !erro && parcelas.length > 0 && (
+          <>
+            <div className="overflow-x-auto">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Parcela</th>
+                    <th>Vencimento</th>
+                    <th className="text-right">Valor</th>
+                    <th>Forma de pagamento</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parcelas.map((p) => (
+                    <tr key={p.id}>
+                      <td className="tabular-nums">
+                        {p.parcela || 1}/{p.total_parcelas || 1}
+                      </td>
+                      <td>{p.vencimento ? formatDate(p.vencimento) : 'Não informado'}</td>
+                      <td className="text-right tabular-nums font-medium">{formatMoney(p.valor)}</td>
+                      <td>{p.forma_pagamento || 'Não informada'}</td>
+                      <td>
+                        <Badge tone={String(p.status) === 'confirmado' ? 'green' : String(p.status) === 'cancelado' ? 'red' : 'amber'}>
+                          {String(p.status || 'pendente')}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+              <span>
+                Total a pagar: <strong className="tabular-nums">{formatMoney(total)}</strong>
+              </span>
+              <span>
+                Pago: <strong className="tabular-nums">{formatMoney(totalPago)}</strong>
+              </span>
+              <span>
+                Em aberto: <strong className="tabular-nums">{formatMoney(total - totalPago)}</strong>
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              A baixa é feita em <strong>Financeiro → Lançamentos</strong>: esta tela mostra a obrigação, quem dá baixa é o
+              financeiro.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

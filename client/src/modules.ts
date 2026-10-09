@@ -48,6 +48,7 @@ import {
   Truck,
   Scale,
   FileText,
+  FileUp,
 } from 'lucide-react';
 
 export type Module = {
@@ -206,6 +207,8 @@ export const MODULES: Module[] = [
   { id: 'fornecedores', label: 'Fornecedores', icon: Factory, group: 'Compras', path: '/fornecedores', resource: 'fornecedores', description: 'Empresas de quem você compra insumos.' },
   { id: 'cotacoes-compra', label: 'Cotação de compra', icon: Scale, group: 'Compras', path: '/cotacoes-compra', resource: 'cotacoes_compra', description: 'Peça preço a vários fornecedores, compare lado a lado e gere o pedido de compra uma única vez. Nenhum preço é estimado: item sem resposta bloqueia a decisão.' },
   { id: 'compra-recebimentos', label: 'Recebimentos de compra', icon: Warehouse, group: 'Compras', path: '/compra-recebimentos', resource: 'compra_recebimentos', description: 'Recebimentos parciais e totais dos pedidos de compra. O estoque sobe exatamente pelo recebido — nunca pelo pedido.' },
+  { id: 'importar-nfe-compra', label: 'Importar NF-e de entrada', icon: FileUp, group: 'Compras', path: '/importar-nfe-compra', minPerfil: 'gerente', description: 'Leia o XML da nota do fornecedor, confira o de-para dos SKUs e crie a compra já recebida. Validar não grava nada.' },
+  { id: 'depara-fornecedor', label: 'De-Para de produtos', icon: ArrowLeftRight, group: 'Compras', path: '/depara-fornecedor', resource: 'produto_fornecedor_skus', description: 'Traduz o código que o fornecedor usa na NF-e para o SKU interno do ERP. É só associação: não cria produto.' },
   { id: 'sugestao-compra', label: 'Sugestão de compra', icon: Calculator, group: 'Compras', path: '/sugestao-compra', minPerfil: 'gerente', description: 'O que comprar a partir do estoque atual, mínimo e máximo, do consumo, dos pedidos em aberto e das compras em trânsito. Nunca gera pedido sozinha.' },
 
   // 🚚 Logística & Expedição — P1

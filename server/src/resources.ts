@@ -1722,16 +1722,24 @@ export const RESOURCES: Record<string, Resource> = {
     key: 'produto_fornecedor_skus',
     empresa: true,
     table: 'produto_fornecedor_skus',
-    label: 'De-para de SKUs de fornecedor',
-    singular: 'De-para de SKU',
-    labelFields: ['codigo_fornecedor'],
-    internal: true,
-    ops: READ_ONLY,
+    label: 'De-para de produtos do fornecedor',
+    singular: 'De-para de produto',
+    labelFields: ['codigo_fornecedor', 'descricao'],
+    // E3.2: deixou de ser interno. O de-para é cadastro que o comprador mantém
+    // todo dia — antes só o importador de XML o usava, sem tela. Continua sendo
+    // ASSOCIAÇÃO: não cria produto, só aponta para um já existente.
+    //
+    // Sem `delete` de propósito: apagar destruiria o rastro das importações que
+    // usaram o de-para. O caminho é `ativo: false`.
+    ops: { create: true, update: true, delete: false },
     fields: [
-      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores' },
-      { name: 'codigo_fornecedor', label: 'Código do fornecedor', type: 'text' },
-      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
-      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
+      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores', required: true },
+      { name: 'codigo_fornecedor', label: 'Código do fornecedor', type: 'text', required: true, hint: 'O cProd que vem na NF-e deste fornecedor. Único por fornecedor.' },
+      { name: 'descricao', label: 'Descrição do fornecedor', type: 'text', hint: 'Como o fornecedor descreve o item. Serve para conferir o de-para sem abrir a nota.' },
+      { name: 'produto_id', label: 'Produto interno', type: 'ref', ref: 'produtos', required: true, hint: 'O SKU do ERP que este código representa.' },
+      { name: 'tamanho_id', label: 'Variação', type: 'ref', ref: 'tamanhos', hint: 'Deixe vazio se o produto não tem variação.' },
+      { name: 'unidade', label: 'Unidade do fornecedor', type: 'text', hint: 'UN, CX, PC, KG, M… A quantidade da NF só faz sentido diante dela.' },
+      { name: 'ativo', label: 'Ativo', type: 'boolean', default: true, hint: 'Inative um de-para obsoleto em vez de apagar: o histórico das importações que o usaram fica preservado.' },
       { name: 'criado_em', label: 'Criado em', type: 'datetime', list: false },
       { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', list: false },
     ],
