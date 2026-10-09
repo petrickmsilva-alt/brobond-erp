@@ -563,6 +563,48 @@ test('E2: OP, apontamento e evento não atravessam empresa', async () => {
   assert.ok(aps.rows.every((a) => Number(a.empresa_id) === 1), 'apontamento com empresa errada');
 });
 
+test('E2: os endpoints de detalhe da OP não vazam entre empresas (A → B → A)', async () => {
+  const empresaB = await s().insert(RESOURCES.empresas, { nome: 'Empresa B Detalhe', cnpj: '22333444000192', ativo: true });
+  const gerenteB = await criarAtor(Number(empresaB.id), 'gerente');
+
+  const p = await novoProduto({ sku: 'E2-DETALHE-MULTIEMPRESA' });
+  const { tecido } = await novaFicha(Number(p.id));
+  await saldoInsumo(Number(tecido.id), 1000);
+  const op = await novaOp(Number(p.id), 8);
+  await chamar(producao.liberarOrdem, reqDe({}, { params: { id: op.id }, user: GERENTE }));
+  await chamar(producao.criarApontamento, reqDe({ quantidade_produzida: 3 }, { params: { id: op.id }, user: GERENTE }), 201);
+
+  // A empresa A lê normalmente.
+  assert.ok((await chamar(producao.listEventosOrdem, reqDe({}, { params: { id: op.id }, user: GERENTE }))).length > 0);
+  assert.ok((await chamar(producao.listApontamentos, reqDe({}, { params: { id: op.id }, user: GERENTE }))).length > 0);
+  await chamar(producao.listItensOrdem, reqDe({}, { params: { id: op.id }, user: GERENTE }));
+
+  // `getOrdem` buscava só por id, então a B lia a trilha, os apontamentos e a
+  // grade da A — e ainda podia liberar/apontar/concluir/reabrir a OP da A.
+  // 404, não 403: 403 confirmaria que o registro existe.
+  for (const [nome, fn, corpo] of [
+    ['eventos', producao.listEventosOrdem, {}],
+    ['apontamentos (GET)', producao.listApontamentos, {}],
+    ['itens', producao.listItensOrdem, {}],
+    ['liberar', producao.liberarOrdem, {}],
+    ['iniciar', producao.iniciarOrdem, {}],
+    ['concluir', producao.concluirOrdemHandler, {}],
+    ['cancelar', producao.cancelarOrdem, { motivo: 'da empresa B' }],
+    ['reabrir', producao.reabrirOrdem, {}],
+  ] as const) {
+    await esperarErro(() => chamar(fn as any, reqDe(corpo as any, { params: { id: op.id }, user: gerenteB })), 404, undefined);
+    void nome;
+  }
+  await esperarErro(
+    () => chamar(producao.criarApontamento, reqDe({ quantidade_produzida: 1 }, { params: { id: op.id }, user: gerenteB })),
+    404
+  );
+
+  // E a A continua operando depois da tentativa.
+  const concluida = await chamar(producao.concluirOrdemHandler, reqDe({}, { params: { id: op.id }, user: GERENTE }));
+  assert.equal(concluida.status, 'concluida');
+});
+
 // ---------------------------------------------------------------------------
 // 8) PLANEJAMENTO
 // ---------------------------------------------------------------------------

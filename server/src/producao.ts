@@ -25,7 +25,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
-import { empresaDoRegistroAudit } from './empresa';
+import { assertRegistroDaEmpresa, empresaDoRegistroAudit, escopoDoAtor, type EscopoEmpresa } from './empresa';
 import { getResource, type Resource } from './resources';
 import { checkAccess, escopoDe, getDefaultLocal, getStore, toHttpError, updateRecord } from './services';
 import { currentUser } from './auth';
@@ -733,10 +733,20 @@ export async function aplicarRegrasOrdem(
 // Itens da OP (grade) — sub-recurso /api/ordens/:id/itens
 // ----------------------------------------------------------------------------
 
-async function getOrdem(id: number, tx?: Tx): Promise<Row> {
+/**
+ * Carrega a OP exigindo que ela seja da empresa da sessão.
+ *
+ * O `escopo` é OBRIGATÓRIO de propósito: esta função é a porta de entrada de
+ * todos os endpoints de detalhe da OP (itens, eventos, apontamentos, fluxo) e
+ * `findOneWhere({ id })` sozinho responde por qualquer empresa. Sem o assert,
+ * `GET /api/ordens/:id/eventos` da empresa B devolvia a trilha da empresa A —
+ * `getRecord()` em services.ts faz esse assert, mas este caminho não passa por lá.
+ *
+ * Responde 404 (não 403): 403 confirmaria que o registro existe.
+ */
+async function getOrdem(id: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row> {
   const row = await getStore().findOneWhere(recursoOrdem().op, { id }, tx);
-  if (!row) throw new HttpError(404, 'Ordem de fabricação não encontrada.');
-  return row;
+  return assertRegistroDaEmpresa(recursoOrdem().op, row, escopo);
 }
 
 function assertOrdemEditavel(op: Row) {
@@ -754,9 +764,10 @@ function assertOrdemEditavel(op: Row) {
 
 export async function listItensOrdem(req: Request, res: Response) {
   const { op, itens } = recursoOrdem();
-  checkAccess(op, currentUser(req), 'read');
+  const actor = currentUser(req);
+  checkAccess(op, actor, 'read');
   const id = parseId(req.params.id);
-  await getOrdem(id);
+  await getOrdem(id, escopoDoAtor(actor));
   const out = await getStore().list(itens, { page: 1, pageSize: 200, sort: 'tamanho_id', dir: 'asc', filter: { ordem_id: id } });
   res.json(out.rows);
 }
@@ -769,7 +780,7 @@ export async function createItemOrdem(req: Request, res: Response) {
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, tx);
+      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
       if (String(ordem.tipo || 'tamanho') !== 'grade') {
         throw new HttpError(409, 'Esta OP é "por tamanho". Use os campos tamanho/quantidade da própria OP. Converta para "por grade" para usar a grade PP–GG.');
       }
@@ -803,7 +814,7 @@ export async function updateItemOrdem(req: Request, res: Response) {
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, tx);
+      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
       assertOrdemEditavel(ordem);
       const before = await s.findOneWhere(itens, { id: itemId, ordem_id: id }, tx);
       if (!before) throw new HttpError(404, 'Item não encontrado nesta OP.');
@@ -830,7 +841,7 @@ export async function deleteItemOrdem(req: Request, res: Response) {
   const s = getStore();
   try {
     await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, tx);
+      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
       assertOrdemEditavel(ordem);
       const before = await s.findOneWhere(itens, { id: itemId, ordem_id: id }, tx);
       if (!before) throw new HttpError(404, 'Item não encontrado nesta OP.');
@@ -1155,7 +1166,7 @@ export async function liberarOrdem(req: Request, res: Response) {
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, tx);
+      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
       if (String(ordem.status) !== 'planejada') throw erroEstado(ordem, 'liberar a OP', ['planejada']);
       const itens = await itensProducao(ordem, tx);
       const pecas = itens.reduce((a, i) => a + i.quantidade, 0);
@@ -1219,7 +1230,7 @@ export async function iniciarOrdem(req: Request, res: Response) {
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, tx);
+      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
       const de = String(ordem.status);
       if (de !== 'planejada' && de !== 'liberada' && de !== 'parcial') throw erroEstado(ordem, 'iniciar a OP', ['planejada', 'liberada', 'parcial']);
       const extra: Payload = ordem.iniciada_em ? {} : { iniciada_em: new Date().toISOString() };
@@ -1243,9 +1254,10 @@ export async function iniciarOrdem(req: Request, res: Response) {
 /** GET /api/ordens/:id/apontamentos */
 export async function listApontamentos(req: Request, res: Response) {
   const { op } = recursoOrdem();
-  checkAccess(op, currentUser(req), 'read');
+  const actor = currentUser(req);
+  checkAccess(op, actor, 'read');
   const id = parseId(req.params.id);
-  await getOrdem(id);
+  await getOrdem(id, escopoDoAtor(actor));
   // id desc: mesmo motivo do histórico — `apontado_em` empata quando o turno
   // aponta dois tamanhos em seguida.
   const out = await getStore().list(recursoEventos().apontamentos, { page: 1, pageSize: 500, sort: 'id', dir: 'desc', filter: { ordem_id: id } });
@@ -1255,9 +1267,10 @@ export async function listApontamentos(req: Request, res: Response) {
 /** GET /api/ordens/:id/eventos */
 export async function listEventosOrdem(req: Request, res: Response) {
   const { op } = recursoOrdem();
-  checkAccess(op, currentUser(req), 'read');
+  const actor = currentUser(req);
+  checkAccess(op, actor, 'read');
   const id = parseId(req.params.id);
-  await getOrdem(id);
+  await getOrdem(id, escopoDoAtor(actor));
   // Ordena por id, não por criado_em: apontamento e perda são gravados no mesmo
   // milissegundo e o empate em criado_em deixava a ordem a cargo do banco (a UI
   // chegou a mostrar a perda antes do apontamento). O id é monotônico na trilha.
@@ -1289,7 +1302,7 @@ export async function criarApontamento(req: Request, res: Response) {
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, tx);
+      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
       const de = String(ordem.status);
       if (de !== 'liberada' && de !== 'em_producao' && de !== 'parcial') {
         throw erroEstado(ordem, 'apontar produção', ['liberada', 'em_producao', 'parcial']);
@@ -1455,7 +1468,7 @@ export async function cancelarOrdem(req: Request, res: Response) {
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, tx);
+      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
       const de = String(ordem.status);
       if (de === 'cancelada') throw new HttpError(409, `A OP #${id} já está cancelada.`);
       if (!transicaoPermitida(de as StatusOp, 'cancelada')) throw erroEstado(ordem, 'cancelar a OP', ['planejada', 'liberada', 'em_producao', 'parcial']);
@@ -1499,9 +1512,7 @@ export async function reabrirOrdem(req: Request, res: Response) {
   exigirGerenteProducao(actor, 'reabrir uma ordem de produção concluída');
   checkAccess(op, actor, 'read');
   const id = parseId(req.params.id);
-  const s = getStore();
-  const ordem = await s.findOneWhere(op, { id });
-  if (!ordem) throw new HttpError(404, 'Ordem de fabricação não encontrada.');
+  const ordem = await getOrdem(id, escopoDoAtor(actor));
   if (String(ordem.status) !== 'concluida') throw erroEstado(ordem, 'reabrir a OP', ['concluida']);
   // A tela usa `planejada`; `?produzindo=true` reabre já no chão de fábrica.
   const para: StatusOp = req.query.produzindo === 'true' ? 'em_producao' : 'planejada';
