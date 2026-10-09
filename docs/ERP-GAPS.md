@@ -16,6 +16,14 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > HTTP ponta a ponta com **126/126** verificações. Junto foram encontrados e
 > corrigidos **8** bugs de produção — o mais grave, `receberParcial` devolvendo
 > **500** no PostgreSQL real para qualquer compra com `fin_vencimento`.
+>
+> **Atualização E4.2 (2026-10-09):** o isolamento multiempresa dos fluxos
+> especializados de estoque foi implementado e validado. A nova entrada
+> `GAP-ESTQ-MULTIEMPRESA` registra a entrega como fechada, com migration 0030,
+> matriz A → B → A em PostgreSQL real, bootstrap vazio + upgrade, regressões e
+> gates. Os gaps E4 de transferência formal, reserva, rastreabilidade e demais
+> etapas E4.3–E4.6 permanecem fora do escopo e abertos conforme seus critérios.
+> Evidência e resultados exatos: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
 
 Este é o **registro oficial do que falta**. Regra de manutenção:
 
@@ -37,7 +45,7 @@ Classificação do tipo de gap (seção 3 da especificação):
 |---|---|---|---|
 | **E2 — Produção** | 8 | **0** ✅ | **0** |
 | **E3 — Compras** | 6 | **0** ✅ | **0** |
-| **E4 — Estoque avançado** | 5 | 5 | 2 |
+| **E4 — Estoque avançado** | 6 | 4 | 1 |
 | **E5 — Financeiro avançado** | 2 | 2 | 0 |
 | **E6 — Fiscal** | 2 | 2 | 0 |
 | **E7 — Logística** | 1 | 1 | 0 |
@@ -47,7 +55,7 @@ Classificação do tipo de gap (seção 3 da especificação):
 | **E11 — UX final** | 2 | 2 | 0 |
 | **E12 — Homologação** | 3 | 3 | 3 |
 | Transversais | 3 | 3 | 0 |
-| **Total** | **43** | **29** | **8** |
+| **Total** | **44** | **28** | **7** |
 
 ---
 
@@ -232,6 +240,14 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
 ---
 
 ## E4 — ESTOQUE AVANÇADO
+
+### `GAP-ESTQ-MULTIEMPRESA` — ownership nos fluxos especializados de estoque · ✅ **RESOLVIDO na E4.2**
+- **Tipo:** backend + banco + testes PostgreSQL
+- **Escopo entregue:** grade e detalhe/tamanhos; inventário (snapshot, detalhe, itens, contagem e fechamento); movimento manual e estorno; movimentação de insumos; preview/confirmação/modelo de importação; relatórios e exportações; endpoints WooCommerce indicados e leituras especializadas do PDV.
+- **Como foi resolvido:** handlers usam `escopoDe(currentUser(req))`, consultas por ID aplicam filtro tenant-scoped e referências relacionadas são verificadas. A migration `0030_e42_locais_estoque_multempresa.sql` + `db/schema.sql` troca a unicidade global de local por `(empresa_id, nome)`, mantém o padrão por empresa, adiciona FKs compostas, diagnóstico pré-DDL e índices de saldo canônico com/sem tamanho. WooCommerce exige `WOOCOMMERCE_EMPRESA_ID`. Não há backfill heurístico; vínculos legados ambíguos continuam sem ID canônico.
+- **Prova PostgreSQL:** `server/test/pg/e42-tenant.test.ts` executa A → B → A, referências estrangeiras, saldos, estorno, inventário, imports/exports e Woo. O bootstrap foi aplicado em database vazio (migrações `0001`–`0030`) e passou **1/1**; o mesmo teste remove `pdv_caixas.local_id`, reinsere a migration 0030 e confirma que o ID legado permanece `NULL`. `npm run test:pg`: **90 pass, 0 fail, 0 skipped**.
+- **Gates:** `npm test` server **638 pass/0 fail/63 skipped** e client **226/226**; `npm run typecheck`, `npm run build`, `npm run smoke` (**126/126**), `npm run audit:menu` e `git diff --check` passaram. Lint: **0 erros, 401 avisos**. Resultados detalhados: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
+- **Fora do fechamento:** E4.3–E4.6, transferência formal, reserva, lote/validade/série, nova política de custo/CMV, devolução nova e mínimo/máximo avançado permanecem fora do escopo.
 
 ### `GAP-ESTQ-VENDA-ID` — vínculo formal venda → estoque · **CRÍTICO**
 - **Tipo:** banco

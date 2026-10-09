@@ -32,13 +32,70 @@ function q(text: string, params: unknown[] = [], tx?: Tx) {
   return tx ? tx.query(text, params as any[]) : query(text, params);
 }
 
+/** Valida a empresa do produto e resolve, se informado, o Local canônico. */
+async function canonicalInsumoEmpresa(insumoId: number, empresaId: number | undefined, tx?: Tx): Promise<number> {
+  const res = await q(
+    'SELECT empresa_id FROM insumos WHERE id = $1 AND ($2::integer IS NULL OR empresa_id = $2)',
+    [insumoId, empresaId ?? null],
+    tx
+  );
+  const dono = res.rows[0] ? Number(res.rows[0].empresa_id ?? EMPRESA_PADRAO) : null;
+  if (dono === null || (empresaId !== undefined && Number(empresaId) !== dono)) {
+    throw new HttpError(404, 'Insumo não encontrado.');
+  }
+  return dono;
+}
+
+async function canonicalStockCell(
+  produtoId: number,
+  tamanhoId: number | null,
+  local: string,
+  localId: number | null | undefined,
+  empresaId: number | undefined,
+  tx?: Tx
+): Promise<{ empresaId: number; local: string; localId: number }> {
+  const prod = await q(
+    'SELECT empresa_id FROM produtos WHERE id = $1 AND ($2::integer IS NULL OR empresa_id = $2)',
+    [produtoId, empresaId ?? null],
+    tx
+  );
+  if (!prod.rows[0]) throw new HttpError(404, 'Produto não encontrado.');
+  const dono = Number(prod.rows[0].empresa_id ?? EMPRESA_PADRAO);
+  if (empresaId !== undefined && Number(empresaId) !== dono) throw new HttpError(404, 'Produto não encontrado.');
+  if (localId === undefined || localId === null || !Number.isInteger(Number(localId)) || Number(localId) <= 0) {
+    throw new HttpError(409, 'A movimentação exige um local canônico identificado por ID.');
+  }
+  const loc = await q('SELECT nome FROM locais WHERE id = $1 AND empresa_id = $2', [localId, dono], tx);
+  if (!loc.rows[0]) throw new HttpError(404, 'Local não encontrado.');
+  const nome = String(loc.rows[0].nome);
+  const celulas = await q(
+    `SELECT id, local_id, local FROM estoques
+      WHERE empresa_id = $1 AND produto_id = $2
+        AND tamanho_id IS NOT DISTINCT FROM $3
+        AND (local_id = $5 OR (local_id IS NULL AND local = $4))
+      LIMIT 2`,
+    [dono, produtoId, tamanhoId, nome, localId],
+    tx
+  );
+  if (celulas.rows.length > 1) throw new HttpError(409, 'Há saldos duplicados para este produto/tamanho/local. Nenhuma movimentação foi aplicada.');
+  const existente = celulas.rows[0];
+  if (existente && (existente.local_id === null || existente.local_id === undefined || Number(existente.local_id) !== Number(localId) || String(existente.local) !== nome)) {
+    throw new HttpError(409, 'O saldo existente não possui vínculo canônico compatível. Nenhuma movimentação foi aplicada.');
+  }
+  return { empresaId: dono, local: nome, localId: Number(localId) };
+}
+
 /** Traduz erros do Postgres para mensagens amigáveis. */
 export function translatePgError(e: any, r?: Resource): HttpError | null {
   if (!e || typeof e.code !== 'string') return null;
   switch (e.code) {
     case '23505': {
       // unique_violation — descobre o campo pelo nome do constraint / detail
-      const field = r?.fields.find((f) => f.unique && String(e.constraint || e.detail || '').includes(f.name));
+      const constraint = String(e.constraint || e.detail || '');
+      const field = r?.fields.find((f) => (f.unique || f.uniqueEmpresa) && constraint.includes(f.name));
+      if (r?.key === 'estoques' && /estoques/i.test(constraint)) {
+        return new HttpError(409, 'Já existe saldo para este produto, tamanho e local. Edite o registro existente ou lance uma movimentação.');
+      }
       const label = field?.label || 'valor';
       return new HttpError(409, `Já existe um registro com este ${label.toLowerCase()}.`, field ? { [field.name]: 'Já cadastrado' } : undefined);
     }
@@ -235,16 +292,29 @@ export class PgStore implements Store {
     const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
     const keys = Object.keys(where).filter((k) => allowed.has(k) || k === 'id');
     if (!keys.length) return null;
-    const cond = keys.map((k, i) => `${k} = $${i + 1}`).join(' AND ');
-    const res = await q(`SELECT * FROM ${r.table} WHERE ${cond} LIMIT 1`, keys.map((k) => where[k]), tx);
+    const params: unknown[] = [];
+    const cond = keys.map((k) => {
+      const value = where[k];
+      if (value === null || value === undefined) return `${k} IS NULL`;
+      params.push(value);
+      return `${k} = $${params.length}`;
+    }).join(' AND ');
+    const res = await q(`SELECT * FROM ${r.table} WHERE ${cond} LIMIT 1`, params, tx);
     return res.rows[0] ?? null;
   }
 
   async countWhere(r: Resource, where: Payload, tx?: Tx): Promise<number> {
     const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
     const keys = Object.keys(where).filter((k) => allowed.has(k) || k === 'id');
-    const cond = keys.length ? `WHERE ${keys.map((k, i) => `${k} = $${i + 1}`).join(' AND ')}` : '';
-    const res = await q(`SELECT COUNT(*)::int AS n FROM ${r.table} ${cond}`, keys.map((k) => where[k]), tx);
+    const params: unknown[] = [];
+    const predicates = keys.map((k) => {
+      const value = where[k];
+      if (value === null || value === undefined) return `${k} IS NULL`;
+      params.push(value);
+      return `${k} = $${params.length}`;
+    });
+    const cond = predicates.length ? `WHERE ${predicates.join(' AND ')}` : '';
+    const res = await q(`SELECT COUNT(*)::int AS n FROM ${r.table} ${cond}`, params, tx);
     return res.rows[0]?.n ?? 0;
   }
 
@@ -287,14 +357,29 @@ export class PgStore implements Store {
     return (res.rowCount ?? 0) > 0;
   }
 
-  async adjustStock(produtoId: number, tamanhoId: number, local: string, delta: number, tx?: Tx): Promise<Row> {
+  async adjustStock(
+    produtoId: number,
+    tamanhoId: number | null,
+    local: string,
+    delta: number,
+    tx?: Tx,
+    localId?: number | null,
+    empresaId?: number
+  ): Promise<Row> {
+    const cell = await canonicalStockCell(produtoId, tamanhoId, local, localId, empresaId, tx);
+    const alvoConflito = tamanhoId === null
+      ? '(empresa_id, produto_id, local_id) WHERE tamanho_id IS NULL AND local_id IS NOT NULL'
+      : '(empresa_id, produto_id, tamanho_id, local_id) WHERE tamanho_id IS NOT NULL AND local_id IS NOT NULL';
     const res = await q(
-      `INSERT INTO estoques (produto_id, tamanho_id, local, quantidade, criado_em)
-       VALUES ($1, $2, $3, $4, now())
-       ON CONFLICT (produto_id, tamanho_id, local)
-       DO UPDATE SET quantidade = estoques.quantidade + EXCLUDED.quantidade, atualizado_em = now()
+      `INSERT INTO estoques (empresa_id, produto_id, tamanho_id, local, local_id, quantidade, criado_em)
+       VALUES ($1, $2, $3, $4, $5, $6, now())
+       ON CONFLICT ${alvoConflito}
+       DO UPDATE SET
+         quantidade = estoques.quantidade + EXCLUDED.quantidade,
+         local_id = EXCLUDED.local_id,
+         atualizado_em = now()
        RETURNING *`,
-      [produtoId, tamanhoId, local, delta],
+      [cell.empresaId, produtoId, tamanhoId, cell.local, cell.localId, delta],
       tx
     );
     return res.rows[0];
@@ -324,29 +409,65 @@ export class PgStore implements Store {
     return res.rows[0] ?? null;
   }
 
-  async tryAdjustStock(produtoId: number, tamanhoId: number, local: string, delta: number, tx?: Tx, minimo = 0): Promise<Row | null> {
-    // Garante a linha do saldo (idempotente) e depois abate com a condição DENTRO
-    // do UPDATE: o WHERE é reavaliado contra a versão mais recente da linha (o
-    // UPDATE toma row lock), então duas transações concorrentes não passam as duas.
+  async tryAdjustStock(
+    produtoId: number,
+    tamanhoId: number | null,
+    local: string,
+    delta: number,
+    tx?: Tx,
+    minimo = 0,
+    localId?: number | null,
+    empresaId?: number
+  ): Promise<Row | null> {
+    const cell = await canonicalStockCell(produtoId, tamanhoId, local, localId, empresaId, tx);
+    // Os índices parciais separam tamanho presente de NULL, e incluem a empresa
+    // e o local textual derivado do ID canônico. O UPDATE toma row lock: saídas
+    // concorrentes nunca passam ambas pelo mesmo saldo.
+    const alvoConflito = tamanhoId === null
+      ? '(empresa_id, produto_id, local_id) WHERE tamanho_id IS NULL AND local_id IS NOT NULL'
+      : '(empresa_id, produto_id, tamanho_id, local_id) WHERE tamanho_id IS NOT NULL AND local_id IS NOT NULL';
     await q(
-      `INSERT INTO estoques (produto_id, tamanho_id, local, quantidade, criado_em)
-       VALUES ($1, $2, $3, 0, now())
-       ON CONFLICT (produto_id, tamanho_id, local) DO NOTHING`,
-      [produtoId, tamanhoId, local],
+      `INSERT INTO estoques (empresa_id, produto_id, tamanho_id, local, local_id, quantidade, criado_em)
+       VALUES ($1, $2, $3, $4, $5, 0, now())
+       ON CONFLICT ${alvoConflito} DO NOTHING`,
+      [cell.empresaId, produtoId, tamanhoId, cell.local, cell.localId],
       tx
     );
     if (delta === 0) {
-      const atual = await q(`SELECT * FROM estoques WHERE produto_id = $1 AND tamanho_id = $2 AND local = $3`, [produtoId, tamanhoId, local], tx);
+      const atual = await q(
+        `SELECT * FROM estoques
+          WHERE empresa_id = $1 AND produto_id = $2
+            AND tamanho_id IS NOT DISTINCT FROM $3 AND local = $4 AND local_id = $5
+          LIMIT 1`,
+        [cell.empresaId, produtoId, tamanhoId, cell.local, cell.localId],
+        tx
+      );
       return atual.rows[0] ?? null;
     }
     const res = await q(
       `UPDATE estoques
-          SET quantidade = quantidade + $4, atualizado_em = now()
-        WHERE produto_id = $1 AND tamanho_id = $2 AND local = $3 AND quantidade + $4 >= $5
+          SET quantidade = quantidade + $4,
+              local_id = $6,
+              atualizado_em = now()
+        WHERE empresa_id = $1 AND produto_id = $2
+          AND tamanho_id IS NOT DISTINCT FROM $7 AND local = $3
+          AND local_id = $6
+          AND quantidade + $4 >= $5
         RETURNING *`,
-      [produtoId, tamanhoId, local, delta, minimo],
+      [cell.empresaId, produtoId, cell.local, delta, minimo, cell.localId, tamanhoId],
       tx
     );
+    if (!res.rows[0] && cell.localId !== null) {
+      const mismatch = await q(
+        `SELECT 1 FROM estoques WHERE empresa_id = $1 AND produto_id = $2
+           AND tamanho_id IS NOT DISTINCT FROM $3
+           AND (local_id = $5 OR (local_id IS NULL AND local = $4))
+           AND (local_id IS DISTINCT FROM $5 OR local IS DISTINCT FROM $4) LIMIT 1`,
+        [cell.empresaId, produtoId, tamanhoId, cell.local, cell.localId],
+        tx
+      );
+      if (mismatch.rows.length) throw new HttpError(409, 'O saldo possui vínculo de local inconsistente.');
+    }
     return res.rows[0] ?? null;
   }
 
@@ -370,22 +491,30 @@ export class PgStore implements Store {
     return res.rows as Row[];
   }
 
-  async adjustInsumoStock(insumoId: number, delta: number, tx?: Tx): Promise<Row> {
+  async adjustInsumoStock(insumoId: number, delta: number, tx?: Tx, empresaId?: number): Promise<Row> {
+    const dono = await canonicalInsumoEmpresa(insumoId, empresaId, tx);
     const res = await q(
-      `INSERT INTO estoque_insumos (insumo_id, quantidade, atualizado_em)
-       VALUES ($1, $2, now())
+      `INSERT INTO estoque_insumos (empresa_id, insumo_id, quantidade, atualizado_em)
+       VALUES ($1, $2, $3, now())
        ON CONFLICT (insumo_id)
        DO UPDATE SET quantidade = ROUND((estoque_insumos.quantidade + EXCLUDED.quantidade)::numeric, 3), atualizado_em = now()
+       WHERE estoque_insumos.empresa_id = EXCLUDED.empresa_id
        RETURNING *`,
-      [insumoId, delta],
+      [dono, insumoId, delta],
       tx
     );
+    if (!res.rows[0]) throw new HttpError(409, 'O saldo do insumo possui vínculo de empresa inconsistente. Nenhuma alteração foi aplicada.');
     return res.rows[0];
   }
 
-  async insumoStock(insumoId: number, tx?: Tx): Promise<number> {
-    const res = await q(`SELECT quantidade FROM estoque_insumos WHERE insumo_id = $1`, [insumoId], tx);
-    return Number(res.rows[0]?.quantidade ?? 0);
+  async insumoStock(insumoId: number, tx?: Tx, empresaId?: number): Promise<number> {
+    const dono = await canonicalInsumoEmpresa(insumoId, empresaId, tx);
+    const res = await q('SELECT empresa_id, quantidade FROM estoque_insumos WHERE insumo_id = $1', [insumoId], tx);
+    if (!res.rows[0]) return 0;
+    if (Number(res.rows[0].empresa_id ?? EMPRESA_PADRAO) !== dono) {
+      throw new HttpError(409, 'O saldo do insumo possui vínculo de empresa inconsistente. Nenhuma leitura foi aplicada.');
+    }
+    return Number(res.rows[0].quantidade ?? 0);
   }
 
   async audit(entry: AuditEntry, tx?: Tx): Promise<void> {

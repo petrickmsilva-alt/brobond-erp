@@ -12,6 +12,7 @@
 //   WOOCOMMERCE_URL  https://brobond.com.br      (sem /wp-json, sem barra final)
 //   WOOCOMMERCE_CK   consumer key  (WooCommerce › Configurações › Avançado › API REST)
 //   WOOCOMMERCE_CS   consumer secret
+//   WOOCOMMERCE_EMPRESA_ID  id da única empresa autorizada a usar esta integração (obrigatório)
 //   WOOCOMMERCE_STATUS   (opcional) status importado — padrão "processing"
 //   WOOCOMMERCE_CANAL    (opcional) site_varejo | site_atacado — padrão site_varejo
 //
@@ -25,8 +26,8 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
-import { empresaDoAtorAudit } from './empresa';
-import { checkAccess, getStore } from './services';
+import { empresaDoAtorAudit, type EscopoEmpresa } from './empresa';
+import { checkAccess, escopoDe, getStore, validarReferenciasDeSaida, validarTamanhoNaGrade } from './services';
 import { RESOURCES } from './resources';
 import { currentUser } from './auth';
 import { recalcularTotal } from './itens';
@@ -47,6 +48,23 @@ export function configLoja(): ConfigLoja | null {
 
 export function lojaConfigurada(): boolean {
   return configLoja() !== null;
+}
+
+/** A única integração WooCommerce deve pertencer explicitamente a um tenant. */
+function empresaVinculadaWoo(): number | null {
+  const raw = String(process.env.WOOCOMMERCE_EMPRESA_ID || '').trim();
+  const id = Number(raw);
+  return raw && Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function exigirEscopoWoo(actor: ReturnType<typeof currentUser>): EscopoEmpresa {
+  const escopo = escopoDe(actor);
+  const empresa = empresaVinculadaWoo();
+  if (!empresa) {
+    throw new HttpError(409, 'A integração WooCommerce está desabilitada até ser vinculada explicitamente a uma empresa (WOOCOMMERCE_EMPRESA_ID).');
+  }
+  if (escopo.empresaId !== empresa) throw new HttpError(404, 'Integração não encontrada.');
+  return { ...escopo, empresaId: empresa, consolidado: false };
 }
 
 /** Status dos pedidos importados (WooCommerce: pending, processing, on-hold, completed…). */
@@ -109,7 +127,7 @@ async function wooFetch(cfg: ConfigLoja, caminho: string, init: Parameters<typeo
   }
 }
 
-function exigirPermissaoVenda(req: Request, op: 'create' | 'update'): { id: number; name: string } {
+function exigirPermissaoVenda(req: Request, op: 'create' | 'update'): ReturnType<typeof currentUser> {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, op);
   // Sincronizar a loja mexe no cadastro de terceiros (clientes) e no saldo
@@ -117,7 +135,7 @@ function exigirPermissaoVenda(req: Request, op: 'create' | 'update'): { id: numb
   if (actor.perfil !== 'admin' && actor.perfil !== 'gerente') {
     throw new HttpError(403, 'Apenas gerentes e administradores sincronizam a loja.');
   }
-  return actor as { id: number; name: string };
+  return actor;
 }
 
 function exigirConfigurada(): ConfigLoja {
@@ -131,6 +149,10 @@ function exigirConfigurada(): ConfigLoja {
   return cfg;
 }
 
+function garantirLeituraCompleta(nome: string, ...resultados: { rows: unknown[]; total: number }[]): void {
+  if (resultados.some((r) => r.total > r.rows.length)) throw new HttpError(409, `A integração da loja encontrou mais registros de ${nome} que o limite seguro. Nenhuma sincronização parcial foi feita.`);
+}
+
 // ----------------------------------------------------------------------------
 // Status / diagnóstico
 // ----------------------------------------------------------------------------
@@ -139,6 +161,7 @@ function exigirConfigurada(): ConfigLoja {
 export async function statusLoja(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'read');
+  exigirEscopoWoo(actor);
   const cfg = configLoja();
   if (!cfg) {
     res.json({ configurado: false, url: urlLoja() || null, status_pedidos: statusImportacao(), canal: canalLoja() });
@@ -169,15 +192,25 @@ export async function statusLoja(req: Request, res: Response) {
 export async function produtosLoja(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.produtos, actor, 'read');
+  const escopo = exigirEscopoWoo(actor);
   const s = getStore();
   const [produtosR, estoquesR, tamanhosR] = await Promise.all([
-    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, sort: 'sku', dir: 'asc' }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000 }),
-    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 500, sort: 'ordem', dir: 'asc' }),
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 20000, sort: 'sku', dir: 'asc', filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 20000, sort: 'ordem', dir: 'asc' }),
+  ]);
+  garantirLeituraCompleta('produtos e saldos', produtosR, estoquesR, tamanhosR);
+  await Promise.all([
+    validarReferenciasDeSaida(RESOURCES.produtos, produtosR.rows, escopo),
+    validarReferenciasDeSaida(RESOURCES.estoques, estoquesR.rows, escopo),
   ]);
   const tamanhoPorId = new Map<number, string>(tamanhosR.rows.map((t) => [Number(t.id), String(t.codigo || '').toUpperCase()]));
   const saldoPorProduto = new Map<number, number>();
+  const celulas = new Set<string>();
   for (const e of estoquesR.rows) {
+    const chave = `${Number(e.produto_id)}:${e.tamanho_id === null || e.tamanho_id === undefined ? 'null' : Number(e.tamanho_id)}:${String(e.local || '')}`;
+    if (celulas.has(chave)) throw new HttpError(409, 'Há saldos duplicados para o mesmo produto/tamanho/local. A sincronização com a loja foi bloqueada.');
+    celulas.add(chave);
     const id = Number(e.produto_id);
     saldoPorProduto.set(id, (saldoPorProduto.get(id) || 0) + Number(e.quantidade || 0));
   }
@@ -293,6 +326,7 @@ function rotuloLinha(linha: LinhaWoo): string {
  */
 export async function importarPedidosLoja(req: Request, res: Response) {
   const actor = exigirPermissaoVenda(req, 'create');
+  const escopo = exigirEscopoWoo(actor);
   const cfg = exigirConfigurada();
   const s = getStore();
 
@@ -308,26 +342,36 @@ export async function importarPedidosLoja(req: Request, res: Response) {
     )) || [];
 
   const [produtosR, tamanhosR, estoquesR] = await Promise.all([
-    s.list(RESOURCES.produtos, { page: 1, pageSize: 5000 }),
-    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 500, sort: 'ordem', dir: 'asc' }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000 }),
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 20000, sort: 'ordem', dir: 'asc' }),
+    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+  ]);
+  garantirLeituraCompleta('produtos, tamanhos e saldos', produtosR, tamanhosR, estoquesR);
+  await Promise.all([
+    validarReferenciasDeSaida(RESOURCES.produtos, produtosR.rows, escopo),
+    validarReferenciasDeSaida(RESOURCES.estoques, estoquesR.rows, escopo),
   ]);
   const produtoPorSku = new Map<string, Row>();
   for (const p of produtosR.rows) {
     const sku = String(p.sku || '')
       .trim()
       .toUpperCase();
-    if (sku && !produtoPorSku.has(sku)) produtoPorSku.set(sku, p);
+    if (sku && produtoPorSku.has(sku)) throw new HttpError(409, 'Há SKUs duplicados nesta empresa. A importação WooCommerce foi bloqueada para não associar o pedido ao produto errado.');
+    if (sku) produtoPorSku.set(sku, p);
   }
   const tamanhos = tamanhosR.rows;
   const tamanhoPorCodigo = new Map<string, Row>();
-  for (const t of tamanhos)
-    tamanhoPorCodigo.set(
-      String(t.codigo || '')
-        .trim()
-        .toUpperCase(),
-      t
-    );
+  for (const t of tamanhos) {
+    const codigo = String(t.codigo || '').trim().toUpperCase();
+    if (codigo && tamanhoPorCodigo.has(codigo)) throw new HttpError(409, 'Há códigos de tamanho duplicados. A importação WooCommerce foi bloqueada.');
+    if (codigo) tamanhoPorCodigo.set(codigo, t);
+  }
+  const celulasSaldo = new Set<string>();
+  for (const saldo of estoquesR.rows) {
+    const chave = `${Number(saldo.produto_id)}:${saldo.tamanho_id === null || saldo.tamanho_id === undefined ? 'null' : Number(saldo.tamanho_id)}:${String(saldo.local || '')}`;
+    if (celulasSaldo.has(chave)) throw new HttpError(409, 'Há saldos duplicados para o mesmo produto/tamanho/local. A importação WooCommerce foi bloqueada.');
+    celulasSaldo.add(chave);
+  }
   const primeiroTamanhoComSaldo = (produtoId: number): number | null => {
     const comSaldo = estoquesR.rows.find((e) => Number(e.produto_id) === produtoId && Number(e.quantidade || 0) > 0);
     return comSaldo ? Number(comSaldo.tamanho_id) : null;
@@ -341,7 +385,7 @@ export async function importarPedidosLoja(req: Request, res: Response) {
   for (const pedido of pedidos) {
     const numero = String(pedido.number ?? pedido.id ?? '').trim();
     const referencia = `WOO-${pedido.id ?? numero}`;
-    const jaExiste = await s.findOneWhere(RESOURCES.vendas, { pedido_cliente: referencia });
+    const jaExiste = await s.findOneWhere(RESOURCES.vendas, { empresa_id: escopo.empresaId, pedido_cliente: referencia });
     if (jaExiste) {
       ignorados.push(numero || referencia); // idempotência: nunca duplica
       continue;
@@ -365,6 +409,7 @@ export async function importarPedidosLoja(req: Request, res: Response) {
         itensPendentes.push(`${rotuloLinha(linha)} (sem tamanho no ERP)`);
         continue;
       }
+      await validarTamanhoNaGrade(Number(produto.id), tamanhoId, undefined, escopo);
       const quantidade = Math.max(1, Math.trunc(Number(linha.quantity) || 1));
       const precoInformado = Number(linha.price);
       const totalLinha = Number(String(linha.total ?? '').replace(',', '.'));
@@ -390,12 +435,13 @@ export async function importarPedidosLoja(req: Request, res: Response) {
           .toLowerCase();
         const nome =
           [billing.first_name, billing.last_name].filter(Boolean).join(' ').trim() || email || `Cliente loja ${numero || referencia}`;
-        let cliente = email ? await s.findOneWhere(RESOURCES.clientes, { email }, tx) : null;
-        if (!cliente) cliente = await s.findOneWhere(RESOURCES.clientes, { nome }, tx);
+        let cliente = email ? await s.findOneWhere(RESOURCES.clientes, { email, empresa_id: escopo.empresaId }, tx) : null;
+        if (!cliente) cliente = await s.findOneWhere(RESOURCES.clientes, { nome, empresa_id: escopo.empresaId }, tx);
         if (!cliente) {
           cliente = await s.insert(
             RESOURCES.clientes,
             {
+              empresa_id: escopo.empresaId,
               nome,
               email: email || null,
               telefone: billing.phone ? String(billing.phone) : null,
@@ -408,6 +454,7 @@ export async function importarPedidosLoja(req: Request, res: Response) {
         const venda = await s.insert(
           RESOURCES.vendas,
           {
+            empresa_id: escopo.empresaId,
             cliente_id: Number(cliente.id),
             data: String(pedido.date_created || new Date().toISOString()).slice(0, 10),
             // "Cotação / Pedido do site": entra para conferência, não baixa estoque.
@@ -432,6 +479,7 @@ export async function importarPedidosLoja(req: Request, res: Response) {
           await s.insert(
             RESOURCES.itens_venda,
             {
+              empresa_id: escopo.empresaId,
               venda_id: Number(venda.id),
               produto_id: Number(item.produto.id),
               tamanho_id: item.tamanhoId,
@@ -505,13 +553,19 @@ function chavesSku(skuProduto: string, codigoTamanho: string): string[] {
  */
 export async function sincronizarEstoqueLoja(req: Request, res: Response) {
   const actor = exigirPermissaoVenda(req, 'update');
+  const escopo = exigirEscopoWoo(actor);
   const cfg = exigirConfigurada();
   const s = getStore();
 
   const [produtosR, tamanhosR, estoquesR] = await Promise.all([
-    s.list(RESOURCES.produtos, { page: 1, pageSize: 5000 }),
-    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 500, sort: 'ordem', dir: 'asc' }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000 }),
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 20000, sort: 'ordem', dir: 'asc' }),
+    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+  ]);
+  garantirLeituraCompleta('produtos, tamanhos e saldos', produtosR, tamanhosR, estoquesR);
+  await Promise.all([
+    validarReferenciasDeSaida(RESOURCES.produtos, produtosR.rows, escopo),
+    validarReferenciasDeSaida(RESOURCES.estoques, estoquesR.rows, escopo),
   ]);
   const tamanhoPorId = new Map<number, string>(
     tamanhosR.rows.map((t) => [
@@ -522,10 +576,22 @@ export async function sincronizarEstoqueLoja(req: Request, res: Response) {
     ])
   );
 
+  const skusAtivos = new Set<string>();
+  for (const p of produtosR.rows) {
+    if (p.ativo === false || p.exibir_site === false) continue;
+    const sku = String(p.sku || '').trim().toUpperCase();
+    if (sku && skusAtivos.has(sku)) throw new HttpError(409, 'Há SKUs ativos duplicados nesta empresa. A sincronização foi bloqueada para evitar atualizar o produto errado.');
+    if (sku) skusAtivos.add(sku);
+  }
+
   // saldo por produto e por produto+tamanho
   const saldoProduto = new Map<number, number>();
   const saldoProdutoTamanho = new Map<number, Map<string, number>>();
+  const celulasSaldo = new Set<string>();
   for (const e of estoquesR.rows) {
+    const chaveCelula = `${Number(e.produto_id)}:${e.tamanho_id === null || e.tamanho_id === undefined ? 'null' : Number(e.tamanho_id)}:${String(e.local || '')}`;
+    if (celulasSaldo.has(chaveCelula)) throw new HttpError(409, 'Há saldos duplicados para o mesmo produto/tamanho/local. A sincronização foi bloqueada.');
+    celulasSaldo.add(chaveCelula);
     const pid = Number(e.produto_id);
     const qtd = Number(e.quantidade || 0);
     saldoProduto.set(pid, (saldoProduto.get(pid) || 0) + qtd);

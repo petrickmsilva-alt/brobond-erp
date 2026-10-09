@@ -24,9 +24,9 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource } from './resources';
-import { checkAccess, getDefaultLocal, getStore, toHttpError } from './services';
-import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
+import { checkAccess, escopoDe, getDefaultLocalInfo, getStore, resolveLocal, toHttpError, validarTamanhoNaGrade } from './services';
+import { currentUser } from './auth';
+import { assertRegistroDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2, round3 } from './utils';
 import { syncLancamentoCompra } from './financeiro';
@@ -51,13 +51,13 @@ export async function aprovarCompra(req: Request, res: Response) {
   const r = getResource('compras')!;
   checkAccess(r, actor, 'update');
   if (actor.perfil === 'operador') throw new HttpError(403, 'Somente gerentes e administradores aprovam pedidos de compra.');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const limite = req.body?.limite_alcada !== undefined ? round2(num(req.body.limite_alcada)) : null;
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const compra = assertRegistroDaEmpresa(r, await s.get(r, id, tx), escopo);
+      const compra = assertRegistroDaEmpresa(r, await s.findOneWhere(r, { id, empresa_id: escopo.empresaId }, tx), escopo);
       if (String(compra.status) !== 'pendente') throw new HttpError(409, `Só se aprova um pedido pendente (status atual: ${compra.status}).`);
       // Alçada: se a compra passou do limite do usuário, a aprovação para aqui
       // em vez de seguir silenciosamente.
@@ -124,7 +124,7 @@ export async function receberParcial(req: Request, res: Response) {
   const actor = currentUser(req);
   const r = getResource('compras')!;
   checkAccess(r, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const body = (req.body || {}) as Record<string, unknown>;
   const linhas = normalizarLinhas(body.itens);
@@ -143,21 +143,34 @@ export async function receberParcial(req: Request, res: Response) {
 
   try {
     const out = await s.transaction(async (tx) => {
-      const compra = assertRegistroDaEmpresa(r, await s.get(r, id, tx), escopo);
+      const compra = assertRegistroDaEmpresa(r, await s.findOneWhere(r, { id, empresa_id: escopo.empresaId }, tx), escopo);
       if (String(compra.status) === 'cancelado') throw new HttpError(409, 'Compra cancelada não pode ser recebida.');
       if (String(compra.status) === 'recebido') throw new HttpError(409, 'Esta compra já foi totalmente recebida.');
 
       // ---- idempotência: mesma chave devolve o mesmo recebimento ----
-      const jaExiste = await s.findOneWhere(R_RECEBIMENTO(), { compra_id: id, documento: chave.slice(0, 60) }, tx);
+      const jaExiste = await s.findOneWhere(R_RECEBIMENTO(), { empresa_id: escopo.empresaId, compra_id: id, documento: chave.slice(0, 60) }, tx);
       if (jaExiste) return { recebimento: jaExiste, idempotente: true, entradas: [], total: num(jaExiste.total) };
 
-      const itens = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { compra_id: id }, sort: 'id', dir: 'asc' }, tx);
+      const itens = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, compra_id: id }, sort: 'id', dir: 'asc' }, tx);
       if (!itens.rows.length) throw new HttpError(409, 'A compra não tem itens para receber.');
       const porId = new Map(itens.rows.map((i) => [Number(i.id), i]));
 
-      const local = body.local ? String(body.local).slice(0, 60) : String(compra.local_entrada || (await getDefaultLocal(tx)));
-      const localRow = await s.findOneWhere(getResource('locais')!, { nome: local }, tx);
-      if (!localRow) throw new HttpError(400, `O armazém "${local}" não está cadastrado.`, { local: 'Não encontrado' });
+      const localData: Record<string, unknown> = {};
+      const localIdInformado = body.local_id ?? compra.local_entrada_id;
+      if (localIdInformado !== undefined && localIdInformado !== null && localIdInformado !== '') {
+        localData.local_id = localIdInformado;
+      } else {
+        const nomeLocal = String(body.local ?? compra.local_entrada ?? '').trim();
+        if (nomeLocal) localData.local = nomeLocal.slice(0, 60);
+        else {
+          const padrao = await getDefaultLocalInfo(tx, escopo);
+          if (!padrao) throw new HttpError(409, 'A empresa ativa não possui um local de estoque ativo. Cadastre um local antes de receber a compra.');
+          localData.local_id = padrao.id;
+        }
+      }
+      await resolveLocal(localData, tx, escopo);
+      const local = String(localData.local);
+      const localId = Number(localData.local_id);
 
       const entradas: { produto_id: number | null; insumo_id: number | null; tamanho_id: number | null; quantidade: number; item_id: number }[] = [];
       let total = 0;
@@ -242,6 +255,7 @@ export async function receberParcial(req: Request, res: Response) {
           quantidade: e.quantidade,
           preco_unitario: num(porId.get(e.item_id)?.preco_unitario ?? 0),
           local,
+          local_id: localId,
         })),
         freteTotal: num(compra.frete),
         actor: { id: actor.id || null, name: actor.name },
@@ -251,7 +265,7 @@ export async function receberParcial(req: Request, res: Response) {
       });
 
       if (previsao) {
-        const itensProjetados = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { compra_id: id } }, tx);
+        const itensProjetados = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, compra_id: id } }, tx);
         throw new PrevisaoRecebimento({
           ok: true,
           previsao: true,
@@ -273,7 +287,7 @@ export async function receberParcial(req: Request, res: Response) {
       }
 
       // ---- status: parcial até tudo chegar ----
-      const itensDepois = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { compra_id: id } }, tx);
+      const itensDepois = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, compra_id: id } }, tx);
       const completo = itensDepois.rows.every((i) => round3(num(i.quantidade_recebida)) >= round3(num(i.quantidade)) - 1e-6);
       const novoStatus = completo ? 'recebido' : 'parcial';
       const patchCompra: Record<string, unknown> = { status: novoStatus };
@@ -333,12 +347,27 @@ export async function listarRecebimentos(req: Request, res: Response) {
   const actor = currentUser(req);
   const r = getResource('compras')!;
   checkAccess(r, actor, 'read');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const s = getStore();
-  assertRegistroDaEmpresa(r, await s.get(r, id), escopo);
-  const recebimentos = await s.list(R_RECEBIMENTO(), { page: 1, pageSize: 500, filter: { compra_id: id }, sort: 'id', dir: 'asc' });
-  const itens = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { compra_id: id }, sort: 'id', dir: 'asc' });
+  const compra = assertRegistroDaEmpresa(r, await s.findOneWhere(r, { id, empresa_id: escopo.empresaId }), escopo);
+  if (compra.fornecedor_id && !await s.findOneWhere(getResource('fornecedores')!, { id: Number(compra.fornecedor_id), empresa_id: escopo.empresaId })) {
+    throw new HttpError(404, 'Fornecedor não encontrado.');
+  }
+  const recebimentos = await s.list(R_RECEBIMENTO(), { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, compra_id: id }, sort: 'id', dir: 'asc' });
+  const itens = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, compra_id: id }, sort: 'id', dir: 'asc' });
+  for (const item of itens.rows) {
+    if (item.produto_id !== null && item.produto_id !== undefined && item.produto_id !== '') {
+      if (!await s.findOneWhere(getResource('produtos')!, { id: Number(item.produto_id), empresa_id: escopo.empresaId })) throw new HttpError(404, 'Produto não encontrado.');
+      if (item.tamanho_id !== null && item.tamanho_id !== undefined && item.tamanho_id !== '') {
+        await validarTamanhoNaGrade(Number(item.produto_id), Number(item.tamanho_id), undefined, escopo);
+      }
+    } else if (item.insumo_id !== null && item.insumo_id !== undefined && item.insumo_id !== '') {
+      if (!await s.findOneWhere(getResource('insumos')!, { id: Number(item.insumo_id), empresa_id: escopo.empresaId })) throw new HttpError(404, 'Insumo não encontrado.');
+    } else {
+      throw new HttpError(404, 'Item da compra não encontrado.');
+    }
+  }
   res.json({
     compra_id: id,
     itens: itens.rows.map((i) => ({ item_compra_id: i.id, produto_id: i.produto_id, insumo_id: i.insumo_id, quantidade: num(i.quantidade), quantidade_recebida: num(i.quantidade_recebida), restante: round3(num(i.quantidade) - num(i.quantidade_recebida)) })),
@@ -410,7 +439,7 @@ export function sugerirQuantidade(input: {
 export async function sugestaoCompra(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('compras')!, actor, 'read');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const empresaId = escopo.empresaId;
   const diasConsumo = Math.min(365, Math.max(30, Number(req.query.dias) || 90));
   const s = getStore();
@@ -539,7 +568,7 @@ export async function gerarCompraDaSugestao(req: Request, res: Response) {
   const actor = currentUser(req);
   const r = getResource('compras')!;
   checkAccess(r, actor, 'create');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const body = (req.body || {}) as Record<string, unknown>;
   const fornecedorId = Number(body.fornecedor_id);
   if (!Number.isInteger(fornecedorId) || fornecedorId <= 0) {
@@ -550,7 +579,7 @@ export async function gerarCompraDaSugestao(req: Request, res: Response) {
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const fornecedor = assertRegistroDaEmpresa(getResource('fornecedores')!, await s.get(getResource('fornecedores')!, fornecedorId, tx), escopo);
+      const fornecedor = assertRegistroDaEmpresa(getResource('fornecedores')!, await s.findOneWhere(getResource('fornecedores')!, { id: fornecedorId, empresa_id: escopo.empresaId }, tx), escopo);
       const produtos = await s.list(getResource('produtos')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }, tx);
       const porId = new Map(produtos.rows.map((p) => [Number(p.id), p]));
 

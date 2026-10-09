@@ -6,9 +6,10 @@
 // baixa o arquivo exportado (mesma estrutura do export de listas).
 // ============================================================
 import type { Request, Response } from 'express';
-import { RESOURCES } from './resources';
-import { checkAccess, getStore } from './services';
+import { getResource, RESOURCES, type Resource } from './resources';
+import { checkAccess, escopoDe, getStore } from './services';
 import { currentUser } from './auth';
+import type { EscopoEmpresa } from './empresa';
 import { enviarArquivo, type ColunaExport } from './export';
 import type { Row } from './store';
 import { labelOf } from './store';
@@ -21,6 +22,66 @@ function periodo(req: Request): { de: string | null; ate: string | null } {
   const de = typeof req.query.de === 'string' && req.query.de ? String(req.query.de).slice(0, 10) : null;
   const ate = typeof req.query.ate === 'string' && req.query.ate ? String(req.query.ate).slice(0, 10) : null;
   return { de, ate };
+}
+
+function garantirLeituraCompleta(rotulo: string, ...resultados: { rows: unknown[]; total: number }[]): void {
+  if (resultados.some((r) => r.total > r.rows.length)) throw new HttpError(409, `O relatório de ${rotulo} excede o limite seguro de leitura. Nenhum resultado parcial foi exportado.`);
+}
+
+async function resolverLocalFiltro(req: Request, escopo: EscopoEmpresa): Promise<Row | null> {
+  const s = getStore();
+  const rawId = req.query.local_id;
+  const id = rawId === undefined || rawId === '' ? null : Number(rawId);
+  const nome = typeof req.query.local === 'string' ? String(req.query.local).trim() : '';
+  if (id !== null && (!Number.isInteger(id) || id <= 0)) throw new HttpError(400, 'Filtro local_id inválido.');
+  let local: Row | null = null;
+  if (id !== null) local = await s.findOneWhere(RESOURCES.locais, { id, empresa_id: escopo.empresaId });
+  else if (nome) {
+    const filtro = { nome, empresa_id: escopo.empresaId };
+    if (await s.countWhere(RESOURCES.locais, filtro) > 1) throw new HttpError(409, 'O nome do local não identifica um local único desta empresa. Use local_id.');
+    local = await s.findOneWhere(RESOURCES.locais, filtro);
+  }
+  if ((id !== null || nome) && !local) throw new HttpError(404, 'Local não encontrado.');
+  if (local && nome && String(local.nome) !== nome) throw new HttpError(404, 'Local não encontrado.');
+  return local;
+}
+
+/** Confere referências que podem produzir rótulos no JSON/CSV/XLSX sem confiar apenas na FK global. */
+async function validarReferenciasRelatorio(r: Resource, rows: Row[]): Promise<void> {
+  const s = getStore();
+  for (const row of rows) {
+    const dono = Number(row.empresa_id ?? 1);
+    for (const field of r.fields) {
+      if (field.type !== 'ref' || !field.ref) continue;
+      const valor = row[field.name];
+      if (valor === null || valor === undefined || valor === '') continue;
+      const id = Number(valor);
+      const alvo = getResource(field.ref);
+      if (!alvo || !Number.isInteger(id) || id <= 0) throw new HttpError(404, `${field.label} não encontrado(a).`);
+      const filtro = alvo.empresa === true ? { id, empresa_id: dono } : { id };
+      const relacionado = await s.findOneWhere(alvo, filtro);
+      if (!relacionado || (alvo.empresa === true && Number(relacionado.empresa_id ?? 1) !== dono)) {
+        throw new HttpError(404, `${field.label} não encontrado(a).`);
+      }
+    }
+    if (r.key === 'movimentacoes' && row.compra_id !== null && row.compra_id !== undefined && row.compra_id !== '') {
+      const id = Number(row.compra_id);
+      const compra = Number.isInteger(id) && id > 0 ? await s.findOneWhere(RESOURCES.compras, { id, empresa_id: dono }) : null;
+      if (!compra || Number(compra.empresa_id ?? 1) !== dono) throw new HttpError(404, 'Compra não encontrada.');
+    }
+  }
+}
+
+async function listarLocaisEmpresa(escopo: EscopoEmpresa): Promise<{ rows: Row[]; porId: Map<number, Row> }> {
+  const locais = await getStore().list(RESOURCES.locais, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } });
+  garantirLeituraCompleta('locais', locais);
+  const nomes = new Set<string>();
+  for (const local of locais.rows) {
+    const nome = String(local.nome || '');
+    if (nomes.has(nome)) throw new HttpError(409, 'Há nomes de locais duplicados nesta empresa. Corrija-os antes de gerar relatórios por local.');
+    nomes.add(nome);
+  }
+  return { rows: locais.rows, porId: new Map(locais.rows.map((local) => [Number(local.id), local])) };
 }
 
 async function responder(
@@ -46,18 +107,37 @@ async function responder(
 // ----------------------------------------------------------------------------
 // 1) Posição de estoque valorizada (por produto/categoria/coleção/local)
 // ----------------------------------------------------------------------------
-async function relEstoquePosicao(req: Request, res: Response) {
+async function relEstoquePosicao(req: Request, res: Response, escopo: EscopoEmpresa) {
+  checkAccess(RESOURCES.estoques, currentUser(req), 'read');
   const s = getStore();
   const grupo = String(req.query.grupo || 'produto');
   const { de: _de, ate: _ate } = periodo(req);
   void _de;
   void _ate;
-  const local = typeof req.query.local === 'string' && req.query.local ? String(req.query.local) : null;
+  const localRow = await resolverLocalFiltro(req, escopo);
 
-  const [produtos, estoques] = await Promise.all([
-    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000 }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 5000, filter: local ? { local } : {} }),
+  const [produtos, estoquesRaw, locais] = await Promise.all([
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    listarLocaisEmpresa(escopo),
   ]);
+  garantirLeituraCompleta('posição de estoque', produtos, estoquesRaw);
+  await Promise.all([
+    validarReferenciasRelatorio(RESOURCES.produtos, produtos.rows),
+    validarReferenciasRelatorio(RESOURCES.estoques, estoquesRaw.rows),
+  ]);
+  for (const e of estoquesRaw.rows) {
+    if (e.local_id !== null && e.local_id !== undefined) {
+      const localVinculado = locais.porId.get(Number(e.local_id));
+      if (!localVinculado || (e.local && String(e.local) !== String(localVinculado.nome))) throw new HttpError(409, 'Há saldos com vínculo de local inconsistente. Nenhum relatório foi gerado.');
+    }
+  }
+  if (localRow && await s.countWhere(RESOURCES.estoques, { empresa_id: escopo.empresaId, local: String(localRow.nome), local_id: null }) > 0) {
+    throw new HttpError(409, 'Há saldos sem vínculo canônico associados pelo nome ao local selecionado. Nenhum relatório parcial foi gerado.');
+  }
+  const estoques = localRow
+    ? { ...estoquesRaw, rows: estoquesRaw.rows.filter((e) => Number(e.local_id) === Number(localRow.id)) }
+    : estoquesRaw;
   const porProduto = new Map<number, { produto: string; pecas: number; valor: number; sku: string }>();
   for (const e of estoques.rows) {
     const pid = Number(e.produto_id);
@@ -73,12 +153,15 @@ async function relEstoquePosicao(req: Request, res: Response) {
   if (grupo === 'local') {
     const porLocal = new Map<string, { local: string; pecas: number; valor: number }>();
     for (const e of estoques.rows) {
-      const l = String(e.local || 'loja');
+      const localId = e.local_id === null || e.local_id === undefined ? null : Number(e.local_id);
+      const localCanonico = localId === null ? null : locais.porId.get(localId);
+      const nomeLocal = localCanonico ? String(localCanonico.nome) : `Sem vínculo canônico — ${String(e.local || 'local histórico')}`;
+      const chaveLocal = localCanonico ? `id:${localId}` : `legado:${String(e.local || '')}`;
       const p = produtos.rows.find((x) => Number(x.id) === Number(e.produto_id));
-      const atual = porLocal.get(l) || { local: l, pecas: 0, valor: 0 };
+      const atual = porLocal.get(chaveLocal) || { local: nomeLocal, pecas: 0, valor: 0 };
       atual.pecas += Number(e.quantidade || 0);
       atual.valor += Number(e.quantidade || 0) * Number(p?.custo || 0);
-      porLocal.set(l, atual);
+      porLocal.set(chaveLocal, atual);
     }
     const linhas = [...porLocal.values()].sort((a, b) => b.valor - a.valor);
     return responder(req, res, {
@@ -96,7 +179,12 @@ async function relEstoquePosicao(req: Request, res: Response) {
   if (grupo === 'categoria' || grupo === 'colecao') {
     const campo = grupo === 'categoria' ? 'categoria_id' : 'colecao_id';
     const refKey = grupo === 'categoria' ? 'categorias' : 'colecoes';
-    const refs = await s.list(RESOURCES[refKey as 'categorias'], { page: 1, pageSize: 500 });
+    const refs = await s.list(RESOURCES[refKey as 'categorias'], {
+      page: 1,
+      pageSize: 20000,
+      filter: refKey === 'colecoes' ? { empresa_id: escopo.empresaId } : {},
+    });
+    garantirLeituraCompleta('classificações de estoque', refs);
     const refNome = new Map(refs.rows.map((x) => [Number(x.id), labelOf(RESOURCES[refKey as 'categorias'], x)]));
     const porRef = new Map<string, { grupo: string; pecas: number; valor: number }>();
     for (const [pid, atual] of porProduto) {
@@ -137,16 +225,43 @@ async function relEstoquePosicao(req: Request, res: Response) {
 // ----------------------------------------------------------------------------
 // 2) Movimentações por período
 // ----------------------------------------------------------------------------
-async function relMovimentacoes(req: Request, res: Response) {
+async function relMovimentacoes(req: Request, res: Response, escopo: EscopoEmpresa) {
+  checkAccess(RESOURCES.movimentacoes, currentUser(req), 'read');
   const s = getStore();
   const { de, ate } = periodo(req);
   const tipo = typeof req.query.tipo === 'string' && req.query.tipo ? String(req.query.tipo) : null;
-  const local = typeof req.query.local === 'string' && req.query.local ? String(req.query.local) : null;
-  const [produtos, tamanhos] = await Promise.all([
-    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000 }),
-    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200 }),
+  const localRow = await resolverLocalFiltro(req, escopo);
+  const [produtos, tamanhos, locais] = await Promise.all([
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 20000 }),
+    listarLocaisEmpresa(escopo),
   ]);
-  const movs = await s.list(RESOURCES.movimentacoes, { page: 1, pageSize: 5000, sort: 'data', dir: 'desc', filter: tipo ? { tipo } : {} });
+  const movs = await s.list(RESOURCES.movimentacoes, {
+    page: 1,
+    pageSize: 20000,
+    sort: 'data',
+    dir: 'desc',
+    filter: { empresa_id: escopo.empresaId, ...(tipo ? { tipo } : {}) },
+  });
+  garantirLeituraCompleta('movimentações', produtos, tamanhos, movs);
+  await Promise.all([
+    validarReferenciasRelatorio(RESOURCES.produtos, produtos.rows),
+    validarReferenciasRelatorio(RESOURCES.movimentacoes, movs.rows),
+  ]);
+  for (const m of movs.rows) {
+    const localOrigem = m.local_id == null ? null : locais.porId.get(Number(m.local_id));
+    const localDestino = m.local_destino_id == null ? null : locais.porId.get(Number(m.local_destino_id));
+    if ((m.local_id != null && (!localOrigem || (m.local && String(m.local) !== String(localOrigem.nome)))) ||
+        (m.local_destino_id != null && (!localDestino || (m.local_destino && String(m.local_destino) !== String(localDestino.nome))))) {
+      throw new HttpError(409, 'Há movimentações com vínculos de local inconsistentes. Nenhum relatório foi gerado.');
+    }
+  }
+  if (localRow) {
+    const nome = String(localRow.nome);
+    const semVinculoOrigem = await s.countWhere(RESOURCES.movimentacoes, { empresa_id: escopo.empresaId, local: nome, local_id: null, ...(tipo ? { tipo } : {}) });
+    const semVinculoDestino = await s.countWhere(RESOURCES.movimentacoes, { empresa_id: escopo.empresaId, local_destino: nome, local_destino_id: null, ...(tipo ? { tipo } : {}) });
+    if (semVinculoOrigem || semVinculoDestino) throw new HttpError(409, 'Há movimentações históricas sem vínculo canônico com este local. Nenhum relatório parcial foi gerado.');
+  }
   const pNome = new Map(produtos.rows.map((p) => [Number(p.id), labelOf(RESOURCES.produtos, p)]));
   const tNome = new Map(tamanhos.rows.map((t) => [Number(t.id), String(t.codigo || '')]));
   const linhas: Row[] = [];
@@ -154,12 +269,12 @@ async function relMovimentacoes(req: Request, res: Response) {
     const data = String(m.data || '').slice(0, 10);
     if (de && data < de) continue;
     if (ate && data > ate) continue;
-    if (local && String(m.local || '') !== local) continue;
+    if (localRow && Number(m.local_id) !== Number(localRow.id) && Number(m.local_destino_id) !== Number(localRow.id)) continue;
     linhas.push({
       data,
       tipo: m.tipo === 'entrada' ? 'Entrada' : m.tipo === 'saida' ? 'Saída' : m.tipo === 'transferencia' ? 'Transferência' : 'Ajuste',
       produto: pNome.get(Number(m.produto_id)) || `#${m.produto_id}`,
-      tamanho: tNome.get(Number(m.tamanho_id)) || '',
+      tamanho: m.tamanho_id === null || m.tamanho_id === undefined ? 'Sem tamanho' : tNome.get(Number(m.tamanho_id)) || '',
       local: String(m.local || '') + (m.local_destino ? ` → ${m.local_destino}` : ''),
       quantidade: Number(m.quantidade),
       motivo: String(m.motivo || ''),
@@ -185,12 +300,15 @@ async function relMovimentacoes(req: Request, res: Response) {
 // ----------------------------------------------------------------------------
 // 3) Produção concluída por período
 // ----------------------------------------------------------------------------
-async function relProducao(req: Request, res: Response) {
+async function relProducao(req: Request, res: Response, escopo: EscopoEmpresa) {
   const s = getStore();
   const { de, ate } = periodo(req);
-  const [produtos] = await Promise.all([s.list(RESOURCES.produtos, { page: 1, pageSize: 2000 })]);
+  const produtos = await s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter: { empresa_id: escopo.empresaId } });
   const pNome = new Map(produtos.rows.map((p) => [Number(p.id), labelOf(RESOURCES.produtos, p)]));
-  const ordens = await s.list(RESOURCES.ordens, { page: 1, pageSize: 5000, sort: 'id', dir: 'desc', filter: { status: 'concluida' } });
+  const ordens = await s.list(RESOURCES.ordens, {
+    page: 1, pageSize: 5000, sort: 'id', dir: 'desc',
+    filter: { empresa_id: escopo.empresaId, status: 'concluida' },
+  });
   const linhas: Row[] = [];
   let totalPecas = 0;
   for (const o of ordens.rows) {
@@ -229,18 +347,18 @@ async function relProducao(req: Request, res: Response) {
 // ----------------------------------------------------------------------------
 // 4) Vendas por cliente / representante / coleção / categoria
 // ----------------------------------------------------------------------------
-async function relVendas(req: Request, res: Response) {
+async function relVendas(req: Request, res: Response, escopo: EscopoEmpresa) {
   const s = getStore();
   const { de, ate } = periodo(req);
   const por = String(req.query.por || 'cliente');
   const [vendas, itensVenda, clientes, representantes, produtos, categorias, colecoes] = await Promise.all([
-    s.list(RESOURCES.vendas, { page: 1, pageSize: 5000 }),
-    s.list(RESOURCES.itens_venda, { page: 1, pageSize: 10000 }),
-    s.list(RESOURCES.clientes, { page: 1, pageSize: 2000 }),
-    s.list(RESOURCES.representantes, { page: 1, pageSize: 500 }),
-    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000 }),
+    s.list(RESOURCES.vendas, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.itens_venda, { page: 1, pageSize: 10000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.clientes, { page: 1, pageSize: 2000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.representantes, { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter: { empresa_id: escopo.empresaId } }),
     s.list(RESOURCES.categorias, { page: 1, pageSize: 500 }),
-    s.list(RESOURCES.colecoes, { page: 1, pageSize: 500 }),
+    s.list(RESOURCES.colecoes, { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId } }),
   ]);
   const clienteNome = new Map(clientes.rows.map((c) => [Number(c.id), labelOf(RESOURCES.clientes, c)]));
   const repNome = new Map(representantes.rows.map((r) => [Number(r.id), labelOf(RESOURCES.representantes, r)]));
@@ -308,13 +426,13 @@ async function relVendas(req: Request, res: Response) {
 // ----------------------------------------------------------------------------
 // 5) Curva ABC de produtos (80/15/5 por faturamento)
 // ----------------------------------------------------------------------------
-async function relABC(req: Request, res: Response) {
+async function relABC(req: Request, res: Response, escopo: EscopoEmpresa) {
   const s = getStore();
   const { de, ate } = periodo(req);
   const [produtos, vendas, itensVenda] = await Promise.all([
-    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000 }),
-    s.list(RESOURCES.vendas, { page: 1, pageSize: 5000 }),
-    s.list(RESOURCES.itens_venda, { page: 1, pageSize: 10000 }),
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.vendas, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.itens_venda, { page: 1, pageSize: 10000, filter: { empresa_id: escopo.empresaId } }),
   ]);
   const faturadas = vendas.rows.filter((v) => FATURADAS.includes(String(v.status)));
   const porVenda = new Set<number>();
@@ -365,12 +483,24 @@ async function relABC(req: Request, res: Response) {
 // ----------------------------------------------------------------------------
 // 6) Insumos abaixo do estoque mínimo
 // ----------------------------------------------------------------------------
-async function relInsumosMinimo(req: Request, res: Response) {
+async function relInsumosMinimo(req: Request, res: Response, escopo: EscopoEmpresa) {
+  checkAccess(RESOURCES.estoque_insumos, currentUser(req), 'read');
   const s = getStore();
   const [insumos, estoques] = await Promise.all([
-    s.list(RESOURCES.insumos, { page: 1, pageSize: 2000 }),
-    s.list(RESOURCES.estoque_insumos, { page: 1, pageSize: 2000 }),
+    s.list(RESOURCES.insumos, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.estoque_insumos, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
   ]);
+  garantirLeituraCompleta('estoque mínimo de insumos', insumos, estoques);
+  await Promise.all([
+    validarReferenciasRelatorio(RESOURCES.insumos, insumos.rows),
+    validarReferenciasRelatorio(RESOURCES.estoque_insumos, estoques.rows),
+  ]);
+  const insumosVistos = new Set<number>();
+  for (const saldo of estoques.rows) {
+    const id = Number(saldo.insumo_id);
+    if (insumosVistos.has(id)) throw new HttpError(409, 'Há saldos duplicados para o mesmo insumo. Corrija os dados antes de gerar o relatório.');
+    insumosVistos.add(id);
+  }
   const linhas: Row[] = [];
   for (const e of estoques.rows) {
     if (Number(e.estoque_min || 0) <= 0 || Number(e.quantidade || 0) > Number(e.estoque_min)) continue;
@@ -403,10 +533,10 @@ async function relInsumosMinimo(req: Request, res: Response) {
 // ------------------------------------------------------------------------------
 // 7) Faturamento por período — mensal com comparação mensal e anual
 // ------------------------------------------------------------------------------
-async function relFaturamento(req: Request, res: Response) {
+async function relFaturamento(req: Request, res: Response, escopo: EscopoEmpresa) {
   const s = getStore();
   const { de, ate } = periodo(req);
-  const vendas = await s.list(RESOURCES.vendas, { page: 1, pageSize: 10000 });
+  const vendas = await s.list(RESOURCES.vendas, { page: 1, pageSize: 10000, filter: { empresa_id: escopo.empresaId } });
   const faturadas = vendas.rows.filter((v) => FATURADAS.includes(String(v.status)));
 
   // Faturamento por mês (YYYY-MM) e por ano (YYYY)
@@ -483,13 +613,16 @@ async function relFaturamento(req: Request, res: Response) {
 // ------------------------------------------------------------------------------
 // 8) Comissões por representante + evolução mensal (gráfico)
 // ------------------------------------------------------------------------------
-async function relComissoes(req: Request, res: Response) {
+async function relComissoes(req: Request, res: Response, escopo: EscopoEmpresa) {
   const s = getStore();
   const { de, ate } = periodo(req);
   const representanteId = req.query.representante_id ? Number(req.query.representante_id) : undefined;
+  if (representanteId && (!Number.isInteger(representanteId) || representanteId <= 0 || !await s.findOneWhere(RESOURCES.representantes, { id: representanteId, empresa_id: escopo.empresaId }))) {
+    throw new HttpError(404, 'Representante não encontrado.');
+  }
   const [vendas, representantes] = await Promise.all([
-    s.list(RESOURCES.vendas, { page: 1, pageSize: 10000, filter: representanteId ? { representante_id: representanteId } : {} }),
-    s.list(RESOURCES.representantes, { page: 1, pageSize: 500 }),
+    s.list(RESOURCES.vendas, { page: 1, pageSize: 10000, filter: { empresa_id: escopo.empresaId, ...(representanteId ? { representante_id: representanteId } : {}) } }),
+    s.list(RESOURCES.representantes, { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId } }),
   ]);
   const repNome = new Map(representantes.rows.map((r) => [Number(r.id), labelOf(RESOURCES.representantes, r)]));
 
@@ -547,14 +680,33 @@ async function relComissoes(req: Request, res: Response) {
 // ------------------------------------------------------------------------------
 // 9) Estoque mínimo por local (produtos acabados)
 // ------------------------------------------------------------------------------
-async function relEstoqueMinimo(req: Request, res: Response) {
+async function relEstoqueMinimo(req: Request, res: Response, escopo: EscopoEmpresa) {
+  checkAccess(RESOURCES.estoques, currentUser(req), 'read');
   const s = getStore();
-  const local = typeof req.query.local === 'string' && req.query.local ? String(req.query.local) : null;
-  const [produtos, tamanhos, estoques] = await Promise.all([
-    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000 }),
-    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200 }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 5000, filter: local ? { local } : {} }),
+  const localRow = await resolverLocalFiltro(req, escopo);
+  const [produtos, tamanhos, estoquesRaw, locais] = await Promise.all([
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.tamanhos, { page: 1, pageSize: 20000 }),
+    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    listarLocaisEmpresa(escopo),
   ]);
+  garantirLeituraCompleta('estoque mínimo', produtos, tamanhos, estoquesRaw);
+  await Promise.all([
+    validarReferenciasRelatorio(RESOURCES.produtos, produtos.rows),
+    validarReferenciasRelatorio(RESOURCES.estoques, estoquesRaw.rows),
+  ]);
+  for (const e of estoquesRaw.rows) {
+    if (e.local_id !== null && e.local_id !== undefined) {
+      const localVinculado = locais.porId.get(Number(e.local_id));
+      if (!localVinculado || (e.local && String(e.local) !== String(localVinculado.nome))) throw new HttpError(409, 'Há saldos com vínculo de local inconsistente. Nenhum relatório foi gerado.');
+    }
+  }
+  if (localRow && await s.countWhere(RESOURCES.estoques, { empresa_id: escopo.empresaId, local: String(localRow.nome), local_id: null }) > 0) {
+    throw new HttpError(409, 'Há saldos sem vínculo canônico associados pelo nome ao local selecionado. Nenhum relatório parcial foi gerado.');
+  }
+  const estoques = localRow
+    ? { ...estoquesRaw, rows: estoquesRaw.rows.filter((e) => Number(e.local_id) === Number(localRow.id)) }
+    : estoquesRaw;
   const pNome = new Map(produtos.rows.map((p) => [Number(p.id), labelOf(RESOURCES.produtos, p)]));
   const tCod = new Map(tamanhos.rows.map((t) => [Number(t.id), String(t.codigo || '')]));
   const custo = new Map(produtos.rows.map((p) => [Number(p.id), Number(p.custo || 0)]));
@@ -566,7 +718,7 @@ async function relEstoqueMinimo(req: Request, res: Response) {
     const faltando = Math.max(0, Number(e.estoque_min) - Number(e.quantidade));
     linhas.push({
       produto: pNome.get(pid) || `#${pid}`,
-      tamanho: tCod.get(Number(e.tamanho_id)) || '',
+      tamanho: e.tamanho_id === null || e.tamanho_id === undefined ? 'Sem tamanho' : tCod.get(Number(e.tamanho_id)) || '',
       local: String(e.local || 'loja'),
       saldo: Number(e.quantidade || 0),
       estoque_min: Number(e.estoque_min || 0),
@@ -599,15 +751,15 @@ async function relEstoqueMinimo(req: Request, res: Response) {
 // ------------------------------------------------------------------------------
 // 10) Razão financeiro (livro-caixa com saldo acumulado) — gerente/admin
 // ------------------------------------------------------------------------------
-async function relRazao(req: Request, res: Response) {
+async function relRazao(req: Request, res: Response, escopo: EscopoEmpresa) {
   checkAccess(RESOURCES.lancamentos_financeiros, currentUser(req), 'read');
   const s = getStore();
   const { de, ate } = periodo(req);
   const tipo = typeof req.query.tipo === 'string' && req.query.tipo ? String(req.query.tipo) : null;
   const [lancs, categorias, contas] = await Promise.all([
-    s.list(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 10000, sort: 'data', dir: 'asc', filter: tipo ? { tipo } : {} }),
-    s.list(RESOURCES.categorias_financeiras, { page: 1, pageSize: 1000 }),
-    s.list(RESOURCES.contas_financeiras, { page: 1, pageSize: 1000 }),
+    s.list(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 10000, sort: 'data', dir: 'asc', filter: { empresa_id: escopo.empresaId, ...(tipo ? { tipo } : {}) } }),
+    s.list(RESOURCES.categorias_financeiras, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.contas_financeiras, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId } }),
   ]);
   const catNome = new Map(categorias.rows.map((c) => [Number(c.id), String(c.nome || '')]));
   const contaNome = new Map(contas.rows.map((c) => [Number(c.id), String(c.nome || '')]));
@@ -658,13 +810,13 @@ async function relRazao(req: Request, res: Response) {
 // ------------------------------------------------------------------------------
 // 11) DRE por período (gerencial, por classificação de categoria) — gerente/admin
 // ------------------------------------------------------------------------------
-async function relDRE(req: Request, res: Response) {
+async function relDRE(req: Request, res: Response, escopo: EscopoEmpresa) {
   checkAccess(RESOURCES.lancamentos_financeiros, currentUser(req), 'read');
   const s = getStore();
   const { de, ate } = periodo(req);
   const [lancs, categorias] = await Promise.all([
-    s.list(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 10000, sort: 'data', dir: 'asc' }),
-    s.list(RESOURCES.categorias_financeiras, { page: 1, pageSize: 1000 }),
+    s.list(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 10000, sort: 'data', dir: 'asc', filter: { empresa_id: escopo.empresaId } }),
+    s.list(RESOURCES.categorias_financeiras, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId } }),
   ]);
   const catPorId = new Map(categorias.rows.map((c) => [Number(c.id), c]));
   const catClasse = new Map<number, string>();
@@ -742,29 +894,30 @@ export async function relatorio(req: Request, res: Response, nome: string) {
   // Acesso a relatórios exige leitura de vendas (todos os perfis autenticados).
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'read');
+  const escopo = escopoDe(actor);
   switch (nome) {
     case 'estoque-posicao':
-      return await relEstoquePosicao(req, res);
+      return await relEstoquePosicao(req, res, escopo);
     case 'movimentacoes-periodo':
-      return await relMovimentacoes(req, res);
+      return await relMovimentacoes(req, res, escopo);
     case 'producao-periodo':
-      return await relProducao(req, res);
+      return await relProducao(req, res, escopo);
     case 'vendas':
-      return await relVendas(req, res);
+      return await relVendas(req, res, escopo);
     case 'abc':
-      return await relABC(req, res);
+      return await relABC(req, res, escopo);
     case 'insumos-minimo':
-      return await relInsumosMinimo(req, res);
+      return await relInsumosMinimo(req, res, escopo);
     case 'faturamento':
-      return await relFaturamento(req, res);
+      return await relFaturamento(req, res, escopo);
     case 'comissoes':
-      return await relComissoes(req, res);
+      return await relComissoes(req, res, escopo);
     case 'estoque-minimo':
-      return await relEstoqueMinimo(req, res);
+      return await relEstoqueMinimo(req, res, escopo);
     case 'razao-financeiro':
-      return await relRazao(req, res);
+      return await relRazao(req, res, escopo);
     case 'dre':
-      return await relDRE(req, res);
+      return await relDRE(req, res, escopo);
     default:
       throw new HttpError(404, 'Relatório não encontrado.');
   }

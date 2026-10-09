@@ -249,10 +249,16 @@ export class MemStore implements Store {
   }
 
   private checkConstraints(r: Resource, data: Payload, id?: number) {
+    const cur = id ? this.table(r.table).rows.get(id) : undefined;
+    const merged = { ...(cur || {}), ...data };
     for (const f of r.fields) {
-      if (f.unique && data[f.name] !== undefined && data[f.name] !== null) {
+      if ((f.unique || f.uniqueEmpresa) && data[f.name] !== undefined && data[f.name] !== null) {
         for (const [rid, row] of this.table(r.table).rows) {
-          if (rid !== id && norm(row[f.name]).toLowerCase() === norm(data[f.name]).toLowerCase()) {
+          const mesmaEmpresa = !f.uniqueEmpresa || Number(row.empresa_id ?? EMPRESA_PADRAO) === Number(merged.empresa_id ?? EMPRESA_PADRAO);
+          const mesmoValor = f.uniqueEmpresa
+            ? norm(row[f.name]) === norm(data[f.name])
+            : norm(row[f.name]).toLowerCase() === norm(data[f.name]).toLowerCase();
+          if (rid !== id && mesmaEmpresa && mesmoValor) {
             throw new HttpError(409, `Já existe um registro com este ${f.label.toLowerCase()}.`, { [f.name]: 'Já cadastrado' });
           }
         }
@@ -264,12 +270,21 @@ export class MemStore implements Store {
         }
       }
     }
-    // Chave composta do estoque (produto + tamanho + local)
+    // A célula é produto + tamanho (NULL é um tamanho válido) + local canônico,
+    // isolada por empresa. Registros antigos só com texto usam a chave textual.
     if (r.key === 'estoques') {
-      const cur = id ? this.table(r.table).rows.get(id) : undefined;
-      const merged = { ...(cur || {}), ...data };
+      const empresaId = Number(merged.empresa_id ?? EMPRESA_PADRAO);
+      const localKey = (row: Row) => norm(row.local);
       for (const [rid, row] of this.table(r.table).rows) {
-        if (rid !== id && row.produto_id === merged.produto_id && row.tamanho_id === merged.tamanho_id && row.local === merged.local) {
+        const mesmoTamanho = (row.tamanho_id === null || row.tamanho_id === undefined ? null : Number(row.tamanho_id)) ===
+          (merged.tamanho_id === null || merged.tamanho_id === undefined ? null : Number(merged.tamanho_id));
+        if (
+          rid !== id &&
+          Number(row.empresa_id ?? EMPRESA_PADRAO) === empresaId &&
+          Number(row.produto_id) === Number(merged.produto_id) &&
+          mesmoTamanho &&
+          localKey(row) === localKey(merged)
+        ) {
           throw new HttpError(409, 'Já existe saldo para este produto, tamanho e local. Edite o registro existente ou lance uma movimentação.');
         }
       }
@@ -322,17 +337,52 @@ export class MemStore implements Store {
     return true;
   }
 
-  async adjustStock(produtoId: number, tamanhoId: number, local: string, delta: number): Promise<Row> {
+  async adjustStock(
+    produtoId: number,
+    tamanhoId: number | null,
+    local: string,
+    delta: number,
+    _tx?: Tx,
+    localId?: number | null,
+    empresaId?: number
+  ): Promise<Row> {
     const r = RESOURCES.estoques;
     const t = this.table(r.table);
-    for (const row of t.rows.values()) {
-      if (row.produto_id === produtoId && row.tamanho_id === tamanhoId && row.local === local) {
-        row.quantidade = Number(row.quantidade || 0) + delta;
-        row.atualizado_em = new Date().toISOString();
-        return { ...row };
-      }
+    const produto = this.table('produtos').rows.get(Number(produtoId));
+    const ownerId = Number(empresaId ?? produto?.empresa_id ?? EMPRESA_PADRAO);
+    if (!produto || Number(produto.empresa_id ?? EMPRESA_PADRAO) !== ownerId) throw new HttpError(404, 'Produto não encontrado.');
+    if (localId === undefined || localId === null || !Number.isInteger(Number(localId)) || Number(localId) <= 0) {
+      throw new HttpError(409, 'A movimentação exige um local canônico identificado por ID.');
     }
-    return this.insert(r, { produto_id: produtoId, tamanho_id: tamanhoId, local, quantidade: delta, estoque_min: 0 });
+    const localRow = this.table('locais').rows.get(Number(localId));
+    if (!localRow || Number(localRow.empresa_id ?? EMPRESA_PADRAO) !== ownerId) throw new HttpError(404, 'Local não encontrado.');
+    const nomeLocal = String(localRow.nome);
+    const sameSize = (v: unknown) => (v === null || v === undefined ? null : Number(v)) === (tamanhoId === null ? null : Number(tamanhoId));
+    const matches = [...t.rows.values()].filter((row) =>
+      Number(row.empresa_id ?? EMPRESA_PADRAO) === ownerId &&
+      Number(row.produto_id) === Number(produtoId) &&
+      sameSize(row.tamanho_id) &&
+      (Number(row.local_id) === Number(localId) || ((row.local_id === null || row.local_id === undefined) && row.local === nomeLocal))
+    );
+    if (matches.length > 1) throw new HttpError(409, 'Há saldos duplicados para este produto/tamanho/local. Nenhuma movimentação foi aplicada.');
+    const row = matches[0];
+    if (row) {
+      if (row.local_id === null || row.local_id === undefined || Number(row.local_id) !== Number(localId) || String(row.local) !== nomeLocal) {
+        throw new HttpError(409, 'O saldo possui vínculo canônico de local ausente ou inconsistente.');
+      }
+      row.quantidade = Number(row.quantidade || 0) + delta;
+      row.atualizado_em = new Date().toISOString();
+      return { ...row };
+    }
+    return this.insert(r, {
+      empresa_id: ownerId,
+      produto_id: produtoId,
+      tamanho_id: tamanhoId,
+      local: nomeLocal,
+      local_id: localId ?? null,
+      quantidade: delta,
+      estoque_min: 0,
+    });
   }
 
   async tryUpdateIf(r: Resource, id: number, esperado: Payload, data: Payload): Promise<Row | null> {
@@ -347,14 +397,50 @@ export class MemStore implements Store {
     return this.update(r, id, data);
   }
 
-  async tryAdjustStock(produtoId: number, tamanhoId: number, local: string, delta: number, _tx?: unknown, minimo = 0): Promise<Row | null> {
+  async tryAdjustStock(
+    produtoId: number,
+    tamanhoId: number | null,
+    local: string,
+    delta: number,
+    _tx?: Tx,
+    minimo = 0,
+    localId?: number | null,
+    empresaId?: number
+  ): Promise<Row | null> {
     const r = RESOURCES.estoques;
     const t = this.table(r.table);
-    const linha = [...t.rows.values()].find((row) => row.produto_id === produtoId && row.tamanho_id === tamanhoId && row.local === local);
+    const produto = this.table('produtos').rows.get(Number(produtoId));
+    const ownerId = Number(empresaId ?? produto?.empresa_id ?? EMPRESA_PADRAO);
+    if (!produto || Number(produto.empresa_id ?? EMPRESA_PADRAO) !== ownerId) throw new HttpError(404, 'Produto não encontrado.');
+    if (localId === undefined || localId === null || !Number.isInteger(Number(localId)) || Number(localId) <= 0) {
+      throw new HttpError(409, 'A movimentação exige um local canônico identificado por ID.');
+    }
+    const localRow = this.table('locais').rows.get(Number(localId));
+    if (!localRow || Number(localRow.empresa_id ?? EMPRESA_PADRAO) !== ownerId) throw new HttpError(404, 'Local não encontrado.');
+    const nomeLocal = String(localRow.nome);
+    const sameSize = (v: unknown) => (v === null || v === undefined ? null : Number(v)) === (tamanhoId === null ? null : Number(tamanhoId));
+    const matches = [...t.rows.values()].filter((row) =>
+      Number(row.empresa_id ?? EMPRESA_PADRAO) === ownerId &&
+      Number(row.produto_id) === Number(produtoId) &&
+      sameSize(row.tamanho_id) &&
+      (Number(row.local_id) === Number(localId) || ((row.local_id === null || row.local_id === undefined) && row.local === nomeLocal))
+    );
+    if (matches.length > 1) throw new HttpError(409, 'Há saldos duplicados para este produto/tamanho/local. Nenhuma movimentação foi aplicada.');
+    const linha = matches[0];
     if (!linha) {
-      if (delta < minimo) return null;
-      if (delta === 0) return null;
-      return this.insert(r, { produto_id: produtoId, tamanho_id: tamanhoId, local, quantidade: delta, estoque_min: 0 });
+      if (delta < minimo || delta === 0) return null;
+      return this.insert(r, {
+        empresa_id: ownerId,
+        produto_id: produtoId,
+        tamanho_id: tamanhoId,
+        local: nomeLocal,
+        local_id: localId ?? null,
+        quantidade: delta,
+        estoque_min: 0,
+      });
+    }
+    if (linha.local_id === null || linha.local_id === undefined || Number(linha.local_id) !== Number(localId) || String(linha.local) !== nomeLocal) {
+      throw new HttpError(409, 'O saldo possui vínculo canônico de local ausente ou inconsistente.');
     }
     const atual = Number(linha.quantidade || 0);
     if (atual + delta < minimo) return null;
@@ -370,25 +456,35 @@ export class MemStore implements Store {
     return out;
   }
 
-  async adjustInsumoStock(insumoId: number, delta: number): Promise<Row> {
+  async adjustInsumoStock(insumoId: number, delta: number, _tx?: Tx, empresaId?: number): Promise<Row> {
+    const insumo = this.table('insumos').rows.get(Number(insumoId));
+    const dono = Number(empresaId ?? insumo?.empresa_id ?? EMPRESA_PADRAO);
+    if (!insumo || Number(insumo.empresa_id ?? EMPRESA_PADRAO) !== dono) throw new HttpError(404, 'Insumo não encontrado.');
     const t = this.table('estoque_insumos');
     for (const row of t.rows.values()) {
       if (Number(row.insumo_id) === Number(insumoId)) {
+        if (Number(row.empresa_id ?? EMPRESA_PADRAO) !== dono) throw new HttpError(409, 'O saldo do insumo possui vínculo de empresa inconsistente.');
         row.quantidade = round3(Number(row.quantidade || 0) + delta);
         row.atualizado_em = new Date().toISOString();
         return { ...row };
       }
     }
     const id = ++t.seq;
-    const row: Row = { id, insumo_id: insumoId, quantidade: round3(delta), estoque_min: 0, atualizado_em: new Date().toISOString() };
+    const row: Row = { id, empresa_id: dono, insumo_id: insumoId, quantidade: round3(delta), estoque_min: 0, atualizado_em: new Date().toISOString() };
     t.rows.set(id, row);
     return { ...row };
   }
 
-  async insumoStock(insumoId: number): Promise<number> {
+  async insumoStock(insumoId: number, _tx?: Tx, empresaId?: number): Promise<number> {
+    const insumo = this.table('insumos').rows.get(Number(insumoId));
+    const dono = Number(empresaId ?? insumo?.empresa_id ?? EMPRESA_PADRAO);
+    if (!insumo || Number(insumo.empresa_id ?? EMPRESA_PADRAO) !== dono) throw new HttpError(404, 'Insumo não encontrado.');
     const t = this.table('estoque_insumos');
     for (const row of t.rows.values()) {
-      if (Number(row.insumo_id) === Number(insumoId)) return Number(row.quantidade || 0);
+      if (Number(row.insumo_id) === Number(insumoId)) {
+        if (Number(row.empresa_id ?? EMPRESA_PADRAO) !== dono) throw new HttpError(409, 'O saldo do insumo possui vínculo de empresa inconsistente.');
+        return Number(row.quantidade || 0);
+      }
     }
     return 0;
   }

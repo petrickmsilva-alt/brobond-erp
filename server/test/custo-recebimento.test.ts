@@ -392,6 +392,7 @@ test('E3.1: repetir o recebimento não duplica estoque nem recalcula o custo', a
 test('E3.1: o mesmo SKU lógico em A e B tem estoque e custo isolados (A → B → A)', async () => {
   const empresaB = await s().insert(RESOURCES.empresas, { nome: 'Empresa B Custo', cnpj: '44555666000155', ativo: true });
   const bid = Number(empresaB.id);
+  await novoLocal('loja', bid, true);
 
   // A compra a R$50.
   const a = await novaCompra([{ qtd: 100, preco: 50 }], { empresa_id: 1 });

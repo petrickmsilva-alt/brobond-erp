@@ -53,6 +53,15 @@ async function novaEmpresa(nome: string, cnpj: string) {
   return Number(r.rows[0].id);
 }
 
+async function garantirLocalPadrao(empresaId: number) {
+  const { RESOURCES } = await import('../src/resources');
+  const { getStore } = await import('../src/services');
+  const s = getStore();
+  const existente = await s.findOneWhere(RESOURCES.locais, { empresa_id: empresaId, padrao: true });
+  if (existente) return existente;
+  return s.insert(RESOURCES.locais, { empresa_id: empresaId, nome: 'loja', tipo: 'loja', ativo: true, padrao: true });
+}
+
 async function usuarioDa(empresaId: number, perfil: string, sufixo: string): Promise<Actor> {
   const { query } = await import('../src/db');
   const r = await query(`INSERT INTO usuarios (nome, email, perfil, empresa_id, ativo) VALUES ($1, $2, $3, $4, true) RETURNING id, nome`, [
@@ -244,6 +253,7 @@ test('E2 (PG): duas conclusões concorrentes da mesma OP — exatamente uma venc
   const { query, RESOURCES, s, updateRecord } = await base();
   const sufixo = Date.now();
   const empresa = await novaEmpresa(`E2 Conc ${sufixo}`, `${50000000000000 + (sufixo % 49999999999999)}`);
+  await garantirLocalPadrao(empresa);
   const gerente = await usuarioDa(empresa, 'gerente', `e2conc${sufixo}`);
   const tam = await s.insert(RESOURCES.tamanhos, { codigo: `CC${sufixo % 100000}`, nome: 'M', ativo: true, empresa_id: empresa });
   const prod = await s.insert(RESOURCES.produtos, { sku: `E2CC-${sufixo}`, nome: 'P concorrência', preco_venda: 10, ativo: true, empresa_id: empresa });
@@ -272,6 +282,8 @@ test('E2 (PG): OP, trilha e apontamento não atravessam empresa (A → B → A)'
   const sufixo = Date.now();
   const empA = await novaEmpresa(`E2 A ${sufixo}`, `${60000000000000 + (sufixo % 39999999999999)}`);
   const empB = await novaEmpresa(`E2 B ${sufixo}`, `${70000000000000 + (sufixo % 29999999999999)}`);
+  await garantirLocalPadrao(empA);
+  await garantirLocalPadrao(empB);
   const adminA = await usuarioDa(empA, 'admin', `e2a${sufixo}`);
   const adminB = await usuarioDa(empB, 'admin', `e2b${sufixo}`);
 

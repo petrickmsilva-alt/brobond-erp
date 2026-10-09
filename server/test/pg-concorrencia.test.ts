@@ -93,12 +93,15 @@ test('runner de migrações: registra, aplica os CHECK de domínio, é idempoten
   );
   assert.equal((constraints.rows || []).length, 5, `faltam CHECKs de domínio: ${constraints.rows.map((r: any) => r.conname).join(', ')}`);
 
-  const recusado = await pool!.query(`SELECT indexname FROM pg_indexes WHERE tablename = 'estoques' AND indexname LIKE '%produto_tamanho_local%'`).catch(() => ({ rows: [] }));
-  assert.ok((recusado.rows || []).length > 0 || true, 'índice único é criado quando não há duplicatas — avisado no log do boot');
+  const recusado = await pool!.query(`SELECT indexname FROM pg_indexes WHERE tablename = 'estoques' AND indexname = 'uq_e42_estoques_empresa_prod_sem_tam_local_id'`);
+  assert.equal(recusado.rows.length, 1, 'a célula sem tamanho precisa de índice único por empresa/produto/ID do local');
 
+  const { RESOURCES } = await import('../src/resources');
+  const { createRecord } = await import('../src/services');
+  const produto = await createRecord(RESOURCES.produtos, { sku: `PG-CHECK-${Date.now()}-${process.pid}`, nome: 'Produto CHECK' }, admin);
   let violou = '';
   try {
-    await pool!.query(`INSERT INTO estoques (produto_id, tamanho_id, local, quantidade) VALUES (NULL, NULL, 'pg-x', -1)`);
+    await pool!.query(`INSERT INTO estoques (produto_id, tamanho_id, local, quantidade) VALUES ($1, NULL, 'pg-x', -1)`, [Number(produto.id)]);
   } catch (e: any) {
     violou = String(e.message);
   }

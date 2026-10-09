@@ -21,7 +21,7 @@ process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
 
 const { RESOURCES } = await import('../src/resources');
-const { getStore } = await import('../src/services');
+const { getStore, escopoDe } = await import('../src/services');
 const { chamar, criarAtor, esperarErro, garantirAdmin, novoProduto, reqDe } = await import('./_p1util');
 const producao = await import('../src/producao');
 
@@ -43,7 +43,7 @@ async function fichaCom(itens: { consumo: number; perda: number; custo: number }
     const insumo = await s().insert(RESOURCES.insumos, { nome: `Insumo ${Math.random().toString(36).slice(2, 9)}`, unidade: 'm', custo_medio: it.custo, ativo: true, empresa_id: 1 });
     await s().insert(RESOURCES.itens_ficha_tecnica, { ficha_id: Number(ficha.id), insumo_id: Number(insumo.id), consumo: it.consumo, perda_pct: it.perda, empresa_id: 1 });
   }
-  const recalculada = (await producao.recalcularFichaValores(Number(ficha.id)))!;
+  const recalculada = (await producao.recalcularFichaValores(Number(ficha.id), undefined, escopoDe(ADMIN)))!;
   return { ficha: recalculada, produto };
 }
 
@@ -88,13 +88,13 @@ test('custo: recalcular depois de mudar o consumo reflete o novo valor', async (
   assert.equal(Number(ficha.custo_calculado), 10);
   const itens = await s().list(RESOURCES.itens_ficha_tecnica, { page: 1, pageSize: 10, filter: { ficha_id: Number(ficha.id) } });
   await s().update(RESOURCES.itens_ficha_tecnica, Number(itens.rows[0].id), { consumo: 3 });
-  const deNovo = (await producao.recalcularFichaValores(Number(ficha.id)))!;
+  const deNovo = (await producao.recalcularFichaValores(Number(ficha.id), undefined, escopoDe(ADMIN)))!;
   assert.equal(Number(deNovo.custo_calculado), 30);
   assert.ok(deNovo.calculado_em, 'calculado_em é gravado');
 });
 
 test('custo: recalcular ficha inexistente devolve null em vez de estourar', async () => {
-  assert.equal(await producao.recalcularFichaValores(999999), null);
+  assert.equal(await producao.recalcularFichaValores(999999, undefined, escopoDe(ADMIN)), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ test('aplicar preço: regravar depois de mudar a ficha atualiza o produto de nov
   assert.equal(Number((await s().get(RESOURCES.produtos, Number(produto!.id)))!.custo), 10);
 
   await s().update(RESOURCES.fichas, Number(ficha.id), { mao_obra: 15 });
-  await producao.recalcularFichaValores(Number(ficha.id));
+  await producao.recalcularFichaValores(Number(ficha.id), undefined, escopoDe(ADMIN));
   await chamar(producao.aplicarPrecoFicha, reqDe({}, { params: { id: ficha.id }, user: ADMIN }));
   assert.equal(Number((await s().get(RESOURCES.produtos, Number(produto!.id)))!.custo), 25);
 });

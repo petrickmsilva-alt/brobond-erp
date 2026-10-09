@@ -6,7 +6,7 @@ import type { Request, Response } from 'express';
 import { currentUser } from './auth';
 import { HttpError } from './errors';
 import { RESOURCES } from './resources';
-import { checkAccess, getRecord, getStore, gradeDoProduto } from './services';
+import { checkAccess, escopoDe, getRecord, getStore, gradeDoProduto, validarReferenciasDeSaida } from './services';
 import { medidasDaGrade } from './medidas';
 import { parseId } from './validate';
 
@@ -17,10 +17,12 @@ import { parseId } from './validate';
  * 36–48. Sem grade definida, devolve a lista completa para não travar o uso.
  */
 export async function produtoTamanhos(req: Request, res: Response) {
-  checkAccess(RESOURCES.produtos, currentUser(req), 'read');
+  const actor = currentUser(req);
+  checkAccess(RESOURCES.produtos, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const s = getStore();
-  const produto = await s.findOneWhere(RESOURCES.produtos, { id });
+  const produto = await s.findOneWhere(RESOURCES.produtos, { id, empresa_id: escopo.empresaId });
   if (!produto) throw new HttpError(404, 'Produto não encontrado.');
   const grade = await gradeDoProduto(produto);
   if (grade) {
@@ -36,19 +38,27 @@ export async function produtoTamanhos(req: Request, res: Response) {
 
 export async function productDetail(req: Request, res: Response) {
   const r = RESOURCES.produtos;
-  checkAccess(r, currentUser(req), 'read');
+  const actor = currentUser(req);
+  checkAccess(r, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const s = getStore();
 
-  const produto = await getRecord(r, id);
+  const produto = await getRecord(r, id, escopo);
 
   const [tamanhos, estoques, movimentacoes, ordens, fichas, gradeInfo] = await Promise.all([
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200 }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 1000, filter: { produto_id: id } }),
-    s.list(RESOURCES.movimentacoes, { page: 1, pageSize: 15, filter: { produto_id: id }, sort: 'data', dir: 'desc' }),
-    s.list(RESOURCES.ordens, { page: 1, pageSize: 50, filter: { produto_id: id }, sort: 'id', dir: 'desc' }),
-    s.list(RESOURCES.fichas, { page: 1, pageSize: 1, filter: { produto_id: id } }),
+    s.list(RESOURCES.estoques, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, produto_id: id } }),
+    s.list(RESOURCES.movimentacoes, { page: 1, pageSize: 15, filter: { empresa_id: escopo.empresaId, produto_id: id }, sort: 'data', dir: 'desc' }),
+    s.list(RESOURCES.ordens, { page: 1, pageSize: 50, filter: { empresa_id: escopo.empresaId, produto_id: id }, sort: 'id', dir: 'desc' }),
+    s.list(RESOURCES.fichas, { page: 1, pageSize: 1, filter: { empresa_id: escopo.empresaId, produto_id: id } }),
     gradeDoProduto(produto),
+  ]);
+  await Promise.all([
+    validarReferenciasDeSaida(RESOURCES.estoques, estoques.rows, escopo),
+    validarReferenciasDeSaida(RESOURCES.movimentacoes, movimentacoes.rows, escopo),
+    validarReferenciasDeSaida(RESOURCES.ordens, ordens.rows, escopo),
+    validarReferenciasDeSaida(RESOURCES.fichas, fichas.rows, escopo),
   ]);
 
   // Grade: locais × tamanhos. Com grade definida (produto ou categoria),

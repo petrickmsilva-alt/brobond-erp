@@ -20,9 +20,9 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource } from './resources';
-import { checkAccess, checkFluxo, getDefaultLocal, getStore, toHttpError } from './services';
-import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
+import { checkAccess, checkFluxo, escopoDe, getStore, resolveLocal, toHttpError } from './services';
+import { currentUser } from './auth';
+import { assertRegistroDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2 } from './utils';
 import { aplicarRegrasPedido } from './itens';
@@ -106,7 +106,7 @@ async function avancarEtapa(venda: Row, alvo: Etapa, actor: { id: number | null;
 export async function separarPedido(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const vendaId = parseId(req.params.id);
   const s = getStore();
   try {
@@ -116,7 +116,7 @@ export async function separarPedido(req: Request, res: Response) {
       if (['faturada', 'entregue'].includes(String(venda.status))) {
         throw new HttpError(409, 'Este pedido já foi faturado — a separação acontece antes do faturamento.');
       }
-      const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { venda_id: vendaId }, sort: 'id', dir: 'asc' }, tx);
+      const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, venda_id: vendaId }, sort: 'id', dir: 'asc' }, tx);
       if (!itens.rows.length) throw new HttpError(409, 'O pedido não tem itens para separar.');
       const atualizada = await avancarEtapa(venda, 'separacao', { id: actor.id || null, name: actor.name }, escopo, tx, 'Pedido enviado para separação.');
       return { venda: atualizada, itens: itens.rows };
@@ -131,13 +131,13 @@ export async function separarPedido(req: Request, res: Response) {
 export async function situacaoExpedicao(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'read');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const vendaId = parseId(req.params.id);
   const s = getStore();
   const venda = await assertVenda(vendaId, escopo);
-  const eventos = await s.list(R_EXP_EVENTO(), { page: 1, pageSize: 500, filter: { venda_id: vendaId }, sort: 'id', dir: 'asc' });
-  const divergencias = await s.list(R_DIVERGENCIA(), { page: 1, pageSize: 200, filter: { venda_id: vendaId }, sort: 'id', dir: 'desc' });
-  const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { venda_id: vendaId }, sort: 'id', dir: 'asc' });
+  const eventos = await s.list(R_EXP_EVENTO(), { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, venda_id: vendaId }, sort: 'id', dir: 'asc' });
+  const divergencias = await s.list(R_DIVERGENCIA(), { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId, venda_id: vendaId }, sort: 'id', dir: 'desc' });
+  const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, venda_id: vendaId }, sort: 'id', dir: 'asc' });
   const produtos = await s.list(getResource('produtos')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } });
   const porId = new Map(produtos.rows.map((p) => [Number(p.id), p]));
   res.json({
@@ -225,7 +225,7 @@ function normalizarLeitura(value: unknown): string[] {
 export async function conferirPedido(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const vendaId = parseId(req.params.id);
   const lidos = normalizarLeitura(Array.isArray(req.body) ? req.body : (req.body?.codigos ?? req.body?.barcodes ?? req.body?.codigos_lidos));
   const s = getStore();
@@ -235,7 +235,7 @@ export async function conferirPedido(req: Request, res: Response) {
       if (String(venda.status) === 'cancelada') throw new HttpError(409, 'Pedido cancelado não pode ser conferido.');
       if (['faturada', 'entregue'].includes(String(venda.status))) throw new HttpError(409, 'Este pedido já foi faturado — a conferência acontece antes.');
 
-      const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { venda_id: vendaId }, sort: 'id', dir: 'asc' }, tx);
+      const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, venda_id: vendaId }, sort: 'id', dir: 'asc' }, tx);
       if (!itens.rows.length) throw new HttpError(409, 'O pedido não tem itens para conferir.');
       const produtos = await s.list(getResource('produtos')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }, tx);
       const porId = new Map(produtos.rows.map((p) => [Number(p.id), p]));
@@ -332,7 +332,7 @@ export async function embalarPedido(req: Request, res: Response) {
 export async function expedirPedido(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const vendaId = parseId(req.params.id);
   const s = getStore();
   try {
@@ -349,7 +349,7 @@ export async function expedirPedido(req: Request, res: Response) {
       const antes = venda;
       const faturada = await s.tryUpdateIf(getResource('vendas')!, vendaId, { status: String(venda.status) }, { status: 'faturada' }, tx);
       if (!faturada) throw new HttpError(409, 'O pedido mudou durante a expedição. Recarregue.');
-      await aplicarRegrasPedido('venda', antes, faturada, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx);
+      await aplicarRegrasPedido('venda', antes, faturada, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx, escopo);
       const depois = (await s.get(getResource('vendas')!, vendaId, tx)) || faturada;
       await syncLancamentoVenda(antes, depois, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx);
       const comEtapa = await avancarEtapa(depois, 'expedida', { id: actor.id || null, name: actor.name }, escopo, tx, 'Pedido expedido e faturado.');
@@ -364,7 +364,7 @@ export async function expedirPedido(req: Request, res: Response) {
 async function avancar(req: Request, res: Response, alvo: Etapa, etapa: string, mensagem: string) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const vendaId = parseId(req.params.id);
   const s = getStore();
   try {
@@ -386,7 +386,7 @@ async function avancar(req: Request, res: Response, alvo: Etapa, etapa: string, 
 export async function listarDivergencias(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'read');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const out = await getStore().list(R_DIVERGENCIA(), {
     page: Math.max(1, Number(req.query.page) || 1),
     pageSize: Math.min(200, Math.max(1, Number(req.query.pageSize) || 50)),
@@ -401,7 +401,7 @@ export async function listarDivergencias(req: Request, res: Response) {
 export async function resolverDivergencia(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const resolucao = String((req.body || {}).resolucao || '').trim();
   if (resolucao.length < 5) throw new HttpError(400, 'Descreva como a divergência foi resolvida (mínimo 5 caracteres).', { resolucao: 'Mínimo 5 caracteres' });
@@ -422,7 +422,7 @@ export async function resolverDivergencia(req: Request, res: Response) {
 export async function criarDevolucao(req: Request, res: Response) {
   const actor = currentUser(req);
   checkFluxo(R_DEVOLUCAO(), actor);
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const body = (req.body || {}) as Record<string, unknown>;
   const motivo = String(body.motivo || '').trim();
   if (motivo.length < 5) throw new HttpError(400, 'Informe o motivo da devolução (mínimo 5 caracteres).', { motivo: 'Mínimo 5 caracteres' });
@@ -438,7 +438,7 @@ export async function criarDevolucao(req: Request, res: Response) {
       if (!['faturada', 'entregue'].includes(String(venda.status))) {
         throw new HttpError(409, 'Só se devolve mercadoria de um pedido faturado ou entregue.');
       }
-      const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { venda_id: vendaId }, sort: 'id', dir: 'asc' }, tx);
+      const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, venda_id: vendaId }, sort: 'id', dir: 'asc' }, tx);
       if (!itens.rows.length) throw new HttpError(409, 'O pedido não tem itens.');
 
       // Sem itens explícitos, a devolução é do pedido inteiro.
@@ -468,7 +468,7 @@ export async function criarDevolucao(req: Request, res: Response) {
       // Devoluções deste pedido que ainda estão vivas. Recusada/cancelada não
       // conta: a mercadoria não vai voltar por ela, então o saldo do pedido
       // volta a ficar disponível para uma nova solicitação.
-      const devsDestePedido = await s.list(R_DEVOLUCAO(), { page: 1, pageSize: 500, filter: { venda_id: vendaId } }, tx);
+      const devsDestePedido = await s.list(R_DEVOLUCAO(), { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, venda_id: vendaId } }, tx);
       const devViva = new Map(
         devsDestePedido.rows.filter((d) => !['recusada', 'cancelada'].includes(String(d.status))).map((d) => [Number(d.id), d])
       );
@@ -483,15 +483,18 @@ export async function criarDevolucao(req: Request, res: Response) {
         // O item precisa existir NO PEDIDO. Sem isso não há contra o que
         // comparar e a devolução poderia ser de mercadoria nunca vendida.
         if (!itemVenda) {
-          throw new HttpError(404, `O pedido #${vendaId} não tem nenhuma linha do produto #${produtoId}${tamanhoId ? ` tamanho #${tamanhoId}` : ''}.`, { itens: 'item fora do pedido' });
+          throw new HttpError(404, 'Item não encontrado neste pedido.');
         }
+        const produtoDoItem = Number(itemVenda.produto_id);
+        const tamanhoDoItem = itemVenda.tamanho_id === null || itemVenda.tamanho_id === undefined ? null : Number(itemVenda.tamanho_id);
+        if (produtoId !== produtoDoItem || tamanhoId !== tamanhoDoItem) throw new HttpError(404, 'Item não encontrado neste pedido.');
         const pedidoNoItem = Math.trunc(num(itemVenda.quantidade));
         const solicitada = Math.trunc(num(raw.quantidade ?? itemVenda.quantidade ?? 0));
         if (!(solicitada > 0)) throw new HttpError(400, `A quantidade devolvida do produto #${produtoId} deve ser maior que zero.`, { itens: 'quantidade' });
         const ja = jaUsados.get(chave) || 0;
         // Não se devolve mais do que o pedido levou — nem somando duas
         // devoluções. Só contam as devoluções VIVAS deste pedido.
-        const existentes = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 500, filter: { produto_id: produtoId } }, tx);
+        const existentes = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, produto_id: produtoId } }, tx);
         const jaDevolvido = existentes.rows
           .filter((di) => devViva.has(Number(di.devolucao_id)))
           .filter((di) => chaveDoItem(Number(di.produto_id), di.tamanho_id === null || di.tamanho_id === undefined ? null : Number(di.tamanho_id)) === chave)
@@ -522,14 +525,14 @@ export async function criarDevolucao(req: Request, res: Response) {
 export async function obterDevolucao(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_DEVOLUCAO(), actor, 'read');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   res.json(await detalharDevolucao(parseId(req.params.id), escopo));
 }
 
 async function detalharDevolucao(id: number, escopo: EscopoEmpresa): Promise<Record<string, unknown>> {
   const s = getStore();
   const dev = assertRegistroDaEmpresa(R_DEVOLUCAO(), await s.get(R_DEVOLUCAO(), id), escopo);
-  const itens = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 500, filter: { devolucao_id: id }, sort: 'id', dir: 'asc' });
+  const itens = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, devolucao_id: id }, sort: 'id', dir: 'asc' });
   const produtos = await s.list(getResource('produtos')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } });
   const porId = new Map(produtos.rows.map((p) => [Number(p.id), p]));
   return {
@@ -561,7 +564,7 @@ function acoesDaDevolucao(status: string): string[] {
 export async function autorizarDevolucao(req: Request, res: Response) {
   const actor = currentUser(req);
   checkFluxo(R_DEVOLUCAO(), actor);
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const body = (req.body || {}) as Record<string, unknown>;
   const s = getStore();
@@ -590,7 +593,7 @@ export async function autorizarDevolucao(req: Request, res: Response) {
 export async function registrarRastreamento(req: Request, res: Response) {
   const actor = currentUser(req);
   checkFluxo(R_DEVOLUCAO(), actor);
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const body = (req.body || {}) as Record<string, unknown>;
   const codigo = String(body.codigo_rastreamento || '').trim();
@@ -630,7 +633,7 @@ export async function registrarRastreamento(req: Request, res: Response) {
 export async function receberDevolucao(req: Request, res: Response) {
   const actor = currentUser(req);
   checkFluxo(R_DEVOLUCAO(), actor);
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const body = (req.body || {}) as Record<string, unknown>;
   const s = getStore();
@@ -644,13 +647,17 @@ export async function receberDevolucao(req: Request, res: Response) {
         throw new HttpError(409, 'Mercadoria sem rastreabilidade não entra no estoque. Registre o código de rastreamento antes de receber.');
       }
 
-      const itens = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 500, filter: { devolucao_id: id }, sort: 'id', dir: 'asc' }, tx);
+      const itens = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, devolucao_id: id }, sort: 'id', dir: 'asc' }, tx);
       if (!itens.rows.length) throw new HttpError(409, 'A devolução não tem itens.');
 
       const recebimentos = Array.isArray(body.itens) ? (body.itens as Record<string, unknown>[]) : [];
-      const local = body.local ? String(body.local).slice(0, 60) : String(dev.local_entrada || (await getDefaultLocal(tx)));
-      const localExiste = await s.findOneWhere(getResource('locais')!, { nome: local }, tx);
-      if (!localExiste) throw new HttpError(400, `O armazém "${local}" não está cadastrado.`, { local: 'Não encontrado' });
+      const localData: Record<string, unknown> = {};
+      if (body.local_id !== undefined) localData.local_id = body.local_id;
+      else if (body.local !== undefined) localData.local = String(body.local).slice(0, 60);
+      else if (dev.local_entrada) localData.local = String(dev.local_entrada);
+      await resolveLocal(localData, tx, escopo);
+      const local = String(localData.local);
+      const localId = Number(localData.local_id);
 
       let totalRecebido = 0;
       const entradas: { produto_id: number; tamanho_id: number | null; quantidade: number }[] = [];
@@ -674,21 +681,28 @@ export async function receberDevolucao(req: Request, res: Response) {
           totalRecebido += recebida;
           continue;
         }
-        entradas.push({ produto_id: Number(item.produto_id), tamanho_id: item.tamanho_id === null || item.tamanho_id === undefined ? null : Number(item.tamanho_id), quantidade: recebida });
+        const produtoId = Number(item.produto_id);
+        const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId }, tx);
+        if (!produto) throw new HttpError(404, 'Produto não encontrado.');
+        const tamanhoId = item.tamanho_id === null || item.tamanho_id === undefined ? null : Number(item.tamanho_id);
+        if (tamanhoId !== null && !await s.findOneWhere(getResource('tamanhos')!, { id: tamanhoId }, tx)) throw new HttpError(404, 'Tamanho não encontrado.');
+        entradas.push({ produto_id: produtoId, tamanho_id: tamanhoId, quantidade: recebida });
         totalRecebido += recebida;
       }
 
       if (!totalRecebido) throw new HttpError(409, 'Nenhuma unidade foi recebida — nada a dar entrada.');
 
       for (const e of entradas) {
-        await s.adjustStock(e.produto_id, e.tamanho_id as number, local, e.quantidade, tx);
+        await s.adjustStock(e.produto_id, e.tamanho_id, local, e.quantidade, tx, localId, escopo.empresaId);
         await s.insert(
           getResource('movimentacoes')!,
           {
+            empresa_id: escopo.empresaId,
             tipo: 'entrada',
             produto_id: e.produto_id,
             tamanho_id: e.tamanho_id,
             local,
+            local_id: localId,
             quantidade: e.quantidade,
             motivo: `Devolução #${id} — Venda #${dev.venda_id}`,
             usuario_id: actor.id || null,
@@ -703,9 +717,9 @@ export async function receberDevolucao(req: Request, res: Response) {
 
       // Ajuste financeiro: a venda cancelada/parcialmente devolvida precisa
       // deixar de constar como recebida. Só quando a devolução é TOTAL.
-      const itensVenda = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { venda_id: Number(dev.venda_id) } }, tx);
+      const itensVenda = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, venda_id: Number(dev.venda_id) } }, tx);
       const qtdVendida = itensVenda.rows.reduce((acc, i) => acc + Math.trunc(num(i.quantidade)), 0);
-      const todas = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 1000, filter: { devolucao_id: id } }, tx);
+      const todas = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, devolucao_id: id } }, tx);
       const qtdDevolvida = todas.rows.reduce((acc, i) => acc + Math.trunc(num(i.quantidade_recebida)), 0);
       let ajusteFinanceiro: { aplicado: boolean; motivo: string } = { aplicado: false, motivo: 'Devolução parcial: o financeiro da venda não é revertido automaticamente.' };
       if (qtdVendida > 0 && qtdDevolvida >= qtdVendida) {
@@ -713,7 +727,7 @@ export async function receberDevolucao(req: Request, res: Response) {
         if (venda && !['cancelada'].includes(String(venda.status))) {
           const cancelada = await s.update(getResource('vendas')!, Number(venda.id), { status: 'cancelada' }, tx);
           if (cancelada) {
-            await aplicarRegrasPedido('venda', venda, cancelada, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx);
+            await aplicarRegrasPedido('venda', venda, cancelada, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx, escopo);
             const depois = (await s.get(getResource('vendas')!, Number(venda.id), tx)) || cancelada;
             await syncLancamentoVenda(venda, depois, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx);
             ajusteFinanceiro = { aplicado: true, motivo: `Devolução total: venda #${venda.id} cancelada e financeiro revertido.` };
@@ -754,7 +768,7 @@ export async function cancelarDevolucao(req: Request, res: Response) {
 async function fecharDevolucao(req: Request, res: Response, para: 'recusada' | 'cancelada') {
   const actor = currentUser(req);
   checkFluxo(R_DEVOLUCAO(), actor);
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const motivo = String((req.body || {}).motivo || '').trim();
   if (motivo.length < 5) throw new HttpError(400, 'Informe o motivo (mínimo 5 caracteres).', { motivo: 'Mínimo 5 caracteres' });

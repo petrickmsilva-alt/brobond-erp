@@ -9,9 +9,9 @@
 import { createHash } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
-import { currentUser, type AuthUser } from './auth';
-import { checkAccess, getDefaultLocal, getStore } from './services';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
+import { currentUser } from './auth';
+import { checkAccess, escopoDe, getStore, resolveLocal, validarTamanhoNaGrade } from './services';
+import { assertRegistroDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { getResource } from './resources';
 import { parseId } from './validate';
 import type { Row } from './store';
@@ -25,7 +25,6 @@ const itensCompra = getResource('itens_compra')!;
 const fornecedores = getResource('fornecedores')!;
 const produtos = getResource('produtos')!;
 const tamanhos = getResource('tamanhos')!;
-const locais = getResource('locais')!;
 const mappings = getResource('produto_fornecedor_skus')!;
 const imports = getResource('importacoes_nfe')!;
 
@@ -304,24 +303,6 @@ function asMapping(value: MappingInput | undefined): MappingInput {
   return value || {};
 }
 
-async function resolveLocal(input: ImportBody, tx: any): Promise<string> {
-  const s = getStore();
-  if (input.local_id) {
-    const local = await s.findOneWhere(locais, { id: Number(input.local_id) }, tx);
-    if (!local) throw new HttpError(400, 'O armazém informado não existe.');
-    if (local.ativo === false) throw new HttpError(409, 'O armazém informado está inativo.');
-    return String(local.nome);
-  }
-  if (input.local && String(input.local).trim()) {
-    const nome = String(input.local).trim();
-    const local = await s.findOneWhere(locais, { nome }, tx);
-    if (!local) throw new HttpError(400, `O armazém "${nome}" não está cadastrado.`);
-    if (local.ativo === false) throw new HttpError(409, `O armazém "${nome}" está inativo.`);
-    return nome;
-  }
-  return getDefaultLocal(tx);
-}
-
 /**
  * MULTIEMPRESA: o fornecedor é procurado e criado DENTRO da empresa ativa.
  * Sem o filtro, uma NF-e importada na Empresa B casava com o fornecedor da
@@ -355,32 +336,46 @@ async function resolveProductAndSize(
   const productRows = (await s.list(produtos, { page: 1, pageSize: 10000, filter: { empresa_id: escopo.empresaId } }, tx)).rows;
   const sizeRows = (await s.list(tamanhos, { page: 1, pageSize: 1000 }, tx)).rows;
   const code = item.codigoFornecedor;
-  const stored = await s.findOneWhere(mappings, { fornecedor_id: supplierId, codigo_fornecedor: code }, tx);
-  const selected = mapping.produto_id || (mapping.sku ? productRows.find((p) => String(p.sku) === String(mapping.sku))?.id : undefined) || stored?.produto_id;
-  let product = selected ? productRows.find((p) => Number(p.id) === Number(selected)) : undefined;
-  if (!product) product = productRows.find((p) => String(p.sku) === code || (item.ean && digits(p.codigo_barras) === digits(item.ean)));
+  const stored = await s.findOneWhere(mappings, { empresa_id: escopo.empresaId, fornecedor_id: supplierId, codigo_fornecedor: code }, tx);
+  let product: Row | undefined;
+  const productId = mapping.produto_id ?? stored?.produto_id;
+  if (productId !== undefined && productId !== null && productId !== '') {
+    product = productRows.find((p) => Number(p.id) === Number(productId));
+    if (!product) throw new HttpError(404, 'Produto não encontrado.');
+  } else if (mapping.sku) {
+    product = productRows.find((p) => String(p.sku) === String(mapping.sku));
+    if (!product) throw new HttpError(404, 'Produto não encontrado.');
+  } else {
+    product = productRows.find((p) => String(p.sku) === code || (item.ean && digits(p.codigo_barras) === digits(item.ean)));
+  }
   if (!product) {
     throw new HttpError(422, `Não foi possível fazer o de-para do SKU do fornecedor "${code || '(vazio)'}".`, { codigo_fornecedor: code, descricao: item.descricao });
   }
 
-  const sizeId = mapping.tamanho_id || stored?.tamanho_id || input.tamanho_id;
-  let size = sizeId ? sizeRows.find((t) => Number(t.id) === Number(sizeId)) : undefined;
-  if (!size) {
+  const explicitSizeId = mapping.tamanho_id ?? stored?.tamanho_id ?? input.tamanho_id;
+  let size: Row | undefined;
+  if (explicitSizeId !== undefined && explicitSizeId !== null && explicitSizeId !== '') {
+    size = sizeRows.find((t) => Number(t.id) === Number(explicitSizeId));
+    if (!size) throw new HttpError(404, 'Tamanho não encontrado.');
+  } else {
     const requestedCode = mapping.tamanho || input.tamanho;
-    size = sizeRows.find((t) => requestedCode && String(t.codigo).toLowerCase() === String(requestedCode).toLowerCase());
+    if (requestedCode) {
+      size = sizeRows.find((t) => String(t.codigo).toLowerCase() === String(requestedCode).toLowerCase());
+      if (!size) throw new HttpError(404, 'Tamanho não encontrado.');
+    }
   }
   if (!size) size = sizeFromText(item.textoTamanho || item.descricao || item.codigoFornecedor, sizeRows) || undefined;
   if (!size && sizeRows.length === 1) size = sizeRows[0];
   if (!size) {
     throw new HttpError(422, `Informe o tamanho para o SKU "${code}" no de-para (tamanho_id/tamanho).`, { codigo_fornecedor: code });
   }
-  if (mapping.tamanho_id && !size) throw new HttpError(400, `O tamanho ${mapping.tamanho_id} não existe.`);
+  await validarTamanhoNaGrade(Number(product.id), Number(size.id), tx, escopo);
   return { produto: product, tamanho: size };
 }
 
 async function upsertMapping(supplierId: number, code: string, productId: number, sizeId: number, empresaId: number, tx: any) {
   const s = getStore();
-  const current = await s.findOneWhere(mappings, { fornecedor_id: supplierId, codigo_fornecedor: code }, tx);
+  const current = await s.findOneWhere(mappings, { empresa_id: empresaId, fornecedor_id: supplierId, codigo_fornecedor: code }, tx);
   if (current) {
     if (Number(current.produto_id) !== productId || (current.tamanho_id && Number(current.tamanho_id) !== sizeId)) {
       throw new HttpError(409, `O de-para "${code}" já aponta para outro produto/tamanho. Corrija o cadastro antes de importar.`);
@@ -393,7 +388,7 @@ async function upsertMapping(supplierId: number, code: string, productId: number
 export async function importarXmlCompra(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(compras, actor, 'create');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const { xml, input } = requestInput(req);
   const parsed = parseXml(xml);
   const hash = createHash('sha256').update(xml, 'utf8').digest('hex');
@@ -401,12 +396,14 @@ export async function importarXmlCompra(req: Request, res: Response) {
   // A pré-validação aborta a transação de propósito; `.then(ok, erro)` mantém o
   // tipo estreito sem `as` e sem variável anulável espalhada pelo handler.
   const desfecho = await s.transaction(async (tx) => {
-    const already = await s.findOneWhere(imports, { chave_acesso: parsed.chaveAcesso }, tx);
+    const already = await s.findOneWhere(imports, { empresa_id: escopo.empresaId, chave_acesso: parsed.chaveAcesso }, tx);
     if (already) {
       throw new HttpError(409, `A NF-e ${parsed.numero || parsed.chaveAcesso} já foi importada.`, { compra_id: already.compra_id, importacao_id: already.id });
     }
     const supplier = await resolveSupplier(parsed, input, escopo, tx);
-    const local = await resolveLocal(input, tx);
+    const localData: Record<string, unknown> = { ...input };
+    await resolveLocal(localData, tx, escopo);
+    const local = String(localData.local);
     const requestedMappings = mappingEntries(input);
     const resolved: { item: XmlFiscalItem; product: Row; size: Row; code: string; mapping: MappingInput }[] = [];
     // Pré-validação: em vez de parar no primeiro problema, coleta TODOS. Quem
@@ -639,7 +636,7 @@ function sameBarcodeMultiset(expected: string[], received: string[]): boolean {
 export async function packingCheck(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id ?? req.body?.venda_id ?? req.body?.vendaId);
   const received = packingCheckBody(Array.isArray(req.body) ? req.body : req.body?.barcodes ?? req.body?.codigos_barras ?? req.body?.codigos ?? req.body?.codigos_lidos);
   const s = getStore();
@@ -703,7 +700,7 @@ export async function packingCheck(req: Request, res: Response) {
     // estiver aberta. A baixa de estoque e o status estão na mesma transação.
     const updated = await s.tryUpdateIf(getResource('vendas')!, id, { status: venda.status }, { status: 'faturada' }, tx);
     if (!updated) throw new HttpError(409, 'O pedido mudou durante a conferência. Recarregue e tente novamente.');
-    await aplicarRegrasPedido('venda', venda, updated, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx);
+    await aplicarRegrasPedido('venda', venda, updated, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx, escopo);
     const after = (await s.get(getResource('vendas')!, id, tx)) || updated;
     await syncLancamentoVenda(venda, after, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx);
     return after;

@@ -23,7 +23,7 @@ delete process.env.DATABASE_URL;
 
 const { RESOURCES } = await import('../src/resources');
 const { getStore } = await import('../src/services');
-const { ADMIN, chamar, criarAtor, esperarErro, garantirAdmin, novoCliente, novoProduto, novoTamanho, reqDe, resFake, saldoInicial } = await import('./_p1util');
+const { ADMIN, chamar, criarAtor, esperarErro, garantirAdmin, novoCliente, novoLocal, novoProduto, novoTamanho, reqDe, resFake, saldoInicial } = await import('./_p1util');
 const pdv = await import('../src/pdv');
 
 await garantirAdmin();
@@ -491,6 +491,7 @@ test('pdv: a caixa da EMPRESA A é invisível para a EMPRESA B', async () => {
   const s = getStore();
   await s.insert(RESOURCES.empresas, { id: 2, nome: 'FILIAL P1', razao_social: 'FILIAL P1 LTDA', ativo: true }).catch(() => undefined);
   const b = await criarAtor(2, 'gerente');
+  await novoLocal('loja', 2, true);
 
   const caixaA = await abrirCaixa(10, 'CAIXA-A');
   assert.equal(Number(caixaA.empresa_id), 1);

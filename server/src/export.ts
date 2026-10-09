@@ -9,7 +9,7 @@ import ExcelJS from 'exceljs';
 import { HttpError } from './errors';
 import { getPublicResource, type Resource } from './resources';
 import { aplicarFiltroEmpresa } from './empresa';
-import { checkAccess, escopoDe, getStore } from './services';
+import { checkAccess, escopoDe, getStore, validarReferenciasDeSaida } from './services';
 import { currentUser } from './auth';
 import type { Row } from './store';
 
@@ -116,7 +116,9 @@ export async function enviarArquivo(res: Response, nome: string, formato: string
 export async function exportarRecurso(req: Request, res: Response, resourceKey: string) {
   const r: Resource | undefined = getPublicResource(resourceKey);
   if (!r) throw new HttpError(404, 'Recurso não encontrado');
-  checkAccess(r, currentUser(req), 'read');
+  const actor = currentUser(req);
+  checkAccess(r, actor, 'read');
+  const escopo = escopoDe(actor);
   const formato = String(req.query.format || 'csv');
 
   // Mesmos filtros da listagem
@@ -155,16 +157,20 @@ export async function exportarRecurso(req: Request, res: Response, resourceKey: 
   // MULTIEMPRESA (Etapa 2.1): a exportação usa o MESMO recorte da listagem —
   // sem isto, /api/auditoria/export (e qualquer recurso com escopo) vazava
   // dados de todas as empresas. Consolidação segue o privilégio existente.
-  const filtroEscopo = aplicarFiltroEmpresa(r, filter, escopoDe(currentUser(req)));
+  const filtroEscopo = aplicarFiltroEmpresa(r, filter, escopo);
   let linhas: Row[] = [];
   let page = 1;
+  let totalEsperado = 0;
   for (;;) {
     const resul = await s.list(r, { q, page, pageSize: 500, sort, dir, filter: filtroEscopo });
+    totalEsperado = resul.total;
+    await validarReferenciasDeSaida(r, resul.rows, escopo);
     linhas.push(...resul.rows);
     if (page * 500 >= resul.total) break;
     page++;
-    if (page > 60) break; // trava de segurança: 30 mil linhas
+    if (page > 60) throw new HttpError(409, 'A exportação excede o limite seguro de 30.000 registros. Nenhum arquivo parcial foi enviado.');
   }
+  if (linhas.length < totalEsperado) throw new HttpError(409, 'A exportação ficou incompleta. Nenhum arquivo parcial foi enviado.');
   if (idsSel.size) linhas = linhas.filter((u) => idsSel.has(Number(u.id)));
   if (r.key === 'usuarios' && (filtroStatus || filtroMfa || filtroParado || filtroSenha || filtroAcesso)) {
     const agora = Date.now();

@@ -237,7 +237,7 @@ test('compras: linhas inválidas são recusadas antes de qualquer efeito', async
   await esperarErro(() => compras.receberParcial(reqDe({ itens: [{ item_compra_id: 0, quantidade: 1 }] }, { params: { id: compra.id } }), resFake().res), 400, /item_compra_id inválido/);
   await esperarErro(() => compras.receberParcial(reqDe({ itens: [{ item_compra_id: itemId, quantidade: 0 }] }, { params: { id: compra.id } }), resFake().res), 400, /maior que zero/);
   await esperarErro(() => compras.receberParcial(reqDe({ itens: [{ item_compra_id: 999999, quantidade: 1 }] }, { params: { id: compra.id } }), resFake().res), 404, /não pertence a esta compra/);
-  await esperarErro(() => compras.receberParcial(reqDe({ itens: [{ item_compra_id: itemId, quantidade: 1 }], local: 'armazem_fantasma' }, { params: { id: compra.id } }), resFake().res), 400, /não está cadastrado/);
+  await esperarErro(() => compras.receberParcial(reqDe({ itens: [{ item_compra_id: itemId, quantidade: 1 }], local: 'armazem_fantasma' }, { params: { id: compra.id } }), resFake().res), 404, /Local não encontrado/);
 });
 
 test('compras: cancelada não recebe', async () => {

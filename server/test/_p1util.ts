@@ -172,10 +172,11 @@ export async function novoTamanho(codigo: string) {
   return getStore().insert(RESOURCES.tamanhos, { codigo, nome: codigo, ativo: true });
 }
 
-export async function novoLocal(nome: string) {
-  const existente = await getStore().findOneWhere(RESOURCES.locais, { nome });
+export async function novoLocal(nome: string, empresaId = 1, padrao = false) {
+  const s = getStore();
+  const existente = await s.findOneWhere(RESOURCES.locais, { nome, empresa_id: empresaId });
   if (existente) return existente;
-  return getStore().insert(RESOURCES.locais, { codigo: nome.slice(0, 10).toUpperCase(), nome, tipo: 'loja', ativo: true });
+  return s.insert(RESOURCES.locais, { codigo: nome.slice(0, 10).toUpperCase(), nome, tipo: 'loja', ativo: true, padrao, empresa_id: empresaId });
 }
 
 /**
@@ -189,21 +190,47 @@ export async function novoLocal(nome: string) {
 export async function saldoInicial(produto: any, quantidade: number, opts: { codigoTamanho?: string; local?: string; custo?: number } = {}) {
   const tam = await novoTamanho(opts.codigoTamanho ?? 'U');
   const local = opts.local ?? 'loja';
+  const empresaId = Number(produto.empresa_id ?? 1);
   const s = getStore();
-  const existente = await s.findOneWhere(RESOURCES.estoques, { produto_id: Number(produto.id), tamanho_id: Number(tam.id), local });
+  let localRow = await novoLocal(local, empresaId, true);
+  if (await s.countWhere(RESOURCES.locais, { empresa_id: empresaId, padrao: true }) === 0 && localRow.padrao !== true) {
+    localRow = (await s.update(RESOURCES.locais, Number(localRow.id), { padrao: true })) ?? localRow;
+  }
+  const existente = await s.findOneWhere(RESOURCES.estoques, {
+    empresa_id: empresaId,
+    produto_id: Number(produto.id),
+    tamanho_id: Number(tam.id),
+    local_id: Number(localRow.id),
+  });
+  if (existente && (Number(existente.local_id) !== Number(localRow.id) || String(existente.local) !== String(localRow.nome))) {
+    throw new Error('Fixture de saldo encontrou vínculo canônico de local inconsistente.');
+  }
   const row = existente
     ? await s.update(RESOURCES.estoques, Number(existente.id), { quantidade })
     : await s.insert(RESOURCES.estoques, {
+        empresa_id: empresaId,
         produto_id: Number(produto.id),
         tamanho_id: Number(tam.id),
-        local,
+        local: String(localRow.nome),
+        local_id: Number(localRow.id),
         quantidade,
         custo_medio: opts.custo ?? Number(produto.custo ?? 40),
       });
-  return { estoque: row, tamanho: tam, local };
+  return { estoque: row, tamanho: tam, local: String(localRow.nome), local_id: Number(localRow.id) };
 }
 
 export async function saldoDe(produtoId: number, tamanhoId: number | null, local: string): Promise<number> {
-  const row = await getStore().findOneWhere(RESOURCES.estoques, { produto_id: produtoId, tamanho_id: tamanhoId, local });
+  const s = getStore();
+  const produto = await s.findOneWhere(RESOURCES.produtos, { id: produtoId });
+  if (!produto) return 0;
+  const dono = Number(produto.empresa_id ?? 1);
+  const localRow = await s.findOneWhere(RESOURCES.locais, { empresa_id: dono, nome: local });
+  if (!localRow) return 0;
+  const row = await s.findOneWhere(RESOURCES.estoques, {
+    empresa_id: dono,
+    produto_id: produtoId,
+    tamanho_id: tamanhoId,
+    local_id: Number(localRow.id),
+  });
   return Number(row?.quantidade ?? 0);
 }

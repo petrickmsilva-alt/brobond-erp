@@ -7,7 +7,7 @@ process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
 
 const { RESOURCES, getResource } = await import('../src/resources');
-const { createRecord, updateRecord, deleteRecord, getRecord, listRecords, getStore } = await import('../src/services');
+const { createRecord, updateRecord, deleteRecord, getRecord, listRecords, getStore, escopoDe } = await import('../src/services');
 const { validatePayload } = await import('../src/validate');
 const { HttpError } = await import('../src/errors');
 
@@ -244,7 +244,7 @@ test('financeiro: venda faturada carrega vencimento e parcelas no lançamento', 
   // parcelas, então o total precisa ser real.
   const { recalcularTotal } = await import('../src/itens');
   await recalcularTotal('venda', Number(venda.id));
-  await getStore().adjustStock(1, 1, 'loja', 10);
+  await getStore().adjustStock(1, 1, 'loja', 10, undefined, 1, 1);
   await updateRecord(RESOURCES.vendas, Number(venda.id), { status: 'faturada' }, admin);
   const lancs = await listRecords(RESOURCES.lancamentos_financeiros, { page: 1, pageSize: 50, filter: { referencia_tipo: 'venda', referencia_id: Number(venda.id) } });
   // Parcelamento real (Onda B): 3 parcelas reais, vencimentos mensais a partir do informado
@@ -276,12 +276,12 @@ test('locais: único Local padrão; movimentação sem local usa o padrão', asy
 
   // Garante estado inicial: loja é o padrão (mock).
   await updateRecord(RESOURCES.locais, 1, { padrao: true }, admin);
-  assert.equal(await getDefaultLocal(), 'loja');
+  assert.equal(await getDefaultLocal(undefined, escopoDe(admin)), 'loja');
 
   // Marca "expedicao" como padrão via CRUD -> loja deve ser desmarcada (apenas 1 padrão).
   const expedicao = await s.findOneWhere(RESOURCES.locais, { nome: 'expedicao' });
   await updateRecord(RESOURCES.locais, Number(expedicao.id), { padrao: true }, admin);
-  assert.equal(await getDefaultLocal(), 'expedicao', 'novo padrão de origem é a expedição');
+  assert.equal(await getDefaultLocal(undefined, escopoDe(admin)), 'expedicao', 'novo padrão de origem é a expedição');
   const loja = await s.findOneWhere(RESOURCES.locais, { nome: 'loja' });
   assert.equal(loja?.padrao, false, 'ao marcar outro padrão, o anterior é desmarcado');
 
@@ -292,5 +292,5 @@ test('locais: único Local padrão; movimentação sem local usa o padrão', asy
 
   // Restaura o padrão original.
   await updateRecord(RESOURCES.locais, 1, { padrao: true }, admin);
-  assert.equal(await getDefaultLocal(), 'loja');
+  assert.equal(await getDefaultLocal(undefined, escopoDe(admin)), 'loja');
 });

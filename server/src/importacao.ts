@@ -13,9 +13,9 @@
 import type { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import { HttpError } from './errors';
-import { empresaDoAtorAudit } from './empresa';
+import { carimbarEmpresa, empresaDoAtorAudit, validarReferenciasDaEmpresa } from './empresa';
 import { RESOURCES, getResource, type Resource } from './resources';
-import { checkAccess, createRecord, getDefaultLocal, getStore, toHttpError } from './services';
+import { checkAccess, ensureUniqueStock, escopoDe, getDefaultLocal, getStore, resolveLocal, toHttpError, validarTamanhoNaGrade } from './services';
 import { currentUser } from './auth';
 import type { Payload } from './store';
 import { parseCSV, parseNumeroTexto } from './csv';
@@ -85,7 +85,7 @@ function booleano(v: string | undefined, padrao = true): boolean {
 // Normalização por tipo: converte linhas da planilha em payloads da API
 // (ex.: "categoria" pelo nome → categoria_id; SKU → produto_id no saldo).
 // ----------------------------------------------------------------------------
-async function normalizarLinha(tipo: TipoImportacao, linha: Record<string, string>): Promise<Payload> {
+async function normalizarLinha(tipo: TipoImportacao, linha: Record<string, string>, escopo: ReturnType<typeof escopoDe>): Promise<Payload> {
   const s = getStore();
   const get = (...chaves: string[]): string | undefined => {
     for (const c of chaves) if (linha[c] !== undefined && linha[c] !== '') return linha[c];
@@ -95,15 +95,19 @@ async function normalizarLinha(tipo: TipoImportacao, linha: Record<string, strin
     const categoria = get('categoria', 'categoria_nome');
     let categoria_id: number | null = null;
     if (categoria) {
-      const c = await s.findOneWhere(RESOURCES.categorias, { nome: categoria });
+      const filtro = { nome: categoria };
+      if (await s.countWhere(RESOURCES.categorias, filtro) > 1) throw new HttpError(409, 'O nome da categoria não identifica um registro único. Informe um cadastro sem duplicidade.');
+      const c = await s.findOneWhere(RESOURCES.categorias, filtro);
       if (!c) throw new HttpError(400, `Categoria "${categoria}" não encontrada — cadastre-a antes.`, { categoria: 'Não encontrada' });
       categoria_id = Number(c.id);
     }
     const colecao = get('colecao', 'colecao_nome');
     let colecao_id: number | null = null;
     if (colecao) {
-      const c = await s.findOneWhere(RESOURCES.colecoes, { nome: colecao });
-      if (!c) throw new HttpError(400, `Coleção "${colecao}" não encontrada — cadastre-a antes.`, { colecao: 'Não encontrada' });
+      const filtro = { nome: colecao, empresa_id: escopo.empresaId };
+      if (await s.countWhere(RESOURCES.colecoes, filtro) > 1) throw new HttpError(409, 'O nome da coleção não identifica um registro único nesta empresa.');
+      const c = await s.findOneWhere(RESOURCES.colecoes, filtro);
+      if (!c) throw new HttpError(400, 'Coleção não encontrada nesta empresa — cadastre-a antes.', { colecao: 'Não encontrada' });
       colecao_id = Number(c.id);
     }
     return {
@@ -146,8 +150,10 @@ async function normalizarLinha(tipo: TipoImportacao, linha: Record<string, strin
     const fornecedor = get('fornecedor', 'fornecedor_nome');
     let fornecedor_id: number | null = null;
     if (fornecedor) {
-      const f = await s.findOneWhere(RESOURCES.fornecedores, { nome: fornecedor });
-      if (!f) throw new HttpError(400, `Fornecedor "${fornecedor}" não encontrado — cadastre-o antes.`, { fornecedor: 'Não encontrado' });
+      const filtro = { nome: fornecedor, empresa_id: escopo.empresaId };
+      if (await s.countWhere(RESOURCES.fornecedores, filtro) > 1) throw new HttpError(409, 'O nome do fornecedor não identifica um registro único nesta empresa.');
+      const f = await s.findOneWhere(RESOURCES.fornecedores, filtro);
+      if (!f) throw new HttpError(400, 'Fornecedor não encontrado nesta empresa — cadastre-o antes.', { fornecedor: 'Não encontrado' });
       fornecedor_id = Number(f.id);
     }
     return {
@@ -158,15 +164,30 @@ async function normalizarLinha(tipo: TipoImportacao, linha: Record<string, strin
       ativo: booleano(get('ativo'), true),
     };
   }
-  // estoque — saldo inicial: linhas produto × tamanho (SKU ou código do produto)
-  const produto = await s.findOneWhere(RESOURCES.produtos, { sku: get('produto', 'sku', 'referencia') || '' });
-  if (!produto) throw new HttpError(400, `Produto "${get('produto', 'sku', 'referencia')}" não encontrado — importe os produtos primeiro.`, { produto: 'SKU não encontrado' });
-  const tamanho = await s.findOneWhere(RESOURCES.tamanhos, { codigo: get('tamanho', 'codigo', 'tam') || '' });
-  if (!tamanho) throw new HttpError(400, `Tamanho "${get('tamanho', 'codigo', 'tam')}" não encontrado.`, { tamanho: 'Código não encontrado' });
+  // estoque — saldo inicial: SKU e local são sempre resolvidos na empresa ativa;
+  // tamanho vazio representa a única célula sem tamanho (NULL).
+  const sku = get('produto', 'sku', 'referencia') || '';
+  const filtroProduto = { sku, empresa_id: escopo.empresaId };
+  if (await s.countWhere(RESOURCES.produtos, filtroProduto) > 1) throw new HttpError(409, 'O SKU não identifica um único produto nesta empresa. Corrija as duplicidades antes de importar o saldo.');
+  const produto = await s.findOneWhere(RESOURCES.produtos, filtroProduto);
+  if (!produto) throw new HttpError(400, 'Produto não encontrado nesta empresa — importe-o primeiro.', { produto: 'SKU não encontrado' });
+  const tamanhoCodigo = get('tamanho', 'codigo', 'tam') || '';
+  if (tamanhoCodigo && await s.countWhere(RESOURCES.tamanhos, { codigo: tamanhoCodigo }) > 1) throw new HttpError(409, 'O código de tamanho não identifica um único tamanho.');
+  const tamanho = tamanhoCodigo ? await s.findOneWhere(RESOURCES.tamanhos, { codigo: tamanhoCodigo }) : null;
+  if (tamanhoCodigo && !tamanho) throw new HttpError(400, `Tamanho "${tamanhoCodigo}" não encontrado.`, { tamanho: 'Código não encontrado' });
+  const localNome = (get('local') || await getDefaultLocal(undefined, escopo)).trim();
+  const filtroLocal = { nome: localNome, empresa_id: escopo.empresaId };
+  if (await s.countWhere(RESOURCES.locais, filtroLocal) > 1) throw new HttpError(409, 'O nome do local não identifica um único local desta empresa. Selecione o local pelo ID e corrija as duplicidades.');
+  const local = await s.findOneWhere(RESOURCES.locais, filtroLocal);
+  if (!local) throw new HttpError(400, 'Local não encontrado nesta empresa — cadastre-o antes.', { local: 'Não encontrado' });
+  if (![true, 1, '1', 'true', 'TRUE', 'on', 'sim'].includes(local.ativo as any)) throw new HttpError(409, 'O local selecionado está inativo.');
+  const tamanhoId = tamanho ? Number(tamanho.id) : null;
+  await validarTamanhoNaGrade(Number(produto.id), tamanhoId, undefined, escopo);
   return {
     produto_id: Number(produto.id),
-    tamanho_id: Number(tamanho.id),
-    local: get('local') || (await getDefaultLocal()),
+    tamanho_id: tamanhoId,
+    local: String(local.nome),
+    local_id: Number(local.id),
     quantidade: parseNumeroTexto(get('quantidade', 'qtd', 'saldo')),
     estoque_min: parseNumeroTexto(get('estoque_min', 'minimo')),
   };
@@ -178,33 +199,44 @@ async function normalizarLinha(tipo: TipoImportacao, linha: Record<string, strin
 export async function previewImportacao(req: Request, res: Response) {
   const actor = currentUser(req);
   if (actor.perfil === 'operador') throw new HttpError(403, 'Somente gerentes e administradores importam planilhas.');
-  checkAccess(RESOURCES.produtos, actor, 'create');
   const tipo = String(req.body?.tipo || '') as TipoImportacao;
   if (!['produtos', 'clientes', 'fornecedores', 'insumos', 'estoque'].includes(tipo)) {
     throw new HttpError(400, 'Tipo de importação inválido. Use produtos, clientes, fornecedores, insumos ou estoque.');
   }
   const recurso = recursoDoTipo(tipo);
+  checkAccess(recurso, actor, 'create');
+  const escopo = escopoDe(actor);
   const s = getStore();
   try {
     const linhas = await lerArquivo((req.body || {}) as Record<string, unknown>);
     if (!linhas.length) throw new HttpError(400, 'A planilha está vazia ou sem linhas de dados.');
     const validas: Payload[] = [];
     const erros: { linha: number; mensagem: string; campos?: Record<string, unknown> }[] = [];
+    const celulasEstoque = new Set<string>();
     for (let i = 0; i < linhas.length; i++) {
       try {
-        const payload = await normalizarLinha(tipo, linhas[i]);
+        const payload = await normalizarLinha(tipo, linhas[i], escopo);
         const validated = validatePayload(recurso, payload, 'create');
-        // O saldo inicial de estoque também precisa de valores válidos
+        carimbarEmpresa(recurso, validated, escopo);
+        await validarReferenciasDaEmpresa(recurso, validated, escopo, (alvo, alvoId, empresaId) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }));
         if (tipo === 'estoque') {
-          if (!validated.produto_id || !validated.tamanho_id) throw new HttpError(400, 'Produto e tamanho são obrigatórios.');
+          if (!validated.produto_id) throw new HttpError(400, 'Produto é obrigatório.');
           if (validated.quantidade === null || validated.quantidade === undefined || Number(validated.quantidade) < 0) {
             throw new HttpError(400, 'Quantidade inválida.', { quantidade: 'Informe um número ≥ 0' });
           }
-          if (validated.local) {
-            const local = String(validated.local).trim();
-            const existe = await s.findOneWhere(RESOURCES.locais, { nome: local });
-            if (!existe) throw new HttpError(400, `Local "${local}" não encontrado — cadastre-o no módulo Locais.`, { local: 'Não encontrado' });
-          }
+          await validarTamanhoNaGrade(Number(validated.produto_id), validated.tamanho_id == null ? null : Number(validated.tamanho_id), undefined, escopo);
+          const filtro = {
+            empresa_id: escopo.empresaId,
+            produto_id: Number(validated.produto_id),
+            tamanho_id: validated.tamanho_id ?? null,
+            local: validated.local,
+          };
+          const existentes = await s.countWhere(RESOURCES.estoques, filtro);
+          if (existentes > 1) throw new HttpError(409, 'Há saldos históricos duplicados para este produto/tamanho/local. Corrija-os antes de importar.');
+          if (existentes === 1) throw new HttpError(409, 'Já existe saldo para este produto, tamanho e local.');
+          const chave = `${Number(validated.local_id)}:${Number(validated.produto_id)}:${validated.tamanho_id == null ? 'null' : Number(validated.tamanho_id)}`;
+          if (celulasEstoque.has(chave)) throw new HttpError(409, 'A planilha contém mais de uma linha para o mesmo produto/tamanho/local.');
+          celulasEstoque.add(chave);
         }
         validas.push(validated);
       } catch (e: any) {
@@ -236,6 +268,7 @@ export async function confirmarImportacao(req: Request, res: Response) {
   const linhas = Array.isArray((req.body || {}).linhas) ? ((req.body || {}).linhas as Payload[]) : [];
   if (!linhas.length) throw new HttpError(400, 'Nenhuma linha para importar.');
   checkAccess(recurso, actor, 'create');
+  const escopo = escopoDe(actor);
   const s = getStore();
   const etiqueta: Record<TipoImportacao, string> = { produtos: 'produtos', clientes: 'clientes', fornecedores: 'fornecedores', insumos: 'insumos', estoque: 'saldos iniciais de estoque' };
   try {
@@ -246,20 +279,31 @@ export async function confirmarImportacao(req: Request, res: Response) {
       for (const payload of linhas) {
         try {
           const validated = validatePayload(recurso, payload, 'create');
+          carimbarEmpresa(recurso, validated, escopo);
+          await validarReferenciasDaEmpresa(recurso, validated, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
           if (tipo === 'estoque') {
-            validated.local = String(validated.local || (await getDefaultLocal(tx)));
+            if (!validated.produto_id) throw new HttpError(400, 'Produto é obrigatório.');
+            if (validated.quantidade === null || validated.quantidade === undefined || Number(validated.quantidade) < 0) {
+              throw new HttpError(400, 'Quantidade inválida.', { quantidade: 'Informe um número ≥ 0' });
+            }
+            await resolveLocal(validated, tx, escopo);
+            await ensureUniqueStock(validated, null, tx, escopo);
+            await validarTamanhoNaGrade(Number(validated.produto_id), validated.tamanho_id == null ? null : Number(validated.tamanho_id), tx, escopo);
           }
           const row = await s.insert(recurso, validated, tx);
           if (tipo === 'estoque' && Number(row.quantidade) !== 0) {
             await s.insert(
               RESOURCES.movimentacoes,
-              { tipo: 'ajuste', produto_id: row.produto_id, tamanho_id: row.tamanho_id, local: row.local, quantidade: Number(row.quantidade), motivo: 'Importação de saldo inicial', usuario_id: actor.id || null },
+              { empresa_id: escopo.empresaId, tipo: 'ajuste', produto_id: row.produto_id, tamanho_id: row.tamanho_id ?? null, local: row.local, local_id: row.local_id ?? null, quantidade: Number(row.quantidade), motivo: 'Importação de saldo inicial', usuario_id: actor.id || null },
               tx
             );
           }
           ids.push(Number(row.id));
           importados++;
-        } catch {
+        } catch (e) {
+          // Uma referência estrangeira aborta o lote inteiro: nunca vira apenas
+          // uma linha "pulada" acompanhada de auditoria/escritas parciais.
+          if (e instanceof HttpError && e.status === 404) throw e;
           pulados++;
         }
       }
@@ -285,7 +329,11 @@ export async function confirmarImportacao(req: Request, res: Response) {
 }
 
 export async function modeloImportacao(req: Request, res: Response) {
+  const actor = currentUser(req);
+  if (actor.perfil === 'operador') throw new HttpError(403, 'Somente gerentes e administradores importam planilhas.');
   const tipo = String(req.query.tipo || 'produtos') as TipoImportacao;
+  if (!['produtos', 'clientes', 'fornecedores', 'insumos', 'estoque'].includes(tipo)) throw new HttpError(400, 'Tipo de importação inválido.');
+  checkAccess(recursoDoTipo(tipo), actor, 'create');
   const MOD: Record<TipoImportacao, { cab: string[]; ex: string[] }> = {
     produtos: {
       cab: ['sku', 'nome', 'categoria', 'colecao', 'cor', 'codigo_barras', 'composicao', 'ncm', 'peso_g', 'custo', 'preco_venda', 'ativo'],

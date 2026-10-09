@@ -19,9 +19,9 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
-import { checkAccess, getDefaultLocal, getStore, toHttpError } from './services';
-import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, escopoDeSistema, validarReferenciasDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
+import { checkAccess, escopoDe, getDefaultLocalInfo, getStore, resolveLocal, toHttpError, validarTamanhoNaGrade } from './services';
+import { currentUser } from './auth';
+import { assertRegistroDaEmpresa, validarReferenciasDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { aplicarEntradaDeCompra, estornarEntradasDeCompra } from './custoRecebimento';
 import type { Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
@@ -87,7 +87,7 @@ export async function listItens(req: Request, res: Response) {
   const r = pedidoConfig(tipo).itens;
   const actor = currentUser(req);
   checkAccess(pedidoConfig(tipo).parent, actor, 'read');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   await getPedido(tipo, id, escopo);
   const out = await getStore().list(r, { page: 1, pageSize: 500, sort: 'id', dir: 'asc', filter: { [pedidoConfig(tipo).parentCol]: id, empresa_id: escopo.empresaId } });
@@ -106,7 +106,7 @@ export async function createItem(req: Request, res: Response) {
   const cfg = pedidoConfig(tipo);
   const actor = currentUser(req);
   checkAccess(cfg.parent, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const s = getStore();
   try {
@@ -117,7 +117,7 @@ export async function createItem(req: Request, res: Response) {
       // MULTIEMPRESA: a empresa é carimbada pelo servidor e as referências
       // (produto/insumo/tamanho) são conferidas contra a empresa ativa.
       const payload: Row = { ...data, [cfg.parentCol]: id, empresa_id: escopo.empresaId };
-      await validarReferenciasDaEmpresa(cfg.itens, payload, escopo, (r, rid, t) => s.get(r, rid, t), tx);
+      await validarReferenciasDaEmpresa(cfg.itens, payload, escopo, (r, rid, empresaId, t) => s.findOneWhere(r, { id: rid, empresa_id: empresaId }, t), tx);
       if (tipo === 'venda') {
         const qtd = Number(payload.quantidade);
         const preco = Number(payload.preco_unitario);
@@ -153,7 +153,7 @@ export async function updateItem(req: Request, res: Response) {
   const cfg = pedidoConfig(tipo);
   const actor = currentUser(req);
   checkAccess(cfg.parent, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
   const s = getStore();
@@ -201,7 +201,7 @@ export async function deleteItem(req: Request, res: Response) {
   const cfg = pedidoConfig(tipo);
   const actor = currentUser(req);
   checkAccess(cfg.parent, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
   const s = getStore();
@@ -281,43 +281,69 @@ export async function recalcularTotal(tipo: TipoPedido, pedidoId: number, tx?: T
 // Venda → faturamento (baixa de estoque) e estorno
 // ----------------------------------------------------------------------------
 
-/** Saldo do produto/tamanho no local; null se não existe linha de estoque. */
-async function saldo(produtoId: number, tamanhoId: number, local: string, tx?: Tx): Promise<number | null> {
-  const row = await getStore().findOneWhere(getResource('estoques')!, { produto_id: produtoId, tamanho_id: tamanhoId, local }, tx);
+/** Local canônico da empresa: todas as novas escritas de saldo/movimento usam o ID. */
+type LocalEstoque = { id: number; nome: string };
+
+/** Saldo do produto/tamanho/local da empresa; null se ainda não há célula. */
+async function saldo(produtoId: number, tamanhoId: number | null, local: LocalEstoque, escopo: EscopoEmpresa, tx?: Tx): Promise<number | null> {
+  const rows = await getStore().list(getResource('estoques')!, {
+    page: 1,
+    pageSize: 20000,
+    filter: { empresa_id: escopo.empresaId, produto_id: produtoId },
+  }, tx);
+  const mesmoTamanho = (v: unknown) => (v === null || v === undefined ? null : Number(v)) === tamanhoId;
+  const row = rows.rows.find((e) =>
+    mesmoTamanho(e.tamanho_id) &&
+    (Number(e.local_id) === local.id || (e.local_id === null || e.local_id === undefined) && String(e.local || '') === local.nome)
+  );
   return row ? Number(row.quantidade || 0) : null;
 }
 
-async function faturarVenda(pedido: Row, actor: { id: number | null; name: string }, tx: Tx) {
+async function faturarVenda(pedido: Row, actor: { id: number | null; name: string }, tx: Tx, escopo: EscopoEmpresa) {
   const s = getStore();
-  const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { venda_id: Number(pedido.id) } }, tx);
+  const empresaId = escopo.empresaId;
+  const itens = await s.list(getResource('itens_venda')!, {
+    page: 1,
+    pageSize: 1000,
+    filter: { empresa_id: empresaId, venda_id: Number(pedido.id) },
+  }, tx);
   if (!itens.rows.length) throw new HttpError(409, 'Adicione ao menos um item antes de faturar o pedido.');
 
-  const localSaida = (String(pedido.local_saida || '').trim() || (await getDefaultLocal(tx)));
+  const localPadraoInfo = await getDefaultLocalInfo(tx, escopo);
+  if (!localPadraoInfo) throw new HttpError(409, 'A empresa ativa não possui um local de estoque ativo. Cadastre um local antes de faturar.');
+  const localPadrao: LocalEstoque = { id: Number(localPadraoInfo.id), nome: String(localPadraoInfo.nome) };
+  const localSaidaData: Record<string, unknown> = pedido.local_saida ? { local: String(pedido.local_saida).trim() } : { local_id: localPadrao.id };
+  await resolveLocal(localSaidaData, tx, escopo);
+  const localSaida: LocalEstoque = { id: Number(localSaidaData.local_id), nome: String(localSaidaData.local) };
+
   // Escolhe, por item, o local com saldo: local de saída configurado → Local padrão.
   const faltas: string[] = [];
-  const plano: { item: Row; local: string; qtd: number }[] = [];
-  const localPadraoFallback = await getDefaultLocal(tx);
+  const plano: { item: Row; local: LocalEstoque; qtd: number; tamanhoId: number | null }[] = [];
   for (const it of itens.rows) {
     const produtoId = Number(it.produto_id);
-    const tamanhoId = Number(it.tamanho_id);
+    const tamanhoId = it.tamanho_id === null || it.tamanho_id === undefined || it.tamanho_id === '' ? null : Number(it.tamanho_id);
     const qtd = Number(it.quantidade);
+    const prod = await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: empresaId }, tx);
+    if (!prod) throw new HttpError(404, 'Produto não encontrado.');
+    const tam = tamanhoId === null ? null : await s.findOneWhere(getResource('tamanhos')!, { id: tamanhoId }, tx);
+    if (tamanhoId !== null && !tam) throw new HttpError(404, 'Tamanho não encontrado.');
+    await validarTamanhoNaGrade(produtoId, tamanhoId, tx, escopo);
+
     let local = localSaida;
-    let disp = await saldo(produtoId, tamanhoId, localSaida, tx);
-    if ((disp === null || disp < qtd) && localSaida !== localPadraoFallback) {
-      const alt = await saldo(produtoId, tamanhoId, localPadraoFallback, tx);
+    let disp = await saldo(produtoId, tamanhoId, localSaida, escopo, tx);
+    if ((disp === null || disp < qtd) && localSaida.id !== localPadrao.id) {
+      const alt = await saldo(produtoId, tamanhoId, localPadrao, escopo, tx);
       if (alt !== null && alt >= qtd && (disp === null || alt >= disp)) {
-        local = localPadraoFallback;
+        local = localPadrao;
         disp = alt;
       }
     }
-    const prod = await s.findOneWhere(getResource('produtos')!, { id: produtoId }, tx);
-    const tam = await s.findOneWhere(getResource('tamanhos')!, { id: tamanhoId }, tx);
-    const nome = prod ? labelOf(getResource('produtos')!, prod) : `#${produtoId}`;
+    const nome = labelOf(getResource('produtos')!, prod);
     if (disp === null || disp < qtd) {
-      faltas.push(`${nome} tam. ${tam?.codigo || '?'}: precisa de ${qtd}, há ${Math.max(0, disp ?? 0)} em "${local}"`);
+      faltas.push(`${nome}${tam ? ` tam. ${tam.codigo}` : ''}: precisa de ${qtd}, há ${Math.max(0, disp ?? 0)} em "${local.nome}"`);
       continue;
     }
-    plano.push({ item: it, local, qtd });
+    plano.push({ item: it, local, qtd, tamanhoId });
   }
   if (faltas.length) {
     throw new HttpError(
@@ -327,25 +353,24 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
   }
 
   for (const p of plano) {
-    // Checar a disponibilidade e abater depois não basta: entre o `disp < qtd`
-    // acima e este loop outro pedido pode ter levado as peças. O abatimento é
-    // condicional na própria escrita.
-    const aplicado = await s.tryAdjustStock(Number(p.item.produto_id), Number(p.item.tamanho_id), p.local, -p.qtd, tx);
+    const produtoId = Number(p.item.produto_id);
+    const aplicado = await s.tryAdjustStock(produtoId, p.tamanhoId, p.local.nome, -p.qtd, tx, 0, p.local.id, empresaId);
     if (!aplicado) {
-      const saldo = await s.findOneWhere(getResource('estoques')!, { produto_id: Number(p.item.produto_id), tamanho_id: Number(p.item.tamanho_id), local: p.local }, tx);
-      const atual = Number(saldo?.quantidade ?? 0);
+      const atual = await saldo(produtoId, p.tamanhoId, p.local, escopo, tx) ?? 0;
       throw new HttpError(
         409,
-        `O saldo mudou durante o faturamento: só há ${atual} peça(s) do produto ${p.item.produto_id} tam. ${p.item.tamanho_id} em "${p.local}", e o pedido precisa de ${p.qtd}. Confirme o estoque e fature de novo.`
+        `O saldo mudou durante o faturamento: só há ${atual} peça(s) do produto ${produtoId}${p.tamanhoId === null ? '' : ` tam. ${p.tamanhoId}`} em "${p.local.nome}", e o pedido precisa de ${p.qtd}. Confirme o estoque e fature de novo.`
       );
     }
     await s.insert(
       getResource('movimentacoes')!,
       {
+        empresa_id: empresaId,
         tipo: 'saida',
-        produto_id: p.item.produto_id,
-        tamanho_id: p.item.tamanho_id,
-        local: p.local,
+        produto_id: produtoId,
+        tamanho_id: p.tamanhoId,
+        local: p.local.nome,
+        local_id: p.local.id,
         quantidade: p.qtd,
         motivo: `Venda #${pedido.id}`,
         usuario_id: actor.id || null,
@@ -358,8 +383,9 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
   let comissaoPct: number | null = null;
   let comissaoValor: number | null = 0;
   if (pedido.representante_id) {
-    const rep = await s.findOneWhere(getResource('representantes')!, { id: Number(pedido.representante_id) }, tx);
-    comissaoPct = rep ? round2(Number(rep.comissao_pct || 0)) : 0;
+    const rep = await s.findOneWhere(getResource('representantes')!, { id: Number(pedido.representante_id), empresa_id: empresaId }, tx);
+    if (!rep) throw new HttpError(404, 'Representante não encontrado.');
+    comissaoPct = round2(Number(rep.comissao_pct || 0));
     const totalItens = itens.rows.reduce((sum, it) => sum + Number(it.subtotal || 0), 0);
     comissaoValor = round2((totalItens * comissaoPct) / 100);
   }
@@ -384,25 +410,45 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
   );
 }
 
-async function estornarVenda(pedido: Row, actor: { id: number | null; name: string }, tx: Tx) {
+async function estornarVenda(pedido: Row, actor: { id: number | null; name: string }, tx: Tx, escopo: EscopoEmpresa) {
   const s = getStore();
+  const empresaId = escopo.empresaId;
   const movs = await s.list(
     getResource('movimentacoes')!,
-    { page: 1, pageSize: 1000, sort: 'id', dir: 'desc', filter: { tipo: 'saida', motivo: `Venda #${pedido.id}` } },
+    { page: 1, pageSize: 1000, sort: 'id', dir: 'desc', filter: { empresa_id: empresaId, tipo: 'saida', motivo: `Venda #${pedido.id}` } },
     tx
   );
-  // Estorna cada saída correspondente (entrada de volta ao mesmo local).
+  // Estorna apenas saídas da mesma empresa e resolve o local legado estritamente
+  // dentro dela; IDs/textos de outro tenant nunca participam do efeito.
   const saidas = movs.rows.filter((m) => String(m.motivo) === `Venda #${pedido.id}`);
   for (const m of saidas) {
-    await s.adjustStock(Number(m.produto_id), Number(m.tamanho_id), String(m.local), Number(m.quantidade), tx);
+    const produtoId = Number(m.produto_id);
+    const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: empresaId }, tx);
+    if (!produto) throw new HttpError(404, 'Produto não encontrado.');
+    const tamanhoId = m.tamanho_id === null || m.tamanho_id === undefined ? null : Number(m.tamanho_id);
+    await validarTamanhoNaGrade(produtoId, tamanhoId, tx, escopo);
+    const quantidade = Number(m.quantidade);
+    if (!Number.isInteger(quantidade) || quantidade <= 0) throw new HttpError(409, 'Não é possível estornar uma movimentação histórica com quantidade inválida. Nenhum saldo foi alterado.');
+    if ((m.local_id === null || m.local_id === undefined || m.local_id === '') && !String(m.local || '').trim()) {
+      throw new HttpError(409, 'Não é possível estornar uma movimentação histórica sem local de estoque válido. Nenhum saldo foi alterado.');
+    }
+    const localData: Record<string, unknown> = {};
+    if (m.local_id !== null && m.local_id !== undefined && m.local_id !== '') localData.local_id = m.local_id;
+    else localData.local = String(m.local).trim();
+    await resolveLocal(localData, tx, escopo);
+    const localId = Number(localData.local_id);
+    const local = String(localData.local);
+    await s.adjustStock(produtoId, tamanhoId, local, quantidade, tx, localId, empresaId);
     await s.insert(
       getResource('movimentacoes')!,
       {
+        empresa_id: empresaId,
         tipo: 'entrada',
-        produto_id: m.produto_id,
-        tamanho_id: m.tamanho_id,
-        local: m.local,
-        quantidade: Number(m.quantidade),
+        produto_id: produtoId,
+        tamanho_id: tamanhoId,
+        local,
+        local_id: localId,
+        quantidade,
         motivo: `Estorno — Venda #${pedido.id} cancelada`,
         usuario_id: actor.id || null,
       },
@@ -519,8 +565,11 @@ export async function aplicarRegrasPedido(
   data: Record<string, unknown>,
   actor: { id: number | null; name: string },
   tx: Tx,
-  escopo?: EscopoEmpresa
+  escopo: EscopoEmpresa
 ): Promise<void> {
+  const pai = pedidoConfig(tipo).parent;
+  assertRegistroDaEmpresa(pai, after, escopo);
+  if (before) assertRegistroDaEmpresa(pai, before, escopo);
   // Recalcula o total quando desconto/frete mudam (os itens recalcam sozinhos).
   if (tipo === 'venda' && (data.desconto !== undefined || data.frete !== undefined)) {
     await recalcularTotal('venda', Number(after.id), tx);
@@ -545,13 +594,13 @@ export async function aplicarRegrasPedido(
     }
     if (!before && ehFaturado) {
       // Criado já como faturado: fatura na hora.
-      await faturarVenda(after, actor, tx);
+      await faturarVenda(after, actor, tx, escopo);
       return;
     }
     if (!eraFaturado && ehFaturado) {
-      await faturarVenda(after, actor, tx);
+      await faturarVenda(after, actor, tx, escopo);
     } else if (eraFaturado && statusNovo === 'cancelada') {
-      await estornarVenda(before!, actor, tx);
+      await estornarVenda(before!, actor, tx, escopo);
     }
     return;
   }
@@ -569,13 +618,9 @@ export async function aplicarRegrasPedido(
   if (tinhaEntrada && !ehRecebido && statusNovo !== 'cancelado') {
     throw new HttpError(409, 'Compra recebida não pode voltar para pendente. Para desfazer o recebimento, cancele a compra (o estoque de insumos é estornado).');
   }
-  // Sem escopo do ator (chamada interna antiga), cai no escopo da linha. Só é
-  // aceitável porque services.ts — o único caminho de compra — valida o pedido
-  // contra o escopo do ator ANTES de chegar aqui (assertRegistroDaEmpresa).
-  const escopoCompra = escopo ?? escopoDeSistema(Number(after.empresa_id));
   if ((!before || !eraRecebido) && ehRecebido) {
-    await receberCompra(after, actor, tx, escopoCompra);
+    await receberCompra(after, actor, tx, escopo);
   } else if (tinhaEntrada && statusNovo === 'cancelado') {
-    await estornarCompra(before!, actor, tx, escopoCompra);
+    await estornarCompra(before!, actor, tx, escopo);
   }
 }

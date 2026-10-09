@@ -481,7 +481,7 @@ test('devolução: não se recebe mais do que foi solicitado nem estado inválid
     400,
     /negativa/
   );
-  await esperarErro(() => exp.receberDevolucao(reqDe({ local: 'armazem_inexistente' }, { params: { id } }), resFake().res), 400, /não está cadastrado/);
+  await esperarErro(() => exp.receberDevolucao(reqDe({ local: 'armazem_inexistente' }, { params: { id } }), resFake().res), 404, /Local não encontrado/);
   // Zero recebido → nada a dar entrada.
   await esperarErro(() => exp.receberDevolucao(reqDe({ itens: [{ id: itemDevId, quantidade_recebida: 0, estado: 'bom' }] }, { params: { id } }), resFake().res), 409, /Nenhuma unidade foi recebida/);
 });

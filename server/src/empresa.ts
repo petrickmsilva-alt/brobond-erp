@@ -215,6 +215,16 @@ export function assertRegistroDaEmpresa(r: Resource, row: Row | null | undefined
   return row;
 }
 
+/** Consolidação amplia leituras, mas nunca transforma uma escrita em operação multiempresa. */
+export function assertRegistroDaEmpresaParaEscrita(
+  r: Resource,
+  row: Row | null | undefined,
+  escopo: EscopoEmpresa | null | undefined
+): Row {
+  const estrito = escopo?.consolidado ? { ...escopo, consolidado: false } : escopo;
+  return assertRegistroDaEmpresa(r, row, estrito);
+}
+
 /**
  * Carimba a empresa no payload de criação. O valor vindo do cliente é
  * ignorado — quem decide é o servidor.
@@ -238,7 +248,7 @@ export function protegerEmpresaNaEdicao(r: Resource, data: Payload): Payload {
 // Integridade referencial entre empresas
 // ---------------------------------------------------------------------------
 
-type LeitorRegistro = (r: Resource, id: number, tx?: Tx) => Promise<Row | null>;
+type LeitorRegistro = (r: Resource, id: number, empresaId: number, tx?: Tx) => Promise<Row | null>;
 
 /**
  * Impede o "ID forjado": uma venda da Empresa A não pode referenciar um
@@ -254,7 +264,10 @@ export async function validarReferenciasDaEmpresa(
   ler: LeitorRegistro,
   tx?: Tx
 ): Promise<void> {
-  if (!escopo || escopo.consolidado) return;
+  if (!escopo) return;
+  // A consolidação autoriza leitura, nunca uma escrita que combine empresas.
+  // Em operações de escrita a referência precisa pertencer à empresa ativa.
+  const escopoEscrita = escopo.consolidado ? { ...escopo, consolidado: false } : escopo;
   for (const field of r.fields) {
     if (field.type !== 'ref' || !field.ref) continue;
     const valor = data[field.name];
@@ -263,11 +276,11 @@ export async function validarReferenciasDaEmpresa(
     if (!alvo || !temEscopoEmpresa(alvo)) continue;
     const id = Number(valor);
     if (!Number.isInteger(id) || id <= 0) continue;
-    const row = await ler(alvo, id, tx);
-    if (!row || !registroNoEscopo(alvo, row, escopo)) {
-      throw new HttpError(400, `${field.label}: o registro selecionado não pertence à empresa ativa.`, {
-        [field.name]: 'Registro de outra empresa',
-      });
+    const row = await ler(alvo, id, escopoEscrita.empresaId, tx);
+    // O mesmo 404 cobre IDs inexistentes e IDs existentes em outra empresa:
+    // a API não confirma nem o nome nem o dono de uma referência estrangeira.
+    if (!row || !registroNoEscopo(alvo, row, escopoEscrita)) {
+      throw new HttpError(404, `${field.label} não encontrado(a).`);
     }
   }
 }

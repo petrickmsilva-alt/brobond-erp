@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 
 process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
+delete process.env.WOOCOMMERCE_EMPRESA_ID;
 delete process.env.WOOCOMMERCE_URL;
 delete process.env.WOOCOMMERCE_CK;
 delete process.env.WOOCOMMERCE_CS;
@@ -50,10 +51,12 @@ function espionarFetch(responder: (url: string, init?: RequestInit) => unknown):
 }
 
 function comLoja<T>(fn: () => Promise<T>): Promise<T> {
+  process.env.WOOCOMMERCE_EMPRESA_ID = '1';
   process.env.WOOCOMMERCE_URL = LOJA;
   process.env.WOOCOMMERCE_CK = 'ck_teste';
   process.env.WOOCOMMERCE_CS = 'cs_teste';
   return fn().finally(() => {
+    delete process.env.WOOCOMMERCE_EMPRESA_ID;
     delete process.env.WOOCOMMERCE_URL;
     delete process.env.WOOCOMMERCE_CK;
     delete process.env.WOOCOMMERCE_CS;
@@ -88,6 +91,20 @@ async function novoProduto(dados: Record<string, unknown> = {}) {
     exibir_site: true,
     ativo: true,
     ...dados,
+  });
+}
+
+async function inserirSaldo(produto: any, tamanho: any, quantidade: number) {
+  const s = getStore();
+  let local = await s.findOneWhere(RESOURCES.locais, { empresa_id: 1, padrao: true });
+  if (!local) local = await s.insert(RESOURCES.locais, { empresa_id: 1, nome: 'loja', tipo: 'loja', ativo: true, padrao: true });
+  return s.insert(RESOURCES.estoques, {
+    empresa_id: 1,
+    produto_id: Number(produto.id),
+    tamanho_id: Number(tamanho.id),
+    local: String(local.nome),
+    local_id: Number(local.id),
+    quantidade,
   });
 }
 
@@ -143,7 +160,7 @@ describe('Importação de pedidos da loja', () => {
     await comLoja(async () => {
       const produto = await novoProduto({ sku: 'CAM-BB-AZUL', nome: 'Camiseta Bordada BB Azul', preco_venda: 90 });
       const tamanho = await novoTamanho('M');
-      await getStore().insert(RESOURCES.estoques, { produto_id: Number(produto.id), tamanho_id: Number(tamanho.id), quantidade: 12 });
+      await inserirSaldo(produto, tamanho, 12);
 
       const { chamadas, restaurar } = espionarFetch((url) =>
         url.includes('/orders?')
@@ -298,7 +315,7 @@ describe('Estoque: ERP → loja', () => {
     await comLoja(async () => {
       const produto = await novoProduto({ sku: 'CALCA-JEANS-CLARA', nome: 'Calça Jeans Clara' });
       const tamanho = await novoTamanho('40');
-      await getStore().insert(RESOURCES.estoques, { produto_id: Number(produto.id), tamanho_id: Number(tamanho.id), quantidade: 7 });
+      await inserirSaldo(produto, tamanho, 7);
 
       const enviados: { url: string; corpo: any }[] = [];
       const { restaurar } = espionarFetch((url, init) => {
@@ -330,8 +347,8 @@ describe('Estoque: ERP → loja', () => {
       const produto = await novoProduto({ sku: 'CAM-BASICA', nome: 'Camiseta Básica' });
       const p = await novoTamanho('P');
       const g = await novoTamanho('G');
-      await getStore().insert(RESOURCES.estoques, { produto_id: Number(produto.id), tamanho_id: Number(p.id), quantidade: 3 });
-      await getStore().insert(RESOURCES.estoques, { produto_id: Number(produto.id), tamanho_id: Number(g.id), quantidade: 5 });
+      await inserirSaldo(produto, p, 3);
+      await inserirSaldo(produto, g, 5);
 
       const enviados: any[] = [];
       const { restaurar } = espionarFetch((url, init) => {

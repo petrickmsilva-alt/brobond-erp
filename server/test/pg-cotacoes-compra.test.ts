@@ -226,21 +226,21 @@ test('E3-PG: itens_compra tem as colunas de rateio de custo, com default 0 e CHE
   assert.ok(cols.rows.every((r: any) => String(r.column_default ?? '').includes('0')), 'o default deveria ser 0');
 
   const emp = await novaEmpresa(`Empresa Custo ${SUFIXO}`, `44${SUFIXO.slice(0, 12)}`);
-  const { fornecedorId } = await cenario(emp, `custo-${SUFIXO}`);
+  const { fornecedorId, insumoId } = await cenario(emp, `custo-${SUFIXO}`);
   const compra = await q(
     `INSERT INTO compras (empresa_id, fornecedor_id, data, status, total) VALUES ($1, $2, CURRENT_DATE, 'pendente', 100) RETURNING id`,
     [emp, fornecedorId]
   );
   const linha = await q(
-    `INSERT INTO itens_compra (empresa_id, compra_id, insumo_id, quantidade, preco_unitario) VALUES ($1, $2, 1, 2, 10) RETURNING custo_frete_rateado, custo_impostos`,
-    [emp, Number(compra.rows[0].id)]
+    `INSERT INTO itens_compra (empresa_id, compra_id, insumo_id, quantidade, preco_unitario) VALUES ($1, $2, $3, 2, 10) RETURNING custo_frete_rateado, custo_impostos`,
+    [emp, Number(compra.rows[0].id), insumoId]
   );
   assert.equal(Number(linha.rows[0].custo_frete_rateado), 0, 'custo_frete_rateado deveria nascer zerado');
   assert.equal(Number(linha.rows[0].custo_impostos), 0, 'custo_impostos deveria nascer zerado');
 
   const freteNeg = await sqlstateDe(
-    `INSERT INTO itens_compra (empresa_id, compra_id, insumo_id, quantidade, preco_unitario, custo_frete_rateado) VALUES ($1, $2, 1, 2, 10, -5)`,
-    [emp, Number(compra.rows[0].id)]
+    `INSERT INTO itens_compra (empresa_id, compra_id, insumo_id, quantidade, preco_unitario, custo_frete_rateado) VALUES ($1, $2, $3, 2, 10, -5)`,
+    [emp, Number(compra.rows[0].id), insumoId]
   );
   assert.equal(freteNeg, '23514', 'custo_frete_rateado negativo foi aceito');
 });

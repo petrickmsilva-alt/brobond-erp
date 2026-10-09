@@ -34,10 +34,10 @@ import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getStore, escopoDe } from './services';
-import { currentUser, type AuthUser } from './auth';
+import { currentUser } from './auth';
 import { parseId } from './validate';
 import { labelOf, type Row, type Tx } from './store';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoAtorAudit, empresaDoRegistroAudit } from './empresa';
+import { assertRegistroDaEmpresa, type EscopoEmpresa, empresaDoAtorAudit, empresaDoRegistroAudit } from './empresa';
 import { aplicarRegrasPedido } from './itens';
 import { syncLancamentoVenda } from './financeiro';
 import { cifrarSegredo, decifrarSegredo, mascararSegredo, pareceCifrado, chaveFraca } from './segredos';
@@ -389,7 +389,7 @@ export async function emitirDocumento(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_VENDA(), actor, 'update');
   const vendaId = parseId(req.params.id);
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const empresaId = escopo.empresaId;
   const s = getStore();
 
@@ -504,7 +504,7 @@ export async function emitirDocumento(req: Request, res: Response) {
     resposta = { status: 'erro', mensagem: `Falha de comunicação com ${provider.nome}: ${e?.message || e}` };
   }
 
-  const atualizado = await aplicarResposta(Number(doc.id), resposta, actor, { config, modelo, numero: numeracao.numero });
+  const atualizado = await aplicarResposta(Number(doc.id), resposta, actor, { config, modelo, numero: numeracao.numero }, escopo);
   const autorizado = String(atualizado.status) === 'autorizado';
   res.status(autorizado ? 200 : 202).json(await respostaDocumento(atualizado, autorizado));
 }
@@ -519,12 +519,12 @@ async function aplicarResposta(
   docId: number,
   resposta: RespostaFiscal,
   actor: { id: number | null; name: string },
-  ctx: { config: Row; modelo: '55' | '65'; numero: number | null }
+  ctx: { config: Row; modelo: '55' | '65'; numero: number | null },
+  escopo: EscopoEmpresa
 ): Promise<Row> {
   const s = getStore();
   const gravado = await s.transaction(async (tx) => {
-    const doc = await s.get(R_DOC(), docId, tx);
-    if (!doc) throw new HttpError(404, 'Documento fiscal não encontrado.');
+    const doc = assertRegistroDaEmpresa(R_DOC(), await s.get(R_DOC(), docId, tx), escopo);
     const agora = new Date().toISOString();
 
     if (resposta.status === 'autorizado') {
@@ -584,23 +584,21 @@ async function aplicarResposta(
   // e a reaplicação pode ser feita depois sem emitir nada de novo.
   try {
     await s.transaction(async (tx) => {
-      const doc = await s.get(R_DOC(), docId, tx);
-      if (doc) await aplicarEfeitosDaAutorizacao(doc, actor, tx);
+      const doc = assertRegistroDaEmpresa(R_DOC(), await s.get(R_DOC(), docId, tx), escopo);
+      await aplicarEfeitosDaAutorizacao(doc, actor, tx, escopo);
     });
   } catch (e: any) {
     const motivo =
       `NOTA AUTORIZADA na SEFAZ, mas os efeitos no ERP não puderam ser aplicados: ${e?.message || e} ` +
       'O documento fiscal é válido; o estoque e o financeiro deste pedido precisam de ajuste manual.';
     await s.transaction(async (tx) => {
-      const doc = await s.get(R_DOC(), docId, tx);
-      if (doc) {
-        await registrarEvento(doc, 'autorizado', 'erro', motivo, null, actor, tx);
-        await s.update(R_DOC(), docId, { motivo }, tx);
-      }
+      const doc = assertRegistroDaEmpresa(R_DOC(), await s.get(R_DOC(), docId, tx), escopo);
+      await registrarEvento(doc, 'autorizado', 'erro', motivo, null, actor, tx);
+      await s.update(R_DOC(), docId, { motivo }, tx);
     });
   }
 
-  return (await s.get(R_DOC(), docId))!;
+  return assertRegistroDaEmpresa(R_DOC(), await s.get(R_DOC(), docId), escopo);
 }
 
 /**
@@ -611,13 +609,13 @@ async function aplicarResposta(
  * `aplicarRegrasPedido` (itens.ts + financeiro.ts), exatamente como no
  * faturamento manual.
  */
-async function aplicarEfeitosDaAutorizacao(doc: Row, actor: { id: number | null; name: string }, tx: Tx): Promise<void> {
+async function aplicarEfeitosDaAutorizacao(doc: Row, actor: { id: number | null; name: string }, tx: Tx, escopo: EscopoEmpresa): Promise<void> {
   const s = getStore();
+  assertRegistroDaEmpresa(R_DOC(), doc, escopo);
   if (doc.estoque_baixado_em) return; // já aplicado — idempotente
   if (!doc.venda_id) return;
 
-  const venda = await s.get(R_VENDA(), Number(doc.venda_id), tx);
-  if (!venda) return;
+  const venda = assertRegistroDaEmpresa(R_VENDA(), await s.get(R_VENDA(), Number(doc.venda_id), tx), escopo);
 
   const jaFaturada = ['faturada', 'entregue'].includes(String(venda.status));
   if (!jaFaturada) {
@@ -626,7 +624,7 @@ async function aplicarEfeitosDaAutorizacao(doc: Row, actor: { id: number | null;
     // estoque + comissão (itens.ts) e contas a receber (financeiro.ts).
     // Nenhum motor novo — só a mesma sequência, agora disparada pela
     // autorização da SEFAZ.
-    await aplicarRegrasPedido('venda', venda, atualizada, { status: 'faturada' }, actor, tx);
+    await aplicarRegrasPedido('venda', venda, atualizada, { status: 'faturada' }, actor, tx, escopo);
     await syncLancamentoVenda(venda, atualizada, { status: 'faturada' }, actor, tx);
   }
 
@@ -701,7 +699,7 @@ export async function situacaoFiscalVenda(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_VENDA(), actor, 'read');
   const vendaId = parseId(req.params.id);
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const s = getStore();
 
   const venda = await s.get(R_VENDA(), vendaId);
@@ -729,7 +727,7 @@ export async function situacaoFiscalVenda(req: Request, res: Response) {
 export async function eventosDocumento(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_DOC(), actor, 'read');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const doc = await carregarDocumento(parseId(req.params.id), escopo);
   const eventos = await getStore().list(R_EVT(), { page: 1, pageSize: 200, sort: 'id', dir: 'desc', filter: { documento_id: Number(doc.id) } });
   res.json({ documento: await respostaDocumento(doc, String(doc.status) === 'autorizado'), eventos: eventos.rows });
@@ -739,7 +737,7 @@ export async function eventosDocumento(req: Request, res: Response) {
 export async function consultarDocumento(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_VENDA(), actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const doc = await carregarDocumento(parseId(req.params.id), escopo);
 
   const config = await configDaEmpresa(escopo.empresaId);
@@ -759,7 +757,7 @@ export async function consultarDocumento(req: Request, res: Response) {
     modelo: String(doc.modelo) === '65' ? '65' : '55',
     // Na consulta a numeração não é devolvida: o documento pode existir lá.
     numero: null,
-  });
+  }, escopo);
   res.json(await respostaDocumento(atualizado, String(atualizado.status) === 'autorizado'));
 }
 
@@ -767,7 +765,7 @@ export async function consultarDocumento(req: Request, res: Response) {
 export async function cancelarDocumento(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_VENDA(), actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const doc = await carregarDocumento(parseId(req.params.id), escopo);
   const s = getStore();
 
@@ -843,7 +841,7 @@ export async function cancelarDocumento(req: Request, res: Response) {
 export async function inutilizarNumeracao(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_INUT(), actor, 'create');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const s = getStore();
   const body = (req.body || {}) as Record<string, unknown>;
 
@@ -911,7 +909,7 @@ export async function inutilizarNumeracao(req: Request, res: Response) {
 export async function obterConfigFiscal(req: Request, res: Response) {
   const actor = currentUser(req);
   if (actor.perfil !== 'admin') throw new HttpError(403, 'Só administradores veem a configuração fiscal.');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const config = await configDaEmpresa(escopo.empresaId);
   const empresa = await empresaAtiva(escopo.empresaId);
   const provider = obterFiscalProvider(config.provider as string);
@@ -955,7 +953,7 @@ export async function obterConfigFiscal(req: Request, res: Response) {
 export async function salvarConfigFiscal(req: Request, res: Response) {
   const actor = currentUser(req);
   if (actor.perfil !== 'admin') throw new HttpError(403, 'Só administradores alteram a configuração fiscal.');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const s = getStore();
   const config = await configDaEmpresa(escopo.empresaId);
   const body = (req.body || {}) as Record<string, unknown>;
@@ -1045,7 +1043,7 @@ export async function previaDocumento(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_VENDA(), actor, 'read');
   const vendaId = parseId(req.params.id);
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const modelo: '55' | '65' = String(req.query.modelo || '55') === '65' ? '65' : '55';
 
   const venda = await getStore().get(R_VENDA(), vendaId);

@@ -70,11 +70,10 @@ async function cenario(tag: string, opts: { custoInicial?: number; saldoInicial?
     empresa_id: empresaId,
     ativo: true,
   });
-  // receberParcial resolve o local pelo NOME ('loja'). locais.nome é UNIQUE
-  // GLOBAL (não por empresa) — então é criar uma vez e reusar, como o novoLocal
-  // do _p1util faz no memdb.
-  if (!(await s.findOneWhere(RESOURCES.locais, { nome: 'loja' }))) {
-    await s.insert(RESOURCES.locais, { codigo: 'LOJA', nome: 'loja', tipo: 'loja', ativo: true, empresa_id: empresaId });
+  // Cada empresa possui seu próprio local padrão. O mesmo nome é permitido
+  // entre tenants; nunca se reutiliza o vínculo da primeira empresa criada.
+  if (!(await s.findOneWhere(RESOURCES.locais, { nome: 'loja', empresa_id: empresaId }))) {
+    await s.insert(RESOURCES.locais, { codigo: 'LOJA', nome: 'loja', tipo: 'loja', ativo: true, padrao: true, empresa_id: empresaId });
   }
   const fornecedor = await s.insert(RESOURCES.fornecedores, { nome: `Forn ${tag} ${seq}`, ativo: true, empresa_id: empresaId });
   const insumo = await s.insert(RESOURCES.insumos, {

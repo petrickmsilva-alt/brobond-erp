@@ -171,14 +171,14 @@ test('o abate condicionado não grava nada quando o saldo não cobre (e cobre ex
   await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: pid, tamanho_id: tamDaGrade, quantidade: 1, local_id: localAud.id }, admin);
 
   // condição avaliada na própria escrita: retirar 2 de 1 não escreve nada
-  const falho = await s.tryAdjustStock(pid, tamDaGrade, localAud.nome, -2);
+  const falho = await s.tryAdjustStock(pid, tamDaGrade, localAud.nome, -2, undefined, 0, localAud.id, 1);
   assert.equal(falho, null, 'sem saldo → nenhuma linha alterada');
   assert.equal(await saldoTotal(pid, localAud.nome), 1);
   // ... e zerar o saldo é permitido (>= 0, não > 0)
-  const ok = await s.tryAdjustStock(pid, tamDaGrade, localAud.nome, -1);
+  const ok = await s.tryAdjustStock(pid, tamDaGrade, localAud.nome, -1, undefined, 0, localAud.id, 1);
   assert.ok(ok);
   assert.equal(Number(ok!.quantidade), 0);
-  assert.equal(await s.tryAdjustStock(pid, tamDaGrade, localAud.nome, -1).then((r) => r), null, 'o segundo abate não pode passar');
+  assert.equal(await s.tryAdjustStock(pid, tamDaGrade, localAud.nome, -1, undefined, 0, localAud.id, 1).then((r) => r), null, 'o segundo abate não pode passar');
   assert.equal(await saldoTotal(pid, localAud.nome), 0, 'jamais negativo');
 });
 

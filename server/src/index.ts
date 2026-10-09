@@ -3,7 +3,6 @@ import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hasDatabaseUrl, isDbConnected, migrate } from './db';
-import { escopoDoAtor } from './empresa';
 import {
   ADMIN_EMAIL,
   changePassword,
@@ -417,7 +416,7 @@ app.get(
       // pode resultar em URL inválida para quem recebeu o e-mail.
       emailLinks: { ...(await statusOrigemAsync(req)), aviso: AVISO_ORIGEM },
       // Local padrão (origem das movimentações) para o front pré-selecionar os formulários.
-      defaultLocal: await getDefaultLocalInfo(),
+      defaultLocal: await getDefaultLocalInfo(undefined, escopoDe(currentUser(req))),
       auth: { hash: 'argon2id', mfa_admin_obrigatorio: true, reauth_ttl_segundos: Math.round(Number(process.env.REAUTH_TTL_MS) || 300_000) / 1000 },
     });
   })
@@ -427,7 +426,7 @@ app.get(
   '/api/dashboard',
   wrap(async (req, res) => {
     // MULTIEMPRESA: o painel é da empresa ativa do ator (nunca de todas por padrão).
-    res.json(await getStore().dashboard(escopoDoAtor(currentUser(req))));
+    res.json(await getStore().dashboard(escopoDe(currentUser(req))));
   })
 );
 

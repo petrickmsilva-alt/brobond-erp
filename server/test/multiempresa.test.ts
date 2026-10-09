@@ -149,8 +149,8 @@ test('referência forjada: venda da A não aceita cliente da B', async () => {
         { cliente_id: Number(clienteDaB.id), data: '2026-10-06', status: 'aberta' },
         anaDaA
       ),
-    400,
-    /não pertence à empresa ativa/i
+    404,
+    /Cliente não encontrado/i
   );
 });
 
@@ -162,7 +162,8 @@ test('tabela filha herda a empresa do pai (espelho do trigger do Postgres)', asy
   );
   assert.equal(Number(produtoB.empresa_id), EMPRESA_B);
 
-  const estoque = await getStore().adjustStock(Number(produtoB.id), 1, 'loja', 5);
+  const localB = await createRecord(RESOURCES.locais, { nome: 'loja', padrao: true }, brunoDaB);
+  const estoque = await getStore().adjustStock(Number(produtoB.id), 1, 'loja', 5, undefined, Number(localB.id), EMPRESA_B);
   assert.equal(Number(estoque.empresa_id), EMPRESA_B, 'o saldo precisa nascer na empresa do produto');
 
   // E o saldo da B não aparece para a A.

@@ -243,8 +243,9 @@ test('FISCAL em Postgres real: a nota fantasma é impossível', { skip }, async 
     const tamanho =
       (await s.list(RESOURCES.tamanhos, { page: 1, pageSize: 1 })).rows[0] ??
       (await createRecord(RESOURCES.tamanhos, { codigo: 'M', ordem: 1 }, ator));
-    const LOCAL = 'loja';
-    await s.adjustStock(Number(produto.id), Number(tamanho.id), LOCAL, 30);
+    const localRow = await createRecord(RESOURCES.locais, { nome: `pg-fiscal-${sufixo}`, padrao: true }, ator);
+    const LOCAL = String(localRow.nome);
+    await s.adjustStock(Number(produto.id), Number(tamanho.id), LOCAL, 30, undefined, Number(localRow.id), EMPRESA);
 
     const venda = await createRecord(
       RESOURCES.vendas,

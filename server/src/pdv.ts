@@ -33,10 +33,10 @@
 // ============================================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
-import { getResource } from './resources';
-import { checkAccess, checkFluxo, getDefaultLocal, getStore, toHttpError } from './services';
-import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
+import { getResource, type Resource } from './resources';
+import { checkAccess, checkFluxo, escopoDe, getStore, resolveLocal, toHttpError } from './services';
+import { currentUser } from './auth';
+import { assertRegistroDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2 } from './utils';
 import { aplicarRegrasPedido } from './itens';
@@ -47,6 +47,11 @@ import type { Row, Tx } from './store';
 export const R_CAIXA = () => getResource('pdv_caixas')!;
 export const R_CAIXA_MOV = () => getResource('pdv_caixa_movimentos')!;
 export const R_PAGAMENTO = () => getResource('pdv_pagamentos')!;
+
+/** Lê pelo ID já no tenant — não consulta primeiro a linha global para depois filtrá-la. */
+async function findInTenant(r: Resource, id: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row | null> {
+  return getStore().findOneWhere(r, r.empresa ? { id, empresa_id: escopo.empresaId } : { id }, tx);
+}
 
 const FORMAS = ['dinheiro', 'pix', 'cartao_credito', 'cartao_debito', 'vale', 'boleto', 'transferencia', 'outros'];
 
@@ -63,7 +68,7 @@ function num(v: unknown, padrao = 0): number {
 export async function abrirCaixa(req: Request, res: Response) {
   const actor = currentUser(req);
   checkFluxo(R_CAIXA(), actor);
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const body = (req.body || {}) as Record<string, unknown>;
   const numero = String(body.numero || body.terminal || 'CAIXA-1').trim().slice(0, 40);
   const valorAbertura = round2(Math.max(0, num(body.valor_abertura)));
@@ -74,7 +79,12 @@ export async function abrirCaixa(req: Request, res: Response) {
       if (aberto) {
         throw new HttpError(409, `O caixa "${numero}" já está aberto (desde ${String(aberto.abertura_em).slice(0, 16)}). Feche-o antes de abrir outro.`);
       }
-      const local = body.local ? String(body.local).slice(0, 60) : await getDefaultLocal(tx);
+      const localData: Record<string, unknown> = {};
+      if (body.local_id !== undefined) localData.local_id = body.local_id;
+      if (body.local !== undefined) localData.local = String(body.local).slice(0, 60);
+      await resolveLocal(localData, tx, escopo);
+      const local = String(localData.local);
+      const localId = Number(localData.local_id);
       const criado = await s.insert(
         R_CAIXA(),
         {
@@ -82,6 +92,7 @@ export async function abrirCaixa(req: Request, res: Response) {
           numero,
           usuario_id: actor.id || null,
           local,
+          local_id: localId,
           abertura_em: new Date().toISOString(),
           valor_abertura: valorAbertura,
           status: 'aberto',
@@ -105,7 +116,7 @@ export async function abrirCaixa(req: Request, res: Response) {
 export async function caixaAberto(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_CAIXA(), actor, 'read');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const numero = req.query.numero ? String(req.query.numero).slice(0, 40) : undefined;
   const s = getStore();
   const filtro: Record<string, unknown> = { empresa_id: escopo.empresaId, status: 'aberto' };
@@ -121,15 +132,14 @@ export async function caixaAberto(req: Request, res: Response) {
  */
 async function resumoCaixa(caixaId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Record<string, unknown>> {
   const s = getStore();
-  const caixa = await s.get(R_CAIXA(), caixaId, tx);
-  if (!caixa) throw new HttpError(404, 'Caixa não encontrado.');
+  const caixa = assertRegistroDaEmpresa(R_CAIXA(), await findInTenant(R_CAIXA(), caixaId, escopo, tx), escopo);
   const vendas = await s.list(
     getResource('vendas')!,
     { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, pdv_caixa_id: caixaId }, sort: 'id', dir: 'asc' },
     tx
   );
-  const pagamentos = await s.list(R_PAGAMENTO(), { page: 1, pageSize: 10000, filter: { caixa_id: caixaId } }, tx);
-  const movimentos = await s.list(R_CAIXA_MOV(), { page: 1, pageSize: 5000, filter: { caixa_id: caixaId } }, tx);
+  const pagamentos = await s.list(R_PAGAMENTO(), { page: 1, pageSize: 10000, filter: { empresa_id: escopo.empresaId, caixa_id: caixaId } }, tx);
+  const movimentos = await s.list(R_CAIXA_MOV(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, caixa_id: caixaId } }, tx);
 
   const porForma: Record<string, number> = {};
   let totalVendido = 0;
@@ -166,9 +176,9 @@ async function resumoCaixa(caixaId: number, escopo: EscopoEmpresa, tx?: Tx): Pro
 export async function resumoCaixaHandler(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_CAIXA(), actor, 'read');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
-  assertRegistroDaEmpresa(R_CAIXA(), await getStore().get(R_CAIXA(), id), escopo);
+  assertRegistroDaEmpresa(R_CAIXA(), await findInTenant(R_CAIXA(), id, escopo), escopo);
   res.json(await resumoCaixa(id, escopo));
 }
 
@@ -176,7 +186,7 @@ export async function resumoCaixaHandler(req: Request, res: Response) {
 export async function movimentoCaixa(req: Request, res: Response) {
   const actor = currentUser(req);
   checkFluxo(R_CAIXA(), actor);
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const body = (req.body || {}) as Record<string, unknown>;
   const tipo = String(body.tipo || '').toLowerCase();
@@ -187,7 +197,7 @@ export async function movimentoCaixa(req: Request, res: Response) {
   if (!(valor > 0)) throw new HttpError(400, 'O valor deve ser maior que zero.', { valor: 'Deve ser > 0' });
   const s = getStore();
   const mov = await s.transaction(async (tx) => {
-    const caixa = assertRegistroDaEmpresa(R_CAIXA(), await s.get(R_CAIXA(), id, tx), escopo);
+    const caixa = assertRegistroDaEmpresa(R_CAIXA(), await findInTenant(R_CAIXA(), id, escopo, tx), escopo);
     if (String(caixa.status) !== 'aberto') throw new HttpError(409, 'Este caixa já foi fechado.');
     const criado = await s.insert(
       R_CAIXA_MOV(),
@@ -214,7 +224,7 @@ export async function movimentoCaixa(req: Request, res: Response) {
 export async function fecharCaixa(req: Request, res: Response) {
   const actor = currentUser(req);
   checkFluxo(R_CAIXA(), actor);
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const body = (req.body || {}) as Record<string, unknown>;
   if (body.valor_fechamento === undefined || body.valor_fechamento === null || body.valor_fechamento === '') {
@@ -225,7 +235,7 @@ export async function fecharCaixa(req: Request, res: Response) {
   const s = getStore();
   try {
     const fechamento = await s.transaction(async (tx) => {
-      const caixa = assertRegistroDaEmpresa(R_CAIXA(), await s.get(R_CAIXA(), id, tx), escopo);
+      const caixa = assertRegistroDaEmpresa(R_CAIXA(), await findInTenant(R_CAIXA(), id, escopo, tx), escopo);
       if (String(caixa.status) !== 'aberto') throw new HttpError(409, 'Este caixa já está fechado.');
       const resumo = await resumoCaixa(id, escopo, tx);
       const esperado = num(resumo.esperado_em_dinheiro);
@@ -343,8 +353,8 @@ export async function resolverProduto(
     (await s.findOneWhere(getResource('produtos')!, { ...escopoFiltro, codigo_barras: limpo }, tx)) ||
     (await s.findOneWhere(getResource('produtos')!, { ...escopoFiltro, sku: limpo }, tx));
   if (!lido && /^\d+$/.test(limpo)) {
-    const porId = await s.get(getResource('produtos')!, Number(limpo), tx);
-    if (porId && Number(porId.empresa_id ?? 1) === escopo.empresaId) lido = porId;
+    const porId = await s.findOneWhere(getResource('produtos')!, { id: Number(limpo), empresa_id: escopo.empresaId }, tx);
+    if (porId) lido = porId;
   }
   if (!lido) throw new HttpError(404, `Nenhum produto encontrado para "${limpo}" nesta empresa.`);
   if (lido.ativo === false) throw new HttpError(409, `O produto ${lido.sku} está inativo e não pode ser vendido.`);
@@ -357,7 +367,7 @@ export async function resolverProduto(
   let tamanhoId: number | null = lido.tamanho_id === null || lido.tamanho_id === undefined ? null : Number(lido.tamanho_id);
   const ehVariacao = Boolean(lido.produto_pai_id);
   if (ehVariacao) {
-    const pai = await s.get(getResource('produtos')!, Number(lido.produto_pai_id), tx);
+    const pai = await s.findOneWhere(getResource('produtos')!, { id: Number(lido.produto_pai_id), empresa_id: escopo.empresaId }, tx);
     // O pai pode ter sido excluído ou pertencer a outra empresa: aí a linha não
     // tem para onde ir e é melhor recusar do que gravar um órfão.
     if (!pai) throw new HttpError(409, `A variação ${lido.sku} aponta para o produto-pai #${lido.produto_pai_id}, que não existe mais.`);
@@ -404,7 +414,7 @@ export async function resolverProduto(
 export async function buscarProduto(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('produtos')!, actor, 'read');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const codigo = String(req.query.codigo ?? req.query.q ?? req.query.sku ?? '');
   const tamanhoPedido = req.query.tamanho_id ? Number(req.query.tamanho_id) : null;
   const linha = await resolverProduto(codigo, escopo, undefined, tamanhoPedido);
@@ -503,7 +513,7 @@ function normalizarPagamentos(bruto: unknown): PagamentoEntrada[] {
 export async function venderPdv(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'create');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const body = (req.body || {}) as Record<string, unknown>;
   const linhas = normalizarLinhas(body.itens ?? body.linhas);
   const pagamentos = normalizarPagamentos(body.pagamentos);
@@ -515,7 +525,7 @@ export async function venderPdv(req: Request, res: Response) {
       // ---- caixa aberto é pré-condição: sem ele o fechamento não fecha ----
       let caixa: Row | null = null;
       if (body.caixa_id) {
-        caixa = assertRegistroDaEmpresa(R_CAIXA(), await s.get(R_CAIXA(), Number(body.caixa_id), tx), escopo);
+        caixa = assertRegistroDaEmpresa(R_CAIXA(), await findInTenant(R_CAIXA(), Number(body.caixa_id), escopo, tx), escopo);
       } else {
         caixa = await s.findOneWhere(R_CAIXA(), { empresa_id: escopo.empresaId, status: 'aberto' }, tx);
       }
@@ -528,12 +538,12 @@ export async function venderPdv(req: Request, res: Response) {
       let clienteId: number | null = null;
       if (body.cliente_id !== undefined && body.cliente_id !== null && body.cliente_id !== '') {
         clienteId = Number(body.cliente_id);
-        assertRegistroDaEmpresa(getResource('clientes')!, await s.get(getResource('clientes')!, clienteId, tx), escopo);
+        assertRegistroDaEmpresa(getResource('clientes')!, await findInTenant(getResource('clientes')!, clienteId, escopo, tx), escopo);
       }
       let representanteId: number | null = null;
       if (body.representante_id !== undefined && body.representante_id !== null && body.representante_id !== '') {
         representanteId = Number(body.representante_id);
-        assertRegistroDaEmpresa(getResource('representantes')!, await s.get(getResource('representantes')!, representanteId, tx), escopo);
+        assertRegistroDaEmpresa(getResource('representantes')!, await findInTenant(getResource('representantes')!, representanteId, escopo, tx), escopo);
       }
 
       // ---- 1) resolve cada linha: produto, TAMANHO, preço de lista, subtotal ----
@@ -589,7 +599,13 @@ export async function venderPdv(req: Request, res: Response) {
       const troco = round2(Math.max(0, totalPago - total));
 
       // ---- 4) grava o pedido ----
-      const localSaida = body.local_saida ? String(body.local_saida).slice(0, 60) : String(caixa.local || (await getDefaultLocal(tx)));
+      const localSaidaData: Record<string, unknown> = {};
+      if (body.local_saida_id !== undefined) localSaidaData.local_id = body.local_saida_id;
+      else if (body.local_saida !== undefined) localSaidaData.local = String(body.local_saida).slice(0, 60);
+      else if (caixa.local_id !== null && caixa.local_id !== undefined) localSaidaData.local_id = caixa.local_id;
+      else if (caixa.local) localSaidaData.local = String(caixa.local);
+      await resolveLocal(localSaidaData, tx, escopo);
+      const localSaida = String(localSaidaData.local);
       const venda = await s.insert(
         getResource('vendas')!,
         {
@@ -648,8 +664,8 @@ export async function venderPdv(req: Request, res: Response) {
       if (faturar) {
         const patch = { status: 'faturada' };
         faturada = (await s.tryUpdateIf(getResource('vendas')!, Number(venda.id), { status: 'aberta' }, patch, tx)) || venda;
-        await aplicarRegrasPedido('venda', venda, faturada, patch, { id: actor.id || null, name: actor.name }, tx);
-        const depois = (await s.get(getResource('vendas')!, Number(venda.id), tx)) || faturada;
+        await aplicarRegrasPedido('venda', venda, faturada, patch, { id: actor.id || null, name: actor.name }, tx, escopo);
+        const depois = (await findInTenant(getResource('vendas')!, Number(venda.id), escopo, tx)) || faturada;
         await syncLancamentoVenda(venda, depois, patch, { id: actor.id || null, name: actor.name }, tx);
         faturada = depois;
       }
@@ -729,7 +745,7 @@ export async function venderPdv(req: Request, res: Response) {
 export async function cancelarVendaPdv(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const motivo = String((req.body || {}).motivo || '').trim();
   if (motivo.length < 5) {
@@ -738,7 +754,7 @@ export async function cancelarVendaPdv(req: Request, res: Response) {
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const venda = assertRegistroDaEmpresa(getResource('vendas')!, await s.get(getResource('vendas')!, id, tx), escopo);
+      const venda = assertRegistroDaEmpresa(getResource('vendas')!, await findInTenant(getResource('vendas')!, id, escopo, tx), escopo);
       if (String(venda.status) === 'cancelada') throw new HttpError(409, 'Esta venda já está cancelada.');
 
       // P2 §6 — caixa fechado é histórico imutável. Cancelar uma venda de um
@@ -746,8 +762,8 @@ export async function cancelarVendaPdv(req: Request, res: Response) {
       // diferença): proibido, salvo permissão administrativa EXPLÍCITA — e
       // ainda assim com auditoria marcando a retroatividade.
       if (venda.pdv_caixa_id) {
-        const caixa = await s.get(R_CAIXA(), Number(venda.pdv_caixa_id), tx);
-        if (caixa && String(caixa.status) === 'fechado') {
+        const caixa = assertRegistroDaEmpresa(R_CAIXA(), await findInTenant(R_CAIXA(), Number(venda.pdv_caixa_id), escopo, tx), escopo);
+        if (String(caixa.status) === 'fechado') {
           if (actor.perfil !== 'admin') {
             throw new HttpError(
               409,
@@ -772,7 +788,7 @@ export async function cancelarVendaPdv(req: Request, res: Response) {
 
       const docVivo = await s.list(
         getResource('documentos_fiscais')!,
-        { page: 1, pageSize: 5, filter: { venda_id: id, status: 'autorizado' } },
+        { page: 1, pageSize: 5, filter: { empresa_id: escopo.empresaId, venda_id: id, status: 'autorizado' } },
         tx
       );
       if (docVivo.rows.length) {
@@ -786,8 +802,8 @@ export async function cancelarVendaPdv(req: Request, res: Response) {
       const cancelada = await s.tryUpdateIf(getResource('vendas')!, id, { status: venda.status }, { status: 'cancelada' }, tx);
       if (!cancelada) throw new HttpError(409, 'A venda mudou durante o cancelamento. Recarregue e tente de novo.');
       // Estorno de estoque + financeiro pelo MESMO caminho do pedido de balcão.
-      await aplicarRegrasPedido('venda', antes, cancelada, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx);
-      const depois = (await s.get(getResource('vendas')!, id, tx)) || cancelada;
+      await aplicarRegrasPedido('venda', antes, cancelada, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx, escopo);
+      const depois = (await findInTenant(getResource('vendas')!, id, escopo, tx)) || cancelada;
       await syncLancamentoVenda(antes, depois, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx);
       await s.audit(
         { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'vendas', registro_id: id, descricao: `Venda PDV #${id} cancelada — motivo: ${motivo}`, dados: { motivo, caixa_id: antes.pdv_caixa_id ?? null }, empresa_id: empresaDoRegistroAudit(getResource('vendas')!, venda, actor) },
@@ -805,10 +821,10 @@ export async function cancelarVendaPdv(req: Request, res: Response) {
 export async function pagamentosVenda(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'read');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const s = getStore();
-  assertRegistroDaEmpresa(getResource('vendas')!, await s.get(getResource('vendas')!, id), escopo);
-  const out = await s.list(R_PAGAMENTO(), { page: 1, pageSize: 100, filter: { venda_id: id }, sort: 'id', dir: 'asc' });
+  assertRegistroDaEmpresa(getResource('vendas')!, await findInTenant(getResource('vendas')!, id, escopo), escopo);
+  const out = await s.list(R_PAGAMENTO(), { page: 1, pageSize: 100, filter: { empresa_id: escopo.empresaId, venda_id: id }, sort: 'id', dir: 'asc' });
   res.json(out.rows);
 }

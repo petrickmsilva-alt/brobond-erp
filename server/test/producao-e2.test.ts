@@ -20,7 +20,7 @@ process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
 
 const { RESOURCES, getResource } = await import('../src/resources');
-const { getStore, updateRecord } = await import('../src/services');
+const { getStore, updateRecord, escopoDe } = await import('../src/services');
 const { chamar, criarAtor, esperarErro, garantirAdmin, novoLocal, novoProduto, novoTamanho, reqDe } = await import('./_p1util');
 const producao = await import('../src/producao');
 
@@ -59,7 +59,7 @@ async function novaFicha(produtoId: number, opts: { consumo?: number; perdaPct?:
     consumo: opts.consumo ?? 2,
     perda_pct: opts.perdaPct ?? 10,
   });
-  await producao.recalcularFichaValores(Number(ficha.id));
+  await producao.recalcularFichaValores(Number(ficha.id), undefined, escopoDe(GERENTE));
   return { ficha: (await s().get(RESOURCES.fichas, Number(ficha.id)))!, tecido };
 }
 

@@ -82,7 +82,8 @@ test('MULTIEMPRESA em Postgres real: triggers, unicidade por empresa e recorte n
     const tamanhoId = tam.length ? Number(tam[0].id) : null;
     if (tamanhoId === null) return; // base sem grade cadastrada
 
-    const saldo = await getStore().adjustStock(Number(produto.id), tamanhoId, `pg-${sufixo}`, 7);
+    const local = await createRecord(RESOURCES.locais, { nome: `pg-${sufixo}` }, ana);
+    const saldo = await getStore().adjustStock(Number(produto.id), tamanhoId, String(local.nome), 7, undefined, Number(local.id), A);
     assert.equal(Number(saldo.empresa_id), A);
     assert.equal(Number(saldo.quantidade), 7);
   });

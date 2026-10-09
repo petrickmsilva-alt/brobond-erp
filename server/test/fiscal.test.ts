@@ -256,7 +256,7 @@ async function montarCenario(nome: string): Promise<Cenario> {
   );
 
   const tamanho = (await s.list(RESOURCES.tamanhos, { page: 1, pageSize: 1 })).rows[0];
-  await s.adjustStock(Number(produto.id), Number(tamanho.id), LOCAL, 50);
+  await s.adjustStock(Number(produto.id), Number(tamanho.id), LOCAL, 50, undefined, 1, 1);
 
   const venda = await createRecord(
     RESOURCES.vendas,

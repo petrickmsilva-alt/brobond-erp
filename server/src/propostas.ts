@@ -263,7 +263,7 @@ export async function criarProposta(req: Request, res: Response) {
       if (cabecalho.valida_ate && dataISO(cabecalho.valida_ate)! < String(cabecalho.data)) {
         throw new HttpError(400, 'A validade não pode ser anterior à data da proposta.', { valida_ate: 'Anterior à data' });
       }
-      await validarReferenciasDaEmpresa(R_PROPOSTA(), cabecalho, escopo, (r, id, t) => s.get(r, id, t), tx);
+      await validarReferenciasDaEmpresa(R_PROPOSTA(), cabecalho, escopo, (r, id, empresaId, t) => s.findOneWhere(r, { id, empresa_id: empresaId }, t), tx);
 
       const proposta = await s.insert(R_PROPOSTA(), cabecalho, tx);
       const subtotal = await gravarItens(Number(proposta.id), itens, escopo, tx);

@@ -65,7 +65,7 @@
 import { HttpError } from './errors';
 import { assertRegistroDaEmpresa, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
 import { getResource } from './resources';
-import { getStore, getDefaultLocal } from './services';
+import { getStore, resolveLocal, validarTamanhoNaGrade } from './services';
 import { isDbConnected } from './db';
 import type { Tx } from './store';
 import { round2, round3 } from './utils';
@@ -90,6 +90,7 @@ export type LinhaRecebimento = {
   quantidade: number;
   preco_unitario: number;
   local: string;
+  local_id?: number | null;
 };
 
 export type CustoDaLinha = {
@@ -208,10 +209,10 @@ async function travarParaCusto(tabela: 'insumos' | 'produtos', id: number, tx: T
   );
 }
 
-/** Saldo de produto acabado somando TODOS os locais (semântica já adotada). */
-async function saldoProduto(produtoId: number, tx?: Tx): Promise<number> {
+/** Saldo da empresa do produto somando TODOS os locais (semântica já adotada). */
+async function saldoProduto(produtoId: number, empresaId: number, tx?: Tx): Promise<number> {
   const s = getStore();
-  const r = await s.list(getResource('estoques')!, { page: 1, pageSize: 10000, filter: { produto_id: produtoId } }, tx);
+  const r = await s.list(getResource('estoques')!, { page: 1, pageSize: 10000, filter: { empresa_id: empresaId, produto_id: produtoId } }, tx);
   return round3(r.rows.reduce((acc, row) => acc + Number(row.quantidade || 0), 0));
 }
 
@@ -246,16 +247,15 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
 
   // 1) EMPRESA — a compra é desta empresa? 404, nunca 403.
   const compra = assertRegistroDaEmpresa(R_COMPRAS(), await s.get(R_COMPRAS(), compraId, tx), escopo);
+  if (Number(empresaId) !== escopo.empresaId || Number(compra.empresa_id) !== escopo.empresaId) throw new HttpError(404, 'Compra não encontrada.');
   if (String(compra.status) === 'cancelado') {
     throw new HttpError(409, `A compra #${compraId} está cancelada — não pode receber estoque.`);
   }
 
   // 4) RECEBIMENTO — se informado, precisa existir e ser desta compra.
   if (recebimentoId !== null) {
-    const rec = await s.get(R_RECEBIMENTO(), recebimentoId, tx);
-    if (!rec || Number(rec.compra_id) !== compraId) {
-      throw new HttpError(404, `O recebimento #${recebimentoId} não pertence à compra #${compraId}.`);
-    }
+    const rec = await s.findOneWhere(R_RECEBIMENTO(), { id: recebimentoId, compra_id: compraId, empresa_id: escopo.empresaId }, tx);
+    if (!rec) throw new HttpError(404, 'Recebimento não encontrado.');
   }
 
   const uteis = linhas.filter((l) => round3(l.quantidade) > 0);
@@ -271,7 +271,7 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
   // Regra: freteDesteLote = frete × (valor deste lote / valor do pedido).
   // A soma sobre todos os lotes dá exatamente o frete. O ÚLTIMO lote absorve o
   // resíduo de arredondamento, e nunca se rateia mais do que falta.
-  const itensDaCompra = (await s.list(R_ITENS(), { page: 1, pageSize: 1000, filter: { compra_id: compraId } }, tx)).rows;
+  const itensDaCompra = (await s.list(R_ITENS(), { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, compra_id: compraId } }, tx)).rows;
   const n2 = (v: unknown) => Number(v || 0);
   const valorDoPedido = round2(itensDaCompra.reduce((a, i) => a + round3(n2(i.quantidade)) * round2(n2(i.preco_unitario)), 0));
   const freteJaRateado = round2(itensDaCompra.reduce((a, i) => a + round2(n2(i.custo_frete_rateado)), 0));
@@ -294,6 +294,18 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
   const aplicadas: EntradaAplicada[] = [];
 
   for (const linha of uteis) {
+    const itemCompra = await s.findOneWhere(R_ITENS(), {
+      id: linha.item_compra_id,
+      compra_id: compraId,
+      empresa_id: escopo.empresaId,
+    }, tx);
+    if (!itemCompra) throw new HttpError(404, 'Item não encontrado nesta compra.');
+    const idRef = (v: unknown) => v === null || v === undefined || v === '' ? null : Number(v);
+    if (
+      idRef(linha.produto_id) !== idRef(itemCompra.produto_id) ||
+      idRef(linha.insumo_id) !== idRef(itemCompra.insumo_id) ||
+      idRef(linha.tamanho_id) !== idRef(itemCompra.tamanho_id)
+    ) throw new HttpError(404, 'Item não encontrado nesta compra.');
     const qtd = round3(linha.quantidade);
 
     // 3) QUANTIDADE
@@ -301,8 +313,7 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
 
     const custoFrete = round2(rateio.get(linha.item_compra_id) ?? 0);
     const custoImpostos = round2(
-      impostosPorItem?.get(linha.item_compra_id) ??
-        Number((await s.get(R_ITENS(), linha.item_compra_id, tx))?.custo_impostos ?? 0)
+      impostosPorItem?.get(linha.item_compra_id) ?? Number(itemCompra.custo_impostos ?? 0)
     );
 
     // 2) SKU / VARIAÇÃO — e empresa do item também.
@@ -315,18 +326,25 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
       // saldo de produto sem variação. Exigir aqui seria mais rígido que o
       // modelo de dados (e que o recebimento parcial, que sempre aceitou).
       const tamanhoId = linha.tamanho_id === null || linha.tamanho_id === undefined ? null : Number(linha.tamanho_id);
+      if (tamanhoId !== null) await validarTamanhoNaGrade(produtoId, tamanhoId, tx, escopo);
       const custoEfetivo = custoUnitarioEfetivo(linha.preco_unitario, qtd, custoFrete, custoImpostos);
 
       // Trava ANTES de ler o custo: sem isto dois recebimentos do mesmo produto
       // leem o mesmo custo_medio e o segundo sobrescreve o primeiro.
       await travarParaCusto('produtos', produtoId, tx);
       const produtoTravado = await s.get(R_PRODUTOS(), produtoId, tx);
-      const saldoAntes = await saldoProduto(produtoId, tx);
+      const saldoAntes = await saldoProduto(produtoId, escopo.empresaId, tx);
       const custoAntes = round2(Number(produtoTravado?.custo || 0));
       const custoDepois = mediaPonderada(saldoAntes, custoAntes, qtd, custoEfetivo);
 
-      const local = linha.local || String(compra.local_entrada || (await getDefaultLocal(tx)));
-      await s.adjustStock(produtoId, tamanhoId as unknown as number, local, Math.trunc(qtd), tx);
+      const localData: Record<string, unknown> = {};
+      if (linha.local_id !== undefined && linha.local_id !== null) localData.local_id = linha.local_id;
+      else if (linha.local) localData.local = linha.local;
+      else if (compra.local_entrada) localData.local = compra.local_entrada;
+      await resolveLocal(localData, tx, escopo);
+      const local = String(localData.local);
+      const localId = Number(localData.local_id);
+      await s.adjustStock(produtoId, tamanhoId, local, Math.trunc(qtd), tx, localId, escopo.empresaId);
       // 7) CUSTO MÉDIO
       await s.update(R_PRODUTOS(), produtoId, { custo: custoDepois }, tx);
       // 6) MOVIMENTAÇÃO COM CUSTO
@@ -338,6 +356,7 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
           produto_id: produtoId,
           tamanho_id: tamanhoId,
           local,
+          local_id: localId,
           quantidade: Math.trunc(qtd),
           motivo,
           compra_id: compraId,
@@ -351,7 +370,7 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
       // O rateio fica gravado no item da compra: é a trilha do "de onde veio".
       // ACUMULA, porque o mesmo item pode chegar em vários lotes — sobrescrever
       // apagaria a parcela do lote anterior e o frete total não fecharia mais.
-      const itemAtual = await s.get(R_ITENS(), linha.item_compra_id, tx);
+      const itemAtual = itemCompra;
       const freteAcumulado = round2(round2(Number(itemAtual?.custo_frete_rateado || 0)) + custoFrete);
       const impostosAcumulados = round2(round2(Number(itemAtual?.custo_impostos || 0)) + custoImpostos);
       await s.update(R_ITENS(), linha.item_compra_id, { custo_frete_rateado: freteAcumulado, custo_impostos: impostosAcumulados }, tx);
@@ -379,11 +398,11 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
 
     await travarParaCusto('insumos', insumoId, tx);
     const insumoTravado = await s.get(R_INSUMOS(), insumoId, tx);
-    const saldoAntes = round3(await s.insumoStock(insumoId, tx));
+    const saldoAntes = round3(await s.insumoStock(insumoId, tx, escopo.empresaId));
     const custoAntes = round2(Number(insumoTravado?.custo_medio || 0));
     const custoDepois = mediaPonderada(saldoAntes, custoAntes, qtd, custoEfetivo);
 
-    await s.adjustInsumoStock(insumoId, qtd, tx);
+    await s.adjustInsumoStock(insumoId, qtd, tx, escopo.empresaId);
     await s.update(R_INSUMOS(), insumoId, { custo_medio: custoDepois }, tx);
     await s.insert(
       R_MOV_INSUMO(),
@@ -402,7 +421,7 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
       tx
     );
     // Mesma regra do ramo de produtos: ACUMULA, não sobrescreve.
-    const itemInsumoAtual = await s.get(R_ITENS(), linha.item_compra_id, tx);
+    const itemInsumoAtual = itemCompra;
     await s.update(
       R_ITENS(),
       linha.item_compra_id,
@@ -478,32 +497,48 @@ export async function estornarEntradasDeCompra(args: {
 
   // ---- produtos acabados ---------------------------------------------------
   const movProdutos = (
-    await s.list(R_MOV(), { page: 1, pageSize: 2000, sort: 'id', dir: 'desc', filter: { tipo: 'entrada', compra_id: compraId } }, tx)
+    await s.list(R_MOV(), { page: 1, pageSize: 2000, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId, tipo: 'entrada', compra_id: compraId } }, tx)
   ).rows.filter((m) => String(m.tipo) === 'entrada' && Number(m.compra_id) === compraId && !m.estornado);
 
   for (const m of movProdutos) {
     const produtoId = Number(m.produto_id);
-    const tamanhoId = Number(m.tamanho_id);
+    const tamanhoId = m.tamanho_id === null || m.tamanho_id === undefined ? null : Number(m.tamanho_id);
     const qtd = Math.trunc(Number(m.quantidade));
     if (!(qtd > 0)) continue;
+    assertRegistroDaEmpresa(R_PRODUTOS(), await s.get(R_PRODUTOS(), produtoId, tx), escopo);
+    if (tamanhoId !== null) await validarTamanhoNaGrade(produtoId, tamanhoId, tx, escopo);
+    if (m.recebimento_id !== null && m.recebimento_id !== undefined && !await s.findOneWhere(R_RECEBIMENTO(), { id: Number(m.recebimento_id), compra_id: compraId, empresa_id: escopo.empresaId }, tx)) {
+      throw new HttpError(404, 'Recebimento não encontrado.');
+    }
+    const itemCompra = m.item_compra_id === null || m.item_compra_id === undefined ? null : await s.findOneWhere(R_ITENS(), { id: Number(m.item_compra_id), compra_id: compraId, empresa_id: escopo.empresaId }, tx);
+    if (m.item_compra_id !== null && m.item_compra_id !== undefined && !itemCompra) throw new HttpError(404, 'Item não encontrado nesta compra.');
+    if (m.local_id === null || m.local_id === undefined || Number(m.local_id) <= 0) {
+      if (!String(m.local || '').trim()) throw new HttpError(409, 'Não é possível estornar uma entrada histórica sem local de estoque válido. Nenhum saldo foi alterado.');
+    }
+    const localData: Record<string, unknown> = {};
+    if (m.local_id !== null && m.local_id !== undefined && Number(m.local_id) > 0) localData.local_id = Number(m.local_id);
+    else localData.local = String(m.local || '').trim();
+    await resolveLocal(localData, tx, escopo);
+    const local = String(localData.local);
+    const localId = Number(localData.local_id);
 
     // Baixa condicional: nunca transformar estoque consumido em negativo.
-    const aplicado = await s.tryAdjustStock(produtoId, tamanhoId, String(m.local), -qtd, tx);
+    const aplicado = await s.tryAdjustStock(produtoId, tamanhoId, local, -qtd, tx, 0, localId, escopo.empresaId);
     if (!aplicado) {
       throw new HttpError(
         409,
-        `Não é possível estornar a compra #${compraId}: o produto ${produtoId} já foi consumido no local "${m.local}".`
+        `Não é possível estornar a compra #${compraId}: o produto ${produtoId} já foi consumido no local "${local}".`
       );
     }
 
     await travarParaCusto('produtos', produtoId, tx);
     const produto = await s.get(R_PRODUTOS(), produtoId, tx);
-    const saldoDepois = await saldoProduto(produtoId, tx);
+    const saldoDepois = await saldoProduto(produtoId, escopo.empresaId, tx);
     const saldoAntes = round3(saldoDepois + qtd);
     // Preço que REALMENTOU entrou. Movimentações antigas (anteriores à 0028) não
     // têm custo gravado — nesse caso cai no preço do item da compra.
     const custoEntrada = m.custo_unitario === null || m.custo_unitario === undefined
-      ? round2(Number((await s.findOneWhere(R_ITENS(), { id: Number(m.item_compra_id ?? 0) }, tx))?.preco_unitario ?? 0))
+      ? round2(Number(itemCompra?.preco_unitario ?? 0))
       : round2(Number(m.custo_unitario));
     const custoAtual = round2(Number(produto?.custo || 0));
     if (saldoAntes <= 0) {
@@ -522,11 +557,12 @@ export async function estornarEntradasDeCompra(args: {
     await s.insert(
       R_MOV(),
       {
-        empresa_id: Number(compra.empresa_id),
+        empresa_id: escopo.empresaId,
         tipo: 'saida',
         produto_id: produtoId,
         tamanho_id: tamanhoId,
-        local: m.local,
+        local,
+        local_id: localId,
         quantidade: qtd,
         compra_id: compraId,
         recebimento_id: m.recebimento_id ?? null,
@@ -543,16 +579,23 @@ export async function estornarEntradasDeCompra(args: {
   // ---- insumos -------------------------------------------------------------
   // Agora por VÍNCULO (compra_id), não por texto de motivo.
   const movInsumos = (
-    await s.list(R_MOV_INSUMO(), { page: 1, pageSize: 2000, sort: 'id', dir: 'desc', filter: { tipo: 'entrada', compra_id: compraId } }, tx)
+    await s.list(R_MOV_INSUMO(), { page: 1, pageSize: 2000, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId, tipo: 'entrada', compra_id: compraId } }, tx)
   ).rows.filter((m) => String(m.tipo) === 'entrada' && Number(m.compra_id) === compraId);
 
   for (const m of movInsumos) {
     const insumoId = Number(m.insumo_id);
     const qtd = round3(Number(m.quantidade));
     if (!(qtd > 0)) continue;
+    assertRegistroDaEmpresa(R_INSUMOS(), await s.get(R_INSUMOS(), insumoId, tx), escopo);
+    if (m.recebimento_id !== null && m.recebimento_id !== undefined && !await s.findOneWhere(R_RECEBIMENTO(), { id: Number(m.recebimento_id), compra_id: compraId, empresa_id: escopo.empresaId }, tx)) {
+      throw new HttpError(404, 'Recebimento não encontrado.');
+    }
+    if (m.item_compra_id !== null && m.item_compra_id !== undefined && !await s.findOneWhere(R_ITENS(), { id: Number(m.item_compra_id), compra_id: compraId, empresa_id: escopo.empresaId }, tx)) {
+      throw new HttpError(404, 'Item não encontrado nesta compra.');
+    }
 
     await travarParaCusto('insumos', insumoId, tx);
-    const saldoDepois = round3(await s.insumoStock(insumoId, tx));
+    const saldoDepois = round3(await s.insumoStock(insumoId, tx, escopo.empresaId));
     const saldoAntes = round3(saldoDepois - qtd);
     if (saldoAntes < 0) {
       throw new HttpError(
@@ -572,7 +615,7 @@ export async function estornarEntradasDeCompra(args: {
       );
     }
 
-    await s.adjustInsumoStock(insumoId, -qtd, tx);
+    await s.adjustInsumoStock(insumoId, -qtd, tx, escopo.empresaId);
     await s.update(R_INSUMOS(), insumoId, { custo_medio: custoRestaurado }, tx);
     out.custoRestaurado.push({ tipo: 'insumo', id: insumoId, antes: custoAtual, depois: custoRestaurado });
 

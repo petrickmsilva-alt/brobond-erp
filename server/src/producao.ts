@@ -25,9 +25,9 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
-import { assertRegistroDaEmpresa, empresaDoRegistroAudit, escopoDoAtor, type EscopoEmpresa } from './empresa';
-import { getResource, type Resource } from './resources';
-import { checkAccess, escopoDe, getDefaultLocal, getStore, toHttpError, updateRecord } from './services';
+import { assertRegistroDaEmpresa, assertRegistroDaEmpresaParaEscrita, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
+import { getResource } from './resources';
+import { checkAccess, escopoDe, getStore, resolveLocal, toHttpError, updateRecord, validarTamanhoNaGrade } from './services';
 import { currentUser } from './auth';
 import type { Payload, Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
@@ -135,12 +135,17 @@ export async function registrarEventoOrdem(
   ordemId: number,
   evento: string,
   info: { de?: string | null; para?: string | null; mensagem?: string; dados?: Record<string, unknown>; usuario_id?: number | null },
-  tx: Tx
+  tx: Tx,
+  escopo: EscopoEmpresa
 ): Promise<void> {
   try {
+    const op = await getStore().findOneWhere(recursoOrdem().op, { id: ordemId, empresa_id: escopo.empresaId }, tx);
+    if (!op) return;
+    assertRegistroDaEmpresa(recursoOrdem().op, op, escopo);
     await getStore().insert(
       recursoEventos().eventos,
       {
+        empresa_id: escopo.empresaId,
         ordem_id: ordemId,
         evento,
         de_status: info.de ?? null,
@@ -185,21 +190,31 @@ export async function validarOrdemPayload(data: Payload, before: Row | null): Pr
 }
 
 /** Itens efetivos de produção (grade → itens_ordem; tamanho → linha única). */
-async function itensProducao(op: Row, tx?: Tx): Promise<{ tamanho_id: number; quantidade: number }[]> {
+async function itensProducao(op: Row, escopo: EscopoEmpresa, tx?: Tx): Promise<{ tamanho_id: number; quantidade: number }[]> {
   const s = getStore();
   const tipo = String(op.tipo || 'tamanho');
   if (tipo === 'grade') {
-    const itens = await s.list(recursoOrdem().itens, { page: 1, pageSize: 200, filter: { ordem_id: Number(op.id) } }, tx);
-    return itens.rows.map((it) => ({ tamanho_id: Number(it.tamanho_id), quantidade: Number(it.quantidade || 0) }));
+    const itens = await s.list(recursoOrdem().itens, { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId, ordem_id: Number(op.id) } }, tx);
+    const out: { tamanho_id: number; quantidade: number }[] = [];
+    for (const it of itens.rows) {
+      const tamanho_id = Number(it.tamanho_id);
+      await validarTamanhoNaGrade(Number(op.produto_id), tamanho_id, tx, escopo);
+      out.push({ tamanho_id, quantidade: Number(it.quantidade || 0) });
+    }
+    return out;
   }
   if (!op.tamanho_id) return [];
-  return [{ tamanho_id: Number(op.tamanho_id), quantidade: Number(op.quantidade || 0) }];
+  const tamanho_id = Number(op.tamanho_id);
+  await validarTamanhoNaGrade(Number(op.produto_id), tamanho_id, tx, escopo);
+  return [{ tamanho_id, quantidade: Number(op.quantidade || 0) }];
 }
 
 /** Encontra a ficha técnica do produto (única por produto). */
-async function fichaDoProduto(produtoId: number, tx?: Tx): Promise<Row | null> {
+async function fichaDoProduto(produtoId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row | null> {
   const s = getStore();
-  return s.findOneWhere(recursoFicha().ficha, { produto_id: produtoId }, tx);
+  const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId }, tx);
+  if (!produto) throw new HttpError(404, 'Produto não encontrado.');
+  return s.findOneWhere(recursoFicha().ficha, { produto_id: produtoId, empresa_id: escopo.empresaId }, tx);
 }
 
 // ============================================================================
@@ -231,21 +246,20 @@ type LinhaConsumo = {
 };
 
 /** Local onde a peça entra: o local de produção da OP, senão o Local padrão. */
-async function localDeEntrada(op: Row, tx: Tx): Promise<{ id: number | null; nome: string }> {
-  const s = getStore();
-  const localId = op.local_producao_id ? Number(op.local_producao_id) : null;
-  if (localId) {
-    const local = await s.findOneWhere(getResource('locais')!, { id: localId }, tx);
-    if (local) return { id: localId, nome: String(local.nome) };
+async function localDeEntrada(op: Row, escopo: EscopoEmpresa, tx: Tx): Promise<{ id: number; nome: string }> {
+  const data: Record<string, unknown> = {};
+  if (op.local_producao_id !== null && op.local_producao_id !== undefined && op.local_producao_id !== '') {
+    data.local_id = Number(op.local_producao_id);
   }
-  return { id: null, nome: await getDefaultLocal(tx) };
+  await resolveLocal(data, tx, escopo);
+  return { id: Number(data.local_id), nome: String(data.local) };
 }
 
 /** Apontamentos da OP, do mais antigo ao mais recente. */
-async function apontamentosDaOrdem(ordemId: number, tx?: Tx): Promise<Row[]> {
+async function apontamentosDaOrdem(ordemId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row[]> {
   const out = await getStore().list(
     recursoEventos().apontamentos,
-    { page: 1, pageSize: 1000, sort: 'apontado_em', dir: 'asc', filter: { ordem_id: ordemId } },
+    { page: 1, pageSize: 1000, sort: 'apontado_em', dir: 'asc', filter: { empresa_id: escopo.empresaId, ordem_id: ordemId } },
     tx
   );
   return out.rows;
@@ -267,23 +281,25 @@ function produzidasPorTamanho(apontamentos: Row[]): Map<number, number> {
  * O que a ficha técnica exige para `pecas` peças, já com a perda de insumo de
  * cada linha. Chave: insumo_id.
  */
-async function necessidadeDaFicha(ficha: Row | null, pecas: number, tx: Tx): Promise<Map<number, LinhaConsumo>> {
+async function necessidadeDaFicha(ficha: Row | null, pecas: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Map<number, LinhaConsumo>> {
   const s = getStore();
   const mapa = new Map<number, LinhaConsumo>();
   if (!ficha || pecas <= 0) return mapa;
-  const linhas = await s.list(recursoFicha().itens, { page: 1, pageSize: 500, filter: { ficha_id: Number(ficha.id) } }, tx);
+  assertRegistroDaEmpresa(recursoFicha().ficha, ficha, escopo);
+  const linhas = await s.list(recursoFicha().itens, { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, ficha_id: Number(ficha.id) } }, tx);
   for (const linha of linhas.rows) {
     const insumoId = Number(linha.insumo_id);
     const consumo = Number(linha.consumo || 0);
     const perdaPct = Number(linha.perda_pct || 0);
     if (!insumoId || consumo <= 0) continue;
-    const insumo = await s.findOneWhere(getResource('insumos')!, { id: insumoId }, tx);
+    const insumo = await s.findOneWhere(getResource('insumos')!, { id: insumoId, empresa_id: escopo.empresaId }, tx);
+    if (!insumo) throw new HttpError(404, 'Insumo não encontrado.');
     mapa.set(insumoId, {
       insumo_id: insumoId,
       necessidade: round3(pecas * consumo * (1 + perdaPct / 100)),
-      custo_unitario: Number(insumo?.custo_medio || 0),
-      nome: insumo ? labelOf(getResource('insumos')!, insumo) : `#${insumoId}`,
-      unidade: insumo?.unidade || 'un',
+      custo_unitario: Number(insumo.custo_medio || 0),
+      nome: labelOf(getResource('insumos')!, insumo),
+      unidade: insumo.unidade || 'un',
       faltando: 0,
     });
   }
@@ -294,14 +310,15 @@ async function necessidadeDaFicha(ficha: Row | null, pecas: number, tx: Tx): Pro
  * Insumos que esta OP JÁ baixou (FK `ordem_id`, saídas não estornadas). É o que
  * impede a conclusão de consumir duas vezes o que o apontamento já consumiu.
  */
-async function jaConsumidoNaOrdem(ordemId: number, tx: Tx): Promise<Map<number, number>> {
+async function jaConsumidoNaOrdem(ordemId: number, escopo: EscopoEmpresa, tx: Tx): Promise<Map<number, number>> {
   const s = getStore();
   const r = getResource('movimentacoes_insumos')!;
-  const out = await s.list(r, { page: 1, pageSize: 5000, filter: { ordem_id: ordemId } }, tx);
+  const out = await s.list(r, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, ordem_id: ordemId } }, tx);
   const mapa = new Map<number, number>();
   for (const m of out.rows) {
     if (String(m.tipo) !== 'saida') continue;
     const id = Number(m.insumo_id);
+    if (!await s.findOneWhere(getResource('insumos')!, { id, empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Insumo não encontrado.');
     mapa.set(id, (mapa.get(id) || 0) + Number(m.quantidade || 0));
   }
   return mapa;
@@ -316,13 +333,14 @@ async function jaConsumidoNaOrdem(ordemId: number, tx: Tx): Promise<Map<number, 
  * carregar o rateio inteiro, senão o custo real de uma OP parcial parece pior do
  * que o de uma concluída.
  */
-async function calcularCustoReal(ordemId: number, ficha: Row | null, pecasPlanejadas: number, pecasProcessadas: number, tx: Tx): Promise<number> {
+async function calcularCustoReal(ordemId: number, ficha: Row | null, pecasPlanejadas: number, pecasProcessadas: number, escopo: EscopoEmpresa, tx: Tx): Promise<number> {
   const s = getStore();
   const r = getResource('movimentacoes_insumos')!;
-  const out = await s.list(r, { page: 1, pageSize: 5000, filter: { ordem_id: ordemId } }, tx);
+  const out = await s.list(r, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, ordem_id: ordemId } }, tx);
   let insumos = 0;
   for (const m of out.rows) {
     if (String(m.tipo) !== 'saida') continue;
+    if (!await s.findOneWhere(getResource('insumos')!, { id: Number(m.insumo_id), empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Insumo não encontrado.');
     insumos += Number(m.quantidade || 0) * Number(m.custo_unitario || 0);
   }
   const indiretos = ficha ? Number(ficha.mao_obra || 0) + Number(ficha.custos_indiretos || 0) : 0;
@@ -344,13 +362,14 @@ async function baixarInsumos(
   actor: Actor,
   tx: Tx,
   opts: OrdemOpts,
-  contexto: string
+  contexto: string,
+  escopo: EscopoEmpresa
 ): Promise<{ linhas: LinhaConsumo[]; emFalta: LinhaConsumo[]; divergencia: { insumo_id: number; nome: string; excesso: number }[] }> {
   const s = getStore();
   const id = Number(op.id);
   const forcar = opts.forcar === true && (actor.perfil === 'admin' || actor.perfil === 'gerente');
-  const necessidade = await necessidadeDaFicha(ficha, pecasBase, tx);
-  const jaConsumido = await jaConsumidoNaOrdem(id, tx);
+  const necessidade = await necessidadeDaFicha(ficha, pecasBase, escopo, tx);
+  const jaConsumido = await jaConsumidoNaOrdem(id, escopo, tx);
   const linhas: LinhaConsumo[] = [];
   const divergencia: { insumo_id: number; nome: string; excesso: number }[] = [];
 
@@ -363,7 +382,7 @@ async function baixarInsumos(
       continue;
     }
     if (resto === 0) continue;
-    const saldo = round3(await s.insumoStock(linha.insumo_id, tx));
+    const saldo = round3(await s.insumoStock(linha.insumo_id, tx, escopo.empresaId));
     linhas.push({ ...linha, necessidade: resto, faltando: saldo < resto ? round3(resto - saldo) : 0 });
   }
 
@@ -378,10 +397,11 @@ async function baixarInsumos(
 
   // Efetiva a baixa — mesmo no forçar, deixando o saldo negativo e auditado.
   for (const l of linhas) {
-    await s.adjustInsumoStock(l.insumo_id, -l.necessidade, tx);
+    await s.adjustInsumoStock(l.insumo_id, -l.necessidade, tx, escopo.empresaId);
     await s.insert(
       getResource('movimentacoes_insumos')!,
       {
+        empresa_id: escopo.empresaId,
         tipo: 'saida',
         insumo_id: l.insumo_id,
         quantidade: l.necessidade,
@@ -401,10 +421,10 @@ async function baixarInsumos(
 // Reabrir: estorna tudo, pelos vínculos formais.
 // ----------------------------------------------------------------------------
 
-async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
+async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts, escopo: EscopoEmpresa) {
   const s = getStore();
   const id = Number(op.id);
-  const itensPlanejados = await itensProducao(op, tx);
+  const itensPlanejados = await itensProducao(op, escopo, tx);
   const pecasPlanejadas = itensPlanejados.reduce((a, i) => a + i.quantidade, 0);
   if (!itensPlanejados.length || pecasPlanejadas <= 0) {
     throw new HttpError(409, 'Adicione ao menos um tamanho com quantidade antes de concluir a OP.');
@@ -412,7 +432,7 @@ async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
 
   // Com apontamento, entra o que foi produzido de verdade; sem apontamento, a
   // quantidade planejada (comportamento anterior à E2, preservado).
-  const apontamentos = await apontamentosDaOrdem(id, tx);
+  const apontamentos = await apontamentosDaOrdem(id, escopo, tx);
   const porTamanho = produzidasPorTamanho(apontamentos);
   const pecasProduzidas = Number(op.quantidade_produzida || 0);
   const pecasPerdidas = Number(op.quantidade_perdida || 0);
@@ -426,21 +446,24 @@ async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
     throw new HttpError(409, 'Nada a dar entrada: a OP não tem quantidade planejada nem apontamento com peças boas.');
   }
 
-  const ficha = await fichaDoProduto(Number(op.produto_id), tx);
+  const ficha = await fichaDoProduto(Number(op.produto_id), escopo, tx);
   const pecasBase = pecasProcessadas > 0 ? pecasProcessadas : pecasPlanejadas;
-  const { linhas, emFalta, divergencia } = await baixarInsumos(op, ficha, pecasBase, actor, tx, opts, 'Consumo');
+  const { linhas, emFalta, divergencia } = await baixarInsumos(op, ficha, pecasBase, actor, tx, opts, 'Consumo', escopo);
 
   // --- entrada de produto acabado, com vínculo formal à OP -------------------
-  const local = await localDeEntrada(op, tx);
+  const local = await localDeEntrada(op, escopo, tx);
   for (const it of entradas) {
-    await s.adjustStock(Number(op.produto_id), it.tamanho_id, local.nome, it.quantidade, tx);
+    await validarTamanhoNaGrade(Number(op.produto_id), it.tamanho_id, tx, escopo);
+    await s.adjustStock(Number(op.produto_id), it.tamanho_id, local.nome, it.quantidade, tx, local.id, escopo.empresaId);
     await s.insert(
       getResource('movimentacoes')!,
       {
+        empresa_id: escopo.empresaId,
         tipo: 'entrada',
         produto_id: op.produto_id,
         tamanho_id: it.tamanho_id,
         local: local.nome,
+        local_id: local.id,
         quantidade: it.quantidade,
         motivo: `Produção concluída — OP #${id}`,
         usuario_id: actor.id || null,
@@ -453,7 +476,7 @@ async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
   // Espelha produzido/perdido por tamanho na grade da OP (OP "por grade").
   if (String(op.tipo || 'tamanho') === 'grade') {
     for (const it of itensPlanejados) {
-      const itemId = await itemIdPorTamanho(id, it.tamanho_id, tx);
+      const itemId = await itemIdPorTamanho(id, it.tamanho_id, escopo, tx);
       const produzido = pecasProduzidas > 0 ? porTamanho.get(it.tamanho_id) || 0 : it.quantidade;
       const perdido = Number(
         apontamentos.filter((a) => Number(a.tamanho_id) === it.tamanho_id).reduce((acc, a) => acc + Number(a.quantidade_perdida || 0), 0)
@@ -462,7 +485,7 @@ async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
     }
   }
 
-  const custoReal = await calcularCustoReal(id, ficha, pecasPlanejadas, pecasBase, tx);
+  const custoReal = await calcularCustoReal(id, ficha, pecasPlanejadas, pecasBase, escopo, tx);
   await s.update(
     recursoOrdem().op,
     id,
@@ -494,38 +517,53 @@ async function concluirOrdem(op: Row, actor: Actor, tx: Tx, opts: OrdemOpts) {
       dados: { pecas: totalEntrada, perdidas: pecasPerdidas, insumos: linhas.length, custo_real: custoReal, local: local.nome, divergencia_insumos: divergencia },
       usuario_id: actor.id || null,
     },
-    tx
+    tx, escopo
   );
 }
 
 /** Busca o id do item de grade por tamanho (para atualizar produzido/perdido). */
-async function itemIdPorTamanho(ordemId: number, tamanhoId: number, tx?: Tx): Promise<number> {
+async function itemIdPorTamanho(ordemId: number, tamanhoId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<number> {
   const s = getStore();
-  const itens = await s.list(recursoOrdem().itens, { page: 1, pageSize: 200, sort: 'id', dir: 'desc', filter: { ordem_id: ordemId, tamanho_id: tamanhoId } }, tx);
+  const itens = await s.list(recursoOrdem().itens, { page: 1, pageSize: 200, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId, ordem_id: ordemId, tamanho_id: tamanhoId } }, tx);
   if (!itens.rows.length) throw new HttpError(404, 'Item da OP não encontrado.');
   return Number(itens.rows[0].id);
 }
 
-async function estornarOrdem(op: Row, actor: Actor, tx: Tx) {
+async function estornarOrdem(op: Row, actor: Actor, tx: Tx, escopo: EscopoEmpresa) {
   const s = getStore();
   const id = Number(op.id);
 
   // 1) estorna as ENTRADAS de produto acabado — pela FK `ordem_id`, não pelo
   //    texto do motivo (que continua existindo só para leitura na tela).
-  const movs = await s.list(getResource('movimentacoes')!, { page: 1, pageSize: 1000, sort: 'id', dir: 'desc', filter: { ordem_id: id } }, tx);
+  const movs = await s.list(getResource('movimentacoes')!, { page: 1, pageSize: 1000, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId, ordem_id: id } }, tx);
   let pecas = 0;
   for (const m of movs.rows) {
     if (String(m.tipo) !== 'entrada' || m.estornado) continue;
+    const produtoId = Number(m.produto_id);
+    if (!await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Produto não encontrado.');
+    const tamanhoId = m.tamanho_id === null || m.tamanho_id === undefined ? null : Number(m.tamanho_id);
+    await validarTamanhoNaGrade(produtoId, tamanhoId, tx, escopo);
     const qtd = Number(m.quantidade || 0);
-    if (!qtd) continue;
-    await s.adjustStock(Number(m.produto_id), m.tamanho_id, m.local, -qtd, tx);
+    if (!Number.isInteger(qtd) || qtd <= 0) throw new HttpError(409, 'Não é possível estornar uma entrada histórica com quantidade inválida. Nenhum saldo foi alterado.');
+    if ((m.local_id === null || m.local_id === undefined || m.local_id === '') && !String(m.local || '').trim()) {
+      throw new HttpError(409, 'Não é possível estornar uma entrada histórica sem local de estoque válido. Nenhum saldo foi alterado.');
+    }
+    const localData: Record<string, unknown> = {};
+    if (m.local_id !== null && m.local_id !== undefined && m.local_id !== '') localData.local_id = m.local_id;
+    else localData.local = String(m.local).trim();
+    await resolveLocal(localData, tx, escopo);
+    const localId = Number(localData.local_id);
+    const local = String(localData.local);
+    await s.adjustStock(produtoId, tamanhoId, local, -qtd, tx, localId, escopo.empresaId);
     await s.insert(
       getResource('movimentacoes')!,
       {
+        empresa_id: escopo.empresaId,
         tipo: 'saida',
-        produto_id: m.produto_id,
-        tamanho_id: m.tamanho_id,
-        local: m.local,
+        produto_id: produtoId,
+        tamanho_id: tamanhoId,
+        local,
+        local_id: localId,
         quantidade: qtd,
         motivo: `Estorno — OP #${id} reaberta`,
         usuario_id: actor.id || null,
@@ -543,10 +581,11 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx) {
   // linha a linha: `movimentacoes_insumos` não tem coluna de estorno, então sem o
   // líquido um segundo "reabrir" devolveria o mesmo insumo de novo. Com o
   // líquido, o segundo estorno encontra zero e não faz nada — idempotente.
-  const movsInsumo = await s.list(getResource('movimentacoes_insumos')!, { page: 1, pageSize: 5000, filter: { ordem_id: id } }, tx);
+  const movsInsumo = await s.list(getResource('movimentacoes_insumos')!, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, ordem_id: id } }, tx);
   const liquido = new Map<number, { qtd: number; custo: number }>();
   for (const m of movsInsumo.rows) {
     const insumoId = Number(m.insumo_id);
+    if (!await s.findOneWhere(getResource('insumos')!, { id: insumoId, empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Insumo não encontrado.');
     const qtd = Number(m.quantidade || 0);
     const sinal = String(m.tipo) === 'saida' ? 1 : String(m.tipo) === 'entrada' ? -1 : 0;
     if (!sinal || !qtd) continue;
@@ -556,10 +595,11 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx) {
   let insumos = 0;
   for (const [insumoId, { qtd, custo }] of liquido) {
     if (qtd <= 0) continue;
-    await s.adjustInsumoStock(insumoId, qtd, tx);
+    await s.adjustInsumoStock(insumoId, qtd, tx, escopo.empresaId);
     await s.insert(
       getResource('movimentacoes_insumos')!,
       {
+        empresa_id: escopo.empresaId,
         tipo: 'entrada',
         insumo_id: insumoId,
         quantidade: qtd,
@@ -577,7 +617,7 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx) {
   //    ordens_eventos (o evento `reaberta` carrega o resumo do que foi anulado),
   //    então a história não se perde — mas os apontamentos não podem continuar
   //    vivos, ou a próxima conclusão leria produção que já foi estornada.
-  const apontamentos = await apontamentosDaOrdem(id, tx);
+  const apontamentos = await apontamentosDaOrdem(id, escopo, tx);
   const resumoApontamentos = apontamentos.map((a) => ({
     id: Number(a.id),
     tamanho_id: a.tamanho_id ? Number(a.tamanho_id) : null,
@@ -586,7 +626,7 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx) {
   }));
   for (const a of apontamentos) await s.remove(recursoEventos().apontamentos, Number(a.id), tx);
 
-  const itensGrade = await s.list(recursoOrdem().itens, { page: 1, pageSize: 200, filter: { ordem_id: id } }, tx);
+  const itensGrade = await s.list(recursoOrdem().itens, { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId, ordem_id: id } }, tx);
   for (const it of itensGrade.rows) await s.update(recursoOrdem().itens, Number(it.id), { produzido: 0, perdido: 0 }, tx);
 
   await s.update(recursoOrdem().op, id, { concluida_em: null, quantidade_produzida: 0, quantidade_perdida: 0, custo_real: 0 }, tx);
@@ -620,7 +660,7 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx) {
       dados: { pecas, insumos, apontamentos: resumoApontamentos },
       usuario_id: actor.id || null,
     },
-    tx
+    tx, escopo
   );
 }
 
@@ -634,10 +674,13 @@ export async function aplicarRegrasOrdem(
   data: Payload,
   actor: Actor,
   tx: Tx,
+  escopo: EscopoEmpresa,
   opts: OrdemOpts = {}
 ): Promise<void> {
   if (data.status === undefined) return;
   const s = getStore();
+  assertRegistroDaEmpresaParaEscrita(recursoOrdem().op, after, escopo);
+  if (before) assertRegistroDaEmpresaParaEscrita(recursoOrdem().op, before, escopo);
   const id = Number(after.id);
   const statusAnterior = before ? String(before.status) : null;
   const statusNovo = String(after.status);
@@ -682,14 +725,14 @@ export async function aplicarRegrasOrdem(
         mensagem: `Conclusão direta a partir de "${ROTULO_STATUS[statusAnterior as StatusOp]}": liberação e produção foram puladas`,
         usuario_id: actor.id || null,
       },
-      tx
+      tx, escopo
     );
   }
   const estornando = statusAnterior === 'concluida' && statusNovo !== 'concluida';
   const cancelando = statusNovo === 'cancelada';
 
-  if (concluindo) await concluirOrdem(after, actor, tx, opts);
-  else if (estornando) await estornarOrdem(before!, actor, tx);
+  if (concluindo) await concluirOrdem(after, actor, tx, opts, escopo);
+  else if (estornando) await estornarOrdem(before!, actor, tx, escopo);
   else if (cancelando && statusAnterior) await registrarEventoOrdem(
     id,
     'cancelada',
@@ -700,7 +743,7 @@ export async function aplicarRegrasOrdem(
       dados: { motivo: data.motivo_cancelamento ?? null },
       usuario_id: actor.id || null,
     },
-    tx
+    tx, escopo
   );
   else {
     // `statusAnterior === null` é a criação da OP: o evento é `criada`, não
@@ -724,7 +767,7 @@ export async function aplicarRegrasOrdem(
         mensagem: statusAnterior === null ? `OP criada já como "${ROTULO_STATUS[statusNovo]}"` : `OP ${ROTULO_STATUS[statusNovo]}`,
         usuario_id: actor.id || null,
       },
-      tx
+      tx, escopo
     );
   }
 }
@@ -745,7 +788,7 @@ export async function aplicarRegrasOrdem(
  * Responde 404 (não 403): 403 confirmaria que o registro existe.
  */
 async function getOrdem(id: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row> {
-  const row = await getStore().findOneWhere(recursoOrdem().op, { id }, tx);
+  const row = await getStore().findOneWhere(recursoOrdem().op, { id, empresa_id: escopo.empresaId }, tx);
   return assertRegistroDaEmpresa(recursoOrdem().op, row, escopo);
 }
 
@@ -766,9 +809,11 @@ export async function listItensOrdem(req: Request, res: Response) {
   const { op, itens } = recursoOrdem();
   const actor = currentUser(req);
   checkAccess(op, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
-  await getOrdem(id, escopoDoAtor(actor));
-  const out = await getStore().list(itens, { page: 1, pageSize: 200, sort: 'tamanho_id', dir: 'asc', filter: { ordem_id: id } });
+  const ordem = await getOrdem(id, escopo);
+  const out = await getStore().list(itens, { page: 1, pageSize: 200, sort: 'tamanho_id', dir: 'asc', filter: { empresa_id: escopo.empresaId, ordem_id: id } });
+  for (const item of out.rows) await validarTamanhoNaGrade(Number(ordem.produto_id), Number(item.tamanho_id), undefined, escopo);
   res.json(out.rows);
 }
 
@@ -776,11 +821,12 @@ export async function createItemOrdem(req: Request, res: Response) {
   const { op, itens } = recursoOrdem();
   const actor = currentUser(req);
   checkAccess(op, actor, 'update');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
+      const ordem = await getOrdem(id, escopo, tx);
       if (String(ordem.tipo || 'tamanho') !== 'grade') {
         throw new HttpError(409, 'Esta OP é "por tamanho". Use os campos tamanho/quantidade da própria OP. Converta para "por grade" para usar a grade PP–GG.');
       }
@@ -788,16 +834,17 @@ export async function createItemOrdem(req: Request, res: Response) {
       const data = validatePayload(itens, req.body, 'create');
       const qtd = Number(data.quantidade || 0);
       if (qtd <= 0) throw new HttpError(400, 'Informe uma quantidade maior que zero.', { quantidade: 'Deve ser maior que zero' });
-      const duplicado = await s.findOneWhere(itens, { ordem_id: id, tamanho_id: Number(data.tamanho_id) }, tx);
+      await validarTamanhoNaGrade(Number(ordem.produto_id), Number(data.tamanho_id), tx, escopo);
+      const duplicado = await s.findOneWhere(itens, { empresa_id: escopo.empresaId, ordem_id: id, tamanho_id: Number(data.tamanho_id) }, tx);
       if (duplicado) {
         throw new HttpError(409, 'Este tamanho já está na OP. Edite a quantidade existente.', { tamanho_id: 'Tamanho já incluído' });
       }
-      const item = await s.insert(itens, { ...data, ordem_id: id, produzido: 0 }, tx);
+      const item = await s.insert(itens, { ...data, empresa_id: escopo.empresaId, ordem_id: id, produzido: 0 }, tx);
       await s.audit(
         { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'ordens', registro_id: id, descricao: `OP #${id}: tamanho adicionado à grade (${qtd} un.)`, empresa_id: empresaDoRegistroAudit(recursoOrdem().op, ordem, actor) },
         tx
       );
-      return (await s.get(itens, Number(item.id), tx)) ?? item;
+      return (await s.findOneWhere(itens, { id: Number(item.id), ordem_id: id, empresa_id: escopo.empresaId }, tx)) ?? item;
     });
     res.status(201).json(out);
   } catch (e) {
@@ -809,22 +856,27 @@ export async function updateItemOrdem(req: Request, res: Response) {
   const { op, itens } = recursoOrdem();
   const actor = currentUser(req);
   checkAccess(op, actor, 'update');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
+      const ordem = await getOrdem(id, escopo, tx);
       assertOrdemEditavel(ordem);
-      const before = await s.findOneWhere(itens, { id: itemId, ordem_id: id }, tx);
+      const before = await s.findOneWhere(itens, { id: itemId, ordem_id: id, empresa_id: escopo.empresaId }, tx);
       if (!before) throw new HttpError(404, 'Item não encontrado nesta OP.');
       const data = validatePayload(itens, req.body, 'update');
+      delete data.empresa_id;
+      delete data.ordem_id;
+      const tamanhoId = data.tamanho_id === undefined ? Number(before.tamanho_id) : Number(data.tamanho_id);
+      await validarTamanhoNaGrade(Number(ordem.produto_id), tamanhoId, tx, escopo);
       const item = await s.update(itens, itemId, data, tx);
       await s.audit(
         { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'ordens', registro_id: id, descricao: `OP #${id}: item ${itemId} alterado`, empresa_id: empresaDoRegistroAudit(recursoOrdem().op, ordem, actor) },
         tx
       );
-      return (await s.get(itens, itemId, tx)) ?? item;
+      return (await s.findOneWhere(itens, { id: itemId, ordem_id: id, empresa_id: escopo.empresaId }, tx)) ?? item;
     });
     res.json(out);
   } catch (e) {
@@ -836,14 +888,15 @@ export async function deleteItemOrdem(req: Request, res: Response) {
   const { op, itens } = recursoOrdem();
   const actor = currentUser(req);
   checkAccess(op, actor, 'update');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
   const s = getStore();
   try {
     await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
+      const ordem = await getOrdem(id, escopo, tx);
       assertOrdemEditavel(ordem);
-      const before = await s.findOneWhere(itens, { id: itemId, ordem_id: id }, tx);
+      const before = await s.findOneWhere(itens, { id: itemId, ordem_id: id, empresa_id: escopo.empresaId }, tx);
       if (!before) throw new HttpError(404, 'Item não encontrado nesta OP.');
       await s.remove(itens, itemId, tx);
       await s.audit(
@@ -862,17 +915,18 @@ export async function deleteItemOrdem(req: Request, res: Response) {
 // ----------------------------------------------------------------------------
 
 /** Recalcula custo_calculado e preco_sugerido de uma ficha. */
-export async function recalcularFichaValores(fichaId: number, tx?: Tx): Promise<Row | null> {
+export async function recalcularFichaValores(fichaId: number, tx: Tx | undefined, escopo: EscopoEmpresa): Promise<Row | null> {
   const s = getStore();
   const { ficha, itens } = recursoFicha();
-  const f = await s.findOneWhere(ficha, { id: fichaId }, tx);
+  const f = await s.findOneWhere(ficha, { id: fichaId, empresa_id: escopo.empresaId }, tx);
   if (!f) return null;
 
-  const linhas = await s.list(itens, { page: 1, pageSize: 500, filter: { ficha_id: fichaId } }, tx);
+  const linhas = await s.list(itens, { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, ficha_id: fichaId } }, tx);
   let insumosTotal = 0;
   for (const linha of linhas.rows) {
-    const insumo = await s.findOneWhere(getResource('insumos')!, { id: Number(linha.insumo_id) }, tx);
-    const custo = Number(insumo?.custo_medio || 0);
+    const insumo = await s.findOneWhere(getResource('insumos')!, { id: Number(linha.insumo_id), empresa_id: escopo.empresaId }, tx);
+    if (!insumo) throw new HttpError(404, 'Insumo não encontrado.');
+    const custo = Number(insumo.custo_medio || 0);
     const consumo = Number(linha.consumo || 0);
     const perda = Number(linha.perda_pct || 0);
     insumosTotal += consumo * (1 + perda / 100) * custo;
@@ -884,18 +938,24 @@ export async function recalcularFichaValores(fichaId: number, tx?: Tx): Promise<
   return updated;
 }
 
-async function getFicha(id: number, tx?: Tx): Promise<Row> {
-  const row = await getStore().findOneWhere(recursoFicha().ficha, { id }, tx);
+async function getFicha(id: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row> {
+  const row = await getStore().findOneWhere(recursoFicha().ficha, { id, empresa_id: escopo.empresaId }, tx);
   if (!row) throw new HttpError(404, 'Ficha técnica não encontrada.');
-  return row;
+  return assertRegistroDaEmpresa(recursoFicha().ficha, row, escopo);
 }
 
 export async function listInsumosFicha(req: Request, res: Response) {
   const { ficha, itens } = recursoFicha();
-  checkAccess(ficha, currentUser(req), 'read');
+  const actor = currentUser(req);
+  checkAccess(ficha, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
-  await getFicha(id);
-  const out = await getStore().list(itens, { page: 1, pageSize: 200, filter: { ficha_id: id } });
+  await getFicha(id, escopo);
+  const s = getStore();
+  const out = await s.list(itens, { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId, ficha_id: id } });
+  for (const item of out.rows) {
+    if (!await s.findOneWhere(getResource('insumos')!, { id: Number(item.insumo_id), empresa_id: escopo.empresaId })) throw new HttpError(404, 'Insumo não encontrado.');
+  }
   res.json(out.rows);
 }
 
@@ -903,15 +963,17 @@ export async function createInsumoFicha(req: Request, res: Response) {
   const { ficha, itens } = recursoFicha();
   const actor = currentUser(req);
   checkAccess(ficha, actor, 'update');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      await getFicha(id, tx);
+      await getFicha(id, escopo, tx);
       const data = validatePayload(itens, req.body, 'create');
-      const item = await s.insert(itens, { ...data, ficha_id: id }, tx);
-      const f = await recalcularFichaValores(id, tx);
-      const ins = await s.findOneWhere(getResource('insumos')!, { id: Number(data.insumo_id) }, tx);
+      if (!await s.findOneWhere(getResource('insumos')!, { id: Number(data.insumo_id), empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Insumo não encontrado.');
+      const item = await s.insert(itens, { ...data, empresa_id: escopo.empresaId, ficha_id: id }, tx);
+      const f = await recalcularFichaValores(id, tx, escopo);
+      const ins = await s.findOneWhere(getResource('insumos')!, { id: Number(data.insumo_id), empresa_id: escopo.empresaId }, tx);
       await s.audit(
         {
           usuario_id: actor.id || null,
@@ -924,7 +986,7 @@ export async function createInsumoFicha(req: Request, res: Response) {
         },
         tx
       );
-      return (await s.get(itens, Number(item.id), tx)) ?? item;
+      return (await s.findOneWhere(itens, { id: Number(item.id), ficha_id: id, empresa_id: escopo.empresaId }, tx)) ?? item;
     });
     res.status(201).json(out);
   } catch (e) {
@@ -936,17 +998,21 @@ export async function updateInsumoFicha(req: Request, res: Response) {
   const { ficha, itens } = recursoFicha();
   const actor = currentUser(req);
   checkAccess(ficha, actor, 'update');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      await getFicha(id, tx);
-      const before = await s.findOneWhere(itens, { id: itemId, ficha_id: id }, tx);
+      await getFicha(id, escopo, tx);
+      const before = await s.findOneWhere(itens, { id: itemId, ficha_id: id, empresa_id: escopo.empresaId }, tx);
       if (!before) throw new HttpError(404, 'Insumo não encontrado nesta ficha.');
       const data = validatePayload(itens, req.body, 'update');
+      delete data.empresa_id;
+      delete data.ficha_id;
+      if (data.insumo_id !== undefined && !await s.findOneWhere(getResource('insumos')!, { id: Number(data.insumo_id), empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Insumo não encontrado.');
       const item = await s.update(itens, itemId, data, tx);
-      const f = await recalcularFichaValores(id, tx);
+      const f = await recalcularFichaValores(id, tx, escopo);
       await s.audit(
         {
           usuario_id: actor.id || null,
@@ -959,7 +1025,7 @@ export async function updateInsumoFicha(req: Request, res: Response) {
         },
         tx
       );
-      return (await s.get(itens, itemId, tx)) ?? item;
+      return (await s.findOneWhere(itens, { id: itemId, ficha_id: id, empresa_id: escopo.empresaId }, tx)) ?? item;
     });
     res.json(out);
   } catch (e) {
@@ -971,16 +1037,17 @@ export async function deleteInsumoFicha(req: Request, res: Response) {
   const { ficha, itens } = recursoFicha();
   const actor = currentUser(req);
   checkAccess(ficha, actor, 'update');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const itemId = parseId(req.params.itemId);
   const s = getStore();
   try {
     await s.transaction(async (tx) => {
-      await getFicha(id, tx);
-      const before = await s.findOneWhere(itens, { id: itemId, ficha_id: id }, tx);
+      await getFicha(id, escopo, tx);
+      const before = await s.findOneWhere(itens, { id: itemId, ficha_id: id, empresa_id: escopo.empresaId }, tx);
       if (!before) throw new HttpError(404, 'Insumo não encontrado nesta ficha.');
       await s.remove(itens, itemId, tx);
-      const f = await recalcularFichaValores(id, tx);
+      const f = await recalcularFichaValores(id, tx, escopo);
       await s.audit(
         {
           usuario_id: actor.id || null,
@@ -1010,14 +1077,15 @@ export async function aplicarPrecoFicha(req: Request, res: Response) {
   // minPerfil (o operador precisa editar consumo/perda), então a trava tem que
   // estar aqui. Encontrado pelo teste de custo: antes, qualquer operador aplicava.
   exigirGerenteProducao(actor, 'aplicar o preço da ficha ao produto');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const f = await getFicha(id, tx);
+      const f = await getFicha(id, escopo, tx);
       const produtoId = Number(f.produto_id);
       if (!produtoId) throw new HttpError(400, 'A ficha não está vinculada a um produto.');
-      const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId }, tx);
+      const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId }, tx);
       if (!produto) throw new HttpError(404, 'Produto da ficha não encontrado.');
       const custo = Number(f.custo_calculado ?? 0);
       const preco = Number(f.preco_sugerido ?? 0);
@@ -1050,17 +1118,22 @@ export async function producaoPainel(req: Request, res: Response) {
   const actor = currentUser(req);
   const { op } = recursoOrdem();
   checkAccess(op, actor, 'read');
+  const escopo = escopoDe(actor);
   const s = getStore();
-  const [ordens, itensOrdem] = await Promise.all([
-    s.list(op, { page: 1, pageSize: 5000, sort: 'id', dir: 'desc' }),
-    s.list(getResource('itens_ordem')!, { page: 1, pageSize: 10000 }),
-  ]);
-  const pecasDa = (o: Row): number => {
-    if (String(o.tipo) === 'grade') {
-      return itensOrdem.rows.filter((i) => Number(i.ordem_id) === Number(o.id)).reduce((a, i) => a + Number(i.quantidade || 0), 0);
-    }
-    return Number(o.quantidade || 0);
-  };
+  const ordens = await s.list(op, { page: 1, pageSize: 5000, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId } });
+  const pecasPorOrdem = new Map<number, number>();
+  const produtoPorId = new Map<number, string>();
+  for (const ordem of ordens.rows) {
+    const produtoId = Number(ordem.produto_id);
+    const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId });
+    if (!produto) throw new HttpError(404, 'Produto não encontrado.');
+    produtoPorId.set(produtoId, labelOf(getResource('produtos')!, produto));
+    const itens = await itensProducao(ordem, escopo);
+    pecasPorOrdem.set(Number(ordem.id), String(ordem.tipo || 'tamanho') === 'grade'
+      ? itens.reduce((total, item) => total + item.quantidade, 0)
+      : Number(ordem.quantidade || 0));
+  }
+  const pecasDa = (o: Row): number => pecasPorOrdem.get(Number(o.id)) || 0;
 
   const hoje = new Date().toISOString().slice(0, 10);
   const mes = hoje.slice(0, 7);
@@ -1108,7 +1181,7 @@ export async function producaoPainel(req: Request, res: Response) {
     porSemana: semanas,
     alertas: atrasadas.slice(0, 6).map((o) => ({
       id: Number(o.id),
-      produto: o.produto_id__label || `#${o.produto_id}`,
+      produto: produtoPorId.get(Number(o.produto_id)) || `#${o.produto_id}`,
       previsao: o.previsao ? String(o.previsao).slice(0, 10) : null,
       quantidade: pecasDa(o),
       status: String(o.status),
@@ -1162,20 +1235,21 @@ export async function liberarOrdem(req: Request, res: Response) {
   const actor = currentUser(req);
   exigirGerenteProducao(actor, 'liberar uma ordem de produção');
   checkAccess(op, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
+      const ordem = await getOrdem(id, escopo, tx);
       if (String(ordem.status) !== 'planejada') throw erroEstado(ordem, 'liberar a OP', ['planejada']);
-      const itens = await itensProducao(ordem, tx);
+      const itens = await itensProducao(ordem, escopo, tx);
       const pecas = itens.reduce((a, i) => a + i.quantidade, 0);
       if (!itens.length || pecas <= 0) throw new HttpError(409, 'Adicione ao menos um tamanho com quantidade antes de liberar a OP.');
 
       // Custo previsto = peças planejadas × custo da ficha NESTE momento.
       // Fica congelado de propósito: editar a ficha depois não reescreve o que
       // foi orçado quando a OP foi para o chão de fábrica.
-      const ficha = await fichaDoProduto(Number(ordem.produto_id), tx);
+      const ficha = await fichaDoProduto(Number(ordem.produto_id), escopo, tx);
       const custoUnitario = ficha ? Number(ficha.custo_calculado || 0) : 0;
       const custoPrevisto = round2(pecas * custoUnitario);
 
@@ -1205,13 +1279,13 @@ export async function liberarOrdem(req: Request, res: Response) {
         mensagem: `Liberada para produção — ${pecas} peça(s), custo previsto R$ ${custoPrevisto.toFixed(2)}`,
         dados: { pecas, custo_previsto: custoPrevisto, tem_ficha: !!ficha },
         usuario_id: actor.id || null,
-      }, tx);
+      }, tx, escopo);
       if (!ficha) {
         await registrarEventoOrdem(id, 'edicao', {
           para: 'liberada',
           mensagem: 'O produto não tem ficha técnica: o custo previsto ficou em R$ 0,00 e a conclusão não baixará insumos.',
           usuario_id: actor.id || null,
-        }, tx);
+        }, tx, escopo);
       }
       return atualizada;
     });
@@ -1226,11 +1300,12 @@ export async function iniciarOrdem(req: Request, res: Response) {
   const { op } = recursoOrdem();
   const actor = currentUser(req);
   checkAccess(op, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
+      const ordem = await getOrdem(id, escopo, tx);
       const de = String(ordem.status);
       if (de !== 'planejada' && de !== 'liberada' && de !== 'parcial') throw erroEstado(ordem, 'iniciar a OP', ['planejada', 'liberada', 'parcial']);
       const extra: Payload = ordem.iniciada_em ? {} : { iniciada_em: new Date().toISOString() };
@@ -1242,7 +1317,7 @@ export async function iniciarOrdem(req: Request, res: Response) {
         { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'ordens', registro_id: id, descricao: `OP #${id}: produção iniciada`, empresa_id: empresaDoRegistroAudit(op, ordem, actor) },
         tx
       );
-      await registrarEventoOrdem(id, 'iniciada', { de, para: 'em_producao', mensagem: 'Produção iniciada', usuario_id: actor.id || null }, tx);
+      await registrarEventoOrdem(id, 'iniciada', { de, para: 'em_producao', mensagem: 'Produção iniciada', usuario_id: actor.id || null }, tx, escopo);
       return atualizada;
     });
     res.json(out);
@@ -1256,11 +1331,12 @@ export async function listApontamentos(req: Request, res: Response) {
   const { op } = recursoOrdem();
   const actor = currentUser(req);
   checkAccess(op, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
-  await getOrdem(id, escopoDoAtor(actor));
+  await getOrdem(id, escopo);
   // id desc: mesmo motivo do histórico — `apontado_em` empata quando o turno
   // aponta dois tamanhos em seguida.
-  const out = await getStore().list(recursoEventos().apontamentos, { page: 1, pageSize: 500, sort: 'id', dir: 'desc', filter: { ordem_id: id } });
+  const out = await getStore().list(recursoEventos().apontamentos, { page: 1, pageSize: 500, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId, ordem_id: id } });
   res.json(out.rows);
 }
 
@@ -1269,12 +1345,13 @@ export async function listEventosOrdem(req: Request, res: Response) {
   const { op } = recursoOrdem();
   const actor = currentUser(req);
   checkAccess(op, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
-  await getOrdem(id, escopoDoAtor(actor));
+  await getOrdem(id, escopo);
   // Ordena por id, não por criado_em: apontamento e perda são gravados no mesmo
   // milissegundo e o empate em criado_em deixava a ordem a cargo do banco (a UI
   // chegou a mostrar a perda antes do apontamento). O id é monotônico na trilha.
-  const out = await getStore().list(recursoEventos().eventos, { page: 1, pageSize: 500, sort: 'id', dir: 'asc', filter: { ordem_id: id } });
+  const out = await getStore().list(recursoEventos().eventos, { page: 1, pageSize: 500, sort: 'id', dir: 'asc', filter: { empresa_id: escopo.empresaId, ordem_id: id } });
   res.json(out.rows);
 }
 
@@ -1297,12 +1374,13 @@ export async function criarApontamento(req: Request, res: Response) {
   const { op } = recursoOrdem();
   const actor = currentUser(req);
   checkAccess(op, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const forcar = req.query.forcar === 'true' || req.query.forcar === '1';
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
+      const ordem = await getOrdem(id, escopo, tx);
       const de = String(ordem.status);
       if (de !== 'liberada' && de !== 'em_producao' && de !== 'parcial') {
         throw erroEstado(ordem, 'apontar produção', ['liberada', 'em_producao', 'parcial']);
@@ -1311,7 +1389,7 @@ export async function criarApontamento(req: Request, res: Response) {
       // ---- idempotência -------------------------------------------------
       const chave = typeof req.body?.idempotency_key === 'string' && req.body.idempotency_key.trim() ? req.body.idempotency_key.trim().slice(0, 120) : null;
       if (chave) {
-        const existente = await s.findOneWhere(recursoEventos().apontamentos, { ordem_id: id, idempotency_key: chave }, tx);
+        const existente = await s.findOneWhere(recursoEventos().apontamentos, { empresa_id: escopo.empresaId, ordem_id: id, idempotency_key: chave }, tx);
         if (existente) return { ...existente, idempotente: true };
       }
 
@@ -1332,13 +1410,13 @@ export async function criarApontamento(req: Request, res: Response) {
         if (ordem.tamanho_id) tamanhoId = Number(ordem.tamanho_id);
         else throw new HttpError(400, 'Esta OP é por grade: informe o tamanho do apontamento.', { tamanho_id: 'Obrigatório em OP por grade' });
       }
-      const itensPlanejados = await itensProducao(ordem, tx);
+      const itensPlanejados = await itensProducao(ordem, escopo, tx);
       if (!itensPlanejados.some((i) => i.tamanho_id === tamanhoId)) {
         throw new HttpError(400, `O tamanho #${tamanhoId} não faz parte do plano desta OP.`, { tamanho_id: 'Tamanho fora do plano da OP' });
       }
 
       // ---- consumo de insumo (peça refugada também consome) --------------
-      const ficha = await fichaDoProduto(Number(ordem.produto_id), tx);
+      const ficha = await fichaDoProduto(Number(ordem.produto_id), escopo, tx);
       const produzidasAteAqui = Number(ordem.quantidade_produzida || 0);
       const perdidasAteAqui = Number(ordem.quantidade_perdida || 0);
       const { linhas, emFalta, divergencia } = await baixarInsumos(
@@ -1348,12 +1426,14 @@ export async function criarApontamento(req: Request, res: Response) {
         actor,
         tx,
         { forcar },
-        'Consumo'
+        'Consumo',
+        escopo
       );
 
       const apontamento = await s.insert(
         recursoEventos().apontamentos,
         {
+          empresa_id: escopo.empresaId,
           ordem_id: id,
           tamanho_id: tamanhoId,
           quantidade_produzida: produzida,
@@ -1369,7 +1449,7 @@ export async function criarApontamento(req: Request, res: Response) {
       const pecasPlanejadas = itensPlanejados.reduce((a, i) => a + i.quantidade, 0);
       const novaProduzida = produzidasAteAqui + produzida;
       const novaPerdida = perdidasAteAqui + perdida;
-      const custoReal = await calcularCustoReal(id, ficha, pecasPlanejadas, novaProduzida + novaPerdida, tx);
+      const custoReal = await calcularCustoReal(id, ficha, pecasPlanejadas, novaProduzida + novaPerdida, escopo, tx);
       const acumulado: Payload = {
         quantidade_produzida: novaProduzida,
         quantidade_perdida: novaPerdida,
@@ -1388,8 +1468,8 @@ export async function criarApontamento(req: Request, res: Response) {
 
       // espelha na grade da OP
       if (String(ordem.tipo || 'tamanho') === 'grade') {
-        const itemId = await itemIdPorTamanho(id, tamanhoId, tx);
-        const linha = await s.findOneWhere(recursoOrdem().itens, { id: itemId }, tx);
+        const itemId = await itemIdPorTamanho(id, tamanhoId, escopo, tx);
+        const linha = await s.findOneWhere(recursoOrdem().itens, { id: itemId, ordem_id: id, empresa_id: escopo.empresaId }, tx);
         await s.update(
           recursoOrdem().itens,
           itemId,
@@ -1421,16 +1501,16 @@ export async function criarApontamento(req: Request, res: Response) {
         mensagem: resumo,
         dados: { produzida, perdida, tamanho_id: tamanhoId, insumos: linhas.length, custo_real: custoReal, divergencia_insumos: divergencia },
         usuario_id: actor.id || null,
-      }, tx);
+      }, tx, escopo);
       if (perdida > 0) {
         await registrarEventoOrdem(id, 'perda', {
           para: alvo,
           mensagem: `${perdida} peça(s) refugada(s) no tamanho #${tamanhoId} — o insumo foi consumido e não entrou no estoque`,
           dados: { perdida, tamanho_id: tamanhoId },
           usuario_id: actor.id || null,
-        }, tx);
+        }, tx, escopo);
       }
-      return { ...(await s.get(recursoEventos().apontamentos, Number(apontamento.id), tx))!, idempotente: false };
+      return { ...(await s.findOneWhere(recursoEventos().apontamentos, { id: Number(apontamento.id), ordem_id: id, empresa_id: escopo.empresaId }, tx))!, idempotente: false };
     });
     res.status(out.idempotente ? 200 : 201).json(out);
   } catch (e) {
@@ -1443,9 +1523,10 @@ export async function concluirOrdemHandler(req: Request, res: Response) {
   const { op } = recursoOrdem();
   const actor = currentUser(req);
   checkAccess(op, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const forcar = req.query.forcar === 'true' || req.query.forcar === '1';
-  const out = await updateRecord(op, id, { status: 'concluida' }, actor, { forcar, escopo: escopoDe(actor) });
+  const out = await updateRecord(op, id, { status: 'concluida' }, actor, { forcar, escopo });
   res.json(out);
 }
 
@@ -1463,12 +1544,13 @@ export async function cancelarOrdem(req: Request, res: Response) {
   const actor = currentUser(req);
   exigirGerenteProducao(actor, 'cancelar uma ordem de produção');
   checkAccess(op, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
   const motivo = typeof req.body?.motivo === 'string' && req.body.motivo.trim() ? req.body.motivo.trim().slice(0, 500) : null;
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
-      const ordem = await getOrdem(id, escopoDoAtor(actor), tx);
+      const ordem = await getOrdem(id, escopo, tx);
       const de = String(ordem.status);
       if (de === 'cancelada') throw new HttpError(409, `A OP #${id} já está cancelada.`);
       if (!transicaoPermitida(de as StatusOp, 'cancelada')) throw erroEstado(ordem, 'cancelar a OP', ['planejada', 'liberada', 'em_producao', 'parcial']);
@@ -1481,7 +1563,7 @@ export async function cancelarOrdem(req: Request, res: Response) {
       if (!atualizada) throw new HttpError(409, `A OP #${id} mudou de estado enquanto você operava. Recarregue e tente de novo.`);
 
       // Payload cru (não validado): é assim que o motivo chega a aplicarRegrasOrdem.
-      await aplicarRegrasOrdem(ordem, atualizada, { status: 'cancelada', motivo_cancelamento: motivo }, actor, tx);
+      await aplicarRegrasOrdem(ordem, atualizada, { status: 'cancelada', motivo_cancelamento: motivo }, actor, tx, escopo);
       await s.audit(
         {
           usuario_id: actor.id || null,
@@ -1511,12 +1593,13 @@ export async function reabrirOrdem(req: Request, res: Response) {
   const actor = currentUser(req);
   exigirGerenteProducao(actor, 'reabrir uma ordem de produção concluída');
   checkAccess(op, actor, 'read');
+  const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
-  const ordem = await getOrdem(id, escopoDoAtor(actor));
+  const ordem = await getOrdem(id, escopo);
   if (String(ordem.status) !== 'concluida') throw erroEstado(ordem, 'reabrir a OP', ['concluida']);
   // A tela usa `planejada`; `?produzindo=true` reabre já no chão de fábrica.
   const para: StatusOp = req.query.produzindo === 'true' ? 'em_producao' : 'planejada';
-  const out = await updateRecord(op, id, { status: para }, actor, { escopo: escopoDe(actor) });
+  const out = await updateRecord(op, id, { status: para }, actor, { escopo });
   res.json(out);
 }
 
@@ -1545,6 +1628,7 @@ export async function planejamentoProducao(req: Request, res: Response) {
   const { op } = recursoOrdem();
   const actor = currentUser(req);
   checkAccess(op, actor, 'read');
+  const escopo = escopoDe(actor);
   const s = getStore();
 
   const hoje = new Date().toISOString().slice(0, 10);
@@ -1555,7 +1639,7 @@ export async function planejamentoProducao(req: Request, res: Response) {
     return d.toISOString().slice(0, 10);
   })();
 
-  const todas = await s.list(op, { page: 1, pageSize: 5000, sort: 'id', dir: 'desc' });
+  const todas = await s.list(op, { page: 1, pageSize: 5000, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId } });
   const noPeriodo = todas.rows.filter((o) => {
     const status = String(o.status);
     if (!['planejada', 'liberada', 'em_producao', 'parcial'].includes(status)) return false;
@@ -1581,14 +1665,16 @@ export async function planejamentoProducao(req: Request, res: Response) {
   }[] = [];
 
   for (const o of noPeriodo) {
-    const itens = await itensProducao(o);
+    const produto = await s.findOneWhere(getResource('produtos')!, { id: Number(o.produto_id), empresa_id: escopo.empresaId });
+    if (!produto) throw new HttpError(404, 'Produto não encontrado.');
+    const itens = await itensProducao(o, escopo);
     const planejadas = itens.reduce((a, i) => a + i.quantidade, 0);
     const produzidas = Number(o.quantidade_produzida || 0);
     const perdidas = Number(o.quantidade_perdida || 0);
     const dia = String(o.previsao || o.criado_em || '').slice(0, 10) || de;
     linhas.push({
       id: Number(o.id),
-      produto: o.produto_id__label ? String(o.produto_id__label) : `#${o.produto_id}`,
+      produto: labelOf(getResource('produtos')!, produto),
       produto_id: Number(o.produto_id),
       status: String(o.status),
       previsao: o.previsao ? String(o.previsao).slice(0, 10) : null,
@@ -1621,16 +1707,16 @@ export async function planejamentoProducao(req: Request, res: Response) {
   const necessidade = new Map<number, { insumo_id: number; nome: string; unidade: string; necessaria: number; disponivel: number; faltando: number }>();
   for (const l of linhas) {
     if (l.faltam <= 0) continue;
-    const ficha = await fichaDoProduto(l.produto_id);
+    const ficha = await fichaDoProduto(l.produto_id, escopo);
     if (!ficha) continue;
-    const mapa = await necessidadeDaFicha(ficha, l.faltam, null);
+    const mapa = await necessidadeDaFicha(ficha, l.faltam, escopo);
     for (const [insumoId, linha] of mapa) {
       const atual = necessidade.get(insumoId) || {
         insumo_id: insumoId,
         nome: linha.nome,
         unidade: linha.unidade,
         necessaria: 0,
-        disponivel: round3(await s.insumoStock(insumoId)),
+        disponivel: round3(await s.insumoStock(insumoId, undefined, escopo.empresaId)),
         faltando: 0,
       };
       atual.necessaria = round3(atual.necessaria + linha.necessidade);

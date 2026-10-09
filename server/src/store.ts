@@ -155,8 +155,16 @@ export interface Store {
   update(r: Resource, id: number, data: Payload, tx?: Tx): Promise<Row | null>;
   remove(r: Resource, id: number, tx?: Tx): Promise<boolean>;
 
-  /** Soma `delta` ao saldo (cria o registro de estoque se não existir). */
-  adjustStock(produtoId: number, tamanhoId: number, local: string, delta: number, tx?: Tx): Promise<Row>;
+  /** Soma `delta` à célula tenantada (produto/tamanho nullable/local canônico). */
+  adjustStock(
+    produtoId: number,
+    tamanhoId: number | null,
+    local: string,
+    delta: number,
+    tx?: Tx,
+    localId?: number | null,
+    empresaId?: number
+  ): Promise<Row>;
 
   /**
    * Como `adjustStock`, mas só aplica se o saldo resultante não ficar abaixo de
@@ -165,17 +173,26 @@ export interface Store {
    * janela entre ler e gravar: duas saídas concorrentes veem o mesmo saldo e
    * ambas abatem. Retorna null quando o abatimento não cabe.
    */
-  tryAdjustStock(produtoId: number, tamanhoId: number, local: string, delta: number, tx?: Tx, minimo?: number): Promise<Row | null>;
+  tryAdjustStock(
+    produtoId: number,
+    tamanhoId: number | null,
+    local: string,
+    delta: number,
+    tx?: Tx,
+    minimo?: number,
+    localId?: number | null,
+    empresaId?: number
+  ): Promise<Row | null>;
 
   /** Vários inserts em uma ida ao banco (usado no snapshot do inventário). */
   insertMany(r: Resource, rows: Payload[], tx?: Tx): Promise<Row[]>;
   /** UPDATE atômico condicionado ao valor atual: 0 linhas alteradas → null. */
   tryUpdateIf(r: Resource, id: number, esperado: Payload, data: Payload, tx?: Tx): Promise<Row | null>;
 
-  /** Soma `delta` ao saldo do insumo (cria o registro se não existir) e atualiza `atualizado_em`. */
-  adjustInsumoStock(insumoId: number, delta: number, tx?: Tx): Promise<Row>;
-  /** Saldo atual de um insumo (0 se nunca movimentado). */
-  insumoStock(insumoId: number, tx?: Tx): Promise<number>;
+  /** Soma `delta` ao saldo do insumo da empresa validada (cria a linha se necessário). */
+  adjustInsumoStock(insumoId: number, delta: number, tx?: Tx, empresaId?: number): Promise<Row>;
+  /** Saldo do insumo da empresa validada (0 se nunca movimentado). */
+  insumoStock(insumoId: number, tx?: Tx, empresaId?: number): Promise<number>;
 
   audit(entry: AuditEntry, tx?: Tx): Promise<void>;
   /** Verifica a cadeia de hashes da auditoria (integridade/tamper-evidence). */

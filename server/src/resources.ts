@@ -46,8 +46,10 @@ export type Field = {
   required?: boolean;
   /** obrigatório apenas na criação (ex.: senha) */
   requiredOnCreate?: boolean;
-  /** valor único (usado para mensagens de erro amigáveis) */
+  /** valor único global (usado para mensagens de erro amigáveis) */
   unique?: boolean;
+  /** valor único dentro da empresa (`empresa_id`, valor), sem globalizar cadastros. */
+  uniqueEmpresa?: boolean;
   options?: FieldOption[];
   /** chave do recurso referenciado (type = 'ref') */
   ref?: string;
@@ -406,7 +408,7 @@ export const RESOURCES: Record<string, Resource> = {
     ops: ALL_OPS,
     notice: 'Locais onde o estoque fica guardado (loja, expedição, facção). Marque um deles como Local padrão — ele vira a origem padrão das movimentações (entrada/saída/transferência) e do Estoque Físico. Gestão livre: o administrador pode incluir, alterar e excluir um local mesmo que ele já esteja em uso — ao renomear, o novo nome é propagado para saldos, movimentações e inventários; ao excluir, o histórico permanece com o nome do local.',
     fields: [
-      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'loja, expedição, facção...', hint: 'Pode ser alterado mesmo com o local em uso (decisão do administrador): o novo nome é aplicado em saldos, movimentações e inventários.' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, uniqueEmpresa: true, search: true, maxLength: 60, placeholder: 'loja, expedição, facção...', hint: 'Nomes podem se repetir em empresas diferentes; dentro da empresa o nome é único. Pode ser alterado mesmo com o local em uso (decisão do administrador).' },
       {
         name: 'tipo',
         label: 'Tipo',
@@ -1256,7 +1258,7 @@ export const RESOURCES: Record<string, Resource> = {
       'Alterar a quantidade aqui gera automaticamente uma movimentação do tipo "ajuste". Para entradas e saídas do dia a dia use o módulo Movimentações.',
     fields: [
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
-      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
       { name: 'local', label: 'Local', type: 'text', search: true, maxLength: 60, placeholder: 'loja, expedição, facção...', list: false, hint: 'Preenchido automaticamente pelo seletor de local. Deixe em branco para usar o Local padrão.' },
       { name: 'local_id', label: 'Local', type: 'ref', ref: 'locais', search: true, hint: 'Use o cadastro de Locais em vez de digitar texto livre.' },
       { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, default: 0 },
@@ -1291,7 +1293,7 @@ export const RESOURCES: Record<string, Resource> = {
         ],
       },
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
-      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
       { name: 'local', label: 'Local de origem', type: 'text', maxLength: 60, list: false, hint: 'Preenchido automaticamente pelo seletor de local. Deixe em branco para usar o Local padrão.' },
       { name: 'local_id', label: 'Local de origem', type: 'ref', ref: 'locais', search: true, hint: 'Use o cadastro de Locais em vez de digitar texto livre.' },
       { name: 'local_destino', label: 'Local de destino', type: 'text', maxLength: 60, list: false, hint: 'Obrigatório em transferências.' },
@@ -1990,7 +1992,7 @@ export const RESOURCES: Record<string, Resource> = {
     fields: [
       { name: 'inventario_id', label: 'Inventário', type: 'integer' },
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true },
-      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
       { name: 'saldo_sistema', label: 'Saldo no sistema', type: 'integer', readonly: true },
       { name: 'contado', label: 'Contado', type: 'integer', min: 0 },
       { name: 'diferenca', label: 'Diferença', type: 'integer', readonly: true },
@@ -2687,6 +2689,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'numero', label: 'Terminal', type: 'text', required: true, search: true, maxLength: 40 },
       { name: 'usuario_id', label: 'Operador', type: 'ref', ref: 'usuarios', search: true },
       { name: 'local', label: 'Local de saída', type: 'text', maxLength: 60, list: false },
+      { name: 'local_id', label: 'Local canônico', type: 'ref', ref: 'locais', list: false, form: false, readonly: true },
       { name: 'abertura_em', label: 'Aberto em', type: 'datetime', readonly: true },
       { name: 'fechamento_em', label: 'Fechado em', type: 'datetime', readonly: true },
       { name: 'valor_abertura', label: 'Troco inicial (R$)', type: 'money', min: 0, readonly: true },

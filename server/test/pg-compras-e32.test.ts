@@ -58,8 +58,8 @@ async function cenario(tag: string) {
     empresa_id: empresaId,
     ativo: true,
   });
-  if (!(await s.findOneWhere(RESOURCES.locais, { nome: 'loja' }))) {
-    await s.insert(RESOURCES.locais, { codigo: 'LOJA', nome: 'loja', tipo: 'loja', ativo: true, empresa_id: empresaId });
+  if (!(await s.findOneWhere(RESOURCES.locais, { nome: 'loja', empresa_id: empresaId }))) {
+    await s.insert(RESOURCES.locais, { codigo: 'LOJA', nome: 'loja', tipo: 'loja', ativo: true, padrao: true, empresa_id: empresaId });
   }
   const fornecedor = await s.insert(RESOURCES.fornecedores, { nome: `Forn ${tag} ${seq}`, cnpj: '', ativo: true, empresa_id: empresaId });
   const insumo = await s.insert(RESOURCES.insumos, { nome: `Insumo ${tag} ${seq}`, unidade: 'un', custo_medio: 0, ativo: true, empresa_id: empresaId });

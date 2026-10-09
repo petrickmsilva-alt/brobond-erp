@@ -151,7 +151,7 @@ test('excluir o Local padrão promove o primeiro local ativo restante', async ()
   assert.equal(padroes.length, 1, 'sempre há um local padrão');
 });
 
-test('excluir o ÚLTIMO local ativo: gerente 403, admin decide; o sistema segue funcionando', async () => {
+test('excluir o ÚLTIMO local ativo: gerente 403, admin decide; movimentações exigem recadastro', async () => {
   // Esvazia o cadastro de locais (como um administrador limparia tudo).
   for (;;) {
     const lista = await listRecords(RESOURCES.locais, { page: 1, pageSize: 500 });
@@ -166,11 +166,16 @@ test('excluir o ÚLTIMO local ativo: gerente 403, admin decide; o sistema segue 
   const vazios = await listRecords(RESOURCES.locais, { page: 1, pageSize: 10 });
   assert.equal(vazios.rows.length, 0, 'cadastro pode ficar vazio (decisão do admin)');
 
-  // Sem nenhum local, as movimentações caem no fallback "loja" e nada quebra.
-  await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, quantidade: 1 }, admin);
-  const saldos = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 100, filter: { produto_id: produtoId } });
-  assert.ok(
-    saldos.rows.some((e: any) => String(e.local) === 'loja'),
-    'fallback do local padrão funciona'
+  const movimentosAntes = await listRecords(RESOURCES.movimentacoes, { page: 1, pageSize: 100, filter: { produto_id: produtoId } });
+  await expectHttp(
+    () => createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, quantidade: 1 }, admin),
+    409,
+    /não possui um local de estoque ativo/
   );
+  const movimentosDepois = await listRecords(RESOURCES.movimentacoes, { page: 1, pageSize: 100, filter: { produto_id: produtoId } });
+  assert.equal(movimentosDepois.total, movimentosAntes.total, 'a operação bloqueada não cria movimento');
+
+  const restaurado = await createRecord(RESOURCES.locais, { nome: 'restaurado', tipo: 'loja', padrao: true }, admin);
+  const movimento = await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, quantidade: 1 }, admin);
+  assert.equal(Number(movimento.local_id), Number(restaurado.id), 'o movimento reaberto usa o ID canônico do novo local');
 });

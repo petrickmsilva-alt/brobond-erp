@@ -16,12 +16,16 @@ import { hookTaxaLancamento, syncAporte, syncLancamentoCompra, syncLancamentoVen
 import {
   aplicarFiltroEmpresa,
   assertRegistroDaEmpresa,
+  EMPRESA_PADRAO,
+  assertRegistroDaEmpresaParaEscrita,
   carimbarEmpresa,
   empresaDoAtorAudit,
   empresaDoRegistroAudit,
   escopoDoAtor,
+  escopoDeSistema,
   protegerEmpresaNaEdicao,
   temEscopoEmpresa,
+  registroNoEscopo,
   validarReferenciasDaEmpresa,
   type EscopoEmpresa,
 } from './empresa';
@@ -173,6 +177,49 @@ export function checkFluxo(r: Resource, actor: Actor): void {
   checkAccess(r, actor, 'read');
 }
 
+const RECURSOS_COM_REFERENCIAS_ESTOQUE = new Set([
+  'produtos', 'insumos', 'estoques', 'movimentacoes', 'movimentacoes_insumos',
+  'estoque_insumos', 'inventarios', 'itens_inventario', 'compras',
+  'compra_recebimentos', 'itens_compra', 'ordens', 'itens_ordem', 'fichas',
+]);
+
+/** Antes de devolver labels/joined refs, confirma que cada relação pertence ao mesmo tenant do registro raiz. */
+export async function validarReferenciasDeSaida(r: Resource, rows: Row[], escopo: EscopoOuAtor): Promise<void> {
+  if (!rows.length || !RECURSOS_COM_REFERENCIAS_ESTOQUE.has(r.key)) return;
+  const s = getStore();
+  const escopoNormalizado = comoEscopo(escopo);
+  const cache = new Map<string, Row | null>();
+  const ler = async (alvo: Resource, id: number, dono: number): Promise<Row | null> => {
+    const empresaId = temEscopoEmpresa(alvo) ? dono : 0;
+    const chave = `${alvo.key}:${empresaId}:${id}`;
+    if (cache.has(chave)) return cache.get(chave)!;
+    const filtro = empresaId ? { id, empresa_id: empresaId } : { id };
+    const row = await s.findOneWhere(alvo, filtro);
+    cache.set(chave, row);
+    return row;
+  };
+  for (const row of rows) {
+    if (!registroNoEscopo(r, row, escopoNormalizado)) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+    const dono = Number(row.empresa_id ?? EMPRESA_PADRAO);
+    for (const field of r.fields) {
+      if (field.type !== 'ref' || !field.ref) continue;
+      const valor = row[field.name];
+      if (valor === undefined || valor === null || valor === '') continue;
+      const id = Number(valor);
+      const alvo = getResource(field.ref);
+      if (!alvo || !Number.isInteger(id) || id <= 0 || !await ler(alvo, id, dono)) {
+        throw new HttpError(404, `${field.label} não encontrado(a).`);
+      }
+    }
+    // compra_id é coluna legada inteira (não declarada como `ref` no Resource).
+    if (r.key === 'movimentacoes' && row.compra_id !== undefined && row.compra_id !== null && row.compra_id !== '') {
+      const id = Number(row.compra_id);
+      const compra = Number.isInteger(id) && id > 0 ? await ler(getResource('compras')!, id, dono) : null;
+      if (!compra) throw new HttpError(404, 'Compra não encontrada.');
+    }
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Leitura
 // ----------------------------------------------------------------------------
@@ -188,6 +235,7 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   // qualquer `f.empresa_id` que o cliente tenha tentado injetar.
   const params: ListParams = { ...p, filter: aplicarFiltroEmpresa(r, p.filter, escopo) };
   const out = await getStore().list(r, params);
+  await validarReferenciasDeSaida(r, out.rows, escopo);
   await attachImages(r, out.rows);
   anotarStatusSenha(r, out.rows);
   await anotarUsoLocal(r, out.rows);
@@ -237,10 +285,17 @@ async function listUsuariosFiltrados(p: ListParams) {
 
 export async function getRecord(r: Resource, id: number, escopoOuAtor?: EscopoOuAtor) {
   const escopo = comoEscopo(escopoOuAtor);
-  const row = await getStore().get(r, id);
+  const filtro = aplicarFiltroEmpresa(r, { id }, escopo) || { id };
+  const store = getStore();
+  // Primeiro prova a posse com uma busca já recortada pelo tenant. Só depois
+  // usa get() para carregar os labels/joins do recurso, sem expor IDs alheios.
+  const posse = await store.findOneWhere(r, filtro);
+  if (!posse) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+  const row = await store.get(r, id);
   if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
   // Registro de outra empresa responde 404 — 403 já vazaria que ele existe.
   assertRegistroDaEmpresa(r, row, escopo);
+  await validarReferenciasDeSaida(r, [row], escopo);
   await attachImages(r, [row]);
   anotarStatusSenha(r, [row]);
   await anotarUsoLocal(r, [row]);
@@ -372,18 +427,21 @@ export async function gradeDoProduto(produto: Row, tx?: Tx): Promise<GradeInfo |
  * chamada direta à API não passam pela tela — é aqui que a mistura PP–GG com
  * 36–48 para de verdade. Produto sem grade fica de fora (ainda não organizado).
  */
-export async function validarTamanhoNaGrade(produtoId: number, tamanhoId: number, tx?: Tx): Promise<void> {
-  if (!produtoId || !tamanhoId) return;
+export async function validarTamanhoNaGrade(produtoId: number, tamanhoId: number | null, tx: Tx | undefined, escopo: EscopoEmpresa): Promise<void> {
+  if (!Number.isInteger(produtoId) || produtoId <= 0) throw new HttpError(404, 'Produto não encontrado.');
   const s = getStore();
-  const produto = await s.findOneWhere(RESOURCES.produtos, { id: produtoId }, tx);
-  if (!produto) return; // a validação de referência do payload cuida disso
+  const produto = await s.findOneWhere(RESOURCES.produtos, { id: produtoId, empresa_id: escopo.empresaId }, tx);
+  if (!produto) throw new HttpError(404, 'Produto não encontrado.');
+  if (tamanhoId === null) return;
+  if (!Number.isInteger(tamanhoId) || tamanhoId <= 0) throw new HttpError(404, 'Tamanho não encontrado.');
+  const tamanho = await s.findOneWhere(RESOURCES.tamanhos, { id: tamanhoId }, tx);
+  if (!tamanho) throw new HttpError(404, 'Tamanho não encontrado.');
   const grade = await gradeDoProduto(produto, tx);
   if (!grade || !grade.tamanhos.length) return;
   if (grade.tamanhos.some((t) => t.id === tamanhoId)) return;
-  const tamanho = await s.findOneWhere(RESOURCES.tamanhos, { id: tamanhoId }, tx);
   throw new HttpError(
     400,
-    `O tamanho "${String(tamanho?.codigo ?? `#${tamanhoId}`)}" não faz parte da grade "${grade.gradeNome}" de ${String(produto.sku ?? `#${produtoId}`)}.`,
+    `O tamanho "${String(tamanho.codigo ?? `#${tamanhoId}`)}" não faz parte da grade "${grade.gradeNome}" de ${String(produto.sku ?? `#${produtoId}`)}.`,
     {
       tamanho_id:
         `A grade aceita: ${grade.tamanhos.map((t) => t.codigo).join(', ')}. ` +
@@ -419,7 +477,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
   const data = validatePayload(r, body, 'create');
   const s = getStore();
   // MULTIEMPRESA: a empresa do novo registro é decidida pelo SERVIDOR.
-  const escopo = ctx.escopo === undefined ? escopoDe(actor) : comoEscopo(ctx.escopo);
+  const escopo = ctx.escopo === undefined ? escopoDe(actor) : (comoEscopo(ctx.escopo) ?? escopoDeSistema());
   carimbarEmpresa(r, data, escopo);
   let conviteLink: string | undefined;
   let conviteEntregue = false;
@@ -429,15 +487,16 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       if (r.key === 'usuarios') await prepareUserPayload(data, null, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, null, actor);
       if (r.key === 'politicas_comerciais') prepararPoliticaComercial(data, null);
-      if (r.key === 'movimentacoes') return createMovimentacao(data, actor, tx);
-      if (r.key === 'movimentacoes_insumos') return createMovimentacaoInsumo(data, actor, tx);
+      if (r.key === 'movimentacoes') return createMovimentacao(data, actor, tx, escopo);
+      if (r.key === 'movimentacoes_insumos') return createMovimentacaoInsumo(data, actor, tx, escopo);
       if (r.key === 'estoques') {
-        await resolveLocal(data, tx);
-        await ensureUniqueStock(data, null, tx);
+        await resolveLocal(data, tx, escopo);
+        await validarTamanhoNaGrade(Number(data.produto_id), data.tamanho_id == null ? null : Number(data.tamanho_id), tx, escopo);
+        await ensureUniqueStock(data, null, tx, escopo);
         await garantirSaldoNaoNegativo(data, null);
       }
       if (r.key === 'inventarios') {
-        await resolveLocal(data, tx);
+        await resolveLocal(data, tx, escopo);
         // Abrir um inventário é sempre abrir: `status` é readonly na API e o
         // DEFAULT 'aberto' só existe no Postgres, então no modo demonstração o
         // registro nascia sem status e o snapshot do saldo nunca rodava.
@@ -445,7 +504,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       }
       // O estado fiscal pertence aos endpoints de NF-e: o formulário não cria nota.
       if (r.key === 'vendas') for (const k of ['nfe_status', 'nfe_numero', 'nfe_emitida_em', 'nfe_provider']) delete data[k];
-      if (r.key === 'locais') await ensureLocalPadraoUnico(data, null, tx);
+      if (r.key === 'locais') await ensureLocalPadraoUnico(data, null, tx, escopo);
       if (r.key === 'ordens') await validarOrdemPayload(data, null);
       // Lançamento: taxa da operadora → líquido calculado antes de gravar
       if (r.key === 'lancamentos_financeiros') hookTaxaLancamento(data, null);
@@ -459,28 +518,28 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
 
       // Nenhum id enviado pelo cliente fura o escopo: toda referência para um
       // recurso com empresa precisa pertencer à MESMA empresa ativa.
-      await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, t) => s.findOneWhere(alvo, { id: alvoId }, t), tx);
+      await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
 
       const row = await s.insert(r, data, tx);
-      if (r.key === 'locais') await garantirLocalPadrao(tx);
+      if (r.key === 'locais') await garantirLocalPadrao(tx, escopo);
       if (r.key === 'grades' && gradeTamanhos) await syncGradeTamanhos(Number(row.id), gradeTamanhos, tx);
 
       if (r.key === 'estoques' && Number(row.quantidade) !== 0) {
         await s.insert(
           getResource('movimentacoes')!,
-          { tipo: 'ajuste', produto_id: row.produto_id, tamanho_id: row.tamanho_id, local: row.local, local_id: row.local_id ?? null, quantidade: Number(row.quantidade), motivo: 'Saldo inicial (cadastro de estoque)', usuario_id: actor.id || null },
+          { empresa_id: escopo.empresaId, tipo: 'ajuste', produto_id: row.produto_id, tamanho_id: row.tamanho_id, local: row.local, local_id: row.local_id ?? null, quantidade: Number(row.quantidade), motivo: 'Saldo inicial (cadastro de estoque)', usuario_id: actor.id || null },
           tx
         );
       }
       if (r.key === 'ordens') {
         const full = (await s.get(r, row.id, tx)) ?? row;
-        await aplicarRegrasOrdem(null, full, data, { id: actor.id || null, name: actor.name, perfil: actor.perfil }, tx, { forcar: false });
+        await aplicarRegrasOrdem(null, full, data, { id: actor.id || null, name: actor.name, perfil: actor.perfil }, tx, escopo, { forcar: false });
       }
       if (r.key === 'fichas') {
-        await recalcularFichaValores(Number(row.id), tx);
+        await recalcularFichaValores(Number(row.id), tx, escopo);
       }
       if (r.key === 'inventarios' && row.status === 'aberto') {
-        await abrirInventarioSnapshot(row, actor, tx);
+        await abrirInventarioSnapshot(row, actor, tx, escopo);
       }
       if (r.key === 'vendas' || r.key === 'compras') {
         await aplicarRegrasPedido(r.key === 'vendas' ? 'venda' : 'compra', null, row, data, { id: actor.id || null, name: actor.name }, tx, escopo);
@@ -544,26 +603,44 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
   const s = getStore();
   // A empresa de um registro NUNCA muda por um PUT.
   protegerEmpresaNaEdicao(r, data);
-  const escopo = opts.escopo === undefined ? escopoDe(actor) : comoEscopo(opts.escopo);
+  const escopo = opts.escopo === undefined ? escopoDe(actor) : (comoEscopo(opts.escopo) ?? escopoDeSistema());
   try {
     return await s.transaction(async (tx) => {
-      const before = await s.findOneWhere(r, { id }, tx);
+      const filtroAntes = temEscopoEmpresa(r) ? { id, empresa_id: escopo.empresaId } : { id };
+      const before = await s.findOneWhere(r, filtroAntes, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
-      assertRegistroDaEmpresa(r, before, escopo);
-      await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, t) => s.findOneWhere(alvo, { id: alvoId }, t), tx);
+      assertRegistroDaEmpresaParaEscrita(r, before, escopo);
+      await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
 
       if (r.key === 'usuarios') await prepareUserPayload(data, before, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, before, actor);
       if (r.key === 'politicas_comerciais') prepararPoliticaComercial(data, before);
       if (r.key === 'estoques') {
-        // Edição parcial (ex.: só estoque_min) mantém o local atual do saldo —
-        // sem isto o resolveLocal aplicaria o padrão "loja" e o
-        // ensureUniqueStock acusaria 409 contra o saldo de outro local.
-        if (before && (data.local === undefined || data.local === null || data.local === '') && !data.local_id && before.local) {
-          data.local = String(before.local);
+        const localAnteriorId = before.local_id === null || before.local_id === undefined ? null : Number(before.local_id);
+        const localIdInformado = data.local_id !== undefined && data.local_id !== null && data.local_id !== '';
+        const nomeInformado = data.local !== undefined && data.local !== null && data.local !== '' ? String(data.local).trim() : null;
+        if (localAnteriorId === null) {
+          // Não converter saldo histórico sem vínculo por uma associação baseada em nome.
+          if (localIdInformado || (nomeInformado !== null && nomeInformado !== String(before.local || ''))) {
+            throw new HttpError(409, 'Este saldo histórico não possui vínculo canônico de local. Atribua-o por um procedimento administrativo explícito antes de alterar o local.');
+          }
+          if (data.quantidade !== undefined && Number(data.quantidade) !== Number(before.quantidade)) {
+            throw new HttpError(409, 'Não é possível ajustar um saldo sem local canônico. Corrija o vínculo do local antes de lançar a movimentação.');
+          }
+          if (nomeInformado === null) data.local = String(before.local || '');
+          data.local_id = null;
+        } else {
+          if (localIdInformado && Number(data.local_id) !== localAnteriorId) throw new HttpError(409, 'A localização de um saldo existente não pode ser trocada diretamente; use uma movimentação entre locais.');
+          if (nomeInformado !== null && nomeInformado !== String(before.local || '')) throw new HttpError(409, 'A localização de um saldo existente não pode ser trocada por nome.');
+          data.local_id = localAnteriorId;
+          data.local = String(before.local || '');
+          await resolveLocal(data, tx, escopo);
+          if (String(data.local) !== String(before.local || '')) throw new HttpError(409, 'O vínculo canônico e o nome histórico do local estão inconsistentes. Revise os dados antes de alterar o saldo.');
         }
-        await resolveLocal(data, tx);
-        await ensureUniqueStock(data, before, tx);
+        const produtoId = Number(data.produto_id ?? before.produto_id);
+        const tamanhoRaw = data.tamanho_id === undefined ? before.tamanho_id : data.tamanho_id;
+        await validarTamanhoNaGrade(produtoId, tamanhoRaw === null || tamanhoRaw === undefined || tamanhoRaw === '' ? null : Number(tamanhoRaw), tx, escopo);
+        await ensureUniqueStock(data, before, tx, escopo);
         await garantirSaldoNaoNegativo(data, before);
       }
       if (r.key === 'movimentacoes') throw new HttpError(405, 'Movimentações são imutáveis. Faça o lançamento inverso.');
@@ -588,8 +665,8 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       }
       let renomeouLocal = false;
       if (r.key === 'locais') {
-        renomeouLocal = await validarRenomeLocal(data, before, actor, tx);
-        await ensureLocalPadraoUnico(data, before, tx);
+        renomeouLocal = await validarRenomeLocal(data, before, actor, tx, escopo);
+        await ensureLocalPadraoUnico(data, before, tx, escopo);
       }
       if (r.key === 'estoque_insumos') {
         // Único campo editável diretamente: estoque mínimo.
@@ -627,7 +704,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       }
 
       if (r.key === 'locais') {
-        await garantirLocalPadrao(tx);
+        await garantirLocalPadrao(tx, escopo);
         // Local renomeado: propaga o novo nome para saldos, movimentações,
         // inventários e vendas que guardavam o nome antigo como texto.
         if (renomeouLocal) await propagarRenomeLocal(before, String(data.nome), tx);
@@ -637,17 +714,17 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (r.key === 'estoques' && changes.quantidade) {
         const delta = Number(row.quantidade) - Number(before.quantidade);
         if (delta !== 0) {
-          await s.insert(getResource('movimentacoes')!, { tipo: 'ajuste', produto_id: row.produto_id, tamanho_id: row.tamanho_id, local: row.local, local_id: row.local_id ?? null, quantidade: delta, motivo: 'Ajuste manual pelo Estoque Físico', usuario_id: actor.id || null }, tx);
+          await s.insert(getResource('movimentacoes')!, { empresa_id: escopo.empresaId, tipo: 'ajuste', produto_id: row.produto_id, tamanho_id: row.tamanho_id, local: row.local, local_id: row.local_id ?? null, quantidade: delta, motivo: 'Ajuste manual pelo Estoque Físico', usuario_id: actor.id || null }, tx);
         }
       }
       // Ordem concluída/reaberta: entrada/estorno no estoque + consumo de insumos
       if (r.key === 'ordens' && changes.status) {
         const full = (await s.get(r, id, tx)) ?? row;
-        await aplicarRegrasOrdem(before, full, data, { id: actor.id || null, name: actor.name, perfil: actor.perfil }, tx, opts);
+        await aplicarRegrasOrdem(before, full, data, { id: actor.id || null, name: actor.name, perfil: actor.perfil }, tx, escopo, opts);
       }
       // Ficha técnica: recalcula custo/preço sugerido (mão de obra, indiretos, margem)
       if (r.key === 'fichas' && (changes.mao_obra || changes.custos_indiretos || changes.margem_pct || changes.produto_id)) {
-        await recalcularFichaValores(id, tx);
+        await recalcularFichaValores(id, tx, escopo);
       }
       // Vendas/Compras: faturamento/baixa de estoque, recebimento/custo médio e estornos
       if (r.key === 'vendas' || r.key === 'compras') {
@@ -683,12 +760,13 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
 
 export async function deleteRecord(r: Resource, id: number, actor: Actor, escopoOpt?: EscopoOuAtor): Promise<void> {
   const s = getStore();
-  const escopo = escopoOpt === undefined ? escopoDe(actor) : comoEscopo(escopoOpt);
+  const escopo = escopoOpt === undefined ? escopoDe(actor) : (comoEscopo(escopoOpt) ?? escopoDeSistema());
   try {
     await s.transaction(async (tx) => {
-      const before = await s.findOneWhere(r, { id }, tx);
+      const filtroAntes = temEscopoEmpresa(r) ? { id, empresa_id: escopo.empresaId } : { id };
+      const before = await s.findOneWhere(r, filtroAntes, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
-      assertRegistroDaEmpresa(r, before, escopo);
+      assertRegistroDaEmpresaParaEscrita(r, before, escopo);
 
       if (r.key === 'usuarios') {
         if (Number(before.id) === Number(actor.id)) throw new HttpError(400, 'Você não pode excluir o seu próprio usuário.');
@@ -811,7 +889,7 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
       await removeAllFiles(r, id, tx);
       const ok = await s.remove(r, id, tx);
       if (!ok) throw new HttpError(404, `${r.singular} não encontrado(a).`);
-      if (r.key === 'locais') await garantirLocalPadrao(tx);
+      if (r.key === 'locais') await garantirLocalPadrao(tx, escopo);
       const detalheUso =
         usoLocal?.emUso
           ? ` — em uso na exclusão: ${usoLocal.saldos} saldo(s), ${usoLocal.movimentacoes} movimentação(ões), ${usoLocal.inventarios} inventário(s) (histórico preservado com o nome do local)`
@@ -1017,34 +1095,67 @@ async function garantirSaldoNaoNegativo(data: Payload, before: Row | null): Prom
   }
 }
 
-async function ensureUniqueStock(data: Payload, before: Row | null, tx: Tx) {
+export async function ensureUniqueStock(data: Payload, before: Row | null, tx: Tx, escopo: EscopoEmpresa) {
   const merged = { ...(before || {}), ...data };
-  if (!merged.produto_id || !merged.tamanho_id) return;
+  if (!merged.produto_id) return;
   const s = getStore();
-  const local = merged.local ?? (await getDefaultLocal(tx));
-  const existing = await s.findOneWhere(getResource('estoques')!, { produto_id: merged.produto_id, tamanho_id: merged.tamanho_id, local }, tx ?? undefined);
+  const base = {
+    empresa_id: escopo.empresaId,
+    produto_id: Number(merged.produto_id),
+    tamanho_id: merged.tamanho_id ?? null,
+  };
+  const localId = merged.local_id === null || merged.local_id === undefined || merged.local_id === '' ? null : Number(merged.local_id);
+  const filtroCanonico = localId === null ? null : { ...base, local_id: localId };
+  const filtroLegado = { ...base, local: String(merged.local), local_id: null };
+  const canonicos = filtroCanonico ? await s.countWhere(getResource('estoques')!, filtroCanonico, tx ?? undefined) : 0;
+  const legados = await s.countWhere(getResource('estoques')!, filtroLegado, tx ?? undefined);
+  if (canonicos + legados > 1) throw new HttpError(409, 'Há saldos históricos duplicados para este produto/tamanho/local. Nada foi alterado; corrija as duplicidades primeiro.');
+  const filtroExistente = canonicos ? filtroCanonico! : filtroLegado;
+  const existing = canonicos + legados ? await s.findOneWhere(getResource('estoques')!, filtroExistente, tx ?? undefined) : null;
+  if (canonicos + legados === 1 && !existing) throw new HttpError(409, 'Não foi possível identificar o saldo de estoque com segurança.');
   if (existing && (!before || Number(existing.id) !== Number(before.id))) {
     throw new HttpError(409, 'Já existe saldo para este produto, tamanho e local. Edite o registro existente ou lance uma movimentação.');
   }
+  if (existing && (Number(existing.local_id || 0) !== Number(localId || 0) || String(existing.local || '') !== String(merged.local || ''))) {
+    throw new HttpError(409, 'O saldo possui vínculo canônico de local ausente ou inconsistente. Nada foi alterado; revise os dados antes de continuar.');
+  }
 }
 
-/** Nome do Local padrão (origem das movimentações) ou 'loja' por segurança. */
-export async function getDefaultLocal(tx?: Tx): Promise<string> {
-  const info = await getDefaultLocalInfo(tx);
-  return info?.nome ?? 'loja';
+/** Nome do Local padrão da empresa ativa. Não há fallback global por nome. */
+export async function getDefaultLocal(tx: Tx | undefined, escopo: EscopoEmpresa): Promise<string> {
+  const info = await getDefaultLocalInfo(tx, escopo);
+  if (!info) throw new HttpError(409, 'A empresa ativa não possui um local de estoque ativo. Cadastre um local antes de movimentar o estoque.');
+  return info.nome;
 }
 
-/**
- * Local padrão: o cadastrado com `padrao = true` e ativo; senão o primeiro
- * local ativo (por nome); senão null (aí os fluxos usam 'loja' por segurança).
- */
-export async function getDefaultLocalInfo(tx?: Tx): Promise<{ id: number | null; nome: string } | null> {
+/** Resolve o Local padrão (ou o primeiro ativo) somente dentro da empresa ativa. */
+export async function getDefaultLocalInfo(
+  tx: Tx | undefined,
+  escopo: EscopoEmpresa
+): Promise<{ id: number; nome: string } | null> {
   const s = getStore();
   const r = getResource('locais')!;
-  const padrao = await s.findOneWhere(r, { padrao: true }, tx ?? undefined);
-  if (padrao && ativoYn(padrao)) return { id: Number(padrao.id) || null, nome: String(padrao.nome) };
-  const ativos = await s.list(r, { page: 1, pageSize: 1, sort: 'nome', dir: 'asc', filter: { ativo: true } }, tx ?? undefined);
-  if (ativos.rows.length) return { id: Number(ativos.rows[0].id) || null, nome: String(ativos.rows[0].nome) };
+  const empresa_id = escopo.empresaId;
+  const padroes = await s.list(r, { page: 1, pageSize: 2, filter: { empresa_id, padrao: true } }, tx ?? undefined);
+  if (padroes.total > 1) {
+    throw new HttpError(409, 'A empresa ativa possui mais de um local padrão. Corrija a configuração antes de movimentar o estoque.');
+  }
+  const padrao = padroes.rows[0];
+  if (padrao) {
+    if (!ativoYn(padrao)) throw new HttpError(409, 'O local padrão da empresa ativa está inativo. Escolha um local padrão ativo antes de movimentar o estoque.');
+    return { id: Number(padrao.id), nome: String(padrao.nome) };
+  }
+  const ativos = await s.list(r, {
+    page: 1,
+    pageSize: 2,
+    sort: 'nome',
+    dir: 'asc',
+    filter: { empresa_id, ativo: true },
+  }, tx ?? undefined);
+  if (ativos.total > 1) {
+    throw new HttpError(409, 'A empresa ativa não possui um local padrão único. Defina o local padrão antes de movimentar o estoque.');
+  }
+  if (ativos.rows.length === 1) return { id: Number(ativos.rows[0].id), nome: String(ativos.rows[0].nome) };
   return null;
 }
 
@@ -1053,12 +1164,17 @@ function ativoYn(row: Row): boolean {
   return v === true || v === 1 || v === '1' || v === 'true' || v === 'TRUE' || v === 'on' || v === 'sim';
 }
 
-/** Ao marcar um local como padrão, desmarca os demais (apenas um pode ser o padrão). */
-async function ensureLocalPadraoUnico(data: Payload, before: Row | null, tx: Tx): Promise<void> {
+/** Ao marcar um local como padrão, desmarca os demais da mesma empresa. */
+async function ensureLocalPadraoUnico(data: Payload, before: Row | null, tx: Tx, escopo: EscopoEmpresa): Promise<void> {
   if (data.padrao !== true) return;
   const s = getStore();
   const r = getResource('locais')!;
-  const demais = await s.list(r, { page: 1, pageSize: 1000, filter: { padrao: true } }, tx ?? undefined);
+  const demais = await s.list(r, {
+    page: 1,
+    pageSize: 1000,
+    filter: { empresa_id: escopo.empresaId, padrao: true },
+  }, tx ?? undefined);
+  if (demais.total > demais.rows.length) throw new HttpError(409, 'Há mais locais padrão que o limite de leitura segura. Corrija a configuração antes de continuar.');
   for (const l of demais.rows) {
     if (!before || Number(l.id) !== Number(before.id)) {
       await s.update(r, Number(l.id), { padrao: false }, tx);
@@ -1066,13 +1182,22 @@ async function ensureLocalPadraoUnico(data: Payload, before: Row | null, tx: Tx)
   }
 }
 
-/** Garante que sempre exista um Local padrão ativo. */
-async function garantirLocalPadrao(tx: Tx): Promise<void> {
+/** Mantém um padrão ativo independente em cada empresa. */
+async function garantirLocalPadrao(tx: Tx, escopo: EscopoEmpresa): Promise<void> {
   const s = getStore();
   const r = getResource('locais')!;
-  const padrao = await s.findOneWhere(r, { padrao: true }, tx ?? undefined);
+  const filtroPadrao = { empresa_id: escopo.empresaId, padrao: true };
+  const totalPadroes = await s.countWhere(r, filtroPadrao, tx ?? undefined);
+  if (totalPadroes > 1) throw new HttpError(409, 'Há mais de um local padrão nesta empresa. Corrija a configuração antes de continuar.');
+  const padrao = await s.findOneWhere(r, filtroPadrao, tx ?? undefined);
   if (padrao && ativoYn(padrao)) return;
-  const ativos = await s.list(r, { page: 1, pageSize: 1, sort: 'nome', dir: 'asc', filter: { ativo: true } }, tx ?? undefined);
+  const ativos = await s.list(r, {
+    page: 1,
+    pageSize: 1,
+    sort: 'nome',
+    dir: 'asc',
+    filter: { empresa_id: escopo.empresaId, ativo: true },
+  }, tx ?? undefined);
   if (!ativos.rows.length) return;
   await s.update(r, Number(ativos.rows[0].id), { padrao: true }, tx);
 }
@@ -1091,34 +1216,33 @@ async function garantirLocalPadrao(tx: Tx): Promise<void> {
 
 export type UsoLocal = { saldos: number; movimentacoes: number; inventarios: number; emUso: boolean };
 
-/** Conta registros de `r` que apontam para o local pelo texto (`colTexto`) ou pelo id (`colId`). */
-async function contarVinculos(r: Resource, colTexto: string, colId: string, nome: string, id: number, tx?: Tx): Promise<number> {
-  const s = getStore();
-  const porTexto = await s.countWhere(r, { [colTexto]: nome }, tx);
-  const porId = await s.countWhere(r, { [colId]: id }, tx);
-  const ambos = await s.countWhere(r, { [colTexto]: nome, [colId]: id }, tx);
-  return porTexto + porId - ambos;
+/** Conta apenas vínculos por ID canônico; texto legado ambíguo não é atribuído a nenhum local. */
+async function contarVinculos(r: Resource, colId: string, id: number, tx?: Tx): Promise<number> {
+  return getStore().countWhere(r, { [colId]: id }, tx);
 }
 
-/** Quantos saldos, movimentações e inventários usam o local (por nome ou id). */
+/** Quantos saldos, movimentações e inventários apontam para o ID deste local. */
 export async function usoDoLocal(local: Row, tx?: Tx): Promise<UsoLocal> {
   const id = Number(local.id);
-  const nome = String(local.nome || '');
-  const saldos = await contarVinculos(getResource('estoques')!, 'local', 'local_id', nome, id, tx);
-  const movOrigem = await contarVinculos(getResource('movimentacoes')!, 'local', 'local_id', nome, id, tx);
-  const movDestino = await contarVinculos(getResource('movimentacoes')!, 'local_destino', 'local_destino_id', nome, id, tx);
-  const inventarios = await contarVinculos(getResource('inventarios')!, 'local', 'local_id', nome, id, tx);
+  const saldos = await contarVinculos(getResource('estoques')!, 'local_id', id, tx);
+  const movOrigem = await contarVinculos(getResource('movimentacoes')!, 'local_id', id, tx);
+  const movDestino = await contarVinculos(getResource('movimentacoes')!, 'local_destino_id', id, tx);
+  const inventarios = await contarVinculos(getResource('inventarios')!, 'local_id', id, tx);
   const movimentacoes = movOrigem + movDestino;
   return { saldos, movimentacoes, inventarios, emUso: saldos + movimentacoes + inventarios > 0 };
 }
 
-/** Anota cada local com o uso (a UI usa isso para avisar o administrador antes de excluir/renomear). */
+/** Anota cada local com o uso (a UI usa isso para avisar antes de excluir/renomear). */
 async function anotarUsoLocal(r: Resource, rows: Row[]): Promise<void> {
   if (r.key !== 'locais' || !rows.length) return;
   const s = getStore();
-  const ativos = await s.list(r, { page: 1, pageSize: 1, filter: { ativo: true } });
   for (const row of rows) {
     const uso = await usoDoLocal(row);
+    const ativos = await s.list(r, {
+      page: 1,
+      pageSize: 1,
+      filter: { empresa_id: Number(row.empresa_id), ativo: true },
+    });
     row.em_uso = uso.emUso;
     row.uso_saldos = uso.saldos;
     row.uso_movimentacoes = uso.movimentacoes;
@@ -1132,7 +1256,7 @@ async function anotarUsoLocal(r: Resource, rows: Row[]): Promise<void> {
  * Local em uso só o administrador renomeia; o nome novo não pode colidir com
  * outro local nem com saldos já gravados (chave produto+tamanho+local).
  */
-async function validarRenomeLocal(data: Payload, before: Row, actor: Actor, tx: Tx): Promise<boolean> {
+async function validarRenomeLocal(data: Payload, before: Row, actor: Actor, tx: Tx, escopo: EscopoEmpresa): Promise<boolean> {
   if (data.nome === undefined || data.nome === null) return false;
   const novo = String(data.nome).trim();
   const antigo = String(before.nome || '');
@@ -1145,32 +1269,44 @@ async function validarRenomeLocal(data: Payload, before: Row, actor: Actor, tx: 
       `O local "${antigo}" está em uso (${uso.saldos} saldo(s), ${uso.movimentacoes} movimentação(ões), ${uso.inventarios} inventário(s)). Renomeá-lo é uma decisão do administrador.`
     );
   }
-  const outro = await s.findOneWhere(getResource('locais')!, { nome: novo }, tx);
+  const outro = await s.findOneWhere(getResource('locais')!, { nome: novo, empresa_id: escopo.empresaId }, tx);
   if (outro && Number(outro.id) !== Number(before.id)) {
-    throw new HttpError(409, `Já existe outro local chamado "${novo}".`, { nome: 'Nome já cadastrado' });
+    throw new HttpError(409, `Já existe outro local chamado "${novo}" nesta empresa.`, { nome: 'Nome já cadastrado' });
   }
-  const colisao = await s.countWhere(getResource('estoques')!, { local: novo }, tx);
+  const colisao = await s.countWhere(getResource('estoques')!, { empresa_id: escopo.empresaId, local: novo }, tx);
   if (colisao > 0) {
-    throw new HttpError(409, `Já existem saldos de estoque gravados com o nome "${novo}". Escolha outro nome para não misturar os estoques.`, { nome: 'Conflito com saldos existentes' });
+    throw new HttpError(409, `Já existem saldos de estoque gravados com o nome "${novo}" nesta empresa. Escolha outro nome para não misturar os estoques.`, { nome: 'Conflito com saldos existentes' });
   }
   return true;
 }
 
-/** Propaga o novo nome do local para os registros que guardavam o nome antigo como texto. */
+/** Propaga o nome apenas pelos vínculos canônicos deste ID e dentro da empresa. */
 async function propagarRenomeLocal(before: Row, novo: string, tx: Tx): Promise<void> {
-  const antigo = String(before.nome || '');
-  await renomearOnde(getResource('estoques')!, 'local', antigo, novo, tx);
-  await renomearOnde(getResource('movimentacoes')!, 'local', antigo, novo, tx);
-  await renomearOnde(getResource('movimentacoes')!, 'local_destino', antigo, novo, tx);
-  await renomearOnde(getResource('inventarios')!, 'local', antigo, novo, tx);
-  await renomearOnde(getResource('vendas')!, 'local_saida', antigo, novo, tx);
+  const id = Number(before.id);
+  const empresa_id = Number(before.empresa_id);
+  await renomearOnde(getResource('estoques')!, 'local', 'local_id', id, novo, tx);
+  await renomearOnde(getResource('movimentacoes')!, 'local', 'local_id', id, novo, tx);
+  await renomearOnde(getResource('movimentacoes')!, 'local_destino', 'local_destino_id', id, novo, tx);
+  await renomearOnde(getResource('inventarios')!, 'local', 'local_id', id, novo, tx);
+  // Vendas históricas guardam somente texto; empresa + nome identificam o local
+  // porque o nome é único dentro da empresa. Nenhuma outra empresa é alterada.
+  await renomearOnde(getResource('vendas')!, 'local_saida', 'empresa_id', empresa_id, novo, tx, String(before.nome || ''));
 }
 
-/** Renomeia em lotes os registros que guardam o nome do local em `col`. */
-async function renomearOnde(r: Resource, col: string, antigo: string, novo: string, tx: Tx): Promise<void> {
+/** Renomeia em lotes usando ID canônico (ou filtro tenantado para campos legados sem ID). */
+async function renomearOnde(
+  r: Resource,
+  col: string,
+  fk: string,
+  id: number,
+  novo: string,
+  tx: Tx,
+  legadoAntigo?: string
+): Promise<void> {
   const s = getStore();
+  const filtro = legadoAntigo === undefined ? { [fk]: id } : { [fk]: id, [col]: legadoAntigo };
   for (;;) {
-    const rows = await s.list(r, { page: 1, pageSize: 1000, filter: { [col]: antigo }, sort: 'id', dir: 'asc' }, tx);
+    const rows = await s.list(r, { page: 1, pageSize: 1000, filter: filtro, sort: 'id', dir: 'asc' }, tx);
     if (!rows.rows.length) break;
     for (const row of rows.rows) await s.update(r, Number(row.id), { [col]: novo }, tx);
     if (rows.rows.length < 1000) break;
@@ -1201,28 +1337,63 @@ async function desvincularTodos(r: Resource, col: string, id: number, tx: Tx): P
   }
 }
 
-/** Preenche `local` (e `local_id`) a partir do cadastro de Locais. */
-async function resolveLocal(data: Payload, tx: Tx): Promise<void> {
+/** Resolve texto/ID para um Local canônico da empresa ativa. */
+export async function resolveLocal(data: Payload, tx: Tx, escopo: EscopoEmpresa): Promise<void> {
   const s = getStore();
-  let local = data.local === undefined || data.local === null ? '' : String(data.local).trim();
+  const locais = getResource('locais')!;
   const rawId = data.local_id;
   const localId = rawId === undefined || rawId === null || rawId === '' ? null : Number(rawId);
+  const nomeInformado = data.local === undefined || data.local === null ? '' : String(data.local).trim();
+  let local: Row | null = null;
 
-  if (localId && Number.isInteger(localId) && localId > 0) {
-    const l = await s.findOneWhere(getResource('locais')!, { id: localId }, tx ?? undefined);
-    if (!l) throw new HttpError(400, 'Local inválido: o registro selecionado não existe.', { local_id: 'Registro não encontrado' });
-    if (!local) local = String(l.nome);
-    data.local_id = localId;
+  if (localId !== null) {
+    if (!Number.isInteger(localId) || localId <= 0) throw new HttpError(404, 'Local não encontrado.');
+    local = await s.findOneWhere(locais, { id: localId, empresa_id: escopo.empresaId }, tx ?? undefined);
+    if (!local) throw new HttpError(404, 'Local não encontrado.');
+  } else if (nomeInformado) {
+    const filtro = { nome: nomeInformado, empresa_id: escopo.empresaId };
+    const quantidade = await s.countWhere(locais, filtro, tx ?? undefined);
+    if (quantidade > 1) throw new HttpError(409, 'O nome do local não identifica um único local desta empresa. Selecione pelo ID e corrija os cadastros duplicados.');
+    local = await s.findOneWhere(locais, filtro, tx ?? undefined);
+    if (!local) throw new HttpError(404, 'Local não encontrado. Selecione um local cadastrado da empresa ativa.');
+  } else {
+    const padrao = await getDefaultLocalInfo(tx, escopo);
+    if (!padrao) throw new HttpError(409, 'A empresa ativa não possui um local de estoque ativo. Cadastre um local antes de movimentar o estoque.');
+    local = await s.findOneWhere(locais, { id: padrao.id, empresa_id: escopo.empresaId }, tx ?? undefined);
+    if (!local) throw new HttpError(404, 'Local não encontrado.');
   }
-  if (!local) local = await getDefaultLocal(tx);
-  if (local.length > 60) throw new HttpError(400, 'O nome do local é muito longo.', { local: 'Máximo de 60 caracteres' });
-  data.local = local;
+
+  if (!ativoYn(local)) throw new HttpError(409, 'O local selecionado está inativo. Escolha um local ativo.');
+  data.local_id = Number(local.id);
+  data.local = String(local.nome);
+}
+
+/** Referências de origem/estorno são gravadas apenas pelos fluxos internos que conhecem a relação entre os registros. */
+async function validarReferenciasMovimentacaoManual(r: Resource, data: Payload, escopo: EscopoEmpresa, tx: Tx): Promise<void> {
+  const s = getStore();
+  await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
+  if (r.key === 'movimentacoes' && data.compra_id !== undefined && data.compra_id !== null && data.compra_id !== '') {
+    const compraId = Number(data.compra_id);
+    if (!Number.isInteger(compraId) || compraId <= 0 || !await s.findOneWhere(getResource('compras')!, { id: compraId, empresa_id: escopo.empresaId }, tx)) {
+      throw new HttpError(404, 'Compra não encontrada.');
+    }
+  }
+  const internos = r.key === 'movimentacoes'
+    ? ['compra_id', 'recebimento_id', 'item_compra_id', 'ordem_id', 'movimentacao_estorno_id', 'estornado_em', 'estornado_por']
+    : ['compra_id', 'recebimento_id', 'item_compra_id', 'ordem_id'];
+  if (internos.some((campo) => data[campo] !== undefined && data[campo] !== null && data[campo] !== '')) {
+    throw new HttpError(400, 'Vínculos de compra, produção e estorno são definidos pelo fluxo de origem e não podem ser informados em lançamento manual.');
+  }
+  if (r.key === 'movimentacoes' && data.estornado === true) {
+    throw new HttpError(400, 'O estado de estorno é definido pelo sistema.');
+  }
 }
 
 /** Movimentação de produtos acabados (entrada/saída/ajuste/transferência). */
-async function createMovimentacao(data: Payload, actor: Actor, tx: Tx): Promise<Row> {
+async function createMovimentacao(data: Payload, actor: Actor, tx: Tx, escopo: EscopoEmpresa): Promise<Row> {
   const s = getStore();
   const mov = getResource('movimentacoes')!;
+  await validarReferenciasMovimentacaoManual(mov, data, escopo, tx);
   const qtd = Number(data.quantidade);
   const tipo = String(data.tipo);
 
@@ -1231,14 +1402,16 @@ async function createMovimentacao(data: Payload, actor: Actor, tx: Tx): Promise<
   }
   if (qtd === 0) throw new HttpError(400, 'A quantidade não pode ser zero.', { quantidade: 'Não pode ser zero' });
 
-  await resolveLocal(data, tx);
+  await resolveLocal(data, tx, escopo);
   const local = String(data.local);
+  const localId = Number(data.local_id);
   const produtoId = Number(data.produto_id);
-  const tamanhoId = Number(data.tamanho_id);
+  const tamanhoId = data.tamanho_id === null || data.tamanho_id === undefined || data.tamanho_id === '' ? null : Number(data.tamanho_id);
+  data.tamanho_id = tamanhoId;
   const usuarioId = actor.id || null;
 
-  // Nenhum tamanho fora da grade do produto (ver validarTamanhoNaGrade).
-  await validarTamanhoNaGrade(produtoId, tamanhoId, tx);
+  // Nenhum tamanho fora da grade do produto; produto sem tamanho usa NULL.
+  await validarTamanhoNaGrade(produtoId, tamanhoId, tx, escopo);
 
   // Transferência entre locais: em UMA transação, saída na origem + entrada no
   // destino — duas linhas ligadas por transferencia_id.
@@ -1249,22 +1422,23 @@ async function createMovimentacao(data: Payload, actor: Actor, tx: Tx): Promise<
     if (!destId || !Number.isInteger(destId)) {
       throw new HttpError(400, 'Escolha o local de destino da transferência.', { local_destino_id: 'Campo obrigatório' });
     }
-    const destino = await s.findOneWhere(getResource('locais')!, { id: destId }, tx ?? undefined);
-    if (!destino) throw new HttpError(400, 'Local de destino inválido: o registro selecionado não existe.', { local_destino_id: 'Registro não encontrado' });
+    const destino = await s.findOneWhere(getResource('locais')!, { id: destId, empresa_id: escopo.empresaId }, tx ?? undefined);
+    if (!destino) throw new HttpError(404, 'Local de destino não encontrado.');
+    if (!ativoYn(destino)) throw new HttpError(409, 'O local de destino está inativo.');
     const localDestino = String(destino.nome);
-    if (localDestino === local) throw new HttpError(400, 'A origem e o destino da transferência devem ser locais diferentes.', { local_destino_id: 'Escolha outro local' });
+    if (destId === localId) throw new HttpError(400, 'A origem e o destino da transferência devem ser locais diferentes.', { local_destino_id: 'Escolha outro local' });
 
     const motivo = data.motivo ? String(data.motivo) : `Transferência para ${localDestino}`;
     // Retira na origem com a condição dentro do próprio UPDATE — ver tryAdjustStock.
-    const retirado = await s.tryAdjustStock(produtoId, tamanhoId, local, -qtd, tx);
+    const retirado = await s.tryAdjustStock(produtoId, tamanhoId, local, -qtd, tx, 0, localId, escopo.empresaId);
     if (!retirado) {
-      const origem = await s.findOneWhere(getResource('estoques')!, { produto_id: produtoId, tamanho_id: tamanhoId, local }, tx ?? undefined);
+      const origem = await s.findOneWhere(getResource('estoques')!, { empresa_id: escopo.empresaId, produto_id: produtoId, tamanho_id: tamanhoId, local }, tx ?? undefined);
       const atual = Number(origem?.quantidade ?? 0);
       throw new HttpError(409, `Saldo insuficiente para transferir: há ${atual} peça(s) em "${local}" e você quer transferir ${qtd}.`, { quantidade: `Saldo atual: ${atual}` });
     }
-    const saida = await s.insert(mov, { tipo: 'saida', produto_id: produtoId, tamanho_id: tamanhoId, local, local_id: data.local_id ?? null, local_destino: localDestino, local_destino_id: destId, quantidade: qtd, motivo, usuario_id: usuarioId }, tx);
-    await s.insert(mov, { tipo: 'entrada', produto_id: produtoId, tamanho_id: tamanhoId, local: localDestino, local_id: destId, transferencia_id: Number(saida.id), quantidade: qtd, motivo: `Transferência de ${local}`, usuario_id: usuarioId }, tx);
-    await s.adjustStock(produtoId, tamanhoId, localDestino, qtd, tx);
+    const saida = await s.insert(mov, { empresa_id: escopo.empresaId, tipo: 'saida', produto_id: produtoId, tamanho_id: tamanhoId, local, local_id: data.local_id ?? null, local_destino: localDestino, local_destino_id: destId, quantidade: qtd, motivo, usuario_id: usuarioId }, tx);
+    await s.insert(mov, { empresa_id: escopo.empresaId, tipo: 'entrada', produto_id: produtoId, tamanho_id: tamanhoId, local: localDestino, local_id: destId, transferencia_id: Number(saida.id), quantidade: qtd, motivo: `Transferência de ${local}`, usuario_id: usuarioId }, tx);
+    await s.adjustStock(produtoId, tamanhoId, localDestino, qtd, tx, destId, escopo.empresaId);
     await s.update(mov, Number(saida.id), { transferencia_id: Number(saida.id) }, tx);
     await audit(tx, actor, 'criar', mov, Number(saida.id), `Transferência de ${qtd} un. de "${local}" para "${localDestino}" — ${await produtoTamanhoLabel(produtoId, tamanhoId, tx)}`, sanitize({ ...data, local, local_destino: localDestino }), saida);
     return (await s.get(mov, Number(saida.id), tx)) ?? saida;
@@ -1275,23 +1449,23 @@ async function createMovimentacao(data: Payload, actor: Actor, tx: Tx): Promise<
     // O abatimento é a primeira coisa e é condicional na própria escrita: checar
     // o saldo antes e gravar depois deixaria duas vendas concorrentes tirarem a
     // mesma peça (e o saldo virar negativo).
-    const aplicado = await s.tryAdjustStock(produtoId, tamanhoId, local, delta, tx);
+    const aplicado = await s.tryAdjustStock(produtoId, tamanhoId, local, delta, tx, 0, localId, escopo.empresaId);
     if (!aplicado) {
-      const saldo = await s.findOneWhere(getResource('estoques')!, { produto_id: produtoId, tamanho_id: tamanhoId, local }, tx ?? undefined);
+      const saldo = await s.findOneWhere(getResource('estoques')!, { empresa_id: escopo.empresaId, produto_id: produtoId, tamanho_id: tamanhoId, local }, tx ?? undefined);
       const atual = Number(saldo?.quantidade ?? 0);
       throw new HttpError(409, `Saldo insuficiente: há ${atual} peça(s) em "${local}" e a movimentação retiraria ${Math.abs(delta)}.`, { quantidade: `Saldo atual: ${atual}` });
     }
   }
 
   const row = await s.insert(mov, { ...data, local, local_id: data.local_id ?? null, local_destino: data.local_destino ?? null, local_destino_id: data.local_destino_id ?? null, usuario_id: usuarioId }, tx);
-  if (delta > 0) await s.adjustStock(produtoId, tamanhoId, local, delta, tx);
+  if (delta > 0) await s.adjustStock(produtoId, tamanhoId, local, delta, tx, localId, escopo.empresaId);
   const full = (await s.get(mov, row.id, tx)) ?? row;
   await audit(tx, actor, 'criar', mov, row.id, `${tipo === 'entrada' ? 'Entrada' : tipo === 'saida' ? 'Saída' : 'Ajuste'} de ${qtd} un. — ${full.produto_id__label ?? '#' + produtoId} ${full.tamanho_id__label ?? ''} (${local})`, sanitize(data), row);
   return full;
 }
 
 /** Rótulo "Produto tam. X" para auditoria. */
-async function produtoTamanhoLabel(produtoId: number, tamanhoId: number, tx?: Tx): Promise<string> {
+async function produtoTamanhoLabel(produtoId: number, tamanhoId: number | null, tx?: Tx): Promise<string> {
   const s = getStore();
   const p = await s.findOneWhere(getResource('produtos')!, { id: produtoId }, tx);
   const t = await s.findOneWhere(getResource('tamanhos')!, { id: tamanhoId }, tx);
@@ -1300,9 +1474,10 @@ async function produtoTamanhoLabel(produtoId: number, tamanhoId: number, tx?: Tx
 }
 
 /** Movimentação manual de insumo (módulo Estoque de Insumos). */
-async function createMovimentacaoInsumo(data: Payload, actor: Actor, tx: Tx): Promise<Row> {
+async function createMovimentacaoInsumo(data: Payload, actor: Actor, tx: Tx, escopo: EscopoEmpresa): Promise<Row> {
   const s = getStore();
   const mov = getResource('movimentacoes_insumos')!;
+  await validarReferenciasMovimentacaoManual(mov, data, escopo, tx);
   const qtd = Number(data.quantidade);
   const tipo = String(data.tipo);
   if (qtd === 0) throw new HttpError(400, 'A quantidade não pode ser zero.', { quantidade: 'Não pode ser zero' });
@@ -1310,31 +1485,61 @@ async function createMovimentacaoInsumo(data: Payload, actor: Actor, tx: Tx): Pr
     throw new HttpError(400, 'Para entrada e saída informe uma quantidade maior que zero.', { quantidade: 'Deve ser maior que zero' });
   }
   const insumoId = Number(data.insumo_id);
+  if (!Number.isInteger(insumoId) || insumoId <= 0) throw new HttpError(404, 'Insumo não encontrado.');
+  const insumo = await s.findOneWhere(getResource('insumos')!, { id: insumoId, empresa_id: escopo.empresaId }, tx);
+  if (!insumo) throw new HttpError(404, 'Insumo não encontrado.');
   const delta = tipo === 'saida' ? -qtd : qtd;
-  const atual = await s.insumoStock(insumoId, tx);
+  const atual = await s.insumoStock(insumoId, tx, escopo.empresaId);
   if (atual + delta < 0) {
-    const ins = await s.findOneWhere(getResource('insumos')!, { id: insumoId }, tx);
-    const nome = ins ? labelOf(getResource('insumos')!, ins) : `#${insumoId}`;
+    const nome = labelOf(getResource('insumos')!, insumo);
     throw new HttpError(409, `Saldo insuficiente do insumo: há ${atual} de ${nome} e a movimentação retiraria ${Math.abs(delta)}.`, { quantidade: `Saldo atual: ${atual}` });
   }
-  const row = await s.insert(mov, { ...data, usuario_id: actor.id || null }, tx);
-  await s.adjustInsumoStock(insumoId, delta, tx);
-  const ins = await s.findOneWhere(getResource('insumos')!, { id: insumoId }, tx);
-  const nome = ins ? labelOf(getResource('insumos')!, ins) : `#${insumoId}`;
-  const un = ins?.unidade || 'un';
+  const row = await s.insert(mov, { ...data, empresa_id: escopo.empresaId, usuario_id: actor.id || null }, tx);
+  await s.adjustInsumoStock(insumoId, delta, tx, escopo.empresaId);
+  const nome = labelOf(getResource('insumos')!, insumo);
+  const un = insumo.unidade || 'un';
   await audit(tx, actor, 'criar', mov, row.id, `${tipo === 'entrada' ? 'Entrada' : tipo === 'saida' ? 'Saída' : 'Ajuste'} de ${qtd} ${un} de ${nome}${data.motivo ? ` — ${data.motivo}` : ''}`, sanitize(data), row);
   return row;
 }
 
-/** Abrir inventário: congela o saldo do local em itens_inventario. */
-async function abrirInventarioSnapshot(row: Row, actor: Actor, tx: Tx) {
+/** Abrir inventário: congela apenas os saldos da empresa/local canônicos. */
+async function abrirInventarioSnapshot(row: Row, actor: Actor, tx: Tx, escopo: EscopoEmpresa) {
   const s = getStore();
-  const local = row.local ? String(row.local) : await getDefaultLocal(tx);
-  const aberto = await s.findOneWhere(getResource('inventarios')!, { local, status: 'aberto' }, tx);
-  if (aberto && Number(aberto.id) !== Number(row.id)) {
-    throw new HttpError(409, `Já existe um inventário aberto para o local "${local}" (inventário #${aberto.id}). Feche-o antes de abrir outro.`);
+  const local = String(row.local);
+  const localId = Number(row.local_id);
+  if (!Number.isInteger(localId) || localId <= 0 || !await s.findOneWhere(getResource('locais')!, { id: localId, empresa_id: escopo.empresaId }, tx)) {
+    throw new HttpError(404, 'Local não encontrado.');
   }
-  const estoques = await s.list(getResource('estoques')!, { page: 1, pageSize: 20000, filter: { local } }, tx);
+  const rInventarios = getResource('inventarios')!;
+  const filtroAberto = { empresa_id: escopo.empresaId, local_id: localId, status: 'aberto' };
+  if (await s.countWhere(rInventarios, filtroAberto, tx) > 1) {
+    throw new HttpError(409, 'Há mais de um inventário aberto para este local nesta empresa. Revise os dados antes de abrir outro.');
+  }
+  const aberto = await s.findOneWhere(rInventarios, filtroAberto, tx);
+  if (aberto && Number(aberto.id) !== Number(row.id)) {
+    throw new HttpError(409, `Já existe um inventário aberto para o local "${local}" nesta empresa. Feche-o antes de abrir outro.`);
+  }
+  const rEstoques = getResource('estoques')!;
+  if (await s.countWhere(rEstoques, { empresa_id: escopo.empresaId, local, local_id: null }, tx) > 0) {
+    throw new HttpError(409, 'Há saldos sem vínculo canônico para este local. Nada foi copiado; revise os dados históricos antes de abrir o inventário.');
+  }
+  const estoques = await s.list(rEstoques, {
+    page: 1,
+    pageSize: 20000,
+    filter: { empresa_id: escopo.empresaId, local_id: localId },
+  }, tx);
+  const celulasSaldo = new Set<string>();
+  for (const saldo of estoques.rows) {
+    const chave = `${Number(saldo.produto_id)}:${saldo.tamanho_id === null || saldo.tamanho_id === undefined ? 'null' : Number(saldo.tamanho_id)}`;
+    if (celulasSaldo.has(chave)) throw new HttpError(409, 'Há saldos duplicados para o mesmo produto/tamanho/local. Nada foi copiado ao inventário; revise os dados históricos.');
+    celulasSaldo.add(chave);
+    await validarTamanhoNaGrade(
+      Number(saldo.produto_id),
+      saldo.tamanho_id === null || saldo.tamanho_id === undefined ? null : Number(saldo.tamanho_id),
+      tx,
+      escopo
+    );
+  }
   // 2000 era o teto antigo e virava contagem silenciosa pela metade num local
   // maior — melhor recusar do que fechar um inventário incompleto.
   if (estoques.total > estoques.rows.length) {
@@ -1344,6 +1549,7 @@ async function abrirInventarioSnapshot(row: Row, actor: Actor, tx: Tx) {
   const linhas = estoques.rows
     .filter((e) => Number(e.quantidade) !== 0 || Number(e.estoque_min || 0) !== 0)
     .map((e) => ({
+      empresa_id: escopo.empresaId,
       inventario_id: Number(row.id),
       produto_id: e.produto_id,
       tamanho_id: e.tamanho_id,
