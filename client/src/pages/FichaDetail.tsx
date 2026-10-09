@@ -216,7 +216,9 @@ export default function FichaDetail() {
                 <Pencil className="h-4 w-4" /> Editar custos e margem
               </button>
             )}
-            {podeEditar && (
+            {/* Escreve custo e preço de venda no produto: só gerente/admin, na
+                mesma régua do servidor (aplicarPrecoFicha). */}
+            {podeEditar && ehGerente && (
               <button className="btn-accent" onClick={aplicarPreco} disabled={aplicando || !ficha.custo_calculado}>
                 {aplicando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Tag className="h-4 w-4" />} Aplicar preço ao produto
               </button>

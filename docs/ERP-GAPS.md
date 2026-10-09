@@ -1,7 +1,12 @@
 # BROBOND ERP — GAPS
 
-**Fase E1 — Auditoria estrutural.**
+**Fase E1 — Auditoria estrutural. Fase E2 — Produção executada.**
 Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3ee997-brobond-erp`
+
+> **Atualização E2:** os 8 gaps de Produção estão fechados com evidência
+> executada (migração em banco vazio, 33 testes novos de servidor, 14 de tela,
+> 24 verificações de smoke HTTP). A seção de cada gap guarda o que faltava,
+> como foi comprovado que faltava e como foi resolvido.
 
 Este é o **registro oficial do que falta**. Regra de manutenção:
 
@@ -19,21 +24,21 @@ Classificação do tipo de gap (seção 3 da especificação):
 
 ## RESUMO
 
-| Fase | Gaps | Críticos |
-|---|---|---|
-| **E2 — Produção** | 8 | 3 |
-| **E3 — Compras** | 5 | 1 |
-| **E4 — Estoque avançado** | 5 | 2 |
-| **E5 — Financeiro avançado** | 2 | 0 |
-| **E6 — Fiscal** | 2 | 0 |
-| **E7 — Logística** | 1 | 0 |
-| **E8 — Commerce** | 6 | 2 |
-| **E9 — Relatórios** | 1 | 0 |
-| **E10 — Administração** | 4 | 1 |
-| **E11 — UX final** | 2 | 0 |
-| **E12 — Homologação** | 3 | 3 |
-| Transversais | 3 | 0 |
-| **Total** | **42** | **12** |
+| Fase | Gaps | Abertos | Críticos abertos |
+|---|---|---|---|
+| **E2 — Produção** | 8 | **0** ✅ | **0** |
+| **E3 — Compras** | 5 | 5 | 1 |
+| **E4 — Estoque avançado** | 5 | 5 | 2 |
+| **E5 — Financeiro avançado** | 2 | 2 | 0 |
+| **E6 — Fiscal** | 2 | 2 | 0 |
+| **E7 — Logística** | 1 | 1 | 0 |
+| **E8 — Commerce** | 6 | 6 | 2 |
+| **E9 — Relatórios** | 1 | 1 | 0 |
+| **E10 — Administração** | 4 | 4 | 1 |
+| **E11 — UX final** | 2 | 2 | 0 |
+| **E12 — Homologação** | 3 | 3 | 3 |
+| Transversais | 3 | 3 | 0 |
+| **Total** | **42** | **34** | **9** |
 
 ---
 
@@ -61,47 +66,55 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
 
 ## E2 — PRODUÇÃO
 
-### `GAP-PROD-ESTADOS` — máquina de estados incompleta · **CRÍTICO**
+### `GAP-PROD-ESTADOS` — máquina de estados incompleta · ✅ **RESOLVIDO na E2**
 - **Tipo:** banco + backend + frontend
-- **O que falta:** a especificação pede `PLANEJADA → LIBERADA → EM_PRODUÇÃO → PARCIAL → CONCLUÍDA` (+ `CANCELADA`).
-- **Evidência:** `db/schema.sql:258` declara `status TEXT DEFAULT 'planejada' -- planejada, em_producao, concluida, cancelada`. Não existe `liberada` nem `parcial`. Não há constraint `CHECK` na coluna — qualquer string é aceita (verificado no banco real: `information_schema` não retorna check constraint para `ordens_fabricacao.status`).
-- **Aceite:** constraint `CHECK` com os estados válidos + transições validadas no servidor + teste de transição ilegal (409) + teste de concorrência em duas conclusões simultâneas.
-
-### `GAP-PROD-PERDAS` — sem quantidade perdida
+- **O que faltava:** a especificação pede `PLANEJADA → LIBERADA → EM_PRODUÇÃO → PARCIAL → CONCLUÍDA` (+ `CANCELADA`).
+- **Evidência do gap (antes):** `db/schema.sql` declarava `status TEXT DEFAULT 'planejada' -- planejada, em_producao, concluida, cancelada`, sem `liberada` nem `parcial`, e **sem nenhuma constraint `CHECK`** — qualquer string era aceita.
+- **Como foi resolvido:** `db/migrations/0026_producao_completa.sql` adiciona `CHECK ordens_fabricacao_status_valido` com os seis estados (precedido de `UPDATE … SET status='planejada' WHERE status IS NULL` e de um DO-block que lista os `id:status` fora do vocabulário antes de criar a constraint, para não quebrar o boot com dado legado). O grafo de transições vive em `server/src/producao.ts` (`STATUS_OP`, `TRANSICOES_OP`, `transicaoPermitida`) e é validado em `aplicarRegrasOrdem` **dentro da transação**, com 409 e mensagem listando as transições permitidas.
+- **Decisões registradas:**
+  - `concluida → cancelada` **passou a ser impossível**. O caminho de desfazer é reabrir (estorna) e então cancelar. `services.ts` ainda roteava essa transição para `estornarOrdem`; o ramo ficou como código morto inofensivo.
+  - `planejada → concluida` (atalho que existia antes) **foi mantido** e agora é gravado na trilha como evento `atalho`.
+  - `cancelada` é terminal.
+- **Evidência:** `server/test/producao-e2.test.ts` (transições legais/ilegais, 409, estado terminal, 400 de vocabulário) · `server/test/pg-producao-e2.test.ts` (o CHECK recusa de verdade no Postgres, `code 23514`) · concorrência real: duas conclusões simultâneas, exatamente uma vence.
+### `GAP-PROD-PERDAS` — sem quantidade perdida · ✅ **RESOLVIDO na E2**
+- **Tipo:** banco + backend + frontend
+- **Evidência do gap (antes):** `grep -n "perdid" db/schema.sql server/src/producao.ts` → **zero ocorrências**.
+- **Como foi resolvido:** `ordens_fabricacao.quantidade_perdida`, `itens_ordem.perdido` e `ordens_apontamentos.quantidade_perdida`. A regra implementada: **a base de consumo de insumo é `produzida + perdida`** (peça refugada custa material) e **a entrada no estoque é só `produzida`**. Sem apontamento a base continua sendo a quantidade planejada — comportamento idêntico ao pré-E2 (teste de não-regressão em `producao-e2.test.ts`).
+- **Evidência:** teste "peça refugada consome insumo e NÃO entra no estoque" (16 m baixados para 6 boas + 2 refugadas; só 6 entram no estoque) · evento `perda` na trilha · coluna "Refugadas" na OP e no planejamento.
+### `GAP-PROD-CUSTO-OP` — sem custo previsto × real na OP · ✅ **RESOLVIDO na E2**
+- **Tipo:** banco + backend + frontend
+- **Como foi resolvido:**
+  - `custo_previsto` é **congelado na liberação** (`POST /api/ordens/:id/liberar`): peças planejadas × `fichas_tecnicas.custo_calculado` daquele instante. Editar a ficha depois **não** reescreve o que foi orçado — é de propósito e está comentado no código.
+  - `custo_real` = Σ(`movimentacoes_insumos` de saída com `ordem_id`, `quantidade × custo_unitario`) + (`mao_obra` + `custos_indiretos`) × `min(1, processadas/planejadas)`. Recalculado a cada apontamento e na conclusão.
+- **Evidência:** `liberar` grava 300 para 10 peças de custo 30 · sem ficha técnica o previsto fica 0 **e a trilha avisa** (não inventa) · custo real 100 para 5 peças × 2 m × R$10 · tela mostra previsto × real com variação (teste de tela `OrdemDetail.test.tsx` verifica `+R$ 40,00`).
+### `GAP-PROD-CONSUMO-VINCULO` — consumo de insumo sem vínculo formal · ✅ **RESOLVIDO na E2**
 - **Tipo:** banco + backend
-- **Evidência:** `grep -n "perdid" db/schema.sql server/src/producao.ts` → **zero ocorrências**. `ordens_fabricacao` tem `quantidade` e `itens_ordem.produzido`, e nada para perda.
-- **Aceite:** coluna `quantidade_perdida`, registro por apontamento, perda entra no custo real, movimentação de insumo vinculada.
-
-### `GAP-PROD-CUSTO-OP` — sem custo previsto × real na OP
-- **Tipo:** banco + backend
-- **Evidência:** `grep -n "custo_previsto\|custo_real" db/schema.sql` → zero. O custo é calculado na **ficha técnica** (`fichas_tecnicas`) e aplicado ao produto por `/fichas/:id/aplicar-preco`; a OP não guarda nem o previsto nem o realizado.
-- **Aceite:** `custo_previsto` gravado na liberação, `custo_real` acumulado no consumo e na conclusão, diferença exposta na tela.
-
-### `GAP-PROD-CONSUMO-VINCULO` — consumo de insumo sem vínculo formal · **CRÍTICO**
-- **Tipo:** banco
-- **Evidência:** `movimentacoes_insumos` (`db/schema.sql:358-367`) tem `insumo_id`, `quantidade`, `custo_unitario`, `motivo`, `usuario_id`, `data` — **sem `ordem_id`**. O estorno localiza o consumo por texto: `server/src/producao.ts:240` faz `if (!String(m.motivo || '').startsWith(\`Consumo — OP #${id}\`)) continue;`. Renomear o padrão da string quebra o estorno silenciosamente.
-- **Aceite:** `movimentacoes_insumos.ordem_id` com FK + índice + backfill pelo padrão de texto existente + estorno passando a usar a FK.
-
-### `GAP-PROD-APONTAMENTOS` — sem apontamento de produção
-- **Tipo:** ausência completa
-- **Evidência:** `grep -c "CREATE TABLE IF NOT EXISTS apontamentos" db/schema.sql` → **0**.
-- **Aceite:** apontamento parcial por operador/turno, alimenta `produzido`, `perdido` e o custo real, permite o estado `PARCIAL`.
-
-### `GAP-PROD-PLANEJAMENTO` — sem planejamento de produção
-- **Tipo:** ausência completa
-- **Evidência:** `grep -c "CREATE TABLE IF NOT EXISTS planejamento" db/schema.sql` → **0**.
-- **Aceite:** plano por período com capacidade, puxando OPs planejadas; nunca gera OP sozinho (mesmo princípio da sugestão de compra).
-
-### `GAP-PROD-EVENTOS` — sem trilha de transições da OP
-- **Tipo:** banco
-- **Evidência:** existem `expedicao_eventos`, `envio_eventos`, `proposta_eventos`, `documentos_fiscais_eventos`, `comissoes_eventos` — **não existe `ordens_eventos`**. A OP só tem a trilha genérica em `auditoria`.
-- **Aceite:** `ordens_eventos` append-only com empresa derivada por trigger, mesma forma das demais trilhas.
-
-### `GAP-PROD-CUSTO-SEM-TESTE` — cálculo de custo sem cobertura
+- **Evidência do gap (antes):** `movimentacoes_insumos` não tinha `ordem_id`; o estorno localizava o consumo por texto (`motivo.startsWith('Consumo — OP #N')`).
+- **Como foi resolvido:** `movimentacoes.ordem_id` e `movimentacoes_insumos.ordem_id`, ambos `REFERENCES ordens_fabricacao(id) ON DELETE SET NULL` + índice. Backfill por `regexp_match(motivo,'OP #(\d+)')` **guardado por `EXISTS` em `ordens_fabricacao`** — motivo sem padrão ou com id órfão fica `NULL`, nunca se inventa vínculo. O `motivo` em texto livre continua sendo escrito (a UI o mostra), mas deixou de ser a fonte de verdade.
+- **Correção de projeto importante:** `movimentacoes_insumos` **não tem** coluna `estornado`, então o estorno é feito por **saldo líquido por insumo** (Σsaída − Σentrada filtrando por `ordem_id`). Reverter linha a linha devolveria o mesmo material duas vezes na segunda reabertura.
+- **Evidência:** `pg-producao-e2.test.ts` executa **o SQL do próprio arquivo 0026** (extraído por regex) contra linhas fabricadas: liga a que tem `OP #N`, deixa `NULL` a sem padrão e a órfã · `ON DELETE SET NULL` preserva a movimentação e solta o vínculo · `producao-e2.test.ts` prova que dois ciclos concluir/reabrir deixam líquido zero.
+### `GAP-PROD-APONTAMENTOS` — sem apontamento de produção · ✅ **RESOLVIDO na E2**
+- **Tipo:** ausência completa → banco + backend + frontend
+- **Como foi resolvido:** tabela `ordens_apontamentos` (append-only, `internal: true`, sem CRUD genérico) criada **apenas** por `POST /api/ordens/:id/apontamentos`, que é o único ponto que consome insumo, acumula `produzido/perdido`, recalcula o custo real e move a OP para `parcial`. Idempotente por `idempotency_key` com **índice único parcial `(empresa_id, idempotency_key)`** — repetir o POST devolve o mesmo apontamento (`idempotente: true`, HTTP 200) sem baixar insumo de novo.
+- **Concorrência:** a transição usa `tryUpdateIf` (`UPDATE … WHERE status = esperado`); a perdedora recebe 409 em vez de acumular sobre a mesma base.
+- **Evidência:** 4 testes em `producao-e2.test.ts` (acumulação, perda, idempotência, validação) · `pg-producao-e2.test.ts` prova que o índice único recusa no banco (`23505`) e que chave `NULL` é repetível · smoke HTTP verifica `idempotente=true` na segunda chamada.
+### `GAP-PROD-PLANEJAMENTO` — sem planejamento de produção · ✅ **RESOLVIDO na E2**
+- **Tipo:** ausência completa → backend + frontend
+- **Como foi resolvido:** `GET /api/producao/planejamento?de=&ate=` + tela `/planejamento-producao` (menu Produção). Agrega por semana as OPs `planejada|liberada|em_producao|parcial` do período e calcula a **necessidade de insumos** (consumo da ficha × peças que faltam produzir − saldo atual). Respeita o mesmo princípio da sugestão de compra: **é cálculo, nunca cria OP**.
+- **Evidência:** período sem OP devolve `resumo.ops = 0`, `ordens: []`, `insumos: []` — a tela mostra estado vazio com caminho para criar, não número inventado (teste de tela e smoke HTTP).
+### `GAP-PROD-EVENTOS` — sem trilha de transições da OP · ✅ **RESOLVIDO na E2**
+- **Tipo:** banco + backend + frontend
+- **Como foi resolvido:** `ordens_eventos` append-only com `empresa_id` derivado, mesma forma das demais trilhas (`expedicao_eventos`, `proposta_eventos`…). Vocabulário: `criada, liberada, iniciada, apontamento, perda, consumo, parcial, concluida, reaberta, cancelada, atalho, edicao`. `GET /api/ordens/:id/eventos` + painel "Histórico da OP" na tela.
+- **Duas decisões que precisam ficar registradas:**
+  - `registrarEventoOrdem` **engole erro de propósito** — a trilha é consequência da operação, nunca motivo para desfazê-la.
+  - A ordenação é por **`id`**, não por `criado_em`: `apontamento` e `perda` nascem no mesmo milissegundo e o empate deixava a ordem a cargo do banco (o smoke pegou a UI mostrando a perda antes do apontamento).
+  - A coluna `dados` é gravada no banco mas **`memdb.decorate()` apaga o campo `dados` em toda leitura da API** (regra geral de segredo, `server/src/memdb.ts:147`). Por isso o conteúdo que o operador precisa ler vai na `mensagem` — inclusive o resumo dos apontamentos anulados numa reabertura.
+- **Evidência:** teste de ciclo completo `liberada → iniciada → apontamento → concluida` · smoke HTTP confere a ordem `criada,liberada,apontamento,perda,concluida`.
+### `GAP-PROD-CUSTO-SEM-TESTE` — cálculo de custo sem cobertura · ✅ **RESOLVIDO na E2**
 - **Tipo:** testes
-- **Evidência:** `grep -rln "aplicarPrecoFicha\|recalcularFichaValores" server/test/` → **zero arquivos**. Só `client/src/pages/FichaDetail.tsx` consome. `CustoPage.tsx` não tem `.test.tsx`.
-- **Aceite:** teste unitário do cálculo (consumo × (1+perda) × custo médio + mão de obra + indiretos), teste de `/fichas/:id/aplicar-preco` e teste de renderização da `CustoPage`.
-
+- **Evidência do gap (antes):** `grep -rln "aplicarPrecoFicha\|recalcularFichaValores" server/test/` → **zero arquivos**; `CustoPage.tsx` sem `.test.tsx`.
+- **Como foi resolvido:** `server/test/custo-ficha.test.ts` (13 testes) trava a fórmula `Σ consumo × (1 + perda%/100) × custo_médio + mão de obra + indiretos`, preço `= custo × (1 + margem%)`, recálculo após mudança de consumo, e `aplicarPrecoFicha` (cópia para o produto, regravar, 404, 400 sem produto, auditoria). `client/src/pages/CustoPage.test.tsx` (8 testes) cobre fórmula exibida, totais, "—" para ficha não calculada, busca, estado vazio, erro e RBAC.
+- **Bug de permissão encontrado POR estes testes e corrigido:** `fichas` não declara `minPerfil` (o operador precisa editar consumo/perda), então `aplicarPrecoFicha` permitia que **qualquer operador escrevesse custo e preço de venda no produto**. Agora exige gerente/admin no servidor (`exigirGerenteProducao`) e o botão da `FichaDetail.tsx` ficou na mesma régua.
 ---
 
 ## E3 — COMPRAS
@@ -146,10 +159,11 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
   `itens.ts:394` re-filtra `String(m.motivo) === \`Venda #${pedido.id}\``.
 - **Aceite:** migração adding `venda_id INTEGER REFERENCES vendas(id)` + índice `(empresa_id, venda_id)` + backfill seguro a partir do padrão de texto + código passando a usar a coluna + teste A→B→A de multiempresa sobre o novo vínculo.
 
-### `GAP-ESTQ-ORDEM-ID` — vínculo formal OP → estoque · **CRÍTICO**
-- **Tipo:** banco
-- **Evidência:** mesma consulta acima — sem `ordem_id`. `server/src/producao.ts:160` grava `motivo: \`Produção concluída — OP #${id}\`` e `producao.ts:204` recupera por `filter: { tipo: 'entrada', motivo: \`Produção concluída — OP #${id}\` }`.
-- **Aceite:** idem, com `ordem_id` + FK + backfill + teste.
+### `GAP-ESTQ-ORDEM-ID` — vínculo formal OP → estoque · ✅ **RESOLVIDO na E2**
+- **Tipo:** banco + backend
+- **Evidência do gap (antes):** `movimentacoes` sem `ordem_id`. `producao.ts` gravava `motivo: \`Produção concluída — OP #${id}\`` e o estorno recuperava por `filter: { tipo: 'entrada', motivo: ... }` — renomear a string quebrava o estorno em silêncio.
+- **Como foi resolvido:** `movimentacoes.ordem_id REFERENCES ordens_fabricacao(id) ON DELETE SET NULL` + índice + backfill pela 0026 (mesmo padrão seguro de `movimentacoes_insumos`). O `motivo` em texto continua escrito para leitura humana, mas deixou de ser chave de busca.
+- **Evidência:** `pg-producao-e2.test.ts` — o backfill roda **o SQL extraído do arquivo 0026**, `ON DELETE SET NULL` preserva a movimentação, e a entrada de produto acabado aparece com `ordem_id` preenchido · smoke HTTP confere `entradas=1 qtd=4` filtrando por `f.ordem_id`.
 
 ### `GAP-ESTQ-TRANSFERENCIAS` — transferência sem entidade e sem FK
 - **Tipo:** banco + backend

@@ -210,6 +210,82 @@ check('GET /financeiro/extrato', extrato.status === 200, `status ${extrato.statu
 const parsers = await req('GET', '/financeiro/cnab/parsers');
 check('GET /financeiro/cnab/parsers (cnab240 presente)', parsers.status === 200 && JSON.stringify(parsers.json || '').includes('cnab240'), `status ${parsers.status}`);
 
+// ---------------------------------------------------------------- E2 PRODUÇÃO (fluxo da OP sobre HTTP real)
+// Os testes unitários chamam os handlers diretamente; este bloco é o único que
+// prova o wiring das rotas novas (/liberar, /apontamentos, /concluir, /cancelar,
+// /reabrir, /producao/planejamento) depois do middleware de auth e do :resource.
+const sfx = Date.now();
+const insumo = await req('POST', '/insumos', { nome: `Tecido Smoke ${sfx}`, unidade: 'm', custo_medio: 10 });
+check('E2: POST /insumos', [200, 201].includes(insumo.status) && !!insumo.json?.id, `status ${insumo.status} ${msg(insumo.json)}`);
+const prodOp = await req('POST', '/produtos', { sku: `SMOKE-OP-${sfx}`, nome: 'Produto Smoke OP', preco_venda: 100, custo: 30 });
+check('E2: POST /produtos', [200, 201].includes(prodOp.status) && !!prodOp.json?.id, `status ${prodOp.status} ${msg(prodOp.json)}`);
+const tamOp = await req('POST', '/tamanhos', { codigo: `S${String(sfx).slice(-4)}`, nome: 'Smoke', ordem: 900 });
+check('E2: POST /tamanhos', [200, 201].includes(tamOp.status) && !!tamOp.json?.id, `status ${tamOp.status} ${msg(tamOp.json)}`);
+
+// saldo do insumo: por movimentação, nunca por edição direta do cadastro
+const movIn = await req('POST', '/movimentacoes_insumos', { tipo: 'entrada', insumo_id: insumo.json?.id, quantidade: 500, custo_unitario: 10, motivo: 'Saldo inicial smoke' });
+check('E2: POST /movimentacoes_insumos dá saldo', [200, 201].includes(movIn.status), `status ${movIn.status} ${msg(movIn.json)}`);
+
+// ficha técnica: 2 m por peça, sem perda, sem mão de obra → custo 20 por peça
+const ficha = await req('POST', '/fichas', { produto_id: prodOp.json?.id, mao_obra: 0, custos_indiretos: 0, margem_pct: 100 });
+check('E2: POST /fichas', [200, 201].includes(ficha.status) && !!ficha.json?.id, `status ${ficha.status} ${msg(ficha.json)}`);
+const itemFicha = await req('POST', `/fichas/${ficha.json?.id}/insumos`, { insumo_id: insumo.json?.id, consumo: 2, perda_pct: 0 });
+check('E2: POST /fichas/:id/insumos', [200, 201].includes(itemFicha.status), `status ${itemFicha.status} ${msg(itemFicha.json)}`);
+
+const op = await req('POST', '/ordens', { produto_id: prodOp.json?.id, tipo: 'tamanho', tamanho_id: tamOp.json?.id, quantidade: 10, status: 'planejada', previsao: new Date().toISOString().slice(0, 10) });
+check('E2: POST /ordens', [200, 201].includes(op.status) && op.json?.status === 'planejada', `status ${op.status} ${msg(op.json)}`);
+const opId = op.json?.id;
+
+// transição ilegal: planejada não pula para parcial
+const ilegal = await req('PUT', `/ordens/${opId}`, { status: 'parcial' });
+check('E2: planejada → parcial é recusada (409)', ilegal.status === 409, `status ${ilegal.status} ${msg(ilegal.json)}`);
+// status fora do vocabulário
+const invalido = await req('PUT', `/ordens/${opId}`, { status: 'voando' });
+check('E2: status fora do vocabulário é recusado (400)', invalido.status === 400, `status ${invalido.status} ${msg(invalido.json)}`);
+
+const liberada = await req('POST', `/ordens/${opId}/liberar`, {});
+// 10 peças × (2 m × R$10) = R$200 de custo previsto
+check('E2: POST /liberar congela o custo previsto', liberada.status === 200 && liberada.json?.status === 'liberada' && Number(liberada.json?.custo_previsto) === 200, `status ${liberada.status} custo_previsto=${liberada.json?.custo_previsto} ${msg(liberada.json)}`);
+
+const chaveAp = `smoke-${sfx}`;
+const ap1 = await req('POST', `/ordens/${opId}/apontamentos`, { quantidade_produzida: 4, quantidade_perdida: 1, idempotency_key: chaveAp });
+check('E2: POST /apontamentos registra produção e perda', ap1.status === 201 && Number(ap1.json?.quantidade_produzida) === 4, `status ${ap1.status} ${msg(ap1.json)}`);
+const ap2 = await req('POST', `/ordens/${opId}/apontamentos`, { quantidade_produzida: 4, quantidade_perdida: 1, idempotency_key: chaveAp });
+check('E2: mesma chave de idempotência não baixa insumo de novo', ap2.status === 200 && ap2.json?.idempotente === true && Number(ap2.json?.id) === Number(ap1.json?.id), `status ${ap2.status} idempotente=${ap2.json?.idempotente}`);
+
+const parcial = await req('GET', `/ordens/${opId}`);
+check('E2: OP foi para "parcial" com 4 boas e 1 refugada', parcial.json?.status === 'parcial' && Number(parcial.json?.quantidade_produzida) === 4 && Number(parcial.json?.quantidade_perdida) === 1, `status=${parcial.json?.status} prod=${parcial.json?.quantidade_produzida} perd=${parcial.json?.quantidade_perdida}`);
+// base de consumo = 4 boas + 1 refugada = 5 peças × 2 m = 10 m → custo real R$100
+check('E2: custo real vem da execução (5 peças × 2 m × R$10 = R$100)', Number(parcial.json?.custo_real) === 100, `custo_real=${parcial.json?.custo_real}`);
+
+const concluida = await req('POST', `/ordens/${opId}/concluir`, {});
+check('E2: POST /concluir entra no estoque só com as peças boas', concluida.status === 200 && concluida.json?.status === 'concluida', `status ${concluida.status} ${msg(concluida.json)}`);
+const consumo = await req('GET', `/movimentacoes_insumos?f.ordem_id=${opId}&pageSize=200`);
+const saidas = (consumo.json?.rows || []).filter((m) => m.tipo === 'saida');
+check('E2: consumo de insumo ligado à OP pela FK, sem duplicar na conclusão', saidas.length === 1 && Number(saidas[0].quantidade) === 10, `saidas=${saidas.length} qtd=${saidas[0]?.quantidade}`);
+const entradaOp = await req('GET', `/movimentacoes?f.ordem_id=${opId}&pageSize=200`);
+const entradas = (entradaOp.json?.rows || []).filter((m) => m.tipo === 'entrada');
+check('E2: entrada de produto acabado ligada à OP pela FK', entradas.length === 1 && Number(entradas[0].quantidade) === 4, `entradas=${entradas.length} qtd=${entradas[0]?.quantidade}`);
+
+const eventos = await req('GET', `/ordens/${opId}/eventos`);
+const nomesEvento = (eventos.json || []).map((e) => e.evento);
+check('E2: trilha registra liberada → apontamento → perda → concluida', ['liberada', 'apontamento', 'perda', 'concluida'].every((n) => nomesEvento.includes(n)), nomesEvento.join(','));
+
+const reaberta = await req('POST', `/ordens/${opId}/reabrir`, {});
+check('E2: POST /reabrir estorna (gerente)', reaberta.status === 200 && reaberta.json?.status === 'planejada', `status ${reaberta.status} ${msg(reaberta.json)}`);
+const apsApos = await req('GET', `/ordens/${opId}/apontamentos`);
+check('E2: reabrir descarta os apontamentos', Array.isArray(apsApos.json) && apsApos.json.length === 0, `apontamentos=${apsApos.json?.length}`);
+
+const cancelada = await req('POST', `/ordens/${opId}/cancelar`, { motivo: 'Smoke: teste de cancelamento' });
+check('E2: POST /cancelar guarda o motivo', cancelada.status === 200 && cancelada.json?.status === 'cancelada' && cancelada.json?.motivo_cancelamento === 'Smoke: teste de cancelamento', `status ${cancelada.status} motivo=${cancelada.json?.motivo_cancelamento}`);
+const ressuscitar = await req('PUT', `/ordens/${opId}`, { status: 'em_producao' });
+check('E2: OP cancelada é terminal', ressuscitar.status === 409, `status ${ressuscitar.status}`);
+
+const plano = await req('GET', '/producao/planejamento');
+check('E2: GET /producao/planejamento responde o plano', plano.status === 200 && typeof plano.json?.resumo?.ops === 'number' && Array.isArray(plano.json?.insumos), `status ${plano.status}`);
+const semPlano = await req('GET', '/producao/planejamento?de=2031-01-05&ate=2031-01-11');
+check('E2: período sem OP vem vazio (não inventa número)', semPlano.status === 200 && semPlano.json?.resumo?.ops === 0 && semPlano.json?.insumos?.length === 0, `ops=${semPlano.json?.resumo?.ops}`);
+
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);
 check('sem token → 401', semToken.status === 401, `status ${semToken.status}`);

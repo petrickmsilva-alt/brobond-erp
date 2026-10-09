@@ -145,7 +145,7 @@ e continuam abertos — ver `docs/ERP-GAPS.md`.
 | Locais de estoque | Loja, expedição, facção | ✅ `locais` | ✅ | ✅ | ✅ `locais.test.ts` | — | 🟢 |
 | Inventário | Contagem por local e acerto de saldos | ✅ `inventarios`, `itens_inventario` | ✅ `/inventarios/:id/{itens,fechar}` | ✅ `InventarioModulePage.tsx` | ✅ `locais.test.ts`, `grades.test.ts`, `pg-concorrencia.test.ts`, `auditoria.test.ts` | — | 🟢 |
 | **Vínculo formal venda → estoque** | `movimentacoes.venda_id` | ❌ **coluna não existe** | ❌ usa `motivo = 'Venda #ID'` | ❌ | ❌ | — | 🔴 `GAP-ESTQ-VENDA-ID` |
-| **Vínculo formal OP → estoque** | `movimentacoes.ordem_id` | ❌ usa `motivo = 'Produção concluída — OP #ID'` | ❌ | ❌ | ❌ | — | 🔴 `GAP-ESTQ-ORDEM-ID` |
+| Vínculo formal OP → estoque | `movimentacoes.ordem_id` | ✅ FK `ON DELETE SET NULL` + índice + backfill (0026) | ✅ estorno e rastreio pela FK | ✅ | ✅ `pg-producao-e2` (backfill, ON DELETE, escopo) | — | 🟢 |
 | **Transferências de estoque** | Entidade própria com origem/destino | ⚠️ `movimentacoes.transferencia_id INTEGER` **com 0 foreign keys** (verificado em `information_schema`) e sem tabela `transferencias` | ⚠️ | ❌ | ❌ | — | 🔴 `GAP-ESTQ-TRANSFERENCIAS` |
 | **Reserva de estoque** | Reservar por venda/proposta aprovada | ❌ | ❌ | ❌ | ❌ | — | 🔴 `GAP-ESTQ-RESERVA` |
 
@@ -153,17 +153,17 @@ e continuam abertos — ver `docs/ERP-GAPS.md`.
 
 | Módulo | Função | Banco | API | Frontend | Testes | Integração | Status |
 |---|---|---|---|---|---|---|---|
-| Ficha técnica / BOM | Insumos, mão de obra, indiretos, perda, margem | ✅ `fichas_tecnicas`, `itens_ficha_tecnica` | ✅ `/fichas/:id/{insumos,aplicar-preco}` | ✅ CRUD + `FichaDetail.tsx` | ✅ `multiempresa-p1.test.ts`, `negocios.test.ts`, `pg-negocios` | — | 🟢 |
-| Ordens de produção | OP por tamanho ou por grade; concluir entra no estoque e baixa insumos | ✅ `ordens_fabricacao`, `itens_ordem` | ✅ `/ordens/:id/{itens,qualidade}`, `/producao/painel` | ✅ CRUD + `OrdemDetail.tsx` | ✅ `regras.test.ts`, `relatorios.test.ts`, `fuso.test.ts`, `pg-fuso` | — | 🟡 |
-| Custos | Insumos + mão de obra + indiretos → custo e preço sugerido | ✅ `fichas_tecnicas.*`, `produtos.custo_*` | ✅ `/fichas/:id/aplicar-preco` | ✅ `CustoPage.tsx` | ❌ **`aplicarPrecoFicha`/`recalcularFichaValores` sem teste**; `CustoPage.tsx` sem teste | — | 🟡 `GAP-PROD-CUSTO-SEM-TESTE` |
+| Ficha técnica / BOM | Insumos, mão de obra, indiretos, perda, margem | ✅ `fichas_tecnicas`, `itens_ficha_tecnica` | ✅ `/fichas/:id/{insumos,aplicar-preco}` (agora exige gerente/admin) | ✅ CRUD + `FichaDetail.tsx` | ✅ `multiempresa-p1.test.ts`, `negocios.test.ts`, `pg-negocios`, **`custo-ficha.test.ts` (13)** | — | 🟢 |
+| Ordens de produção | OP por tamanho ou por grade; concluir entra no estoque e baixa insumos | ✅ `ordens_fabricacao`, `itens_ordem` | ✅ `/ordens/:id/{itens,qualidade}`, `/producao/painel` | ✅ CRUD + `OrdemDetail.tsx` | ✅ `regras.test.ts`, `relatorios.test.ts`, `fuso.test.ts`, `pg-fuso`, **`producao-e2.test.ts` (26)** | — | 🟢 |
+| Custos | Insumos + mão de obra + indiretos → custo e preço sugerido | ✅ `fichas_tecnicas.*`, `produtos.custo_*` | ✅ `/fichas/:id/aplicar-preco` | ✅ `CustoPage.tsx` | ✅ **`custo-ficha.test.ts` (13) + `CustoPage.test.tsx` (8)** | — | 🟢 |
 | Cadeias de fabricação | Etapa + facção na OP | ✅ `ordens_fabricacao.etapa`, `.faccao` | ✅ | ✅ | ✅ | — | 🟢 |
-| Consumo de insumos | Baixa na conclusão da OP, bloqueio 409 sem saldo, `?forcar` auditado | ⚠️ `movimentacoes_insumos` **sem `ordem_id`** — vínculo por texto `Consumo — OP #N` | ✅ | ⚠️ dentro da OP | ✅ | — | 🟡 `GAP-PROD-CONSUMO-VINCULO` |
-| **Estados `LIBERADA` / `PARCIAL`** | Fluxo da especificação | ❌ status atual: `planejada`, `em_producao`, `concluida`, `cancelada` — e **sem constraint `CHECK`** (verificado em `pg_constraint`: zero constraints de check na tabela) | ❌ | ❌ | ❌ | — | 🔴 `GAP-PROD-ESTADOS` |
-| **Perdas** | Quantidade perdida na OP | ❌ sem coluna nem entidade | ❌ | ❌ | ❌ | — | 🔴 `GAP-PROD-PERDAS` |
-| **Custo previsto × real na OP** | Comparar previsto com realizado | ❌ sem colunas | ❌ | ❌ | ❌ | — | 🔴 `GAP-PROD-CUSTO-OP` |
-| **Apontamentos** | Apontar produção parcial por operador | ❌ | ❌ | ❌ | ❌ | — | 🔴 `GAP-PROD-APONTAMENTOS` |
-| **Planejamento** | Plano de produção por período | ❌ | ❌ | ❌ | ❌ | — | 🔴 `GAP-PROD-PLANEJAMENTO` |
-| **Eventos da OP** | Trilha de transições | ❌ sem `ordens_eventos` (há `auditoria` genérica) | ⚠️ | ❌ | ✅ (auditoria) | — | 🔴 `GAP-PROD-EVENTOS` |
+| Consumo de insumos | Baixa por apontamento e na conclusão, bloqueio 409 sem saldo, `?forcar` auditado | ✅ `movimentacoes_insumos.ordem_id` FK `ON DELETE SET NULL` + backfill pela 0026 | ✅ | ✅ dentro da OP | ✅ | — | 🟢 |
+| Estados `LIBERADA` / `PARCIAL` | Fluxo `PLANEJADA→LIBERADA→EM_PRODUÇÃO→PARCIAL→CONCLUÍDA` + `CANCELADA` | ✅ CHECK `ordens_fabricacao_status_valido` (0026) | ✅ grafo em `producao.ts`, 409 na transição ilegal | ✅ botões por estado em `OrdemDetail.tsx` | ✅ unit + `pg-producao-e2` (CHECK recusa com `23514`) + concorrência | — | 🟢 |
+| Perdas | Peça refugada consome insumo e não entra no estoque | ✅ `quantidade_perdida`, `itens_ordem.perdido` | ✅ | ✅ | ✅ | — | 🟢 |
+| Custo previsto × real na OP | Previsto congelado na liberação, real vem da execução | ✅ `custo_previsto`, `custo_real` | ✅ | ✅ cartão com variação | ✅ | — | 🟢 |
+| Apontamentos | Produção parcial por operador/turno, idempotente | ✅ `ordens_apontamentos` + unique parcial `(empresa_id, idempotency_key)` | ✅ `POST /ordens/:id/apontamentos` | ✅ modal + tabela | ✅ unit + `pg-producao-e2` (`23505`) | — | 🟢 |
+| Planejamento | Plano por semana + necessidade de insumos | ✅ (leitura) | ✅ `GET /producao/planejamento` | ✅ `PlanejamentoProducaoPage.tsx` | ✅ unit + tela + smoke | — | 🟢 |
+| Eventos da OP | Trilha de transições append-only | ✅ `ordens_eventos` | ✅ `GET /ordens/:id/eventos` | ✅ painel "Histórico da OP" | ✅ | — | 🟢 |
 
 ### 3.7 Logística & Expedição
 

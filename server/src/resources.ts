@@ -1299,6 +1299,10 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, hint: 'Entrada: positivo (aumenta). Saída/transferência: positivo (diminui). Ajuste: positivo para acrescentar, negativo para reduzir.' },
       { name: 'motivo', label: 'Motivo', type: 'text', search: true, maxLength: 200, wide: true },
       { name: 'compra_id', label: 'Compra', type: 'integer', list: false },
+      // E2: vínculo FORMAL com a OP. Antes a entrada de produto acabado só era
+      // achada pelo texto do motivo ('Produção concluída — OP #N'); o motivo
+      // continua sendo escrito para leitura, mas o vínculo agora é a FK.
+      { name: 'ordem_id', label: 'Ordem de fabricação', type: 'ref', ref: 'ordens', search: true, hint: 'Preenchido automaticamente quando a movimentação vem de uma OP.' },
       { name: 'estornado', label: 'Estornado', type: 'boolean', default: false, list: false },
       { name: 'estornado_em', label: 'Estornado em', type: 'datetime', list: false },
       { name: 'estornado_por', label: 'Estornado por', type: 'text', list: false },
@@ -1345,10 +1349,13 @@ export const RESOURCES: Record<string, Resource> = {
         default: 'planejada',
         options: [
           { value: 'planejada', label: 'Planejada', tone: 'slate' },
+          { value: 'liberada', label: 'Liberada', tone: 'amber' },
           { value: 'em_producao', label: 'Em produção', tone: 'blue' },
+          { value: 'parcial', label: 'Parcial', tone: 'blue' },
           { value: 'concluida', label: 'Concluída', tone: 'green' },
           { value: 'cancelada', label: 'Cancelada', tone: 'red' },
         ],
+        hint: 'Fluxo: planejada → liberada → em produção → parcial → concluída. Use os botões da ficha da OP; trocar o status à mão também é válido, mas a transição é conferida no servidor.',
       },
       {
         name: 'etapa',
@@ -1362,9 +1369,24 @@ export const RESOURCES: Record<string, Resource> = {
         ],
       },
       { name: 'faccao', label: 'Facção', type: 'text', maxLength: 80, search: true, placeholder: 'Facção responsável (opcional)' },
+      { name: 'responsavel_id', label: 'Responsável', type: 'ref', ref: 'usuarios', search: true, hint: 'Quem responde pela OP no chão de fábrica.' },
+      { name: 'local_producao_id', label: 'Local de produção', type: 'ref', ref: 'locais', hint: 'Onde a peça é produzida. A entrada de produto acabado usa este local; sem ele, usa o Local padrão.' },
       { name: 'inicio', label: 'Início', type: 'date' },
       { name: 'previsao', label: 'Previsão de entrega', type: 'date' },
+      // ---- E2: produção, perdas e custo. Tudo readonly — quem escreve é o
+      // fluxo (liberar / apontar / concluir), nunca o formulário. Editar à mão
+      // descolaria o número do estoque e das movimentações que o sustentam.
+      { name: 'quantidade_produzida', label: 'Produzido', type: 'integer', readonly: true, default: 0, hint: 'Peças boas apontadas (soma dos apontamentos).' },
+      { name: 'quantidade_perdida', label: 'Perdido', type: 'integer', readonly: true, default: 0, hint: 'Peças refugadas: consumiram insumo e não entraram no estoque.' },
+      { name: 'custo_previsto', label: 'Custo previsto', type: 'money', readonly: true, form: false, hint: 'Gravado na liberação: peças planejadas × custo da ficha técnica naquele momento.' },
+      { name: 'custo_real', label: 'Custo real', type: 'money', readonly: true, hint: 'Insumos realmente baixados + mão de obra e indiretos reconhecidos.' },
+      { name: 'liberada_em', label: 'Liberada em', type: 'datetime', readonly: true, form: false, list: false },
+      { name: 'liberada_por', label: 'Liberada por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
+      { name: 'iniciada_em', label: 'Iniciada em', type: 'datetime', readonly: true, form: false, list: false },
       { name: 'concluida_em', label: 'Concluída em', type: 'datetime', readonly: true, form: false },
+      { name: 'cancelada_em', label: 'Cancelada em', type: 'datetime', readonly: true, form: false, list: false },
+      { name: 'cancelada_por', label: 'Cancelada por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
+      { name: 'motivo_cancelamento', label: 'Motivo do cancelamento', type: 'textarea', maxLength: 500, readonly: true, form: false, wide: true },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
       ...auditFields,
     ],
@@ -1742,10 +1764,82 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'ordem_id', label: 'OP', type: 'integer' },
       { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', required: true },
       { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, min: 0 },
-      { name: 'produzido', label: 'Produzido', type: 'integer', min: 0, default: 0, readonly: true, hint: 'Atualizado ao concluir a OP.' },
+      { name: 'produzido', label: 'Produzido', type: 'integer', min: 0, default: 0, readonly: true, hint: 'Atualizado pelos apontamentos e ao concluir a OP.' },
+      { name: 'perdido', label: 'Perdido', type: 'integer', min: 0, default: 0, readonly: true, list: false, hint: 'Peças refugadas neste tamanho.' },
       { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false },
     ],
     orderBy: { field: 'tamanho_id', dir: 'asc' },
+  },
+
+  // E2 — trilha de transições da OP. Append-only: a linha nasce e nunca é
+  // editada, exatamente como expedicao_eventos / proposta_eventos.
+  ordens_eventos: {
+    key: 'ordens_eventos',
+    empresa: true,
+    internal: true,
+    table: 'ordens_eventos',
+    label: 'Eventos da OP',
+    singular: 'Evento da OP',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'ordem_id', label: 'OP', type: 'ref', ref: 'ordens' },
+      {
+        name: 'evento',
+        label: 'Evento',
+        type: 'select',
+        options: [
+          { value: 'criada', label: 'Criada', tone: 'slate' },
+          { value: 'liberada', label: 'Liberada', tone: 'amber' },
+          { value: 'iniciada', label: 'Iniciada', tone: 'blue' },
+          { value: 'apontamento', label: 'Apontamento', tone: 'blue' },
+          { value: 'perda', label: 'Perda', tone: 'red' },
+          { value: 'consumo', label: 'Consumo de insumo', tone: 'amber' },
+          { value: 'parcial', label: 'Parcial', tone: 'blue' },
+          { value: 'concluida', label: 'Concluída', tone: 'green' },
+          { value: 'reaberta', label: 'Reaberta', tone: 'amber' },
+          { value: 'cancelada', label: 'Cancelada', tone: 'red' },
+          { value: 'atalho', label: 'Atalho de fluxo', tone: 'amber' },
+          { value: 'edicao', label: 'Edição', tone: 'slate' },
+        ],
+      },
+      { name: 'de_status', label: 'De', type: 'text', list: false },
+      { name: 'para_status', label: 'Para', type: 'text', list: false },
+      { name: 'mensagem', label: 'Mensagem', type: 'text' },
+      { name: 'dados', label: 'Dados do evento', type: 'json', readonly: true, form: false, list: false },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      ...auditAppendOnly,
+    ],
+    // id, não criado_em: eventos do mesmo instante (apontamento + perda) precisam
+    // de ordem estável, e o id é monotônico numa trilha append-only.
+    orderBy: { field: 'id', dir: 'asc' },
+  },
+
+  // E2 — apontamento de produção. Também append-only e criado APENAS pelo
+  // endpoint de fluxo (POST /api/ordens/:id/apontamentos): é ele que consome
+  // insumo e acumula produzido/perdido, então um INSERT direto descolaria a OP
+  // do estoque.
+  ordens_apontamentos: {
+    key: 'ordens_apontamentos',
+    empresa: true,
+    internal: true,
+    table: 'ordens_apontamentos',
+    label: 'Apontamentos de produção',
+    singular: 'Apontamento',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'ordem_id', label: 'OP', type: 'ref', ref: 'ordens' },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
+      { name: 'quantidade_produzida', label: 'Produzido', type: 'integer', min: 0 },
+      { name: 'quantidade_perdida', label: 'Perdido', type: 'integer', min: 0 },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500 },
+      { name: 'idempotency_key', label: 'Chave de idempotência', type: 'text', maxLength: 120, readonly: true, form: false, list: false },
+      { name: 'usuario_id', label: 'Apontado por', type: 'ref', ref: 'usuarios' },
+      // `apontado_em` (não `criado_em`): é o carimbo que a operação usa.
+      { name: 'apontado_em', label: 'Apontado em', type: 'datetime', readonly: true, list: false },
+    ],
+    orderBy: { field: 'apontado_em', dir: 'asc' },
   },
 
   itens_ficha_tecnica: {
@@ -1812,6 +1906,9 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'quantidade', label: 'Quantidade', type: 'number', required: true, hint: 'Entrada/saída: positivo. Ajuste: negativo para reduzir o saldo.' },
       { name: 'custo_unitario', label: 'Custo unitário', type: 'money', min: 0, default: 0, hint: 'Usado apenas como histórico.' },
       { name: 'motivo', label: 'Motivo', type: 'text', search: true, maxLength: 200, wide: true },
+      // E2: vínculo FORMAL com a OP que consumiu o insumo (antes só o texto do
+      // motivo ligava as duas coisas, e o estorno dependia de dar match nele).
+      { name: 'ordem_id', label: 'Ordem de fabricação', type: 'ref', ref: 'ordens', search: true, hint: 'Preenchido automaticamente no consumo por OP.' },
       { name: 'data', label: 'Data', type: 'datetime', readonly: true },
     ],
     orderBy: { field: 'data', dir: 'desc' },

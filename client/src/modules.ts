@@ -100,7 +100,15 @@ export const MODULES: Module[] = [
   { id: 'fichas', label: 'Ficha Técnica / BOM', icon: ClipboardList, group: 'Produção', path: '/fichas', resource: 'fichas', description: 'Mão de obra, custos indiretos e margem por produto.' },
 
   // 🏭 Operações & Fábrica
-  { id: 'ordens', label: 'Cadeias de Fabricação', icon: Cog, group: 'Produção', path: '/ordens', resource: 'ordens', description: 'Ordens de produção (OP). Ao concluir, as peças entram no estoque.' },
+  { id: 'ordens', label: 'Cadeias de Fabricação', icon: Cog, group: 'Produção', path: '/ordens', resource: 'ordens', description: 'Ordens de produção (OP): liberar, apontar produção e perdas, concluir, cancelar e reabrir.' },
+  {
+    id: 'planejamento-producao',
+    label: 'Planejamento de Produção',
+    icon: Factory,
+    group: 'Produção',
+    path: '/planejamento-producao',
+    description: 'Ordens planejadas por semana, atrasos e os insumos que faltam para cumprir o plano.',
+  },
   {
     id: 'custo',
     label: 'Custos',
