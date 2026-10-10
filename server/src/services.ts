@@ -649,6 +649,12 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       // Idem criação: editar à mão criaria uma NF-e "emitida" que não existe.
       if (r.key === 'vendas') {
         for (const k of ['nfe_status', 'nfe_numero', 'nfe_emitida_em', 'nfe_provider']) delete data[k];
+        // E4.2.1: se o texto `local_saida` mudar, o ID canônico é zerado e o faturamento
+        // passa a usar o texto digitado. O ID em si não é editável: `local_saida_id` é
+        // readonly/form:false no recurso e writableFields() o remove do payload.
+        if (data.local_saida !== undefined && String(data.local_saida ?? '').trim() !== String(before.local_saida ?? '').trim()) {
+          data.local_saida_id = null;
+        }
         // Fase 3B: ao tentar faturar acima da alçada, encaminha para a fila em
         // vez de confiar no cliente ou simplesmente perder o trabalho digitado.
         if (['faturada', 'entregue'].includes(String(data.status || '')) && !podeComercial(actor, 'aprovar')) {
@@ -1379,7 +1385,7 @@ async function validarReferenciasMovimentacaoManual(r: Resource, data: Payload, 
     }
   }
   const internos = r.key === 'movimentacoes'
-    ? ['compra_id', 'recebimento_id', 'item_compra_id', 'ordem_id', 'movimentacao_estorno_id', 'estornado_em', 'estornado_por']
+    ? ['compra_id', 'recebimento_id', 'item_compra_id', 'ordem_id', 'venda_id', 'movimentacao_estorno_id', 'estornado_em', 'estornado_por']
     : ['compra_id', 'recebimento_id', 'item_compra_id', 'ordem_id'];
   if (internos.some((campo) => data[campo] !== undefined && data[campo] !== null && data[campo] !== '')) {
     throw new HttpError(400, 'Vínculos de compra, produção e estorno são definidos pelo fluxo de origem e não podem ser informados em lançamento manual.');

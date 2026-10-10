@@ -312,7 +312,11 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
   const localPadraoInfo = await getDefaultLocalInfo(tx, escopo);
   if (!localPadraoInfo) throw new HttpError(409, 'A empresa ativa não possui um local de estoque ativo. Cadastre um local antes de faturar.');
   const localPadrao: LocalEstoque = { id: Number(localPadraoInfo.id), nome: String(localPadraoInfo.nome) };
-  const localSaidaData: Record<string, unknown> = pedido.local_saida ? { local: String(pedido.local_saida).trim() } : { local_id: localPadrao.id };
+  // E4.2.1 (GAP-ESTQ-PDV-LOCAL-TEXTO): o ID canônico manda. O texto só é usado em venda
+  // legada (local_saida_id NULL), sem backfill; o Local padrão é o último recurso.
+  const localSaidaData: Record<string, unknown> = pedido.local_saida_id !== null && pedido.local_saida_id !== undefined
+    ? { local_id: Number(pedido.local_saida_id) }
+    : pedido.local_saida ? { local: String(pedido.local_saida).trim() } : { local_id: localPadrao.id };
   await resolveLocal(localSaidaData, tx, escopo);
   const localSaida: LocalEstoque = { id: Number(localSaidaData.local_id), nome: String(localSaidaData.local) };
 
@@ -372,6 +376,7 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
         local: p.local.nome,
         local_id: p.local.id,
         quantidade: p.qtd,
+        venda_id: Number(pedido.id),
         motivo: `Venda #${pedido.id}`,
         usuario_id: actor.id || null,
       },
@@ -410,17 +415,81 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
   );
 }
 
+/**
+ * Chave de saldo de um item de venda: produto + tamanho (0 = sem tamanho).
+ * Mesma chave em faturamento, devolução e estorno — uma única definição.
+ */
+export function chaveItemVenda(produtoId: number, tamanhoId: number | null | undefined): string {
+  return `${produtoId}:${tamanhoId === null || tamanhoId === undefined ? 0 : Number(tamanhoId)}`;
+}
+
+/**
+ * Quantidade JÁ RECEBIDA de cada item da venda, em qualquer estado (bom, avariado,
+ * usado…), somada das devoluções RECEBIDAS da venda. Fonte: devolucao_itens — não
+ * depende do texto de movimentação, então vale também para vendas anteriores à E4.2.1.
+ * Só devoluções com status 'recebida' contam; solicitada/autorizada ainda não moveram nada.
+ */
+export async function quantidadeRecebidaPorItem(vendaId: number, empresaId: number, tx: Tx): Promise<Map<string, number>> {
+  const s = getStore();
+  const devolucoes = await s.list(getResource('devolucoes')!, {
+    page: 1,
+    pageSize: 1000,
+    filter: { empresa_id: empresaId, venda_id: vendaId, status: 'recebida' },
+  }, tx);
+  const porItem = new Map<string, number>();
+  for (const dev of devolucoes.rows) {
+    const itens = await s.list(getResource('devolucao_itens')!, {
+      page: 1,
+      pageSize: 1000,
+      filter: { empresa_id: empresaId, devolucao_id: Number(dev.id) },
+    }, tx);
+    for (const it of itens.rows) {
+      const chave = chaveItemVenda(Number(it.produto_id), it.tamanho_id === null || it.tamanho_id === undefined ? null : Number(it.tamanho_id));
+      porItem.set(chave, (porItem.get(chave) ?? 0) + Number(it.quantidade_recebida || 0));
+    }
+  }
+  return porItem;
+}
+
+/**
+ * Estorno da venda cancelada. Restaura APENAS o que saiu e ainda não voltou:
+ *   restaurar(item) = saídas(item) − já recebido(item) em devolução (qualquer estado).
+ * Devolução boa já devolveu ao saldo; avariada não volta ao saldo vendável e ainda
+ * assim conta como recebida, para não ser restaurada de novo.
+ *
+ * Saídas: pelo venda_id (fonte canônica). Venda anterior à E4.2.1 não tem venda_id;
+ * só para ela a saída é localizada pelo texto exato 'Venda #id' da MESMA empresa,
+ * em linhas com venda_id NULL. Nada é associado nem reescrito (sem backfill).
+ */
 async function estornarVenda(pedido: Row, actor: { id: number | null; name: string }, tx: Tx, escopo: EscopoEmpresa) {
   const s = getStore();
   const empresaId = escopo.empresaId;
-  const movs = await s.list(
-    getResource('movimentacoes')!,
-    { page: 1, pageSize: 1000, sort: 'id', dir: 'desc', filter: { empresa_id: empresaId, tipo: 'saida', motivo: `Venda #${pedido.id}` } },
-    tx
-  );
-  // Estorna apenas saídas da mesma empresa e resolve o local legado estritamente
-  // dentro dela; IDs/textos de outro tenant nunca participam do efeito.
-  const saidas = movs.rows.filter((m) => String(m.motivo) === `Venda #${pedido.id}`);
+  const vendaId = Number(pedido.id);
+  const movimentacoes = getResource('movimentacoes')!;
+  const canonicas = await s.list(movimentacoes, {
+    page: 1,
+    pageSize: 1000,
+    sort: 'id',
+    dir: 'asc',
+    filter: { empresa_id: empresaId, tipo: 'saida', venda_id: vendaId },
+  }, tx);
+  let saidas = canonicas.rows;
+  let origem: 'venda_id' | 'legado_texto' = 'venda_id';
+  if (!saidas.length) {
+    const legadas = await s.list(movimentacoes, {
+      page: 1,
+      pageSize: 1000,
+      sort: 'id',
+      dir: 'asc',
+      filter: { empresa_id: empresaId, tipo: 'saida', motivo: `Venda #${vendaId}` },
+    }, tx);
+    saidas = legadas.rows.filter((m) => String(m.motivo) === `Venda #${vendaId}` && (m.venda_id === null || m.venda_id === undefined));
+    origem = 'legado_texto';
+  }
+
+  const jaRecebido = await quantidadeRecebidaPorItem(vendaId, empresaId, tx);
+  const aDescontar = new Map(jaRecebido);
+  let restauradas = 0;
   for (const m of saidas) {
     const produtoId = Number(m.produto_id);
     const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: empresaId }, tx);
@@ -432,15 +501,21 @@ async function estornarVenda(pedido: Row, actor: { id: number | null; name: stri
     if ((m.local_id === null || m.local_id === undefined || m.local_id === '') && !String(m.local || '').trim()) {
       throw new HttpError(409, 'Não é possível estornar uma movimentação histórica sem local de estoque válido. Nenhum saldo foi alterado.');
     }
+    const chave = chaveItemVenda(produtoId, tamanhoId);
+    const aindaDevolvido = Math.min(aDescontar.get(chave) ?? 0, quantidade);
+    aDescontar.set(chave, (aDescontar.get(chave) ?? 0) - aindaDevolvido);
+    const aRestaurar = quantidade - aindaDevolvido;
+    if (aRestaurar === 0) continue;
+
     const localData: Record<string, unknown> = {};
     if (m.local_id !== null && m.local_id !== undefined && m.local_id !== '') localData.local_id = m.local_id;
     else localData.local = String(m.local).trim();
     await resolveLocal(localData, tx, escopo);
     const localId = Number(localData.local_id);
     const local = String(localData.local);
-    await s.adjustStock(produtoId, tamanhoId, local, quantidade, tx, localId, empresaId);
+    await s.adjustStock(produtoId, tamanhoId, local, aRestaurar, tx, localId, empresaId);
     await s.insert(
-      getResource('movimentacoes')!,
+      movimentacoes,
       {
         empresa_id: empresaId,
         tipo: 'entrada',
@@ -448,16 +523,23 @@ async function estornarVenda(pedido: Row, actor: { id: number | null; name: stri
         tamanho_id: tamanhoId,
         local,
         local_id: localId,
-        quantidade,
-        motivo: `Estorno — Venda #${pedido.id} cancelada`,
+        quantidade: aRestaurar,
+        venda_id: vendaId,
+        motivo: `Estorno — Venda #${vendaId} cancelada`,
         usuario_id: actor.id || null,
       },
       tx
     );
+    restauradas += aRestaurar;
+  }
+  // Devolvido além do que saiu seria estoque inventado: recusa, nada é gravado.
+  const excedente = [...aDescontar.values()].reduce((acc, v) => acc + v, 0);
+  if (excedente > 0) {
+    throw new HttpError(409, `Há ${excedente} unidade(s) recebidas em devolução sem saída correspondente nesta venda. Nenhum saldo foi alterado.`);
   }
   await s.update(
     getResource('vendas')!,
-    Number(pedido.id),
+    vendaId,
     { faturada_em: null, comissao_pct: null, comissao_valor: null },
     tx
   );
@@ -467,10 +549,10 @@ async function estornarVenda(pedido: Row, actor: { id: number | null; name: stri
       usuario: actor.name,
       acao: 'editar',
       recurso: 'vendas',
-      registro_id: Number(pedido.id),
-      descricao: `Venda #${pedido.id} cancelada — estorno de ${saidas.length} saída(s) de estoque`,
+      registro_id: vendaId,
+      descricao: `Venda #${vendaId} cancelada — estorno de ${saidas.length} saída(s): ${restauradas} unidade(s) restaurada(s)`,
       empresa_id: empresaDoRegistroAudit(getResource('vendas')!, pedido, actor),
-      dados: { estornadas: saidas.length },
+      dados: { estornadas: saidas.length, restauradas, origem_saidas: origem },
     },
     tx
   );

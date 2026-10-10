@@ -25,7 +25,8 @@ import { currentUser } from './auth';
 import { assertRegistroDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2 } from './utils';
-import { aplicarRegrasPedido } from './itens';
+import { aplicarRegrasPedido, chaveItemVenda, quantidadeRecebidaPorItem } from './itens';
+import { isDbConnected } from './db';
 import { syncLancamentoVenda } from './financeiro';
 import type { Row, Tx } from './store';
 
@@ -50,10 +51,6 @@ export function proximaEtapa(atual: Etapa | null | undefined, alvo: Etapa): bool
 function num(v: unknown, padrao = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : padrao;
-}
-
-function chaveDoItem(produtoId: number, tamanhoId: number | null): string {
-  return `${produtoId}:${tamanhoId ?? 0}`;
 }
 
 async function registrarEvento(
@@ -418,7 +415,46 @@ export async function resolverDivergencia(req: Request, res: Response) {
 // LOGÍSTICA REVERSA — DEVOLUÇÃO
 // ============================================================================
 
-/** POST /api/devolucoes — solicitação. */
+/**
+ * Serializa devoluções e recebimentos da MESMA venda (E4.2.1).
+ *
+ * `SELECT … FOR UPDATE` na venda faz duas devoluções concorrentes sobre o último
+ * saldo disputarem uma fila: a segunda só lê o saldo DEPOIS que a primeira
+ * confirmou. Não depende de retry por 40001. No store em memória a transação já é
+ * exclusiva por processo (tx é null), então a chamada é um não-operação.
+ */
+async function travarVendaParaDevolucao(vendaId: number, empresaId: number, tx: Tx): Promise<void> {
+  if (!isDbConnected() || !tx) return;
+  await (tx as unknown as { query: (sql: string, p: unknown[]) => Promise<unknown> }).query(
+    'SELECT id FROM vendas WHERE id = $1 AND empresa_id = $2 FOR UPDATE',
+    [vendaId, empresaId]
+  );
+}
+
+/**
+ * Quantidade de cada item já comprometida com devoluções do pedido:
+ *   • recebida → o que efetivamente voltou (quantidade_recebida, qualquer estado);
+ *   • solicitada/autorizada/em_trânsito → o que está reservado para voltar.
+ * Recusada e cancelada não contam: a mercadoria não volta por elas.
+ */
+async function comprometidoPorItem(vendaId: number, empresaId: number, tx: Tx): Promise<Map<string, number>> {
+  const s = getStore();
+  const devolucoes = await s.list(R_DEVOLUCAO(), { page: 1, pageSize: 1000, filter: { empresa_id: empresaId, venda_id: vendaId } }, tx);
+  const porItem = new Map<string, number>();
+  for (const dev of devolucoes.rows) {
+    const status = String(dev.status);
+    if (['recusada', 'cancelada'].includes(status)) continue;
+    const itens = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 1000, filter: { empresa_id: empresaId, devolucao_id: Number(dev.id) } }, tx);
+    for (const it of itens.rows) {
+      const chave = chaveItemVenda(Number(it.produto_id), it.tamanho_id === null || it.tamanho_id === undefined ? null : Number(it.tamanho_id));
+      const qtd = status === 'recebida' ? num(it.quantidade_recebida) : num(it.quantidade_solicitada);
+      porItem.set(chave, (porItem.get(chave) ?? 0) + qtd);
+    }
+  }
+  return porItem;
+}
+
+/** POST /api/devolucoes — solicitação. Idempotente quando recebe `idempotency_key` (ou header). */
 export async function criarDevolucao(req: Request, res: Response) {
   const actor = currentUser(req);
   checkFluxo(R_DEVOLUCAO(), actor);
@@ -430,14 +466,29 @@ export async function criarDevolucao(req: Request, res: Response) {
   if (!['devolucao', 'troca', 'garantia', 'arrependimento'].includes(tipo)) {
     throw new HttpError(400, 'tipo deve ser devolucao, troca, garantia ou arrependimento.', { tipo: 'Inválido' });
   }
+  // Sem chave, não há idempotência: a repetição vira nova solicitação, como antes.
+  const chaveIdempotencia = String(body.idempotency_key || req.header?.('idempotency-key') || '').trim().slice(0, 120) || null;
   const s = getStore();
   try {
-    const criada = await s.transaction(async (tx) => {
+    const resultado = await s.transaction(async (tx) => {
       const vendaId = parseId(body.venda_id);
+      // Lock ANTES de ler saldo: a segunda devolução concorrente espera aqui.
+      await travarVendaParaDevolucao(vendaId, escopo.empresaId, tx);
       const venda = assertRegistroDaEmpresa(getResource('vendas')!, await s.get(getResource('vendas')!, vendaId, tx), escopo);
       if (!['faturada', 'entregue'].includes(String(venda.status))) {
         throw new HttpError(409, 'Só se devolve mercadoria de um pedido faturado ou entregue.');
       }
+
+      if (chaveIdempotencia) {
+        const existente = await s.findOneWhere(R_DEVOLUCAO(), { empresa_id: escopo.empresaId, idempotency_key: chaveIdempotencia }, tx);
+        if (existente) {
+          if (Number(existente.venda_id) !== vendaId) {
+            throw new HttpError(409, 'Esta chave de idempotência já foi usada em outra devolução.');
+          }
+          return { devolucao: existente, replay: true };
+        }
+      }
+
       const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, venda_id: vendaId }, sort: 'id', dir: 'asc' }, tx);
       if (!itens.rows.length) throw new HttpError(409, 'O pedido não tem itens.');
 
@@ -457,26 +508,27 @@ export async function criarDevolucao(req: Request, res: Response) {
           tipo,
           observacoes: body.observacoes ? String(body.observacoes).slice(0, 2000) : null,
           criado_por: actor.id || null,
+          idempotency_key: chaveIdempotencia,
         },
         tx
       );
 
       const porItem = new Map(itens.rows.map((i) => [Number(i.id), i]));
+      // Quanto foi VENDIDO por produto+tamanho, somando todas as linhas do pedido.
+      const vendidoPorItem = new Map<string, number>();
+      for (const i of itens.rows) {
+        const chave = chaveItemVenda(Number(i.produto_id), i.tamanho_id === null || i.tamanho_id === undefined ? null : Number(i.tamanho_id));
+        vendidoPorItem.set(chave, (vendidoPorItem.get(chave) ?? 0) + num(i.quantidade));
+      }
+      // Quanto já está devolvido OU reservado para devolver (recebido + pendente).
+      const comprometido = await comprometidoPorItem(vendaId, escopo.empresaId, tx);
       // Índice por produto+tamanho: quem chama informando só o produto (o caso
       // comum na tela) também precisa ser confrontado com o pedido.
-      const porChave = new Map(itens.rows.map((i) => [chaveDoItem(Number(i.produto_id), i.tamanho_id === null || i.tamanho_id === undefined ? null : Number(i.tamanho_id)), i]));
-      // Devoluções deste pedido que ainda estão vivas. Recusada/cancelada não
-      // conta: a mercadoria não vai voltar por ela, então o saldo do pedido
-      // volta a ficar disponível para uma nova solicitação.
-      const devsDestePedido = await s.list(R_DEVOLUCAO(), { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, venda_id: vendaId } }, tx);
-      const devViva = new Map(
-        devsDestePedido.rows.filter((d) => !['recusada', 'cancelada'].includes(String(d.status))).map((d) => [Number(d.id), d])
-      );
-      const jaUsados = new Map<string, number>();
+      const porChave = new Map(itens.rows.map((i) => [chaveItemVenda(Number(i.produto_id), i.tamanho_id === null || i.tamanho_id === undefined ? null : Number(i.tamanho_id)), i]));
       for (const raw of solicitados as Record<string, unknown>[]) {
         const produtoId = Number(raw.produto_id ?? (raw.item_venda_id ? porItem.get(Number(raw.item_venda_id))?.produto_id : undefined));
         const tamanhoIdBruto = raw.tamanho_id === undefined || raw.tamanho_id === null || raw.tamanho_id === '' ? null : Number(raw.tamanho_id);
-        const chave = chaveDoItem(produtoId, tamanhoIdBruto);
+        const chave = chaveItemVenda(produtoId, tamanhoIdBruto);
         const itemVenda = (raw.item_venda_id ? porItem.get(Number(raw.item_venda_id)) : null) ?? porChave.get(chave) ?? null;
         const tamanhoId = tamanhoIdBruto ?? (itemVenda?.tamanho_id === null || itemVenda?.tamanho_id === undefined ? null : Number(itemVenda?.tamanho_id));
         if (!Number.isInteger(produtoId) || produtoId <= 0) throw new HttpError(400, 'Cada item devolvido precisa de produto_id (ou item_venda_id).', { itens: 'produto_id inválido' });
@@ -488,21 +540,16 @@ export async function criarDevolucao(req: Request, res: Response) {
         const produtoDoItem = Number(itemVenda.produto_id);
         const tamanhoDoItem = itemVenda.tamanho_id === null || itemVenda.tamanho_id === undefined ? null : Number(itemVenda.tamanho_id);
         if (produtoId !== produtoDoItem || tamanhoId !== tamanhoDoItem) throw new HttpError(404, 'Item não encontrado neste pedido.');
-        const pedidoNoItem = Math.trunc(num(itemVenda.quantidade));
         const solicitada = Math.trunc(num(raw.quantidade ?? itemVenda.quantidade ?? 0));
         if (!(solicitada > 0)) throw new HttpError(400, `A quantidade devolvida do produto #${produtoId} deve ser maior que zero.`, { itens: 'quantidade' });
-        const ja = jaUsados.get(chave) || 0;
-        // Não se devolve mais do que o pedido levou — nem somando duas
-        // devoluções. Só contam as devoluções VIVAS deste pedido.
-        const existentes = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, produto_id: produtoId } }, tx);
-        const jaDevolvido = existentes.rows
-          .filter((di) => devViva.has(Number(di.devolucao_id)))
-          .filter((di) => chaveDoItem(Number(di.produto_id), di.tamanho_id === null || di.tamanho_id === undefined ? null : Number(di.tamanho_id)) === chave)
-          .reduce((acc, di) => acc + num(di.quantidade_solicitada), 0);
-        if (ja + jaDevolvido + solicitada > pedidoNoItem) {
-          throw new HttpError(409, `O pedido #${vendaId} tem ${pedidoNoItem} unidade(s) do produto #${produtoId} e ${ja + jaDevolvido} já está(ão) em devolução. Não é possível devolver ${solicitada} a mais.`);
+        const vendido = vendidoPorItem.get(chave) ?? 0;
+        const usado = comprometido.get(chave) ?? 0;
+        // Saldo devolvível = vendido − (já recebido + reservado). Nunca negativo, e a
+        // conta é feita com a linha já travada: duas devoluções não cabem no mesmo saldo.
+        if (usado + solicitada > vendido) {
+          throw new HttpError(409, `O pedido #${vendaId} tem ${vendido} unidade(s) do produto #${produtoId} e ${usado} já está(ão) em devolução. Não é possível devolver ${solicitada} a mais.`);
         }
-        jaUsados.set(chave, ja + solicitada);
+        comprometido.set(chave, usado + solicitada);
         await s.insert(
           R_DEVOLUCAO_ITEM(),
           { empresa_id: escopo.empresaId, devolucao_id: Number(devolucao.id), item_venda_id: Number(itemVenda.id), produto_id: produtoId, tamanho_id: tamanhoId === null ? null : Number(tamanhoId), quantidade_solicitada: solicitada, quantidade_recebida: 0, estado: 'bom', devolucao_estoque: false },
@@ -513,9 +560,14 @@ export async function criarDevolucao(req: Request, res: Response) {
         { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'devolucoes', registro_id: Number(devolucao.id), descricao: `Devolução #${devolucao.id} solicitada para a venda #${vendaId} — ${solicitados.length} item(ns)`, dados: { venda_id: vendaId, motivo, tipo }, empresa_id: empresaDoRegistroAudit(R_DEVOLUCAO(), devolucao, actor) },
         tx
       );
-      return devolucao;
-    }, { isolation: 'serializable' });
-    res.status(201).json(await detalharDevolucao(Number(criada.id), escopo));
+      return { devolucao, replay: false };
+    }, { isolation: 'read committed' });
+    const detalhe = await detalharDevolucao(Number(resultado.devolucao.id), escopo);
+    if (resultado.replay) {
+      res.status(200).json({ ...detalhe, idempotente: true });
+      return;
+    }
+    res.status(201).json(detalhe);
   } catch (e) {
     throw toHttpError(e, R_DEVOLUCAO());
   }
@@ -623,12 +675,13 @@ export async function registrarRastreamento(req: Request, res: Response) {
 /**
  * POST /api/devolucoes/:id/receber
  *
- * Recebimento com conferência: cada item informa a quantidade efetivamente
- * recebida e o estado. Só o que foi recebido em estado aproveitável volta ao
- * estoque — e o estoque sobe UMA vez, porque o item é marcado com
- * `devolucao_estoque` dentro da mesma transação.
+ * Idempotente pela transição de status: repetir o recebimento devolve 409 e NÃO
+ * sobe o estoque de novo. A venda é travada antes de qualquer leitura, então duas
+ * chamadas simultâneas para a mesma devolução (ou para duas devoluções que disputam
+ * o mesmo saldo) passam uma de cada vez.
  *
- * Rastreabilidade é pré-condição: sem código de rastreamento, não se recebe.
+ * Só item 'bom' volta ao saldo vendável. Item avariado/usado/faltando acessório fica
+ * registrado na devolução, sem movimento de entrada e sem flag que force o estoque.
  */
 export async function receberDevolucao(req: Request, res: Response) {
   const actor = currentUser(req);
@@ -639,12 +692,22 @@ export async function receberDevolucao(req: Request, res: Response) {
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
+      const primeira = assertRegistroDaEmpresa(R_DEVOLUCAO(), await s.get(R_DEVOLUCAO(), id, tx), escopo);
+      // Ordem de travamento fixa: venda → devolução → saldos. Quem recebe espera
+      // quem já está recebendo a mesma venda.
+      await travarVendaParaDevolucao(Number(primeira.venda_id), escopo.empresaId, tx);
       const dev = assertRegistroDaEmpresa(R_DEVOLUCAO(), await s.get(R_DEVOLUCAO(), id, tx), escopo);
       if (String(dev.status) === 'recebida') throw new HttpError(409, 'Esta devolução já foi recebida — o estoque não sobe duas vezes.');
       if (String(dev.status) === 'solicitada') throw new HttpError(409, 'Autorize a devolução antes de receber.');
       if (['recusada', 'cancelada'].includes(String(dev.status))) throw new HttpError(409, `Devolução ${dev.status} não pode ser recebida.`);
       if (!dev.codigo_rastreamento) {
         throw new HttpError(409, 'Mercadoria sem rastreabilidade não entra no estoque. Registre o código de rastreamento antes de receber.');
+      }
+      // Venda cancelada já devolveu tudo o que saiu (estorno). Receber agora somaria
+      // estoque sem saída correspondente.
+      const vendaAtual = await s.get(getResource('vendas')!, Number(dev.venda_id), tx);
+      if (!vendaAtual || String(vendaAtual.status) === 'cancelada') {
+        throw new HttpError(409, 'A venda desta devolução foi cancelada. Não é possível receber a mercadoria no estoque.');
       }
 
       const itens = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, devolucao_id: id }, sort: 'id', dir: 'asc' }, tx);
@@ -675,19 +738,16 @@ export async function receberDevolucao(req: Request, res: Response) {
         if (item.devolucao_estoque) continue;
         await s.update(R_DEVOLUCAO_ITEM(), Number(item.id), { quantidade_recebida: recebida, estado }, tx);
         if (recebida <= 0) continue;
-        // Item avariado não volta para o saldo vendável: fica registrado na
-        // devolução para descarte/reparo, sem inflar o estoque.
-        if (estado !== 'bom' && conf?.devolucao_estoque !== true) {
-          totalRecebido += recebida;
-          continue;
-        }
+        totalRecebido += recebida;
+        // Só o item 'bom' volta ao saldo vendável. Não existe mais atalho que force a
+        // entrada de um item avariado: o estado da peça decide, não o cliente.
+        if (estado !== 'bom') continue;
         const produtoId = Number(item.produto_id);
         const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId }, tx);
         if (!produto) throw new HttpError(404, 'Produto não encontrado.');
         const tamanhoId = item.tamanho_id === null || item.tamanho_id === undefined ? null : Number(item.tamanho_id);
         if (tamanhoId !== null && !await s.findOneWhere(getResource('tamanhos')!, { id: tamanhoId }, tx)) throw new HttpError(404, 'Tamanho não encontrado.');
         entradas.push({ produto_id: produtoId, tamanho_id: tamanhoId, quantidade: recebida });
-        totalRecebido += recebida;
       }
 
       if (!totalRecebido) throw new HttpError(409, 'Nenhuma unidade foi recebida — nada a dar entrada.');
@@ -704,6 +764,7 @@ export async function receberDevolucao(req: Request, res: Response) {
             local,
             local_id: localId,
             quantidade: e.quantidade,
+            venda_id: Number(dev.venda_id),
             motivo: `Devolução #${id} — Venda #${dev.venda_id}`,
             usuario_id: actor.id || null,
           },
@@ -715,14 +776,19 @@ export async function receberDevolucao(req: Request, res: Response) {
       const recebida = await s.tryUpdateIf(R_DEVOLUCAO(), id, { status: String(dev.status) }, { status: 'recebida', recebida_em: new Date().toISOString(), recebido_por: actor.id || null, local_entrada: local }, tx);
       if (!recebida) throw new HttpError(409, 'A devolução mudou durante o recebimento. Recarregue.');
 
-      // Ajuste financeiro: a venda cancelada/parcialmente devolvida precisa
-      // deixar de constar como recebida. Só quando a devolução é TOTAL.
+      // Ajuste financeiro: só quando a venda inteira voltou. O total é ACUMULADO
+      // entre todas as devoluções recebidas da venda, item a item (produto+tamanho).
       const itensVenda = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, venda_id: Number(dev.venda_id) } }, tx);
-      const qtdVendida = itensVenda.rows.reduce((acc, i) => acc + Math.trunc(num(i.quantidade)), 0);
-      const todas = await s.list(R_DEVOLUCAO_ITEM(), { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, devolucao_id: id } }, tx);
-      const qtdDevolvida = todas.rows.reduce((acc, i) => acc + Math.trunc(num(i.quantidade_recebida)), 0);
+      const vendidoPorItem = new Map<string, number>();
+      for (const i of itensVenda.rows) {
+        const chave = chaveItemVenda(Number(i.produto_id), i.tamanho_id === null || i.tamanho_id === undefined ? null : Number(i.tamanho_id));
+        vendidoPorItem.set(chave, (vendidoPorItem.get(chave) ?? 0) + Math.trunc(num(i.quantidade)));
+      }
+      const recebidoPorItem = await quantidadeRecebidaPorItem(Number(dev.venda_id), escopo.empresaId, tx);
+      const vendaTotalmenteDevolvida = vendidoPorItem.size > 0
+        && [...vendidoPorItem.entries()].every(([chave, vendido]) => (recebidoPorItem.get(chave) ?? 0) >= vendido);
       let ajusteFinanceiro: { aplicado: boolean; motivo: string } = { aplicado: false, motivo: 'Devolução parcial: o financeiro da venda não é revertido automaticamente.' };
-      if (qtdVendida > 0 && qtdDevolvida >= qtdVendida) {
+      if (vendaTotalmenteDevolvida) {
         const venda = await s.get(getResource('vendas')!, Number(dev.venda_id), tx);
         if (venda && !['cancelada'].includes(String(venda.status))) {
           const cancelada = await s.update(getResource('vendas')!, Number(venda.id), { status: 'cancelada' }, tx);
@@ -749,7 +815,7 @@ export async function receberDevolucao(req: Request, res: Response) {
         tx
       );
       return { recebida, totalRecebido, entradas, local, ajusteFinanceiro };
-    }, { isolation: 'serializable' });
+    }, { isolation: 'read committed' });
     res.json({ ok: true, devolucao: out.recebida, total_recebido: out.totalRecebido, entradas_estoque: out.entradas, local: out.local, financeiro: out.ajusteFinanceiro });
   } catch (e) {
     throw toHttpError(e, R_DEVOLUCAO());
