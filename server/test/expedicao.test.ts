@@ -303,11 +303,20 @@ test('expedição: divergência resolvida guarda quem resolveu e não se resolve
 // ---------------------------------------------------------------------------
 
 /** Venda FATURADA com itens — pré-condição para devolver. */
+/**
+ * Pedido FATURADO pelo fluxo real de expedição (separar → conferir → embalar →
+ * expedir). Antes esta fixture só trocava o status: o estoque nunca baixava e a
+ * devolução era testada sobre uma venda sem saída — o caso que escondia o bug de
+ * estoque inflado (E4.2.1).
+ */
 async function pedidoFaturado(quantidades: number[] = [2]) {
-  const { venda, itens, codigos } = await pedidoParaExpedir(quantidades);
-  const s = getStore();
-  await s.update(RESOURCES.vendas, Number(venda.id), { status: 'faturada' });
-  return { venda, itens, codigos };
+  const pedido = await pedidoParaExpedir(quantidades);
+  const id = { params: { id: pedido.venda.id } };
+  await chamar(exp.separarPedido, reqDe({}, id));
+  await chamar(exp.conferirPedido, reqDe({ codigos: pedido.codigos }, id));
+  await chamar(exp.embalarPedido, reqDe({}, id));
+  await chamar(exp.expedirPedido, reqDe({}, id));
+  return pedido;
 }
 
 test('devolução: solicitação exige motivo e só vale sobre pedido faturado', async () => {

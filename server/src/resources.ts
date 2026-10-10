@@ -1301,6 +1301,10 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, hint: 'Entrada: positivo (aumenta). Saída/transferência: positivo (diminui). Ajuste: positivo para acrescentar, negativo para reduzir.' },
       { name: 'motivo', label: 'Motivo', type: 'text', search: true, maxLength: 200, wide: true },
       { name: 'compra_id', label: 'Compra', type: 'integer', list: false },
+      // E4.2.1 (GAP-ESTQ-VENDA-ID): vínculo CANÔNICO com a venda. Preenchido só pelo
+      // faturamento, pela entrada de devolução e pelo estorno. Lançamento manual com
+      // este campo é recusado (validarReferenciasMovimentacaoManual). Histórico = NULL.
+      { name: 'venda_id', label: 'Venda', type: 'integer', list: false, hint: 'Preenchido automaticamente pelo faturamento, devolução ou estorno.' },
       // E3.1 (GAP-COMP-CUSTOS): vínculo com o recebimento e com a linha da compra.
       // Sem eles, o estorno de um produto recebido em dois lotes de preço
       // diferente não tem como saber qual preço desfazer.
@@ -1607,6 +1611,9 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'previsao_entrega', label: 'Previsão de entrega', type: 'date', list: false },
       { name: 'pedido_cliente', label: 'Pedido do cliente', type: 'text', maxLength: 60, list: false, placeholder: 'Número do pedido no cliente' },
       { name: 'local_saida', label: 'Local de saída', type: 'text', maxLength: 60, list: false, hint: 'Local de onde as peças saem no faturamento. Começa no Local padrão, mas você pode escolher outro. Se não houver saldo, tenta o Local padrão.' },
+      // E4.2.1 (GAP-ESTQ-PDV-LOCAL-TEXTO): local canônico. Gravado pelo PDV e zerado
+      // quando o texto local_saida é editado. Venda legada = NULL (usa o texto).
+      { name: 'local_saida_id', label: 'Local de saída (ID)', type: 'ref', ref: 'locais', list: false, form: false, readonly: true },
       { name: 'comissao_pct', label: 'Comissão (%)', type: 'percent', readonly: true, form: false },
       { name: 'comissao_valor', label: 'Comissão (R$)', type: 'money', readonly: true, form: false },
       { name: 'faturada_em', label: 'Faturada em', type: 'datetime', readonly: true, form: false },
@@ -2907,6 +2914,9 @@ export const RESOURCES: Record<string, Resource> = {
     fields: [
       { name: 'numero', label: 'Número', type: 'text', maxLength: 40, search: true },
       { name: 'venda_id', label: 'Pedido original', type: 'ref', ref: 'vendas', search: true },
+      // E4.2.1: chave de idempotência da criação (índice único parcial por empresa). Sem
+      // declará-la aqui o INSERT a descarta e a repetição criaria outra devolução.
+      { name: 'idempotency_key', label: 'Chave de idempotência', type: 'text', maxLength: 120, list: false, form: false, readonly: true },
       { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes', search: true },
       {
         name: 'status',

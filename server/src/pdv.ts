@@ -606,6 +606,8 @@ export async function venderPdv(req: Request, res: Response) {
       else if (caixa.local) localSaidaData.local = String(caixa.local);
       await resolveLocal(localSaidaData, tx, escopo);
       const localSaida = String(localSaidaData.local);
+      // E4.2.1: o ID resolvido é o canônico; o texto fica só para leitura/compatibilidade.
+      const localSaidaId = Number(localSaidaData.local_id);
       const venda = await s.insert(
         getResource('vendas')!,
         {
@@ -617,6 +619,7 @@ export async function venderPdv(req: Request, res: Response) {
           canal_venda: 'pdv',
           pdv_caixa_id: Number(caixa.id),
           local_saida: localSaida,
+          local_saida_id: localSaidaId,
           desconto: descontoCupom,
           frete,
           total,

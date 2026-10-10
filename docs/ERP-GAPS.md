@@ -39,7 +39,7 @@ Classificação do tipo de gap (seção 3 da especificação):
 |---|---|---|---|
 | **E2 — Produção** | 8 | **0** ✅ | **0** |
 | **E3 — Compras** | 6 | **0** ✅ | **0** |
-| **E4 — Estoque avançado** | 8 | 7 | 1 |
+| **E4 — Estoque avançado** | 8 | 4 | 0 |
 | **E5 — Financeiro avançado** | 2 | 2 | 0 |
 | **E6 — Fiscal** | 2 | 2 | 0 |
 | **E7 — Logística** | 1 | 1 | 0 |
@@ -48,8 +48,8 @@ Classificação do tipo de gap (seção 3 da especificação):
 | **E10 — Administração** | 4 | 4 | 1 |
 | **E11 — UX final** | 2 | 2 | 0 |
 | **E12 — Homologação** | 3 | 3 | 3 |
-| Transversais | 3 | 3 | 0 |
-| **Total** | **46** | **31** | **7** |
+| Transversais | 5 | 5 | 1 |
+| **Total** | **48** | **30** | **7** |
 
 ---
 
@@ -235,34 +235,37 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
 
 ## E4 — ESTOQUE AVANÇADO
 
-### `GAP-ESTQ-MULTIEMPRESA` — ownership nos fluxos especializados de estoque · **GATE E4.2 APROVADO TECNICAMENTE; PR ABERTO**
+### `GAP-ESTQ-MULTIEMPRESA` — ownership nos fluxos especializados de estoque · **GATE E4.2 APROVADO TECNICAMENTE; PR #46 MERGEADO**
 - **Tipo:** backend + banco + gate HTTP/PostgreSQL.
 - **Escopo de implementação revisado:** grade/detalhe/tamanhos; inventário; movimentações; importação; relatórios/exportações; WooCommerce; ownership de caixas PDV.
 - **Implementação no workspace:** handlers usam escopo de empresa; a migration existente `0030_e42_locais_estoque_multempresa.sql` e o espelho em `db/schema.sql` estabelecem constraints/índices. A aprovação foi baseada na evidência executada, não na implementação isolada.
 - **Evidência final:** o run [38005819077](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38005819077) executou o harness HTTP autenticado e a suíte PostgreSQL real; jobs `testes-postgres` e `verificar` passaram. A contagem da suíte foi 91 pass/0 fail/0 skipped, derivada da invariância do total observado nos dois runs anteriores e do exit 0 do step final; detalhes/proveniência e falhas anteriores estão em [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
 - **Limite do upgrade:** o runner `migrate()` aplica `db/schema.sql` antes das migrations versionadas; a prova executada preserva `pdv_caixas.local_id=NULL` no upgrade simulado, mas não prova a migration 0030 isolada sobre uma cópia intacta de schema pré-0030. O PostgreSQL minor exato não ficou disponível na API do Actions; a imagem/versão major observada é `postgres:16`.
-- **Estado do PR:** #46 continua aberto, sem merge/fechamento por decisão de escopo. Este status técnico não autoriza iniciar E4.3.
+- **Estado do PR:** o PR #46 (`arena/4cb6e53b-brobond-erp`) foi mergeado em `main` (verificado com `gh pr view 46` na E4.2.1). Este status técnico não autoriza iniciar E4.3.
 - **Limites preservados:** E4.3–E4.6, transferência formal, reservas, custo/CMV, devolução e mínimo/máximo avançado seguem fora deste gate. Os gaps P1/crítico/P2 separados permanecem abertos.
 
-### `GAP-ESTQ-DEVOLUCAO-TOTAL` — saldo após devolução total · **P1 / BLOQUEADOR GLOBAL DE RELEASE**
-- **Origem:** gap preexistente documentado na E4.1; não faz parte do aceite E4.2 e não foi alterado neste gate.
-- **Regressão conhecida:** saldo inicial 5 → venda de 2 → saldo 3 → devolução total de 2 → observado 7; esperado 5. A entrada da devolução duplica o saldo que deveria apenas retornar ao inicial.
-- **Tratamento neste PR:** manter aberto e separado; não corrigir nem usar como critério para aprovar tecnicamente E4.2. Continua bloqueando a decisão de release global até correção e teste próprios.
-- **Aceite futuro:** reproduzir o ciclo com PostgreSQL real, corrigir a regra de contabilização sem regressão parcial/total e verificar saldo 5 ao final, preservando isolamento A/B.
+### `GAP-ESTQ-DEVOLUCAO-TOTAL` — saldo após devolução total · ✅ **FECHADO na E4.2.1**
+- **Origem:** regressão P1 documentada na E4.1 (bloqueador global de release).
+- **Regressão reproduzida (antes):** saldo 5 → venda 2 → 3 → devolução total boa 2 → **7** (esperado 5). Reproduzido no PostgreSQL real pelo teste `E4.2.1 PG E2E-1` (`expected 5, actual 7`) no HEAD original, e em memória (`devolução 3: 7 !== 5`).
+- **Causa:** `receberDevolucao` somava a entrada da devolução e, ao ver devolução total, cancelava a venda; o estorno da venda cancelada então readicionava todas as saídas `Venda #id`, inclusive as já devolvidas.
+- **Correção:** o estorno restaura apenas `saídas − já recebido em devolução` por produto+tamanho (`estornarVenda`, `quantidadeRecebidaPorItem`); o total de "venda devolvida" é acumulado item a item; devolução acima do saldo vendido → 409 transacional, sem movimento; recebimento e criação travam a venda (`SELECT … FOR UPDATE`).
+- **Evidência:** `server/test/e421-estoque.test.ts` (devolução 1–12, E2E-1/2/3) — 32/32 em memória; `server/test/pg/e421-estoque-integridade.test.ts` — 10/10 em PostgreSQL real (E2E-1: 5→2→3→2→5, estorno posterior não restaura; E2E-2: 10→6→4→8→recusa 3 com 2 restantes→10; E2E-3: danificado).
+- **Limite conhecido (não é este gap):** a devolução de item avariado não volta ao saldo vendável; o financeiro da venda só é revertido na devolução total (comportamento preservado).
 
-### `GAP-ESTQ-PDV-LOCAL-TEXTO` — ciclo de vida de `pdv_caixas.local` / `local_id` · **P2**
-- **Estado:** fora do gate funcional E4.2. O campo legado `pdv_caixas.local` continua ao lado de `local_id`; a migration não faz backfill por nome e caixas antigas permanecem com `local_id IS NULL` até decisão administrativa explícita.
-- **Segurança multiempresa:** a abertura/leitura usa `empresa_id` e, para vínculos canônicos, o par `(empresa_id, local_id)`. O harness HTTP executado no run 38005819077 verificou ownership A/B de caixas e `local_id` no PostgreSQL; isso não fecha o gap separado de ciclo de vida/rename de caixa legado.
-- **Aceite futuro:** definir e testar o comportamento de rename/legado de caixa sem inferir local por texto, sem alterar dados de outra empresa. Não implementar neste PR.
+### `GAP-ESTQ-PDV-LOCAL-TEXTO` — local de saída por texto no PDV · ✅ **FECHADO na E4.2.1**
+- **Origem:** `pdv_caixas.local` (texto) e `vendas.local_saida` (texto) eram a única referência de local; renomear um local desviava a baixa de vendas pendentes.
+- **Correção:** `vendas.local_saida_id` (migration 0031, FK composta `(empresa_id, local_saida_id)`, nullable). O PDV grava o ID resolvido a partir do caixa; o faturamento usa o ID quando existe e só usa o texto em venda legada. Editar o texto `local_saida` zera o ID. Sem backfill: vendas e caixas legados ficam com `local_id/local_saida_id IS NULL` e continuam usando o texto.
+- **Evidência:** `e421-estoque.test.ts` PDV/local 1–10 (32/32 em memória); `pg/e421-estoque-integridade.test.ts` "PDV: local_saida_id segue o caixa e local de outra empresa é recusado com 404" (PostgreSQL real).
+- **Limite conhecido:** o campo legado `pdv_caixas.local` continua existindo ao lado de `local_id`; a remoção dele é decisão administrativa separada.
 
-### `GAP-ESTQ-VENDA-ID` — vínculo formal venda → estoque · **CRÍTICO**
-- **Tipo:** banco
-- **Evidência executada contra PostgreSQL real:** as colunas de `movimentacoes` após o bootstrap completo são
-  `id, tipo, produto_id, tamanho_id, local, quantidade, motivo, usuario_id, data, local_id, local_destino, local_destino_id, transferencia_id, compra_id, estornado, estornado_em, estornado_por, movimentacao_estorno_id, empresa_id`.
-  **Não existe `venda_id`.** O estorno de venda localiza as saídas por texto:
-  `server/src/itens.ts:390` filtra `motivo: \`Venda #${pedido.id}\`` e
-  `itens.ts:394` re-filtra `String(m.motivo) === \`Venda #${pedido.id}\``.
-- **Aceite:** migração adding `venda_id INTEGER REFERENCES vendas(id)` + índice `(empresa_id, venda_id)` + backfill seguro a partir do padrão de texto + código passando a usar a coluna + teste A→B→A de multiempresa sobre o novo vínculo.
+### `GAP-ESTQ-VENDA-ID` — vínculo formal venda → estoque · ✅ **FECHADO na E4.2.1**
+- **Tipo:** banco + backend.
+- **Antes:** `movimentacoes` não tinha `venda_id`; o estorno localizava as saídas por texto `Venda #id` (`motivo`).
+- **Correção:** migration nova `db/migrations/0031_e421_integridade_estoque.sql` (não altera migrações antigas; espelho em `db/schema.sql`): `movimentacoes.venda_id INTEGER` nullable, FK composta `(empresa_id, venda_id) → vendas(empresa_id, id)`, índice `(empresa_id, venda_id)`. Preenchido pelo faturamento (baixa), pela entrada de devolução e pelo estorno. `venda_id` está na lista de vínculos internos bloqueados em lançamento manual. O texto `Venda #id` continua escrito, mas deixou de ser chave.
+- **Sem backfill heurístico (decisão):** saídas anteriores à 0031 **não são associadas** a venda por SKU, data ou texto. Elas ficam com `venda_id IS NULL`. O estorno de venda legada usa o texto exato `Venda #id` **somente** para linhas com `venda_id NULL` da mesma empresa (regra de compatibilidade, sem reescrever dado). A contagem de saídas legadas é informada pela migration via `RAISE NOTICE`. Na simulação de upgrade com dados (banco de teste com 17 movimentações), foram 9 saídas legadas sem `venda_id`.
+- **Evidência:** `e421-estoque.test.ts` venda_id 1–7; `pg/e421-estoque-integridade.test.ts` "migração 0031 registrada e colunas/índices/FKs existem" e "FK composta recusa venda_id de OUTRA empresa (23503)"; bootstrap em banco vazio e em banco migrado (duas execuções cada, sem erro).
+- **Não tornado NOT NULL:** quebraria o histórico.
+- **`itens_venda` sem `uq (empresa_id, id)` nem FK composta (decisão E4.2.1):** não foi adicionado. Nenhum dos três gaps depende disso: `criarDevolucao` só aceita item de `itens_venda` da própria venda (já filtrada por `empresa_id`), e `devolucao_itens.item_venda_id` é conferido no handler. Risco residual: escrita direta no banco fora dos handlers poderia apontar item de outra empresa. Fica como item de endurecimento futuro, não como gap desta entrega.
 
 ### `GAP-ESTQ-ORDEM-ID` — vínculo formal OP → estoque · ✅ **RESOLVIDO na E2**
 - **Tipo:** banco + backend
@@ -478,6 +481,18 @@ BOM → OP → Insumo → Produção → Produto acabado → Estoque → Custo.
   confundida com gate pulado.
 
 ---
+
+### `GAP-EXPEDICAO-ETAPA-PG` — expedição falha no PostgreSQL real · **CRÍTICO** · registrado na E4.2.1, **não corrigido**
+- **Tipo:** banco + backend (divergência entre código e CHECK).
+- **Evidência executada:** `pg/e421-estoque-integridade.test.ts` falhou ao embalar com `new row for relation "expedicao_eventos" violates check constraint "expedicao_eventos_etapa_valida"`. O CHECK criado em `db/migrations/0024_p1_comercial_logistica.sql` (espelhado em `db/schema.sql`) aceita apenas `separacao`, `conferencia`, `embalagem`, `expedicao`. O código grava `registrarEvento(…, alvo)` com `alvo = 'embalada'` (e `'expedida'`, mesmo padrão, não executado ponta a ponta). Em memória o CHECK não existe, por isso a suíte em memória não pegou o defeito.
+- **Impacto:** o fluxo de expedição (separação → conferência → embalagem → expedição) não completa em PostgreSQL; a venda não chega a `expedicao_etapa = expedida` pelo caminho real. A venda de balcão (PDV) não depende desse fluxo e foi usada nas provas da E4.2.1 por isso.
+- **Fora de escopo da E4.2.1:** não foi corrigido aqui. Correção esperada: migração nova que alinhe o CHECK ao vocabulário gravado (ou mapeie as etapas no código), com teste PG da expedição completa.
+
+### `GAP-ESTQ-MEMSTORE-TX` — transação em memória sem isolamento nem exclusão · **P2** · registrado na E4.2.1, **não corrigido**
+- **Tipo:** backend (modo demonstração/teste).
+- **Evidência:** `server/src/memdb.ts` `transaction()` ignora `options.isolation` e não tem mutex; o rollback restaura um snapshot tirado antes da transação, o que não é seguro com transações concorrentes no mesmo processo.
+- **Tratamento:** as provas de concorrência da E4.2.1 rodam somente em PostgreSQL real. O modo demonstração não deve ser usado para validar concorrência. Também não há FK em memória (ex.: `DELETE` de venda com movimentos não é recusado no modo demonstração, mas é recusado no PostgreSQL).
+- **Aceite futuro:** mutex por empresa no MemStore ou recusa explícita de transações concorrentes; ou declarar o MemStore fora de qualquer caminho de produção.
 
 ## FORA DE ESCOPO (registrado para não virar "gap" repetido)
 
