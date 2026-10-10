@@ -32,7 +32,7 @@ export type FieldType =
   | 'uf' // unidade federativa (SP, MG...) — validada contra a lista oficial
   | 'cep' // CEP brasileiro (normalizado para 8 dígitos)
   | 'images' // galeria de fotos do registro (virtual — tabela `arquivos`)
-  | 'json'; // coluna JSONB: o valor passa como está (objeto/lista), sem coerção
+  | 'json'; // coluna JSONB: objeto/lista é serializado pelo store (JSON.stringify) para o driver
 
 export type Tone = 'green' | 'red' | 'amber' | 'blue' | 'slate';
 

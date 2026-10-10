@@ -54,14 +54,38 @@ type EventoExpedicao = {
 type Divergencia = {
   id: number;
   venda_id: number;
-  esperado: number;
-  lido: number;
-  faltando: number;
-  sobrando: number;
+  // O servidor persiste JSONB detalhado: `esperado`/`faltando`/`sobrando` são
+  // listas de itens com `quantidade`, `lido` é a lista de códigos lidos. A tela
+  // mostra os TOTAIS; o tipo também aceita o número pronto (resumos já prontos).
+  esperado: CampoDivergencia;
+  lido: CampoDivergencia;
+  faltando: CampoDivergencia;
+  sobrando: CampoDivergencia;
   resolvido_em: string | null;
   resolucao: string | null;
   criado_em: string;
 };
+
+type CampoDivergencia = number | string | Array<{ quantidade?: number } | string> | null | undefined;
+
+/**
+ * Total de unidades por trás de um campo de divergência.
+ *
+ * Aceita o JSONB real do servidor (lista de itens com `quantidade`, ou lista de
+ * códigos — cada código conta 1) e também o total numérico pronto. Sem isso a
+ * tela renderizaria NaN sobre os arrays persistidos pela conferência reprovada.
+ */
+function totalDivergencia(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+  if (Array.isArray(v)) {
+    return v.reduce(
+      (acc, item) => acc + (item && typeof item === 'object' ? Number((item as { quantidade?: unknown }).quantidade ?? 0) : 1),
+      0
+    );
+  }
+  return 0;
+}
 
 type Situacao = {
   venda_id: number;
@@ -219,8 +243,8 @@ export default function ExpedicaoPage() {
         // Divergência não é exceção: é o resultado esperado quando falta peça.
         const f = (e.fields || {}) as Record<string, unknown>;
         setErro(
-          `Divergência registrada (#${String(f.divergencia_id ?? '?')}): faltando ${String(f.faltando ?? 0)}, sobrando ${String(
-            f.sobrando ?? 0
+          `Divergência registrada (#${String(f.divergencia_id ?? '?')}): faltando ${String(totalDivergencia(f.faltando))}, sobrando ${String(
+            totalDivergencia(f.sobrando)
           )}. Nenhum estoque foi movimentado.`
         );
         await carregarSituacao(selecionada, true);
@@ -312,10 +336,10 @@ export default function ExpedicaoPage() {
                         #{d.venda_id}
                       </button>
                     </td>
-                    <td className="px-4 py-2 text-right tabular-nums">{formatNumber(d.esperado)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{formatNumber(d.lido)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums text-red-600">{formatNumber(d.faltando)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums text-amber-600">{formatNumber(d.sobrando)}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{formatNumber(totalDivergencia(d.esperado))}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{formatNumber(totalDivergencia(d.lido))}</td>
+                    <td className="px-4 py-2 text-right tabular-nums text-red-600">{formatNumber(totalDivergencia(d.faltando))}</td>
+                    <td className="px-4 py-2 text-right tabular-nums text-amber-600">{formatNumber(totalDivergencia(d.sobrando))}</td>
                     <td className="px-4 py-2">
                       {d.resolvido_em ? (
                         <span className="text-xs text-emerald-600" title={d.resolucao ?? undefined}>
@@ -547,9 +571,9 @@ export default function ExpedicaoPage() {
                               {d.resolvido_em ? <Badge tone="green">resolvida</Badge> : <Badge tone="red">aberta</Badge>}
                             </div>
                             <div className="mt-1 text-xs">
-                              esperado {formatNumber(d.esperado)} · lido {formatNumber(d.lido)} · faltando{' '}
-                              <span className="text-red-600">{formatNumber(d.faltando)}</span> · sobrando{' '}
-                              <span className="text-amber-600">{formatNumber(d.sobrando)}</span>
+                              esperado {formatNumber(totalDivergencia(d.esperado))} · lido {formatNumber(totalDivergencia(d.lido))} · faltando{' '}
+                              <span className="text-red-600">{formatNumber(totalDivergencia(d.faltando))}</span> · sobrando{' '}
+                              <span className="text-amber-600">{formatNumber(totalDivergencia(d.sobrando))}</span>
                             </div>
                             {d.resolucao && <div className="mt-1 text-xs text-slate-500">{d.resolucao}</div>}
                           </li>

@@ -32,6 +32,33 @@ function q(text: string, params: unknown[] = [], tx?: Tx) {
   return tx ? tx.query(text, params as any[]) : query(text, params);
 }
 
+/**
+ * Serializa campos JSON/JSONB para o driver `pg`.
+ *
+ * O driver converte ARRAY JavaScript em literal de array Postgres (`{000}`),
+ * que não é JSON válido: gravar `['000']` em uma coluna JSONB falha com
+ * SQLSTATE 22P02 ("invalid input syntax for type json") — era exatamente o que
+ * acontecia com `divergencias_conferencia.lido/faltando/sobrando/esperado` e a
+ * conferência reprovada respondia 400 sem persistir a divergência (AUD-02).
+ *
+ * O mecanismo já adotado no projeto é entregar TEXTO JSON ao driver
+ * (`JSON.stringify` na auditoria e no payload fiscal). Aqui o store faz o mesmo
+ * para todo campo `type: 'json'`: objetos e arrays são serializados uma única
+ * vez; strings chegam já serializadas (padrão fiscal) e seguem como estão;
+ * null/undefined continuam NULL. Leitura devolve o JSONB já parseado pelo
+ * driver — nada muda no formato do domínio.
+ */
+function parametroJson(field: { type: string } | undefined, valor: unknown): unknown {
+  if (valor === null || valor === undefined) return valor;
+  if (field?.type === 'json' && typeof valor === 'object') return JSON.stringify(valor);
+  return valor;
+}
+
+/** Índice nome → campo do recurso, para decidir a serialização por coluna. */
+function camposPorNome(r: Resource): Map<string, { type: string }> {
+  return new Map(r.fields.map((f) => [f.name, f as { type: string }]));
+}
+
 /** Valida a empresa do produto e resolve, se informado, o Local canônico. */
 async function canonicalInsumoEmpresa(insumoId: number, empresaId: number | undefined, tx?: Tx): Promise<number> {
   const res = await q(
@@ -331,7 +358,8 @@ export class PgStore implements Store {
     const sql = cols.length
       ? `INSERT INTO ${r.table} (${cols.join(', ')}) VALUES (${vals.join(', ')}) RETURNING *`
       : `INSERT INTO ${r.table} DEFAULT VALUES RETURNING *`;
-    const res = await q(sql, keys.map((k) => data[k]), tx);
+    const campos = camposPorNome(r);
+    const res = await q(sql, keys.map((k) => parametroJson(campos.get(k), data[k])), tx);
     return res.rows[0];
   }
 
@@ -344,9 +372,10 @@ export class PgStore implements Store {
     const sets = keys.map((k, i) => `${k} = $${i + 2}`);
     if (r.fields.some((f) => f.name === 'atualizado_em')) sets.push('atualizado_em = now()');
     if (!sets.length) return this.get(r, id, tx);
+    const campos = camposPorNome(r);
     const res = await q(
       `UPDATE ${r.table} SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
-      [id, ...keys.map((k) => data[k])],
+      [id, ...keys.map((k) => parametroJson(campos.get(k), data[k]))],
       tx
     );
     return res.rows[0] ?? null;
@@ -479,9 +508,10 @@ export class PgStore implements Store {
     const hasCriado = r.fields.some((f) => f.name === 'criado_em') && !cols.includes('criado_em');
     const all = hasCriado ? [...cols, 'criado_em'] : cols;
     const params: unknown[] = [];
+    const campos = camposPorNome(r);
     const tuples = rows.map((d) => {
       const vals = cols.map((c) => {
-        params.push(d[c] ?? null);
+        params.push(parametroJson(campos.get(c), d[c] ?? null));
         return `$${params.length}`;
       });
       if (hasCriado) vals.push('now()');
