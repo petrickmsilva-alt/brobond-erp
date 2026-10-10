@@ -234,6 +234,35 @@ test('expedição: expedição fatura, baixa o estoque e lança o financeiro', a
   await esperarErro(() => exp.expedirPedido(reqDe({}, { params: { id: venda.id } }), resFake().res), 409, /já está faturado/);
 });
 
+test('expedição: eventos gravam o vocabulário canônico de estados — sem conferencia/embalagem/expedicao', async () => {
+  const s = getStore();
+  const { venda, codigos } = await pedidoParaExpedir([1]);
+  const id = { params: { id: venda.id } };
+  await chamar(exp.separarPedido, reqDe({}, id));
+  await chamar(exp.conferirPedido, reqDe({ codigos }, id));
+  await chamar(exp.embalarPedido, reqDe({}, id));
+  await chamar(exp.expedirPedido, reqDe({}, id));
+
+  const eventos = await s.list(RESOURCES.expedicao_eventos, { page: 1, pageSize: 50, filter: { venda_id: Number(venda.id) }, sort: 'id', dir: 'asc' });
+  assert.deepEqual(
+    eventos.rows.map((e) => e.etapa),
+    ['separacao', 'conferida', 'embalada', 'expedida'],
+    'a tabela de eventos usa o MESMO vocabulário de vendas.expedicao_etapa'
+  );
+  assert.deepEqual(eventos.rows.map((e) => e.de_etapa), ['pendente', 'separacao', 'conferida', 'embalada']);
+  assert.ok(eventos.rows.every((e) => e.resultado === 'ok'));
+
+  // A conferência reprovada também escreve no vocabulário canônico.
+  const outro = await pedidoParaExpedir([2]);
+  const id2 = { params: { id: outro.venda.id } };
+  await chamar(exp.separarPedido, reqDe({}, id2));
+  await esperarErro(() => exp.conferirPedido(reqDe({ codigos: [outro.codigos[0]] }, id2), resFake().res), 422);
+  const ev2 = await s.list(RESOURCES.expedicao_eventos, { page: 1, pageSize: 50, filter: { venda_id: Number(outro.venda.id) }, sort: 'id', dir: 'asc' });
+  assert.deepEqual(ev2.rows.map((e) => e.etapa), ['separacao', 'conferida']);
+  assert.equal(ev2.rows[1].resultado, 'divergencia');
+  assert.ok(ev2.rows.every((e) => !['conferencia', 'embalagem', 'expedicao'].includes(String(e.etapa))));
+});
+
 test('expedição: pedido cancelado ou já faturado não entra no fluxo', async () => {
   const cancelada = await pedidoParaExpedir([1], { status: 'cancelada' });
   await esperarErro(() => exp.separarPedido(reqDe({}, { params: { id: cancelada.venda.id } }), resFake().res), 409, /cancelado/);
