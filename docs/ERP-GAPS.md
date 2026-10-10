@@ -265,6 +265,7 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
 - **Sem backfill heurístico (decisão):** saídas anteriores à 0031 **não são associadas** a venda por SKU, data ou texto. Elas ficam com `venda_id IS NULL`. O estorno de venda legada usa o texto exato `Venda #id` **somente** para linhas com `venda_id NULL` da mesma empresa (regra de compatibilidade, sem reescrever dado). A contagem de saídas legadas é informada pela migration via `RAISE NOTICE`. Na simulação de upgrade com dados (banco de teste com 17 movimentações), foram 9 saídas legadas sem `venda_id`.
 - **Evidência:** `e421-estoque.test.ts` venda_id 1–7; `pg/e421-estoque-integridade.test.ts` "migração 0031 registrada e colunas/índices/FKs existem" e "FK composta recusa venda_id de OUTRA empresa (23503)"; bootstrap em banco vazio e em banco migrado (duas execuções cada, sem erro).
 - **Não tornado NOT NULL:** quebraria o histórico.
+- **`itens_venda` sem `uq (empresa_id, id)` nem FK composta (decisão E4.2.1):** não foi adicionado. Nenhum dos três gaps depende disso: `criarDevolucao` só aceita item de `itens_venda` da própria venda (já filtrada por `empresa_id`), e `devolucao_itens.item_venda_id` é conferido no handler. Risco residual: escrita direta no banco fora dos handlers poderia apontar item de outra empresa. Fica como item de endurecimento futuro, não como gap desta entrega.
 
 ### `GAP-ESTQ-ORDEM-ID` — vínculo formal OP → estoque · ✅ **RESOLVIDO na E2**
 - **Tipo:** banco + backend

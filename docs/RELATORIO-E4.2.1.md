@@ -69,6 +69,7 @@ Ver a seção 16 (Conclusão) e a resposta final ao usuário. Este relatório de
 - Simulação de upgrade com dados (`brobond_antes`, migrado da base HEAD): **17 movimentações**, das quais **9 saídas de venda sem `venda_id`**. Essas 9 não foram associadas a venda. O estorno delas usa o texto exato, por compatibilidade.
 - **9 vendas com `local_saida_id IS NULL`**: continuam usando o texto `local_saida`.
 - Em produção a contagem é desconhecida; a migration imprime a contagem via `RAISE NOTICE` no momento do upgrade.
+- **`itens_venda` (decisão):** não recebeu `uq (empresa_id, id)` nem FK composta neste ciclo. Os três gaps não dependem disso: a devolução só aceita itens da própria venda, já filtrada por empresa, e o risco residual (escrita direta fora dos handlers) está registrado em `docs/ERP-GAPS.md`.
 
 ## 9. PDV e local
 
