@@ -29,7 +29,11 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > multiempresa 404, rollback e concorrência). `test:pg` **110/110** em banco
 > vazio. AUD-03/AUD-04 (faturamento direto/atalhos fora da máquina) seguem como
 > decisão de produto documentada, não implementados. Estado e evidência:
-> [`docs/RELATORIO-E4.2.3.md`](RELATORIO-E4.2.3.md).
+> [`docs/RELATORIO-E4.2.3.md`](RELATORIO-E4.2.3.md). **Gate final executado em
+> etapa separada (2026-10-10):** CI do PR #48 verde nos dois jobs (`verificar` e
+> `testes-postgres`, `postgres:16`, run 38052675901) + bateria local de
+> aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
+> aguarda decisão humana.
 
 Este é o **registro oficial do que falta**. Regra de manutenção:
 

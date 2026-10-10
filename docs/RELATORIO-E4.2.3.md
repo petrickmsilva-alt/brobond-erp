@@ -198,6 +198,20 @@ Auditoria da `ExpedicaoPage` (sem redesign, sem navegação nova):
 | `git diff --check` | EXIT 0 |
 | Workflows/CI | **não alterados** (`.github/workflows/ci.yml` intocado) |
 
+### 16.1 GATE FINAL — execução em etapa separada (2026-10-10)
+
+Após a implementação, o gate final foi executado como etapa própria (ata completa em [PR #48, comentário](https://github.com/petrickmsilva-alt/brobond-erp/pull/48#issuecomment-6097721573)). **Nenhum código foi alterado nesta etapa.**
+
+**CI do PR #48 (GitHub Actions, `postgres:16`):** `verificar` **PASS** (1m26s) e `testes-postgres` **PASS** (9m32s) — run [38052675901](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38052675901). A suíte PG completa (incluindo os 9 testes E4.2.3) passou contra o serviço `postgres:16` do CI — compatibilidade da migration 0032 comprovada em **PG 16 (CI) e PG 18.4 (local)**.
+
+**Bateria local de aceitação (reexecução integral):** `test:pg` **110/110** em banco recriado do zero · `npm test` 734/671/0/63 + 226/226 · typecheck exit 0 · lint 0 erros/401 warnings (= baseline) · build exit 0 · smoke **126/126** · audit:menu exit 0.
+
+**Banco:**
+- boot idempotente em banco vazio: **BOOT-1 600 ms** (schema + 32 migrations `0001…0032`), **BOOT-2 88 ms** sem erro; 97 tabelas; CHECK canônico **validado** (`convalidated = true`);
+- upgrade com fixture pré-0032 (CHECK antigo + 4 linhas legadas `conferencia:1, embalagem:1, expedicao:2`): linhas **preservadas byte a byte**, escritas novas limitadas ao vocabulário canônico, CHECK `NOT VALID` enquanto houver incompatíveis e `VALIDATE` automático quando limpo (comportamento reconfirmado).
+
+**Auditoria de proibições (§32):** migration `0024` com diff **vazio** · `.github/` com diff **vazio** · testes com **588 linhas só de adição** e **0 removida** · **0 skip/only novo** · produção sem vocabulário paralelo (os nomes antigos só aparecem no teste que prova que são **recusados** e na fixture que prova a **preservação**) · sem escopo E4.3+ · sem backfill heurístico · sem MemStore como prova de banco (teste PG falha sem `DATABASE_URL`) · `brobond-ai-commerce` não acessado.
+
 ## 17. Evidências
 
 - **Antes:** reprodução em PostgreSQL real no HEAD base — `embalar` → 500/23514 (`expedicao_eventos_etapa_valida`, `Failing row contains (…, embalada, conferida, ok, …)`); conferência reprovada → 400 (22P02) com `divergencias_conferencia` vazia (§3).
@@ -229,10 +243,16 @@ Todos os itens da classificação final (§28 da missão) foram verificados com 
 🟢 E4.2.3 CONCLUÍDO
 ```
 
-**Veredito:**
+**Veredito da implementação:**
 
 ```text
 🟢 APROVADO PARA GATE FINAL
 ```
 
-Primeiro evidência (esta entrega). Depois o gate final em etapa separada. **Não é aprovação para merge.**
+**Veredito do gate final (etapa separada, §16.1):** o CI do PR #48 passou nos dois jobs (`verificar` e `testes-postgres`, `postgres:16`), a bateria local de aceitação foi reexecutada integralmente verde, o boot idempotente e o upgrade com dados legados foram reconfirmados e a auditoria de proibições não encontrou nenhuma violação:
+
+```text
+🟢 E4.2.3 APROVADO NO GATE FINAL — formalmente fechado
+```
+
+O PR [#48](https://github.com/petrickmsilva-alt/brobond-erp/pull/48) está pronto para merge. **O merge não será executado automaticamente** — a decisão é humana. E4.3 não começa antes do fechamento formal (ocorrido) e do merge decidido pelo dono do produto.
