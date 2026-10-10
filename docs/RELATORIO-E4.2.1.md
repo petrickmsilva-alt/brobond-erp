@@ -1,7 +1,7 @@
 # Relatório E4.2.1 — Integridade, rastreabilidade e localização dos movimentos de estoque
 
 **Repositório:** `petrickmsilva-alt/brobond-erp`
-**Branch do ciclo:** `arena/7c5077d6-brobond-erp` (sessão atual). A missão citava `arena/4cb6e53b-brobond-erp`, que é a branch do E4.2 já mergeado (PR #46); o trabalho ficou na branch da sessão.
+**Branch do ciclo:** `arena/7c5077d6-brobond-erp` (sessão atual; origem do PR #47). A missão citava `arena/4cb6e53b-brobond-erp`; essa branch existe no remoto, mas aponta para `c22191b` (= main) e não contém trabalho do E4.2.1. A implementação está somente em `arena/7c5077d6-brobond-erp`.
 **Base:** `main` @ `c22191beb1ef6044f0df5a680414311ddadfc2af`
 **Escopo:** somente os três gaps do ciclo. E4.3–E4.6 não foram implementados.
 
@@ -91,6 +91,12 @@ Ver a seção 16 (Conclusão) e a resposta final ao usuário. Este relatório de
 - Dois recebimentos simultâneos da mesma devolução → só um sobe o estoque. Estoque final 10 (nunca 12); uma única entrada de estoque; venda cancelada uma vez.
 - Mecanismo: `SELECT … FOR UPDATE` na venda antes de qualquer leitura de saldo; a transação passou a `read committed` (cada instrução lê o que já foi confirmado após o lock). Não depende de retry por `40001`.
 
+### Limitação da prova MemStore
+
+- A suíte em memória (32/32) prova as regras funcionais, mas **não prova concorrência**: `memdb.ts` ignora isolamento e não tem mutex.
+- A evidência definitiva de concorrência, transação, locks e constraints é a suíte PostgreSQL (10/10 + verificações de gate abaixo).
+- Verificações de gate (temporárias, executadas em PostgreSQL real e **não commitadas**): vendido 5 / devolvido 3 / restante 2 com duas devoluções simultâneas de 2 → `[201, 409]`, estoque final 10 (nunca 12); vendido 2 / devolvido 2 pendente → nova de 1 → 409 sem movimento; vendido 2 / devolução total recebida → venda cancelada → nova devolução 409, estoque 5.
+
 ## 12. Multiempresa
 
 - Empresa B não cria devolução de venda da A (404 sem vazar dados), não recebe devolução da A (404), não baixa saldo da A e não ganha saldo. O saldo da A permanece 3 e a devolução da A segue `em_transito`.
@@ -126,7 +132,8 @@ Os 63 skips de `npm test` são anteriores a esta entrega e não estão nos arqui
 | `npm run smoke` (`scripts/smoke-e2e.mjs`, servidor demo na porta 3001) | **126/126** |
 | `npm run audit:menu` | EXIT 0; avisos `RECURSO_SEM_MENU` já registrados como GAP-FISC |
 | `git diff --check` (com os arquivos novos staged) | EXIT 0, sem problemas de espaço |
-| CI do GitHub no PR #47, run [38014271118](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38014271118) (`ci.yml`, `postgres:16`) | `verificar` **pass** (1m23s); `testes-postgres` **pass** (8m57s) |
+| CI do GitHub no HEAD do PR #47 (`1203669`), runs [38015445553](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38015445553) (pull_request) e [38015443159](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38015443159) (push) (`ci.yml`, `postgres:16`) | `verificar` **pass**; `testes-postgres` **pass** (ambos os runs) |
+| CI anterior (código `34de09e`), run [38014271118](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38014271118) | pass; não é o HEAD atual, citado só como histórico |
 
 Observação: o log TAP do job `testes-postgres` não é acessível pela API do Actions neste ambiente; os números da seção 14 são da execução local em banco limpo, e o CI registra apenas o status de sucesso.
 

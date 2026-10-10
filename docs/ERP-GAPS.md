@@ -235,7 +235,7 @@ Consultas executadas em `postgres://…:55432/brobond_teste` depois de
 
 ## E4 — ESTOQUE AVANÇADO
 
-### `GAP-ESTQ-MULTIEMPRESA` — ownership nos fluxos especializados de estoque · **GATE E4.2 APROVADO TECNICAMENTE; PR ABERTO**
+### `GAP-ESTQ-MULTIEMPRESA` — ownership nos fluxos especializados de estoque · **GATE E4.2 APROVADO TECNICAMENTE; PR #46 MERGEADO**
 - **Tipo:** backend + banco + gate HTTP/PostgreSQL.
 - **Escopo de implementação revisado:** grade/detalhe/tamanhos; inventário; movimentações; importação; relatórios/exportações; WooCommerce; ownership de caixas PDV.
 - **Implementação no workspace:** handlers usam escopo de empresa; a migration existente `0030_e42_locais_estoque_multempresa.sql` e o espelho em `db/schema.sql` estabelecem constraints/índices. A aprovação foi baseada na evidência executada, não na implementação isolada.
