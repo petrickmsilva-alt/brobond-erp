@@ -18,6 +18,22 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > **500** no PostgreSQL real para qualquer compra com `fin_vencimento`.
 >
 > **Gate E4.2 (2026-10-09):** a execução final do CI contra PostgreSQL real, [run 38005819077](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38005819077), passou nos jobs `testes-postgres` e `verificar`; a suíte tem **91 pass, 0 fail, 0 skipped** (a contagem final é derivada, pois o footer TAP não ficou exposto pela API; proveniência em [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md)). As falhas anteriores dos runs 38003682898 e 38004716773 foram preservadas e corrigidas apenas no harness. E4.2 está **APROVADO TECNICAMENTE**; PR #46 permanece aberto, sem merge, e o acompanhamento do gap não autoriza avanço a E4.3 nem altera os gaps P1/P2 separados. Estado, limites e evidência: [`docs/RELATORIO-E4.2.md`](RELATORIO-E4.2.md).
+>
+> **Atualização E4.2.3 (2026-10-10):** os três gaps da expedição em PostgreSQL
+> estão **fechados com evidência executada** — `GAP-EXPEDICAO-ETAPA-PG` (AUD-01,
+> CRÍTICO), `GAP-EXPEDICAO-CONFERENCIA-PG` (AUD-02) e `GAP-EXPEDICAO-SEM-TESTE-PG`
+> (AUD-05). A migration `0032` alinha o CHECK de `expedicao_eventos` ao
+> vocabulário canônico (`pendente → separacao → conferida → embalada → expedida`)
+> sem backfill; a conferência reprovada persiste divergência JSONB válida e
+> responde 422; há E2E PostgreSQL completo (estoque baixado uma única vez,
+> multiempresa 404, rollback e concorrência). `test:pg` **110/110** em banco
+> vazio. AUD-03/AUD-04 (faturamento direto/atalhos fora da máquina) seguem como
+> decisão de produto documentada, não implementados. Estado e evidência:
+> [`docs/RELATORIO-E4.2.3.md`](RELATORIO-E4.2.3.md). **Gate final executado em
+> etapa separada (2026-10-10):** CI do PR #48 verde nos dois jobs (`verificar` e
+> `testes-postgres`, `postgres:16`, run 38052675901) + bateria local de
+> aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
+> aguarda decisão humana.
 
 Este é o **registro oficial do que falta**. Regra de manutenção:
 
@@ -48,8 +64,8 @@ Classificação do tipo de gap (seção 3 da especificação):
 | **E10 — Administração** | 4 | 4 | 1 |
 | **E11 — UX final** | 2 | 2 | 0 |
 | **E12 — Homologação** | 3 | 3 | 3 |
-| Transversais | 5 | 5 | 1 |
-| **Total** | **48** | **30** | **7** |
+| Transversais | 7 | 4 | 0 |
+| **Total** | **50** | **29** | **6** |
 
 ---
 
@@ -482,11 +498,24 @@ BOM → OP → Insumo → Produção → Produto acabado → Estoque → Custo.
 
 ---
 
-### `GAP-EXPEDICAO-ETAPA-PG` — expedição falha no PostgreSQL real · **CRÍTICO** · registrado na E4.2.1, **não corrigido**
+### `GAP-EXPEDICAO-ETAPA-PG` — expedição falha no PostgreSQL real · ✅ **FECHADO na E4.2.3** (AUD-01)
 - **Tipo:** banco + backend (divergência entre código e CHECK).
-- **Evidência executada:** `pg/e421-estoque-integridade.test.ts` falhou ao embalar com `new row for relation "expedicao_eventos" violates check constraint "expedicao_eventos_etapa_valida"`. O CHECK criado em `db/migrations/0024_p1_comercial_logistica.sql` (espelhado em `db/schema.sql`) aceita apenas `separacao`, `conferencia`, `embalagem`, `expedicao`. O código grava `registrarEvento(…, alvo)` com `alvo = 'embalada'` (e `'expedida'`, mesmo padrão, não executado ponta a ponta). Em memória o CHECK não existe, por isso a suíte em memória não pegou o defeito.
-- **Impacto:** o fluxo de expedição (separação → conferência → embalagem → expedição) não completa em PostgreSQL; a venda não chega a `expedicao_etapa = expedida` pelo caminho real. A venda de balcão (PDV) não depende desse fluxo e foi usada nas provas da E4.2.1 por isso.
-- **Fora de escopo da E4.2.1:** não foi corrigido aqui. Correção esperada: migração nova que alinhe o CHECK ao vocabulário gravado (ou mapeie as etapas no código), com teste PG da expedição completa.
+- **Evidência executada (antes):** `pg/e421-estoque-integridade.test.ts` falhou ao embalar com `new row for relation "expedicao_eventos" violates check constraint "expedicao_eventos_etapa_valida"`. O CHECK criado em `db/migrations/0024_p1_comercial_logistica.sql` (espelhado em `db/schema.sql`) aceita apenas `separacao`, `conferencia`, `embalagem`, `expedicao`. O código grava `registrarEvento(…, alvo)` com `alvo = 'embalada'` (e `'expedida'`). Em memória o CHECK não existe, por isso a suíte em memória não pegou o defeito. Reconfirmado na E4.2.3 em PostgreSQL real: HTTP 500 / SQLSTATE 23514, venda presa em `conferida`, sem evento `embalada`.
+- **Impacto:** o fluxo de expedição não completava em PostgreSQL; a venda não chegava a `expedicao_etapa = expedida` pelo caminho real.
+- **Como foi fechado (E4.2.3):** migration nova `db/migrations/0032_e423_expedicao_vocabulario.sql` (0024 intocada) substitui o CHECK pelo vocabulário canônico `pendente, separacao, conferida, embalada, expedida` — o mesmo de `vendas.expedicao_etapa`; sem mapeamento artificial (`embalada→embalagem`). Linhas históricas são preservadas sem conversão (CHECK NOT VALID quando existirem; `VALIDATE CONSTRAINT` quando o conjunto estiver limpo; contagens em `RAISE NOTICE`). `db/schema.sql` atualizado (CHECK inline + bloco espelho). `expedicao.ts` grava eventos no vocabulário canônico.
+- **Evidência (depois):** `server/test/pg/e423-expedicao-postgresql.test.ts` (testes 1–3): `embalada` e `expedida` persistem; `expedicao_eventos` grava `separacao, conferida, embalada, expedida` na ordem; o CHECK recusa `embalagem/expedicao/conferencia` em escrita nova; upgrade de banco com linhas legadas preserva os dados e restringe escritas novas. `test:pg` 110/110 em banco vazio.
+
+### `GAP-EXPEDICAO-CONFERENCIA-PG` — divergência da conferência não persiste em PostgreSQL · ✅ **FECHADO na E4.2.3** (AUD-02)
+- **Tipo:** backend + banco (serialização JS → JSONB).
+- **Evidência executada (antes):** a conferência reprovada enviava arrays JS (`esperado/lido/faltando/sobrando`) direto para colunas JSONB; o driver `pg` converte array JS em literal de array Postgres (`{"000"}`), que não é JSON — SQLSTATE **22P02**, a API respondia **400** ("Valor inválido em um dos campos.") e `divergencias_conferencia` ficava **vazia**. Reproduzido em PostgreSQL real na E4.2.3.
+- **Como foi fechado (E4.2.3):** `pgstore.ts` serializa campos `type: 'json'` com `JSON.stringify` no ponto único de persistência (mesmo mecanismo já adotado na auditoria e no payload fiscal); sem segundo mecanismo, sem tabela paralela, sem mudança no domínio de divergências. A operação persiste a divergência (JSONB válido), o evento (`conferida`/`divergencia`, `dados.divergencia_id`) e a auditoria em transação íntegra e responde **HTTP 422** (não 400) no padrão de erro do ERP. A tela de expedição passou a renderizar os totais sobre o JSONB real (antes `NaN`).
+- **Evidência (depois):** `pg/e423-expedicao-postgresql.test.ts` (testes 4–5): caso A aprovado sem divergência e sem baixa; caso B responde 422 com `jsonb_typeof(...) = 'array'` nas 4 colunas, conteúdo persistido conferido (lido, esperado, faltando), etapa preservada (`separacao`), zero movimentações, evento ligado à divergência; e o fluxo continua (conferência seguinte aprova).
+
+### `GAP-EXPEDICAO-SEM-TESTE-PG` — expedição sem teste E2E em PostgreSQL · ✅ **FECHADO na E4.2.3** (AUD-05)
+- **Tipo:** testes.
+- **Evidência executada (antes):** nenhum teste PostgreSQL exercitava `separar → conferir → embalar → expedir`; o CI passava porque a suíte PG desviava para o PDV (`pg/e421-estoque-integridade.test.ts` registrava a limitação).
+- **Como foi fechado (E4.2.3):** `server/test/pg/e423-expedicao-postgresql.test.ts` — 9 testes em PostgreSQL real cobrindo: upgrade sem backfill; vocabulário canônico; caso A/B da conferência (422 + JSONB); **E2E completo** (empresa → cliente → produto → estoque → venda → itens → separar → conferir → embalar → expedir) com estoque `X − q` baixado uma única vez, `venda_id`/empresa corretos, eventos canônicos na ordem e financeiro lançado; **rollback** (expedição que falha não deixa estado parcial); **multiempresa** (B opera registros de A → 404 em separar/conferir/embalar/expedir/eventos/resolve-divergência); **concorrência** (duas expedições simultâneas → uma baixa, um evento final, saldo coerente). Complemento em memória: vocabulário dos eventos travado em `expedicao.test.ts`.
+- **Evidência (depois):** `test:pg` **110 pass · 0 fail · 0 skipped** em banco vazio (101 da E4.2.1 + 9 novos); reexecução da suíte nova sobre banco populado também 9/9.
 
 ### `GAP-ESTQ-MEMSTORE-TX` — transação em memória sem isolamento nem exclusão · **P2** · registrado na E4.2.1, **não corrigido**
 - **Tipo:** backend (modo demonstração/teste).

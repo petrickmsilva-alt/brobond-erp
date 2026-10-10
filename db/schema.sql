@@ -2650,7 +2650,7 @@ CREATE TABLE IF NOT EXISTS expedicao_eventos (
   usuario_id INTEGER REFERENCES usuarios(id),
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT expedicao_eventos_etapa_valida CHECK (etapa IN (
-    'separacao', 'conferencia', 'embalagem', 'expedicao'
+    'pendente', 'separacao', 'conferida', 'embalada', 'expedida'
   )),
   CONSTRAINT expedicao_eventos_resultado_valido CHECK (resultado IN ('ok', 'divergencia', 'erro'))
 );
@@ -4007,3 +4007,51 @@ $e421_foreign_keys$;
 COMMENT ON COLUMN movimentacoes.venda_id IS 'E4.2.1: venda que originou a baixa, a entrada de devolução ou o estorno. NULL em lançamentos manuais e no histórico anterior (sem backfill).';
 COMMENT ON COLUMN vendas.local_saida_id IS 'E4.2.1: local canônico de saída. NULL em vendas legadas (usam local_saida texto).';
 COMMENT ON INDEX uq_e421_devolucoes_empresa_idempotency IS 'E4.2.1: criação de devolução é idempotente por chave dentro da empresa.';
+
+-- ---- 0032 E4.2.3 — vocabulário canônico da máquina de expedição (AUD-01) ----
+-- Mesmo conteúdo de db/migrations/0032_e423_expedicao_vocabulario.sql, para
+-- banco novo sobe completo por aqui e banco antigo recebe a substituição do
+-- CHECK já no bootstrap. Idempotente. NÃO altera dados históricos (sem backfill).
+DO $e423_diagnostico$
+DECLARE
+  r RECORD;
+  n_incomp INTEGER;
+  n_total INTEGER;
+BEGIN
+  SELECT COUNT(*) INTO n_total FROM expedicao_eventos;
+  SELECT COUNT(*) INTO n_incomp FROM expedicao_eventos
+   WHERE etapa NOT IN ('pendente', 'separacao', 'conferida', 'embalada', 'expedida');
+  RAISE NOTICE 'E4.2.3 diagnóstico sem backfill: expedicao_eventos total=%, fora_do_vocabulario_canonico=%', n_total, n_incomp;
+  FOR r IN SELECT etapa, COUNT(*) AS n FROM expedicao_eventos GROUP BY etapa ORDER BY etapa LOOP
+    RAISE NOTICE 'E4.2.3 diagnóstico: etapa="%" quantidade=%', r.etapa, r.n;
+  END LOOP;
+  IF n_incomp > 0 THEN
+    RAISE NOTICE 'E4.2.3: existem linhas históricas com vocabulário antigo. ELAS NÃO SÃO CONVERTIDAS (sem backfill heurístico). O CHECK novo será criado NOT VALID e a VALIDATE CONSTRAINT fica pendente até tratamento explícito.';
+  END IF;
+END
+$e423_diagnostico$;
+
+ALTER TABLE expedicao_eventos DROP CONSTRAINT IF EXISTS expedicao_eventos_etapa_valida;
+
+DO $e423_check$
+DECLARE
+  n_incomp INTEGER;
+BEGIN
+  SELECT COUNT(*) INTO n_incomp FROM expedicao_eventos
+   WHERE etapa NOT IN ('pendente', 'separacao', 'conferida', 'embalada', 'expedida');
+  EXECUTE $ddl$
+    ALTER TABLE expedicao_eventos ADD CONSTRAINT expedicao_eventos_etapa_valida CHECK (etapa IN (
+      'pendente', 'separacao', 'conferida', 'embalada', 'expedida'
+    )) NOT VALID
+  $ddl$;
+  IF n_incomp = 0 THEN
+    EXECUTE 'ALTER TABLE expedicao_eventos VALIDATE CONSTRAINT expedicao_eventos_etapa_valida';
+    RAISE NOTICE 'E4.2.3: CHECK expedicao_eventos_etapa_valida validado no vocabulário canônico.';
+  ELSE
+    RAISE NOTICE 'E4.2.3: CHECK expedicao_eventos_etapa_valida criado NOT VALID (linhas históricas incompatíveis=%). Novas escritas já são limitadas ao vocabulário canônico.', n_incomp;
+  END IF;
+END
+$e423_check$;
+
+COMMENT ON CONSTRAINT expedicao_eventos_etapa_valida ON expedicao_eventos IS
+  'E4.2.3: vocabulário canônico da máquina de expedição (pendente, separacao, conferida, embalada, expedida) — o mesmo de vendas.expedicao_etapa. Linhas históricas com conferencia/embalagem/expedicao são preservadas sem conversão; se existirem, o CHECK fica NOT VALID até tratamento explícito.';

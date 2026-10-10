@@ -131,7 +131,8 @@ function coerce(f: Field, raw: unknown): [unknown, string | null] {
       return [s, null];
     }
     case 'json':
-      // Coluna JSONB: o store grava o valor como está. Coagir para String
+      // Coluna JSONB: o valor segue como objeto/lista; o store (pgstore)
+      // serializa com JSON.stringify na gravação. Coagir para String aqui
       // escreveria "[object Object]" onde o banco espera JSON.
       return [raw, null];
     default:
