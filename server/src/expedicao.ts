@@ -84,7 +84,11 @@ async function avancarEtapa(venda: Row, alvo: Etapa, actor: { id: number | null;
   const s = getStore();
   const atualizada = await s.tryUpdateIf(getResource('vendas')!, Number(venda.id), { expedicao_etapa: venda.expedicao_etapa ?? null }, { expedicao_etapa: alvo }, tx);
   if (!atualizada) throw new HttpError(409, 'O pedido mudou durante a operação. Recarregue e tente de novo.');
-  await registrarEvento(Number(venda.id), alvo === 'conferida' ? 'conferencia' : alvo, atual, 'ok', mensagem, actor, escopo.empresaId, tx);
+  // O evento grava o vocabulário canônico de ESTADOS (o mesmo de
+  // vendas.expedicao_etapa): pendente → separacao → conferida → embalada →
+  // expedida. Sem mapeamento para os nomes antigos de passo (conferencia,
+  // embalagem, expedicao) — ver migration 0032.
+  await registrarEvento(Number(venda.id), alvo, atual, 'ok', mensagem, actor, escopo.empresaId, tx);
   await s.audit(
     { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'vendas', registro_id: Number(venda.id), descricao: `Venda #${venda.id}: expedição ${atual} → ${alvo}`, dados: { de: atual, para: alvo }, empresa_id: empresaDoRegistroAudit(getResource('vendas')!, venda, actor) },
     tx
@@ -284,7 +288,10 @@ export async function conferirPedido(req: Request, res: Response) {
         );
         await registrarEvento(
           vendaId,
-          'conferencia',
+          // Vocabulário canônico: o evento é sobre o passo "conferida" (a
+          // conferência); `resultado: 'divergencia'` registra que a transição
+          // NÃO ocorreu. Sem o nome antigo 'conferencia' (migration 0032).
+          'conferida',
           etapaAtual,
           'divergencia',
           `Conferência REPROVADA: ${comparacao.faltando.length} item(ns) faltando, ${comparacao.sobrando.length} código(s) não previsto(s). Nenhuma baixa de estoque foi realizada.`,
@@ -316,7 +323,7 @@ export async function conferirPedido(req: Request, res: Response) {
 
 /** POST /api/vendas/:id/expedicao/embalar */
 export async function embalarPedido(req: Request, res: Response) {
-  return avancar(req, res, 'embalada', 'embalagem', 'Pedido embalado.');
+  return avancar(req, res, 'embalada', 'Pedido embalado.');
 }
 
 /**
@@ -358,7 +365,7 @@ export async function expedirPedido(req: Request, res: Response) {
   }
 }
 
-async function avancar(req: Request, res: Response, alvo: Etapa, etapa: string, mensagem: string) {
+async function avancar(req: Request, res: Response, alvo: Etapa, mensagem: string) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'update');
   const escopo = escopoDe(actor);
