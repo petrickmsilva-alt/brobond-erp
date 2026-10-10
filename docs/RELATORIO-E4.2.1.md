@@ -124,8 +124,10 @@ Os 63 skips de `npm test` são anteriores a esta entrega e não estão nos arqui
 | `npm run build` | EXIT 0 |
 | `npm run smoke` (`scripts/smoke-e2e.mjs`, servidor demo na porta 3001) | **126/126** |
 | `npm run audit:menu` | EXIT 0; avisos `RECURSO_SEM_MENU` já registrados como GAP-FISC |
-| `git diff --check` | ver seção "CI" da resposta final (executado após o commit) |
-| CI do GitHub (`ci.yml`, `postgres:16`) | ver a resposta final e os checks do PR |
+| `git diff --check` (com os arquivos novos staged) | EXIT 0, sem problemas de espaço |
+| CI do GitHub no PR #47, run [38014271118](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38014271118) (`ci.yml`, `postgres:16`) | `verificar` **pass** (1m23s); `testes-postgres` **pass** (8m57s) |
+
+Observação: o log TAP do job `testes-postgres` não é acessível pela API do Actions neste ambiente; os números da seção 14 são da execução local em banco limpo, e o CI registra apenas o status de sucesso.
 
 ## 16. Conclusão
 
