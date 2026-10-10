@@ -488,6 +488,29 @@ BOM → OP → Insumo → Produção → Produto acabado → Estoque → Custo.
 - **Impacto:** o fluxo de expedição (separação → conferência → embalagem → expedição) não completa em PostgreSQL; a venda não chega a `expedicao_etapa = expedida` pelo caminho real. A venda de balcão (PDV) não depende desse fluxo e foi usada nas provas da E4.2.1 por isso.
 - **Fora de escopo da E4.2.1:** não foi corrigido aqui. Correção esperada: migração nova que alinhe o CHECK ao vocabulário gravado (ou mapeie as etapas no código), com teste PG da expedição completa.
 
+> **Atualização E4.2.2 (auditoria, sem correção):** `GAP-EXPEDICAO-ETAPA-PG` foi **reproduzido** no PostgreSQL 16.2 real: `embalar` → `23514` em `expedicao_eventos_etapa_valida` → HTTP 500, com rollback completo (venda permanece `conferida`, sem baixa). Nenhum teste PG exercita embalar/expedir (AUD-05). Relatório: [`docs/RELATORIO-E4.2.2.md`](RELATORIO-E4.2.2.md). **Continua aberto.**
+
+### `GAP-EXPEDICAO-CONFERENCIA-PG` — conferência reprovada não grava divergência no PostgreSQL · **P1** · registrado na E4.2.2, **não corrigido**
+- **Tipo:** backend (serialização de `jsonb`).
+- **Evidência executada:** arrays JS em `divergencias_conferencia.lido/esperado/faltando/sobrando` são serializados pelo driver `pg` como literal de array (`{"000"}`), o que o `jsonb` recusa (`22P02`). `POST …/expedicao/conferir` reprovado responde **400** `Valor inválido`, em vez de 422, e **nenhuma divergência é gravada**. MemStore aceita e responde 422.
+- **Risco:** a garantia "divergência SEMPRE registrada" (`0024`, `expedicao.ts`) não vale no PG. Mesmo padrão em `suprimentos.ts:669` (packing check), a verificar.
+- **Aceite futuro:** teste PG de conferência reprovada que verifica 422 e linha em `divergencias_conferencia`.
+
+### `GAP-EXPEDICAO-FATURAMENTO-FORA-DA-ETAPA` — faturar e baixar estoque fora da máquina de etapas · **P1** · registrado na E4.2.2, **não corrigido**
+- **Tipo:** backend (estado).
+- **Evidência executada:** (a) `PUT /api/vendas/:id {status:'faturada'}` baixa estoque com `expedicao_etapa` `NULL` (saldo 50→49); (b) `POST /api/vendas/:id/conferir` (`packingCheck`, `suprimentos.ts`) fatura e baixa (saldo 5→3) sem separação/embalagem. Rota (b) não tem nenhum teste.
+- **Aceite futuro:** decisão de produto (o faturamento pode ocorrer fora da expedição?) e, conforme a resposta, fechar os atalhos ou fazê-los passar pela máquina de etapas, com teste.
+
+### `GAP-EXPEDICAO-SEM-TESTE-PG` — expedição sem prova em PostgreSQL real · **P1** · registrado na E4.2.2, **não corrigido**
+- **Tipo:** teste.
+- **Evidência:** nenhum teste de `server/test/pg*` chama separar/conferir-reprovada/embalar/expedir. `pg/e421-estoque-integridade.test.ts` evita a expedição de propósito. O smoke só consulta `GET /expedicao/divergencias`. O CI fica verde com o fluxo quebrado.
+- **Aceite futuro:** teste PG do fluxo completo (inclui conferência reprovada e rollback) — escrito na fase de implementação, não nesta auditoria.
+
+### `GAP-EXPEDICAO-DIVERGENCIA-MUTAVEL` — trilha de divergência editável pelo CRUD · **P2** · registrado na E4.2.2, **não corrigido**
+- **Tipo:** backend (auditoria).
+- **Evidência executada:** `updateRecord(divergencias_conferencia, id, {venda_id})` foi aceito e trocou o pedido vinculado (40→41). `venda_id`, `usuario_id` e `resolucao` são graváveis em `resources.ts`.
+- **Aceite futuro:** tornar a divergência append-only no CRUD; resolver só pelo endpoint dedicado.
+
 ### `GAP-ESTQ-MEMSTORE-TX` — transação em memória sem isolamento nem exclusão · **P2** · registrado na E4.2.1, **não corrigido**
 - **Tipo:** backend (modo demonstração/teste).
 - **Evidência:** `server/src/memdb.ts` `transaction()` ignora `options.isolation` e não tem mutex; o rollback restaura um snapshot tirado antes da transação, o que não é seguro com transações concorrentes no mesmo processo.
