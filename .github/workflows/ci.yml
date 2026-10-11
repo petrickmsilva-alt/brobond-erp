@@ -88,3 +88,19 @@ jobs:
         run: npx prisma migrate resolve --applied "20261005120000_fusion_commerce_into_erp" || echo "baseline já registrado — seguindo"
       - name: Migration Prisma fusion_commerce_into_erp (dual-track)
         run: npx prisma migrate deploy
+      # ---------------------------------------------------------------------
+      # GATE DO ERP-03 (P0-04): o smoke E2E rodava só contra o modo
+      # demonstração — onde a memória tem `locais.mock` e cadastros de exemplo —
+      # e por isso dava 126/126 enquanto o mesmo sistema, em PostgreSQL
+      # recém-migrado, dava 92/117 (25 × "A empresa ativa não possui um local de
+      # estoque ativo"). O runner cria um BANCO NOVO, sobe a API de verdade
+      # (migrate + ensureAdmin automáticos, ZERO SQL manual) e roda o smoke
+      # contra ela, devolvendo o código de saída do smoke.
+      - name: Smoke E2E contra PostgreSQL novo (gate ERP-03)
+        run: |
+          set -o pipefail
+          npm run smoke:pg 2>&1 | tee /tmp/smokepg.log || {
+            DIAG="$( { grep -E "^FAIL|❌|error|Error" /tmp/smokepg.log | head -40; echo "--- cauda ---"; tail -40 /tmp/smokepg.log; } | sed 's/%/%25/g' )"
+            echo "::error title=smoke:pg falhou::${DIAG//$'\n'/%0A}"
+            exit 1
+          }

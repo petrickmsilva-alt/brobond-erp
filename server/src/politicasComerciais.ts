@@ -1,6 +1,7 @@
 import { RESOURCES } from './resources';
 import { getStore } from './services';
 import type { Row } from './store';
+import { diaISO } from './utils';
 
 export type PoliticaAplicada = {
   id: number; nome: string; escopo: string; desconto_pct: number; pedido_min_valor: number;
@@ -16,7 +17,7 @@ export async function resolverPoliticaComercial(ctx: { catalogo: Row; clienteId?
   const rows = (await getStore().list(RESOURCES.politicas_comerciais, { page: 1, pageSize: 5000 })).rows;
   const hoje = dia();
   const validas = rows.filter((p) => {
-    if (p.ativo === false || (p.inicio_em && String(p.inicio_em).slice(0, 10) > hoje) || (p.fim_em && String(p.fim_em).slice(0, 10) < hoje)) return false;
+    if (p.ativo === false || (p.inicio_em && diaISO(p.inicio_em) > hoje) || (p.fim_em && diaISO(p.fim_em) < hoje)) return false;
     const canalOk = !p.canal || p.canal === 'todos' || p.canal === ctx.canal;
     if (!canalOk) return false;
     if (p.escopo === 'cliente') return !!ctx.clienteId && Number(p.cliente_id) === Number(ctx.clienteId);

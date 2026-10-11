@@ -28,6 +28,31 @@ describe('visibleModules', () => {
     expect(comPermissao.some((m) => m.id === 'politicas-comerciais')).toBe(true);
   });
 
+  it('ERP-05: o grupo Fiscal existe e concentra documentos, regras, NCM e inutilizações', () => {
+    expect(MODULE_GROUPS).toContain('Fiscal');
+    const fiscal = MODULES.filter((m) => m.group === 'Fiscal').map((m) => m.id);
+    expect(fiscal).toEqual(['documentos-fiscais', 'regras-fiscais', 'ncm', 'inutilizacoes']);
+    // Fiscal não mora mais dentro de Vendas (auditoria §17: "Fiscal está espalhado").
+    expect(MODULES.filter((m) => m.group === 'Vendas').map((m) => m.id)).not.toContain('documentos-fiscais');
+    expect(MODULES.filter((m) => m.group === 'Vendas').map((m) => m.id)).not.toContain('regras-fiscais');
+
+    // Os dois recursos que a API expunha sem tela agora têm destino navegável.
+    const ncm = MODULES.find((m) => m.id === 'ncm');
+    expect(ncm?.resource).toBe('impostos_ncm');
+    expect(ncm?.minPerfil).toBe('gerente'); // igual ao minPerfil do recurso no servidor
+    const inut = MODULES.find((m) => m.id === 'inutilizacoes');
+    expect(inut?.resource).toBe('inutilizacoes_fiscais');
+    expect(inut?.minPerfil).toBe('gerente');
+  });
+
+  it('operador não vê os módulos fiscais restritos a gerente', () => {
+    const visiveis = visibleModules({ perfil: 'operador' }).map((m) => m.id);
+    expect(visiveis).not.toContain('ncm');
+    expect(visiveis).not.toContain('inutilizacoes');
+    expect(visiveis).not.toContain('regras-fiscais');
+    expect(visiveis).toContain('documentos-fiscais'); // sem minPerfil: qualquer perfil com RBAC lê
+  });
+
   it('registra o esqueleto completo de Commerce, Creators e Delivery', () => {
     expect(MODULE_GROUPS).toEqual(expect.arrayContaining(['Gestão de Commerce', 'Ecossistema Creators']));
 

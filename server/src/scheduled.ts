@@ -28,6 +28,7 @@ import { processarRecorrencias } from './financeiro';
 import { atualizarMotorNegocios } from './negocios';
 import type { Request, Response } from 'express';
 import { currentUser } from './auth';
+import { diaISO } from './utils';
 
 const fmtMoney = (n: number) => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtNumber = (n: number) => n.toLocaleString('pt-BR');
@@ -143,7 +144,7 @@ async function relatorioVendas(): Promise<void> {
   const desdeStr = desde.toISOString().slice(0, 10);
 
   const vendas = await s.list(getResource('vendas')!, { page: 1, pageSize: 1000, sort: 'faturada_em', dir: 'desc' });
-  const faturadas = vendas.rows.filter((v) => ['faturada', 'entregue'].includes(String(v.status)) && String(v.faturada_em || '').slice(0, 10) >= desdeStr);
+  const faturadas = vendas.rows.filter((v) => ['faturada', 'entregue'].includes(String(v.status)) && diaISO(v.faturada_em) >= desdeStr);
 
   const totalVendas = faturadas.reduce((s, v) => s + Number(v.total || 0), 0);
   const totalComissao = faturadas.reduce((s, v) => s + Number(v.comissao_valor || 0), 0);
@@ -168,7 +169,7 @@ async function relatorioVendas(): Promise<void> {
     <table style="width:100%;border-collapse:collapse;font-size:12px;">
       <thead><tr style="background:#f7f9fc;"><th style="padding:6px;text-align:left;">#</th><th style="padding:6px;text-align:left;">Data</th><th style="padding:6px;text-align:right;">Total</th><th style="padding:6px;text-align:left;">Status</th></tr></thead>
       <tbody>
-        ${faturadas.slice(0, 10).map((v) => `<tr><td style="padding:4px 6px;border-bottom:1px solid #eee;">#${v.id}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;">${String(v.faturada_em || v.data || '').slice(0, 10)}</td><td style="padding:4px 6px;text-align:right;border-bottom:1px solid #eee;font-weight:bold;">R$ ${fmtMoney(Number(v.total || 0))}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;">${v.status}</td></tr>`).join('')}
+        ${faturadas.slice(0, 10).map((v) => `<tr><td style="padding:4px 6px;border-bottom:1px solid #eee;">#${v.id}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;">${diaISO(v.faturada_em || v.data)}</td><td style="padding:4px 6px;text-align:right;border-bottom:1px solid #eee;font-weight:bold;">R$ ${fmtMoney(Number(v.total || 0))}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;">${v.status}</td></tr>`).join('')}
       </tbody>
     </table>`;
 

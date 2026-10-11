@@ -33,7 +33,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource } from './resources';
-import { checkAccess, getStore, escopoDe } from './services';
+import { checkAccess, checkFluxo, getStore, escopoDe } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
 import { labelOf, type Row, type Tx } from './store';
@@ -840,7 +840,14 @@ export async function cancelarDocumento(req: Request, res: Response) {
 /** POST /api/fiscal/inutilizar — inutiliza faixa de numeração. */
 export async function inutilizarNumeracao(req: Request, res: Response) {
   const actor = currentUser(req);
-  checkAccess(R_INUT(), actor, 'create');
+  // P1-03 (ERP-05): aqui era `checkAccess(..., 'create')` sobre um recurso com
+  // `ops.create = false` — a checagem devolvia **405** ANTES de qualquer coisa,
+  // então a inutilização nunca funcionou por esta rota (nem no memdb, nem no
+  // PostgreSQL), em nenhum perfil. A alçada correta é a de FLUXO: `ops` fechado
+  // existe para impedir que o CRUD genérico escreva nesta tabela por fora do
+  // fluxo; o endpoint É o caminho legítimo. `checkFluxo` mantém minPerfil
+  // (gerente) e adminOnly, sem consultar `ops`.
+  checkFluxo(R_INUT(), actor);
   const escopo = escopoDe(actor);
   const s = getStore();
   const body = (req.body || {}) as Record<string, unknown>;

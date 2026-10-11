@@ -31,10 +31,11 @@ import { getResource, type Resource } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, exigirReautenticacao, type AuthUser } from './auth';
 import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, empresaDoRegistroAudit, empresaExplicitaAudit } from './empresa';
-import { round2 } from './utils';
+import { round2, diaISO } from './utils';
 import { calcularLiquido, efetuarBaixa } from './financeiro';
 import { registrarEstornoComissao } from './comissoes';
 import { cifrarSegredo, decifrarSegredo, pareceCifrado } from './segredos';
+import { reportarErro } from './log';
 import type { Row, Tx } from './store';
 
 // ----------------------------------------------------------------------------
@@ -95,7 +96,9 @@ export const R_GATEWAY_COBRANCAS: Resource = {
     { name: 'copia_cola', label: 'Copia e cola', type: 'text' },
     { name: 'nsu', label: 'NSU', type: 'text' },
     { name: 'webhook_evento_id', label: 'Evento de confirmação', type: 'text' },
-    { name: 'payload', label: 'Payload', type: 'textarea' },
+    // `gateway_cobrancas.payload` é JSONB no banco (db/schema.sql): declarar
+    // como 'json' mantém o tipo do recurso igual ao da coluna.
+    { name: 'payload', label: 'Payload', type: 'json' },
     { name: 'observacoes', label: 'Observações', type: 'text' },
     { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true },
     { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', readonly: true },
@@ -117,7 +120,11 @@ export const R_GATEWAY_WEBHOOK_EVENTS: Resource = {
     { name: 'provider', label: 'Provedor', type: 'text' },
     { name: 'evento_id', label: 'Evento (id)', type: 'text' },
     { name: 'evento', label: 'Evento', type: 'text' },
-    { name: 'payload', label: 'Payload', type: 'textarea' },
+    // `gateway_webhook_events.payload` é JSONB no banco (db/schema.sql). A
+    // divergência entre o tipo declarado aqui (textarea) e a coluna real foi a
+    // origem do P0-02: o código lia o payload como texto e `String(objeto)`
+    // produzia "[object Object]".
+    { name: 'payload', label: 'Payload', type: 'json' },
     { name: 'assinatura_ok', label: 'Assinatura OK', type: 'boolean' },
     { name: 'status', label: 'Status', type: 'text' },
     { name: 'tentativas', label: 'Tentativas', type: 'integer' },
@@ -212,6 +219,12 @@ export function getProvider(id: string): PaymentProvider | null {
 
 export function listarProviders(): PaymentProvider[] {
   return [...registry.values()];
+}
+
+/** SQLSTATE de um erro do driver, sem presumir o formato do que foi lançado. */
+function codigoDoErro(e: unknown): string {
+  if (e && typeof e === 'object' && 'code' in e) return String((e as { code?: unknown }).code ?? '');
+  return '';
 }
 
 function hmacHex(segredo: string, dados: string): string {
@@ -616,7 +629,7 @@ export async function criarCobranca(req: Request, res: Response) {
     valor,
     metodo,
     descricao: body.descricao ? String(body.descricao).slice(0, 200) : lancamento ? String(lancamento.descricao) : venda ? `Venda #${venda.id}` : 'Cobrança',
-    vencimento: body.vencimento ? String(body.vencimento).slice(0, 10) : lancamento?.vencimento ? String(lancamento.vencimento).slice(0, 10) : null,
+    vencimento: body.vencimento ? String(body.vencimento).slice(0, 10) : lancamento?.vencimento ? diaISO(lancamento.vencimento) : null,
     expira_em: body.expira_em ? String(body.expira_em) : null,
     parcelas,
     payer_email: body.payer_email ? String(body.payer_email) : null,
@@ -885,12 +898,12 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
       // Registro forense + rejeição: assinatura inválida não processa nada.
       // Repetição de rejeição só atualiza o carimbo — não empilha linhas.
       const evento = jaRejeitado
-        ? await s.update(R_GATEWAY_WEBHOOK_EVENTS, Number(jaRejeitado.id), { recebido_em: new Date().toISOString(), payload: corpo.slice(0, 20000) })
+        ? await s.update(R_GATEWAY_WEBHOOK_EVENTS, Number(jaRejeitado.id), { recebido_em: new Date().toISOString(), payload: payloadParaArmazenar(corpo) })
         : await s.insert(R_GATEWAY_WEBHOOK_EVENTS, {
             provider: providerId,
             evento_id: parsed.evento_id,
             evento: parsed.evento,
-            payload: corpo.slice(0, 20000),
+            payload: payloadParaArmazenar(corpo),
             assinatura_ok: false,
             status: 'ignorado',
             erro: 'Assinatura inválida.',
@@ -903,29 +916,52 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
 
     // Persistência ANTES do processamento: mesmo que o processamento falhe,
     // o evento está gravado e entra no retry — sem duplicar (índice único).
-    const evento = await s.insert(R_GATEWAY_WEBHOOK_EVENTS, {
+    const dadosEvento = {
       empresa_id: empresaId,
       provider: providerId,
       evento_id: parsed.evento_id,
       evento: parsed.evento,
-      payload: corpo.slice(0, 20000),
+      payload: payloadParaArmazenar(corpo),
       assinatura_ok: assinaturaOk,
       status: 'recebido',
       tentativas: 0,
       recebido_em: new Date().toISOString(),
-    });
+    };
+    let evento: Row;
+    try {
+      // Notificação anterior REJEITADA (ex.: assinatura inválida) é reaproveitada
+      // em vez de inserir uma segunda linha: o índice único é (provider, evento_id),
+      // então a inserção nova violaria a trava e devolvia 202 com o nome da
+      // constraint. Rejeitar não pode envenenar o retry legítimo do provedor.
+      evento = jaRejeitado
+        ? (await s.update(R_GATEWAY_WEBHOOK_EVENTS, Number(jaRejeitado.id), dadosEvento))!
+        : await s.insert(R_GATEWAY_WEBHOOK_EVENTS, dadosEvento);
+    } catch (e) {
+      // Corrida entre duas entregas idênticas: a trava do banco deixou uma
+      // passar; a outra é duplicata por definição, não erro.
+      if (codigoDoErro(e) === '23505') return res.json({ ok: true, duplicado: true, evento_id: parsed.evento_id });
+      throw e;
+    }
 
     // ACK imediato ao provedor; processamento a seguir. Se falhar, o evento
     // fica com status 'erro' e o retry (cron/manual) tenta de novo.
     try {
-      await processarEvento(evento);
-      return res.json({ ok: true, evento_id: parsed.evento_id, processado: true });
+      const { resultado } = await processarEvento(evento);
+      // `processado` reflete o efeito real: evento sem efeito financeiro é
+      // ignorado, não "processado" (antes o ACK dizia true em qualquer caso).
+      return res.json({ ok: true, evento_id: parsed.evento_id, resultado, processado: !['ignorado', 'erro'].includes(resultado) });
     } catch (e: any) {
-      return res.json({ ok: true, evento_id: parsed.evento_id, processado: false, erro: String(e?.message || e).slice(0, 200) });
+      // O evento JÁ está persistido com status 'erro' e entra no retry. O
+      // detalhe técnico vai para o log estruturado — nunca para a resposta de
+      // um endpoint anônimo (mensagem de driver expõe tabela/coluna/constraint).
+      reportarErro(e, { rota: 'POST /api/gateway/webhooks/:provider', evento_id: parsed.evento_id });
+      return res.json({ ok: true, evento_id: parsed.evento_id, resultado: 'erro', processado: false });
     }
   } catch (e: any) {
-    // Nunca derruba o ack com 500 por erro interno não mapeado.
-    return res.status(202).json({ ok: false, erro: String(e?.message || e).slice(0, 200) });
+    // Nunca derruba o ack com 500 por erro interno não mapeado — e nunca
+    // devolve a mensagem do driver ao provedor.
+    reportarErro(e, { rota: 'POST /api/gateway/webhooks/:provider' });
+    return res.status(202).json({ ok: false, erro: 'Falha interna ao registrar o evento. A próxima tentativa do provedor reprocessa.' });
   }
 });
 
@@ -944,12 +980,12 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
     return { resultado: 'ignorado' };
   }
 
-  let payload: Record<string, unknown> = {};
-  try {
-    payload = JSON.parse(String(evento.payload || '{}')) as Record<string, unknown>;
-  } catch {
-    payload = {};
-  }
+  // O payload vem de uma coluna JSONB: o driver já o entrega como OBJETO. Ler
+  // com `String(...)` produzia "[object Object]" e o evento legítimo caía em
+  // "Nenhuma cobrança deste provedor com essa referência." (P0-02). Também
+  // aceita string JSON (modo demonstração / registros antigos gravados como
+  // texto) — a leitura nunca depende do tipo que o driver devolveu.
+  const payload = lerPayloadWebhook(evento.payload);
   const parsed: WebhookParse = { evento_id: String(evento.evento_id), evento: String(evento.evento || ''), provider_ref: extrairRefDoPayload(provider, payload) };
 
   const tentativas = Number(evento.tentativas || 0) + 1;
@@ -1003,6 +1039,45 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
 function extrairRefDoPayload(provider: PaymentProvider, payload: Record<string, unknown>): string | null {
   const parsed = provider.parseWebhook(JSON.stringify(payload));
   return parsed?.provider_ref ?? null;
+}
+
+/**
+ * Lê o payload de um evento de webhook sem presumir o tipo entregue pelo driver.
+ * A coluna é JSONB: o Postgres devolve objeto; no modo demonstração (e em
+ * registros antigos gravados como texto) chega string. `String({...})` vira
+ * "[object Object]" — foi exatamente o defeito P0-02, que fazia todo webhook de
+ * pagamento legítimo terminar em 'ignorado'.
+ */
+export function lerPayloadWebhook(bruto: unknown): Record<string, unknown> {
+  if (bruto === null || bruto === undefined) return {};
+  if (Buffer.isBuffer(bruto)) return lerPayloadWebhook(bruto.toString('utf8'));
+  if (typeof bruto === 'object') return bruto as Record<string, unknown>;
+  const texto = String(bruto);
+  if (!texto.trim()) return {};
+  try {
+    const valor = JSON.parse(texto);
+    return valor && typeof valor === 'object' ? (valor as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Prepara o corpo cru para a coluna JSONB `payload`. Corpo JSON vira o objeto
+ * (é o que a coluna guarda de fato — permite consultar `payload->>'data'`);
+ * corpo não-JSON (form-encoded, texto) é preservado dentro do envelope
+ * `{ bruto }`, porque uma coluna JSONB não aceita texto puro.
+ */
+export function payloadParaArmazenar(corpo: unknown): Record<string, unknown> {
+  const texto = Buffer.isBuffer(corpo) ? corpo.toString('utf8') : String(corpo ?? '');
+  const limitado = texto.slice(0, 20_000);
+  try {
+    const valor = JSON.parse(limitado);
+    if (valor && typeof valor === 'object') return valor as Record<string, unknown>;
+  } catch {
+    // corpo não-JSON: mantém a evidência no envelope abaixo
+  }
+  return { bruto: limitado };
 }
 
 function intencaoDoPayload(payload: Record<string, unknown>): IntencaoWebhook {

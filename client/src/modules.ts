@@ -49,6 +49,8 @@ import {
   Scale,
   FileText,
   FileUp,
+  FileMinus,
+  BadgeDollarSign,
 } from 'lucide-react';
 
 export type Module = {
@@ -195,8 +197,11 @@ export const MODULES: Module[] = [
   { id: 'clientes', label: 'Clientes', icon: Store, group: 'Vendas', path: '/clientes', resource: 'clientes', description: 'Lojas e atacadistas que compram de você.' },
   { id: 'representantes', label: 'Representantes', icon: Handshake, group: 'Vendas', path: '/representantes', resource: 'representantes', description: 'Vendedores externos, regiões e comissões.' },
   { id: 'catalogos', label: 'Catálogos públicos', icon: Share2, group: 'Vendas', path: '/catalogos', resource: 'catalogos', description: 'Compartilhe produtos com preço por link — sem login para o cliente.' },
-  { id: 'regras-fiscais', label: 'Regras fiscais', icon: Scale, group: 'Vendas', path: '/regras-fiscais', resource: 'regras_fiscais', minPerfil: 'gerente', description: 'CFOP, CST/CSOSN e alíquotas por NCM, UF e operação — sem alíquota escrita no código.' },
-  { id: 'documentos-fiscais', label: 'Documentos fiscais', icon: FileText, group: 'Vendas', path: '/documentos-fiscais', resource: 'documentos_fiscais', description: 'NF-e e NFC-e emitidas, rejeitadas ou pendentes, com chave, protocolo e DANFE.' },
+  // 🧾 Fiscal — grupo próprio (ERP-05): a tributação é um domínio, não um anexo de Vendas.
+  { id: 'documentos-fiscais', label: 'Documentos fiscais', icon: FileText, group: 'Fiscal', path: '/documentos-fiscais', resource: 'documentos_fiscais', description: 'NF-e e NFC-e emitidas, rejeitadas ou pendentes, com chave, protocolo e DANFE.' },
+  { id: 'regras-fiscais', label: 'Regras fiscais', icon: Scale, group: 'Fiscal', path: '/regras-fiscais', resource: 'regras_fiscais', minPerfil: 'gerente', description: 'CFOP, CST/CSOSN e alíquotas por NCM, UF e operação — sem alíquota escrita no código.' },
+  { id: 'ncm', label: 'NCM / Tributação', icon: Calculator, group: 'Fiscal', path: '/ncm', resource: 'impostos_ncm', minPerfil: 'gerente', description: 'Alíquotas por NCM usadas pelo motor de impostos de cada venda: chave mais longa vence, chave vazia é a padrão.' },
+  { id: 'inutilizacoes', label: 'Inutilizações', icon: FileMinus, group: 'Fiscal', path: '/inutilizacoes', resource: 'inutilizacoes_fiscais', minPerfil: 'gerente', description: 'Comunicação à SEFAZ das faixas de numeração que não serão usadas, com protocolo e status reais.' },
   { id: 'listas-preco', label: 'Listas de preço', icon: Tags, group: 'Vendas', path: '/listas-preco', resource: 'listas_preco', minPerfil: 'gerente', description: 'Tabelas de preço por produto e variação, com vigência, prioridade e histórico. O preço usado na venda é gravado no item e nunca recalculado.' },
   { id: 'propostas', label: 'Propostas comerciais', icon: FileText, group: 'Vendas', path: '/propostas', resource: 'propostas', description: 'Rascunho → enviada → aprovada → convertida em pedido. A conversão é idempotente: uma proposta nunca vira dois pedidos.' },
   { id: 'pdv-caixas', label: 'Caixas do PDV', icon: CreditCard, group: 'Vendas', path: '/pdv-caixas', resource: 'pdv_caixas', minPerfil: 'gerente', description: 'Abertura e fechamento de caixa, suprimentos, sangrias e a diferença entre o esperado e o contado.' },
@@ -234,6 +239,16 @@ export const MODULES: Module[] = [
   { id: 'centros-custo', label: 'Centros de custo', icon: PieChart, group: 'Financeiro', path: '/centros-custo', resource: 'centros_custo', minPerfil: 'gerente', description: 'Rateio gerencial por área: Loja, Produção/Facção, Administrativo, Marketing.' },
   { id: 'investidores', label: 'Investidores / Sócios', icon: PiggyBank, group: 'Financeiro', path: '/investidores', resource: 'investidores', minPerfil: 'gerente', description: 'Quem aporta capital, participação e distribuição de lucros.' },
   { id: 'aportes', label: 'Aportes', icon: Wallet, group: 'Financeiro', path: '/aportes', resource: 'aportes', minPerfil: 'gerente', description: 'Capital inicial, aportes, reinvestimento e empréstimo de sócio.' },
+  {
+    id: 'comissoes',
+    label: 'Comissões',
+    icon: BadgeDollarSign,
+    group: 'Financeiro',
+    path: '/comissoes',
+    minPerfil: 'gerente',
+    description:
+      'Apuração por representante, efetivada conforme o recebimento da venda, com estornos e livro por venda.',
+  },
   { id: 'recorrencias-financeiras', label: 'Recolhimentos e recorrências', icon: Repeat, group: 'Financeiro', path: '/recorrencias-financeiras', resource: 'recorrencias_financeiras', minPerfil: 'gerente', description: 'Despesas/receitas fixas: aluguel, energia, folha, facção, assinaturas — geradas automaticamente.' },
 
   // 📊 Relatórios & Auditoria
@@ -265,6 +280,7 @@ export const MODULE_GROUPS = [
   'Produção',
   'Logística & Expedição',
   'Financeiro',
+  'Fiscal',
   'Relatórios',
   // COMMERCE / INTEGRAÇÕES — seção separada, recolhida por padrão.
   'Integrações',
@@ -285,6 +301,7 @@ export const GROUP_META: Record<ModuleGroup, { icon: LucideIcon; /** seção da 
   Produção: { icon: Factory, section: 'erp' },
   'Logística & Expedição': { icon: Truck, section: 'erp' },
   Financeiro: { icon: Wallet, section: 'erp' },
+  Fiscal: { icon: Scale, section: 'erp' },
   Relatórios: { icon: BarChart3, section: 'erp' },
   Integrações: { icon: Plug, section: 'commerce' },
   'Gestão de Commerce': { icon: ShoppingBag, section: 'commerce' },
@@ -293,7 +310,7 @@ export const GROUP_META: Record<ModuleGroup, { icon: LucideIcon; /** seção da 
 };
 
 /** Módulos que usam página própria (não CRUD genérico nem PlannedModule). */
-export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 'financeiro', 'pdv', 'expedicao', 'cotacoes-compra', 'sugestao-compra', 'devolucoes', 'envios'] as const;
+export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 'financeiro', 'pdv', 'expedicao', 'cotacoes-compra', 'sugestao-compra', 'devolucoes', 'envios', 'ncm', 'inutilizacoes', 'comissoes'] as const;
 
 /** Módulos cuja listagem abre diretamente a página de detalhe. */
 export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);

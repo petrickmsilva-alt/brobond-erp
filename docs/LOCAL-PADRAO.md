@@ -15,6 +15,17 @@
    (e houver outro local ativo), o primeiro local ativo restante assume a
    função.
 
+2.1. **Empresa sem nenhum local (instalação nova).** Na primeira operação que
+   dependa do local (receber compra, faturar venda, movimentar estoque, abrir
+   inventário, importar saldo, PDV, produção), o sistema **cria** o Local padrão
+   **"Loja"** (ativo, marcado como padrão) e segue o fluxo — sem SQL manual e sem
+   parada para cadastro. O ato fica na trilha de auditoria (`usuario: sistema`,
+   `acao: criar`, `recurso: locais`). A regra é estreita de propósito: só
+   provisiona quando a empresa **não tem local algum**. Se existir local
+   cadastrado, nada é criado — inclusive quando todos estão inativos: aí a
+   operação responde o 409 pedindo um local ativo, porque a decisão de não ter
+   local ativo é do administrador.
+
 ## Gestão livre (decisão do administrador)
 
 O local **não fica preso ao sistema**: pode ser **incluído, alterado e
@@ -28,8 +39,8 @@ movimentações, inventários, vendas). A decisão é do **administrador**:
 - **Excluir** um local em uso desfaz apenas os vínculos (`local_id` → vazio);
   saldos, movimentações e inventários **permanecem** no sistema com o nome do
   local como histórico — nada é apagado. Se o local excluído era o padrão,
-  o primeiro local ativo restante assume (ou, não havendo nenhum, os fluxos
-  usam `"loja"` como último recurso).
+  o primeiro local ativo restante assume (ou, não havendo nenhum, a próxima
+  operação de estoque reprovisiona o Local padrão "Loja" — ver 2.1).
 - **Gerentes** continuam podendo incluir/alterar locais e excluir locais sem
   uso. Excluir/renomear um local **em uso** — ou excluir o **último local
   ativo** — é decisão exclusiva do administrador (erro 403 para os demais).
@@ -39,7 +50,8 @@ movimentações, inventários, vendas). A decisão é do **administrador**:
 
 3. **Fallback (mesmo sem marcar nada):** se nenhum local estiver marcado como
    `padrao`, o sistema usa o **primeiro local ativo** (por nome); se não houver
-   nenhum, usa `"loja"` por segurança.
+   nenhum cadastrado, provisiona o "Loja" (2.1); se houver cadastrados e nenhum
+   ativo, responde 409 pedindo que se escolha um local ativo.
 
 ## Onde o Local padrão é aplicado
 
@@ -61,9 +73,24 @@ os formulários já com o Local padrão pré-selecionado.
   sem novo módulo.
 - A coluna `padrao` é uma flag simples; a regra de "apenas um padrão" é aplicada
   no servidor (`services.ts`), então vale para API, planilha e UI.
-- O nome do local padrão é configurável; sem nenhum cadastro ativo, os fluxos
-  que criam estoque usam `"loja"` por segurança (**último fallback**), para
-  nunca quebrar um banco legado.
+- O nome do local padrão é configurável; sem nenhum cadastro, os fluxos que
+  criam estoque **provisionam o "Loja"** (2.1) em vez de gravar saldo com texto
+  solto — assim todo saldo nasce com `local_id` canônico, inclusive num banco
+  legado ou numa instalação nova. (O texto `local` continua sendo preenchido em
+  paralelo para compatibilidade com relatórios e histórico.)
+
+## Provisionamento automático (ERP-03)
+
+| Situação da empresa | Comportamento |
+|---|---|
+| **Nenhum local cadastrado** | a primeira operação de estoque cria o Local padrão **"Loja"** (ativo, `padrao=true`), registra na auditoria e continua o fluxo |
+| Locais cadastrados, com padrão ativo | usa o padrão (ou o primeiro ativo, se nenhum marcado) |
+| Locais cadastrados, nenhum ativo | **409** explicativo: cadastre/ative um local — nada é criado |
+| Mais de um local marcado como padrão | **409** (estado inconsistente, exige correção do cadastro) |
+
+Corrida coberta: dois pedidos simultâneos na primeira operação tentam criar o
+"Loja"; os índices `uq_e42_locais_empresa_nome` e `uq_e42_locais_padrao_empresa`
+deixam passar um só e quem perde relê o local criado pelo vencedor.
 
 ## Migração
 

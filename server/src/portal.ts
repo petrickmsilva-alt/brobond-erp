@@ -7,6 +7,7 @@ import { getStore } from './services';
 import { labelOf, type Row } from './store';
 import { attachImages } from './uploads';
 import { normalizarOrigem, urlBasePublicaAsync } from './urlPublica';
+import { diaISO } from './utils';
 
 const RATE_LIMIT = 60;
 const JANELA_MS = 10 * 60 * 1000;
@@ -60,7 +61,7 @@ const statusLabels: Record<string, string> = { cotacao: 'Aguardando sua decisão
 export async function portalPedidos(req: Request, res: Response) {
   const { cliente, acesso } = await autenticar(String(req.params.token || ''));
   const vendas = await getStore().list(RESOURCES.vendas, { page: 1, pageSize: 200, sort: 'data', dir: 'desc', filter: { cliente_id: Number(cliente.id) } });
-  const pedidos = vendas.rows.map((v) => ({ id: Number(v.id), data: String(v.data || '').slice(0, 10), status: String(v.status), status_label: statusLabels[String(v.status)] || v.status, total: Number(v.total || 0), previsao_entrega: v.previsao_entrega ? String(v.previsao_entrega).slice(0, 10) : null, faturada_em: v.faturada_em || null, condicao_pagamento: v.condicao_pagamento || null }));
+  const pedidos = vendas.rows.map((v) => ({ id: Number(v.id), data: diaISO(v.data), status: String(v.status), status_label: statusLabels[String(v.status)] || v.status, total: Number(v.total || 0), previsao_entrega: v.previsao_entrega ? diaISO(v.previsao_entrega) : null, faturada_em: v.faturada_em || null, condicao_pagamento: v.condicao_pagamento || null }));
   res.json({ cliente: { id: Number(cliente.id), nome: cliente.nome, email: cliente.email || null }, acesso_seguro: !!acesso, total_pedidos: pedidos.length, pedidos });
 }
 
@@ -80,7 +81,7 @@ export async function portalPedidoDetalhe(req: Request, res: Response) {
   const tam = new Map(tamanhos.rows.map((t) => [Number(t.id), String(t.codigo || '')]));
   const prod = new Map(produtos.rows.map((p) => [Number(p.id), p]));
   const linhas = itens.rows.map((it) => { const p = prod.get(Number(it.produto_id)); return { produto_id: Number(it.produto_id), produto: p ? labelOf(RESOURCES.produtos, p) : `#${it.produto_id}`, sku: p?.sku || '', tamanho_id: Number(it.tamanho_id), tamanho: tam.get(Number(it.tamanho_id)) || '', quantidade: Number(it.quantidade || 0), preco_unitario: Number(it.preco_unitario || 0), desconto_pct: Number(it.desconto_pct || 0), subtotal: Number(it.subtotal || 0), foto: p?.foto_url || null }; });
-  res.json({ id: pedidoId, data: String(venda.data || '').slice(0, 10), status: String(venda.status), status_label: statusLabels[String(venda.status)] || venda.status, total: Number(venda.total || 0), frete: Number(venda.frete || 0), desconto: Number(venda.desconto || 0), previsao_entrega: venda.previsao_entrega || null, condicao_pagamento: venda.condicao_pagamento || null, observacoes: venda.observacoes || null, pode_decidir: venda.status === 'cotacao', itens: linhas, documentos: [
+  res.json({ id: pedidoId, data: diaISO(venda.data), status: String(venda.status), status_label: statusLabels[String(venda.status)] || venda.status, total: Number(venda.total || 0), frete: Number(venda.frete || 0), desconto: Number(venda.desconto || 0), previsao_entrega: venda.previsao_entrega || null, condicao_pagamento: venda.condicao_pagamento || null, observacoes: venda.observacoes || null, pode_decidir: venda.status === 'cotacao', itens: linhas, documentos: [
     venda.nfe_numero ? { tipo: 'NF-e', referencia: String(venda.nfe_numero) } : null,
     venda.fin_documento ? { tipo: 'Financeiro', referencia: String(venda.fin_documento) } : null,
   ].filter(Boolean), decisoes: decisoes.rows.map((d) => ({ decisao: d.decisao, responsavel: d.responsavel, mensagem: d.mensagem, criado_em: d.criado_em })) });

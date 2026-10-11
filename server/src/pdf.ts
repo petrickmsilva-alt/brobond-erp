@@ -17,13 +17,15 @@ import { currentUser } from './auth';
 import { parseId } from './validate';
 import { labelOf } from './store';
 import { attachImages } from './uploads';
-import { round2 } from './utils';
+import { round2, diaISO } from './utils';
 
 const fmtMoney = (n: number) =>
   n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtDate = (v: unknown) => {
   if (!v) return '—';
-  const s = String(v);
+  // `Date` (o que o driver do Postgres entrega) não casa com o ISO abaixo —
+  // normaliza antes para não imprimir "Wed Oct 01" no documento.
+  const s = diaISO(v) || String(v);
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
   if (m) return `${m[3]}/${m[2]}/${m[1]}`;
   return s.slice(0, 10);

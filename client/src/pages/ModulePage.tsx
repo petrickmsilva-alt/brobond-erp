@@ -70,6 +70,9 @@ const UsuariosPage = lazy(() => import('./UsuariosPage'));
 const WebhooksPage = lazy(() => import('./WebhooksPage'));
 const ConectorPage = lazy(() => import('./ConectorPage'));
 const CommerceModulePage = lazy(() => import('./CommerceModulePage'));
+const NcmPage = lazy(() => import('./NcmPage'));
+const ComissoesPage = lazy(() => import('./ComissoesPage'));
+const InutilizacoesPage = lazy(() => import('./InutilizacoesPage'));
 
 const PAGE_SIZE = 25;
 
@@ -102,6 +105,9 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'sugestao-compra') return <Suspense fallback={<SubPageLoading />}><SugestaoCompraPage /></Suspense>;
   if (module.id === 'devolucoes') return <Suspense fallback={<SubPageLoading />}><DevolucoesPage /></Suspense>;
   if (module.id === 'envios') return <Suspense fallback={<SubPageLoading />}><LogisticaPage /></Suspense>;
+  if (module.id === 'ncm') return <Suspense fallback={<SubPageLoading />}><NcmPage /></Suspense>;
+  if (module.id === 'comissoes') return <Suspense fallback={<SubPageLoading />}><ComissoesPage /></Suspense>;
+  if (module.id === 'inutilizacoes') return <Suspense fallback={<SubPageLoading />}><InutilizacoesPage /></Suspense>;
 
   if (!module.resource || !resource) return <PlannedModule module={module} />;
   return <ResourceCrud key={resource.key} module={module} resource={resource} />;

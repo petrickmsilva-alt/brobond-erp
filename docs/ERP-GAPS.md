@@ -35,6 +35,137 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
 > aguarda decisão humana.
 
+> **Atualização ERP-06 (2026-10-11) — P1-05 FECHADO (Comissões com tela e número conferido).**
+> O cálculo já existia e já estava testado (`comissoes.ts` + `financeiro-p2.test.ts`); faltava
+> **superfície**: nenhuma entrada em `MODULES`, nenhum consumo no cliente (só o relatório dentro de
+> `RelatoriosPage`). Entrou a tela `/comissoes` (grupo Financeiro, `minPerfil: gerente`) com período,
+> cards de **apurada · efetivada · estornada · saldo**, tabela por representante, drill-down das vendas
+> do período e **livro de eventos** por venda. O botão **"Conferir com o relatório"** executa o critério
+> de aceite do ciclo: compara a soma da tela com o relatório `comissoes` no MESMO período e mostra o
+> resultado (inclusive divergência). **Nenhum estado novo foi inventado:** não existe "comissão paga"
+> no servidor e a tela não criou um — a efetivação é pelo recebimento (parcial: parte proporcional;
+> cancelamento: estorno). Evidência executada: `server/test/pg/comissoes-e2e.test.ts` em **banco novo**
+> (igualdade tela × relatório com tolerância zero; apurada 100 / efetivada 0 antes do recebimento; baixa
+> parcial 400 ⇒ efetivada 40 com pendente 60 e `base = 400` no evento; quitação ⇒ efetivada 100;
+> cancelamento ⇒ estornada 100, saldo 0 e **3 eventos** preservados), `ComissoesPage.test.tsx` **8/8**,
+> `client` **254/254**, `server` **748** (685 pass · 0 fail · 63 skip), typecheck 0, lint **0 erros**
+> (406 warnings), build OK, `audit:menu` **0 erros / 4 avisos** (69 módulos / 13 grupos). Sem migration,
+> sem tabela nova, sem tocar o Commerce. Estado do ciclo:
+> [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
+> **Atualização ERP-05 (2026-10-11) — P1-02 e P1-03 FECHADOS (Fiscal operacional).**
+> O módulo Fiscal passou a ser operável e, no caminho, apareceu um defeito que **nenhum teste cobria**:
+> `POST /api/fiscal/inutilizar` respondia **405 para TODO perfil**, porque `inutilizarNumeracao` chamava
+> `checkAccess(..., 'create')` sobre um recurso com `ops.create = false` (`server/src/fiscal.ts:843`) —
+> a checagem devolve 405 **antes** de qualquer validação, consulta ao provedor ou gravação, então a
+> tabela `inutilizacoes_fiscais` era **inalcançável por HTTP** (repro preservada: `/tmp/aud-inut.mts`,
+> gerente + provedor falso → `405`, **0 registros**). A alçada correta é a de **fluxo**
+> (`checkFluxo`, o mesmo padrão de `expedicao.ts`/`pdv.ts`): mantém `minPerfil` (gerente) e `adminOnly`,
+> **não** consulta `ops` e **não** abre o CRUD genérico — `ops` de `inutilizacoes_fiscais` continua
+> fechado. Telas novas: **NCM / Tributação** (`/ncm`, CRUD de `impostos_ncm`, linha PADRÃO destacada e
+> aviso da alíquota padrão vigente) e **Inutilizações** (`/inutilizacoes`, faixa + justificativa ≥ 15 e
+> histórico com protocolo/status reais), no **grupo Fiscal** novo (documentos-fiscais e regras-fiscais
+> saíram de Vendas). Evidência executada: `server/test/fiscal.test.ts` **24/24** (5 testes novos: `200`
+> homologado com protocolo · `202` "ainda não homologou" · provedor nulo · `403` do operador ·
+> validações da SEFAZ), `server/test/pg/fiscal-inutilizacao-e2e.test.ts` em **banco novo** (persistência
+> com empresa/faixa/justificativa/**autor**, histórico pela API, CHECK do banco recusando justificativa
+> curta, `403` do operador), telas **10/10** e **8/8**, e **mutação**: com
+> `checkAccess(..., 'create')` de volta os três testes do fluxo falham com `405 !== 200/202`.
+> `audit:menu`: **0 `[RECURSO_SEM_MENU]`** (68 módulos / 13 grupos). Bateria completa em **banco novo**:
+> `test:pg` **127 testes · 126 pass · 0 fail · 1 todo** (P1-11) · `smoke:pg` **126/126** · regressão
+> `server` **748** (685 pass · 0 fail · 63 skip) · `client` **246/246** · typecheck 0 · lint 0 erros
+> (401 warnings) · build OK. Sem migration, sem tabela nova, sem tocar o Commerce. Estado do ciclo: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
+> **Atualização ERP-04 (2026-10-11) — P0-03/P1-07 FECHADOS (BI = ERP).**
+> Decisão registrada em [ADR-001](ADR-001-FONTE-UNICA-FATURAMENTO.md): `sales`
+> passa a ser modelo de leitura derivado, alimentado por uma projeção
+> idempotente `vendas → sales` no namespace `erp:` — decisão (B), que substitui
+> a recomendação preliminar (A) com justificativa (ADR §2). Sem migration e sem
+> tocar a ingestão de canais externos. O critério de igualdade
+> (/negocios/resumo × /relatorios/faturamento, tolerância zero) revelou e fez
+> corrigir **8 pontos** de `relatorios.ts` que comparavam `String(Date).slice(0,10)`
+> contra a data pedida — em PostgreSQL o filtro `?de=&ate=` **descartava linhas
+> reais**; `comissoes.ts:261` tinha o mesmo defeito e foi corrigido no ciclo seguinte
+> (**P1-13** fechado em 2026-10-11: `utils.diaISO` como normalização única).
+> Provas: `server/test/pg/bi-faturamento-e2e.test.ts` (banco novo; BI 20000 ×
+> relatório 20000; ABC classe A; canal externo intacto) e
+> `server/test/negocios-projecao-erp.test.ts` (paridade em memória 3/3).
+
+> **Auditoria independente ERP-01…ERP-04 (2026-10-11) — GATE APROVADO COM RESSALVAS (P2).**
+> Executada sobre `bb17f19` com **6 provas por mutação** em PostgreSQL real (arquivo do fix
+> revertido ⇒ o teste do ciclo falha: `gateway.ts`, `producao.ts`+`pgstore.ts`, `services.ts`,
+> `db/schema.sql` com o mesmo EAN em duas empresas, `negocios.ts`, `relatorios.ts`), bateria
+> completa em **banco novo** (`test:pg` **123 pass / 0 fail / 1 todo**) e CI verde incluindo a
+> etapa nova de smoke. Achados registrados: **P2-08** (projeção com zero
+> usuários ativos → `23503` na FK de `sale_items` e `400` enganoso na via sob demanda —
+> **fechado em 2026-10-11** com prova PG e mutação) e
+> **P2-09** (`test:pg` não é repetível em banco reaproveitado — CNPJ de teste com 4–6 dígitos
+> efetivos no índice `uq_empresas_cnpj`) — **aberto**; a documentação do ADR-001 §4/§5 e a linha P1-14 foram
+> corrigidas (o fallback de responsável é global, sem vazamento entre empresas nas telas atuais).
+> Documento: [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md).
+
+> **Atualização ERP-03 (2026-10-11) — P0-04 FECHADO; P0-05 descoberto e fechado.**
+> O gate virou executável: `npm run smoke:pg` (`scripts/smoke-pg.mjs`) cria um
+> **banco novo**, sobe a API real nele e roda o smoke E2E — **126/126 sem um único
+> SQL manual** (era 92/117 em banco novo e 119/126 com o local semeado à mão) — e a
+> etapa entrou no job `testes-postgres` do CI. O onboarding foi corrigido na raiz:
+> empresa sem **nenhum** local recebe o Local padrão "Loja" na primeira operação de
+> estoque (com entrada na trilha de auditoria); empresa com locais (mesmo inativos)
+> continua recebendo o 409 explicativo. O contrato **tipo × coluna** dos 88
+> recursos passou a ser teste executável (existência, tipo, unicidade e interface,
+> com prova de mutação) e reprovou 7 declarações que mentiam sobre o banco — todas
+> alinhadas. O teste A/B multiempresa (risco R6, antes NÃO TESTADO) revelou o
+> **P0-05**: o `db/schema.sql` recriava a cada boot o índice **global**
+> `uq_produtos_codigo_barras`; com o mesmo código de barras em duas empresas
+> (estado legítimo desde a 0018) o **boot falhava** e a API não subia — removido,
+> com prova `MIGRATE FALHOU` → `MIGRATE OK`. **CI do PR #49 verde nos dois jobs**
+> (`verificar` e `testes-postgres`, run 38146107860 — o job PG já executava a
+> etapa nova do smoke). Achados novos ainda abertos:
+> **P1-12** (payload fiscal truncado), **P2-07** (`/health` antes das migrações) e
+> **P3-08** (`audit()` sem `tx` → 40001). Detalhe:
+> [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
+> **Atualização ERP-02 (2026-10-11) — P0-01 FECHADO (estorno/reabertura de OP).**
+> `estornarOrdem` chamava `adjustStock` (padrão `INSERT ... ON CONFLICT DO UPDATE`)
+> com delta **negativo**: o CHECK `estoques_quantidade_nao_negativo` avalia o tuple
+> **proposto** antes de o conflito resolver, então a reabertura devolvia SQLSTATE
+> **23514 → HTTP 500** mesmo com saldo suficiente na linha correta. O estorno passou
+> a usar `tryAdjustStock` (UPDATE condicional com row lock) e o saldo insuficiente
+> virou **409 explicativo**; `translatePgError` passou a traduzir **23514 → 409**
+> sem vazar nome de constraint. **Evidência executada:** antes/depois no mesmo
+> teste (`{"error":"Erro interno do servidor"}` → `200`), fluxo completo da OP pela
+> API em PostgreSQL real (estoque, insumos, apontamentos, trilha, rollback quando o
+> saldo não cobre), `test:pg` **114 pass / 0 fail / 1 todo** (115 testes),
+> `server test` 671/0, `client test` 226, smoke demo **126/126** e — o termômetro da
+> auditoria — **smoke contra PostgreSQL real: 119/126 → 126/126**. O P1-02
+> (`OP cancelada é terminal` respondendo 500) era cascata do mesmo defeito e fechou
+> junto, sem código próprio. Risco residual preventivo registrado como **P3-07**
+> (`adjustInsumoStock` usa o mesmo padrão, hoje sem CHECK que o dispare). **CI do
+> PR #49 verde nos dois jobs** (`verificar` e `testes-postgres`, run 38140231798).
+> Estado do ciclo: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
+> **Atualização ERP-01 (2026-10-11) — primeiro ciclo do roadmap (P0-02 FECHADO).**
+> O webhook de pagamento volta a confirmar cobrança em PostgreSQL: causa-raiz era
+> a leitura de uma coluna **JSONB** com `JSON.parse(String(payload))`
+> (`server/src/gateway.ts` → `"[object Object]"` → evento `'ignorado'`, cobrança
+> presa em `'pendente'`), somada a uma segunda linha inserida no retry que batia
+> em `uq_gateway_webhook_evento` e devolvia **202 com o nome da constraint** em
+> endpoint anônimo. Corrigido sem migration (ler o payload pelo tipo real,
+> reaproveitar a linha rejeitada, `23505` → `duplicado:true`, respostas anônimas
+> sem detalhe de driver, `payload` declarado `json`). **Evidência executada:**
+> antes/depois na mesma linha (`ignorado`/`pendente` → `paga`/`confirmado`),
+> HTTP real na API PostgreSQL (`wh1 → 200 paga`, `wh2 → 200 duplicado`),
+> `test:pg` **112 pass / 0 fail / 1 todo** (baseline 110), `server test` 671/0,
+> `client test` 226, smoke **126/126**, typecheck 0, lint 0 erros/401 warnings,
+> build OK; teste novo `server/test/pg/e01-gateway-webhook-postgresql.test.ts`
+> **falha com o código original e passa com a correção**. **CI do PR #49 verde
+> nos dois jobs** (`verificar` e `testes-postgres`, run 38138475476). Durante o ciclo foi
+> descoberto o gap **P1-11** (assinatura de webhook global por provedor, sem
+> empresa) — registrado em [`docs/RELATORIO-ERP-ONLY.md`](RELATORIO-ERP-ONLY.md)
+> §6/§9 e fixado como teste `todo`; **não corrigido** por depender de decisão de
+> escopo multiempresa. Estado do ciclo:
+> [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 Este é o **registro oficial do que falta**. Regra de manutenção:
 
 > Um gap só sai desta lista quando houver evidência executada — teste passando,

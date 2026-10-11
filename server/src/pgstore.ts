@@ -136,6 +136,15 @@ export function translatePgError(e: any, r?: Resource): HttpError | null {
     }
     case '23502':
       return new HttpError(400, `O campo "${e.column}" é obrigatório.`);
+    case '23514':
+      // check_violation — uma regra de consistência do banco recusou os valores
+      // (ex.: quantidade negativa). É erro de NEGÓCIO, não de servidor: responder
+      // 500 escondia a causa e vazava o nome do constraint quando o erro subia.
+      // A mensagem não cita tabela/constraint — quem precisa do detalhe é o log.
+      return new HttpError(
+        409,
+        'Os valores informados violam uma regra de consistência do sistema e nada foi gravado. Confira os campos e tente novamente.'
+      );
     case '40001':
     case '40P01':
       // serialization_failure / deadlock_detected — duas transações disputaram

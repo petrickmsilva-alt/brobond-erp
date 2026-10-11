@@ -845,7 +845,13 @@ CREATE INDEX IF NOT EXISTS idx_ordens_status        ON ordens_fabricacao (status
 CREATE INDEX IF NOT EXISTS idx_vendas_status        ON vendas (status);
 CREATE INDEX IF NOT EXISTS idx_compras_status       ON compras (status);
 CREATE INDEX IF NOT EXISTS idx_arquivos_registro    ON arquivos (recurso, registro_id, principal DESC, ordem);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_produtos_codigo_barras ON produtos (codigo_barras) WHERE codigo_barras IS NOT NULL AND codigo_barras <> '';
+-- ERP-03 (P0-05): o índice UNIQUE GLOBAL de `codigo_barras` NÃO volta a ser
+-- criado aqui. Desde a 0018 a unicidade é POR EMPRESA
+-- (`uq_produtos_codigo_barras_empresa`, criado mais abaixo e na 0018), e este
+-- CREATE rodava a cada boot ANTES do DROP daquele trecho: num banco que já tem o
+-- mesmo código de barras em duas empresas — estado legítimo desde a 0018 — o
+-- boot morria em `could not create unique index "uq_produtos_codigo_barras"` e
+-- a API não subia. O DROP mais abaixo continua limpando o índice legado.
 CREATE INDEX IF NOT EXISTS idx_produtos_categoria   ON produtos (categoria_id);
 CREATE INDEX IF NOT EXISTS idx_produtos_cor         ON produtos (cor_id);
 -- FIX 2026-09-04: índice para o filtro por coleção dos catálogos públicos

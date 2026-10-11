@@ -14,9 +14,20 @@ import { enviarArquivo, type ColunaExport } from './export';
 import type { Row } from './store';
 import { labelOf } from './store';
 import { HttpError } from './errors';
-import { round2, somaMoeda } from './utils';
+import { round2, somaMoeda, diaISO } from './utils';
 
 const FATURADAS = ['faturada', 'entregue'];
+
+/**
+ * Dia civil (AAAA-MM-DD) de um valor do store.
+ *
+ * O Postgres entrega TIMESTAMPTZ como `Date` — e `String(date).slice(0, 10)`
+ * devolveria "Wed Oct 11", o que fazia o filtro `?de=&ate=` DESCARTAR vendas
+ * reais (comparação lexicográfica de "Wed Oct 11" com "2026-10-11"). Mesma
+ * normalização que o módulo financeiro já usava (`dataISO`, financeiro.ts:41-52);
+ * valor vazio/ilegível vira '' (mesma semântica do `String(x || '')` anterior).
+ */
+
 
 function periodo(req: Request): { de: string | null; ate: string | null } {
   const de = typeof req.query.de === 'string' && req.query.de ? String(req.query.de).slice(0, 10) : null;
@@ -266,7 +277,7 @@ async function relMovimentacoes(req: Request, res: Response, escopo: EscopoEmpre
   const tNome = new Map(tamanhos.rows.map((t) => [Number(t.id), String(t.codigo || '')]));
   const linhas: Row[] = [];
   for (const m of movs.rows) {
-    const data = String(m.data || '').slice(0, 10);
+    const data = diaISO(m.data);
     if (de && data < de) continue;
     if (ate && data > ate) continue;
     if (localRow && Number(m.local_id) !== Number(localRow.id) && Number(m.local_destino_id) !== Number(localRow.id)) continue;
@@ -312,7 +323,7 @@ async function relProducao(req: Request, res: Response, escopo: EscopoEmpresa) {
   const linhas: Row[] = [];
   let totalPecas = 0;
   for (const o of ordens.rows) {
-    const data = String(o.concluida_em || o.atualizado_em || o.criado_em || '').slice(0, 10);
+    const data = diaISO(o.concluida_em || o.atualizado_em || o.criado_em);
     if (de && data < de) continue;
     if (ate && data > ate) continue;
     const pecas = Number(o.quantidade || 0);
@@ -381,7 +392,7 @@ async function relVendas(req: Request, res: Response, escopo: EscopoEmpresa) {
     agrupado.set(chave, a);
   };
   for (const v of faturadas) {
-    const data = String(v.faturada_em || v.data || '').slice(0, 10);
+    const data = diaISO(v.faturada_em || v.data);
     if (de && data < de) continue;
     if (ate && data > ate) continue;
     const total = Number(v.total || 0);
@@ -442,7 +453,7 @@ async function relABC(req: Request, res: Response, escopo: EscopoEmpresa) {
     return true;
   };
   for (const v of faturadas) {
-    const data = String(v.faturada_em || v.data || '').slice(0, 10);
+    const data = diaISO(v.faturada_em || v.data);
     if (intervalo(data)) porVenda.add(Number(v.id));
   }
   const fatPorProduto = new Map<number, number>();
@@ -544,7 +555,7 @@ async function relFaturamento(req: Request, res: Response, escopo: EscopoEmpresa
   const porAno = new Map<string, number>();
   const noIntervalo = (d: string) => d && (!de || d >= de) && (!ate || d <= ate);
   for (const v of faturadas) {
-    const dia = String(v.faturada_em || v.data || '').slice(0, 10);
+    const dia = diaISO(v.faturada_em || v.data);
     const mes = dia.slice(0, 7);
     if (!mes || !noIntervalo(dia)) continue;
     const total = Number(v.total || 0);
@@ -632,7 +643,7 @@ async function relComissoes(req: Request, res: Response, escopo: EscopoEmpresa) 
   for (const v of vendas.rows) {
     if (!FATURADAS.includes(String(v.status))) continue;
     if (!v.representante_id) continue;
-    const dataFat = String(v.faturada_em || v.data || '').slice(0, 10);
+    const dataFat = diaISO(v.faturada_em || v.data);
     if (!noIntervalo(dataFat)) continue;
     const rid = Number(v.representante_id);
     const total = Number(v.total || 0);
@@ -770,7 +781,7 @@ async function relRazao(req: Request, res: Response, escopo: EscopoEmpresa) {
   const linhas: Row[] = [];
   for (const l of lancs.rows) {
     if (String(l.status) === 'cancelado') continue;
-    const dia = String(l.data || '').slice(0, 10);
+    const dia = diaISO(l.data);
     if (de && dia < de) continue;
     if (ate && dia > ate) continue;
     const valor = Number(l.valor || 0);
@@ -842,7 +853,7 @@ async function relDRE(req: Request, res: Response, escopo: EscopoEmpresa) {
   const totalClasse = new Map<string, number>();
   for (const l of lancs.rows) {
     if (String(l.status) !== 'confirmado') continue;
-    const dia = String(l.data || '').slice(0, 10);
+    const dia = diaISO(l.data);
     if (de && dia < de) continue;
     if (ate && dia > ate) continue;
     const catId = Number(l.categoria_id || 0);

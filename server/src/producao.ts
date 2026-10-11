@@ -32,7 +32,7 @@ import { currentUser } from './auth';
 import type { Payload, Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
 import { labelOf } from './store';
-import { round2, round3 } from './utils';
+import { round2, round3, diaISO } from './utils';
 
 type Actor = { id: number | null; name: string; perfil?: string };
 type OrdemOpts = { forcar?: boolean };
@@ -554,7 +554,21 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx, escopo: EscopoEmpres
     await resolveLocal(localData, tx, escopo);
     const localId = Number(localData.local_id);
     const local = String(localData.local);
-    await s.adjustStock(produtoId, tamanhoId, local, -qtd, tx, localId, escopo.empresaId);
+    // O saldo de saída usa o primitivo com guarda DENTRO da escrita
+    // (`tryAdjustStock`). `adjustStock` monta `INSERT ... ON CONFLICT DO UPDATE`
+    // e o CHECK `estoques_quantidade_nao_negativo` avalia o tuple PROPOSTO
+    // (−qtd) antes de o conflito resolver: mesmo com saldo suficiente na linha
+    // correta, o Postgres devolvia SQLSTATE 23514 e toda reabertura virava 500
+    // (P0-01). Aqui o UPDATE é condicional (`quantidade + delta >= 0`, com row
+    // lock) e devolve null quando o saldo não cobre o estorno — erro de negócio,
+    // não de servidor.
+    const estornado = await s.tryAdjustStock(produtoId, tamanhoId, local, -qtd, tx, 0, localId, escopo.empresaId);
+    if (!estornado) {
+      throw new HttpError(
+        409,
+        `Não há saldo de ${qtd} peça(s) em "${local}" para estornar a OP #${id}. Nada foi alterado — estorne antes as movimentações que consumiram essas peças.`
+      );
+    }
     await s.insert(
       getResource('movimentacoes')!,
       {
@@ -1139,10 +1153,10 @@ export async function producaoPainel(req: Request, res: Response) {
   const mes = hoje.slice(0, 7);
   // E2: `liberada` e `parcial` são estados novos e contam como OP aberta.
   const abertas = ordens.rows.filter((o) => ['planejada', 'liberada', 'em_producao', 'parcial'].includes(String(o.status)));
-  const atrasadas = abertas.filter((o) => o.previsao && String(o.previsao).slice(0, 10) < hoje);
+  const atrasadas = abertas.filter((o) => o.previsao && diaISO(o.previsao) < hoje);
   const concluidasMes = ordens.rows.filter((o) => {
     if (String(o.status) !== 'concluida') return false;
-    const d = String(o.concluida_em || o.atualizado_em || o.criado_em || '').slice(0, 7);
+    const d = diaISO(o.concluida_em || o.atualizado_em || o.criado_em).slice(0, 7);
     return d === mes;
   });
   const pecasMes = concluidasMes.reduce((a, o) => a + pecasDa(o), 0);
@@ -1158,7 +1172,7 @@ export async function producaoPainel(req: Request, res: Response) {
   }
   for (const o of ordens.rows) {
     if (String(o.status) !== 'concluida') continue;
-    const dia = String(o.concluida_em || o.atualizado_em || o.criado_em || '').slice(0, 10);
+    const dia = diaISO(o.concluida_em || o.atualizado_em || o.criado_em);
     for (let i = semanas.length - 1; i >= 0; i--) {
       const ini = semanas[i].semana;
       const fim = i + 1 < semanas.length ? semanas[i + 1].semana : '9999-12-31';
@@ -1182,7 +1196,7 @@ export async function producaoPainel(req: Request, res: Response) {
     alertas: atrasadas.slice(0, 6).map((o) => ({
       id: Number(o.id),
       produto: produtoPorId.get(Number(o.produto_id)) || `#${o.produto_id}`,
-      previsao: o.previsao ? String(o.previsao).slice(0, 10) : null,
+      previsao: o.previsao ? diaISO(o.previsao) : null,
       quantidade: pecasDa(o),
       status: String(o.status),
     })),
@@ -1643,7 +1657,7 @@ export async function planejamentoProducao(req: Request, res: Response) {
   const noPeriodo = todas.rows.filter((o) => {
     const status = String(o.status);
     if (!['planejada', 'liberada', 'em_producao', 'parcial'].includes(status)) return false;
-    const dia = String(o.previsao || o.criado_em || '').slice(0, 10);
+    const dia = diaISO(o.previsao || o.criado_em);
     return dia >= de && dia <= ate;
   });
 
@@ -1671,19 +1685,19 @@ export async function planejamentoProducao(req: Request, res: Response) {
     const planejadas = itens.reduce((a, i) => a + i.quantidade, 0);
     const produzidas = Number(o.quantidade_produzida || 0);
     const perdidas = Number(o.quantidade_perdida || 0);
-    const dia = String(o.previsao || o.criado_em || '').slice(0, 10) || de;
+    const dia = diaISO(o.previsao || o.criado_em) || de;
     linhas.push({
       id: Number(o.id),
       produto: labelOf(getResource('produtos')!, produto),
       produto_id: Number(o.produto_id),
       status: String(o.status),
-      previsao: o.previsao ? String(o.previsao).slice(0, 10) : null,
+      previsao: o.previsao ? diaISO(o.previsao) : null,
       semana: segundaDaSemana(dia),
       planejadas,
       produzidas,
       perdidas,
       faltam: Math.max(0, planejadas - produzidas),
-      atrasada: !!o.previsao && String(o.previsao).slice(0, 10) < hoje,
+      atrasada: !!o.previsao && diaISO(o.previsao) < hoje,
       custo_previsto: Number(o.custo_previsto || 0),
       responsavel: o.responsavel_id__label ? String(o.responsavel_id__label) : null,
     });

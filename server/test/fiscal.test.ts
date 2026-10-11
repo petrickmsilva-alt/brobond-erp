@@ -314,13 +314,16 @@ test('produto sem NCM vira pendência explícita — e não vai para a SEFAZ', a
 
 const express = (await import('express')).default;
 const request = (await import('supertest')).default;
-const { emitirDocumento, situacaoFiscalVenda, salvarConfigFiscal, obterConfigFiscal } = await import('../src/fiscal');
+const { emitirDocumento, situacaoFiscalVenda, salvarConfigFiscal, obterConfigFiscal, inutilizarNumeracao } = await import(
+  '../src/fiscal'
+);
 
-function app() {
+/** `ator` permite testar alçada (o padrão é o admin dos cenários acima). */
+function app(ator: any = ADMIN) {
   const a = express();
   a.use(express.json());
   a.use((req, _res, next) => {
-    (req as any).user = { ...ADMIN, pode_consolidar: false };
+    (req as any).user = { ...ator, pode_consolidar: false };
     next();
   });
   const wrap = (fn: any) => (req: any, res: any, next: any) => Promise.resolve(fn(req, res)).catch(next);
@@ -328,6 +331,7 @@ function app() {
   a.get('/api/vendas/:id/fiscal', wrap(situacaoFiscalVenda));
   a.get('/api/fiscal/config', wrap(obterConfigFiscal));
   a.put('/api/fiscal/config', wrap(salvarConfigFiscal));
+  a.post('/api/fiscal/inutilizar', wrap(inutilizarNumeracao));
   a.use((err: any, _req: any, res: any, _next: any) => {
     res.status(err.status || 500).json({ error: err.message });
   });
@@ -496,4 +500,103 @@ test('autorização real: venda faturada, estoque baixado, financeiro lançado �
     .send({ modelo: '55' });
   assert.equal(outra.status, 409);
   assert.match(outra.body.error, /já tem NF-e autorizada/i);
+});
+
+// ---------------------------------------------------------------------------
+// P1-03 (ERP-05) — INUTILIZAÇÃO DE NUMERAÇÃO pela rota pública do módulo
+//
+// O defeito que estes testes fixam: `inutilizarNumeracao` chamava
+// `checkAccess(R_INUT(), actor, 'create')` sobre um recurso com
+// `ops.create = false`. Toda solicitação — de qualquer perfil — morria em
+// **405** antes de chegar ao provedor, e nenhum teste cobria a rota.
+// ---------------------------------------------------------------------------
+const { getResource } = await import('../src/resources');
+
+const GERENTE = { id: 1, name: 'Gerente', perfil: 'gerente' as const, empresa_id: 1, empresas: [1] };
+const OPERADOR = { id: 2, name: 'Operador', perfil: 'operador' as const, empresa_id: 1, empresas: [1] };
+
+const CORPO = {
+  modelo: '55',
+  serie: 3,
+  numero_inicial: 100,
+  numero_final: 110,
+  justificativa: 'Quebra de sequência por falha de energia no servidor',
+};
+
+test('inutilização: provedor homologa → 200, registro homologado com protocolo e autor (P1-03)', async () => {
+  provedorFalso('inutilizador', { status: 'inutilizado', protocolo: '135260000123456', mensagem: 'Inutilizacao homologada' });
+  await habilitar('inutilizador');
+
+  // O autor precisa EXISTIR: `criado_por` tem FK para `usuarios` e o handler
+  // não grava id inexistente (é o mesmo cuidado que evita 23503 em PostgreSQL).
+  const autor = await createRecord(
+    RESOURCES.usuarios,
+    { nome: 'Gerente Fiscal', email: `inut-${Date.now().toString(36)}@teste.local`, perfil: 'gerente', ativo: true },
+    ADMIN
+  );
+  const ator = { ...GERENTE, id: Number(autor.id) };
+
+  const resp = await request(app(ator)).post('/api/fiscal/inutilizar').send(CORPO);
+
+  assert.equal(resp.status, 200, `precisa sair do fluxo (antes: 405) — resposta: ${JSON.stringify(resp.body)}`);
+  assert.equal(resp.body.homologado, true);
+  assert.equal(resp.body.status, 'homologado');
+  assert.equal(resp.body.protocolo, '135260000123456');
+
+  const registro = await getStore().findOneWhere(getResource('inutilizacoes_fiscais')!, { id: Number(resp.body.id) });
+  assert.ok(registro, 'o pedido fica registrado em inutilizacoes_fiscais');
+  assert.equal(Number(registro!.empresa_id), 1, 'escopado à empresa ativa');
+  assert.equal(String(registro!.justificativa), CORPO.justificativa);
+  assert.equal(Number(registro!.numero_inicial), 100);
+  assert.equal(Number(registro!.numero_final), 110);
+  assert.equal(Number(registro!.criado_por), Number(autor.id), 'quem pediu fica gravado (FK existente)');
+  assert.equal(String(registro!.provider), 'inutilizador');
+});
+
+test('inutilização: provedor ainda processando → 202, status pendente e SEM protocolo', async () => {
+  provedorFalso('processador', { status: 'processando', mensagem: 'Em processamento na SEFAZ' });
+  await habilitar('processador');
+
+  const resp = await request(app(GERENTE)).post('/api/fiscal/inutilizar').send({ ...CORPO, numero_inicial: 200, numero_final: 205 });
+
+  assert.equal(resp.status, 202);
+  assert.equal(resp.body.homologado, false);
+  assert.equal(resp.body.status, 'pendente');
+  assert.equal(resp.body.protocolo, null);
+
+  const registro = await getStore().findOneWhere(getResource('inutilizacoes_fiscais')!, { id: Number(resp.body.id) });
+  assert.equal(String(registro!.status), 'pendente');
+});
+
+test('inutilização: sem provedor configurado o pedido é registrado e a tela sabe que não homologou', async () => {
+  const s = getStore();
+  const cfg = await s.findOneWhere(RESOURCES.empresa_fiscal_config, { empresa_id: 1 });
+  await s.update(RESOURCES.empresa_fiscal_config, Number(cfg!.id), { provider: 'nenhum', ambiente: 'homologacao', habilitado: false });
+
+  const resp = await request(app(GERENTE)).post('/api/fiscal/inutilizar').send({ ...CORPO, numero_inicial: 300, numero_final: 305 });
+
+  assert.equal(resp.status, 202, 'registrado, aguardando transmissão');
+  assert.equal(resp.body.homologado, false);
+  assert.equal(resp.body.status, 'erro', 'o provedor nulo não homologa: o status real é gravado');
+  assert.match(String(resp.body.mensagem || ''), /provedor/i);
+});
+
+test('inutilização: operador não tem alçada (403) — a autorização continua no servidor', async () => {
+  const resp = await request(app(OPERADOR)).post('/api/fiscal/inutilizar').send(CORPO);
+  assert.equal(resp.status, 403);
+  assert.match(String(resp.body.error), /gerentes e administradores/i);
+});
+
+test('inutilização: as validações da SEFAZ barram antes de registrar', async () => {
+  const curta = await request(app(GERENTE)).post('/api/fiscal/inutilizar').send({ ...CORPO, justificativa: 'curta' });
+  assert.equal(curta.status, 400);
+  assert.match(String(curta.body.error), /15 caracteres/);
+
+  const faixa = await request(app(GERENTE)).post('/api/fiscal/inutilizar').send({ ...CORPO, numero_inicial: 500, numero_final: 400 });
+  assert.equal(faixa.status, 400);
+  assert.match(String(faixa.body.error), /Faixa de numeração inválida/);
+
+  const serie = await request(app(GERENTE)).post('/api/fiscal/inutilizar').send({ ...CORPO, serie: 0 });
+  assert.equal(serie.status, 400);
+  assert.match(String(serie.body.error), /série/i);
 });

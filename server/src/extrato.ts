@@ -17,7 +17,7 @@ import { getResource } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, type AuthUser } from './auth';
 import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, empresaDoRegistroAudit } from './empresa';
-import { round2 } from './utils';
+import { round2, diaISO } from './utils';
 import { casarLinhaExtrato, efetuarBaixa, pareceOFX, parseLinhasExtrato, type LinhaExtrato } from './financeiro';
 import type { Row } from './store';
 
@@ -189,7 +189,7 @@ export async function conciliarLinhaManual(req: Request, res: Response) {
     lancId,
     {
       valor: valorLinha < valorTitulo ? valorLinha : null,
-      data: linha.data ? String(linha.data).slice(0, 10) : undefined,
+      data: linha.data ? diaISO(linha.data) : undefined,
       conta_id: linha.conta_id ?? lanc.conta_id ?? null,
       origem: 'extrato',
       nota: `Conciliação manual — linha #${linha.id} do extrato (${linha.origem})${valorLinha !== valorTitulo ? ` · valor da linha ${valorLinha.toFixed(2)} × título ${valorTitulo.toFixed(2)}` : ''}`,
