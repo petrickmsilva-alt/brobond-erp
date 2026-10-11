@@ -517,6 +517,17 @@ itens: venda não projetada **não produz itens**, sem linha parcial e sem erro.
 O `todo` da bateria continua sendo o P1-11 (escopo multiempresa da assinatura de webhook), que
 segue **aberto por decisão de arquitetura** — como registrado no ERP-01.
 
+**Smoke E2E contra PostgreSQL real (o termômetro da auditoria), reexecutado no commit deste ciclo:** `npm run
+smoke:pg` em banco novo — **126/126 · 0 FAIL** (a auditoria media **119/126** antes do ERP-01/ERP-02). Os checks
+que reprovavam e agora passam incluem `E2: POST /reabrir estorna (gerente) → 200`, `E2: reabrir descarta os
+apontamentos → 0`, `E2: OP cancelada é terminal → 409`, `webhook pago → processado` (com `cobrança ficou paga`) e
+`E3.1: cancelar compra recebida → estorno` com `custo médio restaurado`.
+
+**CI deste ciclo:** commit [`f978ef1`](https://github.com/petrickmsilva-alt/brobond-erp/commit/f978ef1) — runs
+[38154792779](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38154792779) e
+[38154789238](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38154789238) **verdes** (jobs `verificar` e
+`testes-postgres`, incluindo a etapa `Smoke E2E contra PostgreSQL novo`).
+
 ---
 
 ### ERP-05 — Fiscal operacional (sem homologação)
