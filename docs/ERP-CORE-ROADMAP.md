@@ -16,7 +16,8 @@
 | **ERP-03** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-03, abaixo |
 | **ERP-04** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-04 + [ADR-001](ADR-001-FONTE-UNICA-FATURAMENTO.md) |
 | **ERP-05** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-05 — execução abaixo · `audit:menu` **0 `RECURSO_SEM_MENU`** · P1-02 e P1-03 fechados, com **mutação** provando o 405 do P1-03 |
-| **ERP-06 … ERP-13** | ⏳ não iniciados | — |
+| **ERP-06** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-06 — execução abaixo · igualdade **tela × relatório** provada em PostgreSQL (`pg/comissoes-e2e.test.ts`) · menu **69 módulos / 13 grupos** |
+| **ERP-07 … ERP-13** | ⏳ não iniciados | — |
 | **Auditoria independente (ERP-01…04)** | ✅ **EXECUTADA** (2026-10-11) | [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md) — 6 provas por mutação + bateria em banco novo + CI verde · **GATE APROVADO COM RESSALVAS (P2)** |
 | **Ciclo P1-13 + P2-08** (ressalvas de código da auditoria) | ✅ **IMPLEMENTADO** (2026-10-11) | §5 "Ciclo P1-13 + P2-08", abaixo — prova PG + mutação para cada um; **P2-09 segue aberto** (regra de processo) |
 
@@ -600,6 +601,11 @@ recursos que a auditoria apontou ficaram navegáveis nas telas novas. **68 módu
 nenhuma porta de escrita aberta no CRUD genérico.** O `todo` da bateria continua sendo o **P1-11**
 (escopo multiempresa da assinatura de webhook), aberto por decisão de arquitetura.
 
+**CI deste ciclo:** commit [`876c46c`](https://github.com/petrickmsilva-alt/brobond-erp/commit/876c46c) — runs
+[38159564986](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38159564986) e
+38159569051 **verdes** nos dois jobs (`verificar` e `testes-postgres`, que já executava o novo e2e de
+inutilização na bateria PostgreSQL).
+
 **Ressalva honesta do ciclo:** a inutilização é exercitada contra o provedor **nulo** e contra um
 provedor **falso** em teste — nenhuma SEFAZ real foi chamada (é o escopo do **ERP-12**, homologação).
 O que este ciclo garante é que a **operação** funciona, o pedido é **persistido com autor** e o sistema
@@ -617,6 +623,54 @@ O que este ciclo garante é que a **operação** funciona, o pedido é **persist
 * **Frontend:** tela de Comissões (por vendedor, por venda, comissão devida × paga, estornos) + entrada no grupo Financeiro.
 * **Testes:** teste de tela; manter `financeiro-p2.test.ts` (efetivação pró-rata e não-duplicação) e o teste PG de comissão única por lançamento (`pg-p2.test.ts`).
 * **Critérios de aceite:** gerente vê e fecha a comissão do período pela interface; a soma da tela bate com o relatório `comissoes`.
+
+---
+
+#### ✅ Execução (2026-10-11) — CLOSED (P1-05)
+
+**O que o ciclo entregou:** a tela que faltava para um cálculo que já existia, já estava testado e
+não tinha superfície nenhuma — e a **prova do critério de aceite** que este roadmap escreveu para o
+P1-05 ("gerente vê e fecha a comissão do período; a soma da tela bate com o relatório `comissoes`").
+
+**O gap era de exposição, não de cálculo.** `GET /api/financeiro/comissoes` e
+`GET /api/financeiro/comissoes/venda/:id` existiam em `server/src/comissoes.ts` (livro de efetivação com
+idempotência por lançamento e saldo limitado pela apuração congelada), o relatório `comissoes` existia
+(`relatorios.ts`) e `financeiro-p2.test.ts` já cobria recebimento parcial, quitação e não-duplicação.
+O que não existia: qualquer consumo no cliente (`grep comissoes client/src/modules.ts` → vazio) e
+nenhum teste que comparasse **as duas pontas** do número.
+
+**A tela (`client/src/pages/ComissoesPage.tsx`, `/comissoes`, grupo Financeiro, `minPerfil: gerente`).**
+Período (mês atual / mês anterior / datas livres) → cards de **Apurada · Efetivada · Estornada · Saldo**,
+tabela por representante com totais, e drill-down: as vendas do representante no período e, por venda, o
+**livro de eventos** (`realizada`/`estornada` com base recebida, percentual, origem e usuário).
+A tela **diz a regra em voz alta** — apurada ≠ devida; quem efetiva é o dinheiro que entra — e o botão
+**"Conferir com o relatório"** compara, no mesmo período, a soma da tela com o total do relatório e
+mostra o resultado (inclusive a divergência, se houver).
+
+**O que a tela NÃO faz, de propósito: marcar comissão como "paga".** Esse estado **não existe** no
+servidor (a comissão é efetivada pelo recebimento, não por um ato de fechamento), não há coluna, não há
+rota e o ciclo não criou migration. Inventar um botão "pagar" seria criar regra de negócio sem lastro —
+o "fechamento do período" entregue é a **conferência auditável**: os números que o relatório publica, o
+livro de cada venda a um clique e a igualdade verificada na frente do operador.
+
+**Evidência executada:**
+
+| Prova | Comando | Resultado |
+|---|---|---|
+| **Igualdade tela × relatório (critério de aceite)** | `server/test/pg/comissoes-e2e.test.ts` (**banco novo**, servidor real) | ✅ mesma venda, mesmo período: `resumo.apurada` do endpoint da tela = `resumo.comissao` do relatório — **tolerância zero** |
+| Efetivação só no recebimento | idem | ✅ faturada R$ 1.000 com 10%: apurada **100**, efetivada **0**, saldo **0** (nada recebido) |
+| Baixa parcial | idem | ✅ R$ 400 recebidos ⇒ efetivada **40**, pendente **60**, evento com `base = 400` (o recebido, não o total) |
+| Quitação | idem | ✅ +R$ 600 ⇒ efetivada **100** = apuração; nunca efetiva além dela |
+| Estorno por cancelamento | idem | ✅ venda cancelada ⇒ efetivada **0**, estornada **100**, saldo **0**, **3 eventos** no livro (nada é apagado) |
+| Tela | `client/src/pages/ComissoesPage.test.tsx` | **8/8** (inclui divergência visível e livro vazio para comissão ainda não recebida) |
+| Menu | `npm run audit:menu` | **0 erros · 4 avisos** · **69 módulos / 13 grupos** |
+| Bateria PostgreSQL | `npm run test:pg` em **banco novo** | **128 testes · 127 pass · 0 fail · 1 todo** (P1-11) — o novo e2e entra na bateria |
+| Smoke PostgreSQL | `npm run smoke:pg` (banco novo) | **126/126** — a tela nova não altera o servidor: nenhuma regressão de fluxo |
+| Regressão | `client test` · `server test` · `typecheck` · `lint` · `build` | **254/254** · **748** (685 pass · 0 fail · 63 skip) · **0** · **0 erros** (406 warnings) · **OK** |
+
+**Nenhuma migration, nenhuma tabela nova, nenhuma regra de negócio nova, nenhum arquivo do Commerce.**
+O módulo `comissoes` não tem `resource` — como `financeiro` e `relatorios`, é tela de leitura sobre rotas
+próprias (`/financeiro/comissoes*`), e por isso **não** abre CRUD lateral nenhum.
 
 ---
 
@@ -768,7 +822,7 @@ MENU ERP FINAL PROPOSTO (ERP-06, ERP-07 e ERP-11 ainda implementam entradas; o *
 | P1-02 NCM sem tela | 🟠 P1 | **ERP-05 ✅** |
 | P1-03 inutilização sem tela **+ rota devolvendo 405** | 🟠 P1 | **ERP-05 ✅** |
 | P1-04 CRUD de Empresas sem tela | 🟠 P1 | ERP-07 |
-| P1-05 comissões sem tela/menu (e filtro de período quebrado: `comissoes.ts:261`) | 🟠 P1 | ERP-06 |
+| P1-05 comissões sem tela/menu (e filtro de período quebrado: `comissoes.ts:261`) | 🟠 P1 | **ERP-06 ✅** (o filtro caiu no P1-13) |
 | P1-06 reserva de estoque ausente | 🟠 P1 | ERP-09 |
 | P1-07 fonte única do faturamento | 🟠 P1 | **ERP-04 ✅ (BI = relatório = DRE no mesmo período)** |
 | P1-08 fiscal sem homologação | 🟠 P1 | ERP-12 |

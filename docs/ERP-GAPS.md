@@ -35,6 +35,24 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
 > aguarda decisão humana.
 
+> **Atualização ERP-06 (2026-10-11) — P1-05 FECHADO (Comissões com tela e número conferido).**
+> O cálculo já existia e já estava testado (`comissoes.ts` + `financeiro-p2.test.ts`); faltava
+> **superfície**: nenhuma entrada em `MODULES`, nenhum consumo no cliente (só o relatório dentro de
+> `RelatoriosPage`). Entrou a tela `/comissoes` (grupo Financeiro, `minPerfil: gerente`) com período,
+> cards de **apurada · efetivada · estornada · saldo**, tabela por representante, drill-down das vendas
+> do período e **livro de eventos** por venda. O botão **"Conferir com o relatório"** executa o critério
+> de aceite do ciclo: compara a soma da tela com o relatório `comissoes` no MESMO período e mostra o
+> resultado (inclusive divergência). **Nenhum estado novo foi inventado:** não existe "comissão paga"
+> no servidor e a tela não criou um — a efetivação é pelo recebimento (parcial: parte proporcional;
+> cancelamento: estorno). Evidência executada: `server/test/pg/comissoes-e2e.test.ts` em **banco novo**
+> (igualdade tela × relatório com tolerância zero; apurada 100 / efetivada 0 antes do recebimento; baixa
+> parcial 400 ⇒ efetivada 40 com pendente 60 e `base = 400` no evento; quitação ⇒ efetivada 100;
+> cancelamento ⇒ estornada 100, saldo 0 e **3 eventos** preservados), `ComissoesPage.test.tsx` **8/8**,
+> `client` **254/254**, `server` **748** (685 pass · 0 fail · 63 skip), typecheck 0, lint **0 erros**
+> (406 warnings), build OK, `audit:menu` **0 erros / 4 avisos** (69 módulos / 13 grupos). Sem migration,
+> sem tabela nova, sem tocar o Commerce. Estado do ciclo:
+> [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 > **Atualização ERP-05 (2026-10-11) — P1-02 e P1-03 FECHADOS (Fiscal operacional).**
 > O módulo Fiscal passou a ser operável e, no caminho, apareceu um defeito que **nenhum teste cobria**:
 > `POST /api/fiscal/inutilizar` respondia **405 para TODO perfil**, porque `inutilizarNumeracao` chamava

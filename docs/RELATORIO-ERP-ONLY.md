@@ -18,6 +18,18 @@
 > porque o fallback de responsável é **global**, não por empresa (sem vazamento entre empresas:
 > verificado por canal e por `empresa_id`).
 
+> **Atualização ERP-06 (2026-10-11) — P1-05 FECHADO: Comissões têm tela, e o número confere.**
+> A tela `/comissoes` (grupo Financeiro, `minPerfil: gerente`) mostra **apurada · efetivada · estornada ·
+> saldo** por representante, com drill-down das vendas do período e o **livro de eventos** de cada venda
+> (`realizada`/`estornada`, base recebida, origem). O botão **"Conferir com o relatório"** compara a soma
+> da tela com o relatório `comissoes` do MESMO período e exibe o resultado. **O estado "comissão paga" não
+> existe no servidor e a tela não o inventou** — a efetivação é pelo recebimento (parcial: parte
+> proporcional; cancelamento: estorno). Evidência: `server/test/pg/comissoes-e2e.test.ts` em **banco novo**
+> (igualdade com o relatório; efetivada 0 antes do recebimento; 40/60 na baixa parcial; 100 na quitação;
+> estorno 100 com histórico preservado no cancelamento), `ComissoesPage.test.tsx` **8/8**, `client`
+> **254/254**, `server` **748** (685 pass · 0 fail · 63 skip), `audit:menu` **0 erros** (69 módulos /
+> 13 grupos). Estado do ciclo: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 > **Atualização ERP-05 (2026-10-11) — P1-02 e P1-03 FECHADOS: o Fiscal passa a ser operável (e uma rota
 > que nunca funcionou voltou a funcionar).** Duas telas novas — **NCM / Tributação** (`/ncm`, CRUD de
 > `impostos_ncm`) e **Inutilizações** (`/inutilizacoes`, solicitar faixa de numeração + histórico) — dentro
@@ -498,7 +510,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P1-02** | NCM/`impostos_ncm` sem tela (bloqueia operação fiscal real) · **FECHADO em ERP-05 (2026-10-11)** | ✅ | ✅ | ✅ | ✅ `NcmPage` | ✅ grupo Fiscal | ✅ (`minPerfil: gerente`) | ✅ `fiscal.test.ts` + `NcmPage.test.tsx` 10/10 |
 | **P1-03** | Inutilização fiscal sem tela **e a rota respondendo 405 para todo perfil** · **FECHADO em ERP-05 (2026-10-11)** | ✅ | ✅ | ✅ (corrigida) | ✅ `InutilizacoesPage` | ✅ grupo Fiscal | ✅ (`checkFluxo`: gerente/admin) | ✅ `fiscal.test.ts` 24/24 + `pg/fiscal-inutilizacao-e2e.test.ts` |
 | **P1-04** | CRUD de Empresas sem tela (multiempresa administrável só por API) | ✅ | ✅ | ✅ | ❌ | ❌ | parcial | `multiempresa*.test.ts` |
-| **P1-05** | Comissões sem tela e sem menu (apuração existe e está testada) | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ (`gerente`) | ✅ `financeiro-p2.test.ts` |
+| **P1-05** | Comissões sem tela e sem menu (apuração existe e está testada) · **FECHADO em ERP-06 (2026-10-11)** | ✅ | ✅ | ✅ | ✅ `ComissoesPage` | ✅ grupo Financeiro | ✅ (`gerente`) | ✅ `financeiro-p2.test.ts` + `pg/comissoes-e2e.test.ts` (igualdade tela × relatório) + `ComissoesPage.test.tsx` 8/8 |
 | **P1-06** | Reserva de estoque / disponível × comprometido | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ |
 | **P1-07** | Fonte única do faturamento (correção estrutural de P0-03) · **FECHADO em ERP-04** | ✅ | ✅ | ✅ | — | — | — | ✅ BI = relatório no mesmo período (`bi-faturamento-e2e`) |
 | **P1-08** | Fiscal sem homologação real (adapters existem, nada emitido) | ✅ | ✅ | ✅ | parcial | parcial | ✅ | só contrato |
@@ -571,7 +583,7 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 | Listas de preço | `/listas-preco` | `listas_preco` | ✅ | ✅ | ✅ | ✅ | ⚠️ **deriva** | ✅ | ✅ | 🟡 P1-01 |
 | Políticas comerciais | `/politicas-comerciais` | `politicas_comerciais` | ✅ | ✅ | ✅ | ✅ | ⚠️ **deriva** | ✅ | ✅ | 🟡 P1-01 |
 | Catálogos públicos | `/catalogos` | `catalogos` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
-| **Comissões** | — | `/financeiro/comissoes` | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | 🟠 P1-05 |
+| **Comissões** | `/comissoes` | `/financeiro/comissoes` | ✅ | ✅ | ✅ | ✅ | ✅ (`gerente`) | ✅ | ✅ | 🟢 **ERP-06** (P1-05 fechado) |
 | Compras | `/compras` | `compras` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
 | Cotações de compra | `/cotacoes-compra` | `cotacoes_compra` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
 | Recebimentos | `/compra-recebimentos` | `compra_recebimentos` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
@@ -724,6 +736,8 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 **Problemas objetivos do menu atual:**
 1. **8 dos 66 módulos são `planned`** — telas de prontidão sem domínio. Todos em Commerce/Creators (congelados por decisão de arquitetura).
 2. **Fiscal está espalhado**: "Regras fiscais" e "Documentos fiscais" moram dentro do grupo **Vendas**; NCM e Inutilizações não têm entrada nenhuma.
+*(Atualização 2026-10-11: o menu medido hoje tem **69 módulos em 13 grupos** — o grupo **Fiscal** nasceu no ERP-05 e **Comissões** entrou em Financeiro no ERP-06.)*
+
 3. **`Webhooks` (saída, adminOnly) está em "Integrações"** junto com conectores de Commerce, misturando um recurso administrativo do ERP com integração de marketplace.
 4. **Sem grupo "Fiscal"**, sem "Administração" (o grupo se chama "Configurações" e mistura Usuários/Auditoria com Configurações pessoais e Ajuda).
 5. Cadastros compartilhados aparecem em grupos operacionais (`Clientes`/`Representantes` em Vendas, `Fornecedores` em Compras). É decisão defensável de navegação — **não duplicar**.
@@ -735,7 +749,7 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 | NCM / Tributação (`impostos_ncm`) | ✅ | ❌ | ❌ |
 | Inutilização de numeração | ✅ | ❌ | ❌ |
 | Empresas (CRUD) | ✅ | ❌ | ❌ |
-| Comissões (apuração, efetivação, estorno) | ✅ | ❌ | ❌ |
+| Comissões (apuração, efetivação, estorno) | ✅ | ✅ | ✅ **ERP-06** |
 
 ### 17.3 Funcionalidades que faltam (menu não resolve)
 
@@ -746,7 +760,7 @@ Reserva de estoque · disponível × comprometido · cadastro de Marcas · cadas
 > **Implementado no ERP-05 (2026-10-11):** o **grupo 9 (Fiscal)** e os dois itens novos dele —
 > **NCM / Tributação** (`/ncm`) e **Inutilizações** (`/inutilizacoes`) — existem hoje no menu real, e os
 > quatro itens fiscais saíram de dentro de *Vendas*. **O restante desta proposta continua NÃO implementado:**
-> Marcas, Unidades, Reservas, Comissões, Cobranças/Gateway, Conciliação, Empresas, Importar XML e o renomeio
+> Marcas, Unidades, Reservas, ~~Comissões~~ (**implementado no ERP-06** — §5 do roadmap), Cobranças/Gateway, Conciliação, Empresas, Importar XML e o renomeio
 > `Configurações → Administração`. As contagens atuais (68 módulos / 13 grupos) estão no
 > [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
 
@@ -884,7 +898,7 @@ Responsividade/acessibilidade · breadcrumbs e atalhos de cadeia · série diár
 | **ERP-03** | Suíte E2E executável em PostgreSQL (gate de todos os ciclos seguintes) | P0-04 |
 | **ERP-04** | Fonte única do faturamento: ERP alimenta o BI | P0-03, P1-07 |
 | **ERP-05** | Fiscal operacional: NCM, inutilização, configuração, regras | P1-02, P1-03 |
-| **ERP-06** | Comissões: tela, menu e fechamento | P1-05 |
+| **ERP-06** | Comissões: tela, menu e fechamento | P1-05 → **✅ implementado em 2026-10-11** |
 | **ERP-07** | Administração: CRUD de Empresas | P1-04 |
 | **ERP-08** | Devolução ponta a ponta em PostgreSQL | P1-09 |
 | **ERP-09** | Reserva / disponível × comprometido | P1-06 |

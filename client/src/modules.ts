@@ -50,6 +50,7 @@ import {
   FileText,
   FileUp,
   FileMinus,
+  BadgeDollarSign,
 } from 'lucide-react';
 
 export type Module = {
@@ -238,6 +239,16 @@ export const MODULES: Module[] = [
   { id: 'centros-custo', label: 'Centros de custo', icon: PieChart, group: 'Financeiro', path: '/centros-custo', resource: 'centros_custo', minPerfil: 'gerente', description: 'Rateio gerencial por área: Loja, Produção/Facção, Administrativo, Marketing.' },
   { id: 'investidores', label: 'Investidores / Sócios', icon: PiggyBank, group: 'Financeiro', path: '/investidores', resource: 'investidores', minPerfil: 'gerente', description: 'Quem aporta capital, participação e distribuição de lucros.' },
   { id: 'aportes', label: 'Aportes', icon: Wallet, group: 'Financeiro', path: '/aportes', resource: 'aportes', minPerfil: 'gerente', description: 'Capital inicial, aportes, reinvestimento e empréstimo de sócio.' },
+  {
+    id: 'comissoes',
+    label: 'Comissões',
+    icon: BadgeDollarSign,
+    group: 'Financeiro',
+    path: '/comissoes',
+    minPerfil: 'gerente',
+    description:
+      'Apuração por representante, efetivada conforme o recebimento da venda, com estornos e livro por venda.',
+  },
   { id: 'recorrencias-financeiras', label: 'Recolhimentos e recorrências', icon: Repeat, group: 'Financeiro', path: '/recorrencias-financeiras', resource: 'recorrencias_financeiras', minPerfil: 'gerente', description: 'Despesas/receitas fixas: aluguel, energia, folha, facção, assinaturas — geradas automaticamente.' },
 
   // 📊 Relatórios & Auditoria
@@ -299,7 +310,7 @@ export const GROUP_META: Record<ModuleGroup, { icon: LucideIcon; /** seção da 
 };
 
 /** Módulos que usam página própria (não CRUD genérico nem PlannedModule). */
-export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 'financeiro', 'pdv', 'expedicao', 'cotacoes-compra', 'sugestao-compra', 'devolucoes', 'envios', 'ncm', 'inutilizacoes'] as const;
+export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 'financeiro', 'pdv', 'expedicao', 'cotacoes-compra', 'sugestao-compra', 'devolucoes', 'envios', 'ncm', 'inutilizacoes', 'comissoes'] as const;
 
 /** Módulos cuja listagem abre diretamente a página de detalhe. */
 export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
