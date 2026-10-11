@@ -49,6 +49,18 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > relatório 20000; ABC classe A; canal externo intacto) e
 > `server/test/negocios-projecao-erp.test.ts` (paridade em memória 3/3).
 
+> **Auditoria independente ERP-01…ERP-04 (2026-10-11) — GATE APROVADO COM RESSALVAS (P2).**
+> Executada sobre `bb17f19` com **6 provas por mutação** em PostgreSQL real (arquivo do fix
+> revertido ⇒ o teste do ciclo falha: `gateway.ts`, `producao.ts`+`pgstore.ts`, `services.ts`,
+> `db/schema.sql` com o mesmo EAN em duas empresas, `negocios.ts`, `relatorios.ts`), bateria
+> completa em **banco novo** (`test:pg` **123 pass / 0 fail / 1 todo**) e CI verde incluindo a
+> etapa nova de smoke. Achados registrados (não corrigidos): **P2-08** (projeção com zero
+> usuários ativos → `23503` na FK de `sale_items` e `400` enganoso na via sob demanda) e
+> **P2-09** (`test:pg` não é repetível em banco reaproveitado — CNPJ de teste com 4–6 dígitos
+> efetivos no índice `uq_empresas_cnpj`); a documentação do ADR-001 §4/§5 e a linha P1-14 foram
+> corrigidas (o fallback de responsável é global, sem vazamento entre empresas nas telas atuais).
+> Documento: [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md).
+
 > **Atualização ERP-03 (2026-10-11) — P0-04 FECHADO; P0-05 descoberto e fechado.**
 > O gate virou executável: `npm run smoke:pg` (`scripts/smoke-pg.mjs`) cria um
 > **banco novo**, sobe a API real nele e roda o smoke E2E — **126/126 sem um único

@@ -5,6 +5,17 @@
 **Data:** 2026-10-11 · **Modo:** AUDITORIA (nenhum código foi alterado na auditoria)
 **Autor:** Auditoria técnica sênior assistida por agente
 
+> **Auditoria independente dos ciclos ERP-01…ERP-04 (2026-10-11) — ✅ GATE APROVADO COM RESSALVAS (P2).**
+> Executada sobre o commit `bb17f19`, com **6 provas por mutação** em PostgreSQL real (o arquivo do
+> fix revertido ⇒ o teste do ciclo falha), bateria completa em **banco novo** (`# tests 124 ·
+> pass 123 · fail 0 · todo 1`) e CI verde incluindo o gate de smoke. Documento completo:
+> [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md).
+> **Nada foi corrigido:** as ressalvas viraram gaps registrados — **P2-08** (projeção com zero
+> usuários ativos: `23503` em `sale_items_sale_id_fkey` e `400` enganoso na via sob demanda),
+> **P2-09** (`test:pg` não repetível em banco reaproveitado) — e a linha **P1-14** foi reescrita
+> porque o fallback de responsável é **global**, não por empresa (sem vazamento entre empresas:
+> verificado por canal e por `empresa_id`).
+
 > **Atualização ERP-04 (2026-10-11) — P0-03 e P1-07 FECHADOS: o BI passa a ler a operação do ERP.**
 > Decisão de arquitetura registrada **antes do código** em
 > [`docs/ADR-001-FONTE-UNICA-FATURAMENTO.md`](ADR-001-FONTE-UNICA-FATURAMENTO.md):
@@ -476,7 +487,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P1-12** | `fiscal.ts` grava o payload do evento fiscal com `JSON.stringify(payload).slice(0, 20000)`: acima de 20.000 caracteres o JSON é **truncado no meio** e o `jsonb` recusa com 22P02 — a emissão falha com um 400 enganoso ("valor inválido em um dos campos"). Descoberto pelo contrato tipo × coluna do ERP-03 (o campo era `textarea` sobre `jsonb`; agora o tipo está alinhado, o corte continua) | ✅ | ✅ | ✅ | — | — | ✅ | contrato de tipo (ERP-03) | endereçado em **ERP-05** (Fiscal) |
 | **P1-11** | Assinatura de webhook é global por provedor (sem empresa): segredo de A recusa notificação de B; evento pode ser gravado com `empresa_id` de quem assinou | ✅ | ✅ | ✅ | — | — | ✅ | **todo** em `server/test/pg/e01-gateway-webhook-postgresql.test.ts` (descoberto no ERP-01) |
 | **P1-13** | Filtro de período comparava `String(Date).slice(0, 10)` com a data pedida: em PostgreSQL (TIMESTAMPTZ → `Date`) o valor vira `"Wed Oct 11"` e `?de=&ate=` **descarta linhas reais**. Achado pelo critério de igualdade do ERP-04; **8 pontos de `relatorios.ts` corrigidos** com `diaISO()` (mesma normalização do `dataISO` de `financeiro.ts:41-52`). **Aberto:** `comissoes.ts:261` (mesmo defeito, no relatório de comissões) | ✅ | ✅ | ✅ | — | — | — | ✅ `bi-faturamento-e2e` (relatório de faturamento) · aberto em comissões | ERP-06 |
-| **P1-14** | `sales.usuario_id` é `NOT NULL` (FK para `usuarios`): a projeção do ERP precisa **eleger um responsável por empresa** (primeiro usuário ativo). Venda de empresa sem usuário ativo **não é projetada** (é logado; nenhuma linha parcial) | ✅ | ✅ | ✅ | — | — | — | ✅ `bi-faturamento-e2e` + `negocios-projecao-erp` | documentado no ADR-001 §4/§5 |
+| **P1-14** | `sales.usuario_id` é `NOT NULL` (FK para `usuarios`): a projeção do ERP elege um **responsável técnico** — primeiro usuário ativo **da empresa** e, se a empresa não tiver nenhum, o primeiro usuário ativo **do sistema** (fallback global, **verificado na auditoria**: a venda da empresa 2 saiu assinada por usuário da empresa 1, sem vazamento em tela alguma: o BI escopa por `empresa_id` e o painel dos conectores escopa por `usuario_id + channel` de conector, canal que a projeção não produz). Com **zero** usuários ativos, ver **P2-08** | ✅ | ✅ | ✅ | — | — | — | ✅ `bi-faturamento-e2e` + `negocios-projecao-erp` | ADR-001 §4/§5 revisado + auditoria §6 (AUD-02) |
 
 ---
 
@@ -491,6 +502,8 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P2-05** | `audit:menu` não cobre recursos com CRUD sem módulo cujo nome difira do recurso | Ponto cego comprovado: `empresas` não foi sinalizado, `impostos_ncm` foi |
 | **P2-06** | Teste de concorrência apenas no `PgStore` | correto por design; **declarado em ERP-03** (cabeçalho de `scripts/smoke-pg.mjs` + §5 do roadmap): memória/demonstração não é produção |
 | **P2-07** | `/api/health` responde `{ok:true, db:'postgres'}` **antes** de as migrações e o `ensureAdmin` terminarem: um orquestrador que confie só no health pode rotear tráfego para uma instância ainda migrando (o gate `smoke:pg` precisou esperar o marco real do boot). Descoberto no ERP-03 | liveness × readiness; correção sugerida: só responder `ok` depois do boot completo |
+| **P2-08** | **Projeção do ERP com ZERO usuários ativos aborta com `23503`:** o passo das vendas exige responsável (`AND COALESCE(eu.usuario_id, fb.usuario_id) IS NOT NULL`), o passo dos **itens não repete a condição** e a instrução viola a FK `sale_items_sale_id_fkey` — a projeção inteira falha (nenhuma linha parcial) e a via `POST /api/negocios/margens/recalcular` responde **400 "Referência inválida"** (tradução do 23503), mensagem enganosa. **Descoberto na auditoria independente (AUD-01)**; o ADR dizia "pulada e logada" | ✅ | ✅ | ✅ | — | — | — | ❌ (`server/test/pg/bi-faturamento-e2e` não cobre o caso) | corrigir repetindo a condição no passo 2; sugerido como **primeiro ciclo pós-merge** (junto com P1-13) |
+| **P2-09** | **`test:pg` não é repetível em banco reaproveitado:** `pg-cotacoes-compra` gera CNPJs cujo valor efetivo no índice `uq_empresas_cnpj` é `regexp_replace(cnpj,'[^0-9]','','g')` → **4–6 dígitos** derivados de um prefixo temporal base36 que muda devagar; as empresas de teste nunca são removidas e a execução seguinte colide em 23505 (5 testes reprovados em `brobond_teste` com 701 empresas; o mesmo arquivo passa 7/7 duas vezes em banco novo). **Descoberto na auditoria independente (AUD-03)** | ✅ | ✅ | ✅ | — | — | — | ❌ | derivar 14 dígitos do sufixo inteiro **ou** limpar as empresas do cenário no teardown |
 
 ---
 

@@ -16,6 +16,7 @@
 | **ERP-03** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-03, abaixo |
 | **ERP-04** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-04 + [ADR-001](ADR-001-FONTE-UNICA-FATURAMENTO.md) |
 | **ERP-05 … ERP-13** | ⏳ não iniciados | — |
+| **Auditoria independente (ERP-01…04)** | ✅ **EXECUTADA** (2026-10-11) | [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md) — 6 provas por mutação + bateria em banco novo + CI verde · **GATE APROVADO COM RESSALVAS (P2)** |
 
 **Regra de execução:** um ciclo só muda de ⏳ para ✅ com a bateria completa verde (typecheck · lint · build · `server test` · `client test` · `test:pg` · `smoke`) **e** o teste central falhando antes da correção e passando depois, em PostgreSQL real.
 
@@ -403,6 +404,47 @@ cancelada → `CANCELLED`, aberta não projetada, idempotência e o **gancho rea
 
 ---
 
+### Auditoria independente (ERP-01 … ERP-04) — 2026-10-11
+
+**Commit auditado:** `bb17f19` · **documento:** [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md) · **veredito: ✅ GATE APROVADO COM RESSALVAS (P2)**.
+
+A auditoria foi feita para **tentar derrubar** as conclusões dos quatro ciclos — não para confirmá-las
+por leitura de resumo:
+
+* **6 provas por mutação em PostgreSQL real** (o arquivo do fix revertido ⇒ o teste do ciclo falha):
+  `gateway.ts` (`pass 0 · fail 2`) · `producao.ts`+`pgstore.ts` (`fail 2`) · `services.ts` (`fail 1`) ·
+  `db/schema.sql` com o mesmo EAN em duas empresas (`MIGRATE FALHOU: could not create unique index
+  "uq_produtos_codigo_barras"`; restaurado: `MIGRATE OK`) · `negocios.ts` (`BI pedidos 0`, não 1) ·
+  `relatorios.ts` (`relatório 0`, não 20000). Todos os arquivos restaurados; árvore limpa no fim.
+* **Bateria completa em banco NOVO:** `test:pg` **124 testes · 123 pass · 0 fail · 1 todo (P1-11)**.
+* **CI do commit auditado verde** (runs [38148326540](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38148326540) e 38148323203), incluindo a etapa `Smoke E2E contra PostgreSQL novo (gate ERP-03)` — que aqui deixou de ser promessa e passou a ser **step executado**.
+* **Invariantes do ADR-001 conferidos no código e no banco:** namespace `erp:`, idempotência, sem
+  invenção de dado, escopo por `empresa_id`, ingestão externa intacta (11 campos).
+* **Experimento controlado em banco descartável** para os casos-limite que o ADR declara (venda sem
+  usuário ativo; empresa sem usuário ativo com outra empresa com).
+
+**Achados — registrados, não corrigidos (a auditoria documenta):**
+
+* **P2-08** (AUD-01) — projeção com **zero** usuários ativos: o passo dos itens não repete a condição
+  de responsável e a instrução viola `sale_items_sale_id_fkey` (`23503`); a via sob demanda responde
+  `400 "Referência inválida"`. O ADR dizia "pulada e logada".
+* **P2-09** (AUD-03) — `test:pg` **não é repetível em banco reaproveitado**: o CNPJ gerado pelos testes
+  tem 4–6 dígitos efetivos no índice `uq_empresas_cnpj` (que compara só dígitos) e as empresas do
+  cenário nunca são removidas (5 testes reprovados em `brobond_teste`; arquivo isolado passa 7/7 duas
+  vezes em banco novo). **Por isso a bateria de referência deste roadmap é sempre em banco novo.**
+* **AUD-02** (documentação, corrigida aqui) — o responsável eleito pela projeção pode ser de **outra**
+  empresa (fallback global); ADR §4/§5 e a linha P1-14 do relatório passaram a descrever o comportamento
+  real. **Nenhum vazamento** nas telas atuais (BI por `empresa_id`; painel de conectores por
+  `usuario_id + channel` de conector, canal que a projeção não produz).
+
+**Observação de duração do CI (para não virar suspeita):** o job PG varia de **1m30s a 12m24s** entre
+runs. A causa foi medida: um único `migrate()` custa **~30 s neste sandbox** (com `user` CPU de 0,3 s —
+é I/O) e são 24 arquivos de teste, cada um com a sua migração; em disco rápido o mesmo trabalho cai
+para a casa do minuto e meio. O log do runner não é baixável deste ambiente — a bateria local é a
+evidência primária.
+
+---
+
 ### ERP-05 — Fiscal operacional (sem homologação)
 
 * **Objetivo:** tornar o módulo Fiscal utilizável por quem opera: ver, configurar e corrigir a tributação sem chamar API.
@@ -591,6 +633,9 @@ MENU ERP FINAL PROPOSTO (ERP-05, ERP-06, ERP-07 e ERP-11 implementam as entradas
 | P2-04 relatórios no front | 🟡 P2 | ERP-11 |
 | P2-05 ponto cego do `audit:menu` | 🟡 P2 | ERP-10 |
 | P2-06 concorrência só no `PgStore` | 🟡 P2 | **declarado em ERP-03 ✅** (mesma nota; a suíte de concorrência continua exclusiva do PostgreSQL) |
+| P2-07 `/api/health` responde `db=postgres` antes das migrações | 🟡 P2 | **descoberto no ERP-03**; registrado no relatório (liveness × readiness) |
+| P2-08 projeção do ERP com ZERO usuários ativos → `23503`/`400` enganoso (AUD-01) | 🟡 P2 | **descoberto na auditoria independente (2026-10-11)**; candidato ao primeiro ciclo pós-merge (junto com P1-13) |
+| P2-09 `test:pg` não repetível em banco reaproveitado (AUD-03) | 🟡 P2 | **descoberto na auditoria independente (2026-10-11)**; exige banco novo como a bateria de referência |
 | P3-01 … P3-06 | 🔵 P3 | **FUTURO** — fora dos ciclos do CORE |
 
 ---
@@ -620,10 +665,12 @@ O BROBOND ERP está **mais perto do fim do que o volume de pendências sugere**:
 * **um gate de verificação que não verifica o ambiente de produção** (ERP-03);
 * **um painel desconectado da operação** (ERP-04).
 
-# 🟡 ERP ROADMAP DEFINIDO COM RESSALVAS
+# 🟢 ERP ROADMAP DEFINIDO
 
-**Ressalva:** a implementação **não deve começar** antes de os 4 gaps P0 serem reconhecidos como bloqueadores (dois deles são defeitos de produção provados, não funcionalidade ausente) e antes de **ERP-03** garantir que nenhum ciclo feche sem prova em PostgreSQL real. Fechadas essas duas condições — que correspondem exatamente a **ERP-01, ERP-02 e ERP-03** — o roadmap passa a 🟢.
+**Ressalva original (retirada em 2026-10-11):** a implementação **não deveria começar** antes de os 4 gaps P0 serem reconhecidos como bloqueadores (dois deles são defeitos de produção provados, não funcionalidade ausente) e antes de **ERP-03** garantir que nenhum ciclo feche sem prova em PostgreSQL real. As duas condições foram cumpridas (**ERP-01, ERP-02 e ERP-03**) e o roadmap passou a 🟢; **ERP-04** (o painel desconectado da operação) fechou em seguida e a **auditoria independente** dos quatro ciclos foi executada sobre `bb17f19` — **GATE APROVADO COM RESSALVAS (P2)**, registradas como **P2-08** e **P2-09** (nenhuma P0/P1 aberta).
 
-**Progresso em 2026-10-11:** **ERP-01, ERP-02 e ERP-03 fechados** — P0-02 (webhook de pagamento) e P0-01 (estorno/reabertura de OP) corrigidos, cada um com prova *falha antes → passa depois* em PostgreSQL real, sem tocar em Commerce e sem migration. O termômetro da auditoria (**smoke contra PostgreSQL real**) saiu de **119/126** para **126/126**. **ERP-03 fechou o P0-04** (gate executável em PostgreSQL: `npm run smoke:pg` cria banco novo, sobe a API e roda o smoke — 126/126 sem nenhum SQL manual —, agora no job `testes-postgres` do CI) **e descobriu/fechou o P0-05** (o índice único global legado de `codigo_barras` derrubava o boot em banco com o mesmo código de barras em duas empresas). Com os quatro P0 fechados, a ressalva está retirada — o veredito operacional dos ciclos seguintes passa a ser 🟢, com a auditoria independente ainda pendente para o MERGE. No caminho, a implementação do ERP-01 **descobriu e registrou** o P1-11 (escopo multiempresa da assinatura de webhook), que **não** foi corrigido por exigir decisão de arquitetura — coerente com a regra de o ciclo não decidir sozinho o que é de outro ciclo.
+**Progresso em 2026-10-11:** **ERP-01, ERP-02, ERP-03 e ERP-04 fechados** — o BI passou a refletir a operação do ERP (ADR-001, projeção `vendas → sales`), com `BI == relatório` no mesmo período e o filtro de período de `relatorios.ts` corrigido (8 pontos) como efeito colateral do próprio critério de igualdade. A **auditoria independente** dos quatro ciclos (6 provas por mutação, bateria em banco novo, CI verde) foi executada sobre `bb17f19` com veredito **✅ GATE APROVADO COM RESSALVAS (P2)** — P0-02 (webhook de pagamento) e P0-01 (estorno/reabertura de OP) corrigidos, cada um com prova *falha antes → passa depois* em PostgreSQL real, sem tocar em Commerce e sem migration. O termômetro da auditoria (**smoke contra PostgreSQL real**) saiu de **119/126** para **126/126**. **ERP-03 fechou o P0-04** (gate executável em PostgreSQL: `npm run smoke:pg` cria banco novo, sobe a API e roda o smoke — 126/126 sem nenhum SQL manual —, agora no job `testes-postgres` do CI) **e descobriu/fechou o P0-05** (o índice único global legado de `codigo_barras` derrubava o boot em banco com o mesmo código de barras em duas empresas). Com os quatro P0 fechados **e a auditoria independente executada**, a ressalva está retirada: o veredito é 🟢 — e a decisão de **merge** é do dono do repositório (a auditoria não mergeia). No caminho, a implementação do ERP-01 **descobriu e registrou** o P1-11 (escopo multiempresa da assinatura de webhook), que **não** foi corrigido por exigir decisão de arquitetura — coerente com a regra de o ciclo não decidir sozinho o que é de outro ciclo.
+
+**Ressalvas abertas depois da auditoria (nenhuma bloqueia o merge pelo critério P0/P1):** **P2-08** — projeção com zero usuários ativos aborta em `23503` (o passo dos itens não repete a condição de responsável) e a via sob demanda devolve `400` enganoso; **P2-09** — `test:pg` não é repetível em banco reaproveitado (CNPJ de teste com 4–6 dígitos efetivos). Ambas com recomendação escrita na [auditoria independente](AUDITORIA-INDEPENDENTE-ERP-01-04.md).
 
 **Nada foi implementado, corrigido, migrado, agendado ou mergeado. O menu não foi alterado. O Commerce não foi tocado.**

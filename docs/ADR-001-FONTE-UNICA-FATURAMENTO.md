@@ -117,8 +117,10 @@ tratada pelo que ela é: **`vendas` é a fonte autoritativa da venda do ERP;
 
 Outros campos: `occurred_at = COALESCE(faturada_em, data, criado_em)`;
 `amount_cents = ROUND(total × 100)`; `quantity = Σ itens_venda.quantidade`;
-`reference = 'ERP-<empresa>-<venda>'`; `usuario_id` = responsável ativo da empresa
-(primeiro usuário ativo; a coluna é `NOT NULL` no schema do Commerce).
+`reference = 'ERP-<empresa>-<venda>'`; `usuario_id` = **responsável técnico** eleito pela
+projeção (a coluna é `NOT NULL` no schema do Commerce): o **primeiro usuário ativo da empresa** da
+venda e, se essa empresa não tiver nenhum, o **primeiro usuário ativo do sistema** (fallback
+global). O `empresa_id` da linha é sempre o da venda — quem lê o BI é escopado por ele.
 
 ## 5. Consequências
 
@@ -133,8 +135,18 @@ Outros campos: `occurred_at = COALESCE(faturada_em, data, criado_em)`;
 * **Risco residual 2 — divergência de vocabulário** (status/canal citados
   acima): documentada na tabela de mapeamento; o teste e2e fixa o
   comportamento.
-* **Risco residual 3 — venda sem usuário ativo na empresa:** a projeção é
-  pulada para essa venda e logada; nenhuma linha parcial é escrita.
+* **Risco residual 3 — venda de empresa sem usuário ativo (revisado pela auditoria
+  independente de 2026-10-11):** enquanto existir **um** usuário ativo em qualquer empresa, a
+  venda é projetada e assinada pelo fallback global (acima) — o `empresa_id` continua o da venda
+  e **nenhum dado cruza de empresa em tela alguma** (o BI escopa por `empresa_id`; o painel dos
+  conectores lê por `usuario_id + channel` de **conector**, e a projeção só produz
+  `LOJA_FISICA`/`BROBOND`). Com **zero** usuários ativos no sistema, a venda não entra em `sales`
+  — e o passo dos itens, que não repetia a condição de responsável, fazia a instrução violar a FK
+  `sale_items_sale_id_fkey` e abortar a projeção inteira (erro `23503`, exposto como `400
+  "Referência inválida"` na via sob demanda). **Registrado como P2-08** em
+  [`docs/RELATORIO-ERP-ONLY.md`](RELATORIO-ERP-ONLY.md) e detalhado na
+  [auditoria independente](AUDITORIA-INDEPENDENTE-ERP-01-04.md) §6 — **não corrigido** (a
+  auditoria documenta, não corrige).
 
 ## 6. Plano de prova (critérios de aceite do ERP-04)
 
