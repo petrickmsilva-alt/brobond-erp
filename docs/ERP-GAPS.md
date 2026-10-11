@@ -50,8 +50,9 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > auditoria — **smoke contra PostgreSQL real: 119/126 → 126/126**. O P1-02
 > (`OP cancelada é terminal` respondendo 500) era cascata do mesmo defeito e fechou
 > junto, sem código próprio. Risco residual preventivo registrado como **P3-07**
-> (`adjustInsumoStock` usa o mesmo padrão, hoje sem CHECK que o dispare). Estado do
-> ciclo: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+> (`adjustInsumoStock` usa o mesmo padrão, hoje sem CHECK que o dispare). **CI do
+> PR #49 verde nos dois jobs** (`verificar` e `testes-postgres`, run 38140231798).
+> Estado do ciclo: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
 
 > **Atualização ERP-01 (2026-10-11) — primeiro ciclo do roadmap (P0-02 FECHADO).**
 > O webhook de pagamento volta a confirmar cobrança em PostgreSQL: causa-raiz era

@@ -205,6 +205,7 @@ reabrir → **200**, 10 peças fora do estoque, 20 m de insumo devolvidos, **apo
 Checks que reprovavam e agora passam: `E2: POST /reabrir estorna (gerente)` (200) · `E2: reabrir descarta os apontamentos` (0) · `E2: POST /cancelar guarda o motivo` (200) · `E2: OP cancelada é terminal` (409) · `webhook pago → processado` · `mesma notificação de novo → duplicado` · `cobrança ficou paga`.
 
 - **Regressão:** `server test` **671 pass / 0 fail / 63 skipped** (idêntico ao baseline) · `client test` **226** · `test:pg` **114 pass / 0 fail / 1 todo** (115 testes) · smoke demo **126/126** · typecheck **0** · lint **0 erros / 401 warnings** · build OK.
+- **CI (PR [#49](https://github.com/petrickmsilva-alt/brobond-erp/pull/49)):** jobs `verificar` (1m30s) e `testes-postgres` (10m31s) **verdes** no run [38140231798](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38140231798) — inclui o arquivo novo de prova. **Merge pendente da auditoria independente.**
 - **Risco residual documentado (não é defeito hoje):** `adjustInsumoStock` usa o mesmo padrão `INSERT delta ON CONFLICT DO UPDATE` para consumo (delta negativo). **Não dispara** porque `estoque_insumos.quantidade` **não tem** CHECK de não-negativo — mas, se um CHECK for adicionado ali, o consumo de insumos quebraria da mesma forma. Registrado como **P3-07** em [`docs/RELATORIO-ERP-ONLY.md`](RELATORIO-ERP-ONLY.md) §11.
 
 ---
