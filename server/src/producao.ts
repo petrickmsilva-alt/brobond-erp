@@ -554,7 +554,21 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx, escopo: EscopoEmpres
     await resolveLocal(localData, tx, escopo);
     const localId = Number(localData.local_id);
     const local = String(localData.local);
-    await s.adjustStock(produtoId, tamanhoId, local, -qtd, tx, localId, escopo.empresaId);
+    // O saldo de saída usa o primitivo com guarda DENTRO da escrita
+    // (`tryAdjustStock`). `adjustStock` monta `INSERT ... ON CONFLICT DO UPDATE`
+    // e o CHECK `estoques_quantidade_nao_negativo` avalia o tuple PROPOSTO
+    // (−qtd) antes de o conflito resolver: mesmo com saldo suficiente na linha
+    // correta, o Postgres devolvia SQLSTATE 23514 e toda reabertura virava 500
+    // (P0-01). Aqui o UPDATE é condicional (`quantidade + delta >= 0`, com row
+    // lock) e devolve null quando o saldo não cobre o estorno — erro de negócio,
+    // não de servidor.
+    const estornado = await s.tryAdjustStock(produtoId, tamanhoId, local, -qtd, tx, 0, localId, escopo.empresaId);
+    if (!estornado) {
+      throw new HttpError(
+        409,
+        `Não há saldo de ${qtd} peça(s) em "${local}" para estornar a OP #${id}. Nada foi alterado — estorne antes as movimentações que consumiram essas peças.`
+      );
+    }
     await s.insert(
       getResource('movimentacoes')!,
       {
