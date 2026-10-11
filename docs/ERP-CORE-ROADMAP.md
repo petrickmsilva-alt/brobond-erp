@@ -217,6 +217,20 @@ Checks que reprovavam e agora passam: `E2: POST /reabrir estorna (gerente)` (200
 - **CI (PR [#49](https://github.com/petrickmsilva-alt/brobond-erp/pull/49)):** jobs `verificar` (1m30s) e `testes-postgres` (10m31s) **verdes** no run [38140231798](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38140231798) — inclui o arquivo novo de prova. **Merge pendente da auditoria independente.**
 - **Risco residual documentado (não é defeito hoje):** `adjustInsumoStock` usa o mesmo padrão `INSERT delta ON CONFLICT DO UPDATE` para consumo (delta negativo). **Não dispara** porque `estoque_insumos.quantidade` **não tem** CHECK de não-negativo — mas, se um CHECK for adicionado ali, o consumo de insumos quebraria da mesma forma. Registrado como **P3-07** em [`docs/RELATORIO-ERP-ONLY.md`](RELATORIO-ERP-ONLY.md) §11.
 
+#### ✅ Rodada de verificação ERP-02 (2026-10-11) — `arena/50e1f16d-brobond-erp`
+
+Relatório dedicado: [`docs/RELATORIO-ERP-02.md`](RELATORIO-ERP-02.md) (16 seções do ciclo).
+
+* **P0-01 provado de novo neste ambiente, por reconstrução** (commit único no pacote ⇒ o código pré-correção foi reconstruído por mutação e revertido): `adjustStock(…, −qtd)` + `translatePgError` sem 23514 ⇒ `reabrir → 500 {"error":"Erro interno do servidor"}` · `# pass 0 / # fail 2`; a mecânica ficou provada em SQL cru (o CHECK avalia o **tuple proposto** mesmo com saldo de sobra; o `UPDATE` condicional com row lock é o primitivo correto).
+* **Dois defeitos NOVOS do mesmo fluxo, corrigidos nesta rodada** (ambos em `server/src/producao.ts`, nenhuma migration):
+  1. **conclusão depois de reabertura produzia sem consumir insumo** — `jaConsumidoNaOrdem`/`calcularCustoReal` somavam só as saídas e o estorno devolve insumo por **lançamento compensatório** (entrada com o mesmo `ordem_id`); medido `1000 !== 980` na 2ª conclusão (insumo inflado, custo real descolado do estoque);
+  2. **o estorno não registrava o que revertia** — `custo_real`/`quantidade_produzida`/`quantidade_perdida` zerados na OP sem deixar o valor revertido em lugar consultável; medido `NaN !== 390`.
+* **Correção:** helper canônico `consumoLiquidoDaOrdem` (Σ saídas − Σ entradas, em quantidade **e** dinheiro) passa a alimentar **os três** fluxos que precisam concordar (baixa de insumo, custo real, estorno); a devolução usa custo unitário = valor líquido ÷ quantidade líquida; o estorno grava o bloco **`revertido`** no evento + auditoria (mensagem com `custo real revertido R$ X`). Modelo de movimentos compensatórios preservado; estados, custo previsto, proporcionalidade e perdas intocados.
+* **Prova:** **novo** `server/test/pg/e02-reabertura-estorno-postgresql.test.ts` — 8 testes: ciclo duplo (A) · 2 estornos simultâneos com saldo sobrando (B1) e com saldo exato (B2) · 2 conclusões simultâneas (B3) · rollback com falha na 2ª linha da grade (C) · multiempresa A/B, 404 nas quatro portas e **0** vínculos cruzados (D) · perdas/custo/histórico com `revertido` (E) · causa-raiz em SQL (F). **Antes: 6 pass / 2 fail → depois: 8 pass / 0 fail** em PostgreSQL **16.2** real; paridade em memória em `server/test/producao-e2.test.ts`.
+* **Bateria (tudo executado nesta rodada):** `test:pg` **142 testes · 141 pass · 0 fail · 0 skipped · 1 todo** (PostgreSQL real) · `server test` **760** (695 pass · 0 fail · 65 skip) · `client test` **262/262** · `smoke` **126/126** · `smoke:pg` **126/126** (banco novo) · typecheck **0** · lint **0 erros / 415 warnings** (idêntico ao baseline) · build OK · `audit:menu` **0 erros / 4 avisos**. `prisma validate` **não executável no sandbox** (download do engine bloqueado pela rede; nenhuma linha de schema tocada).
+* **GAPs novos (registrados, não corrigidos):** **GAP-E02-01** (`custo_medio` não é atualizado por movimentação manual de insumo → OP consome a R$ 0,00) · **GAP-E02-02** (`pageSize` fixo de 1000/5000 pode estornar OP gigante pela metade em silêncio) · **GAP-E02-03** (P3-07) · **GAP-E02-04** (`dados` da trilha não sai pela API).
+* **Governança:** PR aberto, **sem merge**; ERP-03 não iniciado; `brobond-ai-commerce` e módulos de Commerce/BI intocados.
+
 ---
 
 ### ERP-03 — Suíte E2E executável em PostgreSQL (GATE)

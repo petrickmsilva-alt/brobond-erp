@@ -409,6 +409,40 @@ test('E2: reabrir estorna estoque e insumos PELA FK e é idempotente', async () 
   assert.equal(liquido, 0, `o consumo líquido da OP deveria ser zero, é ${liquido}`);
 });
 
+test('E2: depois de reabrir, a próxima conclusão CONSOME o insumo de novo (líquido × bruto)', async () => {
+  const p = await novoProduto();
+  const { tecido } = await novaFicha(Number(p.id), { consumo: 2, perdaPct: 0, maoObra: 0, indiretos: 0 });
+  await saldoInsumo(Number(tecido.id), 1000);
+  const op = await novaOp(Number(p.id), 10);
+
+  // 1º ciclo: conclui (baixa 20 m) e reabre (devolve 20 m).
+  await updateRecord(RESOURCES.ordens, Number(op.id), { status: 'concluida' }, GERENTE, { escopo: GERENTE });
+  assert.equal(await s().insumoStock(Number(tecido.id)), 980, 'a 1ª conclusão baixa 20 m');
+  await chamar(producao.reabrirOrdem, reqDe({}, { params: { id: op.id }, user: GERENTE }));
+  assert.equal(await s().insumoStock(Number(tecido.id)), 1000, 'o estorno devolve os 20 m');
+
+  // 2º ciclo: a OP produz de novo e PRECISA baixar de novo. Somando apenas as
+  // saídas (bruto), o consumo já estornado continuava contando como vigente: a
+  // OP produzia sem baixar insumo — saldo inflado e custo real descolado.
+  await updateRecord(RESOURCES.ordens, Number(op.id), { status: 'concluida' }, GERENTE, { escopo: GERENTE });
+  const ordem = await s().get(RESOURCES.ordens, Number(op.id));
+  assert.equal(await s().insumoStock(Number(tecido.id)), 980, 'a 2ª conclusão consome os 20 m de novo');
+  assert.equal(Number(ordem!.custo_real), 200, 'o custo real é o consumo VIGENTE (20 m × R$ 10)');
+
+  // 3º ciclo: o estorno seguinte devolve exatamente o que a 2ª conclusão baixou.
+  const reaberta = await chamar(producao.reabrirOrdem, reqDe({}, { params: { id: op.id }, user: GERENTE }));
+  assert.equal(reaberta.status, 'planejada');
+  assert.equal(await s().insumoStock(Number(tecido.id)), 1000, 'o 2º estorno devolve os 20 m da 2ª conclusão');
+  assert.equal(await saldoProduto(Number(p.id), Number(ordem!.tamanho_id)), 0, 'o produto acabado também foi estornado');
+
+  // O histórico do que foi revertido fica na trilha (mensagem; `dados` é apagado
+  // pelo decorate na leitura da API).
+  const eventos = await eventosDaOrdem(Number(op.id));
+  const estornos = eventos.filter((e) => e.evento === 'reaberta');
+  assert.equal(estornos.length, 2, 'os dois estornos ficam na trilha');
+  assert.match(String(estornos[1].mensagem), /custo real revertido R\$ 200\.00/, 'a trilha guarda o custo real revertido');
+});
+
 test('E2: reabrir descarta os apontamentos para a próxima conclusão não ler produção estornada', async () => {
   const p = await novoProduto();
   const { tecido } = await novaFicha(Number(p.id), { consumo: 1, perdaPct: 0, maoObra: 0, indiretos: 0 });
