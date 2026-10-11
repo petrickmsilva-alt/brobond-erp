@@ -10,9 +10,11 @@
 > fix revertido ⇒ o teste do ciclo falha), bateria completa em **banco novo** (`# tests 124 ·
 > pass 123 · fail 0 · todo 1`) e CI verde incluindo o gate de smoke. Documento completo:
 > [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md).
-> **Nada foi corrigido:** as ressalvas viraram gaps registrados — **P2-08** (projeção com zero
-> usuários ativos: `23503` em `sale_items_sale_id_fkey` e `400` enganoso na via sob demanda),
-> **P2-09** (`test:pg` não repetível em banco reaproveitado) — e a linha **P1-14** foi reescrita
+> **Nada foi corrigido pela auditoria** (o papel dela é documentar): as ressalvas viraram gaps —
+> **P2-08** (projeção com zero usuários ativos: `23503` em `sale_items_sale_id_fkey` e `400`
+> enganoso na via sob demanda — **fechado no ciclo seguinte**, §5 "Ciclo P1-13 + P2-08") e
+> **P2-09** (`test:pg` não repetível em banco reaproveitado — **aberto**: é regra de processo da
+> bateria, não defeito de produto) — e a linha **P1-14** foi reescrita
 > porque o fallback de responsável é **global**, não por empresa (sem vazamento entre empresas:
 > verificado por canal e por `empresa_id`).
 
@@ -28,7 +30,8 @@
 > defeito real: `relatorios.ts` comparava `String(Date).slice(0,10)`
 > (`"Wed Oct 11"`) contra a data pedida em 8 pontos — em PostgreSQL o filtro
 > `?de=&ate=` **descartava vendas reais**. Corrigido com `diaISO()`;
-> `comissoes.ts:261` tem o mesmo defeito e ficou aberto para o ERP-06 (**P1-13**).
+> `comissoes.ts:261` tinha o mesmo defeito e foi corrigido no ciclo seguinte
+> (**P1-13**, fechado em 2026-10-11: normalização única em `utils.diaISO`, usada por 17 módulos).
 > Provas: `server/test/pg/bi-faturamento-e2e.test.ts` (banco novo: BI 20000 ×
 > relatório 20000; ABC classe A; canal externo intacto) e
 > `server/test/negocios-projecao-erp.test.ts` (paridade em memória 3/3).
@@ -486,7 +489,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P1-10** | `E2: OP cancelada é terminal` responde 500 (mensagem errada) — **fechado em ERP-02 como cascata** | ✅ | — | ✅ | — | — | — | smoke + `e02-ordem-reabrir-postgresql.test.ts` |
 | **P1-12** | `fiscal.ts` grava o payload do evento fiscal com `JSON.stringify(payload).slice(0, 20000)`: acima de 20.000 caracteres o JSON é **truncado no meio** e o `jsonb` recusa com 22P02 — a emissão falha com um 400 enganoso ("valor inválido em um dos campos"). Descoberto pelo contrato tipo × coluna do ERP-03 (o campo era `textarea` sobre `jsonb`; agora o tipo está alinhado, o corte continua) | ✅ | ✅ | ✅ | — | — | ✅ | contrato de tipo (ERP-03) | endereçado em **ERP-05** (Fiscal) |
 | **P1-11** | Assinatura de webhook é global por provedor (sem empresa): segredo de A recusa notificação de B; evento pode ser gravado com `empresa_id` de quem assinou | ✅ | ✅ | ✅ | — | — | ✅ | **todo** em `server/test/pg/e01-gateway-webhook-postgresql.test.ts` (descoberto no ERP-01) |
-| **P1-13** | Filtro de período comparava `String(Date).slice(0, 10)` com a data pedida: em PostgreSQL (TIMESTAMPTZ → `Date`) o valor vira `"Wed Oct 11"` e `?de=&ate=` **descarta linhas reais**. Achado pelo critério de igualdade do ERP-04; **8 pontos de `relatorios.ts` corrigidos** com `diaISO()` (mesma normalização do `dataISO` de `financeiro.ts:41-52`). **Aberto:** `comissoes.ts:261` (mesmo defeito, no relatório de comissões) | ✅ | ✅ | ✅ | — | — | — | ✅ `bi-faturamento-e2e` (relatório de faturamento) · aberto em comissões | ERP-06 |
+| **P1-13** | Filtro de período comparava `String(Date).slice(0, 10)` com a data pedida: em PostgreSQL (TIMESTAMPTZ → `Date`) o valor vira `"Thu Oct 01"` e `?de=&ate=` **descarta linhas reais**. Achado pelo critério de igualdade do ERP-04 (8 pontos de `relatorios.ts`); **varredura completa em 2026-10-11: 17 módulos** passaram a usar a **única** normalização `utils.diaISO` (`Date` \| ISO \| vazio \| inválido), e as cópias locais de `relatorios`, `financeiro`, `listasPreco`, `propostas` e `extrato` desapareceram. Corrigidos também `comissoes.ts:261` (relatório de comissões), `quality.ts`, `usuariosAdmin.ts`, `scheduled.ts`, `producao.ts`, `fiscalRegras.ts`, `politicasComerciais.ts`, `portal.ts`, `nfe.ts`, `export.ts` (CSV/XLSX), `gateway.ts` e `pdf.ts`. Fora de escopo **de propósito**: entradas externas (CSV/OFX/XML/corpo JSON) e datas geradas pelo próprio Node | ✅ | ✅ | ✅ | — | — | — | ✅ `utils.test.ts` 3/3 + `pg/comissoes-periodo.test.ts` (banco novo) + **mutação** (`comissoes.ts:261` revertido ⇒ `not ok`) | **fechado em 2026-10-11** (ciclo P1-13 + P2-08) |
 | **P1-14** | `sales.usuario_id` é `NOT NULL` (FK para `usuarios`): a projeção do ERP elege um **responsável técnico** — primeiro usuário ativo **da empresa** e, se a empresa não tiver nenhum, o primeiro usuário ativo **do sistema** (fallback global, **verificado na auditoria**: a venda da empresa 2 saiu assinada por usuário da empresa 1, sem vazamento em tela alguma: o BI escopa por `empresa_id` e o painel dos conectores escopa por `usuario_id + channel` de conector, canal que a projeção não produz). Com **zero** usuários ativos, ver **P2-08** | ✅ | ✅ | ✅ | — | — | — | ✅ `bi-faturamento-e2e` + `negocios-projecao-erp` | ADR-001 §4/§5 revisado + auditoria §6 (AUD-02) |
 
 ---
@@ -502,7 +505,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P2-05** | `audit:menu` não cobre recursos com CRUD sem módulo cujo nome difira do recurso | Ponto cego comprovado: `empresas` não foi sinalizado, `impostos_ncm` foi |
 | **P2-06** | Teste de concorrência apenas no `PgStore` | correto por design; **declarado em ERP-03** (cabeçalho de `scripts/smoke-pg.mjs` + §5 do roadmap): memória/demonstração não é produção |
 | **P2-07** | `/api/health` responde `{ok:true, db:'postgres'}` **antes** de as migrações e o `ensureAdmin` terminarem: um orquestrador que confie só no health pode rotear tráfego para uma instância ainda migrando (o gate `smoke:pg` precisou esperar o marco real do boot). Descoberto no ERP-03 | liveness × readiness; correção sugerida: só responder `ok` depois do boot completo |
-| **P2-08** | **Projeção do ERP com ZERO usuários ativos aborta com `23503`:** o passo das vendas exige responsável (`AND COALESCE(eu.usuario_id, fb.usuario_id) IS NOT NULL`), o passo dos **itens não repete a condição** e a instrução viola a FK `sale_items_sale_id_fkey` — a projeção inteira falha (nenhuma linha parcial) e a via `POST /api/negocios/margens/recalcular` responde **400 "Referência inválida"** (tradução do 23503), mensagem enganosa. **Descoberto na auditoria independente (AUD-01)**; o ADR dizia "pulada e logada" | ✅ | ✅ | ✅ | — | — | — | ❌ (`server/test/pg/bi-faturamento-e2e` não cobre o caso) | corrigir repetindo a condição no passo 2; sugerido como **primeiro ciclo pós-merge** (junto com P1-13) |
+| **P2-08** | **Projeção do ERP com ZERO usuários ativos abortava com `23503`:** o passo das vendas exige responsável (`AND COALESCE(eu.usuario_id, fb.usuario_id) IS NOT NULL`), o passo dos **itens não repetia a condição** e a instrução violava a FK `sale_items_sale_id_fkey` — a projeção inteira falhava (nenhuma linha parcial, transação abortada) e a via `POST /api/negocios/margens/recalcular` respondia **400 "Referência inválida"** (tradução do 23503 em `services.ts:43-50`, mensagem enganosa). **Descoberto na auditoria independente (AUD-01)**; o ADR dizia "pulada e logada". **Corrigido em 2026-10-11:** o `INSERT` dos itens ganhou `AND EXISTS (SELECT 1 FROM sales s WHERE s.id = 'erp:venda:' \|\| iv.venda_id)` — venda não projetada não produz itens, sem linha parcial e sem erro | ✅ | ✅ | ✅ | — | — | — | ✅ `pg/projecao-sem-usuario.test.ts` (banco novo) + **mutação** (cláusula removida ⇒ `23503`) + experimento `/tmp/aud-nouser.mts` | **fechado em 2026-10-11** (ciclo P1-13 + P2-08) |
 | **P2-09** | **`test:pg` não é repetível em banco reaproveitado:** `pg-cotacoes-compra` gera CNPJs cujo valor efetivo no índice `uq_empresas_cnpj` é `regexp_replace(cnpj,'[^0-9]','','g')` → **4–6 dígitos** derivados de um prefixo temporal base36 que muda devagar; as empresas de teste nunca são removidas e a execução seguinte colide em 23505 (5 testes reprovados em `brobond_teste` com 701 empresas; o mesmo arquivo passa 7/7 duas vezes em banco novo). **Descoberto na auditoria independente (AUD-03)** | ✅ | ✅ | ✅ | — | — | — | ❌ | derivar 14 dígitos do sufixo inteiro **ou** limpar as empresas do cenário no teardown |
 
 ---

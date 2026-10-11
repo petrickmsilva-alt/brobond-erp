@@ -44,7 +44,8 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > (/negocios/resumo × /relatorios/faturamento, tolerância zero) revelou e fez
 > corrigir **8 pontos** de `relatorios.ts` que comparavam `String(Date).slice(0,10)`
 > contra a data pedida — em PostgreSQL o filtro `?de=&ate=` **descartava linhas
-> reais**; `comissoes.ts:261` tem o mesmo defeito e ficou para o ERP-06 (P1-13).
+> reais**; `comissoes.ts:261` tinha o mesmo defeito e foi corrigido no ciclo seguinte
+> (**P1-13** fechado em 2026-10-11: `utils.diaISO` como normalização única).
 > Provas: `server/test/pg/bi-faturamento-e2e.test.ts` (banco novo; BI 20000 ×
 > relatório 20000; ABC classe A; canal externo intacto) e
 > `server/test/negocios-projecao-erp.test.ts` (paridade em memória 3/3).
@@ -54,10 +55,11 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > revertido ⇒ o teste do ciclo falha: `gateway.ts`, `producao.ts`+`pgstore.ts`, `services.ts`,
 > `db/schema.sql` com o mesmo EAN em duas empresas, `negocios.ts`, `relatorios.ts`), bateria
 > completa em **banco novo** (`test:pg` **123 pass / 0 fail / 1 todo**) e CI verde incluindo a
-> etapa nova de smoke. Achados registrados (não corrigidos): **P2-08** (projeção com zero
-> usuários ativos → `23503` na FK de `sale_items` e `400` enganoso na via sob demanda) e
+> etapa nova de smoke. Achados registrados: **P2-08** (projeção com zero
+> usuários ativos → `23503` na FK de `sale_items` e `400` enganoso na via sob demanda —
+> **fechado em 2026-10-11** com prova PG e mutação) e
 > **P2-09** (`test:pg` não é repetível em banco reaproveitado — CNPJ de teste com 4–6 dígitos
-> efetivos no índice `uq_empresas_cnpj`); a documentação do ADR-001 §4/§5 e a linha P1-14 foram
+> efetivos no índice `uq_empresas_cnpj`) — **aberto**; a documentação do ADR-001 §4/§5 e a linha P1-14 foram
 > corrigidas (o fallback de responsável é global, sem vazamento entre empresas nas telas atuais).
 > Documento: [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md).
 

@@ -21,6 +21,7 @@ import { currentUser } from './auth';
 import { parseId } from './validate';
 import { labelOf } from './store';
 import type { Row, Tx } from './store';
+import { diaISO } from './utils';
 
 export const ETAPAS = ['corte', 'costura', 'acabamento', 'revisao'] as const;
 export const DEFEITOS = [
@@ -162,8 +163,8 @@ export async function relatorioQualidade(req: Request, res: Response) {
   }));
 
   // Filtros
-  if (de) itens = itens.filter((i) => String(i.data).slice(0, 10) >= de);
-  if (ate) itens = itens.filter((i) => String(i.data).slice(0, 10) <= ate);
+  if (de) itens = itens.filter((i) => diaISO(i.data) >= de);
+  if (ate) itens = itens.filter((i) => diaISO(i.data) <= ate);
   if (etapa) itens = itens.filter((i) => i.etapa === etapa);
 
   // Resumo por tipo de defeito

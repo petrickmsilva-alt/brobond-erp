@@ -22,7 +22,7 @@ import { labelOf } from './store';
 import { checkAccess, getStore } from './services';
 import { currentUser, type AuthUser } from './auth';
 import { escopoDoAtor, aplicarFiltroEmpresa, assertRegistroDaEmpresa, EMPRESA_PADRAO } from './empresa';
-import { round2, somaMoeda } from './utils';
+import { round2, somaMoeda, diaISO } from './utils';
 import type { Row, Tx } from './store';
 
 export const R_COMISSOES_EVENTOS: Resource = {
@@ -258,7 +258,7 @@ export async function resumoComissoes(req: Request, res: Response) {
 
   const repNome = new Map(repsR.rows.map((r) => [Number(r.id), labelOf(rReps, r)]));
   const noPeriodo = (d: unknown) => {
-    const ds = String(d || '').slice(0, 10);
+    const ds = diaISO(d);
     if (!ds) return false;
     return (!de || ds >= de) && (!ate || ds <= ate);
   };

@@ -1816,6 +1816,11 @@ export async function projetarVendasErp(ids?: number[]): Promise<ProjecaoErpResu
         JOIN vendas v ON v.id = iv.venda_id
        WHERE v.status IN ('faturada', 'entregue')
          ${filtroVendas}
+         -- P2-08 (auditoria independente, 2026-10-11): o passo 1 não projeta a
+         -- venda sem responsável ativo; sem repetir a condição AQUI, o item
+         -- entrava órfão e violava a FK "sale_items_sale_id_fkey" (23503), abortando
+         -- a projeção inteira (400 "Referência inválida" na via sob demanda).
+         AND EXISTS (SELECT 1 FROM sales s WHERE s.id = '${ERP_ID_PREFIXO_VENDA}' || iv.venda_id)
       ON CONFLICT (id) DO UPDATE SET
         product_id = EXCLUDED.product_id,
         size_id = EXCLUDED.size_id,

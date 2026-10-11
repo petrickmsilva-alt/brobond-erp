@@ -16,7 +16,7 @@ import { checkAccess, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
 import type { Row, Tx } from './store';
 import { labelOf } from './store';
-import { round2, somaMoeda } from './utils';
+import { round2, somaMoeda, diaISO } from './utils';
 import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, EMPRESA_PADRAO, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { estornarComissoesDaVenda, registrarComissaoPorRecebimento } from './comissoes';
 
@@ -43,13 +43,9 @@ const hoje = () => new Date().toISOString().slice(0, 10);
  * entrega string ISO. Esta função aceita os dois e, no que não for data,
  * devolve null para quem chamou decidir o fallback.
  */
+/** Wrapper de `utils.diaISO` com o contrato deste módulo (vazio -> null). */
 function dataISO(valor: unknown): string | null {
-  if (!valor) return null;
-  if (valor instanceof Date) return Number.isNaN(valor.getTime()) ? null : valor.toISOString().slice(0, 10);
-  const texto = String(valor);
-  if (/^\d{4}-\d{2}-\d{2}/.test(texto)) return texto.slice(0, 10);
-  const parsed = new Date(texto);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+  return diaISO(valor) || null;
 }
 const addDias = (d: Date, n: number) => new Date(d.getTime() + n * 86400000);
 const fmtData = (d: Date) => d.toISOString().slice(0, 10);
@@ -466,7 +462,7 @@ export async function syncAporte(
   const lanc = await criarLancamento(
     {
       empresa_id: empresaDe(after),
-      data: String(after.data || hoje()).slice(0, 10),
+      data: dataISO(after.data) || hoje(),
       tipo: 'investimento',
       categoria_id: cat?.id ?? null,
       conta_id: after.conta_id ?? null,
@@ -503,7 +499,7 @@ export async function syncTransferencia(before: Row | null, after: Row, actor: {
   const valor = Number(after.valor || 0);
   if (!Number.isFinite(valor) || valor <= 0) throw new HttpError(400, 'Informe um valor maior que zero.', { valor: 'Valor inválido' });
 
-  const data = String(after.data || hoje()).slice(0, 10);
+  const data = dataISO(after.data) || hoje();
   const status = String(after.status) === 'cancelado' ? 'cancelado' : 'confirmado';
   const nomeConta = async (cid: number) => {
     const c = await s.findOneWhere(rContas, { id: cid }, tx);
@@ -685,7 +681,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     return String(l.descricao || 'Conta em aberto');
   };
   const vencidas = (d: unknown) => {
-    const s = String(d || '').slice(0, 10);
+    const s = dataISO(d);
     if (!s) return false;
     return s < hoje();
   };
@@ -700,7 +696,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
       tipo: String(l.referencia_tipo || 'outro'),
       nome: nomeRef(l),
       valor: Number(l.valor || 0),
-      vencimento: String(l.vencimento || l.data || '').slice(0, 10) || null,
+      vencimento: dataISO(l.vencimento || l.data) || null,
       parcelas: Number(l.parcela || 1),
       total_parcelas: Number(l.total_parcelas || 1),
       status: String(l.status || 'pendente'),
@@ -715,7 +711,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
       tipo: String(l.referencia_tipo || 'outro'),
       nome: nomeRef(l),
       valor: Number(l.valor || 0),
-      vencimento: String(l.vencimento || l.data || '').slice(0, 10) || null,
+      vencimento: dataISO(l.vencimento || l.data) || null,
       parcelas: Number(l.parcela || 1),
       total_parcelas: Number(l.total_parcelas || 1),
       status: String(l.status || 'pendente'),
@@ -750,7 +746,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
   };
 
   const emJanela = (d: unknown, dias: number) => {
-    const s = String(d || '').slice(0, 10);
+    const s = dataISO(d);
     if (!s) return true; // sem vencimento — conta como próximo
     const hojeS = hoje();
     const limite = new Date();
@@ -773,7 +769,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     forma_pagamento: r.forma_pagamento || null,
     frequencia: String(r.frequencia || 'mensal'),
     dia: Number(r.dia || 1),
-    proxima_geracao: String(r.proxima_geracao || '').slice(0, 10) || null,
+    proxima_geracao: dataISO(r.proxima_geracao) || null,
     status: String(r.status || 'ativo'),
   }));
 
@@ -853,7 +849,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     valor: Number(l.valor || 0),
     categoria: nomeCat(l.categoria_id),
     conta: nomeConta(l.conta_id),
-    vencimento: String(l.vencimento || '').slice(0, 10) || null,
+    vencimento: dataISO(l.vencimento) || null,
     parcela: Number(l.parcela || 1),
     total_parcelas: Number(l.total_parcelas || 1),
     referencia_tipo: l.referencia_tipo || null,
@@ -944,7 +940,7 @@ export async function processarRecorrencias(actor: { id: number | null; name: st
   let total = 0;
 
   for (const rec of lista.rows) {
-    const proxima = String(rec.proxima_geracao || calcularProximaGeracao(rec)).slice(0, 10);
+    const proxima = dataISO(rec.proxima_geracao || calcularProximaGeracao(rec)) || '';
     if (proxima > hojeS) continue;
 
     // Data do lançamento: usa o vencimento da recorrência.
@@ -1221,7 +1217,7 @@ export function casarLinhaExtrato(linha: { data?: string; valor: number; descric
   if (cand.length === 0) cand = pendentes.filter((l) => Math.abs(liquidoDe(l) - valor) < 0.01);
   // Data é critério eliminatório (não sugestivo): linha com data só casa com
   // título vencendo/emitido NAQUELA data. Menos que isso é conciliar no chute.
-  if (linha.data) cand = cand.filter((l) => String(l.vencimento || l.data || '').slice(0, 10) === linha.data);
+  if (linha.data) cand = cand.filter((l) => dataISO(l.vencimento || l.data) === linha.data);
   if (buscaDesc && cand.length > 1) {
     const sobreDesc = cand.filter((l) => buscaDesc.includes(String(l.descricao || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim()) || String(l.descricao || '').toLowerCase().includes(buscaDesc));
     if (sobreDesc.length) cand = sobreDesc;
@@ -1292,7 +1288,7 @@ export async function recebiveisCartao(req: Request, res: Response) {
   );
   const porDia = new Map<string, { vencimento: string; bruto: number; taxas: number; liquido: number; titulos: number }>();
   for (const l of cartao) {
-    const chave = String(l.vencimento || l.data || '').slice(0, 10) || 'sem_vencimento';
+    const chave = dataISO(l.vencimento || l.data) || 'sem_vencimento';
     const item = porDia.get(chave) || { vencimento: chave, bruto: 0, taxas: 0, liquido: 0, titulos: 0 };
     item.bruto = r2(item.bruto + Number(l.valor || 0));
     item.liquido = r2(item.liquido + liquidoDe(l));
@@ -1366,7 +1362,7 @@ export async function efetuarBaixa(
 
     const contaBaixa = opcoes.conta_id ?? lanc.conta_id ?? null;
     const formaBaixa = opcoes.forma_pagamento ?? lanc.forma_pagamento ?? null;
-    const dataBaixa = String(opcoes.data || hoje()).slice(0, 10);
+    const dataBaixa = dataISO(opcoes.data) || hoje();
     const origem = opcoes.origem || 'manual';
     const jurosMulta = r2(juros + multa);
     const filhos: number[] = [];

@@ -14,7 +14,7 @@ import { enviarArquivo, type ColunaExport } from './export';
 import type { Row } from './store';
 import { labelOf } from './store';
 import { HttpError } from './errors';
-import { round2, somaMoeda } from './utils';
+import { round2, somaMoeda, diaISO } from './utils';
 
 const FATURADAS = ['faturada', 'entregue'];
 
@@ -27,14 +27,7 @@ const FATURADAS = ['faturada', 'entregue'];
  * normalização que o módulo financeiro já usava (`dataISO`, financeiro.ts:41-52);
  * valor vazio/ilegível vira '' (mesma semântica do `String(x || '')` anterior).
  */
-function diaISO(valor: unknown): string {
-  if (valor instanceof Date) return Number.isNaN(valor.getTime()) ? '' : valor.toISOString().slice(0, 10);
-  const texto = String(valor ?? '').trim();
-  if (!texto) return '';
-  if (/^\d{4}-\d{2}-\d{2}/.test(texto)) return texto.slice(0, 10);
-  const parsed = new Date(texto);
-  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
-}
+
 
 function periodo(req: Request): { de: string | null; ate: string | null } {
   const de = typeof req.query.de === 'string' && req.query.de ? String(req.query.de).slice(0, 10) : null;

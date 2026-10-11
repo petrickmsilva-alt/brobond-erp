@@ -17,6 +17,7 @@
 | **ERP-04** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-04 + [ADR-001](ADR-001-FONTE-UNICA-FATURAMENTO.md) |
 | **ERP-05 … ERP-13** | ⏳ não iniciados | — |
 | **Auditoria independente (ERP-01…04)** | ✅ **EXECUTADA** (2026-10-11) | [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md) — 6 provas por mutação + bateria em banco novo + CI verde · **GATE APROVADO COM RESSALVAS (P2)** |
+| **Ciclo P1-13 + P2-08** (ressalvas de código da auditoria) | ✅ **IMPLEMENTADO** (2026-10-11) | §5 "Ciclo P1-13 + P2-08", abaixo — prova PG + mutação para cada um; **P2-09 segue aberto** (regra de processo) |
 
 **Regra de execução:** um ciclo só muda de ⏳ para ✅ com a bateria completa verde (typecheck · lint · build · `server test` · `client test` · `test:pg` · `smoke`) **e** o teste central falhando antes da correção e passando depois, em PostgreSQL real.
 
@@ -400,9 +401,31 @@ cancelada → `CANCELLED`, aberta não projetada, idempotência e o **gancho rea
    regressão**: campos conferidos um a um e soma preservada no BI.
 
 - **Regressão:** `server test` **677 pass / 0 fail / 63 skipped** (740) · `client test` **226** · `typecheck` 0 · lint **0 erros / 401 warnings** · build OK · smoke demonstração **126/126** · `smoke:pg` (banco novo) **126/126**.
-- **Achados registrados neste ciclo:** **P1-13** (filtro de período por `String(Date).slice` — `comissoes.ts:261` aberto; 8 pontos de `relatorios.ts` corrigidos aqui) · **P1-14** (`sales.usuario_id NOT NULL` obriga a projeção a eleger um responsável por empresa — documentado no ADR; venda de empresa sem usuário ativo não é projetada).
+- **Achados registrados neste ciclo:** **P1-13** (filtro de período por `String(Date).slice` — `comissoes.ts:261` fechado no ciclo seguinte; 8 pontos de `relatorios.ts` corrigidos aqui) · **P1-14** (`sales.usuario_id NOT NULL` obriga a projeção a eleger um responsável por empresa — documentado no ADR; venda de empresa sem usuário ativo não é projetada).
 
 ---
+
+### Resumo curado dos ciclos ERP-01 … ERP-04 (2026-10-11)
+
+Uma página para quem não vai ler os quatro blocos acima. Cada ciclo fechou um defeito **provado** (dois
+deles já observados em produção/auditoria), com teste que **falha antes e passa depois** em PostgreSQL real.
+
+| Ciclo | Defeito que existia | Onde estava | Prova |
+|---|---|---|---|
+| **ERP-01** | webhook de pagamento **descartado** (cobrança presa em `pendente`) e `202` devolvendo nome de constraint em endpoint anônimo | `gateway.ts`: `JSON.parse(String(payload))` sobre coluna **JSONB** | `pg/e01-gateway-webhook-postgresql.test.ts` · mutação: **2 falhas** · HTTP `wh1 200 {paga}` / `wh2 200 {duplicado}` |
+| **ERP-02** | reabrir/estornar OP devolvia **500** (`estoques_quantidade_nao_negativo` disparando no `INSERT … ON CONFLICT`) | `producao.ts` + `pgstore.ts` | `pg/e02-ordem-reabrir-postgresql.test.ts` · mutação: **2 falhas** · `POST /ordens/1/reabrir → 200` |
+| **ERP-03** | instalação nova **sem Local padrão** (a primeira operação de estoque falhava) e índice único **global** de `codigo_barras` derrubando o boot | `services.ts` / `db/schema.sql` | `pg/e03-*` (2 arquivos) + `pg/contrato-tipo-coluna.test.ts` (88 recursos) · mutações: **1 falha** e `MIGRATE FALHOU: could not create unique index "uq_produtos_codigo_barras"` |
+| **ERP-04** | BI lia `sales` e não enxergava a venda do ERP (`pedidos: 0`); filtro de período do relatório **descartava** linhas | `negocios.ts` / `relatorios.ts` | `pg/bi-faturamento-e2e.test.ts` (banco novo, servidor real): BI `20000` = relatório `20000`, ABC classe A, canal externo intacto · mutações: `fail 1` em cada |
+
+**Estado na data desta curadoria:**
+
+* **Regressão:** `server` **743** testes (680 pass · 0 fail · 63 skip) · `client` **226/226** · lint **0 erros** (401 warnings, igual ao baseline) · `typecheck` **0** · `build` **OK**.
+* **PostgreSQL:** `npm run test:pg` em **banco novo** **126 · 125 pass · 0 fail · 1 todo** (P1-11) · `npm run smoke:pg` **126/126** — o mesmo smoke que a auditoria mediu em **119/126** antes das correções (as 7 falhas eram: 4 de estorno, 2 de cascata e 3 de gateway).
+* **P0 fechados:** P0-01 (ERP-02) · P0-02 (ERP-01) · P0-03 (ERP-04) · P0-04 e P0-05 (ERP-03).
+* **P1 fechados:** P1-07 (ERP-04) · P1-10 (ERP-02, cascata) · P1-13 (ciclo pós-auditoria).
+* **Abertos e conhecidos:** P1-11 (escopo multiempresa da assinatura de webhook — decisão de arquitetura) e P2-09 (a bateria só vale em banco novo — regra de processo, não defeito).
+* **Fora de escopo por decisão:** E8 Commerce e integrações externas — **nenhum** arquivo do repositório do Commerce foi lido, copiado ou tocado.
+* **Merge:** o fluxo combinado é **AUDITORIA → GATE → MERGE → ERP-02 → …**; a auditoria **não mergeia**. A [PR #49](https://github.com/petrickmsilva-alt/brobond-erp/pull/49) segue aberta aguardando a decisão do dono do repositório. Os ciclos **não** foram desenhados para avançar sem essa decisão — o próximo (ERP-05) está descrito e pronto, não iniciado.
 
 ### Auditoria independente (ERP-01 … ERP-04) — 2026-10-11
 
@@ -442,6 +465,57 @@ runs. A causa foi medida: um único `migrate()` custa **~30 s neste sandbox** (c
 é I/O) e são 24 arquivos de teste, cada um com a sua migração; em disco rápido o mesmo trabalho cai
 para a casa do minuto e meio. O log do runner não é baixável deste ambiente — a bateria local é a
 evidência primária.
+
+---
+
+### Ciclo P1-13 + P2-08 — as ressalvas de código da auditoria, fechadas (2026-10-11)
+
+**Origem:** as duas ressalvas de **código** do [§6 da auditoria independente](AUDITORIA-INDEPENDENTE-ERP-01-04.md).
+Nenhuma das duas é funcionalidade ausente: são defeitos comprovados em PostgreSQL, na linha do
+que o ERP-04 tornou visível (número certo × número que o código destrói). Entraram antes do ERP-05
+para a bateria de referência continuar sem "falha conhecida".
+
+**P1-13 — uma única normalização de data civil (`utils.diaISO`).**
+A classe do defeito: o driver entrega `TIMESTAMPTZ` como `Date`, `String(date).slice(0, 10)`
+produz `"Thu Oct 01"` e **qualquer** comparação lexicográfica de período (ou igualdade de dia)
+passa a **descartar linhas reais** — em silêncio, sem erro e sem log. Corrigido em **18 arquivos** (= `utils.ts` + 17 módulos),
+com a implementação única em `server/src/utils.ts` (`Date` \| string ISO \| string \| vazio \|
+inválido → `''`, comentário explicando o porquê): `relatorios.ts`, `financeiro.ts` (que já tinha a
+cópia certa — passou a delegar), `comissoes.ts`, `extrato.ts`, `export.ts` (CSV/XLSX),
+`listasPreco.ts`, `propostas.ts`, `quality.ts`, `usuariosAdmin.ts`, `scheduled.ts`,
+`producao.ts`, `fiscalRegras.ts`, `politicasComerciais.ts`, `portal.ts`, `nfe.ts`, `gateway.ts` (vencimento vindo do lançamento) e `pdf.ts` (documento impresso). As cinco cópias
+locais (`relatorios`, `financeiro`, `listasPreco`, `propostas`, `extrato`) desapareceram.
+**Fora de escopo, de propósito:** entradas **externas** (CSV/OFX/XML/corpo JSON — formato que o
+sistema não controla, ex.: `financeiro.ts:1180`) e as datas que o próprio Node produz
+(`new Date().toISOString().slice(0, 10)`), que não têm o defeito.
+
+**P2-08 — o passo dos itens repete a condição de responsável.**
+`sales.usuario_id` é `NOT NULL`: o passo das vendas só projeta com responsável ativo
+(`AND COALESCE(eu.usuario_id, fb.usuario_id) IS NOT NULL`). O passo dos itens **não repetia** a
+condição — com zero usuários ativos a venda não entrava em `sales` e os itens tentavam entrar:
+`23503` (`sale_items_sale_id_fkey`) abortava a transação inteira e a via
+`POST /api/negocios/margens/recalcular` respondia `400 "Referência inválida"`
+(`translatePgError` em `services.ts:43-50`) — mensagem que esconde a causa real. Corrigido com
+`AND EXISTS (SELECT 1 FROM sales s WHERE s.id = 'erp:venda:' || iv.venda_id)` no `INSERT` dos
+itens: venda não projetada **não produz itens**, sem linha parcial e sem erro.
+
+**Evidência (PostgreSQL 18.4 real; bancos descartáveis novos):**
+
+| Prova | Comando | Resultado |
+|---|---|---|
+| P1-13 — unidade | `server/test/utils.test.ts` | **3/3** (inclui o caso `Date` → `"Thu Oct 01"` × `diaISO` → `2026-10-01`) |
+| P1-13 — ponta a ponta | `server/test/pg/comissoes-periodo.test.ts` (banco novo) | ✅ venda faturada 28/04 e evento 30/04 aparecem no período; fora do período, nada |
+| **P1-13 — mutação** | `comissoes.ts:261` revertido para `String(d \|\| '').slice(0, 10)` | ❌ **`not ok`** — "o representante precisa aparecer no relatório do período" |
+| P2-08 — ponta a ponta | `server/test/pg/projecao-sem-usuario.test.ts` (banco novo) | ✅ não lança, **nenhuma linha parcial** (0 em `sales` e 0 em `sale_items`), e projeta quando o responsável volta |
+| **P2-08 — mutação** | cláusula `EXISTS` do passo 2 removida | ❌ **`not ok`** — `23503 sale_items_sale_id_fkey` (`Key (sale_id)=(erp:venda:7) is not present in table "sales"`) |
+| P2-08 — experimento controlado | `/tmp/aud-nouser.mts` (banco descartável) | **pré-fix:** `projetarVendasErp` LANÇA `23503` e a rota devolve erro; **pós-fix:** `{vendas:0, itens:0}` e a rota responde `200` |
+| Bateria completa | `npm run test:pg` em banco NOVO | **126 testes · 125 pass · 0 fail · 1 todo** (P1-11) |
+| Regressão | `server test` · `client test` · `lint` · `typecheck` | **743** (680 pass · 0 fail · 63 skip) · **226/226** · **0 erros** / 401 warnings · **0** |
+| Smoke PostgreSQL | `npm run smoke:pg` (banco novo) | **126/126** |
+
+**Nenhuma migration, nenhum arquivo do Commerce, nenhuma rota, tela ou menu alterados.**
+O `todo` da bateria continua sendo o P1-11 (escopo multiempresa da assinatura de webhook), que
+segue **aberto por decisão de arquitetura** — como registrado no ERP-01.
 
 ---
 
@@ -634,7 +708,8 @@ MENU ERP FINAL PROPOSTO (ERP-05, ERP-06, ERP-07 e ERP-11 implementam as entradas
 | P2-05 ponto cego do `audit:menu` | 🟡 P2 | ERP-10 |
 | P2-06 concorrência só no `PgStore` | 🟡 P2 | **declarado em ERP-03 ✅** (mesma nota; a suíte de concorrência continua exclusiva do PostgreSQL) |
 | P2-07 `/api/health` responde `db=postgres` antes das migrações | 🟡 P2 | **descoberto no ERP-03**; registrado no relatório (liveness × readiness) |
-| P2-08 projeção do ERP com ZERO usuários ativos → `23503`/`400` enganoso (AUD-01) | 🟡 P2 | **descoberto na auditoria independente (2026-10-11)**; candidato ao primeiro ciclo pós-merge (junto com P1-13) |
+| P1-13 filtro de período por `String(Date).slice(0,10)` (relatórios, comissões e mais 13 módulos) | 🟠 P1 | **fechado em 2026-10-11** (ciclo P1-13 + P2-08: `utils.diaISO` único; prova PG + mutação) |
+| P2-08 projeção do ERP com ZERO usuários ativos → `23503`/`400` enganoso (AUD-01) | 🟡 P2 | **fechado em 2026-10-11** (ciclo P1-13 + P2-08: `EXISTS` no passo dos itens; prova PG + mutação) |
 | P2-09 `test:pg` não repetível em banco reaproveitado (AUD-03) | 🟡 P2 | **descoberto na auditoria independente (2026-10-11)**; exige banco novo como a bateria de referência |
 | P3-01 … P3-06 | 🔵 P3 | **FUTURO** — fora dos ciclos do CORE |
 
@@ -671,6 +746,6 @@ O BROBOND ERP está **mais perto do fim do que o volume de pendências sugere**:
 
 **Progresso em 2026-10-11:** **ERP-01, ERP-02, ERP-03 e ERP-04 fechados** — o BI passou a refletir a operação do ERP (ADR-001, projeção `vendas → sales`), com `BI == relatório` no mesmo período e o filtro de período de `relatorios.ts` corrigido (8 pontos) como efeito colateral do próprio critério de igualdade. A **auditoria independente** dos quatro ciclos (6 provas por mutação, bateria em banco novo, CI verde) foi executada sobre `bb17f19` com veredito **✅ GATE APROVADO COM RESSALVAS (P2)** — P0-02 (webhook de pagamento) e P0-01 (estorno/reabertura de OP) corrigidos, cada um com prova *falha antes → passa depois* em PostgreSQL real, sem tocar em Commerce e sem migration. O termômetro da auditoria (**smoke contra PostgreSQL real**) saiu de **119/126** para **126/126**. **ERP-03 fechou o P0-04** (gate executável em PostgreSQL: `npm run smoke:pg` cria banco novo, sobe a API e roda o smoke — 126/126 sem nenhum SQL manual —, agora no job `testes-postgres` do CI) **e descobriu/fechou o P0-05** (o índice único global legado de `codigo_barras` derrubava o boot em banco com o mesmo código de barras em duas empresas). Com os quatro P0 fechados **e a auditoria independente executada**, a ressalva está retirada: o veredito é 🟢 — e a decisão de **merge** é do dono do repositório (a auditoria não mergeia). No caminho, a implementação do ERP-01 **descobriu e registrou** o P1-11 (escopo multiempresa da assinatura de webhook), que **não** foi corrigido por exigir decisão de arquitetura — coerente com a regra de o ciclo não decidir sozinho o que é de outro ciclo.
 
-**Ressalvas abertas depois da auditoria (nenhuma bloqueia o merge pelo critério P0/P1):** **P2-08** — projeção com zero usuários ativos aborta em `23503` (o passo dos itens não repete a condição de responsável) e a via sob demanda devolve `400` enganoso; **P2-09** — `test:pg` não é repetível em banco reaproveitado (CNPJ de teste com 4–6 dígitos efetivos). Ambas com recomendação escrita na [auditoria independente](AUDITORIA-INDEPENDENTE-ERP-01-04.md).
+**Ressalvas depois da auditoria (ciclo de 2026-10-11):** das duas ressalvas de código, **P2-08 ficou fechada** — o passo dos itens passou a repetir a condição de responsável (`EXISTS` na venda pai), com prova `server/test/pg/projecao-sem-usuario.test.ts` e mutação (`23503` antes, `{vendas:0, itens:0}` depois) — e **P1-13** (o mesmo `String(Date).slice(0,10)` de `comissoes.ts:261`) foi fechado por varredura, com `utils.diaISO` como normalização única em **17 módulos** (18 arquivos com `utils.ts`) e mutação provando que o teste de comissões falha com o código antigo. **P2-09 segue aberto** — `test:pg` não é repetível em banco reaproveitado; é regra de processo da bateria (banco novo como referência, como o CI já faz), não defeito de produto. Recomendações na [auditoria independente](AUDITORIA-INDEPENDENTE-ERP-01-04.md) §6 e §10.
 
 **Nada foi implementado, corrigido, migrado, agendado ou mergeado. O menu não foi alterado. O Commerce não foi tocado.**

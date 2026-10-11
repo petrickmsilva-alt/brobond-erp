@@ -26,6 +26,7 @@ import { lerRegistro, restantesRegistro } from './mfaBackup';
 import { exigirRateLimit, registrarFalha } from './security';
 import { obterPolitica, validarSenhaUsuario, vencimentoSenha } from './politicaSenha';
 import { enviarArquivo, type ColunaExport } from './export';
+import { diaISO } from './utils';
 
 const CONVITE_TTL_HORAS = Number(process.env.INVITE_TTL_HOURS) || 48;
 
@@ -365,7 +366,7 @@ export async function resumoUsuarios(req: Request, res: Response) {
       if (precisaCertificar(u, agora)) t.nao_certificados++;
     }
     const loginMs = u.ultimo_login ? new Date(String(u.ultimo_login)).getTime() : 0;
-    if (String(u.ultimo_login || '').slice(0, 10) === hoje) t.logins_hoje++;
+    if (diaISO(u.ultimo_login) === hoje) t.logins_hoje++;
     if (ativo && u.senha_definida_em && (!loginMs || loginMs < ha30d)) t.sem_login_30d++;
   }
 
@@ -396,12 +397,12 @@ export async function resumoUsuarios(req: Request, res: Response) {
       store.list(RESOURCES.auditoria, { page: 1, pageSize: 2000, sort: 'data', dir: 'desc', filter: { acao: 'login_falha' } }),
     ]);
     for (const e of ok.rows) {
-      const b = porDia.get(String(e.data).slice(0, 10));
+      const b = porDia.get(diaISO(e.data));
       if (b) b.logins++;
     }
     let f24 = 0;
     for (const e of falhas.rows) {
-      const b = porDia.get(String(e.data).slice(0, 10));
+      const b = porDia.get(diaISO(e.data));
       if (b) b.falhas++;
       if (agora - new Date(String(e.data)).getTime() < 86400000) f24++;
     }

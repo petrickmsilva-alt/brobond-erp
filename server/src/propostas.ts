@@ -36,7 +36,7 @@ import { checkAccess, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
 import { assertRegistroDaEmpresa, escopoDoAtor, validarReferenciasDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
-import { round2 } from './utils';
+import { round2, diaISO } from './utils';
 import { precoDe } from './listasPreco';
 import type { Row, Tx } from './store';
 
@@ -90,8 +90,9 @@ function num(v: unknown, padrao = 0): number {
 }
 
 function dataISO(v: unknown): string | null {
-  if (v === null || v === undefined || v === '') return null;
-  return String(v).slice(0, 10);
+  // Uma única implementação no módulo (`utils.diaISO`): aqui só o wrapper que
+  // traduz '' (vazio/inválido) para null, o contrato destes módulos.
+  return diaISO(v) || null;
 }
 
 async function registrarEvento(

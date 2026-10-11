@@ -284,3 +284,28 @@ apagou nenhuma linha de teste.
 * Não houve auditoria de segurança ofensiva (o escopo de RBAC/multiempresa é o dos ciclos).
 * O CI do push final desta auditoria foi observado por `gh run list`; a bateria local é a
   evidência primária.
+
+## 10. Encaminhamento (acrescentado em 2026-10-11, depois desta auditoria)
+
+O ciclo seguinte (**"P1-13 + P2-08"**, roadmap §5) fechou as duas ressalvas de **código** apontadas aqui.
+Esta seção é um acréscimo: as seções §0–§9 permanecem **exatamente como foram publicadas** na auditoria
+(`750a85e`), porque o papel do documento é registrar o que a auditoria encontrou — não o que foi corrigido
+depois dela.
+
+* **P2-08 → fechada.** O passo dos itens passou a repetir a condição de responsável
+  (`AND EXISTS (SELECT 1 FROM sales s WHERE s.id = 'erp:venda:' || iv.venda_id)`). Reprodução exata do
+  defeito **antes** da correção (experimento em banco descartável, `/tmp/aud-nouser.mts`, com zero usuários
+  ativos e sem a venda pai projetada): `projetarVendasErp` lança `23503` —
+  `Key (sale_id)=(erp:venda:7) is not present in table "sales"` (constraint `sale_items_sale_id_fkey`).
+  **Depois:** `{vendas: 0, itens: 0}`, sem linha parcial; a via sob demanda responde `200`. Prova permanente:
+  `server/test/pg/projecao-sem-usuario.test.ts` (mutação: cláusula removida ⇒ `not ok` com o mesmo `23503`).
+  Nota de transparência: na **primeira** execução dentro da bateria esse teste falhou — por um defeito **da
+  limpeza do próprio teste** (a projeção assinava as vendas com o usuário do teste e `sales_usuario_id_fkey`
+  é `RESTRICT`), corrigido antes da publicação do ciclo.
+* **P1-13 → fechado por varredura.** `utils.diaISO` passou a ser a **única** normalização de data civil,
+  consumida por 17 módulos (18 arquivos com `utils.ts`), incluindo `comissoes.ts:261`, citado nesta auditoria
+  como aberto. Provas: `server/test/utils.test.ts` (3/3), `server/test/pg/comissoes-periodo.test.ts` (banco
+  novo) e mutação (`comissoes.ts:261` revertido ⇒ `not ok`: "o representante precisa aparecer no relatório do
+  período").
+* **P2-09 → continua aberto.** É regra de processo da bateria (banco novo como referência, como o CI já faz),
+  não defeito de produto; segue registrada no roadmap §8 e em `docs/ERP-GAPS.md`.

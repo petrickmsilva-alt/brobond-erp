@@ -11,6 +11,7 @@ import { getPublicResource, type Resource } from './resources';
 import { aplicarFiltroEmpresa } from './empresa';
 import { checkAccess, escopoDe, getStore, validarReferenciasDeSaida } from './services';
 import { currentUser } from './auth';
+import { diaISO } from './utils';
 import type { Row } from './store';
 
 // ----------------------------------------------------------------------------
@@ -84,7 +85,7 @@ async function xlsxBuffer(colunas: ColunaExport[], linhas: Row[], sheetName: str
           ? Number(raw) || 0
           : c.tipo === 'date'
             ? raw
-              ? String(raw).slice(0, 10)
+              ? diaISO(raw)
               : undefined
             : valorCelula(c, r);
     }

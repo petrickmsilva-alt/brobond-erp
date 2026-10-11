@@ -65,3 +65,27 @@ export function truncate(s: string, maxLen: number): string {
   if (s.length <= maxLen) return s;
   return s.slice(0, maxLen - 3) + '...';
 }
+
+/**
+ * Normaliza um valor de data para o dia civil `AAAA-MM-DD`.
+ *
+ * O Postgres entrega TIMESTAMPTZ como `Date`; `String(date).slice(0, 10)` produz
+ * `"Wed Oct 11"` — e uma comparação lexicográfica de período passa a DESCARTAR
+ * linhas reais (comparar `"Wed Oct 1"` com `"2026-10-11"` é comparar letra com
+ * dígito). Aceita `Date`, string ISO (com ou sem hora) e string que `new Date`
+ * entenda; devolve `''` para vazio/inválido, para quem chamou decidir o fallback.
+ *
+ * Esta é a ÚNICA implementação: `relatorios.ts`, `financeiro.ts`, `comissoes.ts`,
+ * `extrato.ts`, `listasPreco.ts`, `propostas.ts` e `export.ts` usam esta função
+ * (P1-13 — auditoria independente de 2026-10-11; antes havia cinco cópias, quatro
+ * delas erradas para valores vindos do banco).
+ */
+export function diaISO(valor: unknown): string {
+  if (valor === null || valor === undefined) return '';
+  if (valor instanceof Date) return Number.isNaN(valor.getTime()) ? '' : valor.toISOString().slice(0, 10);
+  const texto = String(valor).trim();
+  if (!texto) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(texto)) return texto.slice(0, 10);
+  const parsed = new Date(texto);
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+}

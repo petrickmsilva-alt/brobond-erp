@@ -31,7 +31,7 @@ import { getResource, type Resource } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, exigirReautenticacao, type AuthUser } from './auth';
 import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, empresaDoRegistroAudit, empresaExplicitaAudit } from './empresa';
-import { round2 } from './utils';
+import { round2, diaISO } from './utils';
 import { calcularLiquido, efetuarBaixa } from './financeiro';
 import { registrarEstornoComissao } from './comissoes';
 import { cifrarSegredo, decifrarSegredo, pareceCifrado } from './segredos';
@@ -629,7 +629,7 @@ export async function criarCobranca(req: Request, res: Response) {
     valor,
     metodo,
     descricao: body.descricao ? String(body.descricao).slice(0, 200) : lancamento ? String(lancamento.descricao) : venda ? `Venda #${venda.id}` : 'Cobrança',
-    vencimento: body.vencimento ? String(body.vencimento).slice(0, 10) : lancamento?.vencimento ? String(lancamento.vencimento).slice(0, 10) : null,
+    vencimento: body.vencimento ? String(body.vencimento).slice(0, 10) : lancamento?.vencimento ? diaISO(lancamento.vencimento) : null,
     expira_em: body.expira_em ? String(body.expira_em) : null,
     parcelas,
     payer_email: body.payer_email ? String(body.payer_email) : null,

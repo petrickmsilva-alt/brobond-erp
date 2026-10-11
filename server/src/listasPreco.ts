@@ -22,7 +22,7 @@ import { checkAccess, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
 import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
-import { round2 } from './utils';
+import { round2, diaISO } from './utils';
 import type { Row, Tx } from './store';
 
 export const R_LISTA = () => getResource('listas_preco')!;
@@ -47,8 +47,9 @@ function num(v: unknown, padrao = 0): number {
 }
 
 function dataISO(v: unknown): string | null {
-  if (v === null || v === undefined || v === '') return null;
-  return String(v).slice(0, 10);
+  // Uma única implementação no módulo (`utils.diaISO`): aqui só o wrapper que
+  // traduz '' (vazio/inválido) para null, o contrato destes módulos.
+  return diaISO(v) || null;
 }
 
 /** A lista vale hoje? (ativa + vigência) */

@@ -30,7 +30,7 @@ import { currentUser } from './auth';
 import { parseId } from './validate';
 import { labelOf } from './store';
 import type { Row } from './store';
-import { round2 } from './utils';
+import { round2, diaISO } from './utils';
 
 const fmtMoney = round2;
 
@@ -104,7 +104,7 @@ async function prepararDadosNFe(vendaId: number): Promise<Record<string, unknown
     referencia: {
       tipo: 'venda',
       id: vendaId,
-      data: String(venda.data || '').slice(0, 10),
+      data: diaISO(venda.data),
       condicao_pagamento: String(venda.condicao_pagamento || 'À vista'),
     },
   };

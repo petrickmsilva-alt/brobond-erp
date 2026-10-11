@@ -25,6 +25,7 @@ import { getResource } from './resources';
 import { getStore } from './services';
 import type { Row, Tx } from './store';
 import { EMPRESA_PADRAO } from './empresa';
+import { diaISO } from './utils';
 
 export type ContextoFiscal = {
   empresaId: number;
@@ -99,9 +100,9 @@ export function regraAplicavel(regra: Row, ctx: ContextoFiscal, ncm: string, hoj
   if (ncmRegra && !ncm.startsWith(ncmRegra)) return false;
 
   const inicio = texto(regra.vigencia_inicio);
-  if (inicio && String(inicio).slice(0, 10) > hoje) return false;
+  if (inicio && diaISO(inicio) > hoje) return false;
   const fim = texto(regra.vigencia_fim);
-  if (fim && String(fim).slice(0, 10) < hoje) return false;
+  if (fim && diaISO(fim) < hoje) return false;
 
   return true;
 }

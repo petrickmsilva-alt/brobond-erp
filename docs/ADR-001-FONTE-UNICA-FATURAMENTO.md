@@ -145,8 +145,11 @@ global). O `empresa_id` da linha é sempre o da venda — quem lê o BI é escop
   `sale_items_sale_id_fkey` e abortar a projeção inteira (erro `23503`, exposto como `400
   "Referência inválida"` na via sob demanda). **Registrado como P2-08** em
   [`docs/RELATORIO-ERP-ONLY.md`](RELATORIO-ERP-ONLY.md) e detalhado na
-  [auditoria independente](AUDITORIA-INDEPENDENTE-ERP-01-04.md) §6 — **não corrigido** (a
-  auditoria documenta, não corrige).
+  [auditoria independente](AUDITORIA-INDEPENDENTE-ERP-01-04.md) §6. **Corrigido no ciclo de
+  2026-10-11:** o `INSERT` dos itens passou a repetir a condição de responsável
+  (`AND EXISTS (SELECT 1 FROM sales s WHERE s.id = 'erp:venda:' || iv.venda_id)`) — com zero
+  usuários ativos a venda não entra em `sales` e **não produz itens**, sem linha parcial e sem
+  erro; prova `server/test/pg/projecao-sem-usuario.test.ts` e mutação (cláusula removida ⇒ `23503`).
 
 ## 6. Plano de prova (critérios de aceite do ERP-04)
 
