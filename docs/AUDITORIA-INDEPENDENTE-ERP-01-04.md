@@ -234,6 +234,9 @@ DATABASE_URL=…/brobond_aud4  npm run test:pg
 O único `todo` é o **P1-11**, declarado e conhecido. A bateria **só é válida em banco novo**: em
 banco reaproveitado ela reprova por **AUD-03** (§6), não por regressão de código.
 
+Repetida no mesmo commit depois da correção do escopo da asserção de canal do BI (`bb17f19`), em
+outro banco novo: **`# tests 124 · pass 123 · fail 0 · todo 1`** de novo (`# duration_ms 729026`).
+
 ### 7.3 CI no commit auditado (`bb17f19`)
 
 * `testes-postgres` e `verificar`: **success** nos runs
