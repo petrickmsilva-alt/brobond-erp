@@ -1127,6 +1127,65 @@ export async function ensureUniqueStock(data: Payload, before: Row | null, tx: T
   }
 }
 
+/**
+ * NOME do local provisionado para uma empresa que ainda não tem nenhum.
+ * "Loja" é o mesmo nome do local de exemplo do modo demonstração: quem nunca
+ * cadastrou um local passa a ter o mesmo ponto de partida em memória e em
+ * PostgreSQL (antes, a memória tinha `locais.mock` e o PostgreSQL ficava sem
+ * nenhum — a origem das 25 falhas do smoke contra banco novo, P0-04).
+ */
+export const NOME_LOCAL_PROVISIONADO = 'Loja';
+
+/**
+ * Provisiona o Local padrão de uma empresa que não tem NENHUM local (ERP-03).
+ *
+ * Idempotente e à prova de corrida: dois pedidos simultâneos na primeira
+ * operação tentam inserir "Loja"; os índices `uq_e42_locais_empresa_nome` e
+ * `uq_e42_locais_padrao_empresa` deixam passar apenas um, e quem perde a
+ * corrida relê o local criado pelo outro em vez de responder erro.
+ *
+ * Devolve `null` quando não foi possível provisionar (aí o fluxo segue para o
+ * 409 explicativo de sempre — nunca para um erro obscuro).
+ */
+async function provisionarLocalPadrao(empresa_id: number, tx: Tx | undefined): Promise<{ id: number; nome: string } | null> {
+  const s = getStore();
+  const r = getResource('locais')!;
+  try {
+    const criado = await s.insert(
+      r,
+      { empresa_id, nome: NOME_LOCAL_PROVISIONADO, tipo: 'loja', ativo: true, padrao: true },
+      tx
+    );
+    // O `tx` é OBRIGATÓRIO aqui: sem ele o audit abre a PRÓPRIA transação
+    // (`audit` → `withTransaction`), e uma segunda conexão escrevendo enquanto a
+    // transação do fluxo está aberta faz o PostgreSQL SERIALIZABLE abortar a
+    // operação com 40001 ("could not serialize access ... during write") — foi
+    // exatamente o que aconteceu na primeira versão deste provisionamento.
+    await s.audit(
+      {
+        usuario_id: null,
+        usuario: 'sistema',
+        acao: 'criar',
+        recurso: 'locais',
+        registro_id: Number(criado.id),
+        descricao: `Local padrão "${NOME_LOCAL_PROVISIONADO}" criado automaticamente: a empresa #${empresa_id} não tinha nenhum local (ERP-03).`,
+        dados: { nome: NOME_LOCAL_PROVISIONADO, tipo: 'loja', padrao: true, provisionado: true },
+        empresa_id,
+      },
+      tx
+    );
+    return { id: Number(criado.id), nome: String(criado.nome) };
+  } catch (e) {
+    // 23505: outro pedido criou o local no meio da corrida. Relê e usa o dele.
+    const erro = e as { code?: string; status?: number };
+    if (erro.code === '23505' || erro.status === 409) {
+      const padrao = await s.findOneWhere(r, { empresa_id, padrao: true }, tx ?? undefined);
+      if (padrao) return { id: Number(padrao.id), nome: String(padrao.nome) };
+    }
+    return null;
+  }
+}
+
 /** Nome do Local padrão da empresa ativa. Não há fallback global por nome. */
 export async function getDefaultLocal(tx: Tx | undefined, escopo: EscopoEmpresa): Promise<string> {
   const info = await getDefaultLocalInfo(tx, escopo);
@@ -1158,6 +1217,20 @@ export async function getDefaultLocalInfo(
     dir: 'asc',
     filter: { empresa_id, ativo: true },
   }, tx ?? undefined);
+  // Onboarding (ERP-03): empresa sem NENHUM local — instalação nova em
+  // PostgreSQL, onde os locais de exemplo do modo demonstração não existem —
+  // provisiona o local padrão na primeira operação que depende dele, para que
+  // receber compra, faturar venda e movimentar estoque funcionem sem SQL manual.
+  // A regra é deliberadamente estreita: só provisiona quando não há local algum.
+  // Se a empresa TEM locais (mesmo inativos), a decisão de não usar nenhum é do
+  // administrador e a resposta continua sendo o 409 explicativo de sempre.
+  if (ativos.total === 0) {
+    const quantidade = await s.countWhere(r, { empresa_id }, tx ?? undefined);
+    if (quantidade === 0) {
+      const criado = await provisionarLocalPadrao(empresa_id, tx);
+      if (criado) return criado;
+    }
+  }
   if (ativos.total > 1) {
     throw new HttpError(409, 'A empresa ativa não possui um local padrão único. Defina o local padrão antes de movimentar o estoque.');
   }

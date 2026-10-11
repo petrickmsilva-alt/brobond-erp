@@ -232,7 +232,11 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'pedido_id', label: 'Pedido', type: 'ref', ref: 'vendas' },
       { name: 'valor', label: 'Valor', type: 'money' },
       { name: 'tipo', label: 'Tipo', type: 'text' },
-      { name: 'dados', label: 'Dados', type: 'text' },
+      // `catalogo_eventos.dados` é JSONB (db/schema.sql). O ERP-01 mostrou o
+      // custo de declarar texto sobre coluna JSONB: o domínio lê estrutura, o
+      // recurso anunciava string. Aqui o campo é só leitura (recurso interno),
+      // então o tipo acompanha a coluna sem efeito de interface.
+      { name: 'dados', label: 'Dados', type: 'json' },
       { name: 'criado_em', label: 'Criado em', type: 'datetime' },
     ],
   },
@@ -453,7 +457,10 @@ export const RESOURCES: Record<string, Resource> = {
     notice:
       'Empresas do grupo para o motor analítico 1. MEU NEGÓCIOS: cada venda multicanal pertence a uma empresa e os relatórios de BI (margem, curva ABC, dashboard) filtram por ela. A BROBOND (id 1) é a empresa padrão — não a exclua.',
     fields: [
-      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 80, placeholder: 'BROBOND' },
+      // Sem `unique`: o banco nunca teve índice único em empresas.nome (a
+      // declaração só valia no modo memória, que recusava nomes que o
+      // PostgreSQL aceita). Duas empresas do grupo podem ter o mesmo rótulo.
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 80, placeholder: 'BROBOND' },
       { name: 'razao_social', label: 'Razão social', type: 'text', maxLength: 140, list: false, wide: true },
       { name: 'nome_fantasia', label: 'Nome fantasia', type: 'text', maxLength: 140, list: false },
       { name: 'cnpj', label: 'CNPJ', type: 'document', documento: 'cnpj', maxLength: 20, list: false, placeholder: '00.000.000/0000-00' },
@@ -915,7 +922,11 @@ export const RESOURCES: Record<string, Resource> = {
     detail: true,
     fields: [
       { name: 'fotos', label: 'Fotos', type: 'images', virtual: true, form: false, hint: 'Até 5 fotos por produto. A primeira é a principal.' },
-      { name: 'sku', label: 'SKU / Referência', type: 'text', required: true, unique: true, search: true, maxLength: 40, placeholder: 'Ex.: CAM-001' },
+            // Unicidade POR EMPRESA: é o que o banco garante (uq_produtos_sku_empresa) e o
+      // que a suíte pg-multiempresa já exigia. Declarar `unique` (global) fazia o
+      // modo memória recusar o mesmo SKU em outra empresa — divergência
+      // memória × PostgreSQL que o contrato de tipos agora barra.
+      { name: 'sku', label: 'SKU / Referência', type: 'text', required: true, uniqueEmpresa: true, search: true, maxLength: 40, placeholder: 'Ex.: CAM-001' },
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
       { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias', search: true },
       { name: 'grade_id', label: 'Grade de tamanhos', type: 'ref', ref: 'grades', search: true, hint: 'Define os tamanhos deste produto no estoque. Se vazio, herda a grade padrão da categoria.' },
@@ -928,7 +939,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'atacado_min_qtd', label: 'Qtd. mínima atacado', type: 'integer', min: 0, default: 0, list: false, section: 'Varejo e atacado', hint: 'Quantidade mínima para aplicar o preço de atacado.' },
       { name: 'exibir_site', label: 'Exibir no catálogo/site', type: 'boolean', default: false, list: false, section: 'Varejo e atacado', hint: 'Produto disponível para catálogos públicos e pedidos pelo site.' },
       { name: 'destaque', label: 'Destaque no catálogo', type: 'boolean', default: false, list: false, section: 'Varejo e atacado' },
-      { name: 'codigo_barras', label: 'Código de barras (EAN)', type: 'text', unique: true, search: true, maxLength: 14, list: false, placeholder: '7891234567890', pattern: '^(\\d{8}|\\d{12,14})$', patternMessage: 'Informe 8, 12, 13 ou 14 dígitos', hint: '8, 12, 13 ou 14 dígitos. Usado nas etiquetas.', section: 'Identificação e catálogo' },
+      { name: 'codigo_barras', label: 'Código de barras (EAN)', type: 'text', uniqueEmpresa: true, search: true, maxLength: 14, list: false, placeholder: '7891234567890', pattern: '^(\\d{8}|\\d{12,14})$', patternMessage: 'Informe 8, 12, 13 ou 14 dígitos', hint: '8, 12, 13 ou 14 dígitos. Usado nas etiquetas.', section: 'Identificação e catálogo' },
       { name: 'composicao', label: 'Composição', type: 'text', maxLength: 120, list: false, placeholder: '100% algodão', section: 'Identificação e catálogo' },
       { name: 'descricao', label: 'Descrição comercial', type: 'textarea', maxLength: 2000, list: false, wide: true, hint: 'Texto usado no catálogo e nas propostas.', section: 'Identificação e catálogo' },
       { name: 'descricao_curta', label: 'Descrição curta', type: 'text', maxLength: 180, list: false, wide: true, section: 'Identificação e catálogo', hint: 'Uma linha — usada em listas, marketplaces e no PDV.' },
@@ -1207,7 +1218,13 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'para_status', label: 'Para', type: 'text', maxLength: 20, required: true },
       { name: 'evento', label: 'Evento', type: 'text', maxLength: 20, required: true },
       { name: 'mensagem', label: 'Mensagem', type: 'textarea', wide: true },
-      { name: 'payload', label: 'Resposta do provedor', type: 'textarea', list: false, wide: true },
+      // `documentos_fiscais_eventos.payload` é JSONB e `registrarEvento`
+      // (fiscal.ts) grava a resposta do provedor já serializada. Era o mesmo
+      // `textarea` sobre JSONB do P0-02 — agora o recurso diz a verdade sobre a
+      // coluna. O corte de 20.000 caracteres no write path é dívida aberta
+      // (JSON truncado é JSON inválido): registrada como P1-12 em
+      // docs/RELATORIO-ERP-ONLY.md §11, endereçada em ERP-05 (Fiscal).
+      { name: 'payload', label: 'Resposta do provedor', type: 'json', list: false, wide: true },
       { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
       { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true },
     ],
@@ -1507,7 +1524,9 @@ export const RESOURCES: Record<string, Resource> = {
       },
       { name: 'fin_vencimento', label: 'Vencimento / previsão', type: 'date', list: false, section: 'Financeiro' },
       { name: 'fin_parcelas', label: 'Parcelas', type: 'integer', min: 1, default: 1, list: false, section: 'Financeiro' },
-      { name: 'fin_parcelas_detalhes', label: 'Detalhes das parcelas', type: 'text', list: false, form: false },
+      // JSONB: o recebimento grava a lista de duplicatas (suprimentos.ts) e o
+      // financeiro lê a lista de volta (financeiro.ts). Campo sem formulário.
+      { name: 'fin_parcelas_detalhes', label: 'Detalhes das parcelas', type: 'json', list: false, form: false },
       { name: 'fin_pago_em', label: 'Pago em', type: 'date', list: false, section: 'Financeiro' },
       { name: 'fin_documento', label: 'Comprovante / doc.', type: 'text', maxLength: 80, list: false, section: 'Financeiro', placeholder: 'Nº comprovante, código Pix...' },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
@@ -1716,7 +1735,8 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'unidade', label: 'Unidade', type: 'text', list: false },
       { name: 'ncm', label: 'NCM', type: 'text', list: false },
       { name: 'cfop', label: 'CFOP', type: 'text', list: false },
-      { name: 'dados_fiscais', label: 'Dados fiscais', type: 'text', list: false },
+      // JSONB: impostos da linha lidos da NF-e (importacao), sem formulário.
+      { name: 'dados_fiscais', label: 'Dados fiscais', type: 'json', list: false },
       // E3.1 (GAP-COMP-CUSTOS): parcela do frete da compra e imposto que compõe
       // custo atribuídos a esta linha. Gravados pela regra canônica de
       // recebimento (custoRecebimento.ts), não à mão — editar aqui desalinha o
@@ -1771,7 +1791,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'numero', label: 'Número', type: 'text' },
       { name: 'serie', label: 'Série', type: 'text' },
       { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
-      { name: 'dados_fiscais', label: 'Dados fiscais', type: 'text', list: false },
+      { name: 'dados_fiscais', label: 'Dados fiscais', type: 'json', list: false },
       { name: 'importado_em', label: 'Importado em', type: 'datetime', list: false },
     ],
   },

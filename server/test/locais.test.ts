@@ -151,7 +151,7 @@ test('excluir o Local padrão promove o primeiro local ativo restante', async ()
   assert.equal(padroes.length, 1, 'sempre há um local padrão');
 });
 
-test('excluir o ÚLTIMO local ativo: gerente 403, admin decide; movimentações exigem recadastro', async () => {
+test('excluir o ÚLTIMO local ativo: gerente 403, admin decide; a operação seguinte reprovisiona', async () => {
   // Esvazia o cadastro de locais (como um administrador limparia tudo).
   for (;;) {
     const lista = await listRecords(RESOURCES.locais, { page: 1, pageSize: 500 });
@@ -166,14 +166,23 @@ test('excluir o ÚLTIMO local ativo: gerente 403, admin decide; movimentações 
   const vazios = await listRecords(RESOURCES.locais, { page: 1, pageSize: 10 });
   assert.equal(vazios.rows.length, 0, 'cadastro pode ficar vazio (decisão do admin)');
 
+  // ERP-03 mudou ESTE contrato de propósito (era o P0-04): cadastro de locais
+  // vazio deixou de bloquear a operação. Uma instalação nova em PostgreSQL não
+  // tem os locais de exemplo da memória, e exigir SQL manual para o primeiro
+  // recebimento/faturamento era o defeito. Agora a empresa SEM nenhum local
+  // recebe o Local padrão "Loja" na primeira operação. O 409 continua valendo
+  // quando a empresa TEM locais e nenhum ativo (decisão do administrador) — é o
+  // que a suíte de PostgreSQL prova em
+  // server/test/pg/e03-onboarding-local-padrao.test.ts.
   const movimentosAntes = await listRecords(RESOURCES.movimentacoes, { page: 1, pageSize: 100, filter: { produto_id: produtoId } });
-  await expectHttp(
-    () => createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, quantidade: 1 }, admin),
-    409,
-    /não possui um local de estoque ativo/
-  );
+  const provisionado = await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, quantidade: 1 }, admin);
+  const locaisCriados = await listRecords(RESOURCES.locais, { page: 1, pageSize: 10 });
+  assert.equal(locaisCriados.rows.length, 1, 'exatamente um local foi provisionado');
+  assert.equal(String(locaisCriados.rows[0].nome), 'Loja');
+  assert.equal(locaisCriados.rows[0].padrao, true, 'o local provisionado é o padrão');
+  assert.equal(Number(provisionado.local_id), Number(locaisCriados.rows[0].id), 'a operação usa o ID canônico do local provisionado');
   const movimentosDepois = await listRecords(RESOURCES.movimentacoes, { page: 1, pageSize: 100, filter: { produto_id: produtoId } });
-  assert.equal(movimentosDepois.total, movimentosAntes.total, 'a operação bloqueada não cria movimento');
+  assert.equal(movimentosDepois.total, movimentosAntes.total + 1, 'a operação provisionada cria o movimento');
 
   const restaurado = await createRecord(RESOURCES.locais, { nome: 'restaurado', tipo: 'loja', padrao: true }, admin);
   const movimento = await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, quantidade: 1 }, admin);
