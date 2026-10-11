@@ -17,7 +17,8 @@
 | **ERP-04** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-04 + [ADR-001](ADR-001-FONTE-UNICA-FATURAMENTO.md) |
 | **ERP-05** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-05 — execução abaixo · `audit:menu` **0 `RECURSO_SEM_MENU`** · P1-02 e P1-03 fechados, com **mutação** provando o 405 do P1-03 |
 | **ERP-06** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-06 — execução abaixo · igualdade **tela × relatório** provada em PostgreSQL (`pg/comissoes-e2e.test.ts`) · menu **69 módulos / 13 grupos** |
-| **ERP-07 … ERP-13** | ⏳ não iniciados | — |
+| **ERP-07** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-07 — execução abaixo · CRUD de Empresas **`adminOnly` provado por HTTP** (`pg/empresas-admin-e2e.test.ts`: gerente recebe **403** nos quatro verbos e o seletor de empresa ativa **continua 200**) + guardas de exclusão em PostgreSQL · menu **70 módulos / 13 grupos** · **P0-06 descoberto e fechado** no ciclo (criar usuário respondia **sempre 409** em PostgreSQL) |
+| **ERP-08 … ERP-13** | ⏳ não iniciados | — |
 | **Auditoria independente (ERP-01…04)** | ✅ **EXECUTADA** (2026-10-11) | [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md) — 6 provas por mutação + bateria em banco novo + CI verde · **GATE APROVADO COM RESSALVAS (P2)** |
 | **Ciclo P1-13 + P2-08** (ressalvas de código da auditoria) | ✅ **IMPLEMENTADO** (2026-10-11) | §5 "Ciclo P1-13 + P2-08", abaixo — prova PG + mutação para cada um; **P2-09 segue aberto** (regra de processo) |
 
@@ -687,6 +688,78 @@ próprias (`/financeiro/comissoes*`), e por isso **não** abre CRUD lateral nenh
 
 ---
 
+#### ✅ Execução (2026-10-11) — CLOSED (P1-04 · P0-06 descoberto e fechado)
+
+**O que o ciclo entregou:** a tela de Empresas (o gap de exposição, **P1-04**) **e** o defeito **P0** que
+ela desenterrou no caminho: **em PostgreSQL, criar usuário nunca funcionou.** `POST /api/usuarios`
+respondia **409 "Outra operação alterou estes dados ao mesmo tempo."** para qualquer perfil e **nenhum
+usuário era criado** — o único caminho de cadastro de usuário do sistema. O ciclo não podia declarar
+"multiempresa administrável sem SQL manual" (o critério de aceite escrito acima, porque a tela de
+Empresas vincula acessos de usuários existentes) sem entender por que o recurso `usuarios` era intocável
+no banco real.
+
+**P0-06 — a causa-raiz é uma linha, com efeito de borda.** `gerarConvite()` (`server/src/usuariosAdmin.ts`)
+grava a auditoria do convite **dentro** da transação do cadastro (`createRecord`), mas chamava
+`store.audit({...})` **sem o `tx`**: o `PgStore` abria uma **segunda conexão** para o `INSERT` em
+`auditoria` enquanto a transação principal (`SERIALIZABLE`) ainda estava aberta — o PostgreSQL responde
+`40001` (`serialization_failure`) na transação de cadastro e o `translatePgError`
+(`server/src/pgstore.ts:116-160`, `40001`/`40P01` → 409) traduzia para a mensagem genérica de conflito.
+Efeito de borda que só a leitura do banco revelou: a linha de auditoria do convite **sobrevivia ao
+rollback** (era gravada fora da transação), ou seja, o log registrava um convite que nunca existiu.
+
+**Reprodução e prova (antes ⇒ depois), em PostgreSQL real:**
+
+| Momento | Comando | Resultado |
+|---|---|---|
+| **Antes do fix** | 3× `createRecord(usuarios)` em banco com o código publicado | **3× FALHOU 409** · `usuarios criados: 0` · `auditoria de convite: 7` (linhas de convite **sobrevivendo** aos rollbacks) |
+| **Depois do fix** (`store.audit({...}, tx)`) | idem | `ok 8` · `ok 9` · `usuarios criados: 2` — auditoria gravada **na mesma transação** |
+| **Mutação** (fix revertido) | `server/test/pg-usuario-convite.test.ts` | **not ok** — volta o `40001` traduzido em 409 "Outra operação alterou estes dados ao mesmo tempo." |
+| **Mutação da alçada** (`adminOnly` removido de `empresas`) | `server/test/pg/empresas-admin-e2e.test.ts` | **not ok** — o gerente passa a receber **200** onde o teste exige **403**; restaurado, volta a **ok 1/1** |
+
+`store.audit` sem `tx` aparece em **13 chamadas** de `usuariosAdmin.ts`; as outras 12 pertencem a rotas que
+já abrem `tx` própria — a do convite era a **única** chamada dentro de uma transação alheia. O ciclo
+corrigiu a chamada, não a assinatura (nenhuma regra de negócio nova, nenhuma migration).
+
+**P1-04 — a tela (`client/src/pages/EmpresasPage.tsx`, `/empresas`, grupo Configurações, `minPerfil: 'admin'`).**
+Lista com situação e principal domínio, criação, edição, ativar/desativar, exclusão — com a recusa do
+servidor exibida **como veio** (409 da empresa padrão, 409 de vínculos, 409 de FK) — e o **modal de
+acessos**, que concede (`POST /api/usuarios/:id/empresas`) e revoga
+(`DELETE /api/usuarios/:id/empresas/:empresaId`) o vínculo de cada usuário, carregado em lotes. A empresa
+**padrão** (id 1, `EMPRESA_PADRAO_ID`) aparece com desativar/excluir desabilitados **e o motivo escrito** —
+e o servidor recusa de novo, porque a guarda é dele. Trocar a **empresa ativa da sessão** continua no
+seletor do topo (`POST /api/empresas/ativa`), de propósito: é navegação de sessão, não administração.
+
+**A alçada é backend, não menu.** `empresas` recebeu `adminOnly: true` (`server/src/resources.ts`) —
+antes do ciclo um **gerente autenticado** alcançava `POST/PUT/DELETE /api/empresas*` por chamada direta
+(a restrição existia só no menu, que sequer tinha entrada). E o seletor de empresa ativa **não** foi
+fechado por acidente: é autorizado pela concessão do usuário, não pelo recurso administrativo.
+
+**Guardas de exclusão** (em `deleteRecord`, antes de chegar à FK): (1) id 1 (`EMPRESA_PADRAO_ID`) → **409**;
+(2) existir vínculo em `usuario_empresas` → **409** com a contagem; (3) existir dado de domínio na empresa
+(`primeiroDominioDaEmpresa`) → **409** citando o módulo. Em memória a guarda **(3)** é a que responde; em
+PostgreSQL a FK (`23503`) chega antes e o 409 é a mensagem genérica de "registro em uso" — a diferença é
+visível na prova e está registrada aqui de propósito (nenhum usuário de API vê stack, vê 409).
+
+**Evidência executada:**
+
+| Prova | Comando | Resultado |
+|---|---|---|
+| Criação de usuário volta a funcionar (P0-06) | `server/test/pg-usuario-convite.test.ts` (**banco novo**, PG real) | ✅ **1/1** (com mutação: sem o `tx` o arquivo **falha** com 409) |
+| Alçada + guardas de exclusão em PostgreSQL | `server/test/pg-empresas-admin.test.ts` (**banco novo**) | ✅ **1/1** — 7 blocos: `checkAccess` de admin; empresa padrão → 409; empresa com acesso → 409; empresa com produto → 409 + contagem por SQL; `remove` → **23503 → 409**; empresa vazia excluída; limpeza só do que o teste criou |
+| **Alçada por HTTP (não pelo contrato)** | `server/test/pg/empresas-admin-e2e.test.ts` (servidor real, **banco novo**, gerente de verdade) | ✅ **1/1** — gerente **403** em `GET`/`POST`/`PUT`/`DELETE`; empresa padrão intacta (`count` e nome **BROBOND**); `GET /api/empresas/ativa` **200** e `POST /api/empresas/ativa` **200** com token novo; **nenhum 500** nos logs |
+| Guardas de exclusão (memória) | `server/test/empresas-admin.test.ts` | ✅ **9/9** |
+| Tela | `client/src/pages/EmpresasPage.test.tsx` | ✅ **8/8** |
+| Menu | `npm run audit:menu` | ✅ **Sem erros** — 70 módulos · 13 grupos · 43 navegáveis · 4 avisos classificados |
+| Regressão | `server test` · `client test` · `typecheck` · `lint` · `build` | **759** (694 pass · 0 fail · 65 skip) · **262/262** (26 arquivos) · **0** · **0 erros** (415 warnings) · **OK** |
+| **Bateria PostgreSQL** | `npm run test:pg` em **banco novo** (`brobond_e07run2`; log completo em `/tmp/testpg-e07.log`) | ✅ **131 testes · 130 pass · 0 fail · 1 todo** (P1-11) — inclui os três arquivos novos do ciclo |
+| **Smoke PostgreSQL** | `npm run smoke:pg` em **banco novo** | ✅ **126/126** — a superfície nova não alterou nenhum fluxo existente |
+
+**Nenhuma migration, nenhuma tabela nova, nenhum arquivo do Commerce.** O vínculo de acessos usa as rotas
+que já existiam (`/api/usuarios/:id/empresas`), e a tela **não** inventa estado de empresa: ativa/inativa é
+campo do próprio recurso.
+
+---
+
 ### ERP-08 — Devolução ponta a ponta em PostgreSQL
 
 * **Objetivo:** provar (e se necessário ajustar) a cadeia de reversa, hoje sem teste E2E.
@@ -799,7 +872,8 @@ FUNCIONALIDADES EXISTENTES não expostas: NCM · Inutilização fiscal · Empres
    ↓
 FUNCIONALIDADES QUE FALTAM: Reserva de estoque · Marcas · Unidades · (BI e Fiscal já existem, precisam funcionar)
    ↓
-MENU ERP FINAL PROPOSTO (ERP-06, ERP-07 e ERP-11 ainda implementam entradas; o **grupo Fiscal** entrou em **ERP-05 ✅**)
+MENU ERP FINAL PROPOSTO (ERP-11 ainda implementa entradas; **grupo Fiscal** ✅ ERP-05, **Comissões** ✅ ERP-06 e
+   **Empresas** ✅ ERP-07 já estão no menu real)
    Meu Negócio · Cadastros · Vendas · Compras · Estoque · Produção ·
    Logística & Expedição · Financeiro · FISCAL(novo) · Relatórios · ADMINISTRAÇÃO(renomeado)
    ── CONGELADO: Integrações · Gestão de Commerce · Ecossistema Creators ──
@@ -821,8 +895,9 @@ MENU ERP FINAL PROPOSTO (ERP-06, ERP-07 e ERP-11 ainda implementam entradas; o *
 | P1-01 deriva RBAC (3 recursos) | 🟠 P1 | ERP-10 |
 | P1-02 NCM sem tela | 🟠 P1 | **ERP-05 ✅** |
 | P1-03 inutilização sem tela **+ rota devolvendo 405** | 🟠 P1 | **ERP-05 ✅** |
-| P1-04 CRUD de Empresas sem tela | 🟠 P1 | ERP-07 |
+| P1-04 CRUD de Empresas sem tela | 🟠 P1 | **ERP-07 ✅** (alçada `adminOnly` provada por HTTP + guardas de exclusão em PG) |
 | P1-05 comissões sem tela/menu (e filtro de período quebrado: `comissoes.ts:261`) | 🟠 P1 | **ERP-06 ✅** (o filtro caiu no P1-13) |
+| **P0-06** criar usuário respondia **sempre 409** em PostgreSQL (`store.audit` sem `tx` em `gerarConvite` ⇒ `40001` na transação de cadastro; auditoria do convite sobrevivia ao rollback) | 🔴 P0 | **descoberto e fechado em ERP-07 ✅** (prova antes/depois + mutação) |
 | P1-06 reserva de estoque ausente | 🟠 P1 | ERP-09 |
 | P1-07 fonte única do faturamento | 🟠 P1 | **ERP-04 ✅ (BI = relatório = DRE no mesmo período)** |
 | P1-08 fiscal sem homologação | 🟠 P1 | ERP-12 |
@@ -876,4 +951,18 @@ O BROBOND ERP está **mais perto do fim do que o volume de pendências sugere**:
 
 **Ressalvas depois da auditoria (ciclo de 2026-10-11):** das duas ressalvas de código, **P2-08 ficou fechada** — o passo dos itens passou a repetir a condição de responsável (`EXISTS` na venda pai), com prova `server/test/pg/projecao-sem-usuario.test.ts` e mutação (`23503` antes, `{vendas:0, itens:0}` depois) — e **P1-13** (o mesmo `String(Date).slice(0,10)` de `comissoes.ts:261`) foi fechado por varredura, com `utils.diaISO` como normalização única em **17 módulos** (18 arquivos com `utils.ts`) e mutação provando que o teste de comissões falha com o código antigo. **P2-09 segue aberto** — `test:pg` não é repetível em banco reaproveitado; é regra de processo da bateria (banco novo como referência, como o CI já faz), não defeito de produto. Recomendações na [auditoria independente](AUDITORIA-INDEPENDENTE-ERP-01-04.md) §6 e §10.
 
+**Progresso (2026-10-11, ciclos ERP-05 → ERP-07):** **ERP-05** tornou o Fiscal operável (telas de NCM e de
+Inutilizações, grupo Fiscal novo) e **corrigiu uma rota que nunca funcionou** — `POST /api/fiscal/inutilizar`
+respondia **405 para todo perfil** porque a alçada de fluxo era checada como op de CRUD (`ops.create = false`);
+**ERP-06** deu tela, menu e conferência às Comissões (a soma da tela **bate com o relatório**, tolerância zero,
+provado em `pg/comissoes-e2e.test.ts`); **ERP-07** entregou a administração de Empresas com **alçada provada por
+HTTP** (gerente ⇒ **403**) e, no caminho, descobriu e fechou o **P0-06**: **em PostgreSQL, criar usuário
+respondia sempre 409 e nenhum usuário era criado** (`store.audit` sem `tx` em `gerarConvite` abria uma segunda
+conexão dentro da transação `SERIALIZABLE` ⇒ `40001`), com a linha de auditoria do convite **sobrevivendo ao
+rollback** — corrigido com prova antes/depois e **mutação**. Nenhum dos três ciclos tocou o Commerce, nenhum
+criou migration, e as ressalvas abertas continuam as mesmas: **P2-09** (processo da bateria) e **P1-11**
+(escopo multiempresa da assinatura de webhook, aguardando decisão).
+
 **Nada foi implementado, corrigido, migrado, agendado ou mergeado. O menu não foi alterado. O Commerce não foi tocado.**
+*(Atualização: a partir do ERP-01 a implementação passou a ser executada nos ciclos, um a um; o parágrafo acima é registro de execução.*
+*A frase do merge continua valendo: nenhum ciclo mergeia — a decisão é do dono do repositório.)*

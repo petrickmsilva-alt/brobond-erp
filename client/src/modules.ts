@@ -260,6 +260,16 @@ export const MODULES: Module[] = [
     path: '/relatorios',
     description: 'Posição de estoque, movimentações, produção, vendas, curva ABC e insumos mínimos.',
   },
+  {
+    id: 'empresas',
+    label: 'Empresas',
+    icon: Building2,
+    group: 'Configurações',
+    path: '/empresas',
+    minPerfil: 'admin',
+    description:
+      'Empresas do grupo: cadastro, situação, acessos por usuário. A empresa ativa da sessão é escolhida no seletor do topo.',
+  },
   { id: 'usuarios', label: 'Usuários', icon: Users, group: 'Configurações', path: '/usuarios', resource: 'usuarios', description: 'Quem acessa o sistema, perfis de permissão e senhas.', adminOnly: true },
   { id: 'auditoria', label: 'Auditoria', icon: History, group: 'Configurações', path: '/auditoria', resource: 'auditoria', description: 'Histórico de inclusões, alterações, exclusões e logins.', adminOnly: true },
   { id: 'webhooks', label: 'Webhooks', icon: Webhook, group: 'Integrações', path: '/webhooks', description: 'Integrações: avise sistemas externos sobre eventos de usuários.', adminOnly: true },
@@ -310,7 +320,7 @@ export const GROUP_META: Record<ModuleGroup, { icon: LucideIcon; /** seção da 
 };
 
 /** Módulos que usam página própria (não CRUD genérico nem PlannedModule). */
-export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 'financeiro', 'pdv', 'expedicao', 'cotacoes-compra', 'sugestao-compra', 'devolucoes', 'envios', 'ncm', 'inutilizacoes', 'comissoes'] as const;
+export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 'financeiro', 'pdv', 'expedicao', 'cotacoes-compra', 'sugestao-compra', 'devolucoes', 'envios', 'ncm', 'inutilizacoes', 'comissoes', 'empresas'] as const;
 
 /** Módulos cuja listagem abre diretamente a página de detalhe. */
 export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
