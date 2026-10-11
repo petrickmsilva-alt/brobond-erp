@@ -67,6 +67,9 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > da OP com `pageSize` fixo (1000/5000) truncam em silêncio numa OP com mais movimentações que o teto;
 > **GAP-E02-03 (P3-07)** `adjustInsumoStock` mantém o padrão `ON CONFLICT DO UPDATE` com delta negativo (não dispara hoje
 > porque `estoque_insumos.quantidade` não tem CHECK); **GAP-E02-04** `auditoria.dados`/`ordens_eventos.dados` não saem pela API.
+> **GAP-E02-05** (CI, observado na rodada) uma execução do job `verificar` falhou no passo "Testes das regras de negócio" em um commit **só de documentação**
+> ([run 38181530778](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38181530778)) — o mesmo commit passou no run do push e o commit com o código e os testes do ciclo passou nos dois jobs;
+> `server test` rodou 3× verde localmente. Sem log recuperável no sandbox (blob fora da allow-list). Registrado como flake de runner, não como falha de produto.
 
 > **Atualização ERP-08 (2026-10-11) — P1-09 FECHADO (devolução provada ponta a ponta em PostgreSQL).**
 > `server/test/pg/devolucao-e2e.test.ts` (banco novo, servidor real) executa a cadeia de reversa inteira: venda
