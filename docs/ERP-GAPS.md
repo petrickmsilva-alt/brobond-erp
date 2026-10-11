@@ -35,6 +35,27 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
 > aguarda decisão humana.
 
+> **Atualização ERP-01 (2026-10-11) — primeiro ciclo do roadmap (P0-02 FECHADO).**
+> O webhook de pagamento volta a confirmar cobrança em PostgreSQL: causa-raiz era
+> a leitura de uma coluna **JSONB** com `JSON.parse(String(payload))`
+> (`server/src/gateway.ts` → `"[object Object]"` → evento `'ignorado'`, cobrança
+> presa em `'pendente'`), somada a uma segunda linha inserida no retry que batia
+> em `uq_gateway_webhook_evento` e devolvia **202 com o nome da constraint** em
+> endpoint anônimo. Corrigido sem migration (ler o payload pelo tipo real,
+> reaproveitar a linha rejeitada, `23505` → `duplicado:true`, respostas anônimas
+> sem detalhe de driver, `payload` declarado `json`). **Evidência executada:**
+> antes/depois na mesma linha (`ignorado`/`pendente` → `paga`/`confirmado`),
+> HTTP real na API PostgreSQL (`wh1 → 200 paga`, `wh2 → 200 duplicado`),
+> `test:pg` **112 pass / 0 fail / 1 todo** (baseline 110), `server test` 671/0,
+> `client test` 226, smoke **126/126**, typecheck 0, lint 0 erros/401 warnings,
+> build OK; teste novo `server/test/pg/e01-gateway-webhook-postgresql.test.ts`
+> **falha com o código original e passa com a correção**. Durante o ciclo foi
+> descoberto o gap **P1-11** (assinatura de webhook global por provedor, sem
+> empresa) — registrado em [`docs/RELATORIO-ERP-ONLY.md`](RELATORIO-ERP-ONLY.md)
+> §6/§9 e fixado como teste `todo`; **não corrigido** por depender de decisão de
+> escopo multiempresa. Estado do ciclo:
+> [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 Este é o **registro oficial do que falta**. Regra de manutenção:
 
 > Um gap só sai desta lista quando houver evidência executada — teste passando,
