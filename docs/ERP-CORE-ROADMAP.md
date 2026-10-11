@@ -18,7 +18,8 @@
 | **ERP-05** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-05 — execução abaixo · `audit:menu` **0 `RECURSO_SEM_MENU`** · P1-02 e P1-03 fechados, com **mutação** provando o 405 do P1-03 |
 | **ERP-06** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-06 — execução abaixo · igualdade **tela × relatório** provada em PostgreSQL (`pg/comissoes-e2e.test.ts`) · menu **69 módulos / 13 grupos** |
 | **ERP-07** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-07 — execução abaixo · CRUD de Empresas **`adminOnly` provado por HTTP** (`pg/empresas-admin-e2e.test.ts`: gerente recebe **403** nos quatro verbos e o seletor de empresa ativa **continua 200**) + guardas de exclusão em PostgreSQL · menu **70 módulos / 13 grupos** · **P0-06 descoberto e fechado** no ciclo (criar usuário respondia **sempre 409** em PostgreSQL) |
-| **ERP-08 … ERP-13** | ⏳ não iniciados | — |
+| **ERP-08** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-08 — execução abaixo · cadeia de reversa provada ponta a ponta em PostgreSQL (`pg/devolucao-e2e.test.ts`: parcial, avariado **não** volta nem pelo estorno, total cancela a venda e reverte o financeiro, idempotência, multiempresa 404) · **mutação** da guarda de estado ⇒ teste falha |
+| **ERP-09 … ERP-13** | ⏳ não iniciados | — |
 | **Auditoria independente (ERP-01…04)** | ✅ **EXECUTADA** (2026-10-11) | [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md) — 6 provas por mutação + bateria em banco novo + CI verde · **GATE APROVADO COM RESSALVAS (P2)** |
 | **Ciclo P1-13 + P2-08** (ressalvas de código da auditoria) | ✅ **IMPLEMENTADO** (2026-10-11) | §5 "Ciclo P1-13 + P2-08", abaixo — prova PG + mutação para cada um; **P2-09 segue aberto** (regra de processo) |
 
@@ -751,7 +752,7 @@ visível na prova e está registrada aqui de propósito (nenhum usuário de API 
 | Tela | `client/src/pages/EmpresasPage.test.tsx` | ✅ **8/8** |
 | Menu | `npm run audit:menu` | ✅ **Sem erros** — 70 módulos · 13 grupos · 43 navegáveis · 4 avisos classificados |
 | Regressão | `server test` · `client test` · `typecheck` · `lint` · `build` | **759** (694 pass · 0 fail · 65 skip) · **262/262** (26 arquivos) · **0** · **0 erros** (415 warnings) · **OK** |
-| **Bateria PostgreSQL** | `npm run test:pg` em **banco novo** (`brobond_e07run2`; log completo em `/tmp/testpg-e07.log`) | ✅ **131 testes · 130 pass · 0 fail · 1 todo** (P1-11) — inclui os três arquivos novos do ciclo |
+| **Bateria PostgreSQL** | `npm run test:pg` em **banco novo** (`brobond_e07run2`; log completo em `/tmp/testpg-e07.log`) | ✅ **131 testes · 130 pass · 0 fail · 1 todo** (P1-11) — inclui os três arquivos novos do ciclo (o e2e de devolução do ERP-08 leva a bateria a **132**) |
 | **Smoke PostgreSQL** | `npm run smoke:pg` em **banco novo** | ✅ **126/126** — a superfície nova não alterou nenhum fluxo existente |
 
 **Nenhuma migration, nenhuma tabela nova, nenhum arquivo do Commerce.** O vínculo de acessos usa as rotas
@@ -770,6 +771,61 @@ campo do próprio recurso.
 * **Frontend:** já existe; conferir os estados devolvidos pelo servidor após o fluxo real.
 * **Testes:** **novo** `server/test/pg/devolucao-e2e.test.ts` — venda faturada → devolução **parcial** → autorização → recebimento → estoque volta **apenas o bom estado** → lançamento financeiro correspondente → divergência (item danificado) **não** volta ao estoque → devolução de venda de outra empresa → 404.
 * **Critérios de aceite:** a devolução parcial fecha o ciclo em PostgreSQL com estoque, financeiro e auditoria coerentes, e o item danificado comprovadamente **não** retorna ao saldo.
+
+---
+
+#### ✅ Execução (2026-10-11) — CLOSED (P1-09)
+
+**O que o ciclo entregou:** a **prova** que faltava — e **nenhuma linha de código de produto**. A cadeia de
+reversa existia inteira (rotas, tela, testes de componente) e nunca havia sido executada contra o banco
+real: `server/test/pg/` não tinha arquivo de devolução. O ciclo não encontrou defeito na cadeia; ele
+escreveu o **contrato real** dela como teste que falha se alguém o quebrar (mutação abaixo).
+
+**O fluxo provado**, em banco novo e com o servidor de verdade (`server/test/pg/devolucao-e2e.test.ts`):
+venda faturada (estoque 5 → 2, com a saída canônica gravada em `movimentacoes.venda_id`) → **devolução
+parcial de 2 de 3** → autorizar → rastrear → receber as 2 em **bom** (estoque 2 → **4**; a venda
+**continua faturada** e a conta a receber **não** é tocada — devolução parcial **não** reverte o
+financeiro, e a própria resposta diz isso: `financeiro: {aplicado: false, motivo: "Devolução parcial…"}`)
+→ segunda devolução de **1 unidade**, recebida **avariada** (entradas de estoque: **nenhuma**;
+`devolucao_estoque = false`; saldo inalterado) → como **3 de 3** voltaram, o recebimento **cancela a
+venda e reverte o financeiro** (`financeiro.aplicado: true`; a conta a receber vira `cancelado`).
+
+**O ponto que o teste tinha de atacar — e ataca:** o estorno da venda cancelada **não** pode ser uma
+porta de volta para a peça avariada. O código faz a conta certa (`restaurar = saídas − já recebido em
+devolução, qualquer estado`) e a prova é numérica: o saldo final é **4** — as 2 peças boas voltaram pela
+devolução, **a avariada não voltou nem pelo estorno**. É exatamente o critério de aceite do ciclo.
+
+**Recusas provadas por HTTP:** receber antes de autorizar (**409**); receber sem código de rastreamento
+(**409** — mercadoria sem rastreabilidade não entra no estoque); receber duas vezes a mesma devolução
+(**409**, e o saldo **não** sobe de novo); devolver mais do que foi vendido (**409** com a conta
+`vendido × em devolução`); receber devolução recusada (**409**); e a repetição da criação com
+`idempotency-key` devolve a **mesma** devolução com `idempotente: true` — conferido no banco: **1** linha.
+
+**Multiempresa:** a empresa B recebe **404** ao ler a devolução de A, ao criar devolução para a venda de
+A e ao tentar receber a devolução de A — e o estoque de A não se move com nenhuma das tentativas.
+
+**Duas notas de engenharia (FATO, com endereço):**
+
+1. O retorno entra por `s.adjustStock(..., +quantidade)` — **delta positivo** —, então a classe do
+   **P0-01** (CHECK de não-negativo avaliado **antes** do `ON CONFLICT` com delta negativo) **não**
+   alcança este caminho. É o índice único parcial por empresa/local que faz o upsert encontrar a linha
+   certa; a evidência são os saldos exatos em cada passo (5 → 2 → 4 → 4).
+2. `devolucoes.documento_fiscal_id` **nunca é escrito** pelo fluxo de devolução: **não existe documento
+   nem evento fiscal de devolução** hoje. Não é defeito deste ciclo — emissão fiscal é **ERP-12** — mas é
+   limitação **declarada**: quem devolve mercadoria **não** emite nota de devolução.
+
+**Evidência executada:**
+
+| Prova | Comando | Resultado |
+|---|---|---|
+| Cadeia completa (faturar → parcial → avariado → total → financeiro → auditoria) | `server/test/pg/devolucao-e2e.test.ts` (**banco novo**, servidor real) | ✅ **1/1** |
+| **Mutação** — guarda do estado removida (`if (estado !== 'bom') continue;`) | idem | ✅ **not ok**: a entrada do item avariado passa a existir — `esperado 0, veio 1` ⇒ o teste guarda a regra |
+| Bateria PostgreSQL (banco novo) | `npm run test:pg` (base `brobond_e07run3`; log em `/tmp/testpg-e08.log`) | ✅ **132 testes · 131 pass · 0 fail · 1 todo** (P1-11) — um a mais que o ciclo anterior: o e2e de devolução entrou na bateria |
+| Smoke PostgreSQL (banco novo) | `npm run smoke:pg` (base `brobond_e08smoke`) | ✅ **126/126** |
+| Regressão | `server test` · `client test` · `typecheck` · `lint` · `build` · `audit:menu` | **759** (694 pass · 0 fail · 65 skip) · **262/262** (26 arquivos) · **0** · **0 erros** (415 warnings) · **OK** · **Sem erros** (70 módulos / 13 grupos) |
+
+**Nenhuma migration, nenhuma tabela nova, nenhum arquivo do Commerce, nenhuma linha de produto alterada** —
+a única mudança do ciclo é o arquivo de teste e este registro.
 
 ---
 
@@ -901,7 +957,7 @@ MENU ERP FINAL PROPOSTO (ERP-11 ainda implementa entradas; **grupo Fiscal** ✅ 
 | P1-06 reserva de estoque ausente | 🟠 P1 | ERP-09 |
 | P1-07 fonte única do faturamento | 🟠 P1 | **ERP-04 ✅ (BI = relatório = DRE no mesmo período)** |
 | P1-08 fiscal sem homologação | 🟠 P1 | ERP-12 |
-| P1-09 devolução sem E2E PostgreSQL | 🟠 P1 | ERP-08 |
+| P1-09 devolução sem E2E PostgreSQL | 🟠 P1 | **ERP-08 ✅** (parcial/avariado/total, idempotência, multiempresa 404; mutação da guarda de estado) |
 | P1-10 `OP cancelada é terminal` responde 500 (cascata de P0-01) | 🟠 P1 | **ERP-02 ✅ (fechado como cascata)** |
 | P1-11 assinatura de webhook global por provedor (sem empresa) | 🟠 P1 | **registrado no ERP-01; correção aguarda decisão de escopo multiempresa** |
 | P2-01 Marcas | 🟡 P2 | ERP-11 |
@@ -962,6 +1018,13 @@ conexão dentro da transação `SERIALIZABLE` ⇒ `40001`), com a linha de audit
 rollback** — corrigido com prova antes/depois e **mutação**. Nenhum dos três ciclos tocou o Commerce, nenhum
 criou migration, e as ressalvas abertas continuam as mesmas: **P2-09** (processo da bateria) e **P1-11**
 (escopo multiempresa da assinatura de webhook, aguardando decisão).
+
+**ERP-08 (2026-10-11)** fechou o último fluxo do §13 que não tinha prova em PostgreSQL: a **cadeia de reversa**
+passou a ter `pg/devolucao-e2e.test.ts` — devolução parcial devolve **só o bom estado**, a peça **avariada não
+volta ao saldo nem pelo estorno do cancelamento** (saldo final 4, conferido), o pedido **totalmente** devolvido
+cancela a venda e reverte o financeiro, a repetição com `idempotency-key` devolve a mesma devolução e a empresa
+B não alcança nada de A (**404**). Nenhuma linha de produto mudou: o ciclo é prova, com **mutação** da guarda de
+estado provando que o teste falha se a regra cair.
 
 **Nada foi implementado, corrigido, migrado, agendado ou mergeado. O menu não foi alterado. O Commerce não foi tocado.**
 *(Atualização: a partir do ERP-01 a implementação passou a ser executada nos ciclos, um a um; o parágrafo acima é registro de execução.*

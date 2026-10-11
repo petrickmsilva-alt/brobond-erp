@@ -18,6 +18,20 @@
 > porque o fallback de responsável é **global**, não por empresa (sem vazamento entre empresas:
 > verificado por canal e por `empresa_id`).
 
+> **Atualização ERP-08 (2026-10-11) — P1-09 FECHADO: a devolução tem prova ponta a ponta em PostgreSQL.**
+> A cadeia de reversa existia inteira e nunca havia sido executada contra o banco real — `server/test/pg/` não tinha
+> arquivo de devolução e o §13 só podia dizer "não conseguimos provar". Agora tem: `pg/devolucao-e2e.test.ts` (banco
+> novo, servidor real) percorre **faturar → devolução parcial (2 de 3, recebidas em bom, estoque 2 → 4, venda segue
+> faturada e conta a receber intacta) → segunda devolução de 1 unidade recebida AVARIADA (nenhuma entrada de estoque,
+> `devolucao_estoque = false`) → total ⇒ venda cancelada e financeiro revertido** — e prova o ponto sensível: o saldo
+> final é **4**, ou seja, **a peça avariada não volta ao estoque nem pelo estorno da venda**. Também entram as recusas
+> (receber antes de autorizar, sem rastreamento, duas vezes, devolver mais do que foi vendido, receber recusada), a
+> **idempotência** por chave (1 linha no banco) e o **404 multiempresa**. **Nenhuma linha de produto mudou**: o ciclo é
+> prova — e a **mutação** (guarda do estado removida) mostra o teste falhando (`esperado 0, veio 1`), garantindo que a
+> regra está de fato coberta. Duas limitações **declaradas**: o retorno usa `adjustStock` com delta **positivo** (não
+> toca a classe do P0-01) e `devolucoes.documento_fiscal_id` **nunca é escrito** — não há nota/evento fiscal de
+> devolução (é território do ERP-12). Estado do ciclo: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 > **Atualização ERP-07 (2026-10-11) — P1-04 FECHADO e um P0 novo descoberto/fechado: criar usuário nunca funcionou em PostgreSQL.**
 > A tela **`/empresas`** (grupo Configurações, `minPerfil: 'admin'`) entrega o CRUD de Empresas com lista, criação,
 > edição, ativar/desativar, exclusão com a recusa do servidor **como veio** e o **modal de acessos**
@@ -275,10 +289,10 @@ Tudo abaixo tem **arquivo + banco + API + tela + teste** e passou nesta auditori
 
 | Item | O que existe | O que falta | Evidência |
 |---|---|---|---|
-| **NCM / Tributação** | Tabela `impostos_ncm` (recurso `impostos_ncm`, ops `cud`), consumida **pelo motor de BI** para alíquota por item | Tela/entrada de menu. `npm run audit:menu` → `[RECURSO_SEM_MENU] O recurso "impostos_ncm" ... tem CRUD na API mas nenhum código do front o consome` | `server/src/resources.ts:483`, saída de `audit:menu` |
-| **Inutilização de numeração fiscal** | Tabela `inutilizacoes_fiscais` + rota `POST /api/fiscal/inutilizar` | Tela/entrada de menu (`[RECURSO_SEM_MENU]`) | `resources.ts:1217`, `index.ts` |
-| **Empresas (multiempresa)** | Recurso `empresas` com ops `cud` (`resources.ts:446`), rotas `/api/empresas/ativa` e `/api/usuarios/:id/empresas` | **CRUD de empresas sem tela**: o front só consome `/empresas/ativa` (`CompanySwitcher.tsx:35,69`). `audit:menu` **não** sinalizou este caso — confirmando o ponto cego `GAP-E1-AUDIT-BLINDSPOT` já registrado | `resources.ts:446`, `client/src/components/CompanySwitcher.tsx` |
-| **Comissões** | Apuração no faturamento + efetivação pró-rata no recebimento + estorno; rotas `/api/financeiro/comissoes` e `/api/financeiro/comissoes/venda/:id`; relatório `comissoes` | Nenhuma entrada em `MODULES` cria o menu; a tela não existe (só o relatório em `RelatoriosPage`) | `docs/ERP-GAPS.md` `GAP-VEND-COMISSOES-MENU`, `grep comissoes client/src/modules.ts` → vazio |
+| **NCM / Tributação** · **FECHADO em ERP-05** (tela `/ncm` + menu) | Tabela `impostos_ncm` (recurso `impostos_ncm`, ops `cud`), consumida **pelo motor de BI** para alíquota por item | Tela/entrada de menu. `npm run audit:menu` → `[RECURSO_SEM_MENU] O recurso "impostos_ncm" ... tem CRUD na API mas nenhum código do front o consome` | `server/src/resources.ts:483`, saída de `audit:menu` |
+| **Inutilização de numeração fiscal** · **FECHADO em ERP-05** (tela `/inutilizacoes`; a rota respondia **405**) | Tabela `inutilizacoes_fiscais` + rota `POST /api/fiscal/inutilizar` | Tela/entrada de menu (`[RECURSO_SEM_MENU]`) | `resources.ts:1217`, `index.ts` |
+| **Empresas (multiempresa)** · **FECHADO em ERP-07** (tela `/empresas`, `adminOnly` provado por HTTP) | Recurso `empresas` com ops `cud` (`resources.ts:446`), rotas `/api/empresas/ativa` e `/api/usuarios/:id/empresas` | **CRUD de empresas sem tela**: o front só consome `/empresas/ativa` (`CompanySwitcher.tsx:35,69`). `audit:menu` **não** sinalizou este caso — confirmando o ponto cego `GAP-E1-AUDIT-BLINDSPOT` já registrado | `resources.ts:446`, `client/src/components/CompanySwitcher.tsx` |
+| **Comissões** · **FECHADO em ERP-06** (tela `/comissoes`, conferência com o relatório) | Apuração no faturamento + efetivação pró-rata no recebimento + estorno; rotas `/api/financeiro/comissoes` e `/api/financeiro/comissoes/venda/:id`; relatório `comissoes` | Nenhuma entrada em `MODULES` cria o menu; a tela não existe (só o relatório em `RelatoriosPage`) | `docs/ERP-GAPS.md` `GAP-VEND-COMISSOES-MENU`, `grep comissoes client/src/modules.ts` → vazio |
 | **Fiscal — emissão** | Adapters `focus` e `plugnotas` com `ambiente: 'homologacao' \| 'producao'`, eventos, consulta, cancelamento | **Nenhuma emissão homologada.** `nfe.ts` tem `NFE_MODO=simulacao` gravando `nfe_status='simulada'` "sem valor fiscal"; certificado/configuração dependem de credencial externa | `server/src/fiscalProvider.ts:261,453,594`, `server/src/nfe.ts:131,165,181` |
 | **Cadastros — Marca** | Coluna `produtos.marca TEXT` (`schema.sql:1740`) e campo texto no recurso (`resources.ts:935`) | Não há tabela `marcas`, nem menu, nem filtro por marca — gap `GAP-CAD-MARCAS` do E1 **continua aberto** | grep por `marcas` em `resources.ts`/`schema.sql` |
 | **Cadastros — Unidades** | Lista fixa `UNIDADES` (`resources.ts:176`) usada por insumos e produtos | Não há cadastro de unidades — gap `GAP-CAD-UNIDADES` **continua aberto** | `resources.ts:176,772,975` |
@@ -297,10 +311,10 @@ Tudo abaixo tem **arquivo + banco + API + tela + teste** e passou nesta auditori
 | 1 | **Tabela/entidade de reserva de estoque** e conceito de "disponível × comprometido" | `grep -c reserva server/src/estoque.ts` = 0 (registrado no E1; segue igual) |
 | 2 | **Cadastro de Marcas** | sem tabela `marcas` |
 | 3 | **Cadastro de Unidades de medida** | só a constante `UNIDADES` |
-| 4 | **Tela de NCM/tributação** | recurso existe, front não consome |
-| 5 | **Tela de inutilização fiscal** | recurso existe, front não consome |
-| 6 | **CRUD de Empresas** | recurso existe, front não consome |
-| 7 | **Tela/menu de Comissões** | rotas existem, menu não |
+| 4 | ~~**Tela de NCM/tributação**~~ — **fechado em ERP-05** (`/ncm`) | recurso existe, front não consome |
+| 5 | ~~**Tela de inutilização fiscal**~~ — **fechado em ERP-05** (`/inutilizacoes`) | recurso existe, front não consome |
+| 6 | ~~**CRUD de Empresas**~~ — **fechado em ERP-07** (`/empresas`, com alçada de administrador) | recurso existe, front não consome |
+| 7 | ~~**Tela/menu de Comissões**~~ — **fechado em ERP-06** (`/comissoes`) | rotas existem, menu não |
 
 ### 5.2 Cadeias que não atravessam o sistema
 
@@ -560,7 +574,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P1-06** | Reserva de estoque / disponível × comprometido | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ |
 | **P1-07** | Fonte única do faturamento (correção estrutural de P0-03) · **FECHADO em ERP-04** | ✅ | ✅ | ✅ | — | — | — | ✅ BI = relatório no mesmo período (`bi-faturamento-e2e`) |
 | **P1-08** | Fiscal sem homologação real (adapters existem, nada emitido) | ✅ | ✅ | ✅ | parcial | parcial | ✅ | só contrato |
-| **P1-09** | Cadeia de devolução sem prova ponta a ponta em PostgreSQL | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | **sem E2E PG** |
+| **P1-09** | Cadeia de devolução sem prova ponta a ponta em PostgreSQL · **FECHADO em ERP-08 (2026-10-11)** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `pg/devolucao-e2e.test.ts` (parcial · avariado não volta nem pelo estorno · total cancela e reverte · idempotência · multiempresa 404) + **mutação** |
 | **P1-10** | `E2: OP cancelada é terminal` responde 500 (mensagem errada) — **fechado em ERP-02 como cascata** | ✅ | — | ✅ | — | — | — | smoke + `e02-ordem-reabrir-postgresql.test.ts` |
 | **P1-12** | `fiscal.ts` grava o payload do evento fiscal com `JSON.stringify(payload).slice(0, 20000)`: acima de 20.000 caracteres o JSON é **truncado no meio** e o `jsonb` recusa com 22P02 — a emissão falha com um 400 enganoso ("valor inválido em um dos campos"). Descoberto pelo contrato tipo × coluna do ERP-03 (o campo era `textarea` sobre `jsonb`; agora o tipo está alinhado, o corte continua) | ✅ | ✅ | ✅ | — | — | ✅ | contrato de tipo (ERP-03) | endereçado em **ERP-05** (Fiscal) |
 | **P1-11** | Assinatura de webhook é global por provedor (sem empresa): segredo de A recusa notificação de B; evento pode ser gravado com `empresa_id` de quem assinou | ✅ | ✅ | ✅ | — | — | ✅ | **todo** em `server/test/pg/e01-gateway-webhook-postgresql.test.ts` (descoberto no ERP-01) |
@@ -649,7 +663,7 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 | Expedição | `/expedicao` | `/vendas/:id/expedicao/*` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
 | Divergências | `/divergencias` | `divergencias_conferencia` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
 | Envios | `/envios` | `envios` | ✅ | ✅ | ✅ | ✅ | ⚠️ **deriva** | ✅ | ✅ | 🟡 P1-01 |
-| Devoluções | `/devolucoes` | `devolucoes` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ **sem E2E** | 🟠 P1-09 |
+| Devoluções | `/devolucoes` | `devolucoes` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 **ERP-08** (P1-09 fechado — cadeia de reversa provada em PG) |
 | Financeiro | `/financeiro` | `/financeiro/*` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 (P0-02 **fechado em ERP-01**: webhook confirma a cobrança em PG) |
 | Lançamentos | `/lancamentos` | `lancamentos_financeiros` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
 | Contas / Categorias / Centros / Recorrências / Transferências / Investidores / Aportes | 7 rotas | 7 recursos | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
@@ -684,13 +698,13 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 | **VENDA** Produto→Cliente→Venda→Pagamento→Estoque→Financeiro→Fiscal→Expedição→BI | parcial (`pg-p1`, `propostas`, `pdv`) | parcial (`pg/e423` até expedição+financeiro; **`bi-faturamento-e2e` fecha venda→BI**) | parcial | 🟠 **GAP parcial** — **o BI agora recebe** (ERP-04 ✅: venda faturada → KPIs = relatório, ABC); resta **Fiscal não emitido** e a cadeia nunca executada como uma única prova |
 | **COMPRA** Fornecedor→Compra→XML→Recebimento→Estoque→Custo→AP→Financeiro | ✅ `compras.test.ts`, `custo-recebimento.test.ts` | ✅ `pg-compras-e32`, `pg-custo-recebimento`, `pg-cotacoes-compra` | ✅ E3.1 e E3.2 **PASS** (inclusive em PG, após semear `local`) | 🟢 **o fluxo mais bem provado do ERP** |
 | **PRODUÇÃO** Produto→Ficha→OP→Consumo→Perda→Produção→Estoque→Custo | ✅ `producao-e2.test.ts` (inclui `reabrir`) | ✅ `pg-producao-e2.test.ts` + `e02-ordem-reabrir-postgresql.test.ts` (CHECK, FK, concorrência; **reabrir/estornar**) | ✅ E2 **PASS** | 🟢 **P0-01 fechado em ERP-02** — a cadeia e a reversão têm prova PostgreSQL |
-| **DEVOLUÇÃO** Venda→Devolução parcial→Estoque→Financeiro→Estorno | ✅ `devolucoes` (front + `DevolucoesPage.test.tsx`) | ⚠️ sem arquivo dedicado | ⚠️ sem bloco próprio | 🔴 **GAP** — fluxo em rota existe, **sem prova ponta a ponta em PostgreSQL** (P1-09) |
+| **DEVOLUÇÃO** Venda→Devolução parcial→Estoque→Financeiro→Estorno | ✅ `devolucoes` (front + `DevolucoesPage.test.tsx`) | ✅ **`pg/devolucao-e2e.test.ts`** (parcial 2/3 bom ⇒ saldo 4; avariado **não** entra; total ⇒ venda cancelada + financeiro revertido; idempotência; multiempresa 404) | ✅ (a cadeia roda por HTTP no e2e) | 🟢 **P1-09 fechado em ERP-08** — com **mutação** provando a guarda do estado |
 | **EXPEDIÇÃO** Venda→Separação→Conferência→Embalagem→Expedição→Estoque | ✅ `expedicao.test.ts` | ✅ **completo** `pg/e423-expedicao-postgresql.test.ts` (E2E, rollback, concorrência, multiempresa 404) | ✅ | 🟢 **fechado com evidência** |
 
 **Resposta direta ao §22 — "quais fluxos do ERP não conseguimos provar ponta a ponta?"**
 
 1. **VENDA completa com Fiscal e BI**: não conseguimos provar. Faltam dois elos, e um deles (BI) está **comprovadamente quebrado**, não apenas sem teste.
-2. **DEVOLUÇÃO completa**: não conseguimos provar em PostgreSQL.
+2. **DEVOLUÇÃO completa**: **fechado em ERP-08** — `pg/devolucao-e2e.test.ts` prova a parcial, o item avariado fora do saldo (inclusive no estorno) e o total com reversão financeira.
 3. **PRODUÇÃO com reabertura/estorno**: **fechado em ERP-02** — `e02-ordem-reabrir-postgresql.test.ts` prova reabrir/estornar em PostgreSQL.
 4. **Financeiro completo com confirmação por webhook de gateway**: **fechado em ERP-01** — o webhook confirma a cobrança em PostgreSQL (P0-02).
 5. **COMPRA e EXPEDIÇÃO completas**: **conseguimos provar** — são as duas cadeias maduras.
@@ -720,13 +734,13 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 
 ## 15. Banco de dados
 
-**O schema representa fielmente o modelo operacional do ERP?** Em grande medida **sim** — e com rigor incomum: 651 `CHECK`, 289 FKs, 19 UNIQUE, 26 triggers de tenant, índices únicos parciais desenhados para o `ON CONFLICT` (e um deles, `uq_gateway_webhook_evento`, é justamente onde P0-02 estoura). Mas há **duas divergências schema × código** que produzem defeito:
+**O schema representa fielmente o modelo operacional do ERP?** Em grande medida **sim** — e com rigor incomum: 651 `CHECK`, 289 FKs, 19 UNIQUE, 26 triggers de tenant, índices únicos parciais desenhados para o `ON CONFLICT` (e um deles, `uq_gateway_webhook_evento`, é justamente onde P0-02 estoura). **Atualização 2026-10-11: as duas divergências que produziam defeito (abaixo, #1 e #2) foram corrigidas** — #1 em **ERP-02** (`tryAdjustStock` no estorno) e #2 em **ERP-01** (`payload` é `json: 'json'` e a leitura é pelo tipo real). A #3 foi **conferida como benigna** (ver a linha).
 
 | # | Divergência | Evidência | Efeito |
 |---|---|---|---|
 | 1 | `estoques.quantidade` tem `CHECK (quantidade >= 0)` e o Postgres a valida **antes** do `ON CONFLICT`; o código em `producao.ts:557` assume que o merge acontece primeiro | §6 P0-01, `ExecConstraints` no stack | 500 na reabertura de OP |
 | 2 | `gateway_webhook_events.payload` é **JSONB**; o recurso o declara como `type: 'textarea'` (`gateway.ts:118`) e o código o lê com `JSON.parse(String(...))` (`gateway.ts:949`) | §6 P0-02 | Webhook descartado + vazamento de constraint |
-| 3 | Tabela `estoques` tem **duas** fontes de unicidade coexistindo: `estoques_produto_id_tamanho_id_local_key UNIQUE(produto_id, tamanho_id, local)` **sem `empresa_id`** (legado) e os 4 índices parciais por empresa | `pg_indexes` | **INFERÊNCIA:** o índice legado sem `empresa_id` pode barrar o mesmo produto+tamanho+local em empresas distintas antes do índice por empresa decidir. Não foi exercitado um teste A/B com o mesmo produto e o mesmo local — **NÃO TESTADO** |
+| 3 | Tabela `estoques` tem **duas** fontes de unicidade coexistindo: `estoques_produto_id_tamanho_id_local_key UNIQUE(produto_id, tamanho_id, local)` **sem `empresa_id`** (legado) e os 4 índices parciais por empresa | `pg_indexes` | **FATO (reconferido em 2026-10-11): benigna.** `produtos.id` é único **globalmente**, e `produto_id` é a primeira coluna do índice legado — a mesma tupla (produto, tamanho, local) só pode existir para o produto daquela empresa. O índice é **redundante**, não conflitante; o A/B de ERP-03 (mesmo SKU e mesmo código de barras em duas empresas) roda com os dois índices presentes |
 | 4 | Nenhuma view no banco | `information_schema.views` → 0 | Toda agregação é feita em SQL dentro do código; não há camada semântica compartilhada entre BI e relatórios — origem estrutural da duplicidade nº 1 (§7) |
 
 **Migrations:** 32 arquivos, aplicados em ordem, sem duplicidade nem conflito (`0001`…`0032`), registrados em `schema_migrations`, com `pg_advisory_lock` e política declarada de "não editar migration antiga, criar nova" (seguida em `0032`, que substitui o CHECK de `0024` sem tocar no arquivo original). **Nada de anormal encontrado aqui** — é a parte mais disciplinada do repositório.
@@ -925,7 +939,23 @@ P1-06 (reserva) ──> venda multi-canal ──> sincronização de estoque (FU
 | 8 | **Multiempresa** | Nenhum dado homônimo vaza entre A e B em nenhum dos 12 domínios, com teste A/B em PostgreSQL |
 | 9 | **RBAC** | Nenhuma operação crítica depende do front: menu, API e serviço coerentes (`audit:menu` sem `RBAC_DERIVA_SOLTA`) |
 
-**ERP CORE = cadeias 1 a 9 sem nenhum P0/P1 aberto.** Hoje: 2 de 9 fechadas (2 e 4), 3 com defeito (1, 3, 6) e 4 não provadas (5, 7, 8-parcial, 9-parcial).
+**ERP CORE = cadeias 1 a 9 sem nenhum P0/P1 aberto.**
+
+**Atualização 2026-10-11 (depois de ERP-01 → ERP-08): nenhum P0 aberto** — P0-01 e P0-02 (ERP-01/02), P0-03 (ERP-04), P0-04 e P0-05 (ERP-03), P0-06 (ERP-07, descoberto na execução) estão todos fechados com prova em PostgreSQL. Estado das cadeias:
+
+| # | Cadeia | Estado em 2026-10-11 |
+|---|---|---|
+| 1 | Cadastro → Estoque → Venda → Financeiro | 🟢 **provas encadeadas**: baixa única (`pg/e423`), conta a receber (`pg/comissoes-e2e`), **BI = relatório** no mesmo período (`bi-faturamento-e2e`) — falta a cadeia inteira numa única execução (candidata a teste de fechamento) |
+| 2 | Compra → Estoque → Custo → AP → Financeiro | ✅ **pronta** (smoke E3.1/E3.2 em PG + `pg-compras-e32`) |
+| 3 | Produção → Estoque → Custo | ✅ **fechada em ERP-02** — planejar/liberar/apontar/concluir/**reabrir/estornar** em PG (`e02-ordem-reabrir-postgresql`) |
+| 4 | Venda → Expedição → Estoque | ✅ **pronta** (`pg/e423`) |
+| 5 | Venda → Devolução → Estoque → Financeiro | ✅ **fechada em ERP-08** — parcial/avariado/total, com o avariado **fora** do saldo inclusive no estorno (`pg/devolucao-e2e`) |
+| 6 | Pagamento → Recebimento → Conciliação | 🟡 **webhook provado em ERP-01** (confirma uma vez; repetição idempotente); **conciliação/extrato sem prova PG dedicada** |
+| 7 | Venda → Fiscal (documento) | 🔴 **pendente** (ERP-12): nada emitido com provedor homologado; **não há nem evento/nota de devolução** |
+| 8 | Multiempresa | 🟡 **isolamento provado** (`e03-multiempresa-ab`, guardas do ERP-07, 404 no e2e de devolução); **P1-11 aberto** (assinatura de webhook global por provedor) |
+| 9 | RBAC | 🟠 **P1-01 aberto** (3 recursos com deriva menu × servidor) — ciclo **ERP-10**; `empresas` deixou de ser ponto cego em ERP-07 |
+
+**Leitura honesta:** o CORE está a **dois ciclos de prova** (ERP-09 reserva é funcionalidade nova; ERP-10 fecha RBAC; ERP-12 é homologação externa) — e a cadeia 1 merece um teste único de ponta a ponta antes do gate final.
 
 ### ERP ADVANCED (importante, depois do CORE)
 
@@ -951,7 +981,7 @@ Responsividade/acessibilidade · breadcrumbs e atalhos de cadeia · série diár
 | **ERP-06** | Comissões: tela, menu e fechamento | P1-05 → **✅ implementado em 2026-10-11** |
 | **ERP-07** | Administração: CRUD de Empresas (+ P0-06) | P1-04, P0-06 → **✅ implementado em 2026-10-11** |
 | **ERP-07** | Administração: CRUD de Empresas | P1-04 · **P0-06 (descoberto no ciclo)** → **✅ implementado em 2026-10-11** |
-| **ERP-08** | Devolução ponta a ponta em PostgreSQL | P1-09 |
+| **ERP-08** | Devolução ponta a ponta em PostgreSQL | P1-09 → **✅ implementado em 2026-10-11** |
 | **ERP-09** | Reserva / disponível × comprometido | P1-06 |
 | **ERP-10** | RBAC sem deriva e auditoria de menu ampliada | P1-01, P2-05 |
 | **ERP-11** | Cadastros faltantes (Marcas, Unidades) e telas de relatório | P2-01, P2-02, P2-04 |

@@ -35,6 +35,22 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
 > aguarda decisão humana.
 
+> **Atualização ERP-08 (2026-10-11) — P1-09 FECHADO (devolução provada ponta a ponta em PostgreSQL).**
+> `server/test/pg/devolucao-e2e.test.ts` (banco novo, servidor real) executa a cadeia de reversa inteira: venda
+> faturada (saída canônica com `venda_id`; estoque 5 → 2) → **devolução parcial de 2 de 3** → autorizar → rastrear →
+> receber em **bom** (estoque 2 → **4**; venda **segue faturada**, conta a receber **intacta** — a resposta declara
+> `financeiro.aplicado = false`) → segunda devolução de 1 unidade recebida **avariada** (nenhuma entrada de estoque,
+> `devolucao_estoque = false`) → com 3 de 3 devolvidas, **venda cancelada e financeiro revertido** (parcela →
+> `cancelado`). O ponto sensível é provado por número: saldo final **4** ⇒ **a peça avariada não volta ao estoque nem
+> pelo estorno da venda** (`restaurar = saídas − já recebido, qualquer estado`). Também cobertos: receber antes de
+> autorizar (409), sem rastreamento (409), duas vezes (409, saldo não sobe de novo), devolver além do vendido (409),
+> receber recusada (409), idempotência por `idempotency-key` (a mesma devolução, 1 linha no banco) e multiempresa
+> (404 em ler/criar/receber, sem mover o estoque de A). **Nenhuma linha de produto mudou** — o ciclo é prova — e a
+> **mutação** da guarda de estado (`if (estado !== 'bom') continue;` removido) faz o teste falhar (`esperado 0, veio 1`).
+> Limitações declaradas: o retorno usa `adjustStock` de delta **positivo** (a classe do P0-01 não o alcança) e
+> `devolucoes.documento_fiscal_id` nunca é escrito — **não há nota/evento fiscal de devolução** (ERP-12). Estado do
+> ciclo: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 > **Atualização ERP-07 (2026-10-11) — P1-04 FECHADO; P0-06 descoberto e fechado (criar usuário não funcionava em PostgreSQL).**
 > A administração de empresas deixou de ser só API: tela **`/empresas`** (grupo Configurações, `minPerfil: 'admin'`)
 > com lista, criar/editar, ativar/desativar, excluir (mostrando a recusa do servidor como veio) e **modal de acessos**
