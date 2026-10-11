@@ -49,7 +49,8 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > `test:pg` **112 pass / 0 fail / 1 todo** (baseline 110), `server test` 671/0,
 > `client test` 226, smoke **126/126**, typecheck 0, lint 0 erros/401 warnings,
 > build OK; teste novo `server/test/pg/e01-gateway-webhook-postgresql.test.ts`
-> **falha com o código original e passa com a correção**. Durante o ciclo foi
+> **falha com o código original e passa com a correção**. **CI do PR #49 verde
+> nos dois jobs** (`verificar` e `testes-postgres`, run 38138475476). Durante o ciclo foi
 > descoberto o gap **P1-11** (assinatura de webhook global por provedor, sem
 > empresa) — registrado em [`docs/RELATORIO-ERP-ONLY.md`](RELATORIO-ERP-ONLY.md)
 > §6/§9 e fixado como teste `todo`; **não corrigido** por depender de decisão de
