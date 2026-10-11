@@ -764,6 +764,25 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
   }
 }
 
+/** Empresa padrão do sistema (BROBOND): criada pelo schema, insubstituível. */
+const EMPRESA_PADRAO_ID = 1;
+
+/**
+ * Primeiro domínio com dados da empresa — para a mensagem de recusa dizer QUAL
+ * vínculo existe, em vez de "está em uso" genérico. A varredura para no primeiro
+ * acerto; empresa nova (o caso comum de exclusão) percorre os recursos e não
+ * encontra nada.
+ */
+async function primeiroDominioDaEmpresa(id: number, tx?: Tx): Promise<{ label: string; total: number } | null> {
+  const s = getStore();
+  for (const r of Object.values(RESOURCES)) {
+    if (!r.empresa || r.key === 'empresas') continue;
+    const total = await s.countWhere(r, { empresa_id: id }, tx);
+    if (total > 0) return { label: r.label, total };
+  }
+  return null;
+}
+
 export async function deleteRecord(r: Resource, id: number, actor: Actor, escopoOpt?: EscopoOuAtor): Promise<void> {
   const s = getStore();
   const escopo = escopoOpt === undefined ? escopoDe(actor) : (comoEscopo(escopoOpt) ?? escopoDeSistema());
@@ -813,6 +832,43 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
         // Desfaz os vínculos de chave estrangeira: saldos, movimentações e
         // inventários continuam com o nome do local como histórico em texto.
         await desvincularLocal(before, tx);
+      }
+      if (r.key === 'empresas') {
+        // ERP-07 — GUARDAS DE EXCLUSÃO. Uma empresa não é um cadastro comum:
+        // apagá-la levaria junto (ou deixaria órfão) todo o histórico que
+        // aponta para ela por `empresa_id` (72 tabelas). Aqui as regras que
+        // valem nos DOIS modos (memória e PostgreSQL):
+        //   1) a empresa padrão (id 1 — BROBOND) nunca é excluída: é o alvo do
+        //      motor analítico, das vendas multicanal e do provisionamento;
+        //   2) empresa com usuários ou concessões de acesso não é excluída —
+        //      primeiro se movem as pessoas (a FK `usuario_empresas` levaria a
+        //      concessão junto, em silêncio).
+        // Empresa com DADOS operacionais: em PostgreSQL a própria FK responde
+        // (23503 → 409 "está em uso... desative"); no modo demonstração, sem
+        // FKs, a varredura abaixo cobre o mesmo caso.
+        if (Number(before.id) === EMPRESA_PADRAO_ID) {
+          throw new HttpError(
+            409,
+            'A BROBOND (empresa padrão, id 1) não pode ser excluída: o motor analítico (Meu Negócio), as vendas multicanal e o provisionamento de local apontam para ela. Se ela não deve mais operar, desative-a.'
+          );
+        }
+        // `usuario_empresas` é o vínculo canônico (o mesmo que o login revalida a
+        // cada requisição); `usuarios.empresa_id` não faz parte do contrato do
+        // recurso e, em PostgreSQL, a própria FK segura o caso.
+        const concessoes = await s.countWhere(getResource('usuario_empresas')!, { empresa_id: id }, tx);
+        if (concessoes > 0) {
+          throw new HttpError(
+            409,
+            `A empresa "${String(before.nome)}" tem ${concessoes} usuário(s) com acesso concedido a ela. Revogue esses acessos (ou mova as pessoas para outra empresa) antes de excluí-la — ou apenas desative a empresa.`
+          );
+        }
+        const dominio = await primeiroDominioDaEmpresa(id, tx);
+        if (dominio) {
+          throw new HttpError(
+            409,
+            `A empresa "${String(before.nome)}" tem registros de ${dominio.label} (${dominio.total}) vinculados a ela. Excluir apagaria vínculos do histórico — desative a empresa em vez de excluí-la.`
+          );
+        }
       }
       if (r.key === 'ordens' && before.status === 'concluida') {
         throw new HttpError(409, 'Ordem concluída já deu entrada no estoque. Reabra ou cancele em vez de excluir.');

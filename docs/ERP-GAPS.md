@@ -35,6 +35,39 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
 > aguarda decisão humana.
 
+> **Atualização ERP-08 (2026-10-11) — P1-09 FECHADO (devolução provada ponta a ponta em PostgreSQL).**
+> `server/test/pg/devolucao-e2e.test.ts` (banco novo, servidor real) executa a cadeia de reversa inteira: venda
+> faturada (saída canônica com `venda_id`; estoque 5 → 2) → **devolução parcial de 2 de 3** → autorizar → rastrear →
+> receber em **bom** (estoque 2 → **4**; venda **segue faturada**, conta a receber **intacta** — a resposta declara
+> `financeiro.aplicado = false`) → segunda devolução de 1 unidade recebida **avariada** (nenhuma entrada de estoque,
+> `devolucao_estoque = false`) → com 3 de 3 devolvidas, **venda cancelada e financeiro revertido** (parcela →
+> `cancelado`). O ponto sensível é provado por número: saldo final **4** ⇒ **a peça avariada não volta ao estoque nem
+> pelo estorno da venda** (`restaurar = saídas − já recebido, qualquer estado`). Também cobertos: receber antes de
+> autorizar (409), sem rastreamento (409), duas vezes (409, saldo não sobe de novo), devolver além do vendido (409),
+> receber recusada (409), idempotência por `idempotency-key` (a mesma devolução, 1 linha no banco) e multiempresa
+> (404 em ler/criar/receber, sem mover o estoque de A). **Nenhuma linha de produto mudou** — o ciclo é prova — e a
+> **mutação** da guarda de estado (`if (estado !== 'bom') continue;` removido) faz o teste falhar (`esperado 0, veio 1`).
+> Limitações declaradas: o retorno usa `adjustStock` de delta **positivo** (a classe do P0-01 não o alcança) e
+> `devolucoes.documento_fiscal_id` nunca é escrito — **não há nota/evento fiscal de devolução** (ERP-12). Estado do
+> ciclo: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
+> **Atualização ERP-07 (2026-10-11) — P1-04 FECHADO; P0-06 descoberto e fechado (criar usuário não funcionava em PostgreSQL).**
+> A administração de empresas deixou de ser só API: tela **`/empresas`** (grupo Configurações, `minPerfil: 'admin'`)
+> com lista, criar/editar, ativar/desativar, excluir (mostrando a recusa do servidor como veio) e **modal de acessos**
+> (`POST`/`DELETE /api/usuarios/:id/empresas`, em lotes). O recurso `empresas` ganhou **`adminOnly: true`** — antes um
+> **gerente autenticado** alcançava `POST/PUT/DELETE /api/empresas*` por chamada direta (restrição só de menu) — e agora
+> responde **403** nos quatro verbos, provado com servidor real em `server/test/pg/empresas-admin-e2e.test.ts`, que também
+> garante que o **seletor de empresa ativa continua 200** (`GET`/`POST /api/empresas/ativa`). Guardas de exclusão com prova
+> PostgreSQL (`pg-empresas-admin.test.ts`): empresa padrão ⇒ 409; empresa com vínculo ⇒ 409; empresa com dado de domínio ⇒
+> **23503 → 409**; empresa vazia ⇒ excluída; e em memória `server/test/empresas-admin.test.ts` **9/9**.
+> **O achado do ciclo é o P0-06:** `POST /api/usuarios` respondia **sempre 409** ("Outra operação alterou estes dados…") e
+> **nenhum usuário era criado** em PostgreSQL, porque `gerarConvite()` (`server/src/usuariosAdmin.ts:87`) chamava
+> `store.audit({...})` **sem `tx`** — segunda conexão dentro da transação `SERIALIZABLE` do cadastro ⇒ `40001`; e a linha de
+> auditoria do convite **sobrevivia ao rollback**. Antes/depois: `3× FALHOU 409` · `usuarios criados: 0` ⇒ `ok 8` · `ok 9` ·
+> `usuarios criados: 2`; **mutação** (sem o `tx`) ⇒ `server/test/pg-usuario-convite.test.ts` volta a falhar — e, sem
+> `adminOnly`, o e2e HTTP volta a **200** onde exige **403**. Bateria `test:pg` em banco novo: **131 testes · 130 pass · 0 fail · 1 todo**;
+> `smoke:pg` **126/126**. Sem migration, sem tabela nova, sem tocar o Commerce. Estado do ciclo: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 > **Atualização ERP-06 (2026-10-11) — P1-05 FECHADO (Comissões com tela e número conferido).**
 > O cálculo já existia e já estava testado (`comissoes.ts` + `financeiro-p2.test.ts`); faltava
 > **superfície**: nenhuma entrada em `MODULES`, nenhum consumo no cliente (só o relatório dentro de

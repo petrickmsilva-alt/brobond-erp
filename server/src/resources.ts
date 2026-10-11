@@ -454,8 +454,16 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Empresa',
     labelFields: ['nome'],
     ops: ALL_OPS,
+    // ERP-07: administrar empresas é ato de ADMINISTRADOR, como usuários e
+    // auditoria. Até aqui o CRUD genérico de `empresas` não tinha alçada
+    // nenhuma: qualquer gerente (ou operador, para incluir/alterar) criava,
+    // renomeava, desativava ou excluía empresa pela API, e o menu nem expunha
+    // o recurso (o `audit:menu` não o sinalizava — ponto cego do P2-05). A
+    // troca da empresa ativa da sessão continua em `/api/empresas/ativa`, que
+    // é outro caminho e não passa por este recurso.
+    adminOnly: true,
     notice:
-      'Empresas do grupo para o motor analítico 1. MEU NEGÓCIOS: cada venda multicanal pertence a uma empresa e os relatórios de BI (margem, curva ABC, dashboard) filtram por ela. A BROBOND (id 1) é a empresa padrão — não a exclua.',
+      'Empresas do grupo para o motor analítico 1. MEU NEGÓCIOS: cada venda multicanal pertence a uma empresa e os relatórios de BI (margem, curva ABC, dashboard) filtram por ela. A BROBOND (id 1) é a empresa padrão e NÃO pode ser excluída — no máximo desativada, e só por administrador. Empresa com usuários ou dados vinculados também não é excluída: desative em vez de excluir.',
     fields: [
       // Sem `unique`: o banco nunca teve índice único em empresas.nome (a
       // declaração só valia no modo memória, que recusava nomes que o

@@ -106,18 +106,29 @@ export async function gerarConvite(row: Record<string, any>, actor: { id: number
     `<p style="font-size:13px;color:#64748b;">Se você não esperava este convite, ignore este e-mail: nada muda no seu acesso.</p>`,
   ]);
   const entregue = (await enviarEmail({ to: email, assunto: 'BROBOND ERP — convite de acesso', html })) === 'enviado';
+  // ERP-07 (P0-06): o `tx` PRECISA ser encaminhado. Sem ele, esta auditoria abre
+  // uma SEGUNDA conexão enquanto a transação de cadastro do usuário está aberta:
+  // com o isolamento SERIALIZABLE do store, a segunda conexão provoca
+  // `40001` na transação principal e o cadastro inteiro é desfeito — na prática
+  // `POST /api/usuarios` (o único caminho de criação de usuário) respondia
+  // **409 "Outra operação alterou estes dados ao mesmo tempo"** e NENHUM usuário
+  // era criado em PostgreSQL. Pior: a linha de auditoria do convite sobrevivia
+  // ao rollback, descrevendo um convite de um usuário que não existe.
   await store
-    .audit({
-      usuario_id: actor?.id || null,
-      usuario: actor?.name || 'sistema',
-      acao: 'convite',
-      recurso: 'usuarios',
-      registro_id: Number(row.id),
-      descricao: entregue
-        ? `Convite de acesso enviado para ${email} (válido por ${CONVITE_TTL_HORAS} h)`
-        : `Convite de acesso gerado para ${email} — e-mail não entregue (sem SMTP ou falha no SMTP); link liberado para entrega manual`,
-      empresa_id: empresaExplicitaAudit(row.empresa_id, actor),
-    })
+    .audit(
+      {
+        usuario_id: actor?.id || null,
+        usuario: actor?.name || 'sistema',
+        acao: 'convite',
+        recurso: 'usuarios',
+        registro_id: Number(row.id),
+        descricao: entregue
+          ? `Convite de acesso enviado para ${email} (válido por ${CONVITE_TTL_HORAS} h)`
+          : `Convite de acesso gerado para ${email} — e-mail não entregue (sem SMTP ou falha no SMTP); link liberado para entrega manual`,
+        empresa_id: empresaExplicitaAudit(row.empresa_id, actor),
+      },
+      tx
+    )
     .catch(() => undefined);
   return { entregue, ...(entregue ? {} : { link }) };
 }
