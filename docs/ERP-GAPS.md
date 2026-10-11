@@ -35,6 +35,24 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
 > aguarda decisão humana.
 
+> **Atualização ERP-02 (2026-10-11) — P0-01 FECHADO (estorno/reabertura de OP).**
+> `estornarOrdem` chamava `adjustStock` (padrão `INSERT ... ON CONFLICT DO UPDATE`)
+> com delta **negativo**: o CHECK `estoques_quantidade_nao_negativo` avalia o tuple
+> **proposto** antes de o conflito resolver, então a reabertura devolvia SQLSTATE
+> **23514 → HTTP 500** mesmo com saldo suficiente na linha correta. O estorno passou
+> a usar `tryAdjustStock` (UPDATE condicional com row lock) e o saldo insuficiente
+> virou **409 explicativo**; `translatePgError` passou a traduzir **23514 → 409**
+> sem vazar nome de constraint. **Evidência executada:** antes/depois no mesmo
+> teste (`{"error":"Erro interno do servidor"}` → `200`), fluxo completo da OP pela
+> API em PostgreSQL real (estoque, insumos, apontamentos, trilha, rollback quando o
+> saldo não cobre), `test:pg` **114 pass / 0 fail / 1 todo** (115 testes),
+> `server test` 671/0, `client test` 226, smoke demo **126/126** e — o termômetro da
+> auditoria — **smoke contra PostgreSQL real: 119/126 → 126/126**. O P1-02
+> (`OP cancelada é terminal` respondendo 500) era cascata do mesmo defeito e fechou
+> junto, sem código próprio. Risco residual preventivo registrado como **P3-07**
+> (`adjustInsumoStock` usa o mesmo padrão, hoje sem CHECK que o dispare). Estado do
+> ciclo: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 > **Atualização ERP-01 (2026-10-11) — primeiro ciclo do roadmap (P0-02 FECHADO).**
 > O webhook de pagamento volta a confirmar cobrança em PostgreSQL: causa-raiz era
 > a leitura de uma coluna **JSONB** com `JSON.parse(String(payload))`

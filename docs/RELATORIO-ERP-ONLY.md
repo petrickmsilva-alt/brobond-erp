@@ -5,6 +5,18 @@
 **Data:** 2026-10-11 · **Modo:** AUDITORIA (nenhum código foi alterado na auditoria)
 **Autor:** Auditoria técnica sênior assistida por agente
 
+> **Atualização ERP-02 (2026-10-11) — P0-01 FECHADO.** O estorno/reabertura de OP
+> volta a funcionar em PostgreSQL: `estornarOrdem` usava `adjustStock` (padrão
+> `INSERT ... ON CONFLICT`) com delta negativo, e o CHECK
+> `estoques_quantidade_nao_negativo` reprovava o tuple proposto antes do conflito
+> → SQLSTATE 23514 → **500**. Agora usa `tryAdjustStock` (UPDATE condicional com
+> row lock) com **409 explicativo** quando o saldo não cobre, e `translatePgError`
+> traduz **23514 → 409** sem vazar constraint. Prova antes/depois no mesmo
+> teste (`{"error":"Erro interno do servidor"}` → `200`) e **smoke contra
+> PostgreSQL real: 119/126 → 126/126**. O P1-02 era cascata e fechou junto;
+> novo risco residual preventivo registrado como **P3-07**. Detalhe:
+> [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 > **Atualização ERP-01 (2026-10-11) — primeiro ciclo do roadmap executado.**
 > **P0-02 está FECHADO com evidência executada em PostgreSQL real** (mesma linha,
 > antes/depois: `ignorado`/cobrança `pendente` → `paga`/título `confirmado`), com
@@ -343,6 +355,7 @@ FAIL  E3.2: prévia devolve 200 e aplicado=false — status 409 ...
 
 * **Evidência:** `FAIL E2: OP cancelada é terminal — status 500`. Como a reabertura falhou (P0-01), a OP continuou `concluida`; a tentativa de "ressuscitar" cai no mesmo `estornarOrdem` e devolve 500 em vez do 409 de estado terminal.
 * **Severidade:** 🟠 **P1** (sintoma do P0-01, mas com mensagem errada ao usuário — o correto seria a transição inválida de `TRANSICOES_OP`).
+* **Fechado em ERP-02 (2026-10-11) como cascata:** com o estorno funcionando, a OP volta a `planejada`, `POST /cancelar` responde 200 e `PUT` numa OP `cancelada` responde **409** — coberto pelo teste novo (`e02-ordem-reabrir-postgresql.test.ts`) e pelo smoke PostgreSQL **126/126**. Nenhum código foi mudado por causa deste item.
 
 ### P1-11 — A assinatura do webhook é global por provedor (não por empresa) — *descoberto na implementação do ERP-01*
 
@@ -400,7 +413,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 
 | ID | Gap | Domínio | Evidência | Depende de |
 |---|---|---|---|---|
-| **P0-01** | Reabrir/estornar OP devolve 500 em PostgreSQL (23514; `adjustStock` com delta negativo) | Produção / Estoque | §6 P0-01, SQLSTATE capturado | — |
+| **P0-01** | Reabrir/estornar OP devolve 500 em PostgreSQL (23514; `adjustStock` com delta negativo) · **FECHADO em ERP-02 (2026-10-11)** | Produção / Estoque | §6 P0-01 · evidência do ciclo na §5 do roadmap | — |
 | **P0-02** | Webhook de pagamento não confirma cobrança em PostgreSQL (jsonb lido como objeto) e vaza constraint no endpoint público · **FECHADO em ERP-01 (2026-10-11)** | Financeiro / Segurança | §6 P0-02 · evidência do ciclo na §5 do roadmap | — |
 | **P0-03** | BI não vê as vendas do ERP (lê `sales`, escreve nada em `vendas`) | BI / Vendas / Arquitetura | §6 P0-03, venda faturada → KPIs zero | Decisão de arquitetura (fonte única de faturamento) |
 | **P0-04** | Suíte E2E não executa contra PostgreSQL; sem `local` padrão a instalação nova não opera estoque | Testes / Estoque / Onboarding | §6 P0-04 | — |
@@ -422,7 +435,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P1-07** | Fonte única do faturamento (correção estrutural de P0-03) | parcial | parcial | parcial | — | — | — | ❌ |
 | **P1-08** | Fiscal sem homologação real (adapters existem, nada emitido) | ✅ | ✅ | ✅ | parcial | parcial | ✅ | só contrato |
 | **P1-09** | Cadeia de devolução sem prova ponta a ponta em PostgreSQL | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | **sem E2E PG** |
-| **P1-10** | `E2: OP cancelada é terminal` responde 500 (mensagem errada) | ✅ | — | ✅ | — | — | — | smoke |
+| **P1-10** | `E2: OP cancelada é terminal` responde 500 (mensagem errada) — **fechado em ERP-02 como cascata** | ✅ | — | ✅ | — | — | — | smoke + `e02-ordem-reabrir-postgresql.test.ts` |
 | **P1-11** | Assinatura de webhook é global por provedor (sem empresa): segredo de A recusa notificação de B; evento pode ser gravado com `empresa_id` de quem assinou | ✅ | ✅ | ✅ | — | — | ✅ | **todo** em `server/test/pg/e01-gateway-webhook-postgresql.test.ts` (descoberto no ERP-01) |
 
 ---
@@ -450,6 +463,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P3-04** | Compras atrasadas por data no dashboard (exige agregado novo) |
 | **P3-05** | `no-explicit-any`: 401 warnings de lint (dívida de tipagem, sem impacto funcional) |
 | **P3-06** | `prisma validate` não roda no sandbox (limitação de ambiente; roda no CI) |
+| **P3-07** | `adjustInsumoStock` usa o mesmo padrão `INSERT delta ON CONFLICT DO UPDATE` para consumo (delta negativo). Hoje **não dispara** — `estoque_insumos.quantidade` não tem CHECK de não-negativo — mas se um CHECK for adicionado ali, o consumo de insumos quebra como o estorno quebrou (P0-01). Recomendação preventiva: migrar o consumo para o padrão de UPDATE condicional |
 
 ---
 

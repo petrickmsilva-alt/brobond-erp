@@ -12,8 +12,9 @@
 | Ciclo | Status | Evidência |
 |---|---|---|
 | **ERP-01** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-01, abaixo |
-| **ERP-02** | ⏳ não iniciado | — |
-| **ERP-03 … ERP-13** | ⏳ não iniciados | — |
+| **ERP-02** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-02, abaixo |
+| **ERP-03** | ⏳ não iniciado | — |
+| **ERP-04 … ERP-13** | ⏳ não iniciados | — |
 
 **Regra de execução:** um ciclo só muda de ⏳ para ✅ com a bateria completa verde (typecheck · lint · build · `server test` · `client test` · `test:pg` · `smoke`) **e** o teste central falhando antes da correção e passando depois, em PostgreSQL real.
 
@@ -174,6 +175,37 @@ E) coletor de vazamento sobre **todas** as respostas públicas.
   2. Nenhuma resposta 500 por violação de CHECK em nenhuma rota de produção/estoque.
   3. Smoke `E2` passa contra PostgreSQL nos 4 passos hoje reprovados.
   4. `npm run test:pg` verde incluindo o arquivo novo.
+
+#### ✅ Execução (2026-10-11) — CLOSED
+
+**Arquivos:** `server/src/producao.ts` (+15/−1) · `server/src/pgstore.ts` (+9) · **novo** `server/test/pg/e02-ordem-reabrir-postgresql.test.ts` — **sem migration**, sem frontend, nenhum arquivo de Commerce.
+
+**Causa-raiz corrigida:**
+1. `producao.ts` (`estornarOrdem`) chamava `adjustStock(..., −qtd, ...)`; esse primitivo monta `INSERT ... ON CONFLICT DO UPDATE`, e o CHECK `estoques_quantidade_nao_negativo` avalia o **tuple proposto** (−qtd) **antes** de o conflito resolver — daí o SQLSTATE 23514 mesmo com saldo suficiente na linha correta. Passou a usar `tryAdjustStock` (INSERT 0 com `DO NOTHING` + `UPDATE ... WHERE quantidade + delta >= 0`, com row lock) e o `null` virou **409 explicativo** ("Não há saldo de N peça(s) em ... para estornar a OP #x. Nada foi alterado").
+2. `pgstore.ts` — `translatePgError` passou a traduzir **23514** (`check_violation`) para **409** com mensagem que **não** cita tabela/constraint: nenhuma violação de CHECK vira "Erro interno do servidor" em nenhum recurso.
+3. **Varredura dos call sites confirmada por evidência:** `adjustStock` é chamado em 11 pontos; só `producao.ts:557` passava delta negativo — os demais são `Math.trunc(qtd)`/`quantidade`/`delta` **com guarda** (`if (delta < 0) → tryAdjustStock`) ou `if (delta > 0)`. Nenhum outro ponto a corrigir.
+4. **P1-10 era cascata, não código próprio:** com o estorno funcionando, a OP volta a `planejada`, o `cancelar` responde 200 e o `PUT` numa OP `cancelada` responde **409** (vocabulário terminal). A prova cobre os dois casos.
+
+**Prova antes/depois (mesmo teste, mesmo banco):**
+
+```
+ANTES  (código original)  reabrir precisa responder 200 — era o defeito P0-01: {"error":"Erro interno do servidor"}   → 2 falhas
+DEPOIS (corrigido)        ok 1 … ok 2 · # pass 2 / # fail 0
+```
+
+**Teste de aceite (PostgreSQL real, servidor spawnado, JWT real):** fluxo completo pela API (insumo → produto → tamanho → ficha → OP → liberar → apontar → concluir) e então:
+reabrir → **200**, 10 peças fora do estoque, 20 m de insumo devolvidos, **apontamentos descartados (0)**, evento `reaberta` na trilha, **uma** movimentação de estorno (`tipo=saida`, qtd 10), nenhum saldo negativo · reabrir de novo → **409** · **saldo insuficiente** (peças consumidas por fora) → **409** com mensagem de saldo, **sem** `constraint`/`SQLSTATE`/`erro interno`, e **rollback integral** (status segue `concluida`, apontamento intacto, insumo intacto, nenhuma movimentação de estorno, saldo inalterado) · OP cancelada → `PUT` **409** e `reabrir` **409** · unidade: `translatePgError(23514) → 409` sem vazar tabela/constraint.
+
+**Smoke E2E contra PostgreSQL real (o termômetro da auditoria):**
+
+| | Auditoria (antes) | Agora |
+|---|---|---|
+| `SMOKE_BASE` contra PostgreSQL com local semeado | **119/126** (7 falhas: 4 estorno + 2 cascata + 3 gateway) | **126/126 · 0 FAIL** |
+
+Checks que reprovavam e agora passam: `E2: POST /reabrir estorna (gerente)` (200) · `E2: reabrir descarta os apontamentos` (0) · `E2: POST /cancelar guarda o motivo` (200) · `E2: OP cancelada é terminal` (409) · `webhook pago → processado` · `mesma notificação de novo → duplicado` · `cobrança ficou paga`.
+
+- **Regressão:** `server test` **671 pass / 0 fail / 63 skipped** (idêntico ao baseline) · `client test` **226** · `test:pg` **114 pass / 0 fail / 1 todo** (115 testes) · smoke demo **126/126** · typecheck **0** · lint **0 erros / 401 warnings** · build OK.
+- **Risco residual documentado (não é defeito hoje):** `adjustInsumoStock` usa o mesmo padrão `INSERT delta ON CONFLICT DO UPDATE` para consumo (delta negativo). **Não dispara** porque `estoque_insumos.quantidade` **não tem** CHECK de não-negativo — mas, se um CHECK for adicionado ali, o consumo de insumos quebraria da mesma forma. Registrado como **P3-07** em [`docs/RELATORIO-ERP-ONLY.md`](RELATORIO-ERP-ONLY.md) §11.
 
 ---
 
@@ -393,8 +425,8 @@ MENU ERP FINAL PROPOSTO (ERP-05, ERP-06, ERP-07 e ERP-11 implementam as entradas
 
 | Gap | Severidade | Ciclo |
 |---|---|---|
-| P0-01 estorno/reabrir OP → 500 em PostgreSQL | 🔴 P0 | ERP-02 |
-| P0-02 webhook de pagamento descartado + vazamento de constraint | 🔴 P0 | ERP-01 |
+| P0-01 estorno/reabrir OP → 500 em PostgreSQL | 🔴 P0 | **ERP-02 ✅** |
+| P0-02 webhook de pagamento descartado + vazamento de constraint | 🔴 P0 | **ERP-01 ✅** |
 | P0-03 BI lê `sales`, não `vendas` do ERP | 🔴 P0 | ERP-04 |
 | P0-04 E2E não roda em PostgreSQL; instalação nova sem local padrão | 🔴 P0 | ERP-03 |
 | P1-01 deriva RBAC (3 recursos) | 🟠 P1 | ERP-10 |
@@ -406,7 +438,7 @@ MENU ERP FINAL PROPOSTO (ERP-05, ERP-06, ERP-07 e ERP-11 implementam as entradas
 | P1-07 fonte única do faturamento | 🟠 P1 | ERP-04 |
 | P1-08 fiscal sem homologação | 🟠 P1 | ERP-12 |
 | P1-09 devolução sem E2E PostgreSQL | 🟠 P1 | ERP-08 |
-| P1-10 `OP cancelada é terminal` responde 500 | 🟠 P1 | ERP-02 |
+| P1-10 `OP cancelada é terminal` responde 500 (cascata de P0-01) | 🟠 P1 | **ERP-02 ✅ (fechado como cascata)** |
 | P1-11 assinatura de webhook global por provedor (sem empresa) | 🟠 P1 | **registrado no ERP-01; correção aguarda decisão de escopo multiempresa** |
 | P2-01 Marcas | 🟡 P2 | ERP-11 |
 | P2-02 Unidades | 🟡 P2 | ERP-11 |
@@ -447,6 +479,6 @@ O BROBOND ERP está **mais perto do fim do que o volume de pendências sugere**:
 
 **Ressalva:** a implementação **não deve começar** antes de os 4 gaps P0 serem reconhecidos como bloqueadores (dois deles são defeitos de produção provados, não funcionalidade ausente) e antes de **ERP-03** garantir que nenhum ciclo feche sem prova em PostgreSQL real. Fechadas essas duas condições — que correspondem exatamente a **ERP-01, ERP-02 e ERP-03** — o roadmap passa a 🟢.
 
-**Progresso em 2026-10-11:** **ERP-01 fechado** (P0-02 corrigido, provado antes/depois em PostgreSQL real, sem tocar em Commerce e sem migration). Restam **ERP-02** (P0-01) e **ERP-03** (P0-04, o gate) para retirar a ressalva. No caminho, a implementação do ERP-01 **descobriu e registrou** o P1-11 (escopo multiempresa da assinatura de webhook), que **não** foi corrigido por exigir decisão de arquitetura — coerente com a regra de o ciclo não decidir sozinho o que é de outro ciclo.
+**Progresso em 2026-10-11:** **ERP-01 e ERP-02 fechados** — P0-02 (webhook de pagamento) e P0-01 (estorno/reabertura de OP) corrigidos, cada um com prova *falha antes → passa depois* em PostgreSQL real, sem tocar em Commerce e sem migration. O termômetro da auditoria (**smoke contra PostgreSQL real**) saiu de **119/126** para **126/126**. Resta **ERP-03** (P0-04: tornar o gate executável em PostgreSQL — onboarding/seed de empresa nova e smoke parametrizado) para retirar a ressalva. No caminho, a implementação do ERP-01 **descobriu e registrou** o P1-11 (escopo multiempresa da assinatura de webhook), que **não** foi corrigido por exigir decisão de arquitetura — coerente com a regra de o ciclo não decidir sozinho o que é de outro ciclo.
 
 **Nada foi implementado, corrigido, migrado, agendado ou mergeado. O menu não foi alterado. O Commerce não foi tocado.**
