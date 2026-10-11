@@ -196,7 +196,18 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > descoberto o gap **P1-11** (assinatura de webhook global por provedor, sem
 > empresa) — registrado em [`docs/RELATORIO-ERP-ONLY.md`](RELATORIO-ERP-ONLY.md)
 > §6/§9 e fixado como teste `todo`; **não corrigido** por depender de decisão de
-> escopo multiempresa. Estado do ciclo:
+> escopo multiempresa. **Verificação independente (2026-10-11, PostgreSQL 16.14
+> real):** defeito e correção reproduzidos por mutação declarada sobre
+> `git show HEAD:server/src/gateway.ts` (leitura ⇒ `ignorado` +
+> `'Nenhuma cobrança deste provedor com essa referência.'` + cobrança `pendente`;
+> 2ª inserção + `catch` cru ⇒ `duplicate key value violates unique constraint
+> "uq_gateway_webhook_evento"`), e os cenários de aceite que faltavam passaram a
+> ser fixados — **`provider_ref` inexistente**, **payload inválido** e
+> **isolamento por empresa** (mutação `filtro` derruba os dois últimos, prova de
+> que não são tautologia). `test:pg` **134 testes · 133 pass · 0 fail · 1 todo**;
+> `smoke:pg` **126/126**; `npm test` server 694 pass/0 fail e client 262 pass;
+> typecheck 0; lint 0 erros; build OK. Relatório dedicado:
+> [`docs/RELATORIO-ERP-01.md`](RELATORIO-ERP-01.md). Estado do ciclo:
 > [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
 
 Este é o **registro oficial do que falta**. Regra de manutenção:
