@@ -38,7 +38,8 @@
 | Nenhuma alteração no Commerce | ✅ | `git diff --stat` só em Produção (`server/src/producao.ts`) e testes/docs |
 | Nenhum avanço de ERP-03 | ✅ | nenhuma linha de ERP-03 |
 | Documentação criada | ✅ | este arquivo + atualização de `ERP-CORE-ROADMAP.md` e `ERP-GAPS.md` |
-| PR aberto, sem merge | ✅ | PR aberto ao final do ciclo (merge é decisão humana) |
+| CI do PR (verificar + testes-postgres) | ✅ | run [38180316539](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38180316539) — 1m17s e 17m47s, ambos **success** |
+| PR aberto, sem merge | ✅ | PR [#54](https://github.com/petrickmsilva-alt/brobond-erp/pull/54) aberto (merge é decisão humana — auditoria independente antes) |
 
 ## 2. ESTADO INICIAL — inventário do fluxo (antes de alterar código)
 
@@ -197,6 +198,7 @@ Nenhum arquivo de frontend, de Commerce, de BI, de gateway/pagamentos ou de sche
 | `npm run lint` | ✅ **0 erros** · 415 warnings (**idêntico ao baseline da `main`** — a correção não adicionou nem removeu aviso) |
 | `npm run build` (client) | ✅ build + PWA gerados |
 | `npm run audit:menu` | ✅ sem erros (4 avisos classificados, inalterados: 3 `RBAC_DERIVA_SOLTA` de módulos de ERP-10 e o `ROTA_PUBLICA` do `/api/health`) |
+| **CI (PR [#54](https://github.com/petrickmsilva-alt/brobond-erp/pull/54), run [38180316539](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38180316539))** | ✅ **verde** nos dois jobs: `verificar` (1m17s) e `testes-postgres` (17m47s) — inclui o arquivo novo e o `smoke:pg` |
 | `npm run db:validate` (Prisma) | ⚠️ **não executável neste sandbox** — o CLI exige baixar `schema-engine` de `binaries.prisma.sh`, fora da allow-list de rede do ambiente (`Client network socket disconnected`). Limitação de ambiente, não falha de código: **nenhuma linha de schema/Prisma foi alterada** neste ciclo. Ver §15 |
 | `npm run test` (raiz) | ✅ = `server test` + `client test` acima |
 
@@ -265,7 +267,7 @@ Cenário D (empresas A e B independentes, cada uma com insumo, produto, ficha, l
 3. **Custo em centavos:** a devolução de insumo usa `valor líquido ÷ quantidade líquida` arredondado a centavos; em consumo com custo médio variando entre lançamentos o resíduo máximo é de centavos por insumo (fica gravado no próprio lançamento compensatório).
 4. **Leitura limitada por página:** `estornarOrdem`/`consumoLiquidoDaOrdem` leem até 1000/5000 movimentações da OP — o domínio produz ~1 movimentação por tamanho e por insumo, mas uma OP com mais de 1000 movimentações seria estornada **parcialmente em silêncio** (GAP-E02-02, §16).
 5. **`dados` continua fora da API** (regra pré-existente): o `revertido` fica no banco para perícia; o operador vê a mensagem. Sem mudança de contrato.
-6. Toda a prova desta rodada é **local** (PostgreSQL 16.2 embarcado). O CI oficial (`postgres:16`) roda a mesma suíte no PR — é ele que dá a leitura final de integração.
+6. Toda a prova desta rodada foi executada **localmente** (PostgreSQL 16.2 embarcado) **e** repetida no CI oficial (`postgres:16`) do PR [#54](https://github.com/petrickmsilva-alt/brobond-erp/pull/54): run [38180316539](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38180316539) **verde** em `verificar` (1m17s) e `testes-postgres` (17m47s) — a suíte PostgreSQL do CI, incluindo o arquivo novo e o `smoke:pg` em banco novo, passou.
 
 ## 16. PROBLEMAS ENCONTRADOS FORA DO ESCOPO (registrados, **não** corrigidos)
 
