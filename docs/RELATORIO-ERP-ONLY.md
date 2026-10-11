@@ -18,6 +18,23 @@
 > porque o fallback de responsável é **global**, não por empresa (sem vazamento entre empresas:
 > verificado por canal e por `empresa_id`).
 
+> **Atualização ERP-05 (2026-10-11) — P1-02 e P1-03 FECHADOS: o Fiscal passa a ser operável (e uma rota
+> que nunca funcionou voltou a funcionar).** Duas telas novas — **NCM / Tributação** (`/ncm`, CRUD de
+> `impostos_ncm`) e **Inutilizações** (`/inutilizacoes`, solicitar faixa de numeração + histórico) — dentro
+> de um **grupo Fiscal** novo no menu (os quatro itens fiscais saíram de Vendas). O achado do ciclo é de outra
+> natureza: **`POST /api/fiscal/inutilizar` respondia 405 para todo perfil** (`checkAccess(..., 'create')` sobre
+> um recurso com `ops.create = false`, `server/src/fiscal.ts:843`) — a tabela `inutilizacoes_fiscais` era
+> **inalcançável por HTTP** e nenhum teste cobria a rota. Corrigido com a alçada de **fluxo** (`checkFluxo`:
+> mantém gerente/admin, não consulta `ops`, **não** abre o CRUD genérico). Evidência: `fiscal.test.ts`
+> **24/24** (5 testes novos), `pg/fiscal-inutilizacao-e2e.test.ts` em **banco novo** (persistência com
+> empresa/faixa/justificativa/autor + histórico pela API + CHECK recusando justificativa curta + 403 do
+> operador), telas **10/10** e **8/8**, e **mutação** (o `checkAccess` de volta ⇒ `405 !== 200/202`).
+> Bateria completa em **banco novo**: `test:pg` **127 testes · 126 pass · 0 fail · 1 todo** (P1-11) e
+> `smoke:pg` **126/126**; regressão `server` **748** (685 pass · 0 fail · 63 skip), `client` **246/246**,
+> typecheck **0**, lint **0 erros** (401 warnings), build **OK**. `audit:menu`: **0 `RECURSO_SEM_MENU`**.
+> Estado do ciclo:
+> [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 > **Atualização ERP-04 (2026-10-11) — P0-03 e P1-07 FECHADOS: o BI passa a ler a operação do ERP.**
 > Decisão de arquitetura registrada **antes do código** em
 > [`docs/ADR-001-FONTE-UNICA-FATURAMENTO.md`](ADR-001-FONTE-UNICA-FATURAMENTO.md):
@@ -478,8 +495,8 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | ID | Gap | Backend | Banco | API | Frontend | Menu | RBAC | Testes |
 |---|---|---|---|---|---|---|---|---|
 | **P1-01** | Deriva RBAC em 3 recursos (`politicas_comerciais`, `listas_preco`, `envios`) | existe | existe | existe | — | restringe | **falta no servidor** | falta |
-| **P1-02** | NCM/`impostos_ncm` sem tela (bloqueia operação fiscal real) | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ (minPerfil) | ✅ `fiscal.test.ts` |
-| **P1-03** | Inutilização fiscal sem tela | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | parcial |
+| **P1-02** | NCM/`impostos_ncm` sem tela (bloqueia operação fiscal real) · **FECHADO em ERP-05 (2026-10-11)** | ✅ | ✅ | ✅ | ✅ `NcmPage` | ✅ grupo Fiscal | ✅ (`minPerfil: gerente`) | ✅ `fiscal.test.ts` + `NcmPage.test.tsx` 10/10 |
+| **P1-03** | Inutilização fiscal sem tela **e a rota respondendo 405 para todo perfil** · **FECHADO em ERP-05 (2026-10-11)** | ✅ | ✅ | ✅ (corrigida) | ✅ `InutilizacoesPage` | ✅ grupo Fiscal | ✅ (`checkFluxo`: gerente/admin) | ✅ `fiscal.test.ts` 24/24 + `pg/fiscal-inutilizacao-e2e.test.ts` |
 | **P1-04** | CRUD de Empresas sem tela (multiempresa administrável só por API) | ✅ | ✅ | ✅ | ❌ | ❌ | parcial | `multiempresa*.test.ts` |
 | **P1-05** | Comissões sem tela e sem menu (apuração existe e está testada) | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ (`gerente`) | ✅ `financeiro-p2.test.ts` |
 | **P1-06** | Reserva de estoque / disponível × comprometido | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ |
@@ -544,7 +561,7 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 | Insumos | `/insumos` | `insumos` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
 | **Marcas** | — | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | ❌ | 🔴 ausente (P2-01) |
 | **Unidades** | — | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | ❌ | 🔴 ausente (P2-02) |
-| **NCM / Tributação** | — | `impostos_ncm` | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | 🟠 P1-02 |
+| **NCM / Tributação** | `/ncm` | `impostos_ncm` | ✅ | ✅ | ✅ | ✅ | ✅ (`minPerfil: gerente`) | ✅ | ✅ | 🟢 **ERP-05** (P1-02 fechado) |
 | **Empresas** | — | `empresas` | ✅ | ✅ | ❌ | ❌ | parcial | ✅ | ✅ | 🟠 P1-04 |
 | Vendas | `/vendas` | `vendas` | ✅ | ✅ | ✅ (`OrderPage`) | ✅ | ✅ | ✅ | ✅ | 🟢 |
 | Propostas | `/propostas` | `propostas` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
@@ -581,7 +598,7 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 | Relatórios | `/relatorios` | `/relatorios/:nome` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 P2-04 |
 | Documentos fiscais | `/documentos-fiscais` | `documentos_fiscais` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟠 P1-08 |
 | Regras fiscais | `/regras-fiscais` | `regras_fiscais` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
-| **Inutilizações** | — | `inutilizacoes_fiscais` | ✅ | ✅ | ❌ | ❌ | ❌ | parcial | ✅ | 🟠 P1-03 |
+| **Inutilizações** | `/inutilizacoes` | `inutilizacoes_fiscais` | ✅ | ✅ | ✅ | ✅ | ✅ (`checkFluxo`: gerente/admin) | ✅ | ✅ | 🟢 **ERP-05** (P1-03 fechado — a rota respondia **405**) |
 | Usuários | `/usuarios` | `usuarios` + 17 rotas | ✅ | ✅ | ✅ | ✅ | ✅ adminOnly | ✅ | ✅ | 🟢 |
 | Auditoria | `/auditoria` | `auditoria` | ✅ | ✅ | ✅ | ✅ | ✅ adminOnly | ✅ | ✅ | 🟢 |
 | Webhooks (saída) | `/webhooks` | `webhooks` | ✅ | ✅ | ✅ | ✅ | ✅ adminOnly | ✅ | ✅ | 🟢 |
@@ -592,7 +609,7 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 | Categoria | Achado | Evidência |
 |---|---|---|
 | **Tela sem backend** | **nenhuma** | não encontrado em 48 páginas |
-| **Backend sem tela** | `impostos_ncm`, `inutilizacoes_fiscais`, `empresas` (CRUD) | `audit:menu` (2 primeiros) + `grep` no client (3º) |
+| **Backend sem tela** | ~~`impostos_ncm`~~, ~~`inutilizacoes_fiscais`~~ (**fechados no ERP-05**: `/ncm` e `/inutilizacoes`), `empresas` (CRUD) | `audit:menu` passou a **0 `[RECURSO_SEM_MENU]`** após o ERP-05; resta só `empresas` (ERP-07) |
 | **Rota órfã** | nenhuma rota `/api/*` sem handler de recurso; as 286 registradas resolvem | `app.use('/api', …404)` ao final garante o resto |
 | **Menu órfão** | nenhum: todos os 66 módulos apontam para rota existente em `App.tsx` | `npm run audit:menu` → "Sem erros: menu, rotas, recursos, permissões e escopo por empresa estão coerentes" |
 | **Módulo duplicado** | nenhum | — |
@@ -724,7 +741,14 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 
 Reserva de estoque · disponível × comprometido · cadastro de Marcas · cadastro de Unidades · BI lendo a operação real · homologação fiscal · telas de devolução com prova E2E.
 
-### 17.4 MENU ERP FINAL PROPOSTO (não implementado)
+### 17.4 MENU ERP FINAL PROPOSTO
+
+> **Implementado no ERP-05 (2026-10-11):** o **grupo 9 (Fiscal)** e os dois itens novos dele —
+> **NCM / Tributação** (`/ncm`) e **Inutilizações** (`/inutilizacoes`) — existem hoje no menu real, e os
+> quatro itens fiscais saíram de dentro de *Vendas*. **O restante desta proposta continua NÃO implementado:**
+> Marcas, Unidades, Reservas, Comissões, Cobranças/Gateway, Conciliação, Empresas, Importar XML e o renomeio
+> `Configurações → Administração`. As contagens atuais (68 módulos / 13 grupos) estão no
+> [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
 
 ```
 1. Meu Negócio                      (raiz — passa a ler a operação real do ERP)

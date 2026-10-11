@@ -35,6 +35,29 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
 > aguarda decisão humana.
 
+> **Atualização ERP-05 (2026-10-11) — P1-02 e P1-03 FECHADOS (Fiscal operacional).**
+> O módulo Fiscal passou a ser operável e, no caminho, apareceu um defeito que **nenhum teste cobria**:
+> `POST /api/fiscal/inutilizar` respondia **405 para TODO perfil**, porque `inutilizarNumeracao` chamava
+> `checkAccess(..., 'create')` sobre um recurso com `ops.create = false` (`server/src/fiscal.ts:843`) —
+> a checagem devolve 405 **antes** de qualquer validação, consulta ao provedor ou gravação, então a
+> tabela `inutilizacoes_fiscais` era **inalcançável por HTTP** (repro preservada: `/tmp/aud-inut.mts`,
+> gerente + provedor falso → `405`, **0 registros**). A alçada correta é a de **fluxo**
+> (`checkFluxo`, o mesmo padrão de `expedicao.ts`/`pdv.ts`): mantém `minPerfil` (gerente) e `adminOnly`,
+> **não** consulta `ops` e **não** abre o CRUD genérico — `ops` de `inutilizacoes_fiscais` continua
+> fechado. Telas novas: **NCM / Tributação** (`/ncm`, CRUD de `impostos_ncm`, linha PADRÃO destacada e
+> aviso da alíquota padrão vigente) e **Inutilizações** (`/inutilizacoes`, faixa + justificativa ≥ 15 e
+> histórico com protocolo/status reais), no **grupo Fiscal** novo (documentos-fiscais e regras-fiscais
+> saíram de Vendas). Evidência executada: `server/test/fiscal.test.ts` **24/24** (5 testes novos: `200`
+> homologado com protocolo · `202` "ainda não homologou" · provedor nulo · `403` do operador ·
+> validações da SEFAZ), `server/test/pg/fiscal-inutilizacao-e2e.test.ts` em **banco novo** (persistência
+> com empresa/faixa/justificativa/**autor**, histórico pela API, CHECK do banco recusando justificativa
+> curta, `403` do operador), telas **10/10** e **8/8**, e **mutação**: com
+> `checkAccess(..., 'create')` de volta os três testes do fluxo falham com `405 !== 200/202`.
+> `audit:menu`: **0 `[RECURSO_SEM_MENU]`** (68 módulos / 13 grupos). Bateria completa em **banco novo**:
+> `test:pg` **127 testes · 126 pass · 0 fail · 1 todo** (P1-11) · `smoke:pg` **126/126** · regressão
+> `server` **748** (685 pass · 0 fail · 63 skip) · `client` **246/246** · typecheck 0 · lint 0 erros
+> (401 warnings) · build OK. Sem migration, sem tabela nova, sem tocar o Commerce. Estado do ciclo: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 > **Atualização ERP-04 (2026-10-11) — P0-03/P1-07 FECHADOS (BI = ERP).**
 > Decisão registrada em [ADR-001](ADR-001-FONTE-UNICA-FATURAMENTO.md): `sales`
 > passa a ser modelo de leitura derivado, alimentado por uma projeção

@@ -15,7 +15,8 @@
 | **ERP-02** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-02, abaixo |
 | **ERP-03** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-03, abaixo |
 | **ERP-04** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-04 + [ADR-001](ADR-001-FONTE-UNICA-FATURAMENTO.md) |
-| **ERP-05 … ERP-13** | ⏳ não iniciados | — |
+| **ERP-05** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-05 — execução abaixo · `audit:menu` **0 `RECURSO_SEM_MENU`** · P1-02 e P1-03 fechados, com **mutação** provando o 405 do P1-03 |
+| **ERP-06 … ERP-13** | ⏳ não iniciados | — |
 | **Auditoria independente (ERP-01…04)** | ✅ **EXECUTADA** (2026-10-11) | [`docs/AUDITORIA-INDEPENDENTE-ERP-01-04.md`](AUDITORIA-INDEPENDENTE-ERP-01-04.md) — 6 provas por mutação + bateria em banco novo + CI verde · **GATE APROVADO COM RESSALVAS (P2)** |
 | **Ciclo P1-13 + P2-08** (ressalvas de código da auditoria) | ✅ **IMPLEMENTADO** (2026-10-11) | §5 "Ciclo P1-13 + P2-08", abaixo — prova PG + mutação para cada um; **P2-09 segue aberto** (regra de processo) |
 
@@ -48,7 +49,7 @@
 | 8 | Multiempresa (A/B sem vazamento, 12 domínios) | 🟡 **A/B provado em ERP-03 ✅**; falta a gestão | ERP-07 |
 | 9 | RBAC sem dependência do front | 🟡 3 derivações | ERP-10 |
 
-**Placar: 5 de 9 fechadas (1, 2, 3, 4 e 6) · 0 com defeito conhecido aberto · 4 parciais (5 → ERP-08, 7 → ERP-05/12, 8 → ERP-07, 9 → ERP-10).**
+**Placar: 5 de 9 fechadas (1, 2, 3, 4 e 6) · 0 com defeito conhecido aberto · 4 parciais (5 → ERP-08, 7 → ERP-12 — **operação e tributação prontas no ERP-05**, falta a homologação real, 8 → ERP-07, 9 → ERP-10).**
 
 ---
 
@@ -425,7 +426,7 @@ deles já observados em produção/auditoria), com teste que **falha antes e pas
 * **P1 fechados:** P1-07 (ERP-04) · P1-10 (ERP-02, cascata) · P1-13 (ciclo pós-auditoria).
 * **Abertos e conhecidos:** P1-11 (escopo multiempresa da assinatura de webhook — decisão de arquitetura) e P2-09 (a bateria só vale em banco novo — regra de processo, não defeito).
 * **Fora de escopo por decisão:** E8 Commerce e integrações externas — **nenhum** arquivo do repositório do Commerce foi lido, copiado ou tocado.
-* **Merge:** o fluxo combinado é **AUDITORIA → GATE → MERGE → ERP-02 → …**; a auditoria **não mergeia**. A [PR #49](https://github.com/petrickmsilva-alt/brobond-erp/pull/49) segue aberta aguardando a decisão do dono do repositório. Os ciclos **não** foram desenhados para avançar sem essa decisão — o próximo (ERP-05) está descrito e pronto, não iniciado.
+* **Merge:** o fluxo combinado é **AUDITORIA → GATE → MERGE → ERP-02 → …**; a auditoria **não mergeia**. A [PR #49](https://github.com/petrickmsilva-alt/brobond-erp/pull/49) segue aberta aguardando a decisão do dono do repositório. Os ciclos **não** foram desenhados para avançar sem essa decisão — o próximo (ERP-05) está descrito e pronto, não iniciado — **implementado em 2026-10-11** (§5, execução do ERP-05).
 
 ### Auditoria independente (ERP-01 … ERP-04) — 2026-10-11
 
@@ -533,7 +534,8 @@ apontamentos → 0`, `E2: OP cancelada é terminal → 409`, `webhook pago → p
 ### ERP-05 — Fiscal operacional (sem homologação)
 
 * **Objetivo:** tornar o módulo Fiscal utilizável por quem opera: ver, configurar e corrigir a tributação sem chamar API.
-* **Gaps fechados:** **P1-02** (NCM sem tela), **P1-03** (inutilização sem tela).
+* **Gaps fechados:** **P1-02** (NCM sem tela), **P1-03** (inutilização sem tela). **Defeito descoberto durante o ciclo e corrigido:
+  a rota `POST /api/fiscal/inutilizar` respondia 405 para todo perfil** (`checkAccess(...,'create')` sobre recurso de fluxo) — detalhe na execução, abaixo.
 * **Dependências:** nenhuma dura. Precede ERP-12 (homologação) porque homologar sem conseguir manter a tributação é operação insustentável.
 * **Evidência do gap:** `audit:menu` → `[RECURSO_SEM_MENU] impostos_ncm` e `[RECURSO_SEM_MENU] inutilizacoes_fiscais`; `resources.ts:483` e `1217` com ops `cud`; nenhum consumo no client.
 * **Banco:** nenhuma migration prevista (tabelas existem).
@@ -541,6 +543,67 @@ apontamentos → 0`, `E2: OP cancelada é terminal → 409`, `webhook pago → p
 * **Frontend:** telas/entradas de menu para **NCM/Tributação** (lista, cadastro, vigência) e **Inutilizações** (solicitar, consultar, ver protocolo). Grupo **Fiscal** proposto no menu final (relatório irmão, §17.4).
 * **Testes:** `client/src/pages` — teste de tela para cada uma; manter `fiscal.test.ts` e `pg-fiscal.test.ts`. Teste PG para inutilização persistida com faixa/justificativa.
 * **Critérios de aceite:** operador consegue cadastrar alíquota por NCM e inutilizar uma faixa de numeração **sem** API manual; `audit:menu` passa a reportar **0** `RECURSO_SEM_MENU`.
+
+---
+
+#### ✅ Execução (2026-10-11) — CLOSED (P1-02 e P1-03)
+
+**O que o ciclo entregou:** as duas telas do módulo Fiscal que faltavam, o **grupo Fiscal** no menu
+e a correção de um defeito que **nenhum teste cobria** — a inutilização de numeração era
+**inalcançável por HTTP**, para qualquer perfil.
+
+**P1-03 — `POST /api/fiscal/inutilizar` respondia 405 para TODO perfil (defeito comprovado).**
+`inutilizarNumeracao` chamava `checkAccess(R_INUT(), actor, 'create')` sobre um recurso declarado com
+`ops.create = false` (`server/src/fiscal.ts:843`; o recurso está em `resources.ts:1235` com `ops` só de
+leitura). A checagem de permissão devolve **405 antes** de qualquer validação, de qualquer consulta ao
+provedor e de qualquer gravação — ou seja, a rota existia, tinha tabela, tinha CHECK e **nunca
+funcionou**; em memória e em PostgreSQL, para gerente e para administrador. Reprodução preservada:
+`/tmp/aud-inut.mts` (gerente + provedor falso) devolvia `405 {"error":"Não é possível incluir registros
+em Inutilizações de numeração."}` com **0 registros** no banco.
+
+**A correção usa a alçada certa — a de FLUXO, não a de CRUD.** `checkFluxo(R_INUT(), actor)`
+(`services.ts:176`, o mesmo padrão já usado em `expedicao.ts` e `pdv.ts`) mantém `minPerfil: 'gerente'`
+e `adminOnly` e **não consulta `ops`** — o `ops` fechado continua fechado, então o CRUD genérico
+(`POST /api/inutilizacoes_fiscais`) segue recusando escrita: **não foi aberta nenhuma porta lateral**.
+Nenhuma migration, nenhuma tabela, nenhuma rota nova; a tela e o endpoint passaram a ser o caminho
+legítimo que o recurso sempre quis ter.
+
+**P1-02 — NCM/Tributação.** `/ncm` (`client/src/pages/NcmPage.tsx`): CRUD de `impostos_ncm` com a linha
+**PADRÃO** (chave vazia) destacada, validação de chave 2–8 dígitos e alíquota 0–100, e aviso explícito de
+qual alíquota padrão está vigente — ou de que NCMs sem chave ficam em **0%**, que é onde o silêncio do
+sistema custava dinheiro. **P1-03 (tela):** `/inutilizacoes` (`client/src/pages/InutilizacoesPage.tsx`):
+formulário com modelo/série/faixa/justificativa (≥ 15 caracteres, validado no cliente *e* no servidor) e
+histórico de `inutilizacoes_fiscais` com status, protocolo e ambiente reais. A tela **não finge
+homologação**: `homologado: true` → sucesso com protocolo; `homologado: false` → alerta âmbar com o
+status e a mensagem que o provedor devolveu.
+
+**Menu.** Nasceu o grupo **Fiscal** (entre Financeiro e Relatórios): `documentos-fiscais` e
+`regras-fiscais` saíram de *Vendas*, e entraram **`ncm`** e **`inutilizacoes`** (`minPerfil: 'gerente'`).
+`npm run audit:menu`: **0 erros · 4 avisos** e, pela primeira vez, **0 `[RECURSO_SEM_MENU]`** — os dois
+recursos que a auditoria apontou ficaram navegáveis nas telas novas. **68 módulos / 13 grupos.**
+
+**Evidência executada:**
+
+| Prova | Comando | Resultado |
+|---|---|---|
+| P1-03 — unidade/HTTP | `server/test/fiscal.test.ts` (19 → **24** testes) | **24/24** — homologado → `200` + protocolo gravado; ainda processando → `202` "sem protocolo"; provedor nulo → `202` com `status: 'erro'` (não homologou); operador → `403`; validações da SEFAZ → `400` |
+| **P1-03 — mutação** | `fiscal.ts:850` revertido para `checkAccess(R_INUT(), actor, 'create')` | ❌ **3 falhas**: `405 !== 200` e `405 !== 202` — o teste do ciclo falha exatamente com o defeito original |
+| P1-03 — PostgreSQL | `server/test/pg/fiscal-inutilizacao-e2e.test.ts` (**banco novo**, servidor real) | ✅ persistência com `empresa_id`, série, faixa, justificativa e **autor** (FK `criado_por` satisfeita), `ambiente: 'homologacao'`, `protocolo` nulo; histórico pela API; `403` do operador sem gravar; e o CHECK do banco recusando justificativa curta (`23514`) |
+| P1-02 — tela | `client/src/pages/NcmPage.test.tsx` | **10/10** (inclui PADRÃO destacada, chave inválida e alíquota fora de 0–100) |
+| P1-03 — tela | `client/src/pages/InutilizacoesPage.test.tsx` | **8/8** (inclui o caminho "ainda não homologou" com protocolo ausente) |
+| Menu | `client/src/modules.test.ts` + `npm run audit:menu` | **10/10** · **0 erros / 4 avisos** (RBAC_DERIVA_SOLTA ×3 + ROTA_PUBLICA `/api/health`) · **0 `RECURSO_SEM_MENU`** |
+| Bateria PostgreSQL | `npm run test:pg` em **banco novo** | **127 testes · 126 pass · 0 fail · 1 todo** (P1-11) — o novo teste e2e entra como `ok 96` |
+| Smoke PostgreSQL | `npm run smoke:pg` (banco novo) | **126/126** |
+| Regressão | `server test` · `client test` · `typecheck` · `lint` · `build` | **748** (685 pass · 0 fail · 63 skip) · **246/246** · **0** · **0 erros** (401 warnings, igual ao baseline) · **OK** |
+
+**Nenhuma migration, nenhuma alteração de schema, nenhum arquivo do Commerce, nenhuma rota nova e
+nenhuma porta de escrita aberta no CRUD genérico.** O `todo` da bateria continua sendo o **P1-11**
+(escopo multiempresa da assinatura de webhook), aberto por decisão de arquitetura.
+
+**Ressalva honesta do ciclo:** a inutilização é exercitada contra o provedor **nulo** e contra um
+provedor **falso** em teste — nenhuma SEFAZ real foi chamada (é o escopo do **ERP-12**, homologação).
+O que este ciclo garante é que a **operação** funciona, o pedido é **persistido com autor** e o sistema
+**não afirma homologação** que não aconteceu.
 
 ---
 
@@ -682,7 +745,7 @@ FUNCIONALIDADES EXISTENTES não expostas: NCM · Inutilização fiscal · Empres
    ↓
 FUNCIONALIDADES QUE FALTAM: Reserva de estoque · Marcas · Unidades · (BI e Fiscal já existem, precisam funcionar)
    ↓
-MENU ERP FINAL PROPOSTO (ERP-05, ERP-06, ERP-07 e ERP-11 implementam as entradas)
+MENU ERP FINAL PROPOSTO (ERP-06, ERP-07 e ERP-11 ainda implementam entradas; o **grupo Fiscal** entrou em **ERP-05 ✅**)
    Meu Negócio · Cadastros · Vendas · Compras · Estoque · Produção ·
    Logística & Expedição · Financeiro · FISCAL(novo) · Relatórios · ADMINISTRAÇÃO(renomeado)
    ── CONGELADO: Integrações · Gestão de Commerce · Ecossistema Creators ──
@@ -702,8 +765,8 @@ MENU ERP FINAL PROPOSTO (ERP-05, ERP-06, ERP-07 e ERP-11 implementam as entradas
 | P0-04 E2E não roda em PostgreSQL; instalação nova sem local padrão | 🔴 P0 | **ERP-03 ✅** |
 | P0-05 índice único GLOBAL legado de `codigo_barras` derruba o boot | 🔴 P0 | **descoberto e fechado em ERP-03 ✅** |
 | P1-01 deriva RBAC (3 recursos) | 🟠 P1 | ERP-10 |
-| P1-02 NCM sem tela | 🟠 P1 | ERP-05 |
-| P1-03 inutilização sem tela | 🟠 P1 | ERP-05 |
+| P1-02 NCM sem tela | 🟠 P1 | **ERP-05 ✅** |
+| P1-03 inutilização sem tela **+ rota devolvendo 405** | 🟠 P1 | **ERP-05 ✅** |
 | P1-04 CRUD de Empresas sem tela | 🟠 P1 | ERP-07 |
 | P1-05 comissões sem tela/menu (e filtro de período quebrado: `comissoes.ts:261`) | 🟠 P1 | ERP-06 |
 | P1-06 reserva de estoque ausente | 🟠 P1 | ERP-09 |
