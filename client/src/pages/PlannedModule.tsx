@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { CheckCircle2, Construction } from 'lucide-react';
-import type { Module } from '../modules';
+import { moduleOfPath, type Module } from '../modules';
 import { PageHeader } from '../components/ui';
 
 /**
@@ -13,6 +13,8 @@ import { PageHeader } from '../components/ui';
  */
 export default function PlannedModule({ module }: { module: Module }) {
   const Icon = module.icon;
+  // Nome do destino inicial vem da fonte única de módulos (era "Dashboard").
+  const inicio = moduleOfPath('/')?.label ?? 'Início';
   return (
     <div className="p-4 sm:p-6">
       <PageHeader
@@ -49,7 +51,7 @@ export default function PlannedModule({ module }: { module: Module }) {
             )}
             <div className="mt-6 flex flex-wrap gap-2">
               <Link to="/" className="btn-secondary">
-                Voltar ao Dashboard
+                Voltar ao {inicio}
               </Link>
               {module.id === 'inventario' && (
                 <Link to="/estoque" className="btn-primary">

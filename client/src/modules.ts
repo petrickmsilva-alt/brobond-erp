@@ -57,7 +57,7 @@ export type Module = {
   id: string;
   label: string;
   icon: LucideIcon;
-  /** null = item de topo (Dashboard) */
+  /** null = item de topo (Meu Negócio, em "/") */
   group: string | null;
   path: string;
   /** nome do recurso da API quando houver cadastro/listagem */
@@ -278,8 +278,13 @@ export const MODULES: Module[] = [
 ];
 
 /**
- * As 9 grandes categorias colapsáveis da Sidebar (Fase 3 — padrão visual
- * "Brobond AI ERP"). A ordem aqui é a ordem dos accordions na navegação.
+ * As áreas colapsáveis da Sidebar ("Brobond AI ERP"). A ordem aqui é a ordem
+ * dos accordions na navegação.
+ *
+ * Esta é a **fonte única** da estrutura do menu: junto com `GROUP_META` (ícone +
+ * seção) e `MODULES` (itens), `NAV_SECTIONS` monta a Sidebar. Nenhum componente
+ * mantém lista própria de grupos — é o que garante que "declarado" e
+ * "renderizado" não divirjam (ERP-UX-01, correção do P0 do grupo Fiscal).
  */
 export const MODULE_GROUPS = [
   // ERP CORE — áreas de negócio, na ordem da navegação.
@@ -325,8 +330,48 @@ export const PAGES_ESPECIAIS = ['estoque', 'inventario', 'custo', 'relatorios', 
 /** Módulos cuja listagem abre diretamente a página de detalhe. */
 export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
 
+export type NavSectionId = 'erp' | 'commerce' | 'sistema';
+
+export type NavSection = {
+  id: NavSectionId;
+  /** Cabeçalho da seção na Sidebar (null = sem rótulo, vai direto para os grupos). */
+  label: string | null;
+  /** Grupos desta seção, na ordem declarada em `MODULE_GROUPS`. */
+  groups: ModuleGroup[];
+};
+
+const SECTION_LABEL: Record<NavSectionId, string | null> = {
+  erp: 'ERP',
+  commerce: 'Commerce / Integrações',
+  sistema: null,
+};
+
+/**
+ * Seções da Sidebar **derivadas** de `MODULE_GROUPS` + `GROUP_META.section`.
+ * Um grupo declarado em `MODULE_GROUPS` aparece automaticamente na seção que
+ * `GROUP_META` indica — não existe lista de grupos escrita à mão na Sidebar.
+ */
+export const NAV_SECTIONS: NavSection[] = (['erp', 'commerce', 'sistema'] as const).map((id) => ({
+  id,
+  label: SECTION_LABEL[id],
+  groups: MODULE_GROUPS.filter((g) => GROUP_META[g].section === id),
+}));
+
 export function findModuleByResource(resource: string): Module | undefined {
   return MODULES.find((m) => m.resource === resource);
+}
+
+/**
+ * Módulo dono de uma rota — regra única para o título da aba, o breadcrumb e o
+ * destaque do grupo na Sidebar. Rotas filhas (ex.: `/produtos/12`) pertencem ao
+ * módulo pai. Recebe a lista já filtrada (ex.: `visibleModules`) quando o
+ * chamador precisa respeitar RBAC.
+ */
+export function moduleOfPath(pathname: string, modulos: Module[] = MODULES): Module | undefined {
+  return (
+    modulos.find((m) => m.path === pathname) ||
+    modulos.filter((m) => m.path !== '/').find((m) => pathname.startsWith(m.path + '/'))
+  );
 }
 
 /**

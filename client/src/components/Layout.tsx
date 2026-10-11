@@ -1,13 +1,24 @@
-import { useEffect, useRef, useState } from 'react';
-import { Link, Outlet, useLocation } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ChevronDown, KeyRound, LogOut, Menu, Search, UserRound } from 'lucide-react';
 import Sidebar from './Sidebar';
 import CommandPalette from './CommandPalette';
 import CompanySwitcher from './CompanySwitcher';
+import { Breadcrumb, type BreadcrumbItem } from './ui-kit';
 import { useAuth } from '../auth/AuthContext';
-import { MODULES } from '../modules';
+import { moduleOfPath } from '../modules';
 
 const PERFIL_LABEL: Record<string, string> = { admin: 'Administrador', gerente: 'Gerente', operador: 'Operador' };
+
+/**
+ * Rótulo do último nível (registro/filho) do breadcrumb a partir da URL.
+ * Nada de mapa de rotas: o nível anterior já veio do módulo dono da rota.
+ */
+function rotuloDoRegistro(pathname: string): string {
+  const ultimo = pathname.split('/').filter(Boolean).pop() ?? '';
+  if (/^\d+$/.test(ultimo)) return `#${ultimo}`;
+  return ultimo ? ultimo.charAt(0).toUpperCase() + ultimo.slice(1) : '';
+}
 
 export default function Layout() {
   const [open, setOpen] = useState(false);
@@ -15,6 +26,7 @@ export default function Layout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const { user, logout } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const menuRef = useRef<HTMLDivElement>(null);
   // Trocar a empresa ativa remonta a tela corrente: nenhum dado da empresa anterior fica visível.
   const [escopoVersao, setEscopoVersao] = useState(0);
@@ -31,11 +43,25 @@ export default function Layout() {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  // Rotas filhas (ex.: /produtos/12) pertencem ao módulo pai
-  const current =
-    MODULES.find((m) => m.path === location.pathname) ||
-    MODULES.filter((m) => m.path !== '/').find((m) => location.pathname.startsWith(m.path + '/')) ||
-    MODULES.find((m) => m.path === '/');
+  // Módulo dono da rota (rotas filhas, ex.: /produtos/12, pertencem ao pai) —
+  // mesma regra da Sidebar, vinda de `modules.ts`. O item de topo é o Meu
+  // Negócio ("/"), então o nome nunca é escrito à mão aqui.
+  const inicio = moduleOfPath('/');
+  const rota = moduleOfPath(location.pathname);
+  const current = rota ?? inicio;
+
+  // Trilha: marca › área › módulo › registro. Todos os níveis, menos o último,
+  // são clicáveis e levam à rota que já existe (não cria rota nova).
+  const trilha = useMemo<BreadcrumbItem[]>(() => {
+    const link = (label: string, href: string): BreadcrumbItem => ({ label, href, onNavigate: () => navigate(href) });
+    if (!rota) return [{ label: 'BROBOND ERP' }]; // rota sem módulo (ex.: /dev/componentes)
+    const itens: BreadcrumbItem[] = [link('BROBOND ERP', '/')];
+    if (rota.group) itens.push({ label: rota.group, semLink: true }); // área não tem página própria
+    const descendente = location.pathname !== rota.path;
+    itens.push(descendente ? link(rota.label, rota.path) : { label: rota.label });
+    if (descendente) itens.push({ label: rotuloDoRegistro(location.pathname) });
+    return itens;
+  }, [rota, location.pathname, navigate]);
 
   useEffect(() => {
     if (!menu) return;
@@ -73,18 +99,7 @@ export default function Layout() {
             <button className="btn-icon -ml-2 md:hidden" onClick={() => setOpen(true)} aria-label="Abrir menu">
               <Menu className="h-5 w-5" />
             </button>
-            <nav className="flex min-w-0 items-center gap-2 text-sm">
-              <span className="hidden text-slate-400 sm:inline dark:text-navy-300">BROBOND ERP</span>
-              {current && current.path !== '/' && (
-                <>
-                  <span className="hidden text-slate-300 sm:inline dark:text-navy-700">/</span>
-                  {current.group && <span className="hidden text-slate-400 lg:inline dark:text-navy-300">{current.group}</span>}
-                  {current.group && <span className="hidden text-slate-300 lg:inline dark:text-navy-700">/</span>}
-                  <span className="truncate font-semibold text-navy-900 dark:text-white">{current.label}</span>
-                </>
-              )}
-              {current?.path === '/' && <span className="font-semibold text-navy-900 dark:text-white">Dashboard</span>}
-            </nav>
+            <Breadcrumb items={trilha} className="min-w-0" />
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">

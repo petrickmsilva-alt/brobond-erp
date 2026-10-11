@@ -26,6 +26,9 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const listRef = useRef<HTMLDivElement>(null);
 
   const items = useMemo<Item[]>(() => {
+    // O item de topo é o Meu Negócio declarado em `modules.ts` — o rótulo não é
+    // escrito à mão (ERP-UX-01): o nome vem da mesma fonte do menu e das rotas.
+    const inicio = visibleModules(user).find((m) => m.path === '/');
     const modules = visibleModules(user).filter((m) => m.path !== '/');
     const fromModules: Item[] = modules.map((m) => ({
       id: `mod-${m.id}`,
@@ -62,9 +65,10 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     return [
       {
         id: 'mod-dashboard',
-        label: 'Dashboard',
-        description: 'Visão geral do negócio.',
-        icon: modules[0]?.icon ?? UserRound,
+        label: inicio?.label ?? 'Meu Negócio',
+        description: inicio?.description ?? 'Visão geral do negócio.',
+        icon: inicio?.icon ?? UserRound,
+        keywords: inicio?.group ?? '',
         action: () => navigate('/'),
       },
       ...fromModules,
