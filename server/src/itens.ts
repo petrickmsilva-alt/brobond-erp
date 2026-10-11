@@ -27,6 +27,7 @@ import type { Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
 import { labelOf } from './store';
 import { attachImages } from './uploads';
+import { notificarVendaErpAlterada } from './eventosVenda';
 import { round2, round3 } from './utils';
 
 type TipoPedido = 'venda' | 'compra';
@@ -413,6 +414,9 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
     },
     tx
   );
+  // ERP-04 (ADR-001): o motor 1. MEU NEGÓCIOS mantém a projeção `vendas → sales`
+  // fresca. O gancho só AGENDA trabalho em segundo plano — a venda não espera o BI.
+  notificarVendaErpAlterada({ vendaId: Number(pedido.id), usuarioId: actor.id ?? null, status: 'faturada' });
 }
 
 /**
@@ -556,6 +560,8 @@ async function estornarVenda(pedido: Row, actor: { id: number | null; name: stri
     },
     tx
   );
+  // ERP-04: o estorno também reescreve a projeção (a linha vira CANCELLED).
+  notificarVendaErpAlterada({ vendaId, usuarioId: actor.id ?? null, status: 'cancelada' });
 }
 
 // ----------------------------------------------------------------------------

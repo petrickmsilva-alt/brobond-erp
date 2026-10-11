@@ -42,11 +42,13 @@ import type { Request, Response } from 'express';
 import type { PoolClient } from 'pg';
 import { hasDatabaseUrl, query, withTransaction } from './db';
 import { empresaExplicitaAudit, escopoDoAtor, exigirEmpresaPermitida } from './empresa';
-import { RESOURCES } from './resources';
+import { RESOURCES, type Resource } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, type AuthUser } from './auth';
 import { HttpError } from './errors';
+import type { Row } from './store';
 import { setOnSaleIngested } from '../../modules/connectors/index';
+import { setOnVendaErpAlterada } from './eventosVenda';
 
 // ----------------------------------------------------------------------------
 // 1) Constantes de domínio
@@ -1485,8 +1487,17 @@ export async function negociosMargensRecalcular(req: Request, res: Response) {
   checkAccess(RESOURCES.vendas, actor, 'read');
   exigirGerente(actor);
   const inicio = Date.now();
+  // ERP-04: recalcular sob demanda também sincroniza a projeção das vendas do
+  // ERP — é a terceira via (além do gancho pós-faturamento e do ciclo do motor).
+  const projecao = await projetarVendasErp();
   const { atualizadas } = await repoNegocios().recalcularMargens();
-  res.json({ ok: true, vendas: atualizadas, duracaoMs: Date.now() - inicio });
+  res.json({
+    ok: true,
+    vendas: atualizadas,
+    vendasErp: projecao.vendas,
+    itensErp: projecao.itens,
+    duracaoMs: Date.now() - inicio,
+  });
 }
 
 /** GET /api/negocios/abc — curva ABC persistida (classificação contínua). */
@@ -1557,6 +1568,343 @@ export async function negociosVendaManual(req: Request, res: Response) {
 
 let cicloRodando = false;
 const vendasPendentes = new Set<string>();
+// ----------------------------------------------------------------------------
+// 9) ERP-04 — Projeção `vendas` → `sales` (ADR-001: `sales` é modelo de leitura)
+// ----------------------------------------------------------------------------
+// `vendas` é a fonte autoritativa da venda do ERP; `sales` é o modelo de
+// leitura analítico (margens materializadas, curva ABC, ingestão de canais
+// externos). Esta rotina DERIVA as linhas do ERP dentro de `sales`, num
+// namespace próprio (`erp:venda:<id>` / `erp:item:<id>`) que ela nunca
+// abandona: nenhuma linha de conector é lida, alterada ou apagada aqui.
+//
+//   • faturada / entregue                  → PAID      (entra no faturamento)
+//   • cancelada que JÁ tinha sido projetada → CANCELLED (histórico preservado)
+//   • aberta, ou cancelada que nunca foi    → nada — e projeção órfã é removida
+//
+// Decisão, alternativas e mapeamentos: docs/ADR-001-FONTE-UNICA-FATURAMENTO.md.
+
+export const ERP_ID_PREFIXO_VENDA = 'erp:venda:';
+export const ERP_ID_PREFIXO_ITEM = 'erp:item:';
+
+/**
+ * Canal da venda do ERP → canal de `sales`. Tabela explícita (ADR-001 §4):
+ * `pdv`/`balcao` são presença física; todo o resto — `site_varejo`,
+ * `site_atacado`, `representante`, `whatsapp`, `outro` — é canal próprio.
+ * `marketplace` cai em `BROBOND` **de propósito**: o ERP registra QUE a venda
+ * veio de um marketplace, não QUAL; escolher `MERCADOLIVRE`/`NUVEMSHOP` seria
+ * inventar dado que a venda não tem.
+ */
+export function canalErpParaSales(canal: unknown): CanalVenda {
+  const valor = String(canal ?? '').trim().toLowerCase();
+  if (valor === 'pdv' || valor === 'balcao') return 'LOJA_FISICA';
+  return 'BROBOND';
+}
+
+/** Status da venda do ERP → status de `sales` (null = não é venda). */
+export function statusErpParaSales(status: unknown): 'PAID' | 'CANCELLED' | null {
+  const valor = String(status ?? '').trim().toLowerCase();
+  if (valor === 'faturada' || valor === 'entregue') return 'PAID';
+  if (valor === 'cancelada') return 'CANCELLED';
+  return null;
+}
+
+export type ProjecaoErpResultado = {
+  /** Linhas `sales` do namespace `erp:` criadas ou reescritas. */
+  vendas: number;
+  /** Linhas `sale_items` do namespace `erp:` criadas ou reescritas. */
+  itens: number;
+  /** Projeções marcadas `CANCELLED` (venda cancelada depois de faturada). */
+  canceladas: number;
+  /** Projeções órfãs removidas (venda deixou de ser venda). */
+  removidas: number;
+  empresas: number;
+  /** Ids de `sales` afetados — o escopo do recálculo de margem. */
+  idsProjetados: string[];
+};
+
+/** Lê um recurso inteiro em páginas (modo demonstração não tem query SQL). */
+async function listarRecursoCompleto(recurso: Resource, maxPaginas = 200): Promise<Row[]> {
+  const s = getStore();
+  const linhas: Row[] = [];
+  for (let pagina = 1; pagina <= maxPaginas; pagina += 1) {
+    const lote = await s.list(recurso, { page: pagina, pageSize: 1000 });
+    linhas.push(...lote.rows);
+    if (lote.rows.length < 1000) break;
+  }
+  return linhas;
+}
+
+/** Projeção no modo demonstração: espelha `vendas`/`itens_venda` do store. */
+async function projetarVendasErpMemoria(escopo: number[] | null): Promise<ProjecaoErpResultado> {
+  const vendas = (await listarRecursoCompleto(RESOURCES.vendas)).filter((v) => !escopo || escopo.includes(Number(v.id)));
+  const itens = await listarRecursoCompleto(RESOURCES.itens_venda);
+  const itensPorVenda = new Map<number, Row[]>();
+  for (const item of itens) {
+    const vendaId = Number(item.venda_id);
+    const lista = itensPorVenda.get(vendaId);
+    if (lista) lista.push(item);
+    else itensPorVenda.set(vendaId, [item]);
+  }
+
+  let removidas = 0;
+  let canceladas = 0;
+  let itensAfetados = 0;
+  const idsProjetados: string[] = [];
+  const empresas = new Set<number>();
+
+  for (const venda of vendas) {
+    const vendaId = Number(venda.id);
+    const salesId = `${ERP_ID_PREFIXO_VENDA}${vendaId}`;
+    const status = statusErpParaSales(venda.status);
+    const existente = memoria.vendas.find((v) => v.id === salesId);
+
+    if (status === null) {
+      if (existente) {
+        memoria.vendas = memoria.vendas.filter((v) => v.id !== salesId);
+        memoria.itens = memoria.itens.filter((i) => i.sale_id !== salesId);
+        removidas += 1;
+      }
+      continue;
+    }
+    if (status === 'CANCELLED' && !existente) continue; // nunca foi faturada — não é venda
+
+    const empresaId = Number(venda.empresa_id ?? 1);
+    const quantidade = (itensPorVenda.get(vendaId) ?? []).reduce((n, i) => n + Number(i.quantidade || 0), 0);
+    const occurredAt = new Date(String(venda.faturada_em ?? venda.data ?? venda.criado_em ?? new Date().toISOString()));
+    const canal = canalErpParaSales(venda.canal_venda);
+    if (existente) {
+      if (existente.status === 'PAID' && status === 'CANCELLED') canceladas += 1;
+      existente.status = status;
+      existente.quantity = quantidade;
+      existente.amount_cents = Math.round(Number(venda.total || 0) * 100);
+      existente.occurred_at = occurredAt;
+      existente.channel = canal;
+      existente.empresa_id = empresaId;
+      existente.updated_at = new Date();
+    } else {
+      memoria.vendas.push({
+        id: salesId,
+        reference: `ERP-${empresaId}-${vendaId}`,
+        quantity: quantidade,
+        amount_cents: Math.round(Number(venda.total || 0) * 100),
+        currency: 'BRL',
+        status,
+        occurred_at: occurredAt,
+        channel: canal,
+        external_order_id: null,
+        usuario_id: 0,
+        empresa_id: empresaId,
+        freight_cents: 0, // o ERP não tem frete da venda neste fluxo — sem invenção (ADR-001 §4)
+        net_cents: null,
+        cmv_cents: null,
+        tax_cents: null,
+        gross_profit_cents: null,
+        margin_pct: null,
+        margem_calculada_em: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+    }
+
+    memoria.itens = memoria.itens.filter((i) => i.sale_id !== salesId);
+    for (const item of itensPorVenda.get(vendaId) ?? []) {
+      const preco = Number(item.preco_unitario || 0);
+      const qtd = Number(item.quantidade || 0);
+      const subtotal = Number(item.subtotal || 0);
+      memoria.itens.push({
+        id: `${ERP_ID_PREFIXO_ITEM}${Number(item.id)}`,
+        sale_id: salesId,
+        product_id: item.produto_id === null || item.produto_id === undefined ? null : Number(item.produto_id),
+        size_id: item.tamanho_id === null || item.tamanho_id === undefined || item.tamanho_id === '' ? null : Number(item.tamanho_id),
+        quantity: qtd,
+        unit_price_cents: Math.round(preco * 100),
+        discount_cents: Math.max(Math.round((preco * qtd - subtotal) * 100), 0),
+        subtotal_cents: Math.round(subtotal * 100),
+        created_at: new Date(),
+      });
+      itensAfetados += 1;
+    }
+    idsProjetados.push(salesId);
+    empresas.add(empresaId);
+  }
+
+  if (idsProjetados.length) await memRepo.recalcularMargens(idsProjetados);
+  return { vendas: idsProjetados.length, itens: itensAfetados, canceladas, removidas, empresas: empresas.size, idsProjetados };
+}
+
+/**
+ * Sincroniza `vendas` → `sales` (idempotente; `ids` limita a vendas específicas).
+ * Com PostgreSQL roda numa transação; o ciclo do motor chama sem `ids`.
+ */
+export async function projetarVendasErp(ids?: number[]): Promise<ProjecaoErpResultado> {
+  const escopo = ids && ids.length ? [...new Set(ids.filter((n) => Number.isInteger(n) && n > 0))] : null;
+  if (!hasDatabaseUrl()) return projetarVendasErpMemoria(escopo);
+
+  const filtroVendas = escopo ? 'AND v.id = ANY($1::int[])' : '';
+  const idsTexto = escopo ? escopo.map((id) => `${ERP_ID_PREFIXO_VENDA}${id}`) : null;
+  const filtroProjecao = idsTexto ? 'AND s.id = ANY($1::text[])' : '';
+
+  return withTransaction(async (tx) => {
+    const params: unknown[] = escopo ? [escopo] : [];
+
+    // 1) Vendas faturadas/entregues → linhas PAID do namespace `erp:`.
+    //    O responsável (`usuario_id`, NOT NULL no schema do Commerce) é o
+    //    primeiro usuário ativo da empresa; sem ele a venda não é projetada.
+    const { rows: projetadas } = await tx.query(
+      `
+      WITH empresa_usuario AS (
+        SELECT DISTINCT ON (u.empresa_id) u.empresa_id, u.id AS usuario_id
+          FROM usuarios u
+         WHERE u.ativo AND u.empresa_id IS NOT NULL
+         ORDER BY u.empresa_id, u.id
+      ), fallback_usuario AS (
+        SELECT u.id AS usuario_id FROM usuarios u WHERE u.ativo ORDER BY u.id LIMIT 1
+      )
+      INSERT INTO sales (id, reference, quantity, amount_cents, currency, status, occurred_at,
+                         channel, external_order_id, usuario_id, empresa_id, freight_cents,
+                         created_at, updated_at)
+      SELECT '${ERP_ID_PREFIXO_VENDA}' || v.id,
+             'ERP-' || v.empresa_id || '-' || v.id,
+             COALESCE((SELECT SUM(iv.quantidade)::int FROM itens_venda iv WHERE iv.venda_id = v.id), 0),
+             ROUND(v.total * 100)::int,
+             'BRL',
+             'PAID'::sale_status,
+             COALESCE(v.faturada_em, v.data::timestamptz, v.criado_em, now()),
+             CASE WHEN v.canal_venda IN ('pdv', 'balcao') THEN 'LOJA_FISICA' ELSE 'BROBOND' END::sale_channel,
+             NULL,
+             COALESCE(eu.usuario_id, fb.usuario_id),
+             v.empresa_id,
+             0,
+             COALESCE(v.criado_em, now()),
+             now()
+        FROM vendas v
+        LEFT JOIN empresa_usuario eu ON eu.empresa_id = v.empresa_id
+        CROSS JOIN fallback_usuario fb
+       WHERE v.status IN ('faturada', 'entregue')
+         ${filtroVendas}
+         AND COALESCE(eu.usuario_id, fb.usuario_id) IS NOT NULL
+      ON CONFLICT (id) DO UPDATE SET
+        reference = EXCLUDED.reference,
+        quantity = EXCLUDED.quantity,
+        amount_cents = EXCLUDED.amount_cents,
+        status = EXCLUDED.status,
+        occurred_at = EXCLUDED.occurred_at,
+        channel = EXCLUDED.channel,
+        usuario_id = EXCLUDED.usuario_id,
+        empresa_id = EXCLUDED.empresa_id,
+        updated_at = now()
+      RETURNING id, empresa_id`,
+      params
+    );
+
+    // 2) Itens da venda → linhas do namespace `erp:item:`.
+    const { rowCount: itensProjetados } = await tx.query(
+      `
+      INSERT INTO sale_items (id, sale_id, product_id, size_id, variacao_externa, quantity,
+                              unit_price_cents, discount_cents, subtotal_cents, created_at)
+      SELECT '${ERP_ID_PREFIXO_ITEM}' || iv.id,
+             '${ERP_ID_PREFIXO_VENDA}' || iv.venda_id,
+             iv.produto_id,
+             iv.tamanho_id,
+             NULL,
+             iv.quantidade,
+             ROUND(iv.preco_unitario * 100)::int,
+             GREATEST(ROUND((iv.preco_unitario * iv.quantidade - iv.subtotal) * 100), 0)::int,
+             ROUND(iv.subtotal * 100)::int,
+             COALESCE(v.criado_em, now())
+        FROM itens_venda iv
+        JOIN vendas v ON v.id = iv.venda_id
+       WHERE v.status IN ('faturada', 'entregue')
+         ${filtroVendas}
+      ON CONFLICT (id) DO UPDATE SET
+        product_id = EXCLUDED.product_id,
+        size_id = EXCLUDED.size_id,
+        quantity = EXCLUDED.quantity,
+        unit_price_cents = EXCLUDED.unit_price_cents,
+        discount_cents = EXCLUDED.discount_cents,
+        subtotal_cents = EXCLUDED.subtotal_cents`,
+      params
+    );
+
+    // 3) Canceladas que já foram projetadas viram CANCELLED (histórico, fora dos totais).
+    const canceladas = await tx.query(
+      `
+      UPDATE sales s
+         SET status = 'CANCELLED'::sale_status, updated_at = now()
+       WHERE s.id LIKE '${ERP_ID_PREFIXO_VENDA}%'
+         AND s.status <> 'CANCELLED'::sale_status
+         ${filtroProjecao}
+         AND EXISTS (
+           SELECT 1 FROM vendas v
+            WHERE '${ERP_ID_PREFIXO_VENDA}' || v.id = s.id
+              AND v.status = 'cancelada'
+         )`,
+      idsTexto ? [idsTexto] : []
+    );
+
+    // 4) Projeção órfã (venda que deixou de ser venda) é removida.
+    const removidas = await tx.query(
+      `
+      DELETE FROM sales s
+       WHERE s.id LIKE '${ERP_ID_PREFIXO_VENDA}%'
+         ${filtroProjecao}
+         AND NOT EXISTS (
+           SELECT 1 FROM vendas v
+            WHERE '${ERP_ID_PREFIXO_VENDA}' || v.id = s.id
+              AND v.status IN ('faturada', 'entregue', 'cancelada')
+         )`,
+      idsTexto ? [idsTexto] : []
+    );
+
+    const idsProjetados = projetadas.map((r: Row) => String(r.id));
+    const empresas = new Set(projetadas.map((r: Row) => Number(r.empresa_id))).size;
+
+    // 5) Margem da venda projetada sai materializada NA MESMA transação — o BI
+    //    nunca lê uma venda PAID sem margem (a janela entre projetar e
+    //    recalcular aparecia como `pedidos: 1, faturamentoCents: 0`).
+    if (idsProjetados.length) {
+      const margem = sqlRecalcularMargens(idsProjetados);
+      await tx.query(margem.sql, margem.params);
+    }
+    return {
+      vendas: projetadas.length,
+      itens: Number(itensProjetados ?? 0),
+      canceladas: Number(canceladas.rowCount ?? 0),
+      removidas: Number(removidas.rowCount ?? 0),
+      empresas,
+      idsProjetados,
+    };
+  });
+}
+
+// Debounce do gancho pós-faturamento: o fluxo da venda não espera o motor.
+let timerProjecaoErp: ReturnType<typeof setTimeout> | null = null;
+const vendasErpPendentes = new Set<number>();
+
+/** Agenda a projeção de uma venda (chamado pelo gancho de faturamento/estorno). */
+export function agendarProjecaoVendasErp(vendaId: number): void {
+  if (!Number.isInteger(vendaId) || vendaId <= 0) return;
+  vendasErpPendentes.add(vendaId);
+  if (timerProjecaoErp) return;
+  timerProjecaoErp = setTimeout(() => {
+    timerProjecaoErp = null;
+    const pendentes = [...vendasErpPendentes];
+    vendasErpPendentes.clear();
+    if (!pendentes.length) return;
+    void (async () => {
+      try {
+        const projecao = await projetarVendasErp(pendentes);
+        const repo = repoNegocios();
+        if (projecao.idsProjetados.length) await repo.recalcularMargens(projecao.idsProjetados);
+        await repo.recalcularCurvaABC();
+      } catch (e) {
+        console.warn('⚠️  Motor 1. MEU NEGÓCIOS: projeção da venda do ERP falhou —', e instanceof Error ? e.message : e);
+      }
+    })();
+  }, 3_000);
+  timerProjecaoErp.unref?.();
+}
+
 let timerDebounce: ReturnType<typeof setTimeout> | null = null;
 let timerCiclo: ReturnType<typeof setInterval> | null = null;
 
@@ -1568,6 +1916,9 @@ async function cicloDoMotor(): Promise<{ margens: number; abc: number } | null> 
   cicloRodando = true;
   try {
     const repo = repoNegocios();
+    // ERP-04: projeta as vendas do ERP ANTES de recalcular — é o que faz venda
+    // faturada fora do gancho (ou anterior a ele) aparecer no BI no ciclo.
+    await projetarVendasErp();
     const margens = await repo.recalcularMargens();
     const abc = await repo.recalcularCurvaABC();
     return { margens: margens.atualizadas, abc: abc.classificados };
@@ -1615,6 +1966,9 @@ export function agendarRecalculo(ids: string[]): void {
  * tem `sales` ingeridas e nada é fabricado.
  */
 export function initNegociosEngine(): void {
+  // O gancho da venda do ERP vale nos DOIS modos (o modo demonstração também
+  // tem venda do ERP — e o BI dele precisa refletir a operação, como o de PG).
+  setOnVendaErpAlterada((evento) => agendarProjecaoVendasErp(evento.vendaId));
   if (!hasDatabaseUrl()) return;
   setOnSaleIngested(({ saleId }) => {
     agendarRecalculo([saleId]);
@@ -1638,5 +1992,9 @@ export function __desligarMotorNegocios(): void {
   timerCiclo = null;
   if (timerDebounce) clearTimeout(timerDebounce);
   timerDebounce = null;
+  if (timerProjecaoErp) clearTimeout(timerProjecaoErp);
+  timerProjecaoErp = null;
   vendasPendentes.clear();
+  vendasErpPendentes.clear();
+  setOnVendaErpAlterada(null);
 }
