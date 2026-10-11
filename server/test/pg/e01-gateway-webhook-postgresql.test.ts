@@ -410,3 +410,133 @@ test('ERP-01/P1-11: segredo de UMA empresa não pode recusar webhook de OUTRA', 
   assert.equal(resposta.body?.resultado, 'paga');
   assert.equal((await s.get(R_GATEWAY_COBRANCAS, semSegredo.cobrancaId))!.status, 'paga');
 });
+
+// ============================================================================
+// ERP-01 — CENÁRIOS DE ACEITE COMPLEMENTARES (complementam, não duplicam, os
+// blocos A/B/C/D/E acima): os testes mínimos obrigatórios do ciclo que ainda
+// não estavam fixados neste arquivo.
+//
+//   F) notificação com `provider_ref` INEXISTENTE → resposta controlada, SEM
+//      criar cobrança, SEM efeito financeiro, evento registrado pela regra
+//      existente ('ignorado'), repetição sem segunda linha e sem vazamento;
+//   G) payload INVÁLIDO (corpo não-JSON e JSON sem referência) → resposta
+//      controlada, sem exceção, sem detalhe de banco no corpo;
+//   H) ISOLAMENTO POR EMPRESA: o webhook da cobrança da Empresa A confirma só
+//      A (B permanece pendente, uma única baixa) e o evento é atribuído à
+//      empresa dona da cobrança.
+// ============================================================================
+
+test('ERP-01: cobrança inexistente e payload inválido têm resposta controlada (sem efeito, sem vazamento)', async (t) => {
+  const s = getStore();
+  const suspensos = await suspenderSegredosExistentes();
+  t.after(async () => restaurarSegredos(suspensos));
+  const porta = await reservePort();
+  const { child, baseUrl } = await startRealServer(porta);
+  t.after(async () => stopServer(child));
+  t.after(async () => limparConfigsDaRodada());
+
+  const eventosDe = (eventoId: string) => s.list(R_GATEWAY_WEBHOOK_EVENTS, { page: 1, pageSize: 20, filter: { provider: 'mock', evento_id: eventoId } });
+
+  // ------------------------------------------------ F) provider_ref inexistente
+  const refFantasma = unico('mock-fantasma');
+  const eventoF = unico('evt-fantasma');
+  const corpoF = JSON.stringify({ event: 'payment.paid', event_id: eventoF, data: { id: refFantasma }, status: 'pago' });
+
+  const f1 = await enviarWebhook(baseUrl, corpoF);
+  semVazamento(f1.texto, 'F: cobrança inexistente');
+  assert.equal(f1.status, 200, `cobrança inexistente não pode virar erro; veio ${f1.status} ${f1.texto}`);
+  assert.equal(f1.body?.ok, true, `o provedor precisa receber ack: ${f1.texto}`);
+  assert.equal(f1.body?.resultado, 'ignorado', `evento sem cobrança é ignorado, nunca pago: ${f1.texto}`);
+  assert.equal(f1.body?.processado, false, `evento sem efeito financeiro não pode ser anunciado como processado: ${f1.texto}`);
+
+  const eventosF = await eventosDe(eventoF);
+  assert.equal(eventosF.rows.length, 1, `o evento precisa ficar registrado para auditoria (uma linha); veio ${eventosF.rows.length}`);
+  assert.equal(String(eventosF.rows[0].status), 'ignorado');
+  assert.equal(eventosF.rows[0].cobranca_id, null, 'evento sem cobrança não pode apontar para nenhuma cobrança');
+
+  const cobrancasFantasma = await query<{ n: string }>(`SELECT count(*)::text AS n FROM gateway_cobrancas WHERE LOWER(provider) = 'mock' AND provider_ref = $1`, [refFantasma]);
+  assert.equal(Number(cobrancasFantasma.rows[0].n), 0, 'webhook não pode CRIAR cobrança');
+  const lancFantasma = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM lancamentos_financeiros WHERE descricao LIKE $1 OR COALESCE(observacoes, '') LIKE $1`,
+    [`%${refFantasma}%`],
+  );
+  assert.equal(Number(lancFantasma.rows[0].n), 0, 'webhook de cobrança inexistente não pode produzir lançamento financeiro');
+
+  // A repetição da MESMA notificação inexistente continua controlada: nenhuma
+  // linha nova (o índice é (provider, evento_id)) e nenhum detalhe de driver.
+  const f2 = await enviarWebhook(baseUrl, corpoF);
+  semVazamento(f2.texto, 'F: repetição da cobrança inexistente');
+  assert.equal(f2.status, 200, `a repetição precisa continuar controlada; veio ${f2.status} ${f2.texto}`);
+  assert.equal(f2.body?.processado, false);
+  assert.equal((await eventosDe(eventoF)).rows.length, 1, 'a repetição não pode criar segunda linha do evento');
+
+  // ----------------------------------------------------------- G) payload inválido
+  const totalEventosAntesDosInvalidos = Number((await query<{ n: string }>(`SELECT count(*)::text AS n FROM gateway_webhook_events`)).rows[0].n);
+  const g1 = await enviarWebhook(baseUrl, 'isto nao e json {{{');
+  semVazamento(g1.texto, 'G: corpo não-JSON');
+  assert.equal(g1.status, 202, `corpo fora do formato tem resposta controlada (política existente); veio ${g1.status} ${g1.texto}`);
+  assert.equal(g1.body?.ok, true, `corpo inválido precisa de ack: ${g1.texto}`);
+  assert.equal(g1.body?.ignorado, true, `corpo inválido é ignorado, não processado: ${g1.texto}`);
+
+  const g2 = await enviarWebhook(baseUrl, JSON.stringify({ event: 'payment.paid', status: 'pago' }));
+  semVazamento(g2.texto, 'G: JSON sem referência');
+  assert.equal(g2.status, 202, `JSON sem referência não é evento de pagamento; veio ${g2.status} ${g2.texto}`);
+  assert.equal(g2.body?.ignorado, true);
+
+  // Corpo que nem é evento de pagamento não vira linha em gateway_webhook_events
+  // (a política existente responde 202 antes de persistir) — medido por DELTA
+  // para não depender do estado que outras suítes deixaram no banco.
+  const depoisG = await query<{ n: string }>(`SELECT count(*)::text AS n FROM gateway_webhook_events`);
+  assert.equal(Number(depoisG.rows[0].n), totalEventosAntesDosInvalidos, 'corpo inválido não pode criar linha em gateway_webhook_events');
+});
+
+test('ERP-01: o webhook confirma a cobrança da empresa dona e não toca a outra (isolamento)', async (t) => {
+  const s = getStore();
+  const suspensos = await suspenderSegredosExistentes();
+  t.after(async () => restaurarSegredos(suspensos));
+  const porta = await reservePort();
+  const { child, baseUrl } = await startRealServer(porta);
+  t.after(async () => stopServer(child));
+  t.after(async () => limparConfigsDaRodada());
+
+  const a = await novoTenant();
+  const b = await novoTenant();
+  assert.ok(a.empresaId !== b.empresaId, 'os dois cenários precisam ser de empresas distintas');
+
+  const eventoA = unico('evt-tenant-a');
+  const pagoA = await enviarWebhook(baseUrl, JSON.stringify({ event: 'payment.paid', event_id: eventoA, data: { id: a.refCobranca }, status: 'pago' }));
+  semVazamento(pagoA.texto, 'H: pagamento da empresa A');
+  assert.equal(pagoA.status, 200);
+  assert.equal(pagoA.body?.resultado, 'paga', `o webhook precisa confirmar a cobrança de A: ${pagoA.texto}`);
+
+  // O efeito financeiro é exatamente o de A: A paga/baixada, B intocada.
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, a.cobrancaId))!.status, 'paga');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, a.lancamentoId))!.status, 'confirmado');
+  assert.equal(await filhosDaBaixa(a.lancamentoId), 0, 'uma baixa para A');
+
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, b.cobrancaId))!.status, 'pendente', 'a cobrança da empresa B não pode ser confirmada pelo webhook de A');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, b.lancamentoId))!.status, 'pendente', 'o título da empresa B não pode ser baixado pelo webhook de A');
+
+  const eventosA = await eventosDoEvento(a, eventoA);
+  assert.equal(eventosA.length, 1);
+  assert.equal(Number(eventosA[0].empresa_id), a.empresaId, 'o evento pertence à empresa dona da cobrança');
+  assert.equal(Number(eventosA[0].cobranca_id), a.cobrancaId);
+
+  // E o caminho inverso: o webhook de B não reabre nem altera o efeito já
+  // aplicado em A (A continua paga, com uma única baixa).
+  const eventoB = unico('evt-tenant-b');
+  const pagoB = await enviarWebhook(baseUrl, JSON.stringify({ event: 'payment.paid', event_id: eventoB, data: { id: b.refCobranca }, status: 'pago' }));
+  semVazamento(pagoB.texto, 'H: pagamento da empresa B');
+  assert.equal(pagoB.status, 200);
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, b.cobrancaId))!.status, 'paga');
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, a.cobrancaId))!.status, 'paga');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, a.lancamentoId))!.status, 'confirmado');
+  const tituloA = await s.get(RESOURCES.lancamentos_financeiros, a.lancamentoId);
+  assert.equal((String(tituloA!.observacoes).match(/Baixa em /g) || []).length, 1, 'A não pode receber uma segunda baixa quando B é notificada');
+
+  // A repetição da notificação de A continua sendo duplicata explícita.
+  const repetidoA = await enviarWebhook(baseUrl, JSON.stringify({ event: 'payment.paid', event_id: eventoA, data: { id: a.refCobranca }, status: 'pago' }));
+  semVazamento(repetidoA.texto, 'H: repetição do pagamento de A');
+  assert.equal(repetidoA.status, 200);
+  assert.equal(repetidoA.body?.duplicado, true, `repetição idêntica é duplicata: ${repetidoA.texto}`);
+});
