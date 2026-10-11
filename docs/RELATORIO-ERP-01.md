@@ -107,6 +107,37 @@ ok 2 - ERP-01: o payload JSONB é lido nos dois formatos (objeto e string)
 # tests 3 · # pass 2 · # fail 0 · # todo 1        (exit 0)
 ```
 
+### 3.4 Como reproduzir exatamente esta prova (PostgreSQL local)
+
+O sandbox **não tem PostgreSQL instalado** e o `apt` não é alcançável; as provas
+rodaram em **PostgreSQL 16.14 real** obtido pelo binário oficial empacotado no
+npm, num diretório de rascunho **fora do repositório** (nada disso entra no
+versionamento — o CI continua usando o serviço `postgres:16`):
+
+```bash
+# 1. PostgreSQL real (binário empacotado) — fora da árvore do repositório
+mkdir -p /tmp/pgbundle && cd /tmp/pgbundle && npm init -y
+npm i @embedded-postgres/linux-x64@16.14.0-beta.17     # postgres/initdb/pg_ctl
+PGBIN=/tmp/pgbundle/node_modules/@embedded-postgres/linux-x64/native/bin
+
+# 2. cluster local (mesmo formato do serviço do CI)
+$PGBIN/initdb -D /tmp/pgdata -U postgres --auth=trust --encoding=UTF8 --no-locale
+$PGBIN/pg_ctl -D /tmp/pgdata -l /tmp/pg.log -w start \
+  -o "-p 55432 -c listen_addresses=127.0.0.1 -c fsync=off"
+
+# 3. papel e base iguais aos do CI (`brobond` / `brobond_teste`)
+# 4. a suíte inteira e as provas deste relatório
+cd server
+DATABASE_URL=postgresql://brobond:brobond@127.0.0.1:55432/brobond_teste npm run test:pg
+DATABASE_URL=postgresql://brobond:brobond@127.0.0.1:55432/brobond_teste npm run smoke:pg
+```
+
+Cada arquivo `.test.ts` de `test/pg` chama `migrate()` no próprio processo —
+o primeiro a rodar aplica `db/schema.sql` + `db/migrations` e os seguintes
+verificam — então um banco vazio é suficiente e nenhum SQL é aplicado à mão.
+
+---
+
 ## 4. CAUSA-RAIZ
 
 1. **Leitura**: `gateway_webhook_events.payload` é **JSONB**
