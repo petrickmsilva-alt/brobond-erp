@@ -63,7 +63,9 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > **P0-05**: o `db/schema.sql` recriava a cada boot o índice **global**
 > `uq_produtos_codigo_barras`; com o mesmo código de barras em duas empresas
 > (estado legítimo desde a 0018) o **boot falhava** e a API não subia — removido,
-> com prova `MIGRATE FALHOU` → `MIGRATE OK`. Achados novos ainda abertos:
+> com prova `MIGRATE FALHOU` → `MIGRATE OK`. **CI do PR #49 verde nos dois jobs**
+> (`verificar` e `testes-postgres`, run 38146107860 — o job PG já executava a
+> etapa nova do smoke). Achados novos ainda abertos:
 > **P1-12** (payload fiscal truncado), **P2-07** (`/health` antes das migrações) e
 > **P3-08** (`audit()` sem `tx` → 40001). Detalhe:
 > [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.

@@ -269,11 +269,15 @@ test('filtros estritos de BI: De/Até inclusivos, canal por grupo e empresa_id (
     const umDiaDepois = await chamar(negociosResumo, mockReq(gerente, { de: '2026-02-11', ate: '2026-02-28' }));
     assert.equal(umDiaDepois.payload.kpis.faturamentoCents, 0);
 
-    // canal por grupo e específico
-    const ecommerce = await chamar(negociosResumo, mockReq(gerente, { canal: 'ecommerce' }));
+    // canal por grupo e específico — ESCOPADO à janela do cenário.
+    // Desde o ERP-04 a tabela `sales` também recebe as vendas do ERP (projeção
+    // `erp:venda:<id>`, canais LOJA_FISICA/BROBOND): uma asserção global mediria
+    // o banco compartilhado (o que outros testes deixaram), não o cenário.
+    const janela = { de: '2026-02-01', ate: '2026-02-28' };
+    const ecommerce = await chamar(negociosResumo, mockReq(gerente, { ...janela, canal: 'ecommerce' }));
     assert.equal(ecommerce.payload.kpis.faturamentoCents, 2000);
-    const lojaFisica = await chamar(negociosResumo, mockReq(gerente, { canal: 'loja_fisica' }));
-    assert.equal(lojaFisica.payload.kpis.faturamentoCents, 0, 'a única venda é e-commerce');
+    const lojaFisica = await chamar(negociosResumo, mockReq(gerente, { ...janela, canal: 'loja_fisica' }));
+    assert.equal(lojaFisica.payload.kpis.faturamentoCents, 0, 'na janela do cenário, a única venda é e-commerce');
 
     // datas ruins continuam 400 no PG
     await assert.rejects(() => chamar(negociosResumo, mockReq(gerente, { de: '2026-13-01' })), /Período inválido/);
