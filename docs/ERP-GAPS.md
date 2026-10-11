@@ -35,6 +35,25 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
 > aguarda decisão humana.
 
+> **Atualização ERP-03 (2026-10-11) — P0-04 FECHADO; P0-05 descoberto e fechado.**
+> O gate virou executável: `npm run smoke:pg` (`scripts/smoke-pg.mjs`) cria um
+> **banco novo**, sobe a API real nele e roda o smoke E2E — **126/126 sem um único
+> SQL manual** (era 92/117 em banco novo e 119/126 com o local semeado à mão) — e a
+> etapa entrou no job `testes-postgres` do CI. O onboarding foi corrigido na raiz:
+> empresa sem **nenhum** local recebe o Local padrão "Loja" na primeira operação de
+> estoque (com entrada na trilha de auditoria); empresa com locais (mesmo inativos)
+> continua recebendo o 409 explicativo. O contrato **tipo × coluna** dos 88
+> recursos passou a ser teste executável (existência, tipo, unicidade e interface,
+> com prova de mutação) e reprovou 7 declarações que mentiam sobre o banco — todas
+> alinhadas. O teste A/B multiempresa (risco R6, antes NÃO TESTADO) revelou o
+> **P0-05**: o `db/schema.sql` recriava a cada boot o índice **global**
+> `uq_produtos_codigo_barras`; com o mesmo código de barras em duas empresas
+> (estado legítimo desde a 0018) o **boot falhava** e a API não subia — removido,
+> com prova `MIGRATE FALHOU` → `MIGRATE OK`. Achados novos ainda abertos:
+> **P1-12** (payload fiscal truncado), **P2-07** (`/health` antes das migrações) e
+> **P3-08** (`audit()` sem `tx` → 40001). Detalhe:
+> [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 > **Atualização ERP-02 (2026-10-11) — P0-01 FECHADO (estorno/reabertura de OP).**
 > `estornarOrdem` chamava `adjustStock` (padrão `INSERT ... ON CONFLICT DO UPDATE`)
 > com delta **negativo**: o CHECK `estoques_quantidade_nao_negativo` avalia o tuple

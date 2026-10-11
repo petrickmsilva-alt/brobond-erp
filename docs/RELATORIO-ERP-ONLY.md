@@ -5,6 +5,23 @@
 **Data:** 2026-10-11 · **Modo:** AUDITORIA (nenhum código foi alterado na auditoria)
 **Autor:** Auditoria técnica sênior assistida por agente
 
+> **Atualização ERP-03 (2026-10-11) — P0-04 FECHADO e P0-05 descoberto/fechado.**
+> O gate passou a medir o sistema que roda em produção: `npm run smoke:pg` cria um
+> **banco novo**, sobe a API real nele (migrate + admin automáticos, **zero SQL
+> manual**) e roda o smoke E2E — **126/126**, contra 119/126 da auditoria (92/117
+> em banco sem `local`); a etapa entrou no job `testes-postgres` do CI. A causa
+> das 25 falhas de onboarding foi fechada na raiz: empresa **sem nenhum local**
+> recebe o Local padrão "Loja" na primeira operação de estoque (com trilha de
+> auditoria), e empresa com locais inativos continua recebendo o 409 explicativo.
+> O contrato tipo × coluna dos **88 recursos** virou teste executável (4 regras +
+> prova de mutação) e reprovou 7 declarações que mentiam sobre o banco — todas
+> alinhadas. O teste A/B multiempresa (R6, antes **NÃO TESTADO**) revelou o
+> **P0-05**: o `db/schema.sql` recriava a cada boot um índice **global** de
+> `codigo_barras`; com o mesmo EAN em duas empresas (estado legítimo desde a 0018)
+> **a API não subia** (`could not create unique index`) — removido, com prova
+> antes/depois. Achados novos ainda abertos: **P1-12**, **P2-07**, **P3-08**.
+> Detalhe: [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) §5.
+
 > **Atualização ERP-02 (2026-10-11) — P0-01 FECHADO.** O estorno/reabertura de OP
 > volta a funcionar em PostgreSQL: `estornarOrdem` usava `adjustStock` (padrão
 > `INSERT ... ON CONFLICT`) com delta negativo, e o CHECK
@@ -416,7 +433,8 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P0-01** | Reabrir/estornar OP devolve 500 em PostgreSQL (23514; `adjustStock` com delta negativo) · **FECHADO em ERP-02 (2026-10-11)** | Produção / Estoque | §6 P0-01 · evidência do ciclo na §5 do roadmap | — |
 | **P0-02** | Webhook de pagamento não confirma cobrança em PostgreSQL (jsonb lido como objeto) e vaza constraint no endpoint público · **FECHADO em ERP-01 (2026-10-11)** | Financeiro / Segurança | §6 P0-02 · evidência do ciclo na §5 do roadmap | — |
 | **P0-03** | BI não vê as vendas do ERP (lê `sales`, escreve nada em `vendas`) | BI / Vendas / Arquitetura | §6 P0-03, venda faturada → KPIs zero | Decisão de arquitetura (fonte única de faturamento) |
-| **P0-04** | Suíte E2E não executa contra PostgreSQL; sem `local` padrão a instalação nova não opera estoque | Testes / Estoque / Onboarding | §6 P0-04 | — |
+| **P0-04** | Suíte E2E não executa contra PostgreSQL; sem `local` padrão a instalação nova não opera estoque · **FECHADO em ERP-03 (2026-10-11)** | Testes / Estoque / Onboarding | §6 P0-04 · evidência do ciclo na §5 do roadmap | — |
+| **P0-05** | `db/schema.sql` recriava a cada boot o índice **global** `uq_produtos_codigo_barras`: com o mesmo código de barras em duas empresas (legítimo desde a 0018) **o boot falhava** (`could not create unique index`) e a API não subia · **descoberto e FECHADO em ERP-03 (2026-10-11)** | Banco / Boot / Multiempresa | §5 ERP-03 (prova antes/depois do `migrate`) | — |
 
 **Critério de saída dos P0:** cada um com teste que **falha antes e passa depois**, executado em PostgreSQL real, e nenhum deles com cobertura apenas em memória.
 
@@ -436,6 +454,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P1-08** | Fiscal sem homologação real (adapters existem, nada emitido) | ✅ | ✅ | ✅ | parcial | parcial | ✅ | só contrato |
 | **P1-09** | Cadeia de devolução sem prova ponta a ponta em PostgreSQL | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | **sem E2E PG** |
 | **P1-10** | `E2: OP cancelada é terminal` responde 500 (mensagem errada) — **fechado em ERP-02 como cascata** | ✅ | — | ✅ | — | — | — | smoke + `e02-ordem-reabrir-postgresql.test.ts` |
+| **P1-12** | `fiscal.ts` grava o payload do evento fiscal com `JSON.stringify(payload).slice(0, 20000)`: acima de 20.000 caracteres o JSON é **truncado no meio** e o `jsonb` recusa com 22P02 — a emissão falha com um 400 enganoso ("valor inválido em um dos campos"). Descoberto pelo contrato tipo × coluna do ERP-03 (o campo era `textarea` sobre `jsonb`; agora o tipo está alinhado, o corte continua) | ✅ | ✅ | ✅ | — | — | ✅ | contrato de tipo (ERP-03) | endereçado em **ERP-05** (Fiscal) |
 | **P1-11** | Assinatura de webhook é global por provedor (sem empresa): segredo de A recusa notificação de B; evento pode ser gravado com `empresa_id` de quem assinou | ✅ | ✅ | ✅ | — | — | ✅ | **todo** em `server/test/pg/e01-gateway-webhook-postgresql.test.ts` (descoberto no ERP-01) |
 
 ---
@@ -449,7 +468,8 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P2-03** | `MemStore` sem isolamento real de transação/concorrência | `GAP-ESTQ-MEMSTORE-TX`; já registrado, ganhou relevância nesta auditoria por ser o ambiente em que o único E2E roda |
 | **P2-04** | Cobertura de relatórios no front menor que o backend | 11 relatórios no servidor; `RelatoriosPage` cobre um subconjunto |
 | **P2-05** | `audit:menu` não cobre recursos com CRUD sem módulo cujo nome difira do recurso | Ponto cego comprovado: `empresas` não foi sinalizado, `impostos_ncm` foi |
-| **P2-06** | Teste de concorrência apenas no `PgStore` | correto por design; falta declarar o modo demonstração como não-produtivo no README de operação |
+| **P2-06** | Teste de concorrência apenas no `PgStore` | correto por design; **declarado em ERP-03** (cabeçalho de `scripts/smoke-pg.mjs` + §5 do roadmap): memória/demonstração não é produção |
+| **P2-07** | `/api/health` responde `{ok:true, db:'postgres'}` **antes** de as migrações e o `ensureAdmin` terminarem: um orquestrador que confie só no health pode rotear tráfego para uma instância ainda migrando (o gate `smoke:pg` precisou esperar o marco real do boot). Descoberto no ERP-03 | liveness × readiness; correção sugerida: só responder `ok` depois do boot completo |
 
 ---
 
@@ -463,6 +483,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P3-04** | Compras atrasadas por data no dashboard (exige agregado novo) |
 | **P3-05** | `no-explicit-any`: 401 warnings de lint (dívida de tipagem, sem impacto funcional) |
 | **P3-06** | `prisma validate` não roda no sandbox (limitação de ambiente; roda no CI) |
+| **P3-08** | `audit()` **sem `tx`** dentro de uma transação abre a PRÓPRIA conexão (`withTransaction`) — em PostgreSQL SERIALIZABLE a segunda conexão escrevendo durante a transação do fluxo aborta a operação com **40001** ("could not serialize access … during write"). Vivido na primeira versão do provisionamento do ERP-03 (corrigido passando `tx`); são ~150 chamadas de auditoria no servidor e o padrão não é verificado por teste nem lint | recomendação: helper que exija `tx` quando há transação aberta (ou auditoria enfileirada e gravada no commit) |
 | **P3-07** | `adjustInsumoStock` usa o mesmo padrão `INSERT delta ON CONFLICT DO UPDATE` para consumo (delta negativo). Hoje **não dispara** — `estoque_insumos.quantidade` não tem CHECK de não-negativo — mas se um CHECK for adicionado ali, o consumo de insumos quebra como o estorno quebrou (P0-01). Recomendação preventiva: migrar o consumo para o padrão de UPDATE condicional |
 
 ---

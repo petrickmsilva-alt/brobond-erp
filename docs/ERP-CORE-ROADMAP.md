@@ -13,7 +13,7 @@
 |---|---|---|
 | **ERP-01** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-01, abaixo |
 | **ERP-02** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-02, abaixo |
-| **ERP-03** | ⏳ não iniciado | — |
+| **ERP-03** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-03, abaixo |
 | **ERP-04 … ERP-13** | ⏳ não iniciados | — |
 
 **Regra de execução:** um ciclo só muda de ⏳ para ✅ com a bateria completa verde (typecheck · lint · build · `server test` · `client test` · `test:pg` · `smoke`) **e** o teste central falhando antes da correção e passando depois, em PostgreSQL real.
@@ -232,6 +232,77 @@ Checks que reprovavam e agora passam: `E2: POST /reabrir estorna (gerente)` (200
   3. Uma instalação PostgreSQL nova consegue, sem intervenção manual em SQL, receber uma compra e faturar uma venda.
   4. O teste de contrato de tipo roda e passa; e **falha** se um campo for declarado com tipo divergente da coluna (verificação por mutação).
 
+#### ✅ Execução (2026-10-11) — CLOSED
+
+**Arquivos:** `server/src/services.ts` (+~72) · `server/src/resources.ts` (8 declarações) · `db/schema.sql` (P0-05) · **novos** `scripts/smoke-pg.mjs`, `server/test/pg/contratoTipos.ts`, `server/test/pg/contrato-tipo-coluna.test.ts`, `server/test/pg/e03-onboarding-local-padrao.test.ts`, `server/test/pg/e03-multiempresa-ab.test.ts`, `server/test/multiempresa-paridade.test.ts` · `server/test/locais.test.ts` (contrato atualizado) · `.github/workflows/ci.yml` + `package.json` (`smoke:pg`).
+
+**1. Onboarding sem SQL manual (o defeito do banco novo).** O modo demonstração tem `locais.mock` (loja/expedicao/faccao) e o PostgreSQL não tem nenhum — daí as 25 falhas `409 A empresa ativa não possui um local de estoque ativo` num banco recém-migrado. A regra passou a ser explícita e restrita em `getDefaultLocalInfo` (`services.ts`), ponto único por onde passam **todos** os fluxos de estoque (recebimento, faturamento, movimentação, inventário, importação, PDV, produção):
+
+* empresa **sem nenhum local** → a primeira operação provisiona o Local padrão **"Loja"** (ativo, `padrao`), com **entrada na trilha de auditoria** (`usuario: 'sistema'`), e segue o fluxo;
+* empresa **com locais** (mesmo inativos) → nada é criado; se não houver padrão ativo, a resposta continua sendo o **409 explicativo** — a decisão de não ter local ativo é do administrador.
+
+Corrida coberta: `uq_e42_locais_empresa_nome` / `uq_e42_locais_padrao_empresa` deixam passar um só; quem perde relê o local do vencedor. **Armadilha vivida e documentada:** `audit()` sem `tx` abre a PRÓPRIA transação (`withTransaction`) e a segunda conexão escrevendo dentro da transação do fluxo faz o PostgreSQL SERIALIZABLE abortar com **40001** — foi o que aconteceu na primeira versão (ver **P3-08**).
+
+**Mudança de contrato declarada:** cadastro de locais **vazio deixou de bloquear** a operação (era o comportamento que o P0-04 mandou mudar). O teste de memória `locais.test.ts` foi atualizado para o contrato novo e `docs/LOCAL-PADRAO.md` deixou de prometer um fallback textual ("loja") que o código nunca implementou.
+
+**2. `npm run smoke:pg` — o gate virou executável.** `scripts/smoke-pg.mjs` cria um **banco novo** a partir do `DATABASE_URL`, sobe a API real nele (migrate + `ensureAdmin` automáticos, esperando o boot **concluir** e não só o `/health`), roda `scripts/smoke-e2e.mjs` apontado para ela e apaga o banco devolvendo o código de saída. Como o banco nasce do zero, o smoke (não idempotente) passou a poder rodar em **qualquer** execução — e o CI ganhou a etapa `Smoke E2E contra PostgreSQL novo` no job `testes-postgres`.
+
+```
+$ DATABASE_URL=… npm run smoke:pg     # banco novo, ZERO SQL manual
+🗄️  smoke:pg — banco novo: brobond_smoke_mv3uc4xc
+✅ smoke:pg — API pronta em http://127.0.0.1:37207 (db=postgres, banco novo, ZERO SQL manual)
+126/126 verificações OK
+✅ smoke:pg — smoke E2E aprovado contra PostgreSQL real   (4 s)
+```
+
+Inspeção do banco criado pelo gate (prova de que nada foi semeado):
+
+| O que | Resultado |
+|---|---|
+| `SELECT * FROM locais` | **1 linha**: `Loja` · tipo `loja` · ativo · `padrao` · empresa 1 |
+| `auditoria` | `usuario='sistema'`, `acao='criar'`, `recurso='locais'`, `dados->>'provisionado'='true'` — “Local padrão "Loja" criado automaticamente: a empresa #1 não tinha nenhum local (ERP-03)” |
+| `estoques` / `movimentacoes` | saldos e movimentos com `local_id` do local provisionado (o caminho canônico, não o texto legado) |
+
+**3. Contrato tipo × coluna (a guarda estrutural).** `server/test/pg/contratoTipos.ts` inspeciona **os 88 recursos do sistema** (os de `resources.ts` + os 8 declarados pelos módulos — gateway, webhooks, comissões, configurações, extrato) contra o PostgreSQL real em quatro regras: existência da coluna, **tipo** (a regra que teria pegado o P0-02), **unicidade** (`unique` ⇒ índice global; `uniqueEmpresa` ⇒ índice por empresa — é o que o `memdb` replica) e **interface** (`json` editável em recurso público, que o cliente não sabe renderizar). Divergências passam só por allowlist explícita e justificada (`arquivos.dados/thumb` → `bytea`, escritos por `uploads.ts`).
+
+O inspetor reprovou **7 declarações** que estavam mentindo sobre o banco — todas alinhadas neste ciclo:
+
+| Campo | Declarado | Coluna real | Risco |
+|---|---|---|---|
+| `catalogo_eventos.dados` | `text` | `jsonb` | leitura como texto (classe do P0-02) |
+| `documentos_fiscais_eventos.payload` | `textarea` | `jsonb` | **o gêmeo do P0-02** na resposta do provedor fiscal |
+| `compras.fin_parcelas_detalhes` | `text` | `jsonb` | lista de duplicatas lida como texto |
+| `itens_compra.dados_fiscais` · `importacoes_nfe.dados_fiscais` | `text` | `jsonb` | impostos da linha da NF-e |
+| `produtos.sku` · `produtos.codigo_barras` | `unique` (global) | índice **por empresa** | memória recusava o que o PostgreSQL aceita |
+| `empresas.nome` | `unique` | **nenhum índice** | mesma divergência, sem lastro no banco |
+
+O último teste do arquivo é a **prova de mutação**: um recurso sintético com a declaração exata do P0-02 precisa ser reprovado (e é), e as variantes de unicidade e de interface também — sem isso o teste seria uma tautologia que passa sempre.
+
+**4. P0-05 — descoberto pelo A/B e fechado no mesmo ciclo.** O teste A/B (mesmo SKU e mesmo código de barras em duas empresas) criou o estado legítimo "duas empresas com o mesmo EAN" — e **todos os 72 testes seguintes do `test:pg` caíram** com `could not create unique index "uq_produtos_codigo_barras"`: o `db/schema.sql` ainda recriava a cada boot o índice **global** de `codigo_barras` (linha 848) antes do `DROP` do trecho multiempresa. Num banco com duplicidade entre empresas, **a API não subia**.
+
+```
+ANTES (schema.sql com o índice legado)   MIGRATE FALHOU: could not create unique index "uq_produtos_codigo_barras"
+DEPOIS (CREATE legado removido)          MIGRATE OK
+```
+
+**5. A/B multiempresa executável (fecha o risco R6).** `e03-multiempresa-ab.test.ts` (PostgreSQL: 4 testes) e `multiempresa-paridade.test.ts` (memória: 3 testes) provam o mesmo contrato nos dois motores: mesmo SKU e mesmo nome de local em duas empresas coexistindo, duplicata **dentro** da empresa em 409, local padrão **por empresa** (`getDefaultLocalInfo` de A nunca devolve o de B), saldos isolados no local de mesmo nome e troca de padrão em A sem efeito em B.
+
+**Prova antes/depois do provisionamento** (mesmo teste, mesmo banco, `git stash` do `services.ts`):
+
+```
+ANTES  not ok 1 — a primeira movimentação precisa funcionar sem local cadastrado: 409 A empresa ativa não possui um local de estoque ativo
+DEPOIS ok 1 — # pass 1 / # fail 0
+```
+
+**Critérios de aceite:**
+1. ✅ `npm run smoke:pg` verde contra PostgreSQL real (126/126, banco novo) **e** smoke do modo demonstração 126/126.
+2. ✅ Job `testes-postgres` do CI ganhou a etapa `Smoke E2E contra PostgreSQL novo (gate ERP-03)` — failure com annotation de diagnóstico.
+3. ✅ Instalação nova recebe compra, fatura venda e movimenta estoque **sem um único SQL manual** (é o que o smoke faz, dentro dos 126 checks, e o que o teste de onboarding prova ponta a ponta).
+4. ✅ Contrato de tipo roda e passa nos 88 recursos e **falha** sob mutação (4 casos).
+- **Regressão:** `server test` **674 pass / 0 fail / 63 skipped** (737) · `client test` **226** · `test:pg` **121 pass / 0 fail / 1 todo** (123) · typecheck **0** · lint **0 erros / 401 warnings** · build OK.
+- **Achados abertos registrados neste ciclo:** **P1-12** (payload fiscal truncado em 20.000 caracteres → JSON inválido; ERP-05) · **P2-07** (`/api/health` responde `db=postgres` antes das migrações terminarem — o gate precisou esperar o boot real) · **P3-08** (`audit()` sem `tx` dentro de transação abre segunda conexão → 40001 em SERIALIZABLE).
+- **P2-03 / P2-06 declarados** (fechando a promessa da matriz): memória/modo demonstração é ambiente de demonstração, **não** produção, e a suíte de concorrência continua exclusiva do `PgStore` — agora escrito no cabeçalho de `scripts/smoke-pg.mjs` além deste documento.
+
 ---
 
 ### ERP-04 — Fonte única do faturamento: o ERP alimenta o BI
@@ -429,7 +500,8 @@ MENU ERP FINAL PROPOSTO (ERP-05, ERP-06, ERP-07 e ERP-11 implementam as entradas
 | P0-01 estorno/reabrir OP → 500 em PostgreSQL | 🔴 P0 | **ERP-02 ✅** |
 | P0-02 webhook de pagamento descartado + vazamento de constraint | 🔴 P0 | **ERP-01 ✅** |
 | P0-03 BI lê `sales`, não `vendas` do ERP | 🔴 P0 | ERP-04 |
-| P0-04 E2E não roda em PostgreSQL; instalação nova sem local padrão | 🔴 P0 | ERP-03 |
+| P0-04 E2E não roda em PostgreSQL; instalação nova sem local padrão | 🔴 P0 | **ERP-03 ✅** |
+| P0-05 índice único GLOBAL legado de `codigo_barras` derruba o boot | 🔴 P0 | **descoberto e fechado em ERP-03 ✅** |
 | P1-01 deriva RBAC (3 recursos) | 🟠 P1 | ERP-10 |
 | P1-02 NCM sem tela | 🟠 P1 | ERP-05 |
 | P1-03 inutilização sem tela | 🟠 P1 | ERP-05 |
@@ -443,10 +515,10 @@ MENU ERP FINAL PROPOSTO (ERP-05, ERP-06, ERP-07 e ERP-11 implementam as entradas
 | P1-11 assinatura de webhook global por provedor (sem empresa) | 🟠 P1 | **registrado no ERP-01; correção aguarda decisão de escopo multiempresa** |
 | P2-01 Marcas | 🟡 P2 | ERP-11 |
 | P2-02 Unidades | 🟡 P2 | ERP-11 |
-| P2-03 `MemStore` sem isolamento | 🟡 P2 | declarado em ERP-03 (documentação de operação) |
+| P2-03 `MemStore` sem isolamento | 🟡 P2 | **declarado em ERP-03 ✅** (cabeçalho de `scripts/smoke-pg.mjs` + §5 ERP-03: memória é demonstração, não produção) |
 | P2-04 relatórios no front | 🟡 P2 | ERP-11 |
 | P2-05 ponto cego do `audit:menu` | 🟡 P2 | ERP-10 |
-| P2-06 concorrência só no `PgStore` | 🟡 P2 | declarado em ERP-03 |
+| P2-06 concorrência só no `PgStore` | 🟡 P2 | **declarado em ERP-03 ✅** (mesma nota; a suíte de concorrência continua exclusiva do PostgreSQL) |
 | P3-01 … P3-06 | 🔵 P3 | **FUTURO** — fora dos ciclos do CORE |
 
 ---
@@ -480,6 +552,6 @@ O BROBOND ERP está **mais perto do fim do que o volume de pendências sugere**:
 
 **Ressalva:** a implementação **não deve começar** antes de os 4 gaps P0 serem reconhecidos como bloqueadores (dois deles são defeitos de produção provados, não funcionalidade ausente) e antes de **ERP-03** garantir que nenhum ciclo feche sem prova em PostgreSQL real. Fechadas essas duas condições — que correspondem exatamente a **ERP-01, ERP-02 e ERP-03** — o roadmap passa a 🟢.
 
-**Progresso em 2026-10-11:** **ERP-01 e ERP-02 fechados** — P0-02 (webhook de pagamento) e P0-01 (estorno/reabertura de OP) corrigidos, cada um com prova *falha antes → passa depois* em PostgreSQL real, sem tocar em Commerce e sem migration. O termômetro da auditoria (**smoke contra PostgreSQL real**) saiu de **119/126** para **126/126**. Resta **ERP-03** (P0-04: tornar o gate executável em PostgreSQL — onboarding/seed de empresa nova e smoke parametrizado) para retirar a ressalva. No caminho, a implementação do ERP-01 **descobriu e registrou** o P1-11 (escopo multiempresa da assinatura de webhook), que **não** foi corrigido por exigir decisão de arquitetura — coerente com a regra de o ciclo não decidir sozinho o que é de outro ciclo.
+**Progresso em 2026-10-11:** **ERP-01, ERP-02 e ERP-03 fechados** — P0-02 (webhook de pagamento) e P0-01 (estorno/reabertura de OP) corrigidos, cada um com prova *falha antes → passa depois* em PostgreSQL real, sem tocar em Commerce e sem migration. O termômetro da auditoria (**smoke contra PostgreSQL real**) saiu de **119/126** para **126/126**. **ERP-03 fechou o P0-04** (gate executável em PostgreSQL: `npm run smoke:pg` cria banco novo, sobe a API e roda o smoke — 126/126 sem nenhum SQL manual —, agora no job `testes-postgres` do CI) **e descobriu/fechou o P0-05** (o índice único global legado de `codigo_barras` derrubava o boot em banco com o mesmo código de barras em duas empresas). Com os quatro P0 fechados, a ressalva está retirada — o veredito operacional dos ciclos seguintes passa a ser 🟢, com a auditoria independente ainda pendente para o MERGE. No caminho, a implementação do ERP-01 **descobriu e registrou** o P1-11 (escopo multiempresa da assinatura de webhook), que **não** foi corrigido por exigir decisão de arquitetura — coerente com a regra de o ciclo não decidir sozinho o que é de outro ciclo.
 
 **Nada foi implementado, corrigido, migrado, agendado ou mergeado. O menu não foi alterado. O Commerce não foi tocado.**
