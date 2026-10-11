@@ -5,6 +5,23 @@
 **Data:** 2026-10-11 · **Modo:** AUDITORIA (nenhum código foi alterado na auditoria)
 **Autor:** Auditoria técnica sênior assistida por agente
 
+> **Atualização ERP-04 (2026-10-11) — P0-03 e P1-07 FECHADOS: o BI passa a ler a operação do ERP.**
+> Decisão de arquitetura registrada **antes do código** em
+> [`docs/ADR-001-FONTE-UNICA-FATURAMENTO.md`](ADR-001-FONTE-UNICA-FATURAMENTO.md):
+> opção **(B) projeção derivada** — `vendas` é a fonte autoritativa do ERP e
+> `sales` passa a ser o **modelo de leitura** alimentado por uma projeção
+> idempotente no namespace `erp:` (a recomendação preliminar (A) foi substituída
+> com quatro evidências; ADR §2). Sem migration e **sem tocar a ingestão de canais
+> externos** (critério de não-regressão provado campo a campo).
+> O critério de igualdade (BI × relatório, tolerância zero) **reprovou** por um
+> defeito real: `relatorios.ts` comparava `String(Date).slice(0,10)`
+> (`"Wed Oct 11"`) contra a data pedida em 8 pontos — em PostgreSQL o filtro
+> `?de=&ate=` **descartava vendas reais**. Corrigido com `diaISO()`;
+> `comissoes.ts:261` tem o mesmo defeito e ficou aberto para o ERP-06 (**P1-13**).
+> Provas: `server/test/pg/bi-faturamento-e2e.test.ts` (banco novo: BI 20000 ×
+> relatório 20000; ABC classe A; canal externo intacto) e
+> `server/test/negocios-projecao-erp.test.ts` (paridade em memória 3/3).
+
 > **Atualização ERP-03 (2026-10-11) — P0-04 FECHADO e P0-05 descoberto/fechado.**
 > O gate passou a medir o sistema que roda em produção: `npm run smoke:pg` cria um
 > **banco novo**, sobe a API real nele (migrate + admin automáticos, **zero SQL
@@ -320,6 +337,8 @@ JSON.parse(String(payload)) → SyntaxError: "[object Object]" is not valid JSON
 
 ### P0-03 — O BI (Meu Negócio) não lê as vendas do ERP
 
+> **✅ FECHADO em ERP-04 (2026-10-11).** Decisão no [ADR-001](ADR-001-FONTE-UNICA-FATURAMENTO.md) (projeção `vendas → sales`, namespace `erp:`); prova em `server/test/pg/bi-faturamento-e2e.test.ts` — BI e relatório de faturamento no mesmo período, tolerância zero. A "incoerência adicional" abaixo (autorização em `vendas`, dados em `sales`) deixou de existir como divergência: os dados agora são derivados de `vendas`.
+
 * **Arquivo:** `server/src/negocios.ts` — a CTE `vendas_escopo` (linhas 494, 502, 558) é construída **exclusivamente sobre `sales`**, e a materialização faz `UPDATE sales s` (linha 575). Não existe view `vendas_escopo` (`information_schema.views` → **0 views**) nem vínculo com `vendas`.
 * **Evidência executada** — venda real criada e faturada pela API do ERP, contra PostgreSQL:
 
@@ -413,7 +432,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 
 | # | Duplicidade | Onde | Classe | Comentário |
 |---|---|---|---|---|
-| 1 | **Dois motores de receita/CMV** | `negocios.ts` (sobre `sales`/`sale_items`) × `financeiro.ts` (`rentabilidade` e `DRE`, sobre `itens_venda`/`lancamentos_financeiros`) | 🔴 | Mesmo fato econômico, duas contabilidades, duas respostas possíveis para "faturamento" e "margem". É a causa direta de P0-03 e o risco de divergência BI × ERP que o §6 mandou procurar |
+| 1 | **Dois motores de receita/CMV** | `negocios.ts` (sobre `sales`/`sale_items`) × `financeiro.ts` (`rentabilidade` e `DRE`, sobre `itens_venda`/`lancamentos_financeiros`) | 🟠 **reduzido em ERP-04** | A causa direta (P0-03) foi fechada: o BI agora deriva de `vendas`, então BI e ERP partem do **mesmo** fato (igualdade BI × relatório de faturamento provada). O DRE do `financeiro.ts` continua com motor próprio — **igualdade BI × DRE não foi provada** neste ciclo (candidata a teste no ERP-13) |
 | 2 | **Dois caminhos de escrita de saldo** | `adjustStock` (INSERT…ON CONFLICT) × `tryAdjustStock` (INSERT…DO NOTHING + UPDATE condicional), ambos em `pgstore.ts:389` e `441` | 🟠 | Duplicação **intencional e documentada** (`store.ts:170-176` explica a janela de corrida). O problema não é a duplicação: é o único ponto (`producao.ts:557`) que escolhe o caminho errado. Fechá-la é o caminho natural para P0-01 |
 | 3 | **Três implementações do conceito "custo do produto"** | `custoRecebimento.ts` (média ponderada do insumo no recebimento), `producao.ts:336` (`calcularCustoReal` da OP), `negocios.ts` (CMV por ficha técnica com fallback `custo_calculado` → `produtos.custo`), `detail.ts:91` (margem real da ficha) | 🟠 | Cada um responde a uma pergunta diferente, mas os três alimentam "custo" e "margem". Sem uma definição canônica escrita, os números vão divergir |
 | 4 | **Duas implementações do `Store`** | `pgstore.ts` × `memdb.ts` | 🟡 | Decisão de arquitetura declarada (modo demonstração). Risco conhecido e já registrado como `GAP-ESTQ-MEMSTORE-TX`. O custo real dele apareceu nesta auditoria: **o modo demonstração não reproduz o banco**, e é nele que o smoke roda |
@@ -432,7 +451,7 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 |---|---|---|---|---|
 | **P0-01** | Reabrir/estornar OP devolve 500 em PostgreSQL (23514; `adjustStock` com delta negativo) · **FECHADO em ERP-02 (2026-10-11)** | Produção / Estoque | §6 P0-01 · evidência do ciclo na §5 do roadmap | — |
 | **P0-02** | Webhook de pagamento não confirma cobrança em PostgreSQL (jsonb lido como objeto) e vaza constraint no endpoint público · **FECHADO em ERP-01 (2026-10-11)** | Financeiro / Segurança | §6 P0-02 · evidência do ciclo na §5 do roadmap | — |
-| **P0-03** | BI não vê as vendas do ERP (lê `sales`, escreve nada em `vendas`) | BI / Vendas / Arquitetura | §6 P0-03, venda faturada → KPIs zero | Decisão de arquitetura (fonte única de faturamento) |
+| **P0-03** | BI não vê as vendas do ERP (lê `sales`, escreve nada em `vendas`) · **FECHADO em ERP-04 (2026-10-11)** | BI / Vendas / Arquitetura | §6 P0-03 · [ADR-001](ADR-001-FONTE-UNICA-FATURAMENTO.md) · `server/test/pg/bi-faturamento-e2e.test.ts` | — |
 | **P0-04** | Suíte E2E não executa contra PostgreSQL; sem `local` padrão a instalação nova não opera estoque · **FECHADO em ERP-03 (2026-10-11)** | Testes / Estoque / Onboarding | §6 P0-04 · evidência do ciclo na §5 do roadmap | — |
 | **P0-05** | `db/schema.sql` recriava a cada boot o índice **global** `uq_produtos_codigo_barras`: com o mesmo código de barras em duas empresas (legítimo desde a 0018) **o boot falhava** (`could not create unique index`) e a API não subia · **descoberto e FECHADO em ERP-03 (2026-10-11)** | Banco / Boot / Multiempresa | §5 ERP-03 (prova antes/depois do `migrate`) | — |
 
@@ -450,12 +469,14 @@ Classificação: 🔴 perigosa · 🟠 funcional · 🟡 aceitável · 🔵 refa
 | **P1-04** | CRUD de Empresas sem tela (multiempresa administrável só por API) | ✅ | ✅ | ✅ | ❌ | ❌ | parcial | `multiempresa*.test.ts` |
 | **P1-05** | Comissões sem tela e sem menu (apuração existe e está testada) | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ (`gerente`) | ✅ `financeiro-p2.test.ts` |
 | **P1-06** | Reserva de estoque / disponível × comprometido | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ |
-| **P1-07** | Fonte única do faturamento (correção estrutural de P0-03) | parcial | parcial | parcial | — | — | — | ❌ |
+| **P1-07** | Fonte única do faturamento (correção estrutural de P0-03) · **FECHADO em ERP-04** | ✅ | ✅ | ✅ | — | — | — | ✅ BI = relatório no mesmo período (`bi-faturamento-e2e`) |
 | **P1-08** | Fiscal sem homologação real (adapters existem, nada emitido) | ✅ | ✅ | ✅ | parcial | parcial | ✅ | só contrato |
 | **P1-09** | Cadeia de devolução sem prova ponta a ponta em PostgreSQL | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | **sem E2E PG** |
 | **P1-10** | `E2: OP cancelada é terminal` responde 500 (mensagem errada) — **fechado em ERP-02 como cascata** | ✅ | — | ✅ | — | — | — | smoke + `e02-ordem-reabrir-postgresql.test.ts` |
 | **P1-12** | `fiscal.ts` grava o payload do evento fiscal com `JSON.stringify(payload).slice(0, 20000)`: acima de 20.000 caracteres o JSON é **truncado no meio** e o `jsonb` recusa com 22P02 — a emissão falha com um 400 enganoso ("valor inválido em um dos campos"). Descoberto pelo contrato tipo × coluna do ERP-03 (o campo era `textarea` sobre `jsonb`; agora o tipo está alinhado, o corte continua) | ✅ | ✅ | ✅ | — | — | ✅ | contrato de tipo (ERP-03) | endereçado em **ERP-05** (Fiscal) |
 | **P1-11** | Assinatura de webhook é global por provedor (sem empresa): segredo de A recusa notificação de B; evento pode ser gravado com `empresa_id` de quem assinou | ✅ | ✅ | ✅ | — | — | ✅ | **todo** em `server/test/pg/e01-gateway-webhook-postgresql.test.ts` (descoberto no ERP-01) |
+| **P1-13** | Filtro de período comparava `String(Date).slice(0, 10)` com a data pedida: em PostgreSQL (TIMESTAMPTZ → `Date`) o valor vira `"Wed Oct 11"` e `?de=&ate=` **descarta linhas reais**. Achado pelo critério de igualdade do ERP-04; **8 pontos de `relatorios.ts` corrigidos** com `diaISO()` (mesma normalização do `dataISO` de `financeiro.ts:41-52`). **Aberto:** `comissoes.ts:261` (mesmo defeito, no relatório de comissões) | ✅ | ✅ | ✅ | — | — | — | ✅ `bi-faturamento-e2e` (relatório de faturamento) · aberto em comissões | ERP-06 |
+| **P1-14** | `sales.usuario_id` é `NOT NULL` (FK para `usuarios`): a projeção do ERP precisa **eleger um responsável por empresa** (primeiro usuário ativo). Venda de empresa sem usuário ativo **não é projetada** (é logado; nenhuma linha parcial) | ✅ | ✅ | ✅ | — | — | — | ✅ `bi-faturamento-e2e` + `negocios-projecao-erp` | documentado no ADR-001 §4/§5 |
 
 ---
 
@@ -496,7 +517,7 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 
 | Módulo | Rota FE | Recurso API | B | API | FE | M | RBAC | T | PG | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Meu Negócio | `/` | `/api/negocios/*` | ✅ | ✅ | ✅ | ✅ | ✅ (`vendas:read`) | ✅ | ✅ | 🔴 **P0-03** (fonte errada) |
+| Meu Negócio | `/` | `/api/negocios/*` | ✅ | ✅ | ✅ | ✅ | ✅ (`vendas:read`) | ✅ | ✅ | 🟢 **ERP-04** (projeção `vendas → sales`) |
 | Produtos | `/produtos` | `produtos` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟢 |
 | Categorias | `/categorias` | `categorias` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | 🟢 |
 | Cores | `/cores` | `cores` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | 🟢 |
@@ -569,7 +590,7 @@ Legenda: **B** banco · **API** existe · **FE** tela própria · **M** entrada 
 
 | Fluxo exigido (§23) | Teste em memória | Teste PostgreSQL | Smoke HTTP | Veredito |
 |---|---|---|---|---|
-| **VENDA** Produto→Cliente→Venda→Pagamento→Estoque→Financeiro→Fiscal→Expedição→BI | parcial (`pg-p1`, `propostas`, `pdv`) | parcial (`pg/e423` cobre até expedição **+ financeiro**) | parcial | 🔴 **GAP** — provado até expedição+financeiro; **Fiscal não emitido** e **BI não recebe nada** (P0-03). Nunca executado como uma cadeia única |
+| **VENDA** Produto→Cliente→Venda→Pagamento→Estoque→Financeiro→Fiscal→Expedição→BI | parcial (`pg-p1`, `propostas`, `pdv`) | parcial (`pg/e423` até expedição+financeiro; **`bi-faturamento-e2e` fecha venda→BI**) | parcial | 🟠 **GAP parcial** — **o BI agora recebe** (ERP-04 ✅: venda faturada → KPIs = relatório, ABC); resta **Fiscal não emitido** e a cadeia nunca executada como uma única prova |
 | **COMPRA** Fornecedor→Compra→XML→Recebimento→Estoque→Custo→AP→Financeiro | ✅ `compras.test.ts`, `custo-recebimento.test.ts` | ✅ `pg-compras-e32`, `pg-custo-recebimento`, `pg-cotacoes-compra` | ✅ E3.1 e E3.2 **PASS** (inclusive em PG, após semear `local`) | 🟢 **o fluxo mais bem provado do ERP** |
 | **PRODUÇÃO** Produto→Ficha→OP→Consumo→Perda→Produção→Estoque→Custo | ✅ `producao-e2.test.ts` (inclui `reabrir`) | ✅ `pg-producao-e2.test.ts` (CHECK, FK, concorrência de conclusão) | ✅ E2 **PASS** até `concluir` | 🟠 **GAP parcial** — a cadeia principal passa; **`reabrir`/estorno não tem teste PG nenhum** (P0-01) |
 | **DEVOLUÇÃO** Venda→Devolução parcial→Estoque→Financeiro→Estorno | ✅ `devolucoes` (front + `DevolucoesPage.test.tsx`) | ⚠️ sem arquivo dedicado | ⚠️ sem bloco próprio | 🔴 **GAP** — fluxo em rota existe, **sem prova ponta a ponta em PostgreSQL** (P1-09) |

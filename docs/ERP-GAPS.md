@@ -35,6 +35,20 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
 > aguarda decisão humana.
 
+> **Atualização ERP-04 (2026-10-11) — P0-03/P1-07 FECHADOS (BI = ERP).**
+> Decisão registrada em [ADR-001](ADR-001-FONTE-UNICA-FATURAMENTO.md): `sales`
+> passa a ser modelo de leitura derivado, alimentado por uma projeção
+> idempotente `vendas → sales` no namespace `erp:` — decisão (B), que substitui
+> a recomendação preliminar (A) com justificativa (ADR §2). Sem migration e sem
+> tocar a ingestão de canais externos. O critério de igualdade
+> (/negocios/resumo × /relatorios/faturamento, tolerância zero) revelou e fez
+> corrigir **8 pontos** de `relatorios.ts` que comparavam `String(Date).slice(0,10)`
+> contra a data pedida — em PostgreSQL o filtro `?de=&ate=` **descartava linhas
+> reais**; `comissoes.ts:261` tem o mesmo defeito e ficou para o ERP-06 (P1-13).
+> Provas: `server/test/pg/bi-faturamento-e2e.test.ts` (banco novo; BI 20000 ×
+> relatório 20000; ABC classe A; canal externo intacto) e
+> `server/test/negocios-projecao-erp.test.ts` (paridade em memória 3/3).
+
 > **Atualização ERP-03 (2026-10-11) — P0-04 FECHADO; P0-05 descoberto e fechado.**
 > O gate virou executável: `npm run smoke:pg` (`scripts/smoke-pg.mjs`) cria um
 > **banco novo**, sobe a API real nele e roda o smoke E2E — **126/126 sem um único

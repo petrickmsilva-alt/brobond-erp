@@ -14,7 +14,8 @@
 | **ERP-01** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-01, abaixo |
 | **ERP-02** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-02, abaixo |
 | **ERP-03** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-03, abaixo |
-| **ERP-04 … ERP-13** | ⏳ não iniciados | — |
+| **ERP-04** | ✅ **IMPLEMENTADO** (2026-10-11) | §5 ERP-04 + [ADR-001](ADR-001-FONTE-UNICA-FATURAMENTO.md) |
+| **ERP-05 … ERP-13** | ⏳ não iniciados | — |
 
 **Regra de execução:** um ciclo só muda de ⏳ para ✅ com a bateria completa verde (typecheck · lint · build · `server test` · `client test` · `test:pg` · `smoke`) **e** o teste central falhando antes da correção e passando depois, em PostgreSQL real.
 
@@ -35,17 +36,17 @@
 
 | # | Cadeia | Status hoje | Ciclos que fecham |
 |---|---|---|---|
-| 1 | Cadastro → Estoque → Venda → Financeiro → **BI** | 🔴 defeito (BI desconectado) | ERP-04 |
+| 1 | Cadastro → Estoque → Venda → Financeiro → **BI** | 🟢 **pronta (ERP-04 ✅)** | — |
 | 2 | Compra → Estoque → Custo → AP → Financeiro | 🟢 **pronta** | — |
-| 3 | Produção → Estoque → Custo (com reabertura/estorno) | 🔴 defeito (500 no reabrir) | ERP-02 |
+| 3 | Produção → Estoque → Custo (com reabertura/estorno) | 🟢 **pronta (ERP-02 ✅)** | — |
 | 4 | Venda → Expedição → Estoque | 🟢 **pronta** | — |
 | 5 | Venda → Devolução → Estoque → Financeiro | 🟠 sem prova PG | ERP-08 |
-| 6 | Pagamento → Recebimento → Conciliação | 🔴 defeito (webhook) | ERP-01 |
+| 6 | Pagamento → Recebimento → Conciliação | 🟢 **pronta (ERP-01 ✅)** | — |
 | 7 | Venda → Fiscal (documento emitido) | 🟠 arquitetura sem homologação | ERP-05 → ERP-12 |
-| 8 | Multiempresa (A/B sem vazamento, 12 domínios) | 🟡 forte, com lacuna de gestão | ERP-07 (+ teste em ERP-03) |
+| 8 | Multiempresa (A/B sem vazamento, 12 domínios) | 🟡 **A/B provado em ERP-03 ✅**; falta a gestão | ERP-07 |
 | 9 | RBAC sem dependência do front | 🟡 3 derivações | ERP-10 |
 
-**Placar: 2 de 9 fechadas · 3 com defeito · 4 parcialmente provadas.**
+**Placar: 5 de 9 fechadas (1, 2, 3, 4 e 6) · 0 com defeito conhecido aberto · 4 parciais (5 → ERP-08, 7 → ERP-05/12, 8 → ERP-07, 9 → ERP-10).**
 
 ---
 
@@ -330,6 +331,76 @@ DEPOIS ok 1 — # pass 1 / # fail 0
   3. Curva ABC classifica os produtos vendidos pelo ERP.
   4. Venda de canal externo (Commerce) continua entrando exatamente como hoje — **sem regressão**, apesar do congelamento.
 
+#### ✅ Execução (2026-10-11) — CLOSED
+
+**Decisão registrada antes do código:** [`docs/ADR-001-FONTE-UNICA-FATURAMENTO.md`](ADR-001-FONTE-UNICA-FATURAMENTO.md)
+— opção **(B) projeção derivada** (§3 do ADR), que **substitui a recomendação
+preliminar (A)** com quatro evidências que a investigação do ciclo levantou: a
+ingestão externa escreve `sales` **neste** repositório (`modules/connectors/`), a
+margem é materializada **em** `sales` (a união exigiria duas versões da mesma
+matemática de CMV/NCM), o painel dos conectores também lê `sales` e o
+`POST /api/negocios/vendas` **já** gravava em `sales` — a tabela já era o modelo
+de leitura; faltava o fluxo operacional alimentá-la.
+
+**O que foi implementado (sem migration, sem tocar a ingestão):**
+
+1. **`negocios.ts` — projeção `vendas → sales`** (`projetarVendasErp`): linhas no
+   namespace `erp:venda:<id>` / `erp:item:<id>`; faturada/entregue → `PAID`;
+   cancelada **que já foi projetada** → `CANCELLED`; aberta/cancelada sem venda →
+   nada (e projeção órfã é removida); margem materializada **na mesma
+   transação** da projeção (o BI nunca vê venda `PAID` sem margem); tabela de
+   canal explícita (`pdv`/`balcao` → `LOJA_FISICA`; o resto → `BROBOND`, sem
+   inventar qual marketplace — ADR-001 §4). Modo demonstração projeta do store
+   de memória com a mesma regra.
+2. **Gancho de ciclo de vida da venda** (`server/src/eventosVenda.ts`, módulo
+   folha para não criar ciclo `negocios → services → itens → negocios`):
+   `faturarVenda` e `estornarVenda` (`itens.ts`) notificam; o motor agenda a
+   projeção com debounce de 3 s. Terceira via: `cicloDoMotor` (boot + intervalo +
+   cron) e `POST /api/negocios/margens/recalcular` (que agora projeta antes de
+   recalcular).
+3. **Achado do próprio critério de igualdade — corrigido:** `relatorios.ts`
+   comparava `String(Date).slice(0, 10)` (`"Wed Oct 11"`) contra a data pedida em
+   **8 pontos** (faturamento, vendas, ABC, comissões, movimentações, produção,
+   razão). Em PostgreSQL, TIMESTAMPTZ chega como `Date`: com `?de=&ate=` o filtro
+   **descartava linhas reais** — o teste de igualdade do ciclo reprovou por isso
+   (`BI 20000` × `relatório 0`). Agora usa `diaISO()` (mesma normalização que o
+   `dataISO` do financeiro, `financeiro.ts:41-52`). `comissoes.ts:261` tem o
+   mesmo defeito **e ficou aberto de propósito** — é território do ERP-06
+   (registrado na matriz).
+
+**Prova (banco NOVO + servidor real): `server/test/pg/bi-faturamento-e2e.test.ts`**
+— venda de 2 × R$ 100,00 faturada pelo fluxo do ERP (cadastro → estoque →
+pedido → item → `PUT status=faturada`) e, sem nenhuma chamada manual ao motor:
+
+```
+BI  kpis: faturamentoCents 20000 · pedidos 1 · ticketMedio 20000
+         cmvCents 8000 (2 × custo 40) · impostosCents 2000 (alíquota padrão 10%)
+         lucroBrutoCents 10000 · semMargemCalculada 0
+IGUALDADE  /negocios/resumo (20000) == /relatorios/faturamento (R$ 200,00)  [tolerância zero]
+ABC  produto vendido pelo ERP na curva, classe A, 20000
+PROJEÇÃO  sales id=erp:venda:<id> status=PAID channel=BROBOND empresa=1
+NÃO-REGRESSÃO  venda de canal externo (NUVEMSHOP) inserida como a ingestão insere:
+              11 campos byte a byte iguais depois da sincronização;
+              BI soma as duas origens (25000, 2 pedidos); zero linhas duplicadas
+```
+
+**Paridade do modo demonstração: `server/test/negocios-projecao-erp.test.ts`
+(3/3)** — mapeamento explícito, faturada → `PAID` com margem em centavos,
+cancelada → `CANCELLED`, aberta não projetada, idempotência e o **gancho real**
+(`initNegociosEngine` + debounce) projetando sem chamada manual.
+
+**Critérios de aceite:**
+1. ✅ Venda faturada pelo ERP aparece no BI após o ciclo documentado (gancho com
+   debounce; teste espera o ciclo, não força).
+2. ✅ Faturamento do BI == faturamento do relatório do ERP, mesmo período/empresa,
+   tolerância zero em centavos (o DRE usa a mesma base de vendas do relatório).
+3. ✅ Curva ABC classifica o produto vendido pelo ERP (classe A, faturamento exato).
+4. ✅ Venda de canal externo continua entrando exatamente como hoje — **sem
+   regressão**: campos conferidos um a um e soma preservada no BI.
+
+- **Regressão:** `server test` **677 pass / 0 fail / 63 skipped** (740) · `client test` **226** · `typecheck` 0 · lint **0 erros / 401 warnings** · build OK · smoke demonstração **126/126** · `smoke:pg` (banco novo) **126/126**.
+- **Achados registrados neste ciclo:** **P1-13** (filtro de período por `String(Date).slice` — `comissoes.ts:261` aberto; 8 pontos de `relatorios.ts` corrigidos aqui) · **P1-14** (`sales.usuario_id NOT NULL` obriga a projeção a eleger um responsável por empresa — documentado no ADR; venda de empresa sem usuário ativo não é projetada).
+
 ---
 
 ### ERP-05 — Fiscal operacional (sem homologação)
@@ -500,16 +571,16 @@ MENU ERP FINAL PROPOSTO (ERP-05, ERP-06, ERP-07 e ERP-11 implementam as entradas
 |---|---|---|
 | P0-01 estorno/reabrir OP → 500 em PostgreSQL | 🔴 P0 | **ERP-02 ✅** |
 | P0-02 webhook de pagamento descartado + vazamento de constraint | 🔴 P0 | **ERP-01 ✅** |
-| P0-03 BI lê `sales`, não `vendas` do ERP | 🔴 P0 | ERP-04 |
+| P0-03 BI lê `sales`, não `vendas` do ERP | 🔴 P0 | **ERP-04 ✅ (ADR-001, opção B)** |
 | P0-04 E2E não roda em PostgreSQL; instalação nova sem local padrão | 🔴 P0 | **ERP-03 ✅** |
 | P0-05 índice único GLOBAL legado de `codigo_barras` derruba o boot | 🔴 P0 | **descoberto e fechado em ERP-03 ✅** |
 | P1-01 deriva RBAC (3 recursos) | 🟠 P1 | ERP-10 |
 | P1-02 NCM sem tela | 🟠 P1 | ERP-05 |
 | P1-03 inutilização sem tela | 🟠 P1 | ERP-05 |
 | P1-04 CRUD de Empresas sem tela | 🟠 P1 | ERP-07 |
-| P1-05 comissões sem tela/menu | 🟠 P1 | ERP-06 |
+| P1-05 comissões sem tela/menu (e filtro de período quebrado: `comissoes.ts:261`) | 🟠 P1 | ERP-06 |
 | P1-06 reserva de estoque ausente | 🟠 P1 | ERP-09 |
-| P1-07 fonte única do faturamento | 🟠 P1 | ERP-04 |
+| P1-07 fonte única do faturamento | 🟠 P1 | **ERP-04 ✅ (BI = relatório = DRE no mesmo período)** |
 | P1-08 fiscal sem homologação | 🟠 P1 | ERP-12 |
 | P1-09 devolução sem E2E PostgreSQL | 🟠 P1 | ERP-08 |
 | P1-10 `OP cancelada é terminal` responde 500 (cascata de P0-01) | 🟠 P1 | **ERP-02 ✅ (fechado como cascata)** |
