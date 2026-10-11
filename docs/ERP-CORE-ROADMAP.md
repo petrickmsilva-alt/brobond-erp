@@ -299,7 +299,8 @@ DEPOIS ok 1 — # pass 1 / # fail 0
 2. ✅ Job `testes-postgres` do CI ganhou a etapa `Smoke E2E contra PostgreSQL novo (gate ERP-03)` — failure com annotation de diagnóstico.
 3. ✅ Instalação nova recebe compra, fatura venda e movimenta estoque **sem um único SQL manual** (é o que o smoke faz, dentro dos 126 checks, e o que o teste de onboarding prova ponta a ponta).
 4. ✅ Contrato de tipo roda e passa nos 88 recursos e **falha** sob mutação (4 casos).
-- **Regressão:** `server test` **674 pass / 0 fail / 63 skipped** (737) · `client test` **226** · `test:pg` **121 pass / 0 fail / 1 todo** (123) · typecheck **0** · lint **0 erros / 401 warnings** · build OK.
+- **Regressão:** `server test` **674 pass / 0 fail / 63 skipped** (737) · `client test` **226** · `test:pg` **122 pass / 0 fail / 1 todo** (123) · typecheck **0** · lint **0 erros / 401 warnings** · build OK.
+- **CI (PR [#49](https://github.com/petrickmsilva-alt/brobond-erp/pull/49)):** run [38145219833](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38145219833) **verde** — `verificar` 1m25s e `testes-postgres` **12m24s** (era 10m31s: os ~2 min a mais são a etapa nova `Smoke E2E contra PostgreSQL novo`, concluída com **success**). O gate deixou de ser um script manual e passou a bloquear o merge sozinho.
 - **Achados abertos registrados neste ciclo:** **P1-12** (payload fiscal truncado em 20.000 caracteres → JSON inválido; ERP-05) · **P2-07** (`/api/health` responde `db=postgres` antes das migrações terminarem — o gate precisou esperar o boot real) · **P3-08** (`audit()` sem `tx` dentro de transação abre segunda conexão → 40001 em SERIALIZABLE).
 - **P2-03 / P2-06 declarados** (fechando a promessa da matriz): memória/modo demonstração é ambiente de demonstração, **não** produção, e a suíte de concorrência continua exclusiva do `PgStore` — agora escrito no cabeçalho de `scripts/smoke-pg.mjs` além deste documento.
 
