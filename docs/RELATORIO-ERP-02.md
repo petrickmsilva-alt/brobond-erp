@@ -1,109 +1,118 @@
-# RELATÓRIO — ERP-02: reabertura/estorno de OP em PostgreSQL
+# RELATÓRIO — ERP-02.1: fechamento do GAP de leituras completas na Produção
 
-**Rodada:** 2026-10-12
+**Data:** 2026-10-12
 **Repositório:** `petrickmsilva-alt/brobond-erp`
 **Branch:** `arena/0c720c09-brobond-erp`
 **Base:** `b907796f26cc800f06db4ce90046fed7ab390cd4` (merge do PR #54)
-**Escopo:** exclusivamente o fluxo de ordens de produção no servidor, suas provas PostgreSQL e os fixtures de memória necessários para a trilha de eventos estrita. Sem alterações em frontend, menu/UX, Fiscal, Commerce/BI, integrações, gateways, schema ou migrations. ERP-03 e outros ciclos não foram iniciados.
+**Commit da correção ERP-02.1:** `20e14c8d913320da90a4104f98ba8a3a85d0a332`
+**PR:** [#55](https://github.com/petrickmsilva-alt/brobond-erp/pull/55) — aberto, sem merge
+**PostgreSQL oficial para esta evidência:** **16.14**. O servidor local retornou `SHOW server_version = 16.14`; `.github/workflows/ci.yml` fixa a imagem `postgres:16.14` e valida a versão reportada pelo servidor.
 
-> **Leitura do veredito:** a correção histórica do P0-01 já estava na base desta rodada. O P0-01 original **não foi reproduzido** nesta execução e não é apresentado como defeito corrigido por este patch. A investigação seguiu pelas invariantes sem cobertura do mesmo fluxo; os problemas G1–G5 descritos abaixo foram reproduzidos e tratados. Este relatório não certifica o ERP inteiro nem substitui auditoria independente.
+**Escopo:** leituras completas do caminho de custo/insumos e do ciclo de produção/estorno, regressões PostgreSQL e documentação; fixação da versão do PostgreSQL usada como evidência. Sem alteração de frontend/UX/menu, Commerce/Marketplace/BI, Fiscal, Financeiro, RBAC, reservas, devoluções, schema ou migrations. Nenhuma implementação funcional de ERP-03 foi iniciada.
 
-## 1. STATUS DESTA RODADA
+> **Separação obrigatória:** P0-01 é histórico e já estava fechado na base; G1–G5 são as proteções do ERP-02 preservadas; **GAP-E02-02** é a auditoria específica da cardinalidade das movimentações acima dos limites antigos. O defeito recém-reproduzido nas duas leituras da ficha técnica também está discriminado, sem confundir sua correção com P0-01 ou com a prova de movimentações.
 
-| Critério | Resultado | Evidência |
+## Veredito e estado dos PRs
+
+**ERP-02.1 FINAL GATE: APPROVED** — a leitura truncada foi reproduzida antes da correção; a menor correção reutiliza `listarTodos`; as regressões em PostgreSQL real passam; os dois jobs de CI do commit de correção passaram. A evidência em PostgreSQL foi executada em banco isolado, na versão oficial 16.14. A atualização que fixa a mesma versão no CI é revalidada pelos checks atuais do PR antes do fechamento desta rodada.
+
+**ERP-03 READINESS: READY TO START** — somente diagnóstico e plano em [`ERP-03-POSTGRES-GATE-PLAN.md`](ERP-03-POSTGRES-GATE-PLAN.md). Isto **não** autoriza implementação nem altera o estado histórico do ERP-03; qualquer implementação depende de comando futuro explícito.
+
+- **PR #54:** merged; é a base `b907796f…` e contém a correção histórica do P0-01.
+- **PR #55:** aberto na branch indicada acima. A atualização ERP-02.1 reaproveita o PR já aberto desta branch; não foi criado PR paralelo e não houve merge.
+- **CI da correção `20e14c8`:** push run [38285230730](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38285230730) e PR run [38285235716](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38285235716) — ambos `verificar` e `testes-postgres` **success**. Naquela execução a imagem do workflow ainda era `postgres:16`; a configuração subsequente fixa `16.14` e faz asserção de versão para as evidências finais.
+- Os checks que cobrem a versão fixada são a validação final exigida no PR #55; não se usa estado de CI anterior como substituto desses checks.
+
+## 1. P0-01 histórico — separado desta rodada
+
+P0-01 foi a falha histórica de estorno causada pelo uso de `INSERT ... ON CONFLICT DO UPDATE` com delta negativo contra a constraint de saldo não negativo: o PostgreSQL avaliava o tuple proposto antes de resolver o conflito e retornava SQLSTATE `23514`. A correção com atualização condicional/`tryAdjustStock` e tradução do erro de negócio já está na base do PR #54 (`b907796f…`).
+
+ERP-02.1 **não** reapresenta P0-01 como defeito novo nem reivindica tê-lo corrigido. Os testes atuais preservam a prova de saldo condicional, concorrência e ausência de saldos negativos; a reprodução original pertence ao registro histórico do ciclo que a fechou.
+
+## 2. G1–G5 — proteções ERP-02 mantidas
+
+| Gate | Invariante protegida | Evidência/regressão mantida |
 |---|---|---|
-| Pré-voo e branch alvo | ✅ | `arena/0c720c09-brobond-erp`, base `b907796f…`; somente o repositório alvo |
-| Reprodução do P0-01 original nesta base | **Não reproduzido** | os dois testes PostgreSQL focados preexistentes passaram 10/10 antes das alterações; o fluxo já usava `tryAdjustStock` e a tradução de `23514` |
-| Falhas correlatas reproduzidas antes da correção | ✅ | G1–G4; G5 também falha com mutação temporária de leitura de uma página (§4) |
-| Correção mínima, sem mudança de regra/cálculo | ✅ | `server/src/producao.ts`; detalhes em §5 |
-| PostgreSQL real focado | ✅ | 16/16 testes passaram; inclui A, B1–B4, C–F e G1–G5 |
-| Bateria PostgreSQL completa | ✅ | banco novo e descartável: 150 testes, 149 pass, 0 fail, 1 todo, 0 skipped |
-| `npm test` (servidor + cliente) | ✅ | servidor 695 pass / 0 fail / 65 skipped; cliente 290/290 |
-| Typecheck / build / lint | ✅ | typecheck completo e build passaram; lint 0 erros / 415 warnings |
-| Smoke em memória / PostgreSQL | ✅ | 126/126 em cada modo |
-| `audit:menu` | ✅ | 0 erros / 4 avisos classificados, sem alteração de menu/UI |
-| `prisma validate` | ⚠️ bloqueado | tentativa feita; download do `schema-engine` falhou por conexão de rede. Nenhum schema foi alterado |
-| Merge / ERP-03 / outro ciclo | Não realizado | permanecem fora do escopo e da decisão desta rodada |
+| **G1** | A falha ao persistir o evento de conclusão aborta a conclusão inteira. | Trigger PostgreSQL injeta erro; snapshot confirma rollback de OP, saldos, movimentos, eventos e auditoria. |
+| **G2** | A falha ao persistir o evento de reabertura aborta o estorno inteiro. | Trigger PostgreSQL injeta erro; snapshot confirma que OP, custo, perdas, apontamentos, saldos, movimentos, eventos e auditoria não mudam parcialmente. |
+| **G3** | Apontamentos e eventos não são truncados no histórico nem no endpoint. | 1001 apontamentos; zero ativos depois do estorno; evento de reabertura retém os 1001 resumos; endpoints retornam o conjunto completo acima de 500 linhas. |
+| **G4** | O livro de consumo de insumos atravessa o limite antigo de 5000 linhas. | Reforçado pelo teste ERP-02.1/GAP-E02-02 abaixo: 5000 linhas históricas mais lançamentos operacionais, leitura e conciliação do conjunto inteiro. |
+| **G5** | O estorno processa todo o histórico de produto acima de 1000 entradas. | 1001 entradas vinculadas à OP, quantidade total 1010; 1001 saídas compensatórias; todas as entradas marcadas como estornadas; saldo final de produto zero e custo/perdas preservados no evento. |
 
-## 2. PRÉ-VOO E REPRODUÇÃO DO P0-01
+Além desses gates, seguem cobertos: retry/idempotência, concorrência com resultados `[200, 409]`, rollback de falha em uma linha de OP por grade, isolamento A/B por empresa e ausência de saldo negativo. O bloco G5 continua imediatamente depois de B3 e antes de B4/seção C, conforme a organização solicitada.
 
-- O checkout estava na branch exigida e partia do commit `b907796f26cc800f06db4ce90046fed7ab390cd4`, que já incorpora o ciclo anterior do PR #54.
-- O PostgreSQL usado para a prova focada é PostgreSQL **16.14 real**, em `127.0.0.1:55432`, base `brobond_teste`. A bateria `test:pg` completa foi executada em um banco novo, `brobond_e02_cb7dfb455067`, removido ao final.
-- Antes de editar código, os dois arquivos focados de ERP-02 passaram **10/10** em PostgreSQL. Não houve resposta 500 nem reprodução do P0-01 nesta base.
-- A inspeção do código confirmou que a base já fazia a saída de estoque com `tryAdjustStock` (predicado de saldo dentro do `UPDATE`) e já traduzia `23514` para erro de negócio. Portanto, não se atribui a este patch a correção histórica do P0, nem se inventa uma falha não observada.
+## 3. GAP-E02-02 — auditoria do caminho transacional acima de 5000 movimentos
 
-## 3. INVARIANTES CORRELATAS INVESTIGADAS
+### Reprodução, investigação e prova de completude
 
-| Caso | Reprodução anterior à correção | Causa observada | Resultado depois |
-|---|---|---|---|
-| **G1 — evento de conclusão** | falha injetada no `INSERT` do evento não abortava a conclusão | `registrarEventoOrdem` capturava e descartava qualquer exceção | resposta de conflito; OP, estoque, insumos, movimentos, eventos e auditoria permanecem no snapshot anterior |
-| **G2 — evento de reabertura** | falha injetada no evento não abortava integralmente o estorno | mesmo `catch` silencioso da trilha | resposta de conflito; nenhum efeito de estorno ou apontamento é confirmado |
-| **G3 — apontamentos/histórico** | estornar uma OP com 1001 apontamentos deixava 1 ativo; as listas HTTP também tinham limites de página | leitura interna limitada a uma página de 1000; endpoints limitados a 500 | todos os 1001 são processados; a trilha preserva o resumo; os endpoints retornam todos os apontamentos/eventos acima de 500 |
-| **G4 — livro de insumos** | cenário com 5001 movimentos não considerava o livro completo no consumo/custo | leitura limitada a 5000 movimentos | leitura paginada inclui os 5001; custo e saldo conferidos diretamente no banco |
-| **G5 — entradas de produto** | mutação temporária para uma página falha com `1000 !== 1001` ao estornar | leitura limitada a 1000 entradas de produto | todas as 1001 entradas são marcadas e compensadas; saldo final zero |
+O fluxo auditado foi `estornarOrdem → consumoLiquidoDaOrdem → movimentações/estoque/insumos/custos → apontamentos/eventos`. Antes de alterar qualquer leitura, verificou-se o helper já existente `listarTodos`: ele solicita páginas até alcançar o `total` retornado pelo store e lança erro explícito se receber uma página vazia antes de completar o conjunto. `PgStore` e `MemStore` têm ordenação determinística por `id` como padrão.
 
-A falha de G5 foi demonstrada após a correção permanente já estar no arquivo: substituí temporariamente `listarTodos` por uma leitura só da primeira página, rodei apenas G5 contra PostgreSQL real, observei a asserção falhar (`1000 !== 1001`) e restaurei o arquivo corrigido. A execução normal de G5 passou. Nenhuma mutação de reprodução foi mantida. O teste G5 está imediatamente após o bloco B3 e antes de B4/seção C, no ponto solicitado.
+- `consumoLiquidoDaOrdem` lê todas as movimentações de insumo filtradas por `empresa_id` e `ordem_id`, agrega saídas menos entradas (quantidade e valor) e valida cada insumo uma única vez no escopo da empresa.
+- `estornarOrdem` lê todas as movimentações de produto da OP, ordenadas por `id` decrescente; percorre apenas entradas ainda não estornadas e grava a saída compensatória dentro da transação existente.
+- `apontamentosDaOrdem`, os itens de grade consumidos pela operação e as rotas de eventos/apontamentos usam `listarTodos`; eventos mantêm ordem estável por `id`.
+- Ajustes de estoque não dependem de varrer páginas: usam a escrita transacional/condicional já existente. As validações de produto e insumo são buscas por chave com filtro de empresa.
+- As duas leituras descobertas como não completas eram adjacentes ao caminho de custo: o recálculo da ficha técnica usava apenas uma página de **500** itens e `GET /fichas/:id/insumos` apenas uma página de **200**. Elas não chamavam `listarTodos` e, portanto, ainda podiam truncar custo/listagem mesmo com o ledger de estorno completo.
 
-## 4. MATRIZ FUNCIONAL E CONCILIAÇÃO NO BANCO
+A reprodução pré-correção usou o código de `ea27998c53e709791a99d7ed05bcd09958f06147` (teste novo já presente, implementação ainda com as leituras de página única) em PostgreSQL real 16.14: uma ficha com **502 linhas** retornou **200** pelo endpoint e gravou custo **519.00**, quando o esperado para todas as linhas era **521.00**. Com a correção, o mesmo teste retorna **502** e calcula **521.00**.
 
-Os números a seguir são dados determinísticos dos fixtures de teste, não dados de produção.
+### Correção mínima aplicada
 
-- **A — dois ciclos completos e retry:** `concluir → reabrir → concluir → reabrir`; retry idêntico de `/concluir` não cria estoque, consumo, custo ou evento duplicado; reabertura repetida retorna 409 sem novo efeito. A segunda conclusão reconsome o insumo e calcula o custo pelo consumo líquido.
-- **B1/B2 — estornos concorrentes:** dois pedidos simultâneos resultam em um 200 e um 409, tanto com saldo adicional quanto com saldo exato; saldo nunca fica negativo.
-- **B3 — conclusões concorrentes:** duas conclusões simultâneas geram uma única entrada e uma única baixa de insumo.
-- **B4 — reabertura/conclusão concorrentes:** os resultados observados deixam um estado serial válido (OP aberta com efeitos revertidos ou novo ciclo concluído); não há estado intermediário, custo fantasma ou saldo negativo.
-- **C — atomicidade:** falha na segunda linha de uma OP por grade reverte integralmente a primeira linha e os demais efeitos.
-- **D — multiempresa:** empresa B não lê nem opera a OP de A; estorno de A não toca nos saldos de B.
-- **E — custo/perdas/histórico:** reabertura preserva custo, perdas e apontamentos revertidos na trilha append-only e nas movimentações históricas.
-- **F — mecanismo SQL:** a prova direta em PostgreSQL confirma o comportamento da constraint `CHECK` e do padrão de atualização condicional já usado no estorno.
-- **G1/G2 — falha de evento:** triggers PostgreSQL lançam `23514` no evento de conclusão/reabertura; as comparações antes/depois confirmam rollback também de movimentos, saldos e auditoria.
-- **G3 — 1001 apontamentos e endpoints:** após reabrir, há zero apontamentos ativos; o evento `reaberta` contém os 1001 resumos. Antes do estorno, as rotas HTTP de apontamentos e eventos foram conferidas com mais de 500 linhas e retornaram todos os registros existentes. Saldos conferidos: produto 0 e insumo 5000.
-- **G4 — 5001 movimentos de insumo:** o banco contém as 5000 linhas históricas mais a saída real; saldo do insumo fica 9998 após consumo de 2 e custo real calculado é 20 (2 × 10), sem truncar a última movimentação.
-- **G5 — 1001 entradas de produto:** saldo antes do estorno 1010, respaldado por 1001 entradas ligadas à OP; depois do estorno, saldo 0, 1001 entradas marcadas como estornadas e 1001 saídas compensatórias totalizando 1010. O insumo volta a 1000, a OP retorna a `planejada` com custo aberto 0, e a trilha mantém `pecas=1010` e custo original revertido 200. Nenhum saldo negativo.
+`server/src/producao.ts` agora chama o `listarTodos` existente em `recalcularFichaValores` e `listInsumosFicha`, preservando os filtros `empresa_id`/`ficha_id`, ordenação determinística por `id ASC` e o `tx` já recebido pelo recálculo. Não foi criado mecanismo novo, não se alterou fórmula de custo e não houve migration. O custo continua sendo calculado para cada linha da ficha e validado no escopo da empresa.
 
-## 5. ALTERAÇÕES MÍNIMAS
+### Prova adversarial do GAP-E02-02 em PostgreSQL
 
-1. **Trilha transacional:** `registrarEventoOrdem` deixou de engolir exceções. Ordem ausente para o escopo gera 404; validação da empresa e `INSERT` do evento continuam na mesma transação da operação. Assim, evento não gravado implica rollback da conclusão/reabertura.
-2. **Leituras completas:** foi introduzido `listarTodos`, que percorre as páginas do filtro até atingir o total reportado e falha explicitamente se uma página vazia deixar a leitura incompleta. Foi aplicado às leituras internas de itens da OP, apontamentos, ficha técnica, movimentos de insumo/produto e às listagens de eventos/apontamentos. Os filtros por empresa permanecem nos chamadores.
-3. **Validação por insumo:** a leitura do livro completo valida cada insumo uma vez por ID, sem alterar a fórmula de consumo/custo.
-4. **Fixtures de memória:** os dois testes de OP em memória usam `usuario_id` nulo quando o ator não existe de fato no store. Não se enfraqueceu a validação nem se criou usuário fictício; os testes PostgreSQL continuam usando usuários persistidos.
+`server/test/pg/e02-reabertura-estorno-postgresql.test.ts` executa em PostgreSQL real:
 
-**Preservado:** máquina de estados, transições legais, cálculo de custo, composição de perdas, idempotência existente, isolamento por empresa, isolamento transacional/concorrência e trilha append-only. Nenhuma migration/schema, frontend, Sidebar, UX ou módulo fora do fluxo de Produção foi alterado.
+1. Cria **5000** movimentos históricos balanceados (2500 saídas + 2500 entradas), valida saldo físico inicial **10000** e registra uma saída operacional posterior às primeiras 5000 linhas.
+2. Conclui a OP com **2 peças boas + 1 perdida**; consome 6 m a R$10; custo real **120** (R$60 insumos + R$30 mão de obra + R$30 indiretos).
+3. Disputa duas reaberturas simultâneas: uma confirma (`200`), a outra recebe conflito (`409`); produto e insumo são compensados uma única vez, sem duplicar auditoria/evento.
+4. Reabre/libera, conclui de novo com a mesma perda e faz o segundo estorno. No final: estoque de produto **0**, estoque do insumo **10000**, OP planejada com custo ativo **0**, nenhum saldo negativo ou residual.
+5. Compara o livro inteiro: **5004** movimentos de insumo (5000 históricos + quatro operacionais), **2502 saídas e 2502 entradas**, quantidades/valores conciliados em **2512 / R$25120** por tipo; as 5000 linhas históricas permanecem intactas. Há exatamente duas conclusões e dois eventos de reabertura, com perda, custo revertido e apontamento registrados; dois estornos geram exatamente duas auditorias.
+6. O teste adicional da ficha cria **502 linhas**, verifica a resposta HTTP completa e o custo calculado incluindo todas as linhas.
 
-## 6. GATES EXECUTADOS
+O conjunto também prova que as duas conclusões reconsomem o material líquido já estornado: não há consumo duplicado, custo fantasma, evento duplicado nem saldo residual depois do segundo estorno.
+
+## 4. Evidência e gates executados
 
 | Gate | Resultado observado |
 |---|---|
-| Dois arquivos PG focados (`e02-ordem-reabrir` + `e02-reabertura-estorno`) | **16/16 pass**, PostgreSQL real, `--test-concurrency=1` |
-| `npm run test:pg` | **150 testes: 149 pass, 0 fail, 1 todo, 0 skipped**; banco novo descartável; ~17m38s |
-| `npm test` | **Servidor:** 760 testes, 695 pass, 0 fail, 65 skipped. **Cliente:** 28 arquivos, 290 pass. Exit 0 |
-| `npm run typecheck` | Passou para domain, server e client |
-| `npm run build` | Passou |
-| `npm run lint` | Exit 0; 0 erros / 415 warnings existentes |
-| Smoke em memória | **126/126** |
-| `npm run smoke:pg` | **126/126**, banco novo removido ao final |
-| `npm run audit:menu` | 0 erros / 4 avisos classificados; nenhum arquivo de menu/UI alterado |
-| `npm run db:validate` | **Não passou por bloqueio externo:** Prisma não conseguiu baixar `schema-engine.sha256` de `binaries.prisma.sh`; nenhuma mudança de schema nesta rodada |
-| PR #55 / CI remoto | ✅ No head `4edf9f7`, os runs de push `38263908588` e de PR `38263913738` passaram em `verificar` e `testes-postgres`. Houve um resultado transitório anterior no SHA `bdc8c95` (push verde; um run de PR falhou na etapa de testes do servidor), não reproduzido no head seguinte |
-| `git diff --check` | Passou |
+| PostgreSQL oficial da rodada | **16.14 real** (`SHOW server_version`); CI fixado em `postgres:16.14` com asserção explícita da versão. |
+| PG focado ERP-02/02.1 | **17/17** entre `e02-ordem-reabrir-postgresql.test.ts` e `e02-reabertura-estorno-postgresql.test.ts`. |
+| `npm run test:pg` completo | Em banco isolado novo `brobond_erp021_final`: **151 testes, 150 pass, 0 fail, 0 skipped, 1 todo**; duração aproximada **17m39s**. O TODO é P1-11, não relacionado a Produção e já declarado como decisão multiempresa de webhook. |
+| Teste da ficha técnica | Pré-correção: 200/502 linhas, custo 519/521. Pós-correção: 502/502 linhas e custo 521.00. |
+| G3 / G5 | 1001 apontamentos e 1001 entradas de produto processados; compensações completas e saldo final zero. |
+| GAP-E02-02 | 5000 movimentos históricos + 4 operacionais reconciliados depois do segundo ciclo; nenhum movimento eliminado ou duplicado. |
+| `npm test` | Servidor: **760** (695 pass, 0 fail, 65 skipped); cliente: **290/290**. |
+| `npm run typecheck` | Passou (domain, API e client). |
+| `npm run lint` | Exit 0; 0 erros / 415 warnings existentes. |
+| `npm run build` | Passou. |
+| `npm run smoke` | **126/126** em modo demonstração. |
+| `DATABASE_URL=… npm run smoke:pg` | **126/126** em banco PostgreSQL novo; API real, migrations/boot e limpeza automática. |
+| `npm run audit:menu` | 0 erros / 4 avisos classificados; nenhum arquivo de menu/UI alterado. |
+| CI do commit de correção | Push [38285230730](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38285230730) e PR [38285235716](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38285235716): `verificar` e `testes-postgres` ambos **success**. |
+| `npm run db:validate` local | Bloqueado ao baixar `schema-engine` por desconexão TLS com `binaries.prisma.sh`; a validação Prisma equivalente passou em CI. Nenhum schema mudou. |
+| `git diff --check` | Passou. |
 
-`db:generate` e `db:deploy` não foram executados: não houve alteração de schema ou migration; deploy de banco não se aplica.
+`db:generate` e `db:deploy` não foram necessários: sem alteração de schema ou migration. As contagens acima não transformam o TODO P1-11 nem os warnings existentes em falhas do ERP-02.1.
 
-## 7. CORRIGIDO × AINDA ABERTO
+## 5. Resultado, limitações e fronteiras
 
-### Corrigido nesta rodada
+### Fechado nesta rodada
 
-- Falhas ao persistir evento deixam de ser ocultadas e abortam a operação transacional.
-- Leituras de históricos/listas internas não são truncadas silenciosamente nos limites de 1000/500/5000 registros abrangidos pelo fluxo; G3–G5 cobrem as fronteiras reais.
-- Asserções PostgreSQL de retry, concorrência, rollback, multiempresa, custo, perda e reconciliação do banco permanecem verdes.
+- Leituras da ficha técnica usadas para listagem e custo deixam de parar em 200/500 linhas.
+- GAP-E02-02 é exercitado acima de 5000 linhas no fluxo completo de conclusão/estorno/reabertura/reconclusão/novo estorno.
+- O caminho crítico preserva consumo líquido, compensações append-only, custos, perdas, eventos, isolamento por empresa, rollback, concorrência/idempotência e saldos sem truncagem ou duplicação.
+- A versão de PostgreSQL da evidência final é fixada em 16.14 e checada no CI.
 
-### Já corrigido na base; não reaberto por este patch
+### Limitações declaradas
 
-- O tratamento histórico de saída negativa no estorno que motivou P0-01 (23514 / saldo não negativo). O fluxo passou na prova atual, mas o defeito original não foi reproduzido nesta rodada; não se afirma que tenha sido corrigido novamente aqui.
+- A tentativa local de `db:validate` não conseguiu baixar o Prisma `schema-engine` por restrição de rede; o step correspondente de CI passou. Nenhum schema foi alterado.
+- A bateria completa conserva **um TODO P1-11** de webhook multiempresa, fora deste fluxo; não foi silenciosamente contado como aprovação.
+- Lint reporta 415 warnings não bloqueantes e o runner GitHub reporta avisos de depreciação de Node/`ubuntu-latest`; nenhum deles alterou o resultado dos jobs.
+- A evidência é limitada aos cenários de Produção descritos; não certifica todos os módulos ou todo o ERP.
+- PR #55 continua aberto, sem merge automático; revisão e merge dependem de decisão humana.
 
-### Ainda aberto / limitações desta evidência
+---
 
-- `npm run db:validate` local não conseguiu baixar o engine por indisponibilidade de rede; a etapa equivalente `Validar schema Prisma` passou no CI do PR. Não houve mudança de schema.
-- Houve uma discrepância transitória sem subprova identificada no SHA `bdc8c95`: o run de push [38261078772](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38261078772) passou nos dois jobs, mas o run de PR [38261291076](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38261291076) falhou em `verificar` durante os testes do servidor. A suíte local passou em quatro execuções; a obtenção do log detalhado terminou em EOF. No head seguinte `4edf9f7`, os runs de push e de PR passaram em ambos os jobs; a discrepância não se repetiu e não há falha atual de CI.
-- O resultado é restrito ao fluxo e aos cenários medidos; **não** é declaração de que todo o ERP esteja concluído, certificado ou livre de outros gaps.
-- PR #55 permanece aberto e sem merge. A revisão e a decisão de merge permanecem humanas; ERP-03 e outros ciclos continuam fora do escopo.
+**ERP-02.1 FINAL GATE: APPROVED**
+**ERP-03 READINESS: READY TO START** — somente o plano foi preparado; aguardar comando explícito antes de qualquer implementação.

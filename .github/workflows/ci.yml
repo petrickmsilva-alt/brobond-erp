@@ -40,7 +40,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        # Versão oficial das evidências ERP-02.1; manter alinhada ao PostgreSQL local 16.14.
+        image: postgres:16.14
         env:
           POSTGRES_USER: brobond
           POSTGRES_PASSWORD: brobond
@@ -61,6 +62,27 @@ jobs:
           node-version: 22
       - name: Instalar dependências da API
         run: npm --prefix server install
+      - name: Confirmar versão oficial PostgreSQL 16.14
+        working-directory: server
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const { Client } = require('pg');
+          const client = new Client({ connectionString: process.env.DATABASE_URL });
+          (async () => {
+            try {
+              await client.connect();
+              const { rows } = await client.query('SHOW server_version');
+              const actual = rows[0]?.server_version;
+              console.log(`PostgreSQL server_version=${actual}`);
+              if (actual !== '16.14') throw new Error(`Expected PostgreSQL 16.14, got ${actual}`);
+            } finally {
+              await client.end();
+            }
+          })().catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+          NODE
       - name: Migrations + concorrência de saldo no Postgres
         # Em caso de falha, ecoa o diagnóstico como annotation do check-run:
         # é a única janela para o log quando o download de artefatos não está
