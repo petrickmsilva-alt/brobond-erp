@@ -5,6 +5,7 @@
 **Branch:** `arena/0c720c09-brobond-erp`
 **Base:** `b907796f26cc800f06db4ce90046fed7ab390cd4` (merge do PR #54)
 **Commit da correção ERP-02.1:** `20e14c8d913320da90a4104f98ba8a3a85d0a332`
+**Head validado com PostgreSQL 16.14 pinado:** `da619c7eca9ce5363bc29fb12bf00075074d4e8c`
 **PR:** [#55](https://github.com/petrickmsilva-alt/brobond-erp/pull/55) — aberto, sem merge
 **PostgreSQL oficial para esta evidência:** **16.14**. O servidor local retornou `SHOW server_version = 16.14`; `.github/workflows/ci.yml` fixa a imagem `postgres:16.14` e valida a versão reportada pelo servidor.
 
@@ -90,8 +91,11 @@ O conjunto também prova que as duas conclusões reconsomem o material líquido 
 | `DATABASE_URL=… npm run smoke:pg` | **126/126** em banco PostgreSQL novo; API real, migrations/boot e limpeza automática. |
 | `npm run audit:menu` | 0 erros / 4 avisos classificados; nenhum arquivo de menu/UI alterado. |
 | CI do commit de correção | Push [38285230730](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38285230730) e PR [38285235716](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38285235716): `verificar` e `testes-postgres` ambos **success**. |
+| CI final com PostgreSQL 16.14 fixado (head `da619c7`) | Push [38288430233](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38288430233) e PR [38288437317](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38288437317): `verificar` e `testes-postgres` ambos **success**; versão numérica `160014`, suíte PG, Prisma baseline/deploy e `smoke:pg` passaram. |
 | `npm run db:validate` local | Bloqueado ao baixar `schema-engine` por desconexão TLS com `binaries.prisma.sh`; a validação Prisma equivalente passou em CI. Nenhum schema mudou. |
 | `git diff --check` | Passou. |
+
+A primeira versão da asserção de versão no head `abdb266` falhou antes de migrations/testes; os logs detalhados terminaram em EOF. A verificação foi ajustada para `SHOW server_version_num = 160014`; o head final `da619c7` confirmou a versão e passou nos dois jobs. A falha inicial era do step de verificação, não evidência de falha funcional do ERP.
 
 `db:generate` e `db:deploy` não foram necessários: sem alteração de schema ou migration. As contagens acima não transformam o TODO P1-11 nem os warnings existentes em falhas do ERP-02.1.
 
