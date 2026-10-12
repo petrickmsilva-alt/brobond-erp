@@ -26,7 +26,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { assertRegistroDaEmpresa, assertRegistroDaEmpresaParaEscrita, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
-import { getResource } from './resources';
+import { getResource, type Resource } from './resources';
 import { checkAccess, escopoDe, getStore, resolveLocal, toHttpError, updateRecord, validarTamanhoNaGrade } from './services';
 import { currentUser } from './auth';
 import type { Payload, Row, Tx } from './store';
@@ -47,6 +47,28 @@ function recursoFicha() {
 
 function recursoEventos() {
   return { eventos: getResource('ordens_eventos')!, apontamentos: getResource('ordens_apontamentos')! };
+}
+
+type OpcoesListaCompleta = { pageSize?: number; sort?: string; dir?: 'asc' | 'desc' };
+
+/** Lê todas as linhas do filtro, sem truncar o histórico por um limite de página. */
+async function listarTodos(r: Resource, filter: Record<string, unknown>, tx?: Tx, opcoes: OpcoesListaCompleta = {}): Promise<Row[]> {
+  const pageSize = opcoes.pageSize && opcoes.pageSize > 0 ? Math.floor(opcoes.pageSize) : 1000;
+  const linhas: Row[] = [];
+  let total = 0;
+  for (let page = 1; page === 1 || linhas.length < total; page++) {
+    const resultado = await getStore().list(
+      r,
+      { page, pageSize, sort: opcoes.sort, dir: opcoes.dir, filter },
+      tx
+    );
+    if (page === 1) total = resultado.total;
+    if (!resultado.rows.length && linhas.length < total) {
+      throw new Error(`Leitura paginada incompleta do recurso ${r.key}: ${linhas.length} de ${total} linhas.`);
+    }
+    linhas.push(...resultado.rows);
+  }
+  return linhas;
 }
 
 // ============================================================================
@@ -127,9 +149,10 @@ export function ehAtalho(de: string, para: string): boolean {
 }
 
 /**
- * Trilha da OP. Append-only, empresa derivada por trigger a partir da OP.
- * Nunca lança: a trilha é consequência da operação, não pré-requisito — se ela
- * falhasse, uma conclusão legítima seria desfeita por causa do log.
+ * Trilha append-only da OP; a empresa é derivada por trigger a partir da OP.
+ * O evento faz parte da mesma operação transacional: se não puder ser gravado,
+ * a transição/efeito correspondente também precisa fazer rollback para nunca
+ * confirmar uma conclusão ou reabertura sem histórico.
  */
 export async function registrarEventoOrdem(
   ordemId: number,
@@ -138,27 +161,23 @@ export async function registrarEventoOrdem(
   tx: Tx,
   escopo: EscopoEmpresa
 ): Promise<void> {
-  try {
-    const op = await getStore().findOneWhere(recursoOrdem().op, { id: ordemId, empresa_id: escopo.empresaId }, tx);
-    if (!op) return;
-    assertRegistroDaEmpresa(recursoOrdem().op, op, escopo);
-    await getStore().insert(
-      recursoEventos().eventos,
-      {
-        empresa_id: escopo.empresaId,
-        ordem_id: ordemId,
-        evento,
-        de_status: info.de ?? null,
-        para_status: info.para ?? null,
-        mensagem: info.mensagem ?? null,
-        dados: info.dados ?? null,
-        usuario_id: info.usuario_id ?? null,
-      },
-      tx
-    );
-  } catch {
-    // silencioso de propósito — ver comentário acima
-  }
+  const op = await getStore().findOneWhere(recursoOrdem().op, { id: ordemId, empresa_id: escopo.empresaId }, tx);
+  if (!op) throw new HttpError(404, 'Ordem de produção não encontrada para registrar o evento.');
+  assertRegistroDaEmpresa(recursoOrdem().op, op, escopo);
+  await getStore().insert(
+    recursoEventos().eventos,
+    {
+      empresa_id: escopo.empresaId,
+      ordem_id: ordemId,
+      evento,
+      de_status: info.de ?? null,
+      para_status: info.para ?? null,
+      mensagem: info.mensagem ?? null,
+      dados: info.dados ?? null,
+      usuario_id: info.usuario_id ?? null,
+    },
+    tx
+  );
 }
 
 
@@ -191,12 +210,11 @@ export async function validarOrdemPayload(data: Payload, before: Row | null): Pr
 
 /** Itens efetivos de produção (grade → itens_ordem; tamanho → linha única). */
 async function itensProducao(op: Row, escopo: EscopoEmpresa, tx?: Tx): Promise<{ tamanho_id: number; quantidade: number }[]> {
-  const s = getStore();
   const tipo = String(op.tipo || 'tamanho');
   if (tipo === 'grade') {
-    const itens = await s.list(recursoOrdem().itens, { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId, ordem_id: Number(op.id) } }, tx);
+    const itens = await listarTodos(recursoOrdem().itens, { empresa_id: escopo.empresaId, ordem_id: Number(op.id) }, tx);
     const out: { tamanho_id: number; quantidade: number }[] = [];
-    for (const it of itens.rows) {
+    for (const it of itens) {
       const tamanho_id = Number(it.tamanho_id);
       await validarTamanhoNaGrade(Number(op.produto_id), tamanho_id, tx, escopo);
       out.push({ tamanho_id, quantidade: Number(it.quantidade || 0) });
@@ -257,12 +275,12 @@ async function localDeEntrada(op: Row, escopo: EscopoEmpresa, tx: Tx): Promise<{
 
 /** Apontamentos da OP, do mais antigo ao mais recente. */
 async function apontamentosDaOrdem(ordemId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row[]> {
-  const out = await getStore().list(
+  return listarTodos(
     recursoEventos().apontamentos,
-    { page: 1, pageSize: 1000, sort: 'apontado_em', dir: 'asc', filter: { empresa_id: escopo.empresaId, ordem_id: ordemId } },
-    tx
+    { empresa_id: escopo.empresaId, ordem_id: ordemId },
+    tx,
+    { pageSize: 1000, sort: 'apontado_em', dir: 'asc' }
   );
-  return out.rows;
 }
 
 /** Peças boas apontadas por tamanho (só o que tem quantidade > 0). */
@@ -286,8 +304,8 @@ async function necessidadeDaFicha(ficha: Row | null, pecas: number, escopo: Esco
   const mapa = new Map<number, LinhaConsumo>();
   if (!ficha || pecas <= 0) return mapa;
   assertRegistroDaEmpresa(recursoFicha().ficha, ficha, escopo);
-  const linhas = await s.list(recursoFicha().itens, { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, ficha_id: Number(ficha.id) } }, tx);
-  for (const linha of linhas.rows) {
+  const linhas = await listarTodos(recursoFicha().itens, { empresa_id: escopo.empresaId, ficha_id: Number(ficha.id) }, tx);
+  for (const linha of linhas) {
     const insumoId = Number(linha.insumo_id);
     const consumo = Number(linha.consumo || 0);
     const perdaPct = Number(linha.perda_pct || 0);
@@ -332,11 +350,15 @@ type ConsumoInsumo = { qtd: number; valor: number; custo_unitario: number };
 async function consumoLiquidoDaOrdem(ordemId: number, escopo: EscopoEmpresa, tx: Tx): Promise<Map<number, ConsumoInsumo>> {
   const s = getStore();
   const r = getResource('movimentacoes_insumos')!;
-  const out = await s.list(r, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, ordem_id: ordemId } }, tx);
+  const movimentos = await listarTodos(r, { empresa_id: escopo.empresaId, ordem_id: ordemId }, tx, { pageSize: 1000 });
   const mapa = new Map<number, ConsumoInsumo>();
-  for (const m of out.rows) {
+  const insumosValidados = new Set<number>();
+  for (const m of movimentos) {
     const insumoId = Number(m.insumo_id);
-    if (!await s.findOneWhere(getResource('insumos')!, { id: insumoId, empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Insumo não encontrado.');
+    if (!insumosValidados.has(insumoId)) {
+      if (!await s.findOneWhere(getResource('insumos')!, { id: insumoId, empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Insumo não encontrado.');
+      insumosValidados.add(insumoId);
+    }
     const tipo = String(m.tipo);
     const sinal = tipo === 'saida' ? 1 : tipo === 'entrada' ? -1 : 0;
     const qtd = Number(m.quantidade || 0);
@@ -580,9 +602,14 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx, escopo: EscopoEmpres
 
   // 1) estorna as ENTRADAS de produto acabado — pela FK `ordem_id`, não pelo
   //    texto do motivo (que continua existindo só para leitura na tela).
-  const movs = await s.list(getResource('movimentacoes')!, { page: 1, pageSize: 1000, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId, ordem_id: id } }, tx);
+  const movs = await listarTodos(
+    getResource('movimentacoes')!,
+    { empresa_id: escopo.empresaId, ordem_id: id },
+    tx,
+    { pageSize: 1000, sort: 'id', dir: 'desc' }
+  );
   let pecas = 0;
-  for (const m of movs.rows) {
+  for (const m of movs) {
     if (String(m.tipo) !== 'entrada' || m.estornado) continue;
     const produtoId = Number(m.produto_id);
     if (!await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Produto não encontrado.');
@@ -698,8 +725,8 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx, escopo: EscopoEmpres
 
   for (const a of apontamentos) await s.remove(recursoEventos().apontamentos, Number(a.id), tx);
 
-  const itensGrade = await s.list(recursoOrdem().itens, { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId, ordem_id: id } }, tx);
-  for (const it of itensGrade.rows) await s.update(recursoOrdem().itens, Number(it.id), { produzido: 0, perdido: 0 }, tx);
+  const itensGrade = await listarTodos(recursoOrdem().itens, { empresa_id: escopo.empresaId, ordem_id: id }, tx);
+  for (const it of itensGrade) await s.update(recursoOrdem().itens, Number(it.id), { produzido: 0, perdido: 0 }, tx);
 
   await s.update(recursoOrdem().op, id, { concluida_em: null, quantidade_produzida: 0, quantidade_perdida: 0, custo_real: 0 }, tx);
 
@@ -1420,8 +1447,13 @@ export async function listApontamentos(req: Request, res: Response) {
   await getOrdem(id, escopo);
   // id desc: mesmo motivo do histórico — `apontado_em` empata quando o turno
   // aponta dois tamanhos em seguida.
-  const out = await getStore().list(recursoEventos().apontamentos, { page: 1, pageSize: 500, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId, ordem_id: id } });
-  res.json(out.rows);
+  const out = await listarTodos(
+    recursoEventos().apontamentos,
+    { empresa_id: escopo.empresaId, ordem_id: id },
+    undefined,
+    { pageSize: 500, sort: 'id', dir: 'desc' }
+  );
+  res.json(out);
 }
 
 /** GET /api/ordens/:id/eventos */
@@ -1435,8 +1467,13 @@ export async function listEventosOrdem(req: Request, res: Response) {
   // Ordena por id, não por criado_em: apontamento e perda são gravados no mesmo
   // milissegundo e o empate em criado_em deixava a ordem a cargo do banco (a UI
   // chegou a mostrar a perda antes do apontamento). O id é monotônico na trilha.
-  const out = await getStore().list(recursoEventos().eventos, { page: 1, pageSize: 500, sort: 'id', dir: 'asc', filter: { empresa_id: escopo.empresaId, ordem_id: id } });
-  res.json(out.rows);
+  const out = await listarTodos(
+    recursoEventos().eventos,
+    { empresa_id: escopo.empresaId, ordem_id: id },
+    undefined,
+    { pageSize: 500, sort: 'id', dir: 'asc' }
+  );
+  res.json(out);
 }
 
 /**
