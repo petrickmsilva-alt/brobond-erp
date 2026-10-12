@@ -1096,3 +1096,52 @@ test('ERP-02.1/GAP-E02-02: >5000 movimentos de insumo atravessam conclusão, est
   );
   assert.equal(Number(auditoriasFinais.rows[0].total), 2, 'cada estorno confirmado gera uma auditoria, sem duplicar o concorrente');
 });
+
+test('ERP-02.1: a ficha técnica recalcula e lista todas as linhas acima de 500', async () => {
+  const c = await novoContexto(baseUrl);
+  const k = await kit(c, { saldoInsumo: 10, consumo: 2, custoInsumo: 10 });
+
+  // Uma linha já veio do helper kit; 501 adicionais excedem tanto o limite 500
+  // da recálculo quanto o limite 200 do endpoint de listagem.
+  const adicionadas = await query(
+    `WITH novos_insumos AS (
+       INSERT INTO insumos (empresa_id, nome, unidade, custo_medio, ativo)
+       SELECT $1, $2 || '-' || gs::text, 'm', 1, true
+         FROM generate_series(1, 501) AS gs
+       RETURNING id
+     )
+     INSERT INTO itens_ficha_tecnica (empresa_id, ficha_id, insumo_id, consumo, perda_pct)
+     SELECT $1, $3, id, 1, 0 FROM novos_insumos RETURNING id`,
+    [c.empresaId, unico('BOM-MASSIVO'), k.fichaId],
+  );
+  assert.equal(adicionadas.rowCount, 501, 'o PostgreSQL armazenou 501 linhas adicionais');
+
+  const primeiraLinha = await query<{ id: number; insumo_id: number }>(
+    `SELECT id, insumo_id FROM itens_ficha_tecnica
+      WHERE empresa_id = $1 AND ficha_id = $2 ORDER BY id ASC LIMIT 1`,
+    [c.empresaId, k.fichaId],
+  );
+  assert.ok(primeiraLinha.rows[0], 'a ficha conserva a linha original para disparar o recálculo pela API');
+
+  const listagem = await req(baseUrl, 'GET', `/fichas/${k.fichaId}/insumos`, undefined, c.token);
+  const atualizacao = await req(baseUrl, 'PUT', `/fichas/${k.fichaId}/insumos/${primeiraLinha.rows[0].id}`, {
+    insumo_id: Number(primeiraLinha.rows[0].insumo_id),
+    consumo: 2,
+    perda_pct: 0,
+  }, c.token);
+  const custoGravado = await query<{ custo_calculado: string }>(
+    `SELECT custo_calculado::text FROM fichas_tecnicas WHERE id = $1 AND empresa_id = $2`,
+    [k.fichaId, c.empresaId],
+  );
+
+  const problemas: string[] = [];
+  if (listagem.status !== 200) problemas.push(`GET da ficha retornou ${listagem.status}: ${listagem.texto}`);
+  if (!Array.isArray(listagem.body) || listagem.body.length !== 502) {
+    problemas.push(`a lista devolveu ${Array.isArray(listagem.body) ? listagem.body.length : typeof listagem.body} linhas; esperado 502`);
+  }
+  if (atualizacao.status !== 200) problemas.push(`recalcular ficha retornou ${atualizacao.status}: ${atualizacao.texto}`);
+  if (Number(custoGravado.rows[0]?.custo_calculado) !== 521) {
+    problemas.push(`custo gravado=${custoGravado.rows[0]?.custo_calculado}; esperado 521 para todas as 502 linhas`);
+  }
+  assert.deepEqual(problemas, [], 'página parcial não pode truncar a listagem nem o custo da ficha');
+});
