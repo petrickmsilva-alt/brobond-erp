@@ -203,8 +203,12 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > 2ª inserção + `catch` cru ⇒ `duplicate key value violates unique constraint
 > "uq_gateway_webhook_evento"`), e os cenários de aceite que faltavam passaram a
 > ser fixados — **`provider_ref` inexistente**, **payload inválido** e
-> **isolamento por empresa** (mutação `filtro` derruba os dois últimos, prova de
-> que não são tautologia). `test:pg` **134 testes · 133 pass · 0 fail · 1 todo**;
+> **isolamento por empresa** e a **cadeia inteira por HTTP autenticado**
+> (`server/test/pg/gateway-cadeia-pagamento-e2e.test.ts`: título → cobrança →
+> webhook assinado → recebimento → conciliação → atomicidade → multiempresa;
+> mutações `filtro`, `payloadVazio`, `semEscopoDetalhe` e `semGuardaEstado`
+> derrubam as provas — não são tautologia). `test:pg` **136 testes · 135 pass ·
+> 0 fail · 1 todo**;
 > `smoke:pg` **126/126**; `npm test` server 694 pass/0 fail e client 262 pass;
 > typecheck 0; lint 0 erros; build OK. Relatório dedicado:
 > [`docs/RELATORIO-ERP-01.md`](RELATORIO-ERP-01.md). Estado do ciclo:

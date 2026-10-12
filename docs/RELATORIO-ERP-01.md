@@ -25,8 +25,10 @@
 | Webhook repetido → `200 {duplicado:true}`, uma única baixa | ✅ provado |
 | Vazamento de constraint em endpoint público | ✅ provado (antes/depois) por mutação |
 | `provider_ref` inexistente, payload inválido | ✅ cenários novos, verdes |
-| Isolamento por empresa preservado | ✅ cenário novo, verde |
+| Isolamento por empresa preservado | ✅ cenário novo, verde (leitura por HTTP: lista e 404) |
+| **Cadeia inteira por HTTP autenticado** (título → cobrança → webhook → baixa → conciliação) | ✅ novo `gateway-cadeia-pagamento-e2e.test.ts`, verde |
 | Concorrência (duas entregas simultâneas) | ✅ uma baixa, um evento, ambos `200` |
+| Atomicidade (§12): recusa no meio do caminho não deixa efeito parcial | ✅ próprio teste novo, verde (mutação `semGuardaEstado` derruba) |
 | MemStore (regressão) | ✅ verde |
 | Migration | ✅ **não necessária** (schema já é JSONB) |
 | Frontend / Commerce / ERP-02 / ERP-03 | ✅ intocados |
@@ -105,6 +107,37 @@ ok 2 - ERP-01: o payload JSONB é lido nos dois formatos (objeto e string)
 # tests 3 · # pass 2 · # fail 0 · # todo 1        (exit 0)
 ```
 
+### 3.4 Como reproduzir exatamente esta prova (PostgreSQL local)
+
+O sandbox **não tem PostgreSQL instalado** e o `apt` não é alcançável; as provas
+rodaram em **PostgreSQL 16.14 real** obtido pelo binário oficial empacotado no
+npm, num diretório de rascunho **fora do repositório** (nada disso entra no
+versionamento — o CI continua usando o serviço `postgres:16`):
+
+```bash
+# 1. PostgreSQL real (binário empacotado) — fora da árvore do repositório
+mkdir -p /tmp/pgbundle && cd /tmp/pgbundle && npm init -y
+npm i @embedded-postgres/linux-x64@16.14.0-beta.17     # postgres/initdb/pg_ctl
+PGBIN=/tmp/pgbundle/node_modules/@embedded-postgres/linux-x64/native/bin
+
+# 2. cluster local (mesmo formato do serviço do CI)
+$PGBIN/initdb -D /tmp/pgdata -U postgres --auth=trust --encoding=UTF8 --no-locale
+$PGBIN/pg_ctl -D /tmp/pgdata -l /tmp/pg.log -w start \
+  -o "-p 55432 -c listen_addresses=127.0.0.1 -c fsync=off"
+
+# 3. papel e base iguais aos do CI (`brobond` / `brobond_teste`)
+# 4. a suíte inteira e as provas deste relatório
+cd server
+DATABASE_URL=postgresql://brobond:brobond@127.0.0.1:55432/brobond_teste npm run test:pg
+DATABASE_URL=postgresql://brobond:brobond@127.0.0.1:55432/brobond_teste npm run smoke:pg
+```
+
+Cada arquivo `.test.ts` de `test/pg` chama `migrate()` no próprio processo —
+o primeiro a rodar aplica `db/schema.sql` + `db/migrations` e os seguintes
+verificam — então um banco vazio é suficiente e nenhum SQL é aplicado à mão.
+
+---
+
 ## 4. CAUSA-RAIZ
 
 1. **Leitura**: `gateway_webhook_events.payload` é **JSONB**
@@ -128,6 +161,7 @@ ok 2 - ERP-01: o payload JSONB é lido nos dois formatos (objeto e string)
 | Arquivo | Alteração |
 |---|---|
 | `server/test/pg/e01-gateway-webhook-postgresql.test.ts` | +2 testes (cenários F/G/H): cobrança inexistente + payload inválido + isolamento por empresa (+130 linhas) |
+| `server/test/pg/gateway-cadeia-pagamento-e2e.test.ts` | **novo** — a cadeia inteira por HTTP autenticado (título → cobrança → webhook assinado → recebimento → conciliação → multiempresa) |
 | `docs/RELATORIO-ERP-01.md` | **novo** — este relatório |
 | `docs/ERP-CORE-ROADMAP.md` | §5 ERP-01 — ponteiro para este relatório e para a prova desta rodada |
 
@@ -225,7 +259,47 @@ multiempresa foi criada.**
 cobrança sem `provider_ref`): cenário F falha com `'erro' !== 'ignorado'` e o
 cenário H falha com `'pendente' !== 'paga'` — os dois testes pegam o defeito.
 
-### 13.2 Por que os testes anteriores não pegaram o P0-02
+### 13.2 A CADEIA INTEIRA POR HTTP AUTENTICADO — `gateway-cadeia-pagamento-e2e.test.ts` (novo)
+
+O arquivo `e01` prova a **rota pública** com fixtures criadas direto no store. O
+que faltava era provar a cadeia da especificação **inteira e por HTTP**, com
+sessão real de gerente persistido no PostgreSQL — é o que este arquivo fecha:
+
+| Passo | O que é executado por HTTP real |
+|---|---|
+| **PAGAMENTO** | `POST /api/financeiro/lancamentos` (sessão de gerente) cria o título `receita`/`pendente` de 120 com `empresa_id` falsificado no corpo — o servidor carimba a empresa do ator |
+| **COBRANÇA** | `POST /api/financeiro/gateway/cobrancas` (PIX do provedor mock) → `201`, `pendente`, `provider_ref`, QR, `lancamento_id` ligado ao título, **payload bruto do provedor ausente da resposta** (`bruto_disponivel:true`); repetir com a mesma `idempotency_key` → `200 {idempotente:true}` com o **mesmo id** (nenhuma segunda cobrança) |
+| **WEBHOOK** | notificação **assinada** (HMAC-SHA256 `x-mock-signature`) na rota pública anônima → `200 {resultado:'paga', processado:true}` — a cadeia roda com a **validação de assinatura ligada** |
+| **RECEBIMENTO** | `GET /api/financeiro/gateway/cobrancas/:id` → `paga` e `webhook_evento_id` preenchido; `GET /api/lancamentos_financeiros/:id` → `confirmado`, com origem `webhook` e **uma** ocorrência de `Baixa em`; nenhum título filho |
+| **CONCILIAÇÃO** | `GET /api/financeiro/gateway/webhooks` → evento `processado` com `cobranca_id` e `empresa_id` da cobrança, `payload` **não** devolvido (`tem_payload:true`); `GET /api/financeiro/gateway/cobrancas?status=paga` inclui a cobrança |
+| **IDEMPOTÊNCIA** | repetição idêntica da notificação → `200 {duplicado:true}`, sem segunda baixa, sem segunda linha de evento |
+| **MULTIEMPRESA** | sessão da Empresa B: `GET .../cobrancas/:id` → **404**, lista de cobranças e lista de eventos **sem** a cobrança/evento de A |
+
+**Mutações (o teste não é tautologia):**
+
+| Mutação | Resultado |
+|---|---|
+| `payloadVazio` — payload nunca lido (`{}`) | ❌ **falha**: `a cadeia precisa confirmar o pagamento: {"resultado":"ignorado","processado":false}` (`'ignorado' !== 'paga'`) |
+| `semEscopoDetalhe` — detalhe da cobrança sem `assertRegistroDaEmpresa` | ❌ **falha**: `a cobrança da empresa A não pode ser lida pela empresa B; veio 200` (`200 !== 404`) |
+| `semGuardaEstado` — sem a guarda `['pendente','autorizada']` em `aplicarIntencao` | ❌ **falha**: `o evento precisa ficar em erro/retry: {"resultado":"paga","processado":true}` (`'paga' !== 'erro'`) — a cobrança **cancelada** seria paga pelo webhook |
+
+**Atomicidade e evento de negócio inválido (2º teste do mesmo arquivo):** cobrança
+cancelada pela API + notificação **assinada** de pagamento → `200 {ok:true,
+resultado:'erro', processado:false}` (ACK, sem 500 e sem vazamento); a cobrança
+**continua `cancelada`**, o título **continua `pendente`** e **nenhuma baixa** é
+registrada (a recusa no meio do caminho não deixa efeito parcial — é o efeito
+financeiro rodando em **uma** transação); o evento fica em **`erro`** com
+`tentativas ≥ 1`, `proxima_tentativa_em` agendada e visível na visão autenticada
+de conciliação para reprocessamento — não é descartado como `'ignorado'`.
+
+> **Fixture declarada:** a configuração do provedor entra por `insert` no store. A
+> rota `PUT /api/financeiro/gateway/config` exige **administrador + reautenticação
+> por senha** (e MFA quando ativo) e já é exercitada pelo smoke com admin real; a
+> configuração é **pré-requisito** da cadeia, não parte dela. O webhook do teste é
+> assinado com o segredo dessa configuração, então a cadeia é provada com a
+> verificação de assinatura **ligada**.
+
+### 13.3 Por que os testes anteriores não pegaram o P0-02
 
 O webhook **público** de gateway só era exercitado em **MemStore**
 (`server/test/financeiro-p2.test.ts:283/311/341`), onde `payload` nunca passa por
@@ -241,7 +315,7 @@ auditoria descreveu.
 |---|---|
 | `npm run typecheck` | ✅ 0 erros (domain + server + client) |
 | `npm test` | ✅ server **759 testes · 694 pass · 0 fail · 65 skipped**; client **262 pass (26 arquivos)** |
-| `npm run test:pg` (PostgreSQL 16.14 real) | ✅ **134 testes · 133 pass · 0 fail · 0 skipped · 1 todo** (16m31s) — baseline antes dos cenários novos: 132/131/0/1 |
+| `npm run test:pg` (PostgreSQL 16.14 real) | ✅ **136 testes · 135 pass · 0 fail · 0 skipped · 1 todo** (17m06s) — baseline desta rodada (antes dos arquivos novos): 132/131/0/1 |
 | `npm run lint` | ✅ 0 erros (415 warnings pré-existentes) |
 | `npm run build` | ✅ OK |
 | `npm run smoke` (MemStore, servidor recém-subido) | ✅ **126/126** |
@@ -260,6 +334,9 @@ auditoria descreveu.
   `checkout` de revisão antiga — o pacote tem um commit único.
 * A rodada é de **verificação e complemento de prova**; a implementação do P0-02
   já estava na `main` (PR #49).
+* Na prova da cadeia (§13.2), a **configuração do provedor** é a única fixture que
+  não passa por HTTP (exige admin + reautenticação + MFA); o webhook, esse sim, é
+  assinado e validado de ponta a ponta.
 * **Janela de atomicidade do evento (pré-existente, não alterada):** o evento é
   gravado **antes** do processamento (é o que garante o ACK e o retry sem perder
   notificação). Se o processo cair **entre** o commit do efeito financeiro e a
@@ -279,6 +356,10 @@ auditoria descreveu.
 | Código corrigido (depois) | `/tmp/evidence/depois-correcao.txt` |
 | Arquivo de prova com cenários F/G/H | `/tmp/evidence/e01-complementos.txt` |
 | Mutação `filtro` nos cenários novos | `/tmp/evidence/mutacao-novos-cenarios.txt` |
+| Cadeia E2E — mutação `payloadVazio` | `/tmp/evidence/mutacao-cadeia-payload.txt` |
+| Cadeia E2E — mutação `semEscopoDetalhe` | `/tmp/evidence/mutacao-cadeia-escopo.txt` |
+| Cadeia E2E — mutação `semGuardaEstado` (atomicidade) | `/tmp/evidence/mutacao-cadeia-guarda.txt` |
+| Suíte PostgreSQL completa (final) | `/tmp/evidence/test-pg-final2.log` |
 | Suíte PostgreSQL completa | `/tmp/evidence/test-pg-final.log` |
 | Reconstrução do código pré-correção | `/tmp/evidence/mutacao.mjs` |
 
@@ -288,5 +369,6 @@ auditoria descreveu.
 registro em [`docs/ERP-GAPS.md`](ERP-GAPS.md):
 
 > Pagamento → Webhook → Cobrança → Recebimento → Conciliação volta a fechar em
-> PostgreSQL; o endpoint público não devolve mais metadado de schema; e as
-> notificações repetidas são idempotentes (uma única baixa).
+> PostgreSQL — provado pela cadeia inteira por HTTP autenticado; o endpoint
+> público não devolve mais metadado de schema; e as notificações repetidas são
+> idempotentes (uma única baixa).
