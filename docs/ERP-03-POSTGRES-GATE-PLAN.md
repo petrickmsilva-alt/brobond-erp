@@ -15,7 +15,7 @@
 - `npm run test:pg` executa serialmente (`--test-concurrency=1`) a suíte PostgreSQL de `server/test/pg-*.test.ts` e `server/test/pg/*.test.ts`.
 - ERP-03 existente também contém `server/test/pg/contrato-tipo-coluna.test.ts` (contrato dos 88 recursos, incluindo prova por mutação), `e03-onboarding-local-padrao.test.ts` e `e03-multiempresa-ab.test.ts`.
 - O job de CI valida o schema Prisma, faz o baseline da migration dual-track já aplicada pelo boot do ERP, executa `prisma migrate deploy` e roda o smoke em banco novo.
-- A versão final deste gate fica fixada em **PostgreSQL 16.14**: a imagem de serviço deve ser `postgres:16.14` e o job deve falhar se `SHOW server_version` não retornar exatamente `16.14`. A evidência local ERP-02.1 foi executada em PostgreSQL 16.14 real.
+- A versão final deste gate fica fixada em **PostgreSQL 16.14**: a imagem de serviço deve ser `postgres:16.14`; o job registra `SHOW server_version` e exige `SHOW server_version_num = 160014`. Usar o número evita depender de sufixos de distribuição no texto da versão. A evidência local ERP-02.1 foi executada em PostgreSQL 16.14 real.
 
 ### O que o estado verde não significa
 
@@ -28,7 +28,7 @@
 
 | Dependência | Requisito para execução | Evidência/observação |
 |---|---|---|
-| PostgreSQL | Servidor **16.14**; mesmo patch na imagem do CI e nas evidências locais. | O workflow fixa `postgres:16.14` e compara `SHOW server_version` com `16.14`. Upgrade é decisão explícita, nunca mudança silenciosa de tag flutuante. |
+| PostgreSQL | Servidor **16.14**; mesmo patch na imagem do CI e nas evidências locais. | O workflow fixa `postgres:16.14`, registra `SHOW server_version` e exige `SHOW server_version_num = 160014`. Upgrade é decisão explícita, nunca mudança silenciosa de tag flutuante. |
 | Node/npm | Node.js 22 no CI; dependências instaladas nos workspaces `server`, `client` e raiz. | `test:pg` usa `tsx`; o passo da versão usa o pacote `pg` instalado em `server`. |
 | Banco | `DATABASE_URL` aponta para uma instância de teste isolada, nunca produção. | `smoke:pg` precisa criar e apagar databases; o serviço CI usa usuário dedicado do container. |
 | Bootstrap/migrations | Banco de teste novo, migrações do ERP e usuário admin de teste funcionais. | A API aplica o schema e as migrations no boot; o job valida também a migration Prisma dual-track. |
@@ -89,7 +89,7 @@ A próxima implementação autorizada, se houver, deverá:
 
 ## 6. Riscos, limites e controles
 
-- **Tag de imagem flutuante:** `postgres:16` pode mudar patch sem alteração do repositório. Controle: tag `postgres:16.14` + verificação de `SHOW server_version`.
+- **Tag de imagem flutuante:** `postgres:16` pode mudar patch sem alteração do repositório. Controle: tag `postgres:16.14` + verificação de `SHOW server_version_num = 160014` (com `server_version` registrado).
 - **Banco temporário residual:** queda do processo ou falta de privilégio pode impedir cleanup. Controle: conta dedicada de CI, log do nome criado, cleanup `WITH (FORCE)`; usar `--keep` só em investigação autorizada.
 - **Concorrência de fixtures:** compartilhar uma database entre suites pode mascarar conflitos ou gerar resultados não determinísticos. Controle: job isolado e `--test-concurrency=1` para `test:pg`.
 - **Bootstrap parcial:** `/health` pode responder antes de migrations e admin terminarem. Controle existente: `smoke:pg` também espera o marcador de bootstrap.
