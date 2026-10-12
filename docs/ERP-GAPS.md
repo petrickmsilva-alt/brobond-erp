@@ -35,6 +35,42 @@ Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3e
 > aceitação reexecutada integralmente — E4.2.3 formalmente fechado; merge
 > aguarda decisão humana.
 
+> **Atualização ERP-02 (2026-10-11) — P0-01 PROVADO E REFORÇADO; dois defeitos NOVOS do mesmo fluxo corrigidos.**
+> Rodada de verificação do ciclo em `arena/50e1f16d-brobond-erp`. O P0-01 (reabertura de OP respondendo **500** por
+> SQLSTATE **23514**) foi **reproduzido neste ambiente** por reconstrução do código pré-correção (mutação reversível:
+> `adjustStock(…, −qtd)` + `translatePgError` sem o caso 23514 ⇒ `{"error":"Erro interno do servidor"}` · `# pass 0 / # fail 2`),
+> com a mecânica provada em SQL cru: `INSERT … ON CONFLICT DO UPDATE` faz o PostgreSQL avaliar o CHECK no **tuple proposto**
+> (−qtd) **antes** de resolver o conflito — recusa com **saldo de sobra** (50 → tuple −10) e o `UPDATE` condicional
+> (`quantidade + delta >= 0`, row lock) é o primitivo correto.
+> **O achado da rodada são dois defeitos REAIS que nenhuma prova cobria**, os dois em `server/src/producao.ts`:
+> **(1) conclusão seguinte a uma reabertura produzia SEM consumir insumo** — `jaConsumidoNaOrdem`/`calcularCustoReal` somavam
+> só as saídas de `movimentacoes_insumos`, e o estorno devolve o insumo por **lançamento compensatório** (entrada com o mesmo
+> `ordem_id`): medido `1000 !== 980` na 2ª conclusão (o insumo ficava inflado e o custo real carregava consumo já estornado);
+> **(2) o estorno não registrava o que revertia** — `custo_real`/`quantidade_produzida`/`quantidade_perdida` eram zerados na OP
+> e o evento `reaberta` gravava só peças/insumos/apontamentos: medido `NaN !== 390` (custo real e perdas sumiam do registro).
+> Correção: um **único helper canônico** `consumoLiquidoDaOrdem` (Σ saídas − Σ entradas, em quantidade e em dinheiro) passa a
+> alimentar baixa de insumo, custo real e estorno (com custo unitário de devolução = valor líquido ÷ quantidade líquida), e o
+> estorno grava o bloco **`revertido`** no evento + auditoria (mensagem com `custo real revertido R$ X`). Modelo de movimentos
+> compensatórios **preservado** (nada de DELETE); máquina de estados, custo previsto congelado, proporcionalidade dos indiretos
+> e perdas intocados. Evidência executada: **novo** `server/test/pg/e02-reabertura-estorno-postgresql.test.ts` (8 testes —
+> ciclo duplo, 2 estornos simultâneos com saldo sobrando e com saldo exato, 2 conclusões simultâneas, rollback por grade com
+> falha na 2ª linha, multiempresa A/B com 404 nas quatro portas e `0` vínculos cruzados, perdas/custo/histórico e a prova SQL
+> da causa-raiz): **antes 6 pass / 2 fail → depois 8 pass / 0 fail** (PostgreSQL **16.2** real); paridade em memória em
+> `server/test/producao-e2.test.ts` (o defeito (1) **não** aparecia na suíte de memória). Regressão: `server` **760**
+> (695 pass · 0 fail · 65 skip) · `client` **262/262** · `test:pg` **142 testes · 141 pass · 0 fail · 1 todo** · `smoke`
+> **126/126** · `smoke:pg` **126/126** · typecheck 0 · lint **0 erros / 415 warnings** (idêntico ao baseline) · build OK ·
+> `audit:menu` **0 erros / 4 avisos**. **Migração não necessária** (a constraint está certa; o código é que a violava).
+> Estado e números completos: [`docs/RELATORIO-ERP-02.md`](RELATORIO-ERP-02.md).
+> **GAPs novos registrados e NÃO corrigidos neste ciclo** (fora do escopo do estorno):
+> **GAP-E02-01** `POST /api/movimentacoes_insumos` não atualiza `insumos.custo_medio` (só o recebimento de compra atualiza —
+> OP cujo insumo só teve entrada manual consome a R$ 0,00 e subestima o custo real); **GAP-E02-02** leituras de movimentações
+> da OP com `pageSize` fixo (1000/5000) truncam em silêncio numa OP com mais movimentações que o teto;
+> **GAP-E02-03 (P3-07)** `adjustInsumoStock` mantém o padrão `ON CONFLICT DO UPDATE` com delta negativo (não dispara hoje
+> porque `estoque_insumos.quantidade` não tem CHECK); **GAP-E02-04** `auditoria.dados`/`ordens_eventos.dados` não saem pela API.
+> **GAP-E02-05** (CI, observado na rodada) uma execução do job `verificar` falhou no passo "Testes das regras de negócio" em um commit **só de documentação**
+> ([run 38181530778](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38181530778)) — o mesmo commit passou no run do push e o commit com o código e os testes do ciclo passou nos dois jobs;
+> `server test` rodou 3× verde localmente. Sem log recuperável no sandbox (blob fora da allow-list). Registrado como flake de runner, não como falha de produto.
+
 > **Atualização ERP-08 (2026-10-11) — P1-09 FECHADO (devolução provada ponta a ponta em PostgreSQL).**
 > `server/test/pg/devolucao-e2e.test.ts` (banco novo, servidor real) executa a cadeia de reversa inteira: venda
 > faturada (saída canônica com `venda_id`; estoque 5 → 2) → **devolução parcial de 2 de 3** → autorizar → rastrear →

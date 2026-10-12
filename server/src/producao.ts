@@ -306,42 +306,87 @@ async function necessidadeDaFicha(ficha: Row | null, pecas: number, escopo: Esco
   return mapa;
 }
 
+type ConsumoInsumo = { qtd: number; valor: number; custo_unitario: number };
+
 /**
- * Insumos que esta OP JÁ baixou (FK `ordem_id`, saídas não estornadas). É o que
- * impede a conclusão de consumir duas vezes o que o apontamento já consumiu.
+ * Consumo LÍQUIDO de insumos de uma OP: por insumo, Σ saídas − Σ entradas
+ * (estornos), em QUANTIDADE e em DINHEIRO (quantidade × custo unitário gravado
+ * na movimentação).
+ *
+ * É a leitura canônica do consumo da OP — os três fluxos que precisam concordar
+ * entre si leem daqui:
+ *   • `jaConsumidoNaOrdem` (baixa de insumo): o que a OP JÁ baixou, para não
+ *     consumir duas vezes o mesmo insumo;
+ *   • `calcularCustoReal`: o custo vigente dos insumos da OP;
+ *   • `estornarOrdem`: quanto devolver ao estoque e a que custo.
+ *
+ * POR QUE LÍQUIDO: `movimentacoes_insumos` não tem coluna de estorno — a
+ * reabertura devolve o insumo com uma movimentação de ENTRADA ligada à mesma OP
+ * (lançamento compensatório, o mesmo modelo do estorno de produto acabado).
+ * Somando apenas as saídas, a conclusão seguinte enxerga o consumo JÁ ESTORNADO
+ * como se ainda estivesse baixado: a OP produz de novo sem baixar insumo, o
+ * saldo do insumo fica inflado e o custo real descola do estoque. Com o líquido,
+ * reabrir devolve, reconcluir baixa de novo e o segundo estorno devolve o que a
+ * segunda conclusão baixou — sem duplicar movimento em nenhum dos ciclos.
  */
-async function jaConsumidoNaOrdem(ordemId: number, escopo: EscopoEmpresa, tx: Tx): Promise<Map<number, number>> {
+async function consumoLiquidoDaOrdem(ordemId: number, escopo: EscopoEmpresa, tx: Tx): Promise<Map<number, ConsumoInsumo>> {
   const s = getStore();
   const r = getResource('movimentacoes_insumos')!;
   const out = await s.list(r, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, ordem_id: ordemId } }, tx);
-  const mapa = new Map<number, number>();
+  const mapa = new Map<number, ConsumoInsumo>();
   for (const m of out.rows) {
-    if (String(m.tipo) !== 'saida') continue;
-    const id = Number(m.insumo_id);
-    if (!await s.findOneWhere(getResource('insumos')!, { id, empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Insumo não encontrado.');
-    mapa.set(id, (mapa.get(id) || 0) + Number(m.quantidade || 0));
+    const insumoId = Number(m.insumo_id);
+    if (!await s.findOneWhere(getResource('insumos')!, { id: insumoId, empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Insumo não encontrado.');
+    const tipo = String(m.tipo);
+    const sinal = tipo === 'saida' ? 1 : tipo === 'entrada' ? -1 : 0;
+    const qtd = Number(m.quantidade || 0);
+    const custo = Number(m.custo_unitario || 0);
+    if (!sinal || !qtd) continue;
+    const atual = mapa.get(insumoId) || { qtd: 0, valor: 0, custo_unitario: custo };
+    mapa.set(insumoId, {
+      qtd: round3(atual.qtd + sinal * qtd),
+      valor: round2(atual.valor + sinal * qtd * custo),
+      // Custo unitário de referência: o da última movimentação com valor.
+      custo_unitario: custo || atual.custo_unitario,
+    });
+  }
+  return mapa;
+}
+
+/**
+ * Insumos que esta OP JÁ baixou (FK `ordem_id`, SAÍDAS MENOS as entradas de
+ * estorno — ver `consumoLiquidoDaOrdem`). É o que impede a conclusão de consumir
+ * duas vezes o que o apontamento já consumiu e o que faz a conclusão seguinte a
+ * uma reabertura baixar o insumo de novo.
+ */
+async function jaConsumidoNaOrdem(ordemId: number, escopo: EscopoEmpresa, tx: Tx): Promise<Map<number, number>> {
+  const liquido = await consumoLiquidoDaOrdem(ordemId, escopo, tx);
+  const mapa = new Map<number, number>();
+  for (const [insumoId, consumo] of liquido) {
+    if (consumo.qtd > 0) mapa.set(insumoId, consumo.qtd);
   }
   return mapa;
 }
 
 /**
  * Custo real da OP até aqui: insumos efetivamente baixados (quantidade × custo
- * unitário gravado na movimentação) + mão de obra e custos indiretos da ficha
- * reconhecidos na proporção de peças processadas sobre as planejadas.
+ * unitário gravado na movimentação, LÍQUIDO dos estornos de reabertura) + mão de
+ * obra e custos indiretos da ficha reconhecidos na proporção de peças
+ * processadas sobre as planejadas.
+ *
+ * O líquido é o que faz o custo acompanhar o estoque: a conclusão seguinte a uma
+ * reabertura não pode carregar o consumo que já foi devolvido, nem o estorno
+ * pode deixar custo residual na OP reaberta.
  *
  * Os indiretos são proporcionais de propósito: uma OP parada na metade não pode
  * carregar o rateio inteiro, senão o custo real de uma OP parcial parece pior do
  * que o de uma concluída.
  */
 async function calcularCustoReal(ordemId: number, ficha: Row | null, pecasPlanejadas: number, pecasProcessadas: number, escopo: EscopoEmpresa, tx: Tx): Promise<number> {
-  const s = getStore();
-  const r = getResource('movimentacoes_insumos')!;
-  const out = await s.list(r, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, ordem_id: ordemId } }, tx);
+  const liquido = await consumoLiquidoDaOrdem(ordemId, escopo, tx);
   let insumos = 0;
-  for (const m of out.rows) {
-    if (String(m.tipo) !== 'saida') continue;
-    if (!await s.findOneWhere(getResource('insumos')!, { id: Number(m.insumo_id), empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Insumo não encontrado.');
-    insumos += Number(m.quantidade || 0) * Number(m.custo_unitario || 0);
+  for (const consumo of liquido.values()) {
+    if (consumo.qtd > 0) insumos += consumo.valor;
   }
   const indiretos = ficha ? Number(ficha.mao_obra || 0) + Number(ficha.custos_indiretos || 0) : 0;
   const proporcao = pecasPlanejadas > 0 ? Math.min(1, pecasProcessadas / pecasPlanejadas) : pecasProcessadas > 0 ? 1 : 0;
@@ -589,34 +634,31 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx, escopo: EscopoEmpres
     pecas += qtd;
   }
 
-  // 2) devolve os insumos consumidos pela OP (de novo pela FK).
+  // 2) devolve os insumos consumidos pela OP (de novo pela FK, com o helper
+  //    compartilhado — a MESMA conta que a baixa e o custo real usam).
   //
   // A devolução é pelo LÍQUIDO por insumo (saídas − entradas já estornadas), não
   // linha a linha: `movimentacoes_insumos` não tem coluna de estorno, então sem o
   // líquido um segundo "reabrir" devolveria o mesmo insumo de novo. Com o
   // líquido, o segundo estorno encontra zero e não faz nada — idempotente.
-  const movsInsumo = await s.list(getResource('movimentacoes_insumos')!, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, ordem_id: id } }, tx);
-  const liquido = new Map<number, { qtd: number; custo: number }>();
-  for (const m of movsInsumo.rows) {
-    const insumoId = Number(m.insumo_id);
-    if (!await s.findOneWhere(getResource('insumos')!, { id: insumoId, empresa_id: escopo.empresaId }, tx)) throw new HttpError(404, 'Insumo não encontrado.');
-    const qtd = Number(m.quantidade || 0);
-    const sinal = String(m.tipo) === 'saida' ? 1 : String(m.tipo) === 'entrada' ? -1 : 0;
-    if (!sinal || !qtd) continue;
-    const atual = liquido.get(insumoId) || { qtd: 0, custo: Number(m.custo_unitario || 0) };
-    liquido.set(insumoId, { qtd: round3(atual.qtd + sinal * qtd), custo: Number(m.custo_unitario || 0) || atual.custo });
-  }
+  //
+  // O custo unitário da devolução é o valor líquido dividido pela quantidade
+  // líquida: a movimentação compensatória devolve EXATAMENTE o dinheiro que a OP
+  // baixou, mesmo quando o custo médio do insumo mudou entre um consumo e outro
+  // (o resíduo de arredondamento fica em centavos, no próprio lançamento).
+  const liquido = await consumoLiquidoDaOrdem(id, escopo, tx);
   let insumos = 0;
-  for (const [insumoId, { qtd, custo }] of liquido) {
-    if (qtd <= 0) continue;
-    await s.adjustInsumoStock(insumoId, qtd, tx, escopo.empresaId);
+  for (const [insumoId, consumo] of liquido) {
+    if (consumo.qtd <= 0) continue;
+    const custo = consumo.valor > 0 ? round2(consumo.valor / consumo.qtd) : consumo.custo_unitario;
+    await s.adjustInsumoStock(insumoId, consumo.qtd, tx, escopo.empresaId);
     await s.insert(
       getResource('movimentacoes_insumos')!,
       {
         empresa_id: escopo.empresaId,
         tipo: 'entrada',
         insumo_id: insumoId,
-        quantidade: qtd,
+        quantidade: consumo.qtd,
         custo_unitario: custo,
         motivo: `Estorno — OP #${id} reaberta`,
         usuario_id: actor.id || null,
@@ -638,12 +680,38 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx, escopo: EscopoEmpres
     produzida: Number(a.quantidade_produzida || 0),
     perdida: Number(a.quantidade_perdida || 0),
   }));
+
+  // O estado da OP ANTES do estorno vai para a trilha e para a auditoria.
+  // Zerar `custo_real`, `quantidade_produzida` e `quantidade_perdida` é a
+  // semântica da OP reaberta (ela está em aberto de novo), mas sem gravar o
+  // valor revertido o custo real da produção anulada desaparecia do registro —
+  // a história ficaria só nas movimentações. Com o bloco `revertido`, a
+  // perícia lê da própria trilha quanto custou (e quanto se perdeu) naquilo
+  // que a reabertura desfez.
+  const revertido = {
+    quantidade_produzida: Number(op.quantidade_produzida || 0),
+    quantidade_perdida: Number(op.quantidade_perdida || 0),
+    custo_real: Number(op.custo_real || 0),
+    custo_previsto: op.custo_previsto === null || op.custo_previsto === undefined ? null : Number(op.custo_previsto),
+    concluida_em: op.concluida_em ? String(op.concluida_em) : null,
+  };
+
   for (const a of apontamentos) await s.remove(recursoEventos().apontamentos, Number(a.id), tx);
 
   const itensGrade = await s.list(recursoOrdem().itens, { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId, ordem_id: id } }, tx);
   for (const it of itensGrade.rows) await s.update(recursoOrdem().itens, Number(it.id), { produzido: 0, perdido: 0 }, tx);
 
   await s.update(recursoOrdem().op, id, { concluida_em: null, quantidade_produzida: 0, quantidade_perdida: 0, custo_real: 0 }, tx);
+
+  const dadosEstorno = {
+    pecas,
+    insumos,
+    perdidas: revertido.quantidade_perdida,
+    custo_real: revertido.custo_real,
+    apontamentos: resumoApontamentos,
+    revertido,
+  };
+  const custoNota = revertido.custo_real > 0 ? ` · custo real revertido R$ ${revertido.custo_real.toFixed(2)}` : '';
 
   await s.audit(
     {
@@ -652,8 +720,8 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx, escopo: EscopoEmpres
       acao: 'estornar',
       recurso: 'ordens',
       registro_id: id,
-      descricao: `OP #${id} reaberta/cancelada — estorno de ${pecas} peça(s), de ${insumos} consumo(s) de insumos e de ${apontamentos.length} apontamento(s)`,
-      dados: { pecas, insumos, apontamentos: resumoApontamentos },
+      descricao: `OP #${id} reaberta/cancelada — estorno de ${pecas} peça(s), de ${insumos} consumo(s) de insumos e de ${apontamentos.length} apontamento(s)${custoNota}`,
+      dados: dadosEstorno,
       empresa_id: empresaDoRegistroAudit(recursoOrdem().op, op, actor),
     },
     tx
@@ -667,11 +735,13 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx, escopo: EscopoEmpres
       // apaga o campo em toda leitura). O que o operador precisa ver vai na
       // mensagem — inclusive o que cada apontamento anulado produzia.
       mensagem:
-        `Estorno de ${pecas} peça(s), ${insumos} consumo(s) de insumos e ${apontamentos.length} apontamento(s)` +
+        `Estorno de ${pecas} peça(s)` +
+        (revertido.quantidade_perdida > 0 ? ` e ${revertido.quantidade_perdida} refugada(s)` : '') +
+        `, ${insumos} consumo(s) de insumos e ${apontamentos.length} apontamento(s)${custoNota}` +
         (resumoApontamentos.length
           ? ` (${resumoApontamentos.map((a) => `${a.produzida} boa(s)/${a.perdida} refugada(s) no tamanho #${a.tamanho_id ?? '—'}`).join('; ')})`
           : ''),
-      dados: { pecas, insumos, apontamentos: resumoApontamentos },
+      dados: dadosEstorno,
       usuario_id: actor.id || null,
     },
     tx, escopo
