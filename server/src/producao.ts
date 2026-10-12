@@ -1032,9 +1032,14 @@ export async function recalcularFichaValores(fichaId: number, tx: Tx | undefined
   const f = await s.findOneWhere(ficha, { id: fichaId, empresa_id: escopo.empresaId }, tx);
   if (!f) return null;
 
-  const linhas = await s.list(itens, { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, ficha_id: fichaId } }, tx);
+  const linhas = await listarTodos(
+    itens,
+    { empresa_id: escopo.empresaId, ficha_id: fichaId },
+    tx,
+    { sort: 'id', dir: 'asc' }
+  );
   let insumosTotal = 0;
-  for (const linha of linhas.rows) {
+  for (const linha of linhas) {
     const insumo = await s.findOneWhere(getResource('insumos')!, { id: Number(linha.insumo_id), empresa_id: escopo.empresaId }, tx);
     if (!insumo) throw new HttpError(404, 'Insumo não encontrado.');
     const custo = Number(insumo.custo_medio || 0);
@@ -1063,11 +1068,16 @@ export async function listInsumosFicha(req: Request, res: Response) {
   const id = parseId(req.params.id);
   await getFicha(id, escopo);
   const s = getStore();
-  const out = await s.list(itens, { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId, ficha_id: id } });
-  for (const item of out.rows) {
+  const linhas = await listarTodos(
+    itens,
+    { empresa_id: escopo.empresaId, ficha_id: id },
+    undefined,
+    { sort: 'id', dir: 'asc' }
+  );
+  for (const item of linhas) {
     if (!await s.findOneWhere(getResource('insumos')!, { id: Number(item.insumo_id), empresa_id: escopo.empresaId })) throw new HttpError(404, 'Insumo não encontrado.');
   }
-  res.json(out.rows);
+  res.json(linhas);
 }
 
 export async function createInsumoFicha(req: Request, res: Response) {
