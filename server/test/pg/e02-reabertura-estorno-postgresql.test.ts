@@ -429,8 +429,13 @@ test('ERP-02/B3: duas conclusões simultâneas — uma só entrada de peças', a
 test('ERP-02/G5: estorno lê e reverte todas as 1001 entradas de produto da OP', async () => {
   const c = await novoContexto(baseUrl);
   const k = await kit(c);
-  const ordemId = await cicloConclusao(c, k, 10);
-  assert.equal(await saldoProduto(c, k.produtoId, k.tamanhoId), 10);
+  const ordemId = await cicloConclusao(c, k, 10, { perdida: 2 });
+  const concluida = await estadoOp(ordemId);
+  assert.equal(concluida.quantidade_produzida, 10);
+  assert.equal(concluida.quantidade_perdida, 2);
+  assert.equal(concluida.custo_real, 240, '24 m de insumo a R$ 10, incluindo as duas peças perdidas');
+  assert.equal(await saldoProduto(c, k.produtoId, k.tamanhoId), 10, 'as peças perdidas não entram no estoque');
+  assert.equal(await saldoInsumo(k.insumoId), 976, 'o custo/consumo inclui as duas peças perdidas');
 
   // A conclusão pela API gerou a entrada mais antiga. Acrescentamos 1000 linhas
   // históricas equivalentes depois dela: com a consulta antiga (só a página mais
@@ -477,7 +482,14 @@ test('ERP-02/G5: estorno lê e reverte todas as 1001 entradas de produto da OP',
   const evento = (await eventosOp(ordemId)).find((e) => String(e.evento) === 'reaberta');
   assert.ok(evento, 'a trilha append-only registra a reabertura');
   assert.equal(Number(evento!.dados?.pecas), 1010, 'o evento concilia todas as peças revertidas');
-  assert.equal(Number(evento!.dados?.revertido?.custo_real), 200, 'o custo original permanece na trilha');
+  assert.equal(Number(evento!.dados?.perdidas), 2, 'o evento mantém as perdas da OP concluída');
+  assert.equal(Number(evento!.dados?.revertido?.quantidade_perdida), 2, 'a quantidade perdida permanece na trilha de reversão');
+  assert.equal(Number(evento!.dados?.revertido?.custo_real), 240, 'o custo original, inclusive das perdas, permanece na trilha');
+  assert.deepEqual(
+    evento!.dados?.apontamentos?.map((a: { produzida: number; perdida: number }) => ({ produzida: a.produzida, perdida: a.perdida })),
+    [{ produzida: 10, perdida: 2 }],
+    'o evento preserva o apontamento completo que foi estornado',
+  );
   assert.equal(await saldosNegativos(c.empresaId), 0);
 });
 
@@ -901,39 +913,186 @@ test('ERP-02/G3: estorno processa todos os 1001 apontamentos sem deixar órfãos
   assert.equal(await saldoInsumo(k.insumoId), 5000);
 });
 
-test('ERP-02/G4: custo e consumo consideram todo o livro de insumos acima de 5000 movimentos', async () => {
+test('ERP-02.1/GAP-E02-02: >5000 movimentos de insumo atravessam conclusão, estorno e novo ciclo sem truncar', async () => {
   const c = await novoContexto(baseUrl);
-  const k = await kit(c, { saldoInsumo: 10000, consumo: 2, custoInsumo: 10 });
+  const k = await kit(c, { saldoInsumo: 10000, consumo: 2, custoInsumo: 10, maoObra: 30, indiretos: 30 });
   const criada = await req(baseUrl, 'POST', '/ordens', {
     produto_id: k.produtoId,
     tipo: 'tamanho',
     tamanho_id: k.tamanhoId,
-    quantidade: 1,
+    quantidade: 3,
     status: 'planejada',
     previsao: new Date().toISOString().slice(0, 10),
   }, c.token);
   assert.equal(criada.status, 201, `criar OP: ${criada.texto}`);
   const ordemId = Number(criada.body.id);
-  const liberada = await req(baseUrl, 'POST', `/ordens/${ordemId}/liberar`, {}, c.token);
-  assert.equal(liberada.status, 200, `liberar OP: ${liberada.texto}`);
+  const liberada1 = await req(baseUrl, 'POST', `/ordens/${ordemId}/liberar`, {}, c.token);
+  assert.equal(liberada1.status, 200, `liberar OP: ${liberada1.texto}`);
 
-  // Histórico antigo da mesma OP em 2500 pares compensatórios (líquido zero).
-  // A nova saída real ficará após essas linhas e precisa continuar sendo vista
-  // pelo cálculo, mesmo quando a OP ultrapassa o limite de uma única página.
-  await query(
+  // Carga adversarial determinística: 2500 pares saida/entrada, cada um com
+  // quantidade 1 e custo unitário 10. O saldo líquido é zero, portanto o estoque
+  // inicial não é adulterado; a próxima movimentação operacional fica após 5000.
+  const motivoHistorico = `Histórico compensatório ERP-02.1 ${RODADA}`;
+  const historicoInserido = await query(
     `INSERT INTO movimentacoes_insumos (empresa_id, tipo, insumo_id, quantidade, custo_unitario, motivo, ordem_id)
      SELECT $1, CASE WHEN gs % 2 = 1 THEN 'saida' ELSE 'entrada' END, $2, 1, 10, $3, $4
        FROM generate_series(1, 5000) AS gs`,
-    [c.empresaId, k.insumoId, `Histórico compensatório E02 ${RODADA}`, ordemId],
+    [c.empresaId, k.insumoId, motivoHistorico, ordemId],
   );
-  const apontamento = await req(baseUrl, 'POST', `/ordens/${ordemId}/apontamentos`, {
-    quantidade_produzida: 1,
-    quantidade_perdida: 0,
-    idempotency_key: unico('e02-pages'),
-  }, c.token);
-  assert.equal(apontamento.status, 201, `apontar produção: ${apontamento.texto}`);
-  assert.equal(await saldoInsumo(k.insumoId), 9998, 'uma saída de 2 m de insumo é lançada');
-  assert.equal((await estadoOp(ordemId)).custo_real, 20, 'custo real = 2 m × R$ 10, sem truncar a última movimentação');
-  const movimentos = await movsInsumoOp(ordemId);
-  assert.equal(movimentos.length, 5001, 'o livro da OP contém as 5000 linhas antigas e a saída atual');
+  assert.equal(historicoInserido.rowCount, 5000, 'o PostgreSQL criou os 5000 movimentos de histórico');
+  const saldoHistorico = await query<{ total: string; saidas: string; entradas: string; liquido: string }>(
+    `SELECT count(*)::text AS total,
+            count(*) FILTER (WHERE tipo = 'saida')::text AS saidas,
+            count(*) FILTER (WHERE tipo = 'entrada')::text AS entradas,
+            sum(CASE WHEN tipo = 'saida' THEN quantidade ELSE -quantidade END)::text AS liquido
+       FROM movimentacoes_insumos WHERE empresa_id = $1 AND ordem_id = $2`,
+    [c.empresaId, ordemId],
+  );
+  assert.deepEqual(
+    { total: Number(saldoHistorico.rows[0].total), saidas: Number(saldoHistorico.rows[0].saidas), entradas: Number(saldoHistorico.rows[0].entradas), liquido: Number(saldoHistorico.rows[0].liquido) },
+    { total: 5000, saidas: 2500, entradas: 2500, liquido: 0 },
+    'o ledger adversarial tem 5000 linhas balanceadas antes da operação real',
+  );
+  assert.equal(await saldoInsumo(k.insumoId), 10000, 'os pares líquidos não alteram o estoque físico');
+
+  const concluirComPerda = async (ciclo: number) => {
+    const apontamento = await req(baseUrl, 'POST', `/ordens/${ordemId}/apontamentos`, {
+      quantidade_produzida: 2,
+      quantidade_perdida: 1,
+      idempotency_key: unico(`e02-gap-${ciclo}`),
+    }, c.token);
+    assert.equal(apontamento.status, 201, `apontamento ciclo ${ciclo}: ${apontamento.texto}`);
+    assert.equal(await saldoInsumo(k.insumoId), 9994, `ciclo ${ciclo}: 6 m consumidos por 2 peças boas + 1 perdida`);
+
+    const concluida = await req(baseUrl, 'POST', `/ordens/${ordemId}/concluir`, {}, c.token);
+    assert.equal(concluida.status, 200, `concluir ciclo ${ciclo}: ${concluida.texto}`);
+    const estado = await estadoOp(ordemId);
+    assert.equal(estado.status, 'concluida');
+    assert.equal(estado.quantidade_produzida, 2);
+    assert.equal(estado.quantidade_perdida, 1);
+    assert.equal(estado.custo_real, 120, 'custo = 6 m × R$ 10 + R$ 30 de mão de obra + R$ 30 indiretos');
+    assert.equal(await saldoProduto(c, k.produtoId, k.tamanhoId), 2, 'somente as 2 peças boas entram no estoque');
+    return estado;
+  };
+
+  await concluirComPerda(1);
+  let movimentosInsumo = await movsInsumoOp(ordemId);
+  assert.equal(movimentosInsumo.length, 5001, 'a primeira saída real vem depois das 5000 linhas históricas');
+  assert.deepEqual(
+    { tipo: movimentosInsumo.at(-1)?.tipo, quantidade: movimentosInsumo.at(-1)?.quantidade, custo: movimentosInsumo.at(-1)?.custo },
+    { tipo: 'saida', quantidade: 6, custo: 10 },
+    'o consumo real e seu custo estão presentes após o conjunto antigo',
+  );
+
+  // Duas reaberturas concorrentes sobre >5000 movimentos devem serializar: um
+  // estorno completo e um 409, sem duplicar estoque, compensação, auditoria ou evento.
+  const [reabertura1, retryReabertura1] = await Promise.all([
+    req(baseUrl, 'POST', `/ordens/${ordemId}/reabrir`, {}, c.token),
+    req(baseUrl, 'POST', `/ordens/${ordemId}/reabrir`, {}, c.token),
+  ]);
+  assert.deepEqual(
+    [reabertura1.status, retryReabertura1.status].sort((a, b) => a - b),
+    [200, 409],
+    `uma única reabertura completa deve confirmar: ${reabertura1.texto} | ${retryReabertura1.texto}`,
+  );
+  assert.equal(await saldoProduto(c, k.produtoId, k.tamanhoId), 0, 'o produto acabado foi compensado integralmente');
+  assert.equal(await saldoInsumo(k.insumoId), 10000, 'o primeiro estorno devolve os 6 m uma única vez');
+  const aberta1 = await estadoOp(ordemId);
+  assert.equal(aberta1.status, 'planejada');
+  assert.equal(aberta1.quantidade_produzida, 0);
+  assert.equal(aberta1.quantidade_perdida, 0);
+  assert.equal(aberta1.custo_real, 0, 'a OP reaberta não carrega custo ativo');
+  movimentosInsumo = await movsInsumoOp(ordemId);
+  assert.equal(movimentosInsumo.length, 5002, 'a compensação é acrescentada sem apagar o histórico');
+  assert.deepEqual(
+    [movimentosInsumo.at(-2), movimentosInsumo.at(-1)].map((m) => `${m?.tipo}:${m?.quantidade}:${m?.custo}`),
+    ['saida:6:10', 'entrada:6:10'],
+    'a primeira saída e sua entrada compensatória permanecem no ledger',
+  );
+  const produtoAposPrimeiroEstorno = await movsOp(ordemId);
+  assert.deepEqual(
+    produtoAposPrimeiroEstorno.map((m) => `${m.tipo}:${m.quantidade}${m.estornado ? ':estornado' : ''}`),
+    ['entrada:2:estornado', 'saida:2'],
+    'o produto tem exatamente uma entrada estornada e uma saída compensatória',
+  );
+  const eventosAposPrimeiroEstorno = await eventosOp(ordemId);
+  const primeiraReabertura = eventosAposPrimeiroEstorno.find((e) => String(e.evento) === 'reaberta');
+  assert.ok(primeiraReabertura, 'a primeira reabertura registra evento transacional');
+  assert.equal(Number(primeiraReabertura!.dados?.perdidas), 1);
+  assert.equal(Number(primeiraReabertura!.dados?.revertido?.custo_real), 120);
+  const auditoriaAposPrimeiroEstorno = await query<{ total: string }>(
+    `SELECT count(*)::text AS total FROM auditoria WHERE recurso = 'ordens' AND registro_id = $1 AND acao = 'estornar'`,
+    [ordemId],
+  );
+  assert.equal(Number(auditoriaAposPrimeiroEstorno.rows[0].total), 1, 'a tentativa concorrente não duplica a auditoria');
+
+  const liberada2 = await req(baseUrl, 'POST', `/ordens/${ordemId}/liberar`, {}, c.token);
+  assert.equal(liberada2.status, 200, `liberar de novo: ${liberada2.texto}`);
+  await concluirComPerda(2);
+  const reabertura2 = await req(baseUrl, 'POST', `/ordens/${ordemId}/reabrir`, {}, c.token);
+  assert.equal(reabertura2.status, 200, `segundo estorno: ${reabertura2.texto}`);
+
+  const opFinal = await estadoOp(ordemId);
+  assert.equal(opFinal.status, 'planejada');
+  assert.equal(opFinal.quantidade_produzida, 0);
+  assert.equal(opFinal.quantidade_perdida, 0);
+  assert.equal(opFinal.custo_real, 0);
+  assert.equal(await saldoProduto(c, k.produtoId, k.tamanhoId), 0, 'nenhum produto acabado residual após dois ciclos');
+  assert.equal(await saldoInsumo(k.insumoId), 10000, 'nenhum consumo líquido ou estoque residual após dois estornos');
+  assert.equal(await saldosNegativos(c.empresaId), 0, 'nenhum saldo negativo');
+
+  const movimentosProduto = await movsOp(ordemId);
+  assert.deepEqual(
+    movimentosProduto.map((m) => `${m.tipo}:${m.quantidade}${m.estornado ? ':estornado' : ''}`),
+    ['entrada:2:estornado', 'saida:2', 'entrada:2:estornado', 'saida:2'],
+    'duas conclusões e dois estornos deixam quatro movimentos de produto conciliados',
+  );
+  movimentosInsumo = await movsInsumoOp(ordemId);
+  assert.equal(movimentosInsumo.length, 5004, 'o conjunto completo é 5000 históricos + 4 movimentos operacionais');
+  const resumoFinal = await query<{ tipo: string; registros: string; quantidade: string; valor: string }>(
+    `SELECT tipo, count(*)::text AS registros, sum(quantidade)::text AS quantidade,
+            sum(quantidade * custo_unitario)::text AS valor
+       FROM movimentacoes_insumos WHERE empresa_id = $1 AND ordem_id = $2
+       GROUP BY tipo ORDER BY tipo`,
+    [c.empresaId, ordemId],
+  );
+  assert.equal(resumoFinal.rowCount, 2, 'o ledger final contém apenas saídas e entradas');
+  const porTipo = new Map(resumoFinal.rows.map((r) => [r.tipo, { registros: Number(r.registros), quantidade: Number(r.quantidade), valor: Number(r.valor) }]));
+  assert.deepEqual(porTipo.get('saida'), { registros: 2502, quantidade: 2512, valor: 25120 });
+  assert.deepEqual(porTipo.get('entrada'), { registros: 2502, quantidade: 2512, valor: 25120 });
+
+  const historicoFinal = await query<{ total: string }>(
+    `SELECT count(*)::text AS total FROM movimentacoes_insumos
+      WHERE empresa_id = $1 AND ordem_id = $2 AND motivo LIKE $3`,
+    [c.empresaId, ordemId, `${motivoHistorico}%`],
+  );
+  assert.equal(Number(historicoFinal.rows[0].total), 5000, 'as 5000 linhas originais continuam íntegras no histórico');
+
+  const eventosFinais = await eventosOp(ordemId);
+  const conclusoes = eventosFinais.filter((e) => String(e.evento) === 'concluida');
+  const reaberturas = eventosFinais.filter((e) => String(e.evento) === 'reaberta');
+  assert.equal(conclusoes.length, 2, 'as duas conclusões permanecem na trilha');
+  assert.equal(reaberturas.length, 2, 'há exatamente dois eventos de estorno/reabertura, apesar do retry concorrente');
+  for (const evento of conclusoes) {
+    assert.equal(Number(evento.dados?.pecas), 2);
+    assert.equal(Number(evento.dados?.perdidas), 1);
+    assert.equal(Number(evento.dados?.custo_real), 120);
+  }
+  for (const evento of reaberturas) {
+    assert.equal(Number(evento.dados?.pecas), 2);
+    assert.equal(Number(evento.dados?.perdidas), 1);
+    assert.equal(Number(evento.dados?.revertido?.quantidade_produzida), 2);
+    assert.equal(Number(evento.dados?.revertido?.quantidade_perdida), 1);
+    assert.equal(Number(evento.dados?.revertido?.custo_real), 120);
+    assert.deepEqual(
+      evento.dados?.apontamentos?.map((a: { produzida: number; perdida: number }) => ({ produzida: a.produzida, perdida: a.perdida })),
+      [{ produzida: 2, perdida: 1 }],
+      'cada estorno preserva o apontamento de boas e perdas',
+    );
+  }
+  const auditoriasFinais = await query<{ total: string }>(
+    `SELECT count(*)::text AS total FROM auditoria WHERE recurso = 'ordens' AND registro_id = $1 AND acao = 'estornar'`,
+    [ordemId],
+  );
+  assert.equal(Number(auditoriasFinais.rows[0].total), 2, 'cada estorno confirmado gera uma auditoria, sem duplicar o concorrente');
 });
