@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GROUP_META, MODULES, MODULE_GROUPS, visibleModules } from './modules';
+import { GROUP_META, MODULES, MODULE_GROUPS, NAV_SECTIONS, moduleOfPath, visibleModules } from './modules';
 
 describe('visibleModules', () => {
   it('operador não vê módulos adminOnly nem exclusivos de gerente', () => {
@@ -83,5 +83,55 @@ describe('visibleModules', () => {
       expect(areas.has(a)).toBe(true);
     }
     expect(MODULES.find((m) => m.id === 'dashboard')?.label).toBe('Meu Negócio');
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Fonte única da navegação (ERP-UX-01): a Sidebar renderiza o que está aqui.
+// ----------------------------------------------------------------------------
+describe('NAV_SECTIONS (fonte única do menu)', () => {
+  it('cobre toda área declarada exatamente uma vez, na ordem de MODULE_GROUPS', () => {
+    const nasSecoes = NAV_SECTIONS.flatMap((s) => s.groups);
+    expect([...nasSecoes].sort()).toEqual([...MODULE_GROUPS].sort());
+    expect(nasSecoes).toHaveLength(MODULE_GROUPS.length);
+    // A ordem renderizada é a ordem declarada.
+    expect(nasSecoes).toEqual([...MODULE_GROUPS]);
+  });
+
+  it('cada área pertence à seção que GROUP_META declara', () => {
+    for (const secao of NAV_SECTIONS) {
+      for (const g of secao.groups) expect(GROUP_META[g].section).toBe(secao.id);
+    }
+  });
+
+  it('ERP-05: o grupo Fiscal é renderizável (aparece em alguma seção) e tem 4 módulos', () => {
+    expect(NAV_SECTIONS.some((s) => s.groups.includes('Fiscal'))).toBe(true);
+    expect(MODULES.filter((m) => m.group === 'Fiscal').map((m) => m.id)).toEqual([
+      'documentos-fiscais',
+      'regras-fiscais',
+      'ncm',
+      'inutilizacoes',
+    ]);
+  });
+});
+
+describe('moduleOfPath (regra única de rota → módulo)', () => {
+  it('casa a rota exata e as rotas filhas com o módulo dono', () => {
+    expect(moduleOfPath('/')?.id).toBe('dashboard');
+    expect(moduleOfPath('/documentos-fiscais')?.id).toBe('documentos-fiscais');
+    expect(moduleOfPath('/produtos/12')?.id).toBe('produtos');
+    expect(moduleOfPath('/vendas/7')?.id).toBe('vendas');
+    expect(moduleOfPath('/conectores/mercado-livre')?.id).toBe('conector-mercadolivre');
+  });
+
+  it('devolve undefined para rota que não pertence a módulo nenhum', () => {
+    expect(moduleOfPath('/dev/componentes')).toBeUndefined();
+    expect(moduleOfPath('/rota-que-nao-existe')).toBeUndefined();
+  });
+
+  it('respeita a lista recebida (RBAC): módulo invisível não é dono da rota', () => {
+    const visiveisOperador = visibleModules({ perfil: 'operador' });
+    expect(moduleOfPath('/regras-fiscais', visiveisOperador)).toBeUndefined();
+    expect(moduleOfPath('/documentos-fiscais', visiveisOperador)?.id).toBe('documentos-fiscais');
   });
 });

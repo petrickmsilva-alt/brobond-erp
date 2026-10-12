@@ -1209,7 +1209,16 @@ export function BulkActions({
 // Em telas pequenas, mostra só o pai imediato e o item atual.
 // ----------------------------------------------------------------------------
 
-export type BreadcrumbItem = { label: string; href?: string; onNavigate?: () => void };
+export type BreadcrumbItem = {
+  label: string;
+  href?: string;
+  onNavigate?: () => void;
+  /**
+   * Nível que não é destino (ex.: a área do menu, que não tem página própria):
+   * aparece como texto, sem virar link ou botão clicável.
+   */
+  semLink?: boolean;
+};
 
 export function Breadcrumb({ items, className }: { items: BreadcrumbItem[]; className?: string }) {
   if (items.length === 0) return null;
@@ -1228,12 +1237,17 @@ export function Breadcrumb({ items, className }: { items: BreadcrumbItem[]; clas
                 <span aria-current="page" className="truncate font-semibold text-navy-900 dark:text-white">
                   {item.label}
                 </span>
+              ) : item.semLink ? (
+                <span className="truncate text-slate-500 dark:text-navy-300">{item.label}</span>
               ) : item.href ? (
                 <a
                   href={item.href}
                   onClick={
                     item.onNavigate
                       ? (e) => {
+                          // Só o clique simples é interceptado: Ctrl/Cmd/Shift/Alt+clique
+                          // (abrir em nova aba/janela) seguem o comportamento do navegador.
+                          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
                           e.preventDefault();
                           item.onNavigate?.();
                         }

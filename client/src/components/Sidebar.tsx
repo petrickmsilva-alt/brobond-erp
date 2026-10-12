@@ -1,12 +1,16 @@
 // ============================================================================
 // Sidebar — navegação por áreas de negócio do ERP.
 //
-// Estrutura:
+// Estrutura (ERP-UX-01): as áreas vêm **integralmente** de `NAV_SECTIONS`, que é
+// derivada de `MODULE_GROUPS` + `GROUP_META` em `modules.ts`. Não existe lista
+// local de grupos aqui — um grupo novo declarado na fonte única aparece nesta
+// tela automaticamente (foi o que faltava no grupo Fiscal).
+//
 //   • Meu Negócio (início)
-//   • ERP CORE: Cadastros, Vendas, Compras, Estoque, Produção, Logística,
-//     Financeiro, Relatórios — accordions abertos automaticamente na rota atual
-//   • COMMERCE / INTEGRAÇÕES — seção separada, recolhida por padrão
-//   • Configurações
+//   • Seção ERP: Cadastros, Vendas, Compras, Estoque, Produção, Logística,
+//     Financeiro, Fiscal, Relatórios — accordions abertos na rota atual
+//   • Seção COMMERCE / INTEGRAÇÕES — separada
+//   • Seção Sistema (Configurações)
 //
 // Desktop: pode ser recolhida para um trilho só de ícones (preferência salva).
 // Mobile: vira drawer (abre pelo botão do header). Tudo que aparece aqui vem de
@@ -15,27 +19,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { ChevronDown, ChevronsLeft, ChevronsRight, X } from 'lucide-react';
-import { GROUP_META, visibleModules, type Module, type ModuleGroup } from '../modules';
+import { GROUP_META, NAV_SECTIONS, moduleOfPath, visibleModules, type Module, type ModuleGroup } from '../modules';
 import { Logo } from './Logo';
 import { useAuth } from '../auth/AuthContext';
 
 const STORAGE_OPEN = 'brobond_nav_groups';
 const STORAGE_COLLAPSED = 'brobond_nav_collapsed';
-
-const ERP_GROUPS = [
-  'Cadastros',
-  'Vendas',
-  'Compras',
-  'Estoque',
-  'Produção',
-  'Logística & Expedição',
-  'Financeiro',
-  'Relatórios',
-] as const satisfies readonly ModuleGroup[];
-
-const COMMERCE_GROUPS = ['Integrações', 'Gestão de Commerce', 'Ecossistema Creators'] as const satisfies readonly ModuleGroup[];
-
-const SYSTEM_GROUPS = ['Configurações'] as const satisfies readonly ModuleGroup[];
 
 function readStringArray(key: string): string[] {
   try {
@@ -65,11 +54,11 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
   const home = visible.find((m) => m.group === null);
 
   // Área dona da rota atual (rotas filhas, ex.: /produtos/12, pertencem ao módulo pai).
-  const activeGroup = useMemo<ModuleGroup | undefined>(() => {
-    const path = location.pathname;
-    const hit = visible.find((m) => m.path === path) || visible.filter((m) => m.path !== '/').find((m) => path.startsWith(m.path + '/'));
-    return (hit?.group as ModuleGroup | undefined) ?? undefined;
-  }, [location.pathname, visible]);
+  // Mesma regra usada pelo título da aba e pelo breadcrumb (`moduleOfPath`).
+  const activeGroup = useMemo<ModuleGroup | undefined>(
+    () => (moduleOfPath(location.pathname, visible)?.group ?? undefined) as ModuleGroup | undefined,
+    [location.pathname, visible]
+  );
 
   const [openGroups, setOpenGroups] = useState<string[]>(() => readStringArray(STORAGE_OPEN));
   const [collapsed, setCollapsed] = useState<boolean>(() => readFlag(STORAGE_COLLAPSED));
@@ -116,8 +105,6 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
     );
   };
 
-  const commerceVisible = COMMERCE_GROUPS.some((g) => visible.some((m) => m.group === g));
-
   return (
     <>
       {open && <div className="fixed inset-0 z-20 bg-black/60 backdrop-blur-sm md:hidden" onClick={onClose} aria-hidden="true" />}
@@ -148,24 +135,22 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
         <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-3" aria-label="Navegação principal">
           {home && <NavItem m={home} collapsed={collapsed} onClose={onClose} />}
 
-          <div className="mt-4 space-y-0.5">
-            {!collapsed && <SectionLabel>ERP</SectionLabel>}
-            {collapsed && <Divider />}
-            {ERP_GROUPS.map(renderGroup)}
-          </div>
-
-          {commerceVisible && (
-            <div className="mt-4 space-y-0.5">
-              {!collapsed && <SectionLabel>Commerce / Integrações</SectionLabel>}
-              {collapsed && <Divider />}
-              {COMMERCE_GROUPS.map(renderGroup)}
-            </div>
-          )}
-
-          <div className="mt-4 space-y-0.5">
-            {collapsed && <Divider />}
-            {SYSTEM_GROUPS.map(renderGroup)}
-          </div>
+          {/*
+            Seções e áreas vêm de NAV_SECTIONS (derivada de MODULE_GROUPS +
+            GROUP_META). O perfil não escolhe um menu diferente: ele filtra a
+            mesma fonte via `visibleModules`, e a seção some quando não sobra
+            nenhuma área visível.
+          */}
+          {NAV_SECTIONS.map((section) => {
+            const grupos = section.groups.filter((g) => visible.some((m) => m.group === g));
+            if (!grupos.length) return null;
+            return (
+              <div key={section.id} className="mt-4 space-y-0.5">
+                {collapsed ? <Divider /> : section.label ? <SectionLabel>{section.label}</SectionLabel> : null}
+                {grupos.map(renderGroup)}
+              </div>
+            );
+          })}
         </nav>
 
         <div className="hidden shrink-0 border-t border-slate-800/60 p-2 md:block">
