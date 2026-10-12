@@ -84,6 +84,7 @@ Os números a seguir são dados determinísticos dos fixtures de teste, não dad
 | `npm run smoke:pg` | **126/126**, banco novo removido ao final |
 | `npm run audit:menu` | 0 erros / 4 avisos classificados; nenhum arquivo de menu/UI alterado |
 | `npm run db:validate` | **Não passou por bloqueio externo:** Prisma não conseguiu baixar `schema-engine.sha256` de `binaries.prisma.sh`; nenhuma mudança de schema nesta rodada |
+| PR #55 / CI remoto | ⚠️ PR aberto sem merge; no run de push `38261078772` os dois jobs passaram; no run de PR `38261291076`, `testes-postgres` passou, mas `verificar` falhou na etapa de testes do servidor |
 | `git diff --check` | Passou |
 
 `db:generate` e `db:deploy` não foram executados: não houve alteração de schema ou migration; deploy de banco não se aplica.
@@ -103,5 +104,6 @@ Os números a seguir são dados determinísticos dos fixtures de teste, não dad
 ### Ainda aberto / limitações desta evidência
 
 - `prisma validate` permanece sem resultado por indisponibilidade de rede ao baixar o engine. É uma limitação de validação de schema, não uma alteração ou defeito de schema introduzido aqui.
+- **Discrepância CI sem causa identificada:** para o mesmo head `bdc8c95`, o run de push [38261078772](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38261078772) passou nos dois jobs; o run de PR [38261291076](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38261291076) passou `testes-postgres`, mas falhou em `verificar` na etapa de testes do servidor. A suíte do servidor passou localmente em quatro execuções; a obtenção do log detalhado do GitHub terminou em EOF, então a subprova que falhou não foi identificada. CI não é classificado como verde até esclarecer essa diferença.
 - O resultado é restrito ao fluxo e aos cenários medidos; **não** é declaração de que todo o ERP esteja concluído, certificado ou livre de outros gaps.
-- Merge não realizado. A revisão e a decisão de merge permanecem humanas; ERP-03 e outros ciclos continuam fora do escopo.
+- PR #55 permanece aberto e sem merge. A revisão e a decisão de merge permanecem humanas; ERP-03 e outros ciclos continuam fora do escopo.
