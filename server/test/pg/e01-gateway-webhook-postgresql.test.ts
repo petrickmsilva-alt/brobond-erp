@@ -133,7 +133,7 @@ type Tenant = { empresaId: number; refCobranca: string; cobrancaId: number; lanc
 /** Configs criadas nesta rodada — removidas no fim para não contaminar a próxima execução. */
 const configsDaRodada: number[] = [];
 
-async function novoTenant(opcoes: { comSegredo?: boolean } = {}): Promise<Tenant> {
+async function novoTenant(opcoes: { comSegredo?: boolean; segredo?: string } = {}): Promise<Tenant> {
   const s = getStore();
   const empresa = await query<{ id: number }>(
     `INSERT INTO empresas (nome, razao_social, ativo) VALUES ($1, $2, true) RETURNING id`,
@@ -147,7 +147,7 @@ async function novoTenant(opcoes: { comSegredo?: boolean } = {}): Promise<Tenant
     ambiente: 'teste',
     ativo: true,
     credenciais_cifradas: cifrarSegredo(JSON.stringify({ fake: 'cred' })),
-    ...(opcoes.comSegredo ? { webhook_segredo_cifrado: cifrarSegredo(SEGREDO_WEBHOOK) } : {}),
+    ...(opcoes.comSegredo ? { webhook_segredo_cifrado: cifrarSegredo(opcoes.segredo ?? SEGREDO_WEBHOOK) } : {}),
   });
   configsDaRodada.push(Number(config!.id));
 
@@ -176,37 +176,11 @@ async function novoTenant(opcoes: { comSegredo?: boolean } = {}): Promise<Tenant
   return { empresaId, refCobranca, cobrancaId: Number(cobranca!.id), lancamentoId: Number(lancamento!.id), configId: Number(config!.id) };
 }
 
-/**
- * A validação de assinatura varre TODAS as configs do provedor (sem filtro de
- * empresa): enquanto uma config com segredo existir no banco, webhook não
- * assinado de QUALQUER empresa é recusado com 401. Isso é o defeito P1-11
- * (documentado em docs/RELATORIO-ERP-ONLY.md) e é a razão de os cenários sem
- * assinatura rodarem antes do cenário assinado — e das configs serem removidas
- * no fim (limpeza também para a próxima execução da suíte).
- */
+/** Configurações criadas pelo teste são removidas ao final da rodada. */
 async function limparConfigsDaRodada(): Promise<void> {
   const s = getStore();
   for (const id of configsDaRodada.splice(0)) {
     await s.remove(R_GATEWAY_CONFIGS, id).catch(() => undefined);
-  }
-}
-
-/** Segredo suspenso para isolar a prova do P1-11 — restaurado ao final. */
-type SegredoSuspenso = { id: number; valor: string };
-
-async function suspenderSegredosExistentes(): Promise<SegredoSuspenso[]> {
-  const linhas = await query<{ id: number; webhook_segredo_cifrado: string }>(
-    `SELECT id, webhook_segredo_cifrado FROM gateway_configs WHERE webhook_segredo_cifrado IS NOT NULL`,
-  );
-  if (linhas.rows.length) {
-    await query(`UPDATE gateway_configs SET webhook_segredo_cifrado = NULL WHERE webhook_segredo_cifrado IS NOT NULL`);
-  }
-  return linhas.rows.map((r) => ({ id: Number(r.id), valor: r.webhook_segredo_cifrado }));
-}
-
-async function restaurarSegredos(suspensos: SegredoSuspenso[]): Promise<void> {
-  for (const item of suspensos) {
-    await query(`UPDATE gateway_configs SET webhook_segredo_cifrado = $2 WHERE id = $1`, [item.id, item.valor]).catch(() => undefined);
   }
 }
 
@@ -231,12 +205,6 @@ async function filhosDaBaixa(lancamentoId: number): Promise<number> {
 
 test('ERP-01: webhook de pagamento processa em PostgreSQL, é idempotente e não vaza schema', async (t) => {
   const s = getStore();
-  // Enquanto o P1-11 existir (assinatura varre TODAS as configs do provedor,
-  // sem empresa), um segredo residual de qualquer execução anterior recusaria
-  // as notificações não assinadas desta prova. Os segredos pré-existentes são
-  // suspensos aqui e restaurados no fim — a prova fica isolada do estado.
-  const suspensos = await suspenderSegredosExistentes();
-  t.after(async () => restaurarSegredos(suspensos));
   const porta = await reservePort();
   const { child, baseUrl, logs } = await startRealServer(porta);
   t.after(async () => stopServer(child));
@@ -332,8 +300,6 @@ test('ERP-01: webhook de pagamento processa em PostgreSQL, é idempotente e não
   assert.equal(await filhosDaBaixa(d.lancamentoId), 0, 'uma única baixa, mesmo com duas entregas simultâneas');
 
   // ------------------------------------------------- C) assinatura inválida → retry assinado
-  // (por último entre os cenários sem assinatura: a config com segredo desta
-  //  empresa passa a exigir assinatura também das outras — P1-11.)
   const c = await novoTenant({ comSegredo: true });
   const eventoC = unico('evt-assinado');
   const corpoSemAssinatura = JSON.stringify({ event: 'payment.paid', event_id: eventoC, data: { id: c.refCobranca }, status: 'pago' });
@@ -378,20 +344,14 @@ test('ERP-01: o payload JSONB é lido nos dois formatos (objeto e string)', asyn
 });
 
 // ============================================================================
-// P1-11 (registrado nesta prova, NÃO corrigido em ERP-01) — ESCOPO DA ASSINATURA
+// P1-11 (identificado no ERP-01; resolvido no gate ERP-03) — ESCOPO DA ASSINATURA
 //
-// A validação de assinatura do webhook varre TODAS as configs do provedor
-// (`s.list(R_GATEWAY_CONFIGS, { filter: { provider } })`, sem `empresa_id`):
-// basta UMA empresa ter segredo configurado para que notificações de TODAS as
-// empresas passem a exigir assinatura — e a notificação legítima de quem não
-// configurou segredo é recusada com 401. O caminho inverso também impressiona:
-// a assinatura validada marca `empresaId` da config que a aceitou, e o evento
-// pode ficar atribuído a uma empresa diferente da dona da cobrança.
-//
-// O teste abaixo descreve o comportamento CORRETO e está marcado como `todo`
-// (falha esperada) até o ciclo que decidir o escopo multiempresa do endpoint.
+// A referência do webhook identifica uma cobrança. Somente a config da empresa
+// proprietária decide se a assinatura é obrigatória; outra empresa nunca a
+// autentica. O evento rejeitado fica na trilha da proprietária e o retry
+// legítimo reaproveita a mesma linha. Duplicata só recebe ACK autenticado.
 // ============================================================================
-test('ERP-01/P1-11: segredo de UMA empresa não pode recusar webhook de OUTRA', { todo: 'P1-11 — assinatura global por provedor (sem empresa); correção depende da decisão de escopo multiempresa' }, async (t) => {
+test('ERP-03/P1-11: assinatura pertence à cobrança de cada empresa, não ao provedor inteiro', async (t) => {
   const s = getStore();
   const porta = await reservePort();
   const { child, baseUrl } = await startRealServer(porta);
@@ -409,6 +369,105 @@ test('ERP-01/P1-11: segredo de UMA empresa não pode recusar webhook de OUTRA', 
   assert.equal(resposta.status, 200, `a empresa que não configurou segredo não pode ser recusada por causa de outra; veio ${resposta.status} ${resposta.texto}`);
   assert.equal(resposta.body?.resultado, 'paga');
   assert.equal((await s.get(R_GATEWAY_COBRANCAS, semSegredo.cobrancaId))!.status, 'paga');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, semSegredo.lancamentoId))!.status, 'confirmado');
+  const eventoB = (await eventosDoEvento(semSegredo, evento))[0];
+  assert.equal(Number(eventoB.empresa_id), semSegredo.empresaId, 'o evento nasce atribuído à dona da cobrança');
+  assert.equal(eventoB.assinatura_ok, false, 'sem segredo B não deve herdar assinatura de A');
+
+  // B agora também tem segredo, diferente de A. Um HMAC válido de A NÃO
+  // autoriza alterar a cobrança de B, nem um evento já aceito pode ser
+  // reconhecido como duplicado antes de validar a assinatura do dono.
+  const segredoB = unico('segredo-b');
+  const protegidoB = await novoTenant({ comSegredo: true, segredo: segredoB });
+  const eventoProtegido = unico('evt-protegido-b');
+  const corpoB = JSON.stringify({ event: 'payment.paid', event_id: eventoProtegido, data: { id: protegidoB.refCobranca }, status: 'pago' });
+  const hmacA = (body: string) => createHmac('sha256', SEGREDO_WEBHOOK).update(body, 'utf8').digest('hex');
+  const hmacB = (body: string) => createHmac('sha256', segredoB).update(body, 'utf8').digest('hex');
+  const forjado = await enviarWebhook(baseUrl, corpoB, { 'x-mock-signature': hmacA(corpoB) });
+  assert.equal(forjado.status, 401, 'segredo da empresa A não autentica B');
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, protegidoB.cobrancaId))!.status, 'pendente');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, protegidoB.lancamentoId))!.status, 'pendente');
+  const rejeitado = (await eventosDoEvento(protegidoB, eventoProtegido))[0];
+  assert.equal(Number(rejeitado.empresa_id), protegidoB.empresaId, 'rejeição pertence à empresa B');
+  assert.equal(rejeitado.status, 'ignorado');
+
+  const valido = await enviarWebhook(baseUrl, corpoB, { 'x-mock-signature': hmacB(corpoB) });
+  assert.equal(valido.status, 200);
+  assert.equal(valido.body?.resultado, 'paga');
+  assert.equal((await eventosDoEvento(protegidoB, eventoProtegido)).length, 1, 'retry reaproveita a rejeição');
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, protegidoB.cobrancaId))!.status, 'paga');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, protegidoB.lancamentoId))!.status, 'confirmado');
+  assert.equal(await filhosDaBaixa(protegidoB.lancamentoId), 0);
+
+  const duplicataSemAssinatura = await enviarWebhook(baseUrl, corpoB);
+  assert.equal(duplicataSemAssinatura.status, 401, 'a duplicata não pode ser ACK sem autenticação');
+  assert.equal((await eventosDoEvento(protegidoB, eventoProtegido)).length, 1);
+  const duplicataAutenticada = await enviarWebhook(baseUrl, corpoB, { 'x-mock-signature': hmacB(corpoB) });
+  assert.equal(duplicataAutenticada.status, 200);
+  assert.equal(duplicataAutenticada.body?.duplicado, true);
+
+  // Um ID global de evento não pode ser reaproveitado por A para provocar
+  // ACK/alteração em B (o índice UNIQUE do PG é provider × evento_id).
+  const corpoCruzado = JSON.stringify({ event: 'payment.paid', event_id: eventoProtegido, data: { id: comSegredo.refCobranca }, status: 'pago' });
+  const cruzado = await enviarWebhook(baseUrl, corpoCruzado, { 'x-mock-signature': hmacA(corpoCruzado) });
+  assert.equal(cruzado.status, 409);
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, comSegredo.cobrancaId))!.status, 'pendente');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, comSegredo.lancamentoId))!.status, 'pendente');
+  assert.equal((await eventosDoEvento(protegidoB, eventoProtegido)).length, 1);
+
+  // provider_ref não é UNIQUE no schema operacional. Em caso de colisão entre
+  // empresas não se pode escolher a primeira linha da página e baixar A/B.
+  const ambA = await novoTenant();
+  const ambB = await novoTenant();
+  await s.update(R_GATEWAY_COBRANCAS, ambB.cobrancaId, { provider_ref: ambA.refCobranca });
+  const idAmbiguo = unico('evt-ref-ambigua');
+  const amb = await enviarWebhook(baseUrl, JSON.stringify({ event: 'payment.paid', event_id: idAmbiguo, data: { id: ambA.refCobranca }, status: 'pago' }));
+  assert.equal(amb.status, 409, 'referência compartilhada não pode escolher arbitrariamente uma empresa');
+  assert.equal((await eventosDoEvento(ambA, idAmbiguo)).length, 0);
+  for (const t of [ambA, ambB]) {
+    assert.equal((await s.get(R_GATEWAY_COBRANCAS, t.cobrancaId))!.status, 'pendente');
+    assert.equal((await s.get(RESOURCES.lancamentos_financeiros, t.lancamentoId))!.status, 'pendente');
+  }
+});
+
+test('ERP-03/P1-11: retry anterior sem assinatura não atravessa a ativação de segredo', async (t) => {
+  const s = getStore();
+  const porta = await reservePort();
+  const { child, baseUrl } = await startRealServer(porta);
+  t.after(async () => stopServer(child));
+  t.after(async () => limparConfigsDaRodada());
+
+  const dono = await novoTenant(); // a assinatura era opcional quando o evento ficou em erro
+  const eventoId = unico('evt-retry-sem-assinatura');
+  const corpo = JSON.stringify({ event: 'payment.paid', event_id: eventoId, data: { id: dono.refCobranca }, status: 'pago' });
+  const pendente = await s.insert(R_GATEWAY_WEBHOOK_EVENTS, {
+    empresa_id: dono.empresaId, provider: 'mock', evento_id: eventoId, evento: 'payment.paid',
+    payload: JSON.parse(corpo), assinatura_ok: false, status: 'erro', tentativas: 1,
+  });
+  const segredo = unico('segredo-ativado');
+  await s.update(R_GATEWAY_CONFIGS, dono.configId, { webhook_segredo_cifrado: cifrarSegredo(segredo) });
+
+  const { processarEvento } = await import('../../src/gateway');
+  const retryInterno = await processarEvento(pendente);
+  assert.equal(retryInterno.resultado, 'erro', 'cron/manual não pode pagar evento não autenticado após ativação de segredo');
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, dono.cobrancaId))!.status, 'pendente');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, dono.lancamentoId))!.status, 'pendente');
+  const semAssinatura = await enviarWebhook(baseUrl, corpo);
+  assert.equal(semAssinatura.status, 401, 'retry HTTP também precisa da assinatura recém-configurada');
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, dono.cobrancaId))!.status, 'pendente');
+
+  const assinatura = createHmac('sha256', segredo).update(corpo).digest('hex');
+  const valido = await enviarWebhook(baseUrl, corpo, { 'x-mock-signature': assinatura });
+  assert.equal(valido.status, 200);
+  assert.equal(valido.body?.resultado, 'paga', 'retry autenticado deve recuperar o evento anterior');
+  const eventos = await eventosDoEvento(dono, eventoId);
+  assert.equal(eventos.length, 1, 'retry conserva UNIQUE(provider, evento_id)');
+  assert.equal(eventos[0].status, 'processado');
+  assert.equal(eventos[0].assinatura_ok, true);
+  assert.equal(Number(eventos[0].empresa_id), dono.empresaId);
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, dono.cobrancaId))!.status, 'paga');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, dono.lancamentoId))!.status, 'confirmado');
+  assert.equal(await filhosDaBaixa(dono.lancamentoId), 0);
 });
 
 // ============================================================================
@@ -428,8 +487,6 @@ test('ERP-01/P1-11: segredo de UMA empresa não pode recusar webhook de OUTRA', 
 
 test('ERP-01: cobrança inexistente e payload inválido têm resposta controlada (sem efeito, sem vazamento)', async (t) => {
   const s = getStore();
-  const suspensos = await suspenderSegredosExistentes();
-  t.after(async () => restaurarSegredos(suspensos));
   const porta = await reservePort();
   const { child, baseUrl } = await startRealServer(porta);
   t.after(async () => stopServer(child));
@@ -492,8 +549,6 @@ test('ERP-01: cobrança inexistente e payload inválido têm resposta controlada
 
 test('ERP-01: o webhook confirma a cobrança da empresa dona e não toca a outra (isolamento)', async (t) => {
   const s = getStore();
-  const suspensos = await suspenderSegredosExistentes();
-  t.after(async () => restaurarSegredos(suspensos));
   const porta = await reservePort();
   const { child, baseUrl } = await startRealServer(porta);
   t.after(async () => stopServer(child));

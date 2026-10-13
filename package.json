@@ -13,7 +13,7 @@
     "typecheck": "npm run typecheck:domain && npm --workspace server run typecheck && npm --workspace client run typecheck",
     "typecheck:domain": "npm --workspace @brobond/domain run typecheck",
     "test": "npm --workspace server test && npm --workspace client test",
-    "test:pg": "npm --workspace server run test:pg",
+    "test:pg": "node scripts/test-pg-gate.mjs",
     "audit:menu": "node --import tsx scripts/auditar-menu.ts",
     "smoke": "node scripts/smoke-e2e.mjs",
     "smoke:pg": "node scripts/smoke-pg.mjs",
