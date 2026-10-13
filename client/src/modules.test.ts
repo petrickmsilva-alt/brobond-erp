@@ -47,6 +47,18 @@ describe('visibleModules', () => {
     expect(comPermissao.some((m) => m.id === 'politicas-comerciais')).toBe(true);
   });
 
+
+  it('UX-02.1: permissões comerciais refletem herdar/permitir/negar na descoberta', () => {
+    expect(visibleModules({ perfil: 'gerente', perm_politicas: 'negar' }).map((m) => m.id)).not.toContain('politicas-comerciais');
+    expect(visibleModules({ perfil: 'gerente', perm_politicas: 'herdar' }).map((m) => m.id)).toContain('politicas-comerciais');
+    expect(visibleModules({ perfil: 'operador', perm_politicas: 'permitir' }).map((m) => m.id)).toContain('politicas-comerciais');
+
+    expect(visibleModules({ perfil: 'operador' }).map((m) => m.id)).not.toContain('catalogos');
+    expect(visibleModules({ perfil: 'operador', perm_compartilhar: 'permitir' }).map((m) => m.id)).toContain('catalogos');
+    expect(visibleModules({ perfil: 'gerente', perm_catalogos: 'negar', perm_compartilhar: 'negar', perm_metricas: 'negar' }).map((m) => m.id)).not.toContain('catalogos');
+    expect(visibleModules({ perfil: 'gerente', perm_catalogos: 'negar', perm_metricas: 'permitir' }).map((m) => m.id)).toContain('catalogos');
+  });
+
   it('ERP-05: o grupo Fiscal existe e concentra documentos, regras, NCM e inutilizações', () => {
     expect(MODULE_GROUPS).toContain('Fiscal');
     const fiscal = MODULES.filter((m) => m.group === 'Fiscal').map((m) => m.id);

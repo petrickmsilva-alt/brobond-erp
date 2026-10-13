@@ -102,10 +102,8 @@ export default function App() {
                   element={
                     m.adminOnly ? (
                       <AdminOnly>{el}</AdminOnly>
-                    ) : m.minPerfil ? (
-                      <ModuleAccess moduleId={m.id}>{el}</ModuleAccess>
                     ) : (
-                      el
+                      <ModuleAccess moduleId={m.id}>{el}</ModuleAccess>
                     )
                   }
                 />

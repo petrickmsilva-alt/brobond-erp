@@ -67,7 +67,7 @@ O caminho público por token de catálogo/portal **não** foi reutilizado como a
 
 - `server/src/resources.ts`: `listas_preco` e `envios` agora declaram `minPerfil: 'gerente'`, alinhando o servidor ao menu já existente. Não houve ampliação de privilégio: o operador perde o acesso que a UI já anunciava como gerencial.
 - `server/src/connectors.ts`: o router autenticado `/api/connectors` aplica guard de gerente/admin antes de status, painel, autorização, sincronização, conexão e desconexão. Callbacks OAuth e webhooks públicos permanecem no router público e fora deste guard.
-- `client/src/App.tsx`: rotas de módulos com `minPerfil` usam `visibleModules` (a mesma fonte da Sidebar/Command Palette) por meio de `ModuleAccess`. URLs existentes não mudaram; isto fecha a UX da URL direta, mas **não** é a barreira de segurança — a barreira é o servidor.
+- `client/src/App.tsx`: as rotas geradas de módulos usam `visibleModules` (a mesma fonte da Sidebar/Command Palette) por meio de `ModuleAccess`. `visibleModules` também passou a espelhar as capacidades comerciais (`herdar/permitir/negar`) para Catálogos e Políticas, sem ampliar a API. URLs existentes não mudaram; isto fecha a UX da URL direta, mas **não** é a barreira de segurança — a barreira é o servidor.
 - Empresas já tinha `adminOnly` no recurso e `minPerfil: 'admin'` no módulo; a URL agora também segue a mesma descoberta. Financeiro e demais módulos com `minPerfil` seguem a mesma regra genérica, sem reorganizar grupos ou labels.
 
 ### 2.3 P0-03 — PDV
@@ -110,7 +110,7 @@ Implementação mínima: `GET /api/pdv/caixas/aberto` passou a ser uma leitura o
 - `server/test/pg/ux021-navigation-blockers.test.ts` — HTTP real + PostgreSQL 16.14: **PASS** (tenant, perfis, conectores e jornada PDV).
 - Testes direcionados de PDV, conectores, listas de preço e logística — **PASS**.
 - Testes client de módulos, PDV, Layout e Sidebar — **PASS**.
-- `npm test` completo — **PASS**: servidor 702 pass / 0 fail / 65 skipped (arquivos PG sem `DATABASE_URL` nesta invocação); cliente 294/294.
+- `npm test` completo — **PASS**: servidor 702 pass / 0 fail / 65 skipped (arquivos PG sem `DATABASE_URL` nesta invocação); cliente 295/295.
 - `npm run test:pg` oficial em banco PostgreSQL 16.14 novo — **PASS**: 158 testes reais, 0 fail/skip/todo (`ERP-03 GATE PASS`).
 - `npm run smoke:pg` — **PASS**: 126/126 verificações contra PostgreSQL real em banco novo criado pelo runner.
 - `npm run typecheck` (domain + server + client) — **PASS**.
@@ -120,7 +120,7 @@ Implementação mínima: `GET /api/pdv/caixas/aberto` passou a ser uma leitura o
 
 ## 5. Avisos restantes do audit:menu
 
-1. **`politicas-comerciais` (`RBAC_DERIVA_SOLTA`):** classificado como exceção comercial intencional. A autoridade não é `minPerfil` isolado, e sim `perm_politicas` (`herdar/permitir/negar`) combinada ao perfil. Os testes cobrem operador negado, operador permitido e gerente negado.
+1. **`politicas-comerciais` (`RBAC_DERIVA_SOLTA`):** classificado como exceção comercial intencional no script estático, que não modela capacidades por usuário. A autoridade é `perm_politicas` (`herdar/permitir/negar`) combinada ao perfil; a descoberta/URL agora espelham essa regra. Os testes cobrem operador negado, operador permitido e gerente negado.
 2. **`/api/health` (`ROTA_PUBLICA`):** endpoint público intencional de saúde, registrado antes de `requireAuth`; não expõe dados de negócio.
 
 ## 6. Limites e não-objetivos confirmados
