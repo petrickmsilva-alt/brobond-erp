@@ -869,37 +869,45 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
     if (!parsed) return res.status(202).json({ ok: true, ignorado: true, motivo: 'Evento fora do escopo de pagamento.' });
 
     const s = getStore();
-    // IDEMPOTÊNCIA: a mesma notificação (provedor × evento_id) entra UMA vez.
-    // Atenção: notificações REJEITADAS por assinatura (status 'ignorado') NÃO
-    // contam — senão um evento forjado travaria o retry legítimo do provedor.
-    const anteriores = await s.list(R_GATEWAY_WEBHOOK_EVENTS, { page: 1, pageSize: 10, filter: { provider: providerId, evento_id: parsed.evento_id } });
-    const aceito = anteriores.rows.find((r) => String(r.status) !== 'ignorado');
-    if (aceito) return res.json({ ok: true, duplicado: true, evento_id: parsed.evento_id });
-    const jaRejeitado = anteriores.rows[0] ?? null;
+    // A referência do corpo NÃO é autenticação. Ela só identifica a cobrança
+    // candidata; o segredo é o da empresa dona da cobrança, nunca o de outra
+    // config do mesmo provedor. Referência ambígua não autoriza nenhum efeito.
+    const cobrancas = parsed.provider_ref
+      ? await s.list(R_GATEWAY_COBRANCAS, { page: 1, pageSize: 2, filter: { provider: providerId, provider_ref: parsed.provider_ref } })
+      : null;
+    if (cobrancas && cobrancas.total > 1) return res.status(409).json({ error: 'Referência de cobrança ambígua.' });
+    const empresaId = cobrancas?.rows[0] ? Number(cobrancas.rows[0].empresa_id) : null;
+    const config = empresaId === null ? null : await configDaEmpresa(empresaId, providerId);
+    if (empresaId !== null && (!config || config.ativo === false)) return res.status(401).json({ error: 'Assinatura inválida.' });
+    const segredo = config ? decifrarSegredo(config.webhook_segredo_cifrado as string | null) : null;
+    const ctxLocal: GatewayContext | null = config && empresaId !== null
+      ? { empresaId, config, credenciais: null, webhookSegredo: segredo }
+      : null;
+    const assinaturaOk = !!segredo && !!ctxLocal && provider.verificaAssinatura(ctxLocal, corpo, req.headers as Record<string, string | undefined>);
 
-    // Assinatura: validada quando há segredo em alguma config do provedor.
-    let assinaturaOk = false;
-    let empresaId: number | null = null;
-    const configs = await s.list(R_GATEWAY_CONFIGS, { page: 1, pageSize: 50, filter: { provider: providerId } });
-    const headers = req.headers as Record<string, string | undefined>;
-    let temSegredo = false;
-    for (const c of configs.rows) {
-      const segredo = decifrarSegredo(c.webhook_segredo_cifrado as string | null);
-      if (!segredo) continue;
-      temSegredo = true;
-      const ctxLocal: GatewayContext = { empresaId: Number(c.empresa_id), config: c, credenciais: null, webhookSegredo: segredo };
-      if (provider.verificaAssinatura(ctxLocal, corpo, headers)) {
-        assinaturaOk = true;
-        empresaId = Number(c.empresa_id);
-        break;
-      }
+    // Verifique a assinatura ANTES de responder "duplicado". Caso contrário,
+    // um terceiro obtém ACK de evento de outro tenant sem autenticar.
+    // IDEMPOTÊNCIA: rejeições ('ignorado') não envenenam o retry assinado.
+    const anteriores = await s.list(R_GATEWAY_WEBHOOK_EVENTS, { page: 1, pageSize: 2, filter: { provider: providerId, evento_id: parsed.evento_id } });
+    const anterior = anteriores.rows[0] ?? null;
+    const rejeicaoLegadaSemEmpresa = anterior?.empresa_id == null && anterior?.status === 'ignorado';
+    if (anterior && ((!rejeicaoLegadaSemEmpresa && Number(anterior.empresa_id || 0) !== Number(empresaId || 0))
+      || extrairRefDoPayload(provider, lerPayloadWebhook(anterior.payload)) !== parsed.provider_ref)) {
+      return res.status(409).json({ error: 'Evento já registrado para outra cobrança.' });
     }
-    if (temSegredo && !assinaturaOk) {
+    const aceito = anteriores.rows.find((r) => String(r.status) !== 'ignorado');
+    const jaRejeitado = aceito ? null : anterior;
+
+    if (segredo && !assinaturaOk) {
+      // Nunca atualizar nem dar ACK de duplicata de um evento já aceito
+      // quando a entrega atual não foi autenticada.
+      if (aceito) return res.status(401).json({ error: 'Assinatura inválida.' });
       // Registro forense + rejeição: assinatura inválida não processa nada.
       // Repetição de rejeição só atualiza o carimbo — não empilha linhas.
       const evento = jaRejeitado
         ? await s.update(R_GATEWAY_WEBHOOK_EVENTS, Number(jaRejeitado.id), { recebido_em: new Date().toISOString(), payload: payloadParaArmazenar(corpo) })
         : await s.insert(R_GATEWAY_WEBHOOK_EVENTS, {
+            empresa_id: empresaId,
             provider: providerId,
             evento_id: parsed.evento_id,
             evento: parsed.evento,
@@ -913,6 +921,7 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
       await s.audit({ usuario_id: null, usuario: 'webhook', acao: 'seguranca', recurso: 'gateway_webhook_events', registro_id: registroId, descricao: `Webhook ${providerId} rejeitado: assinatura inválida (evento ${parsed.evento_id})`, dados: { provider: providerId, evento_id: parsed.evento_id }, empresa_id: empresaExplicitaAudit(empresaId, null) });
       return res.status(401).json({ error: 'Assinatura inválida.' });
     }
+    if (aceito) return res.json({ ok: true, duplicado: true, evento_id: parsed.evento_id });
 
     // Persistência ANTES do processamento: mesmo que o processamento falhe,
     // o evento está gravado e entra no retry — sem duplicar (índice único).
@@ -939,7 +948,14 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
     } catch (e) {
       // Corrida entre duas entregas idênticas: a trava do banco deixou uma
       // passar; a outra é duplicata por definição, não erro.
-      if (codigoDoErro(e) === '23505') return res.json({ ok: true, duplicado: true, evento_id: parsed.evento_id });
+      if (codigoDoErro(e) === '23505') {
+        const atual = await s.findOneWhere(R_GATEWAY_WEBHOOK_EVENTS, { provider: providerId, evento_id: parsed.evento_id });
+        if (!atual || Number(atual.empresa_id || 0) !== Number(empresaId || 0)
+          || extrairRefDoPayload(provider, lerPayloadWebhook(atual.payload)) !== parsed.provider_ref) {
+          return res.status(409).json({ error: 'Evento já registrado para outra cobrança.' });
+        }
+        return res.json({ ok: true, duplicado: true, evento_id: parsed.evento_id });
+      }
       throw e;
     }
 
@@ -993,7 +1009,11 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
     // Contexto: empresa vem da cobrança (o webhook não carrega tenant).
     let cobranca: Row | null = null;
     if (parsed.provider_ref) {
-      const achadas = await s.list(R_GATEWAY_COBRANCAS, { page: 1, pageSize: 5, filter: { provider: providerId, provider_ref: parsed.provider_ref } });
+      const achadas = await s.list(R_GATEWAY_COBRANCAS, { page: 1, pageSize: 2, filter: { provider: providerId, provider_ref: parsed.provider_ref } });
+      if (achadas.total > 1) {
+        await marcarErro('Referência de cobrança ambígua.', tentativas);
+        return { resultado: 'erro' };
+      }
       cobranca = achadas.rows[0] ?? null;
     }
     if (!cobranca) {
@@ -1001,6 +1021,10 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
       return { resultado: 'ignorado' };
     }
 
+    if (evento.empresa_id != null && Number(evento.empresa_id) !== Number(cobranca.empresa_id)) {
+      await marcarErro('Empresa do evento diverge da cobrança.', tentativas);
+      return { resultado: 'erro' };
+    }
     const ctx = await contextoDoProvider(Number(cobranca.empresa_id), providerId).catch(() => null);
     if (!ctx) {
       await marcarErro('Configuração do gateway ausente/inativa.', tentativas);
