@@ -85,14 +85,18 @@ test('estoque: movimentações são imutáveis', async () => {
 });
 
 test('OP: concluir dá entrada no estoque; reabrir estorna; não exclui concluída', async () => {
-  const op = await createRecord(RESOURCES.ordens, { produto_id: produtoId, tamanho_id: 4, quantidade: 20, status: 'planejada' }, admin);
+  // Este teste de memória não cria um usuário persistido. Não associe o evento
+  // da OP ao id fictício 1: o PostgreSQL exige que usuario_id exista, e agora
+  // falhas de escrita da trilha são propagadas em vez de ocultadas.
+  const atorSemUsuario = { ...admin, id: null as any };
+  const op = await createRecord(RESOURCES.ordens, { produto_id: produtoId, tamanho_id: 4, quantidade: 20, status: 'planejada' }, atorSemUsuario);
   const antes = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: 4 } });
   assert.equal(antes.rows.length, 0);
-  await updateRecord(RESOURCES.ordens, Number(op.id), { status: 'concluida' }, admin);
+  await updateRecord(RESOURCES.ordens, Number(op.id), { status: 'concluida' }, atorSemUsuario);
   const dep = await listRecords(RESOURCES.estoques, { page: 1, pageSize: 10, filter: { produto_id: produtoId, tamanho_id: 4 } });
   assert.equal(Number(dep.rows[0].quantidade), 20);
   await expectHttp(() => deleteRecord(RESOURCES.ordens, Number(op.id), admin), 409, /concluída/i);
-  await updateRecord(RESOURCES.ordens, Number(op.id), { status: 'em_producao' }, admin);
+  await updateRecord(RESOURCES.ordens, Number(op.id), { status: 'em_producao' }, atorSemUsuario);
   const est = await getRecord(RESOURCES.estoques, Number(dep.rows[0].id));
   assert.equal(Number(est.quantidade), 0);
 });

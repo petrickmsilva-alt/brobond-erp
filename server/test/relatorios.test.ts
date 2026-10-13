@@ -199,8 +199,10 @@ test('razão e DRE bloqueiam operador (financeiro é gerente/admin)', async () =
 test('cockpit de produção: KPIs das OPs com atrasadas e peças do mês', async () => {
   await ensureSetup();
   const { producaoPainel } = await import('../src/producao');
-  // OP em produção com previsão vencida
-  await createRecord(RESOURCES.ordens, { produto_id: produtoId, tipo: 'tamanho', tamanho_id: tamanhoId, quantidade: 5, status: 'em_producao', previsao: '2026-01-10' }, admin);
+  // OP em produção com previsão vencida. O ator de memória não é um usuário
+  // persistido; use usuario_id nulo em vez de associar o evento a um id fictício.
+  const atorSemUsuario = { ...admin, id: null as any };
+  await createRecord(RESOURCES.ordens, { produto_id: produtoId, tipo: 'tamanho', tamanho_id: tamanhoId, quantidade: 5, status: 'em_producao', previsao: '2026-01-10' }, atorSemUsuario);
   const req: any = { user: admin };
   let payload: any = null;
   const res: any = { json: (d: any) => ((payload = d), res) };
