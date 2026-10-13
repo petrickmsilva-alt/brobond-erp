@@ -86,7 +86,7 @@ export default function ModulePage({ module }: { module: Module }) {
   const resource = module.resource ? meta.resources[module.resource] : undefined;
 
   if (module.connector) return <Suspense fallback={<SubPageLoading />}><ConectorPage module={module} /></Suspense>;
-  if (module.group === 'Gestão de Commerce' || module.group === 'Ecossistema Creators') {
+  if (module.space === 'commerce' || module.space === 'creators') {
     return <Suspense fallback={<SubPageLoading />}><CommerceModulePage module={module} /></Suspense>;
   }
   if (module.id === 'usuarios') return <Suspense fallback={<SubPageLoading />}><UsuariosPage /></Suspense>;

@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, BookOpen, HelpCircle } from 'lucide-react';
-import { MODULES, type Module } from '../modules';
+import { visibleModules, type Module } from '../modules';
+import { useAuth } from '../auth/AuthContext';
 import { PageHeader } from '../components/ui';
 
 const GUIAS: { titulo: string; modulos: string[]; passos: string[] }[] = [
@@ -71,7 +73,7 @@ const GUIAS: { titulo: string; modulos: string[]; passos: string[] }[] = [
     passos: [
       'Em qualquer listagem: “Exportar” baixa CSV (Excel pt-BR) ou XLSX respeitando a busca e os filtros ativos.',
       'Produtos, clientes, fornecedores, insumos e saldos iniciais podem ser importados de CSV ou XLSX com pré-visualização, validação linha a linha e modelo para download.',
-      'O dashboard traz vendas dos últimos 12 meses, produção das últimas 8 semanas, top 10 produtos e insumos em alerta.',
+      'O painel Meu Negócio traz vendas dos últimos 12 meses, produção das últimas 8 semanas, top 10 produtos e insumos em alerta.',
     ],
   },
   {
@@ -96,11 +98,11 @@ const GUIAS: { titulo: string; modulos: string[]; passos: string[] }[] = [
   },
 ];
 
-function mod(m: string): Module | undefined {
-  return MODULES.find((x) => x.id === m);
-}
-
 export default function AjudaPage() {
+  const { user } = useAuth();
+  const visiveis = useMemo(() => visibleModules(user), [user]);
+  const mod = (id: string): Module | undefined => visiveis.find((x) => x.id === id);
+
   return (
     <div className="p-4 pb-16 sm:p-6">
       <PageHeader

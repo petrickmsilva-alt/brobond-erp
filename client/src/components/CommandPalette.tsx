@@ -7,15 +7,30 @@ import { useAuth } from '../auth/AuthContext';
 type Item = {
   id: string;
   label: string;
+  context: string;
+  area?: string;
+  group?: string;
+  subgroup?: string;
+  path?: string;
+  planned?: boolean;
   description?: string;
   icon: Module['icon'];
   keywords?: string;
   action: () => void;
 };
 
+function normalizarBusca(texto: string): string {
+  return texto
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
 /**
  * Busca global (Ctrl/Cmd+K): navega para qualquer um dos módulos visíveis para
- * o perfil do usuário sem precisar procurar na sidebar. Aberta pelo Layout.
+ * o perfil do usuário na Árvore Master, exibindo o contexto (Área → Grupo) e a
+ * rota canônica.
  */
 export default function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, logout } = useAuth();
@@ -26,71 +41,88 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const listRef = useRef<HTMLDivElement>(null);
 
   const items = useMemo<Item[]>(() => {
-    // O item de topo é o Meu Negócio declarado em `modules.ts` — o rótulo não é
-    // escrito à mão (ERP-UX-01): o nome vem da mesma fonte do menu e das rotas.
-    const inicio = visibleModules(user).find((m) => m.path === '/');
-    const modules = visibleModules(user).filter((m) => m.path !== '/');
+    const modules = visibleModules(user);
     const fromModules: Item[] = modules.map((m) => ({
       id: `mod-${m.id}`,
       label: m.label,
+      context: m.area === m.label ? `${m.area} → ${m.group}` : `${m.area} → ${m.group}`,
+      area: m.area,
+      group: m.group,
+      subgroup: m.subgroup,
+      path: m.path,
+      planned: Boolean(m.planned?.length),
       description: m.description,
       icon: m.icon,
-      keywords: `${m.group ?? ''} ${m.label}`,
+      keywords: `${m.area} ${m.group} ${m.subgroup} ${m.path} ${m.keywords ?? ''} ${m.planned?.length ? 'planejado em breve roadmap' : ''}`,
       action: () => navigate(m.path),
     }));
     const extras: Item[] = [
       {
         id: 'acao-minha-conta',
         label: 'Minha conta',
+        context: 'Utilidades Globais → Conta e suporte',
+        area: 'Utilidades Globais',
+        group: 'Conta e suporte',
+        path: '/config',
         description: 'Nome, e-mail, perfil e informações do sistema.',
         icon: UserRound,
+        keywords: 'perfil usuario conta preferencias',
         action: () => navigate('/config'),
       },
       {
         id: 'acao-trocar-senha',
         label: 'Trocar senha',
+        context: 'Utilidades Globais → Conta e suporte',
+        area: 'Utilidades Globais',
+        group: 'Conta e suporte',
+        path: '/config#senha',
         description: 'Definir uma nova senha de acesso.',
         icon: KeyRound,
+        keywords: 'seguranca senha credenciais',
         action: () => navigate('/config#senha'),
       },
       {
         id: 'acao-sair',
         label: 'Sair',
+        context: 'Sessão → Conta',
         description: 'Encerrar a sessão atual.',
         icon: LogOut,
         keywords: 'logout encerrar sessao',
         action: () => logout(),
       },
     ];
-    return [
-      {
-        id: 'mod-dashboard',
-        label: inicio?.label ?? 'Meu Negócio',
-        description: inicio?.description ?? 'Visão geral do negócio.',
-        icon: inicio?.icon ?? UserRound,
-        keywords: inicio?.group ?? '',
-        action: () => navigate('/'),
-      },
-      ...fromModules,
-      ...extras,
-    ];
+    return [...fromModules, ...extras];
   }, [user, navigate, logout]);
 
   const results = useMemo(() => {
-    const term = q.trim().toLowerCase();
+    const term = normalizarBusca(q);
     if (!term) return items;
     const scored = items
       .map((it) => {
-        const haystack = `${it.label} ${it.keywords ?? ''} ${it.description ?? ''}`.toLowerCase();
-        const labelLower = it.label.toLowerCase();
+        const labelNorm = normalizarBusca(it.label);
+        const areaNorm = normalizarBusca(it.area ?? '');
+        const groupNorm = normalizarBusca(it.group ?? '');
+        const subgroupNorm = normalizarBusca(it.subgroup ?? '');
+        const pathNorm = normalizarBusca(it.path ?? '');
+        const keywordsNorm = normalizarBusca(it.keywords ?? '');
+        const haystack = normalizarBusca(
+          `${it.label} ${it.area ?? ''} ${it.group ?? ''} ${it.subgroup ?? ''} ${it.path ?? ''} ${it.keywords ?? ''} ${it.description ?? ''}`
+        );
+
         let score = -1;
-        if (labelLower.startsWith(term)) score = 3;
-        else if (labelLower.includes(term)) score = 2;
+        if (labelNorm === term || pathNorm === term || pathNorm === `/${term}`) score = 6;
+        else if (labelNorm.startsWith(term)) score = 5;
+        else if (labelNorm.includes(term) || pathNorm.includes(term)) score = 4;
+        else if (areaNorm.includes(term) || groupNorm.includes(term) || subgroupNorm.includes(term)) score = 3;
+        else if (keywordsNorm.includes(term)) score = 2;
         else if (haystack.includes(term)) score = 1;
-        return { it, score };
+
+        // Módulos operacionais têm prioridade sobre módulos planejados em caso de empate.
+        const priority = score > 0 ? score * 10 + (it.planned ? 0 : 1) : -1;
+        return { it, priority };
       })
-      .filter((x) => x.score > 0)
-      .sort((a, b) => b.score - a.score);
+      .filter((x) => x.priority > 0)
+      .sort((a, b) => b.priority - a.priority);
     return scored.map((x) => x.it);
   }, [q, items]);
 
@@ -149,7 +181,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             ref={inputRef}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Ir para um módulo... (produtos, vendas, financeiro...)"
+            placeholder="Ir para módulo, área ou rota... (vendas, produção, /ncm...)"
             className="w-full border-0 bg-transparent text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-0 dark:text-slate-100 dark:placeholder:text-navy-500"
             aria-label="Buscar módulo ou ação"
             aria-activedescendant={results[active] ? `cmd-item-${results[active].id}` : undefined}
@@ -172,6 +204,8 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                   key={it.id}
                   id={`cmd-item-${it.id}`}
                   data-idx={idx}
+                  data-planned={it.planned ? 'true' : undefined}
+                  data-path={it.path}
                   role="option"
                   aria-selected={isActive}
                   type="button"
@@ -181,10 +215,27 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                     isActive ? 'bg-navy-50 dark:bg-navy-800' : 'hover:bg-slate-50 dark:hover:bg-navy-800/60'
                   }`}
                 >
-                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${isActive ? 'bg-navy-800 text-white dark:bg-brand-500' : 'bg-slate-100 text-slate-500 dark:bg-navy-800 dark:text-navy-300'}`}>
+                  <span
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                      isActive ? 'bg-navy-800 text-white dark:bg-brand-500' : 'bg-slate-100 text-slate-500 dark:bg-navy-800 dark:text-navy-300'
+                    }`}
+                  >
                     <Icon className="h-4 w-4" />
                   </span>
                   <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2" aria-hidden="true">
+                      <span className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-navy-300">
+                        {it.context}
+                      </span>
+                      {it.path && (
+                        <span className="shrink-0 font-mono text-[10px] text-slate-400/80 dark:text-navy-400">{it.path}</span>
+                      )}
+                      {it.planned && (
+                        <span className="shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.2 text-[9px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-300">
+                          Em breve
+                        </span>
+                      )}
+                    </span>
                     <span className="block truncate text-sm font-semibold text-navy-900 dark:text-slate-100">{it.label}</span>
                     {it.description && <span className="block truncate text-xs text-slate-400 dark:text-navy-300">{it.description}</span>}
                   </span>

@@ -29,7 +29,7 @@ export default function CommerceModulePage({ module }: { module: Module }) {
           </span>
           <div className="min-w-0">
             <div className="mb-1 flex flex-wrap items-center gap-2">
-              <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-brand-300">{module.group}</span>
+              <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-brand-300">{module.area} · {module.group}</span>
               <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-300">
                 rota pronta
               </span>
