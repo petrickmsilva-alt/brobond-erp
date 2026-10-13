@@ -430,6 +430,46 @@ test('ERP-03/P1-11: assinatura pertence à cobrança de cada empresa, não ao pr
   }
 });
 
+test('ERP-03/P1-11: retry anterior sem assinatura não atravessa a ativação de segredo', async (t) => {
+  const s = getStore();
+  const porta = await reservePort();
+  const { child, baseUrl } = await startRealServer(porta);
+  t.after(async () => stopServer(child));
+  t.after(async () => limparConfigsDaRodada());
+
+  const dono = await novoTenant(); // a assinatura era opcional quando o evento ficou em erro
+  const eventoId = unico('evt-retry-sem-assinatura');
+  const corpo = JSON.stringify({ event: 'payment.paid', event_id: eventoId, data: { id: dono.refCobranca }, status: 'pago' });
+  const pendente = await s.insert(R_GATEWAY_WEBHOOK_EVENTS, {
+    empresa_id: dono.empresaId, provider: 'mock', evento_id: eventoId, evento: 'payment.paid',
+    payload: JSON.parse(corpo), assinatura_ok: false, status: 'erro', tentativas: 1,
+  });
+  const segredo = unico('segredo-ativado');
+  await s.update(R_GATEWAY_CONFIGS, dono.configId, { webhook_segredo_cifrado: cifrarSegredo(segredo) });
+
+  const { processarEvento } = await import('../../src/gateway');
+  const retryInterno = await processarEvento(pendente);
+  assert.equal(retryInterno.resultado, 'erro', 'cron/manual não pode pagar evento não autenticado após ativação de segredo');
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, dono.cobrancaId))!.status, 'pendente');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, dono.lancamentoId))!.status, 'pendente');
+  const semAssinatura = await enviarWebhook(baseUrl, corpo);
+  assert.equal(semAssinatura.status, 401, 'retry HTTP também precisa da assinatura recém-configurada');
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, dono.cobrancaId))!.status, 'pendente');
+
+  const assinatura = createHmac('sha256', segredo).update(corpo).digest('hex');
+  const valido = await enviarWebhook(baseUrl, corpo, { 'x-mock-signature': assinatura });
+  assert.equal(valido.status, 200);
+  assert.equal(valido.body?.resultado, 'paga', 'retry autenticado deve recuperar o evento anterior');
+  const eventos = await eventosDoEvento(dono, eventoId);
+  assert.equal(eventos.length, 1, 'retry conserva UNIQUE(provider, evento_id)');
+  assert.equal(eventos[0].status, 'processado');
+  assert.equal(eventos[0].assinatura_ok, true);
+  assert.equal(Number(eventos[0].empresa_id), dono.empresaId);
+  assert.equal((await s.get(R_GATEWAY_COBRANCAS, dono.cobrancaId))!.status, 'paga');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, dono.lancamentoId))!.status, 'confirmado');
+  assert.equal(await filhosDaBaixa(dono.lancamentoId), 0);
+});
+
 // ============================================================================
 // ERP-01 — CENÁRIOS DE ACEITE COMPLEMENTARES (complementam, não duplicam, os
 // blocos A/B/C/D/E acima): os testes mínimos obrigatórios do ciclo que ainda

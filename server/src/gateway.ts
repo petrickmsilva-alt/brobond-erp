@@ -895,7 +895,11 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
       || extrairRefDoPayload(provider, lerPayloadWebhook(anterior.payload)) !== parsed.provider_ref)) {
       return res.status(409).json({ error: 'Evento já registrado para outra cobrança.' });
     }
-    const aceito = anteriores.rows.find((r) => String(r.status) !== 'ignorado');
+    // Um evento que entrou em erro quando a empresa ainda não exigia assinatura
+    // não pode ser pago pelo cron após o admin ativar o segredo. Somente uma
+    // nova entrega com assinatura válida pode promovê-lo a recebido.
+    const aceito = anteriores.rows.find((r) => String(r.status) !== 'ignorado'
+      && !(segredo && r.status === 'erro' && r.assinatura_ok !== true));
     const jaRejeitado = aceito ? null : anterior;
 
     if (segredo && !assinaturaOk) {
@@ -1028,6 +1032,13 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
     const ctx = await contextoDoProvider(Number(cobranca.empresa_id), providerId).catch(() => null);
     if (!ctx) {
       await marcarErro('Configuração do gateway ausente/inativa.', tentativas);
+      return { resultado: 'erro' };
+    }
+    // A política de autenticação vigente também vale para retry pelo cron e
+    // pelo admin: sem esta guarda, um evento persistido antes de ativar o
+    // segredo (assinatura_ok=false) poderia baixar a cobrança depois dele.
+    if (ctx.webhookSegredo && evento.assinatura_ok !== true) {
+      await marcarErro('Nova entrega assinada necessária para reprocessar.', tentativas);
       return { resultado: 'erro' };
     }
 

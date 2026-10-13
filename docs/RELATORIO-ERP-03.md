@@ -1,6 +1,6 @@
 # ERP-03 — PostgreSQL como gate oficial do ERP Core
 
-**Data:** 2026-10-13 · **Status: GATE TÉCNICO PASS; APROVAÇÃO PROCESSUAL BLOCKED até auditoria independente (não fazer merge)** · Repo `petrickmsilva-alt/brobond-erp` · branch `arena/5e23031a-brobond-erp` · base/HEAD inicial `a33811f15d995fb89d1254079de369ab8b078db3` (merge do PR #55, ERP-02.1). Checkout inicial limpo. Commit de implementação `337c82420282391304af33d262536b6c9b14efa3`; PR [#56](https://github.com/petrickmsilva-alt/brobond-erp/pull/56).
+**Data:** 2026-10-13 · **Status: GATE TÉCNICO PASS após revisão adversarial; APROVAÇÃO PROCESSUAL BLOCKED até auditoria independente (não fazer merge)** · Repo `petrickmsilva-alt/brobond-erp` · branch `arena/5e23031a-brobond-erp` · base/HEAD inicial `a33811f15d995fb89d1254079de369ab8b078db3` (merge do PR #55, ERP-02.1). Checkout inicial limpo. Commit de implementação `337c82420282391304af33d262536b6c9b14efa3`; PR [#56](https://github.com/petrickmsilva-alt/brobond-erp/pull/56).
 
 ## 1. Objetivo e estado inicial auditado
 
@@ -103,6 +103,14 @@ Local: binário PostgreSQL **16.14**, `current_setting('server_version_num') = 1
 
 **Limites residuais de segurança:** `provider_ref` não é UNIQUE entre empresas no schema; um valor ambíguo deve ser recusado (409), não adivinhado. Empresa sem segredo mantém a política legada de assinatura opcional; o webhook não fornece tenant autenticado independente da referência. Evento sem cobrança permanece ignorado/auditado sem efeito financeiro. Não foi feita chamada a provedor financeiro externo (G). Cobertura parcial/vermelha da matriz não implica “100% do ERP”.
 
+## 6.2. Revisão adversarial subsequente — P1-11 no retry
+
+**Achado objetivo após o CI verde:** `processarEvento()` (invocado por cron/reprocessamento manual) confiava no campo `assinatura_ok` salvo quando o evento entrou em erro. Se a empresa ativasse segredo *depois* de salvar um evento sem assinatura, o retry confirmava cobrança e título sem autenticação sob a nova política. Teste em PostgreSQL real em `server/test/pg/e01-gateway-webhook-postgresql.test.ts` reproduziu `resultado='paga'` onde deveria ser `erro` (`5 pass, 1 fail`, banco vazio, antes da correção). Não foi classificado como TODO nem mascarado.
+
+**Correção delimitada:** o reprocessador agora recusa (`status='erro'`) eventos com `assinatura_ok !== true` quando a configuração **atual** da empresa exige segredo; nenhum efeito financeiro ocorre. A rota não trata um evento `erro` sem autenticação como duplicata se chegou uma nova entrega **assinada pelo dono**: promove a mesma linha (índice UNIQUE por provedor/evento) e processa uma vez. Retry HTTP sem assinatura responde 401. A prova PG verifica cobrança/título ainda pendentes depois do cron e do HTTP sem assinatura, depois confirma estado final pago/processado/autenticado com uma única linha de evento. Isto não muda a política opcional de empresas sem segredo.
+
+**Determinismo após a correção (3 bancos novos, PostgreSQL 16.14):** RUN 1 `154 pass / 0 fail / 0 skip / 0 TODO` em 137.327 ms (demais gates simultâneos), RUN 2 `154/0/0/0` em 96.334 ms, RUN 3 `154/0/0/0` em 93.572 ms, todos com exit 0. `server test` 695 pass/65 skips fora do glob PG; `client test` 290 pass; `smoke` demo e `smoke:pg` 126/126; `typecheck`, `lint` (415 warnings/0 errors), `build`, `audit:menu`, `git diff --check` exit 0. Prisma local continua bloqueado pelo download da engine; CI no novo head precisa reconfirmar validate/deploy. Não há auditoria independente externa registrada no PR: `reviews=[]`, `reviewRequests=[]` no início desta revisão. **Esta revisão adversarial é interna**, não uma aprovação independente.
+
 ## 7. Auditoria interna / decisão
 
 PG real? sim; CI usa PG? sim (versão 16.14); falha de teste bloqueia? sim (mutação); TODO crítico? **não após correção P1-11**; multiempresa/rollback/concorrência/idempotência/JSONB/constraints/volume/estado final? há provas concretas acima e nos arquivos da matriz, **não universalmente**; drift Prisma integral? não; testes em banco reutilizado? barrados. A auditoria local é **PASS com limites de cobertura explicitados**. Checks do PR estão verdes no mesmo head de código; **auditoria independente externa ainda não executada**. A revisão interna e o CI não substituem essa condição processual. Não reabrir ERP-02 para obter verde.
@@ -113,8 +121,8 @@ PG real? sim; CI usa PG? sim (versão 16.14); falha de teste bloqueia? sim (muta
 - `package.json` — `test:pg` passa pelo gate oficial, reaproveitando o glob server.
 - `.github/workflows/ci.yml` — executar comando oficial, remover masking Prisma, incluir testes client/smoke demo/audit/typecheck domínio, consulta versão explícita.
 - `server/test/pg/e03-core-gate.test.ts` — evidência PG real de migrations, JSONB, constraints e rollback.
-- `server/src/gateway.ts` — assinatura do webhook escopada à dona da cobrança, colisões fail-closed e guarda no reprocessamento.
-- `server/test/pg/e01-gateway-webhook-postgresql.test.ts` — TODO P1-11 convertido em prova PG bloqueante ampliada; removido isolamento artificial de segredos nos testes.
+- `server/src/gateway.ts` — assinatura escopada à dona da cobrança, colisões fail-closed; na revisão adversarial, guarda pela configuração **atual** do segredo no cron/manual e promoção apenas por nova entrega assinada.
+- `server/test/pg/e01-gateway-webhook-postgresql.test.ts` — TODO P1-11 convertido em prova PG bloqueante ampliada; revisão adversarial acrescentou caso falha-antes/passa-depois de retry após ativação do segredo.
 - `docs/ERP-03-TEST-INVENTORY.md` — classificação arquivo a arquivo A–G.
 - `docs/ERP-03-POSTGRES-GATE-PLAN.md` — estado final do plano e referência a este relatório.
 - `docs/RELATORIO-ERP-03.md` — matriz, gaps, execução e evidências de fechamento.
