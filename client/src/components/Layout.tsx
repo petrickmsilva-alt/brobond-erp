@@ -80,7 +80,7 @@ export default function Layout() {
   }, [menu]);
 
   useEffect(() => {
-    document.title = current && current.path !== '/' ? `${current.label} · BROBOND ERP` : 'BROBOND ERP';
+    document.title = current ? `${current.label} · BROBOND ERP` : 'BROBOND ERP';
   }, [current]);
 
   const initials = (user?.name || '?')

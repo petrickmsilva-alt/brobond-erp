@@ -20,6 +20,7 @@ import Layout from './Layout';
 import { ToastProvider } from './ui';
 import App from '../App';
 import { api, setToken } from '../lib/api';
+import { MODULES, moduleOfPath } from '../modules';
 
 const ADMIN = { id: 1, name: 'Petrick Silva', email: 'petrick@brobond.com.br', perfil: 'admin' };
 let usuarioAtual: typeof ADMIN | { id: number; name: string; email: string; perfil: string; perm_politicas?: string } | null = ADMIN;
@@ -82,9 +83,33 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     const nav = trilha();
     expect(within(nav).getByText('Meu Negócio')).toHaveAttribute('aria-current', 'page');
     expect(within(nav).queryByText('Dashboard')).not.toBeInTheDocument();
+    expect(document.title).toBe('Meu Negócio · BROBOND ERP');
+    expect(document.title).not.toContain('Dashboard');
     await waitFor(() => expect(screen.getByLabelText('Menu principal')).toBeInTheDocument());
     expect(screen.queryByText('Dashboard')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Dashboard')).not.toBeInTheDocument();
+  });
+
+  it('matriz de regressão: todas as 70 rotas de módulos e as 5 rotas de detalhe resolvem para o módulo e área corretos', () => {
+    for (const m of MODULES) {
+      const resolvido = moduleOfPath(m.path);
+      expect(resolvido?.id, `Rota ${m.path} não resolveu para ${m.id}`).toBe(m.id);
+      expect(resolvido?.area).toBe(m.area);
+      expect(resolvido?.group).toBe(m.group);
+    }
+
+    const detalhes = [
+      { path: '/produtos/12', id: 'produtos', area: 'Cadastros' },
+      { path: '/fichas/7', id: 'fichas', area: 'Produção' },
+      { path: '/ordens/45', id: 'ordens', area: 'Produção' },
+      { path: '/compras/88', id: 'compras', area: 'Estoque & Suprimentos' },
+      { path: '/vendas/123', id: 'vendas', area: 'Vendas' },
+    ];
+    for (const d of detalhes) {
+      const resolvido = moduleOfPath(d.path);
+      expect(resolvido?.id).toBe(d.id);
+      expect(resolvido?.area).toBe(d.area);
+    }
   });
 
   it('monta as peças do shell: Sidebar, skip-link, busca global e seletor de empresa', async () => {

@@ -184,29 +184,94 @@ Todos os 70 módulos existentes foram reconciliados com **1 única casa principa
 
 ---
 
-## 4. Matriz de Regressão das 82 Rotas Frontend
+## 4. Matriz Completa de Regressão das 82 Rotas Frontend
 
-Todas as 82 rotas da aplicação (70 rotas de módulos + 5 rotas de detalhe por `:id` + 6 rotas públicas + 1 rota legada `/settings` + fallback `*`) foram preservadas sem quebra de URL ou permissão.
+Todas as **82 rotas frontend** (70 rotas de módulos + 5 rotas de detalhe por `:id` + 6 rotas públicas/dev + 1 rota legada `/settings` com fallback `*`) foram preservadas sem qualquer quebra de URL, página renderizada, `resource` de API ou contrato RBAC.
 
-### 4.1 Rotas de Módulos (1 a 70)
-As 70 rotas da Tabela 3 acima (`/`, `/relatorios`, `/produtos`, ..., `/config`, `/ajuda`) permanecem mapeadas em `App.tsx` e `ModulePage.tsx` com proteção `Protected` + `ModuleAccess` / `AdminOnly`.
-
-### 4.2 Rotas de Detalhe, Legadas, Públicas e Fallback (71 a 82)
-
-| # | Rota | Componente | Guard / Acesso | Breadcrumb / Comportamento na Árvore Master | Status |
-|---:|---|---|---|---|---|
-| 71 | `/produtos/:id` | `ProductDetail` | `Protected` | `BROBOND ERP › Cadastros › Produtos › #:id` (auto-expande `Cadastros → Produtos`) | OK |
-| 72 | `/fichas/:id` | `FichaDetail` | `Protected` | `BROBOND ERP › Produção › Fichas técnicas › #:id` (auto-expande `Produção → Engenharia`) | OK |
-| 73 | `/ordens/:id` | `OrdemDetail` | `Protected` | `BROBOND ERP › Produção › Cadeias de Fabricação › #:id` (auto-expande `Produção → Execução`) | OK |
-| 74 | `/compras/:id` | `OrderPage (compra)` | `Protected` | `BROBOND ERP › Estoque & Suprimentos › Compras › #:id` (auto-expande `Estoque & Suprimentos → Compras`) | OK |
-| 75 | `/vendas/:id` | `OrderPage (venda)` | `Protected` | `BROBOND ERP › Vendas › Vendas › #:id` (auto-expande `Vendas → Comercial`) | OK |
-| 76 | `/settings` | `Navigate to="/config" replace` | `Protected` | Redireciona para `/config` (`Utilidades Globais → Conta e suporte → Configurações`) | OK |
-| 77 | `/ui-kit` | `ComponentCatalog` | Pública (DEV) | Catálogo visual de componentes UI | OK |
-| 78 | `/login` | `Login` | Pública | Tela de login sem shell autenticado | OK |
-| 79 | `/esqueci-senha` | `ForgotPassword` | Pública | Recuperação de senha sem shell autenticado | OK |
-| 80 | `/redefinir-senha` | `ResetPassword` | Pública | Redefinição de senha sem shell autenticado | OK |
-| 81 | `/convite/:token` | `Convite` | Pública | Aceite de convite sem shell autenticado | OK |
-| 82 | `/catalogo/:token` e `/portal/:token` (+ `*`) | `CatalogoPublico` / `PortalCliente` / `Navigate to="/"` | Pública / Fallback | Links externos multi-tenant por token e fallback seguro para `/` | OK |
+| # | Rota (`path`) | Página / Componente (`App.tsx` / `ModulePage.tsx`) | Área Master | Grupo | Recurso API | Guard / RBAC | Status |
+|---:|---|---|---|---|---|---|---|
+| 1 | `/` | `Dashboard` | Meu Negócio | Visão do negócio | `/api/dashboard`, `/api/negocios/*` | `Protected` (Todos) | OK |
+| 2 | `/relatorios` | `RelatoriosPage` | Meu Negócio | Análises | `/api/relatorios/*` | `Protected` (Todos) | OK |
+| 3 | `/produtos` | `ModulePage (produtos)` | Cadastros | Produtos | `produtos` | `Protected` (Todos) | OK |
+| 4 | `/categorias` | `ModulePage (categorias)` | Cadastros | Produtos | `categorias_produto` | `Protected` (Todos) | OK |
+| 5 | `/cores` | `ModulePage (cores)` | Cadastros | Produtos | `cores` | `Protected` (Todos) | OK |
+| 6 | `/colecoes` | `ModulePage (colecoes)` | Cadastros | Produtos | `colecoes` | `Protected` (Todos) | OK |
+| 7 | `/grades` | `ModulePage (grades)` | Cadastros | Produtos | `grades` | `Protected` (Todos) | OK |
+| 8 | `/tamanhos` | `ModulePage (tamanhos)` | Cadastros | Produtos | `tamanhos` | `Protected` (Todos) | OK |
+| 9 | `/medidas` | `MedidasPage` | Cadastros | Produtos | `medidas` | `Protected` (Todos) | OK |
+| 10 | `/insumos` | `ModulePage (insumos)` | Cadastros | Materiais | `insumos` | `Protected` (Todos) | OK |
+| 11 | `/clientes` | `ModulePage (clientes)` | Cadastros | Pessoas | `clientes` | `Protected` (Todos) | OK |
+| 12 | `/fornecedores` | `ModulePage (fornecedores)` | Cadastros | Pessoas | `fornecedores` | `Protected` (Todos) | OK |
+| 13 | `/representantes` | `ModulePage (representantes)` | Cadastros | Pessoas | `representantes` | `Protected` (Todos) | OK |
+| 14 | `/vendas` | `ModulePage (vendas)` | Vendas | Comercial | `vendas` | `Protected` (Todos) | OK |
+| 15 | `/propostas` | `ModulePage (propostas)` | Vendas | Comercial | `propostas` | `Protected` (Todos) | OK |
+| 16 | `/catalogos` | `ModulePage (catalogos)` | Vendas | Comercial | `catalogos` | `Protected` (Todos) | OK |
+| 17 | `/politicas-comerciais` | `ModulePage (politicas-comerciais)` | Vendas | Comercial | `politicas_comerciais` | `ModuleAccess` (`gerente` + `politicas`) | OK |
+| 18 | `/listas-preco` | `ModulePage (listas-preco)` | Vendas | Comercial | `listas_preco` | `ModuleAccess` (`gerente`) | OK |
+| 19 | `/pdv` | `PdvPage` | Vendas | Balcão | `/api/pdv/*` | `ModuleAccess` (Todos; caixa: `gerente`) | OK |
+| 20 | `/pdv-caixas` | `ModulePage (pdv-caixas)` | Vendas | Balcão | `pdv_caixas` | `ModuleAccess` (`gerente`) | OK |
+| 21 | `/expedicao` | `ExpedicaoPage` | Vendas | Atendimento e entrega | `ordens_separacao` | `ModuleAccess` (Todos) | OK |
+| 22 | `/divergencias` | `ModulePage (divergencias)` | Vendas | Atendimento e entrega | `divergencias_expedicao` | `ModuleAccess` (`gerente`) | OK |
+| 23 | `/envios` | `LogisticaPage` | Vendas | Atendimento e entrega | `envios` | `ModuleAccess` (`gerente`) | OK |
+| 24 | `/devolucoes` | `DevolucoesPage` | Vendas | Pós-venda | `devolucoes` | `ModuleAccess` (Todos) | OK |
+| 25 | `/estoque` | `EstoqueGradePage` | Estoque & Suprimentos | Estoque | `estoque_produtos` | `ModuleAccess` (Todos) | OK |
+| 26 | `/movimentacoes` | `ModulePage (movimentacoes)` | Estoque & Suprimentos | Estoque | `movimentacoes` | `ModuleAccess` (Todos) | OK |
+| 27 | `/inventario` | `InventarioModulePage` | Estoque & Suprimentos | Estoque | `inventarios` | `ModuleAccess` (Todos) | OK |
+| 28 | `/locais` | `ModulePage (locais)` | Estoque & Suprimentos | Estoque | `locais_estoque` | `ModuleAccess` (Todos) | OK |
+| 29 | `/compras` | `ModulePage (compras)` | Estoque & Suprimentos | Compras | `compras` | `ModuleAccess` (Todos) | OK |
+| 30 | `/cotacoes-compra` | `CotacoesCompraPage` | Estoque & Suprimentos | Compras | `cotacoes_compra` | `ModuleAccess` (`gerente`) | OK |
+| 31 | `/compra-recebimentos` | `ModulePage (compra-recebimentos)` | Estoque & Suprimentos | Compras | `compra_recebimentos` | `ModuleAccess` (Todos) | OK |
+| 32 | `/importar-nfe-compra` | `ImportarNfePage` | Estoque & Suprimentos | Compras | `compras` (`/api/compras/importar-nfe`) | `ModuleAccess` (`gerente`) | OK |
+| 33 | `/sugestao-compra` | `SugestaoCompraPage` | Estoque & Suprimentos | Compras | `insumos` (`/api/suprimentos/sugestao-compra`) | `ModuleAccess` (`gerente`) | OK |
+| 34 | `/depara-fornecedor` | `ModulePage (depara-fornecedor)` | Estoque & Suprimentos | Compras | `fornecedor_insumo_depara` | `ModuleAccess` (`gerente`) | OK |
+| 35 | `/planejamento-producao` | `PlanejamentoProducaoPage` | Produção | Planejamento | `/api/producao/planejamento` | `ModuleAccess` (Todos) | OK |
+| 36 | `/ordens` | `ModulePage (ordens)` | Produção | Execução | `ordens_producao` | `ModuleAccess` (Todos) | OK |
+| 37 | `/fichas` | `ModulePage (fichas)` | Produção | Engenharia | `fichas_tecnicas` | `ModuleAccess` (Todos) | OK |
+| 38 | `/custo` | `CustoPage` | Produção | Engenharia | `/api/fichas` | `ModuleAccess` (Todos) | OK |
+| 39 | `/financeiro` | `FinanceiroPage` | Financeiro | Operação financeira | `/api/financeiro/*` | `ModuleAccess` (`gerente`) | OK |
+| 40 | `/lancamentos` | `ModulePage (lancamentos)` | Financeiro | Operação financeira | `lancamentos_financeiros` | `ModuleAccess` (`gerente`) | OK |
+| 41 | `/contas-financeiras` | `ModulePage (contas-financeiras)` | Financeiro | Tesouraria | `contas_financeiras` | `ModuleAccess` (`gerente`) | OK |
+| 42 | `/transferencias` | `ModulePage (transferencias)` | Financeiro | Tesouraria | `transferencias_financeiras` | `ModuleAccess` (`gerente`) | OK |
+| 43 | `/comissoes` | `ComissoesPage` | Financeiro | Comissões | `comissoes` | `ModuleAccess` (`gerente`) | OK |
+| 44 | `/investidores` | `ModulePage (investidores)` | Financeiro | Capital | `investidores` | `ModuleAccess` (`gerente`) | OK |
+| 45 | `/aportes` | `ModulePage (aportes)` | Financeiro | Capital | `aportes_financeiros` | `ModuleAccess` (`gerente`) | OK |
+| 46 | `/categorias-financeiras` | `ModulePage (categorias-financeiras)` | Financeiro | Parâmetros financeiros | `categorias_financeiras` | `ModuleAccess` (`gerente`) | OK |
+| 47 | `/centros-custo` | `ModulePage (centros-custo)` | Financeiro | Parâmetros financeiros | `centros_custo` | `ModuleAccess` (`gerente`) | OK |
+| 48 | `/recorrencias-financeiras` | `ModulePage (recorrencias-financeiras)` | Financeiro | Parâmetros financeiros | `recorrencias_financeiras` | `ModuleAccess` (`gerente`) | OK |
+| 49 | `/documentos-fiscais` | `ModulePage (documentos-fiscais)` | Fiscal | Operação fiscal | `documentos_fiscais` | `ModuleAccess` (`gerente`) | OK |
+| 50 | `/inutilizacoes` | `InutilizacoesPage` | Fiscal | Operação fiscal | `inutilizacoes_fiscais` | `ModuleAccess` (`gerente`) | OK |
+| 51 | `/regras-fiscais` | `ModulePage (regras-fiscais)` | Fiscal | Parâmetros fiscais | `regras_fiscais` | `ModuleAccess` (`gerente`) | OK |
+| 52 | `/ncm` | `NcmPage` | Fiscal | Parâmetros fiscais | `regras_ncm` | `ModuleAccess` (`gerente`) | OK |
+| 53 | `/empresas` | `EmpresasPage` | Administração | Organização e acesso | `/api/empresas/*` | `AdminOnly` (`admin`) | OK |
+| 54 | `/usuarios` | `UsuariosPage` | Administração | Organização e acesso | `users` | `AdminOnly` (`admin`) | OK |
+| 55 | `/auditoria` | `ModulePage (auditoria)` | Administração | Governança | `audit_log` | `ModuleAccess` (`adminOnly`) | OK |
+| 56 | `/webhooks` | `WebhooksPage` | Administração | Automações | `/api/webhooks/*` | `AdminOnly` (`admin`) | OK |
+| 57 | `/conectores/mercado-livre` | `ConectorPage (mercadolivre)` | Commerce | Canais | `/api/conectores/mercadolivre/*` | `ModuleAccess` (`gerente`) | OK |
+| 58 | `/conectores/mercado-pago` | `ConectorPage (mercadopago)` | Commerce | Canais | `/api/conectores/mercadopago/*` | `ModuleAccess` (`gerente`) | OK |
+| 59 | `/conectores/nuvemshop` | `ConectorPage (nuvemshop)` | Commerce | Canais | `/api/conectores/nuvemshop/*` | `ModuleAccess` (`gerente`) | OK |
+| 60 | `/conectores/instagram` | `ConectorPage (instagram)` | Commerce | Canais | `/api/conectores/instagram/*` | `ModuleAccess` (`gerente`) | OK |
+| 61 | `/commerce/produtos` | `CommerceModulePage` | Commerce | Multicanal | — (`planned`) | `ModuleAccess` (Todos) | OK |
+| 62 | `/commerce/pedidos` | `CommerceModulePage` | Commerce | Multicanal | — (`planned`) | `ModuleAccess` (Todos) | OK |
+| 63 | `/commerce/trends` | `CommerceModulePage` | Commerce | Multicanal | — (`planned`) | `ModuleAccess` (Todos) | OK |
+| 64 | `/commerce/delivery` | `CommerceModulePage` | Commerce | Multicanal | — (`planned`) | `ModuleAccess` (Todos) | OK |
+| 65 | `/creators` | `CommerceModulePage` | Creators | Parcerias e campanhas | — (`planned`) | `ModuleAccess` (Todos) | OK |
+| 66 | `/creator-matches` | `CommerceModulePage` | Creators | Parcerias e campanhas | — (`planned`) | `ModuleAccess` (Todos) | OK |
+| 67 | `/outreach-ai` | `CommerceModulePage` | Creators | Parcerias e campanhas | — (`planned`) | `ModuleAccess` (Todos) | OK |
+| 68 | `/campanhas` | `CommerceModulePage` | Creators | Parcerias e campanhas | — (`planned`) | `ModuleAccess` (Todos) | OK |
+| 69 | `/config` | `Settings` | Utilidades Globais | Conta e suporte | `/api/settings/*` | `Protected` (Todos) | OK |
+| 70 | `/ajuda` | `AjudaPage` | Utilidades Globais | Conta e suporte | — | `Protected` (Todos) | OK |
+| 71 | `/produtos/:id` | `ProductDetail` | Cadastros | Produtos | `produtos`, `/api/produtos/:id/*` | `Protected` (Todos) | OK |
+| 72 | `/fichas/:id` | `FichaDetail` | Produção | Engenharia | `fichas_tecnicas`, `/api/fichas/:id/*` | `Protected` (Todos) | OK |
+| 73 | `/ordens/:id` | `OrdemDetail` | Produção | Execução | `ordens_producao`, `/api/ordens/:id/*` | `Protected` (Todos) | OK |
+| 74 | `/compras/:id` | `OrderPage (compra)` | Estoque & Suprimentos | Compras | `compras`, `/api/compras/:id/*` | `Protected` (Todos) | OK |
+| 75 | `/vendas/:id` | `OrderPage (venda)` | Vendas | Comercial | `vendas`, `/api/vendas/:id/*` | `Protected` (Todos) | OK |
+| 76 | `/settings` | `Navigate to="/config" replace` | Utilidades Globais | Conta e suporte | — (redirect legado) | `Protected` (Todos) | OK |
+| 77 | `/ui-kit` | `ComponentCatalog` | — | — | — (DEV only) | Pública (DEV) | OK |
+| 78 | `/login` | `Login` | — | — | `/api/auth/login` | Pública | OK |
+| 79 | `/esqueci-senha` | `ForgotPassword` | — | — | `/api/auth/forgot-password` | Pública | OK |
+| 80 | `/redefinir-senha` | `ResetPassword` | — | — | `/api/auth/reset-password` | Pública | OK |
+| 81 | `/convite/:token` | `Convite` | — | — | `/api/auth/convite/:token` | Pública | OK |
+| 82 | `/catalogo/:token` / `/portal/:token` / `*` | `CatalogoPublico` / `PortalCliente` / `Navigate to="/"` | — | — | `/api/publico/*` | Pública / Fallback | OK |
 
 ---
 
