@@ -12,13 +12,37 @@
 import type { Request, Response } from 'express';
 import QRCode from 'qrcode';
 import { filtrosDoCatalogo } from './catalogos';
-import { HttpError } from './errors';
 import { getResource } from './resources';
-import { checkAccess, getStore } from './services';
+import { checkAccess, escopoDe, getStore } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
+import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, type EscopoEmpresa } from './empresa';
 import { attachImages } from './uploads';
+import type { Row } from './store';
 import { linkPublicoAsync } from './urlPublica';
+
+
+async function produtoDoAtor(produtoId: number, actor: Parameters<typeof escopoDe>[0]) {
+  const r = getResource('produtos')!;
+  const escopo: EscopoEmpresa = escopoDe(actor as never);
+  const s = getStore();
+  const produto = await buscarRegistroDaEmpresa(
+    (id) => s.get(r, id),
+    (where) => s.findOneWhere(r, where),
+    r,
+    produtoId,
+    escopo
+  );
+  return { produto: assertRegistroDaEmpresaParaEscrita(r, produto, escopo), escopo };
+}
+
+async function catalogosDoProduto(produto: Row, empresaId: number) {
+  return getStore().list(getResource('catalogos')!, {
+    page: 1,
+    pageSize: 100,
+    filter: { ativo: true, empresa_id: empresaId },
+  });
+}
 
 /**
  * Gera o conteúdo do QR code para um produto: URL pública (se houver catálogo
@@ -28,15 +52,13 @@ import { linkPublicoAsync } from './urlPublica';
  * "/catalogo/abc" não abre no celular de quem escaneia (mesma regra dos links
  * de e-mail: ver server/src/urlPublica.ts).
  */
-async function gerarConteudoQR(produtoId: number, req?: Request): Promise<{ url: string; dados: Record<string, unknown> }> {
-  const s = getStore();
-  const produto = await s.get(getResource('produtos')!, produtoId);
-  if (!produto) throw new HttpError(404, 'Produto não encontrado.');
+async function gerarConteudoQR(produtoId: number, actor: Parameters<typeof escopoDe>[0], req?: Request): Promise<{ url: string; dados: Record<string, unknown> }> {
+  const { produto, escopo } = await produtoDoAtor(produtoId, actor);
 
   await attachImages(getResource('produtos')!, [produto]);
 
   // Tenta encontrar um catálogo público que inclua este produto
-  const catalogos = await s.list(getResource('catalogos')!, { page: 1, pageSize: 100, filter: { ativo: true } });
+  const catalogos = await catalogosDoProduto(produto, escopo.empresaId);
   let urlPublica = '';
   for (const cat of catalogos.rows) {
     const filtros = filtrosDoCatalogo(cat);
@@ -74,7 +96,7 @@ export async function produtoQRCode(req: Request, res: Response) {
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
 
-  const { url, dados } = await gerarConteudoQR(id, req);
+  const { url, dados } = await gerarConteudoQR(id, actor, req);
   const size = Math.min(800, Math.max(128, Number(req.query.size) || 300));
 
   // Se ?format=json, retorna os dados + URL em vez da imagem
@@ -104,7 +126,7 @@ export async function produtoQRCodeSVG(req: Request, res: Response) {
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
 
-  const { url, dados } = await gerarConteudoQR(id, req);
+  const { url, dados } = await gerarConteudoQR(id, actor, req);
   const size = Number(req.query.size) || 300;
 
   const svg = await QRCode.toString(url || JSON.stringify(dados), {
@@ -122,9 +144,14 @@ export async function produtoQRCodeSVG(req: Request, res: Response) {
 
 /** GET /api/produtos/:id/qrcode/dados — dados JSON do produto (para QR code). */
 export async function produtoQRDados(req: Request, res: Response) {
-  // Endpoint público (acessível pelo QR code)
+  // A rota é montada depois de `requireAuth` em server/src/index.ts. O QR
+  // impresso aponta para ela, mas a resposta continua sendo uma leitura ERP:
+  // exige a mesma alçada e o mesmo tenant dos demais formatos de QR.
+  const actor = currentUser(req);
+  const r = getResource('produtos')!;
+  checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
-  const { dados } = await gerarConteudoQR(id, req);
+  const { dados } = await gerarConteudoQR(id, actor, req);
   res.json(dados);
 }
 
@@ -135,11 +162,9 @@ export async function produtoEtiquetaQR(req: Request, res: Response) {
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
 
-  const s = getStore();
-  const produto = await s.get(r, id);
-  if (!produto) throw new HttpError(404, 'Produto não encontrado.');
+  const { produto } = await produtoDoAtor(id, actor);
 
-  const { url, dados } = await gerarConteudoQR(id, req);
+  const { url, dados } = await gerarConteudoQR(id, actor, req);
   const qrPng = await QRCode.toBuffer(url || JSON.stringify(dados), {
     type: 'png',
     width: 180,

@@ -12,9 +12,9 @@ import QRCode from 'qrcode';
 import { createRequire } from 'node:module';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
-import { empresaDoAtorAudit, empresaDoRegistroAudit } from './empresa';
-import { getResource, RESOURCES } from './resources';
-import { checkAccess, exigirComercial, getStore, toHttpError } from './services';
+import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
+import { RESOURCES } from './resources';
+import { escopoDe, exigirComercial, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
 import type { Row } from './store';
@@ -92,6 +92,11 @@ export function hashTokenPublico(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
+/**
+ * Caminho PÚBLICO por token (catálogo/embed/pedido/evento). Ele não recebe um
+ * ator ERP e não pode ser reutilizado como autorização administrativa: quem
+ * chama os handlers gerenciais abaixo resolve o catálogo pelo escopo do ator.
+ */
 async function resolverTokenCatalogo(token: string): Promise<{ catalogo: Row | null; compartilhamento: Row | null }> {
   const s = getStore();
   const direto = await s.findOneWhere(RESOURCES.catalogos, { token });
@@ -447,14 +452,55 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
 }
 
 
+
+async function catalogoDoAtor(id: number, actor: Parameters<typeof escopoDe>[0], escrita = false) {
+  const r = RESOURCES.catalogos;
+  const escopo: EscopoEmpresa = escopoDe(actor as never);
+  const s = getStore();
+  const catalogo = await buscarRegistroDaEmpresa(
+    (catalogoId) => s.get(r, catalogoId),
+    (where) => s.findOneWhere(r, where),
+    r,
+    id,
+    escopo
+  );
+  return { catalogo: escrita ? assertRegistroDaEmpresaParaEscrita(r, catalogo, escopo) : catalogo, escopo };
+}
+
+async function clienteDoAtor(id: number, escopo: EscopoEmpresa) {
+  const r = RESOURCES.clientes;
+  return getStore().findOneWhere(r, { id, empresa_id: escopo.empresaId });
+}
+
+async function compartilhamentosDaEmpresa(empresaId: number | null, consolidado: boolean) {
+  const s = getStore();
+  if (consolidado || empresaId === null) {
+    return s.list(RESOURCES.catalogo_compartilhamentos, { page: 1, pageSize: 10000, sort: 'criado_em', dir: 'desc' });
+  }
+  const catalogos = await s.list(RESOURCES.catalogos, {
+    page: 1,
+    pageSize: 2000,
+    filter: { empresa_id: empresaId },
+  });
+  const ids = new Set(catalogos.rows.map((c) => Number(c.id)));
+  const todos = await s.list(RESOURCES.catalogo_compartilhamentos, { page: 1, pageSize: 10000, sort: 'criado_em', dir: 'desc' });
+  const rows = todos.rows.filter((c) => ids.has(Number(c.catalogo_id)));
+  return { ...todos, rows, total: rows.length };
+}
+
+async function catalogoDoCompartilhamento(compartilhamento: Row) {
+  const catalogo = await getStore().get(RESOURCES.catalogos, Number(compartilhamento.catalogo_id));
+  if (!catalogo) throw new HttpError(404, 'Compartilhamento não encontrado.');
+  return catalogo;
+}
+
 /** Central de compartilhamento: gera os ativos e registra a ação na auditoria. */
 export async function compartilharCatalogo(req: Request, res: Response) {
   const actor = currentUser(req);
   exigirComercial(actor, 'compartilhar');
   const id = parseId(req.params.id);
   const s = getStore();
-  const catalogo = await s.get(RESOURCES.catalogos, id);
-  if (!catalogo) throw new HttpError(404, 'Catálogo não encontrado.');
+  const { catalogo, escopo } = await catalogoDoAtor(id, actor, true);
   if (!catalogo.token) throw new HttpError(409, 'Este catálogo ainda não possui link público.');
 
   // Origem pública centralizada (APP_URL → cabeçalhos da requisição) — ver urlPublica.ts.
@@ -464,7 +510,7 @@ export async function compartilharCatalogo(req: Request, res: Response) {
   const expiraEm = new Date(Date.now() + dias * 86400000).toISOString();
   const canal = ['whatsapp', 'email', 'link', 'qrcode', 'visualizacao'].includes(String(req.body?.canal)) ? String(req.body.canal) : 'link';
   const clienteId = Number(req.body?.cliente_id) || null;
-  const cliente = clienteId ? await s.get(RESOURCES.clientes, clienteId) : null;
+  const cliente = clienteId ? await clienteDoAtor(clienteId, escopo) : null;
   if (clienteId && !cliente) throw new HttpError(400, 'Cliente selecionado não foi encontrado.');
   const compartilhamento = await s.insert(RESOURCES.catalogo_compartilhamentos, {
     catalogo_id: id, cliente_id: clienteId, usuario_id: actor.id || null,
@@ -513,14 +559,18 @@ export async function inteligenciaCatalogos(req: Request, res: Response) {
   const s = getStore();
   const dias = Math.min(365, Math.max(1, Number(req.query.dias) || 30));
   const desde = Date.now() - dias * 86400000;
+  const escopo = escopoDe(actor as never);
+  const catalogosFiltro = escopo.consolidado ? undefined : { empresa_id: escopo.empresaId };
+  const clientesFiltro = catalogosFiltro;
   const [compR, eventosR, catalogosR, clientesR, usuariosR] = await Promise.all([
-    s.list(RESOURCES.catalogo_compartilhamentos, { page: 1, pageSize: 10000, sort: 'criado_em', dir: 'desc' }),
+    compartilhamentosDaEmpresa(escopo.empresaId, escopo.consolidado),
     s.list(RESOURCES.catalogo_eventos, { page: 1, pageSize: 50000, sort: 'criado_em', dir: 'desc' }),
-    s.list(RESOURCES.catalogos, { page: 1, pageSize: 2000 }),
-    s.list(RESOURCES.clientes, { page: 1, pageSize: 5000 }),
+    s.list(RESOURCES.catalogos, { page: 1, pageSize: 2000, filter: catalogosFiltro }),
+    s.list(RESOURCES.clientes, { page: 1, pageSize: 5000, filter: clientesFiltro }),
     s.list(RESOURCES.usuarios, { page: 1, pageSize: 1000 }),
   ]);
-  const comps = compR.rows.filter((x) => new Date(String(x.criado_em)).getTime() >= desde);
+  const catalogoIds = new Set(catalogosR.rows.map((c) => Number(c.id)));
+  const comps = compR.rows.filter((x) => catalogoIds.has(Number(x.catalogo_id)) && new Date(String(x.criado_em)).getTime() >= desde);
   const ids = new Set(comps.map((x) => Number(x.id)));
   const eventos = eventosR.rows.filter((x) => ids.has(Number(x.compartilhamento_id)));
   const porTipo = (tipo: string) => eventos.filter((e) => e.tipo === tipo);
@@ -555,8 +605,11 @@ export async function revogarCompartilhamento(req: Request, res: Response) {
   const s = getStore();
   const atual = await s.get(RESOURCES.catalogo_compartilhamentos, id);
   if (!atual) throw new HttpError(404, 'Compartilhamento não encontrado.');
+  const catalogo = await catalogoDoCompartilhamento(atual);
+  const escopo = escopoDe(actor as never);
+  assertRegistroDaEmpresaParaEscrita(RESOURCES.catalogos, catalogo, escopo);
   if (!atual.revogado_em) await s.update(RESOURCES.catalogo_compartilhamentos, id, { revogado_em: new Date().toISOString() });
-  await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'catalogos', registro_id: Number(atual.catalogo_id), descricao: `Link individual #${id} revogado`, dados: { compartilhamento_id: id }, empresa_id: empresaDoAtorAudit(actor) });
+  await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'catalogos', registro_id: Number(atual.catalogo_id), descricao: `Link individual #${id} revogado`, dados: { compartilhamento_id: id }, empresa_id: empresaDoRegistroAudit(RESOURCES.catalogos, catalogo, actor) });
   res.json({ ok: true });
 }
 

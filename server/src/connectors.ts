@@ -145,6 +145,21 @@ const run = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Req
 
 export const connectorsRouter: Router = Router({ mergeParams: true });
 
+/**
+ * UX-02.1 — os quatro canais são módulos `minPerfil: 'gerente'` no menu.
+ * A sessão autenticada continua obrigatória (o router é montado depois de
+ * `requireAuth`), mas sessão sozinha não é alçada: operador não conecta,
+ * sincroniza, lê o painel nem desconecta uma conta externa. Os callbacks e
+ * webhooks públicos vivem em `publicConnectorsRouter`, fora deste guard.
+ */
+connectorsRouter.use((req, _res, next) => {
+  const actor = currentUser(req);
+  if (actor?.perfil !== 'admin' && actor?.perfil !== 'gerente') {
+    return next(new HttpError(403, 'Apenas gerentes e administradores acessam os conectores.'));
+  }
+  return next();
+});
+
 connectorsRouter.get(
   '/',
   run(async (req, res) => {

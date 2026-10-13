@@ -215,6 +215,33 @@ export function assertRegistroDaEmpresa(r: Resource, row: Row | null | undefined
   return row;
 }
 
+/**
+ * UX-02.1 — leitura especializada por ID dentro do tenant ativo.
+ *
+ * Handlers especializados frequentemente precisam carregar o registro raiz e,
+ * em seguida, seus relacionados. Este helper faz a busca já com `empresa_id`
+ * no predicado (em vez de ler globalmente e só filtrar depois) e devolve o
+ * mesmo 404 usado pelo restante da API para ID inexistente ou de outra
+ * empresa. `consolidado` continua sendo uma leitura autorizada; chamadas de
+ * escrita devem usar `assertRegistroDaEmpresaParaEscrita` no registro lido.
+ */
+export async function buscarRegistroDaEmpresa<T extends Row>(
+  lerPorId: (id: number) => Promise<T | null>,
+  buscarNoTenant: (where: Payload) => Promise<T | null>,
+  r: Resource,
+  id: number,
+  escopo: EscopoEmpresa | null | undefined,
+  tx?: Tx
+): Promise<T> {
+  void tx;
+  if (temEscopoEmpresa(r) && escopo && !escopo.consolidado) {
+    const row = await buscarNoTenant({ id, empresa_id: escopo.empresaId });
+    if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+    return row;
+  }
+  return assertRegistroDaEmpresa(r, await lerPorId(id), escopo) as T;
+}
+
 /** Consolidação amplia leituras, mas nunca transforma uma escrita em operação multiempresa. */
 export function assertRegistroDaEmpresaParaEscrita(
   r: Resource,

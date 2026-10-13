@@ -14,13 +14,13 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
-import { empresaDoRegistroAudit } from './empresa';
+import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
 import { getResource } from './resources';
-import { checkAccess, getStore } from './services';
+import { checkAccess, escopoDe, getStore } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
 import { labelOf } from './store';
-import type { Row, Tx } from './store';
+import type { Row } from './store';
 import { diaISO } from './utils';
 
 export const ETAPAS = ['corte', 'costura', 'acabamento', 'revisao'] as const;
@@ -39,27 +39,54 @@ export const DEFEITOS = [
 export type Etapa = typeof ETAPAS[number];
 export type Defeito = typeof DEFEITOS[number]['value'];
 
+
+async function ordemDoAtor(ordemId: number, actor: Parameters<typeof escopoDe>[0], escrita = false) {
+  const r = getResource('ordens')!;
+  const escopo: EscopoEmpresa = escopoDe(actor as never);
+  const s = getStore();
+  const op = await buscarRegistroDaEmpresa(
+    (id) => s.get(r, id),
+    (where) => s.findOneWhere(r, where),
+    r,
+    ordemId,
+    escopo
+  );
+  return { op: escrita ? assertRegistroDaEmpresaParaEscrita(r, op, escopo) : op, escopo };
+}
+
+async function registrosDaOrdem(ordemId: number, empresaId: number) {
+  const auditoria = getResource('auditoria')!;
+  return getStore().list(auditoria, {
+    page: 1,
+    pageSize: 500,
+    sort: 'data',
+    dir: 'desc',
+    filter: { recurso: 'qualidade', registro_id: ordemId, empresa_id: empresaId },
+  });
+}
+
+async function registrosDoRelatorio(empresaId: number | null) {
+  const auditoria = getResource('auditoria')!;
+  return getStore().list(auditoria, {
+    page: 1,
+    pageSize: 2000,
+    sort: 'data',
+    dir: 'desc',
+    filter: empresaId === null ? { recurso: 'qualidade' } : { recurso: 'qualidade', empresa_id: empresaId },
+  });
+}
+
 /** GET /api/ordens/:id/qualidade */
 export async function listQualidade(req: Request, res: Response) {
   const actor = currentUser(req);
   const r = getResource('ordens')!;
   checkAccess(r, actor, 'read');
   const ordemId = parseId(req.params.id);
-  const s = getStore();
 
-  // Verifica se a OP existe
-  const op = await s.get(r, ordemId);
-  if (!op) throw new HttpError(404, 'Ordem de fabricação não encontrada.');
-
-  // Busca registros de qualidade (na tabela auditoria com recurso = 'qualidade')
-  const auditoria = getResource('auditoria')!;
-  const registros = await s.list(auditoria, {
-    page: 1,
-    pageSize: 500,
-    sort: 'data',
-    dir: 'desc',
-    filter: { recurso: 'qualidade', registro_id: ordemId },
-  });
+  // A OP e os eventos dela são lidos já no tenant do ator.
+  const { op, escopo } = await ordemDoAtor(ordemId, actor);
+  void op;
+  const registros = await registrosDaOrdem(ordemId, escopo.empresaId);
 
   res.json(registros.rows.map((reg: Row) => ({
     id: reg.id,
@@ -84,8 +111,7 @@ export async function createQualidade(req: Request, res: Response) {
   const ordemId = parseId(req.params.id);
   const s = getStore();
 
-  const op = await s.get(r, ordemId);
-  if (!op) throw new HttpError(404, 'Ordem de fabricação não encontrada.');
+  const { op } = await ordemDoAtor(ordemId, actor, true);
 
   const etapa = String(req.body?.etapa || '');
   const defeito = String(req.body?.defeito || '');
@@ -135,20 +161,13 @@ export async function updateQualidade(req: Request, res: Response) {
 export async function relatorioQualidade(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('ordens')!, actor, 'read');
-  const s = getStore();
 
   const de = typeof req.query.de === 'string' ? req.query.de : undefined;
   const ate = typeof req.query.ate === 'string' ? req.query.ate : undefined;
   const etapa = typeof req.query.etapa === 'string' ? req.query.etapa : undefined;
 
-  const auditoria = getResource('auditoria')!;
-  const registros = await s.list(auditoria, {
-    page: 1,
-    pageSize: 2000,
-    sort: 'data',
-    dir: 'desc',
-    filter: { recurso: 'qualidade' },
-  });
+  const escopo = escopoDe(actor as never);
+  const registros = await registrosDoRelatorio(escopo.consolidado ? null : escopo.empresaId);
 
   let itens = registros.rows.map((reg: Row) => ({
     id: reg.id,

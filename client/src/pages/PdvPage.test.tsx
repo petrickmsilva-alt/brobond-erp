@@ -29,7 +29,7 @@ vi.mock('../lib/api', () => ({
 }));
 
 vi.mock('../auth/AuthContext', () => ({
-  useAuth: () => ({ user: { id: 1, name: 'Operador PDV', perfil: 'gerente' }, loading: false, meta: {} }),
+  useAuth: () => ({ user: { id: 1, name: 'Operador PDV', perfil: (globalThis as unknown as { __UX021_PERFIL?: string }).__UX021_PERFIL || 'gerente' }, loading: false, meta: {} }),
 }));
 
 const apiGet = vi.mocked(api.get);
@@ -107,6 +107,22 @@ describe('PDV — tela', () => {
     // O campo de leitura não existe sem caixa: ler código sem caixa não faz sentido.
     expect(screen.queryByPlaceholderText(/Código de barras/i)).not.toBeInTheDocument();
     expect(screen.getAllByText('Abrir caixa').length).toBeGreaterThan(0);
+  });
+
+
+  it('UX-02.1: operador com caixa aberto vende sem precisar abrir a gestão da gaveta', async () => {
+    (globalThis as unknown as { __UX021_PERFIL?: string }).__UX021_PERFIL = 'operador';
+    try {
+      mockRotas({ '/pdv/caixas/aberto': { caixa: CAIXA, resumo: RESUMO }, '/pdv/buscar': PRODUTO });
+      renderPdv();
+      expect(await screen.findByText(/CAIXA-01/)).toBeInTheDocument();
+      const campo = screen.getByPlaceholderText(/Código de barras/i);
+      fireEvent.change(campo, { target: { value: '7890000000017' } });
+      fireEvent.keyDown(campo, { key: 'Enter' });
+      expect(await screen.findByText('Bota Country')).toBeInTheDocument();
+    } finally {
+      delete (globalThis as unknown as { __UX021_PERFIL?: string }).__UX021_PERFIL;
+    }
   });
 
   it('com caixa aberto, mostra a posição do caixa e a prévia', async () => {

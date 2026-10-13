@@ -10,11 +10,11 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import PDFDocument from 'pdfkit';
-import { HttpError } from './errors';
-import { getResource } from './resources';
-import { checkAccess, getStore } from './services';
+import { getResource, type Resource } from './resources';
+import { checkAccess, escopoDe, getStore } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
+import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, type EscopoEmpresa } from './empresa';
 import { labelOf } from './store';
 import { attachImages } from './uploads';
 import { round2, diaISO } from './utils';
@@ -30,6 +30,36 @@ const fmtDate = (v: unknown) => {
   if (m) return `${m[3]}/${m[2]}/${m[1]}`;
   return s.slice(0, 10);
 };
+
+
+async function registroDoAtor(r: Resource, id: number, actor: Parameters<typeof escopoDe>[0]) {
+  const escopo: EscopoEmpresa = escopoDe(actor as never);
+  const s = getStore();
+  const row = await buscarRegistroDaEmpresa(
+    (registroId) => s.get(r, registroId),
+    (where) => s.findOneWhere(r, where),
+    r,
+    id,
+    escopo
+  );
+  // A checagem para escrita mantém a leitura presa à empresa ativa mesmo
+  // quando a sessão possui leitura consolidada autorizada.
+  return assertRegistroDaEmpresaParaEscrita(r, row, escopo);
+}
+
+async function relacionadoDoAtor(r: Resource, id: number | null | undefined, escopo: EscopoEmpresa) {
+  if (!id) return null;
+  const s = getStore();
+  return s.findOneWhere(r, r.empresa ? { id, empresa_id: escopo.empresaId } : { id });
+}
+
+async function listaDoPedido(r: Resource, filtro: Record<string, unknown>, empresaId: number, limite = 500) {
+  return getStore().list(r, {
+    page: 1,
+    pageSize: limite,
+    filter: r.empresa ? { ...filtro, empresa_id: empresaId } : filtro,
+  });
+}
 
 /** Cabeçalho do PDF com identificação BROBOND */
 function pdfHeader(doc: InstanceType<typeof PDFDocument>) {
@@ -58,18 +88,18 @@ export async function vendaPDF(req: Request, res: Response) {
   const r = getResource('vendas')!;
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
+
+  const venda = await registroDoAtor(r, id, actor);
+  const escopo = escopoDe(actor as never);
+
+  // Busca dados relacionados já recortados pela empresa do pedido.
   const s = getStore();
-
-  const venda = await s.get(r, id);
-  if (!venda) throw new HttpError(404, 'Pedido de venda não encontrado.');
-
-  // Busca dados relacionados
   const [cliente, representante, itens, tamanhos, produtos] = await Promise.all([
-    venda.cliente_id ? s.findOneWhere(getResource('clientes')!, { id: Number(venda.cliente_id) }) : null,
-    venda.representante_id ? s.findOneWhere(getResource('representantes')!, { id: Number(venda.representante_id) }) : null,
-    s.list(getResource('itens_venda')!, { page: 1, pageSize: 500, filter: { venda_id: id } }),
+    relacionadoDoAtor(getResource('clientes')!, venda.cliente_id ? Number(venda.cliente_id) : null, escopo),
+    relacionadoDoAtor(getResource('representantes')!, venda.representante_id ? Number(venda.representante_id) : null, escopo),
+    listaDoPedido(getResource('itens_venda')!, { venda_id: id }, escopo.empresaId),
     s.list(getResource('tamanhos')!, { page: 1, pageSize: 200, sort: 'ordem', dir: 'asc' }),
-    s.list(getResource('produtos')!, { page: 1, pageSize: 2000 }),
+    listaDoPedido(getResource('produtos')!, {}, escopo.empresaId, 2000),
   ]);
   await attachImages(getResource('produtos')!, produtos.rows);
 
@@ -218,15 +248,14 @@ export async function compraPDF(req: Request, res: Response) {
   const r = getResource('compras')!;
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
-  const s = getStore();
 
-  const compra = await s.get(r, id);
-  if (!compra) throw new HttpError(404, 'Pedido de compra não encontrado.');
+  const compra = await registroDoAtor(r, id, actor);
+  const escopo = escopoDe(actor as never);
 
   const [fornecedor, itens, insumos] = await Promise.all([
-    compra.fornecedor_id ? s.findOneWhere(getResource('fornecedores')!, { id: Number(compra.fornecedor_id) }) : null,
-    s.list(getResource('itens_compra')!, { page: 1, pageSize: 500, filter: { compra_id: id } }),
-    s.list(getResource('insumos')!, { page: 1, pageSize: 2000 }),
+    relacionadoDoAtor(getResource('fornecedores')!, compra.fornecedor_id ? Number(compra.fornecedor_id) : null, escopo),
+    listaDoPedido(getResource('itens_compra')!, { compra_id: id }, escopo.empresaId),
+    listaDoPedido(getResource('insumos')!, {}, escopo.empresaId, 2000),
   ]);
 
   const insMap = new Map(insumos.rows.map((i) => [Number(i.id), i]));
@@ -269,7 +298,7 @@ export async function compraPDF(req: Request, res: Response) {
   // Tabela de itens
   doc.moveDown(0.5);
   const tableTop = doc.y;
-  const colX = [50, 250, 340, 420, 490];
+  const colX = [50, 250, 340, 420, 490, 550];
   const headers = ['#', 'Insumo', 'Unidade', 'Quantidade', 'Preço Unit.', 'Total'];
 
   doc.rect(50, tableTop, 500, 18).fillAndStroke('#1B2A4A', '#1B2A4A');

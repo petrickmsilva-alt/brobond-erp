@@ -17,7 +17,7 @@ import App from '../App';
 import { api, setToken } from '../lib/api';
 
 const ADMIN = { id: 1, name: 'Petrick Silva', email: 'petrick@brobond.com.br', perfil: 'admin' };
-let usuarioAtual: typeof ADMIN | null = ADMIN;
+let usuarioAtual: typeof ADMIN | { id: number; name: string; email: string; perfil: string } | null = ADMIN;
 
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: usuarioAtual, meta: { version: '0.6.0', mode: 'postgres' }, logout: vi.fn(), loading: false }),
@@ -169,6 +169,39 @@ describe('Layout — shell e breadcrumb', () => {
     expect(await screen.findByText('Acessar o sistema')).toBeInTheDocument();
     expect(screen.queryByLabelText('Menu principal')).not.toBeInTheDocument();
     expect(screen.queryByRole('navigation', { name: 'Trilha de navegação' })).not.toBeInTheDocument();
+  });
+
+
+  it('UX-02.1: URL direta de módulo gerencial não abre para operador; PDV continua acessível', async () => {
+    usuarioAtual = { id: 3, name: 'Operador UX021', email: 'operador@brobond.test', perfil: 'operador' };
+    apiGet.mockImplementation(async (path: string) => {
+      if (path === '/empresas/ativa') return EMPRESAS;
+      if (path === '/dashboard') return { itensAlerta: 0, insumosAlerta: [], ordens: [], comprasPendentes: 0, pecasEstoque: 0, vendasAbertas: 0, valorizacao: { produtosComSaldo: 0, semPrecoAtacado: 0, pecas: 0, custo: 0, atacado: 0, varejo: 0, colecoes: [], produtos: [] }, totais: { produtos: 0, clientes: 0, fornecedores: 0, insumos: 0 }, vendasPorMes: [], producaoPorSemana: [], topProdutos: [], recentes: [], valorEstoque: 0, producao: 0, vendasMes: 0, comissoesPagar: 0, alertas: [] };
+      if (path === '/negocios/canais') return { grupos: [] };
+      if (path.startsWith('/negocios/resumo')) return { kpis: { faturamentoCents: 0, pedidos: 0, ticketMedioCents: 0, margemPct: 0, pedidosPendentes: 0 }, porCanal: [], porMes: [], topProdutos: [] };
+      if (path.startsWith('/negocios/abc')) return { linhas: [] };
+      return {};
+    });
+    window.history.pushState({}, '', '/listas-preco');
+    const bloqueada = render(
+      <ToastProvider>
+        <App />
+      </ToastProvider>
+    );
+    await waitFor(() => expect(window.location.pathname).toBe('/'));
+    bloqueada.unmount();
+
+    // O destino permitido é provado pela permanência da URL; renderizar a
+    // página inteira exigiria montar Meta/API do ModulePage, fora deste gate
+    // de rota. O comportamento da tela do PDV é coberto em PdvPage.test.tsx.
+    window.history.pushState({}, '', '/pdv');
+    const pdv = render(
+      <ToastProvider>
+        <App />
+      </ToastProvider>
+    );
+    await waitFor(() => expect(window.location.pathname).toBe('/pdv'));
+    pdv.unmount();
   });
 
   it('sem sessão, "/" redireciona para o login (proteção preservada)', async () => {

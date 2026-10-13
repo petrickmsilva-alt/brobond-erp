@@ -23,28 +23,54 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
-import { empresaDoRegistroAudit } from './empresa';
-import { getResource } from './resources';
-import { checkAccess, getStore } from './services';
+import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
+import { getResource, type Resource } from './resources';
+import { checkAccess, escopoDe, getStore } from './services';
 import { currentUser } from './auth';
 import { parseId } from './validate';
-import { labelOf } from './store';
-import type { Row } from './store';
 import { round2, diaISO } from './utils';
 
 const fmtMoney = round2;
 
 
-/** Prepara os dados da venda no formato da NF-e. */
-async function prepararDadosNFe(vendaId: number): Promise<Record<string, unknown>> {
+
+async function vendaDoAtor(id: number, actor: Parameters<typeof escopoDe>[0], escrita = false) {
+  const r = getResource('vendas')!;
+  const escopo: EscopoEmpresa = escopoDe(actor as never);
   const s = getStore();
-  const venda = await s.get(getResource('vendas')!, vendaId);
-  if (!venda) throw new HttpError(404, 'Pedido não encontrado.');
+  const venda = await buscarRegistroDaEmpresa(
+    (vendaId) => s.get(r, vendaId),
+    (where) => s.findOneWhere(r, where),
+    r,
+    id,
+    escopo
+  );
+  return escrita ? assertRegistroDaEmpresaParaEscrita(r, venda, escopo) : venda;
+}
+
+async function relacionadoDaVenda(r: Resource, id: number | null | undefined, empresaId: number) {
+  if (!id) return null;
+  return getStore().findOneWhere(r, r.empresa ? { id, empresa_id: empresaId } : { id });
+}
+
+async function listaDaVenda(r: Resource, filtro: Record<string, unknown>, empresaId: number, limite = 500) {
+  return getStore().list(r, {
+    page: 1,
+    pageSize: limite,
+    filter: r.empresa ? { ...filtro, empresa_id: empresaId } : filtro,
+  });
+}
+
+/** Prepara os dados da venda no formato da NF-e. */
+async function prepararDadosNFe(vendaId: number, actor: Parameters<typeof escopoDe>[0], escrita = false): Promise<Record<string, unknown>> {
+  const s = getStore();
+  const venda = await vendaDoAtor(vendaId, actor, escrita);
+  const empresaId = Number(venda.empresa_id ?? escopoDe(actor as never).empresaId);
 
   const [cliente, itens, produtos, tamanhos] = await Promise.all([
-    venda.cliente_id ? s.findOneWhere(getResource('clientes')!, { id: Number(venda.cliente_id) }) : null,
-    s.list(getResource('itens_venda')!, { page: 1, pageSize: 500, filter: { venda_id: vendaId } }),
-    s.list(getResource('produtos')!, { page: 1, pageSize: 2000 }),
+    relacionadoDaVenda(getResource('clientes')!, venda.cliente_id ? Number(venda.cliente_id) : null, empresaId),
+    listaDaVenda(getResource('itens_venda')!, { venda_id: vendaId }, empresaId),
+    listaDaVenda(getResource('produtos')!, {}, empresaId, 2000),
     s.list(getResource('tamanhos')!, { page: 1, pageSize: 200 }),
   ]);
 
@@ -117,7 +143,7 @@ export async function nfeDados(req: Request, res: Response) {
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
 
-  const dados = await prepararDadosNFe(id);
+  const dados = await prepararDadosNFe(id, actor);
   res.json(dados);
 }
 
@@ -158,13 +184,12 @@ export async function nfeEmitir(req: Request, res: Response) {
     );
   }
 
-  const venda = await s.get(r, id);
-  if (!venda) throw new HttpError(404, 'Pedido não encontrado.');
+  const venda = await vendaDoAtor(id, actor, true);
   const statusAtual = venda.nfe_status === null || venda.nfe_status === undefined ? null : String(venda.nfe_status);
   if (statusAtual === 'emitida') throw new HttpError(409, `Este pedido já tem NF-e emitida${venda.nfe_numero ? ` (${venda.nfe_numero})` : ''}.`);
   if (statusAtual === 'simulada') throw new HttpError(409, `Este pedido já tem uma simulação de NF-e (${venda.nfe_numero || 'sem número'}).`);
 
-  const dados = await prepararDadosNFe(id);
+  const dados = await prepararDadosNFe(id, actor, true);
   const numero = `SIM-${id}-${Date.now().toString(36).toUpperCase()}`;
   const emitidaEm = new Date().toISOString();
 
@@ -204,10 +229,8 @@ export async function nfeStatus(req: Request, res: Response) {
   const r = getResource('vendas')!;
   checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
-  const s = getStore();
 
-  const venda = await s.get(r, id);
-  if (!venda) throw new HttpError(404, 'Pedido não encontrado.');
+  const venda = await vendaDoAtor(id, actor);
 
   const status = String(venda.nfe_status || 'nao_emitida');
   res.json({

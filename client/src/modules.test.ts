@@ -20,6 +20,25 @@ describe('visibleModules', () => {
     expect(visiveis).toHaveLength(MODULES.length);
   });
 
+  it('UX-02.1: operador não descobre os destinos gerenciais fechados nos P0', () => {
+    const visiveis = visibleModules({ perfil: 'operador' }).map((m) => m.id);
+    for (const id of ['empresas', 'listas-preco', 'envios', 'conector-mercadolivre', 'conector-mercadopago', 'conector-nuvemshop', 'conector-instagram', 'pdv-caixas']) {
+      expect(visiveis, `operador não deveria descobrir ${id}`).not.toContain(id);
+    }
+    expect(visiveis).toContain('pdv');
+  });
+
+  it('UX-02.1: gerente/admin descobrem listas, envios e conectores (sem ampliar operador)', () => {
+    for (const perfil of ['gerente', 'admin'] as const) {
+      const visiveis = visibleModules({ perfil }).map((m) => m.id);
+      for (const id of ['listas-preco', 'envios', 'conector-mercadolivre', 'conector-mercadopago', 'conector-nuvemshop', 'conector-instagram']) {
+        expect(visiveis, `${perfil} deveria descobrir ${id}`).toContain(id);
+      }
+    }
+    expect(visibleModules({ perfil: 'gerente' }).map((m) => m.id)).not.toContain('empresas');
+    expect(visibleModules({ perfil: 'admin' }).map((m) => m.id)).toContain('empresas');
+  });
+
   it('operador com permissão explícita de políticas comerciais vê o módulo mesmo sem ser gerente', () => {
     const semPermissao = visibleModules({ perfil: 'operador' });
     expect(semPermissao.some((m) => m.id === 'politicas-comerciais')).toBe(false);
