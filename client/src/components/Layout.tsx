@@ -50,13 +50,13 @@ export default function Layout() {
   const rota = moduleOfPath(location.pathname);
   const current = rota ?? inicio;
 
-  // Trilha: marca › área › módulo › registro. Todos os níveis, menos o último,
-  // são clicáveis e levam à rota que já existe (não cria rota nova).
+  // Trilha: BROBOND ERP › Área › Módulo › Registro.
+  // Representa a Árvore Master sem alterar nenhuma URL existente.
   const trilha = useMemo<BreadcrumbItem[]>(() => {
     const link = (label: string, href: string): BreadcrumbItem => ({ label, href, onNavigate: () => navigate(href) });
     if (!rota) return [{ label: 'BROBOND ERP' }]; // rota sem módulo (ex.: /dev/componentes)
     const itens: BreadcrumbItem[] = [link('BROBOND ERP', '/')];
-    if (rota.group) itens.push({ label: rota.group, semLink: true }); // área não tem página própria
+    if (rota.area && rota.path !== '/') itens.push({ label: rota.area, semLink: true }); // área não tem página própria
     const descendente = location.pathname !== rota.path;
     itens.push(descendente ? link(rota.label, rota.path) : { label: rota.label });
     if (descendente) itens.push({ label: rotuloDoRegistro(location.pathname) });
@@ -68,8 +68,15 @@ export default function Layout() {
     const onClick = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenu(false);
+    };
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [menu]);
 
   useEffect(() => {
@@ -96,7 +103,13 @@ export default function Layout() {
         </a>
         <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6 dark:border-slate-800/60 dark:bg-[#090d16]/80 dark:backdrop-blur-md">
           <div className="flex min-w-0 items-center gap-3">
-            <button className="btn-icon -ml-2 md:hidden" onClick={() => setOpen(true)} aria-label="Abrir menu">
+            <button
+              className="btn-icon -ml-2 md:hidden"
+              onClick={() => setOpen(true)}
+              aria-label="Abrir menu"
+              aria-expanded={open}
+              aria-controls="sidebar-principal"
+            >
               <Menu className="h-5 w-5" />
             </button>
             <Breadcrumb items={trilha} className="min-w-0" />
@@ -116,37 +129,37 @@ export default function Layout() {
             </button>
 
             <div className="relative" ref={menuRef}>
-            <button
-              onClick={() => setMenu((v) => !v)}
-              className="flex items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2 transition-colors hover:bg-slate-100 dark:hover:bg-navy-800"
-              aria-haspopup="menu"
-              aria-expanded={menu}
-            >
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-navy-800 text-xs font-bold text-white dark:bg-brand-500">{initials}</span>
-              <span className="hidden text-left sm:block">
-                <span className="block text-sm font-semibold leading-tight text-slate-800 dark:text-slate-100">{user?.name}</span>
-                <span className="block text-[11px] leading-tight text-slate-400 dark:text-navy-300">{PERFIL_LABEL[user?.perfil || ''] || user?.perfil}</span>
-              </span>
-              <ChevronDown className="h-4 w-4 text-slate-400" />
-            </button>
+              <button
+                onClick={() => setMenu((v) => !v)}
+                className="flex items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2 transition-colors hover:bg-slate-100 dark:hover:bg-navy-800"
+                aria-haspopup="menu"
+                aria-expanded={menu}
+              >
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-navy-800 text-xs font-bold text-white dark:bg-brand-500">{initials}</span>
+                <span className="hidden text-left sm:block">
+                  <span className="block text-sm font-semibold leading-tight text-slate-800 dark:text-slate-100">{user?.name}</span>
+                  <span className="block text-[11px] leading-tight text-slate-400 dark:text-navy-300">{PERFIL_LABEL[user?.perfil || ''] || user?.perfil}</span>
+                </span>
+                <ChevronDown className="h-4 w-4 text-slate-400" />
+              </button>
 
-            {menu && (
-              <div className="absolute right-0 mt-1 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-modal animate-fade-in dark:border-navy-700 dark:bg-navy-900" role="menu">
-                <div className="border-b border-slate-100 px-4 py-3 dark:border-navy-800">
-                  <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">{user?.name}</div>
-                  <div className="truncate text-xs text-slate-500 dark:text-navy-300">{user?.email}</div>
+              {menu && (
+                <div className="absolute right-0 mt-1 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-modal animate-fade-in dark:border-navy-700 dark:bg-navy-900" role="menu">
+                  <div className="border-b border-slate-100 px-4 py-3 dark:border-navy-800">
+                    <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">{user?.name}</div>
+                    <div className="truncate text-xs text-slate-500 dark:text-navy-300">{user?.email}</div>
+                  </div>
+                  <Link to="/config" onClick={() => setMenu(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-navy-800" role="menuitem">
+                    <UserRound className="h-4 w-4 text-slate-400" /> Minha conta
+                  </Link>
+                  <Link to="/config#senha" onClick={() => setMenu(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-navy-800" role="menuitem">
+                    <KeyRound className="h-4 w-4 text-slate-400" /> Trocar senha
+                  </Link>
+                  <button onClick={logout} className="flex w-full items-center gap-2 border-t border-slate-100 px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 dark:border-navy-800 dark:hover:bg-red-950/40" role="menuitem">
+                    <LogOut className="h-4 w-4" /> Sair
+                  </button>
                 </div>
-                <Link to="/config" onClick={() => setMenu(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-navy-800" role="menuitem">
-                  <UserRound className="h-4 w-4 text-slate-400" /> Minha conta
-                </Link>
-                <Link to="/config#senha" onClick={() => setMenu(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-navy-800" role="menuitem">
-                  <KeyRound className="h-4 w-4 text-slate-400" /> Trocar senha
-                </Link>
-                <button onClick={logout} className="flex w-full items-center gap-2 border-t border-slate-100 px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 dark:border-navy-800 dark:hover:bg-red-950/40" role="menuitem">
-                  <LogOut className="h-4 w-4" /> Sair
-                </button>
-              </div>
-            )}
+              )}
             </div>
           </div>
         </header>

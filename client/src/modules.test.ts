@@ -1,5 +1,212 @@
 import { describe, expect, it } from 'vitest';
-import { GROUP_META, MODULES, MODULE_GROUPS, NAV_SECTIONS, moduleOfPath, visibleModules } from './modules';
+import {
+  AREA_META,
+  GROUP_META,
+  MODULES,
+  MODULE_AREAS,
+  MODULE_GROUPS,
+  NAV_SECTIONS,
+  PAGES_ESPECIAIS,
+  buildNavigationTree,
+  moduleOfPath,
+  visibleModules,
+} from './modules';
+
+const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
+  dashboard: '/',
+  relatorios: '/relatorios',
+  produtos: '/produtos',
+  categorias: '/categorias',
+  cores: '/cores',
+  colecoes: '/colecoes',
+  grades: '/grades',
+  tamanhos: '/tamanhos',
+  medidas: '/medidas',
+  insumos: '/insumos',
+  clientes: '/clientes',
+  fornecedores: '/fornecedores',
+  representantes: '/representantes',
+  vendas: '/vendas',
+  propostas: '/propostas',
+  catalogos: '/catalogos',
+  'politicas-comerciais': '/politicas-comerciais',
+  'listas-preco': '/listas-preco',
+  pdv: '/pdv',
+  'pdv-caixas': '/pdv-caixas',
+  expedicao: '/expedicao',
+  divergencias: '/divergencias',
+  envios: '/envios',
+  devolucoes: '/devolucoes',
+  estoque: '/estoque',
+  movimentacoes: '/movimentacoes',
+  inventario: '/inventario',
+  locais: '/locais',
+  compras: '/compras',
+  'cotacoes-compra': '/cotacoes-compra',
+  'compra-recebimentos': '/compra-recebimentos',
+  'importar-nfe-compra': '/importar-nfe-compra',
+  'sugestao-compra': '/sugestao-compra',
+  'depara-fornecedor': '/depara-fornecedor',
+  'planejamento-producao': '/planejamento-producao',
+  ordens: '/ordens',
+  fichas: '/fichas',
+  custo: '/custo',
+  financeiro: '/financeiro',
+  lancamentos: '/lancamentos',
+  'contas-financeiras': '/contas-financeiras',
+  transferencias: '/transferencias',
+  comissoes: '/comissoes',
+  investidores: '/investidores',
+  aportes: '/aportes',
+  'categorias-financeiras': '/categorias-financeiras',
+  'centros-custo': '/centros-custo',
+  'recorrencias-financeiras': '/recorrencias-financeiras',
+  'documentos-fiscais': '/documentos-fiscais',
+  inutilizacoes: '/inutilizacoes',
+  'regras-fiscais': '/regras-fiscais',
+  ncm: '/ncm',
+  empresas: '/empresas',
+  usuarios: '/usuarios',
+  auditoria: '/auditoria',
+  webhooks: '/webhooks',
+  'conector-mercadolivre': '/conectores/mercado-livre',
+  'conector-mercadopago': '/conectores/mercado-pago',
+  'conector-nuvemshop': '/conectores/nuvemshop',
+  'conector-instagram': '/conectores/instagram',
+  'commerce-produtos': '/commerce/produtos',
+  'commerce-pedidos': '/commerce/pedidos',
+  'commerce-trends': '/commerce/trends',
+  'commerce-delivery': '/commerce/delivery',
+  creators: '/creators',
+  'creator-matches': '/matches',
+  'outreach-ai': '/outreach-ai',
+  campanhas: '/campanhas',
+  config: '/config',
+  ajuda: '/ajuda',
+};
+
+describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', () => {
+  it('preserva exatamente os 70 módulos e todas as 70 URLs sem duplicidade nem remoção', () => {
+    expect(MODULES).toHaveLength(70);
+    const ids = MODULES.map((m) => m.id);
+    const paths = MODULES.map((m) => m.path);
+    expect(new Set(ids).size).toBe(70);
+    expect(new Set(paths).size).toBe(70);
+
+    for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
+      const mod = MODULES.find((m) => m.id === id);
+      expect(mod, `módulo ${id} deve continuar existindo`).toBeDefined();
+      expect(mod?.path, `URL do módulo ${id} não pode mudar`).toBe(pathEsperado);
+    }
+  });
+
+  it('implementa as 11 áreas principais da Árvore Master na ordem aprovada', () => {
+    expect([...MODULE_AREAS]).toEqual([
+      'Meu Negócio',
+      'Cadastros',
+      'Vendas',
+      'Estoque & Suprimentos',
+      'Produção',
+      'Financeiro',
+      'Fiscal',
+      'Administração',
+      'Commerce',
+      'Creators',
+      'Utilidades Globais',
+    ]);
+    for (const area of MODULE_AREAS) {
+      expect(AREA_META[area]).toBeDefined();
+      expect(MODULES.some((m) => m.area === area), `área ${area} deve ter módulos`).toBe(true);
+    }
+  });
+
+  it('separa ERP CORE (56), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(56);
+    expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(8);
+    expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
+    expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
+  });
+
+  it('garante casa canônica única por módulo (Pessoas em Cadastros, Entrega/Pós-venda em Vendas, Compras em Estoque & Suprimentos, Webhooks em Administração, Conta/Ajuda em Utilidades Globais)', () => {
+    const porArea = (area: string) => MODULES.filter((m) => m.area === area).map((m) => m.id);
+
+    expect(porArea('Meu Negócio')).toEqual(['dashboard', 'relatorios']);
+    expect(porArea('Cadastros')).toEqual([
+      'produtos',
+      'categorias',
+      'cores',
+      'colecoes',
+      'grades',
+      'tamanhos',
+      'medidas',
+      'insumos',
+      'clientes',
+      'fornecedores',
+      'representantes',
+    ]);
+    expect(porArea('Vendas')).toEqual([
+      'vendas',
+      'propostas',
+      'catalogos',
+      'politicas-comerciais',
+      'listas-preco',
+      'pdv',
+      'pdv-caixas',
+      'expedicao',
+      'divergencias',
+      'envios',
+      'devolucoes',
+    ]);
+    expect(porArea('Estoque & Suprimentos')).toEqual([
+      'estoque',
+      'movimentacoes',
+      'inventario',
+      'locais',
+      'compras',
+      'cotacoes-compra',
+      'compra-recebimentos',
+      'importar-nfe-compra',
+      'sugestao-compra',
+      'depara-fornecedor',
+    ]);
+    expect(porArea('Produção')).toEqual(['planejamento-producao', 'ordens', 'fichas', 'custo']);
+    expect(porArea('Financeiro')).toEqual([
+      'financeiro',
+      'lancamentos',
+      'contas-financeiras',
+      'transferencias',
+      'comissoes',
+      'investidores',
+      'aportes',
+      'categorias-financeiras',
+      'centros-custo',
+      'recorrencias-financeiras',
+    ]);
+    expect(porArea('Fiscal')).toEqual(['documentos-fiscais', 'inutilizacoes', 'regras-fiscais', 'ncm']);
+    expect(porArea('Administração')).toEqual(['empresas', 'usuarios', 'auditoria', 'webhooks']);
+    expect(porArea('Commerce')).toEqual([
+      'conector-mercadolivre',
+      'conector-mercadopago',
+      'conector-nuvemshop',
+      'conector-instagram',
+      'commerce-produtos',
+      'commerce-pedidos',
+      'commerce-trends',
+      'commerce-delivery',
+    ]);
+    expect(porArea('Creators')).toEqual(['creators', 'creator-matches', 'outreach-ai', 'campanhas']);
+    expect(porArea('Utilidades Globais')).toEqual(['config', 'ajuda']);
+  });
+
+  it('constrói a árvore hierárquica (Seção → Área → Grupo → Subgrupo → Módulo) sem perder nenhum item', () => {
+    const tree = buildNavigationTree(MODULES);
+    const modulosNaArvore = tree.flatMap((s) =>
+      s.areas.flatMap((a) => a.groups.flatMap((g) => g.subgroups.flatMap((sub) => sub.modules.map((m) => m.id))))
+    );
+    expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
+    expect(PAGES_ESPECIAIS).toHaveLength(21);
+  });
+});
 
 describe('visibleModules', () => {
   it('operador não vê módulos adminOnly nem exclusivos de gerente', () => {
@@ -9,10 +216,12 @@ describe('visibleModules', () => {
     expect(visiveis.some((m) => m.minPerfil === 'admin')).toBe(false);
   });
 
-  it('gerente vê módulos de gerente mas não adminOnly', () => {
+  it('gerente vê módulos de gerente mas não adminOnly nem Administração', () => {
     const visiveis = visibleModules({ perfil: 'gerente' });
     expect(visiveis.some((m) => m.id === 'financeiro')).toBe(true);
     expect(visiveis.some((m) => m.id === 'usuarios')).toBe(false);
+    expect(visiveis.some((m) => m.area === 'Administração')).toBe(false);
+    expect(visiveis.some((m) => m.area === 'Utilidades Globais')).toBe(true);
   });
 
   it('admin vê todos os módulos cadastrados', () => {
@@ -22,7 +231,16 @@ describe('visibleModules', () => {
 
   it('UX-02.1: operador não descobre os destinos gerenciais fechados nos P0', () => {
     const visiveis = visibleModules({ perfil: 'operador' }).map((m) => m.id);
-    for (const id of ['empresas', 'listas-preco', 'envios', 'conector-mercadolivre', 'conector-mercadopago', 'conector-nuvemshop', 'conector-instagram', 'pdv-caixas']) {
+    for (const id of [
+      'empresas',
+      'listas-preco',
+      'envios',
+      'conector-mercadolivre',
+      'conector-mercadopago',
+      'conector-nuvemshop',
+      'conector-instagram',
+      'pdv-caixas',
+    ]) {
       expect(visiveis, `operador não deveria descobrir ${id}`).not.toContain(id);
     }
     expect(visiveis).toContain('pdv');
@@ -31,7 +249,14 @@ describe('visibleModules', () => {
   it('UX-02.1: gerente/admin descobrem listas, envios e conectores (sem ampliar operador)', () => {
     for (const perfil of ['gerente', 'admin'] as const) {
       const visiveis = visibleModules({ perfil }).map((m) => m.id);
-      for (const id of ['listas-preco', 'envios', 'conector-mercadolivre', 'conector-mercadopago', 'conector-nuvemshop', 'conector-instagram']) {
+      for (const id of [
+        'listas-preco',
+        'envios',
+        'conector-mercadolivre',
+        'conector-mercadopago',
+        'conector-nuvemshop',
+        'conector-instagram',
+      ]) {
         expect(visiveis, `${perfil} deveria descobrir ${id}`).toContain(id);
       }
     }
@@ -47,7 +272,6 @@ describe('visibleModules', () => {
     expect(comPermissao.some((m) => m.id === 'politicas-comerciais')).toBe(true);
   });
 
-
   it('UX-02.1: permissões comerciais refletem herdar/permitir/negar na descoberta', () => {
     expect(visibleModules({ perfil: 'gerente', perm_politicas: 'negar' }).map((m) => m.id)).not.toContain('politicas-comerciais');
     expect(visibleModules({ perfil: 'gerente', perm_politicas: 'herdar' }).map((m) => m.id)).toContain('politicas-comerciais');
@@ -55,22 +279,24 @@ describe('visibleModules', () => {
 
     expect(visibleModules({ perfil: 'operador' }).map((m) => m.id)).not.toContain('catalogos');
     expect(visibleModules({ perfil: 'operador', perm_compartilhar: 'permitir' }).map((m) => m.id)).toContain('catalogos');
-    expect(visibleModules({ perfil: 'gerente', perm_catalogos: 'negar', perm_compartilhar: 'negar', perm_metricas: 'negar' }).map((m) => m.id)).not.toContain('catalogos');
-    expect(visibleModules({ perfil: 'gerente', perm_catalogos: 'negar', perm_metricas: 'permitir' }).map((m) => m.id)).toContain('catalogos');
+    expect(
+      visibleModules({ perfil: 'gerente', perm_catalogos: 'negar', perm_compartilhar: 'negar', perm_metricas: 'negar' }).map((m) => m.id)
+    ).not.toContain('catalogos');
+    expect(visibleModules({ perfil: 'gerente', perm_catalogos: 'negar', perm_metricas: 'permitir' }).map((m) => m.id)).toContain(
+      'catalogos'
+    );
   });
 
-  it('ERP-05: o grupo Fiscal existe e concentra documentos, regras, NCM e inutilizações', () => {
-    expect(MODULE_GROUPS).toContain('Fiscal');
-    const fiscal = MODULES.filter((m) => m.group === 'Fiscal').map((m) => m.id);
-    expect(fiscal).toEqual(['documentos-fiscais', 'regras-fiscais', 'ncm', 'inutilizacoes']);
-    // Fiscal não mora mais dentro de Vendas (auditoria §17: "Fiscal está espalhado").
-    expect(MODULES.filter((m) => m.group === 'Vendas').map((m) => m.id)).not.toContain('documentos-fiscais');
-    expect(MODULES.filter((m) => m.group === 'Vendas').map((m) => m.id)).not.toContain('regras-fiscais');
+  it('ERP-05 / UX-03: a área Fiscal concentra documentos, inutilizações, regras e NCM', () => {
+    expect(MODULE_AREAS).toContain('Fiscal');
+    const fiscal = MODULES.filter((m) => m.area === 'Fiscal').map((m) => m.id);
+    expect(fiscal).toEqual(['documentos-fiscais', 'inutilizacoes', 'regras-fiscais', 'ncm']);
+    expect(MODULES.filter((m) => m.area === 'Vendas').map((m) => m.id)).not.toContain('documentos-fiscais');
+    expect(MODULES.filter((m) => m.area === 'Vendas').map((m) => m.id)).not.toContain('regras-fiscais');
 
-    // Os dois recursos que a API expunha sem tela agora têm destino navegável.
     const ncm = MODULES.find((m) => m.id === 'ncm');
     expect(ncm?.resource).toBe('impostos_ncm');
-    expect(ncm?.minPerfil).toBe('gerente'); // igual ao minPerfil do recurso no servidor
+    expect(ncm?.minPerfil).toBe('gerente');
     const inut = MODULES.find((m) => m.id === 'inutilizacoes');
     expect(inut?.resource).toBe('inutilizacoes_fiscais');
     expect(inut?.minPerfil).toBe('gerente');
@@ -81,17 +307,23 @@ describe('visibleModules', () => {
     expect(visiveis).not.toContain('ncm');
     expect(visiveis).not.toContain('inutilizacoes');
     expect(visiveis).not.toContain('regras-fiscais');
-    expect(visiveis).toContain('documentos-fiscais'); // sem minPerfil: qualquer perfil com RBAC lê
+    expect(visiveis).toContain('documentos-fiscais');
   });
 
-  it('registra o esqueleto completo de Commerce, Creators e Delivery', () => {
-    expect(MODULE_GROUPS).toEqual(expect.arrayContaining(['Gestão de Commerce', 'Ecossistema Creators']));
+  it('registra Commerce (Canais + Multicanal) e Creators (Parcerias e campanhas) fora do Core', () => {
+    expect(MODULE_GROUPS).toEqual(expect.arrayContaining(['Canais', 'Multicanal', 'Parcerias e campanhas']));
 
-    const commerce = MODULES.filter((m) => m.group === 'Gestão de Commerce');
-    expect(commerce.map((m) => m.label)).toEqual(['Produtos', 'Pedidos', 'Trends', '📦 Delivery']);
-    expect(commerce.map((m) => m.path)).toEqual(['/commerce/produtos', '/commerce/pedidos', '/commerce/trends', '/commerce/delivery']);
+    const commercePlanned = MODULES.filter((m) => m.area === 'Commerce' && m.group === 'Multicanal');
+    expect(commercePlanned.map((m) => m.label)).toEqual(['Produtos', 'Pedidos', 'Trends', '📦 Delivery']);
+    expect(commercePlanned.map((m) => m.path)).toEqual([
+      '/commerce/produtos',
+      '/commerce/pedidos',
+      '/commerce/trends',
+      '/commerce/delivery',
+    ]);
+    expect(commercePlanned.every((m) => m.planned && m.planned.length > 0)).toBe(true);
 
-    const creators = MODULES.filter((m) => m.group === 'Ecossistema Creators');
+    const creators = MODULES.filter((m) => m.area === 'Creators');
     expect(creators.map((m) => m.label)).toEqual(['Creators', 'Matches', 'Outreach AI', 'Campanhas']);
     expect(creators.every((m) => m.planned && m.planned.length > 0)).toBe(true);
   });
@@ -102,47 +334,45 @@ describe('visibleModules', () => {
     expect(visiveis.some((m) => m.minPerfil === 'gerente')).toBe(false);
   });
 
-  it('todo módulo com área de negócio pertence a um grupo declarado e com metadados de Sidebar', () => {
-    const orfaos = MODULES.filter((m) => m.group !== null && !(MODULE_GROUPS as readonly string[]).includes(m.group));
-    expect(orfaos.map((m) => m.id)).toEqual([]);
-    for (const g of MODULE_GROUPS) expect(GROUP_META[g]).toBeDefined();
+  it('todo módulo pertence a uma Área e a um Grupo declarados com metadados consistentes', () => {
+    const orfaosGrupo = MODULES.filter((m) => !(MODULE_GROUPS as readonly string[]).includes(m.group));
+    const orfaosArea = MODULES.filter((m) => !(MODULE_AREAS as readonly string[]).includes(m.area));
+    expect(orfaosGrupo.map((m) => m.id)).toEqual([]);
+    expect(orfaosArea.map((m) => m.id)).toEqual([]);
+    for (const g of MODULE_GROUPS) {
+      expect(GROUP_META[g]).toBeDefined();
+      expect(AREA_META[GROUP_META[g].area].section).toBe(GROUP_META[g].section);
+    }
+    for (const m of MODULES) {
+      expect(GROUP_META[m.group].area).toBe(m.area);
+      expect(AREA_META[m.area].section).toBe(m.space);
+      expect(m.subgroup.trim().length).toBeGreaterThan(0);
+    }
   });
 
-  it('a navegação ERP usa as áreas de negócio (Meu Negócio, Cadastros, Vendas, Estoque, Financeiro...)', () => {
-    const areas = new Set(MODULES.map((m) => m.group).filter(Boolean));
-    for (const a of ['Cadastros', 'Vendas', 'Compras', 'Estoque', 'Produção', 'Financeiro', 'Relatórios', 'Integrações', 'Configurações']) {
-      expect(areas.has(a)).toBe(true);
-    }
-    expect(MODULES.find((m) => m.id === 'dashboard')?.label).toBe('Meu Negócio');
+  it('a navegação usa Meu Negócio como porta de entrada gerencial', () => {
+    const dash = MODULES.find((m) => m.id === 'dashboard');
+    expect(dash?.label).toBe('Meu Negócio');
+    expect(dash?.area).toBe('Meu Negócio');
+    expect(dash?.group).toBe('Visão do negócio');
+    expect(dash?.path).toBe('/');
   });
 });
 
-// ----------------------------------------------------------------------------
-// Fonte única da navegação (ERP-UX-01): a Sidebar renderiza o que está aqui.
-// ----------------------------------------------------------------------------
 describe('NAV_SECTIONS (fonte única do menu)', () => {
-  it('cobre toda área declarada exatamente uma vez, na ordem de MODULE_GROUPS', () => {
-    const nasSecoes = NAV_SECTIONS.flatMap((s) => s.groups);
-    expect([...nasSecoes].sort()).toEqual([...MODULE_GROUPS].sort());
-    expect(nasSecoes).toHaveLength(MODULE_GROUPS.length);
-    // A ordem renderizada é a ordem declarada.
-    expect(nasSecoes).toEqual([...MODULE_GROUPS]);
+  it('cobre toda área e todo grupo declarados exatamente uma vez, na ordem canônica', () => {
+    const areasNasSecoes = NAV_SECTIONS.flatMap((s) => s.areas);
+    expect(areasNasSecoes).toEqual([...MODULE_AREAS]);
+
+    const gruposNasSecoes = NAV_SECTIONS.flatMap((s) => s.groups);
+    expect(gruposNasSecoes).toEqual([...MODULE_GROUPS]);
   });
 
-  it('cada área pertence à seção que GROUP_META declara', () => {
+  it('cada área e cada grupo pertencem à seção declarada em AREA_META / GROUP_META', () => {
     for (const secao of NAV_SECTIONS) {
+      for (const a of secao.areas) expect(AREA_META[a].section).toBe(secao.id);
       for (const g of secao.groups) expect(GROUP_META[g].section).toBe(secao.id);
     }
-  });
-
-  it('ERP-05: o grupo Fiscal é renderizável (aparece em alguma seção) e tem 4 módulos', () => {
-    expect(NAV_SECTIONS.some((s) => s.groups.includes('Fiscal'))).toBe(true);
-    expect(MODULES.filter((m) => m.group === 'Fiscal').map((m) => m.id)).toEqual([
-      'documentos-fiscais',
-      'regras-fiscais',
-      'ncm',
-      'inutilizacoes',
-    ]);
   });
 });
 
@@ -152,6 +382,9 @@ describe('moduleOfPath (regra única de rota → módulo)', () => {
     expect(moduleOfPath('/documentos-fiscais')?.id).toBe('documentos-fiscais');
     expect(moduleOfPath('/produtos/12')?.id).toBe('produtos');
     expect(moduleOfPath('/vendas/7')?.id).toBe('vendas');
+    expect(moduleOfPath('/ordens/45')?.id).toBe('ordens');
+    expect(moduleOfPath('/fichas/9')?.id).toBe('fichas');
+    expect(moduleOfPath('/compras/3')?.id).toBe('compras');
     expect(moduleOfPath('/conectores/mercado-livre')?.id).toBe('conector-mercadolivre');
   });
 

@@ -1,29 +1,35 @@
 // ============================================================================
-// Sidebar — navegação por áreas de negócio do ERP.
+// Sidebar — Árvore Master de navegação do BROBOND ERP (ERP-UX-03).
 //
-// Estrutura (ERP-UX-01): as áreas vêm **integralmente** de `NAV_SECTIONS`, que é
-// derivada de `MODULE_GROUPS` + `GROUP_META` em `modules.ts`. Não existe lista
-// local de grupos aqui — um grupo novo declarado na fonte única aparece nesta
-// tela automaticamente (foi o que faltava no grupo Fiscal).
+// Hierarquia oficial:
+//   SEÇÃO (ERP CORE · Commerce · Creators · Utilidades Globais)
+//   → ÁREA (Meu Negócio, Cadastros, Vendas, Estoque & Suprimentos, Produção,
+//           Financeiro, Fiscal, Administração, Commerce, Creators, Utilidades Globais)
+//   → GRUPO (accordion de 2º nível dentro da Área)
+//   → SUBGRUPO (cabeçalho visual distinto dos módulos)
+//   → MÓDULO (item navegável canônico)
 //
-//   • Meu Negócio (início)
-//   • Seção ERP: Cadastros, Vendas, Compras, Estoque, Produção, Logística,
-//     Financeiro, Fiscal, Relatórios — accordions abertos na rota atual
-//   • Seção COMMERCE / INTEGRAÇÕES — separada
-//   • Seção Sistema (Configurações)
-//
-// Desktop: pode ser recolhida para um trilho só de ícones (preferência salva).
-// Mobile: vira drawer (abre pelo botão do header). Tudo que aparece aqui vem de
-// `visibleModules`, a mesma regra de permissão usada pelas rotas.
+// Fonte única: `buildNavigationTree(visibleModules(user))` de `modules.ts`.
+// Não há listas paralelas de áreas, grupos ou módulos neste componente.
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { ChevronDown, ChevronsLeft, ChevronsRight, X } from 'lucide-react';
-import { GROUP_META, NAV_SECTIONS, moduleOfPath, visibleModules, type Module, type ModuleGroup } from '../modules';
+import {
+  buildNavigationTree,
+  moduleOfPath,
+  visibleModules,
+  type Module,
+  type ModuleArea,
+  type ModuleGroup,
+  type NavAreaNode,
+  type NavGroupNode,
+} from '../modules';
 import { Logo } from './Logo';
 import { useAuth } from '../auth/AuthContext';
 
-const STORAGE_OPEN = 'brobond_nav_groups';
+const STORAGE_OPEN_AREAS = 'brobond_nav_areas';
+const STORAGE_OPEN_GROUPS = 'brobond_nav_groups';
 const STORAGE_COLLAPSED = 'brobond_nav_collapsed';
 
 function readStringArray(key: string): string[] {
@@ -43,36 +49,65 @@ function readFlag(key: string): boolean {
   }
 }
 
-function slug(group: string) {
-  return group.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z]+/g, '-').toLowerCase();
+function slug(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .toLowerCase();
 }
 
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, meta } = useAuth();
   const location = useLocation();
   const visible = useMemo(() => visibleModules(user), [user]);
-  const home = visible.find((m) => m.group === null);
+  const tree = useMemo(() => buildNavigationTree(visible), [visible]);
 
-  // Área dona da rota atual (rotas filhas, ex.: /produtos/12, pertencem ao módulo pai).
-  // Mesma regra usada pelo título da aba e pelo breadcrumb (`moduleOfPath`).
-  const activeGroup = useMemo<ModuleGroup | undefined>(
-    () => (moduleOfPath(location.pathname, visible)?.group ?? undefined) as ModuleGroup | undefined,
-    [location.pathname, visible]
-  );
+  // Módulo, Área e Grupo donos da rota atual (rotas filhas, ex.: /produtos/12,
+  // pertencem ao módulo pai — mesma regra do breadcrumb e do título da aba).
+  const activeModule = useMemo(() => moduleOfPath(location.pathname, visible), [location.pathname, visible]);
+  const activeArea = activeModule?.area;
+  const activeGroup = activeModule?.group;
 
-  const [openGroups, setOpenGroups] = useState<string[]>(() => readStringArray(STORAGE_OPEN));
+  const [openAreas, setOpenAreas] = useState<string[]>(() => {
+    const saved = readStringArray(STORAGE_OPEN_AREAS);
+    return activeArea && !saved.includes(activeArea) ? [...saved, activeArea] : saved;
+  });
+
+  const [openGroups, setOpenGroups] = useState<string[]>(() => {
+    const saved = readStringArray(STORAGE_OPEN_GROUPS);
+    return activeGroup && !saved.includes(activeGroup) ? [...saved, activeGroup] : saved;
+  });
+
   const [collapsed, setCollapsed] = useState<boolean>(() => readFlag(STORAGE_COLLAPSED));
 
-  // A área da rota atual fica sempre expandida.
+  // Deep link / mudança de rota: garante que a Área e o Grupo do módulo ativo abram.
   useEffect(() => {
-    if (activeGroup) setOpenGroups((prev) => (prev.includes(activeGroup) ? prev : [...prev, activeGroup]));
+    if (activeArea) {
+      setOpenAreas((prev) => (prev.includes(activeArea) ? prev : [...prev, activeArea]));
+    }
+  }, [activeArea]);
+
+  useEffect(() => {
+    if (activeGroup) {
+      setOpenGroups((prev) => (prev.includes(activeGroup) ? prev : [...prev, activeGroup]));
+    }
   }, [activeGroup]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_OPEN, JSON.stringify(openGroups));
+      localStorage.setItem(STORAGE_OPEN_AREAS, JSON.stringify(openAreas));
     } catch {
       /* sem persistência: vale só para esta sessão */
+    }
+  }, [openAreas]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_OPEN_GROUPS, JSON.stringify(openGroups));
+    } catch {
+      /* idem */
     }
   }, [openGroups]);
 
@@ -84,37 +119,48 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
     }
   }, [collapsed]);
 
-  const toggle = useCallback((g: string) => {
-    setOpenGroups((prev) => (prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]));
+  // Acessibilidade: Escape fecha o drawer mobile quando estiver aberto.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  const toggleArea = useCallback((area: ModuleArea) => {
+    setOpenAreas((prev) => (prev.includes(area) ? prev.filter((x) => x !== area) : [...prev, area]));
   }, []);
 
-  const renderGroup = (group: ModuleGroup) => {
-    const items = visible.filter((m) => m.group === group);
-    if (!items.length) return null;
-    return (
-      <NavGroup
-        key={group}
-        group={group}
-        items={items}
-        collapsed={collapsed}
-        isOpen={openGroups.includes(group) || activeGroup === group}
-        isActive={activeGroup === group}
-        onClose={onClose}
-        onToggle={toggle}
-      />
-    );
-  };
+  const toggleGroup = useCallback((group: ModuleGroup) => {
+    setOpenGroups((prev) => (prev.includes(group) ? prev.filter((x) => x !== group) : [...prev, group]));
+  }, []);
 
   return (
     <>
-      {open && <div className="fixed inset-0 z-20 bg-black/60 backdrop-blur-sm md:hidden" onClick={onClose} aria-hidden="true" />}
+      {open && (
+        <div
+          className="fixed inset-0 z-20 bg-black/60 backdrop-blur-sm md:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+          data-testid="sidebar-backdrop"
+        />
+      )}
       <aside
+        id="sidebar-principal"
         aria-label="Menu principal"
+        data-collapsed={collapsed ? 'true' : 'false'}
+        data-mobile-open={open ? 'true' : 'false'}
         className={`fixed z-30 flex h-full flex-col border-r border-slate-800/60 bg-[#090d16] text-slate-300 transition-[transform,width] duration-200 md:static md:translate-x-0 ${
-          collapsed ? 'md:w-[4.25rem]' : 'md:w-[16.5rem]'
-        } w-[16.5rem] ${open ? 'translate-x-0' : '-translate-x-full'}`}
+          collapsed ? 'md:w-[4.25rem]' : 'md:w-[17rem]'
+        } w-[17rem] ${open ? 'translate-x-0' : '-translate-x-full'}`}
       >
-        <div className={`flex h-16 shrink-0 items-center border-b border-slate-800/60 ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
+        <div
+          className={`flex h-16 shrink-0 items-center border-b border-slate-800/60 ${
+            collapsed ? 'justify-center px-2' : 'justify-between px-4'
+          }`}
+        >
           {collapsed ? (
             <span className="text-base font-bold tracking-tight text-white" aria-label="BROBOND ERP">
               BB
@@ -133,24 +179,29 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
         </div>
 
         <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-3" aria-label="Navegação principal">
-          {home && <NavItem m={home} collapsed={collapsed} onClose={onClose} />}
-
-          {/*
-            Seções e áreas vêm de NAV_SECTIONS (derivada de MODULE_GROUPS +
-            GROUP_META). O perfil não escolhe um menu diferente: ele filtra a
-            mesma fonte via `visibleModules`, e a seção some quando não sobra
-            nenhuma área visível.
-          */}
-          {NAV_SECTIONS.map((section) => {
-            const grupos = section.groups.filter((g) => visible.some((m) => m.group === g));
-            if (!grupos.length) return null;
-            return (
-              <div key={section.id} className="mt-4 space-y-0.5">
-                {collapsed ? <Divider /> : section.label ? <SectionLabel>{section.label}</SectionLabel> : null}
-                {grupos.map(renderGroup)}
-              </div>
-            );
-          })}
+          {tree.map((section, sectionIdx) => (
+            <div key={section.id} className={sectionIdx === 0 ? 'space-y-0.5' : 'mt-4 space-y-0.5'} data-nav-section={section.id}>
+              {collapsed ? (
+                sectionIdx > 0 ? <Divider /> : null
+              ) : section.label ? (
+                <SectionLabel>{section.label}</SectionLabel>
+              ) : null}
+              {section.areas.map((areaNode) => (
+                <NavArea
+                  key={areaNode.area}
+                  areaNode={areaNode}
+                  collapsed={collapsed}
+                  isOpen={openAreas.includes(areaNode.area)}
+                  isActive={activeArea === areaNode.area}
+                  activeGroup={activeGroup}
+                  openGroups={openGroups}
+                  onClose={onClose}
+                  onToggleArea={toggleArea}
+                  onToggleGroup={toggleGroup}
+                />
+              ))}
+            </div>
+          ))}
         </nav>
 
         <div className="hidden shrink-0 border-t border-slate-800/60 p-2 md:block">
@@ -174,7 +225,10 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
             <div className="flex items-center justify-between">
               <span className="font-mono">BROBOND ERP{meta?.version ? ` v${meta.version.replace(/^v/, '')}` : ''}</span>
               {meta?.mode === 'memory' && (
-                <span className="rounded bg-brand-500/15 px-1.5 py-0.5 font-semibold text-brand-300" title="Sem banco de dados: os dados somem ao reiniciar o servidor">
+                <span
+                  className="rounded bg-brand-500/15 px-1.5 py-0.5 font-semibold text-brand-300"
+                  title="Sem banco de dados: os dados somem ao reiniciar o servidor"
+                >
                   DEMO
                 </span>
               )}
@@ -194,31 +248,35 @@ function Divider() {
   return <div className="mx-3 my-2 border-t border-slate-800/60" aria-hidden="true" />;
 }
 
-function NavGroup({
-  group,
-  items,
+function NavArea({
+  areaNode,
   collapsed,
   isOpen,
   isActive,
+  activeGroup,
+  openGroups,
   onClose,
-  onToggle,
+  onToggleArea,
+  onToggleGroup,
 }: {
-  group: ModuleGroup;
-  items: Module[];
+  areaNode: NavAreaNode;
   collapsed: boolean;
   isOpen: boolean;
   isActive: boolean;
+  activeGroup?: ModuleGroup;
+  openGroups: string[];
   onClose: () => void;
-  onToggle: (group: string) => void;
+  onToggleArea: (area: ModuleArea) => void;
+  onToggleGroup: (group: ModuleGroup) => void;
 }) {
-  const GroupIcon = GROUP_META[group].icon;
-  const panelId = `nav-${slug(group)}`;
+  const AreaIcon = areaNode.icon;
+  const areaPanelId = `nav-area-${slug(areaNode.area)}`;
 
-  // Trilho recolhido: sem cabeçalho de área, só os ícones dos módulos.
+  // Trilho recolhido: exibe os ícones dos módulos com contexto de área no tooltip.
   if (collapsed) {
     return (
       <div className="space-y-0.5">
-        {items.map((m) => (
+        {areaNode.modules.map((m) => (
           <NavItem key={m.id} m={m} collapsed onClose={onClose} />
         ))}
       </div>
@@ -229,21 +287,95 @@ function NavGroup({
     <div>
       <button
         type="button"
-        onClick={() => onToggle(group)}
+        data-nav-area={areaNode.area}
+        onClick={() => onToggleArea(areaNode.area)}
         aria-expanded={isOpen}
-        aria-controls={panelId}
+        aria-controls={areaPanelId}
         className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 ${
-          isActive ? 'text-white' : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-100'
+          isActive ? 'bg-white/[0.04] text-white' : 'text-slate-300 hover:bg-white/[0.04] hover:text-white'
         }`}
       >
-        <GroupIcon className={`h-4 w-4 shrink-0 ${isActive ? 'text-brand-400' : 'text-slate-500 group-hover:text-brand-300'}`} strokeWidth={2} aria-hidden="true" />
-        <span className="flex-1 truncate">{group}</span>
-        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+        <AreaIcon
+          className={`h-4 w-4 shrink-0 ${isActive ? 'text-brand-400' : 'text-slate-500 group-hover:text-brand-300'}`}
+          strokeWidth={2}
+          aria-hidden="true"
+        />
+        <span className="flex-1 truncate">{areaNode.area}</span>
+        <ChevronDown
+          className={`h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+          aria-hidden="true"
+        />
       </button>
 
-      <div id={panelId} hidden={!isOpen} className="mt-0.5 space-y-0.5 pl-3">
-        {items.map((m) => (
-          <NavItem key={m.id} m={m} onClose={onClose} />
+      <div id={areaPanelId} hidden={!isOpen} className="mt-0.5 ml-3.5 space-y-0.5 border-l border-slate-800/80 pl-2">
+        {areaNode.groups.map((groupNode) => (
+          <NavGroup
+            key={groupNode.group}
+            groupNode={groupNode}
+            isOpen={openGroups.includes(groupNode.group)}
+            isActive={activeGroup === groupNode.group}
+            onClose={onClose}
+            onToggle={onToggleGroup}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NavGroup({
+  groupNode,
+  isOpen,
+  isActive,
+  onClose,
+  onToggle,
+}: {
+  groupNode: NavGroupNode;
+  isOpen: boolean;
+  isActive: boolean;
+  onClose: () => void;
+  onToggle: (group: ModuleGroup) => void;
+}) {
+  const GroupIcon = groupNode.icon;
+  const groupPanelId = `nav-group-${slug(groupNode.area)}-${slug(groupNode.group)}`;
+
+  return (
+    <div>
+      <button
+        type="button"
+        data-nav-group={groupNode.group}
+        onClick={() => onToggle(groupNode.group)}
+        aria-expanded={isOpen}
+        aria-controls={groupPanelId}
+        className={`group flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 ${
+          isActive ? 'text-slate-100 font-semibold' : 'text-slate-400 hover:bg-white/[0.03] hover:text-slate-200'
+        }`}
+      >
+        <GroupIcon
+          className={`h-3.5 w-3.5 shrink-0 ${isActive ? 'text-brand-400' : 'text-slate-500 group-hover:text-slate-300'}`}
+          strokeWidth={1.9}
+          aria-hidden="true"
+        />
+        <span className="flex-1 truncate">{groupNode.group}</span>
+        <ChevronDown
+          className={`h-3 w-3 shrink-0 text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+          aria-hidden="true"
+        />
+      </button>
+
+      <div id={groupPanelId} hidden={!isOpen} className="mt-0.5 space-y-1 pl-2">
+        {groupNode.subgroups.map((sub) => (
+          <div key={sub.subgroup} className="space-y-0.5">
+            <div
+              data-nav-subgroup={sub.subgroup}
+              className=" select-none px-2.5 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500"
+            >
+              {sub.subgroup}
+            </div>
+            {sub.modules.map((m) => (
+              <NavItem key={m.id} m={m} onClose={onClose} />
+            ))}
+          </div>
         ))}
       </div>
     </div>
@@ -252,26 +384,45 @@ function NavGroup({
 
 function NavItem({ m, collapsed = false, onClose }: { m: Module; collapsed?: boolean; onClose: () => void }) {
   const Icon = m.icon;
+  const isPlanned = Boolean(m.planned?.length);
+
   return (
     <NavLink
       to={m.path}
       end={m.path === '/'}
       onClick={onClose}
-      title={collapsed ? m.label : undefined}
+      data-module-id={m.id}
+      data-planned={isPlanned ? 'true' : undefined}
+      title={collapsed ? `${m.area} → ${m.label}${isPlanned ? ' (Em breve)' : ''}` : isPlanned ? `${m.label} — Em breve` : undefined}
       aria-label={collapsed ? m.label : undefined}
       className={({ isActive }) =>
-        `group relative flex items-center gap-2.5 rounded-lg py-[7px] text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 ${
-          collapsed ? 'justify-center px-0' : 'px-3'
+        `group relative flex items-center gap-2 rounded-lg py-[6px] text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 ${
+          collapsed ? 'justify-center px-0' : 'px-2.5'
         } ${
-          isActive ? 'bg-white/[0.07] text-white' : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-100'
+          isActive
+            ? 'bg-white/[0.08] text-white'
+            : isPlanned
+              ? 'text-slate-400/80 hover:bg-white/[0.03] hover:text-slate-200'
+              : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-100'
         }`
       }
     >
       {({ isActive }) => (
         <>
           {isActive && <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-brand-400" aria-hidden="true" />}
-          <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-brand-400' : 'text-slate-500 group-hover:text-brand-300'}`} strokeWidth={2} aria-hidden="true" />
+          <Icon
+            className={`h-3.5 w-3.5 shrink-0 ${isActive ? 'text-brand-400' : 'text-slate-500 group-hover:text-brand-300'}`}
+            strokeWidth={2}
+            aria-hidden="true"
+          />
           {!collapsed && <span className="truncate">{m.label}</span>}
+          {!collapsed && isPlanned && (
+            <span
+              data-planned-badge="Em breve"
+              className="ml-auto shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-300 after:content-[attr(data-planned-badge)]"
+              aria-hidden="true"
+            />
+          )}
         </>
       )}
     </NavLink>
