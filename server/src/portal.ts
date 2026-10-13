@@ -1,9 +1,9 @@
 import type { Request, Response } from 'express';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
-import { empresaDoAtorAudit, empresaDoRegistroAudit } from './empresa';
+import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, empresaDoRegistroAudit } from './empresa';
 import { RESOURCES } from './resources';
-import { getStore } from './services';
+import { escopoDe, getStore } from './services';
 import { labelOf, type Row } from './store';
 import { attachImages } from './uploads';
 import { normalizarOrigem, urlBasePublicaAsync } from './urlPublica';
@@ -40,6 +40,35 @@ export async function criarAcessoPortal(clienteId: number, baseUrl: string, vali
   // normalizarOrigem: aceita base com ou sem esquema/barra final (e rejeita valor malformado).
   const base = normalizarOrigem(baseUrl);
   return { token, url: `${base}/portal/${token}`, expira_em };
+}
+
+async function clienteDoAtor(clienteId: number, actor: Parameters<typeof escopoDe>[0], escrita = false) {
+  const clienteR = RESOURCES.clientes;
+  const escopo = escopoDe(actor as never);
+  const cliente = await buscarRegistroDaEmpresa(
+    (id) => getStore().get(clienteR, id),
+    (where) => getStore().findOneWhere(clienteR, where),
+    clienteR,
+    clienteId,
+    escopo
+  );
+  return escrita ? assertRegistroDaEmpresaParaEscrita(clienteR, cliente, escopo) : cliente;
+}
+
+async function acessosDoCliente(clienteId: number) {
+  return getStore().list(RESOURCES.portal_acessos, {
+    page: 1,
+    pageSize: 100,
+    sort: 'criado_em',
+    dir: 'desc',
+    filter: { cliente_id: clienteId },
+  });
+}
+
+async function acessoDoCliente(clienteId: number, acessoId: number) {
+  const acesso = await getStore().findOneWhere(RESOURCES.portal_acessos, { id: acessoId, cliente_id: clienteId });
+  if (!acesso) throw new HttpError(404, 'Acesso não encontrado.');
+  return acesso;
 }
 
 async function autenticar(token: string): Promise<{ cliente: Row; acesso: Row | null }> {
@@ -115,9 +144,8 @@ export async function administrarAcessosPortal(req: Request, res: Response) {
   const { checkAccess } = await import('./services');
   const actor = currentUser(req); checkAccess(RESOURCES.clientes, actor, 'read');
   const clienteId = Number(req.params.id);
-  const cliente = await getStore().get(RESOURCES.clientes, clienteId);
-  if (!cliente) throw new HttpError(404, 'Cliente não encontrado.');
-  const lista = await getStore().list(RESOURCES.portal_acessos, { page: 1, pageSize: 100, sort: 'criado_em', dir: 'desc', filter: { cliente_id: clienteId } });
+  const cliente = await clienteDoAtor(clienteId, actor);
+  const lista = await acessosDoCliente(clienteId);
   const agora = Date.now();
   res.json({ cliente: cliente.nome, acessos: lista.rows.map((a) => ({ id: Number(a.id), criado_em: a.criado_em, expira_em: a.expira_em, ultimo_acesso_em: a.ultimo_acesso_em, acessos: Number(a.acessos || 0), status: a.revogado_em ? 'revogado' : a.expira_em && new Date(String(a.expira_em)).getTime() < agora ? 'expirado' : 'ativo' })) });
 }
@@ -126,7 +154,7 @@ export async function gerarAcessoPortal(req: Request, res: Response) {
   const { currentUser } = await import('./auth'); const { checkAccess } = await import('./services');
   const actor = currentUser(req); checkAccess(RESOURCES.clientes, actor, 'update');
   const clienteId = Number(req.params.id); const s = getStore();
-  const cliente = await s.get(RESOURCES.clientes, clienteId); if (!cliente) throw new HttpError(404, 'Cliente não encontrado.');
+  const cliente = await clienteDoAtor(clienteId, actor, true);
   // Origem pública centralizada (APP_URL → cabeçalhos da requisição) — ver urlPublica.ts.
   const base = await urlBasePublicaAsync(req);
   const acesso = await criarAcessoPortal(clienteId, base, Number(req.body?.validade_dias) || 90);
@@ -138,10 +166,10 @@ export async function revogarAcessoPortal(req: Request, res: Response) {
   const { currentUser } = await import('./auth'); const { checkAccess } = await import('./services');
   const actor = currentUser(req); checkAccess(RESOURCES.clientes, actor, 'update');
   const clienteId = Number(req.params.id), acessoId = Number(req.params.acessoId); const s = getStore();
-  const acesso = await s.findOneWhere(RESOURCES.portal_acessos, { id: acessoId, cliente_id: clienteId });
-  if (!acesso) throw new HttpError(404, 'Acesso não encontrado.');
+  const cliente = await clienteDoAtor(clienteId, actor, true);
+  const acesso = await acessoDoCliente(clienteId, acessoId);
   if (!acesso.revogado_em) await s.update(RESOURCES.portal_acessos, acessoId, { revogado_em: new Date().toISOString() });
-  await s.audit({ usuario_id: actor.id, usuario: actor.name, acao: 'editar', recurso: 'clientes', registro_id: clienteId, descricao: `Acesso #${acessoId} ao portal revogado`, dados: { acesso_id: acessoId }, empresa_id: empresaDoAtorAudit(actor) });
+  await s.audit({ usuario_id: actor.id, usuario: actor.name, acao: 'editar', recurso: 'clientes', registro_id: clienteId, descricao: `Acesso #${acessoId} ao portal revogado`, dados: { acesso_id: acessoId }, empresa_id: empresaDoRegistroAudit(RESOURCES.clientes, cliente, actor) });
   res.json({ ok: true });
 }
 

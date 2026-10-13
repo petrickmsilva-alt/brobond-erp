@@ -379,14 +379,33 @@ export function moduleOfPath(pathname: string, modulos: Module[] = MODULES): Mod
  * herdadas (mesma regra usada pela Sidebar e reaproveitada pelo CommandPalette,
  * para nunca sugerir um destino que o usuário não pode acessar).
  */
-export function visibleModules(user?: { perfil?: string; perm_politicas?: string } | null): Module[] {
+export function visibleModules(
+  user?: {
+    perfil?: string;
+    perm_politicas?: string;
+    perm_catalogos?: string;
+    perm_compartilhar?: string;
+    perm_metricas?: string;
+  } | null
+): Module[] {
   const isAdmin = user?.perfil === 'admin';
+  // Espelho da descoberta (nunca da autorização): a mesma semântica de
+  // `podeComercial` no servidor — admin sempre; permitir/negar vencem;
+  // herdar segue gerente. O servidor continua barrando a API.
+  const comercial = (valor?: string): boolean => {
+    if (isAdmin) return true;
+    if (valor === 'permitir') return true;
+    if (valor === 'negar') return false;
+    return user?.perfil === 'gerente';
+  };
   return MODULES.filter((m) => {
     if (m.adminOnly && !isAdmin) return false;
     if (m.minPerfil === 'admin' && !isAdmin) return false;
-    if (m.minPerfil === 'gerente' && !isAdmin && user?.perfil !== 'gerente') {
-      if (!(m.id === 'politicas-comerciais' && user?.perm_politicas === 'permitir')) return false;
+    if (m.id === 'politicas-comerciais') return comercial(user?.perm_politicas);
+    if (m.id === 'catalogos') {
+      return comercial(user?.perm_catalogos) || comercial(user?.perm_compartilhar) || comercial(user?.perm_metricas);
     }
+    if (m.minPerfil === 'gerente' && !isAdmin && user?.perfil !== 'gerente') return false;
     return true;
   });
 }

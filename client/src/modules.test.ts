@@ -20,12 +20,43 @@ describe('visibleModules', () => {
     expect(visiveis).toHaveLength(MODULES.length);
   });
 
+  it('UX-02.1: operador não descobre os destinos gerenciais fechados nos P0', () => {
+    const visiveis = visibleModules({ perfil: 'operador' }).map((m) => m.id);
+    for (const id of ['empresas', 'listas-preco', 'envios', 'conector-mercadolivre', 'conector-mercadopago', 'conector-nuvemshop', 'conector-instagram', 'pdv-caixas']) {
+      expect(visiveis, `operador não deveria descobrir ${id}`).not.toContain(id);
+    }
+    expect(visiveis).toContain('pdv');
+  });
+
+  it('UX-02.1: gerente/admin descobrem listas, envios e conectores (sem ampliar operador)', () => {
+    for (const perfil of ['gerente', 'admin'] as const) {
+      const visiveis = visibleModules({ perfil }).map((m) => m.id);
+      for (const id of ['listas-preco', 'envios', 'conector-mercadolivre', 'conector-mercadopago', 'conector-nuvemshop', 'conector-instagram']) {
+        expect(visiveis, `${perfil} deveria descobrir ${id}`).toContain(id);
+      }
+    }
+    expect(visibleModules({ perfil: 'gerente' }).map((m) => m.id)).not.toContain('empresas');
+    expect(visibleModules({ perfil: 'admin' }).map((m) => m.id)).toContain('empresas');
+  });
+
   it('operador com permissão explícita de políticas comerciais vê o módulo mesmo sem ser gerente', () => {
     const semPermissao = visibleModules({ perfil: 'operador' });
     expect(semPermissao.some((m) => m.id === 'politicas-comerciais')).toBe(false);
 
     const comPermissao = visibleModules({ perfil: 'operador', perm_politicas: 'permitir' });
     expect(comPermissao.some((m) => m.id === 'politicas-comerciais')).toBe(true);
+  });
+
+
+  it('UX-02.1: permissões comerciais refletem herdar/permitir/negar na descoberta', () => {
+    expect(visibleModules({ perfil: 'gerente', perm_politicas: 'negar' }).map((m) => m.id)).not.toContain('politicas-comerciais');
+    expect(visibleModules({ perfil: 'gerente', perm_politicas: 'herdar' }).map((m) => m.id)).toContain('politicas-comerciais');
+    expect(visibleModules({ perfil: 'operador', perm_politicas: 'permitir' }).map((m) => m.id)).toContain('politicas-comerciais');
+
+    expect(visibleModules({ perfil: 'operador' }).map((m) => m.id)).not.toContain('catalogos');
+    expect(visibleModules({ perfil: 'operador', perm_compartilhar: 'permitir' }).map((m) => m.id)).toContain('catalogos');
+    expect(visibleModules({ perfil: 'gerente', perm_catalogos: 'negar', perm_compartilhar: 'negar', perm_metricas: 'negar' }).map((m) => m.id)).not.toContain('catalogos');
+    expect(visibleModules({ perfil: 'gerente', perm_catalogos: 'negar', perm_metricas: 'permitir' }).map((m) => m.id)).toContain('catalogos');
   });
 
   it('ERP-05: o grupo Fiscal existe e concentra documentos, regras, NCM e inutilizações', () => {

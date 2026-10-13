@@ -5,7 +5,7 @@ import { useAuth } from './auth/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import { MODULES } from './modules';
+import { MODULES, visibleModules } from './modules';
 
 // Code-splitting: só a tela de login e o dashboard (a primeira coisa que qualquer
 // pessoa vê) entram no bundle inicial. O resto — inclusive as páginas públicas
@@ -53,6 +53,19 @@ function AdminOnly({ children }: { children: JSX.Element }) {
   return children;
 }
 
+/**
+ * UX-02.1 — URL direta usa a mesma fonte de descoberta do menu.
+ *
+ * Isto não substitui a autorização do servidor: apenas evita que um item
+ * escondido por `minPerfil`/permissão comercial abra a página e só falhe
+ * depois nas chamadas. O servidor continua decidindo cada API/ação.
+ */
+function ModuleAccess({ moduleId, children }: { moduleId: string; children: JSX.Element }) {
+  const { user } = useAuth();
+  if (!visibleModules(user).some((m) => m.id === moduleId)) return <Navigate to="/" replace />;
+  return children;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -82,7 +95,19 @@ export default function App() {
             <Route path="dev/componentes" element={<AdminOnly><ComponentCatalog /></AdminOnly>} />
             {MODULES.filter((m) => m.path !== '/' && m.id !== 'config').map((m) => {
               const el = <ModulePage module={m} />;
-              return <Route key={m.id} path={m.path.replace('/', '')} element={m.adminOnly ? <AdminOnly>{el}</AdminOnly> : el} />;
+              return (
+                <Route
+                  key={m.id}
+                  path={m.path.replace('/', '')}
+                  element={
+                    m.adminOnly ? (
+                      <AdminOnly>{el}</AdminOnly>
+                    ) : (
+                      <ModuleAccess moduleId={m.id}>{el}</ModuleAccess>
+                    )
+                  }
+                />
+              );
             })}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

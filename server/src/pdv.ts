@@ -53,6 +53,36 @@ async function findInTenant(r: Resource, id: number, escopo: EscopoEmpresa, tx?:
   return getStore().findOneWhere(r, r.empresa ? { id, empresa_id: escopo.empresaId } : { id }, tx);
 }
 
+/**
+ * UX-02.1 — contrato do PDV (evidência: resources.ts e pdv.test.ts):
+ *
+ *   • gerente/admin respondem pela gaveta: abrir, suprimento, sangria,
+ *     fechamento e o resumo/livro completo do caixa;
+ *   • operador VENDE em um caixa aberto da sua empresa. Para a tela funcionar,
+ *     ele precisa apenas descobrir esse caixa aberto e ver a posição mínima
+ *     para continuar a venda.
+ *
+ * Por isso a descoberta operacional abaixo não usa o CRUD/`read` gerencial de
+ * `pdv_caixas`. Ela devolve somente caixas abertos do tenant, sem abrir a
+ * gestão do caixa nem qualquer caixa fechado/histórico para o operador.
+ */
+function caixaAbertoParaOperacao(caixa: Row | null): Row | null {
+  if (!caixa || String(caixa.status) !== 'aberto') return null;
+  return caixa;
+}
+
+async function caixaAbertoDoAtor(req: Request, actor: Parameters<typeof escopoDe>[0]) {
+  const escopo = escopoDe(actor as never);
+  const numero = req.query.numero ? String(req.query.numero).slice(0, 40) : undefined;
+  const s = getStore();
+  const filtro: Record<string, unknown> = { empresa_id: escopo.empresaId, status: 'aberto' };
+  if (numero) filtro.numero = numero;
+  const caixa = caixaAbertoParaOperacao(await s.findOneWhere(R_CAIXA(), filtro));
+  if (!caixa) return { caixa: null, resumo: null, escopo };
+  // `resumoCaixa` já relê o caixa com o tenant no predicado.
+  return { caixa, resumo: await resumoCaixa(Number(caixa.id), escopo), escopo };
+}
+
 const FORMAS = ['dinheiro', 'pix', 'cartao_credito', 'cartao_debito', 'vale', 'boleto', 'transferencia', 'outros'];
 
 function num(v: unknown, padrao = 0): number {
@@ -115,15 +145,12 @@ export async function abrirCaixa(req: Request, res: Response) {
 /** GET /api/pdv/caixas/aberto?numero= — o caixa aberto do terminal. */
 export async function caixaAberto(req: Request, res: Response) {
   const actor = currentUser(req);
-  checkAccess(R_CAIXA(), actor, 'read');
-  const escopo = escopoDe(actor);
-  const numero = req.query.numero ? String(req.query.numero).slice(0, 40) : undefined;
-  const s = getStore();
-  const filtro: Record<string, unknown> = { empresa_id: escopo.empresaId, status: 'aberto' };
-  if (numero) filtro.numero = numero;
-  const caixa = await s.findOneWhere(R_CAIXA(), filtro);
+  // A venda exige `vendas:create`; a gaveta continua gerencial. A descoberta
+  // é uma leitura operacional separada, limitada ao caixa aberto do tenant.
+  checkAccess(getResource('vendas')!, actor, 'create');
+  const { caixa, resumo } = await caixaAbertoDoAtor(req, actor);
   if (!caixa) return res.json({ caixa: null });
-  res.json({ caixa, resumo: await resumoCaixa(Number(caixa.id), escopo) });
+  res.json({ caixa, resumo });
 }
 
 /**
@@ -172,9 +199,11 @@ async function resumoCaixa(caixaId: number, escopo: EscopoEmpresa, tx?: Tx): Pro
   };
 }
 
-/** GET /api/pdv/caixas/:id/resumo */
+/** GET /api/pdv/caixas/:id/resumo — posição/livro do caixa (gestão). */
 export async function resumoCaixaHandler(req: Request, res: Response) {
   const actor = currentUser(req);
+  // Não reutilizar a descoberta operacional aqui: este endpoint é o resumo
+  // endereçável de qualquer caixa do tenant e permanece gerencial.
   checkAccess(R_CAIXA(), actor, 'read');
   const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
@@ -182,7 +211,7 @@ export async function resumoCaixaHandler(req: Request, res: Response) {
   res.json(await resumoCaixa(id, escopo));
 }
 
-/** POST /api/pdv/caixas/:id/movimentos — suprimento (troco) ou sangria. */
+/** POST /api/pdv/caixas/:id/movimentos — suprimento (troco) ou sangria (gestão da gaveta). */
 export async function movimentoCaixa(req: Request, res: Response) {
   const actor = currentUser(req);
   checkFluxo(R_CAIXA(), actor);
@@ -223,6 +252,7 @@ export async function movimentoCaixa(req: Request, res: Response) {
  */
 export async function fecharCaixa(req: Request, res: Response) {
   const actor = currentUser(req);
+  // Fechar é ato de gestão da gaveta (checkFluxo → read de pdv_caixas).
   checkFluxo(R_CAIXA(), actor);
   const escopo = escopoDe(actor);
   const id = parseId(req.params.id);

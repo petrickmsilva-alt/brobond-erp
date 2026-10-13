@@ -2557,6 +2557,9 @@ export const RESOURCES: Record<string, Resource> = {
     label: 'Listas de Preço',
     singular: 'Lista de preço',
     labelFields: ['nome'],
+    // UX-02.1: o menu já anunciava gerente/admin; o servidor passa a
+    // declarar a mesma alçada. Sem isso, esconder o item era a única barreira.
+    minPerfil: 'gerente',
     ops: ALL_OPS,
     detail: true,
     notice:
@@ -2803,6 +2806,9 @@ export const RESOURCES: Record<string, Resource> = {
     label: 'Envios',
     singular: 'Envio',
     labelFields: ['id'],
+    // UX-02.1: alinhado ao módulo de Envios (gerente/admin). A configuração
+    // de credenciais continua com guarda admin própria em logistica.ts.
+    minPerfil: 'gerente',
     ops: { create: false, update: true, delete: false },
     detail: true,
     notice:
