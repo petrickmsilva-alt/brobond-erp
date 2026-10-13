@@ -119,7 +119,10 @@ jobs:
       # (db/schema.sql + db/migrations/0012); a migration Prisma precisa
       # aplicar por cima sem erro (SQL idempotente) e ser registrada em
       # _prisma_migrations.
+      # Coletar também as evidências dual-track/smoke quando test:pg falha.
+      # O job permanece vermelho: estes passos NÃO usam continue-on-error.
       - name: Instalar CLI Prisma (raiz)
+        if: ${{ !cancelled() }}
         run: npm install --include=dev --no-audit --no-fund
       # P3005 ("database schema is not empty"): sem histórico em
       # _prisma_migrations o `migrate deploy` se recusa a rodar em banco
@@ -128,8 +131,10 @@ jobs:
       # procedimento oficial (https://pris.ly/d/migrate-baseline) e é
       # idempotente: se já está registrada, seguimos para o deploy.
       - name: Baseline da fusão (o boot do ERP já aplicou o mesmo SQL)
+        if: ${{ !cancelled() }}
         run: npx prisma migrate resolve --applied "20261005120000_fusion_commerce_into_erp"
       - name: Migration Prisma fusion_commerce_into_erp (dual-track)
+        if: ${{ !cancelled() }}
         run: npx prisma migrate deploy
       # ---------------------------------------------------------------------
       # GATE DO ERP-03 (P0-04): o smoke E2E rodava só contra o modo
@@ -140,6 +145,7 @@ jobs:
       # (migrate + ensureAdmin automáticos, ZERO SQL manual) e roda o smoke
       # contra ela, devolvendo o código de saída do smoke.
       - name: Smoke E2E contra PostgreSQL novo (gate ERP-03)
+        if: ${{ !cancelled() }}
         run: |
           set -o pipefail
           npm run smoke:pg 2>&1 | tee /tmp/smokepg.log || {
