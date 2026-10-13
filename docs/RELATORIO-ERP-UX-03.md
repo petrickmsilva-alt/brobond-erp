@@ -26,7 +26,7 @@ A fase **ERP-UX-03** implementa no frontend do BROBOND ERP a **Árvore Master de
 | Rotas frontend (`App.tsx`) | 82 | **82** | 100% preservadas (70 módulos + 5 detalhes + 6 públicas + `/settings` + `*`) |
 | Recursos de API (`server/src/resources.ts`) | 80 | **80** | Inalterados |
 | Contratos RBAC (`minPerfil`, `adminOnly`, capacidades comerciais) | 70 / 66 / 42 | **70 / 66 / 42** | `admin`: 70, `gerente`: 66, `operador`: 42 (idênticos) |
-| Auditoria estática (`npm run audit:menu`) | 0 erros (2 avisos) | **0 erros (2 avisos)** | Aprovado |
+| Auditoria estática (`npm run audit:menu`) | 0 erros (2 avisos) | **0 erros (1 aviso `/api/health`)** | Aprovado (`RBAC_DERIVA_SOLTA` fechado) |
 | Testes automatizados (Server + Client) | 702 + 280 | **702 + 305** | 1.007 testes passando (0 falhas) |
 | Smoke E2E (`npm run smoke`) | 126/126 | **126/126** | 100% verde |
 
@@ -341,7 +341,7 @@ No ambiente sandbox desta execução não há binário de navegador gráfico ins
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Auditoria de Menu × Rotas × RBAC × Multiempresa | `npm run audit:menu` | **PASS** — 70 módulos, 28 grupos, 80 recursos API, 43 navegáveis, 72 tabelas com `empresa_id`, **0 erros** (2 avisos classificados pré-existentes) |
+| Auditoria de Menu × Rotas × RBAC × Multiempresa | `npm run audit:menu` | **PASS** — 70 módulos, 28 grupos, 80 recursos API, 43 navegáveis, 72 tabelas com `empresa_id`, **0 erros** (apenas 1 aviso informativo de `/api/health`; falso positivo `RBAC_DERIVA_SOLTA` de `politicas_comerciais` eliminado) |
 | Typecheck (Domain + Server + Client) | `npm run typecheck` | **PASS** — 0 erros TypeScript |
 | Lint | `npm run lint` | **PASS** — 0 erros ESLint |
 | Testes Unitários e Integração (Server + Client) | `npm test` | **PASS** — Server: 702 pass / 0 fail; Client: 28 arquivos / 305 pass / 0 fail |
@@ -356,5 +356,5 @@ No ambiente sandbox desta execução não há binário de navegador gráfico ins
 
 Conforme as restrições estritas da fase ERP-UX-03 (que veda alterar rotas, remover módulos ou reescrever páginas operacionais internas), permanecem registrados para ondas futuras:
 1. **Consolidação opcional de parâmetros em abas internas (UX-04+):** Módulos hoje mantidos como rotas independentes dentro de subgrupos (ex.: `grades`, `tamanhos` e `medidas` em `Cadastros → Produtos → Grades e medidas`; `categorias-financeiras`, `centros-custo` e `recorrencias-financeiras` em `Financeiro → Parâmetros financeiros`) já estão agrupados em 2º/3º nível na Sidebar sem poluir o topo, podendo no futuro ganhar navegação por abas internas mantendo redirects das URLs atuais.
-2. **Aviso classificado `RBAC_DERIVA_SOLTA` em `politicas_comerciais`:** Pré-existente e documentado pelo `audit:menu` (menu exige `gerente` + capacidade `politicas`, enquanto o recurso CRUD genérico no servidor usa autenticação padrão).
+2. **Simetria de auditoria RBAC em `politicas_comerciais` (`scripts/auditar-menu.ts`):** Corrigido nesta entrega — a exceção `ALCADA_POR_PERMISSAO_COMERCIAL` agora é aplicada simetricamente em `exigeGerente` e `declaraGerente`, eliminando o aviso `RBAC_DERIVA_SOLTA`.
 3. **Implementação funcional dos 8 módulos `planned` (`Commerce Multicanal` e `Creators`):** Atualmente isolados fora do ERP Core e sinalizados com badge `Em breve`.

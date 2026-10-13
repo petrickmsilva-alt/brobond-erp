@@ -124,7 +124,7 @@ for (const m of MODULES) {
   const exigeAdmin = !!r.adminOnly || r.minPerfil === 'admin';
   const exigeGerente = r.minPerfil === 'gerente' && !r.adminOnly && !ALCADA_POR_PERMISSAO_COMERCIAL.has(r.key);
   const declaraAdmin = !!m.adminOnly || m.minPerfil === 'admin';
-  const declaraGerente = m.minPerfil === 'gerente' && !m.adminOnly;
+  const declaraGerente = m.minPerfil === 'gerente' && !m.adminOnly && !ALCADA_POR_PERMISSAO_COMERCIAL.has(r.key);
 
   if (exigeAdmin && !declaraAdmin) {
     erro('RBAC_DERIVA_ADMIN', `O recurso "${r.key}" é adminOnly/minPerfil=admin no servidor, mas o módulo "${m.id}" não declara adminOnly — operador e gerente veem o menu e recebem 403.`);
