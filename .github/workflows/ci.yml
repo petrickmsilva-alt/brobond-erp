@@ -22,6 +22,25 @@ jobs:
         run: npm --prefix client run typecheck
       - name: Testes das regras de negócio
         run: npm --prefix server test
+      - name: Testes client
+        run: npm --prefix client test
+      - name: Smoke em memória (não substitui o gate PG)
+        run: |
+          env -u DATABASE_URL PORT=3001 node --import tsx server/src/index.ts > /tmp/smoke-demo.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:3001/api/health > /dev/null 2>&1 && grep -q 'Administrador:' /tmp/smoke-demo.log; then ready=1; break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat /tmp/smoke-demo.log; exit 1; fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then cat /tmp/smoke-demo.log; exit 1; fi
+          npm run smoke
+      - name: Auditoria do menu
+        run: npm run audit:menu
+      - name: Typecheck do domínio
+        run: npm run typecheck:domain
       - name: Validar schema Prisma unificado (fusão commerce)
         run: npx prisma validate
         env:
@@ -72,7 +91,7 @@ jobs:
             try {
               await client.connect();
               const { rows: versionRows } = await client.query('SHOW server_version');
-              const { rows: numberRows } = await client.query('SHOW server_version_num');
+              const { rows: numberRows } = await client.query("SELECT current_setting('server_version_num') AS server_version_num");
               const actual = versionRows[0]?.server_version;
               const actualNum = Number(numberRows[0]?.server_version_num);
               console.log(`PostgreSQL server_version=${actual} (server_version_num=${actualNum})`);
@@ -91,7 +110,7 @@ jobs:
         # disponível. (node --test fala TAP; falhas saem como "not ok".)
         run: |
           set -o pipefail
-          npm --prefix server run test:pg 2>&1 | tee /tmp/testpg.log || {
+          npm run test:pg 2>&1 | tee /tmp/testpg.log || {
             DIAG="$( { grep -E "^not ok|failureType|^  error|code: |name: |Migração .* falhou|Error \[|ERR_" /tmp/testpg.log | head -40; echo "--- cauda ---"; tail -40 /tmp/testpg.log; } | sed 's/%/%25/g' )"
             echo "::error title=testpg falhou::${DIAG//$'\n'/%0A}"
             exit 1
@@ -109,7 +128,7 @@ jobs:
       # procedimento oficial (https://pris.ly/d/migrate-baseline) e é
       # idempotente: se já está registrada, seguimos para o deploy.
       - name: Baseline da fusão (o boot do ERP já aplicou o mesmo SQL)
-        run: npx prisma migrate resolve --applied "20261005120000_fusion_commerce_into_erp" || echo "baseline já registrado — seguindo"
+        run: npx prisma migrate resolve --applied "20261005120000_fusion_commerce_into_erp"
       - name: Migration Prisma fusion_commerce_into_erp (dual-track)
         run: npx prisma migrate deploy
       # ---------------------------------------------------------------------
