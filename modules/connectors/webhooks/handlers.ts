@@ -18,7 +18,7 @@
  *      evento forjado jamais chega ao banco);
  *   2. NORMALIZA o payload em `ParsedWebhookEvent` (id de dedupe, tópico,
  *      pista de inquilino);
- *   3. RESOLVE o responsável pela identidade guardada no conector —
+ *   3. RESOLVE empresa + responsável pela identidade guardada no conector —
  *      nunca por entrada do chamador;
  *   4. INGERE de forma idempotente em `connector_events`.
  */
@@ -209,12 +209,13 @@ export function createWebhookHandlers(deps: WebhookHandlerDependencies = {}) {
       if (!event.shopId) return { received: true, ignored: true };
       const connector = await repository.findByShopId(provider, event.shopId);
       if (!connector) return { received: true, ignored: true };
+      const empresaId = connector.empresaId;
       const usuarioId = connector.usuarioId;
 
-      const already = await repository.hasEvent(usuarioId, provider, event.externalEventId);
+      const already = await repository.hasEvent(empresaId, usuarioId, provider, event.externalEventId);
       if (already) return { received: true, duplicate: true };
 
-      await repository.recordEvent(usuarioId, {
+      await repository.recordEvent(empresaId, usuarioId, {
         provider,
         externalEventId: event.externalEventId,
         connectorId: connector.id,
@@ -225,12 +226,13 @@ export function createWebhookHandlers(deps: WebhookHandlerDependencies = {}) {
       if (!isSaleIngestionEvent(provider, event.topic)) {
         // Tópico sem receita: encerrado aqui, a caixa de entrada nunca
         // acumula entrega que ninguém vai processar.
-        await repository.markEventProcessed(usuarioId, provider, event.externalEventId);
+        await repository.markEventProcessed(empresaId, usuarioId, provider, event.externalEventId);
         return { received: true };
       }
 
       try {
         const result = await ingestion.processSaleIngestionEvent({
+          empresaId,
           usuarioId,
           provider,
           externalEventId: event.externalEventId,

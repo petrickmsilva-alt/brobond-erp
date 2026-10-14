@@ -17,7 +17,7 @@ export class NuvemshopConnector implements ProviderConnector {
   readonly name = 'Nuvemshop';
 
   async fetchCatalog(options: FetchCatalogOptions): Promise<NormalizedContent[]> {
-    const { accessToken, shopId } = await connectorService.getValidAccessToken(options.usuarioId, this.provider);
+    const { accessToken, shopId } = await connectorService.getValidAccessToken(options.empresaId, options.usuarioId, this.provider);
     // O `user_id` (id da loja) é obrigatório em TODA chamada da API: sem
     // ele a requisição nem é montada — o operador lê a ação que resolve.
     if (!shopId) {

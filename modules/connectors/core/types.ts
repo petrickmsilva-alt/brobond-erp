@@ -7,8 +7,8 @@
  * `SaleItem` do `prisma/schema.prisma`, em camelCase, já convertidos a
  * partir das colunas snake_case do banco.
  *
- * TENANCY: `usuarioId: number` (FK → `usuarios.id`) substitui o
- * `organizationId: string` do brobond-ai-commerce em TODOS os modelos.
+ * TENANCY: `empresaId` é o tenant confiável e explícito; `usuarioId` é o
+ * operador/responsável associado. Ambos são necessários nas operações.
  */
 
 import type { ConnectionStatusName, ConnectorProviderName, SaleChannelName, SaleStatusName } from './providers';
@@ -19,7 +19,9 @@ export type JsonObject = Record<string, unknown>;
 /** Linha de `connectors` — uma integração ativa de um responsável. */
 export interface ConnectorRow {
   id: string;
-  /** FUSÃO: era `organizationId` no commerce. */
+  /** Tenant resolvido da sessão (ou do state OAuth público de uso único). */
+  empresaId: number;
+  /** Operador responsável pela conexão. */
   usuarioId: number;
   provider: ConnectorProviderName;
   status: ConnectionStatusName;
@@ -46,6 +48,7 @@ export interface ConnectorRow {
 /** Linha de `connector_events` — evento bruto de webhook/polling. */
 export interface ConnectorEventRow {
   id: string;
+  empresaId: number;
   usuarioId: number;
   connectorId: string | null;
   provider: ConnectorProviderName;
@@ -58,6 +61,8 @@ export interface ConnectorEventRow {
 
 /** Linha de `sales` — receita multicanal (valores em CENTAVOS). */
 export interface SaleRow {
+  /** Empresa resolvida pelo conector confiável que originou a ingestão. */
+  empresaId: number;
   id: string;
   reference: string;
   quantity: number;

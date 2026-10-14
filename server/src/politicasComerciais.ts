@@ -13,8 +13,19 @@ const num = (v: unknown, padrao = 0) => Number.isFinite(Number(v)) ? Number(v) :
 const dia = () => new Date().toISOString().slice(0, 10);
 
 /** Resolve uma única política, de modo determinístico e explicável. */
-export async function resolverPoliticaComercial(ctx: { catalogo: Row; clienteId?: number | null; canal: string }): Promise<PoliticaAplicada | null> {
-  const rows = (await getStore().list(RESOURCES.politicas_comerciais, { page: 1, pageSize: 5000 })).rows;
+export async function resolverPoliticaComercial(ctx: { empresaId: number; catalogo: Row; clienteId?: number | null; canal: string }): Promise<PoliticaAplicada | null> {
+  const empresaId = Number(ctx.empresaId);
+  if (!Number.isInteger(empresaId) || empresaId <= 0 || Number(ctx.catalogo.empresa_id) !== empresaId) {
+    throw new Error('O contexto da política comercial deve corresponder à empresa confiável do catálogo.');
+  }
+  // Políticas gerais e de canal também pertencem a uma empresa. Filtrar
+  // somente pelas referências (catálogo/coleção/cliente) não isola esse
+  // escopo: uma regra `geral` de outro tenant alteraria preços e pedidos.
+  const rows = (await getStore().list(RESOURCES.politicas_comerciais, {
+    page: 1,
+    pageSize: 5000,
+    filter: { empresa_id: empresaId },
+  })).rows;
   const hoje = dia();
   const validas = rows.filter((p) => {
     if (p.ativo === false || (p.inicio_em && diaISO(p.inicio_em) > hoje) || (p.fim_em && diaISO(p.fim_em) < hoje)) return false;

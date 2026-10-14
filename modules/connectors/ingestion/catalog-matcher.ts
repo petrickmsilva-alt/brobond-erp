@@ -1,22 +1,10 @@
 /**
- * Casamento do item do marketplace com o catálogo REAL do ERP.
+ * Casamento do item de marketplace com o catálogo REAL do ERP.
  *
- * Esta peça NÃO existia no brobond-ai-commerce: lá a `Sale` apontava
- * direto para um `Product` do próprio SaaS. No ERP um pedido de
- * marketplace vira N `sale_items`, cada um resolvido contra `produtos` e
- * `tamanhos` (a Fase 1 criou exatamente essas FKs, com `SET NULL` para
- * que o histórico fiscal sobreviva à exclusão do catálogo).
- *
- * Política de casamento, do mais forte para o mais fraco:
- *   1. SKU do vendedor = `produtos.sku` (comparação sem caixa);
- *   2. SKU do vendedor = `produtos.codigo_barras`;
- *   3. SKU com sufixo de tamanho (`CAMISA-AZUL-M`) → prefixo bate com o
- *      SKU do produto e o sufixo com o código do tamanho;
- *   4. título idêntico a `produtos.nome` (sem caixa).
- *
- * Não casou? `product_id` fica NULL e `variacao_externa` preserva o nome
- * literal da variação — a venda entra com valor correto e o operador
- * concilia depois. NUNCA inventamos um produto.
+ * O `empresaId` é obrigatório e sempre vem do conector confiável que originou
+ * a ingestão; SKU, código de barras, título e tamanho não são identidade de
+ * tenant. Cada predicado consulta exclusivamente o catálogo dessa empresa,
+ * inclusive os fallbacks de SKU composto e descrição.
  */
 
 import type { ConnectorDatabase } from '../core/database';
@@ -51,7 +39,15 @@ function clean(value: string | null | undefined): string {
   return (value ?? '').trim();
 }
 
-/** Resolve o `tamanhos.id` a partir de um rótulo de variação. */
+function requireEmpresaId(empresaId: number): number {
+  const tenant = Number(empresaId);
+  if (!Number.isSafeInteger(tenant) || tenant <= 0) {
+    throw new Error('O casamento de catálogo exige um empresaId explícito e válido.');
+  }
+  return tenant;
+}
+
+/** `tamanhos` é um dicionário global do ERP, não um recurso empresarial. */
 export async function matchTamanho(db: ConnectorDatabase, label: string | null | undefined): Promise<number | null> {
   const candidate = clean(label);
   if (!candidate) return null;
@@ -66,17 +62,19 @@ export async function matchTamanho(db: ConnectorDatabase, label: string | null |
   return rows[0] ? Number(rows[0].id) : null;
 }
 
-/** Resolve o `produtos.id` a partir do SKU/título do marketplace. */
-export async function matchProduto(db: ConnectorDatabase, input: CatalogMatchInput): Promise<number | null> {
+/** Resolve o `produtos.id` exclusivamente por SKU/título da empresa. */
+export async function matchProduto(db: ConnectorDatabase, empresaId: number, input: CatalogMatchInput): Promise<number | null> {
+  const tenant = requireEmpresaId(empresaId);
   const sku = clean(input.sku);
   if (sku) {
     const { rows } = await db.query<ProdutoRow>(
       `SELECT id, sku FROM produtos
-       WHERE upper(btrim(sku)) = upper(btrim($1))
-          OR upper(btrim(coalesce(codigo_barras, ''))) = upper(btrim($1))
+       WHERE empresa_id = $1
+         AND (upper(btrim(sku)) = upper(btrim($2))
+          OR upper(btrim(coalesce(codigo_barras, ''))) = upper(btrim($2)))
        ORDER BY id ASC
        LIMIT 1`,
-      [sku]
+      [tenant, sku]
     );
     if (rows[0]) return Number(rows[0].id);
 
@@ -86,10 +84,10 @@ export async function matchProduto(db: ConnectorDatabase, input: CatalogMatchInp
       const prefix = sku.slice(0, separatorIndex);
       const { rows: prefixRows } = await db.query<ProdutoRow>(
         `SELECT id, sku FROM produtos
-         WHERE upper(btrim(sku)) = upper(btrim($1))
+         WHERE empresa_id = $1 AND upper(btrim(sku)) = upper(btrim($2))
          ORDER BY id ASC
          LIMIT 1`,
-        [prefix]
+        [tenant, prefix]
       );
       if (prefixRows[0]) return Number(prefixRows[0].id);
     }
@@ -99,10 +97,10 @@ export async function matchProduto(db: ConnectorDatabase, input: CatalogMatchInp
   if (title) {
     const { rows } = await db.query<ProdutoRow>(
       `SELECT id, sku FROM produtos
-       WHERE upper(btrim(nome)) = upper(btrim($1))
+       WHERE empresa_id = $1 AND upper(btrim(nome)) = upper(btrim($2))
        ORDER BY id ASC
        LIMIT 1`,
-      [title]
+      [tenant, title]
     );
     if (rows[0]) return Number(rows[0].id);
   }
@@ -111,17 +109,21 @@ export async function matchProduto(db: ConnectorDatabase, input: CatalogMatchInp
 }
 
 /**
- * Casa um item de pedido com produto + tamanho do ERP. Nunca lança: uma
- * consulta que falhe no casamento não pode impedir a venda de entrar.
+ * Casa um item de pedido com produto + tamanho do tenant indicado. Nunca
+ * lança para falhas de consulta: a venda pode entrar sem vínculo, mas jamais
+ * será ligada a um produto ou tamanho de outra empresa.
  */
-export async function matchCatalogItem(db: ConnectorDatabase, input: CatalogMatchInput): Promise<CatalogMatch> {
+export async function matchCatalogItem(db: ConnectorDatabase, empresaId: number, input: CatalogMatchInput): Promise<CatalogMatch> {
+  const tenant = requireEmpresaId(empresaId);
   try {
-    const productId = await matchProduto(db, input);
+    const productId = await matchProduto(db, tenant, input);
     const sku = clean(input.sku);
     const separatorIndex = Math.max(sku.lastIndexOf('-'), sku.lastIndexOf('_'));
     const skuSuffix = separatorIndex > 0 ? sku.slice(separatorIndex + 1) : '';
     const sizeId =
-      (await matchTamanho(db, input.sizeLabel)) ?? (await matchTamanho(db, skuSuffix)) ?? (await matchTamanho(db, input.variacaoExterna));
+      (await matchTamanho(db, input.sizeLabel)) ??
+      (await matchTamanho(db, skuSuffix)) ??
+      (await matchTamanho(db, input.variacaoExterna));
     return { productId, sizeId };
   } catch (error) {
     console.warn('⚠️  Casamento de catálogo indisponível (item entra sem vínculo):', error instanceof Error ? error.message : error);

@@ -5,8 +5,8 @@
  * brobond-ai-commerce (PR014 — Motor Financeiro Unificado). ADAPTAÇÕES
  * DESTA FASE:
  *
- *   • Tenancy `usuarioId` em todo o caminho (o responsável é resolvido
- *     pelo `shop_id` guardado no conector, nunca por entrada do chamador).
+ *   • Tenancy `empresaId` + `usuarioId` em todo o caminho; ambos vêm do
+ *     conector resolvido pela identidade assinada, nunca do payload externo.
  *   • TRÊS canais alimentam ESTE motor — Mercado Livre, Mercado Pago e
  *     Nuvemshop, com o detalhe de pedido buscado na API oficial de cada
  *     um. Shopee e TikTok saíram do ecossistema (decisão da diretoria,
@@ -137,11 +137,11 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
   const service = deps.service ?? connectorService;
   const sales = deps.sales ?? createSalesService(() => getConnectorDatabase());
 
-  async function resolveMercadoLivreDraft(usuarioId: number, topic: string | null, payload: JsonObject): Promise<IngestedSaleDraft | null> {
+  async function resolveMercadoLivreDraft(empresaId: number, usuarioId: number, topic: string | null, payload: JsonObject): Promise<IngestedSaleDraft | null> {
     const resource = typeof payload.resource === 'string' ? payload.resource : '';
     if (!topic || !resource) return null;
 
-    const { accessToken } = await service.getValidAccessToken(usuarioId, 'MERCADOLIVRE');
+    const { accessToken } = await service.getValidAccessToken(empresaId, usuarioId, 'MERCADOLIVRE');
     const orderId = await resolveMercadoLivreNotificationOrderId(accessToken, topic, resource);
     if (!orderId) return null;
     const order = await fetchMercadoLivreOrder(accessToken, orderId);
@@ -166,12 +166,12 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
     };
   }
 
-  async function resolveMercadoPagoDraft(usuarioId: number, payload: JsonObject): Promise<IngestedSaleDraft | null> {
+  async function resolveMercadoPagoDraft(empresaId: number, usuarioId: number, payload: JsonObject): Promise<IngestedSaleDraft | null> {
     const data = asRecord(payload.data);
     const paymentId = data.id !== undefined ? String(data.id) : '';
     if (!paymentId) return null;
 
-    const { accessToken } = await service.getValidAccessToken(usuarioId, 'MERCADOPAGO');
+    const { accessToken } = await service.getValidAccessToken(empresaId, usuarioId, 'MERCADOPAGO');
     const payment = await fetchMercadoPagoPayment(accessToken, paymentId);
 
     const items: IngestedSaleItemInput[] = payment.items.length
@@ -206,11 +206,11 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
    * (`{ store_id, event, id }`), então o `id` do recurso é o id do
    * pedido e o detalhe vem da API oficial da loja.
    */
-  async function resolveNuvemshopDraft(usuarioId: number, payload: JsonObject): Promise<IngestedSaleDraft | null> {
+  async function resolveNuvemshopDraft(empresaId: number, usuarioId: number, payload: JsonObject): Promise<IngestedSaleDraft | null> {
     const orderId = payload.id !== undefined && payload.id !== null ? String(payload.id) : '';
     if (!orderId) return null;
 
-    const { accessToken, shopId } = await service.getValidAccessToken(usuarioId, 'NUVEMSHOP');
+    const { accessToken, shopId } = await service.getValidAccessToken(empresaId, usuarioId, 'NUVEMSHOP');
     if (!shopId) return null;
     const order = await fetchNuvemshopOrder(accessToken, shopId, orderId);
 
@@ -235,6 +235,7 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
   }
 
   async function resolveDraft(
+    empresaId: number,
     usuarioId: number,
     provider: ConnectorProviderName,
     topic: string | null,
@@ -242,11 +243,11 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
   ): Promise<IngestedSaleDraft | null> {
     switch (provider) {
       case 'MERCADOLIVRE':
-        return resolveMercadoLivreDraft(usuarioId, topic, payload);
+        return resolveMercadoLivreDraft(empresaId, usuarioId, topic, payload);
       case 'MERCADOPAGO':
-        return resolveMercadoPagoDraft(usuarioId, payload);
+        return resolveMercadoPagoDraft(empresaId, usuarioId, payload);
       case 'NUVEMSHOP':
-        return resolveNuvemshopDraft(usuarioId, payload);
+        return resolveNuvemshopDraft(empresaId, usuarioId, payload);
       default:
         return null;
     }
@@ -260,20 +261,21 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
      * única de idempotência.
      */
     async processSaleIngestionEvent(input: {
+      empresaId: number;
       usuarioId: number;
       provider: ConnectorProviderName;
       externalEventId: string;
     }): Promise<SaleIngestionResult> {
-      const { usuarioId, provider, externalEventId } = input;
+      const { empresaId, usuarioId, provider, externalEventId } = input;
 
-      const event = await repository.findEvent(usuarioId, provider, externalEventId);
+      const event = await repository.findEvent(empresaId, usuarioId, provider, externalEventId);
       if (!event) return { provider, externalEventId, status: 'skipped' };
       if (event.processedAt) return { provider, externalEventId, status: 'duplicate' };
 
       const payload = asRecord(event.payload);
       let draft: IngestedSaleDraft | null;
       try {
-        draft = await resolveDraft(usuarioId, provider, event.topic, payload);
+        draft = await resolveDraft(empresaId, usuarioId, provider, event.topic, payload);
       } catch (error) {
         if (requiresReauthentication(error)) {
           // A credencial guardada não abre mais (ex.: token gravado ANTES
@@ -292,11 +294,11 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
         // Sem recurso buscável (payload malformado ou tópico que não gera
         // receita, como `items`): terminal, para a entrega nunca travar a
         // caixa de entrada.
-        await repository.markEventProcessed(usuarioId, provider, externalEventId);
+        await repository.markEventProcessed(empresaId, usuarioId, provider, externalEventId);
         return { provider, externalEventId, status: 'skipped' };
       }
 
-      const { sale, outcome } = await sales.upsertIngestedSale(usuarioId, {
+      const { sale, outcome } = await sales.upsertIngestedSale(empresaId, usuarioId, {
         channel: saleChannelFromConnectorProvider(provider),
         externalOrderId: draft.externalOrderId,
         amountCents: draft.amountCents,
@@ -314,8 +316,8 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
         outcome === 'created' || outcome === 'updated'
           ? { imported: 1, duplicated: 0, failed: 0 }
           : { imported: 0, duplicated: 1, failed: 0 };
-      await repository.incrementIngestionCounters(usuarioId, provider, counters);
-      await repository.markEventProcessed(usuarioId, provider, externalEventId);
+      await repository.incrementIngestionCounters(empresaId, usuarioId, provider, counters);
+      await repository.markEventProcessed(empresaId, usuarioId, provider, externalEventId);
 
       return {
         provider,
@@ -330,8 +332,8 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
     /**
      * Varredura de recuperação: reprocessa as entregas que ficaram
      * pendentes (provedor fora do ar, token em renovação, reinício do
-     * processo no meio da ingestão). Cada linha é re-escopada ao próprio
-     * `usuarioId` — a varredura em si não é escopada, por projeto.
+     * processo no meio da ingestão). Cada linha carrega e revalida o próprio
+     * par `empresaId` + `usuarioId`; só a varredura é global.
      */
     async processPendingSaleEvents(
       options: { limit?: number; olderThanMs?: number; maxAgeMs?: number } = {}
@@ -352,6 +354,7 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
         try {
           results.push(
             await this.processSaleIngestionEvent({
+              empresaId: item.empresaId,
               usuarioId: item.usuarioId,
               provider: item.provider,
               externalEventId: item.externalEventId,

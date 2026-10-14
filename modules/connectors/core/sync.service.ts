@@ -4,7 +4,7 @@
  * Fonte: `modules/marketplace/core/sync.service.ts` do
  * brobond-ai-commerce (PR012). Mantém o contrato de contadores REAIS
  * (importados · duplicados · falhas · rodadas) gravados na linha do
- * conector, agora escopados por `usuarioId`.
+ * conector, escopados pelo par `empresaId` + `usuarioId`.
  *
  * O conteúdo trazido NÃO vira produto no ERP: o catálogo do ERP é a
  * fonte da verdade e nunca é sobrescrito por marketplace. A
@@ -40,11 +40,11 @@ export function createConnectorSyncService(deps: SyncServiceDependencies = {}) {
 
   return {
     /** Executa UMA rodada de sincronização de catálogo de um provedor. */
-    async sync(usuarioId: number, provider: ConnectorProviderName, limit = 50): Promise<ConnectorSyncResult> {
+    async sync(empresaId: number, usuarioId: number, provider: ConnectorProviderName, limit = 50): Promise<ConnectorSyncResult> {
       const connector = getConnector(provider);
       const take = Math.min(Math.max(Math.trunc(limit) || 50, 1), 200);
       try {
-        const items = await connector.fetchCatalog({ usuarioId, limit: take });
+        const items = await connector.fetchCatalog({ empresaId, usuarioId, limit: take });
         // Dedupe pelo `externalId`: um provedor que repete item na mesma
         // página conta como duplicado, não como dois importados.
         const seen = new Set<string>();
@@ -62,7 +62,7 @@ export function createConnectorSyncService(deps: SyncServiceDependencies = {}) {
           duplicated,
           failed: 0,
         };
-        await repository.recordSyncResult(usuarioId, provider, {
+        await repository.recordSyncResult(empresaId, usuarioId, provider, {
           status: 'CONNECTED',
           counters,
           lastError: null,
@@ -86,7 +86,7 @@ export function createConnectorSyncService(deps: SyncServiceDependencies = {}) {
         const counters: ConnectorSyncCounters = { imported: 0, duplicated: 0, failed: 1 };
         // Falha de autorização rebaixa para EXPIRED (o painel oferece
         // reconectar); as demais marcam ERROR (o painel oferece repetir).
-        await repository.recordSyncResult(usuarioId, provider, {
+        await repository.recordSyncResult(empresaId, usuarioId, provider, {
           status: reauth ? 'EXPIRED' : 'ERROR',
           counters,
           lastError: message,

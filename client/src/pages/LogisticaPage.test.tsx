@@ -68,7 +68,7 @@ const CONFIG = {
   cep_origem: '74000000',
   frete_gratis_acima: 0,
   me_sandbox: true,
-  me_token: '••••7f3a',
+  me_token: '••••••••',
   me_token_configurado: true,
   correios_usuario: null,
   correios_codigo_administrativo: null,
@@ -214,7 +214,7 @@ describe('Logística — tela', () => {
     renderPage();
     fireEvent.click(await screen.findByText('Configuração'));
 
-    expect(await screen.findByText(/configurado \(••••7f3a\)/)).toBeInTheDocument();
+    expect(await screen.findByText(/configurado \(••••••••\)/)).toBeInTheDocument();
     // O corpo do documento não contém nenhum token de verdade.
     expect(document.body.textContent).not.toContain('me_token_real');
     // E o campo de token nasce vazio: não há como a tela vazar o valor.
@@ -239,7 +239,7 @@ describe('Logística — tela', () => {
 
     renderPage();
     fireEvent.click(await screen.findByText('Configuração'));
-    await screen.findByText(/configurado \(••••7f3a\)/);
+    await screen.findByText(/configurado \(••••••••\)/);
 
     fireEvent.change(await screen.findByLabelText('Provedor'), { target: { value: 'correios' } });
     fireEvent.click(screen.getByText('Salvar configuração'));
@@ -256,7 +256,7 @@ describe('Logística — tela', () => {
     apiPut.mockResolvedValue({ ok: true } as never);
     renderPage();
     fireEvent.click(await screen.findByText('Configuração'));
-    await screen.findByText(/configurado \(••••7f3a\)/);
+    await screen.findByText(/configurado \(••••••••\)/);
 
     fireEvent.change(await screen.findByLabelText(/CEP de origem/i), { target: { value: '75000000' } });
     fireEvent.click(screen.getByText('Salvar configuração'));

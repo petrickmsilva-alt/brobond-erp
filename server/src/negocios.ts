@@ -395,7 +395,7 @@ export type VendaManualInput = {
 
 export interface NegociosRepo {
   readonly kind: 'postgres' | 'memory';
-  recalcularMargens(ids?: string[]): Promise<{ atualizadas: number }>;
+  recalcularMargens(ids?: string[], empresaId?: number): Promise<{ atualizadas: number }>;
   recalcularCurvaABC(janela?: JanelaAbc): Promise<{ classificados: number; empresas: number }>;
   listarVendas(f: FiltrosBi, limit?: number | null, offset?: number): Promise<VendaNegocios[]>;
   contarVendas(f: FiltrosBi): Promise<number>;
@@ -496,7 +496,7 @@ const SQL_RECALCULAR_MARGENS = `
   WITH vendas_escopo AS (
     SELECT s.id
       FROM sales s
-     WHERE {{IDS}}
+     WHERE {{IDS}} AND {{EMPRESA}}
   ),
   produtos_escopo AS (
     SELECT DISTINCT si.product_id AS produto_id
@@ -569,7 +569,7 @@ const SQL_RECALCULAR_MARGENS = `
            COALESCE(SUM(ROUND(ic.subtotal_cents * ic.aliquota_pct / 100)), 0)::bigint AS tax_cents
       FROM sales s
       LEFT JOIN item_calc ic ON ic.sale_id = s.id
-     WHERE {{IDS}}
+     WHERE {{IDS}} AND {{EMPRESA}}
      GROUP BY s.id, s.amount_cents, s.freight_cents
   )
   UPDATE sales s
@@ -595,17 +595,30 @@ const SQL_RECALCULAR_MARGENS = `
  * manual). O placeholder {{IDS}} aparece nas CTEs vendas_escopo e
  * pedido_calc — as duas varreduras ficam sempre no MESMO escopo.
  */
-function sqlRecalcularMargens(ids?: string[]): { sql: string; params: unknown[] } {
-  if (!ids || !ids.length) return { sql: SQL_RECALCULAR_MARGENS.replaceAll('{{IDS}}', 'TRUE'), params: [] };
-  const cond = `s.id = ANY($1::text[])`;
-  return { sql: SQL_RECALCULAR_MARGENS.replaceAll('{{IDS}}', cond), params: [ids] };
+function sqlRecalcularMargens(ids?: string[], empresaId?: number): { sql: string; params: unknown[] } {
+  const params: unknown[] = [];
+  let idsCond = 'TRUE';
+  let empresaCond = 'TRUE';
+  if (ids && ids.length) {
+    params.push(ids);
+    idsCond = `s.id = ANY($${params.length}::text[])`;
+  }
+  if (empresaId !== undefined) {
+    if (!Number.isSafeInteger(empresaId) || empresaId <= 0) throw new Error('empresaId inválido no recálculo de venda.');
+    params.push(empresaId);
+    empresaCond = `s.empresa_id = $${params.length}`;
+  }
+  return {
+    sql: SQL_RECALCULAR_MARGENS.replaceAll('{{IDS}}', idsCond).replaceAll('{{EMPRESA}}', empresaCond),
+    params,
+  };
 }
 
 const sqlRepo: NegociosRepo = {
   kind: 'postgres',
 
-  async recalcularMargens(ids?: string[]): Promise<{ atualizadas: number }> {
-    const { sql, params } = sqlRecalcularMargens(ids);
+  async recalcularMargens(ids?: string[], empresaId?: number): Promise<{ atualizadas: number }> {
+    const { sql, params } = sqlRecalcularMargens(ids, empresaId);
     const { rowCount } = await q(sql, params);
     return { atualizadas: Number(rowCount ?? 0) };
   },
@@ -822,7 +835,7 @@ const sqlRepo: NegociosRepo = {
       }
       // Margem da venda nova já sai materializada — a MESMA query do motor,
       // escopada à venda criada, dentro da MESMA transação.
-      const { sql, params } = sqlRecalcularMargens([id]);
+      const { sql, params } = sqlRecalcularMargens([id], input.empresaId);
       await q(sql, params, tx);
       const { rows } = await tx.query(
         `SELECT s.id, s.reference, s.external_order_id, s.status::text AS status,
@@ -965,9 +978,9 @@ function passaFiltrosMemoria(v: MemVenda, f: FiltrosBi): boolean {
 const memRepo: NegociosRepo = {
   kind: 'memory',
 
-  async recalcularMargens(ids?: string[]): Promise<{ atualizadas: number }> {
+  async recalcularMargens(ids?: string[], empresaId?: number): Promise<{ atualizadas: number }> {
     const escopo = ids && ids.length ? new Set(ids) : null;
-    const alvo = memoria.vendas.filter((v) => !escopo || escopo.has(v.id));
+    const alvo = memoria.vendas.filter((v) => (!escopo || escopo.has(v.id)) && (empresaId === undefined || v.empresa_id === empresaId));
     if (!alvo.length) return { atualizadas: 0 };
 
     // Catálogo + alíquotas em lote: custo médio (ficha técnica) e NCM.
@@ -1146,7 +1159,7 @@ const memRepo: NegociosRepo = {
         created_at: agora,
       });
     }
-    await memRepo.recalcularMargens([id]);
+    await memRepo.recalcularMargens([id], input.empresaId);
     const vendas = await memRepo.listarVendas({ de: null, ate: null, empresaId: null, canal: null, canais: null, status: null, ids: [id] }, 1, 0);
     return vendas[0];
   },
@@ -1567,7 +1580,7 @@ export async function negociosVendaManual(req: Request, res: Response) {
 // ----------------------------------------------------------------------------
 
 let cicloRodando = false;
-const vendasPendentes = new Set<string>();
+const vendasPendentes = new Map<number, Set<string>>();
 // ----------------------------------------------------------------------------
 // 9) ERP-04 — Projeção `vendas` → `sales` (ADR-001: `sales` é modelo de leitura)
 // ----------------------------------------------------------------------------
@@ -1942,19 +1955,24 @@ export async function atualizarMotorNegocios(): Promise<{ margens: number; abc: 
 }
 
 /** Enfileira vendas ingeridas: recálculo coalescido (debounce) margem+ABC. */
-export function agendarRecalculo(ids: string[]): void {
+export function agendarRecalculo(ids: string[], empresaId: number): void {
   if (!hasDatabaseUrl()) return;
-  for (const id of ids) vendasPendentes.add(id);
+  if (!Number.isSafeInteger(empresaId) || empresaId <= 0) return;
+  const doTenant = vendasPendentes.get(empresaId) ?? new Set<string>();
+  for (const id of ids) doTenant.add(id);
+  vendasPendentes.set(empresaId, doTenant);
   if (timerDebounce) return;
   timerDebounce = setTimeout(() => {
     timerDebounce = null;
-    const pendentes = [...vendasPendentes];
+    const pendentes = [...vendasPendentes.entries()];
     vendasPendentes.clear();
     if (!pendentes.length) return;
     void (async () => {
       try {
         const repo = repoNegocios();
-        await repo.recalcularMargens(pendentes);
+        for (const [tenantId, saleIds] of pendentes) {
+          await repo.recalcularMargens([...saleIds], tenantId);
+        }
         await repo.recalcularCurvaABC();
       } catch (e) {
         console.warn('⚠️  Motor 1. MEU NEGÓCIOS: recálculo pós-ingestão falhou —', e instanceof Error ? e.message : e);
@@ -1975,8 +1993,8 @@ export function initNegociosEngine(): void {
   // tem venda do ERP — e o BI dele precisa refletir a operação, como o de PG).
   setOnVendaErpAlterada((evento) => agendarProjecaoVendasErp(evento.vendaId));
   if (!hasDatabaseUrl()) return;
-  setOnSaleIngested(({ saleId }) => {
-    agendarRecalculo([saleId]);
+  setOnSaleIngested(({ empresaId, saleId }) => {
+    agendarRecalculo([saleId], empresaId);
   });
   if (process.env.NODE_ENV === 'test') return;
   const intervalo = Number(process.env.NEGOCIOS_AUTO_REFRESH_MS ?? AUTO_REFRESH_MS_PADRAO);

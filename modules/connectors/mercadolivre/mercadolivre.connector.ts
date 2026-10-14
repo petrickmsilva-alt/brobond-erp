@@ -23,7 +23,7 @@ export class MercadoLivreConnector implements ProviderConnector {
   readonly name = 'Mercado Livre';
 
   async fetchCatalog(options: FetchCatalogOptions): Promise<NormalizedContent[]> {
-    const { accessToken, shopId } = await connectorService.getValidAccessToken(options.usuarioId, this.provider);
+    const { accessToken, shopId } = await connectorService.getValidAccessToken(options.empresaId, options.usuarioId, this.provider);
     // Sem credencial utilizável NUNCA chamamos a API: listar anúncios com
     // bearer vazio devolvia um 401 opaco que o painel mostrava como "Não
     // foi possível listar os anúncios do Mercado Livre". Agora o operador

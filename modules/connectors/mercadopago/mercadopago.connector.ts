@@ -15,7 +15,7 @@ export class MercadoPagoConnector implements ProviderConnector {
   readonly name = 'Mercado Pago';
 
   async fetchCatalog(options: FetchCatalogOptions): Promise<NormalizedContent[]> {
-    const { accessToken } = await connectorService.getValidAccessToken(options.usuarioId, this.provider);
+    const { accessToken } = await connectorService.getValidAccessToken(options.empresaId, options.usuarioId, this.provider);
     return fetchMercadoPagoPayments(accessToken, options.limit ?? 50);
   }
 

@@ -105,7 +105,40 @@ async function resolverTokenCatalogo(token: string): Promise<{ catalogo: Row | n
   if (!compartilhamento || compartilhamento.revogado_em || (compartilhamento.expira_em && new Date(String(compartilhamento.expira_em)).getTime() < Date.now())) {
     return { catalogo: null, compartilhamento: null };
   }
+  // A autorização individual aponta para um catálogo; o tenant confiável é
+  // o do catálogo, nunca um ID recebido do navegador nem o cliente do link.
   return { catalogo: await s.get(RESOURCES.catalogos, Number(compartilhamento.catalogo_id)), compartilhamento };
+}
+
+function empresaIdDoCatalogo(catalogo: Row): number {
+  const empresaId = Number(catalogo.empresa_id);
+  if (!Number.isInteger(empresaId) || empresaId <= 0) throw new HttpError(404, 'Catálogo não encontrado.');
+  return empresaId;
+}
+
+/** Confirma que o cliente associado ao link também pertence ao catálogo. */
+async function clienteDoCompartilhamento(compartilhamento: Row | null, empresaId: number): Promise<Row | null> {
+  if (!compartilhamento?.cliente_id) return null;
+  const clienteId = Number(compartilhamento.cliente_id);
+  const cliente = Number.isInteger(clienteId) && clienteId > 0
+    ? await getStore().findOneWhere(RESOURCES.clientes, { id: clienteId, empresa_id: empresaId })
+    : null;
+  if (!cliente) throw new HttpError(404, 'Compartilhamento não encontrado.');
+  return cliente;
+}
+
+/** Escopo de leitura compartilhado entre JSON, embed, evento e cotação. */
+async function filtrosPublicosDoCatalogo(catalogo: Row, empresaId: number): Promise<Record<string, unknown>> {
+  const filtros = filtrosDoCatalogo(catalogo);
+  if (filtros.colecao_id) {
+    const colecao = await getStore().findOneWhere(RESOURCES.colecoes, { id: filtros.colecao_id, empresa_id: empresaId });
+    if (!colecao) throw new HttpError(404, 'Catálogo não encontrado.');
+  }
+  return {
+    empresa_id: empresaId,
+    ...(filtros.colecao_id ? { colecao_id: filtros.colecao_id } : {}),
+    ...(filtros.categoria_id ? { categoria_id: filtros.categoria_id } : {}),
+  };
 }
 
 export async function catalogoPublico(req: Request, res: Response) {
@@ -126,6 +159,10 @@ export async function catalogoPublico(req: Request, res: Response) {
     return res.status(401).json({ error: 'senha_necessaria', mensagem: 'Este catálogo é protegido por senha.' });
   }
 
+  const empresaId = empresaIdDoCatalogo(catalogo);
+  const clienteCompartilhado = await clienteDoCompartilhamento(resolvido.compartilhamento, empresaId);
+  const filtro = await filtrosPublicosDoCatalogo(catalogo, empresaId);
+
   if (resolvido.compartilhamento) {
     const c = resolvido.compartilhamento;
     const agora = new Date().toISOString();
@@ -139,14 +176,9 @@ export async function catalogoPublico(req: Request, res: Response) {
     });
   }
 
-  const filtros = filtrosDoCatalogo(catalogo);
-  const filter: Record<string, unknown> = {};
-  if (filtros.colecao_id) filter.colecao_id = filtros.colecao_id;
-  if (filtros.categoria_id) filter.categoria_id = filtros.categoria_id;
-
   const [produtos, estoques, tamanhos] = await Promise.all([
-    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter, sort: 'nome', dir: 'asc' }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 6000 }),
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter: filtro, sort: 'nome', dir: 'asc' }),
+    s.list(RESOURCES.estoques, { page: 1, pageSize: 6000, filter: { empresa_id: empresaId } }),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200, sort: 'ordem', dir: 'asc' }),
   ]);
   await attachImages(RESOURCES.produtos, produtos.rows);
@@ -222,7 +254,7 @@ export async function catalogoPublico(req: Request, res: Response) {
   }
   const canal = String(catalogo.canal || 'todos');
   const tabelaPreco = String(catalogo.tabela_preco || 'automatico');
-  const politica = await resolverPoliticaComercial({ catalogo, clienteId: Number(resolvido.compartilhamento?.cliente_id) || null, canal: canal === 'atacado' ? 'atacado' : 'varejo' });
+  const politica = await resolverPoliticaComercial({ empresaId, catalogo, clienteId: Number(clienteCompartilhado?.id) || null, canal: canal === 'atacado' ? 'atacado' : 'varejo' });
 
   // Preço exibido no catálogo: varejo, atacado, ambos ou automático conforme canal.
   function precoDoProduto(p: Row): { preco: number | null; preco_tipo: 'varejo' | 'atacado' | null; preco_venda: number | null; preco_atacado: number | null } {
@@ -285,7 +317,7 @@ export async function catalogoPublico(req: Request, res: Response) {
 
   res.json({
     nome: catalogo.nome,
-    compartilhamento: resolvido.compartilhamento ? { individual: true, cliente_id: resolvido.compartilhamento.cliente_id ?? null } : null,
+    compartilhamento: resolvido.compartilhamento ? { individual: true } : null,
     canal,
     tabela_preco: tabelaPreco,
     aceita_pedido_site: catalogo.aceita_pedido_site !== false,
@@ -318,12 +350,14 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
   if (catalogo.senha_hash && !ehMesmaSenha(typeof body.senha === 'string' ? body.senha : undefined, catalogo.senha_hash)) {
     throw new HttpError(401, 'senha_necessaria');
   }
+  const empresaId = empresaIdDoCatalogo(catalogo);
+  const clienteCompartilhado = await clienteDoCompartilhamento(resolvido.compartilhamento, empresaId);
   const nome = String(body.nome || '').trim();
   const email = String(body.email || '').trim().toLowerCase();
   const telefone = String(body.telefone || '').trim();
   const canalCatalogo = String(catalogo.canal || 'todos');
   const canal = canalCatalogo === 'atacado' ? 'atacado' : canalCatalogo === 'varejo' ? 'varejo' : (body.canal === 'atacado' ? 'atacado' : 'varejo');
-  const politica = await resolverPoliticaComercial({ catalogo, clienteId: Number(resolvido.compartilhamento?.cliente_id) || null, canal });
+  const politica = await resolverPoliticaComercial({ empresaId, catalogo, clienteId: Number(clienteCompartilhado?.id) || null, canal });
   const itens = Array.isArray(body.itens) ? body.itens : [];
   if (!nome) throw new HttpError(400, 'Informe o nome do cliente.', { nome: 'Campo obrigatório' });
   if (!itens.length) throw new HttpError(400, 'Adicione ao menos um item ao pedido.');
@@ -335,14 +369,11 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
     chaves.add(chave);
   }
 
-  const filtros = filtrosDoCatalogo(catalogo);
-  const filter: Record<string, unknown> = {};
-  if (filtros.colecao_id) filter.colecao_id = filtros.colecao_id;
-  if (filtros.categoria_id) filter.categoria_id = filtros.categoria_id;
+  const filtro = await filtrosPublicosDoCatalogo(catalogo, empresaId);
   const [produtosR, tamanhosR, estoquesR] = await Promise.all([
-    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter }),
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter: filtro }),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200 }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 10000 }),
+    s.list(RESOURCES.estoques, { page: 1, pageSize: 10000, filter: { empresa_id: empresaId } }),
   ]);
   const produtoPorId = new Map<number, Row>(produtosR.rows.map((p) => [Number(p.id), p]));
   const tamanhoPorId = new Map<number, Row>(tamanhosR.rows.map((t) => [Number(t.id), t]));
@@ -350,12 +381,13 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
   try {
     const pedido = await s.transaction(async (tx) => {
       const clientesR = RESOURCES.clientes;
-      let cliente = email ? await s.findOneWhere(clientesR, { email }, tx) : null;
+      let cliente = email ? await s.findOneWhere(clientesR, { empresa_id: empresaId, email }, tx) : null;
       if (!cliente) {
-        cliente = await s.findOneWhere(clientesR, { nome }, tx);
+        cliente = await s.findOneWhere(clientesR, { empresa_id: empresaId, nome }, tx);
       }
       if (!cliente) {
         cliente = await s.insert(clientesR, {
+          empresa_id: empresaId,
           nome,
           email: email || null,
           cnpj_cpf: body.cnpj_cpf ?? null,
@@ -370,6 +402,7 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
 
       const vendaR = RESOURCES.vendas;
       const venda = await s.insert(vendaR, {
+        empresa_id: empresaId,
         cliente_id: Number(cliente.id),
         data: new Date().toISOString().slice(0, 10),
         status: 'cotacao',
@@ -396,14 +429,17 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
         }
         if (politica?.produto_min_qtd && quantidade < politica.produto_min_qtd) throw new HttpError(400, `A política “${politica.nome}” exige ao menos ${politica.produto_min_qtd} peça(s) por item.`);
         if (politica && quantidade % politica.multiplo_qtd !== 0) throw new HttpError(400, `A política “${politica.nome}” exige quantidades múltiplas de ${politica.multiplo_qtd}.`);
-        // Se o cliente não selecionou tamanho, usa o primeiro com saldo (fallback).
+        // O tamanho precisa pertencer ao produto deste tenant. O dicionário
+        // global de tamanhos, isoladamente, não é autoridade para casar o item.
         if (!Number.isInteger(tamanhoId) || tamanhoId <= 0) {
           const comSaldo = estoquesR.rows.find((e) => Number(e.produto_id) === produtoId && Number(e.quantidade) > 0);
-          tamanhoId = comSaldo ? Number(comSaldo.tamanho_id) : Number(tamanhoPorId.keys().next().value);
+          if (!comSaldo) throw new HttpError(400, 'Selecione um tamanho disponível para este produto.');
+          tamanhoId = Number(comSaldo.tamanho_id);
         }
         const tamanho = tamanhoPorId.get(tamanhoId);
-        if (!tamanho) {
-          throw new HttpError(400, 'Selecione um tamanho válido para o pedido.');
+        const tamanhoDoProduto = estoquesR.rows.some((e) => Number(e.produto_id) === produtoId && Number(e.tamanho_id) === tamanhoId);
+        if (!tamanho || !tamanhoDoProduto) {
+          throw new HttpError(400, 'Selecione um tamanho válido para este produto.');
         }
         if (produto.exibir_site === false || produto.ativo === false) {
           throw new HttpError(400, `O produto "${labelOf(RESOURCES.produtos, produto)}" não está disponível para pedido pelo site.`);
@@ -413,6 +449,7 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
         const sub = Math.round(quantidade * preco * 100) / 100;
         subtotal += sub;
         await s.insert(itensR, {
+          empresa_id: empresaId,
           venda_id: Number(venda.id),
           produto_id: produtoId,
           tamanho_id: tamanhoId,
@@ -543,7 +580,16 @@ export async function eventoCatalogo(req: Request, res: Response) {
   if (!resolvido.catalogo || !resolvido.compartilhamento) throw new HttpError(404, 'Compartilhamento não encontrado.');
   const tipo = String(req.body?.tipo || '');
   if (!['produto_visualizado', 'carrinho_iniciado'].includes(tipo)) throw new HttpError(400, 'Evento inválido.');
-  const produtoId = Number(req.body?.produto_id) || null;
+  const empresaId = empresaIdDoCatalogo(resolvido.catalogo);
+  await clienteDoCompartilhamento(resolvido.compartilhamento, empresaId);
+  let produtoId: number | null = null;
+  if (req.body?.produto_id !== undefined && req.body?.produto_id !== null && req.body?.produto_id !== '') {
+    produtoId = Number(req.body.produto_id);
+    if (!Number.isInteger(produtoId) || produtoId <= 0) throw new HttpError(404, 'Produto não encontrado.');
+    const filtro = await filtrosPublicosDoCatalogo(resolvido.catalogo, empresaId);
+    const produto = await getStore().findOneWhere(RESOURCES.produtos, { id: produtoId, ...filtro });
+    if (!produto || produto.ativo === false || produto.exibir_site === false) throw new HttpError(404, 'Produto não encontrado.');
+  }
   await getStore().insert(RESOURCES.catalogo_eventos, {
     compartilhamento_id: Number(resolvido.compartilhamento.id), catalogo_id: Number(resolvido.catalogo.id),
     produto_id: produtoId, tipo, dados: {},
@@ -708,6 +754,10 @@ export async function catalogoEmbed(req: Request, res: Response) {
     return;
   }
 
+  const empresaId = empresaIdDoCatalogo(catalogo);
+  const clienteCompartilhado = await clienteDoCompartilhamento(resolvido.compartilhamento, empresaId);
+  const filtro = await filtrosPublicosDoCatalogo(catalogo, empresaId);
+
   // Mesmo critério do endpoint JSON: conta o acesso do compartilhamento.
   if (resolvido.compartilhamento) {
     const c = resolvido.compartilhamento;
@@ -725,13 +775,9 @@ export async function catalogoEmbed(req: Request, res: Response) {
     });
   }
 
-  const filtros = filtrosDoCatalogo(catalogo);
-  const filter: Record<string, unknown> = {};
-  if (filtros.colecao_id) filter.colecao_id = filtros.colecao_id;
-  if (filtros.categoria_id) filter.categoria_id = filtros.categoria_id;
   const [produtos, estoques, tamanhos] = await Promise.all([
-    s.list(RESOURCES.produtos, { page: 1, pageSize: 500, filter, sort: 'nome', dir: 'asc' }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 6000 }),
+    s.list(RESOURCES.produtos, { page: 1, pageSize: 500, filter: filtro, sort: 'nome', dir: 'asc' }),
+    s.list(RESOURCES.estoques, { page: 1, pageSize: 6000, filter: { empresa_id: empresaId } }),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200, sort: 'ordem', dir: 'asc' }),
   ]);
   await attachImages(RESOURCES.produtos, produtos.rows);
@@ -739,7 +785,7 @@ export async function catalogoEmbed(req: Request, res: Response) {
 
   const canal = String(catalogo.canal || 'todos');
   const canalEfetivo: 'atacado' | 'varejo' = canal === 'atacado' ? 'atacado' : 'varejo';
-  const politica = await resolverPoliticaComercial({ catalogo, clienteId: Number(resolvido.compartilhamento?.cliente_id) || null, canal: canalEfetivo });
+  const politica = await resolverPoliticaComercial({ empresaId, catalogo, clienteId: Number(clienteCompartilhado?.id) || null, canal: canalEfetivo });
   const mostrarPreco = catalogo.mostrar_preco !== false;
   const mostrarSaldo = catalogo.mostrar_saldo === true;
 

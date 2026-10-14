@@ -25,7 +25,7 @@
 // HTTP, injeção do banco/auditoria e as regras de montagem.
 import express, { Router, type NextFunction, type Request, type Response } from 'express';
 import { currentUser } from './auth';
-import { empresaExplicitaAudit } from './empresa';
+import { empresaExplicitaAudit, escopoDoAtor } from './empresa';
 import { hasDatabaseUrl, pool, withTransaction } from './db';
 import { HttpError } from './errors';
 import { getResource } from './resources';
@@ -125,6 +125,11 @@ function providerParam(req: Request): ConnectorProviderName {
   return provider;
 }
 
+/** Empresa ativa, já validada pelo middleware contra a sessão e suas concessões. */
+function empresaAtiva(req: Request): number {
+  return escopoDoAtor(currentUser(req)).empresaId;
+}
+
 /** Traduz os erros de domínio do módulo para HTTP. */
 function toConnectorHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
@@ -165,7 +170,7 @@ connectorsRouter.get(
   run(async (req, res) => {
     assertConnectorsDatabase();
     const actor = currentUser(req);
-    res.json({ connectors: await connectorService.listStatus(actor.id) });
+    res.json({ connectors: await connectorService.listStatus(empresaAtiva(req), actor.id) });
   })
 );
 
@@ -174,8 +179,8 @@ connectorsRouter.post(
   run(async (req, res) => {
     assertConnectorsDatabase();
     const actor = currentUser(req);
-    const connector = await connectorService.connectMercadoPagoFromEnvironment(actor.id);
-    res.json({ ok: true, connector: await connectorService.getStatus(actor.id, connector.provider) });
+    const connector = await connectorService.connectMercadoPagoFromEnvironment(empresaAtiva(req), actor.id);
+    res.json({ ok: true, connector: await connectorService.getStatus(empresaAtiva(req), actor.id, connector.provider) });
   })
 );
 
@@ -189,11 +194,11 @@ connectorsRouter.post(
     if (!accessToken || !publicKey) {
       throw new HttpError(400, 'Informe o Access Token e a Public Key de produção do Mercado Pago.');
     }
-    const connector = await connectorService.connectMercadoPago(actor.id, {
+    const connector = await connectorService.connectMercadoPago(empresaAtiva(req), actor.id, {
       accessToken,
       publicKey,
     });
-    res.json({ ok: true, connector: await connectorService.getStatus(actor.id, connector.provider) });
+    res.json({ ok: true, connector: await connectorService.getStatus(empresaAtiva(req), actor.id, connector.provider) });
   })
 );
 
@@ -202,7 +207,7 @@ connectorsRouter.get(
   run(async (req, res) => {
     assertConnectorsDatabase();
     const actor = currentUser(req);
-    res.json(await connectorService.getStatus(actor.id, providerParam(req)));
+    res.json(await connectorService.getStatus(empresaAtiva(req), actor.id, providerParam(req)));
   })
 );
 
@@ -221,10 +226,10 @@ connectorsRouter.get(
     // independente — é ele que alimenta "Pedidos Importados", "Receita
     // do Canal" e a caixa "Webhooks — eventos recebidos" do canal.
     const [connector, panel] = await Promise.all([
-      connectorService.getStatus(actor.id, provider),
+      connectorService.getStatus(empresaAtiva(req), actor.id, provider),
       provider === 'INSTAGRAM'
-        ? instagramConnectorService.getPanel(actor.id, limite)
-        : connectorPanelService.getPanel(actor.id, provider, limite),
+        ? instagramConnectorService.getPanel(empresaAtiva(req), actor.id, limite)
+        : connectorPanelService.getPanel(empresaAtiva(req), actor.id, provider, limite),
     ]);
     res.json({ connector, panel });
   })
@@ -239,7 +244,7 @@ connectorsRouter.post(
     // (na Render, https://brobond-erp.onrender.com). O caminho canônico do
     // callback é derivado e validado no módulo — nunca montado no cliente.
     const redirectBase = typeof req.body?.redirect_uri === 'string' ? req.body.redirect_uri : '';
-    res.json(await connectorService.startAuthorization(actor.id, providerParam(req), { redirectBase }));
+    res.json(await connectorService.startAuthorization(empresaAtiva(req), actor.id, providerParam(req), { redirectBase }));
   })
 );
 
@@ -250,7 +255,7 @@ connectorsRouter.post(
     const actor = currentUser(req);
     const provider = providerParam(req);
     const limite = Number(req.body?.limite ?? req.query.limite ?? 50);
-    res.json(await connectorSyncService.sync(actor.id, provider, limite));
+    res.json(await connectorSyncService.sync(empresaAtiva(req), actor.id, provider, limite));
   })
 );
 
@@ -260,8 +265,8 @@ connectorsRouter.delete(
     assertConnectorsDatabase();
     const actor = currentUser(req);
     const provider = providerParam(req);
-    await connectorService.disconnect(actor.id, provider);
-    res.json({ ok: true, connector: await connectorService.getStatus(actor.id, provider) });
+    await connectorService.disconnect(empresaAtiva(req), actor.id, provider);
+    res.json({ ok: true, connector: await connectorService.getStatus(empresaAtiva(req), actor.id, provider) });
   })
 );
 

@@ -15,6 +15,8 @@
  */
 
 export interface SaleIngestedEvent {
+  /** Empresa da venda, derivada da conexão que a ingeriu. */
+  empresaId: number;
   saleId: string;
   /** `created` = nova venda; `updated` = reescrita por reentrega corrigida. */
   outcome: 'created' | 'updated';

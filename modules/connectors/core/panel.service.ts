@@ -9,7 +9,7 @@
  *   • "Conteúdo importado desta plataforma" — as linhas de `sale_items`
  *     já casadas (ou não) com o catálogo real do ERP.
  *
- * É SOMENTE LEITURA e sempre escopado ao `usuarioId` do responsável: nada
+ * É SOMENTE LEITURA e sempre escopado a `empresaId` + `usuarioId`: nada
  * aqui escreve, nenhuma credencial é lida e nenhum segredo trafega — o
  * painel recebe contadores e rótulos, jamais material sensível.
  */
@@ -116,7 +116,7 @@ export function createConnectorPanelService(deps: ConnectorPanelDependencies = {
      * um conector recém-criado devolve zeros e listas vazias — é
      * exatamente isso que alimenta os "empty states" do painel.
      */
-    async getPanel(usuarioId: number, provider: ConnectorProviderName, limit = 10): Promise<ConnectorPanelDTO> {
+    async getPanel(empresaId: number, usuarioId: number, provider: ConnectorProviderName, limit = 10): Promise<ConnectorPanelDTO> {
       const db = resolveDb();
       const channel = saleChannelFromConnectorProvider(provider);
       const take = clampLimit(limit);
@@ -125,20 +125,20 @@ export function createConnectorPanelService(deps: ConnectorPanelDependencies = {
         db.query<{ revenue_cents: string | number | null; sales_count: string | number | null; event_count: string | number | null }>(
           `SELECT
              COALESCE((SELECT SUM(amount_cents) FROM sales
-                        WHERE usuario_id = $1 AND channel = $2::sale_channel AND status <> 'CANCELLED'), 0) AS revenue_cents,
+                        WHERE empresa_id = $1 AND usuario_id = $2 AND channel = $3::sale_channel AND status <> 'CANCELLED'), 0) AS revenue_cents,
              COALESCE((SELECT COUNT(*) FROM sales
-                        WHERE usuario_id = $1 AND channel = $2::sale_channel), 0) AS sales_count,
+                        WHERE empresa_id = $1 AND usuario_id = $2 AND channel = $3::sale_channel), 0) AS sales_count,
              COALESCE((SELECT COUNT(*) FROM connector_events
-                        WHERE usuario_id = $1 AND provider = $3::connector_provider), 0) AS event_count`,
-          [usuarioId, channel, provider]
+                        WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $4::connector_provider), 0) AS event_count`,
+          [empresaId, usuarioId, channel, provider]
         ),
         db.query<Record<string, unknown>>(
           `SELECT id, reference, external_order_id, status, quantity, amount_cents, currency, occurred_at
              FROM sales
-            WHERE usuario_id = $1 AND channel = $2::sale_channel
+            WHERE empresa_id = $1 AND usuario_id = $2 AND channel = $3::sale_channel
             ORDER BY occurred_at DESC
-            LIMIT $3`,
-          [usuarioId, channel, take]
+            LIMIT $4`,
+          [empresaId, usuarioId, channel, take]
         ),
         db.query<Record<string, unknown>>(
           `SELECT si.id,
@@ -152,14 +152,14 @@ export function createConnectorPanelService(deps: ConnectorPanelDependencies = {
                   s.occurred_at
              FROM sale_items si
              JOIN sales s     ON s.id = si.sale_id
-             LEFT JOIN produtos p ON p.id = si.product_id
+             LEFT JOIN produtos p ON p.id = si.product_id AND p.empresa_id = s.empresa_id
              LEFT JOIN tamanhos t ON t.id = si.size_id
-            WHERE s.usuario_id = $1 AND s.channel = $2::sale_channel
+            WHERE s.empresa_id = $1 AND s.usuario_id = $2 AND s.channel = $3::sale_channel
             ORDER BY s.occurred_at DESC, si.id ASC
-            LIMIT $3`,
-          [usuarioId, channel, take]
+            LIMIT $4`,
+          [empresaId, usuarioId, channel, take]
         ),
-        repository.listRecentEvents(usuarioId, provider, take),
+        repository.listRecentEvents(empresaId, usuarioId, provider, take),
       ]);
 
       const totalsRow = totals.rows[0] ?? {};

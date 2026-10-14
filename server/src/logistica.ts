@@ -37,7 +37,7 @@ import { currentUser, type AuthUser } from './auth';
 import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2 } from './utils';
-import { cifrarSegredo, decifrarSegredo, mascararSegredo, pareceCifrado } from './segredos';
+import { cifrarSegredo, decifrarSegredo, pareceCifrado } from './segredos';
 import { R_CONFIGURACOES, lerConfig, gravarConfig } from './configuracoes';
 import type { Row, Tx } from './store';
 
@@ -97,6 +97,8 @@ export type EventoRastreio = {
 };
 
 export type ContextoEnvio = {
+  /** Empresa resolvida pelo servidor; nunca recebida do request público. */
+  empresaId: number;
   venda_id: number;
   origem: OrigemFrete;
   destino: DestinoFrete;
@@ -115,12 +117,12 @@ export interface ShippingProvider {
   slug: string;
   /** nome legível */
   nome: string;
-  /** o provedor tem credencial suficiente para operar? */
-  disponivel(): Promise<boolean> | boolean;
+  /** Cada operação recebe o tenant resolvido pelo servidor; nunca há contexto global. */
+  disponivel(empresaId: number): Promise<boolean> | boolean;
   cotar(ctx: ContextoEnvio): Promise<ResultadoProvedor<CotacaoFrete[]>>;
   gerarEnvio(ctx: ContextoEnvio): Promise<ResultadoProvedor<EnvioGerado>>;
-  rastrear(codigo: string): Promise<ResultadoProvedor<EventoRastreio[]>>;
-  cancelar(providerRef: string): Promise<ResultadoProvedor<{ mensagem: string }>>;
+  rastrear(empresaId: number, codigo: string): Promise<ResultadoProvedor<EventoRastreio[]>>;
+  cancelar(empresaId: number, providerRef: string): Promise<ResultadoProvedor<{ mensagem: string }>>;
 }
 
 // ----------------------------------------------------------------------------
@@ -178,7 +180,11 @@ const CREDENCIAL_DO_PROVEDOR: Record<string, 'me_token' | 'correios_senha'> = {
 const CONFIG_PADRAO: ConfigLogistica = { provider: 'manual', ambiente: 'homologacao' };
 
 function chaveConfig(empresaId: number): string {
-  return `logistica_config:${empresaId}`;
+  const tenant = Number(empresaId);
+  if (!Number.isSafeInteger(tenant) || tenant <= 0) {
+    throw new Error('A configuração logística exige um empresaId explícito e válido.');
+  }
+  return `logistica_config:${tenant}`;
 }
 
 export async function obterConfigLogistica(empresaId: number): Promise<ConfigLogistica> {
@@ -196,7 +202,12 @@ export async function obterConfigLogistica(empresaId: number): Promise<ConfigLog
   }
 }
 
-/** Versão para a API: segredos mascarados, nunca em claro. */
+/** Máscara fixa: não revela prefixo, sufixo ou tamanho de uma credencial. */
+function mascararCredencialLogistica(valor: string | null | undefined): string | null {
+  return valor ? '••••••••' : null;
+}
+
+/** Versão para a API: nenhum campo de credencial volta em claro ou parcial. */
 export function mascararConfig(cfg: ConfigLogistica): Record<string, unknown> {
   return {
     provider: cfg.provider,
@@ -204,11 +215,15 @@ export function mascararConfig(cfg: ConfigLogistica): Record<string, unknown> {
     cep_origem: cfg.cep_origem ?? null,
     frete_gratis_acima: cfg.frete_gratis_acima ?? 0,
     me_sandbox: !!cfg.me_sandbox,
-    correios_usuario: cfg.correios_usuario ?? null,
-    correios_codigo_administrativo: cfg.correios_codigo_administrativo ?? null,
-    me_token: mascararSegredo(cfg.me_token),
-    correios_senha: mascararSegredo(cfg.correios_senha),
-    // Sem token, nenhum adaptador externo opera — e a tela precisa dizer isso.
+    // Campos de entrada retornam vazios: o cliente só envia substituições;
+    // um formulário sem valor mantém o segredo existente no servidor.
+    correios_usuario: null,
+    correios_codigo_administrativo: null,
+    correios_usuario_configurado: !!cfg.correios_usuario,
+    correios_codigo_administrativo_configurado: !!cfg.correios_codigo_administrativo,
+    me_token: mascararCredencialLogistica(cfg.me_token),
+    correios_senha: mascararCredencialLogistica(cfg.correios_senha),
+    // Sem credencial, nenhum adaptador externo opera — a tela vê apenas o flag.
     me_token_configurado: !!cfg.me_token,
     correios_senha_configurada: !!cfg.correios_senha,
   };
@@ -236,11 +251,11 @@ async function salvarConfigLogistica(empresaId: number, cfg: ConfigLogistica, po
 export const PROVEDOR_NULO: ShippingProvider = {
   slug: 'manual',
   nome: 'Manual (sem integração)',
-  disponivel: () => false,
+  disponivel: (_empresaId) => false,
   cotar: async () => ({ ok: false, motivo: 'nao_configurado', mensagem: 'Nenhuma transportadora configurada. Configure em Logística → Configuração ou lance o frete manualmente.' }),
   gerarEnvio: async () => ({ ok: false, motivo: 'nao_configurado', mensagem: 'Nenhuma transportadora configurada: nenhum envio foi postado.' }),
-  rastrear: async () => ({ ok: false, motivo: 'nao_configurado', mensagem: 'Nenhuma transportadora configurada para rastrear.' }),
-  cancelar: async () => ({ ok: false, motivo: 'nao_configurado', mensagem: 'Nenhuma transportadora configurada para cancelar.' }),
+  rastrear: async (_empresaId, _codigo) => ({ ok: false, motivo: 'nao_configurado', mensagem: 'Nenhuma transportadora configurada para rastrear.' }),
+  cancelar: async (_empresaId, _providerRef) => ({ ok: false, motivo: 'nao_configurado', mensagem: 'Nenhuma transportadora configurada para cancelar.' }),
 };
 
 // ----------------------------------------------------------------------------
@@ -275,20 +290,15 @@ async function meFetch(url: string, token: string, init: RequestInit = {}): Prom
 }
 
 export function criarMelhorEnvio(): ShippingProvider {
-  let cfgCache: { empresaId: number | null; cfg: ConfigLogistica } | { empresaId: null; cfg: ConfigLogistica } = { empresaId: null, cfg: CONFIG_PADRAO };
-  async function cfg(empresaId?: number): Promise<ConfigLogistica> {
-    if (empresaId === undefined) return cfgCache.cfg;
-    if (cfgCache.empresaId !== empresaId) {
-      cfgCache = { empresaId, cfg: await obterConfigLogistica(empresaId) };
-    }
-    return cfgCache.cfg;
-  }
+  // Configuração local à chamada: não há cache mutável compartilhado entre
+  // requisições/empresas, portanto chamadas concorrentes não trocam credenciais.
+  const cfg = (empresaId: number) => obterConfigLogistica(empresaId);
   return {
     slug: 'melhor_envio',
     nome: 'Melhor Envio',
-    disponivel: async () => !!(await cfg((cfgCache as { empresaId: number | null }).empresaId ?? undefined)).me_token,
+    disponivel: async (empresaId) => !!(await cfg(empresaId)).me_token,
     async cotar(ctx) {
-      const c = await cfg((cfgCache as { empresaId: number | null }).empresaId ?? undefined);
+      const c = await cfg(ctx.empresaId);
       if (!c.me_token) return { ok: false, motivo: 'nao_configurado', mensagem: 'Token do Melhor Envio não configurado.' };
       const base = c.me_sandbox || c.ambiente === 'homologacao' ? ME_BASE_SANDBOX : ME_BASE_PROD;
       try {
@@ -303,7 +313,7 @@ export function criarMelhorEnvio(): ShippingProvider {
         };
         const resp = await meFetch(`${base}/shipment/quote`, c.me_token!, { method: 'POST', body: JSON.stringify(payload) });
         if (resp.status < 200 || resp.status >= 300) {
-          return { ok: false, motivo: 'falha', mensagem: `Melhor Envio respondeu ${resp.status}: ${resumoErro(resp.body)}` };
+          return { ok: false, motivo: 'falha', mensagem: `Melhor Envio respondeu ${resp.status} à cotação.` };
         }
         const lista = Array.isArray(resp.body) ? (resp.body as Record<string, unknown>[]) : [];
         const opcoes: CotacaoFrete[] = lista
@@ -328,12 +338,12 @@ export function criarMelhorEnvio(): ShippingProvider {
           return { ok: false, motivo: 'recusado', mensagem: `O Melhor Envio não devolveu nenhuma opção para ${ctx.origem.cep} → ${ctx.destino.cep} (${pesoKg.toFixed(2)} kg).` };
         }
         return { ok: true, data: opcoes };
-      } catch (e) {
-        return { ok: false, motivo: 'falha', mensagem: `Falha de rede ao consultar o Melhor Envio: ${(e as Error).message}` };
+      } catch {
+        return { ok: false, motivo: 'falha', mensagem: 'Falha de rede ao consultar o Melhor Envio.' };
       }
     },
     async gerarEnvio(ctx) {
-      const c = await cfg((cfgCache as { empresaId: number | null }).empresaId ?? undefined);
+      const c = await cfg(ctx.empresaId);
       if (!c.me_token) return { ok: false, motivo: 'nao_configurado', mensagem: 'Token do Melhor Envio não configurado.' };
       if (!ctx.servico) return { ok: false, motivo: 'recusado', mensagem: 'Escolha o serviço (cote as opções primeiro).' };
       const base = c.me_sandbox || c.ambiente === 'homologacao' ? ME_BASE_SANDBOX : ME_BASE_PROD;
@@ -366,12 +376,12 @@ export function criarMelhorEnvio(): ShippingProvider {
             mensagem: 'Remessa criada no Melhor Envio.',
           },
         };
-      } catch (e) {
-        return { ok: false, motivo: 'falha', mensagem: `Falha de rede ao gerar o envio: ${(e as Error).message}` };
+      } catch {
+        return { ok: false, motivo: 'falha', mensagem: 'Falha de rede ao gerar o envio.' };
       }
     },
-    async rastrear(codigo) {
-      const c = await cfg((cfgCache as { empresaId: number | null }).empresaId ?? undefined);
+    async rastrear(empresaId, codigo) {
+      const c = await cfg(empresaId);
       if (!c.me_token) return { ok: false, motivo: 'nao_configurado', mensagem: 'Token do Melhor Envio não configurado.' };
       const base = c.me_sandbox || c.ambiente === 'homologacao' ? ME_BASE_SANDBOX : ME_BASE_PROD;
       try {
@@ -390,12 +400,12 @@ export function criarMelhorEnvio(): ShippingProvider {
             em: e.created_at ? String(e.created_at) : null,
           })),
         };
-      } catch (e) {
-        return { ok: false, motivo: 'falha', mensagem: `Falha de rede na consulta de rastreio: ${(e as Error).message}` };
+      } catch {
+        return { ok: false, motivo: 'falha', mensagem: 'Falha de rede na consulta de rastreio.' };
       }
     },
-    async cancelar(providerRef) {
-      const c = await cfg((cfgCache as { empresaId: number | null }).empresaId ?? undefined);
+    async cancelar(empresaId, providerRef) {
+      const c = await cfg(empresaId);
       if (!c.me_token) return { ok: false, motivo: 'nao_configurado', mensagem: 'Token do Melhor Envio não configurado.' };
       const base = c.me_sandbox || c.ambiente === 'homologacao' ? ME_BASE_SANDBOX : ME_BASE_PROD;
       try {
@@ -404,21 +414,11 @@ export function criarMelhorEnvio(): ShippingProvider {
           return { ok: false, motivo: 'falha', mensagem: `Cancelamento recusado pelo Melhor Envio (${resp.status}).` };
         }
         return { ok: true, data: { mensagem: 'Remessa cancelada no Melhor Envio.' } };
-      } catch (e) {
-        return { ok: false, motivo: 'falha', mensagem: `Falha de rede ao cancelar: ${(e as Error).message}` };
+      } catch {
+        return { ok: false, motivo: 'falha', mensagem: 'Falha de rede ao cancelar no Melhor Envio.' };
       }
     },
   };
-}
-
-function resumoErro(body: unknown): string {
-  if (!body) return 'sem corpo';
-  if (typeof body === 'string') return body.slice(0, 300);
-  try {
-    return JSON.stringify(body).slice(0, 300);
-  } catch {
-    return 'resposta ilegível';
-  }
 }
 
 // ----------------------------------------------------------------------------
@@ -428,15 +428,15 @@ function resumoErro(body: unknown): string {
 const CORREIOS_BASE = 'https://proxyapp.correios.com.br/v1';
 
 export function criarCorreios(): ShippingProvider {
-  async function cfg(): Promise<ConfigLogistica> {
-    return obterConfigLogistica(empresaCorrente());
-  }
+  // O tenant faz parte de cada chamada; nenhuma variável global representa a
+  // empresa "corrente" (seguro inclusive sob concorrência).
+  const cfg = (empresaId: number) => obterConfigLogistica(empresaId);
   return {
     slug: 'correios',
     nome: 'Correios',
-    disponivel: async () => !!(await cfg()).correios_senha,
+    disponivel: async (empresaId) => !!(await cfg(empresaId)).correios_senha,
     async cotar(ctx) {
-      const c = await cfg();
+      const c = await cfg(ctx.empresaId);
       if (!c.correios_senha) return { ok: false, motivo: 'nao_configurado', mensagem: 'Credenciais dos Correios não configuradas.' };
       try {
         const volumes = ctx.volumes.length ? ctx.volumes : [{ peso_g: 300 }];
@@ -456,13 +456,12 @@ export function criarCorreios(): ShippingProvider {
         const resp = await fetch(`${CORREIOS_BASE}/preco-prazo?${params}`, {
           headers: { Accept: 'application/json', Authorization: `Basic ${Buffer.from(`${c.correios_usuario || ''}:${c.correios_senha}`).toString('base64')}`, 'User-Agent': 'BroBond-ERP/1.0' },
         });
-        const texto = await resp.text();
         if (resp.status < 200 || resp.status >= 300) {
-          return { ok: false, motivo: 'falha', mensagem: `Correios respondeu ${resp.status}: ${texto.slice(0, 200)}` };
+          return { ok: false, motivo: 'falha', mensagem: `Correios respondeu ${resp.status} à cotação.` };
         }
         let body: Record<string, unknown> = {};
         try {
-          body = JSON.parse(texto) as Record<string, unknown>;
+          body = (await resp.json()) as Record<string, unknown>;
         } catch {
           return { ok: false, motivo: 'falha', mensagem: 'Resposta dos Correios não é JSON válido.' };
         }
@@ -474,9 +473,9 @@ export function criarCorreios(): ShippingProvider {
           const valor = String(sv['vvalor'] ?? sv.Valor ?? '0').replace(/\./g, '').replace(',', '.');
           const prazo = Number(sv['nprazoentrega'] ?? sv.PrazoEntrega ?? 0);
           const erro = String(sv['cderro'] ?? sv.Erro ?? '');
-          const mensagem = String(sv['dsobservacao'] ?? sv.MsgErro ?? '');
           if (erro && erro !== '0') {
-            return { ok: false, motivo: 'recusado', mensagem: `Correios recusou (${erro}): ${mensagem || 'serviço indisponível para este trecho'}` };
+            const codigoSeguro = /^[A-Za-z0-9_-]{1,12}$/.test(erro) ? erro : 'indeterminado';
+            return { ok: false, motivo: 'recusado', mensagem: `Correios recusou a cotação (código ${codigoSeguro}); serviço indisponível para este trecho.` };
           }
           opcoes.push({
             servico: codigo,
@@ -489,18 +488,18 @@ export function criarCorreios(): ShippingProvider {
         }
         if (!opcoes.length) return { ok: false, motivo: 'recusado', mensagem: 'Os Correios não devolveram nenhuma opção para este trecho.' };
         return { ok: true, data: opcoes };
-      } catch (e) {
-        return { ok: false, motivo: 'falha', mensagem: `Falha de rede ao consultar os Correios: ${(e as Error).message}` };
+      } catch {
+        return { ok: false, motivo: 'falha', mensagem: 'Falha de rede ao consultar os Correios.' };
       }
     },
-    async gerarEnvio() {
+    async gerarEnvio(_ctx) {
       // A geração de etiqueta nos Correios exige o contrato SIGEP Web com
       // certificado. Implementar pela metade seria pior do que não ter:
       // o envio continuaria "pendente" e a operação seguiria pelo manual.
       return { ok: false, motivo: 'nao_configurado', mensagem: 'Geração de envio pelos Correios requer integração SIGEP Web (contrato corporativo). Use o Melhor Envio ou registre o código manualmente.' };
     },
-    async rastrear(codigo) {
-      const c = await cfg();
+    async rastrear(empresaId, codigo) {
+      const c = await cfg(empresaId);
       if (!c.correios_senha) return { ok: false, motivo: 'nao_configurado', mensagem: 'Credenciais dos Correios não configuradas.' };
       try {
         const resp = await fetch(`${CORREIOS_BASE}/srorastro/v1/objetos/${encodeURIComponent(codigo)}?resultado=T&lingua=101`, {
@@ -523,19 +522,14 @@ export function criarCorreios(): ShippingProvider {
             em: ev['dtHrCriado'] ? String(ev['dtHrCriado']) : null,
           })),
         };
-      } catch (e) {
-        return { ok: false, motivo: 'falha', mensagem: `Falha de rede no rastreio dos Correios: ${(e as Error).message}` };
+      } catch {
+        return { ok: false, motivo: 'falha', mensagem: 'Falha de rede no rastreio dos Correios.' };
       }
     },
-    async cancelar() {
+    async cancelar(_empresaId, _providerRef) {
       return { ok: false, motivo: 'nao_configurado', mensagem: 'Cancelamento de remessa dos Correios não está disponível nesta integração.' };
     },
   };
-}
-
-let EMPRESA_CONTEXTO = 1;
-function empresaCorrente(): number {
-  return EMPRESA_CONTEXTO;
 }
 
 // ----------------------------------------------------------------------------
@@ -549,9 +543,9 @@ function empresaCorrente(): number {
 export const PROVEDOR_MANUAL: ShippingProvider = {
   slug: 'manual',
   nome: 'Manual / transportadora própria',
-  disponivel: () => true,
+  disponivel: (_empresaId) => true,
   async cotar(ctx) {
-    const cfg = await obterConfigLogistica(empresaCorrente());
+    const cfg = await obterConfigLogistica(ctx.empresaId);
     const gratis = Number(cfg.frete_gratis_acima || 0);
     if (gratis > 0 && (ctx.valor_declarado || 0) >= gratis) {
       return { ok: true, data: [{ servico: 'frete_gratis', nome: 'Frete grátis (acima do mínimo)', codigo: 'free', valor: 0, prazo_dias: 7 }] };
@@ -561,10 +555,10 @@ export const PROVEDOR_MANUAL: ShippingProvider = {
   async gerarEnvio() {
     return { ok: false, motivo: 'nao_configurado', mensagem: 'Envio manual: registre o código de rastreamento recebido da transportadora.' };
   },
-  async rastrear() {
+  async rastrear(_empresaId, _codigo) {
     return { ok: false, motivo: 'nao_configurado', mensagem: 'Rastreamento manual não está disponível — consulte a transportadora.' };
   },
-  async cancelar() {
+  async cancelar(_empresaId, _providerRef) {
     return { ok: true, data: { mensagem: 'Envio manual marcado como cancelado no ERP.' } };
   },
 };
@@ -598,6 +592,17 @@ async function enderecoDe(row: Row | null): Promise<{ cep: string; cidade: strin
   return { cep: cepLimpo(row?.cep), cidade: row?.cidade ? String(row.cidade) : null, uf: row?.uf ? String(row.uf) : null };
 }
 
+/** O tenant operacional vem da linha já lida e autorizada, nunca do request. */
+function empresaDaLinha(row: Row, escopo: EscopoEmpresa): number {
+  const empresaId = Number(row.empresa_id);
+  return Number.isSafeInteger(empresaId) && empresaId > 0 ? empresaId : escopo.empresaId;
+}
+
+/** Operações logísticas são sempre de uma única empresa, mesmo em leitura consolidada. */
+function escopoDaEmpresa(empresaId: number): EscopoEmpresa {
+  return { empresaId, consolidado: false, permitidas: [empresaId] };
+}
+
 /** Origem da remessa: endereço da empresa, ou o CEP padrão da configuração. */
 async function origemPadrao(empresaId: number, tx?: Tx): Promise<OrigemFrete> {
   const empresa = await getStore().get(getResource('empresas')!, empresaId, tx);
@@ -606,12 +611,15 @@ async function origemPadrao(empresaId: number, tx?: Tx): Promise<OrigemFrete> {
   return { cep: cepLimpo(cfg.cep_origem) || end.cep, cidade: end.cidade, uf: end.uf };
 }
 
-async function destinoDaVenda(venda: Row, tx?: Tx): Promise<DestinoFrete> {
+async function destinoDaVenda(venda: Row, escopo: EscopoEmpresa, tx?: Tx): Promise<DestinoFrete> {
   if (!venda.cliente_id) {
     throw new HttpError(400, 'A venda não tem cliente — não há endereço de entrega para cotar o frete.');
   }
-  const cliente = await getStore().get(getResource('clientes')!, Number(venda.cliente_id), tx);
-  if (!cliente) throw new HttpError(404, 'Cliente da venda não encontrado.');
+  const cliente = assertRegistroDaEmpresa(
+    getResource('clientes')!,
+    await getStore().get(getResource('clientes')!, Number(venda.cliente_id), tx),
+    escopo
+  );
   const end = await enderecoDe(cliente);
   if (!end.cep || end.cep.length !== 8) {
     throw new HttpError(400, 'O cliente não tem CEP cadastrado (ou está incompleto). Complete o endereço antes de cotar o frete.');
@@ -622,7 +630,7 @@ async function destinoDaVenda(venda: Row, tx?: Tx): Promise<DestinoFrete> {
 /** Peso e volumes da venda, somados da ficha dos produtos. */
 async function volumesDaVenda(vendaId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<{ volumes: VolumeFrete[]; valor: number; pesoTotal: number }> {
   const s = getStore();
-  const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { venda_id: vendaId } }, tx);
+  const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { venda_id: vendaId, empresa_id: escopo.empresaId } }, tx);
   const produtos = await s.list(getResource('produtos')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }, tx);
   const porId = new Map(produtos.rows.map((p) => [Number(p.id), p]));
   let pesoTotal = 0;
@@ -755,19 +763,20 @@ export async function cotarFrete(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'read');
   const escopo = escopoDoAtor(actor as unknown as AuthUser);
-  EMPRESA_CONTEXTO = escopo.empresaId;
   const vendaId = parseId(req.query.venda_id ?? req.params.id);
   const s = getStore();
   const venda = assertRegistroDaEmpresa(getResource('vendas')!, await s.get(getResource('vendas')!, vendaId), escopo);
-  const destino = await destinoDaVenda(venda);
-  const origem = await origemPadrao(escopo.empresaId);
+  const empresaId = empresaDaLinha(venda, escopo);
+  const escopoOperacional = escopoDaEmpresa(empresaId);
+  const destino = await destinoDaVenda(venda, escopoOperacional);
+  const origem = await origemPadrao(empresaId);
   if (!origem.cep || origem.cep.length !== 8) {
     throw new HttpError(409, 'A empresa não tem CEP de origem. Complete o cadastro da empresa ou defina o CEP na configuração de logística.');
   }
-  const { volumes, valor, pesoTotal } = await volumesDaVenda(vendaId, escopo);
-  const cfg = await obterConfigLogistica(escopo.empresaId);
+  const { volumes, valor, pesoTotal } = await volumesDaVenda(vendaId, escopoOperacional);
+  const cfg = await obterConfigLogistica(empresaId);
   const provedor = provedorDaEmpresa(cfg);
-  const resultado = await provedor.cotar({ venda_id: vendaId, origem, destino, volumes, valor_declarado: valor });
+  const resultado = await provedor.cotar({ empresaId, venda_id: vendaId, origem, destino, volumes, valor_declarado: valor });
 
   if (!resultado.ok) {
     const status = resultado.motivo === 'nao_configurado' ? 503 : resultado.motivo === 'recusado' ? 422 : 502;
@@ -802,7 +811,6 @@ export async function gerarEnvio(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'update');
   const escopo = escopoDoAtor(actor as unknown as AuthUser);
-  EMPRESA_CONTEXTO = escopo.empresaId;
   const vendaId = parseId(req.params.id);
   const body = (req.body || {}) as Record<string, unknown>;
   const chave = String(body.idempotency_key || req.header('idempotency-key') || `envio:venda:${vendaId}`).slice(0, 120);
@@ -811,19 +819,21 @@ export async function gerarEnvio(req: Request, res: Response) {
   try {
     const resultado = await s.transaction(async (tx) => {
       const venda = assertRegistroDaEmpresa(getResource('vendas')!, await s.get(getResource('vendas')!, vendaId, tx), escopo);
+      const empresaId = empresaDaLinha(venda, escopo);
+      const escopoOperacional = escopoDaEmpresa(empresaId);
       if (String(venda.status) === 'cancelada') throw new HttpError(409, 'Venda cancelada não gera envio.');
 
-      const existente = await s.findOneWhere(R_ENVIO(), { empresa_id: escopo.empresaId, idempotency_key: chave }, tx);
+      const existente = await s.findOneWhere(R_ENVIO(), { empresa_id: empresaId, idempotency_key: chave }, tx);
       if (existente) return { envio: existente, idempotente: true } as { envio: Row; idempotente: boolean; falha?: undefined };
 
-      const destino = await destinoDaVenda(venda, tx);
-      const origem = await origemPadrao(escopo.empresaId, tx);
-      const { volumes, valor, pesoTotal } = await volumesDaVenda(vendaId, escopo, tx);
-      const cfg = await obterConfigLogistica(escopo.empresaId);
+      const destino = await destinoDaVenda(venda, escopoOperacional, tx);
+      const origem = await origemPadrao(empresaId, tx);
+      const { volumes, valor, pesoTotal } = await volumesDaVenda(vendaId, escopoOperacional, tx);
+      const cfg = await obterConfigLogistica(empresaId);
       const provedor = provedorDaEmpresa(cfg);
       const servico = body.servico ? String(body.servico).slice(0, 40) : undefined;
 
-      const resposta = await provedor.gerarEnvio({ venda_id: vendaId, origem, destino, volumes, servico, valor_declarado: valor });
+      const resposta = await provedor.gerarEnvio({ empresaId, venda_id: vendaId, origem, destino, volumes, servico, valor_declarado: valor });
 
       if (!resposta.ok) {
         // A geração falhou. O registro PENDENTE com o motivo é importante — é o
@@ -833,6 +843,7 @@ export async function gerarEnvio(req: Request, res: Response) {
         // isso a falha SAI da transação e é gravada depois, em bloco próprio.
         return {
           falha: {
+            empresaId,
             motivo: resposta.motivo,
             mensagem: resposta.mensagem,
             provider: provedor.slug,
@@ -849,7 +860,7 @@ export async function gerarEnvio(req: Request, res: Response) {
       const criado = await s.insert(
         R_ENVIO(),
         {
-          empresa_id: escopo.empresaId,
+          empresa_id: empresaId,
           venda_id: vendaId,
           provider: provedor.slug,
           servico: dados.servico || servico || null,
@@ -873,7 +884,7 @@ export async function gerarEnvio(req: Request, res: Response) {
         String(criado.status),
         { codigo: dados.codigo_rastreamento ?? undefined, mensagem: dados.mensagem || 'Remessa gerada no provedor.', payload: { provider_ref: dados.provider_ref, custo } },
         { id: actor.id || null, name: actor.name },
-        escopo.empresaId,
+        empresaId,
         tx
       );
       const patch = { envio_id: Number(criado.id), frete: custo > 0 ? custo : venda.frete, total: round2(num(venda.total) - num(venda.frete) + (custo > 0 ? custo : num(venda.frete))) };
@@ -893,7 +904,7 @@ export async function gerarEnvio(req: Request, res: Response) {
         const criado = await s.insert(
           R_ENVIO(),
           {
-            empresa_id: escopo.empresaId,
+            empresa_id: f.empresaId,
             venda_id: vendaId,
             provider: f.provider,
             servico: f.servico,
@@ -908,7 +919,7 @@ export async function gerarEnvio(req: Request, res: Response) {
           },
           tx
         );
-        await registrarEventoEnvio(Number(criado.id), null, 'pendente', { mensagem: `NÃO POSTADO — ${f.mensagem}` }, { id: actor.id || null, name: actor.name }, escopo.empresaId, tx);
+        await registrarEventoEnvio(Number(criado.id), null, 'pendente', { mensagem: `NÃO POSTADO — ${f.mensagem}` }, { id: actor.id || null, name: actor.name }, f.empresaId, tx);
         return criado;
       }, { isolation: 'serializable' });
       throw new HttpError(
@@ -936,11 +947,12 @@ export async function envioDaVenda(req: Request, res: Response) {
   const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const vendaId = parseId(req.params.id);
   const s = getStore();
-  assertRegistroDaEmpresa(getResource('vendas')!, await s.get(getResource('vendas')!, vendaId), escopo);
-  const envio = await s.findOneWhere(R_ENVIO(), { venda_id: vendaId });
+  const venda = assertRegistroDaEmpresa(getResource('vendas')!, await s.get(getResource('vendas')!, vendaId), escopo);
+  const empresaId = empresaDaLinha(venda, escopo);
+  const envio = await s.findOneWhere(R_ENVIO(), { empresa_id: empresaId, venda_id: vendaId });
   if (!envio) return res.json({ envio: null });
   assertRegistroDaEmpresa(R_ENVIO(), envio, escopo);
-  const eventos = await s.list(R_EVENTO(), { page: 1, pageSize: 200, filter: { envio_id: Number(envio.id) }, sort: 'id', dir: 'asc' });
+  const eventos = await s.list(R_EVENTO(), { page: 1, pageSize: 200, filter: { empresa_id: empresaId, envio_id: Number(envio.id) }, sort: 'id', dir: 'asc' });
   res.json({ envio, eventos: eventos.rows });
 }
 
@@ -951,8 +963,9 @@ export async function eventosEnvio(req: Request, res: Response) {
   const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const id = parseId(req.params.id);
   const s = getStore();
-  assertRegistroDaEmpresa(R_ENVIO(), await s.get(R_ENVIO(), id), escopo);
-  const out = await s.list(R_EVENTO(), { page: 1, pageSize: 500, filter: { envio_id: id }, sort: 'id', dir: 'asc' });
+  const envio = assertRegistroDaEmpresa(R_ENVIO(), await s.get(R_ENVIO(), id), escopo);
+  const empresaId = empresaDaLinha(envio, escopo);
+  const out = await s.list(R_EVENTO(), { page: 1, pageSize: 500, filter: { empresa_id: empresaId, envio_id: id }, sort: 'id', dir: 'asc' });
   res.json(out.rows);
 }
 
@@ -964,16 +977,15 @@ export async function rastrearEnvio(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_ENVIO(), actor, 'read');
   const escopo = escopoDoAtor(actor as unknown as AuthUser);
-  EMPRESA_CONTEXTO = escopo.empresaId;
   const id = parseId(req.params.id);
   const s = getStore();
   const envio = assertRegistroDaEmpresa(R_ENVIO(), await s.get(R_ENVIO(), id), escopo);
+  const empresaId = empresaDaLinha(envio, escopo);
   const codigo = String(envio.codigo_rastreamento || '');
   if (!codigo) throw new HttpError(409, 'Este envio ainda não tem código de rastreamento — não há o que consultar.');
 
-  const cfg = await obterConfigLogistica(escopo.empresaId);
   const provedor = shippingProvider(String(envio.provider)) || PROVEDOR_NULO;
-  const resposta = await provedor.rastrear(codigo);
+  const resposta = await provedor.rastrear(empresaId, codigo);
   if (!resposta.ok) {
     throw new HttpError(resposta.motivo === 'nao_configurado' ? 503 : 502, resposta.mensagem, { provedor: provedor.slug });
   }
@@ -981,7 +993,7 @@ export async function rastrearEnvio(req: Request, res: Response) {
   const novos = resposta.data;
   const gravados: EventoRastreio[] = [];
   await s.transaction(async (tx) => {
-    const jaVistos = await s.list(R_EVENTO(), { page: 1, pageSize: 500, filter: { envio_id: id } }, tx);
+    const jaVistos = await s.list(R_EVENTO(), { page: 1, pageSize: 500, filter: { empresa_id: empresaId, envio_id: id } }, tx);
     const vistos = new Set(jaVistos.rows.map((e) => `${e.codigo || ''}|${String(e.mensagem || '')}`));
     for (const ev of novos) {
       const chave = `${ev.codigo || ''}|${ev.mensagem || ''}`;
@@ -989,7 +1001,7 @@ export async function rastrearEnvio(req: Request, res: Response) {
       vistos.add(chave);
       const statusAtual = String(envio.status);
       const proximo = inferirStatus(ev.status, statusAtual);
-      await registrarEventoEnvio(id, statusAtual, proximo, { codigo: ev.codigo, mensagem: ev.mensagem, local: ev.local ?? null, payload: { em: ev.em } }, { id: actor.id || null, name: actor.name }, escopo.empresaId, tx);
+      await registrarEventoEnvio(id, statusAtual, proximo, { codigo: ev.codigo, mensagem: ev.mensagem, local: ev.local ?? null, payload: { em: ev.em } }, { id: actor.id || null, name: actor.name }, empresaId, tx);
       if (proximo !== statusAtual) {
         await s.update(R_ENVIO(), id, { status: proximo }, tx);
       }
@@ -1032,6 +1044,7 @@ export async function atualizarStatusEnvio(req: Request, res: Response) {
   try {
     const out = await s.transaction(async (tx) => {
       const envio = assertRegistroDaEmpresa(R_ENVIO(), await s.get(R_ENVIO(), id, tx), escopo);
+      const empresaId = empresaDaLinha(envio, escopo);
       const patch: Record<string, unknown> = { status: para };
       if (body.codigo_rastreamento !== undefined) patch.codigo_rastreamento = String(body.codigo_rastreamento).slice(0, 60) || null;
       // "postado" exige prova — a mesma regra do banco, adiantada para dar uma
@@ -1047,7 +1060,7 @@ export async function atualizarStatusEnvio(req: Request, res: Response) {
       if (body.custo !== undefined) patch.custo = round2(Math.max(0, num(body.custo)));
       const atualizado = await s.tryUpdateIf(R_ENVIO(), id, { status: String(envio.status) }, patch, tx);
       if (!atualizado) throw new HttpError(409, 'O envio mudou durante a atualização. Recarregue.');
-      await registrarEventoEnvio(id, String(envio.status), para, { mensagem: body.mensagem ? String(body.mensagem).slice(0, 500) : `Status atualizado manualmente para ${para}.` }, { id: actor.id || null, name: actor.name }, escopo.empresaId, tx);
+      await registrarEventoEnvio(id, String(envio.status), para, { mensagem: body.mensagem ? String(body.mensagem).slice(0, 500) : `Status atualizado manualmente para ${para}.` }, { id: actor.id || null, name: actor.name }, empresaId, tx);
       await s.audit(
         { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'envios', registro_id: id, descricao: `Envio #${id}: ${envio.status} → ${para}`, dados: { de: envio.status, para }, empresa_id: empresaDoRegistroAudit(R_ENVIO(), envio, actor) },
         tx
@@ -1065,7 +1078,6 @@ export async function cancelarEnvio(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_ENVIO(), actor, 'update');
   const escopo = escopoDoAtor(actor as unknown as AuthUser);
-  EMPRESA_CONTEXTO = escopo.empresaId;
   const id = parseId(req.params.id);
   const motivo = String((req.body || {}).motivo || '').trim();
   if (motivo.length < 5) throw new HttpError(400, 'Informe o motivo do cancelamento (mínimo 5 caracteres).', { motivo: 'Mínimo 5 caracteres' });
@@ -1073,13 +1085,14 @@ export async function cancelarEnvio(req: Request, res: Response) {
   try {
     const out = await s.transaction(async (tx) => {
       const envio = assertRegistroDaEmpresa(R_ENVIO(), await s.get(R_ENVIO(), id, tx), escopo);
+      const empresaId = empresaDaLinha(envio, escopo);
       if (String(envio.status) === 'cancelado') throw new HttpError(409, 'Este envio já está cancelado.');
       if (String(envio.status) === 'entregue') throw new HttpError(409, 'Envio entregue não pode ser cancelado — abra uma devolução.');
       let mensagem = `Cancelado no ERP. Motivo: ${motivo}`;
       // Só chama o provedor quando a remessa realmente existe lá.
       if (envio.provider_ref) {
         const provedor = shippingProvider(String(envio.provider)) || PROVEDOR_NULO;
-        const resposta = await provedor.cancelar(String(envio.provider_ref));
+        const resposta = await provedor.cancelar(empresaId, String(envio.provider_ref));
         if (!resposta.ok) {
           throw new HttpError(502, `O provedor recusou o cancelamento: ${resposta.mensagem}. O envio continua ativo no ERP.`, { provider: provedor.slug });
         }
@@ -1087,7 +1100,7 @@ export async function cancelarEnvio(req: Request, res: Response) {
       }
       const atualizado = await s.tryUpdateIf(R_ENVIO(), id, { status: String(envio.status) }, { status: 'cancelado' }, tx);
       if (!atualizado) throw new HttpError(409, 'O envio mudou durante o cancelamento. Recarregue.');
-      await registrarEventoEnvio(id, String(envio.status), 'cancelado', { mensagem }, { id: actor.id || null, name: actor.name }, escopo.empresaId, tx);
+      await registrarEventoEnvio(id, String(envio.status), 'cancelado', { mensagem }, { id: actor.id || null, name: actor.name }, empresaId, tx);
       await s.audit(
         { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'envios', registro_id: id, descricao: `Envio #${id} cancelado — ${motivo}`, dados: { motivo }, empresa_id: empresaDoRegistroAudit(R_ENVIO(), envio, actor) },
         tx

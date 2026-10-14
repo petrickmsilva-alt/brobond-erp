@@ -262,12 +262,12 @@ describe('Conectores — redirect_uri dinâmico lido da Render', () => {
     const db = {
       async query(sql: string, params: readonly unknown[] = []) {
         const responder = (): Array<Record<string, unknown>> => {
-          if (sql.includes('DELETE FROM connector_oauth_states') && sql.includes('expires_at <= $3')) return []; // limpeza
+          if (sql.includes('DELETE FROM connector_oauth_states') && sql.includes('expires_at <= $4')) return []; // limpeza
           if (sql.startsWith('INSERT INTO connector_oauth_states')) {
-            linhas.push({ usuario_id: params[1], redirect_uri: params[4] ?? null });
+            linhas.push({ empresa_id: params[1], usuario_id: params[2], redirect_uri: params[5] ?? null });
             return [];
           }
-          if (sql.includes('RETURNING usuario_id, redirect_uri')) {
+          if (sql.includes('RETURNING s.empresa_id, s.usuario_id, s.redirect_uri')) {
             const linha = linhas.shift();
             return linha ? [linha] : [];
           }
@@ -281,18 +281,19 @@ describe('Conectores — redirect_uri dinâmico lido da Render', () => {
       now: () => new Date('2026-10-05T12:00:00Z'),
       randomState: () => 'state-unificado-1',
     });
-    const state = await states.issue(7, 'MERCADOLIVRE', { redirectUri: REDIRECT_ML });
+    const state = await states.issue(1, 7, 'MERCADOLIVRE', { redirectUri: REDIRECT_ML });
     assert.equal(state, 'state-unificado-1');
     const consumido = await states.consume(state, 'MERCADOLIVRE');
+    assert.equal(consumido.empresaId, 1);
     assert.equal(consumido.usuarioId, 7);
     assert.equal(consumido.redirectUri, REDIRECT_ML);
   });
 
   test('startAuthorization usa a origem da Render e a repassa ao state e à URL do provedor', async () => {
-    const emitidos: Array<{ usuarioId: number; provider: string; redirectUri: string | null }> = [];
+    const emitidos: Array<{ empresaId: number; usuarioId: number; provider: string; redirectUri: string | null }> = [];
     const oauthStates = {
-      issue: async (usuarioId: number, provider: string, metadata?: { redirectUri?: string | null }) => {
-        emitidos.push({ usuarioId, provider, redirectUri: metadata?.redirectUri ?? null });
+      issue: async (empresaId: number, usuarioId: number, provider: string, metadata?: { redirectUri?: string | null }) => {
+        emitidos.push({ empresaId, usuarioId, provider, redirectUri: metadata?.redirectUri ?? null });
         return 'state-dinamico';
       },
       consume: async () => {
@@ -303,9 +304,9 @@ describe('Conectores — redirect_uri dinâmico lido da Render', () => {
     return comEnv(
       { APP_URL: 'https://erp-antigo.example.com', MERCADOLIVRE_CLIENT_ID: '1234567890', MERCADOLIVRE_CLIENT_SECRET: 'segredo-app', MERCADOLIVRE_REDIRECT_URI: undefined },
       async () => {
-        const resultado = await service.startAuthorization(7, 'MERCADOLIVRE', { redirectBase: HOST_UNIFICADO });
+        const resultado = await service.startAuthorization(1, 7, 'MERCADOLIVRE', { redirectBase: HOST_UNIFICADO });
         assert.equal(resultado.redirectUri, REDIRECT_ML, 'o redirect devolvido é o do host unificado');
-        assert.deepEqual(emitidos, [{ usuarioId: 7, provider: 'MERCADOLIVRE', redirectUri: REDIRECT_ML }], 'o state persiste a URI para a troca');
+        assert.deepEqual(emitidos, [{ empresaId: 1, usuarioId: 7, provider: 'MERCADOLIVRE', redirectUri: REDIRECT_ML }], 'o state persiste a URI para a troca');
         const url = new URL(resultado.authorizationUrl);
         assert.equal(url.origin, 'https://auth.mercadolivre.com.br');
         assert.equal(url.searchParams.get('redirect_uri'), REDIRECT_ML);
@@ -324,7 +325,7 @@ describe('Conectores — redirect_uri dinâmico lido da Render', () => {
     return comEnv(
       { APP_URL: HOST_UNIFICADO, MERCADOLIVRE_CLIENT_ID: '1234567890', MERCADOLIVRE_CLIENT_SECRET: 'segredo-app', MERCADOLIVRE_REDIRECT_URI: undefined },
       async () => {
-        const resultado = await service.startAuthorization(7, 'MERCADOLIVRE', { redirectBase: 'https://evil.example.com/outra' });
+        const resultado = await service.startAuthorization(1, 7, 'MERCADOLIVRE', { redirectBase: 'https://evil.example.com/outra' });
         assert.equal(resultado.redirectUri, REDIRECT_ML, 'ignorou a base inválida e usou o APP_URL unificado');
       }
     );
@@ -422,8 +423,11 @@ describe('Conectores — assinatura dos webhooks', () => {
 });
 
 describe('Conectores — ingestão idempotente de vendas', () => {
-  test('a referência da venda é determinística por canal + pedido', () => {
-    assert.equal(marketplaceSaleReference('NUVEMSHOP', 'NS-1'), 'nuvemshop:NS-1');
+  test('a referência da venda é determinística por empresa + responsável + canal + pedido', () => {
+    const refA = marketplaceSaleReference(1, 7, 'NUVEMSHOP', 'NS-1');
+    assert.equal(refA, 'empresa:1:usuario:7:nuvemshop:NS-1');
+    assert.notEqual(refA, marketplaceSaleReference(2, 7, 'NUVEMSHOP', 'NS-1'));
+    assert.notEqual(refA, marketplaceSaleReference(1, 8, 'NUVEMSHOP', 'NS-1'));
     assert.equal(normalizeSaleCurrency('usd'), 'USD');
     assert.equal(normalizeSaleCurrency('xx'), 'BRL');
   });
@@ -436,7 +440,7 @@ describe('Conectores — ingestão idempotente de vendas', () => {
           return [
             {
               id: 's1',
-              reference: 'nuvemshop:NS-1',
+              reference: 'empresa:1:usuario:7:nuvemshop:NS-1',
               quantity: 3,
               amount_cents: 9900,
               currency: 'BRL',
@@ -445,8 +449,10 @@ describe('Conectores — ingestão idempotente de vendas', () => {
               channel: 'NUVEMSHOP',
               external_order_id: 'NS-1',
               usuario_id: 7,
+              empresa_id: 1,
               created_at: new Date(),
               updated_at: new Date(),
+              was_inserted: true,
             },
           ];
         }
@@ -454,7 +460,7 @@ describe('Conectores — ingestão idempotente de vendas', () => {
       })
     );
 
-    const result = await sales.upsertIngestedSale(7, {
+    const result = await sales.upsertIngestedSale(1, 7, {
       channel: 'NUVEMSHOP' as any,
       externalOrderId: 'NS-1',
       amountCents: 9900,
@@ -479,7 +485,7 @@ describe('Conectores — ingestão idempotente de vendas', () => {
         return [
           {
             id: 's1',
-            reference: 'nuvemshop:NS-1',
+            reference: 'empresa:1:usuario:7:nuvemshop:NS-1',
             quantity: 3,
             amount_cents: 9900,
             currency: 'BRL',
@@ -488,6 +494,7 @@ describe('Conectores — ingestão idempotente de vendas', () => {
             channel: 'NUVEMSHOP',
             external_order_id: 'NS-1',
             usuario_id: 7,
+            empresa_id: 1,
             created_at: new Date(),
             updated_at: new Date(),
           },
@@ -497,7 +504,7 @@ describe('Conectores — ingestão idempotente de vendas', () => {
     });
     const sales = createSalesService(() => db);
 
-    const result = await sales.upsertIngestedSale(7, {
+    const result = await sales.upsertIngestedSale(1, 7, {
       channel: 'NUVEMSHOP' as any,
       externalOrderId: 'NS-1',
       amountCents: 9900,
@@ -520,7 +527,7 @@ describe('Conectores — ingestão idempotente de vendas', () => {
         return [
           {
             id: 's2',
-            reference: 'mercadolivre:200',
+            reference: 'empresa:1:usuario:1:mercadolivre:200',
             quantity: 1,
             amount_cents: 1000,
             currency: 'BRL',
@@ -529,6 +536,7 @@ describe('Conectores — ingestão idempotente de vendas', () => {
             channel: 'MERCADOLIVRE',
             external_order_id: '200',
             usuario_id: 1,
+            empresa_id: 1,
             created_at: new Date(),
             updated_at: new Date(),
           },
@@ -537,7 +545,7 @@ describe('Conectores — ingestão idempotente de vendas', () => {
       return [];
     });
     const sales = createSalesService(() => db);
-    await sales.upsertIngestedSale(1, {
+    await sales.upsertIngestedSale(1, 1, {
       channel: 'MERCADOLIVRE' as any,
       externalOrderId: '200',
       amountCents: 1000,
@@ -548,7 +556,7 @@ describe('Conectores — ingestão idempotente de vendas', () => {
       items: [],
     });
     const insert = db.log.find((q: any) => q.sql.startsWith('INSERT INTO sales'));
-    assert.ok(insert.sql.includes('ON CONFLICT (usuario_id, channel, external_order_id)'));
+    assert.ok(insert.sql.includes('ON CONFLICT (empresa_id, usuario_id, channel, external_order_id)'));
   });
 });
 
@@ -559,13 +567,13 @@ describe('Conectores — casamento com o catálogo do ERP', () => {
       if (sql.includes('FROM tamanhos')) return [{ id: 4, codigo: 'M' }];
       return [];
     });
-    const match = await matchCatalogItem(db, { sku: 'CAM-AZ', title: 'Camisa', sizeLabel: 'M' });
+    const match = await matchCatalogItem(db, 1, { sku: 'CAM-AZ', title: 'Camisa', sizeLabel: 'M' });
     assert.deepEqual(match, { productId: 12, sizeId: 4 });
   });
 
   test('item sem correspondência entra sem vínculo, nunca com erro', async () => {
     const db = fakeDb(() => []);
-    const match = await matchCatalogItem(db, { sku: 'DESCONHECIDO', title: 'X' });
+    const match = await matchCatalogItem(db, 1, { sku: 'DESCONHECIDO', title: 'X' });
     assert.deepEqual(match, { productId: null, sizeId: null });
   });
 
@@ -575,7 +583,7 @@ describe('Conectores — casamento com o catálogo do ERP', () => {
         throw new Error('sem banco');
       },
     };
-    const match = await matchCatalogItem(db, { sku: 'A', title: 'B' });
+    const match = await matchCatalogItem(db, 1, { sku: 'A', title: 'B' });
     assert.deepEqual(match, { productId: null, sizeId: null });
   });
 });
@@ -785,7 +793,7 @@ describe('Instagram — o caminho de receita é dirigido por payload', () => {
 describe('Instagram — ingestão idempotente no canal INSTAGRAM_SHOPPING', () => {
   test('o canal gravado em sales é estritamente INSTAGRAM_SHOPPING', () => {
     assert.equal(INSTAGRAM_SALE_CHANNEL, 'INSTAGRAM_SHOPPING');
-    assert.equal(marketplaceSaleReference(INSTAGRAM_SALE_CHANNEL, 'IG-ORDER-77'), 'instagram_shopping:IG-ORDER-77');
+    assert.equal(marketplaceSaleReference(1, 7, INSTAGRAM_SALE_CHANNEL, 'IG-ORDER-77'), 'empresa:1:usuario:7:instagram_shopping:IG-ORDER-77');
   });
 
   test('o pedido entra em sales pelo upsert guardado pela chave única', async () => {
@@ -795,7 +803,7 @@ describe('Instagram — ingestão idempotente no canal INSTAGRAM_SHOPPING', () =
         return [
           {
             id: 'ig-sale-1',
-            reference: 'instagram_shopping:IG-ORDER-77',
+            reference: 'empresa:1:usuario:7:instagram_shopping:IG-ORDER-77',
             quantity: 3,
             amount_cents: 24990,
             currency: 'BRL',
@@ -804,8 +812,10 @@ describe('Instagram — ingestão idempotente no canal INSTAGRAM_SHOPPING', () =
             channel: 'INSTAGRAM_SHOPPING',
             external_order_id: 'IG-ORDER-77',
             usuario_id: 7,
+            empresa_id: 1,
             created_at: new Date(),
             updated_at: new Date(),
+            was_inserted: true,
           },
         ];
       }
@@ -816,8 +826,8 @@ describe('Instagram — ingestão idempotente no canal INSTAGRAM_SHOPPING', () =
     const service = new InstagramConnectorService({
       resolveDb: () => db,
       repository: {
-        incrementIngestionCounters: async (usuarioId: number, provider: string, counters: unknown) => {
-          contadores.push({ usuarioId, provider, counters });
+        incrementIngestionCounters: async (empresaId: number, usuarioId: number, provider: string, counters: unknown) => {
+          contadores.push({ empresaId, usuarioId, provider, counters });
           return null;
         },
       } as any,
@@ -837,16 +847,16 @@ describe('Instagram — ingestão idempotente no canal INSTAGRAM_SHOPPING', () =
       },
     });
 
-    const result = await service.ingestOrder(7, order!);
+    const result = await service.ingestOrder(1, 7, order!);
     assert.equal(result.saleId, 'ig-sale-1');
     assert.equal(result.outcome, 'created');
     assert.equal(result.amountCents, 24990);
 
     const insert = db.log.find((q: any) => q.sql.startsWith('INSERT INTO sales'));
-    assert.ok(insert.sql.includes('ON CONFLICT (usuario_id, channel, external_order_id)'));
+    assert.ok(insert.sql.includes('ON CONFLICT (empresa_id, usuario_id, channel, external_order_id)'));
     assert.ok(insert.params.includes('INSTAGRAM_SHOPPING'));
     // O KPI "Pedidos Importados" do cartão vem DAQUI — contagem real.
-    assert.deepEqual(contadores[0], { usuarioId: 7, provider: 'INSTAGRAM', counters: { imported: 1, duplicated: 0, failed: 0 } });
+    assert.deepEqual(contadores[0], { empresaId: 1, usuarioId: 7, provider: 'INSTAGRAM', counters: { imported: 1, duplicated: 0, failed: 0 } });
   });
 
   test('entrega forjada não chega ao banco', async () => {
@@ -889,14 +899,14 @@ describe('Instagram — ingestão idempotente no canal INSTAGRAM_SHOPPING', () =
           findByShopId: async (provider: string, shopId: string) => {
             assert.equal(provider, 'INSTAGRAM');
             assert.equal(shopId, '17841400000000000');
-            return { id: 'conn-1', usuarioId: 7, provider: 'INSTAGRAM', shopId };
+            return { id: 'conn-1', empresaId: 1, usuarioId: 7, provider: 'INSTAGRAM', shopId };
           },
           hasEvent: async () => false,
-          recordEvent: async (_usuarioId: number, event: unknown) => {
+          recordEvent: async (_empresaId: number, _usuarioId: number, event: unknown) => {
             gravados.push(event);
             return null;
           },
-          markEventProcessed: async (_u: number, _p: string, externalEventId: string) => {
+          markEventProcessed: async (_e: number, _u: number, _p: string, externalEventId: string) => {
             processados.push(externalEventId);
           },
         } as any,
@@ -967,7 +977,7 @@ describe('Instagram — consultas que alimentam o painel analítico', () => {
         return [
           {
             id: 'ig-sale-1',
-            reference: 'instagram_shopping:IG-ORDER-77',
+            reference: 'empresa:1:usuario:7:instagram_shopping:IG-ORDER-77',
             external_order_id: 'IG-ORDER-77',
             status: 'PAID',
             quantity: 3,
@@ -990,7 +1000,7 @@ describe('Instagram — consultas que alimentam o painel analítico', () => {
       } as any,
     });
 
-    const panel = await service.getPanel(7, 10);
+    const panel = await service.getPanel(1, 7, 10);
     assert.equal(panel.provider, 'INSTAGRAM');
     assert.equal(panel.revenueCents, 24990);
     assert.equal(panel.salesCount, 1);
@@ -1000,7 +1010,8 @@ describe('Instagram — consultas que alimentam o painel analítico', () => {
 
     // TODA consulta do painel é escopada ao operador e ao canal.
     for (const q of db.log) {
-      assert.equal(q.params[0], 7);
+      assert.equal(q.params[0], 1);
+      assert.equal(q.params[1], 7);
       if (q.sql.includes('sale_channel')) assert.ok(q.params.includes('INSTAGRAM_SHOPPING'));
     }
   });
@@ -1010,7 +1021,7 @@ describe('Instagram — consultas que alimentam o painel analítico', () => {
       resolveDb: () => fakeDb(() => []),
       repository: { listRecentEvents: async () => [] } as any,
     });
-    const panel = await service.getPanel(7, 10);
+    const panel = await service.getPanel(1, 7, 10);
     assert.deepEqual(
       { revenueCents: panel.revenueCents, salesCount: panel.salesCount, eventCount: panel.eventCount },
       { revenueCents: 0, salesCount: 0, eventCount: 0 }

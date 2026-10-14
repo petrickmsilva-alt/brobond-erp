@@ -33,7 +33,7 @@ const CEP_DESTINO = '30130110';
 // Test double: um provedor de mentira, registrado no contrato real.
 // Ele NÃO está na produção — existe só para exercitar o adaptador.
 // ---------------------------------------------------------------------------
-type ChamadaProvedor = { metodo: string; ctx?: any; codigo?: string; ref?: string };
+type ChamadaProvedor = { metodo: string; ctx?: any; empresaId?: number; codigo?: string; ref?: string };
 const chamadas: ChamadaProvedor[] = [];
 let doubleComportamento: 'ok' | 'falha' | 'recusa_cancelamento' = 'ok';
 let proximoCodigo = 0;
@@ -41,7 +41,7 @@ let proximoCodigo = 0;
 registrarShippingProvider({
   slug: 'double',
   nome: 'Transportadora de Teste',
-  disponivel: () => true,
+  disponivel: (_empresaId) => true,
   async cotar(ctx) {
     chamadas.push({ metodo: 'cotar', ctx });
     return {
@@ -68,8 +68,8 @@ registrarShippingProvider({
       },
     };
   },
-  async rastrear(codigo) {
-    chamadas.push({ metodo: 'rastrear', codigo });
+  async rastrear(empresaId, codigo) {
+    chamadas.push({ metodo: 'rastrear', empresaId, codigo });
     return {
       ok: true,
       data: [
@@ -78,8 +78,8 @@ registrarShippingProvider({
       ],
     };
   },
-  async cancelar(ref) {
-    chamadas.push({ metodo: 'cancelar', ref });
+  async cancelar(empresaId, ref) {
+    chamadas.push({ metodo: 'cancelar', empresaId, ref });
     if (doubleComportamento === 'recusa_cancelamento') return { ok: false, motivo: 'recusado', mensagem: 'A remessa já foi coletada.' };
     return { ok: true, data: { mensagem: `Remessa ${ref} cancelada na transportadora de teste.` } };
   },
@@ -136,12 +136,12 @@ test('logística: provedor desconhecido cai no NULO, nunca no manual', () => {
   const p = provedorDaEmpresa({ provider: 'nao_existe', ambiente: 'homologacao' } as any);
   assert.equal(p.slug, PROVEDOR_NULO.slug);
   assert.equal(p.nome, PROVEDOR_NULO.nome, 'é o adaptador NULO, não o manual');
-  assert.equal(p.disponivel(), false, 'o nulo nunca está disponível');
+  assert.equal(p.disponivel(1), false, 'o nulo nunca está disponível');
 });
 
 test('logística: o adaptador nulo nunca devolve dado inventado', async () => {
-  const ctx: any = { venda_id: 1, origem: { cep: CEP_ORIGEM }, destino: { cep: CEP_DESTINO }, volumes: [{ peso_g: 300, quantidade: 1 }] };
-  for (const r of [await PROVEDOR_NULO.cotar(ctx), await PROVEDOR_NULO.gerarEnvio(ctx), await PROVEDOR_NULO.rastrear('X'), await PROVEDOR_NULO.cancelar('X')]) {
+  const ctx: any = { empresaId: 1, venda_id: 1, origem: { cep: CEP_ORIGEM }, destino: { cep: CEP_DESTINO }, volumes: [{ peso_g: 300, quantidade: 1 }] };
+  for (const r of [await PROVEDOR_NULO.cotar(ctx), await PROVEDOR_NULO.gerarEnvio(ctx), await PROVEDOR_NULO.rastrear(1, 'X'), await PROVEDOR_NULO.cancelar(1, 'X')]) {
     assert.equal(r.ok, false);
     assert.equal((r as any).motivo, 'nao_configurado');
   }
@@ -155,7 +155,7 @@ test('logística: os três adaptadores previstos estão registrados', () => {
 });
 
 test('logística: Melhor Envio e Correios sem credencial dizem "não configurado"', async () => {
-  const ctx: any = { venda_id: 1, origem: { cep: CEP_ORIGEM }, destino: { cep: CEP_DESTINO }, volumes: [{ peso_g: 300, quantidade: 1 }] };
+  const ctx: any = { empresaId: 1, venda_id: 1, origem: { cep: CEP_ORIGEM }, destino: { cep: CEP_DESTINO }, volumes: [{ peso_g: 300, quantidade: 1 }] };
   const me = shippingProvider('melhor_envio')!;
   const corr = shippingProvider('correios')!;
   const rMe = await me.cotar(ctx);
@@ -194,8 +194,8 @@ test('logística: a credencial é guardada cifrada e nunca devolvida em claro', 
   const salvo = await chamar(log.salvarConfigHandler, reqDe({ provider: 'melhor_envio', ambiente: 'homologacao', me_token: segredo, me_sandbox: true }));
   assert.equal(salvo.config.provider, 'melhor_envio');
   assert.equal(salvo.config.me_token_configurado, true, 'a tela sabe que existe credencial');
-  assert.notEqual(String(salvo.config.me_token), segredo, 'o token não volta em claro');
-  assert.ok(!String(salvo.config.me_token).includes('super_secreto'), 'nem fragmento do token aparece');
+  assert.equal(salvo.config.me_token, '••••••••', 'a API só devolve uma máscara fixa');
+  assert.ok(!JSON.stringify(salvo.config).includes('super_secreto'), 'nem fragmento do token aparece');
 
   // E no armazenamento também não fica em claro.
   const s = getStore();
@@ -535,6 +535,72 @@ test('logística: a configuração de cada empresa é independente', async () =>
   await chamar(log.salvarConfigHandler, reqDe({ provider: 'double', cep_origem: '20040020' }, { user: adminB }));
   assert.equal((await obterConfigLogistica(2)).cep_origem, '20040020');
   assert.equal((await obterConfigLogistica(1)).cep_origem, CEP_ORIGEM, 'a origem de A não mudou');
+});
+
+test('logística: cotações Correios concorrentes usam credencial explicitamente vinculada a cada empresa', async () => {
+  const s = getStore();
+  await s.insert(RESOURCES.empresas, { id: 2, nome: 'FILIAL P1', razao_social: 'FILIAL P1 LTDA', ativo: true }).catch(() => undefined);
+  const adminB = await criarAtor(2, 'admin');
+  const segredoSinteticoA = 'CORREIOS-SINTETICO-EMPRESA-A';
+  const segredoSinteticoB = 'CORREIOS-SINTETICO-EMPRESA-B';
+  const cepB = '80010000';
+
+  const salvoA = await chamar(log.salvarConfigHandler, reqDe({
+    provider: 'correios', cep_origem: CEP_ORIGEM, correios_usuario: 'usuario-sintetico-a',
+    correios_codigo_administrativo: '100001', correios_senha: segredoSinteticoA,
+  }));
+  const salvoB = await chamar(log.salvarConfigHandler, reqDe({
+    provider: 'correios', cep_origem: '20040020', correios_usuario: 'usuario-sintetico-b',
+    correios_codigo_administrativo: '200002', correios_senha: segredoSinteticoB,
+  }, { user: adminB }));
+  for (const [resposta, credenciais] of [
+    [salvoA, ['usuario-sintetico-a', '100001', segredoSinteticoA]],
+    [salvoB, ['usuario-sintetico-b', '200002', segredoSinteticoB]],
+  ] as const) {
+    const publico = JSON.stringify(resposta.config);
+    assert.ok(credenciais.every((valor) => !publico.includes(valor)), 'a API não devolve nenhum componente da credencial');
+    assert.equal(resposta.config.correios_usuario, null);
+    assert.equal(resposta.config.correios_codigo_administrativo, null);
+    assert.equal(resposta.config.correios_senha, '••••••••');
+  }
+
+  const clienteA = await s.insert(RESOURCES.clientes, { empresa_id: 1, nome: 'Cliente A Corrida', tipo: 'pf', cep: CEP_DESTINO, ativo: true });
+  const clienteB = await s.insert(RESOURCES.clientes, { empresa_id: 2, nome: 'Cliente B Corrida', tipo: 'pf', cep: cepB, ativo: true });
+  const vendaA = await s.insert(RESOURCES.vendas, { empresa_id: 1, cliente_id: Number(clienteA.id), data: '2026-10-14', status: 'faturada', total: 100 });
+  const vendaB = await s.insert(RESOURCES.vendas, { empresa_id: 2, cliente_id: Number(clienteB.id), data: '2026-10-14', status: 'faturada', total: 100 });
+
+  const credencialEsperadaA = `Basic ${Buffer.from(`usuario-sintetico-a:${segredoSinteticoA}`).toString('base64')}`;
+  const credencialEsperadaB = `Basic ${Buffer.from(`usuario-sintetico-b:${segredoSinteticoB}`).toString('base64')}`;
+  const requisicoes: Array<{ cep: string | null; tenant: 'A' | 'B' | 'outro' }> = [];
+  const fetchOriginal = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const authorization = new Headers(init?.headers).get('authorization');
+    const tenant = authorization === credencialEsperadaA ? 'A' : authorization === credencialEsperadaB ? 'B' : 'outro';
+    requisicoes.push({ cep: url.searchParams.get('cepDestino'), tenant });
+    // Força sobreposição temporal entre as duas chamadas sem acessar a rede.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return {
+      status: 200,
+      json: async () => ({ cresultado: { cservicos: [{ ccodigo: '04510', vvalor: '12,50', nprazoentrega: 3, cderro: '0' }] } }),
+    } as Response;
+  }) as typeof fetch;
+
+  try {
+    const [cotacaoA, cotacaoB] = await Promise.all([
+      chamar(log.cotarFrete, reqDe({}, { query: { venda_id: vendaA.id } })),
+      chamar(log.cotarFrete, reqDe({}, { user: adminB, query: { venda_id: vendaB.id } })),
+    ]);
+    assert.equal(cotacaoA.provedor.slug, 'correios');
+    assert.equal(cotacaoB.provedor.slug, 'correios');
+    assert.ok(requisicoes.some((r) => r.cep === CEP_DESTINO && r.tenant === 'A'), 'a cotação da Empresa A usou exclusivamente a credencial sintética de A');
+    assert.ok(requisicoes.some((r) => r.cep === cepB && r.tenant === 'B'), 'a cotação da Empresa B usou exclusivamente a credencial sintética de B');
+    assert.equal(requisicoes.filter((r) => r.tenant === 'outro').length, 0, 'nenhuma chamada usou credencial global ou de outra empresa');
+  } finally {
+    globalThis.fetch = fetchOriginal;
+    await usarDouble();
+    await chamar(log.salvarConfigHandler, reqDe({ provider: 'manual', correios_senha: null, correios_usuario: null }, { user: adminB }));
+  }
 });
 
 test('logística: envio da EMPRESA A é invisível para a EMPRESA B', async () => {

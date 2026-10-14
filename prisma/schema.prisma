@@ -315,6 +315,8 @@ enum ConnectionStatus {
 model Connector {
   id String @id @default(cuid())
 
+  empresaId Int @default(1) @map("empresa_id")
+
   // Responsável ERP — REQUIRED. FUSÃO: era Organization (Cascade);
   // no ERP a ação é RESTRICT (usuário se desativa, não se apaga).
   usuarioId Int    @map("usuario_id")
@@ -361,9 +363,9 @@ model Connector {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  @@unique([usuarioId, provider])
-  @@index([usuarioId, status])
-  @@index([provider, shopId])
+  @@unique([empresaId, usuarioId, provider])
+  @@index([empresaId, usuarioId, status])
+  @@index([empresaId, provider, shopId])
   @@map("connectors")
 }
 
@@ -375,6 +377,7 @@ model Connector {
 model ConnectorEvent {
   id String @id @default(cuid())
 
+  empresaId Int @default(1) @map("empresa_id")
   usuarioId Int    @map("usuario_id")
   usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
 
@@ -388,8 +391,8 @@ model ConnectorEvent {
   processedAt     DateTime?       @map("processed_at") @db.Timestamptz
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz
 
-  @@unique([usuarioId, provider, externalEventId])
-  @@index([usuarioId, provider, createdAt])
+  @@unique([empresaId, usuarioId, provider, externalEventId])
+  @@index([empresaId, usuarioId, provider, createdAt])
   @@index([connectorId])
   @@map("connector_events")
 }
@@ -400,6 +403,7 @@ model ConnectorEvent {
 model ConnectorOAuthState {
   id String @id @default(cuid())
 
+  empresaId Int @default(1) @map("empresa_id")
   usuarioId Int    @map("usuario_id")
   usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
 
@@ -413,7 +417,7 @@ model ConnectorOAuthState {
   expiresAt  DateTime @map("expires_at") @db.Timestamptz
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  @@index([usuarioId, provider, expiresAt])
+  @@index([empresaId, usuarioId, provider, expiresAt])
   @@map("connector_oauth_states")
 }
 
@@ -495,7 +499,7 @@ model Sale {
   /// de inserir às cegas. `externalOrderId` é `null` no checkout
   /// próprio — Postgres trata NULLs como distintos em índices
   /// únicos, então essas linhas ficam fora da chave.
-  @@unique([channel, externalOrderId])
+  @@unique([empresaId, usuarioId, channel, externalOrderId])
   @@index([tenantId, channel])
   @@index([status])
   @@index([usuarioId])
