@@ -76,6 +76,73 @@ async function assertVenda(vendaId: number, escopo: EscopoEmpresa, tx?: Tx): Pro
   return assertRegistroDaEmpresa(getResource('vendas')!, venda, escopo);
 }
 
+const R_DOC = () => getResource('documentos_fiscais')!;
+
+/**
+ * P1-03 — o documento fiscal da venda que LIBERA a mercadoria.
+ *
+ * Dois estados diferentes estavam sendo tratados como um só (`vendas.status`):
+ *
+ *   • `faturada` por FATURAMENTO (estoque baixado, sem nota) — o fluxo é
+ *     faturamento → expedição; a separação acontece antes, então pedido
+ *     faturado não entra no fluxo logístico. Comportamento preservado.
+ *   • `faturada` por AUTORIZAÇÃO FISCAL (`aplicarEfeitosDaAutorizacao`,
+ *     fiscal.ts) — a nota JÁ existe e a mercadoria ainda está no galpão. É
+ *     exatamente a operação que precisa de separação → conferência →
+ *     embalagem → expedição. Antes da correção ela morria no primeiro passo
+ *     com 409 "Este pedido já foi faturado".
+ *
+ * A autorização não mexe em `expedicao_etapa`; quem manda aqui é o documento.
+ */
+async function documentoFiscalAutorizado(vendaId: number, escopo: EscopoEmpresa, tx: Tx): Promise<Row | null> {
+  const docs = await getStore().list(
+    R_DOC(),
+    { page: 1, pageSize: 20, sort: 'id', dir: 'asc', filter: { empresa_id: escopo.empresaId, venda_id: vendaId } },
+    tx
+  );
+  const autorizado = docs.rows.find((d) => String(d.status) === 'autorizado');
+  return autorizado ?? null;
+}
+
+/**
+ * Uma venda faturada SEM documento fiscal autorizado não entra no fluxo
+ * logístico (é o faturamento que precede a expedição). Com o documento
+ * autorizado, entra: nota emitida e mercadoria no galpão é o caso legítimo.
+ */
+async function assertPodeEntrarNaExpedicao(venda: Row, escopo: EscopoEmpresa, tx: Tx, etapa: 'separação' | 'conferência'): Promise<void> {
+  if (!['faturada', 'entregue'].includes(String(venda.status))) return;
+  if (await documentoFiscalAutorizado(Number(venda.id), escopo, tx)) return;
+  throw new HttpError(409, `Este pedido já foi faturado — a ${etapa} acontece antes do faturamento.`);
+}
+
+/**
+ * Trava fiscal da expedição (a mercadoria saindo).
+ *
+ * Se a operação TEM documento fiscal, ela só sai com um documento AUTORIZADO:
+ * pendente, rejeitado, cancelado ou em erro BLOQUEIAM — inclusive o cancelado
+ * depois de autorizado, porque a nota que acompanha a mercadoria deixou de
+ * existir. Sem documento nenhum, o comportamento continua o de antes (o
+ * faturamento dentro da expedição).
+ */
+async function documentoFiscalLibera(venda: Row, escopo: EscopoEmpresa, tx: Tx): Promise<{ autorizado: Row | null; bloqueio: string | null }> {
+  const docs = await getStore().list(
+    R_DOC(),
+    { page: 1, pageSize: 20, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId, venda_id: Number(venda.id) } },
+    tx
+  );
+  if (!docs.rows.length) return { autorizado: null, bloqueio: null };
+  const autorizado = docs.rows.find((d) => String(d.status) === 'autorizado') ?? null;
+  if (autorizado) return { autorizado, bloqueio: null };
+  const ultimo = docs.rows[0];
+  return {
+    autorizado: null,
+    bloqueio:
+      `Este pedido tem documento fiscal nº ${ultimo.numero ?? '(sem número)'} em "${String(ultimo.status)}" — ` +
+      'a expedição exige documento AUTORIZADO. Autorize o documento (ou cancele a nota/venda) antes de expedir: ' +
+      'nenhuma mercadoria sai sem a nota que a acompanha.',
+  };
+}
+
 async function avancarEtapa(venda: Row, alvo: Etapa, actor: { id: number | null; name: string }, escopo: EscopoEmpresa, tx: Tx, mensagem: string): Promise<Row> {
   const atual = (String(venda.expedicao_etapa || 'pendente') || 'pendente') as Etapa;
   if (!proximaEtapa(atual, alvo)) {
@@ -114,9 +181,8 @@ export async function separarPedido(req: Request, res: Response) {
     const out = await s.transaction(async (tx) => {
       const venda = await assertVenda(vendaId, escopo, tx);
       if (String(venda.status) === 'cancelada') throw new HttpError(409, 'Pedido cancelado não vai para a expedição.');
-      if (['faturada', 'entregue'].includes(String(venda.status))) {
-        throw new HttpError(409, 'Este pedido já foi faturado — a separação acontece antes do faturamento.');
-      }
+      // P1-03: faturada pela autorização da nota CONTINUA entrando no fluxo.
+      await assertPodeEntrarNaExpedicao(venda, escopo, tx, 'separação');
       const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, venda_id: vendaId }, sort: 'id', dir: 'asc' }, tx);
       if (!itens.rows.length) throw new HttpError(409, 'O pedido não tem itens para separar.');
       const atualizada = await avancarEtapa(venda, 'separacao', { id: actor.id || null, name: actor.name }, escopo, tx, 'Pedido enviado para separação.');
@@ -234,7 +300,8 @@ export async function conferirPedido(req: Request, res: Response) {
     const out = await s.transaction(async (tx) => {
       const venda = await assertVenda(vendaId, escopo, tx);
       if (String(venda.status) === 'cancelada') throw new HttpError(409, 'Pedido cancelado não pode ser conferido.');
-      if (['faturada', 'entregue'].includes(String(venda.status))) throw new HttpError(409, 'Este pedido já foi faturado — a conferência acontece antes.');
+      // P1-03: faturada pela autorização da nota CONTINUA entrando no fluxo.
+      await assertPodeEntrarNaExpedicao(venda, escopo, tx, 'conferência');
 
       const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, venda_id: vendaId }, sort: 'id', dir: 'asc' }, tx);
       if (!itens.rows.length) throw new HttpError(409, 'O pedido não tem itens para conferir.');
@@ -332,6 +399,19 @@ export async function embalarPedido(req: Request, res: Response) {
  * Expedir fatura o pedido: baixa de estoque, comissão e financeiro pelo MESMO
  * caminho do pedido de balcão (`aplicarRegrasPedido` + `syncLancamentoVenda`).
  * A expedição não virou um segundo motor de faturamento.
+ *
+ * P1-03: quando o faturamento JÁ aconteceu pela autorização do documento
+ * fiscal, a expedição não refatura — ela só avança a etapa logística. Sem essa
+ * distinção, uma NF legitimamente autorizada não conseguia sair do galpão
+ * (409 "Este pedido já está faturado") e a alternativa — refaturar — baixaria
+ * o estoque duas vezes.
+ *
+ * O que diz se o efeito econômico já foi aplicado NÃO é `vendas.status` (esse
+ * campo é editável pelo CRUD genérico): é o carimbo do DOCUMENTO
+ * (`documentos_fiscais.estoque_baixado_em`, gravado por
+ * `aplicarEfeitosDaAutorizacao` na mesma transação do efeito). Com o carimbo
+ * presente, nenhuma segunda baixa é possível, mesmo que o status da venda tenha
+ * sido revertido à mão.
  */
 export async function expedirPedido(req: Request, res: Response) {
   const actor = currentUser(req);
@@ -343,23 +423,55 @@ export async function expedirPedido(req: Request, res: Response) {
     const out = await s.transaction(async (tx) => {
       const venda = await assertVenda(vendaId, escopo, tx);
       if (String(venda.status) === 'cancelada') throw new HttpError(409, 'Pedido cancelado não pode ser expedido.');
-      if (['faturada', 'entregue'].includes(String(venda.status))) {
+      // Trava fiscal: documento existente precisa estar AUTORIZADO.
+      const fiscal = await documentoFiscalLibera(venda, escopo, tx);
+      if (fiscal.bloqueio) throw new HttpError(409, fiscal.bloqueio);
+      const antes = venda;
+      const jaFaturado = ['faturada', 'entregue'].includes(String(venda.status));
+      // Faturada SEM documento autorizado = faturamento que precede a expedição
+      // (comportamento preservado). Faturada PELA autorização da nota = a
+      // mercadoria ainda vai sair — é o caso que o P1-03 destrava.
+      if (jaFaturado && !fiscal.autorizado) {
         throw new HttpError(409, 'Este pedido já está faturado.');
       }
       const etapaAtual = (String(venda.expedicao_etapa || 'pendente') || 'pendente') as Etapa;
       if (etapaAtual !== 'embalada') {
         throw new HttpError(409, `Só se expede um pedido embalado (etapa atual: ${etapaAtual}). Passe por separação, conferência e embalagem.`);
       }
-      const antes = venda;
-      const faturada = await s.tryUpdateIf(getResource('vendas')!, vendaId, { status: String(venda.status) }, { status: 'faturada' }, tx);
-      if (!faturada) throw new HttpError(409, 'O pedido mudou durante a expedição. Recarregue.');
-      await aplicarRegrasPedido('venda', antes, faturada, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx, escopo);
-      const depois = (await s.get(getResource('vendas')!, vendaId, tx)) || faturada;
-      await syncLancamentoVenda(antes, depois, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx);
-      const comEtapa = await avancarEtapa(depois, 'expedida', { id: actor.id || null, name: actor.name }, escopo, tx, 'Pedido expedido e faturado.');
+      // Efeito econômico já aplicado: pela própria venda faturada OU pelo
+      // carimbo do documento autorizado. O segundo caso é o que impede a
+      // segunda baixa mesmo com o status da venda editado pelo CRUD.
+      const efeitosAplicados = jaFaturado || Boolean(fiscal.autorizado?.estoque_baixado_em);
+      let depois: Row = venda;
+      if (!efeitosAplicados) {
+        const faturada = await s.tryUpdateIf(getResource('vendas')!, vendaId, { status: String(venda.status) }, { status: 'faturada' }, tx);
+        if (!faturada) throw new HttpError(409, 'O pedido mudou durante a expedição. Recarregue.');
+        await aplicarRegrasPedido('venda', antes, faturada, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx, escopo);
+        depois = (await s.get(getResource('vendas')!, vendaId, tx)) || faturada;
+        await syncLancamentoVenda(antes, depois, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx);
+      } else if (!jaFaturado) {
+        // A nota autorizada já é o fato gerador do faturamento: o status da
+        // venda é RESTAURADO ao que o efeito aplicado exige — sem refaturar.
+        const normalizada = await s.tryUpdateIf(getResource('vendas')!, vendaId, { status: String(venda.status) }, { status: 'faturada' }, tx);
+        if (normalizada) depois = normalizada;
+      }
+      const comEtapa = await avancarEtapa(
+        depois,
+        'expedida',
+        { id: actor.id || null, name: actor.name },
+        escopo,
+        tx,
+        efeitosAplicados ? 'Pedido expedido (faturamento já aplicado pela autorização da nota).' : 'Pedido expedido e faturado.'
+      );
       return comEtapa;
     }, { isolation: 'serializable' });
-    res.json({ ok: true, venda: out, etapa: out.expedicao_etapa, status: out.status, mensagem: 'Pedido expedido: estoque baixado, comissão congelada e financeiro lançado.' });
+    res.json({
+      ok: true,
+      venda: out,
+      etapa: out.expedicao_etapa,
+      status: out.status,
+      mensagem: 'Pedido expedido: estoque baixado, comissão congelada e financeiro lançado.',
+    });
   } catch (e) {
     throw toHttpError(e, getResource('vendas')!);
   }

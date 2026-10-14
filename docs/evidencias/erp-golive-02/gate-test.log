@@ -1,0 +1,10 @@
+===== ERP-GOLIVE-02 · gate: npm test (server 804 + client 306) =====
+# tests 804
+# suites 53
+# pass 738
+# fail 0
+# cancelled 0
+# skipped 66
+# todo 0
+ Test Files  28 passed (28)
+      Tests  306 passed (306)

@@ -1,0 +1,9 @@
+===== ERP-GOLIVE-02 · gate: npm run typecheck =====
+
+> brobond-server@0.6.0 typecheck
+> tsc --noEmit
+
+
+> brobond-client@0.6.0 typecheck
+> tsc --noEmit
+

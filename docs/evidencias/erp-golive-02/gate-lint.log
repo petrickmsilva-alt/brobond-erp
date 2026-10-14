@@ -1,0 +1,7 @@
+===== ERP-GOLIVE-02 · gate: npm run lint =====
+  55:16  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  60:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+✖ 409 problems (0 errors, 409 warnings)
+  0 errors and 1 warning potentially fixable with the `--fix` option.
+

@@ -1,0 +1,184 @@
+===== ERP-GOLIVE-02 · C) ANTES da correção · PostgreSQL REAL (os MESMOS testes do DEPOIS) =====
+# Fonte revertida ao commit base 3058c8f via `git stash push -- server/src/pdv.ts server/src/expedicao.ts` (pop depois, md5 verificado).
+# Banco NOVO: brobond_pg_before3 (PostgreSQL 16.14 local). Arquivo: server/test/pg/e424-golive-02-postgresql.test.ts
+# O mesmo comando do DEPOIS: DATABASE_URL=... npm exec -- node --import tsx --test test/pg/e424-golive-02-postgresql.test.ts
+
+not ok 1 - P1-01 PG: o movimento de caixa é o líquido do troco e o fechamento bate no banco
+  error: |-
+    o movimento de dinheiro é LÍQUIDO de troco
+    30 !== 15
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:286:10)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+not ok 2 - P1-01 PG: estorno devolve o estoque UMA vez e tira a venda do caixa
+  error: |-
+    100 entregues − 40 de troco
+    100 !== 60
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:319:10)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+not ok 3 - P1-01 PG: duas vendas simultâneas no mesmo caixa não duplicam movimento
+  error: |-
+    20 de troco por venda: 50 − 20
+    50 !== 30
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:367:10)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+ok 4 - P1-01 PG: fechamento concorrente — exatamente um vence
+not ok 5 - P1-01 PG: rollback — venda recusada não deixa rastro no caixa nem no estoque
+  error: 'esperava HTTP 400, mas a operação foi permitida'
+  code: 'ERR_TEST_FAILURE'
+    esperarErro (/home/user/brobond-erp/server/test/_p1util.ts:133:9)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:410:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+ok 6 - P1-01 PG: idempotência — ler o resumo não move dinheiro e repetir a venda não conta duas vezes
+not ok 7 - P1-01 PG: multiempresa — o caixa de A não soma em B nem é operado por B
+  error: |-
+    Expected values to be strictly equal:
+    130 !== 125
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:458:10)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+not ok 8 - P1-03 PG: NF autorizada segue para separação → conferência → embalagem → expedição
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async withTransaction (/home/user/brobond-erp/server/src/db.ts:80:20)
+    async separarPedido (/home/user/brobond-erp/server/src/expedicao.ts:114:17)
+    async chamar (/home/user/brobond-erp/server/test/_p1util.ts:112:3)
+    async expedirFluxo (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:263:3)
+    async TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:491:20)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+not ok 9 - P1-03 PG: documento PENDENTE bloqueia a expedição — nada muda no banco
+  error: 'esperava HTTP 409, mas a operação foi permitida'
+  code: 'ERR_TEST_FAILURE'
+    esperarErro (/home/user/brobond-erp/server/test/_p1util.ts:133:9)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:531:16)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+not ok 10 - P1-03 PG: documento REJEITADO bloqueia a expedição
+  error: 'esperava HTTP 409, mas a operação foi permitida'
+  code: 'ERR_TEST_FAILURE'
+    esperarErro (/home/user/brobond-erp/server/test/_p1util.ts:133:9)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:553:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+not ok 11 - P1-03 PG: status da venda revertido à mão não provoca segunda baixa (carimbo do documento)
+  error: |-
+    o estoque continua baixado UMA única vez
+    48 !== 49
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:570:10)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+ok 12 - P1-03 PG: documento CANCELADO depois de autorizado bloqueia a expedição
+not ok 13 - P1-03 PG: idempotência — autorização repetida e expedição repetida não duplicam nada
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async withTransaction (/home/user/brobond-erp/server/src/db.ts:80:20)
+    async separarPedido (/home/user/brobond-erp/server/src/expedicao.ts:114:17)
+    async chamar (/home/user/brobond-erp/server/test/_p1util.ts:112:3)
+    async expedirFluxo (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:263:3)
+    async TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:618:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+not ok 14 - P1-03 PG: duas expedições concorrentes — uma vence e a baixa acontece UMA vez
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async withTransaction (/home/user/brobond-erp/server/src/db.ts:80:20)
+    async separarPedido (/home/user/brobond-erp/server/src/expedicao.ts:114:17)
+    async chamar (/home/user/brobond-erp/server/test/_p1util.ts:112:3)
+    async TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:635:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+not ok 15 - P1-03 PG: falha no meio da transição não deixa estado parcial
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async withTransaction (/home/user/brobond-erp/server/src/db.ts:80:20)
+    async separarPedido (/home/user/brobond-erp/server/src/expedicao.ts:114:17)
+    async chamar (/home/user/brobond-erp/server/test/_p1util.ts:112:3)
+    async TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:671:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+not ok 16 - P1-03 PG: multiempresa — B não opera a expedição de A (e a dele funciona)
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async withTransaction (/home/user/brobond-erp/server/src/db.ts:80:20)
+    async separarPedido (/home/user/brobond-erp/server/src/expedicao.ts:114:17)
+    async chamar (/home/user/brobond-erp/server/test/_p1util.ts:112:3)
+    async expedirFluxo (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:263:3)
+    async TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:712:21)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+not ok 17 - P1-01+P1-03 PG: a cadeia inteira de A não aparece em B (caixa, estoque, fiscal, expedição)
+  error: |-
+    Expected values to be strictly equal:
+    130 !== 125
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:743:10)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+not ok 18 - auditoria Q9 PG: o CRUD genérico não fura a proteção fiscal nem duplica o efeito
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async withTransaction (/home/user/brobond-erp/server/src/db.ts:80:20)
+    async separarPedido (/home/user/brobond-erp/server/src/expedicao.ts:114:17)
+    async chamar (/home/user/brobond-erp/server/test/_p1util.ts:112:3)
+    async expedirFluxo (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:263:3)
+    async TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:846:20)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+not ok 19 - E2E PG: venda presencial → pagamento → caixa → fiscal → autorização → expedição
+  error: |-
+    150 entregues − 50 de troco
+    150 !== 100
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    TestContext.<anonymous> (/home/user/brobond-erp/server/test/pg/e424-golive-02-postgresql.test.ts:876:10)
+    process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+# tests 19
+# pass 3
+# fail 16
+# skipped 0
+# todo 0
+# duration_ms 32477.927039

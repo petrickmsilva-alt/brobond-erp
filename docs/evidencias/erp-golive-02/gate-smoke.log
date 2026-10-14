@@ -1,0 +1,10 @@
+===== ERP-GOLIVE-02 · gate: npm run smoke (servidor Express real, modo demonstração, :3001) =====
+
+PASS  E3.2: de-para criado com descrição e unidade  — status 201 
+PASS  E3.2: de-para pode ser inativado  — status 200 ativo=false
+PASS  E3.2: XML inválido é recusado com 422  — status 422
+PASS  E3.2: importação sem arquivo é recusada  — status 400
+PASS  sem token → 401  — status 401
+PASS  ticket de MFA não vale como token de acesso → 401  — status 401
+
+126/126 verificações OK

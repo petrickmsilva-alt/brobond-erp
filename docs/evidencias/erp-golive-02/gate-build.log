@@ -1,0 +1,7 @@
+===== ERP-GOLIVE-02 · gate: npm run build =====
+PWA v1.3.0
+mode      generateSW
+precache  59 entries (1146.95 KiB)
+files generated
+  dist/sw.js
+  dist/workbox-abeb32eb.js

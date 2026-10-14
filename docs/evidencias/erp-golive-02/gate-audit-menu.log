@@ -1,0 +1,9 @@
+===== ERP-GOLIVE-02 · gate: npm run audit:menu =====
+│ tabelas com empresa_id .. 76
+│ rotas públicas (pré-auth) verificadas
+╰───────────────────────────────────────────────────────────────────
+
+⚠️  AVISOS (1) — classificados, não bloqueiam:
+   [ROTA_PUBLICA] A rota "/api/health" é registrada antes do requireAuth global — confirme que é intencionalmente pública.
+
+✅ Sem erros: menu, rotas, recursos, permissões e escopo por empresa estão coerentes.

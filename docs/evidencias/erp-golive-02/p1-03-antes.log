@@ -1,0 +1,58 @@
+===== ERP-GOLIVE-02 · P1-03 C) ANTES da correção (mesma suíte de D) =====
+# cd server && npm exec -- node --import tsx --test test/fiscal-expedicao.test.ts
+# Fonte revertida ao commit base 3058c8f via `git stash push -- server/src/pdv.ts server/src/expedicao.ts`; pop depois, md5 verificado.
+
+not ok 1 - P1-03 (M/A): NF autorizada entra em separação, confere, embala e expede — sem duplicar baixa
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+not ok 2 - P1-03 (B): documento fiscal PENDENTE bloqueia a expedição
+  error: 'esperava HTTP 409, mas a operação foi permitida'
+  code: 'ERR_TEST_FAILURE'
+    esperarErro (/home/user/brobond-erp/server/test/_p1util.ts:133:9)
+not ok 3 - P1-03 (C): documento REJEITADO bloqueia a expedição
+  error: 'esperava HTTP 409, mas a operação foi permitida'
+  code: 'ERR_TEST_FAILURE'
+    esperarErro (/home/user/brobond-erp/server/test/_p1util.ts:133:9)
+ok 4 - P1-03 (D): documento CANCELADO bloqueia a expedição
+ok 5 - P1-03: venda faturada SEM documento fiscal continua bloqueada (proteção preservada)
+not ok 6 - P1-03 (A/B): status da venda revertido à mão NÃO refatura — o carimbo do documento manda
+  error: |-
+    UMA baixa — a expedição não refaturou
+    48 !== 49
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    TestContext.<anonymous> (/home/user/brobond-erp/server/test/fiscal-expedicao.test.ts:453:10)
+not ok 7 - P1-03 (I): expedição repetida não duplica estoque nem evento
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+ok 8 - P1-03 (I): autorização repetida devolve o MESMO documento e não refatura
+not ok 9 - P1-03 (J): duas expedições simultâneas — nunca duas baixas (memória)
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+not ok 10 - P1-03 (K): conferência divergente aborta sem baixa e sem mudar a etapa
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+not ok 11 - P1-03 (K): expedir sem embalar e embalar sem conferir são recusados sem efeito
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+not ok 12 - P1-03 (L): empresa B não opera a expedição de A (e a dela funciona)
+  error: 'Este pedido já foi faturado — a separação acontece antes do faturamento.'
+  code: 'ERR_TEST_FAILURE'
+  name: 'HttpError'
+    s.transaction.isolation (/home/user/brobond-erp/server/src/expedicao.ts:118:15)
+# tests 12
+# pass 3
+# fail 9
+# skipped 0
+# todo 0
+# duration_ms 535.418277

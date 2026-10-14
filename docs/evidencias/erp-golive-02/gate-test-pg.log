@@ -1,0 +1,17 @@
+===== ERP-GOLIVE-02 · gate: npm run test:pg (PostgreSQL 16.14 REAL · banco NOVO brobond_pg_gate9) =====
+# comando: DATABASE_URL=postgres://postgres@127.0.0.1:55432/brobond_pg_gate9 npm run test:pg
+
+  ---
+  duration_ms: 2631.871778
+  type: 'test'
+  ...
+1..145
+# tests 178
+# suites 0
+# pass 178
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 116746.74087
+ERP-03 GATE PASS: 178 testes PostgreSQL reais; 0 fail/skip/todo.

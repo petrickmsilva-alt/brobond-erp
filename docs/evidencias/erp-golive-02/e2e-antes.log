@@ -1,0 +1,17 @@
+===== ERP-GOLIVE-02 · E2E C) ANTES da correção (mesmo teste de D) =====
+# cd server && npm exec -- node --import tsx --test test/golive-02-e2e.test.ts
+# Fonte revertida ao commit base 3058c8f via `git stash push -- server/src/pdv.ts server/src/expedicao.ts`; pop depois, md5 verificado.
+
+not ok 1 - ERP-GOLIVE-02 E2E: venda presencial → pagamento → caixa → fiscal → autorização → expedição
+  error: |-
+    o movimento de caixa vale o líquido (250 − 50 de troco)
+    250 !== 200
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    TestContext.<anonymous> (/home/user/brobond-erp/server/test/golive-02-e2e.test.ts:133:10)
+# tests 1
+# pass 0
+# fail 1
+# skipped 0
+# todo 0
+# duration_ms 384.888894
