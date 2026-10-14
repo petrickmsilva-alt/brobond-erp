@@ -1,0 +1,6 @@
+===== ERP-GOLIVE-02 · gate: npm run db:validate (prisma validate) =====
+
+> brobond-ai-erp@1.0.0 db:validate
+> prisma validate
+
+Error: request to https://binaries.prisma.sh/all_commits/8047c96bbd92db98a2abc7c9323ce77c02c89dbc/debian-openssl-3.0.x/schema-engine.gz.sha256 failed, reason: Client network socket disconnected before secure TLS connection was established

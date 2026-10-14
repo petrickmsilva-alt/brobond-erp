@@ -1,0 +1,14 @@
+===== ERP-GOLIVE-02 · auditoria adversarial (Q9) · sonda CRUD genérico × venda autorizada =====
+# Banco: PostgreSQL real (brobond_pg_final3).
+# Sonda TEMPORÁRIA (não faz parte da suíte): 1) faturada→aberta pela API, 2) PUT ->faturada em venda já faturada,
+# 3) ESCRITA DIRETA (fora do motor) para aberta + PUT genérico ->faturada.
+# 3 é o cenário RESIDUAL documentado: exige edição direta no banco, fora de qualquer rota da API.
+
+# APOS AUTORIZACAO saldo= 49 movs= 1 lanc= 1
+# CRUD faturada->aberta: recusado 409 Pedido faturado não pode voltar para aberto. Para desfazer o faturamento, cancele o pedido (o estoque é estornado).
+# CRUD ->faturada (já faturada): ok status= faturada saldo= 49 movs= 1 lanc= 1
+# DIRETO aberta + CRUD ->faturada: ok status= faturada saldo= 48 movs= 2 lanc= 1
+# Subtest: PROBE: CRUD genérico em venda com documento autorizado carimbado
+ok 1 - PROBE: CRUD genérico em venda com documento autorizado carimbado
+# pass 1
+# fail 0

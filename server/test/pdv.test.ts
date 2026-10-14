@@ -333,11 +333,20 @@ test('pdv: a venda fica amarrada ao caixa e aparece no resumo por forma de pagam
   const resumo = await chamar(pdv.resumoCaixaHandler, reqDe({}, { params: { id: caixa.id } }));
   assert.equal(Number(resumo.quantidade_vendas), 1);
   assert.equal(Number(resumo.total_vendido), 25);
-  assert.equal(Number(resumo.por_forma.dinheiro), 30);
+  // P1-01 (ERP-GOLIVE-02): o movimento de caixa vale o efeito LÍQUIDO na
+  // gaveta. Antes da correção, `por_forma.dinheiro` era 30 (o dinheiro
+  // ENTREGUE) e o esperado era 80 — a gaveta só tinha 15 dos 30, porque 15
+  // voltaram como troco: R$ 15,00 de superestimação, exatamente a divergência
+  // reproduzida na auditoria ERP-COMMERCE-01.
+  assert.equal(Number(resumo.por_forma.dinheiro), 15, '30 entregues − 15 de troco');
   assert.equal(Number(resumo.por_forma.cartao_credito), 10);
-  // esperado = 50 abertura + 30 dinheiro + 0 − 0 (troco não sai do esperado:
-  // o dinheiro entregue volta como troco e continua na gaveta).
-  assert.equal(Number(resumo.esperado_em_dinheiro), 80);
+  // esperado = 50 abertura + 15 dinheiro líquido + 0 − 0.
+  assert.equal(Number(resumo.esperado_em_dinheiro), 65);
+  // E as duas visões do resumo concordam: Σ por_forma = total vendido.
+  assert.equal(
+    Number(resumo.por_forma.dinheiro) + Number(resumo.por_forma.cartao_credito),
+    Number(resumo.total_vendido)
+  );
 
   // Os pagamentos ficam rastreáveis pela venda.
   const pagamentos = await chamar(pdv.pagamentosVenda, reqDe({}, { params: { id: venda.venda_id } }));

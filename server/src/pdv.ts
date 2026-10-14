@@ -154,8 +154,34 @@ export async function caixaAberto(req: Request, res: Response) {
 }
 
 /**
+ * Dinheiro da venda que FICOU na gaveta.
+ *
+ * O troco é dinheiro do cliente: sai da gaveta no mesmo ato. O que pode ficar
+ * é, no máximo, o que sobra da venda depois dos outros meios de pagamento
+ * (cartão, pix, ...). O pagamento em dinheiro guardado pelo PDV já é o valor
+ * LÍQUIDO (ver `venderPdv`), e esta conta é a mesma regra lida de volta — é ela
+ * que mantém auditáveis as linhas gravadas antes da correção, quando a coluna
+ * `valor` recebia o dinheiro ENTREGUE, incluindo o troco (a divergência de
+ * R$ 15,00 reproduzida na auditoria ERP-COMMERCE-01).
+ */
+export function dinheiroNaGaveta(pagamentosDaVenda: Row[], totalDaVenda: unknown): { dinheiro: number; outros: number } {
+  const recebido = round2(pagamentosDaVenda.reduce((acc, p) => acc + num(p.valor), 0));
+  const emDinheiro = round2(
+    pagamentosDaVenda.filter((p) => String(p.forma) === 'dinheiro').reduce((acc, p) => acc + num(p.valor), 0)
+  );
+  const outros = round2(recebido - emDinheiro);
+  return { dinheiro: round2(Math.min(emDinheiro, Math.max(0, num(totalDaVenda) - outros))), outros };
+}
+
+/**
  * Posição do caixa: o que o sistema espera encontrar na gaveta.
- * `esperado = abertura + vendas(dinheiro) + suprimentos − sangrias`.
+ *
+ * `esperado = abertura + dinheiro(líquido de troco) + suprimentos − sangrias`
+ *
+ * A derivação sai SOMENTE dos movimentos válidos do caixa: os pagamentos das
+ * vendas vivas (`pdv_pagamentos`, filtrados pelo caixa) e os movimentos de
+ * gaveta (`pdv_caixa_movimentos`). Venda cancelada não conta, e cada movimento
+ * entra uma única vez — não existe uma segunda contabilidade de caixa.
  */
 async function resumoCaixa(caixaId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Record<string, unknown>> {
   const s = getStore();
@@ -169,14 +195,35 @@ async function resumoCaixa(caixaId: number, escopo: EscopoEmpresa, tx?: Tx): Pro
   const movimentos = await s.list(R_CAIXA_MOV(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, caixa_id: caixaId } }, tx);
 
   const porForma: Record<string, number> = {};
-  let totalVendido = 0;
   const vendasVivas = vendas.rows.filter((v) => String(v.status) !== 'cancelada');
   const idsVivas = new Set(vendasVivas.map((v) => Number(v.id)));
+  const porVenda = new Map<number, Row[]>();
   for (const p of pagamentos.rows) {
-    if (!idsVivas.has(Number(p.venda_id))) continue;
-    porForma[String(p.forma)] = round2(num(porForma[String(p.forma)]) + num(p.valor));
-    totalVendido = round2(totalVendido + num(p.valor));
+    const vendaId = Number(p.venda_id);
+    if (!idsVivas.has(vendaId)) continue;
+    const lista = porVenda.get(vendaId) ?? [];
+    lista.push(p);
+    porVenda.set(vendaId, lista);
   }
+  let dinheiro = 0;
+  let totalVendido = 0;
+  for (const venda of vendasVivas) {
+    const daVenda = porVenda.get(Number(venda.id)) ?? [];
+    const conta = dinheiroNaGaveta(daVenda, venda.total);
+    dinheiro = round2(dinheiro + conta.dinheiro);
+    for (const p of daVenda) {
+      const forma = String(p.forma);
+      if (forma === 'dinheiro') continue;
+      porForma[forma] = round2(num(porForma[forma]) + num(p.valor));
+    }
+    totalVendido = round2(totalVendido + num(venda.total));
+  }
+  // `por_forma.dinheiro` é o que FICOU na gaveta (líquido de troco). Só aparece
+  // quando alguma venda/troca movimentou dinheiro — como antes.
+  const houveDinheiro = pagamentos.rows.some(
+    (p) => idsVivas.has(Number(p.venda_id)) && String(p.forma) === 'dinheiro'
+  );
+  if (houveDinheiro) porForma.dinheiro = dinheiro;
   let suprimentos = 0;
   let sangrias = 0;
   for (const m of movimentos.rows) {
@@ -189,7 +236,7 @@ async function resumoCaixa(caixaId: number, escopo: EscopoEmpresa, tx?: Tx): Pro
     status: String(caixa.status),
     quantidade_vendas: vendasVivas.length,
     quantidade_canceladas: vendas.rows.length - vendasVivas.length,
-    total_vendido: round2(vendasVivas.reduce((acc, v) => acc + num(v.total), 0)),
+    total_vendido: totalVendido,
     por_forma: porForma,
     suprimentos,
     sangrias,
@@ -627,6 +674,43 @@ export async function venderPdv(req: Request, res: Response) {
         throw new HttpError(400, `Pagamento excede o total (${totalPago.toFixed(2)} > ${total.toFixed(2)}). Só dinheiro gera troco.`, { pagamentos: 'Excede o total' });
       }
       const troco = round2(Math.max(0, totalPago - total));
+      // Troco é dinheiro: não existe troco pago com cartão/pix. Mais do que uma
+      // validação, isto é o que impede o movimento de caixa de virar negativo.
+      if (troco > emDinheiro + 0.009) {
+        throw new HttpError(
+          400,
+          `O troco (${troco.toFixed(2)}) não pode ser maior que o dinheiro recebido (${emDinheiro.toFixed(2)}). Registre a devolução em dinheiro como sangria ou ajuste os valores recebidos.`,
+          { pagamentos: 'Troco maior que o dinheiro' }
+        );
+      }
+
+      /**
+       * O MOVIMENTO de caixa vale o efeito LÍQUIDO na gaveta: o dinheiro
+       * ENTREGUE menos o troco DEVOLVIDO. O troco é do cliente — não fica na
+       * gaveta e não pode virar receita em dinheiro.
+       *
+       * Era aqui a origem da divergência de R$ 15,00 da auditoria
+       * ERP-COMMERCE-01: a coluna `valor` recebia os 30,00 entregues em uma
+       * venda de 25,00 paga com troco de 15,00, e o resumo somava 30,00 de
+       * dinheiro onde só havia 15,00 na gaveta. O valor entregue e o troco
+       * continuam no contrato da resposta (`calculo.total_pago`/`troco`) e na
+       * auditoria da venda; o MOVIMENTO guarda o que de fato entrou no caixa.
+       */
+      const pagamentosParaCaixa: PagamentoEntrada[] = [];
+      let trocoACompensar = troco;
+      for (const p of pagamentos) {
+        let valorNoCaixa = p.valor;
+        if (p.forma === 'dinheiro' && trocoACompensar > 0.009) {
+          const abate = Math.min(valorNoCaixa, trocoACompensar);
+          valorNoCaixa = round2(valorNoCaixa - abate);
+          trocoACompensar = round2(trocoACompensar - abate);
+        }
+        // O troco pode consumir toda a linha em dinheiro (cliente devolveu tudo
+        // o que entregou): aí não existe movimento — `pdv_pagamentos.valor` é
+        // CHECK > 0 e zero não movimenta gaveta nenhuma.
+        if (valorNoCaixa <= 0.009) continue;
+        pagamentosParaCaixa.push({ ...p, valor: valorNoCaixa });
+      }
 
       // ---- 4) grava o pedido ----
       const localSaidaData: Record<string, unknown> = {};
@@ -684,7 +768,9 @@ export async function venderPdv(req: Request, res: Response) {
         );
       }
 
-      for (const p of pagamentos) {
+      // O movimento de caixa é gravado por `pagamentosParaCaixa`: mesmo
+      // pagamento (NSU, bandeira, parcelas), valor = efeito líquido na gaveta.
+      for (const p of pagamentosParaCaixa) {
         await s.insert(
           R_PAGAMENTO(),
           { empresa_id: escopo.empresaId, venda_id: Number(venda.id), caixa_id: Number(caixa.id), forma: p.forma, valor: p.valor, parcelas: p.parcelas, nsu: p.nsu ?? null, bandeira: p.bandeira ?? null },

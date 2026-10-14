@@ -1,0 +1,39 @@
+===== ERP-GOLIVE-02 · P1-01 C) ANTES da correção (mesma suíte de D, 14 testes) =====
+# cd server && npm exec -- node --import tsx --test test/pdv-caixa-resumo.test.ts
+# Fonte revertida ao commit base 3058c8f: `git checkout 3058c8f -- server/src/pdv.ts server/src/expedicao.ts`; restaurada com `git restore --source=HEAD --staged --worktree` (md5 bad5b6d0… conferido).
+
+ok 1 - P1-01 (A): venda em dinheiro sem troco — movimento = total, resumo bate
+ok 2 - P1-01 (B): venda no cartão não movimenta a gaveta
+ok 3 - P1-01 (C): venda com múltiplas formas — cada movimento entra UMA vez
+ok 4 - P1-01 (D): o resumo é derivado dos movimentos da venda + gaveta (venda a venda)
+ok 5 - P1-01 (E/F): suprimento e sangria movem a gaveta sem tocar no vendido
+ok 6 - P1-01 (G): venda cancelada sai do resumo e o estoque volta UMA vez
+ok 7 - P1-01 (H): fechamento grava o esperado dos movimentos e a diferença contada
+ok 8 - P1-01 (I): duas vendas simultâneas não duplicam movimento nem estoque
+ok 9 - P1-01 (I): dois fechamentos simultâneos — um vence, o outro é recusado
+ok 10 - P1-01 (J): ler o resumo não move dinheiro e repetir a venda não duplica movimento
+ok 11 - P1-01 (K): caixas de empresas diferentes não se misturam (e B não opera o caixa de A)
+not ok 12 - P1-01 (L): venda de R$ 25,00 paga com R$ 30,00 (troco de R$ 15,00) — o resumo não superestima R$ 15,00
+  error: |-
+    o esperado é o que a gaveta de fato tem
+    80 !== 65
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    provarAritmetica (/home/user/brobond-erp/server/test/pdv-caixa-resumo.test.ts:114:10)
+not ok 13 - P1-01 (L/legado): linhas gravadas ANTES da correção (valor BRUTO, com troco) não reintroduzem a divergência
+  error: |-
+    o esperado é o que a gaveta de fato tem
+    80 !== 65
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    provarAritmetica (/home/user/brobond-erp/server/test/pdv-caixa-resumo.test.ts:114:10)
+not ok 14 - P1-01 (L): troco maior que o dinheiro recebido é recusado ANTES de qualquer movimento
+  error: 'esperava HTTP 400, mas a operação foi permitida'
+  code: 'ERR_TEST_FAILURE'
+    esperarErro (/home/user/brobond-erp/server/test/_p1util.ts:133:9)
+# tests 14
+# pass 11
+# fail 3
+# skipped 0
+# todo 0
+# duration_ms 489.235562

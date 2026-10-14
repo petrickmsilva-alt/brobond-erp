@@ -1,0 +1,23 @@
+===== ERP-GOLIVE-02 · CI do PR #60 (GitHub Actions · run 38644698250) =====
+# job testes-postgres: PostgreSQL 16.14 real no CI (migrations + npm run test:pg + smoke:pg)
+# job verificar: typecheck, lint, prisma validate (db:validate), build
+
+testes-postgres	pass	2m34s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38644698250/job/116128554019
+verificar	pass	1m16s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38644698250/job/116128553662
+
+--- observação ---
+# O log bruto do job é servido por blob storage do Azure, fora dos hosts acessíveis deste sandbox:
+# a conclusão dos checks (abaixo/abaixo) é a evidência disponível aqui; o job passou inteiro.
+
+--- CI do commit FINAL ed1e260 (run 38645820086) ---
+testes-postgres	pass	2m48s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38645820086/job/116132279612
+verificar	pass	1m58s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38645820086/job/116132279788
+
+--- CI do commit 8dde918 (run 38648014767) — suíte ampliada (22 testes PG / 181 no test:pg) ---
+testes-postgres	pass	2m51s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38648014767/job/116139613663
+verificar	pass	1m57s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38648014767/job/116139613849
+
+--- CI do commit 9296116 (run 38649140331) — mesmo código de teste do 8dde918; commit só de docs/evidências ---
+testes-postgres	pass	2m45s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38649140331/job/116143329659
+verificar	pass	2m4s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38649140331/job/116143329421
+# Observação: os commits depois deste são SOMENTE de documentação/evidência — nenhuma linha de produção ou de teste muda.

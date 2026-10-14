@@ -1,0 +1,8 @@
+===== ERP-GOLIVE-02 · E2E integrado D) DEPOIS =====
+# server/test/golive-02-e2e.test.ts
+
+ok 1 - ERP-GOLIVE-02 E2E: venda presencial → pagamento → caixa → fiscal → autorização → expedição
+# tests 1
+# pass 1
+# fail 0
+# skipped 0

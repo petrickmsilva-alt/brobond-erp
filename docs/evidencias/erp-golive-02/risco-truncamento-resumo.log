@@ -1,0 +1,13 @@
+===== ERP-GOLIVE-02 · R7 · sonda do LIMITE DE LEITURA do resumo do caixa (PostgreSQL real, banco NOVO brobond_pg_trunc2) =====
+# Sonda TEMPORÁRIA (não faz parte da suíte): caixa com 5001 vendas de 10,00 pagas em dinheiro.
+# resumoCaixa lê as vendas com pageSize 5000 e os pagamentos com 10000 (server/src/pdv.ts:191/194/195 —
+# os MESMOS valores já existiam na fonte base 3058c8f, linhas 165/168/169, ou seja: pré-existente à correção).
+# O store aplica LIMIT sem avisar (server/src/pgstore.ts:286 e memdb.ts:217-220): a leitura simplesmente para.
+
+# VERDADE    vendas=5001 total=50010.00 pagamentos=5001 dinheiro=50010.00
+# RESUMO     vendas=5000 total_vendido=50000.00 por_forma.dinheiro=50000.00 esperado_em_dinheiro=50000.00
+# FECHAMENTO contado=50010.00 valor_sistema=50000.00 diferenca=10.00 alerta=Sobra de caixa registrada.
+ok 1 - PROBE: caixa com mais vendas que a janela de leitura (pageSize 5000) trunca o resumo
+# tests 1
+# pass 1
+# fail 0

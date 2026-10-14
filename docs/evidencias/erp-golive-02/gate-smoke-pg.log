@@ -1,0 +1,14 @@
+===== ERP-GOLIVE-02 · gate: npm run smoke:pg (PostgreSQL REAL · banco NOVO brobond_pg_smoke2) =====
+
+PASS  E3.2: cancelar a compra recebida  — status 200 
+PASS  E3.2: contas a pagar canceladas junto com a compra  — canceladas=3
+PASS  E3.2: de-para é navegável pela API  — status 200
+PASS  E3.2: de-para criado com descrição e unidade  — status 201 
+PASS  E3.2: de-para pode ser inativado  — status 200 ativo=false
+PASS  E3.2: XML inválido é recusado com 422  — status 422
+PASS  E3.2: importação sem arquivo é recusada  — status 400
+PASS  sem token → 401  — status 401
+PASS  ticket de MFA não vale como token de acesso → 401  — status 401
+
+126/126 verificações OK
+✅ smoke:pg — smoke E2E aprovado contra PostgreSQL real

@@ -1,0 +1,85 @@
+===== ERP-GOLIVE-02 · inventário dos testes PULADOS em `npm test` (servidor, sem DATABASE_URL) =====
+# Total: 66 skips (relatório: 66 skipped) — todos de arquivos `test/pg-*.test.ts`, que se auto-pulam
+# quando não há banco. Os testes de P1-01/P1-03 em PostgreSQL NÃO estão nesta lista: eles vivem em
+# `server/test/pg/e424-golive-02-postgresql.test.ts`, que é executado por `npm run test:pg` e FALHA (throw)
+# sem `DATABASE_URL` — nunca é pulado em silêncio.
+# Skips cujo nome casa com o escopo do ciclo (pdv|caixa|expedi|fiscal|nfe|e424|golive|troco): 2
+
+## Skips que casam com o vocabulário do ciclo (classificados)
+- `FISCAL em Postgres real: a nota fantasma é impossível` — arquivo `server/test/pg-fiscal.test.ts`.
+  NÃO é teste deste ciclo (é de ERP anterior, sobre nota fantasma) e ele NÃO é pulado onde importa:
+  em `npm run test:pg` roda com banco real (`gate-test-pg.log`: "# skipped 0").
+- `P2 pg: concorrência em duas operações de caixa (abrir o mesmo terminal)` — arquivo
+  `server/test/pg-p2.test.ts`. P2 está FORA do escopo autorizado deste ciclo (Caixa P2 = abertura do
+  mesmo terminal); também roda em `test:pg` com banco real (skipped 0 lá).
+=> Nenhum cenário de P1-01/P1-03 é pulado em `npm test`. As provas PostgreSQL do ciclo estão em
+   `server/test/pg/e424-golive-02-postgresql.test.ts`, que não se auto-pula: sem `DATABASE_URL` ele
+   lança erro (a suíte falha em vez de passar em silêncio).
+
+## Lista completa dos skips (nome do teste)
+- E2 (PG): OP, trilha e apontamento não atravessam empresa (A → B → A)
+- E2 (PG): a 0026 criou CHECK de vocabulário, FKs ordem_id e índice de idempotência
+- E2 (PG): a mesma chave de idempotência na mesma empresa é recusada pelo índice único
+- E2 (PG): apagar a OP preserva a movimentação e solta o vínculo (ON DELETE SET NULL)
+- E2 (PG): duas conclusões concorrentes da mesma OP — exatamente uma vence
+- E2 (PG): o backfill liga a movimentação antiga à OP pelo motivo e deixa o órfão NULL
+- E2 (PG): status fora do vocabulário é recusado pelo banco, não só pela aplicação
+- E3-PG: UNIQUE de convite por fornecedor e de preço por item
+- E3-PG: a empresa B não lê nem decide a cotação da A
+- E3-PG: decidir gera um pedido real com itens, e repetir não duplica
+- E3-PG: decisões simultâneas da mesma cotação geram UM único pedido
+- E3-PG: itens_compra tem as colunas de rateio de custo, com default 0 e CHECK >= 0
+- E3-PG: o índice único parcial de compra_id é a trava final de idempotência
+- E3-PG: os CHECKs de status e critério recusam valor fora da lista
+- ERP-07 em Postgres real: alçada de administrador e guardas de exclusão de empresa
+- ERP-07/P0-06 em Postgres real: criar usuário funciona e a auditoria do convite é transacional
+- FISCAL em Postgres real: a nota fantasma é impossível
+- MULTIEMPRESA em Postgres real: triggers, unicidade por empresa e recorte no SQL
+- P0-02 PostgreSQL: conexão/evento/venda têm chave tenant e matcher não cruza SKU
+- P1 em Postgres real: constraints, unicidades e herança de empresa
+- P2 pg: comissão não se efetiva duas vezes pelo mesmo lançamento
+- P2 pg: concorrência em duas operações de caixa (abrir o mesmo terminal)
+- P2 pg: duas baixas simultâneas no mesmo título — exatamente uma vence
+- P2 pg: linha de extrato repetida na mesma conta bate na trava (FITID)
+- P2 pg: migration 0025 cria tabelas de gateway/webhook/comissões/extrato
+- P2 pg: o mesmo evento de webhook não entra duas vezes (índice único)
+- PgStore consulta usuário pelas colunas de autenticação (convite/redefinição)
+- auditoria multiempresa em Postgres real: carimbo no INSERT e recorte no SQL
+- curva ABC: classificação 80/15/5 persistida em produto_abc com janela De/Até (PG)
+- dashboard (PG): faturamento de 21:00–23:59 BR do último dia entra no mês civil correto
+- dashboard (PG): fronteiras SQL de America/Sao_Paulo são 03:00 UTC (independente da sessão)
+- dashboard (PG): produção de domingo 23:59 BR entra na semana civil da segunda anterior
+- duas saídas concorrentes do mesmo saldo: exatamente uma vence
+- filtros estritos de BI: De/Até inclusivos, canal por grupo e empresa_id (PG)
+- fluxo do convite funciona de ponta a ponta no Postgres (validar + aceitar)
+- fuso do negócio (PG): De/Até e data seguem o dia civil de Brasília, nas fronteiras
+- impostos_ncm: a linha-padrão é única — índice parcial recusa a segunda (PG)
+- motor de margem: lucro bruto materializado nas colunas reais de sales (PG)
+- painel (PG): estoque, produtos e valorização respeitam a empresa ativa
+- pg E3.1 CORRIDA A: dois recebimentos simultâneos do MESMO SKU somam estoque e ponderam custo
+- pg E3.1 CORRIDA B: dois parciais simultâneos do MESMO pedido nunca passam do pedido
+- pg E3.1 CORRIDA C: recebimento e cancelamento simultâneos não deixam estoque fantasma
+- pg E3.1 MULTIEMPRESA: A e B compram o mesmo insumo por preços diferentes (A → B → A)
+- pg E3.1: a 0028 está aplicada — colunas, CHECKs e índices únicos parciais
+- pg E3.1: a MESMA linha não aceita duas entradas no mesmo recebimento (23505)
+- pg E3.1: cancelar a compra estorna estoque e restaura o custo médio
+- pg E3.1: custo_unitario NEGATIVO é recusado pelo CHECK (23514)
+- pg E3.1: dois lotes não cobram o frete duas vezes, e a soma fecha no frete
+- pg E3.1: dois recebimentos com a MESMA idempotency key geram um único recebimento
+- pg E3.1: estorno com estoque já consumido RECUSA e não muda nada
+- pg E3.1: lote mais caro no segundo recebimento move o custo médio
+- pg E3.1: o frete da compra entra no custo efetivo e fecha no centavo
+- pg E3.1: o recebimento grava auditoria com o custo aplicado
+- pg E3.1: receber 40 + 60 de uma vez só é igual a receber 100 direto
+- pg E3.1: transação que falha no meio não deixa estoque nem custo
+- pg E3.2 E2E MULTIEMPRESA: B não enxerga nada da cadeia da A (A → B → A)
+- pg E3.2 E2E: fornecedor → compra → recebimento → estoque → custo → conta a pagar
+- pg E3.2 MULTIEMPRESA: o mesmo código em A e B não colide (escopos separados)
+- pg E3.2: a 0029 está aplicada — colunas e índices do de-para
+- pg E3.2: compra COM vencimento recebe e gera parcelas (regressão do RangeError)
+- pg E3.2: compra de valor zero não gera parcela de R$ 0,00
+- pg E3.2: estornar a compra cancela as contas a pagar
+- pg E3.2: o mesmo código no mesmo fornecedor é recusado pelo UNIQUE (23505)
+- pg E3.2: recebimento PARCIAL não gera conta a pagar; o completo gera
+- pg E3.2: vencimento no dia 31 não vira mês seguinte (31 jan + 1m = 28 fev)
+- runner de migrações: registra, aplica os CHECK de domínio, é idempotente e o banco recusa saldo negativo
