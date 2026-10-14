@@ -3,14 +3,14 @@
 **Data:** 14/10/2026  
 **Escopo:** somente P0-01, P0-02 e P0-03  
 **Baseline analisada:** `5d43c89dbd6df827309491132b705c7c90565419`  
-**Veredito técnico:** **PASS para as correções P0 e gates locais executáveis**. Isso **não é aprovação de Go-Live**: a validação em PostgreSQL real permanece pendente porque este ambiente não fornece `DATABASE_URL` nem ferramentas/servidor PostgreSQL.
+**Veredito técnico:** **PASS para as correções P0, gates locais e gate PostgreSQL do CI**. O PostgreSQL não estava disponível localmente, mas o CI do PR #59 executou migrations, testes PostgreSQL e `smoke:pg` em PostgreSQL 16.14. Isso **não é aprovação de Go-Live**.
 
 ## Resumo executivo
 
 | Bloqueador | Resultado | Evidência principal |
 |---|---|---|
 | **P0-01 — catálogo público cross-tenant** | **PASS** | Tenant derivado do catálogo confiável; consultas de produtos, estoque, clientes e políticas limitadas à empresa; pedidos públicos validam os itens no mesmo escopo. Testes adversariais exercitam catálogo/embed, coleção cruzada, produto de outra empresa, compartilhamento ligado a cliente de outro tenant e política de preço de outro tenant. |
-| **P0-02 — ingestão Commerce e matcher sem escopo de empresa** | **PASS em testes locais; confirmação PostgreSQL pendente** | Empresa + responsável percorrem OAuth, conexão, webhook, evento, matcher, venda, painel e recálculo. Chaves de unicidade passam a incluir empresa. Matcher consulta produtos somente no tenant informado; webhook com identidade de loja ambígua falha fechado. Teste de integração PostgreSQL foi incluído, mas não executado por falta de banco. |
+| **P0-02 — ingestão Commerce e matcher sem escopo de empresa** | **PASS — testes locais e PostgreSQL 16.14 no CI** | Empresa + responsável percorrem OAuth, conexão, webhook, evento, matcher, venda, painel e recálculo. Chaves de unicidade passam a incluir empresa. Matcher consulta produtos somente no tenant informado; webhook com identidade de loja ambígua falha fechado. O teste de integração PostgreSQL passou no job `testes-postgres` do PR #59. |
 | **P0-03 — credencial Correios vulnerável à troca concorrente de contexto** | **PASS** | Removido o contexto mutável global. Cada chamada logística recebe a empresa explicitamente e obtém configuração daquela empresa localmente. Teste paralelo com duas empresas e credenciais sintéticas confirma que cada chamada usa a credencial correspondente, sem rede externa. |
 
 **P1 ALTERADOS: OBRIGATORIAMENTE = NÃO.** Nenhuma alteração de P1/P2/P3, UX-04, Sidebar, Command Palette, CompanySwitcher, layout, design ou módulo novo foi incluída. Não houve homologação de integração externa real.
@@ -29,7 +29,7 @@
 - **Depois:** empresa ativa validada pelo servidor é propagada com o responsável. State OAuth persiste ambos e revalida o vínculo no callback. Conexões, eventos, vendas, painéis e recálculo usam o tenant explícito. As chaves passam a ser `(empresa_id, usuario_id, provider)` para conexão, `(empresa_id, usuario_id, provider, external_event_id)` para evento e `(empresa_id, usuario_id, channel, external_order_id)` para venda. A chave de referência também incorpora empresa e responsável. Todas as buscas de produto do matcher incluem `empresa_id`; SKU/título não servem para inferir tenant.
 - Webhook sem sessão resolve a empresa pela conexão persistida. Se a identidade externa da loja corresponder a mais de uma conexão, o sistema não desempata por ordem: ignora/recusa a resolução para não escolher um tenant arbitrariamente.
 - **Testes locais executados:** mesmo SKU/nome em A e B casa com o produto da empresa chamada; SKU e título exclusivos de B não casam em A; tenant inválido é recusado; entregas simultâneas/repetidas não duplicam venda/itens; o mesmo pedido externo fica independente entre empresas; evento e conexão são consultados/deduplicados com empresa + usuário; identidade de loja ambígua falha fechado.
-- **Teste PostgreSQL adicionado:** `server/test/pg-p0-commerce-tenant.test.ts` cria duas empresas, mesmo responsável e dados externos sintéticos; exercita unicidades concorrentes de conexão/evento/venda, matcher e persistência dos itens. Ele foi **ignorado**, não executado, na ausência de `DATABASE_URL`.
+- **Teste PostgreSQL:** `server/test/pg-p0-commerce-tenant.test.ts` cria duas empresas, mesmo responsável e dados externos sintéticos; exercita unicidades concorrentes de conexão/evento/venda, matcher e persistência dos itens. Foi ignorado na execução local sem `DATABASE_URL`; no CI do PR #59 passou dentro do job `testes-postgres` (PostgreSQL 16.14), que executa `npm run test:pg` sobre `server/test/pg-*.test.ts`.
 
 ### P0-03 — Isolamento de credenciais logísticas
 
@@ -60,9 +60,9 @@ O SQL da migration em `db/`, sua cópia Prisma e `db/schema.sql` passaram por an
 | `npm test` | **PASS** — server: 778 testes, 712 pass, 0 fail, 66 skipped; client: 28 arquivos e 306 testes pass. Um skip é o novo teste PostgreSQL sem `DATABASE_URL`. |
 | `npm run build` | **PASS** — Vite compilou 2.108 módulos. |
 | `npm run smoke` | **PASS** — 126/126 verificações. |
-| `test:pg` / `smoke:pg` | **NÃO EXECUTADOS** — `DATABASE_URL` ausente; `psql`, `postgres`, `pg_ctl`, `initdb` e `pg_isready` não estão disponíveis. O gate PostgreSQL exige ambiente próprio. |
-| `npm run db:validate` | **BLOQUEADO PELO AMBIENTE** — falhou ao baixar o schema engine Prisma por interrupção TLS em `binaries.prisma.sh`; não contar como validação Prisma bem-sucedida. |
-| Análise sintática SQL (`pglast`) | **PASS — somente sintaxe**, sem execução PostgreSQL. |
+| `test:pg` / `smoke:pg` | **Local: NÃO EXECUTADOS** — `DATABASE_URL` ausente; `psql`, `postgres`, `pg_ctl`, `initdb` e `pg_isready` não estão disponíveis. **CI do PR #59: PASS** — PostgreSQL 16.14, `npm run test:pg`, deploy da migration Prisma dual-track e `smoke:pg` completaram com sucesso no job `testes-postgres`. |
+| `npm run db:validate` | **Local bloqueado pelo ambiente** — falhou ao baixar o schema engine Prisma por interrupção TLS em `binaries.prisma.sh`. O passo `prisma validate` do job `verificar` no CI passou. |
+| Análise sintática SQL (`pglast`) | **Local: PASS — somente parsing.** Além disso, o CI executou as migrations e o teste de integração em PostgreSQL real 16.14. |
 
 O smoke executou o servidor em modo demonstração, sem banco. As credenciais do teste logístico são sintéticas e o `fetch` é interceptado; nenhuma integração externa real foi homologada.
 
@@ -78,4 +78,4 @@ Nenhum componente ou código de UI foi alterado; somente o fixture de `client/sr
 
 ## Limite do veredito
 
-O resultado é **PASS das correções P0 e dos gates executáveis localmente**, não uma homologação de banco ou de operação. O teste PostgreSQL adicionado ainda precisa rodar no job PostgreSQL apropriado; migrations e constraints devem ser exercitadas em PostgreSQL real antes de qualquer decisão operacional. **GO-LIVE NÃO DECLARADO.**
+O resultado é **PASS das correções P0, dos gates locais e dos checks PostgreSQL do CI**: o job `verificar` e o job `testes-postgres` do PR #59 passaram; este último executou `test:pg`, migrations e `smoke:pg` em PostgreSQL 16.14. Isso não constitui homologação com dados/serviços de produção nem decisão operacional. Revisar o mapeamento de dados legados antes de rollout. **GO-LIVE NÃO DECLARADO.**
