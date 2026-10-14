@@ -12,3 +12,7 @@ verificar	pass	1m16s	https://github.com/petrickmsilva-alt/brobond-erp/actions/ru
 --- CI do commit FINAL ed1e260 (run 38645820086) ---
 testes-postgres	pass	2m48s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38645820086/job/116132279612
 verificar	pass	1m58s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38645820086/job/116132279788
+
+--- CI do commit 8dde918 (run 38648014767) — suíte ampliada (22 testes PG / 181 no test:pg) ---
+testes-postgres	pass	2m51s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38648014767/job/116139613663
+verificar	pass	1m57s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38648014767/job/116139613849
