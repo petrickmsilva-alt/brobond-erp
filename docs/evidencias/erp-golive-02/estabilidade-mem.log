@@ -1,0 +1,11 @@
+===== ERP-GOLIVE-02 · estabilidade · suítes de memória (3 rodadas consecutivas cada) =====
+
+pdv-caixa-resumo         rodada 1: # tests 13 # pass 13 # fail 0 
+pdv-caixa-resumo         rodada 2: # tests 13 # pass 13 # fail 0 
+pdv-caixa-resumo         rodada 3: # tests 13 # pass 13 # fail 0 
+fiscal-expedicao         rodada 1: # tests 12 # pass 12 # fail 0 
+fiscal-expedicao         rodada 2: # tests 12 # pass 12 # fail 0 
+fiscal-expedicao         rodada 3: # tests 12 # pass 12 # fail 0 
+golive-02-e2e            rodada 1: # tests 1 # pass 1 # fail 0 
+golive-02-e2e            rodada 2: # tests 1 # pass 1 # fail 0 
+golive-02-e2e            rodada 3: # tests 1 # pass 1 # fail 0 

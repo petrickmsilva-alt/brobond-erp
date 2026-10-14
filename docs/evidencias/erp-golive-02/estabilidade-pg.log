@@ -1,0 +1,15 @@
+===== ERP-GOLIVE-02 · estabilidade · PostgreSQL REAL (mesmo banco brobond_pg_stab, 3 rodadas consecutivas) =====
+# arquivo: server/test/pg/e424-golive-02-postgresql.test.ts (19 testes, inclui as corridas)
+
+--- rodada 1 ---
+# tests 19
+# pass 19
+# fail 0
+--- rodada 2 ---
+# tests 19
+# pass 19
+# fail 0
+--- rodada 3 ---
+# tests 19
+# pass 19
+# fail 0
