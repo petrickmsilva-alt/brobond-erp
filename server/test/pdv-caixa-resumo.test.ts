@@ -448,6 +448,55 @@ test('P1-01 (L): venda de R$ 25,00 paga com R$ 30,00 (troco de R$ 15,00) — o r
   assert.equal(num(lancamentos.rows[0].valor), 25, 'o financeiro reconhece 25,00 — não 30,00 de dinheiro entregue');
 });
 
+test('P1-01 (L/legado): linhas gravadas ANTES da correção (valor BRUTO, com troco) não reintroduzem a divergência', async () => {
+  // O comentário de `dinheiroNaGaveta` afirma que a regra de leitura mantém
+  // AUDITÁVEIS as linhas gravadas pelo código antigo — quando a coluna `valor`
+  // recebia o dinheiro ENTREGUE, incluindo o troco. Esta é a prova: o cenário
+  // exato da auditoria (venda de 25,00 paga com 30,00 em dinheiro + 10,00 no
+  // cartão) gravado do jeito ANTIGO continua respondendo 65,00 — nunca 80,00.
+  const p = await produto(1, 10, 25);
+  const f: Fixture = { ator: ADMIN, caixaId: await caixa(1, 50), produtoId: p.produtoId, tamanhoId: p.tamanhoId };
+  const s = getStore();
+
+  // Venda + pagamentos com a semântica ANTIGA: dinheiro 30 entregue (o troco
+  // de 15 não aparece em lugar nenhum, como no banco legado).
+  const legada = await s.insert(RESOURCES.vendas, {
+    empresa_id: 1,
+    status: 'faturada',
+    canal_venda: 'balcao',
+    pdv_caixa_id: f.caixaId,
+    data: new Date().toISOString().slice(0, 10),
+    total: 25,
+  });
+  await s.insert(RESOURCES.pdv_pagamentos, { empresa_id: 1, venda_id: Number(legada.id), caixa_id: f.caixaId, forma: 'dinheiro', valor: 30, parcelas: null });
+  await s.insert(RESOURCES.pdv_pagamentos, { empresa_id: 1, venda_id: Number(legada.id), caixa_id: f.caixaId, forma: 'cartao_credito', valor: 10, parcelas: null });
+
+  let r = await provarAritmetica(f, 50, 65);
+  assert.equal(num(r.por_forma.dinheiro), 15, 'a leitura normaliza a linha legada: só 15,00 ficaram na gaveta');
+  assert.equal(num(r.por_forma.cartao_credito), 10);
+  assert.equal(num(r.total_vendido), 25, 'vendido = a venda, não o bruto entregue');
+
+  // A linha NOVA convive com a legada e não é abatida duas vezes: o pagamento
+  // corrigido (15,00 em dinheiro + 10,00 no cartão) já é líquido e continua
+  // valendo 15,00 na gaveta.
+  const corrigida = await s.insert(RESOURCES.vendas, {
+    empresa_id: 1,
+    status: 'faturada',
+    canal_venda: 'balcao',
+    pdv_caixa_id: f.caixaId,
+    data: new Date().toISOString().slice(0, 10),
+    total: 25,
+  });
+  await s.insert(RESOURCES.pdv_pagamentos, { empresa_id: 1, venda_id: Number(corrigida.id), caixa_id: f.caixaId, forma: 'dinheiro', valor: 15, parcelas: null });
+  await s.insert(RESOURCES.pdv_pagamentos, { empresa_id: 1, venda_id: Number(corrigida.id), caixa_id: f.caixaId, forma: 'cartao_credito', valor: 10, parcelas: null });
+
+  r = await provarAritmetica(f, 50, 80);
+  assert.equal(num(r.por_forma.dinheiro), 30, '15,00 da venda legada + 15,00 da venda corrigida');
+  assert.equal(num(r.por_forma.cartao_credito), 20);
+  assert.equal(num(r.total_vendido), 50, 'duas vendas de 25,00');
+  assert.equal(num(r.quantidade_vendas), 2);
+});
+
 test('P1-01 (L): troco maior que o dinheiro recebido é recusado ANTES de qualquer movimento', async () => {
   const p = await produto(1, 10, 25);
   const f: Fixture = { ator: ADMIN, caixaId: await caixa(1, 0), produtoId: p.produtoId, tamanhoId: p.tamanhoId };

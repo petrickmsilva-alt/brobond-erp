@@ -1,7 +1,7 @@
-===== ERP-GOLIVE-02 · gate: npm test (server 804 + client 306) =====
-# tests 804
+===== ERP-GOLIVE-02 · gate: npm test (server + client) =====
+# tests 806
 # suites 53
-# pass 738
+# pass 740
 # fail 0
 # cancelled 0
 # skipped 66

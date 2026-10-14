@@ -459,6 +459,34 @@ test('P1-03 (A/B): status da venda revertido à mão NÃO refatura — o carimbo
 // I) Expedição repetida
 // ---------------------------------------------------------------------------
 
+test('P1-03 (N): venda ENTREGUE — com documento autorizado expede; sem documento continua bloqueada', async () => {
+  // `entregue` é o outro status terminal do faturamento. A proteção tem que
+  // valer IGUAL: com documento autorizado a mercadoria sai (uma única baixa);
+  // sem documento autorizado o galpão continua fechado.
+  // (1) COM documento autorizado
+  const comNota = await cenario(1, 1);
+  const saldoAntes = await saldo(comNota);
+  await autorizar(comNota);
+  assert.equal(await saldo(comNota), saldoAntes - 1, 'a autorização baixou uma vez');
+  await getStore().update(RESOURCES.vendas, comNota.vendaId, { status: 'entregue' });
+
+  await separar(comNota);
+  await conferir(comNota);
+  await embalar(comNota);
+  const expedida = await expedir(comNota);
+  assert.equal(expedida.etapa, 'expedida');
+  assert.equal(await saldo(comNota), saldoAntes - 1, 'UMA baixa: entregue com nota não refatura');
+  assert.equal((await movimentosDeEstoque(comNota.vendaId)).rows.length, 1);
+
+  // (2) SEM documento autorizado — o mesmo status NÃO abre o galpão
+  const semNota = await cenario(1, 1);
+  const saldoIntacto = await saldo(semNota);
+  await getStore().update(RESOURCES.vendas, semNota.vendaId, { status: 'entregue' });
+  await esperarErro(() => separar(semNota), 409, /já foi faturado/);
+  assert.equal(await saldo(semNota), saldoIntacto, 'nada saiu do estoque');
+  assert.equal(await etapaDe(semNota.vendaId), 'pendente', 'a etapa não avançou');
+});
+
 test('P1-03 (I): expedição repetida não duplica estoque nem evento', async () => {
   const c = await cenario(1, 2);
   const antes = await saldo(c);

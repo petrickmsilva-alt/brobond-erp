@@ -1,117 +1,39 @@
-=== ERP-GOLIVE-02 · P1-01 · EVIDÊNCIA ANTES (código da baseline 3058c8f, testes novos) ===
-=== arquivo: server/test/pdv-caixa-resumo.test.ts · comando: node --import tsx --test test/pdv-caixa-resumo.test.ts ===
-TAP version 13
-# ⚠️  JWT_SECRET não definido — usando valor padrão (NÃO use em produção).
-# Subtest: P1-01 (A): venda em dinheiro sem troco — movimento = total, resumo bate
+===== ERP-GOLIVE-02 · P1-01 C) ANTES da correção (mesma suíte de D, 14 testes) =====
+# cd server && npm exec -- node --import tsx --test test/pdv-caixa-resumo.test.ts
+# Fonte revertida ao commit base 3058c8f: `git checkout 3058c8f -- server/src/pdv.ts server/src/expedicao.ts`; restaurada com `git restore --source=HEAD --staged --worktree` (md5 bad5b6d0… conferido).
+
 ok 1 - P1-01 (A): venda em dinheiro sem troco — movimento = total, resumo bate
-  ---
-  duration_ms: 15.726186
-  type: 'test'
-  ...
-# Subtest: P1-01 (B): venda no cartão não movimenta a gaveta
 ok 2 - P1-01 (B): venda no cartão não movimenta a gaveta
-  ---
-  duration_ms: 4.178327
-  type: 'test'
-  ...
-# Subtest: P1-01 (C): venda com múltiplas formas — cada movimento entra UMA vez
 ok 3 - P1-01 (C): venda com múltiplas formas — cada movimento entra UMA vez
-  ---
-  duration_ms: 4.246157
-  type: 'test'
-  ...
-# Subtest: P1-01 (D): o resumo é derivado dos movimentos da venda + gaveta (venda a venda)
 ok 4 - P1-01 (D): o resumo é derivado dos movimentos da venda + gaveta (venda a venda)
-  ---
-  duration_ms: 8.051802
-  type: 'test'
-  ...
-# Subtest: P1-01 (E/F): suprimento e sangria movem a gaveta sem tocar no vendido
 ok 5 - P1-01 (E/F): suprimento e sangria movem a gaveta sem tocar no vendido
-  ---
-  duration_ms: 2.639259
-  type: 'test'
-  ...
-# Subtest: P1-01 (G): venda cancelada sai do resumo e o estoque volta UMA vez
 ok 6 - P1-01 (G): venda cancelada sai do resumo e o estoque volta UMA vez
-  ---
-  duration_ms: 6.670027
-  type: 'test'
-  ...
-# Subtest: P1-01 (H): fechamento grava o esperado dos movimentos e a diferença contada
 ok 7 - P1-01 (H): fechamento grava o esperado dos movimentos e a diferença contada
-  ---
-  duration_ms: 6.783246
-  type: 'test'
-  ...
-# Subtest: P1-01 (I): duas vendas simultâneas não duplicam movimento nem estoque
 ok 8 - P1-01 (I): duas vendas simultâneas não duplicam movimento nem estoque
-  ---
-  duration_ms: 5.680414
-  type: 'test'
-  ...
-# Subtest: P1-01 (I): dois fechamentos simultâneos — um vence, o outro é recusado
 ok 9 - P1-01 (I): dois fechamentos simultâneos — um vence, o outro é recusado
-  ---
-  duration_ms: 6.01352
-  type: 'test'
-  ...
-# Subtest: P1-01 (J): ler o resumo não move dinheiro e repetir a venda não duplica movimento
 ok 10 - P1-01 (J): ler o resumo não move dinheiro e repetir a venda não duplica movimento
-  ---
-  duration_ms: 8.527075
-  type: 'test'
-  ...
-# Subtest: P1-01 (K): caixas de empresas diferentes não se misturam (e B não opera o caixa de A)
 ok 11 - P1-01 (K): caixas de empresas diferentes não se misturam (e B não opera o caixa de A)
-  ---
-  duration_ms: 17.94687
-  type: 'test'
-  ...
-# Subtest: P1-01 (L): venda de R$ 25,00 paga com R$ 30,00 (troco de R$ 15,00) — o resumo não superestima R$ 15,00
 not ok 12 - P1-01 (L): venda de R$ 25,00 paga com R$ 30,00 (troco de R$ 15,00) — o resumo não superestima R$ 15,00
-  ---
-  duration_ms: 6.214419
-  type: 'test'
-  location: '/home/user/brobond-erp/server/test/pdv-caixa-resumo.test.ts:1:14694'
-  failureType: 'testCodeFailure'
   error: |-
     o esperado é o que a gaveta de fato tem
-    
     80 !== 65
-    
   code: 'ERR_ASSERTION'
   name: 'AssertionError'
-  expected: 65
-  actual: 80
-  operator: 'strictEqual'
-  stack: |-
     provarAritmetica (/home/user/brobond-erp/server/test/pdv-caixa-resumo.test.ts:114:10)
-    async TestContext.<anonymous> (/home/user/brobond-erp/server/test/pdv-caixa-resumo.test.ts:423:13)
-    async Test.run (node:internal/test_runner/test:1054:7)
-    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
-  ...
-# Subtest: P1-01 (L): troco maior que o dinheiro recebido é recusado ANTES de qualquer movimento
-not ok 13 - P1-01 (L): troco maior que o dinheiro recebido é recusado ANTES de qualquer movimento
-  ---
-  duration_ms: 2.399388
-  type: 'test'
-  location: '/home/user/brobond-erp/server/test/pdv-caixa-resumo.test.ts:1:16653'
-  failureType: 'testCodeFailure'
+not ok 13 - P1-01 (L/legado): linhas gravadas ANTES da correção (valor BRUTO, com troco) não reintroduzem a divergência
+  error: |-
+    o esperado é o que a gaveta de fato tem
+    80 !== 65
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+    provarAritmetica (/home/user/brobond-erp/server/test/pdv-caixa-resumo.test.ts:114:10)
+not ok 14 - P1-01 (L): troco maior que o dinheiro recebido é recusado ANTES de qualquer movimento
   error: 'esperava HTTP 400, mas a operação foi permitida'
   code: 'ERR_TEST_FAILURE'
-  stack: |-
     esperarErro (/home/user/brobond-erp/server/test/_p1util.ts:133:9)
-    async TestContext.<anonymous> (/home/user/brobond-erp/server/test/pdv-caixa-resumo.test.ts:458:3)
-    async Test.run (node:internal/test_runner/test:1054:7)
-    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
-  ...
-1..13
-# tests 13
-# suites 0
+# tests 14
 # pass 11
-# fail 2
-# cancelled 0
+# fail 3
 # skipped 0
 # todo 0
-# duration_ms 641.842401
+# duration_ms 489.235562

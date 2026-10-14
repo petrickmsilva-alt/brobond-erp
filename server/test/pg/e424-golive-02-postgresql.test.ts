@@ -150,12 +150,33 @@ async function saldoDe(t: Tenant, p: Produto): Promise<number> {
   return Number(r.rows[0].n);
 }
 
-/** Cliente PJ com endereço: exigido pela NF-e (modelo 55). */
+/**
+ * CNPJ único por cliente, com dígitos verificadores VÁLIDOS.
+ *
+ * `uq_clientes_documento_empresa` é por empresa: dois clientes fiscais no MESMO
+ * tenant não podem repetir documento. Um CNPJ fixo funcionava enquanto cada
+ * cenário criava um cliente só; assim que um teste precisa de dois pedidos na
+ * mesma empresa, o fixo colide (23505).
+ */
+function cnpjUnico(): string {
+  const raiz = Array.from({ length: 8 }, () => Math.floor(Math.random() * 10)).concat([0, 0, 0, 1]);
+  const dv = (nums: number[]): number => {
+    const pesos = nums.length === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+    const soma = nums.reduce((acc, n, i) => acc + n * pesos[i], 0);
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  };
+  const d1 = dv(raiz);
+  const d2 = dv([...raiz, d1]);
+  return [...raiz, d1, d2].join('');
+}
+
+/** Cliente PJ com endereço: exigido pela NF-e. Documento único por cliente. */
 async function novoClienteFiscal(t: Tenant): Promise<number> {
   const r = await query(
     `INSERT INTO clientes (empresa_id, nome, pessoa, cnpj_cpf, indicador_ie, rg_ie, cep, logradouro, numero, bairro, cidade, codigo_municipio, uf, ativo)
-     VALUES ($1, $2, 'pj', '19131243000197', '1', '111222333', '20040002', 'Av. Rio Branco', '100', 'Centro', 'Rio de Janeiro', '3304557', 'RJ', true) RETURNING id`,
-    [t.empresaId, unico('Cliente E424')]
+     VALUES ($1, $2, 'pj', $3, '1', '111222333', '20040002', 'Av. Rio Branco', '100', 'Centro', 'Rio de Janeiro', '3304557', 'RJ', true) RETURNING id`,
+    [t.empresaId, unico('Cliente E424'), cnpjUnico()]
   );
   return Number(r.rows[0].id);
 }
@@ -712,6 +733,90 @@ test('P1-03 PG: multiempresa — B não opera a expedição de A (e a dele funci
   const expedidaB = await expedirFluxo(b, pb.vendaId, [pb.codigo]);
   assert.equal(expedidaB.etapa, 'expedida');
   assert.equal(String((await query(`SELECT expedicao_etapa FROM vendas WHERE id = $1`, [pa.vendaId])).rows[0].expedicao_etapa ?? 'pendente'), 'pendente');
+});
+
+test('P1-01 PG: linhas LEGADAS (valor bruto, com troco) não reintroduzem a divergência', async () => {
+  // O banco real de quem rodou a versão antiga tem `pdv_pagamentos.valor` com o
+  // dinheiro ENTREGUE. A leitura normaliza: a gaveta continua 65,00 — nunca 80,00.
+  const t = await novoTenant();
+  const caixa = await abrirCaixa(t, 50, 'CAIXA-PG-LEG');
+  const p = await produtoComSaldo(t, 25, 10);
+
+  const venda = await query(
+    `INSERT INTO vendas (empresa_id, status, canal_venda, pdv_caixa_id, data, total)
+     VALUES ($1, 'faturada', 'balcao', $2, CURRENT_DATE, 25) RETURNING id`,
+    [t.empresaId, Number(caixa.id)]
+  );
+  const vendaId = Number(venda.rows[0].id);
+  // Semântica ANTIGA: 30,00 entregues em dinheiro (troco de 15,00 invisível) + 10,00 no cartão.
+  await query(
+    `INSERT INTO pdv_pagamentos (empresa_id, venda_id, caixa_id, forma, valor) VALUES
+       ($1, $2, $3, 'dinheiro', 30), ($1, $2, $3, 'cartao_credito', 10)`,
+    [t.empresaId, vendaId, Number(caixa.id)]
+  );
+  const bruto = await query(`SELECT COALESCE(SUM(valor), 0)::numeric AS s FROM pdv_pagamentos WHERE venda_id = $1`, [vendaId]);
+  assert.equal(Number(bruto.rows[0].s), 40, 'no banco continua o valor bruto legado de 40,00');
+
+  const r = await resumoDe(t, caixa.id);
+  assert.equal(Number(r.por_forma.dinheiro), 15, 'a leitura normaliza para o que ficou na gaveta');
+  assert.equal(Number(r.por_forma.cartao_credito), 10);
+  assert.equal(Number(r.total_vendido), 25, 'vendido = a venda, não o bruto');
+  assert.equal(Number(r.esperado_em_dinheiro), 65, '50 de abertura + 15 que ficaram');
+
+  // Fechar contando a gaveta real não gera divergência.
+  const fechamento = await chamar(pdv.fecharCaixa, reqDe({ valor_fechamento: 65 }, { user: t.ator, params: { id: caixa.id } }));
+  assert.equal(Number(fechamento.diferenca), 0);
+  assert.equal(Number(fechamento.caixa.valor_sistema), 65);
+  assert.equal(Number(fechamento.resumo.total_vendido), 25);
+});
+
+test('P1-03 PG: venda ENTREGUE — com documento autorizado expede, sem documento é bloqueada', async () => {
+  const t = await novoTenant();
+  await habilitarFiscal(t, AUTORIZADOR);
+
+  // (1) COM documento autorizado: o outro status terminal também sai do galpão, uma única baixa.
+  const comNota = await pedidoAberto(t, 100, 1);
+  await emitir(t, comNota.vendaId);
+  await query(`UPDATE vendas SET status = 'entregue' WHERE id = $1`, [comNota.vendaId]);
+  const saldoNota = await saldoDe(t, comNota);
+  const movNota = await contar('movimentacoes', 'venda_id = $1', [comNota.vendaId]);
+
+  const expedida = await expedirFluxo(t, comNota.vendaId, [comNota.codigo]);
+  assert.equal(expedida.etapa, 'expedida');
+  assert.equal(await saldoDe(t, comNota), saldoNota, 'entregue com nota não refatura');
+  assert.equal(await contar('movimentacoes', 'venda_id = $1', [comNota.vendaId]), movNota);
+  assert.equal(await contar('expedicao_eventos', "venda_id = $1 AND etapa = 'expedida'", [comNota.vendaId]), 1);
+
+  // (2) SEM documento autorizado: `entregue` não abre o galpão.
+  const semNota = await pedidoAberto(t, 100, 1);
+  await query(`UPDATE vendas SET status = 'entregue' WHERE id = $1`, [semNota.vendaId]);
+  await esperarErro(() => exp.separarPedido(reqDe({}, { user: t.ator, params: { id: semNota.vendaId } }), resFake().res), 409, /já foi faturado/);
+  assert.equal(await saldoDe(t, semNota), 50, 'nada saiu do estoque');
+  assert.equal(await contar('movimentacoes', 'venda_id = $1', [semNota.vendaId]), 0);
+  assert.equal(String((await query(`SELECT expedicao_etapa FROM vendas WHERE id = $1`, [semNota.vendaId])).rows[0].expedicao_etapa ?? 'pendente'), 'pendente');
+});
+
+test('P1-03 PG: NFC-e (modelo 65) autorizada também libera a expedição — contrato atual', async () => {
+  // CONTRATO ATUAL (documentado, não alterado neste ciclo): a trava da
+  // expedição pergunta pelo documento AUTORIZADO, sem restringir o modelo.
+  // Uma venda de balcão com NFC-e autorizada pode, portanto, passar por
+  // separação → conferência → embalagem → expedição. Restringir isso ao
+  // modelo 55 é decisão de produto — fora do escopo desta correção.
+  const t = await novoTenant();
+  await habilitarFiscal(t, AUTORIZADOR);
+  const c = await pedidoAberto(t, 100, 1);
+
+  const nota = await emitir(t, c.vendaId, '65');
+  assert.equal(nota.status, 'autorizado');
+  const doc = await query(`SELECT modelo, status, estoque_baixado_em FROM documentos_fiscais WHERE venda_id = $1`, [c.vendaId]);
+  assert.equal(String(doc.rows[0].modelo), '65');
+  assert.ok(doc.rows[0].estoque_baixado_em, 'o efeito econômico foi aplicado pela autorização');
+  const saldoNota = await saldoDe(t, c);
+
+  const expedida = await expedirFluxo(t, c.vendaId, [c.codigo]);
+  assert.equal(expedida.etapa, 'expedida');
+  assert.equal(await saldoDe(t, c), saldoNota, 'uma única baixa');
+  assert.equal(await contar('movimentacoes', 'venda_id = $1', [c.vendaId]), 1);
 });
 
 test('P1-01+P1-03 PG: a cadeia inteira de A não aparece em B (caixa, estoque, fiscal, expedição)', async () => {

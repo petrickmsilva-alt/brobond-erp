@@ -8,13 +8,14 @@ ok 3 - P1-03 (C): documento REJEITADO bloqueia a expedição
 ok 4 - P1-03 (D): documento CANCELADO bloqueia a expedição
 ok 5 - P1-03: venda faturada SEM documento fiscal continua bloqueada (proteção preservada)
 ok 6 - P1-03 (A/B): status da venda revertido à mão NÃO refatura — o carimbo do documento manda
-ok 7 - P1-03 (I): expedição repetida não duplica estoque nem evento
-ok 8 - P1-03 (I): autorização repetida devolve o MESMO documento e não refatura
-ok 9 - P1-03 (J): duas expedições simultâneas — nunca duas baixas (memória)
-ok 10 - P1-03 (K): conferência divergente aborta sem baixa e sem mudar a etapa
-ok 11 - P1-03 (K): expedir sem embalar e embalar sem conferir são recusados sem efeito
-ok 12 - P1-03 (L): empresa B não opera a expedição de A (e a dela funciona)
-# tests 12
-# pass 12
+ok 7 - P1-03 (N): venda ENTREGUE — com documento autorizado expede; sem documento continua bloqueada
+ok 8 - P1-03 (I): expedição repetida não duplica estoque nem evento
+ok 9 - P1-03 (I): autorização repetida devolve o MESMO documento e não refatura
+ok 10 - P1-03 (J): duas expedições simultâneas — nunca duas baixas (memória)
+ok 11 - P1-03 (K): conferência divergente aborta sem baixa e sem mudar a etapa
+ok 12 - P1-03 (K): expedir sem embalar e embalar sem conferir são recusados sem efeito
+ok 13 - P1-03 (L): empresa B não opera a expedição de A (e a dela funciona)
+# tests 13
+# pass 13
 # fail 0
 # skipped 0

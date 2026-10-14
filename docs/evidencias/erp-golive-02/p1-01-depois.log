@@ -14,8 +14,9 @@ ok 9 - P1-01 (I): dois fechamentos simultâneos — um vence, o outro é recusad
 ok 10 - P1-01 (J): ler o resumo não move dinheiro e repetir a venda não duplica movimento
 ok 11 - P1-01 (K): caixas de empresas diferentes não se misturam (e B não opera o caixa de A)
 ok 12 - P1-01 (L): venda de R$ 25,00 paga com R$ 30,00 (troco de R$ 15,00) — o resumo não superestima R$ 15,00
-ok 13 - P1-01 (L): troco maior que o dinheiro recebido é recusado ANTES de qualquer movimento
-# tests 13
-# pass 13
+ok 13 - P1-01 (L/legado): linhas gravadas ANTES da correção (valor BRUTO, com troco) não reintroduzem a divergência
+ok 14 - P1-01 (L): troco maior que o dinheiro recebido é recusado ANTES de qualquer movimento
+# tests 14
+# pass 14
 # fail 0
 # skipped 0

@@ -41,8 +41,8 @@ Reprodução executada (testes escritos ANTES da correção, rodados contra o c�
 
 | Evidência | Comando | Resultado ANTES |
 |---|---|---|
-| `docs/evidencias/erp-golive-02/p1-01-antes.log` | `cd server && npm exec -- node --import tsx --test test/pdv-caixa-resumo.test.ts`¹ | **13 testes · 11 pass · 2 fail** — `L: 80 !== 65` |
-| `docs/evidencias/erp-golive-02/pg-antes.log` | `DATABASE_URL=… npm exec -- node --import tsx --test test/pg/e424-golive-02-postgresql.test.ts` (fonte revertida por `git stash`) | **19 testes · 3 pass · 16 fail** — `o movimento de dinheiro é LÍQUIDO de troco · 30 !== 15` |
+| `docs/evidencias/erp-golive-02/p1-01-antes.log` | `cd server && npm exec -- node --import tsx --test test/pdv-caixa-resumo.test.ts`¹ | **14 testes · 11 pass · 3 fail** — `L: 80 !== 65`, `L/legado: 30 !== 15`, troco inválido aceito |
+| `docs/evidencias/erp-golive-02/pg-antes.log` | `DATABASE_URL=… npm exec -- node --import tsx --test test/pg/e424-golive-02-postgresql.test.ts` (fonte revertida: `git checkout 3058c8f -- server/src/{pdv,expedicao}.ts`) | **22 testes · 3 pass · 19 fail** — `o movimento de dinheiro é LÍQUIDO de troco · 30 !== 15`; `linhas LEGADAS… 30 !== 15`; `NFC-e… “Este pedido já foi faturado”` |
 
 ¹ caminho real: `server/test/pdv-caixa-resumo.test.ts` (o log traz o comando executado).
 
@@ -85,14 +85,14 @@ o **mesmo** ledger (`pdv_pagamentos` + `pdv_caixa_movimentos`) passou a guardar 
 
 | Evidência | Resultado DEPOIS |
 |---|---|
-| `docs/evidencias/erp-golive-02/p1-01-depois.log` (13 testes) | **13/13 pass**, 0 fail |
-| `docs/evidencias/erp-golive-02/pg-depois.log` (19 testes, PostgreSQL real, banco novo `brobond_pg_after2`) | **19/19 pass**, 0 fail/skip |
+| `docs/evidencias/erp-golive-02/p1-01-depois.log` (14 testes) | **14/14 pass**, 0 fail |
+| `docs/evidencias/erp-golive-02/pg-depois.log` (22 testes, PostgreSQL real, banco novo `brobond_pg_after4`) | **22/22 pass**, 0 fail/skip |
 | `docs/evidencias/erp-golive-02/e2e-depois.log` | **1/1 pass** |
 | `docs/evidencias/erp-golive-02/auditoria-crud-probe.log` | sonda adversarial do CRUD genérico (§18) |
 | `docs/evidencias/erp-golive-02/estabilidade-mem.log` | 3 rodadas consecutivas verdes por suíte |
-| `docs/evidencias/erp-golive-02/estabilidade-pg.log` | PG 19/19 em 3 rodadas consecutivas (mesmo banco) |
+| `docs/evidencias/erp-golive-02/estabilidade-pg.log` | PG 22/22 em 3 rodadas consecutivas (mesmo banco) |
 
-Cenários cobertos por `server/test/pdv-caixa-resumo.test.ts` (13 testes, A–L exigidos):
+Cenários cobertos por `server/test/pdv-caixa-resumo.test.ts` (14 testes, A–L exigidos):
 
 - **(A)** dinheiro sem troco: movimento = total, resumo = abertura + movimento;
 - **(B)** cartão: nada entra na gaveta, forma aparece no `por_forma`;
@@ -104,8 +104,10 @@ Cenários cobertos por `server/test/pdv-caixa-resumo.test.ts` (13 testes, A–L 
 - **(I)** duas vendas simultâneas e dois fechamentos simultâneos (um vence, o outro 409);
 - **(J)** ler o resumo não move dinheiro; repetir a venda não duplica movimento;
 - **(K)** caixas de empresas diferentes não se misturam e B não opera o caixa de A;
-- **(L)** **o cenário exato dos R$ 15,00** (25,00 pagos com 30,00 em dinheiro + 10,00 no cartão) e a recusa
-  de troco maior que o dinheiro recebido.
+- **(L)** **o cenário exato dos R$ 15,00** (25,00 pagos com 30,00 em dinheiro + 10,00 no cartão), a recusa
+  de troco maior que o dinheiro recebido, e a **linha LEGADA** (gravada com o valor BRUTO, como o código
+  antigo gravava) lida de volta: a gaveta continua 65,00 — a regra de leitura normaliza o histórico sem
+  exigir backfill, e uma linha NOVA (já líquida) na mesma gaveta não é abatida duas vezes.
 
 Provas aritméticas exigidas, afirmadas em todos esses cenários:
 `saldo inicial + entradas − saídas = saldo final` **e** `saldo calculado = soma dos movimentos válidos`.
@@ -119,8 +121,8 @@ Reprodução executada contra o código base:
 
 | Evidência | Resultado ANTES |
 |---|---|
-| `docs/evidencias/erp-golive-02/p1-03-antes.log` (12 testes) | **3 pass · 9 fail** |
-| `docs/evidencias/erp-golive-02/pg-antes.log` (19 testes, PostgreSQL real) | **3 pass · 16 fail** |
+| `docs/evidencias/erp-golive-02/p1-03-antes.log` (13 testes) | **3 pass · 10 fail** |
+| `docs/evidencias/erp-golive-02/pg-antes.log` (22 testes, PostgreSQL real) | **3 pass · 19 fail** |
 | `docs/evidencias/erp-golive-02/e2e-antes.log` | **0/1** — `o movimento de caixa vale o líquido (250 − 50 de troco) · 250 !== 200` |
 
 Mensagem do defeito, literal:
@@ -175,13 +177,13 @@ certo, com a fonte de verdade do documento fiscal.
 
 | Evidência | Resultado DEPOIS |
 |---|---|
-| `docs/evidencias/erp-golive-02/p1-03-depois.log` (12 testes) | **12/12 pass** |
-| `docs/evidencias/erp-golive-02/pg-depois.log` (PostgreSQL real) | **19/19 pass** |
+| `docs/evidencias/erp-golive-02/p1-03-depois.log` (13 testes) | **13/13 pass** |
+| `docs/evidencias/erp-golive-02/pg-depois.log` (PostgreSQL real) | **22/22 pass** |
 | `docs/evidencias/erp-golive-02/e2e-depois.log` | **1/1 pass** |
 | `docs/evidencias/erp-golive-02/estabilidade-*.log` | 3 rodadas consecutivas verdes (memória e PostgreSQL) |
 
-Cenários cobertos por `server/test/fiscal-expedicao.test.ts` (12 testes) e por
-`server/test/pg/e424-golive-02-postgresql.test.ts` (19 testes, PostgreSQL real):
+Cenários cobertos por `server/test/fiscal-expedicao.test.ts` (13 testes) e por
+`server/test/pg/e424-golive-02-postgresql.test.ts` (22 testes, PostgreSQL real):
 
 - **(A/M)** NF autorizada percorre as quatro etapas e expede — sem duplicar baixa;
 - **(B)** documento **PENDENTE** bloqueia (409) — nada muda no banco (sem baixa, sem evento, etapa preservada);
@@ -193,7 +195,11 @@ Cenários cobertos por `server/test/fiscal-expedicao.test.ts` (12 testes) e por
 - **(I)** autorização repetida devolve o MESMO documento; expedição repetida não duplica estoque/evento;
 - **(K)** conferência divergente aborta sem baixa e sem mudar a etapa; expedir sem embalar e embalar sem conferir
   são recusados sem efeito;
-- **(L)** empresa B não opera a expedição de A (404) e a própria cadeia de B funciona.
+- **(L)** empresa B não opera a expedição de A (404) e a própria cadeia de B funciona;
+- **(N)** venda **ENTREGUE** (o outro status terminal do faturamento): com documento autorizado expede com
+  **uma** baixa; **sem** documento autorizado continua bloqueada (409, nada sai do estoque);
+- **modelo do documento (contrato atual, pinado por teste):** a trava pergunta pelo documento **autorizado**
+  sem restringir o modelo — uma **NFC-e (65)** autorizada também libera a expedição (§18/R6).
 
 ## 11. PostgreSQL real
 
@@ -201,11 +207,11 @@ Todos os números abaixo foram obtidos em **PostgreSQL 16.14 real** (`server_ver
 
 | Execução | Banco | Resultado |
 |---|---|---|
-| `pg-antes.log` (fonte base, testes finais) | NOVO `brobond_pg_before3` | 19 testes · **3 pass · 16 fail** |
-| `pg-depois.log` (fonte corrigida) | NOVO `brobond_pg_after2` | 19 testes · **19 pass · 0 fail** |
-| `gate-test-pg.log` (`npm run test:pg`, suíte inteira) | NOVO `brobond_pg_gate9` | **178 testes · 178 pass · 0 fail · 0 skip · 0 todo** — “ERP-03 GATE PASS: 178 testes PostgreSQL reais; 0 fail/skip/todo.” (116.746 ms) |
+| `pg-antes.log` (fonte base, testes finais) | NOVO `brobond_pg_before4` | 22 testes · **3 pass · 19 fail** |
+| `pg-depois.log` (fonte corrigida) | NOVO `brobond_pg_after4` | 22 testes · **22 pass · 0 fail** |
+| `gate-test-pg.log` (`npm run test:pg`, suíte inteira) | NOVO `brobond_pg_gate10` | **181 testes · 181 pass · 0 fail · 0 skip · 0 todo** — “ERP-03 GATE PASS: 181 testes PostgreSQL reais; 0 fail/skip/todo.” (118.776 ms) |
 | `gate-smoke-pg.log` (`npm run smoke:pg`) | NOVO `brobond_pg_smoke2` | **126/126** — “✅ smoke:pg — smoke E2E aprovado contra PostgreSQL real” |
-| `estabilidade-pg.log` (19 testes × 3 rodadas) | `brobond_pg_stab` | **19/19 · 19/19 · 19/19** |
+| `estabilidade-pg.log` (22 testes × 3 rodadas) | `brobond_pg_stab` | **22/22 · 22/22 · 22/22** |
 | CI do PR #60 — job `testes-postgres` (GitHub Actions, run [38644698250](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38644698250)) | runner do CI (PostgreSQL 16.14) | **PASS** (2m34s) — migrations + `npm run test:pg` + `smoke:pg` no CI |
 
 O que é lido **direto no banco** pelos testes PG (não pelo retorno dos handlers): `pdv_pagamentos.valor`,
@@ -238,23 +244,23 @@ As transições **não dependem de estado em memória**: cada teste cria empresa
 |---|---|---|---|
 | `audit:menu` | `npm run audit:menu` | **PASS** — sem erros; 1 aviso não bloqueante já classificado (`/api/health` pública) | `gate-audit-menu.log` |
 | `typecheck` | `npm run typecheck` | **PASS** (domain, server, client) | `gate-typecheck.log` |
-| `npm test` | `npm test` | **PASS** — server **804** testes / **738 pass** / **0 fail** / 66 skipped; client 28 arquivos / **306 pass** | `gate-test.log` |
+| `npm test` | `npm test` | **PASS** — server **806** testes / **740 pass** / **0 fail** / 66 skipped; client 28 arquivos / **306 pass** | `gate-test.log` |
 | `build` | `npm run build` | **PASS** (Vite + PWA) | `gate-build.log` |
 | `lint` | `npm run lint` | **PASS** — exit 0, **0 erros**, 409 warnings | `gate-lint.log` |
 | `smoke` | `npm run smoke` (servidor demo :3001) | **PASS** — **126/126** | `gate-smoke.log` |
-| `test:pg` | `DATABASE_URL=… npm run test:pg` | **PASS** — **178/178**, 0 fail/skip/todo (PostgreSQL 16.14 real) | `gate-test-pg.log` |
+| `test:pg` | `DATABASE_URL=… npm run test:pg` | **PASS** — **181/181**, 0 fail/skip/todo (PostgreSQL 16.14 real) | `gate-test-pg.log` |
 | `smoke:pg` | `DATABASE_URL=… npm run smoke:pg` | **PASS** — **126/126** (PostgreSQL real) | `gate-smoke-pg.log` |
 | `git diff --check` | `git diff --check` | **PASS** — exit 0 | `gate-diff-check.log` |
 | CI `verificar` (PR #60) | GitHub Actions | **PASS** — 1m16s (run 38644698250) e **1m58s no commit final `ed1e260`** (run 38645820086); inclui `prisma validate` (= `db:validate`) | `gate-ci-pr60.log` |
 | CI `testes-postgres` (PR #60) | GitHub Actions | **PASS** — 2m34s e **2m48s no commit final `ed1e260`**; PostgreSQL real 16.14 | `gate-ci-pr60.log` |
 | `db:validate` | `npm run db:validate` | **BLOQUEADO (rede) localmente** — o Prisma precisa baixar o schema-engine em `binaries.prisma.sh` e a TLS é bloqueada neste ambiente. **Não foi mascarado**; o passo `prisma validate` do CI cobre este gate | `gate-db-validate.log` |
 
-Suítes novas do ciclo: `server/test/pdv-caixa-resumo.test.ts` (13), `server/test/fiscal-expedicao.test.ts` (12),
-`server/test/golive-02-e2e.test.ts` (1), `server/test/pg/e424-golive-02-postgresql.test.ts` (19).
+Suítes novas do ciclo: `server/test/pdv-caixa-resumo.test.ts` (14), `server/test/fiscal-expedicao.test.ts` (13),
+`server/test/golive-02-e2e.test.ts` (1), `server/test/pg/e424-golive-02-postgresql.test.ts` (22).
 
 Estabilidade (não basta passar uma vez): `estabilidade-mem.log` — cada suíte de memória **3 rodadas
-consecutivas** verdes (13/13, 12/12, 1/1 em todas); `estabilidade-pg.log` — o arquivo PostgreSQL completo
-(19 testes, incluindo as quatro corridas) **3 rodadas consecutivas** verdes (19/19 · 19/19 · 19/19) no
+consecutivas** verdes (14/14, 13/13, 1/1 em todas); `estabilidade-pg.log` — o arquivo PostgreSQL completo
+(22 testes, incluindo as quatro corridas) **3 rodadas consecutivas** verdes (22/22 · 22/22 · 22/22) no
 mesmo banco.
 
 ### 14.1 Matriz requisito → teste (rastreabilidade)
@@ -278,6 +284,7 @@ exigido tem teste nominal (e contraparte PostgreSQL), conforme a matriz abaixo.
 | J · idempotência | `(J): ler o resumo não move dinheiro e repetir a venda não duplica movimento` | `idempotência — ler o resumo não move dinheiro e repetir a venda não conta duas vezes` |
 | K · duas empresas (A e B) | `(K): caixas de empresas diferentes não se misturam (e B não opera o caixa de A)` | `multiempresa — o caixa de A não soma em B nem é operado por B` + `a cadeia inteira de A não aparece em B` |
 | **L · a reprodução EXATA dos R$ 15,00** | `(L): venda de R$ 25,00 paga com R$ 30,00 (troco de R$ 15,00) — o resumo não superestima R$ 15,00` | idem (o PG exercita troco de 50 em 150) + `troco maior que o dinheiro recebido é recusado` |
+| histórico legado (linhas gravadas antes da correção) | `(L/legado): linhas gravadas ANTES da correção (valor BRUTO, com troco) não reintroduzem a divergência` | `linhas LEGADAS (valor bruto, com troco) não reintroduzem a divergência` |
 | rollback | — | `rollback — venda recusada não deixa rastro no caixa nem no estoque` |
 
 **P1-03 — Fiscal → Expedição** (`fiscal-expedicao.test.ts` · PG `pg/e424-…test.ts`):
@@ -297,6 +304,8 @@ exigido tem teste nominal (e contraparte PostgreSQL), conforme a matriz abaixo.
 | rollback | idem (a etapa não avança e nada é gravado) | idem + `rollback — venda recusada não deixa rastro` |
 | ordem inválida (sem embalar / sem conferir) | `(K): expedir sem embalar e embalar sem conferir são recusados sem efeito` | idem |
 | sem segunda baixa (carimbo do documento) | `(A/B): status da venda revertido à mão NÃO refatura — o carimbo do documento manda` | `status da venda revertido à mão não provoca segunda baixa (carimbo do documento)` |
+| N · venda `entregue` (outro status terminal) | `(N): venda ENTREGUE — com documento autorizado expede; sem documento continua bloqueada` | `venda ENTREGUE — com documento autorizado expede, sem documento é bloqueada` |
+| modelo do documento (NFC-e 65) | — | `NFC-e (modelo 65) autorizada também libera a expedição — contrato atual` |
 | L · multiempresa (A × B) | `(L): empresa B não opera a expedição de A (e a dela funciona)` | `multiempresa — B não opera a expedição de A` + `a cadeia inteira de A não aparece em B` |
 | auditoria adversarial (caminhos alternativos) | — | `auditoria Q9 PG: o CRUD genérico não fura a proteção fiscal nem duplica o efeito` |
 
@@ -314,12 +323,12 @@ ajuste de banco foi feito “para satisfazer teste”. Rollback: não se aplica 
 | `server/src/pdv.ts` | correção P1-01 | +93 / −7 |
 | `server/src/expedicao.ts` | correção P1-03 | +125 / −13 |
 | `server/test/pdv.test.ts` | ajuste do teste existente à regra líquida de troco | +13 / −4 |
-| `server/test/pdv-caixa-resumo.test.ts` | novo (P1-01 A–L, matriz em §14.1) | 473 linhas |
-| `server/test/fiscal-expedicao.test.ts` | novo (P1-03 A–M, matriz em §14.1) | 594 linhas |
+| `server/test/pdv-caixa-resumo.test.ts` | novo (P1-01 A–L, matriz em §14.1) | 522 linhas |
+| `server/test/fiscal-expedicao.test.ts` | novo (P1-03 A–M/N, matriz em §14.1) | 622 linhas |
 | `server/test/golive-02-e2e.test.ts` | novo (E2E integrado) | 262 linhas |
-| `server/test/pg/e424-golive-02-postgresql.test.ts` | novo (PostgreSQL real: P1-01, P1-03, E2E, multiempresa, auditoria CRUD) | 917 linhas |
+| `server/test/pg/e424-golive-02-postgresql.test.ts` | novo (PostgreSQL real: P1-01, P1-03, E2E, multiempresa, auditoria CRUD) | 1022 linhas |
 | `docs/RELATORIO-ERP-GOLIVE-02.md` | este relatório | novo |
-| `docs/evidencias/erp-golive-02/*.log` | evidências ANTES/DEPOIS, gates, estabilidade e CI | 22 arquivos, 101 KB |
+| `docs/evidencias/erp-golive-02/*.log` | evidências ANTES/DEPOIS, gates, estabilidade e CI | 22 arquivos, 93 KB |
 
 `git diff --stat` do código: **3 arquivos, +231 / −24**. Nenhum arquivo de UI, de schema ou de configuração foi tocado.
 
@@ -350,7 +359,11 @@ foi tocado. Nenhum problema novo foi “consertado” — o achado extra da audi
    202 em rejeição).
 4. **R4 — Fuso/relógio e arredondamento.** Os cálculos usam `round2` e tolerância de 0,009; nenhuma divergência
    de arredondamento apareceu nas 178 provas PG, mas valores-limite de terceiros (ex.: 0,005) não foram esgotados.
-5. **R5 — Concorrência sob SERIALIZABLE.** Rodadas podem terminar com **zero** vencedores (ambos abortam com
+5. **R6 — Modelo do documento fiscal (contrato atual, documentado).** A trava da expedição exige documento
+   **AUTORIZADO** sem restringir o modelo: uma **NFC-e (65)** autorizada também libera separação → conferência →
+   embalagem → expedição (teste PG dedicado pina o comportamento). Restringir a expedição ao modelo 55 é
+   **decisão de produto** e, por isso, ficou fora deste ciclo — nada foi alterado aqui.
+6. **R5 — Concorrência sob SERIALIZABLE.** Rodadas podem terminar com **zero** vencedores (ambos abortam com
    40001→409). O sistema é idempotente e não duplica efeito, mas o operador pode precisar reenviar a operação.
 
 ## 19. Limitações
@@ -366,10 +379,10 @@ foi tocado. Nenhum problema novo foi “consertado” — o achado extra da audi
 As duas correções estão implementadas na origem, com reprodução ANTES registrada, evidência DEPOIS em MemStore
 **e** em PostgreSQL real, provas de concorrência, de multiempresa e de idempotência, sem motor novo, sem
 migração e sem tocar escopo negativo. Gates: `audit:menu`, `typecheck`, `npm test`, `build`, `smoke`, `test:pg`
-(178/178), `smoke:pg` (126/126), `lint` e `git diff --check` **PASS**; `db:validate` **BLOQUEADO por rede**
+(181/181), `smoke:pg` (126/126), `lint` e `git diff --check` **PASS**; `db:validate` **BLOQUEADO por rede**
 localmente e declarado abertamente — no CI do PR #60 os jobs **`verificar` (1m16s) e `testes-postgres` (2m34s)
 passaram**, cobrindo `prisma validate`, a suíte PostgreSQL real e o `smoke:pg`. Estabilidade comprovada em
-rodadas consecutivas: memória 3× verde por suíte (13/13, 12/12, 1/1) e PostgreSQL 3× verde (19/19 · 19/19 · 19/19).
+rodadas consecutivas: memória 3× verde por suíte (14/14, 13/13, 1/1) e PostgreSQL 3× verde (22/22 · 22/22 · 22/22).
 
 ### Auto-auditoria adversarial (10 perguntas)
 
@@ -379,11 +392,11 @@ rodadas consecutivas: memória 3× verde por suíte (13/13, 12/12, 1/1) e Postgr
 | 2 | O resumo bate com os movimentos reais? | **SIM** | `saldo inicial + entradas − saídas = saldo final` e `saldo calculado = soma dos movimentos válidos` em A–L |
 | 3 | Venda de A aparece no caixa de B? | **NÃO** | testes PG multiempresa com `empresa_id` lido no banco |
 | 4 | Requisições concorrentes duplicam dinheiro? | **NÃO** | rodadas concorrentes: ≤ 1 vencedor, perdedor 409, reenvio idempotente |
-| 5 | NF autorizada chega à expedição? | **SIM** | o 409 foi reproduzido e eliminado; fluxo completo em memória e PG |
-| 6 | NF não autorizada continua bloqueada? | **SIM** | pendente/rejeitado/cancelado ⇒ 409; faturada sem documento ⇒ bloqueada |
+| 5 | NF autorizada chega à expedição? | **SIM** | o 409 foi reproduzido e eliminado; fluxo completo em memória e PG (inclusive na venda `entregue` e na NFC-e autorizada) |
+| 6 | NF não autorizada continua bloqueada? | **SIM** | pendente/rejeitado/cancelado ⇒ 409; faturada **e entregue** sem documento ⇒ bloqueada |
 | 7 | Repetir a tentativa duplica estoque? | **NÃO** | expedição repetida, autorização repetida e concorrentes: uma baixa, um evento |
 | 8 | Uma empresa interfere na expedição da outra? | **NÃO** | B não opera A (404) e a cadeia de A não aparece em B |
 | 9 | Existe caminho alternativo (CRUD genérico/rota interna) para furar a proteção? | **NÃO pela API** — o CRUD genérico reusa os motores e recebe 409 na reversão; `expedicao_etapa`/`nfe_*` são readonly; `documentos_fiscais` não é gravável. **Ressalva honesta:** com **escrita direta no banco** (fora do motor) é possível provocar segunda baixa via PUT genérico — **documentado em §18/R1**, inalcançável por rota |
-| 10 | Tudo se comprova em PostgreSQL real? | **SIM** | 178/178 em banco novo, com estado lido direto nas tabelas e `empresa_id` conferido; 19/19 estável em 3 rodadas consecutivas |
+| 10 | Tudo se comprova em PostgreSQL real? | **SIM** | 181/181 em banco novo, com estado lido direto nas tabelas e `empresa_id` conferido; 22/22 estável em 3 rodadas consecutivas |
 
 **GO-LIVE NÃO DECLARADO.** A aprovação deste ciclo é externa e independente; nenhum merge foi feito.

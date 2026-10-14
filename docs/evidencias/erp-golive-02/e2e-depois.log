@@ -1,6 +1,5 @@
 ===== ERP-GOLIVE-02 · E2E integrado D) DEPOIS =====
-# server/test/golive-02-e2e.test.ts — venda presencial → pagamento → caixa → fiscal → autorização → expedição
-# comando: cd server && npm exec -- node --import tsx --test test/golive-02-e2e.test.ts
+# server/test/golive-02-e2e.test.ts
 
 ok 1 - ERP-GOLIVE-02 E2E: venda presencial → pagamento → caixa → fiscal → autorização → expedição
 # tests 1

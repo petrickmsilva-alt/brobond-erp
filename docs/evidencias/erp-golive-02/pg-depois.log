@@ -1,6 +1,6 @@
 ===== ERP-GOLIVE-02 · D) DEPOIS · PostgreSQL REAL (P1-01 + P1-03 + E2E) =====
-# banco NOVO (brobond_pg_after2) em PostgreSQL 16.14 local; nada de MemStore aqui
-# arquivo: server/test/pg/e424-golive-02-postgresql.test.ts (19 testes)
+# banco NOVO (brobond_pg_after4) em PostgreSQL 16.14 local; nada de MemStore aqui
+# arquivo: server/test/pg/e424-golive-02-postgresql.test.ts (22 testes)
 
 ok 1 - P1-01 PG: o movimento de caixa é o líquido do troco e o fechamento bate no banco
 ok 2 - P1-01 PG: estorno devolve o estoque UMA vez e tira a venda do caixa
@@ -18,11 +18,14 @@ ok 13 - P1-03 PG: idempotência — autorização repetida e expedição repetid
 ok 14 - P1-03 PG: duas expedições concorrentes — uma vence e a baixa acontece UMA vez
 ok 15 - P1-03 PG: falha no meio da transição não deixa estado parcial
 ok 16 - P1-03 PG: multiempresa — B não opera a expedição de A (e a dele funciona)
-ok 17 - P1-01+P1-03 PG: a cadeia inteira de A não aparece em B (caixa, estoque, fiscal, expedição)
-ok 18 - auditoria Q9 PG: o CRUD genérico não fura a proteção fiscal nem duplica o efeito
-ok 19 - E2E PG: venda presencial → pagamento → caixa → fiscal → autorização → expedição
-# tests 19
-# pass 19
+ok 17 - P1-01 PG: linhas LEGADAS (valor bruto, com troco) não reintroduzem a divergência
+ok 18 - P1-03 PG: venda ENTREGUE — com documento autorizado expede, sem documento é bloqueada
+ok 19 - P1-03 PG: NFC-e (modelo 65) autorizada também libera a expedição — contrato atual
+ok 20 - P1-01+P1-03 PG: a cadeia inteira de A não aparece em B (caixa, estoque, fiscal, expedição)
+ok 21 - auditoria Q9 PG: o CRUD genérico não fura a proteção fiscal nem duplica o efeito
+ok 22 - E2E PG: venda presencial → pagamento → caixa → fiscal → autorização → expedição
+# tests 22
+# pass 22
 # fail 0
 # skipped 0
 # todo 0
