@@ -2040,6 +2040,7 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   politicas_comerciais: {
     key: 'politicas_comerciais', table: 'politicas_comerciais', label: 'Políticas comerciais', singular: 'Política comercial',
+    empresa: true,
     labelFields: ['nome'], ops: ALL_OPS, minPerfil: 'gerente',
     notice: 'Regras sazonais de preço e pedido. A regra mais específica prevalece: cliente → catálogo → coleção → canal → geral.',
     fields: [

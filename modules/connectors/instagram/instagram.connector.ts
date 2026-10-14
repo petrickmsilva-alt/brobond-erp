@@ -20,7 +20,7 @@ export class InstagramConnector implements ProviderConnector {
   readonly name = 'Instagram Shopping';
 
   async fetchCatalog(options: FetchCatalogOptions): Promise<NormalizedContent[]> {
-    const { accessToken, shopId } = await connectorService.getValidAccessToken(options.usuarioId, this.provider);
+    const { accessToken, shopId } = await connectorService.getValidAccessToken(options.empresaId, options.usuarioId, this.provider);
     // `shopId` é o ID da conta profissional do Instagram: sem ele a
     // chamada nem é montada — o operador lê a ação que resolve.
     if (!shopId) {

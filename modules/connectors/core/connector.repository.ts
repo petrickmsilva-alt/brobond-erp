@@ -1,21 +1,9 @@
 /**
- * Repositório dos conectores multicanal — o ÚNICO lugar que fala com as
- * tabelas `connectors`, `connector_events` e `connector_oauth_states`.
- *
- * Fonte: `modules/marketplace/core/connector.repository.ts` do
- * brobond-ai-commerce (PR012). ADAPTAÇÕES DESTA FASE:
- *
- *   • Prisma → SQL puro sobre o pool `pg` do ERP (porta `ConnectorDatabase`).
- *   • CONTRATO DE ISOLAMENTO: onde o commerce recebia `organizationId`
- *     como PRIMEIRO argumento, o ERP recebe `usuarioId: number` (FK →
- *     `usuarios.id`). Nenhuma consulta roda sem esse escopo — a única
- *     exceção documentada é `findByShopId()` (resolução de inquilino de
- *     webhook de entrada: devolve exatamente uma linha candidata e o
- *     CHAMADOR tem de re-escopar tudo pelo `usuarioId` dela) e
- *     `listPendingSaleEvents()` (varredura do worker, que também
- *     re-escopa por linha).
- *   • `createConnectorRepository(db)` continua sendo uma fábrica para que
- *     a segurança de escopo possa ser testada com um executor falso.
+ * Repositório canônico das tabelas `connectors` e `connector_events`.
+ * O tenant é sempre a empresa confiável resolvida na sessão ou no state
+ * OAuth de uso único. `usuarioId` também é obrigatório, mas nunca substitui
+ * `empresaId`. A resolução de webhook por loja é a única leitura sem tenant
+ * de entrada: exige identidade de loja única e devolve a empresa persistida.
  */
 
 import { getConnectorDatabase, type ConnectorDatabase } from './database';
@@ -23,13 +11,17 @@ import { connectorCuid } from './id';
 import type { ConnectionStatusName, ConnectorProviderName } from './providers';
 import type { ConnectorCredentialsPayload, ConnectorEventRow, ConnectorRow, ConnectorSyncCounters, JsonObject } from './types';
 
-// ------------------------------------------------------------------
-// Mapeamento linha do banco → tipo do domínio
-// ------------------------------------------------------------------
+/** Recusa qualquer acesso sem tenant explícito, válido e confiável. */
+export function assertEmpresaId(empresaId: number): number {
+  if (!Number.isSafeInteger(empresaId) || empresaId <= 0) {
+    throw new Error('Escopo empresarial (empresaId) ausente ou inválido.');
+  }
+  return empresaId;
+}
 
-/** Garante que nenhuma consulta rode sem escopo de responsável. */
+/** Recusa operações sem o responsável autenticado/estabelecido pelo OAuth. */
 export function assertUsuarioId(usuarioId: number): number {
-  if (!Number.isInteger(usuarioId) || usuarioId <= 0) {
+  if (!Number.isSafeInteger(usuarioId) || usuarioId <= 0) {
     throw new Error('Escopo de responsável (usuarioId) ausente ou inválido.');
   }
   return usuarioId;
@@ -68,6 +60,7 @@ type RawRow = Record<string, unknown>;
 function mapConnector(row: RawRow): ConnectorRow {
   return {
     id: String(row.id),
+    empresaId: toInt(row.empresa_id),
     usuarioId: toInt(row.usuario_id),
     provider: String(row.provider) as ConnectorProviderName,
     status: String(row.status) as ConnectionStatusName,
@@ -93,6 +86,7 @@ function mapConnector(row: RawRow): ConnectorRow {
 function mapEvent(row: RawRow): ConnectorEventRow {
   return {
     id: String(row.id),
+    empresaId: toInt(row.empresa_id),
     usuarioId: toInt(row.usuario_id),
     connectorId: row.connector_id === null || row.connector_id === undefined ? null : String(row.connector_id),
     provider: String(row.provider) as ConnectorProviderName,
@@ -105,44 +99,38 @@ function mapEvent(row: RawRow): ConnectorEventRow {
 }
 
 const CONNECTOR_COLUMNS = `
-  id, usuario_id, provider, status, shop_id, shop_name, access_token, refresh_token,
+  id, empresa_id, usuario_id, provider, status, shop_id, shop_name, access_token, refresh_token,
   client_secret, public_key, expires_at, imported_count, duplicated_count, failed_count,
   sync_count, last_sync_at, last_error, metadata, created_at, updated_at`;
 
 const EVENT_COLUMNS = `
-  id, usuario_id, connector_id, provider, external_event_id, topic, payload,
+  id, empresa_id, usuario_id, connector_id, provider, external_event_id, topic, payload,
   processed_at, created_at`;
 
-// ------------------------------------------------------------------
-// Contrato
-// ------------------------------------------------------------------
-
 export interface ConnectorRepository {
-  /** Todas as conexões de um responsável (provedor nunca tocado some). */
-  list(usuarioId: number): Promise<ConnectorRow[]>;
-  /** Uma conexão, ou `null` quando o provedor nunca foi conectado. */
-  findByProvider(usuarioId: number, provider: ConnectorProviderName): Promise<ConnectorRow | null>;
-  /** Cria/atualiza a conexão de um provedor para um responsável. */
+  list(empresaId: number, usuarioId: number): Promise<ConnectorRow[]>;
+  findByProvider(empresaId: number, usuarioId: number, provider: ConnectorProviderName): Promise<ConnectorRow | null>;
   upsertConnection(
+    empresaId: number,
     usuarioId: number,
     provider: ConnectorProviderName,
     data: ConnectorCredentialsPayload & { status: ConnectionStatusName }
   ): Promise<ConnectorRow>;
-  /** Grava tokens rotacionados sem mexer nos contadores. */
   saveTokens(
+    empresaId: number,
     usuarioId: number,
     id: string,
     tokens: { accessToken: string; refreshToken?: string | null; expiresAt: Date | null }
   ): Promise<ConnectorRow | null>;
-  /** Transiciona o status da conexão (com erro sanitizado opcional). */
   setStatus(
+    empresaId: number,
     usuarioId: number,
     provider: ConnectorProviderName,
     status: ConnectionStatusName,
     lastError?: string | null
   ): Promise<ConnectorRow | null>;
-  /** Registra o resultado de UMA execução de sincronização. */
   recordSyncResult(
+    empresaId: number,
     usuarioId: number,
     provider: ConnectorProviderName,
     result: {
@@ -152,18 +140,15 @@ export interface ConnectorRepository {
       syncedAt?: Date;
     }
   ): Promise<ConnectorRow | null>;
-  /** Revoga a conexão: apaga TODA cifra e marca DISCONNECTED. */
-  clearCredentials(usuarioId: number, provider: ConnectorProviderName): Promise<ConnectorRow | null>;
+  clearCredentials(empresaId: number, usuarioId: number, provider: ConnectorProviderName): Promise<ConnectorRow | null>;
   /**
-   * Resolução de inquilino de webhook — NÃO escopada, por projeto. O
-   * chamador DEVE tratar o `usuarioId` da linha devolvida como o único
-   * escopo confiável.
+   * Webhook sem sessão: só retorna uma loja se existir UMA única conexão
+   * para a identidade externa; ambiguidades entre tenants são recusadas.
    */
   findByShopId(provider: ConnectorProviderName, shopId: string): Promise<ConnectorRow | null>;
-  /** Este evento já foi ingerido? (sonda de idempotência). */
-  hasEvent(usuarioId: number, provider: ConnectorProviderName, externalEventId: string): Promise<boolean>;
-  /** Grava um evento de webhook (idempotente na chave de entrega). */
+  hasEvent(empresaId: number, usuarioId: number, provider: ConnectorProviderName, externalEventId: string): Promise<boolean>;
   recordEvent(
+    empresaId: number,
     usuarioId: number,
     event: {
       provider: ConnectorProviderName;
@@ -173,71 +158,60 @@ export interface ConnectorRepository {
       payload?: JsonObject | null;
     }
   ): Promise<ConnectorEventRow | null>;
-  /** Carimba um evento como processado. */
-  markEventProcessed(usuarioId: number, provider: ConnectorProviderName, externalEventId: string): Promise<void>;
-  /** Um evento da caixa de entrada pela chave de entrega, ou `null`. */
-  findEvent(usuarioId: number, provider: ConnectorProviderName, externalEventId: string): Promise<ConnectorEventRow | null>;
-  /** Últimos eventos de um provedor (tela de detalhe do conector). */
-  listRecentEvents(usuarioId: number, provider: ConnectorProviderName, limit: number): Promise<ConnectorEventRow[]>;
-  /**
-   * Varredura do worker — NÃO escopada, por projeto: devolve as chaves de
-   * entrega dos eventos ainda pendentes de virar venda. O chamador
-   * re-escopa todo o processamento ao `usuarioId` de cada linha.
-   */
+  markEventProcessed(empresaId: number, usuarioId: number, provider: ConnectorProviderName, externalEventId: string): Promise<void>;
+  findEvent(empresaId: number, usuarioId: number, provider: ConnectorProviderName, externalEventId: string): Promise<ConnectorEventRow | null>;
+  listRecentEvents(empresaId: number, usuarioId: number, provider: ConnectorProviderName, limit: number): Promise<ConnectorEventRow[]>;
+  /** Worker global: retorna tenant junto com cada chave; cada linha é revalidada no processamento. */
   listPendingSaleEvents(input: {
     providers: readonly ConnectorProviderName[];
     before: Date;
     after?: Date;
     limit: number;
-  }): Promise<Array<Pick<ConnectorEventRow, 'usuarioId' | 'provider' | 'externalEventId'>>>;
-  /**
-   * Incrementa os contadores de ingestão SEM a semântica de execução de
-   * sincronização (`syncCount`/`lastSyncAt`): venda capturada por webhook
-   * é dado importado de verdade, mas não é uma "rodada" de sync.
-   */
+  }): Promise<Array<Pick<ConnectorEventRow, 'empresaId' | 'usuarioId' | 'provider' | 'externalEventId'>>>;
   incrementIngestionCounters(
+    empresaId: number,
     usuarioId: number,
     provider: ConnectorProviderName,
     counters: Partial<ConnectorSyncCounters>
   ): Promise<ConnectorRow | null>;
 }
 
-// ------------------------------------------------------------------
-// Implementação
-// ------------------------------------------------------------------
-
 export function createConnectorRepository(db: ConnectorDatabase): ConnectorRepository {
-  async function connectorByProvider(usuarioId: number, provider: ConnectorProviderName): Promise<ConnectorRow | null> {
-    const { rows } = await db.query<RawRow>(`SELECT ${CONNECTOR_COLUMNS} FROM connectors WHERE usuario_id = $1 AND provider = $2 LIMIT 1`, [
-      usuarioId,
-      provider,
-    ]);
+  async function connectorByProvider(empresaId: number, usuarioId: number, provider: ConnectorProviderName): Promise<ConnectorRow | null> {
+    const { rows } = await db.query<RawRow>(
+      `SELECT ${CONNECTOR_COLUMNS} FROM connectors WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $3 LIMIT 1`,
+      [empresaId, usuarioId, provider]
+    );
     return rows[0] ? mapConnector(rows[0]) : null;
   }
 
   return {
-    async list(usuarioId) {
+    async list(empresaId, usuarioId) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
-      const { rows } = await db.query<RawRow>(`SELECT ${CONNECTOR_COLUMNS} FROM connectors WHERE usuario_id = $1 ORDER BY provider ASC`, [
-        usuarioId,
-      ]);
+      const { rows } = await db.query<RawRow>(
+        `SELECT ${CONNECTOR_COLUMNS} FROM connectors WHERE empresa_id = $1 AND usuario_id = $2 ORDER BY provider ASC`,
+        [empresaId, usuarioId]
+      );
       return rows.map(mapConnector);
     },
 
-    async findByProvider(usuarioId, provider) {
+    async findByProvider(empresaId, usuarioId, provider) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
-      return connectorByProvider(usuarioId, provider);
+      return connectorByProvider(empresaId, usuarioId, provider);
     },
 
-    async upsertConnection(usuarioId, provider, data) {
+    async upsertConnection(empresaId, usuarioId, provider, data) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
       const { status, ...credentials } = data;
       const { rows } = await db.query<RawRow>(
         `INSERT INTO connectors (
-           id, usuario_id, provider, status, shop_id, shop_name, access_token, refresh_token,
+           id, empresa_id, usuario_id, provider, status, shop_id, shop_name, access_token, refresh_token,
            client_secret, public_key, expires_at, metadata, created_at, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, now(), now())
-         ON CONFLICT (usuario_id, provider) DO UPDATE SET
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, now(), now())
+         ON CONFLICT (empresa_id, usuario_id, provider) DO UPDATE SET
            status        = EXCLUDED.status,
            shop_id       = COALESCE(EXCLUDED.shop_id, connectors.shop_id),
            shop_name     = COALESCE(EXCLUDED.shop_name, connectors.shop_name),
@@ -252,6 +226,7 @@ export function createConnectorRepository(db: ConnectorDatabase): ConnectorRepos
          RETURNING ${CONNECTOR_COLUMNS}`,
         [
           connectorCuid(),
+          empresaId,
           usuarioId,
           provider,
           status,
@@ -268,50 +243,54 @@ export function createConnectorRepository(db: ConnectorDatabase): ConnectorRepos
       return mapConnector(rows[0] as RawRow);
     },
 
-    async saveTokens(usuarioId, id, tokens) {
+    async saveTokens(empresaId, usuarioId, id, tokens) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
       const { rows } = await db.query<RawRow>(
         `UPDATE connectors SET
-           access_token  = $3,
-           refresh_token = CASE WHEN $4::boolean THEN $5 ELSE refresh_token END,
-           expires_at    = $6,
+           access_token  = $4,
+           refresh_token = CASE WHEN $5::boolean THEN $6 ELSE refresh_token END,
+           expires_at    = $7,
            status        = 'CONNECTED',
            last_error    = NULL,
            updated_at    = now()
-         WHERE usuario_id = $1 AND id = $2
+         WHERE empresa_id = $1 AND usuario_id = $2 AND id = $3
          RETURNING ${CONNECTOR_COLUMNS}`,
-        [usuarioId, id, tokens.accessToken, tokens.refreshToken !== undefined, tokens.refreshToken ?? null, tokens.expiresAt]
+        [empresaId, usuarioId, id, tokens.accessToken, tokens.refreshToken !== undefined, tokens.refreshToken ?? null, tokens.expiresAt]
       );
       return rows[0] ? mapConnector(rows[0]) : null;
     },
 
-    async setStatus(usuarioId, provider, status, lastError = null) {
+    async setStatus(empresaId, usuarioId, provider, status, lastError = null) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
       const { rows } = await db.query<RawRow>(
-        `UPDATE connectors SET status = $3, last_error = $4, updated_at = now()
-         WHERE usuario_id = $1 AND provider = $2
+        `UPDATE connectors SET status = $4, last_error = $5, updated_at = now()
+         WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $3
          RETURNING ${CONNECTOR_COLUMNS}`,
-        [usuarioId, provider, status, lastError]
+        [empresaId, usuarioId, provider, status, lastError]
       );
       return rows[0] ? mapConnector(rows[0]) : null;
     },
 
-    async recordSyncResult(usuarioId, provider, result) {
+    async recordSyncResult(empresaId, usuarioId, provider, result) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
       const syncedAt = result.syncedAt ?? new Date();
       const { rows } = await db.query<RawRow>(
         `UPDATE connectors SET
-           status           = $3,
-           last_sync_at     = $4,
-           last_error       = $5,
-           imported_count   = imported_count + $6,
-           duplicated_count = duplicated_count + $7,
-           failed_count     = failed_count + $8,
+           status           = $4,
+           last_sync_at     = $5,
+           last_error       = $6,
+           imported_count   = imported_count + $7,
+           duplicated_count = duplicated_count + $8,
+           failed_count     = failed_count + $9,
            sync_count       = sync_count + 1,
            updated_at       = now()
-         WHERE usuario_id = $1 AND provider = $2
+         WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $3
          RETURNING ${CONNECTOR_COLUMNS}`,
         [
+          empresaId,
           usuarioId,
           provider,
           result.status,
@@ -325,7 +304,8 @@ export function createConnectorRepository(db: ConnectorDatabase): ConnectorRepos
       return rows[0] ? mapConnector(rows[0]) : null;
     },
 
-    async clearCredentials(usuarioId, provider) {
+    async clearCredentials(empresaId, usuarioId, provider) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
       const { rows } = await db.query<RawRow>(
         `UPDATE connectors SET
@@ -339,54 +319,54 @@ export function createConnectorRepository(db: ConnectorDatabase): ConnectorRepos
            shop_name     = NULL,
            last_error    = NULL,
            updated_at    = now()
-         WHERE usuario_id = $1 AND provider = $2
+         WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $3
          RETURNING ${CONNECTOR_COLUMNS}`,
-        [usuarioId, provider]
+        [empresaId, usuarioId, provider]
       );
       return rows[0] ? mapConnector(rows[0]) : null;
     },
 
     async findByShopId(provider, shopId) {
       if (!shopId) return null;
-      // Deliberadamente NÃO escopada: é a resolução do responsável dono da
-      // loja que disparou o webhook. Desempate determinístico pela conexão
-      // mais recente para nunca depender da ordem física das linhas.
       const { rows } = await db.query<RawRow>(
         `SELECT ${CONNECTOR_COLUMNS} FROM connectors
          WHERE provider = $1 AND shop_id = $2
          ORDER BY updated_at DESC, id ASC
-         LIMIT 1`,
+         LIMIT 2`,
         [provider, shopId]
       );
-      return rows[0] ? mapConnector(rows[0]) : null;
+      // A identidade externa não pode escolher entre empresas. Se houver
+      // mais de um dono, recusamos o webhook em vez de atribuí-lo por ordem.
+      return rows.length === 1 ? mapConnector(rows[0]) : null;
     },
 
-    async hasEvent(usuarioId, provider, externalEventId) {
+    async hasEvent(empresaId, usuarioId, provider, externalEventId) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
       const { rows } = await db.query<RawRow>(
         `SELECT 1 AS ok FROM connector_events
-         WHERE usuario_id = $1 AND provider = $2 AND external_event_id = $3
+         WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $3 AND external_event_id = $4
          LIMIT 1`,
-        [usuarioId, provider, externalEventId]
+        [empresaId, usuarioId, provider, externalEventId]
       );
       return rows.length > 0;
     },
 
-    async recordEvent(usuarioId, event) {
+    async recordEvent(empresaId, usuarioId, event) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
-      // Upsert na chave de entrega única: reentrega "at-least-once"
-      // atualiza o payload guardado em vez de criar uma segunda linha.
       const { rows } = await db.query<RawRow>(
         `INSERT INTO connector_events (
-           id, usuario_id, connector_id, provider, external_event_id, topic, payload, created_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, now())
-         ON CONFLICT (usuario_id, provider, external_event_id) DO UPDATE SET
+           id, empresa_id, usuario_id, connector_id, provider, external_event_id, topic, payload, created_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, now())
+         ON CONFLICT (empresa_id, usuario_id, provider, external_event_id) DO UPDATE SET
            payload      = COALESCE(EXCLUDED.payload, connector_events.payload),
            topic        = COALESCE(EXCLUDED.topic, connector_events.topic),
            connector_id = COALESCE(EXCLUDED.connector_id, connector_events.connector_id)
          RETURNING ${EVENT_COLUMNS}`,
         [
           connectorCuid(),
+          empresaId,
           usuarioId,
           event.connectorId ?? null,
           event.provider,
@@ -398,35 +378,38 @@ export function createConnectorRepository(db: ConnectorDatabase): ConnectorRepos
       return rows[0] ? mapEvent(rows[0]) : null;
     },
 
-    async markEventProcessed(usuarioId, provider, externalEventId) {
+    async markEventProcessed(empresaId, usuarioId, provider, externalEventId) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
       await db.query(
         `UPDATE connector_events SET processed_at = now()
-         WHERE usuario_id = $1 AND provider = $2 AND external_event_id = $3 AND processed_at IS NULL`,
-        [usuarioId, provider, externalEventId]
+         WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $3 AND external_event_id = $4 AND processed_at IS NULL`,
+        [empresaId, usuarioId, provider, externalEventId]
       );
     },
 
-    async findEvent(usuarioId, provider, externalEventId) {
+    async findEvent(empresaId, usuarioId, provider, externalEventId) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
       const { rows } = await db.query<RawRow>(
         `SELECT ${EVENT_COLUMNS} FROM connector_events
-         WHERE usuario_id = $1 AND provider = $2 AND external_event_id = $3
+         WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $3 AND external_event_id = $4
          LIMIT 1`,
-        [usuarioId, provider, externalEventId]
+        [empresaId, usuarioId, provider, externalEventId]
       );
       return rows[0] ? mapEvent(rows[0]) : null;
     },
 
-    async listRecentEvents(usuarioId, provider, limit) {
+    async listRecentEvents(empresaId, usuarioId, provider, limit) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
       const take = Math.min(Math.max(Math.trunc(limit) || 20, 1), 200);
       const { rows } = await db.query<RawRow>(
         `SELECT ${EVENT_COLUMNS} FROM connector_events
-         WHERE usuario_id = $1 AND provider = $2
+         WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $3
          ORDER BY created_at DESC
-         LIMIT $3`,
-        [usuarioId, provider, take]
+         LIMIT $4`,
+        [empresaId, usuarioId, provider, take]
       );
       return rows.map(mapEvent);
     },
@@ -435,7 +418,7 @@ export function createConnectorRepository(db: ConnectorDatabase): ConnectorRepos
       if (input.providers.length === 0) return [];
       const take = Math.min(Math.max(Math.trunc(input.limit) || 50, 1), 500);
       const { rows } = await db.query<RawRow>(
-        `SELECT usuario_id, provider, external_event_id FROM connector_events
+        `SELECT empresa_id, usuario_id, provider, external_event_id FROM connector_events
          WHERE processed_at IS NULL
            AND provider = ANY($1::connector_provider[])
            AND created_at <= $2
@@ -445,35 +428,32 @@ export function createConnectorRepository(db: ConnectorDatabase): ConnectorRepos
         [input.providers, input.before, input.after ?? null, take]
       );
       return rows.map((row) => ({
+        empresaId: toInt(row.empresa_id),
         usuarioId: toInt(row.usuario_id),
         provider: String(row.provider) as ConnectorProviderName,
         externalEventId: String(row.external_event_id),
       }));
     },
 
-    async incrementIngestionCounters(usuarioId, provider, counters) {
+    async incrementIngestionCounters(empresaId, usuarioId, provider, counters) {
+      assertEmpresaId(empresaId);
       assertUsuarioId(usuarioId);
       const { rows } = await db.query<RawRow>(
         `UPDATE connectors SET
-           imported_count   = imported_count + $3,
-           duplicated_count = duplicated_count + $4,
-           failed_count     = failed_count + $5,
+           imported_count   = imported_count + $4,
+           duplicated_count = duplicated_count + $5,
+           failed_count     = failed_count + $6,
            updated_at       = now()
-         WHERE usuario_id = $1 AND provider = $2
+         WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $3
          RETURNING ${CONNECTOR_COLUMNS}`,
-        [usuarioId, provider, Math.max(0, counters.imported ?? 0), Math.max(0, counters.duplicated ?? 0), Math.max(0, counters.failed ?? 0)]
+        [empresaId, usuarioId, provider, Math.max(0, counters.imported ?? 0), Math.max(0, counters.duplicated ?? 0), Math.max(0, counters.failed ?? 0)]
       );
       return rows[0] ? mapConnector(rows[0]) : null;
     },
   };
 }
 
-/**
- * Repositório padrão, preso ao pool do ERP. A resolução do banco é
- * PREGUIÇOSA (a cada chamada) para que o módulo possa ser importado antes
- * do boot ligar o pool — e para que o MODO DEMONSTRAÇÃO devolva 503 em vez
- * de quebrar na importação.
- */
+/** Repositório padrão, preso ao pool do ERP (resolução preguiçosa). */
 export const connectorRepository: ConnectorRepository = createConnectorRepository({
   query: (text, params) => getConnectorDatabase().query(text, params),
 });

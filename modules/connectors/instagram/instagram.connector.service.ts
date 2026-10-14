@@ -282,12 +282,13 @@ export class InstagramConnectorService {
     connector: ConnectorRow,
     event: InstagramWebhookEvent
   ): Promise<{ duplicate: boolean; order?: InstagramIngestedOrder }> {
+    const empresaId = connector.empresaId;
     const usuarioId = connector.usuarioId;
 
-    const already = await this.repository.hasEvent(usuarioId, INSTAGRAM_PROVIDER, event.externalEventId);
+    const already = await this.repository.hasEvent(empresaId, usuarioId, INSTAGRAM_PROVIDER, event.externalEventId);
     if (already) return { duplicate: true };
 
-    await this.repository.recordEvent(usuarioId, {
+    await this.repository.recordEvent(empresaId, usuarioId, {
       provider: INSTAGRAM_PROVIDER,
       externalEventId: event.externalEventId,
       connectorId: connector.id,
@@ -299,12 +300,12 @@ export class InstagramConnectorService {
       // Interação (comentário, menção, DM, referral de sacolinha): a
       // entrega está completa aqui. Carimbar evita caixa de entrada
       // acumulando evento que ninguém vai processar.
-      await this.repository.markEventProcessed(usuarioId, INSTAGRAM_PROVIDER, event.externalEventId);
+      await this.repository.markEventProcessed(empresaId, usuarioId, INSTAGRAM_PROVIDER, event.externalEventId);
       return { duplicate: false };
     }
 
     try {
-      const order = await this.processSaleEvent(usuarioId, event.externalEventId);
+      const order = await this.processSaleEvent(empresaId, usuarioId, event.externalEventId);
       return { duplicate: false, order: order ?? undefined };
     } catch (error) {
       // Falha transitória: o evento fica com `processed_at = NULL` e a
@@ -326,20 +327,20 @@ export class InstagramConnectorService {
    * Devolve `null` quando a entrega não carrega pedido — que é o caso de
    * 100% dos webhooks que a Meta emite hoje.
    */
-  async processSaleEvent(usuarioId: number, externalEventId: string): Promise<InstagramIngestedOrder | null> {
-    const event = await this.repository.findEvent(usuarioId, INSTAGRAM_PROVIDER, externalEventId);
+  async processSaleEvent(empresaId: number, usuarioId: number, externalEventId: string): Promise<InstagramIngestedOrder | null> {
+    const event = await this.repository.findEvent(empresaId, usuarioId, INSTAGRAM_PROVIDER, externalEventId);
     if (!event || event.processedAt) return null;
 
     const order = mapInstagramOrderPayload(event.payload ?? {});
     if (!order) {
       // Sem pedido no corpo: desfecho TERMINAL. Nada é inventado e a
       // entrega não trava a caixa de entrada.
-      await this.repository.markEventProcessed(usuarioId, INSTAGRAM_PROVIDER, externalEventId);
+      await this.repository.markEventProcessed(empresaId, usuarioId, INSTAGRAM_PROVIDER, externalEventId);
       return null;
     }
 
-    const ingested = await this.ingestOrder(usuarioId, order);
-    await this.repository.markEventProcessed(usuarioId, INSTAGRAM_PROVIDER, externalEventId);
+    const ingested = await this.ingestOrder(empresaId, usuarioId, order);
+    await this.repository.markEventProcessed(empresaId, usuarioId, INSTAGRAM_PROVIDER, externalEventId);
     return ingested;
   }
 
@@ -348,12 +349,12 @@ export class InstagramConnectorService {
    * pedido do ERP e grava em `sales` / `sale_items`.
    *
    * IDEMPOTÊNCIA: o upsert aterrissa na chave única
-   * `(usuario_id, channel, external_order_id)` com
+   * `(empresa_id, usuario_id, channel, external_order_id)` com
    * `channel = 'INSTAGRAM_SHOPPING'`. Reprocessar o mesmo pedido
    * ATUALIZA a linha — nunca duplica receita. Os itens são reescritos em
    * bloco dentro da mesma transação.
    */
-  async ingestOrder(usuarioId: number, order: InstagramOrder): Promise<InstagramIngestedOrder> {
+  async ingestOrder(empresaId: number, usuarioId: number, order: InstagramOrder): Promise<InstagramIngestedOrder> {
     const items: IngestedSaleItemInput[] = order.items.map((item) => ({
       sku: item.sku,
       title: item.title,
@@ -365,7 +366,7 @@ export class InstagramConnectorService {
 
     const quantity = items.reduce((sum, item) => sum + Math.max(1, Math.trunc(item.quantity) || 1), 0);
 
-    const { sale, outcome } = await this.sales.upsertIngestedSale(usuarioId, {
+    const { sale, outcome } = await this.sales.upsertIngestedSale(empresaId, usuarioId, {
       channel: INSTAGRAM_SALE_CHANNEL,
       externalOrderId: order.id,
       amountCents: order.totalAmountCents,
@@ -378,7 +379,7 @@ export class InstagramConnectorService {
 
     // Contadores reais do cartão do canal — alimentam o KPI "Pedidos
     // Importados" sem nenhuma contagem paralela.
-    await this.repository.incrementIngestionCounters(usuarioId, INSTAGRAM_PROVIDER, {
+    await this.repository.incrementIngestionCounters(empresaId, usuarioId, INSTAGRAM_PROVIDER, {
       imported: outcome === 'unchanged' ? 0 : 1,
       duplicated: outcome === 'unchanged' ? 1 : 0,
       failed: 0,
@@ -407,7 +408,7 @@ export class InstagramConnectorService {
     let failed = 0;
     for (const item of pending) {
       try {
-        await this.processSaleEvent(item.usuarioId, item.externalEventId);
+        await this.processSaleEvent(item.empresaId, item.usuarioId, item.externalEventId);
         processed += 1;
       } catch (error) {
         failed += 1;
@@ -422,37 +423,37 @@ export class InstagramConnectorService {
   // ----------------------------------------------------------------
 
   /** "Pedidos Importados": contagem real de `sales` do canal. */
-  async countImportedOrders(usuarioId: number): Promise<number> {
+  async countImportedOrders(empresaId: number, usuarioId: number): Promise<number> {
     const { rows } = await this.resolveDb().query<{ total: string | number | null }>(
-      `SELECT COUNT(*) AS total FROM sales WHERE usuario_id = $1 AND channel = $2::sale_channel`,
-      [usuarioId, INSTAGRAM_SALE_CHANNEL]
+      `SELECT COUNT(*) AS total FROM sales WHERE empresa_id = $1 AND usuario_id = $2 AND channel = $3::sale_channel`,
+      [empresaId, usuarioId, INSTAGRAM_SALE_CHANNEL]
     );
     return toNumber(rows[0]?.total);
   }
 
   /** "Receita do Canal": soma em CENTAVOS, pedidos cancelados fora. */
-  async sumChannelRevenueCents(usuarioId: number): Promise<number> {
+  async sumChannelRevenueCents(empresaId: number, usuarioId: number): Promise<number> {
     const { rows } = await this.resolveDb().query<{ total: string | number | null }>(
       `SELECT COALESCE(SUM(amount_cents), 0) AS total
          FROM sales
-        WHERE usuario_id = $1 AND channel = $2::sale_channel AND status <> 'CANCELLED'`,
-      [usuarioId, INSTAGRAM_SALE_CHANNEL]
+        WHERE empresa_id = $1 AND usuario_id = $2 AND channel = $3::sale_channel AND status <> 'CANCELLED'`,
+      [empresaId, usuarioId, INSTAGRAM_SALE_CHANNEL]
     );
     return toNumber(rows[0]?.total);
   }
 
   /** Total de entregas recebidas da Meta (denominador da caixa). */
-  async countWebhookEvents(usuarioId: number): Promise<number> {
+  async countWebhookEvents(empresaId: number, usuarioId: number): Promise<number> {
     const { rows } = await this.resolveDb().query<{ total: string | number | null }>(
-      `SELECT COUNT(*) AS total FROM connector_events WHERE usuario_id = $1 AND provider = $2::connector_provider`,
-      [usuarioId, INSTAGRAM_PROVIDER]
+      `SELECT COUNT(*) AS total FROM connector_events WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $3::connector_provider`,
+      [empresaId, usuarioId, INSTAGRAM_PROVIDER]
     );
     return toNumber(rows[0]?.total);
   }
 
   /** "Webhooks — eventos recebidos": as entregas mais recentes. */
-  async listWebhookEvents(usuarioId: number, limit = 10): Promise<InstagramPanelEvent[]> {
-    const rows: ConnectorEventRow[] = await this.repository.listRecentEvents(usuarioId, INSTAGRAM_PROVIDER, clampLimit(limit));
+  async listWebhookEvents(empresaId: number, usuarioId: number, limit = 10): Promise<InstagramPanelEvent[]> {
+    const rows: ConnectorEventRow[] = await this.repository.listRecentEvents(empresaId, usuarioId, INSTAGRAM_PROVIDER, clampLimit(limit));
     return rows.map((event) => ({
       id: event.id,
       externalEventId: event.externalEventId,
@@ -463,14 +464,14 @@ export class InstagramConnectorService {
   }
 
   /** "Vendas do canal": as vendas realmente gravadas em `sales`. */
-  async listChannelSales(usuarioId: number, limit = 10): Promise<InstagramPanelSale[]> {
+  async listChannelSales(empresaId: number, usuarioId: number, limit = 10): Promise<InstagramPanelSale[]> {
     const { rows } = await this.resolveDb().query<Record<string, unknown>>(
       `SELECT id, reference, external_order_id, status, quantity, amount_cents, currency, occurred_at
          FROM sales
-        WHERE usuario_id = $1 AND channel = $2::sale_channel
+        WHERE empresa_id = $1 AND usuario_id = $2 AND channel = $3::sale_channel
         ORDER BY occurred_at DESC
-        LIMIT $3`,
-      [usuarioId, INSTAGRAM_SALE_CHANNEL, clampLimit(limit)]
+        LIMIT $4`,
+      [empresaId, usuarioId, INSTAGRAM_SALE_CHANNEL, clampLimit(limit)]
     );
     return rows.map((row) => ({
       id: String(row.id),
@@ -485,7 +486,7 @@ export class InstagramConnectorService {
   }
 
   /** "Conteúdo importado desta plataforma": itens casados com o catálogo. */
-  async listImportedContent(usuarioId: number, limit = 10): Promise<InstagramPanelContent[]> {
+  async listImportedContent(empresaId: number, usuarioId: number, limit = 10): Promise<InstagramPanelContent[]> {
     const { rows } = await this.resolveDb().query<Record<string, unknown>>(
       `SELECT si.id,
               p.nome   AS produto,
@@ -498,12 +499,12 @@ export class InstagramConnectorService {
               s.occurred_at
          FROM sale_items si
          JOIN sales s          ON s.id = si.sale_id
-         LEFT JOIN produtos p  ON p.id = si.product_id
+         LEFT JOIN produtos p  ON p.id = si.product_id AND p.empresa_id = s.empresa_id
          LEFT JOIN tamanhos t  ON t.id = si.size_id
-        WHERE s.usuario_id = $1 AND s.channel = $2::sale_channel
+        WHERE s.empresa_id = $1 AND s.usuario_id = $2 AND s.channel = $3::sale_channel
         ORDER BY s.occurred_at DESC, si.id ASC
-        LIMIT $3`,
-      [usuarioId, INSTAGRAM_SALE_CHANNEL, clampLimit(limit)]
+        LIMIT $4`,
+      [empresaId, usuarioId, INSTAGRAM_SALE_CHANNEL, clampLimit(limit)]
     );
     return rows.map((row) => ({
       id: String(row.id),
@@ -523,15 +524,15 @@ export class InstagramConnectorService {
    * escopado ao operador e sem nenhum material secreto: o navegador
    * recebe contadores e rótulos, nunca credencial.
    */
-  async getPanel(usuarioId: number, limit = 10): Promise<InstagramPanelSnapshot> {
+  async getPanel(empresaId: number, usuarioId: number, limit = 10): Promise<InstagramPanelSnapshot> {
     const take = clampLimit(limit);
     const [revenueCents, salesCount, eventCount, sales, events, importedContent] = await Promise.all([
-      this.sumChannelRevenueCents(usuarioId),
-      this.countImportedOrders(usuarioId),
-      this.countWebhookEvents(usuarioId),
-      this.listChannelSales(usuarioId, take),
-      this.listWebhookEvents(usuarioId, take),
-      this.listImportedContent(usuarioId, take),
+      this.sumChannelRevenueCents(empresaId, usuarioId),
+      this.countImportedOrders(empresaId, usuarioId),
+      this.countWebhookEvents(empresaId, usuarioId),
+      this.listChannelSales(empresaId, usuarioId, take),
+      this.listWebhookEvents(empresaId, usuarioId, take),
+      this.listImportedContent(empresaId, usuarioId, take),
     ]);
     return { provider: INSTAGRAM_PROVIDER, revenueCents, salesCount, eventCount, sales, events, importedContent };
   }

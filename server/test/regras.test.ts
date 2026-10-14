@@ -175,7 +175,7 @@ test('fase 3A: política mais específica prevalece e preço é calculado pelo s
   await createRecord(RESOURCES.politicas_comerciais, { nome: 'Geral 3%', escopo: 'geral', desconto_pct: 3, multiplo_qtd: 1, ativo: true }, admin);
   await createRecord(RESOURCES.politicas_comerciais, { nome: 'Coleção 8%', escopo: 'colecao', colecao_id: 1, desconto_pct: 8, pedido_min_pecas: 12, multiplo_qtd: 3, ativo: true }, admin);
   const { resolverPoliticaComercial, precoComPolitica } = await import('../src/politicasComerciais');
-  const politica = await resolverPoliticaComercial({ catalogo: cat, canal: 'atacado' });
+  const politica = await resolverPoliticaComercial({ empresaId: Number(cat.empresa_id), catalogo: cat, canal: 'atacado' });
   assert.equal(politica?.nome, 'Coleção 8%');
   assert.equal(politica?.pedido_min_pecas, 12);
   assert.equal(politica?.multiplo_qtd, 3);

@@ -6,8 +6,8 @@
  * Fonte: `modules/connectors/core/connector.interface.ts` do
  * brobond-ai-commerce (PR005/PR012). ADAPTAÇÕES:
  *
- *   • `organizationId?: string` → `usuarioId: number` em
- *     `FetchCatalogOptions` (tenancy do ERP).
+ *   • `FetchCatalogOptions` exige `empresaId` e `usuarioId` do contexto
+ *     autenticado, sem inferir tenant por SKU ou credencial global.
  *   • O enum `ConnectorPlatform` do Prisma deu lugar ao
  *     `ConnectorProviderName` puro (`core/providers.ts`) — sem import de
  *     cliente de banco em arquivo de contrato.
@@ -50,7 +50,9 @@ export interface NormalizedContent {
 
 /** Opções aceitas por `fetchCatalog()`. */
 export interface FetchCatalogOptions {
-  /** Escopo de responsável — injetado pelo servidor, nunca pelo cliente. */
+  /** Empresa ativa validada pelo servidor a partir da sessão/concessão. */
+  empresaId: number;
+  /** Responsável autenticado — injetado pelo servidor, nunca pelo cliente. */
   usuarioId: number;
   /** Teto de itens. O adaptador DEVE respeitar. */
   limit?: number;

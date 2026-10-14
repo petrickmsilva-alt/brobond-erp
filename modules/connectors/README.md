@@ -155,19 +155,25 @@ Elas são montadas **depois do `cors()` e antes do `express.json()`** porque:
 2. a assinatura HMAC é calculada sobre os **bytes crus**, que o parser JSON
    destruiria (daí o `express.raw`).
 
-A segurança não vem da sessão e sim do `state` de uso único (callback) e da
-assinatura do provedor + `shop_id` já gravado no conector (webhook). Um
-segmento `:provider` que não seja um dos slugs registrados cai em `next()`, de
-modo que o **CRUD autenticado pré-existente de `/api/webhooks` continua
-intacto**.
+A segurança não vem da sessão e sim do `state` de uso único, que carrega
+`empresaId` + `usuarioId` (callback), e da assinatura do provedor + `shop_id`
+já gravado no conector (webhook). A identidade externa só resolve o conector
+quando corresponde a uma única empresa; se houver ambiguidade, o evento é
+ignorado. Um segmento `:provider` que não seja dos slugs registrados cai em
+`next()`, de modo que o **CRUD autenticado pré-existente de `/api/webhooks`
+continua intacto**.
 
-## Idempotência
+## Isolamento e idempotência
 
-- `connector_events` tem `UNIQUE (usuario_id, provider, external_event_id)`:
-  reentrega do provedor é reconhecida e descartada.
-- `sales` tem `UNIQUE (usuario_id, channel, external_order_id)`: o upsert
-  aterrissa nessa chave em vez de inserir às cegas. Reprocessar o mesmo pedido
-  **atualiza**, nunca duplica receita.
+- Conexões usam `UNIQUE (empresa_id, usuario_id, provider)`; todos os reads,
+  updates de token/status, painéis e contadores recebem empresa e responsável.
+- `connector_events` usa `UNIQUE (empresa_id, usuario_id, provider,
+  external_event_id)`: reentrega do provedor é reconhecida no tenant certo.
+- `sales` usa `UNIQUE (empresa_id, usuario_id, channel, external_order_id)`:
+  o upsert aterrissa nessa chave em vez de inserir às cegas. O mesmo pedido
+  externo em empresas diferentes permanece independente.
+- O matcher exige `empresaId` explícito e aplica `empresa_id` em cada busca de
+  SKU exato, prefixo e título; SKU/nome iguais não cruzam o catálogo.
 - Venda e itens são gravados na **mesma transação**; os itens são reescritos em
   bloco para que uma correção do pedido não deixe linha órfã.
 - O que não terminar fica com `processed_at = NULL` e é retomado por
@@ -189,8 +195,12 @@ catálogo. Por isso não entra em `CONNECTOR_PROVIDER_REQUIRED_ENV`.
 ## Testes
 
 `server/test/connectors.test.ts` cobre registro estrito dos provedores,
-criptografia em repouso, as quatro famílias de assinatura de webhook, o upsert
-idempotente (com banco fingido) e o casamento de catálogo.
+criptografia em repouso, as famílias de assinatura de webhook, o upsert
+idempotente (com banco fingido) e o casamento de catálogo. Os testes P0
+`server/test/p0-commerce-tenant.test.ts` exercitam SKU/nome idênticos entre
+empresas, tentativas cross-tenant, reentrega/concorrência e recusa de webhook
+ambíguo; `server/test/p0-catalog-public.test.ts` cobre o isolamento do
+catálogo, estoque, políticas e pedidos públicos.
 
 Do Instagram, em particular: handshake `hub.challenge` (token certo, errado e
 ausente), assinatura `sha256=` sobre os bytes crus, normalização do payload

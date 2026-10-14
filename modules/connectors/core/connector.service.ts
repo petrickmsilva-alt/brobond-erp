@@ -4,9 +4,9 @@
  * Fonte: `modules/marketplace/core/connector.service.ts` do
  * brobond-ai-commerce (PR012/PR016). ADAPTAÇÕES DESTA FASE:
  *
- *   • Tenancy `organizationId: string` → `usuarioId: number` em TODAS as
- *     assinaturas: quem é dono da conexão, quem aparece na auditoria de
- *     faturamento e quem recebe a venda importada é o OPERADOR do ERP.
+ *   • Tenancy explícita: `empresaId` (empresa ativa validada na sessão) +
+ *     `usuarioId` (responsável autenticado) em todas as operações; nenhum
+ *     dos dois é inferido de SKU, payload externo ou credencial global.
  *   • Auditoria por gancho injetado (`core/audit.ts`) em vez de
  *     `prisma.auditLog`.
  *   • O mapa de refresh é exaustivo sobre os QUATRO canais de produção
@@ -48,7 +48,6 @@ import {
 } from '../mercadolivre/mercadolivre.service';
 import {
   getMercadoPagoEnvironmentCredentials,
-  hasPersistedMercadoPagoCredentials,
   validateMercadoPagoAccessToken,
 } from '../mercadopago/mercadopago.service';
 import { buildNuvemshopAuthorizationUrl, exchangeNuvemshopCode, fetchNuvemshopStore } from '../nuvemshop/nuvemshop.service';
@@ -91,12 +90,13 @@ function decryptCredential(ciphertext: string, provider: ConnectorProviderName, 
 
 async function parkConnectorForUndecryptableCredential(
   repository: ConnectorRepository,
+  empresaId: number,
   usuarioId: number,
   provider: ConnectorProviderName,
   error: ConnectorTokenUndecryptableError
 ): Promise<void> {
   try {
-    await repository.setStatus(usuarioId, provider, 'REAUTH_REQUIRED', error.message);
+    await repository.setStatus(empresaId, usuarioId, provider, 'REAUTH_REQUIRED', error.message);
   } catch {
     // Banco indisponível no caminho de erro: o erro de domínio já carrega
     // a ação que o operador precisa tomar. Nunca escalar para 500.
@@ -180,15 +180,15 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
 
   return {
     /** Conexões do responsável, já projetadas sem material secreto. */
-    async listStatus(usuarioId: number): Promise<ConnectorStatusDTO[]> {
-      const rows = await repository.list(usuarioId);
+    async listStatus(empresaId: number, usuarioId: number): Promise<ConnectorStatusDTO[]> {
+      const rows = await repository.list(empresaId, usuarioId);
       const byProvider = new Map(rows.map((row) => [row.provider, row]));
       return CONNECTOR_PROVIDERS.map((provider) => toConnectorStatusDTO(provider, byProvider.get(provider) ?? null));
     },
 
     /** Uma conexão específica, projetada sem material secreto. */
-    async getStatus(usuarioId: number, provider: ConnectorProviderName): Promise<ConnectorStatusDTO> {
-      return toConnectorStatusDTO(provider, await repository.findByProvider(usuarioId, provider));
+    async getStatus(empresaId: number, usuarioId: number, provider: ConnectorProviderName): Promise<ConnectorStatusDTO> {
+      return toConnectorStatusDTO(provider, await repository.findByProvider(empresaId, usuarioId, provider));
     },
 
     /**
@@ -204,6 +204,7 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
      * Sem base válida, cai na resolução estática do ambiente.
      */
     async startAuthorization(
+      empresaId: number,
       usuarioId: number,
       provider: ConnectorProviderName,
       options: { redirectBase?: string | null } = {}
@@ -217,7 +218,7 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
       if (missing.length) {
         throw new ConnectorError(`Configuração incompleta do conector: ${missing.join(', ')}.`, provider);
       }
-      const state = await oauthStates.issue(usuarioId, provider, { redirectUri: dynamicRedirectUri });
+      const state = await oauthStates.issue(empresaId, usuarioId, provider, { redirectUri: dynamicRedirectUri });
       switch (provider) {
         case 'MERCADOLIVRE': {
           const { resolveMercadoLivreRedirectUri } = await import('../mercadolivre/mercadolivre.service');
@@ -262,9 +263,9 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
     async handleOAuthCallback(
       provider: ConnectorProviderName,
       input: { code: string; state: string; shopId?: string | null }
-    ): Promise<{ usuarioId: number; connector: ConnectorRow }> {
+    ): Promise<{ empresaId: number; usuarioId: number; connector: ConnectorRow }> {
       assertEncryptionKey();
-      const { usuarioId, redirectUri } = await oauthStates.consume(input.state, provider);
+      const { empresaId, usuarioId, redirectUri } = await oauthStates.consume(input.state, provider);
 
       switch (provider) {
         case 'MERCADOLIVRE': {
@@ -272,7 +273,7 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
           // state): a Meli compara os dois valores byte a byte.
           const tokens = await exchangeMercadoLivreCode(input.code, undefined, redirectUri);
           const identity = await fetchMercadoLivreIdentity(tokens.accessToken);
-          const connector = await repository.upsertConnection(usuarioId, provider, {
+          const connector = await repository.upsertConnection(empresaId, usuarioId, provider, {
             status: 'CONNECTED',
             accessToken: encryptConnectorSecret(tokens.accessToken),
             refreshToken: encryptConnectorSecret(tokens.refreshToken),
@@ -288,7 +289,7 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
             connectorId: connector.id,
             metadata: { sellerId: identity.userId, nickname: identity.nickname },
           });
-          return { usuarioId, connector };
+          return { empresaId, usuarioId, connector };
         }
 
         case 'INSTAGRAM': {
@@ -299,7 +300,7 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
           // para o de longa duração (60 dias), que é o renovável.
           const longLived = await exchangeInstagramLongLivedToken(shortLived.accessToken);
           const account = await fetchInstagramBusinessAccount(longLived.accessToken);
-          const connector = await repository.upsertConnection(usuarioId, provider, {
+          const connector = await repository.upsertConnection(empresaId, usuarioId, provider, {
             status: 'CONNECTED',
             accessToken: encryptConnectorSecret(longLived.accessToken),
             // A Meta não emite refresh token: o próprio token longo é o
@@ -319,13 +320,13 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
             connectorId: connector.id,
             metadata: { igUserId: account.igUserId, username: account.username, pageId: account.pageId },
           });
-          return { usuarioId, connector };
+          return { empresaId, usuarioId, connector };
         }
 
         case 'NUVEMSHOP': {
           const tokens = await exchangeNuvemshopCode(input.code);
           const store = await fetchNuvemshopStore(tokens.accessToken, tokens.storeId);
-          const connector = await repository.upsertConnection(usuarioId, provider, {
+          const connector = await repository.upsertConnection(empresaId, usuarioId, provider, {
             status: 'CONNECTED',
             accessToken: encryptConnectorSecret(tokens.accessToken),
             // Token PERMANENTE: não há refresh token nem validade para
@@ -345,7 +346,7 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
             connectorId: connector.id,
             metadata: { storeId: tokens.storeId, storeName: store.storeName },
           });
-          return { usuarioId, connector };
+          return { empresaId, usuarioId, connector };
         }
 
         default:
@@ -354,12 +355,12 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
     },
 
     /** Ativa para este operador o par provisionado no ambiente do servidor. */
-    async connectMercadoPagoFromEnvironment(usuarioId: number): Promise<ConnectorRow> {
+    async connectMercadoPagoFromEnvironment(empresaId: number, usuarioId: number): Promise<ConnectorRow> {
       const credentials = getMercadoPagoEnvironmentCredentials();
       if (!credentials) {
         throw new ConnectorConfigError('MERCADOPAGO_ACCESS_TOKEN e MERCADOPAGO_PUBLIC_KEY', 'MERCADOPAGO');
       }
-      return this.connectMercadoPago(usuarioId, credentials);
+      return this.connectMercadoPago(empresaId, usuarioId, credentials);
     },
 
     /**
@@ -367,10 +368,10 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
      * ANTES de persistir (credencial nunca é gravada sem passar na
      * validação oficial) e guarda as duas chaves cifradas.
      */
-    async connectMercadoPago(usuarioId: number, input: { accessToken: string; publicKey: string }): Promise<ConnectorRow> {
+    async connectMercadoPago(empresaId: number, usuarioId: number, input: { accessToken: string; publicKey: string }): Promise<ConnectorRow> {
       assertEncryptionKey();
       const identity = await validateMercadoPagoAccessToken(input.accessToken);
-      const connector = await repository.upsertConnection(usuarioId, 'MERCADOPAGO', {
+      const connector = await repository.upsertConnection(empresaId, usuarioId, 'MERCADOPAGO', {
         status: 'CONNECTED',
         accessToken: encryptConnectorSecret(input.accessToken),
         publicKey: encryptConnectorSecret(input.publicKey),
@@ -394,15 +395,8 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
      * Devolve um access token VÁLIDO em texto puro, renovando de forma
      * transparente quando vencido ou prestes a vencer.
      */
-    async getValidAccessToken(usuarioId: number, provider: ConnectorProviderName): Promise<{ accessToken: string; shopId: string | null }> {
-      const connector = await repository.findByProvider(usuarioId, provider);
-
-      // Mercado Pago: o par do ambiente é o fallback de deploy para
-      // instalações que provisionam a credencial globalmente.
-      if (provider === 'MERCADOPAGO' && !hasPersistedMercadoPagoCredentials(connector)) {
-        const environment = getMercadoPagoEnvironmentCredentials();
-        if (environment) return { accessToken: environment.accessToken, shopId: null };
-      }
+    async getValidAccessToken(empresaId: number, usuarioId: number, provider: ConnectorProviderName): Promise<{ accessToken: string; shopId: string | null }> {
+      const connector = await repository.findByProvider(empresaId, usuarioId, provider);
 
       if (!connector?.accessToken) {
         throw new ConnectorReauthRequiredError(provider, `O conector "${provider}" não possui credencial ativa. Conecte a conta primeiro.`);
@@ -419,21 +413,21 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
 
         const refresher = TOKEN_REFRESHERS[provider];
         if (!connector.refreshToken || !refresher) {
-          await repository.setStatus(usuarioId, provider, 'EXPIRED');
+          await repository.setStatus(empresaId, usuarioId, provider, 'EXPIRED');
           throw new ConnectorReauthRequiredError(provider, `A credencial do conector "${provider}" expirou. Reconecte a conta.`);
         }
 
         const refreshToken = decryptCredential(connector.refreshToken, provider, 'refresh token');
         try {
           const tokens = await refresher(connector, refreshToken);
-          await repository.saveTokens(usuarioId, connector.id, {
+          await repository.saveTokens(empresaId, usuarioId, connector.id, {
             accessToken: encryptConnectorSecret(tokens.accessToken),
             refreshToken: tokens.refreshToken ? encryptConnectorSecret(tokens.refreshToken) : null,
             expiresAt: tokens.expiresAt,
           });
           return { accessToken: tokens.accessToken, shopId: tokens.shopId };
         } catch (error) {
-          await repository.setStatus(usuarioId, provider, 'EXPIRED', 'A renovação do token falhou — reconecte a conta.');
+          await repository.setStatus(empresaId, usuarioId, provider, 'EXPIRED', 'A renovação do token falhou — reconecte a conta.');
           // Refresh que falha é terminal para a credencial: o provedor vai
           // continuar recusando até a conta ser autorizada de novo.
           if (error instanceof ConnectorReauthRequiredError) throw error;
@@ -445,7 +439,7 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
         }
       } catch (error) {
         if (error instanceof ConnectorTokenUndecryptableError) {
-          await parkConnectorForUndecryptableCredential(repository, usuarioId, provider, error);
+          await parkConnectorForUndecryptableCredential(repository, empresaId, usuarioId, provider, error);
         }
         throw error;
       }
@@ -457,8 +451,8 @@ export function createConnectorService(deps: ConnectorServiceDependencies = {}) 
      * desautorização do lado do provedor segue disponível no painel do
      * vendedor.
      */
-    async disconnect(usuarioId: number, provider: ConnectorProviderName): Promise<void> {
-      const connector = await repository.clearCredentials(usuarioId, provider);
+    async disconnect(empresaId: number, usuarioId: number, provider: ConnectorProviderName): Promise<void> {
+      const connector = await repository.clearCredentials(empresaId, usuarioId, provider);
       await auditConnector({
         action: `${provider}_DISCONNECTED`,
         usuarioId,
