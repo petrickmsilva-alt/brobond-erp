@@ -251,8 +251,8 @@ As transições **não dependem de estado em memória**: cada teste cria empresa
 | `test:pg` | `DATABASE_URL=… npm run test:pg` | **PASS** — **181/181**, 0 fail/skip/todo (PostgreSQL 16.14 real) | `gate-test-pg.log` |
 | `smoke:pg` | `DATABASE_URL=… npm run smoke:pg` | **PASS** — **126/126** (PostgreSQL real) | `gate-smoke-pg.log` |
 | `git diff --check` | `git diff --check` | **PASS** — exit 0 | `gate-diff-check.log` |
-| CI `verificar` (PR #60) | GitHub Actions | **PASS** — 1m16s (run 38644698250) e **1m58s no commit final `ed1e260`** (run 38645820086); inclui `prisma validate` (= `db:validate`) | `gate-ci-pr60.log` |
-| CI `testes-postgres` (PR #60) | GitHub Actions | **PASS** — 2m34s, 2m48s (`ed1e260`) e **2m51s no commit `8dde918`** (suíte ampliada: 181 no `test:pg`); PostgreSQL real 16.14 | `gate-ci-pr60.log` |
+| CI `verificar` (PR #60) | GitHub Actions | **PASS** — 1m16s (38644698250), 1m58s (`ed1e260`), 1m57s (`8dde918`) e **2m4s (`9296116`, último commit com código de teste)**; inclui `prisma validate` (= `db:validate`) | `gate-ci-pr60.log` |
+| CI `testes-postgres` (PR #60) | GitHub Actions | **PASS** — 2m34s, 2m48s (`ed1e260`), 2m51s (`8dde918`, suíte ampliada) e **2m45s (`9296116`)**; PostgreSQL real 16.14. Commits posteriores são **somente documentação** | `gate-ci-pr60.log` |
 | `db:validate` | `npm run db:validate` | **BLOQUEADO (rede) localmente** — o Prisma precisa baixar o schema-engine em `binaries.prisma.sh` e a TLS é bloqueada neste ambiente. **Não foi mascarado**; o passo `prisma validate` do CI cobre este gate | `gate-db-validate.log` |
 
 Suítes novas do ciclo: `server/test/pdv-caixa-resumo.test.ts` (14), `server/test/fiscal-expedicao.test.ts` (13),
