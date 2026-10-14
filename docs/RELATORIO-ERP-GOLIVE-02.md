@@ -5,7 +5,7 @@
 **Commit base:** `3058c8f2b1054ba11b3d6e0d74c2a42a6b657d94` (`main`)
 **Branch do ciclo:** `arena/ddc7e9e7-brobond-erp` (branch da sessão; nenhuma troca de branch foi feita)
 **Evidências:** `docs/evidencias/erp-golive-02/`
-**Veredito técnico:** **PASS técnico das duas correções** — reprodução ANTES, correção DEPOIS, PostgreSQL 16.14 real (local **e** no CI), concorrência, multiempresa, gates e E2E integrado. **Isto NÃO é aprovação de Go-Live; a aprovação é externa.**
+**Veredito técnico:** **PASS técnico das duas correções** — reprodução ANTES, correção DEPOIS, PostgreSQL 16.14 real (local **e** no CI), concorrência, multiempresa, gates e E2E integrado — **com ressalva declarada**: o resumo do caixa tem uma janela de leitura pré-existente (§18/R7), documentada e não corrigida neste ciclo. **Isto NÃO é aprovação de Go-Live; a aprovação é externa.**
 
 ---
 
@@ -258,6 +258,13 @@ As transições **não dependem de estado em memória**: cada teste cria empresa
 Suítes novas do ciclo: `server/test/pdv-caixa-resumo.test.ts` (14), `server/test/fiscal-expedicao.test.ts` (13),
 `server/test/golive-02-e2e.test.ts` (1), `server/test/pg/e424-golive-02-postgresql.test.ts` (22).
 
+**Nenhum cenário do ciclo é pulado em `npm test`.** Os 66 skips do servidor foram inventariados
+(`skips-inventario.log`): todos vêm de arquivos `test/pg-*.test.ts`, que se auto-pulam sem banco; os dois que
+casam com o vocabulário do ciclo são de **outros** ciclos (`pg-fiscal.test.ts` — nota fantasma; `pg-p2.test.ts` —
+concorrência de abertura de caixa do **P2**, fora do escopo), e ambos **rodam** em `npm run test:pg` (lá o
+contador é `# skipped 0`). As provas PostgreSQL deste ciclo vivem em `test/pg/e424-…test.ts`, que **não se
+auto-pula**: sem `DATABASE_URL` ele lança erro e a suíte falha, em vez de passar em silêncio.
+
 Estabilidade (não basta passar uma vez): `estabilidade-mem.log` — cada suíte de memória **3 rodadas
 consecutivas** verdes (14/14, 13/13, 1/1 em todas); `estabilidade-pg.log` — o arquivo PostgreSQL completo
 (22 testes, incluindo as quatro corridas) **3 rodadas consecutivas** verdes (22/22 · 22/22 · 22/22) no
@@ -328,7 +335,7 @@ ajuste de banco foi feito “para satisfazer teste”. Rollback: não se aplica 
 | `server/test/golive-02-e2e.test.ts` | novo (E2E integrado) | 262 linhas |
 | `server/test/pg/e424-golive-02-postgresql.test.ts` | novo (PostgreSQL real: P1-01, P1-03, E2E, multiempresa, auditoria CRUD) | 1022 linhas |
 | `docs/RELATORIO-ERP-GOLIVE-02.md` | este relatório | novo |
-| `docs/evidencias/erp-golive-02/*.log` | evidências ANTES/DEPOIS, gates, estabilidade e CI | 22 arquivos, 93 KB |
+| `docs/evidencias/erp-golive-02/*.log` | evidências ANTES/DEPOIS, gates, estabilidade, CI, auditorias (CRUD, R7, skips) | 24 arquivos, 108 KB |
 
 `git diff --stat` do código: **3 arquivos, +231 / −24**. Nenhum arquivo de UI, de schema ou de configuração foi tocado.
 
@@ -363,7 +370,21 @@ foi tocado. Nenhum problema novo foi “consertado” — o achado extra da audi
    **AUTORIZADO** sem restringir o modelo: uma **NFC-e (65)** autorizada também libera separação → conferência →
    embalagem → expedição (teste PG dedicado pina o comportamento). Restringir a expedição ao modelo 55 é
    **decisão de produto** e, por isso, ficou fora deste ciclo — nada foi alterado aqui.
-6. **R5 — Concorrência sob SERIALIZABLE.** Rodadas podem terminar com **zero** vencedores (ambos abortam com
+6. **R7 — a leitura do resumo tem JANELA (pré-existente, documentada, não corrigida aqui).** `resumoCaixa` lê as
+   vendas do caixa com `pageSize: 5000`, os pagamentos com `10000` e os movimentos de gaveta com `5000`
+   (`server/src/pdv.ts:191/194/195`; **os mesmos valores já existiam na fonte base** `3058c8f`, linhas
+   165/168/169) e o store aplica `LIMIT` **sem avisar** (`server/src/pgstore.ts:286`; no MemStore o corte é o
+   `slice` de `memdb.ts:217-220`). Consequência provada em PostgreSQL real (`risco-truncamento-resumo.log`,
+   caixa com 5001 vendas de 10,00): o resumo responde **5000 vendas / 50.000,00** quando a verdade é
+   **5001 / 50.010,00**, e o fechamento contando a gaveta real (50.010,00) grava **diferença +10,00** com o
+   alerta "Sobra de caixa registrada" — uma **divergência falsa**, no mesmo endpoint desta correção.
+   Alcance: exige um caixa com mais de 5.000 vendas (ou mais de 10.000 pagamentos) **na mesma sessão de
+   caixa** — improvável num turno, plausível num caixa esquecido aberto por dias. **Não foi corrigido neste
+   ciclo** por regra explícita de escopo ("outro problema encontrado → documentar, não corrigir") e porque a
+   correção é uma mudança de estratégia de leitura (agregar em SQL, paginar até o fim ou **recusar** o resumo
+   acima da janela em vez de truncar em silêncio). A aritmética da correção do P1-01 (`saldo inicial +
+   entradas − saídas = saldo final`) permanece provada dentro da janela, que é onde os cenários exigidos vivem.
+7. **R5 — Concorrência sob SERIALIZABLE.** Rodadas podem terminar com **zero** vencedores (ambos abortam com
    40001→409). O sistema é idempotente e não duplica efeito, mas o operador pode precisar reenviar a operação.
 
 ## 19. Limitações
@@ -373,6 +394,9 @@ foi tocado. Nenhum problema novo foi “consertado” — o achado extra da audi
 - O E2E é de servidor (handlers/HTTP interno), não de navegador/UI: **nenhuma verificação de UX** foi feita.
 - A suíte PG exige `DATABASE_URL` e **falha** (não é pulada) sem ele; no CI roda no job `testes-postgres`.
 - Este relatório cobre **somente** P1-01 e P1-03.
+- O resumo do caixa é correto **dentro da janela de leitura** (5.000 vendas / 10.000 pagamentos / 5.000
+  movimentos por caixa); acima disso ele trunca em silêncio — ver §18/R7, com prova em
+  `risco-truncamento-resumo.log`.
 
 ## 20. Conclusão
 
@@ -381,7 +405,8 @@ As duas correções estão implementadas na origem, com reprodução ANTES regis
 migração e sem tocar escopo negativo. Gates: `audit:menu`, `typecheck`, `npm test`, `build`, `smoke`, `test:pg`
 (181/181), `smoke:pg` (126/126), `lint` e `git diff --check` **PASS**; `db:validate` **BLOQUEADO por rede**
 localmente e declarado abertamente — no CI do PR #60 os jobs **`verificar` (1m16s) e `testes-postgres` (2m34s)
-passaram**, cobrindo `prisma validate`, a suíte PostgreSQL real e o `smoke:pg`. Estabilidade comprovada em
+passaram**, cobrindo `prisma validate`, a suíte PostgreSQL real e o `smoke:pg`. Ressalva declarada: a janela de leitura do resumo (§18/R7), pré-existente, segue documentada e **não** corrigida.
+Estabilidade comprovada em
 rodadas consecutivas: memória 3× verde por suíte (14/14, 13/13, 1/1) e PostgreSQL 3× verde (22/22 · 22/22 · 22/22).
 
 ### Auto-auditoria adversarial (10 perguntas)
@@ -389,7 +414,7 @@ rodadas consecutivas: memória 3× verde por suíte (14/14, 13/13, 1/1) e Postgr
 | # | Pergunta | Resposta | Base |
 |---|---|---|---|
 | 1 | Vender e receber duplica dinheiro no caixa? | **NÃO** | 1 pagamento por venda; resumo derivado venda a venda; PG real |
-| 2 | O resumo bate com os movimentos reais? | **SIM** | `saldo inicial + entradas − saídas = saldo final` e `saldo calculado = soma dos movimentos válidos` em A–L |
+| 2 | O resumo bate com os movimentos reais? | **SIM, dentro da janela de leitura** | `saldo inicial + entradas − saídas = saldo final` e `saldo calculado = soma dos movimentos válidos` em A–L; acima de 5.000 vendas por caixa a leitura trunca em silêncio — **documentado em §18/R7**, não corrigido neste ciclo |
 | 3 | Venda de A aparece no caixa de B? | **NÃO** | testes PG multiempresa com `empresa_id` lido no banco |
 | 4 | Requisições concorrentes duplicam dinheiro? | **NÃO** | rodadas concorrentes: ≤ 1 vencedor, perdedor 409, reenvio idempotente |
 | 5 | NF autorizada chega à expedição? | **SIM** | o 409 foi reproduzido e eliminado; fluxo completo em memória e PG (inclusive na venda `entregue` e na NFC-e autorizada) |
