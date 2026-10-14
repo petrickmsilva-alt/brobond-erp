@@ -245,8 +245,8 @@ As transições **não dependem de estado em memória**: cada teste cria empresa
 | `test:pg` | `DATABASE_URL=… npm run test:pg` | **PASS** — **178/178**, 0 fail/skip/todo (PostgreSQL 16.14 real) | `gate-test-pg.log` |
 | `smoke:pg` | `DATABASE_URL=… npm run smoke:pg` | **PASS** — **126/126** (PostgreSQL real) | `gate-smoke-pg.log` |
 | `git diff --check` | `git diff --check` | **PASS** — exit 0 | `gate-diff-check.log` |
-| CI `verificar` (PR #60) | GitHub Actions | **PASS** (1m16s) — inclui `prisma validate` (= `db:validate`) | `gate-ci-pr60.log` |
-| CI `testes-postgres` (PR #60) | GitHub Actions | **PASS** (2m34s) — PostgreSQL real 16.14 | `gate-ci-pr60.log` |
+| CI `verificar` (PR #60) | GitHub Actions | **PASS** — 1m16s (run 38644698250) e **1m58s no commit final `ed1e260`** (run 38645820086); inclui `prisma validate` (= `db:validate`) | `gate-ci-pr60.log` |
+| CI `testes-postgres` (PR #60) | GitHub Actions | **PASS** — 2m34s e **2m48s no commit final `ed1e260`**; PostgreSQL real 16.14 | `gate-ci-pr60.log` |
 | `db:validate` | `npm run db:validate` | **BLOQUEADO (rede) localmente** — o Prisma precisa baixar o schema-engine em `binaries.prisma.sh` e a TLS é bloqueada neste ambiente. **Não foi mascarado**; o passo `prisma validate` do CI cobre este gate | `gate-db-validate.log` |
 
 Suítes novas do ciclo: `server/test/pdv-caixa-resumo.test.ts` (13), `server/test/fiscal-expedicao.test.ts` (12),
@@ -319,7 +319,7 @@ ajuste de banco foi feito “para satisfazer teste”. Rollback: não se aplica 
 | `server/test/golive-02-e2e.test.ts` | novo (E2E integrado) | 262 linhas |
 | `server/test/pg/e424-golive-02-postgresql.test.ts` | novo (PostgreSQL real: P1-01, P1-03, E2E, multiempresa, auditoria CRUD) | 917 linhas |
 | `docs/RELATORIO-ERP-GOLIVE-02.md` | este relatório | novo |
-| `docs/evidencias/erp-golive-02/*.log` | evidências ANTES/DEPOIS e gates | novos/atualizados |
+| `docs/evidencias/erp-golive-02/*.log` | evidências ANTES/DEPOIS, gates, estabilidade e CI | 22 arquivos, 101 KB |
 
 `git diff --stat` do código: **3 arquivos, +231 / −24**. Nenhum arquivo de UI, de schema ou de configuração foi tocado.
 

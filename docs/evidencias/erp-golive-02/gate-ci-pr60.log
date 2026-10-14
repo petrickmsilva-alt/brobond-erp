@@ -8,3 +8,7 @@ verificar	pass	1m16s	https://github.com/petrickmsilva-alt/brobond-erp/actions/ru
 --- observação ---
 # O log bruto do job é servido por blob storage do Azure, fora dos hosts acessíveis deste sandbox:
 # a conclusão dos checks (abaixo/abaixo) é a evidência disponível aqui; o job passou inteiro.
+
+--- CI do commit FINAL ed1e260 (run 38645820086) ---
+testes-postgres	pass	2m48s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38645820086/job/116132279612
+verificar	pass	1m58s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38645820086/job/116132279788
