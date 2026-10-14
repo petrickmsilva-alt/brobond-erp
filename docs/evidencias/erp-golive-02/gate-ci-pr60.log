@@ -1,0 +1,10 @@
+===== ERP-GOLIVE-02 · CI do PR #60 (GitHub Actions · run 38644698250) =====
+# job testes-postgres: PostgreSQL 16.14 real no CI (migrations + npm run test:pg + smoke:pg)
+# job verificar: typecheck, lint, prisma validate (db:validate), build
+
+testes-postgres	pass	2m34s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38644698250/job/116128554019
+verificar	pass	1m16s	https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38644698250/job/116128553662
+
+--- observação ---
+# O log bruto do job é servido por blob storage do Azure, fora dos hosts acessíveis deste sandbox:
+# a conclusão dos checks (abaixo/abaixo) é a evidência disponível aqui; o job passou inteiro.

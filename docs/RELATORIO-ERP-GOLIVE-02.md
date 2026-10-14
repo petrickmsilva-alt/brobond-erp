@@ -5,7 +5,7 @@
 **Commit base:** `3058c8f2b1054ba11b3d6e0d74c2a42a6b657d94` (`main`)
 **Branch do ciclo:** `arena/ddc7e9e7-brobond-erp` (branch da sessão; nenhuma troca de branch foi feita)
 **Evidências:** `docs/evidencias/erp-golive-02/`
-**Veredito técnico:** **PASS técnico das duas correções** — reprodução ANTES, correção DEPOIS, PostgreSQL 16.14 real, concorrência, multiempresa, gates e E2E integrado. **Isto NÃO é aprovação de Go-Live; a aprovação é externa.**
+**Veredito técnico:** **PASS técnico das duas correções** — reprodução ANTES, correção DEPOIS, PostgreSQL 16.14 real (local **e** no CI), concorrência, multiempresa, gates e E2E integrado. **Isto NÃO é aprovação de Go-Live; a aprovação é externa.**
 
 ---
 
@@ -202,6 +202,7 @@ Todos os números abaixo foram obtidos em **PostgreSQL 16.14 real** (`server_ver
 | `pg-depois.log` (fonte corrigida) | NOVO `brobond_pg_after2` | 19 testes · **19 pass · 0 fail** |
 | `gate-test-pg.log` (`npm run test:pg`, suíte inteira) | NOVO `brobond_pg_gate9` | **178 testes · 178 pass · 0 fail · 0 skip · 0 todo** — “ERP-03 GATE PASS: 178 testes PostgreSQL reais; 0 fail/skip/todo.” (116.746 ms) |
 | `gate-smoke-pg.log` (`npm run smoke:pg`) | NOVO `brobond_pg_smoke2` | **126/126** — “✅ smoke:pg — smoke E2E aprovado contra PostgreSQL real” |
+| CI do PR #60 — job `testes-postgres` (GitHub Actions, run [38644698250](https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/38644698250)) | runner do CI (PostgreSQL 16.14) | **PASS** (2m34s) — migrations + `npm run test:pg` + `smoke:pg` no CI |
 
 O que é lido **direto no banco** pelos testes PG (não pelo retorno dos handlers): `pdv_pagamentos.valor`,
 `pdv_caixas.valor_sistema/diferenca`, `estoques.quantidade`, `movimentacoes`, `lancamentos_financeiros`
@@ -240,7 +241,9 @@ As transições **não dependem de estado em memória**: cada teste cria empresa
 | `test:pg` | `DATABASE_URL=… npm run test:pg` | **PASS** — **178/178**, 0 fail/skip/todo (PostgreSQL 16.14 real) | `gate-test-pg.log` |
 | `smoke:pg` | `DATABASE_URL=… npm run smoke:pg` | **PASS** — **126/126** (PostgreSQL real) | `gate-smoke-pg.log` |
 | `git diff --check` | `git diff --check` | **PASS** — exit 0 | `gate-diff-check.log` |
-| `db:validate` | `npm run db:validate` | **BLOQUEADO (rede)** — o Prisma precisa baixar o schema-engine em `binaries.prisma.sh` e a TLS é bloqueada neste ambiente. **Não foi mascarado**; o passo `prisma validate` do CI cobre este gate | `gate-db-validate.log` |
+| CI `verificar` (PR #60) | GitHub Actions | **PASS** (1m16s) — inclui `prisma validate` (= `db:validate`) | `gate-ci-pr60.log` |
+| CI `testes-postgres` (PR #60) | GitHub Actions | **PASS** (2m34s) — PostgreSQL real 16.14 | `gate-ci-pr60.log` |
+| `db:validate` | `npm run db:validate` | **BLOQUEADO (rede) localmente** — o Prisma precisa baixar o schema-engine em `binaries.prisma.sh` e a TLS é bloqueada neste ambiente. **Não foi mascarado**; o passo `prisma validate` do CI cobre este gate | `gate-db-validate.log` |
 
 Suítes novas do ciclo: `server/test/pdv-caixa-resumo.test.ts` (13), `server/test/fiscal-expedicao.test.ts` (12),
 `server/test/golive-02-e2e.test.ts` (1), `server/test/pg/e424-golive-02-postgresql.test.ts` (19).
@@ -289,7 +292,7 @@ foi tocado. Nenhum problema novo foi “consertado” — o achado extra da audi
    é inalcançável. A expedição já é robusta a esse estado (uma única baixa — teste PG dedicado). Corrigir o
    faturamento para consultar o carimbo do documento em `faturarVenda` tocaria um motor compartilhado por PDV,
    pedidos, expedição e autorização fiscal — **fora do escopo autorizado deste ciclo**, portanto documentado.
-2. **R2 — `db:validate` bloqueado por rede no ambiente local.** Coberto pelo CI (`prisma validate`).
+2. **R2 — `db:validate` bloqueado por rede no ambiente local.** Coberto e **verde** no CI do PR #60 (job `verificar`, PASS, 1m16s). O log bruto dos jobs é servido por blob storage do Azure, fora dos hosts acessíveis deste sandbox; a evidência aqui é a conclusão dos checks (`docs/evidencias/erp-golive-02/gate-ci-pr60.log`).
 3. **R3 — Provedores fiscais são dublês de teste.** A autorização real em SEFAZ (produção) não foi homologada;
    o contrato idempotente do provedor foi exercitado (chave de idempotência por venda/modelo, 409 sem credencial,
    202 em rejeição).
@@ -312,7 +315,8 @@ As duas correções estão implementadas na origem, com reprodução ANTES regis
 **e** em PostgreSQL real, provas de concorrência, de multiempresa e de idempotência, sem motor novo, sem
 migração e sem tocar escopo negativo. Gates: `audit:menu`, `typecheck`, `npm test`, `build`, `smoke`, `test:pg`
 (178/178), `smoke:pg` (126/126), `lint` e `git diff --check` **PASS**; `db:validate` **BLOQUEADO por rede**
-declarado abertamente e coberto pelo CI.
+localmente e declarado abertamente — no CI do PR #60 os jobs **`verificar` (1m16s) e `testes-postgres` (2m34s)
+passaram**, cobrindo `prisma validate`, a suíte PostgreSQL real e o `smoke:pg`.
 
 ### Auto-auditoria adversarial (10 perguntas)
 
