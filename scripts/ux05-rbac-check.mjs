@@ -67,7 +67,7 @@ for (const p of PERFIS) {
   // Senha provisória → troca obrigatória (comportamento pré-existente).
   // A política rejeita senha que contenha o e-mail, então usamos uma senha neutra.
   if (page.url().includes('/config')) {
-    const novo = 'Zq7#LmPv2!Tr';
+    const novo = process.env.UX05_SENHA_NOVA || p.senha;
     const campos = await page.$$('input[type="password"]');
     if (campos.length >= 3) {
       await campos[0].type(p.senha);

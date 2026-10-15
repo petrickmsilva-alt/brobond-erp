@@ -14,8 +14,12 @@ import { totpAgora } from './ux05-totp.mjs';
 const API = process.env.UX05_API || 'http://localhost:3001';
 const ADMIN_EMAIL = 'admin@brobond.com.br';
 const ADMIN_INICIAL = process.env.ADMIN_PASSWORD || 'brobond123';
-const SENHA_NOVA = process.env.UX05_PASS || 'Zq7#LmPv2!Tr';
-const SENHA_TEMP_FIXA = process.env.UX05_SENHA_PERFIL || 'Zq7#LmPv2!Tr';
+const SENHA_NOVA = process.env.UX05_PASS || process.env.UX05_SENHA_NOVA;
+const SENHA_TEMP_FIXA = process.env.UX05_SENHA_PERFIL || SENHA_NOVA;
+if (!SENHA_NOVA) {
+  console.error('❌ Defina UX05_PASS (senha de teste do admin) antes de provisionar.');
+  process.exit(1);
+}
 
 const chamar = async (metodo, caminho, corpo, token) => {
   const headers = { 'Content-Type': 'application/json' };
@@ -113,7 +117,9 @@ if (!temFilial) {
     },
     tokenAdmin
   );
-  console.log(criar.status < 300 ? '✅ Empresa filial criada (id 2)' : `⚠️  Empresa filial: ${criar.status} ${JSON.stringify(criar.dados)}`);
+  console.log(
+    criar.status < 300 ? '✅ Empresa filial criada (id 2)' : `⚠️  Empresa filial: ${criar.status} ${JSON.stringify(criar.dados)}`
+  );
 }
 const conceder = await chamar('POST', '/api/usuarios/1/empresas', { empresa_id: 2 }, tokenAdmin);
 console.log(conceder.status < 300 ? '✅ Acesso do admin à filial concedido' : `⚠️  Concessão: ${conceder.status}`);
@@ -168,5 +174,7 @@ console.log(`export UX05_TOTP_SECRET_FILE=/tmp/segredo.txt`);
 console.log(`export UX05_PASS='${SENHA_NOVA}'`);
 console.log(`export UX05_SENHA_GERENTE='${SENHA_TEMP_FIXA}'`);
 console.log(`export UX05_SENHA_OPERADOR='${SENHA_TEMP_FIXA}'`);
-console.log(`export UX05_ESPERADO='{"GERENTE":{"proibidos":["/empresas","/usuarios","/auditoria"]},"OPERADOR":{"proibidos":["/empresas","/usuarios","/auditoria","/politicas-comerciais"]}}'`);
+console.log(
+  `export UX05_ESPERADO='{"GERENTE":{"proibidos":["/empresas","/usuarios","/auditoria"]},"OPERADOR":{"proibidos":["/empresas","/usuarios","/auditoria","/politicas-comerciais"]}}'`
+);
 console.log(`\nids: gerente=${idGerente} operador=${idOperador}`);
