@@ -241,7 +241,7 @@ describe('Sidebar — Árvore Master renderizada × fonte única', () => {
     unmount();
   });
 
-  it('suporta colapso desktop/tablet (rail de ícones) e fechamento do drawer mobile (botão, backdrop e Escape)', async () => {
+  it('é o drawer de navegação do mobile/tablet: fecha por botão, backdrop e Escape', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     const { container, getByLabelText, getByTestId, unmount } = render(
@@ -251,17 +251,7 @@ describe('Sidebar — Árvore Master renderizada × fonte única', () => {
     );
 
     const aside = container.querySelector('aside')!;
-    expect(aside).toHaveAttribute('data-collapsed', 'false');
-
-    // Colapsar para trilho de ícones
-    const botaoRecolher = getByLabelText('Recolher menu');
-    await user.click(botaoRecolher);
-    expect(aside).toHaveAttribute('data-collapsed', 'true');
-    expect(getByLabelText('Expandir menu')).toHaveAttribute('aria-expanded', 'false');
-
-    // Expandir novamente
-    await user.click(getByLabelText('Expandir menu'));
-    expect(aside).toHaveAttribute('data-collapsed', 'false');
+    expect(aside).toHaveAttribute('data-mobile-open', 'true');
 
     // Fechar drawer mobile por botão, backdrop e tecla Escape
     await user.click(getByLabelText('Fechar menu'));

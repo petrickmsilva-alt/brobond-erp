@@ -112,12 +112,26 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     }
   });
 
-  it('monta as peças do shell: Sidebar, skip-link, busca global e seletor de empresa', async () => {
+  it('monta as peças do shell: Top Navigation, skip-link, busca global e seletor de empresa', async () => {
     await renderShell('/');
-    expect(screen.getByLabelText('Menu principal')).toBeInTheDocument();
+    expect(screen.getByTestId('top-navigation')).toBeInTheDocument();
     expect(screen.getByText('Pular para o conteúdo')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Busca rápida' })).toBeInTheDocument();
     expect(await screen.findByLabelText('Empresa ativa: BroBond Wear. Trocar empresa')).toBeInTheDocument();
+  });
+
+  it('UX-05: a Top Navigation é a navegação principal do desktop e alcança as 11 Áreas', async () => {
+    const user = userEvent.setup();
+    await renderShell('/vendas');
+
+    const topnav = screen.getByTestId('top-navigation');
+    // A Área do módulo ativo já vem marcada na barra superior.
+    const botaoVendas = within(topnav).getByRole('button', { name: /^Vendas/ });
+    expect(botaoVendas).toHaveAttribute('aria-current', 'page');
+
+    await user.click(botaoVendas);
+    expect(within(topnav).getByRole('menuitem', { name: 'Vendas' })).toHaveAttribute('aria-current', 'page');
+    expect(within(topnav).getByRole('menuitem', { name: /^PDV — venda balcão$/ })).toBeInTheDocument();
   });
 
   it('em rota de módulo o breadcrumb é clicável e representa a Árvore Master (BROBOND ERP › Área › Módulo › #id)', async () => {
