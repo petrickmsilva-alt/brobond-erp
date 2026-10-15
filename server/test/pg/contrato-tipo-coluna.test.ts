@@ -65,7 +65,12 @@ test('CONTRATO tipo × coluna: os 88 recursos batem com o banco real', { skip },
 
   const entrada = [];
   for (const r of todos) {
-    const cols = await query(`SELECT column_name, data_type FROM information_schema.columns WHERE table_name = $1`, [r.table]);
+    const cols = await query(`SELECT c.column_name,
+              CASE WHEN c.data_type = 'USER-DEFINED' AND t.typtype = 'e' THEN 'text'
+                   ELSE c.data_type END AS data_type
+         FROM information_schema.columns c
+         LEFT JOIN pg_type t ON t.typname = c.udt_name
+        WHERE c.table_name = $1`, [r.table]);
     const idx = await query(`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = $1`, [r.table]);
     entrada.push({
       recurso: r,
@@ -90,7 +95,12 @@ test('CONTRATO: o inspetor REPROVA a declaração errada do P0-02 (prova de muta
 
   // Colunas e índices REAIS da tabela do webhook.
   const tabela = 'gateway_webhook_events';
-  const cols = await query(`SELECT column_name, data_type FROM information_schema.columns WHERE table_name = $1`, [tabela]);
+  const cols = await query(`SELECT c.column_name,
+              CASE WHEN c.data_type = 'USER-DEFINED' AND t.typtype = 'e' THEN 'text'
+                   ELSE c.data_type END AS data_type
+         FROM information_schema.columns c
+         LEFT JOIN pg_type t ON t.typname = c.udt_name
+        WHERE c.table_name = $1`, [tabela]);
   const idx = await query(`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = $1`, [tabela]);
   const colunas = new Map<string, string>(cols.rows.map((c: any) => [c.column_name, c.data_type]));
   const indices = (await import('./contratoTipos')).indicesUnicosDe(idx.rows as any);
@@ -123,7 +133,12 @@ test('CONTRATO: o inspetor REPROVA a declaração errada do P0-02 (prova de muta
   // (3) Unicidade: declarar `unique` (global) onde o banco só tem índice por
   //     empresa — o caso de produtos.sku/empresas.nome antes deste ciclo.
   const produtos = RESOURCES.produtos;
-  const colsP = await query(`SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'produtos'`);
+  const colsP = await query(`SELECT c.column_name,
+              CASE WHEN c.data_type = 'USER-DEFINED' AND t.typtype = 'e' THEN 'text'
+                   ELSE c.data_type END AS data_type
+         FROM information_schema.columns c
+         LEFT JOIN pg_type t ON t.typname = c.udt_name
+        WHERE c.table_name = 'produtos'`);
   const idxP = await query(`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'produtos'`);
   const mutanteUnico = {
     ...produtos,

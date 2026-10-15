@@ -1668,6 +1668,9 @@ async function projetarVendasErpMemoria(escopo: number[] | null): Promise<Projec
   for (const venda of vendas) {
     const vendaId = Number(venda.id);
     const salesId = `${ERP_ID_PREFIXO_VENDA}${vendaId}`;
+    // GOLIVE-03: venda de marketplace já tem representação analítica própria
+    // (a linha de `sales` que a originou) — projetá-la criaria duplicidade no BI.
+    if (String(venda.pedido_externo_id ?? '').trim() !== '') continue;
     const status = statusErpParaSales(venda.status);
     const existente = memoria.vendas.find((v) => v.id === salesId);
 
@@ -1795,6 +1798,11 @@ export async function projetarVendasErp(ids?: number[]): Promise<ProjecaoErpResu
         CROSS JOIN fallback_usuario fb
        WHERE v.status IN ('faturada', 'entregue')
          ${filtroVendas}
+         -- GOLIVE-03: a venda de marketplace já tem representação analítica
+         -- PRÓPRIA (a linha de sales que a originou, vinculada por
+         -- operational_venda_id). Projetá-la aqui criaria uma SEGUNDA linha e
+         -- o BI contaria a mesma venda duas vezes.
+         AND v.pedido_externo_id IS NULL
          AND COALESCE(eu.usuario_id, fb.usuario_id) IS NOT NULL
       ON CONFLICT (id) DO UPDATE SET
         reference = EXCLUDED.reference,
@@ -1829,6 +1837,7 @@ export async function projetarVendasErp(ids?: number[]): Promise<ProjecaoErpResu
         JOIN vendas v ON v.id = iv.venda_id
        WHERE v.status IN ('faturada', 'entregue')
          ${filtroVendas}
+         AND v.pedido_externo_id IS NULL
          -- P2-08 (auditoria independente, 2026-10-11): o passo 1 não projeta a
          -- venda sem responsável ativo; sem repetir a condição AQUI, o item
          -- entrava órfão e violava a FK "sale_items_sale_id_fkey" (23503), abortando

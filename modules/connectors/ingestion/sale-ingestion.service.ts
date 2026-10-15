@@ -101,6 +101,9 @@ interface IngestedSaleDraft {
   quantity: number;
   occurredAt: Date;
   items: IngestedSaleItemInput[];
+  /** Comprador, quando o provedor expõe (usado pela ponte GOLIVE-03). */
+  buyerName?: string | null;
+  buyerEmail?: string | null;
 }
 
 function asRecord(value: unknown): JsonObject {
@@ -163,6 +166,7 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
       quantity: totalQuantity(items, order.itemCount),
       occurredAt: order.dateClosed ?? order.dateCreated,
       items,
+      buyerName: order.buyerNickname,
     };
   }
 
@@ -198,6 +202,7 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
       quantity: totalQuantity(items),
       occurredAt: payment.dateApproved ?? payment.dateCreated,
       items,
+      buyerEmail: payment.payerEmail,
     };
   }
 
@@ -231,6 +236,8 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
       quantity: totalQuantity(items),
       occurredAt: order.createdAt,
       items,
+      buyerName: order.customerName,
+      buyerEmail: order.customerEmail,
     };
   }
 
@@ -307,6 +314,8 @@ export function createSaleIngestionService(deps: SaleIngestionDependencies = {})
         quantity: draft.quantity,
         occurredAt: draft.occurredAt,
         items: draft.items,
+        buyerName: draft.buyerName ?? null,
+        buyerEmail: draft.buyerEmail ?? null,
       });
 
       // Contadores reais do cartão do conector — mesma convenção de uma

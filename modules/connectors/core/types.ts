@@ -73,6 +73,9 @@ export interface SaleRow {
   channel: SaleChannelName;
   externalOrderId: string | null;
   usuarioId: number;
+  /** Comprador do pedido externo (preservado pela ingestão). */
+  buyerName?: string | null;
+  buyerEmail?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
