@@ -1686,6 +1686,11 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'proposta_id', label: 'Proposta de origem', type: 'ref', ref: 'propostas', list: false, form: false, readonly: true },
       { name: 'pdv_caixa_id', label: 'Caixa do PDV', type: 'ref', ref: 'pdv_caixas', list: false, form: false, readonly: true },
       { name: 'envio_id', label: 'Envio', type: 'ref', ref: 'envios', list: false, form: false, readonly: true },
+      // GOLIVE-03: rastro do pedido externo quando a venda nasce da ponte de
+      // marketplace. Gravados SÓ pela ponte; a unicidade (empresa, canal,
+      // pedido externo) é o índice `uq_vendas_pedido_externo`.
+      { name: 'pedido_externo_canal', label: 'Canal do pedido externo', type: 'text', maxLength: 40, list: false, form: false, readonly: true },
+      { name: 'pedido_externo_id', label: 'Pedido externo', type: 'text', maxLength: 120, list: false, form: false, readonly: true },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true },
       ...auditFields,
     ],
@@ -1717,6 +1722,62 @@ export const RESOURCES: Record<string, Resource> = {
       // reescreve a venda. É isso que torna a venda auditável no tempo.
       { name: 'lista_preco_id', label: 'Lista de preço', type: 'ref', ref: 'listas_preco', list: false, readonly: true },
       { name: 'preco_tabela', label: 'Preço de tabela', type: 'money', list: false, readonly: true },
+    ],
+  },
+
+  // ----------------------------------------------------------------
+  // GOLIVE-03 — registro ANALÍTICO multicanal (`sales`/`sale_items`).
+  //
+  // Interno de propósito: NÃO é recurso de API nem do menu. Existe para que a
+  // ponte marketplace → venda operacional (server/src/marketplaceOperacional.ts)
+  // leia a ordem ingerida e grave nela o vínculo com a venda operacional. O BI
+  // (`negocios.ts`) continua lendo `sales` por SQL direto.
+  // ----------------------------------------------------------------
+  sales: {
+    key: 'sales',
+    empresa: true,
+    table: 'sales',
+    label: 'Vendas multicanal (analítico)',
+    singular: 'Venda multicanal',
+    labelFields: ['id'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'id', label: 'ID', type: 'text', readonly: true },
+      { name: 'reference', label: 'Referência', type: 'text' },
+      { name: 'quantity', label: 'Quantidade', type: 'integer' },
+      { name: 'amount_cents', label: 'Valor (centavos)', type: 'integer' },
+      { name: 'currency', label: 'Moeda', type: 'text' },
+      { name: 'status', label: 'Status', type: 'text' },
+      { name: 'occurred_at', label: 'Ocorrida em', type: 'datetime' },
+      { name: 'channel', label: 'Canal', type: 'text' },
+      { name: 'external_order_id', label: 'Pedido externo', type: 'text' },
+      { name: 'usuario_id', label: 'Usuário', type: 'integer' },
+      { name: 'buyer_name', label: 'Comprador', type: 'text' },
+      { name: 'buyer_email', label: 'E-mail do comprador', type: 'text' },
+      { name: 'operational_venda_id', label: 'Venda operacional', type: 'integer' },
+    ],
+  },
+
+  sale_items: {
+    key: 'sale_items',
+    empresa: false,
+    table: 'sale_items',
+    label: 'Itens de venda multicanal',
+    singular: 'Item de venda multicanal',
+    labelFields: ['id'],
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'id', label: 'ID', type: 'text', readonly: true },
+      { name: 'sale_id', label: 'Venda', type: 'text' },
+      { name: 'product_id', label: 'Produto', type: 'integer' },
+      { name: 'size_id', label: 'Tamanho', type: 'integer' },
+      { name: 'variacao_externa', label: 'Variação externa', type: 'text' },
+      { name: 'quantity', label: 'Quantidade', type: 'integer' },
+      { name: 'unit_price_cents', label: 'Preço unitário (centavos)', type: 'integer' },
+      { name: 'discount_cents', label: 'Desconto (centavos)', type: 'integer' },
+      { name: 'subtotal_cents', label: 'Subtotal (centavos)', type: 'integer' },
     ],
   },
 

@@ -310,6 +310,10 @@ export interface NuvemshopOrder {
   currency: string;
   createdAt: Date;
   items: NuvemshopOrderItem[];
+  /** Nome do comprador, quando a loja expõe (usado pela ponte GOLIVE-03). */
+  customerName: string | null;
+  /** E-mail do comprador, quando a loja expõe. */
+  customerEmail: string | null;
 }
 
 interface NuvemshopOrderProductResponse {
@@ -330,6 +334,10 @@ interface NuvemshopOrderResponse {
   created_at?: string;
   paid_at?: string | null;
   products?: NuvemshopOrderProductResponse[];
+  customer?: {
+    name?: string | null;
+    email?: string | null;
+  } | null;
 }
 
 /** Rótulos de variante que a Nuvemshop usa para tamanho em lojas pt-BR. */
@@ -370,6 +378,8 @@ export async function fetchNuvemshopOrder(
   }
 
   const items = (payload.products ?? []).map(mapOrderItem);
+  const customerName = typeof payload.customer?.name === 'string' ? payload.customer.name.trim() || null : null;
+  const customerEmail = typeof payload.customer?.email === 'string' ? payload.customer.email.trim() || null : null;
   return {
     id: String(payload.id),
     number: payload.number !== undefined && payload.number !== null ? String(payload.number) : null,
@@ -379,6 +389,8 @@ export async function fetchNuvemshopOrder(
     currency: payload.currency ?? 'BRL',
     createdAt: payload.paid_at ? new Date(payload.paid_at) : payload.created_at ? new Date(payload.created_at) : new Date(),
     items,
+    customerName,
+    customerEmail,
   };
 }
 

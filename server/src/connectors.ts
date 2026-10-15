@@ -31,6 +31,7 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { getStore } from './services';
 import { instagramWebhookRouter } from './modules/connectors/instagram/instagram.controller';
+import { converterOrdemDoAtor } from './marketplaceOperacional';
 import {
   appUrl,
   connectorWebhookPath,
@@ -171,6 +172,26 @@ connectorsRouter.get(
     assertConnectorsDatabase();
     const actor = currentUser(req);
     res.json({ connectors: await connectorService.listStatus(empresaAtiva(req), actor.id) });
+  })
+);
+
+/**
+ * GOLIVE-03 — converte uma ordem de marketplace JÁ INGERIDA (`sales`) numa
+ * venda OPERACIONAL real (`vendas`), reutilizando os motores canônicos do ERP
+ * (total, faturamento/estoque e financeiro). Idempotente: chamar de novo para a
+ * mesma ordem devolve a venda existente, sem duplicar estoque/financeiro.
+ *
+ * A empresa vem da própria ordem (tenant do conector); o ator apenas autoriza.
+ */
+connectorsRouter.post(
+  '/marketplace/venda-operacional',
+  run(async (req, res) => {
+    assertConnectorsDatabase();
+    const actor = currentUser(req);
+    const saleId = String(req.body?.sale_id ?? '').trim();
+    if (!saleId) throw new HttpError(400, 'Informe o "sale_id" da venda de marketplace a converter.');
+    const resultado = await converterOrdemDoAtor(saleId, actor);
+    res.status(resultado.outcome === 'created' ? 201 : 200).json({ ok: true, ...resultado });
   })
 );
 

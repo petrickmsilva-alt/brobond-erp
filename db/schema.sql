@@ -4135,3 +4135,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS sales_empresa_usuario_channel_external_order_i
   ON sales (empresa_id, usuario_id, channel, external_order_id);
 CREATE INDEX IF NOT EXISTS sales_empresa_usuario_channel_occurred_idx
   ON sales (empresa_id, usuario_id, channel, occurred_at DESC);
+
+-- ==================================================================
+-- BLOCO GOLIVE-03 — PONTE MARKETPLACE → VENDA OPERACIONAL (migration 0034)
+--
+-- Espelha db/migrations/0034_golive03_marketplace_venda_operacional.sql
+-- (idempotente para bancos existentes).
+-- ==================================================================
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS pedido_externo_canal TEXT;
+ALTER TABLE vendas ADD COLUMN IF NOT EXISTS pedido_externo_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_vendas_pedido_externo
+  ON vendas (empresa_id, pedido_externo_canal, pedido_externo_id)
+  WHERE pedido_externo_id IS NOT NULL;
+
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS operational_venda_id INTEGER REFERENCES vendas(id) ON DELETE SET NULL;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS buyer_name TEXT;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS buyer_email TEXT;
+CREATE INDEX IF NOT EXISTS sales_operational_venda_idx
+  ON sales (operational_venda_id)
+  WHERE operational_venda_id IS NOT NULL;

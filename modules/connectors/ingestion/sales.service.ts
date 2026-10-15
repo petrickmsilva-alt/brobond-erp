@@ -48,6 +48,19 @@ export interface IngestedSaleInput {
   quantity: number;
   occurredAt: Date;
   items: IngestedSaleItemInput[];
+  /**
+   * Comprador do pedido externo, quando o provedor o expõe. Preservado para
+   * que a ponte GOLIVE-03 resolva o cliente do ERP de forma determinística
+   * (e-mail → nome) em vez de criar um cliente novo a cada retry.
+   */
+  buyerName?: string | null;
+  buyerEmail?: string | null;
+}
+
+/** Texto opcional normalizado (trim; vazio → null). */
+function optionalText(value: string | null | undefined): string | null {
+  const text = (value ?? '').trim();
+  return text ? text.slice(0, 320) : null;
 }
 
 export type SaleUpsertOutcome = 'created' | 'updated' | 'unchanged';
@@ -165,9 +178,10 @@ export function createSalesService(resolveDb: () => ConnectorDatabase) {
         const { rows } = await tx.query<SaleRawRow>(
           `INSERT INTO sales (
              id, reference, quantity, amount_cents, currency, status, occurred_at,
-             channel, external_order_id, usuario_id, empresa_id, created_at, updated_at
+             channel, external_order_id, usuario_id, empresa_id, buyer_name, buyer_email,
+             created_at, updated_at
            ) VALUES (
-             $1, $2, $3, $4, $5, $6::sale_status, $7, $8::sale_channel, $9, $10, $11, now(), now()
+             $1, $2, $3, $4, $5, $6::sale_status, $7, $8::sale_channel, $9, $10, $11, $12, $13, now(), now()
            )
            ON CONFLICT (empresa_id, usuario_id, channel, external_order_id) DO UPDATE SET
              quantity    = EXCLUDED.quantity,
@@ -175,6 +189,8 @@ export function createSalesService(resolveDb: () => ConnectorDatabase) {
              currency    = EXCLUDED.currency,
              status      = EXCLUDED.status,
              occurred_at = EXCLUDED.occurred_at,
+             buyer_name  = COALESCE(EXCLUDED.buyer_name, sales.buyer_name),
+             buyer_email = COALESCE(EXCLUDED.buyer_email, sales.buyer_email),
              updated_at  = now()
            RETURNING ${SALE_COLUMNS}, (xmax = 0) AS was_inserted`,
           [
@@ -189,6 +205,8 @@ export function createSalesService(resolveDb: () => ConnectorDatabase) {
             input.externalOrderId,
             actorId,
             tenantId,
+            optionalText(input.buyerName),
+            optionalText(input.buyerEmail),
           ]
         );
         const sale = mapSale(rows[0] as SaleRawRow);
