@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import TopNavigation, { quantasCabem } from './TopNavigation';
+import TopNavigation, { focarPrimeiroItem, quantasCabem } from './TopNavigation';
 import { MODULE_AREAS, MODULES, visibleModules } from '../modules';
 
 type Perfil = 'admin' | 'gerente' | 'operador';
@@ -266,6 +266,30 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
     expect(areasRenderizadas.sort()).toEqual([...MODULE_AREAS].sort());
     expect(MODULES).toHaveLength(70);
     unmount();
+  });
+
+  it('focarPrimeiroItem: entra no dropdown "Mais" (botões de Área, sem role=menuitem)', () => {
+    // Regressão: o agrupador "Mais" é feito de botões expansíveis
+    // (`button[data-topnav-area]`), não de links com `role="menuitem"`. Como o
+    // helper buscava apenas `[role="menuitem"]`, abrir o "Mais" pelo teclado
+    // deixava o foco no gatilho — a navegação por setas nunca começava.
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+
+    // Caso "Mais": só botões de Área, nenhum menuitem.
+    host.innerHTML =
+      '<button data-topnav-area="Creators">Creators</button><button data-topnav-area="Utilidades Globais">Utilidades</button>';
+    focarPrimeiroItem(host);
+    expect(document.activeElement?.getAttribute('data-topnav-area')).toBe('Creators');
+
+    // Caso normal: com menuitem presente, ele continua sendo a primeira escolha.
+    host.innerHTML = '<a role="menuitem" href="/vendas">Pedidos</a><button data-topnav-area="Creators">Creators</button>';
+    focarPrimeiroItem(host);
+    expect(document.activeElement?.getAttribute('href')).toBe('/vendas');
+
+    // Menu vazio / nulo não quebra.
+    expect(() => focarPrimeiroItem(null)).not.toThrow();
+    host.remove();
   });
 
   it('sem Áreas visíveis não renderiza a barra (defensivo)', () => {

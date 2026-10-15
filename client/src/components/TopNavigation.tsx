@@ -650,7 +650,14 @@ function onMenuKeyDown(e: React.KeyboardEvent<HTMLDivElement>, gatilho: React.Re
   lista[proximo]?.focus();
 }
 
-/** Foca o primeiro item de um dropdown recém-aberto (abertura por teclado). */
+/**
+ * Foca o primeiro item de um dropdown recém-aberto (abertura por teclado).
+ *
+ * Inclui os botões de Área do agrupador "Mais": eles não têm `role="menuitem"`
+ * (são controles expansíveis, não links), então sem esse seletor a abertura por
+ * teclado do "Mais" deixava o foco no gatilho. É a mesma lista que
+ * `onMenuKeyDown` já usa para navegar.
+ */
 export function focarPrimeiroItem(menu: HTMLElement | null) {
-  menu?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  menu?.querySelector<HTMLElement>('[role="menuitem"], button[data-topnav-area]')?.focus();
 }

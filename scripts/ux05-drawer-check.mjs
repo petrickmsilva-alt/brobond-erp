@@ -2,7 +2,7 @@
 import puppeteer from 'puppeteer-core';
 import { totpAgora } from './ux05-totp.mjs';
 
-const BASE = 'http://localhost:12000';
+const BASE = process.argv[2] || process.env.UX05_BASE || 'http://localhost:12000';
 const falhas = [];
 const ok = (c, m) => {
   console.log(`  ${c ? '✅' : '❌'} ${m}`);

@@ -13,11 +13,45 @@ import { totpAgora } from './ux05-totp.mjs';
 
 const API = process.env.UX05_API || 'http://localhost:3001';
 const ADMIN_EMAIL = 'admin@brobond.com.br';
+// A senha inicial do modo demonstração é pública (vem do seed). Ela só é usada
+// para o PRIMEIRO login local; a senha de teste real vem sempre de UX05_PASS.
 const ADMIN_INICIAL = process.env.ADMIN_PASSWORD || 'brobond123';
 const SENHA_NOVA = process.env.UX05_PASS || process.env.UX05_SENHA_NOVA;
 const SENHA_TEMP_FIXA = process.env.UX05_SENHA_PERFIL || SENHA_NOVA;
 if (!SENHA_NOVA) {
   console.error('❌ Defina UX05_PASS (senha de teste do admin) antes de provisionar.');
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Trava de segurança: este script CRIA empresa, usuários e senhas. Ele só pode
+// rodar contra um alvo explicitamente declarado como descartável.
+// ---------------------------------------------------------------------------
+const alvo = new URL(API);
+const loopback = ['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(alvo.hostname);
+const liberado = process.env.UX05_ALLOW_FIXTURES === '1';
+if (!loopback && !liberado) {
+  console.error(
+    `❌ Alvo não-local (${alvo.hostname}). Este script cria usuários e empresas.\n` +
+      '   Se o alvo é mesmo descartável, rode com UX05_ALLOW_FIXTURES=1.'
+  );
+  process.exit(1);
+}
+if (process.env.NODE_ENV === 'production' && !liberado) {
+  console.error('❌ NODE_ENV=production. Provisionamento de fixtures bloqueado.');
+  process.exit(1);
+}
+
+/**
+ * O script assume o MODO DEMONSTRAÇÃO (dados em memória). Em Postgres real ele
+ * escreveria no banco de verdade — por isso a checagem abaixo aborta.
+ * `/api/health` é público e informa o store ativo sem exigir autenticação.
+ */
+const saude = await fetch(`${API}/api/health`)
+  .then((r) => (r.ok ? r.json() : null))
+  .catch(() => null);
+if (saude && saude.db && saude.db !== 'memory') {
+  console.error(`❌ Alvo com store "${saude.db}" (não é o modo demonstração). Fixtures abortadas.`);
   process.exit(1);
 }
 

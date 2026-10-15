@@ -1,10 +1,26 @@
 // UX-05 — teste de RBAC da Master Top Navigation (ADMIN/GERENTE/OPERADOR).
-// Uso: node scripts/ux05-rbac-check.mjs
+// Uso: node scripts/ux05-rbac-check.mjs [baseURL]
+//
+// Este script depende de FIXTURES provisionadas (perfis gerente/operador e as
+// expectativas de módulos proibidos em UX05_ESPERADO). Sem elas não há o que
+// verificar — por isso aborta em vez de reportar sucesso vazio.
 import puppeteer from 'puppeteer-core';
 import { totpAgora } from './ux05-totp.mjs';
 
-const BASE = 'http://localhost:12000';
+const BASE = process.argv[2] || process.env.UX05_BASE || 'http://localhost:12000';
 const falhas = [];
+
+const esperado = JSON.parse(process.env.UX05_ESPERADO || '{}');
+// Sem expectativas não existe verificação: falhar alto evita um "RBAC OK" falso.
+const perfisEsperados = Object.keys(esperado);
+if (!perfisEsperados.length) {
+  console.error(
+    '❌ UX05_ESPERADO ausente/vazio. Rode `node scripts/ux05-fixtures.mjs` e exporte as\n' +
+      '   variáveis que ele imprime (contém os módulos proibidos por perfil).'
+  );
+  process.exit(1);
+}
+
 const ok = (c, m) => {
   console.log(`  ${c ? '✅' : '❌'} ${m}`);
   if (!c) falhas.push(m);
@@ -21,8 +37,6 @@ const browser = await puppeteer.launch({
   headless: true,
   args: ['--no-sandbox', '--disable-dev-shm-usage'],
 });
-
-const esperado = JSON.parse(process.env.UX05_ESPERADO || '{}');
 
 for (const p of PERFIS) {
   console.log(`\n=== ${p.nome} (${p.email}) ===`);
