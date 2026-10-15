@@ -1,20 +1,22 @@
 // ============================================================================
-// Sidebar — Árvore Master de navegação do BROBOND ERP (ERP-UX-03).
+// Sidebar — Árvore Master de navegação (ERP-UX-03 · UX-05).
 //
-// Hierarquia oficial:
+// A partir do UX-05 a navegação PRINCIPAL do desktop é a Master Top Navigation
+// (componente `TopNavigation`). Esta Sidebar passa a ser exclusivamente o
+// **drawer de navegação do mobile/tablet** — a mesma Árvore Master, o mesmo
+// RBAC e as mesmas rotas, apenas em outra representação.
+//
+// Hierarquia oficial (inalterada):
 //   SEÇÃO (ERP CORE · Commerce · Creators · Utilidades Globais)
-//   → ÁREA (Meu Negócio, Cadastros, Vendas, Estoque & Suprimentos, Produção,
-//           Financeiro, Fiscal, Administração, Commerce, Creators, Utilidades Globais)
-//   → GRUPO (accordion de 2º nível dentro da Área)
-//   → SUBGRUPO (cabeçalho visual distinto dos módulos)
-//   → MÓDULO (item navegável canônico)
+//   → ÁREA → GRUPO (accordion) → SUBGRUPO → MÓDULO
 //
 // Fonte única: `buildNavigationTree(visibleModules(user))` de `modules.ts`.
 // Não há listas paralelas de áreas, grupos ou módulos neste componente.
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
-import { ChevronDown, ChevronsLeft, ChevronsRight, X } from 'lucide-react';
+import { NavLink } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
+import { ChevronDown, X } from 'lucide-react';
 import {
   buildNavigationTree,
   moduleOfPath,
@@ -30,7 +32,6 @@ import { useAuth } from '../auth/AuthContext';
 
 const STORAGE_OPEN_AREAS = 'brobond_nav_areas';
 const STORAGE_OPEN_GROUPS = 'brobond_nav_groups';
-const STORAGE_COLLAPSED = 'brobond_nav_collapsed';
 
 function readStringArray(key: string): string[] {
   try {
@@ -38,14 +39,6 @@ function readStringArray(key: string): string[] {
     return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : [];
   } catch {
     return [];
-  }
-}
-
-function readFlag(key: string): boolean {
-  try {
-    return localStorage.getItem(key) === '1';
-  } catch {
-    return false;
   }
 }
 
@@ -80,19 +73,13 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
     return activeGroup && !saved.includes(activeGroup) ? [...saved, activeGroup] : saved;
   });
 
-  const [collapsed, setCollapsed] = useState<boolean>(() => readFlag(STORAGE_COLLAPSED));
-
   // Deep link / mudança de rota: garante que a Área e o Grupo do módulo ativo abram.
   useEffect(() => {
-    if (activeArea) {
-      setOpenAreas((prev) => (prev.includes(activeArea) ? prev : [...prev, activeArea]));
-    }
+    if (activeArea) setOpenAreas((prev) => (prev.includes(activeArea) ? prev : [...prev, activeArea]));
   }, [activeArea]);
 
   useEffect(() => {
-    if (activeGroup) {
-      setOpenGroups((prev) => (prev.includes(activeGroup) ? prev : [...prev, activeGroup]));
-    }
+    if (activeGroup) setOpenGroups((prev) => (prev.includes(activeGroup) ? prev : [...prev, activeGroup]));
   }, [activeGroup]);
 
   useEffect(() => {
@@ -110,14 +97,6 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
       /* idem */
     }
   }, [openGroups]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_COLLAPSED, collapsed ? '1' : '0');
-    } catch {
-      /* idem */
-    }
-  }, [collapsed]);
 
   // Acessibilidade: Escape fecha o drawer mobile quando estiver aberto.
   useEffect(() => {
@@ -141,7 +120,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
     <>
       {open && (
         <div
-          className="fixed inset-0 z-20 bg-black/60 backdrop-blur-sm md:hidden"
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
           onClick={onClose}
           aria-hidden="true"
           data-testid="sidebar-backdrop"
@@ -150,27 +129,16 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
       <aside
         id="sidebar-principal"
         aria-label="Menu principal"
-        data-collapsed={collapsed ? 'true' : 'false'}
         data-mobile-open={open ? 'true' : 'false'}
-        className={`fixed z-30 flex h-full flex-col border-r border-slate-800/60 bg-[#090d16] text-slate-300 transition-[transform,width] duration-200 md:static md:translate-x-0 ${
-          collapsed ? 'md:w-[4.25rem]' : 'md:w-[17rem]'
-        } w-[17rem] ${open ? 'translate-x-0' : '-translate-x-full'}`}
+        className={`fixed inset-y-0 left-0 z-50 flex h-full w-[17rem] flex-col border-r border-slate-800/60 bg-[#090d16] text-slate-300 transition-transform duration-200 lg:hidden ${
+          open ? 'translate-x-0' : '-translate-x-full'
+        }`}
       >
-        <div
-          className={`flex h-16 shrink-0 items-center border-b border-slate-800/60 ${
-            collapsed ? 'justify-center px-2' : 'justify-between px-4'
-          }`}
-        >
-          {collapsed ? (
-            <span className="text-base font-bold tracking-tight text-white" aria-label="BROBOND ERP">
-              BB
-            </span>
-          ) : (
-            <Logo variant="light" height={26} withTagline={false} />
-          )}
+        <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-800/60 px-4">
+          <Logo variant="light" height={24} withTagline={false} />
           <button
             type="button"
-            className="rounded-md p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 md:hidden"
+            className="rounded-md p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
             onClick={onClose}
             aria-label="Fechar menu"
           >
@@ -181,16 +149,11 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
         <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-3" aria-label="Navegação principal">
           {tree.map((section, sectionIdx) => (
             <div key={section.id} className={sectionIdx === 0 ? 'space-y-0.5' : 'mt-4 space-y-0.5'} data-nav-section={section.id}>
-              {collapsed ? (
-                sectionIdx > 0 ? <Divider /> : null
-              ) : section.label ? (
-                <SectionLabel>{section.label}</SectionLabel>
-              ) : null}
+              {section.label ? <SectionLabel>{section.label}</SectionLabel> : null}
               {section.areas.map((areaNode) => (
                 <NavArea
                   key={areaNode.area}
                   areaNode={areaNode}
-                  collapsed={collapsed}
                   isOpen={openAreas.includes(areaNode.area)}
                   isActive={activeArea === areaNode.area}
                   activeGroup={activeGroup}
@@ -204,37 +167,19 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
           ))}
         </nav>
 
-        <div className="hidden shrink-0 border-t border-slate-800/60 p-2 md:block">
-          <button
-            type="button"
-            onClick={() => setCollapsed((v) => !v)}
-            aria-expanded={!collapsed}
-            aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}
-            title={collapsed ? 'Expandir menu' : 'Recolher menu'}
-            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 ${
-              collapsed ? 'justify-center' : ''
-            }`}
-          >
-            {collapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
-            {!collapsed && <span>Recolher menu</span>}
-          </button>
-        </div>
-
-        {!collapsed && (
-          <div className="shrink-0 border-t border-slate-800/60 px-4 py-2.5 text-[11px] text-slate-500">
-            <div className="flex items-center justify-between">
-              <span className="font-mono">BROBOND ERP{meta?.version ? ` v${meta.version.replace(/^v/, '')}` : ''}</span>
-              {meta?.mode === 'memory' && (
-                <span
-                  className="rounded bg-brand-500/15 px-1.5 py-0.5 font-semibold text-brand-300"
-                  title="Sem banco de dados: os dados somem ao reiniciar o servidor"
-                >
-                  DEMO
-                </span>
-              )}
-            </div>
+        <div className="shrink-0 border-t border-slate-800/60 px-4 py-2.5 text-[11px] text-slate-500">
+          <div className="flex items-center justify-between">
+            <span className="font-mono">BROBOND ERP{meta?.version ? ` v${meta.version.replace(/^v/, '')}` : ''}</span>
+            {meta?.mode === 'memory' && (
+              <span
+                className="rounded bg-brand-500/15 px-1.5 py-0.5 font-semibold text-brand-300"
+                title="Sem banco de dados: os dados somem ao reiniciar o servidor"
+              >
+                DEMO
+              </span>
+            )}
           </div>
-        )}
+        </div>
       </aside>
     </>
   );
@@ -244,13 +189,8 @@ function SectionLabel({ children }: { children: string }) {
   return <p className="mb-1.5 px-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">{children}</p>;
 }
 
-function Divider() {
-  return <div className="mx-3 my-2 border-t border-slate-800/60" aria-hidden="true" />;
-}
-
 function NavArea({
   areaNode,
-  collapsed,
   isOpen,
   isActive,
   activeGroup,
@@ -260,7 +200,6 @@ function NavArea({
   onToggleGroup,
 }: {
   areaNode: NavAreaNode;
-  collapsed: boolean;
   isOpen: boolean;
   isActive: boolean;
   activeGroup?: ModuleGroup;
@@ -271,17 +210,6 @@ function NavArea({
 }) {
   const AreaIcon = areaNode.icon;
   const areaPanelId = `nav-area-${slug(areaNode.area)}`;
-
-  // Trilho recolhido: exibe os ícones dos módulos com contexto de área no tooltip.
-  if (collapsed) {
-    return (
-      <div className="space-y-0.5">
-        {areaNode.modules.map((m) => (
-          <NavItem key={m.id} m={m} collapsed onClose={onClose} />
-        ))}
-      </div>
-    );
-  }
 
   return (
     <div>
@@ -368,7 +296,7 @@ function NavGroup({
           <div key={sub.subgroup} className="space-y-0.5">
             <div
               data-nav-subgroup={sub.subgroup}
-              className=" select-none px-2.5 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500"
+              className="select-none px-2.5 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500"
             >
               {sub.subgroup}
             </div>
@@ -382,7 +310,7 @@ function NavGroup({
   );
 }
 
-function NavItem({ m, collapsed = false, onClose }: { m: Module; collapsed?: boolean; onClose: () => void }) {
+function NavItem({ m, onClose }: { m: Module; onClose: () => void }) {
   const Icon = m.icon;
   const isPlanned = Boolean(m.planned?.length);
 
@@ -393,12 +321,9 @@ function NavItem({ m, collapsed = false, onClose }: { m: Module; collapsed?: boo
       onClick={onClose}
       data-module-id={m.id}
       data-planned={isPlanned ? 'true' : undefined}
-      title={collapsed ? `${m.area} → ${m.label}${isPlanned ? ' (Em breve)' : ''}` : isPlanned ? `${m.label} — Em breve` : undefined}
-      aria-label={collapsed ? m.label : undefined}
+      title={isPlanned ? `${m.label} — Em breve` : undefined}
       className={({ isActive }) =>
-        `group relative flex items-center gap-2 rounded-lg py-[6px] text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 ${
-          collapsed ? 'justify-center px-0' : 'px-2.5'
-        } ${
+        `group relative flex items-center gap-2 rounded-lg px-2.5 py-[6px] text-[12.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 ${
           isActive
             ? 'bg-white/[0.08] text-white'
             : isPlanned
@@ -415,8 +340,8 @@ function NavItem({ m, collapsed = false, onClose }: { m: Module; collapsed?: boo
             strokeWidth={2}
             aria-hidden="true"
           />
-          {!collapsed && <span className="truncate">{m.label}</span>}
-          {!collapsed && isPlanned && (
+          <span className="truncate">{m.label}</span>
+          {isPlanned && (
             <span
               data-planned-badge="Em breve"
               className="ml-auto shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-300 after:content-[attr(data-planned-badge)]"
