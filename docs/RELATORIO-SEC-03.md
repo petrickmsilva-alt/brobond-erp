@@ -314,12 +314,13 @@ npm run test:pg   (DATABASE_URL em banco NOVO e vazio, PostgreSQL 16.14)
 - Resultado da suíte: **195 pass, 0 fail, 0 cancelled, 0 skipped, 0 todo**.
 - Inclui `SEC-03/P1-02: /api/admin/* exige administrador (HTTP real + PostgreSQL)` ✅.
 
-**Ressalva de ferramenta (ver §17):** o parser de resumo do script
-`scripts/test-pg-gate.mjs` espera o formato TAP (`# pass N`) mas o Node 24 emite
-o formato spec (`ℹ pass N`), então o gate imprime `resumo={}` e "GATE BLOCKED"
-apesar do runner ter saído com código 0 e a suíte estar 100% verde. Isso é
-**pré-existente** e **não** foi introduzido por este ciclo (o script não foi
-tocado; reproduzido com um teste trivial).
+**Ressalva de ferramenta (ver §17):** no ambiente local (Node 24) o parser de
+resumo do script `scripts/test-pg-gate.mjs` espera o formato TAP (`# pass N`)
+mas o Node 24 emite o formato spec (`ℹ pass N`), então o gate imprime `resumo={}`
+e "GATE BLOCKED" apesar do runner ter saído com código 0 e a suíte estar 100%
+verde. No **CI** (Node do workflow) o mesmo gate rodou e passou (**`testes-postgres`
+= success**, ver §19), confirmando que é um artefato da versão de Node local, não
+do código. O script não foi tocado por este ciclo.
 
 Na primeira execução do gate, `test/pg-p0-commerce-tenant.test.ts` falhou com
 `duplicate key ... "sales_reference_key"` — teste de ingestão de commerce, que
@@ -390,9 +391,9 @@ gerente).
 
 Registrados, **não corrigidos** neste ciclo (fora do escopo SEC-03):
 
-1. **Parser de resumo do gate PG** (`scripts/test-pg-gate.mjs`): formato TAP vs
-   spec do Node 24 → `resumo={}` e falso "BLOCKED". A suíte está verde. Correção
-   de ferramenta, não do finding.
+1. **Parser de resumo do gate PG** (`scripts/test-pg-gate.mjs`): no Node 24 local
+   o formato spec substitui o TAP → `resumo={}` e falso "BLOCKED"; no CI passa.
+   A suíte está verde em ambos. Correção de ferramenta, não do finding.
 2. **`test/pg-p0-commerce-tenant.test.ts` flaky** (corrida em
    `sales_reference_key` no dedup concorrente de `sales.service.ts`). Pré-existente,
    alheio a `/api/admin/*`.
@@ -420,7 +421,22 @@ Explicitamente **não** tratados neste ciclo (STRICT SCOPE):
 
 ---
 
-## 19. Critério de aceitação
+## 19. CI
+
+PR #66 — checks do GitHub Actions no commit `e1293db`:
+
+| Check | Resultado |
+|-------|-----------|
+| `verificar` | ✅ success |
+| `testes-postgres` (job 1) | ✅ success |
+| `testes-postgres` (job 2) | ✅ success |
+
+Os dois jobs `testes-postgres` verdes confirmam a suíte PostgreSQL real no CI,
+incluindo `SEC-03/P1-02: /api/admin/* exige administrador (HTTP real + PostgreSQL)`.
+
+---
+
+## 20. Critério de aceitação
 
 - [x] todas as `/api/admin/*` auditadas (14 endpoints)
 - [x] guard canônico identificado (`requireRole('admin')`)
