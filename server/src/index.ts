@@ -20,6 +20,7 @@ import {
   mfaDesafio,
   reautenticar,
   requireAuth,
+  requireRole,
   resetPassword,
   revogarSessaoHandler,
   savePreferences,
@@ -347,6 +348,15 @@ app.use('/api', wrap(requireAuth));
 // Conta com senha provisória (convite, reset ou admin padrão) só lê e só escreve
 // no próprio fluxo de troca de senha — ver bloquearSenhaProvisoria.
 app.use('/api', bloquearSenhaProvisoria);
+
+// SEC-03 — TODO o prefixo /api/admin/* exige privilégio administrativo
+// verificado no SERVIDOR (guard canônico requireRole, derivado da identidade
+// autenticada do JWT/sessão — nunca de role/perfil/empresa_id do cliente).
+// O `admin` do caminho não autoriza nada por si: sem este guard, um gerente
+// autenticado alcançava dados globais (auditoria, status, crons, backup).
+// Administradores (incluindo o acesso de emergência, perfil 'admin') seguem
+// entrando normalmente; qualquer outro perfil autenticado recebe 403.
+app.use('/api/admin', requireRole('admin'));
 
 app.get('/api/auth/me', me);
 app.post('/api/auth/change-password', wrap(changePassword));
