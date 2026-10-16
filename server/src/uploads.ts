@@ -22,9 +22,15 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
-import { empresaDoRegistroAudit } from './empresa';
+import {
+  aplicarFiltroEmpresa,
+  assertRegistroDaEmpresa,
+  assertRegistroDaEmpresaParaEscrita,
+  empresaDoRegistroAudit,
+  type EscopoEmpresa,
+} from './empresa';
 import { getPublicResource, getResource, type Resource } from './resources';
-import { getStore, checkAccess, toHttpError } from './services';
+import { getStore, checkAccess, escopoDe, toHttpError } from './services';
 import { currentUser } from './auth';
 import type { FileMeta, Row, Tx } from './store';
 import { parseId } from './validate';
@@ -209,10 +215,36 @@ function resourceWithImages(req: Request): Resource {
   return r;
 }
 
-async function ensureRecord(r: Resource, id: number, tx?: Tx): Promise<Row> {
-  const row = await getStore().findOneWhere(r, { id }, tx);
-  if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
-  return row;
+// ----------------------------------------------------------------------------
+// Isolamento multiempresa dos anexos (SEC-01 / P0-01)
+//
+// A tabela `arquivos` não tem `empresa_id`: a empresa de um anexo é a do
+// REGISTRO-pai (`recurso` + `registro_id`). Até então `ensureRecord` buscava o
+// pai SÓ por id — um ator da Empresa A lia/injetava/excluía fotos de um produto
+// da Empresa B (IDOR/BOLA cross-tenant).
+//
+// Aqui reutilizamos o mecanismo canônico de tenant (`empresa.ts`), sem criar
+// uma segunda engine:
+//   • LEITURA (listar/baixar metadados) usa o recorte de `aplicarFiltroEmpresa`,
+//     que descarta `empresa_id` do cliente e aplica o escopo do ator — a
+//     consolidação (`pode_consolidar`) continua sendo leitura autorizada.
+//   • ESCRITA (incluir/editar/excluir/ordenar) exige o registro na empresa ATIVA
+//     (`assertRegistroDaEmpresaParaEscrita`): consolidação nunca amplia escrita.
+//
+// Quando o recurso-pai é GLOBAL (sem `empresa`, ex.: categorias), não há
+// recorte a aplicar — o comportamento anterior é preservado.
+// ----------------------------------------------------------------------------
+async function registroDoAtor(r: Resource, id: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row> {
+  const filtro = aplicarFiltroEmpresa(r, { id }, escopo) || { id };
+  const row = await getStore().findOneWhere(r, filtro, tx);
+  return assertRegistroDaEmpresa(r, row, escopo);
+}
+
+/** Carrega o registro-pai para ESCRITA: sempre na empresa ativa, mesmo consolidando. */
+async function registroDoAtorParaEscrita(r: Resource, id: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row> {
+  const filtro = { id, ...(r.empresa === true ? { empresa_id: escopo.empresaId } : {}) };
+  const row = await getStore().findOneWhere(r, filtro, tx);
+  return assertRegistroDaEmpresaParaEscrita(r, row, escopo);
 }
 
 async function ownedFile(r: Resource, registroId: number, fileId: number, tx?: Tx): Promise<Row> {
@@ -226,9 +258,11 @@ async function ownedFile(r: Resource, registroId: number, fileId: number, tx?: T
 // ----------------------------------------------------------------------------
 export async function listFiles(req: Request, res: Response) {
   const r = resourceWithImages(req);
-  checkAccess(r, currentUser(req), 'read');
+  const actor = currentUser(req);
+  checkAccess(r, actor, 'read');
   const id = parseId(req.params.id);
-  await ensureRecord(r, id);
+  // SEC-01: o pai tem de estar no escopo do ator — senão 404 (não vaza existência).
+  await registroDoAtor(r, id, escopoDe(actor));
   const files = await getStore().filesFor(r.key, [id]);
   res.json(files.map(toPublicFile));
 }
@@ -250,7 +284,8 @@ export async function uploadFile(req: Request, res: Response) {
   const arquivos = getResource('arquivos')!;
   try {
     const created = await s.transaction(async (tx) => {
-      const rec = await ensureRecord(r, id, tx);
+      // SEC-01: só inclui anexo em registro da empresa ativa (escrita estrita).
+      const rec = await registroDoAtorParaEscrita(r, id, escopoDe(actor), tx);
       const existing = await s.filesFor(r.key, [id], tx);
       if (existing.length >= r.images!.max) throw new HttpError(409, `Limite de ${r.images!.max} fotos por ${r.singular.toLowerCase()} atingido. Remova uma antes.`);
 
@@ -298,7 +333,8 @@ export async function updateFile(req: Request, res: Response) {
   const arquivos = getResource('arquivos')!;
   try {
     const out = await s.transaction(async (tx) => {
-      await ensureRecord(r, id, tx);
+      // SEC-01: reordenar/promover foto exige o pai na empresa ativa.
+      await registroDoAtorParaEscrita(r, id, escopoDe(actor), tx);
       await ownedFile(r, id, fid, tx);
       if (body.principal === true) {
         const all = await s.filesFor(r.key, [id], tx);
@@ -331,7 +367,8 @@ export async function deleteFile(req: Request, res: Response) {
   const arquivos = getResource('arquivos')!;
   try {
     await s.transaction(async (tx) => {
-      const rec = await ensureRecord(r, id, tx);
+      // SEC-01: excluir foto exige o pai na empresa ativa.
+      const rec = await registroDoAtorParaEscrita(r, id, escopoDe(actor), tx);
       const f = await ownedFile(r, id, fid, tx);
       await s.remove(arquivos, fid, tx);
       // Se era a principal, promove a próxima
