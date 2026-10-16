@@ -122,7 +122,24 @@ async function req(baseUrl: string, metodo: string, rota: string, corpo?: unknow
 
 /** Loga o ADMIN com MFA (cadastro guiado na 1ª vez, desafio depois). */
 async function loginAdmin(baseUrl: string, cliente: Client, email: string, senha: string): Promise<string> {
-  let r = await req(baseUrl, 'POST', '/auth/login', { email, password: senha });
+  // O servidor começa a escutar ANTES de `ensureAdmin()` criar o admin de
+  // bootstrap (server/src/index.ts, de propósito, para o Render ver a porta).
+  // O health check confirma o banco assim que `migrate()` termina — ou seja,
+  // antes do admin existir. Espera-se o bootstrap na FONTE (a linha em
+  // `usuarios`), não em tentativas de login: cada falha 401 consome o rate
+  // limit de 5 tentativas e poderia bloquear a conta de teste.
+  const limite = Date.now() + 60_000;
+  for (;;) {
+    try {
+      const { rows } = await cliente.query('SELECT 1 FROM usuarios WHERE email = $1 AND senha_hash IS NOT NULL', [email]);
+      if (rows.length) break;
+    } catch {
+      // `usuarios` ainda não existe: `migrate()` roda depois do listen.
+    }
+    if (Date.now() > limite) throw new Error(`admin de bootstrap "${email}" não foi criado em 60 s`);
+    await delay(200);
+  }
+  const r = await req(baseUrl, 'POST', '/auth/login', { email, password: senha });
   assert.equal(r.status, 200, `login admin: ${r.texto}`);
   const ticket = String(r.body?.mfa_ticket || '');
   assert.ok(ticket, 'admin precisa receber mfa_ticket');
