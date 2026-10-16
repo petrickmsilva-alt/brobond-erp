@@ -423,16 +423,24 @@ Explicitamente **não** tratados neste ciclo (STRICT SCOPE):
 
 ## 19. CI
 
-PR #66 — checks do GitHub Actions no commit `e1293db`:
+PR #66 — checks do GitHub Actions (GitHub-hosted, Node do workflow):
 
-| Check | Resultado |
-|-------|-----------|
-| `verificar` | ✅ success |
-| `testes-postgres` (job 1) | ✅ success |
-| `testes-postgres` (job 2) | ✅ success |
+| Commit | Check | Resultado |
+|--------|-------|-----------|
+| `e1293db` | `verificar` (×2) | ✅ success |
+| `e1293db` | `testes-postgres` (×2) | ✅ success |
+| `4ee4299` | `verificar` (×2) | ✅ success |
+| `4ee4299` | `testes-postgres` (após rerun) | ✅ success (×2) |
 
-Os dois jobs `testes-postgres` verdes confirmam a suíte PostgreSQL real no CI,
-incluindo `SEC-03/P1-02: /api/admin/* exige administrador (HTTP real + PostgreSQL)`.
+**Última execução: 4/4 checks verdes.** Inclui os dois jobs
+`testes-postgres`, que rodam a suíte PostgreSQL real com o gate TAP oficial —
+inclusive `SEC-03/P1-02: /api/admin/* exige administrador (HTTP real + PostgreSQL)`
+(observado como `ok 159` ✅).
+
+Observação de confiabilidade: em uma execução intermediária o job
+`testes-postgres` falhou **apenas** em `P0-02 … tenant (sales_reference_key)` —
+o flaky pré-existente de commerce (§17), alheio ao SEC-03. O `rerun-failed-jobs`
+voltou verde, confirmando que era a corrida do teste, não o código do ciclo.
 
 ---
 
