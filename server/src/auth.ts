@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { createHash, randomBytes } from 'node:crypto';
+import { isIP } from 'node:net';
 import { HttpError } from './errors';
 import { empresaDoAtorAudit, empresaExplicitaAudit } from './empresa';
 import { limparToken } from './validate';
@@ -160,9 +161,21 @@ export function verifyToken(token: string): Record<string, any> | null {
   }
 }
 
+/**
+ * IP do cliente usado em rate limit, sessões e auditoria.
+ *
+ * SEC-02: usa `req.ip`, que o Express resolve segundo a confiança de proxy
+ * (`TRUST_PROXY` — ver `trustProxySetting` em security.ts). Sem proxy confiável
+ * o valor é o da conexão TCP real; portanto um `X-Forwarded-For` enviado pelo
+ * cliente NÃO altera a identidade do rate limit. Quando há proxy confiável, o
+ * Express extrai o IP do cliente da cadeia. Um valor não-IP (cabeçalho lixo) cai
+ * para o endereço do socket — nunca entra cru na chave de rate limit.
+ */
 export function clientIp(req: Request): string {
-  const fwd = (req.headers['x-forwarded-for'] as string) || '';
-  return (fwd.split(',')[0] || req.socket.remoteAddress || '').trim();
+  const resolvido = typeof (req as { ip?: unknown }).ip === 'string' ? String((req as { ip?: unknown }).ip) : '';
+  if (resolvido && isIP(resolvido)) return resolvido;
+  const socket = (req.socket?.remoteAddress as string | undefined) || '';
+  return isIP(socket) ? socket : '';
 }
 
 /**

@@ -45,6 +45,15 @@ services:
         sync: false
       - key: JWT_SECRET
         generateValue: true
+      # SEC-02: confiança de proxy EXPLÍCITA. A Render coloca um único proxy na
+      # frente do serviço web, então "1" (um hop confiável) é o correto aqui. O
+      # rate limit do login passa a usar o IP resolvido pelo Express a partir da
+      # cadeia — sem esta variável o padrão é NÃO confiar em proxy (o IP vira o
+      # do socket, que na Render seria o próprio proxy, agrupando todos os
+      # clientes num só bucket). NUNCA use "true" aqui: a aplicação aceitaria
+      # X-Forwarded-For arbitrário do cliente e o bypass voltaria.
+      - key: TRUST_PROXY
+        value: "1"
       # Chave dedicada para CIFRAR os segredos MFA (TOTP) em repouso.
       # Se ausente, deriva do JWT_SECRET — defina uma própria e não a troque.
       - key: MFA_ENCRYPTION_KEY

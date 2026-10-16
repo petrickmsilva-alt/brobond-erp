@@ -34,9 +34,13 @@ export async function abrirSessao(opts: { usuarioId: number; lembrar: boolean; r
   return id;
 }
 
+// SEC-02: mesma identidade do rate limit — `req.ip` respeita a confiança de
+// proxy (TRUST_PROXY). Sem proxy confiável o X-Forwarded-For do cliente é
+// ignorado e vale o endereço da conexão real.
 function clientIpRaw(req: Request): string | null {
-  const fwd = (req.headers?.['x-forwarded-for'] as string) || '';
-  return (fwd.split(',')[0] || req.socket?.remoteAddress || '').trim() || null;
+  const resolvido = typeof (req as { ip?: unknown }).ip === 'string' ? String((req as { ip?: unknown }).ip) : '';
+  if (resolvido) return resolvido;
+  return ((req.socket?.remoteAddress as string | undefined) || '').trim() || null;
 }
 
 export function sessaoValida(s: Sessao | null | undefined): boolean {
