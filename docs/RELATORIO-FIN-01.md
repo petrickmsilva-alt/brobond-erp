@@ -71,13 +71,19 @@ antes de gravar.
 
 - `server/src/financeiro.ts`
   - **novo** `export function dividirParcelas(total, numeroParcelas): number[]`;
-  - **novo** `function materializarParcelas(total, n, detalhes): number[]`;
+  - **novo** `dividirParcelasCentavos(totalCentavos, n)` — núcleo inteiro, única
+    implementação da regra; `dividirParcelas` só converte entrada/saída;
+  - **novo** `function materializarParcelas(total, n, detalhes): number[]` e
+    `materializarParcelasCentavos(totalCentavos, n, detalhes)`;
   - `reconciliarParcelasPedido` passa a usar `materializarParcelas(total, n,
     detalhes)` e remove o cálculo `valorParcela = r2(total / n)` — o plano é
     validado **antes** do loop de gravação (atomicidade: nada sobra em falha).
-- `server/test/fin01-parcelas.test.ts` (**novo**) — 27 testes de unidade
+  - **hardening FIN-01.1** (§18): detalhes tratados explicitamente, sem
+    `find || index` ambíguo, com rejeição de valores não numéricos, duplicados e
+    de somas que não fecham; normalização de `fin_parcelas` documentada.
+- `server/test/fin01-parcelas.test.ts` (**novo**) — 40 testes de unidade
   (canônica + adversarial + persistência venda/compra + atomicidade + retry +
-  desconto/juros/frete + detalhes do XML).
+  desconto/juros/frete + detalhes do XML + limites/normalização de parcelas).
 - `server/test/pg/fin01-parcelas-e2e.test.ts` (**novo**) — prova HTTP real +
   PostgreSQL (ver §10).
 
@@ -103,11 +109,14 @@ os casos válidos; apenas os casos impossíveis passam a responder erro de negó
 
 ## 9. Testes adversariais (unidade)
 
-`server/test/fin01-parcelas.test.ts` — **27/27 verdes**. Cobrem: combinação
+`server/test/fin01-parcelas.test.ts` — **40/40 verdes**. Cobrem: combinação
 impossível (`0,01` em `2x`/`3x`/`100x`), `0,10` em `3x`, valores grandes
 (`1.000.000` em `7x`), `1,00` em `100x`, determinismo, persistência venda e
 compra, atomicidade (nada persistido na falha), retry sem duplicação (idempotência),
-desconto/juros/frete embutidos e detalhes de duplicatas do XML.
+desconto/juros/frete embutidos, detalhes de duplicatas do XML, **ordem/lacunas**,
+**duplicata de parcela**, **valor zero/negativo/não numérico**, **soma que não
+fecha (acima ou 1 centavo abaixo)** e **normalização de `fin_parcelas`**
+(0/negativo/NaN/ausente → 1x; fracionário trunca; teto 60x).
 
 ## 10. Teste HTTP real
 
@@ -134,6 +143,21 @@ ok 144 - FIN-01: parcelas válidas e exatas via HTTP real + PostgreSQL
 #   E) retry de reconciliação → 3 parcelas, mesmos ids [1,2,3], Σ 100.00
 ```
 
+**Detalhes do documento (XML/NF-e) pelo mesmo stack (FIN-01.1):** o segundo teste
+do arquivo prova o produtor **real** de `fin_parcelas_detalhes` — a importação de
+NF-e — por `POST /api/suprimentos/compras/importar-xml`:
+
+```
+ok 145 - FIN-01: detalhes do XML (duplicatas) via HTTP real + PostgreSQL — válidos e inconsistentes
+#   detalhes válidos) XML 300,00 em 3 dup [100,100,100] → compra #1, [100,100,100], Σ=300,00
+#   detalhes inconsistentes) XML 300,00 em 3 dup [100,100,99] → 422; compras 1→1, lançamentos 3→3, importações 1→1 (sem gravação parcial)
+#   lançamentos com valor <= 0 no banco: 0
+```
+
+O caso inconsistente (`100/100/99`, **1 centavo abaixo**) responde **422** e
+**nada grava**: a compra, a importação (`importacoes_nfe`) e os lançamentos ficam
+inalterados (rollback total — a validação roda antes de qualquer insert).
+
 ## 11. PostgreSQL
 
 Gate oficial do projeto (`npm run test:pg`, `scripts/test-pg-gate.mjs`) sobre um
@@ -141,7 +165,7 @@ Gate oficial do projeto (`npm run test:pg`, `scripts/test-pg-gate.mjs`) sobre um
 CI usa no Node 22):
 
 ```
-ERP-03 GATE PASS: 196 testes PostgreSQL reais; 0 fail/skip/todo.
+ERP-03 GATE PASS: 197 testes PostgreSQL reais; 0 fail/skip/todo.
 ```
 
 ## 12. Typecheck
@@ -170,13 +194,32 @@ OK** (inclui o fluxo de compra parcelada: “compra completa gera 3 contas a pag
 - Client: **323 pass / 0 fail**.
 - `audit:menu`: **sem erros** (menu × rotas × recursos × permissões × multiempresa
   coerentes; 1 aviso pré-existente sobre `/api/health` ser público).
-- Gate PostgreSQL oficial: **196 pass / 0 fail / 0 skip / 0 todo**.
+- Gate PostgreSQL oficial: **197 pass / 0 fail / 0 skip / 0 todo**.
 
 ## 17. Residuals
 
 Nenhum residual novo introduzido por este ciclo restrito.
 
-## 18. Out-of-scope
+## 18. Hardening FIN-01.1 (revisão independente do PR #67)
+
+Após a revisão do PR #67, o materializador foi endurecido **sem mudar o contrato**
+dos casos válidos. As fragilidades endereçadas:
+
+| Achado da revisão | Antes | Depois |
+|-------------------|-------|--------|
+| Seleção do detalhe por parcela (`find` + fallback `detalhes[i-1]`) podia casar valor e vencimento de itens diferentes quando `parcela` estava ausente/fora de 1..N | ambíguo | `numeroDeParcelaDoDetalhe(detalhe, índice, n)` — mesma regra para valor **e** vencimento |
+| Detalhe com valor **não numérico** (ex.: `"abacaxi"`) virava `NaN` e caía no canônico silenciosamente | adivinhação | **422** explícito |
+| Detalhe com `parcela` **repetida** — valores conflitantes | último vencia | **422** explícito |
+| Detalhes cuja soma **excedia** o total eram absorvidos pela última parcela (reinterpretação) | silencioso | **422** (`não fecha o total`) |
+| Detalhes cuja soma ficava **1 centavo abaixo** eram corrigidos na última parcela | silencioso | **422** (`não fecha o total`) |
+| Duas representações de centavos (reais↔centavos) em `dividirParcelas`/`materializar` | risco de dupla conversão | núcleo único `dividirParcelasCentavos`; conversão para reais só na saída |
+| Normalização de `fin_parcelas` (0/negativo/NaN → 1x; fracionário trunca; teto 60x) era implícita | não documentada | explícita em `reconciliarParcelasPedido` e coberta por teste |
+
+Casos válidos preservados: duplicatas positivas do documento continuam mandando,
+com a **última parcela residual** fechando a soma; XMLs com formato BR (`"40,50"`)
+seguem aceitos; lacunas usam a divisão canônica daquela parcela.
+
+## 19. Out-of-scope
 
 Conforme o escopo estrito do FIN-01, **não** foram tocados: SEC-04 (catálogo/RBAC),
 rate limit público, portal XFF, token público de arquivos, auditoria Date/JSONB,

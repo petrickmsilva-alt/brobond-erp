@@ -191,8 +191,17 @@ function addMeses(dataBaseISO: string, meses: number): string {
  * MemStore e PostgreSQL recebem exatamente os mesmos valores.
  */
 export function dividirParcelas(total: number, numeroParcelas: number): number[] {
+  return dividirParcelasCentavos(Math.round(Number(total) * 100), numeroParcelas).map((c) => c / 100);
+}
+
+/**
+ * Núcleo inteiro de `dividirParcelas`: recebe o total JÁ em centavos e devolve
+ * o plano em centavos. É a única implementação da regra; `dividirParcelas`
+ * apenas converte a entrada e a saída. Todas as validações e a distribuição do
+ * resíduo acontecem aqui, sem float.
+ */
+function dividirParcelasCentavos(totalCentavos: number, numeroParcelas: number): number[] {
   const n = Number(numeroParcelas);
-  const totalCentavos = Math.round(Number(total) * 100);
   if (!Number.isInteger(n) || n < 1) {
     throw new HttpError(400, 'O número de parcelas deve ser um inteiro maior ou igual a 1.', { fin_parcelas: 'Informe ao menos 1 parcela' });
   }
@@ -207,39 +216,103 @@ export function dividirParcelas(total: number, numeroParcelas: number): number[]
   const parcelas: number[] = [];
   for (let i = 0; i < n; i++) {
     // Últimas `resto` parcelas absorvem o centavo residual — soma sempre exata.
-    parcelas.push((base + (i >= n - resto ? 1 : 0)) / 100);
+    parcelas.push(base + (i >= n - resto ? 1 : 0));
   }
   return parcelas;
 }
 
 /**
- * Materializa o plano de N parcelas a partir do total, respeitando os detalhes
- * informados (duplicatas do XML da compra) quando presentes.
- *
- * Garante, em CENTAVOS inteiros, que cada parcela é > 0 e que Σ === total.
- * A última parcela fecha o total (absorve o centavo residual e qualquer ajuste
- * do documento). Se isso for impossível — combinação sem N parcelas positivas —
- * lança HttpError ANTES de qualquer persistência.
+ * Converte um valor monetário para CENTAVOS inteiros, rejeitando o que não for
+ * um número finito. `null`/`undefined` viram "ausente" (null) para que quem
+ * chama decida entre erro e fallback — nunca `0` silencioso.
  */
-function materializarParcelas(total: number, n: number, detalhes: Row[]): number[] {
-  const canonico = dividirParcelas(total, n);
+function centavosDe(valor: unknown): number | null {
+  if (valor === undefined || valor === null || valor === '') return null;
+  const n = typeof valor === 'number' ? valor : Number(String(valor).trim());
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100);
+}
+
+/**
+ * Número de parcela de um detalhe do documento, na MESMA regra usada pelo
+ * materializador: usa `detalhe.parcela` quando é um inteiro dentro de 1..N;
+ * caso contrário cai na posição (1-based) do detalhe na lista. Reutilizado na
+ * hora de escolher o vencimento do detalhe, para que valor e vencimento venham
+ * sempre do mesmo item.
+ */
+function numeroDeParcelaDoDetalhe(detalhe: Row | undefined, indice: number, n: number): number {
+  const bruto = Number(detalhe?.parcela || 0);
+  return Number.isInteger(bruto) && bruto >= 1 && bruto <= n ? bruto : indice + 1;
+}
+
+/**
+ * Materializa o plano de N parcelas em CENTAVOS INTEIROS, respeitando os
+ * detalhes do documento (duplicatas da NF-e) quando presentes.
+ *
+ * Contrato (FIN-01):
+ *   • `total` e cada detalhe são convertidos para centavos inteiros UMA vez;
+ *   • a soma, o resíduo e a checagem de positividade acontecem só em centavos;
+ *   • a conversão para o formato monetário persistido (reais) é a ÚLTIMA etapa;
+ *   • Σ parcelas === total, sem perder centavo, e nenhuma parcela <= 0.
+ *
+ * Detalhes (regra explícita):
+ *   • um detalhe por parcela (1..N); fora de ordem é aceito, o `parcela` manda;
+ *   • `parcela` ausente/ inválido/fora de 1..N → usa a posição do item na lista;
+ *   • detalhe ausente (ou sem `valor`) → usa a divisão canônica daquela parcela;
+ *   • valor presente mas não numérico/não finito → rejeitado (422): um número
+ *     de documento ilegível não vira centavo por adivinhação;
+ *   • valor zero ou negativo → rejeitado (422);
+ *   • `parcela` repetida → rejeitado (422): valores conflitantes do documento
+ *     não têm como ser escolhidos com segurança;
+ *   • a ÚLTIMA parcela é residual: se o documento também a informa, ela precisa
+ *     bater com o resíduo — detalhes cuja soma excede OU fica abaixo do total,
+ *     inclusive por 1 centavo, são rejeitados (a soma não é reinterpretada);
+ *   • nenhuma parcela pode ficar <= 0.
+ *
+ * Nada é gravado antes desta função retornar: as rejeições são de negócio e
+ * valem igualmente para MemStore e PostgreSQL.
+ */
+function materializarParcelasCentavos(total: number, n: number, detalhes: Row[]): number[] {
+  const canonico = dividirParcelasCentavos(total, n);
+  if (!detalhes.length) return canonico;
+
+  const informados = new Map<number, number>();
+  detalhes.forEach((detalhe, indice) => {
+    const numero = numeroDeParcelaDoDetalhe(detalhe, indice, n);
+    const temValor = detalhe && detalhe.valor !== undefined && detalhe.valor !== null && detalhe.valor !== '';
+    const centavos = centavosDe(detalhe?.valor);
+    if (!temValor) return; // detalhe sem valor: usa o canônico daquela parcela
+    if (centavos === null) {
+      throw new HttpError(422, `A parcela ${numero} do documento tem valor não numérico (${JSON.stringify(detalhe.valor)}).`, { fin_parcelas_detalhes: 'Valor não numérico' });
+    }
+    if (centavos <= 0) {
+      throw new HttpError(422, `A parcela ${numero} do documento tem valor inválido (${Number(detalhe.valor)}): todo valor de parcela precisa ser maior que zero.`, { fin_parcelas_detalhes: 'Parcela inválida' });
+    }
+    if (informados.has(numero)) {
+      throw new HttpError(422, `O documento informa a parcela ${numero} mais de uma vez; valores conflitantes não têm como ser escolhidos com segurança.`, { fin_parcelas_detalhes: 'Parcela duplicada' });
+    }
+    informados.set(numero, centavos);
+  });
+
   const valores: number[] = [];
-  for (let i = 1; i < n; i++) {
-    const detalhe = detalhes.find((item) => Number(item.parcela || 0) === i) || detalhes[i - 1];
-    const informado = detalhe && detalhe.valor !== undefined && detalhe.valor !== null ? Number(detalhe.valor) : NaN;
-    valores.push(Number.isFinite(informado) && informado > 0 ? r2(informado) : canonico[i - 1]);
+  for (let i = 1; i < n; i++) valores.push(informados.get(i) ?? canonico[i - 1]);
+  const somaParcial = valores.reduce((a, b) => a + b, 0);
+  const residuo = total - somaParcial;
+  const ultimaInformada = informados.get(n);
+  if (ultimaInformada !== undefined && ultimaInformada !== residuo) {
+    throw new HttpError(422, `A soma dos detalhes do documento (R$ ${(ultimaInformada / 100).toFixed(2)} na última parcela) não fecha o total: o resíduo esperado é R$ ${(residuo / 100).toFixed(2)}.`, { fin_parcelas_detalhes: 'Soma não fecha o total' });
   }
-  const ultima = r2(total - somaMoeda(valores));
-  if (!(ultima > 0)) {
-    throw new HttpError(422, `Não é possível dividir R$ ${total.toFixed(2)} em ${n} parcelas: nenhuma parcela pode ficar zerada. Reduza o número de parcelas ou reajuste o valor.`, { fin_parcelas: 'Parcelas acima do valor da operação' });
+  const ultima = ultimaInformada ?? residuo;
+  if (ultima <= 0) {
+    throw new HttpError(422, `Não é possível dividir R$ ${(total / 100).toFixed(2)} em ${n} parcelas: a última parcela ficaria zerada ou negativa. Revise os valores do documento.`, { fin_parcelas_detalhes: 'Última parcela inválida' });
   }
   valores.push(ultima);
-  for (const v of valores) {
-    if (!Number.isFinite(v) || v <= 0) {
-      throw new HttpError(422, 'Parcela inválida: todo valor de parcela precisa ser maior que zero.', { fin_parcelas: 'Parcela inválida' });
-    }
-  }
   return valores;
+}
+
+/** Converte o plano em centavos para o formato monetário persistido (reais). */
+function materializarParcelas(total: number, n: number, detalhes: Row[]): number[] {
+  return materializarParcelasCentavos(Math.round(total * 100), n, detalhes).map((c) => c / 100);
 }
 
 /**
@@ -265,7 +338,15 @@ async function reconciliarParcelasPedido(
   const finCancelado = ['cancelado', 'cancelada'].includes(String(after.fin_status)) || ['cancelado', 'cancelada'].includes(String(after.status));
   const finLiquidado = ['recebido', 'pago'].includes(String(after.fin_status));
   const total = Math.max(0, Number(after.total || 0));
-  const n = Math.max(1, Math.min(60, Math.trunc(Number(after.fin_parcelas || 1) || 1)));
+  // Regra de negócio do plano de parcelas (explícita e testada):
+  //   • ausente / vazio / 0 / negativo / não-finito → 1 parcela (padrão histórico
+  //     do produto; a ausência de plano é "à vista", não um erro);
+  //   • fracionário → trunca (o campo é inteiro; 3,9 parcelas não existe);
+  //   • acima do limite → 60 (teto do produto, aplicado com clamp).
+  // A normalização é feita AQUI, de propósito: `dividirParcelas` recebe sempre um
+  // inteiro 1..60 já validado e não tem como "consertar" entrada inválida.
+  const bruto = Number(after.fin_parcelas || 1);
+  const n = Math.max(1, Math.min(60, Number.isFinite(bruto) ? Math.trunc(bruto) : 1));
   // `fin_vencimento` é coluna DATE: o Postgres devolve um objeto `Date`, e
   // `String(date).slice(0,10)` produz "Mon Nov 09" — data inválida que estourava
   // `addMeses` com RangeError e devolvia 500 em qualquer compra/venda com
@@ -298,7 +379,10 @@ async function reconciliarParcelasPedido(
     const valores = materializarParcelas(total, n, detalhes);
     for (let i = 1; i <= n; i++) {
       const valor = valores[i - 1];
-      const detalhe = detalhes.find((item) => Number(item.parcela || 0) === i) || detalhes[i - 1];
+      // Mesmo item de detalhe (valor + vencimento) usado pelo materializador:
+      // `parcela` quando válida, senão a posição do item na lista do documento.
+      const idxDetalhe = detalhes.findIndex((item, indice) => numeroDeParcelaDoDetalhe(item, indice, n) === i);
+      const detalhe = idxDetalhe >= 0 ? detalhes[idxDetalhe] : undefined;
       const alvo = existentes.find((l) => Number(l.parcela || 1) === i);
       const dados: Row = {
         data: i === 1 || !alvo ? dataBase : dataISO(alvo.data) || dataBase,

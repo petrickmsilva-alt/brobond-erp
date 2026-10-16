@@ -273,3 +273,114 @@ test('FIN-01: parcelas válidas e exatas via HTTP real + PostgreSQL', async (t) 
   console.log(`\n[FIN-01 PostgreSQL] ${evidencia.join('\n  ')}\n`);
   assert.doesNotMatch(logs(), /Erro inesperado/, 'nenhuma operação pode virar 500 inesperado');
 });
+
+// ============================================================================
+// FIN-01 — DETALHES DO DOCUMENTO (XML/NF-e) via HTTP real + PostgreSQL.
+//
+// A importação de NF-e é o produtor REAL de `fin_parcelas_detalhes`: as
+// duplicatas do XML viram o plano de parcelas do contas a pagar. Aqui se prova,
+// pelo stack HTTP completo + banco novo:
+//   • detalhes VÁLIDOS (duplicatas 100/100/100) → compra criada com as parcelas
+//     exatas do documento (Σ === total, todas > 0);
+//   • detalhes INCONSISTENTES (100/100/99, 1 centavo abaixo) → 422 e NENHUMA
+//     gravação parcial (compra, itens, importação e lançamentos intactos).
+// ============================================================================
+function nfeXml(opts: {
+  chave: string;
+  numero: string;
+  cnpj: string;
+  razao: string;
+  cProd: string;
+  descricao: string;
+  qtd: number;
+  unit: number;
+  vNF: number;
+  duplicatas: { n: number; venc: string; valor: number }[];
+}): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc versao="4.00" xmlns="http://www.portalfiscal.inf.br/nfe">
+  <NFe><infNFe Id="NFe${opts.chave}" versao="4.00">
+    <ide><cUF>52</cUF><natOp>VENDA</natOp><mod>55</mod><serie>1</serie><nNF>${opts.numero}</nNF><dhEmi>2026-10-01T10:00:00-03:00</dhEmi></ide>
+    <emit><CNPJ>${opts.cnpj}</CNPJ><xNome>${opts.razao}</xNome><enderEmit><xLgr>Rua Teste</xLgr><nro>1</nro><xBairro>Centro</xBairro><cMun>5208707</cMun><xMun>GOIANIA</xMun><UF>GO</UF><CEP>74000000</CEP></enderEmit></emit>
+    <det nItem="1"><prod><cProd>${opts.cProd}</cProd><cEAN>SEM GTIN</cEAN><xProd>${opts.descricao}</xProd><NCM>60062100</NCM><CFOP>6102</CFOP><uCom>M</uCom><qCom>${opts.qtd.toFixed(4)}</qCom><vUnCom>${opts.unit.toFixed(4)}</vUnCom><vProd>${(opts.qtd * opts.unit).toFixed(2)}</vProd></prod>
+      <imposto><ICMS><ICMS00><orig>0</orig><CST>00</CST><vBC>${(opts.qtd * opts.unit).toFixed(2)}</vBC><pICMS>18.00</pICMS><vICMS>${(opts.qtd * opts.unit * 0.18).toFixed(2)}</vICMS></ICMS00></ICMS></imposto></det>
+    <total><ICMSTot><vNF>${opts.vNF.toFixed(2)}</vNF><vProd>${(opts.qtd * opts.unit).toFixed(2)}</vProd><vFrete>0.00</vFrete></ICMSTot></total>
+    <cobr><fat><nFat>${opts.numero}</nFat><vOrig>${opts.vNF.toFixed(2)}</vOrig></fat>
+${opts.duplicatas.map((d) => `      <dup><nDup>${String(d.n).padStart(3, '0')}</nDup><dVenc>${d.venc}</dVenc><vDup>${d.valor.toFixed(2)}</vDup></dup>`).join('\n')}
+    </cobr>
+  </infNFe></NFe>
+</nfeProc>`;
+}
+
+test('FIN-01: detalhes do XML (duplicatas) via HTTP real + PostgreSQL — válidos e inconsistentes', async (t) => {
+  const nome = nomeDoBancoNovo();
+  await query(`CREATE DATABASE ${nome}`);
+  const databaseUrl = urlDoBanco(nome);
+
+  const porta = await reservePort();
+  const { child, baseUrl, logs } = await startRealServer(porta, databaseUrl);
+
+  const cliente = new Client({ connectionString: databaseUrl });
+  await cliente.connect();
+
+  t.after(async () => {
+    await cliente.end().catch(() => undefined);
+    await stopServer(child);
+    await query(`DROP DATABASE IF EXISTS ${nome} WITH (FORCE)`).catch(() => undefined);
+  });
+
+  const evidencia: string[] = [];
+  const registra = (texto: string) => evidencia.push(texto);
+
+  const adminToken = await loginAdmin(baseUrl, cliente, ADMIN_EMAIL_TESTE, ADMIN_SENHA_TESTE);
+  const novaSenhaAdmin = `FIN01-Det-${randomUUID()}!X`;
+  const troca = await req(baseUrl, 'POST', '/auth/change-password', { senha_atual: ADMIN_SENHA_TESTE, senha_nova: novaSenhaAdmin }, adminToken);
+  assert.equal(troca.status, 200, `troca de senha do admin: ${troca.texto}`);
+
+  // Seed: local padrão, tamanho único e produto com SKU igual ao cProd do XML.
+  await cliente.query(`INSERT INTO locais (empresa_id,nome,tipo,ativo,padrao) VALUES (1,$1,'loja',true,true)`, [`loja det ${RODADA}`]);
+  const tam = await cliente.query(`INSERT INTO tamanhos (codigo,descricao,ordem) VALUES ($1,$1,99) ON CONFLICT (codigo) DO UPDATE SET descricao=EXCLUDED.descricao RETURNING id`, [`FD${RODADA}`.slice(0, 20)]);
+  const sku = `FIN01-DET-${RODADA}`;
+  await cliente.query(`INSERT INTO produtos (empresa_id,sku,nome,preco_venda,ativo) VALUES (1,$1,'Produto detalhe',10,true)`, [sku]);
+  registra(`seed detalhes: tamanho #${tam.rows[0].id}, produto sku ${sku}`);
+
+  const parcelasDaCompra = async (compraId: number) => (await cliente.query(
+    `SELECT parcela, valor::float8 AS valor, total_parcelas, status
+       FROM lancamentos_financeiros WHERE referencia_tipo='compra' AND referencia_id=$1 ORDER BY parcela`,
+    [compraId],
+  )).rows;
+
+  // ---- VÁLIDO: duplicatas 100/100/100 fechando o total 300,00 --------------
+  const chaveOk = `522610${RODADA.toUpperCase().replace(/[^0-9A-Z]/g, '').padEnd(38, '0').slice(0, 38)}`;
+  const xmlOk = nfeXml({ chave: chaveOk, numero: '900001', cnpj: '11.222.333/0001-81', razao: 'Fornecedor Detalhe', cProd: sku, descricao: 'Tecido', qtd: 30, unit: 10, vNF: 300, duplicatas: [{ n: 1, venc: '2026-11-01', valor: 100 }, { n: 2, venc: '2026-12-01', valor: 100 }, { n: 3, venc: '2027-01-01', valor: 100 }] });
+  const impOk = await req(baseUrl, 'POST', '/suprimentos/compras/importar-xml', { xml: xmlOk, aplicar: true }, adminToken);
+  assert.equal(impOk.status, 201, `importação válida deveria criar a compra: ${impOk.texto}`);
+  const compraOkId = Number(impOk.body.compra_id);
+  const pOk = await parcelasDaCompra(compraOkId);
+  assert.equal(pOk.length, 3, 'as 3 duplicatas do XML viram 3 parcelas');
+  assert.deepEqual(pOk.map((p) => Number(p.valor)), [100, 100, 100], 'os valores das duplicatas mandam');
+  assert.equal(somaCentavos(pOk.map((p) => Number(p.valor))), 30000, 'Σ === total do documento');
+  assert.ok(pOk.every((p) => Number(p.valor) > 0));
+  registra(`detalhes válidos) XML 300,00 em 3 dup [100,100,100] → compra #${compraOkId}, ${JSON.stringify(pOk.map((p) => Number(p.valor)))}, Σ=300,00`);
+
+  // ---- INCONSISTENTE: duplicatas 100/100/99 (1 centavo abaixo) → 422 --------
+  const contar = async (tabela: string) => Number((await cliente.query(`SELECT count(*)::int AS n FROM ${tabela}`)).rows[0].n);
+  const antes = { compras: await contar('compras'), lanc: await contar('lancamentos_financeiros'), imports: await contar('importacoes_nfe') };
+  const chaveRuim = `522611${RODADA.toUpperCase().replace(/[^0-9A-Z]/g, '').padEnd(38, '1').slice(0, 38)}`;
+  const xmlRuim = nfeXml({ chave: chaveRuim, numero: '900002', cnpj: '11.222.333/0001-81', razao: 'Fornecedor Detalhe', cProd: sku, descricao: 'Tecido', qtd: 30, unit: 10, vNF: 300, duplicatas: [{ n: 1, venc: '2026-11-01', valor: 100 }, { n: 2, venc: '2026-12-01', valor: 100 }, { n: 3, venc: '2027-01-01', valor: 99 }] });
+  const impRuim = await req(baseUrl, 'POST', '/suprimentos/compras/importar-xml', { xml: xmlRuim, aplicar: true }, adminToken);
+  assert.equal(impRuim.status, 422, `duplicatas que não fecham o total devem ser rejeitadas (422): ${impRuim.texto}`);
+  assert.match(String(impRuim.body?.error || ''), /não fecha o total|resíduo/i, `mensagem canônica: ${impRuim.texto}`);
+  const depois = { compras: await contar('compras'), lanc: await contar('lancamentos_financeiros'), imports: await contar('importacoes_nfe') };
+  assert.equal(depois.compras, antes.compras, 'a importação inválida NÃO pode gravar a compra (rollback total)');
+  assert.equal(depois.lanc, antes.lanc, 'nenhuma parcela pode sobrar da importação inválida');
+  assert.equal(depois.imports, antes.imports, 'a chave inválida não pode ser registrada como importada');
+  registra(`detalhes inconsistentes) XML 300,00 em 3 dup [100,100,99] → ${impRuim.status}; compras ${antes.compras}→${depois.compras}, lançamentos ${antes.lanc}→${depois.lanc}, importações ${antes.imports}→${depois.imports} (sem gravação parcial)`);
+
+  const naoPositivas = Number((await cliente.query(`SELECT count(*)::int AS n FROM lancamentos_financeiros WHERE valor <= 0`)).rows[0].n);
+  assert.equal(naoPositivas, 0, 'não pode existir lançamento com valor <= 0');
+  registra('lançamentos com valor <= 0 no banco: 0');
+
+  console.log(`\n[FIN-01 detalhes PostgreSQL] ${evidencia.join('\n  ')}\n`);
+  assert.doesNotMatch(logs(), /Erro inesperado/, 'nenhuma operação pode virar 500 inesperado');
+});

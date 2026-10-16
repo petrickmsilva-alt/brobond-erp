@@ -267,3 +267,115 @@ test('FIN-01 detalhes do XML: duplicatas positivas mandam; a última fecha o tot
   assert.deepEqual(p.map((x) => Number(x.valor)), [40, 30, 30.01]);
   assert.equal(somaCentavos(p.map((x) => Number(x.valor))), 10001);
 });
+
+// ----------------------------------------------------------------------------
+// 7) NORMALIZAÇÃO DO NÚMERO DE PARCELAS — regra explícita do serviço.
+//    (o campo é inteiro; a ausência de plano é "à vista")
+// ----------------------------------------------------------------------------
+test('FIN-01 parcelas: 0, negativo e não-finito caem no padrão de 1 parcela', async () => {
+  for (const valor of [0, -3, NaN]) {
+    const id = 7600 + Math.round(Math.random() * 100);
+    await sincronizarVenda({ id, total: 100, fin_parcelas: valor });
+    const p = await parcelasDe('venda', id);
+    assert.equal(p.length, 1, `fin_parcelas=${String(valor)} deveria gerar 1 parcela`);
+    assert.equal(Number(p[0].valor), 100);
+  }
+  // ausente também é 1 parcela (padrão histórico).
+  await sincronizarVenda({ id: 7699, total: 100, fin_parcelas: undefined });
+  assert.equal((await parcelasDe('venda', 7699)).length, 1);
+});
+
+test('FIN-01 parcelas: fracionário trunca (2,9 → 2x)', async () => {
+  await sincronizarVenda({ id: 7610, total: 100, fin_parcelas: 2.9 });
+  const p = await parcelasDe('venda', 7610);
+  assert.equal(p.length, 2);
+  assert.deepEqual(p.map((x) => Number(x.valor)), [50, 50]);
+});
+
+test('FIN-01 parcelas: acima do limite do produto é limitado a 60x, sem perder centavo', async () => {
+  await sincronizarVenda({ id: 7611, total: 100, fin_parcelas: 999 });
+  const p = await parcelasDe('venda', 7611);
+  assert.equal(p.length, 60);
+  assert.ok(p.every((x) => Number(x.valor) > 0));
+  assert.equal(somaCentavos(p.map((x) => Number(x.valor))), 10000);
+});
+
+test('FIN-01 parcelas: limite exato 60x é aceito', async () => {
+  await sincronizarVenda({ id: 7612, total: 100, fin_parcelas: 60 });
+  assert.equal((await parcelasDe('venda', 7612)).length, 60);
+});
+
+// ----------------------------------------------------------------------------
+// 8) DETALHES DO DOCUMENTO — regra explícita (valores, ordem, lacunas, 422).
+// ----------------------------------------------------------------------------
+test('FIN-01 detalhes: fora de ordem o campo `parcela` manda (Σ exata)', async () => {
+  await sincronizarVenda({ id: 7701, total: 100.01, fin_parcelas: 3, fin_parcelas_detalhes: [{ parcela: 2, valor: 30 }, { parcela: 1, valor: 40 }, { parcela: 3, valor: 30.01 }] });
+  const p = await parcelasDe('venda', 7701);
+  assert.deepEqual(p.map((x) => Number(x.valor)), [40, 30, 30.01]);
+  assert.equal(somaCentavos(p.map((x) => Number(x.valor))), 10001);
+});
+
+test('FIN-01 detalhes: lacuna usa a divisão canônica daquela parcela (Σ exata)', async () => {
+  await sincronizarVenda({ id: 7702, total: 100.01, fin_parcelas: 3, fin_parcelas_detalhes: [{ parcela: 1, valor: 40 }] });
+  const p = await parcelasDe('venda', 7702);
+  assert.equal(p.length, 3);
+  assert.equal(Number(p[0].valor), 40);
+  assert.ok(p.every((x) => Number(x.valor) > 0));
+  assert.equal(somaCentavos(p.map((x) => Number(x.valor))), 10001);
+});
+
+test('FIN-01 detalhes: número de parcela repetido é rejeitado (422) e nada persiste', async () => {
+  await assert.rejects(
+    () => sincronizarVenda({ id: 7704, total: 100.01, fin_parcelas: 3, fin_parcelas_detalhes: [{ parcela: 1, valor: 40 }, { parcela: 1, valor: 30 }, { parcela: 3, valor: 30.01 }] }),
+    (e: any) => e.status === 422 && /mais de uma vez/i.test(e.message)
+  );
+  assert.equal((await parcelasDe('venda', 7704)).length, 0, 'a falha não pode deixar parcela parcial');
+});
+
+test('FIN-01 detalhes: valor zero ou negativo é rejeitado (422), sem persistir', async () => {
+  for (const valor of [0, -1]) {
+    const id = 7705 + (valor === 0 ? 0 : 1);
+    await assert.rejects(
+      () => sincronizarVenda({ id, total: 100, fin_parcelas: 2, fin_parcelas_detalhes: [{ parcela: 1, valor }, { parcela: 2, valor: 100 - valor }] }),
+      (e: any) => e.status === 422
+    );
+    assert.equal((await parcelasDe('venda', id)).length, 0);
+  }
+});
+
+test('FIN-01 detalhes: valor não numérico é rejeitado (422), sem persistir', async () => {
+  await assert.rejects(
+    () => sincronizarVenda({ id: 7707, total: 100, fin_parcelas: 2, fin_parcelas_detalhes: [{ parcela: 1, valor: 'abacaxi' }, { parcela: 2, valor: 100 }] }),
+    (e: any) => e.status === 422 && /numérico/i.test(e.message)
+  );
+  assert.equal((await parcelasDe('venda', 7707)).length, 0);
+});
+
+test('FIN-01 detalhes: soma que excede o total é rejeitada (422), sem reinterpretar', async () => {
+  await assert.rejects(
+    () => sincronizarVenda({ id: 7708, total: 100, fin_parcelas: 3, fin_parcelas_detalhes: [{ parcela: 1, valor: 50 }, { parcela: 2, valor: 50 }, { parcela: 3, valor: 0.01 }] }),
+    (e: any) => e.status === 422 && /não fecha o total/i.test(e.message)
+  );
+  assert.equal((await parcelasDe('venda', 7708)).length, 0);
+});
+
+test('FIN-01 detalhes: soma abaixo do total por 1 centavo é rejeitada (422)', async () => {
+  await assert.rejects(
+    () => sincronizarVenda({ id: 7709, total: 100, fin_parcelas: 3, fin_parcelas_detalhes: [{ parcela: 1, valor: 33.33 }, { parcela: 2, valor: 33.33 }, { parcela: 3, valor: 33.33 }] }),
+    (e: any) => e.status === 422 && /não fecha o total/i.test(e.message)
+  );
+  assert.equal((await parcelasDe('venda', 7709)).length, 0);
+});
+
+test('FIN-01 detalhes: soma exata com valores desiguais é aceita (Σ === total)', async () => {
+  await sincronizarVenda({ id: 7710, total: 100, fin_parcelas: 3, fin_parcelas_detalhes: [{ parcela: 1, valor: 10 }, { parcela: 2, valor: 20 }, { parcela: 3, valor: 70 }] });
+  const p = await parcelasDe('venda', 7710);
+  assert.deepEqual(p.map((x) => Number(x.valor)), [10, 20, 70]);
+  assert.ok(p.every((x) => Number(x.valor) > 0));
+});
+
+test('FIN-01 detalhes: valor em string numérica é aceito (tolerância do XML)', async () => {
+  await sincronizarVenda({ id: 7711, total: 100, fin_parcelas: 2, fin_parcelas_detalhes: [{ parcela: 1, valor: '40.50' }, { parcela: 2, valor: 59.5 }] });
+  const p = await parcelasDe('venda', 7711);
+  assert.deepEqual(p.map((x) => Number(x.valor)), [40.5, 59.5]);
+});
