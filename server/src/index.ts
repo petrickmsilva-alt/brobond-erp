@@ -48,7 +48,7 @@ import {
 } from './services';
 import { parseId } from './validate';
 import { HttpError } from './errors';
-import { assertProductionSecrets, bloquearSenhaProvisoria, corsOrigin, loginRateLimit, securityHeaders } from './security';
+import { assertProductionSecrets, bloquearSenhaProvisoria, corsOrigin, loginRateLimit, securityHeaders, trustProxySetting } from './security';
 import { initSentry, reportarErro } from './log';
 import { smtpConfigurado } from './mail';
 import { carregarOrigemDoBanco, revisarConfiguracaoOrigem, statusOrigemAsync } from './urlPublica';
@@ -231,7 +231,12 @@ export const VERSION = process.env.npm_package_version || '0.6.0';
 const app = express();
 
 app.disable('x-powered-by');
-app.set('trust proxy', 1); // Render/proxies: IP real em X-Forwarded-For
+// SEC-02: confiança de proxy EXPLÍCITA por ambiente (TRUST_PROXY). Padrão
+// seguro: sem configuração, os cabeçalhos X-Forwarded-* NÃO são aceitos e o IP
+// (rate limit, sessões, auditoria) é o da conexão TCP real — um cliente não
+// consegue trocar de bucket forjando o X-Forwarded-For. Produção na Render
+// define TRUST_PROXY=1 no render.yaml (um proxy confiável).
+app.set('trust proxy', trustProxySetting());
 app.use(securityHeaders);
 // Endpoints públicos também são consumidos por FORA do ERP: o site de varejo
 // (brobond.com.br) busca o catálogo por JavaScript e o incorpora em iframe.

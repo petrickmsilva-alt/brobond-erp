@@ -11,6 +11,41 @@ import { getStore } from './services';
 
 const isProd = process.env.NODE_ENV === 'production';
 
+// ----------------------------------------------------------------------------
+// SEC-02 — confiança EXPLÍCITA de proxy (Express `trust proxy`).
+//
+// Antes: `app.set('trust proxy', 1)` fixo em TODOS os ambientes. O Express então
+// aceitava `X-Forwarded-For` do cliente (salta o último hop) e o rate limit do
+// login — que derivava a identidade do IP direto do cabeçalho — podia ser
+// contornado trocando o X-Forwarded-For a cada tentativa.
+//
+// Agora a confiança é uma decisão explícita por ambiente (`TRUST_PROXY`), com
+// PADRÃO SEGURO: sem configuração, nenhum cabeçalho de encaminhamento é aceito e
+// o IP usado é o da conexão TCP real. O formato é o mesmo que o Express entende
+// em `app.set('trust proxy', ...)`:
+//
+//   (vazio/ausente)              → false: não confia em proxy (padrão)
+//   "false" / "0"                → false
+//   "true"                       → true  (TODO hop confiável — só quando a
+//                                    aplicação é INALCANÇÁVEL por fora)
+//   "1", "2", …                  → nº de hops confiáveis (ex.: 1 proxy)
+//   "loopback" | "linklocal" ... → nome/lista de sub-redes confiáveis
+//   "10.0.0.0/8, 192.168.0.0/16" → IP/CIDR (lista separada por vírgula)
+//
+// Ver render.yaml: produção na Render define `TRUST_PROXY=1` (um proxy).
+// ----------------------------------------------------------------------------
+export function trustProxySetting(): boolean | number | string {
+  const raw = String(process.env.TRUST_PROXY ?? '').trim();
+  if (!raw) return false;
+  const low = raw.toLowerCase();
+  if (low === 'false' || low === '0' || low === 'no' || low === 'off') return false;
+  if (low === 'true' || low === 'yes' || low === 'on') return true;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  // Lista de nomes/IPs/CIDRs — o Express aceita string com itens separados por
+  // vírgula e resolve cada um (sub-rede nomeada, IP ou faixa CIDR).
+  return raw;
+}
+
 /** Aborta a inicialização em produção sem segredo forte do JWT e sem ADMIN_PASSWORD. */
 export function assertProductionSecrets() {
   if (!isProd) return;

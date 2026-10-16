@@ -220,6 +220,27 @@ test('segurança: rate limit PERSISTENTE bloqueia após 5 falhas e libera após 
   assert.equal(status, 200);
 });
 
+test('SEC-02: trust proxy é EXPLÍCITO por ambiente (padrão não confia em encaminhamento)', async () => {
+  const { trustProxySetting } = await import('../src/security');
+  const anterior = process.env.TRUST_PROXY;
+  const set = (v: string | undefined) => { if (v === undefined) delete process.env.TRUST_PROXY; else process.env.TRUST_PROXY = v; };
+  try {
+    // Padrão seguro: sem configuração, nenhum hop é confiável.
+    set(undefined); assert.equal(trustProxySetting(), false);
+    set(''); assert.equal(trustProxySetting(), false);
+    set('false'); assert.equal(trustProxySetting(), false);
+    set('0'); assert.equal(trustProxySetting(), false);
+    // Explicitação: nº de hops, booleano ou lista de IP/CIDR/nome.
+    set('1'); assert.equal(trustProxySetting(), 1);
+    set('2'); assert.equal(trustProxySetting(), 2);
+    set('true'); assert.equal(trustProxySetting(), true);
+    set('loopback'); assert.equal(trustProxySetting(), 'loopback');
+    set('10.0.0.0/8, 192.168.0.0/16'); assert.equal(trustProxySetting(), '10.0.0.0/8, 192.168.0.0/16');
+  } finally {
+    set(anterior);
+  }
+});
+
 test('financeiro: aporte confirmado gera lançamento de investimento e estorno cancela', async () => {
   const inv = await createRecord(RESOURCES.investidores, { nome: 'Anjo Teste', tipo: 'investidor' }, admin);
   const aporte = await createRecord(RESOURCES.aportes, { investidor_id: Number(inv.id), data: '2026-09-04', tipo: 'aporte', valor: 5000, forma_pagamento: 'pix', status: 'confirmado' }, admin);

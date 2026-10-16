@@ -146,20 +146,26 @@ test('signToken: gera token JWT com dados do usuário', async () => {
   assert.ok(decoded.exp); // Tem expiração
 });
 
-test('clientIp: extrai IP de X-Forwarded-For ou socket', async () => {
+test('clientIp: usa req.ip (resolvido pelo Express conforme trust proxy), não o X-Forwarded-For cru', async () => {
   const { clientIp } = await import('../src/auth');
 
-  // Com X-Forwarded-For
-  const req1: any = { headers: { 'x-forwarded-for': '10.0.0.1, 192.168.1.1' }, socket: { remoteAddress: '127.0.0.1' } };
+  // SEC-02: a identidade vem de req.ip (confiança de proxy explícita). Um
+  // X-Forwarded-For enviado pelo cliente NÃO é lido diretamente — por isso o
+  // header abaixo é irrelevante quando req.ip aponta o socket.
+  const req1: any = { ip: '10.0.0.1', headers: { 'x-forwarded-for': '1.1.1.1' }, socket: { remoteAddress: '192.168.1.1' } };
   assert.equal(clientIp(req1), '10.0.0.1');
 
-  // Sem X-Forwarded-For
-  const req2: any = { headers: {}, socket: { remoteAddress: '192.168.1.50' } };
+  // Sem req.ip resolvido: cai para o endereço da conexão.
+  const req2: any = { headers: { 'x-forwarded-for': '1.1.1.1' }, socket: { remoteAddress: '192.168.1.50' } };
   assert.equal(clientIp(req2), '192.168.1.50');
 
-  // Sem nada
-  const req3: any = { headers: {}, socket: {} };
-  assert.equal(clientIp(req3), '');
+  // req.ip não-IP (cabeçalho lixo aceito por trust proxy frouxo): cai para o socket.
+  const req3: any = { ip: 'invalid', headers: {}, socket: { remoteAddress: '192.168.1.60' } };
+  assert.equal(clientIp(req3), '192.168.1.60');
+
+  // Sem nada válido → string vazia (nunca um header cru).
+  const req4: any = { headers: {}, socket: {} };
+  assert.equal(clientIp(req4), '');
 });
 
 test('translatePgError: 42703 cita a coluna faltante', async () => {
