@@ -85,7 +85,10 @@ antes de gravar.
   (canônica + adversarial + persistência venda/compra + atomicidade + retry +
   desconto/juros/frete + detalhes do XML + limites/normalização de parcelas).
 - `server/test/pg/fin01-parcelas-e2e.test.ts` (**novo**) — prova HTTP real +
-  PostgreSQL (ver §10).
+  PostgreSQL (ver §10). O harness espera o admin de bootstrap na FONTE (a linha
+  em `usuarios`) antes de logar: o servidor escuta **antes** de `ensureAdmin()`
+  (§4), então um login imediato podia correr com o boot e receber 401 (observado
+  no CI); esperar na linha evita gastar as 5 tentativas do rate limit de login.
 
 ## 7. Endpoints afetados
 
@@ -195,6 +198,8 @@ OK** (inclui o fluxo de compra parcelada: “compra completa gera 3 contas a pag
 - `audit:menu`: **sem erros** (menu × rotas × recursos × permissões × multiempresa
   coerentes; 1 aviso pré-existente sobre `/api/health` ser público).
 - Gate PostgreSQL oficial: **197 pass / 0 fail / 0 skip / 0 todo**.
+- CI (PR #67, head `186256b`): **verificar** e **testes-postgres** (PostgreSQL
+  16.14 em container) **verdes**.
 
 ## 17. Residuals
 
