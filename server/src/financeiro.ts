@@ -176,6 +176,73 @@ function addMeses(dataBaseISO: string, meses: number): string {
 }
 
 /**
+ * Divide um valor monetário em N parcelas válidas e exatas.
+ *
+ * Regra canônica do parcelamento (FIN-01):
+ *   • N precisa ser inteiro >= 1;
+ *   • o total, em centavos, precisa ser > 0;
+ *   • o total precisa ser >= N centavos — abaixo disso não existem N parcelas
+ *     positivas em centavos (ex.: R$ 0,01 em 3x) e a operação é rejeitada ANTES
+ *     de qualquer persistência, em vez de gerar parcela 0/negativa;
+ *   • Σ parcelas === total, sem perder centavo: o resíduo vai para a ÚLTIMA
+ *     parcela (35,56 ÷ 3 → 1185, 1185, 1186).
+ *
+ * Toda a aritmética é feita em CENTAVOS INTEIROS; não há float no meio.
+ * MemStore e PostgreSQL recebem exatamente os mesmos valores.
+ */
+export function dividirParcelas(total: number, numeroParcelas: number): number[] {
+  const n = Number(numeroParcelas);
+  const totalCentavos = Math.round(Number(total) * 100);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new HttpError(400, 'O número de parcelas deve ser um inteiro maior ou igual a 1.', { fin_parcelas: 'Informe ao menos 1 parcela' });
+  }
+  if (!Number.isFinite(totalCentavos) || totalCentavos <= 0) {
+    throw new HttpError(400, 'O valor total precisa ser maior que zero para gerar parcelas.', { total: 'Valor inválido' });
+  }
+  if (totalCentavos < n) {
+    throw new HttpError(422, `Não é possível dividir R$ ${(totalCentavos / 100).toFixed(2)} em ${n} parcelas: nenhuma parcela pode ficar zerada. Reduza o número de parcelas ou reajuste o valor.`, { fin_parcelas: 'Parcelas acima do valor da operação' });
+  }
+  const base = Math.floor(totalCentavos / n);
+  const resto = totalCentavos - base * n;
+  const parcelas: number[] = [];
+  for (let i = 0; i < n; i++) {
+    // Últimas `resto` parcelas absorvem o centavo residual — soma sempre exata.
+    parcelas.push((base + (i >= n - resto ? 1 : 0)) / 100);
+  }
+  return parcelas;
+}
+
+/**
+ * Materializa o plano de N parcelas a partir do total, respeitando os detalhes
+ * informados (duplicatas do XML da compra) quando presentes.
+ *
+ * Garante, em CENTAVOS inteiros, que cada parcela é > 0 e que Σ === total.
+ * A última parcela fecha o total (absorve o centavo residual e qualquer ajuste
+ * do documento). Se isso for impossível — combinação sem N parcelas positivas —
+ * lança HttpError ANTES de qualquer persistência.
+ */
+function materializarParcelas(total: number, n: number, detalhes: Row[]): number[] {
+  const canonico = dividirParcelas(total, n);
+  const valores: number[] = [];
+  for (let i = 1; i < n; i++) {
+    const detalhe = detalhes.find((item) => Number(item.parcela || 0) === i) || detalhes[i - 1];
+    const informado = detalhe && detalhe.valor !== undefined && detalhe.valor !== null ? Number(detalhe.valor) : NaN;
+    valores.push(Number.isFinite(informado) && informado > 0 ? r2(informado) : canonico[i - 1]);
+  }
+  const ultima = r2(total - somaMoeda(valores));
+  if (!(ultima > 0)) {
+    throw new HttpError(422, `Não é possível dividir R$ ${total.toFixed(2)} em ${n} parcelas: nenhuma parcela pode ficar zerada. Reduza o número de parcelas ou reajuste o valor.`, { fin_parcelas: 'Parcelas acima do valor da operação' });
+  }
+  valores.push(ultima);
+  for (const v of valores) {
+    if (!Number.isFinite(v) || v <= 0) {
+      throw new HttpError(422, 'Parcela inválida: todo valor de parcela precisa ser maior que zero.', { fin_parcelas: 'Parcela inválida' });
+    }
+  }
+  return valores;
+}
+
+/**
  * Reconcilia o contas a receber/pagar de uma venda/compra como PARCELA REAL:
  * fin_parcelas = N gera N lançamentos (1/N..N/N) com vencimentos mensais, a
  * última absorvendo os centavos da divisão. Edição do pedido atualiza as
@@ -204,7 +271,6 @@ async function reconciliarParcelasPedido(
   // `addMeses` com RangeError e devolvia 500 em qualquer compra/venda com
   // vencimento. `dataISO` já trata os dois formatos.
   const baseVenc = dataISO(after.fin_vencimento) || dataBase;
-  const valorParcela = r2(total / n);
   const detalhes = Array.isArray(after.fin_parcelas_detalhes) ? after.fin_parcelas_detalhes as Row[] : [];
   const existentes = await parcelasDaOrigem(referencia, id, tx);
   const parcelasFinais: { lancamento_id: number; valor: number }[] = [];
@@ -225,9 +291,14 @@ async function reconciliarParcelasPedido(
       }
     }
   } else {
+    // FIN-01: plano de parcelas validado (cada parcela > 0, Σ === total) ANTES
+    // de gravar qualquer lançamento. Combinações como R$ 0,01 em 3x são
+    // rejeitadas aqui — nunca viram parcela 0/negativa no MemStore nem chegam
+    // à constraint do PostgreSQL.
+    const valores = materializarParcelas(total, n, detalhes);
     for (let i = 1; i <= n; i++) {
+      const valor = valores[i - 1];
       const detalhe = detalhes.find((item) => Number(item.parcela || 0) === i) || detalhes[i - 1];
-      const valor = detalhe && Number.isFinite(Number(detalhe.valor)) ? r2(Number(detalhe.valor)) : i === n ? r2(total - valorParcela * (n - 1)) : valorParcela;
       const alvo = existentes.find((l) => Number(l.parcela || 1) === i);
       const dados: Row = {
         data: i === 1 || !alvo ? dataBase : dataISO(alvo.data) || dataBase,
