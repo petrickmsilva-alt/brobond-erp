@@ -52,8 +52,14 @@ export function jsonCanônico(v: unknown): string {
   if (v === null || v === undefined) return 'null';
   // Rede de segurança: se um Date chegar aqui sem passar por
   // normalizarPayloadAuditoria, use o MESMO formato persistido — assim a
-  // assinatura na gravação e na releitura nunca divergem.
-  if (v instanceof Date) return JSON.stringify(instanteAuditoriaISO(v));
+  // assinatura na gravação e na releitura nunca divergem. Um Date inválido
+  // seria assinado como `null` (`JSON.stringify(null)`) e descartado em
+  // silêncio; para manter a regra documentada, é recusado aqui também.
+  if (v instanceof Date) {
+    const iso = instanteAuditoriaISO(v);
+    if (iso === null) throw new Error('Auditoria: instante inválido (Invalid Date) não pode ser assinado.');
+    return JSON.stringify(iso);
+  }
   if (typeof v !== 'object') return JSON.stringify(v);
   if (Array.isArray(v)) return '[' + v.map(jsonCanônico).join(',') + ']';
   const obj = v as Record<string, unknown>;

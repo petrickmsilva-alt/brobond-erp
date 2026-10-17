@@ -225,6 +225,69 @@ conforme a regra do ciclo (“não fazer migração histórica ampla sem prova d
 3. **Escopo do serializer:** a normalização cobre `Date`; não tenta (de propósito) cobrir outros
    tipos exóticos (ex.: `Map`/`Set`/`BigInt`) no payload de auditoria — fora do contrato atual.
 
+---
+
+## 20-A. Ajuste P2-01.1 — endurecer o tratamento de `Invalid Date` na assinatura
+
+Divergência apontada na revisão independente do P2-01: `jsonCanônico()` chamava
+`JSON.stringify(instanteAuditoriaISO(v))` diretamente. Para um `Date` inválido,
+`instanteAuditoriaISO()` devolve `null` e `JSON.stringify(null)` é a string `"null"` — então um
+`Date` inválido que chegasse pela serialização canônica era **assinado como `null`** (descartado em
+silêncio), contradizendo a regra documentada de que datas inválidas nunca são descartadas
+silenciosamente. `normalizarPayloadAuditoria()` já recusava, mas `jsonCanônico()` — usado por
+`hashCadeiaAuditoria()` na escrita e na verificação — não.
+
+**Correção (mínima, localizada em `auditChain.ts`):** o ramo `v instanceof Date` de
+`jsonCanônico()` passa a checar o retorno de `instanteAuditoriaISO()` e **lançar**
+`Error('Auditoria: instante inválido (Invalid Date) não pode ser assinado.')` quando for `null`.
+Datas válidas seguem idênticas (mesmo `JSON.stringify(iso)`).
+
+**Chamadas inspecionadas:**
+- `jsonCanônico` ← `payloadAssinavel` ← `hashCadeiaAuditoria` (escrita em `memdb`/`pgstore` e
+  `verificarCadeiaAuditoria`); e recursão interna (arrays/objetos aninhados).
+- `hashCadeiaAuditoria` ← `memdb.audit`, `pgstore.audit`, `verificarCadeiaAuditoria`.
+- Escrita já normaliza antes (`normalizarPayloadAuditoria`); o ajuste fecha o caminho da
+  **assinatura** (rede de segurança) e o caminho da **verificação** direta.
+
+**Comportamento antes × depois:**
+
+| Entrada | Antes | Depois |
+|---|---|---|
+| `jsonCanônico(new Date(NaN))` | `"null"` (silencioso) | **lança** `instante inválido` |
+| `jsonCanônico({ a: { b: InvalidDate } })` | `{"a":{"b":null}}` | **lança** |
+| `jsonCanônico({ l: [InvalidDate] })` | `{"l":[null]}` | **lança** |
+| `hashCadeiaAuditoria('', { dados: { d: InvalidDate } })` | assina `null` | **lança** |
+| `jsonCanônico(Date válido)` | `"2026-…Z"` | `"2026-…Z"` (idêntico) |
+| `hashCadeiaAuditoria` com datas válidas | h | **h (byte a byte igual)** |
+
+**Testes novos (regressão):** `L2` (`jsonCanônico` recusa `Invalid Date`, aninhado e em array),
+`L3` (`hashCadeiaAuditoria` recusa `Invalid Date` dentro de `dados`), `L4` (a recusa **não** altera
+hashes de datas válidas — `Date` e a string ISO do mesmo instante assinam igual). Testes P2-01
+existentes (datas válidas, aninhados, arrays, paridade memória/PG, integridade da cadeia)
+preservados.
+
+**Prova por mutação:** revertendo só o ramo novo de `jsonCanônico`, `L2` e `L3` **falham**
+(`18 pass / 2 fail`); com o ajuste, **20 pass / 0 fail**.
+
+**Sem alteração de hash histórico:** comparação direta entre o código do commit anterior
+(`07cb84d`) e o atual, com 4 payloads válidos (Date simples, Date aninhado em array + string ISO,
+`dados: null`, payload misto): **4/4 hashes idênticos** e `jsonCanônico(Date válido)` idêntico.
+**Nenhuma migração** — o formato persistido não mudou.
+
+**Resultados exatos deste ajuste:**
+
+| Gate | Resultado |
+|---|---|
+| P2-01 memória (adversarial) | **20 pass · 0 fail** (17 → 20) |
+| server tests | **881** tests · 815 pass · 0 fail · 66 skip · 0 todo (+3 novos) |
+| client tests | **323** pass (29 arquivos) · 0 fail |
+| typecheck (domain+server+client) | 0 erros |
+| lint | 0 erros · 409 warnings (= baseline) |
+| build | OK |
+| audit:menu | ✅ sem erros (1 aviso classificado) |
+| smoke / smoke:pg | **126/126** · **126/126** |
+| **test:pg** (PG 16.14 novo) | **201/201 · GATE PASS** (0 fail/skip/todo) |
+
 ## 21. Out-of-scope (não tocado)
 
 P0-01 portal/token público, P1-03 parcelas, P1-04 `rateLimitPublico`/XFF, P2-04 `NOT VALID`,

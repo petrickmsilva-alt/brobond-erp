@@ -25,7 +25,7 @@ process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
 
 const { getStore } = await import('../src/services');
-const { jsonCanônico, normalizarPayloadAuditoria, instanteAuditoriaISO } = await import('../src/auditChain');
+const { jsonCanônico, normalizarPayloadAuditoria, instanteAuditoriaISO, hashCadeiaAuditoria } = await import('../src/auditChain');
 
 const store = getStore();
 
@@ -222,6 +222,40 @@ test('L: Date inválido é recusado explicitamente (nunca descartado em silênci
   assert.equal(instanteAuditoriaISO(new Date('não é data')), null);
 });
 
+test('L2: jsonCanônico recusa Date inválido em vez de assinar "null" (fecha a divergência da revisão)', () => {
+  const invalido = new Date(Number.NaN);
+  // Antes: jsonCanônico(invalido) devolvia "null" (JSON.stringify(null)) — o
+  // instante era descartado em silêncio na assinatura. Agora é recusado.
+  assert.throws(() => jsonCanônico(invalido), /instante inválido/i);
+  assert.throws(() => jsonCanônico({ a: { b: invalido } }), /instante inválido/i, 'aninhado');
+  assert.throws(() => jsonCanônico({ lista: [invalido] }), /instante inválido/i, 'em array');
+  // A mensagem do caminho de assinatura difere da do caminho de persistência.
+  assert.throws(() => jsonCanônico(invalido), /não pode ser assinado/i);
+});
+
+test('L3: hashCadeiaAuditoria recusa Date inválido dentro de dados (não assina "null")', () => {
+  assert.throws(
+    () => hashCadeiaAuditoria('', { usuario_id: null, usuario: 'x', acao: 'seguranca', recurso: null, registro_id: null, descricao: 'd', dados: { quando: new Date(Number.NaN) } } as any),
+    /instante inválido/i
+  );
+  assert.throws(
+    () => hashCadeiaAuditoria('', { usuario_id: null, usuario: 'x', acao: 'seguranca', recurso: null, registro_id: null, descricao: 'd', dados: { eventos: [{ em: new Date(NaN) }] } } as any),
+    /instante inválido/i
+  );
+});
+
+test('L4: a recusa de Date inválido NÃO altera hashes de datas válidas (sem migração histórica)', () => {
+  // Assinatura de um evento com Date VÁLIDO tem de permanecer bit a bit a mesma
+  // de antes do ajuste — o formato persistido (ISO UTC com ms) não mudou.
+  const d = new Date('2026-10-17T12:34:56.789Z');
+  const entrada = { usuario_id: 1, usuario: 'ana', acao: 'criar', recurso: 'tamanhos', registro_id: 7, descricao: 'x', dados: { de: d, quando: d.toISOString() } };
+  const h = hashCadeiaAuditoria('', entrada as any);
+  // O Date e a string ISO do mesmo instante assinam igual (comportamento antigo).
+  const hString = hashCadeiaAuditoria('', { ...entrada, dados: { de: d.toISOString(), quando: d.toISOString() } } as any);
+  assert.equal(h, hString, 'Date válido e a string ISO equivalente continuam assinando igual');
+  assert.match(h, /^[0-9a-f]{64}$/);
+});
+
 // ---------------------------------------------------------------------------
 // M — leitura após round-trip JSON (equivalente ao JSONB) + verificação
 // ---------------------------------------------------------------------------
@@ -232,7 +266,6 @@ test('M: o payload lido de volta (JSON parseado, como o JSONB) revalida a assina
 
   // Reconstrói a linha como o driver Postgres a entrega (dados já parseado).
   const comoLida = { ...linha, dados: comoJsonb(linha.dados) };
-  const { hashCadeiaAuditoria } = await import('../src/auditChain');
   assert.equal(
     hashCadeiaAuditoria(String(linha.hash_anterior), comoLida),
     String(linha.hash),
