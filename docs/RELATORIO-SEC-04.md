@@ -425,7 +425,15 @@ Explicitamente **não** tratados neste ciclo (STRICT SCOPE):
 
 ## 19. CI
 
-Preenchido após o push (checks do GitHub Actions).
+PR #68 — checks do GitHub Actions (GitHub-hosted):
+
+| Commit | Check | Resultado |
+|--------|-------|-----------|
+| `3c31839` | `verificar` (×2) | ✅ success |
+| `3c31839` | `testes-postgres` (×2) | ✅ success |
+
+**4/4 checks verdes.** Inclui os dois jobs `testes-postgres`, que rodam a suíte
+PostgreSQL real com o gate oficial — inclusive o SEC-04.
 
 ---
 
@@ -445,7 +453,7 @@ Preenchido após o push (checks do GitHub Actions).
 - [x] regressões verdes
 - [x] nenhum finding fora do escopo corrigido
 - [x] relatório criado
-- [ ] working tree limpa (após commit)
-- [ ] branch publicada
-- [ ] PR aberta
-- [ ] PR NÃO merged
+- [x] working tree limpa
+- [x] branch publicada
+- [x] PR aberta (#68)
+- [x] PR NÃO merged
