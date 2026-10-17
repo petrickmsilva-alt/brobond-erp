@@ -4,6 +4,7 @@ import { CheckCircle, ClipboardCopy, Copy, Info, Loader2, Plus, Printer, Ruler, 
 import { api } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
 import { Alert, Badge, ConfirmDialog, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { useAuth } from '../auth/AuthContext';
 
 type Tamanho = { id: number; codigo: string };
 type Valor = { id: number; medida_id: number; tamanho_id: number; valor: number | null };
@@ -62,6 +63,11 @@ function celulaInvalida(col: Col, raw: string): boolean {
 
 export default function MedidasPage() {
   const toast = useToast();
+  const { user } = useAuth();
+  // SEC-04/P1-01: a tabela de medidas grava em `grades` (catálogo
+  // compartilhado, escrita gerente+ no servidor). O operador continua vendo as
+  // medidas (leitura), mas não edita — a API é a barreira real.
+  const podeEditar = user?.perfil === 'admin' || user?.perfil === 'gerente';
 
   // Painel de completude (todas as grades)
   const [resumoGrades, setResumoGrades] = useState<ResumoGrade[]>([]);
@@ -510,7 +516,7 @@ export default function MedidasPage() {
               ))}
             </select>
           </label>
-          {tabelaVazia && gradeId && (
+          {tabelaVazia && gradeId && podeEditar && (
             <label className="block">
               <span className="label">Usar modelo (colunas padrão)</span>
               <select className="input min-w-[190px]" value="" onChange={(e) => e.target.value && aplicarModelo(Number(e.target.value))}>
@@ -525,14 +531,16 @@ export default function MedidasPage() {
           )}
           {gradeId && (
             <div className="flex flex-wrap items-end gap-2">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setModalCopiar(true)}
-                disabled={!resumoGrades.some((g) => g.id !== Number(gradeId) && g.colunas > 0)}
-              >
-                <ClipboardCopy className="h-4 w-4" /> Copiar de outra grade
-              </button>
+              {podeEditar && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setModalCopiar(true)}
+                  disabled={!resumoGrades.some((g) => g.id !== Number(gradeId) && g.colunas > 0)}
+                >
+                  <ClipboardCopy className="h-4 w-4" /> Copiar de outra grade
+                </button>
+              )}
               <button type="button" className="btn-secondary" onClick={imprimir} disabled={!podeImprimir}>
                 <Printer className="h-4 w-4" /> Imprimir
               </button>
@@ -615,24 +623,28 @@ export default function MedidasPage() {
                                 className="input !py-1 text-xs font-semibold"
                                 value={c.nome}
                                 placeholder="Ex.: Largura (A)"
+                                readOnly={!podeEditar}
                                 onChange={(e) => setCol(i, { nome: e.target.value })}
                               />
-                              <button
-                                type="button"
-                                className="btn-icon !p-1 text-red-400 hover:text-red-600"
-                                title="Remover coluna"
-                                onClick={() => {
-                                  const temValor = tamanhos.some((t) => (val[`${i}:${t.id}`] ?? '').trim() !== '');
-                                  setColunaParaRemover(temValor ? i : null);
-                                  if (!temValor) removeCol(i);
-                                }}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
+                              {podeEditar && (
+                                <button
+                                  type="button"
+                                  className="btn-icon !p-1 text-red-400 hover:text-red-600"
+                                  title="Remover coluna"
+                                  onClick={() => {
+                                    const temValor = tamanhos.some((t) => (val[`${i}:${t.id}`] ?? '').trim() !== '');
+                                    setColunaParaRemover(temValor ? i : null);
+                                    if (!temValor) removeCol(i);
+                                  }}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              )}
                             </div>
                             <select
                               className="input !py-1 text-xs"
                               value={c.unidade}
+                              disabled={!podeEditar}
                               onChange={(e) => setCol(i, { unidade: e.target.value })}
                             >
                               {UNIDADES.map((u) => (
@@ -644,11 +656,13 @@ export default function MedidasPage() {
                           </div>
                         </th>
                       ))}
-                      <th className="align-top">
-                        <button type="button" className="btn-secondary !py-1.5 text-xs" onClick={addCol}>
-                          <Plus className="h-3.5 w-3.5" /> Coluna
-                        </button>
-                      </th>
+                      {podeEditar && (
+                        <th className="align-top">
+                          <button type="button" className="btn-secondary !py-1.5 text-xs" onClick={addCol}>
+                            <Plus className="h-3.5 w-3.5" /> Coluna
+                          </button>
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -670,12 +684,13 @@ export default function MedidasPage() {
                                 }
                                 value={val[`${i}:${t.id}`] ?? ''}
                                 placeholder="—"
+                                readOnly={!podeEditar}
                                 onChange={(e) => setCell(i, t.id, e.target.value)}
                               />
                             </td>
                           );
                         })}
-                        <td />
+                        {podeEditar && <td />}
                       </tr>
                     ))}
                   </tbody>
@@ -693,6 +708,7 @@ export default function MedidasPage() {
                     className="input mt-1"
                     rows={2}
                     maxLength={600}
+                    readOnly={!podeEditar}
                     placeholder="Ex.: Meça a peça sobre uma superfície plana, sem esticar. Tolerância de ±1 cm. Medidas em cm."
                     value={instrucoes}
                     onChange={(e) => {
@@ -701,16 +717,18 @@ export default function MedidasPage() {
                     }}
                   />
                 </label>
-                <div className="mt-2 flex items-center justify-end">
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={salvarInstrucoes}
-                    disabled={!instrucoesSuja || salvandoInstrucoes}
-                  >
-                    {salvandoInstrucoes ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Salvar instruções
-                  </button>
-                </div>
+                {podeEditar && (
+                  <div className="mt-2 flex items-center justify-end">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={salvarInstrucoes}
+                      disabled={!instrucoesSuja || salvandoInstrucoes}
+                    >
+                      {salvandoInstrucoes ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Salvar instruções
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3">
@@ -723,10 +741,12 @@ export default function MedidasPage() {
                 ) : (
                   <p className="text-xs text-slate-400">Deixe a célula em branco para remover o valor.</p>
                 )}
-                <button className="btn-primary" onClick={save} disabled={saving || celulasInvalidas > 0}>
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Salvar tabela
-                  {sujo && !saving && <span className="ml-2 h-2 w-2 rounded-full bg-amber-400" title="Alterações não salvas" />}
-                </button>
+                {podeEditar && (
+                  <button className="btn-primary" onClick={save} disabled={saving || celulasInvalidas > 0}>
+                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Salvar tabela
+                    {sujo && !saving && <span className="ml-2 h-2 w-2 rounded-full bg-amber-400" title="Alterações não salvas" />}
+                  </button>
+                )}
               </div>
             </>
           )}

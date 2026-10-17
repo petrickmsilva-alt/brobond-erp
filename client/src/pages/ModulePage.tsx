@@ -130,9 +130,15 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const herdaComercial = user?.perfil === 'admin' || user?.perfil === 'gerente';
   const permite = (v: string | undefined) => user?.perfil === 'admin' || v === 'permitir' || (v !== 'negar' && herdaComercial);
   const podeGerirCatalogos = resource.key !== 'catalogos' || permite(user?.perm_catalogos);
-  const canCreate = resource.ops.create && podeGerirCatalogos;
-  const canUpdate = resource.ops.update && podeGerirCatalogos;
-  const canDelete = resource.ops.delete && !isOperador && podeGerirCatalogos;
+  // SEC-04/P1-01: o catálogo compartilhado (categorias/cores/grades/tamanhos) é
+  // global — a escrita exige gerente+ no servidor. Espelhamos aqui para o
+  // operador não ver botões que receberiam 403 (a autorização real é a API).
+  const perfilOkEscrita = !resource.minPerfilEscrita
+    || user?.perfil === 'admin'
+    || (resource.minPerfilEscrita === 'gerente' && user?.perfil === 'gerente');
+  const canCreate = resource.ops.create && podeGerirCatalogos && perfilOkEscrita;
+  const canUpdate = resource.ops.update && podeGerirCatalogos && perfilOkEscrita;
+  const canDelete = resource.ops.delete && !isOperador && podeGerirCatalogos && perfilOkEscrita;
   const readOnly = !canCreate && !canUpdate && !canDelete;
 
   // Lista

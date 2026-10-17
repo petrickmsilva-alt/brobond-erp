@@ -110,6 +110,15 @@ export type Resource = {
   /** perfil mínimo para acessar (admin > gerente > operador). Ex.: gerentePlus */
   minPerfil?: 'gerente' | 'admin';
   /**
+   * RBAC de ESCRITA: perfil mínimo para incluir/alterar/excluir. A LEITURA
+   * continua aberta a todos os perfis. Usado pelo catálogo COMPARTILHADO
+   * (categorias, cores, grades, tamanhos): a lista global é lida por telas
+   * operacionais (vendas/estoque/ordens/inventário), mas a nomenclatura só
+   * pode ser reescrita por gerente/admin — um operador de qualquer empresa não
+   * altera o cadastro que vale para todas as empresas (SEC-04/P1-01).
+   */
+  minPerfilEscrita?: 'gerente' | 'admin';
+  /**
    * MULTIEMPRESA: a tabela tem `empresa_id` e o recurso é isolado por empresa.
    * Toda listagem ganha o filtro da empresa ativa, todo acesso por id é
    * verificado e a empresa é carimbada pelo servidor na criação.
@@ -552,6 +561,8 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Tamanho',
     labelFields: ['codigo'],
     ops: ALL_OPS,
+    // SEC-04/P1-01: catálogo compartilhado (global). Leitura aberta; escrita gerente+.
+    minPerfilEscrita: 'gerente',
     fields: [
       { name: 'codigo', label: 'Código', type: 'text', required: true, unique: true, search: true, maxLength: 10, placeholder: 'PP, P, M, G, GG...' },
       { name: 'descricao', label: 'Descrição', type: 'text', search: true, maxLength: 60 },
@@ -583,6 +594,8 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Grade',
     labelFields: ['nome'],
     ops: ALL_OPS,
+    // SEC-04/P1-01: catálogo compartilhado (global). Leitura aberta; escrita gerente+.
+    minPerfilEscrita: 'gerente',
     notice:
       'Uma grade é um conjunto nomeado de tamanhos na ordem correta (ex.: Camiseta PP–GG, Calça 36–48, Calçado 34–44). Vincule a grade à categoria (padrão) ou diretamente ao produto para que o estoque mostre apenas os tamanhos daquele tipo de peça.',
     fields: [
@@ -877,6 +890,8 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Categoria',
     labelFields: ['nome'],
     ops: ALL_OPS,
+    // SEC-04/P1-01: catálogo compartilhado (global). Leitura aberta; escrita gerente+.
+    minPerfilEscrita: 'gerente',
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'Camisa, Camiseta, Calça, Bermuda...' },
       { name: 'descricao', label: 'Descrição', type: 'text', search: true, maxLength: 160 },
@@ -901,6 +916,8 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Cor',
     labelFields: ['nome'],
     ops: ALL_OPS,
+    // SEC-04/P1-01: catálogo compartilhado (global). Leitura aberta; escrita gerente+.
+    minPerfilEscrita: 'gerente',
     notice: 'Cores padronizadas evitam duplicidade ("Azul", "azul", "AZUL"). O código hexadecimal mostra a amostra da cor nas listas.',
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 40, placeholder: 'Azul marinho, Preto, Off-white...' },
