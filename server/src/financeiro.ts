@@ -484,6 +484,14 @@ export function hookTaxaLancamento(data: Row, before?: Row | null): void {
 async function criarLancamento(data: Row, actor: { id: number | null; name: string }, tx: Tx): Promise<Row> {
   const s = getStore();
   const r = getResource('lancamentos_financeiros')!;
+  // P2-04: o banco exige valor > 0 (ck_lanc_fin_valor_positivo). Os ganchos
+  // automáticos (aporte, recorrência, transferência, baixa) inserem direto no
+  // store, sem passar pelo validatePayload — sem esta guarda o MemStore aceitaria
+  // uma parcela de R$ 0 que o PostgreSQL recusa (23514), quebrando a paridade.
+  const valor = Number(data.valor ?? 0);
+  if (!Number.isFinite(valor) || valor <= 0) {
+    throw new HttpError(400, 'Informe um valor maior que zero.', { valor: 'Valor inválido' });
+  }
   if (data.empresa_id === undefined || data.empresa_id === null) data.empresa_id = EMPRESA_PADRAO;
   const row = await s.insert(r, data, tx);
   await s.audit(
@@ -1102,6 +1110,11 @@ export async function processarRecorrencias(actor: { id: number | null; name: st
     const data = proxima;
     const categoria = rec.categoria_id ?? null;
     const conta = rec.conta_id ?? null;
+    // P2-04: recorrência legada com valor <= 0 não gera lançamento — o banco
+    // exige valor > 0 (ck_lanc_fin_valor_positivo) e uma parcela de R$ 0 não é
+    // obrigação financeira. Pular aqui mantém MemStore e PostgreSQL idênticos e
+    // evita que uma única recorrência inválida aborte a geração das demais.
+    if (!(Number(rec.valor || 0) > 0)) continue;
     try {
       await s.transaction(async (tx) => {
         const r2 = getResource('lancamentos_financeiros')!;
