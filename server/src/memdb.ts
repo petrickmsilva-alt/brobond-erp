@@ -4,7 +4,7 @@
 // sistema pode ser testado por completo antes de ligar o banco real.
 import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, RESOURCES, columnsOf, getResource, type Resource } from './resources';
-import { hashCadeiaAuditoria, verificarCadeiaAuditoria } from './auditChain';
+import { hashCadeiaAuditoria, normalizarPayloadAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
 import {
   labelOf,
@@ -492,14 +492,18 @@ export class MemStore implements Store {
   async audit(entry: AuditEntry): Promise<void> {
     const t = this.table('auditoria');
     const id = ++t.seq;
+    // P2-01: o payload é normalizado para o formato persistido (Date → ISO UTC
+    // com ms) ANTES de assinar — assim memória e PostgreSQL gravam o mesmo
+    // instante e a cadeia não quebra na releitura.
+    const normalizada = { ...entry, dados: normalizarPayloadAuditoria(entry.dados ?? null) };
     // Cadeia de hashes (tamper-evidence): hash_i = SHA-256(hash_{i-1} | payload).
     const anterior = t.rows.get(t.rows.size ? Math.max(...t.rows.keys()) : 0);
     const hash_anterior = anterior?.hash ? String(anterior.hash) : '';
-    const hash = hashCadeiaAuditoria(hash_anterior, entry);
+    const hash = hashCadeiaAuditoria(hash_anterior, normalizada);
     // O tipo exige empresa_id, mas chamadas legadas/diretas (testes, jobs)
     // podem omitir em runtime: nunca grava sem empresa (coluna NOT NULL).
     const empresa_id = entry.empresa_id ?? EMPRESA_PADRAO;
-    t.rows.set(id, { id, data: new Date().toISOString(), ...entry, empresa_id, dados: entry.dados ?? null, hash_anterior, hash });
+    t.rows.set(id, { id, data: new Date().toISOString(), ...normalizada, empresa_id, hash_anterior, hash });
     // mantém só os últimos 2000 eventos em memória
     if (t.rows.size > 2000) t.rows.delete(Math.min(...t.rows.keys()));
   }
