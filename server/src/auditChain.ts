@@ -9,9 +9,57 @@
 import { createHash } from 'node:crypto';
 import type { AuditEntry, AuditoriaVerificacao } from './store';
 
+/**
+ * Formato persistido de um instante na auditoria: ISO-8601 em **UTC com
+ * milissegundos** (`Date.prototype.toISOString()`), ex.: `2026-10-17T12:34:56.789Z`.
+ *
+ * É o formato que `JSON.stringify`/JSONB e o Express já produzem, então o
+ * instante gravado e o lido de volta são idênticos. Instante inválido devolve
+ * `null` (mesma semântica de `JSON.stringify(new Date(NaN))`).
+ */
+export function instanteAuditoriaISO(d: Date): string | null {
+  const ms = d.getTime();
+  return Number.isNaN(ms) ? null : d.toISOString();
+}
+
+/**
+ * Normaliza recursivamente o payload de auditoria para o formato persistido,
+ * substituindo todo `Date` pelo seu ISO-8601 UTC com milissegundos.
+ *
+ * JSONB não tem tipo nativo de data: sem isto, `JSON.stringify` (persistência)
+ * converte o `Date` em string, mas a assinatura da cadeia seria calculada sobre
+ * o objeto cru — o instante nunca entrava no hash e a cadeia "quebrava" na
+ * releitura. Objetos e arrays são percorridos em profundidade. Um `Date`
+ * inválido é recusado explicitamente (nunca silenciosamente descartado).
+ */
+export function normalizarPayloadAuditoria(v: unknown): unknown {
+  if (v instanceof Date) {
+    const iso = instanteAuditoriaISO(v);
+    if (iso === null) throw new Error('Auditoria: instante inválido (Invalid Date) não pode ser persistido.');
+    return iso;
+  }
+  if (Array.isArray(v)) return v.map(normalizarPayloadAuditoria);
+  if (v !== null && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = normalizarPayloadAuditoria(val);
+    return out;
+  }
+  return v;
+}
+
 /** JSON canônico (chaves ordenadas) — estável entre Postgres (JSONB) e memória. */
 export function jsonCanônico(v: unknown): string {
   if (v === null || v === undefined) return 'null';
+  // Rede de segurança: se um Date chegar aqui sem passar por
+  // normalizarPayloadAuditoria, use o MESMO formato persistido — assim a
+  // assinatura na gravação e na releitura nunca divergem. Um Date inválido
+  // seria assinado como `null` (`JSON.stringify(null)`) e descartado em
+  // silêncio; para manter a regra documentada, é recusado aqui também.
+  if (v instanceof Date) {
+    const iso = instanteAuditoriaISO(v);
+    if (iso === null) throw new Error('Auditoria: instante inválido (Invalid Date) não pode ser assinado.');
+    return JSON.stringify(iso);
+  }
   if (typeof v !== 'object') return JSON.stringify(v);
   if (Array.isArray(v)) return '[' + v.map(jsonCanônico).join(',') + ']';
   const obj = v as Record<string, unknown>;

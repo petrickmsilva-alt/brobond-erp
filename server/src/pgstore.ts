@@ -5,7 +5,7 @@ import type { PoolClient } from 'pg';
 import { pool, query, withTransaction } from './db';
 import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './resources';
-import { hashCadeiaAuditoria, verificarCadeiaAuditoria } from './auditChain';
+import { hashCadeiaAuditoria, normalizarPayloadAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
 import type { EscopoEmpresa } from './empresa';
 import { sqlCivil } from './fuso';
@@ -557,13 +557,20 @@ export class PgStore implements Store {
   }
 
   async audit(entry: AuditEntry, tx?: Tx): Promise<void> {
+    // P2-01: normaliza o payload para o formato persistido (Date → ISO UTC com
+    // ms) ANTES de assinar. Sem isto, a assinatura era calculada sobre o objeto
+    // cru (Date canônico = "{}") enquanto o JSONB gravava a string ISO — a
+    // cadeia quebrava na releitura.
+    const dadosBrutos = entry.dados;
+    const dados = dadosBrutos === undefined ? undefined : normalizarPayloadAuditoria(dadosBrutos);
+    const assinavel = { ...entry, dados };
     // Cadeia de hashes: preciso do hash do último evento; com lock para não
     // bifurcar a cadeia quando dois eventos são gravados ao mesmo tempo.
     const escrever = async (t: Tx) => {
       await q(`SELECT pg_advisory_xact_lock(hashtext('brobond-auditoria'))`, [], t);
       const prev = await q(`SELECT hash FROM auditoria WHERE hash IS NOT NULL ORDER BY id DESC LIMIT 1`, [], t);
       const hash_anterior = prev.rows[0]?.hash ? String(prev.rows[0].hash) : '';
-      const hash = hashCadeiaAuditoria(hash_anterior, entry);
+      const hash = hashCadeiaAuditoria(hash_anterior, assinavel);
       // O tipo exige empresa_id; o fallback protege chamadas legadas/diretas
       // em runtime (a coluna é NOT NULL desde a migration 0017).
       const empresaId = entry.empresa_id ?? EMPRESA_PADRAO;
@@ -577,7 +584,7 @@ export class PgStore implements Store {
           entry.recurso,
           entry.registro_id,
           entry.descricao,
-          entry.dados === undefined ? null : JSON.stringify(entry.dados),
+          dados === undefined ? null : JSON.stringify(dados),
           hash_anterior,
           hash,
           empresaId,
