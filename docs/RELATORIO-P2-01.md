@@ -288,6 +288,45 @@ preservados.
 | smoke / smoke:pg | **126/126** · **126/126** |
 | **test:pg** (PG 16.14 novo) | **201/201 · GATE PASS** (0 fail/skip/todo) |
 
+### 20-B. Reverificação independente do P2-01.1
+
+O ajuste foi **reconferido do zero** nesta sessão, sem reaproveitar a evidência anterior:
+
+- **Antes × depois (código real):** com o módulo do commit anterior (`07cb84d`) e o atual, lado a lado —
+  `jsonCanônico(new Date(NaN))` passou de `"null"` (silencioso) para **lançar**
+  `Auditoria: instante inválido (Invalid Date) não pode ser assinado.`; o mesmo para o caso aninhado
+  (`{"a":{"b":null}}` → lança), o array (`{"l":[null]}` → lança) e
+  `hashCadeiaAuditoria` com `Date` inválido em `dados` (antes devolvia um hash SHA-256 válido, agora lança).
+- **Sem alteração de hash válido:** 4 payloads válidos (Date simples; Date aninhado em array + string ISO;
+  `dados: null`; payload misto) → **4/4 hashes idênticos** e `jsonCanônico(Date válido)` idêntico.
+  Nenhuma migração; nenhum esquema alterado.
+- **Caminho de verificação:** `verificarCadeiaAuditoria` com uma linha de `Date` inválido **lança**
+  (não assina `null` nem mascara a linha); uma linha válida segue `ok=true, verificadas=1, quebras=[]`.
+- **Prova por mutação (independente):** revertendo **só** o ramo novo de `jsonCanônico`, os testes
+  `L2` e `L3` **falham** (`18 pass / 2 fail`); restaurado, `20 pass / 0 fail`. A mutação foi desfeita
+  (`git diff` limpo) antes do commit.
+
+**Resultados exatos da reverificação:**
+
+| Gate | Resultado |
+|---|---|
+| P2-01 memória (`test/p2-01-audit-date-jsonb.test.ts`) | **20 pass · 0 fail** |
+| server tests | **881** tests · 815 pass · 0 fail · 66 skip · 0 todo |
+| client tests | **323** pass (29 arquivos) · 0 fail |
+| typecheck (domain+server+client) | 0 erros |
+| lint | 0 erros · 409 warnings (= baseline) |
+| build | OK |
+| audit:menu | ✅ sem erros (1 aviso classificado: `/api/health` público) |
+| smoke (memória) | **126/126** |
+| smoke:pg (PostgreSQL real, banco novo) | **126/126** |
+| **test:pg** (PostgreSQL **16.14** real, container `postgres:16.14`, banco vazio) | **201/201 · GATE PASS** (0 fail/skip/todo) |
+
+**Nota sobre o reporter local:** sob Node 24 o parser do gate imprime
+`ERP-03 GATE BLOCKED: resumo={}` mesmo com `201/201 pass` (reporter `spec`: `ℹ pass`), como já
+registrado em §17 e §20. Repetindo **com Node 22** (a versão do CI) no mesmo banco novo, o resultado é
+`ERP-03 GATE PASS: 201 testes PostgreSQL reais; 0 fail/skip/todo` — confirmando que era apenas o
+formato do reporter. **Nenhum teste foi pulado.**
+
 ## 21. Out-of-scope (não tocado)
 
 P0-01 portal/token público, P1-03 parcelas, P1-04 `rateLimitPublico`/XFF, P2-04 `NOT VALID`,
