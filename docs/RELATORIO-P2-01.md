@@ -180,12 +180,18 @@ no fluxo HTTP.
 
 ## 17. CI
 
-A referência final é o CI do GitHub Actions (job `testes-postgres`), disparado no push da branch.
-O CI usa Node 22 (TAP: `# pass`); localmente o Node é 24 (reporter `spec`: `ℹ pass`). Essa
-diferença de **reporter** fez o parser local do gate imprimir `BLOCKED: resumo={}` numa primeira
-execução; com `NODE_OPTIONS=--test-reporter=tap` o **mesmo** conjunto dá
+A referência final é o CI do GitHub Actions, disparado no push da branch. **Run verde** (PR #69):
+
+| Job | Resultado |
+|---|---|
+| `testes-postgres` (Node 22 + PostgreSQL real) | ✅ passou — 3m07s (run `39035804861`) |
+| `verificar` (typecheck/lint/testes/build) | ✅ passou — 2m05s |
+
+Localmente o Node é 24 (reporter `spec`: `ℹ pass`), enquanto o CI usa Node 22 (TAP: `# pass`).
+Essa diferença de **reporter** fez o parser local do gate imprimir `BLOCKED: resumo={}` numa
+primeira execução; com `NODE_OPTIONS=--test-reporter=tap` o **mesmo** conjunto dá
 `GATE PASS: 201 testes; 0 fail/skip/todo`. É o **problema de parser local já conhecido** (Node 24
-× Node 22), registrado aqui e **não** alterado neste ciclo. Resultado do CI preenchido no corpo da PR.
+× Node 22), registrado aqui e **não** alterado neste ciclo.
 
 ## 18. Arquivos alterados
 
