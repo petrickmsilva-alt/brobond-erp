@@ -152,6 +152,17 @@ export function checkAccess(r: Resource, actor: Actor, op: 'read' | 'create' | '
   if (r.adminOnly && perfil !== 'admin') {
     throw new HttpError(403, 'Apenas administradores acessam este módulo.');
   }
+  // SEC-04/P1-01: o catálogo COMPARTILHADO (categorias, cores, grades,
+  // tamanhos) é global — vale para todas as empresas. A LEITURA é aberta
+  // (telas operacionais de venda/estoque/ordem/inventário usam /options), mas
+  // a ESCRITA exige gerente/admin: um operador não reescreve a nomenclatura
+  // que afeta as outras empresas. O perfil vem da identidade autenticada
+  // (nunca de role/empresa_id enviados pelo cliente).
+  if (op !== 'read' && r.minPerfilEscrita && (PERFIL_RANK[perfil] ?? 0) < PERFIL_RANK[r.minPerfilEscrita]) {
+    throw new HttpError(403, r.minPerfilEscrita === 'admin'
+      ? 'Apenas administradores podem incluir, alterar ou excluir este cadastro compartilhado.'
+      : 'Apenas gerentes e administradores podem incluir, alterar ou excluir este cadastro compartilhado.');
+  }
   if (op !== 'read' && !r.ops[op]) {
     const verbo = op === 'create' ? 'incluir' : op === 'update' ? 'alterar' : 'excluir';
     throw new HttpError(405, `Não é possível ${verbo} registros em ${r.label}.`);

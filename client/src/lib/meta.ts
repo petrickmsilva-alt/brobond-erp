@@ -76,6 +76,12 @@ export type ResourceMeta = {
   orderBy?: { field: string; dir: 'asc' | 'desc' };
   ops: ResourceOps;
   adminOnly?: boolean;
+  /**
+   * RBAC de ESCRITA (espelha `Resource.minPerfilEscrita` do servidor): perfil
+   * mínimo para incluir/alterar/excluir, mantendo a leitura aberta. Usado pelo
+   * catálogo COMPARTILHADO (categorias, cores, grades, tamanhos) — SEC-04.
+   */
+  minPerfilEscrita?: 'gerente' | 'admin';
   notice?: string;
   images?: { max: number };
   detail?: boolean;
