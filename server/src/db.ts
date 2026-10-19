@@ -77,6 +77,24 @@ export function isDbDegraded(): boolean {
   return !!pool && !ready;
 }
 
+/**
+ * PROD-DB-01.2 — estado explícito do banco, para o /api/health distinguir três
+ * situações que antes colapsavam em `db:"memory"`:
+ *
+ *   • 'demo'     — sem DATABASE_URL: modo demonstração (dados em memória);
+ *   • 'ready'    — PostgreSQL conectado E bootstrap/migrações concluídos;
+ *   • 'degraded' — DATABASE_URL configurada, mas o banco NÃO está pronto.
+ *
+ * O health continua respondendo 200 apenas em 'ready' (a Render só promove a
+ * instância nesse estado) e 503 em 'degraded'.
+ */
+export type DbStatus = 'demo' | 'ready' | 'degraded';
+
+export function dbStatus(): DbStatus {
+  if (!pool) return 'demo';
+  return ready ? 'ready' : 'degraded';
+}
+
 /** Causa da última falha de migração (fatal ou de bootstrap). Null quando ok. */
 let erroDeMigracao: string | null = null;
 

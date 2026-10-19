@@ -7,7 +7,7 @@ import { empresaDoAtorAudit, empresaExplicitaAudit } from './empresa';
 import { limparToken } from './validate';
 import { avisarOrigemIndefinida, linkPublicoAsync, urlAbsoluta } from './urlPublica';
 import { getStore } from './services';
-import type { Row } from './store';
+import type { Row, Store } from './store';
 import { loginBucketKey, registerLoginFailure, registerLoginSuccess, registrarFalha, registrarSucesso, exigirRateLimit } from './security';
 import { validarPoliticaSenha } from './services';
 import { hashPassword, verifyPassword, verifyPasswordDetailed, hashAtualizado } from './password';
@@ -236,17 +236,22 @@ export async function login(req: Request, res: Response) {
     return res.status(400).json({ error: 'E-mail e senha são obrigatórios' });
   }
 
-  const store = getStore();
+  // PROD-DB-01.2 — a obtenção do store fica DENTRO do try: quando o banco está
+  // indisponível/degradado, `getStore()` lança (503) em vez de entregar o
+  // MemStore. O erro vira `lookupFailed` para preservar o ACESSO DE EMERGÊNCIA
+  // do administrador (abaixo), que existe justamente para o banco fora do ar.
+  let store: Store | null = null;
   let row: Row | null = null;
   let lookupFailed = false;
   try {
+    store = getStore();
     row = await store.findUserByEmail(email);
   } catch (e: any) {
     lookupFailed = true;
     console.warn('⚠️  Falha ao consultar usuários:', e?.message || e);
   }
 
-  if (row) {
+  if (row && store) {
     if (row.ativo === false) {
       return res.status(403).json({ error: 'Usuário desativado. Fale com o administrador.' });
     }
@@ -350,6 +355,9 @@ export async function login(req: Request, res: Response) {
     console.warn('⚠️  Login de emergência do administrador (banco indisponível).');
     return res.json({ token: signToken(user, { expiresIn: '1h' }), user });
   }
+  // Sem o acesso de emergência, banco indisponível é indisponibilidade — não
+  // "senha incorreta". 503 honesto; nenhuma escrita/auditoria em memória.
+  if (lookupFailed) throw new HttpError(503, 'Banco de dados indisponível. Tente novamente em instantes.');
 
   return loginFailed(req, res, null);
 }

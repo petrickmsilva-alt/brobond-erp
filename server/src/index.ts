@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hasDatabaseUrl, isDbConnected, isDbDegraded, migrate, migrationError } from './db';
+import { dbStatus, hasDatabaseUrl, isDbConnected, isDbDegraded, migrate, migrationError } from './db';
 import {
   ADMIN_EMAIL,
   changePassword,
@@ -311,15 +311,19 @@ function resourceParam(req: Request, _res: Response, next: NextFunction) {
 // Público
 // ----------------------------------------------------------------------------
 app.get('/api/health', (_req, res) => {
-  const db = isDbConnected() ? 'postgres' : 'memory';
-  // PROD-DB-01.1 — banco obrigatório degradado NÃO é saudável: 503 impede a
-  // Render de promover a instância (healthCheckPath: /api/health). O corpo
-  // preserva `db` para os gates existentes (`h.db === 'postgres'`) e NÃO expõe
-  // o texto do erro (pode conter nomes de tabela/coluna) — ele fica no log.
-  if (isDbDegraded()) {
-    return res.status(503).json({ ok: false, db, uploads: uploadProvider(), version: VERSION });
-  }
-  res.json({ ok: true, db, uploads: uploadProvider(), version: VERSION });
+  // PROD-DB-01.2 — três estados explícitos (nunca confundir degradado com
+  // demonstração):
+  //   db:"memory"            → modo demonstração (sem DATABASE_URL);
+  //   db:"postgres"          → PostgreSQL conectado E pronto (200);
+  //   db:"postgres-degraded" → DATABASE_URL configurada, banco NÃO pronto (503).
+  // A Render usa este path como healthCheckPath: só promove a instância com 200,
+  // ou seja, apenas em `ready`. O corpo NÃO expõe o texto do erro (pode conter
+  // nomes de tabela/coluna) — ele fica no log e em `migrationError()`.
+  const status = dbStatus();
+  const db = status === 'demo' ? 'memory' : status === 'ready' ? 'postgres' : 'postgres-degraded';
+  const body = { ok: status !== 'degraded', db, uploads: uploadProvider(), version: VERSION };
+  if (status === 'degraded') return res.status(503).json(body);
+  res.json(body);
 });
 
 // ----------------------------------------------------------------------------

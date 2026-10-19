@@ -299,7 +299,7 @@ versionada). Enquanto degradado:
 
 | Superfície | Comportamento |
 |---|---|
-| `/api/health` | **503** `{ ok: false, db: 'memory' }` → a Render não promove a instância |
+| `/api/health` | **503** `{ ok: false, db: 'postgres-degraded' }` → a Render não promove a instância |
 | Rotas de negócio (`/api/*`, incl. `/api/vendas`) | **503** via `bloqueioDeProntidao` |
 | `/api/auth/*` | liberado (diagnóstico/acesso) |
 | Webhooks de provedores (`publicConnectorsRouter`, `publicGatewayRouter`) | intactos — montados antes do `express.json()` |
@@ -352,12 +352,119 @@ a recuperação posterior.
 
 ---
 
+## 14. PROD-DB-01.2 — gate final de prontidão
+
+Modo: AUDIT → TEST → FIX ONLY IF PROVEN → CI. Sem merge.
+
+### 14.1 Auditoria de TODA rota liberada no estado degradado
+
+O bloqueio de prontidão libera `/api/health` e, por desenho, o prefixo
+`/api/auth/*` (diagnóstico/acesso). A auditoria verificou, rota por rota, se
+alguma delas usa PostgreSQL, altera estado persistente ou pode falhar de forma
+não controlada quando `isDbDegraded()` é verdadeiro:
+
+| Rota | Usa PostgreSQL? | Altera estado? | Comportamento degradado |
+|---|---|---|---|
+| `GET /api/health` | não (lê flags em memória) | não | 503 controlado |
+| `POST /api/auth/login` | sim | sim (sessão, auditoria) | 503 controlado; **emergência** 200 |
+| `POST /api/auth/login/mfa` | sim | sim | 503 controlado |
+| `POST /api/auth/mfa/desafio` | sim | sim | 503 controlado |
+| `POST /api/auth/forgot` | sim | sim (reset token) | 200 (genérico, sem efeito) |
+| `POST /api/auth/reset` | sim | sim | 503 controlado |
+| `GET /api/auth/politica-senha` | não (política padrão em memória) | não | 200 leitura |
+| `GET /api/auth/me` | best-effort | não | 200 leitura (sem persistir) |
+| `POST /api/auth/change-password` | sim | sim | 503 controlado |
+| `POST /api/auth/reautenticar` | sim | sim | 503 controlado |
+| `POST /api/auth/logout` | sim | sim (revoga sessão) | 503 (não revoga em memória) |
+| `POST /api/auth/logout-all` | sim | sim | 503 controlado |
+| `GET /api/auth/sessoes` | sim | não | 503 controlado |
+| `POST /api/auth/sessoes/:sid/revogar` | sim | sim | 503 controlado |
+| `GET /api/auth/mfa/status` | sim | não | 503 controlado |
+| `POST /api/auth/mfa/{setup,ativar,desativar,codigos}` | sim | sim | 503 controlado |
+| `GET/PUT /api/auth/preferences` | sim | PUT sim | 503 controlado |
+
+Conclusão: **nenhuma** rota de `/api/auth/*` atende pelo `MemStore` no estado
+degradado — `getStore()` lança 503 (`isPgAvailable()` exige `isDbConnected()`).
+Não há caminho de escrita em memória nem de leitura servida por memória para
+dados que só existem no Postgres. As duas únicas rotas que respondem 200 são
+estritamente leituras sem persistência (`politica-senha`, `me`).
+
+### 14.2 Correção PROVADA — login de emergência restaurado
+
+A auditoria encontrou uma regressão introduzida pelo PROD-DB-01.1: em
+`server/src/auth.ts`, `login()` chamava `getStore()` **fora** do `try`. Depois do
+01.1, `getStore()` passa a lançar 503 quando o banco está indisponível — então a
+exceção escapava **antes** de `lookupFailed` ser marcado, tornando inalcançável
+o **acesso de emergência do administrador** (`auth.ts:345`), que existe
+justamente para o caso de banco fora do ar.
+
+Correção mínima: a obtenção do store passou para **dentro** do `try`, de modo
+que a falha vira `lookupFailed = true` (comportamento idêntico ao anterior ao
+01.1, quando o `PgStore` existia e `findUserByEmail` lançava). Efeitos:
+
+- emergência (`email === ADMIN_EMAIL` e senha de env): **200** com token de 1 h,
+  `id: 0` (sem escrita sensível);
+- qualquer outro login com banco fora: **503** honesto ("Banco de dados
+  indisponível"), em vez de 401 "senha incorreta" ou token de memória.
+
+Prova em PostgreSQL real: cenário C de `prod-db-01-readiness.test.ts`
+(login comum 503 sem token; login de emergência 200 `id=0`).
+
+### 14.3 Correção PROVADA — contrato de `/api/health` de três estados
+
+Antes, o estado degradado respondia `db: "memory"`, **confundindo** banco
+indisponível com modo demonstração (`ux05-fixtures.mjs` e o cliente tratam
+`memory` como demo). Agora `dbStatus()` distingue explicitamente:
+
+| Estado | `db` | HTTP | `ok` |
+|---|---|---|---|
+| sem `DATABASE_URL` | `memory` | 200 | `true` |
+| pronto | `postgres` | 200 | `true` |
+| degradado | `postgres-degraded` | 503 | `false` |
+
+A Render usa `healthCheckPath: /api/health`: continua promovendo a instância
+apenas com 200 (estado `ready`), preservando o contrato de deploy. O gate
+`schema-sync`/`smoke:pg` casa `db === 'postgres'` somente quando o health é 200,
+logo segue válido.
+
+### 14.4 Contrato de reinício no boot degradado (produção)
+
+Em produção o processo encerra (`process.exit(1)`) no boot degradado. Documentado:
+a Render reinicia o serviço; o deploy é cancelado e a versão anterior continua
+servindo quando o health não fica saudável (rollback automático). O log registra
+a causa (`migrationError()`), então não há falha silenciosa. Um crash-loop só
+persiste enquanto a causa raiz (schema/migração) não for corrigida — que é o
+objetivo do gate.
+
+### 14.5 Testes PROD-DB-01.2
+
+`server/test/pg/prod-db-01-readiness.test.ts` (PostgreSQL 16 real + HTTP real):
+
+| Cenário | Prova |
+|---|---|
+| A — pronto | health 200 `db=postgres`; `/api/vendas` 200 |
+| B — bootstrap incompleto | health 503 `db=postgres-degraded ok=false`; login **503 sem token** (sem MemStore); `GET`/`POST /api/vendas` 503 |
+| C — Postgres indisponível | health 503 `db=postgres-degraded`; login comum **503 sem token**; login de emergência **200 `id=0`**; `/api/vendas` 503 |
+| D — recuperação | health 200 `db=postgres`; `/api/vendas` 200 |
+| E — sem `DATABASE_URL` | health 200 `db=memory ok=true` (demonstração explícita) |
+
+### 14.6 Limitações
+
+- A autenticação continua sendo a única superfície não bloqueada no estado
+  degradado (por desenho, para diagnóstico). A auditoria mostra que nenhuma rota
+  dela serve dados de negócio nem cai para memória.
+- `POST /api/auth/logout` responde 503 com banco fora: a revogação persistente
+  da sessão não acontece. Alternativa (logout local silencioso) foi rejeitada
+  por deixar o token válido no servidor — decisão de segurança, documentada.
+
+---
+
 ## Fora do escopo
 
 - Nenhuma mudança em UX, top navigation, commerce, marketplace, fiscal,
   financeiro, segurança, advisory locks, SERIALIZABLE, CORS, rate limit, RBAC,
   uploads, anexos.
 - O `catch` silencioso do `migrate()` em `index.ts` foi **documentado** mas não
-  alterado (o comportamento degradado agora é visível via `db:"memory"`).
+  alterado (o comportamento degradado agora é visível via `db:"postgres-degraded"`).
 - Produção (Render/Neon) não foi tocada diretamente — a correção chega por
   deploy do código.
