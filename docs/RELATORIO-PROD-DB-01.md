@@ -239,8 +239,9 @@ Evidência registrada pelo teste:
 - multiempresa: local de outra empresa recusado (23503); local da própria empresa aceito
 ```
 
-Regressão completa (seção 18 do formato): server 821/0, client 323/0, PG 210/0,
-typecheck/lint/build/smoke/audit:menu verdes.
+Regressão completa: server 821/0, client 323/0, PG 212/0 (PostgreSQL 16.14 real),
+typecheck (server/domain/client), lint (0 erros), build, smoke 126/126,
+smoke:pg 126/126 e audit:menu (0 erros) — todos verdes.
 
 ---
 
@@ -271,6 +272,83 @@ especulativa; falha do `schema.sql` permanece visível e não finge sucesso.
 3. O `index.ts` continua engolindo o erro no `catch` do `migrate()` (apenas loga).
    Não alterado por estar fora do mecanismo de schema; o efeito visível
    (`db:"memory"`) agora é intencional e detectável.
+
+---
+
+## 13. PROD-DB-01.1 — prontidão de produção (readiness)
+
+### 13.1 Lacuna encontrada pela auditoria independente
+
+O PROD-DB-01 fez `migrate()` aplicar a cadeia versionada mesmo com o bootstrap
+do `schema.sql` bloqueado — mas o estado resultante ainda **atendia negócio**:
+
+- `server/src/index.ts` capturava a falha do `migrate()` com `console.error` e
+  seguia a inicialização;
+- `server/src/pgstore.ts` escolhia o `PgStore` pela mera **existência do pool**,
+  não pela prontidão real do banco;
+- `server/src/services.ts` (`getStore()`) caía para o `MemStore` quando
+  `isPgAvailable()` era falso — ou seja, com `DATABASE_URL` definida e o banco
+  degradado, a instância aceitaria **escrita em memória como se fosse
+  persistência real**.
+
+### 13.2 Decisão de prontidão (um único comportamento seguro)
+
+Sinal canônico: `isDbDegraded()` = `DATABASE_URL` presente **E** `ready === false`.
+`ready` só é verdadeiro com bootstrap completo (`db/schema.sql` + cadeia
+versionada). Enquanto degradado:
+
+| Superfície | Comportamento |
+|---|---|
+| `/api/health` | **503** `{ ok: false, db: 'memory' }` → a Render não promove a instância |
+| Rotas de negócio (`/api/*`, incl. `/api/vendas`) | **503** via `bloqueioDeProntidao` |
+| `/api/auth/*` | liberado (diagnóstico/acesso) |
+| Webhooks de provedores (`publicConnectorsRouter`, `publicGatewayRouter`) | intactos — montados antes do `express.json()` |
+| `getStore()` com `DATABASE_URL` e banco não pronto | lança **503**, nunca `MemStore` |
+| Inicialização | em produção: `process.exit(1)` no boot degradado (recuperação = reiniciar) |
+
+O `process.exit(1)` é a política preferida: o processo não fica servindo com
+schema incompleto e a plataforma reinicia. A porta continua sendo escutada
+**antes** das migrações (exigência da Render, inalterada), e o health responde
+503 durante a janela de boot/migração.
+
+### 13.3 Alterações
+
+- `server/src/db.ts`: `ready = false` no início de `migrate()`; distingue falha
+  fatal da cadeia versionada de bootstrap incompleto; expõe `isDbDegraded()` e
+  `migrationError()`.
+- `server/src/pgstore.ts`: `isPgAvailable()` passa a exigir `isDbConnected()`.
+- `server/src/services.ts`: `getStore()` não cai para memória quando há
+  `DATABASE_URL` e o banco não está pronto.
+- `server/src/index.ts`: health 503 quando degradado; `bloqueioDeProntidao`;
+  `process.exit(1)` em produção no boot degradado; inicializações de negócio
+  (`initConnectors`, `initNegociosEngine`, `ensureAdmin`, …) puladas no estado
+  degradado.
+
+### 13.4 Testes antes/depois
+
+`server/test/pg/prod-db-01-readiness.test.ts` (processo real, porta real, JWT
+real, PostgreSQL 16.14 real):
+
+| Cenário | Antes | Depois |
+|---|---|---|
+| A — banco pronto | health 200 | health 200 `db=postgres`; `GET /api/vendas` 200 |
+| B — bootstrap incompleto (dado legado E4.2) | health 200 `db=memory` e negócio **atendia** | health **503**; `GET`/`POST /api/vendas` **503** |
+| C — `DATABASE_URL` com PostgreSQL indisponível | negócio atendia em memória | health **503**; `GET`/`POST /api/vendas` **503** |
+| D — recuperação (corrigida a causa + reinício) | — | health 200 `db=postgres`; `GET /api/vendas` **200** |
+
+`server/test/pg/prod-db-01-schema-sync.test.ts` cobre ainda a falha da cadeia
+versionada (migração `9999` que falha de propósito) deixando o banco degradado e
+a recuperação posterior.
+
+### 13.5 Limitações
+
+- Não houve acesso ao `DATABASE_URL` de produção; a prova é por reprodução em
+  PostgreSQL real e pelo contrato de `readiness`/health.
+- As rotas de autenticação permanecem acessíveis no estado degradado (por
+  desenho, para diagnóstico); elas não servem dados de negócio.
+- `/api/files/:id/:token` (imagens por token) e o catálogo público respondem 503
+  no estado degradado — comportamento intencional, mas que altera o contrato de
+  disponibilidade durante a janela de migração.
 
 ---
 

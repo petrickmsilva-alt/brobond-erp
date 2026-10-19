@@ -55,8 +55,33 @@ if (pool) {
 
 let ready = false;
 
+/**
+ * PROD-DB-01.1 — prontidão do banco obrigatório.
+ *
+ * `ready` só é verdadeiro quando o banco está REALMENTE pronto para atender
+ * negócio: DATABASE_URL presente E bootstrap completo (db/schema.sql aplicado
+ * + cadeia versionada registrada). Enquanto `ready` for falso e houver
+ * DATABASE_URL, a aplicação está degradada e as rotas de negócio são
+ * bloqueadas (ver `bloqueioDeProntidao` em index.ts).
+ */
 export function isDbConnected(): boolean {
   return !!pool && ready;
+}
+
+/**
+ * Falso quando DATABASE_URL existe mas o banco NÃO está pronto (migração falhou,
+ * bootstrap incompleto). É o sinal canônico de degradação: nunca deixar o
+ * PgStore operar nem cair silenciosamente para memória.
+ */
+export function isDbDegraded(): boolean {
+  return !!pool && !ready;
+}
+
+/** Causa da última falha de migração (fatal ou de bootstrap). Null quando ok. */
+let erroDeMigracao: string | null = null;
+
+export function migrationError(): string | null {
+  return erroDeMigracao;
 }
 
 export function hasDatabaseUrl(): boolean {
@@ -113,6 +138,10 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>,
  */
 export async function migrate(): Promise<void> {
   if (!pool) return;
+  // Re-verificação: enquanto o bootstrap roda, o banco não está pronto. Se algo
+  // falhar daqui pra frente, `ready` fica falso e a instância segue degradada —
+  // inclusive quando migrate() é chamado de novo depois de um estado pronto.
+  ready = false;
   const candidates = [
     path.resolve(__dirname, '../../db/schema.sql'),
     path.resolve(process.cwd(), 'db/schema.sql'),
@@ -140,6 +169,7 @@ export async function migrate(): Promise<void> {
   // (IF NOT EXISTS / ON CONFLICT DO NOTHING).
   const lockClient = await pool.connect();
   let bootstrapError: unknown = null;
+  let migracaoError: unknown = null;
   try {
     await lockClient.query(`SELECT pg_advisory_lock(hashtext('brobond_schema_bootstrap'))`);
     try {
@@ -149,23 +179,41 @@ export async function migrate(): Promise<void> {
     }
     // Roda mesmo com o bootstrap acima tendo falhado: a cadeia versionada é a
     // autoridade para bancos que já existem e não pode ser bloqueada por um
-    // preflight de dado legado (PROD-DB-01). Um erro aqui É fatal.
-    await aplicarMigrationsVersionadas(lockClient);
+    // preflight de dado legado (PROD-DB-01).
+    try {
+      await aplicarMigrationsVersionadas(lockClient);
+    } catch (e) {
+      migracaoError = e;
+    }
   } finally {
     await lockClient.query(`SELECT pg_advisory_unlock(hashtext('brobond_schema_bootstrap'))`).catch(() => undefined);
     lockClient.release();
   }
+
+  // PROD-DB-01.1 — falha da cadeia versionada é a pior: o schema realmente não
+  // corresponde ao código. Marca degradado (ready fica falso) e não deixa a
+  // aplicação atender negócio: `isDbDegraded()` bloqueia as rotas e o health
+  // responde 503, então a Render não promove a instância.
+  if (migracaoError) {
+    erroDeMigracao = `Migração versionada falhou: ${(migracaoError as Error)?.message || String(migracaoError)}`;
+    console.error(
+      `❌ ${erroDeMigracao} — a aplicação NÃO vai atender negócio até o banco estar pronto ` +
+        '(corrija a causa e reinicie).'
+    );
+    return;
+  }
   if (bootstrapError) {
-    const msg = (bootstrapError as Error)?.message || String(bootstrapError);
+    erroDeMigracao = `db/schema.sql incompleto: ${(bootstrapError as Error)?.message || String(bootstrapError)}`;
     console.error(
       '⚠️  db/schema.sql não pôde ser aplicado por inteiro (dado legado ou preflight). ' +
         'As migrações versionadas foram aplicadas mesmo assim; corrija os dados e reinicie para ' +
-        `completar o bootstrap. Causa: ${msg}`
+        `completar o bootstrap. Causa: ${(bootstrapError as Error)?.message || bootstrapError}`
     );
-    // Sem `ready = true`: isDbConnected() continua false, o /api/health reporta
-    // db=memory e os gates PostgreSQL não aceitam esse estado como aprovado.
+    // Sem `ready = true`: isDbConnected() continua false, o /api/health responde
+    // 503 e as rotas de negócio são bloqueadas (ver bloqueioDeProntidao).
     return;
   }
+  erroDeMigracao = null;
   ready = true;
   console.log('🗄️  Schema verificado/migrado (db/schema.sql + db/migrations).');
 }

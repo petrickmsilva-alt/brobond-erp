@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hasDatabaseUrl, isDbConnected, migrate } from './db';
+import { hasDatabaseUrl, isDbConnected, isDbDegraded, migrate, migrationError } from './db';
 import {
   ADMIN_EMAIL,
   changePassword,
@@ -310,9 +310,38 @@ function resourceParam(req: Request, _res: Response, next: NextFunction) {
 // ----------------------------------------------------------------------------
 // Público
 // ----------------------------------------------------------------------------
-app.get('/api/health', (_req, res) =>
-  res.json({ ok: true, db: isDbConnected() ? 'postgres' : 'memory', uploads: uploadProvider(), version: VERSION })
-);
+app.get('/api/health', (_req, res) => {
+  const db = isDbConnected() ? 'postgres' : 'memory';
+  // PROD-DB-01.1 — banco obrigatório degradado NÃO é saudável: 503 impede a
+  // Render de promover a instância (healthCheckPath: /api/health). O corpo
+  // preserva `db` para os gates existentes (`h.db === 'postgres'`) e NÃO expõe
+  // o texto do erro (pode conter nomes de tabela/coluna) — ele fica no log.
+  if (isDbDegraded()) {
+    return res.status(503).json({ ok: false, db, uploads: uploadProvider(), version: VERSION });
+  }
+  res.json({ ok: true, db, uploads: uploadProvider(), version: VERSION });
+});
+
+// ----------------------------------------------------------------------------
+// PROD-DB-01.1 — prontidão do banco obrigatório.
+//
+// Quando DATABASE_URL existe mas o banco não está pronto (falha da cadeia
+// versionada ou bootstrap do db/schema.sql incompleto), a instância NÃO pode
+// atender negócio: serviria com schema desatualizado — foi assim que /vendas
+// respondeu 42703 em produção. O health responde 503 (a Render não promove a
+// instância) e este middleware bloqueia as rotas de negócio. Só continuam
+// respondendo o health e a autenticação (necessária para diagnóstico/acesso);
+// os webhooks dos provedores são montados antes do express.json() e seguem
+// intactos. Sem DATABASE_URL (modo demonstração) nada aqui bloqueia.
+// ----------------------------------------------------------------------------
+const ROTAS_PERMITIDAS_SEM_BANCO_PRONTO = [/^\/api\/auth\//];
+function bloqueioDeProntidao(req: Request, res: Response, next: NextFunction) {
+  if (!isDbDegraded()) return next();
+  if (req.path === '/api/health') return next();
+  if (ROTAS_PERMITIDAS_SEM_BANCO_PRONTO.some((re) => re.test(req.path))) return next();
+  return res.status(503).json({ error: 'Banco de dados não está pronto. O serviço está indisponível até a migração concluir.' });
+}
+app.use(bloqueioDeProntidao);
 app.post('/api/auth/login', loginRateLimit, wrap(login));
 // Segundo fator do login (TOTP): ticket de 10 min emitido no 1º passo.
 app.post('/api/auth/login/mfa', wrap(loginMFA));
@@ -920,6 +949,18 @@ async function start() {
       await migrate();
     } catch (e: any) {
       console.error('❌ Falha ao migrar o banco:', e?.message || e);
+    }
+    // PROD-DB-01.1 — banco obrigatório quebrado não vira "serviço saudável".
+    // Em produção o processo encerra para a plataforma reiniciar (a recuperação
+    // é: corrigir a causa e o restart volta pronto). Fora de produção a
+    // instância segue de pé, porém com as rotas de negócio bloqueadas (503).
+    if (isDbDegraded()) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error(`❌ Banco obrigatório não está pronto (${migrationError()}) — encerrando o processo (exit 1) para reinício pela plataforma.`);
+        process.exit(1);
+      }
+      console.error(`⚠️  Banco obrigatório não está pronto (${migrationError()}) — rotas de negócio bloqueadas (503) até a migração concluir.`);
+      return;
     }
   }
   // Liga o módulo de conectores ao pool do Postgres e à trilha de auditoria.
