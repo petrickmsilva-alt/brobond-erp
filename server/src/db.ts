@@ -91,6 +91,25 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>,
 /**
  * Aplica db/schema.sql (idempotente) ao iniciar. Assim um banco novo na Render
  * já sobe com todas as tabelas, e bancos antigos recebem as colunas novas.
+ *
+ * PROD-DB-01 — por que as migrações versionadas rodam SEPARADAS do schema.sql:
+ *
+ * O driver `pg` executa um arquivo com vários comandos como UMA transação
+ * implícita: se qualquer comando falhar, TODO o lote volta atrás — inclusive
+ * os ADD COLUMN que já tinham "passado". O db/schema.sql tem preflights que
+ * recusam dados legados (ex.: E4.2 bloqueia o DDL quando há dois locais com o
+ * mesmo nome na mesma empresa). Nesse cenário o `lockClient.query(sql)` lançava,
+ * o `aplicarMigrationsVersionadas` logo abaixo nunca era alcançado e o banco
+ * ficava congelado no estado antigo — foi assim que a coluna `vendas.
+ * local_saida_id` (migração 0031) nunca chegou à produção, e /api/vendas passou
+ * a responder 42703.
+ *
+ * Correção: as migrações versionadas (a cadeia oficial, idempotente e uma única
+ * vez por banco) rodam SEMPRE, mesmo que o bootstrap do schema.sql falhe por
+ * dado legado. Cada arquivo de migração roda na própria transação; se ele falhar,
+ * o erro continua fatal (o serviço não sobe com o banco pela metade). Se apenas
+ * o schema.sql falhar, a aplicação sobe com o pool real — sem fingir `ready` —
+ * e registra a causa para correção dos dados.
  */
 export async function migrate(): Promise<void> {
   if (!pool) return;
@@ -120,13 +139,32 @@ export async function migrate(): Promise<void> {
   // segundo processo espera e, quando entra, encontra tudo já aplicado
   // (IF NOT EXISTS / ON CONFLICT DO NOTHING).
   const lockClient = await pool.connect();
+  let bootstrapError: unknown = null;
   try {
     await lockClient.query(`SELECT pg_advisory_lock(hashtext('brobond_schema_bootstrap'))`);
-    await lockClient.query(sql);
+    try {
+      await lockClient.query(sql);
+    } catch (e) {
+      bootstrapError = e;
+    }
+    // Roda mesmo com o bootstrap acima tendo falhado: a cadeia versionada é a
+    // autoridade para bancos que já existem e não pode ser bloqueada por um
+    // preflight de dado legado (PROD-DB-01). Um erro aqui É fatal.
     await aplicarMigrationsVersionadas(lockClient);
   } finally {
     await lockClient.query(`SELECT pg_advisory_unlock(hashtext('brobond_schema_bootstrap'))`).catch(() => undefined);
     lockClient.release();
+  }
+  if (bootstrapError) {
+    const msg = (bootstrapError as Error)?.message || String(bootstrapError);
+    console.error(
+      '⚠️  db/schema.sql não pôde ser aplicado por inteiro (dado legado ou preflight). ' +
+        'As migrações versionadas foram aplicadas mesmo assim; corrija os dados e reinicie para ' +
+        `completar o bootstrap. Causa: ${msg}`
+    );
+    // Sem `ready = true`: isDbConnected() continua false, o /api/health reporta
+    // db=memory e os gates PostgreSQL não aceitam esse estado como aprovado.
+    return;
   }
   ready = true;
   console.log('🗄️  Schema verificado/migrado (db/schema.sql + db/migrations).');
