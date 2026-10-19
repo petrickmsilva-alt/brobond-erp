@@ -2967,20 +2967,39 @@ CREATE INDEX IF NOT EXISTS idx_gateway_cobrancas_ref     ON gateway_cobrancas (p
 CREATE UNIQUE INDEX IF NOT EXISTS uq_gateway_cobrancas_idempotencia
   ON gateway_cobrancas (empresa_id, LOWER(provider), idempotency_key)
   WHERE idempotency_key IS NOT NULL;
-DO $$
+-- P2-04: o CHECK nasce NOT VALID para proteger escritas novas em bancos que já
+-- têm linhas, e é VALIDADO logo abaixo quando o conjunto está limpo. Antes a
+-- VALIDATE era esquecida e a constraint ficava NOT VALID para sempre — mesmo em
+-- banco novo e vazio. A validação condicional abaixo é o mesmo contrato de 0032.
+DO $p204_gateway_checks$
+DECLARE
+  c RECORD;
+  n_violacoes BIGINT;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_gateway_cobrancas_valor') THEN
-    ALTER TABLE gateway_cobrancas ADD CONSTRAINT ck_gateway_cobrancas_valor CHECK (valor > 0) NOT VALID;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_gateway_cobrancas_metodo') THEN
-    ALTER TABLE gateway_cobrancas ADD CONSTRAINT ck_gateway_cobrancas_metodo
-      CHECK (metodo IN ('pix','boleto','cartao_credito','cartao_debito')) NOT VALID;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_gateway_cobrancas_status') THEN
-    ALTER TABLE gateway_cobrancas ADD CONSTRAINT ck_gateway_cobrancas_status
-      CHECK (status IN ('pendente','autorizada','paga','expirada','cancelada','estornada','falhou')) NOT VALID;
-  END IF;
-END $$;
+  FOR c IN
+    SELECT * FROM (VALUES
+      ('ck_gateway_cobrancas_valor',  $$ valor > 0 $$,
+       $$ NOT (valor > 0) $$),
+      ('ck_gateway_cobrancas_metodo', $$ metodo IN ('pix','boleto','cartao_credito','cartao_debito') $$,
+       $$ NOT (metodo IN ('pix','boleto','cartao_credito','cartao_debito')) $$),
+      ('ck_gateway_cobrancas_status', $$ status IN ('pendente','autorizada','paga','expirada','cancelada','estornada','falhou') $$,
+       $$ NOT (status IN ('pendente','autorizada','paga','expirada','cancelada','estornada','falhou')) $$)
+    ) AS v(nome, ddl, regra_invalida)
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.gateway_cobrancas'::regclass AND conname = c.nome) THEN
+      EXECUTE format('ALTER TABLE gateway_cobrancas ADD CONSTRAINT %I CHECK (%s) NOT VALID', c.nome, c.ddl);
+    END IF;
+    IF NOT (SELECT convalidated FROM pg_constraint WHERE conrelid = 'public.gateway_cobrancas'::regclass AND conname = c.nome) THEN
+      EXECUTE format('SELECT COUNT(*) FROM gateway_cobrancas WHERE %s', c.regra_invalida) INTO n_violacoes;
+      IF n_violacoes = 0 THEN
+        EXECUTE format('ALTER TABLE gateway_cobrancas VALIDATE CONSTRAINT %I', c.nome);
+      ELSE
+        RAISE NOTICE 'P2-04: %.% mantida NOT VALID — % linha(s) legada(s) violam a regra.', 'gateway_cobrancas', c.nome, n_violacoes;
+      END IF;
+    END IF;
+  END LOOP;
+END
+$p204_gateway_checks$;
 
 CREATE TABLE IF NOT EXISTS gateway_webhook_events (
   id SERIAL PRIMARY KEY,
@@ -3045,12 +3064,25 @@ CREATE TABLE IF NOT EXISTS fin_extrato_transacoes (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_extrato_linha ON fin_extrato_transacoes (conta_id, linha_hash);
 CREATE INDEX IF NOT EXISTS idx_extrato_empresa_status ON fin_extrato_transacoes (empresa_id, status);
 CREATE INDEX IF NOT EXISTS idx_extrato_conta_data ON fin_extrato_transacoes (conta_id, data DESC);
-DO $$
+-- P2-04: mesmo contrato do bloco gateway acima — cria NOT VALID para proteger
+-- escritas novas e valida condicionalmente quando não há linha legada inválida.
+DO $p204_extrato_check$
+DECLARE
+  n_violacoes BIGINT;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_extrato_valor_positivo') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.fin_extrato_transacoes'::regclass AND conname = 'ck_extrato_valor_positivo') THEN
     ALTER TABLE fin_extrato_transacoes ADD CONSTRAINT ck_extrato_valor_positivo CHECK (valor > 0) NOT VALID;
   END IF;
-END $$;
+  IF NOT (SELECT convalidated FROM pg_constraint WHERE conrelid = 'public.fin_extrato_transacoes'::regclass AND conname = 'ck_extrato_valor_positivo') THEN
+    SELECT COUNT(*) INTO n_violacoes FROM fin_extrato_transacoes WHERE NOT (valor > 0);
+    IF n_violacoes = 0 THEN
+      ALTER TABLE fin_extrato_transacoes VALIDATE CONSTRAINT ck_extrato_valor_positivo;
+    ELSE
+      RAISE NOTICE 'P2-04: fin_extrato_transacoes.ck_extrato_valor_positivo mantida NOT VALID — % linha(s) legada(s) violam a regra.', n_violacoes;
+    END IF;
+  END IF;
+END
+$p204_extrato_check$;
 
 -- ---- 0026_producao_completa (FASE E2 — produção completa) ----
 --

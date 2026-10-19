@@ -2358,7 +2358,7 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'distribuicao_lucro', label: 'Distribuição de lucro', tone: 'slate' },
         ],
       },
-      { name: 'valor', label: 'Valor (R$)', type: 'money', required: true, min: 0 },
+      { name: 'valor', label: 'Valor (R$)', type: 'money', required: true, min: 0.01 },
       {
         name: 'forma_pagamento',
         label: 'Forma de pagamento',
@@ -2423,7 +2423,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'conta_id', label: 'Conta', type: 'ref', ref: 'contas_financeiras', search: true },
       { name: 'centro_custo_id', label: 'Centro de custo', type: 'ref', ref: 'centros_custo', search: true, list: false, section: 'Gerencial', hint: 'Rateio gerencial: Loja, Produção, Administrativo...' },
       { name: 'descricao', label: 'Descrição', type: 'text', required: true, search: true, maxLength: 200, wide: true },
-      { name: 'valor', label: 'Valor bruto (R$)', type: 'money', required: true, min: 0 },
+      { name: 'valor', label: 'Valor bruto (R$)', type: 'money', required: true, min: 0.01 },
       { name: 'taxa_pct', label: 'Taxa da operadora (%)', type: 'percent', min: 0, max: 99.99, default: 0, list: false, section: 'Gerencial', hint: 'Mercado Pago, cartão etc. O líquido (bruto − taxa) é o que entra na conta.' },
       { name: 'valor_liquido', label: 'Valor líquido (R$)', type: 'money', min: 0, section: 'Gerencial', hint: 'Calculado: valor − taxa. Editável para ajustar centavos.' },
       { name: 'vencimento', label: 'Vencimento', type: 'date', list: false, section: 'Financeiro' },
@@ -2507,7 +2507,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias_financeiras', search: true },
       { name: 'conta_id', label: 'Conta', type: 'ref', ref: 'contas_financeiras', search: true },
       { name: 'centro_custo_id', label: 'Centro de custo', type: 'ref', ref: 'centros_custo', search: true, list: false },
-      { name: 'valor', label: 'Valor (R$)', type: 'money', required: true, min: 0 },
+      { name: 'valor', label: 'Valor (R$)', type: 'money', required: true, min: 0.01 },
       {
         name: 'forma_pagamento',
         label: 'Forma de pagamento',
@@ -2600,7 +2600,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'data', label: 'Data', type: 'date', required: true, search: true },
       { name: 'conta_origem_id', label: 'Conta de origem', type: 'ref', ref: 'contas_financeiras', required: true, search: true },
       { name: 'conta_destino_id', label: 'Conta de destino', type: 'ref', ref: 'contas_financeiras', required: true, search: true },
-      { name: 'valor', label: 'Valor (R$)', type: 'money', required: true, min: 0 },
+      { name: 'valor', label: 'Valor (R$)', type: 'money', required: true, min: 0.01 },
       { name: 'descricao', label: 'Descrição', type: 'text', search: true, maxLength: 200, wide: true, placeholder: 'Ex.: depósito do caixa, repasse do Mercado Pago...' },
       {
         name: 'status',
