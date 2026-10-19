@@ -148,6 +148,8 @@ const ROTAS_NEGADAS_EMERGENCIA: Array<[string, string, unknown]> = [
   ['GET', '/vendas', undefined],
   ['POST', '/vendas', { cliente_id: 1, data: '2026-01-01' }],
   ['GET', '/financeiro/resumo', undefined],
+  ['GET', '/meta', undefined],
+  ['GET', '/dashboard', undefined],
   ['GET', '/auth/sessoes', undefined],
   ['GET', '/auth/preferences', undefined],
   ['PUT', '/auth/preferences', { preferencias: { x: 1 } }],
@@ -201,6 +203,17 @@ test('PROD-DB-01.3 — token de emergência limitado a diagnóstico (HTTP real +
   const meA = await http(a.baseUrl, 'GET', '/auth/me', tokenEmergencia);
   assert.equal(meA.status, 200, `A: /auth/me de diagnóstico deveria ser 200; veio ${meA.status}`);
   assert.equal(Number(meA.body?.user?.id), 0);
+
+  // O conjunto ALCANÇÁVEL é exatamente a allowlist: nada além de /auth/me,
+  // /auth/politica-senha e /auth/logout. Isto trava a expansão acidental de
+  // privilégio caso alguém adicione rotas sem revisar o guard de emergência.
+  for (const [metodo, rota, corpo] of [
+    ['GET', '/auth/politica-senha', undefined],
+    ['POST', '/auth/logout', {}],
+  ] as Array<[string, string, unknown]>) {
+    const r = await http(a.baseUrl, metodo, rota, tokenEmergencia, corpo);
+    assert.equal(r.status, 200, `A: ${metodo} ${rota} (diagnóstico) deveria ser 200; veio ${r.status} ${r.text.slice(0, 160)}`);
+  }
 
   // Todas as demais rotas (escrita, admin, negócio, sessões, MFA, preferências)
   // devem ser NEGADAS — nunca 200, nunca 500 não controlado.

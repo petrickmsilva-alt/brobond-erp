@@ -547,8 +547,17 @@ D loginFailed: senha errada 401 (controlado)
 - A restrição vale por instância: como `isDbDegraded()` é um estado de processo,
   um deploy com o banco fora aceita o token; após a recuperação (mesmo processo)
   o token deixa de valer — que é exatamente o comportamento desejado.
-- `POST /api/auth/logout` continua respondendo 503 com o banco fora (a revogação
-  persistente não acontece). Decisão herdada do PROD-DB-01.2, mantida.
+- `POST /api/auth/logout` do token de emergência responde **200** (nada a
+  revogar: id 0 não tem sessão persistida). Para um usuário real com o banco
+  fora, o logout continua 503 (não há como revogar a sessão) — decisão herdada
+  do PROD-DB-01.2, mantida.
+- **Limite pré-existente (PROD-DB-01.2, não introduzido aqui):** em modo
+  degradado, a prontidão já bloqueia `/api/meta` e todo o negócio com 503. Como
+  o SPA chama `/api/meta` logo após o login, a sessão de emergência serve para
+  **diagnóstico via API** (`/api/auth/me`, `/api/health`), não para operar a
+  interface completa. Isso é por desenho (prontidão = serviço de negócio
+  indisponível); a auditoria PROD-DB-01.3 apenas **confirma e documenta** o
+  alcance real do token.
 
 ---
 
