@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hasDatabaseUrl, isDbConnected, migrate } from './db';
+import { dbStatus, hasDatabaseUrl, isDbConnected, isDbDegraded, migrate, migrationError } from './db';
 import {
   ADMIN_EMAIL,
   changePassword,
@@ -310,9 +310,42 @@ function resourceParam(req: Request, _res: Response, next: NextFunction) {
 // ----------------------------------------------------------------------------
 // Público
 // ----------------------------------------------------------------------------
-app.get('/api/health', (_req, res) =>
-  res.json({ ok: true, db: isDbConnected() ? 'postgres' : 'memory', uploads: uploadProvider(), version: VERSION })
-);
+app.get('/api/health', (_req, res) => {
+  // PROD-DB-01.2 — três estados explícitos (nunca confundir degradado com
+  // demonstração):
+  //   db:"memory"            → modo demonstração (sem DATABASE_URL);
+  //   db:"postgres"          → PostgreSQL conectado E pronto (200);
+  //   db:"postgres-degraded" → DATABASE_URL configurada, banco NÃO pronto (503).
+  // A Render usa este path como healthCheckPath: só promove a instância com 200,
+  // ou seja, apenas em `ready`. O corpo NÃO expõe o texto do erro (pode conter
+  // nomes de tabela/coluna) — ele fica no log e em `migrationError()`.
+  const status = dbStatus();
+  const db = status === 'demo' ? 'memory' : status === 'ready' ? 'postgres' : 'postgres-degraded';
+  const body = { ok: status !== 'degraded', db, uploads: uploadProvider(), version: VERSION };
+  if (status === 'degraded') return res.status(503).json(body);
+  res.json(body);
+});
+
+// ----------------------------------------------------------------------------
+// PROD-DB-01.1 — prontidão do banco obrigatório.
+//
+// Quando DATABASE_URL existe mas o banco não está pronto (falha da cadeia
+// versionada ou bootstrap do db/schema.sql incompleto), a instância NÃO pode
+// atender negócio: serviria com schema desatualizado — foi assim que /vendas
+// respondeu 42703 em produção. O health responde 503 (a Render não promove a
+// instância) e este middleware bloqueia as rotas de negócio. Só continuam
+// respondendo o health e a autenticação (necessária para diagnóstico/acesso);
+// os webhooks dos provedores são montados antes do express.json() e seguem
+// intactos. Sem DATABASE_URL (modo demonstração) nada aqui bloqueia.
+// ----------------------------------------------------------------------------
+const ROTAS_PERMITIDAS_SEM_BANCO_PRONTO = [/^\/api\/auth\//];
+function bloqueioDeProntidao(req: Request, res: Response, next: NextFunction) {
+  if (!isDbDegraded()) return next();
+  if (req.path === '/api/health') return next();
+  if (ROTAS_PERMITIDAS_SEM_BANCO_PRONTO.some((re) => re.test(req.path))) return next();
+  return res.status(503).json({ error: 'Banco de dados não está pronto. O serviço está indisponível até a migração concluir.' });
+}
+app.use(bloqueioDeProntidao);
 app.post('/api/auth/login', loginRateLimit, wrap(login));
 // Segundo fator do login (TOTP): ticket de 10 min emitido no 1º passo.
 app.post('/api/auth/login/mfa', wrap(loginMFA));
@@ -349,13 +382,40 @@ app.use('/api', wrap(requireAuth));
 // no próprio fluxo de troca de senha — ver bloquearSenhaProvisoria.
 app.use('/api', bloquearSenhaProvisoria);
 
+// PROD-DB-01.3 — o acesso de emergência (id 0, perfil 'admin') é um ADMIN
+// SINTÉTICO: existe para diagnóstico e recuperação enquanto o banco está fora,
+// não para operar. Sem esta lista explícita, o token passava por requireRole e
+// chegava a handlers administrativos/escrita. Aqui ele fica restrito a
+// diagnóstico estritamente leitura + encerrar a própria sessão. Qualquer outra
+// rota responde 403 (negado por desenho) — as rotas de negócio já respondem 503
+// pelo bloqueioDeProntidao, que roda antes. `requireAuth` (acima) garante que
+// esse token só é aceito no estado degradado.
+const ROTAS_EMERGENCIA: Array<[string, string]> = [
+  ['GET', '/auth/me'],
+  ['GET', '/auth/politica-senha'],
+  ['POST', '/auth/logout'],
+];
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+  const u = (req as { user?: { id?: number } }).user;
+  if (!u || Number(u.id) > 0) return next();
+  // `req.path` é relativo ao mount (`/api`): comparar sem o prefixo.
+  const caminho = req.baseUrl + req.path;
+  const permitida = ROTAS_EMERGENCIA.some(([metodo, rota]) => req.method === metodo && caminho === `/api${rota}`);
+  if (permitida) return next();
+  return res.status(403).json({
+    error: 'O acesso de emergência é restrito a diagnóstico e recuperação enquanto o banco está indisponível.',
+    code: 'EMERGENCIA_RESTRITA',
+  });
+});
+
 // SEC-03 — TODO o prefixo /api/admin/* exige privilégio administrativo
 // verificado no SERVIDOR (guard canônico requireRole, derivado da identidade
 // autenticada do JWT/sessão — nunca de role/perfil/empresa_id do cliente).
 // O `admin` do caminho não autoriza nada por si: sem este guard, um gerente
 // autenticado alcançava dados globais (auditoria, status, crons, backup).
-// Administradores (incluindo o acesso de emergência, perfil 'admin') seguem
-// entrando normalmente; qualquer outro perfil autenticado recebe 403.
+// Administradores reais seguem entrando normalmente; qualquer outro perfil
+// autenticado recebe 403. O acesso de emergência (id 0) NÃO alcança este
+// prefixo: o guard de emergência acima o barra antes.
 app.use('/api/admin', requireRole('admin'));
 
 app.get('/api/auth/me', me);
@@ -920,6 +980,18 @@ async function start() {
       await migrate();
     } catch (e: any) {
       console.error('❌ Falha ao migrar o banco:', e?.message || e);
+    }
+    // PROD-DB-01.1 — banco obrigatório quebrado não vira "serviço saudável".
+    // Em produção o processo encerra para a plataforma reiniciar (a recuperação
+    // é: corrigir a causa e o restart volta pronto). Fora de produção a
+    // instância segue de pé, porém com as rotas de negócio bloqueadas (503).
+    if (isDbDegraded()) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error(`❌ Banco obrigatório não está pronto (${migrationError()}) — encerrando o processo (exit 1) para reinício pela plataforma.`);
+        process.exit(1);
+      }
+      console.error(`⚠️  Banco obrigatório não está pronto (${migrationError()}) — rotas de negócio bloqueadas (503) até a migração concluir.`);
+      return;
     }
   }
   // Liga o módulo de conectores ao pool do Postgres e à trilha de auditoria.

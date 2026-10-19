@@ -2,7 +2,7 @@
 // SEGURANÇA: nomes de tabelas e colunas vêm exclusivamente de resources.ts;
 // todos os valores do usuário entram como parâmetros ($1, $2...).
 import type { PoolClient } from 'pg';
-import { pool, query, withTransaction } from './db';
+import { isDbConnected, pool, query, withTransaction } from './db';
 import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './resources';
 import { hashCadeiaAuditoria, normalizarPayloadAuditoria, verificarCadeiaAuditoria } from './auditChain';
@@ -880,5 +880,5 @@ export class PgStore implements Store {
 }
 
 export function isPgAvailable(): boolean {
-  return !!pool;
+  return !!pool && isDbConnected();
 }

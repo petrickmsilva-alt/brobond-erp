@@ -7,7 +7,8 @@ import { empresaDoAtorAudit, empresaExplicitaAudit } from './empresa';
 import { limparToken } from './validate';
 import { avisarOrigemIndefinida, linkPublicoAsync, urlAbsoluta } from './urlPublica';
 import { getStore } from './services';
-import type { Row } from './store';
+import { isDbDegraded } from './db';
+import type { Row, Store } from './store';
 import { loginBucketKey, registerLoginFailure, registerLoginSuccess, registrarFalha, registrarSucesso, exigirRateLimit } from './security';
 import { validarPoliticaSenha } from './services';
 import { hashPassword, verifyPassword, verifyPasswordDetailed, hashAtualizado } from './password';
@@ -236,17 +237,22 @@ export async function login(req: Request, res: Response) {
     return res.status(400).json({ error: 'E-mail e senha são obrigatórios' });
   }
 
-  const store = getStore();
+  // PROD-DB-01.2 — a obtenção do store fica DENTRO do try: quando o banco está
+  // indisponível/degradado, `getStore()` lança (503) em vez de entregar o
+  // MemStore. O erro vira `lookupFailed` para preservar o ACESSO DE EMERGÊNCIA
+  // do administrador (abaixo), que existe justamente para o banco fora do ar.
+  let store: Store | null = null;
   let row: Row | null = null;
   let lookupFailed = false;
   try {
+    store = getStore();
     row = await store.findUserByEmail(email);
   } catch (e: any) {
     lookupFailed = true;
     console.warn('⚠️  Falha ao consultar usuários:', e?.message || e);
   }
 
-  if (row) {
+  if (row && store) {
     if (row.ativo === false) {
       return res.status(403).json({ error: 'Usuário desativado. Fale com o administrador.' });
     }
@@ -350,6 +356,9 @@ export async function login(req: Request, res: Response) {
     console.warn('⚠️  Login de emergência do administrador (banco indisponível).');
     return res.json({ token: signToken(user, { expiresIn: '1h' }), user });
   }
+  // Sem o acesso de emergência, banco indisponível é indisponibilidade — não
+  // "senha incorreta". 503 honesto; nenhuma escrita/auditoria em memória.
+  if (lookupFailed) throw new HttpError(503, 'Banco de dados indisponível. Tente novamente em instantes.');
 
   return loginFailed(req, res, null);
 }
@@ -496,32 +505,39 @@ async function loginFailed(req: Request, res: Response, row: Row | null) {
   const left = await registerLoginFailure(req);
   // Contador POR USUÁRIO: N falhas seguidas bloqueiam a conta por alguns minutos.
   if (row) await registrarFalhaUsuario(row, clientIp(req));
-  if (left === 0) {
-    await getStore()
-      .audit({
-        usuario_id: row ? Number(row.id) : null,
-        usuario: row?.nome || normalizeEmail(req.body?.email) || null,
-        acao: 'login_falha',
-        recurso: null,
-        registro_id: null,
-        descricao: `Login BLOQUEADO temporariamente por excesso de tentativas — ${normalizeEmail(req.body?.email)} (${clientIp(req) || 'ip desconhecido'})`,
-        empresa_id: empresaExplicitaAudit(row?.empresa_id, null),
-      })
-      .catch(() => undefined);
-  } else if (row) {
-    // Trilha de tentativas (alimenta o gráfico de segurança do módulo Usuários;
-    // a senha jamais é registrada). E-mails inexistentes não geram trilha.
-    await getStore()
-      .audit({
-        usuario_id: Number(row.id),
-        usuario: String(row.nome || row.email),
-        acao: 'login_falha',
-        recurso: null,
-        registro_id: null,
-        descricao: `Senha incorreta para ${String(row.email)} (${clientIp(req) || 'ip desconhecido'})`,
-        empresa_id: empresaDoAtorAudit(row),
-      })
-      .catch(() => undefined);
+  // PROD-DB-01.3 — auditoria é best-effort: `getStore()` pode lançar (banco
+  // indisponível/degradado) e a falha de login NUNCA pode virar um 500 não
+  // controlado. Sem store, seguimos para o 401 canônico.
+  try {
+    if (left === 0) {
+      await getStore()
+        .audit({
+          usuario_id: row ? Number(row.id) : null,
+          usuario: row?.nome || normalizeEmail(req.body?.email) || null,
+          acao: 'login_falha',
+          recurso: null,
+          registro_id: null,
+          descricao: `Login BLOQUEADO temporariamente por excesso de tentativas — ${normalizeEmail(req.body?.email)} (${clientIp(req) || 'ip desconhecido'})`,
+          empresa_id: empresaExplicitaAudit(row?.empresa_id, null),
+        })
+        .catch(() => undefined);
+    } else if (row) {
+      // Trilha de tentativas (alimenta o gráfico de segurança do módulo Usuários;
+      // a senha jamais é registrada). E-mails inexistentes não geram trilha.
+      await getStore()
+        .audit({
+          usuario_id: Number(row.id),
+          usuario: String(row.nome || row.email),
+          acao: 'login_falha',
+          recurso: null,
+          registro_id: null,
+          descricao: `Senha incorreta para ${String(row.email)} (${clientIp(req) || 'ip desconhecido'})`,
+          empresa_id: empresaDoAtorAudit(row),
+        })
+        .catch(() => undefined);
+    }
+  } catch (e: any) {
+    console.warn('⚠️  Não foi possível registrar a falha de login na auditoria:', e?.message || e);
   }
   const hint = left > 0 && left <= 2 ? ` Restam ${left} tentativa${left === 1 ? '' : 's'}.` : '';
   return res.status(401).json({ error: `E-mail ou senha incorretos.${hint}` });
@@ -743,6 +759,15 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   // Tickets de MFA não são tokens de acesso.
   if (payload.typ && payload.typ !== 'access') {
     return res.status(401).json({ error: 'Token inválido. Entre novamente.' });
+  }
+
+  // PROD-DB-01.3 — o token de emergência (id 0) SÓ vale enquanto o banco está
+  // degradado. Ele não tem linha em `usuarios`, então não há `token_versao`,
+  // sessão nem MFA que o revoguem, e o bloco abaixo PULA toda revalidação para
+  // id <= 0. Se continuasse aceito depois da recuperação, viraria um
+  // administrador pleno e NÃO revogável (basta esperar o banco voltar).
+  if (!(Number(payload.id) > 0) && !isDbDegraded()) {
+    return res.status(401).json({ error: 'Acesso de emergência válido apenas com o banco indisponível. Entre novamente.' });
   }
 
   // Revalida o usuário (ativo? perfil mudou? sessão revogada?) — exceto o

@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
 import { MemStore } from './memdb';
 import { PgStore, isPgAvailable, translatePgError } from './pgstore';
+import { hasDatabaseUrl } from './db';
 import { getResource, RESOURCES, type Resource } from './resources';
 import { labelOf, type ListParams, type Payload, type Row, type Store, type Tx } from './store';
 import { validatePayload } from './validate';
@@ -34,8 +35,20 @@ const PERFIL_RANK: Record<string, number> = { operador: 1, gerente: 2, admin: 3 
 
 let store: Store | null = null;
 
+/**
+ * PROD-DB-01.1 — seleção do store por PRONTIDÃO, nunca por mera existência do
+ * pool. Se DATABASE_URL existe mas o banco não está pronto (migração falhou),
+ * NÃO cair para o MemStore: isso aceitaria escritas em memória como se fossem
+ * persistência real. Nesse estado `bloqueioDeProntidao` (index.ts) barra as
+ * rotas de negócio antes de chegar aqui; o erro abaixo é a última linha de
+ * defesa caso algum caminho interno chame o store direto.
+ */
 export function getStore(): Store {
-  if (!store) store = isPgAvailable() ? new PgStore() : new MemStore();
+  if (!store) {
+    if (isPgAvailable()) store = new PgStore();
+    else if (hasDatabaseUrl()) throw new HttpError(503, 'Banco de dados não está pronto.');
+    else store = new MemStore();
+  }
   return store;
 }
 
