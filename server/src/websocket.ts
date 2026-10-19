@@ -40,6 +40,14 @@ export function initWebSocket(httpServer: HttpServer): SocketServer {
       return next(new Error('Token inválido'));
     }
     if (payload?.typ && payload.typ !== 'access') return next(new Error('Token inválido'));
+    // PROD-DB-01.3 — o token de emergência (id 0) só vale com o banco degradado
+    // e não entra em salas globais (dashboard/perfil). Sem isso ele sobreviveria
+    // à recuperação e receberia eventos do sistema.
+    const emergencia = !(Number(payload?.id) > 0);
+    if (emergencia) {
+      const { isDbDegraded } = await import('./db');
+      if (!isDbDegraded()) return next(new Error('Acesso de emergência válido apenas com o banco indisponível.'));
+    }
     if (payload?.id > 0) {
       if (!payload.sid) return next(new Error('Sessão inválida — entre novamente.'));
       try {
@@ -60,10 +68,14 @@ export function initWebSocket(httpServer: HttpServer): SocketServer {
     const user = (socket as any).user as AuthPayload;
     console.log(`🔌 WebSocket: ${user.name} (${user.email}) conectado`);
 
-    // Entra na sala pessoal (para chat e notificações)
+    // Entra na sala pessoal (para chat e notificações). O acesso de emergência
+    // (id 0) NÃO entra em salas globais — não recebe dashboard nem eventos por
+    // perfil (PROD-DB-01.3).
     socket.join(`user:${user.id}`);
-    socket.join('dashboard'); // todos recebem updates do dashboard
-    socket.join(`perfil:${user.perfil}`); // por perfil
+    if (user.id > 0) {
+      socket.join('dashboard'); // todos recebem updates do dashboard
+      socket.join(`perfil:${user.perfil}`); // por perfil
+    }
 
     // ----- Chat -----
     socket.on('chat:enviar', (data: { para_id: number; texto: string }) => {

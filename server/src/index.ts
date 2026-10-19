@@ -382,13 +382,40 @@ app.use('/api', wrap(requireAuth));
 // no próprio fluxo de troca de senha — ver bloquearSenhaProvisoria.
 app.use('/api', bloquearSenhaProvisoria);
 
+// PROD-DB-01.3 — o acesso de emergência (id 0, perfil 'admin') é um ADMIN
+// SINTÉTICO: existe para diagnóstico e recuperação enquanto o banco está fora,
+// não para operar. Sem esta lista explícita, o token passava por requireRole e
+// chegava a handlers administrativos/escrita. Aqui ele fica restrito a
+// diagnóstico estritamente leitura + encerrar a própria sessão. Qualquer outra
+// rota responde 403 (negado por desenho) — as rotas de negócio já respondem 503
+// pelo bloqueioDeProntidao, que roda antes. `requireAuth` (acima) garante que
+// esse token só é aceito no estado degradado.
+const ROTAS_EMERGENCIA: Array<[string, string]> = [
+  ['GET', '/auth/me'],
+  ['GET', '/auth/politica-senha'],
+  ['POST', '/auth/logout'],
+];
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+  const u = (req as { user?: { id?: number } }).user;
+  if (!u || Number(u.id) > 0) return next();
+  // `req.path` é relativo ao mount (`/api`): comparar sem o prefixo.
+  const caminho = req.baseUrl + req.path;
+  const permitida = ROTAS_EMERGENCIA.some(([metodo, rota]) => req.method === metodo && caminho === `/api${rota}`);
+  if (permitida) return next();
+  return res.status(403).json({
+    error: 'O acesso de emergência é restrito a diagnóstico e recuperação enquanto o banco está indisponível.',
+    code: 'EMERGENCIA_RESTRITA',
+  });
+});
+
 // SEC-03 — TODO o prefixo /api/admin/* exige privilégio administrativo
 // verificado no SERVIDOR (guard canônico requireRole, derivado da identidade
 // autenticada do JWT/sessão — nunca de role/perfil/empresa_id do cliente).
 // O `admin` do caminho não autoriza nada por si: sem este guard, um gerente
 // autenticado alcançava dados globais (auditoria, status, crons, backup).
-// Administradores (incluindo o acesso de emergência, perfil 'admin') seguem
-// entrando normalmente; qualquer outro perfil autenticado recebe 403.
+// Administradores reais seguem entrando normalmente; qualquer outro perfil
+// autenticado recebe 403. O acesso de emergência (id 0) NÃO alcança este
+// prefixo: o guard de emergência acima o barra antes.
 app.use('/api/admin', requireRole('admin'));
 
 app.get('/api/auth/me', me);

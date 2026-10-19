@@ -457,6 +457,99 @@ objetivo do gate.
   da sessão não acontece. Alternativa (logout local silencioso) foi rejeitada
   por deixar o token válido no servidor — decisão de segurança, documentada.
 
+## 15. PROD-DB-01.3 — auditoria do token de emergência
+
+### 15.1 Achado da revisão independente
+
+O login de emergência (id `0`, `perfil: 'admin'`) existe para permitir
+diagnóstico quando o banco está fora. A revisão apontou que esse token
+atravessava caminhos que normalmente revalidam o usuário no banco. A auditoria
+confirmou o problema **com prova em PostgreSQL real** (não por leitura de
+código).
+
+Mecânica: `requireAuth` **pula** toda revalidação para `id <= 0` — não há
+`sid`, `token_versao`, linha em `usuarios` nem MFA a conferir. O token é um JWT
+comum de 1 h, com `perfil: 'admin'`.
+
+### 15.2 Vetores PROVADOS (antes da correção)
+
+Servidor real, PostgreSQL real, dois processos com o **mesmo `JWT_SECRET`**:
+
+| Vetor | Estado do banco | Rota | Antes | Depois |
+|---|---|---|---|---|
+| A1 | degradado | `GET /auth/sessoes` | **200** (`{"sessoes":[]}`) | 403 `EMERGENCIA_RESTRITA` |
+| A2 | degradado | `GET /auth/preferences` / `PUT` | **200** | 403 `EMERGENCIA_RESTRITA` |
+| B1 | **recuperado** | `GET /auth/me` | **200** (token da queda aceito) | 401 |
+| B2 | **recuperado** | `GET /admin/notificacoes/status` | **200** | 401 |
+| B3 | **recuperado** | `GET /admin/auditoria/verificar` | **200** | 401 |
+| B4 | **recuperado** | `GET /usuarios/resumo` | **200** | 401 |
+| B5 | **recuperado** | `GET /vendas` | **200** | 401 |
+| B6 | recuperado | `POST /auth/reautenticar` | **200** | 401 |
+| B7 | recuperado | `POST /usuarios/1/desativar` (após B6) | passava o guard de admin e reauth | 401 |
+
+**O vetor B é o grave:** um token emitido durante a queda **continua válido como
+administrador pleno depois que o banco volta** — e **não há como revogá-lo**
+(id 0 não tem linha em `usuarios`, então desativar usuários ou `logout-all` não
+o atingem). Basta esperar a recuperação.
+
+### 15.3 Correção aplicada
+
+1. **`server/src/auth.ts` — `requireAuth`:** token com `id <= 0` só é aceito
+   quando `isDbDegraded()`. Fora do estado degradado → **401**. Fecha o vetor B
+   (o token deixa de sobreviver à recuperação) e elimina o admin sintético
+   não revogável.
+2. **`server/src/index.ts` — allowlist explícita de emergência:** o token id 0
+   só alcança `GET /api/auth/me`, `GET /api/auth/politica-senha` e
+   `POST /api/auth/logout`; qualquer outra rota → **403 `EMERGENCIA_RESTRITA`**.
+   As rotas de negócio continuam em 503 pelo `bloqueioDeProntidao` (roda antes).
+   O `/api/admin/*` (`requireRole('admin')`) deixa de ser alcançável pelo admin
+   sintético.
+3. **`server/src/auth.ts` — `loginFailed`:** a auditoria passou a ser
+   *best-effort* com `try/catch`; `getStore()` pode lançar com o banco fora e a
+   falha de login nunca mais vira **500 não controlado** (resposta canônica 401).
+4. **`server/src/websocket.ts`:** o handshake recusa o token id 0 quando o banco
+   não está degradado, e o id 0 **não entra** nas salas globais (`dashboard`,
+   `perfil:*`).
+
+### 15.4 Capacidades efetivas do token de emergência (depois)
+
+- **Só existe** enquanto `isDbDegraded()`.
+- Alcança apenas `GET /api/auth/me`, `GET /api/auth/politica-senha`,
+  `POST /api/auth/logout` (todas sem dados de negócio).
+- **Nunca** alcança `/api/admin/*`, `/api/usuarios/*`, CRUD genérico, financeiro
+  ou estoque (403/503).
+- Não entra em salas WebSocket globais e não sobrevive à recuperação do banco.
+
+### 15.5 Prova automatizada
+
+`server/test/pg/prod-db-013-emergency-token.test.ts` (PostgreSQL 16 real + HTTP
+real + WebSocket real). Sem `DATABASE_URL` o arquivo FALHA (não é permitido
+pular). Evidência do run verde:
+
+```
+A degradado: login emergência 200 (id=0)
+A degradado: /auth/sessoes 403; /auth/preferences 403; /auth/change-password 403; /auth/mfa/setup 403
+A degradado: /admin/* e negócio → 503 (prontidão); WebSocket handshake → conectado (sem salas globais)
+B recuperado: token da queda → /auth/me 401; /admin/notificacoes/status 401; /usuarios/:id/desativar 401; /vendas 401; WebSocket recusado
+C regressão: login normal 200; GET /vendas 200
+D loginFailed: senha errada 401 (controlado)
+```
+
+### 15.6 Impacto / compatibilidade
+
+- **Nenhuma** mudança no fluxo de recuperação: com o banco fora, o
+  administrador continua logando e enxergando o diagnóstico (`/auth/me`).
+- O comportamento só fica **mais restrito**, nunca mais permissivo.
+- Nenhum usuário real (id > 0) é afetado.
+
+### 15.7 Limitações
+
+- A restrição vale por instância: como `isDbDegraded()` é um estado de processo,
+  um deploy com o banco fora aceita o token; após a recuperação (mesmo processo)
+  o token deixa de valer — que é exatamente o comportamento desejado.
+- `POST /api/auth/logout` continua respondendo 503 com o banco fora (a revogação
+  persistente não acontece). Decisão herdada do PROD-DB-01.2, mantida.
+
 ---
 
 ## Fora do escopo
