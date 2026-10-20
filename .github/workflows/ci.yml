@@ -81,6 +81,15 @@ jobs:
           node-version: 22
       - name: Instalar dependências da API
         run: npm --prefix server install
+      # O wrapper real do script E4.2 (PROD-DB-01.5.1) executa o arquivo via
+      # psql, com o mesmo `\if :apply / BEGIN / COMMIT / ROLLBACK` do operador.
+      # Sem o binário o teste se auto-pula e o gate REPROVA (skip não é
+      # aprovação), então instalamos o cliente aqui.
+      - name: Instalar cliente PostgreSQL (psql) para o teste do wrapper E4.2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-16
+          psql --version
       - name: Confirmar versão oficial PostgreSQL 16.14
         working-directory: server
         run: |
