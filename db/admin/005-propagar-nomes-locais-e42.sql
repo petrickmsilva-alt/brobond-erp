@@ -80,6 +80,15 @@
 
 \set ON_ERROR_STOP on
 
+-- PROD-DB-01.5.2.1 — REVISÃO DESTE ARQUIVO.
+-- A revisão aparece como coluna no cabeçalho abaixo, de modo que a saída de
+-- QUALQUER execução (inclusive um DRY-RUN colado num chamado) identifique sem
+-- ambiguidade qual arquivo rodou. O incidente PROD-DB-01.5.2.1 aconteceu porque
+-- um operador executou uma CÓPIA ANTIGA (01.5.1), que nem possui o parâmetro
+-- `normalizar_classe_c`; o cabeçalho de 2 colunas daquela cópia foi a evidência.
+-- Use `db/admin/run-005-e42.sh` para recusar execução de cópia defasada.
+\set e42_revisao 'PROD-DB-01.5.2.1'
+
 -- Modo: APPLY somente com parâmetro explícito; default é DRY-RUN.
 \if :{?apply}
 \else
@@ -98,7 +107,8 @@
 \endif
 SELECT set_config('e42.apply', :'apply', false) AS modo_apply,
        set_config('e42.confirmacao', :'confirmacao', false) AS confirmacao,
-       set_config('e42.normalizar_classe_c', :'normalizar_classe_c', false) AS normalizar_classe_c;
+       set_config('e42.normalizar_classe_c', :'normalizar_classe_c', false) AS normalizar_classe_c,
+       :'e42_revisao' AS revisao;
 
 -- Autorização de COMMIT: começa DESLIGADA; o bloco só a liga quando a operação
 -- autorizada realmente completou a pós-validação. O wrapper \if abaixo exige
