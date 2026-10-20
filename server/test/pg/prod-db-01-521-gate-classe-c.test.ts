@@ -22,6 +22,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from 'pg';
 
@@ -245,3 +248,60 @@ test('PROD-DB-01.5.2.1 — o comando de produção (-f) autoriza a classe C; fla
     await admin.end().catch(() => undefined);
   }
 });
+
+// ============================================================================
+// PROD-DB-01.5.2.1 — GUARDA CONTRA CÓPIA DEFASADA (origem do incidente).
+//
+// O incidente não foi um defeito de lógica do HEAD: o operador executou uma
+// CÓPIA ANTIGA (revisão 01.5.1, sem `normalizar_classe_c`). Este teste prova que
+// o executor seguro `db/admin/run-005-e42.sh` RECUSA essa classe de erro:
+//   - arquivo sem o gate de classe C (cópia anterior ao 01.5.2) → recusa;
+//   - arquivo sem o marcador de revisão → recusa;
+//   - arquivo que difere do HEAD do repositório → recusa;
+//   - arquivo íntegro (HEAD) → executa normalmente.
+// ============================================================================
+test('PROD-DB-01.5.2.1 — o executor recusa cópia defasada do script 005', async () => {
+  const RUNNER = fileURLToPath(new URL('../../../db/admin/run-005-e42.sh', import.meta.url));
+  const SCRIPT_SRC = fileURLToPath(
+    new URL('../../../db/admin/005-propagar-nomes-locais-e42.sql', import.meta.url)
+  );
+  const origem = readFileSync(SCRIPT_SRC, 'utf8');
+  assert.match(origem, /normalizar_classe_c/, 'o script do HEAD deve conter o gate de classe C');
+  assert.match(origem, /PROD-DB-01\.5\.2\.1/, 'o script do HEAD deve conter o marcador de revisão');
+
+  const tmp = mkdtempSync(path.join(tmpdir(), 'e42run-'));
+  const runnerCopy = path.join(tmp, 'run-005-e42.sh');
+  const scriptCopy = path.join(tmp, '005-propagar-nomes-locais-e42.sql');
+  writeFileSync(runnerCopy, readFileSync(RUNNER, 'utf8'), { mode: 0o755 });
+
+  const executar = () =>
+    spawnSync(runnerCopy, [], {
+      encoding: 'utf8',
+      env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL, PGPASSWORD: process.env.PGPASSWORD || 'brobond' },
+    });
+
+  try {
+    // (1) Cópia anterior ao 01.5.2 (sem o gate) → recusada, nada executado.
+    writeFileSync(scriptCopy, origem.replace(/normalizar_classe_c/g, 'gatilho_ausente_xyz'));
+    const semGate = executar();
+    assert.notEqual(semGate.status, 0, 'cópia sem o gate de classe C deve ser recusada');
+    assert.match(semGate.stderr, /NÃO contém o gate de classe C/);
+
+    // (2) Gate presente, mas sem o marcador de revisão → recusada.
+    writeFileSync(scriptCopy, origem.replace(/PROD-DB-01\.5\.2\.1/g, 'PROD-DB-01.5.0'));
+    const semRevisao = executar();
+    assert.notEqual(semRevisao.status, 0, 'cópia sem o marcador de revisão deve ser recusada');
+    assert.match(semRevisao.stderr, /revisão esperada 'PROD-DB-01\.5\.2\.1' ausente/);
+
+    // (3) Fora de um repositório git, um arquivo íntegro é executado (DRY-RUN).
+    writeFileSync(scriptCopy, origem);
+    const ok = executar();
+    assert.equal(ok.status, 0, `arquivo íntegro deve executar:\n${ok.stderr}`);
+    assert.match(ok.stderr, /revisão do script: reconhece normalizar_classe_c=/);
+
+    console.log('\n=== PROD-DB-01.5.2.1 — executor recusa cópia defasada (gate/versão ausentes) ===');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
