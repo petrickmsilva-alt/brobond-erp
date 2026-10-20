@@ -50,7 +50,12 @@ Restrições respeitadas:
 |---|---|---|
 | `db/admin/005-propagar-nomes-locais-e42.sql` | script administrativo (não-migration) | DRY-RUN por padrão; APPLY com dupla confirmação; guardas; `BEGIN`/`COMMIT`/`ROLLBACK` |
 | `server/test/pg/prod-db-015-correcao-nomes-locais.test.ts` | teste PG | prova 69→0, IDs inalterados, isolamento por empresa, A/C abortam, idempotência; roda em transação revertida |
+| `server/test/pg/prod-db-01-51-wrapper-psql.test.ts` | teste PG (wrapper real) | executa o arquivo INTEIRO via `psql` num banco descartável: DRY-RUN, APPLY sem confirmação, APPLY com dupla confirmação, idempotência e a guarda F1 (fail-closed) |
 | `docs/RELATORIO-PROD-DB-01-5.md` | relatório | este documento |
+
+> **PROD-DB-01.5.1** adiciona o AFTER-CHECK fail-closed (§6/§7) e o teste do
+> wrapper real. O identificador `01.5.1` refere-se ao mesmo artefato `005`,
+> agora endurecido; não há migration nova.
 
 O script **não** é referenciado por nenhum runner de migração: a aplicação nunca
 o executa. É um arquivo manual em `db/admin/`.
@@ -147,12 +152,47 @@ E4.2/01.5 DRY-RUN: transação revertida (ROLLBACK). Nenhum dado foi alterado.
 
 ## 6. Pós-condições e critério de aceite
 
-- `nomes_locais_inconsistentes = 0` (o próprio script verifica e **aborta** se
-  não zerar; nesse caso a transação é revertida).
+### 6.1 Reprodução do achado F1 (evidência)
+
+Cenário: duas linhas de `estoques` da MESMA empresa/produto, `tamanho_id NULL`,
+mesmo `local_id`, textos diferentes (`Antigo`/`Outro`); o local é renomeado sem
+propagação. **Antes** da propagação **não** há duplicata (textos distintos);
+**depois** da propagação ambas viram o nome canônico ⇒ duplicata.
+
+| Passo | Estado | Contadores do preflight |
+|---|---|---|
+| ANTES | 2 linhas `Antigo`/`Outro` | `nomes_locais_inconsistentes=2`, `duplicatas_saldos=0` → preflight **permitiria** |
+| APPLY | propagaria ambas para `Local Novo` | `nomes_locais_inconsistentes=0`, **`duplicatas_saldos=1`** |
+| RESULTADO | **`RAISE EXCEPTION` ⇒ ROLLBACK** | `exit 3`; `Antigo`/`Outro` **intactos** (nada persistido) |
+
+Isso é exatamente o que o AFTER-CHECK fail-closed impede: sem ele, o script
+comitaria um estado que **ainda bloqueia a 0030**. A prova é automatizada no
+teste do wrapper (`prod-db-01-51-wrapper-psql.test.ts`, passo 5).
+
+### 6.2 Critério de aceite
+
+- **TODOS os contadores relevantes do preflight E4.2 = 0** (fail-closed). O
+  script **não** se limita a `nomes_locais_inconsistentes`: após os `UPDATE`s,
+  reexecuta os mesmos contadores da migração 0030
+  (`nomes_locais_inconsistentes`, `duplicatas_locais`, `duplicatas_padroes`,
+  `duplicatas_saldos`, `duplicatas_itens_inventario`, `saldos_invalidos`,
+  `vinculos_empresa`, `vinculos_locais`, `pdv_vinculos`, `pdv_nomes`,
+  `refs_operacionais`) e **aborta com `RAISE EXCEPTION`** se **qualquer um** for
+  `> 0`; nesse caso a transação é revertida e **nada é persistido**.
+
+  > **`nomes_locais_inconsistentes = 0` NÃO é suficiente isoladamente.** O
+  > desbloqueio da 0030 só é garantido quando **todos** os contadores do
+  > preflight E4.2 estão em 0. Um exemplo real (achado F1 da auditoria
+  > independente): duas linhas de `estoques` com `tamanho_id NULL` e o mesmo
+  > `local_id` mas textos diferentes não são duplicata **antes** da propagação
+  > (textos distintos) e passam a ser **depois** (ambas viram o nome canônico) —
+  > o contador `nomes_locais_inconsistentes` zera, mas `duplicatas_saldos` passa
+  > a `> 0` e a 0030 continuaria bloqueada. O AFTER-CHECK fail-closed detecta
+  > isso, aborta e reverte.
 - `local_id` e `empresa_id` **inalterados** em todas as linhas.
 - Nenhuma linha de outra empresa alterada.
-- Com o contador em 0, o preflight E4.2 deixa de bloquear e o DDL da 0030
-  (e o restante do `schema.sql`) pode ser aplicado.
+- **Somente quando todos os contadores = 0** o preflight E4.2 deixa de bloquear
+  e o DDL da 0030 (e o restante do `schema.sql`) pode ser aplicado.
 
 ---
 
@@ -166,17 +206,22 @@ E4.2/01.5 DRY-RUN: transação revertida (ROLLBACK). Nenhum dado foi alterado.
 3. **Transação única.** `BEGIN` no topo; `COMMIT` **somente** no caminho APPLY;
    qualquer erro/guarda ⇒ `ROLLBACK`. Se o contador não zerar, o script levanta
    exceção e a transação é revertida — nada fica pela metade.
-4. **Guardas que abortam** (nada é alterado):
+4. **AFTER-CHECK fail-closed.** Depois dos `UPDATE`s e **antes** do `COMMIT`, o
+   script reexecuta **todos** os contadores do preflight E4.2 (0030) e só comita
+   se **todos** forem 0. `nomes_locais_inconsistentes=0` isolado **não** basta —
+   a propagação pode revelar outro bloqueio (ex.: `duplicatas_saldos` com
+   `tamanho_id NULL`). Qualquer contador `> 0` ⇒ `RAISE EXCEPTION` ⇒ `ROLLBACK`.
+5. **Guardas que abortam** (nada é alterado):
    - **órfão**: `local_id` apontando para local inexistente;
    - **classe A**: `empresa_id` do registro ≠ `empresa_id` do local, ou texto de
      local `NULL` com `local_id` canônico;
    - **classe C**: diferença apenas de caixa/espaço (possível falso positivo).
-5. **Junção canônica.** Todo `UPDATE` casa `local_id = locais.id` **e**
+6. **Junção canônica.** Todo `UPDATE` casa `local_id = locais.id` **e**
    `empresa_id = locais.empresa_id`. É impossível propagar o nome de um local de
    outra empresa (reforçado pela FK composta `fk_e42_*_empresa_local`).
-6. **`IS DISTINCT FROM`** evita reescrever linhas já corretas (idempotência).
-7. **`ON_ERROR_STOP`** garante que qualquer erro aborte o psql com exit ≠ 0.
-8. **Não-migration.** O arquivo vive em `db/admin/`, fora da cadeia versionada;
+7. **`IS DISTINCT FROM`** evita reescrever linhas já corretas (idempotência).
+8. **`ON_ERROR_STOP`** garante que qualquer erro aborte o psql com exit ≠ 0.
+9. **Não-migration.** O arquivo vive em `db/admin/`, fora da cadeia versionada;
    o boot nunca o executa.
 
 ### Guarda de classe A vs. o que a FK já impede
@@ -221,13 +266,15 @@ o script **dentro de uma transação revertida** (nada persiste).
 | Classe A (texto NULL) | **aborta** (`classe A`); linha não alterada |
 | Classe C (caixa/espaço) | **aborta** (`classe C`); linha não alterada |
 | Idempotência | 2ª passada = 0 UPDATEs; contador 0 |
+| Wrapper real via `psql` (PROD-DB-01.5.1) | DRY-RUN=no-op; no-confirm=abort (exit 3); APPLY=69→0+COMMIT; 2ª passada=0; F1 dup_saldos=ROLLBACK |
+| F1 — duplicata de saldo (`tamanho_id NULL`) | **aborta no AFTER-CHECK fail-closed** (exit 3); `Antigo`/`Outro` intactos |
 | Rollback do teste | `empresas`/`locais`/`estoques` de fixture = 0 após o teste |
 
 ### Verificações do projeto
 
 | Verificação | Resultado |
 |---|---|
-| Suíte PG (`npm run test:pg`) | **215 pass, 0 fail, 0 skip, 0 todo** |
+| Suíte PG (`npm run test:pg`) | **216 pass, 0 fail, 0 skip, 0 todo** (215 + wrapper 01.5.1) |
 | E4.2 + PROD-DB-01 | pass, 0 fail |
 | Suíte memória do server (sem `DATABASE_URL`) | 821 pass, 0 fail |
 | Client (`vitest`) | 323 pass, 0 fail |
@@ -282,7 +329,9 @@ Exigir na saída: `atualizados: ... (total=69)`, `AFTER nomes_locais_inconsisten
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/diagnostico-e42-nomes-locais.sql
 ```
 
-Exigir `nomes_locais_inconsistentes = 0`.
+Exigir `nomes_locais_inconsistentes = 0` **e** que **todos** os contadores do
+preflight E4.2 estejam em 0 (o próprio APPLY já verifica isso de forma
+fail-closed; o diagnóstico é a prova independente).
 
 **Passo 6 — Aplicar o DDL.** Com o preflight satisfeito, rodar a migração/
 bootstrap (o fluxo normal da aplicação) para aplicar a 0030 e o restante da
@@ -303,6 +352,8 @@ APPLY, AFTER) no registro de mudanças.
 | Reexecução duplicando | **Baixo** | `IS DISTINCT FROM` + teste de idempotência (0 UPDATEs na 2ª passada). |
 | Esquecer de aplicar o DDL depois | **Médio** | Passo 6 do procedimento; banco fica `degraded` até o DDL rodar. |
 | Diferença só de caixa/espaço (classe C) | **Baixo** | Aborta; exige decisão administrativa (normalizar ou não) — fora do escopo. |
+| Outro bloqueio do preflight revelado pela propagação (ex.: `duplicatas_saldos` com `tamanho_id NULL`) | **Baixo** | AFTER-CHECK fail-closed reexecuta **todos** os contadores e reverte se qualquer um ficar `> 0`. |
+| `vendas.local_saida` desatualizado após a correção (achado F2) | **Baixo** | **Fora do escopo deste incidente.** O contador E4.2 **não** inclui `vendas.local_saida`, então não bloqueia a 0030; a divergência fica apenas documentada para um ciclo futuro. |
 | Aplicar em horário de uso | **Médio** | Janela de manutenção (passo 0). |
 | Script rodado por engano no boot | **Nenhum** | Não é migration; vive em `db/admin/` e não é referenciado por nenhum runner. |
 

@@ -31,6 +31,11 @@
 --   • Guardas abortam (ROLLBACK) se existir QUALQUER caso que não seja classe B
 --     (vínculo de outra empresa, texto NULL, órfão, ou diferença só de
 --     caixa/espaço). Nada é alterado quando há ambiguidade.
+--   • AFTER-CHECK fail-closed: após os UPDATEs, reexecuta TODOS os contadores
+--     relevantes do preflight E4.2 (0030) e só faz COMMIT se TODOS forem 0.
+--     `nomes_locais_inconsistentes=0` isolado NÃO basta — a propagação pode
+--     revelar outro bloqueio (ex.: duplicata de saldo com tamanho_id NULL).
+--     Se qualquer contador for > 0, aborta e reverte; nada é persistido.
 --
 -- PRECEDENTE: docs/RELATORIO-PROD-DB-01-4.md (diagnóstico read-only).
 -- ============================================================================
@@ -69,8 +74,20 @@ DECLARE
   orfaos        BIGINT;
   upd_estoques  BIGINT := 0;
   upd_mov_local BIGINT := 0;
-  upd_mov_dest BIGINT := 0;
+  upd_mov_dest  BIGINT := 0;
   upd_inv       BIGINT := 0;
+  -- Contadores do AFTER-CHECK: os MESMOS nomes/regras do preflight E4.2 (0030).
+  -- O APPLY é fail-closed: se QUALQUER um ficar > 0, a transação é revertida.
+  dup_locais        BIGINT;
+  dup_padroes       BIGINT;
+  dup_saldos        BIGINT;
+  dup_itens_inv     BIGINT;
+  saldos_invalidos  BIGINT;
+  vinc_empresa      BIGINT;
+  vinc_locais       BIGINT;
+  pdv_vinc          BIGINT := 0;
+  pdv_nomes         BIGINT := 0;
+  refs_operacionais BIGINT;
   r             RECORD;
 BEGIN
   -- -------------------------------------------------------------------------
@@ -225,8 +242,19 @@ BEGIN
     upd_estoques + upd_mov_local + upd_mov_dest + upd_inv;
 
   -- -------------------------------------------------------------------------
-  -- (E) DIAGNÓSTICO AFTER — critério de aceite: nomes_locais_inconsistentes=0.
+  -- (E) DIAGNÓSTICO AFTER — FAIL-CLOSED.
+  --
+  -- Reexecuta TODOS os contadores relevantes do preflight E4.2 (0030) e exige
+  -- que TODOS sejam exatamente 0. `nomes_locais_inconsistentes=0` NÃO basta:
+  -- a propagação pode revelar OUTRO bloqueio do mesmo preflight (ex.: duas
+  -- linhas de estoque com tamanho_id NULL que ficam duplicadas no texto
+  -- canônico). Se qualquer contador for > 0, RAISE EXCEPTION ⇒ a transação é
+  -- revertida e NADA é persistido.
+  --
+  -- A lógica de identificação dos registros classe B acima NÃO é alterada: a
+  -- correção continua sendo por local_id + empresa_id, nunca por nome textual.
   -- -------------------------------------------------------------------------
+  -- (E.1) nomes_locais_inconsistentes — as quatro parcelas exatas da 0030.
   SELECT
     (SELECT count(*) FROM estoques e JOIN locais l ON l.id = e.local_id
       WHERE e.local_id IS NOT NULL AND e.local IS DISTINCT FROM l.nome) +
@@ -238,11 +266,119 @@ BEGIN
       WHERE inv.local_id IS NOT NULL AND inv.local IS DISTINCT FROM l.nome)
     INTO total_depois;
 
-  IF total_depois <> 0 THEN
-    RAISE EXCEPTION 'E4.2/01.5 FALHOU: após a correção nomes_locais_inconsistentes=% (esperado 0). Transação revertida.', total_depois
-      USING HINT = 'Nada foi persistido; investigue antes de repetir.';
+  -- (E.2) duplicatas_locais / duplicatas_padroes — idênticas à 0030.
+  SELECT count(*) INTO dup_locais FROM (
+    SELECT empresa_id, nome FROM locais GROUP BY empresa_id, nome HAVING count(*) > 1
+  ) d;
+  SELECT count(*) INTO dup_padroes FROM (
+    SELECT empresa_id FROM locais WHERE padrao IS TRUE GROUP BY empresa_id HAVING count(*) > 1
+  ) d;
+
+  -- (E.3) duplicatas_saldos / duplicatas_itens_inventario / saldos inválidos.
+  SELECT count(*) INTO dup_saldos FROM (
+    SELECT empresa_id, produto_id, tamanho_id, local FROM estoques
+    GROUP BY empresa_id, produto_id, tamanho_id, local HAVING count(*) > 1
+  ) d;
+  SELECT count(*) INTO dup_itens_inv FROM (
+    SELECT empresa_id, inventario_id, produto_id, tamanho_id FROM itens_inventario
+    GROUP BY empresa_id, inventario_id, produto_id, tamanho_id HAVING count(*) > 1
+  ) d;
+  SELECT count(*) INTO saldos_invalidos FROM estoques WHERE produto_id IS NULL OR local IS NULL;
+
+  -- (E.4) vinculos_empresa — idêntico à 0030.
+  SELECT
+    (SELECT count(*) FROM estoques e LEFT JOIN produtos p ON p.id = e.produto_id
+      WHERE e.produto_id IS NULL OR p.id IS NULL OR e.empresa_id IS DISTINCT FROM p.empresa_id) +
+    (SELECT count(*) FROM movimentacoes m LEFT JOIN produtos p ON p.id = m.produto_id
+      WHERE m.produto_id IS NULL OR p.id IS NULL OR m.empresa_id IS DISTINCT FROM p.empresa_id) +
+    (SELECT count(*) FROM estoque_insumos e LEFT JOIN insumos i ON i.id = e.insumo_id
+      WHERE e.insumo_id IS NULL OR i.id IS NULL OR e.empresa_id IS DISTINCT FROM i.empresa_id) +
+    (SELECT count(*) FROM movimentacoes_insumos m LEFT JOIN insumos i ON i.id = m.insumo_id
+      WHERE m.insumo_id IS NULL OR i.id IS NULL OR m.empresa_id IS DISTINCT FROM i.empresa_id) +
+    (SELECT count(*) FROM itens_compra ic
+       LEFT JOIN compras c ON c.id = ic.compra_id
+       LEFT JOIN produtos p ON p.id = ic.produto_id
+       LEFT JOIN insumos i ON i.id = ic.insumo_id
+      WHERE ic.compra_id IS NULL OR c.id IS NULL OR ic.empresa_id IS DISTINCT FROM c.empresa_id
+         OR (ic.produto_id IS NOT NULL AND (p.id IS NULL OR ic.empresa_id IS DISTINCT FROM p.empresa_id))
+         OR (ic.insumo_id IS NOT NULL AND (i.id IS NULL OR ic.empresa_id IS DISTINCT FROM i.empresa_id))) +
+    (SELECT count(*) FROM itens_inventario ii
+       LEFT JOIN inventarios inv ON inv.id = ii.inventario_id
+       LEFT JOIN produtos p ON p.id = ii.produto_id
+      WHERE ii.inventario_id IS NULL OR ii.produto_id IS NULL OR inv.id IS NULL OR p.id IS NULL
+         OR ii.empresa_id IS DISTINCT FROM inv.empresa_id
+         OR ii.empresa_id IS DISTINCT FROM p.empresa_id)
+    INTO vinc_empresa;
+
+  -- (E.5) vinculos_locais — idêntico à 0030.
+  SELECT
+    (SELECT count(*) FROM estoques e LEFT JOIN locais l ON l.id = e.local_id
+      WHERE e.local_id IS NOT NULL AND (l.id IS NULL OR e.empresa_id IS DISTINCT FROM l.empresa_id)) +
+    (SELECT count(*) FROM movimentacoes m LEFT JOIN locais l ON l.id = m.local_id
+      WHERE m.local_id IS NOT NULL AND (l.id IS NULL OR m.empresa_id IS DISTINCT FROM l.empresa_id)) +
+    (SELECT count(*) FROM movimentacoes m LEFT JOIN locais l ON l.id = m.local_destino_id
+      WHERE m.local_destino_id IS NOT NULL AND (l.id IS NULL OR m.empresa_id IS DISTINCT FROM l.empresa_id)) +
+    (SELECT count(*) FROM inventarios inv LEFT JOIN locais l ON l.id = inv.local_id
+      WHERE inv.local_id IS NOT NULL AND (l.id IS NULL OR inv.empresa_id IS DISTINCT FROM l.empresa_id))
+    INTO vinc_locais;
+
+  -- (E.6) PDV — mesmas regras da 0030, com a coluna aditiva opcional.
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'pdv_caixas' AND column_name = 'local_id'
+  ) THEN
+    EXECUTE 'SELECT count(*) FROM pdv_caixas p LEFT JOIN locais l ON l.id = p.local_id
+      WHERE p.local_id IS NOT NULL AND (l.id IS NULL OR p.empresa_id IS DISTINCT FROM l.empresa_id)'
+      INTO pdv_vinc;
+    EXECUTE 'SELECT count(*) FROM pdv_caixas p JOIN locais l ON l.id = p.local_id
+      WHERE p.local_id IS NOT NULL AND p.local IS DISTINCT FROM l.nome'
+      INTO pdv_nomes;
   END IF;
-  RAISE NOTICE 'E4.2/01.5 AFTER nomes_locais_inconsistentes=0 (de % para 0)', total_antes;
+
+  -- (E.7) referências operacionais — mesmo segundo preflight da 0030.
+  SELECT
+    (SELECT count(*) FROM movimentacoes m LEFT JOIN compras c ON c.id = m.compra_id
+      WHERE m.compra_id IS NOT NULL AND (c.id IS NULL OR m.empresa_id IS DISTINCT FROM c.empresa_id)) +
+    (SELECT count(*) FROM movimentacoes m LEFT JOIN compra_recebimentos rcb ON rcb.id = m.recebimento_id
+      WHERE m.recebimento_id IS NOT NULL AND (rcb.id IS NULL OR m.empresa_id IS DISTINCT FROM rcb.empresa_id)) +
+    (SELECT count(*) FROM movimentacoes m LEFT JOIN itens_compra i ON i.id = m.item_compra_id
+      WHERE m.item_compra_id IS NOT NULL AND (i.id IS NULL OR m.empresa_id IS DISTINCT FROM i.empresa_id)) +
+    (SELECT count(*) FROM movimentacoes m LEFT JOIN ordens_fabricacao o ON o.id = m.ordem_id
+      WHERE m.ordem_id IS NOT NULL AND (o.id IS NULL OR m.empresa_id IS DISTINCT FROM o.empresa_id)) +
+    (SELECT count(*) FROM movimentacoes m LEFT JOIN movimentacoes x ON x.id = m.movimentacao_estorno_id
+      WHERE m.movimentacao_estorno_id IS NOT NULL AND (x.id IS NULL OR m.empresa_id IS DISTINCT FROM x.empresa_id)) +
+    (SELECT count(*) FROM movimentacoes m LEFT JOIN movimentacoes x ON x.id = m.transferencia_id
+      WHERE m.transferencia_id IS NOT NULL AND (x.id IS NULL OR m.empresa_id IS DISTINCT FROM x.empresa_id)) +
+    (SELECT count(*) FROM movimentacoes_insumos m LEFT JOIN compras c ON c.id = m.compra_id
+      WHERE m.compra_id IS NOT NULL AND (c.id IS NULL OR m.empresa_id IS DISTINCT FROM c.empresa_id)) +
+    (SELECT count(*) FROM movimentacoes_insumos m LEFT JOIN compra_recebimentos rcb ON rcb.id = m.recebimento_id
+      WHERE m.recebimento_id IS NOT NULL AND (rcb.id IS NULL OR m.empresa_id IS DISTINCT FROM rcb.empresa_id)) +
+    (SELECT count(*) FROM movimentacoes_insumos m LEFT JOIN itens_compra i ON i.id = m.item_compra_id
+      WHERE m.item_compra_id IS NOT NULL AND (i.id IS NULL OR m.empresa_id IS DISTINCT FROM i.empresa_id)) +
+    (SELECT count(*) FROM movimentacoes_insumos m LEFT JOIN ordens_fabricacao o ON o.id = m.ordem_id
+      WHERE m.ordem_id IS NOT NULL AND (o.id IS NULL OR m.empresa_id IS DISTINCT FROM o.empresa_id)) +
+    (SELECT count(*) FROM compra_recebimentos rcb LEFT JOIN compras c ON c.id = rcb.compra_id
+      WHERE rcb.compra_id IS NULL OR c.id IS NULL OR rcb.empresa_id IS DISTINCT FROM c.empresa_id) +
+    (SELECT count(*) FROM compra_recebimento_itens ri
+       LEFT JOIN compra_recebimentos rcb ON rcb.id = ri.recebimento_id
+       LEFT JOIN itens_compra i ON i.id = ri.item_compra_id
+      WHERE ri.recebimento_id IS NULL OR ri.item_compra_id IS NULL OR rcb.id IS NULL OR i.id IS NULL
+         OR ri.empresa_id IS DISTINCT FROM rcb.empresa_id
+         OR ri.empresa_id IS DISTINCT FROM i.empresa_id)
+    INTO refs_operacionais;
+
+  RAISE NOTICE 'E4.2/01.5 AFTER nomes_locais_inconsistentes=% (fail-closed) contadores: duplicatas_locais=%, duplicatas_padroes=%, duplicatas_saldos=%, duplicatas_itens_inventario=%, saldos_invalidos=%, vinculos_empresa=%, vinculos_locais=%, pdv_vinculos=%, pdv_nomes=%, refs_operacionais=%',
+    total_depois, dup_locais, dup_padroes, dup_saldos, dup_itens_inv, saldos_invalidos,
+    vinc_empresa, vinc_locais, pdv_vinc, pdv_nomes, refs_operacionais;
+
+  IF total_depois + dup_locais + dup_padroes + dup_saldos + dup_itens_inv + saldos_invalidos
+     + vinc_empresa + vinc_locais + pdv_vinc + pdv_nomes + refs_operacionais <> 0 THEN
+    RAISE EXCEPTION 'E4.2/01.5 FALHOU (fail-closed): o estado final NÃO satisfaz o preflight E4.2. nomes_locais_inconsistentes=%, duplicatas_locais=%, duplicatas_padroes=%, duplicatas_saldos=%, duplicatas_itens_inventario=%, saldos_invalidos=%, vinculos_empresa=%, vinculos_locais=%, pdv_vinculos=%, pdv_nomes=%, refs_operacionais=%. Transação revertida: NADA foi persistido.',
+      total_depois, dup_locais, dup_padroes, dup_saldos, dup_itens_inv, saldos_invalidos,
+      vinc_empresa, vinc_locais, pdv_vinc, pdv_nomes, refs_operacionais
+      USING HINT = 'Investigue os contadores > 0 (use db/diagnostico-e42-nomes-locais.sql); a correção não deve mascarar outro bloqueio do preflight.';
+  END IF;
+  RAISE NOTICE 'E4.2/01.5 AFTER OK: todos os contadores do preflight E4.2 = 0 (nomes_locais_inconsistentes de % para 0)', total_antes;
 END
 $e42_propagar_nomes_locais$;
 
