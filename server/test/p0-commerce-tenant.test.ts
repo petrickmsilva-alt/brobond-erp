@@ -164,7 +164,10 @@ describe('P0-02 — isolamento tenant no matcher e ingestão Commerce', () => {
     );
     assert.deepEqual([a1.outcome, a2.outcome].sort(), ['created', 'unchanged']);
     assert.equal(b1.outcome, 'created');
-    assert.ok(db.log.some((q) => q.sql.includes('ON CONFLICT (empresa_id, usuario_id, channel, external_order_id)')));
+    assert.ok(db.log.some((q) => q.sql.includes('ON CONFLICT (reference)')));
+    // A `reference` de marketplace codifica o escopo tenant; o upsert repete a
+    // mesma chave (empresa/usuario/canal/pedido externo) no SELECT de conflito.
+    assert.ok(db.log.some((q) => /empresa_id\s*=\s*\$1 AND usuario_id\s*=\s*\$2 AND channel\s*=\s*\$3::sale_channel AND external_order_id\s*=\s*\$4/i.test(q.sql)));
     for (const query of db.log.filter((q) => q.sql.includes('FROM produtos'))) {
       assert.match(query.sql, /empresa_id\s*=\s*\$1/i);
     }

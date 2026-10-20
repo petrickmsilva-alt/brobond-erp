@@ -175,6 +175,14 @@ export function createSalesService(resolveDb: () => ConnectorDatabase) {
           return { sale: existing, outcome: 'unchanged' as const, itemCount: 0 };
         }
 
+        // O árbitro do ON CONFLICT precisa ser o índice que a corrida viola.
+        // `reference` é DERIVADA de (empresa, usuario, canal, pedido externo),
+        // então os dois índices de unicidade expressam o mesmo fato para vendas
+        // de marketplace. Arbitrar por `reference` é o que torna a reentrega
+        // concorrente determinística: o PostgreSQL só resolve conflito no
+        // índice indicado; se arbitrássemos pelo índice composto, o conflito
+        // que aparece no índice de `reference` viraria 23505 (era o defeito
+        // intermitente de P0-02 em webhooks "at-least-once" simultâneos).
         const { rows } = await tx.query<SaleRawRow>(
           `INSERT INTO sales (
              id, reference, quantity, amount_cents, currency, status, occurred_at,
@@ -183,7 +191,7 @@ export function createSalesService(resolveDb: () => ConnectorDatabase) {
            ) VALUES (
              $1, $2, $3, $4, $5, $6::sale_status, $7, $8::sale_channel, $9, $10, $11, $12, $13, now(), now()
            )
-           ON CONFLICT (empresa_id, usuario_id, channel, external_order_id) DO UPDATE SET
+           ON CONFLICT (reference) DO UPDATE SET
              quantity    = EXCLUDED.quantity,
              amount_cents= EXCLUDED.amount_cents,
              currency    = EXCLUDED.currency,

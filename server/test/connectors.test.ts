@@ -556,7 +556,7 @@ describe('Conectores — ingestão idempotente de vendas', () => {
       items: [],
     });
     const insert = db.log.find((q: any) => q.sql.startsWith('INSERT INTO sales'));
-    assert.ok(insert.sql.includes('ON CONFLICT (empresa_id, usuario_id, channel, external_order_id)'));
+    assert.ok(insert.sql.includes('ON CONFLICT (reference)'));
   });
 });
 
@@ -853,7 +853,7 @@ describe('Instagram — ingestão idempotente no canal INSTAGRAM_SHOPPING', () =
     assert.equal(result.amountCents, 24990);
 
     const insert = db.log.find((q: any) => q.sql.startsWith('INSERT INTO sales'));
-    assert.ok(insert.sql.includes('ON CONFLICT (empresa_id, usuario_id, channel, external_order_id)'));
+    assert.ok(insert.sql.includes('ON CONFLICT (reference)'));
     assert.ok(insert.params.includes('INSTAGRAM_SHOPPING'));
     // O KPI "Pedidos Importados" do cartão vem DAQUI — contagem real.
     assert.deepEqual(contadores[0], { empresaId: 1, usuarioId: 7, provider: 'INSTAGRAM', counters: { imported: 1, duplicated: 0, failed: 0 } });
