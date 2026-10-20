@@ -160,15 +160,21 @@ test('PROD-DB-01.2 — prontidão: pronto, bootstrap incompleto, banco indispon�
   await stopServer(a.child);
 
   // ---------------------------------------------------------------------
-  // B. Bootstrap incompleto: dado legado que o preflight da E4.2 recusa.
+  // B. Bootstrap/migração incompleta: dado legado que o preflight da E4.2
+  //    (migração 0030) recusa. O bootstrap estrutural é só DDL e não é
+  //    bloqueado por dado; quem recusa é a CADEIA versionada. Para reproduzir
+  //    o boot de produção, removemos o registro da 0030 para que ela reexecute.
   // ---------------------------------------------------------------------
   const nomeLocal = `Loja ${suffix}`;
   await query(`DROP INDEX IF EXISTS uq_e42_locais_empresa_nome`);
   await query(`INSERT INTO locais (empresa_id, nome, padrao) VALUES ($1, $2, false)`, [empresaId, nomeLocal]);
   await query(`INSERT INTO locais (empresa_id, nome, padrao) VALUES ($1, $2, false)`, [empresaId, nomeLocal]);
+  await query(`DELETE FROM schema_migrations WHERE id = $1`, ['0030_e42_locais_estoque_multempresa.sql']);
   const limparLegado = async () => {
     await query(`DELETE FROM locais WHERE empresa_id = $1 AND nome = $2`, [empresaId, nomeLocal]).catch(() => undefined);
     await query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_locais_empresa_nome ON locais (empresa_id, nome)`).catch(() => undefined);
+    await query(`DELETE FROM schema_migrations WHERE id = $1`, ['0030_e42_locais_estoque_multempresa.sql']).catch(() => undefined);
+    await migrate().catch(() => undefined);
   };
   t.after(limparLegado);
 

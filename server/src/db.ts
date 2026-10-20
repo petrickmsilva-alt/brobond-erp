@@ -53,15 +53,52 @@ if (pool) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// PROD-DB-02 — estado do bootstrap/migração em FASES explícitas.
+//
+// Antes existia só `ready: boolean` + `erroDeMigracao: string`. Isso colapsava
+// situações distintas ("o bootstrap estrutural falhou" vs "uma migration
+// versionada falhou") num único estado, e não dava para saber em que ponto o
+// boot parou. Agora cada fase é registrada:
+//
+//   'bootstrap'  — DDL estrutural (db/bootstrap.sql) não pôde ser aplicado;
+//   'migrations' — a cadeia versionada (db/migrations/*.sql) falhou.
+//
+// A separação é o coração do PROD-DB-02: o bootstrap estrutural NÃO contém
+// preflight que aborta (nunca é bloqueado por dado legado) e a cadeia
+// versionada é a autoridade de regra de dado (E4.2 e seguintes). Uma falha da
+// cadeia NUNCA pode ser confundida com sucesso do bootstrap.
+// ---------------------------------------------------------------------------
+export type FaseDeBoot = 'bootstrap' | 'migrations';
+
+export interface FalhaDeBoot {
+  fase: FaseDeBoot;
+  mensagem: string;
+}
+
 let ready = false;
+let falhaDeBoot: FalhaDeBoot | null = null;
+
+/** Falha de boot (fase + causa). Null quando o banco está pronto ou é demo. */
+export function bootFailure(): FalhaDeBoot | null {
+  return falhaDeBoot;
+}
+
+/**
+ * Causa da última falha de boot. Mantido para health/log; use `bootFailure()`
+ * quando precisar saber em qual FASE o boot parou.
+ */
+export function migrationError(): string | null {
+  return falhaDeBoot?.mensagem ?? null;
+}
 
 /**
  * PROD-DB-01.1 — prontidão do banco obrigatório.
  *
  * `ready` só é verdadeiro quando o banco está REALMENTE pronto para atender
- * negócio: DATABASE_URL presente E bootstrap completo (db/schema.sql aplicado
- * + cadeia versionada registrada). Enquanto `ready` for falso e houver
- * DATABASE_URL, a aplicação está degradada e as rotas de negócio são
+ * negócio: DATABASE_URL presente E bootstrap estrutural aplicado E cadeia
+ * versionada registrada. Enquanto `ready` for falso e houver DATABASE_URL, a
+ * aplicação está degradada e as rotas de negócio são
  * bloqueadas (ver `bloqueioDeProntidao` em index.ts).
  */
 export function isDbConnected(): boolean {
@@ -95,13 +132,6 @@ export function dbStatus(): DbStatus {
   return ready ? 'ready' : 'degraded';
 }
 
-/** Causa da última falha de migração (fatal ou de bootstrap). Null quando ok. */
-let erroDeMigracao: string | null = null;
-
-export function migrationError(): string | null {
-  return erroDeMigracao;
-}
-
 export function hasDatabaseUrl(): boolean {
   return !!pool;
 }
@@ -131,109 +161,126 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>,
   }
 }
 
+// ---------------------------------------------------------------------------
+// PROD-DB-02 — ciclo de vida do boot, em FASES separadas.
+//
+// O boot tem quatro responsabilidades distintas, e cada uma falha de forma
+// própria:
+//
+//   1. BOOTSTRAP ESTRUTURAL (db/bootstrap.sql)
+//      Só DDL idempotente (CREATE/ALTER aditivo). Nunca é bloqueado por dado
+//      legado: não contém DML nem preflight que aborta. Se falhar, é defeito de
+//      estrutura (arquivo ausente, DDL inválido) — não é dado sujo.
+//
+//   2. CRIAÇÃO/CONTROLE DE schema_migrations
+//      É criada pela própria cadeia (fase 3). É o registro transacional de cada
+//      migration aplicada; é a única fonte de verdade do que já rodou.
+//
+//   3. MIGRAÇÕES VERSIONADAS (db/migrations/*.sql)
+//      Autoridade de regra de dado (E4.2 e seguintes). Rodam em ordem LÉXICA,
+//      cada uma na própria transação, registradas em schema_migrations. Um
+//      preflight que recusa dado legado (ex.: 0030/E4.2) faz a cadeia parar:
+//      a migration não é registrada, o banco fica DEGRADADO e nenhum DML
+//      corretivo é executado.
+//
+//   4. READINESS / DEGRADED
+//      `ready = true` exige as fases 1 e 3 concluídas. Qualquer falha registra
+//      a FASE em `bootFailure()`; a aplicação sobe com o pool real, responde
+//      503 no /api/health e bloqueia as rotas de negócio.
+//
+// A separação é o que impede a confusão central do PROD-DB-02: uma falha de
+// migration versionada nunca pode ser lida como sucesso de bootstrap.
+// ---------------------------------------------------------------------------
+
 /**
- * Aplica db/schema.sql (idempotente) ao iniciar. Assim um banco novo na Render
- * já sobe com todas as tabelas, e bancos antigos recebem as colunas novas.
+ * Aplica o BOOTSTRAP ESTRUTURAL (db/bootstrap.sql), idempotente. Não executa
+ * DML e não contém preflight que aborta — é o que permite a um banco de
+ * produção híbrido (com dados legados) receber a estrutura-base sem ser
+ * bloqueado nem corrigido automaticamente.
+ */
+export async function aplicarBootstrapEstrutural(client: PoolClient): Promise<void> {
+  const file = candidatosDb('bootstrap.sql').find(existe);
+  if (!file) {
+    // Sem o arquivo, um banco novo não sobe — mas não inventamos `ready`:
+    // a ausência é reportada como falha de bootstrap.
+    throw new Error('db/bootstrap.sql não encontrado (estrutura-base ausente).');
+  }
+  await client.query(readFileSync(file, 'utf8'));
+}
+
+/**
+ * Boot do banco: bootstrap estrutural + cadeia versionada, sob um advisory lock
+ * de sessão. Idempotente: reexecutar num banco pronto não altera nada.
  *
- * PROD-DB-01 — por que as migrações versionadas rodam SEPARADAS do schema.sql:
- *
- * O driver `pg` executa um arquivo com vários comandos como UMA transação
- * implícita: se qualquer comando falhar, TODO o lote volta atrás — inclusive
- * os ADD COLUMN que já tinham "passado". O db/schema.sql tem preflights que
- * recusam dados legados (ex.: E4.2 bloqueia o DDL quando há dois locais com o
- * mesmo nome na mesma empresa). Nesse cenário o `lockClient.query(sql)` lançava,
- * o `aplicarMigrationsVersionadas` logo abaixo nunca era alcançado e o banco
- * ficava congelado no estado antigo — foi assim que a coluna `vendas.
- * local_saida_id` (migração 0031) nunca chegou à produção, e /api/vendas passou
- * a responder 42703.
- *
- * Correção: as migrações versionadas (a cadeia oficial, idempotente e uma única
- * vez por banco) rodam SEMPRE, mesmo que o bootstrap do schema.sql falhe por
- * dado legado. Cada arquivo de migração roda na própria transação; se ele falhar,
- * o erro continua fatal (o serviço não sobe com o banco pela metade). Se apenas
- * o schema.sql falhar, a aplicação sobe com o pool real — sem fingir `ready` —
- * e registra a causa para correção dos dados.
+ * Nunca lança por falha de dado: registra a FASE que falhou em `bootFailure()`
+ * e deixa `ready = false` (degradado). Lança apenas se a conexão/lock falhar.
  */
 export async function migrate(): Promise<void> {
   if (!pool) return;
-  // Re-verificação: enquanto o bootstrap roda, o banco não está pronto. Se algo
-  // falhar daqui pra frente, `ready` fica falso e a instância segue degradada —
-  // inclusive quando migrate() é chamado de novo depois de um estado pronto.
+  // Enquanto o boot roda, o banco não está pronto. Se algo falhar daqui pra
+  // frente, `ready` fica falso e a instância segue degradada — inclusive quando
+  // migrate() é chamado de novo depois de um estado pronto.
   ready = false;
-  const candidates = [
-    path.resolve(__dirname, '../../db/schema.sql'),
-    path.resolve(process.cwd(), 'db/schema.sql'),
-    path.resolve(process.cwd(), '../db/schema.sql'),
-  ];
-  const file = candidates.find((p) => {
-    try {
-      readFileSync(p);
-      return true;
-    } catch {
-      return false;
-    }
-  });
-  if (!file) {
-    console.warn('⚠️  db/schema.sql não encontrado — migração automática ignorada.');
-    ready = true;
-    return;
-  }
-  const sql = readFileSync(file, 'utf8');
-  // Boots simultâneos (processos de teste em paralelo, várias réplicas) não
-  // podem aplicar o bootstrap ao MESMO tempo: schema.sql e as migrações têm
-  // blocos DO $$ (ADD CONSTRAINT) e INSERT de registro que, corridos, matam o
-  // boot do perdedor à toa. Um advisory lock de sessão serializa tudo; o
-  // segundo processo espera e, quando entra, encontra tudo já aplicado
-  // (IF NOT EXISTS / ON CONFLICT DO NOTHING).
+  falhaDeBoot = null;
+
+  // Boots simultâneos (processos de teste, várias réplicas) não podem aplicar a
+  // estrutura ao MESMO tempo: os blocos DO $$ (ADD CONSTRAINT) e os INSERT de
+  // registro, corridos, matam o boot do perdedor à toa. Um advisory lock de
+  // sessão serializa tudo; o segundo processo espera e, quando entra, encontra
+  // tudo já aplicado (IF NOT EXISTS / ON CONFLICT DO NOTHING).
   const lockClient = await pool.connect();
-  let bootstrapError: unknown = null;
-  let migracaoError: unknown = null;
+  let erroDeBootstrap: unknown = null;
+  let erroDeMigracao: unknown = null;
   try {
     await lockClient.query(`SELECT pg_advisory_lock(hashtext('brobond_schema_bootstrap'))`);
     try {
-      await lockClient.query(sql);
+      await aplicarBootstrapEstrutural(lockClient);
     } catch (e) {
-      bootstrapError = e;
+      erroDeBootstrap = e;
     }
-    // Roda mesmo com o bootstrap acima tendo falhado: a cadeia versionada é a
+    // A cadeia versionada roda MESMO com o bootstrap tendo falhado: ela é a
     // autoridade para bancos que já existem e não pode ser bloqueada por um
-    // preflight de dado legado (PROD-DB-01).
+    // defeito de bootstrap. (E, ao contrário, uma falha dela não é mascarada
+    // por um bootstrap bem-sucedido.)
     try {
       await aplicarMigrationsVersionadas(lockClient);
     } catch (e) {
-      migracaoError = e;
+      erroDeMigracao = e;
     }
   } finally {
     await lockClient.query(`SELECT pg_advisory_unlock(hashtext('brobond_schema_bootstrap'))`).catch(() => undefined);
     lockClient.release();
   }
 
-  // PROD-DB-01.1 — falha da cadeia versionada é a pior: o schema realmente não
-  // corresponde ao código. Marca degradado (ready fica falso) e não deixa a
-  // aplicação atender negócio: `isDbDegraded()` bloqueia as rotas e o health
-  // responde 503, então a Render não promove a instância.
-  if (migracaoError) {
-    erroDeMigracao = `Migração versionada falhou: ${(migracaoError as Error)?.message || String(migracaoError)}`;
+  // Falha da cadeia versionada é a mais grave: o schema realmente não
+  // corresponde ao código. Degradado, sem tráfego de negócio.
+  if (erroDeMigracao) {
+    falhaDeBoot = {
+      fase: 'migrations',
+      mensagem: `Migração versionada falhou: ${(erroDeMigracao as Error)?.message || String(erroDeMigracao)}`,
+    };
     console.error(
-      `❌ ${erroDeMigracao} — a aplicação NÃO vai atender negócio até o banco estar pronto ` +
+      `❌ ${falhaDeBoot.mensagem} — a aplicação NÃO vai atender negócio até o banco estar pronto ` +
         '(corrija a causa e reinicie).'
     );
     return;
   }
-  if (bootstrapError) {
-    erroDeMigracao = `db/schema.sql incompleto: ${(bootstrapError as Error)?.message || String(bootstrapError)}`;
+  if (erroDeBootstrap) {
+    falhaDeBoot = {
+      fase: 'bootstrap',
+      mensagem: `db/bootstrap.sql incompleto: ${(erroDeBootstrap as Error)?.message || String(erroDeBootstrap)}`,
+    };
     console.error(
-      '⚠️  db/schema.sql não pôde ser aplicado por inteiro (dado legado ou preflight). ' +
-        'As migrações versionadas foram aplicadas mesmo assim; corrija os dados e reinicie para ' +
-        `completar o bootstrap. Causa: ${(bootstrapError as Error)?.message || bootstrapError}`
+      '⚠️  db/bootstrap.sql não pôde ser aplicado por inteiro (estrutura). ' +
+        'As migrações versionadas foram aplicadas mesmo assim; corrija a causa e reinicie para ' +
+        `completar o bootstrap. Causa: ${(erroDeBootstrap as Error)?.message || erroDeBootstrap}`
     );
     // Sem `ready = true`: isDbConnected() continua false, o /api/health responde
     // 503 e as rotas de negócio são bloqueadas (ver bloqueioDeProntidao).
     return;
   }
-  erroDeMigracao = null;
   ready = true;
-  console.log('🗄️  Schema verificado/migrado (db/schema.sql + db/migrations).');
+  console.log('🗄️  Bootstrap estrutural + migrações versionadas aplicados.');
 }
 
 /** Caminhos possíveis de `db/<rel>` a partir de server/src, do build ou do repositório. */
@@ -254,16 +301,23 @@ function existe(caminho: string): boolean {
 }
 
 /**
- * Migrações versionadas (db/migrations/*.sql), aplicadas em ordem léxica e uma
+ * Migrações versionadas (db/migrations/*.sql), aplicadas em ORDEM LÉXICA e uma
  * única vez por banco: o nome do arquivo fica registrado em `schema_migrations`.
+ *
+ * Garantias:
+ *   • ordem lexical (`.sort()`) — determinística e igual em todo ambiente;
+ *   • registro TRANSACIONAL: o INSERT em schema_migrations roda na MESMA
+ *     transação do DDL/DML da migration. Ou tudo é aplicado e registrado, ou
+ *     nada (ROLLBACK) — nunca uma migration "aplicada pela metade";
+ *   • a migration NÃO é registrada quando falha, então o retry a reexecuta;
+ *   • parada no primeiro erro: as migrations seguintes não rodam sobre um
+ *     estado inconsistente, e o banco fica degradado.
  *
  * É isso que faltava para uma correção de schema chegar a quem JÁ tem banco: sem
  * registro, só existia o db/schema.sql "aplique e reze", e coluna nova vinha com
- * ALTER TABLE ... IF NOT EXISTS solto no fim do arquivo. Cada arquivo roda dentro
- * da própria transação; se um falhar o boot aborta em vez de subir com o banco
- * pela metade.
+ * ALTER TABLE ... IF NOT EXISTS solto no fim do arquivo.
  */
-async function aplicarMigrationsVersionadas(client: PoolClient): Promise<void> {
+export async function aplicarMigrationsVersionadas(client: PoolClient): Promise<void> {
   if (!pool) return;
   const dir = candidatosDb('migrations').find(existe);
   if (!dir) return;

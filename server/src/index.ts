@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dbStatus, hasDatabaseUrl, isDbConnected, isDbDegraded, migrate, migrationError } from './db';
+import { bootFailure, dbStatus, hasDatabaseUrl, isDbConnected, isDbDegraded, migrate, migrationError } from './db';
 import {
   ADMIN_EMAIL,
   changePassword,
@@ -318,10 +318,13 @@ app.get('/api/health', (_req, res) => {
   //   db:"postgres-degraded" → DATABASE_URL configurada, banco NÃO pronto (503).
   // A Render usa este path como healthCheckPath: só promove a instância com 200,
   // ou seja, apenas em `ready`. O corpo NÃO expõe o texto do erro (pode conter
-  // nomes de tabela/coluna) — ele fica no log e em `migrationError()`.
+  // nomes de tabela/coluna) — ele fica no log e em `migrationError()`. A FASE
+  // que falhou (PROD-DB-02: 'bootstrap' vs 'migrations') é exposta porque é
+  // diagnóstico operacional, não dado sensível.
   const status = dbStatus();
   const db = status === 'demo' ? 'memory' : status === 'ready' ? 'postgres' : 'postgres-degraded';
-  const body = { ok: status !== 'degraded', db, uploads: uploadProvider(), version: VERSION };
+  const fase = status === 'degraded' ? bootFailure()?.fase : undefined;
+  const body = { ok: status !== 'degraded', db, ...(fase ? { fase } : {}), uploads: uploadProvider(), version: VERSION };
   if (status === 'degraded') return res.status(503).json(body);
   res.json(body);
 });
@@ -986,11 +989,16 @@ async function start() {
     // é: corrigir a causa e o restart volta pronto). Fora de produção a
     // instância segue de pé, porém com as rotas de negócio bloqueadas (503).
     if (isDbDegraded()) {
+      // PROD-DB-02 — a FASE é parte do diagnóstico: 'bootstrap' é defeito de
+      // estrutura (não se resolve corrigindo dado); 'migrations' é regra de dado
+      // (ex.: E4.2 recusando dado legado) e exige decisão humana.
+      const falha = bootFailure();
+      const fase = falha ? `fase=${falha.fase}` : 'fase=desconhecida';
       if (process.env.NODE_ENV === 'production') {
-        console.error(`❌ Banco obrigatório não está pronto (${migrationError()}) — encerrando o processo (exit 1) para reinício pela plataforma.`);
+        console.error(`❌ Banco obrigatório não está pronto [${fase}] (${migrationError()}) — encerrando o processo (exit 1) para reinício pela plataforma.`);
         process.exit(1);
       }
-      console.error(`⚠️  Banco obrigatório não está pronto (${migrationError()}) — rotas de negócio bloqueadas (503) até a migração concluir.`);
+      console.error(`⚠️  Banco obrigatório não está pronto [${fase}] (${migrationError()}) — rotas de negócio bloqueadas (503) até a migração concluir.`);
       return;
     }
   }
