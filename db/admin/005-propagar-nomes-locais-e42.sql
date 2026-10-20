@@ -12,32 +12,65 @@
 -- A regra E4.2 NÃO é alterada, o preflight NÃO é removido nem relaxado.
 --
 -- ----------------------------------------------------------------------------
+-- DUAS OPERAÇÕES DISTINTAS (PROD-DB-01.5 e PROD-DB-01.5.2)
+--
+--   Operação B — correção de divergência textual real (renome sem propagação).
+--   Operação C — NORMALIZAÇÃO CONTROLADA DE CLASSE C (diferença apenas de
+--                caixa/espaço). Ex.: "loja" -> "LOJA".
+--
+-- As duas são MUTUAMENTE EXCLUSIVAS: cada uma aborta se houver casos da outra.
+-- Isso impede "misturar classe B com classe C" numa mesma execução.
+--
 -- COMO USAR (preferência: sempre rodar o DRY-RUN antes)
 --
---   DRY-RUN (padrão, não escreve nada):
+--   DRY-RUN operação B (padrão, não escreve nada):
 --     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 --       -f db/admin/005-propagar-nomes-locais-e42.sql
 --
---   APPLY (dupla confirmação explícita; COMMIT ao final):
+--   APPLY operação B (dupla confirmação explícita; COMMIT ao final):
 --     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 --       -v apply=on -v confirmacao=PROD-DB-01.5 \
 --       -f db/admin/005-propagar-nomes-locais-e42.sql
 --
+--   DRY-RUN operação C (mostra o que seria normalizado; NÃO escreve):
+--     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+--       -v normalizar_classe_c=on \
+--       -f db/admin/005-propagar-nomes-locais-e42.sql
+--
+--   APPLY operação C (TRÍPLICE autorização explícita; COMMIT ao final):
+--     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+--       -v apply=on -v confirmacao=PROD-DB-01.5.2 -v normalizar_classe_c=on \
+--       -f db/admin/005-propagar-nomes-locais-e42.sql
+--
 -- SEGURANÇA:
 --   • DRY-RUN por padrão: sem `-v apply=on` NADA é escrito.
---   • APPLY exige TAMBÉM `-v confirmacao=PROD-DB-01.5` (impede apply acidental).
+--   • APPLY B exige TAMBÉM `-v confirmacao=PROD-DB-01.5`.
+--   • APPLY C exige `-v apply=on` E `-v confirmacao=PROD-DB-01.5.2` E
+--     `-v normalizar_classe_c=on` — três chaves independentes. Faltando
+--     QUALQUER uma, aborta antes de qualquer UPDATE.
+--   • Sem `-v normalizar_classe_c=on` o script NUNCA normaliza classe C: a
+--     diferença cosmética continua abortando (comportamento do PROD-DB-01.5).
 --   • Tudo roda em UMA transação explícita: APPLY faz COMMIT; qualquer outro
 --     caminho (erro, guarda acionada, dry-run) faz ROLLBACK.
---   • Guardas abortam (ROLLBACK) se existir QUALQUER caso que não seja classe B
---     (vínculo de outra empresa, texto NULL, órfão, ou diferença só de
---     caixa/espaço). Nada é alterado quando há ambiguidade.
+--   • Guardas abortam (ROLLBACK) se existir QUALQUER caso classe A (vínculo de
+--     outra empresa, texto NULL ou órfão). Nada é alterado quando há ambiguidade.
+--   • Operação B aborta se houver classe C; operação C aborta se houver classe B.
+--   • Classificação preserva a distinção semântica: só é classe C quando
+--     `lower(btrim(texto)) = lower(btrim(nome))` E o texto difere do canônico.
+--     Divergência real ("LOJA" vs "LOJA 2", "LOJA CENTRO", "ESTOQUE", ...) é
+--     classe B e NUNCA é tratada como cosmética.
 --   • AFTER-CHECK fail-closed: após os UPDATEs, reexecuta TODOS os contadores
 --     relevantes do preflight E4.2 (0030) e só faz COMMIT se TODOS forem 0.
 --     `nomes_locais_inconsistentes=0` isolado NÃO basta — a propagação pode
 --     revelar outro bloqueio (ex.: duplicata de saldo com tamanho_id NULL).
 --     Se qualquer contador for > 0, aborta e reverte; nada é persistido.
+--   • O COMMIT depende de `e42.autorizado`, definido pelo próprio bloco apenas
+--     quando a operação autorizada realmente completou; é defesa em profundidade
+--     além do `ON_ERROR_STOP`.
 --
--- PRECEDENTE: docs/RELATORIO-PROD-DB-01-4.md (diagnóstico read-only).
+-- PRECEDENTES: docs/RELATORIO-PROD-DB-01-4.md (diagnóstico read-only),
+--              docs/RELATORIO-PROD-DB-01-5.md (correção classe B),
+--              docs/RELATORIO-PROD-DB-01-5-2.md (normalização classe C).
 -- ============================================================================
 
 \set ON_ERROR_STOP on
@@ -51,8 +84,22 @@
 \else
   \set confirmacao off
 \endif
+-- Operação C (normalização classe C): DESLIGADA por padrão. Só liga com
+-- `-v normalizar_classe_c=on`; sem isso o script mantém o comportamento do
+-- PROD-DB-01.5 (classe C continua abortando).
+\if :{?normalizar_classe_c}
+\else
+  \set normalizar_classe_c off
+\endif
 SELECT set_config('e42.apply', :'apply', false) AS modo_apply,
-       set_config('e42.confirmacao', :'confirmacao', false) AS confirmacao;
+       set_config('e42.confirmacao', :'confirmacao', false) AS confirmacao,
+       set_config('e42.normalizar_classe_c', :'normalizar_classe_c', false) AS normalizar_classe_c;
+
+-- Autorização de COMMIT: começa DESLIGADA; o bloco só a liga quando a operação
+-- autorizada realmente completou a pós-validação. O wrapper \if abaixo exige
+-- esta marca além de `apply=on` (defesa em profundidade; ON_ERROR_STOP já
+-- garantiria o ROLLBACK em qualquer erro).
+SELECT set_config('e42.autorizado', 'off', false) AS autorizado;
 
 -- Transação explícita: nada é persistido até o COMMIT condicional no fim.
 BEGIN;
@@ -65,7 +112,9 @@ BEGIN;
 DO $e42_propagar_nomes_locais$
 DECLARE
   aplicar       BOOLEAN := coalesce(current_setting('e42.apply', true), 'off') IN ('on', 'true', '1', 'yes');
-  confirmado    BOOLEAN := coalesce(current_setting('e42.confirmacao', true), '') = 'PROD-DB-01.5';
+  confirmado_b  BOOLEAN := coalesce(current_setting('e42.confirmacao', true), '') = 'PROD-DB-01.5';
+  confirmado_c  BOOLEAN := coalesce(current_setting('e42.confirmacao', true), '') = 'PROD-DB-01.5.2';
+  normalizar_c  BOOLEAN := coalesce(current_setting('e42.normalizar_classe_c', true), 'off') IN ('on', 'true', '1', 'yes');
   total_antes   BIGINT;
   total_depois  BIGINT;
   a_casos       BIGINT;
@@ -138,7 +187,9 @@ BEGIN
   END LOOP;
 
   -- -------------------------------------------------------------------------
-  -- (C) PROTEÇÃO — aborta se houver QUALQUER caso que não seja classe B.
+  -- (C) PROTEÇÃO — classe A aborta SEMPRE (vínculo cruzado, órfão, texto NULL).
+  --     Classe B e classe C são operações MUTUAMENTE EXCLUSIVAS: cada uma aborta
+  --     se existirem casos da outra. Nunca se "mistura" B com C.
   -- -------------------------------------------------------------------------
   SELECT count(*) INTO orfaos FROM (
     SELECT e.id FROM estoques e LEFT JOIN locais l ON l.id = e.local_id
@@ -180,6 +231,8 @@ BEGIN
     INTO a_casos, c_casos, b_casos
   FROM inc;
 
+  -- Classe A (vínculo cruzado, órfão ou texto NULL) aborta SEMPRE — inclusive no
+  -- DRY-RUN: exige revisão manual, nunca é resolvida por nome.
   IF orfaos > 0 THEN
     RAISE EXCEPTION 'E4.2/01.5 ABORTADO: % registro(s) com local_id apontando para local inexistente (órfão). Nada foi alterado.', orfaos
       USING HINT = 'Corrija o vínculo canônico antes; não associe por nome.';
@@ -188,54 +241,120 @@ BEGIN
     RAISE EXCEPTION 'E4.2/01.5 ABORTADO: % caso(s) classe A (vínculo de outra empresa ou texto de local NULL). Nada foi alterado.', a_casos
       USING HINT = 'Classe A exige revisão manual de empresa_id; não é correção automática por nome.';
   END IF;
-  IF c_casos > 0 THEN
-    RAISE EXCEPTION 'E4.2/01.5 ABORTADO: % caso(s) classe C (diferença apenas de caixa/espaço). Nada foi alterado.', c_casos
-      USING HINT = 'Diferença cosmética: decida com a administração se normaliza; não é propagação de renome.';
-  END IF;
 
-  RAISE NOTICE 'E4.2/01.5 classificação: A=% C=% B=% (todos classe B: correção segura)', a_casos, c_casos, b_casos;
+  -- Relatório de classificação (sempre emitido, inclusive no DRY-RUN).
+  RAISE NOTICE 'E4.2/01.5 classificação: A=% B=% C=% (B=divergência real; C=diferença só de caixa/espaço)', a_casos, b_casos, c_casos;
 
+  -- -------------------------------------------------------------------------
+  -- (C.1) DRY-RUN — padrão. Reporta TODOS os contadores e NÃO escreve nada.
+  --       Não aborta por presença de classe B/C (não há escrita); a decisão de
+  --       qual operação rodar é explícita no APPLY.
+  -- -------------------------------------------------------------------------
   IF NOT aplicar THEN
-    RAISE NOTICE 'E4.2/01.5 DRY-RUN: nenhuma escrita. Seriam atualizados % registro(s) classe B.', b_casos;
-    RAISE NOTICE 'E4.2/01.5 DRY-RUN: para aplicar use -v apply=on -v confirmacao=PROD-DB-01.5';
+    RAISE NOTICE 'E4.2/01.5 DRY-RUN: nenhuma escrita.';
+    RAISE NOTICE 'E4.2/01.5 DRY-RUN contadores: classe_A=%, classe_B=%, classe_C=%, seria_corrigido_classe_B=%, seria_normalizado_classe_C=%, alterados=0',
+      a_casos, b_casos, c_casos, b_casos, c_casos;
+    IF normalizar_c THEN
+      RAISE NOTICE 'E4.2/01.5.2 DRY-RUN: modo classe C habilitado; para aplicar use -v apply=on -v confirmacao=PROD-DB-01.5.2 -v normalizar_classe_c=on';
+    ELSE
+      RAISE NOTICE 'E4.2/01.5 DRY-RUN: modo classe B (padrão); para aplicar use -v apply=on -v confirmacao=PROD-DB-01.5';
+      RAISE NOTICE 'E4.2/01.5.2 DRY-RUN: para normalizar classe C use -v normalizar_classe_c=on -v apply=on -v confirmacao=PROD-DB-01.5.2';
+    END IF;
     RETURN;
   END IF;
 
-  IF NOT confirmado THEN
-    RAISE EXCEPTION 'E4.2/01.5 APPLY recusado: falta -v confirmacao=PROD-DB-01.5. Nada foi alterado.'
-      USING HINT = 'A dupla confirmação evita APPLY acidental.';
+  -- -------------------------------------------------------------------------
+  -- (C.2) APPLY — operações B e C são MUTUAMENTE EXCLUSIVAS: cada uma aborta se
+  --       houver casos da outra. Nunca se "mistura classe B com classe C".
+  -- -------------------------------------------------------------------------
+  IF normalizar_c THEN
+    IF b_casos > 0 THEN
+      RAISE EXCEPTION 'E4.2/01.5.2 ABORTADO: % caso(s) classe B (divergência textual real, não cosmética). A normalização de classe C exige que TODOS os casos sejam cosméticos. Nada foi alterado.', b_casos
+        USING HINT = 'Execute primeiro a operação classe B (PROD-DB-01.5) e só depois a classe C; nunca misture as duas.';
+    END IF;
+    IF NOT confirmado_c THEN
+      RAISE EXCEPTION 'E4.2/01.5.2 APPLY recusado: falta -v confirmacao=PROD-DB-01.5.2. Nada foi alterado.'
+        USING HINT = 'A normalização de classe C exige a confirmação textual específica PROD-DB-01.5.2 (distinta da classe B).';
+    END IF;
+    RAISE NOTICE 'E4.2/01.5.2 classificação: A=% B=% C=% (operação classe C autorizada: % a normalizar)', a_casos, b_casos, c_casos, c_casos;
+  ELSE
+    IF c_casos > 0 THEN
+      RAISE EXCEPTION 'E4.2/01.5 ABORTADO: % caso(s) classe C (diferença apenas de caixa/espaço). Nada foi alterado.', c_casos
+        USING HINT = 'Diferença cosmética: use a operação explícita -v normalizar_classe_c=on -v confirmacao=PROD-DB-01.5.2 para normalizar; não é propagação de renome.';
+    END IF;
+    IF NOT confirmado_b THEN
+      RAISE EXCEPTION 'E4.2/01.5 APPLY recusado: falta -v confirmacao=PROD-DB-01.5. Nada foi alterado.'
+        USING HINT = 'A dupla confirmação evita APPLY acidental.';
+    END IF;
+    RAISE NOTICE 'E4.2/01.5 classificação: A=% C=% B=% (operação classe B autorizada: todos classe B, correção segura)', a_casos, c_casos, b_casos;
   END IF;
 
   -- -------------------------------------------------------------------------
   -- (D) CORREÇÃO — junta SEMPRE por local_id + empresa_id (nunca por nome).
+  --     Operação C acrescenta a restrição cosmética (defesa em profundidade):
+  --     só toca linhas cujo texto difere do canônico APENAS por caixa/espaço.
   -- -------------------------------------------------------------------------
-  UPDATE estoques e SET local = l.nome
-    FROM locais l
-   WHERE e.local_id = l.id
-     AND e.empresa_id = l.empresa_id
-     AND e.local IS DISTINCT FROM l.nome;
-  GET DIAGNOSTICS upd_estoques = ROW_COUNT;
+  IF normalizar_c THEN
+    UPDATE estoques e SET local = l.nome
+      FROM locais l
+     WHERE e.local_id = l.id
+       AND e.empresa_id = l.empresa_id
+       AND e.local IS DISTINCT FROM l.nome
+       AND lower(btrim(e.local)) = lower(btrim(l.nome));
+    GET DIAGNOSTICS upd_estoques = ROW_COUNT;
 
-  UPDATE movimentacoes m SET local = l.nome
-    FROM locais l
-   WHERE m.local_id = l.id
-     AND m.empresa_id = l.empresa_id
-     AND m.local IS DISTINCT FROM l.nome;
-  GET DIAGNOSTICS upd_mov_local = ROW_COUNT;
+    UPDATE movimentacoes m SET local = l.nome
+      FROM locais l
+     WHERE m.local_id = l.id
+       AND m.empresa_id = l.empresa_id
+       AND m.local IS DISTINCT FROM l.nome
+       AND lower(btrim(m.local)) = lower(btrim(l.nome));
+    GET DIAGNOSTICS upd_mov_local = ROW_COUNT;
 
-  UPDATE movimentacoes m SET local_destino = l.nome
-    FROM locais l
-   WHERE m.local_destino_id = l.id
-     AND m.empresa_id = l.empresa_id
-     AND m.local_destino IS DISTINCT FROM l.nome;
-  GET DIAGNOSTICS upd_mov_dest = ROW_COUNT;
+    UPDATE movimentacoes m SET local_destino = l.nome
+      FROM locais l
+     WHERE m.local_destino_id = l.id
+       AND m.empresa_id = l.empresa_id
+       AND m.local_destino IS DISTINCT FROM l.nome
+       AND lower(btrim(m.local_destino)) = lower(btrim(l.nome));
+    GET DIAGNOSTICS upd_mov_dest = ROW_COUNT;
 
-  UPDATE inventarios inv SET local = l.nome
-    FROM locais l
-   WHERE inv.local_id = l.id
-     AND inv.empresa_id = l.empresa_id
-     AND inv.local IS DISTINCT FROM l.nome;
-  GET DIAGNOSTICS upd_inv = ROW_COUNT;
+    UPDATE inventarios inv SET local = l.nome
+      FROM locais l
+     WHERE inv.local_id = l.id
+       AND inv.empresa_id = l.empresa_id
+       AND inv.local IS DISTINCT FROM l.nome
+       AND lower(btrim(inv.local)) = lower(btrim(l.nome));
+    GET DIAGNOSTICS upd_inv = ROW_COUNT;
+  ELSE
+    UPDATE estoques e SET local = l.nome
+      FROM locais l
+     WHERE e.local_id = l.id
+       AND e.empresa_id = l.empresa_id
+       AND e.local IS DISTINCT FROM l.nome;
+    GET DIAGNOSTICS upd_estoques = ROW_COUNT;
+
+    UPDATE movimentacoes m SET local = l.nome
+      FROM locais l
+     WHERE m.local_id = l.id
+       AND m.empresa_id = l.empresa_id
+       AND m.local IS DISTINCT FROM l.nome;
+    GET DIAGNOSTICS upd_mov_local = ROW_COUNT;
+
+    UPDATE movimentacoes m SET local_destino = l.nome
+      FROM locais l
+     WHERE m.local_destino_id = l.id
+       AND m.empresa_id = l.empresa_id
+       AND m.local_destino IS DISTINCT FROM l.nome;
+    GET DIAGNOSTICS upd_mov_dest = ROW_COUNT;
+
+    UPDATE inventarios inv SET local = l.nome
+      FROM locais l
+     WHERE inv.local_id = l.id
+       AND inv.empresa_id = l.empresa_id
+       AND inv.local IS DISTINCT FROM l.nome;
+    GET DIAGNOSTICS upd_inv = ROW_COUNT;
+  END IF;
 
   RAISE NOTICE 'E4.2/01.5 atualizados: estoques.local=%, movimentacoes.local=%, movimentacoes.local_destino=%, inventarios.local=% (total=%)',
     upd_estoques, upd_mov_local, upd_mov_dest, upd_inv,
@@ -379,15 +498,26 @@ BEGIN
       USING HINT = 'Investigue os contadores > 0 (use db/diagnostico-e42-nomes-locais.sql); a correção não deve mascarar outro bloqueio do preflight.';
   END IF;
   RAISE NOTICE 'E4.2/01.5 AFTER OK: todos os contadores do preflight E4.2 = 0 (nomes_locais_inconsistentes de % para 0)', total_antes;
+
+  -- Marca de autorização de COMMIT: só chega aqui quem passou por TODAS as
+  -- guardas, pela confirmação correta e pela pós-validação fail-closed.
+  PERFORM set_config('e42.autorizado', 'on', false);
 END
 $e42_propagar_nomes_locais$;
 
 -- ----------------------------------------------------------------------------
--- (F) SEGURANÇA — COMMIT só no APPLY explícito; qualquer outro caminho ROLLBACK.
+-- (F) SEGURANÇA — COMMIT só no APPLY explícito E autorizado pelo bloco;
+--     qualquer outro caminho faz ROLLBACK.
 -- ----------------------------------------------------------------------------
 \if :apply
-  COMMIT;
-  \echo 'E4.2/01.5 APPLY: transação COMITADA. Confirme com o diagnóstico read-only (db/diagnostico-e42-nomes-locais.sql) que o contador está em 0.'
+  SELECT current_setting('e42.autorizado', true) AS autorizado \gset
+  \if :autorizado
+    COMMIT;
+    \echo 'E4.2/01.5 APPLY: transação COMITADA. Confirme com o diagnóstico read-only (db/diagnostico-e42-nomes-locais.sql) que o contador está em 0.'
+  \else
+    ROLLBACK;
+    \echo 'E4.2/01.5 APPLY NÃO AUTORIZADO: a pós-validação não foi concluída; transação revertida (ROLLBACK). Nenhum dado foi alterado.'
+  \endif
 \else
   ROLLBACK;
   \echo 'E4.2/01.5 DRY-RUN: transação revertida (ROLLBACK). Nenhum dado foi alterado.'
