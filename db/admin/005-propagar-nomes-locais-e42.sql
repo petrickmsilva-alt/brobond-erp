@@ -50,6 +50,11 @@
 --     QUALQUER uma, aborta antes de qualquer UPDATE.
 --   • Sem `-v normalizar_classe_c=on` o script NUNCA normaliza classe C: a
 --     diferença cosmética continua abortando (comportamento do PROD-DB-01.5).
+--   • PROD-DB-01.5.2.1: a flag é lida como TEXTO e reconhecida sem diferenciar
+--     caixa/espaço (`ON`, ` on ` valem). Um valor não reconhecido aborta com o
+--     valor exato recebido — nunca é tratado como "flag ausente". Um marcador de
+--     revisão é emitido no log para distinguir uma cópia ANTIGA do arquivo (que
+--     nem aceita o terceiro parâmetro) de uma falha de gate.
 --   • Tudo roda em UMA transação explícita: APPLY faz COMMIT; qualquer outro
 --     caminho (erro, guarda acionada, dry-run) faz ROLLBACK.
 --   • Guardas abortam (ROLLBACK) se existir QUALQUER caso classe A (vínculo de
@@ -75,6 +80,15 @@
 
 \set ON_ERROR_STOP on
 
+-- PROD-DB-01.5.2.1 — REVISÃO DESTE ARQUIVO.
+-- A revisão aparece como coluna no cabeçalho abaixo, de modo que a saída de
+-- QUALQUER execução (inclusive um DRY-RUN colado num chamado) identifique sem
+-- ambiguidade qual arquivo rodou. O incidente PROD-DB-01.5.2.1 aconteceu porque
+-- um operador executou uma CÓPIA ANTIGA (01.5.1), que nem possui o parâmetro
+-- `normalizar_classe_c`; o cabeçalho de 2 colunas daquela cópia foi a evidência.
+-- Use `db/admin/run-005-e42.sh` para recusar execução de cópia defasada.
+\set e42_revisao 'PROD-DB-01.5.2.1'
+
 -- Modo: APPLY somente com parâmetro explícito; default é DRY-RUN.
 \if :{?apply}
 \else
@@ -93,7 +107,8 @@
 \endif
 SELECT set_config('e42.apply', :'apply', false) AS modo_apply,
        set_config('e42.confirmacao', :'confirmacao', false) AS confirmacao,
-       set_config('e42.normalizar_classe_c', :'normalizar_classe_c', false) AS normalizar_classe_c;
+       set_config('e42.normalizar_classe_c', :'normalizar_classe_c', false) AS normalizar_classe_c,
+       :'e42_revisao' AS revisao;
 
 -- Autorização de COMMIT: começa DESLIGADA; o bloco só a liga quando a operação
 -- autorizada realmente completou a pós-validação. O wrapper \if abaixo exige
@@ -114,7 +129,13 @@ DECLARE
   aplicar       BOOLEAN := coalesce(current_setting('e42.apply', true), 'off') IN ('on', 'true', '1', 'yes');
   confirmado_b  BOOLEAN := coalesce(current_setting('e42.confirmacao', true), '') = 'PROD-DB-01.5';
   confirmado_c  BOOLEAN := coalesce(current_setting('e42.confirmacao', true), '') = 'PROD-DB-01.5.2';
-  normalizar_c  BOOLEAN := coalesce(current_setting('e42.normalizar_classe_c', true), 'off') IN ('on', 'true', '1', 'yes');
+  -- Reconhecimento da flag de classe C. `current_setting` devolve TEXTO: a caixa
+  -- e o espaço são normalizados e só tokens booleanos conhecidos são aceitos.
+  -- Um valor não reconhecido é ERRO, nunca "silenciosamente off" — sem isso um
+  -- `-v normalizar_classe_c=<valor inesperado>` faria o gate parecer "não
+  -- reconhecer a flag" e abortar a classe C como se ela não estivesse ligada.
+  normalizar_raw TEXT    := lower(btrim(coalesce(current_setting('e42.normalizar_classe_c', true), 'off')));
+  normalizar_c   BOOLEAN := lower(btrim(coalesce(current_setting('e42.normalizar_classe_c', true), 'off'))) IN ('on', 'true', '1', 'yes');
   total_antes   BIGINT;
   total_depois  BIGINT;
   a_casos       BIGINT;
@@ -139,6 +160,26 @@ DECLARE
   refs_operacionais BIGINT;
   r             RECORD;
 BEGIN
+  -- -------------------------------------------------------------------------
+  -- (0) VALIDAÇÃO DA ENTRADA — a flag de classe C só aceita tokens booleanos
+  --     conhecidos. Um valor não reconhecido (typo, acento, idioma) é ERRO
+  --     EXPLÍCITO, para NUNCA ser confundido com "o gate não reconheceu a flag"
+  --     (o sintoma do PROD-DB-01.5.2.1): `-v normalizar_classe_c=ON` e
+  --     `-v normalizar_classe_c= sim ` são aceitos (caixa/espaço normalizados);
+  --     `=sim`/`=ligado` abortam dizendo exatamente o valor recebido.
+  -- -------------------------------------------------------------------------
+  IF normalizar_raw NOT IN ('on', 'true', '1', 'yes', 'off', 'false', '0', 'no') THEN
+    RAISE EXCEPTION 'E4.2/01.5.2 APPLY recusado: valor inválido para -v normalizar_classe_c=%. Nada foi alterado.', normalizar_raw
+      USING HINT = 'Use um token booleano reconhecido: on/true/1/yes (habilita a classe C) ou off/false/0/no (desabilita).';
+  END IF;
+
+  -- Marcador de revisão: identifica QUAL arquivo está em execução. Um operador que
+  -- rode uma cópia antiga (sem esta linha e sem o terceiro parâmetro) vê o sintoma
+  -- exato do PROD-DB-01.5.2.1 — o gate "não reconhece" a flag. O marcador torna a
+  -- causa óbvia no log, em vez de parecer um defeito de lógica.
+  RAISE NOTICE 'E4.2/01.5.2.1 revisão do script: reconhece normalizar_classe_c=% (apply=%, confirmacao=%)',
+    normalizar_raw, aplicar, coalesce(current_setting('e42.confirmacao', true), '');
+
   -- -------------------------------------------------------------------------
   -- (A) DIAGNÓSTICO BEFORE — as quatro parcelas exatas do preflight E4.2.
   -- -------------------------------------------------------------------------
