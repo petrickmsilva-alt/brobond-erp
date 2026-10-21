@@ -473,16 +473,23 @@ BEGIN
           colisoes_linhas := colisoes_linhas + linhas_idx;
 
           -- Relatório por chave: o detalhe usa os dados REAIS (nunca fictícios).
+          -- Ordenação DETERMINÍSTICA e independente de collation: sem ORDER BY,
+          -- a ordem de `array_agg(DISTINCT ...)` segue a collation do banco
+          -- (C.UTF-8 e en_US.utf8/ICU produzem ordens diferentes para o mesmo
+          -- dado — ex.: {LOJA,loja} × {loja,LOJA}). O relatório não pode mudar
+          -- de forma entre ambientes. Colunas textuais usam COLLATE "C"
+          -- (byte a byte); as demais, ordem numérica explícita. Argumentos
+          -- posicionais (%n$) porque a coluna textual aparece duas vezes.
           FOR det IN EXECUTE format(
-            'SELECT jsonb_build_object(%s)::text AS chave,'
+            'SELECT jsonb_build_object(%1$s)::text AS chave,'
             || ' count(*) AS linhas, array_agg(r.id ORDER BY r.id) AS registro_ids,'
-            || ' array_agg(DISTINCT r.empresa_id) AS empresas,'
-            || ' array_agg(DISTINCT r.%I) AS local_ids,'
-            || ' array_agg(DISTINCT r.%I) AS locais_atuais,'
-            || ' array_agg(DISTINCT l.nome) AS locais_canonicos'
-            || ' FROM %s'
-            || ' WHERE (%s) AND (%s)'
-            || ' GROUP BY jsonb_build_object(%s)'
+            || ' array_agg(DISTINCT r.empresa_id ORDER BY r.empresa_id) AS empresas,'
+            || ' array_agg(DISTINCT r.%2$I ORDER BY r.%2$I) AS local_ids,'
+            || ' array_agg(DISTINCT r.%3$I COLLATE "C" ORDER BY r.%3$I COLLATE "C") AS locais_atuais,'
+            || ' array_agg(DISTINCT l.nome COLLATE "C" ORDER BY l.nome COLLATE "C") AS locais_canonicos'
+            || ' FROM %4$s'
+            || ' WHERE (%5$s) AND (%6$s)'
+            || ' GROUP BY jsonb_build_object(%7$s)'
             || ' HAVING count(*) > 1'
             || ' ORDER BY 1',
             key_args, tgt.fk, tgt.coluna, base_from, pred_sql, nao_nulo, key_args
