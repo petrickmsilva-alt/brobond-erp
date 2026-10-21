@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
-# PROD-DB-01.5.2.1 — Executor seguro do script administrativo E4.2 (005).
+# PROD-DB-01.5.3 — Executor seguro do script administrativo E4.2 (005).
+# (Criado no PROD-DB-01.5.2.1; a revisão esperada acompanha o script 005.)
 #
 # Motivo: o incidente PROD-DB-01.5.2.1 ocorreu porque o operador executou uma
 # CÓPIA DEFASADA do arquivo 005 (a revisão 01.5.1, que nem possui o parâmetro
@@ -22,7 +23,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$SELF_DIR/005-propagar-nomes-locais-e42.sql"
-REVISAO_ESPERADA='PROD-DB-01.5.2.1'
+REVISAO_ESPERADA='PROD-DB-01.5.3'
 
 if [ -z "${DATABASE_URL:-}" ]; then
   echo "erro: DATABASE_URL não definida." >&2

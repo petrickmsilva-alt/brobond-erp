@@ -1,5 +1,5 @@
 // ============================================================================
-// PROD-DB-01.5.2.1 — GATE DE RECONHECIMENTO DA CLASSE C (regressão do incidente).
+// PROD-DB-01.5.3 — GATE DE RECONHECIMENTO DA CLASSE C (regressão do incidente).
 //
 // Reproduz o comando EXATO que falhou em produção:
 //
@@ -75,7 +75,7 @@ const CONTADOR_SQL = `SELECT
   (SELECT count(*) FROM inventarios inv JOIN locais l ON inv.local_id = l.id
     WHERE inv.local_id IS NOT NULL AND inv.local IS DISTINCT FROM l.nome) AS n`;
 
-test('PROD-DB-01.5.2.1 — o comando de produção (-f) autoriza a classe C; flag robusta a caixa/espaço e valor inválido aborta', async (t) => {
+test('PROD-DB-01.5.3 — o comando de produção (-f) autoriza a classe C; flag robusta a caixa/espaço e valor inválido aborta', async (t) => {
   if (!PSQL) {
     t.skip('binário psql indisponível; no CI ele é instalado (postgresql-client-16).');
     return;
@@ -180,7 +180,7 @@ test('PROD-DB-01.5.2.1 — o comando de produção (-f) autoriza a classe C; fla
     // ------------------------------------------------------------------------
     const prod = runPsqlFile(scratchUrl, ['-v', 'apply=on', '-v', 'confirmacao=PROD-DB-01.5.2', '-v', 'normalizar_classe_c=on']);
     assert.equal(prod.code, 0, `o comando de produção deve sair 0:\n${prod.stderr}`);
-    assert.match(prod.out, /E4\.2\/01\.5\.2\.1 revisão do script: reconhece normalizar_classe_c=on/);
+    assert.match(prod.out, /E4\.2\/01\.5\.3 revisão do script: reconhece normalizar_classe_c=on/);
     assert.match(prod.out, /operação classe C autorizada: 69 a normalizar/);
     assert.match(prod.out, /atualizados: estoques\.local=29, movimentacoes\.local=40, movimentacoes\.local_destino=0, inventarios\.local=0 \(total=69\)/);
     assert.match(prod.out, /transação COMITADA/);
@@ -239,7 +239,7 @@ test('PROD-DB-01.5.2.1 — o comando de produção (-f) autoriza a classe C; fla
     assert.match(comEspaco.out, /reconhece normalizar_classe_c=on/);
     assert.equal((await db.query(`SELECT local FROM estoques WHERE produto_id = $1`, [prod3])).rows[0].local, 'LOJA');
 
-    console.log('\n=== PROD-DB-01.5.2.1 — gate classe C validado (comando de produção via -f) ===');
+    console.log('\n=== PROD-DB-01.5.3 — gate classe C validado (comando de produção via -f) ===');
     console.log('  DRY-RUN=no-op | sem-conf=abort | conf-B=abort | sem-flag=abort | valor-invalido=abort');
     console.log('  comando de produção: 69→0 (29+40) + COMMIT | 2ª=0 | ON/` on ` autorizam');
   } finally {
@@ -250,7 +250,7 @@ test('PROD-DB-01.5.2.1 — o comando de produção (-f) autoriza a classe C; fla
 });
 
 // ============================================================================
-// PROD-DB-01.5.2.1 — GUARDA CONTRA CÓPIA DEFASADA (origem do incidente).
+// PROD-DB-01.5.3 — GUARDA CONTRA CÓPIA DEFASADA (origem do incidente).
 //
 // O incidente não foi um defeito de lógica do HEAD: o operador executou uma
 // CÓPIA ANTIGA (revisão 01.5.1, sem `normalizar_classe_c`). Este teste prova que
@@ -260,14 +260,14 @@ test('PROD-DB-01.5.2.1 — o comando de produção (-f) autoriza a classe C; fla
 //   - arquivo que difere do HEAD do repositório → recusa;
 //   - arquivo íntegro (HEAD) → executa normalmente.
 // ============================================================================
-test('PROD-DB-01.5.2.1 — o executor recusa cópia defasada do script 005', async () => {
+test('PROD-DB-01.5.3 — o executor recusa cópia defasada do script 005', async () => {
   const RUNNER = fileURLToPath(new URL('../../../db/admin/run-005-e42.sh', import.meta.url));
   const SCRIPT_SRC = fileURLToPath(
     new URL('../../../db/admin/005-propagar-nomes-locais-e42.sql', import.meta.url)
   );
   const origem = readFileSync(SCRIPT_SRC, 'utf8');
   assert.match(origem, /normalizar_classe_c/, 'o script do HEAD deve conter o gate de classe C');
-  assert.match(origem, /PROD-DB-01\.5\.2\.1/, 'o script do HEAD deve conter o marcador de revisão');
+  assert.match(origem, /PROD-DB-01.5.3/, 'o script do HEAD deve conter o marcador de revisão');
 
   const tmp = mkdtempSync(path.join(tmpdir(), 'e42run-'));
   const runnerCopy = path.join(tmp, 'run-005-e42.sh');
@@ -288,10 +288,10 @@ test('PROD-DB-01.5.2.1 — o executor recusa cópia defasada do script 005', asy
     assert.match(semGate.stderr, /NÃO contém o gate de classe C/);
 
     // (2) Gate presente, mas sem o marcador de revisão → recusada.
-    writeFileSync(scriptCopy, origem.replace(/PROD-DB-01\.5\.2\.1/g, 'PROD-DB-01.5.0'));
+    writeFileSync(scriptCopy, origem.replace(/PROD-DB-01.5.3/g, 'PROD-DB-01.5.0'));
     const semRevisao = executar();
     assert.notEqual(semRevisao.status, 0, 'cópia sem o marcador de revisão deve ser recusada');
-    assert.match(semRevisao.stderr, /revisão esperada 'PROD-DB-01\.5\.2\.1' ausente/);
+    assert.match(semRevisao.stderr, /revisão esperada 'PROD-DB-01.5.3' ausente/);
 
     // (3) Fora de um repositório git, um arquivo íntegro é executado (DRY-RUN).
     writeFileSync(scriptCopy, origem);
@@ -299,7 +299,7 @@ test('PROD-DB-01.5.2.1 — o executor recusa cópia defasada do script 005', asy
     assert.equal(ok.status, 0, `arquivo íntegro deve executar:\n${ok.stderr}`);
     assert.match(ok.stderr, /revisão do script: reconhece normalizar_classe_c=/);
 
-    console.log('\n=== PROD-DB-01.5.2.1 — executor recusa cópia defasada (gate/versão ausentes) ===');
+    console.log('\n=== PROD-DB-01.5.3 — executor recusa cópia defasada (gate/versão ausentes) ===');
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

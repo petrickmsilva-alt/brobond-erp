@@ -72,22 +72,36 @@
 --   • O COMMIT depende de `e42.autorizado`, definido pelo próprio bloco apenas
 --     quando a operação autorizada realmente completou; é defesa em profundidade
 --     além do `ON_ERROR_STOP`.
+--   • PROD-DB-01.5.3 — PREFLIGHT DE COLISÃO DE CLASSE C: antes de QUALQUER
+--     UPDATE, o bloco inspeciona os índices ÚNICOS reais das tabelas afetadas
+--     (não há lista fixa no código) e verifica se duas linhas distintas passariam
+--     a ocupar a MESMA chave depois de trocar o texto pelo nome canônico de
+--     `locais`. Se houver QUALQUER colisão, o APPLY aborta ANTES de escrever —
+--     o PostgreSQL nunca é quem descobre a violação. O DRY-RUN reporta as
+--     colisões e continua sem escrever. Justificativa: a diferença apenas de
+--     caixa/espaço NÃO torna a linha automaticamente normalizável — ela pode
+--     colidir com uma linha já existente sob uma constraint UNIQUE (caso real:
+--     `estoques_produto_id_tamanho_id_local_key`, chave
+--     `(produto_id, tamanho_id, local)` = `(7, 5, 'LOJA')`).
+--     A normalização NUNCA faz merge nem exclui linhas: a decisão sobre a linha
+--     duplicada continua sendo do operador.
 --
 -- PRECEDENTES: docs/RELATORIO-PROD-DB-01-4.md (diagnóstico read-only),
 --              docs/RELATORIO-PROD-DB-01-5.md (correção classe B),
---              docs/RELATORIO-PROD-DB-01-5-2.md (normalização classe C).
+--              docs/RELATORIO-PROD-DB-01-5-2.md (normalização classe C),
+--              docs/RELATORIO-PROD-DB-01-5-3.md (pré-detecção de colisão).
 -- ============================================================================
 
 \set ON_ERROR_STOP on
 
--- PROD-DB-01.5.2.1 — REVISÃO DESTE ARQUIVO.
+-- PROD-DB-01.5.3 — REVISÃO DESTE ARQUIVO.
 -- A revisão aparece como coluna no cabeçalho abaixo, de modo que a saída de
 -- QUALQUER execução (inclusive um DRY-RUN colado num chamado) identifique sem
 -- ambiguidade qual arquivo rodou. O incidente PROD-DB-01.5.2.1 aconteceu porque
 -- um operador executou uma CÓPIA ANTIGA (01.5.1), que nem possui o parâmetro
 -- `normalizar_classe_c`; o cabeçalho de 2 colunas daquela cópia foi a evidência.
 -- Use `db/admin/run-005-e42.sh` para recusar execução de cópia defasada.
-\set e42_revisao 'PROD-DB-01.5.2.1'
+\set e42_revisao 'PROD-DB-01.5.3'
 
 -- Modo: APPLY somente com parâmetro explícito; default é DRY-RUN.
 \if :{?apply}
@@ -159,6 +173,23 @@ DECLARE
   pdv_nomes         BIGINT := 0;
   refs_operacionais BIGINT;
   r             RECORD;
+  -- PROD-DB-01.5.3 — preflight de colisão de chave única na normalização C.
+  colisoes_total   BIGINT := 0;   -- nº de chaves que passariam a colidir
+  colisoes_linhas  BIGINT := 0;   -- nº de linhas envolvidas nessas chaves
+  idx_verificados  BIGINT := 0;   -- índices únicos efetivamente inspecionados
+  colisoes_resumo  TEXT   := '';  -- relatório acumulado (tabela/índice/chaves)
+  viol             BIGINT;        -- chaves em colisão de UM índice
+  linhas_idx       BIGINT;        -- linhas envolvidas nas colisões de UM índice
+  base_from        TEXT;          -- FROM/JOIN do alvo (tabela + locais canônicos)
+  cand             TEXT;          -- condição "linha candidata ao UPDATE classe C"
+  pred_sql         TEXT;          -- predicado do índice parcial (verbatim)
+  key_args         TEXT;          -- pares 'coluna', <expr pós-update> p/ jsonb
+  nao_nulo         TEXT;          -- todas as colunas de chave não nulas
+  expr             TEXT;          -- expressão de uma coluna de chave
+  tgt              RECORD;        -- alvo (tabela, coluna textual, FK canônica)
+  idx_rec          RECORD;        -- índice único inspecionado
+  det              RECORD;        -- grupo em colisão (detalhe do relatório)
+  i                INT;
 BEGIN
   -- -------------------------------------------------------------------------
   -- (0) VALIDAÇÃO DA ENTRADA — a flag de classe C só aceita tokens booleanos
@@ -177,7 +208,7 @@ BEGIN
   -- rode uma cópia antiga (sem esta linha e sem o terceiro parâmetro) vê o sintoma
   -- exato do PROD-DB-01.5.2.1 — o gate "não reconhece" a flag. O marcador torna a
   -- causa óbvia no log, em vez de parecer um defeito de lógica.
-  RAISE NOTICE 'E4.2/01.5.2.1 revisão do script: reconhece normalizar_classe_c=% (apply=%, confirmacao=%)',
+  RAISE NOTICE 'E4.2/01.5.3 revisão do script: reconhece normalizar_classe_c=% (apply=%, confirmacao=%)',
     normalizar_raw, aplicar, coalesce(current_setting('e42.confirmacao', true), '');
 
   -- -------------------------------------------------------------------------
@@ -287,6 +318,200 @@ BEGIN
   RAISE NOTICE 'E4.2/01.5 classificação: A=% B=% C=% (B=divergência real; C=diferença só de caixa/espaço)', a_casos, b_casos, c_casos;
 
   -- -------------------------------------------------------------------------
+  -- (C.0) PROD-DB-01.5.3 — PREFLIGHT DE COLISÃO DE CHAVE ÚNICA (classe C).
+  --
+  -- A normalização troca um texto por `locais.nome`. Se esse texto participa de
+  -- um índice ÚNICO, duas linhas DISTINTAS podem passar a ocupar a MESMA chave —
+  -- e o UPDATE violaria a constraint (foi o caso real de
+  -- `estoques_produto_id_tamanho_id_local_key`, `(produto_id, tamanho_id, local)`).
+  -- Aqui a colisão é detectada ANTES de qualquer escrita: o PostgreSQL nunca é
+  -- quem descobre a violação.
+  --
+  -- A detecção é GENÉRICA: não há lista fixa de índices no código. Para cada
+  -- UPDATE de classe C, introspecta-se `pg_index`/`pg_attribute` e testa-se TODO
+  -- índice único (inclusive a chave primária) e válido cujas colunas de chave
+  -- incluam a coluna textual normalizada. A chave é avaliada no estado PÓS-update
+  -- (a coluna textual vira `locais.nome`; as demais ficam como estão) e o
+  -- predicado do índice parcial é aplicado verbatim — assim a semântica de NULL
+  -- do índice (linhas com chave nula nunca colidem) é preservada.
+  --
+  -- Semântica de colisão: um grupo é colisão somente quando TODAS as colunas da
+  -- chave são não nulas e iguais entre ≥2 linhas — exatamente o que um índice
+  -- único btree rejeita. Um predicado que referencie a coluna textual é
+  -- fail-closed (aborta): não se pode afirmar que o índice deixa de valer.
+  --
+  -- Nenhuma linha é alterada, mesclada ou excluída por este bloco: ele apenas lê.
+  -- -------------------------------------------------------------------------
+  IF normalizar_c THEN
+    -- (C.0a) AUTORIZAÇÃO da operação C — validada ANTES do preflight de colisão,
+    --        na ordem obrigatória do APPLY. No DRY-RUN nada disso é exigido (não
+    --        há escrita): o modo C reporta e retorna mais abaixo.
+    IF aplicar THEN
+      IF b_casos > 0 THEN
+        RAISE EXCEPTION 'E4.2/01.5.2 ABORTADO: % caso(s) classe B (divergência textual real, não cosmética). A normalização de classe C exige que TODOS os casos sejam cosméticos. Nada foi alterado.', b_casos
+          USING HINT = 'Execute primeiro a operação classe B (PROD-DB-01.5) e só depois a classe C; nunca misture as duas.';
+      END IF;
+      IF NOT confirmado_c THEN
+        RAISE EXCEPTION 'E4.2/01.5.2 APPLY recusado: falta -v confirmacao=PROD-DB-01.5.2. Nada foi alterado.'
+          USING HINT = 'A normalização de classe C exige a confirmação textual específica PROD-DB-01.5.2 (distinta da classe B).';
+      END IF;
+    END IF;
+
+    FOR tgt IN
+      SELECT * FROM (VALUES
+        ('estoques',      'local',         'local_id'),
+        ('movimentacoes', 'local',         'local_id'),
+        ('movimentacoes', 'local_destino', 'local_destino_id'),
+        ('inventarios',   'local',         'local_id')
+      ) AS v(tabela, coluna, fk)
+    LOOP
+      -- A colisão pode ocorrer entre uma linha ATUALIZADA e outra que NÃO é
+      -- atualizada (caso real: 'loja' normaliza para 'LOJA' e já existe uma
+      -- linha 'LOJA'). Por isso o preflight avalia a tabela INTEIRA no estado
+      -- PÓS-update, e não apenas as linhas candidatas ao UPDATE.
+      --
+      -- `base_from` faz LEFT JOIN com o local canônico; `cand` marca a linha que
+      -- o UPDATE de classe C realmente alteraria (mesmo vínculo, mesma empresa,
+      -- texto divergente só por caixa/espaço). Para as demais, o texto fica
+      -- como está. `filtro` é o estado pós-update aplicado ao predicado do índice.
+      base_from := format(
+        '%I r LEFT JOIN locais l ON l.id = r.%I',
+        tgt.tabela, tgt.fk);
+      cand := format(
+        '(r.%I IS NOT NULL AND l.id IS NOT NULL AND l.empresa_id = r.empresa_id'
+        || ' AND r.%I IS DISTINCT FROM l.nome AND lower(btrim(r.%I)) = lower(btrim(l.nome)))',
+        tgt.fk, tgt.coluna, tgt.coluna);
+
+      FOR idx_rec IN
+        SELECT c.relname AS idx_nome,
+               pg_get_expr(i.indpred, i.indrelid) AS pred,
+               pg_get_indexdef(i.indexrelid) AS idx_def,
+               ARRAY(
+                 SELECT a.attname
+                   FROM unnest(i.indkey::int[]) WITH ORDINALITY AS k(attnum, ord)
+                   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                  WHERE k.ord <= i.indnkeyatts
+                  ORDER BY k.ord
+               ) AS cols
+          FROM pg_index i
+          JOIN pg_class c ON c.oid = i.indexrelid
+          JOIN pg_class t ON t.oid = i.indrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+         WHERE n.nspname = current_schema()
+           AND t.relname = tgt.tabela
+           -- TODO índice único conta, inclusive a chave primária: a única
+           -- razão para excluir a PK seria a suposição de que `id` nunca é a
+           -- coluna textual normalizada — suposição que o preflight não faz.
+           AND i.indisunique AND i.indisvalid
+           AND (
+             -- (a) a chave inclui a coluna textual normalizada: o valor da chave
+             --     muda e duas linhas podem passar a colidir.
+             tgt.coluna = ANY (
+                   SELECT a2.attname
+                     FROM unnest(i.indkey::int[]) WITH ORDINALITY AS k2(attnum, ord)
+                     JOIN pg_attribute a2 ON a2.attrelid = i.indrelid AND a2.attnum = k2.attnum
+                    WHERE k2.ord <= i.indnkeyatts
+                 )
+             -- (b) o predicado do índice parcial referencia a coluna textual:
+             --     a linha pode entrar/sair do índice. Não dá para afirmar que
+             --     deixa de valer — o bloco trata como fail-closed e aborta.
+             OR (i.indpred IS NOT NULL
+                 AND pg_get_expr(i.indpred, i.indrelid)
+                     ~* ('(^|[^a-z0-9_])' || lower(tgt.coluna) || '([^a-z0-9_]|$)'))
+           )
+      LOOP
+        idx_verificados := idx_verificados + 1;
+
+        -- Fail-closed: predicado que menciona a coluna textual impede afirmar
+        -- que o índice deixará de valer (a linha pode entrar/sair do índice).
+        -- Não se arrisca — aborta antes de qualquer escrita.
+        IF idx_rec.pred IS NOT NULL
+           AND idx_rec.pred ~* ('(^|[^a-z0-9_])' || lower(tgt.coluna) || '([^a-z0-9_]|$)') THEN
+          RAISE EXCEPTION 'E4.2/01.5.3 ABORTADO: o índice único % em % tem predicado que referencia a coluna normalizada (%) — não é possível afirmar que o índice deixa de valer. Nada foi alterado.',
+            idx_rec.idx_nome, tgt.tabela, tgt.coluna
+            USING HINT = 'Revise manualmente o índice parcial; o preflight é fail-closed e nunca assume que um predicado sobre a coluna normalizada não colidirá.';
+        END IF;
+
+        -- Monta a chave PÓS-update: a coluna textual vira l.nome nas linhas
+        -- candidatas (e permanece igual nas demais); as outras colunas da chave
+        -- ficam como estão. `key_args` alimenta `jsonb_build_object`, que agrupa
+        -- por igualdade exata de coluna e serve para exibir a chave conflitante.
+        -- `nao_nulo` reproduz a semântica NULL-distinta de um índice único btree:
+        -- uma chave com qualquer coluna nula nunca colide.
+        key_args := '';
+        nao_nulo := '';
+        FOR i IN 1 .. array_length(idx_rec.cols, 1) LOOP
+          IF idx_rec.cols[i] = tgt.coluna THEN
+            expr := format('(CASE WHEN %s THEN l.nome ELSE r.%I END)', cand, tgt.coluna);
+          ELSE
+            expr := format('r.%I', idx_rec.cols[i]);
+          END IF;
+          key_args := key_args || CASE WHEN i > 1 THEN ', ' ELSE '' END
+                      || format('%L, %s', idx_rec.cols[i], expr);
+          nao_nulo := nao_nulo || CASE WHEN i > 1 THEN ' AND ' ELSE '' END
+                      || format('(%s) IS NOT NULL', expr);
+        END LOOP;
+
+        -- O predicado do índice parcial é aplicado verbatim: ele nunca
+        -- referencia a coluna textual (senão o bloco acima já teria abortado) e
+        -- as demais colunas não mudam no UPDATE.
+        pred_sql := coalesce(idx_rec.pred, 'true');
+
+        EXECUTE format(
+          'SELECT count(*), coalesce(sum(n), 0) FROM ('
+          || '  SELECT count(*) AS n'
+          || '    FROM %s'
+          || '   WHERE (%s) AND (%s)'
+          || '   GROUP BY jsonb_build_object(%s)'
+          || '  HAVING count(*) > 1'
+          || ') g',
+          base_from, pred_sql, nao_nulo, key_args
+        ) INTO viol, linhas_idx;
+
+        IF viol > 0 THEN
+          colisoes_total := colisoes_total + viol;
+          colisoes_linhas := colisoes_linhas + linhas_idx;
+
+          -- Relatório por chave: o detalhe usa os dados REAIS (nunca fictícios).
+          -- Ordenação DETERMINÍSTICA e independente de collation: sem ORDER BY,
+          -- a ordem de `array_agg(DISTINCT ...)` segue a collation do banco
+          -- (C.UTF-8 e en_US.utf8/ICU produzem ordens diferentes para o mesmo
+          -- dado — ex.: {LOJA,loja} × {loja,LOJA}). O relatório não pode mudar
+          -- de forma entre ambientes. Colunas textuais usam COLLATE "C"
+          -- (byte a byte); as demais, ordem numérica explícita. Argumentos
+          -- posicionais (%n$) porque a coluna textual aparece duas vezes.
+          FOR det IN EXECUTE format(
+            'SELECT jsonb_build_object(%1$s)::text AS chave,'
+            || ' count(*) AS linhas, array_agg(r.id ORDER BY r.id) AS registro_ids,'
+            || ' array_agg(DISTINCT r.empresa_id ORDER BY r.empresa_id) AS empresas,'
+            || ' array_agg(DISTINCT r.%2$I ORDER BY r.%2$I) AS local_ids,'
+            || ' array_agg(DISTINCT r.%3$I COLLATE "C" ORDER BY r.%3$I COLLATE "C") AS locais_atuais,'
+            || ' array_agg(DISTINCT l.nome COLLATE "C" ORDER BY l.nome COLLATE "C") AS locais_canonicos'
+            || ' FROM %4$s'
+            || ' WHERE (%5$s) AND (%6$s)'
+            || ' GROUP BY jsonb_build_object(%7$s)'
+            || ' HAVING count(*) > 1'
+            || ' ORDER BY 1',
+            key_args, tgt.fk, tgt.coluna, base_from, pred_sql, nao_nulo, key_args
+          )
+          LOOP
+            colisoes_resumo := colisoes_resumo || format(
+              E'\n  • tabela=%s índice=%s chave_conflitante=%s empresa_id=%s local_id=%s local_atual=%s local_canonico=%s linhas=%s registros=%s',
+              tgt.tabela, idx_rec.idx_nome, det.chave, det.empresas, det.local_ids,
+              det.locais_atuais, det.locais_canonicos, det.linhas, det.registro_ids);
+          END LOOP;
+
+          RAISE NOTICE 'E4.2/01.5.3 COLISÃO: tabela=% índice=% coluna=% chaves_conflitantes=% linhas_envolvidas=%',
+            tgt.tabela, idx_rec.idx_nome, tgt.coluna, viol, linhas_idx;
+        END IF;
+      END LOOP;
+    END LOOP;
+
+    RAISE NOTICE 'E4.2/01.5.3 preflight de colisão: índices únicos verificados=%, chaves em colisão=%, linhas envolvidas=%',
+      idx_verificados, colisoes_total, colisoes_linhas;
+  END IF;
+
+  -- -------------------------------------------------------------------------
   -- (C.1) DRY-RUN — padrão. Reporta TODOS os contadores e NÃO escreve nada.
   --       Não aborta por presença de classe B/C (não há escrita); a decisão de
   --       qual operação rodar é explícita no APPLY.
@@ -296,6 +521,12 @@ BEGIN
     RAISE NOTICE 'E4.2/01.5 DRY-RUN contadores: classe_A=%, classe_B=%, classe_C=%, seria_corrigido_classe_B=%, seria_normalizado_classe_C=%, alterados=0',
       a_casos, b_casos, c_casos, b_casos, c_casos;
     IF normalizar_c THEN
+      IF colisoes_total > 0 THEN
+        RAISE NOTICE 'E4.2/01.5.3 DRY-RUN: % colisão(ões) de chave única detectada(s) (% linha(s)). O APPLY abortaria ANTES de qualquer UPDATE. Detalhe:%',
+          colisoes_total, colisoes_linhas, colisoes_resumo;
+      ELSE
+        RAISE NOTICE 'E4.2/01.5.3 DRY-RUN: nenhuma colisão de chave única prevista (índices verificados=%); a normalização pode ser aplicada com segurança.', idx_verificados;
+      END IF;
       RAISE NOTICE 'E4.2/01.5.2 DRY-RUN: modo classe C habilitado; para aplicar use -v apply=on -v confirmacao=PROD-DB-01.5.2 -v normalizar_classe_c=on';
     ELSE
       RAISE NOTICE 'E4.2/01.5 DRY-RUN: modo classe B (padrão); para aplicar use -v apply=on -v confirmacao=PROD-DB-01.5';
@@ -307,16 +538,18 @@ BEGIN
   -- -------------------------------------------------------------------------
   -- (C.2) APPLY — operações B e C são MUTUAMENTE EXCLUSIVAS: cada uma aborta se
   --       houver casos da outra. Nunca se "mistura classe B com classe C".
+  --       A autorização e o preflight de colisão da classe C já rodaram em
+  --       (C.0a)/(C.0); aqui só resta decidir o COMMIT a partir da colisão.
   -- -------------------------------------------------------------------------
   IF normalizar_c THEN
-    IF b_casos > 0 THEN
-      RAISE EXCEPTION 'E4.2/01.5.2 ABORTADO: % caso(s) classe B (divergência textual real, não cosmética). A normalização de classe C exige que TODOS os casos sejam cosméticos. Nada foi alterado.', b_casos
-        USING HINT = 'Execute primeiro a operação classe B (PROD-DB-01.5) e só depois a classe C; nunca misture as duas.';
+    -- PROD-DB-01.5.3 — COLISÃO DE CHAVE ÚNICA: aborta ANTES de qualquer UPDATE.
+    -- O preflight (C.0) já rodou; aqui é a decisão. Nenhum UPDATE abaixo executa
+    -- e o COMMIT não ocorre: a transação é revertida pelo wrapper (ON_ERROR_STOP).
+    IF colisoes_total > 0 THEN
+      RAISE EXCEPTION 'E4.2/01.5.3 ABORTADO: a normalização classe C faria % chave(s) única(s) colidir (% linha(s) envolvida(s)). Nenhum UPDATE foi executado e nada será persistido.', colisoes_total, colisoes_linhas
+        USING HINT = 'O PostgreSQL nunca é quem descobre a violação: o preflight aborta ANTES de escrever. Revise as linhas listadas e decida manualmente qual manter — a normalização NÃO faz merge nem exclui registros. Detalhe:' || colisoes_resumo;
     END IF;
-    IF NOT confirmado_c THEN
-      RAISE EXCEPTION 'E4.2/01.5.2 APPLY recusado: falta -v confirmacao=PROD-DB-01.5.2. Nada foi alterado.'
-        USING HINT = 'A normalização de classe C exige a confirmação textual específica PROD-DB-01.5.2 (distinta da classe B).';
-    END IF;
+
     RAISE NOTICE 'E4.2/01.5.2 classificação: A=% B=% C=% (operação classe C autorizada: % a normalizar)', a_casos, b_casos, c_casos, c_casos;
   ELSE
     IF c_casos > 0 THEN
