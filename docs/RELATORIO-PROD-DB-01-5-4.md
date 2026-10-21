@@ -255,9 +255,26 @@ Cobertura explícita dos itens exigidos: 16 conflitos ✅ · quantidades diferen
 | smoke | `npm run smoke` | ver §9.1 |
 | smoke PostgreSQL | `npm run smoke:pg` | ver §9.1 |
 
-### 9.1 Resultado
+### 9.1 Resultado (executados localmente, PostgreSQL 16.14)
 
-_preenchido na seção de evidência de gates deste ciclo (ver `docs/evidencias/prod-db-01-5-4/`)._
+| camada | comando | resultado | evidência |
+|:-------|:--------|:----------|:----------|
+| **PostgreSQL (gate ERP-03)** | `npm run test:pg` | **PASS** — `233 pass, 0 fail, 0 skipped, 0 todo` (58 arquivos) | `gate-test-pg.log` |
+| Testes de memória | `npm --workspace server test` | PASS — 890 testes, 824 pass, **0 fail**, 66 skipped (não críticos) | `gate-server-test.log` |
+| Testes do client | `npm --workspace client test` | PASS — 29 arquivos, 323 testes | `gate-client-test.log` |
+| typecheck | `npm run typecheck` | PASS (domain + server + client) | `gate-typecheck.log` |
+| lint | `npm run lint` | PASS — **0 erros** (410 warnings pré-existentes) | `gate-lint.log` |
+| build | `npm run build` | PASS | `gate-build.log` |
+| auditoria de menu | `npm run audit:menu` | PASS — sem erros (1 aviso classificado: `/api/health` pública) | `gate-audit-menu.log` |
+| smoke (demonstração) | `npm run smoke` | PASS — **126/126** | `gate-smoke.log` |
+| smoke PostgreSQL | `npm run smoke:pg` | PASS — **126/126** contra PG real | `gate-smoke-pg.log` |
+
+Os 4 testes do PROD-DB-01.5.4 estão entre os 233 do gate PostgreSQL (arquivo
+`server/test/pg/prod-db-01-54-consolidar-colisoes.test.ts`).
+
+> Nota de ambiente: `npm run smoke` exige um servidor de demonstração recém-subido
+> (`PORT=3001 npx tsx server/src/index.ts`, sem `DATABASE_URL`); o log anexado é de
+> uma execução limpa (126/126). Nenhum gate foi executado contra produção.
 
 ---
 
@@ -273,3 +290,36 @@ _preenchido na seção de evidência de gates deste ciclo (ver `docs/evidencias/
 
 `db/migrations/0030_e42_locais_estoque_multempresa.sql` **não foi alterada**.
 Nenhum arquivo de boot foi alterado.
+
+---
+
+## 11. Runbook de aplicação (quando autorizado, em produção)
+
+Sequência recomendada — **nada disso foi executado neste ciclo**:
+
+```bash
+# 0. Snapshot/backup antes de qualquer escrita (fora do escopo deste ciclo).
+
+# 1. Diagnóstico read-only: confirma o estado atual.
+psql "$DATABASE_URL" -f db/diagnostico-e42-nomes-locais.sql
+
+# 2. DRY-RUN do 006: relatório dos 16 pares e da ação prevista. Não escreve.
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f db/admin/006-consolidar-colisoes-estoque-classe-c.sql
+
+# 3. APPLY do 006 (tríplice autorização): consolida+soma+normaliza. COMMIT.
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -v apply=on -v confirmacao=PROD-DB-01.5.4 -v autorizacao=PROD-DB-01.5.4 \
+  -f db/admin/006-consolidar-colisoes-estoque-classe-c.sql
+
+# 4. 005 (PROD-DB-01.5.3.1): normaliza a classe C restante, agora sem colisão.
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -v apply=on -v confirmacao=PROD-DB-01.5.2 -v normalizar_classe_c=on \
+  -f db/admin/005-propagar-nomes-locais-e42.sql
+
+# 5. Confirmação: contador de nomes locais = 0 e nenhuma colisão canônica.
+psql "$DATABASE_URL" -f db/diagnostico-e42-nomes-locais.sql
+```
+
+Em qualquer erro o script reverte a transação inteira (`ROLLBACK`) — nada fica
+parcialmente aplicado. Reexecutar o passo 3 é seguro (idempotente).

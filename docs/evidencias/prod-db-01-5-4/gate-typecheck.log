@@ -1,0 +1,20 @@
+
+> brobond-ai-erp@1.0.0 typecheck
+> npm run typecheck:domain && npm --workspace server run typecheck && npm --workspace client run typecheck
+
+
+> brobond-ai-erp@1.0.0 typecheck:domain
+> npm --workspace @brobond/domain run typecheck
+
+
+> @brobond/domain@1.0.0 typecheck
+> tsc --noEmit
+
+
+> brobond-server@0.6.0 typecheck
+> tsc --noEmit
+
+
+> brobond-client@0.6.0 typecheck
+> tsc --noEmit
+

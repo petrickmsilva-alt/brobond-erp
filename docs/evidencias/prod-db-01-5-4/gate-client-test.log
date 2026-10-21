@@ -1,0 +1,126 @@
+
+> brobond-client@0.6.0 test
+> vitest run
+
+
+ RUN  v2.1.9 /workspace/project/brobond-erp/client
+
+ ✓ src/modules.test.ts (23 tests) 34ms
+ ✓ src/pages/PdvPage.test.tsx (12 tests) 790ms
+ ✓ src/components/ui-kit.test.tsx (31 tests) 1079ms
+stderr | src/components/Layout.test.tsx > Layout — shell, breadcrumb e Command Palette (ERP-UX-03) > em "/" a moldura diz "Meu Negócio" e não existe mais "Dashboard" no shell
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+stderr | src/components/TopNavigation.test.tsx > TopNavigation — Master Top Navigation (UX-05) > admin: renderiza uma entrada por Área visível, derivada de visibleModules
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+ ✓ src/pages/CotacoesCompraPage.test.tsx (11 tests) 910ms
+ ✓ src/components/TopNavigation.test.tsx (16 tests) 1876ms
+   ✓ TopNavigation — Master Top Navigation (UX-05) > RBAC preservado: operador não vê Administração nem Financeiro; gerente vê Financeiro e não Administração 322ms
+   ✓ TopNavigation — Master Top Navigation (UX-05) > toda rota de visibleModules é alcançável pelo menu superior (nenhum módulo órfão) 615ms
+stderr | src/components/ui-kit-negocios.test.tsx > StatCard > vira link quando recebe destino
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+stderr | src/components/ui-kit-negocios.test.tsx > Combobox > navega com setas + Enter e fecha com Esc sem escolher
+Warning: An update to Combobox inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at Combobox (/workspace/project/brobond-erp/client/src/components/ui-kit-negocios.tsx:528:3)
+    at Hospedeiro (/workspace/project/brobond-erp/client/src/components/ui-kit-negocios.test.tsx:207:25)
+Warning: An update to Combobox inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at Combobox (/workspace/project/brobond-erp/client/src/components/ui-kit-negocios.tsx:528:3)
+    at Hospedeiro (/workspace/project/brobond-erp/client/src/components/ui-kit-negocios.test.tsx:207:25)
+Warning: An update to Combobox inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at Combobox (/workspace/project/brobond-erp/client/src/components/ui-kit-negocios.tsx:528:3)
+    at Hospedeiro (/workspace/project/brobond-erp/client/src/components/ui-kit-negocios.test.tsx:207:25)
+
+stderr | src/components/Sidebar.test.tsx > Sidebar — Árvore Master renderizada × fonte única > admin: renderiza exatamente os módulos de visibleModules(MODULES)
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+ ✓ src/components/ui-kit-negocios.test.tsx (26 tests) 636ms
+ ✓ src/components/Sidebar.test.tsx (18 tests) 2221ms
+   ✓ Sidebar — Árvore Master renderizada × fonte única > módulo ativo e deep links abrem automaticamente a Área e o Grupo corretos 425ms
+ ✓ src/components/Layout.test.tsx (13 tests) 5554ms
+   ✓ Layout — shell, breadcrumb e Command Palette (ERP-UX-03) > em "/" a moldura diz "Meu Negócio" e não existe mais "Dashboard" no shell 486ms
+   ✓ Layout — shell, breadcrumb e Command Palette (ERP-UX-03) > monta as peças do shell: Top Navigation, skip-link, busca global e seletor de empresa 366ms
+   ✓ Layout — shell, breadcrumb e Command Palette (ERP-UX-03) > UX-05: a Top Navigation é a navegação principal do desktop e alcança as 11 Áreas 354ms
+   ✓ Layout — shell, breadcrumb e Command Palette (ERP-UX-03) > o breadcrumb reflete as novas áreas da Árvore Master (Vendas, Estoque & Suprimentos, Produção, Fiscal, Administração, Commerce, Creators, Utilidades Globais) 1683ms
+   ✓ Layout — shell, breadcrumb e Command Palette (ERP-UX-03) > a busca global (Ctrl/Cmd+K) usa a mesma fonte, exibe contexto Área → Grupo, busca por rota/sinônimo e respeita planned e RBAC 1179ms
+   ✓ Layout — shell, breadcrumb e Command Palette (ERP-UX-03) > trocar a empresa continua remontando o conteúdo (escopo preservado) sem quebrar a navegação 358ms
+   ✓ Layout — shell, breadcrumb e Command Palette (ERP-UX-03) > mobile drawer abre pelo botão do header e fecha com Escape 326ms
+ ✓ src/pages/LogisticaPage.test.tsx (11 tests) 442ms
+ ✓ src/components/RecebimentoCompraModal.test.tsx (17 tests) 790ms
+ ✓ src/pages/DevolucoesPage.test.tsx (8 tests) 487ms
+stderr | src/pages/Dashboard.negocios.test.tsx > Dashboard — motor analítico > consulta o resumo sempre com a empresa ativa e com o período anterior de mesma duração
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+ ✓ src/pages/OrdemDetail.test.tsx (9 tests) 596ms
+ ✓ src/pages/ExpedicaoPage.test.tsx (6 tests) 461ms
+ ✓ src/pages/Dashboard.negocios.test.tsx (11 tests) 1626ms
+ ✓ src/pages/EmpresasPage.test.tsx (8 tests) 1027ms
+   ✓ EmpresasPage > cria empresa pelo servidor 348ms
+ ✓ src/pages/ComissoesPage.test.tsx (8 tests) 597ms
+ ✓ src/pages/SugestaoCompraPage.test.tsx (7 tests) 336ms
+ ✓ src/pages/InutilizacoesPage.test.tsx (8 tests) 501ms
+ ✓ src/pages/NcmPage.test.tsx (10 tests) 391ms
+stderr | src/pages/Dashboard.test.tsx > Dashboard — estoque valorizado > troca o cartão "Valor do estoque" pelos três custos (produção, atacado, varejo)
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+ ✓ src/pages/Dashboard.test.tsx (3 tests) 516ms
+ ✓ src/pages/ConectorPage.test.tsx (6 tests) 357ms
+stderr | src/pages/UsuariosPage.test.tsx > Usuários — painel de consulta > abre com as visões rápidas prontas e o caixabox de filtros visível
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+ ✓ src/components/ui.test.tsx (13 tests) 371ms
+ ✓ src/pages/UsuariosPage.test.tsx (4 tests) 1154ms
+   ✓ Usuários — painel de consulta > abre com as visões rápidas prontas e o caixabox de filtros visível 359ms
+   ✓ Usuários — painel de consulta > dobra/desdobra o caixabox, aplica um recorte e mostra o chip removível 497ms
+ ✓ src/pages/CustoPage.test.tsx (8 tests) 187ms
+ ✓ src/pages/PlanejamentoProducaoPage.test.tsx (5 tests) 203ms
+ ✓ src/components/CompanySwitcher.test.tsx (4 tests) 226ms
+stderr | src/pages/Login.test.tsx > Login > mostra o spinner de carregamento enquanto a sessão é verificada
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+ ✓ src/lib/periodo.test.ts (15 tests) 9ms
+ ✓ src/lib/datas.test.ts (6 tests) 4ms
+ ✓ src/pages/Login.test.tsx (6 tests) 991ms
+   ✓ Login > chama login() com e-mail e senha ao enviar o formulário 316ms
+
+ Test Files  29 passed (29)
+      Tests  323 passed (323)
+   Start at  18:45:55
+   Duration  18.80s (transform 1.94s, setup 1.59s, collect 9.08s, tests 24.37s, environment 12.98s, prepare 2.10s)
+

@@ -1,0 +1,299 @@
+nohup: ignoring input
+
+> brobond-ai-erp@1.0.0 smoke:pg
+> node scripts/smoke-pg.mjs
+
+🗄️  smoke:pg — banco novo: brobond_smoke_mvifpoub
+🚀 smoke:pg — subindo a API na porta 43071 (migrate + admin automáticos)
+[api] ⚡ BROBOND API rodando em http://0.0.0.0:43071
+[api] [2026-10-21T18:17:27.634Z] GET /api/health
+[api] 🗄️  Migração aplicada: 0001_integridade_dominio.sql
+[api] 🗄️  Migração aplicada: 0002_medidas_integridade.sql
+[api] 🗄️  Migração aplicada: 0003_catalogo_inteligencia.sql
+[api] 🗄️  Migração aplicada: 0004_catalogo_funil.sql
+[api] 🗄️  Migração aplicada: 0005_politicas_comerciais.sql
+[api] 🗄️  Migração aplicada: 0006_permissoes_comerciais.sql
+[api] 🗄️  Migração aplicada: 0007_portal_cliente_seguro.sql
+[api] 🗄️  Migração aplicada: 0008_usuarios_profissional.sql
+[api] 🗄️  Migração aplicada: 0009_usuarios_onda3.sql
+[api] 🗄️  Migração aplicada: 0010_onda4_governanca.sql
+[api] 🗄️  Migração aplicada: 0011_financeiro_profissional.sql
+[api] 🗄️  Migração aplicada: 0012_fusion_commerce_into_erp.sql
+[api] 🗄️  Migração aplicada: 0013_connector_oauth_redirect_uri.sql
+[api] 🗄️  Migração aplicada: 0014_drop_shopee_and_tiktok_connectors.sql
+[api] 🗄️  Migração aplicada: 0015_instagram_shopping_channel.sql
+[api] 🗄️  Migração aplicada: 0016_meu_negocios_motor_analitico.sql
+[api] [2026-10-21T18:17:27.893Z] GET /api/health
+[api] 🗄️  Migração aplicada: 0017_multiempresa_isolamento.sql
+[api] 🗄️  Migração aplicada: 0018_produto_cadastro_completo.sql
+[api] 🗄️  Migração aplicada: 0019_tributacao_fiscal.sql
+[api] 🗄️  Migração aplicada: 0020_documentos_fiscais.sql
+[api] 🗄️  Migração aplicada: 0021_cadastros_pessoas.sql
+[api] 🗄️  Migração aplicada: 0022_fiscal_config_id.sql
+[api] 🗄️  Migração aplicada: 0023_fiscal_provider_extensivel.sql
+[api] [2026-10-21T18:17:28.147Z] GET /api/health
+[api] 🗄️  Migração aplicada: 0024_p1_comercial_logistica.sql
+[api] 🗄️  Migração aplicada: 0025_p2_financeiro_gateways.sql
+[api] 🗄️  Migração aplicada: 0026_producao_completa.sql
+[api] 🗄️  Migração aplicada: 0027_compras_cotacoes.sql
+[api] 🗄️  Migração aplicada: 0028_compras_custo_canonico.sql
+[api] 🗄️  Migração aplicada: 0029_compras_depara_completo.sql
+[api] [2026-10-21T18:17:28.398Z] GET /api/health
+[api] 🗄️  Migração aplicada: 0030_e42_locais_estoque_multempresa.sql
+[api] 🗄️  Migração aplicada: 0031_e421_integridade_estoque.sql
+[api] 🗄️  Migração aplicada: 0032_e423_expedicao_vocabulario.sql
+[api] 🗄️  Migração aplicada: 0033_p0_commerce_tenant_scope.sql
+[api] 🗄️  Migração aplicada: 0034_golive03_marketplace_venda_operacional.sql
+[api] 🗄️  Migração aplicada: 0035_p2_04_not_valid_constraints.sql
+[api] 🗄️  Bootstrap estrutural + migrações versionadas aplicados.
+[api] 👤 Usuário administrador criado: admin@brobond.com.br (id 1)
+🔑 Troque a senha padrão no primeiro acesso (o sistema vai pedir) e ative o MFA (obrigatório para administradores).
+[api] 🗄️  Conectado ao Postgres.
+🔐 Administrador: admin@brobond.com.br
+[api] [2026-10-21T18:17:28.649Z] GET /api/health
+✅ smoke:pg — API pronta em http://127.0.0.1:43071 (db=postgres, banco novo, ZERO SQL manual)
+[api] [2026-10-21T18:17:28.718Z] POST /api/auth/login
+[api] [2026-10-21T18:17:28.813Z] POST /api/auth/mfa/desafio
+[api] [2026-10-21T18:17:28.866Z] POST /api/auth/login/mfa
+[api] [2026-10-21T18:17:28.917Z] POST /api/pdv/caixas
+[api] [2026-10-21T18:17:28.927Z] POST /api/auth/change-password
+[api] [2026-10-21T18:17:28.963Z] POST /api/auth/login
+[api] [2026-10-21T18:17:28.978Z] POST /api/auth/login/mfa
+[api] [2026-10-21T18:17:29.022Z] GET /api/listas_preco
+[api] [2026-10-21T18:17:29.031Z] POST /api/listas_preco
+[api] [2026-10-21T18:17:29.043Z] GET /api/propostas
+[api] [2026-10-21T18:17:29.048Z] GET /api/pdv/caixas/aberto
+[api] [2026-10-21T18:17:29.052Z] POST /api/pdv/caixas
+[api] [2026-10-21T18:17:29.063Z] POST /api/pdv/caixas
+[api] [2026-10-21T18:17:29.066Z] GET /api/logistica/config
+[api] [2026-10-21T18:17:29.069Z] PUT /api/logistica/config
+[api] [2026-10-21T18:17:29.072Z] PUT /api/logistica/config
+[api] [2026-10-21T18:17:29.077Z] GET /api/envios
+[api] [2026-10-21T18:17:29.081Z] GET /api/expedicao/divergencias
+[api] [2026-10-21T18:17:29.085Z] GET /api/devolucoes
+[api] [2026-10-21T18:17:29.091Z] GET /api/compras
+[api] [2026-10-21T18:17:29.096Z] GET /api/suprimentos/sugestao-compra
+[api] [2026-10-21T18:17:29.131Z] GET /api/financeiro/gateway/providers
+[api] [2026-10-21T18:17:29.135Z] PUT /api/financeiro/gateway/config
+[api] [2026-10-21T18:17:29.137Z] POST /api/auth/reautenticar
+[api] [2026-10-21T18:17:29.153Z] PUT /api/financeiro/gateway/config
+[api] [2026-10-21T18:17:29.196Z] POST /api/financeiro/gateway/cobrancas
+[api] [2026-10-21T18:17:29.203Z] POST /api/financeiro/gateway/cobrancas
+[api] [2026-10-21T18:17:29.219Z] GET /api/financeiro/gateway/cobrancas/1
+[api] [2026-10-21T18:17:29.221Z] GET /api/financeiro/gateway/webhooks
+[api] [2026-10-21T18:17:29.223Z] GET /api/financeiro/comissoes
+[api] [2026-10-21T18:17:29.236Z] GET /api/financeiro/cartao/recebiveis
+[api] [2026-10-21T18:17:29.241Z] POST /api/contas_financeiras
+[api] [2026-10-21T18:17:29.247Z] POST /api/financeiro/extrato/importar
+[api] [2026-10-21T18:17:29.256Z] POST /api/financeiro/extrato/importar
+[api] [2026-10-21T18:17:29.262Z] GET /api/financeiro/extrato
+[api] [2026-10-21T18:17:29.265Z] GET /api/financeiro/cnab/parsers
+[api] [2026-10-21T18:17:29.266Z] POST /api/insumos
+[api] [2026-10-21T18:17:29.272Z] POST /api/produtos
+[api] [2026-10-21T18:17:29.283Z] POST /api/tamanhos
+[api] [2026-10-21T18:17:29.288Z] POST /api/movimentacoes_insumos
+[api] [2026-10-21T18:17:29.298Z] POST /api/fichas
+[api] [2026-10-21T18:17:29.307Z] POST /api/fichas/1/insumos
+[api] [2026-10-21T18:17:29.315Z] POST /api/ordens
+[api] [2026-10-21T18:17:29.328Z] PUT /api/ordens/1
+[api] [2026-10-21T18:17:29.333Z] PUT /api/ordens/1
+[api] [2026-10-21T18:17:29.335Z] POST /api/ordens/1/liberar
+[api] [2026-10-21T18:17:29.344Z] POST /api/ordens/1/apontamentos
+[api] [2026-10-21T18:17:29.364Z] POST /api/ordens/1/apontamentos
+[api] [2026-10-21T18:17:29.366Z] GET /api/ordens/1
+[api] [2026-10-21T18:17:29.372Z] POST /api/ordens/1/concluir
+[api] [2026-10-21T18:17:29.400Z] GET /api/movimentacoes_insumos
+[api] [2026-10-21T18:17:29.405Z] GET /api/movimentacoes
+[api] [2026-10-21T18:17:29.429Z] GET /api/ordens/1/eventos
+[api] [2026-10-21T18:17:29.433Z] POST /api/ordens/1/reabrir
+[api] [2026-10-21T18:17:29.463Z] GET /api/ordens/1/apontamentos
+[api] [2026-10-21T18:17:29.466Z] POST /api/ordens/1/cancelar
+[api] [2026-10-21T18:17:29.472Z] PUT /api/ordens/1
+[api] [2026-10-21T18:17:29.477Z] GET /api/producao/planejamento
+[api] [2026-10-21T18:17:29.481Z] GET /api/producao/planejamento
+[api] [2026-10-21T18:17:29.485Z] GET /api/cotacoes_compra
+[api] [2026-10-21T18:17:29.488Z] GET /api/insumos
+[api] [2026-10-21T18:17:29.490Z] GET /api/fornecedores
+[api] [2026-10-21T18:17:29.492Z] POST /api/fornecedores
+[api] [2026-10-21T18:17:29.498Z] POST /api/cotacoes_compra
+[api] [2026-10-21T18:17:29.502Z] POST /api/cotacoes-compra/1/convidar
+[api] [2026-10-21T18:17:29.507Z] POST /api/cotacoes-compra/1/itens
+[api] [2026-10-21T18:17:29.512Z] POST /api/cotacoes-compra/1/itens
+[api] [2026-10-21T18:17:29.515Z] POST /api/cotacoes-compra/1/convidar
+[api] [2026-10-21T18:17:29.522Z] GET /api/cotacoes-compra/1/comparativo
+[api] [2026-10-21T18:17:29.529Z] POST /api/cotacoes-compra/1/decidir
+[api] [2026-10-21T18:17:29.536Z] POST /api/cotacoes-compra/1/cotar
+[api] [2026-10-21T18:17:29.544Z] GET /api/cotacoes-compra/1/comparativo
+[api] [2026-10-21T18:17:29.551Z] POST /api/cotacoes-compra/1/decidir
+[api] [2026-10-21T18:17:29.562Z] GET /api/compras/1
+[api] [2026-10-21T18:17:29.565Z] POST /api/cotacoes-compra/1/decidir
+[api] [2026-10-21T18:17:29.567Z] GET /api/cotacoes_compra/1
+[api] [2026-10-21T18:17:29.570Z] POST /api/cotacoes-compra/1/cancelar
+[api] [2026-10-21T18:17:29.572Z] POST /api/cotacoes_compra
+[api] [2026-10-21T18:17:29.577Z] POST /api/cotacoes-compra/2/cancelar
+[api] [2026-10-21T18:17:29.581Z] GET /api/cotacoes_compra
+[api] [2026-10-21T18:17:29.582Z] POST /api/fornecedores
+[api] [2026-10-21T18:17:29.586Z] POST /api/insumos
+[api] [2026-10-21T18:17:29.590Z] POST /api/compras
+[api] [2026-10-21T18:17:29.600Z] POST /api/compras/2/itens
+[api] [2026-10-21T18:17:29.609Z] POST /api/compras/2/receber
+[api] [2026-10-21T18:17:29.632Z] POST /api/compras/2/receber
+[api] [2026-10-21T18:17:29.657Z] GET /api/insumos/2
+[api] [2026-10-21T18:17:29.659Z] GET /api/movimentacoes_insumos
+[api] [2026-10-21T18:17:29.666Z] POST /api/compras/2/receber
+[api] [2026-10-21T18:17:29.669Z] PUT /api/compras/2
+[api] [2026-10-21T18:17:29.701Z] GET /api/insumos/2
+[api] [2026-10-21T18:17:29.703Z] POST /api/fornecedores
+[api] [2026-10-21T18:17:29.707Z] POST /api/insumos
+[api] [2026-10-21T18:17:29.712Z] POST /api/compras
+[api] [2026-10-21T18:17:29.721Z] POST /api/compras/3/itens
+[api] [2026-10-21T18:17:29.728Z] GET /api/lancamentos_financeiros
+[api] [2026-10-21T18:17:29.731Z] POST /api/compras/3/receber
+[api] [2026-10-21T18:17:29.746Z] GET /api/insumos/3
+[api] [2026-10-21T18:17:29.748Z] POST /api/compras/3/receber
+[api] [2026-10-21T18:17:29.766Z] GET /api/lancamentos_financeiros
+[api] [2026-10-21T18:17:29.769Z] POST /api/compras/3/receber
+[api] [2026-10-21T18:17:29.793Z] GET /api/insumos/3
+[api] [2026-10-21T18:17:29.795Z] GET /api/lancamentos_financeiros
+[api] [2026-10-21T18:17:29.799Z] PUT /api/lancamentos_financeiros/2
+[api] [2026-10-21T18:17:29.804Z] GET /api/lancamentos_financeiros
+[api] [2026-10-21T18:17:29.807Z] PUT /api/compras/3
+[api] [2026-10-21T18:17:29.840Z] GET /api/lancamentos_financeiros
+[api] [2026-10-21T18:17:29.843Z] GET /api/produto_fornecedor_skus
+[api] [2026-10-21T18:17:29.846Z] POST /api/fornecedores
+[api] [2026-10-21T18:17:29.850Z] POST /api/produtos
+[api] [2026-10-21T18:17:29.862Z] POST /api/produto_fornecedor_skus
+[api] [2026-10-21T18:17:29.869Z] PUT /api/produto_fornecedor_skus/1
+[api] [2026-10-21T18:17:29.875Z] POST /api/suprimentos/compras/importar-xml
+[api] [2026-10-21T18:17:29.877Z] POST /api/suprimentos/compras/importar-xml
+[api] [2026-10-21T18:17:29.878Z] GET /api/logistica/config
+[api] [2026-10-21T18:17:29.879Z] GET /api/logistica/config
+PASS  POST /auth/login exige MFA do admin  — status 200
+PASS  POST /auth/mfa/desafio (cadastro TOTP)  — status 200
+PASS  POST /auth/login/mfa → token (TOTP real)  — status 200
+PASS  senha provisória bloqueia escrita (SENHA_PROVISORIA)  — status 403 code=SENHA_PROVISORIA
+PASS  POST /auth/change-password  — status 200 
+PASS  relogin com senha definitiva + MFA  — status 200
+PASS  GET /listas_preco  — status 200
+PASS  POST /listas_preco  — status 201 
+PASS  GET /propostas  — status 200
+PASS  GET /pdv/caixas/aberto  — status 200
+PASS  POST /pdv/caixas → 201  — status 201 
+PASS  segundo caixa aberto → 409  — status 409
+PASS  GET /logistica/config  — provedores=["manual","melhor_envio","correios"]
+PASS  ativar Melhor Envio sem credencial → 409  — status 409: Configure a credencial (me_token) do provedor "melhor_envio" antes de 
+PASS  ativar provedor manual → 200  — status 200
+PASS  GET /envios  — status 200
+PASS  GET /expedicao/divergencias  — status 200
+PASS  GET /devolucoes  — status 200
+PASS  GET /compras  — status 200
+PASS  GET /suprimentos/sugestao-compra nunca é automática  — automatico=false, itens=0
+PASS  GET /financeiro/gateway/providers  — status 200
+PASS  PUT gateway/config sem re-auth → 403  — status 403 code=reauth_necessaria
+PASS  POST /auth/reautenticar  — status 200 
+PASS  PUT gateway/config com re-auth → 200  — status 200 
+PASS  POST cobrança PIX → 201 + QR code  — status 201 
+PASS  mesma chave → idempotente (mesma cobrança)  — status 200
+PASS  webhook pago → processado  — status 200 {"ok":true,"evento_id":"payment.paid:mock-57bea0d3fae2:9e84a6937a10ca5f450655e4"
+PASS  mesma notificação de novo → duplicado (sem 2ª baixa)  — status 200
+PASS  cobrança ficou paga  — status=paga
+PASS  eventos de webhook auditáveis  — status 200
+PASS  GET /financeiro/comissoes  — status 200
+PASS  GET /financeiro/cartao/recebiveis  — status 200
+PASS  POST conta financeira  — status 201 
+PASS  import OFX → 1 linha nova  — status 200 
+PASS  reimport OFX → FITID bloqueia duplicata  — importadas=0 duplicadas=1
+PASS  GET /financeiro/extrato  — status 200
+PASS  GET /financeiro/cnab/parsers (cnab240 presente)  — status 200
+PASS  E2: POST /insumos  — status 201 
+PASS  E2: POST /produtos  — status 201 
+PASS  E2: POST /tamanhos  — status 201 
+PASS  E2: POST /movimentacoes_insumos dá saldo  — status 201 
+PASS  E2: POST /fichas  — status 201 
+PASS  E2: POST /fichas/:id/insumos  — status 201 
+PASS  E2: POST /ordens  — status 201 
+PASS  E2: planejada → parcial é recusada (409)  — status 409 A OP #1 está "planejada" e não pode ir para "parcial". Transições perm
+PASS  E2: status fora do vocabulário é recusado (400)  — status 400 Verifique os campos: Opção inválida
+PASS  E2: POST /liberar congela o custo previsto  — status 200 custo_previsto=200.00 
+PASS  E2: POST /apontamentos registra produção e perda  — status 201 
+PASS  E2: mesma chave de idempotência não baixa insumo de novo  — status 200 idempotente=true
+PASS  E2: OP foi para "parcial" com 4 boas e 1 refugada  — status=parcial prod=4 perd=1
+PASS  E2: custo real vem da execução (5 peças × 2 m × R$10 = R$100)  — custo_real=100.00
+PASS  E2: POST /concluir entra no estoque só com as peças boas  — status 200 
+PASS  E2: consumo de insumo ligado à OP pela FK, sem duplicar na conclusão  — saidas=1 qtd=10.000
+PASS  E2: entrada de produto acabado ligada à OP pela FK  — entradas=1 qtd=4
+PASS  E2: trilha registra liberada → apontamento → perda → concluida  — criada,liberada,apontamento,perda,concluida
+PASS  E2: POST /reabrir estorna (gerente)  — status 200 
+PASS  E2: reabrir descarta os apontamentos  — apontamentos=0
+PASS  E2: POST /cancelar guarda o motivo  — status 200 motivo=Smoke: teste de cancelamento
+PASS  E2: OP cancelada é terminal  — status 409
+PASS  E2: GET /producao/planejamento responde o plano  — status 200
+PASS  E2: período sem OP vem vazio (não inventa número)  — ops=0
+PASS  E3: GET /cotacoes_compra  — status 200
+PASS  E3: insumo disponível para cotar  — insumo_id=1
+PASS  E3: fornecedor disponível para convidar  — fornecedor_id=1
+PASS  E3: POST /cotacoes_compra → 201 em rascunho  — status 201 
+PASS  E3: convidar sem item → 409  — status 409 Adicione ao menos um item antes de convidar fornecedores — convite sem
+PASS  E3: POST item da cotação → 201  — status 201 
+PASS  E3: item duplicado na mesma cotação → 409  — status 409 Este item já está na cotação (#1). Edite a quantidade em vez de duplic
+PASS  E3: POST convidar → 201 e abre a cotação  — status 201 
+PASS  E3: GET comparativo lista o convidado  — status 200
+PASS  E3: decidir com item sem cotação → 409  — status 409 Nenhum fornecedor cotou: Tecido Smoke 1792606649266. Espere as cotaçõe
+PASS  E3: POST cotar → 201  — status 201 
+PASS  E3: comparativo traz o menor preço real  — menor=12.5
+PASS  E3: comparativo não inventa economia com uma só cotação  — economia=0
+PASS  E3: POST decidir → 201 e gera pedido  — status 201 compra=1 
+PASS  E3: pedido gerado nasce pendente com total 125  — status=pendente total=125.00
+PASS  E3: decidir de novo → 200 idempotente, mesmo pedido  — compra=1 idempotente=true
+PASS  E3: cotação fica decidida e aponta para o pedido  — status=decidida
+PASS  E3: cancelar cotação já decidida → 409  — status 409 Esta cotação já gerou o pedido #1. Cancele o pedido, não a cotação — o
+PASS  E3: cancelar cotação aberta → 200 cancelada  — status 200 
+PASS  E3: /cotacoes_compra sem token → 401  — status 401
+PASS  E3.1: fornecedor e insumo criados  — forn=2 insumo=2
+PASS  E3.1: compra com frete criada  — status 201 
+PASS  E3.1: item adicionado  — status 201 
+PASS  E3.1: 1º lote (40 un) recebido  — status 201 
+PASS  E3.1: resposta traz o custo efetivo aplicado  — efetivo=54 (preço 50 + frete 160/40)
+PASS  E3.1: resposta traz o antes/depois do custo médio  — antes=0 depois=54
+PASS  E3.1: compra fica parcial  — status=parcial
+PASS  E3.1: 2º lote (60 un) recebido  — status 201 
+PASS  E3.1: frete NÃO é cobrado duas vezes  — efetivo=54 (90 seria frete em dobro)
+PASS  E3.1: custo médio final = 54  — depois=54
+PASS  E3.1: compra fica recebida  — status=recebido
+PASS  E3.1: custo médio gravado no insumo  — custo_medio=54.00
+PASS  E3.1: cada lote é uma movimentação com custo  — entradas=2 custos=54.00,54.00
+PASS  E3.1: movimentação tem vínculo com a compra  — compra_id=2,2
+PASS  E3.1: receber além do pedido é recusado  — status 409 Esta compra já foi totalmente recebida.
+PASS  E3.1: cancelar compra recebida → estorno  — status 200 
+PASS  E3.1: custo médio restaurado pelo estorno  — custo_medio=0.00
+PASS  E3.2: cadeia — fornecedor e insumo  — forn=3 insumo=3  
+PASS  E3.2: cadeia — compra com condição de pagamento criada  — status 201 
+PASS  E3.2: cadeia — item criado  — status 201 
+PASS  E3.2: compra pendente não gera conta a pagar  — parcelas=0
+PASS  E3.2: prévia devolve 200 e aplicado=false  — status 200 
+PASS  E3.2: prévia projeta o custo efetivo  — efetivo=54
+PASS  E3.2: prévia NÃO movimenta estoque  — custo_medio=0.00
+PASS  E3.2: 1º lote recebido (parcial)  — status 201/parcial 
+PASS  E3.2: parcial ainda não gera conta a pagar  — parcelas=0
+PASS  E3.2: 2º lote completa o pedido  — status 201/recebido 
+PASS  E3.2: custo médio final = 54 (frete não cobrado duas vezes)  — custo_medio=54.00
+PASS  E3.2: compra completa gera 3 contas a pagar  — parcelas=3
+PASS  E3.2: soma das parcelas fecha no total 5400  — soma=5400
+PASS  E3.2: parcelas numeradas 1/3, 2/3, 3/3  — 1/3,2/3,3/3
+PASS  E3.2: vencimentos mensais a partir do informado  — 2026-11-09,2026-12-09,2027-01-09
+PASS  E3.2: parcelas nascem pendentes e são despesa  — pendente/despesa,pendente/despesa,pendente/despesa
+PASS  E3.2: parcela tem vínculo estrutural com a compra  — ok
+PASS  E3.2: baixa da 1ª parcela pelo financeiro  — status 200 
+PASS  E3.2: baixa confirmada aparece no plano  — confirmadas=1
+PASS  E3.2: cancelar a compra recebida  — status 200 
+PASS  E3.2: contas a pagar canceladas junto com a compra  — canceladas=3
+PASS  E3.2: de-para é navegável pela API  — status 200
+PASS  E3.2: de-para criado com descrição e unidade  — status 201 
+PASS  E3.2: de-para pode ser inativado  — status 200 ativo=false
+PASS  E3.2: XML inválido é recusado com 422  — status 422
+PASS  E3.2: importação sem arquivo é recusada  — status 400
+PASS  sem token → 401  — status 401
+PASS  ticket de MFA não vale como token de acesso → 401  — status 401
+
+126/126 verificações OK
+✅ smoke:pg — smoke E2E aprovado contra PostgreSQL real

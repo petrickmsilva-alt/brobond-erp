@@ -1,0 +1,80 @@
+
+> brobond-ai-erp@1.0.0 build
+> npm --workspace client run build
+
+
+> brobond-client@0.6.0 build
+> vite build
+
+vite v5.4.21 building for production...
+transforming...
+✓ 2109 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/registerSW.js                                  0.13 kB
+dist/index.html                                     1.82 kB │ gzip:   0.89 kB
+dist/assets/index-nmNtlOlG.css                     99.26 kB │ gzip:  15.23 kB
+dist/assets/plus-BScPTkwD.js                        0.33 kB │ gzip:   0.25 kB
+dist/assets/clock-DLjTIgM_.js                       0.34 kB │ gzip:   0.27 kB
+dist/assets/arrow-left-Bfv4tZHT.js                  0.34 kB │ gzip:   0.27 kB
+dist/assets/power-BS5oGiei.js                       0.35 kB │ gzip:   0.27 kB
+dist/assets/lock-open-DVYAXQAK.js                   0.38 kB │ gzip:   0.30 kB
+dist/assets/table-2-Cj6uwR-W.js                     0.39 kB │ gzip:   0.29 kB
+dist/assets/link-2-16ZF99wA.js                      0.42 kB │ gzip:   0.31 kB
+dist/assets/settings-2-CGm4u78_.js                  0.42 kB │ gzip:   0.30 kB
+dist/assets/pencil-3TNyS8Xs.js                      0.45 kB │ gzip:   0.33 kB
+dist/assets/inbox-CowWdbVA.js                       0.46 kB │ gzip:   0.34 kB
+dist/assets/printer-BMgWi0-S.js                     0.49 kB │ gzip:   0.34 kB
+dist/assets/refresh-cw-CoVMbWUP.js                  0.49 kB │ gzip:   0.33 kB
+dist/assets/tag-Bavt8J5h.js                         0.49 kB │ gzip:   0.35 kB
+dist/assets/save-DwHNshdf.js                        0.50 kB │ gzip:   0.33 kB
+dist/assets/trash-2-BLXzTc4b.js                     0.50 kB │ gzip:   0.32 kB
+dist/assets/file-spreadsheet-CwMRQtR_.js            0.55 kB │ gzip:   0.33 kB
+dist/assets/ReauthModal-B8lOthxR.js                 1.85 kB │ gzip:   1.00 kB
+dist/assets/ForcaSenha-Bc5rni1R.js                  2.51 kB │ gzip:   1.16 kB
+dist/assets/BarcodeScanner-DdgLEg26.js              4.48 kB │ gzip:   2.03 kB
+dist/assets/Convite-JOATp0g_.js                     5.92 kB │ gzip:   2.33 kB
+dist/assets/ComponentCatalog-Br6Er6EZ.js            6.07 kB │ gzip:   2.32 kB
+dist/assets/CommerceModulePage-DLCorsqO.js          6.16 kB │ gzip:   2.05 kB
+dist/assets/ForgotReset-CqYDJHeL.js                 6.93 kB │ gzip:   2.40 kB
+dist/assets/AjudaPage-D8GZHbkb.js                   7.18 kB │ gzip:   3.42 kB
+dist/assets/CustoPage-gK2s8cbP.js                   7.36 kB │ gzip:   2.52 kB
+dist/assets/NcmPage-CP8FZ4eS.js                     7.82 kB │ gzip:   3.04 kB
+dist/assets/PlanejamentoProducaoPage-jUj6R4ZE.js    8.29 kB │ gzip:   2.49 kB
+dist/assets/PortalCliente-CBPTMvFv.js               8.37 kB │ gzip:   2.84 kB
+dist/assets/InutilizacoesPage-DfIVOyGe.js           8.96 kB │ gzip:   3.10 kB
+dist/assets/ImportarNfePage-CsaGfeZ2.js             9.01 kB │ gzip:   3.08 kB
+dist/assets/EmpresasPage-lC5tOaEL.js                9.37 kB │ gzip:   3.29 kB
+dist/assets/RelatoriosPage-CCCl6uuT.js              9.91 kB │ gzip:   3.74 kB
+dist/assets/SugestaoCompraPage-tcCUkMzs.js         10.25 kB │ gzip:   3.42 kB
+dist/assets/ComissoesPage-CCbwq_-M.js              11.35 kB │ gzip:   3.49 kB
+dist/assets/ImageField-D8FwwF7F.js                 11.57 kB │ gzip:   4.50 kB
+dist/assets/FichaDetail-D9xxifKC.js                11.98 kB │ gzip:   3.59 kB
+dist/assets/RecordForm-Y-3P2jOF.js                 12.03 kB │ gzip:   4.43 kB
+dist/assets/DevolucoesPage-RLnymSLe.js             14.70 kB │ gzip:   4.24 kB
+dist/assets/WebhooksPage-BzVrJ1Ti.js               15.03 kB │ gzip:   4.93 kB
+dist/assets/ExpedicaoPage-DIaj9STs.js              15.24 kB │ gzip:   4.78 kB
+dist/assets/InventarioModulePage-BxpIpWfj.js       16.03 kB │ gzip:   5.13 kB
+dist/assets/ConectorPage-Dk0jYJVZ.js               17.50 kB │ gzip:   5.78 kB
+dist/assets/LogisticaPage-xcS3VMYJ.js              18.03 kB │ gzip:   5.01 kB
+dist/assets/PdvPage-DfuGBdC5.js                    20.14 kB │ gzip:   5.95 kB
+dist/assets/MedidasPage-ihXO7F_E.js                20.85 kB │ gzip:   7.01 kB
+dist/assets/EstoqueGradePage-DQdtexu-.js           21.15 kB │ gzip:   6.61 kB
+dist/assets/CotacoesCompraPage-CbRGDGOk.js         25.09 kB │ gzip:   6.89 kB
+dist/assets/ProductDetail-C_mH-kgJ.js              26.58 kB │ gzip:   8.49 kB
+dist/assets/OrdemDetail-B4RZLIVr.js                28.32 kB │ gzip:   7.10 kB
+dist/assets/Settings-BFV4UmNI.js                   33.44 kB │ gzip:   9.59 kB
+dist/assets/CatalogoPublico-zlnLX6e2.js            33.79 kB │ gzip:   9.84 kB
+dist/assets/OrderPage-VdAhWpzA.js                  36.72 kB │ gzip:   9.78 kB
+dist/assets/FinanceiroPage-B1s_0qmh.js             39.26 kB │ gzip:   9.01 kB
+dist/assets/ModulePage-B-Mc9puD.js                 68.83 kB │ gzip:  19.62 kB
+dist/assets/UsuariosPage-uimGaumM.js              105.65 kB │ gzip:  27.18 kB
+dist/assets/index-DGJwz7BK.js                     350.40 kB │ gzip: 102.54 kB
+✓ built in 10.25s
+
+PWA v1.3.0
+mode      generateSW
+precache  59 entries (1159.29 KiB)
+files generated
+  dist/sw.js
+  dist/workbox-abeb32eb.js

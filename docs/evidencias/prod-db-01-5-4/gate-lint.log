@@ -1,0 +1,588 @@
+
+> brobond-ai-erp@1.0.0 lint
+> eslint 'server/src/**/*.ts' 'modules/**/*.ts' 'packages/*/src/**/*.ts' 'client/src/**/*.{ts,tsx}' 'scripts/**/*.ts'
+
+
+/workspace/project/brobond-erp/client/src/components/BarcodeScanner.tsx
+  77:17  warning  Unexpected any. Specify a different type                                                                       @typescript-eslint/no-explicit-any
+  82:6   warning  React Hook useCallback has a missing dependency: 'scanLoop'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+  90:39  warning  Unexpected any. Specify a different type                                                                       @typescript-eslint/no-explicit-any
+  91:43  warning  Unexpected any. Specify a different type                                                                       @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/components/CatalogoShareModal.tsx
+  13:94  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/components/ImageField.tsx
+    2:78  warning  'ZoomIn' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   83:19  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+   94:17  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+  110:17  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+  127:17  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/components/ImportModal.tsx
+    2:10  warning  'CheckCircle2' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+    2:42  warning  'Inbox' is defined but never used. Allowed unused vars must match /^_/u         @typescript-eslint/no-unused-vars
+   21:27  warning  Unexpected any. Specify a different type                                        @typescript-eslint/no-explicit-any
+  106:17  warning  Unexpected any. Specify a different type                                        @typescript-eslint/no-explicit-any
+  125:17  warning  Unexpected any. Specify a different type                                        @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/components/LabelSheet.tsx
+  42:27  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/components/PortalAccessModal.tsx
+   8:91  warning  Unexpected any. Specify a different type                                                                 @typescript-eslint/no-explicit-any
+  11:49  warning  React Hook useEffect has a missing dependency: 'load'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+/workspace/project/brobond-erp/client/src/components/ReauthModal.tsx
+  30:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/components/RecebimentoCompraModal.test.tsx
+  90:43  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  90:56  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  90:72  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/components/RecebimentoCompraModal.tsx
+  111:55  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  129:32  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  130:26  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  133:37  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  159:17  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  198:17  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  220:17  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  414:26  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  488:3   warning  'compra' is defined but never used. Allowed unused args must match /^_/u    @typescript-eslint/no-unused-vars
+  490:3   warning  'custoPor' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+  500:26  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/components/RecordForm.tsx
+  12:24  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/lib/api.ts
+   33:36  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   66:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  106:13  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  107:14  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  108:13  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  109:13  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/lib/fichaPrint.ts
+  36:27  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  39:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  40:27  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/lib/format.ts
+  61:58  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/lib/meta.ts
+  138:43  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/CatalogoPublico.tsx
+  106:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  881:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/ComissoesPage.test.tsx
+  64:25   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  68:84   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  70:68   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  71:129  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  72:54   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/Convite.tsx
+  75:18  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/CotacoesCompraPage.test.tsx
+  17:46  warning  'within' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/workspace/project/brobond-erp/client/src/pages/CustoPage.tsx
+   6:17  warning  'Badge' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   9:29  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+  31:17  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+  52:37  warning  'f' is defined but never used. Allowed unused args must match /^_/u      @typescript-eslint/no-unused-vars
+  69:17  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/EmpresasPage.test.tsx
+   64:25   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   67:58   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   68:120  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   69:94   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   70:58   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  116:44   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  131:36   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  165:47   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  181:36   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/EstoqueGradePage.tsx
+    3:100  warning  'Package' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   63:46   warning  Unexpected any. Specify a different type                                   @typescript-eslint/no-explicit-any
+   69:58   warning  Unexpected any. Specify a different type                                   @typescript-eslint/no-explicit-any
+   84:17   warning  Unexpected any. Specify a different type                                   @typescript-eslint/no-explicit-any
+  252:17   warning  Unexpected any. Specify a different type                                   @typescript-eslint/no-explicit-any
+  282:34   warning  Unexpected any. Specify a different type                                   @typescript-eslint/no-explicit-any
+  285:17   warning  Unexpected any. Specify a different type                                   @typescript-eslint/no-explicit-any
+  294:41   warning  Unexpected any. Specify a different type                                   @typescript-eslint/no-explicit-any
+  304:17   warning  Unexpected any. Specify a different type                                   @typescript-eslint/no-explicit-any
+  608:42   warning  Unexpected any. Specify a different type                                   @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/FichaDetail.tsx
+    7:17  warning  'Badge' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   10:35  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+   27:53  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+   28:57  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+   54:66  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+   60:31  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+   64:17  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+   81:35  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+  109:17  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+  142:17  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+  157:17  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+  171:17  warning  Unexpected any. Specify a different type                                 @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/FinanceiroPage.tsx
+    3:147  warning  'Plus' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  143:17   warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  156:17   warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  192:17   warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  207:17   warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/ForgotReset.tsx
+   47:18  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  136:18  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/ImportarNfePage.tsx
+  115:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  131:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/InventarioModulePage.tsx
+   10:27  warning  Unexpected any. Specify a different type                                               @typescript-eslint/no-explicit-any
+   11:32  warning  Unexpected any. Specify a different type                                               @typescript-eslint/no-explicit-any
+   14:9   warning  'navigate' is assigned a value but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+   17:9   warning  'podeFechar' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   35:17  warning  Unexpected any. Specify a different type                                               @typescript-eslint/no-explicit-any
+   60:17  warning  Unexpected any. Specify a different type                                               @typescript-eslint/no-explicit-any
+   73:17  warning  Unexpected any. Specify a different type                                               @typescript-eslint/no-explicit-any
+  248:17  warning  Unexpected any. Specify a different type                                               @typescript-eslint/no-explicit-any
+  351:17  warning  Unexpected any. Specify a different type                                               @typescript-eslint/no-explicit-any
+  367:17  warning  Unexpected any. Specify a different type                                               @typescript-eslint/no-explicit-any
+  379:17  warning  Unexpected any. Specify a different type                                               @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/Login.tsx
+  51:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  66:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  93:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/MedidasPage.tsx
+  148:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  230:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  280:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  391:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/ModulePage.tsx
+    17:3   warning  'EyeOff' is defined but never used. Allowed unused vars must match /^_/u                        @typescript-eslint/no-unused-vars
+   151:69  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   152:83  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   157:57  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   202:5   warning  Unused eslint-disable directive (no problems were reported from 'react-hooks/exhaustive-deps')
+   217:59  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   221:63  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   233:17  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   242:69  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   249:54  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   256:17  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   264:53  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   277:17  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   340:17  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   352:17  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   371:41  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   434:55  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   478:17  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+   495:17  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+  1052:73  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+  1131:56  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+  1137:59  warning  Unexpected any. Specify a different type                                                        @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/OrdemDetail.test.tsx
+  145:22  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  146:22  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  147:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/OrdemDetail.tsx
+   10:111  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   72:53   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  104:67   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  105:57   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  119:32   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  121:32   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  121:108  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  122:32   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  122:103  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  129:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  199:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  216:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  240:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  269:47   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  286:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  309:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  322:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  348:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  363:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/OrderPage.tsx
+   26:16   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+   51:55   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+   64:59   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+   94:32   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+   99:17   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  111:11   warning  'base' is assigned a value but never used. Allowed unused vars must match /^_/u   @typescript-eslint/no-unused-vars
+  117:22   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  147:50   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  150:17   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  179:17   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  194:17   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  204:50   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  208:17   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  553:104  warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  595:96   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  596:59   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  604:54   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  609:17   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  710:70   warning  'optional' is defined but never used. Allowed unused args must match /^_/u        @typescript-eslint/no-unused-vars
+  719:94   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  746:10   warning  'imprimirPedido' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  746:60   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  766:43   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  772:22   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+  783:22   warning  Unexpected any. Specify a different type                                          @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/PlanejamentoProducaoPage.test.tsx
+  105:39  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  119:39  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  130:39  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  137:39  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  151:39  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/PlanejamentoProducaoPage.tsx
+  99:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/PortalCliente.tsx
+  16:36  warning  React Hook useEffect has a missing dependency: 'carregar'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+/workspace/project/brobond-erp/client/src/pages/ProductDetail.tsx
+  15:27  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  31:33  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  32:37  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  32:70  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  33:34  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  67:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  93:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/RelatoriosPage.tsx
+    3:31  warning  'Loader2' is defined but never used. Allowed unused vars must match /^_/u       @typescript-eslint/no-unused-vars
+   15:26  warning  Unexpected any. Specify a different type                                        @typescript-eslint/no-explicit-any
+   16:26  warning  Unexpected any. Specify a different type                                        @typescript-eslint/no-explicit-any
+  127:9   warning  'rel' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  138:19  warning  Unexpected any. Specify a different type                                        @typescript-eslint/no-explicit-any
+  168:17  warning  Unexpected any. Specify a different type                                        @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/Settings.tsx
+  322:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  462:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  481:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  496:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  531:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  715:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  822:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  962:43  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  987:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/UsuariosPage.tsx
+    71:31   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   138:29   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   140:27   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   507:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   551:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   571:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   615:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   670:19   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   719:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   735:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   752:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   767:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   784:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   803:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   818:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   837:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2372:141  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2412:37   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2430:55   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2433:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  2643:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/client/src/pages/WebhooksPage.tsx
+   42:27  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   73:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  115:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  132:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  153:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  171:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  456:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  473:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/approval.ts
+  23:10  warning  'checkAccess' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  23:48  warning  'toHttpError' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  25:23  warning  'requireAuth' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  27:20  warning  'Tx' is defined but never used. Allowed unused vars must match /^_/u           @typescript-eslint/no-unused-vars
+
+/workspace/project/brobond-erp/server/src/auditChain.ts
+  73:58  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  85:94  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  89:38  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/auth.ts
+    12:10  warning  'loginBucketKey' is defined but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+    16:10  warning  'decifrarSegredoMfa' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   157:60  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+   159:56  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+   223:15  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+   250:15  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+   320:21  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+   539:15  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+   658:18  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+   839:11  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+   840:11  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+   845:18  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+   964:15  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+  1068:15  warning  Unexpected any. Specify a different type                                              @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/backup.ts
+   27:27  warning  Unexpected any. Specify a different type                                                 @typescript-eslint/no-explicit-any
+  176:7   warning  'linhasTotais' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/workspace/project/brobond-erp/server/src/catalogos.ts
+   64:14  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   65:27  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  312:38  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  462:54  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/cep.ts
+   48:53  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   69:53  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  128:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/chat.ts
+   19:15  warning  'Row' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   19:20  warning  'Tx' is defined but never used. Allowed unused vars must match /^_/u   @typescript-eslint/no-unused-vars
+   40:53  warning  Unexpected any. Specify a different type                               @typescript-eslint/no-explicit-any
+   77:53  warning  Unexpected any. Specify a different type                               @typescript-eslint/no-explicit-any
+   88:21  warning  Unexpected any. Specify a different type                               @typescript-eslint/no-explicit-any
+   89:31  warning  Unexpected any. Specify a different type                               @typescript-eslint/no-explicit-any
+   90:26  warning  Unexpected any. Specify a different type                               @typescript-eslint/no-explicit-any
+   91:24  warning  Unexpected any. Specify a different type                               @typescript-eslint/no-explicit-any
+  140:53  warning  Unexpected any. Specify a different type                               @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/cnab.ts
+  304:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/compras.ts
+   29:40  warning  'EscopoEmpresa' is defined but never used. Allowed unused vars must match /^_/u        @typescript-eslint/no-unused-vars
+   34:15  warning  'Row' is defined but never used. Allowed unused vars must match /^_/u                  @typescript-eslint/no-unused-vars
+   34:20  warning  'Tx' is defined but never used. Allowed unused vars must match /^_/u                   @typescript-eslint/no-unused-vars
+  582:13  warning  'fornecedor' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/workspace/project/brobond-erp/server/src/db.ts
+  139:54  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  139:61  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  144:40  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/empresasApi.ts
+  43:40  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  70:35  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  76:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/expedicao.ts
+  27:10  warning  'round2' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/workspace/project/brobond-erp/server/src/extrato.ts
+  21:79  warning  'LinhaExtrato' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/workspace/project/brobond-erp/server/src/financeiro.ts
+   741:26  warning  'comprasR' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  1151:17  warning  Unexpected any. Specify a different type                                             @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/fiscal.ts
+  503:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  590:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/fiscalProvider.ts
+  198:50  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  212:16  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  244:31  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  443:35  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/frete.ts
+  12:41  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  15:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/gateway.ts
+    37:42  warning  'pareceCifrado' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   973:17  warning  Unexpected any. Specify a different type                                         @typescript-eslint/no-explicit-any
+   980:15  warning  Unexpected any. Specify a different type                                         @typescript-eslint/no-explicit-any
+  1068:15  warning  Unexpected any. Specify a different type                                         @typescript-eslint/no-explicit-any
+  1216:15  warning  Unexpected any. Specify a different type                                         @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/importacao.ts
+   17:21  warning  'getResource' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   50:34  warning  Unexpected any. Specify a different type                                       @typescript-eslint/no-explicit-any
+   59:29  warning  Unexpected any. Specify a different type                                       @typescript-eslint/no-explicit-any
+   69:17  warning  Unexpected any. Specify a different type                                       @typescript-eslint/no-explicit-any
+  183:76  warning  Unexpected any. Specify a different type                                       @typescript-eslint/no-explicit-any
+  242:19  warning  Unexpected any. Specify a different type                                       @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/index.ts
+  108:30  warning  'verificarAlertasEstoque' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  306:11  warning  Unexpected any. Specify a different type                                                   @typescript-eslint/no-explicit-any
+  845:23  warning  Unexpected any. Specify a different type                                                   @typescript-eslint/no-explicit-any
+  856:23  warning  Unexpected any. Specify a different type                                                   @typescript-eslint/no-explicit-any
+  889:23  warning  Unexpected any. Specify a different type                                                   @typescript-eslint/no-explicit-any
+  900:23  warning  Unexpected any. Specify a different type                                                   @typescript-eslint/no-explicit-any
+  909:21  warning  Unexpected any. Specify a different type                                                   @typescript-eslint/no-explicit-any
+  924:23  warning  Unexpected any. Specify a different type                                                   @typescript-eslint/no-explicit-any
+  950:15  warning  Unexpected any. Specify a different type                                                   @typescript-eslint/no-explicit-any
+  954:44  warning  Unexpected any. Specify a different type                                                   @typescript-eslint/no-explicit-any
+  984:17  warning  Unexpected any. Specify a different type                                                   @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/itens.ts
+  21:28  warning  'Resource' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/workspace/project/brobond-erp/server/src/log.ts
+  34:13  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  51:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/logistica.ts
+  307:15  warning  'v0' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/workspace/project/brobond-erp/server/src/loja.ts
+   88:108  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  102:15   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  180:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  501:17   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/mail.ts
+  103:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  129:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/marketplace.ts
+  17:10  warning  'getResource' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  61:45  warning  Unexpected any. Specify a different type                                       @typescript-eslint/no-explicit-any
+  68:17  warning  Unexpected any. Specify a different type                                       @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/medidas.ts
+  235:109  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  237:24   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/memdb.ts
+  26:10  warning  'round2' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  68:52  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+  69:55  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/mfa.ts
+  65:59  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  76:70  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  84:18  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/negocios.ts
+  407:41  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  411:46  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  448:40  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  751:26  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  783:40  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/notifications.ts
+  77:87  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/openapi.ts
+  15:31  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  16:33  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  50:38  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/pdf.ts
+   76:30  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  170:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  200:61  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  313:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/pgstore.ts
+   32:40  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  116:37  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  743:41  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  744:46  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  745:40  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  746:42  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/prediction.ts
+   13:23  warning  'getRecord' is defined but never used. Allowed unused vars must match /^_/u        @typescript-eslint/no-unused-vars
+  178:9   warning  'vendas' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/workspace/project/brobond-erp/server/src/scheduled.ts
+   76:90  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  250:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  257:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/security.ts
+  186:68  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  196:87  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  226:68  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/services.ts
+  56:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  88:28  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  93:32  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/store.ts
+  9:34  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/suprimentos.ts
+  253:25   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  255:19   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  257:19   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  259:19   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  278:65   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  279:57   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  311:97   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  331:7    warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  376:122  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  434:31   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/uploads.ts
+  116:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/usuariosAdmin.ts
+   19:92   warning  'validarSenhaNova' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   37:46   warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+   50:41   warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+   87:56   warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+   87:111  warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+  252:47   warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+  252:69   warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+  265:42   warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+  459:75   warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+  460:58   warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+  472:41   warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+  529:57   warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+  868:81   warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+  924:104  warning  Unexpected any. Specify a different type                                            @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/variacoes.ts
+  270:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/webhooks.ts
+  189:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+/workspace/project/brobond-erp/server/src/websocket.ts
+  36:18  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  63:16  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  68:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+✖ 410 problems (0 errors, 410 warnings)
+  0 errors and 1 warning potentially fixable with the `--fix` option.
+
