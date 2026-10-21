@@ -88,13 +88,20 @@ interface Scratch {
   encerrar: () => Promise<void>;
 }
 
-/** Cria um banco descartável próprio e aplica o bootstrap/migrações reais. */
-async function criarBanco(prefixo: string): Promise<Scratch> {
+/** Cria um banco descartável próprio e aplica o bootstrap/migrações reais.
+ *
+ * Com `icu: true`, o banco nasce com collation ICU (`en-US`), reproduzindo a
+ * ordem de `array_agg(DISTINCT ...)` do serviço `postgres:16.14` do CI
+ * (`en_US.utf8`) — que difere da ordem `C.UTF-8` de um host comum. */
+async function criarBanco(prefixo: string, opcoes: { icu?: boolean } = {}): Promise<Scratch> {
   const base = new URL(process.env.DATABASE_URL!);
   const scratch = `${prefixo}_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
   const admin = new Client({ connectionString: process.env.DATABASE_URL });
   await admin.connect();
-  await admin.query(`CREATE DATABASE ${scratch}`);
+  const criarSql = opcoes.icu
+    ? `CREATE DATABASE ${scratch} TEMPLATE template0 LOCALE_PROVIDER icu ICU_LOCALE 'en-US' LC_COLLATE 'C' LC_CTYPE 'C' ENCODING 'UTF8'`
+    : `CREATE DATABASE ${scratch}`;
+  await admin.query(criarSql);
   const url = new URL(base.toString());
   url.pathname = `/${scratch}`;
   const scratchUrl = url.toString();
@@ -547,6 +554,83 @@ test('PROD-DB-01.5.3 — a detecção cobre QUALQUER índice único (não só es
 
     console.log('\n=== PROD-DB-01.5.3 — detecção genérica por catálogo ===');
     console.log('  índice único adicional em inventarios=detectado | predicado sobre a coluna=abort (fail-closed)');
+  } finally {
+    await s.encerrar();
+  }
+});
+
+// ============================================================================
+// TESTE — o relatório de colisão é DETERMINÍSTICO e independente de collation.
+//
+// Regressão do HOTFIX de CI: `array_agg(DISTINCT ...)` SEM `ORDER BY` ordena
+// conforme a collation do banco. O `postgres:16.14` do CI nasce com
+// `en_US.utf8` (ICU) e devolve `{loja,LOJA}`; um host `C.UTF-8` devolve
+// `{LOJA,loja}` para o MESMO dado. A suíte passava local e falhava no CI.
+//
+// Este teste força a collation do CI (banco com LOCALE_PROVIDER icu) e exige
+// a ordem determinística (`COLLATE "C"`) — se alguém remover o `ORDER BY`/
+// `COLLATE "C"` do relatório, a suíte volta a falhar aqui, não só no CI.
+// ============================================================================
+test('PROD-DB-01.5.3 — o relatório de colisão é determinístico sob collation ICU (ordem do CI)', async (t) => {
+  if (!PSQL) {
+    t.skip('binário psql indisponível; no CI ele é instalado (postgresql-client-16).');
+    return;
+  }
+
+  // O `postgres:16.14` do CI traz ICU; um host comum pode não trazer. Sem ICU
+  // não há como reproduzir a ordem do CI — mas a asserção de ordem determinística
+  // continua valendo, então NÃO pulamos (skip reprova o gate).
+  const probe = new Client({ connectionString: process.env.DATABASE_URL! });
+  await probe.connect();
+  const icuOk = (await probe.query(`SELECT 1 FROM pg_collation WHERE collname = 'en-US-x-icu'`)).rowCount! > 0;
+  await probe.end();
+
+  const s = await criarBanco('e42_collation', { icu: icuOk });
+  const { db } = s;
+
+  try {
+    // Confirma que o banco descartável tem a ordem do CI quando ICU está presente.
+    const ordemNativa = (await db.query(
+      `SELECT array_agg(DISTINCT x) AS a FROM (VALUES ('loja'),('LOJA')) t(x)`
+    )).rows[0].a as string[];
+    if (icuOk) {
+      assert.deepEqual(
+        ordemNativa,
+        ['loja', 'LOJA'],
+        'o banco descartável precisa reproduzir a collation ICU do CI para este teste ter valor'
+      );
+    } else {
+      t.diagnostic('ICU indisponível neste servidor; a ordem nativa não reproduz o CI.');
+    }
+
+    const sfx = Date.now().toString(36);
+    const cnpj = (p: string) => `${p}${sfx.replace(/\D/g, '').padEnd(13, '0').slice(0, 13)}`;
+    const { emp, local } = await empresaComLocal(db, `COLLATION ${sfx}`, cnpj('9'));
+
+    await tamanho(db, 5, `T5-${sfx}`);
+    await produto(db, 7, emp, `SKU7-${sfx}`);
+    await db.query(
+      `INSERT INTO estoques (produto_id, tamanho_id, local, local_id, quantidade, empresa_id)
+       VALUES (7, 5, 'LOJA', NULL, 10, $1)`,
+      [emp]
+    );
+    await db.query(
+      `INSERT INTO estoques (produto_id, tamanho_id, local, local_id, quantidade, empresa_id)
+       VALUES (7, 5, 'loja', $1, 20, $2)`,
+      [local, emp]
+    );
+
+    const dry = runPsqlFile(s.url, ['-v', 'normalizar_classe_c=on']);
+    assert.equal(dry.code, 0, `DRY-RUN deve sair 0:\n${dry.stderr}`);
+    // Ordem determinística byte a byte: 'LOJA' antes de 'loja' (maiúscula < minúscula).
+    assert.match(
+      dry.out,
+      /local_atual=\{LOJA,loja\}/,
+      'a ordem do relatório não pode depender da collation do banco'
+    );
+
+    console.log('\n=== PROD-DB-01.5.3 — relatório determinístico sob collation ICU ===');
+    console.log(`  ICU=${icuOk} ordem nativa do banco={${ordemNativa.join(',')}} → relatório={LOJA,loja}`);
   } finally {
     await s.encerrar();
   }
