@@ -329,11 +329,11 @@ BEGIN
   --
   -- A detecção é GENÉRICA: não há lista fixa de índices no código. Para cada
   -- UPDATE de classe C, introspecta-se `pg_index`/`pg_attribute` e testa-se TODO
-  -- índice único, não-primário e válido cujas colunas de chave incluam a coluna
-  -- textual normalizada. A chave é avaliada no estado PÓS-update (a coluna
-  -- textual vira `locais.nome`; as demais ficam como estão) e o predicado do
-  -- índice parcial é aplicado verbatim — assim a semântica de NULL do índice
-  -- (linhas com chave nula nunca colidem) é preservada.
+  -- índice único (inclusive a chave primária) e válido cujas colunas de chave
+  -- incluam a coluna textual normalizada. A chave é avaliada no estado PÓS-update
+  -- (a coluna textual vira `locais.nome`; as demais ficam como estão) e o
+  -- predicado do índice parcial é aplicado verbatim — assim a semântica de NULL
+  -- do índice (linhas com chave nula nunca colidem) é preservada.
   --
   -- Semântica de colisão: um grupo é colisão somente quando TODAS as colunas da
   -- chave são não nulas e iguais entre ≥2 linhas — exatamente o que um índice
@@ -399,7 +399,10 @@ BEGIN
           JOIN pg_namespace n ON n.oid = t.relnamespace
          WHERE n.nspname = current_schema()
            AND t.relname = tgt.tabela
-           AND i.indisunique AND NOT i.indisprimary AND i.indisvalid
+           -- TODO índice único conta, inclusive a chave primária: a única
+           -- razão para excluir a PK seria a suposição de que `id` nunca é a
+           -- coluna textual normalizada — suposição que o preflight não faz.
+           AND i.indisunique AND i.indisvalid
            AND (
              -- (a) a chave inclui a coluna textual normalizada: o valor da chave
              --     muda e duas linhas podem passar a colidir.

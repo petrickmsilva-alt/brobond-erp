@@ -62,9 +62,9 @@ colisão** que:
 
 1. inspeciona o **catálogo real** (`pg_index` / `pg_attribute`) das tabelas que a
    normalização pode alterar;
-2. considera **todos** os índices únicos não-primários e válidos cuja chave
-   inclua a coluna textual normalizada — **não há lista fixa de índices no
-   código**;
+2. considera **todos** os índices únicos (inclusive a chave primária) e válidos
+   cuja chave inclua a coluna textual normalizada — **não há lista fixa de
+   índices no código**;
 3. considera também índices parciais cujo **predicado** referencia a coluna
    normalizada (fail-closed: aborta em vez de assumir que o índice deixa de
    valer);
