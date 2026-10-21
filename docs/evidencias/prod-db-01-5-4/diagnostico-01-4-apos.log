@@ -1,0 +1,17 @@
+ nomes_locais_inconsistentes 
+-----------------------------
+                           0
+(1 row)
+
+ origem | qtd 
+--------+-----
+(0 rows)
+
+ origem | registro_id | local_id | local_cadastro_id | cadastro_nome_atual | local_empresa_id | registro_empresa_id | empresa_diverge | valor_esperado | valor_encontrado | so_caixa_espaco | classe 
+--------+-------------+----------+-------------------+---------------------+------------------+---------------------+-----------------+----------------+------------------+-----------------+--------
+(0 rows)
+
+ local_id | nome_atual | registros_afetados 
+----------+------------+--------------------
+(0 rows)
+

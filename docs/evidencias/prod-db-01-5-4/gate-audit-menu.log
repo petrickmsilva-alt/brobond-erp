@@ -1,0 +1,17 @@
+
+> brobond-ai-erp@1.0.0 audit:menu
+> node --import tsx scripts/auditar-menu.ts
+
+╭─ AUDITORIA DE MENU × ROTAS × RBAC × MULTIEMPRESA ─────────────────
+│ módulos no menu ......... 70
+│ grupos de navegação ..... 28
+│ recursos de API ......... 82
+│ recursos navegáveis ..... 43
+│ tabelas com empresa_id .. 76
+│ rotas públicas (pré-auth) verificadas
+╰───────────────────────────────────────────────────────────────────
+
+⚠️  AVISOS (1) — classificados, não bloqueiam:
+   [ROTA_PUBLICA] A rota "/api/health" é registrada antes do requireAuth global — confirme que é intencionalmente pública.
+
+✅ Sem erros: menu, rotas, recursos, permissões e escopo por empresa estão coerentes.

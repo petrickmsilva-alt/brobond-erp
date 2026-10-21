@@ -1,0 +1,36 @@
+ modo_apply |  confirmacao   |  autorizacao   |    revisao     
+------------+----------------+----------------+----------------
+ on         | PROD-DB-01.5.4 | PROD-DB-01.5.4 | PROD-DB-01.5.4
+(1 row)
+
+ autorizado 
+------------
+ off
+(1 row)
+
+BEGIN
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:  E4.2/01.5.4 revisão do script: PROD-DB-01.5.4 (apply=t, confirmacao=PROD-DB-01.5.4, autorizacao=PROD-DB-01.5.4)
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:  E4.2/01.5.4 BEFORE: chaves canônicas em colisão=16 linhas envolvidas=32
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:  E4.2/01.5.4 RELATÓRIO DOS PARES (ação prevista por grupo):
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=5 tamanho_id=1 | ids={105,205} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=105 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={205}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=6 tamanho_id=1 | ids={106,206} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=106 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={206}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=7 tamanho_id=1 | ids={107,207} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=107 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={207}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=8 tamanho_id=1 | ids={108,208} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=108 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={208}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=9 tamanho_id=1 | ids={109,209} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=109 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={209}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=10 tamanho_id=1 | ids={110,210} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=110 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={210}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=11 tamanho_id=1 | ids={111,211} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=111 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={211}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=12 tamanho_id=1 | ids={112,212} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=112 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={212}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=13 tamanho_id=1 | ids={113,213} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=113 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={213}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=14 tamanho_id=1 | ids={114,214} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=114 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={214}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=15 tamanho_id=1 | ids={115,215} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=115 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={215}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=16 tamanho_id=1 | ids={116,216} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=116 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={216}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=17 tamanho_id=1 | ids={117,217} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=117 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={217}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=18 tamanho_id=1 | ids={118,218} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=118 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={218}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=19 tamanho_id=1 | ids={119,219} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=119 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={219}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:    • empresa_id=1 local_id=3 produto_id=20 tamanho_id=1 | ids={120,220} locais={loja,LOJA} quantidades={9,1} | AÇÃO: manter id=120 com local=LOJA quantidade=10 (soma) estoque_min=0 ; remover ids={220}
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:  E4.2/01.5.4 atualizados: sobreviventes=16, linhas_removidas=16 (grupos=16 )
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:  E4.2/01.5.4 AFTER colisoes_canonicas_restantes=0 (fail-closed) contadores: nomes_locais_inconsistentes=0, duplicatas_locais=0, duplicatas_padroes=0, duplicatas_saldos=0, duplicatas_itens_inventario=0, saldos_invalidos=0, vinculos_empresa=0, vinculos_locais=0, pdv_vinculos=0, pdv_nomes=0, refs_operacionais=0
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:  E4.2/01.5.4 AFTER OK: colisões canônicas=0, duplicatas_saldos=0, saldos_invalidos=0, integridade de vínculos=0 (resíduo de nomes para o 005: 0)
+DO
+COMMIT
+E4.2/01.5.4 APPLY: transação COMITADA. Rode agora o script 005 (PROD-DB-01.5.3.1) para normalizar a classe C restante e confirme com o diagnóstico read-only (db/diagnostico-e42-nomes-locais.sql).
