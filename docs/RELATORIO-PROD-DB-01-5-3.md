@@ -189,6 +189,29 @@ executam o arquivo real pelo `psql -f`, em bancos descartáveis próprios).
 | 11 | Wrapper continua recusando cópia defasada do script | ✅ (teste existente) |
 | + | Detecção genérica (índice único adicional em `inventarios`) e predicado sobre a coluna normalizada = fail-closed | ✅ |
 
+### 6.1 Verificação final (execução limpa, PostgreSQL 16.14)
+
+| camada | comando | resultado |
+|:-------|:--------|:----------|
+| PostgreSQL | `npm run test:pg` | **227 pass / 0 fail / 0 skipped** (224 baseline + 3 novos) |
+| Memória | `npm --workspace server test` (sem `DATABASE_URL`) | **824 pass / 0 fail / 66 skipped** |
+| Client | `npm --workspace client test` | **323 pass** (29 arquivos) |
+| typecheck | `npm run typecheck` | exit 0 |
+| lint | `npm run lint` | exit 0 (0 erros; 410 warnings pré-existentes) |
+| build | `npm run build` | exit 0 |
+| auditoria de menu | `npm run audit:menu` | exit 0 |
+| smoke | `npm run smoke` (servidor demo em :3001) | **126/126** |
+| smoke PostgreSQL | `npm run smoke:pg` | **126/126** |
+
+Nota de ambiente: `npm run test:pg` e `npm --workspace server test` **não** devem
+rodar com `DATABASE_URL` exportado ao mesmo tempo. A suíte de memória pressupõe
+modo demonstração; com `DATABASE_URL` presente ela tenta tocar o banco e falha
+(artefato de ambiente, não regressão). O smoke simples exige um servidor em
+modo demonstração já no ar na porta 3001.
+
+A mensagem `ERP-03 GATE BLOCKED: resumo={}` é **pré-existente** (o runner emite
+TAP, não a linha `# pass` que o parser de resumo espera) e não representa falha.
+
 ---
 
 ## 7. Decisões deliberadas (o que a normalização NÃO faz)
