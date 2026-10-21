@@ -254,15 +254,47 @@ registrado como FOLLOW-UP.
 
 | arquivo | mudança |
 |:--------|:--------|
-| `db/admin/005-propagar-nomes-locais-e42.sql` | preflight de colisão de classe C (genérico por catálogo), aborto antes do UPDATE, relatório; revisão `PROD-DB-01.5.3` |
+| `db/admin/005-propagar-nomes-locais-e42.sql` | preflight de colisão de classe C (genérico por catálogo), aborto antes do UPDATE, relatório determinístico (`COLLATE "C"`); revisão `PROD-DB-01.5.3` |
 | `db/admin/run-005-e42.sh` | `REVISAO_ESPERADA='PROD-DB-01.5.3'` (guarda contra cópia defasada) |
 | `server/test/pg/prod-db-01-521-gate-classe-c.test.ts` | marcador de revisão atualizado para `01.5.3` |
-| `server/test/pg/prod-db-01-53-colisao-classe-c.test.ts` | **novo** — 11 cenários de colisão + detecção genérica |
+| `server/test/pg/prod-db-01-53-colisao-classe-c.test.ts` | **novo** — 11 cenários de colisão + detecção genérica + determinismo sob collation ICU |
 | `docs/RELATORIO-PROD-DB-01-5-3.md` | **novo** — este relatório |
 
 ---
 
-## 10. FOLLOW-UPs (fora do escopo deste ciclo)
+## 10. HOTFIX de CI — ordem de `array_agg` dependente de collation
+
+Depois de o PR #76 ficar tecnicamente pronto, o job `CI / testes-postgres`
+falhou no GitHub (225 pass / 2 fail) enquanto local dava 227/0. Causa raiz:
+
+- O relatório de colisão montava `local_atual` com `array_agg(DISTINCT r.local)`
+  **sem `ORDER BY`**. A ordem de `array_agg(DISTINCT ...)` segue a **collation
+  do banco**.
+- O serviço `postgres:16.14` do CI nasce com `en_US.utf8` (**ICU**) e devolve
+  `{loja,LOJA}`; o host local (`C.UTF-8`) devolve `{LOJA,loja}` para o **mesmo**
+  dado.
+- As asserções `/local_atual=\{LOJA,loja\}/` (caso exato e cenário de múltiplas
+  colisões) passavam local e falhavam no CI.
+
+Correção (determinismo, não mascaramento): o relatório agora ordena as colunas
+textuais com `COLLATE "C"` (`array_agg(DISTINCT x COLLATE "C" ORDER BY x COLLATE "C")`)
+e as numéricas com `ORDER BY` explícito. A ordem passa a ser byte a byte,
+idêntica em qualquer collation. Como cada coluna textual aparece duas vezes no
+`format()`, os argumentos passaram a ser posicionais (`%1$s`…`%7$s`).
+
+Teste de regressão: `PROD-DB-01.5.3 — o relatório de colisão é determinístico
+sob collation ICU (ordem do CI)` cria um banco descartável com
+`LOCALE_PROVIDER icu`, confirma que a ordem nativa é `{loja,LOJA}` e exige que o
+relatório continue `{LOJA,loja}`. Revertendo a correção, esse teste falha com o
+**mesmo** erro do CI (`local_atual={loja,LOJA}`).
+
+Não foi uma regressão do PROD-DB-01.5.3 (o comportamento de detecção estava
+correto); era um defeito de **portabilidade do relatório**. A suíte rodou verde
+nas duas collations: **228 pass / 0 fail / 0 skipped** em `C.UTF-8` e em ICU.
+
+---
+
+## 11. FOLLOW-UPs (fora do escopo deste ciclo)
 
 - **Operação classe B tem risco latente análogo.** A correção de classe B também
   troca texto por `locais.nome`; uma linha de classe B poderia colidir com outra
