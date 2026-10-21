@@ -22,7 +22,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$SELF_DIR/005-propagar-nomes-locais-e42.sql"
-REVISAO_ESPERADA='PROD-DB-01.5.2.1'
+REVISAO_ESPERADA='PROD-DB-01.5.3'
 
 if [ -z "${DATABASE_URL:-}" ]; then
   echo "erro: DATABASE_URL não definida." >&2
