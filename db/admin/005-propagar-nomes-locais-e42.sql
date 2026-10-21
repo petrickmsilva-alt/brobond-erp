@@ -85,6 +85,13 @@
 --     `(produto_id, tamanho_id, local)` = `(7, 5, 'LOJA')`).
 --     A normalização NUNCA faz merge nem exclui linhas: a decisão sobre a linha
 --     duplicada continua sendo do operador.
+--     HOTFIX (ainda 01.5.3): a varredura de índices passou a escopar pela tabela
+--     REAL (resolvida por `to_regclass`, a mesma resolução do UPDATE) em vez de
+--     `current_schema()`. Com `current_schema()` — que devolve o primeiro schema
+--     existente do `search_path`, às vezes um schema nomeado pela role em vez do
+--     schema das tabelas — a varredura podia enxergar ZERO índices e anunciar
+--     "nenhuma colisão", deixando o PostgreSQL descobrir a violação. Tabela não
+--     resolvível ou zero índice inspecionado com classe C presente = aborta.
 --
 -- PRECEDENTES: docs/RELATORIO-PROD-DB-01-4.md (diagnóstico read-only),
 --              docs/RELATORIO-PROD-DB-01-5.md (correção classe B),
@@ -187,6 +194,7 @@ DECLARE
   nao_nulo         TEXT;          -- todas as colunas de chave não nulas
   expr             TEXT;          -- expressão de uma coluna de chave
   tgt              RECORD;        -- alvo (tabela, coluna textual, FK canônica)
+  tgt_oid          OID;           -- OID REAL da tabela alvo (resolvido no search_path)
   idx_rec          RECORD;        -- índice único inspecionado
   det              RECORD;        -- grupo em colisão (detalhe do relatório)
   i                INT;
@@ -340,6 +348,19 @@ BEGIN
   -- único btree rejeita. Um predicado que referencie a coluna textual é
   -- fail-closed (aborta): não se pode afirmar que o índice deixa de valer.
   --
+  -- PROD-DB-01.5.3 (hotfix) — ESCOPO DA VARREDURA PELA TABELA REAL. A varredura
+  -- do catálogo escopava por `current_schema()`, que devolve o PRIMEIRO schema
+  -- existente do `search_path` — não necessariamente onde a tabela vive. Num
+  -- Postgres gerenciado, um schema nomeado pela role costuma existir, então
+  -- `current_schema()` podia divergir do schema real: a varredura enxergava ZERO
+  -- índices enquanto o UPDATE (sem qualificação de schema) resolvia a tabela
+  -- corretamente pelo `search_path`, e o PostgreSQL era quem descobria a
+  -- violação — o sintoma exato do incidente. Agora o OID real da tabela é
+  -- resolvido por `to_regclass()` (a MESMA resolução do UPDATE) e a varredura é
+  -- escopada por `i.indrelid`. Tabela não resolvível aborta (fail-closed). Como
+  -- defesa em profundidade, se houver classe C mas a varredura inspecionar zero
+  -- índices, o bloco também aborta em vez de anunciar segurança sem prova.
+  --
   -- Nenhuma linha é alterada, mesclada ou excluída por este bloco: ele apenas lê.
   -- -------------------------------------------------------------------------
   IF normalizar_c THEN
@@ -382,6 +403,22 @@ BEGIN
         || ' AND r.%I IS DISTINCT FROM l.nome AND lower(btrim(r.%I)) = lower(btrim(l.nome)))',
         tgt.fk, tgt.coluna, tgt.coluna);
 
+      -- PROD-DB-01.5.3 (correção): resolve o OID REAL da tabela alvo com a
+      -- MESMA resolução de nome do UPDATE (search_path), em vez de assumir
+      -- `current_schema()`. `current_schema()` devolve o PRIMEIRO schema
+      -- existente do search_path — que, num Postgres gerenciado, pode ser um
+      -- schema nomeado pela role e NÃO aquele onde as tabelas vivem. Filtrar o
+      -- catálogo por `current_schema()` então varria ZERO índices enquanto o
+      -- UPDATE (sem schema) resolvia a tabela corretamente pelo search_path — e
+      -- o PostgreSQL era quem descobria a violação. Resolver o OID pela mesma
+      -- rota elimina a divergência. Fail-closed: tabela não resolvível aborta.
+      tgt_oid := to_regclass(tgt.tabela);
+      IF tgt_oid IS NULL THEN
+        RAISE EXCEPTION 'E4.2/01.5.3 ABORTADO: a tabela alvo % não é resolvível pelo search_path (%) — não é possível inspecionar seus índices únicos com a mesma resolução do UPDATE. Nada foi alterado.',
+          tgt.tabela, current_setting('search_path')
+          USING HINT = 'Ajuste o search_path para que a tabela (ex.: public.estoques) seja resolvida como o UPDATE a resolveria; o preflight é fail-closed e nunca assume que não há índice.';
+      END IF;
+
       FOR idx_rec IN
         SELECT c.relname AS idx_nome,
                pg_get_expr(i.indpred, i.indrelid) AS pred,
@@ -395,10 +432,10 @@ BEGIN
                ) AS cols
           FROM pg_index i
           JOIN pg_class c ON c.oid = i.indexrelid
-          JOIN pg_class t ON t.oid = i.indrelid
-          JOIN pg_namespace n ON n.oid = t.relnamespace
-         WHERE n.nspname = current_schema()
-           AND t.relname = tgt.tabela
+         -- Escopo pela tabela REAL resolvida (tgt_oid), não por `current_schema()`:
+         -- assim a varredura enxerga os índices da MESMA tabela que o UPDATE toca,
+         -- qualquer que seja o search_path da sessão.
+         WHERE i.indrelid = tgt_oid
            -- TODO índice único conta, inclusive a chave primária: a única
            -- razão para excluir a PK seria a suposição de que `id` nunca é a
            -- coluna textual normalizada — suposição que o preflight não faz.
@@ -509,6 +546,17 @@ BEGIN
 
     RAISE NOTICE 'E4.2/01.5.3 preflight de colisão: índices únicos verificados=%, chaves em colisão=%, linhas envolvidas=%',
       idx_verificados, colisoes_total, colisoes_linhas;
+
+    -- Defesa em profundidade (fail-closed): se há linhas classe C a normalizar
+    -- mas NENHUM índice único foi inspecionado nas tabelas alvo, a garantia de
+    -- "nenhuma colisão" não tem base — só pode significar que a varredura não
+    -- enxergou os índices reais (foi exatamente o defeito corrigido acima, com
+    -- `current_schema()`). Nesse estado, abortar é mais seguro do que anunciar
+    -- segurança sem prova; o PostgreSQL nunca pode ser quem descobre a violação.
+    IF c_casos > 0 AND colisoes_total = 0 AND idx_verificados = 0 THEN
+      RAISE EXCEPTION 'E4.2/01.5.3 ABORTADO: existem % linha(s) classe C para normalizar, mas o preflight não inspecionou NENHUM índice único nas tabelas alvo (search_path=%) — não há base para afirmar que a normalização é segura. Nada foi alterado.', c_casos, current_setting('search_path')
+        USING HINT = 'Verifique se as tabelas alvo (ex.: public.estoques) são resolvíveis pelo search_path e se possuem índice único sobre a coluna normalizada; o preflight nunca assume ausência de índice sem prova.';
+    END IF;
   END IF;
 
   -- -------------------------------------------------------------------------

@@ -258,6 +258,7 @@ registrado como FOLLOW-UP.
 | `db/admin/run-005-e42.sh` | `REVISAO_ESPERADA='PROD-DB-01.5.3'` (guarda contra cópia defasada) |
 | `server/test/pg/prod-db-01-521-gate-classe-c.test.ts` | marcador de revisão atualizado para `01.5.3` |
 | `server/test/pg/prod-db-01-53-colisao-classe-c.test.ts` | **novo** — 11 cenários de colisão + detecção genérica + determinismo sob collation ICU |
+| `server/test/pg/prod-db-01-53-1-schema-search-path.test.ts` | **novo (hotfix 01.5.3)** — regressão: a colisão `(7,5,LOJA)` ainda é detectada quando `current_schema() != public` |
 | `docs/RELATORIO-PROD-DB-01-5-3.md` | **novo** — este relatório |
 
 ---
@@ -294,7 +295,109 @@ nas duas collations: **228 pass / 0 fail / 0 skipped** em `C.UTF-8` e em ICU.
 
 ---
 
-## 11. FOLLOW-UPs (fora do escopo deste ciclo)
+## 11. HOTFIX 01.5.3 — a varredura de índices escopava por `current_schema()` (o defeito que ainda deixava a produção falhar)
+
+### 11.1 Diagnóstico
+
+Mesmo com o preflight de colisão do PROD-DB-01.5.3 instalado, a produção voltou
+a abortar com a mensagem **nativa** do PostgreSQL:
+
+```
+duplicate key value violates unique constraint
+  "estoques_produto_id_tamanho_id_local_key"
+Key (produto_id, tamanho_id, local)=(7, 5, LOJA) already exists.
+```
+
+com a classificação `A=0 B=0 C=69` — ou seja, a preflight **não** detectou a
+colisão antes do `UPDATE`.
+
+Causa raiz: a varredura do catálogo escopava por **`current_schema()`**:
+
+```sql
+JOIN pg_namespace n ON n.oid = t.relnamespace
+WHERE n.nspname = current_schema()      -- PRIMEIRO schema EXISTENTE do search_path
+  AND t.relname = tgt.tabela
+```
+
+`current_schema()` **não** devolve necessariamente o schema onde as tabelas
+vivem: ele devolve o **primeiro schema existente** do `search_path`. O
+`search_path` padrão do PostgreSQL é `"$user", public`. Num Postgres gerenciado
+(Neon/Render) é comum existir um schema com o **nome da role conectante**; nesse
+caso `current_schema()` passa a ser esse schema — que **não tem** os índices das
+tabelas do ERP.
+
+Resultado: a varredura enxergava **ZERO** índices e anunciava "nenhuma colisão
+prevista", enquanto o `UPDATE` (sem qualificação de schema) resolvia
+`estoques` corretamente pelo `search_path` para `public.estoques` — e o
+PostgreSQL era quem descobria a violação **durante** o `UPDATE`.
+
+Os dois lados usavam resoluções de nome **diferentes**: o `UPDATE` usava o
+`search_path`; a varredura usava `current_schema()`. A divergência entre elas é
+o defeito.
+
+### 11.2 Reprodução empírica
+
+Banco descartável com `search_path = <role>, public` (existindo um schema com o
+nome da role) e a fixture do caso exato (`produto_id=7`, `tamanho_id=5`, uma
+linha `'LOJA'` e outra `'loja'`):
+
+| versão do script | `current_schema()` | DRY-RUN | APPLY |
+|:-----------------|:-------------------|:--------|:------|
+| **antes do hotfix** | `brobond` (schema da role) | `índices únicos verificados=0` → **não detecta** | **`duplicate key ... estoques_produto_id_tamanho_id_local_key`** (PostgreSQL descobre) |
+| **depois do hotfix** | `brobond` (schema da role) | `índices únicos verificados=3` → **colisão detectada** | **aborta antes do UPDATE** (`ABORTADO ... 1 chave(s) ... colidir`), sem `COMMIT` |
+
+É a assinatura exata do incidente: classificação correta (`C=69`) e, ainda
+assim, violação de constraint descoberta pelo PostgreSQL.
+
+### 11.3 Correção
+
+1. **Escopo pela tabela REAL.** O OID da tabela alvo é resolvido por
+   `to_regclass(tgt.tabela)` — a **mesma** resolução de nome que o `UPDATE`
+   usa — e a varredura passa a ser escopada por `i.indrelid = tgt_oid`:
+
+   ```sql
+   tgt_oid := to_regclass(tgt.tabela);
+   ...
+   WHERE i.indrelid = tgt_oid
+   ```
+
+   Assim a varredura enxerga os índices da **mesma tabela** que o `UPDATE` toca,
+   qualquer que seja o `search_path` da sessão.
+
+2. **Fail-closed na tabela não resolvível.** Se `to_regclass` devolver `NULL`, o
+   preflight **aborta** antes de qualquer escrita (em vez de, silenciosamente,
+   não achar índice algum).
+
+3. **Defesa em profundidade.** Se houver **classe C** para normalizar, mas a
+   varredura inspecionar **zero** índices únicos nas tabelas alvo, o bloco
+   **aborta** — nunca anuncia segurança sem prova. Esse guarda, por si só, já
+   teria impedido o incidente mesmo se a resolução de schema voltasse a divergir.
+
+Nada mais mudou: A/B/C preservados; a identificação do registro continua por
+`local_id` + `empresa_id`; nenhum fallback textual; nenhum `DELETE`/`MERGE`. A
+migration `0030` não foi alterada.
+
+### 11.4 Teste de regressão
+
+`server/test/pg/prod-db-01-53-1-schema-search-path.test.ts` (novo). O banco
+descartável nasce com um schema com o nome da role **à frente** do `public` no
+`search_path`, de modo que `current_schema() != public`. A fixture reproduz o
+caso exato (`produto_id=7`, `tamanho_id=5`, `'LOJA'` + `'loja'`) e prova:
+
+- **DRY-RUN** detecta a colisão (e reporta a chave `(7, 5, LOJA)`);
+- **APPLY** aborta **antes** do `UPDATE`;
+- **nenhuma** linha é alterada (snapshot byte a byte idêntico);
+- **nenhuma** exclusão/merge ocorre (o número de linhas permanece 2);
+- **não há `COMMIT`**, e a mensagem **nativa** de constraint **não** aparece
+  (o PostgreSQL nunca chega a descobrir a violação).
+
+Revertendo o escopo para o comportamento anterior, o teste **falha** com o
+sintoma do incidente (`índices únicos verificados=0` e depois `duplicate key`),
+o que prova que ele cobre o defeito.
+
+---
+
+## 12. FOLLOW-UPs (fora do escopo deste ciclo)
 
 - **Operação classe B tem risco latente análogo.** A correção de classe B também
   troca texto por `locais.nome`; uma linha de classe B poderia colidir com outra
