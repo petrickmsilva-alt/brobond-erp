@@ -209,8 +209,15 @@ modo demonstração; com `DATABASE_URL` presente ela tenta tocar o banco e falha
 (artefato de ambiente, não regressão). O smoke simples exige um servidor em
 modo demonstração já no ar na porta 3001.
 
-A mensagem `ERP-03 GATE BLOCKED: resumo={}` é **pré-existente** (o runner emite
-TAP, não a linha `# pass` que o parser de resumo espera) e não representa falha.
+A mensagem `ERP-03 GATE BLOCKED: resumo={}` **não** é uma falha de teste. O
+`scripts/test-pg-gate.mjs` lê o resumo no formato TAP (`# pass 227`), que é o
+reporter padrão do `node --test` em **Node 22 não-TTY** (a versão fixada no CI).
+Em **Node 24** o reporter padrão passou a ser `spec` (`ℹ pass 227`), então o
+parser do gate não encontra o resumo e bloqueia — mesmo com 227 pass / 0 fail.
+Rodando o runner com `--test-reporter=tap` (equivalente ao CI), o resumo aparece
+como `# pass 227 / # fail 0 / # skipped 0` e o gate aprova. É um artefato de
+versão de Node, **pré-existente** (o gate não foi alterado neste ciclo) e
+registrado como FOLLOW-UP.
 
 ---
 
@@ -271,3 +278,9 @@ TAP, não a linha `# pass` que o parser de resumo espera) e não representa falh
   C (e das que colidem): qual linha manter, se há ajuste de saldo.
 - Avaliar se o schema deve ganhar índices únicos com expressão `lower(btrim(...))`
   (mudaria a análise de colisão; exigiria estender o preflight).
+- **`scripts/test-pg-gate.mjs` assume TAP.** Ele parseia `# pass`/`# fail`, mas o
+  reporter padrão do `node --test` mudou de TAP para `spec` no Node 24 (em Node
+  22 não-TTY, o do CI, continua TAP). Em Node ≥ 24 o gate bloqueia mesmo com
+  suíte verde. Corrigir o parser (aceitar `ℹ pass`, ou fixar
+  `--test-reporter=tap` no `server/package.json#test:pg`) é uma mudança de
+  infraestrutura de teste — **fora do escopo do PROD-DB-01.5.3**.
