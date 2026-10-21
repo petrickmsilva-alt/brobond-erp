@@ -1,0 +1,22 @@
+ modo_apply |  confirmacao   | normalizar_classe_c |    revisao     
+------------+----------------+---------------------+----------------
+ on         | PROD-DB-01.5.2 | on                  | PROD-DB-01.5.3
+(1 row)
+
+ autorizado 
+------------
+ off
+(1 row)
+
+BEGIN
+psql:db/admin/005-propagar-nomes-locais-e42.sql:828: NOTICE:  E4.2/01.5.3 revisão do script: reconhece normalizar_classe_c=on (apply=t, confirmacao=PROD-DB-01.5.2)
+psql:db/admin/005-propagar-nomes-locais-e42.sql:828: NOTICE:  E4.2/01.5 BEFORE nomes_locais_inconsistentes=0
+psql:db/admin/005-propagar-nomes-locais-e42.sql:828: NOTICE:  E4.2/01.5 classificação: A=0 B=0 C=0 (B=divergência real; C=diferença só de caixa/espaço)
+psql:db/admin/005-propagar-nomes-locais-e42.sql:828: NOTICE:  E4.2/01.5.3 preflight de colisão: índices únicos verificados=3, chaves em colisão=0, linhas envolvidas=0
+psql:db/admin/005-propagar-nomes-locais-e42.sql:828: NOTICE:  E4.2/01.5.2 classificação: A=0 B=0 C=0 (operação classe C autorizada: 0 a normalizar)
+psql:db/admin/005-propagar-nomes-locais-e42.sql:828: NOTICE:  E4.2/01.5 atualizados: estoques.local=0, movimentacoes.local=0, movimentacoes.local_destino=0, inventarios.local=0 (total=0)
+psql:db/admin/005-propagar-nomes-locais-e42.sql:828: NOTICE:  E4.2/01.5 AFTER nomes_locais_inconsistentes=0 (fail-closed) contadores: duplicatas_locais=0, duplicatas_padroes=0, duplicatas_saldos=0, duplicatas_itens_inventario=0, saldos_invalidos=0, vinculos_empresa=0, vinculos_locais=0, pdv_vinculos=0, pdv_nomes=0, refs_operacionais=0
+psql:db/admin/005-propagar-nomes-locais-e42.sql:828: NOTICE:  E4.2/01.5 AFTER OK: todos os contadores do preflight E4.2 = 0 (nomes_locais_inconsistentes de 0 para 0)
+DO
+COMMIT
+E4.2/01.5 APPLY: transação COMITADA. Confirme com o diagnóstico read-only (db/diagnostico-e42-nomes-locais.sql) que o contador está em 0.

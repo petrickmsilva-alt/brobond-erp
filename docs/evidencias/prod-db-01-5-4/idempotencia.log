@@ -1,0 +1,19 @@
+ modo_apply |  confirmacao   |  autorizacao   |    revisao     
+------------+----------------+----------------+----------------
+ on         | PROD-DB-01.5.4 | PROD-DB-01.5.4 | PROD-DB-01.5.4
+(1 row)
+
+ autorizado 
+------------
+ off
+(1 row)
+
+BEGIN
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:  E4.2/01.5.4 revisão do script: PROD-DB-01.5.4 (apply=t, confirmacao=PROD-DB-01.5.4, autorizacao=PROD-DB-01.5.4)
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:  E4.2/01.5.4 BEFORE: chaves canônicas em colisão=0 linhas envolvidas=0
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:  E4.2/01.5.4 atualizados: sobreviventes=0, linhas_removidas=0 (grupos=0 )
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:  E4.2/01.5.4 AFTER colisoes_canonicas_restantes=0 (fail-closed) contadores: nomes_locais_inconsistentes=0, duplicatas_locais=0, duplicatas_padroes=0, duplicatas_saldos=0, duplicatas_itens_inventario=0, saldos_invalidos=0, vinculos_empresa=0, vinculos_locais=0, pdv_vinculos=0, pdv_nomes=0, refs_operacionais=0
+psql:db/admin/006-consolidar-colisoes-estoque-classe-c.sql:528: NOTICE:  E4.2/01.5.4 AFTER OK: colisões canônicas=0, duplicatas_saldos=0, saldos_invalidos=0, integridade de vínculos=0 (resíduo de nomes para o 005: 0)
+DO
+COMMIT
+E4.2/01.5.4 APPLY: transação COMITADA. Rode agora o script 005 (PROD-DB-01.5.3.1) para normalizar a classe C restante e confirme com o diagnóstico read-only (db/diagnostico-e42-nomes-locais.sql).
