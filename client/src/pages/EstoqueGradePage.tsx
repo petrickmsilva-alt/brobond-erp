@@ -15,6 +15,7 @@ type GradeResp = {
   local: string;
   locaisDisponiveis: string[];
   totalPecas: number;
+  busca?: { q: string; total: number; exibidos: number; hasMore: boolean } | null;
   linhas: {
     produto: { id: number; sku: string; nome: string; cor: string | null; cor_hex: string | null; categoria_id__label: string | null; colecao_id__label: string | null; grade_id: number | null; grade_nome: string | null; foto_url: string | null; preco_venda: number; custo: number };
     celulas: { tamanho_id: number; quantidade: number; estoque_min: number }[];
@@ -52,6 +53,7 @@ export default function EstoqueGradePage() {
   const [categoriaId, setCategoriaId] = useState('');
   const [gradeId, setGradeId] = useState('');
   const [q, setQ] = useState('');
+  const [qDebounced, setQDebounced] = useState('');
   const [soAlertas, setSoAlertas] = useState(false);
   const [opts, setOpts] = useState<Record<string, { value: number; label: string }[]>>({});
   const [cel, setCel] = useState<Cel | null>(null);
@@ -66,10 +68,17 @@ export default function EstoqueGradePage() {
   // Identifica a requisição de histórico mais recente (evita que uma resposta
   // atrasada de uma célula anterior sobrescreva a célula aberta agora).
   const historicoReq = useRef(0);
+  const gradeReq = useRef(0);
   const [movParaEstornar, setMovParaEstornar] = useState<any>(null);
   const [estornando, setEstornando] = useState(false);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQDebounced(q.trim()), 200);
+    return () => window.clearTimeout(timer);
+  }, [q]);
+
   const load = useCallback(async () => {
+    const sequence = ++gradeReq.current;
     setLoading(true);
     setError('');
     try {
@@ -78,15 +87,17 @@ export default function EstoqueGradePage() {
       if (colecaoId) params.set('colecao_id', colecaoId);
       if (categoriaId) params.set('categoria_id', categoriaId);
       if (gradeId) params.set('grade_id', gradeId);
+      if (qDebounced) params.set('q', qDebounced);
       const d = await api.get<GradeResp>(`/estoques/grade?${params.toString()}`);
+      if (sequence !== gradeReq.current) return;
       setData(d);
       if (!local && d.locaisDisponiveis.length) setLocal((l) => l || '');
     } catch (e: any) {
-      setError(e.message || 'Erro ao carregar a grade.');
+      if (sequence === gradeReq.current) setError(e.message || 'Erro ao carregar a grade.');
     } finally {
-      setLoading(false);
+      if (sequence === gradeReq.current) setLoading(false);
     }
-  }, [local, colecaoId, categoriaId, gradeId]);
+  }, [local, colecaoId, categoriaId, gradeId, qDebounced]);
 
   useEffect(() => {
     load();
@@ -140,13 +151,8 @@ export default function EstoqueGradePage() {
 
   const linhasVisiveis = useMemo(() => {
     if (!data) return [];
-    const term = q.trim().toLowerCase();
-    return data.linhas.filter((l) => {
-      if (soAlertas && !l.celulas.some((c) => c.estoque_min > 0 && c.quantidade <= c.estoque_min)) return false;
-      if (!term) return true;
-      return `${l.produto.sku} ${l.produto.nome} ${l.produto.cor || ''} ${l.produto.categoria_id__label || ''}`.toLowerCase().includes(term);
-    });
-  }, [data, q, soAlertas]);
+    return data.linhas.filter((l) => !soAlertas || l.celulas.some((c) => c.estoque_min > 0 && c.quantidade <= c.estoque_min));
+  }, [data, soAlertas]);
 
   // Agrupa por grade: cada grade vira uma matriz com SOMENTE os seus tamanhos,
   // na ordem cadastrada na grade. Sem isso, calça e camiseta dividir as mesmas
@@ -473,12 +479,15 @@ export default function EstoqueGradePage() {
             </label>
             <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input className="input pl-9" placeholder="Buscar produto/SKU/cor..." value={q} onChange={(e) => setQ(e.target.value)} />
+              <input className="input pl-9" aria-label="Buscar produtos na grade de estoque" placeholder="Nome, SKU, barcode, descrição, cor, categoria ou marca..." value={q} onChange={(e) => setQ(e.target.value)} />
             </div>
             <div className="ml-auto text-right text-sm text-slate-500">
               Total: <strong className="tabular-nums">{formatNumber(data.totalPecas)}</strong> peças
             </div>
           </div>
+          {data.busca?.hasMore && (
+            <Alert tone="blue">A busca encontrou {data.busca.total} produtos e exibiu os {data.busca.exibidos} primeiros. Refine os termos ou os filtros para localizar os demais.</Alert>
+          )}
 
           {/* Matriz — uma seção por grade, cada uma só com os seus tamanhos */}
           {linhasVisiveis.length === 0 ? (

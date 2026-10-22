@@ -23,7 +23,7 @@ delete process.env.DATABASE_URL;
 
 const { RESOURCES } = await import('../src/resources');
 const { getStore } = await import('../src/services');
-const { ADMIN, chamar, criarAtor, esperarErro, garantirAdmin, novoCliente, novoLocal, novoProduto, novoTamanho, reqDe, resFake, saldoInicial } = await import('./_p1util');
+const { ADMIN, chamar, criarAtor, esperarErro, garantirAdmin, novoCliente, novoLocal, novoProduto, novoTamanho, reqDe, resFake, saldoDe, saldoInicial } = await import('./_p1util');
 const pdv = await import('../src/pdv');
 
 await garantirAdmin();
@@ -551,4 +551,35 @@ test('pdv: operador não abre caixa (RBAC)', async () => {
   await saldoInicial(p, 500);
   const venda = await chamar(pdv.venderPdv, reqDe({ itens: [linhaDe(p, 1)], pagamentos: [{ forma: 'dinheiro', valor: 5 }] }, { user: operador }), 201);
   assert.equal(Number(venda.calculo.total), 5);
+});
+
+test('pdv: SKU de variação resolve variacao_tamanho_id e fatura baixando a grade do pai', async () => {
+  await fecharTudo();
+  await abrirCaixa(100, 'CAIXA-VARIACAO');
+  const pai = await novoProduto({ sku: 'PAI-GRADE-PDV', nome: 'Pai grade PDV', formato: 'variacao', preco_venda: 80 });
+  const tam = await novoTamanho('G');
+  const filho = await novoProduto({
+    sku: 'FILHO-GRADE-PDV-G',
+    nome: 'Pai grade PDV Vermelha G',
+    produto_pai_id: Number(pai.id),
+    variacao_tamanho_id: Number(tam.id),
+    formato: 'variacao',
+    preco_venda: 80,
+  });
+  await saldoInicial(pai, 5, { codigoTamanho: 'G' });
+
+  const busca = await chamar(pdv.buscarProduto, reqDe({}, { query: { codigo: filho.sku } }));
+  assert.equal(busca.produto_id, Number(pai.id), 'a venda permanece canonicamente no produto pai');
+  assert.equal(busca.tamanho_id, Number(tam.id));
+  assert.equal(busca.eh_variacao, true);
+
+  const venda = await venderPdv(
+    [{ produto_id: Number(pai.id), codigo: filho.sku, tamanho_id: Number(tam.id), quantidade: 2, desconto_pct: 0 }],
+    [{ forma: 'dinheiro', valor: 160 }],
+  );
+  assert.equal(venda.itens[0].produto_id, Number(pai.id));
+  assert.equal(venda.itens[0].tamanho_id, Number(tam.id));
+  assert.equal(venda.itens[0].sku, filho.sku, 'o SKU lido continua auditado na resposta');
+  assert.equal(await saldoDe(Number(pai.id), Number(tam.id), 'loja'), 3);
+  assert.equal(await saldoDe(Number(filho.id), Number(tam.id), 'loja'), 0, 'o filho não possui saldo próprio neste contrato');
 });

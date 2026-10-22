@@ -5,6 +5,7 @@ import { api, ApiError } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import { Thumb } from '../components/ImageField';
+import { ProductSelector } from '../components/ProductSelector';
 import { formatDateTime, formatNumber } from '../lib/format';
 
 type Inv = Record<string, any> & { id: number };
@@ -204,7 +205,6 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
   const [fechando, setFechando] = useState(false);
   const [achadoOpen, setAchadoOpen] = useState(false);
   const [achado, setAchado] = useState<{ produto_id: string; tamanho_id: string; contado: string }>({ produto_id: '', tamanho_id: '', contado: '1' });
-  const [produtos, setProdutos] = useState<{ value: number; label: string }[]>([]);
   const [tamanhos, setTamanhos] = useState<{ value: number; label: string }[]>([]);
   // No "achado", o tamanho precisa ser da grade do produto escolhido.
   const [tamanhosAchado, setTamanhosAchado] = useState<{ value: number; label: string }[] | null>(null);
@@ -254,7 +254,6 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
 
   useEffect(() => {
     carregar();
-    api.get<{ value: number; label: string }[]>('/produtos/options').then(setProdutos).catch(() => {});
     api.get<{ value: number; label: string }[]>('/tamanhos/options').then(setTamanhos).catch(() => {});
   }, [carregar]);
 
@@ -497,14 +496,15 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
         <div className="space-y-4">
           <label className="block">
             <span className="label">Produto</span>
-            <select className="input" value={achado.produto_id} onChange={(e) => setAchado((a) => ({ ...a, produto_id: e.target.value }))}>
-              <option value="">Selecione...</option>
-              {produtos.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+            <ProductSelector
+              value={achado.produto_id}
+              aria-label="Buscar produto para contagem"
+              onChange={(_id, product) => setAchado((a) => ({
+                ...a,
+                produto_id: product ? String(product.produto_pai_id ?? product.id) : '',
+                tamanho_id: product?.variacao_tamanho_id ? String(product.variacao_tamanho_id) : '',
+              }))}
+            />
           </label>
           <label className="block">
             <span className="label">Tamanho</span>

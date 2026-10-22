@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Calculator, ClipboardList, Loader2, Plus, Search, Tag } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { ProductSelector } from '../components/ProductSelector';
 import { formatMoney, formatNumber } from '../lib/format';
 
 type Ficha = Record<string, any> & { id: number };
@@ -18,7 +19,6 @@ export default function CustoPage() {
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
   const [novoOpen, setNovoOpen] = useState(false);
-  const [produtos, setProdutos] = useState<{ value: number; label: string }[]>([]);
   const [form, setForm] = useState({ produto_id: '', mao_obra: '0', custos_indiretos: '0', margem_pct: '0' });
   const [formErr, setFormErr] = useState('');
   const [criando, setCriando] = useState(false);
@@ -35,10 +35,6 @@ export default function CustoPage() {
 
   useEffect(() => {
     carregar();
-    api
-      .get<{ value: number; label: string }[]>('/produtos/options')
-      .then(setProdutos)
-      .catch(() => {});
   }, []);
 
   const visiveis = useMemo(() => {
@@ -171,14 +167,14 @@ export default function CustoPage() {
         <div className="space-y-4">
           <label className="block">
             <span className="label">Produto</span>
-            <select className="input" value={form.produto_id} onChange={(e) => setForm((f) => ({ ...f, produto_id: e.target.value }))}>
-              <option value="">Selecione...</option>
-              {produtos.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+            <ProductSelector
+              value={form.produto_id}
+              aria-label="Produto da ficha de custo"
+              onChange={(_id, product) => setForm((f) => ({
+                ...f,
+                produto_id: product ? String(product.produto_pai_id ?? product.id) : '',
+              }))}
+            />
           </label>
           <div className="grid grid-cols-3 gap-3">
             <label className="block">

@@ -7,6 +7,7 @@ import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, PageHeader, Spinner, useToast } from '../components/ui';
 import { Thumb } from '../components/ImageField';
 import RecebimentoCompraModal from '../components/RecebimentoCompraModal';
+import { ProductSelector } from '../components/ProductSelector';
 import { formatDate, formatMoney } from '../lib/format';
 
 type Tipo = 'venda' | 'compra';
@@ -61,14 +62,8 @@ export default function OrderPage({ tipo }: { tipo: Tipo }) {
   // rótulos para selects
   const [parceiroOpts, setParceiroOpts] = useState<Option[]>([]);
   const [repOpts, setRepOpts] = useState<Option[]>([]);
-  const [produtos, setProdutos] = useState<Record<string, any>[]>([]);
   const [insumoOpts, setInsumoOpts] = useState<Option[]>([]);
   const [tamanhoOpts, setTamanhoOpts] = useState<Option[]>([]);
-
-  const produtoOpts: (Option & { preco_venda?: number })[] = useMemo(
-    () => produtos.map((r) => ({ value: r.id, label: `${r.sku} — ${r.nome}`, preco_venda: r.preco_venda })),
-    [produtos]
-  );
 
   // item novo (linha de edição)
   const blank: Item = useMemo(
@@ -113,10 +108,6 @@ export default function OrderPage({ tipo }: { tipo: Tipo }) {
     api.get<Option[]>(`/tamanhos/options`).then(setTamanhoOpts).catch(() => {});
     if (tipo === 'venda') {
       api.get<Option[]>('/representantes/options').then(setRepOpts).catch(() => {});
-      api
-        .get<{ rows: any[] }>(`/produtos?pageSize=200&sort=nome`)
-        .then((d) => setProdutos(d.rows))
-        .catch(() => {});
     } else {
       api.get<Option[]>('/insumos/options').then(setInsumoOpts).catch(() => {});
     }
@@ -209,13 +200,6 @@ export default function OrderPage({ tipo }: { tipo: Tipo }) {
       toast.error(e.message || 'Não foi possível alterar o status.');
     } finally {
       setActionStatus(null);
-    }
-  }
-
-  function prefillPreco() {
-    if (tipo === 'venda' && novo.produto_id) {
-      const p = produtoOpts.find((o) => o.value === Number(novo.produto_id));
-      if (p?.preco_venda && !novo.preco_unitario) setNovo((n) => ({ ...n, preco_unitario: p.preco_venda! }));
     }
   }
 
@@ -426,22 +410,40 @@ export default function OrderPage({ tipo }: { tipo: Tipo }) {
                 <tr className="bg-navy-50/40">
                   {tipo === 'venda' && <td />}
                   <td>
-                    <select
-                      className="input"
-                      value={novo.produto_id ?? (novo.insumo_id ?? '')}
-                      onChange={(e) => {
-                        const v = e.target.value ? Number(e.target.value) : undefined;
-                        setNovo((n) => ({ ...n, [tipo === 'venda' ? 'produto_id' : 'insumo_id']: v }));
-                        setTimeout(prefillPreco, 0);
-                      }}
-                    >
-                      <option value="">Selecione {labelItemRef.toLowerCase()}...</option>
-                      {(tipo === 'venda' ? produtoOpts : insumoOpts).map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
+                    {tipo === 'venda' ? (
+                      <ProductSelector
+                        value={novo.produto_id}
+                        aria-label="Buscar produto da venda"
+                        className="min-w-[19rem]"
+                        selectParentsWithVariants={false}
+                        onChange={(_id, product) => {
+                          if (!product) {
+                            setNovo((n) => ({ ...n, produto_id: undefined, tamanho_id: undefined }));
+                            return;
+                          }
+                          const unicoTamanho = product.tamanhos.length === 1 ? product.tamanhos[0].tamanho_id : null;
+                          setNovo((n) => ({
+                            ...n,
+                            // Venda/faturamento usam o mesmo contrato do PDV:
+                            // produto pai + tamanho; a variação fornece SKU/preço.
+                            produto_id: product.produto_pai_id ?? product.id,
+                            tamanho_id: product.variacao_tamanho_id ?? unicoTamanho ?? undefined,
+                            preco_unitario: product.preco_venda,
+                          }));
+                        }}
+                      />
+                    ) : (
+                      <select
+                        className="input"
+                        value={novo.insumo_id ?? ''}
+                        onChange={(e) => setNovo((n) => ({ ...n, insumo_id: e.target.value ? Number(e.target.value) : undefined }))}
+                      >
+                        <option value="">Selecione insumo...</option>
+                        {insumoOpts.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    )}
                   </td>
                   {tipo === 'venda' && (
                     <td>

@@ -154,6 +154,50 @@ describe('PDV — tela', () => {
     expect(apiGet).toHaveBeenCalledWith('/pdv/buscar?codigo=7890000000017');
   });
 
+  it('busca global seleciona uma variação, mas só adiciona depois da resolução exata do PDV', async () => {
+    const variante = {
+      id: 420,
+      produto_pai_id: 42,
+      sku: 'BOTA-001-G',
+      nome: 'Bota Country Vermelha G',
+      codigo_barras: '7890000000017',
+      descricao: null,
+      cor: 'Vermelha',
+      categoria: 'Botas',
+      marca: 'BroBond',
+      preco_venda: 199.9,
+      ativo: true,
+      variacao_tamanho_id: 3,
+      estoque_disponivel: 8,
+      tamanhos: [{ tamanho_id: 3, tamanho: 'G', quantidade: 8 }],
+    };
+    mockRotas({
+      '/pdv/caixas/aberto': { caixa: CAIXA, resumo: RESUMO },
+      '/produtos/busca': {
+        rows: [{ ...variante, id: 42, produto_pai_id: null, sku: 'BOTA-001', nome: 'Bota Country', variacoes: [variante] }],
+        total: 1,
+        page: 1,
+        pageSize: 20,
+        hasMore: false,
+      },
+      '/pdv/buscar': { ...PRODUTO, sku: 'BOTA-001-G' },
+    });
+    renderPdv();
+    await screen.findByText(/CAIXA-01/);
+
+    const campo = screen.getByRole('combobox', { name: 'Buscar produto no PDV' }) as HTMLInputElement;
+    fireEvent.change(campo, { target: { value: 'bota vermelha' } });
+    const opcao = await screen.findByRole('option', { name: /BOTA-001-G/ });
+    expect(opcao).toHaveTextContent('G: 8');
+    fireEvent.click(opcao);
+
+    expect(await screen.findByText('Bota Country')).toBeInTheDocument();
+    expect(apiGet).toHaveBeenCalledWith('/pdv/buscar?codigo=BOTA-001-G');
+    expect(apiGet.mock.calls.some(([path]) => String(path).startsWith('/produtos/busca?') && String(path).includes('q=bota+vermelha'))).toBe(true);
+    await waitFor(() => expect(campo.value).toBe(''));
+    expect(campo).toHaveFocus();
+  });
+
   it('ler o mesmo código duas vezes incrementa a quantidade em vez de duplicar a linha', async () => {
     mockRotas({ '/pdv/caixas/aberto': { caixa: CAIXA, resumo: RESUMO }, '/pdv/buscar': PRODUTO });
     renderPdv();

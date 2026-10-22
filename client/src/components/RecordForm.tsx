@@ -3,6 +3,7 @@ import { Eraser, Eye, EyeOff, Loader2, MapPin, Plus, Save } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import type { Field, Option, ResourceMeta } from '../lib/meta';
 import { maskCep, maskDocument, maskPhone, toInputValue } from '../lib/format';
+import { ProductSelector } from './ProductSelector';
 
 export type FormValues = Record<string, string | boolean | string[]>;
 
@@ -287,6 +288,26 @@ function FieldInput({
   }
 
   if (f.type === 'ref') {
+    if (f.ref === 'produtos') {
+      return (
+        <div>
+          {label}
+          <ProductSelector
+            id={id}
+            name={f.name}
+            value={String(value ?? '')}
+            onChange={(idSelecionado) => onChange(idSelecionado)}
+            placeholder={f.placeholder || 'Buscar produto por nome, SKU, barcode ou atributos…'}
+            disabled={disabled}
+            required={required}
+            autoFocus={autoFocus}
+            includeInactive={editing}
+            aria-label={f.label}
+          />
+          {help}
+        </div>
+      );
+    }
     const loaded = options !== undefined;
     return (
       <div>
@@ -516,7 +537,9 @@ function refLabel(ref?: string) {
 /** Carrega as opções de todos os campos de referência do recurso. */
 export function useRefOptions(resource: ResourceMeta, reloadKey = 0) {
   const [opts, setOpts] = useState<Record<string, Option[]>>({});
-  const refs = useMemo(() => Array.from(new Set(resource.fields.filter((f) => (f.type === 'ref' || f.type === 'multiref') && f.ref).map((f) => f.ref!))), [resource]);
+  const refs = useMemo(() => Array.from(new Set(resource.fields
+    .filter((f) => (f.type === 'ref' || f.type === 'multiref') && f.ref && !(f.type === 'ref' && f.ref === 'produtos'))
+    .map((f) => f.ref!))), [resource]);
   const refsKey = refs.join(',');
 
   useEffect(() => {

@@ -441,7 +441,10 @@ export async function resolverProduto(
   const resolvido = await precoDe(lido, escopo, tx);
 
   let produto = lido;
-  let tamanhoId: number | null = lido.tamanho_id === null || lido.tamanho_id === undefined ? null : Number(lido.tamanho_id);
+  // Variações geradas pelo cadastro usam `variacao_tamanho_id` (migration
+  // 0018). `tamanho_id` permanece como fallback para registros legados.
+  const tamanhoDaVariacao = lido.variacao_tamanho_id ?? lido.tamanho_id;
+  let tamanhoId: number | null = tamanhoDaVariacao === null || tamanhoDaVariacao === undefined ? null : Number(tamanhoDaVariacao);
   const ehVariacao = Boolean(lido.produto_pai_id);
   if (ehVariacao) {
     const pai = await s.findOneWhere(getResource('produtos')!, { id: Number(lido.produto_pai_id), empresa_id: escopo.empresaId }, tx);
@@ -498,7 +501,7 @@ export async function buscarProduto(req: Request, res: Response) {
   const saldo = await getStore().list(getResource('estoques')!, {
     page: 1,
     pageSize: 100,
-    filter: { produto_id: Number(linha.produto.id) },
+    filter: { empresa_id: escopo.empresaId, produto_id: Number(linha.produto.id) },
   });
   res.json({
     produto_id: Number(linha.produto.id),

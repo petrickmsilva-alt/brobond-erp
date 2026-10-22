@@ -42,6 +42,7 @@ import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import ReauthModal from '../components/ReauthModal';
 import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
+import { ProductSelector } from '../components/ProductSelector';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import { useLocalStorageBool, useLocalStorageSet } from '../lib/useLocalStorage';
 import PlannedModule from './PlannedModule';
@@ -1099,6 +1100,20 @@ function FiltroCampo({
     );
   }
   const valor = filtros[field.name] ?? '';
+  if (field.type === 'ref' && field.ref === 'produtos') {
+    return (
+      <label className="block" htmlFor={id}>
+        <span className="label">{field.label}</span>
+        <ProductSelector
+          id={id}
+          value={valor}
+          onChange={(idProduto) => onChange(field.name, idProduto)}
+          includeInactive
+          aria-label={`Filtrar por ${field.label}`}
+        />
+      </label>
+    );
+  }
   return (
     <label className="block" htmlFor={id}>
       <span className="label">{field.label}</span>

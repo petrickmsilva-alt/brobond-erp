@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, ClipboardList, Cog, History, Loader2, Pencil, Plus, Play, CheckCircle2, RotateCcw, Trash2, Unlock, XCircle } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useMeta, type Option } from '../lib/meta';
+import { ProductSelector } from '../components/ProductSelector';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import { formatDate, formatMoney, formatNumber } from '../lib/format';
@@ -75,7 +76,6 @@ export default function OrdemDetail() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const [produtoOpts, setProdutoOpts] = useState<Option[]>([]);
   const [tamanhoOpts, setTamanhoOpts] = useState<Option[]>([]);
   const etapaOptions = resource?.fields.find((f) => f.name === 'etapa')?.options || [];
 
@@ -138,7 +138,6 @@ export default function OrdemDetail() {
   }, [load]);
 
   useEffect(() => {
-    api.get<Option[]>('/produtos/options').then(setProdutoOpts).catch(() => {});
     api.get<Option[]>('/tamanhos/options').then(setTamanhoOpts).catch(() => {});
   }, []);
 
@@ -149,7 +148,7 @@ export default function OrdemDetail() {
 
   const grade0 = String(ordem?.tipo || '') === 'grade';
   const tamanhosNaGrade = useMemo(() => new Set(itens.map((i) => Number(i.tamanho_id))), [itens]);
-  const nomeProduto = produtoOpts.find((p) => p.value === Number(ordem?.produto_id))?.label;
+  const nomeProduto = ordem?.produto_id__label as string | undefined;
   const nomeTamanho = tamanhoOpts.find((t) => t.value === Number(ordem?.tamanho_id))?.label;
 
   const status = String(ordem?.status || '');
@@ -710,14 +709,22 @@ export default function OrdemDetail() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <label className="block sm:col-span-2">
             <span className="label">Produto</span>
-            <select className="input" value={editVal.produto_id} onChange={(e) => setEditVal((v) => ({ ...v, produto_id: e.target.value }))}>
-              <option value="">Selecione...</option>
-              {produtoOpts.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+            <ProductSelector
+              value={editVal.produto_id}
+              aria-label="Produto da ordem de fabricação"
+              onChange={(_id, product) => {
+                if (!product) {
+                  setEditVal((v) => ({ ...v, produto_id: '' }));
+                  return;
+                }
+                setEditVal((v) => ({
+                  ...v,
+                  produto_id: String(product.produto_pai_id ?? product.id),
+                  tipo: product.variacao_tamanho_id ? 'tamanho' : v.tipo,
+                  tamanho_id: product.variacao_tamanho_id ? String(product.variacao_tamanho_id) : v.tamanho_id,
+                }));
+              }}
+            />
           </label>
           <label className="block">
             <span className="label">Tipo</span>
