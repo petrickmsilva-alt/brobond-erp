@@ -18,6 +18,7 @@ import { currentUser } from './auth';
 import type { Row, Tx } from './store';
 import { parseId } from './validate';
 import { labelOf } from './store';
+import { searchProducts as buscarProdutosGlobais } from './productSearch';
 
 // ----------------------------------------------------------------------------
 // GET /api/estoques/grade — matriz produto × tamanhos
@@ -57,6 +58,18 @@ export async function estoqueGrade(req: Request, res: Response) {
   const filtroProdutos: Record<string, unknown> = { empresa_id: escopo.empresaId };
   if (colecaoId) filtroProdutos.colecao_id = colecaoId;
   if (categoriaId) filtroProdutos.categoria_id = categoriaId;
+  const termo = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  const encontrados = termo
+    ? await buscarProdutosGlobais(escopo, {
+        q: termo,
+        pageSize: 50,
+        localId: localSelecionado ? Number(localSelecionado.id) : null,
+        includeInactive: true,
+      })
+    : null;
+  const idsEncontrados = encontrados
+    ? new Set(encontrados.rows.flatMap((row) => [row.id, ...row.variacoes.map((variant) => variant.id)]))
+    : null;
   const [produtos, tamanhos, estoques, categorias, grades, gradeTamanhos, locais, colecoes] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter: filtroProdutos }),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200, sort: 'ordem', dir: 'asc' }),
@@ -119,6 +132,7 @@ export async function estoqueGrade(req: Request, res: Response) {
 
   const filtrados = produtos.rows.filter((p) => {
     if (gradeId && resolveGrade(p) !== gradeId) return false;
+    if (idsEncontrados && !idsEncontrados.has(Number(p.id))) return false;
     return true;
   });
   const estoqueVisivel = estoques.rows.filter((e) => {
@@ -177,6 +191,7 @@ export async function estoqueGrade(req: Request, res: Response) {
     local_id: localSelecionado?.id ?? null,
     locaisDisponiveis: locais.rows.map((l) => String(l.nome)).sort(),
     totalPecas: linhas.reduce((a, l) => a + l.total, 0),
+    busca: encontrados ? { q: termo, total: encontrados.total, exibidos: encontrados.rows.length, hasMore: encontrados.hasMore } : null,
     linhas,
   });
 }

@@ -70,6 +70,15 @@ function generateOpenAPISpec() {
   }
 
   // Endpoints especiais
+  paths['/api/produtos/busca'] = { get: { tags: ['Produtos'], summary: 'Smart Product Search global, tenantada, com ranking, estoque e variações', security: [{ bearerAuth: [] }], parameters: [
+    { name: 'q', in: 'query', schema: { type: 'string', maxLength: 120 }, description: 'Nome, SKU, barcode, descrição, cor, categoria, marca ou múltiplos termos' },
+    { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+    { name: 'pageSize', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 50, default: 20 } },
+    { name: 'onlyInStock', in: 'query', schema: { type: 'boolean', default: false } },
+    { name: 'inStockFirst', in: 'query', schema: { type: 'boolean', default: false } },
+    { name: 'includeInactive', in: 'query', schema: { type: 'boolean', default: false } },
+    { name: 'local_id', in: 'query', schema: { type: 'integer', minimum: 1 } },
+  ], responses: { '200': { description: 'Resultados paginados com tamanhos e variações' }, '400': { description: 'Parâmetros inválidos' } } } };
   paths['/api/produtos/{id}/tamanhos'] = { get: { tags: ['Produtos'], summary: 'Tamanhos da grade efetiva do produto (grade do produto, senão da categoria)', security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }], responses: { '200': { description: 'OK' } } } };
   paths['/api/produtos/{id}/detalhe'] = { get: { tags: ['Produtos'], summary: 'Detalhe completo do produto (grade, movimentações, OPs, ficha)', security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }], responses: { '200': { description: 'OK' } } } };
   paths['/api/produtos/{id}/qrcode'] = { get: { tags: ['Produtos'], summary: 'QR Code do produto (PNG)', security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }, { name: 'size', in: 'query', schema: { type: 'integer', default: 300 } }], responses: { '200': { description: 'Imagem PNG', content: { 'image/png': {} } } } } };

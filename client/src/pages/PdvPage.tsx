@@ -19,7 +19,6 @@ import {
   Plus,
   Receipt,
   ScanBarcode,
-  Search,
   ShoppingCart,
   Trash2,
   Wallet,
@@ -29,6 +28,8 @@ import { api, ApiError } from '../lib/api';
 import { formatMoney } from '../lib/format';
 import { Alert, Badge, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import BarcodeScanner from '../components/BarcodeScanner';
+import { ProductSelector } from '../components/ProductSelector';
+import type { SearchProduct } from '../lib/productSearch';
 import { useAuth } from '../auth/AuthContext';
 
 // ---------------------------------------------------------------------------
@@ -140,8 +141,6 @@ export default function PdvPage() {
   const [pagamentos, setPagamentos] = useState<Pagamento[]>([]);
   const [descontoCupom, setDescontoCupom] = useState(0);
   const [frete, setFrete] = useState(0);
-  const [busca, setBusca] = useState('');
-  const [buscando, setBuscando] = useState(false);
   const [scannerAberto, setScannerAberto] = useState(false);
   const [aberturaAberta, setAberturaAberta] = useState(false);
   const [movAberto, setMovAberto] = useState<'suprimento' | 'sangria' | null>(null);
@@ -194,12 +193,14 @@ export default function PdvPage() {
   // -------------------------------------------------------------------------
 
   const resolver = useCallback(
-    async (codigo: string) => {
+    async (codigo: string): Promise<boolean> => {
       const limpo = codigo.trim();
-      if (!limpo) return;
-      setBuscando(true);
+      if (!limpo) return false;
       setErro('');
       try {
+        // A busca global apenas localiza. O PDV continua resolvendo o SKU exato
+        // no servidor: preço vigente, produto pai, tamanho e estoque não são
+        // inferidos pelo autocomplete.
         const p = await api.get<ProdutoResolvido>(`/pdv/buscar?codigo=${encodeURIComponent(limpo)}`);
         setLinhas((atual) => {
           const idx = atual.findIndex((l) => l.produto_id === p.produto_id && l.tamanho_id === p.tamanho_id);
@@ -226,18 +227,19 @@ export default function PdvPage() {
             },
           ];
         });
-        setBusca('');
         inputBusca.current?.focus();
+        return true;
       } catch (e) {
         const msg = e instanceof ApiError ? e.message : 'Não foi possível resolver o código.';
         setErro(msg);
         toast.error(msg);
-      } finally {
-        setBuscando(false);
+        return false;
       }
     },
     [toast]
   );
+
+  const selecionarProduto = useCallback((produto: SearchProduct) => resolver(produto.sku), [resolver]);
 
   // -------------------------------------------------------------------------
   // Prévia — SÓ para a tela. O total que vale é o do servidor.
@@ -493,31 +495,25 @@ export default function PdvPage() {
           {/* -------------------------------------------------- itens */}
           <div className="space-y-4">
             <div className="card p-4">
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    ref={inputBusca}
-                    className="input pl-9"
-                    placeholder="Código de barras, SKU ou nome — Enter para adicionar"
-                    value={busca}
-                    onChange={(e) => setBusca(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        void resolver(busca);
-                      }
-                    }}
-                    disabled={!caixa}
-                  />
-                </div>
+              <div className="flex items-start gap-2">
+                <ProductSelector
+                  ref={inputBusca}
+                  className="flex-1"
+                  placeholder="Nome, SKU, código de barras, cor, categoria ou marca"
+                  aria-label="Buscar produto no PDV"
+                  onSelect={selecionarProduto}
+                  onSubmit={resolver}
+                  clearOnSelect
+                  selectParentsWithVariants={false}
+                  inStockFirst
+                  disabled={!caixa}
+                  autoFocus
+                />
                 <button className="btn-secondary" onClick={() => setScannerAberto(true)} title="Ler com a câmera">
                   <ScanBarcode className="h-4 w-4" />
                 </button>
-                <button className="btn-primary" onClick={() => void resolver(busca)} disabled={buscando || !busca.trim()}>
-                  {buscando ? <Spinner label="" /> : 'Adicionar'}
-                </button>
               </div>
+              <p className="mt-2 text-xs text-slate-500">Digite ao menos uma letra; use ↑ ↓ e Enter. Leitores de SKU/barcode continuam adicionando diretamente.</p>
             </div>
 
             <div className="card overflow-hidden">

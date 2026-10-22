@@ -33,6 +33,7 @@ import { limpezaPeriodica } from './sessoes';
 import { getPublicResource, publicMeta } from './resources';
 import { deleteFile, listFiles, serveFile, updateFile, uploadFile, uploadProvider, uploadsConfigError } from './uploads';
 import { produtoTamanhos, productDetail } from './detail';
+import { buscarProdutos } from './productSearch';
 import { createItem, deleteItem, listItens, updateItem } from './itens';
 import {
   checkAccess,
@@ -547,6 +548,10 @@ app.post('/api/financeiro/extrato/:id/divergir', wrap(marcarDivergencia));
 app.get('/api/financeiro/cnab/parsers', wrap(listarParsersHandler));
 app.post('/api/financeiro/cnab/importar', wrap(importarCnab));
 
+// Smart Product Search central (antes das rotas /:id e do CRUD genérico).
+app.get('/api/produtos/busca', wrap(buscarProdutos));
+// Alias em inglês para integrações; mesmo contrato e mesmo isolamento.
+app.get('/api/produtos/search', wrap(buscarProdutos));
 // Página de detalhe do produto (fotos, grade de estoque, movimentações, OPs, ficha)
 app.get('/api/produtos/:id/detalhe', wrap(productDetail));
 // Tamanhos da grade do produto (seletores de tamanho sem mistura de grades)

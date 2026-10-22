@@ -1,0 +1,115 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import OrderPage from './OrderPage';
+import { ToastProvider } from '../components/ui';
+import { api } from '../lib/api';
+
+vi.mock('../lib/api', () => ({
+  api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() },
+}));
+
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useParams: () => ({ id: '7' }), useNavigate: () => vi.fn() };
+});
+
+vi.mock('../auth/AuthContext', () => ({
+  useAuth: () => ({ user: { id: 1, name: 'Vendedor', perfil: 'gerente' } }),
+}));
+
+vi.mock('../lib/meta', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/meta')>();
+  const resource = {
+    key: 'vendas',
+    label: 'Vendas',
+    singular: 'Venda',
+    labelFields: ['id'],
+    ops: { create: true, update: true, delete: true },
+    fields: [{ name: 'status', label: 'Status', type: 'select' as const, options: [{ value: 'aberta', label: 'Aberta' }] }],
+  };
+  return {
+    ...actual,
+    useMeta: () => ({ resources: { vendas: resource, compras: { ...resource, key: 'compras' } }, modules: [] }),
+  };
+});
+
+const apiGet = vi.mocked(api.get);
+const apiPost = vi.mocked(api.post);
+
+const pedido = {
+  id: 7,
+  status: 'aberta',
+  data: '2026-10-22',
+  cliente_id: null,
+  representante_id: null,
+  desconto: 0,
+  frete: 0,
+  observacoes: '',
+};
+
+const variante = {
+  id: 101,
+  produto_pai_id: 10,
+  sku: 'CAM-VERM-G',
+  nome: 'Camiseta Premium Vermelha G',
+  codigo_barras: '7895550001112',
+  descricao: null,
+  cor: 'Vermelha',
+  categoria: 'Camisetas',
+  marca: 'BroBond',
+  preco_venda: 95,
+  ativo: true,
+  variacao_tamanho_id: 4,
+  estoque_disponivel: 8,
+  tamanhos: [{ tamanho_id: 4, tamanho: 'G', quantidade: 8 }],
+};
+
+const pai = {
+  ...variante,
+  id: 10,
+  produto_pai_id: null,
+  sku: 'CAM-PREM',
+  nome: 'Camiseta Premium',
+  variacao_tamanho_id: null,
+  variacoes: [variante],
+};
+
+describe('OrderPage — Smart Product Search em /vendas', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiGet.mockImplementation(((path: string) => {
+      if (path === '/vendas/7') return Promise.resolve(pedido);
+      if (path === '/vendas/7/itens') return Promise.resolve([]);
+      if (path.endsWith('/options')) return Promise.resolve(path === '/tamanhos/options' ? [{ value: 4, label: 'G' }] : []);
+      if (path.startsWith('/produtos/busca')) {
+        return Promise.resolve({ rows: [pai], total: 1, page: 1, pageSize: 20, hasMore: false });
+      }
+      return Promise.reject(new Error(`rota não mockada: ${path}`));
+    }) as never);
+    apiPost.mockResolvedValue({});
+  });
+
+  it('seleciona variação e envia produto pai + tamanho + preço, sem pré-carregar catálogo', async () => {
+    render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
+    const campo = await screen.findByRole('combobox', { name: 'Buscar produto da venda' });
+    fireEvent.change(campo, { target: { value: 'camiseta vermelha' } });
+    const opcao = await screen.findByRole('option', { name: /CAM-VERM-G/ });
+    fireEvent.click(opcao);
+
+    await screen.findByDisplayValue('95');
+    await waitFor(() => expect(campo).toHaveValue('CAM-VERM-G — Camiseta Premium Vermelha G'));
+    expect(apiGet.mock.calls.some(([path]) => String(path).includes('id=10'))).toBe(false);
+    expect(screen.getByDisplayValue('G')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar item' }));
+
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/vendas/7/itens', {
+      produto_id: 10,
+      tamanho_id: 4,
+      quantidade: 1,
+      preco_unitario: 95,
+      desconto_pct: 0,
+    }));
+    expect(apiGet.mock.calls.some(([path]) => String(path).includes('/produtos/options'))).toBe(false);
+    expect(apiGet.mock.calls.some(([path]) => String(path).includes('/produtos?pageSize='))).toBe(false);
+  });
+});
