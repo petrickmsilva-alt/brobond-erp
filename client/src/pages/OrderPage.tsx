@@ -416,19 +416,24 @@ export default function OrderPage({ tipo }: { tipo: Tipo }) {
                         aria-label="Buscar produto da venda"
                         className="min-w-[19rem]"
                         selectParentsWithVariants={false}
-                        onChange={(_id, product) => {
+                        onChange={(_id, product, selection) => {
                           if (!product) {
                             setNovo((n) => ({ ...n, produto_id: undefined, tamanho_id: undefined }));
                             return;
                           }
-                          const unicoTamanho = product.tamanhos.length === 1 ? product.tamanhos[0].tamanho_id : null;
+                          // Venda/faturamento usam o mesmo contrato do PDV:
+                          // produto pai + tamanho; a variação fornece SKU/preço.
+                          // `selection` já traz a combinação explícita quando o
+                          // usuário escolhe o tamanho de um produto com grade.
+                          const tamanho =
+                            selection?.tamanho_id
+                            ?? product.variacao_tamanho_id
+                            ?? (product.tamanhos.length === 1 ? product.tamanhos[0].tamanho_id : null);
                           setNovo((n) => ({
                             ...n,
-                            // Venda/faturamento usam o mesmo contrato do PDV:
-                            // produto pai + tamanho; a variação fornece SKU/preço.
-                            produto_id: product.produto_pai_id ?? product.id,
-                            tamanho_id: product.variacao_tamanho_id ?? unicoTamanho ?? undefined,
-                            preco_unitario: product.preco_venda,
+                            produto_id: selection?.produto_id ?? product.produto_pai_id ?? product.id,
+                            tamanho_id: tamanho ?? undefined,
+                            preco_unitario: selection?.preco ?? product.preco_venda,
                           }));
                         }}
                       />

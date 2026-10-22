@@ -583,3 +583,40 @@ test('pdv: SKU de variação resolve variacao_tamanho_id e fatura baixando a gra
   assert.equal(await saldoDe(Number(pai.id), Number(tam.id), 'loja'), 3);
   assert.equal(await saldoDe(Number(filho.id), Number(tam.id), 'loja'), 0, 'o filho não possui saldo próprio neste contrato');
 });
+
+test('pdv: busca do produto pai aceita o tamanho escolhido e fatura só aquela célula', async () => {
+  await fecharTudo();
+  await abrirCaixa(100, 'CAIXA-TAMANHO');
+  const pai = await novoProduto({ sku: 'PAI-TAMANHO-PDV', nome: 'Pai tamanho PDV', preco_venda: 60 });
+  const tamP = await novoTamanho('P');
+  const tamM = await novoTamanho('M');
+  await saldoInicial(pai, 3, { codigoTamanho: 'P' });
+  await saldoInicial(pai, 4, { codigoTamanho: 'M' });
+
+  // Sem o tamanho o servidor recusa a ambiguidade — é exatamente o erro que a
+  // seleção hierárquica da busca evita antes de chamar a venda.
+  await esperarErro(
+    () => chamar(pdv.buscarProduto, reqDe({}, { query: { codigo: pai.sku } })),
+    400,
+    /mais de um tamanho com estoque/,
+  );
+
+  // A combinação escolhida na busca (produto pai + tamanho_id) é aceita pelo
+  // mesmo /api/pdv/buscar: preço e saldo continuam vindo do servidor.
+  const busca = await chamar(pdv.buscarProduto, reqDe({}, { query: { codigo: pai.sku, tamanho_id: tamM.id } }));
+  assert.equal(busca.produto_id, Number(pai.id));
+  assert.equal(busca.tamanho_id, Number(tamM.id));
+  assert.equal(busca.tamanho, 'M');
+  assert.equal(busca.eh_variacao, false);
+  assert.equal(busca.disponivel_no_tamanho, 4);
+  assert.equal(busca.estoque_disponivel, 7, 'o saldo total do pai continua sendo a soma das células da grade');
+
+  const venda = await venderPdv(
+    [{ produto_id: Number(pai.id), codigo: pai.sku, tamanho_id: Number(tamM.id), quantidade: 1, desconto_pct: 0 }],
+    [{ forma: 'dinheiro', valor: 60 }],
+  );
+  assert.equal(venda.itens[0].produto_id, Number(pai.id));
+  assert.equal(venda.itens[0].tamanho_id, Number(tamM.id));
+  assert.equal(await saldoDe(Number(pai.id), Number(tamM.id), 'loja'), 3, 'baixa somente a célula M');
+  assert.equal(await saldoDe(Number(pai.id), Number(tamP.id), 'loja'), 3, 'o tamanho P não é afetado');
+});

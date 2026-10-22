@@ -198,6 +198,61 @@ describe('PDV — tela', () => {
     expect(campo).toHaveFocus();
   });
 
+  it('produto pai com vários tamanhos: o PDV só recebe o item depois da escolha do tamanho', async () => {
+    // O defeito original: o pai mostrava P/M/G/GG e o clique caía no SKU do
+    // pai, que o servidor recusa por ambiguidade de tamanho. Agora a escolha é
+    // explícita e o tamanho viaja para o mesmo /api/pdv/buscar de sempre.
+    const pai = {
+      id: 42,
+      produto_pai_id: null,
+      sku: 'BOTA-001',
+      nome: 'Bota Country',
+      codigo_barras: '7890000000017',
+      descricao: null,
+      cor: 'Marrom',
+      categoria: 'Botas',
+      marca: 'BroBond',
+      preco_venda: 199.9,
+      ativo: true,
+      variacao_tamanho_id: null,
+      estoque_disponivel: 11,
+      tamanhos: [
+        { tamanho_id: 1, tamanho: 'P', quantidade: 5 },
+        { tamanho_id: 2, tamanho: 'M', quantidade: 0 },
+        { tamanho_id: 3, tamanho: 'G', quantidade: 6 },
+      ],
+      variacoes: [],
+    };
+    mockRotas({
+      '/pdv/caixas/aberto': { caixa: CAIXA, resumo: RESUMO },
+      '/produtos/busca': { rows: [pai], total: 1, page: 1, pageSize: 20, hasMore: false },
+      '/pdv/buscar': { ...PRODUTO, sku: 'BOTA-001', eh_variacao: false, tamanho_id: 3, tamanho: 'G' },
+    });
+    renderPdv();
+    await screen.findByText(/CAIXA-01/);
+
+    const campo = screen.getByRole('combobox', { name: 'Buscar produto no PDV' });
+    fireEvent.change(campo, { target: { value: 'bota' } });
+    const paiOpcao = await screen.findByRole('option', { name: /BOTA-001/ });
+
+    // Clicar no pai não adiciona item nenhum: primeiro a combinação.
+    fireEvent.click(paiOpcao);
+    expect(apiGet.mock.calls.some(([path]) => String(path).startsWith('/pdv/buscar'))).toBe(false);
+    expect(screen.queryByText('Bota Country')).not.toBeInTheDocument();
+
+    // Tamanho sem saldo continua visível, mas indisponível para venda.
+    const semSaldo = screen.getByRole('option', { name: /Tamanho M: 0 disponível/ });
+    expect(semSaldo).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('option', { name: /Tamanho G: 6 disponível/ }));
+
+    expect(await screen.findByText('Bota Country')).toBeInTheDocument();
+    expect(apiGet).toHaveBeenCalledWith('/pdv/buscar?codigo=BOTA-001&tamanho_id=3');
+    // A linha nasce com o tamanho escolhido, no mesmo produto pai.
+    expect(screen.getByText(/BOTA-001 · G/)).toBeInTheDocument();
+    await waitFor(() => expect(campo).toHaveValue(''));
+  });
+
   it('ler o mesmo código duas vezes incrementa a quantidade em vez de duplicar a linha', async () => {
     mockRotas({ '/pdv/caixas/aberto': { caixa: CAIXA, resumo: RESUMO }, '/pdv/buscar': PRODUTO });
     renderPdv();

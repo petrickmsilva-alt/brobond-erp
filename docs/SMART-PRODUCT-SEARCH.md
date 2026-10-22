@@ -88,9 +88,25 @@ O desempate usa disponibilidade apenas quando `inStockFirst=true`, depois nome e
 - O contrato canônico do ERP mantém **SKU/preço na variação**, mas **venda e estoque no produto pai + tamanho + local**.
 - O saldo de uma variação é a projeção da célula correspondente do pai. Os saldos de pai e filhos nunca são somados como se fossem estoques diferentes.
 - Uma variação sem célula de estoque ainda pode ser apresentada com seu tamanho real e saldo zero.
-- Em operações que exigem tamanho, o pai funciona como agrupador e a pessoa escolhe a variação; a UI não apenas bloqueia o produto.
+- Em operações que exigem tamanho, o pai funciona como agrupador e a pessoa escolhe a combinação; a UI não apenas bloqueia o produto.
+- Os tamanhos do pai deixaram de ser `<span>` informativo: com mais de um tamanho eles são opções selecionáveis, cada uma mostrando **tamanho + saldo da célula**.
 - Em `/vendas`, a seleção de variação envia `produto_id` do pai, `tamanho_id` e preço da variação. O seletor continua exibindo a variação mesmo quando o formulário persiste o pai.
-- No PDV, a busca global só localiza. `/api/pdv/buscar` continua sendo a resolução final de SKU/barcode, preço vigente, produto pai, tamanho e estoque antes de adicionar à venda.
+- No PDV, a busca global só localiza. `/api/pdv/buscar` continua sendo a resolução final de SKU/barcode, preço vigente, produto pai, tamanho e estoque antes de adicionar à venda. Quando a escolha é do **produto pai**, o seletor acrescenta `tamanho_id` à mesma consulta (`/api/pdv/buscar?codigo=...&tamanho_id=...`), que já era suportada pelo servidor; quando a escolha é de uma variação, o SKU da variação continua determinando o tamanho no servidor.
+
+## Seleção hierárquica (pai → variação → tamanho)
+
+Regras aplicadas pelo `ProductSelector` em qualquer módulo:
+
+1. **Combinação única e inequívoca** (nenhuma variação e no máximo um tamanho) → seleção direta, como antes.
+2. **Vários tamanhos** → o produto pai é cabeçalho, não escolha. Cada tamanho é uma opção (`role="option"`) com tamanho e saldo; clicar/Enter no pai apenas conduz à escolha do tamanho.
+3. **Variações** → o pai nunca é devolvido em `onSelect`. Cada variação é a combinação (SKU + preço + tamanho da célula do pai). Tamanhos da grade que não têm variação continuam vendáveis pelo pai, com o `tamanho_id` correspondente.
+   - Em cadastro/filtro sem `onSelect` (apenas `onChange`), o pai segue selecionável como **referência de produto** — o formulário guarda o id do pai, sem inventar combinação de estoque. Isso preserva o comportamento anterior dos formulários genéricos.
+4. **Saldo zero** → o tamanho continua visível, mas fica `disabled`/`aria-disabled` e não é escolhido quando o contexto exige estoque (`requiresStock`, usado pelo PDV). Em cadastro/filtro (`requiresStock=false`) o saldo não impede a seleção.
+5. **Sem duplicação** → o saldo exibido é sempre uma única célula (pai + tamanho + local); nunca se soma o saldo do pai ao das variações.
+6. **Contrato de saída** → `onSelect(product, selection)` e `onChange(id, product, selection)`, onde `selection` (`client/src/lib/productSelection.ts`) traz `produto` (pai), `produto_id`, `variacao`, `sku`, `preco`, `tamanho_id`, `tamanho` e `quantidade_disponivel`. Módulos que faturam/baixam estoque devem consumir `selection`, não remontar a combinação.
+7. **Teclado/ARIA** → setas percorrem pai → tamanhos → variações, Enter escolhe a combinação ativa, `←`/`→` sobem/descem na hierarquia, Escape recolhe a instrução e fecha, Tab não seleciona; `aria-activedescendant`, `aria-selected`, `aria-disabled`, `role="group"` por família e região `role="status"` para a instrução de escolha.
+
+Nenhuma migration, DDL ou alteração de banco foi necessária: o contrato canônico (pai + tamanho + local) já existia.
 
 ## Experiência de uso
 
@@ -100,8 +116,10 @@ O desempate usa disponibilidade apenas quando `inStockFirst=true`, depois nome e
 - nenhuma precarga do catálogo;
 - proteção contra respostas de busca ou de ID fora de ordem;
 - setas, Enter, Escape e Tab; `ArrowDown` no último item ou “Mostrar mais” para paginar;
-- foco devolvido à busca depois da seleção;
-- atributos ARIA de combobox/listbox e estado vazio/erro/carregamento;
+- tamanhos clicáveis com tamanho + saldo quando há mais de um, com `Enter`/clique na combinação;
+- foco devolvido à busca depois da seleção, sem reabrir a lista recém-fechada;
+- atributos ARIA de combobox/listbox, `aria-activedescendant` por opção de tamanho e estado vazio/erro/carregamento;
+- instrução acessível (`role="status"`) quando o pai exige escolha de tamanho/variação;
 - preservação da primeira tecla ao editar uma seleção em formulário controlado.
 
 O caminho de leitor/SKU/barcode do PDV continua disponível com Enter sem abrir a lista.
@@ -145,7 +163,7 @@ Resultados desta implementação no ambiente de desenvolvimento:
 
 - `npm run typecheck`: domain, server e client aprovados.
 - `npm run build`: build Vite/PWA de produção aprovado.
-- `npm test`: backend com **898 testes — 832 aprovados, 66 ignorados e 0 falhas**; frontend com **31 arquivos e 334 testes aprovados**.
+- `npm test`: backend com **899 testes — 833 aprovados, 66 ignorados e 0 falhas**; frontend com **31 arquivos e 350 testes aprovados**.
 - Gate oficial PostgreSQL em banco vazio, servidor **16.14**: **238 testes reais aprovados, 0 falhas, 0 skips/todo**. Inclui a suíte de busca com atributos, múltiplos termos, ranking, variantes/saldos e tenants A/B.
 - `npm run lint`: **0 erros e 407 avisos** no conjunto atual; o novo seletor está sem avisos.
 - `git diff --check`: sem erros de whitespace.
@@ -163,15 +181,16 @@ Os 66 skips da suíte backend sem `DATABASE_URL` pertencem ao conjunto já exist
 - `server/src/estoque.ts` — integração da grade com a busca central.
 - `server/test/product-search.test.ts` — contrato, ranking, atributos, tenant, estoque, variantes, paginação, API e grade.
 - `server/test/pg/product-search-postgresql.test.ts` — prova da implementação SQL em PostgreSQL real.
-- `server/test/pdv.test.ts` — regressão da resolução canônica de variações e preço/estoque/venda.
+- `server/test/pdv.test.ts` — regressão da resolução canônica de variações e preço/estoque/venda; prova de `/pdv/buscar` com `tamanho_id` escolhido e baixa apenas da célula correspondente.
 
 ### Frontend e testes
 
 - `client/src/lib/productSearch.ts` — cliente tipado único.
-- `client/src/components/ProductSelector.tsx` — seletor compartilhado.
+- `client/src/lib/productSelection.ts` — combinação canônica pai + tamanho + variação/SKU/preço (puro, reutilizável).
+- `client/src/components/ProductSelector.tsx` — seletor compartilhado com seleção hierárquica de tamanho.
 - `client/src/components/RecordForm.tsx` e `client/src/pages/ModulePage.tsx` — refs e filtros genéricos.
 - `client/src/pages/PdvPage.tsx`, `OrderPage.tsx`, `EstoqueGradePage.tsx`, `InventarioModulePage.tsx`, `OrdemDetail.tsx` e `CustoPage.tsx` — fluxos operacionais.
-- `client/src/components/ProductSelector.test.tsx`, `client/src/pages/PdvPage.test.tsx` e `client/src/pages/OrderPage.test.tsx` — debounce, atributos, saldos, teclado, foco, paginação, corridas de resposta, formulário controlado e integração de venda/PDV.
+- `client/src/components/ProductSelector.test.tsx`, `client/src/pages/PdvPage.test.tsx` e `client/src/pages/OrderPage.test.tsx` — debounce, atributos, saldos, teclado, foco, paginação, corridas de resposta, formulário controlado, seleção de P/M/G/GG, tamanho sem estoque, produto com/sem variação, tentativa de selecionar o pai ambíguo e combinação correta chegando ao PDV.
 
 ## Pendências e limites deliberados
 

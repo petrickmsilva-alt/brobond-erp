@@ -14,8 +14,15 @@ import {
   productLabel,
   searchProducts,
   type ProductSearchFilters,
+  type ProductSearchSize,
   type SearchProduct,
 } from '../lib/productSearch';
+import {
+  buildProductSelection,
+  parentOnlySizes,
+  sizeIsSellable,
+  type ProductSelection,
+} from '../lib/productSelection';
 
 type SelectionResult = void | boolean;
 
@@ -23,8 +30,13 @@ export type ProductSelectorProps = ProductSearchFilters & {
   id?: string;
   name?: string;
   value?: string | number | null;
-  onChange?: (id: string, product?: SearchProduct) => void;
-  onSelect?: (product: SearchProduct) => SelectionResult | Promise<SelectionResult>;
+  onChange?: (id: string, product?: SearchProduct, selection?: ProductSelection) => void;
+  /**
+   * `product` é a linha escolhida (a variação, quando for o caso) e `selection`
+   * traz a combinação canônica completa: produto PAI, tamanho_id, variação,
+   * SKU e preço. Quem precisa vender/baixar estoque deve usar `selection`.
+   */
+  onSelect?: (product: SearchProduct, selection: ProductSelection) => SelectionResult | Promise<SelectionResult>;
   /** Enter sem lista aberta: caminho rápido de leitor/SKU exato do PDV. */
   onSubmit?: (query: string) => SelectionResult | Promise<SelectionResult>;
   placeholder?: string;
@@ -33,6 +45,12 @@ export type ProductSelectorProps = ProductSearchFilters & {
   autoFocus?: boolean;
   clearOnSelect?: boolean;
   selectParentsWithVariants?: boolean;
+  /**
+   * Contexto de venda: tamanho com saldo zero continua visível, mas fica
+   * indisponível para escolha. Fora de venda (cadastro/filtro) pode ficar
+   * desligado, porque ali o saldo não impede a seleção.
+   */
+  requiresStock?: boolean;
   className?: string;
   debounceMs?: number;
   'aria-label'?: string;
@@ -42,6 +60,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Não foi possível pesquisar produtos.';
 }
 
+/** Saldo por tamanho apenas informativo (uma única combinação possível). */
 function StockSizes({ product }: { product: SearchProduct }) {
   if (!product.tamanhos.length) {
     return <span className="text-[11px] text-slate-500">Sem saldo</span>;
@@ -60,9 +79,77 @@ function StockSizes({ product }: { product: SearchProduct }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Modelo de opções — hierarquia pai → (tamanhos) e variações → (tamanhos)
+// ---------------------------------------------------------------------------
+
+type ProductEntry = {
+  key: string;
+  kind: 'product';
+  row: SearchProduct;
+  parent: SearchProduct | null;
+  variant: boolean;
+  sizes: ProductSearchSize[];
+  /** Precisa de escolha explícita de tamanho/variação antes de selecionar. */
+  needsSizeChoice: boolean;
+  /** Pode ser escolhido diretamente (combinação única e inequívoca). */
+  selectable: boolean;
+  /**
+   * Escolha de referência (cadastro/filtro sem `onSelect`): o formulário
+   * guarda o produto pai, sem afirmar combinação de estoque. Nunca chama
+   * `onSelect` com o pai — a regra 7 continua valendo.
+   */
+  referenceOnly: boolean;
+};
+
+type SizeEntry = {
+  key: string;
+  kind: 'size';
+  row: SearchProduct;
+  parent: SearchProduct | null;
+  variant: boolean;
+  size: ProductSearchSize;
+  /** Tamanho existe, mas o contexto de venda exige saldo e ele é zero. */
+  blocked: boolean;
+};
+
+type OptionEntry = ProductEntry | SizeEntry;
+
+type VariantPlan = {
+  product: SearchProduct;
+  entry: ProductEntry;
+  sizeEntries: SizeEntry[];
+};
+
+type FamilyPlan = {
+  product: SearchProduct;
+  variants: SearchProduct[];
+  parentEntry: ProductEntry | null;
+  parentSizeEntries: SizeEntry[];
+  variantPlans: VariantPlan[];
+  entries: OptionEntry[];
+};
+
+function optionDomId(listboxId: string, key: string): string {
+  return `${listboxId}-${key}`;
+}
+
+function sizeKey(rowId: number, size: ProductSearchSize): string {
+  return `s-${rowId}-${size.tamanho_id ?? 'sem'}`;
+}
+
+function isEntryDisabled(entry: OptionEntry, includeInactive: boolean): boolean {
+  if (entry.kind === 'size') return entry.blocked;
+  return !entry.row.ativo && !includeInactive;
+}
+
 /**
  * Seletor global de produtos. Toda a busca acontece no backend central; esta
  * tela só mantém a página já exibida (20 itens por vez), nunca o catálogo todo.
+ *
+ * Quando o resultado tem mais de um tamanho (ou variações), o produto-pai não é
+ * escolhido diretamente: o usuário escolhe a combinação (tamanho/variação) e só
+ * então `onSelect`/`onSubmit` recebem produto PAI + tamanho_id.
  */
 export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps>(function ProductSelector({
   id,
@@ -77,6 +164,7 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
   autoFocus = false,
   clearOnSelect = false,
   selectParentsWithVariants = true,
+  requiresStock = false,
   className = '',
   debounceMs = 200,
   onlyInStock = false,
@@ -87,17 +175,23 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
 }, ref) {
   const reactId = useId();
   const listboxId = `${reactId}-product-results`;
+  const hintId = `${reactId}-product-hint`;
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const requestSeq = useRef(0);
   const editSeq = useRef(0);
+  // Evita que o `focus()` devolvido ao campo reabra a lista recém-fechada com
+  // o termo antigo (o estado de `query`/`selected` ainda é o anterior).
+  const focusGuard = useRef(false);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<SearchProduct | null>(null);
+  const [selectedSize, setSelectedSize] = useState<ProductSearchSize | null>(null);
   const [rows, setRows] = useState<SearchProduct[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [error, setError] = useState('');
+  const [hint, setHint] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -110,6 +204,7 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
     const sequence = ++requestSeq.current;
     setLoading(true);
     setError('');
+    setHint('');
     try {
       const response = await searchProducts(term, {
         page: requestedPage,
@@ -166,6 +261,7 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
       // limpa o texto quando havia uma seleção efetivamente exibida.
       if (selected) setQuery('');
       setSelected(null);
+      setSelectedSize(null);
       return;
     }
     // Alguns fluxos persistem o pai (venda/estoque/produção), embora a
@@ -178,6 +274,7 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
       .then((response) => {
         if (!alive || editSequence !== editSeq.current || !response.rows[0]) return;
         setSelected(response.rows[0]);
+        setSelectedSize(null);
         setOpen(false);
       })
       .catch(() => {
@@ -194,65 +291,244 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
     return () => document.removeEventListener('pointerdown', closeOnOutsideClick);
   }, []);
 
-  const options = useMemo(() => rows.flatMap((product) => {
+  // Hierarquia de opções: o pai só entra como escolha direta quando a
+  // combinação é inequívoca; caso contrário ele é o cabeçalho e os tamanhos (e
+  // variações) viram opções irmãs — nunca aninhadas dentro do botão do pai.
+  const plans = useMemo<FamilyPlan[]>(() => rows.map((product) => {
     const variants = product.variacoes ?? [];
-    const parent = selectParentsWithVariants || !variants.length ? [product] : [];
-    return [...parent, ...variants];
-  }), [rows, selectParentsWithVariants]);
-  const optionIndexes = useMemo(() => new Map(options.map((product, index) => [product.id, index])), [options]);
+    const parentSizes = parentOnlySizes(product);
+    const entries: OptionEntry[] = [];
+    const parentSizeEntries: SizeEntry[] = [];
+    const variantPlans: VariantPlan[] = [];
+    let parentEntry: ProductEntry | null = null;
 
-  const choose = async (product: SearchProduct) => {
+    const showParent = variants.length === 0 || selectParentsWithVariants;
+    if (showParent) {
+      const needsSizeChoice = variants.length > 0 || parentSizes.length > 1;
+      parentEntry = {
+        key: `p-${product.id}`,
+        kind: 'product',
+        row: product,
+        parent: null,
+        variant: false,
+        sizes: parentSizes,
+        needsSizeChoice,
+        selectable: !needsSizeChoice,
+        // Cadastro/filtro (sem `onSelect`) continua podendo apontar o pai,
+        // exatamente como antes: ali o valor é uma referência de produto, não
+        // uma linha de venda/estoque. Com `onSelect` a combinação é obrigatória.
+        referenceOnly: needsSizeChoice && !onSelect && variants.length > 0,
+      };
+      entries.push(parentEntry);
+      if (needsSizeChoice) {
+        for (const size of parentSizes) {
+          const entry: SizeEntry = {
+            key: sizeKey(product.id, size),
+            kind: 'size',
+            row: product,
+            parent: null,
+            variant: false,
+            size,
+            blocked: !sizeIsSellable(size, requiresStock),
+          };
+          parentSizeEntries.push(entry);
+          entries.push(entry);
+        }
+      }
+    }
+
+    for (const variant of variants) {
+      const sizes = variant.tamanhos;
+      const needsSizeChoice = sizes.length > 1;
+      const entry: ProductEntry = {
+        key: `v-${variant.id}`,
+        kind: 'product',
+        row: variant,
+        parent: product,
+        variant: true,
+        sizes,
+        needsSizeChoice,
+        selectable: !needsSizeChoice,
+        referenceOnly: false,
+      };
+      entries.push(entry);
+      const sizeEntries: SizeEntry[] = [];
+      if (needsSizeChoice) {
+        for (const size of sizes) {
+          const sizeEntry: SizeEntry = {
+            key: sizeKey(variant.id, size),
+            kind: 'size',
+            row: variant,
+            parent: product,
+            variant: true,
+            size,
+            blocked: !sizeIsSellable(size, requiresStock),
+          };
+          sizeEntries.push(sizeEntry);
+          entries.push(sizeEntry);
+        }
+      }
+      variantPlans.push({ product: variant, entry, sizeEntries });
+    }
+
+    return { product, variants, parentEntry, parentSizeEntries, variantPlans, entries };
+  }), [rows, selectParentsWithVariants, requiresStock, onSelect]);
+
+  const options = useMemo(() => plans.flatMap((plan) => plan.entries), [plans]);
+  const optionIndexes = useMemo(
+    () => new Map(options.map((entry, index) => [entry.key, index])),
+    [options],
+  );
+
+  useEffect(() => {
+    if (activeIndex > options.length - 1) setActiveIndex(0);
+  }, [activeIndex, options.length]);
+
+  const commit = useCallback(async (
+    row: SearchProduct,
+    size: ProductSearchSize | null,
+    parent: SearchProduct | null,
+    explicitSize: boolean,
+  ) => {
     if (selecting) return;
     requestSeq.current += 1;
     setLoading(false);
     setSelecting(true);
     setError('');
+    setHint('');
+    const selection = buildProductSelection(row, size, parent);
     let succeeded = true;
     try {
-      const result = await onSelect?.(product);
+      const result = await onSelect?.(row, selection);
       succeeded = result !== false;
     } catch (cause) {
       succeeded = false;
       setError(errorMessage(cause));
     }
     if (succeeded) {
-      onChange?.(String(product.id), product);
+      onChange?.(String(row.id), row, selection);
       setOpen(false);
       if (clearOnSelect) {
         requestSeq.current += 1;
         setSelected(null);
+        setSelectedSize(null);
         setQuery('');
         setRows([]);
       } else {
-        setSelected(product);
+        setSelected(row);
+        // Só mostra o tamanho no campo quando ele foi escolhido de propósito:
+        // a seleção direta (combinação única) continua idêntica ao passado.
+        setSelectedSize(explicitSize ? size : null);
         setQuery('');
       }
     }
     setSelecting(false);
+    focusGuard.current = true;
     inputRef.current?.focus();
-  };
+  }, [clearOnSelect, onChange, onSelect, selecting]);
+
+  /** Referência administrativa ao produto pai (cadastro/filtro), sem venda. */
+  const commitReference = useCallback((row: SearchProduct) => {
+    if (selecting) return;
+    requestSeq.current += 1;
+    setLoading(false);
+    setError('');
+    setHint('');
+    onChange?.(String(row.id), row);
+    setOpen(false);
+    if (clearOnSelect) {
+      requestSeq.current += 1;
+      setSelected(null);
+      setSelectedSize(null);
+      setQuery('');
+      setRows([]);
+    } else {
+      setSelected(row);
+      setSelectedSize(null);
+      setQuery('');
+    }
+    focusGuard.current = true;
+    inputRef.current?.focus();
+  }, [clearOnSelect, onChange, selecting]);
+
+  /** Escolhe a opção ativa: tamanho direto, combinação ou guia para os filhos. */
+  const activate = useCallback(async (entry: OptionEntry) => {
+    if (entry.kind === 'size') {
+      if (entry.blocked) {
+        setHint(`Tamanho ${entry.size.tamanho} sem saldo disponível para venda.`);
+        return;
+      }
+      await commit(entry.row, entry.size, entry.parent, true);
+      return;
+    }
+    if (!entry.selectable) {
+      if (entry.referenceOnly) {
+        commitReference(entry.row);
+        return;
+      }
+      const firstSize = options.findIndex(
+        (option) => option.kind === 'size' && option.row.id === entry.row.id && !option.blocked,
+      );
+      if (firstSize >= 0) {
+        setActiveIndex(firstSize);
+        setHint(`Escolha o tamanho de ${entry.row.nome} para continuar.`);
+        return;
+      }
+      const firstVariant = options.findIndex(
+        (option) => option.kind === 'product' && option.variant && option.parent?.id === entry.row.id,
+      );
+      if (firstVariant >= 0) {
+        setActiveIndex(firstVariant);
+        setHint(`Escolha a variação de ${entry.row.nome} para continuar.`);
+        return;
+      }
+      setHint(`Nenhuma combinação disponível para ${entry.row.nome}.`);
+      return;
+    }
+    const size = entry.sizes.length === 1 ? entry.sizes[0] : null;
+    await commit(entry.row, size, entry.parent, false);
+  }, [commit, commitReference, options]);
 
   const updateQuery = (next: string) => {
     editSeq.current += 1;
+    focusGuard.current = false;
     if (selected) {
       setSelected(null);
+      setSelectedSize(null);
       onChange?.('');
     }
     setQuery(next);
     setOpen(Boolean(next.trim()));
     setActiveIndex(0);
+    setHint('');
   };
 
   const clear = () => {
     requestSeq.current += 1;
     editSeq.current += 1;
+    focusGuard.current = false;
     setSelected(null);
+    setSelectedSize(null);
     setQuery('');
     setRows([]);
     setOpen(false);
     setError('');
+    setHint('');
     onChange?.('');
     inputRef.current?.focus();
+  };
+
+  /** Move a opção ativa pulando o que está desabilitado neste contexto. */
+  const moveActive = (delta: number) => {
+    if (!options.length) return;
+    let index = activeIndex;
+    for (let step = 0; step < options.length; step += 1) {
+      index = (index + delta + options.length) % options.length;
+      if (!isEntryDisabled(options[index], includeInactive)) {
+        setActiveIndex(index);
+        return;
+      }
+    }
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -268,23 +544,48 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
         void load(query.trim(), page + 1, true);
         return;
       }
-      const delta = event.key === 'ArrowDown' ? 1 : -1;
-      setActiveIndex((current) => (current + delta + options.length) % options.length);
+      moveActive(event.key === 'ArrowDown' ? 1 : -1);
+      return;
+    }
+    if (event.key === 'ArrowRight') {
+      const entry = options[activeIndex];
+      if (!open || !entry || entry.kind !== 'product' || entry.selectable) return;
+      event.preventDefault();
+      void activate(entry);
+      return;
+    }
+    if (event.key === 'ArrowLeft') {
+      const entry = options[activeIndex];
+      if (!open || !entry || entry.kind !== 'size') return;
+      event.preventDefault();
+      const parentIndex = options.findIndex(
+        (option) => option.kind === 'product' && option.row.id === entry.row.id,
+      );
+      if (parentIndex >= 0) {
+        setActiveIndex(parentIndex);
+        setHint('');
+      }
       return;
     }
     if (event.key === 'Escape') {
       event.preventDefault();
+      if (hint) {
+        // O primeiro Escape apenas recolhe a instrução de escolha.
+        setHint('');
+        return;
+      }
       setOpen(false);
       return;
     }
     if (event.key === 'Tab') {
       setOpen(false);
+      setHint('');
       return;
     }
     if (event.key !== 'Enter') return;
     event.preventDefault();
     if (open && options.length) {
-      void choose(options[Math.min(activeIndex, options.length - 1)]);
+      void activate(options[Math.min(activeIndex, options.length - 1)]);
       return;
     }
     if (onSubmit && query.trim()) {
@@ -302,50 +603,105 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
     }
   };
 
-  const renderOption = (product: SearchProduct, variant = false) => {
-    const index = optionIndexes.get(product.id);
-    if (index === undefined) {
-      // Pai usado apenas como cabeçalho quando a operação exige uma variação.
-      return (
-        <div className="border-b border-slate-100 px-3 py-2">
-          <div className="text-sm font-medium text-slate-700">{product.sku} — {product.nome}</div>
-          <div className="mt-1 text-[11px] text-slate-500">Escolha uma variação/tamanho abaixo</div>
-        </div>
-      );
-    }
+  const renderSizeOption = (entry: SizeEntry) => {
+    const index = optionIndexes.get(entry.key);
+    if (index === undefined) return null;
+    const active = activeIndex === index;
+    const unavailable = entry.blocked;
     return (
       <button
+        key={entry.key}
         type="button"
-        id={`${listboxId}-${product.id}`}
+        id={optionDomId(listboxId, entry.key)}
         role="option"
-        aria-selected={activeIndex === index}
-        disabled={selecting || (!product.ativo && !includeInactive)}
-        className={`block w-full border-b border-slate-100 px-3 py-2 text-left last:border-0 ${variant ? 'pl-7' : ''} ${activeIndex === index ? 'bg-brand-50 text-brand-900' : 'hover:bg-slate-50'} disabled:cursor-not-allowed disabled:opacity-50`}
+        aria-selected={active}
+        aria-disabled={unavailable || undefined}
+        disabled={selecting || unavailable}
+        data-tamanho-id={entry.size.tamanho_id ?? ''}
+        title={unavailable
+          ? `Tamanho ${entry.size.tamanho} sem saldo disponível para venda`
+          : `Selecionar tamanho ${entry.size.tamanho} (${formatNumber(entry.size.quantidade)} disponível)`}
+        aria-label={`Tamanho ${entry.size.tamanho}: ${formatNumber(entry.size.quantidade)} disponível${unavailable ? ' — indisponível para venda' : ''}`}
+        className={`rounded border px-2 py-1 font-mono text-[11px] transition ${
+          unavailable
+            ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400 line-through'
+            : active
+              ? 'border-brand-500 bg-brand-50 text-brand-900 ring-1 ring-brand-400'
+              : 'border-slate-200 bg-white text-slate-700 hover:border-brand-400 hover:bg-brand-50'
+        } ${selecting ? 'opacity-60' : ''}`}
         onMouseDown={(event) => event.preventDefault()}
-        onClick={() => void choose(product)}
+        onClick={() => void activate(entry)}
         onMouseEnter={() => setActiveIndex(index)}
       >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium">
-              {variant ? '↳ ' : ''}<span className="font-mono text-xs">{product.sku}</span> — {product.nome}
-            </div>
-            <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-slate-500">
-              {product.codigo_barras && <span>EAN {product.codigo_barras}</span>}
-              {product.cor && <span>{product.cor}</span>}
-              {product.categoria && <span>{product.categoria}</span>}
-              {product.marca && <span>{product.marca}</span>}
-              {!product.ativo && <span className="font-semibold text-red-600">Inativo</span>}
-            </div>
-          </div>
-          <span className={`shrink-0 text-xs font-semibold ${product.estoque_disponivel > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
-            {formatNumber(product.estoque_disponivel)} un.
-          </span>
-        </div>
-        <div className="mt-1.5"><StockSizes product={product} /></div>
+        {entry.size.tamanho}: {formatNumber(entry.size.quantidade)}
       </button>
     );
   };
+
+  const renderProductEntry = (entry: ProductEntry, sizeEntries: SizeEntry[], variant: boolean) => {
+    const index = optionIndexes.get(entry.key);
+    if (index === undefined) return null;
+    const active = activeIndex === index;
+    const inactive = !entry.row.ativo && !includeInactive;
+    return (
+      <div className={`flex items-start gap-2 px-3 py-2 ${variant ? 'pl-7' : ''}`}>
+        <button
+          type="button"
+          id={optionDomId(listboxId, entry.key)}
+          role="option"
+          aria-selected={active}
+          aria-disabled={!entry.selectable && !entry.referenceOnly || undefined}
+          disabled={selecting || inactive}
+          className={`min-w-0 flex-1 text-left disabled:cursor-not-allowed disabled:opacity-50 ${active ? 'text-brand-900' : ''}`}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => void activate(entry)}
+          onMouseEnter={() => setActiveIndex(index)}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">
+                {variant ? '↳ ' : ''}<span className="font-mono text-xs">{entry.row.sku}</span> — {entry.row.nome}
+              </div>
+              <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-slate-500">
+                {entry.row.codigo_barras && <span>EAN {entry.row.codigo_barras}</span>}
+                {entry.row.cor && <span>{entry.row.cor}</span>}
+                {entry.row.categoria && <span>{entry.row.categoria}</span>}
+                {entry.row.marca && <span>{entry.row.marca}</span>}
+                {!entry.row.ativo && <span className="font-semibold text-red-600">Inativo</span>}
+              </div>
+            </div>
+            <span className={`shrink-0 text-xs font-semibold ${entry.row.estoque_disponivel > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
+              {formatNumber(entry.row.estoque_disponivel)} un.
+            </span>
+          </div>
+          {entry.needsSizeChoice ? (
+            <div className="mt-1 text-[11px] font-medium text-brand-700">
+              {entry.referenceOnly
+                ? 'Escolha a variação abaixo — ou selecione o produto pai'
+                : sizeEntries.length
+                  ? 'Escolha o tamanho ao lado para continuar'
+                  : 'Escolha uma variação/tamanho abaixo'}
+            </div>
+          ) : (
+            <div className="mt-1.5"><StockSizes product={entry.row} /></div>
+          )}
+        </button>
+        {entry.needsSizeChoice && sizeEntries.length > 0 && (
+          <div
+            role="group"
+            aria-label={`Tamanhos de ${entry.row.nome}`}
+            className="flex shrink-0 flex-wrap justify-end gap-1"
+          >
+            {sizeEntries.map(renderSizeOption)}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const displayedValue = selected
+    ? `${productLabel(selected)}${selectedSize && selectedSize.tamanho ? ` · ${selectedSize.tamanho}` : ''}`
+    : query;
 
   return (
     <div ref={rootRef} className={`relative ${className}`}>
@@ -361,16 +717,23 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
           aria-autocomplete="list"
           aria-expanded={open}
           aria-controls={listboxId}
-          aria-activedescendant={open && options[activeIndex] ? `${listboxId}-${options[activeIndex].id}` : undefined}
+          aria-describedby={hint ? hintId : undefined}
+          aria-activedescendant={open && options[activeIndex] ? optionDomId(listboxId, options[activeIndex].key) : undefined}
           autoComplete="off"
           className="input w-full pl-9 pr-9"
           placeholder={placeholder}
-          value={selected ? productLabel(selected) : query}
+          value={displayedValue}
           disabled={disabled}
           required={required}
           autoFocus={autoFocus}
           onChange={(event) => updateQuery(event.target.value)}
-          onFocus={() => { if (query.trim() && rows.length) setOpen(true); }}
+          onFocus={() => {
+            if (focusGuard.current) {
+              focusGuard.current = false;
+              return;
+            }
+            if (!selected && query.trim() && rows.length) setOpen(true);
+          }}
           onKeyDown={handleKeyDown}
         />
         {(loading || selecting) ? (
@@ -389,17 +752,29 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
           {!loading && !error && !rows.length && query.trim() && (
             <div className="px-3 py-4 text-sm text-slate-500">Nenhum produto encontrado para “{query.trim()}”.</div>
           )}
-          {rows.map((product) => (
-            <div key={product.id}>
-              {renderOption(product)}
-              {(product.variacoes ?? []).map((variant) => (
-                <div key={variant.id}>{renderOption(variant, true)}</div>
+          {plans.map((plan) => (
+            <div key={plan.product.id} className="border-b border-slate-100 last:border-0">
+              {plan.parentEntry ? (
+                renderProductEntry(plan.parentEntry, plan.parentSizeEntries, false)
+              ) : (
+                // Pai usado apenas como cabeçalho quando a operação exige uma
+                // combinação (variação/tamanho) e o chamador pediu para não
+                // oferecer o pai como escolha direta.
+                <div className="px-3 py-2">
+                  <div className="text-sm font-medium text-slate-700">{plan.product.sku} — {plan.product.nome}</div>
+                  <div className="mt-1 text-[11px] text-slate-500">Escolha uma variação/tamanho abaixo</div>
+                </div>
+              )}
+              {plan.variantPlans.map((variantPlan) => (
+                <div key={variantPlan.product.id}>
+                  {renderProductEntry(variantPlan.entry, variantPlan.sizeEntries, true)}
+                </div>
               ))}
             </div>
           ))}
           {rows.length > 0 && (
             <div className="flex items-center justify-between gap-2 bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
-              <span>{rows.length} de {total} produto(s); variações exibidas com seus saldos.</span>
+              <span>{rows.length} de {total} produto(s); tamanhos e variações com os saldos reais.</span>
               {hasMore && (
                 <button
                   type="button"
@@ -413,6 +788,12 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {hint && (
+        <div id={hintId} role="status" aria-live="polite" className="mt-1 text-[11px] font-medium text-amber-700">
+          {hint}
         </div>
       )}
     </div>
