@@ -109,7 +109,11 @@ describe('ProductSelector — Smart Product Search compartilhado', () => {
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     fireEvent.keyDown(input, { key: 'Enter' });
     await act(async () => { await Promise.resolve(); });
-    expect(onSelect).toHaveBeenCalledWith(segundo);
+    expect(onSelect).toHaveBeenCalledWith(segundo, expect.objectContaining({
+      produto: segundo,
+      produto_id: 2,
+      tamanho_id: null,
+    }));
     expect(input.value).toBe('');
     expect(input).toHaveFocus();
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
@@ -259,5 +263,379 @@ describe('ProductSelector — Smart Product Search compartilhado', () => {
       await Promise.resolve();
     });
     expect(screen.getByText(/Nenhum produto encontrado/)).toBeInTheDocument();
+  });
+});
+
+// ============================================================================
+// Seleção hierárquica — produto PAI → tamanho → variação
+//
+// O defeito real: o pai mostrava P/M/G/GG, mas não havia como escolher o
+// tamanho — a linha entrava sem tamanho e travava no faturamento. Estes testes
+// garantem que a combinação é explícita, que o saldo continua sendo uma única
+// célula (pai + tamanho + local) e que o pai nunca é devolvido sozinho quando
+// há mais de uma combinação possível.
+// ============================================================================
+
+const TAMANHOS_PADRAO = [
+  { tamanho_id: 1, tamanho: 'P', quantidade: 4 },
+  { tamanho_id: 2, tamanho: 'M', quantidade: 2 },
+  { tamanho_id: 3, tamanho: 'G', quantidade: 6 },
+  { tamanho_id: 4, tamanho: 'GG', quantidade: 3 },
+];
+
+function produtoComGrade(overrides: Partial<SearchProduct> = {}): SearchProduct {
+  const tamanhos = overrides.tamanhos ?? TAMANHOS_PADRAO;
+  return product(10, {
+    sku: 'CAM-PREM',
+    nome: 'Camiseta Premium',
+    preco_venda: 79.9,
+    estoque_disponivel: tamanhos.reduce((total, t) => total + t.quantidade, 0),
+    tamanhos,
+    ...overrides,
+  });
+}
+
+async function abrirBusca(termo = 'camiseta') {
+  const input = screen.getByRole('combobox', { name: 'Produto' }) as HTMLInputElement;
+  await search(input, termo);
+  return input;
+}
+
+function opcao(nome: RegExp | string) {
+  return screen.getByRole('option', { name: nome });
+}
+
+describe('ProductSelector — seleção hierárquica de tamanho', () => {
+  it('produto com vários tamanhos: o pai deixa de ser uma escolha e os tamanhos viram opções', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'get').mockResolvedValue(response([produtoComGrade()]));
+    const onSelect = vi.fn().mockResolvedValue(true);
+    render(<ProductSelector onSelect={onSelect} requiresStock aria-label="Produto" />);
+    await abrirBusca();
+
+    // O pai continua visível como cabeçalho da família, mas está marcado como
+    // não selecionável — clicar nele não pode disparar onSelect.
+    const pai = opcao(/CAM-PREM/);
+    expect(pai).toHaveAttribute('aria-disabled', 'true');
+    expect(pai).toHaveTextContent('Escolha o tamanho ao lado');
+
+    // Cada tamanho é uma opção com tamanho + saldo.
+    expect(opcao(/Tamanho P: 4 disponível/)).toHaveAttribute('data-tamanho-id', '1');
+    expect(opcao(/Tamanho M: 2 disponível/)).toHaveAttribute('data-tamanho-id', '2');
+    expect(opcao(/Tamanho G: 6 disponível/)).toHaveAttribute('data-tamanho-id', '3');
+    expect(opcao(/Tamanho GG: 3 disponível/)).toHaveAttribute('data-tamanho-id', '4');
+    expect(screen.getByText('P: 4')).toBeInTheDocument();
+
+    fireEvent.click(pai);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('Escolha o tamanho de Camiseta Premium');
+  });
+
+  it.each([
+    ['P', 1],
+    ['M', 2],
+    ['G', 3],
+    ['GG', 4],
+  ])('seleciona explicitamente o tamanho %s', async (tamanho, tamanhoId) => {
+    vi.useFakeTimers();
+    const pai = produtoComGrade();
+    vi.spyOn(api, 'get').mockResolvedValue(response([pai]));
+    const onSelect = vi.fn().mockResolvedValue(true);
+    const onChange = vi.fn();
+    render(<ProductSelector onSelect={onSelect} onChange={onChange} requiresStock aria-label="Produto" />);
+    const input = await abrirBusca();
+
+    fireEvent.click(opcao(new RegExp(`Tamanho ${tamanho}:`)));
+    await act(async () => { await Promise.resolve(); });
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(pai, {
+      produto: pai,
+      produto_id: 10,
+      produto_pai_id: null,
+      variacao: null,
+      sku: 'CAM-PREM',
+      preco: 79.9,
+      tamanho_id: tamanhoId,
+      tamanho,
+      quantidade_disponivel: TAMANHOS_PADRAO[tamanhoId - 1].quantidade,
+    });
+    // O formulário recebe a mesma combinação (pai + tamanho).
+    expect(onChange).toHaveBeenCalledWith('10', pai, expect.objectContaining({ tamanho_id: tamanhoId }));
+    // E o campo passa a exibir o tamanho escolhido, sem esconder o produto.
+    expect(input.value).toBe(`CAM-PREM — Camiseta Premium · ${tamanho}`);
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+
+  it('tamanho sem estoque aparece, mas fica indisponível quando o contexto exige saldo', async () => {
+    vi.useFakeTimers();
+    const pai = produtoComGrade({
+      tamanhos: [
+        { tamanho_id: 1, tamanho: 'P', quantidade: 4 },
+        { tamanho_id: 2, tamanho: 'M', quantidade: 0 },
+      ],
+      estoque_disponivel: 4,
+    });
+    vi.spyOn(api, 'get').mockResolvedValue(response([pai]));
+    const onSelect = vi.fn().mockResolvedValue(true);
+    render(<ProductSelector onSelect={onSelect} requiresStock aria-label="Produto" />);
+    await abrirBusca();
+
+    const semSaldo = opcao(/Tamanho M: 0 disponível/);
+    expect(semSaldo).toBeInTheDocument();
+    expect(semSaldo).toBeDisabled();
+    expect(semSaldo).toHaveAttribute('aria-disabled', 'true');
+    expect(semSaldo).toHaveTextContent('M: 0');
+
+    fireEvent.click(semSaldo);
+    await act(async () => { await Promise.resolve(); });
+    expect(onSelect).not.toHaveBeenCalled();
+    // O saldo zero não impede a navegação para o tamanho seguinte.
+    const input = screen.getByRole('combobox', { name: 'Produto' });
+    expect(input).toHaveAttribute('aria-activedescendant', expect.stringContaining('p-10'));
+  });
+
+  it('fora de venda (sem exigir estoque) o tamanho zerado continua selecionável', async () => {
+    vi.useFakeTimers();
+    const pai = produtoComGrade({
+      tamanhos: [
+        { tamanho_id: 1, tamanho: 'P', quantidade: 4 },
+        { tamanho_id: 2, tamanho: 'M', quantidade: 0 },
+      ],
+      estoque_disponivel: 4,
+    });
+    vi.spyOn(api, 'get').mockResolvedValue(response([pai]));
+    const onSelect = vi.fn().mockResolvedValue(true);
+    render(<ProductSelector onSelect={onSelect} aria-label="Produto" />);
+    await abrirBusca();
+
+    const semSaldo = opcao(/Tamanho M: 0 disponível/);
+    expect(semSaldo).not.toBeDisabled();
+    fireEvent.click(semSaldo);
+    await act(async () => { await Promise.resolve(); });
+    expect(onSelect).toHaveBeenCalledWith(pai, expect.objectContaining({ tamanho_id: 2, tamanho: 'M', quantidade_disponivel: 0 }));
+  });
+
+  it('produto com variações: a variação escolhida carrega pai, SKU, preço e tamanho sem duplicar saldo', async () => {
+    vi.useFakeTimers();
+    const varianteP = product(110, {
+      produto_pai_id: 10,
+      sku: 'CAM-PREM-P',
+      nome: 'Camiseta Premium P',
+      variacao_tamanho_id: 1,
+      preco_venda: 84.9,
+      estoque_disponivel: 4,
+      tamanhos: [{ tamanho_id: 1, tamanho: 'P', quantidade: 4 }],
+    });
+    const varianteM = product(111, {
+      produto_pai_id: 10,
+      sku: 'CAM-PREM-M',
+      nome: 'Camiseta Premium M',
+      variacao_tamanho_id: 2,
+      preco_venda: 84.9,
+      estoque_disponivel: 2,
+      tamanhos: [{ tamanho_id: 2, tamanho: 'M', quantidade: 2 }],
+    });
+    const pai = produtoComGrade({ variacoes: [varianteP, varianteM], estoque_disponivel: 6 });
+    vi.spyOn(api, 'get').mockResolvedValue(response([pai]));
+    const onSelect = vi.fn().mockResolvedValue(true);
+    render(<ProductSelector onSelect={onSelect} requiresStock aria-label="Produto" />);
+    const input = await abrirBusca('camiseta');
+
+    // O pai é cabeçalho: não é uma escolha quando existem variações.
+    expect(opcao(/^CAM-PREM —/)).toHaveAttribute('aria-disabled', 'true');
+    // Os tamanhos já cobertos por variação não são oferecidos de novo pelo pai.
+    expect(screen.queryByRole('option', { name: /Tamanho P:/ })).not.toBeInTheDocument();
+
+    fireEvent.click(opcao(/CAM-PREM-M/));
+    await act(async () => { await Promise.resolve(); });
+
+    expect(onSelect).toHaveBeenCalledWith(varianteM, {
+      produto: pai,
+      produto_id: 10,
+      produto_pai_id: 10,
+      variacao: varianteM,
+      sku: 'CAM-PREM-M',
+      preco: 84.9,
+      tamanho_id: 2,
+      tamanho: 'M',
+      // Saldo da célula do pai — as variações não são somadas.
+      quantidade_disponivel: 2,
+    });
+    expect(input.value).toBe('CAM-PREM-M — Camiseta Premium M');
+    expect(pai.estoque_disponivel).toBe(6);
+  });
+
+  it('produto com variações e tamanho sem variação: o tamanho restante é vendido pelo pai', async () => {
+    vi.useFakeTimers();
+    const varianteP = product(110, {
+      produto_pai_id: 10,
+      sku: 'CAM-PREM-P',
+      nome: 'Camiseta Premium P',
+      variacao_tamanho_id: 1,
+      estoque_disponivel: 4,
+      tamanhos: [{ tamanho_id: 1, tamanho: 'P', quantidade: 4 }],
+    });
+    const pai = produtoComGrade({
+      tamanhos: [
+        { tamanho_id: 1, tamanho: 'P', quantidade: 4 },
+        { tamanho_id: 3, tamanho: 'G', quantidade: 6 },
+      ],
+      variacoes: [varianteP],
+      estoque_disponivel: 10,
+    });
+    vi.spyOn(api, 'get').mockResolvedValue(response([pai]));
+    const onSelect = vi.fn().mockResolvedValue(true);
+    render(<ProductSelector onSelect={onSelect} requiresStock aria-label="Produto" />);
+    await abrirBusca();
+
+    // Só o tamanho sem variação aparece como opção do pai.
+    expect(opcao(/Tamanho G: 6 disponível/)).toHaveAttribute('data-tamanho-id', '3');
+    expect(screen.queryByRole('option', { name: /Tamanho P:/ })).not.toBeInTheDocument();
+
+    fireEvent.click(opcao(/Tamanho G:/));
+    await act(async () => { await Promise.resolve(); });
+    expect(onSelect).toHaveBeenCalledWith(pai, expect.objectContaining({
+      produto_id: 10,
+      variacao: null,
+      tamanho_id: 3,
+      tamanho: 'G',
+    }));
+  });
+
+  it('produto sem variação e com um único tamanho continua com seleção direta', async () => {
+    vi.useFakeTimers();
+    const unico = product(20, {
+      sku: 'BONE-UNICO',
+      nome: 'Boné Único',
+      preco_venda: 49.9,
+      tamanhos: [{ tamanho_id: 9, tamanho: 'Único', quantidade: 7 }],
+      estoque_disponivel: 7,
+    });
+    vi.spyOn(api, 'get').mockResolvedValue(response([unico]));
+    const onSelect = vi.fn().mockResolvedValue(true);
+    render(<ProductSelector onSelect={onSelect} requiresStock aria-label="Produto" />);
+    await abrirBusca('bone');
+
+    // Sem grade: nenhum botão de tamanho, apenas a informação de saldo.
+    expect(screen.queryByRole('option', { name: /Tamanho Único:/ })).not.toBeInTheDocument();
+    fireEvent.click(opcao(/BONE-UNICO/));
+    await act(async () => { await Promise.resolve(); });
+
+    expect(onSelect).toHaveBeenCalledWith(unico, expect.objectContaining({
+      produto_id: 20,
+      tamanho_id: 9,
+      tamanho: 'Único',
+      quantidade_disponivel: 7,
+    }));
+  });
+
+  it('produto sem tamanho é selecionado diretamente com tamanho_id nulo', async () => {
+    vi.useFakeTimers();
+    const semTamanho = product(30, { sku: 'SERV-01', nome: 'Serviço de ajuste', tamanhos: [], estoque_disponivel: 0 });
+    vi.spyOn(api, 'get').mockResolvedValue(response([semTamanho]));
+    const onSelect = vi.fn().mockResolvedValue(true);
+    render(<ProductSelector onSelect={onSelect} requiresStock aria-label="Produto" />);
+    await abrirBusca('ajuste');
+
+    fireEvent.click(opcao(/SERV-01/));
+    await act(async () => { await Promise.resolve(); });
+    expect(onSelect).toHaveBeenCalledWith(semTamanho, expect.objectContaining({ tamanho_id: null, tamanho: null }));
+  });
+
+  it('tentar selecionar o pai com múltiplos tamanhos pelo teclado leva à escolha do tamanho', async () => {
+    vi.useFakeTimers();
+    const pai = produtoComGrade();
+    vi.spyOn(api, 'get').mockResolvedValue(response([pai]));
+    const onSelect = vi.fn().mockResolvedValue(true);
+    render(<ProductSelector onSelect={onSelect} requiresStock aria-label="Produto" />);
+    const input = await abrirBusca();
+
+    input.focus();
+    // Enter no pai: não chama onSelect, move o foco virtual para o primeiro
+    // tamanho disponível e anuncia o motivo.
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => { await Promise.resolve(); });
+    expect(onSelect).not.toHaveBeenCalled();
+    const primeiroTamanho = opcao(/Tamanho P: 4/);
+    expect(input).toHaveAttribute('aria-activedescendant', primeiroTamanho.id);
+
+    // O segundo Enter escolhe o tamanho ativo — combinação completa.
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => { await Promise.resolve(); });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(pai, expect.objectContaining({ tamanho_id: 1, tamanho: 'P', produto_id: 10 }));
+  });
+
+  it('setas navegam do pai para os tamanhos, Escape recolhe a instrução e fecha, Tab não escolhe', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'get').mockResolvedValue(response([produtoComGrade()]));
+    const onSelect = vi.fn().mockResolvedValue(true);
+    render(<ProductSelector onSelect={onSelect} requiresStock aria-label="Produto" />);
+    const input = await abrirBusca();
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input).toHaveAttribute('aria-activedescendant', expect.stringContaining('s-10-1'));
+
+    fireEvent.click(screen.getByRole('option', { name: /CAM-PREM/ }));
+    expect(screen.getByRole('status')).toHaveTextContent(/Escolha o tamanho/);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Tab' });
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('cadastro/filtro sem onSelect: o pai continua selecionável como referência, sem inventar combinação', async () => {
+    vi.useFakeTimers();
+    const variante = product(110, {
+      produto_pai_id: 10,
+      sku: 'CAM-PREM-P',
+      nome: 'Camiseta Premium P',
+      variacao_tamanho_id: 1,
+      estoque_disponivel: 4,
+      tamanhos: [{ tamanho_id: 1, tamanho: 'P', quantidade: 4 }],
+    });
+    const pai = produtoComGrade({
+      tamanhos: [{ tamanho_id: 1, tamanho: 'P', quantidade: 4 }],
+      variacoes: [variante],
+      estoque_disponivel: 4,
+    });
+    vi.spyOn(api, 'get').mockResolvedValue(response([pai]));
+    const onChange = vi.fn();
+    render(<ProductSelector onChange={onChange} aria-label="Produto" />);
+    const input = await abrirBusca();
+
+    const paiOpcao = opcao(/^CAM-PREM —/);
+    expect(paiOpcao).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(paiOpcao);
+    await act(async () => { await Promise.resolve(); });
+
+    // Referência administrativa: produto pai + id, sem `selection` e sem
+    // transformar o cadastro em uma linha de venda.
+    expect(onChange).toHaveBeenCalledWith('10', pai);
+    expect(input.value).toBe('CAM-PREM — Camiseta Premium');
+  });
+
+  it('falha do consumidor mantém a combinação em aberto para nova tentativa', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(api, 'get').mockResolvedValue(response([produtoComGrade()]));
+    const onSelect = vi.fn().mockResolvedValue(false);
+    render(<ProductSelector onSelect={onSelect} requiresStock aria-label="Produto" />);
+    await abrirBusca();
+
+    fireEvent.click(opcao(/Tamanho G:/));
+    await act(async () => { await Promise.resolve(); });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+    const campo = screen.getByRole('combobox', { name: 'Produto' }) as HTMLInputElement;
+    expect(campo.value).not.toMatch(/· G/);
   });
 });

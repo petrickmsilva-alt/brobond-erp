@@ -30,6 +30,7 @@ import { Alert, Badge, Modal, PageHeader, Spinner, useToast } from '../component
 import BarcodeScanner from '../components/BarcodeScanner';
 import { ProductSelector } from '../components/ProductSelector';
 import type { SearchProduct } from '../lib/productSearch';
+import type { ProductSelection } from '../lib/productSelection';
 import { useAuth } from '../auth/AuthContext';
 
 // ---------------------------------------------------------------------------
@@ -193,15 +194,19 @@ export default function PdvPage() {
   // -------------------------------------------------------------------------
 
   const resolver = useCallback(
-    async (codigo: string): Promise<boolean> => {
+    async (codigo: string, tamanhoId: number | null = null): Promise<boolean> => {
       const limpo = codigo.trim();
       if (!limpo) return false;
       setErro('');
       try {
         // A busca global apenas localiza. O PDV continua resolvendo o SKU exato
         // no servidor: preço vigente, produto pai, tamanho e estoque não são
-        // inferidos pelo autocomplete.
-        const p = await api.get<ProdutoResolvido>(`/pdv/buscar?codigo=${encodeURIComponent(limpo)}`);
+        // inferidos pelo autocomplete. Quando o que foi escolhido é o produto
+        // pai (sem variação), o tamanho escolhido na busca viaja junto — o
+        // servidor continua sendo a única fonte de preço e de saldo.
+        const params = new URLSearchParams({ codigo: limpo });
+        if (tamanhoId) params.set('tamanho_id', String(tamanhoId));
+        const p = await api.get<ProdutoResolvido>(`/pdv/buscar?${params.toString()}`);
         setLinhas((atual) => {
           const idx = atual.findIndex((l) => l.produto_id === p.produto_id && l.tamanho_id === p.tamanho_id);
           if (idx >= 0) {
@@ -239,7 +244,18 @@ export default function PdvPage() {
     [toast]
   );
 
-  const selecionarProduto = useCallback((produto: SearchProduct) => resolver(produto.sku), [resolver]);
+  /**
+   * A busca global entrega a combinação escolhida (produto pai + tamanho_id,
+   * com a variação quando houver). O PDV não recalcula nada: reenvia ao
+   * /api/pdv/buscar o código vendável e, se a escolha foi do pai, o tamanho.
+   * A variação já define o tamanho no servidor, então nela o parâmetro é
+   * omitido para não duplicar a decisão.
+   */
+  const selecionarProduto = useCallback(
+    (produto: SearchProduct, selecao?: ProductSelection) =>
+      resolver(selecao?.sku || produto.sku, selecao && !selecao.variacao ? selecao.tamanho_id : null),
+    [resolver]
+  );
 
   // -------------------------------------------------------------------------
   // Prévia — SÓ para a tela. O total que vale é o do servidor.
@@ -505,6 +521,7 @@ export default function PdvPage() {
                   onSubmit={resolver}
                   clearOnSelect
                   selectParentsWithVariants={false}
+                  requiresStock
                   inStockFirst
                   disabled={!caixa}
                   autoFocus
@@ -513,7 +530,10 @@ export default function PdvPage() {
                   <ScanBarcode className="h-4 w-4" />
                 </button>
               </div>
-              <p className="mt-2 text-xs text-slate-500">Digite ao menos uma letra; use ↑ ↓ e Enter. Leitores de SKU/barcode continuam adicionando diretamente.</p>
+              <p className="mt-2 text-xs text-slate-500">
+                Digite ao menos uma letra; use ↑ ↓ e Enter. Produto com vários tamanhos exige a escolha do
+                tamanho antes de entrar no cupom; leitores de SKU/barcode continuam adicionando diretamente.
+              </p>
             </div>
 
             <div className="card overflow-hidden">
