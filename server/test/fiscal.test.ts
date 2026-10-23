@@ -200,6 +200,25 @@ const LOCAL = 'loja';
 
 type Cenario = { vendaId: number; produtoId: number; tamanhoId: number; clienteId: number };
 
+/**
+ * CNPJ válido e ÚNICO por cenário. O cadastro de clientes não aceita mais
+ * documento duplicado na mesma empresa (regra PF/PJ + índice único), então cada
+ * cenário precisa do seu — antes todos repetiam o mesmo e a suíte só passava
+ * porque nada verificava duplicidade.
+ */
+let seqCnpj = 0;
+function cnpjDeTeste(): string {
+  seqCnpj += 1;
+  const base = `19${String(100000 + seqCnpj).padStart(6, '0')}0001`.split('').map(Number);
+  const digito = (digitos: number[], pesos: number[]) => {
+    const resto = digitos.reduce((acc, d, i) => acc + d * pesos[i], 0) % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  };
+  const d1 = digito(base, [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  const d2 = digito([...base, d1], [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  return `${base.join('')}${d1}${d2}`;
+}
+
 async function montarCenario(nome: string): Promise<Cenario> {
   const s = getStore();
   await s.update(RESOURCES.empresas, 1, {
@@ -221,7 +240,7 @@ async function montarCenario(nome: string): Promise<Cenario> {
     {
       nome: `Cliente ${nome}`,
       pessoa: 'pj',
-      cnpj_cpf: '19131243000197',
+      cnpj_cpf: cnpjDeTeste(),
       indicador_ie: '1',
       rg_ie: '111222333',
       cep: '20040002',

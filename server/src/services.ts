@@ -8,6 +8,7 @@ import { hasDatabaseUrl } from './db';
 import { getResource, RESOURCES, type Resource } from './resources';
 import { labelOf, type ListParams, type Payload, type Row, type Store, type Tx } from './store';
 import { validatePayload } from './validate';
+import { apenasDigitos, cnpjValido, cpfValido, tipoDocumento } from './documentos';
 import type { Request } from 'express';
 import type { AuthUser } from './auth';
 import { attachImages, removeAllFiles } from './uploads';
@@ -497,6 +498,97 @@ async function validarCategoriaPai(r: Resource, data: Row, before: Row | null, t
   }
 }
 
+// ----------------------------------------------------------------------------
+// CLIENTES — regras PF/PJ do cadastro profissional.
+//
+// O modelo (pessoa + cnpj_cpf + razao_social/nome_fantasia) já existe desde a
+// migração 0021; aqui está a coerência que a UI nova garante e que o SERVIDOR
+// precisa validar de novo — nunca se confia só no front:
+//   1) nomes sem espaços duplicados ou sobras nas bordas;
+//   2) pessoa × documento coerentes (PF usa CPF, PJ usa CNPJ), com dígito
+//      verificador conferido (já feito em validatePayload, reforçado aqui para
+//      pegar também a troca de `pessoa` em edição);
+//   3) documento único POR EMPRESA — o índice parcial
+//      `uq_clientes_documento_empresa` é a garantia última no PostgreSQL; esta
+//      checagem dá a mensagem amigável (e cobre o modo memória).
+//      O mesmo documento em EMPRESAS diferentes continua permitido.
+// ----------------------------------------------------------------------------
+
+/** Colapsa espaços duplicados e remove sobras das bordas. */
+export function normalizarEspacosTexto(v: unknown): string {
+  return String(v ?? '').trim().replace(/\s{2,}/g, ' ');
+}
+
+/**
+ * Cliente da MESMA empresa com o mesmo documento (comparação por dígitos —
+ * cadastros legados podem guardar o documento com máscara).
+ */
+export async function clientePorDocumento(
+  doc: unknown,
+  empresaId: number,
+  excluirId: number | null = null,
+  tx?: Tx
+): Promise<Row | null> {
+  const digitos = apenasDigitos(doc);
+  if (!digitos) return null;
+  const r = getResource('clientes')!;
+  const lista = await getStore().list(r, { page: 1, pageSize: 100000, filter: { empresa_id: empresaId } }, tx);
+  return (
+    lista.rows.find((row) => Number(row.id) !== Number(excluirId ?? -1) && apenasDigitos(row.cnpj_cpf) === digitos) ?? null
+  );
+}
+
+/**
+ * Regras de negócio do cadastro de clientes. `data` é MUTÁVEL (normalizações
+ * entram no próprio payload gravado). `body` bruto permite distinguir "pessoa
+ * não informada" (integração legada) de "pessoa escolhida" (formulário novo).
+ */
+export async function validarRegrasCliente(
+  data: Payload,
+  before: Row | null,
+  empresaId: number,
+  opts: { body?: unknown; tx?: Tx } = {}
+): Promise<void> {
+  // 1) Textos limpos — nomes brasileiros passam intactos; só o lixo de espaços sai.
+  for (const campo of ['nome', 'razao_social', 'nome_fantasia', 'rg_ie', 'im', 'suframa', 'logradouro', 'numero', 'complemento', 'bairro', 'cidade', 'observacoes']) {
+    if (typeof data[campo] === 'string') data[campo] = normalizarEspacosTexto(data[campo]);
+  }
+
+  const body = (opts.body && typeof opts.body === 'object' ? opts.body : {}) as Record<string, unknown>;
+  const informouPessoa = Object.prototype.hasOwnProperty.call(body, 'pessoa');
+  const docAnterior = before ? apenasDigitos(before.cnpj_cpf) : '';
+  const documento = data.cnpj_cpf !== undefined ? apenasDigitos(data.cnpj_cpf) : docAnterior;
+
+  // 2) Coerência pessoa × documento.
+  if (documento) {
+    let pessoa = String(data.pessoa ?? before?.pessoa ?? 'pj');
+    // Compatibilidade: integração antiga que não conhece `pessoa` e manda um
+    // CPF puro nasce como PF (mesmo critério do backfill do schema).
+    if (!before && !informouPessoa && pessoa === 'pj' && documento.length === 11) {
+      pessoa = 'pf';
+      data.pessoa = 'pf';
+    }
+    if (pessoa === 'pf' && !cpfValido(documento)) {
+      const msg = tipoDocumento(documento) === 'cnpj' ? 'Pessoa física deve usar CPF.' : 'CPF inválido.';
+      throw new HttpError(400, msg, { cnpj_cpf: msg }, 'cliente_documento_invalido');
+    }
+    if (pessoa === 'pj' && !cnpjValido(documento)) {
+      const msg = tipoDocumento(documento) === 'cpf' ? 'Pessoa jurídica deve usar CNPJ.' : 'CNPJ inválido.';
+      throw new HttpError(400, msg, { cnpj_cpf: msg }, 'cliente_documento_invalido');
+    }
+  }
+
+  // 3) Duplicidade por empresa — só quando o documento entra ou muda de verdade.
+  if (documento && (!before || documento !== docAnterior)) {
+    const existente = await clientePorDocumento(documento, empresaId, before ? Number(before.id) : null, opts.tx);
+    if (existente) {
+      const rotulo = documento.length === 11 ? 'CPF' : 'CNPJ';
+      const msg = `Já existe um cliente cadastrado com este ${rotulo}.`;
+      throw new HttpError(409, msg, { cnpj_cpf: msg }, 'cliente_duplicado');
+    }
+  }
+}
+
 export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
   const s = getStore();
@@ -533,6 +625,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       // Lançamento: taxa da operadora → líquido calculado antes de gravar
       if (r.key === 'lancamentos_financeiros') hookTaxaLancamento(data, null);
       if (r.key === 'categorias_financeiras') await validarCategoriaPai(r, data, null, tx);
+      if (r.key === 'clientes') await validarRegrasCliente(data, null, Number(data.empresa_id ?? escopo.empresaId), { body, tx });
       if (r.key === 'transferencias_financeiras' && Number(data.conta_origem_id) === Number(data.conta_destino_id)) {
         throw new HttpError(400, 'Origem e destino precisam ser contas diferentes.', { conta_destino_id: 'Escolha outra conta' });
       }
@@ -706,6 +799,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
         }
       }
       if (r.key === 'ordens') await validarOrdemPayload(data, before);
+      if (r.key === 'clientes') await validarRegrasCliente(data, before, Number(before.empresa_id ?? escopo.empresaId), { body, tx });
       // Lançamento: edição de valor/taxa recalcula o líquido
       if (r.key === 'lancamentos_financeiros') hookTaxaLancamento(data, before);
       if (r.key === 'categorias_financeiras') await validarCategoriaPai(r, data, before, tx);

@@ -390,6 +390,9 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
           empresa_id: empresaId,
           nome,
           email: email || null,
+          // Pedido do catálogo público não informa `pessoa`: deriva do documento
+          // (11 dígitos = PF) para manter o cadastro coerente com o backfill.
+          pessoa: body.cnpj_cpf && String(body.cnpj_cpf).replace(/\D/g, '').length === 11 ? 'pf' : 'pj',
           cnpj_cpf: body.cnpj_cpf ?? null,
           telefone: telefone || null,
           tipo: canal === 'atacado' ? 'atacadista' : 'varejo',

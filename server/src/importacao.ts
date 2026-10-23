@@ -127,9 +127,14 @@ async function normalizarLinha(tipo: TipoImportacao, linha: Record<string, strin
     };
   }
   if (tipo === 'clientes') {
+    const cnpjCpf = get('cnpj_cpf', 'cnpj', 'cpf', 'documento');
+    const pessoaInformada = String(get('pessoa') || '').trim().toLowerCase();
     return {
       nome: get('nome', 'razao_social') || '',
-      cnpj_cpf: get('cnpj_cpf', 'cnpj', 'cpf', 'documento'),
+      // Pessoa derivada do documento quando a planilha não traz a coluna —
+      // mesmo critério do backfill do schema (11 dígitos = PF).
+      pessoa: pessoaInformada || (cnpjCpf && String(cnpjCpf).replace(/\D/g, '').length === 11 ? 'pf' : 'pj'),
+      cnpj_cpf: cnpjCpf,
       tipo: get('tipo', 'tipo_cliente') || 'loja',
       telefone: get('telefone', 'fone', 'whatsapp'),
       email: get('email'),

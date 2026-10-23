@@ -1285,6 +1285,12 @@ export const PAGES_ESPECIAIS = [
 /** Módulos cuja listagem abre diretamente a página de detalhe. */
 export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
 
+/**
+ * Recursos cujo cadastro vive em PÁGINA PRÓPRIA (não no modal genérico):
+ * /clientes/novo e /clientes/:id/editar. A lista continua em /clientes.
+ */
+export const FORM_DIRETO = new Set(['clientes']);
+
 export type NavSection = {
   id: NavSectionId;
   /** Cabeçalho da seção na Sidebar (null = sem rótulo). */

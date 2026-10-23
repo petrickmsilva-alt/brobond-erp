@@ -37,7 +37,7 @@ import { useMeta, type Field, type ListResult, type Option, type PublicFile, typ
 import { ColorDot, ImageField, Lightbox, Thumb } from '../components/ImageField';
 import { formatCell } from '../lib/format';
 import { BarrasVerticais } from '../components/Charts';
-import { DETALHE_DIRETO, type Module } from '../modules';
+import { DETALHE_DIRETO, FORM_DIRETO, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import ReauthModal from '../components/ReauthModal';
@@ -361,6 +361,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
 
   // --- formulário ---
   function openCreate() {
+    // Cadastro em página própria (clientes PF/PJ): o modal genérico não abre.
+    if (FORM_DIRETO.has(resource.key)) {
+      navigate(`/${resource.key}/novo`);
+      return;
+    }
     setEditing(null);
     setValues(initialValues(resource, null, defaultLocal));
     setErrors({});
@@ -373,6 +378,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     // Módulos com página de detalhe própria (OP, ficha técnica): edita lá.
     if (DETALHE_DIRETO.has(module.id)) {
       navigate(`/${resource.key}/${row.id}`);
+      return;
+    }
+    // Cadastro em página própria (clientes PF/PJ).
+    if (FORM_DIRETO.has(resource.key)) {
+      navigate(`/${resource.key}/${row.id}/editar`);
       return;
     }
     setEditing(row);

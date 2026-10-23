@@ -15,6 +15,7 @@ import { MODULES, visibleModules } from './modules';
 const ModulePage = lazy(() => import('./pages/ModulePage'));
 const Settings = lazy(() => import('./pages/Settings'));
 const ProductDetail = lazy(() => import('./pages/ProductDetail'));
+const ClienteFormPage = lazy(() => import('./pages/ClienteFormPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
 const FichaDetail = lazy(() => import('./pages/FichaDetail'));
@@ -88,6 +89,23 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="config" element={<Settings />} />
             <Route path="produtos/:id" element={<ProductDetail />} />
+            {/* Cadastro de clientes PF/PJ em página própria (fora do modal). */}
+            <Route
+              path="clientes/novo"
+              element={
+                <ModuleAccess moduleId="clientes">
+                  <ClienteFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="clientes/:id/editar"
+              element={
+                <ModuleAccess moduleId="clientes">
+                  <ClienteFormPage />
+                </ModuleAccess>
+              }
+            />
             <Route path="vendas/:id" element={<OrderPage tipo="venda" />} />
             <Route path="compras/:id" element={<OrderPage tipo="compra" />} />
             <Route path="ordens/:id" element={<OrdemDetail />} />
