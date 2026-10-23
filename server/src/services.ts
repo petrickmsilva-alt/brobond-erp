@@ -620,7 +620,10 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       }
       // O estado fiscal pertence aos endpoints de NF-e: o formulário não cria nota.
       if (r.key === 'vendas') for (const k of ['nfe_status', 'nfe_numero', 'nfe_emitida_em', 'nfe_provider']) delete data[k];
-      if (r.key === 'locais') await ensureLocalPadraoUnico(data, null, tx, escopo);
+      if (r.key === 'locais') {
+        await validarNomeLocalSemColisaoCaixa(data, null, tx, escopo);
+        await ensureLocalPadraoUnico(data, null, tx, escopo);
+      }
       if (r.key === 'ordens') await validarOrdemPayload(data, null);
       // Lançamento: taxa da operadora → líquido calculado antes de gravar
       if (r.key === 'lancamentos_financeiros') hookTaxaLancamento(data, null);
@@ -788,6 +791,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       }
       let renomeouLocal = false;
       if (r.key === 'locais') {
+        await validarNomeLocalSemColisaoCaixa(data, before, tx, escopo);
         renomeouLocal = await validarRenomeLocal(data, before, actor, tx, escopo);
         await ensureLocalPadraoUnico(data, before, tx, escopo);
       }
@@ -1505,6 +1509,35 @@ async function anotarUsoLocal(r: Resource, rows: Row[]): Promise<void> {
 }
 
 /**
+ * Impede que dois locais ativos da mesma empresa coexistam diferindo apenas por
+ * caixa/espaços (ex.: 'LOJA' × 'loja' — causa raiz da fragmentação histórica),
+ * inclusive ao tentar reativar um local legado consolidado.
+ */
+async function validarNomeLocalSemColisaoCaixa(data: Payload, before: Row | null, tx: Tx, escopo: EscopoEmpresa): Promise<void> {
+  const nome = String(data.nome ?? before?.nome ?? '').trim();
+  if (!nome) return;
+  const ficaraAtivo = data.ativo === undefined ? (before ? ativoYn(before) : true) : Boolean(data.ativo);
+  if (!ficaraAtivo) return;
+  const s = getStore();
+  const existentes = await s.list(
+    getResource('locais')!,
+    { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId } },
+    tx
+  );
+  const chave = nome.toLowerCase();
+  const conflito = existentes.rows.find(
+    (l) => (!before || Number(l.id) !== Number(before.id)) && ativoYn(l) && String(l.nome || '').trim().toLowerCase() === chave
+  );
+  if (conflito) {
+    throw new HttpError(
+      409,
+      `Já existe outro local ativo chamado "${conflito.nome}" nesta empresa.`,
+      { nome: 'Nome já cadastrado' }
+    );
+  }
+}
+
+/**
  * Valida a alteração de nome de um local. Retorna true quando o nome muda.
  * Local em uso só o administrador renomeia; o nome novo não pode colidir com
  * outro local nem com saldos já gravados (chave produto+tamanho+local).
@@ -1604,11 +1637,23 @@ export async function resolveLocal(data: Payload, tx: Tx, escopo: EscopoEmpresa)
     local = await s.findOneWhere(locais, { id: localId, empresa_id: escopo.empresaId }, tx ?? undefined);
     if (!local) throw new HttpError(404, 'Local não encontrado.');
   } else if (nomeInformado) {
-    const filtro = { nome: nomeInformado, empresa_id: escopo.empresaId };
-    const quantidade = await s.countWhere(locais, filtro, tx ?? undefined);
-    if (quantidade > 1) throw new HttpError(409, 'O nome do local não identifica um único local desta empresa. Selecione pelo ID e corrija os cadastros duplicados.');
-    local = await s.findOneWhere(locais, filtro, tx ?? undefined);
-    if (!local) throw new HttpError(404, 'Local não encontrado. Selecione um local cadastrado da empresa ativa.');
+    const chave = nomeInformado.toLowerCase();
+    const candidatos = await s.list(locais, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId } }, tx ?? undefined);
+    if (candidatos.total > candidatos.rows.length) {
+      throw new HttpError(409, 'Há mais locais cadastrados que o limite de leitura segura.');
+    }
+    const equivalentes = candidatos.rows.filter((l) => String(l.nome || '').trim().toLowerCase() === chave);
+    const ativos = equivalentes.filter((l) => ativoYn(l));
+    if (ativos.length > 1) {
+      throw new HttpError(409, 'O nome do local não identifica um único local desta empresa. Selecione pelo ID e corrija os cadastros duplicados.');
+    }
+    if (ativos.length === 1) {
+      local = ativos[0];
+    } else if (equivalentes.length > 0) {
+      local = equivalentes[0];
+    } else {
+      throw new HttpError(404, 'Local não encontrado. Selecione um local cadastrado da empresa ativa.');
+    }
   } else {
     const padrao = await getDefaultLocalInfo(tx, escopo);
     if (!padrao) throw new HttpError(409, 'A empresa ativa não possui um local de estoque ativo. Cadastre um local antes de movimentar o estoque.');
@@ -1619,6 +1664,49 @@ export async function resolveLocal(data: Payload, tx: Tx, escopo: EscopoEmpresa)
   if (!ativoYn(local)) throw new HttpError(409, 'O local selecionado está inativo. Escolha um local ativo.');
   data.local_id = Number(local.id);
   data.local = String(local.nome);
+}
+
+/**
+ * Resolve o local para estorno de movimentação histórica (cancelamento de venda,
+ * reabertura de OP ou estorno de compra). Se o movimento histórico apontar para
+ * um local consolidado/inativo (ex.: local ID 6 'loja' consolidado em ID 3 'LOJA'),
+ * direciona o estorno ao local operacional ativo equivalente (homônimo ativo por
+ * caixa ou local padrão ativo da empresa), sem alterar a linha histórica e sem
+ * recriar saldo em local inativo.
+ */
+export async function resolveLocalParaEstorno(mov: Row, tx: Tx, escopo: EscopoEmpresa): Promise<{ localId: number; local: string }> {
+  const s = getStore();
+  const locais = getResource('locais')!;
+  const rawId = mov.local_id;
+  const localId = rawId === undefined || rawId === null || rawId === '' || Number(rawId) <= 0 ? null : Number(rawId);
+  const texto = String(mov.local || '').trim();
+  if (localId === null && !texto) {
+    throw new HttpError(409, 'Não é possível estornar uma movimentação histórica sem local de estoque válido. Nenhum saldo foi alterado.');
+  }
+
+  if (localId !== null) {
+    const original = await s.findOneWhere(locais, { id: localId, empresa_id: escopo.empresaId }, tx);
+    if (!original) throw new HttpError(404, 'Local não encontrado.');
+    if (ativoYn(original)) {
+      return { localId: Number(original.id), local: String(original.nome) };
+    }
+    // Local histórico desativado/consolidado: redireciona ao local operacional ativo da empresa.
+    const chave = String(original.nome || texto).trim().toLowerCase();
+    const todos = await s.list(locais, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId } }, tx);
+    const homonimoAtivo = todos.rows.find((l) => ativoYn(l) && String(l.nome || '').trim().toLowerCase() === chave);
+    if (homonimoAtivo) {
+      return { localId: Number(homonimoAtivo.id), local: String(homonimoAtivo.nome) };
+    }
+    const padrao = await getDefaultLocalInfo(tx, escopo);
+    if (padrao) {
+      return { localId: padrao.id, local: padrao.nome };
+    }
+    throw new HttpError(409, 'O local da movimentação histórica está inativo e a empresa não possui local operacional ativo.');
+  }
+
+  const localData: Record<string, unknown> = { local: texto };
+  await resolveLocal(localData, tx, escopo);
+  return { localId: Number(localData.local_id), local: String(localData.local) };
 }
 
 /** Referências de origem/estorno são gravadas apenas pelos fluxos internos que conhecem a relação entre os registros. */

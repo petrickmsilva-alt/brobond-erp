@@ -65,7 +65,7 @@
 import { HttpError } from './errors';
 import { assertRegistroDaEmpresa, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
 import { getResource } from './resources';
-import { getStore, resolveLocal, validarTamanhoNaGrade } from './services';
+import { getStore, resolveLocal, resolveLocalParaEstorno, validarTamanhoNaGrade } from './services';
 import { isDbConnected } from './db';
 import type { Tx } from './store';
 import { round2, round3 } from './utils';
@@ -515,12 +515,7 @@ export async function estornarEntradasDeCompra(args: {
     if (m.local_id === null || m.local_id === undefined || Number(m.local_id) <= 0) {
       if (!String(m.local || '').trim()) throw new HttpError(409, 'Não é possível estornar uma entrada histórica sem local de estoque válido. Nenhum saldo foi alterado.');
     }
-    const localData: Record<string, unknown> = {};
-    if (m.local_id !== null && m.local_id !== undefined && Number(m.local_id) > 0) localData.local_id = Number(m.local_id);
-    else localData.local = String(m.local || '').trim();
-    await resolveLocal(localData, tx, escopo);
-    const local = String(localData.local);
-    const localId = Number(localData.local_id);
+    const { localId, local } = await resolveLocalParaEstorno(m, tx, escopo);
 
     // Baixa condicional: nunca transformar estoque consumido em negativo.
     const aplicado = await s.tryAdjustStock(produtoId, tamanhoId, local, -qtd, tx, 0, localId, escopo.empresaId);

@@ -19,7 +19,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
-import { checkAccess, escopoDe, getDefaultLocalInfo, getStore, resolveLocal, toHttpError, validarTamanhoNaGrade } from './services';
+import { checkAccess, escopoDe, getDefaultLocalInfo, getStore, resolveLocal, resolveLocalParaEstorno, toHttpError, validarTamanhoNaGrade } from './services';
 import { currentUser } from './auth';
 import { assertRegistroDaEmpresa, validarReferenciasDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { aplicarEntradaDeCompra, estornarEntradasDeCompra } from './custoRecebimento';
@@ -514,12 +514,7 @@ async function estornarVenda(pedido: Row, actor: { id: number | null; name: stri
     const aRestaurar = quantidade - aindaDevolvido;
     if (aRestaurar === 0) continue;
 
-    const localData: Record<string, unknown> = {};
-    if (m.local_id !== null && m.local_id !== undefined && m.local_id !== '') localData.local_id = m.local_id;
-    else localData.local = String(m.local).trim();
-    await resolveLocal(localData, tx, escopo);
-    const localId = Number(localData.local_id);
-    const local = String(localData.local);
+    const { localId, local } = await resolveLocalParaEstorno(m, tx, escopo);
     await s.adjustStock(produtoId, tamanhoId, local, aRestaurar, tx, localId, empresaId);
     await s.insert(
       movimentacoes,

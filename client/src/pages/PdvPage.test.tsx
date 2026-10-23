@@ -476,4 +476,33 @@ describe('PDV — tela', () => {
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/pdv/caixas/7/fechar', { valor_fechamento: 80 }));
     expect(await screen.findByText(/Falta de caixa registrada/)).toBeInTheDocument();
   });
+
+  it('exibe saldo consolidado canônico (10 em LOJA) para CAM-BAS-PREM-PRET-"B" tamanho M no local oficial ID 3', async () => {
+    mockRotas({
+      '/pdv/caixas/aberto': { caixa: { ...CAIXA, local_id: 3, local: 'LOJA' }, resumo: RESUMO },
+      '/pdv/buscar': {
+        ...PRODUTO,
+        produto_id: 500,
+        sku: 'CAM-BAS-PREM-PRET-"B"-M',
+        sku_produto: 'CAM-BAS-PREM-PRET-"B"',
+        nome: 'COTTON "B"',
+        tamanho_id: 2,
+        tamanho: 'M',
+        local_id: 3,
+        local: 'LOJA',
+        disponivel_no_tamanho: 10,
+        disponivel_no_local: 10,
+        estoque_fisico_no_tamanho: 10,
+      },
+    });
+    renderPdv();
+    await screen.findByText(/CAIXA-01/);
+
+    const campo = screen.getByRole('combobox', { name: 'Buscar produto no PDV' });
+    fireEvent.change(campo, { target: { value: 'CAM-BAS-PREM-PRET-"B"-M' } });
+    fireEvent.keyDown(campo, { key: 'Enter' });
+
+    expect(await screen.findByText('COTTON "B"')).toBeInTheDocument();
+    expect(screen.getByText(/disp\. 10 em LOJA/)).toBeInTheDocument();
+  });
 });

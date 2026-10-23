@@ -42,7 +42,7 @@ import { round2 } from './utils';
 import { aplicarRegrasPedido } from './itens';
 import { syncLancamentoVenda } from './financeiro';
 import { precoDe } from './listasPreco';
-import { chaveTamanho, localDaEmpresa, locaisDeSaida, saldoPorTamanho, saldoVendavel } from './estoqueCanonico';
+import { chaveTamanho, localDaEmpresa, localPadraoDaEmpresa, locaisDeSaida, saldoPorTamanho, saldoVendavel } from './estoqueCanonico';
 import type { Row, Tx } from './store';
 
 export const R_CAIXA = () => getResource('pdv_caixas')!;
@@ -467,6 +467,12 @@ export async function resolverProduto(
   const tamanhoDaVariacao = lido.variacao_tamanho_id ?? lido.tamanho_id;
   let tamanhoId: number | null = tamanhoDaVariacao === null || tamanhoDaVariacao === undefined ? null : Number(tamanhoDaVariacao);
   const ehVariacao = Boolean(lido.produto_pai_id);
+  const temLocalInformado = localSaidaId !== null && localSaidaId !== undefined && Number(localSaidaId) > 0;
+  const localOperacional = temLocalInformado
+    ? (await locaisDeSaida(escopo, Number(localSaidaId), tx)).preferido
+    : await localPadraoDaEmpresa(escopo, tx);
+  const localEfetivoId = localOperacional ? localOperacional.id : null;
+
   if (ehVariacao) {
     const pai = await s.findOneWhere(getResource('produtos')!, { id: Number(lido.produto_pai_id), empresa_id: escopo.empresaId }, tx);
     // O pai pode ter sido excluído ou pertencer a outra empresa: aí a linha não
@@ -480,7 +486,7 @@ export async function resolverProduto(
     assertRegistroDaEmpresa(getResource('tamanhos')!, tam, escopo);
     tamanhoId = Number(tam.id);
   } else {
-    const opcoes = await tamanhosComEstoque(Number(lido.id), escopo, tx, { localId: localSaidaId ?? null });
+    const opcoes = await tamanhosComEstoque(Number(lido.id), escopo, tx, { localId: localEfetivoId });
     if (opcoes.length === 1 && opcoes[0].id > 0) tamanhoId = opcoes[0].id;
     else if (opcoes.length > 1) {
       throw new HttpError(
@@ -494,12 +500,12 @@ export async function resolverProduto(
   }
 
   const tam = tamanhoId ? await s.findOneWhere(getResource('tamanhos')!, { id: tamanhoId }, tx) : null;
-  const temLocalDeSaida = localSaidaId !== null && localSaidaId !== undefined && Number(localSaidaId) > 0;
-  const vendavel = temLocalDeSaida
-    ? await saldoVendavel(escopo, Number(produto.id), tamanhoId, Number(localSaidaId), tx)
+  const vendavel = localEfetivoId !== null
+    ? await saldoVendavel(escopo, Number(produto.id), tamanhoId, localEfetivoId, tx)
     : null;
-  // Sem local de saída conhecido (ex.: busca antes de abrir o caixa) a leitura
-  // é o físico do tamanho; com local, é o vendável daquele local.
+  // Sem local operacional cadastrado (ex.: empresa recém-criada em pré-onboarding)
+  // a leitura cai no físico do tamanho; com local operacional, usa sempre a fonte
+  // canônica única: Produto + tamanho + local operacional = disponível para venda.
   const fisico = vendavel
     ? vendavel.fisico
     : (await tamanhosComEstoque(Number(produto.id), escopo, tx))
@@ -507,7 +513,7 @@ export async function resolverProduto(
         .reduce((acc, t) => acc + t.disponivel, 0);
   const disponivel = vendavel ? vendavel.quantidade : fisico;
   const disponivelNoLocal = vendavel
-    ? vendavel.por_local.find((item) => item.local_id === Number(localSaidaId))?.quantidade ?? 0
+    ? vendavel.por_local.find((item) => item.local_id === localEfetivoId)?.quantidade ?? vendavel.quantidade
     : fisico;
 
   return {
@@ -522,8 +528,8 @@ export async function resolverProduto(
     lista_nome: resolvido.lista_nome,
     codigo_lido: limpo,
     disponivel,
-    local_id: vendavel?.local_id ?? (temLocalDeSaida ? Number(localSaidaId) : null),
-    local: vendavel?.local ?? null,
+    local_id: vendavel?.local_id ?? localEfetivoId,
+    local: vendavel?.local ?? localOperacional?.nome ?? null,
     disponivel_fisico: fisico,
     disponivel_no_local: disponivelNoLocal,
   };

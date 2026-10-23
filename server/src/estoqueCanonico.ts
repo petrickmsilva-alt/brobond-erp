@@ -53,7 +53,7 @@ import { getStore } from './services';
 import type { Row, Tx } from './store';
 
 /** Local de estoque resolvido (o ID é a identidade; o nome é rótulo). */
-export type LocalEstoque = { id: number; nome: string };
+export type LocalEstoque = { id: number; nome: string; ativo?: boolean };
 
 /** Célula de estoque já na identidade canônica. */
 export type CelulaCanonica = {
@@ -114,7 +114,7 @@ export async function localDaEmpresa(escopo: EscopoEmpresa, localId: number, tx?
   if (!Number.isInteger(localId) || localId <= 0) throw new HttpError(404, 'Local não encontrado.');
   const local = await getStore().findOneWhere(getResource('locais')!, { id: localId, empresa_id: escopo.empresaId }, tx);
   if (!local) throw new HttpError(404, 'Local não encontrado.');
-  return { id: Number(local.id), nome: String(local.nome) };
+  return { id: Number(local.id), nome: String(local.nome), ativo: local.ativo !== false };
 }
 
 /**
@@ -157,12 +157,16 @@ export async function locaisDeSaida(
   localPreferidoId: number | null | undefined,
   tx?: Tx
 ): Promise<{ preferido: LocalEstoque; padrao: LocalEstoque | null; candidatos: LocalEstoque[] }> {
-  const preferido = localPreferidoId === null || localPreferidoId === undefined || localPreferidoId === ('' as unknown as number)
-    ? (await localPadraoDaEmpresa(escopo, tx)) ?? (() => { throw new HttpError(409, 'A empresa ativa não possui um local de estoque ativo. Cadastre um local antes de vender.'); })()
-    : await localDaEmpresa(escopo, Number(localPreferidoId), tx);
   const padrao = await localPadraoDaEmpresa(escopo, tx);
-  const candidatos = padrao && padrao.id !== preferido.id ? [preferido, padrao] : [preferido];
-  return { preferido, padrao, candidatos };
+  const solicitado = localPreferidoId === null || localPreferidoId === undefined || localPreferidoId === ('' as unknown as number)
+    ? padrao
+    : await localDaEmpresa(escopo, Number(localPreferidoId), tx);
+  const preferidoAtivo = solicitado && solicitado.ativo !== false ? solicitado : padrao;
+  if (!preferidoAtivo) {
+    throw new HttpError(409, 'A empresa ativa não possui um local de estoque ativo. Cadastre um local antes de vender.');
+  }
+  const candidatos = padrao && padrao.id !== preferidoAtivo.id ? [preferidoAtivo, padrao] : [preferidoAtivo];
+  return { preferido: preferidoAtivo, padrao, candidatos };
 }
 
 // ---------------------------------------------------------------------------

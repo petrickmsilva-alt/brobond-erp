@@ -27,7 +27,7 @@ import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { assertRegistroDaEmpresa, assertRegistroDaEmpresaParaEscrita, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
 import { getResource, type Resource } from './resources';
-import { checkAccess, escopoDe, getStore, resolveLocal, toHttpError, updateRecord, validarTamanhoNaGrade } from './services';
+import { checkAccess, escopoDe, getStore, resolveLocal, resolveLocalParaEstorno, toHttpError, updateRecord, validarTamanhoNaGrade } from './services';
 import { currentUser } from './auth';
 import type { Payload, Row, Tx } from './store';
 import { parseId, validatePayload } from './validate';
@@ -620,12 +620,7 @@ async function estornarOrdem(op: Row, actor: Actor, tx: Tx, escopo: EscopoEmpres
     if ((m.local_id === null || m.local_id === undefined || m.local_id === '') && !String(m.local || '').trim()) {
       throw new HttpError(409, 'Não é possível estornar uma entrada histórica sem local de estoque válido. Nenhum saldo foi alterado.');
     }
-    const localData: Record<string, unknown> = {};
-    if (m.local_id !== null && m.local_id !== undefined && m.local_id !== '') localData.local_id = m.local_id;
-    else localData.local = String(m.local).trim();
-    await resolveLocal(localData, tx, escopo);
-    const localId = Number(localData.local_id);
-    const local = String(localData.local);
+    const { localId, local } = await resolveLocalParaEstorno(m, tx, escopo);
     // O saldo de saída usa o primitivo com guarda DENTRO da escrita
     // (`tryAdjustStock`). `adjustStock` monta `INSERT ... ON CONFLICT DO UPDATE`
     // e o CHECK `estoques_quantidade_nao_negativo` avalia o tuple PROPOSTO

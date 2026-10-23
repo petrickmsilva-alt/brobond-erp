@@ -226,7 +226,13 @@ export default function PdvPage() {
           const idx = atual.findIndex((l) => l.produto_id === p.produto_id && l.tamanho_id === p.tamanho_id);
           if (idx >= 0) {
             const copia = atual.slice();
-            copia[idx] = { ...copia[idx], quantidade: arredonda(copia[idx].quantidade + 1) };
+            copia[idx] = {
+              ...copia[idx],
+              quantidade: arredonda(copia[idx].quantidade + 1),
+              disponivel: p.disponivel_no_tamanho,
+              local: p.local,
+              disponivel_fisico: p.estoque_fisico_no_tamanho,
+            };
             return copia;
           }
           return [

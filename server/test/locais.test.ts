@@ -188,3 +188,19 @@ test('excluir o ÚLTIMO local ativo: gerente 403, admin decide; a operação seg
   const movimento = await createRecord(RESOURCES.movimentacoes, { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, quantidade: 1 }, admin);
   assert.equal(Number(movimento.local_id), Number(restaurado.id), 'o movimento reaberto usa o ID canônico do novo local');
 });
+
+test('impede criar local ativo homônimo diferindo apenas por caixa (ex.: LOJA × loja) e resolve caixa-insensível no local ativo', async () => {
+  await expectHttp(
+    () => createRecord(RESOURCES.locais, { nome: 'RESTAURADO', tipo: 'loja', ativo: true }, admin),
+    409,
+    /Já existe outro local ativo chamado/
+  );
+  const movCaixaDiferente = await createRecord(
+    RESOURCES.movimentacoes,
+    { tipo: 'entrada', produto_id: produtoId, tamanho_id: 3, quantidade: 2, local: 'RESTAURADO' },
+    admin
+  );
+  const oficial = await localPorNome('restaurado');
+  assert.equal(Number(movCaixaDiferente.local_id), Number(oficial!.id));
+  assert.equal(String(movCaixaDiferente.local), 'restaurado');
+});
