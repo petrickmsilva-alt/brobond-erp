@@ -40,15 +40,21 @@ import { assertRegistroDaEmpresa, type EscopoEmpresa } from './empresa';
 import type { Row, Tx } from './store';
 import { hashConteudoImpressao, jobParaPrintIR, validatePrintIR, type NovoJobImpressao } from './printIr';
 import {
+  isSafePrinterName,
   PRINT_DOC_TYPES,
   PRINT_IR_VERSION,
   PRINT_LIMITS,
   PRINT_PERMANENT_ERRORS,
   PRINT_SOURCES,
 } from '../../packages/domain/src/print/print-ir';
+import { resolverDestinoImpressao, validarNomeImpressoraOpcional } from './printTerminals';
 
 export const R_JOBS = () => getResource('print_jobs')!;
 export const R_AGENTS = () => getResource('print_agents')!;
+const R_NONCES = () => getResource('print_agent_nonces')!;
+const R_PAIRING = () => getResource('print_pairing_codes')!;
+const R_TERMINALS = () => getResource('print_terminals')!;
+const SUPPORTED_JOB_PROTOCOLS = new Set(['text', 'escpos', 'zpl', 'epl2', 'pdf', 'html']);
 
 /** Lease padrão do claim: tempo de imprimir sem renovar (extensível). */
 export const LEASE_MS = Number(process.env.PRINT_LEASE_MS) || 60_000;
@@ -85,6 +91,18 @@ export function atorDeAgente(agente: Row): AtorImpressao {
   return { usuario_id: null, usuario: `agente:${String(agente.token_prefix || agente.machine_id || '').slice(0, 24)}` };
 }
 
+function semUndefined(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map((x) => (x === undefined ? null : semUndefined(x)));
+  if (v && typeof v === 'object' && !(v instanceof Date)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (val !== undefined) out[k] = semUndefined(val);
+    }
+    return out;
+  }
+  return v;
+}
+
 export async function auditarImpressao(
   ator: AtorImpressao,
   evento: string,
@@ -93,6 +111,7 @@ export async function auditarImpressao(
   dados: Record<string, unknown> = {},
   tx?: Tx
 ): Promise<void> {
+  const payload = semUndefined({ evento, public_id: job.public_id, doc_type: job.doc_type, status: job.status, ...dados }) as Record<string, unknown>;
   await getStore().audit(
     {
       usuario_id: ator.usuario_id,
@@ -101,7 +120,7 @@ export async function auditarImpressao(
       recurso: 'print_jobs',
       registro_id: Number(job.id) || null,
       descricao,
-      dados: { evento, public_id: job.public_id, doc_type: job.doc_type, status: job.status, ...dados },
+      dados: payload,
       empresa_id: Number(job.empresa_id),
     },
     tx
@@ -152,6 +171,17 @@ export function normalizarNovoJob(body: Record<string, unknown>, headerKey?: str
   if (!Array.isArray(content)) throw new HttpError(400, 'content (blocos do PrintIR) é obrigatório');
   const metadata = (body.metadata ?? {}) as Record<string, unknown>;
   if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) throw new HttpError(400, 'metadata deve ser um objeto');
+  if (metadata.protocol !== undefined && metadata.protocol !== null && metadata.protocol !== '') {
+    const proto = String(metadata.protocol).trim().toLowerCase();
+    if (!SUPPORTED_JOB_PROTOCOLS.has(proto)) {
+      throw new HttpError(400, `Protocolo de impressão não suportado: "${proto}".`);
+    }
+    metadata.protocol = proto;
+  }
+  const rawPrinterName = texto(body.printer_name ?? body.printerName, PRINT_LIMITS.printerNameMax);
+  if (rawPrinterName && !isSafePrinterName(rawPrinterName)) {
+    throw new HttpError(400, 'printer_name inválido ou contém caracteres inseguros.');
+  }
   // Sem chave do cliente, geramos uma — a criação continua válida, mas um
   // retry de rede SEM chave é, por definição, um novo pedido (documentado).
   const idempotencyKey = texto(body.idempotency_key ?? body.idempotencyKey ?? headerKey, PRINT_LIMITS.idempotencyKeyMax) || randomUUID();
@@ -160,7 +190,7 @@ export function normalizarNovoJob(body: Record<string, unknown>, headerKey?: str
     source,
     sourceRef: texto(body.source_ref ?? body.sourceRef, 120),
     terminal: texto(body.terminal, PRINT_LIMITS.terminalMax),
-    printerName: texto(body.printer_name ?? body.printerName, PRINT_LIMITS.printerNameMax),
+    printerName: rawPrinterName,
     copies,
     priority,
     content: content as NovoJobImpressao['content'],
@@ -179,11 +209,17 @@ export async function enfileirarJob(
   empresaId: number,
   ator: AtorImpressao,
   novo: NovoJobImpressao,
-  opts: { reprintOf?: string | null } = {}
+  opts: { reprintOf?: string | null; reprintReason?: string | null } = {}
 ): Promise<{ job: Row; idempotente: boolean }> {
   const s = getStore();
   const publicId = randomUUID();
   const agora = new Date().toISOString();
+  if (novo.metadata?.protocol !== undefined && novo.metadata?.protocol !== null && novo.metadata?.protocol !== '') {
+    const p = String(novo.metadata.protocol).trim().toLowerCase();
+    if (!SUPPORTED_JOB_PROTOCOLS.has(p)) {
+      throw new HttpError(400, `Protocolo de impressão não suportado: "${p}".`);
+    }
+  }
   // O validador canônico roda sobre o PrintIR montado com o carimbo do
   // servidor (empresa/ator nunca vêm do corpo).
   const ir = {
@@ -217,17 +253,21 @@ export async function enfileirarJob(
     content: novo.content,
   });
 
-  return s.transaction(async (tx) => {
-    const existente = await s.findOneWhere(R_JOBS(), { empresa_id: empresaId, idempotency_key: novo.idempotencyKey }, tx);
-    if (existente) {
-      if (String(existente.content_hash) !== contentHash) {
-        throw new HttpError(409, 'Esta chave de idempotência já foi usada para outra impressão.');
+  const printerProtocol = typeof novo.metadata?.protocol === 'string' && novo.metadata.protocol
+    ? String(novo.metadata.protocol).toLowerCase()
+    : null;
+  const reprintReason = texto(opts.reprintReason ?? novo.metadata?.reprint_reason, 240);
+
+  try {
+    return await s.transaction(async (tx) => {
+      const existente = await s.findOneWhere(R_JOBS(), { empresa_id: empresaId, idempotency_key: novo.idempotencyKey }, tx);
+      if (existente) {
+        if (String(existente.content_hash) !== contentHash) {
+          throw new HttpError(409, 'Esta chave de idempotência já foi usada para outra impressão.');
+        }
+        return { job: existente, idempotente: true };
       }
-      return { job: existente, idempotente: true };
-    }
-    let job: Row;
-    try {
-      job = await s.insert(
+      const job = await s.insert(
         R_JOBS(),
         {
           empresa_id: empresaId,
@@ -238,6 +278,7 @@ export async function enfileirarJob(
           source_ref: novo.sourceRef,
           terminal: novo.terminal,
           printer_name: novo.printerName,
+          printer_protocol: printerProtocol,
           copies: novo.copies,
           priority: novo.priority,
           status: 'QUEUED',
@@ -248,23 +289,30 @@ export async function enfileirarJob(
           attempts: 0,
           max_attempts: novo.maxAttempts,
           reprint_of: opts.reprintOf ?? null,
+          reprint_reason: reprintReason,
           requested_by: await autorValidoImpressao(ator.usuario_id, tx),
         },
         tx
       );
-    } catch (e) {
-      // Corrida no Postgres: o índice único venceu a leitura acima. O job
-      // "perdedor" não existe — devolve o vencedor, como um retry faria.
-      const vencedor = await s.findOneWhere(R_JOBS(), { empresa_id: empresaId, idempotency_key: novo.idempotencyKey }, tx).catch(() => null);
-      if (vencedor && String(vencedor.content_hash) === contentHash) return { job: vencedor, idempotente: true };
-      throw e;
+      await auditarImpressao(ator, 'print.job.created', job, `Impressão enfileirada (${novo.docType})`, {
+        idempotency_key: novo.idempotencyKey,
+        reprint_of: opts.reprintOf ?? undefined,
+        reprint_reason: reprintReason ?? undefined,
+        protocol: printerProtocol ?? undefined,
+      }, tx);
+      return { job, idempotente: false };
+    }, { isolation: 'read committed' });
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    // Corrida em PostgreSQL real: 23505 aborta a transação interna, então a
+    // leitura do vencedor PRECISA ocorrer fora da tx abortada.
+    const vencedor = await s.findOneWhere(R_JOBS(), { empresa_id: empresaId, idempotency_key: novo.idempotencyKey }).catch(() => null);
+    if (vencedor) {
+      if (String(vencedor.content_hash) === contentHash) return { job: vencedor, idempotente: true };
+      throw new HttpError(409, 'Esta chave de idempotência já foi usada para outra impressão.');
     }
-    await auditarImpressao(ator, 'print.job.created', job, `Impressão enfileirada (${novo.docType})`, {
-      idempotency_key: novo.idempotencyKey,
-      reprint_of: opts.reprintOf ?? undefined,
-    }, tx);
-    return { job, idempotente: false };
-  }, { isolation: 'read committed' });
+    throw e;
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -316,6 +364,35 @@ export async function claimJob(agente: Row): Promise<{ job: Row; leaseToken: str
       Number(a.id) - Number(b.id)
   );
   for (const cand of candidatos) {
+    // Se um lease expirado já atingiu max_attempts (agente caiu repetidamente
+    // neste mesmo job), encerra em FAILED permanente em vez de loop infinito.
+    if (
+      (cand.status === 'CLAIMED' || cand.status === 'PRINTING') &&
+      Number(cand.attempts || 0) >= Number(cand.max_attempts || 3)
+    ) {
+      await s.tryUpdateIf(
+        R_JOBS(),
+        Number(cand.id),
+        { status: String(cand.status), lease_token_hash: cand.lease_token_hash },
+        {
+          status: 'FAILED',
+          failed_at: new Date(agora).toISOString(),
+          lease_token_hash: null,
+          lease_expires_at: null,
+          claimed_by_agent_id: null,
+          next_retry_at: null,
+          permanent_error: true,
+          last_error_code: 'LEASE_EXPIRED_MAX_ATTEMPTS',
+          last_error: 'Lease expirou após esgotar o número máximo de tentativas.',
+        }
+      ).then(async (falhou) => {
+        if (falhou) {
+          await auditarImpressao(atorDeAgente(agente), 'print.job.failed', falhou, 'Impressão falhou (lease expirado após máximo de tentativas)');
+        }
+      }).catch(() => {});
+      continue;
+    }
+
     const leaseToken = randomBytes(32).toString('hex');
     const esperado: Record<string, unknown> = { status: String(cand.status) };
     if (cand.status !== 'QUEUED') {
@@ -472,7 +549,7 @@ function podeVerTodos(actor: AuthUser): boolean {
   return actor.perfil === 'admin' || actor.perfil === 'gerente';
 }
 
-async function jobDoUsuario(req: Request): Promise<{ actor: AuthUser; escopo: EscopoEmpresa; job: Row }> {
+export async function obterJobDoUsuario(req: Request): Promise<{ actor: AuthUser; escopo: EscopoEmpresa; job: Row }> {
   const { actor, escopo } = escopoDaReq(req);
   const publicId = String(req.params.id || '');
   const job = await getStore().findOneWhere(R_JOBS(), { empresa_id: escopo.empresaId, public_id: publicId });
@@ -485,6 +562,8 @@ async function jobDoUsuario(req: Request): Promise<{ actor: AuthUser; escopo: Es
   return { actor, escopo, job };
 }
 
+const jobDoUsuario = obterJobDoUsuario;
+
 /** POST /api/print/jobs — enfileira (idempotente por chave). */
 export async function criarJobHandler(req: Request, res: Response): Promise<void> {
   const { actor, escopo } = escopoDaReq(req);
@@ -493,17 +572,107 @@ export async function criarJobHandler(req: Request, res: Response): Promise<void
   res.status(idempotente ? 200 : 201).json({ job: jobPublico(job), idempotente });
 }
 
-/** GET /api/print/jobs — lista da empresa (operador: só os seus). */
+/**
+ * GET /api/print/jobs — lista e histórico auditável da empresa com filtros
+ * operacionais (status, doc_type, source, source_ref, terminal, printer_name,
+ * agent_id, usuario_id, reprint_only, de, ate, q). Operador vê só os próprios.
+ */
 export async function listarJobsHandler(req: Request, res: Response): Promise<void> {
   const { actor, escopo } = escopoDaReq(req);
+  const s = getStore();
   const filter: Record<string, unknown> = { empresa_id: escopo.empresaId };
+
   const status = texto(req.query.status, 20);
   if (status) filter.status = status;
-  if (!podeVerTodos(actor)) filter.requested_by = actor.id;
+  const docType = texto(req.query.doc_type, 40);
+  if (docType) filter.doc_type = docType;
+  const source = texto(req.query.source, 40);
+  if (source) filter.source = source;
+  const sourceRef = texto(req.query.source_ref, 120);
+  if (sourceRef) filter.source_ref = sourceRef;
+  const terminal = texto(req.query.terminal, 60);
+  if (terminal) filter.terminal = terminal;
+  const printerName = texto(req.query.printer_name, 120);
+  if (printerName) filter.printer_name = printerName;
+
+  if (req.query.agent_id !== undefined && req.query.agent_id !== '') {
+    const aid = Number(req.query.agent_id);
+    if (Number.isInteger(aid) && aid > 0) filter.claimed_by_agent_id = aid;
+  }
+
+  if (!podeVerTodos(actor)) {
+    filter.requested_by = actor.id;
+  } else if (req.query.usuario_id !== undefined && req.query.usuario_id !== '') {
+    const uid = Number(req.query.usuario_id);
+    if (Number.isInteger(uid) && uid > 0) filter.requested_by = uid;
+  }
+
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
-  const out = await getStore().list(R_JOBS(), { page, pageSize, filter, sort: 'criado_em', dir: 'desc' });
-  res.json({ ...out, rows: out.rows.map(jobPublico) });
+  const qRaw = texto(req.query.q, 80)?.toLowerCase() || '';
+  const reprintOnly = req.query.reprint_only === 'true' || req.query.reprint_only === '1';
+  const deStr = texto(req.query.de, 30);
+  const ateStr = texto(req.query.ate, 30);
+  const deMs = deStr ? Date.parse(deStr.length === 10 ? `${deStr}T00:00:00.000Z` : deStr) : NaN;
+  const ateMs = ateStr ? Date.parse(ateStr.length === 10 ? `${ateStr}T23:59:59.999Z` : ateStr) : NaN;
+
+  const precisaFiltroPos = Boolean(qRaw || reprintOnly || !Number.isNaN(deMs) || !Number.isNaN(ateMs));
+
+  let rows: Row[];
+  let total: number;
+
+  if (!precisaFiltroPos) {
+    const out = await s.list(R_JOBS(), { page, pageSize, filter, sort: 'criado_em', dir: 'desc' });
+    rows = out.rows;
+    total = out.total;
+  } else {
+    // Janela limitada (máx. 1000 mais recentes nos índices por empresa) para filtros textuais/período
+    const scan = await s.list(R_JOBS(), { page: 1, pageSize: 1000, filter, sort: 'criado_em', dir: 'desc' });
+    const filtrados = scan.rows.filter((r) => {
+      if (reprintOnly && !r.reprint_of) return false;
+      const criadoMs = r.criado_em ? Date.parse(String(r.criado_em)) : NaN;
+      if (!Number.isNaN(deMs) && (Number.isNaN(criadoMs) || criadoMs < deMs)) return false;
+      if (!Number.isNaN(ateMs) && (Number.isNaN(criadoMs) || criadoMs > ateMs)) return false;
+      if (qRaw) {
+        const alvo = [
+          r.public_id,
+          r.source_ref,
+          r.terminal,
+          r.printer_name,
+          r.last_error,
+          r.last_error_code,
+          r.reprint_of,
+          r.reprint_reason,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!alvo.includes(qRaw)) return false;
+      }
+      return true;
+    });
+    total = filtrados.length;
+    const offset = (page - 1) * pageSize;
+    rows = filtrados.slice(offset, offset + pageSize);
+  }
+
+  // Enriquecimento leve de nomes (somente registros da mesma empresa)
+  const [usersRes, agentsRes] = await Promise.all([
+    s.list(getResource('usuarios')!, { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId } }),
+    s.list(R_AGENTS(), { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId } }),
+  ]);
+  const userMap = new Map<number, string>();
+  for (const u of usersRes.rows) userMap.set(Number(u.id), String(u.nome || u.email || `#${u.id}`));
+  const agentMap = new Map<number, string>();
+  for (const a of agentsRes.rows) agentMap.set(Number(a.id), String(a.nome || a.machine_id || `#${a.id}`));
+
+  const enriquecidos = rows.map((r) => ({
+    ...jobPublico(r),
+    requested_by_nome: r.requested_by ? userMap.get(Number(r.requested_by)) ?? null : null,
+    agent_nome: r.claimed_by_agent_id ? agentMap.get(Number(r.claimed_by_agent_id)) ?? null : null,
+  }));
+
+  res.json({ rows: enriquecidos, total, page, pageSize });
 }
 
 /** GET /api/print/jobs/:id — detalhe + PrintIR montado. */
@@ -552,6 +721,8 @@ export async function retryJobHandler(req: Request, res: Response): Promise<void
   res.json({ job: jobPublico(row) });
 }
 
+export const MAX_COPIAS_REIMPRESSAO = 10;
+
 /**
  * POST /api/print/jobs/:id/reimprimir — reimpressão é um job NOVO (nova
  * chave, novo id, `reprint_of` apontando à origem): o original PRINTED
@@ -562,8 +733,30 @@ export async function reimprimirJobHandler(req: Request, res: Response): Promise
   if (!['PRINTED', 'FAILED', 'CANCELLED'].includes(String(job.status))) {
     throw new HttpError(409, `Job em ${job.status} ainda está em andamento — aguarde ou cancele.`);
   }
-  const chave = texto((req.body as any)?.idempotency_key ?? req.header('idempotency-key'), PRINT_LIMITS.idempotencyKeyMax)
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const terminalAlvo = body.terminal !== undefined ? texto(body.terminal, PRINT_LIMITS.terminalMax) : ((job.terminal as string) || null);
+  const printerAlvo =
+    body.printer_name !== undefined
+      ? validarNomeImpressoraOpcional(body.printer_name, 'Impressora')
+      : ((job.printer_name as string) || null);
+
+  if (!podeVerTodos(actor) && terminalAlvo) {
+    const dest = await resolverDestinoImpressao(escopo.empresaId, 'padrao', { terminal: terminalAlvo });
+    if (!dest.allowOperatorReprint) {
+      throw new HttpError(403, 'Reimpressão neste terminal exige perfil gerente ou administrador.');
+    }
+  }
+
+  const copies = Number(body.copies ?? job.copies ?? 1);
+  if (!Number.isInteger(copies) || copies < 1 || copies > MAX_COPIAS_REIMPRESSAO) {
+    throw new HttpError(400, `Número de cópias na reimpressão deve estar entre 1 e ${MAX_COPIAS_REIMPRESSAO}.`);
+  }
+
+  const motivo = texto(body.motivo ?? body.reprint_reason, 240);
+  const chave = texto(body.idempotency_key ?? req.header('idempotency-key'), PRINT_LIMITS.idempotencyKeyMax)
     || `reprint:${job.public_id}:${randomUUID()}`;
+
+  const metadataBase = ((job.metadata as Record<string, unknown>) || {});
   const { job: novo, idempotente } = await enfileirarJob(
     escopo.empresaId,
     atorDeUsuario(actor),
@@ -571,19 +764,250 @@ export async function reimprimirJobHandler(req: Request, res: Response): Promise
       docType: String(job.doc_type),
       source: String(job.source),
       sourceRef: (job.source_ref as string) || null,
-      terminal: (job.terminal as string) || null,
-      printerName: (job.printer_name as string) || null,
-      copies: Number(job.copies) || 1,
+      terminal: terminalAlvo,
+      printerName: printerAlvo,
+      copies,
       priority: Number(job.priority) || 0,
       content: (job.payload as NovoJobImpressao['content']) || [],
-      metadata: { ...((job.metadata as Record<string, unknown>) || {}), reprint: true },
+      metadata: {
+        ...metadataBase,
+        reprint: true,
+        ...(motivo ? { reprint_reason: motivo } : {}),
+      },
       idempotencyKey: chave,
       maxAttempts: Number(job.max_attempts) || 3,
     },
-    { reprintOf: String(job.public_id) }
+    { reprintOf: String(job.public_id), reprintReason: motivo }
   );
   if (!idempotente) {
-    await auditarImpressao(atorDeUsuario(actor), 'print.job.reprinted', novo, `Reimpressão do job ${job.public_id}`, { origem: job.public_id });
+    await auditarImpressao(
+      atorDeUsuario(actor),
+      'print.job.reprinted',
+      novo,
+      motivo ? `Reimpressão do job ${job.public_id} (${motivo})` : `Reimpressão do job ${job.public_id}`,
+      { origem: job.public_id, motivo: motivo ?? undefined, copies }
+    );
   }
   res.status(idempotente ? 200 : 201).json({ job: jobPublico(novo), idempotente });
+}
+
+// ----------------------------------------------------------------------------
+// Recuperação de órfãos, observabilidade e retenção/limpeza periódica (P5/P6)
+// ----------------------------------------------------------------------------
+
+/**
+ * Recupera jobs presos em CLAIMED/PRINTING cujo lease expirou (ex.: agente
+ * caiu e não voltou). Respeita `max_attempts` para evitar loop infinito.
+ */
+export async function recuperarJobsOrfaos(empresaId?: number): Promise<{ reabertos: number; falhados: number }> {
+  const s = getStore();
+  const agora = Date.now();
+  const agoraIso = new Date(agora).toISOString();
+  let reabertos = 0;
+  let falhados = 0;
+
+  for (const status of ['CLAIMED', 'PRINTING'] as const) {
+    const filter: Record<string, unknown> = { status };
+    if (empresaId !== undefined) filter.empresa_id = empresaId;
+    const { rows } = await s.list(R_JOBS(), { page: 1, pageSize: 200, filter, sort: 'criado_em', dir: 'asc' });
+    for (const j of rows) {
+      if (!leaseExpirado(j, agora)) continue;
+      const esgotou = Number(j.attempts || 0) >= Number(j.max_attempts || 3);
+      if (esgotou) {
+        const up = await s.tryUpdateIf(
+          R_JOBS(),
+          Number(j.id),
+          { status, lease_token_hash: j.lease_token_hash },
+          {
+            status: 'FAILED',
+            failed_at: agoraIso,
+            lease_token_hash: null,
+            lease_expires_at: null,
+            claimed_by_agent_id: null,
+            next_retry_at: null,
+            permanent_error: true,
+            last_error_code: 'LEASE_EXPIRED_MAX_ATTEMPTS',
+            last_error: 'Lease expirou após esgotar o número máximo de tentativas.',
+          }
+        );
+        if (up) {
+          falhados++;
+          await auditarImpressao(
+            { usuario_id: null, usuario: 'sistema:manutencao' },
+            'print.job.orphan_failed',
+            up,
+            'Job órfão encerrado em FAILED após esgotar tentativas'
+          );
+        }
+      } else {
+        const up = await s.tryUpdateIf(
+          R_JOBS(),
+          Number(j.id),
+          { status, lease_token_hash: j.lease_token_hash },
+          {
+            status: 'QUEUED',
+            lease_token_hash: null,
+            lease_expires_at: null,
+            claimed_by_agent_id: null,
+            printing_at: null,
+            next_retry_at: null,
+          }
+        );
+        if (up) {
+          reabertos++;
+          await auditarImpressao(
+            { usuario_id: null, usuario: 'sistema:manutencao' },
+            'print.job.lease_recovered',
+            up,
+            'Lease expirado recuperado automaticamente para QUEUED'
+          );
+        }
+      }
+    }
+  }
+  return { reabertos, falhados };
+}
+
+/**
+ * Política de retenção e limpeza periódica (P6.7):
+ *   • Nonces de replay vencidos (> 24h por padrão, janela ativa é 5 min);
+ *   • Códigos de pareamento expirados há mais de 7 dias;
+ *   • Jobs terminais (PRINTED, FAILED, CANCELLED) com mais de N dias
+ *     (`PRINT_JOBS_RETENTION_DAYS`, padrão 90 dias), preservando a trilha
+ *     assinada em `auditoria`.
+ */
+export async function limparFilaImpressaoPeriodica(opts: {
+  nonceMaxAgeMs?: number;
+  pairingMaxAgeMs?: number;
+  jobRetentionDays?: number;
+} = {}): Promise<{
+  orfaosReabertos: number;
+  orfaosFalhados: number;
+  noncesRemovidos: number;
+  pairingsRemovidos: number;
+  jobsAntigosRemovidos: number;
+}> {
+  const s = getStore();
+  const agora = Date.now();
+  const nonceCorte = agora - (opts.nonceMaxAgeMs ?? 24 * 3600_000);
+  const pairingCorte = agora - (opts.pairingMaxAgeMs ?? 7 * 24 * 3600_000);
+  const retentionDays = opts.jobRetentionDays ?? Math.max(7, Number(process.env.PRINT_JOBS_RETENTION_DAYS) || 90);
+  const jobCorte = agora - retentionDays * 24 * 3600_000;
+
+  const orfaos = await recuperarJobsOrfaos();
+
+  let noncesRemovidos = 0;
+  const nonces = await s.list(R_NONCES(), { page: 1, pageSize: 500, sort: 'criado_em', dir: 'asc' });
+  for (const n of nonces.rows) {
+    const t = n.criado_em ? Date.parse(String(n.criado_em)) : NaN;
+    if (!Number.isNaN(t) && t < nonceCorte) {
+      if (await s.remove(R_NONCES(), Number(n.id))) noncesRemovidos++;
+    }
+  }
+
+  let pairingsRemovidos = 0;
+  const pairings = await s.list(R_PAIRING(), { page: 1, pageSize: 300, sort: 'criado_em', dir: 'asc' });
+  for (const p of pairings.rows) {
+    const exp = p.expires_at ? Date.parse(String(p.expires_at)) : NaN;
+    if (!Number.isNaN(exp) && exp < pairingCorte) {
+      if (await s.remove(R_PAIRING(), Number(p.id))) pairingsRemovidos++;
+    }
+  }
+
+  let jobsAntigosRemovidos = 0;
+  for (const status of ['PRINTED', 'FAILED', 'CANCELLED'] as const) {
+    const antigos = await s.list(R_JOBS(), { page: 1, pageSize: 300, filter: { status }, sort: 'criado_em', dir: 'asc' });
+    for (const j of antigos.rows) {
+      const t = j.criado_em ? Date.parse(String(j.criado_em)) : NaN;
+      if (!Number.isNaN(t) && t < jobCorte) {
+        if (await s.remove(R_JOBS(), Number(j.id))) jobsAntigosRemovidos++;
+      }
+    }
+  }
+
+  return {
+    orfaosReabertos: orfaos.reabertos,
+    orfaosFalhados: orfaos.falhados,
+    noncesRemovidos,
+    pairingsRemovidos,
+    jobsAntigosRemovidos,
+  };
+}
+
+/**
+ * GET /api/print/resumo — observabilidade operacional da fila por empresa,
+ * sem vazar segredos, tokens ou dados de outros tenants.
+ */
+export async function resumoOperacionalImpressaoHandler(req: Request, res: Response): Promise<void> {
+  const { actor, escopo } = escopoDaReq(req);
+  const s = getStore();
+  const baseFilter: Record<string, unknown> = { empresa_id: escopo.empresaId };
+  if (!podeVerTodos(actor)) baseFilter.requested_by = actor.id;
+
+  const [queued, claimed, printing, failed, cancelled, recentJobs, agents, terminals] = await Promise.all([
+    s.countWhere(R_JOBS(), { ...baseFilter, status: 'QUEUED' }),
+    s.countWhere(R_JOBS(), { ...baseFilter, status: 'CLAIMED' }),
+    s.countWhere(R_JOBS(), { ...baseFilter, status: 'PRINTING' }),
+    s.countWhere(R_JOBS(), { ...baseFilter, status: 'FAILED' }),
+    s.countWhere(R_JOBS(), { ...baseFilter, status: 'CANCELLED' }),
+    s.list(R_JOBS(), { page: 1, pageSize: 200, filter: baseFilter, sort: 'criado_em', dir: 'desc' }),
+    s.list(R_AGENTS(), { page: 1, pageSize: 100, filter: { empresa_id: escopo.empresaId } }),
+    s.list(R_TERMINALS(), { page: 1, pageSize: 100, filter: { empresa_id: escopo.empresaId, ativo: true } }),
+  ]);
+
+  const agora = Date.now();
+  const corte24h = agora - 24 * 3600_000;
+  let printed24h = 0;
+  let reprints24h = 0;
+  let orphanLeases = 0;
+  for (const j of recentJobs.rows) {
+    const criadoMs = j.criado_em ? Date.parse(String(j.criado_em)) : 0;
+    if (j.status === 'PRINTED' && criadoMs >= corte24h) printed24h++;
+    if (j.reprint_of && criadoMs >= corte24h) reprints24h++;
+    if ((j.status === 'CLAIMED' || j.status === 'PRINTING') && leaseExpirado(j, agora)) orphanLeases++;
+  }
+
+  let agentsOnline = 0;
+  let agentsAtivos = 0;
+  let agentsRevogados = 0;
+  for (const a of agents.rows) {
+    if (a.status === 'ativo') {
+      agentsAtivos++;
+      const hb = a.last_heartbeat_at ? Date.parse(String(a.last_heartbeat_at)) : 0;
+      if (hb > 0 && agora - hb <= 120_000) agentsOnline++;
+    } else {
+      agentsRevogados++;
+    }
+  }
+
+  res.json({
+    fila: {
+      queued,
+      claimed,
+      printing,
+      failed,
+      cancelled,
+      printed_24h: printed24h,
+      reprints_24h: reprints24h,
+      orphan_leases: orphanLeases,
+    },
+    agentes: {
+      total: agents.total,
+      ativos: agentsAtivos,
+      online: agentsOnline,
+      revogados: agentsRevogados,
+    },
+    terminais_ativos: terminals.total,
+  });
+}
+
+/** POST /api/print/manutencao — recupera órfãos da empresa sob demanda (gerente/admin). */
+export async function manutencaoImpressaoHandler(req: Request, res: Response): Promise<void> {
+  const actor = currentUser(req);
+  if (actor.perfil !== 'admin' && actor.perfil !== 'gerente') {
+    throw new HttpError(403, 'Apenas administradores e gerentes podem executar manutenção da fila.');
+  }
+  const escopo = escopoDe(actor);
+  const out = await recuperarJobsOrfaos(escopo.empresaId);
+  res.json({ ok: true, ...out });
 }

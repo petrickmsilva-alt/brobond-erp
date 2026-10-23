@@ -1,63 +1,31 @@
-# BroBond Print Agent (P1)
+# BroBond Print Agent (P1–P6)
 
-Agente local de impressão do BroBond ERP. Roda no computador da loja
-(Windows é o alvo; desenvolve/testa em qualquer Node ≥ 18), faz **polling**
-na fila de impressão do ERP e executa os jobs com **claim/lease** e
-**journal anti-duplicação**. Nunca escuta na rede: a API local é
-**127.0.0.1:17831** apenas.
+Agente local de impressão do BroBond ERP. Executa na estação de trabalho da loja/expedição (Windows, Linux ou macOS com Node >= 18), realiza **polling HTTPS** autenticado na fila `print_jobs` do ERP e entrega bytes nativos às impressoras térmicas e de sistema com **claim/lease**, **nonce anti-replay** e **journal local anti-duplicação**.
 
-## Como funciona
+Nunca abre porta para a rede local: a ponte de diagnóstico/pareamento escuta estritamente em **`127.0.0.1:17831`** com proteção contra DNS Rebinding (`Host`) e CSRF (`Origin` / `Sec-Fetch-Site`).
 
-```text
-ERP (fila print_jobs) ──claim/lease──► Agente ──► Renderer ──► Impressora
-        ▲                                   │
-        └──── heartbeat / printed / fail ◄──┘   (agente sempre inicia)
-```
+## Renderers e Transportes Suportados
 
-- **Pareamento:** no ERP (gerente/admin), `POST /api/print/pairing` gera um
-  código de uso único (10 min). No agente: `--pair XXXX-XXXX-XXXX` ou
-  `POST http://127.0.0.1:17831/pair`. O agente recebe uma **machine identity**
-  própria (machine_id + token revogável) — não é o login de nenhum usuário.
-- **Polling com backoff:** ERP hibernado/fora do ar vira espera crescente
-  (até 60 s), nunca erro fatal.
-- **Não duplica:** lease no servidor (só um agente por job) + journal local
-  (`printed-journal.log`): se o agente cair depois de imprimir e antes do
-  ack, ao reivindicar de novo ele confirma sem reimprimir.
-- **Dry-run por padrão:** na P1 a "impressora" é o arquivo
-  `outbox/<jobId>.txt` (renderer de texto). ESC/POS (P2) e ZPL/EPL2 (P4)
-  entram como renderer/printer novos, sem mudar fila, lease ou journal.
+- **Renderers (`criarRegistryPadrao`)**:
+  - `escpos` — Recibos térmicos PDV 80mm (48 col), 72mm (42 col) e 58mm (32 col), CP850, tabelas, QR Code nativo `GS ( k`, códigos de barras `GS k` e corte parcial `GS V 66`.
+  - `zpl` — Etiquetas térmicas Zebra/compatíveis (`ZPL II ^XA..^XZ`), validação GS1 estrita (`EAN-8`, `UPC-A`, `EAN-13`, `GTIN-14`), `Code 128` para SKU, repetição nativa `^PQ<n>` e escape `^FH_` contra injeção.
+  - `epl2` — Etiquetas térmicas Elgin L42 / Zebra TLP2844 (`EPL2 N..P<n>`), validação GS1 estrita e sanitização de campos.
+  - `text` — Texto colunar puro (48 colunas) e inspeção dry-run.
+- **Modos de Saída (`BROBOND_PRINTER_MODE`)**:
+  - `dry-run` (padrão seguro de desenvolvimento): grava `outbox/<jobId>.<ext>` confinado contra path traversal.
+  - `system` (produção): envia bytes RAW via socket `tcp://<ip>:<porta>` (ex.: JetDirect `9100`), spooler RAW do Windows (`RawPrinterHelper` via `execFile` sem shell) ou CUPS (`lp -o raw -d <fila>`), além de listar impressoras instaladas no SO durante o heartbeat.
 
-## Rodando
+## Uso Rápido
 
 ```bash
-npm install
+npm ci
 npm run build
+
+# 1. Parear com código único de 10 min gerado no ERP (/config/impressao)
 BROBOND_ERP_URL=https://erp.exemplo.com.br node dist/index.js --pair ABCD-EFGH-JKLM
-BROBOND_ERP_URL=https://erp.exemplo.com.br node dist/index.js
+
+# 2. Executar em modo produção (spooler do SO / TCP RAW)
+BROBOND_ERP_URL=https://erp.exemplo.com.br BROBOND_PRINTER_MODE=system node dist/index.js
 ```
 
-Configuração completa: `src/config/config.ts` (arquivo
-`agent-config.json` + variáveis `BROBOND_*`). O token de máquina fica em
-arquivo separado e restrito (`machine-token`, 0600 onde suportado; no
-Windows, dentro de `%LOCALAPPDATA%\BroBond\PrintAgent`). Revogação e
-rotação do token são feitas no ERP — um token vazado morre na hora.
-
-## Estrutura
-
-```text
-src/
-  core/       loop de polling, backoff
-  transport/  cliente do ERP (polling) + API local 127.0.0.1
-  auth/       machine identity (nonce/timestamp anti-replay)
-  queue/      execução de um job (claim → printed/fail)
-  printer/    saída física + journal anti-duplicação
-  renderer/   PrintIR → carga (texto hoje; ESC/POS P2; ZPL/EPL2 P4)
-  config/     configuração local e token
-  logging/    log sem segredos
-```
-
-## Testes
-
-```bash
-npm test
-```
+Credenciais ficam isoladas em `machine-token` (`0600`) fora do `agent-config.json` e jamais aparecem nos logs estruturados. Documentação arquitetural completa em `../docs/IMPRESSAO-P0-P6.md`.

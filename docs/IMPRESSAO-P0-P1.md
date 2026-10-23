@@ -12,6 +12,8 @@ impressão existente foi removida: navegador/PDF continua sendo o caminho
 visível hoje; a fila e o agente são a fundação sobre a qual P2 (ESC/POS),
 P3 (PDV) e P4 (ZPL/EPL2) serão construídos.
 
+> **Evolução completa P2..P6 entregue:** consulte [`docs/IMPRESSAO-P0-P6.md`](./IMPRESSAO-P0-P6.md) para a arquitetura completa de Recibos PDV (`ESC/POS`), Documentos ERP, Etiquetas Térmicas (`ZPL II` / `EPL2`), Central Operacional (`/config/impressao`), Terminais multi-impressora e Hardening P6.
+
 ---
 
 ## 1. Mapeamento do que já existia (antes do P0)

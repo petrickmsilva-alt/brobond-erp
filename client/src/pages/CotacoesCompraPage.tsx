@@ -32,6 +32,7 @@ import { formatDateTime, formatMoney, formatNumber } from '../lib/format';
 import type { ListResult } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { DocumentPrintButton } from '../components/DocumentPrintButton';
 
 // ---------------------------------------------------------------------------
 // Tipos espelhando a resposta de GET /api/cotacoes-compra/:id/comparativo
@@ -537,6 +538,7 @@ export default function CotacoesCompraPage() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge tone={TOM_STATUS[comp.cotacao.status] ?? 'slate'}>{ROTULO_STATUS[comp.cotacao.status] ?? comp.cotacao.status}</Badge>
+                    <DocumentPrintButton tipo="cotacoes-compra" documentoId={Number(comp.cotacao.id)} label="Imprimir" compact />
                     {editavel && (
                       <button type="button" className="btn btn-secondary" onClick={() => setAddItemAberto(true)}>
                         <Plus className="h-4 w-4" aria-hidden /> Item

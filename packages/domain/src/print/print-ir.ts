@@ -22,11 +22,13 @@ export const PRINT_IR_VERSION = 1 as const;
 
 /** Tipos de documento que o ERP sabe pedir para imprimir. */
 export const PRINT_DOC_TYPES = [
-  'etiqueta_produto', // LabelSheet (A4 / 50x30 hoje; ZPL/EPL2 na P4)
-  'recibo_pdv',       // comprovante de venda do PDV (ESC/POS na P2/P3)
-  'pedido',           // pedido/orçamento (PDF hoje via OrderPage)
-  'compra',           // pedido de compra (PDF hoje)
-  'ficha_usuario',    // dossiê do usuário (fichaPrint)
+  'etiqueta_produto', // LabelSheet (A4 / 50x30 / ZPL / EPL2)
+  'recibo_pdv',       // comprovante de venda do PDV (ESC/POS)
+  'pedido',           // pedido de venda
+  'orcamento',        // orçamento / proposta comercial / cotação de compra
+  'compra',           // pedido de compra
+  'ordem_producao',   // ordem de produção / ficha OP
+  'ficha_usuario',    // dossiê cadastral do usuário
   'relatorio',        // relatórios/expedição/medidas
   'teste',            // página de teste do agente/impressora
   'generico',         // conteúdo livre validado (blocos abaixo)
@@ -34,8 +36,16 @@ export const PRINT_DOC_TYPES = [
 export type PrintDocType = (typeof PRINT_DOC_TYPES)[number];
 
 /** De onde o pedido de impressão nasceu (auditoria + roteamento). */
-export const PRINT_SOURCES = ['pdv', 'produto', 'pedido', 'compra', 'usuario', 'relatorio', 'sistema', 'agente'] as const;
+export const PRINT_SOURCES = ['pdv', 'produto', 'pedido', 'compra', 'producao', 'usuario', 'relatorio', 'sistema', 'agente'] as const;
 export type PrintSource = (typeof PRINT_SOURCES)[number];
+
+/** Simbologias de código de barras aceitas pelo contrato. */
+export const PRINT_BARCODE_SYMBOLOGIES = ['auto', 'ean13', 'ean8', 'upca', 'gtin14', 'code128'] as const;
+export type PrintBarcodeSymbology = (typeof PRINT_BARCODE_SYMBOLOGIES)[number];
+
+/** Protocolos físicos suportados pelo agente local (contingência usa pdf/html). */
+export const SUPPORTED_AGENT_PROTOCOLS = ['text', 'escpos', 'zpl', 'epl2'] as const;
+export type AgentPrintProtocol = (typeof SUPPORTED_AGENT_PROTOCOLS)[number];
 
 /**
  * Blocos semânticos de conteúdo. São intencionais e pequenos: descrevem
@@ -50,11 +60,11 @@ export type PrintBlock =
   | { kind: 'text'; text: string; align?: PrintAlign; emphasis?: 'normal' | 'bold' | 'title'; size?: 'normal' | 'small' | 'large' }
   | { kind: 'kv'; label: string; value: string }
   | { kind: 'table'; columns: { header: string; align?: PrintAlign }[]; rows: string[][] }
-  | { kind: 'barcode'; value: string; symbology?: 'auto' | 'ean13' | 'ean8' | 'code128'; caption?: string }
+  | { kind: 'barcode'; value: string; symbology?: PrintBarcodeSymbology; caption?: string }
   | { kind: 'qrcode'; value: string; caption?: string }
   | { kind: 'separator' }
   | { kind: 'spacer'; lines?: number }
-  | { kind: 'cut' }; // dica de corte/avanco — renderers sem guilhotina ignoram
+  | { kind: 'cut'; repeat?: number }; // dica de corte/etiqueta — `repeat` (1..200) multiplica a seção até este corte
 
 export type PrintIR = {
   /** Versão do contrato (PRINT_IR_VERSION). */
@@ -103,6 +113,8 @@ export const PRINT_LIMITS = {
   priorityMin: 0,
   priorityMax: 100,
   maxBlocks: 500,
+  maxCutRepeat: 200,
+  maxTotalOutputUnits: 500,
   maxTextLength: 2000,
   maxTableRows: 500,
   maxTableColumns: 12,
@@ -114,6 +126,42 @@ export const PRINT_LIMITS = {
 } as const;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Permite spooler seguro ("Zebra ZD220 (USB)", "Elgin_i9-Caixa.1") ou destino
+// TCP explícito ("tcp://192.168.1.50:9100"). Bloqueia path traversal (.., \, /),
+// metacaracteres de shell (; | & $ ` < >), aspas, controles e flag injection (-d).
+const SAFE_SPOOLER_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 _.()-]{0,119}$/;
+const SAFE_TCP_TARGET_RE = /^tcp:\/\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*):([1-9][0-9]{0,4})$/i;
+
+export function hasAsciiControl(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return true;
+  }
+  return false;
+}
+
+export function stripAsciiControl(s: string, keepNewlineAndTab = false): string {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (keepNewlineAndTab && (c === 0x09 || c === 0x0a || c === 0x0d)) out += s[i];
+    else if (c < 0x20 || c === 0x7f) continue;
+    else out += s[i];
+  }
+  return out;
+}
+
+/** Valida nome de impressora contra path traversal, flag injection e shell metachars. */
+export function isSafePrinterName(name: string): boolean {
+  if (!name || name.length > PRINT_LIMITS.printerNameMax) return false;
+  if (hasAsciiControl(name) || name.includes('..')) return false;
+  const tcp = SAFE_TCP_TARGET_RE.exec(name);
+  if (tcp) {
+    const port = Number(tcp[2]);
+    return Number.isInteger(port) && port >= 1 && port <= 65535;
+  }
+  return SAFE_SPOOLER_NAME_RE.test(name);
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -131,23 +179,35 @@ function validarBloco(b: unknown, i: number, erros: string[]): void {
       break;
     case 'kv':
       if (typeof b.label !== 'string' || typeof b.value !== 'string') erros.push(`${onde}: kv exige label e value`);
+      else if (b.label.length > 200 || b.value.length > PRINT_LIMITS.maxTextLength) erros.push(`${onde}: kv excede tamanho máximo`);
       break;
     case 'table': {
       const cols = b.columns;
       const rows = b.rows;
       if (!Array.isArray(cols) || cols.length === 0 || cols.length > PRINT_LIMITS.maxTableColumns) erros.push(`${onde}: table exige 1..${PRINT_LIMITS.maxTableColumns} colunas`);
       if (!Array.isArray(rows) || rows.length > PRINT_LIMITS.maxTableRows) erros.push(`${onde}: table com linhas demais`);
-      else if (Array.isArray(cols) && rows.some((r) => !Array.isArray(r) || r.length !== cols.length)) erros.push(`${onde}: linha de tabela com número de células diferente das colunas`);
+      else if (Array.isArray(cols) && rows.some((r) => !Array.isArray(r) || r.length !== cols.length || r.some((c) => typeof c !== 'string' || c.length > 500))) {
+        erros.push(`${onde}: linha de tabela inválida ou com número de células diferente das colunas`);
+      }
       break;
     }
     case 'barcode':
-      if (typeof b.value !== 'string' || !b.value || b.value.length > PRINT_LIMITS.maxBarcodeLength) erros.push(`${onde}: barcode exige value (máx. ${PRINT_LIMITS.maxBarcodeLength})`);
+      if (typeof b.value !== 'string' || !b.value || b.value.length > PRINT_LIMITS.maxBarcodeLength) {
+        erros.push(`${onde}: barcode exige value (máx. ${PRINT_LIMITS.maxBarcodeLength})`);
+      }
+      if (b.symbology !== undefined && (typeof b.symbology !== 'string' || !(PRINT_BARCODE_SYMBOLOGIES as readonly string[]).includes(b.symbology))) {
+        erros.push(`${onde}: symbology inválida "${String(b.symbology)}"`);
+      }
       break;
     case 'qrcode':
       if (typeof b.value !== 'string' || !b.value || b.value.length > 1024) erros.push(`${onde}: qrcode exige value`);
       break;
     case 'separator':
+      break;
     case 'cut':
+      if (b.repeat !== undefined && (!Number.isInteger(b.repeat) || Number(b.repeat) < 1 || Number(b.repeat) > PRINT_LIMITS.maxCutRepeat)) {
+        erros.push(`${onde}: cut.repeat deve ser 1..${PRINT_LIMITS.maxCutRepeat}`);
+      }
       break;
     case 'spacer':
       if (b.lines !== undefined && (!Number.isInteger(b.lines) || Number(b.lines) < 0 || Number(b.lines) > 20)) erros.push(`${onde}: spacer.lines deve ser 0..20`);
@@ -179,8 +239,12 @@ export function validatePrintIR(input: unknown): string[] {
   if (!Number.isInteger(ir.priority) || Number(ir.priority) < PRINT_LIMITS.priorityMin || Number(ir.priority) > PRINT_LIMITS.priorityMax) {
     erros.push(`priority deve ser ${PRINT_LIMITS.priorityMin}..${PRINT_LIMITS.priorityMax}`);
   }
-  if (ir.terminal != null && (typeof ir.terminal !== 'string' || ir.terminal.length > PRINT_LIMITS.terminalMax)) erros.push('terminal inválido');
-  if (ir.printerName != null && (typeof ir.printerName !== 'string' || ir.printerName.length > PRINT_LIMITS.printerNameMax)) erros.push('printerName inválido');
+  if (ir.terminal != null && (typeof ir.terminal !== 'string' || ir.terminal.length > PRINT_LIMITS.terminalMax || hasAsciiControl(ir.terminal))) {
+    erros.push('terminal inválido');
+  }
+  if (ir.printerName != null && (typeof ir.printerName !== 'string' || !isSafePrinterName(ir.printerName))) {
+    erros.push('printerName inválido');
+  }
   if (ir.related != null && (!isRecord(ir.related) || typeof ir.related.type !== 'string' || typeof ir.related.id !== 'string')) erros.push('related deve ser {type, id}');
   if (typeof ir.idempotencyKey !== 'string' || !ir.idempotencyKey.trim() || ir.idempotencyKey.length > PRINT_LIMITS.idempotencyKeyMax) {
     erros.push('idempotencyKey é obrigatória');
@@ -188,7 +252,14 @@ export function validatePrintIR(input: unknown): string[] {
   if (typeof ir.createdAt !== 'string' || Number.isNaN(Date.parse(ir.createdAt))) erros.push('createdAt deve ser ISO-8601');
   if (!Array.isArray(ir.content) || ir.content.length === 0) erros.push('content deve ter ao menos um bloco');
   else if (ir.content.length > PRINT_LIMITS.maxBlocks) erros.push(`content excede ${PRINT_LIMITS.maxBlocks} blocos`);
-  else ir.content.forEach((b, i) => validarBloco(b, i, erros));
+  else {
+    ir.content.forEach((b, i) => validarBloco(b, i, erros));
+    const unidades = ir.content.reduce((acc, b) => acc + (isRecord(b) && b.kind === 'cut' ? Number(b.repeat ?? 1) : 0), 0) || 1;
+    const copies = Number.isInteger(ir.copies) ? Number(ir.copies) : 1;
+    if (unidades * copies > PRINT_LIMITS.maxTotalOutputUnits) {
+      erros.push(`total de unidades impressas (${unidades * copies}) excede o limite de segurança (${PRINT_LIMITS.maxTotalOutputUnits})`);
+    }
+  }
   if (!isRecord(ir.metadata)) erros.push('metadata deve ser um objeto');
   else if (JSON.stringify(ir.metadata).length > PRINT_LIMITS.maxMetadataBytes) erros.push('metadata grande demais');
 
@@ -204,9 +275,12 @@ export const PRINT_ERROR_CODES = [
   'PRINTER_OFFLINE',
   'PRINTER_NOT_FOUND',
   'PAPER_OUT',
-  'RENDER_UNSUPPORTED', // permanente: renderer não sabe este PrintIR/docType
+  'RENDER_UNSUPPORTED', // permanente: renderer não sabe este PrintIR/docType/protocol
+  'UNSUPPORTED_PROTOCOL',
+  'INVALID_EAN',
   'IR_INVALID',         // permanente: PrintIR não validou no agente
   'IR_VERSION',         // permanente: versão desconhecida do contrato
+  'LEASE_EXPIRED_MAX_ATTEMPTS',
   'TRANSPORT',          // transitório: rede/USB/serial
   'TIMEOUT',
   'UNKNOWN',
@@ -214,4 +288,12 @@ export const PRINT_ERROR_CODES = [
 export type PrintErrorCode = (typeof PRINT_ERROR_CODES)[number];
 
 /** Erros que NUNCA devem ser retentados automaticamente. */
-export const PRINT_PERMANENT_ERRORS: ReadonlySet<string> = new Set(['RENDER_UNSUPPORTED', 'IR_INVALID', 'IR_VERSION', 'PRINTER_NOT_FOUND']);
+export const PRINT_PERMANENT_ERRORS: ReadonlySet<string> = new Set([
+  'RENDER_UNSUPPORTED',
+  'UNSUPPORTED_PROTOCOL',
+  'INVALID_EAN',
+  'IR_INVALID',
+  'IR_VERSION',
+  'PRINTER_NOT_FOUND',
+  'LEASE_EXPIRED_MAX_ATTEMPTS',
+]);

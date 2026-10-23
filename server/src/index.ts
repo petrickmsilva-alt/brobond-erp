@@ -152,9 +152,13 @@ import {
   buscarProduto as pdvBuscarProduto,
   caixaAberto,
   cancelarVendaPdv,
+  cupomPdvHtmlHandler,
+  cupomPdvPdfHandler,
+  emitirCupomPdvHandler,
   fecharCaixa,
   movimentoCaixa,
   pagamentosVenda,
+  reimprimirCupomPdvHandler,
   resumoCaixaHandler,
   venderPdv,
 } from './pdv';
@@ -163,10 +167,13 @@ import {
   criarJobHandler,
   detalheJobHandler,
   listarJobsHandler,
+  manutencaoImpressaoHandler,
   reimprimirJobHandler,
+  resumoOperacionalImpressaoHandler,
   retryJobHandler,
 } from './printJobs';
 import {
+  atualizarAgenteHandler,
   autenticarAgente,
   claimHandler as printClaimHandler,
   criarCodigoPareamentoHandler,
@@ -175,12 +182,35 @@ import {
   heartbeatHandler as printHeartbeatHandler,
   leaseHandler as printLeaseHandler,
   listarAgentesHandler,
+  listarImpressorasDetectadasHandler,
   parearAgenteHandler,
   printedHandler as printPrintedHandler,
   printingHandler as printPrintingHandler,
+  reativarAgenteHandler,
   revogarAgenteHandler,
   rotacionarTokenHandler as printRotacionarTokenHandler,
 } from './printAgents';
+import {
+  atualizarTerminalHandler,
+  criarTerminalHandler,
+  listarTerminaisHandler,
+  removerTerminalHandler,
+} from './printTerminals';
+import {
+  fallbackHtmlJobHandler,
+  fallbackPdfJobHandler,
+} from './printFallback';
+import {
+  fallbackDocumentoHtmlHandler,
+  fallbackDocumentoPdfHandler,
+  imprimirDocumentoHandler,
+  imprimirTesteTerminalHandler,
+  reimprimirDocumentoHandler,
+} from './printDocuments';
+import {
+  imprimirEtiquetasHandler,
+  imprimirEtiquetasProdutoHandler,
+} from './printLabels';
 import {
   atualizarStatusEnvio,
   buscarPorCodigo as buscarEnvioPorCodigo,
@@ -745,23 +775,46 @@ app.post('/api/pdv/caixas/:id/fechar', wrap(fecharCaixa));
 app.get('/api/pdv/buscar', wrap(pdvBuscarProduto));
 app.post('/api/pdv/vendas', wrap(venderPdv));
 app.post('/api/pdv/vendas/:id/cancelar', wrap(cancelarVendaPdv));
+app.post('/api/pdv/vendas/:id/cupom', wrap(emitirCupomPdvHandler));
+app.post('/api/pdv/vendas/:id/reimprimir', wrap(reimprimirCupomPdvHandler));
+app.get('/api/pdv/vendas/:id/cupom/html', wrap(cupomPdvHtmlHandler));
+app.get('/api/pdv/vendas/:id/cupom/pdf', wrap(cupomPdvPdfHandler));
 
 // ----------------------------------------------------------------------------
-// IMPRESSÃO P0/P1 — fila (lado do usuário) e gestão de agentes.
-// Enfileirar/listar/cancelar/retry/reimprimir: qualquer perfil autenticado,
-// com ownership (operador só vê os próprios jobs — printJobs.ts).
-// Parear/listar/revogar/rotacionar agentes: gerência (a machine identity
-// enxerga a fila inteira da empresa, então criá-la é ato administrativo).
+// IMPRESSÃO P0..P6 — fila, documentos, etiquetas, terminais e agentes.
 // ----------------------------------------------------------------------------
+app.get('/api/print/resumo', wrap(resumoOperacionalImpressaoHandler));
+app.post('/api/print/manutencao', requireRole('admin', 'gerente'), wrap(manutencaoImpressaoHandler));
+app.get('/api/print/impressoras-detectadas', wrap(listarImpressorasDetectadasHandler));
+
 app.post('/api/print/jobs', wrap(criarJobHandler));
 app.get('/api/print/jobs', wrap(listarJobsHandler));
 app.get('/api/print/jobs/:id', wrap(detalheJobHandler));
+app.get('/api/print/jobs/:id/html', wrap(fallbackHtmlJobHandler));
+app.get('/api/print/jobs/:id/pdf', wrap(fallbackPdfJobHandler));
 app.post('/api/print/jobs/:id/cancelar', wrap(cancelarJobHandler));
 app.post('/api/print/jobs/:id/retry', wrap(retryJobHandler));
 app.post('/api/print/jobs/:id/reimprimir', wrap(reimprimirJobHandler));
+
+app.post('/api/print/etiquetas', wrap(imprimirEtiquetasHandler));
+app.post('/api/produtos/:id/etiquetas', wrap(imprimirEtiquetasProdutoHandler));
+
+app.post('/api/print/documentos/:tipo/:id', wrap(imprimirDocumentoHandler));
+app.post('/api/print/documentos/:tipo/:id/reimprimir', wrap(reimprimirDocumentoHandler));
+app.get('/api/print/documentos/:tipo/:id/html', wrap(fallbackDocumentoHtmlHandler));
+app.get('/api/print/documentos/:tipo/:id/pdf', wrap(fallbackDocumentoPdfHandler));
+
+app.get('/api/print/terminals', wrap(listarTerminaisHandler));
+app.post('/api/print/terminals', requireRole('admin', 'gerente'), wrap(criarTerminalHandler));
+app.patch('/api/print/terminals/:id', requireRole('admin', 'gerente'), wrap(atualizarTerminalHandler));
+app.delete('/api/print/terminals/:id', requireRole('admin', 'gerente'), wrap(removerTerminalHandler));
+app.post('/api/print/terminals/:id/teste', requireRole('admin', 'gerente'), wrap(imprimirTesteTerminalHandler));
+
 app.post('/api/print/pairing', requireRole('admin', 'gerente'), wrap(criarCodigoPareamentoHandler));
 app.get('/api/print/agents', requireRole('admin', 'gerente'), wrap(listarAgentesHandler));
+app.patch('/api/print/agents/:id', requireRole('admin', 'gerente'), wrap(atualizarAgenteHandler));
 app.post('/api/print/agents/:id/revogar', requireRole('admin', 'gerente'), wrap(revogarAgenteHandler));
+app.post('/api/print/agents/:id/reativar', requireRole('admin', 'gerente'), wrap(reativarAgenteHandler));
 app.post('/api/print/agents/:id/rotacionar-token', requireRole('admin', 'gerente'), wrap(printRotacionarTokenHandler));
 app.get('/api/pdv/vendas/:id/pagamentos', wrap(pagamentosVenda));
 

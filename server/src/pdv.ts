@@ -31,8 +31,14 @@
 // demorar. Engolir a emissão dentro da transação da venda faria um timeout do
 // provedor desfazer uma venda que já aconteceu no balcão.
 // ============================================================================
+import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
+import { PRINT_IR_VERSION, PRINT_LIMITS } from '../../packages/domain/src/print/print-ir';
 import { HttpError } from './errors';
+import { enviarHtmlSeguro, renderPrintIrHtml, renderPrintIrPdf } from './printFallback';
+import { atorDeUsuario, auditarImpressao, enfileirarJob, jobPublico, MAX_COPIAS_REIMPRESSAO, R_JOBS } from './printJobs';
+import { construirCupomPdvPrintIR } from './printTemplates';
+import { resolverDestinoImpressao } from './printTerminals';
 import { getResource, type Resource } from './resources';
 import { checkAccess, checkFluxo, escopoDe, getStore, resolveLocal, toHttpError } from './services';
 import { currentUser } from './auth';
@@ -660,7 +666,7 @@ function normalizarLinhas(bruto: unknown): LinhaPdv[] {
   });
 }
 
-type PagamentoEntrada = { forma: string; valor: number; parcelas: number; nsu?: string | null; bandeira?: string | null };
+type PagamentoEntrada = { forma: string; valor: number; valor_informado?: number; parcelas: number; nsu?: string | null; bandeira?: string | null };
 
 function normalizarPagamentos(bruto: unknown): PagamentoEntrada[] {
   if (!Array.isArray(bruto)) throw new HttpError(400, 'pagamentos deve ser uma lista.', { pagamentos: 'Lista obrigatória' });
@@ -691,13 +697,76 @@ export async function venderPdv(req: Request, res: Response) {
   checkAccess(getResource('vendas')!, actor, 'create');
   const escopo = escopoDe(actor);
   const body = (req.body || {}) as Record<string, unknown>;
+  const chaveIdempotencia =
+    String(body.idempotency_key ?? req.header?.('idempotency-key') ?? '').trim().slice(0, 120) || null;
+  const terminalSolicitado = body.terminal != null && String(body.terminal).trim() ? String(body.terminal).trim().slice(0, 60) : null;
+  const autoImprimir = body.auto_imprimir !== false;
   const linhas = normalizarLinhas(body.itens ?? body.linhas);
   const pagamentos = normalizarPagamentos(body.pagamentos);
   const faturar = body.faturar !== false;
   const s = getStore();
 
+  // Atalho idempotente antes de abrir nova escrita: refresh/timeout com a
+  // mesma chave devolve a venda já confirmada sem duplicar baixa nem cupom.
+  if (chaveIdempotencia) {
+    const jaExiste = await s.findOneWhere(getResource('vendas')!, {
+      empresa_id: escopo.empresaId,
+      idempotency_key: chaveIdempotencia,
+    });
+    if (jaExiste) {
+      const imp = await dispararImpressaoPosVendaPdv(Number(jaExiste.id), escopo, actor, {
+        autoImprimir,
+        terminalSolicitado,
+        caixaId: jaExiste.pdv_caixa_id != null ? Number(jaExiste.pdv_caixa_id) : null,
+      });
+      res.status(200).json({
+        ok: true,
+        idempotente: true,
+        venda_id: Number(jaExiste.id),
+        venda: jaExiste,
+        calculo: {
+          subtotal_itens: round2(Number(jaExiste.total || 0) + Number(jaExiste.desconto || 0) - Number(jaExiste.frete || 0)),
+          desconto: round2(Number(jaExiste.desconto || 0)),
+          frete: round2(Number(jaExiste.frete || 0)),
+          total: round2(Number(jaExiste.total || 0)),
+          total_pago: round2(Number(jaExiste.pdv_valor_recebido ?? jaExiste.total ?? 0)),
+          troco: round2(Number(jaExiste.pdv_troco ?? 0)),
+        },
+        impressao: imp,
+        cupom_impressao: imp,
+      });
+      return;
+    }
+  }
+
   try {
     const resultado = await s.transaction(async (tx) => {
+      if (chaveIdempotencia) {
+        const existenteTx = await s.findOneWhere(
+          getResource('vendas')!,
+          { empresa_id: escopo.empresaId, idempotency_key: chaveIdempotencia },
+          tx
+        );
+        if (existenteTx) {
+          const caixaEx = existenteTx.pdv_caixa_id
+            ? await findInTenant(R_CAIXA(), Number(existenteTx.pdv_caixa_id), escopo, tx)
+            : null;
+          return {
+            idempotenteVenda: true,
+            venda: existenteTx,
+            subtotalItens: round2(Number(existenteTx.total || 0) + Number(existenteTx.desconto || 0) - Number(existenteTx.frete || 0)),
+            descontoCupom: round2(Number(existenteTx.desconto || 0)),
+            frete: round2(Number(existenteTx.frete || 0)),
+            total: round2(Number(existenteTx.total || 0)),
+            totalPago: round2(Number(existenteTx.pdv_valor_recebido ?? existenteTx.total ?? 0)),
+            troco: round2(Number(existenteTx.pdv_troco ?? 0)),
+            divergencias: [] as { linha: number; enviado: number | null; servidor: number }[],
+            caixa: caixaEx || { id: existenteTx.pdv_caixa_id ?? null, numero: null },
+            resolvidas: [] as { linha: LinhaPdv; info: LinhaResolvida; preco: number; subtotal: number }[],
+            faturar: existenteTx.status === 'faturada',
+          };
+        }
+      }
       // ---- caixa aberto é pré-condição: sem ele o fechamento não fecha ----
       let caixa: Row | null = null;
       if (body.caixa_id) {
@@ -823,7 +892,7 @@ export async function venderPdv(req: Request, res: Response) {
         // o que entregou): aí não existe movimento — `pdv_pagamentos.valor` é
         // CHECK > 0 e zero não movimenta gaveta nenhuma.
         if (valorNoCaixa <= 0.009) continue;
-        pagamentosParaCaixa.push({ ...p, valor: valorNoCaixa });
+        pagamentosParaCaixa.push({ ...p, valor: valorNoCaixa, valor_informado: p.valor });
       }
 
       // ---- 4) grava o pedido (local de saída já resolvido no passo 1) ----
@@ -837,6 +906,10 @@ export async function venderPdv(req: Request, res: Response) {
           status: 'aberta',
           canal_venda: 'pdv',
           pdv_caixa_id: Number(caixa.id),
+          pdv_operador_id: actor.id || null,
+          pdv_valor_recebido: totalPago,
+          pdv_troco: troco,
+          idempotency_key: chaveIdempotencia,
           local_saida: localSaida,
           local_saida_id: localSaidaId,
           desconto: descontoCupom,
@@ -878,7 +951,17 @@ export async function venderPdv(req: Request, res: Response) {
       for (const p of pagamentosParaCaixa) {
         await s.insert(
           R_PAGAMENTO(),
-          { empresa_id: escopo.empresaId, venda_id: Number(venda.id), caixa_id: Number(caixa.id), forma: p.forma, valor: p.valor, parcelas: p.parcelas, nsu: p.nsu ?? null, bandeira: p.bandeira ?? null },
+          {
+            empresa_id: escopo.empresaId,
+            venda_id: Number(venda.id),
+            caixa_id: Number(caixa.id),
+            forma: p.forma,
+            valor: p.valor,
+            valor_informado: p.valor_informado ?? p.valor,
+            parcelas: p.parcelas,
+            nsu: p.nsu ?? null,
+            bandeira: p.bandeira ?? null,
+          },
           tx
         );
       }
@@ -908,11 +991,21 @@ export async function venderPdv(req: Request, res: Response) {
         tx
       );
 
-      return { venda: faturada, subtotalItens, descontoCupom, frete, total, totalPago, troco, divergencias, caixa, resolvidas, faturar };
+      return { idempotenteVenda: false, venda: faturada, subtotalItens, descontoCupom, frete, total, totalPago, troco, divergencias, caixa, resolvidas, faturar };
     }, { isolation: 'serializable' });
 
-    res.status(201).json({
+    // P2: Impressão automática NÃO BLOQUEANTE e FORA da transação da venda.
+    // Se a impressora estiver offline ou houver erro ao enfileirar, a venda
+    // já está gravada e faturada — nunca desfaz nem duplica venda.
+    const impressao = await dispararImpressaoPosVendaPdv(Number(resultado.venda.id), escopo, actor, {
+      autoImprimir,
+      terminalSolicitado,
+      caixaNumero: resultado.caixa?.numero ? String(resultado.caixa.numero) : null,
+    });
+
+    res.status(resultado.idempotenteVenda ? 200 : 201).json({
       ok: true,
+      ...(resultado.idempotenteVenda ? { idempotente: true } : {}),
       venda_id: Number(resultado.venda.id),
       venda: resultado.venda,
       caixa: { id: resultado.caixa.id, numero: resultado.caixa.numero },
@@ -946,19 +1039,47 @@ export async function venderPdv(req: Request, res: Response) {
         local_saida: r.info.local,
         origem_preco: r.info.lista_nome ? `Lista: ${r.info.lista_nome}` : 'Ficha do produto',
       })),
-      // Se o operador digitou um preço diferente, o servidor mostra a diferença
-      // em vez de aceitá-la em silêncio.
       divergencias_de_preco: resultado.divergencias,
-      // A NFC-e é um ato separado: tem a própria máquina de estados e não pode
-      // ser engolida pela transação da venda.
       fiscal: {
         elegivel: resultado.faturar,
         modelo: '65',
         endpoint: `/api/vendas/${resultado.venda.id}/fiscal/emitir`,
         mensagem: 'Para emitir a NFC-e, chame o endpoint acima. A venda já está gravada e faturada independentemente da emissão.',
       },
+      impressao,
+      cupom_impressao: impressao,
     });
   } catch (e) {
+    // Corrida em Postgres (23505) na mesma idempotency_key de venda:
+    if (chaveIdempotencia && !(e instanceof HttpError)) {
+      const vencedora = await s.findOneWhere(getResource('vendas')!, {
+        empresa_id: escopo.empresaId,
+        idempotency_key: chaveIdempotencia,
+      }).catch(() => null);
+      if (vencedora) {
+        const imp = await dispararImpressaoPosVendaPdv(Number(vencedora.id), escopo, actor, {
+          autoImprimir,
+          terminalSolicitado,
+        });
+        res.status(200).json({
+          ok: true,
+          idempotente: true,
+          venda_id: Number(vencedora.id),
+          venda: vencedora,
+          calculo: {
+            subtotal_itens: round2(Number(vencedora.total || 0) + Number(vencedora.desconto || 0) - Number(vencedora.frete || 0)),
+            desconto: round2(Number(vencedora.desconto || 0)),
+            frete: round2(Number(vencedora.frete || 0)),
+            total: round2(Number(vencedora.total || 0)),
+            total_pago: round2(Number(vencedora.pdv_valor_recebido ?? vencedora.total ?? 0)),
+            troco: round2(Number(vencedora.pdv_troco ?? 0)),
+          },
+          impressao: imp,
+          cupom_impressao: imp,
+        });
+        return;
+      }
+    }
     throw toHttpError(e, getResource('vendas')!);
   }
 }
@@ -1055,4 +1176,339 @@ export async function pagamentosVenda(req: Request, res: Response) {
   assertRegistroDaEmpresa(getResource('vendas')!, await findInTenant(getResource('vendas')!, id, escopo), escopo);
   const out = await s.list(R_PAGAMENTO(), { page: 1, pageSize: 100, filter: { empresa_id: escopo.empresaId, venda_id: id }, sort: 'id', dir: 'asc' });
   res.json(out.rows);
+}
+
+// ============================================================================
+// P2 — Impressão Automática Não-Bloqueante, Reimpressão Auditada e Contingência
+// ============================================================================
+
+export function chaveCupomAutomaticoPdv(vendaId: number): string {
+  return `recibo:pdv:venda:${vendaId}`;
+}
+
+export async function dispararImpressaoPosVendaPdv(
+  vendaId: number,
+  escopo: ReturnType<typeof escopoDe>,
+  actor: ReturnType<typeof currentUser>,
+  opts: {
+    autoImprimir?: boolean;
+    terminalSolicitado?: string | null;
+    caixaNumero?: string | null;
+    caixaId?: number | null;
+  } = {}
+): Promise<Record<string, unknown>> {
+  const fallbackHtmlUrl = `/api/pdv/vendas/${vendaId}/cupom/html`;
+  const fallbackPdfUrl = `/api/pdv/vendas/${vendaId}/cupom/pdf`;
+  if (opts.autoImprimir === false) {
+    return {
+      enfileirado: false,
+      job_public_id: null,
+      status: 'desativado',
+      idempotente: false,
+      erro: null,
+      fallback_html_url: fallbackHtmlUrl,
+      fallback_pdf_url: fallbackPdfUrl,
+    };
+  }
+  try {
+    const doc = await construirCupomPdvPrintIR(vendaId, escopo);
+    const dest = await resolverDestinoImpressao(escopo.empresaId, 'recibo', {
+      terminal: opts.terminalSolicitado || undefined,
+    });
+    // Se não houve terminal explícito, tenta casar configuração do número do caixa
+    const destCaixa = !opts.terminalSolicitado && !dest.terminalConfig && (opts.caixaNumero || doc.caixaNumero)
+      ? await resolverDestinoImpressao(escopo.empresaId, 'recibo', { terminal: opts.caixaNumero || doc.caixaNumero || undefined })
+      : null;
+    const efetivo = destCaixa?.terminalConfig ? destCaixa : dest;
+
+    if (!efetivo.autoPrintPdv) {
+      return {
+        enfileirado: false,
+        job_public_id: null,
+        status: 'desativado',
+        idempotente: false,
+        erro: null,
+        fallback_mode: efetivo.fallbackMode,
+        fallback_html_url: fallbackHtmlUrl,
+        fallback_pdf_url: fallbackPdfUrl,
+      };
+    }
+
+    const { job, idempotente } = await enfileirarJob(escopo.empresaId, atorDeUsuario(actor), {
+      docType: 'recibo_pdv',
+      source: 'pdv',
+      sourceRef: doc.sourceRef,
+      terminal: opts.terminalSolicitado || (efetivo.terminalConfig ? efetivo.terminal : null),
+      printerName: efetivo.printerName,
+      copies: efetivo.copiesDefault,
+      priority: 30,
+      content: doc.blocks,
+      metadata: {
+        ...doc.metadata,
+        protocol: efetivo.protocol === 'text' ? 'text' : 'escpos',
+        widthCols: efetivo.widthCols,
+      },
+      idempotencyKey: chaveCupomAutomaticoPdv(vendaId),
+      maxAttempts: 3,
+    });
+
+    return {
+      enfileirado: true,
+      job_public_id: String(job.public_id),
+      job_id: job.public_id,
+      status: String(job.status),
+      job_status: job.status,
+      idempotente,
+      erro: null,
+      terminal: job.terminal ?? null,
+      printer_name: job.printer_name ?? null,
+      protocol: efetivo.protocol === 'text' ? 'text' : 'escpos',
+      fallback_mode: efetivo.fallbackMode,
+      fallback_html_url: fallbackHtmlUrl,
+      fallback_pdf_url: fallbackPdfUrl,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message.slice(0, 200) : 'Falha ao enfileirar cupom';
+    console.warn(`[print:pdv] falha não-bloqueante ao enfileirar cupom da venda #${vendaId}: ${msg}`);
+    return {
+      enfileirado: false,
+      job_public_id: null,
+      status: 'falha_enfileiramento',
+      idempotente: false,
+      erro: msg,
+      fallback_html_url: fallbackHtmlUrl,
+      fallback_pdf_url: fallbackPdfUrl,
+    };
+  }
+}
+
+/**
+ * POST /api/pdv/vendas/:id/cupom — garante/consulta o job inicial idempotente
+ * do cupom da venda (jamais duplica se já enfileirado ou impresso).
+ */
+export async function emitirCupomPdvHandler(req: Request, res: Response): Promise<void> {
+  const actor = currentUser(req);
+  checkAccess(getResource('vendas')!, actor, 'read');
+  const escopo = escopoDe(actor);
+  const vendaId = parseId(req.params.id);
+  const body = (req.body ?? {}) as Record<string, unknown>;
+
+  const doc = await construirCupomPdvPrintIR(vendaId, escopo);
+  const s = getStore();
+  // Se o cupom automático já existe na fila para esta venda, devolve-o sem
+  // exigir hash idêntico caso o operador mude apenas parâmetros de tela.
+  const jaCriado = await s.findOneWhere(R_JOBS(), {
+    empresa_id: escopo.empresaId,
+    idempotency_key: chaveCupomAutomaticoPdv(vendaId),
+  });
+  if (jaCriado) {
+    res.status(200).json({
+      job: jobPublico(jaCriado),
+      idempotente: true,
+      fallback_html_url: `/api/pdv/vendas/${vendaId}/cupom/html`,
+      fallback_pdf_url: `/api/pdv/vendas/${vendaId}/cupom/pdf`,
+    });
+    return;
+  }
+
+  const dest = await resolverDestinoImpressao(escopo.empresaId, 'recibo', {
+    terminal: body.terminal != null ? String(body.terminal) : undefined,
+    printerName: body.printer_name != null ? String(body.printer_name) : undefined,
+  });
+
+  const { job, idempotente } = await enfileirarJob(escopo.empresaId, atorDeUsuario(actor), {
+    docType: 'recibo_pdv',
+    source: 'pdv',
+    sourceRef: doc.sourceRef,
+    terminal: body.terminal != null ? dest.terminal : (dest.terminalConfig ? dest.terminal : null),
+    printerName: dest.printerName,
+    copies: dest.copiesDefault,
+    priority: 30,
+    content: doc.blocks,
+    metadata: {
+      ...doc.metadata,
+      protocol: dest.protocol === 'text' ? 'text' : 'escpos',
+      widthCols: dest.widthCols,
+    },
+    idempotencyKey: chaveCupomAutomaticoPdv(vendaId),
+    maxAttempts: 3,
+  });
+
+  res.status(idempotente ? 200 : 201).json({
+    job: jobPublico(job),
+    idempotente,
+    fallback_html_url: `/api/pdv/vendas/${vendaId}/cupom/html`,
+    fallback_pdf_url: `/api/pdv/vendas/${vendaId}/cupom/pdf`,
+  });
+}
+
+/**
+ * POST /api/pdv/vendas/:id/reimprimir — reimpressão explícita, autenticada,
+ * validada por permissão e integralmente auditada (`reprint_of`, motivo,
+ * terminal, venda associada, solicitante e timestamp).
+ */
+export async function reimprimirCupomPdvHandler(req: Request, res: Response): Promise<void> {
+  const actor = currentUser(req);
+  checkAccess(getResource('vendas')!, actor, 'read');
+  const escopo = escopoDe(actor);
+  const vendaId = parseId(req.params.id);
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const s = getStore();
+
+  const venda = assertRegistroDaEmpresa(
+    getResource('vendas')!,
+    await findInTenant(getResource('vendas')!, vendaId, escopo),
+    escopo
+  );
+  const caixa = venda.pdv_caixa_id ? await findInTenant(R_CAIXA(), Number(venda.pdv_caixa_id), escopo) : null;
+
+  const doc = await construirCupomPdvPrintIR(vendaId, escopo);
+  const termPed = body.terminal != null && String(body.terminal).trim() ? String(body.terminal).trim() : null;
+  const dest = await resolverDestinoImpressao(escopo.empresaId, 'recibo', {
+    terminal: termPed || doc.caixaNumero || undefined,
+    printerName: body.printer_name != null ? String(body.printer_name) : undefined,
+  });
+
+  // Controle de permissão fina na reimpressão do PDV:
+  //   • admin e gerente podem reimprimir qualquer venda da empresa;
+  //   • operador respeita `allowOperatorReprint` do terminal e só reimprime
+  //     vendas do seu próprio caixa/operação.
+  if (actor.perfil === 'operador') {
+    if (!dest.allowOperatorReprint) {
+      throw new HttpError(403, 'Reimpressão neste terminal exige autorização de gerente ou administrador.');
+    }
+    const donoOperador = Number(venda.pdv_operador_id || caixa?.usuario_id || 0);
+    if (donoOperador > 0 && donoOperador !== actor.id) {
+      throw new HttpError(403, 'Operador só pode reimprimir cupons emitidos no próprio caixa/operação.');
+    }
+  }
+
+  const copies = body.copies !== undefined ? Number(body.copies) : 1;
+  if (!Number.isInteger(copies) || copies < 1 || copies > MAX_COPIAS_REIMPRESSAO) {
+    throw new HttpError(400, `Número de cópias na reimpressão deve estar entre 1 e ${MAX_COPIAS_REIMPRESSAO}.`);
+  }
+
+  const motivo = String(body.motivo ?? body.reprint_reason ?? '').trim().slice(0, 240) || null;
+  const anteriores = await s.list(R_JOBS(), {
+    page: 1,
+    pageSize: 5,
+    filter: { empresa_id: escopo.empresaId, source_ref: `venda:${vendaId}` },
+    sort: 'criado_em',
+    dir: 'desc',
+  });
+  const jobOriginal = anteriores.rows[0] ?? null;
+  const reprintOf = jobOriginal ? String(jobOriginal.reprint_of || jobOriginal.public_id) : `venda:${vendaId}`;
+
+  const chave =
+    String(body.idempotency_key ?? req.header('idempotency-key') ?? '').trim().slice(0, PRINT_LIMITS.idempotencyKeyMax) ||
+    `reprint:pdv:venda:${vendaId}:${randomUUID()}`;
+
+  const terminalFinal = termPed || (dest.terminalConfig ? dest.terminal : (jobOriginal?.terminal as string) || null);
+  const { job, idempotente } = await enfileirarJob(
+    escopo.empresaId,
+    atorDeUsuario(actor),
+    {
+      docType: 'recibo_pdv',
+      source: 'pdv',
+      sourceRef: doc.sourceRef,
+      terminal: terminalFinal,
+      printerName: dest.printerName || ((jobOriginal?.printer_name as string) ?? null),
+      copies,
+      priority: 25,
+      content: doc.blocks,
+      metadata: {
+        ...doc.metadata,
+        protocol: dest.protocol === 'text' ? 'text' : 'escpos',
+        widthCols: dest.widthCols,
+        reprint: true,
+        ...(motivo ? { reprint_reason: motivo } : {}),
+      },
+      idempotencyKey: chave,
+      maxAttempts: 3,
+    },
+    { reprintOf, reprintReason: motivo }
+  );
+
+  if (!idempotente) {
+    await auditarImpressao(
+      atorDeUsuario(actor),
+      'print.pdv.reprinted',
+      job,
+      motivo ? `Reimpressão do cupom PDV #${vendaId} (${motivo})` : `Reimpressão do cupom PDV #${vendaId}`,
+      {
+        venda_id: vendaId,
+        caixa_id: venda.pdv_caixa_id ?? null,
+        terminal: terminalFinal,
+        reprint_of: reprintOf,
+        motivo: motivo ?? undefined,
+        copies,
+      }
+    );
+  }
+
+  res.status(idempotente ? 200 : 201).json({
+    job: jobPublico(job),
+    idempotente,
+    reprint_of: reprintOf,
+    fallback_html_url: `/api/pdv/vendas/${vendaId}/cupom/html`,
+    fallback_pdf_url: `/api/pdv/vendas/${vendaId}/cupom/pdf`,
+  });
+}
+
+/** GET /api/pdv/vendas/:id/cupom/html — contingência HTML 80mm do cupom PDV. */
+export async function cupomPdvHtmlHandler(req: Request, res: Response): Promise<void> {
+  const actor = currentUser(req);
+  checkAccess(getResource('vendas')!, actor, 'read');
+  const escopo = escopoDe(actor);
+  const vendaId = parseId(req.params.id);
+  const doc = await construirCupomPdvPrintIR(vendaId, escopo);
+  const html = await renderPrintIrHtml(
+    {
+      version: PRINT_IR_VERSION,
+      jobId: randomUUID(),
+      tenantId: String(escopo.empresaId),
+      companyId: String(escopo.empresaId),
+      requestedBy: { userId: actor.id || null, userName: actor.name },
+      source: 'pdv',
+      docType: 'recibo_pdv',
+      related: doc.related,
+      copies: 1,
+      priority: 0,
+      content: doc.blocks,
+      metadata: doc.metadata,
+      idempotencyKey: `fallback:pdv:venda:${vendaId}`,
+      createdAt: new Date().toISOString(),
+    },
+    { title: `Cupom PDV #${vendaId}` }
+  );
+  enviarHtmlSeguro(res, html);
+}
+
+/** GET /api/pdv/vendas/:id/cupom/pdf — contingência PDF 80mm do cupom PDV. */
+export async function cupomPdvPdfHandler(req: Request, res: Response): Promise<void> {
+  const actor = currentUser(req);
+  checkAccess(getResource('vendas')!, actor, 'read');
+  const escopo = escopoDe(actor);
+  const vendaId = parseId(req.params.id);
+  const doc = await construirCupomPdvPrintIR(vendaId, escopo);
+  await renderPrintIrPdf(
+    {
+      version: PRINT_IR_VERSION,
+      jobId: randomUUID(),
+      tenantId: String(escopo.empresaId),
+      companyId: String(escopo.empresaId),
+      requestedBy: { userId: actor.id || null, userName: actor.name },
+      source: 'pdv',
+      docType: 'recibo_pdv',
+      related: doc.related,
+      copies: 1,
+      priority: 0,
+      content: doc.blocks,
+      metadata: doc.metadata,
+      idempotencyKey: `fallback:pdv:venda:${vendaId}`,
+      createdAt: new Date().toISOString(),
+    },
+    res,
+    `cupom-pdv-${vendaId}.pdf`
+  );
 }

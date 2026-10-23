@@ -8,6 +8,7 @@
 // ============================================================
 import { randomBytes } from 'node:crypto';
 import type { Request } from 'express';
+import { limparFilaImpressaoPeriodica } from './printJobs';
 import { getStore } from './services';
 import type { Sessao } from './store';
 
@@ -68,4 +69,5 @@ export async function limpezaPeriodica(): Promise<void> {
   const store = getStore();
   await store.limparSessoesEncerradas();
   await store.limparRateLimitsAntigos();
+  await limparFilaImpressaoPeriodica();
 }

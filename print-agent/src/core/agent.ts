@@ -1,7 +1,6 @@
 // ============================================================================
 // Núcleo do agente: sobe a API local (127.0.0.1), mantém heartbeat e o loop
-// de polling da fila. Tudo sequencial e tolerante a queda: ERP fora do ar
-// vira backoff, nunca crash nem impressão duplicada.
+// de polling da fila com os renderers completos (text, escpos, zpl, epl2).
 // ============================================================================
 import { hostname } from 'node:os';
 import type { Server } from 'node:http';
@@ -9,16 +8,29 @@ import { loadToken, saveConfig, saveToken, type AgentConfig } from '../config/co
 import { ErpClient } from '../transport/erpClient.js';
 import { criarLocalServer, ouvirLoopback } from '../transport/localServer.js';
 import { JobRunner } from '../queue/jobRunner.js';
-import { DryRunPrinter, UnsupportedPrinter, journalEm, type Printer } from '../printer/printer.js';
+import { DryRunPrinter, SystemPrinter, journalEm, type Printer } from '../printer/printer.js';
 import { RendererRegistry, TextRenderer } from '../renderer/renderer.js';
+import { EscPosRenderer } from '../renderer/escposRenderer.js';
+import { ZplRenderer } from '../renderer/zplRenderer.js';
+import { Epl2Renderer } from '../renderer/epl2Renderer.js';
 import { Backoff, dormir } from './backoff.js';
 import type { Logger } from '../logging/logger.js';
 
-export const AGENT_VERSION = '0.1.0';
+export const AGENT_VERSION = '0.2.0';
+
+export function criarRegistryPadrao(): RendererRegistry {
+  const registry = new RendererRegistry();
+  registry.register('text', new TextRenderer());
+  registry.register('escpos', new EscPosRenderer());
+  registry.register('zpl', new ZplRenderer());
+  registry.register('epl2', new Epl2Renderer());
+  return registry;
+}
 
 export class PrintAgent {
   private client: ErpClient;
   private printer: Printer;
+  private registry: RendererRegistry;
   private runner: JobRunner;
   private server: Server | null = null;
   private rodando = false;
@@ -27,10 +39,9 @@ export class PrintAgent {
   constructor(private cfg: AgentConfig, private log: Logger) {
     const token = loadToken(cfg);
     this.client = new ErpClient(cfg.erpUrl, cfg.machineId && token ? { machineId: cfg.machineId, token } : null, fetch, AGENT_VERSION);
-    this.printer = cfg.dryRun ? new DryRunPrinter(`${cfg.dir}/outbox`) : new UnsupportedPrinter();
-    const registry = new RendererRegistry();
-    registry.register('text', new TextRenderer());
-    this.runner = new JobRunner(this.client, registry, this.printer, journalEm(cfg.dir), log);
+    this.printer = cfg.dryRun ? new DryRunPrinter(`${cfg.dir}/outbox`) : new SystemPrinter(cfg.printerDefault);
+    this.registry = criarRegistryPadrao();
+    this.runner = new JobRunner(this.client, this.registry, this.printer, journalEm(cfg.dir), log);
   }
 
   async parear(codigo: string): Promise<void> {
@@ -51,10 +62,12 @@ export class PrintAgent {
     this.server = criarLocalServer({
       version: AGENT_VERSION,
       erpOrigin: this.cfg.erpOrigin,
-      status: () => ({
+      status: async () => ({
         pareado: this.client.pareado,
         machineId: this.cfg.machineId,
-        printers: this.cfg.dryRun ? ['dry-run (arquivo)'] : [],
+        terminal: this.cfg.terminal,
+        printers: await this.printer.printers(),
+        protocols: this.registry.familias(),
       }),
       pair: async (codigo) => {
         await this.parear(codigo);
