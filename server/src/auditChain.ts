@@ -47,7 +47,21 @@ export function normalizarPayloadAuditoria(v: unknown): unknown {
   return v;
 }
 
-/** JSON canônico (chaves ordenadas) — estável entre Postgres (JSONB) e memória. */
+/**
+ * JSON canônico (chaves ordenadas) — estável entre Postgres (JSONB) e memória.
+ *
+ * INVARIANTE: `jsonCanônico(x)` precisa ser igual a
+ * `jsonCanônico(JSON.parse(JSON.stringify(x)))`. A assinatura é calculada sobre
+ * o objeto em memória, mas o que fica gravado é o JSON serializado; se os dois
+ * divergirem, a cadeia "quebra" na releitura sem que ninguém tenha adulterado
+ * nada.
+ *
+ * `JSON.stringify` DESCARTA chaves de valor `undefined` dentro de objetos —
+ * então o canônico também precisa descartá-las. Antes, `{reprint_of: undefined}`
+ * era assinado como `{"reprint_of":null}` e persistido como `{}`, o que fazia a
+ * verificação acusar quebra nos eventos que montam o payload com `?? undefined`
+ * (ex.: `reprint_of` e `recuperado_de_lease` em printJobs.ts).
+ */
 export function jsonCanônico(v: unknown): string {
   if (v === null || v === undefined) return 'null';
   // Rede de segurança: se um Date chegar aqui sem passar por
@@ -61,9 +75,12 @@ export function jsonCanônico(v: unknown): string {
     return JSON.stringify(iso);
   }
   if (typeof v !== 'object') return JSON.stringify(v);
+  // Array: `JSON.stringify` converte `undefined` em `null` (não descarta), e é
+  // isso que o canônico faz — `jsonCanônico(undefined)` já devolve 'null'.
   if (Array.isArray(v)) return '[' + v.map(jsonCanônico).join(',') + ']';
   const obj = v as Record<string, unknown>;
   return '{' + Object.keys(obj)
+    .filter((k) => obj[k] !== undefined)
     .sort()
     .map((k) => JSON.stringify(k) + ':' + jsonCanônico(obj[k]))
     .join(',') + '}';

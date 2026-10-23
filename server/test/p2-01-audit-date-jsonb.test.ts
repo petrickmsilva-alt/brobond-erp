@@ -315,3 +315,75 @@ test('Q: eventos concorrentes com Date continuam formando uma cadeia única e í
   assert.equal(verificado.ok, true, 'a cadeia permanece íntegra após gravações concorrentes');
   assert.equal(verificado.total - antes, 25, 'nenhum evento se perdeu');
 });
+
+// ---------------------------------------------------------------------------
+// R — chaves `undefined`: a assinatura precisa sobreviver ao round-trip JSON
+//
+// Achado (gate testes-postgres do CI): eventos que montam o payload com
+// `campo: x ?? undefined` (ex.: `reprint_of` e `recuperado_de_lease` em
+// printJobs.ts) quebravam a cadeia ao serem lidos do JSONB. `jsonCanônico`
+// assinava `{"reprint_of":null}`, mas `JSON.stringify` DESCARTA a chave
+// `undefined` na persistência — a releitura assinava `{}` e acusava quebra sem
+// adulteração alguma. A regra agora é a mesma dos dois lados: chave `undefined`
+// não existe no objeto.
+// ---------------------------------------------------------------------------
+
+test('R: invariante — jsonCanônico(x) === jsonCanônico(JSON.parse(JSON.stringify(x))) com chaves undefined', () => {
+  const casos: Array<[string, unknown]> = [
+    ['undefined de primeiro nível', { evento: 'print.job.created', reprint_of: undefined }],
+    ['undefined aninhado', { a: { b: undefined, c: 1 } }],
+    ['undefined em array vira null', { lista: [undefined, 1, undefined] }],
+    ['mix de null e undefined', { n: null, u: undefined, z: 0 }],
+    ['undefined sob chave que também existe como null', { reprint_of: null }],
+    ['objeto profundamente aninhado', { x: { y: { z: undefined, w: [1, { k: undefined }] } } }],
+  ];
+  for (const [nome, valor] of casos) {
+    assert.equal(
+      jsonCanônico(valor),
+      jsonCanônico(comoJsonb(valor)),
+      `a assinatura divergiu do que a releitura vê: ${nome}`
+    );
+  }
+});
+
+test('R: chave undefined é descartada; null é preservado; array preserva a posição', () => {
+  assert.equal(jsonCanônico({ a: 1, b: undefined }), '{"a":1}');
+  assert.equal(jsonCanônico({ a: 1, b: null }), '{"a":1,"b":null}');
+  assert.equal(jsonCanônico({ lista: [1, undefined, 3] }), '{"lista":[1,null,3]}');
+  assert.equal(jsonCanônico({ lista: [1, null, 3] }), '{"lista":[1,null,3]}', 'array: undefined e null coincidem, como no JSON');
+  assert.equal(jsonCanônico(undefined), 'null');
+  assert.equal(jsonCanônico({}), '{}');
+});
+
+test('R: evento de auditoria com chave undefined mantém a cadeia íntegra na releitura', async () => {
+  const antes = (await store.verificarAuditoria()).total;
+  // O payload é exatamente o que printJobs monta: `reprint_of` ausente vira
+  // `undefined` e o hash precisa continuar válido depois do round-trip JSONB.
+  await evento({ evento: 'print.job.created', status: 'QUEUED', doc_type: 'teste', reprint_of: undefined });
+  await evento({ evento: 'print.job.claimed', status: 'CLAIMED', tentativa: 1, recuperado_de_lease: undefined });
+
+  const linha = await ultimoEvento();
+  // A chave `undefined` não entra na assinatura: assinar com ou sem ela é o
+  // mesmo, e é isso que faz a releitura (após o JSONB, onde a chave some)
+  // reproduzir o hash gravado.
+  assert.equal(
+    hashCadeiaAuditoria(linha.hash_anterior, { ...linha, dados: { ...linha.dados, reprint_of: undefined } }),
+    linha.hash,
+    'a chave undefined não pode alterar a assinatura'
+  );
+
+  const verificado = await store.verificarAuditoria();
+  assert.equal(verificado.ok, true, `a cadeia ficou íntegra; quebras=${JSON.stringify(verificado.quebras)}`);
+  assert.equal(verificado.total - antes, 2);
+});
+
+test('R: a assinatura gravada é a mesma que a releitura calcula (round-trip explícito)', async () => {
+  await evento({ evento: 'print.job.created', reprint_of: undefined, doc_type: 'teste' });
+  const linha = await ultimoEvento();
+  const relido = comoJsonb(linha.dados);
+  assert.equal(
+    hashCadeiaAuditoria(linha.hash_anterior, { ...linha, dados: relido }),
+    linha.hash,
+    'o hash gravado precisa ser reproduzível a partir do payload já serializado'
+  );
+});

@@ -77,8 +77,8 @@ test('Smart Product Search: ranking, atributos, variantes, estoque e tenant A/B 
     }))!;
   }
 
-  const filhoG = await variante('G', Number(tamG.id), '7895550001112');
-  await variante('GG', Number(tamGG.id), '7895550002229');
+  const filhoG = await variante('G', Number(tamG.id), '7895550001118');
+  await variante('GG', Number(tamGG.id), '7895550002221');
   const store = getStore();
   await store.adjustStock(Number(pai.id), Number(tamG.id), String(localA.nome), 5, undefined, Number(localA.id), aId);
   await store.adjustStock(Number(pai.id), Number(tamGG.id), String(localA.nome), 7, undefined, Number(localA.id), aId);
@@ -87,7 +87,7 @@ test('Smart Product Search: ranking, atributos, variantes, estoque e tenant A/B 
   const outro = await createRecord(R.produtos, {
     sku: skuPai,
     nome: `Camiseta Premium ${sufixo}`,
-    codigo_barras: '7895550009999',
+    codigo_barras: '7895550009992',
     preco_venda: 20,
     ativo: true,
   }, atorB as any);
