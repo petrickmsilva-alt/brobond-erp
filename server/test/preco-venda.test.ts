@@ -307,3 +307,183 @@ test('item da venda: desconto de linha isolado não zera o resumo (regressão "D
   assert.notEqual(r.descontoLinhas, 0);
   assert.equal(r.descontoLinhas, 18);
 });
+
+// ---------------------------------------------------------------------------
+// SNAPSHOT HISTÓRICO — a venda não pode ser reescrita pela tabela de hoje
+// ---------------------------------------------------------------------------
+
+test('snapshot: alterar a tabela do produto depois NÃO reescreve a venda existente', async () => {
+  const v = await novaVenda();
+  const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
+  assert.equal(Number(item.preco_tabela), 90);
+
+  // A precificação muda DEPOIS da venda (ficha do produto vai para 120).
+  await getStore().update(RESOURCES.produtos, Number(produto90.id), { preco_venda: 120 });
+  try {
+    const relido = (await itensDaVenda(Number(v.id)))[0];
+    assert.equal(Number(relido.preco_tabela), 90, 'o snapshot da venda continua 90');
+    assert.equal(Number(relido.subtotal), 72, 'o valor praticado não muda');
+    const venda = await getRecord(RESOURCES.vendas, Number(v.id), gerente);
+    assert.equal(Number(venda.total), 72, 'o total da venda não muda');
+  } finally {
+    await getStore().update(RESOURCES.produtos, Number(produto90.id), { preco_venda: 90 });
+  }
+});
+
+test('snapshot: editar uma linha SEM snapshot (escritor secundário) preserva a referência histórica', async () => {
+  // Espelha o que a loja, o catálogo público, o marketplace e a recompra do
+  // portal gravam: preço PRATICADO em `preco_unitario`, sem `preco_tabela`.
+  const v = await novaVenda();
+  const item = await getStore().insert(RESOURCES.itens_venda, {
+    empresa_id: 1,
+    venda_id: Number(v.id),
+    produto_id: Number(produto90.id),
+    tamanho_id: Number(tamanho.id),
+    quantidade: 1,
+    preco_unitario: 90,
+    desconto_pct: 0,
+    subtotal: 90,
+    preco_tabela: null,
+  });
+
+  // A tabela do produto sobe DEPOIS da venda existir.
+  await getStore().update(RESOURCES.produtos, Number(produto90.id), { preco_venda: 120 });
+  try {
+    // O operador altera APENAS a quantidade — nenhum campo de preço no corpo.
+    const editado = await editarItem(Number(v.id), Number(item.id), { quantidade: 3 });
+    assert.equal(Number(editado.preco_tabela), 90, 'a referência é o preço já praticado, não a tabela de hoje');
+    assert.equal(Number(editado.preco_unitario), 90);
+    assert.equal(Number(editado.desconto_pct), 0, 'não inventa desconto que nunca foi concedido');
+    assert.equal(Number(editado.subtotal), 270, '3 × 90');
+  } finally {
+    await getStore().update(RESOURCES.produtos, Number(produto90.id), { preco_venda: 90 });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// CONTRATO HTTP REAL — o servidor é a autoridade sobre o corpo enviado
+// ---------------------------------------------------------------------------
+
+test('contrato HTTP: o cliente não forja preco_tabela nem lista_preco_id; valores inválidos são recusados', async () => {
+  const express = (await import('express')).default;
+  const request = (await import('supertest')).default;
+  const { createItem: criar, updateItem: atualizar } = await import('../src/itens');
+
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    (req as any).user = gerente;
+    next();
+  });
+  const wrap = (fn: any) => (req: any, res: any, next: any) => Promise.resolve(fn(req, res)).catch(next);
+  app.post('/api/vendas/:id/itens', wrap(criar));
+  app.put('/api/vendas/:id/itens/:itemId', wrap(atualizar));
+  app.use((err: any, _req: any, res: any, _next: any) => res.status(err?.status || 500).json({ error: err?.message, fields: err?.fields }));
+
+  const v = await novaVenda();
+  const criado = await request(app)
+    .post(`/api/vendas/${v.id}/itens`)
+    .send({ produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20, preco_tabela: 9999, lista_preco_id: 4242 })
+    .expect(201);
+  assert.equal(Number(criado.body.preco_tabela), 90, 'o preco_tabela forjado no corpo é ignorado');
+  assert.equal(Number(criado.body.lista_preco_id ?? 0) !== 4242, true, 'a lista de preço forjada é ignorada');
+  assert.equal(Number(criado.body.subtotal), 72, 'o subtotal é recalculado pelo servidor');
+
+  const forjado = await request(app)
+    .put(`/api/vendas/${v.id}/itens/${criado.body.id}`)
+    .send({ preco_tabela: 9999, quantidade: 2 })
+    .expect(200);
+  assert.equal(Number(forjado.body.preco_tabela), 90, 'PUT forjando a tabela mantém a referência real');
+  assert.equal(Number(forjado.body.subtotal), 144, '2 × 72');
+
+  await request(app)
+    .post(`/api/vendas/${v.id}/itens`)
+    .send({ produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 150 })
+    .expect(400);
+  await request(app)
+    .post(`/api/vendas/${v.id}/itens`)
+    .send({ produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: -5 })
+    .expect(400);
+  await request(app)
+    .post(`/api/vendas/${v.id}/itens`)
+    .send({ produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 0, preco_unitario: 90 })
+    .expect(400);
+});
+
+test('contrato HTTP: edição repetida de preço não acumula erro de arredondamento', async () => {
+  const express = (await import('express')).default;
+  const request = (await import('supertest')).default;
+  const { createItem: criar, updateItem: atualizar } = await import('../src/itens');
+
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    (req as any).user = gerente;
+    next();
+  });
+  const wrap = (fn: any) => (req: any, res: any, next: any) => Promise.resolve(fn(req, res)).catch(next);
+  app.post('/api/vendas/:id/itens', wrap(criar));
+  app.put('/api/vendas/:id/itens/:itemId', wrap(atualizar));
+  app.use((err: any, _req: any, res: any, _next: any) => res.status(err?.status || 500).json({ error: err?.message, fields: err?.fields }));
+
+  const v = await novaVenda();
+  const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
+
+  // 90 → 20% → 68 → 75 → 10% → desconto R$ 15 → volta para 90.
+  const roteiro: Array<Record<string, unknown>> = [
+    { desconto_pct: 20 },
+    { preco_unitario: 68 },
+    { preco_unitario: 75 },
+    { desconto_pct: 10 },
+    { desconto_pct: pctDeDescontoUnitario(90, 15) },
+    { desconto_pct: 0 },
+  ];
+  for (const passo of roteiro) {
+    const r = await request(app)
+      .put(`/api/vendas/${v.id}/itens/${item.id}`)
+      .send({ produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, ...passo })
+      .expect(200);
+    const linha = linhaDePreco(1, Number(r.body.preco_tabela), Number(r.body.desconto_pct));
+    assert.equal(
+      linha.descontoUnitario + linha.precoVenda,
+      Number(r.body.preco_tabela),
+      `não fechou no centavo no passo ${JSON.stringify(passo)}`
+    );
+    assert.equal(Number(r.body.subtotal), linha.subtotal, `subtotal divergente no passo ${JSON.stringify(passo)}`);
+    assert.equal(Number(r.body.preco_tabela), 90, 'a tabela é imutável na linha');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// CONSUMIDORES EXISTENTES — leem a mesma semântica, sem quebrar
+// ---------------------------------------------------------------------------
+
+test('consumidores: fiscal, PDF, NFe e financeiro reconciliam com o desconto das linhas', async () => {
+  const v = await novaVenda();
+  await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 2, preco_unitario: 90, desconto_pct: 20 });
+  const itens = await itensDaVenda(Number(v.id));
+  const it = itens[0];
+
+  // Os consumidores derivam o desconto de `preco_unitario × quantidade − subtotal`
+  // (negócios/BI) ou exibem `preco_unitario` como valor unitário (PDF/NFe). Ambos
+  // continuam corretos com `preco_unitario` = preço de TABELA.
+  const unitarioCents = Math.round(Number(it.preco_unitario) * 100);
+  const descontoCents = Math.max(Math.round((Number(it.preco_unitario) * Number(it.quantidade) - Number(it.subtotal)) * 100), 0);
+  assert.equal(unitarioCents, 9000, 'valor unitário da NFe = preço de tabela');
+  assert.equal(descontoCents, 3600, 'desconto de R$ 36,00 em 2 peças (2 × R$ 18,00)');
+  assert.equal(Number(it.subtotal), 144);
+
+  // O total da venda (autoridade) fecha: bruto − desconto das linhas.
+  const venda = await getRecord(RESOURCES.vendas, Number(v.id), gerente);
+  assert.equal(Number(venda.total), 144);
+  assert.equal(Number(venda.total) + descontoCents / 100, Number(it.preco_unitario) * Number(it.quantidade));
+});
+
+test('regressão do fluxo normal: venda com frete e desconto de cabeçalho fecha o total', async () => {
+  const v = await novaVenda({ desconto: 10, frete: 25 });
+  await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
+  await addItem(Number(v.id), { produto_id: Number(produto80.id), tamanho_id: Number(tamanho.id), quantidade: 2, preco_unitario: 80, desconto_pct: 20 });
+  // Líquido 72 + 128 = 200; − 10 do cabeçalho; + 25 de frete = 215.
+  const venda = await getRecord(RESOURCES.vendas, Number(v.id), gerente);
+  assert.equal(Number(venda.total), 215);
+});

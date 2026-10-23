@@ -174,7 +174,7 @@ export async function updateItem(req: Request, res: Response) {
       delete data.lista_preco_id;
       if (tipo === 'venda') {
         const merged: Row = { ...before, ...data };
-        await precificarItemVenda(merged, escopo, tx, informadoNoCorpo(req.body, 'update'));
+        await precificarItemVenda(merged, escopo, tx, informadoNoCorpo(req.body, 'update'), before);
         data.preco_unitario = merged.preco_unitario;
         data.desconto_pct = merged.desconto_pct;
         data.subtotal = merged.subtotal;
@@ -278,19 +278,31 @@ async function precificarItemVenda(
   payload: Row,
   escopo: EscopoEmpresa,
   tx: Tx | undefined,
-  informado: { descontoPct: boolean; preco: boolean }
+  informado: { descontoPct: boolean; preco: boolean },
+  anterior?: Row | null
 ): Promise<void> {
   const s = getStore();
   const produtoId = Number(payload.produto_id);
   let tabela: number | null = null;
   let listaId: number | null = null;
   // Numa edição, o SNAPSHOT já gravado é a referência desta venda: ele não pode
-  // ser reescrito por uma mudança posterior na tabela de preços. Só resolvemos
-  // a precificação quando ainda não existe snapshot (linha nova ou legada).
+  // ser reescrito por uma mudança posterior na tabela de preços.
   const snapshot = payload.preco_tabela;
-  if (snapshot !== undefined && snapshot !== null && Number.isFinite(Number(snapshot))) {
+  const temSnapshot = snapshot !== undefined && snapshot !== null && Number.isFinite(Number(snapshot));
+  // Linha legada/de escritor secundário (loja, catálogo, marketplace, portal):
+  // existe com o preço PRATICADO e sem snapshot. A referência histórica dela é o
+  // próprio preço gravado — NUNCA a tabela vigente hoje, que não existia na
+  // venda. Sem isso, editar só a quantidade reprecificaria a linha pela tabela
+  // atual e o resumo passaria a exibir um desconto que nunca foi concedido.
+  const baseAnterior = anterior && anterior.preco_unitario !== undefined && anterior.preco_unitario !== null
+    ? round2(Math.max(0, Number(anterior.preco_unitario) || 0))
+    : null;
+  if (temSnapshot) {
     tabela = round2(Math.max(0, Number(snapshot)));
     listaId = payload.lista_preco_id !== undefined && payload.lista_preco_id !== null ? Number(payload.lista_preco_id) : null;
+  } else if (baseAnterior !== null) {
+    tabela = baseAnterior;
+    listaId = anterior?.lista_preco_id !== undefined && anterior?.lista_preco_id !== null ? Number(anterior.lista_preco_id) : null;
   } else {
     const produto = Number.isInteger(produtoId)
       ? await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId }, tx)
