@@ -106,6 +106,7 @@ import { runScheduled, cronScheduled, scheduledStatus } from './scheduled';
 import { listQualidade, createQualidade, relatorioQualidade } from './quality';
 import { predicaoDemanda, predicaoInsumos } from './prediction';
 import { rateLimitPortal, administrarAcessosPortal, decidirCotacao, gerarAcessoPortal, portalPedidos, portalPedidoDetalhe, recomprarPedido, revogarAcessoPortal } from './portal';
+import { clientePorDocumentoHandler } from './clientes';
 import { notificacoesStatus, verificarAlertasEstoque } from './notifications';
 import { openapiJSON, openapiUI } from './openapi';
 import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat';
@@ -587,6 +588,12 @@ app.get('/api/compras/:id/pdf', wrap(compraPDF));
 app.get('/api/clientes/:id/portal-acessos', wrap(administrarAcessosPortal));
 app.post('/api/clientes/:id/portal-acessos', wrap(gerarAcessoPortal));
 app.post('/api/clientes/:id/portal-acessos/:acessoId/revogar', wrap(revogarAcessoPortal));
+
+// Duplicidade de CPF/CNPJ no cadastro de clientes — consulta recortada pela
+// empresa ativa do ator. ANTES do CRUD genérico: /api/:resource/:id trataria
+// "por-documento" como um id. O front usa para avisar "já existe um cliente
+// com este CPF" e oferecer [Abrir cliente] antes mesmo de salvar.
+app.get('/api/clientes/por-documento', wrap(clientePorDocumentoHandler));
 
 // Inteligência comercial e gestão de compartilhamentos (antes do CRUD genérico)
 app.get('/api/catalogos/inteligencia', wrap(inteligenciaCatalogos));

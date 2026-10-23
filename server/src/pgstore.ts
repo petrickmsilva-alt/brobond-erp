@@ -119,6 +119,10 @@ export function translatePgError(e: any, r?: Resource): HttpError | null {
     case '23505': {
       // unique_violation — descobre o campo pelo nome do constraint / detail
       const constraint = String(e.constraint || e.detail || '');
+      if (r?.key === 'clientes' && /clientes_documento/i.test(constraint)) {
+        // Índice parcial uq_clientes_documento_empresa (documento único por empresa).
+        return new HttpError(409, 'Já existe um cliente cadastrado com este CPF ou CNPJ.', { cnpj_cpf: 'Já cadastrado' }, 'cliente_duplicado');
+      }
       const field = r?.fields.find((f) => (f.unique || f.uniqueEmpresa) && constraint.includes(f.name));
       if (r?.key === 'estoques' && /estoques/i.test(constraint)) {
         return new HttpError(409, 'Já existe saldo para este produto, tamanho e local. Edite o registro existente ou lance uma movimentação.');

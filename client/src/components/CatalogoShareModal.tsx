@@ -74,7 +74,10 @@ export default function CatalogoShareModal({ catalogo, onClose }: { catalogo: Re
     const d = await preparar('whatsapp');
     if (!d) return;
     const telefone = cliente?.telefone || destinatario;
-    const destino = soDigitos(telefone || '');
+    // O ERP guarda o telefone normalizado como DDD+número (sem máscara). O
+    // wa.me exige o número COM o DDI — 55 + DDD + número para o Brasil.
+    let destino = soDigitos(telefone || '');
+    if (destino.length === 10 || destino.length === 11) destino = `55${destino}`;
     window.open(`https://wa.me/${destino}?text=${encodeURIComponent(textoFinal(d.url))}`, '_blank', 'noopener,noreferrer');
   }
 
