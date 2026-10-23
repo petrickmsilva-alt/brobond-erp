@@ -82,6 +82,12 @@ export type Field = {
    * aceita CPF ou CNPJ. Em qualquer caso o dígito verificador É conferido.
    */
   documento?: 'cpf' | 'cnpj' | 'ambos';
+  /**
+   * Campo GTIN/EAN (código de barras de fábrica): além do `pattern`, o
+   * DÍGITO VERIFICADOR GS1 é conferido (server/src/ean.ts). Só para campos
+   * que são GTIN por definição — SKU interno nunca recebe esta flag.
+   */
+  gtin?: boolean;
 };
 
 export type ResourceOps = { create: boolean; update: boolean; delete: boolean };
@@ -424,6 +430,7 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'importar', label: 'Importação', tone: 'blue' },
           { value: 'ajuste', label: 'Ajuste de estoque', tone: 'amber' },
           { value: 'estornar', label: 'Estorno', tone: 'amber' },
+          { value: 'imprimir', label: 'Impressão', tone: 'blue' },
         ],
       },
       { name: 'recurso', label: 'Módulo', type: 'text', readonly: true, search: true },
@@ -992,7 +999,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'atacado_min_qtd', label: 'Qtd. mínima atacado', type: 'integer', min: 0, default: 0, list: false, section: 'Varejo e atacado', hint: 'Quantidade mínima para aplicar o preço de atacado.' },
       { name: 'exibir_site', label: 'Exibir no catálogo/site', type: 'boolean', default: false, list: false, section: 'Varejo e atacado', hint: 'Produto disponível para catálogos públicos e pedidos pelo site.' },
       { name: 'destaque', label: 'Destaque no catálogo', type: 'boolean', default: false, list: false, section: 'Varejo e atacado' },
-      { name: 'codigo_barras', label: 'Código de barras (EAN)', type: 'text', uniqueEmpresa: true, search: true, maxLength: 14, list: false, placeholder: '7891234567890', pattern: '^(\\d{8}|\\d{12,14})$', patternMessage: 'Informe 8, 12, 13 ou 14 dígitos', hint: '8, 12, 13 ou 14 dígitos. Usado nas etiquetas.', section: 'Identificação e catálogo' },
+      { name: 'codigo_barras', label: 'Código de barras (EAN)', type: 'text', uniqueEmpresa: true, search: true, maxLength: 14, list: false, placeholder: '7891234567895', gtin: true, pattern: '^(\\d{8}|\\d{12,14})$', patternMessage: 'Informe 8, 12, 13 ou 14 dígitos', hint: 'EAN-8, UPC-A, EAN-13 ou EAN-14 — o dígito verificador é conferido. Usado nas etiquetas.', section: 'Identificação e catálogo' },
       { name: 'composicao', label: 'Composição', type: 'text', maxLength: 120, list: false, placeholder: '100% algodão', section: 'Identificação e catálogo' },
       { name: 'descricao', label: 'Descrição comercial', type: 'textarea', maxLength: 2000, list: false, wide: true, hint: 'Texto usado no catálogo e nas propostas.', section: 'Identificação e catálogo' },
       { name: 'descricao_curta', label: 'Descrição curta', type: 'text', maxLength: 180, list: false, wide: true, section: 'Identificação e catálogo', hint: 'Uma linha — usada em listas, marketplaces e no PDV.' },
@@ -1067,7 +1074,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'cofins_aliquota', label: 'COFINS (%)', type: 'percent', min: 0, max: 100, list: false, section: 'Fiscal' },
       { name: 'ipi_cst', label: 'CST do IPI', type: 'text', maxLength: 3, list: false, section: 'Fiscal' },
       { name: 'ipi_aliquota', label: 'IPI (%)', type: 'percent', min: 0, max: 100, list: false, section: 'Fiscal' },
-      { name: 'gtin_tributario', label: 'GTIN tributário', type: 'text', maxLength: 14, list: false, section: 'Fiscal', pattern: '^(|\\d{8}|\\d{12,14})$', patternMessage: 'Informe 8, 12, 13 ou 14 dígitos', hint: 'Normalmente igual ao GTIN/EAN; difere em produtos vendidos por fração ou caixa.' },
+      { name: 'gtin_tributario', label: 'GTIN tributário', type: 'text', gtin: true, maxLength: 14, list: false, section: 'Fiscal', pattern: '^(|\\d{8}|\\d{12,14})$', patternMessage: 'Informe 8, 12, 13 ou 14 dígitos', hint: 'Normalmente igual ao GTIN/EAN; difere em produtos vendidos por fração ou caixa.' },
 
       // ---------------- Logística ----------------
       { name: 'peso_g', label: 'Peso (g) — legado', type: 'integer', min: 0, list: false, form: false, section: 'Logística' },
@@ -3315,6 +3322,140 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'observacoes', label: 'Observações', type: 'text', maxLength: 500, list: false },
       ...auditFields,
     ],
+  },
+
+  // ------------------------------------------------------------------
+  // IMPRESSÃO P0/P1 — fila persistente + agentes locais.
+  //
+  // Recursos INTERNOS de propósito: a fila tem máquina de estados própria
+  // (QUEUED→CLAIMED→PRINTING→PRINTED/FAILED/CANCELLED), lease e hashes de
+  // token — nada disso pode ser escrito pelo CRUD genérico. Toda leitura/
+  // escrita passa pelos handlers de printJobs.ts / printAgents.ts, que
+  // carimbam a empresa, validam o PrintIR e nunca devolvem os hashes.
+  // Ver docs/IMPRESSAO-P0-P1.md e db/migrations/0037_print_p0_p1.sql.
+  // ------------------------------------------------------------------
+  print_jobs: {
+    key: 'print_jobs',
+    empresa: true,
+    internal: true,
+    table: 'print_jobs',
+    label: 'Fila de impressão',
+    singular: 'Job de impressão',
+    labelFields: ['public_id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'public_id', label: 'ID público', type: 'text', readonly: true },
+      { name: 'ir_version', label: 'Versão do PrintIR', type: 'integer', readonly: true },
+      { name: 'doc_type', label: 'Tipo de documento', type: 'text', readonly: true },
+      { name: 'source', label: 'Origem', type: 'text', readonly: true },
+      { name: 'source_ref', label: 'Documento relacionado', type: 'text', readonly: true },
+      { name: 'terminal', label: 'Terminal', type: 'text', readonly: true },
+      { name: 'printer_name', label: 'Impressora', type: 'text', readonly: true },
+      { name: 'copies', label: 'Cópias', type: 'integer', readonly: true },
+      { name: 'priority', label: 'Prioridade', type: 'integer', readonly: true },
+      { name: 'status', label: 'Status', type: 'select', readonly: true, options: [
+        { value: 'QUEUED', label: 'Na fila', tone: 'slate' },
+        { value: 'CLAIMED', label: 'Reservado', tone: 'amber' },
+        { value: 'PRINTING', label: 'Imprimindo', tone: 'blue' },
+        { value: 'PRINTED', label: 'Impresso', tone: 'green' },
+        { value: 'FAILED', label: 'Falhou', tone: 'red' },
+        { value: 'CANCELLED', label: 'Cancelado', tone: 'red' },
+      ] },
+      { name: 'payload', label: 'Conteúdo (PrintIR)', type: 'json', readonly: true, list: false, form: false },
+      { name: 'metadata', label: 'Metadados', type: 'json', readonly: true, list: false, form: false },
+      { name: 'idempotency_key', label: 'Chave de idempotência', type: 'text', readonly: true },
+      { name: 'content_hash', label: 'Hash do conteúdo', type: 'text', readonly: true, list: false, form: false },
+      { name: 'attempts', label: 'Tentativas', type: 'integer', readonly: true },
+      { name: 'max_attempts', label: 'Máx. tentativas', type: 'integer', readonly: true },
+      { name: 'claimed_by_agent_id', label: 'Agente', type: 'ref', ref: 'print_agents', readonly: true },
+      { name: 'lease_token_hash', label: 'Hash do lease', type: 'text', readonly: true, list: false, form: false },
+      { name: 'lease_expires_at', label: 'Lease expira em', type: 'datetime', readonly: true },
+      { name: 'next_retry_at', label: 'Próxima tentativa em', type: 'datetime', readonly: true },
+      { name: 'last_error_code', label: 'Último erro (código)', type: 'text', readonly: true },
+      { name: 'last_error', label: 'Último erro', type: 'text', readonly: true },
+      { name: 'permanent_error', label: 'Erro permanente', type: 'boolean', readonly: true },
+      { name: 'reprint_of', label: 'Reimpressão de', type: 'text', readonly: true },
+      { name: 'requested_by', label: 'Solicitado por', type: 'ref', ref: 'usuarios', readonly: true },
+      { name: 'claimed_at', label: 'Reservado em', type: 'datetime', readonly: true },
+      { name: 'printing_at', label: 'Imprimindo em', type: 'datetime', readonly: true },
+      { name: 'printed_at', label: 'Impresso em', type: 'datetime', readonly: true },
+      { name: 'failed_at', label: 'Falhou em', type: 'datetime', readonly: true },
+      { name: 'cancelled_at', label: 'Cancelado em', type: 'datetime', readonly: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+  },
+
+  print_agents: {
+    key: 'print_agents',
+    empresa: true,
+    internal: true,
+    table: 'print_agents',
+    label: 'Agentes de impressão',
+    singular: 'Agente de impressão',
+    labelFields: ['nome'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'machine_id', label: 'Machine ID', type: 'text', readonly: true },
+      { name: 'nome', label: 'Nome', type: 'text', readonly: true },
+      { name: 'terminal', label: 'Terminal', type: 'text', readonly: true },
+      { name: 'token_hash', label: 'Hash do token', type: 'text', readonly: true, list: false, form: false },
+      { name: 'token_prefix', label: 'Token', type: 'text', readonly: true },
+      { name: 'status', label: 'Status', type: 'select', readonly: true, options: [
+        { value: 'ativo', label: 'Ativo', tone: 'green' },
+        { value: 'revogado', label: 'Revogado', tone: 'red' },
+      ] },
+      { name: 'agent_version', label: 'Versão do agente', type: 'text', readonly: true },
+      { name: 'platform', label: 'Plataforma', type: 'text', readonly: true },
+      { name: 'printers', label: 'Impressoras', type: 'json', readonly: true, list: false, form: false },
+      { name: 'last_heartbeat_at', label: 'Último heartbeat', type: 'datetime', readonly: true },
+      { name: 'last_ip', label: 'Último IP', type: 'text', readonly: true },
+      { name: 'paired_by', label: 'Pareado por', type: 'ref', ref: 'usuarios', readonly: true },
+      { name: 'revoked_at', label: 'Revogado em', type: 'datetime', readonly: true },
+      { name: 'revoked_by', label: 'Revogado por', type: 'ref', ref: 'usuarios', readonly: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+  },
+
+  print_pairing_codes: {
+    key: 'print_pairing_codes',
+    empresa: true,
+    internal: true,
+    table: 'print_pairing_codes',
+    label: 'Códigos de pareamento',
+    singular: 'Código de pareamento',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'code_hash', label: 'Hash do código', type: 'text', readonly: true, list: false, form: false },
+      { name: 'terminal', label: 'Terminal', type: 'text', readonly: true },
+      { name: 'nome_sugerido', label: 'Nome sugerido', type: 'text', readonly: true },
+      { name: 'expires_at', label: 'Expira em', type: 'datetime', readonly: true },
+      { name: 'used_at', label: 'Usado em', type: 'datetime', readonly: true },
+      { name: 'used_by_agent_id', label: 'Agente criado', type: 'ref', ref: 'print_agents', readonly: true },
+      { name: 'tentativas', label: 'Tentativas', type: 'integer', readonly: true },
+      { name: 'criado_por', label: 'Criado por', type: 'ref', ref: 'usuarios', readonly: true },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+  },
+
+  print_agent_nonces: {
+    key: 'print_agent_nonces',
+    empresa: true,
+    internal: true,
+    table: 'print_agent_nonces',
+    label: 'Nonces de agentes',
+    singular: 'Nonce',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    fields: [
+      { name: 'agent_id', label: 'Agente', type: 'ref', ref: 'print_agents', readonly: true },
+      { name: 'nonce', label: 'Nonce', type: 'text', readonly: true },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
   },
 };
 

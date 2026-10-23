@@ -159,6 +159,29 @@ import {
   venderPdv,
 } from './pdv';
 import {
+  cancelarJobHandler,
+  criarJobHandler,
+  detalheJobHandler,
+  listarJobsHandler,
+  reimprimirJobHandler,
+  retryJobHandler,
+} from './printJobs';
+import {
+  autenticarAgente,
+  claimHandler as printClaimHandler,
+  criarCodigoPareamentoHandler,
+  exigirNonceAgente,
+  failHandler as printFailHandler,
+  heartbeatHandler as printHeartbeatHandler,
+  leaseHandler as printLeaseHandler,
+  listarAgentesHandler,
+  parearAgenteHandler,
+  printedHandler as printPrintedHandler,
+  printingHandler as printPrintingHandler,
+  revogarAgenteHandler,
+  rotacionarTokenHandler as printRotacionarTokenHandler,
+} from './printAgents';
+import {
   atualizarStatusEnvio,
   buscarPorCodigo as buscarEnvioPorCodigo,
   cancelarEnvio,
@@ -258,7 +281,7 @@ app.use(
     origin: corsOrigin(),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
   })
 );
 // O cors() global roda depois do middleware público e recoloca
@@ -378,6 +401,24 @@ app.post('/api/portal/:token/pedido/:id/decisao', rateLimitPortal, wrap(decidirC
 app.post('/api/portal/:token/pedido/:id/recomprar', rateLimitPortal, wrap(recomprarPedido));
 // Imagens armazenadas no banco: URL pública protegida por token aleatório
 app.get('/api/files/:id/:token', wrap(serveFile));
+
+// ----------------------------------------------------------------------------
+// IMPRESSÃO P1 — rotas do AGENTE LOCAL (machine identity, sem JWT de usuário).
+//
+// Montadas de propósito ANTES do requireAuth: o agente não é um usuário e a
+// sessão do ERP nunca pode barrá-lo (mesmo racional dos webhooks públicos).
+// A autenticação aqui é a da máquina: pareamento por código temporário de
+// uso único; depois, Bearer de machine token revogável + nonce anti-replay
+// nas chamadas mutantes (printAgents.ts). O bloqueioDeProntidao (acima)
+// continua valendo: sem banco pronto, o agente recebe 503 e tenta de novo.
+// ----------------------------------------------------------------------------
+app.post('/api/print/agent/pair', wrap(parearAgenteHandler));
+app.post('/api/print/agent/heartbeat', autenticarAgente, exigirNonceAgente, wrap(printHeartbeatHandler));
+app.post('/api/print/agent/claim', autenticarAgente, exigirNonceAgente, wrap(printClaimHandler));
+app.post('/api/print/agent/jobs/:id/printing', autenticarAgente, exigirNonceAgente, wrap(printPrintingHandler));
+app.post('/api/print/agent/jobs/:id/printed', autenticarAgente, exigirNonceAgente, wrap(printPrintedHandler));
+app.post('/api/print/agent/jobs/:id/fail', autenticarAgente, exigirNonceAgente, wrap(printFailHandler));
+app.post('/api/print/agent/jobs/:id/lease', autenticarAgente, exigirNonceAgente, wrap(printLeaseHandler));
 
 // ----------------------------------------------------------------------------
 // Autenticado
@@ -704,6 +745,24 @@ app.post('/api/pdv/caixas/:id/fechar', wrap(fecharCaixa));
 app.get('/api/pdv/buscar', wrap(pdvBuscarProduto));
 app.post('/api/pdv/vendas', wrap(venderPdv));
 app.post('/api/pdv/vendas/:id/cancelar', wrap(cancelarVendaPdv));
+
+// ----------------------------------------------------------------------------
+// IMPRESSÃO P0/P1 — fila (lado do usuário) e gestão de agentes.
+// Enfileirar/listar/cancelar/retry/reimprimir: qualquer perfil autenticado,
+// com ownership (operador só vê os próprios jobs — printJobs.ts).
+// Parear/listar/revogar/rotacionar agentes: gerência (a machine identity
+// enxerga a fila inteira da empresa, então criá-la é ato administrativo).
+// ----------------------------------------------------------------------------
+app.post('/api/print/jobs', wrap(criarJobHandler));
+app.get('/api/print/jobs', wrap(listarJobsHandler));
+app.get('/api/print/jobs/:id', wrap(detalheJobHandler));
+app.post('/api/print/jobs/:id/cancelar', wrap(cancelarJobHandler));
+app.post('/api/print/jobs/:id/retry', wrap(retryJobHandler));
+app.post('/api/print/jobs/:id/reimprimir', wrap(reimprimirJobHandler));
+app.post('/api/print/pairing', requireRole('admin', 'gerente'), wrap(criarCodigoPareamentoHandler));
+app.get('/api/print/agents', requireRole('admin', 'gerente'), wrap(listarAgentesHandler));
+app.post('/api/print/agents/:id/revogar', requireRole('admin', 'gerente'), wrap(revogarAgenteHandler));
+app.post('/api/print/agents/:id/rotacionar-token', requireRole('admin', 'gerente'), wrap(printRotacionarTokenHandler));
 app.get('/api/pdv/vendas/:id/pagamentos', wrap(pagamentosVenda));
 
 // ---- Logística ----

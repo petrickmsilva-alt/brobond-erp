@@ -171,7 +171,7 @@ describe('criação', () => {
     renderPage();
     fireEvent.change(await screen.findByLabelText(/SKU \/ Referência/), { target: { value: ' cam-001 ' } });
     fireEvent.change(screen.getByLabelText(/^Nome/), { target: { value: 'Camiseta Polo' } });
-    fireEvent.change(screen.getByLabelText(/Código de barras/), { target: { value: '7891234567890' } });
+    fireEvent.change(screen.getByLabelText(/Código de barras/), { target: { value: '7891234567895' } });
     fireEvent.change(screen.getByLabelText(/Preço de venda/), { target: { value: '89,90' } });
 
     fireEvent.click(screen.getAllByRole('button', { name: /Salvar produto/i })[0]);
@@ -181,7 +181,7 @@ describe('criação', () => {
     expect(path).toBe('/produtos');
     expect(payload.sku).toBe('cam-001');
     expect(payload.nome).toBe('Camiseta Polo');
-    expect(payload.codigo_barras).toBe('7891234567890');
+    expect(payload.codigo_barras).toBe('7891234567895');
     expect(payload.preco_venda).toBe(89.9);
     expect(payload.formato).toBe('simples');
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/produtos'));
