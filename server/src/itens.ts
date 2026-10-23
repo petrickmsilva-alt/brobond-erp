@@ -30,6 +30,8 @@ import { attachImages } from './uploads';
 import { notificarVendaErpAlterada } from './eventosVenda';
 import { round2, round3 } from './utils';
 import { locaisDeSaida, saldoCelula } from './estoqueCanonico';
+import { precoDe } from './listasPreco';
+import { normalizarPct, pctDePrecoVenda } from './precoVenda';
 
 type TipoPedido = 'venda' | 'compra';
 
@@ -121,10 +123,9 @@ export async function createItem(req: Request, res: Response) {
       const payload: Row = { ...data, [cfg.parentCol]: id, empresa_id: escopo.empresaId };
       await validarReferenciasDaEmpresa(cfg.itens, payload, escopo, (r, rid, empresaId, t) => s.findOneWhere(r, { id: rid, empresa_id: empresaId }, t), tx);
       if (tipo === 'venda') {
-        const qtd = Number(payload.quantidade);
-        const preco = Number(payload.preco_unitario);
-        const pct = Number(payload.desconto_pct || 0);
-        payload.subtotal = round2(qtd * preco * (1 - pct / 100));
+        // Quem o operador alterou é lido do CORPO BRUTO: `validatePayload`
+        // aplica defaults (ex.: `desconto_pct: 0`) e apagaria essa informação.
+        await precificarItemVenda(payload, escopo, tx, informadoNoCorpo(req.body, 'create'));
       }
       const item = await s.insert(cfg.itens, payload, tx);
       await recalcularTotal(tipo, id, tx);
@@ -167,12 +168,18 @@ export async function updateItem(req: Request, res: Response) {
       if (!before) throw new HttpError(404, 'Item não encontrado neste pedido.');
       const data = validatePayload(cfg.itens, req.body, 'update');
       delete data.empresa_id;
+      // O preço de TABELA é referência do cadastro/precificação: o cliente não
+      // o envia nem o altera (é `readonly` no recurso). Ele é re-derivado aqui.
+      delete data.preco_tabela;
+      delete data.lista_preco_id;
       if (tipo === 'venda') {
-        const merged = { ...before, ...data };
-        const qtd = Number(merged.quantidade);
-        const preco = Number(merged.preco_unitario);
-        const pct = Number(merged.desconto_pct || 0);
-        data.subtotal = round2(qtd * preco * (1 - pct / 100));
+        const merged: Row = { ...before, ...data };
+        await precificarItemVenda(merged, escopo, tx, informadoNoCorpo(req.body, 'update'), before);
+        data.preco_unitario = merged.preco_unitario;
+        data.desconto_pct = merged.desconto_pct;
+        data.subtotal = merged.subtotal;
+        data.preco_tabela = merged.preco_tabela;
+        data.lista_preco_id = merged.lista_preco_id;
       }
       const item = await s.update(cfg.itens, itemId, data, tx);
       await recalcularTotal(tipo, id, tx);
@@ -238,6 +245,113 @@ export async function deleteItem(req: Request, res: Response) {
 /** "/api/vendas/12/itens" → 'venda'; "/api/compras/12/itens" → 'compra'. */
 function tipoFromPath(pathname: string): TipoPedido {
   return pathname.split('/').includes('vendas') ? 'venda' : 'compra';
+}
+
+/**
+ * Fecha a formação de preço de uma linha de VENDA (autoridade do servidor).
+ *
+ * O preço de TABELA vem da precificação (`precoDe`: lista vigente, senão a
+ * ficha do produto) e é gravado como SNAPSHOT na linha — mudar a tabela depois
+ * não reescreve a venda. O preço de VENDA é o valor efetivamente praticado e o
+ * desconto % é derivado dele em 2 casas, para que
+ * `tabela − desconto R$ = preço de venda` feche no centavo.
+ *
+ * PRECEDÊNCIA (o servidor sabe qual campo o operador alterou pelo que veio no
+ * corpo): `desconto_pct` informado manda; senão `preco_unitario` manda; senão a
+ * linha mantém o preço/desconto que já tinha. O `preco_tabela` e a
+ * `lista_preco_id` enviados pelo cliente são SEMPRE ignorados.
+ *
+ * Muta `payload` in-place.
+ */
+function informadoNoCorpo(body: unknown, modo: 'create' | 'update'): { descontoPct: boolean; preco: boolean } {
+  const b = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
+  const tem = (v: unknown) => v !== undefined && v !== null && !(typeof v === 'string' && v.trim() === '');
+  return {
+    descontoPct: tem(b.desconto_pct),
+    // No `create`, o preço unitário é obrigatório; sua presença indica a escolha
+    // do operador. No `update`, ele só conta se foi realmente enviado.
+    preco: tem(b.preco_unitario) || (modo === 'create' && !tem(b.desconto_pct)),
+  };
+}
+
+async function precificarItemVenda(
+  payload: Row,
+  escopo: EscopoEmpresa,
+  tx: Tx | undefined,
+  informado: { descontoPct: boolean; preco: boolean },
+  anterior?: Row | null
+): Promise<void> {
+  const s = getStore();
+  const produtoId = Number(payload.produto_id);
+  let tabela: number | null = null;
+  let listaId: number | null = null;
+  // Numa edição, o SNAPSHOT já gravado é a referência desta venda: ele não pode
+  // ser reescrito por uma mudança posterior na tabela de preços.
+  const snapshot = payload.preco_tabela;
+  const temSnapshot = snapshot !== undefined && snapshot !== null && Number.isFinite(Number(snapshot));
+  // Linha legada/de escritor secundário (loja, catálogo, marketplace, portal):
+  // existe com o preço PRATICADO e sem snapshot. A referência histórica dela é o
+  // próprio preço gravado — NUNCA a tabela vigente hoje, que não existia na
+  // venda. Sem isso, editar só a quantidade reprecificaria a linha pela tabela
+  // atual e o resumo passaria a exibir um desconto que nunca foi concedido.
+  const baseAnterior = anterior && anterior.preco_unitario !== undefined && anterior.preco_unitario !== null
+    ? round2(Math.max(0, Number(anterior.preco_unitario) || 0))
+    : null;
+  if (temSnapshot) {
+    tabela = round2(Math.max(0, Number(snapshot)));
+    listaId = payload.lista_preco_id !== undefined && payload.lista_preco_id !== null ? Number(payload.lista_preco_id) : null;
+  } else if (baseAnterior !== null) {
+    tabela = baseAnterior;
+    listaId = anterior?.lista_preco_id !== undefined && anterior?.lista_preco_id !== null ? Number(anterior.lista_preco_id) : null;
+  } else {
+    const produto = Number.isInteger(produtoId)
+      ? await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId }, tx)
+      : null;
+    if (produto) {
+      const resolvido = await precoDe(produto, escopo, tx);
+      tabela = round2(Math.max(0, Number(resolvido.preco)));
+      listaId = resolvido.lista_id;
+    }
+  }
+
+  const qtd = Number(payload.quantidade) || 0;
+  // `preco_unitario` é o preço BASE da linha — o valor sobre o qual o
+  // `desconto_pct` incide (convenção já usada pelo ERP: PDV e propostas). Na
+  // formação profissional o base é o PREÇO DE TABELA, e o desconto é derivado
+  // do preço de venda praticado quando for esse o campo que o operador mexeu.
+  let base: number;
+  let pct: number;
+
+  if (informado.descontoPct) {
+    pct = normalizarPct(payload.desconto_pct);
+    base = payload.preco_unitario !== undefined && payload.preco_unitario !== null
+      ? round2(Math.max(0, Number(payload.preco_unitario) || 0))
+      : tabela ?? round2(Math.max(0, Number(payload.preco_unitario) || 0));
+  } else if (informado.preco) {
+    const preco = round2(Math.max(0, Number(payload.preco_unitario) || 0));
+    if (tabela !== null && preco < tabela) {
+      // Preço de venda praticado abaixo da tabela: o desconto é derivado dele.
+      pct = pctDePrecoVenda(tabela, preco);
+      base = tabela;
+    } else {
+      // Sem tabela de referência, ou venda acima/na tabela: não há desconto.
+      pct = 0;
+      base = preco;
+    }
+  } else {
+    // Nem preço nem desconto vieram no corpo (ex.: edição só da quantidade):
+    // mantém a formação já gravada e apenas recompõe o subtotal.
+    pct = normalizarPct(payload.desconto_pct);
+    base = payload.preco_unitario !== undefined && payload.preco_unitario !== null
+      ? round2(Math.max(0, Number(payload.preco_unitario) || 0))
+      : tabela ?? 0;
+  }
+
+  payload.preco_tabela = tabela !== null ? tabela : round2(base);
+  payload.lista_preco_id = listaId;
+  payload.preco_unitario = base;
+  payload.desconto_pct = pct;
+  payload.subtotal = round2(qtd * base * (1 - pct / 100));
 }
 
 /** Rótulo legível de um item (produto/insumo + tamanho + quantidade). */

@@ -26,6 +26,14 @@ import RecebimentoCompraModal from '../components/RecebimentoCompraModal';
 import { ProductSelector } from '../components/ProductSelector';
 import { searchProducts } from '../lib/productSearch';
 import { formatDate, formatDocumento, formatMoney, formatNumber, parseMoneyInput } from '../lib/format';
+import {
+  arredondarMoeda,
+  descontoUnitarioDe,
+  pctDeDescontoUnitario,
+  pctDePrecoVenda,
+  precoVendaDe,
+  resumoVenda,
+} from '../lib/precoVenda';
 import { hojeCivilIso, maskDataBR, parseDataBR } from '../lib/datas';
 import { buildProductSelection, requiresExplicitChoice, type ProductSelection } from '../lib/productSelection';
 import {
@@ -54,9 +62,13 @@ type Item = {
   insumo_id?: number;
   tamanho_id?: number;
   quantidade: number | string;
+  /** Preço BASE da linha (na formação profissional, o preço de TABELA). */
   preco_unitario: number | string;
   desconto_pct?: number | string;
   subtotal?: number;
+  /** Snapshot do preço de tabela da precificação, gravado pelo servidor. */
+  preco_tabela?: number | string | null;
+  lista_preco_id?: number | null;
   produto_id__label?: string;
   insumo_id__label?: string;
   tamanho_id__label?: string;
@@ -255,10 +267,21 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
   const [busyItem, setBusyItem] = useState<number | 'new' | null>(null);
   const [toDelete, setToDelete] = useState<Item | null>(null);
   const [itemEditandoId, setItemEditandoId] = useState<number | null>(null);
-  const [itemEditDraft, setItemEditDraft] = useState<{ quantidade: string; preco_unitario: string; desconto_pct: string }>({
+  // Formação de preço da linha em edição. `preco_unitario` guarda o PREÇO DE
+  // VENDA praticado (o que o operador enxerga e mexe) e `desconto_rs` o
+  // desconto unitário em R$. O `preco_tabela` é somente leitura (referência).
+  const [itemEditDraft, setItemEditDraft] = useState<{
+    quantidade: string;
+    preco_tabela: string;
+    preco_unitario: string;
+    desconto_pct: string;
+    desconto_rs: string;
+  }>({
     quantidade: '1',
+    preco_tabela: '0',
     preco_unitario: '0',
     desconto_pct: '0',
+    desconto_rs: '0',
   });
 
   // Opções auxiliares
@@ -279,7 +302,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
 
   // Linha de inclusão de novo produto via Smart Product Search global (`ProductSelector`)
   const blankItem: Item = useMemo(
-    () => ({ id: 0, produto_id: undefined, tamanho_id: undefined, quantidade: 1, preco_unitario: '', desconto_pct: 0 }),
+    () => ({ id: 0, produto_id: undefined, tamanho_id: undefined, quantidade: 1, preco_unitario: '', desconto_pct: 0, preco_tabela: '' }),
     []
   );
   const [novo, setNovo] = useState<Item>(blankItem);
@@ -394,19 +417,44 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
     return achado ? achado.id : null;
   }, [form.local_saida, locaisAtivos]);
 
+  /**
+   * Formação de preço de cada linha, do jeito que o operador precisa enxergar:
+   * preço de tabela → preço de venda → desconto % → desconto R$ → subtotal.
+   *
+   * `preco_unitario` é o preço BASE da linha (a tabela da precificação) e o
+   * `desconto_pct` incide sobre ele — a mesma convenção que o servidor grava.
+   */
+  const linhasPreco = useMemo(
+    () =>
+      itens.map((it) => {
+        const qtd = Number(it.quantidade) || 0;
+        const tabela = it.preco_tabela != null ? Number(it.preco_tabela) : parsePrecoUnitario(it.preco_unitario) || 0;
+        const base = parsePrecoUnitario(it.preco_unitario) || 0;
+        const pct = Number(it.desconto_pct) || 0;
+        const precoVenda = precoVendaDe(base, pct);
+        const bruto = arredondarMoeda(qtd * tabela);
+        const subtotal = it.subtotal !== undefined && it.subtotal !== null
+          ? arredondarMoeda(Number(it.subtotal))
+          : arredondarMoeda(qtd * base * (1 - pct / 100));
+        return {
+          item: it,
+          quantidade: qtd,
+          tabela,
+          precoVenda,
+          descontoPct: pct,
+          descontoUnitario: descontoUnitarioDe(base, pct),
+          bruto,
+          subtotal,
+          desconto: arredondarMoeda(bruto - subtotal),
+        };
+      }),
+    [itens]
+  );
+
   // Totais calculados ao vivo (espelhando a fórmula canônica `recalcularTotal` do servidor)
   const subtotalItens = useMemo(
-    () =>
-      arredondar2(
-        itens.reduce((acc, it) => {
-          if (it.subtotal !== undefined && it.subtotal !== null) return acc + Number(it.subtotal || 0);
-          const q = Number(it.quantidade) || 0;
-          const p = parsePrecoUnitario(it.preco_unitario) || 0;
-          const d = Number(it.desconto_pct) || 0;
-          return acc + arredondar2(q * p * (1 - d / 100));
-        }, 0)
-      ),
-    [itens]
+    () => arredondarMoeda(linhasPreco.reduce((acc, l) => acc + l.subtotal, 0)),
+    [linhasPreco]
   );
 
   const totalPecas = useMemo(
@@ -417,10 +465,16 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
   const valorDesconto = useMemo(() => Math.max(0, parseMoneyInput(form.desconto_texto) ?? 0), [form.desconto_texto]);
   const valorFrete = useMemo(() => Math.max(0, parseMoneyInput(form.frete_texto) ?? 0), [form.frete_texto]);
   const totalCalculado = useMemo(
-    () => arredondar2(Math.max(0, subtotalItens + valorFrete - valorDesconto)),
+    () => arredondarMoeda(Math.max(0, subtotalItens + valorFrete - valorDesconto)),
     [subtotalItens, valorDesconto, valorFrete]
   );
   const totalExibido = !ehRotaNovo && !sujo && pedido?.total !== undefined ? Number(pedido.total) : totalCalculado;
+
+  // Resumo consolidado: preço bruto → desconto real → subtotal líquido → frete → total.
+  const resumo = useMemo(
+    () => resumoVenda(linhasPreco, valorDesconto, valorFrete),
+    [linhasPreco, valorDesconto, valorFrete]
+  );
 
   const qtdParcelasNum = Math.max(1, Math.min(60, Math.trunc(Number(form.fin_parcelas) || 1)));
   const parcelasPrevia = useMemo(
@@ -433,7 +487,49 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
     const p = parsePrecoUnitario(novo.preco_unitario);
     const d = Number(novo.desconto_pct) || 0;
     if (!Number.isFinite(p) || p < 0 || q <= 0) return 0;
-    return arredondar2(q * p * (1 - d / 100));
+    return arredondarMoeda(q * p * (1 - d / 100));
+  }
+
+  /** Fecha a linha em edição a partir do campo que o operador acabou de mexer. */
+  function atualizarDraftItem(campo: 'preco_unitario' | 'desconto_pct' | 'desconto_rs', valor: string) {
+    setItemEditDraft((d) => {
+      const tabela = parseMoneyInput(d.preco_tabela) ?? 0;
+      if (campo === 'desconto_pct') {
+        const pct = Number(String(valor).replace(',', '.')) || 0;
+        return { ...d, desconto_pct: valor, preco_unitario: String(precoVendaDe(tabela, pct)), desconto_rs: String(descontoUnitarioDe(tabela, pct)) };
+      }
+      if (campo === 'preco_unitario') {
+        const preco = parseMoneyInput(valor) ?? 0;
+        const pct = pctDePrecoVenda(tabela, preco);
+        return { ...d, preco_unitario: valor, desconto_pct: String(pct), desconto_rs: String(descontoUnitarioDe(tabela, pct)) };
+      }
+      const rs = parseMoneyInput(valor) ?? 0;
+      const pct = pctDeDescontoUnitario(tabela, rs);
+      return { ...d, desconto_rs: valor, preco_unitario: String(precoVendaDe(tabela, pct)), desconto_pct: String(pct) };
+    });
+  }
+
+  /**
+   * Recalcula a linha NOVA (ainda não adicionada) quando o operador mexe em
+   * preço de venda, desconto % ou desconto R$ — sempre sobre o preço de tabela.
+   * Só um campo é a fonte; os outros dois são derivados, sem loop.
+   */
+  function atualizarNovoPreco(campo: 'preco_unitario' | 'desconto_pct' | 'desconto_rs', valor: string) {
+    setNovo((n) => {
+      const tabela = parsePrecoUnitario(n.preco_tabela) || 0;
+      if (campo === 'desconto_pct') {
+        const pct = Number(String(valor).replace(',', '.')) || 0;
+        return { ...n, desconto_pct: valor, preco_unitario: String(precoVendaDe(tabela, pct)), desconto_rs: String(descontoUnitarioDe(tabela, pct)) };
+      }
+      if (campo === 'preco_unitario') {
+        const preco = parseMoneyInput(valor) ?? 0;
+        const pct = pctDePrecoVenda(tabela, preco);
+        return { ...n, preco_unitario: valor, desconto_pct: String(pct), desconto_rs: String(descontoUnitarioDe(tabela, pct)) };
+      }
+      const rs = parseMoneyInput(valor) ?? 0;
+      const pct = pctDeDescontoUnitario(tabela, rs);
+      return { ...n, desconto_rs: valor, preco_unitario: String(precoVendaDe(tabela, pct)), desconto_pct: String(pct) };
+    });
   }
 
   // Opções de tamanho do item novo: prioriza a grade real do produto selecionado
@@ -521,7 +617,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
     }
     const preco = parsePrecoUnitario(novo.preco_unitario);
     if (!Number.isFinite(preco) || preco < 0) {
-      const msg = 'Informe um preço unitário válido.';
+      const msg = 'Informe um preço de venda válido.';
       setErroNovoItem(msg);
       toast.error(msg);
       return;
@@ -533,6 +629,12 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
       toast.error(msg);
       return;
     }
+    // O backend grava `preco_unitario` como BASE da linha (o preço de tabela) e
+    // o desconto % sobre ele. Sem tabela de referência, o preço praticado é o
+    // próprio base e não há desconto.
+    const tabela = parsePrecoUnitario(novo.preco_tabela) || 0;
+    const base = tabela > 0 ? tabela : preco;
+    const pctEnvio = tabela > 0 ? pctDePrecoVenda(tabela, preco) : 0;
 
     // Se ainda estamos montando uma nova venda sem ID persistido no banco: adiciona ao rascunho local
     if (!vendaIdAtiva) {
@@ -540,7 +642,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
         opcoesTamanhoItemNovo.find((o) => Number(o.value) === Number(novo.tamanho_id))?.label ||
         selecaoProduto?.tamanho ||
         `#${novo.tamanho_id}`;
-      const sub = arredondar2(qtd * preco * (1 - descPct / 100));
+      const sub = arredondarMoeda(qtd * base * (1 - pctEnvio / 100));
       const tempId = --rascunhoSeq.current;
       const alvoProd = selecaoProduto?.variacao ?? selecaoProduto?.produto ?? null;
       const itemRascunho: Item = {
@@ -548,9 +650,10 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
         produto_id: Number(novo.produto_id),
         tamanho_id: Number(novo.tamanho_id),
         quantidade: qtd,
-        preco_unitario: preco,
-        desconto_pct: descPct,
+        preco_unitario: base,
+        desconto_pct: pctEnvio,
         subtotal: sub,
+        preco_tabela: base,
         produto_id__label:
           novo.produto_id__label ||
           (selecaoProduto && alvoProd ? `${selecaoProduto.sku} — ${alvoProd.nome}` : `Produto #${novo.produto_id}`),
@@ -581,8 +684,8 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
         produto_id: Number(novo.produto_id),
         tamanho_id: Number(novo.tamanho_id),
         quantidade: qtd,
-        preco_unitario: preco,
-        desconto_pct: descPct,
+        preco_unitario: base,
+        desconto_pct: pctEnvio,
       });
       toast.success('Item adicionado ao pedido.');
       setNovo(blankItem);
@@ -600,11 +703,17 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
 
   async function salvarEdicaoItem(item: Item) {
     const qtd = Number(itemEditDraft.quantidade);
-    const preco = parsePrecoUnitario(itemEditDraft.preco_unitario);
+    const precoVenda = parsePrecoUnitario(itemEditDraft.preco_unitario);
     const desc = Number(itemEditDraft.desconto_pct || 0);
     if (!Number.isInteger(qtd) || qtd < 1) return toast.error('A quantidade deve ser um inteiro maior ou igual a 1.');
-    if (!Number.isFinite(preco) || preco < 0) return toast.error('Preço unitário inválido.');
+    if (!Number.isFinite(precoVenda) || precoVenda < 0) return toast.error('Preço de venda inválido.');
     if (!Number.isFinite(desc) || desc < 0 || desc > 100) return toast.error('Desconto deve ficar entre 0% e 100%.');
+
+    // O servidor espera o BASE da linha (preço de tabela) + desconto %. A tabela
+    // da linha é a referência congelada: nunca é reescrita pelo operador.
+    const tabela = parsePrecoUnitario(itemEditDraft.preco_tabela) || 0;
+    const base = tabela > 0 ? tabela : precoVenda;
+    const pctEnvio = tabela > 0 ? pctDePrecoVenda(tabela, precoVenda) : 0;
 
     if (!item.persistido || !vendaIdAtiva) {
       setItens((atuais) =>
@@ -613,9 +722,10 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
             ? {
                 ...it,
                 quantidade: qtd,
-                preco_unitario: preco,
-                desconto_pct: desc,
-                subtotal: arredondar2(qtd * preco * (1 - desc / 100)),
+                preco_unitario: base,
+                desconto_pct: pctEnvio,
+                subtotal: arredondarMoeda(qtd * base * (1 - pctEnvio / 100)),
+                preco_tabela: tabela > 0 ? tabela : base,
               }
             : it
         )
@@ -630,8 +740,8 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
         produto_id: Number(item.produto_id),
         tamanho_id: Number(item.tamanho_id),
         quantidade: qtd,
-        preco_unitario: preco,
-        desconto_pct: desc,
+        preco_unitario: base,
+        desconto_pct: pctEnvio,
       });
       toast.success('Item atualizado.');
       setItemEditandoId(null);
@@ -1323,6 +1433,8 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                             produto_id: sel.produto_id,
                             tamanho_id: sel.tamanho_id ?? undefined,
                             preco_unitario: sel.preco,
+                            preco_tabela: sel.preco,
+                            desconto_pct: 0,
                             produto_id__label: `${sel.sku} — ${varExata.nome}`,
                           }));
                           setErroNovoItem('');
@@ -1355,6 +1467,8 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                             produto_id: sel.produto_id,
                             tamanho_id: sel.tamanho_id ?? undefined,
                             preco_unitario: sel.preco,
+                            preco_tabela: sel.preco,
+                            desconto_pct: 0,
                             produto_id__label: `${sel.sku} — ${fam.nome}`,
                           }));
                           setErroNovoItem('');
@@ -1369,7 +1483,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                     if (!product) {
                       setSelecaoProduto(null);
                       setTamanhosDoProduto([]);
-                      setNovo((n) => ({ ...n, produto_id: undefined, tamanho_id: undefined, produto_id__label: undefined }));
+                      setNovo((n) => ({ ...n, produto_id: undefined, tamanho_id: undefined, produto_id__label: undefined, preco_tabela: '', desconto_pct: 0 }));
                       return;
                     }
                     setSelecaoProduto(selection ?? null);
@@ -1389,11 +1503,14 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                       product.variacao_tamanho_id ??
                       (product.tamanhos.length === 1 ? product.tamanhos[0].tamanho_id : null);
                     const alvoProd = selection?.variacao ?? selection?.produto ?? product;
+                    const precoTabela = selection?.preco ?? product.preco_venda;
                     setNovo((n) => ({
                       ...n,
                       produto_id: selection?.produto_id ?? product.produto_pai_id ?? product.id,
                       tamanho_id: tamanho ?? undefined,
-                      preco_unitario: selection?.preco ?? product.preco_venda,
+                      preco_unitario: precoTabela,
+                      preco_tabela: precoTabela,
+                      desconto_pct: 0,
                       produto_id__label: `${selection?.sku ?? product.sku} — ${alvoProd.nome}`,
                     }));
                   }}
@@ -1437,9 +1554,24 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                 />
               </div>
 
-              <div className="md:col-span-2">
+              <div className="md:col-span-1">
+                <label htmlFor="venda-novo-preco-tabela" className="label">
+                  Preço tabela
+                </label>
+                <input
+                  id="venda-novo-preco-tabela"
+                  type="text"
+                  readOnly
+                  aria-readonly="true"
+                  title="Preço de tabela da precificação (não editável)"
+                  className="input w-full cursor-not-allowed bg-slate-100 text-right tabular-nums text-slate-500 dark:bg-navy-800/70 dark:text-navy-300"
+                  value={novo.preco_tabela ? formatMoney(parsePrecoUnitario(novo.preco_tabela) || 0) : '—'}
+                />
+              </div>
+
+              <div className="md:col-span-1">
                 <label htmlFor="venda-novo-preco" className="label">
-                  Preço un. (R$) <span className="text-red-500">*</span>
+                  Preço venda (R$) <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="venda-novo-preco"
@@ -1448,7 +1580,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                   className="input w-full text-right tabular-nums"
                   placeholder="0,00"
                   value={novo.preco_unitario}
-                  onChange={(e) => setNovo((n) => ({ ...n, preco_unitario: e.target.value }))}
+                  onChange={(e) => atualizarNovoPreco('preco_unitario', e.target.value)}
                 />
               </div>
 
@@ -1461,14 +1593,29 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                   type="number"
                   min={0}
                   max={100}
-                  step="0.1"
+                  step="0.01"
                   className="input w-full text-right tabular-nums"
                   value={novo.desconto_pct ?? 0}
-                  onChange={(e) => setNovo((n) => ({ ...n, desconto_pct: e.target.value }))}
+                  onChange={(e) => atualizarNovoPreco('desconto_pct', e.target.value)}
                 />
               </div>
 
               <div className="md:col-span-1">
+                <label htmlFor="venda-novo-desc-rs" className="label">
+                  Desc. R$
+                </label>
+                <input
+                  id="venda-novo-desc-rs"
+                  type="text"
+                  inputMode="decimal"
+                  className="input w-full text-right tabular-nums"
+                  placeholder="0,00"
+                  value={novo.desconto_rs ?? ''}
+                  onChange={(e) => atualizarNovoPreco('desconto_rs', e.target.value)}
+                />
+              </div>
+
+              <div className="md:col-span-2">
                 <button
                   type="button"
                   className="btn-primary w-full justify-center"
@@ -1538,30 +1685,29 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-navy-800">
-            <table className="table">
+            <table className="table min-w-[880px]">
               <thead>
                 <tr>
                   <th className="w-12" />
                   <th>Produto / Variação</th>
                   <th className="w-24">Tamanho</th>
-                  <th className="w-24 text-right">Qtd.</th>
-                  <th className="w-32 text-right">Preço un.</th>
+                  <th className="w-20 text-right">Qtd.</th>
+                  <th className="w-28 text-right">Preço tabela</th>
+                  <th className="w-28 text-right">Preço venda</th>
                   <th className="w-24 text-right">Desc. %</th>
-                  <th className="w-32 text-right">Subtotal</th>
+                  <th className="w-24 text-right">Desc. R$</th>
+                  <th className="w-28 text-right">Subtotal</th>
                   <th className="w-24 text-right">Ações</th>
                 </tr>
               </thead>
               <tbody>
                 {itens.map((it) => {
                   const emEdicao = itemEditandoId === it.id && !itensBloqueados;
-                  const subLinha =
-                    it.subtotal !== undefined
-                      ? Number(it.subtotal)
-                      : arredondar2(
-                          (Number(it.quantidade) || 0) *
-                            (parsePrecoUnitario(it.preco_unitario) || 0) *
-                            (1 - Number(it.desconto_pct || 0) / 100)
-                        );
+                  const linha = linhasPreco.find((l) => l.item.id === it.id);
+                  const tabela = linha?.tabela ?? (parsePrecoUnitario(it.preco_unitario) || 0);
+                  const precoVenda = linha?.precoVenda ?? (parsePrecoUnitario(it.preco_unitario) || 0);
+                  const descontoRs = linha?.descontoUnitario ?? 0;
+                  const subLinha = linha?.subtotal ?? 0;
                   return (
                     <tr key={it.id}>
                       <td>
@@ -1597,18 +1743,21 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                           it.quantidade
                         )}
                       </td>
+                      <td className="text-right tabular-nums text-slate-500 dark:text-navy-300">
+                        {formatMoney(tabela)}
+                      </td>
                       <td className="text-right tabular-nums">
                         {emEdicao ? (
                           <input
                             type="text"
                             inputMode="decimal"
-                            aria-label={`Preço unitário de ${it.produto_id__label}`}
+                            aria-label={`Preço de venda de ${it.produto_id__label}`}
                             className="input !py-1 text-right tabular-nums"
                             value={itemEditDraft.preco_unitario}
-                            onChange={(e) => setItemEditDraft((d) => ({ ...d, preco_unitario: e.target.value }))}
+                            onChange={(e) => atualizarDraftItem('preco_unitario', e.target.value)}
                           />
                         ) : (
-                          formatMoney(parsePrecoUnitario(it.preco_unitario))
+                          formatMoney(precoVenda)
                         )}
                       </td>
                       <td className="text-right tabular-nums">
@@ -1617,14 +1766,30 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                             type="number"
                             min={0}
                             max={100}
-                            step="0.1"
+                            step="0.01"
                             aria-label={`Desconto percentual de ${it.produto_id__label}`}
                             className="input !py-1 text-right tabular-nums"
                             value={itemEditDraft.desconto_pct}
-                            onChange={(e) => setItemEditDraft((d) => ({ ...d, desconto_pct: e.target.value }))}
+                            onChange={(e) => atualizarDraftItem('desconto_pct', e.target.value)}
                           />
                         ) : Number(it.desconto_pct || 0) ? (
-                          `${it.desconto_pct}%`
+                          `${formatNumber(it.desconto_pct)}%`
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="text-right tabular-nums">
+                        {emEdicao ? (
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            aria-label={`Desconto em reais de ${it.produto_id__label}`}
+                            className="input !py-1 text-right tabular-nums"
+                            value={itemEditDraft.desconto_rs}
+                            onChange={(e) => atualizarDraftItem('desconto_rs', e.target.value)}
+                          />
+                        ) : descontoRs ? (
+                          formatMoney(descontoRs)
                         ) : (
                           '—'
                         )}
@@ -1663,13 +1828,17 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                                   disabled={busyItem === it.id}
                                   onClick={() => {
                                     setItemEditandoId(it.id);
+                                    const tabelaAtual = linha?.tabela ?? (parsePrecoUnitario(it.preco_unitario) || 0);
+                                    const pctAtual = Number(it.desconto_pct ?? 0);
                                     setItemEditDraft({
                                       quantidade: String(it.quantidade),
-                                      preco_unitario: String(it.preco_unitario),
-                                      desconto_pct: String(it.desconto_pct ?? 0),
+                                      preco_tabela: String(tabelaAtual),
+                                      preco_unitario: String(linha?.precoVenda ?? parsePrecoUnitario(it.preco_unitario)),
+                                      desconto_pct: String(pctAtual),
+                                      desconto_rs: String(descontoUnitarioDe(tabelaAtual, pctAtual)),
                                     });
                                   }}
-                                  title="Editar quantidade, preço ou desconto"
+                                  title="Editar quantidade, preço de venda ou desconto"
                                   aria-label={`Editar item ${it.produto_id__label}`}
                                 >
                                   <Edit3 className="h-4 w-4" />
@@ -1990,16 +2159,33 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
           <div className="flex flex-col justify-between rounded-xl border border-navy-200 bg-navy-50/50 p-4 lg:col-span-5 dark:border-navy-700 dark:bg-navy-800/60">
             <div className="space-y-1.5 text-sm">
               <div className="flex justify-between">
-                <span className="text-slate-600 dark:text-navy-200">Subtotal dos produtos</span>
-                <span className="font-medium tabular-nums">{formatMoney(subtotalItens)}</span>
+                <span className="text-slate-600 dark:text-navy-200">Produtos — preço de tabela</span>
+                <span className="font-medium tabular-nums">{formatMoney(resumo.bruto)}</span>
               </div>
               <div className="flex justify-between text-red-600 dark:text-red-400">
-                <span>Desconto</span>
-                <span className="tabular-nums">− {formatMoney(valorDesconto)}</span>
+                <span className="flex flex-wrap items-center gap-1.5">
+                  Descontos concedidos
+                  {resumo.descontoTotal > 0 && (
+                    <span className="rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold text-red-700 dark:bg-red-500/20 dark:text-red-300">
+                      {formatNumber(resumo.descontoPct)}%
+                    </span>
+                  )}
+                </span>
+                <span className="tabular-nums">− {formatMoney(resumo.descontoTotal)}</span>
+              </div>
+              {resumo.descontoPedido > 0 && (
+                <div className="flex justify-between text-[11px] text-red-500 dark:text-red-400">
+                  <span className="pl-3">↳ desconto do pedido</span>
+                  <span className="tabular-nums">− {formatMoney(resumo.descontoPedido)}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-600 dark:text-navy-200">Subtotal líquido</span>
+                <span className="font-medium tabular-nums">{formatMoney(resumo.subtotalLiquido)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-600 dark:text-navy-200">Frete</span>
-                <span className="tabular-nums">+ {formatMoney(valorFrete)}</span>
+                <span className="tabular-nums">+ {formatMoney(resumo.frete)}</span>
               </div>
               <div className="flex justify-between border-t border-navy-200 pt-2 text-lg font-extrabold text-navy-900 dark:border-navy-600 dark:text-white">
                 <span>Total da venda</span>
