@@ -11,8 +11,13 @@ import {
   DENSIDADE_INFO,
   densidadeLegada,
   larguraDaColuna,
+  permiteAlternarAtivo,
+  placeholderBusca,
   rotuloDaColuna,
+  rotuloNovo,
   saldoDaLinha,
+  textoContagem,
+  textoVazio,
   usaColunaEstoque,
 } from './lista';
 
@@ -159,5 +164,65 @@ describe('chips de filtros ativos', () => {
   it('referência desconhecida não vira texto vazio', () => {
     const chips = chipsDeFiltros(campos, { categoria_id: '9' }, {});
     expect(chips[0].valor).toBe('#9');
+  });
+});
+
+describe('apresentação da listagem de categorias', () => {
+  const campos: Field[] = [
+    campo('ativo', { label: 'Ativo', type: 'boolean' }),
+    campo('nome', { label: 'Nome' }),
+    campo('descricao', { label: 'Descrição' }),
+    campo('grade_id', { label: 'Grade padrão', type: 'ref', ref: 'grades' }),
+  ];
+
+  it('ordena as colunas como Categoria, Descrição, Grade padrão e Status', () => {
+    expect(camposOrdenados(campos, 'categorias').map((f) => f.name)).toEqual([
+      'nome',
+      'descricao',
+      'grade_id',
+      'ativo',
+    ]);
+  });
+
+  it('usa os rótulos de apresentação sem trocar o nome do campo (sort/API intactos)', () => {
+    const nome = campos.find((f) => f.name === 'nome')!;
+    const ativo = campos.find((f) => f.name === 'ativo')!;
+    const grade = campos.find((f) => f.name === 'grade_id')!;
+    expect(rotuloDaColuna(nome, 'categorias')).toBe('Categoria');
+    expect(rotuloDaColuna(ativo, 'categorias')).toBe('Status');
+    expect(rotuloDaColuna(grade, 'categorias')).toBe('Grade padrão');
+    expect(nome.name).toBe('nome');
+  });
+
+  it('busca, botão de inclusão e estado vazio seguem a linguagem do cadastro', () => {
+    expect(placeholderBusca('categorias', 'Categorias')).toBe('Buscar categoria...');
+    expect(rotuloNovo('categorias', 'Categoria')).toBe('Nova categoria');
+    expect(textoVazio('categorias', 'Categoria')).toEqual({
+      titulo: 'Nenhuma categoria cadastrada',
+      descricao: 'Cadastre sua primeira categoria para organizar seus produtos.',
+    });
+  });
+
+  it('recursos sem configuração mantêm o texto genérico', () => {
+    expect(placeholderBusca('clientes', 'Clientes')).toBe('Buscar em Clientes...');
+    expect(rotuloNovo('clientes', 'Cliente')).toBe('Novo cliente');
+    expect(textoVazio('clientes', 'Cliente').titulo).toBe('Nenhum(a) cliente cadastrado(a)');
+  });
+
+  it('só categorias declaram a ação Ativar/Desativar na linha', () => {
+    expect(permiteAlternarAtivo('categorias')).toBe(true);
+    expect(permiteAlternarAtivo('produtos')).toBe(false);
+    expect(permiteAlternarAtivo('clientes')).toBe(false);
+  });
+
+  it('o contador usa o substantivo do cadastro (e o genérico nos demais)', () => {
+    expect(textoContagem('categorias', 1, 3, 3)).toBe('1–3 de 3 categorias');
+    expect(textoContagem('categorias', 1, 1, 1)).toBe('1–1 de 1 categoria');
+    expect(textoContagem('categorias', 0, 0, 0)).toBe('Nenhum registro');
+    expect(textoContagem('produtos', 1, 25, 1248)).toBe('1–25 de 1248 registros');
+  });
+
+  it('o modo visual da categoria traz descrição, grade e status', () => {
+    expect(camposDoCard(campos, 'categorias').map((f) => f.name)).toEqual(['descricao', 'grade_id', 'ativo']);
   });
 });
