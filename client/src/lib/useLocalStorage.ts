@@ -66,6 +66,60 @@ export function useLocalStorageInt(key: string, def: number, permitidos?: number
 }
 
 /**
+ * Escolha entre opções fixas persistida no navegador (ex.: densidade da
+ * listagem, modo tabela/visual). Qualquer valor fora da lista é descartado —
+ * uma preferência corrompida (ou de uma versão antiga) volta ao padrão.
+ *
+ * `legado` permite herdar a preferência de uma chave antiga na primeira visita
+ * (migração do antigo "tabela compacta" booleano para os três níveis atuais).
+ */
+export function useLocalStorageChoice<T extends string>(
+  key: string,
+  def: T,
+  permitidos: readonly T[],
+  legado?: () => T | null
+): [T, (v: T) => void] {
+  const valido = useCallback(
+    (v: unknown): v is T => typeof v === 'string' && (permitidos as readonly string[]).includes(v),
+    [permitidos]
+  );
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw !== null) return valido(raw) ? raw : def;
+      const antigo = legado?.() ?? null;
+      return valido(antigo) ? antigo : def;
+    } catch {
+      return def;
+    }
+  });
+
+  // A migração vira preferência explícita já na primeira renderização.
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      /* sem persistência: preferência vale só para esta sessão */
+    }
+  }, [key, value]);
+
+  const update = useCallback(
+    (v: T) => {
+      if (!valido(v)) return;
+      setValue(v);
+      try {
+        localStorage.setItem(key, v);
+      } catch {
+        /* sem persistência: preferência vale só para esta sessão */
+      }
+    },
+    [key, valido]
+  );
+
+  return [value, update];
+}
+
+/**
  * Conjunto de strings persistido no navegador (ex.: nomes de colunas ocultas por
  * recurso). Devolve o Set atual e uma função para alternar um item.
  */
