@@ -240,6 +240,14 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
   if (!term) return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
   params.push(`%${term}%`);
   const idx = params.length;
+  const digits = term.replace(/\D/g, '');
+  const hasDocOrPhoneSearch =
+    digits.length >= 3 && r.fields.some((f) => f.search && (f.type === 'document' || f.type === 'phone'));
+  let digitsIdx = 0;
+  if (hasDocOrPhoneSearch) {
+    params.push(`%${digits}%`);
+    digitsIdx = params.length;
+  }
   const parts: string[] = [];
   for (const f of r.fields) {
     if (!f.search) continue;
@@ -251,9 +259,18 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
       }
     } else {
       parts.push(`t.${f.name}::text ILIKE $${idx}`);
+      if (digitsIdx > 0 && (f.type === 'document' || f.type === 'phone')) {
+        parts.push(`regexp_replace(COALESCE(t.${f.name}::text, ''), '[^0-9]', '', 'g') LIKE $${digitsIdx}`);
+      }
     }
   }
-  if (/^\d+$/.test(term)) parts.push(`t.id = ${Number(term)}`);
+  if (/^\d{1,10}$/.test(term)) {
+    const numId = Number(term);
+    if (Number.isInteger(numId) && numId > 0 && numId <= 2147483647) {
+      params.push(numId);
+      parts.push(`t.id = $${params.length}`);
+    }
+  }
   if (parts.length) conds.push(`(${parts.join(' OR ')})`);
   return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 }

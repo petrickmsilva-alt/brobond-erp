@@ -106,7 +106,31 @@ export default function App() {
                 </ModuleAccess>
               }
             />
-            <Route path="vendas/:id" element={<OrderPage tipo="venda" />} />
+            {/* Pedidos de venda PF/PJ em página própria (motor único de venda, fora do modal). */}
+            <Route
+              path="vendas/novo"
+              element={
+                <ModuleAccess moduleId="vendas">
+                  <OrderPage tipo="venda" modo="novo" />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="vendas/:id/editar"
+              element={
+                <ModuleAccess moduleId="vendas">
+                  <OrderPage tipo="venda" modo="editar" />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="vendas/:id"
+              element={
+                <ModuleAccess moduleId="vendas">
+                  <OrderPage tipo="venda" />
+                </ModuleAccess>
+              }
+            />
             <Route path="compras/:id" element={<OrderPage tipo="compra" />} />
             <Route path="ordens/:id" element={<OrdemDetail />} />
             <Route path="fichas/:id" element={<FichaDetail />} />

@@ -160,14 +160,21 @@ export class MemStore implements Store {
 
   private matches(r: Resource, row: Row, term: string): boolean {
     const t = term.toLowerCase();
-    if (/^\d+$/.test(term) && row.id === Number(term)) return true;
+    const digits = term.replace(/\D/g, '');
+    if (/^\d{1,10}$/.test(term) && row.id === Number(term)) return true;
     for (const f of r.fields) {
       if (!f.search) continue;
       if (f.type === 'ref' && f.ref) {
         const target = getResource(f.ref);
         const ref = target ? this.table(target.table).rows.get(Number(row[f.name])) : undefined;
         if (target && ref && labelOf(target, ref).toLowerCase().includes(t)) return true;
-      } else if (norm(row[f.name]).toLowerCase().includes(t)) return true;
+      } else {
+        const raw = norm(row[f.name]);
+        if (raw.toLowerCase().includes(t)) return true;
+        if (digits.length >= 3 && (f.type === 'document' || f.type === 'phone')) {
+          if (raw.replace(/\D/g, '').includes(digits)) return true;
+        }
+      }
     }
     return false;
   }

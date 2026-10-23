@@ -176,6 +176,8 @@ describe('moeda', () => {
     expect(parseMoneyInput('25.999,90')).toBe(25999.9);
     expect(parseMoneyInput('0,00')).toBe(0);
     expect(parseMoneyInput('R$ 1.500,00')).toBe(1500);
+    expect(parseMoneyInput('1.500')).toBe(1500);
+    expect(parseMoneyInput('2.599.990')).toBe(2599990);
     expect(parseMoneyInput('1500.50')).toBe(1500.5);
     expect(parseMoneyInput('')).toBe(null);
     expect(parseMoneyInput('abc')).toBe(null);
