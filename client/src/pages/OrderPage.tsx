@@ -20,6 +20,7 @@ import { api } from '../lib/api';
 import { useMeta, type Option, type ResourceMeta } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, PageHeader, Spinner, useToast } from '../components/ui';
+import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Thumb } from '../components/ImageField';
 import RecebimentoCompraModal from '../components/RecebimentoCompraModal';
 import { ProductSelector } from '../components/ProductSelector';
@@ -929,14 +930,17 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
             </button>
 
             {vendaIdAtiva && (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => window.open(`/api/vendas/${vendaIdAtiva}/pdf`, '_blank')}
-              >
-                <Printer className="h-4 w-4" />
-                Imprimir PDF
-              </button>
+              <>
+                <DocumentPrintButton tipo="vendas" documentoId={Number(vendaIdAtiva)} label="Fila de impressão" />
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => window.open(`/api/vendas/${vendaIdAtiva}/pdf`, '_blank')}
+                >
+                  <Printer className="h-4 w-4" />
+                  Imprimir PDF
+                </button>
+              </>
             )}
 
             {!ehRotaNovo && !ehRotaEditar && !cancelado && vendaIdAtiva && (
@@ -2256,6 +2260,7 @@ function CompraOrderEngine() {
         description="Itens da compra, totais e recebimento de insumos."
         actions={
           <div className="flex flex-wrap gap-2">
+            <DocumentPrintButton tipo="compras" documentoId={Number(pedido.id)} label="Fila de impressão" />
             <button className="btn-secondary" onClick={() => window.open(`/api/compras/${pedido.id}/pdf`, '_blank')}>
               <Printer className="h-4 w-4" /> Imprimir PDF
             </button>

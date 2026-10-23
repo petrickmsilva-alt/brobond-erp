@@ -55,7 +55,7 @@ test('Listagem de produtos em escala: paginação, busca, filtros e ordenação 
       formato: i % 3 === 0 ? 'variacao' : 'simples',
       ativo: i % 10 !== 0,
       preco_venda: i * 10,
-      codigo_barras: i === 7 ? '7891234500077' : null,
+      codigo_barras: i === 7 ? '7891234500076' : null,
     }, atorA);
   }
   // Mesmo padrão de nome na empresa B: não pode aparecer para A.
@@ -100,7 +100,7 @@ test('Listagem de produtos em escala: paginação, busca, filtros e ordenação 
   await t.test('busca por nome, SKU, código de barras e parcial no SQL', async () => {
     assert.ok((await lista({ page: 1, pageSize: 5, q: 'Produto Listagem 007' })).total >= 1, 'nome');
     assert.equal((await lista({ page: 1, pageSize: 5, q: 'LPG-007' })).rows[0]?.sku, 'LPG-007', 'SKU');
-    assert.equal((await lista({ page: 1, pageSize: 5, q: '7891234500077' })).total, 1, 'código de barras');
+    assert.equal((await lista({ page: 1, pageSize: 5, q: '7891234500076' })).total, 1, 'código de barras');
     assert.ok((await lista({ page: 1, pageSize: 5, q: 'LPG-01' })).total >= 10, 'SKU parcial');
   });
 

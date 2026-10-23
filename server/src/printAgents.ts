@@ -20,6 +20,7 @@
 // ============================================================================
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
+import { isSafePrinterName, stripAsciiControl } from '../../packages/domain/src/print/print-ir';
 import { HttpError } from './errors';
 import { getResource } from './resources';
 import { escopoDe, getStore } from './services';
@@ -246,12 +247,26 @@ const leaseDaReq = (req: Request) => String(req.header('x-print-lease-token') ||
 // Handlers do agente (polling)
 // ----------------------------------------------------------------------------
 
+function sanitizarListaImpressoras(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const s = stripAsciiControl(item).replace(/[<>]/g, '').trim().slice(0, 120);
+    if (!s || s.includes('..') || !isSafePrinterName(s)) continue;
+    if (!out.includes(s)) out.push(s);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
 /** POST /api/print/agent/heartbeat */
 export async function heartbeatHandler(req: Request, res: Response): Promise<void> {
   const agente = agenteDaReq(req);
   const body = (req.body ?? {}) as Record<string, unknown>;
   let printers: unknown = agente.printers ?? null;
-  if (Array.isArray(body.printers) && JSON.stringify(body.printers).length <= 4096) printers = body.printers;
+  const limpas = sanitizarListaImpressoras(body.printers);
+  if (limpas !== null && JSON.stringify(limpas).length <= 4096) printers = limpas;
   const row = await getStore().update(R_AGENTS(), Number(agente.id), {
     agent_version: texto(body.agent_version, 40) || (agente.agent_version as string) || null,
     platform: texto(body.platform, 40) || (agente.platform as string) || null,
@@ -306,13 +321,24 @@ export async function leaseHandler(req: Request, res: Response): Promise<void> {
 
 export function agentePublico(a: Row): Record<string, unknown> {
   const { token_hash: _hash, ...resto } = a;
-  return resto;
+  const hb = a.last_heartbeat_at ? Date.parse(String(a.last_heartbeat_at)) : 0;
+  const online = a.status === 'ativo' && hb > 0 && Date.now() - hb <= 120_000;
+  return {
+    ...resto,
+    online,
+    printers: Array.isArray(a.printers) ? a.printers : [],
+  };
 }
 
 async function agenteDaEmpresa(req: Request): Promise<Row> {
   const actor = currentUser(req);
   const escopo = escopoDe(actor);
-  const agente = await getStore().findOneWhere(R_AGENTS(), { empresa_id: escopo.empresaId, machine_id: String(req.params.id) });
+  const rawId = String(req.params.id || '').trim();
+  const s = getStore();
+  let agente = await s.findOneWhere(R_AGENTS(), { empresa_id: escopo.empresaId, machine_id: rawId });
+  if (!agente && /^\d+$/.test(rawId)) {
+    agente = await s.findOneWhere(R_AGENTS(), { empresa_id: escopo.empresaId, id: Number(rawId) });
+  }
   if (!agente) throw new HttpError(404, 'Agente não encontrado.');
   return agente;
 }
@@ -383,4 +409,92 @@ export async function rotacionarTokenHandler(req: Request, res: Response): Promi
     empresa_id: Number(agente.empresa_id),
   });
   res.json({ agente: agentePublico(row!), token });
+}
+
+/** POST /api/print/agents/:id/reativar — reativa emitindo credencial NOVA (uma vez). */
+export async function reativarAgenteHandler(req: Request, res: Response): Promise<void> {
+  const actor = currentUser(req);
+  const agente = await agenteDaEmpresa(req);
+  if (agente.status === 'ativo') {
+    throw new HttpError(409, 'Este agente já está ativo. Use rotacionar credencial se desejar um novo token.');
+  }
+  const token = gerarTokenMaquina();
+  const row = await getStore().update(R_AGENTS(), Number(agente.id), {
+    status: 'ativo',
+    token_hash: hashTokenImpressao(token),
+    token_prefix: token.slice(0, 12),
+    revoked_at: null,
+    revoked_by: null,
+  });
+  await getStore().audit({
+    ...atorDeUsuario(actor),
+    acao: 'imprimir',
+    recurso: 'print_agents',
+    registro_id: Number(agente.id),
+    descricao: `Agente de impressão reativado com nova credencial (${agente.nome})`,
+    dados: { evento: 'print.agent.reactivated', machine_id: agente.machine_id },
+    empresa_id: Number(agente.empresa_id),
+  });
+  res.json({ agente: agentePublico(row!), token });
+}
+
+/** PATCH /api/print/agents/:id — atualiza nome ou terminal vinculado. */
+export async function atualizarAgenteHandler(req: Request, res: Response): Promise<void> {
+  const actor = currentUser(req);
+  const agente = await agenteDaEmpresa(req);
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const patch: Record<string, unknown> = {};
+  if (body.nome !== undefined) {
+    const n = texto(body.nome, 80);
+    if (!n) throw new HttpError(400, 'Informe o nome do agente.');
+    patch.nome = n;
+  }
+  if (body.terminal !== undefined) {
+    patch.terminal = texto(body.terminal, 60);
+  }
+  if (Object.keys(patch).length === 0) {
+    res.json({ agente: agentePublico(agente) });
+    return;
+  }
+  const row = await getStore().update(R_AGENTS(), Number(agente.id), patch);
+  await getStore().audit({
+    ...atorDeUsuario(actor),
+    acao: 'imprimir',
+    recurso: 'print_agents',
+    registro_id: Number(agente.id),
+    descricao: `Configuração do agente atualizada (${row?.nome ?? agente.nome})`,
+    dados: { evento: 'print.agent.updated', machine_id: agente.machine_id, terminal: patch.terminal ?? agente.terminal ?? null },
+    empresa_id: Number(agente.empresa_id),
+  });
+  res.json({ agente: agentePublico(row ?? agente) });
+}
+
+/**
+ * GET /api/print/impressoras-detectadas — devolve as impressoras reportadas
+ * pelos agentes ativos da empresa sem inventar status de driver inexistente.
+ */
+export async function listarImpressorasDetectadasHandler(req: Request, res: Response): Promise<void> {
+  const actor = currentUser(req);
+  const escopo = escopoDe(actor);
+  const out = await getStore().list(R_AGENTS(), {
+    page: 1,
+    pageSize: 100,
+    filter: { empresa_id: escopo.empresaId, status: 'ativo' },
+    sort: 'criado_em',
+    dir: 'desc',
+  });
+  const agentes = out.rows.map((a) => {
+    const pub = agentePublico(a);
+    return {
+      agent_id: Number(a.id),
+      machine_id: String(a.machine_id),
+      nome: String(a.nome),
+      terminal: (a.terminal as string) ?? null,
+      online: Boolean(pub.online),
+      last_heartbeat_at: a.last_heartbeat_at ?? null,
+      printers: Array.isArray(a.printers) ? (a.printers as string[]) : [],
+    };
+  });
+  const todas = [...new Set(agentes.flatMap((a) => a.printers))];
+  res.json({ agentes, impressoras: todas });
 }

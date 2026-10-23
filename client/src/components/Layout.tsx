@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { ChevronDown, KeyRound, LogOut, Menu, Search, UserRound } from 'lucide-react';
+import { ChevronDown, KeyRound, LogOut, Menu, Printer, Search, UserRound } from 'lucide-react';
 import Sidebar from './Sidebar';
 import TopNavigation from './TopNavigation';
 import CommandPalette from './CommandPalette';
@@ -188,6 +188,14 @@ export default function Layout() {
                     role="menuitem"
                   >
                     <UserRound className="h-4 w-4 text-slate-400" /> Minha conta
+                  </Link>
+                  <Link
+                    to="/config/impressao"
+                    onClick={() => setMenu(false)}
+                    className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-navy-800"
+                    role="menuitem"
+                  >
+                    <Printer className="h-4 w-4 text-slate-400" /> Fila de impressão
                   </Link>
                   <Link
                     to="/config#senha"

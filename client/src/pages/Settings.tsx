@@ -13,6 +13,7 @@ import {
   LogOut,
   Monitor,
   Moon,
+  Printer,
   Save,
   Server,
   Settings2,
@@ -77,6 +78,24 @@ export default function Settings() {
   return (
     <div className="p-4 sm:p-6">
       <PageHeader title="Configurações" description="Sua conta, senha, sessão e informações do sistema." />
+
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-navy-800 dark:bg-navy-900">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600 dark:bg-navy-800 dark:text-brand-400">
+            <Printer className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold text-navy-900 dark:text-white">Central de Impressão Operacional</h2>
+            <p className="text-xs text-slate-600 dark:text-navy-300">
+              Gerencie fila de jobs, terminais multi-impressora (ESC/POS, ZPL, EPL2), agentes locais e reimpressões auditadas.
+            </p>
+          </div>
+        </div>
+        <Link to="/config/impressao" className="btn-primary text-xs">
+          <Printer className="h-4 w-4" />
+          Abrir Central de Impressão
+        </Link>
+      </div>
 
       {precisaTrocar && (
         <div className="mb-4">

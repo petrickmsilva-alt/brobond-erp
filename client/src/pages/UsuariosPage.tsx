@@ -66,6 +66,7 @@ import { imprimirFicha } from '../lib/fichaPrint';
 import { useAuth } from '../auth/AuthContext';
 import { useLocalStorageBool } from '../lib/useLocalStorage';
 import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import ReauthModal from '../components/ReauthModal';
 
 type Usuario = Record<string, any>;
@@ -2701,6 +2702,7 @@ function FichaUsuarioModal({
               <button className="btn-secondary !px-2.5 !py-1.5 text-xs" onClick={() => dados && onImprimir(dados)} title="Imprimir o dossiê completo (RH/arquivo)">
                 <Printer className="h-3.5 w-3.5" /> Imprimir ficha
               </button>
+              <DocumentPrintButton tipo="usuarios" documentoId={Number(u.id)} label="Fila" compact />
             </div>
           </div>
 

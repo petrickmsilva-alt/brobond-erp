@@ -80,7 +80,7 @@ for (const m of MODULES) {
 
 // Uma rota absoluta que não é de módulo só é alcançável por link direto — não é
 // erro (login, convite, portal, catálogo público), mas fica registrado.
-const ROTAS_DE_TOPO_ESPERADAS = new Set(['/', '/login', '/esqueci', '/dev/componentes']);
+const ROTAS_DE_TOPO_ESPERADAS = new Set(['/', '/login', '/esqueci', '/dev/componentes', '/config/impressao']);
 for (const rota of rotasExplicitas) {
   if (/:|\*/.test(rota) || ROTAS_DE_TOPO_ESPERADAS.has(rota)) continue;
   if (!MODULES.some((m) => m.path === rota)) {

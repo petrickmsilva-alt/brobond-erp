@@ -32,6 +32,7 @@ import { BarrasVerticais } from '../components/Charts';
 import { DETALHE_DIRETO, FORM_DIRETO, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Pagination } from '../components/ui-kit';
 import ReauthModal from '../components/ReauthModal';
 import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
@@ -693,6 +694,9 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           <button className="btn-icon" onClick={() => pedirSenhaTemporaria(row)} title="Gerar senha temporária (exibição única)" aria-label="Gerar senha temporária">
             <KeyRound className="h-4 w-4" />
           </button>
+        )}
+        {resource.key === 'propostas' && (
+          <DocumentPrintButton tipo="propostas" documentoId={Number(row.id)} label="Imprimir" compact />
         )}
         {resource.detail && (
           <button className="btn-icon" onClick={() => navigate(`/${resource.key}/${row.id}`)} title="Ver detalhes" aria-label="Ver detalhes">

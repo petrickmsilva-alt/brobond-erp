@@ -1,9 +1,9 @@
 {
   "name": "brobond-print-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Agente local de impressão do BroBond ERP (P1) — polling na fila PrintIR, claim/lease, machine identity. Escuta somente em 127.0.0.1.",
+  "description": "Agente local de impressão do BroBond ERP (P1..P6) — polling na fila PrintIR, renderers ESC/POS, ZPL II e EPL2, claim/lease, machine identity. Escuta somente em 127.0.0.1.",
   "engines": { "node": ">=18" },
   "scripts": {
     "build": "tsc",

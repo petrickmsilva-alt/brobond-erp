@@ -5,22 +5,26 @@
 // tipos são espelhados estruturalmente (o agente compila isolado) e um
 // teste de conformidade garante que a versão bate com o domínio.
 //
-// P1 entrega o renderer de TEXTO (dry-run/validação do pipeline). ESC/POS
-// chega na P2 e ZPL/EPL2 na P4 implementando esta mesma interface — o
-// restante do agente (fila, lease, journal) não muda.
+// Família completa de renderers do agente local:
+//   • text   — texto puro / validação / dry-run (P1)
+//   • escpos — térmico de recibos e cupons 80mm/58mm (P2)
+//   • zpl    — térmico de etiquetas ZPL II / Zebra (P4)
+//   • epl2   — térmico de etiquetas EPL2 / Elgin / Zebra legado (P4)
 // ============================================================================
 
 export const PRINT_IR_VERSION = 1; // deve igualar packages/domain (teste de conformidade)
 
+export type PrintAlign = 'left' | 'center' | 'right';
+
 export type PrintBlock =
-  | { kind: 'text'; text: string; align?: 'left' | 'center' | 'right'; emphasis?: 'normal' | 'bold' | 'title'; size?: 'normal' | 'small' | 'large' }
+  | { kind: 'text'; text: string; align?: PrintAlign; emphasis?: 'normal' | 'bold' | 'title'; size?: 'normal' | 'small' | 'large' }
   | { kind: 'kv'; label: string; value: string }
-  | { kind: 'table'; columns: { header: string; align?: string }[]; rows: string[][] }
+  | { kind: 'table'; columns: { header: string; align?: PrintAlign }[]; rows: string[][] }
   | { kind: 'barcode'; value: string; symbology?: string; caption?: string }
   | { kind: 'qrcode'; value: string; caption?: string }
   | { kind: 'separator' }
   | { kind: 'spacer'; lines?: number }
-  | { kind: 'cut' };
+  | { kind: 'cut'; repeat?: number };
 
 export type PrintIR = {
   version: number;
@@ -32,6 +36,7 @@ export type PrintIR = {
   printerName?: string | null;
   source: string;
   docType: string;
+  related?: { type: string; id: string } | null;
   copies: number;
   priority: number;
   content: PrintBlock[];
@@ -57,6 +62,8 @@ export interface Renderer {
   render(ir: PrintIR): Promise<Buffer>;
 }
 
+export type PrintRenderer = Renderer;
+
 function centro(s: string, largura: number): string {
   if (s.length >= largura) return s;
   const pad = Math.floor((largura - s.length) / 2);
@@ -69,61 +76,113 @@ export class TextRenderer implements Renderer {
   constructor(private largura = 48) {}
 
   async render(ir: PrintIR): Promise<Buffer> {
-    const linhas: string[] = [];
+    if (ir.version !== PRINT_IR_VERSION) {
+      throw new PrintError('IR_VERSION', `Versão de PrintIR não suportada: ${String(ir.version)}`, false);
+    }
+    const linhasTotais: string[] = [];
+    let secao: string[] = [];
+
+    const descarregarSecao = (repeat = 1, comCorte = false) => {
+      const n = Math.max(1, Math.min(200, Math.trunc(repeat)));
+      for (let r = 0; r < n; r++) {
+        linhasTotais.push(...secao);
+        if (comCorte) linhasTotais.push('', '- - - - corte - - - -', '');
+      }
+      secao = [];
+    };
+
     for (const b of ir.content) {
       switch (b.kind) {
         case 'text': {
-          const t = b.emphasis === 'title' ? b.text.toUpperCase() : b.text;
-          linhas.push(b.align === 'center' ? centro(t, this.largura) : b.align === 'right' ? t.padStart(this.largura) : t);
+          const t = (b.emphasis === 'title' ? b.text.toUpperCase() : b.text).replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '');
+          secao.push(b.align === 'center' ? centro(t, this.largura) : b.align === 'right' ? t.padStart(this.largura) : t);
           break;
         }
         case 'kv': {
-          const esq = `${b.label}:`;
-          const dir = b.value;
-          linhas.push(esq + ' '.repeat(Math.max(1, this.largura - esq.length - dir.length)) + dir);
+          const esq = `${b.label}:`.replace(/[\x00-\x1f\x7f]/g, '');
+          const dir = b.value.replace(/[\x00-\x1f\x7f]/g, '');
+          secao.push(esq + ' '.repeat(Math.max(1, this.largura - esq.length - dir.length)) + dir);
           break;
         }
         case 'table': {
-          linhas.push(b.columns.map((c) => c.header).join('  '));
-          for (const row of b.rows) linhas.push(row.join('  '));
+          secao.push(b.columns.map((c) => c.header.replace(/[\x00-\x1f\x7f]/g, '')).join('  '));
+          for (const row of b.rows) secao.push(row.map((c) => c.replace(/[\x00-\x1f\x7f]/g, '')).join('  '));
           break;
         }
         case 'barcode':
-          linhas.push(centro(`[BARCODE ${b.value}]`, this.largura));
-          if (b.caption) linhas.push(centro(b.caption, this.largura));
+          secao.push(centro(`[BARCODE ${b.value.replace(/[\x00-\x1f\x7f]/g, '')}]`, this.largura));
+          if (b.caption) secao.push(centro(b.caption.replace(/[\x00-\x1f\x7f]/g, ''), this.largura));
           break;
         case 'qrcode':
-          linhas.push(centro(`[QR ${b.value}]`, this.largura));
-          if (b.caption) linhas.push(centro(b.caption, this.largura));
+          secao.push(centro(`[QR ${b.value.replace(/[\x00-\x1f\x7f]/g, '')}]`, this.largura));
+          if (b.caption) secao.push(centro(b.caption.replace(/[\x00-\x1f\x7f]/g, ''), this.largura));
           break;
         case 'separator':
-          linhas.push('-'.repeat(this.largura));
+          secao.push('-'.repeat(this.largura));
           break;
         case 'spacer':
-          for (let i = 0; i < (b.lines ?? 1); i++) linhas.push('');
+          for (let i = 0; i < (b.lines ?? 1); i++) secao.push('');
           break;
         case 'cut':
-          linhas.push('', '- - - - corte - - - -', '');
+          descarregarSecao(b.repeat ?? 1, true);
           break;
         default:
           throw new PrintError('IR_INVALID', `Bloco desconhecido: ${JSON.stringify(b).slice(0, 80)}`, false);
       }
     }
-    return Buffer.from(linhas.join('\n') + '\n', 'utf8');
+    if (secao.length > 0) descarregarSecao(1, false);
+    return Buffer.from(linhasTotais.join('\n') + '\n', 'utf8');
   }
 }
 
-/** Registro de renderers por família. P2/P4 registram os físicos aqui. */
+/**
+ * Registro de renderers por protocolo/família.
+ * Nunca imprime em formato errado silenciosamente: protocolo desconhecido
+ * informado em `metadata.protocol` gera erro permanente `UNSUPPORTED_PROTOCOL`.
+ */
 export class RendererRegistry {
   private map = new Map<string, Renderer>();
+
   register(familia: string, r: Renderer) {
-    this.map.set(familia, r);
+    this.map.set(familia.toLowerCase(), r);
   }
+
+  has(familia: string): boolean {
+    return this.map.has(familia.toLowerCase());
+  }
+
   get(familia: string): Renderer {
-    const r = this.map.get(familia);
+    const r = this.map.get(familia.toLowerCase());
     if (!r) throw new PrintError('RENDER_UNSUPPORTED', `Renderer "${familia}" não disponível neste agente`, false);
     return r;
   }
+
+  /**
+   * Seleciona o renderer para o job:
+   * 1. Se `metadata.protocol` vier explícito, EXIGE suporte exato (senão lança
+   *    erro permanente `UNSUPPORTED_PROTOCOL` — nunca cai em texto silencioso).
+   * 2. Sem `metadata.protocol`, escolhe o protocolo canônico pelo `docType`
+   *    (`recibo_pdv` -> `escpos`, `etiqueta_produto` -> `zpl`) quando registrado,
+   *    ou usa `fallbackFamilia`.
+   */
+  forJob(docType: string, metadata?: Record<string, unknown>, fallbackFamilia = 'text'): Renderer {
+    const rawProto = typeof metadata?.protocol === 'string' ? metadata.protocol.trim().toLowerCase() : '';
+    if (rawProto) {
+      const r = this.map.get(rawProto);
+      if (!r) {
+        throw new PrintError(
+          'UNSUPPORTED_PROTOCOL',
+          `Protocolo "${rawProto}" não é suportado pelo agente local (suportados: ${this.familias().join(', ') || 'nenhum'}).`,
+          false
+        );
+      }
+      return r;
+    }
+    if (docType === 'recibo_pdv' && this.map.has('escpos')) return this.map.get('escpos')!;
+    if (docType === 'etiqueta_produto' && this.map.has('zpl')) return this.map.get('zpl')!;
+    return this.get(fallbackFamilia);
+  }
+
   familias(): string[] {
     return [...this.map.keys()];
   }

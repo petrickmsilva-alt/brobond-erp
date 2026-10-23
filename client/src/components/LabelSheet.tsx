@@ -1,8 +1,15 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Printer } from 'lucide-react';
 import { barcodeSvg } from '../lib/barcode';
 import { formatMoney } from '../lib/format';
-import { Modal } from './ui';
+import {
+  getPreferredTerminal,
+  imprimirEtiquetasTermicas,
+  listarTerminaisImpressao,
+  novaChaveIdempotencia,
+  type TerminalConfigCliente,
+} from '../lib/printAgent';
+import { Modal, useToast } from './ui';
 
 type Tam = { id: number; codigo: string };
 type Grade = { local: string; celulas: { tamanho_id: number; quantidade: number }[] }[];
@@ -45,9 +52,24 @@ export function LabelSheet({
   medidas?: Medidas;
   user?: string;
 }) {
-  const [mode, setMode] = useState<'a4' | 'roll'>('a4');
+  const toast = useToast();
+  const [mode, setMode] = useState<'a4' | 'roll' | 'zpl' | 'epl2'>('a4');
   const [showPrice, setShowPrice] = useState(true);
   const [showMedidas, setShowMedidas] = useState(false);
+  const [terminal, setTerminal] = useState(() => getPreferredTerminal());
+  const [terminais, setTerminais] = useState<TerminalConfigCliente[]>([]);
+  const [labelDims, setLabelDims] = useState<'50x30' | '40x25' | '60x40' | '100x50'>('50x30');
+  const [dpi, setDpi] = useState<203 | 300>(203);
+  const [enviandoFila, setEnviandoFila] = useState(false);
+  const [idemKey, setIdemKey] = useState(() => novaChaveIdempotencia());
+
+  useEffect(() => {
+    if (!open) return;
+    setIdemKey(novaChaveIdempotencia());
+    listarTerminaisImpressao()
+      .then((r) => setTerminais(r.rows.filter((t) => t.ativo)))
+      .catch(() => {});
+  }, [open]);
   const [qtd, setQtd] = useState<Record<number, number>>(() => {
     // sugestão: 1 por tamanho; se houver estoque, usa o saldo total do tamanho
     const out: Record<number, number> = {};
@@ -63,7 +85,43 @@ export function LabelSheet({
   const cor = produto.cor_id__label || produto.cor || '';
   const total = useMemo(() => Object.values(qtd).reduce((a, b) => a + (Number(b) || 0), 0) + (Number(extra) || 0), [qtd, extra]);
 
-  function print() {
+  async function print() {
+    if (mode === 'zpl' || mode === 'epl2') {
+      const itens: { produto_id: number; tamanho_id?: number | null; quantidade: number }[] = [];
+      for (const t of tamanhos) {
+        const q = Number(qtd[t.id]) || 0;
+        if (q > 0) itens.push({ produto_id: Number(produto.id), tamanho_id: t.id, quantidade: q });
+      }
+      if ((Number(extra) || 0) > 0) {
+        itens.push({ produto_id: Number(produto.id), tamanho_id: null, quantidade: Number(extra) });
+      }
+      if (!itens.length) return;
+      const [wMm, hMm] = labelDims.split('x').map(Number);
+      setEnviandoFila(true);
+      try {
+        const res = await imprimirEtiquetasTermicas({
+          itens,
+          protocol: mode,
+          terminal: terminal || undefined,
+          incluir_preco: showPrice,
+          label_width_mm: wMm,
+          label_height_mm: hMm,
+          dpi,
+          idempotency_key: idemKey,
+        });
+        toast.success(
+          `${res.total_etiquetas} etiqueta(s) ${res.protocol.toUpperCase()} enfileirada(s) (Job #${res.job.public_id.slice(0, 8)}).`
+        );
+        setIdemKey(novaChaveIdempotencia());
+        onClose();
+      } catch (e: any) {
+        toast.error(e?.message || 'Erro ao enfileirar etiquetas térmicas.');
+      } finally {
+        setEnviandoFila(false);
+      }
+      return;
+    }
+
     const { svg, kind } = barcodeSvg(code, { height: mode === 'roll' ? 30 : 34, module: mode === 'roll' ? 1 : 1.1, fontSize: 8 });
     const items: { size: string }[] = [];
     for (const t of tamanhos) for (let i = 0; i < (Number(qtd[t.id]) || 0); i++) items.push({ size: t.codigo });
@@ -166,8 +224,11 @@ export function LabelSheet({
           <button className="btn-secondary" onClick={onClose}>
             Cancelar
           </button>
-          <button className="btn-primary" onClick={print} disabled={total === 0 || !code}>
-            <Printer className="h-4 w-4" /> Imprimir {total} etiqueta{total === 1 ? '' : 's'}
+          <button className="btn-primary" onClick={() => void print()} disabled={enviandoFila || total === 0 || !code || ((mode === 'zpl' || mode === 'epl2') && total > 500)}>
+            <Printer className="h-4 w-4" />{' '}
+            {enviandoFila
+              ? 'Enfileirando...'
+              : `${mode === 'zpl' || mode === 'epl2' ? 'Enviar para fila' : 'Imprimir'} ${total} etiqueta${total === 1 ? '' : 's'}`}
           </button>
         </>
       }
@@ -201,10 +262,19 @@ export function LabelSheet({
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block">
-            <span className="label">Formato</span>
-            <select className="input" value={mode} onChange={(e) => setMode(e.target.value as 'a4' | 'roll')}>
+            <span className="label">Formato / Destino</span>
+            <select
+              className="input"
+              value={mode}
+              onChange={(e) => {
+                setMode(e.target.value as 'a4' | 'roll' | 'zpl' | 'epl2');
+                setIdemKey(novaChaveIdempotencia());
+              }}
+            >
               <option value="a4">Folha A4 — 3 colunas (Pimaco A4263 / 6182)</option>
-              <option value="roll">Bobina térmica 50 × 30 mm</option>
+              <option value="roll">Bobina 50 × 30 mm (Navegador)</option>
+              <option value="zpl">Térmica ZPL II — Fila do Agente (Zebra)</option>
+              <option value="epl2">Térmica EPL2 — Fila do Agente (Elgin / TLP)</option>
             </select>
           </label>
           <label className="flex items-end gap-2 pb-2">
@@ -212,6 +282,43 @@ export function LabelSheet({
             <span className="text-sm text-slate-700">Mostrar preço de venda</span>
           </label>
         </div>
+
+        {(mode === 'zpl' || mode === 'epl2') && (
+          <div className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-3">
+            <label className="block">
+              <span className="label text-xs">Tamanho da etiqueta</span>
+              <select className="input text-xs" value={labelDims} onChange={(e) => setLabelDims(e.target.value as any)}>
+                <option value="50x30">50 × 30 mm</option>
+                <option value="40x25">40 × 25 mm</option>
+                <option value="60x40">60 × 40 mm</option>
+                <option value="100x50">100 × 50 mm</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="label text-xs">Resolução</span>
+              <select className="input text-xs" value={dpi} onChange={(e) => setDpi(Number(e.target.value) as 203 | 300)}>
+                <option value={203}>203 dpi (8 dots/mm)</option>
+                <option value={300}>300 dpi (12 dots/mm)</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="label text-xs">Terminal</span>
+              <select className="input text-xs" value={terminal} onChange={(e) => setTerminal(e.target.value)}>
+                <option value="">Padrão da empresa</option>
+                {terminais.map((t) => (
+                  <option key={t.id} value={t.codigo}>
+                    {t.codigo} ({t.nome})
+                  </option>
+                ))}
+              </select>
+            </label>
+            {total > 500 && (
+              <p className="col-span-full text-xs text-red-600">
+                Limite de segurança por lote térmico: máximo de 500 etiquetas por envio (atual: {total}).
+              </p>
+            )}
+          </div>
+        )}
 
         {medidas && medidas.medidas.length > 0 && (
           <label className="flex items-center gap-2">

@@ -6,6 +6,7 @@ import { useMeta, type Option } from '../lib/meta';
 import { ProductSelector } from '../components/ProductSelector';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { formatDate, formatMoney, formatNumber } from '../lib/format';
 
 type ItemOP = { id: number; tamanho_id?: number; quantidade: number; tamanho_id__label?: string; [k: string]: any };
@@ -398,6 +399,7 @@ export default function OrdemDetail() {
         description={nomeProduto ? `${nomeProduto} · ${totalPecas} peça(s)` : `${totalPecas} peça(s)`}
         actions={
           <>
+            <DocumentPrintButton tipo="ordens" documentoId={Number(ordem.id)} label="Imprimir OP" />
             {podeEditar && planoEditavel && (
               <button className="btn-secondary" onClick={abrirEdicao}>
                 <Pencil className="h-4 w-4" /> Editar

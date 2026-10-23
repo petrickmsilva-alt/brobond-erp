@@ -17,7 +17,9 @@ import {
   CreditCard,
   Minus,
   Plus,
+  Printer,
   Receipt,
+  RefreshCw,
   ScanBarcode,
   ShoppingCart,
   Trash2,
@@ -25,6 +27,12 @@ import {
   X,
 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
+import {
+  abrirContingenciaImpressao,
+  getPreferredTerminal,
+  novaChaveIdempotencia,
+  reimprimirCupomPdv,
+} from '../lib/printAgent';
 import { formatMoney } from '../lib/format';
 import { Alert, Badge, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import BarcodeScanner from '../components/BarcodeScanner';
@@ -119,11 +127,23 @@ type CalculoServidor = {
 /** O servidor informa se a venda é elegível a NFC-e; nada mais é usado na tela. */
 type SituacaoFiscal = { elegivel?: boolean; modelo?: string } | null;
 
+type CupomImpressaoStatus = {
+  enfileirado: boolean;
+  job_public_id: string | null;
+  status: string | null;
+  idempotente: boolean;
+  erro: string | null;
+  fallback_html_url: string;
+  fallback_pdf_url: string;
+};
+
 type RespostaVenda = {
   venda_id: number;
+  idempotente?: boolean;
   calculo: CalculoServidor;
   fiscal: SituacaoFiscal;
   divergencias_de_preco: unknown[];
+  cupom_impressao?: CupomImpressaoStatus;
 };
 
 const FORMAS: Array<{ value: string; label: string }> = [
@@ -158,7 +178,15 @@ export default function PdvPage() {
   const [movAberto, setMovAberto] = useState<'suprimento' | 'sangria' | null>(null);
   const [fechando, setFechando] = useState(false);
   const [ocupado, setOcupado] = useState(false);
-  const [ultimaVenda, setUltimaVenda] = useState<{ id: number; calculo: CalculoServidor; fiscal: SituacaoFiscal } | null>(null);
+  const [ultimaVenda, setUltimaVenda] = useState<{
+    id: number;
+    calculo: CalculoServidor;
+    fiscal: SituacaoFiscal;
+    cupom?: CupomImpressaoStatus;
+  } | null>(null);
+  const [modalReimpressaoCupom, setModalReimpressaoCupom] = useState(false);
+  const [motivoReimpressaoCupom, setMotivoReimpressaoCupom] = useState('');
+  const vendaIdemKeyRef = useRef<string>(novaChaveIdempotencia());
   /**
    * Emissão fiscal da última venda. Enquanto for `null`, não se afirma nada:
    * só o servidor sabe se a nota foi autorizada — a tela nunca marca como
@@ -397,6 +425,8 @@ export default function PdvPage() {
         '/pdv/vendas',
         {
           caixa_id: caixa.id,
+          idempotency_key: vendaIdemKeyRef.current,
+          terminal: getPreferredTerminal() || caixa.numero || undefined,
           itens: linhas.map((l) => ({
             produto_id: l.produto_id,
             tamanho_id: l.tamanho_id,
@@ -410,7 +440,8 @@ export default function PdvPage() {
           faturar,
         }
       );
-      setUltimaVenda({ id: r.venda_id, calculo: r.calculo, fiscal: r.fiscal });
+      vendaIdemKeyRef.current = novaChaveIdempotencia();
+      setUltimaVenda({ id: r.venda_id, calculo: r.calculo, fiscal: r.fiscal, cupom: r.cupom_impressao });
       setEmissao(null);
       setLinhas([]);
       setPagamentos([]);
@@ -696,6 +727,50 @@ export default function PdvPage() {
                         )}
                       </div>
                     )}
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                      {ultimaVenda.cupom?.enfileirado && ultimaVenda.cupom.job_public_id ? (
+                        <span className="rounded bg-emerald-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                          Cupom na fila #{ultimaVenda.cupom.job_public_id.slice(0, 8)} ({ultimaVenda.cupom.status || 'QUEUED'})
+                        </span>
+                      ) : ultimaVenda.cupom?.erro ? (
+                        <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">
+                          Impressora indisponível ({ultimaVenda.cupom.erro}) — use a contingência abaixo
+                        </span>
+                      ) : null}
+
+                      <button
+                        type="button"
+                        className="btn-secondary !px-2.5 !py-1 text-xs"
+                        onClick={() => {
+                          setMotivoReimpressaoCupom('');
+                          setModalReimpressaoCupom(true);
+                        }}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" /> Reimprimir cupom
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary !px-2.5 !py-1 text-xs"
+                        onClick={() =>
+                          abrirContingenciaImpressao(
+                            ultimaVenda.cupom?.fallback_html_url || `/api/pdv/vendas/${ultimaVenda.id}/cupom/html`
+                          ).catch((e) => toast.error(e.message))
+                        }
+                      >
+                        <Printer className="h-3.5 w-3.5" /> Cupom navegador
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary !px-2.5 !py-1 text-xs"
+                        onClick={() =>
+                          abrirContingenciaImpressao(
+                            ultimaVenda.cupom?.fallback_pdf_url || `/api/pdv/vendas/${ultimaVenda.id}/cupom/pdf`
+                          ).catch((e) => toast.error(e.message))
+                        }
+                      >
+                        Cupom PDF
+                      </button>
+                    </div>
                     <button className="btn-ghost mt-1" onClick={() => setUltimaVenda(null)}>
                       dispensar
                     </button>
@@ -938,6 +1013,67 @@ export default function PdvPage() {
           onClose={() => setScannerAberto(false)}
           onError={(e) => toast.error(e)}
         />
+      </Modal>
+
+      <Modal
+        open={modalReimpressaoCupom && Boolean(ultimaVenda)}
+        onClose={() => setModalReimpressaoCupom(false)}
+        title={`Reimprimir Cupom — Venda #${ultimaVenda?.id ?? ''}`}
+        subtitle="Gera um novo job auditado com referência (reprint_of) ao cupom original"
+      >
+        <div className="space-y-3">
+          <label className="label">
+            Motivo da reimpressão (opcional — salvo na auditoria)
+            <input
+              type="text"
+              maxLength={240}
+              className="input"
+              placeholder="Ex.: bobina enroscou, 2ª via do cliente..."
+              value={motivoReimpressaoCupom}
+              onChange={(e) => setMotivoReimpressaoCupom(e.target.value)}
+            />
+          </label>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn-ghost" onClick={() => setModalReimpressaoCupom(false)}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn-accent"
+              onClick={async () => {
+                if (!ultimaVenda) return;
+                try {
+                  const r = await reimprimirCupomPdv(ultimaVenda.id, {
+                    motivo: motivoReimpressaoCupom.trim() || undefined,
+                    terminal: getPreferredTerminal() || caixa?.numero || undefined,
+                  });
+                  setUltimaVenda((uv) =>
+                    uv
+                      ? {
+                          ...uv,
+                          cupom: {
+                            enfileirado: true,
+                            job_public_id: r.job.public_id,
+                            status: r.job.status,
+                            idempotente: r.idempotente,
+                            erro: null,
+                            fallback_html_url: r.fallback_html_url,
+                            fallback_pdf_url: r.fallback_pdf_url,
+                          },
+                        }
+                      : null
+                  );
+                  toast.success(`Reimpressão enfileirada (#${r.job.public_id.slice(0, 8)}).`);
+                  setModalReimpressaoCupom(false);
+                } catch (e: any) {
+                  toast.error(e?.message || 'Não foi possível reimprimir o cupom.');
+                }
+              }}
+            >
+              <RefreshCw className="h-4 w-4" /> Confirmar reimpressão
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

@@ -14,6 +14,7 @@ import { MODULES, visibleModules } from './modules';
 // quando a rota é realmente acessada.
 const ModulePage = lazy(() => import('./pages/ModulePage'));
 const Settings = lazy(() => import('./pages/Settings'));
+const ImpressaoPage = lazy(() => import('./pages/ImpressaoPage'));
 const ProductDetail = lazy(() => import('./pages/ProductDetail'));
 const ClienteFormPage = lazy(() => import('./pages/ClienteFormPage'));
 const ProdutoFormPage = lazy(() => import('./pages/ProdutoFormPage'));
@@ -90,6 +91,7 @@ export default function App() {
           >
             <Route index element={<Dashboard />} />
             <Route path="config" element={<Settings />} />
+            <Route path="config/impressao" element={<ImpressaoPage />} />
             <Route path="produtos/:id" element={<ProductDetail />} />
             {/* Cadastro de clientes PF/PJ em página própria (fora do modal). */}
             <Route
