@@ -1,18 +1,13 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle as AlertTriangleIcon,
-  ArrowDown,
-  ArrowUp,
-  ArrowUpDown,
   BarChart3 as BarChartIcon,
   CheckCircle2 as CheckCircle2Icon,
   Cog,
-  Columns3,
   Download,
   Copy,
   Eye,
-  EyeOff,
   Mail,
   Factory as FactoryIcon,
   FileUp,
@@ -23,7 +18,6 @@ import {
   Pencil,
   Plus,
   RefreshCw,
-  Rows3,
   RotateCcw,
   Search,
   Share2,
@@ -32,22 +26,41 @@ import {
 } from 'lucide-react';
 import { api, ApiError, downloadFile } from '../lib/api';
 import { useMeta, type Field, type ListResult, type Option, type PublicFile, type ResourceMeta } from '../lib/meta';
-import { ColorDot, ImageField, Lightbox, Thumb } from '../components/ImageField';
-import { formatCell } from '../lib/format';
+import { ImageField, Lightbox } from '../components/ImageField';
 import { BarrasVerticais } from '../components/Charts';
 import { DETALHE_DIRETO, FORM_DIRETO, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import { Pagination } from '../components/ui-kit';
 import ReauthModal from '../components/ReauthModal';
 import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
-import { ProductSelector } from '../components/ProductSelector';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
-import { useLocalStorageBool, useLocalStorageInt, useLocalStorageSet } from '../lib/useLocalStorage';
+import { useLocalStorageChoice, useLocalStorageInt, useLocalStorageSet } from '../lib/useLocalStorage';
 import PlannedModule from './PlannedModule';
 import CatalogoShareModal from '../components/CatalogoShareModal';
 import CatalogoInsights from '../components/CatalogoInsights';
 import PortalAccessModal from '../components/PortalAccessModal';
+// Listagem (tabela/visual): apresentação isolada do CRUD genérico.
+import { ListaTabela } from '../components/ListaTabela';
+import { ListaCards } from '../components/ListaCards';
+import { ColunasMenu, DensidadeMenu, ModoVisualizacaoControl } from '../components/ListaControles';
+import { ChipsFiltros, PainelFiltros } from '../components/ListaFiltros';
+import { rowLabel } from '../components/ListaValores';
+import {
+  CAMPO_ESTOQUE,
+  CAMPO_ID,
+  camposOrdenados,
+  campoTitulo,
+  camposDoCard,
+  chipsDeFiltros,
+  DENSIDADE_PADRAO,
+  DENSIDADES,
+  densidadeLegada,
+  MODO_PADRAO,
+  MODOS_VISUALIZACAO,
+  type ModoVisualizacao,
+  usaColunaEstoque,
+} from '../lib/lista';
 
 // Páginas especializadas pesadas: carregadas sob demanda, só quando o módulo
 // correspondente é aberto — evitam engordar o bundle de quem só usa cadastros simples.
@@ -290,7 +303,20 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
 
   // Campos virtuais só entram na tabela se pedirem explicitamente (list: true),
   // ex.: "Senha" em usuários, que mostra o estado e não o valor.
-  const allListFields = useMemo(() => resource.fields.filter((f) => f.list !== false && (!f.virtual || f.list === true) && f.type !== 'password' && f.type !== 'images'), [resource]);
+  //
+  // Produtos ganham a coluna sintética "Estoque" logo após o preço — ela lê o
+  // saldo somente quando o payload já o traz (ver lib/lista.ts) e nunca dispara
+  // uma consulta por linha.
+  const allListFields = useMemo(() => {
+    const base = resource.fields.filter(
+      (f) => f.list !== false && (!f.virtual || f.list === true) && f.type !== 'password' && f.type !== 'images'
+    );
+    if (usaColunaEstoque(resource.key)) {
+      return base.some((f) => f.name === CAMPO_ESTOQUE.name) ? base : [...base, CAMPO_ESTOQUE];
+    }
+    // Recursos genéricos mantêm a coluna `#` (id) à esquerda, como antes.
+    return base.some((f) => f.name === 'id') ? base : [CAMPO_ID, ...base];
+  }, [resource]);
   const searchable = resource.fields.some((f) => f.search);
   // Filtros da listagem: quando o recurso declara `filterFields` (ex.: Produtos),
   // a ordem e a escolha são as do domínio — inclusive faixa numérica (preço).
@@ -305,22 +331,16 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       .slice(0, 8);
   }, [resource]);
 
-  // Colunas visíveis e densidade da tabela: preferências por recurso, persistidas
-  // no navegador — úteis em recursos com muitos campos (Produtos, Usuários), onde
-  // ver tudo de uma vez vira "parede de texto" em telas de notebook.
+  // Colunas visíveis, densidade e modo de visualização: preferências persistidas
+  // no navegador. A densidade antiga ("tabela compacta", booleana) migra para
+  // os três níveis atuais na primeira visita.
   const [colunasOcultas, setColunasOcultas] = useLocalStorageSet(`brobond_colunas_ocultas_${resource.key}`);
-  const [compacta, setCompacta] = useLocalStorageBool('brobond_tabela_compacta', false);
-  const [colunasMenuOpen, setColunasMenuOpen] = useState(false);
-  const colunasMenuRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!colunasMenuOpen) return;
-    const onClick = (e: MouseEvent) => {
-      if (colunasMenuRef.current && !colunasMenuRef.current.contains(e.target as Node)) setColunasMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [colunasMenuOpen]);
-  const listFields = useMemo(() => allListFields.filter((f) => !colunasOcultas.has(f.name)), [allListFields, colunasOcultas]);
+  const [densidade, setDensidade] = useLocalStorageChoice('brobond_lista_densidade', DENSIDADE_PADRAO, DENSIDADES, densidadeLegada);
+  const [modoVisualizacao, setModoVisualizacao] = useLocalStorageChoice<ModoVisualizacao>('brobond_lista_modo', MODO_PADRAO, MODOS_VISUALIZACAO);
+  const listFields = useMemo(
+    () => camposOrdenados(allListFields.filter((f) => !colunasOcultas.has(f.name)), resource.key),
+    [allListFields, colunasOcultas, resource.key]
+  );
 
   // A busca é do servidor: espera o operador parar de digitar e volta à 1ª
   // página (o recorte mudou). A guarda evita que o disparo inicial — q vazio,
@@ -336,8 +356,15 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     return () => window.clearTimeout(t);
   }, [q]);
 
-  // Quantos filtros estão ativos (cada chave — inclusive `_min`/`_max` e `_de`/`_ate`).
-  const filtrosAtivos = useMemo(() => Object.values(filtros).filter((v) => v !== undefined && v !== '').length, [filtros]);
+  // Filtros ativos como chips removíveis (fonte do contador e da remoção
+  // individual). Faixas de data/preço aparecem como um único chip — por isso o
+  // contador é o número de CHIPS, não de chaves na query.
+  const chipsFiltros = useMemo(() => chipsDeFiltros(filtroFields, filtros, refOptions), [filtroFields, filtros, refOptions]);
+  const filtrosAtivos = chipsFiltros.length;
+  /** Campos exibidos no modo visual (mesmos dados, outra apresentação). */
+  const camposCard = useMemo(() => camposDoCard(listFields, resource.key), [listFields, resource.key]);
+  /** Existe algum recorte (busca ou filtro) aplicado? Muda o texto do vazio. */
+  const recorteAtivo = debouncedQ !== '' || filtrosAtivos > 0;
 
   const paramsAtuais = useMemo(() => {
     const params = new URLSearchParams();
@@ -541,6 +568,118 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     setPage(1);
   }
 
+  /** Limpa TODOS os filtros e volta à primeira página da listagem normal. */
+  function limparFiltros() {
+    setFiltros({});
+    setPage(1);
+  }
+
+  /** Remove um chip (uma faixa inteira, quando for o caso). */
+  function removerFiltro(chaves: string[]) {
+    setFiltros((prev) => {
+      const next = { ...prev };
+      for (const chave of chaves) delete next[chave];
+      return next;
+    });
+    setPage(1);
+  }
+
+  /**
+   * Abre a galeria existente (Lightbox) com todas as fotos da linha — sem sair
+   * da listagem e sem buscar nada novo: as fotos já vieram no payload.
+   */
+  function abrirFoto(row: Record<string, any>) {
+    const fotos: PublicFile[] = Array.isArray(row.fotos) ? row.fotos : [];
+    if (fotos.length) {
+      setZoom({ file: fotos[0], files: fotos });
+      return;
+    }
+    // Fallback: a linha tem miniatura mas não veio a galeria completa — abre a
+    // própria miniatura ampliada, sem buscar nada no servidor.
+    if (!row.foto_url) return;
+    const unica: PublicFile = {
+      id: -Number(row.id),
+      nome: null,
+      mime: null,
+      tamanho_bytes: null,
+      url: String(row.foto_url),
+      thumb_url: String(row.foto_url),
+      principal: true,
+      ordem: 0,
+      criado_em: '',
+    };
+    setZoom({ file: unica, files: [unica] });
+  }
+
+  /** Clique/duplo clique na linha: detalhe quando existe, senão edição. */
+  function abrirLinha(row: Record<string, any>) {
+    if (resource.detail || DETALHE_DIRETO.has(module.id)) {
+      navigate(`/${resource.key}/${row.id}`);
+      return;
+    }
+    if (canUpdate) openEdit(row);
+  }
+
+  /** Linhas estornadas continuam visíveis, porém riscadas (histórico/auditoria). */
+  function linhaClasse(row: Record<string, any>) {
+    return resource.key === 'movimentacoes' && row.estornado ? 'opacity-50 line-through' : '';
+  }
+
+  const temAcoesLinha = canUpdate || canDelete || !!resource.detail;
+  /** A linha só é "clicável" quando existe um destino (detalhe ou edição). */
+  const podeAbrirLinha = !!resource.detail || DETALHE_DIRETO.has(module.id) || canUpdate;
+
+  /**
+   * Ações da linha — a MESMA lista na tabela e nos cartões (nada de regra
+   * duplicada por modo de visualização).
+   */
+  function renderAcoesLinha(row: Record<string, any>) {
+    return (
+      <>
+        {resource.key === 'clientes' && canUpdate && (
+          <button className="btn-icon !bg-navy-50 !text-navy-700" onClick={() => setClientePortal(row)} title="Portal do cliente" aria-label="Portal do cliente">
+            <KeyRound className="h-4 w-4" />
+          </button>
+        )}
+        {resource.key === 'catalogos' && permite(user?.perm_compartilhar) && (
+          <button className="btn-icon !bg-brand-50 !text-brand-700 hover:!bg-brand-100" onClick={() => setCatalogoCompartilhar(row)} title="Compartilhar catálogo" aria-label="Compartilhar catálogo">
+            <Share2 className="h-4 w-4" />
+          </button>
+        )}
+        {resource.key === 'usuarios' && canUpdate && !row.senha_definida_em && (
+          <button className="btn-icon" onClick={() => reenviarConvite(row)} disabled={conviteBusyId === Number(row.id)} title="Reenviar convite de acesso" aria-label="Reenviar convite">
+            {conviteBusyId === Number(row.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+          </button>
+        )}
+        {resource.key === 'usuarios' && canUpdate && !!row.senha_definida_em && (
+          <button className="btn-icon" onClick={() => pedirSenhaTemporaria(row)} title="Gerar senha temporária (exibição única)" aria-label="Gerar senha temporária">
+            <KeyRound className="h-4 w-4" />
+          </button>
+        )}
+        {resource.detail && (
+          <button className="btn-icon" onClick={() => navigate(`/${resource.key}/${row.id}`)} title="Ver detalhes" aria-label="Ver detalhes">
+            <Eye className="h-4 w-4" />
+          </button>
+        )}
+        {canUpdate && (
+          <button className="btn-icon" onClick={() => openEdit(row)} title="Editar" aria-label="Editar">
+            <Pencil className="h-4 w-4" />
+          </button>
+        )}
+        {resource.key === 'movimentacoes' && !row.estornado && (user?.perfil === 'admin' || user?.perfil === 'gerente') && (
+          <button className="btn-icon hover:!bg-amber-50 hover:!text-amber-600" onClick={() => setToEstornar(row)} title="Estornar movimentação (cria lançamento inverso)" aria-label="Estornar">
+            <RotateCcw className="h-4 w-4" />
+          </button>
+        )}
+        {canDelete && (
+          <button className="btn-icon hover:!bg-red-50 hover:!text-red-600" onClick={() => setToDelete(row)} title="Excluir" aria-label="Excluir">
+            <Trash2 className="h-4 w-4" />
+          </button>
+        )}
+      </>
+    );
+  }
+
   const total = data?.total ?? 0;
   const from = total ? (page - 1) * pageSize + 1 : 0;
   const to = Math.min(total, page * pageSize);
@@ -564,52 +703,6 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">Atualizar</span>
             </button>
-            {filtroFields.length > 0 && (
-              <button className={`btn-secondary ${filtrosAtivos ? '!border-brand-400 !text-brand-700' : ''}`} onClick={() => setShowFiltros((v) => !v)} title="Filtros avançados">
-                <ListFilter className="h-4 w-4" />
-                <span className="hidden sm:inline">Filtros</span>
-                {filtrosAtivos > 0 && <span className="badge ml-1 !bg-brand-500 !text-white">{filtrosAtivos}</span>}
-              </button>
-            )}
-            <button
-              className="btn-secondary hidden md:inline-flex"
-              onClick={() => setCompacta(!compacta)}
-              title={compacta ? 'Densidade confortável' : 'Densidade compacta'}
-            >
-              <Rows3 className="h-4 w-4" />
-            </button>
-            {allListFields.length > 3 && (
-              <div className="relative hidden md:block" ref={colunasMenuRef}>
-                <button
-                  className={`btn-secondary ${colunasOcultas.size ? '!border-brand-400 !text-brand-700' : ''}`}
-                  onClick={() => setColunasMenuOpen((v) => !v)}
-                  title="Escolher colunas visíveis"
-                  aria-haspopup="menu"
-                  aria-expanded={colunasMenuOpen}
-                >
-                  <Columns3 className="h-4 w-4" />
-                  <span className="hidden lg:inline">Colunas</span>
-                </button>
-                {colunasMenuOpen && (
-                  <div className="absolute right-0 z-20 mt-1 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-modal animate-fade-in" role="menu">
-                    <p className="px-2 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Colunas visíveis</p>
-                    <div className="max-h-64 overflow-y-auto">
-                      {allListFields.map((f) => (
-                        <label key={f.name} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
-                          <input
-                            type="checkbox"
-                            className="h-3.5 w-3.5 rounded border-slate-300 text-navy-800 focus:ring-navy-500/30"
-                            checked={!colunasOcultas.has(f.name)}
-                            onChange={() => setColunasOcultas(f.name)}
-                          />
-                          {f.label}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
             <button className="btn-secondary" onClick={() => exportarLista('csv')} disabled={loading} title="Exportar a lista atual em CSV (Excel)">
               <Download className="h-4 w-4" />
               <span className="hidden md:inline">CSV</span>
@@ -642,35 +735,24 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         </div>
       )}
 
-      {showFiltros && filtroFields.length > 0 && (
-        <div className="card mb-4 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-bold text-navy-900">Filtros avançados</h3>
-            <button className="btn-ghost text-xs" onClick={() => { setFiltros({}); setPage(1); }}>
-              Limpar filtros
-            </button>
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {filtroFields.map((f) => (
-              <FiltroCampo
-                key={f.name}
-                field={f}
-                filtros={filtros}
-                opcoes={f.type === 'ref' && f.ref ? refOptions[f.ref] : undefined}
-                onChange={(chave, valor) => setFiltros((prev) => ({ ...prev, [chave]: valor }))}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="card overflow-hidden">
-        {/* Barra de ferramentas */}
-        <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 px-4 py-3">
+      {/* ------------------------------------------------------------------
+          BUSCA + FILTROS — área própria, ACIMA da tabela.
+          O painel abre em linha (empurra a lista): nunca sobrepõe a tabela,
+          nunca esconde a coluna de foto. Os filtros ativos viram chips com
+          remoção individual e contador.
+         ------------------------------------------------------------------ */}
+      <div className="card mb-4">
+        <div className="flex flex-wrap items-center gap-3 px-4 py-3">
           {searchable && (
             <div className="relative min-w-[220px] flex-1 sm:max-w-sm">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input className="input pl-9 pr-8" placeholder={`Buscar em ${module.label.toLowerCase()}...`} value={q} onChange={(e) => setQ(e.target.value)} />
+              <input
+                className="input pl-9 pr-8"
+                placeholder={`Buscar em ${module.label.toLowerCase()}...`}
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                aria-label={`Buscar em ${module.label.toLowerCase()}`}
+              />
               {q && (
                 <button className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" onClick={() => setQ('')} aria-label="Limpar busca">
                   <X className="h-4 w-4" />
@@ -678,8 +760,71 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
               )}
             </div>
           )}
-          <div className="ml-auto text-xs text-slate-500">
+          {filtroFields.length > 0 && (
+            <button
+              type="button"
+              className={`btn-secondary ${filtrosAtivos || showFiltros ? '!border-brand-400 !text-brand-700' : ''}`}
+              onClick={() => setShowFiltros((v) => !v)}
+              title={showFiltros ? 'Fechar filtros' : 'Abrir filtros'}
+              aria-expanded={showFiltros}
+              aria-controls={showFiltros ? 'painel-filtros-listagem' : undefined}
+              aria-label={filtrosAtivos > 0 ? `Filtros (${filtrosAtivos} ativo${filtrosAtivos === 1 ? '' : 's'})` : 'Filtros'}
+            >
+              <ListFilter className="h-4 w-4" aria-hidden="true" />
+              <span className="hidden sm:inline">Filtros</span>
+              {filtrosAtivos > 0 && <span className="badge ml-1 !bg-brand-500 !text-white">{filtrosAtivos}</span>}
+            </button>
+          )}
+          {filtrosAtivos > 0 && (
+            <button type="button" className="btn-ghost text-xs" onClick={limparFiltros} title="Remover todos os filtros">
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+              Limpar filtros
+            </button>
+          )}
+          <div className="ml-auto text-xs text-slate-500" aria-live="polite">
             {loading && !data ? 'Carregando...' : total === 0 ? 'Nenhum registro' : `${from}–${to} de ${total} registro${total === 1 ? '' : 's'}`}
+          </div>
+        </div>
+
+        <ChipsFiltros chips={chipsFiltros} onRemover={removerFiltro} />
+
+        {showFiltros && filtroFields.length > 0 && (
+          <PainelFiltros
+            id="painel-filtros-listagem"
+            fields={filtroFields}
+            filtros={filtros}
+            opcoes={refOptions}
+            onChange={(chave, valor) => setFiltros((prev) => ({ ...prev, [chave]: valor }))}
+            onAtualizar={load}
+            onFechar={() => setShowFiltros(false)}
+            atualizando={loading}
+            ativos={filtrosAtivos}
+          />
+        )}
+      </div>
+
+      <div className="card overflow-hidden">
+        {/* Barra da listagem: modo de visualização + colunas + densidade */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-2.5">
+          <span className="text-xs text-slate-400" aria-live="polite">
+            {loading && data ? 'Atualizando...' : ''}
+          </span>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <ModoVisualizacaoControl valor={modoVisualizacao} onChange={setModoVisualizacao} />
+            {modoVisualizacao === 'tabela' && (
+              <>
+                <DensidadeMenu valor={densidade} onChange={setDensidade} />
+                {allListFields.length > 3 && (
+                  <ColunasMenu
+                    campos={allListFields}
+                    recurso={resource.key}
+                    ocultas={colunasOcultas}
+                    onToggle={(nome) => setColunasOcultas(nome)}
+                    comFoto={hasImages}
+                  />
+                )}
+              </>
+            )}
           </div>
         </div>
 
@@ -694,13 +839,28 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         {!error && data && data.rows.length === 0 && (
           <EmptyState
             icon={<Inbox className="h-6 w-6" />}
-            title={debouncedQ ? 'Nada encontrado' : `Nenhum(a) ${resource.singular.toLowerCase()} cadastrado(a)`}
-            description={debouncedQ ? `Nenhum resultado para "${debouncedQ}".` : canCreate ? `Clique em "Novo ${resource.singular.toLowerCase()}" para fazer o primeiro cadastro.` : undefined}
+            title={recorteAtivo ? 'Nada encontrado' : `Nenhum(a) ${resource.singular.toLowerCase()} cadastrado(a)`}
+            description={
+              recorteAtivo
+                ? `Nenhum resultado para o recorte atual${debouncedQ ? ` (busca: "${debouncedQ}")` : ''}${filtrosAtivos ? ` (${filtrosAtivos} filtro${filtrosAtivos === 1 ? '' : 's'})` : ''}.`
+                : canCreate
+                  ? `Clique em "Novo ${resource.singular.toLowerCase()}" para fazer o primeiro cadastro.`
+                  : undefined
+            }
             action={
-              debouncedQ ? (
-                <button className="btn-secondary" onClick={() => setQ('')}>
-                  Limpar busca
-                </button>
+              recorteAtivo ? (
+                <div className="flex flex-wrap justify-center gap-2">
+                  {debouncedQ && (
+                    <button className="btn-secondary" onClick={() => setQ('')}>
+                      Limpar busca
+                    </button>
+                  )}
+                  {filtrosAtivos > 0 && (
+                    <button className="btn-secondary" onClick={limparFiltros}>
+                      Limpar filtros
+                    </button>
+                  )}
+                </div>
               ) : canCreate ? (
                 <button className="btn-accent" onClick={openCreate}>
                   <Plus className="h-4 w-4" /> Novo {resource.singular.toLowerCase()}
@@ -711,154 +871,37 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         )}
 
         {!error && data && data.rows.length > 0 && (
-          <div className={`hidden overflow-x-auto md:block ${loading ? 'opacity-60' : ''}`}>
-            <table className={`table ${compacta ? 'table-compact' : ''}`}>
-              <thead>
-                <tr>
-                  <th className="w-16">#</th>
-                  {hasImages && <th className="w-14">Foto</th>}
-                  {listFields.map((f) => (
-                    <th key={f.name}>
-                      <button className="inline-flex items-center gap-1 hover:text-navy-800" onClick={() => toggleSort(f)}>
-                        {f.label}
-                        {sort?.field === f.name ? sort.dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" /> : <ArrowUpDown className="h-3 w-3 opacity-30" />}
-                      </button>
-                    </th>
-                  ))}
-                  {(canUpdate || canDelete || resource.detail) && <th className="w-28 text-right">Ações</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {data.rows.map((row) => (
-                  <tr
-                    key={row.id}
-                    className={`${canUpdate || resource.detail ? 'cursor-pointer' : ''} ${resource.key === 'movimentacoes' && row.estornado ? 'opacity-50 line-through' : ''}`}
-                    onDoubleClick={() => (resource.detail ? navigate(`/${resource.key}/${row.id}`) : canUpdate && openEdit(row))}
-                  >
-                    <td className="font-mono text-xs text-slate-400">{row.id}</td>
-                    {hasImages && (
-                      <td>
-                        <Thumb src={row.foto_url} alt={rowLabel(resource, row)} onClick={row.fotos?.length ? () => setZoom({ file: row.fotos[0], files: row.fotos }) : undefined} />
-                      </td>
-                    )}
-                    {listFields.map((f) => (
-                      <td key={f.name} className={f.type === 'money' || f.type === 'number' || f.type === 'integer' || f.type === 'percent' ? 'text-right tabular-nums' : ''}>
-                        <Cell f={f} row={row} />
-                      </td>
-                    ))}
-                    {(canUpdate || canDelete || resource.detail) && (
-                      <td className="text-right">
-                        <div className="inline-flex items-center gap-1">
-                          {resource.key === 'clientes' && canUpdate && (
-                            <button className="btn-icon !bg-navy-50 !text-navy-700" onClick={() => setClientePortal(row)} title="Portal do cliente" aria-label="Portal do cliente"><KeyRound className="h-4 w-4" /></button>
-                          )}
-                          {resource.key === 'clientes' && canUpdate && (
-                        <button className="btn-icon !bg-navy-50 !text-navy-700" onClick={() => setClientePortal(row)} aria-label="Portal do cliente"><KeyRound className="h-4 w-4" /></button>
-                      )}
-                      {resource.key === 'catalogos' && permite(user?.perm_compartilhar) && (
-                            <button className="btn-icon !bg-brand-50 !text-brand-700 hover:!bg-brand-100" onClick={() => setCatalogoCompartilhar(row)} title="Compartilhar catálogo" aria-label="Compartilhar catálogo">
-                              <Share2 className="h-4 w-4" />
-                            </button>
-                          )}
-                          {resource.key === 'usuarios' && canUpdate && !row.senha_definida_em && (
-                            <button className="btn-icon" onClick={() => reenviarConvite(row)} disabled={conviteBusyId === Number(row.id)} title="Reenviar convite de acesso" aria-label="Reenviar convite">
-                              {conviteBusyId === Number(row.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-                            </button>
-                          )}
-                          {resource.key === 'usuarios' && canUpdate && !!row.senha_definida_em && (
-                            <button className="btn-icon" onClick={() => pedirSenhaTemporaria(row)} title="Gerar senha temporária (exibição única)" aria-label="Gerar senha temporária"><KeyRound className="h-4 w-4" /></button>
-                          )}
-                          {resource.detail && (
-                            <button className="btn-icon" onClick={() => navigate(`/${resource.key}/${row.id}`)} title="Ver detalhes" aria-label="Ver detalhes">
-                              <Eye className="h-4 w-4" />
-                            </button>
-                          )}
-                          {canUpdate && (
-                            <button className="btn-icon" onClick={() => openEdit(row)} title="Editar" aria-label="Editar">
-                              <Pencil className="h-4 w-4" />
-                            </button>
-                          )}
-                          {resource.key === 'movimentacoes' && !row.estornado && (user?.perfil === 'admin' || user?.perfil === 'gerente') && (
-                            <button className="btn-icon hover:!bg-amber-50 hover:!text-amber-600" onClick={() => setToEstornar(row)} title="Estornar movimentação (cria lançamento inverso)" aria-label="Estornar">
-                              <RotateCcw className="h-4 w-4" />
-                            </button>
-                          )}
-                          {canDelete && (
-                            <button className="btn-icon hover:!bg-red-50 hover:!text-red-600" onClick={() => setToDelete(row)} title="Excluir" aria-label="Excluir">
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className={`transition-opacity ${loading ? 'opacity-60' : ''}`}>
+            {modoVisualizacao === 'tabela' ? (
+              <ListaTabela
+                rows={data.rows}
+                fields={listFields}
+                recurso={resource.key}
+                densidade={densidade}
+                sort={sort}
+                onSort={toggleSort}
+                comFoto={hasImages}
+                onAbrirFoto={abrirFoto}
+                rotuloLinha={(row) => rowLabel(resource, row)}
+                renderAcoes={temAcoesLinha ? renderAcoesLinha : undefined}
+                onAbrirLinha={podeAbrirLinha ? abrirLinha : undefined}
+                linhaClasse={linhaClasse}
+                caption={`${module.label} — página ${page} de ${Math.max(1, Math.ceil(total / pageSize))}`}
+              />
+            ) : (
+              <ListaCards
+                rows={data.rows}
+                fields={camposCard}
+                recurso={resource.key}
+                campoTitulo={campoTitulo(resource.key)}
+                rotuloLinha={(row) => rowLabel(resource, row)}
+                onAbrirFoto={abrirFoto}
+                onAbrirLinha={podeAbrirLinha ? abrirLinha : undefined}
+                renderAcoes={temAcoesLinha ? renderAcoesLinha : undefined}
+                linhaClasse={linhaClasse}
+              />
+            )}
           </div>
-        )}
-
-        {/* Celular (< 768 px): cartões em vez de tabela */}
-        {!error && data && data.rows.length > 0 && (
-          <ul className="divide-y divide-slate-100 md:hidden">
-            {data.rows.map((row) => {
-              const rotulo = rowLabel(resource, row);
-              return (
-                <li key={row.id} className="px-4 py-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <button
-                      className="min-w-0 text-left"
-                      onClick={() => (resource.detail || DETALHE_DIRETO.has(module.id) ? navigate(`/${resource.key}/${row.id}`) : canUpdate ? openEdit(row) : undefined)}
-                    >
-                      <div className="truncate text-sm font-semibold text-navy-900">{rotulo}</div>
-                      <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">
-                        {listFields.slice(0, 3).map((f) => (
-                          <span key={f.name}>
-                            <Cell f={f} row={row} />
-                          </span>
-                        ))}
-                      </div>
-                    </button>
-                    <div className="flex shrink-0 items-center gap-0.5">
-                      {resource.key === 'catalogos' && permite(user?.perm_compartilhar) && (
-                        <button className="btn-icon !bg-brand-50 !text-brand-700" onClick={() => setCatalogoCompartilhar(row)} aria-label="Compartilhar catálogo">
-                          <Share2 className="h-4 w-4" />
-                        </button>
-                      )}
-                      {resource.key === 'usuarios' && canUpdate && !row.senha_definida_em && (
-                        <button className="btn-icon" onClick={() => reenviarConvite(row)} disabled={conviteBusyId === Number(row.id)} aria-label="Reenviar convite">
-                          {conviteBusyId === Number(row.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-                        </button>
-                      )}
-                      {resource.key === 'usuarios' && canUpdate && !!row.senha_definida_em && (
-                        <button className="btn-icon" onClick={() => pedirSenhaTemporaria(row)} aria-label="Gerar senha temporária"><KeyRound className="h-4 w-4" /></button>
-                      )}
-                      {resource.detail && (
-                        <button className="btn-icon" onClick={() => navigate(`/${resource.key}/${row.id}`)} aria-label="Ver detalhes">
-                          <Eye className="h-4 w-4" />
-                        </button>
-                      )}
-                      {canUpdate && !resource.detail && (
-                        <button className="btn-icon" onClick={() => openEdit(row)} aria-label="Editar">
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                      )}
-                      {resource.key === 'movimentacoes' && !row.estornado && (user?.perfil === 'admin' || user?.perfil === 'gerente') && (
-                        <button className="btn-icon hover:!bg-amber-50 hover:!text-amber-600" onClick={() => setToEstornar(row)} aria-label="Estornar">
-                          <RotateCcw className="h-4 w-4" />
-                        </button>
-                      )}
-                      {canDelete && (
-                        <button className="btn-icon hover:!bg-red-50 hover:!text-red-600" onClick={() => setToDelete(row)} aria-label="Excluir">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
         )}
 
         {/* Paginação server-side: o servidor devolve só a página pedida. */}
@@ -1103,142 +1146,6 @@ function LocalExclusaoAviso({ local, isAdmin }: { local: Record<string, any>; is
       {!uso && !ultimoAtivo && <p className="mt-2 text-slate-500">Dica: se o local ainda vai ser usado mais tarde, prefira desmarcar "Ativo" ao editá-lo.</p>}
     </div>
   );
-}
-
-function FiltroCampo({
-  field,
-  filtros,
-  opcoes,
-  onChange,
-}: {
-  field: Field;
-  filtros: Record<string, string>;
-  opcoes?: Option[];
-  onChange: (chave: string, valor: string) => void;
-}) {
-  const id = `filtro-${field.name}`;
-  if (field.type === 'date') {
-    return (
-      <label className="block" htmlFor={id}>
-        <span className="label">{field.label}</span>
-        <div className="flex items-center gap-1.5 text-xs text-slate-400">
-          <input type="date" className="input" value={filtros[`${field.name}_de`] ?? ''} onChange={(e) => onChange(`${field.name}_de`, e.target.value)} aria-label={`${field.label} a partir de`} />
-          até
-          <input type="date" className="input" value={filtros[`${field.name}_ate`] ?? ''} onChange={(e) => onChange(`${field.name}_ate`, e.target.value)} aria-label={`${field.label} até`} />
-        </div>
-      </label>
-    );
-  }
-  // Faixa numérica (preço, custo, estoque): mínimo e máximo no servidor.
-  if (field.type === 'money' || field.type === 'number' || field.type === 'percent' || field.type === 'integer') {
-    const prefixo = field.type === 'money' ? 'R$' : undefined;
-    return (
-      <label className="block" htmlFor={id}>
-        <span className="label">{field.label}</span>
-        <div className="flex items-center gap-1.5">
-          <div className="relative flex-1">
-            {prefixo && <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2.5 text-xs text-slate-400">{prefixo}</span>}
-            <input
-              id={id}
-              type="text"
-              inputMode="decimal"
-              className={`input ${prefixo ? 'pl-8' : ''}`}
-              value={filtros[`${field.name}_min`] ?? ''}
-              onChange={(e) => onChange(`${field.name}_min`, e.target.value)}
-              placeholder="Mínimo"
-              aria-label={`${field.label} mínimo`}
-            />
-          </div>
-          <span className="text-xs text-slate-400">até</span>
-          <div className="relative flex-1">
-            {prefixo && <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2.5 text-xs text-slate-400">{prefixo}</span>}
-            <input
-              type="text"
-              inputMode="decimal"
-              className={`input ${prefixo ? 'pl-8' : ''}`}
-              value={filtros[`${field.name}_max`] ?? ''}
-              onChange={(e) => onChange(`${field.name}_max`, e.target.value)}
-              placeholder="Máximo"
-              aria-label={`${field.label} máximo`}
-            />
-          </div>
-        </div>
-      </label>
-    );
-  }
-  const valor = filtros[field.name] ?? '';
-  if (field.type === 'ref' && field.ref === 'produtos') {
-    return (
-      <label className="block" htmlFor={id}>
-        <span className="label">{field.label}</span>
-        <ProductSelector
-          id={id}
-          value={valor}
-          onChange={(idProduto) => onChange(field.name, idProduto)}
-          includeInactive
-          aria-label={`Filtrar por ${field.label}`}
-        />
-      </label>
-    );
-  }
-  return (
-    <label className="block" htmlFor={id}>
-      <span className="label">{field.label}</span>
-      {field.type === 'boolean' ? (
-        <select id={id} className="input" value={valor} onChange={(e) => onChange(field.name, e.target.value)}>
-          <option value="">Qualquer</option>
-          <option value="true">Sim</option>
-          <option value="false">Não</option>
-        </select>
-      ) : (
-        <select id={id} className="input" value={valor} onChange={(e) => onChange(field.name, e.target.value)}>
-          <option value="">Todos</option>
-          {field.type === 'select'
-            ? field.options?.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))
-            : opcoes?.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-        </select>
-      )}
-    </label>
-  );
-}
-
-function rowLabel(r: ResourceMeta, row: Record<string, any>): string {
-  const parts = r.labelFields.map((f) => row[f]).filter((v) => v !== null && v !== undefined && String(v) !== '');
-  if (r.labelFields.length === 1 && r.labelFields[0] === 'id') return `#${row.id}`;
-  return parts.length ? parts.join(' — ') : `#${row.id}`;
-}
-
-function Cell({ f, row }: { f: Field; row: Record<string, any> }) {
-  const v = row[f.name];
-  if (f.type === 'boolean') {
-    return v ? <Badge tone="green">Sim</Badge> : <Badge tone="slate">Não</Badge>;
-  }
-  if (f.type === 'select' && f.options) {
-    const opt = f.options.find((o) => o.value === String(v));
-    if (opt?.tone) return <Badge tone={opt.tone}>{opt.label}</Badge>;
-    return <>{opt?.label ?? (v ?? '—')}</>;
-  }
-  if (f.type === 'color') return <ColorDot hex={v} label={v} />;
-  if (f.type === 'multiref') {
-    const label = row[`${f.name}__label`];
-    return <span className="text-slate-600">{label || (Array.isArray(v) ? `${v.length} item(ns)` : '—')}</span>;
-  }
-  const text = formatCell(f, row);
-  if (f.type === 'ref' && text !== '—') {
-    const hex = row[`${f.name}__color`];
-    if (hex) return <span className="font-medium text-slate-800"><ColorDot hex={hex} label={text} /></span>;
-    return <span className="font-medium text-slate-800">{text}</span>;
-  }
-  if (text === '—') return <span className="text-slate-300">—</span>;
-  return <span className={f.type === 'text' && f.name === 'nome' ? 'font-medium text-slate-800' : ''}>{text}</span>;
 }
 
 // ----------------------------------------------------------------------------

@@ -1,0 +1,154 @@
+// ============================================================================
+// VALORES DAS CÉLULAS DA LISTAGEM
+//
+// Um único lugar decide como cada tipo de campo aparece na tabela, nos cartões
+// e na lista compacta: texto truncado com tooltip, badge de status, amostra de
+// cor, valor monetário alinhado à direita. A listagem em si só posiciona.
+// ============================================================================
+import { AlertTriangle, Camera, CheckCircle2, XCircle } from 'lucide-react';
+import type { Field, ResourceMeta } from '../lib/meta';
+import { formatCell } from '../lib/format';
+import { ColorDot } from './ImageField';
+import { Badge } from './ui';
+import { estoqueMinimoDaLinha, larguraDaColuna, saldoDaLinha } from '../lib/lista';
+
+/** Texto de identificação da linha (ex.: "CAM-001 — Camiseta Pima"). */
+export function rowLabel(r: ResourceMeta, row: Record<string, any>): string {
+  const parts = r.labelFields.map((f) => row[f]).filter((v) => v !== null && v !== undefined && String(v) !== '');
+  if (r.labelFields.length === 1 && r.labelFields[0] === 'id') return `#${row.id}`;
+  return parts.length ? parts.join(' — ') : `#${row.id}`;
+}
+
+/**
+ * Texto longo: ellipsis + tooltip nativo. Nunca quebra o layout nem empurra a
+ * coluna vizinha — o valor inteiro continua disponível no hover/foco.
+ */
+export function TextoTruncado({
+  texto,
+  className = '',
+  vazio = '—',
+  titulo,
+}: {
+  texto: string;
+  className?: string;
+  vazio?: string;
+  titulo?: string;
+}) {
+  if (!texto || texto === '—') return <span className="text-slate-300">{vazio}</span>;
+  return (
+    <span className={`block truncate ${className}`} title={titulo ?? texto}>
+      {texto}
+    </span>
+  );
+}
+
+function EstoqueCelula({ row }: { row: Record<string, any> }) {
+  const saldo = saldoDaLinha(row);
+  if (saldo === null) {
+    // O saldo não faz parte do payload da listagem (contrato de estoque é
+    // consultado por produto). Mostrar zero seria pior que mostrar o traço.
+    return (
+      <span
+        className="text-slate-300"
+        title="O saldo por tamanho fica na grade de estoque do produto."
+        aria-label="Saldo de estoque disponível na página do produto"
+      >
+        —
+      </span>
+    );
+  }
+  const minimo = estoqueMinimoDaLinha(row);
+  const abaixoDoMinimo = minimo !== null && minimo > 0 && saldo <= minimo;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={`font-semibold tabular-nums ${abaixoDoMinimo ? 'text-brand-700' : 'text-slate-800'}`}>{saldo}</span>
+      {abaixoDoMinimo && (
+        <Badge tone="amber">
+          <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+          mín. {minimo}
+        </Badge>
+      )}
+    </span>
+  );
+}
+
+/**
+ * Conteúdo de uma célula. `recurso` entra só para rótulos/apresentação —
+ * nenhum cálculo de negócio acontece aqui.
+ */
+export function ValorCampo({ f, row, recurso }: { f: Field; row: Record<string, any>; recurso: string }) {
+  if (f.name === 'estoque') return <EstoqueCelula row={row} />;
+
+  const { max } = larguraDaColuna(f, recurso);
+  const v = row[f.name];
+
+  if (f.type === 'boolean') {
+    // Status: texto + ícone, nunca só a cor (leitura para daltônicos e para
+    // quem imprime a listagem).
+    if (f.name === 'ativo') {
+      return v ? (
+        <Badge tone="green">
+          <CheckCircle2 className="h-3 w-3" aria-hidden="true" /> Ativo
+        </Badge>
+      ) : (
+        <Badge tone="slate">
+          <XCircle className="h-3 w-3" aria-hidden="true" /> Inativo
+        </Badge>
+      );
+    }
+    return v ? <Badge tone="green">Sim</Badge> : <Badge tone="slate">Não</Badge>;
+  }
+
+  if (f.type === 'select' && f.options) {
+    const opt = f.options.find((o) => o.value === String(v));
+    if (opt?.tone) return <Badge tone={opt.tone}>{opt.label}</Badge>;
+    return <TextoTruncado texto={String(opt?.label ?? (v ?? '—'))} className={max} />;
+  }
+
+  if (f.type === 'color') return <ColorDot hex={v} label={v} />;
+
+  if (f.type === 'multiref') {
+    const label = row[`${f.name}__label`];
+    const texto = label || (Array.isArray(v) ? `${v.length} item(ns)` : '—');
+    return <TextoTruncado texto={String(texto)} className={`text-slate-600 ${max}`} />;
+  }
+
+  const texto = formatCell(f, row);
+
+  if (f.type === 'ref' && texto !== '—') {
+    const hex = row[`${f.name}__color`];
+    if (hex) {
+      // Amostra da cor + rótulo truncado (o texto inteiro fica no tooltip).
+      return (
+        <span className={`inline-flex max-w-full items-center gap-1.5 ${max}`} title={texto}>
+          <ColorDot hex={hex} label={null} />
+          <span className="truncate font-medium text-slate-800">{texto}</span>
+        </span>
+      );
+    }
+    return <TextoTruncado texto={texto} className={`font-medium text-slate-800 ${max}`} />;
+  }
+
+  if (texto === '—') return <span className="text-slate-300">—</span>;
+
+  // SKU/códigos e o id da linha: monoespaçado ajuda a comparar caractere a
+  // caractere (o id continua discreto, como na listagem anterior).
+  if (f.name === 'id') return <span className="font-mono text-xs text-slate-400">{texto}</span>;
+  const mono = f.name === 'sku' || f.name === 'codigo_barras';
+  const peso = f.name === 'nome' ? 'font-semibold text-navy-900' : '';
+  const numero = ['money', 'number', 'integer', 'percent'].includes(f.type) ? 'tabular-nums' : '';
+  return <TextoTruncado texto={texto} className={`${max} ${mono ? 'font-mono text-xs' : ''} ${peso} ${numero}`} />;
+}
+
+/** Miniatura de "sem foto" usada nos cartões do modo visual. */
+export function PlaceholderFoto({ className = '' }: { className?: string }) {
+  return (
+    <div
+      className={`flex items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 text-slate-400 ${className}`}
+      role="img"
+      aria-label="Sem foto"
+    >
+      <Camera className="h-1/4 w-1/4" aria-hidden="true" />
+    </div>
+  );
+}

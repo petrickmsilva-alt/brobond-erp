@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Camera, ImagePlus, Loader2, Star, Trash2, X, ZoomIn } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Camera, ImagePlus, Loader2, Star, Trash2, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import type { PublicFile, ResourceMeta } from '../lib/meta';
 import { prepareImage } from '../lib/images';
@@ -274,18 +274,64 @@ export function Lightbox({ file, files, onClose, onNav }: { file: PublicFile; fi
   );
 }
 
-/** Miniatura para listas (com fallback quando não há foto). */
-export function Thumb({ src, alt, size = 40, onClick }: { src?: string | null; alt?: string; size?: number; onClick?: () => void }) {
-  const cls = 'shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-100';
+/**
+ * Miniatura para listas (com fallback quando não há foto).
+ *
+ * - mantém a proporção da imagem (`object-cover`, sem distorcer);
+ * - quando há `onClick`, é um <button> de verdade: entra na ordem de tabulação,
+ *   tem foco visível e `aria-label` (a galeria/lightbox é aberta sem sair da
+ *   listagem);
+ * - sem foto, mostra um placeholder neutro (não um buraco na tabela).
+ */
+export function Thumb({
+  src,
+  alt,
+  size = 40,
+  onClick,
+  ariaLabel,
+  className = '',
+  rounded = 'rounded-md',
+}: {
+  src?: string | null;
+  alt?: string;
+  size?: number;
+  onClick?: () => void;
+  /** Rótulo acessível do botão (ex.: "Ampliar foto de Camiseta Pima"). */
+  ariaLabel?: string;
+  className?: string;
+  rounded?: string;
+}) {
+  const cls = `shrink-0 overflow-hidden ${rounded} border border-slate-200 bg-slate-100 ${className}`;
   if (!src)
     return (
-      <span className={`${cls} flex items-center justify-center text-slate-300`} style={{ width: size, height: size }} title="Sem foto">
-        <Camera className="h-4 w-4" />
+      <span
+        className={`${cls} flex items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 text-slate-400`}
+        style={{ width: size, height: size }}
+        role="img"
+        aria-label={alt ? `Sem foto de ${alt}` : 'Sem foto'}
+        title="Sem foto"
+      >
+        <Camera className="h-1/3 w-1/3" aria-hidden="true" />
       </span>
     );
+  const imagem = <img src={src} alt={alt || ''} className="h-full w-full object-cover" loading="lazy" draggable={false} />;
+  if (!onClick)
+    return (
+      <span className={`${cls} block`} style={{ width: size, height: size }} title={alt}>
+        {imagem}
+      </span>
+    );
+  const rotulo = ariaLabel ?? (alt ? `Ampliar foto de ${alt}` : 'Ampliar foto');
   return (
-    <button type="button" className={`${cls} ${onClick ? 'cursor-zoom-in' : 'cursor-default'}`} style={{ width: size, height: size }} onClick={onClick} title={alt}>
-      <img src={src} alt={alt || ''} className="h-full w-full object-cover" loading="lazy" />
+    <button
+      type="button"
+      className={`${cls} block cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1`}
+      style={{ width: size, height: size }}
+      onClick={onClick}
+      title={rotulo}
+      aria-label={rotulo}
+    >
+      {imagem}
     </button>
   );
 }
