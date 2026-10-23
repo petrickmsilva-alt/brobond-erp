@@ -11,7 +11,6 @@ import {
 import { Loader2, Search, X } from 'lucide-react';
 import { formatNumber } from '../lib/format';
 import {
-  productLabel,
   searchProducts,
   type ProductSearchFilters,
   type ProductSearchSize,
@@ -61,6 +60,67 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Não foi possível pesquisar produtos.';
 }
 
+// ---------------------------------------------------------------------------
+// Apresentação do resultado — lista fechada de campos visuais.
+//
+// O contrato da busca ainda transporta `descricao`, mas o ProductSelector NUNCA
+// apresenta descrição/ficha técnica (composição, modelagem, lavagem,
+// observações, BOM, custo). Para que isso seja estrutural — e não só um efeito
+// colateral do JSX atual — o card é montado a partir de um recorte explícito
+// (`ProductResultView`): só foto, nome, categoria, cor, marca, SKU, código de
+// barras, estoque total e estado ativo/inativo.
+//
+// O recorte também protege o nome exibido: cadastros importados de fornecedor
+// às vezes despejam a ficha inteira dentro de `nome`, com quebras de linha e
+// rótulos ("Ficha Técnica", "Marca:", "Composição:"...). Aqui o nome volta a ser
+// apenas o título comercial.
+// ---------------------------------------------------------------------------
+
+/** Marcadores de ficha técnica que nunca fazem parte do nome comercial. */
+const MARCADOR_FICHA =
+  /\b(ficha\s+t[eé]cnica|composi[cç][aã]o\s*:|modelagem\s*:|lavagem\s*:|observa[cç][oõ]es\s*:|marca\s*:)/i;
+
+/** Nome comercial: primeira linha útil, sem blocos de ficha técnica anexados. */
+export function productDisplayName(nome: string | null | undefined): string {
+  const primeiraLinha =
+    String(nome ?? '')
+      .split(/\r?\n/)
+      .map((linha) => linha.replace(/\s+/g, ' ').trim())
+      .find(Boolean) ?? '';
+  const corte = primeiraLinha.search(MARCADOR_FICHA);
+  const titulo = (corte > 0 ? primeiraLinha.slice(0, corte) : primeiraLinha)
+    .replace(/[\s·|,;/–—-]+$/, '')
+    .trim();
+  // Nome inteiro composto só por ficha: preserva um rótulo legível em vez de
+  // deixar o card sem nome (a seleção continua identificável).
+  return titulo || primeiraLinha;
+}
+
+/** Campos visuais permitidos no resultado do ProductSelector. */
+type ProductResultView = {
+  nome: string;
+  categoria: string | null;
+  cor: string | null;
+  marca: string | null;
+  sku: string | null;
+  codigo_barras: string | null;
+  estoque_total: number;
+  ativo: boolean;
+};
+
+function productResultView(product: SearchProduct): ProductResultView {
+  return {
+    nome: productDisplayName(product.nome),
+    categoria: product.categoria,
+    cor: product.cor,
+    marca: product.marca,
+    sku: product.sku,
+    codigo_barras: product.codigo_barras,
+    estoque_total: product.estoque_disponivel,
+    ativo: product.ativo,
+  };
+}
+
 /** Saldo por tamanho apenas informativo (uma única combinação possível). */
 function StockSizes({ product }: { product: SearchProduct }) {
   if (!product.tamanhos.length) {
@@ -70,7 +130,7 @@ function StockSizes({ product }: { product: SearchProduct }) {
     <span
       role="group"
       className="flex min-w-0 flex-wrap gap-1.5"
-      aria-label={`Saldos por tamanho de ${product.nome}`}
+      aria-label={`Saldos por tamanho de ${productDisplayName(product.nome)}`}
     >
       {product.tamanhos.map((size) => (
         <span
@@ -86,9 +146,10 @@ function StockSizes({ product }: { product: SearchProduct }) {
 
 /**
  * Conteúdo visual compartilhado pelo resultado e pelo cabeçalho de uma família.
- * Somente apresenta campos do payload: não consulta nem recalcula nada aqui.
+ * Recebe SOMENTE o recorte `ProductResultView`: descrição/ficha técnica não
+ * existem neste tipo, nem no payload, logo não há como serem renderizadas.
  */
-function ProductDetails({ product, variant = false }: { product: SearchProduct; variant?: boolean }) {
+function ProductDetails({ product, variant = false }: { product: ProductResultView; variant?: boolean }) {
   return (
     <>
       <div className="break-words text-sm font-semibold leading-5 text-slate-900" title={product.nome}>
@@ -109,8 +170,8 @@ function ProductDetails({ product, variant = false }: { product: SearchProduct; 
       )}
       <div className="mt-2 text-xs leading-5 text-slate-600">
         <span className="font-medium">Estoque total:</span>{' '}
-        <span className={`font-semibold tabular-nums ${product.estoque_disponivel > 0 ? 'text-emerald-700' : 'text-slate-600'}`}>
-          {formatNumber(product.estoque_disponivel)} un.
+        <span className={`font-semibold tabular-nums ${product.estoque_total > 0 ? 'text-emerald-700' : 'text-slate-600'}`}>
+          {formatNumber(product.estoque_total)} un.
         </span>
       </div>
     </>
@@ -509,7 +570,7 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
       );
       if (firstSize >= 0) {
         setActiveIndex(firstSize);
-        setHint(`Escolha o tamanho de ${entry.row.nome} para continuar.`);
+        setHint(`Escolha o tamanho de ${productDisplayName(entry.row.nome)} para continuar.`);
         return;
       }
       const firstVariant = options.findIndex(
@@ -517,10 +578,10 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
       );
       if (firstVariant >= 0) {
         setActiveIndex(firstVariant);
-        setHint(`Escolha a variação de ${entry.row.nome} para continuar.`);
+        setHint(`Escolha a variação de ${productDisplayName(entry.row.nome)} para continuar.`);
         return;
       }
-      setHint(`Nenhuma combinação disponível para ${entry.row.nome}.`);
+      setHint(`Nenhuma combinação disponível para ${productDisplayName(entry.row.nome)}.`);
       return;
     }
     const size = entry.sizes.length === 1 ? entry.sizes[0] : null;
@@ -681,10 +742,11 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
     if (index === undefined) return null;
     const active = activeIndex === index;
     const inactive = !entry.row.ativo && !includeInactive;
+    const view = productResultView(entry.row);
     return (
       <div className={`px-3 py-3 transition-colors ${variant ? 'pl-6 sm:pl-7' : ''} ${active ? 'bg-brand-50/70' : 'bg-white'}`}>
         <div className="flex items-start gap-3">
-          <Thumb src={entry.row.foto_url} alt={entry.row.nome} size={44} className="mt-0.5" />
+          <Thumb src={entry.row.foto_url} alt={view.nome} size={44} className="mt-0.5" />
           <div className="min-w-0 flex-1">
             <button
               type="button"
@@ -692,14 +754,14 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
               role="option"
               aria-selected={active}
               aria-disabled={!entry.selectable && !entry.referenceOnly || undefined}
-              aria-label={`${productLabel(entry.row)}. Estoque total: ${formatNumber(entry.row.estoque_disponivel)} unidades.`}
+              aria-label={`${entry.row.sku} — ${view.nome}. Estoque total: ${formatNumber(view.estoque_total)} unidades.`}
               disabled={selecting || inactive}
               className="block w-full min-w-0 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => void activate(entry)}
               onMouseEnter={() => setActiveIndex(index)}
             >
-              <ProductDetails product={entry.row} variant={variant} />
+              <ProductDetails product={view} variant={variant} />
               {entry.needsSizeChoice ? (
                 <div className="mt-1.5 text-[11px] font-medium leading-4 text-brand-700">
                   {entry.referenceOnly
@@ -715,7 +777,7 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
             {entry.needsSizeChoice && sizeEntries.length > 0 && (
               <div
                 role="group"
-                aria-label={`Tamanhos de ${entry.row.nome}`}
+                aria-label={`Tamanhos de ${productDisplayName(entry.row.nome)}`}
                 className="mt-2 flex min-w-0 flex-wrap gap-1.5"
               >
                 {sizeEntries.map(renderSizeOption)}
@@ -728,7 +790,7 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
   };
 
   const displayedValue = selected
-    ? `${productLabel(selected)}${selectedSize && selectedSize.tamanho ? ` · ${selectedSize.tamanho}` : ''}`
+    ? `${selected.sku} — ${productDisplayName(selected.nome)}${selectedSize && selectedSize.tamanho ? ` · ${selectedSize.tamanho}` : ''}`
     : query;
 
   return (
@@ -789,9 +851,9 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
                 // combinação (variação/tamanho) e o chamador pediu para não
                 // oferecer o pai como escolha direta.
                 <div className="flex items-start gap-3 px-3 py-3">
-                  <Thumb src={plan.product.foto_url} alt={plan.product.nome} size={44} className="mt-0.5" />
+                  <Thumb src={plan.product.foto_url} alt={productDisplayName(plan.product.nome)} size={44} className="mt-0.5" />
                   <div className="min-w-0 flex-1">
-                    <ProductDetails product={plan.product} />
+                    <ProductDetails product={productResultView(plan.product)} />
                     <div className="mt-1.5 text-[11px] font-medium leading-4 text-brand-700">Escolha uma variação/tamanho abaixo</div>
                   </div>
                 </div>

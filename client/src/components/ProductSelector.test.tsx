@@ -743,3 +743,53 @@ describe('ProductSelector — apresentação profissional dos resultados', () =>
     expect(get).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ProductSelector — nenhuma ficha técnica/descrição no resultado', () => {
+  it('mostra somente foto, nome, atributos, SKU, estoque e tamanhos (mesmo com ficha no cadastro)', async () => {
+    vi.useFakeTimers();
+    const item = product(120, {
+      sku: 'CAL-JEANS-SLIM-001',
+      // Caso real de importação: a ficha inteira foi despejada no nome.
+      nome: [
+        'Calça Jeans Slim Premium – BroBond Wear Ficha Técnica',
+        'Marca: BroBond – Irmãos de Ligação',
+        'Modelagem: Slim',
+        'Composição: 98,5% Algodão / 1,5% Elastano',
+        'Lavagem: Azul Médio Índigo Estonado',
+      ].join('\n'),
+      descricao: 'Ficha Técnica\nComposição: 98,5% Algodão\nModelagem: Slim',
+      categoria: 'Jeans',
+      cor: 'Azul Médio',
+      marca: 'BroBond',
+      codigo_barras: '7895550009999',
+      estoque_disponivel: 42,
+      tamanhos: ['P', 'M', 'G', 'GG', 'EG'].map((tamanho, index) => ({
+        tamanho_id: index + 1,
+        tamanho,
+        quantidade: index + 1,
+      })),
+    });
+    vi.spyOn(api, 'get').mockResolvedValue(response([item]));
+    render(<ProductSelector onSelect={vi.fn()} requiresStock aria-label="Produto" />);
+    await abrirBusca('calca');
+
+    const card = opcao(/CAL-JEANS-SLIM-001/);
+    expect(card).toHaveTextContent('Calça Jeans Slim Premium – BroBond Wear');
+    expect(card).toHaveTextContent('Jeans');
+    expect(card).toHaveTextContent('Azul Médio');
+    expect(card).toHaveTextContent('BroBond');
+    expect(card).toHaveTextContent('SKU CAL-JEANS-SLIM-001');
+    expect(card).toHaveTextContent('EAN 7895550009999');
+    expect(card).toHaveTextContent('Estoque total: 42 un.');
+
+    // Nenhum vestígio de descrição/ficha técnica em texto ou atributo (tooltip).
+    const dom = card.outerHTML;
+    for (const trecho of ['Ficha Técnica', 'Composição', 'Modelagem', 'Lavagem', 'Irmãos de Ligação']) {
+      expect(dom).not.toContain(trecho);
+    }
+    expect(card).not.toHaveAttribute('title', expect.stringContaining('Composição'));
+
+    const grade = screen.getByRole('group', { name: 'Tamanhos de Calça Jeans Slim Premium – BroBond Wear' });
+    expect(grade.querySelectorAll('[role="option"]')).toHaveLength(5);
+  });
+});
