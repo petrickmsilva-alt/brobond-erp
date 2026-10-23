@@ -78,7 +78,7 @@ export function imprimirFicha(dados: DadosFicha, geradoPor: string): boolean {
   .assinaturas div { flex: 1; border-top: 1px solid #475569; padding-top: 6px; text-align: center; color: #475569; }
   .rodape { margin-top: 24px; color: #64748b; font-size: 10px; border-top: 1px solid #e2e8f0; padding-top: 8px; }
   @media print { body { margin: 0; } .noprint { display: none; } }
-</style></head><body onload="window.print()">
+</style></head><body>
 <div class="topo"><div><h1>BROBOND ERP — Ficha do usuário</h1><p><span class="badge">${esc(PERFIL[String(u.perfil)] || u.perfil)}</span><span class="badge">${esc(STATUS[String(u.status_conta)] || '—')}</span></p></div><div class="meta">Gerado em ${esc(agora)}<br>por ${esc(geradoPor)}</div></div>
 <h2>Identificação</h2>
 <table>
@@ -106,6 +106,17 @@ ${(dados.historico || []).length ? `<table class="lista"><tr><th>Data/hora</th><
 <div class="rodape">Documento gerado pelo BROBOND ERP a partir da trilha de auditoria do sistema. Verifique a integridade em Administração → Auditoria.</div>
 </body></html>`);
   win.document.close();
-  win.focus();
+  // O gatilho de impressão vem da janela pai (mesmo padrão do LabelSheet e
+  // da MedidasPage): um handler inline (`onload="window.print()"`) ou
+  // <script> dentro do documento impresso é bloqueado pela CSP do app
+  // (script-src 'self'), e a ficha abria sem imprimir.
+  setTimeout(() => {
+    try {
+      win.focus();
+      win.print();
+    } catch {
+      /* a janela foi fechada antes de imprimir */
+    }
+  }, 250);
   return true;
 }

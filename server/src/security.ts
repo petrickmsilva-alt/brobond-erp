@@ -103,10 +103,29 @@ export function bloquearSenhaProvisoria(req: Request, res: Response, next: NextF
 }
 
 /**
+ * Porto do agente local de impressão (P1). O agente escuta SOMENTE em
+ * 127.0.0.1 nessa porta; o navegador só o consulta para status/pareamento
+ * assistido — o caminho principal de impressão é o agente fazendo polling
+ * no ERP, que não passa pelo navegador nem pela CSP.
+ */
+export const PRINT_AGENT_LOOPBACK = 'http://127.0.0.1:17831';
+
+/**
  * Content-Security-Policy do app. O SPA é 100% same-origin (bundle, API,
  * manifest) e o CSS do editor é autocontido; de fora entram só as fontes do
  * Google e o Cloudinary (imagens/uploads). `style-src 'unsafe-inline'` é
  * obrigatório porque o React escreve style="" nos elementos.
+ *
+ * `connect-src` e o agente local (P1): a ÚNICA origem não-HTTPS liberada é o
+ * loopback literal `http://127.0.0.1:17831` (sem wildcard, sem localhost
+ * genérico, sem rede local). Isso não enfraquece a CSP global: 127.0.0.1 é
+ * a própria máquina do operador, e o agente ainda exige Origin do ERP +
+ * responde ao preflight de Private Network Access. Em produção,
+ * `upgrade-insecure-requests` CONTINUA ativo para todo o resto; a exceção
+ * de loopback é tratada explicitamente: navegadores consideram 127.0.0.1
+ * potencialmente confiável e não o promovem a HTTPS (o agente não tem
+ * certificado público possível) — e, se algum navegador bloquear a consulta
+ * de status, a impressão NÃO é afetada (polling do agente é o caminho).
  */
 const CSP = [
   "default-src 'self'",
@@ -114,7 +133,7 @@ const CSP = [
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob: https://res.cloudinary.com https://*.cloudinary.com",
-  "connect-src 'self' https://res.cloudinary.com https://*.cloudinary.com",
+  `connect-src 'self' https://res.cloudinary.com https://*.cloudinary.com ${PRINT_AGENT_LOOPBACK}`,
   "worker-src 'self' blob:",
   "child-src 'self' blob:",
   "manifest-src 'self'",
@@ -150,7 +169,7 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
 // Rate limit PERSISTENTE (tabela login_tentativas no Postgres; Map em memória
 // no modo demonstração). Buckets por finalidade: login, reset, mfa, convite.
 // ----------------------------------------------------------------------------
-export type RateBucket = 'login' | 'reset' | 'mfa' | 'convite' | 'reauth';
+export type RateBucket = 'login' | 'reset' | 'mfa' | 'convite' | 'reauth' | 'pairing';
 
 const WINDOW_MS = Number(process.env.LOGIN_WINDOW_MS) || 15 * 60_000; // 15 min
 const MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS) || 5;

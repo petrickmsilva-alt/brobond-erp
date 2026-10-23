@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./dist/index.js", "./order": "./dist/order/index.js" },
+  "exports": { ".": "./dist/index.js", "./order": "./dist/order/index.js", "./print": "./dist/print/index.js" },
   "scripts": { "typecheck": "tsc --noEmit" },
   "devDependencies": { "typescript": "^5.6.2" }
 }

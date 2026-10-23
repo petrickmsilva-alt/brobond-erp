@@ -34,7 +34,9 @@ before(async () => {
 });
 
 test('validação: EAN aceita 8/12/13/14 dígitos e rejeita o resto', () => {
-  for (const ok of ['12345678', '123456789012', '7891234567895', '12345678901234']) {
+  // P0 (§7): além da forma, o dígito verificador GS1 é conferido — os
+  // vetores abaixo são GTINs válidos de verdade (ver server/test/ean.test.ts).
+  for (const ok of ['96385074', '036000291452', '7891234567895', '12345678901231']) {
     assert.equal(validatePayload(RESOURCES.produtos, { sku: 'x', nome: 'y', codigo_barras: ok }, 'create').codigo_barras, ok);
   }
   for (const bad of ['123', 'abc', '1234567890', '12345678901']) {

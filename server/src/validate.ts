@@ -2,6 +2,7 @@ import { HttpError } from './errors';
 import type { Field, Resource } from './resources';
 import { writableFields } from './resources';
 import { apenasDigitos, erroDocumento, erroTelefone, telefoneNormalizado, ufValida } from './documentos';
+import { erroGtin } from './ean';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -41,6 +42,13 @@ function coerce(f: Field, raw: unknown): [unknown, string | null] {
       const s = String(raw).trim();
       if (f.maxLength && s.length > f.maxLength) return [s, `Máximo de ${f.maxLength} caracteres`];
       if (f.pattern && !new RegExp(f.pattern).test(s)) return [s, f.patternMessage || 'Formato inválido'];
+      // GTIN/EAN: a forma passou no pattern; o dígito verificador GS1 é
+      // conferido aqui (ean.ts). Sem isto, um EAN digitado com um dígito
+      // trocado era aceito e bipava outro produto no caixa/etiqueta.
+      if (f.gtin) {
+        const erro = erroGtin(s);
+        if (erro) return [s, erro];
+      }
       return [s, null];
     }
     case 'phone': {
