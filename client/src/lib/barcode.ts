@@ -21,6 +21,42 @@ export function isValidEan(code: string): boolean {
   return eanCheckDigit(code.slice(0, -1)) === Number(code.slice(-1));
 }
 
+// ---------------------------------------------------------------- GTIN
+// A família completa aceita no cadastro (P0): GTIN-8 (EAN-8), GTIN-12
+// (UPC-A), GTIN-13 (EAN-13) e GTIN-14. O dígito verificador GS1 é o mesmo
+// algoritmo de `eanCheckDigit` para qualquer comprimento. Só EAN-8/EAN-13
+// têm simbologia própria desenhada aqui; GTIN-12/14 válidos são RECONHECIDOS
+// como GTIN (validação de cadastro) mas a etiqueta os imprime em Code 128 —
+// como já acontece com o SKU interno, que não é EAN e nunca é validado como
+// se fosse. O servidor espelha esta regra (server/src/ean.ts) e é a autoridade.
+export type GtinKind = 'GTIN-8' | 'GTIN-12' | 'GTIN-13' | 'GTIN-14';
+
+export function gtinKind(code: string): GtinKind | null {
+  if (!/^\d+$/.test(code)) return null;
+  switch (code.length) {
+    case 8: return 'GTIN-8';
+    case 12: return 'GTIN-12';
+    case 13: return 'GTIN-13';
+    case 14: return 'GTIN-14';
+    default: return null;
+  }
+}
+
+export function isValidGtin(code: string): boolean {
+  if (!gtinKind(code)) return false;
+  return eanCheckDigit(code.slice(0, -1)) === Number(code.slice(-1));
+}
+
+/** Mensagem de erro de cadastro para um GTIN/EAN (null = aceitável; vazio idem). */
+export function erroGtin(valor: unknown): string | null {
+  const s = String(valor ?? '').trim();
+  if (!s) return null;
+  if (!/^\d+$/.test(s)) return 'Código de barras deve conter apenas dígitos.';
+  if (!gtinKind(s)) return 'Informe 8, 12, 13 ou 14 dígitos (EAN-8, UPC-A, EAN-13 ou EAN-14).';
+  if (!isValidGtin(s)) return 'Dígito verificador do código de barras inválido. Confira o código impresso na embalagem.';
+  return null;
+}
+
 function eanPattern(code: string): string {
   if (code.length === 13) {
     const first = Number(code[0]);

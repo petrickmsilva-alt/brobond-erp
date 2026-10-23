@@ -49,10 +49,12 @@ describe('nome — texto livre com limite', () => {
 describe('código de barras (EAN/GTIN)', () => {
   it('aceita 8, 12, 13 e 14 dígitos e ignora separadores digitados', () => {
     expect(normalizarCodigoBarras('789-1234')).toBe('7891234');
-    expect(erroCodigoBarras('78912345')).toBeNull();
-    expect(erroCodigoBarras('789123456789')).toBeNull();
-    expect(erroCodigoBarras('7891234567890')).toBeNull();
-    expect(erroCodigoBarras('78912345678901')).toBeNull();
+    // P0 (§7): o dígito verificador GS1 é conferido — vetores com dv válido.
+    expect(erroCodigoBarras('96385074')).toBeNull();
+    expect(erroCodigoBarras('036000291452')).toBeNull();
+    expect(erroCodigoBarras('7891234567895')).toBeNull();
+    expect(erroCodigoBarras('12345678901231')).toBeNull();
+    expect(erroCodigoBarras('7891234567890')).toMatch(/dígito verificador/i);
   });
 
   it('recusa quantidade de dígitos que o domínio não suporta', () => {
@@ -100,7 +102,7 @@ describe('CFOP e GTIN tributário', () => {
   });
 
   it('GTIN tributário segue a família do código de barras', () => {
-    expect(erroGtinTributario('7891234567890')).toBeNull();
+    expect(erroGtinTributario('7891234567895')).toBeNull();
     expect(erroGtinTributario('')).toBeNull();
     expect(erroGtinTributario('123')).toMatch(/8, 12, 13 ou 14/);
   });

@@ -27,6 +27,7 @@
 // observações são texto livre (com limite de caracteres, como no servidor).
 // ============================================================================
 import { maskMoneyInput, soDigitos } from './format';
+import { erroGtin } from './barcode';
 
 export const SKU_MAX = 40;
 export const NOME_MAX = 120;
@@ -94,10 +95,11 @@ export function erroNome(valor: unknown): string | null {
 }
 
 export function erroCodigoBarras(valor: unknown): string | null {
-  const s = normalizarCodigoBarras(valor);
-  if (!s) return null;
-  if (!CODIGO_BARRAS_PATTERN.test(s)) return 'Informe 8, 12, 13 ou 14 dígitos.';
-  return null;
+  // P0: além da forma (8/12/13/14 dígitos), o DÍGITO VERIFICADOR GS1 é
+  // conferido (erroGtin, de barcode.ts — o mesmo algoritmo que desenha a
+  // etiqueta; o servidor repete a conferência em ean.ts e é a autoridade).
+  // SKU interno não passa por aqui: é texto livre e imprime em Code 128.
+  return erroGtin(normalizarCodigoBarras(valor));
 }
 
 export function erroNcm(valor: unknown): string | null {
@@ -122,10 +124,7 @@ export function erroCfop(valor: unknown): string | null {
 }
 
 export function erroGtinTributario(valor: unknown): string | null {
-  const s = normalizarCodigoBarras(valor);
-  if (!s) return null;
-  if (!GTIN_TRIBUTARIO_PATTERN.test(s)) return 'Informe 8, 12, 13 ou 14 dígitos.';
-  return null;
+  return erroGtin(normalizarCodigoBarras(valor));
 }
 
 /** Estoque máximo não pode ficar abaixo do mínimo (mesma CHECK do banco). */
