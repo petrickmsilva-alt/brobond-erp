@@ -23,6 +23,7 @@ import {
   sizeIsSellable,
   type ProductSelection,
 } from '../lib/productSelection';
+import { Thumb } from './ImageField';
 
 type SelectionResult = void | boolean;
 
@@ -63,19 +64,61 @@ function errorMessage(error: unknown): string {
 /** Saldo por tamanho apenas informativo (uma única combinação possível). */
 function StockSizes({ product }: { product: SearchProduct }) {
   if (!product.tamanhos.length) {
-    return <span className="text-[11px] text-slate-500">Sem saldo</span>;
+    return <span className="text-[11px] text-slate-500">Sem saldo por tamanho</span>;
   }
   return (
-    <span className="flex flex-wrap gap-1" aria-label={`Saldo total ${formatNumber(product.estoque_disponivel)}`}>
+    <span
+      role="group"
+      className="flex min-w-0 flex-wrap gap-1.5"
+      aria-label={`Saldos por tamanho de ${product.nome}`}
+    >
       {product.tamanhos.map((size) => (
         <span
           key={`${size.tamanho_id ?? 'sem'}-${size.tamanho}`}
-          className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${size.quantidade > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}
+          className={`max-w-full rounded-md border px-2 py-1 font-mono text-[11px] leading-4 [overflow-wrap:anywhere] ${size.quantidade > 0 ? 'border-emerald-100 bg-emerald-50 text-emerald-800' : 'border-slate-200 bg-slate-100 text-slate-600'}`}
         >
-          {size.tamanho}: {formatNumber(size.quantidade)}
+          {size.tamanho} {formatNumber(size.quantidade)}
         </span>
       ))}
     </span>
+  );
+}
+
+/**
+ * Conteúdo visual compartilhado pelo resultado e pelo cabeçalho de uma família.
+ * Somente apresenta campos do payload: não consulta nem recalcula nada aqui.
+ */
+function ProductDetails({ product, variant = false }: { product: SearchProduct; variant?: boolean }) {
+  return (
+    <>
+      <div className="break-words text-sm font-semibold leading-5 text-slate-900" title={product.nome}>
+        {variant && <span aria-hidden="true">↳ </span>}
+        {product.nome}
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] leading-4 text-slate-500">
+        {product.categoria && <span className="max-w-full [overflow-wrap:anywhere]">{product.categoria}</span>}
+        {product.cor && <span className="max-w-full [overflow-wrap:anywhere]">{product.cor}</span>}
+        {product.marca && <span className="max-w-full [overflow-wrap:anywhere]">{product.marca}</span>}
+        {product.codigo_barras && <span className="max-w-full [overflow-wrap:anywhere]">EAN {product.codigo_barras}</span>}
+        {!product.ativo && <span className="font-semibold text-red-600">Inativo</span>}
+      </div>
+      {product.sku && (
+        <div className="mt-0.5 font-mono text-[11px] leading-4 text-slate-500 [overflow-wrap:anywhere]" title={product.sku}>
+          <span className="font-sans font-semibold text-slate-400">SKU</span> {product.sku}
+        </div>
+      )}
+      {product.descricao && (
+        <div className="mt-1 break-words text-[11px] leading-4 text-slate-500" title={product.descricao}>
+          {product.descricao}
+        </div>
+      )}
+      <div className="mt-2 text-xs leading-5 text-slate-600">
+        <span className="font-medium">Estoque total:</span>{' '}
+        <span className={`font-semibold tabular-nums ${product.estoque_disponivel > 0 ? 'text-emerald-700' : 'text-slate-600'}`}>
+          {formatNumber(product.estoque_disponivel)} un.
+        </span>
+      </div>
+    </>
   );
 }
 
@@ -622,7 +665,7 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
           ? `Tamanho ${entry.size.tamanho} sem saldo disponível para venda`
           : `Selecionar tamanho ${entry.size.tamanho} (${formatNumber(entry.size.quantidade)} disponível)`}
         aria-label={`Tamanho ${entry.size.tamanho}: ${formatNumber(entry.size.quantidade)} disponível${unavailable ? ' — indisponível para venda' : ''}`}
-        className={`rounded border px-2 py-1 font-mono text-[11px] transition ${
+        className={`max-w-full rounded-md border px-2.5 py-1 font-mono text-[11px] leading-4 transition [overflow-wrap:anywhere] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
           unavailable
             ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400 line-through'
             : active
@@ -633,7 +676,7 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
         onClick={() => void activate(entry)}
         onMouseEnter={() => setActiveIndex(index)}
       >
-        {entry.size.tamanho}: {formatNumber(entry.size.quantidade)}
+        {entry.size.tamanho} {formatNumber(entry.size.quantidade)}
       </button>
     );
   };
@@ -644,57 +687,47 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
     const active = activeIndex === index;
     const inactive = !entry.row.ativo && !includeInactive;
     return (
-      <div className={`flex items-start gap-2 px-3 py-2 ${variant ? 'pl-7' : ''}`}>
-        <button
-          type="button"
-          id={optionDomId(listboxId, entry.key)}
-          role="option"
-          aria-selected={active}
-          aria-disabled={!entry.selectable && !entry.referenceOnly || undefined}
-          disabled={selecting || inactive}
-          className={`min-w-0 flex-1 text-left disabled:cursor-not-allowed disabled:opacity-50 ${active ? 'text-brand-900' : ''}`}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => void activate(entry)}
-          onMouseEnter={() => setActiveIndex(index)}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium">
-                {variant ? '↳ ' : ''}<span className="font-mono text-xs">{entry.row.sku}</span> — {entry.row.nome}
+      <div className={`px-3 py-3 transition-colors ${variant ? 'pl-6 sm:pl-7' : ''} ${active ? 'bg-brand-50/70' : 'bg-white'}`}>
+        <div className="flex items-start gap-3">
+          <Thumb src={entry.row.foto_url} alt={entry.row.nome} size={44} className="mt-0.5" />
+          <div className="min-w-0 flex-1">
+            <button
+              type="button"
+              id={optionDomId(listboxId, entry.key)}
+              role="option"
+              aria-selected={active}
+              aria-disabled={!entry.selectable && !entry.referenceOnly || undefined}
+              aria-label={`${productLabel(entry.row)}. Estoque total: ${formatNumber(entry.row.estoque_disponivel)} unidades.`}
+              disabled={selecting || inactive}
+              className="block w-full min-w-0 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => void activate(entry)}
+              onMouseEnter={() => setActiveIndex(index)}
+            >
+              <ProductDetails product={entry.row} variant={variant} />
+              {entry.needsSizeChoice ? (
+                <div className="mt-1.5 text-[11px] font-medium leading-4 text-brand-700">
+                  {entry.referenceOnly
+                    ? 'Escolha a variação abaixo — ou selecione o produto pai'
+                    : sizeEntries.length
+                      ? 'Escolha um tamanho abaixo para continuar'
+                      : 'Escolha uma variação/tamanho abaixo'}
+                </div>
+              ) : (
+                <div className="mt-2"><StockSizes product={entry.row} /></div>
+              )}
+            </button>
+            {entry.needsSizeChoice && sizeEntries.length > 0 && (
+              <div
+                role="group"
+                aria-label={`Tamanhos de ${entry.row.nome}`}
+                className="mt-2 flex min-w-0 flex-wrap gap-1.5"
+              >
+                {sizeEntries.map(renderSizeOption)}
               </div>
-              <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-slate-500">
-                {entry.row.codigo_barras && <span>EAN {entry.row.codigo_barras}</span>}
-                {entry.row.cor && <span>{entry.row.cor}</span>}
-                {entry.row.categoria && <span>{entry.row.categoria}</span>}
-                {entry.row.marca && <span>{entry.row.marca}</span>}
-                {!entry.row.ativo && <span className="font-semibold text-red-600">Inativo</span>}
-              </div>
-            </div>
-            <span className={`shrink-0 text-xs font-semibold ${entry.row.estoque_disponivel > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
-              {formatNumber(entry.row.estoque_disponivel)} un.
-            </span>
+            )}
           </div>
-          {entry.needsSizeChoice ? (
-            <div className="mt-1 text-[11px] font-medium text-brand-700">
-              {entry.referenceOnly
-                ? 'Escolha a variação abaixo — ou selecione o produto pai'
-                : sizeEntries.length
-                  ? 'Escolha o tamanho ao lado para continuar'
-                  : 'Escolha uma variação/tamanho abaixo'}
-            </div>
-          ) : (
-            <div className="mt-1.5"><StockSizes product={entry.row} /></div>
-          )}
-        </button>
-        {entry.needsSizeChoice && sizeEntries.length > 0 && (
-          <div
-            role="group"
-            aria-label={`Tamanhos de ${entry.row.nome}`}
-            className="flex shrink-0 flex-wrap justify-end gap-1"
-          >
-            {sizeEntries.map(renderSizeOption)}
-          </div>
-        )}
+        </div>
       </div>
     );
   };
@@ -704,7 +737,7 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
     : query;
 
   return (
-    <div ref={rootRef} className={`relative ${className}`}>
+    <div ref={rootRef} className={`relative min-w-0 ${className}`}>
       <div className="relative">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
         <input
@@ -746,7 +779,7 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
       </div>
 
       {open && !disabled && (
-        <div className="absolute z-50 mt-1 max-h-96 w-full min-w-[22rem] overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl" role="listbox" id={listboxId} aria-label="Resultados de produtos">
+        <div className="absolute z-50 mt-1 max-h-96 w-full min-w-0 max-w-[calc(100vw-1rem)] overflow-y-auto overflow-x-hidden overscroll-contain rounded-lg border border-slate-200 bg-white shadow-xl" role="listbox" id={listboxId} aria-label="Resultados de produtos">
           {loading && !rows.length && <div className="px-3 py-4 text-sm text-slate-500">Pesquisando produtos…</div>}
           {!loading && error && <div className="px-3 py-4 text-sm text-red-600" role="alert">{error}</div>}
           {!loading && !error && !rows.length && query.trim() && (
@@ -760,9 +793,12 @@ export const ProductSelector = forwardRef<HTMLInputElement, ProductSelectorProps
                 // Pai usado apenas como cabeçalho quando a operação exige uma
                 // combinação (variação/tamanho) e o chamador pediu para não
                 // oferecer o pai como escolha direta.
-                <div className="px-3 py-2">
-                  <div className="text-sm font-medium text-slate-700">{plan.product.sku} — {plan.product.nome}</div>
-                  <div className="mt-1 text-[11px] text-slate-500">Escolha uma variação/tamanho abaixo</div>
+                <div className="flex items-start gap-3 px-3 py-3">
+                  <Thumb src={plan.product.foto_url} alt={plan.product.nome} size={44} className="mt-0.5" />
+                  <div className="min-w-0 flex-1">
+                    <ProductDetails product={plan.product} />
+                    <div className="mt-1.5 text-[11px] font-medium leading-4 text-brand-700">Escolha uma variação/tamanho abaixo</div>
+                  </div>
                 </div>
               )}
               {plan.variantPlans.map((variantPlan) => (

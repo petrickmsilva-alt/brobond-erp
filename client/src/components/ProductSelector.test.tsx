@@ -92,7 +92,7 @@ describe('ProductSelector — Smart Product Search compartilhado', () => {
     expect(screen.getByText('Vermelha')).toBeInTheDocument();
     expect(screen.getByText('Camisetas')).toBeInTheDocument();
     expect(screen.getByText('BroBond')).toBeInTheDocument();
-    expect(screen.getAllByText('G: 8').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('G 8').length).toBeGreaterThan(0);
   });
 
   it('navega com setas, seleciona com Enter, limpa e devolve foco à busca', async () => {
@@ -317,14 +317,14 @@ describe('ProductSelector — seleção hierárquica de tamanho', () => {
     // não selecionável — clicar nele não pode disparar onSelect.
     const pai = opcao(/CAM-PREM/);
     expect(pai).toHaveAttribute('aria-disabled', 'true');
-    expect(pai).toHaveTextContent('Escolha o tamanho ao lado');
+    expect(pai).toHaveTextContent('Escolha um tamanho abaixo');
 
     // Cada tamanho é uma opção com tamanho + saldo.
     expect(opcao(/Tamanho P: 4 disponível/)).toHaveAttribute('data-tamanho-id', '1');
     expect(opcao(/Tamanho M: 2 disponível/)).toHaveAttribute('data-tamanho-id', '2');
     expect(opcao(/Tamanho G: 6 disponível/)).toHaveAttribute('data-tamanho-id', '3');
     expect(opcao(/Tamanho GG: 3 disponível/)).toHaveAttribute('data-tamanho-id', '4');
-    expect(screen.getByText('P: 4')).toBeInTheDocument();
+    expect(screen.getByText('P 4')).toBeInTheDocument();
 
     fireEvent.click(pai);
     expect(onSelect).not.toHaveBeenCalled();
@@ -385,7 +385,7 @@ describe('ProductSelector — seleção hierárquica de tamanho', () => {
     expect(semSaldo).toBeInTheDocument();
     expect(semSaldo).toBeDisabled();
     expect(semSaldo).toHaveAttribute('aria-disabled', 'true');
-    expect(semSaldo).toHaveTextContent('M: 0');
+    expect(semSaldo).toHaveTextContent('M 0');
 
     fireEvent.click(semSaldo);
     await act(async () => { await Promise.resolve(); });
@@ -637,5 +637,108 @@ describe('ProductSelector — seleção hierárquica de tamanho', () => {
     expect(screen.getByRole('listbox')).toBeInTheDocument();
     const campo = screen.getByRole('combobox', { name: 'Produto' }) as HTMLInputElement;
     expect(campo.value).not.toMatch(/· G/);
+  });
+});
+
+describe('ProductSelector — apresentação profissional dos resultados', () => {
+  it('mantém nome, foto, estoque total e os cinco tamanhos legíveis no caso real', async () => {
+    vi.useFakeTimers();
+    const tamanhos = [
+      { tamanho_id: 1, tamanho: 'P', quantidade: 7 },
+      { tamanho_id: 2, tamanho: 'M', quantidade: 10 },
+      { tamanho_id: 3, tamanho: 'G', quantidade: 10 },
+      { tamanho_id: 4, tamanho: 'GG', quantidade: 10 },
+      { tamanho_id: 5, tamanho: 'EG', quantidade: 10 },
+    ];
+    const item = product(77, {
+      sku: 'CAM-BAS-PREM-PRET-"B"',
+      nome: 'COTTON "B"',
+      categoria: 'Camisetas básicas premium',
+      cor: 'Preta',
+      marca: 'BroBond',
+      descricao: 'Malha de algodão premium',
+      foto_url: '/api/files/77/principal.jpg?thumb=1',
+      estoque_disponivel: 47,
+      tamanhos,
+    });
+    const get = vi.spyOn(api, 'get').mockResolvedValue(response([item]));
+    render(<ProductSelector onSelect={vi.fn()} requiresStock aria-label="Produto" />);
+    await abrirBusca('cotton');
+
+    const card = opcao(/CAM-BAS-PREM-PRET/);
+    const nome = screen.getByText('COTTON "B"');
+    expect(nome).toHaveClass('break-words', 'font-semibold');
+    expect(nome).toHaveAttribute('title', 'COTTON "B"');
+    expect(nome.className).not.toContain('truncate');
+    expect(card).toHaveTextContent('Camisetas básicas premium');
+    expect(card).toHaveTextContent('Preta');
+    expect(card).toHaveTextContent('SKU CAM-BAS-PREM-PRET-"B"');
+    expect(card).toHaveTextContent('Estoque total: 47 un.');
+
+    const foto = screen.getByRole('img', { name: 'COTTON "B"' });
+    expect(foto).toHaveAttribute('src', '/api/files/77/principal.jpg?thumb=1');
+    expect(foto).toHaveClass('object-cover');
+    expect(foto.parentElement).toHaveStyle({ width: '44px', height: '44px' });
+
+    const grade = screen.getByRole('group', { name: 'Tamanhos de COTTON "B"' });
+    expect(grade).toHaveClass('flex', 'flex-wrap');
+    expect(grade.className).not.toContain('shrink-0');
+    expect(grade.querySelectorAll('[role="option"]')).toHaveLength(5);
+    for (const tamanho of tamanhos) {
+      expect(opcao(new RegExp(`Tamanho ${tamanho.tamanho}: ${tamanho.quantidade} disponível`)))
+        .toHaveTextContent(`${tamanho.tamanho} ${tamanho.quantidade}`);
+    }
+    expect(card).toHaveAttribute('aria-selected', 'true');
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('quebra nome e SKU longos, mostra placeholder e não omite tamanhos em uma página cheia', async () => {
+    vi.useFakeTimers();
+    const nomeLongo = 'Camiseta premium de algodão penteado com modelagem oversized e identificação completa para conferência visual no atendimento';
+    const skuLongo = `SKU-${'BROBOND-PREMIUM-PRETA-'.repeat(4)}EDICAO-LIMITADA`;
+    const tamanhos = ['P', 'M', 'G', 'GG', 'EG', 'XG', 'XXG', '3G'].map((tamanho, index) => ({
+      tamanho_id: index + 1,
+      tamanho,
+      quantidade: index + 1,
+    }));
+    const semFoto = product(90, {
+      sku: skuLongo,
+      nome: nomeLongo,
+      foto_url: null,
+      estoque_disponivel: 36,
+      tamanhos,
+    });
+    const rows = [
+      semFoto,
+      ...Array.from({ length: 19 }, (_, index) => product(200 + index, {
+        nome: `Produto catálogo ${index + 1}`,
+      })),
+    ];
+    const get = vi.spyOn(api, 'get').mockResolvedValue(response(rows, { total: 100, hasMore: true }));
+    render(<ProductSelector onSelect={vi.fn()} requiresStock aria-label="Produto" />);
+    await abrirBusca('premium');
+
+    const nome = screen.getByText(nomeLongo);
+    const card = nome.closest('[role="option"]');
+    expect(card).not.toBeNull();
+    expect(nome).toHaveClass('break-words');
+    expect(screen.getByTitle(skuLongo)).toHaveClass('[overflow-wrap:anywhere]');
+    expect(card).toHaveTextContent('Estoque total: 36 un.');
+    expect(screen.getByRole('img', { name: `Sem foto de ${nomeLongo}` })).toBeInTheDocument();
+
+    const grade = screen.getByRole('group', { name: `Tamanhos de ${nomeLongo}` });
+    expect(grade).toHaveClass('flex-wrap');
+    expect(grade.querySelectorAll('[role="option"]')).toHaveLength(8);
+    for (const tamanho of tamanhos) {
+      expect(opcao(new RegExp(`Tamanho ${tamanho.tamanho}: ${tamanho.quantidade} disponível`)))
+        .toHaveTextContent(`${tamanho.tamanho} ${tamanho.quantidade}`);
+    }
+
+    expect(screen.getAllByRole('option', { name: /Produto catálogo/ })).toHaveLength(19);
+    expect(screen.getByRole('button', { name: /Mostrar mais/ })).toBeInTheDocument();
+    const listbox = screen.getByRole('listbox');
+    expect(listbox).toHaveClass('max-h-96', 'overflow-y-auto', 'overflow-x-hidden', 'min-w-0');
+    expect(listbox.className).not.toContain('min-w-[22rem]');
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });

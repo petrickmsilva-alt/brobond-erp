@@ -16,6 +16,8 @@ export type SearchProduct = {
   cor: string | null;
   categoria: string | null;
   marca: string | null;
+  /** Miniatura já presente no resultado; o seletor nunca busca fotos à parte. */
+  foto_url?: string | null;
   preco_venda: number;
   ativo: boolean;
   variacao_tamanho_id: number | null;

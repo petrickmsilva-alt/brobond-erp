@@ -9,7 +9,7 @@
 // repetido, preço manual marcado como exceção, e pagamento que some o troco.
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import PdvPage from './PdvPage';
 import { ToastProvider } from '../components/ui';
 import { api } from '../lib/api';
@@ -188,10 +188,11 @@ describe('PDV — tela', () => {
     const campo = screen.getByRole('combobox', { name: 'Buscar produto no PDV' }) as HTMLInputElement;
     fireEvent.change(campo, { target: { value: 'bota vermelha' } });
     const opcao = await screen.findByRole('option', { name: /BOTA-001-G/ });
-    expect(opcao).toHaveTextContent('G: 8');
+    expect(opcao).toHaveTextContent('G 8');
     fireEvent.click(opcao);
 
-    expect(await screen.findByText('Bota Country')).toBeInTheDocument();
+    const cupom = await screen.findByRole('table');
+    expect(within(cupom).getByText('Bota Country')).toBeInTheDocument();
     expect(apiGet).toHaveBeenCalledWith('/pdv/buscar?codigo=BOTA-001-G');
     expect(apiGet.mock.calls.some(([path]) => String(path).startsWith('/produtos/busca?') && String(path).includes('q=bota+vermelha'))).toBe(true);
     await waitFor(() => expect(campo.value).toBe(''));
@@ -238,7 +239,7 @@ describe('PDV — tela', () => {
     // Clicar no pai não adiciona item nenhum: primeiro a combinação.
     fireEvent.click(paiOpcao);
     expect(apiGet.mock.calls.some(([path]) => String(path).startsWith('/pdv/buscar'))).toBe(false);
-    expect(screen.queryByText('Bota Country')).not.toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
 
     // Tamanho sem saldo continua visível, mas indisponível para venda.
     const semSaldo = screen.getByRole('option', { name: /Tamanho M: 0 disponível/ });
@@ -246,10 +247,11 @@ describe('PDV — tela', () => {
 
     fireEvent.click(screen.getByRole('option', { name: /Tamanho G: 6 disponível/ }));
 
-    expect(await screen.findByText('Bota Country')).toBeInTheDocument();
+    const cupom = await screen.findByRole('table');
+    expect(within(cupom).getByText('Bota Country')).toBeInTheDocument();
     expect(apiGet).toHaveBeenCalledWith('/pdv/buscar?codigo=BOTA-001&tamanho_id=3');
     // A linha nasce com o tamanho escolhido, no mesmo produto pai.
-    expect(screen.getByText(/BOTA-001 · G/)).toBeInTheDocument();
+    expect(within(cupom).getByText(/BOTA-001 · G/)).toBeInTheDocument();
     await waitFor(() => expect(campo).toHaveValue(''));
   });
 
