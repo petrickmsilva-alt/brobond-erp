@@ -8,8 +8,6 @@ import {
   BarChart3 as BarChartIcon,
   CheckCircle2 as CheckCircle2Icon,
   Cog,
-  ChevronLeft,
-  ChevronRight,
   Columns3,
   Download,
   Copy,
@@ -40,11 +38,12 @@ import { BarrasVerticais } from '../components/Charts';
 import { DETALHE_DIRETO, FORM_DIRETO, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Pagination } from '../components/ui-kit';
 import ReauthModal from '../components/ReauthModal';
 import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
 import { ProductSelector } from '../components/ProductSelector';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
-import { useLocalStorageBool, useLocalStorageSet } from '../lib/useLocalStorage';
+import { useLocalStorageBool, useLocalStorageInt, useLocalStorageSet } from '../lib/useLocalStorage';
 import PlannedModule from './PlannedModule';
 import CatalogoShareModal from '../components/CatalogoShareModal';
 import CatalogoInsights from '../components/CatalogoInsights';
@@ -77,6 +76,8 @@ const EmpresasPage = lazy(() => import('./EmpresasPage'));
 const InutilizacoesPage = lazy(() => import('./InutilizacoesPage'));
 
 const PAGE_SIZE = 25;
+/** Tamanhos de página oferecidos na listagem (server-side). */
+const TAMANHOS_PAGINA = [25, 50, 100];
 
 function SubPageLoading() {
   return <Spinner label="Carregando módulo..." />;
@@ -149,6 +150,8 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [page, setPage] = useState(1);
+  // Tamanho da página: preferência do usuário, persistida no navegador.
+  const [pageSize, setPageSize] = useLocalStorageInt('brobond_lista_page_size', PAGE_SIZE, TAMANHOS_PAGINA);
   const [clientePortal, setClientePortal] = useState<Record<string, any> | null>(null);
   const [catalogoCompartilhar, setCatalogoCompartilhar] = useState<Record<string, any> | null>(null);
   const [sort, setSort] = useState<{ field: string; dir: 'asc' | 'desc' } | null>(null);
@@ -289,11 +292,18 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   // ex.: "Senha" em usuários, que mostra o estado e não o valor.
   const allListFields = useMemo(() => resource.fields.filter((f) => f.list !== false && (!f.virtual || f.list === true) && f.type !== 'password' && f.type !== 'images'), [resource]);
   const searchable = resource.fields.some((f) => f.search);
-  const filtroFields = useMemo(
-    () =>
-      resource.fields.filter((f) => f.form !== false && !f.readonly && (f.type === 'select' || f.type === 'ref' || f.type === 'boolean' || f.type === 'date')).slice(0, 8),
-    [resource]
-  );
+  // Filtros da listagem: quando o recurso declara `filterFields` (ex.: Produtos),
+  // a ordem e a escolha são as do domínio — inclusive faixa numérica (preço).
+  // Sem declaração, mantém o comportamento anterior (primeiros campos filtráveis).
+  const filtroFields = useMemo(() => {
+    if (resource.filterFields?.length) {
+      const porNome = new Map(resource.fields.map((f) => [f.name, f]));
+      return resource.filterFields.map((n) => porNome.get(n)).filter((f): f is Field => !!f);
+    }
+    return resource.fields
+      .filter((f) => f.form !== false && !f.readonly && (f.type === 'select' || f.type === 'ref' || f.type === 'boolean' || f.type === 'date'))
+      .slice(0, 8);
+  }, [resource]);
 
   // Colunas visíveis e densidade da tabela: preferências por recurso, persistidas
   // no navegador — úteis em recursos com muitos campos (Produtos, Usuários), onde
@@ -312,13 +322,22 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   }, [colunasMenuOpen]);
   const listFields = useMemo(() => allListFields.filter((f) => !colunasOcultas.has(f.name)), [allListFields, colunasOcultas]);
 
+  // A busca é do servidor: espera o operador parar de digitar e volta à 1ª
+  // página (o recorte mudou). A guarda evita que o disparo inicial — q vazio,
+  // já igual ao debouncedQ — reinicie a página por cima de uma troca de página.
   useEffect(() => {
+    const termo = q.trim();
     const t = window.setTimeout(() => {
-      setDebouncedQ(q.trim());
-      setPage(1);
+      setDebouncedQ((atual) => {
+        if (atual !== termo) setPage(1);
+        return termo;
+      });
     }, 300);
     return () => window.clearTimeout(t);
   }, [q]);
+
+  // Quantos filtros estão ativos (cada chave — inclusive `_min`/`_max` e `_de`/`_ate`).
+  const filtrosAtivos = useMemo(() => Object.values(filtros).filter((v) => v !== undefined && v !== '').length, [filtros]);
 
   const paramsAtuais = useMemo(() => {
     const params = new URLSearchParams();
@@ -335,15 +354,15 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     setLoading(true);
     setError('');
     try {
-      const d = await api.get<ListResult>(`/${resource.key}?page=${page}&pageSize=${PAGE_SIZE}${paramsAtuais ? `&${paramsAtuais}` : ''}`);
+      const d = await api.get<ListResult>(`/${resource.key}?page=${page}&pageSize=${pageSize}${paramsAtuais ? `&${paramsAtuais}` : ''}`);
       setData(d);
-      if (d.total > 0 && d.rows.length === 0 && page > 1) setPage(Math.max(1, Math.ceil(d.total / PAGE_SIZE)));
+      if (d.total > 0 && d.rows.length === 0 && page > 1) setPage(Math.max(1, Math.ceil(d.total / pageSize)));
     } catch (e: any) {
       setError(e.message || 'Erro ao carregar');
     } finally {
       setLoading(false);
     }
-  }, [resource.key, page, paramsAtuais]);
+  }, [resource.key, page, pageSize, paramsAtuais]);
 
   /** Exporta a lista atual (honrando busca, ordenação e filtros). */
   async function exportarLista(formato: 'csv' | 'xlsx') {
@@ -510,6 +529,12 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     }
   }
 
+  /** Trocar o tamanho da página volta para a primeira — o recorte mudou. */
+  function mudarTamanhoPagina(n: number) {
+    setPageSize(n);
+    setPage(1);
+  }
+
   function toggleSort(f: Field) {
     if (f.virtual) return;
     setSort((s) => (s?.field === f.name ? (s.dir === 'asc' ? { field: f.name, dir: 'desc' } : null) : { field: f.name, dir: 'asc' }));
@@ -517,9 +542,8 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   }
 
   const total = data?.total ?? 0;
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const from = total ? (page - 1) * PAGE_SIZE + 1 : 0;
-  const to = Math.min(total, page * PAGE_SIZE);
+  const from = total ? (page - 1) * pageSize + 1 : 0;
+  const to = Math.min(total, page * pageSize);
   const Icon = module.icon;
 
   return (
@@ -541,12 +565,10 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
               <span className="hidden sm:inline">Atualizar</span>
             </button>
             {filtroFields.length > 0 && (
-              <button className={`btn-secondary ${Object.keys(filtros).length ? '!border-brand-400 !text-brand-700' : ''}`} onClick={() => setShowFiltros((v) => !v)} title="Filtros avançados">
+              <button className={`btn-secondary ${filtrosAtivos ? '!border-brand-400 !text-brand-700' : ''}`} onClick={() => setShowFiltros((v) => !v)} title="Filtros avançados">
                 <ListFilter className="h-4 w-4" />
                 <span className="hidden sm:inline">Filtros</span>
-                {Object.keys(filtros).length > 0 && (
-                  <span className="badge ml-1 !bg-brand-500 !text-white">{Object.keys(filtros).length}</span>
-                )}
+                {filtrosAtivos > 0 && <span className="badge ml-1 !bg-brand-500 !text-white">{filtrosAtivos}</span>}
               </button>
             )}
             <button
@@ -839,20 +861,18 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           </ul>
         )}
 
-        {/* Paginação */}
-        {data && total > PAGE_SIZE && (
-          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-2.5 text-sm">
-            <span className="text-slate-500">
-              Página {page} de {pages}
-            </span>
-            <div className="flex items-center gap-1">
-              <button className="btn-icon" disabled={page <= 1 || loading} onClick={() => setPage((p) => p - 1)} aria-label="Página anterior">
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <button className="btn-icon" disabled={page >= pages || loading} onClick={() => setPage((p) => p + 1)} aria-label="Próxima página">
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            </div>
+        {/* Paginação server-side: o servidor devolve só a página pedida. */}
+        {data && total > 0 && (
+          <div className="border-t border-slate-200 px-4 py-3">
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              pageSizeOptions={TAMANHOS_PAGINA}
+              onPageSizeChange={mudarTamanhoPagina}
+              label={`Paginação de ${module.label}`}
+            />
           </div>
         )}
       </div>
@@ -1105,6 +1125,43 @@ function FiltroCampo({
           <input type="date" className="input" value={filtros[`${field.name}_de`] ?? ''} onChange={(e) => onChange(`${field.name}_de`, e.target.value)} aria-label={`${field.label} a partir de`} />
           até
           <input type="date" className="input" value={filtros[`${field.name}_ate`] ?? ''} onChange={(e) => onChange(`${field.name}_ate`, e.target.value)} aria-label={`${field.label} até`} />
+        </div>
+      </label>
+    );
+  }
+  // Faixa numérica (preço, custo, estoque): mínimo e máximo no servidor.
+  if (field.type === 'money' || field.type === 'number' || field.type === 'percent' || field.type === 'integer') {
+    const prefixo = field.type === 'money' ? 'R$' : undefined;
+    return (
+      <label className="block" htmlFor={id}>
+        <span className="label">{field.label}</span>
+        <div className="flex items-center gap-1.5">
+          <div className="relative flex-1">
+            {prefixo && <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2.5 text-xs text-slate-400">{prefixo}</span>}
+            <input
+              id={id}
+              type="text"
+              inputMode="decimal"
+              className={`input ${prefixo ? 'pl-8' : ''}`}
+              value={filtros[`${field.name}_min`] ?? ''}
+              onChange={(e) => onChange(`${field.name}_min`, e.target.value)}
+              placeholder="Mínimo"
+              aria-label={`${field.label} mínimo`}
+            />
+          </div>
+          <span className="text-xs text-slate-400">até</span>
+          <div className="relative flex-1">
+            {prefixo && <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2.5 text-xs text-slate-400">{prefixo}</span>}
+            <input
+              type="text"
+              inputMode="decimal"
+              className={`input ${prefixo ? 'pl-8' : ''}`}
+              value={filtros[`${field.name}_max`] ?? ''}
+              onChange={(e) => onChange(`${field.name}_max`, e.target.value)}
+              placeholder="Máximo"
+              aria-label={`${field.label} máximo`}
+            />
+          </div>
         </div>
       </label>
     );

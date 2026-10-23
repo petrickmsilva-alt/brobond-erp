@@ -869,7 +869,11 @@ app.get(
     const r = (req as any).resource;
     checkAccess(r, currentUser(req), 'read');
     const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 25));
+    // Página do servidor: o cliente pede 25/50/100 e recebe SÓ aquela página.
+    // O teto de 500 atende os seletores que precisam do cadastro inteiro
+    // (fornecedores/insumos/clientes em modais) sem abrir a porta para "baixe o
+    // catálogo todo" — a listagem de Produtos usa 25/50/100.
+    const pageSize = Math.min(500, Math.max(1, Number(req.query.pageSize) || 25));
     const dir = String(req.query.dir || '').toLowerCase() === 'desc' ? 'desc' : String(req.query.dir || '').toLowerCase() === 'asc' ? 'asc' : undefined;
     // Filtros de igualdade: ?f.produto_id=3&f.status=aberta
     const filter: Record<string, unknown> = {};

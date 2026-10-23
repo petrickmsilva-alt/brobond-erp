@@ -30,6 +30,42 @@ export function useLocalStorageBool(key: string, def: boolean): [boolean, (v: bo
 }
 
 /**
+ * Número inteiro persistido no navegador (ex.: tamanho de página da listagem).
+ * Só aceita valores da lista permitida — uma preferência corrompida não quebra a tela.
+ */
+export function useLocalStorageInt(key: string, def: number, permitidos?: number[]): [number, (v: number) => void] {
+  const valido = useCallback(
+    (n: number) => Number.isInteger(n) && n > 0 && (!permitidos || permitidos.includes(n)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [permitidos?.join(',')]
+  );
+  const [value, setValue] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      const n = raw === null ? def : Number(raw);
+      return valido(n) ? n : def;
+    } catch {
+      return def;
+    }
+  });
+
+  const update = useCallback(
+    (v: number) => {
+      if (!valido(v)) return;
+      setValue(v);
+      try {
+        localStorage.setItem(key, String(v));
+      } catch {
+        /* sem persistência: preferência vale só para esta sessão */
+      }
+    },
+    [key, valido]
+  );
+
+  return [value, update];
+}
+
+/**
  * Conjunto de strings persistido no navegador (ex.: nomes de colunas ocultas por
  * recurso). Devolve o Set atual e uma função para alternar um item.
  */

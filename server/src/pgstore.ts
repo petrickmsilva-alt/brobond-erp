@@ -5,6 +5,7 @@ import type { PoolClient } from 'pg';
 import { isDbConnected, pool, query, withTransaction } from './db';
 import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './resources';
+import { alvosDeBusca, campoPorDigitos, digitosDe, idDoTermo, termosDeBusca } from './busca';
 import { hashCadeiaAuditoria, normalizarPayloadAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
 import type { EscopoEmpresa } from './empresa';
@@ -214,6 +215,8 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
   // Filtros de igualdade (somente colunas reais do recurso)
   const cols = new Set(columnsOf(r).map((f) => f.name));
   const dateCols = new Set(r.fields.filter((f) => f.type === 'date' || f.type === 'datetime').map((f) => f.name));
+  // Faixa numérica (ex.: preço, custo, estoque): f.preco_venda_min / _max.
+  const numCols = new Set(r.fields.filter((f) => ['integer', 'number', 'money', 'percent'].includes(f.type)).map((f) => f.name));
   for (const [k, v] of Object.entries(filter || {})) {
     if (v === undefined || v === null || v === '') continue;
     // Intervalo de datas: f.<campo>_de / f.<campo>_ate (ex.: f.data_de, f.data_ate)
@@ -232,46 +235,64 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
       }
       continue;
     }
+    // Faixa numérica: f.<campo>_min / f.<campo>_max (ex.: f.preco_venda_min).
+    const mNum = /^(.*?)_(min|max)$/.exec(k);
+    if (mNum && numCols.has(mNum[1])) {
+      const n = Number(String(v).replace(',', '.'));
+      if (!Number.isFinite(n)) continue;
+      params.push(n);
+      conds.push(`t.${mNum[1]} ${mNum[2] === 'min' ? '>=' : '<='} $${params.length}`);
+      continue;
+    }
     if (!cols.has(k)) continue;
     params.push(v);
     conds.push(`t.${k} = $${params.length}`);
   }
   const term = (qtext || '').trim();
   if (!term) return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
-  params.push(`%${term}%`);
-  const idx = params.length;
-  const digits = term.replace(/\D/g, '');
-  const hasDocOrPhoneSearch =
-    digits.length >= 3 && r.fields.some((f) => f.search && (f.type === 'document' || f.type === 'phone'));
-  let digitsIdx = 0;
-  if (hasDocOrPhoneSearch) {
-    params.push(`%${digits}%`);
-    digitsIdx = params.length;
+  // Cada termo é um AND; dentro do termo, OR entre os campos pesquisáveis. Os
+  // alvos vêm de `searchFields` (ou, sem ele, de todo campo com `search: true`)
+  // e só entram no SQL nomes de coluna reais — o valor é sempre parâmetro.
+  const alvos = alvosDeBusca(r);
+  // Documento/telefone: a consulta INTEIRA é comparada só pelos dígitos, então
+  // "(62) 99123-4567" casa com "62991234567". Um parâmetro único, fora do laço
+  // de termos, porque a pontuação quebra a consulta em termos sem sentido
+  // ("(62)" tem 2 dígitos) — a via textual não acharia o telefone.
+  const digitosConsulta = digitosDe(term);
+  let digitosIdx = 0;
+  if (digitosConsulta.length >= 3 && alvos.some((a) => a.tipo === 'coluna' && campoPorDigitos(a.campo))) {
+    params.push(`%${digitosConsulta}%`);
+    digitosIdx = params.length;
   }
-  const parts: string[] = [];
-  for (const f of r.fields) {
-    if (!f.search) continue;
-    if (f.type === 'ref') {
-      const i = refs.indexOf(f);
-      if (i >= 0) {
-        const target = getResource(f.ref!)!;
-        for (const lf of target.labelFields) parts.push(`r${i}.${lf}::text ILIKE $${idx}`);
+  for (const termo of termosDeBusca(term)) {
+    params.push(`%${termo}%`);
+    const idx = params.length;
+    const parts: string[] = [];
+    for (const alvo of alvos) {
+      if (alvo.tipo === 'coluna') {
+        parts.push(`t.${alvo.coluna}::text ILIKE $${idx}`);
+        if (digitosIdx > 0 && campoPorDigitos(alvo.campo)) {
+          parts.push(`regexp_replace(COALESCE(t.${alvo.coluna}::text, ''), '[^0-9]', '', 'g') LIKE $${digitosIdx}`);
+        }
+        continue;
       }
-    } else {
-      parts.push(`t.${f.name}::text ILIKE $${idx}`);
-      if (digitsIdx > 0 && (f.type === 'document' || f.type === 'phone')) {
-        parts.push(`regexp_replace(COALESCE(t.${f.name}::text, ''), '[^0-9]', '', 'g') LIKE $${digitsIdx}`);
+      const alvoRef = getResource(alvo.ref)!;
+      const i = refs.findIndex((f) => f.ref === alvo.ref);
+      if (i >= 0) {
+        // Todo label do recurso referenciado continua pesquisável (o rótulo
+        // exibido é a concatenação deles).
+        for (const lf of alvoRef.labelFields) parts.push(`r${i}.${lf}::text ILIKE $${idx}`);
       }
     }
-  }
-  if (/^\d{1,10}$/.test(term)) {
-    const numId = Number(term);
-    if (Number.isInteger(numId) && numId > 0 && numId <= 2147483647) {
-      params.push(numId);
+    // ID exato: só o termo puramente numérico, dentro da faixa de int32, e
+    // SEMPRE como parâmetro — nunca concatenado no SQL.
+    const id = idDoTermo(termo);
+    if (id !== null) {
+      params.push(id);
       parts.push(`t.id = $${params.length}`);
     }
+    if (parts.length) conds.push(`(${parts.join(' OR ')})`);
   }
-  if (parts.length) conds.push(`(${parts.join(' OR ')})`);
   return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 }
 

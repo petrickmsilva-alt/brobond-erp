@@ -86,6 +86,21 @@ export type Field = {
 
 export type ResourceOps = { create: boolean; update: boolean; delete: boolean };
 
+/**
+ * Campos aceitos na BUSCA TEXTUAL da listagem (`?q=`).
+ *
+ * Sem esta lista, a busca cobre todo campo com `search: true`. Ela existe para
+ * as telas em que "buscar" tem um recorte de domínio próprio — em Produtos, o
+ * identificador que o operador tem em mãos (SKU, nome, código de barras,
+ * referência do fornecedor). Os campos continuam sendo colunas reais (nunca
+ * SQL interpolado) e continuam sujeitos ao tenant: o escopo é aplicado por
+ * fora, como em qualquer listagem.
+ */
+export type ResourceSearchField =
+  | string
+  /** Coluna de outro recurso (join pelo label), ex.: categoria/coleção/cor. */
+  | { ref: string; field?: string };
+
 export type Resource = {
   key: string;
   table: string;
@@ -125,6 +140,16 @@ export type Resource = {
    * Ver server/src/empresa.ts.
    */
   empresa?: boolean;
+  /** Recorte da busca textual da listagem (padrão: todo campo com `search: true`). */
+  searchFields?: ResourceSearchField[];
+  /**
+   * Filtros declarados da listagem, na ordem em que devem aparecer. Sem esta
+   * lista, a tela deriva os filtros dos primeiros campos select/ref/boolean/data.
+   * Declarar é o que garante que "categoria, coleção, cor, grade, formato,
+   * status, preço e fornecedor" apareçam — e que a faixa de preço (campo
+   * numérico) exista como filtro de mínimo/máximo.
+   */
+  filterFields?: string[];
 };
 
 const ALL_OPS: ResourceOps = { create: true, update: true, delete: true };
@@ -951,14 +976,14 @@ export const RESOURCES: Record<string, Resource> = {
       // que a suíte pg-multiempresa já exigia. Declarar `unique` (global) fazia o
       // modo memória recusar o mesmo SKU em outra empresa — divergência
       // memória × PostgreSQL que o contrato de tipos agora barra.
-      { name: 'sku', label: 'SKU / Referência', type: 'text', required: true, uniqueEmpresa: true, search: true, maxLength: 40, placeholder: 'Ex.: CAM-001' },
-      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
-      { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias', search: true },
-      { name: 'grade_id', label: 'Grade de tamanhos', type: 'ref', ref: 'grades', search: true, hint: 'Define os tamanhos deste produto no estoque. Se vazio, herda a grade padrão da categoria.' },
-      { name: 'colecao_id', label: 'Coleção', type: 'ref', ref: 'colecoes', search: true },
-      { name: 'cor_id', label: 'Cor (cadastro)', type: 'ref', ref: 'cores', search: true, hint: 'Cor padronizada, com amostra colorida.' },
-      { name: 'cor', label: 'Cor (texto livre)', type: 'text', search: true, maxLength: 40, list: false, hint: 'Use quando a cor ainda não estiver no cadastro (ex.: estampa).' },
-      { name: 'custo', label: 'Custo unitário', type: 'money', min: 0, default: 0, hint: 'Base para o valor do estoque no Dashboard.' },
+      { name: 'sku', label: 'SKU / Referência', type: 'text', required: true, uniqueEmpresa: true, search: true, maxLength: 40, placeholder: 'Ex.: CAM-001', section: 'Informações básicas' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, section: 'Informações básicas' },
+      { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias', search: true, section: 'Classificação' },
+      { name: 'grade_id', label: 'Grade de tamanhos', type: 'ref', ref: 'grades', search: true, section: 'Classificação', hint: 'Define os tamanhos deste produto no estoque. Se vazio, herda a grade padrão da categoria.' },
+      { name: 'colecao_id', label: 'Coleção', type: 'ref', ref: 'colecoes', search: true, section: 'Classificação' },
+      { name: 'cor_id', label: 'Cor (cadastro)', type: 'ref', ref: 'cores', search: true, section: 'Classificação', hint: 'Cor padronizada, com amostra colorida.' },
+      { name: 'cor', label: 'Cor (texto livre)', type: 'text', search: true, maxLength: 40, list: false, section: 'Classificação', hint: 'Use quando a cor ainda não estiver no cadastro (ex.: estampa).' },
+      { name: 'custo', label: 'Custo unitário', type: 'money', min: 0, default: 0, section: 'Comercial', hint: 'Base para o valor do estoque no Dashboard.' },
       { name: 'preco_venda', label: 'Preço de venda (varejo)', type: 'money', min: 0, default: 0, section: 'Varejo e atacado' },
       { name: 'preco_atacado', label: 'Preço de venda atacado', type: 'money', min: 0, default: 0, list: false, section: 'Varejo e atacado', hint: 'Usado em catálogos/links de atacado e no pedido pelo site.' },
       { name: 'atacado_min_qtd', label: 'Qtd. mínima atacado', type: 'integer', min: 0, default: 0, list: false, section: 'Varejo e atacado', hint: 'Quantidade mínima para aplicar o preço de atacado.' },
@@ -1063,6 +1088,36 @@ export const RESOURCES: Record<string, Resource> = {
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
+    // Busca da LISTAGEM: o que o operador tem em mãos para achar a peça — SKU,
+    // nome, código de barras, referência do fornecedor e a classificação que
+    // ele vê na tela (categoria, coleção, cor, grade, marca). Não inclui texto
+    // longo (descrição, observações internas) nem NCM: são dados que não
+    // identificam a peça e encheriam a busca de falso-positivo.
+    searchFields: [
+      'sku',
+      'nome',
+      'codigo_barras',
+      'codigo_fornecedor',
+      'variacao_chave',
+      'marca',
+      { ref: 'categorias', field: 'nome' },
+      { ref: 'colecoes', field: 'nome' },
+      { ref: 'cores', field: 'nome' },
+      { ref: 'grades', field: 'nome' },
+    ],
+    // Filtros da LISTAGEM: todos aplicados no servidor, na ordem em que o
+    // operador procura a peça. `preco_venda` entra como faixa (mín/máx) — o
+    // campo é numérico e o servidor monta `>= / <=`.
+    filterFields: [
+      'categoria_id',
+      'colecao_id',
+      'cor_id',
+      'grade_id',
+      'formato',
+      'ativo',
+      'fornecedor_id',
+      'preco_venda',
+    ],
   },
 
   // Componentes de um produto formato='kit'.
