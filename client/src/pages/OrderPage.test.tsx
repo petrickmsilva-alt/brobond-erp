@@ -35,6 +35,7 @@ vi.mock('../lib/meta', async (importOriginal) => {
 
 const apiGet = vi.mocked(api.get);
 const apiPost = vi.mocked(api.post);
+const apiPut = vi.mocked(api.put);
 
 const pedido = {
   id: 7,
@@ -130,5 +131,133 @@ describe('OrderPage — Smart Product Search em /vendas', () => {
     }));
     expect(apiGet.mock.calls.some(([path]) => String(path).includes('/produtos/options'))).toBe(false);
     expect(apiGet.mock.calls.some(([path]) => String(path).includes('/produtos?pageSize='))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Formação profissional do preço da venda
+// ---------------------------------------------------------------------------
+
+const itemDescontado = {
+  id: 501,
+  venda_id: 7,
+  produto_id: 10,
+  tamanho_id: 4,
+  quantidade: 1,
+  preco_unitario: 90,
+  desconto_pct: 20,
+  subtotal: 72,
+  preco_tabela: 90,
+  produto_id__label: 'CAM-VERM-G — Camiseta Premium Vermelha G',
+  tamanho_id__label: 'G',
+  persistido: true,
+};
+
+function mockVendaComItens(itens: unknown[]) {
+  apiGet.mockImplementation(((path: string) => {
+    if (path === '/vendas/7') return Promise.resolve({ ...pedido, total: 72 });
+    if (path === '/vendas/7/itens') return Promise.resolve(itens);
+    if (path.endsWith('/options')) return Promise.resolve([]);
+    return Promise.reject(new Error(`rota não mockada: ${path}`));
+  }) as never);
+}
+
+describe('OrderPage — formação profissional do preço', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiPut.mockResolvedValue({});
+  });
+
+  it('mostra preço de tabela, preço de venda, desconto % e desconto R$ por linha', async () => {
+    mockVendaComItens([itemDescontado]);
+    render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
+
+    await screen.findByText('CAM-VERM-G — Camiseta Premium Vermelha G');
+    expect(screen.getByRole('columnheader', { name: 'Preço tabela' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Preço venda' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Desc. %' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Desc. R$' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Subtotal' })).toBeInTheDocument();
+
+    // tabela 90 · venda 72 · desc 20% · desc R$ 18 · subtotal 72
+    // (90/72 aparecem na linha e no resumo; 18 só como desconto da linha)
+    expect(screen.getAllByText('R$ 90,00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('R$ 72,00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('20%').length).toBeGreaterThan(0);
+    expect(screen.getByText('R$ 18,00')).toBeInTheDocument();
+  });
+
+  it('resumo mostra preço bruto → desconto real → subtotal líquido → frete → total', async () => {
+    mockVendaComItens([itemDescontado]);
+    render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
+
+    await screen.findByText('Produtos — preço de tabela');
+    expect(screen.getByText('Descontos concedidos')).toBeInTheDocument();
+    expect(screen.getByText('Subtotal líquido')).toBeInTheDocument();
+    expect(screen.getByText('Frete')).toBeInTheDocument();
+    expect(screen.getByText('Total da venda')).toBeInTheDocument();
+    // O desconto das linhas aparece no resumo (regressão do "Desconto − R$ 0,00").
+    expect(screen.getByText('− R$ 18,00')).toBeInTheDocument();
+  });
+
+  it('editar o desconto % recalcula o preço de venda e o desconto R$', async () => {
+    mockVendaComItens([itemDescontado]);
+    render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
+    await screen.findByText('CAM-VERM-G — Camiseta Premium Vermelha G');
+
+    fireEvent.click(screen.getByRole('button', { name: /Editar item CAM-VERM-G/ }));
+    const campoDesc = screen.getByRole('spinbutton', { name: /Desconto percentual/ });
+    fireEvent.change(campoDesc, { target: { value: '20.5' } });
+
+    const campoVenda = screen.getByRole('textbox', { name: /Preço de venda/ }) as HTMLInputElement;
+    const campoRs = screen.getByRole('textbox', { name: /Desconto em reais/ }) as HTMLInputElement;
+    expect(campoVenda.value).toBe('71.55');
+    expect(campoRs.value).toBe('18.45');
+  });
+
+  it('editar o preço de venda recalcula o desconto % e o desconto R$', async () => {
+    mockVendaComItens([itemDescontado]);
+    render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
+    await screen.findByText('CAM-VERM-G — Camiseta Premium Vermelha G');
+
+    fireEvent.click(screen.getByRole('button', { name: /Editar item CAM-VERM-G/ }));
+    const campoVenda = screen.getByRole('textbox', { name: /Preço de venda/ });
+    fireEvent.change(campoVenda, { target: { value: '68' } });
+
+    expect((screen.getByRole('spinbutton', { name: /Desconto percentual/ }) as HTMLInputElement).value).toBe('24.44');
+    expect((screen.getByRole('textbox', { name: /Desconto em reais/ }) as HTMLInputElement).value).toBe('22');
+  });
+
+  it('editar o desconto R$ recalcula o preço de venda e o desconto %', async () => {
+    mockVendaComItens([itemDescontado]);
+    render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
+    await screen.findByText('CAM-VERM-G — Camiseta Premium Vermelha G');
+
+    fireEvent.click(screen.getByRole('button', { name: /Editar item CAM-VERM-G/ }));
+    const campoRs = screen.getByRole('textbox', { name: /Desconto em reais/ });
+    fireEvent.change(campoRs, { target: { value: '15' } });
+
+    expect((screen.getByRole('textbox', { name: /Preço de venda/ }) as HTMLInputElement).value).toBe('75');
+    expect((screen.getByRole('spinbutton', { name: /Desconto percentual/ }) as HTMLInputElement).value).toBe('16.67');
+  });
+
+  it('salvar envia o preço de TABELA como base e o desconto derivado (nunca a tabela forjada)', async () => {
+    mockVendaComItens([itemDescontado]);
+    render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
+    await screen.findByText('CAM-VERM-G — Camiseta Premium Vermelha G');
+
+    fireEvent.click(screen.getByRole('button', { name: /Editar item CAM-VERM-G/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: /Preço de venda/ }), { target: { value: '68' } });
+    fireEvent.click(screen.getByRole('button', { name: /Salvar item CAM-VERM-G/ }));
+
+    await waitFor(() =>
+      expect(apiPut).toHaveBeenCalledWith('/vendas/7/itens/501', {
+        produto_id: 10,
+        tamanho_id: 4,
+        quantidade: 1,
+        preco_unitario: 90,
+        desconto_pct: 24.44,
+      })
+    );
   });
 });
