@@ -107,11 +107,6 @@ function ProductDetails({ product, variant = false }: { product: SearchProduct; 
           <span className="font-sans font-semibold text-slate-400">SKU</span> {product.sku}
         </div>
       )}
-      {product.descricao && (
-        <div className="mt-1 break-words text-[11px] leading-4 text-slate-500" title={product.descricao}>
-          {product.descricao}
-        </div>
-      )}
       <div className="mt-2 text-xs leading-5 text-slate-600">
         <span className="font-medium">Estoque total:</span>{' '}
         <span className={`font-semibold tabular-nums ${product.estoque_disponivel > 0 ? 'text-emerald-700' : 'text-slate-600'}`}>

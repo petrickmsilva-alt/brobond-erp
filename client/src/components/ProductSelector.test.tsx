@@ -674,6 +674,7 @@ describe('ProductSelector — apresentação profissional dos resultados', () =>
     expect(card).toHaveTextContent('Preta');
     expect(card).toHaveTextContent('SKU CAM-BAS-PREM-PRET-"B"');
     expect(card).toHaveTextContent('Estoque total: 47 un.');
+    expect(card).not.toHaveTextContent('Malha de algodão premium');
 
     const foto = screen.getByRole('img', { name: 'COTTON "B"' });
     expect(foto).toHaveAttribute('src', '/api/files/77/principal.jpg?thumb=1');
