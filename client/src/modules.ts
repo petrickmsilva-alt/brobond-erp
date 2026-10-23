@@ -1286,11 +1286,12 @@ export const PAGES_ESPECIAIS = [
 export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
 
 /**
- * Recursos cujo cadastro vive em PÁGINA PRÓPRIA (não no modal genérico):
- * /clientes/novo e /clientes/:id/editar; /produtos/novo e /produtos/:id/editar.
- * A lista continua em /clientes e /produtos.
+ * Recursos cujo cadastro/edição vive em PÁGINA PRÓPRIA (não no modal genérico):
+ * - /clientes/novo e /clientes/:id/editar (listagem em /clientes)
+ * - /produtos/novo e /produtos/:id/editar (listagem em /produtos)
+ * - /vendas/novo e /vendas/:id/editar (listagem em /vendas e detalhe em /vendas/:id)
  */
-export const FORM_DIRETO = new Set(['clientes', 'produtos']);
+export const FORM_DIRETO = new Set(['clientes', 'produtos', 'vendas']);
 
 export type NavSection = {
   id: NavSectionId;

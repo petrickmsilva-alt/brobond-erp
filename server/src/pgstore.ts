@@ -5,7 +5,7 @@ import type { PoolClient } from 'pg';
 import { isDbConnected, pool, query, withTransaction } from './db';
 import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './resources';
-import { alvosDeBusca, termosDeBusca } from './busca';
+import { alvosDeBusca, campoPorDigitos, digitosDe, idDoTermo, termosDeBusca } from './busca';
 import { hashCadeiaAuditoria, normalizarPayloadAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
 import type { EscopoEmpresa } from './empresa';
@@ -254,6 +254,16 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
   // alvos vêm de `searchFields` (ou, sem ele, de todo campo com `search: true`)
   // e só entram no SQL nomes de coluna reais — o valor é sempre parâmetro.
   const alvos = alvosDeBusca(r);
+  // Documento/telefone: a consulta INTEIRA é comparada só pelos dígitos, então
+  // "(62) 99123-4567" casa com "62991234567". Um parâmetro único, fora do laço
+  // de termos, porque a pontuação quebra a consulta em termos sem sentido
+  // ("(62)" tem 2 dígitos) — a via textual não acharia o telefone.
+  const digitosConsulta = digitosDe(term);
+  let digitosIdx = 0;
+  if (digitosConsulta.length >= 3 && alvos.some((a) => a.tipo === 'coluna' && campoPorDigitos(a.campo))) {
+    params.push(`%${digitosConsulta}%`);
+    digitosIdx = params.length;
+  }
   for (const termo of termosDeBusca(term)) {
     params.push(`%${termo}%`);
     const idx = params.length;
@@ -261,6 +271,9 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
     for (const alvo of alvos) {
       if (alvo.tipo === 'coluna') {
         parts.push(`t.${alvo.coluna}::text ILIKE $${idx}`);
+        if (digitosIdx > 0 && campoPorDigitos(alvo.campo)) {
+          parts.push(`regexp_replace(COALESCE(t.${alvo.coluna}::text, ''), '[^0-9]', '', 'g') LIKE $${digitosIdx}`);
+        }
         continue;
       }
       const alvoRef = getResource(alvo.ref)!;
@@ -271,8 +284,13 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
         for (const lf of alvoRef.labelFields) parts.push(`r${i}.${lf}::text ILIKE $${idx}`);
       }
     }
-    // ID exato: só o termo puramente numérico.
-    if (/^\d+$/.test(termo)) parts.push(`t.id = ${Number(termo)}`);
+    // ID exato: só o termo puramente numérico, dentro da faixa de int32, e
+    // SEMPRE como parâmetro — nunca concatenado no SQL.
+    const id = idDoTermo(termo);
+    if (id !== null) {
+      params.push(id);
+      parts.push(`t.id = $${params.length}`);
+    }
     if (parts.length) conds.push(`(${parts.join(' OR ')})`);
   }
   return conds.length ? `WHERE ${conds.join(' AND ')}` : '';

@@ -166,8 +166,13 @@ export class MemStore implements Store {
     return this.table(alvo.table).rows.get(Number(id));
   }
 
-  private matches(r: Resource, row: Row, termo: string): boolean {
-    return linhaCorrespondeBusca(r, row, termosDeBusca(termo), (ref, id) => this.linhaDe(ref, id));
+  /**
+   * Busca da listagem — delega ao contrato compartilhado (`busca.ts`) para a
+   * memória e o PostgreSQL responderem igual: múltiplas palavras em AND, campo
+   * de documento/telefone por dígitos e `id` exato dentro da faixa de int32.
+   */
+  private matches(r: Resource, row: Row, term: string): boolean {
+    return linhaCorrespondeBusca(r, row, termosDeBusca(term), (ref, id) => this.linhaDe(ref, id), term);
   }
 
   async list(r: Resource, p: ListParams): Promise<ListResult> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diaDaSemana, diasNoMes, formatarDiaBR, lerDia, somarDias, somarMeses, validarIntervalo } from './datas';
+import { diaDaSemana, diasNoMes, formatarDiaBR, lerDia, maskDataBR, parseDataBR, somarDias, somarMeses, validarIntervalo } from './datas';
 
 describe('datas (dia civil, sem fuso)', () => {
   it('rejeita datas inexistentes e formatos inválidos', () => {
@@ -42,5 +42,15 @@ describe('datas (dia civil, sem fuso)', () => {
     expect(validarIntervalo('2026-10-31', '2026-10-01')).toMatch(/posterior/);
     expect(validarIntervalo('2026-02-30', '2026-03-01')).toMatch(/inicial inválida/);
     expect(validarIntervalo('', '2026-03-01')).toBeNull();
+  });
+
+  it('mascara e converte dd/mm/aaaa ↔ AAAA-MM-DD validando calendário civil', () => {
+    expect(maskDataBR('25102026')).toBe('25/10/2026');
+    expect(maskDataBR('2026-10-25')).toBe('25/10/2026');
+    expect(parseDataBR('25/10/2026')).toBe('2026-10-25');
+    expect(parseDataBR('2026-10-25')).toBe('2026-10-25');
+    expect(parseDataBR('31/02/2026')).toBeNull();
+    expect(parseDataBR('25/10/26')).toBeNull();
+    expect(parseDataBR('')).toBe('');
   });
 });

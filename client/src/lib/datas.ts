@@ -90,3 +90,37 @@ export function validarIntervalo(de: string | null | undefined, ate: string | nu
   if (de > ate) return 'A data inicial é posterior à data final.';
   return null;
 }
+
+/** Máscara de digitação `dd/mm/aaaa` (aceita colar `AAAA-MM-DD` convertendo na hora). */
+export function maskDataBR(valor: string | null | undefined): string {
+  const s = String(valor ?? '').trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    const br = formatarDiaBR(s.slice(0, 10));
+    if (br) return br;
+  }
+  const d = s.replace(/\D/g, '').slice(0, 8);
+  if (d.length <= 2) return d;
+  if (d.length <= 4) return `${d.slice(0, 2)}/${d.slice(2)}`;
+  return `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}`;
+}
+
+/**
+ * Converte texto digitado (`dd/mm/aaaa` ou `AAAA-MM-DD`) para `AAAA-MM-DD` real.
+ * Retorna `''` quando vazio, ou `null` quando preenchido porém inválido.
+ */
+export function parseDataBR(valor: string | null | undefined): string | null {
+  const s = String(valor ?? '').trim();
+  if (!s) return '';
+  if (lerDia(s)) return s;
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+  if (!m) return null;
+  const iso = `${m[3]}-${m[2]}-${m[1]}`;
+  return lerDia(iso) ? iso : null;
+}
+
+/** Dia civil atual no fuso local como `AAAA-MM-DD`. */
+export function hojeCivilIso(): string {
+  const agora = new Date();
+  return paraIso({ ano: agora.getFullYear(), mes: agora.getMonth() + 1, dia: agora.getDate() });
+}
