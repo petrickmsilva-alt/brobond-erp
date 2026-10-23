@@ -55,7 +55,7 @@ import { initSentry, reportarErro } from './log';
 import { smtpConfigurado } from './mail';
 import { carregarOrigemDoBanco, revisarConfiguracaoOrigem, statusOrigemAsync } from './urlPublica';
 import { obterEnderecoPublico, removerEnderecoPublico, salvarEnderecoPublico } from './configSistema';
-import { estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario } from './estoque';
+import { estoqueDisponivel, estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario } from './estoque';
 import { getMedidasGrade, resumoMedidasGrades, saveMedidasGrade } from './medidas';
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
@@ -822,6 +822,7 @@ app.post('/api/fichas/:id/aplicar-preco', wrap(aplicarPrecoFicha));
 
 // Fase 4 — grade de estoque e inventário
 app.get('/api/estoques/grade', wrap(estoqueGrade));
+app.get('/api/estoques/disponivel', wrap(estoqueDisponivel));
 app.get('/api/grades/medidas-resumo', wrap(resumoMedidasGrades));
 app.get('/api/grades/:id/medidas', wrap(getMedidasGrade));
 app.put('/api/grades/:id/medidas', wrap(saveMedidasGrade));

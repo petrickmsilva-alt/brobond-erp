@@ -285,6 +285,18 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
   const [selecaoProduto, setSelecaoProduto] = useState<ProductSelection | null>(null);
   const [tamanhosDoProduto, setTamanhosDoProduto] = useState<Array<{ tamanho_id: number; tamanho: string; quantidade: number }>>([]);
   const [erroNovoItem, setErroNovoItem] = useState('');
+  /**
+   * Disponibilidade canônica vinda de `GET /estoques/disponivel` — o MESMO
+   * número que o faturamento vai baixar (célula do local de saída, com o
+   * fallback do Local padrão). A tela não soma estoque; só mostra o que o
+   * servidor devolveu, com o local explícito.
+   */
+  const [disponibilidade, setDisponibilidade] = useState<{
+    quantidade: number;
+    local: string | null;
+    estoque_fisico: number;
+    tamanho_id: number | null;
+  } | null>(null);
 
   // Carrega opções de apoio sem quebrar quando alguma rota não está mockada ou restrita por RBAC.
   useEffect(() => {
@@ -437,13 +449,52 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
     return tamanhoOpts.map((o) => ({ value: Number(o.value), label: o.label, quantidade: undefined as number | undefined }));
   }, [tamanhoOpts, tamanhosDoProduto]);
 
+  // Busca a disponibilidade canônica sempre que produto/tamanho/local mudam.
+  // `requiresStock` e o aviso de quantidade passam a ler o mesmo contrato do
+  // faturamento — nenhuma soma de estoque acontece no navegador.
+  useEffect(() => {
+    if (!novo.produto_id || !novo.tamanho_id) {
+      setDisponibilidade(null);
+      return;
+    }
+    let vivo = true;
+    const params = new URLSearchParams({
+      produto_id: String(novo.produto_id),
+      tamanho_id: String(novo.tamanho_id),
+    });
+    if (localSaidaId) params.set('local_id', String(localSaidaId));
+    api
+      .get<{ quantidade: number; local: string | null; estoque_fisico: number; tamanho_id: number | null }>(
+        `/estoques/disponivel?${params.toString()}`
+      )
+      .then((r) => {
+        if (vivo) setDisponibilidade(r);
+      })
+      .catch(() => {
+        if (vivo) setDisponibilidade(null);
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [novo.produto_id, novo.tamanho_id, localSaidaId]);
+
   const estoqueTamanhoSelecionado = useMemo(() => {
+    if (
+      disponibilidade &&
+      Number.isFinite(Number(disponibilidade.quantidade)) &&
+      Number(disponibilidade.tamanho_id ?? novo.tamanho_id) === Number(novo.tamanho_id)
+    ) {
+      return Number(disponibilidade.quantidade);
+    }
     if (novo.tamanho_id && tamanhosDoProduto.length > 0) {
       const t = tamanhosDoProduto.find((x) => Number(x.tamanho_id) === Number(novo.tamanho_id));
       if (t) return Number(t.quantidade);
     }
     return selecaoProduto?.quantidade_disponivel ?? null;
-  }, [novo.tamanho_id, selecaoProduto, tamanhosDoProduto]);
+  }, [disponibilidade, novo.tamanho_id, selecaoProduto, tamanhosDoProduto]);
+
+  /** Local que a disponibilidade acima representa (o de saída da venda). */
+  const localDisponibilidade = disponibilidade?.local || form.local_saida || localPadrao;
 
   // Inclusão de produto (em rascunho em `/vendas/novo`, ou direto via API quando pedido já existe)
   async function addItem() {
@@ -1448,8 +1499,13 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                             : 'text-emerald-700 dark:text-emerald-400'
                         }`}
                       >
-                        Estoque disponível: {formatNumber(estoqueTamanhoSelecionado)} un.
+                        Estoque disponível em {localDisponibilidade}: {formatNumber(estoqueTamanhoSelecionado)} un.
                         {Number(novo.quantidade) > estoqueTamanhoSelecionado ? ' (acima do saldo atual!)' : ''}
+                        {disponibilidade && disponibilidade.estoque_fisico > disponibilidade.quantidade ? (
+                          <span className="ml-1 font-normal text-slate-500">
+                            (físico total: {formatNumber(disponibilidade.estoque_fisico)} un. em todos os locais)
+                          </span>
+                        ) : null}
                       </span>
                     )}
                   </>

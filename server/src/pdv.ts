@@ -42,6 +42,7 @@ import { round2 } from './utils';
 import { aplicarRegrasPedido } from './itens';
 import { syncLancamentoVenda } from './financeiro';
 import { precoDe } from './listasPreco';
+import { chaveTamanho, localDaEmpresa, locaisDeSaida, saldoPorTamanho, saldoVendavel } from './estoqueCanonico';
 import type { Row, Tx } from './store';
 
 export const R_CAIXA = () => getResource('pdv_caixas')!;
@@ -383,22 +384,36 @@ export type LinhaResolvida = {
   lista_preco_id: number | null;
   lista_nome: string | null;
   codigo_lido: string | null;
+  /** ESTOQUE VENDÁVEL do tamanho: o que esta venda consegue baixar no local escolhido. */
   disponivel: number;
+  /** Local de onde `disponivel` sai (local de saída da venda, senão Local padrão). */
+  local_id: number | null;
+  local: string | null;
+  /** ESTOQUE FÍSICO do tamanho (soma de todos os locais da empresa). */
+  disponivel_fisico: number;
+  /** Estoque no local de saída escolhido, sem o fallback do Local padrão. */
+  disponivel_no_local: number;
 };
 
-/** Tamanhos em que o produto tem linha de estoque nesta empresa. */
-async function tamanhosComEstoque(produtoId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<{ id: number; codigo: string; disponivel: number }[]> {
+/**
+ * Tamanhos em que o produto tem célula de estoque nesta empresa.
+ *
+ * A agregação vem de `estoqueCanonico.ts` (empresa + produto + tamanho + local):
+ * sem `localId` é o estoque físico do produto; com `localId` é a célula daquele
+ * local. O PDV não monta uma segunda soma de `estoques`.
+ */
+async function tamanhosComEstoque(
+  produtoId: number,
+  escopo: EscopoEmpresa,
+  tx?: Tx,
+  opcoes: { localId?: number | null } = {}
+): Promise<{ id: number; codigo: string; disponivel: number }[]> {
   const s = getStore();
-  const saldos = await s.list(getResource('estoques')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, produto_id: produtoId } }, tx);
-  const porTamanho = new Map<number, number>();
-  for (const e of saldos.rows) {
-    const t = e.tamanho_id === null || e.tamanho_id === undefined ? 0 : Number(e.tamanho_id);
-    porTamanho.set(t, num(porTamanho.get(t)) + num(e.quantidade));
-  }
+  const porTamanho = await saldoPorTamanho(escopo, produtoId, { localId: opcoes.localId ?? null }, tx);
   const out: { id: number; codigo: string; disponivel: number }[] = [];
-  for (const [id, disponivel] of porTamanho) {
-    const tam = id ? await s.findOneWhere(getResource('tamanhos')!, { id }, tx) : null;
-    out.push({ id, codigo: tam ? String(tam.codigo ?? tam.nome ?? id) : 'sem tamanho', disponivel });
+  for (const [chave, saldo] of porTamanho) {
+    const tam = chave ? await s.findOneWhere(getResource('tamanhos')!, { id: chave }, tx) : null;
+    out.push({ id: chave, codigo: tam ? String(tam.codigo ?? tam.nome ?? chave) : 'sem tamanho', disponivel: saldo.quantidade });
   }
   return out.sort((a, b) => a.id - b.id);
 }
@@ -420,7 +435,13 @@ export async function resolverProduto(
   codigo: string,
   escopo: EscopoEmpresa,
   tx?: Tx,
-  tamanhoPedido?: number | null
+  tamanhoPedido?: number | null,
+  /**
+   * Local de saída da venda. Quando informado, `disponivel` passa a ser o
+   * ESTOQUE VENDÁVEL naquele local (com o mesmo fallback para o Local padrão
+   * que o faturamento usa) — nunca a soma de todos os locais.
+   */
+  localSaidaId?: number | null
 ): Promise<LinhaResolvida> {
   const s = getStore();
   const limpo = String(codigo ?? '').trim();
@@ -459,7 +480,7 @@ export async function resolverProduto(
     assertRegistroDaEmpresa(getResource('tamanhos')!, tam, escopo);
     tamanhoId = Number(tam.id);
   } else {
-    const opcoes = await tamanhosComEstoque(Number(lido.id), escopo, tx);
+    const opcoes = await tamanhosComEstoque(Number(lido.id), escopo, tx, { localId: localSaidaId ?? null });
     if (opcoes.length === 1 && opcoes[0].id > 0) tamanhoId = opcoes[0].id;
     else if (opcoes.length > 1) {
       throw new HttpError(
@@ -473,7 +494,21 @@ export async function resolverProduto(
   }
 
   const tam = tamanhoId ? await s.findOneWhere(getResource('tamanhos')!, { id: tamanhoId }, tx) : null;
-  const disponivel = (await tamanhosComEstoque(Number(produto.id), escopo, tx)).filter((t) => t.id === (tamanhoId ?? 0)).reduce((acc, t) => acc + t.disponivel, 0);
+  const temLocalDeSaida = localSaidaId !== null && localSaidaId !== undefined && Number(localSaidaId) > 0;
+  const vendavel = temLocalDeSaida
+    ? await saldoVendavel(escopo, Number(produto.id), tamanhoId, Number(localSaidaId), tx)
+    : null;
+  // Sem local de saída conhecido (ex.: busca antes de abrir o caixa) a leitura
+  // é o físico do tamanho; com local, é o vendável daquele local.
+  const fisico = vendavel
+    ? vendavel.fisico
+    : (await tamanhosComEstoque(Number(produto.id), escopo, tx))
+        .filter((t) => t.id === chaveTamanho(tamanhoId))
+        .reduce((acc, t) => acc + t.disponivel, 0);
+  const disponivel = vendavel ? vendavel.quantidade : fisico;
+  const disponivelNoLocal = vendavel
+    ? vendavel.por_local.find((item) => item.local_id === Number(localSaidaId))?.quantidade ?? 0
+    : fisico;
 
   return {
     produto,
@@ -487,22 +522,70 @@ export async function resolverProduto(
     lista_nome: resolvido.lista_nome,
     codigo_lido: limpo,
     disponivel,
+    local_id: vendavel?.local_id ?? (temLocalDeSaida ? Number(localSaidaId) : null),
+    local: vendavel?.local ?? null,
+    disponivel_fisico: fisico,
+    disponivel_no_local: disponivelNoLocal,
   };
 }
 
-/** GET /api/pdv/buscar?codigo=789... — o que o leitor de código devolve à tela. */
+/**
+ * Local de saída que a tela do PDV deve usar para disponibilidade: o `local_id`
+ * pedido, senão o local do caixa aberto, senão o Local padrão da empresa.
+ *
+ * É o MESMO local que `venderPdv` debita — por isso a tela e o faturamento não
+ * podem discordar. O `local_id` pedido é validado no tenant (404 se for de
+ * outra empresa), nunca aceito como texto livre.
+ */
+async function localDeSaidaDaBusca(req: Request, escopo: EscopoEmpresa): Promise<number | null> {
+  const raw = req.query.local_id;
+  if (raw !== undefined && raw !== null && raw !== '') {
+    const id = Number(raw);
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Filtro local_id inválido.');
+    return (await localDaEmpresa(escopo, id)).id;
+  }
+  // Caixa aberto: só serve de referência quando é INEQUÍVOCO. Com duas
+  // gavetas abertas (dois terminais), escolher "uma" abriria de novo a porta
+  // para a tela mostrar o saldo de outro local — o defeito que este módulo
+  // corrige. Nesse caso a referência é o Local padrão da empresa.
+  const abertos = await getStore().list(
+    R_CAIXA(),
+    { page: 1, pageSize: 2, filter: { empresa_id: escopo.empresaId, status: 'aberto' } }
+  );
+  const caixa = abertos.total === 1 ? abertos.rows[0] : null;
+  if (caixa && caixa.local_id !== null && caixa.local_id !== undefined && caixa.local_id !== '') {
+    // Validado no tenant: um caixa apontando para local de outra empresa não
+    // pode redirecionar a disponibilidade.
+    return (await localDaEmpresa(escopo, Number(caixa.local_id))).id;
+  }
+  const { preferido } = await locaisDeSaida(escopo, null);
+  return preferido.id;
+}
+
+/**
+ * GET /api/pdv/buscar?codigo=789...&tamanho_id=&local_id=
+ *
+ * O que o leitor de código devolve à tela. `disponivel_no_tamanho` é o
+ * ESTOQUE VENDÁVEL no local de saída (a célula que o faturamento baixa);
+ * `estoque_fisico_no_tamanho` e `estoque_disponivel` são o físico (todos os
+ * locais) e existem para a tela explicar a diferença — nunca para vender.
+ */
 export async function buscarProduto(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('produtos')!, actor, 'read');
   const escopo = escopoDe(actor);
   const codigo = String(req.query.codigo ?? req.query.q ?? req.query.sku ?? '');
   const tamanhoPedido = req.query.tamanho_id ? Number(req.query.tamanho_id) : null;
-  const linha = await resolverProduto(codigo, escopo, undefined, tamanhoPedido);
-  const saldo = await getStore().list(getResource('estoques')!, {
-    page: 1,
-    pageSize: 100,
-    filter: { empresa_id: escopo.empresaId, produto_id: Number(linha.produto.id) },
-  });
+  const localId = await localDeSaidaDaBusca(req, escopo);
+  const linha = await resolverProduto(codigo, escopo, undefined, tamanhoPedido, localId);
+  // Físico do produto inteiro (todos os tamanhos, todos os locais) pela MESMA
+  // agregação canônica. Não existe mais soma de `estoques` fora de
+  // `estoqueCanonico.ts`: era assim que uma página truncada em 100 linhas
+  // virava "disponível" na tela.
+  const fisicoDoProduto = [...(await saldoPorTamanho(escopo, Number(linha.produto.id))).values()].reduce(
+    (acc, item) => acc + item.quantidade,
+    0
+  );
   res.json({
     produto_id: Number(linha.produto.id),
     sku: linha.sku,
@@ -519,8 +602,15 @@ export async function buscarProduto(req: Request, res: Response) {
     preco_tabela: linha.preco_tabela,
     origem_preco: linha.lista_nome ? `Lista: ${linha.lista_nome}` : 'Ficha do produto',
     lista_preco_id: linha.lista_preco_id,
+    // VENDÁVEL: a célula do local de saída (fallback Local padrão). É o número
+    // que o operador pode vender de fato.
     disponivel_no_tamanho: linha.disponivel,
-    estoque_disponivel: saldo.rows.reduce((acc, e) => acc + num(e.quantidade), 0),
+    local_id: linha.local_id,
+    local: linha.local,
+    disponivel_no_local: linha.disponivel_no_local,
+    // FÍSICO: soma de todos os locais da empresa (inclui outros depósitos).
+    estoque_fisico_no_tamanho: linha.disponivel_fisico,
+    estoque_disponivel: fisicoDoProduto,
   });
 }
 
@@ -626,15 +716,30 @@ export async function venderPdv(req: Request, res: Response) {
         assertRegistroDaEmpresa(getResource('representantes')!, await findInTenant(getResource('representantes')!, representanteId, escopo, tx), escopo);
       }
 
-      // ---- 1) resolve cada linha: produto, TAMANHO, preço de lista, subtotal ----
+      // ---- 1) local de saída: resolvido ANTES de precificar ----
+      // A disponibilidade mostrada ao operador e a baixa do faturamento têm de
+      // sair do MESMO local. Por isso o local é decidido aqui e viaja para
+      // `resolverProduto`; o faturamento (`faturarVenda`) usa exatamente o mesmo
+      // local de saída, com o mesmo fallback para o Local padrão.
+      const localSaidaData: Record<string, unknown> = {};
+      if (body.local_saida_id !== undefined) localSaidaData.local_id = body.local_saida_id;
+      else if (body.local_saida !== undefined) localSaidaData.local = String(body.local_saida).slice(0, 60);
+      else if (caixa.local_id !== null && caixa.local_id !== undefined) localSaidaData.local_id = caixa.local_id;
+      else if (caixa.local) localSaidaData.local = String(caixa.local);
+      await resolveLocal(localSaidaData, tx, escopo);
+      const localSaida = String(localSaidaData.local);
+      // E4.2.1: o ID resolvido é o canônico; o texto fica só para leitura/compatibilidade.
+      const localSaidaId = Number(localSaidaData.local_id);
+
+      // ---- 2) resolve cada linha: produto, TAMANHO, preço de lista, subtotal ----
       const resolvidas: { linha: LinhaPdv; info: LinhaResolvida; preco: number; subtotal: number }[] = [];
       let subtotalItens = 0;
       const divergencias: { linha: number; enviado: number | null; servidor: number }[] = [];
       for (let i = 0; i < linhas.length; i++) {
         const linha = linhas[i];
         const info = linha.codigo
-          ? await resolverProduto(linha.codigo, escopo, tx, linha.tamanho_id)
-          : await resolverProduto(String(linha.produto_id), escopo, tx, linha.tamanho_id);
+          ? await resolverProduto(linha.codigo, escopo, tx, linha.tamanho_id, localSaidaId)
+          : await resolverProduto(String(linha.produto_id), escopo, tx, linha.tamanho_id, localSaidaId);
         // O código lido tem que apontar para o produto informado. Aceitamos o
         // pai OU a própria variação: as duas formas de referir a mesma peça.
         if (linha.produto_id && Number(info.produto.id) !== linha.produto_id && Number(info.produto.produto_pai_id ?? 0) !== linha.produto_id) {
@@ -715,16 +820,7 @@ export async function venderPdv(req: Request, res: Response) {
         pagamentosParaCaixa.push({ ...p, valor: valorNoCaixa });
       }
 
-      // ---- 4) grava o pedido ----
-      const localSaidaData: Record<string, unknown> = {};
-      if (body.local_saida_id !== undefined) localSaidaData.local_id = body.local_saida_id;
-      else if (body.local_saida !== undefined) localSaidaData.local = String(body.local_saida).slice(0, 60);
-      else if (caixa.local_id !== null && caixa.local_id !== undefined) localSaidaData.local_id = caixa.local_id;
-      else if (caixa.local) localSaidaData.local = String(caixa.local);
-      await resolveLocal(localSaidaData, tx, escopo);
-      const localSaida = String(localSaidaData.local);
-      // E4.2.1: o ID resolvido é o canônico; o texto fica só para leitura/compatibilidade.
-      const localSaidaId = Number(localSaidaData.local_id);
+      // ---- 4) grava o pedido (local de saída já resolvido no passo 1) ----
       const venda = await s.insert(
         getResource('vendas')!,
         {
@@ -837,7 +933,11 @@ export async function venderPdv(req: Request, res: Response) {
         desconto_pct: r.linha.desconto_pct,
         subtotal: r.subtotal,
         preco_tabela: r.info.preco_tabela,
+        // Vendável no local de saída (o mesmo que o faturamento baixa).
         disponivel_antes: r.info.disponivel,
+        disponivel_fisico: r.info.disponivel_fisico,
+        local_saida_id: r.info.local_id,
+        local_saida: r.info.local,
         origem_preco: r.info.lista_nome ? `Lista: ${r.info.lista_nome}` : 'Ficha do produto',
       })),
       // Se o operador digitou um preço diferente, o servidor mostra a diferença

@@ -29,6 +29,7 @@ import { labelOf } from './store';
 import { attachImages } from './uploads';
 import { notificarVendaErpAlterada } from './eventosVenda';
 import { round2, round3 } from './utils';
+import { locaisDeSaida, saldoCelula } from './estoqueCanonico';
 
 type TipoPedido = 'venda' | 'compra';
 
@@ -285,19 +286,15 @@ export async function recalcularTotal(tipo: TipoPedido, pedidoId: number, tx?: T
 /** Local canônico da empresa: todas as novas escritas de saldo/movimento usam o ID. */
 type LocalEstoque = { id: number; nome: string };
 
-/** Saldo do produto/tamanho/local da empresa; null se ainda não há célula. */
+/**
+ * Saldo da célula canônica (empresa + produto + tamanho + local).
+ *
+ * A leitura é a MESMA que o PDV/Vendas usam para exibir disponibilidade
+ * (`estoqueCanonico.ts`), inclusive na resolução de linhas históricas sem
+ * `local_id`. Não existe um segundo cálculo de saldo no faturamento.
+ */
 async function saldo(produtoId: number, tamanhoId: number | null, local: LocalEstoque, escopo: EscopoEmpresa, tx?: Tx): Promise<number | null> {
-  const rows = await getStore().list(getResource('estoques')!, {
-    page: 1,
-    pageSize: 20000,
-    filter: { empresa_id: escopo.empresaId, produto_id: produtoId },
-  }, tx);
-  const mesmoTamanho = (v: unknown) => (v === null || v === undefined ? null : Number(v)) === tamanhoId;
-  const row = rows.rows.find((e) =>
-    mesmoTamanho(e.tamanho_id) &&
-    (Number(e.local_id) === local.id || (e.local_id === null || e.local_id === undefined) && String(e.local || '') === local.nome)
-  );
-  return row ? Number(row.quantidade || 0) : null;
+  return saldoCelula(escopo, produtoId, tamanhoId, local.id, tx);
 }
 
 async function faturarVenda(pedido: Row, actor: { id: number | null; name: string }, tx: Tx, escopo: EscopoEmpresa) {
@@ -320,6 +317,12 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
     : pedido.local_saida ? { local: String(pedido.local_saida).trim() } : { local_id: localPadrao.id };
   await resolveLocal(localSaidaData, tx, escopo);
   const localSaida: LocalEstoque = { id: Number(localSaidaData.local_id), nome: String(localSaidaData.local) };
+  // `locaisDeSaida` é a MESMA definição usada por `saldoVendavel` no PDV: o
+  // local de saída e, se ele não cobrir a quantidade, o Local padrão. Exibir e
+  // debitar compartilham a regra — não há como a tela prometer saldo que o
+  // faturamento não baixa.
+  const { candidatos } = await locaisDeSaida(escopo, localSaida.id, tx);
+  const alternativo = candidatos.find((local) => local.id !== localSaida.id) ?? null;
 
   // Escolhe, por item, o local com saldo: local de saída configurado → Local padrão.
   const faltas: string[] = [];
@@ -336,10 +339,10 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
 
     let local = localSaida;
     let disp = await saldo(produtoId, tamanhoId, localSaida, escopo, tx);
-    if ((disp === null || disp < qtd) && localSaida.id !== localPadrao.id) {
-      const alt = await saldo(produtoId, tamanhoId, localPadrao, escopo, tx);
+    if ((disp === null || disp < qtd) && alternativo) {
+      const alt = await saldo(produtoId, tamanhoId, alternativo, escopo, tx);
       if (alt !== null && alt >= qtd && (disp === null || alt >= disp)) {
-        local = localPadrao;
+        local = alternativo;
         disp = alt;
       }
     }

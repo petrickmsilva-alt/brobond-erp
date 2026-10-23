@@ -184,15 +184,31 @@ function isActive(product: Row): boolean {
   return product.ativo !== false;
 }
 
+/**
+ * Tamanhos de um produto na identidade canônica (empresa + produto + tamanho).
+ *
+ * As linhas de `estoques` são somadas POR TAMANHO antes de virarem opções: sem
+ * isso, um produto com o mesmo tamanho em dois locais aparecia duas vezes e a
+ * variação podia exibir só a primeira linha (1 un.) enquanto a grade somava
+ * todas (10 un.) — a divergência Grade × PDV. A soma nunca atravessa produtos:
+ * saldo de variação e de pai não se misturam.
+ */
 function mapSizes(stock: StockRow[], productId: number, variationSizeId: number | null, variationSizeLabel?: unknown): ProductSearchSize[] {
-  const own = stock
-    .filter((row) => Number(row.produto_id) === productId)
-    .map((row) => ({
-      tamanho_id: row.tamanho_id === null || row.tamanho_id === undefined ? null : Number(row.tamanho_id),
+  const porTamanho = new Map<number, { tamanho_id: number | null; tamanho: string; quantidade: number; ordem: number }>();
+  for (const row of stock) {
+    if (Number(row.produto_id) !== productId) continue;
+    const tamanhoId = row.tamanho_id === null || row.tamanho_id === undefined ? null : Number(row.tamanho_id);
+    const chave = tamanhoId === null ? 0 : tamanhoId;
+    const atual = porTamanho.get(chave) ?? {
+      tamanho_id: tamanhoId,
       tamanho: text(row.tamanho) || 'Sem tamanho',
-      quantidade: num(row.quantidade),
+      quantidade: 0,
       ordem: num(row.ordem),
-    }))
+    };
+    atual.quantidade += num(row.quantidade);
+    porTamanho.set(chave, atual);
+  }
+  const own = [...porTamanho.values()]
     .sort((a, b) => a.ordem - b.ordem || a.tamanho.localeCompare(b.tamanho, 'pt-BR', { numeric: true }) || Number(a.tamanho_id ?? -1) - Number(b.tamanho_id ?? -1))
     .map(({ tamanho_id, tamanho, quantidade }) => ({ tamanho_id, tamanho, quantidade }));
   // Uma variação recém-criada ainda pode não ter célula de estoque. Exibir o
@@ -243,12 +259,20 @@ function assembleItems(
       .map((row) => {
         const variant = toProduct(row, stock);
         // Regra canônica do ERP (PDV + migration 0018): SKU/preço pertencem à
-        // variação, mas a venda e o saldo pertencem ao PAI + tamanho. Portanto,
-        // o saldo mostrado na variação é a célula correspondente da grade do pai.
-        const parentSize = variant.variacao_tamanho_id === null
+        // variação, mas a venda e o saldo pertencem ao PAI + tamanho. O saldo da
+        // variação é SEMPRE a célula da grade do pai — jamais a linha de
+        // `estoques` gravada na variação (que não é vendável e não pode ser
+        // somada à do pai). Variação legada sem `variacao_tamanho_id` continua
+        // resolvida pelo único tamanho dela.
+        const tamanhoId = variant.variacao_tamanho_id
+          ?? (variant.tamanhos.length === 1 ? variant.tamanhos[0].tamanho_id : null);
+        const parentSize = tamanhoId === null
           ? undefined
-          : own.tamanhos.find((size) => size.tamanho_id === variant.variacao_tamanho_id);
-        const tamanhos = parentSize ? [parentSize] : variant.tamanhos;
+          : own.tamanhos.find((size) => size.tamanho_id === tamanhoId);
+        const rotuloTamanho = variant.tamanhos[0]?.tamanho || text(row.variacao_tamanho__label) || `#${tamanhoId}`;
+        const tamanhos = tamanhoId === null
+          ? []
+          : [parentSize ?? { tamanho_id: tamanhoId, tamanho: rotuloTamanho, quantidade: 0 }];
         return {
           ...variant,
           tamanhos,

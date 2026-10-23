@@ -359,7 +359,13 @@ export default function EstoqueGradePage() {
         <>
           {/* Cockpit do estoque — resumo em 4 cartões + atalhos */}
           <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <CockpitKPI icon={Boxes} label="Peças em estoque" value={formatNumber(data.totalPecas)} sub={local ? `Local: ${local}` : `${data.locaisDisponiveis.length} local(is) ativo(s)`} accent="bg-navy-800" />
+            <CockpitKPI
+              icon={Boxes}
+              label={local ? 'Estoque físico do local' : 'Estoque físico (todos os locais)'}
+              value={formatNumber(data.totalPecas)}
+              sub={local ? `Local: ${local}` : `${data.locaisDisponiveis.length} local(is) ativo(s) · soma`}
+              accent="bg-navy-800"
+            />
             <CockpitKPI icon={Wallet} label="Valor a custo" value={formatMoney(valorEstoque)} sub={`A preço de venda: ${formatMoney(valorVenda)}`} accent="bg-brand-500" />
             <CockpitKPI
               icon={AlertTriangle}
@@ -535,7 +541,8 @@ export default function EstoqueGradePage() {
           )}
           <p className="mt-2 text-xs text-slate-400">
             Cada grade tem a sua própria matriz, só com os tamanhos dela. Célula amarela = saldo igual ou abaixo do estoque mínimo. Com “Todos os locais” os valores somam os
-            locais; selecione um local para ver o saldo dele.
+            locais (estoque físico da empresa); selecione um local para ver o saldo daquele local. O PDV e a Venda mostram o estoque <strong>disponível</strong>: a célula do
+            local de saída da venda, que pode ser menor que o físico total quando há peças em outros locais.
           </p>
         </>
       )}
