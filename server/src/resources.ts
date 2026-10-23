@@ -932,6 +932,9 @@ export const RESOURCES: Record<string, Resource> = {
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
+    // Filtros da LISTAGEM (server-side, mesmo mecanismo dos demais recursos):
+    // grade padrão e status — as duas perguntas que se faz ao revisar o catálogo.
+    filterFields: ['grade_id', 'ativo'],
     mock: [
       { id: 1, nome: 'Camisa', descricao: 'Camisas sociais e casuais', ativo: true, grade_id: 1 },
       { id: 2, nome: 'Camiseta', descricao: 'Malha, gola careca e polo', ativo: true, grade_id: 1 },

@@ -182,6 +182,16 @@ describe('Pagination', () => {
     expect(screen.getByRole('navigation')).toHaveTextContent('0 registros');
   });
 
+  it('usa o substantivo do recurso quando a listagem informa `contagem`', () => {
+    render(<Pagination page={1} pageSize={25} total={5} onPageChange={() => {}} contagem={{ singular: 'categoria', plural: 'categorias' }} />);
+    expect(screen.getByRole('navigation')).toHaveTextContent('5 categorias');
+  });
+
+  it('respeita o singular quando há um único registro', () => {
+    render(<Pagination page={1} pageSize={25} total={1} onPageChange={() => {}} contagem={{ singular: 'categoria', plural: 'categorias' }} />);
+    expect(screen.getByRole('navigation')).toHaveTextContent('1 categoria');
+  });
+
   it('chama onPageChange com a página certa e troca o tamanho', async () => {
     const user = userEvent.setup();
     const onPage = vi.fn();

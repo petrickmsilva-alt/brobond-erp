@@ -5,6 +5,7 @@ import {
   MODULES,
   MODULE_AREAS,
   MODULE_GROUPS,
+  FORM_DIRETO,
   NAV_SECTIONS,
   PAGES_ESPECIAIS,
   buildNavigationTree,
@@ -372,6 +373,20 @@ describe('NAV_SECTIONS (fonte única do menu)', () => {
     for (const secao of NAV_SECTIONS) {
       for (const a of secao.areas) expect(AREA_META[a].section).toBe(secao.id);
       for (const g of secao.groups) expect(GROUP_META[g].section).toBe(secao.id);
+    }
+  });
+});
+
+describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
+  it('inclui os cadastros que já vivem em página própria', () => {
+    expect([...FORM_DIRETO].sort()).toEqual(['categorias', 'clientes', 'produtos', 'vendas']);
+  });
+
+  it('cada recurso de FORM_DIRETO tem um módulo navegável na mesma rota', () => {
+    for (const recurso of FORM_DIRETO) {
+      const m = MODULES.find((x) => x.id === recurso);
+      expect(m, `${recurso} precisa de módulo no menu`).toBeTruthy();
+      expect(moduleOfPath(m!.path)?.id).toBe(recurso);
     }
   });
 });

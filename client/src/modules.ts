@@ -1290,8 +1290,9 @@ export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
  * - /clientes/novo e /clientes/:id/editar (listagem em /clientes)
  * - /produtos/novo e /produtos/:id/editar (listagem em /produtos)
  * - /vendas/novo e /vendas/:id/editar (listagem em /vendas e detalhe em /vendas/:id)
+ * - /categorias/novo e /categorias/:id/editar (listagem em /categorias)
  */
-export const FORM_DIRETO = new Set(['clientes', 'produtos', 'vendas']);
+export const FORM_DIRETO = new Set(['clientes', 'produtos', 'vendas', 'categorias']);
 
 export type NavSection = {
   id: NavSectionId;
