@@ -868,9 +868,9 @@ export const RESOURCES: Record<string, Resource> = {
       ...camposEndereco(),
 
       // ---------------- Contato ----------------
-      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, section: 'Contato' },
-      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, section: 'Contato' },
-      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, section: 'Contato' },
+      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, search: true, section: 'Contato' },
+      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
+      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, search: true, section: 'Contato' },
 
       // ---------------- Comercial ----------------
       { name: 'limite_credito', label: 'Limite de crédito', type: 'money', min: 0, default: 0, list: false, section: 'Comercial', hint: 'Zero = sem limite definido.' },

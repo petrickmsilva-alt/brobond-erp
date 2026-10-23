@@ -320,7 +320,12 @@ export function parseMoneyInput(v: unknown): number | null {
   if (v === null || v === undefined) return null;
   let s = String(v).trim().replace(/\s|R\$|%/g, '');
   if (!s) return null;
-  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  if (s.includes(',')) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (/^-?\d{1,3}(\.\d{3})+$/.test(s)) {
+    // Agrupamento de milhar pt-BR sem centavos explícitos ("1.500" → 1500).
+    s = s.replace(/\./g, '');
+  }
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
 }
