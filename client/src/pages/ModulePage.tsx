@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle as AlertTriangleIcon,
@@ -17,6 +17,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  Power,
   RefreshCw,
   RotateCcw,
   Search,
@@ -58,6 +59,12 @@ import {
   densidadeLegada,
   MODO_PADRAO,
   MODOS_VISUALIZACAO,
+  contagemDe,
+  permiteAlternarAtivo,
+  placeholderBusca,
+  rotuloNovo,
+  textoContagem,
+  textoVazio,
   type ModoVisualizacao,
   usaColunaEstoque,
 } from '../lib/lista';
@@ -233,6 +240,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   // Exclusão
   const [toDelete, setToDelete] = useState<Record<string, any> | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Ativar/Desativar na linha (recursos marcados na configuração da listagem).
+  const podeAlternarAtivo = permiteAlternarAtivo(resource.key) && canUpdate;
+  const [alternandoAtivoId, setAlternandoAtivoId] = useState<number | null>(null);
+  const alternandoAtivoRef = useRef<number | null>(null);
 
   // Estorno de movimentações
   const [toEstornar, setToEstornar] = useState<Record<string, any> | null>(null);
@@ -556,6 +568,32 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     }
   }
 
+  /**
+   * Ativar/Desativar sem abrir o formulário: um PUT no contrato existente do
+   * recurso, com apenas o campo `ativo`. Nada de exclusão — categoria em uso se
+   * desativa (o servidor recusa a exclusão de registros referenciados).
+   */
+  async function alternarAtivo(row: Record<string, any>) {
+    const id = Number(row.id);
+    // A trava é um ref: dois cliques no mesmo tick não passariam pela checagem
+    // de estado (que só atualiza no próximo render).
+    if (alternandoAtivoRef.current !== null) return;
+    const novo = row.ativo === false;
+    alternandoAtivoRef.current = id;
+    setAlternandoAtivoId(id);
+    try {
+      await api.put(`/${resource.key}/${id}`, { ativo: novo });
+      const nome = String(row[campoTitulo(resource.key)] ?? resource.singular);
+      toast.success(`“${nome}”: status alterado para ${novo ? 'Ativo' : 'Inativo'}.`);
+      await load();
+    } catch (e: any) {
+      toast.error(e?.message || 'Não foi possível alterar o status.');
+    } finally {
+      alternandoAtivoRef.current = null;
+      setAlternandoAtivoId(null);
+    }
+  }
+
   /** Trocar o tamanho da página volta para a primeira — o recorte mudou. */
   function mudarTamanhoPagina(n: number) {
     setPageSize(n);
@@ -625,7 +663,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     return resource.key === 'movimentacoes' && row.estornado ? 'opacity-50 line-through' : '';
   }
 
-  const temAcoesLinha = canUpdate || canDelete || !!resource.detail;
+  const temAcoesLinha = canUpdate || canDelete || !!resource.detail || podeAlternarAtivo;
   /** A linha só é "clicável" quando existe um destino (detalhe ou edição). */
   const podeAbrirLinha = !!resource.detail || DETALHE_DIRETO.has(module.id) || canUpdate;
 
@@ -664,6 +702,17 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         {canUpdate && (
           <button className="btn-icon" onClick={() => openEdit(row)} title="Editar" aria-label="Editar">
             <Pencil className="h-4 w-4" />
+          </button>
+        )}
+        {podeAlternarAtivo && (
+          <button
+            className="btn-icon"
+            onClick={() => void alternarAtivo(row)}
+            disabled={alternandoAtivoId === Number(row.id)}
+            title={row.ativo === false ? 'Ativar' : 'Desativar'}
+            aria-label={row.ativo === false ? 'Ativar' : 'Desativar'}
+          >
+            {alternandoAtivoId === Number(row.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Power className="h-4 w-4" />}
           </button>
         )}
         {resource.key === 'movimentacoes' && !row.estornado && (user?.perfil === 'admin' || user?.perfil === 'gerente') && (
@@ -719,7 +768,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
             )}
             {canCreate && (
               <button className="btn-accent" onClick={openCreate}>
-                <Plus className="h-4 w-4" /> Novo {resource.singular.toLowerCase()}
+                <Plus className="h-4 w-4" /> {rotuloNovo(resource.key, resource.singular)}
               </button>
             )}
           </>
@@ -748,10 +797,10 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
                 className="input pl-9 pr-8"
-                placeholder={`Buscar em ${module.label.toLowerCase()}...`}
+                placeholder={placeholderBusca(resource.key, module.label)}
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                aria-label={`Buscar em ${module.label.toLowerCase()}`}
+                aria-label={placeholderBusca(resource.key, module.label)}
               />
               {q && (
                 <button className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" onClick={() => setQ('')} aria-label="Limpar busca">
@@ -782,7 +831,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
             </button>
           )}
           <div className="ml-auto text-xs text-slate-500" aria-live="polite">
-            {loading && !data ? 'Carregando...' : total === 0 ? 'Nenhum registro' : `${from}–${to} de ${total} registro${total === 1 ? '' : 's'}`}
+            {loading && !data ? 'Carregando...' : textoContagem(resource.key, from, to, total)}
           </div>
         </div>
 
@@ -839,12 +888,12 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         {!error && data && data.rows.length === 0 && (
           <EmptyState
             icon={<Inbox className="h-6 w-6" />}
-            title={recorteAtivo ? 'Nada encontrado' : `Nenhum(a) ${resource.singular.toLowerCase()} cadastrado(a)`}
+            title={recorteAtivo ? 'Nada encontrado' : textoVazio(resource.key, resource.singular).titulo}
             description={
               recorteAtivo
                 ? `Nenhum resultado para o recorte atual${debouncedQ ? ` (busca: "${debouncedQ}")` : ''}${filtrosAtivos ? ` (${filtrosAtivos} filtro${filtrosAtivos === 1 ? '' : 's'})` : ''}.`
                 : canCreate
-                  ? `Clique em "Novo ${resource.singular.toLowerCase()}" para fazer o primeiro cadastro.`
+                  ? textoVazio(resource.key, resource.singular).descricao
                   : undefined
             }
             action={
@@ -863,7 +912,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
                 </div>
               ) : canCreate ? (
                 <button className="btn-accent" onClick={openCreate}>
-                  <Plus className="h-4 w-4" /> Novo {resource.singular.toLowerCase()}
+                  <Plus className="h-4 w-4" /> {rotuloNovo(resource.key, resource.singular)}
                 </button>
               ) : undefined
             }
@@ -915,6 +964,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
               pageSizeOptions={TAMANHOS_PAGINA}
               onPageSizeChange={mudarTamanhoPagina}
               label={`Paginação de ${module.label}`}
+              contagem={contagemDe(resource.key)}
             />
           </div>
         )}
@@ -925,10 +975,10 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         <button
           className="btn-accent fixed bottom-5 right-5 z-40 rounded-full px-4 py-3.5 shadow-modal md:hidden"
           onClick={openCreate}
-          aria-label={`Novo ${resource.singular.toLowerCase()}`}
+          aria-label={rotuloNovo(resource.key, resource.singular)}
         >
           <Plus className="h-5 w-5" />
-          <span className="sr-only">Novo {resource.singular.toLowerCase()}</span>
+          <span className="sr-only">{rotuloNovo(resource.key, resource.singular)}</span>
         </button>
       )}
 

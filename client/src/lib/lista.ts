@@ -74,6 +74,21 @@ export type ListaConfig = {
   titulo: string;
   /** Campos exibidos no cartão do modo visual. */
   card: string[];
+  /** Placeholder da busca da listagem (padrão: "Buscar em <módulo>..."). */
+  buscaPlaceholder?: string;
+  /** Rótulo do botão de inclusão (padrão: "Novo <singular>") — só apresentação. */
+  rotuloNovo?: string;
+  /** Estado vazio sem nenhum registro cadastrado (padrão genérico). */
+  vazioTitulo?: string;
+  vazioDescricao?: string;
+  /**
+   * Habilita a ação Ativar/Desativar na linha (PUT `{ ativo: !ativo }` no
+   * contrato existente do recurso). Só para recursos em que alternar o status
+   * é uma operação normal de cadastro.
+   */
+  alternarAtivo?: boolean;
+  /** Substantivo do contador da listagem (padrão: "registro"/"registros"). */
+  contagem?: { singular: string; plural: string };
 };
 
 const LARGURA_PADRAO: ColunaLargura = { min: 'min-w-[120px]', max: 'max-w-[220px]' };
@@ -117,8 +132,38 @@ const CONFIG_PRODUTOS: ListaConfig = {
   card: ['sku', 'categoria_id', 'cor_id', 'colecao_id', 'grade_id', 'preco_venda', 'estoque', 'ativo'],
 };
 
+/**
+ * Categorias: entidade organizadora dos produtos. A tabela segue a ordem em que
+ * a pessoa procura o tipo de peça — Categoria, Descrição, Grade padrão e Status —
+ * com a grade herdada pelos produtos sempre visível (não escondida).
+ */
+const CONFIG_CATEGORIAS: ListaConfig = {
+  prioridade: ['nome', 'descricao', 'grade_id', 'ativo'],
+  rotulos: {
+    nome: 'Categoria',
+    descricao: 'Descrição',
+    grade_id: 'Grade padrão',
+    ativo: 'Status',
+  },
+  larguras: {
+    nome: { min: 'min-w-[200px]', max: 'max-w-[280px]' },
+    descricao: { min: 'min-w-[200px]', max: 'max-w-[320px]' },
+    grade_id: { min: 'min-w-[150px]', max: 'max-w-[200px]' },
+    ativo: { min: 'min-w-[110px]', max: 'max-w-[120px]' },
+  },
+  titulo: 'nome',
+  card: ['descricao', 'grade_id', 'ativo'],
+  buscaPlaceholder: 'Buscar categoria...',
+  rotuloNovo: 'Nova categoria',
+  vazioTitulo: 'Nenhuma categoria cadastrada',
+  vazioDescricao: 'Cadastre sua primeira categoria para organizar seus produtos.',
+  alternarAtivo: true,
+  contagem: { singular: 'categoria', plural: 'categorias' },
+};
+
 const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   produtos: CONFIG_PRODUTOS,
+  categorias: CONFIG_CATEGORIAS,
 };
 
 export function configDaLista(recurso: string): ListaConfig {
@@ -179,6 +224,44 @@ export function larguraDaColuna(f: Field, recurso: string): ColunaLargura {
 
 export function campoTitulo(recurso: string): string {
   return configDaLista(recurso).titulo;
+}
+
+/** Placeholder da busca — padrão "Buscar em <módulo>..." quando não configurado. */
+export function placeholderBusca(recurso: string, rotuloPadrao: string): string {
+  return configDaLista(recurso).buscaPlaceholder ?? `Buscar em ${rotuloPadrao}...`;
+}
+
+/** Rótulo do botão de inclusão — padrão "Novo <singular>" quando não configurado. */
+export function rotuloNovo(recurso: string, singular: string): string {
+  return configDaLista(recurso).rotuloNovo ?? `Novo ${singular.toLowerCase()}`;
+}
+
+/** Título/descrição do estado vazio sem registros — genérico quando não configurado. */
+export function textoVazio(recurso: string, singular: string): { titulo: string; descricao: string } {
+  const c = configDaLista(recurso);
+  const rotulo = rotuloNovo(recurso, singular);
+  return {
+    titulo: c.vazioTitulo ?? `Nenhum(a) ${singular.toLowerCase()} cadastrado(a)`,
+    descricao: c.vazioDescricao ?? `Clique em "${rotulo}" para fazer o primeiro cadastro.`,
+  };
+}
+
+/** A listagem oferece Ativar/Desativar na linha para este recurso? */
+export function permiteAlternarAtivo(recurso: string): boolean {
+  return configDaLista(recurso).alternarAtivo === true;
+}
+
+/** Substantivo do contador do recurso (undefined = genérico "registro"/"registros"). */
+export function contagemDe(recurso: string): { singular: string; plural: string } | undefined {
+  return configDaLista(recurso).contagem;
+}
+
+/** Contador da listagem ("1–3 de 3 categorias"); genérico quando não configurado. */
+export function textoContagem(recurso: string, de: number, ate: number, total: number): string {
+  if (total === 0) return 'Nenhum registro';
+  const c = contagemDe(recurso);
+  const nome = c ? (total === 1 ? c.singular : c.plural) : total === 1 ? 'registro' : 'registros';
+  return `${de}–${ate} de ${total} ${nome}`;
 }
 
 /** Campos do cartão (modo visual) — interseção entre a config e o que está visível. */

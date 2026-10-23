@@ -58,9 +58,25 @@ vi.mock('../lib/meta', async (importOriginal) => {
       { name: 'preco_venda', label: 'Preço de venda (varejo)', type: 'money', list: true, default: 0 },
     ],
   };
+  const categorias = {
+    key: 'categorias',
+    table: 'categorias',
+    label: 'Categorias',
+    singular: 'Categoria',
+    labelFields: ['nome'],
+    ops: { create: true, update: true, delete: true },
+    minPerfilEscrita: 'gerente',
+    filterFields: ['grade_id', 'ativo'],
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, list: true, search: true },
+      { name: 'descricao', label: 'Descrição', type: 'text', list: true, search: true },
+      { name: 'grade_id', label: 'Grade padrão', type: 'ref', ref: 'grades', list: true },
+      { name: 'ativo', label: 'Ativo', type: 'boolean', default: true, list: true },
+    ],
+  };
   return {
     ...actual,
-    useMeta: () => ({ resources: { produtos }, modules: [], mode: 'memory' }),
+    useMeta: () => ({ resources: { produtos, categorias }, modules: [], mode: 'memory' }),
   };
 });
 
@@ -273,5 +289,134 @@ describe('ordenação server-side', () => {
     await waitFor(() => expect(ultimaLista()).toContain('page=2'));
     expect(ultimaLista()).toContain('sort=sku');
     expect(ultimaLista()).toContain('dir=asc');
+  });
+});
+
+// ============================================================================
+// LISTAGEM DE CATEGORIAS — o cadastro saiu do modal e a lista ficou navegável.
+//
+// Trava o que a página /categorias precisa entregar:
+//   • busca própria ("Buscar categoria...") por nome/descrição, no servidor;
+//   • botão "Nova categoria" navega para /categorias/novo (sem modal);
+//   • editar navega para /categorias/:id/editar (sem modal);
+//   • Ativar/Desativar é um PUT no contrato existente, sem abrir formulário;
+//   • estado vazio profissional com a chamada para o primeiro cadastro;
+//   • colunas Categoria / Descrição / Grade padrão / Status, com a grade
+//     visível (nada de esconder informação relevante).
+// ============================================================================
+const MODULE_CATEGORIAS = {
+  id: 'categorias',
+  label: 'Categorias',
+  icon: (() => null) as unknown as Module['icon'],
+  space: 'erp',
+  area: 'Cadastros',
+  group: 'Produtos',
+  subgroup: 'Classificações',
+  path: '/categorias',
+  resource: 'categorias',
+  description: 'Tipos de peça.',
+} as Module;
+
+const CATEGORIAS = {
+  rows: [
+    { id: 1, nome: 'Camisa', descricao: 'Camisas sociais', grade_id: 1, ativo: true },
+    { id: 2, nome: 'Calça', descricao: 'Jeans e sarja', grade_id: 2, ativo: false },
+  ],
+  total: 2,
+  page: 1,
+  pageSize: 25,
+};
+
+function renderCategorias(resposta: unknown = CATEGORIAS) {
+  apiGet.mockImplementation(((path: string) => {
+    if (String(path).endsWith('/options')) return Promise.resolve([{ value: 1, label: 'Camisaria' }]);
+    if (String(path).startsWith('/categorias?')) return Promise.resolve(resposta);
+    return Promise.resolve({ rows: [], total: 0, page: 1, pageSize: 25 });
+  }) as never);
+  return render(
+    <MemoryRouter initialEntries={['/categorias']}>
+      <ToastProvider>
+        <Routes>
+          <Route path="/categorias" element={<ModulePage module={MODULE_CATEGORIAS} />} />
+          <Route path="/categorias/novo" element={<div>Página nova categoria</div>} />
+          <Route path="/categorias/:id/editar" element={<div>Página editar categoria</div>} />
+        </Routes>
+      </ToastProvider>
+    </MemoryRouter>
+  );
+}
+
+function ultimaListaCategorias(): string {
+  const chamadas = apiGet.mock.calls.map(([p]) => String(p)).filter((p) => p.startsWith('/categorias?'));
+  return chamadas[chamadas.length - 1] ?? '';
+}
+
+describe('categorias — listagem profissionalizada', () => {
+  it('mostra as colunas Categoria, Descrição, Grade padrão e Status sem esconder informação', async () => {
+    renderCategorias();
+    await screen.findByText('Camisa');
+    expect(screen.getByRole('columnheader', { name: /Categoria/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Descrição/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Grade padrão/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Status/ })).toBeInTheDocument();
+    expect(screen.getByText('Camisas sociais')).toBeInTheDocument();
+  });
+
+  it('a busca tem placeholder próprio e vai ao servidor (nome e descrição)', async () => {
+    renderCategorias();
+    const busca = await screen.findByPlaceholderText('Buscar categoria...');
+    fireEvent.change(busca, { target: { value: 'jeans' } });
+    await waitFor(() => expect(ultimaListaCategorias()).toContain('q=jeans'));
+    expect(ultimaListaCategorias()).toContain('page=1');
+  });
+
+  it('declara os filtros de grade padrão e status (server-side)', async () => {
+    renderCategorias();
+    await screen.findByText('Camisa');
+    fireEvent.click(screen.getByRole('button', { name: /Filtros/ }));
+    expect(await screen.findByLabelText(/Grade padrão/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Ativo/)).toBeInTheDocument();
+  });
+
+  it('"Nova categoria" navega para /categorias/novo em vez de abrir modal', async () => {
+    renderCategorias();
+    await screen.findByText('Camisa');
+    fireEvent.click(screen.getAllByRole('button', { name: /Nova categoria/i })[0]);
+    expect(await screen.findByText('Página nova categoria')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('Editar navega para /categorias/:id/editar (sem modal)', async () => {
+    renderCategorias();
+    await screen.findByText('Camisa');
+    fireEvent.click(screen.getAllByTitle('Editar')[0]);
+    expect(await screen.findByText('Página editar categoria')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('Ativar/Desativar usa o PUT do contrato existente, sem abrir o formulário', async () => {
+    const apiPut = vi.mocked(api.put);
+    apiPut.mockResolvedValue({ id: 2, ativo: true } as never);
+    renderCategorias();
+    await screen.findByText('Calça');
+
+    // A linha inativa oferece "Ativar"; a ativa, "Desativar".
+    const ativar = screen.getAllByRole('button', { name: 'Ativar' })[0];
+    fireEvent.click(ativar);
+    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/categorias/2', { ativo: true }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('estado vazio traz a mensagem profissional e o botão de primeiro cadastro', async () => {
+    renderCategorias({ rows: [], total: 0, page: 1, pageSize: 25 });
+    expect(await screen.findByText('Nenhuma categoria cadastrada')).toBeInTheDocument();
+    expect(screen.getByText('Cadastre sua primeira categoria para organizar seus produtos.')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Nova categoria/i }).length).toBeGreaterThan(0);
+  });
+
+  it('o contador mostra o total do servidor com o substantivo do cadastro', async () => {
+    renderCategorias();
+    await screen.findByText('Camisa');
+    expect(screen.getByText('1–2 de 2 categorias')).toBeInTheDocument();
   });
 });

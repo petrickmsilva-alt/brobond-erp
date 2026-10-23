@@ -17,6 +17,7 @@ const Settings = lazy(() => import('./pages/Settings'));
 const ProductDetail = lazy(() => import('./pages/ProductDetail'));
 const ClienteFormPage = lazy(() => import('./pages/ClienteFormPage'));
 const ProdutoFormPage = lazy(() => import('./pages/ProdutoFormPage'));
+const CategoriaFormPage = lazy(() => import('./pages/CategoriaFormPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
 const FichaDetail = lazy(() => import('./pages/FichaDetail'));
@@ -121,6 +122,23 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="produtos">
                   <ProdutoFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Cadastro de categorias em página própria (fora do modal). */}
+            <Route
+              path="categorias/novo"
+              element={
+                <ModuleAccess moduleId="categorias">
+                  <CategoriaFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="categorias/:id/editar"
+              element={
+                <ModuleAccess moduleId="categorias">
+                  <CategoriaFormPage />
                 </ModuleAccess>
               }
             />

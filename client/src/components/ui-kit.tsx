@@ -393,6 +393,7 @@ export function Pagination({
   pageSizeOptions,
   onPageSizeChange,
   label = 'Paginação',
+  contagem,
 }: {
   page: number;
   pageSize: number;
@@ -401,6 +402,8 @@ export function Pagination({
   pageSizeOptions?: number[];
   onPageSizeChange?: (size: number) => void;
   label?: string;
+  /** Substantivo do total exibido (padrão: "registro"/"registros"). */
+  contagem?: { singular: string; plural: string };
 }) {
   const tamanho = Math.max(1, pageSize);
   const totalPaginas = Math.max(1, Math.ceil(Math.max(0, total) / tamanho));
@@ -415,7 +418,8 @@ export function Pagination({
       <p>
         Página <span className="font-semibold tabular-nums">{atual}</span> de <span className="font-semibold tabular-nums">{totalPaginas}</span>
         <span className="text-slate-400"> · </span>
-        <span className="tabular-nums">{total}</span> registro{total === 1 ? '' : 's'}
+        <span className="tabular-nums">{total}</span>{' '}
+        {contagem ? (total === 1 ? contagem.singular : contagem.plural) : `registro${total === 1 ? '' : 's'}`}
       </p>
       <div className="flex items-center gap-1">
         <button type="button" className={botao} aria-label="Primeira página" disabled={noPrimeira} onClick={() => onPageChange(1)}>
