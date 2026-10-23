@@ -159,17 +159,24 @@ export async function exportarRecurso(req: Request, res: Response, resourceKey: 
   // sem isto, /api/auditoria/export (e qualquer recurso com escopo) vazava
   // dados de todas as empresas. Consolidação segue o privilégio existente.
   const filtroEscopo = aplicarFiltroEmpresa(r, filter, escopo);
+  const LIMITE_SEGURO = 30_000;
   let linhas: Row[] = [];
-  let page = 1;
   let totalEsperado = 0;
-  for (;;) {
+  for (let page = 1; ; page++) {
     const resul = await s.list(r, { q, page, pageSize: 500, sort, dir, filter: filtroEscopo });
     totalEsperado = resul.total;
+    // A exportação SEMPRE reflete o conjunto filtrado inteiro (não a página da
+    // tela), lido do servidor em blocos. Acima do limite seguro o arquivo não
+    // sai parcial: a resposta diz o tamanho real e como reduzir o recorte.
+    if (page === 1 && totalEsperado > LIMITE_SEGURO) {
+      throw new HttpError(
+        409,
+        `A exportação de ${r.label} tem ${totalEsperado} registros e excede o limite seguro de ${LIMITE_SEGURO}. Aplique filtros (categoria, coleção, cor, status, período) para reduzir o conjunto — nenhum arquivo parcial foi enviado.`
+      );
+    }
     await validarReferenciasDeSaida(r, resul.rows, escopo);
     linhas.push(...resul.rows);
     if (page * 500 >= resul.total) break;
-    page++;
-    if (page > 60) throw new HttpError(409, 'A exportação excede o limite seguro de 30.000 registros. Nenhum arquivo parcial foi enviado.');
   }
   if (linhas.length < totalEsperado) throw new HttpError(409, 'A exportação ficou incompleta. Nenhum arquivo parcial foi enviado.');
   if (idsSel.size) linhas = linhas.filter((u) => idsSel.has(Number(u.id)));

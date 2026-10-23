@@ -4186,3 +4186,14 @@ ALTER TABLE sales ADD COLUMN IF NOT EXISTS buyer_email TEXT;
 CREATE INDEX IF NOT EXISTS sales_operational_venda_idx
   ON sales (operational_venda_id)
   WHERE operational_venda_id IS NOT NULL;
+
+-- ==================================================================
+-- BLOCO LISTAGEM DE PRODUTOS EM ESCALA (migration 0036)
+--
+-- Espelha db/migrations/0036_produtos_listagem_escala.sql (idempotente para
+-- bancos existentes). Índice da ORDEM PADRÃO da listagem de produtos —
+-- (empresa_id, nome ASC NULLS LAST, id DESC) — para que a paginação do
+-- servidor não ordene o catálogo inteiro do tenant a cada página.
+-- ==================================================================
+CREATE INDEX IF NOT EXISTS idx_produtos_empresa_nome_id
+  ON produtos (empresa_id, nome ASC NULLS LAST, id DESC);

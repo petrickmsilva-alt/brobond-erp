@@ -5,6 +5,7 @@ import type { PoolClient } from 'pg';
 import { isDbConnected, pool, query, withTransaction } from './db';
 import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './resources';
+import { alvosDeBusca, termosDeBusca } from './busca';
 import { hashCadeiaAuditoria, normalizarPayloadAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
 import type { EscopoEmpresa } from './empresa';
@@ -214,6 +215,8 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
   // Filtros de igualdade (somente colunas reais do recurso)
   const cols = new Set(columnsOf(r).map((f) => f.name));
   const dateCols = new Set(r.fields.filter((f) => f.type === 'date' || f.type === 'datetime').map((f) => f.name));
+  // Faixa numérica (ex.: preço, custo, estoque): f.preco_venda_min / _max.
+  const numCols = new Set(r.fields.filter((f) => ['integer', 'number', 'money', 'percent'].includes(f.type)).map((f) => f.name));
   for (const [k, v] of Object.entries(filter || {})) {
     if (v === undefined || v === null || v === '') continue;
     // Intervalo de datas: f.<campo>_de / f.<campo>_ate (ex.: f.data_de, f.data_ate)
@@ -232,29 +235,46 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
       }
       continue;
     }
+    // Faixa numérica: f.<campo>_min / f.<campo>_max (ex.: f.preco_venda_min).
+    const mNum = /^(.*?)_(min|max)$/.exec(k);
+    if (mNum && numCols.has(mNum[1])) {
+      const n = Number(String(v).replace(',', '.'));
+      if (!Number.isFinite(n)) continue;
+      params.push(n);
+      conds.push(`t.${mNum[1]} ${mNum[2] === 'min' ? '>=' : '<='} $${params.length}`);
+      continue;
+    }
     if (!cols.has(k)) continue;
     params.push(v);
     conds.push(`t.${k} = $${params.length}`);
   }
   const term = (qtext || '').trim();
   if (!term) return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
-  params.push(`%${term}%`);
-  const idx = params.length;
-  const parts: string[] = [];
-  for (const f of r.fields) {
-    if (!f.search) continue;
-    if (f.type === 'ref') {
-      const i = refs.indexOf(f);
-      if (i >= 0) {
-        const target = getResource(f.ref!)!;
-        for (const lf of target.labelFields) parts.push(`r${i}.${lf}::text ILIKE $${idx}`);
+  // Cada termo é um AND; dentro do termo, OR entre os campos pesquisáveis. Os
+  // alvos vêm de `searchFields` (ou, sem ele, de todo campo com `search: true`)
+  // e só entram no SQL nomes de coluna reais — o valor é sempre parâmetro.
+  const alvos = alvosDeBusca(r);
+  for (const termo of termosDeBusca(term)) {
+    params.push(`%${termo}%`);
+    const idx = params.length;
+    const parts: string[] = [];
+    for (const alvo of alvos) {
+      if (alvo.tipo === 'coluna') {
+        parts.push(`t.${alvo.coluna}::text ILIKE $${idx}`);
+        continue;
       }
-    } else {
-      parts.push(`t.${f.name}::text ILIKE $${idx}`);
+      const alvoRef = getResource(alvo.ref)!;
+      const i = refs.findIndex((f) => f.ref === alvo.ref);
+      if (i >= 0) {
+        // Todo label do recurso referenciado continua pesquisável (o rótulo
+        // exibido é a concatenação deles).
+        for (const lf of alvoRef.labelFields) parts.push(`r${i}.${lf}::text ILIKE $${idx}`);
+      }
     }
+    // ID exato: só o termo puramente numérico.
+    if (/^\d+$/.test(termo)) parts.push(`t.id = ${Number(termo)}`);
+    if (parts.length) conds.push(`(${parts.join(' OR ')})`);
   }
-  if (/^\d+$/.test(term)) parts.push(`t.id = ${Number(term)}`);
-  if (parts.length) conds.push(`(${parts.join(' OR ')})`);
   return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 }
 

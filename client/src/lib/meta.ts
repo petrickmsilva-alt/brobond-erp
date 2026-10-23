@@ -85,6 +85,10 @@ export type ResourceMeta = {
   notice?: string;
   images?: { max: number };
   detail?: boolean;
+  /** Recorte da busca textual da listagem (espelha o servidor). */
+  searchFields?: (string | { ref: string; field?: string })[];
+  /** Filtros declarados da listagem, na ordem de exibição. */
+  filterFields?: string[];
 };
 
 export type Meta = {

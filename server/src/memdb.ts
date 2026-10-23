@@ -4,6 +4,7 @@
 // sistema pode ser testado por completo antes de ligar o banco real.
 import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, RESOURCES, columnsOf, getResource, type Resource } from './resources';
+import { linhaCorrespondeBusca, termosDeBusca } from './busca';
 import { hashCadeiaAuditoria, normalizarPayloadAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
 import {
@@ -158,18 +159,15 @@ export class MemStore implements Store {
     return out;
   }
 
-  private matches(r: Resource, row: Row, term: string): boolean {
-    const t = term.toLowerCase();
-    if (/^\d+$/.test(term) && row.id === Number(term)) return true;
-    for (const f of r.fields) {
-      if (!f.search) continue;
-      if (f.type === 'ref' && f.ref) {
-        const target = getResource(f.ref);
-        const ref = target ? this.table(target.table).rows.get(Number(row[f.name])) : undefined;
-        if (target && ref && labelOf(target, ref).toLowerCase().includes(t)) return true;
-      } else if (norm(row[f.name]).toLowerCase().includes(t)) return true;
-    }
-    return false;
+  /** Acesso a uma linha de outro recurso, pelo nome do RECURSO (não da tabela). */
+  private linhaDe(ref: string, id: number): Row | undefined {
+    const alvo = getResource(ref);
+    if (!alvo) return undefined;
+    return this.table(alvo.table).rows.get(Number(id));
+  }
+
+  private matches(r: Resource, row: Row, termo: string): boolean {
+    return linhaCorrespondeBusca(r, row, termosDeBusca(termo), (ref, id) => this.linhaDe(ref, id));
   }
 
   async list(r: Resource, p: ListParams): Promise<ListResult> {
@@ -177,6 +175,7 @@ export class MemStore implements Store {
     let rows = [...this.table(r.table).rows.values()];
     const cols0 = new Set(columnsOf(r).map((f) => f.name));
     const dateCols0 = new Set(r.fields.filter((f) => f.type === 'date' || f.type === 'datetime').map((f) => f.name));
+    const numCols0 = new Set(r.fields.filter((f) => ['integer', 'number', 'money', 'percent'].includes(f.type)).map((f) => f.name));
     for (const [k, v] of Object.entries(p.filter || {})) {
       if (v === undefined || v === null || v === '') continue;
       // Intervalo de datas: f.<campo>_de / f.<campo>_ate (ex.: f.data_de)
@@ -189,6 +188,18 @@ export class MemStore implements Store {
         } else {
           rows = rows.filter((row) => norm(row[mDate[1]]).slice(0, 10) <= dia);
         }
+        continue;
+      }
+      // Faixa numérica: f.<campo>_min / f.<campo>_max (ex.: f.preco_venda_min).
+      const mNum = /^(.*?)_(min|max)$/.exec(k);
+      if (mNum && numCols0.has(mNum[1])) {
+        const n = Number(String(v).replace(',', '.'));
+        if (!Number.isFinite(n)) continue;
+        rows = rows.filter((row) => {
+          const atual = Number(row[mNum[1]]);
+          if (!Number.isFinite(atual)) return false;
+          return mNum[2] === 'min' ? atual >= n : atual <= n;
+        });
         continue;
       }
       if (!cols0.has(k)) continue;

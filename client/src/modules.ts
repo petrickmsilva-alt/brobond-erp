@@ -1287,9 +1287,10 @@ export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
 
 /**
  * Recursos cujo cadastro vive em PÁGINA PRÓPRIA (não no modal genérico):
- * /clientes/novo e /clientes/:id/editar. A lista continua em /clientes.
+ * /clientes/novo e /clientes/:id/editar; /produtos/novo e /produtos/:id/editar.
+ * A lista continua em /clientes e /produtos.
  */
-export const FORM_DIRETO = new Set(['clientes']);
+export const FORM_DIRETO = new Set(['clientes', 'produtos']);
 
 export type NavSection = {
   id: NavSectionId;

@@ -5,10 +5,8 @@ import { api } from '../lib/api';
 import { useMeta, type PublicFile } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '../lib/format';
-import { Alert, Badge, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, PageHeader, Spinner } from '../components/ui';
 import { ColorDot, ImageField, Lightbox } from '../components/ImageField';
-import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
-import { ApiError } from '../lib/api';
 import { LabelSheet } from '../components/LabelSheet';
 
 type Detail = {
@@ -43,7 +41,6 @@ export default function ProductDetail() {
   const navigate = useNavigate();
   const meta = useMeta();
   const { user } = useAuth();
-  const toast = useToast();
   const resource = meta.resources.produtos;
   const canEdit = resource.ops.update;
 
@@ -51,14 +48,6 @@ export default function ProductDetail() {
   const [error, setError] = useState('');
   const [zoom, setZoom] = useState<PublicFile | null>(null);
   const [labels, setLabels] = useState(false);
-
-  // edição inline (modal)
-  const [formOpen, setFormOpen] = useState(false);
-  const [values, setValues] = useState<FormValues>({});
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [formError, setFormError] = useState('');
-  const [saving, setSaving] = useState(false);
-  const refOptions = useRefOptions(resource, formOpen ? 1 : 0);
 
   const load = useCallback(async () => {
     try {
@@ -73,29 +62,9 @@ export default function ProductDetail() {
     load();
   }, [load]);
 
+  /** Edição vive em página própria: /produtos/:id/editar (sem modal gigante). */
   function openEdit() {
-    if (!data) return;
-    setValues(initialValues(resource, data.produto));
-    setErrors({});
-    setFormError('');
-    setFormOpen(true);
-  }
-
-  async function save() {
-    if (!data) return;
-    setSaving(true);
-    setFormError('');
-    try {
-      await api.put(`/produtos/${data.produto.id}`, toPayload(resource, values, true));
-      toast.success('Produto salvo.');
-      setFormOpen(false);
-      await load();
-    } catch (e: any) {
-      setErrors(fieldErrors(e));
-      setFormError(e instanceof ApiError ? e.message : 'Não foi possível salvar.');
-    } finally {
-      setSaving(false);
-    }
+    navigate(`/produtos/${id}/editar`);
   }
 
   if (error)
@@ -399,28 +368,6 @@ export default function ProductDetail() {
       </div>
 
       {zoom && <Lightbox file={zoom} files={fotos} onClose={() => setZoom(null)} onNav={setZoom} />}
-
-      <Modal open={formOpen} onClose={() => !saving && setFormOpen(false)} title="Editar produto" subtitle={`Registro #${p.id}`} size="lg">
-        {formError && (
-          <div className="mb-4">
-            <Alert tone="red">{formError}</Alert>
-          </div>
-        )}
-        <RecordForm
-          resource={resource}
-          values={values}
-          errors={errors}
-          onChange={(n, v) => {
-            setValues((s) => ({ ...s, [n]: v }));
-            if (errors[n]) setErrors((e) => ({ ...e, [n]: '' }));
-          }}
-          onSubmit={save}
-          onClear={() => setValues(initialValues(resource, null))}
-          editing
-          busy={saving}
-          refOptions={refOptions}
-        />
-      </Modal>
 
       <LabelSheet open={labels} onClose={() => setLabels(false)} produto={p} tamanhos={data.estoque.colunas} grade={data.estoque.grade} medidas={data.medidas} user={user?.name} />
 

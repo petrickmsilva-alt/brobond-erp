@@ -1,0 +1,47 @@
+-- ============================================================================
+-- 0036 — LISTAGEM DE PRODUTOS EM ESCALA: índice da ORDEM PADRÃO da lista.
+--
+-- CONTEXTO
+--   A tela /produtos passou a paginar no SERVIDOR (25/50/100 por página) com
+--   busca, filtros e ordenação no backend. A consulta quente é:
+--
+--     SELECT ... FROM produtos t
+--      WHERE t.empresa_id = $1 [AND ...busca/filtros...]
+--      ORDER BY t.nome ASC NULLS LAST, t.id DESC
+--      LIMIT $n OFFSET $m
+--
+--   — exatamente a ordenação declarada em resources.produtos.orderBy
+--   (`nome asc`) somada ao desempate `id DESC` do store (pgstore.orderClause).
+--
+-- ANÁLISE DOS ÍNDICES EXISTENTES (nenhum novo para as mesmas colunas)
+--   • uq_produtos_sku_empresa        (empresa_id, sku)              → unicidade
+--   • uq_produtos_codigo_barras_empresa (empresa_id, codigo_barras) WHERE ... → unicidade
+--   • produtos_empresa_idx           (empresa_id)                   → COUNT e filtro por tenant
+--   • uq_e42_produtos_empresa_id     (empresa_id, id)               → FK composta
+--   • idx_produtos_categoria/cor/colecao (coluna)                   → joins de label
+--   • produtos_pai_idx               (produto_pai_id)               → variações
+--   Nenhum deles cobre a ORDENAÇÃO padrão: sem um índice compatível, cada
+--   página ordena o catálogo INTEIRO do tenant (10k produtos por página).
+--
+-- O QUE ESTA MIGRATION CRIA (e por quê)
+--   Um índice btree com a MESMA direção por coluna do ORDER BY
+--   (nome ASC NULLS LAST, id DESC). Com ele o planejador entrega a primeira
+--   página sem nó de Sort — o custo deixa de crescer com o catálogo.
+--
+-- O QUE DELIBERADAMENTE **NÃO** FOI CRIADO (e por quê)
+--   • Ordenação por outras colunas (sku, preço, custo, categoria...): o
+--     servidor continua ordenando. Criar 8 índices para cada direção possível
+--     seria custo de escrita permanente por ganho marginal — 10k linhas
+--     ordenam em poucos milissegundos, e o problema real (trazer o catálogo
+--     todo para o navegador) foi resolvido pela paginação.
+--   • Busca textual com `pg_trgm` (GIN): a extensão NÃO é pré-requisito deste
+--     banco (o boot não pode depender de CREATE EXTENSION) e, com o volume
+--     atual, o scan do recorte do tenant é barato. Fica documentado como o
+--     próximo passo se o catálogo passar de ~100k itens.
+--
+-- REVERSÍVEL: DROP INDEX IF EXISTS idx_produtos_empresa_nome_id;
+-- Idempotente: pode rodar em banco novo ou existente.
+-- ============================================================================
+
+CREATE INDEX IF NOT EXISTS idx_produtos_empresa_nome_id
+  ON produtos (empresa_id, nome ASC NULLS LAST, id DESC);
