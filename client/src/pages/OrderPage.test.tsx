@@ -84,6 +84,16 @@ describe('OrderPage — Smart Product Search em /vendas', () => {
       if (path.startsWith('/produtos/busca')) {
         return Promise.resolve({ rows: [pai], total: 1, page: 1, pageSize: 20, hasMore: false });
       }
+      if (path.startsWith('/estoques/disponivel')) {
+        return Promise.resolve({
+          quantidade: 8,
+          local_id: 3,
+          local: 'Loja Matriz',
+          estoque_fisico: 8,
+          tamanho_id: 4,
+          semantica: 'estoque_vendavel_no_local_de_saida',
+        });
+      }
       return Promise.reject(new Error(`rota não mockada: ${path}`));
     }) as never);
     apiPost.mockResolvedValue({});
@@ -98,7 +108,16 @@ describe('OrderPage — Smart Product Search em /vendas', () => {
 
     await screen.findByDisplayValue('95');
     await waitFor(() => expect(campo).toHaveValue('CAM-VERM-G — Camiseta Premium Vermelha G'));
-    expect(apiGet.mock.calls.some(([path]) => String(path).includes('id=10'))).toBe(false);
+    // O seletor não pré-carrega o cadastro do pai (`GET /produtos/10`): ele
+    // resolve o item inteiro pela busca. A única leitura com o id do pai é a
+    // disponibilidade canônica, que precisa ser por produto+tamanho.
+    expect(apiGet.mock.calls.some(([path]) => String(path).split('?')[0] === '/produtos/10')).toBe(false);
+    const chamadaDisponivel = apiGet.mock.calls
+      .map(([path]) => String(path))
+      .find((path) => path.startsWith('/estoques/disponivel'));
+    expect(chamadaDisponivel).toBeDefined();
+    expect(chamadaDisponivel).toContain('produto_id=10');
+    expect(chamadaDisponivel).toContain('tamanho_id=4');
     expect(screen.getByDisplayValue('G')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Adicionar item' }));
 

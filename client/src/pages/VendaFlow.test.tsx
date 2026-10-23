@@ -302,6 +302,11 @@ describe('Nova Venda Profissional PF/CNPJ — Motor Único de Vendas', () => {
       }
       if (path === `/clientes/${CLIENTE_PF.id}`) return Promise.resolve(CLIENTE_PF);
       if (path === `/clientes/${CLIENTE_PJ.id}`) return Promise.resolve(CLIENTE_PJ);
+      if (path.startsWith('/estoques/disponivel')) {
+        // Contrato canônico: o servidor devolve o vendável no local de saída
+        // (aqui 5), o local explícito e o físico total (10, em dois locais).
+        return Promise.resolve({ produto_id: 300, tamanho_id: 2, quantidade: 5, local_id: 1, local: 'Loja Matriz', por_local: [{ local_id: 1, local: 'Loja Matriz', quantidade: 5 }], estoque_fisico: 10, outros_locais: 5, semantica: 'estoque_vendavel_no_local_de_saida' });
+      }
       if (path.startsWith('/produtos/busca')) {
         const u = new URL(`http://x${path}`);
         const q = (u.searchParams.get('q') || '').toLowerCase();
@@ -568,7 +573,10 @@ describe('Nova Venda Profissional PF/CNPJ — Motor Único de Vendas', () => {
     await user.click(btnM);
 
     await screen.findByDisplayValue('250');
-    expect(screen.getByText(/Estoque disponível: 5 un\./i)).toBeInTheDocument();
+    // O número exibido vem de `/estoques/disponivel` (mesma regra do faturamento)
+    // e o local é explícito: nunca "10" somando locais, nunca um saldo anônimo.
+    expect(await screen.findByText(/Estoque disponível em Loja Matriz: 5 un\./i)).toBeInTheDocument();
+    expect(screen.getByText(/físico total: 10 un\. em todos os locais/i)).toBeInTheDocument();
   });
 
   it('Acessibilidade por teclado: alterna PF/PJ por setas, navega cliente com ArrowDown/Enter/Escape e foca resumo de erros', async () => {

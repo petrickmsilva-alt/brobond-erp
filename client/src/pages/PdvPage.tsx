@@ -54,6 +54,8 @@ type Caixa = {
   id: number;
   numero: string;
   local: string | null;
+  /** Local canônico do caixa: é dele que a venda baixa o estoque. */
+  local_id: number | null;
   status: string;
   valor_abertura: number;
   abertura_em: string | null;
@@ -74,7 +76,13 @@ type ProdutoResolvido = {
   preco_tabela: number;
   origem_preco: string;
   lista_preco_id: number | null;
+  /** Vendável no local de saída do caixa (a célula que o faturamento baixa). */
   disponivel_no_tamanho: number | null;
+  local_id: number | null;
+  local: string | null;
+  disponivel_no_local: number | null;
+  /** Físico do tamanho (todos os locais) — só para explicar a diferença. */
+  estoque_fisico_no_tamanho: number | null;
   estoque_disponivel: number;
 };
 
@@ -91,7 +99,10 @@ type Linha = {
   /** Preço digitado pelo operador — exceção registrada pelo servidor. */
   preco_manual: number | null;
   origem_preco: string;
+  /** Vendável no local de saída (mesmo número que o servidor vai debitar). */
   disponivel: number | null;
+  local: string | null;
+  disponivel_fisico: number | null;
 };
 
 type Pagamento = { forma: string; valor: number; parcelas: number };
@@ -206,6 +217,10 @@ export default function PdvPage() {
         // servidor continua sendo a única fonte de preço e de saldo.
         const params = new URLSearchParams({ codigo: limpo });
         if (tamanhoId) params.set('tamanho_id', String(tamanhoId));
+        // O saldo exibido tem de ser o do local que a venda baixa. O servidor
+        // resolve a identidade canônica (empresa + produto + tamanho + local);
+        // a tela só informa QUAL local (o do caixa) — nunca calcula o saldo.
+        if (caixa?.local_id) params.set('local_id', String(caixa.local_id));
         const p = await api.get<ProdutoResolvido>(`/pdv/buscar?${params.toString()}`);
         setLinhas((atual) => {
           const idx = atual.findIndex((l) => l.produto_id === p.produto_id && l.tamanho_id === p.tamanho_id);
@@ -229,6 +244,8 @@ export default function PdvPage() {
               preco_manual: null,
               origem_preco: p.origem_preco,
               disponivel: p.disponivel_no_tamanho,
+              local: p.local,
+              disponivel_fisico: p.estoque_fisico_no_tamanho,
             },
           ];
         });
@@ -241,7 +258,7 @@ export default function PdvPage() {
         return false;
       }
     },
-    [toast]
+    [caixa?.local_id, toast]
   );
 
   /**
@@ -523,6 +540,7 @@ export default function PdvPage() {
                   selectParentsWithVariants={false}
                   requiresStock
                   inStockFirst
+                  localId={caixa?.local_id ?? null}
                   disabled={!caixa}
                   autoFocus
                 />
@@ -563,9 +581,17 @@ export default function PdvPage() {
                             {l.sku}
                             {l.tamanho ? ` · ${l.tamanho}` : ''} · {l.origem_preco}
                             {l.disponivel !== null && l.disponivel !== undefined && (
-                              <span className={l.disponivel >= l.quantidade ? ' text-emerald-600' : ' text-amber-600'}>
+                              <span
+                                className={l.disponivel >= l.quantidade ? ' text-emerald-600' : ' text-amber-600'}
+                                title={
+                                  l.disponivel_fisico !== null && l.disponivel_fisico !== undefined && l.disponivel_fisico !== l.disponivel
+                                    ? `Disponível para esta venda (célula do local de saída). Estoque físico total: ${l.disponivel_fisico} un.`
+                                    : 'Disponível para esta venda na célula do local de saída.'
+                                }
+                              >
                                 {' '}
                                 · disp. {l.disponivel}
+                                {l.local ? ` em ${l.local}` : ''}
                               </span>
                             )}
                           </div>

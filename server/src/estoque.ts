@@ -19,6 +19,7 @@ import type { Row, Tx } from './store';
 import { parseId } from './validate';
 import { labelOf } from './store';
 import { searchProducts as buscarProdutosGlobais } from './productSearch';
+import { agregarPorTamanho, celulasDaEmpresa, chaveTamanho, saldoVendavel, type CelulaCanonica } from './estoqueCanonico';
 
 // ----------------------------------------------------------------------------
 // GET /api/estoques/grade — matriz produto × tamanhos
@@ -70,41 +71,28 @@ export async function estoqueGrade(req: Request, res: Response) {
   const idsEncontrados = encontrados
     ? new Set(encontrados.rows.flatMap((row) => [row.id, ...row.variacoes.map((variant) => variant.id)]))
     : null;
-  const [produtos, tamanhos, estoques, categorias, grades, gradeTamanhos, locais, colecoes] = await Promise.all([
+  const [produtos, tamanhos, categorias, grades, gradeTamanhos, locais, colecoes, celulasCanonicas] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter: filtroProdutos }),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200, sort: 'ordem', dir: 'asc' }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
     s.list(RESOURCES.categorias, { page: 1, pageSize: 2000 }),
     s.list(RESOURCES.grades, { page: 1, pageSize: 2000 }),
     s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 10000, sort: 'ordem', dir: 'asc' }),
     s.list(RESOURCES.locais, { page: 1, pageSize: 2000, filter: { empresa_id: escopo.empresaId } }),
     s.list(RESOURCES.colecoes, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    // REGRA CANÔNICA (estoqueCanonico.ts): identidade empresa+produto+tamanho+
+    // local, vínculo legado por nome e falha fechada em saldo duplicado. É a
+    // MESMA leitura que o PDV usa — não existe uma segunda agregação de grade.
+    celulasDaEmpresa(escopo),
   ]);
-  if ([produtos, tamanhos, estoques, categorias, grades, gradeTamanhos, locais, colecoes].some((result) => result.total > result.rows.length)) {
+  if ([produtos, tamanhos, categorias, grades, gradeTamanhos, locais, colecoes].some((result) => result.total > result.rows.length)) {
     throw new HttpError(409, 'A grade do estoque excede o limite seguro de leitura. Nenhum resultado parcial foi retornado.');
   }
-  await Promise.all([
-    validarReferenciasDeSaida(RESOURCES.produtos, produtos.rows, escopo),
-    validarReferenciasDeSaida(RESOURCES.estoques, estoques.rows, escopo),
-  ]);
+  await Promise.all([validarReferenciasDeSaida(RESOURCES.produtos, produtos.rows, escopo)]);
   const nomesLocais = new Set<string>();
   for (const local of locais.rows) {
     const nome = String(local.nome || '');
     if (nomesLocais.has(nome)) throw new HttpError(409, 'Há nomes de locais duplicados nesta empresa. Corrija-os antes de consultar o estoque.');
     nomesLocais.add(nome);
-  }
-  const localPorId = new Map(locais.rows.map((local) => [Number(local.id), local]));
-  const celulasEstoque = new Set<string>();
-  for (const saldo of estoques.rows) {
-    const chave = `${Number(saldo.produto_id)}:${saldo.tamanho_id === null || saldo.tamanho_id === undefined ? 'null' : Number(saldo.tamanho_id)}:${String(saldo.local || '')}`;
-    if (celulasEstoque.has(chave)) throw new HttpError(409, 'Há saldos duplicados para o mesmo produto/tamanho/local. Nenhuma grade parcial foi retornada.');
-    celulasEstoque.add(chave);
-    if (saldo.local_id === null || saldo.local_id === undefined) continue;
-    const localVinculado = localPorId.get(Number(saldo.local_id));
-    if (!localVinculado || (saldo.local && String(saldo.local) !== String(localVinculado.nome))) throw new HttpError(409, 'Há saldos com vínculo de local inconsistente. Nenhuma grade parcial foi retornada.');
-  }
-  if (localSelecionado && await s.countWhere(RESOURCES.estoques, { empresa_id: escopo.empresaId, local: String(localSelecionado.nome), local_id: null }) > 0) {
-    throw new HttpError(409, 'Há saldos sem vínculo canônico para o local selecionado. Nenhuma grade parcial foi retornada.');
   }
 
   const codigoPor = new Map(tamanhos.rows.map((t) => [Number(t.id), String(t.codigo || '')]));
@@ -124,7 +112,7 @@ export async function estoqueGrade(req: Request, res: Response) {
   }
   const resolveGrade = (p: Row): number => Number(p.grade_id) || gradePorCategoria.get(Number(p.categoria_id)) || 0;
   const idSemTamanho = 0; // sentinela da API; não é um ID armazenado em tamanhos.
-  const temSemTamanho = estoques.rows.some((e) => e.tamanho_id === null || e.tamanho_id === undefined);
+  const temSemTamanho = celulasCanonicas.some((celula) => celula.tamanho_id === null);
   const colunasBase = gradeId
     ? (tamsPorGrade.get(gradeId) ?? []).map((id) => ({ id, codigo: codigoPor.get(id) ?? `#${id}` }))
     : tamanhos.rows.map((t) => ({ id: Number(t.id), codigo: String(t.codigo || '') }));
@@ -135,30 +123,34 @@ export async function estoqueGrade(req: Request, res: Response) {
     if (idsEncontrados && !idsEncontrados.has(Number(p.id))) return false;
     return true;
   });
-  const estoqueVisivel = estoques.rows.filter((e) => {
-    if (!localSelecionado) return true;
-    return Number(e.local_id) === Number(localSelecionado.id);
-  });
+  // A Grade tem UM escopo explícito: todos os locais (estoque físico) ou um
+  // local. O PDV/Venda tem outro (a célula do local que a venda debita). Ambos
+  // saem deste mesmo módulo — o que muda é o filtro de local, nunca a regra.
+  const escopoLocalId = localSelecionado ? Number(localSelecionado.id) : null;
+  const estoqueVisivel: CelulaCanonica[] = escopoLocalId === null
+    ? celulasCanonicas
+    : celulasCanonicas.filter((celula) => celula.local_id === escopoLocalId);
   const linhas = filtrados.map((p) => {
-    const doProduto = estoqueVisivel.filter((e) => Number(e.produto_id) === Number(p.id));
+    const doProduto = estoqueVisivel.filter((celula) => celula.produto_id === Number(p.id));
+    const porTamanho = agregarPorTamanho(doProduto);
     const gradeDoP = resolveGrade(p);
     const idsLinha = gradeId
       ? colunasBase.map((c) => c.id)
       : gradeDoP ? tamsPorGrade.get(gradeDoP) ?? [] : colunasBase.map((c) => c.id);
     const celulas = idsLinha.map((tid) => {
-      const daTamanho = doProduto.filter((e) => Number(e.tamanho_id) === tid);
+      const saldo = porTamanho.get(chaveTamanho(tid));
       return {
         tamanho_id: tid,
-        quantidade: daTamanho.reduce((a, e) => a + Number(e.quantidade || 0), 0),
-        estoque_min: daTamanho.reduce((a, e) => a + Number(e.estoque_min || 0), 0),
+        quantidade: saldo?.quantidade ?? 0,
+        estoque_min: saldo?.estoque_min ?? 0,
       };
     });
     if (temSemTamanho) {
-      const semTamanho = doProduto.filter((e) => e.tamanho_id === null || e.tamanho_id === undefined);
+      const semTamanho = porTamanho.get(chaveTamanho(null));
       celulas.push({
         tamanho_id: idSemTamanho,
-        quantidade: semTamanho.reduce((a, e) => a + Number(e.quantidade || 0), 0),
-        estoque_min: semTamanho.reduce((a, e) => a + Number(e.estoque_min || 0), 0),
+        quantidade: semTamanho?.quantidade ?? 0,
+        estoque_min: semTamanho?.estoque_min ?? 0,
       });
     }
     return {
@@ -189,10 +181,67 @@ export async function estoqueGrade(req: Request, res: Response) {
     ),
     local: localSelecionado?.nome ?? 'todos',
     local_id: localSelecionado?.id ?? null,
+    // Semântica explícita: a Grade mostra ESTOQUE FÍSICO. Com "todos" a célula
+    // soma os locais; com um local, mostra só aquela célula. O disponível para
+    // venda é sempre o da célula do local de saída da venda (PDV/Vendas), que
+    // pode ser menor que o físico total — por desenho, não por divergência.
+    escopo_saldo: {
+      tipo: localSelecionado ? 'local' : 'todos',
+      local_id: localSelecionado?.id ?? null,
+      local: localSelecionado?.nome ?? null,
+      semantica: localSelecionado
+        ? 'estoque_fisico_do_local'
+        : 'estoque_fisico_total_da_empresa',
+      descricao: localSelecionado
+        ? `Estoque físico do local "${String(localSelecionado.nome)}" (empresa + produto + tamanho + local).`
+        : 'Estoque físico somado de todos os locais da empresa (empresa + produto + tamanho). O PDV/Venda mostra o disponível no local de saída.',
+    },
     locaisDisponiveis: locais.rows.map((l) => String(l.nome)).sort(),
     totalPecas: linhas.reduce((a, l) => a + l.total, 0),
     busca: encontrados ? { q: termo, total: encontrados.total, exibidos: encontrados.rows.length, hasMore: encontrados.hasMore } : null,
     linhas,
+  });
+}
+
+/**
+ * GET /api/estoques/disponivel?produto_id=&tamanho_id=&local_id=
+ *
+ * Disponibilidade canônica de UMA célula para a venda: o que a linha consegue
+ * baixar no local de saída (com o mesmo fallback para o Local padrão do
+ * faturamento), ao lado do estoque físico do tamanho. PDV e Vendas exibem ESTE
+ * número — nenhuma tela recalcula saldo a partir da grade.
+ */
+export async function estoqueDisponivel(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(RESOURCES.estoques, actor, 'read');
+  const escopo = escopoDe(actor);
+  const produtoId = Number(req.query.produto_id);
+  if (!Number.isInteger(produtoId) || produtoId <= 0) {
+    throw new HttpError(400, 'Informe produto_id válido.', { produto_id: 'Obrigatório' });
+  }
+  const tamanhoRaw = req.query.tamanho_id;
+  const tamanhoId = tamanhoRaw === undefined || tamanhoRaw === null || tamanhoRaw === '' ? null : Number(tamanhoRaw);
+  if (tamanhoId !== null && (!Number.isInteger(tamanhoId) || tamanhoId <= 0)) {
+    throw new HttpError(400, 'tamanho_id inválido.', { tamanho_id: 'Inválido' });
+  }
+  const localRaw = req.query.local_id;
+  const localId = localRaw === undefined || localRaw === null || localRaw === '' ? null : Number(localRaw);
+  if (localId !== null && (!Number.isInteger(localId) || localId <= 0)) {
+    throw new HttpError(400, 'local_id inválido.', { local_id: 'Inválido' });
+  }
+  const saldo = await saldoVendavel(escopo, produtoId, tamanhoId, localId);
+  res.json({
+    produto_id: produtoId,
+    tamanho_id: saldo.tamanho_id,
+    // Vendável: o faturamento debita um local por item (saída → fallback padrão).
+    quantidade: saldo.quantidade,
+    local_id: saldo.local_id,
+    local: saldo.local,
+    por_local: saldo.por_local,
+    // Físico: todos os locais; a diferença é legítima e explícita.
+    estoque_fisico: saldo.fisico,
+    outros_locais: saldo.outros_locais,
+    semantica: 'estoque_vendavel_no_local_de_saida',
   });
 }
 
