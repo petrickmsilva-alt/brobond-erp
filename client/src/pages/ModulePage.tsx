@@ -29,12 +29,13 @@ import { api, ApiError, downloadFile } from '../lib/api';
 import { useMeta, type Field, type ListResult, type Option, type PublicFile, type ResourceMeta } from '../lib/meta';
 import { ImageField, Lightbox } from '../components/ImageField';
 import { BarrasVerticais } from '../components/Charts';
-import { DETALHE_DIRETO, FORM_DIRETO, type Module } from '../modules';
+import { DETALHE_DIRETO, FORM_DIRETO, findModuleByResource, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Pagination } from '../components/ui-kit';
 import ReauthModal from '../components/ReauthModal';
+import { DependenciasModal, type DiagnosticoDependencias } from '../components/DependenciasModal';
 import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import { useLocalStorageChoice, useLocalStorageInt, useLocalStorageSet } from '../lib/useLocalStorage';
@@ -241,6 +242,8 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   // Exclusão
   const [toDelete, setToDelete] = useState<Record<string, any> | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Diagnóstico de vínculos devolvido pelo 409 (código 'dependencias_vinculadas').
+  const [dependencias, setDependencias] = useState<DiagnosticoDependencias | null>(null);
 
   // Ativar/Desativar na linha (recursos marcados na configuração da listagem).
   const podeAlternarAtivo = permiteAlternarAtivo(resource.key) && canUpdate;
@@ -563,7 +566,16 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       setToDelete(null);
       await load();
     } catch (e: any) {
-      toast.error(e.message || 'Não foi possível excluir.');
+      // Exclusão bloqueada por vínculos: o servidor manda o diagnóstico
+      // completo (módulos, quantidades, ids e o motivo). Em vez do toast
+      // genérico, abrimos o "Ver vínculos" — nada foi apagado.
+      const diag = e instanceof ApiError && e.details?.dependencias ? (e.details.dependencias as DiagnosticoDependencias) : null;
+      if (diag) {
+        setToDelete(null);
+        setDependencias(diag);
+      } else {
+        toast.error(e.message || 'Não foi possível excluir.');
+      }
     } finally {
       setDeleting(false);
     }
@@ -1128,6 +1140,17 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       </Modal>
 
       {zoom && <Lightbox file={zoom.file} files={zoom.files} onClose={() => setZoom(null)} onNav={(f) => setZoom({ ...zoom, file: f })} />}
+
+      <DependenciasModal
+        diag={dependencias}
+        onClose={() => setDependencias(null)}
+        onAbrirModulo={(recurso) => {
+          const destino = findModuleByResource(recurso);
+          if (!destino) return;
+          setDependencias(null);
+          navigate(destino.path);
+        }}
+      />
 
       <ConfirmDialog
         open={!!toDelete}

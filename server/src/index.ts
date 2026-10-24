@@ -38,6 +38,7 @@ import { createItem, deleteItem, listItens, updateItem } from './itens';
 import {
   checkAccess,
   createRecord,
+  diagnosticarDependencias,
   escopoDe,
   deleteRecord,
   getDefaultLocalInfo,
@@ -956,6 +957,20 @@ app.get('/api/admin/backup', wrap(adminBackup));
 app.get('/api/admin/backup/xlsx', wrap(adminBackupXlsx));
 app.get('/api/admin/backup/info', wrap(backupInfo));
 
+// DIAGNÓSTICO DE DEPENDÊNCIAS — "por que não posso excluir?".
+// Antes das rotas genéricas /api/:resource/:id. Somente leitura, recortado pela
+// empresa ativa do ator: vínculo de outra empresa nem é contado (404 no alvo).
+app.get(
+  '/api/:resource/:id/dependencias',
+  resourceParam,
+  wrap(async (req: Request, res: Response) => {
+    const r = (req as any).resource;
+    const actor = currentUser(req);
+    checkAccess(r, actor, 'read');
+    res.json(await diagnosticarDependencias(r, parseId(req.params.id), escopoDe(actor)));
+  })
+);
+
 // Fotos / anexos de um registro
 app.get('/api/:resource/:id/arquivos', wrap(listFiles));
 app.post('/api/:resource/:id/arquivos', wrap(uploadFile));
@@ -1082,7 +1097,14 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   }
   const httpErr = toHttpError(err, (req as any).resource);
   if (httpErr.status >= 500) reportarErro(err, { rota: `${req.method} ${req.path}` });
-  res.status(httpErr.status).json({ error: httpErr.message, fields: httpErr.fields, ...(httpErr.code ? { code: httpErr.code } : {}) });
+  res.status(httpErr.status).json({
+    error: httpErr.message,
+    fields: httpErr.fields,
+    ...(httpErr.code ? { code: httpErr.code } : {}),
+    // Dados estruturados do erro (ex.: diagnóstico de dependências). `fields`
+    // continua sendo só erro por campo de formulário.
+    ...(httpErr.details ? { details: httpErr.details } : {}),
+  });
 });
 
 // ----------------------------------------------------------------------------

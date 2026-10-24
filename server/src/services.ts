@@ -12,6 +12,7 @@ import { apenasDigitos, cnpjValido, cpfValido, tipoDocumento } from './documento
 import type { Request } from 'express';
 import type { AuthUser } from './auth';
 import { attachImages, removeAllFiles } from './uploads';
+import { erroDependencias, montarDiagnostico, temHistoricoProtegido, type DiagnosticoDependencias } from './dependencias';
 import { aplicarRegrasPedido } from './itens';
 import { aplicarRegrasOrdem, recalcularFichaValores, validarOrdemPayload } from './producao';
 import { hookTaxaLancamento, syncAporte, syncLancamentoCompra, syncLancamentoVenda, syncTransferencia } from './financeiro';
@@ -905,6 +906,41 @@ async function primeiroDominioDaEmpresa(id: number, tx?: Tx): Promise<{ label: s
   return null;
 }
 
+/**
+ * DIAGNÓSTICO DE DEPENDÊNCIAS — camada pública e reutilizável.
+ *
+ * Responde, para QUALQUER recurso: quem aponta para este registro, quantos
+ * são, quais ids, de que módulo, se o vínculo é de composição/histórico/
+ * operacional/auditoria e se ele impede a exclusão.
+ *
+ * Somente leitura. O registro-alvo é lido DENTRO do escopo do ator (404 para
+ * outra empresa) e cada contagem é recortada pela empresa do registro.
+ */
+export async function diagnosticarDependencias(
+  r: Resource,
+  id: number,
+  escopoOpt?: EscopoOuAtor,
+  tx?: Tx
+): Promise<DiagnosticoDependencias> {
+  const s = getStore();
+  const escopo = escopoOpt === undefined ? escopoDeSistema() : (comoEscopo(escopoOpt) ?? escopoDeSistema());
+  const filtro = temEscopoEmpresa(r) ? { id, empresa_id: escopo.empresaId } : { id };
+  const row = await s.findOneWhere(r, filtro, tx);
+  if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+  const empresaId = Number(row.empresa_id ?? escopo.empresaId);
+  const relacoes = await s.dependenciasDe(r, id, empresaId, tx);
+  return montarDiagnostico(r, row, relacoes, { origem: s.kind === 'postgres' ? 'postgresql' : 'memoria', empresaId });
+}
+
+/** Diagnóstico que nunca lança — usado no tratamento de erro do DELETE. */
+async function diagnosticarSemFalhar(r: Resource, id: number, escopo: EscopoEmpresa): Promise<DiagnosticoDependencias | null> {
+  try {
+    return await diagnosticarDependencias(r, id, escopo);
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteRecord(r: Resource, id: number, actor: Actor, escopoOpt?: EscopoOuAtor): Promise<void> {
   const s = getStore();
   const escopo = escopoOpt === undefined ? escopoDe(actor) : (comoEscopo(escopoOpt) ?? escopoDeSistema());
@@ -1037,6 +1073,20 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
       if (r.key === 'compras' && before.status === 'recebido') {
         throw new HttpError(409, 'Compra recebida já deu entrada nos insumos. Cancele a compra (estorna automaticamente) em vez de excluí-la.');
       }
+      // HISTÓRICO PROTEGIDO: em vendas/compras parte das relações é
+      // CASCADE/SET NULL no banco — sozinha, a FK apagaria ou desligaria a
+      // trilha em silêncio. A checagem roda DEPOIS dos desvínculos próprios do
+      // recurso (locais) e ANTES de remover as composições, para o diagnóstico
+      // enxergar o registro completo. Bloqueado = nada é gravado nem apagado.
+      if (temHistoricoProtegido(r)) {
+        const empresaId = Number(before.empresa_id ?? escopo.empresaId);
+        const relacoes = await s.dependenciasDe(r, id, empresaId, tx);
+        const diag = montarDiagnostico(r, before, relacoes, {
+          origem: s.kind === 'postgres' ? 'postgresql' : 'memoria',
+          empresaId,
+        });
+        if (diag.bloqueado) throw erroDependencias(diag);
+      }
       // Remove os itens do pedido junto (no Postgres o ON DELETE CASCADE faz;
       // aqui garantimos o mesmo comportamento no modo demonstração).
       const filhos: { r: Resource; col: string }[] = [];
@@ -1081,6 +1131,17 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
       await audit(tx, actor, 'excluir', r, id, `${r.singular} ${labelOf(r, before)} excluído(a)${detalheUso}`, sanitize(before), before);
     });
   } catch (e) {
+    // A FK continua sendo a proteção final: se o banco recusou o DELETE
+    // (23503) — ou uma regra de consistência quebraria com o SET NULL (23514)
+    // —, explicamos QUAIS vínculos existem em vez de devolver "em uso".
+    // A transação já sofreu rollback: nada foi apagado.
+    if (!(e instanceof HttpError)) {
+      const codigo = String((e as { code?: string } | null)?.code ?? '');
+      if (codigo === '23503' || codigo === '23514') {
+        const diag = await diagnosticarSemFalhar(r, id, escopo);
+        if (diag?.bloqueado) throw erroDependencias(diag);
+      }
+    }
     throw toHttpError(e, r);
   }
 }

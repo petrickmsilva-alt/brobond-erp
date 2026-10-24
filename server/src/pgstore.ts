@@ -8,6 +8,16 @@ import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './r
 import { alvosDeBusca, campoPorDigitos, digitosDe, idDoTermo, termosDeBusca } from './busca';
 import { hashCadeiaAuditoria, normalizarPayloadAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
+import {
+  LIMITE_IDS_POR_VINCULO,
+  VINCULOS_LOGICOS,
+  acaoDeCodigo,
+  acaoMaisForte,
+  citarIdentificador,
+  identificadorSeguro,
+  type AcaoReferencial,
+  type RelacaoDependente,
+} from './dependencias';
 import type { EscopoEmpresa } from './empresa';
 import { sqlCivil } from './fuso';
 import { EMPRESA_PADRAO } from './empresa';
@@ -181,6 +191,29 @@ export function translatePgError(e: any, r?: Resource): HttpError | null {
     default:
       return null;
   }
+}
+
+
+/**
+ * Mapeia as colunas de uma FK para os valores do registro-alvo.
+ * Só são aceitas referências a `id` e `empresa_id` (o padrão do schema); uma
+ * constraint que aponte para outra coluna é ignorada — nunca inventamos valor.
+ */
+function mapaDeValores(
+  colunasDependente: string[],
+  colunasAlvo: string[],
+  id: number,
+  empresaId: number
+): Record<string, number> | null {
+  const mapa: Record<string, number> = {};
+  for (let i = 0; i < colunasDependente.length; i++) {
+    const alvo = colunasAlvo[i];
+    const dependente = colunasDependente[i];
+    if (alvo === 'id') mapa[dependente] = id;
+    else if (alvo === 'empresa_id') mapa[dependente] = empresaId;
+    else return null;
+  }
+  return Object.keys(mapa).length ? mapa : null;
 }
 
 function refJoins(r: Resource) {
@@ -463,6 +496,192 @@ export class PgStore implements Store {
       tx
     );
     return res.rows[0];
+  }
+
+  /**
+   * DIAGNÓSTICO DE DEPENDÊNCIAS (PostgreSQL).
+   *
+   * As relações de entrada NÃO são uma lista fixa: saem do catálogo
+   * (pg_constraint), então toda FK real — inclusive as criadas por migrations
+   * futuras — aparece. A ação referencial decide se o banco recusa o DELETE
+   * (NO ACTION/RESTRICT) ou se apenas acompanha (CASCADE/SET NULL).
+   *
+   * SEGURANÇA:
+   *   • tabela/colunas vêm do catálogo, nunca do input do usuário, e ainda
+   *     passam por `identificadorSeguro` + `citarIdentificador` antes do SQL;
+   *   • todo valor entra como parâmetro ($1, $2...);
+   *   • toda contagem é recortada por `empresa_id` quando a tabela dependente
+   *     tem essa coluna — uma empresa nunca vê vínculo de outra;
+   *   • a operação é somente leitura (nenhum DELETE/UPDATE/INSERT).
+   */
+  async dependenciasDe(r: Resource, id: number, empresaId: number, tx?: Tx): Promise<RelacaoDependente[]> {
+    const out: RelacaoDependente[] = [];
+    const alvo = await q('SELECT c.oid::int AS oid FROM pg_class c WHERE c.oid = to_regclass($1)', [r.table], tx);
+    const oid = Number(alvo.rows[0]?.oid ?? 0);
+
+    if (oid > 0) {
+      const fks = await q(
+        `SELECT src.relname AS tabela,
+                con.confdeltype AS acao,
+                ARRAY(
+                  SELECT a.attname::text
+                    FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                    JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+                   ORDER BY k.ord
+                ) AS colunas,
+                ARRAY(
+                  SELECT a.attname::text
+                    FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+                    JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum
+                   ORDER BY k.ord
+                ) AS alvo_colunas
+           FROM pg_constraint con
+           JOIN pg_class src ON src.oid = con.conrelid
+          WHERE con.contype = 'f' AND con.confrelid = $1::oid
+          ORDER BY src.relname, con.conname`,
+        [oid],
+        tx
+      );
+
+      // Agrupa por tabela dependente: várias constraints para a mesma tabela
+      // (ex.: devolucoes simples + composta) não podem contar em dobro.
+      const grupos = new Map<string, { colsets: string[][]; alvoColsets: string[][]; acao: AcaoReferencial }>();
+      for (const row of fks.rows) {
+        const tabela = String(row.tabela);
+        const grupo = grupos.get(tabela) ?? { colsets: [], alvoColsets: [], acao: 'LOGICO' as AcaoReferencial };
+        grupo.colsets.push((row.colunas as string[]).map(String));
+        grupo.alvoColsets.push((row.alvo_colunas as string[]).map(String));
+        const acao = acaoDeCodigo(String(row.acao));
+        grupo.acao = grupo.colsets.length === 1 ? acao : acaoMaisForte(grupo.acao, acao);
+        grupos.set(tabela, grupo);
+      }
+
+      for (const [tabela, grupo] of grupos) {
+        if (!identificadorSeguro(tabela)) continue;
+        const meta = await q(
+          `SELECT a.attname::text AS attname
+             FROM pg_attribute a
+            WHERE a.attrelid = to_regclass($1) AND a.attnum > 0 AND NOT a.attisdropped
+              AND a.attname IN ('id', 'empresa_id')`,
+          [tabela],
+          tx
+        );
+        const colunasTabela = new Set(meta.rows.map((x) => String(x.attname)));
+        if (!colunasTabela.has('id')) continue;
+
+        const params: unknown[] = [];
+        const predicados: string[] = [];
+        for (let i = 0; i < grupo.colsets.length; i++) {
+          const mapa = mapaDeValores(grupo.colsets[i], grupo.alvoColsets[i], id, empresaId);
+          if (!mapa) continue;
+          const partes: string[] = [];
+          let invalido = false;
+          for (const [coluna, valor] of Object.entries(mapa)) {
+            if (!identificadorSeguro(coluna)) {
+              invalido = true;
+              break;
+            }
+            params.push(valor);
+            partes.push(`${citarIdentificador(coluna)} = $${params.length}`);
+          }
+          if (invalido || !partes.length) continue;
+          // Defesa em profundidade: mesmo que a FK simples não traga a empresa,
+          // o dependente é recortado pela empresa do registro-alvo. Vale só
+          // para recursos escopados — em `empresas` a coluna `empresa_id` é a
+          // própria FK para o alvo, não um filtro de tenant.
+          if (r.empresa === true && colunasTabela.has('empresa_id') && !('empresa_id' in mapa)) {
+            params.push(empresaId);
+            partes.push(`${citarIdentificador('empresa_id')} = $${params.length}`);
+          }
+          predicados.push(`(${partes.join(' AND ')})`);
+        }
+        if (!predicados.length) continue;
+
+        const where = predicados.join(' OR ');
+        const limite = LIMITE_IDS_POR_VINCULO + 1;
+        const res = await q(
+          `SELECT count(*)::int AS total,
+                  (SELECT array_agg(x.id ORDER BY x.id)
+                     FROM (SELECT id FROM ${citarIdentificador(tabela)} WHERE ${where} ORDER BY id LIMIT ${limite}) x) AS ids
+             FROM ${citarIdentificador(tabela)}
+            WHERE ${where}`,
+          params,
+          tx
+        );
+        const ids = ((res.rows[0]?.ids as Array<number | string> | null) ?? [])
+          .map((x) => Number(x))
+          .filter((n) => Number.isFinite(n));
+        out.push({
+          tabela,
+          colunas: grupo.colsets.length === 1 ? grupo.colsets[0] : [...new Set(grupo.colsets.flat())],
+          quantidade: Number(res.rows[0]?.total ?? 0),
+          ids: ids.slice(0, LIMITE_IDS_POR_VINCULO),
+          idsTruncados: ids.length > LIMITE_IDS_POR_VINCULO,
+          acao: grupo.acao,
+          fk: true,
+        });
+      }
+    }
+
+    // Vínculos LÓGICOS (sem FK): referências por coluna textual gravadas pelos
+    // módulos. Mesma classificação do MemStore — nada de SQL por input.
+    for (const logico of VINCULOS_LOGICOS) {
+      const chave = logico.chave(r, id);
+      if (!chave) continue;
+      if (!identificadorSeguro(logico.tabela)) continue;
+      const params: unknown[] = [];
+      const partes: string[] = [];
+      let invalido = false;
+      for (const [coluna, valor] of Object.entries(chave)) {
+        if (!identificadorSeguro(coluna)) {
+          invalido = true;
+          break;
+        }
+        if (Array.isArray(valor)) {
+          params.push(valor.map(String));
+          partes.push(`${citarIdentificador(coluna)} = ANY($${params.length}::text[])`);
+        } else {
+          params.push(valor);
+          partes.push(`${citarIdentificador(coluna)} = $${params.length}`);
+        }
+      }
+      if (invalido || !partes.length) continue;
+      if (logico.escopoEmpresa) {
+        const meta = await q(
+          `SELECT 1 FROM pg_attribute a WHERE a.attrelid = to_regclass($1) AND a.attname = 'empresa_id' AND a.attnum > 0 AND NOT a.attisdropped`,
+          [logico.tabela],
+          tx
+        );
+        if (!meta.rows.length) continue;
+        params.push(empresaId);
+        partes.push(`${citarIdentificador('empresa_id')} = $${params.length}`);
+      }
+      const where = partes.join(' AND ');
+      const limite = LIMITE_IDS_POR_VINCULO + 1;
+      const res = await q(
+        `SELECT count(*)::int AS total,
+                (SELECT array_agg(x.id ORDER BY x.id)
+                   FROM (SELECT id FROM ${citarIdentificador(logico.tabela)} WHERE ${where} ORDER BY id LIMIT ${limite}) x) AS ids
+           FROM ${citarIdentificador(logico.tabela)}
+          WHERE ${where}`,
+        params,
+        tx
+      );
+      const ids = ((res.rows[0]?.ids as Array<number | string> | null) ?? [])
+        .map((x) => Number(x))
+        .filter((n) => Number.isFinite(n));
+      out.push({
+        tabela: logico.tabela,
+        colunas: Object.keys(chave),
+        quantidade: Number(res.rows[0]?.total ?? 0),
+        ids: ids.slice(0, LIMITE_IDS_POR_VINCULO),
+        idsTruncados: ids.length > LIMITE_IDS_POR_VINCULO,
+        acao: 'LOGICO',
+        fk: false,
+      });
+    }
+
+    return out;
   }
 
   async tryUpdateIf(r: Resource, id: number, esperado: Payload, data: Payload, tx?: Tx): Promise<Row | null> {

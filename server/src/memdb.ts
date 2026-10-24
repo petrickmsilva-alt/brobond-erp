@@ -8,6 +8,18 @@ import { linhaCorrespondeBusca, termosDeBusca } from './busca';
 import { hashCadeiaAuditoria, normalizarPayloadAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
 import {
+  LIMITE_IDS_POR_VINCULO,
+  VINCULOS_LOGICOS,
+  acaoDeclarada,
+  acaoMaisForte,
+  erroDependencias,
+  montarDiagnostico,
+  refsPara,
+  relacoesDeclaradasPara,
+  type AcaoReferencial,
+  type RelacaoDependente,
+} from './dependencias';
+import {
   labelOf,
   type AuditEntry,
   type AuditoriaVerificacao,
@@ -52,6 +64,17 @@ const HERANCA_EMPRESA: Record<string, { pai: string; fk: string }> = {
   movimentacoes_insumos: { pai: 'insumos', fk: 'insumo_id' },
   produto_composicao: { pai: 'produtos', fk: 'produto_id' },
 };
+
+/**
+ * Valor que a coluna dependente deve ter para apontar para o registro-alvo.
+ *
+ * A coluna `empresa_id` só representa o TENANT quando participa de uma chave
+ * composta (`(empresa_id, venda_id)`); sozinha, ela é uma FK comum para
+ * `empresas(id)` — exatamente como o `confkey` do PostgreSQL distingue.
+ */
+function valorDaColuna(colunas: string[], coluna: string, id: number, empresaId: number): number {
+  return colunas.length > 1 && coluna === 'empresa_id' ? empresaId : id;
+}
 
 function norm(v: unknown): string {
   return v === null || v === undefined ? '' : String(v);
@@ -334,19 +357,113 @@ export class MemStore implements Store {
     return { ...cur };
   }
 
+  /**
+   * DIAGNÓSTICO DE DEPENDÊNCIAS (modo demonstração).
+   *
+   * O MemStore não tem catálogo de FK, então usa o MESMO mapa declarativo que
+   * o PostgreSQL consulta como metadado: `ref` de resources.ts + RELACOES_FK
+   * (FKs que não são `ref`, ex.: movimentacoes.venda_id) + VINCULOS_LOGICOS.
+   * O recorte por empresa é idêntico ao do banco: nada de vínculo cruzado.
+   */
+  async dependenciasDe(r: Resource, id: number, empresaId: number): Promise<RelacaoDependente[]> {
+    const grupos = new Map<string, { colsets: string[][]; acao: AcaoReferencial }>();
+    const registrar = (tabela: string, colunas: string[], acao: AcaoReferencial) => {
+      const grupo = grupos.get(tabela) ?? { colsets: [], acao: 'LOGICO' as AcaoReferencial };
+      grupo.colsets.push(colunas);
+      grupo.acao = grupo.colsets.length === 1 ? acao : acaoMaisForte(grupo.acao, acao);
+      grupos.set(tabela, grupo);
+    };
+    for (const ref of refsPara(r.table)) registrar(ref.tabela, [ref.coluna], acaoDeclarada(ref.tabela, ref.coluna));
+    for (const rel of relacoesDeclaradasPara(r.table)) registrar(rel.tabela, rel.colunas, rel.acao);
+
+    // O alvo é escopado por empresa? (a tabela `empresas` NÃO é: nela a coluna
+    // dependente `empresa_id` referencia o ID da empresa, não um tenant externo)
+    const alvoEscopado = r.empresa === true;
+    const out: RelacaoDependente[] = [];
+    for (const [tabela, grupo] of grupos) {
+      const linhas = [...this.table(tabela).rows.values()].filter((row) => {
+        const casaAlguma = grupo.colsets.some((cols) =>
+          cols.every((col) => norm(row[col]) === norm(valorDaColuna(cols, col, id, empresaId)))
+        );
+        if (!casaAlguma) return false;
+        if (!alvoEscopado) return true;
+        // A chave composta (empresa_id, <fk>) já carrega o recorte de empresa.
+        if (grupo.colsets.some((cols) => cols.length > 1 && cols.includes('empresa_id'))) return true;
+        if (row.empresa_id === undefined || row.empresa_id === null) return true;
+        return Number(row.empresa_id) === empresaId;
+      });
+      const ids = linhas.map((row) => Number(row.id)).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+      out.push({
+        tabela,
+        colunas: grupo.colsets.length === 1 ? grupo.colsets[0] : [...new Set(grupo.colsets.flat())],
+        quantidade: linhas.length,
+        ids: ids.slice(0, LIMITE_IDS_POR_VINCULO),
+        idsTruncados: ids.length > LIMITE_IDS_POR_VINCULO,
+        acao: grupo.acao,
+        fk: true,
+      });
+    }
+
+    for (const logico of VINCULOS_LOGICOS) {
+      const chave = logico.chave(r, id);
+      if (!chave) continue;
+      const linhas = [...this.table(logico.tabela).rows.values()].filter((row) => {
+        for (const [col, valor] of Object.entries(chave)) {
+          const ok = Array.isArray(valor) ? valor.map(String).includes(String(row[col] ?? '')) : norm(row[col]) === norm(valor);
+          if (!ok) return false;
+        }
+        if (!logico.escopoEmpresa) return true;
+        if (row.empresa_id === undefined || row.empresa_id === null) return false;
+        return Number(row.empresa_id) === empresaId;
+      });
+      const ids = linhas.map((row) => Number(row.id)).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+      out.push({
+        tabela: logico.tabela,
+        colunas: Object.keys(chave),
+        quantidade: linhas.length,
+        ids: ids.slice(0, LIMITE_IDS_POR_VINCULO),
+        idsTruncados: ids.length > LIMITE_IDS_POR_VINCULO,
+        acao: 'LOGICO',
+        fk: false,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Remove o registro aplicando as MESMAS ações referenciais do PostgreSQL:
+   *   • NO ACTION/RESTRICT com dependentes → 409 com DIAGNÓSTICO completo
+   *     (nada é apagado: o `transaction` do serviço faz rollback);
+   *   • CASCADE → remove os dependentes (composição);
+   *   • SET NULL → desliga o vínculo, preservando o registro dependente.
+   * Antes o erro era genérico ("em uso em outro módulo"); agora ele diz qual
+   * módulo, quantos registros e quais ids.
+   */
   async remove(r: Resource, id: number): Promise<boolean> {
     const t = this.table(r.table);
-    if (!t.rows.has(id)) return false;
-    // Integridade referencial: alguém aponta para este registro?
-    for (const other of Object.values(RESOURCES)) {
-      for (const f of other.fields) {
-        if (f.type === 'ref' && f.ref === r.key) {
-          for (const row of this.table(other.table).rows.values()) {
-            if (Number(row[f.name]) === id) {
-              throw new HttpError(409, `Este registro está em uso em "${other.label}" e não pode ser excluído. Você pode desativá-lo.`);
-            }
-          }
-        }
+    const row = t.rows.get(id);
+    if (!row) return false;
+    const empresaId = Number(row.empresa_id ?? EMPRESA_PADRAO);
+    const relacoes = await this.dependenciasDe(r, id, empresaId);
+    const bloqueantes = relacoes.filter((rel) => rel.quantidade > 0 && (rel.acao === 'NO_ACTION' || rel.acao === 'RESTRICT'));
+    if (bloqueantes.length) {
+      throw erroDependencias(montarDiagnostico(r, row, relacoes, { origem: 'memoria', empresaId }));
+    }
+    // Ações referenciais (o serviço já removeu as composições que manipula;
+    // aqui garantimos a paridade com o ON DELETE do banco no modo demo).
+    for (const rel of relacoes) {
+      if (!rel.fk || rel.quantidade === 0) continue;
+      const colunasValor = rel.colunas.filter((c) => c !== 'empresa_id');
+      // Só é seguro "cascatear" quando há UMA coluna de valor (a outra, se
+      // existir, é o tenant). Relações com duas FKs para o mesmo alvo já são
+      // bloqueantes por RESTRICT/NO ACTION e nunca chegam aqui.
+      if (colunasValor.length !== 1) continue;
+      const dependentes = this.table(rel.tabela);
+      for (const [depId, dep] of [...dependentes.rows]) {
+        const casa = rel.colunas.every((col) => norm(dep[col]) === norm(valorDaColuna(rel.colunas, col, id, empresaId)));
+        if (!casa) continue;
+        if (rel.acao === 'CASCADE') dependentes.rows.delete(depId);
+        else if (rel.acao === 'SET_NULL') for (const col of colunasValor) dep[col] = null;
       }
     }
     t.rows.delete(id);

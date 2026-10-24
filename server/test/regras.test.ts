@@ -115,8 +115,18 @@ test('usuários: não remove o último administrador', async () => {
   await expectHttp(() => updateRecord(RESOURCES.usuarios, Number(u.id), { perfil: 'operador' }, { id: 99, name: 'outro', perfil: 'admin' }), 400, /único administrador/);
 });
 
-test('produto: excluir produto em uso é bloqueado (409); produto sem uso é excluído', async () => {
-  await expectHttp(() => deleteRecord(RESOURCES.produtos, produtoId, admin), 409, /em uso/);
+test('produto: excluir produto em uso é bloqueado (409) com diagnóstico; produto sem uso é excluído', async () => {
+  // A recusa deixou de ser o genérico "está em uso": agora o 409 traz o
+  // diagnóstico de vínculos (módulo, quantidade e id), reutilizável pela UI.
+  const bloqueio = await expectHttp(() => deleteRecord(RESOURCES.produtos, produtoId, admin), 409, /registros? vinculados?/);
+  assert.equal(bloqueio.code, 'dependencias_vinculadas');
+  const diag = (bloqueio.details as any)?.dependencias;
+  assert.ok(diag?.bloqueado, 'o diagnóstico diz que a exclusão está bloqueada');
+  assert.ok(Array.isArray(diag.vinculos) && diag.vinculos.length > 0);
+  assert.ok(
+    diag.vinculos.some((v: any) => v.bloqueia && v.quantidade > 0 && v.ids.length > 0),
+    'o vínculo bloqueante traz quantidade e ids'
+  );
   const tmp = await createRecord(RESOURCES.produtos, { sku: 'TMP', nome: 'tmp' }, admin);
   await deleteRecord(RESOURCES.produtos, Number(tmp.id), admin);
   await expectHttp(() => getRecord(RESOURCES.produtos, Number(tmp.id)), 404);
