@@ -12,17 +12,23 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-/** Erro de API com status HTTP, erros por campo e código estável (ex.: 'reauth_necessaria'). */
+/**
+ * Erro de API com status HTTP, erros por campo e código estável (ex.:
+ * 'reauth_necessaria'). `details` carrega dados estruturados do erro — hoje, o
+ * diagnóstico de dependências de uma exclusão bloqueada (`{ dependencias }`).
+ */
 export class ApiError extends Error {
   status: number;
   fields?: Record<string, string>;
   code?: string;
-  constructor(status: number, message: string, fields?: Record<string, string>, code?: string) {
+  details?: Record<string, any>;
+  constructor(status: number, message: string, fields?: Record<string, string>, code?: string, details?: Record<string, any>) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.fields = fields;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -93,11 +99,11 @@ export async function apiFetch<T = any>(path: string, opts: RequestInit = {}): P
       clearToken();
       if (!isOnLoginPage) window.location.href = '/login';
     }
-    throw new ApiError(401, data?.error || (isLoginRequest ? 'E-mail ou senha incorretos' : 'Sessão expirada'), data?.fields, data?.code);
+    throw new ApiError(401, data?.error || (isLoginRequest ? 'E-mail ou senha incorretos' : 'Sessão expirada'), data?.fields, data?.code, data?.details);
   }
 
   if (!res.ok) {
-    throw new ApiError(res.status, data?.error || 'Erro na requisição', data?.fields, data?.code);
+    throw new ApiError(res.status, data?.error || 'Erro na requisição', data?.fields, data?.code, data?.details);
   }
   return data as T;
 }
@@ -119,7 +125,7 @@ export async function downloadFile(path: string, fallbackName = 'download'): Pro
   const res = await fetch(`/api${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, data?.error || 'Não foi possível baixar o arquivo.', data?.fields);
+    throw new ApiError(res.status, data?.error || 'Não foi possível baixar o arquivo.', data?.fields, data?.code, data?.details);
   }
   const blob = await res.blob();
   const cd = res.headers.get('Content-Disposition') || '';

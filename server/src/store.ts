@@ -5,6 +5,7 @@
 import type { EscopoEmpresa } from './empresa';
 import type { PoolClient } from 'pg';
 import type { Resource } from './resources';
+import type { RelacaoDependente } from './dependencias';
 
 export type Row = Record<string, any>;
 export type Payload = Record<string, unknown>;
@@ -154,6 +155,20 @@ export interface Store {
   insert(r: Resource, data: Payload, tx?: Tx): Promise<Row>;
   update(r: Resource, id: number, data: Payload, tx?: Tx): Promise<Row | null>;
   remove(r: Resource, id: number, tx?: Tx): Promise<boolean>;
+
+  /**
+   * DIAGNÓSTICO DE DEPENDÊNCIAS — quem aponta para este registro?
+   *
+   * Devolve as relações de ENTRADA com a quantidade exata e até
+   * LIMITE_IDS_POR_VINCULO ids, sempre recortadas por `empresaId`:
+   *   • PostgreSQL: FKs reais descobertas no catálogo (pg_constraint), com a
+   *     ação referencial (ON DELETE) de cada uma — nenhuma relação inventada e
+   *     nenhuma esquecida;
+   *   • MemStore: o mesmo mapa declarativo (resources.ts + RELACOES_FK).
+   * Somam-se os vínculos LÓGICOS reais (auditoria, financeiro, impressão,
+   * anexos). Operação SOMENTE LEITURA.
+   */
+  dependenciasDe(r: Resource, id: number, empresaId: number, tx?: Tx): Promise<RelacaoDependente[]>;
 
   /** Soma `delta` à célula tenantada (produto/tamanho nullable/local canônico). */
   adjustStock(
