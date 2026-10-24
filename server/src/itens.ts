@@ -19,7 +19,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
-import { checkAccess, escopoDe, getDefaultLocalInfo, getStore, resolveLocal, resolveLocalParaEstorno, toHttpError, validarTamanhoNaGrade } from './services';
+import { checkAccess, escopoDe, getDefaultLocalInfo, getStore, podeEditarPrecoTabela, resolveLocal, resolveLocalParaEstorno, toHttpError, validarTamanhoNaGrade, type Actor } from './services';
 import { currentUser } from './auth';
 import { assertRegistroDaEmpresa, validarReferenciasDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { aplicarEntradaDeCompra, estornarEntradasDeCompra } from './custoRecebimento';
@@ -31,7 +31,7 @@ import { notificarVendaErpAlterada } from './eventosVenda';
 import { round2, round3 } from './utils';
 import { locaisDeSaida, saldoCelula } from './estoqueCanonico';
 import { precoDe } from './listasPreco';
-import { normalizarPct, pctDePrecoVenda } from './precoVenda';
+import { descontoUnitarioDe, normalizarPct, normalizarPrecoVenda, precoLiquidoDe } from './precoVenda';
 
 type TipoPedido = 'venda' | 'compra';
 
@@ -114,6 +114,7 @@ export async function createItem(req: Request, res: Response) {
   const id = parseId(req.params.id);
   const s = getStore();
   try {
+    let alteracaoTabela: AlteracaoTabela | null = null;
     const full = await s.transaction(async (tx) => {
       const pedido = await getPedido(tipo, id, escopo, tx);
       assertPedidoAberto(tipo, pedido);
@@ -125,7 +126,7 @@ export async function createItem(req: Request, res: Response) {
       if (tipo === 'venda') {
         // Quem o operador alterou é lido do CORPO BRUTO: `validatePayload`
         // aplica defaults (ex.: `desconto_pct: 0`) e apagaria essa informação.
-        await precificarItemVenda(payload, escopo, tx, informadoNoCorpo(req.body, 'create'));
+        alteracaoTabela = await precificarItemVenda(payload, escopo, tx, informadoNoCorpo(req.body, 'create'), actor);
       }
       const item = await s.insert(cfg.itens, payload, tx);
       await recalcularTotal(tipo, id, tx);
@@ -143,6 +144,7 @@ export async function createItem(req: Request, res: Response) {
         },
         tx
       );
+      await auditarAlteracaoTabela(cfg.parent, id, Number(item.id), alteracaoTabela, pedido, actor, tx);
       return out;
     });
     res.status(201).json(full);
@@ -161,6 +163,7 @@ export async function updateItem(req: Request, res: Response) {
   const itemId = parseId(req.params.itemId);
   const s = getStore();
   try {
+    let alteracaoTabela: AlteracaoTabela | null = null;
     const full = await s.transaction(async (tx) => {
       const pedido = await getPedido(tipo, id, escopo, tx);
       assertPedidoAberto(tipo, pedido);
@@ -168,18 +171,21 @@ export async function updateItem(req: Request, res: Response) {
       if (!before) throw new HttpError(404, 'Item não encontrado neste pedido.');
       const data = validatePayload(cfg.itens, req.body, 'update');
       delete data.empresa_id;
-      // O preço de TABELA é referência do cadastro/precificação: o cliente não
-      // o envia nem o altera (é `readonly` no recurso). Ele é re-derivado aqui.
-      delete data.preco_tabela;
+      // O preço de TABELA é uma referência imutável da precificação: só quem tem
+      // autorização pode alterá-lo (validado no servidor). A `lista_preco_id`
+      // continua sempre derivada do servidor.
       delete data.lista_preco_id;
       if (tipo === 'venda') {
         const merged: Row = { ...before, ...data };
-        await precificarItemVenda(merged, escopo, tx, informadoNoCorpo(req.body, 'update'), before);
+        alteracaoTabela = await precificarItemVenda(merged, escopo, tx, informadoNoCorpo(req.body, 'update'), actor, before);
         data.preco_unitario = merged.preco_unitario;
         data.desconto_pct = merged.desconto_pct;
         data.subtotal = merged.subtotal;
         data.preco_tabela = merged.preco_tabela;
         data.lista_preco_id = merged.lista_preco_id;
+      } else {
+        // Compra: o preço de tabela não existe neste fluxo.
+        delete data.preco_tabela;
       }
       const item = await s.update(cfg.itens, itemId, data, tx);
       await recalcularTotal(tipo, id, tx);
@@ -197,6 +203,7 @@ export async function updateItem(req: Request, res: Response) {
         },
         tx
       );
+      await auditarAlteracaoTabela(cfg.parent, id, itemId, alteracaoTabela, pedido, actor, tx);
       return out;
     });
     res.json(full);
@@ -250,27 +257,45 @@ function tipoFromPath(pathname: string): TipoPedido {
 /**
  * Fecha a formação de preço de uma linha de VENDA (autoridade do servidor).
  *
- * O preço de TABELA vem da precificação (`precoDe`: lista vigente, senão a
- * ficha do produto) e é gravado como SNAPSHOT na linha — mudar a tabela depois
- * não reescreve a venda. O preço de VENDA é o valor efetivamente praticado e o
- * desconto % é derivado dele em 2 casas, para que
- * `tabela − desconto R$ = preço de venda` feche no centavo.
+ * REGRA COMERCIAL DESTE ERP: a BASE do desconto é SEMPRE o PREÇO DE VENDA
+ * (`preco_unitario`), nunca o preço de tabela. O preço de TABELA é apenas a
+ * referência comercial preservada como SNAPSHOT histórico — mudar a tabela
+ * depois não reescreve a venda.
+ *
+ *   preco_unitario = preço de venda praticado (base do desconto)
+ *   desconto_pct   = percentual concedido SOBRE o preço de venda
+ *   subtotal       = preço líquido × quantidade
+ *   preco_tabela   = referência da precificação, congelada na linha
  *
  * PRECEDÊNCIA (o servidor sabe qual campo o operador alterou pelo que veio no
- * corpo): `desconto_pct` informado manda; senão `preco_unitario` manda; senão a
- * linha mantém o preço/desconto que já tinha. O `preco_tabela` e a
- * `lista_preco_id` enviados pelo cliente são SEMPRE ignorados.
+ * corpo): o preço de venda e o desconto % enviados mandam; se só o preço vier,
+ * o desconto atual é MANTIDO; se só o desconto vier, o preço atual é mantido.
  *
- * Muta `payload` in-place.
+ * O `preco_tabela` só muda com AUTORIZAÇÃO (`podeEditarPrecoTabela`): sem ela,
+ * um valor diferente da referência vigente é recusado com 403 — a decisão é do
+ * servidor, não da tela.
+ *
+ * Muta `payload` in-place e devolve os dados de auditoria da tabela, quando
+ * houve alteração.
  */
-function informadoNoCorpo(body: unknown, modo: 'create' | 'update'): { descontoPct: boolean; preco: boolean } {
+type AlteracaoTabela = { de: number | null; para: number };
+
+function informadoNoCorpo(body: unknown, modo: 'create' | 'update'): {
+  descontoPct: boolean;
+  preco: boolean;
+  precoTabelaInformado: boolean;
+  precoTabela: number | null;
+} {
   const b = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
   const tem = (v: unknown) => v !== undefined && v !== null && !(typeof v === 'string' && v.trim() === '');
+  const tabelaInformada = tem(b.preco_tabela);
   return {
     descontoPct: tem(b.desconto_pct),
     // No `create`, o preço unitário é obrigatório; sua presença indica a escolha
     // do operador. No `update`, ele só conta se foi realmente enviado.
     preco: tem(b.preco_unitario) || (modo === 'create' && !tem(b.desconto_pct)),
+    precoTabelaInformado: tabelaInformada,
+    precoTabela: tabelaInformada ? round2(Math.max(0, Number(b.preco_tabela) || 0)) : null,
   };
 }
 
@@ -278,80 +303,136 @@ async function precificarItemVenda(
   payload: Row,
   escopo: EscopoEmpresa,
   tx: Tx | undefined,
-  informado: { descontoPct: boolean; preco: boolean },
+  informado: { descontoPct: boolean; preco: boolean; precoTabelaInformado: boolean; precoTabela: number | null },
+  actor: Actor,
   anterior?: Row | null
-): Promise<void> {
+): Promise<AlteracaoTabela | null> {
   const s = getStore();
   const produtoId = Number(payload.produto_id);
-  let tabela: number | null = null;
-  let listaId: number | null = null;
-  // Numa edição, o SNAPSHOT já gravado é a referência desta venda: ele não pode
-  // ser reescrito por uma mudança posterior na tabela de preços.
-  const snapshot = payload.preco_tabela;
-  const temSnapshot = snapshot !== undefined && snapshot !== null && Number.isFinite(Number(snapshot));
-  // Linha legada/de escritor secundário (loja, catálogo, marketplace, portal):
-  // existe com o preço PRATICADO e sem snapshot. A referência histórica dela é o
-  // próprio preço gravado — NUNCA a tabela vigente hoje, que não existia na
-  // venda. Sem isso, editar só a quantidade reprecificaria a linha pela tabela
-  // atual e o resumo passaria a exibir um desconto que nunca foi concedido.
-  const baseAnterior = anterior && anterior.preco_unitario !== undefined && anterior.preco_unitario !== null
-    ? round2(Math.max(0, Number(anterior.preco_unitario) || 0))
+
+  // ---- 1) Referência de TABELA (snapshot) e lista de preço --------------
+  // O snapshot já gravado é a referência desta venda: não pode ser reescrito
+  // por uma mudança posterior na precificação.
+  const snapshotAnterior = anterior && anterior.preco_tabela !== undefined && anterior.preco_tabela !== null && Number.isFinite(Number(anterior.preco_tabela))
+    ? round2(Math.max(0, Number(anterior.preco_tabela)))
     : null;
-  if (temSnapshot) {
-    tabela = round2(Math.max(0, Number(snapshot)));
-    listaId = payload.lista_preco_id !== undefined && payload.lista_preco_id !== null ? Number(payload.lista_preco_id) : null;
-  } else if (baseAnterior !== null) {
-    tabela = baseAnterior;
-    listaId = anterior?.lista_preco_id !== undefined && anterior?.lista_preco_id !== null ? Number(anterior.lista_preco_id) : null;
-  } else {
-    const produto = Number.isInteger(produtoId)
-      ? await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId }, tx)
-      : null;
+
+  // Referência vigente da precificação — só consultada quando a linha ainda não
+  // tem snapshot (criação) ou quando ele precisa ser validado.
+  let tabelaVigente: number | null = null;
+  let listaVigente: number | null = null;
+  let precoVendaVigente: number | null = null;
+  if (Number.isInteger(produtoId)) {
+    const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId }, tx);
     if (produto) {
       const resolvido = await precoDe(produto, escopo, tx);
-      tabela = round2(Math.max(0, Number(resolvido.preco)));
-      listaId = resolvido.lista_id;
+      tabelaVigente = round2(Math.max(0, Number(resolvido.preco_tabela)));
+      listaVigente = resolvido.lista_id;
+      precoVendaVigente = round2(Math.max(0, Number(resolvido.preco)));
     }
   }
 
+  // Referência contra a qual um preço de tabela enviado é comparado.
+  const referencia = snapshotAnterior ?? tabelaVigente;
+  let tabela: number;
+  let listaId: number | null;
+  let alteracao: AlteracaoTabela | null = null;
+
+  if (informado.precoTabelaInformado) {
+    const enviado = informado.precoTabela as number;
+    if (referencia === null || enviado !== referencia) {
+      // Só quem tem autorização altera o preço de tabela — validado no servidor.
+      if (!podeEditarPrecoTabela(actor)) {
+        throw new HttpError(403, 'Alterar o preço de tabela exige autorização do administrador.', {
+          preco_tabela: 'Sem permissão para alterar',
+        });
+      }
+      alteracao = { de: referencia, para: enviado };
+    }
+    tabela = enviado;
+    listaId = snapshotAnterior !== null ? (anterior?.lista_preco_id ?? listaVigente) : listaVigente;
+  } else if (snapshotAnterior !== null) {
+    tabela = snapshotAnterior;
+    listaId = anterior?.lista_preco_id ?? null;
+  } else {
+    // Linha legada/escritor secundário (loja, catálogo, marketplace, portal):
+    // existe com o preço PRATICADO e sem snapshot. A referência histórica dela é
+    // o próprio preço gravado — NUNCA a tabela vigente hoje, que não existia na
+    // venda. Sem isso, editar só a quantidade reprecificaria a linha pela tabela
+    // atual e o resumo passaria a exibir um desconto que nunca foi concedido.
+    const legado = anterior && anterior.preco_unitario !== undefined && anterior.preco_unitario !== null
+      ? round2(Math.max(0, Number(anterior.preco_unitario) || 0))
+      : null;
+    tabela = legado ?? tabelaVigente ?? 0;
+    listaId = anterior?.lista_preco_id ?? listaVigente;
+  }
+
+  // ---- 2) Preço de VENDA (base do desconto) e desconto % ----------------
   const qtd = Number(payload.quantidade) || 0;
-  // `preco_unitario` é o preço BASE da linha — o valor sobre o qual o
-  // `desconto_pct` incide (convenção já usada pelo ERP: PDV e propostas). Na
-  // formação profissional o base é o PREÇO DE TABELA, e o desconto é derivado
-  // do preço de venda praticado quando for esse o campo que o operador mexeu.
-  let base: number;
+  const precoAnterior = anterior && anterior.preco_unitario !== undefined && anterior.preco_unitario !== null
+    ? normalizarPrecoVenda(anterior.preco_unitario)
+    : null;
+  const pctAnterior = anterior ? normalizarPct(anterior.desconto_pct) : 0;
+
+  let precoVenda: number;
   let pct: number;
 
   if (informado.descontoPct) {
     pct = normalizarPct(payload.desconto_pct);
-    base = payload.preco_unitario !== undefined && payload.preco_unitario !== null
-      ? round2(Math.max(0, Number(payload.preco_unitario) || 0))
-      : tabela ?? round2(Math.max(0, Number(payload.preco_unitario) || 0));
+    precoVenda = informado.preco
+      ? normalizarPrecoVenda(payload.preco_unitario)
+      : precoAnterior ?? precoVendaVigente ?? 0;
   } else if (informado.preco) {
-    const preco = round2(Math.max(0, Number(payload.preco_unitario) || 0));
-    if (tabela !== null && preco < tabela) {
-      // Preço de venda praticado abaixo da tabela: o desconto é derivado dele.
-      pct = pctDePrecoVenda(tabela, preco);
-      base = tabela;
-    } else {
-      // Sem tabela de referência, ou venda acima/na tabela: não há desconto.
-      pct = 0;
-      base = preco;
-    }
+    // Alterou só o preço de venda: MANTÉM o desconto atual.
+    precoVenda = normalizarPrecoVenda(payload.preco_unitario);
+    pct = pctAnterior;
   } else {
     // Nem preço nem desconto vieram no corpo (ex.: edição só da quantidade):
     // mantém a formação já gravada e apenas recompõe o subtotal.
-    pct = normalizarPct(payload.desconto_pct);
-    base = payload.preco_unitario !== undefined && payload.preco_unitario !== null
-      ? round2(Math.max(0, Number(payload.preco_unitario) || 0))
-      : tabela ?? 0;
+    precoVenda = precoAnterior ?? precoVendaVigente ?? 0;
+    pct = pctAnterior;
   }
 
-  payload.preco_tabela = tabela !== null ? tabela : round2(base);
+  const descontoUnitario = descontoUnitarioDe(precoVenda, pct);
+  const liquido = precoLiquidoDe(precoVenda, descontoUnitario);
+  const subtotal = round2(qtd * liquido);
+
+  payload.preco_tabela = tabela;
   payload.lista_preco_id = listaId;
-  payload.preco_unitario = base;
+  payload.preco_unitario = precoVenda;
   payload.desconto_pct = pct;
-  payload.subtotal = round2(qtd * base * (1 - pct / 100));
+  payload.subtotal = subtotal;
+  return alteracao;
+}
+
+/**
+ * Registra na auditoria a alteração do PREÇO DE TABELA de uma linha de venda.
+ * Só é gravado quando houve mudança autorizada — a referência comercial da
+ * venda é dado sensível e precisa de trilha própria.
+ */
+async function auditarAlteracaoTabela(
+  parent: Resource,
+  vendaId: number,
+  itemId: number,
+  alteracao: AlteracaoTabela | null,
+  pedido: Row,
+  actor: Actor,
+  tx: Tx
+): Promise<void> {
+  if (!alteracao) return;
+  await getStore().audit(
+    {
+      usuario_id: actor.id || null,
+      usuario: actor.name,
+      acao: 'editar',
+      recurso: parent.key,
+      registro_id: vendaId,
+      descricao: `Preço de tabela do item #${itemId} da venda #${vendaId} alterado de ${alteracao.de === null ? '—' : alteracao.de.toFixed(2)} para ${alteracao.para.toFixed(2)}`,
+      empresa_id: empresaDoRegistroAudit(parent, pedido, actor),
+      dados: { item_id: itemId, preco_tabela_de: alteracao.de, preco_tabela_para: alteracao.para },
+    },
+    tx
+  );
 }
 
 /** Rótulo legível de um item (produto/insumo + tamanho + quantidade). */

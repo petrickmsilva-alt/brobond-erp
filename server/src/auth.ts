@@ -73,6 +73,7 @@ export type AuthUser = {
   perm_metricas?: string;
   perm_politicas?: string;
   perm_aprovar?: string;
+  perm_preco_tabela?: string;
   desconto_max_pct?: number | null;
   venda_sem_aprovacao_ate?: number | null;
   // ---- MULTIEMPRESA (ver empresa.ts) ----
@@ -122,7 +123,7 @@ function toAuthUser(row: Row): AuthUser {
   user.empresa_id = Number(row.empresa_id) > 0 ? Number(row.empresa_id) : EMPRESA_PADRAO;
   user.pode_consolidar = row.pode_consolidar === true;
   if (row.trocar_senha === true) user.trocar_senha = true;
-  for (const k of ['perm_catalogos','perm_compartilhar','perm_metricas','perm_politicas','perm_aprovar'] as const) user[k] = String(row[k] || 'herdar');
+  for (const k of ['perm_catalogos','perm_compartilhar','perm_metricas','perm_politicas','perm_aprovar','perm_preco_tabela'] as const) user[k] = String(row[k] || 'herdar');
   user.desconto_max_pct = row.desconto_max_pct == null ? null : Number(row.desconto_max_pct);
   user.venda_sem_aprovacao_ate = row.venda_sem_aprovacao_ate == null ? null : Number(row.venda_sem_aprovacao_ate);
   return user;

@@ -64,7 +64,7 @@ export function toHttpError(e: any, r?: Resource): HttpError {
   return new HttpError(500, 'Erro interno do servidor');
 }
 
-type Actor = Pick<AuthUser, 'id' | 'name' | 'perfil'> & Partial<AuthUser>;
+export type Actor = Pick<AuthUser, 'id' | 'name' | 'perfil'> & Partial<AuthUser>;
 
 /**
  * MULTIEMPRESA: o escopo é SEMPRE derivado do ator (ou explicitamente nulo
@@ -151,6 +151,23 @@ export function podeComercial(actor: Actor, capacidade: CapacidadeComercial): bo
 
 export function exigirComercial(actor: Actor, capacidade: CapacidadeComercial) {
   if (!podeComercial(actor, capacidade)) throw new HttpError(403, 'Você não possui esta permissão comercial. Peça ao administrador para revisar sua alçada.');
+}
+
+/**
+ * Quem pode alterar o PREÇO DE TABELA dentro do módulo de venda.
+ *
+ * Regra do ERP: o preço de tabela é referência da precificação/cadastro. Dentro
+ * da venda, só o administrador — ou quem ele autorizar explicitamente em
+ * `perm_preco_tabela` — pode alterá-lo. A checagem é do SERVIDOR: esconder ou
+ * desabilitar o campo na tela não é autorização.
+ *
+ * `herdar` (padrão) NÃO libera: a autorização precisa ser explícita ('permitir')
+ * ou o perfil ser admin — o padrão é negar, porque este campo afeta a
+ * referência comercial e o histórico da venda.
+ */
+export function podeEditarPrecoTabela(actor: Actor): boolean {
+  if (actor.perfil === 'admin') return true;
+  return String((actor as Record<string, unknown>).perm_preco_tabela || 'herdar') === 'permitir';
 }
 
 export function checkAccess(r: Resource, actor: Actor, op: 'read' | 'create' | 'update' | 'delete') {

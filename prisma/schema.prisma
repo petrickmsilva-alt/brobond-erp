@@ -151,6 +151,7 @@ model Usuario {
   permMetricas       String  @default("herdar") @map("perm_metricas")
   permPoliticas      String  @default("herdar") @map("perm_politicas")
   permAprovar        String  @default("herdar") @map("perm_aprovar")
+  permPrecoTabela    String  @default("herdar") @map("perm_preco_tabela")
   descontoMaxPct     Decimal? @map("desconto_max_pct") @db.Decimal(5, 2)
   vendaSemAprovacaoAte Decimal? @map("venda_sem_aprovacao_ate") @db.Decimal(12, 2)
 

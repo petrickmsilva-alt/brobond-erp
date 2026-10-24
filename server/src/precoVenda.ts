@@ -3,21 +3,24 @@
 //
 // Separa, em cada linha da venda:
 //   • preço de TABELA  → referência da precificação/cadastro (snapshot);
-//   • preço de VENDA   → preço efetivamente praticado;
-//   • desconto %       → percentual concedido SOBRE o preço de tabela;
-//   • desconto R$      → valor concedido SOBRE o preço de tabela;
-//   • SUBTOTAL         → preço de venda × quantidade.
+//   • preço de VENDA   → preço comercial efetivamente praticado;
+//   • desconto %       → percentual concedido SOBRE o preço de VENDA;
+//   • desconto R$      → valor concedido SOBRE o preço de VENDA;
+//   • SUBTOTAL         → preço líquido × quantidade.
+//
+// REGRA COMERCIAL DESTE ERP: a BASE do desconto é SEMPRE o preço de VENDA.
+// O preço de tabela NÃO participa do cálculo do desconto — ele é apenas a
+// referência comercial preservada como snapshot histórico da venda.
 //
 // Invariantes (garantidas em qualquer ordem de edição):
-//   preco_venda      = round2(tabela × (1 − pct/100))
-//   desconto_unit    = round2(tabela − preco_venda)
-//   bruto_linha      = round2(qtd × tabela)
-//   subtotal_linha   = round2(qtd × tabela × (1 − pct/100))   (fórmula do ERP)
-//   desconto_linha   = bruto_linha − subtotal_linha   (exato, sem centavo solto)
+//   desconto_unit    = round2(preco_venda × pct/100)
+//   preco_liquido    = round2(preco_venda − desconto_unit)
+//   subtotal_linha   = round2(qtd × preco_liquido)
 //
-// PRECISÃO: dinheiro em 2 casas (round2), percentual em 2 casas. O percentual é
-// derivado do valor monetário arredondado — nunca o contrário — para que
-// "tabela − desconto R$ = preço de venda" feche sempre no centavo.
+// PRECISÃO: dinheiro em 2 casas (round2), percentual em 2 casas. O percentual
+// derivado de um desconto em R$ é calculado sobre o preço de venda e
+// arredondado a 2 casas; o desconto em R$ derivado do percentual é a fonte do
+// líquido, para que "preço de venda − desconto R$ = líquido" feche no centavo.
 //
 // Este módulo é a autoridade do backend. O frontend espelha as mesmas funções
 // (client/src/lib/precoVenda.ts) apenas para resposta imediata na tela; o
@@ -40,66 +43,88 @@ export function normalizarPct(pct: unknown): number {
   return round2(n);
 }
 
-/** Preço de venda (unitário) a partir do preço de tabela e do desconto %. */
-export function precoVendaDe(tabela: number, pct: number): number {
-  return round2(Math.max(0, num(tabela) * (1 - normalizarPct(pct) / 100)));
+/** Preço de venda normalizado (2 casas, nunca negativo). */
+export function normalizarPrecoVenda(preco: unknown): number {
+  return round2(Math.max(0, num(preco)));
 }
 
-/** Desconto em R$ (unitário) a partir do preço de tabela e do desconto %. */
-export function descontoUnitarioDe(tabela: number, pct: number): number {
-  return round2(Math.max(0, num(tabela) - precoVendaDe(tabela, pct)));
+/** Desconto em R$ (unitário) a partir do preço de venda e do desconto %. */
+export function descontoUnitarioDe(precoVenda: number, pct: number): number {
+  return round2(Math.max(0, num(precoVenda) * (normalizarPct(pct) / 100)));
 }
 
-/** Desconto % (2 casas) equivalente a um preço de venda informado. */
-export function pctDePrecoVenda(tabela: number, precoVenda: number): number {
-  const t = num(tabela);
-  if (t <= 0) return 0;
-  return normalizarPct((1 - num(precoVenda) / t) * 100);
+/** Preço líquido (unitário) = preço de venda − desconto em R$. */
+export function precoLiquidoDe(precoVenda: number, descontoUnitario: number): number {
+  return round2(Math.max(0, num(precoVenda) - num(descontoUnitario)));
 }
 
-/** Desconto % (2 casas) equivalente a um desconto em R$ (unitário) informado. */
-export function pctDeDescontoUnitario(tabela: number, descontoUnitario: number): number {
-  const t = num(tabela);
-  if (t <= 0) return 0;
-  return normalizarPct((num(descontoUnitario) / t) * 100);
+/**
+ * Preço líquido (unitário) a partir do preço de venda e do desconto %.
+ * É o "preço de venda após desconto" — o que o operador enxerga na linha.
+ */
+export function precoLiquidoDePct(precoVenda: number, pct: number): number {
+  return precoLiquidoDe(precoVenda, descontoUnitarioDe(precoVenda, pct));
 }
 
-/** Preço de venda (unitário) a partir do desconto em R$ (unitário). */
-export function precoVendaDeDescontoUnitario(tabela: number, descontoUnitario: number): number {
-  return round2(Math.max(0, num(tabela) - num(descontoUnitario)));
+/** Desconto % (2 casas) equivalente a um desconto em R$ sobre o preço de venda. */
+export function pctDeDescontoUnitario(precoVenda: number, descontoUnitario: number): number {
+  const base = num(precoVenda);
+  if (base <= 0) return 0;
+  return normalizarPct((num(descontoUnitario) / base) * 100);
+}
+
+/** Desconto % (2 casas) equivalente a um preço líquido informado. */
+export function pctDePrecoLiquido(precoVenda: number, precoLiquido: number): number {
+  const base = num(precoVenda);
+  if (base <= 0) return 0;
+  const desconto = Math.max(0, base - num(precoLiquido));
+  return normalizarPct((desconto / base) * 100);
+}
+
+/**
+ * Desconto em R$ (unitário) equivalente a um preço líquido desejado.
+ * Limitado ao próprio preço de venda (o líquido nunca fica negativo).
+ */
+export function descontoUnitarioDePrecoLiquido(precoVenda: number, precoLiquido: number): number {
+  const base = num(precoVenda);
+  return round2(Math.min(base, Math.max(0, base - num(precoLiquido))));
 }
 
 export type LinhaPreco = {
+  /** Preço de tabela (referência/snapshot). NÃO é base do desconto. */
   tabela: number;
+  /** Preço de venda praticado — base do desconto. */
   precoVenda: number;
   descontoPct: number;
   descontoUnitario: number;
+  /** Preço de venda × quantidade (preço bruto da linha). */
   bruto: number;
+  /** Preço líquido × quantidade. */
   subtotal: number;
+  /** Desconto total da linha (bruto − subtotal). */
   desconto: number;
 };
 
 /**
- * Fecha uma linha da venda a partir do preço de TABELA e do desconto %.
+ * Fecha uma linha da venda a partir do preço de VENDA e do desconto %.
  *
- * O subtotal usa a fórmula canônica do ERP — `round2(qtd × tabela × (1 − pct))`
- * — e não `round2(qtd × preço de venda)`: as duas coincidem em praticamente
- * todos os casos, mas a primeira é a que o backend grava, então é ela que a
- * tela precisa espelhar para não exibir um centavo diferente do servidor.
- * O desconto da linha é a diferença EXATA para o bruto.
+ * O preço de tabela é apenas transportado como referência — ele não entra em
+ * nenhuma conta. O subtotal é `round2(qtd × (preço de venda − desconto R$))`.
  */
-export function linhaDePreco(quantidade: unknown, tabela: unknown, descontoPct: unknown): LinhaPreco {
+export function linhaDePreco(quantidade: unknown, precoVenda: unknown, descontoPct: unknown, precoTabela: unknown = 0): LinhaPreco {
   const qtd = num(quantidade);
-  const t = round2(Math.max(0, num(tabela)));
+  const venda = normalizarPrecoVenda(precoVenda);
   const pct = normalizarPct(descontoPct);
-  const precoVenda = precoVendaDe(t, pct);
-  const bruto = round2(qtd * t);
-  const subtotal = round2(qtd * t * (1 - pct / 100));
+  const tabela = round2(Math.max(0, num(precoTabela)));
+  const descontoUnitario = descontoUnitarioDe(venda, pct);
+  const liquido = precoLiquidoDe(venda, descontoUnitario);
+  const bruto = round2(qtd * venda);
+  const subtotal = round2(qtd * liquido);
   return {
-    tabela: t,
-    precoVenda,
+    tabela,
+    precoVenda: venda,
     descontoPct: pct,
-    descontoUnitario: round2(t - precoVenda),
+    descontoUnitario,
     bruto,
     subtotal,
     desconto: round2(bruto - subtotal),
@@ -107,7 +132,7 @@ export function linhaDePreco(quantidade: unknown, tabela: unknown, descontoPct: 
 }
 
 export type ResumoVenda = {
-  /** Soma dos itens pelo preço de tabela (preço bruto). */
+  /** Soma dos itens pelo preço de venda (preço bruto). */
   bruto: number;
   /** Descontos concedidos nas linhas. */
   descontoLinhas: number;
