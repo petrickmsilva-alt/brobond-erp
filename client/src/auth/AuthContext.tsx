@@ -17,6 +17,7 @@ export type User = {
   perm_metricas?: string;
   perm_politicas?: string;
   perm_aprovar?: string;
+  perm_preco_tabela?: string;
   desconto_max_pct?: number | null;
   venda_sem_aprovacao_ate?: number | null;
 };

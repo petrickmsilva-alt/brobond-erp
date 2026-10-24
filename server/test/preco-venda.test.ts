@@ -1,12 +1,17 @@
 // ============================================================================
-// FORMAÇÃO PROFISSIONAL DO PREÇO DA VENDA — suíte canônica do servidor.
+// FORMAÇÃO DO PREÇO DA VENDA — suíte canônica do servidor.
+//
+// REGRA COMERCIAL DESTE ERP: a BASE do desconto é SEMPRE o PREÇO DE VENDA.
+// O preço de TABELA é referência comercial (snapshot) e NÃO participa do
+// cálculo. O SUBTOTAL é `preço líquido × quantidade`.
 //
 // Prova, pelo CONTRATO DO BACKEND (não pela tela), que a linha da venda
 // distingue: preço de tabela → preço de venda → desconto % → desconto R$ →
 // subtotal, e que o resumo fecha em preço bruto → desconto → líquido → frete →
 // total, sem o erro "Desconto − R$ 0,00" quando há desconto nas linhas.
 //
-// Cobre os 12 cenários obrigatórios do pedido de correção.
+// Cobre os casos obrigatórios da tarefa e a autorização (backend) para alterar
+// o preço de tabela, com auditoria.
 // ============================================================================
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,51 +20,55 @@ process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
 
 const { RESOURCES } = await import('../src/resources');
-const { createRecord, getRecord, getStore } = await import('../src/services');
+const { createRecord, getRecord, getStore, podeEditarPrecoTabela } = await import('../src/services');
 const { createItem, updateItem, deleteItem } = await import('../src/itens');
 const {
+  descontoUnitarioDe,
+  descontoUnitarioDePrecoLiquido,
   linhaDePreco,
   normalizarPct,
+  normalizarPrecoVenda,
   pctDeDescontoUnitario,
-  pctDePrecoVenda,
-  precoVendaDe,
-  precoVendaDeDescontoUnitario,
+  pctDePrecoLiquido,
+  precoLiquidoDe,
   resumoVenda,
 } = await import('../src/precoVenda');
-const { garantirAdmin, novoCliente, novoProduto, novoTamanho, reqDe } = await import('./_p1util');
+const { garantirAdmin, novoCliente, novoProduto, novoTamanho, reqDe, criarAtor } = await import('./_p1util');
 
 await garantirAdmin();
-const gerente = { id: 1, name: 'Admin Teste', perfil: 'admin' as const, empresa_id: 1, empresas: [1] };
+const admin = { id: 1, name: 'Admin Teste', perfil: 'admin' as const, empresa_id: 1, empresas: [1] };
+// Perfil que NÃO tem autorização de tabela (nem por perfil, nem explícita).
+const operador = await criarAtor(1, 'operador');
 
 const cliente = await novoCliente({ nome: 'Cliente Preço Venda' });
-const produto90 = await novoProduto({ sku: 'PV-90', nome: 'Produto Tabela 90', preco_venda: 90 });
 const produto80 = await novoProduto({ sku: 'PV-80', nome: 'Produto Tabela 80', preco_venda: 80 });
+const produto90 = await novoProduto({ sku: 'PV-90', nome: 'Produto Tabela 90', preco_venda: 90 });
 const produtoSemTabela = await novoProduto({ sku: 'PV-0', nome: 'Produto Sem Preço', preco_venda: 0 });
 const tamanho = await novoTamanho('PV-TAM');
 
-function mockItem(vendaId: number, body: Record<string, unknown>, itemId?: number): any {
-  const req = reqDe(body, { params: itemId ? { id: String(vendaId), itemId: String(itemId) } : { id: String(vendaId) }, user: gerente });
+function mockItem(vendaId: number, body: Record<string, unknown>, itemId?: number, user: any = admin): any {
+  const req = reqDe(body, { params: itemId ? { id: String(vendaId), itemId: String(itemId) } : { id: String(vendaId) }, user });
   req.path = `/api/vendas/${vendaId}/itens${itemId ? `/${itemId}` : ''}`;
   return req;
 }
 
-async function novaVenda(extra: Record<string, unknown> = {}) {
+async function novaVenda(extra: Record<string, unknown> = {}, user: any = admin) {
   return createRecord(
     RESOURCES.vendas,
     { cliente_id: cliente.id, data: '2026-10-23', status: 'aberta', canal_venda: 'balcao', ...extra },
-    gerente
+    user
   );
 }
 
-async function addItem(vendaId: number, body: Record<string, unknown>) {
+async function addItem(vendaId: number, body: Record<string, unknown>, user: any = admin) {
   let saida: any;
-  await createItem(mockItem(vendaId, body), { status: () => ({ json: (d: any) => (saida = d) }) } as any);
+  await createItem(mockItem(vendaId, body, undefined, user), { status: () => ({ json: (d: any) => (saida = d) }) } as any);
   return saida;
 }
 
-async function editarItem(vendaId: number, itemId: number, body: Record<string, unknown>) {
+async function editarItem(vendaId: number, itemId: number, body: Record<string, unknown>, user: any = admin) {
   let saida: any;
-  await updateItem(mockItem(vendaId, body, itemId), { json: (d: any) => (saida = d) } as any);
+  await updateItem(mockItem(vendaId, body, itemId, user), { json: (d: any) => (saida = d) } as any);
   return saida;
 }
 
@@ -67,207 +76,224 @@ async function itensDaVenda(vendaId: number) {
   return (await getStore().list(RESOURCES.itens_venda, { page: 1, pageSize: 100, filter: { venda_id: vendaId } })).rows;
 }
 
+async function auditoriaDaVenda(vendaId: number) {
+  return (await getStore().list(RESOURCES.auditoria, { page: 1, pageSize: 500, filter: { recurso: 'vendas', registro_id: vendaId } })).rows;
+}
+
 // ---------------------------------------------------------------------------
-// Funções puras — a base de tudo
+// Funções puras — os casos obrigatórios da tarefa
 // ---------------------------------------------------------------------------
 
-test('cenário 1 — tabela 90 com 20%: preço de venda 72 e desconto R$ 18', () => {
-  const linha = linhaDePreco(1, 90, 20);
-  assert.equal(linha.tabela, 90);
-  assert.equal(linha.precoVenda, 72);
-  assert.equal(linha.descontoPct, 20);
-  assert.equal(linha.descontoUnitario, 18);
-  assert.equal(linha.subtotal, 72);
-  assert.equal(linha.desconto, 18);
+test('CASO 1 — venda 90 com 20%: desconto R$ 18 e líquido R$ 72', () => {
+  const l = linhaDePreco(1, 90, 20);
+  assert.equal(l.precoVenda, 90);
+  assert.equal(l.descontoPct, 20);
+  assert.equal(l.descontoUnitario, 18);
+  assert.equal(l.subtotal, 72);
+  assert.equal(l.desconto, 18);
 });
 
-test('cenário 2 — tabela 90 com 20,5%: preço de venda 71,55 e desconto R$ 18,45', () => {
-  const linha = linhaDePreco(1, 90, 20.5);
-  assert.equal(linha.precoVenda, 71.55);
-  assert.equal(linha.descontoUnitario, 18.45);
-  assert.equal(linha.subtotal, 71.55);
-  assert.equal(linha.desconto, 18.45);
+test('CASO 2 — venda 90 com desconto R$ 18: desconto 20% e líquido R$ 72', () => {
+  const pct = pctDeDescontoUnitario(90, 18);
+  assert.equal(pct, 20);
+  const l = linhaDePreco(1, 90, pct);
+  assert.equal(l.descontoUnitario, 18);
+  assert.equal(l.subtotal, 72);
 });
 
-test('cenário 3 — tabela 90 e preço de venda 68: desconto R$ 22 e desconto 24,44%', () => {
-  const pct = pctDePrecoVenda(90, 68);
-  assert.equal(pct, 24.44);
-  assert.equal(precoVendaDe(90, pct), 68);
-  const linha = linhaDePreco(1, 90, pct);
-  assert.equal(linha.descontoUnitario, 22);
-  assert.equal(linha.descontoPct, 24.44);
+test('CASO 3 — venda 90 com líquido desejado 72: desconto R$ 18 e 20%', () => {
+  assert.equal(descontoUnitarioDePrecoLiquido(90, 72), 18);
+  assert.equal(pctDePrecoLiquido(90, 72), 20);
+  assert.equal(precoLiquidoDe(90, 18), 72);
 });
 
-test('cenário 4 — tabela 90 e desconto R$ 15: preço de venda 75 e desconto 16,67%', () => {
+test('CASO 4 — venda 90 menos R$ 15: líquido R$ 75 e 16,67%', () => {
   const pct = pctDeDescontoUnitario(90, 15);
   assert.equal(pct, 16.67);
-  assert.equal(precoVendaDeDescontoUnitario(90, 15), 75);
-  const linha = linhaDePreco(1, 90, pct);
-  assert.equal(linha.precoVenda, 75);
-  assert.equal(linha.descontoUnitario, 15);
+  const l = linhaDePreco(1, 90, pct);
+  assert.equal(l.subtotal, 75);
+  assert.equal(l.descontoUnitario, 15);
 });
 
-test('cenário 5 — sem desconto: preço de tabela = preço de venda, desconto 0 e subtotal correto', () => {
-  const linha = linhaDePreco(3, 90, 0);
-  assert.equal(linha.precoVenda, 90);
-  assert.equal(linha.descontoPct, 0);
-  assert.equal(linha.descontoUnitario, 0);
-  assert.equal(linha.subtotal, 270);
-  assert.equal(linha.desconto, 0);
+test('CASO 5 — venda 90 com 20,5%: desconto R$ 18,45 e líquido R$ 71,55', () => {
+  const l = linhaDePreco(1, 90, 20.5);
+  assert.equal(l.descontoUnitario, 18.45);
+  assert.equal(l.subtotal, 71.55);
 });
 
-test('cenário 6 — quantidade maior que 1: subtotal = preço de venda × quantidade e desconto total correto', () => {
-  const linha = linhaDePreco(2, 80, 20);
-  assert.equal(linha.precoVenda, 64);
-  assert.equal(linha.subtotal, 128);
-  assert.equal(linha.bruto, 160);
-  assert.equal(linha.desconto, 32);
+test('sem desconto: desconto 0 e subtotal = venda × quantidade', () => {
+  const l = linhaDePreco(3, 90, 0);
+  assert.equal(l.precoVenda, 90);
+  assert.equal(l.descontoPct, 0);
+  assert.equal(l.descontoUnitario, 0);
+  assert.equal(l.subtotal, 270);
 });
 
-test('cenário 7 — múltiplas linhas com descontos diferentes: o resumo soma corretamente', () => {
-  const l1 = linhaDePreco(1, 90, 20); // 72, desc 18
-  const l2 = linhaDePreco(1, 90, 0); // 90, desc 0
-  const l3 = linhaDePreco(2, 80, 20); // 128, desc 32
-  const r = resumoVenda([l1, l2, l3], 0, 0);
-  assert.equal(r.bruto, 90 + 90 + 160);
-  assert.equal(r.descontoLinhas, 18 + 0 + 32);
-  assert.equal(r.subtotalLiquido, 72 + 90 + 128);
-  assert.equal(r.total, 72 + 90 + 128);
+test('quantidade maior que 1: subtotal = líquido × quantidade', () => {
+  const l = linhaDePreco(2, 90, 20);
+  assert.equal(l.subtotal, 144);
+  assert.equal(l.bruto, 180);
+  assert.equal(l.desconto, 36);
 });
 
-test('cenário 8 — frete: subtotal líquido + frete = total', () => {
-  const l = linhaDePreco(1, 90, 20);
-  const r = resumoVenda([l], 0, 25);
+test('O PREÇO DE TABELA NÃO INTERFERE NO CÁLCULO (tabela 80, venda 90, 20%)', () => {
+  const comTabela = linhaDePreco(1, 90, 20, 80);
+  const semTabela = linhaDePreco(1, 90, 20);
+  assert.equal(comTabela.tabela, 80);
+  assert.equal(comTabela.descontoUnitario, 18);
+  assert.equal(comTabela.subtotal, 72);
+  assert.deepEqual({ ...comTabela, tabela: 0 }, { ...semTabela, tabela: 0 });
+});
+
+test('múltiplas linhas: o resumo soma e o percentual é ponderado pelo bruto', () => {
+  const r = resumoVenda([linhaDePreco(1, 90, 20), linhaDePreco(1, 90, 0), linhaDePreco(2, 90, 20)], 0, 0);
+  assert.equal(r.bruto, 360);
+  assert.equal(r.descontoLinhas, 54);
+  assert.equal(r.subtotalLiquido, 306);
+  assert.equal(r.total, 306);
+  // 50% em 100 e 0% em 300 → 50/400 = 12,5% (não a média simples 25%).
+  const ponderado = resumoVenda([linhaDePreco(1, 100, 50), linhaDePreco(1, 300, 0)], 0, 0);
+  assert.equal(ponderado.descontoPct, 12.5);
+  assert.notEqual(ponderado.descontoPct, 25);
+});
+
+test('frete: subtotal líquido + frete = total', () => {
+  const r = resumoVenda([linhaDePreco(1, 90, 20)], 0, 25);
   assert.equal(r.subtotalLiquido, 72);
-  assert.equal(r.frete, 25);
   assert.equal(r.total, 97);
 });
 
-test('cenário 9 — 20% em quatro linhas: tabela 430, desconto 86, total 344', () => {
-  const linhas = [
-    linhaDePreco(1, 90, 20),
-    linhaDePreco(1, 90, 20),
-    linhaDePreco(1, 90, 20),
-    linhaDePreco(2, 80, 20),
-  ];
-  const r = resumoVenda(linhas, 0, 0);
-  assert.equal(r.bruto, 430);
-  assert.equal(r.descontoLinhas, 86);
-  assert.equal(r.subtotalLiquido, 344);
-  assert.equal(r.total, 344);
-  assert.equal(r.descontoPct, 20);
-});
-
-test('cenário 10 — alterar o preço de venda várias vezes não acumula erro de arredondamento', () => {
-  let pct = 0;
-  for (const preco of [89.99, 71.55, 68, 90, 45.5, 12.34, 89.99, 68]) {
-    pct = pctDePrecoVenda(90, preco);
-    const linha = linhaDePreco(1, 90, pct);
-    // Volta e fecha sempre no mesmo centavo: tabela − desconto = preço de venda.
-    assert.equal(linha.descontoUnitario + linha.precoVenda, 90, `preço ${preco} não fechou`);
-  }
-  assert.equal(precoVendaDe(90, pctDePrecoVenda(90, 68)), 68);
-});
-
-test('cenário 11 — alterar o desconto % várias vezes mantém preço de venda coerente', () => {
-  for (const pct of [0, 5, 12.5, 20, 20.5, 33.33, 50, 99.99, 100]) {
-    const linha = linhaDePreco(1, 90, pct);
-    assert.equal(linha.precoVenda, precoVendaDe(90, pct));
-    assert.equal(linha.descontoUnitario + linha.precoVenda, 90, `pct ${pct} não fechou`);
-  }
-  assert.equal(linhaDePreco(1, 90, 100).precoVenda, 0);
-});
-
-test('cenário 12 — valores inválidos/negativos são normalizados para um intervalo seguro', () => {
+test('valores inválidos/negativos são normalizados para um intervalo seguro', () => {
   assert.equal(normalizarPct(-10), 0);
   assert.equal(normalizarPct(150), 100);
-  assert.equal(linhaDePreco(1, 90, -5).precoVenda, 90, 'percentual negativo não aumenta o preço');
-  assert.equal(linhaDePreco(1, 90, -5).descontoPct, 0);
-  assert.equal(linhaDePreco(1, 90, 120).precoVenda, 0, 'percentual acima de 100 não gera preço negativo');
-  assert.equal(linhaDePreco(1, -50, 20).tabela, 0, 'preço de tabela negativo é tratado como 0');
+  assert.equal(normalizarPrecoVenda(-5), 0);
+  assert.equal(linhaDePreco(1, 90, -5).descontoUnitario, 0);
+  assert.equal(linhaDePreco(1, 90, 120).subtotal, 0);
+  assert.equal(linhaDePreco(1, -50, 20).precoVenda, 0);
 });
 
 // ---------------------------------------------------------------------------
-// Contrato HTTP/serviço — o backend é a autoridade
+// Contrato de serviço — o backend é a autoridade
 // ---------------------------------------------------------------------------
 
-test('item da venda: grava o snapshot do preço de tabela e calcula subtotal pelo preço de venda', async () => {
+test('item: grava o snapshot da tabela e calcula o subtotal pelo preço de VENDA', async () => {
   const v = await novaVenda();
-  const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
-  assert.equal(Number(item.preco_tabela), 90, 'snapshot do preço de tabela');
-  assert.equal(Number(item.preco_unitario), 90, 'base da linha = preço de tabela');
+  const item = await addItem(Number(v.id), {
+    produto_id: Number(produto80.id),
+    tamanho_id: Number(tamanho.id),
+    quantidade: 1,
+    preco_unitario: 90,
+    desconto_pct: 20,
+  });
+  assert.equal(Number(item.preco_tabela), 80, 'snapshot do preço de tabela do produto');
+  assert.equal(Number(item.preco_unitario), 90, 'preço de venda é a base');
   assert.equal(Number(item.desconto_pct), 20);
-  assert.equal(Number(item.subtotal), 72, 'subtotal = preço de venda × quantidade');
+  assert.equal(Number(item.subtotal), 72, 'tabela 80 NÃO entra na conta: 90 − 18 = 72');
 
-  const venda = await getRecord(RESOURCES.vendas, Number(v.id), gerente);
+  const venda = await getRecord(RESOURCES.vendas, Number(v.id), admin);
   assert.equal(Number(venda.total), 72);
 });
 
-test('item da venda: preço de venda abaixo da tabela deriva o desconto % (24,44%)', async () => {
+test('item: preço de venda acima da tabela mantém o desconto informado', async () => {
   const v = await novaVenda();
-  const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 68 });
-  assert.equal(Number(item.preco_tabela), 90);
-  assert.equal(Number(item.preco_unitario), 90, 'base continua a tabela');
-  assert.equal(Number(item.desconto_pct), 24.44, 'desconto derivado do preço de venda');
-  assert.equal(Number(item.subtotal), 68);
+  const item = await addItem(Number(v.id), {
+    produto_id: Number(produto80.id),
+    tamanho_id: Number(tamanho.id),
+    quantidade: 1,
+    preco_unitario: 100,
+    desconto_pct: 10,
+  });
+  assert.equal(Number(item.preco_tabela), 80, 'tabela continua sendo a referência');
+  assert.equal(Number(item.preco_unitario), 100);
+  assert.equal(Number(item.subtotal), 90, '10% sobre 100, não sobre 80');
 });
 
-test('item da venda: preço de venda não pode ser reescrito pelo cliente e a tabela é imutável na linha', async () => {
+test('item: alterar só o preço de venda MANTÉM o desconto atual', async () => {
   const v = await novaVenda();
-  const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
-  // O cliente tenta forjar um preço de tabela maior: é ignorado (readonly).
-  const editado = await editarItem(Number(v.id), Number(item.id), { preco_tabela: 1000, quantidade: 2 });
-  assert.equal(Number(editado.preco_tabela), 90, 'a tabela continua a referência da venda');
-  assert.equal(Number(editado.desconto_pct), 20, 'o desconto foi preservado na edição só da quantidade');
-  assert.equal(Number(editado.subtotal), 144, '2 × 72');
+  const item = await addItem(Number(v.id), {
+    produto_id: Number(produto90.id),
+    tamanho_id: Number(tamanho.id),
+    quantidade: 1,
+    preco_unitario: 90,
+    desconto_pct: 20,
+  });
+  const editado = await editarItem(Number(v.id), Number(item.id), { preco_unitario: 100 });
+  assert.equal(Number(editado.preco_unitario), 100);
+  assert.equal(Number(editado.desconto_pct), 20, 'o desconto foi preservado');
+  assert.equal(Number(editado.subtotal), 80, '100 − 20% = 80');
+  assert.equal(Number(editado.preco_tabela), 90, 'a tabela não mudou');
 });
 
-test('item da venda: desconto acima de 100% é recusado pela validação (não gera preço negativo)', async () => {
+test('item: desconto acima de 100% é recusado pela validação (não gera preço negativo)', async () => {
   const v = await novaVenda();
   await assert.rejects(
-    () => addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 150 }),
+    () =>
+      addItem(Number(v.id), {
+        produto_id: Number(produto90.id),
+        tamanho_id: Number(tamanho.id),
+        quantidade: 1,
+        preco_unitario: 90,
+        desconto_pct: 150,
+      }),
     (e: any) => e?.status === 400 && e?.fields?.desconto_pct === 'Máximo: 100'
   );
 });
 
-test('item da venda: produto sem preço de tabela aceita o preço informado como preço de venda', async () => {
+test('item: preço de venda negativo e quantidade inválida são recusados', async () => {
   const v = await novaVenda();
-  const item = await addItem(Number(v.id), { produto_id: Number(produtoSemTabela.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 50 });
+  await assert.rejects(
+    () => addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: -5 }),
+    (e: any) => e?.status === 400
+  );
+  await assert.rejects(
+    () => addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 0, preco_unitario: 90 }),
+    (e: any) => e?.status === 400
+  );
+});
+
+test('item: produto sem preço de tabela aceita o preço informado como preço de venda', async () => {
+  const v = await novaVenda();
+  const item = await addItem(Number(v.id), {
+    produto_id: Number(produtoSemTabela.id),
+    tamanho_id: Number(tamanho.id),
+    quantidade: 1,
+    preco_unitario: 50,
+  });
   assert.equal(Number(item.preco_tabela), 0);
   assert.equal(Number(item.preco_unitario), 50);
   assert.equal(Number(item.desconto_pct), 0);
   assert.equal(Number(item.subtotal), 50);
 });
 
-test('resumo da venda: quatro linhas com 20% mostram desconto real de R$ 86 (não R$ 0,00)', async () => {
+test('resumo: linha com tabela 80 e venda 90 a 20% mostra desconto R$ 18 (nunca − R$ 0,00)', async () => {
   const v = await novaVenda();
-  await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
-  await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
-  await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
-  await addItem(Number(v.id), { produto_id: Number(produto80.id), tamanho_id: Number(tamanho.id), quantidade: 2, preco_unitario: 80, desconto_pct: 20 });
-
+  await addItem(Number(v.id), {
+    produto_id: Number(produto80.id),
+    tamanho_id: Number(tamanho.id),
+    quantidade: 1,
+    preco_unitario: 90,
+    desconto_pct: 20,
+  });
   const itens = await itensDaVenda(Number(v.id));
-  const linhas = itens.map((it) => ({
-    bruto: Number(it.quantidade) * Number(it.preco_tabela ?? it.preco_unitario),
-    subtotal: Number(it.subtotal),
-  }));
-  const r = resumoVenda(linhas, 0, 0);
-  assert.equal(r.bruto, 430, 'preço de tabela total');
-  assert.equal(r.descontoLinhas, 86, 'desconto real das linhas');
-  assert.equal(r.subtotalLiquido, 344);
-  assert.equal(r.total, 344);
-  assert.equal(r.descontoPct, 20, 'percentual total = desconto / bruto (não média simples)');
-
-  const venda = await getRecord(RESOURCES.vendas, Number(v.id), gerente);
-  assert.equal(Number(venda.total), 344, 'total do servidor bate com o resumo');
+  const r = resumoVenda(
+    itens.map((it) => ({ bruto: Number(it.quantidade) * Number(it.preco_unitario), subtotal: Number(it.subtotal) })),
+    0,
+    0
+  );
+  assert.equal(r.bruto, 90, 'preço bruto = preço de venda');
+  assert.equal(r.descontoLinhas, 18);
+  assert.equal(r.descontoTotal, 18);
+  assert.equal(r.subtotalLiquido, 72);
+  const venda = await getRecord(RESOURCES.vendas, Number(v.id), admin);
+  assert.equal(Number(venda.total), 72);
 });
 
-test('resumo da venda: desconto comercial do cabeçalho entra no desconto total e no total', async () => {
+test('resumo: desconto comercial do cabeçalho entra no desconto total e no total', async () => {
   const v = await novaVenda({ desconto: 10, frete: 5 });
   await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 2, preco_unitario: 90, desconto_pct: 20 });
   const itens = await itensDaVenda(Number(v.id));
   const r = resumoVenda(
-    itens.map((it) => ({ bruto: Number(it.quantidade) * Number(it.preco_tabela ?? it.preco_unitario), subtotal: Number(it.subtotal) })),
+    itens.map((it) => ({ bruto: Number(it.quantidade) * Number(it.preco_unitario), subtotal: Number(it.subtotal) })),
     10,
     5
   );
@@ -275,37 +301,91 @@ test('resumo da venda: desconto comercial do cabeçalho entra no desconto total 
   assert.equal(r.descontoLinhas, 36);
   assert.equal(r.descontoPedido, 10);
   assert.equal(r.descontoTotal, 46);
-  assert.equal(r.total, 144 - 10 + 5);
+  assert.equal(r.total, 139);
+  const venda = await getRecord(RESOURCES.vendas, Number(v.id), admin);
+  assert.equal(Number(venda.total), 139);
 });
 
-test('item da venda: remover item mantém o desconto das linhas restantes no resumo', async () => {
+// ---------------------------------------------------------------------------
+// EDIÇÃO BIDIRECIONAL — o servidor mantém os três campos coerentes
+// ---------------------------------------------------------------------------
+
+test('edição bidirecional: desconto % → R$ → líquido, sem acumular erro de arredondamento', async () => {
   const v = await novaVenda();
-  const a = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
-  await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
-  await deleteItem(mockItem(Number(v.id), {}, Number(a.id)), { json: () => undefined } as any);
-  const itens = await itensDaVenda(Number(v.id));
-  assert.equal(itens.length, 1);
-  const r = resumoVenda(
-    itens.map((it) => ({ bruto: Number(it.quantidade) * Number(it.preco_tabela ?? it.preco_unitario), subtotal: Number(it.subtotal) })),
-    0,
-    0
-  );
-  assert.equal(r.bruto, 90);
-  assert.equal(r.descontoLinhas, 18);
-  assert.equal(r.total, 72);
+  const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
+  // 20% → venda 68 → venda 75 → 10% → desconto R$ 15 → 20,5%.
+  const roteiro: Array<Record<string, unknown>> = [
+    { desconto_pct: 20 },
+    { preco_unitario: 68 },
+    { preco_unitario: 75 },
+    { desconto_pct: 10 },
+    { desconto_pct: pctDeDescontoUnitario(90, 15) },
+    { desconto_pct: 20.5 },
+  ];
+  for (const passo of roteiro) {
+    const r = await editarItem(Number(v.id), Number(item.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, ...passo });
+    const venda = Number(r.preco_unitario);
+    const pct = Number(r.desconto_pct);
+    const descRs = descontoUnitarioDe(venda, pct);
+    assert.equal(Number(r.subtotal), precoLiquidoDe(venda, descRs), `subtotal divergente em ${JSON.stringify(passo)}`);
+    assert.equal(Number(r.preco_tabela), 90, 'a tabela é referência e não muda');
+  }
+  const final = await editarItem(Number(v.id), Number(item.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20.5 });
+  assert.equal(Number(final.subtotal), 71.55);
 });
 
-test('item da venda: desconto de linha isolado não zera o resumo (regressão "Desconto − R$ 0,00")', async () => {
+// ---------------------------------------------------------------------------
+// AUTORIZAÇÃO DO PREÇO DE TABELA — aplicada no BACKEND, com auditoria
+// ---------------------------------------------------------------------------
+
+test('autorização: operador SEM permissão não altera o preço de tabela (403 do servidor)', async () => {
+  assert.equal(podeEditarPrecoTabela(operador), false, 'operador sem autorização explícita não edita');
   const v = await novaVenda();
-  await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
-  const itens = await itensDaVenda(Number(v.id));
-  const r = resumoVenda(
-    itens.map((it) => ({ bruto: Number(it.quantidade) * Number(it.preco_tabela ?? it.preco_unitario), subtotal: Number(it.subtotal) })),
-    0,
-    0
+  const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
+  await assert.rejects(
+    () => editarItem(Number(v.id), Number(item.id), { preco_tabela: 100 }, operador),
+    (e: any) => e?.status === 403
   );
-  assert.notEqual(r.descontoLinhas, 0);
-  assert.equal(r.descontoLinhas, 18);
+  // A linha permanece intacta.
+  const relido = (await itensDaVenda(Number(v.id)))[0];
+  assert.equal(Number(relido.preco_tabela), 90);
+});
+
+test('autorização: operador COM permissão explícita altera o preço de tabela e a mudança é auditada', async () => {
+  const autorizado = await criarAtor(1, 'operador');
+  await getStore().update(RESOURCES.usuarios, Number(autorizado.id), { perm_preco_tabela: 'permitir' });
+  const ator = { ...autorizado, perm_preco_tabela: 'permitir' };
+  assert.equal(podeEditarPrecoTabela(ator), true);
+
+  const v = await novaVenda();
+  const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 }, ator);
+  const editado = await editarItem(Number(v.id), Number(item.id), { preco_tabela: 120 }, ator);
+  assert.equal(Number(editado.preco_tabela), 120, 'a tabela foi alterada');
+  assert.equal(Number(editado.preco_unitario), 90, 'o preço de venda não mudou');
+  assert.equal(Number(editado.subtotal), 72, 'o cálculo do desconto não usou a tabela');
+
+  const auditoria = await auditoriaDaVenda(Number(v.id));
+  const registro = auditoria.find((a) => /Preço de tabela/i.test(String(a.descricao || '')));
+  assert.ok(registro, 'a alteração do preço de tabela foi registrada na auditoria');
+  assert.match(String((registro as any).descricao), /de 90\.00 para 120\.00/);
+  assert.equal(Number((registro as any).registro_id), Number(v.id));
+  assert.equal(String((registro as any).usuario), ator.name, 'a trilha identifica quem alterou');
+});
+
+test('autorização: admin altera o preço de tabela sem precisar de concessão explícita', async () => {
+  assert.equal(podeEditarPrecoTabela(admin), true);
+  const v = await novaVenda();
+  const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
+  const editado = await editarItem(Number(v.id), Number(item.id), { preco_tabela: 85 });
+  assert.equal(Number(editado.preco_tabela), 85);
+});
+
+test('autorização: enviar a MESMA tabela vigente não exige permissão (não é alteração)', async () => {
+  const v = await novaVenda();
+  const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
+  const editado = await editarItem(Number(v.id), Number(item.id), { preco_tabela: 90, quantidade: 2 }, operador);
+  assert.equal(Number(editado.preco_tabela), 90);
+  assert.equal(Number(editado.subtotal), 144);
 });
 
 // ---------------------------------------------------------------------------
@@ -317,14 +397,13 @@ test('snapshot: alterar a tabela do produto depois NÃO reescreve a venda existe
   const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
   assert.equal(Number(item.preco_tabela), 90);
 
-  // A precificação muda DEPOIS da venda (ficha do produto vai para 120).
   await getStore().update(RESOURCES.produtos, Number(produto90.id), { preco_venda: 120 });
   try {
     const relido = (await itensDaVenda(Number(v.id)))[0];
     assert.equal(Number(relido.preco_tabela), 90, 'o snapshot da venda continua 90');
     assert.equal(Number(relido.subtotal), 72, 'o valor praticado não muda');
-    const venda = await getRecord(RESOURCES.vendas, Number(v.id), gerente);
-    assert.equal(Number(venda.total), 72, 'o total da venda não muda');
+    const venda = await getRecord(RESOURCES.vendas, Number(v.id), admin);
+    assert.equal(Number(venda.total), 72);
   } finally {
     await getStore().update(RESOURCES.produtos, Number(produto90.id), { preco_venda: 90 });
   }
@@ -346,10 +425,8 @@ test('snapshot: editar uma linha SEM snapshot (escritor secundário) preserva a 
     preco_tabela: null,
   });
 
-  // A tabela do produto sobe DEPOIS da venda existir.
   await getStore().update(RESOURCES.produtos, Number(produto90.id), { preco_venda: 120 });
   try {
-    // O operador altera APENAS a quantidade — nenhum campo de preço no corpo.
     const editado = await editarItem(Number(v.id), Number(item.id), { quantidade: 3 });
     assert.equal(Number(editado.preco_tabela), 90, 'a referência é o preço já praticado, não a tabela de hoje');
     assert.equal(Number(editado.preco_unitario), 90);
@@ -364,94 +441,58 @@ test('snapshot: editar uma linha SEM snapshot (escritor secundário) preserva a 
 // CONTRATO HTTP REAL — o servidor é a autoridade sobre o corpo enviado
 // ---------------------------------------------------------------------------
 
-test('contrato HTTP: o cliente não forja preco_tabela nem lista_preco_id; valores inválidos são recusados', async () => {
+async function appDeVendas() {
   const express = (await import('express')).default;
-  const request = (await import('supertest')).default;
   const { createItem: criar, updateItem: atualizar } = await import('../src/itens');
-
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).user = gerente;
+    (req as any).user = (req as any).headers['x-ator'] === 'operador' ? operador : admin;
     next();
   });
   const wrap = (fn: any) => (req: any, res: any, next: any) => Promise.resolve(fn(req, res)).catch(next);
   app.post('/api/vendas/:id/itens', wrap(criar));
   app.put('/api/vendas/:id/itens/:itemId', wrap(atualizar));
   app.use((err: any, _req: any, res: any, _next: any) => res.status(err?.status || 500).json({ error: err?.message, fields: err?.fields }));
+  return app;
+}
 
+test('contrato HTTP: o cliente não forja lista_preco_id e o desconto é sobre o preço de venda', async () => {
+  const request = (await import('supertest')).default;
+  const app = await appDeVendas();
   const v = await novaVenda();
   const criado = await request(app)
     .post(`/api/vendas/${v.id}/itens`)
-    .send({ produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20, preco_tabela: 9999, lista_preco_id: 4242 })
+    .send({ produto_id: Number(produto80.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20, lista_preco_id: 4242 })
     .expect(201);
-  assert.equal(Number(criado.body.preco_tabela), 90, 'o preco_tabela forjado no corpo é ignorado');
+  assert.equal(Number(criado.body.preco_tabela), 80, 'a tabela vem da precificação do produto');
   assert.equal(Number(criado.body.lista_preco_id ?? 0) !== 4242, true, 'a lista de preço forjada é ignorada');
-  assert.equal(Number(criado.body.subtotal), 72, 'o subtotal é recalculado pelo servidor');
-
-  const forjado = await request(app)
-    .put(`/api/vendas/${v.id}/itens/${criado.body.id}`)
-    .send({ preco_tabela: 9999, quantidade: 2 })
-    .expect(200);
-  assert.equal(Number(forjado.body.preco_tabela), 90, 'PUT forjando a tabela mantém a referência real');
-  assert.equal(Number(forjado.body.subtotal), 144, '2 × 72');
-
-  await request(app)
-    .post(`/api/vendas/${v.id}/itens`)
-    .send({ produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 150 })
-    .expect(400);
-  await request(app)
-    .post(`/api/vendas/${v.id}/itens`)
-    .send({ produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: -5 })
-    .expect(400);
-  await request(app)
-    .post(`/api/vendas/${v.id}/itens`)
-    .send({ produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 0, preco_unitario: 90 })
-    .expect(400);
+  assert.equal(Number(criado.body.subtotal), 72, '20% sobre 90, não sobre 80');
 });
 
-test('contrato HTTP: edição repetida de preço não acumula erro de arredondamento', async () => {
-  const express = (await import('express')).default;
+test('contrato HTTP: operador sem permissão recebe 403 ao tentar alterar o preço de tabela', async () => {
   const request = (await import('supertest')).default;
-  const { createItem: criar, updateItem: atualizar } = await import('../src/itens');
-
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).user = gerente;
-    next();
-  });
-  const wrap = (fn: any) => (req: any, res: any, next: any) => Promise.resolve(fn(req, res)).catch(next);
-  app.post('/api/vendas/:id/itens', wrap(criar));
-  app.put('/api/vendas/:id/itens/:itemId', wrap(atualizar));
-  app.use((err: any, _req: any, res: any, _next: any) => res.status(err?.status || 500).json({ error: err?.message, fields: err?.fields }));
-
+  const app = await appDeVendas();
   const v = await novaVenda();
-  const item = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
+  const criado = await request(app)
+    .post(`/api/vendas/${v.id}/itens`)
+    .send({ produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 })
+    .expect(201);
 
-  // 90 → 20% → 68 → 75 → 10% → desconto R$ 15 → volta para 90.
-  const roteiro: Array<Record<string, unknown>> = [
-    { desconto_pct: 20 },
-    { preco_unitario: 68 },
-    { preco_unitario: 75 },
-    { desconto_pct: 10 },
-    { desconto_pct: pctDeDescontoUnitario(90, 15) },
-    { desconto_pct: 0 },
-  ];
-  for (const passo of roteiro) {
-    const r = await request(app)
-      .put(`/api/vendas/${v.id}/itens/${item.id}`)
-      .send({ produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, ...passo })
-      .expect(200);
-    const linha = linhaDePreco(1, Number(r.body.preco_tabela), Number(r.body.desconto_pct));
-    assert.equal(
-      linha.descontoUnitario + linha.precoVenda,
-      Number(r.body.preco_tabela),
-      `não fechou no centavo no passo ${JSON.stringify(passo)}`
-    );
-    assert.equal(Number(r.body.subtotal), linha.subtotal, `subtotal divergente no passo ${JSON.stringify(passo)}`);
-    assert.equal(Number(r.body.preco_tabela), 90, 'a tabela é imutável na linha');
-  }
+  await request(app)
+    .put(`/api/vendas/${v.id}/itens/${criado.body.id}`)
+    .set('x-ator', 'operador')
+    .send({ preco_tabela: 500 })
+    .expect(403);
+
+  // O operador PODE editar o preço de venda e o desconto normalmente.
+  const ok = await request(app)
+    .put(`/api/vendas/${v.id}/itens/${criado.body.id}`)
+    .set('x-ator', 'operador')
+    .send({ preco_unitario: 100, desconto_pct: 10 })
+    .expect(200);
+  assert.equal(Number(ok.body.subtotal), 90);
+  assert.equal(Number(ok.body.preco_tabela), 90, 'a tabela continua a referência');
 });
 
 // ---------------------------------------------------------------------------
@@ -464,17 +505,15 @@ test('consumidores: fiscal, PDF, NFe e financeiro reconciliam com o desconto das
   const itens = await itensDaVenda(Number(v.id));
   const it = itens[0];
 
-  // Os consumidores derivam o desconto de `preco_unitario × quantidade − subtotal`
-  // (negócios/BI) ou exibem `preco_unitario` como valor unitário (PDF/NFe). Ambos
-  // continuam corretos com `preco_unitario` = preço de TABELA.
+  // O desconto é derivado de `preco_unitario × quantidade − subtotal`; o valor
+  // unitário (PDF/NFe) é o PREÇO DE VENDA praticado.
   const unitarioCents = Math.round(Number(it.preco_unitario) * 100);
   const descontoCents = Math.max(Math.round((Number(it.preco_unitario) * Number(it.quantidade) - Number(it.subtotal)) * 100), 0);
-  assert.equal(unitarioCents, 9000, 'valor unitário da NFe = preço de tabela');
+  assert.equal(unitarioCents, 9000, 'valor unitário = preço de venda');
   assert.equal(descontoCents, 3600, 'desconto de R$ 36,00 em 2 peças (2 × R$ 18,00)');
   assert.equal(Number(it.subtotal), 144);
 
-  // O total da venda (autoridade) fecha: bruto − desconto das linhas.
-  const venda = await getRecord(RESOURCES.vendas, Number(v.id), gerente);
+  const venda = await getRecord(RESOURCES.vendas, Number(v.id), admin);
   assert.equal(Number(venda.total), 144);
   assert.equal(Number(venda.total) + descontoCents / 100, Number(it.preco_unitario) * Number(it.quantidade));
 });
@@ -484,6 +523,23 @@ test('regressão do fluxo normal: venda com frete e desconto de cabeçalho fecha
   await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
   await addItem(Number(v.id), { produto_id: Number(produto80.id), tamanho_id: Number(tamanho.id), quantidade: 2, preco_unitario: 80, desconto_pct: 20 });
   // Líquido 72 + 128 = 200; − 10 do cabeçalho; + 25 de frete = 215.
-  const venda = await getRecord(RESOURCES.vendas, Number(v.id), gerente);
+  const venda = await getRecord(RESOURCES.vendas, Number(v.id), admin);
   assert.equal(Number(venda.total), 215);
+});
+
+test('remover item mantém o desconto das linhas restantes no resumo', async () => {
+  const v = await novaVenda();
+  const a = await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
+  await addItem(Number(v.id), { produto_id: Number(produto90.id), tamanho_id: Number(tamanho.id), quantidade: 1, preco_unitario: 90, desconto_pct: 20 });
+  await deleteItem(mockItem(Number(v.id), {}, Number(a.id)), { json: () => undefined } as any);
+  const itens = await itensDaVenda(Number(v.id));
+  assert.equal(itens.length, 1);
+  const r = resumoVenda(
+    itens.map((it) => ({ bruto: Number(it.quantidade) * Number(it.preco_unitario), subtotal: Number(it.subtotal) })),
+    0,
+    0
+  );
+  assert.equal(r.bruto, 90);
+  assert.equal(r.descontoLinhas, 18);
+  assert.equal(r.total, 72);
 });

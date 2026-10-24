@@ -179,8 +179,7 @@ describe('OrderPage — formação profissional do preço', () => {
     expect(screen.getByRole('columnheader', { name: 'Desc. R$' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Subtotal' })).toBeInTheDocument();
 
-    // tabela 90 · venda 72 · desc 20% · desc R$ 18 · subtotal 72
-    // (90/72 aparecem na linha e no resumo; 18 só como desconto da linha)
+    // tabela 90 · venda 90 · desc 20% · desc R$ 18 · subtotal 72
     expect(screen.getAllByText('R$ 90,00').length).toBeGreaterThan(0);
     expect(screen.getAllByText('R$ 72,00').length).toBeGreaterThan(0);
     expect(screen.getAllByText('20%').length).toBeGreaterThan(0);
@@ -191,7 +190,7 @@ describe('OrderPage — formação profissional do preço', () => {
     mockVendaComItens([itemDescontado]);
     render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
 
-    await screen.findByText('Produtos — preço de tabela');
+    await screen.findByText('Preço bruto da venda');
     expect(screen.getByText('Descontos concedidos')).toBeInTheDocument();
     expect(screen.getByText('Subtotal líquido')).toBeInTheDocument();
     expect(screen.getByText('Frete')).toBeInTheDocument();
@@ -200,7 +199,7 @@ describe('OrderPage — formação profissional do preço', () => {
     expect(screen.getByText('− R$ 18,00')).toBeInTheDocument();
   });
 
-  it('editar o desconto % recalcula o preço de venda e o desconto R$', async () => {
+  it('editar o desconto % recalcula o desconto R$ sobre o PREÇO DE VENDA (a tabela não é base)', async () => {
     mockVendaComItens([itemDescontado]);
     render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
     await screen.findByText('CAM-VERM-G — Camiseta Premium Vermelha G');
@@ -211,24 +210,26 @@ describe('OrderPage — formação profissional do preço', () => {
 
     const campoVenda = screen.getByRole('textbox', { name: /Preço de venda/ }) as HTMLInputElement;
     const campoRs = screen.getByRole('textbox', { name: /Desconto em reais/ }) as HTMLInputElement;
-    expect(campoVenda.value).toBe('71.55');
+    // O preço de venda (90) permanece: só o desconto muda. 90 × 20,5% = 18,45.
+    expect(campoVenda.value).toBe('90');
     expect(campoRs.value).toBe('18.45');
   });
 
-  it('editar o preço de venda recalcula o desconto % e o desconto R$', async () => {
+  it('editar o preço de venda MANTÉM o desconto atual e recalcula o desconto R$', async () => {
     mockVendaComItens([itemDescontado]);
     render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
     await screen.findByText('CAM-VERM-G — Camiseta Premium Vermelha G');
 
     fireEvent.click(screen.getByRole('button', { name: /Editar item CAM-VERM-G/ }));
     const campoVenda = screen.getByRole('textbox', { name: /Preço de venda/ });
-    fireEvent.change(campoVenda, { target: { value: '68' } });
+    fireEvent.change(campoVenda, { target: { value: '100' } });
 
-    expect((screen.getByRole('spinbutton', { name: /Desconto percentual/ }) as HTMLInputElement).value).toBe('24.44');
-    expect((screen.getByRole('textbox', { name: /Desconto em reais/ }) as HTMLInputElement).value).toBe('22');
+    // O desconto (20%) é preservado; 100 × 20% = 20,00.
+    expect((screen.getByRole('spinbutton', { name: /Desconto percentual/ }) as HTMLInputElement).value).toBe('20');
+    expect((screen.getByRole('textbox', { name: /Desconto em reais/ }) as HTMLInputElement).value).toBe('20');
   });
 
-  it('editar o desconto R$ recalcula o preço de venda e o desconto %', async () => {
+  it('editar o desconto R$ recalcula o desconto % sobre o PREÇO DE VENDA', async () => {
     mockVendaComItens([itemDescontado]);
     render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
     await screen.findByText('CAM-VERM-G — Camiseta Premium Vermelha G');
@@ -237,26 +238,29 @@ describe('OrderPage — formação profissional do preço', () => {
     const campoRs = screen.getByRole('textbox', { name: /Desconto em reais/ });
     fireEvent.change(campoRs, { target: { value: '15' } });
 
-    expect((screen.getByRole('textbox', { name: /Preço de venda/ }) as HTMLInputElement).value).toBe('75');
+    expect((screen.getByRole('textbox', { name: /Preço de venda/ }) as HTMLInputElement).value).toBe('90');
+    // 15 / 90 = 16,67%.
     expect((screen.getByRole('spinbutton', { name: /Desconto percentual/ }) as HTMLInputElement).value).toBe('16.67');
   });
 
-  it('salvar envia o preço de TABELA como base e o desconto derivado (nunca a tabela forjada)', async () => {
+  it('salvar envia o PREÇO DE VENDA como base do desconto (nunca a tabela)', async () => {
     mockVendaComItens([itemDescontado]);
     render(<ToastProvider><OrderPage tipo="venda" /></ToastProvider>);
     await screen.findByText('CAM-VERM-G — Camiseta Premium Vermelha G');
 
     fireEvent.click(screen.getByRole('button', { name: /Editar item CAM-VERM-G/ }));
-    fireEvent.change(screen.getByRole('textbox', { name: /Preço de venda/ }), { target: { value: '68' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /Preço de venda/ }), { target: { value: '100' } });
     fireEvent.click(screen.getByRole('button', { name: /Salvar item CAM-VERM-G/ }));
 
+    // Gerente sem permissão explícita NÃO envia `preco_tabela`: o servidor é a
+    // autoridade e recusaria a alteração da referência.
     await waitFor(() =>
       expect(apiPut).toHaveBeenCalledWith('/vendas/7/itens/501', {
         produto_id: 10,
         tamanho_id: 4,
         quantidade: 1,
-        preco_unitario: 90,
-        desconto_pct: 24.44,
+        preco_unitario: 100,
+        desconto_pct: 20,
       })
     );
   });

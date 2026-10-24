@@ -3,11 +3,12 @@
 //
 // Mesmas fórmulas de `server/src/precoVenda.ts`, usadas apenas para resposta
 // imediata na tela. O backend continua sendo a autoridade: ele recalcula e
-// valida o que grava, e ignora qualquer `preco_tabela` enviado pelo cliente.
+// valida o que grava.
 //
-// A regra do ERP é: o desconto é sempre sobre o preço de TABELA e o SUBTOTAL é
-// `preço de venda × quantidade`. O percentual é derivado do valor monetário
-// arredondado para que "tabela − desconto R$ = preço de venda" feche no centavo.
+// A regra do ERP é: a BASE do desconto é SEMPRE o preço de VENDA. O preço de
+// TABELA é apenas referência comercial (snapshot) e NÃO participa do cálculo.
+// O SUBTOTAL é `preço líquido × quantidade`, onde o preço líquido é
+// `preço de venda − desconto R$`.
 // ============================================================================
 
 export const PCT_MAX_VENDA = 100;
@@ -27,63 +28,82 @@ export function normalizarPctVenda(pct: unknown): number {
   return arredondarPct(n);
 }
 
-/** Preço de venda (unitário) a partir do preço de tabela e do desconto %. */
-export function precoVendaDe(tabela: number, pct: number): number {
-  const t = Number(tabela) || 0;
-  return arredondarMoeda(Math.max(0, t * (1 - normalizarPctVenda(pct) / 100)));
+/** Preço de venda normalizado (2 casas, nunca negativo). */
+export function normalizarPrecoVenda(preco: unknown): number {
+  return arredondarMoeda(Math.max(0, Number(preco) || 0));
 }
 
-/** Desconto em R$ (unitário) a partir do preço de tabela e do desconto %. */
-export function descontoUnitarioDe(tabela: number, pct: number): number {
-  const t = Number(tabela) || 0;
-  return arredondarMoeda(Math.max(0, t - precoVendaDe(t, pct)));
+/** Desconto em R$ (unitário) a partir do preço de venda e do desconto %. */
+export function descontoUnitarioDe(precoVenda: number, pct: number): number {
+  const v = Number(precoVenda) || 0;
+  return arredondarMoeda(Math.max(0, v * (normalizarPctVenda(pct) / 100)));
 }
 
-/** Desconto % equivalente a um preço de venda informado. */
-export function pctDePrecoVenda(tabela: number, precoVenda: number): number {
-  const t = Number(tabela) || 0;
-  if (t <= 0) return 0;
-  return normalizarPctVenda((1 - (Number(precoVenda) || 0) / t) * 100);
+/** Preço líquido (unitário) = preço de venda − desconto em R$. */
+export function precoLiquidoDe(precoVenda: number, descontoUnitario: number): number {
+  const v = Number(precoVenda) || 0;
+  return arredondarMoeda(Math.max(0, v - (Number(descontoUnitario) || 0)));
 }
 
-/** Desconto % equivalente a um desconto em R$ (unitário) informado. */
-export function pctDeDescontoUnitario(tabela: number, descontoUnitario: number): number {
-  const t = Number(tabela) || 0;
-  if (t <= 0) return 0;
-  return normalizarPctVenda(((Number(descontoUnitario) || 0) / t) * 100);
+/** Preço líquido (unitário) a partir do preço de venda e do desconto %. */
+export function precoLiquidoDePct(precoVenda: number, pct: number): number {
+  return precoLiquidoDe(precoVenda, descontoUnitarioDe(precoVenda, pct));
 }
 
-/** Preço de venda (unitário) a partir do desconto em R$ (unitário). */
-export function precoVendaDeDescontoUnitario(tabela: number, descontoUnitario: number): number {
-  const t = Number(tabela) || 0;
-  return arredondarMoeda(Math.max(0, t - (Number(descontoUnitario) || 0)));
+/** Desconto % equivalente a um desconto em R$ (unitário) sobre o preço de venda. */
+export function pctDeDescontoUnitario(precoVenda: number, descontoUnitario: number): number {
+  const base = Number(precoVenda) || 0;
+  if (base <= 0) return 0;
+  return normalizarPctVenda(((Number(descontoUnitario) || 0) / base) * 100);
+}
+
+/** Desconto % equivalente a um preço líquido informado. */
+export function pctDePrecoLiquido(precoVenda: number, precoLiquido: number): number {
+  const base = Number(precoVenda) || 0;
+  if (base <= 0) return 0;
+  const desconto = Math.max(0, base - (Number(precoLiquido) || 0));
+  return normalizarPctVenda((desconto / base) * 100);
+}
+
+/**
+ * Desconto em R$ (unitário) equivalente a um preço líquido desejado.
+ * Limitado ao próprio preço de venda (o líquido nunca fica negativo).
+ */
+export function descontoUnitarioDePrecoLiquido(precoVenda: number, precoLiquido: number): number {
+  const base = Number(precoVenda) || 0;
+  return arredondarMoeda(Math.min(base, Math.max(0, base - (Number(precoLiquido) || 0))));
 }
 
 export type LinhaPreco = {
+  /** Preço de tabela (referência/snapshot). NÃO é base do desconto. */
   tabela: number;
+  /** Preço de venda praticado — base do desconto. */
   precoVenda: number;
   descontoPct: number;
   descontoUnitario: number;
+  /** Preço de venda × quantidade (preço bruto da linha). */
   bruto: number;
+  /** Preço líquido × quantidade. */
   subtotal: number;
+  /** Desconto total da linha (bruto − subtotal). */
   desconto: number;
 };
 
-/** Fecha uma linha da venda a partir da quantidade, preço de tabela e desconto %. */
-export function linhaDePreco(quantidade: unknown, tabela: unknown, descontoPct: unknown): LinhaPreco {
+/** Fecha uma linha da venda a partir da quantidade, preço de VENDA e desconto %. */
+export function linhaDePreco(quantidade: unknown, precoVenda: unknown, descontoPct: unknown, precoTabela: unknown = 0): LinhaPreco {
   const qtd = Number(quantidade) || 0;
-  const t = arredondarMoeda(Math.max(0, Number(tabela) || 0));
+  const venda = normalizarPrecoVenda(precoVenda);
   const pct = normalizarPctVenda(descontoPct);
-  const precoVenda = precoVendaDe(t, pct);
-  const bruto = arredondarMoeda(qtd * t);
-  // Fórmula canônica do ERP (a mesma que o backend grava), para a tela nunca
-  // divergir do servidor em um centavo.
-  const subtotal = arredondarMoeda(qtd * t * (1 - pct / 100));
+  const tabela = arredondarMoeda(Math.max(0, Number(precoTabela) || 0));
+  const descontoUnitario = descontoUnitarioDe(venda, pct);
+  const liquido = precoLiquidoDe(venda, descontoUnitario);
+  const bruto = arredondarMoeda(qtd * venda);
+  const subtotal = arredondarMoeda(qtd * liquido);
   return {
-    tabela: t,
-    precoVenda,
+    tabela,
+    precoVenda: venda,
     descontoPct: pct,
-    descontoUnitario: arredondarMoeda(t - precoVenda),
+    descontoUnitario,
     bruto,
     subtotal,
     desconto: arredondarMoeda(bruto - subtotal),

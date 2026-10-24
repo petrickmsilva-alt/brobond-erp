@@ -2386,6 +2386,7 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
     perm_metricas: editing?.perm_metricas || 'herdar',
     perm_politicas: editing?.perm_politicas || 'herdar',
     perm_aprovar: editing?.perm_aprovar || 'herdar',
+    perm_preco_tabela: editing?.perm_preco_tabela || 'herdar',
   });
   const [desconto, setDesconto] = useState(editing?.desconto_max_pct ?? '');
   const [alçada, setAlçada] = useState(editing?.venda_sem_aprovacao_ate ?? '');
@@ -2558,6 +2559,7 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
               ['perm_metricas', 'Ver métricas comerciais'],
               ['perm_politicas', 'Gerenciar políticas'],
               ['perm_aprovar', 'Aprovar exceções'],
+              ['perm_preco_tabela', 'Alterar preço de tabela na venda'],
             ].map(([k, label]) => (
               <label key={k} className="block">
                 <span className="label">{label}</span>
@@ -3081,7 +3083,7 @@ const CAMPO_LABEL: Record<string, string> = {
   desconto_max_pct: 'Desconto máximo', venda_sem_aprovacao_ate: 'Venda sem aprovação até',
   perm_catalogos: 'Permissão: catálogos', perm_compartilhar: 'Permissão: compartilhar',
   perm_metricas: 'Permissão: métricas', perm_politicas: 'Permissão: políticas',
-  perm_aprovar: 'Permissão: aprovar',
+  perm_aprovar: 'Permissão: aprovar', perm_preco_tabela: 'Permissão: preço de tabela',
 };
 
 const PERFIL_SIMPLES: Record<string, string> = { admin: 'Administrador', gerente: 'Gerente', operador: 'Operador' };

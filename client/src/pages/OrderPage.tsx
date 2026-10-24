@@ -29,9 +29,9 @@ import { formatDate, formatDocumento, formatMoney, formatNumber, parseMoneyInput
 import {
   arredondarMoeda,
   descontoUnitarioDe,
+  linhaDePreco,
+  normalizarPctVenda,
   pctDeDescontoUnitario,
-  pctDePrecoVenda,
-  precoVendaDe,
   resumoVenda,
 } from '../lib/precoVenda';
 import { hojeCivilIso, maskDataBR, parseDataBR } from '../lib/datas';
@@ -62,11 +62,11 @@ type Item = {
   insumo_id?: number;
   tamanho_id?: number;
   quantidade: number | string;
-  /** Preço BASE da linha (na formação profissional, o preço de TABELA). */
+  /** Preço de VENDA praticado — a BASE do desconto percentual e em R$. */
   preco_unitario: number | string;
   desconto_pct?: number | string;
   subtotal?: number;
-  /** Snapshot do preço de tabela da precificação, gravado pelo servidor. */
+  /** Preço de TABELA (referência da precificação). NÃO é base do desconto. */
   preco_tabela?: number | string | null;
   lista_preco_id?: number | null;
   produto_id__label?: string;
@@ -268,8 +268,9 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
   const [toDelete, setToDelete] = useState<Item | null>(null);
   const [itemEditandoId, setItemEditandoId] = useState<number | null>(null);
   // Formação de preço da linha em edição. `preco_unitario` guarda o PREÇO DE
-  // VENDA praticado (o que o operador enxerga e mexe) e `desconto_rs` o
-  // desconto unitário em R$. O `preco_tabela` é somente leitura (referência).
+  // VENDA praticado (a base do desconto) e `desconto_rs` o desconto unitário em
+  // R$. O `preco_tabela` é a referência comercial: só é editável por quem tem
+  // autorização (o servidor recusa a alteração de quem não tem).
   const [itemEditDraft, setItemEditDraft] = useState<{
     quantidade: string;
     preco_tabela: string;
@@ -292,6 +293,8 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
 
   const podeGerirFinanceiro = user?.perfil === 'gerente' || user?.perfil === 'admin';
   const podeExcluir = user?.perfil !== 'operador';
+  // Alterar o preço de tabela exige autorização explícita — validada no servidor.
+  const podeEditarTabela = user?.perfil === 'admin' || user?.perm_preco_tabela === 'permitir';
 
   const statusAtual = ehRotaNovo && !pedido ? form.statusInicial : String(pedido?.status || 'aberta');
   const fechado = !ehRotaNovo && ['faturada', 'entregue'].includes(statusAtual);
@@ -421,32 +424,21 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
    * Formação de preço de cada linha, do jeito que o operador precisa enxergar:
    * preço de tabela → preço de venda → desconto % → desconto R$ → subtotal.
    *
-   * `preco_unitario` é o preço BASE da linha (a tabela da precificação) e o
-   * `desconto_pct` incide sobre ele — a mesma convenção que o servidor grava.
+   * A BASE do desconto é o PREÇO DE VENDA (`preco_unitario`); o preço de tabela
+   * é apenas referência (não entra na conta). O subtotal usa a mesma fórmula
+   * canônica do servidor (`linhaDePreco`), para a tela nunca divergir.
    */
   const linhasPreco = useMemo(
     () =>
       itens.map((it) => {
         const qtd = Number(it.quantidade) || 0;
-        const tabela = it.preco_tabela != null ? Number(it.preco_tabela) : parsePrecoUnitario(it.preco_unitario) || 0;
-        const base = parsePrecoUnitario(it.preco_unitario) || 0;
+        const precoVenda = parsePrecoUnitario(it.preco_unitario) || 0;
+        const tabela = it.preco_tabela != null ? Number(it.preco_tabela) : precoVenda;
         const pct = Number(it.desconto_pct) || 0;
-        const precoVenda = precoVendaDe(base, pct);
-        const bruto = arredondarMoeda(qtd * tabela);
-        const subtotal = it.subtotal !== undefined && it.subtotal !== null
-          ? arredondarMoeda(Number(it.subtotal))
-          : arredondarMoeda(qtd * base * (1 - pct / 100));
-        return {
-          item: it,
-          quantidade: qtd,
-          tabela,
-          precoVenda,
-          descontoPct: pct,
-          descontoUnitario: descontoUnitarioDe(base, pct),
-          bruto,
-          subtotal,
-          desconto: arredondarMoeda(bruto - subtotal),
-        };
+        const l = linhaDePreco(qtd, precoVenda, pct, tabela);
+        // A linha persistida já traz o subtotal autoritativo do servidor.
+        const subtotal = it.subtotal !== undefined && it.subtotal !== null ? arredondarMoeda(Number(it.subtotal)) : l.subtotal;
+        return { ...l, item: it, quantidade: qtd, subtotal, desconto: arredondarMoeda(l.bruto - subtotal) };
       }),
     [itens]
   );
@@ -485,50 +477,67 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
   function subtotalNovo(): number {
     const q = Number(novo.quantidade) || 0;
     const p = parsePrecoUnitario(novo.preco_unitario);
-    const d = Number(novo.desconto_pct) || 0;
+    const d = normalizarPctVenda(Number(novo.desconto_pct) || 0);
     if (!Number.isFinite(p) || p < 0 || q <= 0) return 0;
-    return arredondarMoeda(q * p * (1 - d / 100));
+    return linhaDePreco(q, p, d).subtotal;
   }
 
-  /** Fecha a linha em edição a partir do campo que o operador acabou de mexer. */
-  function atualizarDraftItem(campo: 'preco_unitario' | 'desconto_pct' | 'desconto_rs', valor: string) {
+  /**
+   * Fecha a linha em edição a partir do campo que o operador acabou de mexer.
+   * A base é SEMPRE o preço de venda; o preço de tabela não participa.
+   */
+  function atualizarDraftItem(campo: 'preco_tabela' | 'preco_unitario' | 'desconto_pct' | 'desconto_rs', valor: string) {
     setItemEditDraft((d) => {
-      const tabela = parseMoneyInput(d.preco_tabela) ?? 0;
+      if (campo === 'preco_tabela') {
+        // Alterar a tabela NÃO mexe no preço de venda nem no desconto: a tabela
+        // é referência, não base de cálculo.
+        return { ...d, preco_tabela: valor };
+      }
+      const precoVenda = parsePrecoUnitario(d.preco_unitario) || 0;
       if (campo === 'desconto_pct') {
-        const pct = Number(String(valor).replace(',', '.')) || 0;
-        return { ...d, desconto_pct: valor, preco_unitario: String(precoVendaDe(tabela, pct)), desconto_rs: String(descontoUnitarioDe(tabela, pct)) };
+        const pct = normalizarPctVenda(Number(String(valor).replace(',', '.')) || 0);
+        return {
+          ...d,
+          desconto_pct: valor,
+          desconto_rs: String(descontoUnitarioDe(precoVenda, pct)),
+        };
       }
       if (campo === 'preco_unitario') {
+        // Alterou o preço de venda: MANTÉM o desconto atual e recalcula o R$.
         const preco = parseMoneyInput(valor) ?? 0;
-        const pct = pctDePrecoVenda(tabela, preco);
-        return { ...d, preco_unitario: valor, desconto_pct: String(pct), desconto_rs: String(descontoUnitarioDe(tabela, pct)) };
+        const pct = normalizarPctVenda(Number(d.desconto_pct) || 0);
+        return { ...d, preco_unitario: valor, desconto_rs: String(descontoUnitarioDe(preco, pct)) };
       }
       const rs = parseMoneyInput(valor) ?? 0;
-      const pct = pctDeDescontoUnitario(tabela, rs);
-      return { ...d, desconto_rs: valor, preco_unitario: String(precoVendaDe(tabela, pct)), desconto_pct: String(pct) };
+      const pct = pctDeDescontoUnitario(precoVenda, rs);
+      return { ...d, desconto_rs: valor, desconto_pct: String(pct) };
     });
   }
 
   /**
    * Recalcula a linha NOVA (ainda não adicionada) quando o operador mexe em
-   * preço de venda, desconto % ou desconto R$ — sempre sobre o preço de tabela.
+   * preço de venda, desconto % ou desconto R$ — sempre sobre o PREÇO DE VENDA.
    * Só um campo é a fonte; os outros dois são derivados, sem loop.
    */
-  function atualizarNovoPreco(campo: 'preco_unitario' | 'desconto_pct' | 'desconto_rs', valor: string) {
+  function atualizarNovoPreco(campo: 'preco_tabela' | 'preco_unitario' | 'desconto_pct' | 'desconto_rs', valor: string) {
     setNovo((n) => {
-      const tabela = parsePrecoUnitario(n.preco_tabela) || 0;
+      if (campo === 'preco_tabela') {
+        // Referência apenas — não altera o preço de venda nem o desconto.
+        return { ...n, preco_tabela: valor };
+      }
+      const precoVenda = parsePrecoUnitario(n.preco_unitario) || 0;
       if (campo === 'desconto_pct') {
-        const pct = Number(String(valor).replace(',', '.')) || 0;
-        return { ...n, desconto_pct: valor, preco_unitario: String(precoVendaDe(tabela, pct)), desconto_rs: String(descontoUnitarioDe(tabela, pct)) };
+        const pct = normalizarPctVenda(Number(String(valor).replace(',', '.')) || 0);
+        return { ...n, desconto_pct: valor, desconto_rs: String(descontoUnitarioDe(precoVenda, pct)) };
       }
       if (campo === 'preco_unitario') {
         const preco = parseMoneyInput(valor) ?? 0;
-        const pct = pctDePrecoVenda(tabela, preco);
-        return { ...n, preco_unitario: valor, desconto_pct: String(pct), desconto_rs: String(descontoUnitarioDe(tabela, pct)) };
+        const pct = normalizarPctVenda(Number(n.desconto_pct) || 0);
+        return { ...n, preco_unitario: valor, desconto_rs: String(descontoUnitarioDe(preco, pct)) };
       }
       const rs = parseMoneyInput(valor) ?? 0;
-      const pct = pctDeDescontoUnitario(tabela, rs);
-      return { ...n, desconto_rs: valor, preco_unitario: String(precoVendaDe(tabela, pct)), desconto_pct: String(pct) };
+      const pct = pctDeDescontoUnitario(precoVenda, rs);
+      return { ...n, desconto_rs: valor, desconto_pct: String(pct) };
     });
   }
 
@@ -622,19 +631,11 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
       toast.error(msg);
       return;
     }
-    const descPct = Number(novo.desconto_pct || 0);
-    if (!Number.isFinite(descPct) || descPct < 0 || descPct > 100) {
-      const msg = 'O desconto percentual do item deve estar entre 0% e 100%.';
-      setErroNovoItem(msg);
-      toast.error(msg);
-      return;
-    }
-    // O backend grava `preco_unitario` como BASE da linha (o preço de tabela) e
-    // o desconto % sobre ele. Sem tabela de referência, o preço praticado é o
-    // próprio base e não há desconto.
+    const descPct = normalizarPctVenda(Number(novo.desconto_pct || 0));
+    // O backend recebe o PREÇO DE VENDA (base do desconto) e o desconto %.
+    // O preço de tabela só é enviado por quem tem autorização — e só vale como
+    // referência, nunca como base de cálculo.
     const tabela = parsePrecoUnitario(novo.preco_tabela) || 0;
-    const base = tabela > 0 ? tabela : preco;
-    const pctEnvio = tabela > 0 ? pctDePrecoVenda(tabela, preco) : 0;
 
     // Se ainda estamos montando uma nova venda sem ID persistido no banco: adiciona ao rascunho local
     if (!vendaIdAtiva) {
@@ -642,7 +643,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
         opcoesTamanhoItemNovo.find((o) => Number(o.value) === Number(novo.tamanho_id))?.label ||
         selecaoProduto?.tamanho ||
         `#${novo.tamanho_id}`;
-      const sub = arredondarMoeda(qtd * base * (1 - pctEnvio / 100));
+      const sub = linhaDePreco(qtd, preco, descPct).subtotal;
       const tempId = --rascunhoSeq.current;
       const alvoProd = selecaoProduto?.variacao ?? selecaoProduto?.produto ?? null;
       const itemRascunho: Item = {
@@ -650,10 +651,10 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
         produto_id: Number(novo.produto_id),
         tamanho_id: Number(novo.tamanho_id),
         quantidade: qtd,
-        preco_unitario: base,
-        desconto_pct: pctEnvio,
+        preco_unitario: preco,
+        desconto_pct: descPct,
         subtotal: sub,
-        preco_tabela: base,
+        preco_tabela: tabela > 0 ? tabela : preco,
         produto_id__label:
           novo.produto_id__label ||
           (selecaoProduto && alvoProd ? `${selecaoProduto.sku} — ${alvoProd.nome}` : `Produto #${novo.produto_id}`),
@@ -680,13 +681,16 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
     // Pedido já existente: persiste imediatamente via contrato canônico `POST /vendas/:id/itens`
     setBusyItem('new');
     try {
-      await api.post(`/vendas/${vendaIdAtiva}/itens`, {
+      const payloadItem: Record<string, unknown> = {
         produto_id: Number(novo.produto_id),
         tamanho_id: Number(novo.tamanho_id),
         quantidade: qtd,
-        preco_unitario: base,
-        desconto_pct: pctEnvio,
-      });
+        preco_unitario: preco,
+        desconto_pct: descPct,
+      };
+      // Só quem tem autorização envia o preço de tabela; o servidor valida de novo.
+      if (podeEditarTabela && tabela > 0) payloadItem.preco_tabela = tabela;
+      await api.post(`/vendas/${vendaIdAtiva}/itens`, payloadItem);
       toast.success('Item adicionado ao pedido.');
       setNovo(blankItem);
       setSelecaoProduto(null);
@@ -704,16 +708,14 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
   async function salvarEdicaoItem(item: Item) {
     const qtd = Number(itemEditDraft.quantidade);
     const precoVenda = parsePrecoUnitario(itemEditDraft.preco_unitario);
-    const desc = Number(itemEditDraft.desconto_pct || 0);
+    const desc = normalizarPctVenda(Number(itemEditDraft.desconto_pct || 0));
     if (!Number.isInteger(qtd) || qtd < 1) return toast.error('A quantidade deve ser um inteiro maior ou igual a 1.');
     if (!Number.isFinite(precoVenda) || precoVenda < 0) return toast.error('Preço de venda inválido.');
-    if (!Number.isFinite(desc) || desc < 0 || desc > 100) return toast.error('Desconto deve ficar entre 0% e 100%.');
+    if (desc < 0 || desc > 100) return toast.error('Desconto deve ficar entre 0% e 100%.');
 
-    // O servidor espera o BASE da linha (preço de tabela) + desconto %. A tabela
-    // da linha é a referência congelada: nunca é reescrita pelo operador.
+    // O servidor recebe o PREÇO DE VENDA (base do desconto) e o desconto %. O
+    // preço de tabela é referência: só é enviado por quem tem autorização.
     const tabela = parsePrecoUnitario(itemEditDraft.preco_tabela) || 0;
-    const base = tabela > 0 ? tabela : precoVenda;
-    const pctEnvio = tabela > 0 ? pctDePrecoVenda(tabela, precoVenda) : 0;
 
     if (!item.persistido || !vendaIdAtiva) {
       setItens((atuais) =>
@@ -722,10 +724,10 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
             ? {
                 ...it,
                 quantidade: qtd,
-                preco_unitario: base,
-                desconto_pct: pctEnvio,
-                subtotal: arredondarMoeda(qtd * base * (1 - pctEnvio / 100)),
-                preco_tabela: tabela > 0 ? tabela : base,
+                preco_unitario: precoVenda,
+                desconto_pct: desc,
+                subtotal: linhaDePreco(qtd, precoVenda, desc).subtotal,
+                preco_tabela: tabela > 0 ? tabela : precoVenda,
               }
             : it
         )
@@ -736,13 +738,15 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
 
     setBusyItem(item.id);
     try {
-      await api.put(`/vendas/${vendaIdAtiva}/itens/${item.id}`, {
+      const payloadItem: Record<string, unknown> = {
         produto_id: Number(item.produto_id),
         tamanho_id: Number(item.tamanho_id),
         quantidade: qtd,
-        preco_unitario: base,
-        desconto_pct: pctEnvio,
-      });
+        preco_unitario: precoVenda,
+        desconto_pct: desc,
+      };
+      if (podeEditarTabela && tabela > 0) payloadItem.preco_tabela = tabela;
+      await api.put(`/vendas/${vendaIdAtiva}/itens/${item.id}`, payloadItem);
       toast.success('Item atualizado.');
       setItemEditandoId(null);
       await recarregarPedido(vendaIdAtiva, false);
@@ -1558,15 +1562,28 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                 <label htmlFor="venda-novo-preco-tabela" className="label">
                   Preço tabela
                 </label>
-                <input
-                  id="venda-novo-preco-tabela"
-                  type="text"
-                  readOnly
-                  aria-readonly="true"
-                  title="Preço de tabela da precificação (não editável)"
-                  className="input w-full cursor-not-allowed bg-slate-100 text-right tabular-nums text-slate-500 dark:bg-navy-800/70 dark:text-navy-300"
-                  value={novo.preco_tabela ? formatMoney(parsePrecoUnitario(novo.preco_tabela) || 0) : '—'}
-                />
+                {podeEditarTabela ? (
+                  <input
+                    id="venda-novo-preco-tabela"
+                    type="text"
+                    inputMode="decimal"
+                    aria-label="Preço de tabela"
+                    title="Preço de tabela da precificação (referência — não é a base do desconto)"
+                    className="input w-full text-right tabular-nums"
+                    value={novo.preco_tabela ?? ''}
+                    onChange={(e) => atualizarNovoPreco('preco_tabela', e.target.value)}
+                  />
+                ) : (
+                  <input
+                    id="venda-novo-preco-tabela"
+                    type="text"
+                    readOnly
+                    aria-readonly="true"
+                    title="Preço de tabela da precificação (somente quem tem autorização altera)"
+                    className="input w-full cursor-not-allowed bg-slate-100 text-right tabular-nums text-slate-500 dark:bg-navy-800/70 dark:text-navy-300"
+                    value={novo.preco_tabela ? formatMoney(parsePrecoUnitario(novo.preco_tabela) || 0) : '—'}
+                  />
+                )}
               </div>
 
               <div className="md:col-span-1">
@@ -1744,7 +1761,20 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                         )}
                       </td>
                       <td className="text-right tabular-nums text-slate-500 dark:text-navy-300">
-                        {formatMoney(tabela)}
+                        {emEdicao && podeEditarTabela ? (
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            aria-label={`Preço de tabela de ${it.produto_id__label}`}
+                            className="input !py-1 text-right tabular-nums"
+                            value={itemEditDraft.preco_tabela}
+                            onChange={(e) => atualizarDraftItem('preco_tabela', e.target.value)}
+                          />
+                        ) : (
+                          <span title={podeEditarTabela ? undefined : 'Somente quem tem autorização altera o preço de tabela'}>
+                            {formatMoney(tabela)}
+                          </span>
+                        )}
                       </td>
                       <td className="text-right tabular-nums">
                         {emEdicao ? (
@@ -1829,13 +1859,14 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
                                   onClick={() => {
                                     setItemEditandoId(it.id);
                                     const tabelaAtual = linha?.tabela ?? (parsePrecoUnitario(it.preco_unitario) || 0);
-                                    const pctAtual = Number(it.desconto_pct ?? 0);
+                                    const precoVendaAtual = linha?.precoVenda ?? (parsePrecoUnitario(it.preco_unitario) || 0);
+                                    const pctAtual = normalizarPctVenda(Number(it.desconto_pct ?? 0));
                                     setItemEditDraft({
                                       quantidade: String(it.quantidade),
                                       preco_tabela: String(tabelaAtual),
-                                      preco_unitario: String(linha?.precoVenda ?? parsePrecoUnitario(it.preco_unitario)),
+                                      preco_unitario: String(precoVendaAtual),
                                       desconto_pct: String(pctAtual),
-                                      desconto_rs: String(descontoUnitarioDe(tabelaAtual, pctAtual)),
+                                      desconto_rs: String(descontoUnitarioDe(precoVendaAtual, pctAtual)),
                                     });
                                   }}
                                   title="Editar quantidade, preço de venda ou desconto"
@@ -2159,7 +2190,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
           <div className="flex flex-col justify-between rounded-xl border border-navy-200 bg-navy-50/50 p-4 lg:col-span-5 dark:border-navy-700 dark:bg-navy-800/60">
             <div className="space-y-1.5 text-sm">
               <div className="flex justify-between">
-                <span className="text-slate-600 dark:text-navy-200">Produtos — preço de tabela</span>
+                <span className="text-slate-600 dark:text-navy-200">Preço bruto da venda</span>
                 <span className="font-medium tabular-nums">{formatMoney(resumo.bruto)}</span>
               </div>
               <div className="flex justify-between text-red-600 dark:text-red-400">
