@@ -89,6 +89,24 @@ export type ListaConfig = {
   alternarAtivo?: boolean;
   /** Substantivo do contador da listagem (padrão: "registro"/"registros"). */
   contagem?: { singular: string; plural: string };
+  /**
+   * Campo que guarda o HEX da amostra visual. Quando declarado, a tabela ganha
+   * uma coluna AMOSTRA (primeira, antes do nome) alimentada por esse campo —
+   * a cor fica com presença visual sem depender só dela (nome e HEX seguem
+   * visíveis). Vazio = recurso sem amostra.
+   */
+  amostra?: string;
+  /** Título do drawer de edição (padrão: "Editar <singular>"). */
+  rotuloEditar?: string;
+  /** Descrição do drawer de cadastro/edição — texto de apoio do formulário. */
+  descricaoDrawer?: string;
+  /** Rótulo do botão de salvar no drawer (padrão: "Salvar"). */
+  rotuloSalvar?: string;
+  /**
+   * Texto exibido quando a exclusão é recusada por vínculos. Quando ausente, o
+   * modal usa o resumo técnico devolvido pelo servidor.
+   */
+  mensagemVinculos?: string;
 };
 
 const LARGURA_PADRAO: ColunaLargura = { min: 'min-w-[120px]', max: 'max-w-[220px]' };
@@ -161,9 +179,47 @@ const CONFIG_CATEGORIAS: ListaConfig = {
   contagem: { singular: 'categoria', plural: 'categorias' },
 };
 
+/**
+ * Cores: PRIMEIRO cadastro simples no padrão profissional (lista + drawer).
+ * A ordem das colunas é a da pergunta que se faz ao revisar a cartela: qual é a
+ * cor (amostra + nome), como ela é representada (HEX), ela está disponível
+ * (status) e onde ela é usada (utilização).
+ */
+const CONFIG_CORES: ListaConfig = {
+  prioridade: ['amostra', 'nome', 'hex', 'ativo', 'uso_vinculado'],
+  rotulos: {
+    amostra: 'Amostra',
+    nome: 'Cor',
+    hex: 'HEX',
+    ativo: 'Status',
+    uso_vinculado: 'Utilização',
+  },
+  larguras: {
+    amostra: { min: 'min-w-[88px]', max: 'max-w-[96px]' },
+    nome: { min: 'min-w-[200px]', max: 'max-w-[300px]' },
+    hex: { min: 'min-w-[120px]', max: 'max-w-[140px]' },
+    ativo: { min: 'min-w-[110px]', max: 'max-w-[120px]' },
+    uso_vinculado: { min: 'min-w-[130px]', max: 'max-w-[160px]' },
+  },
+  titulo: 'nome',
+  card: ['amostra', 'nome', 'hex', 'ativo', 'uso_vinculado'],
+  amostra: 'hex',
+  buscaPlaceholder: 'Buscar cor...',
+  rotuloNovo: 'Nova cor',
+  rotuloEditar: 'Editar cor',
+  descricaoDrawer: 'Cadastre uma cor para utilização no catálogo de produtos.',
+  rotuloSalvar: 'Salvar cor',
+  mensagemVinculos: 'Não é possível excluir esta cor porque existem registros vinculados.',
+  vazioTitulo: 'Nenhuma cor cadastrada',
+  vazioDescricao: 'Cadastre a primeira cor para padronizar o catálogo de produtos.',
+  alternarAtivo: true,
+  contagem: { singular: 'cor', plural: 'cores' },
+};
+
 const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   produtos: CONFIG_PRODUTOS,
   categorias: CONFIG_CATEGORIAS,
+  cores: CONFIG_CORES,
 };
 
 export function configDaLista(recurso: string): ListaConfig {
@@ -190,6 +246,40 @@ export const CAMPO_ESTOQUE: Field = {
 };
 
 /**
+ * Coluna sintética de AMOSTRA da cor.
+ *
+ * Mesmo padrão da coluna Estoque de Produtos: uma coluna calculada no front, a
+ * partir de dados que a API já devolveu (o HEX do registro). Não há consulta
+ * por linha nem endpoint novo.
+ */
+export const CAMPO_AMOSTRA: Field = {
+  name: 'amostra',
+  label: 'Amostra',
+  type: 'text',
+  virtual: true,
+  list: true,
+  form: false,
+  hint: 'Amostra visual gerada a partir do código HEX.',
+};
+
+/**
+ * Coluna sintética de UTILIZAÇÃO.
+ *
+ * O número vem do servidor (`uso_vinculado`, contagem real recortada pela
+ * empresa ativa — ver `Resource.uso`). O front só apresenta: zero vira "—",
+ * porque "0 produtos" polui a leitura da cartela.
+ */
+export const CAMPO_USO: Field = {
+  name: 'uso_vinculado',
+  label: 'Utilização',
+  type: 'integer',
+  virtual: true,
+  list: true,
+  form: false,
+  hint: 'Quantos registros da empresa ativa usam este cadastro.',
+};
+
+/**
  * Coluna `#` (id) dos demais recursos: é o identificador que o operador usa em
  * atendimento/auditoria. Produtos dispensam — lá a identificação é SKU + nome.
  */
@@ -197,6 +287,11 @@ export const CAMPO_ID: Field = { name: 'id', label: '#', type: 'text', virtual: 
 
 export function usaColunaEstoque(recurso: string): boolean {
   return recurso === 'produtos';
+}
+
+/** Campo de onde sai a amostra visual (null = recurso sem coluna Amostra). */
+export function campoDaAmostra(recurso: string): string | null {
+  return configDaLista(recurso).amostra ?? null;
 }
 
 /** Ordena os campos visíveis pela prioridade do recurso (o resto mantém a ordem do domínio). */
@@ -234,6 +329,30 @@ export function placeholderBusca(recurso: string, rotuloPadrao: string): string 
 /** Rótulo do botão de inclusão — padrão "Novo <singular>" quando não configurado. */
 export function rotuloNovo(recurso: string, singular: string): string {
   return configDaLista(recurso).rotuloNovo ?? `Novo ${singular.toLowerCase()}`;
+}
+
+/** Título do formulário de EDIÇÃO (drawer/modal) — padrão "Editar <singular>". */
+export function rotuloEditar(recurso: string, singular: string): string {
+  return configDaLista(recurso).rotuloEditar ?? `Editar ${singular.toLowerCase()}`;
+}
+
+/** Descrição do drawer de cadastro/edição (texto de apoio). */
+export function descricaoDoDrawer(recurso: string): string | undefined {
+  return configDaLista(recurso).descricaoDrawer;
+}
+
+/** Rótulo do botão de salvar do drawer (padrão: "Salvar"). */
+export function rotuloSalvar(recurso: string): string {
+  return configDaLista(recurso).rotuloSalvar ?? 'Salvar';
+}
+
+/**
+ * Mensagem de exclusão bloqueada por vínculos (null = usa o resumo do servidor).
+ * O diagnóstico continua sendo a fonte dos números e dos módulos; aqui fica só
+ * a frase que o operador lê, na voz do cadastro.
+ */
+export function mensagemDeVinculos(recurso: string): string | null {
+  return configDaLista(recurso).mensagemVinculos ?? null;
 }
 
 /** Título/descrição do estado vazio sem registros — genérico quando não configurado. */
@@ -334,7 +453,12 @@ function valorDeFaixa(f: Field, bruto: string): string {
 export function chipsDeFiltros(
   fields: Field[],
   filtros: Record<string, string>,
-  opcoes: Record<string, Option[]> = {}
+  opcoes: Record<string, Option[]> = {},
+  /**
+   * Filtros rápidos do recurso (Todas/Ativas/Inativas): o chip mostra o rótulo
+   * do recorte escolhido ("Ativas") em vez do valor técnico ("Sim").
+   */
+  rapidos: { field: string; options: { value: string; label: string }[] }[] = []
 ): ChipFiltro[] {
   const chips: ChipFiltro[] = [];
   for (const f of fields) {
@@ -368,7 +492,8 @@ export function chipsDeFiltros(
     }
     const valor = filtros[f.name] ?? '';
     if (!valor) continue;
-    chips.push({ chaves: [f.name], rotulo: f.label, valor: rotuloDaOpcao(f, valor, opcoes) });
+    const rapido = rapidos.find((r) => r.field === f.name)?.options.find((o) => o.value === valor);
+    chips.push({ chaves: [f.name], rotulo: f.label, valor: rapido?.label ?? rotuloDaOpcao(f, valor, opcoes) });
   }
   return chips;
 }

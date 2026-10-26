@@ -251,6 +251,7 @@ export function Drawer({
   description,
   children,
   footer,
+  size = 'md',
 }: {
   open: boolean;
   onClose: () => void;
@@ -258,6 +259,12 @@ export function Drawer({
   description?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
+  /**
+   * Largura em telas a partir de `sm`. `md` (28rem) para filtros/detalhes;
+   * `lg` (32rem) para cadastro — cabe formulário e prévia sem apertar campos.
+   * No celular o painel continua ocupando a largura toda (`w-full`).
+   */
+  size?: 'md' | 'lg';
 }) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -290,7 +297,7 @@ export function Drawer({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="relative flex h-full w-full max-w-md flex-col bg-surface shadow-modal outline-none animate-slide-in"
+        className={`relative flex h-full w-full flex-col bg-surface shadow-modal outline-none animate-slide-in ${size === 'lg' ? 'max-w-lg' : 'max-w-md'}`}
       >
         <header className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
           <div className="min-w-0">

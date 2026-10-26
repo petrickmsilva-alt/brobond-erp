@@ -240,7 +240,7 @@ export const MODULES: Module[] = [
     keywords: 'cartela de cores variantes hex',
     path: '/cores',
     resource: 'cores',
-    description: 'Cores padronizadas com amostra visual.',
+    description: 'Cores padronizadas usadas no catálogo de produtos.',
   },
   {
     id: 'colecoes',

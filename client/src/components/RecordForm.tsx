@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Eraser, Eye, EyeOff, Loader2, MapPin, Plus, Save } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import type { Field, Option, ResourceMeta } from '../lib/meta';
 import { maskCep, maskDocument, maskPhone, toInputValue } from '../lib/format';
+import { normalizarHex } from '../lib/hex';
 import { ProductSelector } from './ProductSelector';
 
 export type FormValues = Record<string, string | boolean | string[]>;
@@ -77,6 +78,9 @@ export function RecordForm({
   refOptions,
   autoFocus = true,
   before,
+  layout = 'grid',
+  hideActions = false,
+  depoisDoCampo,
 }: {
   resource: ResourceMeta;
   values: FormValues;
@@ -90,6 +94,24 @@ export function RecordForm({
   autoFocus?: boolean;
   /** conteúdo exibido antes dos campos (ex.: galeria de fotos) */
   before?: ReactNode;
+  /**
+   * `grid` (padrão) = duas colunas no desktop. `unico` = uma coluna — usado no
+   * drawer de cadastro simples, onde o painel é estreito e dois campos lado a
+   * lado ficariam apertados.
+   */
+  layout?: 'grid' | 'unico';
+  /**
+   * Esconde a barra de ações do próprio formulário (Limpar/Incluir). O drawer
+   * de cadastro tem rodapé fixo próprio e precisa ser a ÚNICA barra de ações —
+   * sem dois botões "salvar" concorrendo na mesma tela.
+   */
+  hideActions?: boolean;
+  /**
+   * Conteúdo extra renderizado logo APÓS um campo, por nome (ex.: a prévia da
+   * amostra de cor embaixo do código HEX). Em `layout="unico"` ocupa a linha
+   * inteira; no grid, também.
+   */
+  depoisDoCampo?: Record<string, ReactNode>;
 }) {
   const fields = useMemo(() => resource.fields.filter((f) => f.form !== false && !f.readonly && f.type !== 'images'), [resource]);
   const firstName = fields[0]?.name;
@@ -173,37 +195,42 @@ export function RecordForm({
           {sec.title && (
             <h3 className="mb-3 mt-2 border-b border-slate-200 pb-1.5 text-xs font-bold uppercase tracking-wide text-navy-700">{sec.title}</h3>
           )}
-          <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
+          <div className={`grid grid-cols-1 gap-x-4 gap-y-4 ${layout === 'grid' ? 'sm:grid-cols-2' : ''}`}>
             {sec.fields.map((f) => (
-              <div key={f.name} className={f.wide || f.type === 'textarea' ? 'sm:col-span-2' : ''}>
-                <FieldInput
-                  field={f}
-                  value={values[f.name]}
-                  error={errors[f.name]}
-                  onChange={(v) => onChange(f.name, v)}
-                  options={(f.type === 'ref' || f.type === 'multiref') && f.ref ? refOptions[f.ref] : undefined}
-                  editing={editing}
-                  autoFocus={autoFocus && f.name === firstName}
-                  disabled={busy}
-                  onBuscarCep={f.type === 'cep' ? buscarCep : undefined}
-                  buscandoCep={cepBuscando}
-                  avisoCep={f.type === 'cep' ? cepAviso : null}
-                />
-              </div>
+              <Fragment key={f.name}>
+                <div className={layout === 'grid' && (f.wide || f.type === 'textarea') ? 'sm:col-span-2' : ''}>
+                  <FieldInput
+                    field={f}
+                    value={values[f.name]}
+                    error={errors[f.name]}
+                    onChange={(v) => onChange(f.name, v)}
+                    options={(f.type === 'ref' || f.type === 'multiref') && f.ref ? refOptions[f.ref] : undefined}
+                    editing={editing}
+                    autoFocus={autoFocus && f.name === firstName}
+                    disabled={busy}
+                    onBuscarCep={f.type === 'cep' ? buscarCep : undefined}
+                    buscandoCep={cepBuscando}
+                    avisoCep={f.type === 'cep' ? cepAviso : null}
+                  />
+                </div>
+                {depoisDoCampo?.[f.name] && <div className="sm:col-span-full">{depoisDoCampo[f.name]}</div>}
+              </Fragment>
             ))}
           </div>
         </div>
       ))}
 
-      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-4">
-        <button type="button" className="btn-secondary" onClick={onClear} disabled={busy} title="Limpar os campos do formulário">
-          <Eraser className="h-4 w-4" /> Limpar
-        </button>
-        <button type="submit" className={editing ? 'btn-primary' : 'btn-accent'} disabled={busy}>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : editing ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-          {editing ? 'Salvar alterações' : 'Incluir'}
-        </button>
-      </div>
+      {!hideActions && (
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-4">
+          <button type="button" className="btn-secondary" onClick={onClear} disabled={busy} title="Limpar os campos do formulário">
+            <Eraser className="h-4 w-4" /> Limpar
+          </button>
+          <button type="submit" className={editing ? 'btn-primary' : 'btn-accent'} disabled={busy}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : editing ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+            {editing ? 'Salvar alterações' : 'Incluir'}
+          </button>
+        </div>
+      )}
     </form>
   );
 }
@@ -391,10 +418,20 @@ function FieldInput({
             className={`${cls} font-mono uppercase`}
             value={v}
             onChange={(e) => onChange(e.target.value)}
-            placeholder="#1F3A5F"
+            // Normaliza ao sair do campo (#abc → #AABBCC, 172038 → #172038) com
+            // a MESMA regra do servidor. Valor inválido não é "corrigido" — a
+            // validação do formulário mostra o erro e não envia à API.
+            onBlur={() => {
+              const canonico = normalizarHex(v);
+              if (canonico && canonico !== v) onChange(canonico);
+            }}
+            placeholder={f.placeholder ?? '#1F3A5F'}
             maxLength={7}
             disabled={disabled}
             autoFocus={autoFocus}
+            spellCheck={false}
+            autoCapitalize="characters"
+            aria-invalid={error ? true : undefined}
           />
           {v && (
             <button type="button" className="btn-icon" title="Limpar cor" onClick={() => onChange('')} disabled={disabled}>
