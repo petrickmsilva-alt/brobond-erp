@@ -133,6 +133,26 @@ export function translatePgError(e: any, r?: Resource): HttpError | null {
         // Índice parcial uq_clientes_documento_empresa (documento único por empresa).
         return new HttpError(409, 'Já existe um cliente cadastrado com este CPF ou CNPJ.', { cnpj_cpf: 'Já cadastrado' }, 'cliente_duplicado');
       }
+      // Representantes: dois índices únicos por empresa (migration 0021) —
+      // CPF (`uq_representantes_cpf_empresa`) e vínculo com o usuário do
+      // sistema (`uq_representantes_usuario_empresa`). A regra é do BANCO; aqui
+      // só traduzimos a violação em mensagem clara, apontando o campo certo.
+      if (r?.key === 'representantes' && /representantes_cpf/i.test(constraint)) {
+        return new HttpError(
+          409,
+          'Já existe um representante cadastrado com este CPF nesta empresa.',
+          { cpf: 'Já cadastrado' },
+          'representante_duplicado'
+        );
+      }
+      if (r?.key === 'representantes' && /representantes_usuario/i.test(constraint)) {
+        return new HttpError(
+          409,
+          'Este usuário do sistema já está vinculado a outro representante nesta empresa.',
+          { usuario_id: 'Já vinculado' },
+          'representante_usuario_duplicado'
+        );
+      }
       if (r?.key === 'fornecedores' && /fornecedores_documento/i.test(constraint)) {
         // Índice parcial uq_fornecedores_documento_empresa (documento único por
         // empresa) — o MESMO tratamento do espelho (clientes): mensagem clara e

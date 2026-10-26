@@ -1102,6 +1102,177 @@ await (async () => {
   const sumiu = await req('GET', `/fornecedores/${semUsoForn.json?.id}`);
   check('fornecedores: o excluído some da leitura (404)', sumiu.status === 404, `status ${sumiu.status}`);
 }
+// --------------------------- CADASTROS › REPRESENTANTES (padrão LISTA → PÁGINA)
+// Representantes seguem o mesmo padrão de Cores, Coleções, Grades, Insumos e
+// Fornecedores: o formulário vive nas páginas /representantes/novo e
+// /representantes/:id/editar — `/meta` não declara drawer/modal. O contrato
+// abaixo é exatamente o que elas usam (o MESMO contrato genérico de antes:
+// POST/PUT/DELETE /representantes).
+//
+// DOMÍNIO REAL de `representantes` (db/schema.sql + migration 0021): nome,
+// cpf (único por empresa), cargo, regiao, comissao_pct, usuario_id (vínculo
+// opcional e único por empresa), telefone, whatsapp, email, admissao,
+// desligamento, observacoes e ativo. NÃO existem salário, meta, limite de
+// crédito, banco/PIX, foto, ranking, faturamento nem "vendas totais" — e o
+// smoke trava essa verdade.
+//
+// A UNICIDADE (CPF e usuário por empresa) é índice do BANCO: fica coberta em
+// test/pg/representantes-pg.test.ts, não aqui (o modo demonstração não impõe
+// índice único).
+{
+  const meta = await req('GET', '/meta');
+  const rep = meta.json?.resources?.representantes;
+  check('representantes: /meta NÃO declara drawer/modal (formulário é página)', !('editor' in (rep || {})), `editor=${rep?.editor}`);
+  check('representantes: cadastro por empresa (empresa: true)', rep?.empresa === true, `empresa=${rep?.empresa}`);
+  check('representantes: RBAC preservado — SEM minPerfilEscrita (é cadastro por empresa)', rep?.minPerfilEscrita === undefined, `minPerfilEscrita=${rep?.minPerfilEscrita}`);
+  check('representantes: /meta entrega os filtros rápidos Todos/Ativos/Inativos',
+    JSON.stringify(rep?.quickFilters?.[0]?.options?.map((o) => o.label)) === JSON.stringify(['Todos', 'Ativos', 'Inativos']));
+  check('representantes: /meta declara os filtros reais (usuario_id, ativo)',
+    JSON.stringify(rep?.filterFields) === JSON.stringify(['usuario_id', 'ativo']),
+    `filterFields=${JSON.stringify(rep?.filterFields)}`);
+  check('representantes: /meta declara a utilização real pelos pedidos de venda',
+    rep?.uso?.recurso === 'vendas' && rep?.uso?.campo === 'representante_id',
+    JSON.stringify(rep?.uso));
+  check('representantes: /meta declara as seções reais do formulário',
+    ['Identificação', 'Comercial', 'Acesso ao ERP', 'Contato', 'Situação profissional'].every((sec) =>
+      (rep?.fields || []).some((f) => f.section === sec)));
+
+  // NENHUM campo inventado no formulário.
+  const camposRep = (rep?.fields || []).map((f) => f.name);
+  check('representantes: o formulário usa só os campos reais do banco',
+    ['nome', 'cpf', 'cargo', 'regiao', 'comissao_pct', 'usuario_id', 'telefone', 'whatsapp', 'email',
+      'admissao', 'desligamento', 'observacoes', 'ativo'].every((c) => camposRep.includes(c)) &&
+    !camposRep.some((c) => ['salario', 'meta', 'limite_credito', 'banco', 'pix', 'agencia', 'conta', 'foto',
+      'imagem', 'ranking', 'faturamento', 'comissao_acumulada', 'vendas_total', 'departamento'].includes(c)),
+    `campos=${camposRep.join(',')}`);
+
+  // Cadastro pela PÁGINA: mesmo contrato do CRUD genérico. CPF mascarado — o
+  // servidor confere o dígito verificador e grava só dígitos.
+  const criadoRep = await req('POST', '/representantes', {
+    nome: `Ana Smoke ${Date.now().toString().slice(-6)}`,
+    cpf: '529.982.247-25',
+    cargo: 'Vendedora',
+    regiao: 'Centro-Oeste',
+    comissao_pct: 3.5,
+    telefone: '+55 (62) 3333-4444',
+    whatsapp: '(62) 99999-8888',
+    email: 'ana.smoke@brobond.com.br',
+    admissao: '2024-03-01',
+    ativo: true,
+  });
+  check('representantes: POST cria o representante com o contrato real',
+    [200, 201].includes(criadoRep.status) && !!criadoRep.json?.id,
+    `status ${criadoRep.status} ${msg(criadoRep.json)}`);
+  const repId = criadoRep.json?.id;
+  check('representantes: CPF normalizado para dígitos e telefone canônico',
+    criadoRep.json?.cpf === '52998224725' && criadoRep.json?.telefone === '6233334444',
+    `cpf=${criadoRep.json?.cpf} telefone=${criadoRep.json?.telefone}`);
+  check('representantes: comissão padrão em % gravada como número',
+    Number(criadoRep.json?.comissao_pct) === 3.5, `comissao_pct=${criadoRep.json?.comissao_pct}`);
+
+  // CPF com dígito verificador errado é recusado com erro no campo.
+  const cpfInvalido = await req('POST', '/representantes', { nome: 'CPF inválido Smoke', cpf: '11144477736' });
+  check('representantes: CPF com dígito verificador errado → 400 com erro no campo cpf',
+    cpfInvalido.status === 400 && !!cpfInvalido.json?.fields?.cpf,
+    `status ${cpfInvalido.status} ${msg(cpfInvalido.json)}`);
+
+  // Segundo representante com vínculo REAL ao usuário do sistema (opcional):
+  // é o que o filtro `f.usuario_id` da tela recorta.
+  const opcoesUsuarios = await req('GET', '/usuarios/options');
+  const usuarioId = Array.isArray(opcoesUsuarios.json) ? opcoesUsuarios.json[0]?.value : null;
+  let repComUsuario = null;
+  if (usuarioId != null) {
+    repComUsuario = await req('POST', '/representantes', {
+      nome: `Carlos Smoke ${Date.now().toString().slice(-6)}`,
+      cargo: 'Representante',
+      regiao: 'Norte',
+      usuario_id: usuarioId,
+      ativo: true,
+    });
+    check('representantes: vínculo OPCIONAL com o usuário do sistema (mesma empresa)',
+      [200, 201].includes(repComUsuario.status) && Number(repComUsuario.json?.usuario_id) === Number(usuarioId),
+      `status ${repComUsuario.status} ${msg(repComUsuario.json)}`);
+  }
+
+  // Busca (server-side): nome, CPF com e sem máscara, cargo, região, telefone,
+  // WhatsApp e e-mail — os campos `search: true` do recurso.
+  const nomeRep = String(criadoRep.json?.nome || '');
+  const porNomeRep = await req('GET', `/representantes?q=${encodeURIComponent(nomeRep)}`);
+  check('representantes: busca por nome na listagem do servidor', porNomeRep.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+  const porCpfDigitos = await req('GET', '/representantes?q=52998224725');
+  check('representantes: busca por dígitos do CPF encontra o registro', porCpfDigitos.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+  const porCpfMascara = await req('GET', `/representantes?q=${encodeURIComponent('529.982.247-25')}`);
+  check('representantes: busca pelo CPF COM máscara encontra o mesmo registro', porCpfMascara.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+  const porCargoRep = await req('GET', '/representantes?q=Vendedora');
+  check('representantes: busca por cargo', porCargoRep.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+  const porRegiaoRep = await req('GET', '/representantes?q=Centro-Oeste');
+  check('representantes: busca por região', porRegiaoRep.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+  const porTelefoneRep = await req('GET', '/representantes?q=6233334444');
+  check('representantes: busca por telefone', porTelefoneRep.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+  const porEmailRep = await req('GET', '/representantes?q=ana.smoke%40brobond.com.br');
+  check('representantes: busca por e-mail', porEmailRep.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+
+  // Filtros reais na MESMA listagem paginada (contrato `f.<campo>`).
+  const repAtivos = await req('GET', '/representantes?f.ativo=true&pageSize=200');
+  check('representantes: filtro f.ativo=true', repAtivos.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+  if (repComUsuario?.json?.id != null) {
+    const porUsuario = await req('GET', `/representantes?f.usuario_id=${usuarioId}&pageSize=200`);
+    check('representantes: filtro f.usuario_id recorta no servidor',
+      porUsuario.json?.rows?.some((r) => Number(r.id) === Number(repComUsuario.json.id)) &&
+      !porUsuario.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+  }
+
+  // Leitura e edição pelo contrato genérico (a página /representantes/:id/editar).
+  const lidoRep = await req('GET', `/representantes/${repId}`);
+  check('representantes: GET /:id devolve o registro', lidoRep.status === 200 && lidoRep.json?.id === repId, `status ${lidoRep.status}`);
+  const editadoRep = await req('PUT', `/representantes/${repId}`, { cargo: 'Gerente comercial', regiao: 'Sudeste', comissao_pct: 5 });
+  check('representantes: PUT edita pelo contrato real',
+    editadoRep.status === 200 && editadoRep.json?.cargo === 'Gerente comercial' && Number(editadoRep.json?.comissao_pct) === 5,
+    `status ${editadoRep.status} ${msg(editadoRep.json)}`);
+
+  // UTILIZAÇÃO: contagem real dos pedidos de venda (agregada, em lote).
+  const clienteRep = await req('POST', '/clientes', { nome: `Cliente Smoke Rep ${Date.now().toString().slice(-6)}`, pessoa: 'pj' });
+  check('representantes: cliente do smoke para a venda', [200, 201].includes(clienteRep.status), `status ${clienteRep.status} ${msg(clienteRep.json)}`);
+  const vendaRep = await req('POST', '/vendas', { cliente_id: clienteRep.json?.id, representante_id: repId, data: '2026-10-01' });
+  check('representantes: a venda do smoke foi criada', [200, 201].includes(vendaRep.status), `status ${vendaRep.status} ${msg(vendaRep.json)}`);
+  const listaUsoRep = await req('GET', `/representantes?q=${encodeURIComponent(nomeRep)}`);
+  const linhaUsoRep = listaUsoRep.json?.rows?.find((r) => Number(r.id) === Number(repId));
+  check('representantes: Utilização traz a contagem real (pedidos de venda)',
+    Number(linhaUsoRep?.uso_vinculado) === 1 && linhaUsoRep?.uso_vinculado_label === '1 venda',
+    `uso=${linhaUsoRep?.uso_vinculado_label}`);
+
+  // Exclusão bloqueada por histórico protegido + saída por desativação.
+  const bloqueadaRep = await req('DELETE', `/representantes/${repId}`);
+  const diagRep = bloqueadaRep.json?.details?.dependencias;
+  check('representantes: DELETE vinculado → 409 dependencias_vinculadas',
+    bloqueadaRep.status === 409 && bloqueadaRep.json?.code === 'dependencias_vinculadas', `status ${bloqueadaRep.status}`);
+  check('representantes: diagnóstico diz onde/quantos/por quê (Vendas)',
+    diagRep?.bloqueado === true && diagRep?.modulosBloqueantes?.includes('Vendas') &&
+    diagRep?.vinculos?.some((v) => v.tabela === 'vendas' && v.quantidade >= 1 && Array.isArray(v.ids) && v.motivo));
+  const sobreviveuRep = await req('GET', `/representantes/${repId}`);
+  check('representantes: nada foi apagado — o registro permanece', sobreviveuRep.status === 200);
+  const desativadoRep = await req('PUT', `/representantes/${repId}`, { ativo: false });
+  check('representantes: desativar preserva o representante e o histórico',
+    desativadoRep.status === 200 && desativadoRep.json?.ativo === false, `status ${desativadoRep.status}`);
+  const desligadoRep = await req('PUT', `/representantes/${repId}`, { desligamento: '2026-01-31' });
+  check('representantes: desligamento registra a situação profissional (não apaga histórico)',
+    desligadoRep.status === 200 && String(desligadoRep.json?.desligamento || '').slice(0, 10) === '2026-01-31',
+    `status ${desligadoRep.status}`);
+  const aindaLaRep = await req('GET', `/representantes/${repId}`);
+  check('representantes: o representante desativado continua na leitura', aindaLaRep.status === 200 && aindaLaRep.json?.ativo === false);
+  const vendaIntactaRep = await req('GET', `/vendas/${vendaRep.json?.id}`);
+  check('representantes: a venda continua apontando para o representante desativado',
+    vendaIntactaRep.status === 200 && Number(vendaIntactaRep.json?.representante_id) === Number(repId));
+  const listaInativosRep = await req('GET', '/representantes?f.ativo=false&pageSize=200');
+  check('representantes: o desativado aparece no filtro de inativos', listaInativosRep.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+
+  // Representante sem vínculo segue o fluxo normal de exclusão.
+  const semUsoRep = await req('POST', '/representantes', { nome: `Representante sem uso ${Date.now().toString().slice(-6)}` });
+  const excluidaRep = await req('DELETE', `/representantes/${semUsoRep.json?.id}`);
+  check('representantes: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluidaRep.status), `status ${excluidaRep.status}`);
+  const sumiuRep = await req('GET', `/representantes/${semUsoRep.json?.id}`);
+  check('representantes: o excluído some da leitura (404)', sumiuRep.status === 404, `status ${sumiuRep.status}`);
+}
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);
 check('sem token → 401', semToken.status === 401, `status ${semToken.status}`);

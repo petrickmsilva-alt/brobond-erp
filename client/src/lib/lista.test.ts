@@ -336,3 +336,77 @@ describe('apresentação da listagem de grades', () => {
     expect(temUtilizacao({})).toBe(false);
   });
 });
+
+// ============================================================================
+// REPRESENTANTES — configuração da listagem (padrão LISTA → PÁGINA).
+//
+// O cadastro é o MESMO usado nas vendas, propostas e comissões: a config só
+// apresenta o que existe de verdade (nome, cpf, cargo, regiao, comissao_pct,
+// usuario_id, contato, ativo e a utilização agregada pelo servidor).
+// ============================================================================
+describe('representantes — configuração da listagem', () => {
+  const campos: Field[] = [
+    campo('nome', { label: 'Nome', type: 'text', section: 'Identificação' }),
+    campo('cpf', { label: 'CPF', type: 'document', section: 'Identificação' }),
+    campo('cargo', { label: 'Cargo', section: 'Identificação' }),
+    campo('regiao', { label: 'Região', section: 'Identificação' }),
+    campo('comissao_pct', { label: 'Comissão padrão (%)', type: 'percent', section: 'Comercial' }),
+    campo('usuario_id', { label: 'Usuário do sistema', type: 'ref', ref: 'usuarios', list: false }),
+    campo('telefone', { label: 'Telefone', type: 'phone' }),
+    campo('email', { label: 'E-mail', type: 'email' }),
+    campo('ativo', { label: 'Ativo', type: 'boolean' }),
+    campo('uso_vinculado', { label: 'Utilização', type: 'integer', virtual: true }),
+  ];
+
+  it('ordena as colunas do domínio e usa os rótulos de apresentação', () => {
+    const ordem = camposOrdenados(campos, 'representantes').map((f) => f.name);
+    expect(ordem.slice(0, 9)).toEqual([
+      'nome',
+      'cpf',
+      'cargo',
+      'regiao',
+      'comissao_pct',
+      'usuario_id',
+      'ativo',
+      'uso_vinculado',
+      'telefone',
+    ]);
+    expect(rotuloDaColuna(campos[0], 'representantes')).toBe('Representante');
+    expect(rotuloDaColuna(campos[8], 'representantes')).toBe('Status');
+    expect(larguraDaColuna(campos[0], 'representantes').min).toBe('min-w-[200px]');
+  });
+
+  it('o cartão mostra o essencial do representante, sem campo inventado', () => {
+    expect(camposDoCard(campos, 'representantes').map((f) => f.name)).toEqual([
+      'cargo',
+      'regiao',
+      'comissao_pct',
+      'usuario_id',
+      'cpf',
+      'ativo',
+      'uso_vinculado',
+    ]);
+  });
+
+  it('textos do cadastro são os do domínio (novo/editar/salvar/vazio/contagem)', () => {
+    expect(rotuloNovo('representantes', 'Representante')).toBe('Novo representante');
+    expect(rotuloEditar('representantes', 'Representante')).toBe('Editar representante');
+    expect(rotuloSalvar('representantes')).toBe('Salvar representante');
+    expect(descricaoDoCadastro('representantes')).toMatch(/vendas, propostas e comissões/);
+    expect(placeholderBusca('representantes', 'Representantes')).toMatch(/CPF/);
+    expect(textoVazio('representantes', 'Representante')).toEqual({
+      titulo: 'Nenhum representante cadastrado',
+      descricao: 'Cadastre o primeiro representante para vincular vendas, clientes e comissões.',
+    });
+    expect(textoContagem('representantes', 1, 3, 3)).toBe('1–3 de 3 representantes');
+    expect(textoContagem('representantes', 0, 0, 0)).toBe('Nenhum registro');
+  });
+
+  it('a linha oferece Ativar/Desativar e a utilização vem do servidor', () => {
+    expect(permiteAlternarAtivo('representantes')).toBe(true);
+    expect(permiteAlternarAtivo('clientes')).toBe(false);
+    expect(temUtilizacao({ uso_vinculado: 12, uso_vinculado_label: '12 vendas' })).toBe(true);
+    expect(temUtilizacao({ uso_vinculado: 0 })).toBe(false);
+    expect(CAMPO_USO.label).toBe('Utilização');
+  });
+});

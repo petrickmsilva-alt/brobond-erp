@@ -1299,13 +1299,26 @@ export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
  * - /grades/novo e /grades/:id/editar (listagem em /grades)
  * - /insumos/novo e /insumos/:id/editar (listagem em /insumos)
  * - /fornecedores/novo e /fornecedores/:id/editar (listagem em /fornecedores)
+ * - /representantes/novo e /representantes/:id/editar (listagem em /representantes)
  *
  * É a lista canônica do padrão LISTA → PÁGINA do BROBOND ERP: quem entra aqui
  * navega (rota filha do módulo) em vez de abrir a superfície do formulário na
  * própria listagem. Demais cadastros simples devem migrar para cá — não para
  * novas superfícies de modal/drawer.
  */
-export const FORM_DIRETO = new Set(['clientes', 'produtos', 'vendas', 'categorias', 'cores', 'colecoes', 'tamanhos', 'grades', 'insumos', 'fornecedores']);
+export const FORM_DIRETO = new Set([
+  'clientes',
+  'produtos',
+  'vendas',
+  'categorias',
+  'cores',
+  'colecoes',
+  'tamanhos',
+  'grades',
+  'insumos',
+  'fornecedores',
+  'representantes',
+]);
 
 export type NavSection = {
   id: NavSectionId;

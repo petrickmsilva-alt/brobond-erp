@@ -988,6 +988,15 @@ export const RESOURCES: Record<string, Resource> = {
     uso: { recurso: 'itens_ficha_tecnica', campo: 'insumo_id', singular: 'ficha técnica', plural: 'fichas técnicas' },
   },
 
+  // REPRESENTANTES — vendedores/funcionários do ERP (a entidade oficial de
+  // vendedor; NÃO existe outra). Cadastro POR EMPRESA no padrão
+  // LISTA → PÁGINA (`/representantes`, `/representantes/novo`,
+  // `/representantes/:id/editar` — ver client/src/modules.ts › FORM_DIRETO),
+  // nunca em modal/drawer.
+  //
+  // O formulário é agrupado pelas SEÇÕES reais do recurso (o `RecordForm` as
+  // renderiza na ordem em que aparecem): Identificação · Comercial ·
+  // Acesso ao ERP · Contato · Situação profissional.
   representantes: {
     key: 'representantes',
     empresa: true,
@@ -996,23 +1005,103 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Representante',
     labelFields: ['nome'],
     ops: ALL_OPS,
+    notice:
+      'Desligar ou desativar um representante NÃO apaga histórico: vendas, clientes, propostas e comissões apuradas continuam apontando para ele. Um representante em uso não é excluído — ele é DESATIVADO.',
     fields: [
-      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, wide: true },
-      { name: 'cpf', label: 'CPF', type: 'document', documento: 'cpf', search: true, maxLength: 14 },
-      { name: 'cargo', label: 'Cargo', type: 'text', maxLength: 60, search: true, placeholder: 'Vendedor, Representante, Gerente comercial...' },
-      { name: 'regiao', label: 'Região', type: 'text', search: true, maxLength: 80 },
-      { name: 'comissao_pct', label: 'Comissão padrão (%)', type: 'percent', min: 0, max: 100, default: 0, hint: 'A comissão é paga sobre faturas efetivamente LIQUIDADAS, não sobre a venda criada.' },
-      { name: 'usuario_id', label: 'Usuário do sistema', type: 'ref', ref: 'usuarios', list: false, search: true, section: 'Acesso', hint: 'Vincule para que a pessoa veja as próprias vendas e comissões ao entrar no ERP.' },
-      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, section: 'Contato' },
-      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, section: 'Contato' },
-      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, section: 'Contato' },
-      { name: 'admissao', label: 'Admissão', type: 'date', list: false, section: 'Situação' },
-      { name: 'desligamento', label: 'Desligamento', type: 'date', list: false, section: 'Situação', hint: 'Preencher aqui NÃO apaga o histórico de vendas nem as comissões já apuradas.' },
-      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Situação' },
-      ativo,
+      // ---------------- Identificação ----------------
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, wide: true, section: 'Identificação' },
+      {
+        name: 'cpf',
+        label: 'CPF',
+        type: 'document',
+        documento: 'cpf',
+        search: true,
+        maxLength: 14,
+        section: 'Identificação',
+        hint: 'CPF único por empresa (índice uq_representantes_cpf_empresa). O dígito verificador é conferido no servidor.',
+      },
+      {
+        name: 'cargo',
+        label: 'Cargo',
+        type: 'text',
+        maxLength: 60,
+        search: true,
+        section: 'Identificação',
+        placeholder: 'Vendedor, Representante, Gerente comercial...',
+      },
+      { name: 'regiao', label: 'Região', type: 'text', search: true, maxLength: 80, section: 'Identificação' },
+
+      // ---------------- Comercial ----------------
+      {
+        name: 'comissao_pct',
+        label: 'Comissão padrão (%)',
+        type: 'percent',
+        min: 0,
+        max: 100,
+        default: 0,
+        section: 'Comercial',
+        hint: 'A comissão é paga sobre faturas efetivamente LIQUIDADAS, não sobre a venda criada.',
+      },
+
+      // ---------------- Acesso ao ERP ----------------
+      {
+        name: 'usuario_id',
+        label: 'Usuário do sistema',
+        type: 'ref',
+        ref: 'usuarios',
+        list: false,
+        search: true,
+        section: 'Acesso ao ERP',
+        hint: 'Vínculo OPCIONAL e único por empresa (uq_representantes_usuario_empresa): vincule para que a pessoa veja as próprias vendas e comissões ao entrar no ERP.',
+      },
+
+      // ---------------- Contato ----------------
+      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, search: true, section: 'Contato' },
+      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
+      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, search: true, section: 'Contato' },
+
+      // ---------------- Situação profissional ----------------
+      { name: 'admissao', label: 'Admissão', type: 'date', list: false, section: 'Situação profissional' },
+      {
+        name: 'desligamento',
+        label: 'Desligamento',
+        type: 'date',
+        list: false,
+        section: 'Situação profissional',
+        hint: 'Preencher aqui registra apenas a situação profissional: NÃO apaga o histórico de vendas nem as comissões já apuradas.',
+      },
+      {
+        ...ativo,
+        section: 'Situação profissional',
+        hint: 'Inativo sai das opções de novos cadastros e do vínculo com novos pedidos; o histórico comercial permanece.',
+      },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Situação profissional' },
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
+    // Filtros da LISTAGEM (server-side, o mesmo contrato `f.<campo>` dos demais
+    // recursos): status e usuário do sistema — as duas colunas que recortam o
+    // cadastro com dado REAL. Cargo e região são texto livre: entram pela busca
+    // (`?q=`), não como filtro de igualdade.
+    filterFields: ['usuario_id', 'ativo'],
+    // Recorte de um clique acima da tabela — mesmo contrato `f.ativo` de Cores,
+    // Fornecedores e Insumos (nenhum SQL novo).
+    quickFilters: [
+      {
+        field: 'ativo',
+        label: 'Status',
+        options: [
+          { value: '', label: 'Todos' },
+          { value: 'true', label: 'Ativos' },
+          { value: 'false', label: 'Inativos' },
+        ],
+      },
+    ],
+    // Coluna "Utilização": pedidos de venda da EMPRESA ATIVA vinculados ao
+    // representante (`vendas.representante_id`). Contagem agregada no servidor
+    // em UMA consulta por página (`anotarUsoVinculado`) — nunca um N+1 e nunca
+    // um número inventado. Não é faturamento, nem meta, nem ranking.
+    uso: { recurso: 'vendas', campo: 'representante_id', singular: 'venda', plural: 'vendas' },
   },
 
   clientes: {
