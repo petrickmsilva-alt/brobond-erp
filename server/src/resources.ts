@@ -906,15 +906,51 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Insumo',
     labelFields: ['nome'],
     ops: ALL_OPS,
+    // Padrão LISTA → PÁGINA do BROBOND ERP: a inclusão e a edição vivem em
+    // /insumos/novo e /insumos/:id/editar (rotas no cliente, registradas em
+    // client/src/modules.ts › FORM_DIRETO). NÃO existe modal/drawer para este
+    // cadastro. O contrato continua o MESMO (POST/PUT /api/insumos com nome,
+    // unidade, custo_medio, fornecedor_id e ativo) e o servidor segue sendo a
+    // autoridade (RBAC + validatePayload).
+    //
+    // ATENÇÃO — a tabela `insumos` tem EXATAMENTE estas colunas: nome,
+    // unidade, custo_medio, fornecedor_id, ativo, criado_em, atualizado_em
+    // (db/schema.sql). NÃO existem `estoque_min`/`estoque_max`/`localizacao`
+    // aqui: o saldo e o estoque mínimo vivem na tabela `estoque_insumos` (um
+    // saldo por insumo, `estoque_min` — sem máximo). Por isso o formulário de
+    // insumos NÃO tem seção de estoque nem campo de localização: seriam campos
+    // inventados. O estoque mínimo continua editável no módulo "Estoque de
+    // Insumos" (recurso `estoque_insumos`), como sempre.
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, wide: true },
       { name: 'unidade', label: 'Unidade', type: 'select', required: true, options: UNIDADES, default: 'un' },
-      { name: 'custo_medio', label: 'Custo médio', type: 'money', min: 0, default: 0 },
+      { name: 'custo_medio', label: 'Custo médio', type: 'money', min: 0, default: 0, hint: 'Custo por unidade do insumo. É atualizado automaticamente quando uma compra é recebida — o valor aqui é a referência inicial do cadastro.' },
       { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores', search: true },
       ativo,
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
+    // Filtros da LISTAGEM (server-side, mesmo mecanismo dos demais recursos):
+    // unidade, fornecedor e status — as três perguntas que se faz ao revisar o
+    // estoque de matéria-prima. Todos os campos EXISTEM em `insumos`.
+    filterFields: ['unidade', 'fornecedor_id', 'ativo'],
+    // Recorte de um clique acima da tabela — mesmo contrato `f.ativo` de Cores
+    // e Grades (nenhum SQL novo).
+    quickFilters: [
+      {
+        field: 'ativo',
+        label: 'Status',
+        options: [
+          { value: '', label: 'Todos' },
+          { value: 'true', label: 'Ativos' },
+          { value: 'false', label: 'Inativos' },
+        ],
+      },
+    ],
+    // Coluna "Utilização": quantas FICHAS TÉCNICAS consomem este insumo — é o
+    // uso real do cadastro (o insumo entra no custo do produto por ela). A
+    // contagem é agregada no servidor, em lote, para a página inteira.
+    uso: { recurso: 'itens_ficha_tecnica', campo: 'insumo_id', singular: 'ficha técnica', plural: 'fichas técnicas' },
   },
 
   representantes: {

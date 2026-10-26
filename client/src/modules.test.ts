@@ -385,6 +385,7 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
       'colecoes',
       'cores',
       'grades',
+      'insumos',
       'produtos',
       'vendas',
     ]);
@@ -417,6 +418,16 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
     expect(moduleOfPath('/grades')?.id).toBe('grades');
     expect(moduleOfPath('/grades/novo')?.id).toBe('grades');
     expect(moduleOfPath('/grades/12/editar')?.id).toBe('grades');
+  });
+
+  it('Insumos entra no padrão LISTA → PÁGINA: criação e edição vivem no módulo /insumos', () => {
+    expect(FORM_DIRETO.has('insumos')).toBe(true);
+    const insumos = MODULES.find((m) => m.id === 'insumos');
+    expect(insumos?.path).toBe('/insumos');
+    // As rotas filhas pertencem ao módulo pai (breadcrumb e acesso usam isso).
+    expect(moduleOfPath('/insumos')?.id).toBe('insumos');
+    expect(moduleOfPath('/insumos/novo')?.id).toBe('insumos');
+    expect(moduleOfPath('/insumos/12/editar')?.id).toBe('insumos');
   });
 
   it('cada recurso de FORM_DIRETO tem um módulo navegável na mesma rota', () => {

@@ -298,12 +298,59 @@ const CONFIG_GRADES: ListaConfig = {
   contagem: { singular: 'grade', plural: 'grades' },
 };
 
+/**
+ * Insumos: matéria-prima da produção. Cadastro no padrão LISTA → PÁGINA
+ * (`/insumos/novo`, `/insumos/:id/editar`), nunca formulário sobreposto.
+ *
+ * A ordem das colunas é a da pergunta que se faz ao revisar o estoque de
+ * matéria-prima: qual é o insumo, em que unidade ele é comprado, de quem vem,
+ * quanto custa, quanto tem em estoque, se está ativo e onde ele é usado.
+ *
+ * `estoque_saldo` e `uso_vinculado` são campos VIRTUAIS: o servidor os anota
+ * na listagem (agregados, uma consulta por página) — nenhum número inventado
+ * aqui.
+ */
+const CONFIG_INSUMOS: ListaConfig = {
+  prioridade: ['nome', 'unidade', 'fornecedor_id', 'custo_medio', 'estoque_saldo', 'ativo', 'uso_vinculado'],
+  rotulos: {
+    nome: 'Insumo',
+    unidade: 'Unidade',
+    fornecedor_id: 'Fornecedor',
+    custo_medio: 'Custo médio',
+    estoque_saldo: 'Estoque',
+    ativo: 'Status',
+    uso_vinculado: 'Utilização',
+  },
+  larguras: {
+    nome: { min: 'min-w-[200px]', max: 'max-w-[280px]' },
+    unidade: { min: 'min-w-[120px]', max: 'max-w-[150px]' },
+    fornecedor_id: { min: 'min-w-[150px]', max: 'max-w-[200px]' },
+    custo_medio: { min: 'min-w-[120px]', max: 'max-w-[140px]' },
+    estoque_saldo: { min: 'min-w-[110px]', max: 'max-w-[130px]' },
+    ativo: { min: 'min-w-[110px]', max: 'max-w-[120px]' },
+    uso_vinculado: { min: 'min-w-[150px]', max: 'max-w-[200px]' },
+  },
+  titulo: 'nome',
+  card: ['unidade', 'fornecedor_id', 'custo_medio', 'estoque_saldo', 'ativo', 'uso_vinculado'],
+  buscaPlaceholder: 'Buscar insumo...',
+  rotuloNovo: 'Novo insumo',
+  rotuloEditar: 'Editar insumo',
+  descricaoCadastro: 'Cadastre a matéria-prima usada na produção, a unidade de compra, o custo e o fornecedor.',
+  rotuloSalvar: 'Salvar insumo',
+  mensagemVinculos: 'Não é possível excluir este insumo porque existem registros vinculados.',
+  vazioTitulo: 'Nenhum insumo cadastrado',
+  vazioDescricao: 'Cadastre a primeira matéria-prima para usar nas fichas técnicas e nas compras.',
+  alternarAtivo: true,
+  contagem: { singular: 'insumo', plural: 'insumos' },
+};
+
 const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   produtos: CONFIG_PRODUTOS,
   categorias: CONFIG_CATEGORIAS,
   cores: CONFIG_CORES,
   colecoes: CONFIG_COLECOES,
   grades: CONFIG_GRADES,
+  insumos: CONFIG_INSUMOS,
 };
 
 export function configDaLista(recurso: string): ListaConfig {

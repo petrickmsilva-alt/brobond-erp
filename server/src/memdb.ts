@@ -306,6 +306,38 @@ export class MemStore implements Store {
     return out;
   }
 
+  /**
+   * Espelha a SOMATÓRIA agregada do PostgreSQL: soma, de uma vez, o valor da
+   * coluna `valor` das linhas que apontam para cada id pela coluna `grupo`.
+   * Mesmo contrato (um Map), mesmo recorte por empresa e — como em
+   * `countByColumn` — nenhuma consulta por registro (nenhum N+1).
+   *
+   * Serve ao saldo de estoque de insumos, que vive em `estoque_insumos` (um
+   * saldo por insumo) e não na própria linha do insumo.
+   */
+  async sumByColumn(
+    r: Resource,
+    grupo: string,
+    valor: string,
+    ids: number[],
+    empresaId?: number
+  ): Promise<Map<number, number>> {
+    const out = new Map<number, number>();
+    const colunas = columnsOf(r).map((f) => f.name);
+    if (!colunas.includes(grupo) || !colunas.includes(valor)) return out;
+    const alvos = new Set(ids.filter((n) => Number.isInteger(n) && n > 0));
+    const escopado = temEscopoEmpresa(r) && empresaId !== undefined;
+    for (const row of this.table(r.table).rows.values()) {
+      if (escopado && Number(row.empresa_id ?? EMPRESA_PADRAO) !== empresaId) continue;
+      const id = Number(row[grupo]);
+      if (!alvos.has(id)) continue;
+      const n = Number(row[valor]);
+      if (!Number.isFinite(n)) continue;
+      out.set(id, (out.get(id) ?? 0) + n);
+    }
+    return out;
+  }
+
   private checkConstraints(r: Resource, data: Payload, id?: number) {
     const cur = id ? this.table(r.table).rows.get(id) : undefined;
     const merged = { ...(cur || {}), ...data };
