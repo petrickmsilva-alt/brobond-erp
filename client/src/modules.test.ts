@@ -384,6 +384,7 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
       'clientes',
       'colecoes',
       'cores',
+      'fornecedores',
       'grades',
       'insumos',
       'produtos',
@@ -439,6 +440,17 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
     expect(moduleOfPath('/insumos/novo')?.id).toBe('insumos');
     expect(moduleOfPath('/insumos/12/editar')?.id).toBe('insumos');
   });
+
+  it('Fornecedores entra no padrão LISTA → PÁGINA: cadastro e edição vivem no módulo /fornecedores (nunca em modal)', () => {
+    expect(FORM_DIRETO.has('fornecedores')).toBe(true);
+    const fornecedores = MODULES.find((m) => m.id === 'fornecedores');
+    expect(fornecedores?.path).toBe('/fornecedores');
+    // As rotas filhas pertencem ao módulo pai (breadcrumb e acesso usam isso).
+    expect(moduleOfPath('/fornecedores')?.id).toBe('fornecedores');
+    expect(moduleOfPath('/fornecedores/novo')?.id).toBe('fornecedores');
+    expect(moduleOfPath('/fornecedores/12/editar')?.id).toBe('fornecedores');
+  });
+
   it('cada recurso de FORM_DIRETO tem um módulo navegável na mesma rota', () => {
     for (const recurso of FORM_DIRETO) {
       const m = MODULES.find((x) => x.id === recurso);

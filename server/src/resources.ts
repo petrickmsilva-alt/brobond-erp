@@ -843,12 +843,25 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Fornecedor',
     labelFields: ['nome'],
     ops: ALL_OPS,
+    // RBAC PRESERVADO: `fornecedores` é cadastro POR EMPRESA (empresa: true),
+    // operável pelos perfis que já têm acesso (sem `minPerfilEscrita` — isso é
+    // do catálogo GLOBAL). A autoridade segue no servidor (checkAccess +
+    // validatePayload): o operador lê/cria/edita, mas NÃO exclui; a UI apenas
+    // reflete.
+    // Padrão LISTA → PÁGINA do BROBOND ERP: a inclusão e a edição vivem em
+    // /fornecedores/novo e /fornecedores/:id/editar (rotas no cliente,
+    // registradas em client/src/modules.ts › FORM_DIRETO). NÃO existe
+    // modal/drawer para este cadastro. O contrato continua o MESMO
+    // (POST/PUT /api/fornecedores) e o servidor segue sendo a autoridade.
+    notice:
+      'Um fornecedor em uso por compras, insumos ou produtos NÃO é excluído — ele é DESATIVADO: sai das opções de novos cadastros, mas o histórico (compras, recebimentos, cotações) continua apontando para ele.',
     fields: [
-      { name: 'nome', label: 'Razão social / Nome', type: 'text', required: true, search: true, maxLength: 160, wide: true },
-      { name: 'pessoa', label: 'Tipo de pessoa', type: 'select', required: true, default: 'pj', options: PESSOA },
-      { name: 'cnpj', label: 'CNPJ / CPF', type: 'document', search: true, maxLength: 20 },
-      { name: 'razao_social', label: 'Razão social', type: 'text', maxLength: 160, list: false, wide: true, search: true },
-      { name: 'nome_fantasia', label: 'Nome fantasia', type: 'text', maxLength: 160, list: false, search: true },
+      // ---------------- Identificação ----------------
+      { name: 'nome', label: 'Razão social / Nome', type: 'text', required: true, search: true, maxLength: 160, wide: true, section: 'Identificação' },
+      { name: 'pessoa', label: 'Tipo de pessoa', type: 'select', required: true, default: 'pj', options: PESSOA, section: 'Identificação' },
+      { name: 'cnpj', label: 'CNPJ / CPF', type: 'document', search: true, maxLength: 20, section: 'Identificação', hint: 'O dígito verificador é conferido no cadastro — documento inválido é recusado pela SEFAZ na NF-e de entrada.' },
+      { name: 'razao_social', label: 'Razão social', type: 'text', maxLength: 160, list: false, wide: true, search: true, section: 'Identificação' },
+      { name: 'nome_fantasia', label: 'Nome fantasia', type: 'text', maxLength: 160, list: false, search: true, section: 'Identificação' },
 
       // ---------------- Fiscal (necessário na NF-e de entrada) ----------------
       { name: 'ie', label: 'Inscrição estadual', type: 'text', maxLength: 30, list: false, search: true, section: 'Fiscal' },
@@ -858,10 +871,10 @@ export const RESOURCES: Record<string, Resource> = {
       ...camposEndereco(),
 
       // ---------------- Contato ----------------
-      { name: 'contato', label: 'Pessoa de contato', type: 'text', maxLength: 80, section: 'Contato' },
-      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, section: 'Contato' },
-      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, section: 'Contato' },
-      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, section: 'Contato' },
+      { name: 'contato', label: 'Pessoa de contato', type: 'text', maxLength: 80, search: true, section: 'Contato' },
+      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, search: true, section: 'Contato' },
+      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
+      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, search: true, section: 'Contato' },
 
       // ---------------- Comercial ----------------
       { name: 'prazo_entrega_dias', label: 'Prazo de entrega (dias)', type: 'integer', min: 0, list: false, section: 'Comercial' },
@@ -872,6 +885,28 @@ export const RESOURCES: Record<string, Resource> = {
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
+    // Filtros da LISTAGEM (server-side, mesmo mecanismo dos demais recursos):
+    // tipo de pessoa, UF e status — as três perguntas que se faz ao revisar os
+    // fornecedores. Todos os campos EXISTEM em `fornecedores`.
+    filterFields: ['pessoa', 'uf', 'ativo'],
+    // Recorte de um clique acima da tabela — mesmo contrato `f.ativo` de Cores,
+    // Grades e Insumos (nenhum SQL novo).
+    quickFilters: [
+      {
+        field: 'ativo',
+        label: 'Status',
+        options: [
+          { value: '', label: 'Todos' },
+          { value: 'true', label: 'Ativos' },
+          { value: 'false', label: 'Inativos' },
+        ],
+      },
+    ],
+    // Coluna "Utilização": quantos PEDIDOS DE COMPRA apontam para o fornecedor —
+    // é o uso real do cadastro (o fornecedor existe para comprar dele). A
+    // contagem é agregada no servidor, em lote, para a página inteira
+    // (`countByColumn`, recortada pela empresa ativa — `compras` é tenantada).
+    uso: { recurso: 'compras', campo: 'fornecedor_id', singular: 'compra', plural: 'compras' },
   },
 
   // Contatos adicionais do fornecedor (compras, financeiro, expedição).

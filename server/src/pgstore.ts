@@ -133,6 +133,12 @@ export function translatePgError(e: any, r?: Resource): HttpError | null {
         // Índice parcial uq_clientes_documento_empresa (documento único por empresa).
         return new HttpError(409, 'Já existe um cliente cadastrado com este CPF ou CNPJ.', { cnpj_cpf: 'Já cadastrado' }, 'cliente_duplicado');
       }
+      if (r?.key === 'fornecedores' && /fornecedores_documento/i.test(constraint)) {
+        // Índice parcial uq_fornecedores_documento_empresa (documento único por
+        // empresa) — o MESMO tratamento do espelho (clientes): mensagem clara e
+        // erro apontado no campo `cnpj` do formulário.
+        return new HttpError(409, 'Já existe um fornecedor cadastrado com este CNPJ ou CPF.', { cnpj: 'Já cadastrado' }, 'fornecedor_duplicado');
+      }
       const field = r?.fields.find((f) => (f.unique || f.uniqueEmpresa) && constraint.includes(f.name));
       if (r?.key === 'estoques' && /estoques/i.test(constraint)) {
         return new HttpError(409, 'Já existe saldo para este produto, tamanho e local. Edite o registro existente ou lance uma movimentação.');
