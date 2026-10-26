@@ -25,6 +25,7 @@ const TamanhoFormPage = lazy(() => import('./pages/TamanhoFormPage'));
 const GradeFormPage = lazy(() => import('./pages/GradeFormPage'));
 const InsumoFormPage = lazy(() => import('./pages/InsumoFormPage'));
 const FornecedorFormPage = lazy(() => import('./pages/FornecedorFormPage'));
+const RepresentanteFormPage = lazy(() => import('./pages/RepresentanteFormPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
 const FichaDetail = lazy(() => import('./pages/FichaDetail'));
@@ -255,6 +256,26 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="fornecedores">
                   <FornecedorFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Cadastro de representantes em página própria (fora de qualquer
+                modal/drawer): identificação, comissão, acesso ao ERP, contato e
+                situação profissional precisam de espaço próprio — o formulário
+                vive na rota, não sobreposto à lista. */}
+            <Route
+              path="representantes/novo"
+              element={
+                <ModuleAccess moduleId="representantes">
+                  <RepresentanteFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="representantes/:id/editar"
+              element={
+                <ModuleAccess moduleId="representantes">
+                  <RepresentanteFormPage />
                 </ModuleAccess>
               }
             />

@@ -303,6 +303,17 @@ export const REGRAS_RELACAO: RegraRelacao[] = [
   { alvo: 'clientes', tabela: 'politicas_comerciais', tipo: 'operacional', politica: 'seguir', motivo: 'política comercial negociada com o cliente' },
   { alvo: 'clientes', tabela: 'cotacao_decisoes', tipo: 'historico', politica: 'proteger', motivo: 'decisões do cliente em cotações' },
 
+  // ---- REPRESENTANTES -----------------------------------------------------
+  // O representante é o vendedor do histórico comercial. Excluir o cadastro
+  // NÃO pode apagar (nem desligar) vendas, propostas e comissões já apuradas:
+  // a FK é NO ACTION — o banco já recusa — e a política é declarada para o
+  // diagnóstico explicar POR QUE a saída é DESATIVAR/DESLIGAR. Nada de
+  // CASCADE, nada de remover FK, nada de balcão de exclusão forçada.
+  { alvo: 'representantes', tabela: 'vendas', tipo: 'historico', politica: 'proteger', motivo: 'pedidos de venda do representante' },
+  { alvo: 'representantes', tabela: 'comissoes_eventos', tipo: 'historico', politica: 'proteger', motivo: 'comissões apuradas do representante' },
+  { alvo: 'representantes', tabela: 'propostas', tipo: 'historico', politica: 'proteger', motivo: 'propostas comerciais do representante' },
+  { alvo: 'representantes', tabela: 'clientes', tipo: 'operacional', politica: 'seguir', motivo: 'clientes atendidos por este representante (vendedor padrão)' },
+
   // ---- PRODUTOS -----------------------------------------------------------
   // Estoque, pedidos, fichas e OPs usam FK NO ACTION: o produto é histórico.
   { alvo: 'produtos', tabela: 'estoques', tipo: 'historico', politica: 'seguir', motivo: 'saldo de estoque do produto' },
@@ -418,6 +429,13 @@ export const RELACOES_FK: RelacaoFkDeclarada[] = [
   { alvo: 'clientes', tabela: 'politicas_comerciais', colunas: ['cliente_id'], acao: 'CASCADE' },
   { alvo: 'clientes', tabela: 'portal_acessos', colunas: ['cliente_id'], acao: 'CASCADE' },
   { alvo: 'clientes', tabela: 'catalogo_compartilhamentos', colunas: ['cliente_id'], acao: 'SET_NULL' },
+
+  // representantes — `comissoes_eventos.representante_id` é coluna REAL sem
+  // `ref` em resources.ts. Sem esta declaração o modo demonstração não enxerga
+  // o vínculo (o catálogo do PostgreSQL enxerga sempre). As demais FKs para
+  // `representantes` (vendas, clientes, propostas) são descobertas pelos
+  // campos `ref` dos próprios recursos — ver `refsPara`.
+  { alvo: 'representantes', tabela: 'comissoes_eventos', colunas: ['representante_id'], acao: 'NO_ACTION' },
 
   // produtos
   { alvo: 'produtos', tabela: 'produto_composicao', colunas: ['produto_id'], acao: 'CASCADE' },

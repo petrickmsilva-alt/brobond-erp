@@ -434,6 +434,63 @@ const CONFIG_FORNECEDORES: ListaConfig = {
   contagem: { singular: 'fornecedor', plural: 'fornecedores' },
 };
 
+/**
+ * Representantes: vendedores/funcionários do ERP (a entidade oficial de
+ * vendedor). Cadastro POR EMPRESA no padrão LISTA → PÁGINA
+ * (`/representantes`, `/representantes/novo`, `/representantes/:id/editar`),
+ * nunca formulário sobreposto.
+ *
+ * A ordem das colunas é a da pergunta que se faz ao revisar o time comercial:
+ * quem é (nome — informação principal), o documento (CPF), a função (cargo) e
+ * onde atua (região) — a informação secundária —, quanto recebe de comissão
+ * padrão, com qual usuário do ERP está vinculado, como falar com a pessoa
+ * (contato), se está ativo e quantos pedidos de venda a empresa ativa tem com
+ * ele (utilização).
+ *
+ * `contato` e `uso_vinculado` são campos VIRTUAIS: `contato` é apresentação
+ * (telefone · e-mail que a API já devolveu na linha) e `uso_vinculado` é a
+ * contagem REAL agregada no servidor (`vendas.representante_id`, uma consulta
+ * por página, recortada pela empresa ativa) — nenhum número inventado aqui.
+ */
+const CONFIG_REPRESENTANTES: ListaConfig = {
+  prioridade: ['nome', 'cpf', 'cargo', 'regiao', 'comissao_pct', 'usuario_id', 'contato', 'ativo', 'uso_vinculado'],
+  rotulos: {
+    nome: 'Representante',
+    cpf: 'CPF',
+    cargo: 'Cargo',
+    regiao: 'Região',
+    comissao_pct: 'Comissão',
+    usuario_id: 'Usuário',
+    contato: 'Contato',
+    ativo: 'Status',
+    uso_vinculado: 'Utilização',
+  },
+  larguras: {
+    nome: { min: 'min-w-[200px]', max: 'max-w-[280px]' },
+    cpf: { min: 'min-w-[130px]', max: 'max-w-[150px]' },
+    cargo: { min: 'min-w-[130px]', max: 'max-w-[180px]' },
+    regiao: { min: 'min-w-[120px]', max: 'max-w-[180px]' },
+    comissao_pct: { min: 'min-w-[100px]', max: 'max-w-[120px]' },
+    usuario_id: { min: 'min-w-[150px]', max: 'max-w-[200px]' },
+    contato: { min: 'min-w-[190px]', max: 'max-w-[260px]' },
+    ativo: { min: 'min-w-[110px]', max: 'max-w-[120px]' },
+    uso_vinculado: { min: 'min-w-[120px]', max: 'max-w-[150px]' },
+  },
+  titulo: 'nome',
+  card: ['cargo', 'regiao', 'comissao_pct', 'usuario_id', 'contato', 'cpf', 'ativo', 'uso_vinculado'],
+  buscaPlaceholder: 'Buscar por nome, CPF, cargo, região, telefone ou e-mail...',
+  rotuloNovo: 'Novo representante',
+  rotuloEditar: 'Editar representante',
+  descricaoCadastro:
+    'Cadastre o representante com o cargo, a região, a comissão padrão e o contato usados nas vendas, propostas e comissões.',
+  rotuloSalvar: 'Salvar representante',
+  mensagemVinculos: 'Não é possível excluir este representante porque existem registros vinculados.',
+  vazioTitulo: 'Nenhum representante cadastrado',
+  vazioDescricao: 'Cadastre o primeiro representante para vincular vendas, clientes e comissões.',
+  alternarAtivo: true,
+  contagem: { singular: 'representante', plural: 'representantes' },
+};
+
 const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   produtos: CONFIG_PRODUTOS,
   categorias: CONFIG_CATEGORIAS,
@@ -443,6 +500,7 @@ const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   grades: CONFIG_GRADES,
   insumos: CONFIG_INSUMOS,
   fornecedores: CONFIG_FORNECEDORES,
+  representantes: CONFIG_REPRESENTANTES,
 };
 
 export function configDaLista(recurso: string): ListaConfig {

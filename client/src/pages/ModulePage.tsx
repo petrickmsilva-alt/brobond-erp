@@ -115,6 +115,7 @@ const InutilizacoesPage = lazy(() => import('./InutilizacoesPage'));
 const ColecoesPage = lazy(() => import('./ColecoesPage'));
 const InsumosPage = lazy(() => import('./InsumosPage'));
 const FornecedoresPage = lazy(() => import('./FornecedoresPage'));
+const RepresentantesPage = lazy(() => import('./RepresentantesPage'));
 
 const PAGE_SIZE = 25;
 /** Tamanhos de página oferecidos na listagem (server-side). */
@@ -158,6 +159,10 @@ export default function ModulePage({ module }: { module: Module }) {
   // Fornecedores: LISTA dedicada no padrão LISTA → PÁGINA (cadastro/edição em
   // /fornecedores/novo e /fornecedores/:id/editar — nunca no modal genérico).
   if (module.id === 'fornecedores') return <Suspense fallback={<SubPageLoading />}><FornecedoresPage /></Suspense>;
+  // Representantes: LISTA dedicada no padrão LISTA → PÁGINA (cadastro/edição em
+  // /representantes/novo e /representantes/:id/editar — nunca no modal
+  // genérico).
+  if (module.id === 'representantes') return <Suspense fallback={<SubPageLoading />}><RepresentantesPage /></Suspense>;
 
   if (!module.resource || !resource) return <PlannedModule module={module} />;
   return <ResourceCrud key={resource.key} module={module} resource={resource} />;
@@ -1185,9 +1190,9 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
 
       {/* Modal de cadastro / edição — APENAS para os recursos que ainda não
           migraram para o padrão LISTA → PÁGINA. Quem está em FORM_DIRETO
-          (clientes, produtos, vendas, categorias, cores, coleções, grades,
-          insumos e fornecedores) vive em página própria: `openCreate`/`openEdit`
-          navegam e este bloco nunca abre. */}
+          (clientes, produtos, vendas, categorias, cores, coleções, tamanhos,
+          grades, insumos, fornecedores e representantes) vive em página própria:
+          `openCreate`/`openEdit` navegam e este bloco nunca abre. */}
       {!FORM_DIRETO.has(resource.key) && (
         <Modal
           open={formOpen}
