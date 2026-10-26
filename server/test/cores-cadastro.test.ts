@@ -2,8 +2,8 @@
 // CADASTROS › CORES — contrato do padrão profissional (memória).
 //
 // O módulo continua sendo o CRUD genérico dirigido por `resources.ts`. O que
-// este arquivo trava é o contrato que a nova tela usa:
-//   • metadado do padrão simples (drawer, filtro de status, uso declarado);
+// este arquivo trava é o contrato que a tela usa:
+//   • metadado do padrão simples (SEM drawer/modal, filtro de status, uso);
 //   • HEX opcional, normalizado e recusado quando inválido;
 //   • busca por nome e por HEX na MESMA listagem paginada (sem SQL paralelo);
 //   • filtro `f.ativo` (o recorte Todas/Ativas/Inativas da tela);
@@ -48,9 +48,12 @@ async function listar(p: { q?: string; filter?: Record<string, unknown>; page?: 
 // ---------------------------------------------------------------------------
 // A) Metadado do padrão simples (fonte única de verdade)
 // ---------------------------------------------------------------------------
-test('cadastro declara o padrão lista + drawer, filtro de status e uso real', () => {
+test('cadastro declara o padrão LISTA → PÁGINA (sem drawer/modal), filtro de status e uso real', () => {
   const r = RESOURCES.cores;
-  assert.equal(r.editor, 'drawer', 'Cores é o cadastro piloto do drawer lateral');
+  // O BROBOND ERP não usa formulário sobreposto: a inclusão/edição é a página
+  // /cores/novo e /cores/:id/editar. O metadado não oferece superfície de
+  // drawer nem de modal — a rota vive em client/src/modules.ts › FORM_DIRETO.
+  assert.equal('editor' in r, false, 'Cores não declara drawer/modal: o formulário é página');
   assert.deepEqual(r.filterFields, ['ativo']);
   assert.equal(r.quickFilters?.[0]?.field, 'ativo');
   assert.deepEqual(

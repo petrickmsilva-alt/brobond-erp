@@ -89,12 +89,6 @@ export type ResourceMeta = {
   searchFields?: (string | { ref: string; field?: string })[];
   /** Filtros declarados da listagem, na ordem de exibição. */
   filterFields?: string[];
-  /**
-   * Superfície do formulário: `drawer` = cadastro simples em painel lateral
-   * (a lista continua visível); `modal` (padrão) = modal central histórico.
-   * Espelha `Resource.editor` do servidor.
-   */
-  editor?: 'modal' | 'drawer';
   /** Contagem real de uso do cadastro (coluna "Utilização"). */
   uso?: { recurso: string; campo: string; singular: string; plural: string };
   /** Filtros rápidos (um clique) da listagem. */

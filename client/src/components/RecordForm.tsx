@@ -3,7 +3,7 @@ import { Eraser, Eye, EyeOff, Loader2, MapPin, Plus, Save } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import type { Field, Option, ResourceMeta } from '../lib/meta';
 import { maskCep, maskDocument, maskPhone, toInputValue } from '../lib/format';
-import { normalizarHex } from '../lib/hex';
+import { erroHex, hexValido, normalizarHex } from '../lib/hex';
 import { ProductSelector } from './ProductSelector';
 
 export type FormValues = Record<string, string | boolean | string[]>;
@@ -66,6 +66,63 @@ export function toPayload(r: ResourceMeta, values: FormValues, editing: boolean)
   return out;
 }
 
+/**
+ * Normaliza os campos de COR (#abc → #AABBCC, 172038 → #172038) com a MESMA
+ * regra do servidor (lib/hex.ts). Devolve a MESMA referência quando nada mudou
+ * — quem chama só re-renderiza se houve correção de fato.
+ */
+export function normalizarCamposCor(r: ResourceMeta, values: FormValues): FormValues {
+  let out: FormValues | null = null;
+  for (const f of r.fields) {
+    if (f.type !== 'color') continue;
+    const atual = String(values[f.name] ?? '');
+    const canonico = normalizarHex(atual);
+    if (canonico !== atual) {
+      out = out ?? { ...values };
+      out[f.name] = canonico;
+    }
+  }
+  return out ?? values;
+}
+
+/**
+ * Validação local COMPARTILHADA por todas as superfícies do formulário —
+ * o modal do CRUD genérico e as páginas de cadastro/edição (ex.: Cores):
+ * mesmas mensagens, mesmos campos, nenhuma regra duplicada por tela.
+ *
+ * O servidor REVALIDA tudo (validatePayload); isto só evita a ida e volta e
+ * deixa o erro junto do campo certo. HEX vazio é permitido pelo contrato;
+ * valor preenchido precisa ser #RRGGBB.
+ */
+export function validarFormulario(
+  r: ResourceMeta,
+  vals: FormValues,
+  editing: boolean
+): { errors: Record<string, string>; formError: string } {
+  const errors: Record<string, string> = {};
+  for (const f of r.fields) {
+    if (f.form === false || f.readonly) continue;
+    const required = f.required || (!editing && f.requiredOnCreate);
+    const v = vals[f.name];
+    if (required && f.type === 'multiref') {
+      if (!Array.isArray(v) || v.length === 0) errors[f.name] = 'Selecione ao menos um item';
+    } else if (required && f.type !== 'boolean' && (v === undefined || String(v).trim() === '')) {
+      errors[f.name] = 'Campo obrigatório';
+    }
+    if (f.type === 'password' && typeof v === 'string' && v && f.min && v.length < f.min) errors[f.name] = `Mínimo de ${f.min} caracteres`;
+    // HEX: vazio é permitido pelo contrato; valor preenchido precisa ser
+    // #RRGGBB. Inválido NÃO vai para a API (o servidor recusaria de qualquer
+    // forma — aqui o erro aparece antes, no campo certo).
+    if (f.type === 'color' && !hexValido(v)) errors[f.name] = erroHex(v)!;
+  }
+  const formError = Object.keys(errors).length
+    ? Object.keys(errors).some((n) => r.fields.find((f) => f.name === n)?.type === 'color')
+      ? 'Confira o código HEX destacado. Use o formato #RRGGBB (ex.: #172038).'
+      : 'Preencha os campos obrigatórios destacados.'
+    : '';
+  return { errors, formError };
+}
+
 export function RecordForm({
   resource,
   values,
@@ -78,7 +135,6 @@ export function RecordForm({
   refOptions,
   autoFocus = true,
   before,
-  layout = 'grid',
   hideActions = false,
   depoisDoCampo,
 }: {
@@ -95,21 +151,14 @@ export function RecordForm({
   /** conteúdo exibido antes dos campos (ex.: galeria de fotos) */
   before?: ReactNode;
   /**
-   * `grid` (padrão) = duas colunas no desktop. `unico` = uma coluna — usado no
-   * drawer de cadastro simples, onde o painel é estreito e dois campos lado a
-   * lado ficariam apertados.
-   */
-  layout?: 'grid' | 'unico';
-  /**
-   * Esconde a barra de ações do próprio formulário (Limpar/Incluir). O drawer
-   * de cadastro tem rodapé fixo próprio e precisa ser a ÚNICA barra de ações —
+   * Esconde a barra de ações do próprio formulário (Limpar/Incluir). Usado nas
+   * PÁGINAS de cadastro, onde o cabeçalho da página é a única barra de ações —
    * sem dois botões "salvar" concorrendo na mesma tela.
    */
   hideActions?: boolean;
   /**
    * Conteúdo extra renderizado logo APÓS um campo, por nome (ex.: a prévia da
-   * amostra de cor embaixo do código HEX). Em `layout="unico"` ocupa a linha
-   * inteira; no grid, também.
+   * amostra de cor embaixo do código HEX), ocupando a linha inteira.
    */
   depoisDoCampo?: Record<string, ReactNode>;
 }) {
@@ -195,10 +244,10 @@ export function RecordForm({
           {sec.title && (
             <h3 className="mb-3 mt-2 border-b border-slate-200 pb-1.5 text-xs font-bold uppercase tracking-wide text-navy-700">{sec.title}</h3>
           )}
-          <div className={`grid grid-cols-1 gap-x-4 gap-y-4 ${layout === 'grid' ? 'sm:grid-cols-2' : ''}`}>
+          <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
             {sec.fields.map((f) => (
               <Fragment key={f.name}>
-                <div className={layout === 'grid' && (f.wide || f.type === 'textarea') ? 'sm:col-span-2' : ''}>
+                <div className={f.wide || f.type === 'textarea' ? 'sm:col-span-2' : ''}>
                   <FieldInput
                     field={f}
                     value={values[f.name]}

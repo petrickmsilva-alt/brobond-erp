@@ -188,17 +188,6 @@ export type Resource = {
    * numérico) exista como filtro de mínimo/máximo.
    */
   filterFields?: string[];
-  /**
-   * PADRÃO DE CADASTRO SIMPLES: a inclusão/edição acontece em DRAWER lateral
-   * (a lista permanece visível), não em modal central. `'modal'` (padrão) é o
-   * comportamento histórico dos demais recursos — nada muda para eles.
-   *
-   * O formulário continua sendo o mesmo `RecordForm`, dirigido por metadados:
-   * este campo só escolhe a superfície (drawer × modal). Outros cadastros
-   * simples (categorias, tamanhos, grades, coleções) podem adotar o padrão
-   * declarando `editor: 'drawer'` — sem implementação paralela.
-   */
-  editor?: 'modal' | 'drawer';
   /** Contagem real de uso do cadastro (coluna "Utilização" da listagem). */
   uso?: ResourceUso;
   /** Filtros rápidos (um clique) da listagem, na ordem de exibição. */
@@ -1001,9 +990,12 @@ export const RESOURCES: Record<string, Resource> = {
     ops: ALL_OPS,
     // SEC-04/P1-01: catálogo compartilhado (global). Leitura aberta; escrita gerente+.
     minPerfilEscrita: 'gerente',
-    // PRIMEIRO cadastro simples no padrão profissional: lista + DRAWER lateral.
-    // O formulário continua sendo o RecordForm dirigido por metadados.
-    editor: 'drawer',
+    // Padrão LISTA → PÁGINA do BROBOND ERP: a inclusão e a edição vivem em
+    // /cores/novo e /cores/:id/editar (rotas no cliente, registradas em
+    // client/src/modules.ts › FORM_DIRETO). O formulário é o RecordForm
+    // dirigido por estes metadados; NÃO existe drawer/modal para este
+    // cadastro e o servidor (RBAC + validatePayload) continua sendo a
+    // autoridade do contrato.
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 40, placeholder: 'Azul marinho' },
       // `search: true`: a busca da listagem encontra a cor pelo código (ex.: 172038).

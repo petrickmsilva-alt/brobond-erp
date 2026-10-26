@@ -527,14 +527,17 @@ await (async () => {
   check('E3.2: importação sem arquivo é recusada', semNada.status >= 400, `status ${semNada.status}`);
 }
 
-// ------------------------------- CADASTROS › CORES (piloto lista + drawer)
-// A tela de Cores é metadado-dirigida: se `/meta` não entregar `editor`, `uso`
-// e `quickFilters`, o drawer não abre e a coluna Utilização fica vazia. Aqui a
-// prova é no Express de verdade — sem chamar handler na mão.
+// ------------------------------- CADASTROS › CORES (padrão LISTA → PÁGINA)
+// A tela de Cores é metadado-dirigida: `/meta` precisa declarar `uso` e
+// `quickFilters` (coluna Utilização e recorte de status). O formulário NÃO é
+// uma superfície sobreposta: o metadado não declara `editor` de drawer/modal —
+// a inclusão e a edição vivem nas páginas /cores/novo e /cores/:id/editar, e o
+// contrato de API abaixo (POST/PUT/GET/DELETE) é o que essas páginas usam.
+// A prova é no Express de verdade — sem chamar handler na mão.
 {
   const meta = await req('GET', '/meta');
   const cores = meta.json?.resources?.cores;
-  check('cores: /meta entrega editor=drawer', cores?.editor === 'drawer', `editor=${cores?.editor}`);
+  check('cores: /meta NÃO declara drawer/modal (formulário é página)', !('editor' in (cores || {})), `editor=${cores?.editor}`);
   check('cores: /meta declara uso por produtos.cor_id',
     cores?.uso?.recurso === 'produtos' && cores?.uso?.campo === 'cor_id', JSON.stringify(cores?.uso));
   check('cores: /meta entrega os filtros rápidos Todas/Ativas/Inativas',

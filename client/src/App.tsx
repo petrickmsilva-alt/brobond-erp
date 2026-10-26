@@ -19,6 +19,7 @@ const ProductDetail = lazy(() => import('./pages/ProductDetail'));
 const ClienteFormPage = lazy(() => import('./pages/ClienteFormPage'));
 const ProdutoFormPage = lazy(() => import('./pages/ProdutoFormPage'));
 const CategoriaFormPage = lazy(() => import('./pages/CategoriaFormPage'));
+const CorFormPage = lazy(() => import('./pages/CorFormPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
 const FichaDetail = lazy(() => import('./pages/FichaDetail'));
@@ -141,6 +142,23 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="categorias">
                   <CategoriaFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Cadastro de cores em página própria (fora de qualquer modal/drawer). */}
+            <Route
+              path="cores/novo"
+              element={
+                <ModuleAccess moduleId="cores">
+                  <CorFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="cores/:id/editar"
+              element={
+                <ModuleAccess moduleId="cores">
+                  <CorFormPage />
                 </ModuleAccess>
               }
             />
