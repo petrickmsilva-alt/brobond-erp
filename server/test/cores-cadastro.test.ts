@@ -86,6 +86,24 @@ test('HEX é opcional, normalizado para #RRGGBB e inválido vira erro de campo',
 });
 
 // ---------------------------------------------------------------------------
+// NOME: trim e a MESMA regra de duplicidade do ERP (nenhuma regra paralela)
+// ---------------------------------------------------------------------------
+test('nome é aparado e a duplicidade reaproveita a regra existente', async () => {
+  const criada = await novaCor(`  Duplicada ${sufixo}  `);
+  assert.equal(criada.nome, `Duplicada ${sufixo}`, 'espaços sobrando não são gravados');
+
+  const erro: any = await esperarErro(
+    () => novaCor(`DUPLICADA ${sufixo}`),
+    409,
+    /Já existe um registro com este nome/i
+  );
+  assert.equal(erro.fields?.nome, 'Já cadastrado', 'o erro aponta o campo, como nos demais cadastros');
+
+  const todas = await listar({ q: `Duplicada ${sufixo}` });
+  assert.equal(todas.rows.length, 1, 'a tentativa duplicada não criou registro');
+});
+
+// ---------------------------------------------------------------------------
 // B/C) Busca e filtro no SERVIDOR, na mesma listagem paginada
 // ---------------------------------------------------------------------------
 test('busca encontra a cor pelo nome (parcial, sem caixa) e pelo HEX', async () => {

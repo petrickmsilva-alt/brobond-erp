@@ -320,6 +320,30 @@ describe('Cores — drawer de cadastro e edição', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Nova cor' })).toBeNull());
   });
 
+  it('E2. nome duplicado mantém o drawer aberto com a mensagem amigável', async () => {
+    const { ApiError } = await import('../lib/api');
+    apiPost.mockRejectedValueOnce(
+      new (ApiError as unknown as new (s: number, m: string, f?: Record<string, string>) => Error)(
+        409,
+        'Já existe um registro com este nome.',
+        { nome: 'Já cadastrado' }
+      )
+    );
+    renderPagina();
+    fireEvent.click(botaoNovaCor());
+    const drawer = screen.getByRole('dialog', { name: 'Nova cor' });
+
+    fireEvent.change(within(drawer).getByLabelText(/^Nome/), { target: { value: 'azul marinho' } });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Salvar cor' }));
+
+    // Regra de unicidade existente: a API recusa e a tela explica no campo.
+    await waitFor(() => expect(within(drawer).getByText('Já existe um registro com este nome.')).toBeInTheDocument());
+    expect(within(drawer).getByText('Já cadastrado')).toBeInTheDocument();
+    // O drawer continua aberto para corrigir o nome.
+    expect(screen.getByRole('dialog', { name: 'Nova cor' })).toBeInTheDocument();
+    expect(apiPost).toHaveBeenCalledTimes(1);
+  });
+
   it('F. a amostra acompanha o HEX em tempo real', async () => {
     renderPagina();
     fireEvent.click(botaoNovaCor());
