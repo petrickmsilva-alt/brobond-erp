@@ -213,3 +213,46 @@ export function ChipsFiltros({
     </div>
   );
 }
+
+/**
+ * FILTRO RÁPIDO SEGMENTADO — o recorte de um clique da listagem (Todas /
+ * Ativas / Inativas).
+ *
+ * Reusa o mesmo contrato dos demais filtros (`f.<campo>` na requisição
+ * server-side): não existe consulta paralela. O valor vazio significa "sem
+ * recorte" e é o que devolve a lista completa.
+ */
+export function FiltroRapido({
+  label,
+  opcoes,
+  valor,
+  onChange,
+}: {
+  /** Nome acessível do grupo (ex.: "Status"). */
+  label: string;
+  opcoes: { value: string; label: string }[];
+  /** Valor aplicado hoje ('' = sem recorte). */
+  valor: string;
+  onChange: (valor: string) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 shadow-sm dark:border-navy-700 dark:bg-navy-900" role="group" aria-label={label}>
+      {opcoes.map((o) => {
+        const ativo = (valor || '') === (o.value || '');
+        return (
+          <button
+            key={o.value || 'todos'}
+            type="button"
+            aria-pressed={ativo}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-navy-500/40 ${
+              ativo ? 'bg-navy-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-navy-800'
+            }`}
+            onClick={() => onChange(o.value)}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
