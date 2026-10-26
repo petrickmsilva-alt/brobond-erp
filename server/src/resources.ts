@@ -667,6 +667,14 @@ export const RESOURCES: Record<string, Resource> = {
     minPerfilEscrita: 'gerente',
     notice:
       'Uma grade é um conjunto nomeado de tamanhos na ordem correta (ex.: Camiseta PP–GG, Calça 36–48, Calçado 34–44). Vincule a grade à categoria (padrão) ou diretamente ao produto para que o estoque mostre apenas os tamanhos daquele tipo de peça.',
+    // Padrão LISTA → PÁGINA do BROBOND ERP: a inclusão e a edição vivem em
+    // /grades/novo e /grades/:id/editar (rotas no cliente, registradas em
+    // client/src/modules.ts › FORM_DIRETO). NÃO existe modal/drawer para este
+    // cadastro: a relação ordenada grade × tamanho (`grade_tamanhos`) é editada
+    // na página, com a ordem explícita. O contrato continua o mesmo
+    // (POST/PUT /api/grades com nome, descricao, instrucoes_medidas, ativo e
+    // `tamanhos` = ids na ordem desejada) e o servidor segue sendo a autoridade
+    // (RBAC gerente+ e validatePayload).
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'Camiseta PP-GG, Calça 36-48...' },
       { name: 'tamanhos', label: 'Tamanhos', type: 'multiref', ref: 'tamanhos', virtual: true, required: true, list: true, wide: true, hint: 'Marque os tamanhos desta grade, na ordem em que devem aparecer. Reordene marcando na sequência desejada.' },
@@ -685,6 +693,25 @@ export const RESOURCES: Record<string, Resource> = {
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
+    // Filtros da LISTAGEM, no servidor: status (o recorte Todas/Ativas/Inativas
+    // usa o mesmo contrato `f.ativo` dos demais recursos — nenhum SQL novo).
+    filterFields: ['ativo'],
+    quickFilters: [
+      {
+        field: 'ativo',
+        label: 'Status',
+        options: [
+          { value: '', label: 'Todas' },
+          { value: 'true', label: 'Ativas' },
+          { value: 'false', label: 'Inativas' },
+        ],
+      },
+    ],
+    // Coluna "Utilização": contagem REAL de produtos que usam a grade, recortada
+    // pela empresa ativa (a grade é catálogo global; os produtos não). As
+    // categorias que usam a grade como padrão são anotadas à parte
+    // (`uso_categorias`, em services.ts) — as duas origens aparecem juntas.
+    uso: { recurso: 'produtos', campo: 'grade_id', singular: 'produto', plural: 'produtos' },
     mock: [
       { id: 1, nome: 'Camiseta PP-GG', descricao: 'Malha e camisaria básica', ativo: true },
       { id: 2, nome: 'Calça 36-48', descricao: 'Jeans e sarja', ativo: true },
@@ -879,15 +906,51 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Insumo',
     labelFields: ['nome'],
     ops: ALL_OPS,
+    // Padrão LISTA → PÁGINA do BROBOND ERP: a inclusão e a edição vivem em
+    // /insumos/novo e /insumos/:id/editar (rotas no cliente, registradas em
+    // client/src/modules.ts › FORM_DIRETO). NÃO existe modal/drawer para este
+    // cadastro. O contrato continua o MESMO (POST/PUT /api/insumos com nome,
+    // unidade, custo_medio, fornecedor_id e ativo) e o servidor segue sendo a
+    // autoridade (RBAC + validatePayload).
+    //
+    // ATENÇÃO — a tabela `insumos` tem EXATAMENTE estas colunas: nome,
+    // unidade, custo_medio, fornecedor_id, ativo, criado_em, atualizado_em
+    // (db/schema.sql). NÃO existem `estoque_min`/`estoque_max`/`localizacao`
+    // aqui: o saldo e o estoque mínimo vivem na tabela `estoque_insumos` (um
+    // saldo por insumo, `estoque_min` — sem máximo). Por isso o formulário de
+    // insumos NÃO tem seção de estoque nem campo de localização: seriam campos
+    // inventados. O estoque mínimo continua editável no módulo "Estoque de
+    // Insumos" (recurso `estoque_insumos`), como sempre.
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, wide: true },
       { name: 'unidade', label: 'Unidade', type: 'select', required: true, options: UNIDADES, default: 'un' },
-      { name: 'custo_medio', label: 'Custo médio', type: 'money', min: 0, default: 0 },
+      { name: 'custo_medio', label: 'Custo médio', type: 'money', min: 0, default: 0, hint: 'Custo por unidade do insumo. É atualizado automaticamente quando uma compra é recebida — o valor aqui é a referência inicial do cadastro.' },
       { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores', search: true },
       ativo,
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
+    // Filtros da LISTAGEM (server-side, mesmo mecanismo dos demais recursos):
+    // unidade, fornecedor e status — as três perguntas que se faz ao revisar o
+    // estoque de matéria-prima. Todos os campos EXISTEM em `insumos`.
+    filterFields: ['unidade', 'fornecedor_id', 'ativo'],
+    // Recorte de um clique acima da tabela — mesmo contrato `f.ativo` de Cores
+    // e Grades (nenhum SQL novo).
+    quickFilters: [
+      {
+        field: 'ativo',
+        label: 'Status',
+        options: [
+          { value: '', label: 'Todos' },
+          { value: 'true', label: 'Ativos' },
+          { value: 'false', label: 'Inativos' },
+        ],
+      },
+    ],
+    // Coluna "Utilização": quantas FICHAS TÉCNICAS consomem este insumo — é o
+    // uso real do cadastro (o insumo entra no custo do produto por ela). A
+    // contagem é agregada no servidor, em lote, para a página inteira.
+    uso: { recurso: 'itens_ficha_tecnica', campo: 'insumo_id', singular: 'ficha técnica', plural: 'fichas técnicas' },
   },
 
   representantes: {

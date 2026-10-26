@@ -461,6 +461,54 @@ export class PgStore implements Store {
     return out;
   }
 
+  /**
+   * SOMATÓRIA AGREGADA — GROUP BY em UMA consulta para a página inteira.
+   *
+   * Serve ao SALDO de estoque de insumos: o saldo vive na tabela
+   * `estoque_insumos` (um saldo por insumo), não na linha de `insumos`. Sem
+   * esta agregação, a listagem teria de chamar o saldo linha a linha — o N+1
+   * que a listagem do ERP precisa evitar. Mesmas garantias de
+   * `countByColumn`: nomes de tabela/coluna vêm do METADADO (nunca do input do
+   * usuário) e passam por `identificadorSeguro`; os ids entram como parâmetro;
+   * o recorte de empresa é obrigatório quando o recurso é tenantado.
+   */
+  async sumByColumn(
+    r: Resource,
+    grupo: string,
+    valor: string,
+    ids: number[],
+    empresaId?: number,
+    tx?: Tx
+  ): Promise<Map<number, number>> {
+    const out = new Map<number, number>();
+    const alvos = [...new Set(ids.filter((n) => Number.isInteger(n) && n > 0))];
+    if (!alvos.length) return out;
+    const colunasReais = new Set(columnsOf(r).map((f) => f.name));
+    if (!colunasReais.has(grupo) || !colunasReais.has(valor)) return out;
+    if (!identificadorSeguro(grupo) || !identificadorSeguro(valor) || !identificadorSeguro(r.table)) return out;
+    const params: unknown[] = [alvos];
+    let where = `${citarIdentificador(grupo)} = ANY($1)`;
+    if (temEscopoEmpresa(r) && empresaId !== undefined) {
+      params.push(empresaId);
+      where += ` AND ${citarIdentificador('empresa_id')} = $${params.length}`;
+    }
+    const res = await q(
+      `SELECT ${citarIdentificador(grupo)} AS alvo,
+              COALESCE(SUM(${citarIdentificador(valor)}), 0) AS total
+         FROM ${citarIdentificador(r.table)}
+        WHERE ${where}
+        GROUP BY ${citarIdentificador(grupo)}`,
+      params,
+      tx
+    );
+    for (const row of res.rows as { alvo: unknown; total: unknown }[]) {
+      const id = Number(row.alvo);
+      const n = Number(row.total);
+      if (Number.isInteger(id) && Number.isFinite(n)) out.set(id, n);
+    }
+    return out;
+  }
+
   async insert(r: Resource, data: Payload, tx?: Tx): Promise<Row> {
     const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
     const keys = Object.keys(data).filter((k) => allowed.has(k));

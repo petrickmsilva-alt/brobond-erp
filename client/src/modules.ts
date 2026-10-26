@@ -257,7 +257,7 @@ export const MODULES: Module[] = [
   },
   {
     id: 'grades',
-    label: 'Grade',
+    label: 'Grades',
     icon: LayoutGrid,
     space: 'erp',
     area: 'Cadastros',
@@ -1296,13 +1296,15 @@ export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
  * - /cores/novo e /cores/:id/editar (listagem em /cores)
  * - /colecoes/novo e /colecoes/:id/editar (listagem em /colecoes)
  * - /tamanhos/novo e /tamanhos/:id/editar (listagem em /tamanhos)
+ * - /grades/novo e /grades/:id/editar (listagem em /grades)
+ * - /insumos/novo e /insumos/:id/editar (listagem em /insumos)
  *
  * É a lista canônica do padrão LISTA → PÁGINA do BROBOND ERP: quem entra aqui
  * navega (rota filha do módulo) em vez de abrir a superfície do formulário na
  * própria listagem. Demais cadastros simples devem migrar para cá — não para
  * novas superfícies de modal/drawer.
  */
-export const FORM_DIRETO = new Set(['clientes', 'produtos', 'vendas', 'categorias', 'cores', 'colecoes', 'tamanhos']);
+export const FORM_DIRETO = new Set(['clientes', 'produtos', 'vendas', 'categorias', 'cores', 'colecoes', 'tamanhos', 'grades', 'insumos']);
 
 export type NavSection = {
   id: NavSectionId;

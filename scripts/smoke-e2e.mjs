@@ -701,6 +701,274 @@ await (async () => {
   check('tamanhos: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluidaTam.status), `status ${excluidaTam.status}`);
 }
 
+// ------------------------------ CADASTROS › GRADES (padrão LISTA → PÁGINA)
+// Grades seguem o mesmo padrão de Cores, com uma diferença de domínio: a relação
+// grade × tamanho é ORDENADA (`grade_tamanhos.ordem`). O formulário vive nas
+// páginas /grades/novo e /grades/:id/editar — `/meta` não declara drawer/modal —
+// e o contrato abaixo é exatamente o que elas usam: POST/PUT com `tamanhos` na
+// ordem desejada, listagem anotada (ordem, utilização, estado da tabela de
+// medidas) e exclusão com diagnóstico de vínculos.
+{
+  const meta = await req('GET', '/meta');
+  const grades = meta.json?.resources?.grades;
+  check('grades: /meta NÃO declara drawer/modal (formulário é página)', !('editor' in (grades || {})), `editor=${grades?.editor}`);
+  check('grades: /meta declara uso por produtos.grade_id',
+    grades?.uso?.recurso === 'produtos' && grades?.uso?.campo === 'grade_id', JSON.stringify(grades?.uso));
+  check('grades: /meta entrega os filtros rápidos Todas/Ativas/Inativas',
+    JSON.stringify((grades?.quickFilters?.[0]?.options || []).map((o) => o.label)) === '["Todas","Ativas","Inativas"]');
+  const campoTamanhos = (grades?.fields || []).find((f) => f.name === 'tamanhos');
+  check('grades: tamanhos é a relação ordenada e obrigatória do domínio',
+    campoTamanhos?.type === 'multiref' && campoTamanhos?.ref === 'tamanhos' && campoTamanhos?.required === true,
+    JSON.stringify({ type: campoTamanhos?.type, ref: campoTamanhos?.ref, required: campoTamanhos?.required }));
+
+  // Tamanhos reais do dicionário, na ordem do próprio cadastro. Um banco novo
+  // (smoke:pg) pode vir sem dicionário — aí o smoke cadastra os tamanhos que usa,
+  // pelo mesmo POST /tamanhos da tela (nada de dado de exemplo injetado à mão).
+  const sufixoTam = Date.now().toString().slice(-6);
+  let opcoesTamanhos = await req('GET', '/tamanhos/options');
+  let idsTamanhos = (opcoesTamanhos.json || []).slice(0, 4).map((o) => Number(o.value));
+  while (idsTamanhos.length < 3) {
+    const novoTamanho = await req('POST', '/tamanhos', {
+      codigo: `SM${sufixoTam}${idsTamanhos.length + 1}`,
+      ordem: 900 + idsTamanhos.length,
+    });
+    if (![200, 201].includes(novoTamanho.status) || !novoTamanho.json?.id) break;
+    idsTamanhos.push(Number(novoTamanho.json.id));
+  }
+  opcoesTamanhos = await req('GET', '/tamanhos/options');
+  check('grades: /tamanhos/options alimenta a seleção da página', idsTamanhos.length >= 3, `${idsTamanhos.length} tamanhos`);
+
+  const nomeGrade = `Camiseta Smoke ${Date.now().toString().slice(-6)}`;
+  const novaGrade = await req('POST', '/grades', {
+    nome: nomeGrade,
+    descricao: 'Grade do smoke',
+    instrucoes_medidas: 'Meça a peça sobre uma superfície plana, sem esticar.',
+    ativo: true,
+    tamanhos: idsTamanhos,
+  });
+  const gradeId = novaGrade.json?.id;
+  check('POST /grades grava a grade com os tamanhos NA ORDEM enviada',
+    novaGrade.status === 201 && JSON.stringify(novaGrade.json?.tamanhos) === JSON.stringify(idsTamanhos),
+    `status ${novaGrade.status} tamanhos=${JSON.stringify(novaGrade.json?.tamanhos)}`);
+
+  const gradeCriada = await req('GET', `/grades/${gradeId}`);
+  const codigos = new Map((opcoesTamanhos.json || []).map((o) => [Number(o.value), String(o.label)]));
+  const rotuloEsperado = idsTamanhos.map((t) => codigos.get(t)).join(' · ');
+  check('grades: rótulo dos tamanhos segue a ordem da grade',
+    gradeCriada.json?.tamanhos__label === rotuloEsperado && gradeCriada.json?.tamanhos_total === idsTamanhos.length,
+    `${gradeCriada.json?.tamanhos__label} (total ${gradeCriada.json?.tamanhos_total})`);
+  check('grades: instruções de medição persistem no campo existente',
+    String(gradeCriada.json?.instrucoes_medidas || '').includes('superfície plana'));
+
+  // Reordenação (o ↑ ↓ da página) reescreve a ordem — sem recriar a grade.
+  const reordenada = idsTamanhos.slice().reverse();
+  const putOrdem = await req('PUT', `/grades/${gradeId}`, { tamanhos: reordenada });
+  check('PUT /grades reordena os tamanhos (ordem = posição)',
+    putOrdem.status === 200 && JSON.stringify(putOrdem.json?.tamanhos) === JSON.stringify(reordenada),
+    `status ${putOrdem.status} tamanhos=${JSON.stringify(putOrdem.json?.tamanhos)}`);
+  // Duplicata não entra duas vezes (UNIQUE grade_id + tamanho_id): a primeira
+  // ocorrência vence e a ordem recebida é preservada.
+  const duplicada = await req('PUT', `/grades/${gradeId}`, { tamanhos: [...reordenada, reordenada[0]] });
+  check('grades: tamanho duplicado é descartado na gravação',
+    duplicada.status === 200 && JSON.stringify(duplicada.json?.tamanhos) === JSON.stringify(reordenada),
+    `tamanhos=${JSON.stringify(duplicada.json?.tamanhos)}`);
+  await req('PUT', `/grades/${gradeId}`, { tamanhos: reordenada });
+
+  // Grade sem tamanho é recusada (a obrigatoriedade já é do domínio).
+  const semTamanho = await req('POST', '/grades', { nome: `Sem tamanho ${Date.now().toString().slice(-6)}`, tamanhos: [] });
+  check('grades: criação sem tamanho é recusada', semTamanho.status === 400, `status ${semTamanho.status}`);
+
+  // Utilização real: produto da empresa ativa + categoria que usa a grade.
+  const produtoGrade = await req('POST', '/produtos', {
+    sku: `SMOKE-GRD-${Date.now()}`,
+    nome: 'Camiseta Smoke Grade',
+    grade_id: gradeId,
+    preco_venda: 89.9,
+  });
+  check('produtos: grade do cadastro aceita no produto', [200, 201].includes(produtoGrade.status), `status ${produtoGrade.status}`);
+  const categoriaGrade = await req('POST', '/categorias', { nome: `Categoria Smoke ${Date.now().toString().slice(-6)}`, grade_id: gradeId });
+  check('categorias: grade padrão aceita na categoria', [200, 201].includes(categoriaGrade.status), `status ${categoriaGrade.status}`);
+
+  const listaGrades = await req('GET', '/grades?page=1&pageSize=100');
+  const linhaGrade = (listaGrades.json?.rows || []).find((r) => r.id === gradeId);
+  check('grades: Utilização traz produtos E categorias (contagem real, em lote)',
+    linhaGrade?.uso_vinculado === 1 && linhaGrade?.uso_categorias === 1 &&
+    linhaGrade?.uso_vinculado_label === '1 produto · 1 categoria',
+    `${linhaGrade?.uso_vinculado_label}`);
+
+  // Estado da tabela de medidas: mesma regra de completude do módulo de medidas.
+  check('grades: MEDIDAS começa "sem tabela" (estado real, não inventado)',
+    linhaGrade?.medidas_status === 'sem_tabela' && linhaGrade?.medidas_colunas === 0,
+    `status=${linhaGrade?.medidas_status}`);
+  const valoresMedidas = reordenada.slice(0, 2).map((tamanho_id) => ({ medida_nome: 'Largura (A)', tamanho_id, valor: 50 }));
+  const tabela = await req('PUT', `/grades/${gradeId}/medidas`, {
+    medidas: [{ nome: 'Largura (A)', unidade: 'cm' }, { nome: 'Comprimento (B)', unidade: 'cm' }],
+    valores: valoresMedidas,
+  });
+  check('grades: tabela de medidas salva pelo endpoint do módulo', tabela.status === 200, `status ${tabela.status}`);
+  const depoisMedidas = (await req('GET', '/grades?page=1&pageSize=100')).json?.rows?.find((r) => r.id === gradeId);
+  // 2 colunas × N tamanhos da grade = total de células; preenchidas = as enviadas.
+  const celulasTotal = 2 * reordenada.length;
+  const celulasPreenchidas = valoresMedidas.length;
+  const pctEsperado = Math.round((celulasPreenchidas / celulasTotal) * 100);
+  check('grades: MEDIDAS vira "parcial" com o percentual real',
+    depoisMedidas?.medidas_status === 'parcial' && depoisMedidas?.medidas_pct === pctEsperado &&
+    depoisMedidas?.medidas_colunas === 2 && depoisMedidas?.medidas_celulas_total === celulasTotal &&
+    depoisMedidas?.medidas_celulas_preenchidas === celulasPreenchidas,
+    `status=${depoisMedidas?.medidas_status} pct=${depoisMedidas?.medidas_pct}/${pctEsperado} celulas=${depoisMedidas?.medidas_celulas_total}`);
+  const resumo = await req('GET', '/grades/medidas-resumo');
+  const linhaResumo = (resumo.json?.grades || []).find((g) => g.id === gradeId);
+  check('grades: painel de completude continua dizendo o mesmo',
+    linhaResumo?.celulas_total === celulasTotal && linhaResumo?.celulas_preenchidas === celulasPreenchidas &&
+    linhaResumo?.pct === pctEsperado,
+    JSON.stringify({ total: linhaResumo?.celulas_total, preenchidas: linhaResumo?.celulas_preenchidas, pct: linhaResumo?.pct }));
+
+  // Busca e filtro de status pela mesma listagem paginada.
+  const buscaGrade = await req('GET', `/grades?q=${encodeURIComponent('camiseta smoke')}&page=1&pageSize=25`);
+  check('grades: busca por nome na listagem do servidor', (buscaGrade.json?.rows || []).some((r) => r.id === gradeId));
+  const gradesInativas = await req('GET', '/grades?f.ativo=false&page=1&pageSize=25');
+  check('grades: filtro f.ativo=false', gradesInativas.status === 200 && (gradesInativas.json?.rows || []).every((r) => r.ativo === false));
+
+  // Exclusão bloqueada: diagnóstico real + saída por desativação.
+  const bloqueada = await req('DELETE', `/grades/${gradeId}`);
+  const diag = bloqueada.json?.details?.dependencias;
+  check('grades: DELETE vinculado → 409 dependencias_vinculadas',
+    bloqueada.status === 409 && bloqueada.json?.code === 'dependencias_vinculadas', `status ${bloqueada.status}`);
+  check('grades: diagnóstico diz onde/quantos/por quê',
+    diag?.bloqueado === true && diag?.modulosBloqueantes?.includes('Produtos') &&
+    diag?.vinculos?.some((v) => v.tabela === 'produtos' && v.quantidade === 1 && Array.isArray(v.ids) && v.motivo) &&
+    /desative/i.test(String(diag?.orientacao || '')));
+  check('grades: a composição (tamanhos/medidas) aparece sem bloquear',
+    diag?.vinculos?.some((v) => v.tabela === 'grade_tamanhos' && v.bloqueia === false));
+
+  const desativada = await req('PUT', `/grades/${gradeId}`, { ativo: false });
+  const aposDesativar = await req('GET', `/grades/${gradeId}`);
+  check('grades: desativar preserva tamanhos, medidas e vínculos',
+    desativada.status === 200 && aposDesativar.json?.ativo === false &&
+    aposDesativar.json?.tamanhos_total === reordenada.length &&
+    (await req('GET', `/grades/${gradeId}/medidas`)).json?.medidas?.length === 2,
+    `status ${desativada.status} tamanhos=${aposDesativar.json?.tamanhos_total}`);
+
+  // Grade sem vínculo segue o fluxo normal (a composição sai junto).
+  const gradeOrfa = await req('POST', '/grades', { nome: `Órfã ${Date.now().toString().slice(-6)}`, tamanhos: idsTamanhos.slice(0, 2) });
+  const excluida = await req('DELETE', `/grades/${gradeOrfa.json?.id}`);
+  check('grades: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluida.status), `status ${excluida.status}`);
+  const sumiu = await req('GET', `/grades/${gradeOrfa.json?.id}`);
+  check('grades: a grade excluída não volta na leitura', sumiu.status === 404, `status ${sumiu.status}`);
+}
+
+// ------------------------------ CADASTROS › INSUMOS (padrão LISTA → PÁGINA)
+// Insumos seguem o mesmo padrão de Cores, Coleções e Grades: o formulário vive
+// nas páginas /insumos/novo e /insumos/:id/editar — `/meta` não declara
+// drawer/modal. O contrato abaixo é exatamente o que elas usam.
+//
+// DOMÍNIO REAL de `insumos` (db/schema.sql): nome, unidade, custo_medio,
+// fornecedor_id, ativo. NÃO existem SKU/NCM/descrição/marca/cor/imagem/
+// categoria/estoque mínimo/localização — e o smoke trava essa verdade: um
+// campo que não existe no banco não pode aparecer no formulário.
+{
+  const meta = await req('GET', '/meta');
+  const insumos = meta.json?.resources?.insumos;
+  check('insumos: /meta NÃO declara drawer/modal (formulário é página)', !('editor' in (insumos || {})), `editor=${insumos?.editor}`);
+  check('insumos: cadastro por empresa (empresa: true)', insumos?.empresa === true, `empresa=${insumos?.empresa}`);
+  check('insumos: RBAC preservado — SEM minPerfilEscrita (é cadastro por empresa)', insumos?.minPerfilEscrita === undefined, `minPerfilEscrita=${insumos?.minPerfilEscrita}`);
+  check('insumos: /meta entrega os filtros rápidos Todos/Ativos/Inativos',
+    JSON.stringify(insumos?.quickFilters?.[0]?.options?.map((o) => o.label)) === JSON.stringify(['Todos', 'Ativos', 'Inativos']));
+  check('insumos: /meta declara a utilização real pelas fichas técnicas',
+    insumos?.uso?.recurso === 'itens_ficha_tecnica' && insumos?.uso?.campo === 'insumo_id',
+    JSON.stringify(insumos?.uso));
+
+  // NENHUM campo inventado no formulário.
+  const camposInsumo = (insumos?.fields || []).map((f) => f.name);
+  check('insumos: o formulário usa só os campos reais do banco',
+    ['nome', 'unidade', 'custo_medio', 'fornecedor_id', 'ativo'].every((c) => camposInsumo.includes(c)) &&
+    !camposInsumo.some((c) => ['sku', 'codigo', 'ncm', 'descricao', 'marca', 'cor_id', 'imagem', 'categoria_id', 'estoque_min', 'estoque_max', 'localizacao'].includes(c)),
+    `campos=${camposInsumo.join(',')}`);
+
+  // Fornecedor: a referência real (fornecedor_id → fornecedores), com as
+  // opções do endpoint padrão de opções (nenhum endpoint paralelo).
+  const fornecedor = await req('POST', '/fornecedores', { nome: `Fornecedor Smoke ${Date.now().toString().slice(-6)}` });
+  check('insumos: o fornecedor do smoke foi cadastrado', [200, 201].includes(fornecedor.status), `status ${fornecedor.status}`);
+  const opcoesForn = await req('GET', '/fornecedores/options');
+  check('insumos: /fornecedores/options alimenta a seleção do fornecedor',
+    Array.isArray(opcoesForn.json) && opcoesForn.json.some((o) => Number(o.value) === Number(fornecedor.json?.id)),
+    `${Array.isArray(opcoesForn.json) ? opcoesForn.json.length : 0} opções`);
+
+  // Cadastro pela PÁGINA: o mesmo contrato do CRUD genérico.
+  const criado = await req('POST', '/insumos', {
+    nome: `Insumo Smoke ${Date.now().toString().slice(-6)}`,
+    unidade: 'm',
+    custo_medio: 7.5,
+    fornecedor_id: fornecedor.json?.id,
+    ativo: true,
+  });
+  check('insumos: POST cria o insumo com o contrato real', [200, 201].includes(criado.status) && !!criado.json?.id, `status ${criado.status}`);
+  const insumoId = criado.json?.id;
+
+  // Listagem: busca + filtro de status + filtro de unidade.
+  const listaIns = await req('GET', `/insumos?q=${encodeURIComponent(criado.json?.nome || '')}`);
+  check('insumos: busca por nome na listagem do servidor', listaIns.json?.rows?.some((r) => Number(r.id) === Number(insumoId)));
+  check('insumos: a listagem devolve a unidade e o custo médio reais',
+    listaIns.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.unidade === 'm' &&
+    Number(listaIns.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.custo_medio) === 7.5);
+  const listaAtivos = await req('GET', '/insumos?f.ativo=true&pageSize=200');
+  check('insumos: filtro f.ativo=true', listaAtivos.json?.rows?.some((r) => Number(r.id) === Number(insumoId)));
+  const listaPorUnidade = await req('GET', '/insumos?f.unidade=kg&pageSize=200');
+  check('insumos: filtro f.unidade recorta no servidor',
+    !listaPorUnidade.json?.rows?.some((r) => Number(r.id) === Number(insumoId)));
+
+  // ESTOQUE: o saldo REAL de estoque_insumos, agregado no servidor (nunca
+  // um N+1, nunca um número inventado). Insumo sem movimentação = null.
+  const semSaldo = listaIns.json?.rows?.find((r) => Number(r.id) === Number(insumoId));
+  check('insumos: insumo sem movimentação tem estoque null (nunca zero inventado)', semSaldo?.estoque_saldo === null, `estoque_saldo=${semSaldo?.estoque_saldo}`);
+  const movInsumo = await req('POST', '/movimentacoes_insumos', {
+    tipo: 'entrada',
+    insumo_id: insumoId,
+    quantidade: 120,
+    custo_unitario: 7.5,
+    motivo: 'Saldo inicial smoke insumos',
+  });
+  check('insumos: a movimentação de insumo dá saldo', [200, 201].includes(movInsumo.status), `status ${movInsumo.status}`);
+  const listaComSaldo = await req('GET', `/insumos?q=${encodeURIComponent(criado.json?.nome || '')}`);
+  check('insumos: a coluna Estoque traz o saldo REAL agregado',
+    Number(listaComSaldo.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.estoque_saldo) === 120,
+    `estoque_saldo=${listaComSaldo.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.estoque_saldo}`);
+
+  // UTILIZAÇÃO: contagem real das fichas técnicas (agregada, em lote).
+  const produtoIns = await req('POST', '/produtos', { sku: `INS-SMOKE-${Date.now().toString().slice(-6)}`, nome: 'Produto Insumo Smoke' });
+  const fichaIns = await req('POST', '/fichas', { produto_id: produtoIns.json?.id });
+  check('insumos: a ficha técnica do smoke foi criada', [200, 201].includes(fichaIns.status), `status ${fichaIns.status}`);
+  const itemFichaIns = await req('POST', `/fichas/${fichaIns.json?.id}/insumos`, { insumo_id: insumoId, consumo: 2, perda_pct: 0 });
+  check('insumos: o insumo entrou na ficha técnica', [200, 201].includes(itemFichaIns.status), `status ${itemFichaIns.status}`);
+  const listaUso = await req('GET', `/insumos?q=${encodeURIComponent(criado.json?.nome || '')}`);
+  const linhaUso = listaUso.json?.rows?.find((r) => Number(r.id) === Number(insumoId));
+  check('insumos: Utilização traz a contagem real (fichas técnicas)',
+    Number(linhaUso?.uso_vinculado) === 1 && linhaUso?.uso_vinculado_label === '1 ficha técnica',
+    `uso=${linhaUso?.uso_vinculado_label}`);
+
+  // Exclusão bloqueada por histórico protegido + saída por desativação.
+  const bloqueadaIns = await req('DELETE', `/insumos/${insumoId}`);
+  const diagIns = bloqueadaIns.json?.details?.dependencias;
+  check('insumos: DELETE vinculado → 409 dependencias_vinculadas',
+    bloqueadaIns.status === 409 && bloqueadaIns.json?.code === 'dependencias_vinculadas', `status ${bloqueadaIns.status}`);
+  check('insumos: diagnóstico diz onde/quantos/por quê',
+    diagIns?.bloqueado === true && diagIns?.modulosBloqueantes?.length > 0 &&
+    diagIns?.vinculos?.some((v) => v.quantidade >= 1 && Array.isArray(v.ids) && v.motivo));
+  const desativadoIns = await req('PUT', `/insumos/${insumoId}`, { ativo: false });
+  check('insumos: desativar preserva o insumo e o histórico',
+    desativadoIns.status === 200 && desativadoIns.json?.ativo === false, `status ${desativadoIns.status}`);
+  const aindaLa = await req('GET', `/insumos/${insumoId}`);
+  check('insumos: o insumo desativado continua na leitura', aindaLa.status === 200 && aindaLa.json?.ativo === false);
+  const saldoApos = await req('GET', `/insumos?q=${encodeURIComponent(criado.json?.nome || '')}`);
+  check('insumos: o saldo do insumo desativado continua no estoque',
+    Number(saldoApos.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.estoque_saldo) === 120);
+
+  // Insumo sem vínculo segue o fluxo normal de exclusão.
+  const semUsoIns = await req('POST', '/insumos', { nome: `Insumo sem uso ${Date.now().toString().slice(-6)}`, unidade: 'un' });
+  const excluidaIns = await req('DELETE', `/insumos/${semUsoIns.json?.id}`);
+  check('insumos: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluidaIns.status), `status ${excluidaIns.status}`);
+}
+
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);
 check('sem token → 401', semToken.status === 401, `status ${semToken.status}`);

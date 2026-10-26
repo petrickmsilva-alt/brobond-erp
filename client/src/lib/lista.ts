@@ -291,12 +291,104 @@ const CONFIG_TAMANHOS: ListaConfig = {
   contagem: { singular: 'tamanho', plural: 'tamanhos' },
 };
 
+/**
+ * Grades: entidade ESTRUTURAL do catálogo (conjunto nomeado de tamanhos, com
+ * ordem). Cadastro no padrão LISTA → PÁGINA (`/grades/novo`,
+ * `/grades/:id/editar`), nunca formulário sobreposto.
+ *
+ * A ordem das colunas é a da pergunta que se faz ao revisar as grades do
+ * catálogo: qual é a grade, quais tamanhos ela tem (na ordem dela), como está a
+ * tabela de medidas, ela está disponível e onde é usada.
+ */
+const CONFIG_GRADES: ListaConfig = {
+  // `#` fica à esquerda como nos demais cadastros genéricos do ERP; depois vêm
+  // as colunas do domínio: GRADE · TAMANHOS · MEDIDAS · STATUS · UTILIZAÇÃO.
+  prioridade: ['id', 'nome', 'tamanhos', 'medidas_status', 'ativo', 'uso_vinculado', 'descricao'],
+  rotulos: {
+    id: '#',
+    nome: 'Grade',
+    tamanhos: 'Tamanhos',
+    medidas_status: 'Medidas',
+    ativo: 'Status',
+    uso_vinculado: 'Utilização',
+    descricao: 'Descrição',
+  },
+  larguras: {
+    nome: { min: 'min-w-[200px]', max: 'max-w-[280px]' },
+    tamanhos: { min: 'min-w-[180px]', max: 'max-w-[280px]' },
+    medidas_status: { min: 'min-w-[130px]', max: 'max-w-[150px]' },
+    ativo: { min: 'min-w-[110px]', max: 'max-w-[120px]' },
+    uso_vinculado: { min: 'min-w-[150px]', max: 'max-w-[200px]' },
+    descricao: { min: 'min-w-[180px]', max: 'max-w-[300px]' },
+  },
+  titulo: 'nome',
+  card: ['tamanhos', 'medidas_status', 'ativo', 'uso_vinculado'],
+  buscaPlaceholder: 'Buscar grade...',
+  rotuloNovo: 'Nova grade',
+  rotuloEditar: 'Editar grade',
+  descricaoCadastro: 'Configure uma grade de tamanhos para utilização no catálogo de produtos.',
+  rotuloSalvar: 'Salvar grade',
+  mensagemVinculos: 'Não é possível excluir esta grade porque existem registros vinculados.',
+  vazioTitulo: 'Nenhuma grade cadastrada',
+  vazioDescricao: 'Cadastre a primeira grade de tamanhos para organizar o estoque dos produtos.',
+  alternarAtivo: true,
+  contagem: { singular: 'grade', plural: 'grades' },
+};
+
+/**
+ * Insumos: matéria-prima da produção. Cadastro no padrão LISTA → PÁGINA
+ * (`/insumos/novo`, `/insumos/:id/editar`), nunca formulário sobreposto.
+ *
+ * A ordem das colunas é a da pergunta que se faz ao revisar o estoque de
+ * matéria-prima: qual é o insumo, em que unidade ele é comprado, de quem vem,
+ * quanto custa, quanto tem em estoque, se está ativo e onde ele é usado.
+ *
+ * `estoque_saldo` e `uso_vinculado` são campos VIRTUAIS: o servidor os anota
+ * na listagem (agregados, uma consulta por página) — nenhum número inventado
+ * aqui.
+ */
+const CONFIG_INSUMOS: ListaConfig = {
+  prioridade: ['nome', 'unidade', 'fornecedor_id', 'custo_medio', 'estoque_saldo', 'ativo', 'uso_vinculado'],
+  rotulos: {
+    nome: 'Insumo',
+    unidade: 'Unidade',
+    fornecedor_id: 'Fornecedor',
+    custo_medio: 'Custo médio',
+    estoque_saldo: 'Estoque',
+    ativo: 'Status',
+    uso_vinculado: 'Utilização',
+  },
+  larguras: {
+    nome: { min: 'min-w-[200px]', max: 'max-w-[280px]' },
+    unidade: { min: 'min-w-[120px]', max: 'max-w-[150px]' },
+    fornecedor_id: { min: 'min-w-[150px]', max: 'max-w-[200px]' },
+    custo_medio: { min: 'min-w-[120px]', max: 'max-w-[140px]' },
+    estoque_saldo: { min: 'min-w-[110px]', max: 'max-w-[130px]' },
+    ativo: { min: 'min-w-[110px]', max: 'max-w-[120px]' },
+    uso_vinculado: { min: 'min-w-[150px]', max: 'max-w-[200px]' },
+  },
+  titulo: 'nome',
+  card: ['unidade', 'fornecedor_id', 'custo_medio', 'estoque_saldo', 'ativo', 'uso_vinculado'],
+  buscaPlaceholder: 'Buscar insumo...',
+  rotuloNovo: 'Novo insumo',
+  rotuloEditar: 'Editar insumo',
+  descricaoCadastro: 'Cadastre a matéria-prima usada na produção, a unidade de compra, o custo e o fornecedor.',
+  rotuloSalvar: 'Salvar insumo',
+  mensagemVinculos: 'Não é possível excluir este insumo porque existem registros vinculados.',
+  vazioTitulo: 'Nenhum insumo cadastrado',
+  vazioDescricao: 'Cadastre a primeira matéria-prima para usar nas fichas técnicas e nas compras.',
+  alternarAtivo: true,
+  contagem: { singular: 'insumo', plural: 'insumos' },
+};
+
 const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   produtos: CONFIG_PRODUTOS,
   categorias: CONFIG_CATEGORIAS,
   cores: CONFIG_CORES,
   colecoes: CONFIG_COLECOES,
   tamanhos: CONFIG_TAMANHOS,
+  grades: CONFIG_GRADES,
+  insumos: CONFIG_INSUMOS,
 };
 
 export function configDaLista(recurso: string): ListaConfig {
@@ -355,6 +447,55 @@ export const CAMPO_USO: Field = {
   form: false,
   hint: 'Quantos registros da empresa ativa usam este cadastro.',
 };
+
+/**
+ * Coluna sintética do ESTADO DA TABELA DE MEDIDAS (grades).
+ *
+ * O valor vem ANOTADO pelo servidor no payload da listagem
+ * (`medidas_status`/`medidas_pct`), calculado pela MESMA função de completude
+ * do módulo de medidas (server/src/medidas.ts › resumoMedidasPorGrade) — o
+ * front não recalcula nada e não faz uma consulta por grade.
+ */
+export const CAMPO_MEDIDAS: Field = {
+  name: 'medidas_status',
+  label: 'Medidas',
+  type: 'text',
+  virtual: true,
+  list: true,
+  form: false,
+  hint: 'Situação da tabela de medidas da grade (sem tabela, parcial ou completa).',
+};
+
+/** Estados reais da tabela de medidas de uma grade (mesmos do servidor). */
+export type StatusMedidas = 'sem_tabela' | 'parcial' | 'completa';
+
+export const ROTULO_STATUS_MEDIDAS: Record<StatusMedidas, string> = {
+  sem_tabela: 'Sem tabela',
+  parcial: 'Parcial',
+  completa: 'Completa',
+};
+
+/** A listagem deste recurso ganha a coluna MEDIDAS? */
+export function usaColunaMedidas(recurso: string): boolean {
+  return recurso === 'grades';
+}
+
+/**
+ * Estado da tabela de medidas da linha (null quando o payload não trouxe —
+ * ex.: recurso que não tem tabela de medidas). Nenhum estado é inventado: sem
+ * dado, a coluna mostra o traço neutro.
+ */
+export function statusMedidasDaLinha(row: Record<string, any>): StatusMedidas | null {
+  const bruto = String(row?.medidas_status ?? '');
+  return bruto === 'sem_tabela' || bruto === 'parcial' || bruto === 'completa' ? bruto : null;
+}
+
+/** A linha tem utilização (produtos OU categorias vinculados)? */
+export function temUtilizacao(row: Record<string, any>): boolean {
+  const produtos = Number(row?.uso_vinculado);
+  const categorias = Number(row?.uso_categorias);
+  return (Number.isFinite(produtos) && produtos > 0) || (Number.isFinite(categorias) && categorias > 0);
+}
 
 /**
  * Coluna `#` (id) dos demais recursos: é o identificador que o operador usa em

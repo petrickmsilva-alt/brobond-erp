@@ -161,6 +161,25 @@ export interface Store {
    */
   countByColumn(r: Resource, coluna: string, ids: number[], empresaId?: number, tx?: Tx): Promise<Map<number, number>>;
 
+  /**
+   * SOMATÓRIA AGREGADA — soma o valor da coluna `valor` das linhas de `r` que
+   * apontam para cada id de `ids` pela coluna `grupo`, recortando por
+   * `empresaId`.
+   *
+   * Mesma garantia de `countByColumn`: UMA consulta com GROUP BY serve a
+   * página inteira (nunca uma consulta por registro — nenhum N+1). Usada para
+   * mostrar o SALDO de estoque de insumos na listagem, quando o saldo vive
+   * numa tabela separada (um saldo por insumo) e não na própria linha.
+   */
+  sumByColumn(
+    r: Resource,
+    grupo: string,
+    valor: string,
+    ids: number[],
+    empresaId?: number,
+    tx?: Tx
+  ): Promise<Map<number, number>>;
+
   insert(r: Resource, data: Payload, tx?: Tx): Promise<Row>;
   update(r: Resource, id: number, data: Payload, tx?: Tx): Promise<Row | null>;
   remove(r: Resource, id: number, tx?: Tx): Promise<boolean>;
