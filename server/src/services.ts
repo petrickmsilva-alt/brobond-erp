@@ -310,7 +310,40 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   await anotarUsoColecao(r, out.rows, escopo);
   await attachGradeTamanhos(r, out.rows);
   await anotarGrades(r, out.rows, escopo);
+  await anotarEstoqueInsumos(r, out.rows, escopo);
   return out;
+}
+
+/**
+ * SALDO DE ESTOQUE DOS INSUMOS — coluna "Estoque" da listagem de insumos.
+ *
+ * O saldo NÃO é coluna de `insumos`: ele vive em `estoque_insumos` (um saldo
+ * por insumo, atualizado por compra/ajuste/consumo de OP). Sem esta agregação,
+ * a listagem teria de buscar o saldo insumo a insumo — exatamente o N+1 que a
+ * listagem do ERP precisa evitar.
+ *
+ * UMA consulta agregada (`Store.sumByColumn`, GROUP BY) serve a página inteira:
+ * o número de consultas é CONSTANTE, não cresce com a quantidade de insumos
+ * listados. O recorte de empresa é o da empresa ativa (`estoque_insumos` é
+ * tenantado), então nenhum saldo de outra empresa aparece.
+ *
+ * O estoque mínimo NÃO é anotado aqui: ele é editável no módulo "Estoque de
+ * Insumos" (recurso `estoque_insumos`) e o valor do saldo não o substitui.
+ */
+async function anotarEstoqueInsumos(r: Resource, rows: Row[], escopo?: EscopoEmpresa): Promise<void> {
+  if (r.key !== 'insumos' || !rows.length) return;
+  const saldos = getResource('estoque_insumos');
+  if (!saldos) return;
+  const ids = rows.map((row) => Number(row.id)).filter((n) => Number.isInteger(n) && n > 0);
+  if (!ids.length) return;
+  const empresaId = escopo?.empresaId ?? Number(rows[0].empresa_id ?? EMPRESA_PADRAO);
+  const porInsumo = await getStore().sumByColumn(saldos, 'insumo_id', 'quantidade', ids, empresaId);
+  for (const row of rows) {
+    const saldo = porInsumo.get(Number(row.id));
+    // `null` = insumo sem saldo registrado (nunca movimentado). A coluna mostra
+    // "—" nesse caso; ZERO saldo (movimentado e baixado) é um número real.
+    row.estoque_saldo = saldo === undefined ? null : Number(saldo);
+  }
 }
 
 /**
@@ -418,6 +451,7 @@ export async function getRecord(r: Resource, id: number, escopoOuAtor?: EscopoOu
   await anotarUsoVinculado(r, [row], escopo);
   await attachGradeTamanhos(r, [row]);
   await anotarGrades(r, [row], escopo);
+  await anotarEstoqueInsumos(r, [row], escopo);
   return row;
 }
 

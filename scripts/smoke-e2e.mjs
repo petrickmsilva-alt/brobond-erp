@@ -799,6 +799,118 @@ await (async () => {
   const sumiu = await req('GET', `/grades/${gradeOrfa.json?.id}`);
   check('grades: a grade excluída não volta na leitura', sumiu.status === 404, `status ${sumiu.status}`);
 }
+
+// ------------------------------ CADASTROS › INSUMOS (padrão LISTA → PÁGINA)
+// Insumos seguem o mesmo padrão de Cores, Coleções e Grades: o formulário vive
+// nas páginas /insumos/novo e /insumos/:id/editar — `/meta` não declara
+// drawer/modal. O contrato abaixo é exatamente o que elas usam.
+//
+// DOMÍNIO REAL de `insumos` (db/schema.sql): nome, unidade, custo_medio,
+// fornecedor_id, ativo. NÃO existem SKU/NCM/descrição/marca/cor/imagem/
+// categoria/estoque mínimo/localização — e o smoke trava essa verdade: um
+// campo que não existe no banco não pode aparecer no formulário.
+{
+  const meta = await req('GET', '/meta');
+  const insumos = meta.json?.resources?.insumos;
+  check('insumos: /meta NÃO declara drawer/modal (formulário é página)', !('editor' in (insumos || {})), `editor=${insumos?.editor}`);
+  check('insumos: cadastro por empresa (empresa: true)', insumos?.empresa === true, `empresa=${insumos?.empresa}`);
+  check('insumos: RBAC preservado — SEM minPerfilEscrita (é cadastro por empresa)', insumos?.minPerfilEscrita === undefined, `minPerfilEscrita=${insumos?.minPerfilEscrita}`);
+  check('insumos: /meta entrega os filtros rápidos Todos/Ativos/Inativos',
+    JSON.stringify(insumos?.quickFilters?.[0]?.options?.map((o) => o.label)) === JSON.stringify(['Todos', 'Ativos', 'Inativos']));
+  check('insumos: /meta declara a utilização real pelas fichas técnicas',
+    insumos?.uso?.recurso === 'itens_ficha_tecnica' && insumos?.uso?.campo === 'insumo_id',
+    JSON.stringify(insumos?.uso));
+
+  // NENHUM campo inventado no formulário.
+  const camposInsumo = (insumos?.fields || []).map((f) => f.name);
+  check('insumos: o formulário usa só os campos reais do banco',
+    ['nome', 'unidade', 'custo_medio', 'fornecedor_id', 'ativo'].every((c) => camposInsumo.includes(c)) &&
+    !camposInsumo.some((c) => ['sku', 'codigo', 'ncm', 'descricao', 'marca', 'cor_id', 'imagem', 'categoria_id', 'estoque_min', 'estoque_max', 'localizacao'].includes(c)),
+    `campos=${camposInsumo.join(',')}`);
+
+  // Fornecedor: a referência real (fornecedor_id → fornecedores), com as
+  // opções do endpoint padrão de opções (nenhum endpoint paralelo).
+  const fornecedor = await req('POST', '/fornecedores', { nome: `Fornecedor Smoke ${Date.now().toString().slice(-6)}` });
+  check('insumos: o fornecedor do smoke foi cadastrado', [200, 201].includes(fornecedor.status), `status ${fornecedor.status}`);
+  const opcoesForn = await req('GET', '/fornecedores/options');
+  check('insumos: /fornecedores/options alimenta a seleção do fornecedor',
+    Array.isArray(opcoesForn.json) && opcoesForn.json.some((o) => Number(o.value) === Number(fornecedor.json?.id)),
+    `${Array.isArray(opcoesForn.json) ? opcoesForn.json.length : 0} opções`);
+
+  // Cadastro pela PÁGINA: o mesmo contrato do CRUD genérico.
+  const criado = await req('POST', '/insumos', {
+    nome: `Insumo Smoke ${Date.now().toString().slice(-6)}`,
+    unidade: 'm',
+    custo_medio: 7.5,
+    fornecedor_id: fornecedor.json?.id,
+    ativo: true,
+  });
+  check('insumos: POST cria o insumo com o contrato real', [200, 201].includes(criado.status) && !!criado.json?.id, `status ${criado.status}`);
+  const insumoId = criado.json?.id;
+
+  // Listagem: busca + filtro de status + filtro de unidade.
+  const listaIns = await req('GET', `/insumos?q=${encodeURIComponent(criado.json?.nome || '')}`);
+  check('insumos: busca por nome na listagem do servidor', listaIns.json?.rows?.some((r) => Number(r.id) === Number(insumoId)));
+  check('insumos: a listagem devolve a unidade e o custo médio reais',
+    listaIns.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.unidade === 'm' &&
+    Number(listaIns.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.custo_medio) === 7.5);
+  const listaAtivos = await req('GET', '/insumos?f.ativo=true&pageSize=200');
+  check('insumos: filtro f.ativo=true', listaAtivos.json?.rows?.some((r) => Number(r.id) === Number(insumoId)));
+  const listaPorUnidade = await req('GET', '/insumos?f.unidade=kg&pageSize=200');
+  check('insumos: filtro f.unidade recorta no servidor',
+    !listaPorUnidade.json?.rows?.some((r) => Number(r.id) === Number(insumoId)));
+
+  // ESTOQUE: o saldo REAL de estoque_insumos, agregado no servidor (nunca
+  // um N+1, nunca um número inventado). Insumo sem movimentação = null.
+  const semSaldo = listaIns.json?.rows?.find((r) => Number(r.id) === Number(insumoId));
+  check('insumos: insumo sem movimentação tem estoque null (nunca zero inventado)', semSaldo?.estoque_saldo === null, `estoque_saldo=${semSaldo?.estoque_saldo}`);
+  const movInsumo = await req('POST', '/movimentacoes_insumos', {
+    tipo: 'entrada',
+    insumo_id: insumoId,
+    quantidade: 120,
+    custo_unitario: 7.5,
+    motivo: 'Saldo inicial smoke insumos',
+  });
+  check('insumos: a movimentação de insumo dá saldo', [200, 201].includes(movInsumo.status), `status ${movInsumo.status}`);
+  const listaComSaldo = await req('GET', `/insumos?q=${encodeURIComponent(criado.json?.nome || '')}`);
+  check('insumos: a coluna Estoque traz o saldo REAL agregado',
+    Number(listaComSaldo.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.estoque_saldo) === 120,
+    `estoque_saldo=${listaComSaldo.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.estoque_saldo}`);
+
+  // UTILIZAÇÃO: contagem real das fichas técnicas (agregada, em lote).
+  const produtoIns = await req('POST', '/produtos', { sku: `INS-SMOKE-${Date.now().toString().slice(-6)}`, nome: 'Produto Insumo Smoke' });
+  const fichaIns = await req('POST', '/fichas', { produto_id: produtoIns.json?.id });
+  check('insumos: a ficha técnica do smoke foi criada', [200, 201].includes(fichaIns.status), `status ${fichaIns.status}`);
+  const itemFichaIns = await req('POST', `/fichas/${fichaIns.json?.id}/insumos`, { insumo_id: insumoId, consumo: 2, perda_pct: 0 });
+  check('insumos: o insumo entrou na ficha técnica', [200, 201].includes(itemFichaIns.status), `status ${itemFichaIns.status}`);
+  const listaUso = await req('GET', `/insumos?q=${encodeURIComponent(criado.json?.nome || '')}`);
+  const linhaUso = listaUso.json?.rows?.find((r) => Number(r.id) === Number(insumoId));
+  check('insumos: Utilização traz a contagem real (fichas técnicas)',
+    Number(linhaUso?.uso_vinculado) === 1 && linhaUso?.uso_vinculado_label === '1 ficha técnica',
+    `uso=${linhaUso?.uso_vinculado_label}`);
+
+  // Exclusão bloqueada por histórico protegido + saída por desativação.
+  const bloqueadaIns = await req('DELETE', `/insumos/${insumoId}`);
+  const diagIns = bloqueadaIns.json?.details?.dependencias;
+  check('insumos: DELETE vinculado → 409 dependencias_vinculadas',
+    bloqueadaIns.status === 409 && bloqueadaIns.json?.code === 'dependencias_vinculadas', `status ${bloqueadaIns.status}`);
+  check('insumos: diagnóstico diz onde/quantos/por quê',
+    diagIns?.bloqueado === true && diagIns?.modulosBloqueantes?.length > 0 &&
+    diagIns?.vinculos?.some((v) => v.quantidade >= 1 && Array.isArray(v.ids) && v.motivo));
+  const desativadoIns = await req('PUT', `/insumos/${insumoId}`, { ativo: false });
+  check('insumos: desativar preserva o insumo e o histórico',
+    desativadoIns.status === 200 && desativadoIns.json?.ativo === false, `status ${desativadoIns.status}`);
+  const aindaLa = await req('GET', `/insumos/${insumoId}`);
+  check('insumos: o insumo desativado continua na leitura', aindaLa.status === 200 && aindaLa.json?.ativo === false);
+  const saldoApos = await req('GET', `/insumos?q=${encodeURIComponent(criado.json?.nome || '')}`);
+  check('insumos: o saldo do insumo desativado continua no estoque',
+    Number(saldoApos.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.estoque_saldo) === 120);
+
+  // Insumo sem vínculo segue o fluxo normal de exclusão.
+  const semUsoIns = await req('POST', '/insumos', { nome: `Insumo sem uso ${Date.now().toString().slice(-6)}`, unidade: 'un' });
+  const excluidaIns = await req('DELETE', `/insumos/${semUsoIns.json?.id}`);
+  check('insumos: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluidaIns.status), `status ${excluidaIns.status}`);
+}
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);
 check('sem token → 401', semToken.status === 401, `status ${semToken.status}`);

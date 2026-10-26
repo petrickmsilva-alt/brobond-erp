@@ -22,6 +22,7 @@ const CategoriaFormPage = lazy(() => import('./pages/CategoriaFormPage'));
 const CorFormPage = lazy(() => import('./pages/CorFormPage'));
 const ColecaoFormPage = lazy(() => import('./pages/ColecaoFormPage'));
 const GradeFormPage = lazy(() => import('./pages/GradeFormPage'));
+const InsumoFormPage = lazy(() => import('./pages/InsumoFormPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
 const FichaDetail = lazy(() => import('./pages/FichaDetail'));
@@ -196,6 +197,25 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="grades">
                   <GradeFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Cadastro de insumos em página própria (fora de qualquer modal/drawer):
+                a matéria-prima é consultada na compra, na ficha técnica e no
+                estoque — o formulário vive na rota, não sobreposto à lista. */}
+            <Route
+              path="insumos/novo"
+              element={
+                <ModuleAccess moduleId="insumos">
+                  <InsumoFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="insumos/:id/editar"
+              element={
+                <ModuleAccess moduleId="insumos">
+                  <InsumoFormPage />
                 </ModuleAccess>
               }
             />
