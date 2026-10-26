@@ -1,15 +1,14 @@
 // ============================================================================
-// CADASTRO DE COLEÇÕES — LISTA + DRAWER LATERAL (padrão dos cadastros simples).
+// CADASTRO DE COLEÇÕES — LISTA (tela principal) no padrão do BROBOND ERP.
 //
-// Substitui a caixa modal central por uma experiência profissional: a LISTA
-// permanece à vista e o formulário abre num DRAWER lateral — o usuário nunca
-// perde o contexto da listagem. É o padrão que os demais cadastros simples
-// (cores, tamanhos, grades) passam a seguir.
+// O cadastro/edição NÃO é uma superfície sobreposta: vive em PÁGINA PRÓPRIA
+// (`/colecoes/novo`, `/colecoes/:id/editar` — ver ColecaoFormPage), exatamente
+// como Cores, Categorias e Produtos. Aqui só existe a LISTA; "Nova coleção" e
+// "Editar" NAVEGAM, nunca abrem modal/drawer/overlay.
 //
 // NÃO inventa campos nem endpoints: usa o contrato existente do recurso
 // `colecoes` (nome, temporada, ano, ativo) em GET/POST/PUT/DELETE /api/colecoes.
-// O servidor revalida tudo (validatePayload + checkAccess); o front só evita a
-// ida e volta com validação local e mensagens por campo.
+// O servidor revalida tudo (validatePayload + checkAccess); a UI só reflete.
 //
 // Utilização em produtos: o servidor anota `produtos_vinculados` na listagem
 // com UMA consulta agregada (nunca N+1) — a tela apenas exibe o número real.
@@ -18,15 +17,17 @@
 // diagnóstico de dependências e a tela abre o "Ver vínculos" (o mesmo mecanismo
 // dos demais módulos). A saída é DESATIVAR: o histórico (produtos) permanece.
 // ============================================================================
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Layers, Loader2, Pencil, Plus, Power, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Layers, Pencil, Plus, Power, Trash2 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
-import { useMeta, type Field, type ListResult } from '../lib/meta';
+import { useMeta, type ListResult } from '../lib/meta';
 import { Alert, Badge, ConfirmDialog, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
-import { DataTable, Drawer, FilterBar, SearchInput, type DataTableColumn } from '../components/ui-kit-negocios';
-import { Dropdown, Pagination, Switch } from '../components/ui-kit';
+import { DataTable, FilterBar, SearchInput, type DataTableColumn } from '../components/ui-kit-negocios';
+import { Dropdown, Pagination } from '../components/ui-kit';
 import { DependenciasModal, type DiagnosticoDependencias } from '../components/DependenciasModal';
 import { useAuth } from '../auth/AuthContext';
+import { contagemDe, placeholderBusca, rotuloNovo } from '../lib/lista';
 
 type Colecao = {
   id: number;
@@ -35,28 +36,12 @@ type Colecao = {
   ano: number | null;
   ativo?: boolean;
   produtos_vinculados?: number;
-  atualizado_em?: string | null;
-  criado_em?: string | null;
 };
-
-type Valores = { nome: string; temporada: string; ano: string; ativo: boolean };
-
-const VALORES_INICIAIS: Valores = { nome: '', temporada: '', ano: '', ativo: true };
 
 const PAGE_SIZE = 25;
 const TAMANHOS_PAGINA = [25, 50, 100];
 
 type FiltroStatus = '' | 'true' | 'false';
-
-/** Linha da API → valores do formulário. */
-function valoresDaLinha(row: Colecao): Valores {
-  return {
-    nome: String(row.nome ?? ''),
-    temporada: row.temporada == null ? '' : String(row.temporada),
-    ano: row.ano == null || row.ano === undefined ? '' : String(row.ano),
-    ativo: row.ativo !== false,
-  };
-}
 
 /** "1 produto" / "N produtos" — só com a contagem REAL do servidor. */
 function textoUtilizacao(n: number | undefined): string {
@@ -67,6 +52,7 @@ function textoUtilizacao(n: number | undefined): string {
 export default function ColecoesPage() {
   const toast = useToast();
   const meta = useMeta();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const resource = meta.resources['colecoes'];
 
@@ -91,14 +77,6 @@ export default function ColecoesPage() {
   const [busca, setBusca] = useState('');
   const [buscaAplicada, setBuscaAplicada] = useState('');
   const [status, setStatus] = useState<FiltroStatus>('');
-
-  const [drawerAberto, setDrawerAberto] = useState(false);
-  const [editando, setEditando] = useState<Colecao | null>(null);
-  const [valores, setValores] = useState<Valores>(VALORES_INICIAIS);
-  const [erros, setErros] = useState<Record<string, string>>({});
-  const [erroForm, setErroForm] = useState('');
-  const [salvando, setSalvando] = useState(false);
-  const erroResumoRef = useRef<HTMLDivElement>(null);
 
   const [alternandoAtivo, setAlternandoAtivo] = useState<number | null>(null);
   const [alvoExclusao, setAlvoExclusao] = useState<Colecao | null>(null);
@@ -143,93 +121,6 @@ export default function ColecoesPage() {
   }, [carregar]);
 
   const recorteAtivo = buscaAplicada !== '' || status !== '';
-
-  // ---- Drawer: novo / editar ----
-  function abrirNova() {
-    setEditando(null);
-    setValores(VALORES_INICIAIS);
-    setErros({});
-    setErroForm('');
-    setDrawerAberto(true);
-  }
-
-  function abrirEdicao(row: Colecao) {
-    setEditando(row);
-    setValores(valoresDaLinha(row));
-    setErros({});
-    setErroForm('');
-    setDrawerAberto(true);
-  }
-
-  function fecharDrawer() {
-    if (salvando) return;
-    setDrawerAberto(false);
-  }
-
-  const setCampo = useCallback((nome: keyof Valores, valor: string | boolean) => {
-    setValores((v) => ({ ...v, [nome]: valor }));
-    setErros((e) => (e[nome] ? { ...e, [nome]: '' } : e));
-    setErroForm('');
-  }, []);
-
-  /** Validação local espelhando o servidor — erro junto do campo, na hora. */
-  function validar(): Record<string, string> {
-    const errs: Record<string, string> = {};
-    const nome = valores.nome.trim();
-    const maxNome = resource?.fields.find((f) => f.name === 'nome')?.maxLength ?? 80;
-    if (!nome) errs.nome = 'Informe o nome da coleção.';
-    else if (nome.length > maxNome) errs.nome = `Máximo de ${maxNome} caracteres.`;
-    if (valores.ano.trim() !== '') {
-      const ano = Number(valores.ano);
-      if (!Number.isInteger(ano) || ano < 2000 || ano > 2100) errs.ano = 'Informe um ano entre 2000 e 2100.';
-    }
-    return errs;
-  }
-
-  /** Payload no contrato do recurso: texto/select texto, ano inteiro, ativo booleano. */
-  function montarPayload(): Record<string, unknown> {
-    return {
-      nome: valores.nome.trim(),
-      temporada: valores.temporada.trim() === '' ? null : valores.temporada.trim(),
-      ano: valores.ano.trim() === '' ? null : Number(valores.ano),
-      ativo: valores.ativo,
-    };
-  }
-
-  async function salvar() {
-    if (salvando) return;
-    setErroForm('');
-    const errs = validar();
-    setErros(errs);
-    if (Object.keys(errs).length) {
-      setErroForm('Verifique os campos destacados — nada foi salvo e o que você digitou foi mantido.');
-      requestAnimationFrame(() => {
-        erroResumoRef.current?.focus();
-        document.getElementById(`col-${Object.keys(errs)[0]}`)?.focus();
-      });
-      return;
-    }
-    setSalvando(true);
-    try {
-      const payload = montarPayload();
-      if (editando) {
-        await api.put(`/colecoes/${editando.id}`, payload);
-        toast.success('Coleção salva com sucesso.');
-      } else {
-        await api.post('/colecoes', payload);
-        toast.success('Coleção cadastrada com sucesso.');
-      }
-      setDrawerAberto(false);
-      await carregar();
-    } catch (e) {
-      const fe = e instanceof ApiError && e.fields ? e.fields : {};
-      setErros(fe);
-      setErroForm(e instanceof ApiError ? e.message : 'Não foi possível salvar. Tente novamente.');
-      requestAnimationFrame(() => erroResumoRef.current?.focus());
-    } finally {
-      setSalvando(false);
-    }
-  }
 
   // ---- Ativar / Desativar na linha ----
   async function alternarAtivo(row: Colecao, forcar?: boolean) {
@@ -338,7 +229,7 @@ export default function ColecoesPage() {
       align: 'right',
       render: (row) => {
         const itens = [
-          canUpdate && { id: 'editar', label: 'Editar', icon: <Pencil className="h-4 w-4" />, onSelect: () => abrirEdicao(row) },
+          canUpdate && { id: 'editar', label: 'Editar', icon: <Pencil className="h-4 w-4" />, onSelect: () => navigate(`/colecoes/${row.id}/editar`) },
           canUpdate && {
             id: 'status',
             label: row.ativo === false ? 'Ativar' : 'Desativar',
@@ -362,14 +253,6 @@ export default function ColecoesPage() {
     },
   ];
 
-  const tituloDrawer = editando ? 'Editar coleção' : 'Nova coleção';
-  const descricaoDrawer = editando
-    ? `Alterando a coleção “${String(editando.nome ?? '')}”.`
-    : 'Cadastre uma coleção para organizar os produtos do catálogo.';
-  const maxNome = resource?.fields.find((f) => f.name === 'nome')?.maxLength ?? 80;
-  const campoNome = resource?.fields.find((f) => f.name === 'nome') as Field | undefined;
-  const campoTemporada = resource?.fields.find((f) => f.name === 'temporada') as Field | undefined;
-  const campoAno = resource?.fields.find((f) => f.name === 'ano') as Field | undefined;
   const alvoEmUso = !!alvoExclusao && Number(alvoExclusao.produtos_vinculados ?? 0) > 0;
   const dependenciasAtivaAinda = !!dependencias && linhas.some((l) => Number(l.id) === Number(dependencias.id) && l.ativo !== false);
 
@@ -380,15 +263,16 @@ export default function ColecoesPage() {
         description="Gerencie as coleções e temporadas utilizadas no catálogo."
         actions={
           canCreate ? (
-            <button className="btn-accent inline-flex" onClick={abrirNova}>
-              <Plus className="h-4 w-4" /> Nova coleção
+            // Padrão LISTA → PÁGINA: navega para a página própria de cadastro.
+            <button className="btn-accent inline-flex" onClick={() => navigate('/colecoes/novo')}>
+              <Plus className="h-4 w-4" /> {rotuloNovo('colecoes', 'Coleção')}
             </button>
           ) : undefined
         }
       />
 
       <FilterBar>
-        <SearchInput value={busca} onChange={setBusca} placeholder="Buscar coleção..." label="Buscar coleção" />
+        <SearchInput value={busca} onChange={setBusca} placeholder={placeholderBusca('colecoes', 'Coleções')} label="Buscar coleção" />
         <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-navy-200">
           <span className="sr-only">Filtrar por status</span>
           <select
@@ -443,8 +327,8 @@ export default function ColecoesPage() {
                   )}
                 </div>
               ) : canCreate ? (
-                <button className="btn-accent" onClick={abrirNova}>
-                  <Plus className="h-4 w-4" /> Nova coleção
+                <button className="btn-accent" onClick={() => navigate('/colecoes/novo')}>
+                  <Plus className="h-4 w-4" /> {rotuloNovo('colecoes', 'Coleção')}
                 </button>
               ) : undefined
             }
@@ -474,138 +358,11 @@ export default function ColecoesPage() {
                 setPage(1);
               }}
               label="Paginação de Coleções"
-              contagem={{ singular: 'coleção', plural: 'coleções' }}
+              contagem={contagemDe('colecoes')}
             />
           </div>
         )}
       </div>
-
-      {/* ---- Drawer: Nova coleção / Editar coleção ---- */}
-      <Drawer
-        open={drawerAberto}
-        onClose={fecharDrawer}
-        title={tituloDrawer}
-        description={descricaoDrawer}
-        footer={
-          <>
-            <button type="button" className="btn-secondary" onClick={fecharDrawer} disabled={salvando}>
-              Cancelar
-            </button>
-            <button type="submit" form="form-colecao" className="btn-accent" disabled={salvando || !(editando ? canUpdate : canCreate)}>
-              {salvando ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Salvar coleção
-            </button>
-          </>
-        }
-      >
-        {erroForm && (
-          <div ref={erroResumoRef} tabIndex={-1} className="mb-4 outline-none" role="alert" aria-live="assertive">
-            <Alert tone="red">{erroForm}</Alert>
-          </div>
-        )}
-        <form
-          id="form-colecao"
-          aria-label={tituloDrawer}
-          className="space-y-4"
-          noValidate
-          onSubmit={(e) => {
-            e.preventDefault();
-            void salvar();
-          }}
-        >
-          {/* Nome (obrigatório) */}
-          <div>
-            <label htmlFor="col-nome" className="label">
-              Nome <span className="text-red-500" aria-hidden="true">*</span>
-              <span className="sr-only"> (obrigatório)</span>
-            </label>
-            <input
-              id="col-nome"
-              type="text"
-              className={`input ${erros.nome ? 'input-error' : ''}`}
-              value={valores.nome}
-              onChange={(e) => setCampo('nome', e.target.value)}
-              maxLength={maxNome}
-              placeholder={campoNome?.placeholder ?? 'Verão 2027, Coleção Premium...'}
-              autoComplete="off"
-              autoFocus
-              disabled={salvando}
-              aria-invalid={erros.nome ? true : undefined}
-              aria-describedby={erros.nome ? 'col-nome-erro' : undefined}
-              required
-            />
-            {erros.nome ? (
-              <p id="col-nome-erro" className="mt-1 text-xs font-medium text-red-600" role="alert">
-                {erros.nome}
-              </p>
-            ) : (
-              <p className="mt-1 text-xs text-slate-400">Como a coleção aparece no catálogo. Ex.: Verão 2027.</p>
-            )}
-          </div>
-
-          {/* Temporada (select com opções reais do recurso) */}
-          <div>
-            <label htmlFor="col-temporada" className="label">
-              Temporada
-            </label>
-            <select
-              id="col-temporada"
-              className="input"
-              value={valores.temporada}
-              onChange={(e) => setCampo('temporada', e.target.value)}
-              disabled={salvando}
-            >
-              <option value="">— Nenhuma —</option>
-              {(campoTemporada?.options ?? []).map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-            <p className="mt-1 text-xs text-slate-400">Opcional. Agrupa a coleção por estação do ano.</p>
-          </div>
-
-          {/* Ano (integer, faixa do recurso) */}
-          <div>
-            <label htmlFor="col-ano" className="label">
-              Ano
-            </label>
-            <input
-              id="col-ano"
-              type="number"
-              inputMode="numeric"
-              className={`input ${erros.ano ? 'input-error' : ''}`}
-              value={valores.ano}
-              onChange={(e) => setCampo('ano', e.target.value)}
-              min={campoAno?.min ?? 2000}
-              max={campoAno?.max ?? 2100}
-              placeholder="2027"
-              disabled={salvando}
-              aria-invalid={erros.ano ? true : undefined}
-              aria-describedby={erros.ano ? 'col-ano-erro' : undefined}
-            />
-            {erros.ano ? (
-              <p id="col-ano-erro" className="mt-1 text-xs font-medium text-red-600" role="alert">
-                {erros.ano}
-              </p>
-            ) : (
-              <p className="mt-1 text-xs text-slate-400">Opcional. Usado para ordenar as coleções por recência.</p>
-            )}
-          </div>
-
-          {/* Ativo (Switch do design system) */}
-          <div className="border-t border-slate-100 pt-4 dark:border-navy-800">
-            <Switch
-              id="col-ativo"
-              checked={valores.ativo}
-              onChange={(v) => setCampo('ativo', v)}
-              disabled={salvando}
-              label="Ativa"
-              description="Coleções inativas não aparecem nos seletores de novos produtos; os produtos que já a usam continuam vinculados."
-            />
-          </div>
-        </form>
-      </Drawer>
 
       {/* ---- Confirmação de exclusão (componente padrão do ERP) ---- */}
       <ConfirmDialog

@@ -379,7 +379,7 @@ describe('NAV_SECTIONS (fonte única do menu)', () => {
 
 describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
   it('inclui os cadastros que já vivem em página própria', () => {
-    expect([...FORM_DIRETO].sort()).toEqual(['categorias', 'clientes', 'cores', 'produtos', 'vendas']);
+    expect([...FORM_DIRETO].sort()).toEqual(['categorias', 'clientes', 'colecoes', 'cores', 'produtos', 'vendas']);
   });
 
   it('Cores entra no padrão LISTA → PÁGINA: inventário e edição vivem no módulo /cores', () => {
@@ -390,6 +390,15 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
     expect(moduleOfPath('/cores')?.id).toBe('cores');
     expect(moduleOfPath('/cores/novo')?.id).toBe('cores');
     expect(moduleOfPath('/cores/12/editar')?.id).toBe('cores');
+  });
+
+  it('Coleções entra no padrão LISTA → PÁGINA: cadastro e edição vivem no módulo /colecoes', () => {
+    expect(FORM_DIRETO.has('colecoes')).toBe(true);
+    const colecoes = MODULES.find((m) => m.id === 'colecoes');
+    expect(colecoes?.path).toBe('/colecoes');
+    expect(moduleOfPath('/colecoes')?.id).toBe('colecoes');
+    expect(moduleOfPath('/colecoes/novo')?.id).toBe('colecoes');
+    expect(moduleOfPath('/colecoes/12/editar')?.id).toBe('colecoes');
   });
 
   it('cada recurso de FORM_DIRETO tem um módulo navegável na mesma rota', () => {

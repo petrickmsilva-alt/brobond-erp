@@ -598,6 +598,7 @@ await (async () => {
 {
   const meta = await req('GET', '/meta');
   const col = meta.json?.resources?.colecoes;
+  check('colecoes: /meta NÃO declara drawer/modal (formulário é página)', !('editor' in (col || {})), `editor=${col?.editor}`);
   check('colecoes: cadastro por empresa (empresa: true)', col?.empresa === true, `empresa=${col?.empresa}`);
   check('colecoes: RBAC preservado — SEM minPerfilEscrita',
     !('minPerfilEscrita' in (col || {})), `minPerfilEscrita=${col?.minPerfilEscrita}`);

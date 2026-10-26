@@ -1,13 +1,18 @@
-# Padrão de cadastros auxiliares — LISTA + DRAWER
+# Padrão de cadastros auxiliares — LISTA → PÁGINA
 
-Cadastros simples do ERP (poucos campos, uso frequente) não usam mais caixa modal
-central. A tela é a **lista**; criar/editar abrem um **Drawer lateral**, para o
-usuário não perder o contexto da listagem. Coleções é a primeira aplicação
-completa do padrão; cores, tamanhos, grades e categorias passam a segui-lo.
+Cadastros simples do ERP (poucos campos, uso frequente) **não** usam caixa modal
+central **nem** drawer/sheet lateral. A tela principal é a **lista**; criar e
+editar são **páginas próprias do ERP**, para o usuário navegar como em qualquer
+outra tela do sistema.
+
+Referência canônica: **Cores** (`client/src/pages/CorFormPage.tsx`, rotas
+`/cores/novo` e `/cores/:id/editar`). Coleções, Categorias, Produtos, Clientes e
+Vendas seguem o mesmo padrão (`FORM_DIRETO` em `client/src/modules.ts`).
 
 ## Estrutura da tela
 
-- `PageHeader` com título, descrição curta e ação `+ Novo`.
+- `PageHeader` com título, descrição curta e ação `+ Novo` (navega, não abre
+  superfície).
 - `FilterBar` com `SearchInput` (busca server-side via `q`) e o filtro de status
   (`f.ativo`): **Todas / Ativas / Inativas**.
 - `DataTable` com colunas só do que existe no modelo + `Status` + `Ações`.
@@ -15,14 +20,20 @@ completa do padrão; cores, tamanhos, grades e categorias passam a segui-lo.
   com recorte ativo, oferece limpar busca/filtros.
 - `Pagination` server-side, preservada.
 
-## Drawer
+## Página de cadastro/edição (não é drawer nem modal)
 
-- Mesmo formulário em **novo** e **edição** (`Drawer` do design system).
-- Título "Nova coleção" / "Editar coleção"; rodapé `[Cancelar] [Salvar coleção]`.
+- Rotas próprias: `/colecoes/novo` e `/colecoes/:id/editar`, registradas no
+  roteador do ERP sob o mesmo `ModuleAccess` do módulo (sem roteamento paralelo).
+- Mesmo formulário em **novo** e **edição**: o `RecordForm` dirigido por
+  metadados, dentro de um `card` da página, com o breadcrumb do shell
+  (`BROBOND ERP › Cadastros › Coleções › Novo/Editar`).
+- Título "Nova coleção" / "Editar coleção"; ações `Voltar` / `Cancelar` /
+  `Salvar coleção` no cabeçalho e no rodapé. Salvar devolve à lista.
 - Mostra **exatamente os campos do recurso** (em `colecoes`: nome, temporada, ano,
   ativo). Nenhum campo é inventado na UI.
 - Erro por campo na hora + resumo acessível; o servidor revalida tudo
   (`validatePayload`) e é a autoridade final.
+- Nenhuma superfície sobreposta: não há `role="dialog"`/`aria-modal`.
 
 ## Utilização (contagem real, sem N+1)
 
@@ -51,6 +62,11 @@ exibe o número; nunca dispara uma consulta por linha.
 
 ## Testes
 
-`client/src/pages/ColecoesPage.test.tsx` (lista, busca, filtro, drawer, RBAC,
-diagnóstico) e `server/test/colecoes-listagem.test.ts` (busca, filtros, utilização
-agregada, RBAC, multiempresa, exclusão bloqueada, desativação preserva produtos).
+- `client/src/pages/ColecoesPage.test.tsx` — lista, busca, filtro, **navegação**
+  para `/colecoes/novo` e `/colecoes/:id/editar` (sem modal/drawer), RBAC,
+  diagnóstico.
+- `client/src/pages/ColecaoFormPage.test.tsx` — página de cadastro/edição
+  (campos reais, criar, editar, cancelar, sem sobreposição).
+- `client/src/pages/ColecoesRoute.test.tsx` — o App registra as rotas próprias.
+- `server/test/colecoes-listagem.test.ts` — busca, filtros, utilização agregada,
+  RBAC, multiempresa, exclusão bloqueada, desativação preserva produtos.
