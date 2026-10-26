@@ -330,6 +330,13 @@ export const REGRAS_RELACAO: RegraRelacao[] = [
   { alvo: 'fornecedores', tabela: 'fornecedor_contatos', tipo: 'composicao', politica: 'seguir' },
   { alvo: 'categorias', tabela: 'produtos', tipo: 'historico', politica: 'seguir', motivo: 'produtos da categoria' },
   { alvo: 'categorias', tabela: 'catalogos', tipo: 'operacional', politica: 'seguir', motivo: 'catálogo que usa esta categoria' },
+  // COLEÇÕES: a coleção organiza o catálogo. Os PRODUTOS que a referenciam são
+  // histórico do negócio — apagá-los (ou desligar o vínculo) reescreveria o
+  // passado. Por isso a política é `proteger`: a exclusão é recusada com o
+  // diagnóstico completo e a coleção se DESATIVA (campo Ativo), preservando os
+  // produtos. As regras valem nos DOIS modos (o MemStore lê este mesmo mapa).
+  { alvo: 'colecoes', tabela: 'produtos', tipo: 'historico', politica: 'proteger', motivo: 'produtos do catálogo vinculados a esta coleção' },
+  { alvo: 'colecoes', tabela: 'catalogos', tipo: 'operacional', politica: 'proteger', motivo: 'catálogo que usa esta coleção como filtro' },
   { alvo: 'colecoes', tabela: 'politicas_comerciais', tipo: 'operacional', politica: 'seguir', motivo: 'política comercial da coleção' },
   { alvo: 'grades', tabela: 'grade_tamanhos', tipo: 'composicao', politica: 'seguir' },
   { alvo: 'grades', tabela: 'medidas', tipo: 'composicao', politica: 'seguir' },
@@ -700,6 +707,9 @@ function orientacaoPadrao(r: Resource, row: Row, bloqueado: boolean): string {
   }
   if (r.key === 'compras') {
     return 'Cancele a compra em vez de excluí-la: o recebimento e o histórico de estoque, financeiro e fiscal precisam ser preservados.';
+  }
+  if (r.key === 'colecoes') {
+    return 'Desative a coleção (campo Ativo) em vez de excluí-la: ela sai das opções de novos cadastros, mas os produtos e o histórico continuam apontando para ela.';
   }
   if (r.fields.some((f) => f.name === 'ativo')) {
     return 'Desative o registro (campo Ativo) em vez de excluí-lo: o histórico do sistema depende dele.';

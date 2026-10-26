@@ -218,6 +218,43 @@ const CONFIG_CORES: ListaConfig = {
 };
 
 /**
+ * Coleções: cadastro POR EMPRESA no padrão LISTA → PÁGINA do BROBOND ERP
+ * (`/colecoes/novo`, `/colecoes/:id/editar`) — o formulário é uma página do ERP,
+ * nunca modal/drawer. A ordem das colunas é a da pergunta que se faz ao revisar
+ * o catálogo: qual é a coleção (nome), quando ela vale (temporada/ano), ela está
+ * disponível (status) e onde ela é usada (utilização).
+ */
+const CONFIG_COLECOES: ListaConfig = {
+  prioridade: ['nome', 'temporada', 'ano', 'ativo', 'uso_vinculado'],
+  rotulos: {
+    nome: 'Coleção',
+    temporada: 'Temporada',
+    ano: 'Ano',
+    ativo: 'Status',
+    uso_vinculado: 'Utilização',
+  },
+  larguras: {
+    nome: { min: 'min-w-[200px]', max: 'max-w-[300px]' },
+    temporada: { min: 'min-w-[130px]', max: 'max-w-[160px]' },
+    ano: { min: 'min-w-[90px]', max: 'max-w-[110px]' },
+    ativo: { min: 'min-w-[110px]', max: 'max-w-[120px]' },
+    uso_vinculado: { min: 'min-w-[130px]', max: 'max-w-[160px]' },
+  },
+  titulo: 'nome',
+  card: ['nome', 'temporada', 'ano', 'ativo', 'uso_vinculado'],
+  buscaPlaceholder: 'Buscar coleção...',
+  rotuloNovo: 'Nova coleção',
+  rotuloEditar: 'Editar coleção',
+  descricaoCadastro: 'Cadastre uma coleção para organizar os produtos do catálogo.',
+  rotuloSalvar: 'Salvar coleção',
+  mensagemVinculos: 'Não é possível excluir esta coleção porque existem produtos vinculados.',
+  vazioTitulo: 'Nenhuma coleção cadastrada',
+  vazioDescricao: 'Cadastre sua primeira coleção para organizar os produtos do catálogo.',
+  alternarAtivo: true,
+  contagem: { singular: 'coleção', plural: 'coleções' },
+};
+
+/**
  * Grades: entidade ESTRUTURAL do catálogo (conjunto nomeado de tamanhos, com
  * ordem). Cadastro no padrão LISTA → PÁGINA (`/grades/novo`,
  * `/grades/:id/editar`), nunca formulário sobreposto.
@@ -265,6 +302,7 @@ const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   produtos: CONFIG_PRODUTOS,
   categorias: CONFIG_CATEGORIAS,
   cores: CONFIG_CORES,
+  colecoes: CONFIG_COLECOES,
   grades: CONFIG_GRADES,
 };
 

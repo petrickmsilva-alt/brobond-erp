@@ -799,8 +799,16 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Coleção',
     labelFields: ['nome'],
     ops: ALL_OPS,
+    // RBAC PRESERVADO: `colecoes` é cadastro POR EMPRESA (empresa: true) e
+    // sempre foi operável pelos perfis que já têm acesso ao catálogo. Não se
+    // introduz `minPerfilEscrita` aqui — os catálogos GLOBAIS (categorias,
+    // cores, grades, tamanhos) exigem gerente+ porque a nomenclatura deles vale
+    // para todas as empresas; coleções são de cada empresa. A autoridade segue
+    // no servidor (checkAccess): a UI apenas reflete.
+    notice:
+      'A coleção organiza o catálogo (ex.: Verão 2027). Uma coleção em uso pelos produtos NÃO é excluída — ela é DESATIVADA: sai das opções de novos cadastros, mas os produtos e o histórico continuam apontando para ela.',
     fields: [
-      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 80 },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 80, placeholder: 'Verão 2027, Coleção Premium...' },
       {
         name: 'temporada',
         label: 'Temporada',
@@ -814,10 +822,17 @@ export const RESOURCES: Record<string, Resource> = {
         ],
       },
       { name: 'ano', label: 'Ano', type: 'integer', min: 2000, max: 2100 },
+      ativo,
       ...auditFields,
     ],
+    // Filtros da LISTAGEM (server-side, mesmo mecanismo dos demais recursos):
+    // temporada e status — as duas perguntas que se faz ao revisar o catálogo.
+    filterFields: ['temporada', 'ativo'],
     orderBy: { field: 'ano', dir: 'desc' },
-    mock: [{ id: 1, nome: 'Verão 2026', temporada: 'Verão', ano: 2026 }],
+    mock: [
+      { id: 1, nome: 'Verão 2026', temporada: 'Verão', ano: 2026, ativo: true },
+      { id: 2, nome: 'Inverno 2026', temporada: 'Inverno', ano: 2026, ativo: true },
+    ],
   },
 
   fornecedores: {

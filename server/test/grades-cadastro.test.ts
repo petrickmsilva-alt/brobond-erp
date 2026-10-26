@@ -592,9 +592,9 @@ test('a listagem de grades não faz uma consulta por grade (sem N+1)', async () 
     const originais = {
       list: s.list.bind(s),
       countWhere: s.countWhere.bind(s),
-      countGroupBy: s.countGroupBy.bind(s),
+      countByColumn: s.countByColumn.bind(s),
     };
-    const contagem = { list: 0, countWhere: 0, countGroupBy: 0 };
+    const contagem = { list: 0, countWhere: 0, countByColumn: 0 };
     (s as any).list = async (...args: any[]) => {
       contagem.list += 1;
       return originais.list(...args);
@@ -603,16 +603,16 @@ test('a listagem de grades não faz uma consulta por grade (sem N+1)', async () 
       contagem.countWhere += 1;
       return originais.countWhere(...args);
     };
-    (s as any).countGroupBy = async (...args: any[]) => {
-      contagem.countGroupBy += 1;
-      return originais.countGroupBy(...args);
+    (s as any).countByColumn = async (...args: any[]) => {
+      contagem.countByColumn += 1;
+      return originais.countByColumn(...args);
     };
     try {
       await fn();
     } finally {
       (s as any).list = originais.list;
       (s as any).countWhere = originais.countWhere;
-      (s as any).countGroupBy = originais.countGroupBy;
+      (s as any).countByColumn = originais.countByColumn;
     }
     return contagem;
   }
@@ -622,7 +622,9 @@ test('a listagem de grades não faz uma consulta por grade (sem N+1)', async () 
 
   assert.equal(cinco.list, uma.list, 'o número de leituras não depende da quantidade de linhas');
   assert.equal(cinco.countWhere, uma.countWhere, 'nenhum countWhere por linha');
-  assert.equal(cinco.countGroupBy, uma.countGroupBy, 'contagem de uso agrupada (uma por empresa/recurso)');
-  assert.ok(cinco.countGroupBy >= 2, 'produtos + categorias em lote');
+  // `countByColumn` é a agregação ÚNICA de utilização do ERP (mesmo helper de
+  // cores e coleções): uma consulta por recurso/empresa, nunca por linha.
+  assert.equal(cinco.countByColumn, uma.countByColumn, 'contagem de uso agrupada (uma por empresa/recurso)');
+  assert.ok(cinco.countByColumn >= 2, 'produtos + categorias em lote');
   assert.equal(cinco.countWhere, 0, 'a utilização não usa mais contagem por registro');
 });

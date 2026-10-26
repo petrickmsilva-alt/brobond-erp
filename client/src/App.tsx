@@ -20,6 +20,7 @@ const ClienteFormPage = lazy(() => import('./pages/ClienteFormPage'));
 const ProdutoFormPage = lazy(() => import('./pages/ProdutoFormPage'));
 const CategoriaFormPage = lazy(() => import('./pages/CategoriaFormPage'));
 const CorFormPage = lazy(() => import('./pages/CorFormPage'));
+const ColecaoFormPage = lazy(() => import('./pages/ColecaoFormPage'));
 const GradeFormPage = lazy(() => import('./pages/GradeFormPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
@@ -160,6 +161,23 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="cores">
                   <CorFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Cadastro de coleções em página própria (fora de qualquer modal/drawer). */}
+            <Route
+              path="colecoes/novo"
+              element={
+                <ModuleAccess moduleId="colecoes">
+                  <ColecaoFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="colecoes/:id/editar"
+              element={
+                <ModuleAccess moduleId="colecoes">
+                  <ColecaoFormPage />
                 </ModuleAccess>
               }
             />

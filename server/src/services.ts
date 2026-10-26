@@ -267,6 +267,29 @@ export async function validarReferenciasDeSaida(r: Resource, rows: Row[], escopo
 // ----------------------------------------------------------------------------
 // Leitura
 // ----------------------------------------------------------------------------
+/**
+ * UTILIZAÇÃO DA COLEÇÃO EM PRODUTOS — "N produtos" na listagem de coleções.
+ *
+ * Uma consulta AGREGADA (GROUP BY colecao_id) para a PÁGINA inteira, jamais uma
+ * por coleção: o `countByColumn` devolve um Map id→contagem. O recorte de
+ * empresa é aplicado na própria consulta, então uma empresa nunca vê a contagem
+ * de produtos de outra. Campos são virtuais (não existem como coluna; servem à
+ * apresentação) e nunca entram na escrita — ver `Payload`/validação.
+ */
+async function anotarUsoColecao(r: Resource, rows: Row[], escopo: EscopoEmpresa | null | undefined): Promise<void> {
+  if (r.key !== 'colecoes' || !rows.length) return;
+  const ids = rows.map((row) => Number(row.id)).filter((n) => Number.isInteger(n));
+  const produtos = getResource('produtos');
+  const contagens = produtos
+    ? await getStore().countByColumn(produtos, 'colecao_id', ids, escopo?.empresaId)
+    : new Map<number, number>();
+  for (const row of rows) {
+    const n = contagens.get(Number(row.id)) ?? 0;
+    row.produtos_vinculados = n;
+    row.em_uso = n > 0;
+  }
+}
+
 export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: EscopoOuAtor) {
   const escopo = comoEscopo(escopoOuAtor);
   // Filtros virtuais do módulo Usuários (status consolidado, MFA, senha, acesso):
@@ -284,6 +307,7 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   anotarStatusSenha(r, out.rows);
   await anotarUsoLocal(r, out.rows);
   await anotarUsoVinculado(r, out.rows, escopo);
+  await anotarUsoColecao(r, out.rows, escopo);
   await attachGradeTamanhos(r, out.rows);
   await anotarGrades(r, out.rows, escopo);
   return out;
@@ -293,18 +317,18 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
  * UTILIZAÇÃO do cadastro (coluna "Utilização" da listagem).
  *
  * O recurso declara em `resources.ts` QUEM aponta para ele (`uso`). A contagem
- * é real e usa o mesmo `countWhere` do diagnóstico de vínculos — nada de SQL
- * paralelo nem de número de exemplo. Quando o recurso dependente é
- * multiempresa (produtos), a contagem é recortada pela empresa ativa: o número
- * mostrado é o da operação de quem está lendo, nunca o total das outras
- * empresas (multiempresa preservada).
+ * é real e vem da MESMA agregação usada pelos demais cadastros
+ * (`Store.countByColumn`, um GROUP BY por página) — nada de SQL paralelo nem de
+ * número de exemplo. Quando o recurso dependente é multiempresa (produtos), a
+ * contagem é recortada pela empresa ativa: o número mostrado é o da operação de
+ * quem está lendo, nunca o total das outras empresas (multiempresa preservada).
  *
  * Campo anotado:
  *   uso_vinculado        número exato de registros dependentes
  *   uso_vinculado_label  contagem já com o substantivo ("18 produtos")
  *
- * SEM N+1: a contagem é agrupada no banco (`countGroupBy`) — UMA consulta por
- * empresa envolvida para a página inteira, e não um `countWhere` por linha.
+ * SEM N+1: UMA consulta agrupada por empresa envolvida para a página inteira,
+ * e não um `countWhere` por linha.
  */
 async function anotarUsoVinculado(r: Resource, rows: Row[], escopo?: EscopoEmpresa): Promise<void> {
   const uso = r.uso;
@@ -325,8 +349,8 @@ async function anotarUsoVinculado(r: Resource, rows: Row[], escopo?: EscopoEmpre
     else grupos.set(empresaId, [row]);
   }
   for (const [empresaId, grupo] of grupos) {
-    const filtro: Payload = escopado ? { empresa_id: empresaId } : {};
-    const contagem = await s.countGroupBy(dependente, uso.campo, filtro);
+    const ids = grupo.map((row) => Number(row.id));
+    const contagem = await s.countByColumn(dependente, uso.campo, ids, escopado ? empresaId : undefined);
     for (const row of grupo) {
       const total = contagem.get(Number(row.id)) ?? 0;
       row.uso_vinculado = total;
@@ -503,9 +527,15 @@ async function anotarGrades(r: Resource, rows: Row[], escopo?: EscopoEmpresa): P
   if (r.key !== 'grades' || !rows.length) return;
   const s = getStore();
   const categorias = getResource('categorias')!;
+  const ids = rows.map((row) => Number(row.id));
+  // Duas leituras AGREGADAS para a página inteira (nunca uma por grade):
+  // o resumo de medidas de todas as grades e as categorias que usam cada uma
+  // delas como padrão. `categorias` é catálogo global (sem empresa_id), então
+  // não há recorte de empresa aqui — o recorte vale para os PRODUTOS, anotados
+  // por `anotarUsoVinculado`.
   const [medidasPorGrade, usoCategorias] = await Promise.all([
     resumoMedidasPorGrade(),
-    s.countGroupBy(categorias, 'grade_id', {}),
+    s.countByColumn(categorias, 'grade_id', ids),
   ]);
   for (const row of rows) {
     const gid = Number(row.id);

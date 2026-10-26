@@ -205,7 +205,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', 
       s.areas.flatMap((a) => a.groups.flatMap((g) => g.subgroups.flatMap((sub) => sub.modules.map((m) => m.id))))
     );
     expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
-    expect(PAGES_ESPECIAIS).toHaveLength(21);
+    expect(PAGES_ESPECIAIS).toHaveLength(22);
   });
 });
 
@@ -379,17 +379,15 @@ describe('NAV_SECTIONS (fonte única do menu)', () => {
 
 describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
   it('inclui os cadastros que já vivem em página própria', () => {
-    expect([...FORM_DIRETO].sort()).toEqual(['categorias', 'clientes', 'cores', 'grades', 'produtos', 'vendas']);
-  });
-
-  it('Grades entra no padrão LISTA → PÁGINA: criação e edição vivem no módulo /grades', () => {
-    expect(FORM_DIRETO.has('grades')).toBe(true);
-    const grades = MODULES.find((m) => m.id === 'grades');
-    expect(grades?.path).toBe('/grades');
-    // As rotas filhas pertencem ao módulo pai (breadcrumb e acesso usam isso).
-    expect(moduleOfPath('/grades')?.id).toBe('grades');
-    expect(moduleOfPath('/grades/novo')?.id).toBe('grades');
-    expect(moduleOfPath('/grades/12/editar')?.id).toBe('grades');
+    expect([...FORM_DIRETO].sort()).toEqual([
+      'categorias',
+      'clientes',
+      'colecoes',
+      'cores',
+      'grades',
+      'produtos',
+      'vendas',
+    ]);
   });
 
   it('Cores entra no padrão LISTA → PÁGINA: inventário e edição vivem no módulo /cores', () => {
@@ -400,6 +398,25 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
     expect(moduleOfPath('/cores')?.id).toBe('cores');
     expect(moduleOfPath('/cores/novo')?.id).toBe('cores');
     expect(moduleOfPath('/cores/12/editar')?.id).toBe('cores');
+  });
+
+  it('Coleções entra no padrão LISTA → PÁGINA: cadastro e edição vivem no módulo /colecoes', () => {
+    expect(FORM_DIRETO.has('colecoes')).toBe(true);
+    const colecoes = MODULES.find((m) => m.id === 'colecoes');
+    expect(colecoes?.path).toBe('/colecoes');
+    expect(moduleOfPath('/colecoes')?.id).toBe('colecoes');
+    expect(moduleOfPath('/colecoes/novo')?.id).toBe('colecoes');
+    expect(moduleOfPath('/colecoes/12/editar')?.id).toBe('colecoes');
+  });
+
+  it('Grades entra no padrão LISTA → PÁGINA: criação e edição vivem no módulo /grades', () => {
+    expect(FORM_DIRETO.has('grades')).toBe(true);
+    const grades = MODULES.find((m) => m.id === 'grades');
+    expect(grades?.path).toBe('/grades');
+    // As rotas filhas pertencem ao módulo pai (breadcrumb e acesso usam isso).
+    expect(moduleOfPath('/grades')?.id).toBe('grades');
+    expect(moduleOfPath('/grades/novo')?.id).toBe('grades');
+    expect(moduleOfPath('/grades/12/editar')?.id).toBe('grades');
   });
 
   it('cada recurso de FORM_DIRETO tem um módulo navegável na mesma rota', () => {

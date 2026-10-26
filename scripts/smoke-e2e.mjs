@@ -591,6 +591,59 @@ await (async () => {
 }
 
 
+// ---------------------------- CADASTROS › COLEÇÕES (padrão LISTA → DRAWER)
+// Coleções é cadastro POR EMPRESA (empresa: true): o formulário vive num Drawer
+// sobre a própria listagem, e a exclusão passa pelo diagnóstico de dependências
+// — coleção em uso pelos produtos é DESATIVADA, nunca apagada.
+{
+  const meta = await req('GET', '/meta');
+  const col = meta.json?.resources?.colecoes;
+  check('colecoes: /meta NÃO declara drawer/modal (formulário é página)', !('editor' in (col || {})), `editor=${col?.editor}`);
+  check('colecoes: cadastro por empresa (empresa: true)', col?.empresa === true, `empresa=${col?.empresa}`);
+  check('colecoes: RBAC preservado — SEM minPerfilEscrita',
+    !('minPerfilEscrita' in (col || {})), `minPerfilEscrita=${col?.minPerfilEscrita}`);
+  check('colecoes: nome é o único campo obrigatório e é buscável',
+    (col?.fields || []).filter((f) => f.required).map((f) => f.name).join(',') === 'nome' &&
+    (col?.fields || []).find((f) => f.name === 'nome')?.search === true);
+
+  const nomeCol = `Verão Smoke ${Date.now().toString().slice(-6)}`;
+  const nova = await req('POST', '/colecoes', { nome: nomeCol, temporada: 'Verão', ano: 2027, ativo: true });
+  check('POST /colecoes cria a coleção', nova.status === 201, `status ${nova.status}`);
+  const colId = nova.json?.id;
+
+  const busca = await req('GET', '/colecoes?q=ver%C3%A3o%20smoke&page=1&pageSize=25');
+  check('colecoes: busca por nome na listagem', (busca.json?.rows || []).some((r) => r.id === colId));
+  const inativasCol = await req('GET', '/colecoes?f.ativo=false&page=1&pageSize=25');
+  check('colecoes: filtro f.ativo=false', inativasCol.status === 200 && (inativasCol.json?.rows || []).every((r) => r.ativo === false));
+
+  // Produto referencia a coleção e a utilização é contada de forma AGREGADA.
+  const produtoCol = await req('POST', '/produtos', { sku: `SMOKE-COL-${Date.now()}`, nome: 'Camiseta Smoke Coleção', colecao_id: colId, preco_venda: 129.9 });
+  check('produtos: coleção do cadastro aceita no produto', [200, 201].includes(produtoCol.status), `status ${produtoCol.status}`);
+  const listaCol = await req('GET', '/colecoes?page=1&pageSize=50');
+  const linhaCol = (listaCol.json?.rows || []).find((r) => r.id === colId);
+  check('colecoes: Utilização traz a contagem real (1 produto)',
+    linhaCol?.produtos_vinculados === 1 && linhaCol?.em_uso === true, `produtos_vinculados=${linhaCol?.produtos_vinculados}`);
+
+  // Exclusão bloqueada por histórico protegido + saída por desativação.
+  const bloqueadaCol = await req('DELETE', `/colecoes/${colId}`);
+  const diagCol = bloqueadaCol.json?.details?.dependencias;
+  check('colecoes: DELETE vinculado → 409 dependencias_vinculadas',
+    bloqueadaCol.status === 409 && bloqueadaCol.json?.code === 'dependencias_vinculadas', `status ${bloqueadaCol.status}`);
+  check('colecoes: diagnóstico diz onde/quantos/por quê',
+    diagCol?.bloqueado === true && diagCol?.modulosBloqueantes?.includes('Produtos') &&
+    diagCol?.vinculos?.some((v) => v.tabela === 'produtos' && v.quantidade === 1 && Array.isArray(v.ids) && v.motivo));
+  const desativadaCol = await req('PUT', `/colecoes/${colId}`, { ativo: false });
+  check('colecoes: desativar preserva a coleção e o produto vinculado',
+    desativadaCol.status === 200 && desativadaCol.json?.ativo === false, `status ${desativadaCol.status}`);
+  const produtoApos = await req('GET', `/produtos/${produtoCol.json?.id}`);
+  check('produtos: continuam apontando para a coleção desativada', String(produtoApos.json?.colecao_id) === String(colId));
+
+  // Coleção sem vínculo segue o fluxo normal de exclusão.
+  const semUsoCol = await req('POST', '/colecoes', { nome: `Coleção sem uso ${Date.now().toString().slice(-6)}` });
+  const excluidaCol = await req('DELETE', `/colecoes/${semUsoCol.json?.id}`);
+  check('colecoes: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluidaCol.status), `status ${excluidaCol.status}`);
+}
+
 // ------------------------------ CADASTROS › GRADES (padrão LISTA → PÁGINA)
 // Grades seguem o mesmo padrão de Cores, com uma diferença de domínio: a relação
 // grade × tamanho é ORDENADA (`grade_tamanhos.ordem`). O formulário vive nas
@@ -746,8 +799,6 @@ await (async () => {
   const sumiu = await req('GET', `/grades/${gradeOrfa.json?.id}`);
   check('grades: a grade excluída não volta na leitura', sumiu.status === 404, `status ${sumiu.status}`);
 }
-
-
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);
 check('sem token → 401', semToken.status === 401, `status ${semToken.status}`);

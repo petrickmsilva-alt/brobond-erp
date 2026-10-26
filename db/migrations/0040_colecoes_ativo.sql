@@ -1,0 +1,17 @@
+-- ============================================================================
+-- 0040 — STATUS ATIVO/INATIVO NO CADASTRO DE COLEÇÕES.
+--
+-- O cadastro de coleções nasceu só com nome/temporada/ano. Os demais cadastros
+-- auxiliares do catálogo (categorias, cores, grades) têm `ativo` desde sempre:
+-- é o que permite TIRAR DE CIRCULAÇÃO uma coleção já usada por produtos sem
+-- apagar o vínculo histórico — regra do ERP ("cadastro se desativa, histórico
+-- nunca se apaga"; ver docs/EXCLUSAO-E-VINCULOS.md).
+--
+-- Sem esta coluna, uma coleção usada por produtos não poderia nem ser excluída
+-- (o banco recusa o DELETE por FK) nem desativada — ficava sem saída.
+--
+-- 100% ADITIVA e idempotente: nenhum dado é reescrito. As coleções existentes
+-- continuam válidas e passam a nascer ATIVAS (DEFAULT TRUE), então nenhum
+-- produto perde a coleção nem nenhum seletor deixa de oferecê-la.
+-- ============================================================================
+ALTER TABLE colecoes ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;
