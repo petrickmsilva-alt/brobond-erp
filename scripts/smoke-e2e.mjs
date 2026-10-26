@@ -644,6 +644,161 @@ await (async () => {
   check('colecoes: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluidaCol.status), `status ${excluidaCol.status}`);
 }
 
+// ------------------------------ CADASTROS › GRADES (padrão LISTA → PÁGINA)
+// Grades seguem o mesmo padrão de Cores, com uma diferença de domínio: a relação
+// grade × tamanho é ORDENADA (`grade_tamanhos.ordem`). O formulário vive nas
+// páginas /grades/novo e /grades/:id/editar — `/meta` não declara drawer/modal —
+// e o contrato abaixo é exatamente o que elas usam: POST/PUT com `tamanhos` na
+// ordem desejada, listagem anotada (ordem, utilização, estado da tabela de
+// medidas) e exclusão com diagnóstico de vínculos.
+{
+  const meta = await req('GET', '/meta');
+  const grades = meta.json?.resources?.grades;
+  check('grades: /meta NÃO declara drawer/modal (formulário é página)', !('editor' in (grades || {})), `editor=${grades?.editor}`);
+  check('grades: /meta declara uso por produtos.grade_id',
+    grades?.uso?.recurso === 'produtos' && grades?.uso?.campo === 'grade_id', JSON.stringify(grades?.uso));
+  check('grades: /meta entrega os filtros rápidos Todas/Ativas/Inativas',
+    JSON.stringify((grades?.quickFilters?.[0]?.options || []).map((o) => o.label)) === '["Todas","Ativas","Inativas"]');
+  const campoTamanhos = (grades?.fields || []).find((f) => f.name === 'tamanhos');
+  check('grades: tamanhos é a relação ordenada e obrigatória do domínio',
+    campoTamanhos?.type === 'multiref' && campoTamanhos?.ref === 'tamanhos' && campoTamanhos?.required === true,
+    JSON.stringify({ type: campoTamanhos?.type, ref: campoTamanhos?.ref, required: campoTamanhos?.required }));
+
+  // Tamanhos reais do dicionário, na ordem do próprio cadastro. Um banco novo
+  // (smoke:pg) pode vir sem dicionário — aí o smoke cadastra os tamanhos que usa,
+  // pelo mesmo POST /tamanhos da tela (nada de dado de exemplo injetado à mão).
+  const sufixoTam = Date.now().toString().slice(-6);
+  let opcoesTamanhos = await req('GET', '/tamanhos/options');
+  let idsTamanhos = (opcoesTamanhos.json || []).slice(0, 4).map((o) => Number(o.value));
+  while (idsTamanhos.length < 3) {
+    const novoTamanho = await req('POST', '/tamanhos', {
+      codigo: `SM${sufixoTam}${idsTamanhos.length + 1}`,
+      ordem: 900 + idsTamanhos.length,
+    });
+    if (![200, 201].includes(novoTamanho.status) || !novoTamanho.json?.id) break;
+    idsTamanhos.push(Number(novoTamanho.json.id));
+  }
+  opcoesTamanhos = await req('GET', '/tamanhos/options');
+  check('grades: /tamanhos/options alimenta a seleção da página', idsTamanhos.length >= 3, `${idsTamanhos.length} tamanhos`);
+
+  const nomeGrade = `Camiseta Smoke ${Date.now().toString().slice(-6)}`;
+  const novaGrade = await req('POST', '/grades', {
+    nome: nomeGrade,
+    descricao: 'Grade do smoke',
+    instrucoes_medidas: 'Meça a peça sobre uma superfície plana, sem esticar.',
+    ativo: true,
+    tamanhos: idsTamanhos,
+  });
+  const gradeId = novaGrade.json?.id;
+  check('POST /grades grava a grade com os tamanhos NA ORDEM enviada',
+    novaGrade.status === 201 && JSON.stringify(novaGrade.json?.tamanhos) === JSON.stringify(idsTamanhos),
+    `status ${novaGrade.status} tamanhos=${JSON.stringify(novaGrade.json?.tamanhos)}`);
+
+  const gradeCriada = await req('GET', `/grades/${gradeId}`);
+  const codigos = new Map((opcoesTamanhos.json || []).map((o) => [Number(o.value), String(o.label)]));
+  const rotuloEsperado = idsTamanhos.map((t) => codigos.get(t)).join(' · ');
+  check('grades: rótulo dos tamanhos segue a ordem da grade',
+    gradeCriada.json?.tamanhos__label === rotuloEsperado && gradeCriada.json?.tamanhos_total === idsTamanhos.length,
+    `${gradeCriada.json?.tamanhos__label} (total ${gradeCriada.json?.tamanhos_total})`);
+  check('grades: instruções de medição persistem no campo existente',
+    String(gradeCriada.json?.instrucoes_medidas || '').includes('superfície plana'));
+
+  // Reordenação (o ↑ ↓ da página) reescreve a ordem — sem recriar a grade.
+  const reordenada = idsTamanhos.slice().reverse();
+  const putOrdem = await req('PUT', `/grades/${gradeId}`, { tamanhos: reordenada });
+  check('PUT /grades reordena os tamanhos (ordem = posição)',
+    putOrdem.status === 200 && JSON.stringify(putOrdem.json?.tamanhos) === JSON.stringify(reordenada),
+    `status ${putOrdem.status} tamanhos=${JSON.stringify(putOrdem.json?.tamanhos)}`);
+  // Duplicata não entra duas vezes (UNIQUE grade_id + tamanho_id): a primeira
+  // ocorrência vence e a ordem recebida é preservada.
+  const duplicada = await req('PUT', `/grades/${gradeId}`, { tamanhos: [...reordenada, reordenada[0]] });
+  check('grades: tamanho duplicado é descartado na gravação',
+    duplicada.status === 200 && JSON.stringify(duplicada.json?.tamanhos) === JSON.stringify(reordenada),
+    `tamanhos=${JSON.stringify(duplicada.json?.tamanhos)}`);
+  await req('PUT', `/grades/${gradeId}`, { tamanhos: reordenada });
+
+  // Grade sem tamanho é recusada (a obrigatoriedade já é do domínio).
+  const semTamanho = await req('POST', '/grades', { nome: `Sem tamanho ${Date.now().toString().slice(-6)}`, tamanhos: [] });
+  check('grades: criação sem tamanho é recusada', semTamanho.status === 400, `status ${semTamanho.status}`);
+
+  // Utilização real: produto da empresa ativa + categoria que usa a grade.
+  const produtoGrade = await req('POST', '/produtos', {
+    sku: `SMOKE-GRD-${Date.now()}`,
+    nome: 'Camiseta Smoke Grade',
+    grade_id: gradeId,
+    preco_venda: 89.9,
+  });
+  check('produtos: grade do cadastro aceita no produto', [200, 201].includes(produtoGrade.status), `status ${produtoGrade.status}`);
+  const categoriaGrade = await req('POST', '/categorias', { nome: `Categoria Smoke ${Date.now().toString().slice(-6)}`, grade_id: gradeId });
+  check('categorias: grade padrão aceita na categoria', [200, 201].includes(categoriaGrade.status), `status ${categoriaGrade.status}`);
+
+  const listaGrades = await req('GET', '/grades?page=1&pageSize=100');
+  const linhaGrade = (listaGrades.json?.rows || []).find((r) => r.id === gradeId);
+  check('grades: Utilização traz produtos E categorias (contagem real, em lote)',
+    linhaGrade?.uso_vinculado === 1 && linhaGrade?.uso_categorias === 1 &&
+    linhaGrade?.uso_vinculado_label === '1 produto · 1 categoria',
+    `${linhaGrade?.uso_vinculado_label}`);
+
+  // Estado da tabela de medidas: mesma regra de completude do módulo de medidas.
+  check('grades: MEDIDAS começa "sem tabela" (estado real, não inventado)',
+    linhaGrade?.medidas_status === 'sem_tabela' && linhaGrade?.medidas_colunas === 0,
+    `status=${linhaGrade?.medidas_status}`);
+  const valoresMedidas = reordenada.slice(0, 2).map((tamanho_id) => ({ medida_nome: 'Largura (A)', tamanho_id, valor: 50 }));
+  const tabela = await req('PUT', `/grades/${gradeId}/medidas`, {
+    medidas: [{ nome: 'Largura (A)', unidade: 'cm' }, { nome: 'Comprimento (B)', unidade: 'cm' }],
+    valores: valoresMedidas,
+  });
+  check('grades: tabela de medidas salva pelo endpoint do módulo', tabela.status === 200, `status ${tabela.status}`);
+  const depoisMedidas = (await req('GET', '/grades?page=1&pageSize=100')).json?.rows?.find((r) => r.id === gradeId);
+  // 2 colunas × N tamanhos da grade = total de células; preenchidas = as enviadas.
+  const celulasTotal = 2 * reordenada.length;
+  const celulasPreenchidas = valoresMedidas.length;
+  const pctEsperado = Math.round((celulasPreenchidas / celulasTotal) * 100);
+  check('grades: MEDIDAS vira "parcial" com o percentual real',
+    depoisMedidas?.medidas_status === 'parcial' && depoisMedidas?.medidas_pct === pctEsperado &&
+    depoisMedidas?.medidas_colunas === 2 && depoisMedidas?.medidas_celulas_total === celulasTotal &&
+    depoisMedidas?.medidas_celulas_preenchidas === celulasPreenchidas,
+    `status=${depoisMedidas?.medidas_status} pct=${depoisMedidas?.medidas_pct}/${pctEsperado} celulas=${depoisMedidas?.medidas_celulas_total}`);
+  const resumo = await req('GET', '/grades/medidas-resumo');
+  const linhaResumo = (resumo.json?.grades || []).find((g) => g.id === gradeId);
+  check('grades: painel de completude continua dizendo o mesmo',
+    linhaResumo?.celulas_total === celulasTotal && linhaResumo?.celulas_preenchidas === celulasPreenchidas &&
+    linhaResumo?.pct === pctEsperado,
+    JSON.stringify({ total: linhaResumo?.celulas_total, preenchidas: linhaResumo?.celulas_preenchidas, pct: linhaResumo?.pct }));
+
+  // Busca e filtro de status pela mesma listagem paginada.
+  const buscaGrade = await req('GET', `/grades?q=${encodeURIComponent('camiseta smoke')}&page=1&pageSize=25`);
+  check('grades: busca por nome na listagem do servidor', (buscaGrade.json?.rows || []).some((r) => r.id === gradeId));
+  const gradesInativas = await req('GET', '/grades?f.ativo=false&page=1&pageSize=25');
+  check('grades: filtro f.ativo=false', gradesInativas.status === 200 && (gradesInativas.json?.rows || []).every((r) => r.ativo === false));
+
+  // Exclusão bloqueada: diagnóstico real + saída por desativação.
+  const bloqueada = await req('DELETE', `/grades/${gradeId}`);
+  const diag = bloqueada.json?.details?.dependencias;
+  check('grades: DELETE vinculado → 409 dependencias_vinculadas',
+    bloqueada.status === 409 && bloqueada.json?.code === 'dependencias_vinculadas', `status ${bloqueada.status}`);
+  check('grades: diagnóstico diz onde/quantos/por quê',
+    diag?.bloqueado === true && diag?.modulosBloqueantes?.includes('Produtos') &&
+    diag?.vinculos?.some((v) => v.tabela === 'produtos' && v.quantidade === 1 && Array.isArray(v.ids) && v.motivo) &&
+    /desative/i.test(String(diag?.orientacao || '')));
+  check('grades: a composição (tamanhos/medidas) aparece sem bloquear',
+    diag?.vinculos?.some((v) => v.tabela === 'grade_tamanhos' && v.bloqueia === false));
+
+  const desativada = await req('PUT', `/grades/${gradeId}`, { ativo: false });
+  const aposDesativar = await req('GET', `/grades/${gradeId}`);
+  check('grades: desativar preserva tamanhos, medidas e vínculos',
+    desativada.status === 200 && aposDesativar.json?.ativo === false &&
+    aposDesativar.json?.tamanhos_total === reordenada.length &&
+    (await req('GET', `/grades/${gradeId}/medidas`)).json?.medidas?.length === 2,
+    `status ${desativada.status} tamanhos=${aposDesativar.json?.tamanhos_total}`);
+
+  // Grade sem vínculo segue o fluxo normal (a composição sai junto).
+  const gradeOrfa = await req('POST', '/grades', { nome: `Órfã ${Date.now().toString().slice(-6)}`, tamanhos: idsTamanhos.slice(0, 2) });
+  const excluida = await req('DELETE', `/grades/${gradeOrfa.json?.id}`);
+  check('grades: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluida.status), `status ${excluida.status}`);
+  const sumiu = await req('GET', `/grades/${gradeOrfa.json?.id}`);
+  check('grades: a grade excluída não volta na leitura', sumiu.status === 404, `status ${sumiu.status}`);
+}
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);
 check('sem token → 401', semToken.status === 401, `status ${semToken.status}`);

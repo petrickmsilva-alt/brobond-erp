@@ -177,6 +177,35 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     }
   });
 
+  it('Grades: as páginas /grades/novo e /grades/:id/editar seguem a MESMA trilha do padrão LISTA → PÁGINA', async () => {
+    // O cadastro de Grades entrou no padrão de Cores: a rota filha pertence ao
+    // módulo Grades e o breadcrumb completo é
+    // BROBOND ERP › Cadastros › Grades › Novo/Editar — com o nível "Grades"
+    // voltando para a LISTA (o título "Nova grade"/"Editar grade" é da página).
+    const casos = [
+      { rota: '/grades/novo', ultimo: 'Novo' },
+      { rota: '/grades/7/editar', ultimo: 'Editar' },
+    ];
+
+    for (const c of casos) {
+      const user = userEvent.setup();
+      const view = await renderShell(c.rota);
+      const nav = trilha();
+      expect(within(nav).getByRole('link', { name: 'BROBOND ERP' })).toHaveAttribute('href', '/');
+      expect(within(nav).getByText('Cadastros')).toBeInTheDocument(); // área, sem link
+      expect(within(nav).getByRole('link', { name: 'Grades' })).toHaveAttribute('href', '/grades');
+      expect(within(nav).getByText(c.ultimo)).toHaveAttribute('aria-current', 'page');
+
+      // Clicar em "Grades" devolve para a LISTA (sem recarregar a página).
+      await user.click(within(nav).getByRole('link', { name: 'Grades' }));
+      await waitFor(() =>
+        expect(within(trilha()).getAllByText('Grades').at(-1)).toHaveAttribute('aria-current', 'page')
+      );
+      expect(within(trilha()).queryByText(c.ultimo)).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
   it('o breadcrumb reflete as novas áreas da Árvore Master (Vendas, Estoque & Suprimentos, Produção, Fiscal, Administração, Commerce, Creators, Utilidades Globais)', async () => {
     const casos = [
       { rota: '/vendas/123', area: 'Vendas', modulo: 'Vendas', id: '#123' },
