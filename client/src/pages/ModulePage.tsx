@@ -36,7 +36,16 @@ import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Pagination } from '../components/ui-kit';
 import ReauthModal from '../components/ReauthModal';
 import { DependenciasModal, type DiagnosticoDependencias } from '../components/DependenciasModal';
-import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
+import {
+  fieldErrors,
+  initialValues,
+  normalizarCamposCor,
+  RecordForm,
+  toPayload,
+  useRefOptions,
+  validarFormulario,
+  type FormValues,
+} from '../components/RecordForm';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import { useLocalStorageChoice, useLocalStorageInt, useLocalStorageSet } from '../lib/useLocalStorage';
 import PlannedModule from './PlannedModule';
@@ -47,11 +56,14 @@ import PortalAccessModal from '../components/PortalAccessModal';
 import { ListaTabela } from '../components/ListaTabela';
 import { ListaCards } from '../components/ListaCards';
 import { ColunasMenu, DensidadeMenu, ModoVisualizacaoControl } from '../components/ListaControles';
-import { ChipsFiltros, PainelFiltros } from '../components/ListaFiltros';
+import { ChipsFiltros, FiltroRapido, PainelFiltros } from '../components/ListaFiltros';
 import { rowLabel } from '../components/ListaValores';
 import {
+  CAMPO_AMOSTRA,
   CAMPO_ESTOQUE,
   CAMPO_ID,
+  CAMPO_USO,
+  campoDaAmostra,
   camposOrdenados,
   campoTitulo,
   camposDoCard,
@@ -63,6 +75,7 @@ import {
   MODOS_VISUALIZACAO,
   contagemDe,
   permiteAlternarAtivo,
+  mensagemDeVinculos,
   placeholderBusca,
   rotuloNovo,
   textoContagem,
@@ -246,6 +259,9 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const [deleting, setDeleting] = useState(false);
   // Diagnóstico de vínculos devolvido pelo 409 (código 'dependencias_vinculadas').
   const [dependencias, setDependencias] = useState<DiagnosticoDependencias | null>(null);
+  // Linha que originou o diagnóstico — permite oferecer a saída recomendada
+  // (desativar) sem tentar excluir de novo nem apagar nada.
+  const [diagAlvo, setDiagAlvo] = useState<Record<string, any> | null>(null);
 
   // Ativar/Desativar na linha (recursos marcados na configuração da listagem).
   const podeAlternarAtivo = permiteAlternarAtivo(resource.key) && canUpdate;
@@ -329,13 +345,25 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     const base = resource.fields.filter(
       (f) => f.list !== false && (!f.virtual || f.list === true) && f.type !== 'password' && f.type !== 'images'
     );
+    // Utilização: contagem real anotada pelo servidor (declarada em `uso`).
+    const comUso = resource.uso && !base.some((f) => f.name === CAMPO_USO.name) ? [...base, CAMPO_USO] : base;
     if (usaColunaEstoque(resource.key)) {
-      return base.some((f) => f.name === CAMPO_ESTOQUE.name) ? base : [...base, CAMPO_ESTOQUE];
+      return comUso.some((f) => f.name === CAMPO_ESTOQUE.name) ? comUso : [...comUso, CAMPO_ESTOQUE];
+    }
+    // Amostra: a cor ganha presença visual na primeira coluna (e a tabela
+    // dispensa a coluna `#`, que não ajuda a ler uma cartela de cores).
+    if (campoDaAmostra(resource.key)) {
+      return comUso.some((f) => f.name === CAMPO_AMOSTRA.name) ? comUso : [CAMPO_AMOSTRA, ...comUso];
     }
     // Recursos genéricos mantêm a coluna `#` (id) à esquerda, como antes.
-    return base.some((f) => f.name === 'id') ? base : [CAMPO_ID, ...base];
+    return comUso.some((f) => f.name === 'id') ? comUso : [CAMPO_ID, ...comUso];
   }, [resource]);
   const searchable = resource.fields.some((f) => f.search);
+  // Filtros rápidos (Todas/Ativas/Inativas): mesmo contrato `f.<campo>` dos
+  // demais filtros, aplicados no servidor. Quando um campo já tem filtro rápido,
+  // ele não se repete no painel de filtros avançados.
+  const filtrosRapidos = useMemo(() => resource.quickFilters ?? [], [resource]);
+  const chavesRapidas = useMemo(() => new Set(filtrosRapidos.map((q) => q.field)), [filtrosRapidos]);
   // Filtros da listagem: quando o recurso declara `filterFields` (ex.: Produtos),
   // a ordem e a escolha são as do domínio — inclusive faixa numérica (preço).
   // Sem declaração, mantém o comportamento anterior (primeiros campos filtráveis).
@@ -377,7 +405,12 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   // Filtros ativos como chips removíveis (fonte do contador e da remoção
   // individual). Faixas de data/preço aparecem como um único chip — por isso o
   // contador é o número de CHIPS, não de chaves na query.
-  const chipsFiltros = useMemo(() => chipsDeFiltros(filtroFields, filtros, refOptions), [filtroFields, filtros, refOptions]);
+  const chipsFiltros = useMemo(
+    () => chipsDeFiltros(filtroFields, filtros, refOptions, filtrosRapidos),
+    [filtroFields, filtros, refOptions, filtrosRapidos]
+  );
+  /** Campos que ainda dependem do painel avançado (sem filtro rápido). */
+  const filtroFieldsPainel = useMemo(() => filtroFields.filter((f) => !chavesRapidas.has(f.name)), [filtroFields, chavesRapidas]);
   const filtrosAtivos = chipsFiltros.length;
   /** Campos exibidos no modo visual (mesmos dados, outra apresentação). */
   const camposCard = useMemo(() => camposDoCard(listFields, resource.key), [listFields, resource.key]);
@@ -425,7 +458,8 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
 
   // --- formulário ---
   function openCreate() {
-    // Cadastro em página própria (clientes PF/PJ): o modal genérico não abre.
+    // Padrão LISTA → PÁGINA do BROBOND ERP: estes cadastros têm rota própria
+    // (/cores/novo, /categorias/novo...) e NÃO abrem formulário sobreposto.
     if (FORM_DIRETO.has(resource.key)) {
       navigate(`/${resource.key}/novo`);
       return;
@@ -444,7 +478,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       navigate(`/${resource.key}/${row.id}`);
       return;
     }
-    // Cadastro em página própria (clientes PF/PJ).
+    // Padrão LISTA → PÁGINA do BROBOND ERP: edição em rota própria.
     if (FORM_DIRETO.has(resource.key)) {
       navigate(`/${resource.key}/${row.id}/editar`);
       return;
@@ -473,23 +507,16 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     if (errors[name]) setErrors((e) => ({ ...e, [name]: '' }));
   }
 
-  /** Validação local rápida (obrigatórios) antes de chamar a API. */
-  function validateLocal(): boolean {
-    const errs: Record<string, string> = {};
-    for (const f of resource.fields) {
-      if (f.form === false || f.readonly) continue;
-      const required = f.required || (!editing && f.requiredOnCreate);
-      const v = values[f.name];
-      if (required && f.type === 'multiref') {
-        if (!Array.isArray(v) || v.length === 0) errs[f.name] = 'Selecione ao menos um item';
-      } else if (required && f.type !== 'boolean' && (v === undefined || String(v).trim() === '')) {
-        errs[f.name] = 'Campo obrigatório';
-      }
-      if (f.type === 'password' && typeof v === 'string' && v && f.min && v.length < f.min) errs[f.name] = `Mínimo de ${f.min} caracteres`;
-    }
+  /**
+   * Validação local rápida (obrigatórios, HEX) antes de chamar a API. A regra é
+   * a COMPARTILHADA com as páginas de cadastro (validarFormulario), para o
+   * mesmo campo nunca ter duas mensagens diferentes no ERP.
+   */
+  function validateLocal(vals: FormValues = values): boolean {
+    const { errors: errs, formError: msg } = validarFormulario(resource, vals, !!editing);
     setErrors(errs);
-    if (Object.keys(errs).length) {
-      setFormError('Preencha os campos obrigatórios destacados.');
+    if (msg) {
+      setFormError(msg);
       return false;
     }
     return true;
@@ -497,10 +524,12 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
 
   async function submit() {
     setFormError('');
-    if (!validateLocal()) return;
+    const valores = normalizarCamposCor(resource, values);
+    if (valores !== values) setValues(valores);
+    if (!validateLocal(valores)) return;
     setSaving(true);
     try {
-      const payload = toPayload(resource, values, !!editing);
+      const payload = toPayload(resource, valores, !!editing);
       if (editing) {
         await api.put(`/${resource.key}/${editing.id}`, payload);
         toast.success(`${resource.singular} salvo(a) com sucesso.`);
@@ -573,6 +602,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       // genérico, abrimos o "Ver vínculos" — nada foi apagado.
       const diag = e instanceof ApiError && e.details?.dependencias ? (e.details.dependencias as DiagnosticoDependencias) : null;
       if (diag) {
+        setDiagAlvo(toDelete);
         setToDelete(null);
         setDependencias(diag);
       } else {
@@ -801,6 +831,18 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           <Alert tone={readOnly ? 'slate' : 'blue'}>{resource.notice}</Alert>
         </div>
       )}
+      {/* SEC-04: catálogo compartilhado tem piso de escrita (gerente+). O
+          operador continua LENDO — e entende por que os botões não aparecem.
+          A autorização real continua no servidor (checkAccess). */}
+      {readOnly && resource.minPerfilEscrita && !resource.notice && (
+        <div className="mb-4">
+          <Alert tone="slate">
+            {resource.minPerfilEscrita === 'admin'
+              ? 'Apenas administradores podem incluir, alterar ou excluir este cadastro compartilhado. Você pode consultar a lista normalmente.'
+              : 'Apenas gerentes e administradores podem incluir, alterar ou excluir este cadastro compartilhado. Você pode consultar a lista normalmente.'}
+          </Alert>
+        </div>
+      )}
 
       {/* ------------------------------------------------------------------
           BUSCA + FILTROS — área própria, ACIMA da tabela.
@@ -827,7 +869,26 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
               )}
             </div>
           )}
-          {filtroFields.length > 0 && (
+          {/* Recorte de um clique (Todas / Ativas / Inativas): servidor-side,
+              pelo mesmo contrato `f.<campo>` do painel de filtros. */}
+          {filtrosRapidos.map((grupo) => (
+            <FiltroRapido
+              key={grupo.field}
+              label={grupo.label}
+              opcoes={grupo.options}
+              valor={filtros[grupo.field] ?? ''}
+              onChange={(valor) => {
+                setFiltros((prev) => {
+                  const next = { ...prev };
+                  if (valor === '') delete next[grupo.field];
+                  else next[grupo.field] = valor;
+                  return next;
+                });
+                setPage(1);
+              }}
+            />
+          ))}
+          {filtroFieldsPainel.length > 0 && (
             <button
               type="button"
               className={`btn-secondary ${filtrosAtivos || showFiltros ? '!border-brand-400 !text-brand-700' : ''}`}
@@ -855,10 +916,10 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
 
         <ChipsFiltros chips={chipsFiltros} onRemover={removerFiltro} />
 
-        {showFiltros && filtroFields.length > 0 && (
+        {showFiltros && filtroFieldsPainel.length > 0 && (
           <PainelFiltros
             id="painel-filtros-listagem"
-            fields={filtroFields}
+            fields={filtroFieldsPainel}
             filtros={filtros}
             opcoes={refOptions}
             onChange={(chave, valor) => setFiltros((prev) => ({ ...prev, [chave]: valor }))}
@@ -1090,62 +1151,87 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         <ImportModal open={importOpen} onClose={() => setImportOpen(false)} tipoConfig={importTipo} onDone={() => load()} />
       )}
 
-      {/* Modal de cadastro / edição */}
-      <Modal
-        open={formOpen}
-        onClose={closeForm}
-        title={editing ? `Editar ${resource.singular.toLowerCase()}` : `Novo ${resource.singular.toLowerCase()}`}
-        subtitle={
-          editing
-            ? `Registro #${editing.id}`
-            : hasImages
-              ? 'Preencha os dados e clique em Incluir. Depois de salvar você poderá adicionar as fotos.'
-              : `Preencha os dados e clique em Incluir. Os campos com * são obrigatórios.`
-        }
-        size={resource.fields.filter((f) => f.form !== false && !f.readonly).length > 6 ? 'lg' : 'md'}
-      >
-        {formError && (
-          <div className="mb-4">
-            <Alert tone="red">{formError}</Alert>
-          </div>
-        )}
-        {gradeAware && produtoDoFormulario && (
-          <p className="mb-3 rounded-md bg-navy-50 px-3 py-2 text-xs text-navy-700">
-            {gradeDoFormulario ? (
-              <>
-                Grade do produto: <strong className="font-semibold">{gradeDoFormulario}</strong>. O campo Tamanho lista apenas estes tamanhos.
-              </>
-            ) : (
-              <>Este produto ainda não tem grade definida — a lista mostra todos os tamanhos cadastrados.</>
-            )}
-          </p>
-        )}
-        <RecordForm
-          resource={resource}
-          values={values}
-          errors={errors}
-          onChange={onChange}
-          onSubmit={submit}
-          onClear={clearForm}
-          editing={!!editing}
-          busy={saving}
-          refOptions={refOptionsForm}
-          before={
-            hasImages && editing ? (
-              <div>
-                <span className="label">Fotos</span>
-                <ImageField key={editing.id} resource={resource} recordId={editing.id} initial={editing.fotos} canEdit={canUpdate} onChange={() => load()} />
-              </div>
-            ) : undefined
+      {/* Modal de cadastro / edição — APENAS para os recursos que ainda não
+          migraram para o padrão LISTA → PÁGINA. Cores, Produtos, Categorias,
+          Clientes e Vendas já vivem em página própria (FORM_DIRETO): nesses
+          casos `openCreate`/`openEdit` navegam e este bloco nunca abre. */}
+      {!FORM_DIRETO.has(resource.key) && (
+        <Modal
+          open={formOpen}
+          onClose={closeForm}
+          title={editing ? `Editar ${resource.singular.toLowerCase()}` : `Novo ${resource.singular.toLowerCase()}`}
+          subtitle={
+            editing
+              ? `Registro #${editing.id}`
+              : hasImages
+                ? 'Preencha os dados e clique em Incluir. Depois de salvar você poderá adicionar as fotos.'
+                : `Preencha os dados e clique em Incluir. Os campos com * são obrigatórios.`
           }
-        />
-      </Modal>
+          size={resource.fields.filter((f) => f.form !== false && !f.readonly).length > 6 ? 'lg' : 'md'}
+        >
+          {formError && (
+            <div className="mb-4">
+              <Alert tone="red">{formError}</Alert>
+            </div>
+          )}
+          {gradeAware && produtoDoFormulario && (
+            <p className="mb-3 rounded-md bg-navy-50 px-3 py-2 text-xs text-navy-700">
+              {gradeDoFormulario ? (
+                <>
+                  Grade do produto: <strong className="font-semibold">{gradeDoFormulario}</strong>. O campo Tamanho lista apenas estes tamanhos.
+                </>
+              ) : (
+                <>Este produto ainda não tem grade definida — a lista mostra todos os tamanhos cadastrados.</>
+              )}
+            </p>
+          )}
+          <RecordForm
+            resource={resource}
+            values={values}
+            errors={errors}
+            onChange={onChange}
+            onSubmit={submit}
+            onClear={clearForm}
+            editing={!!editing}
+            busy={saving}
+            refOptions={refOptionsForm}
+            before={
+              hasImages && editing ? (
+                <div>
+                  <span className="label">Fotos</span>
+                  <ImageField key={editing.id} resource={resource} recordId={editing.id} initial={editing.fotos} canEdit={canUpdate} onChange={() => load()} />
+                </div>
+              ) : undefined
+            }
+          />
+        </Modal>
+      )}
 
       {zoom && <Lightbox file={zoom.file} files={zoom.files} onClose={() => setZoom(null)} onNav={(f) => setZoom({ ...zoom, file: f })} />}
 
       <DependenciasModal
         diag={dependencias}
-        onClose={() => setDependencias(null)}
+        onClose={() => {
+          setDependencias(null);
+          setDiagAlvo(null);
+        }}
+        mensagem={mensagemDeVinculos(resource.key)}
+        // Regra do ERP: cadastro com histórico NÃO é apagado — desativa-se. O
+        // diagnóstico continua somente leitura; a ação é o fluxo normal (PUT).
+        acaoRecomendada={
+          diagAlvo && diagAlvo.ativo !== false && canUpdate
+            ? {
+                rotulo: `Desativar ${resource.singular.toLowerCase()}`,
+                descricao: 'Mantém o histórico e tira o cadastro das listas de seleção.',
+                onClick: () => {
+                  const alvo = diagAlvo;
+                  setDependencias(null);
+                  setDiagAlvo(null);
+                  if (alvo) void alternarAtivo(alvo);
+                },
+              }
+            : undefined
+        }
         onAbrirModulo={(recurso) => {
           const destino = findModuleByResource(recurso);
           if (!destino) return;

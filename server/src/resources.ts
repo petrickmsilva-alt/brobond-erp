@@ -93,6 +93,38 @@ export type Field = {
 export type ResourceOps = { create: boolean; update: boolean; delete: boolean };
 
 /**
+ * USO do cadastro — quantos registros de outro recurso apontam para ele.
+ *
+ * É a MESMA pergunta que o diagnóstico de vínculos responde antes da exclusão
+ * ("onde esta cor é usada?"). Aqui ela é declarada no metadado para a listagem
+ * mostrar a coluna "Utilização" com uma contagem REAL, sem número inventado e
+ * sem SQL paralelo: o serviço usa `countWhere` do store (o mesmo mecanismo do
+ * diagnóstico), sempre recortado pela empresa ativa quando o recurso dependente
+ * é multiempresa.
+ */
+export type ResourceUso = {
+  /** Recurso que aponta para este cadastro (ex.: 'produtos'). */
+  recurso: string;
+  /** Coluna do recurso dependente que guarda o id deste cadastro (ex.: 'cor_id'). */
+  campo: string;
+  /** Substantivo da contagem (ex.: 'produto'). */
+  singular: string;
+  /** Plural da contagem (ex.: 'produtos'). */
+  plural: string;
+};
+
+/**
+ * FILTRO RÁPIDO da listagem: um recorte de um clique (Todas / Ativas /
+ * Inativas). Usa o mesmo contrato `f.<campo>` dos demais filtros — nada de
+ * consulta paralela. `value` vazio significa "sem recorte".
+ */
+export type ResourceQuickFilter = {
+  field: string;
+  label: string;
+  options: { value: string; label: string }[];
+};
+
+/**
  * Campos aceitos na BUSCA TEXTUAL da listagem (`?q=`).
  *
  * Sem esta lista, a busca cobre todo campo com `search: true`. Ela existe para
@@ -156,6 +188,10 @@ export type Resource = {
    * numérico) exista como filtro de mínimo/máximo.
    */
   filterFields?: string[];
+  /** Contagem real de uso do cadastro (coluna "Utilização" da listagem). */
+  uso?: ResourceUso;
+  /** Filtros rápidos (um clique) da listagem, na ordem de exibição. */
+  quickFilters?: ResourceQuickFilter[];
 };
 
 const ALL_OPS: ResourceOps = { create: true, update: true, delete: true };
@@ -969,14 +1005,41 @@ export const RESOURCES: Record<string, Resource> = {
     ops: ALL_OPS,
     // SEC-04/P1-01: catálogo compartilhado (global). Leitura aberta; escrita gerente+.
     minPerfilEscrita: 'gerente',
-    notice: 'Cores padronizadas evitam duplicidade ("Azul", "azul", "AZUL"). O código hexadecimal mostra a amostra da cor nas listas.',
+    // Padrão LISTA → PÁGINA do BROBOND ERP: a inclusão e a edição vivem em
+    // /cores/novo e /cores/:id/editar (rotas no cliente, registradas em
+    // client/src/modules.ts › FORM_DIRETO). O formulário é o RecordForm
+    // dirigido por estes metadados; NÃO existe drawer/modal para este
+    // cadastro e o servidor (RBAC + validatePayload) continua sendo a
+    // autoridade do contrato.
     fields: [
-      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 40, placeholder: 'Azul marinho, Preto, Off-white...' },
-      { name: 'hex', label: 'Amostra (hex)', type: 'color', maxLength: 7, hint: 'Ex.: #1F3A5F. Opcional.' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 40, placeholder: 'Azul marinho' },
+      // `search: true`: a busca da listagem encontra a cor pelo código (ex.: 172038).
+      // O valor continua opcional — o contrato atual e os dados existentes não
+      // exigem HEX, e o banco não tem NOT NULL em `cores.hex`.
+      { name: 'hex', label: 'Código HEX', type: 'color', maxLength: 7, search: true, placeholder: '#172038', hint: 'Opcional. Ex.: #172038.' },
       ativo,
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
+    // Filtros da LISTAGEM, no servidor: status (o recorte Todas/Ativas/Inativas
+    // usa o mesmo contrato `f.ativo` dos demais recursos).
+    filterFields: ['ativo'],
+    // Recorte de um clique acima da tabela — mesmo contrato `f.ativo`.
+    quickFilters: [
+      {
+        field: 'ativo',
+        label: 'Status',
+        options: [
+          { value: '', label: 'Todas' },
+          { value: 'true', label: 'Ativas' },
+          { value: 'false', label: 'Inativas' },
+        ],
+      },
+    ],
+    // Coluna "Utilização": contagem REAL de produtos que usam a cor, recortada
+    // pela empresa ativa. Não é número de exemplo — é a mesma contagem do
+    // diagnóstico de vínculos (PR #83) e alimenta o modal de exclusão.
+    uso: { recurso: 'produtos', campo: 'cor_id', singular: 'produto', plural: 'produtos' },
     mock: [
       { id: 1, nome: 'Preto', hex: '#111111', ativo: true },
       { id: 2, nome: 'Branco', hex: '#FFFFFF', ativo: true },

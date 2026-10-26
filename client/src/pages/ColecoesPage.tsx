@@ -104,7 +104,6 @@ export default function ColecoesPage() {
   const [alvoExclusao, setAlvoExclusao] = useState<Colecao | null>(null);
   const [excluindo, setExcluindo] = useState(false);
   const [dependencias, setDependencias] = useState<DiagnosticoDependencias | null>(null);
-  const [desativandoVinculo, setDesativandoVinculo] = useState(false);
 
   // Busca com atraso: não dispara uma requisição por tecla.
   useEffect(() => {
@@ -277,16 +276,14 @@ export default function ColecoesPage() {
   /** Do diagnóstico de vínculos, desativa a coleção em uso (preserva o histórico). */
   async function desativarDoDiagnostico() {
     if (!dependencias) return;
-    setDesativandoVinculo(true);
+    const id = dependencias.id;
+    setDependencias(null);
     try {
-      await api.put(`/colecoes/${dependencias.id}`, { ativo: false });
+      await api.put(`/colecoes/${id}`, { ativo: false });
       toast.success('Coleção desativada. Os produtos vinculados continuam apontando para ela.');
-      setDependencias(null);
       await carregar();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : 'Não foi possível desativar a coleção.');
-    } finally {
-      setDesativandoVinculo(false);
     }
   }
 
@@ -641,9 +638,18 @@ export default function ColecoesPage() {
       <DependenciasModal
         diag={dependencias}
         onClose={() => setDependencias(null)}
-        onDesativar={canUpdate && dependenciasAtivaAinda ? () => void desativarDoDiagnostico() : undefined}
-        desativando={desativandoVinculo}
-        rotuloDesativar="Desativar coleção"
+        mensagem="Não é possível excluir esta coleção porque existem produtos vinculados."
+        // Regra do ERP: cadastro com histórico NÃO é apagado — desativa-se. O
+        // diagnóstico continua somente leitura; a ação é o fluxo normal (PUT).
+        acaoRecomendada={
+          canUpdate && dependenciasAtivaAinda
+            ? {
+                rotulo: 'Desativar coleção',
+                descricao: 'Mantém os produtos vinculados e tira a coleção das listas de seleção.',
+                onClick: () => void desativarDoDiagnostico(),
+              }
+            : undefined
+        }
       />
     </div>
   );

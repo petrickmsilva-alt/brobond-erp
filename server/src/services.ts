@@ -305,9 +305,42 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   await attachImages(r, out.rows);
   anotarStatusSenha(r, out.rows);
   await anotarUsoLocal(r, out.rows);
+  await anotarUsoVinculado(r, out.rows, escopo);
   await anotarUsoColecao(r, out.rows, escopo);
   await attachGradeTamanhos(r, out.rows);
   return out;
+}
+
+/**
+ * UTILIZAÇÃO do cadastro (coluna "Utilização" da listagem).
+ *
+ * O recurso declara em `resources.ts` QUEM aponta para ele (`uso`). A contagem
+ * é real e usa o mesmo `countWhere` do diagnóstico de vínculos — nada de SQL
+ * paralelo nem de número de exemplo. Quando o recurso dependente é
+ * multiempresa (produtos), a contagem é recortada pela empresa ativa: o número
+ * mostrado é o da operação de quem está lendo, nunca o total das outras
+ * empresas (multiempresa preservada).
+ *
+ * Campo anotado:
+ *   uso_vinculado        número exato de registros dependentes
+ *   uso_vinculado_label  contagem já com o substantivo ("18 produtos")
+ */
+async function anotarUsoVinculado(r: Resource, rows: Row[], escopo?: EscopoEmpresa): Promise<void> {
+  const uso = r.uso;
+  if (!uso || !rows.length) return;
+  const dependente = getResource(uso.recurso);
+  if (!dependente) return;
+  const s = getStore();
+  const escopado = temEscopoEmpresa(dependente);
+  for (const row of rows) {
+    const filtro: Payload = { [uso.campo]: Number(row.id) };
+    if (escopado) {
+      filtro.empresa_id = escopo?.empresaId ?? Number(row.empresa_id ?? EMPRESA_PADRAO);
+    }
+    const total = await s.countWhere(dependente, filtro);
+    row.uso_vinculado = total;
+    row.uso_vinculado_label = `${total} ${total === 1 ? uso.singular : uso.plural}`;
+  }
 }
 
 /** Lista de usuários com filtro por status consolidado, MFA, senha e/ou período de acesso (admin). */
@@ -366,6 +399,7 @@ export async function getRecord(r: Resource, id: number, escopoOuAtor?: EscopoOu
   await attachImages(r, [row]);
   anotarStatusSenha(r, [row]);
   await anotarUsoLocal(r, [row]);
+  await anotarUsoVinculado(r, [row], escopo);
   await attachGradeTamanhos(r, [row]);
   return row;
 }

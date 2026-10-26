@@ -8,9 +8,11 @@
 import { AlertTriangle, Camera, CheckCircle2, XCircle } from 'lucide-react';
 import type { Field, ResourceMeta } from '../lib/meta';
 import { formatCell } from '../lib/format';
+import { corSegura } from '../lib/hex';
 import { ColorDot } from './ImageField';
+import { AmostraCor } from './AmostraCor';
 import { Badge } from './ui';
-import { estoqueMinimoDaLinha, larguraDaColuna, saldoDaLinha } from '../lib/lista';
+import { campoDaAmostra, estoqueMinimoDaLinha, larguraDaColuna, saldoDaLinha } from '../lib/lista';
 
 /** Texto de identificação da linha (ex.: "CAM-001 — Camiseta Pima"). */
 export function rowLabel(r: ResourceMeta, row: Record<string, any>): string {
@@ -79,6 +81,32 @@ function EstoqueCelula({ row }: { row: Record<string, any> }) {
 export function ValorCampo({ f, row, recurso }: { f: Field; row: Record<string, any>; recurso: string }) {
   if (f.name === 'estoque') return <EstoqueCelula row={row} />;
 
+  // Coluna sintética AMOSTRA: a cor com presença visual. O nome e o HEX ficam
+  // em colunas próprias — a cor nunca é a única informação da linha.
+  if (f.name === 'amostra') {
+    const campo = campoDaAmostra(recurso);
+    if (!campo) return <span className="text-slate-300">—</span>;
+    return <AmostraCor hex={row[campo]} nome={row.nome ?? null} />;
+  }
+
+  // Coluna sintética UTILIZAÇÃO: contagem REAL vinda do servidor. Zero (ou
+  // ausência do dado) é "—", nunca um número inventado.
+  if (f.name === 'uso_vinculado') {
+    const n = Number(row.uso_vinculado);
+    if (!Number.isFinite(n) || n <= 0) {
+      return (
+        <span className="text-slate-300" title="Nenhum registro usa este cadastro na empresa ativa." aria-label="Sem utilização">
+          —
+        </span>
+      );
+    }
+    return (
+      <span className="tabular-nums text-slate-700 dark:text-slate-200">
+        {row.uso_vinculado_label ?? String(n)}
+      </span>
+    );
+  }
+
   const { max } = larguraDaColuna(f, recurso);
   const v = row[f.name];
 
@@ -105,7 +133,17 @@ export function ValorCampo({ f, row, recurso }: { f: Field; row: Record<string, 
     return <TextoTruncado texto={String(opt?.label ?? (v ?? '—'))} className={max} />;
   }
 
-  if (f.type === 'color') return <ColorDot hex={v} label={v} />;
+  if (f.type === 'color') {
+    // Com coluna AMOSTRA dedicada, o HEX aqui é texto (evita duas amostras na
+    // mesma linha). Sem a coluna, mantém a "bolinha" histórica ao lado do valor.
+    if (campoDaAmostra(recurso)) {
+      if (!v) return <span className="text-slate-300">—</span>;
+      // Canônico quando válido; valor legado aparece como está (nunca inventado).
+      const texto = corSegura(v) ?? String(v).trim();
+      return <TextoTruncado texto={texto} className="font-mono text-xs uppercase" />;
+    }
+    return <ColorDot hex={v} label={v} />;
+  }
 
   if (f.type === 'multiref') {
     const label = row[`${f.name}__label`];

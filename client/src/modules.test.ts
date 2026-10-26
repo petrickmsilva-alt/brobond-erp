@@ -379,7 +379,17 @@ describe('NAV_SECTIONS (fonte única do menu)', () => {
 
 describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
   it('inclui os cadastros que já vivem em página própria', () => {
-    expect([...FORM_DIRETO].sort()).toEqual(['categorias', 'clientes', 'produtos', 'vendas']);
+    expect([...FORM_DIRETO].sort()).toEqual(['categorias', 'clientes', 'cores', 'produtos', 'vendas']);
+  });
+
+  it('Cores entra no padrão LISTA → PÁGINA: inventário e edição vivem no módulo /cores', () => {
+    expect(FORM_DIRETO.has('cores')).toBe(true);
+    const cores = MODULES.find((m) => m.id === 'cores');
+    expect(cores?.path).toBe('/cores');
+    // As rotas filhas pertencem ao módulo pai (breadcrumb e acesso usam isso).
+    expect(moduleOfPath('/cores')?.id).toBe('cores');
+    expect(moduleOfPath('/cores/novo')?.id).toBe('cores');
+    expect(moduleOfPath('/cores/12/editar')?.id).toBe('cores');
   });
 
   it('cada recurso de FORM_DIRETO tem um módulo navegável na mesma rota', () => {

@@ -31,9 +31,9 @@ import {
   Layers,
   Link2,
   ListChecks,
-  Loader2,
   Package,
   Paperclip,
+  Power,
   Printer,
   ShoppingBag,
   ShoppingCart,
@@ -170,22 +170,26 @@ export function DependenciasModal({
   diag,
   onClose,
   onAbrirModulo,
-  onDesativar,
-  desativando = false,
-  rotuloDesativar = 'Desativar registro',
+  acaoRecomendada,
+  mensagem,
 }: {
   diag: DiagnosticoDependencias | null;
   onClose: () => void;
   /** Leva ao módulo do vínculo (quando ele é um recurso navegável). */
   onAbrirModulo?: (recurso: string) => void;
   /**
-   * Saída alternativa à exclusão quando o recurso tem status Ativo/Inativo:
-   * desativar preserva os vínculos (o histórico continua apontando para ele).
-   * Sem esta prop, o rodapé traz só "Fechar" e "Ver vínculos".
+   * Saída alternativa ao DELETE bloqueado, oferecida pelo dono do cadastro —
+   * ex.: "Desativar cor" quando a regra do ERP recomenda desativar em vez de
+   * excluir. O diagnóstico continua sendo somente leitura: quem age é a tela,
+   * pelo fluxo normal do recurso (PUT `{ ativo: false }`).
    */
-  onDesativar?: () => void;
-  desativando?: boolean;
-  rotuloDesativar?: string;
+  acaoRecomendada?: { rotulo: string; onClick: () => void; descricao?: string };
+  /**
+   * Frase de abertura na voz do cadastro (ex.: "Não é possível excluir esta cor
+   * porque existem registros vinculados."). Substitui o resumo técnico; os
+   * números, os módulos e o motivo continuam vindo do diagnóstico do servidor.
+   */
+  mensagem?: string | null;
 }) {
   const [detalhado, setDetalhado] = useState(false);
   const grupos = useMemo(() => (diag ? agruparPorModulo(diag) : []), [diag]);
@@ -203,16 +207,16 @@ export function DependenciasModal({
       subtitle={diag.titulo}
       footer={
         <>
+          {acaoRecomendada && (
+            <button type="button" className="btn-accent" onClick={acaoRecomendada.onClick} title={acaoRecomendada.descricao ?? acaoRecomendada.rotulo}>
+              <Power className="h-4 w-4" aria-hidden="true" />
+              {acaoRecomendada.rotulo}
+            </button>
+          )}
           <button className="btn-secondary" onClick={onClose}>
             Fechar
           </button>
-          {onDesativar && (
-            <button className="btn-primary" onClick={onDesativar} disabled={desativando}>
-              {desativando && <Loader2 className="h-4 w-4 animate-spin" />}
-              {rotuloDesativar}
-            </button>
-          )}
-          <button className="btn-secondary" onClick={() => setDetalhado((v) => !v)} aria-expanded={detalhado}>
+          <button className="btn-primary" onClick={() => setDetalhado((v) => !v)} aria-expanded={detalhado}>
             {detalhado ? 'Ocultar vínculos' : 'Ver vínculos'}
             {detalhado ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </button>
@@ -222,7 +226,7 @@ export function DependenciasModal({
       <div className="space-y-4 text-sm">
         <Alert tone="red">
           <div className="space-y-1">
-            <p className="font-semibold">{diag.resumo}</p>
+            <p className="font-semibold">{mensagem || diag.resumo}</p>
             <p>{diag.orientacao}</p>
           </div>
         </Alert>

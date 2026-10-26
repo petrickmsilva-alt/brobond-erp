@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Eraser, Eye, EyeOff, Loader2, MapPin, Plus, Save } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import type { Field, Option, ResourceMeta } from '../lib/meta';
 import { maskCep, maskDocument, maskPhone, toInputValue } from '../lib/format';
+import { erroHex, hexValido, normalizarHex } from '../lib/hex';
 import { ProductSelector } from './ProductSelector';
 
 export type FormValues = Record<string, string | boolean | string[]>;
@@ -65,6 +66,63 @@ export function toPayload(r: ResourceMeta, values: FormValues, editing: boolean)
   return out;
 }
 
+/**
+ * Normaliza os campos de COR (#abc → #AABBCC, 172038 → #172038) com a MESMA
+ * regra do servidor (lib/hex.ts). Devolve a MESMA referência quando nada mudou
+ * — quem chama só re-renderiza se houve correção de fato.
+ */
+export function normalizarCamposCor(r: ResourceMeta, values: FormValues): FormValues {
+  let out: FormValues | null = null;
+  for (const f of r.fields) {
+    if (f.type !== 'color') continue;
+    const atual = String(values[f.name] ?? '');
+    const canonico = normalizarHex(atual);
+    if (canonico !== atual) {
+      out = out ?? { ...values };
+      out[f.name] = canonico;
+    }
+  }
+  return out ?? values;
+}
+
+/**
+ * Validação local COMPARTILHADA por todas as superfícies do formulário —
+ * o modal do CRUD genérico e as páginas de cadastro/edição (ex.: Cores):
+ * mesmas mensagens, mesmos campos, nenhuma regra duplicada por tela.
+ *
+ * O servidor REVALIDA tudo (validatePayload); isto só evita a ida e volta e
+ * deixa o erro junto do campo certo. HEX vazio é permitido pelo contrato;
+ * valor preenchido precisa ser #RRGGBB.
+ */
+export function validarFormulario(
+  r: ResourceMeta,
+  vals: FormValues,
+  editing: boolean
+): { errors: Record<string, string>; formError: string } {
+  const errors: Record<string, string> = {};
+  for (const f of r.fields) {
+    if (f.form === false || f.readonly) continue;
+    const required = f.required || (!editing && f.requiredOnCreate);
+    const v = vals[f.name];
+    if (required && f.type === 'multiref') {
+      if (!Array.isArray(v) || v.length === 0) errors[f.name] = 'Selecione ao menos um item';
+    } else if (required && f.type !== 'boolean' && (v === undefined || String(v).trim() === '')) {
+      errors[f.name] = 'Campo obrigatório';
+    }
+    if (f.type === 'password' && typeof v === 'string' && v && f.min && v.length < f.min) errors[f.name] = `Mínimo de ${f.min} caracteres`;
+    // HEX: vazio é permitido pelo contrato; valor preenchido precisa ser
+    // #RRGGBB. Inválido NÃO vai para a API (o servidor recusaria de qualquer
+    // forma — aqui o erro aparece antes, no campo certo).
+    if (f.type === 'color' && !hexValido(v)) errors[f.name] = erroHex(v)!;
+  }
+  const formError = Object.keys(errors).length
+    ? Object.keys(errors).some((n) => r.fields.find((f) => f.name === n)?.type === 'color')
+      ? 'Confira o código HEX destacado. Use o formato #RRGGBB (ex.: #172038).'
+      : 'Preencha os campos obrigatórios destacados.'
+    : '';
+  return { errors, formError };
+}
+
 export function RecordForm({
   resource,
   values,
@@ -77,6 +135,8 @@ export function RecordForm({
   refOptions,
   autoFocus = true,
   before,
+  hideActions = false,
+  depoisDoCampo,
 }: {
   resource: ResourceMeta;
   values: FormValues;
@@ -90,6 +150,17 @@ export function RecordForm({
   autoFocus?: boolean;
   /** conteúdo exibido antes dos campos (ex.: galeria de fotos) */
   before?: ReactNode;
+  /**
+   * Esconde a barra de ações do próprio formulário (Limpar/Incluir). Usado nas
+   * PÁGINAS de cadastro, onde o cabeçalho da página é a única barra de ações —
+   * sem dois botões "salvar" concorrendo na mesma tela.
+   */
+  hideActions?: boolean;
+  /**
+   * Conteúdo extra renderizado logo APÓS um campo, por nome (ex.: a prévia da
+   * amostra de cor embaixo do código HEX), ocupando a linha inteira.
+   */
+  depoisDoCampo?: Record<string, ReactNode>;
 }) {
   const fields = useMemo(() => resource.fields.filter((f) => f.form !== false && !f.readonly && f.type !== 'images'), [resource]);
   const firstName = fields[0]?.name;
@@ -175,35 +246,40 @@ export function RecordForm({
           )}
           <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
             {sec.fields.map((f) => (
-              <div key={f.name} className={f.wide || f.type === 'textarea' ? 'sm:col-span-2' : ''}>
-                <FieldInput
-                  field={f}
-                  value={values[f.name]}
-                  error={errors[f.name]}
-                  onChange={(v) => onChange(f.name, v)}
-                  options={(f.type === 'ref' || f.type === 'multiref') && f.ref ? refOptions[f.ref] : undefined}
-                  editing={editing}
-                  autoFocus={autoFocus && f.name === firstName}
-                  disabled={busy}
-                  onBuscarCep={f.type === 'cep' ? buscarCep : undefined}
-                  buscandoCep={cepBuscando}
-                  avisoCep={f.type === 'cep' ? cepAviso : null}
-                />
-              </div>
+              <Fragment key={f.name}>
+                <div className={f.wide || f.type === 'textarea' ? 'sm:col-span-2' : ''}>
+                  <FieldInput
+                    field={f}
+                    value={values[f.name]}
+                    error={errors[f.name]}
+                    onChange={(v) => onChange(f.name, v)}
+                    options={(f.type === 'ref' || f.type === 'multiref') && f.ref ? refOptions[f.ref] : undefined}
+                    editing={editing}
+                    autoFocus={autoFocus && f.name === firstName}
+                    disabled={busy}
+                    onBuscarCep={f.type === 'cep' ? buscarCep : undefined}
+                    buscandoCep={cepBuscando}
+                    avisoCep={f.type === 'cep' ? cepAviso : null}
+                  />
+                </div>
+                {depoisDoCampo?.[f.name] && <div className="sm:col-span-full">{depoisDoCampo[f.name]}</div>}
+              </Fragment>
             ))}
           </div>
         </div>
       ))}
 
-      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-4">
-        <button type="button" className="btn-secondary" onClick={onClear} disabled={busy} title="Limpar os campos do formulário">
-          <Eraser className="h-4 w-4" /> Limpar
-        </button>
-        <button type="submit" className={editing ? 'btn-primary' : 'btn-accent'} disabled={busy}>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : editing ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-          {editing ? 'Salvar alterações' : 'Incluir'}
-        </button>
-      </div>
+      {!hideActions && (
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-4">
+          <button type="button" className="btn-secondary" onClick={onClear} disabled={busy} title="Limpar os campos do formulário">
+            <Eraser className="h-4 w-4" /> Limpar
+          </button>
+          <button type="submit" className={editing ? 'btn-primary' : 'btn-accent'} disabled={busy}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : editing ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+            {editing ? 'Salvar alterações' : 'Incluir'}
+          </button>
+        </div>
+      )}
     </form>
   );
 }
@@ -391,10 +467,20 @@ function FieldInput({
             className={`${cls} font-mono uppercase`}
             value={v}
             onChange={(e) => onChange(e.target.value)}
-            placeholder="#1F3A5F"
+            // Normaliza ao sair do campo (#abc → #AABBCC, 172038 → #172038) com
+            // a MESMA regra do servidor. Valor inválido não é "corrigido" — a
+            // validação do formulário mostra o erro e não envia à API.
+            onBlur={() => {
+              const canonico = normalizarHex(v);
+              if (canonico && canonico !== v) onChange(canonico);
+            }}
+            placeholder={f.placeholder ?? '#1F3A5F'}
             maxLength={7}
             disabled={disabled}
             autoFocus={autoFocus}
+            spellCheck={false}
+            autoCapitalize="characters"
+            aria-invalid={error ? true : undefined}
           />
           {v && (
             <button type="button" className="btn-icon" title="Limpar cor" onClick={() => onChange('')} disabled={disabled}>

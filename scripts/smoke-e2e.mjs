@@ -527,6 +527,121 @@ await (async () => {
   check('E3.2: importação sem arquivo é recusada', semNada.status >= 400, `status ${semNada.status}`);
 }
 
+// ------------------------------- CADASTROS › CORES (padrão LISTA → PÁGINA)
+// A tela de Cores é metadado-dirigida: `/meta` precisa declarar `uso` e
+// `quickFilters` (coluna Utilização e recorte de status). O formulário NÃO é
+// uma superfície sobreposta: o metadado não declara `editor` de drawer/modal —
+// a inclusão e a edição vivem nas páginas /cores/novo e /cores/:id/editar, e o
+// contrato de API abaixo (POST/PUT/GET/DELETE) é o que essas páginas usam.
+// A prova é no Express de verdade — sem chamar handler na mão.
+{
+  const meta = await req('GET', '/meta');
+  const cores = meta.json?.resources?.cores;
+  check('cores: /meta NÃO declara drawer/modal (formulário é página)', !('editor' in (cores || {})), `editor=${cores?.editor}`);
+  check('cores: /meta declara uso por produtos.cor_id',
+    cores?.uso?.recurso === 'produtos' && cores?.uso?.campo === 'cor_id', JSON.stringify(cores?.uso));
+  check('cores: /meta entrega os filtros rápidos Todas/Ativas/Inativas',
+    JSON.stringify((cores?.quickFilters?.[0]?.options || []).map((o) => o.label)) === '["Todas","Ativas","Inativas"]');
+  const campoHex = (cores?.fields || []).find((f) => f.name === 'hex');
+  check('cores: HEX segue opcional e buscável', campoHex?.required !== true && campoHex?.search === true);
+
+  const nomeCor = `Azul Petróleo ${Date.now().toString().slice(-6)}`;
+  const nova = await req('POST', '/cores', { nome: nomeCor, hex: '172038', ativo: true });
+  check('POST /cores normaliza HEX para #172038', nova.status === 201 && nova.json?.hex === '#172038',
+    `status ${nova.status} hex=${nova.json?.hex}`);
+  const corId = nova.json?.id;
+
+  const buscaNome = await req('GET', '/cores?q=azul%20petr&page=1&pageSize=25');
+  check('cores: busca por nome na listagem do servidor', (buscaNome.json?.rows || []).some((r) => r.id === corId));
+  const buscaHex = await req('GET', '/cores?q=172038&page=1&pageSize=25');
+  check('cores: busca alcança o HEX', (buscaHex.json?.rows || []).some((r) => r.id === corId));
+  const inativas = await req('GET', '/cores?f.ativo=false&page=1&pageSize=25');
+  check('cores: filtro f.ativo=false', inativas.status === 200 && (inativas.json?.rows || []).every((r) => r.ativo === false));
+
+  // Produto continua escolhendo a cor do cadastro e recebendo a amostra.
+  const produtoCor = await req('POST', '/produtos', { sku: `SMOKE-COR-${Date.now()}`, nome: 'Camiseta Smoke Cor', cor_id: corId, preco_venda: 99.9 });
+  check('produtos: cor do cadastro aceita no produto', [200, 201].includes(produtoCor.status), `status ${produtoCor.status}`);
+  const detalhe = await req('GET', `/produtos/${produtoCor.json?.id}`);
+  check('produtos: rótulo e amostra da cor resolvidos',
+    detalhe.json?.cor_id__label === nomeCor && detalhe.json?.cor_id__color === '#172038',
+    `${detalhe.json?.cor_id__label} / ${detalhe.json?.cor_id__color}`);
+  const opcoes = await req('GET', '/cores/options');
+  check('cores: /options alimenta a seleção do produto', Array.isArray(opcoes.json) && opcoes.json.some((o) => String(o.value) === String(corId)));
+
+  const listaUso = await req('GET', '/cores?page=1&pageSize=50');
+  const linhaUso = (listaUso.json?.rows || []).find((r) => r.id === corId);
+  check('cores: Utilização traz a contagem real (1 produto)',
+    linhaUso?.uso_vinculado === 1 && linhaUso?.uso_vinculado_label === '1 produto', `${linhaUso?.uso_vinculado_label}`);
+
+  // Exclusão bloqueada: diagnóstico do PR #83 + saída por desativação.
+  const bloqueada = await req('DELETE', `/cores/${corId}`);
+  const diagCor = bloqueada.json?.details?.dependencias;
+  check('cores: DELETE vinculado → 409 dependencias_vinculadas',
+    bloqueada.status === 409 && bloqueada.json?.code === 'dependencias_vinculadas', `status ${bloqueada.status}`);
+  check('cores: diagnóstico diz onde/quantos/por quê',
+    diagCor?.bloqueado === true && diagCor?.modulosBloqueantes?.includes('Produtos') &&
+    diagCor?.vinculos?.some((v) => v.tabela === 'produtos' && v.quantidade === 1 && Array.isArray(v.ids) && v.motivo));
+  const desativada = await req('PUT', `/cores/${corId}`, { ativo: false });
+  check('cores: desativar preserva o registro', desativada.status === 200 && desativada.json?.ativo === false, `status ${desativada.status}`);
+
+  // Cor sem vínculo segue o fluxo normal.
+  const semUso = await req('POST', '/cores', { nome: `Cor sem uso ${Date.now().toString().slice(-6)}` });
+  const excluida = await req('DELETE', `/cores/${semUso.json?.id}`);
+  check('cores: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluida.status), `status ${excluida.status}`);
+}
+
+
+// ---------------------------- CADASTROS › COLEÇÕES (padrão LISTA → DRAWER)
+// Coleções é cadastro POR EMPRESA (empresa: true): o formulário vive num Drawer
+// sobre a própria listagem, e a exclusão passa pelo diagnóstico de dependências
+// — coleção em uso pelos produtos é DESATIVADA, nunca apagada.
+{
+  const meta = await req('GET', '/meta');
+  const col = meta.json?.resources?.colecoes;
+  check('colecoes: cadastro por empresa (empresa: true)', col?.empresa === true, `empresa=${col?.empresa}`);
+  check('colecoes: RBAC preservado — SEM minPerfilEscrita',
+    !('minPerfilEscrita' in (col || {})), `minPerfilEscrita=${col?.minPerfilEscrita}`);
+  check('colecoes: nome é o único campo obrigatório e é buscável',
+    (col?.fields || []).filter((f) => f.required).map((f) => f.name).join(',') === 'nome' &&
+    (col?.fields || []).find((f) => f.name === 'nome')?.search === true);
+
+  const nomeCol = `Verão Smoke ${Date.now().toString().slice(-6)}`;
+  const nova = await req('POST', '/colecoes', { nome: nomeCol, temporada: 'Verão', ano: 2027, ativo: true });
+  check('POST /colecoes cria a coleção', nova.status === 201, `status ${nova.status}`);
+  const colId = nova.json?.id;
+
+  const busca = await req('GET', '/colecoes?q=ver%C3%A3o%20smoke&page=1&pageSize=25');
+  check('colecoes: busca por nome na listagem', (busca.json?.rows || []).some((r) => r.id === colId));
+  const inativasCol = await req('GET', '/colecoes?f.ativo=false&page=1&pageSize=25');
+  check('colecoes: filtro f.ativo=false', inativasCol.status === 200 && (inativasCol.json?.rows || []).every((r) => r.ativo === false));
+
+  // Produto referencia a coleção e a utilização é contada de forma AGREGADA.
+  const produtoCol = await req('POST', '/produtos', { sku: `SMOKE-COL-${Date.now()}`, nome: 'Camiseta Smoke Coleção', colecao_id: colId, preco_venda: 129.9 });
+  check('produtos: coleção do cadastro aceita no produto', [200, 201].includes(produtoCol.status), `status ${produtoCol.status}`);
+  const listaCol = await req('GET', '/colecoes?page=1&pageSize=50');
+  const linhaCol = (listaCol.json?.rows || []).find((r) => r.id === colId);
+  check('colecoes: Utilização traz a contagem real (1 produto)',
+    linhaCol?.produtos_vinculados === 1 && linhaCol?.em_uso === true, `produtos_vinculados=${linhaCol?.produtos_vinculados}`);
+
+  // Exclusão bloqueada por histórico protegido + saída por desativação.
+  const bloqueadaCol = await req('DELETE', `/colecoes/${colId}`);
+  const diagCol = bloqueadaCol.json?.details?.dependencias;
+  check('colecoes: DELETE vinculado → 409 dependencias_vinculadas',
+    bloqueadaCol.status === 409 && bloqueadaCol.json?.code === 'dependencias_vinculadas', `status ${bloqueadaCol.status}`);
+  check('colecoes: diagnóstico diz onde/quantos/por quê',
+    diagCol?.bloqueado === true && diagCol?.modulosBloqueantes?.includes('Produtos') &&
+    diagCol?.vinculos?.some((v) => v.tabela === 'produtos' && v.quantidade === 1 && Array.isArray(v.ids) && v.motivo));
+  const desativadaCol = await req('PUT', `/colecoes/${colId}`, { ativo: false });
+  check('colecoes: desativar preserva a coleção e o produto vinculado',
+    desativadaCol.status === 200 && desativadaCol.json?.ativo === false, `status ${desativadaCol.status}`);
+  const produtoApos = await req('GET', `/produtos/${produtoCol.json?.id}`);
+  check('produtos: continuam apontando para a coleção desativada', String(produtoApos.json?.colecao_id) === String(colId));
+
+  // Coleção sem vínculo segue o fluxo normal de exclusão.
+  const semUsoCol = await req('POST', '/colecoes', { nome: `Coleção sem uso ${Date.now().toString().slice(-6)}` });
+  const excluidaCol = await req('DELETE', `/colecoes/${semUsoCol.json?.id}`);
+  check('colecoes: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluidaCol.status), `status ${excluidaCol.status}`);
+}
 
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);

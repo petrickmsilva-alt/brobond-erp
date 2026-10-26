@@ -89,6 +89,10 @@ export type ResourceMeta = {
   searchFields?: (string | { ref: string; field?: string })[];
   /** Filtros declarados da listagem, na ordem de exibição. */
   filterFields?: string[];
+  /** Contagem real de uso do cadastro (coluna "Utilização"). */
+  uso?: { recurso: string; campo: string; singular: string; plural: string };
+  /** Filtros rápidos (um clique) da listagem. */
+  quickFilters?: { field: string; label: string; options: { value: string; label: string }[] }[];
 };
 
 export type Meta = {
