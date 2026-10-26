@@ -527,6 +527,66 @@ await (async () => {
   check('E3.2: importação sem arquivo é recusada', semNada.status >= 400, `status ${semNada.status}`);
 }
 
+// ------------------------------- CADASTROS › CORES (piloto lista + drawer)
+// A tela de Cores é metadado-dirigida: se `/meta` não entregar `editor`, `uso`
+// e `quickFilters`, o drawer não abre e a coluna Utilização fica vazia. Aqui a
+// prova é no Express de verdade — sem chamar handler na mão.
+{
+  const meta = await req('GET', '/meta');
+  const cores = meta.json?.resources?.cores;
+  check('cores: /meta entrega editor=drawer', cores?.editor === 'drawer', `editor=${cores?.editor}`);
+  check('cores: /meta declara uso por produtos.cor_id',
+    cores?.uso?.recurso === 'produtos' && cores?.uso?.campo === 'cor_id', JSON.stringify(cores?.uso));
+  check('cores: /meta entrega os filtros rápidos Todas/Ativas/Inativas',
+    JSON.stringify((cores?.quickFilters?.[0]?.options || []).map((o) => o.label)) === '["Todas","Ativas","Inativas"]');
+  const campoHex = (cores?.fields || []).find((f) => f.name === 'hex');
+  check('cores: HEX segue opcional e buscável', campoHex?.required !== true && campoHex?.search === true);
+
+  const nomeCor = `Azul Petróleo ${Date.now().toString().slice(-6)}`;
+  const nova = await req('POST', '/cores', { nome: nomeCor, hex: '172038', ativo: true });
+  check('POST /cores normaliza HEX para #172038', nova.status === 201 && nova.json?.hex === '#172038',
+    `status ${nova.status} hex=${nova.json?.hex}`);
+  const corId = nova.json?.id;
+
+  const buscaNome = await req('GET', '/cores?q=azul%20petr&page=1&pageSize=25');
+  check('cores: busca por nome na listagem do servidor', (buscaNome.json?.rows || []).some((r) => r.id === corId));
+  const buscaHex = await req('GET', '/cores?q=172038&page=1&pageSize=25');
+  check('cores: busca alcança o HEX', (buscaHex.json?.rows || []).some((r) => r.id === corId));
+  const inativas = await req('GET', '/cores?f.ativo=false&page=1&pageSize=25');
+  check('cores: filtro f.ativo=false', inativas.status === 200 && (inativas.json?.rows || []).every((r) => r.ativo === false));
+
+  // Produto continua escolhendo a cor do cadastro e recebendo a amostra.
+  const produtoCor = await req('POST', '/produtos', { sku: `SMOKE-COR-${Date.now()}`, nome: 'Camiseta Smoke Cor', cor_id: corId, preco_venda: 99.9 });
+  check('produtos: cor do cadastro aceita no produto', [200, 201].includes(produtoCor.status), `status ${produtoCor.status}`);
+  const detalhe = await req('GET', `/produtos/${produtoCor.json?.id}`);
+  check('produtos: rótulo e amostra da cor resolvidos',
+    detalhe.json?.cor_id__label === nomeCor && detalhe.json?.cor_id__color === '#172038',
+    `${detalhe.json?.cor_id__label} / ${detalhe.json?.cor_id__color}`);
+  const opcoes = await req('GET', '/cores/options');
+  check('cores: /options alimenta a seleção do produto', Array.isArray(opcoes.json) && opcoes.json.some((o) => String(o.value) === String(corId)));
+
+  const listaUso = await req('GET', '/cores?page=1&pageSize=50');
+  const linhaUso = (listaUso.json?.rows || []).find((r) => r.id === corId);
+  check('cores: Utilização traz a contagem real (1 produto)',
+    linhaUso?.uso_vinculado === 1 && linhaUso?.uso_vinculado_label === '1 produto', `${linhaUso?.uso_vinculado_label}`);
+
+  // Exclusão bloqueada: diagnóstico do PR #83 + saída por desativação.
+  const bloqueada = await req('DELETE', `/cores/${corId}`);
+  const diagCor = bloqueada.json?.details?.dependencias;
+  check('cores: DELETE vinculado → 409 dependencias_vinculadas',
+    bloqueada.status === 409 && bloqueada.json?.code === 'dependencias_vinculadas', `status ${bloqueada.status}`);
+  check('cores: diagnóstico diz onde/quantos/por quê',
+    diagCor?.bloqueado === true && diagCor?.modulosBloqueantes?.includes('Produtos') &&
+    diagCor?.vinculos?.some((v) => v.tabela === 'produtos' && v.quantidade === 1 && Array.isArray(v.ids) && v.motivo));
+  const desativada = await req('PUT', `/cores/${corId}`, { ativo: false });
+  check('cores: desativar preserva o registro', desativada.status === 200 && desativada.json?.ativo === false, `status ${desativada.status}`);
+
+  // Cor sem vínculo segue o fluxo normal.
+  const semUso = await req('POST', '/cores', { nome: `Cor sem uso ${Date.now().toString().slice(-6)}` });
+  const excluida = await req('DELETE', `/cores/${semUso.json?.id}`);
+  check('cores: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluida.status), `status ${excluida.status}`);
+}
+
 
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);
