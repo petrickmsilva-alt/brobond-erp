@@ -344,6 +344,59 @@ const CONFIG_INSUMOS: ListaConfig = {
   contagem: { singular: 'insumo', plural: 'insumos' },
 };
 
+/**
+ * Fornecedores: de quem a empresa compra. Cadastro POR EMPRESA no padrão
+ * LISTA → PÁGINA (`/fornecedores/novo`, `/fornecedores/:id/editar`), nunca
+ * formulário sobreposto.
+ *
+ * A ordem das colunas é a da pergunta que se faz ao revisar os fornecedores:
+ * quem é (nome), que tipo de pessoa é (PF/PJ/estrangeiro), qual o documento
+ * (CNPJ/CPF), como é conhecido (nome fantasia), onde está (cidade/UF), se está
+ * ativo e onde é usado (pedidos de compra).
+ *
+ * `uso_vinculado` é campo VIRTUAL: o servidor o anota na listagem (UMA
+ * consulta agregada por página, recortada pela empresa ativa) — nenhum número
+ * inventado aqui. `localizacao` é apresentação: cidade + UF que a API já
+ * devolveu na linha (sem consulta nova, como a coluna AMOSTRA das cores).
+ */
+const CONFIG_FORNECEDORES: ListaConfig = {
+  prioridade: ['nome', 'pessoa', 'cnpj', 'nome_fantasia', 'localizacao', 'telefone', 'email', 'ativo', 'uso_vinculado'],
+  rotulos: {
+    nome: 'Fornecedor',
+    pessoa: 'Tipo',
+    cnpj: 'CNPJ / CPF',
+    nome_fantasia: 'Nome fantasia',
+    localizacao: 'Localização',
+    telefone: 'Telefone',
+    email: 'E-mail',
+    ativo: 'Status',
+    uso_vinculado: 'Utilização',
+  },
+  larguras: {
+    nome: { min: 'min-w-[220px]', max: 'max-w-[300px]' },
+    pessoa: { min: 'min-w-[110px]', max: 'max-w-[130px]' },
+    cnpj: { min: 'min-w-[150px]', max: 'max-w-[180px]' },
+    nome_fantasia: { min: 'min-w-[160px]', max: 'max-w-[240px]' },
+    localizacao: { min: 'min-w-[140px]', max: 'max-w-[200px]' },
+    telefone: { min: 'min-w-[130px]', max: 'max-w-[160px]' },
+    email: { min: 'min-w-[180px]', max: 'max-w-[260px]' },
+    ativo: { min: 'min-w-[110px]', max: 'max-w-[120px]' },
+    uso_vinculado: { min: 'min-w-[130px]', max: 'max-w-[160px]' },
+  },
+  titulo: 'nome',
+  card: ['pessoa', 'cnpj', 'nome_fantasia', 'localizacao', 'telefone', 'ativo', 'uso_vinculado'],
+  buscaPlaceholder: 'Buscar fornecedor...',
+  rotuloNovo: 'Novo fornecedor',
+  rotuloEditar: 'Editar fornecedor',
+  descricaoCadastro: 'Cadastre o fornecedor com os dados fiscais, de endereço e de contato usados nas compras e na NF-e de entrada.',
+  rotuloSalvar: 'Salvar fornecedor',
+  mensagemVinculos: 'Não é possível excluir este fornecedor porque existem registros vinculados.',
+  vazioTitulo: 'Nenhum fornecedor cadastrado',
+  vazioDescricao: 'Cadastre o primeiro fornecedor para usar nas compras, cotações e insumos.',
+  alternarAtivo: true,
+  contagem: { singular: 'fornecedor', plural: 'fornecedores' },
+};
+
 const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   produtos: CONFIG_PRODUTOS,
   categorias: CONFIG_CATEGORIAS,
@@ -351,6 +404,7 @@ const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   colecoes: CONFIG_COLECOES,
   grades: CONFIG_GRADES,
   insumos: CONFIG_INSUMOS,
+  fornecedores: CONFIG_FORNECEDORES,
 };
 
 export function configDaLista(recurso: string): ListaConfig {

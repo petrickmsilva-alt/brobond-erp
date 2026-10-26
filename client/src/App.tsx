@@ -23,6 +23,7 @@ const CorFormPage = lazy(() => import('./pages/CorFormPage'));
 const ColecaoFormPage = lazy(() => import('./pages/ColecaoFormPage'));
 const GradeFormPage = lazy(() => import('./pages/GradeFormPage'));
 const InsumoFormPage = lazy(() => import('./pages/InsumoFormPage'));
+const FornecedorFormPage = lazy(() => import('./pages/FornecedorFormPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
 const FichaDetail = lazy(() => import('./pages/FichaDetail'));
@@ -216,6 +217,26 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="insumos">
                   <InsumoFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Cadastro de fornecedores em página própria (fora de qualquer
+                modal/drawer): PF/PJ, fiscal, endereço e comercial precisam de
+                espaço próprio — o formulário vive na rota, não sobreposto à
+                lista. */}
+            <Route
+              path="fornecedores/novo"
+              element={
+                <ModuleAccess moduleId="fornecedores">
+                  <FornecedorFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="fornecedores/:id/editar"
+              element={
+                <ModuleAccess moduleId="fornecedores">
+                  <FornecedorFormPage />
                 </ModuleAccess>
               }
             />

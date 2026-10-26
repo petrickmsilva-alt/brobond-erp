@@ -911,6 +911,140 @@ await (async () => {
   const excluidaIns = await req('DELETE', `/insumos/${semUsoIns.json?.id}`);
   check('insumos: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluidaIns.status), `status ${excluidaIns.status}`);
 }
+
+// --------------------------- CADASTROS › FORNECEDORES (padrão LISTA → PÁGINA)
+// Fornecedores seguem o mesmo padrão de Cores, Coleções, Grades e Insumos: o
+// formulário vive nas páginas /fornecedores/novo e /fornecedores/:id/editar —
+// `/meta` não declara drawer/modal. O contrato abaixo é exatamente o que elas
+// usam (o MESMO contrato genérico de antes: POST/PUT/DELETE /fornecedores).
+//
+// DOMÍNIO REAL de `fornecedores` (db/schema.sql + migration 0021): nome,
+// pessoa (pf/pj/estrangeiro), cnpj (CPF/CNPJ com dígito verificador),
+// razao_social, nome_fantasia, fiscal (ie, indicador_ie, im), endereço,
+// contato (contato, telefone, whatsapp, email), comercial (prazo_entrega_dias,
+// condicao_pagamento, observacoes) e ativo. NÃO existem código/SKU próprio,
+// NCM, categoria, limite de crédito, banco/PIX, foto ou tabela de preços — e
+// o smoke trava essa verdade.
+{
+  const meta = await req('GET', '/meta');
+  const forn = meta.json?.resources?.fornecedores;
+  check('fornecedores: /meta NÃO declara drawer/modal (formulário é página)', !('editor' in (forn || {})), `editor=${forn?.editor}`);
+  check('fornecedores: cadastro por empresa (empresa: true)', forn?.empresa === true, `empresa=${forn?.empresa}`);
+  check('fornecedores: RBAC preservado — SEM minPerfilEscrita (é cadastro por empresa)', forn?.minPerfilEscrita === undefined, `minPerfilEscrita=${forn?.minPerfilEscrita}`);
+  check('fornecedores: /meta entrega os filtros rápidos Todos/Ativos/Inativos',
+    JSON.stringify(forn?.quickFilters?.[0]?.options?.map((o) => o.label)) === JSON.stringify(['Todos', 'Ativos', 'Inativos']));
+  check('fornecedores: /meta declara os filtros reais (pessoa, uf, ativo)',
+    JSON.stringify(forn?.filterFields) === JSON.stringify(['pessoa', 'uf', 'ativo']),
+    `filterFields=${JSON.stringify(forn?.filterFields)}`);
+  check('fornecedores: /meta declara a utilização real pelos pedidos de compra',
+    forn?.uso?.recurso === 'compras' && forn?.uso?.campo === 'fornecedor_id',
+    JSON.stringify(forn?.uso));
+  check('fornecedores: /meta declara as seções reais do formulário',
+    ['Identificação', 'Fiscal', 'Endereço', 'Contato', 'Comercial'].every((s) =>
+      (forn?.fields || []).some((f) => f.section === s)));
+
+  // NENHUM campo inventado no formulário.
+  const camposForn = (forn?.fields || []).map((f) => f.name);
+  check('fornecedores: o formulário usa só os campos reais do banco',
+    ['nome', 'pessoa', 'cnpj', 'razao_social', 'nome_fantasia', 'ie', 'indicador_ie', 'im', 'cep', 'logradouro',
+     'numero', 'complemento', 'bairro', 'cidade', 'uf', 'codigo_municipio', 'contato', 'telefone', 'whatsapp',
+     'email', 'prazo_entrega_dias', 'condicao_pagamento', 'observacoes', 'ativo'].every((c) => camposForn.includes(c)) &&
+    !camposForn.some((c) => ['sku', 'codigo', 'codigo_fornecedor', 'ncm', 'categoria_id', 'limite_credito', 'banco',
+      'pix', 'agencia', 'conta', 'foto', 'imagem', 'tabela_preco'].includes(c)),
+    `campos=${camposForn.join(',')}`);
+
+  // Cadastro pela PÁGINA: o mesmo contrato do CRUD genérico. PJ com CNPJ
+  // mascarado — o servidor confere o dígito verificador e grava só dígitos.
+  // (CNPJ 12.345.678/0001-95 é válido; o smoke E3.1 usa outro documento.)
+  const criadoForn = await req('POST', '/fornecedores', {
+    nome: `Têxtil Smoke ${Date.now().toString().slice(-6)}`,
+    pessoa: 'pj',
+    cnpj: '12.345.678/0001-95',
+    cidade: 'Goiânia',
+    uf: 'GO',
+    telefone: '+55 (62) 3333-4444',
+    email: 'smoke@textil.com.br',
+    ativo: true,
+  });
+  check('fornecedores: POST cria o fornecedor com o contrato real', [200, 201].includes(criadoForn.status) && !!criadoForn.json?.id, `status ${criadoForn.status} ${msg(criadoForn.json)}`);
+  const fornId = criadoForn.json?.id;
+  check('fornecedores: CNPJ normalizado para dígitos e telefone canônico',
+    criadoForn.json?.cnpj === '12345678000195' && criadoForn.json?.telefone === '6233334444',
+    `cnpj=${criadoForn.json?.cnpj} telefone=${criadoForn.json?.telefone}`);
+
+  // Documento inválido (dígito verificador errado) é recusado com erro no campo.
+  const docInvalido = await req('POST', '/fornecedores', { nome: 'Doc inválido Smoke', cnpj: '12345678000196' });
+  check('fornecedores: CNPJ com dígito verificador errado → 400 com erro no campo cnpj',
+    docInvalido.status === 400 && !!docInvalido.json?.fields?.cnpj,
+    `status ${docInvalido.status} ${msg(docInvalido.json)}`);
+
+  // PF com CPF válido (529.982.247-25): o dicionário pf/pj/estrangeiro é o do
+  // servidor e a mesma validação de documento se aplica.
+  const criadoPf = await req('POST', '/fornecedores', { nome: `PF Smoke ${Date.now().toString().slice(-6)}`, pessoa: 'pf', cnpj: '529.982.247-25' });
+  check('fornecedores: PF criada com CPF válido (dígitos normalizados)',
+    [200, 201].includes(criadoPf.status) && criadoPf.json?.cnpj === '52998224725',
+    `status ${criadoPf.status} cnpj=${criadoPf.json?.cnpj}`);
+
+  // Listagem: busca por nome e por dígitos do documento + filtros reais.
+  const listaForn = await req('GET', `/fornecedores?q=${encodeURIComponent(criadoForn.json?.nome || '')}`);
+  check('fornecedores: busca por nome na listagem do servidor', listaForn.json?.rows?.some((r) => Number(r.id) === Number(fornId)));
+  const porDoc = await req('GET', '/fornecedores?q=12345678000195');
+  check('fornecedores: busca por dígitos do CNPJ encontra o registro', porDoc.json?.rows?.some((r) => Number(r.id) === Number(fornId)));
+  const porCpf = await req('GET', '/fornecedores?q=52998224725');
+  check('fornecedores: busca por dígitos do CPF encontra o registro', porCpf.json?.rows?.some((r) => Number(r.id) === Number(criadoPf.json?.id)));
+  const porPessoa = await req('GET', '/fornecedores?f.pessoa=pf&pageSize=200');
+  check('fornecedores: filtro f.pessoa recorta no servidor',
+    porPessoa.json?.rows?.some((r) => Number(r.id) === Number(criadoPf.json?.id)) &&
+    !porPessoa.json?.rows?.some((r) => Number(r.id) === Number(fornId)));
+  const porUf = await req('GET', '/fornecedores?f.uf=GO&pageSize=200');
+  check('fornecedores: filtro f.uf recorta no servidor', porUf.json?.rows?.some((r) => Number(r.id) === Number(fornId)));
+  const porAtivo = await req('GET', '/fornecedores?f.ativo=true&pageSize=200');
+  check('fornecedores: filtro f.ativo=true', porAtivo.json?.rows?.some((r) => Number(r.id) === Number(fornId)));
+
+  // Leitura e edição pelo contrato genérico (a página /fornecedores/:id/editar).
+  const lidoForn = await req('GET', `/fornecedores/${fornId}`);
+  check('fornecedores: GET /:id devolve o registro', lidoForn.status === 200 && lidoForn.json?.id === fornId, `status ${lidoForn.status}`);
+  const editadoForn = await req('PUT', `/fornecedores/${fornId}`, { nome_fantasia: 'Smoke Malharia', condicao_pagamento: '30/60/90 dias' });
+  check('fornecedores: PUT edita pelo contrato real',
+    editadoForn.status === 200 && editadoForn.json?.nome_fantasia === 'Smoke Malharia', `status ${editadoForn.status}`);
+
+  // UTILIZAÇÃO: contagem real dos pedidos de compra (agregada, em lote).
+  const compraForn = await req('POST', '/compras', { fornecedor_id: fornId, data: '2026-10-01' });
+  check('fornecedores: a compra do smoke foi criada', [200, 201].includes(compraForn.status), `status ${compraForn.status} ${msg(compraForn.json)}`);
+  const listaUsoForn = await req('GET', `/fornecedores?q=${encodeURIComponent(criadoForn.json?.nome || '')}`);
+  const linhaUsoForn = listaUsoForn.json?.rows?.find((r) => Number(r.id) === Number(fornId));
+  check('fornecedores: Utilização traz a contagem real (pedidos de compra)',
+    Number(linhaUsoForn?.uso_vinculado) === 1 && linhaUsoForn?.uso_vinculado_label === '1 compra',
+    `uso=${linhaUsoForn?.uso_vinculado_label}`);
+
+  // Exclusão bloqueada por histórico protegido + saída por desativação.
+  const bloqueadaForn = await req('DELETE', `/fornecedores/${fornId}`);
+  const diagForn = bloqueadaForn.json?.details?.dependencias;
+  check('fornecedores: DELETE vinculado → 409 dependencias_vinculadas',
+    bloqueadaForn.status === 409 && bloqueadaForn.json?.code === 'dependencias_vinculadas', `status ${bloqueadaForn.status}`);
+  check('fornecedores: diagnóstico diz onde/quantos/por quê (Compras)',
+    diagForn?.bloqueado === true && diagForn?.modulosBloqueantes?.includes('Compras') &&
+    diagForn?.vinculos?.some((v) => v.tabela === 'compras' && v.quantidade >= 1 && Array.isArray(v.ids) && v.motivo));
+  const sobreviveu = await req('GET', `/fornecedores/${fornId}`);
+  check('fornecedores: nada foi apagado — o registro permanece', sobreviveu.status === 200);
+  const desativadoForn = await req('PUT', `/fornecedores/${fornId}`, { ativo: false });
+  check('fornecedores: desativar preserva o fornecedor e o histórico',
+    desativadoForn.status === 200 && desativadoForn.json?.ativo === false, `status ${desativadoForn.status}`);
+  const aindaLaForn = await req('GET', `/fornecedores/${fornId}`);
+  check('fornecedores: o fornecedor desativado continua na leitura', aindaLaForn.status === 200 && aindaLaForn.json?.ativo === false);
+  const compraIntacta = await req('GET', `/compras/${compraForn.json?.id}`);
+  check('fornecedores: a compra continua apontando para o fornecedor desativado',
+    compraIntacta.status === 200 && Number(compraIntacta.json?.fornecedor_id) === Number(fornId));
+  const listaInativos = await req('GET', '/fornecedores?f.ativo=false&pageSize=200');
+  check('fornecedores: o desativado aparece no filtro de inativos', listaInativos.json?.rows?.some((r) => Number(r.id) === Number(fornId)));
+
+  // Fornecedor sem vínculo segue o fluxo normal de exclusão.
+  const semUsoForn = await req('POST', '/fornecedores', { nome: `Fornecedor sem uso ${Date.now().toString().slice(-6)}` });
+  const excluidaForn = await req('DELETE', `/fornecedores/${semUsoForn.json?.id}`);
+  check('fornecedores: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluidaForn.status), `status ${excluidaForn.status}`);
+  const sumiu = await req('GET', `/fornecedores/${semUsoForn.json?.id}`);
+  check('fornecedores: o excluído some da leitura (404)', sumiu.status === 404, `status ${sumiu.status}`);
+}
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);
 check('sem token → 401', semToken.status === 401, `status ${semToken.status}`);

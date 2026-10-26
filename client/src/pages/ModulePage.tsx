@@ -114,6 +114,7 @@ const EmpresasPage = lazy(() => import('./EmpresasPage'));
 const InutilizacoesPage = lazy(() => import('./InutilizacoesPage'));
 const ColecoesPage = lazy(() => import('./ColecoesPage'));
 const InsumosPage = lazy(() => import('./InsumosPage'));
+const FornecedoresPage = lazy(() => import('./FornecedoresPage'));
 
 const PAGE_SIZE = 25;
 /** Tamanhos de página oferecidos na listagem (server-side). */
@@ -154,6 +155,9 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'inutilizacoes') return <Suspense fallback={<SubPageLoading />}><InutilizacoesPage /></Suspense>;
   if (module.id === 'colecoes') return <Suspense fallback={<SubPageLoading />}><ColecoesPage /></Suspense>;
   if (module.id === 'insumos') return <Suspense fallback={<SubPageLoading />}><InsumosPage /></Suspense>;
+  // Fornecedores: LISTA dedicada no padrão LISTA → PÁGINA (cadastro/edição em
+  // /fornecedores/novo e /fornecedores/:id/editar — nunca no modal genérico).
+  if (module.id === 'fornecedores') return <Suspense fallback={<SubPageLoading />}><FornecedoresPage /></Suspense>;
 
   if (!module.resource || !resource) return <PlannedModule module={module} />;
   return <ResourceCrud key={resource.key} module={module} resource={resource} />;
@@ -1180,9 +1184,10 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       )}
 
       {/* Modal de cadastro / edição — APENAS para os recursos que ainda não
-          migraram para o padrão LISTA → PÁGINA. Cores, Produtos, Categorias,
-          Clientes e Vendas já vivem em página própria (FORM_DIRETO): nesses
-          casos `openCreate`/`openEdit` navegam e este bloco nunca abre. */}
+          migraram para o padrão LISTA → PÁGINA. Quem está em FORM_DIRETO
+          (clientes, produtos, vendas, categorias, cores, coleções, grades,
+          insumos e fornecedores) vive em página própria: `openCreate`/`openEdit`
+          navegam e este bloco nunca abre. */}
       {!FORM_DIRETO.has(resource.key) && (
         <Modal
           open={formOpen}
