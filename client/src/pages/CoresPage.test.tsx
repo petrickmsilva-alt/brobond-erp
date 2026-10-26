@@ -1,24 +1,25 @@
 // ============================================================================
-// CADASTROS › CORES — padrão profissional (lista + drawer).
+// CADASTROS › CORES — lista profissional (a tela principal do módulo).
 //
-// Trava o contrato da tela:
+// Trava o contrato da LISTAGEM, que não muda com o microfix visual:
 //   A. lista abre com cabeçalho, amostra, nome, HEX, status e utilização;
 //   B. busca vai para o servidor (`q=`) e sobrevive ao debounce;
 //   C. filtro Ativas/Inativas usa o contrato existente (`f.ativo`), sem SQL novo;
-//   D. "Nova cor" abre DRAWER lateral (não o modal central);
-//   E. criar envia o payload canônico (HEX em #RRGGBB, status preservado);
-//   F. a amostra acompanha o HEX em tempo real;
-//   G. HEX inválido mostra erro e NÃO chega à API;
-//   H. editar abre o mesmo drawer com os dados preenchidos e salva por PUT;
-//   I. o status do registro é preservado na edição e há ação de desativar;
+//   D. "Nova cor" NAVEGA para /cores/novo — página normal do ERP, sem modal,
+//      sem drawer e sem overlay;
+//   H. editar NAVEGA para /cores/:id/editar (mesma regra);
+//   I. ação Desativar usa o PUT existente e mantém o registro;
 //   J/K. operador SEM piso de escrita: lê, mas não cria/edita/exclui;
 //   L. exclusão bloqueada usa o diagnóstico de vínculos (PR #83) e oferece
 //      "Desativar cor" em vez de forçar o DELETE;
 //   M. cor sem vínculo segue o fluxo normal de exclusão.
+//
+// O formulário em si (campos, HEX, preview, salvar/cancelar) é coberto por
+// CorFormPage.test.tsx — aqui só se garante que a lista manda para a página.
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import ModulePage from './ModulePage';
 import { ToastProvider } from '../components/ui';
 import { api } from '../lib/api';
@@ -61,7 +62,6 @@ vi.mock('../lib/meta', async (importOriginal) => {
     labelFields: ['nome'],
     ops: { create: true, update: true, delete: true },
     minPerfilEscrita: 'gerente',
-    editor: 'drawer',
     filterFields: ['ativo'],
     quickFilters: [
       {
@@ -161,11 +161,19 @@ function ultimaLista(): string {
   return chamadas[chamadas.length - 1] ?? '';
 }
 
+/**
+ * Monta a listagem com as rotas de destino REGISTRADAS (o roteador real do
+ * ERP). Assim o teste prova a navegação — e não uma abertura de formulário.
+ */
 function renderPagina() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/cores']}>
       <ToastProvider>
-        <ModulePage module={MODULE} />
+        <Routes>
+          <Route path="/cores" element={<ModulePage module={MODULE} />} />
+          <Route path="/cores/novo" element={<div>Página nova cor</div>} />
+          <Route path="/cores/:id/editar" element={<div>Página editar cor</div>} />
+        </Routes>
       </ToastProvider>
     </MemoryRouter>
   );
@@ -269,6 +277,41 @@ describe('Cores — lista profissional', () => {
     await waitFor(() => expect(ultimaLista()).not.toContain('f.ativo='));
   });
 
+  it('D. "Nova cor" NAVEGA para /cores/novo — sem modal, sem drawer, sem overlay', async () => {
+    renderPagina();
+    await screen.findByText('Azul marinho');
+
+    fireEvent.click(botaoNovaCor());
+
+    // A página normal do ERP é montada pelo roteador…
+    expect(await screen.findByText('Página nova cor')).toBeInTheDocument();
+    // …e NENHUMA superfície sobreposta é aberta (nem modal, nem drawer/sheet).
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.querySelector('[role="dialog"], [aria-modal="true"]')).toBeNull();
+    // Nada de formulário aberto sobre a lista: a lista saiu da tela.
+    expect(screen.queryByText('Azul marinho')).toBeNull();
+  });
+
+  it('H. editar NAVEGA para /cores/:id/editar (sem formulário sobreposto)', async () => {
+    renderPagina();
+    await screen.findByText('Cinza mescla');
+
+    fireEvent.click(within(linha('Cinza mescla')).getByLabelText('Editar'));
+
+    expect(await screen.findByText('Página editar cor')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('H2. duplo clique na linha também abre a PÁGINA de edição', async () => {
+    renderPagina();
+    await screen.findByText('Cinza mescla');
+
+    fireEvent.doubleClick(linha('Cinza mescla'));
+
+    expect(await screen.findByText('Página editar cor')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('J/K. operador lê o catálogo, mas não vê criar/editar/excluir (RBAC do servidor preservado)', async () => {
     auth.user = { id: 2, name: 'Operador', perfil: 'operador' };
     renderPagina();
@@ -283,124 +326,11 @@ describe('Cores — lista profissional', () => {
     // Nem o atalho de edição por duplo clique abre o formulário.
     fireEvent.doubleClick(linha('Azul marinho'));
     expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByText('Página editar cor')).toBeNull();
   });
 });
 
-describe('Cores — drawer de cadastro e edição', () => {
-  it('D. "Nova cor" abre o DRAWER (não o modal central) com os campos do metadado', async () => {
-    renderPagina();
-    fireEvent.click(botaoNovaCor());
-    // (o segundo "Nova cor" é o atalho flutuante do celular — mesmo destino)
-
-    const drawer = screen.getByRole('dialog', { name: 'Nova cor' });
-    expect(within(drawer).getByText('Cadastre uma cor para utilização no catálogo de produtos.')).toBeInTheDocument();
-    expect(within(drawer).getByLabelText(/^Nome/)).toBeInTheDocument();
-    expect(within(drawer).getByLabelText('Código HEX')).toBeInTheDocument();
-    expect(within(drawer).getByRole('checkbox', { name: 'Ativo' })).toBeChecked();
-    expect(within(drawer).getByRole('button', { name: 'Cancelar' })).toBeInTheDocument();
-    expect(within(drawer).getByRole('button', { name: 'Salvar cor' })).toBeInTheDocument();
-    // O formulário não duplica a barra de ações dentro do corpo.
-    expect(within(drawer).queryByRole('button', { name: /Incluir/ })).toBeNull();
-    // A lista continua no documento, atrás do painel (contexto preservado).
-    expect(await screen.findByText('Preto')).toBeInTheDocument();
-  });
-
-  it('E. cria cor válida enviando HEX canônico', async () => {
-    renderPagina();
-    fireEvent.click(botaoNovaCor());
-    // (o segundo "Nova cor" é o atalho flutuante do celular — mesmo destino)
-    const drawer = screen.getByRole('dialog', { name: 'Nova cor' });
-
-    fireEvent.change(within(drawer).getByLabelText(/^Nome/), { target: { value: '  Azul marinho  ' } });
-    fireEvent.change(within(drawer).getByLabelText('Código HEX'), { target: { value: '172038' } });
-    fireEvent.click(within(drawer).getByRole('button', { name: 'Salvar cor' }));
-
-    await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1));
-    expect(apiPost).toHaveBeenCalledWith('/cores', { nome: 'Azul marinho', hex: '#172038', ativo: true });
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Nova cor' })).toBeNull());
-  });
-
-  it('E2. nome duplicado mantém o drawer aberto com a mensagem amigável', async () => {
-    const { ApiError } = await import('../lib/api');
-    apiPost.mockRejectedValueOnce(
-      new (ApiError as unknown as new (s: number, m: string, f?: Record<string, string>) => Error)(
-        409,
-        'Já existe um registro com este nome.',
-        { nome: 'Já cadastrado' }
-      )
-    );
-    renderPagina();
-    fireEvent.click(botaoNovaCor());
-    const drawer = screen.getByRole('dialog', { name: 'Nova cor' });
-
-    fireEvent.change(within(drawer).getByLabelText(/^Nome/), { target: { value: 'azul marinho' } });
-    fireEvent.click(within(drawer).getByRole('button', { name: 'Salvar cor' }));
-
-    // Regra de unicidade existente: a API recusa e a tela explica no campo.
-    await waitFor(() => expect(within(drawer).getByText('Já existe um registro com este nome.')).toBeInTheDocument());
-    expect(within(drawer).getByText('Já cadastrado')).toBeInTheDocument();
-    // O drawer continua aberto para corrigir o nome.
-    expect(screen.getByRole('dialog', { name: 'Nova cor' })).toBeInTheDocument();
-    expect(apiPost).toHaveBeenCalledTimes(1);
-  });
-
-  it('F. a amostra acompanha o HEX em tempo real', async () => {
-    renderPagina();
-    fireEvent.click(botaoNovaCor());
-    // (o segundo "Nova cor" é o atalho flutuante do celular — mesmo destino)
-    const drawer = screen.getByRole('dialog', { name: 'Nova cor' });
-    const hex = within(drawer).getByLabelText('Código HEX');
-
-    fireEvent.change(within(drawer).getByLabelText(/^Nome/), { target: { value: 'Azul marinho' } });
-    fireEvent.change(hex, { target: { value: '#172038' } });
-    expect(within(drawer).getByRole('img', { name: /Amostra da cor Azul marinho: #172038/i })).toHaveStyle({ backgroundColor: '#172038' });
-
-    fireEvent.change(hex, { target: { value: '#F5F5F0' } });
-    expect(within(drawer).getByRole('img', { name: /Amostra da cor Azul marinho: #F5F5F0/i })).toHaveStyle({ backgroundColor: '#F5F5F0' });
-
-    // Forma curta é expandida ao sair do campo (mesma regra do servidor).
-    fireEvent.change(hex, { target: { value: '#abc' } });
-    fireEvent.blur(hex);
-    expect(hex).toHaveValue('#AABBCC');
-  });
-
-  it('G. HEX inválido mostra erro claro e não é enviado à API', async () => {
-    renderPagina();
-    fireEvent.click(botaoNovaCor());
-    // (o segundo "Nova cor" é o atalho flutuante do celular — mesmo destino)
-    const drawer = screen.getByRole('dialog', { name: 'Nova cor' });
-
-    fireEvent.change(within(drawer).getByLabelText(/^Nome/), { target: { value: 'Azul' } });
-    fireEvent.change(within(drawer).getByLabelText('Código HEX'), { target: { value: '#12' } });
-
-    // Erro em tempo real na prévia.
-    expect(within(drawer).getByText('Informe o HEX no formato #RRGGBB (ex.: #172038).')).toBeInTheDocument();
-
-    fireEvent.click(within(drawer).getByRole('button', { name: 'Salvar cor' }));
-
-    await waitFor(() => expect(within(drawer).getAllByText(/formato #RRGGBB/i).length).toBeGreaterThan(1));
-    expect(apiPost).not.toHaveBeenCalled();
-    // O drawer permanece aberto para corrigir o campo.
-    expect(screen.getByRole('dialog', { name: 'Nova cor' })).toBeInTheDocument();
-  });
-
-  it('H/I. edita a cor preservando o status atual', async () => {
-    renderPagina();
-    await screen.findByText('Cinza mescla');
-    fireEvent.click(within(linha('Cinza mescla')).getByLabelText('Editar'));
-
-    const drawer = screen.getByRole('dialog', { name: 'Editar cor' });
-    const nome = within(drawer).getByLabelText(/^Nome/);
-    expect(nome).toHaveValue('Cinza mescla');
-    expect(within(drawer).getByRole('checkbox', { name: 'Ativo' })).not.toBeChecked();
-
-    fireEvent.change(nome, { target: { value: 'Cinza mescla escuro' } });
-    fireEvent.change(within(drawer).getByLabelText('Código HEX'), { target: { value: '#6b7280' } });
-    fireEvent.click(within(drawer).getByRole('button', { name: 'Salvar cor' }));
-
-    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/cores/4', { nome: 'Cinza mescla escuro', hex: '#6B7280', ativo: false }));
-  });
-
+describe('Cores — ações da lista (contrato existente)', () => {
   it('I. ação Desativar usa o PUT existente e mantém o registro', async () => {
     renderPagina();
     await screen.findByText('Azul marinho');

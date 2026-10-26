@@ -96,11 +96,11 @@ export type ListaConfig = {
    * visíveis). Vazio = recurso sem amostra.
    */
   amostra?: string;
-  /** Título do drawer de edição (padrão: "Editar <singular>"). */
+  /** Título da PÁGINA de edição (padrão: "Editar <singular>"). */
   rotuloEditar?: string;
-  /** Descrição do drawer de cadastro/edição — texto de apoio do formulário. */
-  descricaoDrawer?: string;
-  /** Rótulo do botão de salvar no drawer (padrão: "Salvar"). */
+  /** Descrição da PÁGINA de cadastro/edição — texto de apoio do formulário. */
+  descricaoCadastro?: string;
+  /** Rótulo do botão de salvar da página (padrão: "Salvar"). */
   rotuloSalvar?: string;
   /**
    * Texto exibido quando a exclusão é recusada por vínculos. Quando ausente, o
@@ -180,7 +180,8 @@ const CONFIG_CATEGORIAS: ListaConfig = {
 };
 
 /**
- * Cores: PRIMEIRO cadastro simples no padrão profissional (lista + drawer).
+ * Cores: cadastro simples no padrão do BROBOND ERP — LISTA → PÁGINA
+ * (`/cores/novo`, `/cores/:id/editar`), nunca formulário sobreposto.
  * A ordem das colunas é a da pergunta que se faz ao revisar a cartela: qual é a
  * cor (amostra + nome), como ela é representada (HEX), ela está disponível
  * (status) e onde ela é usada (utilização).
@@ -207,7 +208,7 @@ const CONFIG_CORES: ListaConfig = {
   buscaPlaceholder: 'Buscar cor...',
   rotuloNovo: 'Nova cor',
   rotuloEditar: 'Editar cor',
-  descricaoDrawer: 'Cadastre uma cor para utilização no catálogo de produtos.',
+  descricaoCadastro: 'Cadastre uma cor para utilização no catálogo de produtos.',
   rotuloSalvar: 'Salvar cor',
   mensagemVinculos: 'Não é possível excluir esta cor porque existem registros vinculados.',
   vazioTitulo: 'Nenhuma cor cadastrada',
@@ -331,17 +332,17 @@ export function rotuloNovo(recurso: string, singular: string): string {
   return configDaLista(recurso).rotuloNovo ?? `Novo ${singular.toLowerCase()}`;
 }
 
-/** Título do formulário de EDIÇÃO (drawer/modal) — padrão "Editar <singular>". */
+/** Título da PÁGINA de EDIÇÃO — padrão "Editar <singular>". */
 export function rotuloEditar(recurso: string, singular: string): string {
   return configDaLista(recurso).rotuloEditar ?? `Editar ${singular.toLowerCase()}`;
 }
 
-/** Descrição do drawer de cadastro/edição (texto de apoio). */
-export function descricaoDoDrawer(recurso: string): string | undefined {
-  return configDaLista(recurso).descricaoDrawer;
+/** Descrição da PÁGINA de cadastro/edição (texto de apoio do formulário). */
+export function descricaoDoCadastro(recurso: string): string | undefined {
+  return configDaLista(recurso).descricaoCadastro;
 }
 
-/** Rótulo do botão de salvar do drawer (padrão: "Salvar"). */
+/** Rótulo do botão de salvar da página de cadastro (padrão: "Salvar"). */
 export function rotuloSalvar(recurso: string): string {
   return configDaLista(recurso).rotuloSalvar ?? 'Salvar';
 }

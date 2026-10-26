@@ -150,6 +150,33 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     expect(within(trilha()).queryByText('#12')).not.toBeInTheDocument();
   });
 
+  it('Cores: as páginas de cadastro/edição (/cores/novo e /cores/:id/editar) têm trilha própria e o nível Cores volta para a lista', async () => {
+    // Padrão LISTA → PÁGINA: a rota filha pertence ao módulo Cores e o
+    // breadcrumb completo é BROBOND ERP › Cadastros › Cores › Novo/Editar.
+    const casos = [
+      { rota: '/cores/novo', ultimo: 'Novo' },
+      { rota: '/cores/4/editar', ultimo: 'Editar' },
+    ];
+
+    for (const c of casos) {
+      const user = userEvent.setup();
+      const view = await renderShell(c.rota);
+      const nav = trilha();
+      expect(within(nav).getByRole('link', { name: 'BROBOND ERP' })).toHaveAttribute('href', '/');
+      expect(within(nav).getByText('Cadastros')).toBeInTheDocument(); // área, sem link
+      expect(within(nav).getByRole('link', { name: 'Cores' })).toHaveAttribute('href', '/cores');
+      expect(within(nav).getByText(c.ultimo)).toHaveAttribute('aria-current', 'page');
+
+      // Clicar em "Cores" devolve para a LISTA (sem recarregar a página).
+      await user.click(within(nav).getByRole('link', { name: 'Cores' }));
+      await waitFor(() =>
+        expect(within(trilha()).getAllByText('Cores').at(-1)).toHaveAttribute('aria-current', 'page')
+      );
+      expect(within(trilha()).queryByText(c.ultimo)).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
   it('o breadcrumb reflete as novas áreas da Árvore Master (Vendas, Estoque & Suprimentos, Produção, Fiscal, Administração, Commerce, Creators, Utilidades Globais)', async () => {
     const casos = [
       { rota: '/vendas/123', area: 'Vendas', modulo: 'Vendas', id: '#123' },

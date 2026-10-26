@@ -1286,13 +1286,20 @@ export const PAGES_ESPECIAIS = [
 export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
 
 /**
- * Recursos cujo cadastro/edição vive em PÁGINA PRÓPRIA (não no modal genérico):
+ * Recursos cujo cadastro/edição vive em PÁGINA PRÓPRIA (nunca em modal, drawer
+ * ou qualquer formulário sobreposto à lista):
  * - /clientes/novo e /clientes/:id/editar (listagem em /clientes)
  * - /produtos/novo e /produtos/:id/editar (listagem em /produtos)
  * - /vendas/novo e /vendas/:id/editar (listagem em /vendas e detalhe em /vendas/:id)
  * - /categorias/novo e /categorias/:id/editar (listagem em /categorias)
+ * - /cores/novo e /cores/:id/editar (listagem em /cores)
+ *
+ * É a lista canônica do padrão LISTA → PÁGINA do BROBOND ERP: quem entra aqui
+ * navega (rota filha do módulo) em vez de abrir a superfície do formulário na
+ * própria listagem. Demais cadastros simples devem migrar para cá — não para
+ * novas superfícies de modal/drawer.
  */
-export const FORM_DIRETO = new Set(['clientes', 'produtos', 'vendas', 'categorias']);
+export const FORM_DIRETO = new Set(['clientes', 'produtos', 'vendas', 'categorias', 'cores']);
 
 export type NavSection = {
   id: NavSectionId;

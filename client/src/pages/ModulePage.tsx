@@ -36,13 +36,20 @@ import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Pagination } from '../components/ui-kit';
 import ReauthModal from '../components/ReauthModal';
 import { DependenciasModal, type DiagnosticoDependencias } from '../components/DependenciasModal';
-import { fieldErrors, initialValues, RecordForm, toPayload, useRefOptions, type FormValues } from '../components/RecordForm';
+import {
+  fieldErrors,
+  initialValues,
+  normalizarCamposCor,
+  RecordForm,
+  toPayload,
+  useRefOptions,
+  validarFormulario,
+  type FormValues,
+} from '../components/RecordForm';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import { useLocalStorageChoice, useLocalStorageInt, useLocalStorageSet } from '../lib/useLocalStorage';
-import { erroHex, hexValido, normalizarHex } from '../lib/hex';
 import PlannedModule from './PlannedModule';
 import CatalogoShareModal from '../components/CatalogoShareModal';
-import { CadastroDrawer } from '../components/CadastroDrawer';
 import CatalogoInsights from '../components/CatalogoInsights';
 import PortalAccessModal from '../components/PortalAccessModal';
 // Listagem (tabela/visual): apresentação isolada do CRUD genérico.
@@ -62,7 +69,6 @@ import {
   camposDoCard,
   chipsDeFiltros,
   DENSIDADE_PADRAO,
-  descricaoDoDrawer,
   DENSIDADES,
   densidadeLegada,
   MODO_PADRAO,
@@ -71,9 +77,7 @@ import {
   permiteAlternarAtivo,
   mensagemDeVinculos,
   placeholderBusca,
-  rotuloEditar,
   rotuloNovo,
-  rotuloSalvar,
   textoContagem,
   textoVazio,
   type ModoVisualizacao,
@@ -452,7 +456,8 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
 
   // --- formulário ---
   function openCreate() {
-    // Cadastro em página própria (clientes PF/PJ): o modal genérico não abre.
+    // Padrão LISTA → PÁGINA do BROBOND ERP: estes cadastros têm rota própria
+    // (/cores/novo, /categorias/novo...) e NÃO abrem formulário sobreposto.
     if (FORM_DIRETO.has(resource.key)) {
       navigate(`/${resource.key}/novo`);
       return;
@@ -471,7 +476,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       navigate(`/${resource.key}/${row.id}`);
       return;
     }
-    // Cadastro em página própria (clientes PF/PJ).
+    // Padrão LISTA → PÁGINA do BROBOND ERP: edição em rota própria.
     if (FORM_DIRETO.has(resource.key)) {
       navigate(`/${resource.key}/${row.id}/editar`);
       return;
@@ -501,48 +506,15 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   }
 
   /**
-   * Normaliza os campos de COR (#abc → #AABBCC, 172038 → #172038) com a MESMA
-   * regra do servidor. Devolve a mesma referência quando nada mudou.
+   * Validação local rápida (obrigatórios, HEX) antes de chamar a API. A regra é
+   * a COMPARTILHADA com as páginas de cadastro (validarFormulario), para o
+   * mesmo campo nunca ter duas mensagens diferentes no ERP.
    */
-  function normalizarCores(v: FormValues): FormValues {
-    let out: FormValues | null = null;
-    for (const f of resource.fields) {
-      if (f.type !== 'color') continue;
-      const atual = String(v[f.name] ?? '');
-      const canonico = normalizarHex(atual);
-      if (canonico !== atual) {
-        out = out ?? { ...v };
-        out[f.name] = canonico;
-      }
-    }
-    return out ?? v;
-  }
-
-  /** Validação local rápida (obrigatórios, HEX) antes de chamar a API. */
   function validateLocal(vals: FormValues = values): boolean {
-    const errs: Record<string, string> = {};
-    for (const f of resource.fields) {
-      if (f.form === false || f.readonly) continue;
-      const required = f.required || (!editing && f.requiredOnCreate);
-      const v = vals[f.name];
-      if (required && f.type === 'multiref') {
-        if (!Array.isArray(v) || v.length === 0) errs[f.name] = 'Selecione ao menos um item';
-      } else if (required && f.type !== 'boolean' && (v === undefined || String(v).trim() === '')) {
-        errs[f.name] = 'Campo obrigatório';
-      }
-      if (f.type === 'password' && typeof v === 'string' && v && f.min && v.length < f.min) errs[f.name] = `Mínimo de ${f.min} caracteres`;
-      // HEX: vazio é permitido pelo contrato; valor preenchido precisa ser
-      // #RRGGBB. Inválido NÃO vai para a API (o servidor recusaria de qualquer
-      // forma — aqui o erro aparece antes, no campo certo).
-      if (f.type === 'color' && !hexValido(v)) errs[f.name] = erroHex(v)!;
-    }
+    const { errors: errs, formError: msg } = validarFormulario(resource, vals, !!editing);
     setErrors(errs);
-    if (Object.keys(errs).length) {
-      setFormError(
-        Object.keys(errs).some((n) => resource.fields.find((f) => f.name === n)?.type === 'color')
-          ? 'Confira o código HEX destacado. Use o formato #RRGGBB (ex.: #172038).'
-          : 'Preencha os campos obrigatórios destacados.'
-      );
+    if (msg) {
+      setFormError(msg);
       return false;
     }
     return true;
@@ -550,7 +522,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
 
   async function submit() {
     setFormError('');
-    const valores = normalizarCores(values);
+    const valores = normalizarCamposCor(resource, values);
     if (valores !== values) setValues(valores);
     if (!validateLocal(valores)) return;
     setSaving(true);
@@ -595,15 +567,6 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           toast.success(`${resource.singular} incluído(a). Agora você pode adicionar as fotos.`);
           setEditing(created);
           setValues(initialValues(resource, created));
-          setErrors({});
-        } else if (resource.editor === 'drawer') {
-          // Cadastro simples em DRAWER: salvar fecha o painel e devolve a
-          // pessoa à lista (o registro novo já aparece nela). Manter o drawer
-          // aberto e limpo (comportamento histórico do modal) esconderia o
-          // resultado do cadastro atrás do próprio formulário.
-          toast.success(`${resource.singular} incluído(a) com sucesso.`);
-          setFormOpen(false);
-          setValues(initialValues(resource, null, defaultLocal));
           setErrors({});
         } else {
           toast.success(`${resource.singular} incluído(a) com sucesso.`);
@@ -1186,40 +1149,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         <ImportModal open={importOpen} onClose={() => setImportOpen(false)} tipoConfig={importTipo} onDone={() => load()} />
       )}
 
-      {/* Cadastro simples: DRAWER lateral (a lista continua visível).
-          `editor` vem do metadado do recurso — nenhuma tela paralela. */}
-      {resource.editor === 'drawer' ? (
-        <CadastroDrawer
-          open={formOpen}
-          onClose={closeForm}
-          resource={resource}
-          editing={!!editing}
-          title={editing ? rotuloEditar(resource.key, resource.singular) : rotuloNovo(resource.key, resource.singular)}
-          description={
-            editing
-              ? 'Atualize os dados deste cadastro. As alterações valem para a empresa ativa.'
-              : descricaoDoDrawer(resource.key)
-          }
-          values={values}
-          errors={errors}
-          formError={formError}
-          onChange={onChange}
-          onSubmit={submit}
-          busy={saving}
-          refOptions={refOptionsForm}
-          submitLabel={rotuloSalvar(resource.key)}
-          cancelLabel="Cancelar"
-          before={
-            hasImages && editing ? (
-              <div className="mb-4">
-                <span className="label">Fotos</span>
-                <ImageField key={editing.id} resource={resource} recordId={editing.id} initial={editing.fotos} canEdit={canUpdate} onChange={() => load()} />
-              </div>
-            ) : undefined
-          }
-        />
-      ) : (
-        /* Modal de cadastro / edição (demais recursos — comportamento histórico) */
+      {/* Modal de cadastro / edição — APENAS para os recursos que ainda não
+          migraram para o padrão LISTA → PÁGINA. Cores, Produtos, Categorias,
+          Clientes e Vendas já vivem em página própria (FORM_DIRETO): nesses
+          casos `openCreate`/`openEdit` navegam e este bloco nunca abre. */}
+      {!FORM_DIRETO.has(resource.key) && (
         <Modal
           open={formOpen}
           onClose={closeForm}
