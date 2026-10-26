@@ -1218,8 +1218,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         mensagem={mensagemDeVinculos(resource.key)}
         // Regra do ERP: cadastro com histórico NÃO é apagado — desativa-se. O
         // diagnóstico continua somente leitura; a ação é o fluxo normal (PUT).
+        // Só faz sentido quando o domínio TEM o campo `ativo` (Cores, Coleções,
+        // Categorias...): em Tamanhos e Grades, que não o possuem, oferecer
+        // "Desativar" dispararia um PUT inválido — por isso não aparece.
         acaoRecomendada={
-          diagAlvo && diagAlvo.ativo !== false && canUpdate
+          diagAlvo && resource.fields.some((f) => f.name === 'ativo') && diagAlvo.ativo !== false && canUpdate
             ? {
                 rotulo: `Desativar ${resource.singular.toLowerCase()}`,
                 descricao: 'Mantém o histórico e tira o cadastro das listas de seleção.',

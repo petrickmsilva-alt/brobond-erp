@@ -254,11 +254,49 @@ const CONFIG_COLECOES: ListaConfig = {
   contagem: { singular: 'coleção', plural: 'coleções' },
 };
 
+/**
+ * Tamanhos: o dicionário de tamanhos (PP, P, M, G, GG, 36, 38, 40...) — cadastro
+ * GLOBAL no padrão LISTA → PÁGINA do BROBOND ERP (`/tamanhos/novo`,
+ * `/tamanhos/:id/editar`), exatamente como Cores e Coleções: o formulário é uma
+ * página do ERP, nunca modal/drawer.
+ *
+ * A ordem das colunas é a da pergunta que se faz ao revisar o dicionário: qual é
+ * o tamanho (código), como ele é descrito (descrição) e onde ele se encaixa na
+ * sequência da grade (ordem). Tamanhos NÃO têm campo Ativo no domínio (por isso
+ * não há ação Ativar/Desativar nem coluna Status) — a apresentação reflete o
+ * modelo real, sem inventar atributos.
+ */
+const CONFIG_TAMANHOS: ListaConfig = {
+  prioridade: ['id', 'codigo', 'descricao', 'ordem'],
+  rotulos: {
+    codigo: 'Código',
+    descricao: 'Descrição',
+    ordem: 'Ordem na grade',
+  },
+  larguras: {
+    codigo: { min: 'min-w-[110px]', max: 'max-w-[140px]' },
+    descricao: { min: 'min-w-[220px]', max: 'max-w-[340px]' },
+    ordem: { min: 'min-w-[120px]', max: 'max-w-[150px]' },
+  },
+  titulo: 'codigo',
+  card: ['codigo', 'descricao', 'ordem'],
+  buscaPlaceholder: 'Buscar tamanho...',
+  rotuloNovo: 'Novo tamanho',
+  rotuloEditar: 'Editar tamanho',
+  descricaoCadastro: 'Cadastre um tamanho para compor as grades do catálogo de produtos.',
+  rotuloSalvar: 'Salvar tamanho',
+  mensagemVinculos: 'Não é possível excluir este tamanho porque existem registros vinculados.',
+  vazioTitulo: 'Nenhum tamanho cadastrado',
+  vazioDescricao: 'Cadastre o primeiro tamanho para montar as grades do catálogo.',
+  contagem: { singular: 'tamanho', plural: 'tamanhos' },
+};
+
 const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   produtos: CONFIG_PRODUTOS,
   categorias: CONFIG_CATEGORIAS,
   cores: CONFIG_CORES,
   colecoes: CONFIG_COLECOES,
+  tamanhos: CONFIG_TAMANHOS,
 };
 
 export function configDaLista(recurso: string): ListaConfig {

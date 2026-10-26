@@ -21,6 +21,7 @@ const ProdutoFormPage = lazy(() => import('./pages/ProdutoFormPage'));
 const CategoriaFormPage = lazy(() => import('./pages/CategoriaFormPage'));
 const CorFormPage = lazy(() => import('./pages/CorFormPage'));
 const ColecaoFormPage = lazy(() => import('./pages/ColecaoFormPage'));
+const TamanhoFormPage = lazy(() => import('./pages/TamanhoFormPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
 const FichaDetail = lazy(() => import('./pages/FichaDetail'));
@@ -177,6 +178,23 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="colecoes">
                   <ColecaoFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Cadastro de tamanhos em página própria (fora de qualquer modal/drawer). */}
+            <Route
+              path="tamanhos/novo"
+              element={
+                <ModuleAccess moduleId="tamanhos">
+                  <TamanhoFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="tamanhos/:id/editar"
+              element={
+                <ModuleAccess moduleId="tamanhos">
+                  <TamanhoFormPage />
                 </ModuleAccess>
               }
             />

@@ -379,7 +379,7 @@ describe('NAV_SECTIONS (fonte única do menu)', () => {
 
 describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
   it('inclui os cadastros que já vivem em página própria', () => {
-    expect([...FORM_DIRETO].sort()).toEqual(['categorias', 'clientes', 'colecoes', 'cores', 'produtos', 'vendas']);
+    expect([...FORM_DIRETO].sort()).toEqual(['categorias', 'clientes', 'colecoes', 'cores', 'produtos', 'tamanhos', 'vendas']);
   });
 
   it('Cores entra no padrão LISTA → PÁGINA: inventário e edição vivem no módulo /cores', () => {
@@ -399,6 +399,15 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
     expect(moduleOfPath('/colecoes')?.id).toBe('colecoes');
     expect(moduleOfPath('/colecoes/novo')?.id).toBe('colecoes');
     expect(moduleOfPath('/colecoes/12/editar')?.id).toBe('colecoes');
+  });
+
+  it('Tamanhos entra no padrão LISTA → PÁGINA: cadastro e edição vivem no módulo /tamanhos', () => {
+    expect(FORM_DIRETO.has('tamanhos')).toBe(true);
+    const tamanhos = MODULES.find((m) => m.id === 'tamanhos');
+    expect(tamanhos?.path).toBe('/tamanhos');
+    expect(moduleOfPath('/tamanhos')?.id).toBe('tamanhos');
+    expect(moduleOfPath('/tamanhos/novo')?.id).toBe('tamanhos');
+    expect(moduleOfPath('/tamanhos/12/editar')?.id).toBe('tamanhos');
   });
 
   it('cada recurso de FORM_DIRETO tem um módulo navegável na mesma rota', () => {
