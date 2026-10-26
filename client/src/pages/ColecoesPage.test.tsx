@@ -1,24 +1,29 @@
 // ============================================================================
-// CADASTRO DE COLEÇÕES — LISTA + DRAWER LATERAL.
+// CADASTRO DE COLEÇÕES — LISTA (tela principal).
 //
-// Trava o contrato de UX que substitui a caixa modal central:
-//   • a LISTA é a tela; "Nova coleção"/"Editar" abrem um DRAWER lateral
-//     (role=dialog), nunca um modal central — o contexto da lista permanece;
+// Trava o padrão LISTA → PÁGINA do BROBOND ERP (o MESMO de Cores):
+//   • a LISTA é a tela; "Nova coleção" NAVEGA para /colecoes/novo e "Editar"
+//     NAVEGA para /colecoes/:id/editar — nunca abre modal, drawer ou overlay;
 //   • a lista vem do servidor (GET /colecoes) com busca (q) e filtro de status
 //     (f.ativo), sem SQL paralelo no front;
-//   • o formulário envia só os campos REAIS do recurso (nome, temporada, ano,
-//     ativo) — nenhum campo inventado;
 //   • "Utilização" mostra a contagem REAL de produtos (ou "—");
 //   • DELETE bloqueado (409 dependencias_vinculadas) abre o "Ver vínculos" e a
 //     saída oferecida é DESATIVAR (preserva o histórico);
 //   • operador não vê os controles de escrita (a autoridade real é a API).
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import ColecoesPage from './ColecoesPage';
 import { ToastProvider } from '../components/ui';
 import { api, ApiError } from '../lib/api';
 import type { DiagnosticoDependencias } from '../components/DependenciasModal';
+
+const navigateMock = vi.fn();
+
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useNavigate: () => navigateMock };
+});
 
 vi.mock('../lib/api', () => {
   class ApiErrorMock extends Error {
@@ -140,6 +145,7 @@ function montar() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  navigateMock.mockReset();
   mockUser.perfil = 'gerente';
   apiGet.mockResolvedValue(LISTA as never);
   apiPost.mockResolvedValue({ id: 99 } as never);
@@ -186,62 +192,34 @@ describe('Coleções — busca e filtro (B, C)', () => {
   });
 });
 
-describe('Coleções — Drawer novo/editar (D, E, F)', () => {
-  it('"Nova coleção" abre o DRAWER lateral (não um modal central)', async () => {
+describe('Coleções — navegação para a página própria (D, F)', () => {
+  it('"Nova coleção" NAVEGA para /colecoes/novo (sem modal/drawer/overlay)', async () => {
     montar();
     await screen.findByText('Verão 2027');
     fireEvent.click(screen.getAllByRole('button', { name: /Nova coleção/ })[0]);
-    const drawer = await screen.findByRole('dialog');
-    expect(within(drawer).getByRole('heading', { name: 'Nova coleção' })).toBeInTheDocument();
-    expect(within(drawer).getByText(/organizar os produtos do catálogo/)).toBeInTheDocument();
-    // Só os campos REAIS do recurso.
-    expect(within(drawer).getByLabelText(/Nome/)).toBeInTheDocument();
-    expect(within(drawer).getByLabelText('Temporada')).toBeInTheDocument();
-    expect(within(drawer).getByLabelText('Ano')).toBeInTheDocument();
-    expect(within(drawer).getByRole('switch')).toBeInTheDocument();
-    // A lista continua visível por trás (o contexto não se perde).
+
+    expect(navigateMock).toHaveBeenCalledWith('/colecoes/novo');
+    // Nenhuma superfície sobreposta é montada na lista.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.querySelector('[aria-modal="true"]')).toBeNull();
+    expect(document.querySelector('[data-drawer], [data-sheet]')).toBeNull();
+    // A lista permanece intacta.
     expect(screen.getByText('Inverno 2026')).toBeInTheDocument();
   });
 
-  it('cria uma coleção válida com o payload do recurso', async () => {
-    montar();
-    await screen.findByText('Verão 2027');
-    fireEvent.click(screen.getAllByRole('button', { name: /Nova coleção/ })[0]);
-    const drawer = await screen.findByRole('dialog');
-    fireEvent.change(within(drawer).getByLabelText(/Nome/), { target: { value: 'Verão 2028' } });
-    fireEvent.change(within(drawer).getByLabelText('Temporada'), { target: { value: 'Verão' } });
-    fireEvent.change(within(drawer).getByLabelText('Ano'), { target: { value: '2028' } });
-    fireEvent.submit(within(drawer).getByRole('form') as HTMLFormElement);
-
-    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/colecoes', { nome: 'Verão 2028', temporada: 'Verão', ano: 2028, ativo: true }));
-  });
-
-  it('não chama a API com nome vazio — erro junto do campo e nada é salvo', async () => {
-    montar();
-    await screen.findByText('Verão 2027');
-    fireEvent.click(screen.getAllByRole('button', { name: /Nova coleção/ })[0]);
-    const drawer = await screen.findByRole('dialog');
-    fireEvent.submit(within(drawer).getByRole('form') as HTMLFormElement);
-    expect(await within(drawer).findByText('Informe o nome da coleção.')).toBeInTheDocument();
-    expect(apiPost).not.toHaveBeenCalled();
-  });
-
-  it('"Editar" reutiliza o Drawer em modo edição, preenchido, e envia PUT', async () => {
+  it('"Editar" NAVEGA para /colecoes/:id/editar (sem modal/drawer/overlay)', async () => {
     montar();
     await screen.findByText('Verão 2027');
     fireEvent.click(screen.getByRole('button', { name: 'Ações da coleção Verão 2027' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Editar' }));
-    const drawer = await screen.findByRole('dialog');
-    expect(within(drawer).getByRole('heading', { name: 'Editar coleção' })).toBeInTheDocument();
-    const nome = within(drawer).getByLabelText(/Nome/) as HTMLInputElement;
-    expect(nome.value).toBe('Verão 2027');
-    fireEvent.change(nome, { target: { value: 'Verão 2027 Premium' } });
-    fireEvent.submit(within(drawer).getByRole('form') as HTMLFormElement);
-    await waitFor(() =>
-      expect(apiPut).toHaveBeenCalledWith('/colecoes/1', { nome: 'Verão 2027 Premium', temporada: 'Verão', ano: 2027, ativo: true })
-    );
+
+    expect(navigateMock).toHaveBeenCalledWith('/colecoes/1/editar');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.querySelector('[aria-modal="true"]')).toBeNull();
+    expect(document.querySelector('[data-drawer], [data-sheet]')).toBeNull();
   });
 });
+
 
 describe('Coleções — status (G)', () => {
   it('desativa pela linha com PUT { ativo: false }', async () => {
