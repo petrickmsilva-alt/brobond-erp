@@ -8,7 +8,7 @@
 import { AlertTriangle, Camera, CheckCircle2, XCircle } from 'lucide-react';
 import type { Field, ResourceMeta } from '../lib/meta';
 import { formatCell } from '../lib/format';
-import { normalizarHex } from '../lib/hex';
+import { corSegura } from '../lib/hex';
 import { ColorDot } from './ImageField';
 import { AmostraCor } from './AmostraCor';
 import { Badge } from './ui';
@@ -136,9 +136,10 @@ export function ValorCampo({ f, row, recurso }: { f: Field; row: Record<string, 
   if (f.type === 'color') {
     // Com coluna AMOSTRA dedicada, o HEX aqui é texto (evita duas amostras na
     // mesma linha). Sem a coluna, mantém a "bolinha" histórica ao lado do valor.
-    const texto = String(normalizarHex(v) || '—');
     if (campoDaAmostra(recurso)) {
       if (!v) return <span className="text-slate-300">—</span>;
+      // Canônico quando válido; valor legado aparece como está (nunca inventado).
+      const texto = corSegura(v) ?? String(v).trim();
       return <TextoTruncado texto={texto} className="font-mono text-xs uppercase" />;
     }
     return <ColorDot hex={v} label={v} />;
