@@ -15,6 +15,7 @@ import { attachImages, removeAllFiles } from './uploads';
 import { erroDependencias, montarDiagnostico, temHistoricoProtegido, type DiagnosticoDependencias } from './dependencias';
 import { aplicarRegrasPedido } from './itens';
 import { aplicarRegrasOrdem, recalcularFichaValores, validarOrdemPayload } from './producao';
+import { RESUMO_MEDIDAS_VAZIO, resumoMedidasPorGrade, statusTabelaMedidas } from './medidas';
 import { hookTaxaLancamento, syncAporte, syncLancamentoCompra, syncLancamentoVenda, syncTransferencia } from './financeiro';
 import {
   aplicarFiltroEmpresa,
@@ -284,6 +285,7 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   await anotarUsoLocal(r, out.rows);
   await anotarUsoVinculado(r, out.rows, escopo);
   await attachGradeTamanhos(r, out.rows);
+  await anotarGrades(r, out.rows, escopo);
   return out;
 }
 
@@ -300,6 +302,9 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
  * Campo anotado:
  *   uso_vinculado        número exato de registros dependentes
  *   uso_vinculado_label  contagem já com o substantivo ("18 produtos")
+ *
+ * SEM N+1: a contagem é agrupada no banco (`countGroupBy`) — UMA consulta por
+ * empresa envolvida para a página inteira, e não um `countWhere` por linha.
  */
 async function anotarUsoVinculado(r: Resource, rows: Row[], escopo?: EscopoEmpresa): Promise<void> {
   const uso = r.uso;
@@ -308,14 +313,25 @@ async function anotarUsoVinculado(r: Resource, rows: Row[], escopo?: EscopoEmpre
   if (!dependente) return;
   const s = getStore();
   const escopado = temEscopoEmpresa(dependente);
+  // Linhas agrupadas pela empresa que vale para a contagem. Cadastros
+  // compartilhados (cores, grades) não têm empresa: um único grupo, uma
+  // consulta. Recurso tenantado mantém a regra antiga (empresa ativa, senão a
+  // empresa do próprio registro).
+  const grupos = new Map<number, Row[]>();
   for (const row of rows) {
-    const filtro: Payload = { [uso.campo]: Number(row.id) };
-    if (escopado) {
-      filtro.empresa_id = escopo?.empresaId ?? Number(row.empresa_id ?? EMPRESA_PADRAO);
+    const empresaId = escopado ? (escopo?.empresaId ?? Number(row.empresa_id ?? EMPRESA_PADRAO)) : 0;
+    const grupo = grupos.get(empresaId);
+    if (grupo) grupo.push(row);
+    else grupos.set(empresaId, [row]);
+  }
+  for (const [empresaId, grupo] of grupos) {
+    const filtro: Payload = escopado ? { empresa_id: empresaId } : {};
+    const contagem = await s.countGroupBy(dependente, uso.campo, filtro);
+    for (const row of grupo) {
+      const total = contagem.get(Number(row.id)) ?? 0;
+      row.uso_vinculado = total;
+      row.uso_vinculado_label = `${total} ${total === 1 ? uso.singular : uso.plural}`;
     }
-    const total = await s.countWhere(dependente, filtro);
-    row.uso_vinculado = total;
-    row.uso_vinculado_label = `${total} ${total === 1 ? uso.singular : uso.plural}`;
   }
 }
 
@@ -377,6 +393,7 @@ export async function getRecord(r: Resource, id: number, escopoOuAtor?: EscopoOu
   await anotarUsoLocal(r, [row]);
   await anotarUsoVinculado(r, [row], escopo);
   await attachGradeTamanhos(r, [row]);
+  await anotarGrades(r, [row], escopo);
   return row;
 }
 
@@ -459,17 +476,89 @@ async function attachGradeTamanhos(r: Resource, rows: Row[], tx?: Tx): Promise<v
   for (const row of rows) {
     const ids = porGrade.get(Number(row.id)) ?? [];
     row.tamanhos = ids;
-    row.tamanhos__label = ids.map((id) => codigoPor.get(id) ?? `#${id}`).join(', ');
+    row.tamanhos_total = ids.length;
+    // Sequência na ordem cadastrada ("P · M · G · GG"): é a leitura que interessa
+    // na listagem — a ordem faz parte do domínio (grade_tamanhos.ordem).
+    row.tamanhos__label = ids.map((id) => codigoPor.get(id) ?? `#${id}`).join(' · ');
   }
 }
 
-/** Substitui os tamanhos de uma grade pelos ids fornecidos (ordem = posição). */
+/**
+ * GRADES — coluna MEDIDAS e utilização por CATEGORIAS da listagem.
+ *
+ * Duas informações estruturais que a tela mostra ao lado dos tamanhos, ambas
+ * em lote (número fixo de consultas, independente do tamanho da página — nunca
+ * uma consulta por grade):
+ *
+ *   • estado da tabela de medidas (`medidas_status`/`medidas_pct`/...), lido da
+ *     MESMA função que alimenta GET /api/grades/medidas-resumo (medidas.ts) —
+ *     nenhuma regra de completude duplicada;
+ *   • quantas categorias usam a grade como padrão (`uso_categorias`), que soma
+ *     à utilização por produtos (`uso_vinculado`, anotado por `anotarUsoVinculado`).
+ *
+ * A grade é catálogo GLOBAL; os PRODUTOS são da empresa ativa — a contagem de
+ * produtos nunca mistura empresas (multiempresa preservada).
+ */
+async function anotarGrades(r: Resource, rows: Row[], escopo?: EscopoEmpresa): Promise<void> {
+  if (r.key !== 'grades' || !rows.length) return;
+  const s = getStore();
+  const categorias = getResource('categorias')!;
+  const [medidasPorGrade, usoCategorias] = await Promise.all([
+    resumoMedidasPorGrade(),
+    s.countGroupBy(categorias, 'grade_id', {}),
+  ]);
+  for (const row of rows) {
+    const gid = Number(row.id);
+    const resumo = medidasPorGrade.get(gid) ?? RESUMO_MEDIDAS_VAZIO;
+    row.medidas_colunas = resumo.colunas;
+    row.medidas_celulas_total = resumo.celulas_total;
+    row.medidas_celulas_preenchidas = resumo.celulas_preenchidas;
+    row.medidas_pct = resumo.pct;
+    row.medidas_atualizada_em = resumo.atualizada_em;
+    row.medidas_status = statusTabelaMedidas(resumo);
+
+    const nCategorias = usoCategorias.get(gid) ?? 0;
+    row.uso_categorias = nCategorias;
+    // A utilização da grade tem duas origens reais (produto e categoria): o
+    // rótulo mostra as duas, e o número continua sendo o de produtos da empresa.
+    row.uso_vinculado_label = rotuloUsoGrades(Number(row.uso_vinculado ?? 0), nCategorias);
+  }
+  // `escopo` documenta a regra de tenant da contagem de produtos (anotada por
+  // `anotarUsoVinculado`); nada aqui é recalculado por linha.
+  void escopo;
+}
+
+/** Rótulo de utilização da grade: "32 produtos · 3 categorias" (só o que existe). */
+export function rotuloUsoGrades(produtos: number, categorias: number): string {
+  const partes: string[] = [];
+  if (produtos > 0) partes.push(`${produtos} ${produtos === 1 ? 'produto' : 'produtos'}`);
+  if (categorias > 0) partes.push(`${categorias} ${categorias === 1 ? 'categoria' : 'categorias'}`);
+  return partes.join(' · ');
+}
+
+/**
+ * Substitui os tamanhos de uma grade pelos ids fornecidos (ordem = posição).
+ *
+ * A ordem recebida É a ordem gravada (`ordem` = 1..N) — é ela que define a
+ * sequência dos tamanhos no estoque, na tabela de medidas e no catálogo.
+ * Ids repetidos são descartados mantendo a PRIMEIRA ocorrência: `grade_tamanhos`
+ * tem UNIQUE (grade_id, tamanho_id), então uma duplicata derrubaria o salvamento
+ * inteiro (ou criaria duas linhas no modo demonstração).
+ */
 async function syncGradeTamanhos(gradeId: number, tamanhoIds: number[], tx: Tx): Promise<void> {
   const s = getStore();
+  const unicos: number[] = [];
+  const vistos = new Set<number>();
+  for (const bruto of tamanhoIds) {
+    const id = Number(bruto);
+    if (!Number.isInteger(id) || id <= 0 || vistos.has(id)) continue;
+    vistos.add(id);
+    unicos.push(id);
+  }
   const existentes = await s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 1000, filter: { grade_id: gradeId } }, tx);
   for (const it of existentes.rows) await s.remove(RESOURCES.grade_tamanhos, Number(it.id), tx);
   let ordem = 1;
-  for (const t of tamanhoIds) {
+  for (const t of unicos) {
     await s.insert(RESOURCES.grade_tamanhos, { grade_id: gradeId, tamanho_id: t, ordem }, tx);
     ordem += 1;
   }
@@ -1154,17 +1243,19 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
         throw new HttpError(409, 'Só é possível excluir saldos zerados. Lance uma saída/ajuste antes.');
       }
       if (r.key === 'grades') {
-        // Grade em uso por categoria ou produto não pode ser excluída.
-        const [emCategorias, emProdutos] = await Promise.all([
-          s.countWhere(getResource('categorias')!, { grade_id: id }, tx),
-          s.countWhere(getResource('produtos')!, { grade_id: id }, tx),
-        ]);
-        if (emCategorias || emProdutos) {
-          throw new HttpError(
-            409,
-            `A grade "${String(before.nome)}" está em uso (${emCategorias} categoria(s) e ${emProdutos} produto(s)). Remova o vínculo antes de excluir.`
-          );
-        }
+        // Grade em uso por categoria ou produto NÃO é excluída — e a recusa vem
+        // com o DIAGNÓSTICO padrão do ERP (módulos, quantidades, ids, orientação),
+        // o mesmo payload de cores/categorias: a tela abre o "Ver vínculos" e
+        // oferece desativar em vez de forçar o DELETE. Nada de FK removida, nada
+        // de CASCADE para contornar: `produtos.grade_id` e `categorias.grade_id`
+        // continuam sendo a proteção final no banco.
+        const empresaId = Number(before.empresa_id ?? escopo.empresaId);
+        const relacoes = await s.dependenciasDe(r, id, empresaId, tx);
+        const diag = montarDiagnostico(r, before, relacoes, {
+          origem: s.kind === 'postgres' ? 'postgresql' : 'memoria',
+          empresaId,
+        });
+        if (diag.bloqueado) throw erroDependencias(diag);
         // Remove os tamanhos da grade (no Postgres o ON DELETE CASCADE já faz;
         // aqui garantimos o mesmo no modo demonstração).
         const itensGrade = await s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 1000, filter: { grade_id: id } }, tx);

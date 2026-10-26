@@ -152,6 +152,20 @@ export interface Store {
   findOneWhere(r: Resource, where: Payload, tx?: Tx): Promise<Row | null>;
   countWhere(r: Resource, where: Payload, tx?: Tx): Promise<number>;
 
+  /**
+   * CONTAGEM AGRUPADA por uma coluna do recurso — UMA consulta para N
+   * registros, em vez de um `countWhere` por linha.
+   *
+   * É o que permite anotar a "Utilização" de uma listagem inteira (quantos
+   * produtos apontam para cada cor/grade da página) sem N+1: o agrupamento é
+   * feito no banco (GROUP BY) e só as chaves com contagem > 0 voltam.
+   *
+   * `coluna` precisa ser uma coluna declarada do recurso (nunca um
+   * identificador vindo de fora) e `where` usa a mesma semântica de igualdade
+   * de `countWhere` (ex.: o recorte da empresa ativa).
+   */
+  countGroupBy(r: Resource, coluna: string, where: Payload, tx?: Tx): Promise<Map<number, number>>;
+
   insert(r: Resource, data: Payload, tx?: Tx): Promise<Row>;
   update(r: Resource, id: number, data: Payload, tx?: Tx): Promise<Row | null>;
   remove(r: Resource, id: number, tx?: Tx): Promise<boolean>;

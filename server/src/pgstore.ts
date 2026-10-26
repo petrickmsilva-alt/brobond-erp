@@ -429,6 +429,34 @@ export class PgStore implements Store {
     return res.rows[0]?.n ?? 0;
   }
 
+  async countGroupBy(r: Resource, coluna: string, where: Payload, tx?: Tx): Promise<Map<number, number>> {
+    const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
+    // A coluna agrupada é interpolada no SQL: só uma coluna REAL do recurso
+    // passa (mesma whitelist de `countWhere`/`findOneWhere`) — nada de
+    // identificador vindo do cliente.
+    if (!allowed.has(coluna)) return new Map();
+    const keys = Object.keys(where).filter((k) => allowed.has(k) || k === 'id');
+    const params: unknown[] = [];
+    const predicates = keys.map((k) => {
+      const value = where[k];
+      if (value === null || value === undefined) return `${k} IS NULL`;
+      params.push(value);
+      return `${k} = $${params.length}`;
+    });
+    predicates.push(`${coluna} IS NOT NULL`);
+    const res = await q(
+      `SELECT ${coluna}::int AS chave, COUNT(*)::int AS total FROM ${r.table} WHERE ${predicates.join(' AND ')} GROUP BY 1`,
+      params,
+      tx
+    );
+    const out = new Map<number, number>();
+    for (const row of res.rows) {
+      const chave = Number(row.chave);
+      if (Number.isInteger(chave) && chave > 0) out.set(chave, Number(row.total));
+    }
+    return out;
+  }
+
   async insert(r: Resource, data: Payload, tx?: Tx): Promise<Row> {
     const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
     const keys = Object.keys(data).filter((k) => allowed.has(k));

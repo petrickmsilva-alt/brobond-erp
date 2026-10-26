@@ -667,6 +667,14 @@ export const RESOURCES: Record<string, Resource> = {
     minPerfilEscrita: 'gerente',
     notice:
       'Uma grade é um conjunto nomeado de tamanhos na ordem correta (ex.: Camiseta PP–GG, Calça 36–48, Calçado 34–44). Vincule a grade à categoria (padrão) ou diretamente ao produto para que o estoque mostre apenas os tamanhos daquele tipo de peça.',
+    // Padrão LISTA → PÁGINA do BROBOND ERP: a inclusão e a edição vivem em
+    // /grades/novo e /grades/:id/editar (rotas no cliente, registradas em
+    // client/src/modules.ts › FORM_DIRETO). NÃO existe modal/drawer para este
+    // cadastro: a relação ordenada grade × tamanho (`grade_tamanhos`) é editada
+    // na página, com a ordem explícita. O contrato continua o mesmo
+    // (POST/PUT /api/grades com nome, descricao, instrucoes_medidas, ativo e
+    // `tamanhos` = ids na ordem desejada) e o servidor segue sendo a autoridade
+    // (RBAC gerente+ e validatePayload).
     fields: [
       { name: 'nome', label: 'Nome', type: 'text', required: true, unique: true, search: true, maxLength: 60, placeholder: 'Camiseta PP-GG, Calça 36-48...' },
       { name: 'tamanhos', label: 'Tamanhos', type: 'multiref', ref: 'tamanhos', virtual: true, required: true, list: true, wide: true, hint: 'Marque os tamanhos desta grade, na ordem em que devem aparecer. Reordene marcando na sequência desejada.' },
@@ -685,6 +693,25 @@ export const RESOURCES: Record<string, Resource> = {
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
+    // Filtros da LISTAGEM, no servidor: status (o recorte Todas/Ativas/Inativas
+    // usa o mesmo contrato `f.ativo` dos demais recursos — nenhum SQL novo).
+    filterFields: ['ativo'],
+    quickFilters: [
+      {
+        field: 'ativo',
+        label: 'Status',
+        options: [
+          { value: '', label: 'Todas' },
+          { value: 'true', label: 'Ativas' },
+          { value: 'false', label: 'Inativas' },
+        ],
+      },
+    ],
+    // Coluna "Utilização": contagem REAL de produtos que usam a grade, recortada
+    // pela empresa ativa (a grade é catálogo global; os produtos não). As
+    // categorias que usam a grade como padrão são anotadas à parte
+    // (`uso_categorias`, em services.ts) — as duas origens aparecem juntas.
+    uso: { recurso: 'produtos', campo: 'grade_id', singular: 'produto', plural: 'produtos' },
     mock: [
       { id: 1, nome: 'Camiseta PP-GG', descricao: 'Malha e camisaria básica', ativo: true },
       { id: 2, nome: 'Calça 36-48', descricao: 'Jeans e sarja', ativo: true },

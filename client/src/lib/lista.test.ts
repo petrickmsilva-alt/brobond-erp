@@ -5,20 +5,30 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Field } from './meta';
 import {
   CAMPO_ESTOQUE,
+  CAMPO_ID,
+  CAMPO_MEDIDAS,
+  CAMPO_USO,
   camposDoCard,
   camposOrdenados,
   chipsDeFiltros,
   DENSIDADE_INFO,
   densidadeLegada,
+  descricaoDoCadastro,
   larguraDaColuna,
   permiteAlternarAtivo,
   placeholderBusca,
   rotuloDaColuna,
+  rotuloEditar,
   rotuloNovo,
+  rotuloSalvar,
+  ROTULO_STATUS_MEDIDAS,
   saldoDaLinha,
+  statusMedidasDaLinha,
+  temUtilizacao,
   textoContagem,
   textoVazio,
   usaColunaEstoque,
+  usaColunaMedidas,
 } from './lista';
 
 const campo = (name: string, extra: Partial<Field> = {}): Field => ({ name, label: name, type: 'text', ...extra });
@@ -224,5 +234,105 @@ describe('apresentação da listagem de categorias', () => {
 
   it('o modo visual da categoria traz descrição, grade e status', () => {
     expect(camposDoCard(campos, 'categorias').map((f) => f.name)).toEqual(['descricao', 'grade_id', 'ativo']);
+  });
+});
+
+describe('apresentação da listagem de grades', () => {
+  const campos = [
+    campo('ativo', { label: 'Ativo', type: 'boolean' }),
+    campo('descricao', { label: 'Descrição' }),
+    campo('instrucoes_medidas', { label: 'Instruções de medição', type: 'textarea', list: false }),
+    campo('nome', { label: 'Nome' }),
+    campo('tamanhos', { label: 'Tamanhos', type: 'multiref', ref: 'tamanhos', virtual: true, list: true }),
+    CAMPO_USO,
+    CAMPO_MEDIDAS,
+    CAMPO_ID,
+  ];
+
+  // A ModulePage já descarta o que não é de lista (`instrucoes_medidas` vive na
+  // página da grade, não na tabela) — aqui entra o mesmo recorte.
+  const visiveis = campos.filter((f) => f.list !== false);
+
+  it('ordena as colunas como # · Grade · Tamanhos · Medidas · Status · Utilização · Descrição', () => {
+    expect(visiveis.map((f) => f.name)).not.toContain('instrucoes_medidas');
+    expect(camposOrdenados(visiveis, 'grades').map((f) => f.name)).toEqual([
+      'id',
+      'nome',
+      'tamanhos',
+      'medidas_status',
+      'ativo',
+      'uso_vinculado',
+      'descricao',
+    ]);
+  });
+
+  it('usa os rótulos de apresentação sem trocar o nome do campo (sort/API intactos)', () => {
+    expect(camposOrdenados(visiveis, 'grades').map((f) => rotuloDaColuna(f, 'grades'))).toEqual([
+      '#',
+      'Grade',
+      'Tamanhos',
+      'Medidas',
+      'Status',
+      'Utilização',
+      'Descrição',
+    ]);
+    // O campo continua se chamando como no servidor: a coluna sintética de
+    // medidas é `medidas_status`, nunca um campo novo em `grades`.
+    expect(rotuloDaColuna(CAMPO_MEDIDAS, 'grades')).toBe('Medidas');
+    expect(CAMPO_MEDIDAS.name).toBe('medidas_status');
+    expect(CAMPO_MEDIDAS.form).toBe(false);
+  });
+
+  it('busca, títulos das páginas e estado vazio seguem a linguagem do cadastro', () => {
+    expect(placeholderBusca('grades', 'Grades')).toBe('Buscar grade...');
+    expect(rotuloNovo('grades', 'Grade')).toBe('Nova grade');
+    expect(rotuloEditar('grades', 'Grade')).toBe('Editar grade');
+    expect(rotuloSalvar('grades')).toBe('Salvar grade');
+    expect(descricaoDoCadastro('grades')).toBe(
+      'Configure uma grade de tamanhos para utilização no catálogo de produtos.'
+    );
+    expect(textoVazio('grades', 'Grade')).toEqual({
+      titulo: 'Nenhuma grade cadastrada',
+      descricao: 'Cadastre a primeira grade de tamanhos para organizar o estoque dos produtos.',
+    });
+    expect(textoContagem('grades', 1, 4, 4)).toBe('1–4 de 4 grades');
+    expect(textoContagem('grades', 1, 1, 1)).toBe('1–1 de 1 grade');
+  });
+
+  it('a grade pode ser desativada na linha (nunca excluída à força)', () => {
+    expect(permiteAlternarAtivo('grades')).toBe(true);
+  });
+
+  it('o modo visual da grade traz tamanhos, medidas, status e utilização', () => {
+    expect(camposDoCard(campos, 'grades').map((f) => f.name)).toEqual([
+      'tamanhos',
+      'medidas_status',
+      'ativo',
+      'uso_vinculado',
+    ]);
+  });
+
+  it('a coluna de MEDIDAS é exclusiva das grades', () => {
+    expect(usaColunaMedidas('grades')).toBe(true);
+    for (const recurso of ['produtos', 'categorias', 'cores', 'clientes']) {
+      expect(usaColunaMedidas(recurso)).toBe(false);
+    }
+  });
+
+  it('lê o estado da tabela de medidas do payload — e não inventa quando ele não vem', () => {
+    expect(statusMedidasDaLinha({ medidas_status: 'sem_tabela' })).toBe('sem_tabela');
+    expect(statusMedidasDaLinha({ medidas_status: 'parcial' })).toBe('parcial');
+    expect(statusMedidasDaLinha({ medidas_status: 'completa' })).toBe('completa');
+    expect(statusMedidasDaLinha({})).toBeNull();
+    expect(statusMedidasDaLinha({ medidas_status: 'outra_coisa' })).toBeNull();
+    expect(ROTULO_STATUS_MEDIDAS.parcial).toBe('Parcial');
+  });
+
+  it('utilização só existe quando há produtos OU categorias vinculadas', () => {
+    expect(temUtilizacao({ uso_vinculado: 18, uso_categorias: 2 })).toBe(true);
+    expect(temUtilizacao({ uso_vinculado: 0, uso_categorias: 1 })).toBe(true);
+    expect(temUtilizacao({ uso_vinculado: 7, uso_categorias: 0 })).toBe(true);
+    expect(temUtilizacao({ uso_vinculado: 0, uso_categorias: 0 })).toBe(false);
+    expect(temUtilizacao({})).toBe(false);
   });
 });

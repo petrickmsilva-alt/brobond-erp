@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { CheckCircle, ClipboardCopy, Copy, Info, Loader2, Plus, Printer, Ruler, Save, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
@@ -161,6 +161,20 @@ export default function MedidasPage() {
     setGradeId(id);
     load(id);
   }
+
+  // CHEGADA POR LINK — o cadastro de Grades oferece a ação "Tabela de medidas"
+  // (/medidas?grade=<id>): o módulo é o mesmo de sempre, só já abre na grade
+  // certa. Aplica uma única vez e nunca por cima de edição não salva.
+  const [parametros] = useSearchParams();
+  const gradeDoLink = String(parametros.get('grade') ?? '');
+  const linkAplicado = useRef(false);
+  useEffect(() => {
+    if (linkAplicado.current || !/^\d+$/.test(gradeDoLink)) return;
+    if (sujo || instrucoesSuja) return;
+    linkAplicado.current = true;
+    setGradeId(gradeDoLink);
+    void load(gradeDoLink);
+  }, [gradeDoLink, load, sujo, instrucoesSuja]);
 
   function confirmarTrocaGrade() {
     if (gradeParaTrocar === null) return;

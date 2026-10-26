@@ -20,6 +20,7 @@ const ClienteFormPage = lazy(() => import('./pages/ClienteFormPage'));
 const ProdutoFormPage = lazy(() => import('./pages/ProdutoFormPage'));
 const CategoriaFormPage = lazy(() => import('./pages/CategoriaFormPage'));
 const CorFormPage = lazy(() => import('./pages/CorFormPage'));
+const GradeFormPage = lazy(() => import('./pages/GradeFormPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
 const FichaDetail = lazy(() => import('./pages/FichaDetail'));
@@ -159,6 +160,24 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="cores">
                   <CorFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Cadastro de grades em página própria (fora de qualquer modal/drawer):
+                a relação ordenada grade × tamanho precisa de espaço próprio. */}
+            <Route
+              path="grades/novo"
+              element={
+                <ModuleAccess moduleId="grades">
+                  <GradeFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="grades/:id/editar"
+              element={
+                <ModuleAccess moduleId="grades">
+                  <GradeFormPage />
                 </ModuleAccess>
               }
             />

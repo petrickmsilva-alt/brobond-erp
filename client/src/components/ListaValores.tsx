@@ -5,14 +5,21 @@
 // e na lista compacta: texto truncado com tooltip, badge de status, amostra de
 // cor, valor monetário alinhado à direita. A listagem em si só posiciona.
 // ============================================================================
-import { AlertTriangle, Camera, CheckCircle2, XCircle } from 'lucide-react';
+import { AlertTriangle, Camera, CheckCircle2, CircleDashed, XCircle } from 'lucide-react';
 import type { Field, ResourceMeta } from '../lib/meta';
 import { formatCell } from '../lib/format';
 import { corSegura } from '../lib/hex';
 import { ColorDot } from './ImageField';
 import { AmostraCor } from './AmostraCor';
 import { Badge } from './ui';
-import { campoDaAmostra, estoqueMinimoDaLinha, larguraDaColuna, saldoDaLinha } from '../lib/lista';
+import {
+  campoDaAmostra,
+  estoqueMinimoDaLinha,
+  larguraDaColuna,
+  saldoDaLinha,
+  statusMedidasDaLinha,
+  temUtilizacao,
+} from '../lib/lista';
 
 /** Texto de identificação da linha (ex.: "CAM-001 — Camiseta Pima"). */
 export function rowLabel(r: ResourceMeta, row: Record<string, any>): string {
@@ -90,10 +97,13 @@ export function ValorCampo({ f, row, recurso }: { f: Field; row: Record<string, 
   }
 
   // Coluna sintética UTILIZAÇÃO: contagem REAL vinda do servidor. Zero (ou
-  // ausência do dado) é "—", nunca um número inventado.
+  // ausência do dado) é "—", nunca um número inventado. Grades têm duas
+  // origens de uso (produtos da empresa ativa + categorias que a usam como
+  // padrão): o rótulo do servidor já traz as duas, e só as duas zeradas é que
+  // significam "sem utilização".
   if (f.name === 'uso_vinculado') {
     const n = Number(row.uso_vinculado);
-    if (!Number.isFinite(n) || n <= 0) {
+    if (!temUtilizacao(row)) {
       return (
         <span className="text-slate-300" title="Nenhum registro usa este cadastro na empresa ativa." aria-label="Sem utilização">
           —
@@ -102,8 +112,42 @@ export function ValorCampo({ f, row, recurso }: { f: Field; row: Record<string, 
     }
     return (
       <span className="tabular-nums text-slate-700 dark:text-slate-200">
-        {row.uso_vinculado_label ?? String(n)}
+        {row.uso_vinculado_label ?? (Number.isFinite(n) ? String(n) : '—')}
       </span>
+    );
+  }
+
+  // Coluna sintética MEDIDAS (grades): estado REAL da tabela de medidas,
+  // anotado pelo servidor com a mesma regra de completude do módulo de medidas.
+  if (f.name === 'medidas_status') {
+    const status = statusMedidasDaLinha(row);
+    if (!status) {
+      return (
+        <span className="text-slate-300" title="Sem informação da tabela de medidas." aria-label="Sem informação">
+          —
+        </span>
+      );
+    }
+    if (status === 'sem_tabela') {
+      return (
+        <Badge tone="slate">
+          <CircleDashed className="h-3 w-3" aria-hidden="true" /> Sem tabela
+        </Badge>
+      );
+    }
+    const pct = Number(row.medidas_pct);
+    if (status === 'completa') {
+      return (
+        <Badge tone="green">
+          <CheckCircle2 className="h-3 w-3" aria-hidden="true" /> Completa
+        </Badge>
+      );
+    }
+    return (
+      <Badge tone="amber">
+        <AlertTriangle className="h-3 w-3" aria-hidden="true" /> Parcial
+        {Number.isFinite(pct) ? ` · ${pct}%` : ''}
+      </Badge>
     );
   }
 

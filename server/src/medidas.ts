@@ -399,20 +399,58 @@ export async function saveMedidasGrade(req: Request, res: Response) {
   res.json(d);
 }
 
+/** Estado da tabela de medidas de UMA grade (números reais, nada aproximado). */
+export type ResumoMedidasGrade = {
+  /** Tamanhos vinculados à grade (`grade_tamanhos`) — as linhas da tabela. */
+  tamanhos: number;
+  /** Colunas de medida cadastradas para a grade. */
+  colunas: number;
+  celulas_total: number;
+  celulas_preenchidas: number;
+  pct: number;
+  /** Última alteração de coluna ou célula (ISO) — null quando nunca mexida. */
+  atualizada_em: string | null;
+};
+
+/** Grade sem nenhuma coluna de medida cadastrada. */
+export const RESUMO_MEDIDAS_VAZIO: ResumoMedidasGrade = {
+  tamanhos: 0,
+  colunas: 0,
+  celulas_total: 0,
+  celulas_preenchidas: 0,
+  pct: 0,
+  atualizada_em: null,
+};
+
 /**
- * GET /api/grades/medidas-resumo — status de TODAS as grades em um olhar só:
- * quantas colunas, quantas células preenchidas, percentual e quando foi
- * atualizada. É o que alimenta o painel de completude do módulo e o alerta
- * de "grade publicada no catálogo sem tabela preenchida".
+ * Situação da tabela de medidas, derivada dos números reais do resumo:
+ *   • `sem_tabela` — nenhuma coluna cadastrada para a grade;
+ *   • `completa`   — todas as células (colunas × tamanhos) preenchidas;
+ *   • `parcial`    — há colunas, mas falta preencher (ou a grade não tem tamanhos).
+ *
+ * FUNÇÃO ÚNICA: o painel de completude do módulo de medidas, o resumo por grade
+ * e a coluna "Medidas" da listagem de grades falam a mesma língua — nenhuma
+ * regra de completude é reimplementada em outro lugar.
  */
-export async function resumoMedidasGrades(req: Request, res: Response) {
-  checkAccess(RESOURCES.grades, currentUser(req), 'read');
+export function statusTabelaMedidas(r: ResumoMedidasGrade): 'sem_tabela' | 'parcial' | 'completa' {
+  if (r.colunas <= 0) return 'sem_tabela';
+  return r.celulas_total > 0 && r.celulas_preenchidas >= r.celulas_total ? 'completa' : 'parcial';
+}
+
+/**
+ * Resumo de completude de TODAS as grades em UM lote: três leituras agregadas
+ * (itens de grade, colunas e valores), independentes do número de grades —
+ * nunca uma consulta por grade.
+ *
+ * É a fonte única usada pelo endpoint `/api/grades/medidas-resumo` e pela
+ * anotação da listagem de grades (services.ts).
+ */
+export async function resumoMedidasPorGrade(tx?: Tx): Promise<Map<number, ResumoMedidasGrade>> {
   const s = getStore();
-  const [grades, itens, medidas, valores] = await Promise.all([
-    s.list(RESOURCES.grades, { page: 1, pageSize: 2000, sort: 'nome', dir: 'asc' }),
-    s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 20000, sort: 'ordem', dir: 'asc' }),
-    s.list(RESOURCES.medidas, { page: 1, pageSize: 5000, sort: 'ordem', dir: 'asc' }),
-    s.list(RESOURCES.medida_valores, { page: 1, pageSize: 20000 }),
+  const [itens, medidas, valores] = await Promise.all([
+    s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 20000, sort: 'ordem', dir: 'asc' }, tx),
+    s.list(RESOURCES.medidas, { page: 1, pageSize: 5000, sort: 'ordem', dir: 'asc' }, tx),
+    s.list(RESOURCES.medida_valores, { page: 1, pageSize: 20000 }, tx),
   ]);
 
   const tamsPorGrade = new Map<number, number>();
@@ -441,9 +479,8 @@ export async function resumoMedidasGrades(req: Request, res: Response) {
     }
   }
 
-  const lista = grades.rows.map((g) => {
-    const gid = Number(g.id);
-    const meds = medidasPorGrade.get(gid) ?? [];
+  const porGrade = new Map<number, ResumoMedidasGrade>();
+  for (const [gid, meds] of medidasPorGrade) {
     const tamanhos = tamsPorGrade.get(gid) ?? 0;
     const celulas_total = meds.length * tamanhos;
     const preenchidas = preenchidasPorGrade.get(gid) ?? 0;
@@ -451,16 +488,44 @@ export async function resumoMedidasGrades(req: Request, res: Response) {
       ...meds.map((m) => m.atualizado_em).filter((d): d is string => Boolean(d)),
       ...(datasPorGrade.get(gid) ?? []),
     ].sort();
-    return {
-      id: gid,
-      nome: String(g.nome || `#${gid}`),
-      ativo: g.ativo !== false,
+    porGrade.set(gid, {
       tamanhos,
       colunas: meds.length,
       celulas_total,
       celulas_preenchidas: preenchidas,
       pct: pctCompleto(preenchidas, celulas_total),
       atualizada_em: datas.length ? datas.slice(-1)[0] : null,
+    });
+  }
+  // Grade com tamanhos mas sem nenhuma coluna também entra no mapa (o painel
+  // precisa mostrar "sem tabela", não "não existe").
+  for (const gid of tamsPorGrade.keys()) {
+    if (!porGrade.has(gid)) porGrade.set(gid, { ...RESUMO_MEDIDAS_VAZIO, tamanhos: tamsPorGrade.get(gid) ?? 0 });
+  }
+  return porGrade;
+}
+
+/**
+ * GET /api/grades/medidas-resumo — status de TODAS as grades em um olhar só:
+ * quantas colunas, quantas células preenchidas, percentual e quando foi
+ * atualizada. É o que alimenta o painel de completude do módulo e o alerta
+ * de "grade publicada no catálogo sem tabela preenchida".
+ */
+export async function resumoMedidasGrades(req: Request, res: Response) {
+  checkAccess(RESOURCES.grades, currentUser(req), 'read');
+  const s = getStore();
+  const [grades, porGrade] = await Promise.all([
+    s.list(RESOURCES.grades, { page: 1, pageSize: 2000, sort: 'nome', dir: 'asc' }),
+    resumoMedidasPorGrade(),
+  ]);
+
+  const lista = grades.rows.map((g) => {
+    const gid = Number(g.id);
+    return {
+      id: gid,
+      nome: String(g.nome || `#${gid}`),
+      ativo: g.ativo !== false,
+      ...(porGrade.get(gid) ?? RESUMO_MEDIDAS_VAZIO),
     };
   });
 

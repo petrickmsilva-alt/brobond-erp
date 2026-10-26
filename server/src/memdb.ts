@@ -287,6 +287,17 @@ export class MemStore implements Store {
     return n;
   }
 
+  async countGroupBy(r: Resource, coluna: string, where: Payload): Promise<Map<number, number>> {
+    const out = new Map<number, number>();
+    for (const row of this.table(r.table).rows.values()) {
+      if (!Object.entries(where).every(([k, v]) => norm(row[k]) === norm(v))) continue;
+      const chave = Number(row[coluna]);
+      if (!Number.isInteger(chave) || chave <= 0) continue;
+      out.set(chave, (out.get(chave) ?? 0) + 1);
+    }
+    return out;
+  }
+
   private checkConstraints(r: Resource, data: Payload, id?: number) {
     const cur = id ? this.table(r.table).rows.get(id) : undefined;
     const merged = { ...(cur || {}), ...data };

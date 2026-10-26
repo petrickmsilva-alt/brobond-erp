@@ -20,6 +20,7 @@ import {
   Power,
   RefreshCw,
   RotateCcw,
+  Ruler,
   Search,
   Share2,
   Trash2,
@@ -62,6 +63,7 @@ import {
   CAMPO_AMOSTRA,
   CAMPO_ESTOQUE,
   CAMPO_ID,
+  CAMPO_MEDIDAS,
   CAMPO_USO,
   campoDaAmostra,
   camposOrdenados,
@@ -82,6 +84,7 @@ import {
   textoVazio,
   type ModoVisualizacao,
   usaColunaEstoque,
+  usaColunaMedidas,
 } from '../lib/lista';
 
 // Páginas especializadas pesadas: carregadas sob demanda, só quando o módulo
@@ -345,16 +348,23 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     );
     // Utilização: contagem real anotada pelo servidor (declarada em `uso`).
     const comUso = resource.uso && !base.some((f) => f.name === CAMPO_USO.name) ? [...base, CAMPO_USO] : base;
+    // Grades: estado REAL da tabela de medidas (sem tabela / parcial / completa),
+    // anotado pelo servidor no mesmo payload da listagem — nenhuma consulta por
+    // linha e nenhuma regra de completude duplicada no front.
+    const comMedidas =
+      usaColunaMedidas(resource.key) && !comUso.some((f) => f.name === CAMPO_MEDIDAS.name)
+        ? [...comUso, CAMPO_MEDIDAS]
+        : comUso;
     if (usaColunaEstoque(resource.key)) {
-      return comUso.some((f) => f.name === CAMPO_ESTOQUE.name) ? comUso : [...comUso, CAMPO_ESTOQUE];
+      return comMedidas.some((f) => f.name === CAMPO_ESTOQUE.name) ? comMedidas : [...comMedidas, CAMPO_ESTOQUE];
     }
     // Amostra: a cor ganha presença visual na primeira coluna (e a tabela
     // dispensa a coluna `#`, que não ajuda a ler uma cartela de cores).
     if (campoDaAmostra(resource.key)) {
-      return comUso.some((f) => f.name === CAMPO_AMOSTRA.name) ? comUso : [CAMPO_AMOSTRA, ...comUso];
+      return comMedidas.some((f) => f.name === CAMPO_AMOSTRA.name) ? comMedidas : [CAMPO_AMOSTRA, ...comMedidas];
     }
     // Recursos genéricos mantêm a coluna `#` (id) à esquerda, como antes.
-    return comUso.some((f) => f.name === 'id') ? comUso : [CAMPO_ID, ...comUso];
+    return comMedidas.some((f) => f.name === 'id') ? comMedidas : [CAMPO_ID, ...comMedidas];
   }, [resource]);
   const searchable = resource.fields.some((f) => f.search);
   // Filtros rápidos (Todas/Ativas/Inativas): mesmo contrato `f.<campo>` dos
@@ -706,7 +716,10 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     return resource.key === 'movimentacoes' && row.estornado ? 'opacity-50 line-through' : '';
   }
 
-  const temAcoesLinha = canUpdate || canDelete || !!resource.detail || podeAlternarAtivo;
+  // Grades: o atalho "Tabela de medidas" é só navegação para o módulo existente
+  // (leitura), então a coluna de ações continua existindo para perfis sem escrita.
+  const temAcoesLinha =
+    canUpdate || canDelete || !!resource.detail || podeAlternarAtivo || usaColunaMedidas(resource.key);
   /** A linha só é "clicável" quando existe um destino (detalhe ou edição). */
   const podeAbrirLinha = !!resource.detail || DETALHE_DIRETO.has(module.id) || canUpdate;
 
@@ -739,6 +752,19 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         )}
         {resource.key === 'propostas' && (
           <DocumentPrintButton tipo="propostas" documentoId={Number(row.id)} label="Imprimir" compact />
+        )}
+        {resource.key === 'grades' && (
+          // Integração com o módulo de medidas já existente: a grade abre a
+          // tabela dela (o módulo recebe `?grade=` e seleciona sozinho). Nada é
+          // recriado aqui — é só o caminho até o fluxo atual.
+          <button
+            className="btn-icon"
+            onClick={() => navigate(`/medidas?grade=${Number(row.id)}`)}
+            title="Tabela de medidas"
+            aria-label={`Tabela de medidas de ${rowLabel(resource, row)}`}
+          >
+            <Ruler className="h-4 w-4" />
+          </button>
         )}
         {resource.detail && (
           <button className="btn-icon" onClick={() => navigate(`/${resource.key}/${row.id}`)} title="Ver detalhes" aria-label="Ver detalhes">

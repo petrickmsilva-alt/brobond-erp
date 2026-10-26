@@ -379,7 +379,17 @@ describe('NAV_SECTIONS (fonte única do menu)', () => {
 
 describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
   it('inclui os cadastros que já vivem em página própria', () => {
-    expect([...FORM_DIRETO].sort()).toEqual(['categorias', 'clientes', 'cores', 'produtos', 'vendas']);
+    expect([...FORM_DIRETO].sort()).toEqual(['categorias', 'clientes', 'cores', 'grades', 'produtos', 'vendas']);
+  });
+
+  it('Grades entra no padrão LISTA → PÁGINA: criação e edição vivem no módulo /grades', () => {
+    expect(FORM_DIRETO.has('grades')).toBe(true);
+    const grades = MODULES.find((m) => m.id === 'grades');
+    expect(grades?.path).toBe('/grades');
+    // As rotas filhas pertencem ao módulo pai (breadcrumb e acesso usam isso).
+    expect(moduleOfPath('/grades')?.id).toBe('grades');
+    expect(moduleOfPath('/grades/novo')?.id).toBe('grades');
+    expect(moduleOfPath('/grades/12/editar')?.id).toBe('grades');
   });
 
   it('Cores entra no padrão LISTA → PÁGINA: inventário e edição vivem no módulo /cores', () => {
