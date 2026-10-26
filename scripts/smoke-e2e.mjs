@@ -644,6 +644,63 @@ await (async () => {
   check('colecoes: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluidaCol.status), `status ${excluidaCol.status}`);
 }
 
+// ------------------------------ CADASTROS › TAMANHOS (padrão LISTA → PÁGINA)
+// O dicionário de tamanhos migrou do modal central para o padrão canônico do
+// ERP: a inclusão e a edição vivem nas páginas /tamanhos/novo e
+// /tamanhos/:id/editar. O metadado não declara `editor` de drawer/modal — a
+// prova é no Express de verdade, com o MESMO contrato de API que a página usa.
+{
+  const meta = await req('GET', '/meta');
+  const tam = meta.json?.resources?.tamanhos;
+  check('tamanhos: /meta NÃO declara drawer/modal (formulário é página)', !('editor' in (tam || {})), `editor=${tam?.editor}`);
+  check('tamanhos: campos reais (codigo, descricao, ordem) e nenhum "ativo" inventado',
+    JSON.stringify((tam?.fields || []).filter((f) => !['criado_em', 'atualizado_em'].includes(f.name)).map((f) => f.name)) ===
+      '["codigo","descricao","ordem"]',
+    JSON.stringify((tam?.fields || []).map((f) => f.name)));
+  const campoCodigo = (tam?.fields || []).find((f) => f.name === 'codigo');
+  check('tamanhos: codigo é obrigatório, único e buscável',
+    campoCodigo?.required === true && campoCodigo?.unique === true && campoCodigo?.search === true);
+  check('tamanhos: RBAC do catálogo compartilhado preservado (gerente+)', tam?.minPerfilEscrita === 'gerente', `minPerfilEscrita=${tam?.minPerfilEscrita}`);
+
+  const codTam = `SM${Date.now().toString().slice(-6)}`;
+  const novo = await req('POST', '/tamanhos', { codigo: codTam, descricao: 'Smoke Tamanho', ordem: 42 });
+  check('POST /tamanhos cria o tamanho (o que a página /tamanhos/novo envia)', novo.status === 201 && !!novo.json?.id,
+    `status ${novo.status} ${msg(novo.json)}`);
+  const tamId = novo.json?.id;
+
+  const buscaCod = await req('GET', `/tamanhos?q=${encodeURIComponent(codTam)}&page=1&pageSize=25`);
+  check('tamanhos: busca por código na listagem do servidor', (buscaCod.json?.rows || []).some((r) => r.id === tamId));
+  const buscaDesc = await req('GET', '/tamanhos?q=Smoke%20Tamanho&page=1&pageSize=25');
+  check('tamanhos: busca alcança a descrição', (buscaDesc.json?.rows || []).some((r) => r.id === tamId));
+
+  // A página de edição carrega pelo GET e salva pelo PUT — o mesmo contrato.
+  const detalheTam = await req('GET', `/tamanhos/${tamId}`);
+  check('GET /tamanhos/:id devolve o registro para a página de edição',
+    detalheTam.status === 200 && detalheTam.json?.codigo === codTam && Number(detalheTam.json?.ordem) === 42);
+  const editado = await req('PUT', `/tamanhos/${tamId}`, { descricao: 'Smoke Tamanho editado', ordem: 43 });
+  check('PUT /tamanhos/:id salva a edição', editado.status === 200 && Number(editado.json?.ordem) === 43, `status ${editado.status}`);
+
+  const opcoesTam = await req('GET', '/tamanhos/options');
+  check('tamanhos: /options alimenta Grades e Estoque', Array.isArray(opcoesTam.json) && opcoesTam.json.some((o) => String(o.value) === String(tamId)));
+
+  // Exclusão: o vínculo REAL do domínio é o estoque (movimentação/saldo).
+  const prodTam = await req('POST', '/produtos', { sku: `SMOKE-TAM-${Date.now()}`, nome: 'Camiseta Smoke Tam', preco_venda: 59.9 });
+  const mov = await req('POST', '/movimentacoes', { tipo: 'entrada', produto_id: prodTam.json?.id, tamanho_id: tamId, quantidade: 3 });
+  check('estoque aceita movimentação com o tamanho do dicionário', [200, 201].includes(mov.status), `status ${mov.status} ${msg(mov.json)}`);
+  const bloqueadaTam = await req('DELETE', `/tamanhos/${tamId}`);
+  const diagTam = bloqueadaTam.json?.details?.dependencias;
+  check('tamanhos: DELETE vinculado → 409 dependencias_vinculadas',
+    bloqueadaTam.status === 409 && bloqueadaTam.json?.code === 'dependencias_vinculadas', `status ${bloqueadaTam.status}`);
+  check('tamanhos: diagnóstico diz onde/quantos/por quê',
+    diagTam?.bloqueado === true && diagTam?.modulosBloqueantes?.includes('Estoque') &&
+    diagTam?.vinculos?.some((v) => v.tabela === 'movimentacoes' && v.quantidade >= 1 && Array.isArray(v.ids) && v.motivo));
+
+  // Tamanho sem vínculo segue o fluxo normal.
+  const semUsoTam = await req('POST', '/tamanhos', { codigo: `SV${Date.now().toString().slice(-6)}`, ordem: 44 });
+  const excluidaTam = await req('DELETE', `/tamanhos/${semUsoTam.json?.id}`);
+  check('tamanhos: DELETE sem vínculo segue o fluxo normal', [200, 204].includes(excluidaTam.status), `status ${excluidaTam.status}`);
+}
+
 // ------------------------------ CADASTROS › GRADES (padrão LISTA → PÁGINA)
 // Grades seguem o mesmo padrão de Cores, com uma diferença de domínio: a relação
 // grade × tamanho é ORDENADA (`grade_tamanhos.ordem`). O formulário vive nas

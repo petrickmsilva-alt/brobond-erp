@@ -388,6 +388,7 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
       'grades',
       'insumos',
       'produtos',
+      'tamanhos',
       'vendas',
     ]);
   });
@@ -409,6 +410,15 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
     expect(moduleOfPath('/colecoes')?.id).toBe('colecoes');
     expect(moduleOfPath('/colecoes/novo')?.id).toBe('colecoes');
     expect(moduleOfPath('/colecoes/12/editar')?.id).toBe('colecoes');
+  });
+
+  it('Tamanhos entra no padrão LISTA → PÁGINA: cadastro e edição vivem no módulo /tamanhos', () => {
+    expect(FORM_DIRETO.has('tamanhos')).toBe(true);
+    const tamanhos = MODULES.find((m) => m.id === 'tamanhos');
+    expect(tamanhos?.path).toBe('/tamanhos');
+    expect(moduleOfPath('/tamanhos')?.id).toBe('tamanhos');
+    expect(moduleOfPath('/tamanhos/novo')?.id).toBe('tamanhos');
+    expect(moduleOfPath('/tamanhos/12/editar')?.id).toBe('tamanhos');
   });
 
   it('Grades entra no padrão LISTA → PÁGINA: criação e edição vivem no módulo /grades', () => {
