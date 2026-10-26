@@ -1280,6 +1280,7 @@ export const PAGES_ESPECIAIS = [
   'inutilizacoes',
   'comissoes',
   'empresas',
+  'colecoes',
 ] as const;
 
 /** Módulos cuja listagem abre diretamente a página de detalhe. */

@@ -205,7 +205,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', 
       s.areas.flatMap((a) => a.groups.flatMap((g) => g.subgroups.flatMap((sub) => sub.modules.map((m) => m.id))))
     );
     expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
-    expect(PAGES_ESPECIAIS).toHaveLength(21);
+    expect(PAGES_ESPECIAIS).toHaveLength(22);
   });
 });
 

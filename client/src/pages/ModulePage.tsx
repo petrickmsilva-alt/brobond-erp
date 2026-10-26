@@ -109,6 +109,7 @@ const NcmPage = lazy(() => import('./NcmPage'));
 const ComissoesPage = lazy(() => import('./ComissoesPage'));
 const EmpresasPage = lazy(() => import('./EmpresasPage'));
 const InutilizacoesPage = lazy(() => import('./InutilizacoesPage'));
+const ColecoesPage = lazy(() => import('./ColecoesPage'));
 
 const PAGE_SIZE = 25;
 /** Tamanhos de página oferecidos na listagem (server-side). */
@@ -147,6 +148,7 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'comissoes') return <Suspense fallback={<SubPageLoading />}><ComissoesPage /></Suspense>;
   if (module.id === 'empresas') return <Suspense fallback={<SubPageLoading />}><EmpresasPage /></Suspense>;
   if (module.id === 'inutilizacoes') return <Suspense fallback={<SubPageLoading />}><InutilizacoesPage /></Suspense>;
+  if (module.id === 'colecoes') return <Suspense fallback={<SubPageLoading />}><ColecoesPage /></Suspense>;
 
   if (!module.resource || !resource) return <PlannedModule module={module} />;
   return <ResourceCrud key={resource.key} module={module} resource={resource} />;

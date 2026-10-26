@@ -37,7 +37,7 @@ import {
   type Tx,
 } from './store';
 import { round2 } from './utils';
-import { EMPRESA_PADRAO, type EscopoEmpresa } from './empresa';
+import { EMPRESA_PADRAO, temEscopoEmpresa, type EscopoEmpresa } from './empresa';
 import { chaveSemanaCivil, diaCivil, inicioSemanaCivil, mesCivil, mesCivilDeslocado } from './fuso';
 
 /** Tabelas do painel que carregam `empresa_id` (migration 0017). */
@@ -285,6 +285,25 @@ export class MemStore implements Store {
       if (Object.entries(where).every(([k, v]) => norm(row[k]) === norm(v))) n++;
     }
     return n;
+  }
+
+  /**
+   * Espelha a agregação do PostgreSQL sobre as tabelas em memória: conta, de uma
+   * vez, quantas linhas referenciam cada id — o mesmo contrato (um Map) e o
+   * mesmo recorte por empresa. Sem N+1 no modo demonstração também.
+   */
+  async countByColumn(r: Resource, coluna: string, ids: number[], empresaId?: number): Promise<Map<number, number>> {
+    const out = new Map<number, number>();
+    if (!columnsOf(r).some((f) => f.name === coluna)) return out;
+    const alvos = new Set(ids.filter((n) => Number.isInteger(n) && n > 0));
+    const escopado = temEscopoEmpresa(r) && empresaId !== undefined;
+    for (const row of this.table(r.table).rows.values()) {
+      if (escopado && Number(row.empresa_id ?? EMPRESA_PADRAO) !== empresaId) continue;
+      const id = Number(row[coluna]);
+      if (!alvos.has(id)) continue;
+      out.set(id, (out.get(id) ?? 0) + 1);
+    }
+    return out;
   }
 
   private checkConstraints(r: Resource, data: Payload, id?: number) {
