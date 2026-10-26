@@ -266,6 +266,29 @@ export async function validarReferenciasDeSaida(r: Resource, rows: Row[], escopo
 // ----------------------------------------------------------------------------
 // Leitura
 // ----------------------------------------------------------------------------
+/**
+ * UTILIZAÇÃO DA COLEÇÃO EM PRODUTOS — "N produtos" na listagem de coleções.
+ *
+ * Uma consulta AGREGADA (GROUP BY colecao_id) para a PÁGINA inteira, jamais uma
+ * por coleção: o `countByColumn` devolve um Map id→contagem. O recorte de
+ * empresa é aplicado na própria consulta, então uma empresa nunca vê a contagem
+ * de produtos de outra. Campos são virtuais (não existem como coluna; servem à
+ * apresentação) e nunca entram na escrita — ver `Payload`/validação.
+ */
+async function anotarUsoColecao(r: Resource, rows: Row[], escopo: EscopoEmpresa | null | undefined): Promise<void> {
+  if (r.key !== 'colecoes' || !rows.length) return;
+  const ids = rows.map((row) => Number(row.id)).filter((n) => Number.isInteger(n));
+  const produtos = getResource('produtos');
+  const contagens = produtos
+    ? await getStore().countByColumn(produtos, 'colecao_id', ids, escopo?.empresaId)
+    : new Map<number, number>();
+  for (const row of rows) {
+    const n = contagens.get(Number(row.id)) ?? 0;
+    row.produtos_vinculados = n;
+    row.em_uso = n > 0;
+  }
+}
+
 export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: EscopoOuAtor) {
   const escopo = comoEscopo(escopoOuAtor);
   // Filtros virtuais do módulo Usuários (status consolidado, MFA, senha, acesso):
@@ -282,6 +305,7 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   await attachImages(r, out.rows);
   anotarStatusSenha(r, out.rows);
   await anotarUsoLocal(r, out.rows);
+  await anotarUsoColecao(r, out.rows, escopo);
   await attachGradeTamanhos(r, out.rows);
   return out;
 }

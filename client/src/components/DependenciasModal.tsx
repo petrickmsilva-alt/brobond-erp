@@ -31,6 +31,7 @@ import {
   Layers,
   Link2,
   ListChecks,
+  Loader2,
   Package,
   Paperclip,
   Printer,
@@ -169,11 +170,22 @@ export function DependenciasModal({
   diag,
   onClose,
   onAbrirModulo,
+  onDesativar,
+  desativando = false,
+  rotuloDesativar = 'Desativar registro',
 }: {
   diag: DiagnosticoDependencias | null;
   onClose: () => void;
   /** Leva ao módulo do vínculo (quando ele é um recurso navegável). */
   onAbrirModulo?: (recurso: string) => void;
+  /**
+   * Saída alternativa à exclusão quando o recurso tem status Ativo/Inativo:
+   * desativar preserva os vínculos (o histórico continua apontando para ele).
+   * Sem esta prop, o rodapé traz só "Fechar" e "Ver vínculos".
+   */
+  onDesativar?: () => void;
+  desativando?: boolean;
+  rotuloDesativar?: string;
 }) {
   const [detalhado, setDetalhado] = useState(false);
   const grupos = useMemo(() => (diag ? agruparPorModulo(diag) : []), [diag]);
@@ -194,7 +206,13 @@ export function DependenciasModal({
           <button className="btn-secondary" onClick={onClose}>
             Fechar
           </button>
-          <button className="btn-primary" onClick={() => setDetalhado((v) => !v)} aria-expanded={detalhado}>
+          {onDesativar && (
+            <button className="btn-primary" onClick={onDesativar} disabled={desativando}>
+              {desativando && <Loader2 className="h-4 w-4 animate-spin" />}
+              {rotuloDesativar}
+            </button>
+          )}
+          <button className="btn-secondary" onClick={() => setDetalhado((v) => !v)} aria-expanded={detalhado}>
             {detalhado ? 'Ocultar vínculos' : 'Ver vínculos'}
             {detalhado ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </button>

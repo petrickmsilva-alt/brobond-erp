@@ -151,6 +151,15 @@ export interface Store {
   options(r: Resource, tx?: Tx): Promise<Option[]>;
   findOneWhere(r: Resource, where: Payload, tx?: Tx): Promise<Row | null>;
   countWhere(r: Resource, where: Payload, tx?: Tx): Promise<number>;
+  /**
+   * UTILIZAÇÃO AGREGADA — quantas linhas de `r` referenciam cada id de `ids`
+   * pela coluna `coluna`, sempre recortado por `empresaId`.
+   *
+   * Uma única consulta com GROUP BY serve a página inteira (nenhum N+1: nunca
+   * uma consulta por registro). Devolve só os ids com contagem > 0. Usada para
+   * mostrar "N produtos" na listagem sem contar produto a produto.
+   */
+  countByColumn(r: Resource, coluna: string, ids: number[], empresaId?: number, tx?: Tx): Promise<Map<number, number>>;
 
   insert(r: Resource, data: Payload, tx?: Tx): Promise<Row>;
   update(r: Resource, id: number, data: Payload, tx?: Tx): Promise<Row | null>;

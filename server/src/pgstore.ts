@@ -18,9 +18,8 @@ import {
   type AcaoReferencial,
   type RelacaoDependente,
 } from './dependencias';
-import type { EscopoEmpresa } from './empresa';
+import { EMPRESA_PADRAO, temEscopoEmpresa, type EscopoEmpresa } from './empresa';
 import { sqlCivil } from './fuso';
-import { EMPRESA_PADRAO } from './empresa';
 import {
   labelOf,
   type AuditEntry,
@@ -427,6 +426,39 @@ export class PgStore implements Store {
     const cond = predicates.length ? `WHERE ${predicates.join(' AND ')}` : '';
     const res = await q(`SELECT COUNT(*)::int AS n FROM ${r.table} ${cond}`, params, tx);
     return res.rows[0]?.n ?? 0;
+  }
+
+  /**
+   * UTILIZAÇÃO AGREGADA — GROUP BY em UMA consulta para a página inteira.
+   * Nenhum N+1: a contagem de todos os registros vem de uma só ida ao banco.
+   * `coluna` e a tabela vêm do METADADO do recurso (nunca do input do usuário)
+   * e ainda passam por `identificadorSeguro`; os ids entram como parâmetro.
+   */
+  async countByColumn(r: Resource, coluna: string, ids: number[], empresaId?: number, tx?: Tx): Promise<Map<number, number>> {
+    const out = new Map<number, number>();
+    const alvos = [...new Set(ids.filter((n) => Number.isInteger(n) && n > 0))];
+    if (!alvos.length) return out;
+    const colunasReais = new Set(columnsOf(r).map((f) => f.name));
+    if (!colunasReais.has(coluna) || !identificadorSeguro(coluna) || !identificadorSeguro(r.table)) return out;
+    const params: unknown[] = [alvos];
+    let where = `${citarIdentificador(coluna)} = ANY($1)`;
+    if (temEscopoEmpresa(r) && empresaId !== undefined) {
+      params.push(empresaId);
+      where += ` AND ${citarIdentificador('empresa_id')} = $${params.length}`;
+    }
+    const res = await q(
+      `SELECT ${citarIdentificador(coluna)} AS alvo, COUNT(*)::int AS n
+         FROM ${citarIdentificador(r.table)}
+        WHERE ${where}
+        GROUP BY ${citarIdentificador(coluna)}`,
+      params,
+      tx
+    );
+    for (const row of res.rows as { alvo: unknown; n: number }[]) {
+      const id = Number(row.alvo);
+      if (Number.isInteger(id)) out.set(id, Number(row.n));
+    }
+    return out;
   }
 
   async insert(r: Resource, data: Payload, tx?: Tx): Promise<Row> {
