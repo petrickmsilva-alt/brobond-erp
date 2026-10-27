@@ -6,6 +6,7 @@ import { MemStore } from './memdb';
 import { PgStore, isPgAvailable, translatePgError } from './pgstore';
 import { hasDatabaseUrl } from './db';
 import { getResource, RESOURCES, type Resource } from './resources';
+import { validarFornecedorParaNovoPedido } from './fornecedorHomologacaoGuard';
 import { labelOf, type ListParams, type ListResult, type Payload, type Row, type Store, type Tx } from './store';
 import { validatePayload } from './validate';
 import { apenasDigitos, cnpjValido, cpfValido, tipoDocumento } from './documentos';
@@ -22,6 +23,10 @@ import {
 import { aplicarRegrasOrdem, recalcularFichaValores, validarOrdemPayload } from './producao';
 import { RESUMO_MEDIDAS_VAZIO, resumoMedidasPorGrade, statusTabelaMedidas } from './medidas';
 import { hookTaxaLancamento, syncAporte, syncLancamentoCompra, syncLancamentoVenda, syncTransferencia } from './financeiro';
+// CRM 3.0 — histórico de estágio e lead scoring são EFEITOS da gravação, não
+// endpoints paralelos: entram na MESMA transação do CRUD (nada de trilha que
+// pode "sumir" se a transação falhar).
+import { normalizarAtividadeCrm, recalcularScoreDoLead, registrarHistoricoEstagio, resolverFunilPadrao } from './crm';
 import {
   aplicarFiltroEmpresa,
   assertRegistroDaEmpresa,
@@ -1052,6 +1057,8 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       if (r.key === 'usuarios') await prepareUserPayload(data, null, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, null, actor);
       if (r.key === 'politicas_comerciais') prepararPoliticaComercial(data, null);
+      if (r.key === 'crm_atividades') normalizarAtividadeCrm(data, null);
+      if (r.key === 'crm_oportunidades') await resolverFunilPadrao(s, tx, escopo.empresaId, data);
       if (r.key === 'movimentacoes') return createMovimentacao(data, actor, tx, escopo);
       if (r.key === 'movimentacoes_insumos') return createMovimentacaoInsumo(data, actor, tx, escopo);
       if (r.key === 'estoques') {
@@ -1066,6 +1073,11 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
         // DEFAULT 'aberto' só existe no Postgres, então no modo demonstração o
         // registro nascia sem status e o snapshot do saldo nunca rodava.
         if (data.status === undefined || data.status === null || data.status === '') data.status = 'aberto';
+      }
+      // COMPRAS 3.0 — fornecedor suspenso/bloqueado não recebe pedido NOVO.
+      // (A regra vale só na criação: pedido existente segue o curso.)
+      if (r.key === 'compras') {
+        await validarFornecedorParaNovoPedido(s, data.fornecedor_id ? Number(data.fornecedor_id) : null, escopo.empresaId, tx);
       }
       // O estado fiscal pertence aos endpoints de NF-e: o formulário não cria nota.
       if (r.key === 'vendas') for (const k of ['nfe_status', 'nfe_numero', 'nfe_emitida_em', 'nfe_provider']) delete data[k];
@@ -1143,6 +1155,23 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
         conviteEntregue = convite.entregue;
       }
 
+      // CRM 3.0 — a oportunidade nasce com o PRIMEIRO registro do histórico
+      // (estágio anterior nulo) e o lead nasce com score calculado.
+      if (r.key === 'crm_oportunidades') {
+        await registrarHistoricoEstagio(s, tx, {
+          empresaId: Number(row.empresa_id ?? escopo.empresaId),
+          oportunidadeId: Number(row.id),
+          estagioAnterior: null,
+          estagioNovo: String(row.etapa ?? ''),
+          statusAnterior: null,
+          statusNovo: row.status ? String(row.status) : null,
+          usuarioId: actor.id ?? null,
+          observacao: 'Abertura da oportunidade',
+        });
+      }
+      if (r.key === 'crm_leads') {
+        await recalcularScoreDoLead(s, tx, Number(row.id), Number(row.empresa_id ?? escopo.empresaId), row);
+      }
       await audit(tx, actor, 'criar', r, row.id, `${r.singular} ${labelOf(r, row)} incluído(a)`, sanitize(data), row);
       const final = (await s.get(r, row.id, tx)) ?? row;
       if (conviteLink) (final as Row).convite_link = conviteLink;
@@ -1204,6 +1233,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (r.key === 'usuarios') await prepareUserPayload(data, before, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, before, actor);
       if (r.key === 'politicas_comerciais') prepararPoliticaComercial(data, before);
+      if (r.key === 'crm_atividades') normalizarAtividadeCrm(data, before);
       if (r.key === 'estoques') {
         const localAnteriorId = before.local_id === null || before.local_id === undefined ? null : Number(before.local_id);
         const localIdInformado = data.local_id !== undefined && data.local_id !== null && data.local_id !== '';
@@ -1294,6 +1324,9 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
           throw new HttpError(400, 'O saldo do insumo só muda por movimentações (compra, ajuste ou consumo de OP). Apenas o estoque mínimo pode ser editado aqui.', { quantidade: 'Use uma movimentação de insumo' });
         }
       }
+      if (r.key === 'compras' && data.fornecedor_id !== undefined && Number(data.fornecedor_id) !== Number(before.fornecedor_id)) {
+        await validarFornecedorParaNovoPedido(s, data.fornecedor_id ? Number(data.fornecedor_id) : null, escopo.empresaId, tx);
+      }
       if (r.key === 'ordens') await validarOrdemPayload(data, before);
       if (r.key === 'clientes') await validarRegrasCliente(data, before, Number(before.empresa_id ?? escopo.empresaId), { body, tx });
       if (r.key === 'representantes') await validarRegrasRepresentante(s, data, before, Number(before.empresa_id ?? escopo.empresaId), { body, tx });
@@ -1318,6 +1351,30 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       const row = await s.update(r, id, data, tx);
       if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
       if (mudouGrade) await syncGradeTamanhos(id, gradeTamanhos, tx);
+
+      // CRM 3.0 — HISTÓRICO DE ESTÁGIO: toda mudança de etapa (ou de desfecho)
+      // da oportunidade entra na trilha do funil, na mesma transação.
+      if (r.key === 'crm_oportunidades' && (changes.etapa || changes.status)) {
+        const etapaMudou = String(row.etapa ?? '') !== String(before.etapa ?? '');
+        const statusMudou = String(row.status ?? '') !== String(before.status ?? '');
+        if (etapaMudou || statusMudou) {
+          await registrarHistoricoEstagio(s, tx, {
+            empresaId: Number(before.empresa_id ?? escopo.empresaId),
+            oportunidadeId: id,
+            estagioAnterior: before.etapa ? String(before.etapa) : null,
+            estagioNovo: String(row.etapa ?? ''),
+            statusAnterior: before.status ? String(before.status) : null,
+            statusNovo: row.status ? String(row.status) : null,
+            usuarioId: actor.id ?? null,
+            observacao: statusMudou && !etapaMudou ? `Desfecho alterado para ${row.status}` : null,
+          });
+        }
+      }
+      // CRM 3.0 — LEAD SCORING: recalculado a cada gravação do lead (regras
+      // explicáveis; o motivo fica gravado junto do número).
+      if (r.key === 'crm_leads') {
+        await recalcularScoreDoLead(s, tx, id, Number(before.empresa_id ?? escopo.empresaId), row);
+      }
 
       // Usuários: desativação/reativação/troca de perfil têm efeitos de segurança.
       if (r.key === 'usuarios') {
@@ -1587,6 +1644,22 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
       }
       if (r.key === 'ordens') filhos.push({ r: getResource('itens_ordem')!, col: 'ordem_id' });
       if (r.key === 'fichas') filhos.push({ r: getResource('itens_ficha_tecnica')!, col: 'ficha_id' });
+      // ERP 3.0 — COMPOSIÇÕES dos documentos das migrations 0051..0056.
+      // São partes do PRÓPRIO registro (não histórico de outro domínio): sem
+      // esta remoção prévia, a FK NO ACTION faria a trilha recém-criada
+      // impedir a exclusão do registro que a originou — por exemplo, o
+      // histórico de estágio bloquearia excluir uma oportunidade criada por
+      // engano. O padrão é o mesmo de `itens_venda`/`itens_ordem`.
+      if (r.key === 'crm_oportunidades') filhos.push({ r: getResource('crm_estagio_historico')!, col: 'oportunidade_id' });
+      if (r.key === 'estoque_transferencias') {
+        filhos.push({ r: getResource('estoque_transferencia_itens')!, col: 'transferencia_id' });
+        filhos.push({ r: getResource('estoque_transferencia_eventos')!, col: 'transferencia_id' });
+      }
+      if (r.key === 'fornecedores') {
+        filhos.push({ r: getResource('fornecedor_documentos')!, col: 'fornecedor_id' });
+        filhos.push({ r: getResource('fornecedor_homologacao_eventos')!, col: 'fornecedor_id' });
+      }
+      if (r.key === 'fiscal_obrigacoes') filhos.push({ r: getResource('fiscal_obrigacao_entregas')!, col: 'obrigacao_id' });
       for (const filho of filhos) {
         const itens = await s.list(filho.r, { page: 1, pageSize: 1000, filter: { [filho.col]: id } }, tx);
         for (const it of itens.rows) await s.remove(filho.r, Number(it.id), tx);
@@ -2370,6 +2443,18 @@ async function produtoTamanhoLabel(produtoId: number, tamanhoId: number | null, 
 }
 
 /** Movimentação manual de insumo (módulo Estoque de Insumos). */
+/**
+ * LANÇA UMA MOVIMENTAÇÃO OFICIAL dentro de uma transação JÁ ABERTA.
+ *
+ * Existe para que documentos de negócio (transferência entre locais, reserva de
+ * estoque) mudem o saldo pelo MESMO caminho de sempre — com validação de grade,
+ * checagem condicional de saldo, estorno e auditoria — sem abrir uma segunda
+ * transação nem escrever em `estoques` por conta própria.
+ */
+export async function lancarMovimentacaoDentro(data: Payload, actor: Actor, tx: Tx, escopo: EscopoEmpresa): Promise<Row> {
+  return createMovimentacao(data, actor, tx, escopo);
+}
+
 async function createMovimentacaoInsumo(data: Payload, actor: Actor, tx: Tx, escopo: EscopoEmpresa): Promise<Row> {
   const s = getStore();
   const mov = getResource('movimentacoes_insumos')!;

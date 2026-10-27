@@ -78,7 +78,10 @@ test('cadastro declara o padrão LISTA → PÁGINA (sem drawer/modal), filtros r
   assert.deepEqual(r.ops, { create: true, update: true, delete: true });
 
   // Filtros: SOMENTE campos que existem de verdade em `fornecedores`.
-  assert.deepEqual(r.filterFields, ['pessoa', 'uf', 'ativo']);
+  // COMPRAS 3.0 (migration 0053) acrescenta o filtro de HOMOLOGAÇÃO — o
+  // comprador pergunta primeiro "quem pode receber pedido?" e só depois filtra
+  // por pessoa/UF. Os quatro campos existem em `fornecedores`.
+  assert.deepEqual(r.filterFields, ['homologacao_status', 'pessoa', 'uf', 'ativo']);
   assert.equal(r.quickFilters?.[0]?.field, 'ativo');
   assert.deepEqual(
     r.quickFilters?.[0]?.options.map((o) => o.label),
@@ -99,7 +102,7 @@ test('cadastro declara o padrão LISTA → PÁGINA (sem drawer/modal), filtros r
 test('as seções do formulário são as reais do recurso (Identificação · Fiscal · Endereço · Contato · Comercial)', () => {
   const r = RESOURCES.fornecedores;
   const secoes = Array.from(new Set(r.fields.map((f) => f.section).filter(Boolean)));
-  assert.deepEqual(secoes, ['Identificação', 'Fiscal', 'Endereço', 'Contato', 'Comercial']);
+  assert.deepEqual(secoes, ['Identificação', 'Fiscal', 'Endereço', 'Contato', 'Homologação', 'Comercial']);
   // A busca do servidor cobre os campos declarados search:true.
   const buscaveis = r.fields.filter((f) => f.search).map((f) => f.name);
   for (const esperado of ['nome', 'cnpj', 'nome_fantasia', 'ie', 'cidade', 'contato', 'telefone', 'whatsapp', 'email']) {
@@ -134,13 +137,22 @@ test('os campos do formulário são exatamente os que existem em `fornecedores` 
     'telefone',
     'whatsapp',
     'email',
+    // COMPRAS 3.0 — homologação (migration 0053): estado, categoria,
+    // responsável, carimbo, validade documental, nota manual e motivo.
+    'homologacao_status',
+    'homologacao_categoria',
+    'homologacao_responsavel_id',
+    'homologado_em',
+    'validade_documentos',
+    'avaliacao_manual',
+    'homologacao_motivo',
     'prazo_entrega_dias',
     'condicao_pagamento',
     'observacoes',
     'ativo',
     'criado_em',
     'atualizado_em',
-  ], 'o formulário usa os campos reais da tabela fornecedores (schema + migration 0021)');
+  ], 'o formulário usa os campos reais da tabela fornecedores (schema + migrations 0021 e 0053)');
 
   // Nada de código/SKU próprio, NCM, categoria, limite de crédito, banco/PIX,
   // foto ou tabela de preços — nada disso existe no domínio.
