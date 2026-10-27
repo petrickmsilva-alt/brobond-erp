@@ -179,3 +179,131 @@ test('H) produto sem ficha aparece em sem_ficha', async () => {
   const out = await chamar(mrpProducao, { actor: gerente });
   assert.ok(out.sem_ficha.some((p: any) => p.produto_id === produto));
 });
+
+// ============================================================================
+// CORREÇÃO FINAL — MRP SEM DUPLA CONTAGEM E COM ESCOPO DECLARADO
+//
+// Cada caso aqui existe para impedir um jeito concreto de contar a mesma
+// quantidade duas vezes. Se alguém "otimizar" a fórmula, estes testes caem.
+// ============================================================================
+
+test('I) reserva ATIVA não é contada como oferta (físico − comprometido)', async () => {
+  const produto = await novoProduto(`Camisa Reserva ${unico()}`);
+  const tamanho = await createRecord(RESOURCES.tamanhos, { nome: `R-${unico()}`, codigo: `R${unico()}` }, admin);
+  // 10 peças físicas, das quais 10 estão reservadas para outro documento.
+  await createRecord(RESOURCES.estoques, { produto_id: produto, tamanho_id: Number(tamanho.id), quantidade: 10 }, admin);
+  await createRecord(
+    RESOURCES.estoque_reservas,
+    { produto_id: produto, tamanho_id: Number(tamanho.id), tipo: 'reserva', quantidade: 10, status: 'ativa', motivo: `Reserva ${unico()}` },
+    admin
+  );
+  const venda = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, status: 'aberta', data: '2026-09-01', total: 60 }, admin);
+  await createRecord(RESOURCES.itens_venda, { venda_id: Number(venda.id), produto_id: produto, tamanho_id: Number(tamanho.id), quantidade: 6, preco_unitario: 10 }, admin);
+
+  const out = await chamar(mrpProducao, { actor: gerente });
+  const linha = out.produtos.find((p: any) => p.produto_id === produto && p.tamanho_id === Number(tamanho.id));
+  assert.ok(linha, 'a falta aparece porque o físico está comprometido');
+  assert.equal(linha.estoque_fisico, 10, 'físico continua visível para auditoria');
+  assert.equal(linha.reservado, 10, 'o comprometido é explicitado');
+  assert.equal(linha.estoque_disponivel, 0, 'disponível = físico − reservado (nada livre)');
+  assert.equal(linha.falta, 6, 'a mesma peça não cobre a venda: falta tudo');
+  assert.equal(out.produtos.filter((p: any) => p.produto_id === produto).length, 1, 'uma linha por produto/tamanho');
+});
+
+test('J) OP aberta entra pelo que FALTA produzir (não pelo total) e não duplica a demanda', async () => {
+  const produto = await novoProduto(`Camisa OP ${unico()}`);
+  const tamanho = await createRecord(RESOURCES.tamanhos, { nome: `O-${unico()}`, codigo: `O${unico()}` }, admin);
+  const venda = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, status: 'aberta', data: '2026-09-02', total: 100 }, admin);
+  await createRecord(RESOURCES.itens_venda, { venda_id: Number(venda.id), produto_id: produto, tamanho_id: Number(tamanho.id), quantidade: 10, preco_unitario: 10 }, admin);
+  // OP de 40 peças com 30 já produzidas → 10 restantes cobrem a demanda inteira.
+  const op = await createRecord(
+    RESOURCES.ordens,
+    { produto_id: produto, tipo: 'tamanho', quantidade: 40, status: 'em_producao', tamanho_id: Number(tamanho.id) },
+    admin
+  );
+  // `quantidade_produzida` é readonly na API (quem escreve é o apontamento).
+  // No teste gravamos direto no store para simular as 30 peças já apontadas.
+  await getStore().update(RESOURCES.ordens, Number(op.id), { quantidade_produzida: 30 });
+
+  const out = await chamar(mrpProducao, { actor: gerente });
+  const linha = out.produtos.find((p: any) => p.produto_id === produto);
+  assert.equal(linha, undefined, 'demanda 10 = OP 10 restantes → não há falta (nada contado duas vezes)');
+  const resumo = out.resumo;
+  assert.equal(typeof resumo.pecas_em_falta, 'number');
+});
+
+test('K) estoque mínimo entra apenas como DÉFICIT (nunca em cima da demanda)', async () => {
+  const produto = await novoProduto(`Camisa Mínimo ${unico()}`);
+  const tamanho = await createRecord(RESOURCES.tamanhos, { nome: `N-${unico()}`, codigo: `N${unico()}` }, admin);
+  await createRecord(RESOURCES.estoques, { produto_id: produto, tamanho_id: Number(tamanho.id), quantidade: 2, estoque_min: 8 }, admin);
+
+  const out = await chamar(mrpProducao, { actor: gerente });
+  const linha = out.produtos.find((p: any) => p.produto_id === produto);
+  assert.ok(linha, 'abaixo do mínimo há necessidade de reposição');
+  assert.equal(linha.demanda_vendas, 0);
+  assert.equal(linha.demanda_estoque_minimo, 6, 'deficit = 8 (mínimo) − 2 (disponível)');
+  assert.equal(linha.demanda, 6);
+  assert.equal(linha.falta, 6);
+});
+
+test('L) compra aberta entra por (pedido − recebido): recebido já está no saldo', async () => {
+  const produto = await novoProduto(`Camisa Compra Parcial ${unico()}`);
+  const tamanho = await createRecord(RESOURCES.tamanhos, { nome: `P-${unico()}`, codigo: `P${unico()}` }, admin);
+  const insumo = await createRecord(RESOURCES.insumos, { nome: `Tecido Parcial ${unico()}`, unidade: 'm' }, admin);
+  const ficha = await createRecord(RESOURCES.fichas, { produto_id: produto, mao_obra: 0, custos_indiretos: 0, margem_pct: 0 }, admin);
+  await createRecord(RESOURCES.itens_ficha_tecnica, { ficha_id: Number(ficha.id), insumo_id: Number(insumo.id), consumo: 1, perda_pct: 0 }, admin);
+  const venda = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, status: 'aberta', data: '2026-09-03', total: 100 }, admin);
+  await createRecord(RESOURCES.itens_venda, { venda_id: Number(venda.id), produto_id: produto, tamanho_id: Number(tamanho.id), quantidade: 10, preco_unitario: 10 }, admin);
+  const compra = await createRecord(RESOURCES.compras, { fornecedor_id: 1, status: 'parcial', data: '2026-09-01' }, admin);
+  // 10 pedidas, 4 já recebidas (e já refletidas no saldo) → só 6 estão a caminho.
+  await createRecord(RESOURCES.itens_compra, { compra_id: Number(compra.id), insumo_id: Number(insumo.id), quantidade: 10, preco_unitario: 2 }, admin);
+  const itemCompra = (await listRecords(RESOURCES.itens_compra, { page: 1, pageSize: 5, filter: { compra_id: Number(compra.id) } }, { kind: 'empresa', empresaId: 1 } as any)).rows[0];
+  // 4 já recebidas (readonly na API; o recebimento é quem escreve).
+  await getStore().update(RESOURCES.itens_compra, Number(itemCompra.id), { quantidade_recebida: 4 });
+
+  const out = await chamar(mrpProducao, { actor: gerente });
+  const ins = out.insumos.find((i: any) => i.insumo_id === Number(insumo.id));
+  assert.equal(ins.em_compra, 6, 'só o saldo pendente da compra é oferta futura');
+  assert.equal(ins.faltando, 4, '10 de necessidade − 6 a caminho');
+});
+
+test('M) MRP declara o que é, o que cobre e o que NÃO cobre — e não cria compra', async () => {
+  const antes = await listRecords(RESOURCES.compras, { page: 1, pageSize: 1, filter: {} }, { kind: 'empresa', empresaId: 1 } as any);
+  const out = await chamar(mrpProducao, { actor: gerente });
+  const depois = await listRecords(RESOURCES.compras, { page: 1, pageSize: 1, filter: {} }, { kind: 'empresa', empresaId: 1 } as any);
+
+  assert.equal(depois.total, antes.total, 'MRP NUNCA cria pedido de compra');
+  assert.equal(out.calculo.tipo, 'mrp_planejamento_necessidade');
+  assert.equal(out.calculo.cria_pedido_de_compra, false);
+  assert.ok(String(out.calculo.titulo).includes('planejamento/necessidade'));
+  assert.ok(out.calculo.nao_coberto.includes('lead time de compra e de produção'));
+  assert.ok(out.calculo.nao_coberto.some((x: string) => x.includes('capacidade finita')));
+  assert.ok(out.calculo.coberto.some((x: string) => x.includes('compras abertas')));
+});
+
+test('N) MRP não vaza dados de outra empresa', async () => {
+  const empresaB = { kind: 'empresa', empresaId: 2 } as any;
+  const produtoB = await createRecord(RESOURCES.produtos, { sku: `MRPB-${unico()}`, nome: `Produto B ${unico()}`, custo: 1, preco_venda: 2 }, { id: 999, name: 'Admin B', perfil: 'admin' } as any, { escopo: empresaB });
+  const clienteB = await createRecord(
+    RESOURCES.clientes,
+    { nome: `Cliente B ${unico()}`, pessoa: 'pf', documento: '52998224725' },
+    { id: 999, name: 'Admin B', perfil: 'admin' } as any,
+    { escopo: empresaB }
+  );
+  const vendaB = await createRecord(RESOURCES.vendas, { cliente_id: Number(clienteB.id), status: 'aberta', data: '2026-09-04', total: 50 }, { id: 999, name: 'Admin B', perfil: 'admin' } as any, { escopo: empresaB });
+  const tamanhoB = await createRecord(
+    RESOURCES.tamanhos,
+    { nome: `B-${unico()}`, codigo: `B${unico()}` },
+    { id: 999, name: 'Admin B', perfil: 'admin' } as any,
+    { escopo: empresaB }
+  );
+  await createRecord(
+    RESOURCES.itens_venda,
+    { venda_id: Number(vendaB.id), produto_id: Number(produtoB.id), tamanho_id: Number(tamanhoB.id), quantidade: 9, preco_unitario: 5 },
+    { id: 999, name: 'Admin B', perfil: 'admin' } as any,
+    { escopo: empresaB }
+  );
+
+  const outA = await chamar(mrpProducao, { actor: gerente });
+  assert.ok(!outA.produtos.some((p: any) => p.produto_id === Number(produtoB.id)), 'demanda da empresa B não aparece no MRP de A');
+});

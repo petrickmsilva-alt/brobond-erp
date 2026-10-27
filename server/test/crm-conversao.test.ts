@@ -66,7 +66,14 @@ test('conversão: cria oportunidade vinculada, marca o lead e audita', async () 
   assert.equal(Number(opp.lead_id), Number(l.id), 'oportunidade aponta para o lead de origem');
   assert.equal(Number(opp.empresa_id), 1, 'oportunidade nasce na empresa da sessão');
   assert.equal(opp.status, 'aberta');
-  assert.equal(opp.etapa, 'qualificacao', 'conversão entra na etapa de qualificação');
+  // CORREÇÃO (0057): a conversão NÃO escolhe mais uma etapa do vocabulário
+  // fixo ("qualificacao"). Ela usa o FUNIL PADRÃO da empresa e entra na
+  // PRIMEIRA ETAPA ATIVA por `ordem`. No funil semeado (0051) a primeira é
+  // "prospeccao" (ordem 10). Com funil próprio, a etapa é a do cadastro —
+  // comportamento coberto em crm-funil-configuravel.test.ts (casos 9/10).
+  assert.equal(opp.etapa, 'prospeccao', 'conversão entra na primeira etapa ativa do funil padrão');
+  assert.ok(opp.etapa_id, 'a oportunidade convertida aponta para a etapa do cadastro');
+  assert.ok(opp.funil_id, 'a oportunidade convertida fica no funil padrão da empresa');
   assert.equal(Number(opp.valor), 12000, 'valor herdado do lead');
   assert.equal(Number(opp.probabilidade), 30, 'probabilidade herdada do lead');
   assert.equal(String(opp.previsao_fechamento), '2026-12-20', 'previsão herdada do lead');

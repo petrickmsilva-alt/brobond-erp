@@ -101,7 +101,10 @@ test('histórico de estágio: mesmo estágio não gera linha nova (idempotência
 // ---------------------------------------------------------------------------
 // C) Transição explícita de estágio (endpoint) — regra de negócio
 // ---------------------------------------------------------------------------
-test('transição de estágio: etapa inválida é recusada pelo vocabulário fechado', async () => {
+// A partir da 0057 o vocabulário NÃO é mais a autoridade: quem manda é o
+// cadastro de etapas da empresa. Etapa inexistente no cadastro continua sendo
+// recusada — agora com 422 e a lista de chaves válidas do funil.
+test('transição de estágio: etapa fora do cadastro do funil é recusada (422)', async () => {
   const op = await createRecord(
     RESOURCES['crm_oportunidades'],
     { nome: `Op etapa inválida ${sufixo}`, etapa: 'prospeccao', status: 'aberta', valor: '1000,00' },
@@ -110,7 +113,10 @@ test('transição de estágio: etapa inválida é recusada pelo vocabulário fec
   );
   const { mudarEstagioOportunidade } = await import('../src/crm');
   const req = { params: { id: String(op.id) }, body: { etapa: 'etapa-que-nao-existe' }, user: atorA, query: {} } as any;
-  await esperarErro(() => mudarEstagioOportunidade(req, { json() {} } as any), 400);
+  const erro: any = await esperarErro(() => mudarEstagioOportunidade(req, { json() {} } as any), 422);
+  assert.match(String(erro.message), /não existe no funil/, 'a mensagem lista o que existe no funil');
+  // A lista canônica continua existindo como SEMENTE/compatibilidade — não
+  // como autoridade. Ver docs/ERP-3.0-CRM-FUNIL-CONFIGURAVEL.md.
   assert.equal(ETAPAS_CRM.length, 5);
 });
 
