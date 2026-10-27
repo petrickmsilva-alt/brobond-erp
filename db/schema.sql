@@ -5358,3 +5358,12 @@ DO $$ BEGIN
   ALTER TABLE crm_oportunidades ADD CONSTRAINT crm_oportunidades_probabilidade_range
     CHECK (probabilidade >= 0 AND probabilidade <= 100);
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ============================================================================
+-- Espelho da migration db/migrations/0050_crm_funil_indices.sql
+-- (CRM 3.0 — índices do funil; o contrato de conversão está documentado lá)
+-- ============================================================================
+CREATE INDEX IF NOT EXISTS crm_leads_empresa_origem_idx
+  ON crm_leads (empresa_id, origem);
+CREATE INDEX IF NOT EXISTS crm_oportunidades_empresa_lead_idx
+  ON crm_oportunidades (empresa_id, lead_id);

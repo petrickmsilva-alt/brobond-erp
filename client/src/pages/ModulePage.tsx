@@ -24,6 +24,7 @@ import {
   Search,
   Share2,
   Trash2,
+  TrendingUp,
   X,
 } from 'lucide-react';
 import { api, ApiError, downloadFile } from '../lib/api';
@@ -302,6 +303,29 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const podeAlternarAtivo = permiteAlternarAtivo(resource.key) && canUpdate;
   const [alternandoAtivoId, setAlternandoAtivoId] = useState<number | null>(null);
   const alternandoAtivoRef = useRef<number | null>(null);
+
+  // CRM 3.0 — conversão Lead → Oportunidade (mesma rota do backend,
+  // POST /api/crm/leads/:id/converter). A tela NÃO decide nada: os valores
+  // padrão, a idempotência, o escopo de empresa e a auditoria são do servidor.
+  // Aqui só existe o caminho de navegação para o fluxo já implementado.
+  const [convertendoLeadId, setConvertendoLeadId] = useState<number | null>(null);
+  async function converterLeadEmOportunidade(row: Record<string, any>) {
+    const id = Number(row.id);
+    setConvertendoLeadId(id);
+    try {
+      const r = await api.post<{ oportunidade_id: number; idempotente: boolean }>(`/crm/leads/${id}/converter`, {});
+      toast.success(
+        r.idempotente
+          ? `Este lead já estava convertido — oportunidade #${r.oportunidade_id}.`
+          : `Lead convertido na oportunidade #${r.oportunidade_id}.`
+      );
+      await load();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Não foi possível converter o lead.');
+    } finally {
+      setConvertendoLeadId(null);
+    }
+  }
 
   // Estorno de movimentações
   const [toEstornar, setToEstornar] = useState<Record<string, any> | null>(null);
@@ -786,6 +810,20 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
             <KeyRound className="h-4 w-4" />
           </button>
         )}
+        {resource.key === 'crm_leads' &&
+          canUpdate &&
+          !row.lead_convertido_em &&
+          !['ganho', 'perdido'].includes(String(row.status)) && (
+            <button
+              className="btn-icon hover:!bg-emerald-50 hover:!text-emerald-700"
+              onClick={() => void converterLeadEmOportunidade(row)}
+              disabled={convertendoLeadId === Number(row.id)}
+              title="Converter em oportunidade"
+              aria-label={`Converter ${rowLabel(resource, row)} em oportunidade`}
+            >
+              {convertendoLeadId === Number(row.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <TrendingUp className="h-4 w-4" />}
+            </button>
+          )}
         {resource.key === 'propostas' && (
           <DocumentPrintButton tipo="propostas" documentoId={Number(row.id)} label="Imprimir" compact />
         )}

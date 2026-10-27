@@ -1425,6 +1425,63 @@ await (async () => {
   const sumiuRep = await req('GET', `/representantes/${semUsoRep.json?.id}`);
   check('representantes: o excluído some da leitura (404)', sumiuRep.status === 404, `status ${sumiuRep.status}`);
 }
+// ---------------------------------------------------------------- CRM 3.0
+// Funil Lead → Oportunidade pela superfície HTTP real: rota registrada,
+// RBAC do recurso, conversão transacional/idempotente e coerência de funil.
+{
+  const sufixo = Date.now().toString().slice(-6);
+  const lead = await req('POST', '/crm_leads', {
+    nome: `Lead smoke ${sufixo}`,
+    origem: 'site',
+    status: 'novo',
+    valor_estimado: '4800,00',
+    probabilidade: 40,
+    previsao_contato: '2026-12-31',
+  });
+  check('CRM: POST /crm_leads cria lead', [200, 201].includes(lead.status), `status ${lead.status} ${msg(lead.json)}`);
+  const leadId = lead.json?.id;
+
+  const conversao = await req('POST', `/crm/leads/${leadId}/converter`, { etapa: 'qualificacao' });
+  check('CRM: POST /crm/leads/:id/converter → 201', conversao.status === 201, `status ${conversao.status} ${msg(conversao.json)}`);
+  check('CRM: conversão devolve oportunidade vinculada ao lead',
+    Number(conversao.json?.oportunidade?.lead_id) === Number(leadId),
+    `oportunidade=${conversao.json?.oportunidade_id}`);
+
+  const repetida = await req('POST', `/crm/leads/${leadId}/converter`, {});
+  check('CRM: conversão repetida é idempotente (200, mesma oportunidade)',
+    repetida.status === 200 && repetida.json?.idempotente === true &&
+    Number(repetida.json?.oportunidade_id) === Number(conversao.json?.oportunidade_id),
+    `status ${repetida.status} id=${repetida.json?.oportunidade_id}`);
+
+  const doLead = await req('GET', `/crm_oportunidades?f.lead_id=${leadId}&pageSize=50`);
+  check('CRM: o lead convertido tem exatamente UMA oportunidade',
+    doLead.status === 200 && (doLead.json?.rows || []).length === 1,
+    `total=${doLead.json?.total}`);
+
+  const leadDepois = await req('GET', `/crm_leads/${leadId}`);
+  check('CRM: lead marcado como convertido e promovido a qualificação',
+    leadDepois.status === 200 && !!leadDepois.json?.lead_convertido_em && leadDepois.json?.status === 'qualificacao',
+    `status=${leadDepois.json?.status}`);
+
+  const perdaSemMotivo = await req('PUT', `/crm_oportunidades/${conversao.json?.oportunidade_id}`, { status: 'perdida' });
+  check('CRM: oportunidade perdida sem motivo → 400',
+    perdaSemMotivo.status === 400 && !!perdaSemMotivo.json?.fields?.motivo_perda_id,
+    `status ${perdaSemMotivo.status}`);
+
+  const motivo = await req('POST', '/crm_motivos_perda', { nome: `Preço ${sufixo}` });
+  const perdida = await req('PUT', `/crm_oportunidades/${conversao.json?.oportunidade_id}`,
+    { status: 'perdida', motivo_perda_id: motivo.json?.id });
+  check('CRM: fechar como perdida com motivo → 200 e data de fechamento',
+    perdida.status === 200 && !!perdida.json?.data_fechamento, `status ${perdida.status}`);
+
+  const etapaCongelada = await req('PUT', `/crm_oportunidades/${conversao.json?.oportunidade_id}`, { etapa: 'proposta' });
+  check('CRM: estágio de oportunidade fechada é congelado → 409',
+    etapaCongelada.status === 409, `status ${etapaCongelada.status}`);
+
+  const semTokenCrm = await req('POST', `/crm/leads/${leadId}/converter`, {}, null);
+  check('CRM: conversão exige autenticação → 401', semTokenCrm.status === 401, `status ${semTokenCrm.status}`);
+}
+
 // ---------------------------------------------------------------- RBAC
 const semToken = await req('GET', '/logistica/config', null, null);
 check('sem token → 401', semToken.status === 401, `status ${semToken.status}`);
