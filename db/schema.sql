@@ -5369,7 +5369,7 @@ CREATE INDEX IF NOT EXISTS crm_oportunidades_empresa_lead_idx
   ON crm_oportunidades (empresa_id, lead_id);
 
 -- ============================================================================
--- ESPELHO DAS MIGRATIONS 0051..0056 (ERP 3.0)
+-- ESPELHO DAS MIGRATIONS 0051..0057 (ERP 3.0)
 --
 -- O schema.sql é aplicado a cada boot em bancos NOVOS (server/src/db.ts) e é a
 -- referência de "coluna existe" para o teste `api.test.ts`. Toda migration
@@ -6264,3 +6264,57 @@ DO $$ BEGIN
   ALTER TABLE lancamentos_financeiros ADD CONSTRAINT lancamentos_classificacao_coerente
     CHECK ((conta_contabil_id IS NULL) = (natureza_lancamento IS NULL));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+
+-- ----------------------------------------------------------------------------
+-- ESPELHO DE db/migrations/0057_crm_etapa_configuravel.sql
+--
+-- CRM: etapa da oportunidade realmente configurável por empresa.
+-- `etapa_id` é a referência operacional (FK composta por empresa); `etapa`
+-- (texto) continua como chave de leitura/compatibilidade/histórico.
+-- ----------------------------------------------------------------------------
+
+ALTER TABLE crm_oportunidades ADD COLUMN IF NOT EXISTS etapa_id INTEGER;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_crm_etapas_empresa_id
+  ON crm_etapas (empresa_id, id);
+
+DO $$ BEGIN
+  ALTER TABLE crm_oportunidades
+    ADD CONSTRAINT fk_e42_crm_oportunidades_empresa_etapa
+    FOREIGN KEY (empresa_id, etapa_id) REFERENCES crm_etapas (empresa_id, id)
+    ON DELETE RESTRICT;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE INDEX IF NOT EXISTS crm_oportunidades_empresa_etapa_id_idx
+  ON crm_oportunidades (empresa_id, etapa_id);
+
+DO $$ BEGIN
+  ALTER TABLE crm_etapas ADD CONSTRAINT crm_etapas_chave_formato
+    CHECK (chave ~ '^[a-z][a-z0-9_]{0,39}$') NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+ALTER TABLE crm_oportunidades DROP CONSTRAINT IF EXISTS crm_oportunidades_etapa_valido;
+
+DO $$ BEGIN
+  ALTER TABLE crm_oportunidades ADD CONSTRAINT crm_oportunidades_etapa_nao_vazia
+    CHECK (etapa IS NOT NULL AND btrim(etapa) <> '');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+UPDATE crm_oportunidades o
+   SET etapa_id = e.id
+  FROM crm_etapas e
+ WHERE o.etapa_id IS NULL
+   AND e.empresa_id = o.empresa_id
+   AND e.chave = o.etapa
+   AND (o.funil_id IS NULL OR e.funil_id = o.funil_id);
+
+UPDATE crm_oportunidades o
+   SET etapa_id = e.id,
+       funil_id = COALESCE(o.funil_id, e.funil_id)
+  FROM crm_etapas e
+  JOIN crm_funis f ON f.id = e.funil_id AND f.empresa_id = e.empresa_id
+ WHERE o.etapa_id IS NULL
+   AND e.empresa_id = o.empresa_id
+   AND f.padrao
+   AND e.chave = o.etapa;
