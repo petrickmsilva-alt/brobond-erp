@@ -1,5 +1,5 @@
 {
-  "gerado_em": "2026-10-27T19:29:57.248Z",
+  "gerado_em": "2026-10-27T20:27:58.055Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
     "sql": 50,
@@ -163,14 +163,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 149,
-      "casos": 1316
+      "arquivos": 151,
+      "casos": 1319
     },
     "client": {
       "arquivos": 71,
       "casos": 822
     },
-    "total": 2138
+    "total": 2141
   },
   "integracoes": {
     "arquivos_modules": 31,
@@ -226,116 +226,6 @@
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"produto_abc\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"fornecedor_contatos\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"produto_composicao\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"regras_fiscais\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"documentos_fiscais_eventos\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"inutilizacoes_fiscais\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"importacoes_nfe\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"categorias_financeiras\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"investidores\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"aportes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"recorrencias_financeiras\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"centros_custo\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"transferencias_financeiras\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"listas_preco_historico\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"proposta_itens\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"proposta_eventos\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"compra_recebimento_itens\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"print_pairing_codes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"print_agent_nonces\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"print_terminals\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"planos_comissao\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"regras_comissao\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"venda_atribuicao\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     }
   ],
   "tabelas_sem_empresa_id": [

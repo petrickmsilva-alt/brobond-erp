@@ -328,7 +328,9 @@ escrito apenas por esses endpoints — o CRUD de vendas descarta `nfe_*`.
 
 ```bash
 npm test                        # regras de negócio (estoque, OP, permissões, validação, rate limit)
-npm --prefix server run test:pg # suíte de integração: exige DATABASE_URL (sem ela, os testes se auto-pulam)
+npm run test:pg                 # suíte de integração: exige DATABASE_URL em banco VAZIO (o gate
+                                # recusa skip/todo e exige PostgreSQL 16.14 — 160014)
+npm run smoke:pg                # smoke E2E contra PostgreSQL real, em banco criado do zero
 npm run typecheck
 npm run lint                    # erros param o CI; avisos (any em handlers) não
 npm run audit:menu              # menu × rotas × recursos × RBAC × tenant
@@ -338,10 +340,14 @@ npm run smoke                   # HTTP real contra a API em modo demonstração 
 
 O GitHub Actions (`.github/workflows/ci.yml`) roda typecheck, testes, lint e build
 a cada push — um PR com erro não passa. Há ainda um job `testes-postgres` que sobe
-um `postgres:16` e roda `test:pg`: é o único lugar onde dá para provar que o abate
-de saldo é atômico sob concorrência (o modo demonstração não tem isolamento por
-transação) e que as migrações versionadas chegam a um banco existente. Ele está com
-`continue-on-error`, ou seja: informa, não segura o merge.
+um `postgres:16.14` oficial, instala `postgresql-client-16` e roda `test:pg`,
+`npx prisma validate`, o dual-track Prisma e `smoke:pg`: é o único lugar onde dá
+para provar que o abate de saldo é atômico sob concorrência (o modo demonstração
+não tem isolamento por transação) e que as migrações versionadas chegam a um banco
+existente. **Esse job não usa `continue-on-error`** — verde nele é condição de
+merge. Para reproduzir localmente é preciso um PostgreSQL 16.14 e o cliente `psql`
+no `PATH` (ou em `PSQL_BIN`): sem o `psql`, os testes do wrapper E4.2 se
+auto-pulam e o gate acusa a falta, porque skip não é aprovação.
 
 ### Como adicionar um campo a um módulo
 

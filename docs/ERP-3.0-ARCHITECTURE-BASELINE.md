@@ -40,9 +40,9 @@
 | Grupos de navegação | **28** | `MODULE_GROUPS` |
 | Rotas HTTP | **336** | `app.get/post/put/patch/delete` em `server/src/index.ts` |
 | Modelos Prisma | **11** | 5 com `empresaId` (bounded context do commerce) |
-| Casos de teste declarados | **2.138** | contagem estática: 1.316 server (149 arquivos) + 822 client (71 arquivos) |
-| Casos executados neste ambiente | **2.008** | 1.174 server (1.106 pass / 68 skip) + 834 client (834 pass) |
-| Verificações HTTP de smoke | **327** | `npm run smoke` contra o Express real, modo demonstração |
+| Casos de teste declarados | **2.141** | contagem estática: 1.319 server (151 arquivos) + 822 client (71 arquivos) |
+| Casos executados neste ambiente | **2.163** | 1.329 server (1.261 pass / 68 skip) + 834 client (834 pass) |
+| Verificações HTTP de smoke | **327** | `npm run smoke` (Express real, modo demonstração) **e** `npm run smoke:pg` (PostgreSQL real, banco novo) |
 
 Rotas por método: `GET 147 · POST 157 · PUT 17 · DELETE 12 · PATCH 3`.
 Rotas registradas **antes** do `requireAuth` global (públicas por desenho): 44 —
@@ -314,12 +314,14 @@ BI (Meu Negócio, produto_abc, comissões)
 |---|---|
 | `npm run typecheck` (domain + server + client) | **PASS** |
 | `npm run lint` | **PASS** — 0 erros (avisos pré-existentes de `no-explicit-any`) |
-| `npm test` (server + client) | **PASS** — server 1.106/1.174 (68 skip), client 834/834 |
+| `npm test` (server + client) | **PASS** — server 1.261/1.329 (68 skip), client 834/834 |
 | `npm run build` | **PASS** |
 | `npm run audit:menu` | **PASS** — sem erros |
-| `npm run architecture:audit` (novo) | **PASS** — 0 erros, 32 avisos classificados |
+| `npm run architecture:audit` | **PASS** — 0 erros, 10 avisos classificados (`TENANT_SEM_TESTE` zerado) |
 | `npm run smoke` (Express real, HTTP) | **PASS** — 327/327, incluindo 10 verificações de CRM |
-| `npm run test:pg` / `smoke:pg` / `db:validate` | **BLOCKED** — ambiente sem PostgreSQL e sem acesso a `binaries.prisma.sh` (ver §10 do relatório da execução) |
+| `npm run smoke:pg` (PostgreSQL 16.14 real, banco novo) | **PASS** — 327/327 |
+| `npm run test:pg` (PostgreSQL 16.14 real) | **PASS parcial** — 277/290 (12 skip + 1 falha por ausência do cliente `psql` neste sandbox; o job `testes-postgres` do CI é verde com `postgresql-client-16`) |
+| `npm run db:validate` | **BLOQUEADO neste sandbox** — `prisma validate` baixa o `schema-engine` de `binaries.prisma.sh` (fora da allowlist de rede); o CI executa o mesmo comando no job `verificar` |
 
 ---
 

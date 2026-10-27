@@ -25,8 +25,8 @@
 | Nível | Abertos | Fechados nesta execução |
 |---|---:|---:|
 | **P0** | **0** | 0 |
-| **P1** | **2** | 3 |
-| **P2** | **8** | 2 |
+| **P1** | **0** | 2 |
+| **P2** | **9** | 3 |
 | **P3** | **3** | 0 |
 
 **Nenhum gap P0 foi encontrado** no escopo auditado (tenancy, RBAC, conversão
@@ -35,32 +35,40 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 
 ---
 
-## 2. Gaps P1 (abertos)
+## 2. Gaps P1 — fechados nesta execução
 
-### GAP-P1-01 — Gates de PostgreSQL não executados neste ambiente (BLOQUEADO)
+> Esta rodada executou os dois P1 que estavam abertos. O que segue é a evidência
+> **executada**, com os comandos e os números reais — inclusive a única verificação
+> que permanece impossível neste sandbox.
+
+### GAP-P1-01 — Evidência de PostgreSQL real · **FECHADO**
 
 | Campo | Valor |
 |---|---|
 | Domínio | Infraestrutura de teste / evidência de release |
-| Sintoma | `npm run test:pg`, `npm run smoke:pg` e `npm run db:validate` **não rodaram**: o sandbox não tem servidor PostgreSQL nem acesso a `binaries.prisma.sh` |
-| Impacto | As regras provadas "no banco de verdade" (concorrência de saldo, migrações em banco vazio, smoke E2E pós-migração) ficam **sem evidência nova** nesta execução |
-| Verificação | `npx prisma validate` → `Error: request to https://binaries.prisma.sh/... failed`; `which psql postgres initdb` → vazio |
-| Mitigação nesta execução | `npm run smoke` (Express real, modo demonstração) 327/327; suíte de servidor com 1.106 testes verdes, 68 skips declarados (os skips são, em sua maioria, os casos que exigem PG) |
-| Fechamento | Rodar o job `testes-postgres` do CI (`.github/workflows/ci.yml`) ou `npm run test:pg` + `npm run smoke:pg` contra PostgreSQL 16 |
-| Severidade | **P1** (evidência, não defeito de código) |
+| Sintoma (antes) | `test:pg`, `smoke:pg` e `db:validate` não rodavam no ambiente de trabalho: sem servidor PostgreSQL e sem acesso a `binaries.prisma.sh` |
+| Como foi fechado | PostgreSQL **16.14 real** (binários `embedded-postgres` 16.14.0-beta.17) subiu em `127.0.0.1:5433`; banco **novo e vazio** por rodada; a suíte inteira do job `testes-postgres` foi executada |
+| Evidência local — `npm run test:pg` | **290 testes · 277 pass · 12 skip · 1 fail** (detalhe abaixo) |
+| Evidência local — `npm run smoke:pg` | **327/327 PASS** contra PostgreSQL real em banco criado do zero (migrate + `ensureAdmin` automáticos, zero SQL manual) |
+| Evidência local — `npm run db:validate` | **BLOQUEADO**: `prisma validate` baixa `schema-engine` de `binaries.prisma.sh` (fora da allowlist de rede do sandbox). O CI executa `npx prisma validate` como passo do job `verificar` |
+| Evidência de CI | run **40569720909** em `ab6e254`: job `testes-postgres` ✓ (4m37s, `postgres:16.14` oficial + `psql`) e job `verificar` ✓ (3m5s, inclui `npx prisma validate`) |
+| Falha local remanescente (não mascarada) | `PROD-DB-01.5.3 — o executor recusa cópia defasada do script 005` (`server/test/pg/prod-db-01-521-gate-classe-c.test.ts`): `spawnSync(psql …)` → `exec: psql: not found`, exit 127. O pacote de binários disponível aqui traz `initdb`/`pg_ctl`/`postgres` e **não** traz o cliente `psql`; os 12 `# SKIP` da rodada têm a mesma causa (`binário psql indisponível; no CI ele é instalado (postgresql-client-16)`). No CI, com `postgresql-client-16` instalado, o mesmo teste passa — é o que o job verde de `ab6e254` mostra |
+| O que **não** foi feito | Não relaxei a asserção de versão (`server_version_num = 160014`), não converti o teste em skip e não substituí nada por mock para "fechar verde" |
+| Severidade residual | **Nenhuma de código.** Dívida de ambiente: o sandbox não tem cliente `psql` |
 
-### GAP-P1-02 — Cobertura nominal de isolamento A × B em 22 recursos multiempresa
+### GAP-P1-02 — Isolamento A × B nominal em 22 recursos · **FECHADO**
 
 | Campo | Valor |
 |---|---|
 | Domínio | Tenancy / testes |
-| Sintoma | `npm run architecture:audit` aponta 22 recursos `empresa: true` sem um teste que os cite nominalmente em cenário A × B (ex.: `regras_fiscais`, `documentos_fiscais_eventos`, `inutilizacoes_fiscais`, `centros_custo`, `transferencias_financeiras`, `proposta_itens`, `compra_recebimento_itens`, `planos_comissao`, `venda_atribuicao`, `print_terminals`) |
-| Impacto | O isolamento **existe** (declarado em `resources.ts` e aplicado por `empresa.ts`), mas a prova é indireta (testes genéricos de multiempresa) |
-| Verificação | `npm run architecture:audit` → avisos `TENANT_SEM_TESTE` |
-| Fechamento | Um teste A × B por recurso (ou por família), no molde de `server/test/crm-3-0.test.ts` e `server/test/crm-conversao.test.ts` |
-| Severidade | **P1** (consistência de evidência) |
-
----
+| Sintoma (antes) | `npm run architecture:audit` listava **22** recursos `empresa: true` sem teste que os citasse nominalmente (regra `TENANT_SEM_TESTE`) |
+| Como foi fechado | Um caso nominal por recurso, em duas camadas: serviço (`server/test/multiempresa-nominal.test.ts`, 155 testes) e HTTP real sobre PostgreSQL (`server/test/pg/multiempresa-nominal-http.test.ts`, 13 testes / 10 recursos com rota pública) |
+| Recursos cobertos (22) | `fornecedor_contatos`, `produto_composicao`, `regras_fiscais`, `documentos_fiscais_eventos`, `inutilizacoes_fiscais`, `importacoes_nfe`, `categorias_financeiras`, `investidores`, `aportes`, `recorrencias_financeiras`, `centros_custo`, `transferencias_financeiras`, `listas_preco_historico`, `proposta_itens`, `proposta_eventos`, `compra_recebimento_itens`, `print_pairing_codes`, `print_agent_nonces`, `print_terminals`, `planos_comissao`, `regras_comissao`, `venda_atribuicao` |
+| O que cada caso prova | A cria/lê/lista/edita/(exclui) o próprio registro **e** o registro é dela no banco; B **não lê** (404), **não lista** (`total = 0`), **não edita** (404 + registro idêntico) e **não exclui** (404 + registro intacto). Depois disso A ainda edita e exclui — ou seja, o bloqueio de B vem do **recorte de empresa**, não de o registro ser imutável |
+| Semântica preservada | 404 (não 403) para registro de outra empresa — o ERP não confirma existência de dado alheio. Recursos `internal`/append-only continuam sem rota pública (`GET /api/print_terminals` → 404) e continuam recusando escrita pelo próprio contrato |
+| Evidência do audit | `TENANT_SEM_TESTE`: **22 → 0**. Avisos totais do `architecture:audit`: **32 → 10** (nenhum deles de tenancy) |
+| Falhas de produto encontradas | **Nenhuma de isolamento.** O que os testes acharam foram divergências de **contrato de payload** entre modo memória e PostgreSQL — `planos_comissao` exige `vigencia_inicio`/`padrao` (o `INSERT` do `pgstore` envia a coluna explicitamente; o modo memória preenche o default) e `NUMERIC` volta como `"7.0000"` —, tratadas no próprio teste, sem tocar em código de produção |
+| Severidade residual | **Nenhuma.** `GAP-P2-12` (duplicata deste item) também é baixado |
 
 ## 3. Auditoria por domínio (o que foi verificado)
 
@@ -86,6 +94,8 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 
 | ID | Item | Evidência |
 |---|---|---|
+| **GAP-P1-01** | Gates de PostgreSQL sem execução real | PG 16.14 real: `smoke:pg` 327/327; `test:pg` 277 pass (1 falha só por `psql` ausente no sandbox); CI `40569720909` verde |
+| **GAP-P1-02** | 22 recursos multiempresa sem prova nominal de isolamento | `server/test/multiempresa-nominal.test.ts` (155) + `server/test/pg/multiempresa-nominal-http.test.ts` (13); `TENANT_SEM_TESTE` 22 → 0 |
 | **GAP-P1-03** | Funil sem elo Lead → Oportunidade (não havia endpoint nem ação de tela) | `server/src/crm.ts` + rota + ação na lista + 10 testes de servidor + 6 de tela + 10 verificações HTTP |
 | **GAP-P1-04** | Estágio/status do funil sem coerência (fechada mudava de etapa; motivo de perda órfão; data de fechamento não derivada) | `normalizarOportunidadeCrm` em `services.ts` + testes |
 | **GAP-P1-05** | Inventário arquitetural inexistente como comando (números digitados à mão em docs) | `npm run architecture:audit` + JSON + gate de CI |
@@ -107,7 +117,6 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 | GAP-P2-09 | Compras | Sem homologação/cotação formal de fornecedor (qualificação cadastral) | Compra direta com fornecedor não homologado | Fluxo de homologação (documentos, aprovação, validade) |
 | GAP-P2-10 | Produção | Sem MRP, capacidade ou sequenciamento | Planejamento manual | MRP a partir de demanda + ficha técnica |
 | GAP-P2-11 | Fiscal | SPED/obrigações acessórias não implementados | Escrituração é feita fora do ERP | Exportações SPED (ICMS/IPI, contribuições), EFD-Reinf |
-| GAP-P2-12 | Tenancy | 22 recursos sem teste de isolamento **nominal** (ver GAP-P1-02) | Evidência indireta | Um teste por família de recurso |
 
 ---
 
