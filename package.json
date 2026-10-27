@@ -16,6 +16,7 @@
     "test:pg": "node scripts/test-pg-gate.mjs",
     "audit:menu": "node --import tsx scripts/auditar-menu.ts",
     "architecture:audit": "node --import tsx scripts/arquitetura-audit.ts",
+    "audit:ux": "node scripts/auditar-ux.mjs",
     "smoke": "node scripts/smoke-e2e.mjs",
     "smoke:pg": "node scripts/smoke-pg.mjs",
     "lint": "eslint 'server/src/**/*.ts' 'modules/**/*.ts' 'packages/*/src/**/*.ts' 'client/src/**/*.{ts,tsx}' 'scripts/**/*.ts'",

@@ -335,7 +335,12 @@ console.log(`│ cobertura de tenant ..... ${inventario.recursos.cobertura_tenan
 console.log(`│ RBAC restrito ........... ${numero(inventario.recursos.rbac_restrito)} recursos`);
 console.log(`│ módulos ................. ${numero(inventario.modulos.total)} (áreas: ${inventario.modulos.areas}, grupos: ${inventario.modulos.grupos})`);
 console.log(`│ rotas HTTP .............. ${numero(inventario.rotas.total)}`);
-console.log(`│ modelos Prisma .......... ${numero(inventario.prisma.total_modelos)} (com empresa_id: ${inventario.prisma.com_empresa_id})`);
+// MÉTRICAS SEPARADAS, DE PROPÓSITO:
+//   • SQL  → "tabela possui empresa_id" (fonte de verdade do tenant);
+//   • Prisma → "modelo tem empresaId" (campo do bounded context commerce).
+// Somar as duas num único número esconderia que o Prisma é recorte parcial.
+console.log(`│ modelos Prisma .......... ${numero(inventario.prisma.total_modelos)} (com empresaId: ${inventario.prisma.com_empresa_id})`);
+console.log(`│ métricas distintas ...... SQL: ${inventario.tabelas.com_empresa_id}/${inventario.tabelas.total} tabelas com empresa_id · Prisma: ${inventario.prisma.com_empresa_id}/${inventario.prisma.total_modelos} modelos com empresaId`);
 console.log(`│ testes .................. ${numero(inventario.testes.total)} casos em ${numero(testesServer.arquivos + testesClient.arquivos)} arquivos`);
 console.log('└───────────────────────────────────────────────────────────────────┘');
 

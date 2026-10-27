@@ -234,6 +234,10 @@ const SEM_TELA_PROPRIA = new Set([
   'comissoes_eventos', 'gateway_configs', 'gateway_webhook_events',
   'produto_abc', 'produto_fornecedor_skus', 'connector_events',
   'connector_oauth_states', 'sale_items',
+  // ESTOQUE 3.0: itens e eventos do documento de transferência vivem DENTRO da
+  // tela de transferências (que lê o documento completo por
+  // GET /api/estoque/transferencias/:id). Não são telas — são o documento.
+  'estoque_transferencia_itens', 'estoque_transferencia_eventos',
 ]);
 const recursosNavegaveis = new Set<string>();
 for (const r of Object.values(RESOURCES)) {
