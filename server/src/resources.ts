@@ -51,6 +51,29 @@ export type Field = {
   /** valor único dentro da empresa (`empresa_id`, valor), sem globalizar cadastros. */
   uniqueEmpresa?: boolean;
   options?: FieldOption[];
+  /**
+   * Opções de um `select` que vivem no BANCO, não no código.
+   *
+   * `GET /api/meta` resolve este campo para a empresa da sessão (ver
+   * `metaComOpcoesDinamicas` em services.ts) e entrega as opções prontas no
+   * campo `options`. Quando a empresa ainda não cadastrou nada, as `options`
+   * estáticas acima funcionam como SEMENTE/COMPATIBILIDADE — nunca como
+   * autoridade sobre o que existe.
+   *
+   * Usado pelo funil do CRM (`crm_oportunidades.etapa` ← `crm_etapas.chave`):
+   * cadastrar uma etapa nova passa a permitir usá-la em uma oportunidade sem
+   * alterar código.
+   */
+  optionsFrom?: {
+    /** recurso de onde vêm as opções (ex.: 'crm_etapas') */
+    resource: string;
+    /** campo do recurso usado como `value` (padrão: 'id') */
+    value?: string;
+    /** campo do recurso usado como `label` (padrão: labelFields) */
+    label?: string;
+    /** só oferece registros ativos (padrão: true) */
+    onlyActive?: boolean;
+  };
   /** chave do recurso referenciado (type = 'ref') */
   ref?: string;
   min?: number;
@@ -1492,13 +1515,36 @@ export const RESOURCES: Record<string, Resource> = {
     empresa: true,
     ops: ALL_OPS,
     minPerfil: 'gerente',
-    notice: 'Negociação em pipeline, com estágio, valor, probabilidade e previsão de fechamento. Oportunidade perdida exige motivo.',
+    notice:
+      'Negociação em pipeline. O estágio vem do funil CADASTRADO da empresa (Etapas do funil) — a lista abaixo é apenas a semente inicial. Oportunidade perdida exige motivo.',
     fields: [
       { name: 'nome', label: 'Oportunidade', type: 'text', required: true, search: true, maxLength: 160, placeholder: 'Nome da negociação' },
       { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes', search: true, hint: 'Cliente já cadastrado (ou deixe o lead como origem).' },
       { name: 'lead_id', label: 'Lead de origem', type: 'ref', ref: 'crm_leads', search: true, hint: 'Lead que originou esta oportunidade.' },
       { name: 'funil_id', label: 'Funil', type: 'ref', ref: 'crm_funis', search: true, hint: 'Funil configurável a que esta oportunidade pertence (padrão: o funil padrão da empresa).' },
-      { name: 'etapa', label: 'Estágio', type: 'select', required: true, search: true, options: [
+      {
+        name: 'etapa_id',
+        label: 'Estágio (etapa do funil)',
+        type: 'ref',
+        ref: 'crm_etapas',
+        search: true,
+        hint: 'Etapa cadastrada no funil da empresa. É a referência operacional — vale a etapa, sua probabilidade e o histórico.',
+      },
+      {
+        name: 'etapa',
+        label: 'Estágio',
+        type: 'select',
+        // Não é `required` no schema: a etapa pode chegar por `etapa_id` (que é
+        // a referência operacional) ou ser resolvida pelo cadastro do funil.
+        // O servidor SEMPRE grava uma chave válida — ver
+        // `aplicarEtapaNaOportunidade()` em crm.ts.
+        search: true,
+        hint: 'Chave da etapa (preenchida pelo cadastro do funil). A lista canônica só aparece enquanto a empresa não cadastrar etapas próprias.',
+        // A AUTORIDADE é o cadastro da empresa (crm_etapas). As opções abaixo
+        // são semente/compatibilidade: `GET /api/meta` as substitui pelas
+        // etapas reais da empresa (ver `optionsFrom`).
+        optionsFrom: { resource: 'crm_etapas', value: 'chave', label: 'nome' },
+        options: [
         { value: 'prospeccao', label: 'Prospecção', tone: 'blue' },
         { value: 'qualificacao', label: 'Qualificação', tone: 'amber' },
         { value: 'proposta', label: 'Proposta', tone: 'blue' },
@@ -1520,7 +1566,7 @@ export const RESOURCES: Record<string, Resource> = {
       ...auditFields,
     ],
     orderBy: { field: 'criado_em', dir: 'desc' },
-    filterFields: ['etapa', 'status', 'funil_id', 'responsavel_id', 'cliente_id', 'ativo'],
+    filterFields: ['etapa', 'etapa_id', 'status', 'funil_id', 'responsavel_id', 'cliente_id', 'ativo'],
     quickFilters: [
       { field: 'ativo', label: 'Status', options: [
         { value: '', label: 'Todos' },
@@ -1609,6 +1655,9 @@ export const RESOURCES: Record<string, Resource> = {
     ],
     orderBy: { field: 'nome', dir: 'asc' },
     uso: { recurso: 'crm_etapas', campo: 'funil_id', singular: 'etapa', plural: 'etapas' },
+    // SEMENTE de demonstração — espelha exatamente o INSERT da migration 0051.
+    // Não é funil oculto: é o mesmo funil padrão que a empresa recebe no banco.
+    mock: [{ id: 1, nome: 'Funil comercial', descricao: 'Funil padrão (semente da migration 0051).', padrao: true, ativo: true, empresa_id: 1 }],
   },
   crm_etapas: {
     key: 'crm_etapas',
@@ -1619,17 +1668,21 @@ export const RESOURCES: Record<string, Resource> = {
     empresa: true,
     ops: ALL_OPS,
     minPerfil: 'gerente',
-    notice: 'Ordem e probabilidade configuráveis. A chave (`prospeccao`, `qualificacao`, `proposta`, `negociacao`, `fechamento`) é o vocabulário aceito pelo banco.',
+    notice:
+      'ESTA é a autoridade do funil: etapa cadastrada aqui pode ser usada imediatamente nas oportunidades (ordem, probabilidade e ativo valem para o CRM inteiro).',
     fields: [
       { name: 'funil_id', label: 'Funil', type: 'ref', ref: 'crm_funis', required: true, search: true },
       { name: 'nome', label: 'Nome da etapa', type: 'text', required: true, search: true, maxLength: 80 },
-      { name: 'chave', label: 'Chave', type: 'select', required: true, options: [
-        { value: 'prospeccao', label: 'prospeccao' },
-        { value: 'qualificacao', label: 'qualificacao' },
-        { value: 'proposta', label: 'proposta' },
-        { value: 'negociacao', label: 'negociacao' },
-        { value: 'fechamento', label: 'fechamento' },
-      ] },
+      {
+        name: 'chave',
+        label: 'Chave',
+        type: 'text',
+        required: true,
+        maxLength: 40,
+        pattern: '^[a-z][a-z0-9_]{0,39}$',
+        patternMessage: 'Use minúsculas, sem acento nem espaço (ex.: demonstracao, aprovacao_juridica)',
+        hint: 'Identificador técnico da etapa (é o valor gravado na oportunidade). Livre: crie a etapa que a sua operação usa.',
+      },
       { name: 'ordem', label: 'Ordem', type: 'integer', required: true, min: 0, default: 0 },
       { name: 'probabilidade', label: 'Probabilidade (%)', type: 'percent', min: 0, max: 100, default: 0 },
       { name: 'ativo', label: 'Ativa', type: 'boolean', default: true },
@@ -1637,6 +1690,14 @@ export const RESOURCES: Record<string, Resource> = {
     ],
     orderBy: { field: 'ordem', dir: 'asc' },
     filterFields: ['funil_id', 'ativo'],
+    // SEMENTE de demonstração — mesmas 5 etapas que a 0051 cria por empresa.
+    mock: [
+      { id: 1, funil_id: 1, nome: 'Prospecção', chave: 'prospeccao', ordem: 1, probabilidade: 10, ativo: true, empresa_id: 1 },
+      { id: 2, funil_id: 1, nome: 'Qualificação', chave: 'qualificacao', ordem: 2, probabilidade: 25, ativo: true, empresa_id: 1 },
+      { id: 3, funil_id: 1, nome: 'Proposta', chave: 'proposta', ordem: 3, probabilidade: 50, ativo: true, empresa_id: 1 },
+      { id: 4, funil_id: 1, nome: 'Negociação', chave: 'negociacao', ordem: 4, probabilidade: 75, ativo: true, empresa_id: 1 },
+      { id: 5, funil_id: 1, nome: 'Fechamento', chave: 'fechamento', ordem: 5, probabilidade: 90, ativo: true, empresa_id: 1 },
+    ],
   },
   crm_origens: {
     key: 'crm_origens',

@@ -5,7 +5,7 @@ import { HttpError } from './errors';
 import { MemStore } from './memdb';
 import { PgStore, isPgAvailable, translatePgError } from './pgstore';
 import { hasDatabaseUrl } from './db';
-import { getResource, RESOURCES, type Resource } from './resources';
+import { getResource, publicMeta, RESOURCES, type Resource } from './resources';
 import { validarFornecedorParaNovoPedido } from './fornecedorHomologacaoGuard';
 import { labelOf, type ListParams, type ListResult, type Payload, type Row, type Store, type Tx } from './store';
 import { validatePayload } from './validate';
@@ -26,7 +26,13 @@ import { hookTaxaLancamento, syncAporte, syncLancamentoCompra, syncLancamentoVen
 // CRM 3.0 — histórico de estágio e lead scoring são EFEITOS da gravação, não
 // endpoints paralelos: entram na MESMA transação do CRUD (nada de trilha que
 // pode "sumir" se a transação falhar).
-import { normalizarAtividadeCrm, recalcularScoreDoLead, registrarHistoricoEstagio, resolverFunilPadrao } from './crm';
+import {
+  aplicarEtapaNaOportunidade,
+  normalizarAtividadeCrm,
+  recalcularScoreDoLead,
+  registrarHistoricoEstagio,
+  resolverFunilPadrao,
+} from './crm';
 import {
   aplicarFiltroEmpresa,
   assertRegistroDaEmpresa,
@@ -682,6 +688,62 @@ function anotarStatusSenha(r: Resource, rows: Row[]) {
   }
 }
 
+/**
+ * `GET /api/meta` com as opções que vivem no BANCO resolvidas para a empresa.
+ *
+ * Um campo `select` pode declarar `optionsFrom: { resource: 'crm_etapas', ... }`.
+ * Nesse caso a lista estática de `resources.ts` é apenas SEMENTE: aqui ela é
+ * substituída pelas linhas REAIS da empresa da sessão (só ativas, na ordem do
+ * cadastro). É assim que a etapa cadastrada hoje aparece amanhã no formulário
+ * de oportunidade — sem alterar código e sem lista escondida no cliente.
+ *
+ * Cuidado obrigatório: `publicMeta()` devolve os MESMOS objetos de
+ * `RESOURCES`; mutar `field.options` ali vazaria a empresa A para a empresa B.
+ * Por isso os campos são clonados antes de qualquer escrita.
+ */
+export async function metaComOpcoesDinamicas(escopo: EscopoEmpresa) {
+  const publico = publicMeta();
+  const meta: typeof publico = {};
+  for (const [key, recurso] of Object.entries(publico)) {
+    meta[key] = { ...recurso, fields: recurso.fields.map((f) => ({ ...f })) };
+  }
+
+  const cache = new Map<string, { value: string; label: string }[]>();
+  for (const recurso of Object.values(meta)) {
+    for (const campo of recurso.fields) {
+      const fonte = campo.optionsFrom;
+      if (!fonte) continue;
+      const alvo = getResource(fonte.resource);
+      if (!alvo) continue;
+      const chaveCache = `${alvo.key}`;
+      let opcoes = cache.get(chaveCache);
+      if (!opcoes) {
+        const filtro: Record<string, unknown> = { empresa_id: escopo.empresaId };
+        const linhas = (await getStore().list(alvo, { page: 1, pageSize: 5000, filter: filtro })).rows;
+        const campoValor = fonte.value ?? 'id';
+        const campoLabel = fonte.label ?? alvo.labelFields[0] ?? campoValor;
+        const apenasAtivas = fonte.onlyActive !== false;
+        const temAtivo = alvo.fields.some((f) => f.name === 'ativo');
+        opcoes = linhas
+          .filter((row) => !(apenasAtivas && temAtivo && row.ativo === false))
+          .slice()
+          .sort((a, b) => {
+            const oa = Number(a.ordem ?? 0) || 0;
+            const ob = Number(b.ordem ?? 0) || 0;
+            if (oa !== ob) return oa - ob;
+            return String(a[campoLabel] ?? '').localeCompare(String(b[campoLabel] ?? ''));
+          })
+          .map((row) => ({ value: String(row[campoValor] ?? ''), label: String(row[campoLabel] ?? row[campoValor] ?? '') }))
+          .filter((o) => o.value !== '');
+        cache.set(chaveCache, opcoes);
+      }
+      // Sem cadastro na empresa: mantém a semente estática (compatibilidade).
+      if (opcoes.length) campo.options = opcoes;
+    }
+  }
+  return meta;
+}
+
 export async function optionsFor(r: Resource, escopoOuAtor?: EscopoOuAtor) {
   const escopo = comoEscopo(escopoOuAtor);
   if (!temEscopoEmpresa(r)) return getStore().options(r);
@@ -1034,6 +1096,17 @@ function normalizarOportunidadeCrm(data: Payload, before: Row | null): void {
   }
 }
 
+/**
+ * O corpo CRU informou `probabilidade`? Necessário porque o schema dá default 0
+ * a esse campo — sem isso, "não informado" e "informado como zero" ficariam
+ * indistinguíveis e a probabilidade da ETAPA nunca seria aplicada.
+ */
+function probabilidadeFoiInformada(body: unknown): boolean {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const bruto = (body as Record<string, unknown>).probabilidade;
+  return bruto !== undefined && bruto !== null && bruto !== '';
+}
+
 export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
   const s = getStore();
@@ -1058,7 +1131,15 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, null, actor);
       if (r.key === 'politicas_comerciais') prepararPoliticaComercial(data, null);
       if (r.key === 'crm_atividades') normalizarAtividadeCrm(data, null);
-      if (r.key === 'crm_oportunidades') await resolverFunilPadrao(s, tx, escopo.empresaId, data);
+      if (r.key === 'crm_oportunidades') {
+        await resolverFunilPadrao(s, tx, escopo.empresaId, data);
+        // ETAPA CONFIGURÁVEL (0057): resolve a etapa contra o CADASTRO da
+        // empresa — grava `etapa_id` (referência) e a chave em `etapa`, e
+        // aplica a probabilidade da etapa quando o chamador não informou.
+        await aplicarEtapaNaOportunidade(s, tx, escopo, data, null, {
+          probabilidadeInformada: probabilidadeFoiInformada(body),
+        });
+      }
       if (r.key === 'movimentacoes') return createMovimentacao(data, actor, tx, escopo);
       if (r.key === 'movimentacoes_insumos') return createMovimentacaoInsumo(data, actor, tx, escopo);
       if (r.key === 'estoques') {
@@ -1222,6 +1303,12 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       // CRM 3.0: depende do desfecho ATUAL da oportunidade (estágio congelado
       // depois do fechamento, motivo de perda só em perdida, data de fechamento).
       if (r.key === 'crm_oportunidades') {
+        // ETAPA CONFIGURÁVEL (0057): valida a etapa/funil contra o cadastro da
+        // empresa ANTES de qualquer escrita (etapa de outro tenant → 404;
+        // de outro funil ou inativa → 422). Roda na mesma transação.
+        await aplicarEtapaNaOportunidade(s, tx, escopo, data, before, {
+          probabilidadeInformada: probabilidadeFoiInformada(body),
+        });
         normalizarOportunidadeCrm(data, before);
         if (data.status === 'perdida' && !(data.motivo_perda_id ?? before.motivo_perda_id)) {
           throw new HttpError(400, 'Informe o motivo da perda.', { motivo_perda_id: 'Obrigatório quando o status é perdida.' });
@@ -1354,7 +1441,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
 
       // CRM 3.0 — HISTÓRICO DE ESTÁGIO: toda mudança de etapa (ou de desfecho)
       // da oportunidade entra na trilha do funil, na mesma transação.
-      if (r.key === 'crm_oportunidades' && (changes.etapa || changes.status)) {
+      if (r.key === 'crm_oportunidades' && (changes.etapa || changes.etapa_id || changes.status)) {
         const etapaMudou = String(row.etapa ?? '') !== String(before.etapa ?? '');
         const statusMudou = String(row.status ?? '') !== String(before.status ?? '');
         if (etapaMudou || statusMudou) {

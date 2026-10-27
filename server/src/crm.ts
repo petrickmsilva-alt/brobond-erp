@@ -134,23 +134,49 @@ export async function converterLead(req: Request, res: Response) {
       }
 
       // 3) Oportunidade — valores do lead por padrão, sobrescritos pelo corpo.
+      //
+      // ETAPA: a conversão NÃO inventa estágio. Ela usa o funil PADRÃO da
+      // empresa e a PRIMEIRA etapa ATIVA desse funil (por `ordem`). Se a
+      // empresa ainda não cadastrou etapas, cai no vocabulário de
+      // compatibilidade ('prospeccao') e diz isso na resposta (`funil.legado`).
+      // Nunca cria funil/etapa escondida.
       const clienteId = await clienteDoLead(lead, escopo, tx);
+      const funilId = await funilPadraoDaEmpresa(s, escopo.empresaId, tx);
+      const etapaInicial = await resolverEtapaDoFunil(s, tx, {
+        empresaId: escopo.empresaId,
+        funilId,
+        etapaId: body.etapa_id === undefined ? null : Number(body.etapa_id),
+        etapaTexto: body.etapa === undefined || body.etapa === null ? null : String(body.etapa),
+        exigirAtiva: true,
+        padraoInicial: true,
+      });
+
       const payload: Record<string, unknown> = {
         empresa_id: escopo.empresaId,
         nome: texto(body.nome || `${lead.nome} — oportunidade`, NOME_MAX),
         lead_id: id,
         cliente_id: clienteId,
-        etapa: body.etapa ?? 'qualificacao',
+        funil_id: etapaInicial?.funil_id ?? funilId,
+        etapa_id: etapaInicial?.etapa_id ?? null,
+        etapa: etapaInicial?.chave ?? ETAPAS_CRM[0],
         status: 'aberta',
         valor: body.valor ?? lead.valor_estimado ?? null,
-        probabilidade: body.probabilidade ?? lead.probabilidade ?? 0,
+        // Probabilidade: explícita (corpo) > lead (> 0) > PROBABILIDADE DA
+        // ETAPA > 0. O `> 0` existe porque `crm_leads.probabilidade` tem
+        // default 0 no schema: zero ali significa "não informado", não
+        // "probabilidade nula" — e a etapa cadastrada é a fonte mais confiável.
+        probabilidade:
+          body.probabilidade ??
+          (num(lead.probabilidade) !== null && Number(lead.probabilidade) > 0 ? Number(lead.probabilidade) : null) ??
+          etapaInicial?.probabilidade ??
+          0,
         previsao_fechamento: body.previsao_fechamento ?? lead.previsao_contato ?? null,
         observacoes: body.observacoes ?? `Convertida do lead #${id}.`,
         responsavel_id: body.responsavel_id ?? lead.responsavel_id ?? null,
       };
 
-      // A validação é a MESMA do CRUD: vocabulário fechado (etapa/status),
-      // faixa de probabilidade, obrigatórios — nada de caminho alternativo.
+      // A validação é a MESMA do CRUD: faixa de probabilidade, obrigatórios,
+      // referências da empresa — nada de caminho alternativo.
       const data = validatePayload(R_OPORTUNIDADE(), payload, 'create');
       carimbarEmpresa(R_OPORTUNIDADE(), data, escopo);
       await validarReferenciasDaEmpresa(
@@ -206,9 +232,22 @@ export async function converterLead(req: Request, res: Response) {
       return { oportunidade, idempotente: false, lead: convertido };
     }, { isolation: 'serializable' });
 
+    const etapaFinal = resultado.oportunidade?.etapa_id
+      ? await getStore().findOneWhere(R_ETAPA(), { id: Number(resultado.oportunidade.etapa_id), empresa_id: escopo.empresaId })
+      : null;
     res.status(resultado.idempotente ? 200 : 201).json({
       ok: true,
       lead_id: id,
+      // Etapa de destino da conversão, com a origem da decisão explícita:
+      // 'cadastro' = veio do funil da empresa; 'compatibilidade' = a empresa
+      // não tem etapas cadastradas e vale o vocabulário histórico.
+      etapa: {
+        id: resultado.oportunidade?.etapa_id ? Number(resultado.oportunidade.etapa_id) : null,
+        chave: resultado.oportunidade?.etapa ?? null,
+        nome: etapaFinal?.nome ?? null,
+        funil_id: resultado.oportunidade?.funil_id ? Number(resultado.oportunidade.funil_id) : null,
+        origem: resultado.oportunidade?.etapa_id ? 'cadastro' : 'compatibilidade',
+      },
       oportunidade_id: Number(resultado.oportunidade.id),
       // Repetir a mesma conversão devolve a oportunidade existente — não uma nova.
       idempotente: resultado.idempotente,
@@ -243,11 +282,28 @@ const R_ESTAGIO_HIST = () => getResource('crm_estagio_historico')!;
 const R_ATIVIDADE = () => getResource('crm_atividades')!;
 const R_FUNIL = () => getResource('crm_funis')!;
 const R_CAMPANHA = () => getResource('crm_campanhas')!;
+const R_ETAPA = () => getResource('crm_etapas')!;
 
-/** Etapas canônicas do funil (as mesmas aceitas pelo CHECK da migration 0049). */
+/**
+ * ETAPAS CANÔNICAS — semente e compatibilidade, NÃO autoridade.
+ *
+ * A autoridade sobre "quais estágios existem" é o CADASTRO da empresa
+ * (`crm_etapas`). Esta lista sobrevive por três motivos legítimos:
+ *   1) SEMENTE — é o que a migration 0051 semeia no funil padrão de cada
+ *      empresa (nomes/rótulos/probabilidades iniciais);
+ *   2) COMPATIBILIDADE — banco legado sem nenhuma etapa cadastrada continua
+ *      operando pelo vocabulário que o CHECK da 0049 aceitava (hoje o CHECK é
+ *      só "não vazio", ver migration 0057);
+ *   3) LEITURA HISTÓRICA — chance que aparece em oportunidade antiga mas não
+ *      está no cadastro continua sendo exibida no funil/painel em vez de
+ *      desaparecer do relatório.
+ *
+ * O que ela NÃO faz mais: decidir se uma etapa pode ser usada. Quem decide é
+ * `resolverEtapaDoFunil()` abaixo, consultando o cadastro da EMPRESA.
+ */
 export const ETAPAS_CRM = ['prospeccao', 'qualificacao', 'proposta', 'negociacao', 'fechamento'] as const;
 
-/** Probabilidade padrão por etapa — usada só quando a etapa não tem cadastro. */
+/** Probabilidade histórica por etapa — usada só quando a etapa não tem cadastro. */
 const PROBABILIDADE_PADRAO: Record<string, number> = {
   prospeccao: 10,
   qualificacao: 25,
@@ -271,6 +327,270 @@ function diaISO(v: unknown): string | null {
 
 function hojeISO(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+// ----------------------------------------------------------------------------
+// ETAPAS DO FUNIL — a empresa é a autoridade (migration 0057)
+//
+// Toda escrita de etapa de oportunidade passa por aqui. As regras, nesta ordem:
+//   1) a etapa existe no cadastro da EMPRESA da sessão (senão 404 — não vaza
+//      existência de registro de outro tenant);
+//   2) a etapa pertence ao FUNIL da oportunidade (senão 422);
+//   3) a etapa está ATIVA para criação/movimentação (senão 422). Oportunidade
+//      antiga em etapa desativada continua legível: só não se move para ela.
+// Nada disso é validado no cliente: o cliente apenas recebe a lista
+// (`GET /api/meta` → `optionsFrom: crm_etapas`) e escolhe.
+// ----------------------------------------------------------------------------
+
+export type EtapaResolvida = {
+  /** `crm_etapas.id` — referência operacional (FK composta por empresa). */
+  etapa_id: number | null;
+  /** chave da etapa (é o que vai para `crm_oportunidades.etapa`). */
+  chave: string;
+  /** rótulo humano, quando a etapa veio do cadastro. */
+  nome: string | null;
+  /** funil a que a etapa pertence. */
+  funil_id: number | null;
+  /** probabilidade configurada na etapa (null quando não há cadastro). */
+  probabilidade: number | null;
+  /** true quando a resolução caiu no vocabulário de compatibilidade. */
+  legado: boolean;
+};
+
+/** Etapas cadastradas da empresa (opcionalmente de um funil), ativas primeiro. */
+export async function etapasDaEmpresa(
+  s: ReturnType<typeof getStore>,
+  empresaId: number,
+  tx?: Tx,
+  funilId?: number | null
+): Promise<Row[]> {
+  const filtro: Record<string, unknown> = { empresa_id: empresaId };
+  if (funilId !== undefined && funilId !== null) filtro.funil_id = funilId;
+  const { rows } = await s.list(R_ETAPA(), { page: 1, pageSize: 5000, filter: filtro }, tx);
+  return rows.slice().sort((a, b) => {
+    const oa = num(a.ordem) ?? 0;
+    const ob = num(b.ordem) ?? 0;
+    if (oa !== ob) return oa - ob;
+    return String(a.nome ?? '').localeCompare(String(b.nome ?? ''));
+  });
+}
+
+/** Funil padrão da empresa (a migration 0051 garante no máximo um). */
+export async function funilPadraoDaEmpresa(
+  s: ReturnType<typeof getStore>,
+  empresaId: number,
+  tx?: Tx
+): Promise<number | null> {
+  const { rows } = await s.list(R_FUNIL(), { page: 1, pageSize: 1, filter: { empresa_id: empresaId, padrao: true } }, tx);
+  return rows[0] ? Number(rows[0].id) : null;
+}
+
+/**
+ * Resolve a etapa da oportunidade contra o CADASTRO da empresa.
+ *
+ * Aceita `etapa_id` (referência) OU texto (chave ou nome, para compatibilidade
+ * com integrações que já mandavam `etapa: 'proposta'`). Quando nada é informado
+ * e `padraoInicial` é true (criação), usa a PRIMEIRA etapa ativa do funil — é
+ * o que faz a conversão de lead respeitar a configuração da empresa.
+ */
+export async function resolverEtapaDoFunil(
+  s: ReturnType<typeof getStore>,
+  tx: Tx | undefined,
+  params: {
+    empresaId: number;
+    funilId?: number | null;
+    etapaId?: number | null;
+    etapaTexto?: string | null;
+    /** exige etapa ativa (criação e movimentação de funil) */
+    exigirAtiva?: boolean;
+    /** sem etapa informada: assume a primeira ativa do funil */
+    padraoInicial?: boolean;
+  }
+): Promise<EtapaResolvida | null> {
+  const { empresaId } = params;
+  const funilId = params.funilId ?? null;
+  const etapaId = num(params.etapaId ?? null);
+  const texto = String(params.etapaTexto ?? '').replace(/\s+/g, ' ').trim();
+  const todas = await etapasDaEmpresa(s, empresaId, tx);
+
+  const doFunil = (e: Row) => funilId === null || Number(e.funil_id) === funilId;
+  const ativa = (e: Row) => e.ativo !== false;
+
+  if (etapaId !== null) {
+    const etapa = todas.find((e) => Number(e.id) === etapaId);
+    // 404 sem detalhe: nunca confirmamos a existência de etapa de outro tenant.
+    if (!etapa) throw new HttpError(404, 'Etapa do funil não encontrada.');
+    if (!doFunil(etapa)) {
+      throw new HttpError(422, 'Esta etapa pertence a outro funil. Escolha uma etapa do funil da oportunidade.', {
+        etapa_id: 'Etapa de outro funil',
+      });
+    }
+    if (params.exigirAtiva && !ativa(etapa)) {
+      throw new HttpError(422, 'Esta etapa está inativa e não pode receber movimentação. Reative a etapa ou escolha outra.', {
+        etapa_id: 'Etapa inativa',
+      });
+    }
+    return {
+      etapa_id: Number(etapa.id),
+      chave: String(etapa.chave),
+      nome: etapa.nome === null || etapa.nome === undefined ? null : String(etapa.nome),
+      funil_id: Number(etapa.funil_id),
+      probabilidade: num(etapa.probabilidade),
+      legado: false,
+    };
+  }
+
+  if (texto) {
+    // COMPATIBILIDADE: empresa sem NENHUMA etapa cadastrada (base legada, modo
+    // demonstração sem semente, integração antiga). Só aceita o vocabulário
+    // histórico — nada de inventar etapa nova — e diz que é legado.
+    if (todas.length === 0) {
+      const legado = ETAPAS_CRM.find((c) => c === texto.toLowerCase());
+      if (legado) {
+        return {
+          etapa_id: null,
+          chave: legado,
+          nome: null,
+          funil_id: funilId,
+          probabilidade: PROBABILIDADE_PADRAO[legado] ?? 0,
+          legado: true,
+        };
+      }
+      throw new HttpError(
+        422,
+        `Etapa "${texto}" não existe e esta empresa ainda não cadastrou etapas de funil. Cadastre em CRM › Etapas do funil.`,
+        { etapa: 'Etapa não cadastrada no funil' }
+      );
+    }
+    const alvo = texto.toLowerCase();
+    const candidatas = todas.filter((e) => String(e.chave).toLowerCase() === alvo || String(e.nome ?? '').toLowerCase() === alvo);
+    // Prefere a etapa do funil da oportunidade e, entre iguais, a ativa.
+    const ordenadas = candidatas
+      .slice()
+      .sort((a, b) => Number(!doFunil(a)) - Number(!doFunil(b)) || Number(!ativa(a)) - Number(!ativa(b)));
+    const etapa = ordenadas[0];
+    if (!etapa) {
+      const disponiveis = todas.filter(doFunil).map((e) => String(e.chave));
+      throw new HttpError(
+        422,
+        disponiveis.length
+          ? `Etapa "${texto}" não existe no funil desta empresa. Etapas disponíveis: ${disponiveis.join(', ')}.`
+          : 'O funil desta empresa não tem etapas cadastradas para este estágio.',
+        { etapa: 'Etapa não cadastrada no funil' }
+      );
+    }
+    if (!doFunil(etapa)) {
+      throw new HttpError(422, 'Esta etapa pertence a outro funil. Escolha uma etapa do funil da oportunidade.', {
+        etapa: 'Etapa de outro funil',
+      });
+    }
+    if (params.exigirAtiva && !ativa(etapa)) {
+      throw new HttpError(422, 'Esta etapa está inativa e não pode receber movimentação. Reative a etapa ou escolha outra.', {
+        etapa: 'Etapa inativa',
+      });
+    }
+    return {
+      etapa_id: Number(etapa.id),
+      chave: String(etapa.chave),
+      nome: etapa.nome === null || etapa.nome === undefined ? null : String(etapa.nome),
+      funil_id: Number(etapa.funil_id),
+      probabilidade: num(etapa.probabilidade),
+      legado: false,
+    };
+  }
+
+  if (!params.padraoInicial) return null;
+
+  // Sem etapa informada: primeira etapa ATIVA do funil (ordem do cadastro).
+  const primeira = todas.filter((e) => doFunil(e) && ativa(e))[0];
+  if (primeira) {
+    return {
+      etapa_id: Number(primeira.id),
+      chave: String(primeira.chave),
+      nome: primeira.nome === null || primeira.nome === undefined ? null : String(primeira.nome),
+      funil_id: Number(primeira.funil_id),
+      probabilidade: num(primeira.probabilidade),
+      legado: false,
+    };
+  }
+
+  // Compatibilidade: empresa sem NENHUMA etapa cadastrada. Mantém o
+  // comportamento anterior (vocabulário canônico) e diz isso na resposta.
+  if (todas.length === 0) {
+    const chave = ETAPAS_CRM[0];
+    return { etapa_id: null, chave, nome: null, funil_id: funilId, probabilidade: PROBABILIDADE_PADRAO[chave] ?? 0, legado: true };
+  }
+  throw new HttpError(422, 'O funil desta empresa não tem nenhuma etapa ativa. Reative uma etapa antes de criar oportunidades.', {
+    etapa: 'Nenhuma etapa ativa no funil',
+  });
+}
+
+/**
+ * Aplica a etapa resolvida no payload da oportunidade (criação, edição e
+ * conversão de lead). Sempre grava os DOIS lados:
+ *   • `etapa_id` — referência operacional (FK composta, tenant safe);
+ *   • `etapa`    — chave textual, para histórico/relatório/compatibilidade.
+ */
+export async function aplicarEtapaNaOportunidade(
+  s: ReturnType<typeof getStore>,
+  tx: Tx | undefined,
+  escopo: EscopoEmpresa,
+  data: Payload,
+  before: Row | null,
+  /** `probabilidadeInformada`: o corpo cru trazia `probabilidade`? (default 0
+   *  do schema NÃO conta como informação do usuário) */
+  opts: { probabilidadeInformada?: boolean } = {}
+): Promise<EtapaResolvida | null> {
+  const etapaInformada = data.etapa_id !== undefined || data.etapa !== undefined;
+  // Nada foi dito sobre etapa/funil nesta gravação: preserva o que já existe.
+  if (!etapaInformada && before) return null;
+  // `funil_id` sozinho não move a etapa; se mudou de funil, a etapa é
+  // revalidada contra o novo funil (e pode ser rejeitada — de propósito).
+  const funilTrocado = data.funil_id !== undefined && before !== null && String(data.funil_id ?? '') !== String(before.funil_id ?? '');
+  if (!etapaInformada && !funilTrocado && before) return null;
+
+  const funilId = data.funil_id !== undefined
+    ? num(data.funil_id)
+    : before
+      ? num(before.funil_id) ?? (await funilPadraoDaEmpresa(s, escopo.empresaId, tx))
+      : await funilPadraoDaEmpresa(s, escopo.empresaId, tx);
+
+  // Precedência: `etapa_id` explícito > `etapa` explícito > texto atual
+  // (só quando o FUNIL mudou, para revalidar a etapa no funil novo).
+  // Nunca herdamos o `etapa_id` antigo quando o chamador disse qual etapa
+  // quer: isso faria a mudança ser silenciosamente ignorada.
+  const etapaIdInformada = data.etapa_id === undefined ? null : num(data.etapa_id);
+  const textoInformado =
+    data.etapa !== undefined
+      ? String(data.etapa ?? '')
+      : funilTrocado && before
+        ? String(before.etapa ?? '')
+        : null;
+
+  const resolvida = await resolverEtapaDoFunil(s, tx, {
+    empresaId: escopo.empresaId,
+    funilId,
+    etapaId: etapaIdInformada,
+    etapaTexto: textoInformado,
+    exigirAtiva: true,
+    padraoInicial: before === null && etapaIdInformada === null && !textoInformado,
+  });
+
+  if (!resolvida) return null;
+  data.etapa_id = resolvida.etapa_id;
+  data.etapa = resolvida.chave;
+  if (funilId !== null && data.funil_id === undefined) data.funil_id = funilId;
+
+  // PROBABILIDADE: a etapa cadastrada manda. O valor EXPLÍCITO do chamador
+  // continua vencendo (é o override consciente do gestor).
+  //
+  // `probabilidade` tem default 0 no schema, então `data.probabilidade === 0`
+  // não prova que alguém informou zero — pode ser o default preenchendo o
+  // campo. Quem sabe a diferença é quem viu o corpo cru (createRecord/
+  // updateRecord passam `probabilidadeInformada`).
+  const explicita = opts.probabilidadeInformada;
+  if (!explicita && resolvida.probabilidade !== null) data.probabilidade = resolvida.probabilidade;
+  return resolvida;
 }
 
 /**
@@ -442,6 +762,26 @@ async function listarTudo(
   return paginado.rows;
 }
 
+/**
+ * Chaves de etapa para relatório: CADASTRO primeiro (ordenado por `ordem`),
+ * depois as chaves que só aparecem em oportunidade antiga. Assim o painel não
+ * esconde estágio histórico nem inventa estágio que a empresa não usa.
+ */
+function chavesDoFunil(etapas: Row[], oportunidades: Row[]): string[] {
+  const doCadastro = etapas.slice().sort((a, b) => (num(a.ordem) ?? 0) - (num(b.ordem) ?? 0)).map((e) => String(e.chave));
+  const vistas = new Set(doCadastro);
+  const extras: string[] = [];
+  for (const o of oportunidades) {
+    const chave = String(o.etapa ?? '').trim();
+    if (chave && !vistas.has(chave)) {
+      vistas.add(chave);
+      extras.push(chave);
+    }
+  }
+  if (!doCadastro.length && !extras.length) return [...ETAPAS_CRM];
+  return [...doCadastro, ...extras];
+}
+
 function nomeDoUsuario(usuarios: Row[], id: unknown): string {
   const alvo = num(id);
   if (!alvo) return '—';
@@ -458,45 +798,82 @@ export async function mudarEstagioOportunidade(req: Request, res: Response) {
   const escopo = escopoDoAtor(actor);
   const id = parseId(req.params.id);
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
-  const novaEtapa = String(body.etapa ?? '').trim();
-  if (!ETAPAS_CRM.includes(novaEtapa as (typeof ETAPAS_CRM)[number])) {
-    throw new HttpError(400, `Etapa inválida. Use: ${ETAPAS_CRM.join(', ')}.`, { etapa: 'Etapa inválida' });
+  const etapaIdBody = body.etapa_id === undefined || body.etapa_id === null || body.etapa_id === '' ? null : Number(body.etapa_id);
+  const etapaTexto = body.etapa === undefined || body.etapa === null ? '' : String(body.etapa).trim();
+  if (etapaIdBody === null && !etapaTexto) {
+    throw new HttpError(400, 'Informe a etapa de destino (etapa_id ou etapa).', { etapa: 'Obrigatório' });
   }
   const observacao = body.observacao ? texto(body.observacao, 300) : null;
   const s = getStore();
 
-  return s.transaction(async (tx) => {
+  // TUDO na mesma transação: validar oportunidade/funil/etapa, gravar a
+  // mudança e gravar o histórico. Qualquer falha → rollback completo (nada de
+  // oportunidade movida sem trilha).
+  //
+  // ATENÇÃO: o `wrap()` do Express descarta o valor de retorno do handler —
+  // sem `res.json()` explícito a rota ficava pendurada. A resposta é enviada
+  // aqui, depois do commit.
+  const resultado = await s.transaction(async (tx) => {
     const antes = assertRegistroDaEmpresa(
       R_OPORTUNIDADE(),
       await s.findOneWhere(R_OPORTUNIDADE(), { id, empresa_id: escopo.empresaId }, tx),
       escopo
     );
     const etapaAtual = String(antes.etapa ?? '');
-    if (etapaAtual === novaEtapa) {
+
+    // A etapa de destino vem do CADASTRO da empresa (o funil é o da própria
+    // oportunidade). Etapa de outro funil, de outro tenant ou inativa → erro.
+    const destino = await resolverEtapaDoFunil(s, tx, {
+      empresaId: escopo.empresaId,
+      funilId: num(antes.funil_id) ?? (await funilPadraoDaEmpresa(s, escopo.empresaId, tx)),
+      etapaId: etapaIdBody,
+      etapaTexto,
+      exigirAtiva: true,
+    });
+    if (!destino) throw new HttpError(400, 'Informe a etapa de destino.', { etapa: 'Obrigatório' });
+
+    if (etapaAtual === destino.chave && num(antes.etapa_id) === destino.etapa_id) {
       // Idempotente: repetir a mesma etapa não duplica histórico.
-      return { ok: true, idempotente: true, etapa: novaEtapa, oportunidade: antes };
+      return { ok: true, idempotente: true, etapa: destino.chave, etapa_id: destino.etapa_id, oportunidade: antes };
     }
     if (String(antes.status ?? 'aberta') !== 'aberta') {
       throw new HttpError(409, 'Oportunidade encerrada não muda de estágio.');
     }
-    const probabilidade = body.probabilidade !== undefined ? Number(body.probabilidade) : undefined;
-    const patch: Record<string, unknown> = { etapa: novaEtapa };
-    if (probabilidade !== undefined && Number.isFinite(probabilidade)) {
-      patch.probabilidade = Math.max(0, Math.min(100, probabilidade));
+
+    const patch: Record<string, unknown> = { etapa: destino.chave, etapa_id: destino.etapa_id };
+    const probabilidadeInformada = body.probabilidade !== undefined && body.probabilidade !== null && body.probabilidade !== '';
+    if (probabilidadeInformada) {
+      const p = Number(body.probabilidade);
+      if (!Number.isFinite(p)) throw new HttpError(400, 'Probabilidade inválida.', { probabilidade: 'Número de 0 a 100' });
+      patch.probabilidade = Math.max(0, Math.min(100, p));
+    } else if (destino.probabilidade !== null) {
+      // Probabilidade POR ETAPA: mover para "Proposta 50%" já aplica os 50%
+      // no forecast, sem o gestor digitar de novo.
+      patch.probabilidade = Math.max(0, Math.min(100, destino.probabilidade));
     }
     const depois = await s.update(R_OPORTUNIDADE(), id, patch, tx);
     await registrarHistoricoEstagio(s, tx, {
       empresaId: escopo.empresaId,
       oportunidadeId: id,
       estagioAnterior: etapaAtual || null,
-      estagioNovo: novaEtapa,
+      estagioNovo: destino.chave,
       statusAnterior: antes.status ? String(antes.status) : null,
       statusNovo: depois?.status ? String(depois.status) : null,
       usuarioId: actor.id ?? null,
       observacao,
     });
-    return { ok: true, idempotente: false, etapa: novaEtapa, oportunidade: depois };
+    return {
+      ok: true,
+      idempotente: false,
+      etapa: destino.chave,
+      etapa_id: destino.etapa_id,
+      etapa_nome: destino.nome,
+      probabilidade: depois?.probabilidade ?? null,
+      oportunidade: depois,
+    };
   });
+
+  return res.json(resultado);
 }
 
 // ----------------------------------------------------------------------------
@@ -652,10 +1029,15 @@ export async function forecastCrm(req: Request, res: Response) {
   });
 
   const soma = (lista: typeof linhas) => Math.round(lista.reduce((t, l) => t + l.ponderado, 0) * 100) / 100;
-  const porEtapa = ETAPAS_CRM.map((etapa) => {
+  // A lista de etapas do relatório vem do CADASTRO (ordenada por `ordem`).
+  // Chaves que só existem em oportunidade antiga (sem cadastro) entram no fim,
+  // para o relatório não "perder" receita histórica.
+  const etapasRelatorio = chavesDoFunil(etapas, oportunidades);
+  const porEtapa = etapasRelatorio.map((etapa) => {
     const lista = linhas.filter((l) => l.etapa === etapa);
     return {
       etapa,
+      nome: String(etapas.find((e) => String(e.chave) === etapa)?.nome ?? etapa),
       oportunidades: lista.length,
       valor_total: Math.round(lista.reduce((t, l) => t + l.valor, 0) * 100) / 100,
       forecast: soma(lista),
@@ -736,13 +1118,16 @@ export async function painelCrm(req: Request, res: Response) {
     const destino = String(h.estagio_novo ?? '');
     avancosPorEtapa.set(destino, (avancosPorEtapa.get(destino) ?? 0) + 1);
   }
-  const funil = ETAPAS_CRM.map((etapa) => {
+  const funil = chavesDoFunil(etapas, oportunidades).map((etapa, indice) => {
+    const cadastro = etapas.find((e) => String(e.chave) === etapa);
     const lista = abertas.filter((o) => String(o.etapa) === etapa);
     return {
       etapa,
-      nome: etapas.find((e) => String(e.chave) === etapa)?.nome ?? etapa,
-      ordem: num(etapas.find((e) => String(e.chave) === etapa)?.ordem) ?? ETAPAS_CRM.indexOf(etapa) + 1,
+      etapa_id: cadastro ? Number(cadastro.id) : null,
+      nome: String(cadastro?.nome ?? etapa),
+      ordem: num(cadastro?.ordem) ?? indice + 1,
       probabilidade: probPorEtapa.get(etapa) ?? PROBABILIDADE_PADRAO[etapa] ?? 0,
+      origem: cadastro ? 'cadastro' : 'compatibilidade',
       oportunidades: lista.length,
       valor: round2(lista.reduce((t, o) => t + valorDe(o), 0)),
       forecast: round2(lista.reduce((t, o) => t + valorDe(o) * (probabilidade(o) / 100), 0)),

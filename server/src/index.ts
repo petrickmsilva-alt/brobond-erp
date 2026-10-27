@@ -48,6 +48,7 @@ import {
   optionsFor,
   toHttpError,
   updateRecord,
+  metaComOpcoesDinamicas,
 } from './services';
 import { parseId } from './validate';
 import { HttpError } from './errors';
@@ -595,8 +596,12 @@ app.get('/api/admin/auditoria/verificar', wrap(verificarAuditoriaHandler));
 app.get(
   '/api/meta',
   wrap(async (req, res) => {
+    const ator = currentUser(req);
     res.json({
-      resources: publicMeta(),
+      // `metaComOpcoesDinamicas` resolve os campos `optionsFrom` (ex.: etapa do
+      // funil do CRM) para a EMPRESA da sessão — a lista de etapas que o
+      // formulário mostra é a do cadastro, não uma constante do código.
+      resources: await metaComOpcoesDinamicas(escopoDe(ator)),
       mode: getStore().kind,
       uploads: uploadProvider(),
       uploadsConfigError: uploadsConfigError(),
