@@ -1,5 +1,14 @@
 # BROBOND ERP — ROADMAP DE FECHAMENTO (ERP CORE)
 
+> **ERP 3.0 (2026-10-27) — leia antes deste documento.** Este é um documento
+> **histórico**: ele descreve a fase em que foi escrito. O estado REAL do
+> código hoje está em [`docs/ERP-3.0-ARCHITECTURE-BASELINE.md`](ERP-3.0-ARCHITECTURE-BASELINE.md)
+> (inventário lido do código por `npm run architecture:audit`) e os gaps
+> abertos em [`docs/ERP-3.0-GAP-MATRIX.md`](ERP-3.0-GAP-MATRIX.md).
+> Onde este arquivo afirmar algo que o baseline desmente — por exemplo
+> "ERP single-company" — **vale o baseline**. Nada do conteúdo histórico foi
+> apagado: o registro de como cada fase foi executada continua abaixo.
+
 **Repositório:** `petrickmsilva-alt/brobond-erp`
 **Baseline:** `0c9fc202c04c288b2ea6f197a2240a98a87efc0c` (`main`) · 2026-10-11
 **Relatório irmão:** [`docs/RELATORIO-ERP-ONLY.md`](RELATORIO-ERP-ONLY.md) — onde cada gap deste roadmap tem causa-raiz, arquivo, linha, evidência e severidade.

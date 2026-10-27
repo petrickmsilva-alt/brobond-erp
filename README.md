@@ -75,6 +75,18 @@ sobre domínios, donos de dados, fluxos e padrões:
   de domínios, catálogo por domínio (tabelas, API, telas, testes, limites),
   relacionamentos reais, entidades **conceituais** (não criadas) e gaps.
 
+E, desde o **ERP 3.0**, o estado verificável do código:
+
+- **[`docs/ERP-3.0-ARCHITECTURE-BASELINE.md`](docs/ERP-3.0-ARCHITECTURE-BASELINE.md)**
+  — inventário real (migrations, tabelas, recursos, rotas, RBAC, tenant, Prisma),
+  doutrina vigente, boundary SQL × Prisma e o contrato do funil de CRM.
+- **[`docs/ERP-3.0-GAP-MATRIX.md`](docs/ERP-3.0-GAP-MATRIX.md)** — gaps
+  classificados em **P0/P1/P2/P3**, com evidência e caminho de fechamento.
+- **`npm run architecture:audit`** — gera os números acima a partir do código
+  (`docs/ERP-3.0-ARCHITECTURE-INVENTORY.json`). Roda no CI: falha se um recurso
+  apontar para tabela inexistente, declarar `empresa: true` sem `empresa_id` ou
+  se o Prisma mapear tabela que o ERP não cria.
+
 Regra resumida: **cadastro se desativa, documento se cancela, histórico nunca se
 apaga**; toda entidade nova respeita `empresa_id`, RBAC, auditoria, FK explícita
 e o padrão de tela **LISTA → PÁGINA**
@@ -247,6 +259,7 @@ GET    /api/dashboard                  KPIs + `valorizacao` (custo × atacado ×
 GET    /api/financeiro/resumo          fluxo de caixa, resultado do mês, a receber/pagar, por categoria
 GET    /api/publico/catalogo/:token    catálogo público (somente leitura)
 POST   /api/publico/catalogo/:token/pedido   cria COTAÇÃO de venda (site varejo/atacado)
+POST   /api/crm/leads/:id/converter   lead → oportunidade (transacional, idempotente, auditado)
 GET    /api/:recurso?q=&page=&pageSize=&sort=&dir=&f.campo=valor   (f.* = filtros de igualdade)
 GET    /api/:recurso/options           [{ value, label }] para selects
 GET    /api/produtos/:id/detalhe       fotos + grade de estoque + movimentações + OPs + custo
@@ -318,6 +331,9 @@ npm test                        # regras de negócio (estoque, OP, permissões, 
 npm --prefix server run test:pg # suíte de integração: exige DATABASE_URL (sem ela, os testes se auto-pulam)
 npm run typecheck
 npm run lint                    # erros param o CI; avisos (any em handlers) não
+npm run audit:menu              # menu × rotas × recursos × RBAC × tenant
+npm run architecture:audit      # inventário ERP 3.0 lido do código (falha se houver incoerência)
+npm run smoke                   # HTTP real contra a API em modo demonstração (327 verificações)
 ```
 
 O GitHub Actions (`.github/workflows/ci.yml`) roda typecheck, testes, lint e build

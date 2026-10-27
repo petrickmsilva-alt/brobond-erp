@@ -43,22 +43,60 @@
 //     db/schema.sql + db/migrations (lado ERP) ou por migrations
 //     Prisma criadas com --create-only e revisadas (lado commerce).
 //
-// TENANCY: Organization → Usuario
-// --------------------------------
-// No commerce, todo registro pertencia a uma Organization (SaaS
-// multi-tenant). O ERP é single-company: a fronteira de identidade é
-// a tabela `usuarios` (login por e-mail + Argon2id, MFA, sessões).
-// Por isso `organizationId` virou `usuarioId` (FK → usuarios.id):
-//   • Connector.usuarioId      — operador responsável pela conexão;
-//   • Sale.usuarioId           — operador que importou/sincronizou a
-//                                venda (proveniência);
-//   • ConnectorEvent.usuarioId — mesmo contrato do conector.
+// TENANCY: Empresa (multiempresa) + Usuario (identidade/proveniência)
+// -------------------------------------------------------------------
+// REGRA VIGENTE DO ERP 3.0 — leia antes de assumir "single-company":
+//
+//   • Empresa = TENANT. A fronteira de dados é `empresa_id` (FK →
+//     empresas.id) em toda tabela de negócio. O escopo vem do ator
+//     autenticado (usuarios.empresa_id + concessões em usuario_empresas
+//     + claim `emp` da sessão) — NUNCA do corpo da requisição.
+//     Implementação: server/src/empresa.ts.
+//   • Usuario = IDENTIDADE. Usuário × Empresa = autorização/contexto
+//     (usuario_empresas). Usuário NÃO é fronteira de tenancy.
+//   • `usuarioId` (herança do `organizationId` do commerce) é
+//     PROVENIÊNCIA/OWNERSHIP operacional, não tenancy:
+//       Connector.usuarioId      — operador responsável pela conexão;
+//       Sale.usuarioId           — operador que importou/sincronizou;
+//       ConnectorEvent.usuarioId — mesmo contrato do conector.
+//     As três tabelas também carregam `empresaId` (migration
+//     db/migrations/0033_p0_commerce_tenant_scope.sql), e é ELE que
+//     recorta listagens, relatórios e BI. Consultas por `usuarioId`
+//     sozinho não são escopo de empresa.
+//
+// HISTÓRICO (para não induzir a erro): a Fase 1 da fusão (2026-10-05)
+// descreveu o ERP como single-company e mapeou organizationId →
+// usuarioId. A migration 0017 (multiempresa) e a 0033 (escopo de tenant
+// do commerce) tornaram essa descrição OBSOLETA. Este comentário é a
+// fonte de verdade; o cabeçalho das migrations 0012/0033 permanece
+// como registro histórico do que foi executado.
+//
 // A ação ON DELETE é RESTRICT (não CASCADE como no commerce): no ERP
 // usuários são DESATIVADOS (colunas ativo/desativado_em), nunca
 // apagados; um DELETE acidental em usuarios não pode destruir
 // credenciais de marketplace nem histórico de vendas. Exceção:
 // ConnectorOAuthState é efêmero (estado CSRF de minutos) e mantém
 // CASCADE.
+//
+// ERP SQL / PRISMA BOUNDARY (ERP 3.0)
+// -----------------------------------
+//   • FONTE OFICIAL DO SCHEMA DO ERP: db/schema.sql + db/migrations/*.sql
+//     (PostgreSQL), aplicados no boot por server/src/db.ts. Toda tabela
+//     nova do ERP nasce em `db/migrations/00NN_*.sql`, com espelho em
+//     `db/schema.sql`.
+//   • PRISMA = BOUNDED CONTEXT TÉCNICO do módulo commerce (conectores
+//     multicanal, pedidos importados e projeções analíticas). Os 11
+//     modelos abaixo mapeiam tabelas que o ERP JÁ criou; o Prisma não é
+//     dono de nenhuma tabela do ERP.
+//   • PROIBIDO: criar tabela do ERP exclusivamente no Prisma, rodar
+//     `prisma migrate dev` contra este banco, ou tratar o schema.prisma
+//     como inventário do ERP (ele cobre 11 de 116 tabelas — o inventário
+//     real é docs/ERP-3.0-ARCHITECTURE-INVENTORY.json, gerado por
+//     `npm run architecture:audit`).
+//   • As migrations Prisma (prisma/migrations/) são dual-track: o MESMO
+//     SQL é aplicado pelo boot do ERP (db/migrations/0012 e seguintes).
+//     Elas estão registradas em _prisma_migrations para o `migrate
+//     deploy` não tentar recriar o que o boot já criou.
 
 generator client {
   provider        = "prisma-client-js"
@@ -86,7 +124,8 @@ datasource db {
 // login espera — o Prisma não toca neles.
 
 /// Usuários do ERP — tabela `usuarios` (login, perfis, MFA, cofre de
-/// senha, governança). É a âncora de tenancy da fusão.
+/// senha, governança). É a IDENTIDADE autenticada; o tenant é a empresa
+/// (`empresa_id` + concessões em `usuario_empresas`) — ver TENANCY acima.
 model Usuario {
   id            Int     @id @default(autoincrement()) @map("id")
   nome          String  @map("nome")
@@ -372,7 +411,8 @@ model Connector {
 
 /// Evento bruto ingerido (webhook/polling) com deduplicação por
 /// (responsável, provedor, id externo) — fontes: commerce PR012.
-/// FUSÃO: tenancy organizationId → usuarioId (RESTRICT); o vínculo
+/// FUSÃO: proveniência organizationId → usuarioId (RESTRICT); o escopo de
+/// empresa é `empresaId` (tenant). O vínculo
 /// com o conector permanece SET NULL (o evento sobrevive à remoção
 /// do conector como trilha de ingestão).
 model ConnectorEvent {
