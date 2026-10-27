@@ -9,7 +9,7 @@
 - **Branch:** `arena/72895db5-brobond-erp`
 - **Gate automatizado:** `npm run audit:ux` (script `scripts/auditar-ux.mjs`) e
   `client/src/test/zero-modal.test.ts`. O primeiro falha (exit 1) se aparecer
-  assinatura de sobreposição fora da lista de exceções declaradas; o segundo
+  assinatura de sobreposição acima do baseline declarado — por arquivo **e** por total; o segundo
   trava o contrato no nível do código de teste.
 - **Complemento:** `npm run audit:menu` verifica que cada rota de cadastro tem
   entrada navegável (nenhum cadastro "só por link direto").
@@ -45,7 +45,8 @@
 
 ### 2.2 Exceções DECLARADAS — não são fluxo de módulo
 
-Cada exceção está declarada em `scripts/auditar-ux.mjs` com justificativa; o
+Cada exceção está declarada em **`docs/ERP-3.0-UX-BASELINE.json`** (categoria + motivo + contagem),
+validada pelo próprio gate; o
 gate **falha** se uma nova aparecer sem declaração.
 
 | Arquivo | Componente/assinatura | Contexto | Por que não é fluxo de módulo | Status |
@@ -98,7 +99,7 @@ Lista exata, lida de `client/src/modules.ts`:
 ## 4. Como o gate funciona
 
 ```bash
-npm run audit:ux        # falha (exit 1) se houver sobreposição fora das exceções
+npm run audit:ux        # falha (exit 1) em baseline + QUALQUER ocorrência nova
 npm run audit:menu      # falha se um cadastro não tiver entrada navegável
 npm --workspace client run test   # inclui client/src/test/zero-modal.test.ts
 ```
@@ -109,7 +110,7 @@ npm --workspace client run test   # inclui client/src/test/zero-modal.test.ts
    que cita "modal" não é ocorrência;
 2. procura `role="dialog"`, `aria-modal`, backdrops `fixed inset-0`,
    `Sheet`, `Drawer` e afins;
-3. exige que cada ocorrência esteja na lista de exceções **com justificativa**;
+3. exige que cada ocorrência esteja no baseline **com categoria permitida, justificativa e contagem exata**;
 4. valida também que os módulos com cadastro declaram suas rotas de página.
 
 `client/src/test/zero-modal.test.ts` complementa no nível de teste:
@@ -132,3 +133,60 @@ npm --workspace client run test   # inclui client/src/test/zero-modal.test.ts
 
 Nenhum item da lista é fluxo de módulo: **não existe CRUD, detalhe ou
 formulário dentro de sobreposição no ERP.**
+
+---
+
+## 11. Endurecimento do gate (correção final do PR #92, 2026-10-27)
+
+O gate anterior tinha duas fraquezas reais: as exceções viviam **dentro do
+script** (mudar exceção = mudar código, sem diff revisável de política) e só
+media **4** assinaturas. Além disso, um arquivo com exceção podia crescer até o
+limite sem que o total do repositório fosse conferido.
+
+### 11.1 O que passou a ser medido (10 assinaturas)
+
+| id | O que detecta |
+|---|---|
+| `role-dialog` | `role="dialog"` |
+| `role-alertdialog` | `role="alertdialog"` |
+| `aria-modal` | `aria-modal="true"` |
+| `overlay-fixo` | `fixed` + `inset-0` no mesmo `className` |
+| `overlay-fixo-inverso` | `inset-0` antes de `fixed` (mesma coisa, ordem trocada) |
+| `overlay-eixos` | `inset-x-0` **e** `inset-y-0` (tela inteira) |
+| `elemento-dialog` | `<dialog>` nativo |
+| `show-modal` | `HTMLDialogElement.showModal()` |
+| `componente-modal` | `<Modal>`, `<Dialog>`, `<Drawer>`, `<Sheet>`, `<AlertDialog>`, `*Root`, `*Content`… |
+| `portal` | `createPortal(...)` |
+
+Barra fixa (`fixed inset-x-0 bottom-0`) **não** é overlay: a assinatura de eixos
+exige os dois eixos, para não punir barra de ação legítima.
+
+### 11.2 O baseline (`docs/ERP-3.0-UX-BASELINE.json`)
+
+* cada exceção declara `arquivo`, `categoria`, `motivo` e `padroes` (contagem
+  exata por assinatura);
+* `categoria` **precisa** ser uma de: `navegacao_global`, `menu_mobile`,
+  `infraestrutura`, `portal_publico`, `catalogo_publico`;
+* `motivo` com menos de 40 caracteres é recusado;
+* `totais` declarados por assinatura — medido **acima** do declarado é falha;
+* arquivo inexistente, assinatura desconhecida e JSON inválido são falhas;
+* **caminho de formulário/cadastro/detalhe** (`RegistroPage`, `RecordForm`,
+  `*Form`, `*Novo`, `*Edicao`, `*Detalhe`, `*Exclusao`, `*Selecao`,
+  `*Confirmacao`) **nunca** pode ser exceção.
+
+### 11.3 O que continua não sendo violação
+
+* comentário ou prosa que **menciona** modal/dialog (o gate remove comentários
+  antes de varrer — sem isso puniria a própria documentação);
+* as 6 exceções declaradas (navegação global, menu mobile, captura invisível de
+  clique e ambiente público).
+
+### 11.4 Prova de que o gate morde
+
+`client/src/test/zero-modal-baseline.test.ts` monta raízes temporárias e
+verifica: arquivo novo com `<Modal>` falha; `role="dialog"`, `aria-modal`,
+`<dialog>`, `showModal()`, `createPortal`, `fixed inset-0` (3 variações) falham;
+contagem que cresce em arquivo já exceptuado falha; total acima do declarado
+falha; exceção sem categoria / com categoria de fluxo de módulo / com motivo
+curto / em página de cadastro falha; baseline ausente falha; e — no sentido
+oposto — barra fixa e texto que menciona modal **passam**.

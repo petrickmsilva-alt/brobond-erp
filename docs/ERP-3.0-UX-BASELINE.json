@@ -1,0 +1,105 @@
+{
+  "_comentario": [
+    "BASELINE OBJETIVO DO GATE DE UX (ZERO MODAL) — BROBOND ERP 3.0.",
+    "Este arquivo é a ÚNICA fonte de exceções do gate `npm run audit:ux`.",
+    "Regra: LISTA → DETALHE → NOVO (/recurso/novo) → EDIÇÃO (/recurso/:id/editar).",
+    "Nenhuma superfície sobreposta (Modal/Dialog/Drawer/Sheet, role=dialog,",
+    "aria-modal, <dialog>, showModal(), backdrop fixed inset-0) é permitida em",
+    "fluxo de módulo.",
+    "",
+    "COMO ADICIONAR UMA EXCEÇÃO (exige edição deliberada deste arquivo):",
+    "  1. `categoria` precisa ser uma de: navegacao_global, menu_mobile,",
+    "     infraestrutura, portal_publico, catalogo_publico.",
+    "  2. `motivo` precisa explicar por que NÃO é cadastro/edição/confirmação de",
+    "     exclusão/detalhe/seleção/formulário/workflow (mínimo 40 caracteres).",
+    "  3. `padroes` declara a contagem EXATA tolerada por assinatura.",
+    "  4. Atualize `totais` para os números novos.",
+    "Categorias de conteúdo (cadastro, edição, exclusão, detalhe, seleção,",
+    "formulário, workflow) NÃO existem e não podem ser criadas: isso é a regra,",
+    "não uma configuração.",
+    "",
+    "O gate falha em: baseline + QUALQUER ocorrência nova (arquivo novo ou",
+    "contagem maior) e em totais acima do declarado."
+  ],
+  "versao": 2,
+  "regra": "ZERO MODAL — LISTA → DETALHE → NOVO → EDIÇÃO",
+  "assinaturas": {
+    "role-dialog": "role=\"dialog\"",
+    "role-alertdialog": "role=\"alertdialog\"",
+    "aria-modal": "aria-modal=\"true\"",
+    "overlay-fixo": "backdrop/overlay fixed inset-0 (qualquer ordem)",
+    "elemento-dialog": "elemento nativo <dialog>",
+    "show-modal": "HTMLDialogElement.showModal()",
+    "componente-modal": "<Modal>/<Dialog>/<Drawer>/<Sheet>",
+    "portal": "createPortal (renderização fora da árvore da página)"
+  },
+  "categorias_permitidas": [
+    "navegacao_global",
+    "menu_mobile",
+    "infraestrutura",
+    "portal_publico",
+    "catalogo_publico"
+  ],
+  "excecoes": [
+    {
+      "arquivo": "client/src/components/CommandPalette.tsx",
+      "categoria": "navegacao_global",
+      "motivo": "Navegação global (Ctrl+K): busca de módulos e ações, sem cadastro, edição ou detalhe de registro. Não é fluxo de módulo — é atalho de navegação, como o menu lateral.",
+      "padroes": {
+        "role-dialog": 1,
+        "aria-modal": 1,
+        "overlay-fixo": 1
+      }
+    },
+    {
+      "arquivo": "client/src/components/Sidebar.tsx",
+      "categoria": "menu_mobile",
+      "motivo": "Backdrop do menu de navegação no celular. É navegação (a mesma árvore de módulos do desktop), não formulário: nenhum CRUD vive ali.",
+      "padroes": {
+        "overlay-fixo": 1
+      }
+    },
+    {
+      "arquivo": "client/src/components/Layout.tsx",
+      "categoria": "menu_mobile",
+      "motivo": "Comentário/estrutura do drawer de navegação mobile (reenvia ao Sidebar). Nenhum conteúdo de negócio é renderizado aqui.",
+      "padroes": {}
+    },
+    {
+      "arquivo": "client/src/pages/UsuariosPage.tsx",
+      "categoria": "infraestrutura",
+      "motivo": "Captura invisível de clique fora do menu de ações da linha (elemento sem conteúdo visual, cursor-default). Não é overlay de conteúdo nem formulário.",
+      "padroes": {
+        "overlay-fixo": 1
+      }
+    },
+    {
+      "arquivo": "client/src/pages/PortalCliente.tsx",
+      "categoria": "portal_publico",
+      "motivo": "Portal PÚBLICO do cliente (fora do ERP, rota /portal/:token): página do cliente final, que lê o pedido e responde a proposta. Não é módulo do ERP nem cadastro interno.",
+      "padroes": {
+        "overlay-fixo": 1
+      }
+    },
+    {
+      "arquivo": "client/src/pages/CatalogoPublico.tsx",
+      "categoria": "catalogo_publico",
+      "motivo": "Catálogo PÚBLICO compartilhável (rota /catalogo/:token): visualização de produtos e carrinho do cliente final — fora do ERP e sem cadastro interno. A ampliação da foto do produto e o carrinho continuam sobrepostos de propósito: é a experiência de compra do cliente, não um fluxo de módulo.",
+      "padroes": {
+        "overlay-fixo": 3,
+        "role-dialog": 1,
+        "aria-modal": 1
+      }
+    }
+  ],
+  "totais": {
+    "role-dialog": 2,
+    "role-alertdialog": 0,
+    "aria-modal": 2,
+    "overlay-fixo": 7,
+    "elemento-dialog": 0,
+    "show-modal": 0,
+    "componente-modal": 0,
+    "portal": 0
+  }
+}

@@ -82,7 +82,7 @@ carrinho de compra).
 
 | Item pedido | Estado | Onde |
 |---|---|---|
-| Funil/etapas configuráveis (ordem, ativo, probabilidade, empresa_id) | ✅ | `crm_funis`, `crm_etapas` (0051); telas `crm-funis`/`crm-etapas` |
+| Funil/etapas configuráveis (ordem, ativo, probabilidade, empresa_id) | ✅ **corrigido na 0057** | `crm_funis`, `crm_etapas` (0051) **+ `crm_oportunidades.etapa_id`** (0057). Na 0051 o cadastro era configurável mas a **oportunidade** continuava presa ao CHECK de vocabulário da 0049 — ver §14 |
 | Histórico de estágio (tabela própria) | ✅ | `crm_oportunidade_estagio_historico` + `GET /api/crm/oportunidades/:id/historico` |
 | Origem/canal/campanha/UTM estruturados, **texto livre preservado** | ✅ | `crm_origens`, `crm_campanhas`, `origem_id`, `utm_*` |
 | Lembretes (data/hora, responsável, status, prioridade) | ✅ | `crm_atividades` + `/crm/agenda` com hoje/atrasadas/próximas |
@@ -93,6 +93,17 @@ carrinho de compra).
 Compatibilidade: sem cadastro em `crm_funis`, o vocabulário anterior
 (`prospeccao…fechamento`) continua valendo — nenhuma migração de dados foi
 imposta aos registros existentes.
+
+> **Retificação (correção final, 0057).** A frase acima, sozinha, dava a
+> impressão de que bastava cadastrar `crm_funis`/`crm_etapas` para a etapa ser
+> configurável. **Não era verdade**: a oportunidade tinha CHECK de vocabulário
+> fixo, então etapa nova era recusada no uso. O que passou a valer de fato:
+> `crm_oportunidades.etapa_id` → `crm_etapas.id` (FK composta por empresa) é a
+> referência operacional, `etapa` (texto) é a chave mantida para histórico; a
+> validação é por cadastro (tenant + funil + ativa), a transição grava
+> oportunidade e histórico **na mesma transação** e a conversão de lead usa o
+> funil padrão + primeira etapa ativa. Detalhe e provas:
+> `docs/ERP-3.0-CRM-FUNIL-CONFIGURAVEL.md`.
 
 ---
 
@@ -206,7 +217,7 @@ competência mantém **uma** linha.
 | Menu | `npm run audit:menu` | ✅ 0 erros |
 | UX (novo) | `npm run audit:ux` | ✅ 0 modais em fluxo de módulo |
 | Arquitetura | `npm run architecture:audit` | ✅ 0 erros / 10 avisos (`TABELA_SEM_RECURSO`, esperados) |
-| Smoke HTTP | `npm run smoke` | ✅ **377/377** (50 novas do ERP 3.0) |
+| Smoke HTTP | `npm run smoke` | ✅ **386/386** (50 do ERP 3.0 + 9 da correção 0057) |
 | `test:pg` | — | ⛔ **BLOQUEADO** (sem PostgreSQL/`psql` neste sandbox) |
 | `smoke:pg` | — | ⛔ **BLOQUEADO** (idem) |
 | `db:validate` | — | ⛔ **BLOQUEADO** (`prisma validate` baixa `schema-engine` fora da allowlist) |
@@ -255,3 +266,93 @@ com gate que falha o CI, nenhuma duplicidade real criada, nenhuma tabela removid
 tenancy e RBAC revalidados, e escopo proibido (`organizationId`, unificar
 `sales`/`vendas`, segundo financeiro, alíquota inventada, deploy automático)
 **não violado**.
+
+---
+
+## 14. CORREÇÃO FINAL DO PR #92 (migration 0057)
+
+Depois da entrega acima, o arquiteto apontou **três defeitos**. Todos foram
+corrigidos nesta rodada. Nenhum foi escondido atrás de "já estava funcionando".
+
+### 14.1 CRM — etapa realmente configurável (🔴 era o mais grave)
+
+| Antes | Depois |
+|---|---|
+| `etapa` TEXT + CHECK de 5 valores (0049) | `etapa_id` INTEGER → `crm_etapas.id`, FK composta `(empresa_id, etapa_id)`, `ON DELETE RESTRICT` |
+| `ETAPAS_CRM` decidia o que era válido | cadastro da empresa decide (tenant + funil + ativo) |
+| etapa nova: cadastrava e **não usava** | etapa nova: cadastra e usa (`Demonstração`, `Aprovação Jurídica`) |
+| transição parcial | valida + atualiza + histórico em **uma** transação, com rollback provado |
+| probabilidade fixa | `crm_etapas.probabilidade` (fallback só legado) |
+| UI com lista fixa | `/api/meta` com `optionsFrom` por empresa + `refreshMeta()` |
+
+Bugs reais encontrados **durante** a correção (não estavam no relatório do
+arquiteto, apareceram ao testar de verdade):
+
+1. `mudarEstagioOportunidade` devolvia o objeto da transação, mas `wrap()` do
+   Express **descarta o retorno** — a rota não respondia. Agora usa `res.json()`.
+2. `probabilidade` tem default `0` no schema: "não informado" ficava
+   indistinguível de "0 informado" e a probabilidade da etapa nunca era
+   aplicada. Corrigido lendo o corpo cru (`probabilidadeFoiInformada`).
+3. `crm_leads.probabilidade` também tem default `0`: a conversão aplicava 0 em
+   vez da probabilidade da etapa. Corrigido com `> 0` no fallback.
+4. O modo demonstração não tinha `crm_funis`/`crm_etapas` semeados — toda
+   resolução caía em 404/422 nos testes. Semente adicionada em `resources.ts`.
+
+Dois testes antigos **afirmavam o comportamento antigo** e foram reescritos de
+propósito (não pulados): `crm-3-0-evolucao.test.ts` ("etapa inválida" agora é
+422 com a lista do funil, não 400 de vocabulário) e `crm-conversao.test.ts`
+(conversão entra na **primeira etapa ativa** do funil padrão, não em
+`qualificacao` fixo).
+
+Evidência: `server/test/crm-funil-configuravel.test.ts` — **11 blocos / 12 casos**
+exigidos, incluindo cross-tenant (404), etapa de outro funil (422), inativa
+(422), histórico em transição, rollback por falha do histórico, conversão
+idempotente, etapa 65% → 65% e forecast ponderado pela etapa cadastrada.
+
+### 14.2 MRP — delimitação e anti-dupla-contagem (🟠)
+
+* a resposta declara `calculo.tipo = 'mrp_planejamento_necessidade'`,
+  `coberto[]`, `nao_coberto[]` (10 itens) e `cria_pedido_de_compra: false`;
+* oferta de produto passou a usar **disponível** (físico − reservado −
+  empenhado − bloqueado) — antes reserva/empenho eram ignorados;
+* estoque mínimo entra **só como déficit** (antes somava o mínimo inteiro em
+  cima da demanda de venda: dupla contagem real);
+* OP aberta por (planejado − produzido) e compra aberta por (pedido − recebido)
+  já estavam corretos e agora têm teste próprio;
+* **nenhum pedido de compra é criado** (verificado por contagem invariante).
+
+Evidência: `server/test/producao-capacidade-mrp.test.ts` — 14 testes (6 novos:
+reserva não é oferta, OP pelo que falta, mínimo como déficit, compra parcial,
+declaração de escopo + não-cria-compra, isolamento por empresa).
+
+### 14.3 UX — gate ZERO MODAL objetivo (🟡)
+
+* baseline versionado `docs/ERP-3.0-UX-BASELINE.json` (categoria + motivo +
+  contagem por assinatura + total), com validação do próprio baseline;
+* falha em **baseline + qualquer ocorrência nova** (arquivo novo, contagem por
+  arquivo ou total acima do declarado);
+* 10 assinaturas: `role="dialog"`, `role="alertdialog"`, `aria-modal="true"`,
+  `fixed inset-0` (3 variações), `<dialog>`, `showModal()`, componentes de
+  sobreposição e `createPortal`;
+* exports proibidos ampliados (`AlertDialog`, `ModalRoot`, `DialogContent`,
+  `Overlay`, `Backdrop`…);
+* exceção **nunca** para cadastro/edição/exclusão/detalhe/seleção/formulário/
+  workflow — o gate recusa categoria inexistente e caminho de formulário;
+* comentário/texto citando modal **não** é violação (comentários são removidos).
+
+Evidência: `client/src/test/zero-modal-baseline.test.ts` — 9 casos com fixtures
+temporárias.
+
+### 14.4 Estado dos gates nesta rodada
+
+| Gate | Resultado |
+|---|---|
+| `npm run typecheck` (server + client) | **EXIT 0** |
+| `npm run test` server | **1.347 pass / 0 fail / 68 skip** (1.415 casos, 55 suítes) |
+| `npm run test` client | **858 pass / 0 fail / 75 arquivos** |
+| `npm run lint` | **EXIT 0** (0 erros, 554 avisos) |
+| `npm run build` | **EXIT 0** |
+| `npm run audit:menu` | **PASS** |
+| `npm run architecture:audit` | **PASS** — 57 migrations, 131 tabelas, 408 índices, 219 constraints, 361 rotas, 2.252 casos em 235 arquivos |
+| `npm run audit:ux` | **PASS** — 0 sobreposição nova; 6 exceções no baseline |
+| `npm run test:pg` / `smoke:pg` / `db:validate` | **BLOQUEADOS neste sandbox** (sem PostgreSQL/`psql`/download do `schema-engine`) — cobertos pelo CI |

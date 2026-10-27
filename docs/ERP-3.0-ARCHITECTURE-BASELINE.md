@@ -43,7 +43,7 @@
 | Modelos Prisma | **11** | 5 com `empresaId` (bounded context do commerce) |
 | Casos de teste declarados | **2.226** | contagem estática: `architecture:audit` sobre 233 arquivos |
 | Casos executados neste ambiente | **2.179** | 1.330 server (1.330 pass / 0 fail, 68 skip não contados) + 849 client (849 pass) |
-| Verificações HTTP de smoke | **377** | `npm run smoke` (Express real, modo demonstração) **e** `npm run smoke:pg` (PostgreSQL real, banco novo) |
+| Verificações HTTP de smoke | **386** | `npm run smoke` (Express real, modo demonstração) **e** `npm run smoke:pg` (PostgreSQL real, banco novo) |
 
 Rotas por método: `GET 147 · POST 157 · PUT 17 · DELETE 12 · PATCH 3` (contagem anterior à evolução 3.0; o total atual é 361).
 Rotas registradas **antes** do `requireAuth` global (públicas por desenho): 44 —
@@ -318,10 +318,10 @@ BI (Meu Negócio, produto_abc, comissões)
 | `npm test` (server + client) | **PASS** — server 1.330 pass / 0 fail (68 skip), client 849/849 |
 | `npm run build` | **PASS** |
 | `npm run audit:menu` | **PASS** — sem erros |
-| `npm run audit:ux` (novo gate ZERO MODAL) | **PASS** — 0 modais em fluxo de módulo; 6 exceções declaradas (navegação e ambiente público) |
+| `npm run audit:ux` (gate ZERO MODAL, baseline JSON) | **PASS** — 0 sobreposições novas; 6 exceções declaradas em `docs/ERP-3.0-UX-BASELINE.json` (navegação, menu mobile, captura invisível e ambiente público). Desde a correção do PR #92 o gate falha em `baseline + qualquer ocorrência nova`, inclusive dentro de arquivo já exceptuado |
 | `npm run architecture:audit` | **PASS** — 0 erros, 10 avisos classificados (`TENANT_SEM_TESTE` zerado) |
-| `npm run smoke` (Express real, HTTP) | **PASS** — **377/377**, incluindo 10 verificações de CRM e 50 novas de ERP 3.0 (estoque, compras, produção, fiscal, financeiro, CRM) |
-| `npm run smoke:pg` (PostgreSQL 16.14 real, banco novo) | **PASS** — 327/327 na rodada do CI contra PG real; o script hoje tem **377** verificações (as 50 de ERP 3.0 foram validadas no modo demonstração e ficam cobertas pelo mesmo job no próximo run) |
+| `npm run smoke` (Express real, HTTP) | **PASS** — **386/386**, incluindo 10 verificações de CRM, 50 de ERP 3.0 (estoque, compras, produção, fiscal, financeiro, CRM) e 9 de CRM 0057 (etapa customizada usada, transição por id, 404 sem vazar existência, `/api/meta` com as etapas do cadastro) |
+| `npm run smoke:pg` (PostgreSQL 16.14 real, banco novo) | **PASS histórico** — 327/327 na rodada do CI contra PG real; o script hoje tem **386** verificações (as 59 de ERP 3.0 rodaram no modo demonstração; `smoke:pg` está BLOQUEADO neste sandbox — GAP-P2-17) |
 | `npm run test:pg` (PostgreSQL 16.14 real) | **PASS parcial** — 280/293 (12 skip + 1 falha por ausência do cliente `psql` neste sandbox; o job `testes-postgres` do CI é verde com `postgresql-client-16`) |
 | `npm run db:validate` | **BLOQUEADO neste sandbox** — `prisma validate` baixa o `schema-engine` de `binaries.prisma.sh` (fora da allowlist de rede); o CI executa o mesmo comando no job `verificar` |
 
@@ -384,3 +384,106 @@ nem duplicado).
 | D17 | Financeiro **não** vira contabilidade completa | Estrutura preparada (plano de contas, competência, débito/crédito), sem segundo financeiro e sem escrituração fiscal |
 | D18 | Gate `audit:ux` criado em vez de regra escrita em documento | Regra que não falha em CI não é regra (mesma lógica da D8) |
 | D19 | `db/schema.sql` espelha 0051..0056 | Banco novo precisa nascer com o 3.0; o teste de contrato de colunas exige o espelho |
+| D20 | Etapa da oportunidade tem **duas** representações com papéis distintos (0057): `etapa_id` = operacional, `etapa` = chave | Uma coluna só não serve para os dois usos: FK composta precisa de id, e histórico/relatórios/integrações leem a chave estável. Manter as duas **no mesmo registro** (nunca tabela paralela) elimina a duplicidade de modelo |
+| D21 | O CHECK de vocabulário da 0049 foi **substituído**, não ampliado | Ampliar a lista de valores manteria o hard-code. A integridade passou para FK composta + validação de funil/ativo no serviço, dentro da mesma transação |
+| D22 | `ETAPAS_CRM` sobrevive só como semente/fallback/compatibilidade | Apagar a constante quebraria empresas legadas sem funil cadastrado; mantê-la como **último** recurso (nunca como autoridade) preserva o comportamento sem travar a parametrização |
+| D23 | MRP é declarado **MRP de planejamento/necessidade** na própria resposta | Nome sozinho não delimita escopo; a resposta carrega `calculo.nao_coberto[]` para que ninguém venda "MRP industrial completo" |
+| D24 | Exceções de UX vivem em **JSON versionado**, não no código do gate | Baseline no código exige deploy para registrar exceção e mistura regra com histórico. No JSON, adicionar exceção é um diff revisável — e o gate continua recusando categorias de fluxo de módulo |
+
+---
+
+## 12. Correção final do PR #92 (migration 0057)
+
+O arquiteto apontou três defeitos na entrega anterior. Nenhum era estético: dois
+eram **funcionalidade declarada que não existia** e um era **gate permissivo**.
+Esta seção corrige o registro; onde o texto anterior dizia "configurável", agora
+diz **como** e **com qual prova**.
+
+### 12.1 CRM — `etapa_id` como referência operacional
+
+A 0051 criou `crm_funis`/`crm_etapas`, mas `crm_oportunidades.etapa` continuava
+com o CHECK de vocabulário da 0049 — ou seja, etapa cadastrada **não podia ser
+usada**. A 0057 resolve sem estrutura paralela (ver
+`docs/ERP-3.0-CRM-FUNIL-CONFIGURAVEL.md`):
+
+| Aspecto | 0051 (declarado) | 0057 (real) |
+|---|---|---|
+| Referência | texto com CHECK de 5 valores | `etapa_id` → `crm_etapas.id`, FK composta `(empresa_id, etapa_id)` |
+| Validação | constante `ETAPAS_CRM` | cadastro da empresa: tenant, funil, ativo |
+| Probabilidade | `PROBABILIDADE_PADRAO` | `crm_etapas.probabilidade` |
+| UI | lista fixa | `optionsFrom` no `/api/meta` + `refreshMeta()` |
+| Conversão de lead | etapa fixa `qualificacao` | funil padrão + primeira etapa ativa por `ordem` |
+
+Detalhes que a correção **prova**, não apenas afirma:
+
+* **rollback**: teste sabota o `insert` do histórico e verifica que a
+  oportunidade não mudou (nem a probabilidade da etapa foi aplicada);
+* **cross-tenant**: 404 na criação e na transição, e a oportunidade de B
+  continua invisível para A;
+* **bug real encontrado**: `mudarEstagioOportunidade` retornava o objeto da
+  transação, mas `wrap()` do Express descarta o retorno — a rota ficava sem
+  resposta. Corrigido com `res.json()` explícito;
+* **probabilidade**: `probabilidade` tem default `0` no schema; "explícito"
+  agora é lido do corpo cru (`probabilidadeFoiInformada`), senão a probabilidade
+  da etapa nunca seria aplicada.
+
+Nota de compatibilidade: `ETAPAS_CRM` e `PROBABILIDADE_PADRAO` continuam no
+código como **semente, fallback e compatibilidade histórica** — nunca como
+autoridade quando existe cadastro (D22).
+
+### 12.2 MRP — escopo declarado e anti-dupla-contagem
+
+`GET /api/producao/mrp` passou a ser explícito sobre o que é:
+
+```
+calculo: {
+  tipo: 'mrp_planejamento_necessidade',
+  cria_pedido_de_compra: false,
+  coberto: [...], nao_coberto: [lead time, lote mínimo, calendário, capacidade
+            finita, ordens planejadas, consumo real por OP, reservas por OP,
+            pegging/datas, horizonte, BOM multinível],
+  horizonte: 'demanda conhecida hoje (sem datas de necessidade)'
+}
+```
+
+E a fórmula fechou as brechas de dupla contagem:
+
+| Regra | Efeito |
+|---|---|
+| oferta de produto usa **disponível** (físico − reservado − empenhado − bloqueado) | peça já comprometida não cobre outra demanda |
+| OP aberta entra por **(planejado − produzido)** | o já produzido está no estoque; contar o total contaria duas vezes |
+| compra aberta entra por **(pedido − recebido)** | o recebido já virou saldo |
+| estoque mínimo entra só como **déficit** | somar o mínimo cheio em cima da venda contaria a mesma peça |
+| falta de produto → necessidade de insumo; OP existente → seu próprio `faltam` | a mesma quantidade não entra nos dois lados |
+
+Cada regra tem teste próprio (`producao-capacidade-mrp.test.ts`, casos I..N).
+
+### 12.3 UX — baseline objetivo
+
+`npm run audit:ux` deixou de ter a lista de exceções dentro do script:
+
+| Antes | Depois |
+|---|---|
+| `EXCECOES` hard-coded em `scripts/ux-guard.mjs` | `docs/ERP-3.0-UX-BASELINE.json` (versionado, com `categoria` e `motivo`) |
+| 4 assinaturas | 10 assinaturas (`role="alertdialog"`, `<dialog>`, `showModal()`, `createPortal`, `inset-x-0`+`inset-y-0`, ordem invertida...) |
+| falha só em arquivo novo | falha em **qualquer ocorrência acima do baseline** (por arquivo **e** por total) |
+| exceção sem categoria | categoria obrigatória; fluxo de módulo **não tem categoria** e caminho de cadastro/edição é recusado |
+| comentário citando modal já era ignorado | mantido (e coberto por teste) |
+
+Prova: `client/src/test/zero-modal-baseline.test.ts` — 9 casos com fixtures
+temporárias, incluindo "comentário que menciona modal NÃO falha" e "barra fixa
+`inset-x-0 bottom-0` NÃO é overlay".
+
+### 12.4 Números após a correção
+
+| Dimensão | Antes (§11.1) | Depois |
+|---|---:|---:|
+| Migrations SQL | 56 | **57** |
+| Tabelas | 131 | **131** (nenhuma tabela nova — só coluna + FK) |
+| Índices | 406 | **408** |
+| Constraints | 216 | **219** |
+| Recursos de API | 116 | **116** |
+| Rotas HTTP | 361 | **361** |
+| Módulos de navegação | 101 | **101** |
+| Testes (server + client) | 2.179 | **2.273** (server 1.415 + client 858) |
+| Suítes server / arquivos client | 1.330 pass / 74 | **1.347 pass / 75** |

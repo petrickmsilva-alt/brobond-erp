@@ -8,6 +8,16 @@
 > Onde este arquivo afirmar algo que o baseline desmente — por exemplo
 > "ERP single-company" — **vale o baseline**. Nada do conteúdo histórico foi
 > apagado: o registro de como cada fase foi executada continua abaixo.
+>
+> **Correção final do PR #92 (migration 0057, 2026-10-27):** três afirmações da
+> rodada anterior foram corrigidas — (1) "estágio do CRM configurável" só
+> passou a ser verdade com `crm_oportunidades.etapa_id`; até a 0057 o cadastro
+> de etapas existia mas a oportunidade continuava presa ao CHECK de vocabulário
+> da 0049; (2) o cálculo de produção é **MRP de planejamento/necessidade**, não
+> MRP industrial completo — a rota declara `calculo.nao_coberto[]`; (3) o gate
+> ZERO MODAL passou a usar baseline versionado
+> (`docs/ERP-3.0-UX-BASELINE.json`) e falha em qualquer ocorrência nova. Detalhe
+> em [`docs/ERP-3.0-GAP-MATRIX.md`](ERP-3.0-GAP-MATRIX.md) §9.
 
 **Fase E1 — Auditoria estrutural. Fases E2, E3, E3.1 e E3.2 executadas.**
 Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3ee997-brobond-erp`
@@ -755,3 +765,24 @@ BOM → OP → Insumo → Produção → Produto acabado → Estoque → Custo.
 | Bloco antifraude no painel | Nenhuma fonte de risco/chargeback no domínio; inventar violaria a regra 30 |
 | Compras atrasadas por data | `/api/dashboard` entrega `comprasPendentes` sem datas; exige agregado dedicado |
 | `brobond-ai-commerce` | Proibido por regra. Varredura no repositório não encontrou nenhuma referência |
+
+---
+
+## ERP 3.0 — gaps abertos após a correção do PR #92 (2026-10-27)
+
+Registro **atual** (não histórico). A lista completa, com evidência e risco,
+está em [`docs/ERP-3.0-GAP-MATRIX.md`](ERP-3.0-GAP-MATRIX.md) §5, §8.3 e §9.4.
+Resumo por domínio:
+
+| Domínio | Estado | O que continua aberto |
+|---|---|---|
+| **CRM** | 🟢 funcional, etapa **realmente** configurável (0057) | empresas legadas sem funil seguem no caminho textual (`etapa_id` nulo) até cadastrarem o funil; falta reordenar etapas por arrastar (P2); renomear etapa antiga muda o rótulo em relatório histórico — o histórico grava a **chave**, não o rótulo (P2) |
+| **Produção / MRP** | 🟠 MRP **de planejamento/necessidade**, declarado como tal | lead time, lote mínimo/econômico, calendário de feriados, capacidade finita, ordens planejadas, consumo real por OP, reservas de material por OP, pegging/datas de necessidade, horizonte e BOM multinível (P2) |
+| **UX (ZERO MODAL)** | 🟢 regra com baseline objetivo e gate em CI | nada de fluxo de módulo pendente; exceções ficam restritas a navegação, menu mobile, infraestrutura e ambiente público |
+| **Fiscal** | 🟠 estrutura pronta | exportação SPED/EFD no layout oficial (P2) |
+| **Financeiro** | 🟢 estrutura contábil | importação de plano de contas em massa (P2) |
+| **Infraestrutura de teste** | 🔴 **BLOQUEADO neste sandbox** | `test:pg`, `smoke:pg` e `db:validate` exigem PostgreSQL/`psql`/download do `schema-engine`; cobertos pelos jobs do CI, **não** declarados verdes aqui |
+
+> **Como isso é declarado.** Nenhum item acima foi fechado por decreto, e
+> nenhum foi escondido: a suíte de testes cobre o que existe e os gaps dizem,
+> item por item, o que não existe. "Suíte verde" ≠ "produto completo".
