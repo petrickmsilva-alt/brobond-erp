@@ -1671,6 +1671,55 @@ check('ticket de MFA não vale como token de acesso → 401', ticketComoBearer.s
     `status ${historicoOport.status}`);
   const painelCrm30SemToken = await fetch(`${BASE}/crm/painel`);
   check('3.0 CRM: painel exige autenticação → 401', painelCrm30SemToken.status === 401, `status ${painelCrm30SemToken.status}`);
+
+  // --- CRM 3.0 / 0057: ETAPA REALMENTE CONFIGURÁVEL (ponta a ponta por HTTP)
+  //
+  // O gate anterior só provava que o CADASTRO de etapa funcionava. Aqui a etapa
+  // criada pela empresa é USADA numa oportunidade, muda de etapa por id e a
+  // probabilidade vem do cadastro — exatamente o que estava quebrado.
+  const etapaDemo = await req('POST', '/crm_etapas', {
+    funil_id: funil.json?.id, nome: `Demonstração ${sufixo}`, chave: `demonstracao_${sufixo}`, ordem: 2, probabilidade: 45,
+  });
+  check('0057 CRM: etapa CUSTOMIZADA é cadastrada (chave própria, probabilidade 45)',
+    [200, 201].includes(etapaDemo.status), `status ${etapaDemo.status} ${msg(etapaDemo.json)}`);
+  const etapaJuridico = await req('POST', '/crm_etapas', {
+    funil_id: funil.json?.id, nome: `Aprovação Jurídica ${sufixo}`, chave: `aprovacao_juridica_${sufixo}`, ordem: 3, probabilidade: 65,
+  });
+  check('0057 CRM: segunda etapa customizada é cadastrada (65%)',
+    [200, 201].includes(etapaJuridico.status), `status ${etapaJuridico.status} ${msg(etapaJuridico.json)}`);
+
+  const oportEtapa = await req('POST', '/crm_oportunidades', {
+    nome: `Oportunidade etapa custom ${sufixo}`, funil_id: funil.json?.id, etapa_id: etapaDemo.json?.id,
+    status: 'aberta', valor: 10000,
+  });
+  check('0057 CRM: oportunidade USA a etapa customizada (etapa_id aceito no cadastro)',
+    [200, 201].includes(oportEtapa.status) && Number(oportEtapa.json?.etapa_id) === Number(etapaDemo.json?.id)
+      && String(oportEtapa.json?.etapa) === `demonstracao_${sufixo}`,
+    `status ${oportEtapa.status} etapa=${oportEtapa.json?.etapa} etapa_id=${oportEtapa.json?.etapa_id} ${msg(oportEtapa.json)}`);
+  check('0057 CRM: probabilidade da etapa cadastrada é aplicada na criação (45%)',
+    Number(oportEtapa.json?.probabilidade) === 45, `probabilidade=${oportEtapa.json?.probabilidade}`);
+
+  const transicao = await req('POST', `/crm/oportunidades/${oportEtapa.json?.id}/estagio`, { etapa_id: etapaJuridico.json?.id });
+  check('0057 CRM: POST /crm/oportunidades/:id/estagio aceita etapa por ID e responde',
+    transicao.status === 200 && Number(transicao.json?.etapa_id) === Number(etapaJuridico.json?.id),
+    `status ${transicao.status} ${msg(transicao.json)}`);
+  check('0057 CRM: a transição usa a probabilidade da etapa de destino (65%)',
+    Number(transicao.json?.probabilidade) === 65, `probabilidade=${transicao.json?.probabilidade}`);
+  const histTransicao = await req('GET', `/crm/oportunidades/${oportEtapa.json?.id}/historico`);
+  check('0057 CRM: a transição gravou histórico com a etapa anterior',
+    histTransicao.status === 200 && JSON.stringify(histTransicao.json ?? {}).includes(`demonstracao_${sufixo}`),
+    `status ${histTransicao.status}`);
+
+  const etapaAlheia = await req('PUT', `/crm_oportunidades/${oportEtapa.json?.id}`, { etapa_id: 999999 });
+  check('0057 CRM: etapa inexistente é recusada (404, sem vazar existência) → não 200',
+    etapaAlheia.status === 404, `status ${etapaAlheia.status} ${msg(etapaAlheia.json)}`);
+
+  const metaCrm = await req('GET', '/meta');
+  const campoEtapa = (metaCrm.json?.resources?.crm_oportunidades?.fields ?? []).find((f) => f.name === 'etapa');
+  const opcoesEtapa = (campoEtapa?.options ?? []).map((o) => o.value);
+  check('0057 CRM: /api/meta devolve as etapas do CADASTRO (a etapa nova aparece nas opções)',
+    metaCrm.status === 200 && opcoesEtapa.includes(`demonstracao_${sufixo}`),
+    `status ${metaCrm.status} opções=${opcoesEtapa.length}`);
 }
 
 console.log(out.join('\n'));
