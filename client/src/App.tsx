@@ -25,6 +25,11 @@ const TamanhoFormPage = lazy(() => import('./pages/TamanhoFormPage'));
 const GradeFormPage = lazy(() => import('./pages/GradeFormPage'));
 const InsumoFormPage = lazy(() => import('./pages/InsumoFormPage'));
 const CategoriaInsumoFormPage = lazy(() => import('./pages/CategoriaInsumoFormPage'));
+const FornecedorFormPage = lazy(() => import('./pages/FornecedorFormPage'));
+const RepresentanteFormPage = lazy(() => import('./pages/RepresentanteFormPage'));
+// Fundação comercial (MASTER): formulário em PÁGINA PRÓPRIA (nunca modal).
+const CadastroComercialFormPage = lazy(() => import('./pages/CadastroComercialFormPage'));
+const MetaAcompanhamentoPage = lazy(() => import('./pages/MetaAcompanhamentoPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
 const FichaDetail = lazy(() => import('./pages/FichaDetail'));
@@ -253,6 +258,92 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="categorias-insumos">
                   <CategoriaInsumoFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Cadastro de fornecedores em página própria (fora de qualquer
+                modal/drawer): PF/PJ, fiscal, endereço e comercial precisam de
+                espaço próprio — o formulário vive na rota, não sobreposto à
+                lista. */}
+            <Route
+              path="fornecedores/novo"
+              element={
+                <ModuleAccess moduleId="fornecedores">
+                  <FornecedorFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="fornecedores/:id/editar"
+              element={
+                <ModuleAccess moduleId="fornecedores">
+                  <FornecedorFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Cadastro de representantes em página própria (fora de qualquer
+                modal/drawer): identificação, comissão, acesso ao ERP, contato e
+                situação profissional precisam de espaço próprio — o formulário
+                vive na rota, não sobreposto à lista. */}
+            <Route
+              path="representantes/novo"
+              element={
+                <ModuleAccess moduleId="representantes">
+                  <RepresentanteFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="representantes/:id/editar"
+              element={
+                <ModuleAccess moduleId="representantes">
+                  <RepresentanteFormPage />
+                </ModuleAccess>
+              }
+            />
+
+            {/* =============================================================
+                FUNDAÇÃO COMERCIAL (MASTER MA-02..MA-08) — cadastro em
+                PÁGINA PRÓPRIA. A listagem fica na rota do módulo; incluir e
+                editar navegam. Nenhuma dessas telas abre formulário
+                sobreposto à lista.
+                ============================================================= */}
+            {[
+              { rota: 'territorios', modulo: 'territorios', recurso: 'territorios' },
+              { rota: 'equipes-comerciais', modulo: 'equipes_comerciais', recurso: 'equipes_comerciais' },
+              { rota: 'equipe-membros', modulo: 'equipe_membros', recurso: 'equipe_membros' },
+              { rota: 'hierarquia-comercial', modulo: 'representante_hierarquia', recurso: 'representante_hierarquia' },
+              { rota: 'carteira-clientes', modulo: 'representante_cliente', recurso: 'representante_cliente' },
+              { rota: 'atribuicao-comercial', modulo: 'venda_atribuicao', recurso: 'venda_atribuicao' },
+              { rota: 'metas', modulo: 'metas', recurso: 'metas' },
+              { rota: 'planos-comissao', modulo: 'planos_comissao', recurso: 'planos_comissao' },
+              { rota: 'regras-comissao', modulo: 'regras_comissao', recurso: 'regras_comissao' },
+            ].flatMap(({ rota, modulo, recurso }) => [
+              <Route
+                key={`${recurso}-novo`}
+                path={`${rota}/novo`}
+                element={
+                  <ModuleAccess moduleId={modulo}>
+                    <CadastroComercialFormPage recurso={recurso} />
+                  </ModuleAccess>
+                }
+              />,
+              <Route
+                key={`${recurso}-editar`}
+                path={`${rota}/:id/editar`}
+                element={
+                  <ModuleAccess moduleId={modulo}>
+                    <CadastroComercialFormPage recurso={recurso} />
+                  </ModuleAccess>
+                }
+              />,
+            ])}
+            {/* Acompanhamento da meta: realizado DERIVADO das vendas (MA-04). */}
+            <Route
+              path="metas/:id/acompanhamento"
+              element={
+                <ModuleAccess moduleId="metas">
+                  <MetaAcompanhamentoPage />
                 </ModuleAccess>
               }
             />

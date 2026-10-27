@@ -87,6 +87,13 @@ import { catalogoEmbed, catalogoPublico, compartilharCatalogo, criarPedidoCatalo
 import { baixarLancamento, conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, recebiveisCartao, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
 import { comissoesDaVenda, resumoComissoes } from './comissoes';
 import {
+  apiAcompanhamentoMeta,
+  apiApurarComissao,
+  apiArvoreTerritorios,
+  apiIndicadores,
+  apiPainelRepresentante,
+} from './comercial';
+import {
   cancelarCobranca,
   configurarGateway,
   criarCobranca,
@@ -598,6 +605,19 @@ app.get('/api/financeiro/comissoes/venda/:id', wrap(comissoesDaVenda));
 
 // P2 — recebíveis de cartão (bruto × taxa × líquido por vencimento)
 app.get('/api/financeiro/cartao/recebiveis', wrap(recebiveisCartao));
+
+// ============================================================================
+// MASTER (MA-02..MA-08) — INTELIGÊNCIA COMERCIAL
+//
+// Rotas DERIVADAS: não gravam indicador, não aceitam número manual. Todas
+// exigem autenticação (o bloco acima já está sob `requireAuth`) e recorte de
+// empresa server-side (`escopoDoAtor`) — a empresa nunca vem do cliente.
+// ============================================================================
+app.get('/api/comercial/indicadores', wrap(apiIndicadores));
+app.get('/api/comercial/territorios/arvore', wrap(apiArvoreTerritorios));
+app.get('/api/comercial/metas/:id/acompanhamento', wrap(apiAcompanhamentoMeta));
+app.get('/api/comercial/representantes/:id/painel', wrap(apiPainelRepresentante));
+app.post('/api/comercial/vendas/:id/apurar-comissao', wrap(apiApurarComissao));
 
 // P2 — gateway de pagamento (adapters): config, cobranças, webhooks
 app.get('/api/financeiro/gateway/providers', wrap(listarGateways));

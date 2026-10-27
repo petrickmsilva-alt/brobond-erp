@@ -61,6 +61,25 @@ brobond-erp/
 └── package.json            # scripts raiz (dev com concurrently + db:* do Prisma)
 ```
 
+## Arquitetura do ERP (leia antes de criar módulo novo)
+
+A arquitetura oficial está em dois documentos — eles são a fonte de verdade
+sobre domínios, donos de dados, fluxos e padrões:
+
+- **[`docs/ERP-MASTER-ARCHITECTURE.md`](docs/ERP-MASTER-ARCHITECTURE.md)** — a
+  doutrina: cadastro ≠ parâmetro ≠ processo ≠ movimento ≠ evento/indicador,
+  regras transversais (multiempresa, RBAC, auditoria, 409), blueprint de módulo
+  novo, fluxos canônicos, expansão futura de Representantes/Territórios/Metas/
+  Comissões e roadmap.
+- **[`docs/ERP-DOMAIN-MAP.md`](docs/ERP-DOMAIN-MAP.md)** — o inventário: árvore
+  de domínios, catálogo por domínio (tabelas, API, telas, testes, limites),
+  relacionamentos reais, entidades **conceituais** (não criadas) e gaps.
+
+Regra resumida: **cadastro se desativa, documento se cancela, histórico nunca se
+apaga**; toda entidade nova respeita `empresa_id`, RBAC, auditoria, FK explícita
+e o padrão de tela **LISTA → PÁGINA**
+([`docs/PADRAO-CADASTROS-AUXILIARES.md`](docs/PADRAO-CADASTROS-AUXILIARES.md)).
+
 ## Como rodar localmente
 
 ```bash

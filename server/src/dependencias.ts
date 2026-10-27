@@ -161,6 +161,17 @@ export const MODULOS_POR_TABELA: Record<string, InfoModulo> = {
   envios: { modulo: 'Expedição', icone: 'expedicao', unidade: ['envio', 'envios'] },
   estoque_insumos: { modulo: 'Estoque', icone: 'estoque', unidade: ['saldo', 'saldos'] },
   estoques: { modulo: 'Estoque', icone: 'estoque', unidade: ['saldo', 'saldos'] },
+  // MASTER (MA-02..MA-07): fundação comercial
+  territorios: { modulo: 'Territórios', icone: 'comercial', unidade: ['território', 'territórios'] },
+  equipes_comerciais: { modulo: 'Equipes comerciais', icone: 'comercial', unidade: ['equipe', 'equipes'] },
+  equipe_membros: { modulo: 'Equipes comerciais', icone: 'comercial', unidade: ['membro', 'membros'] },
+  representante_hierarquia: { modulo: 'Hierarquia comercial', icone: 'comercial', unidade: ['vínculo', 'vínculos'] },
+  representante_cliente: { modulo: 'Carteira de clientes', icone: 'comercial', unidade: ['vínculo de carteira', 'vínculos de carteira'] },
+  metas: { modulo: 'Metas', icone: 'comercial', unidade: ['meta', 'metas'] },
+  planos_comissao: { modulo: 'Comissões', icone: 'financeiro', unidade: ['plano', 'planos'] },
+  regras_comissao: { modulo: 'Comissões', icone: 'financeiro', unidade: ['regra', 'regras'] },
+  comissoes_apuradas: { modulo: 'Comissões', icone: 'financeiro', unidade: ['apuração', 'apurações'] },
+  venda_atribuicao: { modulo: 'Atribuição comercial', icone: 'comercial', unidade: ['atribuição', 'atribuições'] },
   expedicao_eventos: { modulo: 'Expedição', icone: 'expedicao', unidade: ['evento', 'eventos'] },
   fichas_tecnicas: { modulo: 'Produção', icone: 'producao', unidade: ['ficha', 'fichas'] },
   fin_extrato_transacoes: { modulo: 'Financeiro', icone: 'financeiro', unidade: ['transação', 'transações'] },
@@ -273,6 +284,20 @@ export const REGRAS_RELACAO: RegraRelacao[] = [
   { alvo: 'vendas', tabela: 'sales', tipo: 'operacional', politica: 'proteger', motivo: 'pedido multicanal ligado a esta venda' },
   // Composição: itens do pedido são parte do próprio registro.
   { alvo: 'vendas', tabela: 'itens_venda', tipo: 'composicao', politica: 'seguir' },
+
+  // ---- FUNDAÇÃO COMERCIAL (MASTER MA-02..MA-07) ---------------------------
+  // Carteira, atribuição e comissão apurada são HISTÓRICO: apagar o
+  // representante/cliente/território não pode reescrever a história comercial.
+  { alvo: '', tabela: 'representante_cliente', tipo: 'historico', politica: 'proteger', motivo: 'carteira temporal do representante (histórico de quem atendia o cliente)' },
+  { alvo: '', tabela: 'venda_atribuicao', tipo: 'historico', politica: 'proteger', motivo: 'atribuição comercial congelada na venda' },
+  { alvo: '', tabela: 'comissoes_apuradas', tipo: 'historico', politica: 'proteger', motivo: 'comissão apurada por venda e representante' },
+  { alvo: '', tabela: 'regras_comissao', tipo: 'operacional', politica: 'proteger', motivo: 'regra que precifica a comissão' },
+  { alvo: '', tabela: 'planos_comissao', tipo: 'operacional', politica: 'proteger', motivo: 'plano de comissão com vigência' },
+  { alvo: '', tabela: 'metas', tipo: 'operacional', politica: 'proteger', motivo: 'meta comercial do período' },
+  { alvo: '', tabela: 'equipe_membros', tipo: 'composicao', politica: 'seguir', motivo: 'composição da equipe' },
+  { alvo: '', tabela: 'representante_hierarquia', tipo: 'historico', politica: 'proteger', motivo: 'hierarquia comercial com vigência' },
+  { alvo: '', tabela: 'equipes_comerciais', tipo: 'operacional', politica: 'proteger', motivo: 'equipe comercial' },
+  { alvo: '', tabela: 'territorios', tipo: 'operacional', politica: 'proteger', motivo: 'território comercial (a exclusão deixaria vínculos órfãos)' },
   // Marketing: evento de catálogo não é histórico do pedido.
   { alvo: 'vendas', tabela: 'catalogo_eventos', tipo: 'operacional', politica: 'seguir', motivo: 'evento de catálogo que originou o pedido' },
 
@@ -302,6 +327,17 @@ export const REGRAS_RELACAO: RegraRelacao[] = [
   { alvo: 'clientes', tabela: 'portal_acessos', tipo: 'operacional', politica: 'seguir', motivo: 'acesso ao portal do cliente (revogado junto)' },
   { alvo: 'clientes', tabela: 'politicas_comerciais', tipo: 'operacional', politica: 'seguir', motivo: 'política comercial negociada com o cliente' },
   { alvo: 'clientes', tabela: 'cotacao_decisoes', tipo: 'historico', politica: 'proteger', motivo: 'decisões do cliente em cotações' },
+
+  // ---- REPRESENTANTES -----------------------------------------------------
+  // O representante é o vendedor do histórico comercial. Excluir o cadastro
+  // NÃO pode apagar (nem desligar) vendas, propostas e comissões já apuradas:
+  // a FK é NO ACTION — o banco já recusa — e a política é declarada para o
+  // diagnóstico explicar POR QUE a saída é DESATIVAR/DESLIGAR. Nada de
+  // CASCADE, nada de remover FK, nada de balcão de exclusão forçada.
+  { alvo: 'representantes', tabela: 'vendas', tipo: 'historico', politica: 'proteger', motivo: 'pedidos de venda do representante' },
+  { alvo: 'representantes', tabela: 'comissoes_eventos', tipo: 'historico', politica: 'proteger', motivo: 'comissões apuradas do representante' },
+  { alvo: 'representantes', tabela: 'propostas', tipo: 'historico', politica: 'proteger', motivo: 'propostas comerciais do representante' },
+  { alvo: 'representantes', tabela: 'clientes', tipo: 'operacional', politica: 'seguir', motivo: 'clientes atendidos por este representante (vendedor padrão)' },
 
   // ---- PRODUTOS -----------------------------------------------------------
   // Estoque, pedidos, fichas e OPs usam FK NO ACTION: o produto é histórico.
@@ -384,6 +420,36 @@ export const REGRAS_RELACAO: RegraRelacao[] = [
 export type RelacaoFkDeclarada = { alvo: string; tabela: string; colunas: string[]; acao: AcaoReferencial };
 
 export const RELACOES_FK: RelacaoFkDeclarada[] = [
+  // MASTER (MA-02..MA-07) — FKs reais da fundação comercial. O PostgreSQL as
+  // descobre sozinho no catálogo; esta declaração existe para o MemStore
+  // responder EXATAMENTE o mesmo diagnóstico (paridade declarada, não fingida).
+  { alvo: 'territorios', tabela: 'territorios', colunas: ['territorio_pai_id'], acao: 'NO_ACTION' },
+  { alvo: 'territorios', tabela: 'representante_cliente', colunas: ['territorio_id'], acao: 'NO_ACTION' },
+  { alvo: 'territorios', tabela: 'metas', colunas: ['territorio_id'], acao: 'NO_ACTION' },
+  { alvo: 'territorios', tabela: 'regras_comissao', colunas: ['territorio_id'], acao: 'NO_ACTION' },
+  { alvo: 'territorios', tabela: 'venda_atribuicao', colunas: ['territorio_id'], acao: 'NO_ACTION' },
+  { alvo: 'territorios', tabela: 'equipes_comerciais', colunas: ['territorio_id'], acao: 'NO_ACTION' },
+  { alvo: 'territorios', tabela: 'territorios', colunas: ['responsavel_id'], acao: 'NO_ACTION' },
+  { alvo: 'equipes_comerciais', tabela: 'equipe_membros', colunas: ['equipe_id'], acao: 'CASCADE' },
+  { alvo: 'equipes_comerciais', tabela: 'metas', colunas: ['equipe_id'], acao: 'NO_ACTION' },
+  { alvo: 'equipes_comerciais', tabela: 'regras_comissao', colunas: ['equipe_id'], acao: 'NO_ACTION' },
+  { alvo: 'equipes_comerciais', tabela: 'venda_atribuicao', colunas: ['equipe_id'], acao: 'NO_ACTION' },
+  { alvo: 'representantes', tabela: 'representante_cliente', colunas: ['representante_id'], acao: 'NO_ACTION' },
+  { alvo: 'representantes', tabela: 'representante_hierarquia', colunas: ['supervisor_id'], acao: 'NO_ACTION' },
+  { alvo: 'representantes', tabela: 'representante_hierarquia', colunas: ['subordinado_id'], acao: 'NO_ACTION' },
+  { alvo: 'representantes', tabela: 'equipe_membros', colunas: ['representante_id'], acao: 'NO_ACTION' },
+  { alvo: 'representantes', tabela: 'metas', colunas: ['representante_id'], acao: 'NO_ACTION' },
+  { alvo: 'representantes', tabela: 'regras_comissao', colunas: ['representante_id'], acao: 'NO_ACTION' },
+  { alvo: 'representantes', tabela: 'venda_atribuicao', colunas: ['representante_id'], acao: 'NO_ACTION' },
+  { alvo: 'representantes', tabela: 'comissoes_apuradas', colunas: ['representante_id'], acao: 'NO_ACTION' },
+  { alvo: 'clientes', tabela: 'representante_cliente', colunas: ['cliente_id'], acao: 'NO_ACTION' },
+  { alvo: 'clientes', tabela: 'regras_comissao', colunas: ['cliente_id'], acao: 'NO_ACTION' },
+  { alvo: 'planos_comissao', tabela: 'regras_comissao', colunas: ['plano_id'], acao: 'CASCADE' },
+  { alvo: 'planos_comissao', tabela: 'comissoes_apuradas', colunas: ['plano_id'], acao: 'NO_ACTION' },
+  { alvo: 'regras_comissao', tabela: 'comissoes_apuradas', colunas: ['regra_id'], acao: 'NO_ACTION' },
+  { alvo: 'vendas', tabela: 'venda_atribuicao', colunas: ['venda_id'], acao: 'CASCADE' },
+  { alvo: 'vendas', tabela: 'comissoes_apuradas', colunas: ['venda_id'], acao: 'NO_ACTION' },
+
   // vendas — todas as FKs de entrada (pg_constraint em 16.14)
   { alvo: 'vendas', tabela: 'itens_venda', colunas: ['venda_id'], acao: 'CASCADE' },
   { alvo: 'vendas', tabela: 'movimentacoes', colunas: ['empresa_id', 'venda_id'], acao: 'NO_ACTION' },
@@ -418,6 +484,13 @@ export const RELACOES_FK: RelacaoFkDeclarada[] = [
   { alvo: 'clientes', tabela: 'politicas_comerciais', colunas: ['cliente_id'], acao: 'CASCADE' },
   { alvo: 'clientes', tabela: 'portal_acessos', colunas: ['cliente_id'], acao: 'CASCADE' },
   { alvo: 'clientes', tabela: 'catalogo_compartilhamentos', colunas: ['cliente_id'], acao: 'SET_NULL' },
+
+  // representantes — `comissoes_eventos.representante_id` é coluna REAL sem
+  // `ref` em resources.ts. Sem esta declaração o modo demonstração não enxerga
+  // o vínculo (o catálogo do PostgreSQL enxerga sempre). As demais FKs para
+  // `representantes` (vendas, clientes, propostas) são descobertas pelos
+  // campos `ref` dos próprios recursos — ver `refsPara`.
+  { alvo: 'representantes', tabela: 'comissoes_eventos', colunas: ['representante_id'], acao: 'NO_ACTION' },
 
   // produtos
   { alvo: 'produtos', tabela: 'produto_composicao', colunas: ['produto_id'], acao: 'CASCADE' },

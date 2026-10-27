@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0041 — CADASTRO PROFISSIONAL DE INSUMOS (identificação + categorização).
+-- 0047 — CADASTRO PROFISSIONAL DE INSUMOS (identificação + categorização).
 --
 -- O cadastro de insumos tinha apenas nome, unidade, custo_medio, fornecedor_id
 -- e ativo (db/schema.sql). Faltavam as duas peças de um cadastro MESTRE de

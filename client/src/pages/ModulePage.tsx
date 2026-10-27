@@ -114,6 +114,13 @@ const EmpresasPage = lazy(() => import('./EmpresasPage'));
 const InutilizacoesPage = lazy(() => import('./InutilizacoesPage'));
 const ColecoesPage = lazy(() => import('./ColecoesPage'));
 const InsumosPage = lazy(() => import('./InsumosPage'));
+const FornecedoresPage = lazy(() => import('./FornecedoresPage'));
+const RepresentantesPage = lazy(() => import('./RepresentantesPage'));
+// Fundação comercial (MASTER MA-02..MA-08): LISTA → PÁGINA em todas as telas.
+const CadastroComercialPage = lazy(() => import('./CadastroComercialPage'));
+const TerritoriosPage = lazy(() => import('./TerritoriosPage'));
+const MetasPage = lazy(() => import('./MetasPage'));
+const PainelComercialPage = lazy(() => import('./PainelComercialPage'));
 
 const PAGE_SIZE = 25;
 /** Tamanhos de página oferecidos na listagem (server-side). */
@@ -154,6 +161,25 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'inutilizacoes') return <Suspense fallback={<SubPageLoading />}><InutilizacoesPage /></Suspense>;
   if (module.id === 'colecoes') return <Suspense fallback={<SubPageLoading />}><ColecoesPage /></Suspense>;
   if (module.id === 'insumos') return <Suspense fallback={<SubPageLoading />}><InsumosPage /></Suspense>;
+  // Fornecedores: LISTA dedicada no padrão LISTA → PÁGINA (cadastro/edição em
+  // /fornecedores/novo e /fornecedores/:id/editar — nunca no modal genérico).
+  if (module.id === 'fornecedores') return <Suspense fallback={<SubPageLoading />}><FornecedoresPage /></Suspense>;
+  // Representantes: LISTA dedicada no padrão LISTA → PÁGINA (cadastro/edição em
+  // /representantes/novo e /representantes/:id/editar — nunca no modal
+  // genérico).
+  if (module.id === 'representantes') return <Suspense fallback={<SubPageLoading />}><RepresentantesPage /></Suspense>;
+  // ESTRUTURA COMERCIAL (MASTER): territórios com árvore, metas com
+  // acompanhamento derivado, painel de indicadores — todos em página própria.
+  if (module.id === 'territorios') return <Suspense fallback={<SubPageLoading />}><TerritoriosPage /></Suspense>;
+  if (module.id === 'metas') return <Suspense fallback={<SubPageLoading />}><MetasPage /></Suspense>;
+  if (module.id === 'painel-comercial') return <Suspense fallback={<SubPageLoading />}><PainelComercialPage /></Suspense>;
+  if (module.id === 'equipes_comerciais') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="equipes_comerciais" /></Suspense>;
+  if (module.id === 'equipe_membros') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="equipe_membros" /></Suspense>;
+  if (module.id === 'representante_hierarquia') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="representante_hierarquia" /></Suspense>;
+  if (module.id === 'representante_cliente') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="representante_cliente" /></Suspense>;
+  if (module.id === 'venda_atribuicao') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="venda_atribuicao" /></Suspense>;
+  if (module.id === 'planos_comissao') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="planos_comissao" /></Suspense>;
+  if (module.id === 'regras_comissao') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="regras_comissao" /></Suspense>;
 
   if (!module.resource || !resource) return <PlannedModule module={module} />;
   return <ResourceCrud key={resource.key} module={module} resource={resource} />;
@@ -1186,9 +1212,10 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       )}
 
       {/* Modal de cadastro / edição — APENAS para os recursos que ainda não
-          migraram para o padrão LISTA → PÁGINA. Cores, Produtos, Categorias,
-          Clientes e Vendas já vivem em página própria (FORM_DIRETO): nesses
-          casos `openCreate`/`openEdit` navegam e este bloco nunca abre. */}
+          migraram para o padrão LISTA → PÁGINA. Quem está em FORM_DIRETO
+          (clientes, produtos, vendas, categorias, cores, coleções, tamanhos,
+          grades, insumos, fornecedores e representantes) vive em página própria:
+          `openCreate`/`openEdit` navegam e este bloco nunca abre. */}
       {!FORM_DIRETO.has(resource.key) && (
         <Modal
           open={formOpen}

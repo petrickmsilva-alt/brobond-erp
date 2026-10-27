@@ -51,6 +51,13 @@ import {
   FileUp,
   FileMinus,
   BadgeDollarSign,
+  GitBranch,
+  Target,
+  Network,
+  UsersRound,
+  Percent,
+  IdCard,
+  MapPinned,
 } from 'lucide-react';
 
 export type ModuleSpace = 'erp' | 'commerce' | 'creators' | 'utilidades';
@@ -198,6 +205,19 @@ export const MODULES: Module[] = [
     keywords: 'central de relatorios exportacao csv xlsx analises bi',
     path: '/relatorios',
     description: 'Posição de estoque, movimentações, produção, vendas, curva ABC e insumos mínimos.',
+  },
+
+  {
+    id: 'painel-comercial',
+    label: 'Painel comercial',
+    icon: BarChart3,
+    space: 'erp',
+    area: 'Meu Negócio',
+    group: 'Análises',
+    subgroup: 'Desempenho comercial',
+    keywords: 'indicadores desempenho meta atingimento comissao ticket medio território equipe',
+    path: '/comercial/painel',
+    description: 'Indicadores derivados por representante, equipe e território, com meta e atingimento.',
   },
 
   // ==========================================================================
@@ -360,9 +380,6 @@ export const MODULES: Module[] = [
     description: 'Vendedores externos, regiões e comissões.',
   },
 
-  // ==========================================================================
-  // 3. VENDAS (ERP CORE)
-  // ==========================================================================
   {
     id: 'vendas',
     label: 'Vendas',
@@ -430,6 +447,109 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Tabelas de preço por produto e variação, com vigência, prioridade e histórico. O preço usado na venda é gravado no item e nunca recalculado.',
   },
+
+  // ==========================================================================
+  // ESTRUTURA COMERCIAL (MASTER MA-02 · MA-03 · MA-06 · MA-07)
+  //
+  // Território, equipe, hierarquia, carteira e atribuição são ESTRUTURA
+  // ORGANIZACIONAL — não colunas do cadastro de representantes. Cada um tem
+  // cadastro próprio, com vigência e histórico, e todos passam pelo padrão
+  // LISTA → PÁGINA (formulário em rota própria, nunca em modal/drawer).
+  // ==========================================================================
+  {
+    id: 'territorios',
+    label: 'Territórios',
+    icon: MapPinned,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'Estrutura comercial',
+    keywords: 'territorio regiao uf cidade zona canal key account hierarquia comercial',
+    path: '/territorios',
+    resource: 'territorios',
+    description: 'Hierarquia comercial (Brasil → Estado → Região → Cidade → Zona) ou recortes não geográficos.',
+  },
+  {
+    id: 'equipes_comerciais',
+    label: 'Equipes comerciais',
+    icon: UsersRound,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'Estrutura comercial',
+    keywords: 'equipe time lider gerente supervisor representantes',
+    path: '/equipes-comerciais',
+    resource: 'equipes_comerciais',
+    description: 'Equipes comerciais com líder, território e composição por vigência.',
+  },
+  {
+    id: 'equipe_membros',
+    label: 'Membros de equipe',
+    icon: UsersRound,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'Estrutura comercial',
+    keywords: 'membros composicao equipe participacao vigencia',
+    path: '/equipe-membros',
+    resource: 'equipe_membros',
+    description: 'Composição da equipe com papel, participação e período (histórico preservado).',
+  },
+  {
+    id: 'representante_hierarquia',
+    label: 'Hierarquia comercial',
+    icon: Network,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'Estrutura comercial',
+    keywords: 'hierarquia supervisor diretor gerente coordenador ciclo',
+    path: '/hierarquia-comercial',
+    resource: 'representante_hierarquia',
+    description: 'Diretor → Gerente → Supervisor → Representante, com vigência e sem ciclo.',
+  },
+  {
+    id: 'representante_cliente',
+    label: 'Carteira de clientes',
+    icon: IdCard,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'Carteira',
+    keywords: 'carteira clientes representante vigencia troca historico compartilhada',
+    path: '/carteira-clientes',
+    resource: 'representante_cliente',
+    description: 'Quem atende cada cliente, de quando até quando — trocar não apaga o histórico.',
+  },
+  {
+    id: 'venda_atribuicao',
+    label: 'Atribuição comercial',
+    icon: GitBranch,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'Atribuição',
+    keywords: 'atribuicao contribuicao participacao venda representante equipe territorio',
+    path: '/atribuicao-comercial',
+    resource: 'venda_atribuicao',
+    description: 'Participação de cada representante na venda (contribuição ≠ comissão).',
+  },
+  {
+    id: 'metas',
+    label: 'Metas',
+    icon: Target,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'Metas e desempenho',
+    keywords: 'metas objetivo faturamento quantidade margem atingimento realizado periodo',
+    path: '/metas',
+    resource: 'metas',
+    description: 'Metas por representante, equipe, território ou empresa — o realizado é sempre calculado.',
+  },
+  // ==========================================================================
+  // 3. VENDAS (ERP CORE)
+  // ==========================================================================
   {
     id: 'pdv',
     label: 'PDV — venda balcão',
@@ -772,6 +892,35 @@ export const MODULES: Module[] = [
     description:
       'Apuração por representante, efetivada conforme o recebimento da venda, com estornos e livro por venda.',
   },
+
+  {
+    id: 'planos_comissao',
+    label: 'Planos de comissão',
+    icon: BadgeDollarSign,
+    space: 'erp',
+    area: 'Financeiro',
+    group: 'Comissões',
+    subgroup: 'Motores de comissão',
+    keywords: 'plano comissao politica vigencia base calculo efetivacao',
+    path: '/planos-comissao',
+    resource: 'planos_comissao',
+    minPerfil: 'gerente',
+    description: 'Política de comissão: vigência, base de cálculo e momento de efetivação.',
+  },
+  {
+    id: 'regras_comissao',
+    label: 'Regras de comissão',
+    icon: Percent,
+    space: 'erp',
+    area: 'Financeiro',
+    group: 'Comissões',
+    subgroup: 'Motores de comissão',
+    keywords: 'regra comissao escopo produto categoria colecao cliente territorio equipe prioridade',
+    path: '/regras-comissao',
+    resource: 'regras_comissao',
+    minPerfil: 'gerente',
+    description: 'Regra por escopo com prioridade e vigência; a mais específica vence.',
+  },
   {
     id: 'investidores',
     label: 'Investidores / Sócios',
@@ -845,6 +994,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Despesas/receitas fixas: aluguel, energia, folha, facção, assinaturas — geradas automaticamente.',
   },
+
 
   // ==========================================================================
   // 7. FISCAL (ERP CORE)
@@ -1295,6 +1445,7 @@ export const PAGES_ESPECIAIS = [
   'comissoes',
   'empresas',
   'colecoes',
+  'painel-comercial',
 ] as const;
 
 /** Módulos cuja listagem abre diretamente a página de detalhe. */
@@ -1312,6 +1463,8 @@ export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
  * - /tamanhos/novo e /tamanhos/:id/editar (listagem em /tamanhos)
  * - /grades/novo e /grades/:id/editar (listagem em /grades)
  * - /insumos/novo e /insumos/:id/editar (listagem em /insumos)
+ * - /fornecedores/novo e /fornecedores/:id/editar (listagem em /fornecedores)
+ * - /representantes/novo e /representantes/:id/editar (listagem em /representantes)
  * - /categorias-insumos/novo e /categorias-insumos/:id/editar (listagem em /categorias-insumos)
  *
  * É a lista canônica do padrão LISTA → PÁGINA do BROBOND ERP: quem entra aqui
@@ -1319,7 +1472,29 @@ export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
  * própria listagem. Demais cadastros simples devem migrar para cá — não para
  * novas superfícies de modal/drawer.
  */
-export const FORM_DIRETO = new Set(['clientes', 'produtos', 'vendas', 'categorias', 'cores', 'colecoes', 'tamanhos', 'grades', 'insumos', 'categorias_insumos']);
+export const FORM_DIRETO = new Set([
+  'territorios',
+  'equipes_comerciais',
+  'equipe_membros',
+  'representante_hierarquia',
+  'representante_cliente',
+  'metas',
+  'planos_comissao',
+  'regras_comissao',
+  'venda_atribuicao',
+  'clientes',
+  'produtos',
+  'vendas',
+  'categorias',
+  'cores',
+  'colecoes',
+  'tamanhos',
+  'grades',
+  'insumos',
+  'fornecedores',
+  'representantes',
+  'categorias_insumos',
+]);
 
 export type NavSection = {
   id: NavSectionId;

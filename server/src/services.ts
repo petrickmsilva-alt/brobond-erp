@@ -14,6 +14,7 @@ import type { AuthUser } from './auth';
 import { attachImages, removeAllFiles } from './uploads';
 import { erroDependencias, montarDiagnostico, temHistoricoProtegido, type DiagnosticoDependencias } from './dependencias';
 import { aplicarRegrasPedido } from './itens';
+import { validarRegrasComerciais } from './comercial';
 import { aplicarRegrasOrdem, recalcularFichaValores, validarOrdemPayload } from './producao';
 import { RESUMO_MEDIDAS_VAZIO, resumoMedidasPorGrade, statusTabelaMedidas } from './medidas';
 import { hookTaxaLancamento, syncAporte, syncLancamentoCompra, syncLancamentoVenda, syncTransferencia } from './financeiro';
@@ -888,6 +889,11 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       // recurso com empresa precisa pertencer à MESMA empresa ativa.
       await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
 
+      // MASTER (MA-02..MA-07): integridade de domínio comercial — hierarquia sem
+      // ciclo, carteira sem sobreposição, meta sem período ambíguo, participações
+      // somando no máximo 100%. As mesmas funções valem para PUT (abaixo).
+      await validarRegrasComerciais(r, data, null, s, escopo, tx);
+
       const row = await s.insert(r, data, tx);
       if (r.key === 'locais') await garantirLocalPadrao(tx, escopo);
       if (r.key === 'grades' && gradeTamanhos) await syncGradeTamanhos(Number(row.id), gradeTamanhos, tx);
@@ -979,6 +985,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
       assertRegistroDaEmpresaParaEscrita(r, before, escopo);
       await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
+      await validarRegrasComerciais(r, data, before, s, escopo, tx);
 
       if (r.key === 'usuarios') await prepareUserPayload(data, before, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, before, actor);
