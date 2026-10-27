@@ -5228,3 +5228,133 @@ CREATE INDEX IF NOT EXISTS categorias_insumos_pai_idx ON categorias_insumos (pai
 ALTER TABLE insumos ADD COLUMN IF NOT EXISTS categoria_id INTEGER REFERENCES categorias_insumos(id);
 
 CREATE INDEX IF NOT EXISTS insumos_categoria_idx ON insumos (categoria_id);
+
+-- ============================================================================
+-- 0049 — CRM 3.0 · LEADS, OPORTUNIDADES, ATIVIDADES E MOTIVOS DE PERDA
+-- Espelho da migration db/migrations/0049_crm_3_0.sql.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS crm_motivos_perda (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  nome TEXT NOT NULL,
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS crm_motivos_perda_empresa_idx
+  ON crm_motivos_perda (empresa_id, ativo);
+
+CREATE TABLE IF NOT EXISTS crm_leads (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  nome TEXT NOT NULL,
+  documento TEXT,
+  email TEXT,
+  telefone TEXT,
+  origem TEXT,
+  status TEXT NOT NULL DEFAULT 'novo',
+  valor_estimado NUMERIC(14,2),
+  probabilidade INTEGER DEFAULT 0,
+  cliente_id INTEGER REFERENCES clientes(id),
+  lead_convertido_em TIMESTAMPTZ,
+  previsao_contato DATE,
+  observacoes TEXT,
+  responsavel_id INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS crm_leads_empresa_status_idx
+  ON crm_leads (empresa_id, status);
+CREATE INDEX IF NOT EXISTS crm_leads_empresa_responsavel_idx
+  ON crm_leads (empresa_id, responsavel_id);
+CREATE INDEX IF NOT EXISTS crm_leads_cliente_idx
+  ON crm_leads (cliente_id);
+
+CREATE TABLE IF NOT EXISTS crm_oportunidades (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  cliente_id INTEGER REFERENCES clientes(id),
+  lead_id INTEGER REFERENCES crm_leads(id),
+  nome TEXT NOT NULL,
+  etapa TEXT NOT NULL DEFAULT 'prospeccao',
+  valor NUMERIC(14,2),
+  probabilidade INTEGER DEFAULT 0,
+  previsao_fechamento DATE,
+  data_fechamento DATE,
+  motivo_perda_id INTEGER REFERENCES crm_motivos_perda(id),
+  observacoes TEXT,
+  responsavel_id INTEGER REFERENCES usuarios(id),
+  status TEXT NOT NULL DEFAULT 'aberta',
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS crm_oportunidades_empresa_status_idx
+  ON crm_oportunidades (empresa_id, status);
+CREATE INDEX IF NOT EXISTS crm_oportunidades_empresa_etapa_idx
+  ON crm_oportunidades (empresa_id, etapa);
+CREATE INDEX IF NOT EXISTS crm_oportunidades_cliente_idx
+  ON crm_oportunidades (cliente_id);
+CREATE INDEX IF NOT EXISTS crm_oportunidades_lead_idx
+  ON crm_oportunidades (lead_id);
+CREATE INDEX IF NOT EXISTS crm_oportunidades_responsavel_idx
+  ON crm_oportunidades (empresa_id, responsavel_id);
+
+CREATE TABLE IF NOT EXISTS crm_atividades (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  lead_id INTEGER REFERENCES crm_leads(id),
+  oportunidade_id INTEGER REFERENCES crm_oportunidades(id),
+  cliente_id INTEGER REFERENCES clientes(id),
+  tipo TEXT NOT NULL,
+  data_atividade TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resultado TEXT,
+  resumo TEXT,
+  proxima_acao DATE,
+  responsavel_id INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS crm_atividades_empresa_tipo_idx
+  ON crm_atividades (empresa_id, tipo);
+CREATE INDEX IF NOT EXISTS crm_atividades_lead_idx
+  ON crm_atividades (lead_id);
+CREATE INDEX IF NOT EXISTS crm_atividades_oportunidade_idx
+  ON crm_atividades (oportunidade_id);
+CREATE INDEX IF NOT EXISTS crm_atividades_cliente_idx
+  ON crm_atividades (cliente_id);
+CREATE INDEX IF NOT EXISTS crm_atividades_data_idx
+  ON crm_atividades (empresa_id, data_atividade);
+
+DO $$ BEGIN
+  ALTER TABLE crm_leads ADD CONSTRAINT crm_leads_status_valido
+    CHECK (status IN ('novo', 'contato', 'qualificacao', 'proposta', 'ganho', 'perdido'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE crm_oportunidades ADD CONSTRAINT crm_oportunidades_etapa_valido
+    CHECK (etapa IN ('prospeccao', 'qualificacao', 'proposta', 'negociacao', 'fechamento'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE crm_oportunidades ADD CONSTRAINT crm_oportunidades_status_valido
+    CHECK (status IN ('aberta', 'ganha', 'perdida'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE crm_oportunidades ADD CONSTRAINT crm_oportunidades_perda_exige_motivo
+    CHECK (status <> 'perdida' OR motivo_perda_id IS NOT NULL);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE crm_atividades ADD CONSTRAINT crm_atividades_tipo_valido
+    CHECK (tipo IN ('chamada', 'visita', 'email', 'reuniao', 'tarefa', 'follow_up'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE crm_atividades ADD CONSTRAINT crm_atividades_resultado_valido
+    CHECK (resultado IS NULL OR resultado IN ('realizado', 'agendado', 'nao_compareceu'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE crm_leads ADD CONSTRAINT crm_leads_probabilidade_range
+    CHECK (probabilidade >= 0 AND probabilidade <= 100);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE crm_oportunidades ADD CONSTRAINT crm_oportunidades_probabilidade_range
+    CHECK (probabilidade >= 0 AND probabilidade <= 100);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

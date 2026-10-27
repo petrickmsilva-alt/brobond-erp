@@ -983,6 +983,12 @@ export async function validarRegrasCliente(
 export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
   const s = getStore();
+  // CRM 3.0: oportunidade perdida exige motivo de perda (espelha o CHECK
+  // `crm_oportunidades_perda_exige_motivo` do banco; aqui falha rápido com 400
+  // e campo identificado, em vez de deixar o PostgreSQL rejeitar no commit).
+  if (r.key === 'crm_oportunidades' && data.status === 'perdida' && !data.motivo_perda_id) {
+    throw new HttpError(400, 'Informe o motivo da perda.', { motivo_perda_id: 'Obrigatório quando o status é perdida.' });
+  }
   // MULTIEMPRESA: a empresa do novo registro é decidida pelo SERVIDOR.
   const escopo = ctx.escopo === undefined ? escopoDe(actor) : (comoEscopo(ctx.escopo) ?? escopoDeSistema());
   carimbarEmpresa(r, data, escopo);
@@ -1120,6 +1126,10 @@ export type UpdateOpts = { forcar?: boolean; escopo?: EscopoOuAtor };
 export async function updateRecord(r: Resource, id: number, body: unknown, actor: Actor, opts: UpdateOpts = {}): Promise<Row> {
   const data = validatePayload(r, body, 'update');
   const s = getStore();
+  // CRM 3.0: oportunidade perdida exige motivo de perda (espelha o CHECK do banco).
+  if (r.key === 'crm_oportunidades' && data.status === 'perdida' && !data.motivo_perda_id) {
+    throw new HttpError(400, 'Informe o motivo da perda.', { motivo_perda_id: 'Obrigatório quando o status é perdida.' });
+  }
   // A empresa de um registro NUNCA muda por um PUT.
   protegerEmpresaNaEdicao(r, data);
   const escopo = opts.escopo === undefined ? escopoDe(actor) : (comoEscopo(opts.escopo) ?? escopoDeSistema());

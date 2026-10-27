@@ -88,16 +88,17 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
 };
 
 describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () => {
-  it('preserva exatamente os 81 módulos e todas as 81 URLs sem duplicidade nem remoção', () => {
+  it('preserva exatamente os 85 módulos e todas as 85 URLs sem duplicidade nem remoção', () => {
     // 70 da Árvore Master original + 10 da FUNDAÇÃO COMERCIAL (MASTER
     // MA-02..MA-08: territórios, equipes, hierarquia, carteira, atribuição,
     // metas, painel comercial e os dois cadastros do motor de comissão)
-    // + 1 do cadastro mestre de Insumos (Categorias de Insumos).
-    expect(MODULES).toHaveLength(81);
+    // + 1 do cadastro mestre de Insumos (Categorias de Insumos)
+    // + 4 do CRM 3.0 (leads, oportunidades, atividades, motivos de perda).
+    expect(MODULES).toHaveLength(85);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(81);
-    expect(new Set(paths).size).toBe(81);
+    expect(new Set(ids).size).toBe(85);
+    expect(new Set(paths).size).toBe(85);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -126,8 +127,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (67), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(67);
+  it('separa ERP CORE (71), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(71);
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(8);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
@@ -165,6 +166,11 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'representante_hierarquia',
       'representante_cliente',
       'venda_atribuicao',
+      // CRM 3.0 — funil de vendas (grupo Comercial, subgrupo CRM — Funil)
+      'crm-leads',
+      'crm-oportunidades',
+      'crm-atividades',
+      'crm-motivos-perda',
       'metas',
       'pdv',
       'pdv-caixas',
