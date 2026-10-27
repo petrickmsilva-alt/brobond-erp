@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, ArrowLeftRight, Boxes, ClipboardCheck, Download, FileUp, History, Loader2, Package, RefreshCw, RotateCcw, Search, Warehouse, Wallet } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
 import { useMeta } from '../lib/meta';
-import { Alert, Badge, ConfirmDialog, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import { formatMoney, formatNumber } from '../lib/format';
 import { formatDateTime } from '../lib/format';
@@ -549,8 +549,8 @@ export default function EstoqueGradePage() {
 
       {tipoImport && <ImportModal open={importOpen} onClose={() => setImportOpen(false)} tipoConfig={tipoImport} onDone={() => load()} />}
 
-      {/* Modal de movimentação a partir da célula */}
-      <Modal open={!!cel} onClose={() => setCel(null)} title="Lançar movimentação" subtitle={cel ? `${cel.produto.sku} — ${cel.produto.nome} · tam. ${cel.tamanho.codigo}` : ''} size="md">
+      {/* PainelInline de movimentação a partir da célula */}
+      <PainelInline open={!!cel} onClose={() => setCel(null)} title="Lançar movimentação" subtitle={cel ? `${cel.produto.sku} — ${cel.produto.nome} · tam. ${cel.tamanho.codigo}` : ''} size="md">
         {movErr && <Alert tone="red">{movErr}</Alert>}
         {cel && (
           <div className="space-y-4">
@@ -658,10 +658,10 @@ export default function EstoqueGradePage() {
             </div>
           </div>
         )}
-      </Modal>
+      </PainelInline>
 
       {/* Diálogo de confirmação de estorno */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!movParaEstornar}
         title="Estornar movimentação?"
         danger

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Calculator, ClipboardList, Loader2, Plus, Search, Tag } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { ProductSelector } from '../components/ProductSelector';
 import { formatMoney, formatNumber } from '../lib/format';
 
@@ -162,7 +162,7 @@ export default function CustoPage() {
         </>
       )}
 
-      <Modal open={novoOpen} onClose={() => setNovoOpen(false)} title="Nova ficha técnica" subtitle="Depois de criar, você adiciona os insumos na página da ficha." size="sm">
+      <PainelInline open={novoOpen} onClose={() => setNovoOpen(false)} title="Nova ficha técnica" subtitle="Depois de criar, você adiciona os insumos na página da ficha." size="sm">
         {formErr && <Alert tone="red">{formErr}</Alert>}
         <div className="space-y-4">
           <label className="block">
@@ -197,7 +197,7 @@ export default function CustoPage() {
             </button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
     </div>
   );
 }

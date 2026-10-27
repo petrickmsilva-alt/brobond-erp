@@ -34,7 +34,7 @@ import {
   reimprimirCupomPdv,
 } from '../lib/printAgent';
 import { formatMoney } from '../lib/format';
-import { Alert, Badge, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import BarcodeScanner from '../components/BarcodeScanner';
 import { ProductSelector } from '../components/ProductSelector';
 import type { SearchProduct } from '../lib/productSearch';
@@ -882,7 +882,7 @@ export default function PdvPage() {
       )}
 
       {/* --------------------------------------------------------- modais */}
-      <Modal open={aberturaAberta} onClose={() => setAberturaAberta(false)} title="Abrir caixa">
+      <PainelInline open={aberturaAberta} onClose={() => setAberturaAberta(false)} title="Abrir caixa">
         <div className="space-y-3">
           <label className="label">
             Número / terminal
@@ -929,9 +929,9 @@ export default function PdvPage() {
             Abrir
           </button>
         </div>
-      </Modal>
+      </PainelInline>
 
-      <Modal
+      <PainelInline
         open={movAberto !== null}
         onClose={() => setMovAberto(null)}
         title={movAberto === 'suprimento' ? 'Suprimento de caixa' : 'Sangria de caixa'}
@@ -962,9 +962,9 @@ export default function PdvPage() {
             Registrar
           </button>
         </div>
-      </Modal>
+      </PainelInline>
 
-      <Modal
+      <PainelInline
         open={fechando}
         onClose={() => setFechando(false)}
         title="Fechar caixa"
@@ -1002,9 +1002,9 @@ export default function PdvPage() {
             Fechar caixa
           </button>
         </div>
-      </Modal>
+      </PainelInline>
 
-      <Modal open={scannerAberto} onClose={() => setScannerAberto(false)} title="Ler código de barras">
+      <PainelInline open={scannerAberto} onClose={() => setScannerAberto(false)} title="Ler código de barras">
         <BarcodeScanner
           onScan={(codigo) => {
             void resolver(codigo);
@@ -1013,9 +1013,9 @@ export default function PdvPage() {
           onClose={() => setScannerAberto(false)}
           onError={(e) => toast.error(e)}
         />
-      </Modal>
+      </PainelInline>
 
-      <Modal
+      <PainelInline
         open={modalReimpressaoCupom && Boolean(ultimaVenda)}
         onClose={() => setModalReimpressaoCupom(false)}
         title={`Reimprimir Cupom — Venda #${ultimaVenda?.id ?? ''}`}
@@ -1074,7 +1074,7 @@ export default function PdvPage() {
             </button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
     </div>
   );
 }

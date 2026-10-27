@@ -296,15 +296,18 @@ function renderPagina() {
 }
 
 /**
- * Modal do ERP com título: o `Modal` genérico não liga o título ao `role=dialog`
+ * PainelInline do ERP com título: o `PainelInline` genérico não liga o título ao `role=dialog`
  * por aria-labelledby (comportamento histórico), então localizamos pelo texto e
  * subimos até o diálogo.
  */
-function dialogPorTitulo(titulo: string): HTMLElement {
+function blocoPorTitulo(titulo: string): HTMLElement {
+  // ZERO MODAL: confirmação e diagnóstico são blocos INLINE na página (role=group
+  // ou <section>), nunca role="dialog". Localizamos pelo texto e subimos até o
+  // bloco de decisão.
   const el = screen.getByText(titulo);
-  const dlg = el.closest('[role="dialog"]');
-  if (!dlg) throw new Error(`diálogo "${titulo}" não encontrado`);
-  return dlg as HTMLElement;
+  const bloco = el.closest('[role="group"], section');
+  if (!bloco) throw new Error(`bloco "${titulo}" não encontrado`);
+  return bloco as HTMLElement;
 }
 
 /** Botão "Nova grade" do cabeçalho (o FAB mobile é o segundo, oculto no desktop). */
@@ -503,13 +506,13 @@ describe('Grades — exclusão com diagnóstico de vínculos', () => {
     await screen.findByText('Camiseta PP-GG');
 
     fireEvent.click(within(linha('Camiseta PP-GG')).getByLabelText('Excluir'));
-    const confirmacao = dialogPorTitulo('Excluir grade?');
+    const confirmacao = blocoPorTitulo('Excluir grade?');
     fireEvent.click(within(confirmacao).getByRole('button', { name: 'Excluir' }));
 
     // O DELETE foi tentado e recusado pelo servidor (a FK é a proteção final).
     await waitFor(() => expect(apiDel).toHaveBeenCalledWith('/grades/3'));
     await screen.findByText('Exclusão bloqueada por vínculos');
-    const diagnostico = dialogPorTitulo('Exclusão bloqueada por vínculos');
+    const diagnostico = blocoPorTitulo('Exclusão bloqueada por vínculos');
 
     // Frase do padrão: a voz do cadastro, não o resumo técnico do servidor.
     expect(
@@ -533,7 +536,7 @@ describe('Grades — exclusão com diagnóstico de vínculos', () => {
     await screen.findByText('Infantil 2-10');
 
     fireEvent.click(within(linha('Infantil 2-10')).getByLabelText('Excluir'));
-    const confirmacao = dialogPorTitulo('Excluir grade?');
+    const confirmacao = blocoPorTitulo('Excluir grade?');
     fireEvent.click(within(confirmacao).getByRole('button', { name: 'Excluir' }));
 
     await waitFor(() => expect(apiDel).toHaveBeenCalledWith('/grades/2'));

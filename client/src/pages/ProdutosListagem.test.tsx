@@ -205,11 +205,14 @@ describe('C — clique na foto abre a galeria existente', () => {
     const foto = await screen.findByRole('button', { name: 'Ampliar foto de CAM-001 — Camiseta Pima' });
     fireEvent.click(foto);
 
-    const dialog = await screen.findByRole('dialog');
-    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    // ZERO MODAL: a foto ampliada vive DENTRO da página (bloco inline), sem
+    // role="dialog", sem aria-modal e sem overlay de tela cheia.
+    const galeria = await screen.findByRole('group', { name: /Foto ampliada/i });
+    expect(galeria).toBeInTheDocument();
+    expect(document.querySelector('[aria-modal="true"]')).toBeNull();
     // A imagem ampliada usa a URL cheia (não a miniatura).
-    expect(within(dialog).getByRole('img')).toHaveAttribute('src', '/api/files/11/frente.jpg');
-    expect(within(dialog).getByRole('button', { name: 'Próxima' })).toBeInTheDocument();
+    expect(within(galeria).getByRole('img')).toHaveAttribute('src', '/api/files/11/frente.jpg');
+    expect(within(galeria).getByRole('button', { name: 'Próxima foto' })).toBeInTheDocument();
     // Continua na listagem (a tabela segue montada atrás do lightbox).
     expect(screen.getByRole('table')).toBeInTheDocument();
   });

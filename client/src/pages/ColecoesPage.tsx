@@ -22,7 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import { Layers, Pencil, Plus, Power, Trash2 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useMeta, type ListResult } from '../lib/meta';
-import { Alert, Badge, ConfirmDialog, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
 import { DataTable, FilterBar, SearchInput, type DataTableColumn } from '../components/ui-kit-negocios';
 import { Dropdown, Pagination } from '../components/ui-kit';
 import { DependenciasModal, type DiagnosticoDependencias } from '../components/DependenciasModal';
@@ -365,7 +365,7 @@ export default function ColecoesPage() {
       </div>
 
       {/* ---- Confirmação de exclusão (componente padrão do ERP) ---- */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!alvoExclusao}
         danger
         busy={excluindo}

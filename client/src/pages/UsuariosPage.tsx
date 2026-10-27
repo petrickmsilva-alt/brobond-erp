@@ -13,11 +13,12 @@
 //   • Onda 3/4: gráfico 7d, ações em lote, política de senha, certificação
 // ============================================================================
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   ArrowUpDown,
   Ban,
@@ -65,7 +66,7 @@ import { formatDateTime, formatRelative } from '../lib/format';
 import { imprimirFicha } from '../lib/fichaPrint';
 import { useAuth } from '../auth/AuthContext';
 import { useLocalStorageBool } from '../lib/useLocalStorage';
-import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import ReauthModal from '../components/ReauthModal';
 
@@ -422,8 +423,9 @@ export default function UsuariosPage() {
   const [filtrosAbertos, setFiltrosAbertos] = useLocalStorageBool('brobond_usuarios_filtros_abertos', true);
 
   // Formulário
-  const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState<Usuario | null>(null);
+  // ZERO MODAL: o cadastro/edição de usuário vive em PÁGINA própria
+  // (/usuarios/novo e /usuarios/:id/editar). A lista apenas navega.
+  const navigate = useNavigate();
 
   // Ficha
   const [fichaId, setFichaId] = useState<number | null>(null);
@@ -833,8 +835,7 @@ export default function UsuariosPage() {
     setAlertaBusy(chaveBusy);
     try {
       const row = await api.get<Usuario>(`/usuarios/${id}`);
-      setEditing(row);
-      setFormOpen(true);
+      navigate(`/usuarios/${row.id}/editar`);
     } catch (e: any) {
       toast.error(e instanceof ApiError ? e.message : 'Não foi possível abrir o cadastro.');
     } finally {
@@ -987,8 +988,7 @@ export default function UsuariosPage() {
             <button
               className="btn-accent"
               onClick={() => {
-                setEditing(null);
-                setFormOpen(true);
+                navigate('/usuarios/novo');
               }}
             >
               <Plus className="h-4 w-4" /> Novo usuário
@@ -1400,7 +1400,7 @@ export default function UsuariosPage() {
                   Limpar filtros
                 </button>
               ) : (
-                <button className="btn-accent" onClick={() => { setEditing(null); setFormOpen(true); }}>
+                <button className="btn-accent" onClick={() => navigate('/usuarios/novo')}>
                   <Plus className="h-4 w-4" /> Novo usuário
                 </button>
               )
@@ -1490,8 +1490,7 @@ export default function UsuariosPage() {
                           <button
                             className="btn-icon"
                             onClick={() => {
-                              setEditing(row);
-                              setFormOpen(true);
+                              navigate(`/usuarios/${row.id}/editar`);
                             }}
                             title="Editar cadastro"
                             aria-label="Editar"
@@ -1546,7 +1545,7 @@ export default function UsuariosPage() {
                       </p>
                     </button>
                     <div className="flex shrink-0 flex-col gap-0.5">
-                      <button className="btn-icon" onClick={() => { setEditing(row); setFormOpen(true); }} aria-label="Editar">
+                      <button className="btn-icon" onClick={() => navigate(`/usuarios/${row.id}/editar`)} aria-label="Editar">
                         <Pencil className="h-4 w-4" />
                       </button>
                       <MenuAcoes
@@ -1606,8 +1605,7 @@ export default function UsuariosPage() {
       <button
         className="btn-accent fixed bottom-5 right-5 z-40 rounded-full px-4 py-3.5 shadow-modal md:hidden"
         onClick={() => {
-          setEditing(null);
-          setFormOpen(true);
+          navigate('/usuarios/novo');
         }}
         aria-label="Novo usuário"
       >
@@ -1625,8 +1623,7 @@ export default function UsuariosPage() {
           onClose={() => setFichaId(null)}
           onEdit={(row) => {
             setFichaId(null);
-            setEditing(row);
-            setFormOpen(true);
+            navigate(`/usuarios/${row.id}/editar`);
           }}
           onConvite={reenviarConvite}
           onCertificar={(row) => {
@@ -1687,7 +1684,7 @@ export default function UsuariosPage() {
       />
 
       {/* Desativar com motivo (individual ou em lote) */}
-      <Modal
+      <PainelInline
         open={!!desativarRow || !!loteDesativarIds}
         onClose={() => {
           setDesativarRow(null);
@@ -1739,10 +1736,10 @@ export default function UsuariosPage() {
           />
           <p className="mt-1 text-xs text-slate-400">Obrigatório: fica registrado na auditoria com quem e quando desativou.</p>
         </label>
-      </Modal>
+      </PainelInline>
 
       {/* Bloqueio manual de acesso */}
-      <Modal
+      <PainelInline
         open={!!bloquearRow}
         onClose={() => setBloquearRow(null)}
         title={`Bloquear acesso de ${bloquearRow?.nome || ''}?`}
@@ -1791,10 +1788,10 @@ export default function UsuariosPage() {
             </select>
           </label>
         </div>
-      </Modal>
+      </PainelInline>
 
       {/* Política de senha configurável */}
-      <Modal
+      <PainelInline
         open={politicaAberta}
         onClose={() => !politicaSaving && setPoliticaAberta(false)}
         title="Política de senha"
@@ -1881,10 +1878,10 @@ export default function UsuariosPage() {
             </Alert>
           </div>
         )}
-      </Modal>
+      </PainelInline>
 
       {/* Certificação de acessos */}
-      <Modal
+      <PainelInline
         open={certAberto}
         onClose={() => setCertAberto(false)}
         title="Certificação de acessos"
@@ -1977,10 +1974,10 @@ export default function UsuariosPage() {
               })}
           </ul>
         )}
-      </Modal>
+      </PainelInline>
 
       {/* Certificar acesso (com observação opcional) */}
-      <Modal
+      <PainelInline
         open={!!certificarRow}
         onClose={() => setCertificarRow(null)}
         title={`Certificar acesso de ${certificarRow?.nome || ''}?`}
@@ -2015,10 +2012,10 @@ export default function UsuariosPage() {
             autoFocus
           />
         </label>
-      </Modal>
+      </PainelInline>
 
       {/* Senha temporária: exibição única */}
-      <Modal
+      <PainelInline
         open={!!senhaTempUser && !!senhaTempValor}
         onClose={() => {
           setSenhaTempUser(null);
@@ -2060,10 +2057,10 @@ export default function UsuariosPage() {
             </button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
 
       {/* Convite que não pôde ser entregue por e-mail (sem SMTP ou SMTP com falha) */}
-      <Modal
+      <PainelInline
         open={!!conviteLink}
         onClose={() => setConviteLink('')}
         title="Convite de acesso criado — entrega manual"
@@ -2106,10 +2103,10 @@ export default function UsuariosPage() {
             </button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
 
       {/* Confirmações (encerrar sessões, reset MFA, troca forçada, desbloqueio) */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!confirmAcao}
         title={
           confirmAcao?.tipo === 'encerrar'
@@ -2156,7 +2153,7 @@ export default function UsuariosPage() {
       />
 
       {/* Exclusão (só contas virgens) */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!toDelete}
         title="Excluir usuário?"
         danger
@@ -2177,19 +2174,6 @@ export default function UsuariosPage() {
         }
       />
 
-      {/* Cadastro / edição */}
-      {formOpen && (
-        <UsuarioFormModal
-          editing={editing}
-          onClose={() => setFormOpen(false)}
-          onSaved={(created) => {
-            setFormOpen(false);
-            if (created?.convite_link) setConviteLink(String(created.convite_link));
-            else toast.success(editing ? 'Usuário salvo.' : 'Usuário incluído. Convite de acesso enviado por e-mail.');
-            void recarregarTudo();
-          }}
-        />
-      )}
 
     </div>
   );
@@ -2441,7 +2425,7 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
   }
 
   return (
-    <Modal
+    <PainelInline
       open
       onClose={onClose}
       title={editing ? 'Editar usuário' : 'Novo usuário'}
@@ -2588,7 +2572,7 @@ function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | nu
           </div>
         </section>
       </div>
-    </Modal>
+    </PainelInline>
   );
 }
 
@@ -2663,7 +2647,7 @@ function FichaUsuarioModal({
   const ativo = u?.ativo !== false;
 
   return (
-    <Modal open onClose={onClose} title={u ? u.nome : `Usuário #${id}`} subtitle={u?.email || ''} size="lg">
+    <PainelInline open onClose={onClose} title={u ? u.nome : `Usuário #${id}`} subtitle={u?.email || ''} size="lg">
       {loading && !dados && <Spinner />}
       {erro && <Alert tone="red">{erro}</Alert>}
       {u && perfil && status && (
@@ -3057,7 +3041,7 @@ function FichaUsuarioModal({
           )}
         </div>
       )}
-    </Modal>
+    </PainelInline>
   );
 }
 
@@ -3188,3 +3172,103 @@ const ACAO_LABEL: Record<string, string> = {
   ajuste: 'ajuste',
   estornar: 'estorno',
 };
+
+// ----------------------------------------------------------------------------
+// PÁGINA de cadastro/edição de usuário (LISTA → PÁGINA, ZERO MODAL)
+// ----------------------------------------------------------------------------
+/**
+ * Rota `/usuarios/novo` e `/usuarios/:id/editar`.
+ *
+ * O formulário é EXATAMENTE o mesmo componente usado antes (`UsuarioFormulario`,
+ * antigo modal) — nenhuma regra de negócio, validação, RBAC ou payload foi
+ * reescrita. O que mudou é a superfície: agora é uma página com cabeçalho,
+ * navegação de volta e URL própria (recarregável, compartilhável, auditável no
+ * histórico do navegador).
+ */
+export function UsuarioRegistroPage({ modo }: { modo: 'novo' | 'editar' }) {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [registro, setRegistro] = useState<Usuario | null>(null);
+  const [carregando, setCarregando] = useState(modo === 'editar');
+  const [erro, setErro] = useState('');
+  const [conviteLink, setConviteLink] = useState('');
+
+  useEffect(() => {
+    if (modo !== 'editar') return;
+    const alvo = Number(id);
+    if (!Number.isInteger(alvo) || alvo <= 0) {
+      setErro('Usuário inválido.');
+      setCarregando(false);
+      return;
+    }
+    let vivo = true;
+    api
+      .get<Usuario>(`/usuarios/${alvo}`)
+      .then((u) => vivo && setRegistro(u))
+      .catch((e: any) => vivo && setErro(e instanceof ApiError ? e.message : 'Não foi possível abrir o usuário.'))
+      .finally(() => vivo && setCarregando(false));
+    return () => {
+      vivo = false;
+    };
+  }, [id, modo]);
+
+  return (
+    <div className="p-4 sm:p-6">
+      <PageHeader
+        title={modo === 'editar' ? 'Editar usuário' : 'Novo usuário'}
+        description="Perfil, permissões comerciais, alçadas e expiração de acesso. O usuário define a própria senha pelo convite."
+        actions={
+          <Link className="btn-secondary" to="/usuarios">
+            <ArrowLeft className="h-4 w-4" />
+            <span className="hidden sm:inline">Voltar à lista</span>
+          </Link>
+        }
+      />
+
+      {erro && <Alert tone="red">{erro}</Alert>}
+      {carregando && <Spinner label="Carregando usuário..." />}
+
+      {conviteLink && (
+        <div className="mt-4 space-y-3 rounded-xl border border-navy-200 bg-navy-50 p-4">
+          <Alert tone="blue">
+            Usuário criado. Este ambiente não tem SMTP configurado — entregue o link abaixo. Ele vale por <strong>48 horas</strong> e só pode ser usado uma vez.
+          </Alert>
+          <div className="flex flex-wrap gap-2">
+            <input className="input flex-1 font-mono text-xs" readOnly value={conviteLink} onFocus={(e) => e.currentTarget.select()} />
+            <button
+              className="btn-secondary"
+              type="button"
+              onClick={async () => {
+                await navigator.clipboard.writeText(conviteLink);
+                toast.success('Link do convite copiado.');
+              }}
+            >
+              Copiar
+            </button>
+            <Link className="btn-primary" to="/usuarios">
+              Concluído
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {!carregando && !erro && (
+        <div className="mt-4">
+          <UsuarioFormModal
+            editing={modo === 'editar' ? registro : null}
+            onClose={() => navigate('/usuarios')}
+            onSaved={(created) => {
+              if (created?.convite_link) {
+                setConviteLink(String(created.convite_link));
+                return;
+              }
+              toast.success(modo === 'editar' ? 'Usuário salvo.' : 'Usuário incluído.');
+              navigate('/usuarios');
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}

@@ -9,7 +9,7 @@ import {
   novaChaveIdempotencia,
   type TerminalConfigCliente,
 } from '../lib/printAgent';
-import { Modal, useToast } from './ui';
+import { PainelInline, useToast } from './ui';
 
 type Tam = { id: number; codigo: string };
 type Grade = { local: string; celulas: { tamanho_id: number; quantidade: number }[] }[];
@@ -213,7 +213,7 @@ export function LabelSheet({
   }
 
   return (
-    <Modal
+    <PainelInline
       open={open}
       onClose={onClose}
       title="Imprimir etiquetas"
@@ -328,7 +328,7 @@ export function LabelSheet({
         )}
         <p className="text-xs text-slate-400">Uma nova aba será aberta com as etiquetas e a caixa de impressão do navegador. Na impressão, desative "ajustar à página" e as margens extras.</p>
       </div>
-    </Modal>
+    </PainelInline>
   );
 }
 

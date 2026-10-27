@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Inbox, Plus, Search } from 'lucide-react';
-import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../../components/ui';
+import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../../components/ui';
 import { Combobox, DataTable, DateRangePicker, Pagination, Tabs } from '../../components/ui-kit-negocios';
 import type { Tone } from '../../lib/meta';
 
@@ -74,7 +74,7 @@ export default function ComponentCatalog() {
           </div>
         </Secao>
 
-        <Secao titulo="Modal e ConfirmDialog">
+        <Secao titulo="PainelInline e ConfirmacaoInline">
           <div className="flex flex-wrap gap-2">
             <button className="btn-secondary" onClick={() => setModalOpen(true)}>
               Abrir modal
@@ -142,11 +142,11 @@ export default function ComponentCatalog() {
         </Secao>
       </div>
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Exemplo de modal" subtitle="Subtítulo opcional" footer={<button className="btn-primary" onClick={() => setModalOpen(false)}>Fechar</button>}>
+      <PainelInline open={modalOpen} onClose={() => setModalOpen(false)} title="Exemplo de modal" subtitle="Subtítulo opcional" footer={<button className="btn-primary" onClick={() => setModalOpen(false)}>Fechar</button>}>
         Conteúdo qualquer do modal — formulário, texto, tabela...
-      </Modal>
+      </PainelInline>
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={confirmOpen}
         title="Excluir item de exemplo?"
         message="Esta ação é só uma demonstração — nada será excluído de verdade."

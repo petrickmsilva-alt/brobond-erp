@@ -264,7 +264,10 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
       .map((b) => b.getAttribute('data-topnav-area'))
       .filter((a) => a !== '__mais__');
     expect(areasRenderizadas.sort()).toEqual([...MODULE_AREAS].sort());
-    expect(MODULES).toHaveLength(85);
+    // Cada módulo da fonte única aparece exatamente uma vez no menu superior:
+    // o comprimento é o da fonte (101 após a evolução ERP 3.0), não um número
+    // copiado à mão — assim incluir módulo novo não quebra a garantia.
+    expect(MODULES).toHaveLength(101);
     unmount();
   });
 

@@ -13,7 +13,7 @@ import { AlertTriangle, CheckCircle2, Package, PackageCheck, ScanBarcode, Search
 import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
 import type { ListResult } from '../lib/meta';
-import { Alert, Badge, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import BarcodeScanner from '../components/BarcodeScanner';
 
 type Etapa = 'pendente' | 'separacao' | 'conferida' | 'embalada' | 'expedida';
@@ -607,7 +607,7 @@ export default function ExpedicaoPage() {
         </div>
       )}
 
-      <Modal open={scannerAberto} onClose={() => setScannerAberto(false)} title="Ler código de barras">
+      <PainelInline open={scannerAberto} onClose={() => setScannerAberto(false)} title="Ler código de barras">
         <BarcodeScanner
           onScan={(codigo) => {
             registrarLeitura(codigo);
@@ -617,9 +617,9 @@ export default function ExpedicaoPage() {
           onClose={() => setScannerAberto(false)}
           onError={(e) => toast.error(e)}
         />
-      </Modal>
+      </PainelInline>
 
-      <Modal
+      <PainelInline
         open={resolvendo !== null}
         onClose={() => setResolvendo(null)}
         title={`Resolver divergência #${resolvendo?.id ?? ''}`}
@@ -642,7 +642,7 @@ export default function ExpedicaoPage() {
             Registrar resolução
           </button>
         </div>
-      </Modal>
+      </PainelInline>
 
       {aba === 'fila' && selecionada && (
         <button className="btn-icon fixed bottom-4 right-4 lg:hidden" onClick={() => setSelecionada(null)} title="Fechar pedido">

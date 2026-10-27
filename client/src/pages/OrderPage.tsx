@@ -19,7 +19,7 @@ import {
 import { api } from '../lib/api';
 import { useMeta, type Option, type ResourceMeta } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, ConfirmDialog, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Thumb } from '../components/ImageField';
 import RecebimentoCompraModal from '../components/RecebimentoCompraModal';
@@ -2276,7 +2276,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
       />
 
       {/* Confirmação de remoção de item */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!toDelete}
         title="Remover item?"
         danger
@@ -2292,7 +2292,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
       />
 
       {/* Confirmação de cancelamento da venda */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={confirmarCancelamento}
         title="Cancelar pedido de venda?"
         danger
@@ -2684,7 +2684,7 @@ function CompraOrderEngine() {
         <RecebimentoCompraModal compraId={Number(pedidoId)} onClose={() => setRecebendo(false)} onRecebido={() => void load()} />
       )}
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!toDelete}
         title="Remover item?"
         danger

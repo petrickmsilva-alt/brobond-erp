@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { CheckCircle, ClipboardCopy, Copy, Info, Loader2, Plus, Printer, Ruler, Save, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
-import { Alert, Badge, ConfirmDialog, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
 
 type Tamanho = { id: number; codigo: string };
@@ -768,7 +768,7 @@ export default function MedidasPage() {
       )}
 
       {/* Confirmação: trocar de grade com alterações não salvas */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={gradeParaTrocar !== null}
         title="Sair sem salvar?"
         message="Há alterações não salvas nesta grade. Sair sem salvar descarta o que foi digitado."
@@ -779,7 +779,7 @@ export default function MedidasPage() {
       />
 
       {/* Confirmação: substituir tabela atual ao copiar de outra grade */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={confirmarSubstituirCopia}
         title="Substituir tabela atual"
         message="Substituir a tabela atual de medidas pela de outra grade? Nada é gravado até você clicar em Salvar tabela."
@@ -790,7 +790,7 @@ export default function MedidasPage() {
       />
 
       {/* Confirmação: remover coluna com valores */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={colunaParaRemover !== null}
         title="Remover coluna"
         message={
@@ -809,7 +809,7 @@ export default function MedidasPage() {
       />
 
       {/* Copiar de outra grade */}
-      <Modal
+      <PainelInline
         open={modalCopiar}
         onClose={() => setModalCopiar(false)}
         title="Copiar tabela de outra grade"
@@ -843,7 +843,7 @@ export default function MedidasPage() {
             tabela”.
           </span>
         </label>
-      </Modal>
+      </PainelInline>
     </div>
   );
 }

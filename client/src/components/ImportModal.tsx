@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Download, FileUp, Inbox, Loader2, UploadCloud, X } from 'lucide-react';
 import { api, downloadFile, lerArquivoParaImportacao, ApiError } from '../lib/api';
-import { Alert, Modal, useToast } from './ui';
+import { Alert, PainelInline, useToast } from './ui';
 
 export type TipoImport = 'produtos' | 'clientes' | 'fornecedores' | 'insumos' | 'estoque';
 
@@ -138,7 +138,7 @@ export function ImportModal({
   const aceita = '.csv,text/csv,.xlsx,.xls';
 
   return (
-    <Modal
+    <PainelInline
       open={open}
       onClose={onClose}
       title={`Importar ${tipoConfig.label.toLowerCase()}`}
@@ -274,6 +274,6 @@ export function ImportModal({
           </>
         )}
       </div>
-    </Modal>
+    </PainelInline>
   );
 }

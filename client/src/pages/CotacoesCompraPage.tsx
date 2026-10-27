@@ -31,7 +31,7 @@ import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatMoney, formatNumber } from '../lib/format';
 import type { ListResult } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 
 // ---------------------------------------------------------------------------
@@ -778,7 +778,7 @@ export default function CotacoesCompraPage() {
       </div>
 
       {/* ------------------------------------------------------- nova cotação */}
-      <Modal
+      <PainelInline
         open={novaAberta}
         onClose={() => setNovaAberta(false)}
         title="Nova cotação de compra"
@@ -818,10 +818,10 @@ export default function CotacoesCompraPage() {
           </div>
           <Alert tone="blue">Depois de criada, adicione os itens e convide os fornecedores. Convidar já abre a cotação para respostas.</Alert>
         </div>
-      </Modal>
+      </PainelInline>
 
       {/* ------------------------------------------------------- adicionar item */}
-      <Modal
+      <PainelInline
         open={addItemAberto}
         onClose={() => setAddItemAberto(false)}
         title="Adicionar item à cotação"
@@ -858,10 +858,10 @@ export default function CotacoesCompraPage() {
             />
           </div>
         </div>
-      </Modal>
+      </PainelInline>
 
       {/* ---------------------------------------------------------- convidar */}
-      <Modal
+      <PainelInline
         open={addConviteAberto}
         onClose={() => setAddConviteAberto(false)}
         title="Convidar fornecedores"
@@ -895,10 +895,10 @@ export default function CotacoesCompraPage() {
           })}
           {fornecedores.length === 0 ? <p className="px-2 py-1 text-xs text-amber-600">Nenhum fornecedor cadastrado.</p> : null}
         </div>
-      </Modal>
+      </PainelInline>
 
       {/* --------------------------------------------- preços do fornecedor */}
-      <Modal
+      <PainelInline
         open={cotandoConvite !== null}
         onClose={() => setCotandoConvite(null)}
         title={`Cotação de ${cotandoConvite?.fornecedor ?? ''}`}
@@ -974,10 +974,10 @@ export default function CotacoesCompraPage() {
             </table>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
 
       {/* ---------------------------------------------------- confirmações */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={confirmarDecisao}
         title="Decidir cotação e gerar pedido de compra"
         message={
@@ -990,7 +990,7 @@ export default function CotacoesCompraPage() {
         onConfirm={() => void decidir()}
         onCancel={() => setConfirmarDecisao(false)}
       />
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={confirmarCancelamento}
         title="Cancelar esta cotação?"
         message="A cotação e as propostas recebidas saem do fluxo. Nada de estoque ou financeiro é afetado — nenhuma compra é criada."
@@ -1000,7 +1000,7 @@ export default function CotacoesCompraPage() {
         onConfirm={() => void cancelar()}
         onCancel={() => setConfirmarCancelamento(false)}
       />
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={itemRemover !== null}
         title="Remover item da cotação?"
         message={itemRemover ? `"${itemRemover.descricao}" sai do carrinho. Os preços já recebidos para ele deixam de contar no comparativo.` : ''}

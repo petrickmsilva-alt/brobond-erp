@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { api, apiFetch, ApiError } from '../lib/api';
 import { Logo } from '../components/Logo';
-import { Modal, useToast } from '../components/ui';
+import { PainelInline, useToast } from '../components/ui';
 import { formatDateTime, formatMoney, formatNumber } from '../lib/format';
 
 type MedidasCatalogo = {
@@ -514,7 +514,7 @@ export default function CatalogoPublico() {
         />
       )}
 
-      <Modal
+      <PainelInline
         open={!!linkParaCopiar}
         onClose={() => setLinkParaCopiar('')}
         title="Link do produto"
@@ -527,7 +527,7 @@ export default function CatalogoPublico() {
         }
       >
         <input className="input select-all font-mono text-xs" readOnly value={linkParaCopiar} onFocus={(e) => e.currentTarget.select()} />
-      </Modal>
+      </PainelInline>
 
       {pedidoOpen && (
         <CatalogoPedidoModal

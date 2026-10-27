@@ -5,7 +5,7 @@
 // módulo") por uma explicação concreta: QUAIS módulos apontam para o registro,
 // QUANTOS são, QUAIS ids e POR QUE a exclusão está bloqueada.
 //
-// Reusa os componentes do design system (Modal, Alert, Badge) — nenhuma
+// Reusa os componentes do design system (PainelInline, Alert, Badge) — nenhuma
 // biblioteca visual nova.
 // ============================================================================
 import { useMemo, useState } from 'react';
@@ -45,7 +45,7 @@ import {
   Wallet,
   type LucideIcon,
 } from 'lucide-react';
-import { Alert, Badge, Modal } from './ui';
+import { Alert, Badge, PainelInline } from './ui';
 
 export type TipoVinculo = 'composicao' | 'historico' | 'operacional' | 'trilha' | 'anexo';
 
@@ -199,7 +199,7 @@ export function DependenciasModal({
   const acompanhamento = grupos.filter((g) => !g.bloqueia);
 
   return (
-    <Modal
+    <PainelInline
       open
       onClose={onClose}
       size="lg"
@@ -348,6 +348,6 @@ export function DependenciasModal({
           </span>
         </p>
       </div>
-    </Modal>
+    </PainelInline>
   );
 }

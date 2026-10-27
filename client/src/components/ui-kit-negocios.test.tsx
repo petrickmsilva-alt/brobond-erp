@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { Combobox, DataTable, DatePicker, DateRangePicker, DeltaBadge, Drawer, ErrorState, LoadingState, Pagination, StatCard, StatusBadge, Tabs, Tooltip } from './ui-kit-negocios';
+import { Combobox, DataTable, DatePicker, DateRangePicker, DeltaBadge, ErrorState, LoadingState, Pagination, StatCard, StatusBadge, Tabs, Tooltip } from './ui-kit-negocios';
 
 describe('StatusBadge', () => {
   it('mostra o texto do status (nunca só a cor)', () => {
@@ -58,29 +58,6 @@ describe('ErrorState e LoadingState', () => {
   it('LoadingState anuncia o carregamento', () => {
     render(<LoadingState label="Carregando vendas" />);
     expect(screen.getByRole('status')).toHaveTextContent('Carregando vendas');
-  });
-});
-
-describe('Drawer', () => {
-  it('abre como diálogo e fecha com Esc', async () => {
-    const onClose = vi.fn();
-    render(
-      <Drawer open onClose={onClose} title="Filtros avançados">
-        <p>conteúdo</p>
-      </Drawer>,
-    );
-    expect(screen.getByRole('dialog', { name: 'Filtros avançados' })).toBeInTheDocument();
-    await userEvent.keyboard('{Escape}');
-    expect(onClose).toHaveBeenCalled();
-  });
-
-  it('não renderiza quando fechado', () => {
-    render(
-      <Drawer open={false} onClose={() => {}} title="Oculto">
-        <p>x</p>
-      </Drawer>,
-    );
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
 

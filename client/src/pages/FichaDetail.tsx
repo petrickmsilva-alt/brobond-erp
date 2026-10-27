@@ -4,7 +4,7 @@ import { ArrowLeft, ClipboardList, Loader2, Pencil, Plus, Scissors, Tag, Trash2 
 import { api, ApiError } from '../lib/api';
 import { useMeta, type Option } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, ConfirmDialog, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { formatMoney, formatNumber } from '../lib/format';
 
 type InsumoLinha = Record<string, any> & { id: number };
@@ -324,8 +324,8 @@ export default function FichaDetail() {
         </div>
       </div>
 
-      {/* Modal cabeçalho */}
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Editar custos e margem" subtitle="Ao salvar, custo e preço sugerido são recalculados." size="sm">
+      {/* PainelInline cabeçalho */}
+      <PainelInline open={editOpen} onClose={() => setEditOpen(false)} title="Editar custos e margem" subtitle="Ao salvar, custo e preço sugerido são recalculados." size="sm">
         {editErr && <Alert tone="red">{editErr}</Alert>}
         <div className="space-y-4">
           <label className="block">
@@ -347,10 +347,10 @@ export default function FichaDetail() {
             </button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
 
-      {/* Modal insumo */}
-      <Modal
+      {/* PainelInline insumo */}
+      <PainelInline
         open={!!insumoModal}
         onClose={() => setInsumoModal(null)}
         title={insumoModal === 'novo' ? 'Adicionar insumo' : 'Editar insumo'}
@@ -387,9 +387,9 @@ export default function FichaDetail() {
             </button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!toDelete}
         title="Remover insumo da ficha?"
         danger

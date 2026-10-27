@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, ToastProvider, useToast } from './ui';
+import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, ToastProvider, useToast } from './ui';
 
 describe('Badge', () => {
   it('renderiza o texto e aplica o tom informado', () => {
@@ -48,41 +48,45 @@ describe('PageHeader', () => {
   });
 });
 
-describe('Modal', () => {
+describe('PainelInline', () => {
   it('não renderiza nada quando fechado', () => {
     render(
-      <Modal open={false} onClose={() => {}} title="Título">
+      <PainelInline open={false} onClose={() => {}} title="Título">
         conteúdo
-      </Modal>
+      </PainelInline>
     );
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByText('conteúdo')).not.toBeInTheDocument();
   });
 
-  it('renderiza o conteúdo e fecha ao clicar no X e no Escape', async () => {
+  it('renderiza o conteúdo na própria página, sem semântica de modal', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     render(
-      <Modal open onClose={onClose} title="Editar produto">
-        conteúdo do formulário
-      </Modal>
+      <PainelInline open onClose={onClose} title="Conferência">
+        conteúdo do painel
+      </PainelInline>
     );
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByText('conteúdo do formulário')).toBeInTheDocument();
+    expect(screen.getByText('conteúdo do painel')).toBeInTheDocument();
+    // Regra ZERO MODAL: nada de role="dialog", aria-modal nem overlay fixo.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(document.querySelector('[aria-modal="true"]')).toBeNull();
+    expect(document.querySelector('.fixed.inset-0')).toBeNull();
 
-    await user.click(screen.getByRole('button', { name: 'Fechar' }));
+    await user.click(screen.getByRole('button', { name: 'Fechar painel' }));
     expect(onClose).toHaveBeenCalledTimes(1);
 
+    // O painel NÃO captura ESC: fechar é decisão explícita do usuário.
     await user.keyboard('{Escape}');
-    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('ConfirmDialog', () => {
+describe('ConfirmacaoInline', () => {
   it('chama onConfirm e onCancel a partir dos botões corretos', async () => {
     const user = userEvent.setup();
     const onConfirm = vi.fn();
     const onCancel = vi.fn();
-    render(<ConfirmDialog open title="Excluir produto?" message="Esta ação não pode ser desfeita." danger confirmLabel="Excluir" onConfirm={onConfirm} onCancel={onCancel} />);
+    render(<ConfirmacaoInline open title="Excluir produto?" message="Esta ação não pode ser desfeita." danger confirmLabel="Excluir" onConfirm={onConfirm} onCancel={onCancel} />);
 
     expect(screen.getByText('Esta ação não pode ser desfeita.')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Excluir' }));
@@ -93,7 +97,7 @@ describe('ConfirmDialog', () => {
   });
 
   it('desabilita os botões quando busy=true (evita clique duplo)', () => {
-    render(<ConfirmDialog open title="Excluir?" message="..." busy onConfirm={() => {}} onCancel={() => {}} />);
+    render(<ConfirmacaoInline open title="Excluir?" message="..." busy onConfirm={() => {}} onCancel={() => {}} />);
     expect(screen.getByRole('button', { name: 'Cancelar' })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Confirmar/ })).toBeDisabled();
   });

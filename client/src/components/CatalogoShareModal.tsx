@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Copy, Download, ExternalLink, Mail, MessageCircle, QrCode, Share2 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
-import { Alert, Modal, useToast } from './ui';
+import { Alert, PainelInline, useToast } from './ui';
 
 type Cliente = { id: number; nome: string; telefone?: string | null; email?: string | null; ativo?: boolean };
 type ShareInfo = { url: string; qr_data_url: string; compartilhamento_id: number; expira_em: string };
@@ -106,7 +106,7 @@ export default function CatalogoShareModal({ catalogo, onClose }: { catalogo: Re
   }
 
   return (
-    <Modal open={!!catalogo} onClose={onClose} title="Compartilhar catálogo" subtitle={catalogo?.nome} size="lg">
+    <PainelInline open={!!catalogo} onClose={onClose} title="Compartilhar catálogo" subtitle={catalogo?.nome} size="lg">
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div className="space-y-4">
           {catalogo?.ativo === false && <Alert tone="amber">Este catálogo está inativo. Ative-o antes de enviar ao cliente.</Alert>}
@@ -176,6 +176,6 @@ export default function CatalogoShareModal({ catalogo, onClose }: { catalogo: Re
           )}
         </aside>
       </div>
-    </Modal>
+    </PainelInline>
   );
 }

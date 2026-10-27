@@ -27,7 +27,7 @@ import {
 import { api, ApiError, downloadFile } from '../lib/api';
 import type { Meta } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, Modal, PageHeader, useToast } from '../components/ui';
+import { Alert, Badge, PainelInline, PageHeader, useToast } from '../components/ui';
 import ReauthModal from '../components/ReauthModal';
 import { useTheme, type ThemePref } from '../lib/theme';
 
@@ -673,7 +673,7 @@ function MfaCard() {
         }}
         titulo={aposReauth === 'codigos' ? 'Autorizar novos códigos de recuperação' : 'Autorizar desativação do MFA'}
       />
-      <Modal open={!!codigosNovos} onClose={() => setCodigosNovos(null)} title="Códigos de recuperação" subtitle="Exibição única: guarde agora, cada código vale um acesso." size="md">
+      <PainelInline open={!!codigosNovos} onClose={() => setCodigosNovos(null)} title="Códigos de recuperação" subtitle="Exibição única: guarde agora, cada código vale um acesso." size="md">
         <div className="space-y-4">
           <Alert tone="amber">
             Estes códigos <strong>não aparecem de novo</strong>. Sem eles (e sem o celular), só o administrador — com reset do MFA — devolve o seu acesso.
@@ -703,7 +703,7 @@ function MfaCard() {
             </button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
     </section>
   );
 }

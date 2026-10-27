@@ -8,7 +8,6 @@ import {
   Download,
   Copy,
   Eye,
-  Mail,
   Factory as FactoryIcon,
   FileUp,
   Inbox,
@@ -33,21 +32,13 @@ import { ImageField, Lightbox } from '../components/ImageField';
 import { BarrasVerticais } from '../components/Charts';
 import { DETALHE_DIRETO, FORM_DIRETO, findModuleByResource, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Pagination } from '../components/ui-kit';
-import ReauthModal from '../components/ReauthModal';
+// Opções de referência usadas pelos FILTROS da listagem (não por formulário:
+// o formulário de cadastro vive em página própria — ver RegistroPage).
+import { useRefOptions } from '../components/RecordForm';
 import { DependenciasModal, type DiagnosticoDependencias } from '../components/DependenciasModal';
-import {
-  fieldErrors,
-  initialValues,
-  normalizarCamposCor,
-  RecordForm,
-  toPayload,
-  useRefOptions,
-  validarFormulario,
-  type FormValues,
-} from '../components/RecordForm';
 import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
 import { useLocalStorageChoice, useLocalStorageInt, useLocalStorageSet } from '../lib/useLocalStorage';
 import PlannedModule from './PlannedModule';
@@ -122,6 +113,19 @@ const CadastroComercialPage = lazy(() => import('./CadastroComercialPage'));
 const TerritoriosPage = lazy(() => import('./TerritoriosPage'));
 const MetasPage = lazy(() => import('./MetasPage'));
 const PainelComercialPage = lazy(() => import('./PainelComercialPage'));
+// CRM 3.0 — painel comercial e agenda (páginas próprias, sem modal).
+const CrmPainelPage = lazy(() => import('./CrmPainelPage'));
+const CrmAgendaPage = lazy(() => import('./CrmAgendaPage'));
+// Estoque 3.0 — transferência formal (documento + estados) e reservas.
+const EstoqueTransferenciasPage = lazy(() => import('./EstoqueTransferenciasPage'));
+// Compras 3.0 — homologação de fornecedor (processo, não cadastro paralelo).
+const ComprasFornecedoresPage = lazy(() => import('./ComprasFornecedoresPage'));
+// Produção 3.0 — capacidade/carga/gargalo e MRP (somente leitura).
+const ProducaoCapacidadePage = lazy(() => import('./ProducaoCapacidadePage'));
+// Fiscal 3.0 — calendário de obrigações acessórias (prazo e prova, sem imposto).
+const FiscalCalendarioPage = lazy(() => import('./FiscalCalendarioPage'));
+// Financeiro 3.0 — balancete/classificação contábil (leitura do mesmo livro).
+const FinanceiroBalancetePage = lazy(() => import('./FinanceiroBalancetePage'));
 
 const PAGE_SIZE = 25;
 /** Tamanhos de página oferecidos na listagem (server-side). */
@@ -174,6 +178,13 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'territorios') return <Suspense fallback={<SubPageLoading />}><TerritoriosPage /></Suspense>;
   if (module.id === 'metas') return <Suspense fallback={<SubPageLoading />}><MetasPage /></Suspense>;
   if (module.id === 'painel-comercial') return <Suspense fallback={<SubPageLoading />}><PainelComercialPage /></Suspense>;
+  if (module.id === 'crm-painel') return <Suspense fallback={<SubPageLoading />}><CrmPainelPage /></Suspense>;
+  if (module.id === 'crm-agenda') return <Suspense fallback={<SubPageLoading />}><CrmAgendaPage /></Suspense>;
+  if (module.id === 'transferencias-estoque') return <Suspense fallback={<SubPageLoading />}><EstoqueTransferenciasPage /></Suspense>;
+  if (module.id === 'homologacao-fornecedores') return <Suspense fallback={<SubPageLoading />}><ComprasFornecedoresPage /></Suspense>;
+  if (module.id === 'producao-capacidade') return <Suspense fallback={<SubPageLoading />}><ProducaoCapacidadePage /></Suspense>;
+  if (module.id === 'fiscal-calendario') return <Suspense fallback={<SubPageLoading />}><FiscalCalendarioPage /></Suspense>;
+  if (module.id === 'balancete') return <Suspense fallback={<SubPageLoading />}><FinanceiroBalancetePage /></Suspense>;
   if (module.id === 'equipes_comerciais') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="equipes_comerciais" /></Suspense>;
   if (module.id === 'equipe_membros') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="equipe_membros" /></Suspense>;
   if (module.id === 'representante_hierarquia') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="representante_hierarquia" /></Suspense>;
@@ -229,61 +240,12 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const [catalogoCompartilhar, setCatalogoCompartilhar] = useState<Record<string, any> | null>(null);
   const [sort, setSort] = useState<{ field: string; dir: 'asc' | 'desc' } | null>(null);
 
-  // Formulário (modal)
-  const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState<Record<string, any> | null>(null);
-  const [values, setValues] = useState<FormValues>(() => initialValues(resource, null, defaultLocal));
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [formError, setFormError] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [optionsKey, setOptionsKey] = useState(0);
-  const refOptions = useRefOptions(resource, optionsKey);
+  // Opções de referência para os filtros da lista (chips/painel).
+  const refOptions = useRefOptions(resource);
 
-  // Movimentações: o tamanho deve vir da grade do produto escolhido — sem isso
-  // dá para lançar “PP” numa calça 36-48 e o saldo vira bagunça.
-  const gradeAware = resource.key === 'movimentacoes';
-  const produtoDoFormulario = gradeAware ? String(values.produto_id ?? '') : '';
-  const [tamanhosDaGrade, setTamanhosDaGrade] = useState<Option[] | null>(null);
-  const [gradeDoFormulario, setGradeDoFormulario] = useState('');
-  useEffect(() => {
-    if (!gradeAware || !produtoDoFormulario) {
-      setTamanhosDaGrade(null);
-      setGradeDoFormulario('');
-      return;
-    }
-    let alive = true;
-    api
-      .get<{ grade: { id: number; nome: string } | null; tamanhos: { id: number; codigo: string }[] }>(`/produtos/${produtoDoFormulario}/tamanhos`)
-      .then((d) => {
-        if (!alive) return;
-        const lista = (d.tamanhos ?? []).map((t) => ({ value: t.id, label: t.codigo }));
-        setTamanhosDaGrade(lista);
-        setGradeDoFormulario(d.grade?.nome ?? '');
-        if (!lista.length) return;
-        // Produto trocado e o tamanho anterior não pertence à nova grade → limpa.
-        const validos = new Set(lista.map((t) => t.value));
-        setValues((v) => {
-          const atual = Number(String(v.tamanho_id ?? ''));
-          if (!atual || validos.has(atual)) return v;
-          return { ...v, tamanho_id: '' };
-        });
-      })
-      .catch(() => {
-        if (!alive) return;
-        setTamanhosDaGrade(null);
-        setGradeDoFormulario('');
-      });
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gradeAware, produtoDoFormulario]);
-
-  const refOptionsForm = useMemo(
-    () => (gradeAware && tamanhosDaGrade && tamanhosDaGrade.length ? { ...refOptions, tamanhos: tamanhosDaGrade } : refOptions),
-    [gradeAware, tamanhosDaGrade, refOptions]
-  );
-
+  // ZERO MODAL: não existe estado de formulário nesta página. Criar/editar
+  // navega para a PÁGINA do recurso (`/recurso/novo` e `/recurso/:id/editar`,
+  // ver pages/RegistroPage.tsx). A lista nunca abre superfície sobreposta.
   // Fase 5 — exportação, importação e filtros avançados
   const importTipo = IMPORT_TIPOS.find((t) => t.recurso === resource.key);
   const [importOpen, setImportOpen] = useState(false);
@@ -347,52 +309,9 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     }
   }
 
-  // Fluxo profissional de acesso (somente no módulo Usuários):
-  // convite por e-mail + senha temporária de EXIBIÇÃO ÚNICA (nunca recuperável).
-  const [senhaTempUser, setSenhaTempUser] = useState<Record<string, any> | null>(null);
-  const [senhaTempValor, setSenhaTempValor] = useState('');
-  const [conviteLink, setConviteLink] = useState('');
-  const [reauthAcao, setReauthAcao] = useState<null | 'senha-temporaria'>(null);
-  const [conviteBusyId, setConviteBusyId] = useState<number | null>(null);
-
-  /** Reenviar convite de acesso (usuário ainda sem senha definida). */
-  async function reenviarConvite(row: Record<string, any>) {
-    setConviteBusyId(Number(row.id));
-    try {
-      const d = await api.post<{ convite_link?: string }>(`/usuarios/${row.id}/reenviar-convite`, {});
-      if (d.convite_link) setConviteLink(d.convite_link);
-      else toast.success(`Convite reenviado para ${row.email}.`);
-      await load();
-    } catch (e: any) {
-      toast.error(e instanceof ApiError ? e.message : 'Não foi possível reenviar o convite.');
-    } finally {
-      setConviteBusyId(null);
-    }
-  }
-
-  /** 1º passo da senha temporária: reautenticação (o servidor exige senha recente). */
-  function pedirSenhaTemporaria(row: Record<string, any>) {
-    setSenhaTempUser(row);
-    setReauthAcao('senha-temporaria');
-  }
-
-  /** 2º passo: com a reautenticação validada, gera a senha (mostrada uma única vez). */
-  async function gerarSenhaTemporaria() {
-    if (!senhaTempUser) return;
-    try {
-      const d = await api.post<{ senha_temporaria: string; sessoes_encerradas: number }>(`/usuarios/${senhaTempUser.id}/senha-temporaria`, {});
-      setSenhaTempValor(d.senha_temporaria);
-      toast.success(`Senha temporária gerada para ${senhaTempUser.email}.`);
-      await load();
-    } catch (e: any) {
-      if (e instanceof ApiError && e.code === 'reauth_necessaria') {
-        setReauthAcao('senha-temporaria');
-        return;
-      }
-      toast.error(e instanceof ApiError ? e.message : 'Não foi possível gerar a senha temporária.');
-      setSenhaTempUser(null);
-    }
-  }
+  // O fluxo de convite/senha temporária vive em UsuariosPage (página própria do
+  // módulo `usuarios`); esta listagem genérica nunca o renderiza — por isso não
+  // há estado nem ação de usuário aqui.
 
   // Campos virtuais só entram na tabela se pedirem explicitamente (list: true),
   // ex.: "Senha" em usuários, que mostra o estado e não o valor.
@@ -522,138 +441,37 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     load();
   }, [load]);
 
-  // --- formulário ---
+  // --- navegação do cadastro (LISTA → PÁGINA) ---
+  /**
+   * Criar SEMPRE navega para a página do recurso. Não há caminho alternativo
+   * em modal/drawer: a lista é somente leitura e navegação.
+   */
   function openCreate() {
-    // Padrão LISTA → PÁGINA do BROBOND ERP: estes cadastros têm rota própria
-    // (/cores/novo, /categorias/novo...) e NÃO abrem formulário sobreposto.
-    // O caminho-base vem do módulo (`/categorias-insumos`), nunca do nome do
+    // O caminho-base vem do MÓDULO (`/categorias-insumos`), nunca do nome do
     // recurso — os dois divergem nos recursos com sublinhado.
-    if (FORM_DIRETO.has(resource.key)) {
-      navigate(`${basePath}/novo`);
-      return;
-    }
-    setEditing(null);
-    setValues(initialValues(resource, null, defaultLocal));
-    setErrors({});
-    setFormError('');
-    setOptionsKey((k) => k + 1);
-    setFormOpen(true);
+    navigate(`${basePath}/novo`);
   }
 
+  /**
+   * Editar: módulos com página de detalhe própria continuam indo para o
+   * detalhe (OP, ficha técnica, pedidos); os demais abrem a página de edição
+   * do recurso.
+   */
   function openEdit(row: Record<string, any>) {
-    // Módulos com página de detalhe própria (OP, ficha técnica): edita lá.
+    // Módulos cujo ciclo de vida É a página de detalhe (OP, ficha técnica) e
+    // pedidos com página dedicada (compras) editam lá — a página de detalhe é
+    // quem manda no documento.
     if (DETALHE_DIRETO.has(module.id)) {
       navigate(`/${resource.key}/${row.id}`);
       return;
     }
-    // Padrão LISTA → PÁGINA do BROBOND ERP: edição em rota própria.
-    if (FORM_DIRETO.has(resource.key)) {
+    // Cadastros com formulário próprio (clientes, produtos, vendas, cores...)
+    // e todos os recursos do CRUD genérico editam na PÁGINA de edição.
+    if (FORM_DIRETO.has(resource.key) || !resource.detail) {
       navigate(`${basePath}/${row.id}/editar`);
       return;
     }
-    setEditing(row);
-    setValues(initialValues(resource, row));
-    setErrors({});
-    setFormError('');
-    setOptionsKey((k) => k + 1);
-    setFormOpen(true);
-  }
-
-  function clearForm() {
-    setValues(initialValues(resource, null, defaultLocal));
-    setErrors({});
-    setFormError('');
-  }
-
-  function closeForm() {
-    if (saving) return;
-    setFormOpen(false);
-  }
-
-  function onChange(name: string, value: string | boolean | string[]) {
-    setValues((v) => ({ ...v, [name]: value }));
-    if (errors[name]) setErrors((e) => ({ ...e, [name]: '' }));
-  }
-
-  /**
-   * Validação local rápida (obrigatórios, HEX) antes de chamar a API. A regra é
-   * a COMPARTILHADA com as páginas de cadastro (validarFormulario), para o
-   * mesmo campo nunca ter duas mensagens diferentes no ERP.
-   */
-  function validateLocal(vals: FormValues = values): boolean {
-    const { errors: errs, formError: msg } = validarFormulario(resource, vals, !!editing);
-    setErrors(errs);
-    if (msg) {
-      setFormError(msg);
-      return false;
-    }
-    return true;
-  }
-
-  async function submit() {
-    setFormError('');
-    const valores = normalizarCamposCor(resource, values);
-    if (valores !== values) setValues(valores);
-    if (!validateLocal(valores)) return;
-    setSaving(true);
-    try {
-      const payload = toPayload(resource, valores, !!editing);
-      if (editing) {
-        await api.put(`/${resource.key}/${editing.id}`, payload);
-        toast.success(`${resource.singular} salvo(a) com sucesso.`);
-        setFormOpen(false);
-      } else {
-        const created = await api.post<Record<string, any>>(`/${resource.key}`, payload);
-        if (resource.key === 'usuarios') {
-          // Convite por e-mail: com SMTP o link vai direto para o usuário;
-          // sem SMTP o link volta na resposta para ser entregue manualmente.
-          if (created?.convite_link) {
-            setFormOpen(false);
-            setConviteLink(String(created.convite_link));
-            await load();
-            return;
-          }
-          toast.success(`${resource.singular} incluído(a). Convite de acesso enviado por e-mail.`);
-          setValues(initialValues(resource, null, defaultLocal));
-          setErrors({});
-          await load();
-          return;
-        }
-        if (resource.key === 'catalogos' && created?.id) {
-          toast.success('Catálogo criado. Agora compartilhe o link com seus clientes.');
-          setFormOpen(false);
-          setCatalogoCompartilhar(created);
-          await load();
-          return;
-        }
-        if (resource.detail && !hasImages && created?.id) {
-          // Módulos com página de detalhe própria (vendas, compras): abre o pedido
-          toast.success(`${resource.singular} incluído(a). Adicione os itens do pedido.`);
-          navigate(`/${resource.key}/${created.id}`);
-          return;
-        }
-        if (hasImages && created?.id) {
-          // Abre o registro recém-criado em modo edição para permitir anexar fotos
-          toast.success(`${resource.singular} incluído(a). Agora você pode adicionar as fotos.`);
-          setEditing(created);
-          setValues(initialValues(resource, created));
-          setErrors({});
-        } else {
-          toast.success(`${resource.singular} incluído(a) com sucesso.`);
-          // Mantém o formulário aberto e limpo para o próximo cadastro
-          setValues(initialValues(resource, null, defaultLocal));
-          setErrors({});
-          document.getElementById(`form-${resource.key}`)?.querySelector<HTMLElement>('input, select, textarea')?.focus();
-        }
-      }
-      await load();
-    } catch (e: any) {
-      const fe = fieldErrors(e);
-      setErrors(fe);
-      setFormError(e instanceof ApiError ? e.message : 'Não foi possível salvar. Tente novamente.');
-    } finally {
-      setSaving(false);
-    }
+    navigate(`/${resource.key}/${row.id}`);
   }
 
   async function confirmDelete() {
@@ -798,16 +616,6 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         {resource.key === 'catalogos' && permite(user?.perm_compartilhar) && (
           <button className="btn-icon !bg-brand-50 !text-brand-700 hover:!bg-brand-100" onClick={() => setCatalogoCompartilhar(row)} title="Compartilhar catálogo" aria-label="Compartilhar catálogo">
             <Share2 className="h-4 w-4" />
-          </button>
-        )}
-        {resource.key === 'usuarios' && canUpdate && !row.senha_definida_em && (
-          <button className="btn-icon" onClick={() => reenviarConvite(row)} disabled={conviteBusyId === Number(row.id)} title="Reenviar convite de acesso" aria-label="Reenviar convite">
-            {conviteBusyId === Number(row.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-          </button>
-        )}
-        {resource.key === 'usuarios' && canUpdate && !!row.senha_definida_em && (
-          <button className="btn-icon" onClick={() => pedirSenhaTemporaria(row)} title="Gerar senha temporária (exibição única)" aria-label="Gerar senha temporária">
-            <KeyRound className="h-4 w-4" />
           </button>
         )}
         {resource.key === 'crm_leads' &&
@@ -1159,151 +967,11 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         </button>
       )}
 
-      {/* Reautenticação (step-up) para gerar senha temporária */}
-      <ReauthModal
-        open={reauthAcao === 'senha-temporaria'}
-        onClose={() => {
-          setReauthAcao(null);
-          if (!senhaTempValor) setSenhaTempUser(null);
-        }}
-        onConfirmed={gerarSenhaTemporaria}
-        titulo={senhaTempUser ? `Autorizar senha temporária — ${senhaTempUser.nome}` : 'Autorização necessária'}
-      />
-
-      {/* Senha temporária: EXIBIÇÃO ÚNICA — não existe como rever */}
-      <Modal
-        open={!!senhaTempUser && !!senhaTempValor}
-        onClose={() => {
-          setSenhaTempUser(null);
-          setSenhaTempValor('');
-        }}
-        title="Senha temporária gerada"
-        subtitle={senhaTempUser ? `${senhaTempUser.nome} — ${senhaTempUser.email}` : ''}
-        size="md"
-      >
-        <div className="space-y-4">
-          <Alert tone="amber">
-            <strong>Guarde esta senha agora:</strong> ela é exibida <strong>uma única vez</strong>, não fica salva em lugar nenhum (só o hash irreversível) e não
-            pode ser vista nem por administradores depois desta tela. O usuário deverá trocá-la no próximo acesso.
-          </Alert>
-          <div className="flex gap-2">
-            <input className="input flex-1 font-mono" readOnly value={senhaTempValor} onFocus={(e) => e.currentTarget.select()} />
-            <button
-              className="btn-secondary"
-              onClick={async () => {
-                await navigator.clipboard.writeText(senhaTempValor);
-                toast.success('Senha copiada. Ela não será exibida novamente.');
-              }}
-              type="button"
-            >
-              <Copy className="h-4 w-4" /> Copiar
-            </button>
-          </div>
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-slate-400">As sessões ativas deste usuário foram encerradas.</p>
-            <button
-              className="btn-primary"
-              onClick={() => {
-                setSenhaTempUser(null);
-                setSenhaTempValor('');
-              }}
-              type="button"
-            >
-              Fechei — não preciso mais dela
-            </button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Convite gerado sem SMTP: link para entregar manualmente */}
-      <Modal open={!!conviteLink} onClose={() => setConviteLink('')} title="Convite de acesso criado" subtitle="Este ambiente não tem SMTP configurado — entregue o link ao usuário." size="md">
-        <div className="space-y-4">
-          <Alert tone="blue">
-            O convite é válido por <strong>48 horas</strong> e só pode ser usado uma vez. Quem recebe define a própria senha (ela nunca passa pelo administrador).
-          </Alert>
-          <div className="flex gap-2">
-            <input className="input flex-1 font-mono text-xs" readOnly value={conviteLink} onFocus={(e) => e.currentTarget.select()} />
-            <button
-              className="btn-secondary"
-              onClick={async () => {
-                await navigator.clipboard.writeText(conviteLink);
-                toast.success('Link do convite copiado.');
-              }}
-              type="button"
-            >
-              <Copy className="h-4 w-4" /> Copiar
-            </button>
-          </div>
-          <div className="flex justify-end">
-            <button className="btn-primary" onClick={() => setConviteLink('')} type="button">
-              Concluído
-            </button>
-          </div>
-        </div>
-      </Modal>
-
       <PortalAccessModal cliente={clientePortal} onClose={() => setClientePortal(null)} />
       <CatalogoShareModal catalogo={catalogoCompartilhar} onClose={() => setCatalogoCompartilhar(null)} />
 
       {importTipo && (
         <ImportModal open={importOpen} onClose={() => setImportOpen(false)} tipoConfig={importTipo} onDone={() => load()} />
-      )}
-
-      {/* Modal de cadastro / edição — APENAS para os recursos que ainda não
-          migraram para o padrão LISTA → PÁGINA. Quem está em FORM_DIRETO
-          (clientes, produtos, vendas, categorias, cores, coleções, tamanhos,
-          grades, insumos, fornecedores e representantes) vive em página própria:
-          `openCreate`/`openEdit` navegam e este bloco nunca abre. */}
-      {!FORM_DIRETO.has(resource.key) && (
-        <Modal
-          open={formOpen}
-          onClose={closeForm}
-          title={editing ? `Editar ${resource.singular.toLowerCase()}` : `Novo ${resource.singular.toLowerCase()}`}
-          subtitle={
-            editing
-              ? `Registro #${editing.id}`
-              : hasImages
-                ? 'Preencha os dados e clique em Incluir. Depois de salvar você poderá adicionar as fotos.'
-                : `Preencha os dados e clique em Incluir. Os campos com * são obrigatórios.`
-          }
-          size={resource.fields.filter((f) => f.form !== false && !f.readonly).length > 6 ? 'lg' : 'md'}
-        >
-          {formError && (
-            <div className="mb-4">
-              <Alert tone="red">{formError}</Alert>
-            </div>
-          )}
-          {gradeAware && produtoDoFormulario && (
-            <p className="mb-3 rounded-md bg-navy-50 px-3 py-2 text-xs text-navy-700">
-              {gradeDoFormulario ? (
-                <>
-                  Grade do produto: <strong className="font-semibold">{gradeDoFormulario}</strong>. O campo Tamanho lista apenas estes tamanhos.
-                </>
-              ) : (
-                <>Este produto ainda não tem grade definida — a lista mostra todos os tamanhos cadastrados.</>
-              )}
-            </p>
-          )}
-          <RecordForm
-            resource={resource}
-            values={values}
-            errors={errors}
-            onChange={onChange}
-            onSubmit={submit}
-            onClear={clearForm}
-            editing={!!editing}
-            busy={saving}
-            refOptions={refOptionsForm}
-            before={
-              hasImages && editing ? (
-                <div>
-                  <span className="label">Fotos</span>
-                  <ImageField key={editing.id} resource={resource} recordId={editing.id} initial={editing.fotos} canEdit={canUpdate} onChange={() => load()} />
-                </div>
-              ) : undefined
-            }
-          />
-        </Modal>
       )}
 
       {zoom && <Lightbox file={zoom.file} files={zoom.files} onClose={() => setZoom(null)} onNav={(f) => setZoom({ ...zoom, file: f })} />}
@@ -1342,7 +1010,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         }}
       />
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!toDelete}
         title={`Excluir ${resource.singular.toLowerCase()}?`}
         danger
@@ -1364,7 +1032,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
         }
       />
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!toEstornar}
         title="Estornar movimentação?"
         danger

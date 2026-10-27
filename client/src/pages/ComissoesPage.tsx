@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BadgeDollarSign, CalendarRange, ClipboardCheck, Receipt, Undo2 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { formatDate, formatMoney, formatNumber, formatPct } from '../lib/format';
-import { Alert, Badge, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 
 type LinhaComissao = {
   representante_id: number;
@@ -316,7 +316,7 @@ export default function ComissoesPage() {
         )}
       </div>
 
-      <Modal
+      <PainelInline
         open={detalhe !== null}
         onClose={() => setDetalhe(null)}
         title={detalhe ? `Comissões de ${detalhe.representante}` : 'Comissões'}
@@ -415,7 +415,7 @@ export default function ComissoesPage() {
         <p className="mt-3 flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
           <Undo2 className="h-3 w-3" /> Venda cancelada gera evento de <strong>estorno</strong> no livro — o saldo cai junto.
         </p>
-      </Modal>
+      </PainelInline>
     </div>
   );
 }

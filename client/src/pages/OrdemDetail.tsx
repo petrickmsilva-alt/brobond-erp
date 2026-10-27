@@ -5,7 +5,7 @@ import { api, ApiError } from '../lib/api';
 import { useMeta, type Option } from '../lib/meta';
 import { ProductSelector } from '../components/ProductSelector';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, ConfirmDialog, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { formatDate, formatMoney, formatNumber } from '../lib/format';
 
@@ -705,8 +705,8 @@ export default function OrdemDetail() {
         </div>
       </div>
 
-      {/* Modal cabeçalho */}
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Editar ordem de fabricação" subtitle="Tipo de OP: por tamanho único ou por grade (vários tamanhos)." size="md">
+      {/* PainelInline cabeçalho */}
+      <PainelInline open={editOpen} onClose={() => setEditOpen(false)} title="Editar ordem de fabricação" subtitle="Tipo de OP: por tamanho único ou por grade (vários tamanhos)." size="md">
         {editErr && <Alert tone="red">{editErr}</Alert>}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <label className="block sm:col-span-2">
@@ -797,10 +797,10 @@ export default function OrdemDetail() {
             {savingEdit && <Loader2 className="h-4 w-4 animate-spin" />} Salvar
           </button>
         </div>
-      </Modal>
+      </PainelInline>
 
-      {/* Modal item de grade */}
-      <Modal
+      {/* PainelInline item de grade */}
+      <PainelInline
         open={!!itemModal}
         onClose={() => setItemModal(null)}
         title={itemModal === 'novo' ? 'Adicionar tamanho à grade' : 'Editar quantidade'}
@@ -832,9 +832,9 @@ export default function OrdemDetail() {
             </button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!toDelete}
         title="Remover tamanho da grade?"
         danger
@@ -845,7 +845,7 @@ export default function OrdemDetail() {
         message={<p>O tamanho sairá da grade da OP. As quantidades produzidas já registradas não são apagadas.</p>}
       />
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={forceOpen}
         title="Concluir mesmo sem saldo de insumos?"
         danger
@@ -862,8 +862,8 @@ export default function OrdemDetail() {
         }
       />
 
-      {/* Modal de apontamento de produção */}
-      <Modal
+      {/* PainelInline de apontamento de produção */}
+      <PainelInline
         open={apontOpen}
         onClose={() => setApontOpen(false)}
         title="Apontar produção"
@@ -938,10 +938,10 @@ export default function OrdemDetail() {
             </button>
           )}
         </div>
-      </Modal>
+      </PainelInline>
 
       {/* Cancelar com motivo: é operação sensível e o motivo vai para a trilha */}
-      <Modal open={cancelOpen} onClose={() => setCancelOpen(false)} title="Cancelar ordem de produção" subtitle="A OP deixa de movimentar estoque. Esta ação é registrada no histórico." size="sm">
+      <PainelInline open={cancelOpen} onClose={() => setCancelOpen(false)} title="Cancelar ordem de produção" subtitle="A OP deixa de movimentar estoque. Esta ação é registrada no histórico." size="sm">
         <label className="block">
           <span className="label">Motivo (opcional)</span>
           <textarea
@@ -961,7 +961,7 @@ export default function OrdemDetail() {
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />} Cancelar OP
           </button>
         </div>
-      </Modal>
+      </PainelInline>
     </div>
   );
 }

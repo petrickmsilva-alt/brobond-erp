@@ -150,7 +150,7 @@ describe('DependenciasModal', () => {
     expect(screen.queryByText('Exclusão bloqueada por vínculos')).not.toBeInTheDocument();
 
     rerender(<DependenciasModal diag={DIAG} onClose={onClose} />);
-    // Há dois "Fechar": o ícone do cabeçalho do Modal e o botão do rodapé.
+    // Há dois "Fechar": o ícone do cabeçalho do PainelInline e o botão do rodapé.
     const fechar = screen.getAllByRole('button', { name: 'Fechar' });
     await user.click(fechar[fechar.length - 1]);
     expect(onClose).toHaveBeenCalled();

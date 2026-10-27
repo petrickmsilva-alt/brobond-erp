@@ -4,7 +4,7 @@ import { api, ApiError } from '../lib/api';
 import type { PublicFile, ResourceMeta } from '../lib/meta';
 import { prepareImage } from '../lib/images';
 import { formatBytes } from '../lib/format';
-import { ConfirmDialog, useToast } from './ui';
+import { ConfirmacaoInline, useToast } from './ui';
 
 /**
  * Galeria de fotos de um registro já salvo: upload (arrastar/soltar, câmera),
@@ -225,7 +225,7 @@ export function ImageField({
 
       {zoom && <Lightbox file={zoom} files={files} onClose={() => setZoom(null)} onNav={setZoom} />}
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!toRemove}
         title="Remover foto"
         message="Tem certeza de que deseja remover esta foto? Essa ação não pode ser desfeita."
@@ -239,37 +239,47 @@ export function ImageField({
   );
 }
 
+/**
+ * Visualizador de imagem — INLINE, nunca em modal.
+ *
+ * A foto ampliada aparece DENTRO do bloco da galeria (faixa do layout), com
+ * navegação anterior/próxima e botão de fechar. Nada de overlay de tela cheia,
+ * nada de prender o foco, nada de ESC obrigatório: a página continua utilizável
+ * e a foto não "sequestra" a interface.
+ */
 export function Lightbox({ file, files, onClose, onNav }: { file: PublicFile; files: PublicFile[]; onClose: () => void; onNav: (f: PublicFile) => void }) {
   const idx = files.findIndex((f) => f.id === file.id);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowRight' && files[idx + 1]) onNav(files[idx + 1]);
-      if (e.key === 'ArrowLeft' && files[idx - 1]) onNav(files[idx - 1]);
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [idx, files, onClose, onNav]);
-
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-navy-950/90 p-4" onClick={onClose} role="dialog" aria-modal="true">
-      <button className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={onClose} aria-label="Fechar">
-        <X className="h-5 w-5" />
-      </button>
-      {files[idx - 1] && (
-        <button className="absolute left-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={(e) => (e.stopPropagation(), onNav(files[idx - 1]))} aria-label="Anterior">
-          <ArrowLeft className="h-5 w-5" />
-        </button>
-      )}
-      <img src={file.url} alt={file.nome || ''} className="max-h-[88vh] max-w-full rounded-lg object-contain shadow-2xl" onClick={(e) => e.stopPropagation()} />
-      {files[idx + 1] && (
-        <button className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={(e) => (e.stopPropagation(), onNav(files[idx + 1]))} aria-label="Próxima">
-          <ArrowRight className="h-5 w-5" />
-        </button>
-      )}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-white/10 px-3 py-1 text-xs text-white">
-        {idx + 1} / {files.length} · {file.nome} {file.tamanho_bytes ? `· ${formatBytes(file.tamanho_bytes)}` : ''}
+    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-navy-800 dark:bg-navy-900/40" role="group" aria-label="Foto ampliada">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-slate-500 dark:text-navy-300">
+          {idx + 1} / {files.length} · {file.nome} {file.tamanho_bytes ? `· ${formatBytes(file.tamanho_bytes)}` : ''}
+        </p>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className="btn-icon"
+            disabled={!files[idx - 1]}
+            onClick={() => files[idx - 1] && onNav(files[idx - 1])}
+            aria-label="Foto anterior"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className="btn-icon"
+            disabled={!files[idx + 1]}
+            onClick={() => files[idx + 1] && onNav(files[idx + 1])}
+            aria-label="Próxima foto"
+          >
+            <ArrowRight className="h-4 w-4" />
+          </button>
+          <button type="button" className="btn-icon" onClick={onClose} aria-label="Fechar visualização">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
+      <img src={file.url} alt={file.nome || ''} className="mx-auto mt-2 max-h-[60vh] max-w-full rounded-lg object-contain" />
     </div>
   );
 }

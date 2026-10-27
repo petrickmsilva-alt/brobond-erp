@@ -1,11 +1,11 @@
-import { lazy, Suspense } from 'react';
+import { Fragment, lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from './auth/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import { MODULES, visibleModules } from './modules';
+import { MODULES, usaCrudGenerico, visibleModules } from './modules';
 
 // Code-splitting: só a tela de login e o dashboard (a primeira coisa que qualquer
 // pessoa vê) entram no bundle inicial. O resto — inclusive as páginas públicas
@@ -41,6 +41,12 @@ const CatalogoPublico = lazy(() => import('./pages/CatalogoPublico'));
 const PortalCliente = lazy(() => import('./pages/PortalCliente'));
 // Catálogo de componentes de UI, só para referência visual — não entra no menu.
 const ComponentCatalog = lazy(() => import('./pages/dev/ComponentCatalog'));
+// Página genérica de NOVO/EDITAR — destino de TODO recurso do CRUD genérico.
+const RegistroPage = lazy(() => import('./pages/RegistroPage'));
+// Usuários: cadastro/edição em PÁGINA própria (nunca em modal/drawer).
+const UsuarioRegistroPage = lazy(() =>
+  import('./pages/UsuariosPage').then((m) => ({ default: m.UsuarioRegistroPage }))
+);
 
 function Loading() {
   return (
@@ -384,10 +390,54 @@ export default function App() {
                 </ModuleAccess>
               }
             />
+            {/* Usuários: LISTA → PÁGINA (formulário em rota própria). */}
+            <Route
+              path="usuarios/novo"
+              element={
+                <AdminOnly>
+                  <UsuarioRegistroPage modo="novo" />
+                </AdminOnly>
+              }
+            />
+            <Route
+              path="usuarios/:id/editar"
+              element={
+                <AdminOnly>
+                  <UsuarioRegistroPage modo="editar" />
+                </AdminOnly>
+              }
+            />
             <Route path="compras/:id" element={<OrderPage tipo="compra" />} />
             <Route path="ordens/:id" element={<OrdemDetail />} />
             <Route path="fichas/:id" element={<FichaDetail />} />
             <Route path="dev/componentes" element={<AdminOnly><ComponentCatalog /></AdminOnly>} />
+            {/* ZERO MODAL — LISTA → PÁGINA em todo o ERP.
+                Todo módulo que usa o CRUD genérico ganha rota própria de cadastro
+                (`/recurso/novo`) e de edição (`/recurso/:id/editar`). A listagem
+                nunca abre formulário sobreposto: ela navega. */}
+            {MODULES.filter(usaCrudGenerico).map((m) => {
+              const base = m.path.replace(/^\//, '');
+              return (
+                <Fragment key={`crud-${m.id}`}>
+                  <Route
+                    path={`${base}/novo`}
+                    element={
+                      <ModuleAccess moduleId={m.id}>
+                        <RegistroPage module={m} modo="novo" />
+                      </ModuleAccess>
+                    }
+                  />
+                  <Route
+                    path={`${base}/:id/editar`}
+                    element={
+                      <ModuleAccess moduleId={m.id}>
+                        <RegistroPage module={m} modo="editar" />
+                      </ModuleAccess>
+                    }
+                  />
+                </Fragment>
+              );
+            })}
             {MODULES.filter((m) => m.path !== '/' && m.id !== 'config').map((m) => {
               const el = <ModulePage module={m} />;
               return (

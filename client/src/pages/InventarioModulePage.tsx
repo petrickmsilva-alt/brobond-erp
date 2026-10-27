@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, ClipboardCheck, ClipboardList, Loader2, Lock, Plus, RefreshCw, Save, Search } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, ConfirmDialog, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { Thumb } from '../components/ImageField';
 import { ProductSelector } from '../components/ProductSelector';
 import { formatDateTime, formatNumber } from '../lib/format';
@@ -149,7 +149,7 @@ export default function InventarioModulePage() {
         </div>
       )}
 
-      <Modal open={novoOpen} onClose={() => setNovoOpen(false)} title="Abrir contagem" subtitle="O saldo do sistema é congelado neste momento (foto instantânea)." size="sm">
+      <PainelInline open={novoOpen} onClose={() => setNovoOpen(false)} title="Abrir contagem" subtitle="O saldo do sistema é congelado neste momento (foto instantânea)." size="sm">
         <div className="space-y-4">
           <label className="block">
             <span className="label">Local</span>
@@ -174,7 +174,7 @@ export default function InventarioModulePage() {
             </button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
 
       {!aberto && (
         <button className="btn-accent fixed bottom-5 right-5 z-40 rounded-full px-4 py-3.5 shadow-modal md:hidden" onClick={() => setNovoOpen(true)} aria-label="Abrir contagem">
@@ -492,7 +492,7 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
         </button>
       )}
 
-      <Modal open={achadoOpen} onClose={() => setAchadoOpen(false)} title="Produto sem saldo no sistema" subtitle="Adiciona uma linha de contagem mesmo sem estoque registrado." size="sm">
+      <PainelInline open={achadoOpen} onClose={() => setAchadoOpen(false)} title="Produto sem saldo no sistema" subtitle="Adiciona uma linha de contagem mesmo sem estoque registrado." size="sm">
         <div className="space-y-4">
           <label className="block">
             <span className="label">Produto</span>
@@ -531,9 +531,9 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
             <button className="btn-primary" onClick={adicionarAchado}>Adicionar</button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={fecharOpen}
         title="Fechar inventário e gerar ajustes?"
         danger
