@@ -155,6 +155,7 @@ import {
   recusarProposta,
   reescreverItens as reescreverItensProposta,
 } from './propostas';
+import { converterLead } from './crm';
 import {
   abrirCaixa,
   buscarProduto as pdvBuscarProduto,
@@ -786,6 +787,9 @@ app.post('/api/propostas/:id/aprovar', wrap(aprovarProposta));
 app.post('/api/propostas/:id/recusar', wrap(recusarProposta));
 app.post('/api/propostas/:id/cancelar', wrap(cancelarProposta));
 app.post('/api/propostas/:id/converter', wrap(converterProposta));
+
+// ---- CRM 3.0 — Lead → Oportunidade (transacional, idempotente, auditável) ----
+app.post('/api/crm/leads/:id/converter', wrap(converterLead));
 
 // ---- PDV ----
 app.get('/api/pdv/caixas/aberto', wrap(caixaAberto));

@@ -1,5 +1,14 @@
 # BROBOND ERP — GAPS
 
+> **ERP 3.0 (2026-10-27) — leia antes deste documento.** Este é um documento
+> **histórico**: ele descreve a fase em que foi escrito. O estado REAL do
+> código hoje está em [`docs/ERP-3.0-ARCHITECTURE-BASELINE.md`](ERP-3.0-ARCHITECTURE-BASELINE.md)
+> (inventário lido do código por `npm run architecture:audit`) e os gaps
+> abertos em [`docs/ERP-3.0-GAP-MATRIX.md`](ERP-3.0-GAP-MATRIX.md).
+> Onde este arquivo afirmar algo que o baseline desmente — por exemplo
+> "ERP single-company" — **vale o baseline**. Nada do conteúdo histórico foi
+> apagado: o registro de como cada fase foi executada continua abaixo.
+
 **Fase E1 — Auditoria estrutural. Fases E2, E3, E3.1 e E3.2 executadas.**
 Baseline auditado: `e6cb2f0` (`main`) · Data: 2026-10-09 · Branch: `arena/3b3ee997-brobond-erp`
 

@@ -1,0 +1,360 @@
+{
+  "gerado_em": "2026-10-27T21:12:06.572Z",
+  "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
+  "migrations": {
+    "sql": 50,
+    "sql_com_conteudo": 50,
+    "prisma": 7
+  },
+  "tabelas": {
+    "total": 116,
+    "com_empresa_id": 96,
+    "sem_empresa_id": 20,
+    "fora_do_prisma": 105
+  },
+  "indices": 369,
+  "constraints": 179,
+  "recursos": {
+    "total": 101,
+    "com_tabela": 101,
+    "multiempresa": 83,
+    "somente_leitura": 44,
+    "rbac_restrito": 27,
+    "cobertura_tenant_pct": 82.2
+  },
+  "crm": [
+    {
+      "key": "crm_motivos_perda",
+      "empresa": true,
+      "minPerfil": "gerente",
+      "adminOnly": false
+    },
+    {
+      "key": "crm_leads",
+      "empresa": true,
+      "minPerfil": "gerente",
+      "adminOnly": false
+    },
+    {
+      "key": "crm_oportunidades",
+      "empresa": true,
+      "minPerfil": "gerente",
+      "adminOnly": false
+    },
+    {
+      "key": "crm_atividades",
+      "empresa": true,
+      "minPerfil": "gerente",
+      "adminOnly": false
+    }
+  ],
+  "modulos": {
+    "total": 85,
+    "navegaveis": 77,
+    "planejados": 8,
+    "areas": 11,
+    "grupos": 28,
+    "com_recurso": 55
+  },
+  "rotas": {
+    "total": 336,
+    "por_metodo": {
+      "GET": 147,
+      "POST": 157,
+      "PUT": 17,
+      "DELETE": 12,
+      "PATCH": 3
+    },
+    "publicas_por_desenho": 44,
+    "routers_montados": [
+      {
+        "base": "/api",
+        "router": "bloquearSenhaProvisoria"
+      },
+      {
+        "base": "/api/connectors",
+        "router": "connectorsRouter"
+      }
+    ]
+  },
+  "prisma": {
+    "total_modelos": 11,
+    "com_empresa_id": 5,
+    "com_usuario_id": 4,
+    "modelos": [
+      {
+        "modelo": "Usuario",
+        "tabela": "usuarios",
+        "campos": 52,
+        "temEmpresa": false,
+        "temUsuarioTenancy": false
+      },
+      {
+        "modelo": "Produto",
+        "tabela": "produtos",
+        "campos": 24,
+        "temEmpresa": false,
+        "temUsuarioTenancy": false
+      },
+      {
+        "modelo": "Tamanho",
+        "tabela": "tamanhos",
+        "campos": 7,
+        "temEmpresa": false,
+        "temUsuarioTenancy": false
+      },
+      {
+        "modelo": "Connector",
+        "tabela": "connectors",
+        "campos": 23,
+        "temEmpresa": true,
+        "temUsuarioTenancy": true
+      },
+      {
+        "modelo": "ConnectorEvent",
+        "tabela": "connector_events",
+        "campos": 12,
+        "temEmpresa": true,
+        "temUsuarioTenancy": true
+      },
+      {
+        "modelo": "ConnectorOAuthState",
+        "tabela": "connector_oauth_states",
+        "campos": 9,
+        "temEmpresa": true,
+        "temUsuarioTenancy": true
+      },
+      {
+        "modelo": "Sale",
+        "tabela": "sales",
+        "campos": 24,
+        "temEmpresa": true,
+        "temUsuarioTenancy": true
+      },
+      {
+        "modelo": "SaleItem",
+        "tabela": "sale_items",
+        "campos": 14,
+        "temEmpresa": false,
+        "temUsuarioTenancy": false
+      },
+      {
+        "modelo": "Empresa",
+        "tabela": "empresas",
+        "campos": 9,
+        "temEmpresa": false,
+        "temUsuarioTenancy": false
+      },
+      {
+        "modelo": "ImpostosNcm",
+        "tabela": "impostos_ncm",
+        "campos": 6,
+        "temEmpresa": false,
+        "temUsuarioTenancy": false
+      },
+      {
+        "modelo": "ProdutoAbc",
+        "tabela": "produto_abc",
+        "campos": 11,
+        "temEmpresa": true,
+        "temUsuarioTenancy": false
+      }
+    ]
+  },
+  "testes": {
+    "server": {
+      "arquivos": 152,
+      "casos": 1320
+    },
+    "client": {
+      "arquivos": 71,
+      "casos": 822
+    },
+    "total": 2142
+  },
+  "integracoes": {
+    "arquivos_modules": 31,
+    "arquivos_server_modules": 1
+  },
+  "achados": [
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"comissoes_apuradas\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"comissoes_eventos\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"connector_events\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"connector_oauth_states\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"connectors\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"fin_extrato_transacoes\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"gateway_cobrancas\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"gateway_configs\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"gateway_webhook_events\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"produto_abc\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    }
+  ],
+  "tabelas_sem_empresa_id": [
+    "arquivos",
+    "catalogo_compartilhamentos",
+    "catalogo_eventos",
+    "categorias",
+    "configuracoes",
+    "cores",
+    "cotacao_decisoes",
+    "empresas",
+    "grade_tamanhos",
+    "grades",
+    "impostos_ncm",
+    "login_tentativas",
+    "medida_valores",
+    "medidas",
+    "portal_acessos",
+    "sale_items",
+    "sessoes",
+    "tamanhos",
+    "webhook_entregas",
+    "webhooks"
+  ],
+  "tabelas_fora_do_prisma": [
+    "aportes",
+    "arquivos",
+    "auditoria",
+    "catalogo_compartilhamentos",
+    "catalogo_eventos",
+    "catalogos",
+    "categorias",
+    "categorias_financeiras",
+    "categorias_insumos",
+    "centros_custo",
+    "clientes",
+    "colecoes",
+    "comissoes_apuradas",
+    "comissoes_eventos",
+    "compra_recebimento_itens",
+    "compra_recebimentos",
+    "compras",
+    "configuracoes",
+    "contas_financeiras",
+    "cores",
+    "cotacao_compra_fornecedores",
+    "cotacao_compra_itens",
+    "cotacao_compra_precos",
+    "cotacao_decisoes",
+    "cotacoes_compra",
+    "crm_atividades",
+    "crm_leads",
+    "crm_motivos_perda",
+    "crm_oportunidades",
+    "devolucao_itens",
+    "devolucoes",
+    "divergencias_conferencia",
+    "documentos_fiscais",
+    "documentos_fiscais_eventos",
+    "empresa_fiscal_config",
+    "envio_eventos",
+    "envios",
+    "equipe_membros",
+    "equipes_comerciais",
+    "estoque_insumos",
+    "estoques",
+    "expedicao_eventos",
+    "fichas_tecnicas",
+    "fin_extrato_transacoes",
+    "fornecedor_contatos",
+    "fornecedores",
+    "gateway_cobrancas",
+    "gateway_configs",
+    "gateway_webhook_events",
+    "grade_tamanhos",
+    "grades",
+    "importacoes_nfe",
+    "insumos",
+    "inutilizacoes_fiscais",
+    "inventarios",
+    "investidores",
+    "itens_compra",
+    "itens_ficha_tecnica",
+    "itens_inventario",
+    "itens_ordem",
+    "itens_venda",
+    "lancamentos_financeiros",
+    "lista_preco_itens",
+    "listas_preco",
+    "listas_preco_historico",
+    "locais",
+    "login_tentativas",
+    "medida_valores",
+    "medidas",
+    "metas",
+    "movimentacoes",
+    "movimentacoes_insumos",
+    "ordens_apontamentos",
+    "ordens_eventos",
+    "ordens_fabricacao",
+    "pdv_caixa_movimentos",
+    "pdv_caixas",
+    "pdv_pagamentos",
+    "planos_comissao",
+    "politicas_comerciais",
+    "portal_acessos",
+    "print_agent_nonces",
+    "print_agents",
+    "print_jobs",
+    "print_pairing_codes",
+    "print_terminals",
+    "produto_composicao",
+    "produto_fornecedor_skus",
+    "proposta_eventos",
+    "proposta_itens",
+    "propostas",
+    "recorrencias_financeiras",
+    "regras_comissao",
+    "regras_fiscais",
+    "representante_cliente",
+    "representante_hierarquia",
+    "representantes",
+    "sessoes",
+    "territorios",
+    "transferencias_financeiras",
+    "usuario_empresas",
+    "venda_atribuicao",
+    "vendas",
+    "webhook_entregas",
+    "webhooks"
+  ]
+}

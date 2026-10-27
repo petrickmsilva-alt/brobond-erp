@@ -1325,6 +1325,11 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'valor_estimado', label: 'Valor estimado', type: 'money', min: 0 },
       { name: 'probabilidade', label: 'Probabilidade (%)', type: 'percent', min: 0, max: 100, default: 0 },
       { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes', search: true, hint: 'Preenchido quando o lead vira cliente.' },
+      // Marca de conversão (Lead → Oportunidade). É READONLY de propósito: quem
+      // grava é o endpoint POST /api/crm/leads/:id/converter, dentro da mesma
+      // transação que cria a oportunidade — é a chave de idempotência da
+      // conversão (compare-and-swap). Um PUT do cliente não pode forjá-la.
+      { name: 'lead_convertido_em', label: 'Convertido em', type: 'datetime', readonly: true, list: false },
       { name: 'previsao_contato', label: 'Próximo contato', type: 'date' },
       { name: 'observacoes', label: 'Observações', type: 'textarea', wide: true },
       { name: 'responsavel_id', label: 'Responsável', type: 'ref', ref: 'usuarios', search: true },

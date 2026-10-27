@@ -980,14 +980,66 @@ export async function validarRegrasCliente(
   }
 }
 
+/**
+ * CRM 3.0 — ESTÁGIO × STATUS DA OPORTUNIDADE (hardening do funil).
+ *
+ * `etapa` (posição no funil) e `status` (desfecho) são dimensões SEPARADAS —
+ * uma oportunidade pode estar em "negociação" e aberta, ganha ou perdida. O que
+ * não pode acontecer é o histórico ser reescrito:
+ *
+ *   1) oportunidade FECHADA (ganha/perdida) não muda de estágio. Reabrir é uma
+ *      decisão de negócio legítima (status → aberta) e, nesse caso, o funil
+ *      volta a andar; o que se recusa é reescrever o estágio de um desfecho já
+ *      registrado, escondendo por onde a negociação passou;
+ *   2) `motivo_perda_id` só existe em oportunidade PERDIDA — ao ganhar ou
+ *      reabrir, o motivo é limpo (não fica um "motivo" órfão no registro);
+ *   3) fechar preenche `data_fechamento` (se ainda vazia) e reabrir limpa a
+ *      data: ela descreve o desfecho vigente, não um histórico paralelo.
+ *
+ * A validação de vocabulário (CHECK no banco + `select` no recurso) continua
+ * sendo a primeira linha; aqui fica só a coerência ENTRE os dois campos.
+ */
+function normalizarOportunidadeCrm(data: Payload, before: Row | null): void {
+  const fechada = (s: string | null) => s === 'ganha' || s === 'perdida';
+  const statusAtual = before ? String(before.status ?? 'aberta') : null;
+
+  // Reabrir (status → aberta) é a única porta que devolve o movimento no funil;
+  // enquanto o desfecho continuar fechado, o estágio é histórico.
+  const continuaFechada = data.status === undefined || fechada(String(data.status));
+  if (before && fechada(statusAtual) && continuaFechada && data.etapa !== undefined && String(data.etapa) !== String(before.etapa)) {
+    throw new HttpError(
+      409,
+      'Oportunidade fechada (ganha/perdida) não muda de estágio. Reabra a oportunidade antes de movê-la no funil.',
+      { etapa: 'Estágio congelado após o fechamento.' }
+    );
+  }
+
+  // Sem mudança de status declarada, nada mais é derivado.
+  if (data.status === undefined) return;
+  const statusNovo = String(data.status);
+
+  // Motivo de perda pertence apenas ao desfecho "perdida".
+  if (statusNovo !== 'perdida') data.motivo_perda_id = null;
+
+  if (fechada(statusNovo)) {
+    const jaTinha = before && before.data_fechamento !== null && before.data_fechamento !== undefined && String(before.data_fechamento) !== '';
+    if (!data.data_fechamento && !jaTinha) data.data_fechamento = new Date().toISOString().slice(0, 10);
+  } else if (before && before.data_fechamento) {
+    data.data_fechamento = null;
+  }
+}
+
 export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
   const s = getStore();
   // CRM 3.0: oportunidade perdida exige motivo de perda (espelha o CHECK
   // `crm_oportunidades_perda_exige_motivo` do banco; aqui falha rápido com 400
   // e campo identificado, em vez de deixar o PostgreSQL rejeitar no commit).
-  if (r.key === 'crm_oportunidades' && data.status === 'perdida' && !data.motivo_perda_id) {
-    throw new HttpError(400, 'Informe o motivo da perda.', { motivo_perda_id: 'Obrigatório quando o status é perdida.' });
+  if (r.key === 'crm_oportunidades') {
+    normalizarOportunidadeCrm(data, null);
+    if (data.status === 'perdida' && !data.motivo_perda_id) {
+      throw new HttpError(400, 'Informe o motivo da perda.', { motivo_perda_id: 'Obrigatório quando o status é perdida.' });
+    }
   }
   // MULTIEMPRESA: a empresa do novo registro é decidida pelo SERVIDOR.
   const escopo = ctx.escopo === undefined ? escopoDe(actor) : (comoEscopo(ctx.escopo) ?? escopoDeSistema());
@@ -1127,9 +1179,8 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
   const data = validatePayload(r, body, 'update');
   const s = getStore();
   // CRM 3.0: oportunidade perdida exige motivo de perda (espelha o CHECK do banco).
-  if (r.key === 'crm_oportunidades' && data.status === 'perdida' && !data.motivo_perda_id) {
-    throw new HttpError(400, 'Informe o motivo da perda.', { motivo_perda_id: 'Obrigatório quando o status é perdida.' });
-  }
+  // A coerência estágio × status é aplicada depois de ler o registro atual
+  // (abaixo, com `before`), porque depende do desfecho anterior.
   // A empresa de um registro NUNCA muda por um PUT.
   protegerEmpresaNaEdicao(r, data);
   const escopo = opts.escopo === undefined ? escopoDe(actor) : (comoEscopo(opts.escopo) ?? escopoDeSistema());
@@ -1139,6 +1190,14 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       const before = await s.findOneWhere(r, filtroAntes, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
       assertRegistroDaEmpresaParaEscrita(r, before, escopo);
+      // CRM 3.0: depende do desfecho ATUAL da oportunidade (estágio congelado
+      // depois do fechamento, motivo de perda só em perdida, data de fechamento).
+      if (r.key === 'crm_oportunidades') {
+        normalizarOportunidadeCrm(data, before);
+        if (data.status === 'perdida' && !(data.motivo_perda_id ?? before.motivo_perda_id)) {
+          throw new HttpError(400, 'Informe o motivo da perda.', { motivo_perda_id: 'Obrigatório quando o status é perdida.' });
+        }
+      }
       await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
       await validarRegrasComerciais(r, data, before, s, escopo, tx);
 
