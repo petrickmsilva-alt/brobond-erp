@@ -3779,6 +3779,556 @@ export const RESOURCES: Record<string, Resource> = {
     ],
     orderBy: { field: 'codigo', dir: 'asc' },
   },
+
+  // ==========================================================================
+  // MA-02 · TERRITÓRIOS
+  //
+  // Domínio PRÓPRIO (não é `representantes.regiao`, que continua intocado).
+  // Hierarquia livre por `territorio_pai_id`; `nivel` é DERIVADO do pai no
+  // banco (trigger 0041) e replicado na validação de serviço para o modo
+  // memória. Ciclo, pai de outra empresa e pai inexistente são 409/400.
+  // ==========================================================================
+  territorios: {
+    key: 'territorios',
+    empresa: true,
+    table: 'territorios',
+    label: 'Territórios',
+    singular: 'Território',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    notice:
+      'O território organiza a operação comercial (Brasil → Estado → Região → Cidade → Zona, ou recortes não geográficos como Comercial, Digital, Key Account). Um território em uso NÃO é excluído — é DESATIVADO: a carteira, as metas e o histórico continuam apontando para ele.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, section: 'Identificação' },
+      { name: 'codigo', label: 'Código', type: 'text', search: true, maxLength: 30, section: 'Identificação', hint: 'Único por empresa (índice uq_territorios_empresa_codigo).' },
+      {
+        name: 'tipo',
+        label: 'Tipo',
+        type: 'select',
+        required: true,
+        default: 'comercial',
+        options: [
+          { value: 'pais', label: 'País', tone: 'blue' },
+          { value: 'estado', label: 'Estado', tone: 'blue' },
+          { value: 'regiao', label: 'Região', tone: 'blue' },
+          { value: 'cidade', label: 'Cidade', tone: 'blue' },
+          { value: 'zona', label: 'Zona', tone: 'blue' },
+          { value: 'comercial', label: 'Comercial', tone: 'green' },
+          { value: 'digital', label: 'Digital', tone: 'green' },
+          { value: 'key_account', label: 'Key Account', tone: 'green' },
+          { value: 'especial', label: 'Especial', tone: 'amber' },
+          { value: 'canal', label: 'Canal', tone: 'amber' },
+        ],
+      },
+      { name: 'territorio_pai_id', label: 'Território pai', type: 'ref', ref: 'territorios', section: 'Hierarquia', hint: 'Vazio = território raiz. O pai precisa ser da mesma empresa e não pode criar ciclo.' },
+      { name: 'nivel', label: 'Nível', type: 'integer', readonly: true, list: false, section: 'Hierarquia', hint: 'Calculado pelo servidor a partir do pai (raiz = 1).' },
+      { name: 'responsavel_id', label: 'Responsável', type: 'ref', ref: 'representantes', section: 'Hierarquia' },
+      { name: 'uf', label: 'UF', type: 'uf', maxLength: 2, section: 'Geografia' },
+      { name: 'cidade', label: 'Cidade', type: 'text', maxLength: 80, search: true, section: 'Geografia' },
+      {
+        name: 'status',
+        label: 'Situação',
+        type: 'select',
+        default: 'ativo',
+        options: [
+          { value: 'ativo', label: 'Ativo', tone: 'green' },
+          { value: 'inativo', label: 'Inativo', tone: 'slate' },
+        ],
+      },
+      { name: 'descricao', label: 'Descrição', type: 'textarea', maxLength: 500, list: false, wide: true, section: 'Detalhes' },
+      { name: 'uso_vinculado', label: 'Utilização', type: 'integer', readonly: true, virtual: true, list: true, form: false },
+      ...auditFields,
+    ],
+    filterFields: ['tipo', 'status', 'uf', 'responsavel_id', 'territorio_pai_id'],
+    quickFilters: [
+      { field: 'status', label: 'Situação', options: [{ value: '', label: 'Todas' }, { value: 'ativo', label: 'Ativos' }, { value: 'inativo', label: 'Inativos' }] },
+    ],
+    orderBy: { field: 'nivel', dir: 'asc' },
+  },
+
+  // ==========================================================================
+  // MA-06 · EQUIPES COMERCIAIS E HIERARQUIA
+  // ==========================================================================
+  equipes_comerciais: {
+    key: 'equipes_comerciais',
+    empresa: true,
+    table: 'equipes_comerciais',
+    label: 'Equipes comerciais',
+    singular: 'Equipe',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    notice:
+      'A equipe é ESTRUTURA organizacional: líder, membros e território. O cadastro de representantes não guarda equipe — a composição vive em "Membros de equipe", com vigência, para que a saída de alguém não reescreva o histórico.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, section: 'Identificação' },
+      { name: 'codigo', label: 'Código', type: 'text', search: true, maxLength: 30, section: 'Identificação' },
+      { name: 'lider_id', label: 'Líder', type: 'ref', ref: 'representantes', section: 'Estrutura' },
+      { name: 'territorio_id', label: 'Território', type: 'ref', ref: 'territorios', section: 'Estrutura' },
+      {
+        name: 'status',
+        label: 'Situação',
+        type: 'select',
+        default: 'ativo',
+        options: [
+          { value: 'ativo', label: 'Ativa', tone: 'green' },
+          { value: 'inativo', label: 'Inativa', tone: 'slate' },
+        ],
+      },
+      { name: 'descricao', label: 'Descrição', type: 'textarea', maxLength: 500, list: false, wide: true, section: 'Detalhes' },
+      { name: 'uso_vinculado', label: 'Utilização', type: 'integer', readonly: true, virtual: true, list: true, form: false },
+      ...auditFields,
+    ],
+    filterFields: ['status', 'lider_id', 'territorio_id'],
+    orderBy: { field: 'nome', dir: 'asc' },
+  },
+
+  equipe_membros: {
+    key: 'equipe_membros',
+    empresa: true,
+    table: 'equipe_membros',
+    label: 'Membros de equipe',
+    singular: 'Membro',
+    labelFields: ['representante_id'],
+    ops: ALL_OPS,
+    notice:
+      'Composição da equipe com VIGÊNCIA. Encerrar (saída/status inativo) preserva o período; nada é apagado. A soma das participações ativas de uma equipe não passa de 100%.',
+    fields: [
+      { name: 'equipe_id', label: 'Equipe', type: 'ref', ref: 'equipes_comerciais', required: true, section: 'Vínculo' },
+      { name: 'representante_id', label: 'Representante', type: 'ref', ref: 'representantes', required: true, section: 'Vínculo' },
+      {
+        name: 'papel',
+        label: 'Papel',
+        type: 'select',
+        default: 'membro',
+        options: [
+          { value: 'membro', label: 'Membro', tone: 'slate' },
+          { value: 'lider', label: 'Líder', tone: 'blue' },
+          { value: 'supervisor', label: 'Supervisor', tone: 'amber' },
+        ],
+        section: 'Vínculo',
+      },
+      { name: 'participacao_pct', label: 'Participação (%)', type: 'percent', min: 0.01, max: 100, default: 100, section: 'Vínculo' },
+      { name: 'entrada', label: 'Entrada', type: 'date', section: 'Vigência' },
+      { name: 'saida', label: 'Saída', type: 'date', section: 'Vigência' },
+      {
+        name: 'status',
+        label: 'Situação',
+        type: 'select',
+        default: 'ativo',
+        options: [
+          { value: 'ativo', label: 'Ativo', tone: 'green' },
+          { value: 'inativo', label: 'Inativo', tone: 'slate' },
+        ],
+        section: 'Vigência',
+      },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false, wide: true },
+      ...auditFields,
+    ],
+    filterFields: ['equipe_id', 'representante_id', 'papel', 'status'],
+    orderBy: { field: 'equipe_id', dir: 'asc' },
+  },
+
+  representante_hierarquia: {
+    key: 'representante_hierarquia',
+    empresa: true,
+    table: 'representante_hierarquia',
+    label: 'Hierarquia comercial',
+    singular: 'Vínculo hierárquico',
+    labelFields: ['supervisor_id'],
+    ops: ALL_OPS,
+    notice:
+      'Diretor → Gerente → Supervisor → Representante. Cada representante tem no máximo UM supervisor ativo e ciclo é recusado. Encerrar o vínculo (fim/status) preserva o histórico.',
+    fields: [
+      { name: 'supervisor_id', label: 'Supervisor', type: 'ref', ref: 'representantes', required: true, section: 'Vínculo' },
+      { name: 'subordinado_id', label: 'Subordinado', type: 'ref', ref: 'representantes', required: true, section: 'Vínculo' },
+      {
+        name: 'nivel',
+        label: 'Nível',
+        type: 'select',
+        default: 'supervisor',
+        options: [
+          { value: 'diretor', label: 'Diretor', tone: 'amber' },
+          { value: 'gerente', label: 'Gerente', tone: 'blue' },
+          { value: 'supervisor', label: 'Supervisor', tone: 'green' },
+          { value: 'coordenador', label: 'Coordenador', tone: 'slate' },
+        ],
+        section: 'Vínculo',
+      },
+      { name: 'inicio', label: 'Início', type: 'date', section: 'Vigência' },
+      { name: 'fim', label: 'Fim', type: 'date', section: 'Vigência' },
+      {
+        name: 'status',
+        label: 'Situação',
+        type: 'select',
+        default: 'ativo',
+        options: [
+          { value: 'ativo', label: 'Ativo', tone: 'green' },
+          { value: 'inativo', label: 'Inativo', tone: 'slate' },
+        ],
+        section: 'Vigência',
+      },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false, wide: true },
+      ...auditFields,
+    ],
+    filterFields: ['supervisor_id', 'subordinado_id', 'nivel', 'status'],
+    orderBy: { field: 'supervisor_id', dir: 'asc' },
+  },
+
+  // ==========================================================================
+  // MA-03 · CARTEIRA TEMPORAL (representante × cliente)
+  //
+  // A chave `representante_cliente` é o nome da tabela. Trocar o representante
+  // de um cliente ENCERRA a vigência anterior (o serviço faz isso na mesma
+  // transação) — nunca sobrescreve. `clientes.representante_id` segue intocado.
+  // ==========================================================================
+  representante_cliente: {
+    key: 'representante_cliente',
+    empresa: true,
+    table: 'representante_cliente',
+    label: 'Carteira de clientes',
+    singular: 'Vínculo de carteira',
+    labelFields: ['cliente_id'],
+    ops: ALL_OPS,
+    notice:
+      'A carteira é TEMPORAL: cada linha vale de `inicio` até `fim`. Ao registrar um novo vínculo aberto para o mesmo cliente, o anterior é ENCERRADO automaticamente (fim = véspera do novo início) — o histórico nunca é reescrito. Sobreposição de vigência é recusada com 409.',
+    fields: [
+      { name: 'representante_id', label: 'Representante', type: 'ref', ref: 'representantes', required: true, section: 'Vínculo' },
+      { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes', required: true, section: 'Vínculo' },
+      { name: 'territorio_id', label: 'Território', type: 'ref', ref: 'territorios', section: 'Vínculo' },
+      { name: 'inicio', label: 'Início', type: 'date', section: 'Vigência' },
+      { name: 'fim', label: 'Fim', type: 'date', section: 'Vigência', hint: 'Vazio = carteira aberta (vigente).' },
+      {
+        name: 'status',
+        label: 'Situação',
+        type: 'select',
+        default: 'ativo',
+        options: [
+          { value: 'ativo', label: 'Ativo', tone: 'green' },
+          { value: 'encerrado', label: 'Encerrado', tone: 'slate' },
+          { value: 'cancelado', label: 'Cancelado', tone: 'red' },
+        ],
+        section: 'Vigência',
+      },
+      { name: 'prioridade', label: 'Prioridade', type: 'integer', min: 1, max: 9, default: 1, section: 'Comercial' },
+      { name: 'participacao_pct', label: 'Participação (%)', type: 'percent', min: 0.01, max: 100, default: 100, section: 'Comercial', hint: 'Carteira compartilhada: dois representantes no mesmo cliente somam 100%.' },
+      { name: 'observacao', label: 'Observação', type: 'textarea', maxLength: 500, list: false, wide: true },
+      ...auditFields,
+    ],
+    filterFields: ['representante_id', 'cliente_id', 'territorio_id', 'status'],
+    quickFilters: [
+      { field: 'status', label: 'Situação', options: [{ value: '', label: 'Todas' }, { value: 'ativo', label: 'Ativas' }, { value: 'encerrado', label: 'Encerradas' }] },
+    ],
+    orderBy: { field: 'inicio', dir: 'desc' },
+  },
+
+  // ==========================================================================
+  // MA-04 · METAS — o REALIZADO nunca é coluna: é derivado das vendas.
+  // ==========================================================================
+  metas: {
+    key: 'metas',
+    empresa: true,
+    table: 'metas',
+    label: 'Metas',
+    singular: 'Meta',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    notice:
+      'O REALIZADO não é digitado nem armazenado: é sempre apurado das vendas faturadas no período (GET /api/comercial/metas/:id/acompanhamento). Variação e % de atingimento são calculados pelo servidor — nenhum número "manual".',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', search: true, maxLength: 120, section: 'Identificação' },
+      {
+        name: 'alvo_tipo',
+        label: 'Alvo',
+        type: 'select',
+        required: true,
+        default: 'representante',
+        options: [
+          { value: 'representante', label: 'Representante', tone: 'blue' },
+          { value: 'equipe', label: 'Equipe', tone: 'green' },
+          { value: 'territorio', label: 'Território', tone: 'amber' },
+          { value: 'empresa', label: 'Empresa', tone: 'slate' },
+        ],
+        section: 'Alvo',
+      },
+      { name: 'representante_id', label: 'Representante', type: 'ref', ref: 'representantes', section: 'Alvo' },
+      { name: 'equipe_id', label: 'Equipe', type: 'ref', ref: 'equipes_comerciais', section: 'Alvo' },
+      { name: 'territorio_id', label: 'Território', type: 'ref', ref: 'territorios', section: 'Alvo' },
+      {
+        name: 'metrica',
+        label: 'Métrica',
+        type: 'select',
+        required: true,
+        default: 'faturamento',
+        options: [
+          { value: 'faturamento', label: 'Faturamento (R$)', tone: 'green' },
+          { value: 'quantidade', label: 'Quantidade de peças', tone: 'blue' },
+          { value: 'margem', label: 'Margem (R$)', tone: 'amber' },
+          { value: 'pedidos', label: 'Pedidos', tone: 'slate' },
+          { value: 'clientes', label: 'Clientes atendidos', tone: 'slate' },
+        ],
+        section: 'Métrica',
+      },
+      {
+        name: 'recorte_tipo',
+        label: 'Recorte',
+        type: 'select',
+        default: 'todos',
+        options: [
+          { value: 'todos', label: 'Todos', tone: 'slate' },
+          { value: 'produto', label: 'Produto', tone: 'blue' },
+          { value: 'categoria', label: 'Categoria', tone: 'blue' },
+          { value: 'colecao', label: 'Coleção', tone: 'blue' },
+        ],
+        section: 'Métrica',
+      },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', list: false, section: 'Métrica' },
+      { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias', list: false, section: 'Métrica' },
+      { name: 'colecao_id', label: 'Coleção', type: 'ref', ref: 'colecoes', list: false, section: 'Métrica' },
+      { name: 'periodo_inicio', label: 'Início do período', type: 'date', required: true, section: 'Período' },
+      { name: 'periodo_fim', label: 'Fim do período', type: 'date', required: true, section: 'Período' },
+      {
+        name: 'granularidade',
+        label: 'Granularidade',
+        type: 'select',
+        default: 'mensal',
+        options: [
+          { value: 'mensal', label: 'Mensal', tone: 'blue' },
+          { value: 'trimestral', label: 'Trimestral', tone: 'blue' },
+          { value: 'anual', label: 'Anual', tone: 'blue' },
+        ],
+        section: 'Período',
+      },
+      {
+        name: 'distribuicao',
+        label: 'Distribuição',
+        type: 'select',
+        default: 'linear',
+        options: [
+          { value: 'linear', label: 'Linear (proporcional aos dias)', tone: 'slate' },
+          { value: 'unica', label: 'Meta única do período', tone: 'slate' },
+        ],
+        section: 'Período',
+      },
+      { name: 'valor_meta', label: 'Meta (R$)', type: 'money', min: 0, section: 'Meta' },
+      { name: 'quantidade_meta', label: 'Meta (quantidade)', type: 'number', min: 0, section: 'Meta' },
+      {
+        name: 'status',
+        label: 'Situação',
+        type: 'select',
+        default: 'ativa',
+        options: [
+          { value: 'rascunho', label: 'Rascunho', tone: 'slate' },
+          { value: 'ativa', label: 'Ativa', tone: 'green' },
+          { value: 'encerrada', label: 'Encerrada', tone: 'blue' },
+          { value: 'cancelada', label: 'Cancelada', tone: 'red' },
+        ],
+        section: 'Meta',
+      },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false, wide: true },
+      ...auditFields,
+    ],
+    filterFields: ['alvo_tipo', 'metrica', 'recorte_tipo', 'status', 'representante_id', 'equipe_id', 'territorio_id'],
+    quickFilters: [
+      { field: 'status', label: 'Situação', options: [{ value: '', label: 'Todas' }, { value: 'ativa', label: 'Ativas' }, { value: 'encerrada', label: 'Encerradas' }] },
+    ],
+    orderBy: { field: 'periodo_inicio', dir: 'desc' },
+  },
+
+  // ==========================================================================
+  // MA-05 · MOTOR DE COMISSÃO — plano + regras
+  // ==========================================================================
+  planos_comissao: {
+    key: 'planos_comissao',
+    empresa: true,
+    table: 'planos_comissao',
+    label: 'Planos de comissão',
+    singular: 'Plano de comissão',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    // Parâmetro FINANCEIRO: define quanto cada representante recebe. Leitura e
+    // escrita exigem gerente+ (mesma alçada do módulo de comissões).
+    minPerfil: 'gerente',
+    notice:
+      'O plano define a política (vigência, base de cálculo, momento de efetivação). Sem plano ativo com regra aplicável, o ERP continua usando `representantes.comissao_pct` — nada muda para quem já opera.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, section: 'Identificação' },
+      { name: 'vigencia_inicio', label: 'Início da vigência', type: 'date', section: 'Vigência' },
+      { name: 'vigencia_fim', label: 'Fim da vigência', type: 'date', section: 'Vigência' },
+      {
+        name: 'base_calculo',
+        label: 'Base de cálculo',
+        type: 'select',
+        default: 'faturamento',
+        options: [
+          { value: 'faturamento', label: 'Faturamento bruto', tone: 'green' },
+          { value: 'liquido', label: 'Líquido (com desconto)', tone: 'blue' },
+          { value: 'margem', label: 'Margem', tone: 'amber' },
+        ],
+        section: 'Cálculo',
+      },
+      {
+        name: 'momento_efetivacao',
+        label: 'Efetivação',
+        type: 'select',
+        default: 'recebimento',
+        options: [
+          { value: 'recebimento', label: 'No recebimento', tone: 'green' },
+          { value: 'faturamento', label: 'No faturamento', tone: 'blue' },
+        ],
+        section: 'Cálculo',
+      },
+      { name: 'prioridade', label: 'Prioridade', type: 'integer', default: 0, min: 0, max: 99, section: 'Cálculo', hint: 'Maior prioridade vence quando mais de um plano está vigente.' },
+      { name: 'padrao', label: 'Plano padrão', type: 'boolean', section: 'Cálculo', hint: 'Um plano padrão ativo por empresa (índice uq_planos_comissao_padrao).' },
+      {
+        name: 'status',
+        label: 'Situação',
+        type: 'select',
+        default: 'ativo',
+        options: [
+          { value: 'ativo', label: 'Ativo', tone: 'green' },
+          { value: 'inativo', label: 'Inativo', tone: 'slate' },
+        ],
+      },
+      { name: 'descricao', label: 'Descrição', type: 'textarea', maxLength: 500, list: false, wide: true },
+      ...auditFields,
+    ],
+    filterFields: ['status', 'base_calculo', 'momento_efetivacao', 'padrao'],
+    orderBy: { field: 'nome', dir: 'asc' },
+  },
+
+  regras_comissao: {
+    key: 'regras_comissao',
+    empresa: true,
+    table: 'regras_comissao',
+    label: 'Regras de comissão',
+    singular: 'Regra de comissão',
+    labelFields: ['escopo'],
+    ops: ALL_OPS,
+    minPerfil: 'gerente',
+    notice:
+      'A regra vale dentro de um plano e tem ESCOPO (geral, representante, equipe, território, cliente, coleção, categoria, produto). Resolução: escopo mais específico → prioridade → vigência mais recente → id. Empate nunca é resolvido por ordem de execução.',
+    fields: [
+      { name: 'plano_id', label: 'Plano', type: 'ref', ref: 'planos_comissao', required: true, section: 'Plano' },
+      {
+        name: 'escopo',
+        label: 'Escopo',
+        type: 'select',
+        required: true,
+        default: 'geral',
+        options: [
+          { value: 'geral', label: 'Geral (todos)', tone: 'slate' },
+          { value: 'representante', label: 'Representante', tone: 'blue' },
+          { value: 'equipe', label: 'Equipe', tone: 'green' },
+          { value: 'territorio', label: 'Território', tone: 'amber' },
+          { value: 'cliente', label: 'Cliente', tone: 'blue' },
+          { value: 'colecao', label: 'Coleção', tone: 'blue' },
+          { value: 'categoria', label: 'Categoria', tone: 'blue' },
+          { value: 'produto', label: 'Produto', tone: 'amber' },
+        ],
+        section: 'Escopo',
+      },
+      { name: 'representante_id', label: 'Representante', type: 'ref', ref: 'representantes', list: false, section: 'Escopo' },
+      { name: 'equipe_id', label: 'Equipe', type: 'ref', ref: 'equipes_comerciais', list: false, section: 'Escopo' },
+      { name: 'territorio_id', label: 'Território', type: 'ref', ref: 'territorios', list: false, section: 'Escopo' },
+      { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes', list: false, section: 'Escopo' },
+      { name: 'colecao_id', label: 'Coleção', type: 'ref', ref: 'colecoes', list: false, section: 'Escopo' },
+      { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias', list: false, section: 'Escopo' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', list: false, section: 'Escopo' },
+      {
+        name: 'tipo_valor',
+        label: 'Tipo de valor',
+        type: 'select',
+        required: true,
+        default: 'percentual',
+        options: [
+          { value: 'percentual', label: 'Percentual (%)', tone: 'green' },
+          { value: 'fixo', label: 'Valor fixo (R$ por venda)', tone: 'blue' },
+        ],
+        section: 'Cálculo',
+      },
+      { name: 'valor', label: 'Valor', type: 'number', min: 0, required: true, section: 'Cálculo' },
+      {
+        name: 'base',
+        label: 'Base',
+        type: 'select',
+        required: true,
+        default: 'bruto',
+        options: [
+          { value: 'bruto', label: 'Bruto', tone: 'green' },
+          { value: 'liquido', label: 'Líquido', tone: 'blue' },
+          { value: 'margem', label: 'Margem', tone: 'amber' },
+        ],
+        section: 'Cálculo',
+      },
+      { name: 'prioridade', label: 'Prioridade', type: 'integer', default: 0, min: 0, max: 99, section: 'Cálculo' },
+      { name: 'vigencia_inicio', label: 'Início da vigência', type: 'date', section: 'Vigência' },
+      { name: 'vigencia_fim', label: 'Fim da vigência', type: 'date', section: 'Vigência' },
+      {
+        name: 'status',
+        label: 'Situação',
+        type: 'select',
+        default: 'ativa',
+        options: [
+          { value: 'ativa', label: 'Ativa', tone: 'green' },
+          { value: 'inativa', label: 'Inativa', tone: 'slate' },
+        ],
+        section: 'Vigência',
+      },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false, wide: true },
+      ...auditFields,
+    ],
+    filterFields: ['plano_id', 'escopo', 'status', 'tipo_valor'],
+    orderBy: { field: 'plano_id', dir: 'asc' },
+  },
+
+  // ==========================================================================
+  // MA-07 · ATRIBUIÇÃO COMERCIAL — participação NÃO é comissão.
+  // ==========================================================================
+  venda_atribuicao: {
+    key: 'venda_atribuicao',
+    empresa: true,
+    table: 'venda_atribuicao',
+    label: 'Atribuição comercial',
+    singular: 'Atribuição',
+    labelFields: ['venda_id'],
+    ops: ALL_OPS,
+    notice:
+      'Contribuição comercial por venda: quem participou e com qual percentual. NÃO é comissão — o valor financeiro é apurado pelo motor (planos de comissão). A soma das participações de uma venda não passa de 100%.',
+    fields: [
+      { name: 'venda_id', label: 'Venda', type: 'ref', ref: 'vendas', required: true, section: 'Vínculo' },
+      { name: 'representante_id', label: 'Representante', type: 'ref', ref: 'representantes', required: true, section: 'Vínculo' },
+      { name: 'equipe_id', label: 'Equipe', type: 'ref', ref: 'equipes_comerciais', section: 'Vínculo' },
+      { name: 'territorio_id', label: 'Território', type: 'ref', ref: 'territorios', section: 'Vínculo' },
+      {
+        name: 'papel',
+        label: 'Papel',
+        type: 'select',
+        default: 'principal',
+        options: [
+          { value: 'principal', label: 'Principal', tone: 'green' },
+          { value: 'secundario', label: 'Secundário', tone: 'slate' },
+        ],
+        section: 'Participação',
+      },
+      { name: 'participacao_pct', label: 'Participação (%)', type: 'percent', min: 0.01, max: 100, default: 100, section: 'Participação' },
+      {
+        name: 'origem',
+        label: 'Origem',
+        type: 'select',
+        default: 'manual',
+        options: [
+          { value: 'manual', label: 'Manual', tone: 'slate' },
+          { value: 'carteira', label: 'Carteira', tone: 'blue' },
+          { value: 'equipe', label: 'Equipe', tone: 'green' },
+          { value: 'importacao', label: 'Importação', tone: 'amber' },
+        ],
+        section: 'Participação',
+      },
+      ...auditFields,
+    ],
+    filterFields: ['venda_id', 'representante_id', 'equipe_id', 'territorio_id', 'papel'],
+    orderBy: { field: 'venda_id', dir: 'desc' },
+  },
 };
 
 export function getResource(key: string): Resource | undefined {

@@ -491,6 +491,228 @@ const CONFIG_REPRESENTANTES: ListaConfig = {
   contagem: { singular: 'representante', plural: 'representantes' },
 };
 
+// ============================================================================
+// FUNDAÇÃO COMERCIAL (MASTER MA-02..MA-08)
+//
+// Só APRESENTAÇÃO: rótulos, ordem das colunas e textos de apoio. O contrato da
+// API é o recurso declarado em server/src/resources.ts — nada de campo aqui que
+// não exista lá.
+// ============================================================================
+const CONFIG_TERRITORIOS: ListaConfig = {
+  prioridade: ['nome', 'codigo', 'tipo', 'territorio_pai_id', 'nivel', 'uf', 'cidade', 'responsavel_id', 'status'],
+  rotulos: {
+    nome: 'Território',
+    codigo: 'Código',
+    tipo: 'Tipo',
+    territorio_pai_id: 'Pai',
+    nivel: 'Nível',
+    uf: 'UF',
+    cidade: 'Cidade',
+    responsavel_id: 'Responsável',
+    status: 'Situação',
+    uso_vinculado: 'Carteira',
+  },
+  larguras: {},
+  titulo: 'nome',
+  card: ['nome', 'tipo', 'uf', 'cidade', 'status'],
+  buscaPlaceholder: 'Buscar território (nome, código, cidade)...',
+  rotuloNovo: 'Novo território',
+  rotuloEditar: 'Editar território',
+  descricaoCadastro: 'Território organiza a operação comercial. O nível é calculado a partir do pai e ciclo é recusado.',
+  rotuloSalvar: 'Salvar território',
+  contagem: { singular: 'território', plural: 'territórios' },
+  vazioTitulo: 'Nenhum território cadastrado',
+  vazioDescricao: 'Comece pelo topo da hierarquia (por exemplo, o Brasil) e acrescente estados, regiões e zonas.',
+};
+
+const CONFIG_EQUIPES_COMERCIAIS: ListaConfig = {
+  prioridade: ['nome', 'codigo', 'lider_id', 'territorio_id', 'status', 'uso_vinculado'],
+  rotulos: { nome: 'Equipe', codigo: 'Código', lider_id: 'Líder', territorio_id: 'Território', status: 'Situação', uso_vinculado: 'Vínculos' },
+  larguras: {},
+  titulo: 'nome',
+  card: ['nome', 'lider_id', 'territorio_id', 'status'],
+  buscaPlaceholder: 'Buscar equipe...',
+  rotuloNovo: 'Nova equipe',
+  rotuloEditar: 'Editar equipe',
+  descricaoCadastro: 'Equipe comercial com líder, território e composição por vigência.',
+  rotuloSalvar: 'Salvar equipe',
+  contagem: { singular: 'equipe', plural: 'equipes' },
+  vazioTitulo: 'Nenhuma equipe comercial',
+  vazioDescricao: 'Cadastre a primeira equipe para organizar representantes, metas e comissão.',
+};
+
+const CONFIG_EQUIPE_MEMBROS: ListaConfig = {
+  prioridade: ['equipe_id', 'representante_id', 'papel', 'participacao_pct', 'entrada', 'saida', 'status'],
+  rotulos: {
+    equipe_id: 'Equipe',
+    representante_id: 'Representante',
+    papel: 'Papel',
+    participacao_pct: 'Participação',
+    entrada: 'Entrada',
+    saida: 'Saída',
+    status: 'Situação',
+  },
+  larguras: {},
+  titulo: 'representante_id',
+  card: ['equipe_id', 'representante_id', 'papel', 'status'],
+  buscaPlaceholder: 'Buscar membro...',
+  rotuloNovo: 'Novo membro',
+  rotuloEditar: 'Editar membro',
+  descricaoCadastro: 'Composição da equipe com vigência. Encerrar preserva o período; nada é apagado.',
+  rotuloSalvar: 'Salvar membro',
+  contagem: { singular: 'membro', plural: 'membros' },
+  vazioTitulo: 'Nenhum membro de equipe',
+  vazioDescricao: 'Inclua representantes na equipe com papel, participação e data de entrada.',
+};
+
+const CONFIG_HIERARQUIA: ListaConfig = {
+  prioridade: ['supervisor_id', 'subordinado_id', 'nivel', 'inicio', 'fim', 'status'],
+  rotulos: { supervisor_id: 'Supervisor', subordinado_id: 'Subordinado', nivel: 'Nível', inicio: 'Início', fim: 'Fim', status: 'Situação' },
+  larguras: {},
+  titulo: 'supervisor_id',
+  card: ['supervisor_id', 'subordinado_id', 'nivel', 'status'],
+  buscaPlaceholder: 'Buscar vínculo hierárquico...',
+  rotuloNovo: 'Novo vínculo',
+  rotuloEditar: 'Editar vínculo',
+  descricaoCadastro: 'Diretor → Gerente → Supervisor → Representante. Um supervisor ativo por subordinado; ciclo é recusado.',
+  rotuloSalvar: 'Salvar vínculo',
+  contagem: { singular: 'vínculo', plural: 'vínculos' },
+  vazioTitulo: 'Nenhum vínculo hierárquico',
+  vazioDescricao: 'Defina quem responde a quem na estrutura comercial.',
+};
+
+const CONFIG_CARTEIRA: ListaConfig = {
+  prioridade: ['representante_id', 'cliente_id', 'territorio_id', 'inicio', 'fim', 'status', 'participacao_pct', 'prioridade'],
+  rotulos: {
+    representante_id: 'Representante',
+    cliente_id: 'Cliente',
+    territorio_id: 'Território',
+    inicio: 'Início',
+    fim: 'Fim',
+    status: 'Situação',
+    participacao_pct: 'Participação',
+    prioridade: 'Prioridade',
+  },
+  larguras: {},
+  titulo: 'cliente_id',
+  card: ['cliente_id', 'representante_id', 'inicio', 'fim', 'status'],
+  buscaPlaceholder: 'Buscar na carteira...',
+  rotuloNovo: 'Novo vínculo de carteira',
+  rotuloEditar: 'Editar vínculo de carteira',
+  descricaoCadastro:
+    'Quem atende cada cliente, de quando até quando. Registrar um vínculo de 100% ENCERRA o anterior (fim = véspera do novo início) — o histórico nunca é reescrito.',
+  rotuloSalvar: 'Salvar vínculo',
+  contagem: { singular: 'vínculo', plural: 'vínculos' },
+  vazioTitulo: 'Carteira vazia',
+  vazioDescricao: 'Registre o primeiro vínculo entre representante e cliente.',
+};
+
+const CONFIG_METAS: ListaConfig = {
+  prioridade: ['nome', 'alvo_tipo', 'metrica', 'periodo_inicio', 'periodo_fim', 'valor_meta', 'quantidade_meta', 'status'],
+  rotulos: {
+    nome: 'Meta',
+    alvo_tipo: 'Alvo',
+    representante_id: 'Representante',
+    equipe_id: 'Equipe',
+    territorio_id: 'Território',
+    metrica: 'Métrica',
+    recorte_tipo: 'Recorte',
+    periodo_inicio: 'Início',
+    periodo_fim: 'Fim',
+    valor_meta: 'Meta (R$)',
+    quantidade_meta: 'Meta (qtd)',
+    status: 'Situação',
+  },
+  larguras: {},
+  titulo: 'nome',
+  card: ['nome', 'alvo_tipo', 'metrica', 'periodo_inicio', 'status'],
+  buscaPlaceholder: 'Buscar meta...',
+  rotuloNovo: 'Nova meta',
+  rotuloEditar: 'Editar meta',
+  descricaoCadastro: 'Meta por representante, equipe, território ou empresa. O REALIZADO é sempre calculado das vendas faturadas.',
+  rotuloSalvar: 'Salvar meta',
+  contagem: { singular: 'meta', plural: 'metas' },
+  vazioTitulo: 'Nenhuma meta cadastrada',
+  vazioDescricao: 'Cadastre a primeira meta do período — o realizado aparece no acompanhamento, calculado pelo servidor.',
+};
+
+const CONFIG_PLANOS_COMISSAO: ListaConfig = {
+  prioridade: ['nome', 'vigencia_inicio', 'vigencia_fim', 'base_calculo', 'momento_efetivacao', 'prioridade', 'padrao', 'status'],
+  rotulos: {
+    nome: 'Plano',
+    vigencia_inicio: 'Início',
+    vigencia_fim: 'Fim',
+    base_calculo: 'Base',
+    momento_efetivacao: 'Efetivação',
+    prioridade: 'Prioridade',
+    padrao: 'Padrão',
+    status: 'Situação',
+  },
+  larguras: {},
+  titulo: 'nome',
+  card: ['nome', 'base_calculo', 'momento_efetivacao', 'status'],
+  buscaPlaceholder: 'Buscar plano de comissão...',
+  rotuloNovo: 'Novo plano',
+  rotuloEditar: 'Editar plano',
+  descricaoCadastro: 'Política de comissão com vigência, base de cálculo e momento de efetivação. Sem plano, vale a comissão do cadastro.',
+  rotuloSalvar: 'Salvar plano',
+  contagem: { singular: 'plano', plural: 'planos' },
+  vazioTitulo: 'Nenhum plano de comissão',
+  vazioDescricao: 'Cadastre um plano para comissão por regra (produto, categoria, cliente, território...).',
+};
+
+const CONFIG_REGRAS_COMISSAO: ListaConfig = {
+  prioridade: ['plano_id', 'escopo', 'tipo_valor', 'valor', 'base', 'prioridade', 'vigencia_inicio', 'vigencia_fim', 'status'],
+  rotulos: {
+    plano_id: 'Plano',
+    escopo: 'Escopo',
+    tipo_valor: 'Tipo',
+    valor: 'Valor',
+    base: 'Base',
+    prioridade: 'Prioridade',
+    vigencia_inicio: 'Início',
+    vigencia_fim: 'Fim',
+    status: 'Situação',
+  },
+  larguras: {},
+  titulo: 'escopo',
+  card: ['plano_id', 'escopo', 'valor', 'status'],
+  buscaPlaceholder: 'Buscar regra de comissão...',
+  rotuloNovo: 'Nova regra',
+  rotuloEditar: 'Editar regra',
+  descricaoCadastro:
+    'A regra vale dentro de um plano e tem escopo. Resolução: escopo mais específico → prioridade → vigência mais recente → id.',
+  rotuloSalvar: 'Salvar regra',
+  contagem: { singular: 'regra', plural: 'regras' },
+  vazioTitulo: 'Nenhuma regra de comissão',
+  vazioDescricao: 'Sem regra aplicável, o ERP usa a comissão do cadastro do representante — nada muda para quem já opera.',
+};
+
+const CONFIG_ATRIBUICAO: ListaConfig = {
+  prioridade: ['venda_id', 'representante_id', 'papel', 'participacao_pct', 'equipe_id', 'territorio_id', 'origem'],
+  rotulos: {
+    venda_id: 'Venda',
+    representante_id: 'Representante',
+    papel: 'Papel',
+    participacao_pct: 'Participação',
+    equipe_id: 'Equipe',
+    territorio_id: 'Território',
+    origem: 'Origem',
+  },
+  larguras: {},
+  titulo: 'venda_id',
+  card: ['venda_id', 'representante_id', 'papel', 'participacao_pct'],
+  buscaPlaceholder: 'Buscar atribuição...',
+  rotuloNovo: 'Nova atribuição',
+  rotuloEditar: 'Editar atribuição',
+  descricaoCadastro:
+    'Quem participou de cada venda e com qual percentual (a soma não passa de 100%). Contribuição NÃO é comissão — o valor financeiro vem do motor de comissão.',
+  rotuloSalvar: 'Salvar atribuição',
+  contagem: { singular: 'atribuição', plural: 'atribuições' },
+  vazioTitulo: 'Nenhuma atribuição comercial',
+  vazioDescricao: 'Sem atribuição, a venda usa o representante do próprio pedido como principal.',
+};
+
 const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   produtos: CONFIG_PRODUTOS,
   categorias: CONFIG_CATEGORIAS,
@@ -501,6 +723,15 @@ const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   insumos: CONFIG_INSUMOS,
   fornecedores: CONFIG_FORNECEDORES,
   representantes: CONFIG_REPRESENTANTES,
+  territorios: CONFIG_TERRITORIOS,
+  equipes_comerciais: CONFIG_EQUIPES_COMERCIAIS,
+  equipe_membros: CONFIG_EQUIPE_MEMBROS,
+  representante_hierarquia: CONFIG_HIERARQUIA,
+  representante_cliente: CONFIG_CARTEIRA,
+  metas: CONFIG_METAS,
+  planos_comissao: CONFIG_PLANOS_COMISSAO,
+  regras_comissao: CONFIG_REGRAS_COMISSAO,
+  venda_atribuicao: CONFIG_ATRIBUICAO,
 };
 
 export function configDaLista(recurso: string): ListaConfig {

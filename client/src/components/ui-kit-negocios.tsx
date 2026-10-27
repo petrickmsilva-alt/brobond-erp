@@ -668,7 +668,15 @@ export type DataTableColumn<T> = {
   header: string;
   align?: 'left' | 'right' | 'center';
   render: (row: T) => ReactNode;
+  /**
+   * Coluna ORDENÁVEL: o campo do recurso que o servidor aceita em `sort`.
+   * Sem esta chave, a coluna não é ordenável (ex.: coluna de ações).
+   */
+  sortKey?: string;
 };
+
+/** Estado de ordenação atual (server-side). `dir` alterna asc → desc → nenhum. */
+export type DataTableSort = { field: string; dir: 'asc' | 'desc' } | null;
 
 const ALIGN: Record<string, string> = { left: 'text-left', right: 'text-right', center: 'text-center' };
 
@@ -682,12 +690,22 @@ export function DataTable<T>({
   caption,
   empty,
   getRowKey,
+  sort = null,
+  onSort,
 }: {
   columns: DataTableColumn<T>[];
   rows: T[];
   caption: string;
   empty: ReactNode;
   getRowKey: (row: T, index: number) => string | number;
+  /**
+   * ORDENAÇÃO SERVER-SIDE (opcional). Quando `onSort` é informado, cada coluna
+   * com `sortKey` ganha um botão no cabeçalho; o chamador traduz o clique em
+   * `sort`/`dir` na consulta — a tabela nunca reordena a página atual no
+   * cliente (isso ordenaria só 25 linhas e mentiria sobre o total).
+   */
+  sort?: DataTableSort;
+  onSort?: (campo: string) => void;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -695,11 +713,33 @@ export function DataTable<T>({
         <caption className="sr-only">{caption}</caption>
         <thead>
           <tr>
-            {columns.map((c) => (
-              <th key={c.key} scope="col" className={ALIGN[c.align ?? 'left']}>
-                {c.header}
-              </th>
-            ))}
+            {columns.map((c) => {
+              const ativa = !!sort && !!c.sortKey && sort.field === c.sortKey;
+              return (
+                <th
+                  key={c.key}
+                  scope="col"
+                  aria-sort={ativa ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : undefined}
+                  className={ALIGN[c.align ?? 'left']}
+                >
+                  {onSort && c.sortKey ? (
+                    <button
+                      type="button"
+                      onClick={() => onSort(c.sortKey!)}
+                      className="inline-flex items-center gap-1 font-semibold hover:text-navy-900 dark:hover:text-white"
+                      title={`Ordenar por ${c.header}`}
+                    >
+                      {c.header}
+                      <span aria-hidden="true" className={ativa ? 'text-navy-700 dark:text-navy-200' : 'text-slate-300'}>
+                        {ativa && sort!.dir === 'desc' ? '↓' : '↑'}
+                      </span>
+                    </button>
+                  ) : (
+                    c.header
+                  )}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>

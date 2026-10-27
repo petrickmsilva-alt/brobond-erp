@@ -803,6 +803,25 @@ pode alterar dinheiro já apurado.
 
 ---
 
+### 16.1 Status da evolução Master entregue (numeração da entrega)
+
+A tabela acima é o **roadmap conceitual** (numeração própria). A entrega executada
+usou a numeração do mandato e está detalhada, com evidências, em
+[`ERP-FUNDACAO-COMERCIAL.md`](./ERP-FUNDACAO-COMERCIAL.md):
+
+| Fase | Entrega | Situação |
+| --- | --- | --- |
+| MA-02 | Territórios (hierarquia, tipos geográficos e não geográficos, nível derivado) | IMPLEMENTADA |
+| MA-03 | Carteira temporal `representante_cliente` (vigência, takeover 100%, 409) | IMPLEMENTADA |
+| MA-04 | Metas com realizado derivado + acompanhamento | IMPLEMENTADA |
+| MA-05 | Motor de comissão (plano, regra, apuração, evento, fallback legado) | IMPLEMENTADA |
+| MA-06 | Equipes, membros e hierarquia (anti-ciclo) | IMPLEMENTADA |
+| MA-07 | Atribuição comercial da venda (participação % ≠ comissão) | IMPLEMENTADA |
+| MA-08 | Indicadores derivados (representante, território, equipe) | IMPLEMENTADA |
+| MA-09 | Integrações mínimas (clientes, vendas, financeiro, produtos, RBAC, auditoria) | IMPLEMENTADA |
+| MA-10 | Governança (tenant, RBAC, auditoria, desativação, 409, índices) | IMPLEMENTADA |
+| — | Insumos | NÃO EXECUTADO (mantido só como posição arquitetural) |
+
 ## 17. Governança deste documento
 
 1. **Quem cria módulo, atualiza o mapa.** Toda entrega que cria entidade,
@@ -888,6 +907,7 @@ que permanece idêntico após as alterações (dois arquivos `.md` novos).
 
 | Documento | Papel |
 |---|---|
+| [`docs/ERP-FUNDACAO-COMERCIAL.md`](ERP-FUNDACAO-COMERCIAL.md) | **implementação** da fundação comercial (MA-02…MA-10): migrations, recursos, endpoints, telas, testes e limites | 
 | [`docs/ERP-DOMAIN-MAP.md`](ERP-DOMAIN-MAP.md) | **mapa formal de domínios** (este documento é a doutrina; o mapa é o inventário) |
 | [`docs/ERP-MASTER-MAP.md`](ERP-MASTER-MAP.md) | auditoria estrutural E1 (histórico, evidência de módulo por módulo) |
 | [`docs/ERP-CORE-ROADMAP.md`](ERP-CORE-ROADMAP.md) | roadmap de fechamento do ERP CORE (ERP-01…ERP-13) |
