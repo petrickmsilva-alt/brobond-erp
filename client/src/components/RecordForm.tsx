@@ -137,6 +137,7 @@ export function RecordForm({
   before,
   hideActions = false,
   depoisDoCampo,
+  camposSomenteLeitura,
 }: {
   resource: ResourceMeta;
   values: FormValues;
@@ -161,10 +162,19 @@ export function RecordForm({
    * amostra de cor embaixo do código HEX), ocupando a linha inteira.
    */
   depoisDoCampo?: Record<string, ReactNode>;
+  /**
+   * Campos que, NESTA tela, são apresentados como leitura (ficam desabilitados
+   * e o valor não é reenviado). Usado quando o dado passou a ser DERIVADO de
+   * outro fluxo — ex.: o custo médio do insumo depois da primeira compra, que
+   * quem forma é o recebimento. A regra de negócio continua no servidor; aqui
+   * é só a apresentação.
+   */
+  camposSomenteLeitura?: string[];
 }) {
   const fields = useMemo(() => resource.fields.filter((f) => f.form !== false && !f.readonly && f.type !== 'images'), [resource]);
   const firstName = fields[0]?.name;
   const nomesDoForm = useMemo(() => new Set(fields.map((f) => f.name)), [fields]);
+  const somenteLeitura = useMemo(() => new Set(camposSomenteLeitura ?? []), [camposSomenteLeitura]);
   const [cepBuscando, setCepBuscando] = useState(false);
   const [cepAviso, setCepAviso] = useState<string | null>(null);
 
@@ -256,7 +266,8 @@ export function RecordForm({
                     options={(f.type === 'ref' || f.type === 'multiref') && f.ref ? refOptions[f.ref] : undefined}
                     editing={editing}
                     autoFocus={autoFocus && f.name === firstName}
-                    disabled={busy}
+                    disabled={busy || somenteLeitura.has(f.name)}
+                    readOnlyField={somenteLeitura.has(f.name)}
                     onBuscarCep={f.type === 'cep' ? buscarCep : undefined}
                     buscandoCep={cepBuscando}
                     avisoCep={f.type === 'cep' ? cepAviso : null}
@@ -293,6 +304,7 @@ function FieldInput({
   editing,
   autoFocus,
   disabled,
+  readOnlyField,
   onBuscarCep,
   buscandoCep,
   avisoCep,
@@ -305,6 +317,8 @@ function FieldInput({
   editing: boolean;
   autoFocus?: boolean;
   disabled?: boolean;
+  /** Campo apresentado como leitura NESTA tela (dado derivado, não editável). */
+  readOnlyField?: boolean;
   /** Presente apenas no campo de CEP: dispara a busca de endereço. */
   onBuscarCep?: (cep: string) => void;
   buscandoCep?: boolean;
@@ -319,6 +333,11 @@ function FieldInput({
     <label htmlFor={id} className="label">
       {f.label}
       {required && <span className="ml-0.5 text-red-500">*</span>}
+      {readOnlyField && (
+        <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-navy-800 dark:text-navy-300">
+          Calculado
+        </span>
+      )}
     </label>
   );
   const help = error ? (

@@ -264,7 +264,7 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
       .map((b) => b.getAttribute('data-topnav-area'))
       .filter((a) => a !== '__mais__');
     expect(areasRenderizadas.sort()).toEqual([...MODULE_AREAS].sort());
-    expect(MODULES).toHaveLength(70);
+    expect(MODULES).toHaveLength(71);
     unmount();
   });
 

@@ -315,35 +315,78 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
 }
 
 /**
- * SALDO DE ESTOQUE DOS INSUMOS — coluna "Estoque" da listagem de insumos.
+ * SALDO, MÍNIMO E ÚLTIMA MOVIMENTAÇÃO DOS INSUMOS — dados DERIVADOS da ficha.
  *
- * O saldo NÃO é coluna de `insumos`: ele vive em `estoque_insumos` (um saldo
- * por insumo, atualizado por compra/ajuste/consumo de OP). Sem esta agregação,
- * a listagem teria de buscar o saldo insumo a insumo — exatamente o N+1 que a
- * listagem do ERP precisa evitar.
+ * Nenhum destes valores é coluna de `insumos`: o saldo e o mínimo vivem em
+ * `estoque_insumos` e o histórico em `movimentacoes_insumos`. Sem agregação, a
+ * ficha teria de consultar insumo a insumo — o N+1 que o ERP precisa evitar.
  *
- * UMA consulta agregada (`Store.sumByColumn`, GROUP BY) serve a página inteira:
- * o número de consultas é CONSTANTE, não cresce com a quantidade de insumos
- * listados. O recorte de empresa é o da empresa ativa (`estoque_insumos` é
- * tenantado), então nenhum saldo de outra empresa aparece.
+ * TUDO é resolvido em consultas de NÚMERO CONSTANTE para a página inteira:
+ *   • `sumByColumn`        — saldo somado por insumo (GROUP BY);
+ *   • `ultimosPorColuna`   — a linha de saldo (para o MÍNIMO) e a movimentação
+ *     mais recente (geral e só de ENTRADA), via DISTINCT ON.
+ * O recorte de empresa é sempre o da empresa ativa: saldo, mínimo e histórico
+ * de outra empresa jamais aparecem (multiempresa preservada).
  *
- * O estoque mínimo NÃO é anotado aqui: ele é editável no módulo "Estoque de
- * Insumos" (recurso `estoque_insumos`) e o valor do saldo não o substitui.
+ * Campos anotados:
+ *   estoque_saldo            saldo real (null = nunca movimentado)
+ *   estoque_min              mínimo cadastrado em `estoque_insumos`
+ *   estoque_status           sem_registro | sem_estoque | abaixo_minimo | normal
+ *   ultima_movimentacao      data da movimentação mais recente
+ *   ultima_movimentacao_tipo entrada | saida | ajuste
+ *   ultimo_custo_entrada     custo unitário da última ENTRADA
+ *   ultima_entrada_em        data da última ENTRADA (a "última compra" do insumo)
  */
 async function anotarEstoqueInsumos(r: Resource, rows: Row[], escopo?: EscopoEmpresa): Promise<void> {
   if (r.key !== 'insumos' || !rows.length) return;
   const saldos = getResource('estoque_insumos');
-  if (!saldos) return;
+  const movs = getResource('movimentacoes_insumos');
   const ids = rows.map((row) => Number(row.id)).filter((n) => Number.isInteger(n) && n > 0);
   if (!ids.length) return;
   const empresaId = escopo?.empresaId ?? Number(rows[0].empresa_id ?? EMPRESA_PADRAO);
-  const porInsumo = await getStore().sumByColumn(saldos, 'insumo_id', 'quantidade', ids, empresaId);
+  const s = getStore();
+  const [porInsumo, saldoRow, ultimaMov, ultimaEntrada] = await Promise.all([
+    saldos ? s.sumByColumn(saldos, 'insumo_id', 'quantidade', ids, empresaId) : Promise.resolve(new Map<number, number>()),
+    saldos ? s.ultimosPorColuna(saldos, 'insumo_id', 'id', ids, empresaId) : Promise.resolve(new Map<number, Row>()),
+    movs ? s.ultimosPorColuna(movs, 'insumo_id', 'data', ids, empresaId) : Promise.resolve(new Map<number, Row>()),
+    movs ? s.ultimosPorColuna(movs, 'insumo_id', 'data', ids, empresaId, { tipo: 'entrada' }) : Promise.resolve(new Map<number, Row>()),
+  ]);
   for (const row of rows) {
-    const saldo = porInsumo.get(Number(row.id));
+    const id = Number(row.id);
+    const saldo = porInsumo.get(id);
     // `null` = insumo sem saldo registrado (nunca movimentado). A coluna mostra
     // "—" nesse caso; ZERO saldo (movimentado e baixado) é um número real.
     row.estoque_saldo = saldo === undefined ? null : Number(saldo);
+
+    const linhaSaldo = saldoRow.get(id);
+    const minimo = linhaSaldo?.estoque_min === null || linhaSaldo?.estoque_min === undefined ? null : Number(linhaSaldo.estoque_min);
+    row.estoque_min = minimo;
+    row.estoque_status = situacaoEstoque(saldo === undefined ? null : Number(saldo), minimo, linhaSaldo !== undefined);
+
+    const mov = ultimaMov.get(id);
+    row.ultima_movimentacao = mov?.data ?? null;
+    row.ultima_movimentacao_tipo = mov?.tipo ?? null;
+    // Sinaliza à PÁGINA de edição que o custo médio já é DADO CALCULADO (há
+    // histórico de compra/entrada): o formulário o apresenta como leitura, sem
+    // deixar editar o que a compra forma. Sem histórico, segue editável.
+    row.estoque_tem_movimentacao = ultimaMov.has(id);
+
+    const entrada = ultimaEntrada.get(id);
+    row.ultimo_custo_entrada = entrada?.custo_unitario === null || entrada?.custo_unitario === undefined ? null : Number(entrada.custo_unitario);
+    row.ultima_entrada_em = entrada?.data ?? null;
   }
+}
+
+/** Situação do estoque a partir do saldo real e do mínimo cadastrado. */
+export function situacaoEstoque(
+  saldo: number | null,
+  minimo: number | null,
+  temRegistro: boolean
+): 'sem_registro' | 'sem_estoque' | 'abaixo_minimo' | 'normal' {
+  if (!temRegistro || saldo === null) return 'sem_registro';
+  if (saldo <= 0) return 'sem_estoque';
+  if (minimo !== null && minimo > 0 && saldo < minimo) return 'abaixo_minimo';
+  return 'normal';
 }
 
 /**
@@ -970,6 +1013,29 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       }
       if (r.key === 'movimentacoes') throw new HttpError(405, 'Movimentações são imutáveis. Faça o lançamento inverso.');
       if (r.key === 'movimentacoes_insumos') throw new HttpError(405, 'Movimentações de insumos são imutáveis. Faça o lançamento inverso.');
+      if (r.key === 'insumos') {
+        // O CUSTO MÉDIO do insumo é DADO CALCULADO: quem o forma é o recebimento
+        // de compras (custoRecebimento.ts — custo médio ponderado). Sem histórico
+        // de movimentação ele ainda é a REFERÊNCIA INICIAL do cadastro e
+        // permanece editável (importação/ajuste do cadastro nascente). A partir
+        // da PRIMEIRA movimentação, o valor é formado pela compra e um PUT que o
+        // altere é recusado: a autoridade é o fluxo de compras, nunca o
+        // formulário. As escritas internas de custo usam o store (`s.update`),
+        // não este caminho — a formação do custo pelas compras segue intacta.
+        const custoMudou = data.custo_medio !== undefined && Number(data.custo_medio) !== Number(before.custo_medio ?? 0);
+        if (custoMudou) {
+          const movs = getResource('movimentacoes_insumos');
+          const empresaDoRegistro = Number(before.empresa_id ?? escopo.empresaId);
+          const jaMovimentado = movs ? (await s.countWhere(movs, { insumo_id: id, empresa_id: empresaDoRegistro }, tx)) > 0 : false;
+          if (jaMovimentado) {
+            throw new HttpError(
+              409,
+              'O custo médio é calculado pelo recebimento de compras e não pode ser editado manualmente. Registre uma compra/entrada para atualizá-lo.',
+              { custo_medio: 'Dado calculado — atualizado pelo recebimento de compras' }
+            );
+          }
+        }
+      }
       if (r.key === 'inventarios') await validarUpdateInventario(data, before);
       // Idem criação: editar à mão criaria uma NF-e "emitida" que não existe.
       if (r.key === 'vendas') {

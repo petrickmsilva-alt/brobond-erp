@@ -301,10 +301,24 @@ export const MODULES: Module[] = [
     area: 'Cadastros',
     group: 'Materiais',
     subgroup: 'Insumos',
-    keywords: 'materia prima aviamentos tecido botao ziper etiqueta',
+    keywords: 'materia prima aviamentos tecido botao ziper etiqueta codigo categoria',
     path: '/insumos',
     resource: 'insumos',
     description: 'Matéria-prima: tecido, botão, zíper, etiqueta e afins.',
+  },
+  {
+    id: 'categorias-insumos',
+    label: 'Categorias de Insumos',
+    icon: Layers,
+    space: 'erp',
+    area: 'Cadastros',
+    group: 'Materiais',
+    subgroup: 'Insumos',
+    kind: 'subitem',
+    keywords: 'categorias de insumo classificacao materia prima aviamentos embalagem agrupamento',
+    path: '/categorias-insumos',
+    resource: 'categorias_insumos',
+    description: 'Agrupamento da matéria-prima: Matéria-prima, Aviamentos, Identidade de marca, Embalagem...',
   },
   {
     id: 'clientes',
@@ -1298,13 +1312,14 @@ export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
  * - /tamanhos/novo e /tamanhos/:id/editar (listagem em /tamanhos)
  * - /grades/novo e /grades/:id/editar (listagem em /grades)
  * - /insumos/novo e /insumos/:id/editar (listagem em /insumos)
+ * - /categorias-insumos/novo e /categorias-insumos/:id/editar (listagem em /categorias-insumos)
  *
  * É a lista canônica do padrão LISTA → PÁGINA do BROBOND ERP: quem entra aqui
  * navega (rota filha do módulo) em vez de abrir a superfície do formulário na
  * própria listagem. Demais cadastros simples devem migrar para cá — não para
  * novas superfícies de modal/drawer.
  */
-export const FORM_DIRETO = new Set(['clientes', 'produtos', 'vendas', 'categorias', 'cores', 'colecoes', 'tamanhos', 'grades', 'insumos']);
+export const FORM_DIRETO = new Set(['clientes', 'produtos', 'vendas', 'categorias', 'cores', 'colecoes', 'tamanhos', 'grades', 'insumos', 'categorias_insumos']);
 
 export type NavSection = {
   id: NavSectionId;

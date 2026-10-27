@@ -4390,3 +4390,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_print_terminals_empresa_codigo
 CREATE INDEX IF NOT EXISTS print_terminals_empresa_ativo_idx
   ON print_terminals (empresa_id, ativo);
 
+-- ============================================================================
+-- 0041 — CADASTRO PROFISSIONAL DE INSUMOS (identificação + categorização).
+-- Espelha db/migrations/0041_insumos_cadastro_profissional.sql.
+-- ============================================================================
+
+ALTER TABLE insumos ADD COLUMN IF NOT EXISTS codigo_insumo TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_insumos_codigo_empresa
+  ON insumos (empresa_id, codigo_insumo)
+  WHERE codigo_insumo IS NOT NULL AND codigo_insumo <> '';
+
+CREATE TABLE IF NOT EXISTS categorias_insumos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  nome TEXT NOT NULL,
+  descricao TEXT,
+  pai_id INTEGER REFERENCES categorias_insumos(id),
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_categorias_insumos_empresa_nome
+  ON categorias_insumos (empresa_id, nome);
+
+CREATE INDEX IF NOT EXISTS categorias_insumos_empresa_idx ON categorias_insumos (empresa_id);
+CREATE INDEX IF NOT EXISTS categorias_insumos_pai_idx ON categorias_insumos (pai_id);
+
+ALTER TABLE insumos ADD COLUMN IF NOT EXISTS categoria_id INTEGER REFERENCES categorias_insumos(id);
+
+CREATE INDEX IF NOT EXISTS insumos_categoria_idx ON insumos (categoria_id);

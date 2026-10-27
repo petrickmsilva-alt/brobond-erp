@@ -66,7 +66,10 @@ import {
 
 type Insumo = {
   id: number;
+  codigo_insumo?: string | null;
   nome: string | null;
+  categoria_id?: number | null;
+  categoria_id__label?: string | null;
   unidade: string | null;
   custo_medio: number | null;
   fornecedor_id: number | null;
@@ -74,6 +77,10 @@ type Insumo = {
   ativo?: boolean;
   /** Saldo real de `estoque_insumos` (agregado no servidor); null = sem saldo. */
   estoque_saldo?: number | null;
+  /** Mínimo cadastrado em `estoque_insumos` (agregado no servidor). */
+  estoque_min?: number | null;
+  /** Situação derivada: sem_registro | sem_estoque | abaixo_minimo | normal. */
+  estoque_status?: string | null;
   /** Contagem real de fichas técnicas que consomem o insumo. */
   uso_vinculado?: number;
   uso_vinculado_label?: string;
@@ -85,16 +92,19 @@ const TAMANHOS_PAGINA = [25, 50, 100];
 /**
  * Colunas da listagem.
  *
- * `estoque_saldo` e `uso_vinculado` são campos VIRTUAIS: não existem como
- * coluna em `insumos` — o servidor os anota na listagem (agregados, uma
- * consulta por página). Nenhum outro dado é apresentado.
+ * `estoque_saldo`, `estoque_min`, `estoque_status` e `uso_vinculado` são campos
+ * VIRTUAIS: não existem como coluna em `insumos` — o servidor os anota na
+ * listagem (agregados, uma consulta por página). Nenhum outro dado é
+ * apresentado.
  */
 const COLUNAS: Field[] = [
+  { name: 'codigo_insumo', label: 'Código', type: 'text', list: true },
   { name: 'nome', label: 'Insumo', type: 'text', list: true },
+  { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias_insumos', list: true },
   { name: 'unidade', label: 'Unidade', type: 'select', list: true },
   { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores', list: true },
-  { name: 'custo_medio', label: 'Custo médio', type: 'money', list: true },
   { name: 'estoque_saldo', label: 'Estoque', type: 'number', virtual: true, list: true, hint: 'Saldo real de estoque_insumos, agregado no servidor.' },
+  { name: 'custo_medio', label: 'Custo médio', type: 'money', list: true },
   { name: 'ativo', label: 'Status', type: 'boolean', list: true },
   { name: 'uso_vinculado', label: 'Utilização', type: 'integer', virtual: true, list: true, hint: 'Fichas técnicas que consomem este insumo.' },
 ];
@@ -135,6 +145,7 @@ export default function InsumosPage() {
   const [status, setStatus] = useState('');
   const [unidade, setUnidade] = useState('');
   const [fornecedor, setFornecedor] = useState('');
+  const [categoria, setCategoria] = useState('');
 
   // Preferências de apresentação (persistidas no navegador), como no resto
   // do ERP: modo de visualização, densidade e colunas visíveis.
@@ -147,9 +158,11 @@ export default function InsumosPage() {
   const [excluindo, setExcluindo] = useState(false);
   const [dependencias, setDependencias] = useState<DiagnosticoDependencias | null>(null);
 
-  // Opções de FORNECEDOR: vêm do endpoint de opções que o ERP já usa para os
-  // campos de referência (`/fornecedores/options`) — nenhum endpoint novo.
+  // Opções de FORNECEDOR e CATEGORIA: vêm do endpoint de opções que o ERP já
+  // usa para os campos de referência (`/fornecedores/options`,
+  // `/categorias_insumos/options`) — nenhum endpoint novo.
   const [opcoesFornecedor, setOpcoesFornecedor] = useState<Option[]>([]);
+  const [opcoesCategoria, setOpcoesCategoria] = useState<Option[]>([]);
 
   // Opções de UNIDADE: o dicionário é do METADADO do recurso (mesmo `UNIDADES`
   // que o servidor valida) — não há busca paralela para o servidor.
@@ -160,16 +173,17 @@ export default function InsumosPage() {
 
   useEffect(() => {
     let alive = true;
-    api
-      .get<Option[]>('/fornecedores/options')
-      .then((o) => {
-        if (!alive) return;
-        setOpcoesFornecedor(Array.isArray(o) ? o : []);
-      })
-      .catch(() => {
-        if (!alive) return;
-        setOpcoesFornecedor([]);
-      });
+    const buscar = (rota: string, set: (o: Option[]) => void) =>
+      api
+        .get<Option[]>(rota)
+        .then((o) => {
+          if (alive) set(Array.isArray(o) ? o : []);
+        })
+        .catch(() => {
+          if (alive) set([]);
+        });
+    void buscar('/fornecedores/options', setOpcoesFornecedor);
+    void buscar('/categorias_insumos/options', setOpcoesCategoria);
     return () => {
       alive = false;
     };
@@ -192,8 +206,9 @@ export default function InsumosPage() {
     if (status) p.set('f.ativo', status);
     if (unidade) p.set('f.unidade', unidade);
     if (fornecedor) p.set('f.fornecedor_id', fornecedor);
+    if (categoria) p.set('f.categoria_id', categoria);
     return p.toString();
-  }, [page, pageSize, buscaAplicada, status, unidade, fornecedor]);
+  }, [page, pageSize, buscaAplicada, status, unidade, fornecedor, categoria]);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -214,7 +229,7 @@ export default function InsumosPage() {
     void carregar();
   }, [carregar]);
 
-  const recorteAtivo = buscaAplicada !== '' || status !== '' || unidade !== '' || fornecedor !== '';
+  const recorteAtivo = buscaAplicada !== '' || status !== '' || unidade !== '' || fornecedor !== '' || categoria !== '';
 
   // ---- Ativar / Desativar na linha ----
   async function alternarAtivo(row: Insumo, forcar?: boolean) {
@@ -399,6 +414,26 @@ export default function InsumosPage() {
           </label>
 
           <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-navy-200">
+            <span className="sr-only">Filtrar por categoria</span>
+            <select
+              className="input !w-auto"
+              value={categoria}
+              onChange={(e) => {
+                setCategoria(e.target.value);
+                setPage(1);
+              }}
+              aria-label="Filtrar por categoria"
+            >
+              <option value="">Todas as categorias</option>
+              {opcoesCategoria.map((o) => (
+                <option key={o.value} value={String(o.value)}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-navy-200">
             <span className="sr-only">Filtrar por fornecedor</span>
             <select
               className="input !w-auto"
@@ -427,6 +462,7 @@ export default function InsumosPage() {
                 setStatus('');
                 setUnidade('');
                 setFornecedor('');
+                setCategoria('');
                 setPage(1);
               }}
               title="Remover todos os filtros"
@@ -487,13 +523,14 @@ export default function InsumosPage() {
                       Limpar busca
                     </button>
                   )}
-                  {(status || unidade || fornecedor) && (
+                  {(status || unidade || fornecedor || categoria) && (
                     <button
                       className="btn-secondary"
                       onClick={() => {
                         setStatus('');
                         setUnidade('');
                         setFornecedor('');
+                        setCategoria('');
                       }}
                     >
                       Limpar filtros

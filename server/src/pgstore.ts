@@ -509,6 +509,63 @@ export class PgStore implements Store {
     return out;
   }
 
+  /**
+   * ÚLTIMA LINHA POR GRUPO — DISTINCT ON em UMA consulta para a página inteira.
+   *
+   * Serve à coluna derivada "Última movimentação" da ficha do insumo: a
+   * movimentação mais recente vive em `movimentacoes_insumos`, não na linha de
+   * `insumos`. Sem esta agregação, a ficha teria de buscar a última movimentação
+   * insumo a insumo — o N+1 que a ficha do ERP precisa evitar.
+   *
+   * Segurança: tabela/colunas vêm do METADADO (nunca do input do usuário) e
+   * passam por `identificadorSeguro`; os ids entram como parâmetro; o recorte de
+   * empresa é obrigatório quando o recurso é tenantado; as chaves de `filtro`
+   * também são validadas contra as colunas reais e os valores entram como
+   * parâmetros.
+   */
+  async ultimosPorColuna(
+    r: Resource,
+    grupo: string,
+    ordenarPor: string,
+    ids: number[],
+    empresaId?: number,
+    filtro?: Record<string, unknown>,
+    tx?: Tx
+  ): Promise<Map<number, Row>> {
+    const out = new Map<number, Row>();
+    const alvos = [...new Set(ids.filter((n) => Number.isInteger(n) && n > 0))];
+    if (!alvos.length) return out;
+    const colunasReais = new Set(columnsOf(r).map((f) => f.name));
+    // `id` é coluna universal (não é campo do recurso): aceito como ordenação
+    // para o caso de "a linha mais recente por id" (ex.: o saldo único do insumo).
+    if (!colunasReais.has(grupo) || !(ordenarPor === 'id' || colunasReais.has(ordenarPor))) return out;
+    if (!identificadorSeguro(grupo) || !identificadorSeguro(ordenarPor) || !identificadorSeguro(r.table)) return out;
+    const params: unknown[] = [alvos];
+    let where = `${citarIdentificador(grupo)} = ANY($1)`;
+    if (temEscopoEmpresa(r) && empresaId !== undefined) {
+      params.push(empresaId);
+      where += ` AND ${citarIdentificador('empresa_id')} = $${params.length}`;
+    }
+    for (const [coluna, valor] of Object.entries(filtro ?? {})) {
+      if (!colunasReais.has(coluna) || !identificadorSeguro(coluna)) continue;
+      params.push(valor);
+      where += ` AND ${citarIdentificador(coluna)} = $${params.length}`;
+    }
+    const res = await q(
+      `SELECT DISTINCT ON (${citarIdentificador(grupo)}) *
+         FROM ${citarIdentificador(r.table)}
+        WHERE ${where}
+        ORDER BY ${citarIdentificador(grupo)}, ${citarIdentificador(ordenarPor)} DESC NULLS LAST, id DESC`,
+      params,
+      tx
+    );
+    for (const row of res.rows as Row[]) {
+      const id = Number(row[grupo]);
+      if (Number.isInteger(id)) out.set(id, row);
+    }
+    return out;
+  }
+
   async insert(r: Resource, data: Payload, tx?: Tx): Promise<Row> {
     const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
     const keys = Object.keys(data).filter((k) => allowed.has(k));

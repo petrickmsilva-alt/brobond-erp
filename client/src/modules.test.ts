@@ -24,6 +24,7 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   tamanhos: '/tamanhos',
   medidas: '/medidas',
   insumos: '/insumos',
+  'categorias-insumos': '/categorias-insumos',
   clientes: '/clientes',
   fornecedores: '/fornecedores',
   representantes: '/representantes',
@@ -86,13 +87,13 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   ajuda: '/ajuda',
 };
 
-describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', () => {
-  it('preserva exatamente os 70 módulos e todas as 70 URLs sem duplicidade nem remoção', () => {
-    expect(MODULES).toHaveLength(70);
+describe('ERP-UX-03 — Árvore Master e preservação das 71 funções/rotas', () => {
+  it('preserva exatamente os 71 módulos e todas as 71 URLs sem duplicidade nem remoção', () => {
+    expect(MODULES).toHaveLength(71);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(70);
-    expect(new Set(paths).size).toBe(70);
+    expect(new Set(ids).size).toBe(71);
+    expect(new Set(paths).size).toBe(71);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -121,8 +122,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', 
     }
   });
 
-  it('separa ERP CORE (56), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(56);
+  it('separa ERP CORE (57), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(57);
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(8);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
@@ -141,6 +142,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', 
       'tamanhos',
       'medidas',
       'insumos',
+      'categorias-insumos',
       'clientes',
       'fornecedores',
       'representantes',
@@ -381,6 +383,7 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
   it('inclui os cadastros que já vivem em página própria', () => {
     expect([...FORM_DIRETO].sort()).toEqual([
       'categorias',
+      'categorias_insumos',
       'clientes',
       'colecoes',
       'cores',
@@ -439,11 +442,26 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
     expect(moduleOfPath('/insumos/novo')?.id).toBe('insumos');
     expect(moduleOfPath('/insumos/12/editar')?.id).toBe('insumos');
   });
+
+  it('Categorias de Insumos entra no padrão LISTA → PÁGINA: criação e edição vivem no módulo /categorias-insumos', () => {
+    expect(FORM_DIRETO.has('categorias_insumos')).toBe(true);
+    // O id do módulo usa hífen; o recurso da API usa sublinhado — a rota-base
+    // vem do MÓDULO, nunca do nome do recurso.
+    const categorias = MODULES.find((m) => m.resource === 'categorias_insumos');
+    expect(categorias?.path).toBe('/categorias-insumos');
+    expect(moduleOfPath('/categorias-insumos')?.id).toBe('categorias-insumos');
+    expect(moduleOfPath('/categorias-insumos/novo')?.id).toBe('categorias-insumos');
+    expect(moduleOfPath('/categorias-insumos/12/editar')?.id).toBe('categorias-insumos');
+  });
+
   it('cada recurso de FORM_DIRETO tem um módulo navegável na mesma rota', () => {
     for (const recurso of FORM_DIRETO) {
-      const m = MODULES.find((x) => x.id === recurso);
+      // O recurso da API pode não coincidir com o id do módulo (ex.:
+      // `categorias_insumos` → módulo `categorias-insumos`), então casamos pelo
+      // campo `resource` do módulo.
+      const m = MODULES.find((x) => x.resource === recurso);
       expect(m, `${recurso} precisa de módulo no menu`).toBeTruthy();
-      expect(moduleOfPath(m!.path)?.id).toBe(recurso);
+      expect(moduleOfPath(m!.path)?.id).toBe(m!.id);
     }
   });
 });
