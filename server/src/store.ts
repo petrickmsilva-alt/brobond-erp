@@ -180,6 +180,28 @@ export interface Store {
     tx?: Tx
   ): Promise<Map<number, number>>;
 
+  /**
+   * ÚLTIMA LINHA POR GRUPO — para cada id de `ids`, a linha de `r` que aponta
+   * para ele pela coluna `grupo` com o MAIOR valor em `ordenarPor` (ex.: a
+   * movimentação de insumo mais recente por `data`).
+   *
+   * Mesma garantia de `countByColumn`/`sumByColumn`: UMA consulta (DISTINCT ON
+   * no PostgreSQL) serve a página inteira — nunca uma consulta por registro
+   * (nenhum N+1). Serve às colunas derivadas "Última movimentação" e "Último
+   * custo de entrada" da ficha do insumo, que vivem em `movimentacoes_insumos`
+   * e não na própria linha. `filtro` restringe as linhas candidatas por
+   * igualdade (ex.: `{ tipo: 'entrada' }`), sempre recortado por `empresaId`.
+   */
+  ultimosPorColuna(
+    r: Resource,
+    grupo: string,
+    ordenarPor: string,
+    ids: number[],
+    empresaId?: number,
+    filtro?: Record<string, unknown>,
+    tx?: Tx
+  ): Promise<Map<number, Row>>;
+
   insert(r: Resource, data: Payload, tx?: Tx): Promise<Row>;
   update(r: Resource, id: number, data: Payload, tx?: Tx): Promise<Row | null>;
   remove(r: Resource, id: number, tx?: Tx): Promise<boolean>;

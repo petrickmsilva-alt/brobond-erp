@@ -933,6 +933,52 @@ export const RESOURCES: Record<string, Resource> = {
     orderBy: { field: 'nome', dir: 'asc' },
   },
 
+  /**
+   * CATEGORIAS DE INSUMOS — agrupamento profissional da matéria-prima.
+   *
+   * Taxonomia PRÓPRIA do insumo (matéria-prima, aviamentos, identidade de
+   * marca, embalagem...), separada do catálogo GLOBAL `categorias`, que é o
+   * tipo de peça do PRODUTO ACABADO (camisa, calça). Misturar os dois faria a
+   * lista de categorias de produto poluir os seletores de insumo e vice-versa.
+   *
+   * Cadastro POR EMPRESA (como `categorias_financeiras`), com UM nível de
+   * categoria-pai opcional para agrupar sem inflar o cadastro. Escrita aberta a
+   * quem já opera o cadastro de insumos (sem `minPerfilEscrita`): não se
+   * introduz restrição nova onde o cadastro irmão não tem.
+   */
+  categorias_insumos: {
+    key: 'categorias_insumos',
+    empresa: true,
+    table: 'categorias_insumos',
+    label: 'Categorias de Insumos',
+    singular: 'Categoria de insumo',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    notice: 'Agrupa a matéria-prima por natureza (matéria-prima, aviamentos, identidade de marca, embalagem...). Não confundir com as Categorias de produto.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, uniqueEmpresa: true, search: true, maxLength: 60, placeholder: 'Matéria-prima, Aviamentos, Embalagem...' },
+      { name: 'descricao', label: 'Descrição', type: 'text', search: true, maxLength: 160, wide: true },
+      { name: 'pai_id', label: 'Categoria-pai', type: 'ref', ref: 'categorias_insumos', search: true, list: false, hint: 'Agrupamento em dois níveis: ex. "Aviamentos" (pai) → "Linhas e Fios" (filha). Deixe vazio para categoria principal.' },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+    filterFields: ['pai_id', 'ativo'],
+    quickFilters: [
+      {
+        field: 'ativo',
+        label: 'Status',
+        options: [
+          { value: '', label: 'Todos' },
+          { value: 'true', label: 'Ativas' },
+          { value: 'false', label: 'Inativas' },
+        ],
+      },
+    ],
+    // Utilização real: quantos insumos usam a categoria (agregado no servidor).
+    uso: { recurso: 'insumos', campo: 'categoria_id', singular: 'insumo', plural: 'insumos' },
+  },
+
   insumos: {
     key: 'insumos',
     empresa: true,
@@ -957,18 +1003,31 @@ export const RESOURCES: Record<string, Resource> = {
     // inventados. O estoque mínimo continua editável no módulo "Estoque de
     // Insumos" (recurso `estoque_insumos`), como sempre.
     fields: [
-      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, wide: true },
-      { name: 'unidade', label: 'Unidade', type: 'select', required: true, options: UNIDADES, default: 'un' },
-      { name: 'custo_medio', label: 'Custo médio', type: 'money', min: 0, default: 0, hint: 'Custo por unidade do insumo. É atualizado automaticamente quando uma compra é recebida — o valor aqui é a referência inicial do cadastro.' },
-      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores', search: true },
+      // IDENTIFICAÇÃO — o que a produção usa para achar o insumo.
+      // `codigo_insumo` é o identificador operacional (único POR EMPRESA, mesmo
+      // desenho de `produtos.sku`). Opcional: os registros existentes ficam sem
+      // código e continuam válidos — nada é gerado automaticamente.
+      { name: 'codigo_insumo', label: 'Código', type: 'text', uniqueEmpresa: true, search: true, maxLength: 40, placeholder: 'Ex.: INS-MAL-001', section: 'Identificação', hint: 'Identificador operacional do insumo. Único na empresa; pode ficar vazio.' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, wide: true, section: 'Identificação' },
+      // Categoria de INSUMO (taxonomia própria, separada da categoria de produto).
+      { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias_insumos', search: true, section: 'Identificação' },
+      { name: 'unidade', label: 'Unidade', type: 'select', required: true, options: UNIDADES, default: 'un', section: 'Identificação' },
       ativo,
+      // SUPRIMENTOS — o fornecedor principal do cadastro.
+      { name: 'fornecedor_id', label: 'Fornecedor principal', type: 'ref', ref: 'fornecedores', search: true, section: 'Suprimentos' },
+      // CUSTOS — referência inicial do cadastro. O custo médio REAL é formado
+      // pelo recebimento de compras (custoRecebimento.ts); este valor é o ponto
+      // de partida. Na PÁGINA de edição ele é apresentado como dado CALCULADO,
+      // nunca como campo editável (a compra é quem manda depois da criação).
+      { name: 'custo_medio', label: 'Custo médio', type: 'money', min: 0, default: 0, section: 'Custos', hint: 'Custo por unidade do insumo. É atualizado automaticamente quando uma compra é recebida — o valor aqui é a referência inicial do cadastro.' },
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
     // Filtros da LISTAGEM (server-side, mesmo mecanismo dos demais recursos):
-    // unidade, fornecedor e status — as três perguntas que se faz ao revisar o
-    // estoque de matéria-prima. Todos os campos EXISTEM em `insumos`.
-    filterFields: ['unidade', 'fornecedor_id', 'ativo'],
+    // busca (código/nome), categoria, unidade, fornecedor e status — as
+    // perguntas que se faz ao revisar o estoque de matéria-prima. Todos os
+    // campos EXISTEM em `insumos`.
+    filterFields: ['categoria_id', 'unidade', 'fornecedor_id', 'ativo'],
     // Recorte de um clique acima da tabela — mesmo contrato `f.ativo` de Cores
     // e Grades (nenhum SQL novo).
     quickFilters: [

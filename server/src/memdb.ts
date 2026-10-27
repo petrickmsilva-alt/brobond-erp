@@ -338,6 +338,57 @@ export class MemStore implements Store {
     return out;
   }
 
+  /**
+   * Espelha `ultimosPorColuna` do PostgreSQL: para cada id de `ids`, a linha que
+   * aponta para ele pela coluna `grupo` com o MAIOR valor em `ordenarPor`
+   * (desempate por id DESC, nulos por último) — em UMA passada, sem consulta por
+   * registro. `filtro` restringe as linhas candidatas por igualdade, e o recorte
+   * de empresa vale para recurso tenantado, como nas demais agregações.
+   */
+  async ultimosPorColuna(
+    r: Resource,
+    grupo: string,
+    ordenarPor: string,
+    ids: number[],
+    empresaId?: number,
+    filtro?: Record<string, unknown>
+  ): Promise<Map<number, Row>> {
+    const out = new Map<number, Row>();
+    const colunas = columnsOf(r).map((f) => f.name);
+    if (!colunas.includes(grupo) || !(ordenarPor === 'id' || colunas.includes(ordenarPor))) return out;
+    const alvos = new Set(ids.filter((n) => Number.isInteger(n) && n > 0));
+    const escopado = temEscopoEmpresa(r) && empresaId !== undefined;
+    for (const row of this.table(r.table).rows.values()) {
+      if (escopado && Number(row.empresa_id ?? EMPRESA_PADRAO) !== empresaId) continue;
+      const id = Number(row[grupo]);
+      if (!alvos.has(id)) continue;
+      if (filtro && !Object.entries(filtro).every(([col, valor]) => norm(row[col]) === norm(valor))) continue;
+      const atual = out.get(id);
+      if (!atual || this.maisRecente(row, atual, ordenarPor)) out.set(id, row);
+    }
+    return out;
+  }
+
+  /** `a` vem depois de `b` por `ordenarPor` (desempate por id DESC; nulos por último). */
+  private maisRecente(a: Row, b: Row, ordenarPor: string): boolean {
+    const av = a[ordenarPor];
+    const bv = b[ordenarPor];
+    const aNulo = av === null || av === undefined;
+    const bNulo = bv === null || bv === undefined;
+    // Nulos ficam por último; dois nulos desempatam por id DESC (determinismo).
+    if (!aNulo && !bNulo) {
+      if (typeof av === 'number' && typeof bv === 'number') {
+        if (av !== bv) return av > bv;
+      } else {
+        const cmp = norm(av).localeCompare(norm(bv), 'pt-BR', { numeric: true });
+        if (cmp !== 0) return cmp > 0;
+      }
+    } else if (aNulo !== bNulo) {
+      return !aNulo;
+    }
+    return Number(a.id) > Number(b.id);
+  }
+
   private checkConstraints(r: Resource, data: Payload, id?: number) {
     const cur = id ? this.table(r.table).rows.get(id) : undefined;
     const merged = { ...(cur || {}), ...data };
@@ -390,7 +441,12 @@ export class MemStore implements Store {
     // Colunas internas de autenticação (hash/segredos/tokens) graváveis pela API interna.
     for (const k of COLUNAS_AUTENTICACAO) if (k in data) row[k] = data[k];
     if (r.fields.some((f) => f.name === 'criado_em')) row.criado_em = new Date().toISOString();
-    if (r.key === 'movimentacoes' || r.key === 'auditoria') row.data = row.data || new Date().toISOString();
+    // Espelha o DEFAULT now() da coluna `data` (movimentações de produto/insumo e
+    // auditoria): sem isso o modo demonstração devolveria `data` nula onde o
+    // Postgres grava a data do lançamento — divergência real de contrato.
+    if (r.key === 'movimentacoes' || r.key === 'movimentacoes_insumos' || r.key === 'auditoria') {
+      row.data = row.data || new Date().toISOString();
+    }
     this.herdarEmpresa(r, row);
     t.rows.set(id, row);
     return { ...row };

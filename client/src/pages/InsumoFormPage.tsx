@@ -8,41 +8,49 @@
 //   /insumos/:id/editar     → página "Editar insumo"
 //
 // Nada é sobreposto à lista: a inclusão/edição é uma rota normal, com o
-// breadcrumb do shell (BROBOND ERP › Cadastros › Insumos › Novo/Editar), o
-// `PageHeader` padrão e as ações Voltar / Cancelar / Salvar insumo.
+// breadcrumb do shell, o `PageHeader` padrão e as ações Voltar / Cancelar /
+// Salvar insumo.
+//
+// A página separa o que é DADO CADASTRAL do que é DADO CALCULADO:
+//
+//   EDITÁVEL (vai no POST/PUT)          CALCULADO (só leitura, vem do domínio)
+//   ─────────────────────────           ─────────────────────────────────────
+//   código · nome · categoria            estoque atual / mínimo / situação
+//   unidade · fornecedor principal       última movimentação
+//   ativo                                último preço de compra / última compra
+//   custo médio (referência inicial)     custo médio (depois da 1ª compra)
+//                                        utilização em ficha técnica
 //
 // REUTILIZA os componentes JÁ existentes do ERP — nenhum design system novo:
-//   • `PageHeader`, `Alert`, `Spinner`, `useToast`  (components/ui)
+//   • `PageHeader`, `Alert`, `Badge`, `Spinner`, `useToast`  (components/ui)
 //   • `RecordForm` dirigido pelos metadados de GET /api/meta
 //   • `validarFormulario` / `toPayload` / `initialValues` (mesmas regras do
 //     CRUD genérico — um campo nunca tem duas validações no ERP)
-//   • `useRefOptions` (opções de fornecedor do endpoint padrão `/options`)
-//   • `lib/lista` (rótulos/descrição do cadastro, sem texto duplicado)
+//   • `useRefOptions` (opções de fornecedor/categoria do endpoint `/options`)
+//   • `lib/lista` e `lib/format` (rótulos e formatação, sem texto duplicado)
 //
-// CAMPOS — os que EXISTEM de verdade em `insumos` (db/schema.sql):
-//   nome · unidade · custo_medio · fornecedor_id · ativo
+// CAMPOS CADASTRAIS — os que EXISTEM de verdade em `insumos` (db/schema.sql +
+// migration 0041): codigo_insumo · nome · categoria_id · unidade ·
+// fornecedor_id · ativo · custo_medio. NÃO existem (e por isso NÃO aparecem):
+// NCM, descrição, marca, cor, imagem, estoque mínimo/máximo, localização.
+// O estoque mínimo vive em `estoque_insumos` — é exibido como DADO CALCULADO e
+// continua editável no módulo "Estoque de Insumos", como sempre.
 //
-// NÃO existem (e por isso NÃO aparecem): código/SKU de insumo, NCM, descrição,
-// marca, cor, imagem, categoria, estoque mínimo/máximo, localização física.
-// O estoque mínimo vive na tabela `estoque_insumos` (sem máximo) e continua
-// editável no módulo "Estoque de Insumos" — como sempre.
-//
-// CUSTO MÉDIO: campo editável do recurso, exatamente como no CRUD genérico.
-// A regra de formação do custo pelo recebimento de compras (custo médio
-// ponderado) NÃO é alterada por esta página — ela apenas edita o valor de
-// referência do cadastro, como já fazia.
+// CUSTO MÉDIO: referência inicial editável. Depois da PRIMEIRA movimentação
+// (compra/entrada) ele é formado pelo recebimento de compras: a página o mostra
+// como dado calculado e o servidor recusa um PUT que tente alterá-lo. As
+// escritas internas do custo continuam pelo store — o fluxo de compras não muda.
 //
 // Contrato da API: POST/PUT /api/insumos com
-// { nome, unidade, custo_medio, fornecedor_id, ativo }.
+// { codigo_insumo, nome, categoria_id, unidade, fornecedor_id, ativo, custo_medio }.
 // RBAC intacto: `insumos` é cadastro POR EMPRESA (sem `minPerfilEscrita`) e o
-// servidor (checkAccess + validatePayload) continua sendo a autoridade — a UI
-// só reflete o que a API autoriza.
+// servidor (checkAccess + validatePayload) continua sendo a autoridade.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, Loader2, Package, Save, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Boxes, ClipboardList, Loader2, Package, Save, Wallet, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
-import { useMeta, type ResourceMeta } from '../lib/meta';
-import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
+import { useMeta, type ResourceMeta, type Tone } from '../lib/meta';
+import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
 import {
   fieldErrors,
   initialValues,
@@ -53,6 +61,7 @@ import {
   type FormValues,
 } from '../components/RecordForm';
 import { descricaoDoCadastro, rotuloEditar, rotuloNovo, rotuloSalvar } from '../lib/lista';
+import { formatDate, formatMoney, formatNumber } from '../lib/format';
 import { useAuth } from '../auth/AuthContext';
 
 /**
@@ -67,6 +76,24 @@ const RECURSO_INDISPONIVEL: ResourceMeta = {
   fields: [],
   ops: { create: false, update: false, delete: false },
 };
+
+/** Situação do estoque (derivada no servidor) → tom e rótulo do Badge padrão. */
+const SITUACAO_ESTOQUE: Record<string, { label: string; tone: Tone }> = {
+  normal: { label: 'Normal', tone: 'green' },
+  abaixo_minimo: { label: 'Abaixo do mínimo', tone: 'amber' },
+  sem_estoque: { label: 'Sem estoque', tone: 'red' },
+  sem_registro: { label: 'Sem movimentação', tone: 'slate' },
+};
+
+/** Linha rótulo → valor de um painel de DADOS CALCULADOS (somente leitura). */
+function CampoDerivado({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <dt className="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-navy-300">{label}</dt>
+      <dd className="mt-0.5 text-sm font-semibold text-navy-800 dark:text-navy-100">{children}</dd>
+    </div>
+  );
+}
 
 export default function InsumoFormPage() {
   const { id } = useParams();
@@ -97,8 +124,8 @@ export default function InsumoFormPage() {
   const [salvoComSucesso, setSalvoComSucesso] = useState(false);
   const [registro, setRegistro] = useState<Record<string, any> | null>(null);
   const errorSummaryRef = useRef<HTMLDivElement>(null);
-  // Opções do fornecedor: o hook usa o endpoint padrão de opções (`/options`),
-  // o mesmo que o CRUD genérico usa — nenhum endpoint novo.
+  // Opções do fornecedor/categoria: o hook usa o endpoint padrão de opções
+  // (`/options`), o mesmo que o CRUD genérico usa — nenhum endpoint novo.
   const refOptions = useRefOptions(resource ?? RECURSO_INDISPONIVEL);
 
   // ---- carga do registro (edição) ----
@@ -146,6 +173,9 @@ export default function InsumoFormPage() {
     setSaving(true);
     try {
       const payload = toPayload(resource, values, editing);
+      // Campos calculados NESTA tela (custo médio já formado por compra) não
+      // voltam no PUT: quem forma o valor é o recebimento, não o formulário.
+      for (const nome of camposSomenteLeitura) delete payload[nome];
       if (editing && id) {
         await api.put<Record<string, any>>(`/insumos/${id}`, payload);
         toast.success('Insumo salvo com sucesso.');
@@ -188,6 +218,23 @@ export default function InsumoFormPage() {
   // recurso, em `client/src/lib/lista.ts`); na edição, "Salvar alterações" —
   // a mesma convenção já usada em Categorias e Clientes.
   const rotuloSalvarInsumo = editing ? 'Salvar alterações' : rotuloSalvar(resource.key);
+
+  // ---- DADOS CALCULADOS (somente na edição; vêm do domínio, não do formulário) ----
+  // Nada aqui é editável: saldo/mínimo/situação/última movimentação/custo médio
+  // derivado são anotados pelo servidor a partir de `estoque_insumos`,
+  // `movimentacoes_insumos` e do recebimento de compras. Se o insumo ainda não
+  // tem histórico, o bloco correspondente simplesmente NÃO aparece — nada de
+  // campo vazio só para preencher espaço.
+  const temHistorico = registro?.estoque_tem_movimentacao === true;
+  const estoqueTemDados = editing && registro != null && (registro.estoque_saldo != null || registro.estoque_min != null);
+  const custoTemDados = editing && registro != null;
+  const unidadeAtual = String(registro?.unidade ?? values.unidade ?? '').trim();
+  const situacao = registro?.estoque_status ? SITUACAO_ESTOQUE[String(registro.estoque_status)] : undefined;
+  const usoVinculado = Number(registro?.uso_vinculado ?? 0);
+  const temUso = editing && registro != null && Number.isFinite(usoVinculado) && usoVinculado > 0;
+  // Com histórico de compra o custo médio é CALCULADO: a página o mostra como
+  // leitura e o servidor recusa um PUT que tente alterá-lo.
+  const camposSomenteLeitura = temHistorico ? ['custo_medio'] : [];
 
   if (carregando) {
     return (
@@ -278,7 +325,9 @@ export default function InsumoFormPage() {
 
         {/* O formulário é o MESMO componente dirigido por metadados: campos,
             obrigatoriedade e validações vêm de GET /api/meta. `hideActions`
-            evita uma segunda barra de botões — a da página é a única. */}
+            evita uma segunda barra de botões — a da página é a única. Os campos
+            em `camposSomenteLeitura` (custo médio já formado por compra) são
+            apresentados como leitura e não voltam no payload. */}
         <RecordForm
           resource={resource}
           values={values}
@@ -295,6 +344,7 @@ export default function InsumoFormPage() {
           refOptions={refOptions}
           autoFocus
           hideActions
+          camposSomenteLeitura={camposSomenteLeitura}
         />
 
         {/* Rodapé de ações da página — mesma dupla de botões do cabeçalho,
@@ -315,6 +365,93 @@ export default function InsumoFormPage() {
           </button>
         </div>
       </section>
+
+      {/* ---- DADOS CALCULADOS: só aparecem na edição e só com dado REAL ---- */}
+      {editing && registro && (
+        <div className="mt-5 space-y-5">
+          {temHistorico && (
+            <div>
+              <Alert tone="blue">
+                O custo médio é calculado pelo recebimento de compras e não pode ser editado aqui. Registre uma compra
+                ou uma entrada para atualizá-lo.
+              </Alert>
+            </div>
+          )}
+
+          {/* ESTOQUE — saldo e mínimo vivem em `estoque_insumos`, agregados pelo
+              servidor; nada é campo manual no cadastro. */}
+          {estoqueTemDados && (
+            <section className="card p-4 sm:p-5">
+              <h2 className="mb-4 flex items-center gap-2 border-b border-slate-100 pb-3 text-sm font-bold uppercase tracking-wide text-navy-800 dark:border-navy-800">
+                <Boxes className="h-4 w-4 text-navy-400" aria-hidden="true" />
+                Estoque
+              </h2>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-4">
+                <CampoDerivado label="Estoque atual">
+                  {registro.estoque_saldo == null ? '—' : `${formatNumber(registro.estoque_saldo)}${unidadeAtual ? ` ${unidadeAtual}` : ''}`}
+                </CampoDerivado>
+                <CampoDerivado label="Estoque mínimo">
+                  {registro.estoque_min == null ? '—' : `${formatNumber(registro.estoque_min)}${unidadeAtual ? ` ${unidadeAtual}` : ''}`}
+                </CampoDerivado>
+                <CampoDerivado label="Situação">
+                  {situacao ? <Badge tone={situacao.tone}>{situacao.label}</Badge> : '—'}
+                </CampoDerivado>
+                <CampoDerivado label="Última movimentação">
+                  {registro.ultima_movimentacao ? formatDate(registro.ultima_movimentacao) : '—'}
+                  {registro.ultima_movimentacao_tipo && (
+                    <span className="ml-1 text-xs font-normal text-slate-400">({registro.ultima_movimentacao_tipo})</span>
+                  )}
+                </CampoDerivado>
+              </dl>
+              <p className="mt-3 text-xs text-slate-400 dark:text-navy-300">
+                Saldo e mínimo são mantidos pelo módulo Estoque de Insumos; aqui são apenas exibidos.
+              </p>
+            </section>
+          )}
+
+          {/* CUSTOS CALCULADOS — último preço/última compra derivados do recebimento. */}
+          {custoTemDados && (
+            <section className="card p-4 sm:p-5">
+              <h2 className="mb-4 flex items-center gap-2 border-b border-slate-100 pb-3 text-sm font-bold uppercase tracking-wide text-navy-800 dark:border-navy-800">
+                <Wallet className="h-4 w-4 text-navy-400" aria-hidden="true" />
+                Custos calculados
+              </h2>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-3">
+                <CampoDerivado label="Último preço de compra">
+                  {registro.ultimo_custo_entrada == null ? '—' : formatMoney(registro.ultimo_custo_entrada)}
+                </CampoDerivado>
+                <CampoDerivado label="Custo médio">
+                  {formatMoney(registro.custo_medio)}
+                  {temHistorico && <span className="ml-1 text-xs font-normal text-slate-400">(calculado)</span>}
+                </CampoDerivado>
+                <CampoDerivado label="Última compra">
+                  {registro.ultima_entrada_em ? formatDate(registro.ultima_entrada_em) : '—'}
+                </CampoDerivado>
+              </dl>
+            </section>
+          )}
+
+          {/* ENGENHARIA / UTILIZAÇÃO — uso real do insumo na ficha técnica. */}
+          {temUso && (
+            <section className="card p-4 sm:p-5">
+              <h2 className="mb-4 flex items-center gap-2 border-b border-slate-100 pb-3 text-sm font-bold uppercase tracking-wide text-navy-800 dark:border-navy-800">
+                <ClipboardList className="h-4 w-4 text-navy-400" aria-hidden="true" />
+                Engenharia / Utilização
+              </h2>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-3">
+                <CampoDerivado label="Fichas técnicas">
+                  {registro.uso_vinculado_label ?? `${usoVinculado}`}
+                </CampoDerivado>
+              </dl>
+              <div className="mt-3">
+                <Link to="/fichas" className="btn-secondary inline-flex text-xs">
+                  Ver fichas técnicas
+                </Link>
+              </div>
+            </section>
+          )}
+        </div>
+      )}
     </div>
   );
 }

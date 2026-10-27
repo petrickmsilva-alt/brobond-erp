@@ -862,10 +862,11 @@ await (async () => {
 // nas páginas /insumos/novo e /insumos/:id/editar — `/meta` não declara
 // drawer/modal. O contrato abaixo é exatamente o que elas usam.
 //
-// DOMÍNIO REAL de `insumos` (db/schema.sql): nome, unidade, custo_medio,
-// fornecedor_id, ativo. NÃO existem SKU/NCM/descrição/marca/cor/imagem/
-// categoria/estoque mínimo/localização — e o smoke trava essa verdade: um
-// campo que não existe no banco não pode aparecer no formulário.
+// DOMÍNIO REAL de `insumos` (db/schema.sql + migration 0041): codigo_insumo,
+// nome, categoria_id, unidade, custo_medio, fornecedor_id, ativo. NÃO existem
+// SKU/NCM/descrição/marca/cor/imagem/estoque mínimo/localização — e o smoke
+// trava essa verdade: um campo que não existe no banco não pode aparecer no
+// formulário.
 {
   const meta = await req('GET', '/meta');
   const insumos = meta.json?.resources?.insumos;
@@ -877,13 +878,27 @@ await (async () => {
   check('insumos: /meta declara a utilização real pelas fichas técnicas',
     insumos?.uso?.recurso === 'itens_ficha_tecnica' && insumos?.uso?.campo === 'insumo_id',
     JSON.stringify(insumos?.uso));
+  check('insumos: /meta declara o filtro de categoria (server-side)',
+    Array.isArray(insumos?.filterFields) && insumos.filterFields.includes('categoria_id'),
+    JSON.stringify(insumos?.filterFields));
 
-  // NENHUM campo inventado no formulário.
+  // NENHUM campo inventado no formulário. `codigo_insumo` e `categoria_id`
+  // EXISTEM em `insumos` (migration 0041) — identificador operacional e
+  // agrupamento, não campos inventados.
   const camposInsumo = (insumos?.fields || []).map((f) => f.name);
   check('insumos: o formulário usa só os campos reais do banco',
-    ['nome', 'unidade', 'custo_medio', 'fornecedor_id', 'ativo'].every((c) => camposInsumo.includes(c)) &&
-    !camposInsumo.some((c) => ['sku', 'codigo', 'ncm', 'descricao', 'marca', 'cor_id', 'imagem', 'categoria_id', 'estoque_min', 'estoque_max', 'localizacao'].includes(c)),
+    ['codigo_insumo', 'nome', 'categoria_id', 'unidade', 'custo_medio', 'fornecedor_id', 'ativo'].every((c) => camposInsumo.includes(c)) &&
+    !camposInsumo.some((c) => ['sku', 'ncm', 'descricao', 'marca', 'cor_id', 'imagem', 'estoque_min', 'estoque_max', 'localizacao'].includes(c)),
     `campos=${camposInsumo.join(',')}`);
+  check('insumos: a categoria do formulário é a taxonomia PRÓPRIA (categorias_insumos)',
+    insumos?.fields?.find((f) => f.name === 'categoria_id')?.ref === 'categorias_insumos');
+
+  // Categoria de insumo: cadastro POR EMPRESA, taxonomia própria, página própria.
+  const categoriasIns = meta.json?.resources?.categorias_insumos;
+  check('categorias_insumos: cadastro por empresa', categoriasIns?.empresa === true, `empresa=${categoriasIns?.empresa}`);
+  check('categorias_insumos: taxonomia própria (não é a categoria de produto)',
+    (categoriasIns?.fields || []).map((f) => f.name).join(',') === 'nome,descricao,pai_id,ativo,criado_em,atualizado_em',
+    (categoriasIns?.fields || []).map((f) => f.name).join(','));
 
   // Fornecedor: a referência real (fornecedor_id → fornecedores), com as
   // opções do endpoint padrão de opções (nenhum endpoint paralelo).
@@ -895,8 +910,13 @@ await (async () => {
     `${Array.isArray(opcoesForn.json) ? opcoesForn.json.length : 0} opções`);
 
   // Cadastro pela PÁGINA: o mesmo contrato do CRUD genérico.
+  const categoriaIns = await req('POST', '/categorias_insumos', { nome: `Malhas Smoke ${Date.now().toString().slice(-6)}` });
+  check('insumos: a categoria de insumo do smoke foi cadastrada', [200, 201].includes(categoriaIns.status), `status ${categoriaIns.status} ${msg(categoriaIns.json)}`);
+  const codigoIns = `INS-SMK-${Date.now().toString().slice(-6)}`;
   const criado = await req('POST', '/insumos', {
+    codigo_insumo: codigoIns,
     nome: `Insumo Smoke ${Date.now().toString().slice(-6)}`,
+    categoria_id: categoriaIns.json?.id,
     unidade: 'm',
     custo_medio: 7.5,
     fornecedor_id: fornecedor.json?.id,
@@ -905,7 +925,14 @@ await (async () => {
   check('insumos: POST cria o insumo com o contrato real', [200, 201].includes(criado.status) && !!criado.json?.id, `status ${criado.status}`);
   const insumoId = criado.json?.id;
 
-  // Listagem: busca + filtro de status + filtro de unidade.
+  // Código operacional: único por empresa, entra na BUSCA (server-side).
+  const buscaCodigo = await req('GET', `/insumos?q=${encodeURIComponent(codigoIns)}`);
+  check('insumos: a busca encontra o insumo pelo CÓDIGO (server-side)',
+    buscaCodigo.json?.rows?.some((r) => Number(r.id) === Number(insumoId)), `status ${buscaCodigo.status}`);
+  const codigoDup = await req('POST', '/insumos', { codigo_insumo: codigoIns, nome: `Duplicado ${Date.now()}`, unidade: 'm' });
+  check('insumos: código repetido na MESMA empresa é recusado (409)', codigoDup.status === 409, `status ${codigoDup.status}`);
+
+  // Listagem: busca + filtro de status + filtro de unidade + filtro de categoria.
   const listaIns = await req('GET', `/insumos?q=${encodeURIComponent(criado.json?.nome || '')}`);
   check('insumos: busca por nome na listagem do servidor', listaIns.json?.rows?.some((r) => Number(r.id) === Number(insumoId)));
   check('insumos: a listagem devolve a unidade e o custo médio reais',
@@ -916,6 +943,15 @@ await (async () => {
   const listaPorUnidade = await req('GET', '/insumos?f.unidade=kg&pageSize=200');
   check('insumos: filtro f.unidade recorta no servidor',
     !listaPorUnidade.json?.rows?.some((r) => Number(r.id) === Number(insumoId)));
+  const listaPorCategoria = await req('GET', `/insumos?f.categoria_id=${categoriaIns.json?.id}&pageSize=200`);
+  check('insumos: filtro f.categoria_id recorta no servidor',
+    listaPorCategoria.json?.rows?.some((r) => Number(r.id) === Number(insumoId)));
+
+  // A categoria agrupa: a utilização dela é a contagem REAL de insumos.
+  const catsIns = await req('GET', `/categorias_insumos?q=${encodeURIComponent(categoriaIns.json?.nome || '')}`);
+  check('insumos: a categoria de insumo conta os insumos vinculados (utilização real)',
+    Number(catsIns.json?.rows?.find((r) => Number(r.id) === Number(categoriaIns.json?.id))?.uso_vinculado) === 1,
+    `uso=${catsIns.json?.rows?.find((r) => Number(r.id) === Number(categoriaIns.json?.id))?.uso_vinculado}`);
 
   // ESTOQUE: o saldo REAL de estoque_insumos, agregado no servidor (nunca
   // um N+1, nunca um número inventado). Insumo sem movimentação = null.
@@ -933,6 +969,21 @@ await (async () => {
   check('insumos: a coluna Estoque traz o saldo REAL agregado',
     Number(listaComSaldo.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.estoque_saldo) === 120,
     `estoque_saldo=${listaComSaldo.json?.rows?.find((r) => Number(r.id) === Number(insumoId))?.estoque_saldo}`);
+
+  // DERIVADOS da ficha: situação, última movimentação e último custo de entrada
+  // vêm do estoque real (agregados em lote), nunca de campo manual.
+  const linhaDeriv = listaComSaldo.json?.rows?.find((r) => Number(r.id) === Number(insumoId));
+  check('insumos: a ficha deriva a situação do estoque (saldo 120 > 0 → normal)',
+    linhaDeriv?.estoque_status === 'normal', `estoque_status=${linhaDeriv?.estoque_status}`);
+  check('insumos: a ficha deriva a última movimentação e o último custo de entrada',
+    linhaDeriv?.ultima_movimentacao_tipo === 'entrada' && !!linhaDeriv?.ultima_movimentacao && Number(linhaDeriv?.ultimo_custo_entrada) === 7.5,
+    `tipo=${linhaDeriv?.ultima_movimentacao_tipo} custo=${linhaDeriv?.ultimo_custo_entrada}`);
+
+  // CUSTO MÉDIO: depois da 1ª movimentação é DADO CALCULADO — o servidor recusa
+  // um PUT que tente editá-lo à mão (a autoridade é o recebimento de compras).
+  const custoManual = await req('PUT', `/insumos/${insumoId}`, { custo_medio: 99 });
+  check('insumos: custo médio calculado NÃO é editável à mão (409)',
+    custoManual.status === 409, `status ${custoManual.status}`);
 
   // UTILIZAÇÃO: contagem real das fichas técnicas (agregada, em lote).
   const produtoIns = await req('POST', '/produtos', { sku: `INS-SMOKE-${Date.now().toString().slice(-6)}`, nome: 'Produto Insumo Smoke' });
