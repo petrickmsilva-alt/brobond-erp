@@ -1,4 +1,4 @@
-import { Pool, type PoolClient, type QueryResult } from 'pg';
+import { Pool, TypeOverrides, type PoolClient, type QueryResult } from 'pg';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,12 +30,37 @@ const databaseUrl = (process.env.DATABASE_URL || '').replace(
   'sslmode=verify-full$2'
 );
 
+// ---------------------------------------------------------------------------
+// DATE como dia civil "YYYY-MM-DD" — não como `Date` JavaScript.
+//
+// O driver `pg` registra, por padrão, o parser da OID 1082 (`DATE`) que converte
+// a coluna em um `Date` JS (o mesmo tipo usado para TIMESTAMP/TIMESTAMPTZ). Isso
+// quebra o contrato de DIA CIVIL do domínio: `String(date).slice(0, 10)` produz
+// "Sat Jan 31" em vez de "2026-01-31" (representantes.desligamento, por
+// exemplo), e a data passa a depender do fuso do processo — exatamente o que a
+// separação DATE × TIMESTAMP existe para evitar.
+//
+// O modo demonstração (memdb.ts) entrega DATE como string "YYYY-MM-DD"; esta é
+// a MESMA semântica no PostgreSQL. A correção fica no ponto COMPARTILHADO que
+// transforma/retorna dados do banco (o pool do PgStore e de todo o serviço), e
+// não em um campo isolado: TODA coluna DATE passa a voltar como a data de
+// negócio textual.
+//
+// Alcance: só a OID 1082. TIMESTAMP (1114) e TIMESTAMPTZ (1184) seguem
+// intocados (continuam `Date`, como o restante do código espera), assim como
+// numéricos, booleanos, JSON, arrays, nullable e os demais tipos. O override é
+// do pool da aplicação — nenhum outro cliente `pg` do processo é afetado.
+// ---------------------------------------------------------------------------
+const tiposPg = new TypeOverrides();
+tiposPg.setTypeParser(1082, (valor: string) => valor); // DATE → "YYYY-MM-DD"
+
 // Se DATABASE_URL não existir (ex.: dev local sem Postgres), o pool fica nulo
 // e a API funciona em MODO DEMONSTRAÇÃO com um banco em memória (memdb.ts):
 // tudo cadastra/edita/exclui normalmente, mas os dados somem ao reiniciar.
 export const pool: Pool | null = databaseUrl
   ? new Pool({
       connectionString: databaseUrl,
+      types: tiposPg,
       ssl:
         process.env.NODE_ENV === 'production' || process.env.PGSSL === 'true'
           ? { rejectUnauthorized: false }
