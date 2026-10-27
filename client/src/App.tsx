@@ -27,6 +27,7 @@ const InsumoFormPage = lazy(() => import('./pages/InsumoFormPage'));
 const CategoriaInsumoFormPage = lazy(() => import('./pages/CategoriaInsumoFormPage'));
 const FornecedorFormPage = lazy(() => import('./pages/FornecedorFormPage'));
 const RepresentanteFormPage = lazy(() => import('./pages/RepresentanteFormPage'));
+const RepresentanteDetailPage = lazy(() => import('./pages/RepresentanteDetailPage'));
 // Fundação comercial (MASTER): formulário em PÁGINA PRÓPRIA (nunca modal).
 const CadastroComercialFormPage = lazy(() => import('./pages/CadastroComercialFormPage'));
 const MetaAcompanhamentoPage = lazy(() => import('./pages/MetaAcompanhamentoPage'));
@@ -298,6 +299,17 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="representantes">
                   <RepresentanteFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* FICHA + PAINEL do representante — PÁGINA própria (nunca drawer/
+                modal). Apresenta cadastro, território, equipe, hierarquia,
+                carteira, metas, comissão e indicadores derivados. */}
+            <Route
+              path="representantes/:id"
+              element={
+                <ModuleAccess moduleId="representantes">
+                  <RepresentanteDetailPage />
                 </ModuleAccess>
               }
             />

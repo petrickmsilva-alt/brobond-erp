@@ -1065,10 +1065,43 @@ export const RESOURCES: Record<string, Resource> = {
     labelFields: ['nome'],
     ops: ALL_OPS,
     notice:
-      'Desligar ou desativar um representante NÃO apaga histórico: vendas, clientes, propostas e comissões apuradas continuam apontando para ele. Um representante em uso não é excluído — ele é DESATIVADO.',
+      'Representante com histórico (vendas, clientes, propostas, comissões, metas, equipe ou carteira) NÃO é excluído — ele é DESATIVADO/desligado. Desativar não apaga venda, carteira, meta nem comissão: a verdade histórica permanece.',
     fields: [
       // ---------------- Identificação ----------------
+      {
+        name: 'codigo',
+        label: 'Código',
+        type: 'text',
+        search: true,
+        uniqueEmpresa: true,
+        maxLength: 24,
+        section: 'Identificação',
+        placeholder: 'REP00001',
+        hint: 'Identificador COMERCIAL legível, único por empresa (índice uq_representantes_empresa_codigo). Separado do id técnico e preservado no histórico. Em branco, o servidor gera o próximo código.',
+      },
+      {
+        name: 'tipo_pessoa',
+        label: 'Tipo de pessoa',
+        type: 'select',
+        default: 'PF',
+        section: 'Identificação',
+        options: [
+          { value: 'PF', label: 'Pessoa física (CPF)', tone: 'blue' },
+          { value: 'PJ', label: 'Pessoa jurídica (CNPJ)', tone: 'slate' },
+        ],
+        hint: 'Define QUAL documento vale: PF usa CPF; PJ usa CNPJ. Nunca se exige os dois.',
+      },
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, wide: true, section: 'Identificação' },
+      {
+        name: 'razao_social',
+        label: 'Razão social',
+        type: 'text',
+        search: true,
+        maxLength: 160,
+        section: 'Identificação',
+        hint: 'Pessoa jurídica: razão social do CNPJ. Para PF, o nome civil continua sendo o nome.',
+      },
+      { name: 'nome_fantasia', label: 'Nome fantasia', type: 'text', search: true, maxLength: 160, section: 'Identificação' },
       {
         name: 'cpf',
         label: 'CPF',
@@ -1077,7 +1110,38 @@ export const RESOURCES: Record<string, Resource> = {
         search: true,
         maxLength: 14,
         section: 'Identificação',
-        hint: 'CPF único por empresa (índice uq_representantes_cpf_empresa). O dígito verificador é conferido no servidor.',
+        hint: 'CPF único por empresa (índice uq_representantes_cpf_empresa). O dígito verificador é conferido no servidor e o valor é gravado sem máscara.',
+      },
+      {
+        name: 'cnpj',
+        label: 'CNPJ',
+        type: 'document',
+        documento: 'cnpj',
+        search: true,
+        maxLength: 18,
+        section: 'Identificação',
+        hint: 'CNPJ único por empresa (índice uq_representantes_cnpj_empresa). O dígito verificador é conferido no servidor. Exigido somente para pessoa jurídica.',
+      },
+      { name: 'data_nascimento', label: 'Data de nascimento', type: 'date', list: false, section: 'Identificação' },
+
+      // ---------------- Dados profissionais ----------------
+      {
+        name: 'tipo_representante',
+        label: 'Tipo de representante',
+        type: 'select',
+        default: 'REPRESENTANTE_COMERCIAL',
+        section: 'Dados profissionais',
+        options: [
+          { value: 'INTERNO', label: 'Interno', tone: 'slate' },
+          { value: 'EXTERNO', label: 'Externo', tone: 'blue' },
+          { value: 'REPRESENTANTE_COMERCIAL', label: 'Representante comercial', tone: 'blue' },
+          { value: 'SUPERVISOR', label: 'Supervisor', tone: 'amber' },
+          { value: 'COORDENADOR', label: 'Coordenador', tone: 'amber' },
+          { value: 'GERENTE', label: 'Gerente', tone: 'green' },
+          { value: 'PARCEIRO', label: 'Parceiro', tone: 'green' },
+          { value: 'TERCEIRIZADO', label: 'Terceirizado', tone: 'slate' },
+        ],
+        hint: 'PAPEL comercial. O cargo continua sendo a informação funcional — um não substitui o outro.',
       },
       {
         name: 'cargo',
@@ -1085,10 +1149,49 @@ export const RESOURCES: Record<string, Resource> = {
         type: 'text',
         maxLength: 60,
         search: true,
-        section: 'Identificação',
+        section: 'Dados profissionais',
         placeholder: 'Vendedor, Representante, Gerente comercial...',
       },
-      { name: 'regiao', label: 'Região', type: 'text', search: true, maxLength: 80, section: 'Identificação' },
+      { name: 'registro_profissional', label: 'Registro profissional', type: 'text', maxLength: 40, search: true, section: 'Dados profissionais' },
+      {
+        name: 'orgao_registro',
+        label: 'Órgão do registro',
+        type: 'text',
+        maxLength: 40,
+        section: 'Dados profissionais',
+        placeholder: 'CORE, CRC, OAB...',
+        hint: 'Opcional: só preencha quando a atividade exigir registro (ex.: CORE para representante comercial).',
+      },
+      { name: 'admissao', label: 'Admissão', type: 'date', list: false, section: 'Dados profissionais' },
+      {
+        name: 'desligamento',
+        label: 'Desligamento',
+        type: 'date',
+        list: false,
+        section: 'Dados profissionais',
+        hint: 'Registra a situação profissional e desativa o cadastro para NOVAS atribuições. NÃO apaga histórico de vendas, carteira, metas nem comissões já apuradas.',
+      },
+      {
+        ...ativo,
+        section: 'Dados profissionais',
+        hint: 'Inativo sai das opções de novos cadastros e do vínculo com novos pedidos; o histórico comercial permanece.',
+      },
+
+      // ---------------- Contato ----------------
+      { name: 'telefone', label: 'Telefone comercial', type: 'phone', maxLength: 20, search: true, section: 'Contato' },
+      { name: 'celular', label: 'Celular', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
+      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
+      { name: 'email', label: 'E-mail comercial', type: 'email', maxLength: 160, search: true, section: 'Contato' },
+
+      // ---------------- Endereço ----------------
+      { name: 'cep', label: 'CEP', type: 'cep', list: false, section: 'Endereço' },
+      { name: 'logradouro', label: 'Logradouro', type: 'text', maxLength: 160, list: false, section: 'Endereço' },
+      { name: 'numero', label: 'Número', type: 'text', maxLength: 20, list: false, section: 'Endereço' },
+      { name: 'complemento', label: 'Complemento', type: 'text', maxLength: 80, list: false, section: 'Endereço' },
+      { name: 'bairro', label: 'Bairro', type: 'text', maxLength: 80, list: false, section: 'Endereço' },
+      { name: 'cidade', label: 'Cidade', type: 'text', maxLength: 80, list: false, search: true, section: 'Endereço' },
+      { name: 'uf', label: 'UF', type: 'uf', list: false, search: true, section: 'Endereço' },
+      { name: 'pais', label: 'País', type: 'text', maxLength: 60, default: 'Brasil', list: false, section: 'Endereço', hint: 'Padrão Brasil. O campo é texto para permitir outros países sem reescrever o cadastro.' },
 
       // ---------------- Comercial ----------------
       {
@@ -1099,7 +1202,25 @@ export const RESOURCES: Record<string, Resource> = {
         max: 100,
         default: 0,
         section: 'Comercial',
-        hint: 'A comissão é paga sobre faturas efetivamente LIQUIDADAS, não sobre a venda criada.',
+        hint: 'Padrão de referência do cadastro. A comissão efetiva é apurada pelo MOTOR (planos/regras/atribuição) sobre faturas efetivamente LIQUIDADAS — nunca sobre a venda criada.',
+      },
+      {
+        name: 'territorio_id',
+        label: 'Território',
+        type: 'ref',
+        ref: 'territorios',
+        search: true,
+        section: 'Comercial',
+        hint: 'Vínculo com o DOMÍNIO de territórios (não é uma segunda tabela). O texto legado “Região” continua válido.',
+      },
+      {
+        name: 'regiao',
+        label: 'Região (legado)',
+        type: 'text',
+        search: true,
+        maxLength: 80,
+        section: 'Comercial',
+        hint: 'Texto livre herdado, preservado por compatibilidade. Para estrutura comercial com hierarquia e dono, use Território.',
       },
 
       // ---------------- Acesso ao ERP ----------------
@@ -1114,35 +1235,16 @@ export const RESOURCES: Record<string, Resource> = {
         hint: 'Vínculo OPCIONAL e único por empresa (uq_representantes_usuario_empresa): vincule para que a pessoa veja as próprias vendas e comissões ao entrar no ERP.',
       },
 
-      // ---------------- Contato ----------------
-      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, search: true, section: 'Contato' },
-      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
-      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, search: true, section: 'Contato' },
-
-      // ---------------- Situação profissional ----------------
-      { name: 'admissao', label: 'Admissão', type: 'date', list: false, section: 'Situação profissional' },
-      {
-        name: 'desligamento',
-        label: 'Desligamento',
-        type: 'date',
-        list: false,
-        section: 'Situação profissional',
-        hint: 'Preencher aqui registra apenas a situação profissional: NÃO apaga o histórico de vendas nem as comissões já apuradas.',
-      },
-      {
-        ...ativo,
-        section: 'Situação profissional',
-        hint: 'Inativo sai das opções de novos cadastros e do vínculo com novos pedidos; o histórico comercial permanece.',
-      },
-      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Situação profissional' },
+      // ---------------- Observações ----------------
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Observações' },
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
-    // Filtros da LISTAGEM (server-side, o mesmo contrato `f.<campo>` dos demais
-    // recursos): status e usuário do sistema — as duas colunas que recortam o
-    // cadastro com dado REAL. Cargo e região são texto livre: entram pela busca
-    // (`?q=`), não como filtro de igualdade.
-    filterFields: ['usuario_id', 'ativo'],
+    // Filtros da LISTAGEM (server-side, o mesmo contrato `f.<campo>`): status,
+    // tipo de representante, tipo de pessoa, território estruturado e usuário.
+    // `equipe_id` é um filtro VIRTUAL (a composição vive em `equipe_membros` e é
+    // resolvida no servidor em lote — nunca uma coluna duplicada aqui).
+    filterFields: ['tipo_representante', 'tipo_pessoa', 'territorio_id', 'usuario_id', 'ativo'],
     // Recorte de um clique acima da tabela — mesmo contrato `f.ativo` de Cores,
     // Fornecedores e Insumos (nenhum SQL novo).
     quickFilters: [

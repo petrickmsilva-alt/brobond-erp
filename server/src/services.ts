@@ -6,7 +6,7 @@ import { MemStore } from './memdb';
 import { PgStore, isPgAvailable, translatePgError } from './pgstore';
 import { hasDatabaseUrl } from './db';
 import { getResource, RESOURCES, type Resource } from './resources';
-import { labelOf, type ListParams, type Payload, type Row, type Store, type Tx } from './store';
+import { labelOf, type ListParams, type ListResult, type Payload, type Row, type Store, type Tx } from './store';
 import { validatePayload } from './validate';
 import { apenasDigitos, cnpjValido, cpfValido, tipoDocumento } from './documentos';
 import type { Request } from 'express';
@@ -15,6 +15,10 @@ import { attachImages, removeAllFiles } from './uploads';
 import { erroDependencias, montarDiagnostico, temHistoricoProtegido, type DiagnosticoDependencias } from './dependencias';
 import { aplicarRegrasPedido } from './itens';
 import { validarRegrasComerciais } from './comercial';
+import {
+  anotarComercialRepresentantes,
+  validarRegrasRepresentante,
+} from './representantes';
 import { aplicarRegrasOrdem, recalcularFichaValores, validarOrdemPayload } from './producao';
 import { RESUMO_MEDIDAS_VAZIO, resumoMedidasPorGrade, statusTabelaMedidas } from './medidas';
 import { hookTaxaLancamento, syncAporte, syncLancamentoCompra, syncLancamentoVenda, syncTransferencia } from './financeiro';
@@ -302,7 +306,12 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   // MULTIEMPRESA: o recorte entra como filtro obrigatório (AND) e descarta
   // qualquer `f.empresa_id` que o cliente tenha tentado injetar.
   const params: ListParams = { ...p, filter: aplicarFiltroEmpresa(r, p.filter, escopo) };
-  const out = await getStore().list(r, params);
+  // REPRESENTANTES 2.0: `f.equipe_id` e a busca pelo NOME DA EQUIPE são
+  // filtros VIRTUAIS (a composição vive em `equipe_membros`, não em uma coluna
+  // duplicada no cadastro). O caminho dedicado devolve lista/total/paginação
+  // corretos — e, quando não há recorte por equipe, a listagem segue 100% SQL.
+  const out = (r.key === 'representantes' ? await listRepresentantesPorEquipe(r, params, escopo) : null)
+    ?? (await getStore().list(r, params));
   await validarReferenciasDeSaida(r, out.rows, escopo);
   await attachImages(r, out.rows);
   anotarStatusSenha(r, out.rows);
@@ -312,7 +321,139 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   await attachGradeTamanhos(r, out.rows);
   await anotarGrades(r, out.rows, escopo);
   await anotarEstoqueInsumos(r, out.rows, escopo);
+  // Equipe vigente e carteira: projeção em lote (uma consulta por tabela),
+  // recortada pela empresa ativa — nunca um N+1.
+  if (r.key === 'representantes') await anotarComercialRepresentantes(getStore(), out.rows, escopo);
   return out;
+}
+
+/**
+ * LISTAGEM DE REPRESENTANTES × EQUIPE — recorte VIRTUAL.
+ *
+ * `f.equipe_id` e a busca pelo nome da equipe não existem como coluna em
+ * `representantes` (e NÃO devem existir: equipe é estrutura organizacional,
+ * com vigência, em `equipes_comerciais`/`equipe_membros`). Este caminho:
+ *
+ *   1. resolve os representantes das equipes que casam o recorte (UMA consulta
+ *      em `equipe_membros` + UMA busca de equipes por texto);
+ *   2. combina com a listagem normal do store (`q`/filtros de coluna reais);
+ *   3. pagina a UNIÃO em memória, com `total` correto.
+ *
+ * Devolve `null` quando não há recorte por equipe — aí a listagem continua
+ * sendo uma única consulta SQL paginada. O número de consultas é CONSTANTE
+ * (não cresce com a quantidade de representantes).
+ */
+async function listRepresentantesPorEquipe(
+  r: Resource,
+  params: ListParams,
+  escopo: EscopoEmpresa | undefined
+): Promise<ListResult | null> {
+  const filtro = (params.filter || {}) as Record<string, unknown>;
+  const equipeId = filtro.equipe_id === undefined || filtro.equipe_id === null || filtro.equipe_id === ''
+    ? null
+    : Number(filtro.equipe_id);
+  const termo = (params.q || '').trim();
+  // Sem recorte por equipe e sem termo de busca, a listagem É SQL puro.
+  if (!equipeId && !termo) return null;
+
+  const s = getStore();
+  const empresaId = escopo?.empresaId ?? EMPRESA_PADRAO;
+  const membros = getResource('equipe_membros');
+  const equipes = getResource('equipes_comerciais');
+  if (!membros || !equipes) return null;
+
+  // Representantes vinculados à equipe pedida (se houver).
+  let daEquipe: Set<number> | null = null;
+  if (equipeId) {
+    if (!Number.isInteger(equipeId) || equipeId <= 0) return { rows: [], total: 0, page: params.page, pageSize: params.pageSize };
+    const lista = await s.list(membros, {
+      page: 1,
+      pageSize: 50_000,
+      filter: { empresa_id: empresaId, equipe_id: equipeId, status: 'ativo' },
+    });
+    daEquipe = new Set(
+      lista.rows
+        .filter((m) => !m.saida)
+        .map((m) => Number(m.representante_id))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    );
+    if (!daEquipe.size) return { rows: [], total: 0, page: params.page, pageSize: params.pageSize };
+  }
+
+  // Busca pelo NOME da equipe: só entra se houver equipe que case os termos.
+  // Sem equipe casando e sem `f.equipe_id`, a busca segue pelo caminho SQL
+  // normal (os campos `search: true` do recurso) — o recorte virtual nunca
+  // intercepta uma busca comum.
+  let porNomeDeEquipe: Set<number> | null = null;
+  if (termo) {
+    const encontradas = await s.list(equipes, {
+      page: 1,
+      pageSize: 200,
+      q: termo,
+      filter: { empresa_id: empresaId },
+    });
+    if (!encontradas.rows.length && !equipeId) return null;
+    if (encontradas.rows.length) {
+      const ids = new Set(encontradas.rows.map((e) => Number(e.id)));
+      const lista = await s.list(membros, { page: 1, pageSize: 50_000, filter: { empresa_id: empresaId, status: 'ativo' } });
+      porNomeDeEquipe = new Set(
+        lista.rows
+          .filter((m) => ids.has(Number(m.equipe_id)) && !m.saida)
+          .map((m) => Number(m.representante_id))
+      );
+    }
+  }
+
+  if (!daEquipe && !porNomeDeEquipe) return null;
+
+  // Base: filtros de coluna reais (sem o virtual) e o recorte de empresa.
+  const { equipe_id: _equipe, ...reais } = filtro;
+  const baseFilter = { ...reais, empresa_id: empresaId };
+  const colunas = await s.list(r, {
+    page: 1,
+    pageSize: 50_000,
+    filter: baseFilter,
+    sort: params.sort,
+    dir: params.dir,
+  });
+
+  // Busca textual direta (quando há `q`, o store aplica os campos search:true).
+  const diretos = termo
+    ? await s.list(r, { page: 1, pageSize: 50_000, q: termo, filter: baseFilter, sort: params.sort, dir: params.dir })
+    : null;
+
+  const porId = new Map<number, Row>();
+  const incluir = (row: Row) => {
+    const id = Number(row.id);
+    if (!Number.isInteger(id)) return;
+    if (daEquipe && !daEquipe.has(id)) return;
+    const casaTexto = !params.q
+      ? true
+      : (diretos?.rows.some((d) => Number(d.id) === id) ?? false) || (porNomeDeEquipe?.has(id) ?? false);
+    if (!casaTexto) return;
+    porId.set(id, row);
+  };
+  for (const row of colunas.rows) incluir(row);
+  for (const row of diretos?.rows ?? []) incluir(row);
+
+  const rows = [...porId.values()];
+  // Ordenação: preserva o campo pedido; sem pedido, mantém a ordem do recurso.
+  const sort = params.sort;
+  if (sort) {
+    const sinal = (params.dir || 'asc').toLowerCase() === 'desc' ? -1 : 1;
+    rows.sort((a, b) => {
+      const va = a[sort];
+      const vb = b[sort];
+      const na = Number(va);
+      const nb = Number(vb);
+      if (Number.isFinite(na) && Number.isFinite(nb) && va !== null && vb !== null && va !== '' && vb !== '') return (na - nb) * sinal;
+      return String(va ?? '').localeCompare(String(vb ?? ''), 'pt-BR') * sinal;
+    });
+  }
+
+  const total = rows.length;
+  const inicio = (params.page - 1) * params.pageSize;
+  return { rows: rows.slice(inicio, inicio + params.pageSize), total, page: params.page, pageSize: params.pageSize };
 }
 
 /**
@@ -496,6 +637,7 @@ export async function getRecord(r: Resource, id: number, escopoOuAtor?: EscopoOu
   await attachGradeTamanhos(r, [row]);
   await anotarGrades(r, [row], escopo);
   await anotarEstoqueInsumos(r, [row], escopo);
+  if (r.key === 'representantes') await anotarComercialRepresentantes(getStore(), [row], escopo);
   return row;
 }
 
@@ -878,6 +1020,9 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       if (r.key === 'lancamentos_financeiros') hookTaxaLancamento(data, null);
       if (r.key === 'categorias_financeiras') await validarCategoriaPai(r, data, null, tx);
       if (r.key === 'clientes') await validarRegrasCliente(data, null, Number(data.empresa_id ?? escopo.empresaId), { body, tx });
+      // REPRESENTANTE 2.0 — código comercial, PF/PJ, documento único por
+      // empresa, contato/endereço canônicos e status × desligamento.
+      if (r.key === 'representantes') await validarRegrasRepresentante(s, data, null, Number(data.empresa_id ?? escopo.empresaId), { body, tx });
       if (r.key === 'transferencias_financeiras' && Number(data.conta_origem_id) === Number(data.conta_destino_id)) {
         throw new HttpError(400, 'Origem e destino precisam ser contas diferentes.', { conta_destino_id: 'Escolha outra conta' });
       }
@@ -1082,6 +1227,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       }
       if (r.key === 'ordens') await validarOrdemPayload(data, before);
       if (r.key === 'clientes') await validarRegrasCliente(data, before, Number(before.empresa_id ?? escopo.empresaId), { body, tx });
+      if (r.key === 'representantes') await validarRegrasRepresentante(s, data, before, Number(before.empresa_id ?? escopo.empresaId), { body, tx });
       // Lançamento: edição de valor/taxa recalcula o líquido
       if (r.key === 'lancamentos_financeiros') hookTaxaLancamento(data, before);
       if (r.key === 'categorias_financeiras') await validarCategoriaPai(r, data, before, tx);

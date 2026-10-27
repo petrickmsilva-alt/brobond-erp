@@ -12,13 +12,14 @@
 //     (na edição: "Salvar alterações");
 //   • nenhum `role="dialog"`/`aria-modal` é renderizado;
 //   • o formulário é o RecordForm dirigido por metadados, com as SEÇÕES reais
-//     do recurso (Identificação · Comercial · Acesso ao ERP · Contato ·
-//     Situação profissional) — e os campos são EXATAMENTE os que existem em
-//     `representantes` (db/schema.sql + migration 0021): nome, cpf, cargo,
-//     regiao, comissao_pct, usuario_id, telefone, whatsapp, email, admissao,
-//     desligamento, observacoes e ativo. Nenhum campo inventado (salário, meta,
-//     limite de crédito, banco/PIX, foto, ranking, faturamento ou "vendas
-//     totais" persistidas);
+//     do recurso (Identificação · Dados profissionais · Contato · Endereço ·
+//     Comercial · Acesso ao ERP · Observações) — e os campos são EXATAMENTE os
+//     que existem em `representantes` (db/schema.sql + migrations 0021/0048):
+//     código comercial, tipo de pessoa, PF/PJ (CPF/CNPJ, razão social, nome
+//     fantasia), tipo de representante, cargo, registro profissional, datas,
+//     contato, endereço estruturado, território, comissão padrão, usuário e
+//     observações. Nenhum campo inventado (salário, meta, limite de crédito,
+//     banco/PIX, foto, ranking, faturamento ou "vendas totais" persistidas);
 //   • CPF: máscara compartilhada do ERP; o dígito verificador e a unicidade por
 //     empresa são do SERVIDOR (409 com erro no campo, a página não fecha);
 //   • comissão: 0–100% com o texto de que a comissão é paga sobre faturas
@@ -83,19 +84,82 @@ vi.mock('../lib/meta', async (importOriginal) => {
     // SEM minPerfilEscrita: cadastro por empresa, operável por quem já tem acesso.
     ops: { create: true, update: true, delete: true },
     fields: [
-      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, wide: true, section: 'Identificação' },
+      // ---------------- Identificação ----------------
+      { name: 'codigo', label: 'Código', type: 'text', search: true, maxLength: 24, section: 'Identificação', placeholder: 'REP00001' },
       {
-        name: 'cpf',
-        label: 'CPF',
-        type: 'document',
-        documento: 'cpf',
-        search: true,
-        maxLength: 14,
+        name: 'tipo_pessoa',
+        label: 'Tipo de pessoa',
+        type: 'select',
+        default: 'PF',
         section: 'Identificação',
-        hint: 'CPF único por empresa (índice uq_representantes_cpf_empresa). O dígito verificador é conferido no servidor.',
+        options: [
+          { value: 'PF', label: 'Pessoa física (CPF)' },
+          { value: 'PJ', label: 'Pessoa jurídica (CNPJ)' },
+        ],
       },
-      { name: 'cargo', label: 'Cargo', type: 'text', maxLength: 60, search: true, section: 'Identificação' },
-      { name: 'regiao', label: 'Região', type: 'text', maxLength: 80, search: true, section: 'Identificação' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, wide: true, section: 'Identificação' },
+      { name: 'razao_social', label: 'Razão social', type: 'text', search: true, maxLength: 160, section: 'Identificação' },
+      { name: 'nome_fantasia', label: 'Nome fantasia', type: 'text', search: true, maxLength: 160, section: 'Identificação' },
+      { name: 'cpf', label: 'CPF', type: 'document', documento: 'cpf', search: true, maxLength: 14, section: 'Identificação' },
+      { name: 'cnpj', label: 'CNPJ', type: 'document', documento: 'cnpj', search: true, maxLength: 18, section: 'Identificação' },
+      { name: 'data_nascimento', label: 'Data de nascimento', type: 'date', list: false, section: 'Identificação' },
+
+      // ---------------- Dados profissionais ----------------
+      {
+        name: 'tipo_representante',
+        label: 'Tipo de representante',
+        type: 'select',
+        default: 'REPRESENTANTE_COMERCIAL',
+        section: 'Dados profissionais',
+        options: [
+          { value: 'INTERNO', label: 'Interno' },
+          { value: 'EXTERNO', label: 'Externo' },
+          { value: 'REPRESENTANTE_COMERCIAL', label: 'Representante comercial' },
+          { value: 'SUPERVISOR', label: 'Supervisor' },
+          { value: 'COORDENADOR', label: 'Coordenador' },
+          { value: 'GERENTE', label: 'Gerente' },
+          { value: 'PARCEIRO', label: 'Parceiro' },
+          { value: 'TERCEIRIZADO', label: 'Terceirizado' },
+        ],
+      },
+      { name: 'cargo', label: 'Cargo', type: 'text', maxLength: 60, search: true, section: 'Dados profissionais' },
+      { name: 'registro_profissional', label: 'Registro profissional', type: 'text', maxLength: 40, search: true, section: 'Dados profissionais' },
+      { name: 'orgao_registro', label: 'Órgão do registro', type: 'text', maxLength: 40, section: 'Dados profissionais' },
+      { name: 'admissao', label: 'Admissão', type: 'date', list: false, section: 'Dados profissionais' },
+      {
+        name: 'desligamento',
+        label: 'Desligamento',
+        type: 'date',
+        list: false,
+        section: 'Dados profissionais',
+        hint: 'Registra a situação profissional e desativa o cadastro para NOVAS atribuições. NÃO apaga histórico de vendas, carteira, metas nem comissões já apuradas.',
+      },
+      {
+        name: 'ativo',
+        label: 'Ativo',
+        type: 'boolean',
+        default: true,
+        section: 'Dados profissionais',
+        hint: 'Inativo sai das opções de novos cadastros e do vínculo com novos pedidos; o histórico comercial permanece.',
+      },
+
+      // ---------------- Contato ----------------
+      { name: 'telefone', label: 'Telefone comercial', type: 'phone', maxLength: 20, search: true, section: 'Contato' },
+      { name: 'celular', label: 'Celular', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
+      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
+      { name: 'email', label: 'E-mail comercial', type: 'email', maxLength: 160, search: true, section: 'Contato' },
+
+      // ---------------- Endereço ----------------
+      { name: 'cep', label: 'CEP', type: 'cep', list: false, section: 'Endereço' },
+      { name: 'logradouro', label: 'Logradouro', type: 'text', maxLength: 160, list: false, section: 'Endereço' },
+      { name: 'numero', label: 'Número', type: 'text', maxLength: 20, list: false, section: 'Endereço' },
+      { name: 'complemento', label: 'Complemento', type: 'text', maxLength: 80, list: false, section: 'Endereço' },
+      { name: 'bairro', label: 'Bairro', type: 'text', maxLength: 80, list: false, section: 'Endereço' },
+      { name: 'cidade', label: 'Cidade', type: 'text', maxLength: 80, list: false, search: true, section: 'Endereço' },
+      { name: 'uf', label: 'UF', type: 'uf', list: false, search: true, section: 'Endereço' },
+      { name: 'pais', label: 'País', type: 'text', maxLength: 60, default: 'Brasil', list: false, section: 'Endereço' },
+
+      // ---------------- Comercial ----------------
       {
         name: 'comissao_pct',
         label: 'Comissão padrão (%)',
@@ -104,8 +168,12 @@ vi.mock('../lib/meta', async (importOriginal) => {
         max: 100,
         default: 0,
         section: 'Comercial',
-        hint: 'A comissão é paga sobre faturas efetivamente LIQUIDADAS, não sobre a venda criada.',
+        hint: 'Padrão de referência do cadastro. A comissão efetiva é apurada pelo MOTOR (planos/regras/atribuição) sobre faturas efetivamente LIQUIDADAS — nunca sobre a venda criada.',
       },
+      { name: 'territorio_id', label: 'Território', type: 'ref', ref: 'territorios', search: true, section: 'Comercial' },
+      { name: 'regiao', label: 'Região (legado)', type: 'text', search: true, maxLength: 80, section: 'Comercial' },
+
+      // ---------------- Acesso ao ERP ----------------
       {
         name: 'usuario_id',
         label: 'Usuário do sistema',
@@ -114,29 +182,10 @@ vi.mock('../lib/meta', async (importOriginal) => {
         list: false,
         search: true,
         section: 'Acesso ao ERP',
-        hint: 'Vínculo OPCIONAL e único por empresa (uq_representantes_usuario_empresa).',
       },
-      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, search: true, section: 'Contato' },
-      { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
-      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, search: true, section: 'Contato' },
-      { name: 'admissao', label: 'Admissão', type: 'date', list: false, section: 'Situação profissional' },
-      {
-        name: 'desligamento',
-        label: 'Desligamento',
-        type: 'date',
-        list: false,
-        section: 'Situação profissional',
-        hint: 'Preencher aqui registra apenas a situação profissional: NÃO apaga o histórico de vendas nem as comissões já apuradas.',
-      },
-      {
-        name: 'ativo',
-        label: 'Ativo',
-        type: 'boolean',
-        default: true,
-        section: 'Situação profissional',
-        hint: 'Inativo sai das opções de novos cadastros e do vínculo com novos pedidos; o histórico comercial permanece.',
-      },
-      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Situação profissional' },
+
+      // ---------------- Observações ----------------
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Observações' },
       { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false },
       { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', readonly: true, list: false },
     ],
@@ -153,19 +202,38 @@ const apiPut = vi.mocked(api.put);
 
 /** Payload completo de criação só com o nome preenchido (padrões do recurso). */
 const PAYLOAD_MINIMO = {
+  codigo: null,
+  tipo_pessoa: 'PF',
   nome: 'Ana Souza',
+  razao_social: null,
+  nome_fantasia: null,
   cpf: null,
+  cnpj: null,
+  data_nascimento: null,
+  tipo_representante: 'REPRESENTANTE_COMERCIAL',
   cargo: null,
-  regiao: null,
-  comissao_pct: '0',
-  usuario_id: null,
-  telefone: null,
-  whatsapp: null,
-  email: null,
+  registro_profissional: null,
+  orgao_registro: null,
   admissao: null,
   desligamento: null,
-  observacoes: null,
   ativo: true,
+  telefone: null,
+  celular: null,
+  whatsapp: null,
+  email: null,
+  cep: null,
+  logradouro: null,
+  numero: null,
+  complemento: null,
+  bairro: null,
+  cidade: null,
+  uf: null,
+  pais: 'Brasil',
+  comissao_pct: '0',
+  territorio_id: null,
+  regiao: null,
+  usuario_id: null,
+  observacoes: null,
 };
 
 const USUARIOS = [
@@ -173,17 +241,41 @@ const USUARIOS = [
   { value: 9, label: 'Marina Alves' },
 ];
 
+const TERRITORIOS = [
+  { value: 10, label: 'Centro-Oeste' },
+  { value: 11, label: 'Sudeste' },
+];
+
 const REGISTRO = {
   id: 4,
+  codigo: 'REP00004',
+  tipo_pessoa: 'PF',
   nome: 'Carlos Lima',
+  razao_social: null,
+  nome_fantasia: null,
   cpf: '52998224725',
+  cnpj: null,
+  data_nascimento: '1985-04-12',
+  tipo_representante: 'GERENTE',
   cargo: 'Representante',
+  registro_profissional: 'CORE-1234',
+  orgao_registro: 'CORE',
   regiao: 'Norte',
   comissao_pct: 3.5,
+  territorio_id: 10,
   usuario_id: 7,
   telefone: '62999998888',
+  celular: '62988887777',
   whatsapp: null,
   email: 'carlos@brobond.com.br',
+  cep: '74000000',
+  logradouro: 'Avenida Central',
+  numero: '100',
+  complemento: null,
+  bairro: 'Setor Bueno',
+  cidade: 'Goiânia',
+  uf: 'GO',
+  pais: 'Brasil',
   admissao: '2024-03-01',
   desligamento: null,
   observacoes: null,
@@ -221,10 +313,13 @@ beforeEach(() => {
   apiGet.mockReset();
   apiPost.mockReset();
   apiPut.mockReset();
-  // `/usuarios/options` é o MESMO contrato do RecordForm genérico.
-  apiGet.mockImplementation(async (path: string) =>
-    String(path) === '/usuarios/options' ? (USUARIOS as never) : ({} as never)
-  );
+  // `/usuarios/options` e `/territorios/options` são os MESMOS contratos de
+  // opções do RecordForm genérico (nada de lista digitada na tela).
+  apiGet.mockImplementation(async (path: string) => {
+    if (String(path) === '/usuarios/options') return USUARIOS as never;
+    if (String(path) === '/territorios/options') return TERRITORIOS as never;
+    return {} as never;
+  });
   apiPost.mockResolvedValue({ id: 9 } as never);
   apiPut.mockResolvedValue({ id: 4 } as never);
 });
@@ -234,9 +329,11 @@ describe('novo representante — página própria do ERP', () => {
     renderPage();
 
     expect(await screen.findByRole('heading', { name: /Novo representante/ })).toBeInTheDocument();
-    expect(
-      screen.getByText('Cadastre o representante com o cargo, a região, a comissão padrão e o contato usados nas vendas, propostas e comissões.')
-    ).toBeInTheDocument();
+    // A descrição é a do CADASTRO 2.0 (fonte única em lib/lista.ts): identidade
+    // profissional e contato/endereço aqui; equipe, carteira, metas e comissão
+    // nos próprios domínios.
+    expect(screen.getByText(/identidade profissional \(código, PF\/PJ, CPF\/CNPJ\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Equipe, carteira, metas e comissão vivem nos próprios domínios/)).toBeInTheDocument();
 
     // Voltar é um LINK para a lista (navegação normal do ERP).
     expect(screen.getByRole('link', { name: /Voltar/ })).toHaveAttribute('href', '/representantes');
@@ -252,32 +349,55 @@ describe('novo representante — página própria do ERP', () => {
     await screen.findByRole('heading', { name: /Novo representante/ });
 
     expect(screen.getByRole('heading', { name: 'Identificação' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Dados profissionais' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Contato' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Endereço' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Comercial' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Acesso ao ERP' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Contato' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Situação profissional' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Observações' })).toBeInTheDocument();
   });
 
   it('mostra os campos reais do cadastro e nada inventado', async () => {
     renderPage();
 
     // Identificação
-    expect(await screen.findByLabelText(/^Nome/)).toBeInTheDocument();
+    expect(await screen.findByLabelText('Código')).toBeInTheDocument();
+    expect(screen.getByLabelText('Tipo de pessoa')).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Nome(?! fantasia)/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Razão social')).toBeInTheDocument();
+    expect(screen.getByLabelText('Nome fantasia')).toBeInTheDocument();
     expect(screen.getByLabelText('CPF')).toBeInTheDocument();
+    expect(screen.getByLabelText('CNPJ')).toBeInTheDocument();
+    expect(screen.getByLabelText('Data de nascimento')).toBeInTheDocument();
+    // Dados profissionais
+    expect(screen.getByLabelText('Tipo de representante')).toBeInTheDocument();
     expect(screen.getByLabelText('Cargo')).toBeInTheDocument();
-    expect(screen.getByLabelText('Região')).toBeInTheDocument();
-    // Comercial
-    expect(screen.getByLabelText(/Comissão padrão/)).toBeInTheDocument();
-    // Acesso ao ERP
-    expect(screen.getByLabelText('Usuário do sistema')).toBeInTheDocument();
-    // Contato
-    expect(screen.getByLabelText('Telefone')).toBeInTheDocument();
-    expect(screen.getByLabelText('WhatsApp')).toBeInTheDocument();
-    expect(screen.getByLabelText('E-mail')).toBeInTheDocument();
-    // Situação profissional
+    expect(screen.getByLabelText('Registro profissional')).toBeInTheDocument();
+    expect(screen.getByLabelText('Órgão do registro')).toBeInTheDocument();
     expect(screen.getByLabelText('Admissão')).toBeInTheDocument();
     expect(screen.getByLabelText('Desligamento')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Ativo' })).toBeChecked();
+    // Contato
+    expect(screen.getByLabelText('Telefone comercial')).toBeInTheDocument();
+    expect(screen.getByLabelText('Celular')).toBeInTheDocument();
+    expect(screen.getByLabelText('WhatsApp')).toBeInTheDocument();
+    expect(screen.getByLabelText('E-mail comercial')).toBeInTheDocument();
+    // Endereço ESTRUTURADO (não um texto único)
+    expect(screen.getByLabelText('CEP')).toBeInTheDocument();
+    expect(screen.getByLabelText('Logradouro')).toBeInTheDocument();
+    expect(screen.getByLabelText('Número')).toBeInTheDocument();
+    expect(screen.getByLabelText('Complemento')).toBeInTheDocument();
+    expect(screen.getByLabelText('Bairro')).toBeInTheDocument();
+    expect(screen.getByLabelText('Cidade')).toBeInTheDocument();
+    expect(screen.getByLabelText('UF')).toBeInTheDocument();
+    expect(screen.getByLabelText('País')).toHaveValue('Brasil');
+    // Comercial
+    expect(screen.getByLabelText(/Comissão padrão/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Território')).toBeInTheDocument();
+    expect(screen.getByLabelText('Região (legado)')).toBeInTheDocument();
+    // Acesso ao ERP
+    expect(screen.getByLabelText('Usuário do sistema')).toBeInTheDocument();
+    // Observações
     expect(screen.getByLabelText('Observações')).toBeInTheDocument();
 
     // Nenhum campo INVENTADO aparece (o domínio de `representantes` não tem
@@ -301,18 +421,23 @@ describe('novo representante — página própria do ERP', () => {
     renderPage();
 
     expect(await screen.findByLabelText(/Comissão padrão/)).toHaveValue('0');
-    expect(screen.getByText(/A comissão é paga sobre faturas efetivamente LIQUIDADAS/)).toBeInTheDocument();
+    expect(screen.getByText(/apurada pelo MOTOR \(planos\/regras\/atribuição\) sobre faturas efetivamente LIQUIDADAS/)).toBeInTheDocument();
   });
 
   it('cria o representante enviando o contrato existente e volta para a lista', async () => {
     renderPage();
 
-    fireEvent.change(await screen.findByLabelText(/^Nome/), { target: { value: '  Ana Souza  ' } });
+    fireEvent.change(await screen.findByLabelText(/^Nome(?! fantasia)/), { target: { value: '  Ana Souza  ' } });
     fireEvent.change(screen.getByLabelText('CPF'), { target: { value: '52998224725' } });
     fireEvent.change(screen.getByLabelText('Cargo'), { target: { value: 'Vendedora' } });
-    fireEvent.change(screen.getByLabelText('Região'), { target: { value: 'Centro-Oeste' } });
-    fireEvent.change(screen.getByLabelText('Telefone'), { target: { value: '6233334444' } });
-    fireEvent.change(screen.getByLabelText('E-mail'), { target: { value: 'ana@brobond.com.br' } });
+    fireEvent.change(screen.getByLabelText('Região (legado)'), { target: { value: 'Centro-Oeste' } });
+    fireEvent.change(screen.getByLabelText('Telefone comercial'), { target: { value: '6233334444' } });
+    fireEvent.change(screen.getByLabelText('Celular'), { target: { value: '62988887777' } });
+    fireEvent.change(screen.getByLabelText('E-mail comercial'), { target: { value: 'ana@brobond.com.br' } });
+    fireEvent.change(screen.getByLabelText('Cidade'), { target: { value: 'Goiânia' } });
+    fireEvent.change(screen.getByLabelText('UF'), { target: { value: 'GO' } });
+    fireEvent.change(screen.getByLabelText('Logradouro'), { target: { value: 'Avenida Central' } });
+    fireEvent.change(screen.getByLabelText('Número'), { target: { value: '100' } });
     fireEvent.change(screen.getByLabelText('Usuário do sistema'), { target: { value: '7' } });
     fireEvent.click(botaoSalvar());
 
@@ -324,7 +449,12 @@ describe('novo representante — página própria do ERP', () => {
       cargo: 'Vendedora',
       regiao: 'Centro-Oeste',
       telefone: '+55 (62) 3333-4444',
+      celular: '+55 (62) 98888-7777',
       email: 'ana@brobond.com.br',
+      cidade: 'Goiânia',
+      uf: 'GO',
+      logradouro: 'Avenida Central',
+      numero: '100',
       usuario_id: '7',
     });
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/representantes'));
@@ -333,7 +463,7 @@ describe('novo representante — página própria do ERP', () => {
   it('só o nome é obrigatório: campos vazios viram null no payload (contrato preservado)', async () => {
     renderPage();
 
-    fireEvent.change(await screen.findByLabelText(/^Nome/), { target: { value: 'Ana Souza' } });
+    fireEvent.change(await screen.findByLabelText(/^Nome(?! fantasia)/), { target: { value: 'Ana Souza' } });
     fireEvent.click(botaoSalvar());
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/representantes', PAYLOAD_MINIMO));
@@ -357,7 +487,7 @@ describe('novo representante — página própria do ERP', () => {
     );
     renderPage();
 
-    fireEvent.change(await screen.findByLabelText(/^Nome/), { target: { value: 'Ana Souza' } });
+    fireEvent.change(await screen.findByLabelText(/^Nome(?! fantasia)/), { target: { value: 'Ana Souza' } });
     fireEvent.change(screen.getByLabelText('CPF'), { target: { value: '52998224725' } });
     fireEvent.click(botaoSalvar());
 
@@ -373,7 +503,7 @@ describe('novo representante — página própria do ERP', () => {
 
     const usuario = await screen.findByLabelText('Usuário do sistema');
     await waitFor(() => expect(usuario).not.toBeDisabled());
-    expect(screen.getByRole('option', { name: '— Nenhum —' })).toBeInTheDocument();
+    expect(screen.getAllByRole('option', { name: '— Nenhum —' }).length).toBeGreaterThan(0);
     expect(screen.getByRole('option', { name: 'Ana Souza' })).toBeInTheDocument();
     expect(apiGet).toHaveBeenCalledWith('/usuarios/options');
   });
@@ -382,10 +512,10 @@ describe('novo representante — página própria do ERP', () => {
     renderPage();
 
     expect(await screen.findByLabelText('Desligamento')).toBeInTheDocument();
-    expect(screen.getByText(/NÃO apaga o histórico de vendas nem as comissões já apuradas/)).toBeInTheDocument();
+    expect(screen.getByText(/NÃO apaga histórico de vendas, carteira, metas nem comissões já apuradas/)).toBeInTheDocument();
     expect(screen.getByText(/o histórico comercial permanece/)).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText(/^Nome/), { target: { value: 'Carlos Lima' } });
+    fireEvent.change(screen.getByLabelText(/^Nome(?! fantasia)/), { target: { value: 'Carlos Lima' } });
     fireEvent.change(screen.getByLabelText('Desligamento'), { target: { value: '2026-01-31' } });
     fireEvent.click(botaoSalvar());
 
@@ -399,7 +529,7 @@ describe('novo representante — página própria do ERP', () => {
     apiPost.mockImplementation(() => new Promise((r) => { resolver = r; }) as never);
     renderPage();
 
-    fireEvent.change(await screen.findByLabelText(/^Nome/), { target: { value: 'Ana Souza' } });
+    fireEvent.change(await screen.findByLabelText(/^Nome(?! fantasia)/), { target: { value: 'Ana Souza' } });
     fireEvent.click(botaoSalvar());
 
     await waitFor(() => expect(botaoSalvar()).toBeDisabled());
@@ -433,25 +563,37 @@ describe('novo representante — página própria do ERP', () => {
 describe('editar representante — página própria do ERP', () => {
   beforeEach(() => {
     routeParams = { id: '4' };
-    apiGet.mockImplementation(async (path: string) =>
-      String(path) === '/usuarios/options' ? (USUARIOS as never) : (REGISTRO as never)
-    );
+    apiGet.mockImplementation(async (path: string) => {
+      if (String(path) === '/usuarios/options') return USUARIOS as never;
+      if (String(path) === '/territorios/options') return TERRITORIOS as never;
+      return REGISTRO as never;
+    });
   });
 
   it('abre a página "Editar representante" com os dados do registro carregados', async () => {
     renderPage();
 
     expect(await screen.findByRole('heading', { name: /Editar representante/ })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText(/^Nome/)).toHaveValue('Carlos Lima'));
+    await waitFor(() => expect(screen.getByLabelText(/^Nome(?! fantasia)/)).toHaveValue('Carlos Lima'));
     // O formulário compartilhado exibe o valor gravado (dígitos); a máscara
     // atua na digitação e a formatação aparece na lista/ficha.
+    expect(screen.getByLabelText('Código')).toHaveValue('REP00004');
+    expect(screen.getByLabelText('Tipo de pessoa')).toHaveValue('PF');
     expect(screen.getByLabelText('CPF')).toHaveValue('52998224725');
+    expect(screen.getByLabelText('CNPJ')).toHaveValue('');
+    expect(screen.getByLabelText('Tipo de representante')).toHaveValue('GERENTE');
     expect(screen.getByLabelText('Cargo')).toHaveValue('Representante');
-    expect(screen.getByLabelText('Região')).toHaveValue('Norte');
+    expect(screen.getByLabelText('Registro profissional')).toHaveValue('CORE-1234');
+    expect(screen.getByLabelText('Região (legado)')).toHaveValue('Norte');
     expect(screen.getByLabelText(/Comissão padrão/)).toHaveValue('3,5');
+    expect(screen.getByLabelText('Território')).toHaveValue('10');
     expect(screen.getByLabelText('Usuário do sistema')).toHaveValue('7');
-    expect(screen.getByLabelText('Telefone')).toHaveValue('62999998888');
-    expect(screen.getByLabelText('E-mail')).toHaveValue('carlos@brobond.com.br');
+    expect(screen.getByLabelText('Telefone comercial')).toHaveValue('62999998888');
+    expect(screen.getByLabelText('Celular')).toHaveValue('62988887777');
+    expect(screen.getByLabelText('E-mail comercial')).toHaveValue('carlos@brobond.com.br');
+    expect(screen.getByLabelText('CEP')).toHaveValue('74000000');
+    expect(screen.getByLabelText('Logradouro')).toHaveValue('Avenida Central');
+    expect(screen.getByLabelText('UF')).toHaveValue('GO');
     expect(screen.getByLabelText('Admissão')).toHaveValue('2024-03-01');
     expect(screen.getByRole('checkbox', { name: 'Ativo' })).not.toBeChecked();
     expect(screen.getByText(/Alterando o representante “Carlos Lima”/)).toBeInTheDocument();
@@ -468,26 +610,45 @@ describe('editar representante — página própria do ERP', () => {
 
   it('salva por PUT preservando os demais campos e volta para a lista', async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByLabelText(/^Nome/)).toHaveValue('Carlos Lima'));
+    await waitFor(() => expect(screen.getByLabelText(/^Nome(?! fantasia)/)).toHaveValue('Carlos Lima'));
 
-    fireEvent.change(screen.getByLabelText(/^Nome/), { target: { value: 'Carlos Souza' } });
+    fireEvent.change(screen.getByLabelText(/^Nome(?! fantasia)/), { target: { value: 'Carlos Souza' } });
     fireEvent.click(botaoSalvar());
 
     await waitFor(() =>
       expect(apiPut).toHaveBeenCalledWith('/representantes/4', {
+        codigo: 'REP00004',
+        tipo_pessoa: 'PF',
         nome: 'Carlos Souza',
+        razao_social: null,
+        nome_fantasia: null,
         cpf: '52998224725',
+        cnpj: null,
+        data_nascimento: '1985-04-12',
+        tipo_representante: 'GERENTE',
         cargo: 'Representante',
-        regiao: 'Norte',
-        comissao_pct: '3,5',
-        usuario_id: '7',
-        telefone: '62999998888',
-        whatsapp: null,
-        email: 'carlos@brobond.com.br',
+        registro_profissional: 'CORE-1234',
+        orgao_registro: 'CORE',
         admissao: '2024-03-01',
         desligamento: null,
-        observacoes: null,
         ativo: false,
+        telefone: '62999998888',
+        celular: '62988887777',
+        whatsapp: null,
+        email: 'carlos@brobond.com.br',
+        cep: '74000000',
+        logradouro: 'Avenida Central',
+        numero: '100',
+        complemento: null,
+        bairro: 'Setor Bueno',
+        cidade: 'Goiânia',
+        uf: 'GO',
+        pais: 'Brasil',
+        comissao_pct: '3,5',
+        territorio_id: '10',
+        regiao: 'Norte',
+        usuario_id: '7',
+        observacoes: null,
       })
     );
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/representantes'));
@@ -496,6 +657,7 @@ describe('editar representante — página própria do ERP', () => {
   it('registro inexistente ou de outra empresa (404) mostra o caminho de volta, sem modal', async () => {
     apiGet.mockImplementation(async (path: string) => {
       if (String(path) === '/usuarios/options') return USUARIOS as never;
+      if (String(path) === '/territorios/options') return TERRITORIOS as never;
       throw new ApiError(404, 'Representante não encontrado.');
     });
     renderPage();

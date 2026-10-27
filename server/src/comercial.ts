@@ -31,6 +31,7 @@ import { getResource, type Resource } from './resources';
 import type { Row, Store, Tx } from './store';
 import { checkAccess, getStore } from './services';
 import { aplicarFiltroEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
+import { R_COMISSOES_EVENTOS } from './comissoes';
 
 /**
  * RECURSO INTERNO `comissoes_apuradas`.
@@ -1360,57 +1361,309 @@ export async function apiArvoreTerritorios(req: Request, res: Response) {
   res.json({ total: linhas.length, arvore: raizes.map((r) => montar(r, 1)) });
 }
 
-/** GET /api/comercial/representantes/:id/painel — carteira + equipe + hierarquia. */
+/**
+ * PAINEL DO REPRESENTANTE — visão consolidada, DERIVADA das fontes oficiais.
+ *
+ * Nada aqui é digitado nem persistido: cadastro, território, equipe,
+ * hierarquia, carteira, metas, comissão e indicadores são LIDOS dos domínios
+ * próprios e apresentados juntos. A tela do representante (`/representantes/:id`)
+ * usa exatamente este contrato — LISTA → PÁGINA, sem modal.
+ *
+ * CONSULTAS: uma por tabela envolvida (14 no total, constante). Nenhuma
+ * consulta por cliente, por meta ou por equipe — não há N+1.
+ */
+export async function painelDoRepresentante(s: Store, escopo: EscopoEmpresa, id: number) {
+  const rep = await lerDaEmpresa(s, 'representantes', id, escopo);
+  const [
+    carteira,
+    membros,
+    hierarquia,
+    indicadores,
+    equipes,
+    clientes,
+    metas,
+    apuradas,
+    eventos,
+    vendas,
+    itens,
+    atribuicoes,
+    representantes,
+    territorios,
+  ] = await Promise.all([
+    listarTudo(s, 'representante_cliente', escopo, { representante_id: id }),
+    listarTudo(s, 'equipe_membros', escopo, { representante_id: id }),
+    listarTudo(s, 'representante_hierarquia', escopo, {}),
+    calcularIndicadores(s, escopo, { representante_id: id }, { de: null, ate: null }),
+    listarTudo(s, 'equipes_comerciais', escopo, {}),
+    listarTudo(s, 'clientes', escopo, {}),
+    listarTudo(s, 'metas', escopo, { representante_id: id }),
+    listarTudo(s, R_COMISSOES_APURADAS, escopo, { representante_id: id }),
+    listarTudo(s, R_COMISSOES_EVENTOS, escopo, { representante_id: id }),
+    listarTudo(s, 'vendas', escopo, {}),
+    listarTudo(s, 'itens_venda', escopo, {}),
+    listarTudo(s, 'venda_atribuicao', escopo, {}),
+    listarTudo(s, 'representantes', escopo, {}),
+    listarTudo(s, 'territorios', escopo, {}),
+  ]);
+
+  const hoje = hojeISO();
+  const nomesRep = new Map(representantes.map((r) => [Number(r.id), String(r.nome ?? `#${r.id}`)]));
+  const nomesEquipe = new Map(equipes.map((e) => [Number(e.id), String(e.nome ?? `#${e.id}`)]));
+  const nomesTerritorio = new Map(territorios.map((t) => [Number(t.id), String(t.nome ?? `#${t.id}`)]));
+  const clientesPorId = new Map(clientes.map((c) => [Number(c.id), c]));
+
+  // ---- CARTEIRA (histórico temporal preservado) ---------------------------
+  const linhasCarteira = carteira
+    .slice()
+    .sort((a, b) => String(diaISO(b.inicio) ?? '').localeCompare(String(diaISO(a.inicio) ?? '')))
+    .map((c) => {
+      const clienteId = Number(c.cliente_id);
+      const cliente = clientesPorId.get(clienteId);
+      const inicio = diaISO(c.inicio);
+      const fim = diaISO(c.fim);
+      const status = String(c.status ?? 'ativo');
+      const vigente = status === 'ativo' && periodoCobre(inicio, fim, hoje);
+      return {
+        cliente_id: clienteId,
+        cliente: cliente ? String(cliente.nome ?? `#${clienteId}`) : `#${clienteId}`,
+        cliente_ativo: cliente ? cliente.ativo !== false : null,
+        territorio_id: idOuNull(c.territorio_id),
+        inicio,
+        fim,
+        status,
+        participacao_pct: numero(c.participacao_pct),
+        vigente,
+      };
+    });
+  const vigentes = linhasCarteira.filter((c) => c.vigente);
+  const canceladas = linhasCarteira.filter((c) => c.status === 'cancelado');
+
+  // ---- EQUIPES vigentes + histórico --------------------------------------
+  const linhasEquipe = membros
+    .slice()
+    .sort((a, b) => String(diaISO(b.entrada) ?? '').localeCompare(String(diaISO(a.entrada) ?? '')))
+    .map((m) => {
+      const equipeId = Number(m.equipe_id);
+      const entrada = diaISO(m.entrada);
+      const saida = diaISO(m.saida);
+      const status = String(m.status ?? 'ativo');
+      return {
+        equipe_id: equipeId,
+        equipe: nomesEquipe.get(equipeId) ?? `#${equipeId}`,
+        papel: String(m.papel ?? 'membro'),
+        participacao_pct: numero(m.participacao_pct),
+        entrada,
+        saida,
+        status,
+        vigente: status === 'ativo' && !saida && (!entrada || entrada <= hoje),
+      };
+    });
+
+  // ---- HIERARQUIA (a verdade continua em representante_hierarquia) --------
+  const hierarquiaAtiva = hierarquia.filter(
+    (h) => String(h.status ?? 'ativo') === 'ativo' && !diaISO(h.fim)
+  );
+  const supervisores = hierarquiaAtiva
+    .filter((h) => idOuNull(h.subordinado_id) === id)
+    .map((h) => ({
+      representante_id: Number(h.supervisor_id),
+      nome: nomesRep.get(Number(h.supervisor_id)) ?? `#${h.supervisor_id}`,
+      nivel: String(h.nivel ?? 'supervisor'),
+      inicio: diaISO(h.inicio),
+    }));
+  const subordinados = hierarquiaAtiva
+    .filter((h) => idOuNull(h.supervisor_id) === id)
+    .map((h) => ({
+      representante_id: Number(h.subordinado_id),
+      nome: nomesRep.get(Number(h.subordinado_id)) ?? `#${h.subordinado_id}`,
+      nivel: String(h.nivel ?? 'supervisor'),
+      inicio: diaISO(h.inicio),
+    }));
+
+  // ---- METAS: realizado DERIVADO das vendas faturadas ---------------------
+  // A participação vem da ATRIBUIÇÃO congelada na venda; sem atribuição, cai
+  // para `vendas.representante_id` — o mesmo critério dos indicadores.
+  const itensPorVenda = new Map<number, Row[]>();
+  for (const item of itens) {
+    const vid = Number(item.venda_id);
+    const lista = itensPorVenda.get(vid);
+    if (lista) lista.push(item);
+    else itensPorVenda.set(vid, [item]);
+  }
+  const atribPorVenda = new Map<number, Row[]>();
+  for (const a of atribuicoes) {
+    const vid = Number(a.venda_id);
+    const lista = atribPorVenda.get(vid);
+    if (lista) lista.push(a);
+    else atribPorVenda.set(vid, [a]);
+  }
+  const participacao = new Map<number, number>();
+  for (const venda of vendas) {
+    if (!STATUS_FATURADO.has(String(venda.status ?? ''))) continue;
+    const lista = (atribPorVenda.get(Number(venda.id)) ?? []).filter((a) => a.representante_id !== null);
+    if (lista.length) {
+      const fracao = lista
+        .filter((a) => idOuNull(a.representante_id) === id)
+        .reduce((soma, a) => soma + numero(a.participacao_pct) / 100, 0);
+      if (fracao > 0) participacao.set(Number(venda.id), fracao);
+    } else if (idOuNull(venda.representante_id) === id) {
+      participacao.set(Number(venda.id), 1);
+    }
+  }
+  const vendasDoRep = vendas.filter((v) => participacao.has(Number(v.id)));
+
+  const linhasMeta = metas
+    .slice()
+    .sort((a, b) => String(diaISO(b.periodo_inicio) ?? '').localeCompare(String(diaISO(a.periodo_inicio) ?? '')))
+    .map((m) => {
+      const inicio = diaISO(m.periodo_inicio);
+      const fim = diaISO(m.periodo_fim);
+      const metrica = String(m.metrica ?? 'faturamento');
+      let faturamento = 0;
+      let pedidos = 0;
+      let pecas = 0;
+      const clientesDaMeta = new Set<number>();
+      for (const venda of vendasDoRep) {
+        const dia = diaISO(venda.data);
+        if (!dia || !periodoCobre(inicio, fim, dia)) continue;
+        const fracao = participacao.get(Number(venda.id)) ?? 0;
+        faturamento += numero(venda.total) * fracao;
+        pedidos += 1;
+        pecas += (itensPorVenda.get(Number(venda.id)) ?? []).reduce((soma, i) => soma + numero(i.quantidade), 0) * fracao;
+        const clienteId = idOuNull(venda.cliente_id);
+        if (clienteId) clientesDaMeta.add(clienteId);
+      }
+      const metaValor = metrica === 'quantidade' ? numero(m.quantidade_meta) : numero(m.valor_meta);
+      const realizado =
+        metrica === 'faturamento'
+          ? faturamento
+          : metrica === 'quantidade'
+            ? pecas
+            : metrica === 'pedidos'
+              ? pedidos
+              : metrica === 'clientes'
+                ? clientesDaMeta.size
+                : 0;
+      return {
+        meta_id: Number(m.id),
+        alvo_tipo: String(m.alvo_tipo ?? 'representante'),
+        metrica,
+        periodo_inicio: inicio,
+        periodo_fim: fim,
+        status: String(m.status ?? 'ativa'),
+        meta: arredondar(metaValor),
+        realizado: arredondar(realizado),
+        atingimento_pct: metaValor > 0 ? arredondar((realizado / metaValor) * 100) : null,
+        falta: arredondar(Math.max(0, metaValor - realizado)),
+      };
+    });
+
+  // ---- COMISSÃO: apuração (motor) + efetivação (recebimento) --------------
+  const apuradoTotal = apuradas
+    .filter((a) => String(a.status ?? 'apurada') === 'apurada')
+    .reduce((soma, a) => soma + numero(a.valor), 0);
+  const estornadoTotal = apuradas
+    .filter((a) => String(a.status ?? '') === 'estornada')
+    .reduce((soma, a) => soma + numero(a.valor), 0);
+  const efetivado = eventos.reduce(
+    (soma, e) => soma + (String(e.tipo ?? '').toLowerCase().includes('estorno') ? -numero(e.valor) : numero(e.valor)),
+    0
+  );
+
+  // ---- RANKING: posição no faturamento da empresa (mesma fonte) -----------
+  const ranking = indicadores.por_representante;
+  const posicao = ranking.findIndex((l) => l.representante_id === id);
+
+  const territorioId = idOuNull(rep.territorio_id);
+
+  return {
+    representante: {
+      id: Number(rep.id),
+      codigo: rep.codigo ?? null,
+      nome: rep.nome ?? null,
+      tipo_pessoa: rep.tipo_pessoa ?? 'PF',
+      tipo_representante: rep.tipo_representante ?? 'REPRESENTANTE_COMERCIAL',
+      cpf: rep.cpf ?? null,
+      cnpj: rep.cnpj ?? null,
+      razao_social: rep.razao_social ?? null,
+      nome_fantasia: rep.nome_fantasia ?? null,
+      cargo: rep.cargo ?? null,
+      registro_profissional: rep.registro_profissional ?? null,
+      orgao_registro: rep.orgao_registro ?? null,
+      data_nascimento: diaISO(rep.data_nascimento),
+      admissao: diaISO(rep.admissao),
+      desligamento: diaISO(rep.desligamento),
+      ativo: rep.ativo !== false,
+      comissao_pct: numero(rep.comissao_pct),
+      usuario_id: idOuNull(rep.usuario_id),
+      contato: {
+        telefone: rep.telefone ?? null,
+        celular: rep.celular ?? null,
+        whatsapp: rep.whatsapp ?? null,
+        email: rep.email ?? null,
+      },
+      endereco: {
+        cep: rep.cep ?? null,
+        logradouro: rep.logradouro ?? null,
+        numero: rep.numero ?? null,
+        complemento: rep.complemento ?? null,
+        bairro: rep.bairro ?? null,
+        cidade: rep.cidade ?? null,
+        uf: rep.uf ?? null,
+        pais: rep.pais ?? 'Brasil',
+      },
+      regiao_legado: rep.regiao ?? null,
+    },
+    estrutura: {
+      territorio: territorioId
+        ? {
+            id: territorioId,
+            nome: nomesTerritorio.get(territorioId) ?? `#${territorioId}`,
+            ...(() => {
+              const t = territorios.find((x) => Number(x.id) === territorioId);
+              return { codigo: t?.codigo ?? null, tipo: t?.tipo ?? null, uf: t?.uf ?? null, cidade: t?.cidade ?? null };
+            })(),
+          }
+        : null,
+      equipes: linhasEquipe,
+      hierarquia: { supervisores, subordinados },
+    },
+    carteira: {
+      vigentes: vigentes.length,
+      encerrados: linhasCarteira.filter((c) => c.status !== 'cancelado' && !c.vigente).length,
+      cancelados: canceladas.length,
+      total: linhasCarteira.length,
+      clientes_ativos: vigentes.filter((c) => c.cliente_ativo !== false).length,
+      clientes_inativos: vigentes.filter((c) => c.cliente_ativo === false).length,
+      clientes: linhasCarteira,
+    },
+    metas: {
+      total: linhasMeta.length,
+      ativas: linhasMeta.filter((m) => m.status === 'ativa').length,
+      linhas: linhasMeta,
+    },
+    comissao: {
+      padrao_pct: numero(rep.comissao_pct),
+      apurado_total: arredondar(apuradoTotal),
+      estornado_total: arredondar(estornadoTotal),
+      efetivado_total: arredondar(efetivado),
+      apuracoes: apuradas.length,
+      eventos: eventos.length,
+    },
+    indicadores,
+    ranking: {
+      posicao: posicao >= 0 ? posicao + 1 : null,
+      total: ranking.length,
+      faturamento: posicao >= 0 ? ranking[posicao].faturamento : 0,
+    },
+  };
+}
+
+/** GET /api/comercial/representantes/:id/painel — painel completo do representante. */
 export async function apiPainelRepresentante(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('representantes')!, actor, 'read');
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Representante inválido.');
-  const escopo = escopoDaRequisicao(req);
-  const s = getStore();
-  await lerDaEmpresa(s, 'representantes', id, escopo);
-
-  const [carteira, membros, hierarquia, indicadores] = await Promise.all([
-    listarTudo(s, 'representante_cliente', escopo, { representante_id: id }),
-    listarTudo(s, 'equipe_membros', escopo, { representante_id: id }),
-    listarTudo(s, 'representante_hierarquia', escopo, {}),
-    calcularIndicadores(s, escopo, { representante_id: id }, { de: null, ate: null }),
-  ]);
-
-  const hoje = hojeISO();
-  res.json({
-    representante_id: id,
-    indicadores,
-    carteira: {
-      ativos: carteira.filter((c) => !diaISO(c.fim) && String(c.status ?? 'ativo') === 'ativo').length,
-      total: carteira.length,
-      clientes: carteira
-        .filter((c) => String(c.status ?? 'ativo') !== 'cancelado')
-        .map((c) => ({
-          cliente_id: Number(c.cliente_id),
-          territorio_id: c.territorio_id,
-          inicio: diaISO(c.inicio),
-          fim: diaISO(c.fim),
-          status: c.status,
-          participacao_pct: numero(c.participacao_pct),
-          vigente: periodoCobre(diaISO(c.inicio), diaISO(c.fim), hoje) && String(c.status ?? 'ativo') === 'ativo',
-        })),
-    },
-    equipes: membros.map((m) => ({
-      equipe_id: Number(m.equipe_id),
-      papel: m.papel,
-      participacao_pct: numero(m.participacao_pct),
-      entrada: diaISO(m.entrada),
-      saida: diaISO(m.saida),
-      status: m.status,
-    })),
-    hierarquia: {
-      supervisores: hierarquia
-        .filter((h) => idOuNull(h.subordinado_id) === id && String(h.status ?? 'ativo') === 'ativo' && !diaISO(h.fim))
-        .map((h) => ({ supervisor_id: Number(h.supervisor_id), nivel: h.nivel })),
-      subordinados: hierarquia
-        .filter((h) => idOuNull(h.supervisor_id) === id && String(h.status ?? 'ativo') === 'ativo' && !diaISO(h.fim))
-        .map((h) => ({ subordinado_id: Number(h.subordinado_id), nivel: h.nivel })),
-    },
-  });
+  res.json(await painelDoRepresentante(getStore(), escopoDaRequisicao(req), id));
 }

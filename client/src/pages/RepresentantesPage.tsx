@@ -8,18 +8,25 @@
 // Cores, Coleções, Grades e Tamanhos. Aqui só existe a LISTA; "Novo
 // representante" e "Editar" NAVEGAM — nunca abrem modal/drawer/overlay/sheet.
 //
-// CAMPOS REAIS (db/schema.sql + migration 0021 — nenhum campo inventado):
-// nome, cpf, cargo, regiao, comissao_pct, usuario_id, telefone, whatsapp,
-// email, admissao, desligamento, observacoes, ativo, criado_em e
-// atualizado_em. NÃO existem salário, meta, limite de crédito, banco/PIX,
-// "comissão acumulada", "vendas totais persistidas", foto, tabela de preço,
-// código interno nem departamento — e a tela não os inventa.
+// CAMPOS REAIS (db/schema.sql + migrations 0021 e 0048 — nenhum campo
+// inventado): codigo, tipo_pessoa, cpf, cnpj, razao_social, nome_fantasia,
+// tipo_representante, registro_profissional, orgao_registro, nome, cargo,
+// data_nascimento, admissao, desligamento, ativo, comissao_pct, territorio_id,
+// regiao (legado), usuario_id, telefone, celular, whatsapp, email, endereço
+// estruturado, observacoes, criado_em e atualizado_em. NÃO existem salário,
+// meta, limite de crédito, banco/PIX, "comissão acumulada", "vendas totais
+// persistidas", foto nem tabela de preço — e a tela não os inventa.
 //
 // COLUNAS — todas com dado REAL no backend:
 //   • Representante → `representantes.nome` (informação principal)
-//   • CPF           → `representantes.cpf` (documento formatado)
-//   • Cargo         → `representantes.cargo`   (informação secundária)
-//   • Região        → `representantes.regiao`  (informação secundária)
+//   • Código        → `representantes.codigo`  (identificador comercial)
+//   • CPF/CNPJ      → apresentação conforme `tipo_pessoa` (PF usa cpf, PJ usa
+//                     cnpj) — nunca os dois na mesma linha
+//   • Tipo          → `representantes.tipo_representante` (papel comercial)
+//   • Cargo         → `representantes.cargo`   (informação funcional)
+//   • Território    → `representantes.territorio_id` (label do domínio)
+//   • Equipe        → projeção de `equipe_membros` (equipe VIGENTE)
+//   • Carteira      → projeção de `representante_cliente` (vínculos vigentes)
 //   • Comissão      → `representantes.comissao_pct`
 //   • Usuário       → `representantes.usuario_id` (label vinda do join do
 //                     servidor; `usuarios` é adminOnly, então o rótulo é o que
@@ -38,10 +45,13 @@
 // pelos DÍGITOS (o mesmo mecanismo de documentos/telefones do ERP), então
 // "529.982.247-25" e "52998224725" encontram o mesmo registro.
 //
-// FILTROS (server-side, contrato `f.<campo>`): STATUS (Todos/Ativos/Inativos)
-// e USUÁRIO VINCULADO (`f.usuario_id`, com as opções do próprio contrato
-// `/usuarios/options`). Cargo e região são texto livre: entram pela busca, sem
-// inventar um endpoint de valores distintos.
+// FILTROS (server-side, contrato `f.<campo>`): STATUS (Todos/Ativos/Inativos),
+// TIPO DE REPRESENTANTE (`f.tipo_representante`), TERRITÓRIO
+// (`f.territorio_id`, com as opções do DOMÍNIO em `/territorios/options`) e
+// USUÁRIO VINCULADO (`f.usuario_id`). Cargo, código, documento e região são
+// texto livre: entram pela busca, sem inventar endpoint de valores distintos.
+// Equipe tem filtro VIRTUAL no servidor (`f.equipe_id`, resolvido a partir de
+// `equipe_membros`) — a tela não duplica a composição.
 //
 // MULTIEMPRESA: listagem, filtros, utilização e ações são recortados pela
 // empresa ativa no servidor (`empresa: true` no recurso) — nenhuma consulta
@@ -54,7 +64,7 @@
 // nenhuma FK removida.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Download, Handshake, Pencil, Plus, Power, RefreshCw, Trash2 } from 'lucide-react';
+import { BarChart3, Download, Handshake, Pencil, Plus, Power, RefreshCw, Trash2 } from 'lucide-react';
 import { api, ApiError, downloadFile } from '../lib/api';
 import { useMeta, type Field, type ListResult, type Option } from '../lib/meta';
 import { formatPhone } from '../lib/format';
@@ -88,26 +98,54 @@ import {
 
 type Representante = {
   id: number;
+  codigo: string | null;
   nome: string | null;
+  tipo_pessoa: string | null;
+  tipo_representante: string | null;
   cpf: string | null;
+  cnpj: string | null;
+  razao_social: string | null;
+  nome_fantasia: string | null;
   cargo: string | null;
   regiao: string | null;
   comissao_pct: number | string | null;
+  territorio_id: number | null;
+  territorio_id__label?: string | null;
   usuario_id: number | null;
   usuario_id__label?: string | null;
   telefone: string | null;
+  celular: string | null;
   whatsapp: string | null;
   email: string | null;
   ativo?: boolean;
   /** Contagem REAL de pedidos de venda (agregada no servidor). */
   uso_vinculado?: number;
   uso_vinculado_label?: string;
-  /** Apresentação: telefone · e-mail que a API já devolveu na linha. */
+  /** Projeção de equipe vigente (equipe_membros) — anotada em lote. */
+  equipe_label?: string | null;
+  equipe_count?: number;
+  /** Projeção de carteira (representante_cliente) — anotada em lote. */
+  carteira_vinculos?: number;
+  carteira_historico?: number;
+  /** Apresentação: documento e contato montados com o que a API devolveu. */
+  documento?: string | null;
   contato?: string | null;
 };
 
 const PAGE_SIZE = 25;
 const TAMANHOS_PAGINA = [25, 50, 100];
+
+/** Tipos de representante (espelho do CHECK do banco / options do recurso). */
+const TIPOS_REPRESENTANTE = [
+  { value: 'INTERNO', label: 'Interno' },
+  { value: 'EXTERNO', label: 'Externo' },
+  { value: 'REPRESENTANTE_COMERCIAL', label: 'Representante comercial' },
+  { value: 'SUPERVISOR', label: 'Supervisor' },
+  { value: 'COORDENADOR', label: 'Coordenador' },
+  { value: 'GERENTE', label: 'Gerente' },
+  { value: 'PARCEIRO', label: 'Parceiro' },
+  { value: 'TERCEIRIZADO', label: 'Terceirizado' },
+];
 
 /**
  * Colunas da listagem.
@@ -119,13 +157,32 @@ const TAMANHOS_PAGINA = [25, 50, 100];
  * apresentado.
  */
 const COLUNAS: Field[] = [
+  { name: 'codigo', label: 'Código', type: 'text', list: true },
   { name: 'nome', label: 'Representante', type: 'text', list: true },
-  { name: 'cpf', label: 'CPF', type: 'document', list: true },
+  { name: 'documento', label: 'CPF/CNPJ', type: 'document', virtual: true, list: true, hint: 'Documento conforme o tipo de pessoa (CPF para PF, CNPJ para PJ).' },
+  {
+    name: 'tipo_representante',
+    label: 'Tipo',
+    type: 'select',
+    list: true,
+    options: [
+      { value: 'INTERNO', label: 'Interno', tone: 'slate' },
+      { value: 'EXTERNO', label: 'Externo', tone: 'blue' },
+      { value: 'REPRESENTANTE_COMERCIAL', label: 'Rep. comercial', tone: 'blue' },
+      { value: 'SUPERVISOR', label: 'Supervisor', tone: 'amber' },
+      { value: 'COORDENADOR', label: 'Coordenador', tone: 'amber' },
+      { value: 'GERENTE', label: 'Gerente', tone: 'green' },
+      { value: 'PARCEIRO', label: 'Parceiro', tone: 'green' },
+      { value: 'TERCEIRIZADO', label: 'Terceirizado', tone: 'slate' },
+    ],
+  },
   { name: 'cargo', label: 'Cargo', type: 'text', list: true },
-  { name: 'regiao', label: 'Região', type: 'text', list: true },
+  { name: 'territorio_id', label: 'Território', type: 'ref', ref: 'territorios', list: true },
+  { name: 'equipe_label', label: 'Equipe', type: 'text', virtual: true, list: true, hint: 'Equipes vigentes do representante (equipe_membros).' },
   { name: 'comissao_pct', label: 'Comissão', type: 'percent', list: true },
   { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios', list: true },
-  { name: 'contato', label: 'Contato', type: 'text', virtual: true, list: true, hint: 'Telefone e e-mail do cadastro do representante.' },
+  { name: 'contato', label: 'Contato', type: 'text', virtual: true, list: true, hint: 'Telefone/celular e e-mail do cadastro do representante.' },
+  { name: 'carteira_vinculos', label: 'Carteira', type: 'integer', virtual: true, list: true, hint: 'Clientes com vínculo de carteira vigente (representante_cliente).' },
   { name: 'ativo', label: 'Status', type: 'boolean', list: true },
   {
     name: 'uso_vinculado',
@@ -145,13 +202,22 @@ function rotuloDaLinha(row: Record<string, any>): string {
 /** Contato para a coluna de apresentação (telefone · e-mail, null se vazio). */
 function contatoDaLinha(row: Record<string, any>): string | null {
   const telefone = formatPhone(row.telefone);
+  const celular = formatPhone(row.celular);
   const whatsapp = formatPhone(row.whatsapp);
   const email = String(row.email ?? '').trim();
   const partes: string[] = [];
   if (telefone) partes.push(telefone);
-  else if (whatsapp) partes.push(`${whatsapp} (WhatsApp)`);
+  if (celular) partes.push(`${celular} (celular)`);
+  if (!telefone && !celular && whatsapp) partes.push(`${whatsapp} (WhatsApp)`);
   if (email) partes.push(email);
   return partes.length ? partes.join(' · ') : null;
+}
+
+/** Documento de apresentação: CPF para PF, CNPJ para PJ (o que existir). */
+function documentoDaLinha(row: Record<string, any>): string | null {
+  const valor = String(row.tipo_pessoa ?? '').toUpperCase() === 'PJ' ? row.cnpj ?? row.cpf : row.cpf ?? row.cnpj;
+  const digitos = String(valor ?? '').replace(/\D/g, '');
+  return digitos || null;
 }
 
 export default function RepresentantesPage() {
@@ -186,6 +252,11 @@ export default function RepresentantesPage() {
   const [buscaAplicada, setBuscaAplicada] = useState('');
   const [status, setStatus] = useState('');
   const [usuarioId, setUsuarioId] = useState('');
+  const [tipo, setTipo] = useState('');
+  const [territorioId, setTerritorioId] = useState('');
+  // Territórios da empresa ativa (opções do próprio domínio — nenhuma lista
+  // paralela): o filtro é server-side (`f.territorio_id`).
+  const [territorioOpts, setTerritorioOpts] = useState<Option[]>([]);
   // Opções do filtro "Usuário vinculado" — o MESMO contrato `/usuarios/options`
   // usado pelos selects do ERP. `usuarios` é adminOnly: quando a API nega, o
   // filtro simplesmente não é oferecido (nada de erro na tela).
@@ -212,6 +283,22 @@ export default function RepresentantesPage() {
     return () => window.clearTimeout(t);
   }, [busca]);
 
+  // Opções do filtro de território (o MESMO contrato `/territorios/options`).
+  useEffect(() => {
+    let vivo = true;
+    api
+      .get<Option[]>('/territorios/options')
+      .then((o) => {
+        if (vivo && Array.isArray(o)) setTerritorioOpts(o);
+      })
+      .catch(() => {
+        if (vivo) setTerritorioOpts([]);
+      });
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
   // Opções do filtro de usuário (silencioso quando o perfil não pode listar).
   useEffect(() => {
     let vivo = true;
@@ -234,12 +321,14 @@ export default function RepresentantesPage() {
     if (buscaAplicada) p.set('q', buscaAplicada);
     if (status) p.set('f.ativo', status);
     if (usuarioId) p.set('f.usuario_id', usuarioId);
+    if (tipo) p.set('f.tipo_representante', tipo);
+    if (territorioId) p.set('f.territorio_id', territorioId);
     if (sort) {
       p.set('sort', sort.field);
       p.set('dir', sort.dir);
     }
     return p.toString();
-  }, [buscaAplicada, status, usuarioId, sort]);
+  }, [buscaAplicada, status, usuarioId, tipo, territorioId, sort]);
 
   const params = useMemo(() => {
     const p = new URLSearchParams(paramsFiltros);
@@ -254,7 +343,7 @@ export default function RepresentantesPage() {
       const d = await api.get<ListResult<Representante>>(`/representantes?${params}`);
       // `contato` é apresentação (telefone · e-mail): monta com o que a API já
       // devolveu — nenhuma consulta por linha.
-      setLinhas(d.rows.map((r) => ({ ...r, contato: contatoDaLinha(r) })));
+      setLinhas(d.rows.map((r) => ({ ...r, documento: documentoDaLinha(r), contato: contatoDaLinha(r) })));
       setTotal(d.total);
       if (d.total > 0 && d.rows.length === 0 && page > 1) setPage(Math.max(1, Math.ceil(d.total / pageSize)));
       setErro('');
@@ -269,7 +358,7 @@ export default function RepresentantesPage() {
     void carregar();
   }, [carregar]);
 
-  const recorteAtivo = buscaAplicada !== '' || status !== '' || usuarioId !== '';
+  const recorteAtivo = buscaAplicada !== '' || status !== '' || usuarioId !== '' || tipo !== '' || territorioId !== '';
 
   /** Exporta a lista atual (honrando busca, ordenação e filtros) — mesmo
       endpoint genérico do CRUD (`/representantes/export`). */
@@ -363,6 +452,12 @@ export default function RepresentantesPage() {
   const renderAcoes = (linha: Record<string, any>): ReactNode => {
     const row = linha as Representante;
     const itens = [
+      {
+        id: 'ficha',
+        label: 'Ver ficha e painel',
+        icon: <BarChart3 className="h-4 w-4" />,
+        onSelect: () => navigate(`/representantes/${row.id}`),
+      },
       canUpdate && {
         id: 'editar',
         label: 'Editar',
@@ -416,7 +511,7 @@ export default function RepresentantesPage() {
             Representantes
           </span>
         }
-        description="Vendedores e representantes: cargo, região, comissão padrão, contato e utilização nas vendas."
+        description="Cadastro mestre do time comercial: código, PF/PJ, tipo, cargo, território, equipe, comissão padrão, contato e utilização nas vendas."
         actions={
           <>
             <button className="btn-secondary" onClick={() => void carregar()} disabled={carregando} title="Atualizar lista">
@@ -484,6 +579,48 @@ export default function RepresentantesPage() {
             }}
           />
 
+          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-navy-200">
+            <span className="sr-only">Filtrar por tipo de representante</span>
+            <select
+              className="input !w-auto"
+              value={tipo}
+              onChange={(e) => {
+                setTipo(e.target.value);
+                setPage(1);
+              }}
+              aria-label="Filtrar por tipo de representante"
+            >
+              <option value="">Todos os tipos</option>
+              {TIPOS_REPRESENTANTE.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {territorioOpts.length > 0 && (
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-navy-200">
+              <span className="sr-only">Filtrar por território</span>
+              <select
+                className="input !w-auto"
+                value={territorioId}
+                onChange={(e) => {
+                  setTerritorioId(e.target.value);
+                  setPage(1);
+                }}
+                aria-label="Filtrar por território"
+              >
+                <option value="">Todos os territórios</option>
+                {territorioOpts.map((o) => (
+                  <option key={o.value} value={String(o.value)}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
           {usuarioOpts.length > 0 && (
             <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-navy-200">
               <span className="sr-only">Filtrar por usuário do sistema</span>
@@ -514,6 +651,8 @@ export default function RepresentantesPage() {
                 setBusca('');
                 setStatus('');
                 setUsuarioId('');
+                setTipo('');
+                setTerritorioId('');
                 setPage(1);
               }}
               title="Remover todos os filtros"

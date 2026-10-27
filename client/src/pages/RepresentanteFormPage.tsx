@@ -15,20 +15,31 @@
 // REUTILIZA os componentes JÁ existentes do ERP — nenhum design system novo:
 //   • `PageHeader`, `Alert`, `Spinner`, `useToast`  (components/ui)
 //   • `RecordForm` dirigido pelos metadados de GET /api/meta — inclusive as
-//     SEÇÕES do formulário (Identificação · Comercial · Acesso ao ERP ·
-//     Contato · Situação profissional), declaradas nos próprios campos do
-//     recurso no servidor
+//     SEÇÕES do formulário (Identificação · Dados profissionais · Contato ·
+//     Endereço · Comercial · Acesso ao ERP · Observações), declaradas nos
+//     próprios campos do recurso no servidor
 //   • `validarFormulario` / `toPayload` / `initialValues` (as MESMAS regras do
 //     CRUD genérico — um campo nunca tem duas validações no ERP; a máscara de
 //     CPF e a conferência do dígito verificador vêm do servidor)
 //   • `lib/lista` (rótulos/descrição do cadastro, sem texto duplicado)
 //
 // CAMPOS — os que EXISTEM de verdade em `representantes` (db/schema.sql +
-// migration 0021): nome, cpf, cargo, regiao, comissao_pct, usuario_id,
-// telefone, whatsapp, email, admissao, desligamento, observacoes e ativo.
-// NÃO existem (e por isso NÃO aparecem): salário, meta, limite de crédito,
-// banco/PIX, comissão acumulada, vendas totais, foto, tabela de preço, código
-// interno ou departamento.
+// migrations 0021 e 0048): codigo, tipo_pessoa, cpf/cnpj, razao_social,
+// nome_fantasia, tipo_representante, cargo, registro_profissional,
+// orgao_registro, data_nascimento, admissao, desligamento, ativo, telefone,
+// celular, whatsapp, email, endereço estruturado (cep, logradouro, numero,
+// complemento, bairro, cidade, uf, pais), comissao_pct, territorio_id, regiao
+// (legado), usuario_id e observacoes. NÃO existem (e por isso NÃO aparecem):
+// salário, meta, limite de crédito, banco/PIX, comissão acumulada, vendas
+// totais, foto, tabela de preço ou departamento — equipe, hierarquia, carteira,
+// metas e comissão vivem nos próprios domínios.
+//
+// PF × PJ: `tipo_pessoa` decide QUAL documento vale. O formulário mostra os
+// dois campos, mas o servidor recusa os dois preenchidos ao mesmo tempo e
+// recusa PJ sem CNPJ — a mensagem volta no campo, sem fechar a página.
+//
+// CÓDIGO COMERCIAL: em branco, o SERVIDOR gera o próximo (REP00001); na
+// edição, limpar o campo não apaga o identificador histórico.
 //
 // vendedor: `representantes` é a entidade OFICIAL de vendedor/funcionário —
 // aqui não se cria outra. O vínculo com `usuarios` (`usuario_id`) é OPCIONAL e

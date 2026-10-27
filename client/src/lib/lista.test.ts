@@ -345,46 +345,61 @@ describe('apresentação da listagem de grades', () => {
 // usuario_id, contato, ativo e a utilização agregada pelo servidor).
 // ============================================================================
 describe('representantes — configuração da listagem', () => {
+  // Campos do CADASTRO MESTRE 2.0 (schema.sql + migration 0048). `documento`,
+  // `equipe_label` e `contato` são colunas de APRESENTAÇÃO (virtual) montadas
+  // com o que a API já devolveu na linha; `uso_vinculado` é anotado no
+  // servidor em lote. Nenhum campo inventado.
   const campos: Field[] = [
-    campo('nome', { label: 'Nome', type: 'text', section: 'Identificação' }),
-    campo('cpf', { label: 'CPF', type: 'document', section: 'Identificação' }),
-    campo('cargo', { label: 'Cargo', section: 'Identificação' }),
-    campo('regiao', { label: 'Região', section: 'Identificação' }),
+    campo('codigo', { label: 'Código' }),
+    campo('nome', { label: 'Nome', section: 'Identificação' }),
+    campo('documento', { label: 'CPF/CNPJ', type: 'document', virtual: true }),
+    campo('tipo_representante', { label: 'Tipo', type: 'select' }),
+    campo('cargo', { label: 'Cargo' }),
+    campo('territorio_id', { label: 'Território', type: 'ref', ref: 'territorios' }),
+    campo('equipe_label', { label: 'Equipe', virtual: true }),
     campo('comissao_pct', { label: 'Comissão padrão (%)', type: 'percent', section: 'Comercial' }),
-    campo('usuario_id', { label: 'Usuário do sistema', type: 'ref', ref: 'usuarios', list: false }),
-    campo('telefone', { label: 'Telefone', type: 'phone' }),
-    campo('email', { label: 'E-mail', type: 'email' }),
+    campo('usuario_id', { label: 'Usuário do sistema', type: 'ref', ref: 'usuarios' }),
+    campo('contato', { label: 'Contato', virtual: true }),
+    campo('carteira_vinculos', { label: 'Carteira', type: 'integer', virtual: true }),
     campo('ativo', { label: 'Ativo', type: 'boolean' }),
     campo('uso_vinculado', { label: 'Utilização', type: 'integer', virtual: true }),
   ];
 
   it('ordena as colunas do domínio e usa os rótulos de apresentação', () => {
     const ordem = camposOrdenados(campos, 'representantes').map((f) => f.name);
-    expect(ordem.slice(0, 9)).toEqual([
+    expect(ordem).toEqual([
+      'codigo',
       'nome',
-      'cpf',
+      'documento',
+      'tipo_representante',
       'cargo',
-      'regiao',
+      'territorio_id',
+      'equipe_label',
       'comissao_pct',
       'usuario_id',
+      'contato',
+      'carteira_vinculos',
       'ativo',
       'uso_vinculado',
-      'telefone',
     ]);
-    expect(rotuloDaColuna(campos[0], 'representantes')).toBe('Representante');
-    expect(rotuloDaColuna(campos[8], 'representantes')).toBe('Status');
-    expect(larguraDaColuna(campos[0], 'representantes').min).toBe('min-w-[200px]');
+    expect(rotuloDaColuna(campos[1], 'representantes')).toBe('Representante');
+    expect(rotuloDaColuna(campos[2], 'representantes')).toBe('CPF/CNPJ');
+    expect(rotuloDaColuna(campos[11], 'representantes')).toBe('Status');
+    expect(larguraDaColuna(campos[1], 'representantes').min).toBe('min-w-[190px]');
   });
 
   it('o cartão mostra o essencial do representante, sem campo inventado', () => {
     expect(camposDoCard(campos, 'representantes').map((f) => f.name)).toEqual([
+      'codigo',
+      'documento',
+      'tipo_representante',
       'cargo',
-      'regiao',
+      'territorio_id',
+      'equipe_label',
       'comissao_pct',
-      'usuario_id',
-      'cpf',
+      'contato',
+      'carteira_vinculos',
       'ativo',
-      'uso_vinculado',
     ]);
   });
 
@@ -392,11 +407,14 @@ describe('representantes — configuração da listagem', () => {
     expect(rotuloNovo('representantes', 'Representante')).toBe('Novo representante');
     expect(rotuloEditar('representantes', 'Representante')).toBe('Editar representante');
     expect(rotuloSalvar('representantes')).toBe('Salvar representante');
-    expect(descricaoDoCadastro('representantes')).toMatch(/vendas, propostas e comissões/);
-    expect(placeholderBusca('representantes', 'Representantes')).toMatch(/CPF/);
+    // A descrição fala do que o CADASTRO guarda e devolve EQUIPE, CARTEIRA,
+    // METAS e COMISSÃO aos domínios próprios (sem segunda estrutura).
+    expect(descricaoDoCadastro('representantes')).toMatch(/código, PF\/PJ, CPF\/CNPJ/);
+    expect(descricaoDoCadastro('representantes')).toMatch(/Equipe, carteira, metas e comissão vivem nos próprios domínios/);
+    expect(placeholderBusca('representantes', 'Representantes')).toMatch(/CPF\/CNPJ/);
     expect(textoVazio('representantes', 'Representante')).toEqual({
       titulo: 'Nenhum representante cadastrado',
-      descricao: 'Cadastre o primeiro representante para vincular vendas, clientes e comissões.',
+      descricao: 'Cadastre o primeiro representante para vincular vendas, clientes, metas e comissões.',
     });
     expect(textoContagem('representantes', 1, 3, 3)).toBe('1–3 de 3 representantes');
     expect(textoContagem('representantes', 0, 0, 0)).toBe('Nenhum registro');

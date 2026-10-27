@@ -1178,21 +1178,24 @@ await (async () => {
   check('representantes: RBAC preservado — SEM minPerfilEscrita (é cadastro por empresa)', rep?.minPerfilEscrita === undefined, `minPerfilEscrita=${rep?.minPerfilEscrita}`);
   check('representantes: /meta entrega os filtros rápidos Todos/Ativos/Inativos',
     JSON.stringify(rep?.quickFilters?.[0]?.options?.map((o) => o.label)) === JSON.stringify(['Todos', 'Ativos', 'Inativos']));
-  check('representantes: /meta declara os filtros reais (usuario_id, ativo)',
-    JSON.stringify(rep?.filterFields) === JSON.stringify(['usuario_id', 'ativo']),
+  check('representantes: /meta declara os filtros reais (tipo, pessoa, território, usuário, ativo)',
+    JSON.stringify(rep?.filterFields) === JSON.stringify(['tipo_representante', 'tipo_pessoa', 'territorio_id', 'usuario_id', 'ativo']),
     `filterFields=${JSON.stringify(rep?.filterFields)}`);
   check('representantes: /meta declara a utilização real pelos pedidos de venda',
     rep?.uso?.recurso === 'vendas' && rep?.uso?.campo === 'representante_id',
     JSON.stringify(rep?.uso));
-  check('representantes: /meta declara as seções reais do formulário',
-    ['Identificação', 'Comercial', 'Acesso ao ERP', 'Contato', 'Situação profissional'].every((sec) =>
+  check('representantes: /meta declara as seções reais do formulário 2.0',
+    ['Identificação', 'Dados profissionais', 'Contato', 'Endereço', 'Comercial', 'Acesso ao ERP', 'Observações'].every((sec) =>
       (rep?.fields || []).some((f) => f.section === sec)));
 
   // NENHUM campo inventado no formulário.
   const camposRep = (rep?.fields || []).map((f) => f.name);
-  check('representantes: o formulário usa só os campos reais do banco',
-    ['nome', 'cpf', 'cargo', 'regiao', 'comissao_pct', 'usuario_id', 'telefone', 'whatsapp', 'email',
-      'admissao', 'desligamento', 'observacoes', 'ativo'].every((c) => camposRep.includes(c)) &&
+  check('representantes: o formulário usa só os campos reais do banco (cadastro mestre 2.0)',
+    ['codigo', 'tipo_pessoa', 'nome', 'razao_social', 'nome_fantasia', 'cpf', 'cnpj', 'data_nascimento',
+      'tipo_representante', 'cargo', 'registro_profissional', 'orgao_registro', 'admissao', 'desligamento',
+      'ativo', 'telefone', 'celular', 'whatsapp', 'email', 'cep', 'logradouro', 'numero', 'complemento',
+      'bairro', 'cidade', 'uf', 'pais', 'comissao_pct', 'territorio_id', 'regiao', 'usuario_id',
+      'observacoes'].every((c) => camposRep.includes(c)) &&
     !camposRep.some((c) => ['salario', 'meta', 'limite_credito', 'banco', 'pix', 'agencia', 'conta', 'foto',
       'imagem', 'ranking', 'faturamento', 'comissao_acumulada', 'vendas_total', 'departamento'].includes(c)),
     `campos=${camposRep.join(',')}`);
@@ -1220,6 +1223,52 @@ await (async () => {
     `cpf=${criadoRep.json?.cpf} telefone=${criadoRep.json?.telefone}`);
   check('representantes: comissão padrão em % gravada como número',
     Number(criadoRep.json?.comissao_pct) === 3.5, `comissao_pct=${criadoRep.json?.comissao_pct}`);
+  // 2.0 — código comercial gerado, tipo de representante e contato profissional.
+  check('representantes: código comercial gerado (REP00001) e único por empresa',
+    /^REP\d{5}$/.test(String(criadoRep.json?.codigo || '')), `codigo=${criadoRep.json?.codigo}`);
+  check('representantes: celular normalizado como telefone profissional',
+    criadoRep.json?.celular === null || /^\d{10,11}$/.test(String(criadoRep.json?.celular || '')), `celular=${criadoRep.json?.celular}`);
+  check('representantes: tipo de representante tem default de PAPEL comercial (não o cargo)',
+    String(criadoRep.json?.tipo_representante || '') === 'REPRESENTANTE_COMERCIAL' &&
+      criadoRep.json?.cargo === 'Vendedora',
+    `tipo=${criadoRep.json?.tipo_representante} cargo=${criadoRep.json?.cargo}`);
+
+  // 2.0 — PJ usa CNPJ (nunca CPF) e o documento é gravado sem máscara.
+  const sufixoSmoke = Date.now().toString().slice(-6);
+  const repPj = await req('POST', '/representantes', {
+    nome: `Distribuidora Smoke ${sufixoSmoke}`,
+    tipo_pessoa: 'PJ',
+    cnpj: '11.222.333/0001-81',
+    razao_social: 'Distribuidora Smoke Ltda',
+    tipo_representante: 'PARCEIRO',
+    cargo: 'Parceiro comercial',
+  });
+  check('representantes: PJ exige e normaliza o CNPJ',
+    [200, 201].includes(repPj.status) && repPj.json?.cnpj === '11222333000181' && repPj.json?.tipo_pessoa === 'PJ',
+    `status ${repPj.status} ${msg(repPj.json)}`);
+  const pjSemCnpj = await req('POST', '/representantes', { nome: `PJ sem CNPJ ${sufixoSmoke}`, tipo_pessoa: 'PJ' });
+  check('representantes: PJ sem CNPJ → 400 com erro no campo cnpj',
+    pjSemCnpj.status === 400 && !!pjSemCnpj.json?.fields?.cnpj,
+    `status ${pjSemCnpj.status} ${msg(pjSemCnpj.json)}`);
+  const pfComCnpj = await req('POST', '/representantes', { nome: `PF com CNPJ ${sufixoSmoke}`, tipo_pessoa: 'PF', cnpj: '11222333000181' });
+  check('representantes: PF com CNPJ → 400 (documento incoerente com o tipo de pessoa)',
+    pfComCnpj.status === 400 && !!pfComCnpj.json?.fields?.cnpj,
+    `status ${pfComCnpj.status} ${msg(pfComCnpj.json)}`);
+
+  // 2.0 — endereço ESTRUTURADO: CEP/UF canônicos e país padrão.
+  const repEndereco = await req('POST', '/representantes', {
+    nome: `Endereço Smoke ${sufixoSmoke}`,
+    cep: '74.000-000',
+    logradouro: 'Avenida Central',
+    numero: '100',
+    bairro: 'Setor Bueno',
+    cidade: 'Goiânia',
+    uf: 'go',
+  });
+  check('representantes: endereço estruturado normalizado (CEP, UF, país)',
+    [200, 201].includes(repEndereco.status) && repEndereco.json?.cep === '74000000' &&
+      repEndereco.json?.uf === 'GO' && repEndereco.json?.pais === 'Brasil' && repEndereco.json?.cidade === 'Goiânia',
+    `status ${repEndereco.status} cep=${repEndereco.json?.cep} uf=${repEndereco.json?.uf} pais=${repEndereco.json?.pais}`);
 
   // CPF com dígito verificador errado é recusado com erro no campo.
   const cpfInvalido = await req('POST', '/representantes', { nome: 'CPF inválido Smoke', cpf: '11144477736' });
@@ -1273,6 +1322,42 @@ await (async () => {
       !porUsuario.json?.rows?.some((r) => Number(r.id) === Number(repId)));
   }
 
+  // 2.0 — filtros de TIPO e de TERRITÓRIO (server-side, mesma listagem).
+  const repGerentes = await req('GET', '/representantes?f.tipo_representante=PARCEIRO&pageSize=200');
+  check('representantes: filtro f.tipo_representante recorta no servidor',
+    repGerentes.json?.rows?.some((r) => Number(r.id) === Number(repPj.json?.id)) &&
+      !repGerentes.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+  const repPjFiltro = await req('GET', '/representantes?f.tipo_pessoa=PJ&pageSize=200');
+  check('representantes: filtro f.tipo_pessoa recorta no servidor',
+    repPjFiltro.json?.rows?.some((r) => Number(r.id) === Number(repPj.json?.id)));
+
+  const territorioSmoke = await req('POST', '/territorios', {
+    nome: `Território Smoke ${sufixoSmoke}`,
+    codigo: `TS${sufixoSmoke}`,
+    tipo: 'regiao',
+  });
+  check('representantes: território criado no DOMÍNIO existente (não há segunda tabela)',
+    [200, 201].includes(territorioSmoke.status) && !!territorioSmoke.json?.id,
+    `status ${territorioSmoke.status} ${msg(territorioSmoke.json)}`);
+  const repComTerritorio = await req('PUT', `/representantes/${repEndereco.json?.id}`, {
+    territorio_id: territorioSmoke.json?.id,
+    tipo_representante: 'GERENTE',
+  });
+  check('representantes: vínculo com território estruturado',
+    repComTerritorio.status === 200 && Number(repComTerritorio.json?.territorio_id) === Number(territorioSmoke.json?.id),
+    `status ${repComTerritorio.status} ${msg(repComTerritorio.json)}`);
+  const porTerritorio = await req('GET', `/representantes?f.territorio_id=${territorioSmoke.json?.id}&pageSize=200`);
+  check('representantes: filtro f.territorio_id recorta no servidor',
+    porTerritorio.json?.rows?.some((r) => Number(r.id) === Number(repEndereco.json?.id)) &&
+      !porTerritorio.json?.rows?.some((r) => Number(r.id) === Number(repId)));
+  const listaComTerritorio = await req('GET', `/representantes?q=${encodeURIComponent(`Endereço Smoke ${sufixoSmoke}`)}`);
+  const linhaTerritorio = listaComTerritorio.json?.rows?.find((r) => Number(r.id) === Number(repEndereco.json?.id));
+  check('representantes: a listagem projeta o rótulo do território (join do domínio)',
+    String(linhaTerritorio?.territorio_id__label || '') === `Território Smoke ${sufixoSmoke}`,
+    `label=${linhaTerritorio?.territorio_id__label}`);
+  check('representantes: a listagem projeta equipe e carteira em lote (sem N+1)',
+    linhaTerritorio != null && 'equipe_label' in linhaTerritorio && 'carteira_vinculos' in linhaTerritorio);
+
   // Leitura e edição pelo contrato genérico (a página /representantes/:id/editar).
   const lidoRep = await req('GET', `/representantes/${repId}`);
   check('representantes: GET /:id devolve o registro', lidoRep.status === 200 && lidoRep.json?.id === repId, `status ${lidoRep.status}`);
@@ -1291,6 +1376,22 @@ await (async () => {
   check('representantes: Utilização traz a contagem real (pedidos de venda)',
     Number(linhaUsoRep?.uso_vinculado) === 1 && linhaUsoRep?.uso_vinculado_label === '1 venda',
     `uso=${linhaUsoRep?.uso_vinculado_label}`);
+
+  // 2.0 — PAINEL da página /representantes/:id (derivado, nada digitado).
+  const painelRep = await req('GET', `/comercial/representantes/${repId}/painel`);
+  check('representantes: painel do representante responde com cadastro + estrutura + carteira + metas + comissão',
+    painelRep.status === 200 && Number(painelRep.json?.representante?.id) === Number(repId) &&
+      painelRep.json?.estrutura != null && painelRep.json?.carteira != null &&
+      painelRep.json?.metas != null && painelRep.json?.comissao != null && painelRep.json?.ranking != null,
+    `status ${painelRep.status} ${msg(painelRep.json)}`);
+  // O representante do smoke tem 1 venda PENDENTE (não faturada): o painel não
+  // pode inventar faturamento nem ranking — o realizado só existe com venda
+  // faturada, e o ranking é recortado pela mesma fonte.
+  check('representantes: o painel NÃO inventa faturamento (venda pendente não conta)',
+    Number(painelRep.json?.indicadores?.faturamento) === 0 &&
+      Number(painelRep.json?.ranking?.faturamento) === 0 &&
+      painelRep.json?.ranking?.posicao === null,
+    `faturamento=${painelRep.json?.indicadores?.faturamento} ranking=${JSON.stringify(painelRep.json?.ranking)}`);
 
   // Exclusão bloqueada por histórico protegido + saída por desativação.
   const bloqueadaRep = await req('DELETE', `/representantes/${repId}`);

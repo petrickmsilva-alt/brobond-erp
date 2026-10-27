@@ -12,6 +12,7 @@
 // Também cobre a LINHA e o BREADCRUMB do shell:
 //   /representantes            → LISTA (BROBOND ERP › Cadastros › Representantes)
 //   /representantes/novo       → página "Novo representante" (› Novo)
+//   /representantes/:id        → página da FICHA + PAINEL (uma rota, não modal)
 //   /representantes/:id/editar → página "Editar representante" (› Editar)
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -112,6 +113,38 @@ beforeEach(() => {
   apiGet.mockImplementation(async (path: string) => {
     if (String(path) === '/empresas/ativa') return EMPRESAS as never;
     if (String(path) === '/usuarios/options') return [] as never;
+    if (String(path) === '/comercial/representantes/4/painel') {
+      return {
+        representante: {
+          id: 4,
+          codigo: 'REP00004',
+          nome: 'Carlos Lima',
+          tipo_pessoa: 'PF',
+          tipo_representante: 'GERENTE',
+          cpf: '52998224725',
+          cnpj: null,
+          razao_social: null,
+          nome_fantasia: null,
+          cargo: 'Representante',
+          registro_profissional: null,
+          orgao_registro: null,
+          data_nascimento: null,
+          admissao: null,
+          desligamento: null,
+          ativo: true,
+          comissao_pct: 3.5,
+          contato: { telefone: null, celular: null, whatsapp: null, email: null },
+          endereco: { cep: null, logradouro: null, numero: null, complemento: null, bairro: null, cidade: null, uf: null, pais: 'Brasil' },
+          regiao_legado: 'Norte',
+        },
+        estrutura: { territorio: null, equipes: [], hierarquia: { supervisores: [], subordinados: [] } },
+        carteira: { vigentes: 0, encerrados: 0, cancelados: 0, total: 0, clientes_ativos: 0, clientes_inativos: 0, clientes: [] },
+        metas: { total: 0, ativas: 0, linhas: [] },
+        comissao: { padrao_pct: 3.5, apurado_total: 0, estornado_total: 0, efetivado_total: 0, apuracoes: 0, eventos: 0 },
+        indicadores: { vendas: 0, faturamento: 0, pedidos: 0, clientes: 0, pecas: 0, ticket_medio: 0, comissao: 0, meta: null, atingimento_pct: null },
+        ranking: { posicao: null, total: 0, faturamento: 0 },
+      } as never;
+    }
     if (String(path) === '/representantes/4') {
       return {
         id: 4,
@@ -160,6 +193,17 @@ describe('App — rotas do cadastro de Representantes (LISTA → PÁGINA)', () =
     const nav = trilha();
     expect(within(nav).getByRole('link', { name: 'Representantes' })).toHaveAttribute('href', '/representantes');
     expect(within(nav).getByText('Novo')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('/representantes/:id é uma rota registrada e abre a FICHA com painel (página, não modal)', async () => {
+    abrirRota('/representantes/4');
+
+    expect(await screen.findByRole('heading', { name: /Carlos Lima/ })).toBeInTheDocument();
+    expect(apiGet).toHaveBeenCalledWith('/comercial/representantes/4/painel');
+    expect(window.location.pathname).toBe('/representantes/4');
+    // A ficha é uma PÁGINA do módulo, com caminho de volta para a lista.
+    expect(screen.getByRole('link', { name: /Voltar/ })).toHaveAttribute('href', '/representantes');
+    semSobreposicao();
   });
 
   it('/representantes/:id/editar é uma rota registrada e abre a página "Editar representante"', async () => {
