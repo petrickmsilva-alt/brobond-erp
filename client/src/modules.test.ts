@@ -86,13 +86,16 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   ajuda: '/ajuda',
 };
 
-describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', () => {
-  it('preserva exatamente os 70 módulos e todas as 70 URLs sem duplicidade nem remoção', () => {
-    expect(MODULES).toHaveLength(70);
+describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () => {
+  it('preserva exatamente os 80 módulos e todas as 80 URLs sem duplicidade nem remoção', () => {
+    // 70 da Árvore Master original + 10 da FUNDAÇÃO COMERCIAL (MASTER
+    // MA-02..MA-08: territórios, equipes, hierarquia, carteira, atribuição,
+    // metas, painel comercial e os dois cadastros do motor de comissão).
+    expect(MODULES).toHaveLength(80);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(70);
-    expect(new Set(paths).size).toBe(70);
+    expect(new Set(ids).size).toBe(80);
+    expect(new Set(paths).size).toBe(80);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -121,8 +124,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', 
     }
   });
 
-  it('separa ERP CORE (56), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(56);
+  it('separa ERP CORE (66), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(66);
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(8);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
@@ -131,7 +134,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', 
   it('garante casa canônica única por módulo (Pessoas em Cadastros, Entrega/Pós-venda em Vendas, Compras em Estoque & Suprimentos, Webhooks em Administração, Conta/Ajuda em Utilidades Globais)', () => {
     const porArea = (area: string) => MODULES.filter((m) => m.area === area).map((m) => m.id);
 
-    expect(porArea('Meu Negócio')).toEqual(['dashboard', 'relatorios']);
+    expect(porArea('Meu Negócio')).toEqual(['dashboard', 'relatorios', 'painel-comercial']);
     expect(porArea('Cadastros')).toEqual([
       'produtos',
       'categorias',
@@ -151,6 +154,15 @@ describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', 
       'catalogos',
       'politicas-comerciais',
       'listas-preco',
+      // ESTRUTURA COMERCIAL (MASTER): cadastros próprios, no grupo Comercial
+      // da área de Vendas (depois dos pedidos e antes do balcão).
+      'territorios',
+      'equipes_comerciais',
+      'equipe_membros',
+      'representante_hierarquia',
+      'representante_cliente',
+      'venda_atribuicao',
+      'metas',
       'pdv',
       'pdv-caixas',
       'expedicao',
@@ -177,6 +189,9 @@ describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', 
       'contas-financeiras',
       'transferencias',
       'comissoes',
+      // MOTOR DE COMISSÃO (MASTER MA-05): plano + regra, no grupo Comissões.
+      'planos_comissao',
+      'regras_comissao',
       'investidores',
       'aportes',
       'categorias-financeiras',
@@ -205,7 +220,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das 70 funções/rotas', 
       s.areas.flatMap((a) => a.groups.flatMap((g) => g.subgroups.flatMap((sub) => sub.modules.map((m) => m.id))))
     );
     expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
-    expect(PAGES_ESPECIAIS).toHaveLength(22);
+    expect(PAGES_ESPECIAIS).toHaveLength(23);
   });
 });
 
@@ -384,12 +399,22 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
       'clientes',
       'colecoes',
       'cores',
+      // FUNDAÇÃO COMERCIAL (MASTER): todos em PÁGINA PRÓPRIA.
+      'equipe_membros',
+      'equipes_comerciais',
       'fornecedores',
       'grades',
       'insumos',
+      'metas',
+      'planos_comissao',
       'produtos',
+      'regras_comissao',
+      'representante_cliente',
+      'representante_hierarquia',
       'representantes',
       'tamanhos',
+      'territorios',
+      'venda_atribuicao',
       'vendas',
     ]);
   });
