@@ -320,7 +320,7 @@ BI (Meu Negócio, produto_abc, comissões)
 | `npm run architecture:audit` | **PASS** — 0 erros, 10 avisos classificados (`TENANT_SEM_TESTE` zerado) |
 | `npm run smoke` (Express real, HTTP) | **PASS** — 327/327, incluindo 10 verificações de CRM |
 | `npm run smoke:pg` (PostgreSQL 16.14 real, banco novo) | **PASS** — 327/327 |
-| `npm run test:pg` (PostgreSQL 16.14 real) | **PASS parcial** — 278/291 (12 skip + 1 falha por ausência do cliente `psql` neste sandbox; o job `testes-postgres` do CI é verde com `postgresql-client-16`) |
+| `npm run test:pg` (PostgreSQL 16.14 real) | **PASS parcial** — 280/293 (12 skip + 1 falha por ausência do cliente `psql` neste sandbox; o job `testes-postgres` do CI é verde com `postgresql-client-16`) |
 | `npm run db:validate` | **BLOQUEADO neste sandbox** — `prisma validate` baixa o `schema-engine` de `binaries.prisma.sh` (fora da allowlist de rede); o CI executa o mesmo comando no job `verificar` |
 
 ---
