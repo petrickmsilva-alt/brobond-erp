@@ -69,15 +69,18 @@ vi.mock('../lib/meta', async (importOriginal) => {
     labelFields: ['nome'],
     // SEM minPerfilEscrita: cadastro por empresa, operável por quem já tem acesso.
     ops: { create: true, update: true, delete: true },
-    filterFields: ['unidade', 'fornecedor_id', 'ativo'],
+    filterFields: ['categoria_id', 'unidade', 'fornecedor_id', 'ativo'],
     fields: [
-      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
+      { name: 'codigo_insumo', label: 'Código', type: 'text', uniqueEmpresa: true, search: true, maxLength: 40, section: 'Identificação' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, section: 'Identificação' },
+      { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias_insumos', search: true, section: 'Identificação' },
       {
         name: 'unidade',
         label: 'Unidade',
         type: 'select',
         required: true,
         default: 'un',
+        section: 'Identificação',
         options: [
           { value: 'un', label: 'Unidade (un)' },
           { value: 'pc', label: 'Peça (pç)' },
@@ -86,9 +89,9 @@ vi.mock('../lib/meta', async (importOriginal) => {
           { value: 'l', label: 'Litro (l)' },
         ],
       },
-      { name: 'custo_medio', label: 'Custo médio', type: 'money', min: 0, default: 0 },
-      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores' },
-      { name: 'ativo', label: 'Ativo', type: 'boolean', default: true },
+      { name: 'ativo', label: 'Ativo', type: 'boolean', default: true, section: 'Identificação' },
+      { name: 'fornecedor_id', label: 'Fornecedor principal', type: 'ref', ref: 'fornecedores', section: 'Suprimentos' },
+      { name: 'custo_medio', label: 'Custo médio', type: 'money', min: 0, default: 0, section: 'Custos' },
       { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false },
     ],
   };
@@ -100,9 +103,17 @@ vi.mock('../lib/meta', async (importOriginal) => {
     ops: { create: true, update: true, delete: true },
     fields: [{ name: 'nome', label: 'Nome', type: 'text', required: true }],
   };
+  const categorias_insumos = {
+    key: 'categorias_insumos',
+    label: 'Categorias de Insumos',
+    singular: 'Categoria de insumo',
+    labelFields: ['nome'],
+    ops: { create: true, update: true, delete: true },
+    fields: [{ name: 'nome', label: 'Nome', type: 'text', required: true }],
+  };
   return {
     ...actual,
-    useMeta: () => ({ resources: { insumos, fornecedores }, modules: [], mode: 'memory' }),
+    useMeta: () => ({ resources: { insumos, fornecedores, categorias_insumos }, modules: [], mode: 'memory' }),
   };
 });
 
@@ -146,6 +157,12 @@ beforeEach(() => {
         { value: 2, label: 'Química Sul' },
       ] as never;
     }
+    if (String(path) === '/categorias_insumos/options') {
+      return [
+        { value: 10, label: 'Malhas' },
+        { value: 11, label: 'Aviamentos' },
+      ] as never;
+    }
     return {} as never;
   });
   apiPost.mockResolvedValue({ id: 9 } as never);
@@ -173,14 +190,16 @@ describe('novo insumo — página própria do ERP', () => {
   it('mostra os campos reais do cadastro e nada inventado', async () => {
     renderPage();
 
-    expect(await screen.findByLabelText(/^Nome/)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/^Código/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Nome/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Categoria/)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Unidade/)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Custo médio/)).toBeInTheDocument();
-    expect(await screen.findByLabelText('Fornecedor')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Fornecedor principal')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Ativo' })).toBeChecked();
 
     // Nenhum campo INVENTADO aparece (o domínio de `insumos` não tem nenhum deles).
-    expect(screen.queryByLabelText(/Código|SKU|NCM|Descrição|Marca|Cor|Imagem|Categoria|Localiza/i)).toBeNull();
+    expect(screen.queryByLabelText(/NCM|Descrição|Marca|Cor\b|Imagem|Localiza/i)).toBeNull();
     // O estoque mínimo/máximo NÃO existe em `insumos`: vive em `estoque_insumos`.
     expect(screen.queryByLabelText(/Estoque m[ií]nimo/i)).toBeNull();
     expect(screen.queryByLabelText(/Estoque m[aá]ximo/i)).toBeNull();
@@ -198,7 +217,7 @@ describe('novo insumo — página própria do ERP', () => {
   it('o fornecedor usa as opções reais do ERP (nenhum endpoint paralelo)', async () => {
     renderPage();
 
-    const fornecedor = await screen.findByLabelText('Fornecedor');
+    const fornecedor = await screen.findByLabelText('Fornecedor principal');
     await waitFor(() => expect(screen.getByRole('option', { name: 'Têxtil Bella' })).toBeInTheDocument());
     expect(screen.getByRole('option', { name: 'Química Sul' })).toBeInTheDocument();
     expect(apiGet).toHaveBeenCalledWith('/fornecedores/options');
@@ -208,21 +227,24 @@ describe('novo insumo — página própria do ERP', () => {
   it('cria o insumo enviando o contrato existente e volta para a lista', async () => {
     renderPage();
 
-    fireEvent.change(await screen.findByLabelText(/^Nome/), { target: { value: '  Malha penteada  ' } });
+    fireEvent.change(await screen.findByLabelText(/^Código/), { target: { value: '  INS-MAL-001  ' } });
+    fireEvent.change(screen.getByLabelText(/^Nome/), { target: { value: '  Malha penteada  ' } });
     fireEvent.change(screen.getByLabelText(/^Unidade/), { target: { value: 'm' } });
     fireEvent.change(screen.getByLabelText(/^Custo médio/), { target: { value: '12,50' } });
-    const fornecedor = await screen.findByLabelText('Fornecedor');
+    const fornecedor = await screen.findByLabelText('Fornecedor principal');
     await waitFor(() => expect(screen.getByRole('option', { name: 'Têxtil Bella' })).toBeInTheDocument());
     fireEvent.change(fornecedor, { target: { value: '1' } });
     fireEvent.click(botaoSalvar());
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1));
     expect(apiPost).toHaveBeenCalledWith('/insumos', {
+      codigo_insumo: 'INS-MAL-001',
       nome: 'Malha penteada',
+      categoria_id: null,
       unidade: 'm',
-      custo_medio: '12,50',
-      fornecedor_id: '1',
       ativo: true,
+      fornecedor_id: '1',
+      custo_medio: '12,50',
     });
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/insumos'));
   });
@@ -235,11 +257,13 @@ describe('novo insumo — página própria do ERP', () => {
 
     await waitFor(() =>
       expect(apiPost).toHaveBeenCalledWith('/insumos', {
+        codigo_insumo: null,
         nome: 'Elástico',
+        categoria_id: null,
         unidade: 'un',
-        custo_medio: '0',
-        fornecedor_id: null,
         ativo: true,
+        fornecedor_id: null,
+        custo_medio: '0',
       })
     );
   });
@@ -313,7 +337,10 @@ describe('editar insumo — página própria do ERP', () => {
       if (String(path) === '/insumos/4') {
         return {
           id: 4,
+          codigo_insumo: 'INS-MAL-001',
           nome: 'Malha penteada',
+          categoria_id: 10,
+          categoria_id__label: 'Malhas',
           unidade: 'm',
           custo_medio: 12.5,
           fornecedor_id: 1,
@@ -327,6 +354,12 @@ describe('editar insumo — página própria do ERP', () => {
           { value: 2, label: 'Química Sul' },
         ] as never;
       }
+      if (String(path) === '/categorias_insumos/options') {
+        return [
+          { value: 10, label: 'Malhas' },
+          { value: 11, label: 'Aviamentos' },
+        ] as never;
+      }
       return {} as never;
     });
   });
@@ -336,6 +369,7 @@ describe('editar insumo — página própria do ERP', () => {
 
     expect(await screen.findByRole('heading', { name: /Editar insumo/ })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText(/^Nome/)).toHaveValue('Malha penteada'));
+    expect(screen.getByLabelText(/^Código/)).toHaveValue('INS-MAL-001');
     expect(screen.getByLabelText(/^Unidade/)).toHaveValue('m');
     expect(screen.getByLabelText(/^Custo médio/)).toHaveValue('12,5');
     expect(screen.getByRole('checkbox', { name: 'Ativo' })).not.toBeChecked();
@@ -361,11 +395,13 @@ describe('editar insumo — página própria do ERP', () => {
 
     await waitFor(() =>
       expect(apiPut).toHaveBeenCalledWith('/insumos/4', {
+        codigo_insumo: 'INS-MAL-001',
         nome: 'Malha penteada premium',
+        categoria_id: '10',
         unidade: 'm',
-        custo_medio: '12,5',
-        fornecedor_id: '1',
         ativo: false,
+        fornecedor_id: '1',
+        custo_medio: '12,5',
       })
     );
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/insumos'));
@@ -381,5 +417,144 @@ describe('editar insumo — página própria do ERP', () => {
     expect(await screen.findByText('Insumo não encontrado(a).')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Voltar para a lista/ })).toHaveAttribute('href', '/insumos');
     semSobreposicao();
+  });
+});
+
+describe('editar insumo — DADOS CALCULADOS (só leitura, vindos do domínio)', () => {
+  /** Insulo com histórico real: saldo, mínimo, última movimentação, compra e uso. */
+  function comHistorico(extra: Record<string, unknown> = {}) {
+    routeParams = { id: '4' };
+    apiGet.mockImplementation(async (path: string) => {
+      if (String(path) === '/insumos/4') {
+        return {
+          id: 4,
+          codigo_insumo: 'INS-MAL-001',
+          nome: 'Malha penteada',
+          categoria_id: 10,
+          categoria_id__label: 'Malhas',
+          unidade: 'm',
+          custo_medio: 12.5,
+          fornecedor_id: 1,
+          fornecedor_id__label: 'Têxtil Bella',
+          ativo: true,
+          estoque_saldo: 320,
+          estoque_min: 100,
+          estoque_status: 'normal',
+          ultima_movimentacao: '2026-10-20T10:00:00.000Z',
+          ultima_movimentacao_tipo: 'entrada',
+          estoque_tem_movimentacao: true,
+          ultimo_custo_entrada: 13.4,
+          ultima_entrada_em: '2026-10-20T10:00:00.000Z',
+          uso_vinculado: 12,
+          uso_vinculado_label: '12 fichas técnicas',
+          ...extra,
+        } as never;
+      }
+      if (String(path) === '/fornecedores/options') return [{ value: 1, label: 'Têxtil Bella' }] as never;
+      if (String(path) === '/categorias_insumos/options') return [{ value: 10, label: 'Malhas' }] as never;
+      return {} as never;
+    });
+  }
+
+  it('apresenta os blocos de ESTOQUE, CUSTOS e UTILIZAÇÃO com os valores reais', async () => {
+    comHistorico();
+    renderPage();
+
+    await screen.findByRole('heading', { name: /Editar insumo/ });
+
+    // ESTOQUE — saldo/mínimo/situação/última movimentação (de estoque_insumos).
+    expect(screen.getByRole('heading', { name: /^Estoque$/ })).toBeInTheDocument();
+    expect(screen.getByText('320 m')).toBeInTheDocument();
+    expect(screen.getByText('100 m')).toBeInTheDocument();
+    expect(screen.getByText('Normal')).toBeInTheDocument();
+
+    // CUSTOS — último preço/última compra derivados do recebimento.
+    expect(screen.getByRole('heading', { name: /Custos calculados/ })).toBeInTheDocument();
+    expect(screen.getByText(/13,40/)).toBeInTheDocument();
+
+    // ENGENHARIA — uso real na ficha técnica, com atalho de navegação.
+    expect(screen.getByRole('heading', { name: /Engenharia \/ Utilização/ })).toBeInTheDocument();
+    expect(screen.getByText('12 fichas técnicas')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Ver fichas técnicas/ })).toHaveAttribute('href', '/fichas');
+
+    semSobreposicao();
+  });
+
+  it('com histórico de compra o custo médio é CALCULADO: campo desabilitado e fora do PUT', async () => {
+    comHistorico();
+    renderPage();
+    await screen.findByRole('heading', { name: /Editar insumo/ });
+
+    const custo = screen.getByLabelText(/^Custo médio/);
+    expect(custo).toBeDisabled();
+    // O rótulo avisa que é calculado.
+    expect(screen.getByText('Calculado')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^Nome/), { target: { value: 'Malha penteada premium' } });
+    fireEvent.click(botaoSalvar());
+
+    await waitFor(() => expect(apiPut).toHaveBeenCalledTimes(1));
+    const payload = apiPut.mock.calls[0][1] as Record<string, unknown>;
+    // O valor derivado NÃO volta no payload — quem o forma é o recebimento.
+    expect(payload).not.toHaveProperty('custo_medio');
+  });
+
+  it('sem histórico, o custo médio segue editável e é enviado (referência inicial)', async () => {
+    routeParams = { id: '4' };
+    apiGet.mockImplementation(async (path: string) => {
+      if (String(path) === '/insumos/4') {
+        return {
+          id: 4,
+          nome: 'Malha nova',
+          unidade: 'm',
+          custo_medio: 5,
+          fornecedor_id: null,
+          ativo: true,
+          estoque_saldo: null,
+          estoque_status: 'sem_registro',
+          estoque_tem_movimentacao: false,
+          uso_vinculado: 0,
+        } as never;
+      }
+      if (String(path) === '/fornecedores/options') return [] as never;
+      if (String(path) === '/categorias_insumos/options') return [] as never;
+      return {} as never;
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Editar insumo/ });
+
+    const custo = screen.getByLabelText(/^Custo médio/);
+    expect(custo).not.toBeDisabled();
+    fireEvent.click(botaoSalvar());
+    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/insumos/4', expect.objectContaining({ custo_medio: '5' })));
+  });
+
+  it('sem estoque registrado, o bloco de ESTOQUE não aparece (nada de campo vazio)', async () => {
+    routeParams = { id: '4' };
+    apiGet.mockImplementation(async (path: string) => {
+      if (String(path) === '/insumos/4') {
+        return {
+          id: 4,
+          nome: 'Insumo novo',
+          unidade: 'un',
+          custo_medio: 0,
+          fornecedor_id: null,
+          ativo: true,
+          estoque_saldo: null,
+          estoque_min: null,
+          estoque_status: 'sem_registro',
+          estoque_tem_movimentacao: false,
+          uso_vinculado: 0,
+        } as never;
+      }
+      if (String(path) === '/fornecedores/options') return [] as never;
+      if (String(path) === '/categorias_insumos/options') return [] as never;
+      return {} as never;
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Editar insumo/ });
+
+    expect(screen.queryByRole('heading', { name: /^Estoque$/ })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /Engenharia \/ Utilização/ })).toBeNull();
   });
 });

@@ -321,10 +321,24 @@ export const MODULES: Module[] = [
     area: 'Cadastros',
     group: 'Materiais',
     subgroup: 'Insumos',
-    keywords: 'materia prima aviamentos tecido botao ziper etiqueta',
+    keywords: 'materia prima aviamentos tecido botao ziper etiqueta codigo categoria',
     path: '/insumos',
     resource: 'insumos',
     description: 'Matéria-prima: tecido, botão, zíper, etiqueta e afins.',
+  },
+  {
+    id: 'categorias-insumos',
+    label: 'Categorias de Insumos',
+    icon: Layers,
+    space: 'erp',
+    area: 'Cadastros',
+    group: 'Materiais',
+    subgroup: 'Insumos',
+    kind: 'subitem',
+    keywords: 'categorias de insumo classificacao materia prima aviamentos embalagem agrupamento',
+    path: '/categorias-insumos',
+    resource: 'categorias_insumos',
+    description: 'Agrupamento da matéria-prima: Matéria-prima, Aviamentos, Identidade de marca, Embalagem...',
   },
   {
     id: 'clientes',
@@ -1451,6 +1465,7 @@ export const DETALHE_DIRETO = new Set(['ordens', 'fichas']);
  * - /insumos/novo e /insumos/:id/editar (listagem em /insumos)
  * - /fornecedores/novo e /fornecedores/:id/editar (listagem em /fornecedores)
  * - /representantes/novo e /representantes/:id/editar (listagem em /representantes)
+ * - /categorias-insumos/novo e /categorias-insumos/:id/editar (listagem em /categorias-insumos)
  *
  * É a lista canônica do padrão LISTA → PÁGINA do BROBOND ERP: quem entra aqui
  * navega (rota filha do módulo) em vez de abrir a superfície do formulário na
@@ -1478,6 +1493,7 @@ export const FORM_DIRETO = new Set([
   'insumos',
   'fornecedores',
   'representantes',
+  'categorias_insumos',
 ]);
 
 export type NavSection = {

@@ -4,8 +4,9 @@
 // O módulo continua sendo o CRUD genérico dirigido por `resources.ts`. O que
 // este arquivo trava é o contrato que a TELA usa:
 //   • metadado do padrão LISTA → PÁGINA (sem drawer/modal), filtros reais e
-//     uso real — e NENHUM campo inventado (o domínio de `insumos` tem só
-//     nome, unidade, custo_medio, fornecedor_id, ativo);
+//     uso real — e NENHUM campo inventado (o domínio de `insumos` tem
+//     nome, codigo_insumo, categoria_id, unidade, custo_medio, fornecedor_id
+//     e ativo — migration 0041);
 //   • busca por nome e filtros (unidade, fornecedor, status) no SERVIDOR, na
 //     mesma listagem paginada (sem SQL paralelo);
 //   • coluna "Estoque" = saldo REAL de `estoque_insumos`, agregado pelo
@@ -17,8 +18,10 @@
 //     e o operador não exclui (o servidor bloqueia);
 //   • exclusão: insumo vinculado devolve o diagnóstico de vínculos e o insumo
 //     permanece; a saída é DESATIVAR;
-//   • CUSTO MÉDIO: a regra de formação pelo recebimento de compras NÃO mudou
-//     (o campo continua editável como no CRUD genérico).
+//   • CUSTO MÉDIO: referência inicial editável; depois da PRIMEIRA movimentação
+//     (compra/entrada) o valor é formado pelo recebimento e o servidor recusa
+//     um PUT que tente alterá-lo (409) — a formação pelo fluxo de compras não
+//     muda.
 //
 // A variante contra PostgreSQL real fica em test/pg/insumos-pg.test.ts.
 // ============================================================================
@@ -73,7 +76,7 @@ test('cadastro declara o padrão LISTA → PÁGINA (sem drawer/modal), filtros r
   assert.deepEqual(r.ops, { create: true, update: true, delete: true });
 
   // Filtros: SOMENTE campos que existem de verdade em `insumos`.
-  assert.deepEqual(r.filterFields, ['unidade', 'fornecedor_id', 'ativo']);
+  assert.deepEqual(r.filterFields, ['categoria_id', 'unidade', 'fornecedor_id', 'ativo']);
   assert.equal(r.quickFilters?.[0]?.field, 'ativo');
   assert.deepEqual(
     r.quickFilters?.[0]?.options.map((o) => o.label),
@@ -96,18 +99,24 @@ test('os campos do formulário são exatamente os que existem em `insumos` — n
   const nomes = r.fields.map((f) => f.name);
   assert.deepEqual(
     nomes,
-    ['nome', 'unidade', 'custo_medio', 'fornecedor_id', 'ativo', 'criado_em', 'atualizado_em'],
+    ['codigo_insumo', 'nome', 'categoria_id', 'unidade', 'ativo', 'fornecedor_id', 'custo_medio', 'criado_em', 'atualizado_em'],
     'o formulário usa os campos reais da tabela insumos'
   );
-  // Nada de SKU/NCM/descrição/marca/cor/imagem/categoria/localização.
-  for (const proibido of ['sku', 'codigo', 'ncm', 'descricao', 'marca', 'cor_id', 'imagem', 'categoria_id', 'localizacao', 'local_id']) {
+  // `codigo_insumo` e `categoria_id` EXISTEM em `insumos` (migration 0041) e são
+  // identificador operacional e agrupamento — não são campos inventados.
+  assert.ok(nomes.includes('codigo_insumo'), 'código operacional do insumo (0041)');
+  assert.ok(nomes.includes('categoria_id'), 'categoria de insumo (0041)');
+  // Nada de NCM/descrição/marca/cor/imagem/localização física.
+  for (const proibido of ['sku', 'ncm', 'descricao', 'marca', 'cor_id', 'imagem', 'localizacao', 'local_id']) {
     assert.equal(nomes.includes(proibido), false, `${proibido} não existe em insumos`);
   }
   // Estoque mínimo/máximo NÃO são campos de `insumos`: vivem em
   // `estoque_insumos` (só o mínimo). Nenhum dos dois foi inventado aqui.
   assert.equal(nomes.includes('estoque_min'), false);
   assert.equal(nomes.includes('estoque_max'), false);
-  // E o recurso de saldo continua declaring o estoque mínimo (sem máximo).
+  // A categoria do insumo é a taxonomia PRÓPRIA (não a categoria de produto).
+  assert.equal(r.fields.find((f) => f.name === 'categoria_id')?.ref, 'categorias_insumos');
+  // E o recurso de saldo continua declarando o estoque mínimo (sem máximo).
   const saldos = RESOURCES.estoque_insumos;
   assert.ok(saldos.fields.some((f) => f.name === 'estoque_min' && f.min === 0));
   assert.equal(saldos.fields.some((f) => f.name === 'estoque_max'), false, 'não existe estoque máximo no domínio');
@@ -117,6 +126,21 @@ test('os campos do formulário são exatamente os que existem em `insumos` — n
   assert.equal(unidade?.type, 'select');
   assert.equal(unidade?.required, true);
   assert.ok((unidade?.options?.length ?? 0) > 1);
+});
+
+// ---------------------------------------------------------------------------
+// A2) Categorias de insumos: taxonomia PRÓPRIA, por empresa
+// ---------------------------------------------------------------------------
+test('categorias de insumos é cadastro por EMPRESA com taxonomia própria (não é a categoria de produto)', () => {
+  const c = RESOURCES.categorias_insumos;
+  assert.ok(c, 'recurso declarado');
+  assert.equal(c.empresa, true, 'por empresa (isolamento multiempresa)');
+  assert.equal(c.minPerfilEscrita, undefined, 'sem piso de escrita novo');
+  assert.deepEqual(c.fields.map((f) => f.name), ['nome', 'descricao', 'pai_id', 'ativo', 'criado_em', 'atualizado_em']);
+  assert.equal(c.fields.find((f) => f.name === 'nome')?.uniqueEmpresa, true, 'nome único por empresa');
+  assert.equal(c.fields.find((f) => f.name === 'pai_id')?.ref, 'categorias_insumos', 'um nível de categoria-pai');
+  // Utilização: quantos insumos usam a categoria (contagem agregada no servidor).
+  assert.deepEqual(c.uso, { recurso: 'insumos', campo: 'categoria_id', singular: 'insumo', plural: 'insumos' });
 });
 
 // ---------------------------------------------------------------------------
@@ -295,25 +319,182 @@ test('multiempresa: o insumo de uma empresa não é lido, editado nem excluído 
 });
 
 // ---------------------------------------------------------------------------
-// Custo médio: campo editável, com a regra de compras INTACTA
+// Custo médio: referência inicial editável; DADO CALCULADO após a 1ª compra
 // ---------------------------------------------------------------------------
-test('custo médio continua editável como no CRUD genérico (a regra das compras não mudou)', async () => {
+test('custo médio é editável como referência inicial, mas vira dado calculado após a primeira movimentação', async () => {
   const insumo = await novoInsumo('Custo editável', { custo_medio: 10 });
+  const insumoId = Number(insumo.id);
 
-  const editado = await updateRecord(RESOURCES.insumos, Number(insumo.id), { custo_medio: 25.5 }, atorA);
-  assert.equal(Number(editado.custo_medio), 25.5, 'o cadastro edita o valor de referência');
+  // Sem histórico: ainda é a referência inicial do cadastro — editável.
+  const editado = await updateRecord(RESOURCES.insumos, insumoId, { custo_medio: 25.5 }, atorA);
+  assert.equal(Number(editado.custo_medio), 25.5, 'o cadastro edita o valor de referência enquanto não há compra');
 
   // O valor é recusado quando negativo — o servidor continua a autoridade.
   const erro: any = await esperarErro(
-    () => updateRecord(RESOURCES.insumos, Number(insumo.id), { custo_medio: -1 }, atorA),
+    () => updateRecord(RESOURCES.insumos, insumoId, { custo_medio: -1 }, atorA),
     400
   );
   assert.ok(erro.fields?.custo_medio, 'o erro aponta o campo custo_medio');
 
-  // E o saldo/custo NÃO são recalculados por esta edição: a formação do custo
-  // médio continua sendo do recebimento de compras (nada foi alterado aqui).
-  const custoDepois = await getRecord(RESOURCES.insumos, Number(insumo.id), empresaA);
-  assert.equal(Number(custoDepois.custo_medio), 25.5);
+  // Depois da PRIMEIRA movimentação, o custo médio é formado pelo recebimento
+  // de compras: um PUT que o altere é recusado (não é campo manual).
+  await createRecord(
+    RESOURCES.movimentacoes_insumos,
+    { tipo: 'entrada', insumo_id: insumoId, quantidade: 5, custo_unitario: 25.5 },
+    atorA
+  );
+  const erroCalculado: any = await esperarErro(
+    () => updateRecord(RESOURCES.insumos, insumoId, { custo_medio: 99 }, atorA),
+    409
+  );
+  assert.ok(erroCalculado.fields?.custo_medio, 'o 409 aponta o campo custo_medio');
+
+  // Editar outros campos continua permitido, e o custo calculado não muda.
+  const soNome = await updateRecord(RESOURCES.insumos, insumoId, { nome: `Custo calculado ${sufixo}` }, atorA);
+  assert.equal(Number(soNome.custo_medio), 25.5, 'a edição de outros campos não mexe no custo calculado');
+});
+
+// ---------------------------------------------------------------------------
+// Código do insumo: identificador operacional único POR EMPRESA
+// ---------------------------------------------------------------------------
+test('código do insumo é único por empresa (e opcional)', async () => {
+  const codigo = `INS-T-${sufixo}`;
+  const a = await novoInsumo('Com código', { codigo_insumo: codigo });
+  assert.equal(String(a.codigo_insumo), codigo);
+
+  // Duplicar o MESMO código na MESMA empresa é recusado (409 do store).
+  await esperarErro(() => novoInsumo('Código repetido', { codigo_insumo: codigo }), 409);
+
+  // Sem código continua válido (o campo é opcional).
+  const semCodigo = await novoInsumo('Sem código');
+  assert.ok(semCodigo.id);
+
+  // O código entra na BUSCA (server-side), como o nome.
+  const achado = await listar({ q: codigo });
+  assert.ok(achado.rows.some((r) => Number(r.id) === Number(a.id)), 'a busca encontra pelo código');
+});
+
+// ---------------------------------------------------------------------------
+// Categoria do insumo: agrupamento por empresa + filtro server-side
+// ---------------------------------------------------------------------------
+test('categoria do insumo agrupa, filtra no servidor e respeita a empresa', async () => {
+  const cat = await createRecord(RESOURCES.categorias_insumos, { nome: `Malhas ${sufixo}` }, atorA);
+  const insumo = await novoInsumo('Categorizado', { categoria_id: Number(cat.id) });
+  assert.equal(Number(insumo.categoria_id), Number(cat.id));
+
+  const porCategoria = await listar({ filter: { categoria_id: String(cat.id) } });
+  assert.ok(porCategoria.rows.some((r) => Number(r.id) === Number(insumo.id)), 'o filtro de categoria recorta no servidor');
+
+  // Categoria de OUTRA empresa não é aceita: a referência é resolvida DENTRO da
+  // empresa (404, não 400 — não se confirma a existência de dado alheio).
+  const catB = await createRecord(RESOURCES.categorias_insumos, { nome: `Malhas B ${sufixo}` }, atorB);
+  await esperarErro(() => novoInsumo('Categoria alheia', { categoria_id: Number(catB.id) }, atorA), 404);
+
+  // A utilização da categoria é a contagem REAL de insumos (agregada no
+  // servidor), declarada em `categorias_insumos.uso` — nenhum número inventado.
+  const cats = await listRecords(RESOURCES.categorias_insumos, { page: 1, pageSize: 500, q: `Malhas ${sufixo}` }, empresaA);
+  const linhaCat = cats.rows.find((r) => Number(r.id) === Number(cat.id))!;
+  assert.ok(linhaCat, 'a categoria é listada');
+  assert.equal(Number(linhaCat.uso_vinculado), 1, 'um insumo usa a categoria');
+  assert.equal(linhaCat.uso_vinculado_label, '1 insumo');
+  // E a categoria de OUTRA empresa não conta o insumo da empresa A.
+  const catsB = await listRecords(RESOURCES.categorias_insumos, { page: 1, pageSize: 500, q: `Malhas B ${sufixo}` }, empresaB);
+  const linhaCatB = catsB.rows.find((r) => Number(r.id) === Number(catB.id))!;
+  assert.equal(Number(linhaCatB.uso_vinculado ?? 0), 0, 'a categoria da empresa B não vê o insumo de A');
+});
+
+// ---------------------------------------------------------------------------
+// Estoque DERIVADO: saldo, mínimo, situação e última movimentação
+// ---------------------------------------------------------------------------
+test('a ficha do insumo deriva saldo, mínimo, situação e última movimentação do estoque real', async () => {
+  const insumo = await novoInsumo('Com estoque', { custo_medio: 7 });
+  const insumoId = Number(insumo.id);
+
+  // Saldo real em `estoque_insumos` com mínimo cadastrado.
+  await getStore().insert(RESOURCES.estoque_insumos, { insumo_id: insumoId, quantidade: 40, estoque_min: 100 });
+
+  const linha = (await listar({ q: `Com estoque ${sufixo}` })).rows.find((r) => Number(r.id) === insumoId)!;
+  assert.equal(Number(linha.estoque_saldo), 40, 'saldo real agregado');
+  assert.equal(Number(linha.estoque_min), 100, 'mínimo cadastrado em estoque_insumos');
+  assert.equal(linha.estoque_status, 'abaixo_minimo', '40 < 100 → abaixo do mínimo');
+
+  // Entrada real → última movimentação e último custo de entrada derivados.
+  await createRecord(
+    RESOURCES.movimentacoes_insumos,
+    { tipo: 'entrada', insumo_id: insumoId, quantidade: 10, custo_unitario: 12.5 },
+    atorA
+  );
+  const depois = (await listar({ q: `Com estoque ${sufixo}` })).rows.find((r) => Number(r.id) === insumoId)!;
+  assert.equal(depois.ultima_movimentacao_tipo, 'entrada');
+  assert.ok(depois.ultima_movimentacao, 'a última movimentação é datada');
+  assert.equal(Number(depois.ultimo_custo_entrada), 12.5, 'custo da última ENTRADA');
+  assert.equal(Number(depois.estoque_saldo), 50, 'o saldo reflete a entrada real');
+
+  // Insumo nunca movimentado: situação "sem_registro" e sem números inventados.
+  const novo = await novoInsumo('Nunca movimentado');
+  const linhaNova = (await listar({ q: `Nunca movimentado ${sufixo}` })).rows.find((r) => Number(r.id) === Number(novo.id))!;
+  assert.equal(linhaNova.estoque_saldo, null);
+  assert.equal(linhaNova.estoque_status, 'sem_registro');
+  assert.equal(linhaNova.ultima_movimentacao, null);
+  assert.equal(linhaNova.ultimo_custo_entrada, null);
+});
+
+// ---------------------------------------------------------------------------
+// SEM N+1: a página inteira custa um número CONSTANTE de consultas
+// ---------------------------------------------------------------------------
+test('a listagem agrega saldo/mínimo/última movimentação em LOTE (o nº de consultas não cresce com a página)', async () => {
+  const store = getStore();
+  // Espiões nas agregações: o nº de CHAMADAS (não o nº de linhas) tem de ser
+  // constante. Sem `ultimosPorColuna`/`sumByColumn`, a ficha faria N consultas.
+  const chamadas = { sum: 0, ultimos: 0, count: 0 };
+  const origSum = (store as any).sumByColumn.bind(store);
+  const origUlt = (store as any).ultimosPorColuna.bind(store);
+  const origCount = (store as any).countByColumn.bind(store);
+  (store as any).sumByColumn = (...a: any[]) => {
+    chamadas.sum++;
+    return origSum(...a);
+  };
+  (store as any).ultimosPorColuna = (...a: any[]) => {
+    chamadas.ultimos++;
+    return origUlt(...a);
+  };
+  (store as any).countByColumn = (...a: any[]) => {
+    chamadas.count++;
+    return origCount(...a);
+  };
+  try {
+    // Duas fases: 2 insumos e depois 12 insumos NA MESMA PÁGINA (pageSize cobre
+    // todos). Se a agregação fosse por linha, o nº de consultas subiria de 2
+    // para 12 — o teste falharia.
+    for (let i = 0; i < 2; i++) await novoInsumo(`Escala ${i}`);
+
+    chamadas.sum = chamadas.ultimos = chamadas.count = 0;
+    const dois = await listar({ page: 1, pageSize: 500 });
+    const custoDois = { ...chamadas };
+
+    for (let i = 2; i < 12; i++) await novoInsumo(`Escala ${i}`);
+
+    chamadas.sum = chamadas.ultimos = chamadas.count = 0;
+    const doze = await listar({ page: 1, pageSize: 500 });
+    const custoDoze = { ...chamadas };
+
+    assert.ok(dois.rows.length >= 2);
+    assert.ok(doze.rows.length >= 12, 'a página agora traz 12 insumos deste arquivo');
+    assert.deepEqual(
+      custoDoze,
+      custoDois,
+      'o nº de agregações independe da QUANTIDADE de insumos (nenhum N+1)'
+    );
+
+    // E o lote é REAL: poucas chamadas, não uma por insumo.
+    assert.ok(custoDoze.sum <= 2, 'saldo: 1 agregação por página');
+    assert.ok(custoDoze.ultimos <= 4, 'últimas linhas: agregações fixas por página');
+    assert.ok(custoDoze.sum < doze.rows.length, 'muito menos agregações do que linhas');
+  } finally {
+    (store as any).sumByColumn = origSum;
+    (store as any).ultimosPorColuna = origUlt;
+    (store as any).countByColumn = origCount;
+  }
 });
 
 // ---------------------------------------------------------------------------

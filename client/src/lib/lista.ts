@@ -348,9 +348,11 @@ const CONFIG_GRADES: ListaConfig = {
  * aqui.
  */
 const CONFIG_INSUMOS: ListaConfig = {
-  prioridade: ['nome', 'unidade', 'fornecedor_id', 'custo_medio', 'estoque_saldo', 'ativo', 'uso_vinculado'],
+  prioridade: ['codigo_insumo', 'nome', 'categoria_id', 'unidade', 'fornecedor_id', 'estoque_saldo', 'custo_medio', 'ativo', 'uso_vinculado'],
   rotulos: {
+    codigo_insumo: 'Código',
     nome: 'Insumo',
+    categoria_id: 'Categoria',
     unidade: 'Unidade',
     fornecedor_id: 'Fornecedor',
     custo_medio: 'Custo médio',
@@ -359,8 +361,10 @@ const CONFIG_INSUMOS: ListaConfig = {
     uso_vinculado: 'Utilização',
   },
   larguras: {
+    codigo_insumo: { min: 'min-w-[110px]', max: 'max-w-[140px]' },
     nome: { min: 'min-w-[200px]', max: 'max-w-[280px]' },
-    unidade: { min: 'min-w-[120px]', max: 'max-w-[150px]' },
+    categoria_id: { min: 'min-w-[140px]', max: 'max-w-[180px]' },
+    unidade: { min: 'min-w-[100px]', max: 'max-w-[130px]' },
     fornecedor_id: { min: 'min-w-[150px]', max: 'max-w-[200px]' },
     custo_medio: { min: 'min-w-[120px]', max: 'max-w-[140px]' },
     estoque_saldo: { min: 'min-w-[110px]', max: 'max-w-[130px]' },
@@ -368,8 +372,8 @@ const CONFIG_INSUMOS: ListaConfig = {
     uso_vinculado: { min: 'min-w-[150px]', max: 'max-w-[200px]' },
   },
   titulo: 'nome',
-  card: ['unidade', 'fornecedor_id', 'custo_medio', 'estoque_saldo', 'ativo', 'uso_vinculado'],
-  buscaPlaceholder: 'Buscar insumo...',
+  card: ['codigo_insumo', 'categoria_id', 'unidade', 'fornecedor_id', 'custo_medio', 'estoque_saldo', 'ativo', 'uso_vinculado'],
+  buscaPlaceholder: 'Buscar insumo por nome ou código...',
   rotuloNovo: 'Novo insumo',
   rotuloEditar: 'Editar insumo',
   descricaoCadastro: 'Cadastre a matéria-prima usada na produção, a unidade de compra, o custo e o fornecedor.',
@@ -735,6 +739,44 @@ const CONFIG_ATRIBUICAO: ListaConfig = {
   vazioDescricao: 'Sem atribuição, a venda usa o representante do próprio pedido como principal.',
 };
 
+/**
+ * Categorias de insumos: taxonomia PRÓPRIA da matéria-prima, por empresa.
+ * Cadastro no padrão LISTA → PÁGINA (`/categorias-insumos/novo`,
+ * `/categorias-insumos/:id/editar`), nunca formulário sobreposto.
+ *
+ * `uso_vinculado` é VIRTUAL: o servidor conta quantos insumos usam a categoria
+ * (uma consulta agregada por página) — nenhum número inventado aqui.
+ */
+const CONFIG_CATEGORIAS_INSUMOS: ListaConfig = {
+  prioridade: ['nome', 'descricao', 'pai_id', 'ativo', 'uso_vinculado'],
+  rotulos: {
+    nome: 'Categoria',
+    descricao: 'Descrição',
+    pai_id: 'Categoria-pai',
+    ativo: 'Status',
+    uso_vinculado: 'Utilização',
+  },
+  larguras: {
+    nome: { min: 'min-w-[200px]', max: 'max-w-[280px]' },
+    descricao: { min: 'min-w-[180px]', max: 'max-w-[320px]' },
+    pai_id: { min: 'min-w-[150px]', max: 'max-w-[200px]' },
+    ativo: { min: 'min-w-[110px]', max: 'max-w-[120px]' },
+    uso_vinculado: { min: 'min-w-[150px]', max: 'max-w-[200px]' },
+  },
+  titulo: 'nome',
+  card: ['descricao', 'pai_id', 'ativo', 'uso_vinculado'],
+  buscaPlaceholder: 'Buscar categoria de insumo...',
+  rotuloNovo: 'Nova categoria',
+  rotuloEditar: 'Editar categoria',
+  descricaoCadastro: 'Agrupe a matéria-prima por natureza: Matéria-prima, Aviamentos, Identidade de marca, Embalagem...',
+  rotuloSalvar: 'Salvar categoria',
+  mensagemVinculos: 'Não é possível excluir esta categoria porque existem insumos vinculados.',
+  vazioTitulo: 'Nenhuma categoria de insumo cadastrada',
+  vazioDescricao: 'Cadastre a primeira categoria para agrupar a matéria-prima nas compras e na ficha técnica.',
+  alternarAtivo: true,
+  contagem: { singular: 'categoria', plural: 'categorias' },
+};
+
 const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   produtos: CONFIG_PRODUTOS,
   categorias: CONFIG_CATEGORIAS,
@@ -743,6 +785,7 @@ const LISTA_POR_RECURSO: Record<string, ListaConfig> = {
   tamanhos: CONFIG_TAMANHOS,
   grades: CONFIG_GRADES,
   insumos: CONFIG_INSUMOS,
+  categorias_insumos: CONFIG_CATEGORIAS_INSUMOS,
   fornecedores: CONFIG_FORNECEDORES,
   representantes: CONFIG_REPRESENTANTES,
   territorios: CONFIG_TERRITORIOS,

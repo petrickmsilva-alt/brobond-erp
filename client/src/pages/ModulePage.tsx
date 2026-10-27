@@ -193,6 +193,10 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const toast = useToast();
   const navigate = useNavigate();
   const meta = useMeta();
+  // Caminho-base do cadastro: é o caminho do MÓDULO (ex.: /categorias-insumos),
+  // que não coincide com o nome do recurso quando ele tem sublinhado
+  // (`categorias_insumos`). Rotas LISTA → PÁGINA são montadas a partir dele.
+  const basePath = module.path;
   const defaultLocal = meta?.defaultLocal ?? null;
   const hasImages = !!resource.images;
   const [zoom, setZoom] = useState<{ file: PublicFile; files: PublicFile[] } | null>(null);
@@ -498,8 +502,10 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   function openCreate() {
     // Padrão LISTA → PÁGINA do BROBOND ERP: estes cadastros têm rota própria
     // (/cores/novo, /categorias/novo...) e NÃO abrem formulário sobreposto.
+    // O caminho-base vem do módulo (`/categorias-insumos`), nunca do nome do
+    // recurso — os dois divergem nos recursos com sublinhado.
     if (FORM_DIRETO.has(resource.key)) {
-      navigate(`/${resource.key}/novo`);
+      navigate(`${basePath}/novo`);
       return;
     }
     setEditing(null);
@@ -518,7 +524,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
     }
     // Padrão LISTA → PÁGINA do BROBOND ERP: edição em rota própria.
     if (FORM_DIRETO.has(resource.key)) {
-      navigate(`/${resource.key}/${row.id}/editar`);
+      navigate(`${basePath}/${row.id}/editar`);
       return;
     }
     setEditing(row);

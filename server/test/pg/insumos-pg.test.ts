@@ -44,12 +44,15 @@ test('insumos em PostgreSQL real: listagem/filtros, saldo e utilização agregad
   const atorA = { id: 0, name: 'Gerente A', perfil: 'gerente' as const, empresa_id: A, empresas: [A] };
   const atorB = { id: 0, name: 'Gerente B', perfil: 'gerente' as const, empresa_id: B, empresas: [B] };
 
-  const fornecedor = await createRecord(RESOURCES.fornecedores, { nome: `Fornecedor ${sufixo}`, ativo: true }, admin);
+  // O insumo (e o fornecedor) pertencem à empresa A: criar com o ator da
+  // empresa é o que o fluxo real faz — um admin de SISTEMA criaria em empresa
+  // padrão e a listagem de A não o encontraria (era o defeito deste teste).
+  const fornecedor = await createRecord(RESOURCES.fornecedores, { nome: `Fornecedor ${sufixo}`, ativo: true }, atorA);
 
   const insumo = await createRecord(
     RESOURCES.insumos,
     { nome: `Malha penteada ${sufixo}`, unidade: 'm', custo_medio: 12.5, fornecedor_id: Number(fornecedor.id), ativo: true },
-    admin
+    atorA
   );
   const insumoId = Number(insumo.id);
 
@@ -68,6 +71,34 @@ test('insumos em PostgreSQL real: listagem/filtros, saldo e utilização agregad
   assert.equal(Number(linhaA!.custo_medio), 12.5);
   assert.equal(linhaA!.fornecedor_id__label, `Fornecedor ${sufixo}`, 'rótulo do fornecedor vem do cadastro');
 
+  // ---- A1) Identificação operacional e categorização (migration 0041) ------
+  // Código único POR EMPRESA: o mesmo código em OUTRA empresa é permitido.
+  const codigo = `INS-PG-${sufixo}`;
+  await query('UPDATE insumos SET codigo_insumo = $1 WHERE id = $2', [codigo, insumoId]);
+  const porCodigo = await listRecords(RESOURCES.insumos, { page: 1, pageSize: 50, q: codigo }, atorA);
+  assert.ok(porCodigo.rows.some((r) => Number(r.id) === insumoId), 'a busca encontra pelo código (ILIKE)');
+  await assert.rejects(
+    () =>
+      query('INSERT INTO insumos (empresa_id, nome, unidade, codigo_insumo) VALUES ($1, $2, $3, $4)', [
+        A,
+        `Duplicado ${sufixo}`,
+        'm',
+        codigo,
+      ]),
+    (e: any) => e?.code === '23505',
+    'o índice único parcial uq_insumos_codigo_empresa recusa o código repetido na MESMA empresa'
+  );
+
+  // Categoria de insumo (taxonomia própria) + filtro server-side por categoria.
+  const categoria = await createRecord(RESOURCES.categorias_insumos, { nome: `Malhas PG ${sufixo}` }, atorA);
+  await updateRecord(RESOURCES.insumos, insumoId, { categoria_id: Number(categoria.id) }, atorA);
+  const porCategoria = await listRecords(
+    RESOURCES.insumos,
+    { page: 1, pageSize: 100, filter: { categoria_id: String(categoria.id) } },
+    atorA
+  );
+  assert.ok(porCategoria.rows.some((r) => Number(r.id) === insumoId), 'o filtro de categoria recorta no servidor');
+
   const porUnidade = await listRecords(RESOURCES.insumos, { page: 1, pageSize: 100, filter: { unidade: 'kg' } }, atorA);
   assert.ok(!porUnidade.rows.some((r) => Number(r.id) === insumoId), 'filtro de unidade recorta no servidor');
 
@@ -83,9 +114,37 @@ test('insumos em PostgreSQL real: listagem/filtros, saldo e utilização agregad
 
   // ---- B) Estoque: saldo REAL agregado, por empresa ------------------------
   assert.equal(Number(linhaA!.estoque_saldo), 250, 'saldo real de estoque_insumos');
+  assert.equal(Number(linhaA!.estoque_min), 10, 'mínimo cadastrado em estoque_insumos (250 > 10 → normal)');
+  assert.equal(linhaA!.estoque_status, 'normal', 'situação derivada do saldo × mínimo');
   // A empresa B não tem saldo para este insumo: o recorte impede o vazamento.
   const linhaB = (await listRecords(RESOURCES.insumos, { page: 1, pageSize: 50, q: `malha penteada ${sufixo}` }, atorB)).rows[0];
   assert.ok(!linhaB, 'a empresa B não enxerga o insumo da empresa A');
+
+  // ---- B1) Última movimentação e último custo de entrada (DISTINCT ON) -----
+  await createRecord(
+    RESOURCES.movimentacoes_insumos,
+    { tipo: 'entrada', insumo_id: insumoId, quantidade: 5, custo_unitario: 14.75 },
+    atorA
+  );
+  const comMov = (await listRecords(RESOURCES.insumos, { page: 1, pageSize: 50, q: `malha penteada ${sufixo}` }, atorA)).rows[0];
+  assert.equal(comMov.ultima_movimentacao_tipo, 'entrada');
+  assert.ok(comMov.ultima_movimentacao, 'a última movimentação vem datada do banco');
+  assert.equal(Number(comMov.ultimo_custo_entrada), 14.75, 'custo unitário da última ENTRADA');
+  assert.equal(comMov.estoque_tem_movimentacao, true, 'a ficha sinaliza que há histórico (custo é calculado)');
+
+  // ---- B2) CUSTO MÉDIO: dado calculado depois da 1ª movimentação -----------
+  // Com histórico, o servidor RECUSA o PUT que tente editar o custo à mão — o
+  // valor é formado pelo recebimento de compras, não pelo formulário.
+  let erroCusto: any = null;
+  try {
+    await updateRecord(RESOURCES.insumos, insumoId, { custo_medio: 99 }, atorA);
+  } catch (e: any) {
+    erroCusto = e;
+  }
+  assert.ok(erroCusto, 'o custo médio é recusado quando já há movimentação');
+  assert.equal(erroCusto.status, 409);
+  assert.ok(erroCusto.fields?.custo_medio, 'o 409 aponta o campo custo_medio');
+  assert.equal(Number((await getRecord(RESOURCES.insumos, insumoId, atorA)).custo_medio), 12.5, 'o custo calculado não mudou');
 
   // ---- C) Utilização: contagem real de fichas técnicas ----------------------
   const produto = await createRecord(
@@ -120,7 +179,7 @@ test('insumos em PostgreSQL real: listagem/filtros, saldo e utilização agregad
   // ---- E) Pela camada de serviço: 409 + diagnóstico do catálogo ------------
   let erro: any = null;
   try {
-    await deleteRecord(RESOURCES.insumos, insumoId, admin);
+    await deleteRecord(RESOURCES.insumos, insumoId, atorA);
   } catch (e: any) {
     erro = e;
   }
@@ -137,15 +196,17 @@ test('insumos em PostgreSQL real: listagem/filtros, saldo e utilização agregad
   assert.equal((await getRecord(RESOURCES.insumos, insumoId, atorA)).nome, `Malha penteada ${sufixo}`);
 
   // ---- F) Insumo sem vínculo segue o fluxo normal ----------------------------
-  const orfa = await createRecord(RESOURCES.insumos, { nome: `Órfã ${sufixo}`, unidade: 'un', ativo: true }, admin);
-  await deleteRecord(RESOURCES.insumos, Number(orfa.id), admin);
+  const orfa = await createRecord(RESOURCES.insumos, { nome: `Órfã ${sufixo}`, unidade: 'un', ativo: true }, atorA);
+  await deleteRecord(RESOURCES.insumos, Number(orfa.id), atorA);
   const restou = await query('SELECT id FROM insumos WHERE id = $1', [Number(orfa.id)]);
   assert.equal(restou.rowCount, 0);
 
   // ---- G) Desativar (a saída recomendada) preserva registro e saldo ---------
-  const desativado = await updateRecord(RESOURCES.insumos, insumoId, { ativo: false }, admin);
+  const desativado = await updateRecord(RESOURCES.insumos, insumoId, { ativo: false }, atorA);
   assert.equal(desativado.ativo, false);
   assert.equal((await query('SELECT id FROM insumos WHERE id = $1', [insumoId])).rowCount, 1, 'o registro continua');
   const saldo = await query<{ quantidade: string }>('SELECT quantidade FROM estoque_insumos WHERE insumo_id = $1', [insumoId]);
-  assert.equal(Number(saldo.rows[0]?.quantidade), 250, 'o saldo do insumo desativado continua no estoque');
+  // 250 do saldo inicial + 5 da entrada real registrada em B1: o saldo do
+  // insumo desativado continua no estoque, agora refletindo a movimentação.
+  assert.equal(Number(saldo.rows[0]?.quantidade), 255, 'o saldo do insumo desativado continua no estoque');
 });
