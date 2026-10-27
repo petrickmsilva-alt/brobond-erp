@@ -138,6 +138,57 @@ export function marketplaceSaleReference(empresaId: number, usuarioId: number, c
   return `empresa:${tenant}:usuario:${actor}:${channel.toLowerCase()}:${externalOrderId}`;
 }
 
+/**
+ * Índices únicos que uma reentrega SIMULTÂNEA do mesmo pedido pode violar.
+ *
+ * O `ON CONFLICT` arbitra UM índice, e o PostgreSQL verifica os índices únicos
+ * na ordem de criação da tabela. Duas entregas concorrentes do mesmo pedido
+ * podem, portanto, estourar `23505` no índice composto ANTES de chegar ao
+ * árbitro (`reference`) — era a causa do 23505 intermitente que derrubava o
+ * gate de PostgreSQL (`pg-p0-commerce-tenant`).
+ */
+const CORRIDA_NA_REENTREGA =
+  /^sales_(reference_key|usuario_id_channel_external_order_id_key|empresa_usuario_channel_external_order_id_key)$/;
+
+/**
+ * `true` quando o erro é a corrida conhecida entre duas reentregas do pedido:
+ * violação de unicidade nos índices acima, ou o deadlock/serialização que o
+ * PostgreSQL levanta quando várias inserções especulativas disputam as mesmas
+ * chaves. Nenhum dos dois gravou nada — a transação inteira foi desfeita —,
+ * então repetir é seguro e é a resposta correta do lado da ingestão.
+ */
+function ehCorridaDeReentrega(error: unknown): boolean {
+  const e = error as { code?: string; constraint?: string } | null;
+  if (e?.code === '40001' || e?.code === '40P01') return true;
+  return e?.code === '23505' && CORRIDA_NA_REENTREGA.test(String(e.constraint ?? ''));
+}
+
+/**
+ * Executa o upsert com retentativa CURTA quando a transação perde a corrida
+ * para outra reentrega do mesmo pedido (unicidade, deadlock ou serialização).
+ *
+ * A violação de unicidade só aparece depois que a transação concorrente
+ * COMITA (o PostgreSQL espera por ela antes de decidir), então a tentativa
+ * seguinte enxerga a venda gravada e cai no caminho idempotente — nunca
+ * duplica receita. Não é laço infinito: sem a corrida conhecida, o erro
+ * original sobe intacto.
+ */
+async function runInTransactionComCorrida<T>(
+  db: ConnectorDatabase,
+  fn: (db: ConnectorDatabase) => Promise<T>,
+  tentativas = 3
+): Promise<T> {
+  for (let tentativa = 1; ; tentativa += 1) {
+    try {
+      return await runInTransaction(db, fn);
+    } catch (error) {
+      if (!ehCorridaDeReentrega(error) || tentativa >= tentativas) throw error;
+      // Espera crescente e curta: o commit concorrente já está a caminho.
+      await new Promise((resolve) => setTimeout(resolve, 5 * tentativa));
+    }
+  }
+}
+
 export function createSalesService(resolveDb: () => ConnectorDatabase) {
   return {
     /**
@@ -154,7 +205,7 @@ export function createSalesService(resolveDb: () => ConnectorDatabase) {
       const quantity = positiveInt(input.quantity, 1);
       const reference = marketplaceSaleReference(tenantId, actorId, input.channel, input.externalOrderId);
 
-      const result = await runInTransaction(db, async (tx) => {
+      const result = await runInTransactionComCorrida(db, async (tx) => {
         const { rows: existingRows } = await tx.query<SaleRawRow>(
           `SELECT ${SALE_COLUMNS} FROM sales
            WHERE empresa_id = $1 AND usuario_id = $2 AND channel = $3::sale_channel AND external_order_id = $4
@@ -177,12 +228,13 @@ export function createSalesService(resolveDb: () => ConnectorDatabase) {
 
         // O árbitro do ON CONFLICT precisa ser o índice que a corrida viola.
         // `reference` é DERIVADA de (empresa, usuario, canal, pedido externo),
-        // então os dois índices de unicidade expressam o mesmo fato para vendas
-        // de marketplace. Arbitrar por `reference` é o que torna a reentrega
-        // concorrente determinística: o PostgreSQL só resolve conflito no
-        // índice indicado; se arbitrássemos pelo índice composto, o conflito
-        // que aparece no índice de `reference` viraria 23505 (era o defeito
-        // intermitente de P0-02 em webhooks "at-least-once" simultâneos).
+        // então os índices de unicidade expressam o mesmo fato para vendas de
+        // marketplace e arbitrar por `reference` resolve o caso SEQUENCIAL.
+        // O caso SIMULTÂNEO continua possível: o PostgreSQL checa os índices
+        // únicos na ordem de criação e pode acusar o composto antes de chegar
+        // ao árbitro — por isso a transação é envolvida em
+        // `runInTransactionComCorrida`, que repete o upsert uma vez que a
+        // entrega concorrente comita (o resultado continua idempotente).
         const { rows } = await tx.query<SaleRawRow>(
           `INSERT INTO sales (
              id, reference, quantity, amount_cents, currency, status, occurred_at,
