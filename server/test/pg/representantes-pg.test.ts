@@ -34,10 +34,10 @@ process.env.NODE_ENV = 'test';
 const sufixo = Date.now().toString(36).toUpperCase();
 
 /**
- * DATE no PostgreSQL chega ao driver `pg` como `Date` (meia-noite UTC), não
- * como string — a mesma armadilha registrada em comissoes-periodo.test.ts.
- * Comparar `String(valor)` produziria "Sat Jan 31"; aqui a data é normalizada
- * para o formato canônico antes da asserção (o CONTRATO é o dia, não o tipo).
+ * O contrato de DATE é o DIA CIVIL "YYYY-MM-DD" — o pool da aplicação
+ * (server/src/db.ts) sobrepõe o parser da OID 1082 justamente para isso. Esta
+ * normalização defensiva mantém a asserção legível caso o valor chegue como
+ * `Date` por qualquer caminho: o que se compara é o DIA, não a representação.
  */
 function dia(valor: unknown): string | null {
   if (valor === null || valor === undefined) return null;
