@@ -39,6 +39,12 @@ jobs:
           npm run smoke
       - name: Auditoria do menu
         run: npm run audit:menu
+      # ERP 3.0: inventário arquitetural automatizado (migrations, tabelas,
+      # recursos × tenant × Prisma, rotas, RBAC, testes). Falha se um recurso
+      # apontar para tabela inexistente, declarar empresa sem `empresa_id` ou
+      # se o Prisma mapear uma tabela que o ERP não cria.
+      - name: Inventário arquitetural (ERP 3.0)
+        run: npm run architecture:audit
       - name: Typecheck do domínio
         run: npm run typecheck:domain
       - name: Validar schema Prisma unificado (fusão commerce)
