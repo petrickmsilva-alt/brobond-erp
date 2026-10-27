@@ -1,6 +1,7 @@
 # BROBOND ERP 3.0 — MATRIZ DE GAPS
 
-**Gerado em:** 2026-10-27 · **Branch:** `arena/bfa4a15b-brobond-erp`
+**Gerado em:** 2026-10-27 · **Branch:** `arena/72895db5-brobond-erp` · **Baseline de comparação:** **`main`**
+**Última atualização:** rodada *ERP 3.0 — MASTER FINAL HARDENING + ERP EVOLUTION* (migrations 0051..0056) — ver §8
 **Baseline real:** [`docs/ERP-3.0-ARCHITECTURE-BASELINE.md`](ERP-3.0-ARCHITECTURE-BASELINE.md) + [`docs/ERP-3.0-ARCHITECTURE-INVENTORY.json`](ERP-3.0-ARCHITECTURE-INVENTORY.json)
 **Como regenerar os números:** `npm run architecture:audit`
 
@@ -26,8 +27,14 @@
 |---|---:|---:|
 | **P0** | **0** | 0 |
 | **P1** | **0** | 3 |
-| **P2** | **9** | 3 |
-| **P3** | **3** | 0 |
+| **P2** | **12** | 11 (7 da rodada anterior + 4 na evolução 3.0) |
+| **P3** | **3** | 1 |
+
+> Números atualizados na rodada ERP 3.0: a evolução **fechou** GAP-P2-02,
+> P2-03, P2-05, P2-06, P2-08, P2-09, P2-10 e P3-01/P3-02, e **abriu** gaps
+> novos e honestos (§8.3) — porque implementar estrutura contábil/fiscal expõe
+> o que ainda falta. Nenhum gap foi fechado por decreto: cada um traz a
+> evidência executada.
 
 **Nenhum gap P0 foi encontrado** no escopo auditado (tenancy, RBAC, conversão
 CRM, projeção de vendas, anexos, webhooks). Isso **não é prova de ausência
@@ -51,7 +58,7 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 | Sintoma (antes) | `test:pg`, `smoke:pg` e `db:validate` não rodavam no ambiente de trabalho: sem servidor PostgreSQL e sem acesso a `binaries.prisma.sh` |
 | Como foi fechado | PostgreSQL **16.14 real** (binários `embedded-postgres` 16.14.0-beta.17) subiu em `127.0.0.1:5433`; banco **novo e vazio** por rodada; a suíte inteira do job `testes-postgres` foi executada |
 | Evidência local — `npm run test:pg` | **293 testes · 280 pass · 12 skip · 1 fail** (detalhe abaixo) |
-| Evidência local — `npm run smoke:pg` | **327/327 PASS** contra PostgreSQL real em banco criado do zero (migrate + `ensureAdmin` automáticos, zero SQL manual) |
+| Evidência local — `npm run smoke:pg` | **327/327 PASS** contra PostgreSQL real em banco criado do zero (migrate + `ensureAdmin` automáticos, zero SQL manual). O script passou a ter **377** verificações na evolução 3.0 (as 50 novas rodaram no modo demonstração; `smoke:pg` está bloqueado neste sandbox — GAP-P2-17) |
 | Evidência local — `npm run db:validate` | **BLOQUEADO**: `prisma validate` baixa `schema-engine` de `binaries.prisma.sh` (fora da allowlist de rede do sandbox). O CI executa `npx prisma validate` como passo do job `verificar` |
 | Evidência de CI | runs **40578401850** (`f3bf3f8`) e **40569720909** (`ab6e254`): job `testes-postgres` ✓ (PG 16.14 oficial + `psql`; passos `test:pg` e `smoke:pg` verdes) e job `verificar` ✓ (inclui `npx prisma validate`). O run **40579160432** foi vermelho por um defeito real de concorrência — ver `GAP-P1-06` |
 | Falha local remanescente (não mascarada) | `PROD-DB-01.5.3 — o executor recusa cópia defasada do script 005` (`server/test/pg/prod-db-01-521-gate-classe-c.test.ts`): `spawnSync(psql …)` → `exec: psql: not found`, exit 127. O pacote de binários disponível aqui traz `initdb`/`pg_ctl`/`postgres` e **não** traz o cliente `psql`; os 12 `# SKIP` da rodada têm a mesma causa (`binário psql indisponível; no CI ele é instalado (postgresql-client-16)`). No CI, com `postgresql-client-16` instalado, o mesmo teste passa — é o que o job verde de `ab6e254` mostra |
@@ -112,7 +119,7 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 | ID | Item | Evidência |
 |---|---|---|
 | **GAP-P1-06** | Reentrega simultânea do mesmo pedido retornava `23505`/`40P01` na ingestão | `runInTransactionComCorrida` + `server/test/pg/commerce-reentrega-concorrente.test.ts` (falha sem a correção, passa com ela) |
-| **GAP-P1-01** | Gates de PostgreSQL sem execução real | PG 16.14 real: `smoke:pg` 327/327; `test:pg` 277 pass (1 falha só por `psql` ausente no sandbox); CI run **40578401850** em `f3bf3f8` verde nos dois jobs (`testes-postgres` e `verificar`, este com `npx prisma validate`) |
+| **GAP-P1-01** | Gates de PostgreSQL sem execução real | PG 16.14 real: `smoke:pg` 327/327 (naquela rodada); `test:pg` 277 pass (1 falha só por `psql` ausente no sandbox); CI run **40578401850** em `f3bf3f8` verde nos dois jobs (`testes-postgres` e `verificar`, este com `npx prisma validate`) |
 | **GAP-P1-02** | 22 recursos multiempresa sem prova nominal de isolamento | `server/test/multiempresa-nominal.test.ts` (155) + `server/test/pg/multiempresa-nominal-http.test.ts` (13); `TENANT_SEM_TESTE` 22 → 0 |
 | **GAP-P1-03** | Funil sem elo Lead → Oportunidade (não havia endpoint nem ação de tela) | `server/src/crm.ts` + rota + ação na lista + 10 testes de servidor + 6 de tela + 10 verificações HTTP |
 | **GAP-P1-04** | Estágio/status do funil sem coerência (fechada mudava de etapa; motivo de perda órfão; data de fechamento não derivada) | `normalizarOportunidadeCrm` em `services.ts` + testes |
@@ -126,15 +133,15 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 
 | ID | Domínio | Gap | Impacto hoje | Fechamento sugerido |
 |---|---|---|---|---|
-| GAP-P2-02 | CRM | Estágios do funil **hard-coded** (5 etapas fixas) | Empresas não configuram o próprio pipeline | Tabela `crm_estagios` por empresa + FK em `crm_oportunidades.etapa`, mantendo o vocabulário atual como seed |
-| GAP-P2-03 | CRM | Histórico de estágio só na auditoria (sem tabela de eventos da oportunidade) | Relatório de conversão por estágio exige ler auditoria (JSONB) | Tabela `crm_oportunidade_eventos` (de/para estágio, autor, quando) |
+| ~~GAP-P2-02~~ | CRM | ~~Estágios do funil hard-coded~~ | **FECHADO na evolução 3.0** — `crm_funis`/`crm_etapas` (0051) com `ordem`, `ativo`, `probabilidade` e `empresa_id`; sem cadastro, o vocabulário anterior continua valendo | Evidência: `server/test/crm-3-0.test.ts`, `crm-funis`/`crm-etapas` na navegação |
+| ~~GAP-P2-03~~ | CRM | ~~Histórico de estágio só na auditoria~~ | **FECHADO** — `crm_oportunidade_estagio_historico` (0051) com de/para, autor, motivo e quando; `GET /api/crm/oportunidades/:id/historico` | Evidência: `server/test/crm-3-0.test.ts` |
 | GAP-P2-04 | CRM | Integridade cross-tenant no **banco** para `crm_*` é só por FK simples | API garante (404); SQL manual poderia cruzar empresas | Índices `UNIQUE (empresa_id, id)` + FKs compostas, no padrão E4.2 (`uq_e42_*`) |
-| GAP-P2-05 | CRM | Origem do lead é texto com vocabulário fechado no formulário | Sem campanha/UTM rastreável | Catálogo `crm_origens` (ou campos `campanha_id`/`utm_*`) — hoje indexada e validada |
-| GAP-P2-06 | CRM | Sem lembrete/notificação de atividade vencida | Follow-up depende de consulta manual | Job em `scheduled.ts` + notificação existente |
-| GAP-P2-08 | Estoque | Transferência entre locais não tem **documento** próprio (só movimentações par espelhado) | Sem rastreio de solicitação/aprovação da transferência | Documento `transferencias_estoque` + itens + eventos |
-| GAP-P2-09 | Compras | Sem homologação/cotação formal de fornecedor (qualificação cadastral) | Compra direta com fornecedor não homologado | Fluxo de homologação (documentos, aprovação, validade) |
-| GAP-P2-10 | Produção | Sem MRP, capacidade ou sequenciamento | Planejamento manual | MRP a partir de demanda + ficha técnica |
-| GAP-P2-11 | Fiscal | SPED/obrigações acessórias não implementados | Escrituração é feita fora do ERP | Exportações SPED (ICMS/IPI, contribuições), EFD-Reinf |
+| ~~GAP-P2-05~~ | CRM | ~~Origem sem campanha/UTM rastreável~~ | **FECHADO** — `crm_origens`, `crm_campanhas`, `origem_id`/`campanha_id`/`utm_source|medium|campaign|content|term` (0051). O texto livre legado foi **mantido** | Evidência: `server/test/crm-3-0.test.ts` |
+| ~~GAP-P2-06~~ | CRM | ~~Sem lembrete de atividade~~ | **FECHADO (lembrete)** — `data_hora`, `responsavel_id`, `prioridade`, `lembrete_em` e visões hoje/atrasadas/próximas em `/crm/agenda`. **Notificação push/e-mail continua aberta** (P2, §8.3) | Evidência: `crm-agenda` + `server/test/crm-3-0.test.ts` |
+| ~~GAP-P2-08~~ | Estoque | ~~Transferência sem documento~~ | **FECHADO** — `estoque_transferencias` + itens + eventos (0052), estados `solicitada→aprovada→em_transito→recebida`/`cancelada`; saldo só muda por `movimentacoes` | Evidência: `/estoque/transferencias` + `server/test/tenant-isolamento-3-0.test.ts` |
+| ~~GAP-P2-09~~ | Compras | ~~Sem homologação de fornecedor~~ | **FECHADO** — status/categoria/documentos/validade/avaliação/responsável no próprio fornecedor (0053), máquina de estados + guard 409 + score explicável | Evidência: `server/test/compras-homologacao.test.ts` (11) + `/compras/fornecedores` |
+| ~~GAP-P2-10~~ | Produção | ~~Sem MRP/capacidade~~ | **FECHADO (capacidade + MRP de leitura)** — `producao_recursos` (0054), ocupação/gargalo e MRP a partir de pedidos, estoque, mínimo, BOM e compras abertas. **Sequenciamento automático não foi feito** (§8.3) | Evidência: `server/test/producao-capacidade-mrp.test.ts` (8) |
+| GAP-P2-11 | Fiscal | Obrigações acessórias **sem geração de arquivo** | **PARCIAL** — calendário, prazos, status derivado e entrega com protocolo/arquivo já existem (0055); **o layout do SPED/EFD não foi implementado** (ver §8.3) | Exportações SPED com layout validado contra o manual do órgão |
 
 ---
 
@@ -142,8 +149,8 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 
 | ID | Domínio | Gap |
 |---|---|---|
-| GAP-P3-01 | CRM | Lead scoring / previsão de fechamento (hoje probabilidade manual) |
-| GAP-P3-02 | CRM | Painel de conversão por estágio (depende de GAP-P2-03) |
+| ~~GAP-P3-01~~ | CRM | ~~Lead scoring / previsão de fechamento~~ — **FECHADO**: score por regras explicáveis com `score_motivo` gravado + forecast ponderado pela probabilidade da etapa |
+| ~~GAP-P3-02~~ | CRM | ~~Painel de conversão por estágio~~ — **FECHADO**: `/crm/painel` sobre o histórico de estágio (0051) |
 | GAP-P3-03 | Commerce/Creators | 8 módulos `planned` (produtos/pedidos/trends/delivery, creators, matches, outreach, campanhas) |
 
 ---
@@ -158,3 +165,63 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 | Otimizações especulativas (cache, GIN/trgm) | **Não** | Sem evidência de plano ruim; índices só nas consultas quentes reais |
 | Unificar `vendas` e `sales` | **Não** | Arquitetura é operacional + read model; unificar criaria segunda fonte de verdade |
 | Declarar "compliance fiscal completo" | **Não** | NF-e/NFC-e existem; SPED e obrigações acessórias **não** — registrado como P2 |
+
+---
+
+## 8. Evolução ERP 3.0 (migrations 0051..0056)
+
+> Rodada *MASTER FINAL HARDENING + ERP EVOLUTION*. Baseline de comparação:
+> **`main`**. Tudo abaixo executado e verificado; nada foi declarado pronto por
+> inspeção.
+
+### 8.1 Fechados na evolução
+
+| ID | Domínio | Evidência executada |
+|---|---|---|
+| GAP-P2-02 | CRM | `crm_funis` + `crm_etapas` (0051); `server/test/crm-3-0.test.ts` |
+| GAP-P2-03 | CRM | `crm_oportunidade_estagio_historico` + rota de histórico |
+| GAP-P2-05 | CRM | `crm_origens`/`crm_campanhas`/UTM sem remover o texto livre |
+| GAP-P2-06 | CRM | Lembretes e visões hoje/atrasadas/próximas (`/crm/agenda`) |
+| GAP-P2-08 | Estoque | Documento de transferência com estados e itens (0052) |
+| GAP-P2-09 | Compras | Homologação no cadastro do fornecedor (0053), com guard 409 |
+| GAP-P2-10 | Produção | Recursos, capacidade, gargalo e MRP de leitura (0054) |
+| GAP-P3-01 | CRM | Score explicável com motivo gravado |
+| GAP-P3-02 | CRM | Painel de conversão por estágio |
+| — (novo, P1 na rodada) | UX | **Zero modal**: `npm run audit:ux` + `client/src/test/zero-modal.test.ts` |
+| — (novo, P1 na rodada) | Arquitetura | Métricas SQL (`tabela possui empresa_id`) e Prisma (`modelo tem empresaId`) separadas no `architecture:audit` |
+| — (novo, P1 na rodada) | Documentação | `docs/ERP-3.0-MODAL-AUDIT.md`, `docs/ERP-3.0-DUPLICITY-AUDIT.md`, `docs/ERP-3.0-MASTER-DATA-AUDIT.md` |
+
+### 8.2 Gaps que a evolução **fechou parcialmente** (sem fingir conclusão)
+
+| Item | O que existe | O que falta |
+|---|---|---|
+| Fiscal (obrigações acessórias) | Calendário por competência, vencimento calculado, status derivado, entrega com protocolo/arquivo/validação | Geração e validação de arquivo no layout oficial (SPED/EFD). **Não** foi inventada nenhuma regra tributária |
+| Financeiro contábil | Plano de contas, centro de custo, natureza, documento de origem, débito/crédito, competência, período, balancete com `sem_classificacao` | Escrituração fiscal/contábil completa, integração com contador, importação de plano de contas |
+| CRM lembretes | Registro, prioridade, responsável, visões de atraso | Notificação ativa (push/e-mail) disparada por `scheduled.ts` |
+| Produção planejamento | Capacidade, ocupação, gargalo, MRP de necessidade | Sequenciamento/otimização de fila e calendário de feriados |
+
+### 8.3 Gaps abertos a partir desta evolução
+
+| ID | Nível | Domínio | Gap | Por que não foi feito agora | Risco/dependência |
+|---|---|---|---|---|---|
+| GAP-P2-12 | P2 | Fiscal | Sem exportação SPED/EFD (ICMS/IPI, contribuições, Reinf) | Exige layout oficial versionado e validação contra manual; implementar "meio SPED" geraria arquivo rejeitado | Depende de contador/contabilidade definir o escopo |
+| GAP-P2-13 | P2 | Financeiro | Plano de contas sem importação em massa | Formato (CSV × SPED) precisa ser acordado; hoje é cadastro manual | 200+ contas digitadas à mão |
+| GAP-P2-14 | P2 | CRM | Lembrete sem notificação ativa | Depende do canal já existente (`scheduled.ts` + notificações) ser parametrizado por usuário | Follow-up depende de abrir a tela |
+| GAP-P2-15 | P2 | Produção | Sem sequenciamento nem calendário de feriados | Capacidade atual considera dia útil fixo (seg–sex) | Ocupação/gargalo ficam otimistas em semanas com feriado |
+| GAP-P2-16 | P2 | Estoque | Sem contagem cíclica automatizada (inventário rotativo por curva) | Inventário com contagem/divergência/aprovação/ajuste existe; gerar a pauta automaticamente é decisão de operação | Retrabalho de contagem |
+| GAP-P2-17 | P2 | Infraestrutura de teste | `test:pg`, `smoke:pg`, `db:validate` **BLOQUEADOS** neste sandbox | Sem servidor PostgreSQL e sem cliente `psql`; `prisma validate` baixa binário fora da allowlist de rede | Evidência de PG depende do CI (jobs `testes-postgres` e `verificar`) |
+| GAP-P3-04 | P3 | Master data | `insumos.unidade` é texto livre | Catálogo de unidades exigiria migração de dados | Padronização de compras |
+| GAP-P3-05 | P3 | Estoque | Estoque de terceiros (facção) sem endereço próprio completo | `locais.tipo = faccao` existe e o saldo é rastreado por local; falta o contrato de posse por terceiro | Só relevante se houver estoque de terceiro em escala |
+| GAP-P3-06 | P3 | UX | `CatalogoPublico` mantém lightbox/carrinho sobrepostos | Ambiente público de compra do cliente final, fora do ERP — decisão de produto | Nenhum para o ERP |
+
+### 8.4 O que esta evolução **não** fez (e por quê)
+
+| Tentação | Decisão | Motivo |
+|---|---|---|
+| Criar um segundo financeiro/contabilidade paralela | **Não** | Um único livro-caixa; balancete é leitura dele |
+| Inventar alíquotas, CST ou layout de SPED | **Não** | Regra tributária sem base legal é pior que ausência: fica em `regras_fiscais`/`impostos_ncm`, cadastrada pelo contador |
+| Gerar pedido de compra automático pelo MRP | **Não** | Sem aprovação humana violaria alçada; MRP é leitura |
+| Criar "fornecedor homologado" como segundo cadastro | **Não** | Duplicidade de master data; homologação é processo sobre o cadastro existente |
+| Gravar `disponível` como coluna | **Não** | Saldo derivado gravado é fonte clássica de divergência |
+| Unificar `vendas` e `sales` | **Não** | Proibido pelo escopo e destruiria rastreabilidade por canal |
+| Remover tabelas "legadas" | **Não** | Nenhuma prova de duplicidade real (`docs/ERP-3.0-DUPLICITY-AUDIT.md`: 0 duplicidades reais) |

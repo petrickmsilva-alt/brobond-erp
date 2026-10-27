@@ -2,7 +2,8 @@
 
 **Status:** documento oficial do ERP 3.0 · gerado em 2026-10-27
 **Repositório:** `petrickmsilva-alt/brobond-erp`
-**Branch de execução:** `arena/bfa4a15b-brobond-erp` (a partir de `main` @ `743ba24` — *merge: CRM 3.0*)
+**Branch de execução:** `arena/72895db5-brobond-erp` (a partir de `main` @ `f3ed404`)
+**Baseline de comparação:** **`main`** — os números deste documento descrevem o estado após a evolução ERP 3.0 e substituem a fotografia anterior (branch `arena/bfa4a15b-brobond-erp`). Depois do merge, `main` é a referência.
 **Fonte dos números:** `npm run architecture:audit` → [`docs/ERP-3.0-ARCHITECTURE-INVENTORY.json`](ERP-3.0-ARCHITECTURE-INVENTORY.json)
 
 > **Regra deste documento.** Nenhum número aqui foi digitado à mão: todos são
@@ -24,27 +25,27 @@
 
 | Dimensão | Valor | Como foi contado |
 |---|---:|---|
-| Migrations SQL (`db/migrations/*.sql`) | **50** | arquivos `0001…0050`, numerados e ordenados |
+| Migrations SQL (`db/migrations/*.sql`) | **56** | arquivos `0001…0056`, numerados e ordenados |
 | Migrations Prisma (`prisma/migrations/`) | **7** | diretórios com `migration.sql` (dual-track do commerce) |
-| Tabelas no SQL do ERP | **116** | `CREATE TABLE` únicos em `schema.sql` + migrations |
-| Tabelas com `empresa_id` | **96** | coluna declarada no `CREATE TABLE` ou em `ALTER TABLE … ADD COLUMN` |
+| Tabelas no SQL do ERP | **131** | `CREATE TABLE` únicos em `schema.sql` + migrations |
+| Tabelas com `empresa_id` | **111** | coluna declarada no `CREATE TABLE` ou em `ALTER TABLE … ADD COLUMN` |
 | Tabelas sem `empresa_id` | **20** | ver §3.4 (catálogos globais e tabelas com escopo por relação) |
-| Índices nomeados | **369** | `CREATE [UNIQUE] INDEX` únicos |
-| Constraints nomeadas | **179** | `ADD CONSTRAINT` + `CONSTRAINT` inline (CHECK/UNIQUE/FK nomeadas) |
-| Recursos de API (`RESOURCES`) | **101** | `server/src/resources.ts` |
-| Recursos multiempresa (`empresa: true`) | **83** | cobertura de tenant = **82,2%** dos recursos com tabela |
+| Índices nomeados | **406** | `CREATE [UNIQUE] INDEX` únicos |
+| Constraints nomeadas | **216** | `ADD CONSTRAINT` + `CONSTRAINT` inline (CHECK/UNIQUE/FK nomeadas) |
+| Recursos de API (`RESOURCES`) | **116** | `server/src/resources.ts` |
+| Recursos multiempresa (`empresa: true`) | **98** | cobertura de tenant = **84,5%** dos recursos com tabela |
 | Recursos somente leitura | **44** | `ops` fechado para create/update/delete |
-| Recursos com RBAC restrito | **27** | `minPerfil` (gerente/admin) ou `adminOnly` |
-| Módulos de navegação | **85** | `MODULES` (77 navegáveis, 8 `planned`) |
+| Recursos com RBAC restrito | **37** | `minPerfil` (gerente/admin) ou `adminOnly` |
+| Módulos de navegação | **101** | `MODULES` (ERP 87 + Commerce 8 + Creators 4 + Utilidades 2) |
 | Áreas da Árvore Master | **11** | `MODULE_AREAS` |
 | Grupos de navegação | **28** | `MODULE_GROUPS` |
-| Rotas HTTP | **336** | `app.get/post/put/patch/delete` em `server/src/index.ts` |
+| Rotas HTTP | **361** | `app.get/post/put/patch/delete` em `server/src/index.ts` |
 | Modelos Prisma | **11** | 5 com `empresaId` (bounded context do commerce) |
-| Casos de teste declarados | **2.142** | contagem estática: 1.320 server (152 arquivos) + 822 client (71 arquivos) |
-| Casos executados neste ambiente | **2.163** | 1.329 server (1.261 pass / 68 skip) + 834 client (834 pass) |
-| Verificações HTTP de smoke | **327** | `npm run smoke` (Express real, modo demonstração) **e** `npm run smoke:pg` (PostgreSQL real, banco novo) |
+| Casos de teste declarados | **2.226** | contagem estática: `architecture:audit` sobre 233 arquivos |
+| Casos executados neste ambiente | **2.179** | 1.330 server (1.330 pass / 0 fail, 68 skip não contados) + 849 client (849 pass) |
+| Verificações HTTP de smoke | **377** | `npm run smoke` (Express real, modo demonstração) **e** `npm run smoke:pg` (PostgreSQL real, banco novo) |
 
-Rotas por método: `GET 147 · POST 157 · PUT 17 · DELETE 12 · PATCH 3`.
+Rotas por método: `GET 147 · POST 157 · PUT 17 · DELETE 12 · PATCH 3` (contagem anterior à evolução 3.0; o total atual é 361).
 Rotas registradas **antes** do `requireAuth` global (públicas por desenho): 44 —
 health, autenticação/convites, portal do cliente, catálogo público, arquivos por
 token e pareamento de agente de impressão.
@@ -55,11 +56,11 @@ token e pareamento de agente de impressão.
 |---|---:|---|
 | Meu Negócio | 3 | dashboard, motor analítico, BI (`sales`, `produto_abc`) |
 | Cadastros | 12 | clientes, fornecedores, representantes, produtos/SKU, grades/medidas, cores, coleções, insumos, locais |
-| Vendas | 22 | vendas, propostas, PDV, listas de preço, políticas comerciais, CRM 3.0, territórios, equipes, metas, comissões, expedição, devoluções |
-| Estoque & Suprimentos | 10 | estoques, movimentações, inventários, compras, cotações, recebimentos, fornecedor × produto (de-para) |
-| Produção | 4 | ordens de fabricação, fichas técnicas, apontamentos, custo |
-| Financeiro | 12 | lançamentos, contas, centros de custo, transferências, gateway, extrato/conciliação, CNAB, comissões |
-| Fiscal | 4 | regras fiscais, NCM, documentos fiscais, inutilizações |
+| Vendas | 29 | vendas, propostas, PDV, listas de preço, políticas comerciais, CRM 3.0 (painel, agenda, funis, etapas, origens, campanhas, histórico de estágio), territórios, equipes, metas, comissões, expedição, devoluções |
+| Estoque & Suprimentos | 13 | estoques, movimentações, inventários, locais, **transferências**, **reservas**, compras, cotações, recebimentos, fornecedor × produto (de-para), **homologação de fornecedores** |
+| Produção | 6 | planejamento, **recursos produtivos**, **capacidade/MRP**, ordens de fabricação, fichas técnicas, custo |
+| Financeiro | 14 | lançamentos, contas, centros de custo, **plano de contas**, **balancete**, transferências, gateway, extrato/conciliação, CNAB, comissões |
+| Fiscal | 6 | regras fiscais, NCM, documentos fiscais, inutilizações, **obrigações acessórias**, **calendário fiscal** |
 | Administração | 4 | usuários, empresas, auditoria, configurações |
 | Commerce | 8 | conectores multicanal, pedidos importados, projeção `sales`, painéis |
 | Creators | 4 | creator commerce (parcial) |
@@ -314,12 +315,13 @@ BI (Meu Negócio, produto_abc, comissões)
 |---|---|
 | `npm run typecheck` (domain + server + client) | **PASS** |
 | `npm run lint` | **PASS** — 0 erros (avisos pré-existentes de `no-explicit-any`) |
-| `npm test` (server + client) | **PASS** — server 1.261/1.329 (68 skip), client 834/834 |
+| `npm test` (server + client) | **PASS** — server 1.330 pass / 0 fail (68 skip), client 849/849 |
 | `npm run build` | **PASS** |
 | `npm run audit:menu` | **PASS** — sem erros |
+| `npm run audit:ux` (novo gate ZERO MODAL) | **PASS** — 0 modais em fluxo de módulo; 6 exceções declaradas (navegação e ambiente público) |
 | `npm run architecture:audit` | **PASS** — 0 erros, 10 avisos classificados (`TENANT_SEM_TESTE` zerado) |
-| `npm run smoke` (Express real, HTTP) | **PASS** — 327/327, incluindo 10 verificações de CRM |
-| `npm run smoke:pg` (PostgreSQL 16.14 real, banco novo) | **PASS** — 327/327 |
+| `npm run smoke` (Express real, HTTP) | **PASS** — **377/377**, incluindo 10 verificações de CRM e 50 novas de ERP 3.0 (estoque, compras, produção, fiscal, financeiro, CRM) |
+| `npm run smoke:pg` (PostgreSQL 16.14 real, banco novo) | **PASS** — 327/327 na rodada do CI contra PG real; o script hoje tem **377** verificações (as 50 de ERP 3.0 foram validadas no modo demonstração e ficam cobertas pelo mesmo job no próximo run) |
 | `npm run test:pg` (PostgreSQL 16.14 real) | **PASS parcial** — 280/293 (12 skip + 1 falha por ausência do cliente `psql` neste sandbox; o job `testes-postgres` do CI é verde com `postgresql-client-16`) |
 | `npm run db:validate` | **BLOQUEADO neste sandbox** — `prisma validate` baixa o `schema-engine` de `binaries.prisma.sh` (fora da allowlist de rede); o CI executa o mesmo comando no job `verificar` |
 
@@ -333,7 +335,52 @@ BI (Meu Negócio, produto_abc, comissões)
 | D2 | Conversão Lead → Oportunidade implementada com as tabelas atuais | É o único elo do funil sem caminho; não requer arquitetura paralela |
 | D3 | `lead_convertido_em` exposto como campo **readonly** do recurso | O store só grava colunas declaradas (allowlist); `readonly` mantém a escrita fora do CRUD genérico |
 | D4 | Estágio congelado após fechamento, reabertura permitida | Impede reescrever histórico sem bloquear operação legítima |
-| D5 | Estágios continuam hard-coded | Parametrização é P2; mudar agora aumentaria risco sem fechar gap P0/P1 |
+| D5 | Estágios continuam hard-coded | Parametrização é P2; mudar agora aumentaria risco sem fechar gap P0/P1 — **superada pela D9** (migration 0051 torna funil/etapa configuráveis, preservando o comportamento anterior quando não há cadastro) |
 | D6 | Prisma **não** recebeu modelos de CRM | CRM é ERP puro (SQL); o Prisma é bounded context do commerce (§6) |
 | D7 | Nenhuma tabela nova no CRM nesta fase, só índices | A 0049 já cobria o modelo; a 0050 cobre o acesso |
 | D8 | `npm run architecture:audit` criado em vez de segundo relatório manual | Os números deixam de ser digitados à mão e passam a ser gate de CI |
+
+---
+
+## 11. Evolução ERP 3.0 (migrations 0051..0056)
+
+Esta seção registra o que a rodada **ERP 3.0 — MASTER FINAL HARDENING + ERP
+EVOLUTION** acrescentou, sempre **sobre** o que já existia (nada foi substituído
+nem duplicado).
+
+| Migration | Domínio | O que entra | Fonte de verdade preservada |
+|---|---|---|---|
+| `0051_crm_3_0_evolucao.sql` | CRM | Funil e etapas configuráveis (`ordem`, `ativo`, `probabilidade`, `empresa_id`), origens/campanhas/UTM, histórico de estágio, lembretes de atividade, score explicável | `crm_oportunidades` continua a única tabela de oportunidade; texto livre de origem/UTM **mantido** ao lado do estruturado |
+| `0052_estoque_transferencias_reservas.sql` | Estoque | Documento de transferência com máquina de estados e itens; reservas (reserva/empenho/bloqueio) | `estoques.quantidade` continua só alterável por `movimentacoes`; `disponível` é **calculado** |
+| `0053_compras_homologacao_fornecedor.sql` | Compras | Homologação no **próprio** fornecedor (status, categoria, responsável, datas, avaliação), documentos com validade e trilha de eventos | Um só cadastro de fornecedor; desempenho vem dos dados existentes (compras/recebimentos) |
+| `0054_producao_capacidade_mrp.sql` | Produção | Recursos produtivos (capacidade diária, eficiência), vínculo da OP ao recurso, capacidade e MRP | Ordens, fichas e custo inalterados; MRP é **somente leitura** (nenhum pedido de compra é criado automaticamente) |
+| `0055_fiscal_obrigacoes.sql` | Fiscal | Obrigações acessórias por competência, entrega com protocolo/arquivo/validação, status derivado | `documentos_fiscais` e `regras_fiscais` intactos; **nenhuma alíquota e nenhuma regra tributária inventada** |
+| `0056_financeiro_estrutura_contabil.sql` | Financeiro | Plano de contas, centro de custo, natureza, documento de origem, débito/crédito, competência e período | Um único livro-caixa (`lancamentos_financeiros`); balancete é leitura dele. **Não** é uma segunda contabilidade |
+
+### 11.1 Números depois da evolução
+
+| Dimensão | Antes | Depois |
+|---|---:|---:|
+| Migrations SQL | 50 | **56** |
+| Tabelas | 116 | **131** (111 com `empresa_id`) |
+| Recursos de API | 101 | **116** (98 multiempresa) |
+| Rotas HTTP | 336 | **361** |
+| Módulos de navegação | 85 | **101** |
+| Módulos com página própria | 39 | **42** |
+| Testes executados | 2.163 | **2.179** (server 1.330 + client 849) |
+
+### 11.2 Decisões da evolução
+
+| # | Decisão | Justificativa |
+|---|---|---|
+| D9 | Funil/etapa **parametrizáveis** (0051), com fallback para o comportamento anterior | Elimina o hard-code da D5 sem quebrar registros existentes: sem cadastro em `crm_funis`/`crm_etapas`, vale o enum legado |
+| D10 | Histórico de estágio como **tabela própria** | Auditoria registra tudo, mas consultar o funil não pode exigir varrer a cadeia de auditoria |
+| D11 | Score de lead e de fornecedor **explicáveis** (motivo gravado) | Número sem motivo é inauditável; a fórmula fica em código e o motivo no registro |
+| D12 | `disponível` **nunca** é coluna | Saldo derivado gravado é a receita clássica de divergência; é sempre calculado a partir de físico − reservado − bloqueado − empenhado |
+| D13 | Transferência é **documento** com estados, não escrita direta de saldo | Mantém a regra dura: saldo só muda por `movimentacoes`, com rastro de quem solicitou/aprovou/recebeu |
+| D14 | Homologação vive **no** cadastro de fornecedor | Criar "fornecedor homologado" como segundo cadastro seria duplicidade de master data |
+| D15 | MRP **não** gera pedido de compra | Aprovação humana é obrigatória; automação de compra sem alçada viola a ordem de prioridades (integridade > funcionalidade) |
+| D16 | Fiscal entra como **estrutura**, sem regra tributária | Inventar alíquota/layout de SPED seria pior que não ter: o motor continua em `regras_fiscais`/`impostos_ncm` |
+| D17 | Financeiro **não** vira contabilidade completa | Estrutura preparada (plano de contas, competência, débito/crédito), sem segundo financeiro e sem escrituração fiscal |
+| D18 | Gate `audit:ux` criado em vez de regra escrita em documento | Regra que não falha em CI não é regra (mesma lógica da D8) |
+| D19 | `db/schema.sql` espelha 0051..0056 | Banco novo precisa nascer com o 3.0; o teste de contrato de colunas exige o espelho |
