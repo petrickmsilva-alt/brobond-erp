@@ -37,9 +37,11 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 
 ## 2. Gaps P1 — fechados nesta execução
 
-> Esta rodada executou os dois P1 que estavam abertos. O que segue é a evidência
-> **executada**, com os comandos e os números reais — inclusive a única verificação
-> que permanece impossível neste sandbox.
+> Esta rodada fechou os dois P1 que estavam abertos e **encontrou e fechou um
+> terceiro**, revelado pelo próprio gate (o P1-06, defeito intermitente de
+> concorrência na ingestão). O que segue é a evidência **executada**, com os
+> comandos e os números reais — inclusive a única verificação que permanece
+> impossível neste sandbox.
 
 ### GAP-P1-01 — Evidência de PostgreSQL real · **FECHADO**
 
