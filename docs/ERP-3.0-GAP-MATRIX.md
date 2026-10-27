@@ -94,7 +94,7 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 
 | ID | Item | Evidência |
 |---|---|---|
-| **GAP-P1-01** | Gates de PostgreSQL sem execução real | PG 16.14 real: `smoke:pg` 327/327; `test:pg` 277 pass (1 falha só por `psql` ausente no sandbox); CI `40569720909` verde |
+| **GAP-P1-01** | Gates de PostgreSQL sem execução real | PG 16.14 real: `smoke:pg` 327/327; `test:pg` 277 pass (1 falha só por `psql` ausente no sandbox); CI run **40578401850** em `f3bf3f8` verde nos dois jobs (`testes-postgres` e `verificar`, este com `npx prisma validate`) |
 | **GAP-P1-02** | 22 recursos multiempresa sem prova nominal de isolamento | `server/test/multiempresa-nominal.test.ts` (155) + `server/test/pg/multiempresa-nominal-http.test.ts` (13); `TENANT_SEM_TESTE` 22 → 0 |
 | **GAP-P1-03** | Funil sem elo Lead → Oportunidade (não havia endpoint nem ação de tela) | `server/src/crm.ts` + rota + ação na lista + 10 testes de servidor + 6 de tela + 10 verificações HTTP |
 | **GAP-P1-04** | Estágio/status do funil sem coerência (fechada mudava de etapa; motivo de perda órfão; data de fechamento não derivada) | `normalizarOportunidadeCrm` em `services.ts` + testes |
