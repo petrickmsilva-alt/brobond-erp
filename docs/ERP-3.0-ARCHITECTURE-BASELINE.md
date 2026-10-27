@@ -40,7 +40,7 @@
 | Grupos de navegação | **28** | `MODULE_GROUPS` |
 | Rotas HTTP | **336** | `app.get/post/put/patch/delete` em `server/src/index.ts` |
 | Modelos Prisma | **11** | 5 com `empresaId` (bounded context do commerce) |
-| Casos de teste declarados | **2.141** | contagem estática: 1.319 server (151 arquivos) + 822 client (71 arquivos) |
+| Casos de teste declarados | **2.142** | contagem estática: 1.320 server (152 arquivos) + 822 client (71 arquivos) |
 | Casos executados neste ambiente | **2.163** | 1.329 server (1.261 pass / 68 skip) + 834 client (834 pass) |
 | Verificações HTTP de smoke | **327** | `npm run smoke` (Express real, modo demonstração) **e** `npm run smoke:pg` (PostgreSQL real, banco novo) |
 
@@ -320,7 +320,7 @@ BI (Meu Negócio, produto_abc, comissões)
 | `npm run architecture:audit` | **PASS** — 0 erros, 10 avisos classificados (`TENANT_SEM_TESTE` zerado) |
 | `npm run smoke` (Express real, HTTP) | **PASS** — 327/327, incluindo 10 verificações de CRM |
 | `npm run smoke:pg` (PostgreSQL 16.14 real, banco novo) | **PASS** — 327/327 |
-| `npm run test:pg` (PostgreSQL 16.14 real) | **PASS parcial** — 277/290 (12 skip + 1 falha por ausência do cliente `psql` neste sandbox; o job `testes-postgres` do CI é verde com `postgresql-client-16`) |
+| `npm run test:pg` (PostgreSQL 16.14 real) | **PASS parcial** — 278/291 (12 skip + 1 falha por ausência do cliente `psql` neste sandbox; o job `testes-postgres` do CI é verde com `postgresql-client-16`) |
 | `npm run db:validate` | **BLOQUEADO neste sandbox** — `prisma validate` baixa o `schema-engine` de `binaries.prisma.sh` (fora da allowlist de rede); o CI executa o mesmo comando no job `verificar` |
 
 ---

@@ -25,7 +25,7 @@
 | Nível | Abertos | Fechados nesta execução |
 |---|---:|---:|
 | **P0** | **0** | 0 |
-| **P1** | **0** | 2 |
+| **P1** | **0** | 3 |
 | **P2** | **9** | 3 |
 | **P3** | **3** | 0 |
 
@@ -48,10 +48,10 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 | Domínio | Infraestrutura de teste / evidência de release |
 | Sintoma (antes) | `test:pg`, `smoke:pg` e `db:validate` não rodavam no ambiente de trabalho: sem servidor PostgreSQL e sem acesso a `binaries.prisma.sh` |
 | Como foi fechado | PostgreSQL **16.14 real** (binários `embedded-postgres` 16.14.0-beta.17) subiu em `127.0.0.1:5433`; banco **novo e vazio** por rodada; a suíte inteira do job `testes-postgres` foi executada |
-| Evidência local — `npm run test:pg` | **290 testes · 277 pass · 12 skip · 1 fail** (detalhe abaixo) |
+| Evidência local — `npm run test:pg` | **291 testes · 278 pass · 12 skip · 1 fail** (detalhe abaixo) |
 | Evidência local — `npm run smoke:pg` | **327/327 PASS** contra PostgreSQL real em banco criado do zero (migrate + `ensureAdmin` automáticos, zero SQL manual) |
 | Evidência local — `npm run db:validate` | **BLOQUEADO**: `prisma validate` baixa `schema-engine` de `binaries.prisma.sh` (fora da allowlist de rede do sandbox). O CI executa `npx prisma validate` como passo do job `verificar` |
-| Evidência de CI | run **40569720909** em `ab6e254`: job `testes-postgres` ✓ (4m37s, `postgres:16.14` oficial + `psql`) e job `verificar` ✓ (3m5s, inclui `npx prisma validate`) |
+| Evidência de CI | runs **40578401850** (`f3bf3f8`) e **40569720909** (`ab6e254`): job `testes-postgres` ✓ (PG 16.14 oficial + `psql`; passos `test:pg` e `smoke:pg` verdes) e job `verificar` ✓ (inclui `npx prisma validate`). O run **40579160432** foi vermelho por um defeito real de concorrência — ver `GAP-P1-06` |
 | Falha local remanescente (não mascarada) | `PROD-DB-01.5.3 — o executor recusa cópia defasada do script 005` (`server/test/pg/prod-db-01-521-gate-classe-c.test.ts`): `spawnSync(psql …)` → `exec: psql: not found`, exit 127. O pacote de binários disponível aqui traz `initdb`/`pg_ctl`/`postgres` e **não** traz o cliente `psql`; os 12 `# SKIP` da rodada têm a mesma causa (`binário psql indisponível; no CI ele é instalado (postgresql-client-16)`). No CI, com `postgresql-client-16` instalado, o mesmo teste passa — é o que o job verde de `ab6e254` mostra |
 | O que **não** foi feito | Não relaxei a asserção de versão (`server_version_num = 160014`), não converti o teste em skip e não substituí nada por mock para "fechar verde" |
 | Severidade residual | **Nenhuma de código.** Dívida de ambiente: o sandbox não tem cliente `psql` |
@@ -69,6 +69,21 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 | Evidência do audit | `TENANT_SEM_TESTE`: **22 → 0**. Avisos totais do `architecture:audit`: **32 → 10** (nenhum deles de tenancy) |
 | Falhas de produto encontradas | **Nenhuma de isolamento.** O que os testes acharam foram divergências de **contrato de payload** entre modo memória e PostgreSQL — `planos_comissao` exige `vigencia_inicio`/`padrao` (o `INSERT` do `pgstore` envia a coluna explicitamente; o modo memória preenche o default) e `NUMERIC` volta como `"7.0000"` —, tratadas no próprio teste, sem tocar em código de produção |
 | Severidade residual | **Nenhuma.** `GAP-P2-12` (duplicata deste item) também é baixado |
+
+### GAP-P1-06 — Reentrega simultânea do mesmo pedido derrubava a ingestão · **FECHADO**
+
+| Campo | Valor |
+|---|---|
+| Domínio | Commerce / ingestão de marketplace (webhook "at-least-once") |
+| Como apareceu | O gate de PostgreSQL ficou vermelho no CI **da rodada anterior** (`40579160432`, commit só de documentação): `not ok — P0-02 … duplicate key value violates unique constraint "sales_empresa_usuario_channel_external_order_id_key"` (`23505`) |
+| Causa | `upsertIngestedSale` arbitra o `ON CONFLICT` por `reference`, mas o PostgreSQL verifica os índices únicos na **ordem de criação** da tabela: duas entregas do mesmo pedido ao mesmo tempo podem estourar o índice composto antes de chegar ao árbitro. Em concorrência maior aparece também `40P01` (deadlock entre inserções especulativas das mesmas chaves) |
+| Reprodução | Probe com transação real: 200 rodadas × 8 entregas simultâneas → **6–7 falhas**, todas com o pedido já gravado pela entrega vencedora |
+| Correção | `runInTransactionComCorrida` em `modules/connectors/ingestion/sales.service.ts`: retentativa CURTA (até 3 tentativas, espera crescente de 5 ms) apenas quando o erro é a corrida conhecida — `23505` nos três índices de idempotência de `sales`, `40001` ou `40P01`. Nenhum dos três grava nada, então repetir é seguro; fora desse conjunto o erro sobe intacto |
+| Prova | Probe: **0 falhas em 200 rodadas** (era 6–7). Teste de regressão novo `server/test/pg/commerce-reentrega-concorrente.test.ts` (40 rodadas × 8 entregas): **falha sem a correção** e passa com ela; `pg-p0-commerce-tenant`, `pg-golive03-marketplace-venda` e `bi-faturamento-e2e` seguem verdes |
+| O que **não** mudou | Nenhum DDL, nenhum índice, nenhum contrato público: a chave de idempotência e a semântica do upsert continuam as mesmas. A retentativa não esconde erro de negócio |
+| Severidade residual | Nenhuma. Era um defeito intermitente de produção (webhook reentregue podia receber 500), agora reproduzível e protegido por teste |
+
+---
 
 ## 3. Auditoria por domínio (o que foi verificado)
 
@@ -94,6 +109,7 @@ absoluta** — é o resultado das verificações listadas em §3 e dos gates de 
 
 | ID | Item | Evidência |
 |---|---|---|
+| **GAP-P1-06** | Reentrega simultânea do mesmo pedido retornava `23505`/`40P01` na ingestão | `runInTransactionComCorrida` + `server/test/pg/commerce-reentrega-concorrente.test.ts` (falha sem a correção, passa com ela) |
 | **GAP-P1-01** | Gates de PostgreSQL sem execução real | PG 16.14 real: `smoke:pg` 327/327; `test:pg` 277 pass (1 falha só por `psql` ausente no sandbox); CI run **40578401850** em `f3bf3f8` verde nos dois jobs (`testes-postgres` e `verificar`, este com `npx prisma validate`) |
 | **GAP-P1-02** | 22 recursos multiempresa sem prova nominal de isolamento | `server/test/multiempresa-nominal.test.ts` (155) + `server/test/pg/multiempresa-nominal-http.test.ts` (13); `TENANT_SEM_TESTE` 22 → 0 |
 | **GAP-P1-03** | Funil sem elo Lead → Oportunidade (não havia endpoint nem ação de tela) | `server/src/crm.ts` + rota + ação na lista + 10 testes de servidor + 6 de tela + 10 verificações HTTP |
