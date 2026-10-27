@@ -24,6 +24,7 @@ const ColecaoFormPage = lazy(() => import('./pages/ColecaoFormPage'));
 const TamanhoFormPage = lazy(() => import('./pages/TamanhoFormPage'));
 const GradeFormPage = lazy(() => import('./pages/GradeFormPage'));
 const InsumoFormPage = lazy(() => import('./pages/InsumoFormPage'));
+const CategoriaInsumoFormPage = lazy(() => import('./pages/CategoriaInsumoFormPage'));
 const FornecedorFormPage = lazy(() => import('./pages/FornecedorFormPage'));
 const RepresentanteFormPage = lazy(() => import('./pages/RepresentanteFormPage'));
 // Fundação comercial (MASTER): formulário em PÁGINA PRÓPRIA (nunca modal).
@@ -239,6 +240,24 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="insumos">
                   <InsumoFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Categorias de insumos — cadastro auxiliar em página própria
+                (LISTA → PÁGINA), como Categorias de produto e Coleções. */}
+            <Route
+              path="categorias-insumos/novo"
+              element={
+                <ModuleAccess moduleId="categorias-insumos">
+                  <CategoriaInsumoFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="categorias-insumos/:id/editar"
+              element={
+                <ModuleAccess moduleId="categorias-insumos">
+                  <CategoriaInsumoFormPage />
                 </ModuleAccess>
               }
             />

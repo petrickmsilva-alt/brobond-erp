@@ -68,9 +68,11 @@ vi.mock('../lib/meta', async (importOriginal) => {
     singular: 'Insumo',
     labelFields: ['nome'],
     ops: { create: true, update: true, delete: true },
-    filterFields: ['unidade', 'fornecedor_id', 'ativo'],
+    filterFields: ['categoria_id', 'unidade', 'fornecedor_id', 'ativo'],
     fields: [
+      { name: 'codigo_insumo', label: 'Código', type: 'text', uniqueEmpresa: true, search: true, maxLength: 40 },
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
+      { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias_insumos', search: true },
       {
         name: 'unidade',
         label: 'Unidade',
@@ -83,8 +85,8 @@ vi.mock('../lib/meta', async (importOriginal) => {
           { value: 'kg', label: 'Quilo (kg)' },
         ],
       },
+      { name: 'fornecedor_id', label: 'Fornecedor principal', type: 'ref', ref: 'fornecedores' },
       { name: 'custo_medio', label: 'Custo médio', type: 'money', min: 0, default: 0 },
-      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores' },
       { name: 'ativo', label: 'Ativo', type: 'boolean' },
     ],
   };
@@ -100,36 +102,50 @@ const LISTA = {
   rows: [
     {
       id: 1,
+      codigo_insumo: 'INS-MAL-001',
       nome: 'Malha penteada',
+      categoria_id: 10,
+      categoria_id__label: 'Malhas',
       unidade: 'm',
       custo_medio: 12.5,
       fornecedor_id: 1,
       fornecedor_id__label: 'Têxtil Bella',
       ativo: true,
       estoque_saldo: 320,
+      estoque_min: 100,
+      estoque_status: 'normal',
       uso_vinculado: 2,
       uso_vinculado_label: '2 fichas técnicas',
     },
     {
       id: 2,
+      codigo_insumo: 'INS-LIN-002',
       nome: 'Elástico',
+      categoria_id: 11,
+      categoria_id__label: 'Aviamentos',
       unidade: 'm',
       custo_medio: 3.2,
       fornecedor_id: null,
       ativo: false,
       estoque_saldo: 0,
+      estoque_min: 0,
+      estoque_status: 'sem_estoque',
       uso_vinculado: 0,
       uso_vinculado_label: '0 fichas técnicas',
     },
     {
       id: 3,
+      codigo_insumo: null,
       nome: 'Botão',
+      categoria_id: null,
       unidade: 'un',
       custo_medio: 0.4,
       fornecedor_id: 2,
       fornecedor_id__label: 'Química Sul',
       ativo: true,
       estoque_saldo: null,
+      estoque_min: null,
+      estoque_status: 'sem_registro',
       uso_vinculado: 1,
       uso_vinculado_label: '1 ficha técnica',
     },
@@ -199,6 +215,12 @@ beforeEach(() => {
         { value: 2, label: 'Química Sul' },
       ] as never;
     }
+    if (String(path) === '/categorias_insumos/options') {
+      return [
+        { value: 10, label: 'Malhas' },
+        { value: 11, label: 'Aviamentos' },
+      ] as never;
+    }
     return LISTA as never;
   });
   apiPost.mockResolvedValue({ id: 99 } as never);
@@ -213,13 +235,19 @@ describe('Insumos — lista (A)', () => {
     expect(apiGet).toHaveBeenCalledWith(expect.stringContaining('/insumos?'));
 
     // Colunas do domínio — o cabeçalho mostra exatamente o que existe.
+    expect(screen.getByRole('columnheader', { name: /Código/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Insumo/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Categoria/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Unidade/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Fornecedor/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Custo médio/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Estoque/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Status/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Utilização/ })).toBeInTheDocument();
+
+    // Código e categoria: dado REAL da listagem (não inventado na tela).
+    expect(screen.getAllByText('INS-MAL-001').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Malhas').length).toBeGreaterThan(0);
 
     // Fornecedor: o RÓTULO real que o servidor devolveu (não o id).
     expect(screen.getAllByText('Têxtil Bella').length).toBeGreaterThan(0);
@@ -302,6 +330,16 @@ describe('Insumos — busca e filtros (B, C)', () => {
     await waitFor(() => expect(screen.getByRole('option', { name: 'Têxtil Bella' })).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText('Filtrar por fornecedor'), { target: { value: '1' } });
     await waitFor(() => expect(apiGet).toHaveBeenCalledWith(expect.stringContaining('f.fornecedor_id=1')));
+  });
+
+  it('o filtro de categoria envia f.categoria_id ao servidor (opções reais do ERP)', async () => {
+    montar();
+    await screen.findByText('Malha penteada');
+    // As opções vêm do endpoint padrão de opções — nenhuma lista paralela.
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Aviamentos' })).toBeInTheDocument());
+    expect(apiGet).toHaveBeenCalledWith('/categorias_insumos/options');
+    fireEvent.change(screen.getByLabelText('Filtrar por categoria'), { target: { value: '11' } });
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith(expect.stringContaining('f.categoria_id=11')));
   });
 });
 

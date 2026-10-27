@@ -50,9 +50,11 @@ vi.mock('../lib/meta', async (importOriginal) => {
     singular: 'Insumo',
     labelFields: ['nome'],
     ops: { create: true, update: true, delete: true },
-    filterFields: ['unidade', 'fornecedor_id', 'ativo'],
+    filterFields: ['categoria_id', 'unidade', 'fornecedor_id', 'ativo'],
     fields: [
+      { name: 'codigo_insumo', label: 'Código', type: 'text', uniqueEmpresa: true, maxLength: 40 },
       { name: 'nome', label: 'Nome', type: 'text', required: true, maxLength: 120 },
+      { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias_insumos' },
       {
         name: 'unidade',
         label: 'Unidade',
@@ -65,7 +67,7 @@ vi.mock('../lib/meta', async (importOriginal) => {
         ],
       },
       { name: 'custo_medio', label: 'Custo médio', type: 'money', min: 0, default: 0 },
-      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores' },
+      { name: 'fornecedor_id', label: 'Fornecedor principal', type: 'ref', ref: 'fornecedores' },
       { name: 'ativo', label: 'Ativo', type: 'boolean', default: true },
     ],
   };
@@ -77,9 +79,22 @@ vi.mock('../lib/meta', async (importOriginal) => {
     ops: { create: true, update: true, delete: true },
     fields: [{ name: 'nome', label: 'Nome', type: 'text', required: true }],
   };
+  const categorias_insumos = {
+    key: 'categorias_insumos',
+    label: 'Categorias de Insumos',
+    singular: 'Categoria de insumo',
+    labelFields: ['nome'],
+    ops: { create: true, update: true, delete: true },
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, maxLength: 60 },
+      { name: 'descricao', label: 'Descrição', type: 'text', maxLength: 160 },
+      { name: 'pai_id', label: 'Categoria-pai', type: 'ref', ref: 'categorias_insumos' },
+      { name: 'ativo', label: 'Ativo', type: 'boolean', default: true },
+    ],
+  };
   return {
     ...actual,
-    useMeta: () => ({ resources: { insumos, fornecedores }, modules: [], mode: 'memory' }),
+    useMeta: () => ({ resources: { insumos, fornecedores, categorias_insumos }, modules: [], mode: 'memory' }),
   };
 });
 
@@ -112,6 +127,10 @@ beforeEach(() => {
       return { id: 4, nome: 'Malha penteada', unidade: 'm', custo_medio: 12.5, fornecedor_id: 1, ativo: true } as never;
     }
     if (String(path) === '/fornecedores/options') return [{ value: 1, label: 'Têxtil Bella' }] as never;
+    if (String(path) === '/categorias_insumos/options') return [{ value: 10, label: 'Malhas' }] as never;
+    if (String(path) === '/categorias_insumos/7') {
+      return { id: 7, nome: 'Aviamentos', descricao: null, pai_id: null, ativo: true } as never;
+    }
     return { rows: [], total: 0, page: 1, pageSize: 25 } as never;
   });
 });
@@ -146,6 +165,29 @@ describe('App — rotas do cadastro de Insumos (LISTA → PÁGINA)', () => {
     expect(await screen.findByRole('heading', { name: /Editar insumo/ })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText(/^Nome/)).toHaveValue('Malha penteada'));
     expect(window.location.pathname).toBe('/insumos/4/editar');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.querySelector('[aria-modal="true"]')).toBeNull();
+  });
+});
+
+describe('App — rotas de Categorias de Insumos (LISTA → PÁGINA)', () => {
+  it('/categorias-insumos/novo abre a página "Nova categoria de insumo" (sem modal/drawer)', async () => {
+    abrirRota('/categorias-insumos/novo');
+
+    expect(await screen.findByRole('heading', { name: /Nova categoria de insumo/ })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/categorias-insumos/novo');
+    expect(screen.getByRole('link', { name: /Voltar/ })).toHaveAttribute('href', '/categorias-insumos');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.querySelector('[aria-modal="true"]')).toBeNull();
+    expect(document.querySelector('[data-drawer], [data-sheet]')).toBeNull();
+  });
+
+  it('/categorias-insumos/:id/editar abre a página "Editar categoria de insumo"', async () => {
+    abrirRota('/categorias-insumos/7/editar');
+
+    expect(await screen.findByRole('heading', { name: /Editar categoria de insumo/ })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText(/^Nome/)).toHaveValue('Aviamentos'));
+    expect(window.location.pathname).toBe('/categorias-insumos/7/editar');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.querySelector('[aria-modal="true"]')).toBeNull();
   });
