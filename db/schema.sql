@@ -5067,3 +5067,131 @@ ALTER TABLE comissoes_eventos ADD COLUMN IF NOT EXISTS plano_id INTEGER REFERENC
 ALTER TABLE comissoes_eventos ADD COLUMN IF NOT EXISTS regra_id INTEGER REFERENCES regras_comissao(id);
 ALTER TABLE comissoes_eventos ADD COLUMN IF NOT EXISTS apurada_id INTEGER REFERENCES comissoes_apuradas(id);
 ALTER TABLE comissoes_eventos ADD COLUMN IF NOT EXISTS base_tipo TEXT;
+
+-- ---- 0048_representantes_2_0 ----
+-- Espelho da migration db/migrations/0048_representantes_2_0.sql
+-- (idempotente: um banco novo sobe completo por aqui, um banco antigo recebe a
+-- mesma alteração pela migration versionada — nenhuma migration histórica é
+-- editada). O cadastro de representante é EVOLUÍDO, não recriado: `regiao`,
+-- `comissao_pct`, `telefone`, `whatsapp` e `email` continuam válidos.
+
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS codigo TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS tipo_pessoa TEXT NOT NULL DEFAULT 'PF';
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS cnpj TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS razao_social TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS nome_fantasia TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS registro_profissional TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS orgao_registro TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS tipo_representante TEXT NOT NULL DEFAULT 'REPRESENTANTE_COMERCIAL';
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS data_nascimento DATE;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS celular TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS cep TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS logradouro TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS numero TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS complemento TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS bairro TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS cidade TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS uf TEXT;
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS pais TEXT DEFAULT 'Brasil';
+ALTER TABLE representantes ADD COLUMN IF NOT EXISTS territorio_id INTEGER REFERENCES territorios(id);
+
+UPDATE representantes
+   SET codigo = 'REP' || lpad(id::text, 5, '0')
+ WHERE codigo IS NULL OR btrim(codigo) = '';
+UPDATE representantes SET pais = 'Brasil' WHERE pais IS NULL OR btrim(pais) = '';
+
+DO $$ BEGIN
+  ALTER TABLE representantes ADD CONSTRAINT representantes_tipo_pessoa_valido
+    CHECK (tipo_pessoa IN ('PF', 'PJ'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE representantes ADD CONSTRAINT representantes_tipo_valido
+    CHECK (tipo_representante IN (
+      'INTERNO', 'EXTERNO', 'REPRESENTANTE_COMERCIAL', 'SUPERVISOR',
+      'COORDENADOR', 'GERENTE', 'PARCEIRO', 'TERCEIRIZADO'
+    ));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE representantes ADD CONSTRAINT representantes_uf_valida
+    CHECK (uf IS NULL OR uf ~ '^[A-Z]{2}$');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE representantes ADD CONSTRAINT representantes_cep_valido
+    CHECK (cep IS NULL OR cep ~ '^[0-9]{8}$');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE representantes ADD CONSTRAINT representantes_nascimento_plausivel
+    CHECK (data_nascimento IS NULL OR (data_nascimento >= '1900-01-01' AND data_nascimento < '2100-01-01'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_representantes_empresa_codigo
+  ON representantes (empresa_id, upper(codigo))
+  WHERE codigo IS NOT NULL AND btrim(codigo) <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_representantes_cnpj_empresa
+  ON representantes (empresa_id, regexp_replace(cnpj, '[^0-9]', '', 'g'))
+  WHERE cnpj IS NOT NULL AND regexp_replace(cnpj, '[^0-9]', '', 'g') <> '';
+
+CREATE INDEX IF NOT EXISTS representantes_empresa_ativo_idx
+  ON representantes (empresa_id, ativo);
+CREATE INDEX IF NOT EXISTS representantes_empresa_tipo_idx
+  ON representantes (empresa_id, tipo_representante);
+CREATE INDEX IF NOT EXISTS representantes_empresa_pessoa_idx
+  ON representantes (empresa_id, tipo_pessoa);
+CREATE INDEX IF NOT EXISTS representantes_empresa_territorio_idx
+  ON representantes (empresa_id, territorio_id);
+CREATE INDEX IF NOT EXISTS representantes_empresa_codigo_idx
+  ON representantes (empresa_id, codigo);
+
+CREATE OR REPLACE FUNCTION brobond_representante_valida() RETURNS trigger AS $$
+DECLARE
+  terr territorios%ROWTYPE;
+BEGIN
+  NEW.tipo_pessoa := upper(btrim(COALESCE(NULLIF(NEW.tipo_pessoa, ''), 'PF')));
+  NEW.tipo_representante := upper(btrim(COALESCE(NULLIF(NEW.tipo_representante, ''), 'REPRESENTANTE_COMERCIAL')));
+
+  IF NEW.codigo IS NOT NULL THEN
+    NEW.codigo := upper(btrim(NEW.codigo));
+    IF NEW.codigo = '' THEN NEW.codigo := NULL; END IF;
+  END IF;
+  IF NEW.cpf IS NOT NULL THEN
+    NEW.cpf := regexp_replace(NEW.cpf, '[^0-9]', '', 'g');
+    IF NEW.cpf = '' THEN NEW.cpf := NULL; END IF;
+  END IF;
+  IF NEW.cnpj IS NOT NULL THEN
+    NEW.cnpj := regexp_replace(NEW.cnpj, '[^0-9]', '', 'g');
+    IF NEW.cnpj = '' THEN NEW.cnpj := NULL; END IF;
+  END IF;
+  IF NEW.cep IS NOT NULL THEN
+    NEW.cep := regexp_replace(NEW.cep, '[^0-9]', '', 'g');
+    IF NEW.cep = '' THEN NEW.cep := NULL; END IF;
+  END IF;
+  IF NEW.uf IS NOT NULL THEN
+    NEW.uf := upper(btrim(NEW.uf));
+    IF NEW.uf = '' THEN NEW.uf := NULL; END IF;
+  END IF;
+  IF NEW.pais IS NULL OR btrim(NEW.pais) = '' THEN
+    NEW.pais := 'Brasil';
+  END IF;
+
+  IF NEW.territorio_id IS NOT NULL THEN
+    SELECT * INTO terr FROM territorios WHERE id = NEW.territorio_id;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'território inexistente' USING ERRCODE = '23503';
+    END IF;
+    IF terr.empresa_id <> NEW.empresa_id THEN
+      RAISE EXCEPTION 'o território pertence a outra empresa' USING ERRCODE = '23514';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_representante_valida ON representantes;
+CREATE TRIGGER trg_representante_valida
+  BEFORE INSERT OR UPDATE ON representantes
+  FOR EACH ROW EXECUTE FUNCTION brobond_representante_valida();

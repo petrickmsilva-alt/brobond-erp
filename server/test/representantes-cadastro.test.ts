@@ -7,10 +7,12 @@
 // trava o contrato que a TELA usa, sem tocar em vendas nem em comissões:
 //   • metadado do padrão LISTA → PÁGINA (sem drawer/modal), com as SEÇÕES do
 //     formulário (Identificação · Comercial · Acesso ao ERP · Contato ·
-//     Situação profissional), filtros reais e uso real — e NENHUM campo
-//     inventado (o domínio é o do schema + migration 0021: nome, cpf, cargo,
-//     regiao, comissao_pct, usuario_id, telefone, whatsapp, email, admissao,
-//     desligamento, observacoes e ativo);
+//     Situação profissional → 2.0: Identificação · Dados profissionais ·
+//     Contato · Endereço · Comercial · Acesso ao ERP · Observações), filtros
+//     reais e uso real — e NENHUM campo inventado (o domínio é o do schema +
+//     migrations 0021 e 0048: código comercial, PF/PJ com CPF/CNPJ, razão
+//     social, nome fantasia, tipo de representante, registro profissional,
+//     celular, endereço estruturado, território, além dos campos anteriores);
 //   • CPF: máscara aceita e normalizada para só dígitos, dígito verificador
 //     conferido no SERVIDOR (a unicidade por empresa é índice do banco —
 //     coberta em test/pg/representantes-pg.test.ts, porque o MemStore não
@@ -92,8 +94,9 @@ test('cadastro declara o padrão LISTA → PÁGINA (sem drawer/modal), filtros r
   assert.deepEqual(r.ops, { create: true, update: true, delete: true });
   assert.deepEqual(r.labelFields, ['nome']);
 
-  // Filtros: SOMENTE campos que existem de verdade em `representantes`.
-  assert.deepEqual(r.filterFields, ['usuario_id', 'ativo']);
+  // Filtros: SOMENTE campos que existem de verdade em `representantes`
+  // (`equipe_id` é VIRTUAL e resolvido em lote pelo servidor — não é coluna).
+  assert.deepEqual(r.filterFields, ['tipo_representante', 'tipo_pessoa', 'territorio_id', 'usuario_id', 'ativo']);
   assert.equal(r.quickFilters?.[0]?.field, 'ativo');
   assert.equal(r.quickFilters?.[0]?.label, 'Status');
   assert.deepEqual(
@@ -116,33 +119,79 @@ test('cadastro declara o padrão LISTA → PÁGINA (sem drawer/modal), filtros r
   assert.match(String(r.notice), /não apaga|NÃO apaga/);
 });
 
-test('as seções do formulário são as reais do recurso (Identificação · Comercial · Acesso ao ERP · Contato · Situação profissional)', () => {
+test('as seções do formulário são as reais do recurso 2.0 (Identificação · Dados profissionais · Contato · Endereço · Comercial · Acesso ao ERP · Observações)', () => {
   const r = RESOURCES.representantes;
   const secoes = Array.from(new Set(r.fields.map((f) => f.section).filter(Boolean)));
-  assert.deepEqual(secoes, ['Identificação', 'Comercial', 'Acesso ao ERP', 'Contato', 'Situação profissional']);
+  assert.deepEqual(secoes, [
+    'Identificação',
+    'Dados profissionais',
+    'Contato',
+    'Endereço',
+    'Comercial',
+    'Acesso ao ERP',
+    'Observações',
+  ]);
 
   // A busca do servidor cobre os campos declarados search:true — inclusive o
-  // CPF (comparado também por dígitos) e os contatos.
+  // CPF/CNPJ (comparados também por dígitos), o código comercial, os contatos
+  // e o território (o rótulo do domínio de territórios).
   const buscaveis = r.fields.filter((f) => f.search).map((f) => f.name);
-  for (const esperado of ['nome', 'cpf', 'cargo', 'regiao', 'usuario_id', 'telefone', 'whatsapp', 'email']) {
+  for (const esperado of [
+    'codigo',
+    'nome',
+    'razao_social',
+    'nome_fantasia',
+    'cpf',
+    'cnpj',
+    'cargo',
+    'registro_profissional',
+    'regiao',
+    'cidade',
+    'uf',
+    'territorio_id',
+    'usuario_id',
+    'telefone',
+    'celular',
+    'whatsapp',
+    'email',
+  ]) {
     assert.ok(buscaveis.includes(esperado), `${esperado} é buscável`);
   }
 
   // A ordem dos campos é a das seções (o RecordForm agrupa preservando ordem).
   const nomes = r.fields.map((f) => f.name);
   assert.deepEqual(nomes, [
+    'codigo',
+    'tipo_pessoa',
     'nome',
+    'razao_social',
+    'nome_fantasia',
     'cpf',
+    'cnpj',
+    'data_nascimento',
+    'tipo_representante',
     'cargo',
-    'regiao',
-    'comissao_pct',
-    'usuario_id',
-    'telefone',
-    'whatsapp',
-    'email',
+    'registro_profissional',
+    'orgao_registro',
     'admissao',
     'desligamento',
     'ativo',
+    'telefone',
+    'celular',
+    'whatsapp',
+    'email',
+    'cep',
+    'logradouro',
+    'numero',
+    'complemento',
+    'bairro',
+    'cidade',
+    'uf',
+    'pais',
+    'comissao_pct',
+    'territorio_id',
+    'regiao',
+    'usuario_id',
     'observacoes',
     'criado_em',
     'atualizado_em',
@@ -171,7 +220,6 @@ test('os campos são exatamente os do schema — nada de salário, meta, limite,
     'comissao_acumulada',
     'vendas_total',
     'departamento',
-    'codigo',
     'tabela_preco',
   ]) {
     assert.equal(nomes.includes(proibido), false, `${proibido} não existe em representantes`);
@@ -191,6 +239,7 @@ test('os campos são exatamente os do schema — nada de salário, meta, limite,
   assert.equal(comissao?.max, 100);
   assert.equal(comissao?.default, 0);
   assert.match(String(comissao?.hint), /LIQUIDADAS/);
+  assert.match(String(comissao?.hint), /MOTOR|motor|planos\/regras/);
 
   // Usuário do sistema: vínculo OPCIONAL e recortado por empresa.
   const usuario = r.fields.find((f) => f.name === 'usuario_id');
@@ -201,7 +250,7 @@ test('os campos são exatamente os do schema — nada de salário, meta, limite,
   // Desligamento é data e a explicação preserva o histórico.
   const desligamento = r.fields.find((f) => f.name === 'desligamento');
   assert.equal(desligamento?.type, 'date');
-  assert.match(String(desligamento?.hint), /NÃO apaga o histórico/);
+  assert.match(String(desligamento?.hint), /NÃO apaga (o )?histórico/);
 });
 
 // ---------------------------------------------------------------------------
@@ -250,8 +299,12 @@ test('validação: nome obrigatório e comissão no intervalo 0–100', async ()
 // B/C) Busca e filtros no SERVIDOR, na mesma listagem paginada
 // ---------------------------------------------------------------------------
 test('busca encontra por nome, CPF (com e sem máscara), cargo, região, telefone e e-mail', async () => {
+  // CPF VÁLIDO diferente do usado nos testes anteriores (a unicidade por
+  // empresa agora vale também no modo memória).
+  const CPF_BUSCA = '39053344705';
+  const CPF_BUSCA_MASCARADO = '390.533.447-05';
   await novoRepresentante('Ana Souza', {
-    cpf: CPF_VALIDO,
+    cpf: CPF_BUSCA,
     cargo: `Vendedora ${sufixo}`,
     regiao: 'Centro-Oeste',
     telefone: '6233334444',
@@ -266,8 +319,8 @@ test('busca encontra por nome, CPF (com e sem máscara), cargo, região, telefon
   assert.equal(String(porNome.rows[0].nome), `Ana Souza ${sufixo}`);
 
   // q pelo CPF em DÍGITOS e COM máscara: as duas formas acham o registro.
-  assert.ok((await listar({ q: CPF_VALIDO })).rows.some((r) => String(r.nome).startsWith('Ana Souza')));
-  assert.ok((await listar({ q: CPF_MASCARADO })).rows.some((r) => String(r.nome).startsWith('Ana Souza')));
+  assert.ok((await listar({ q: CPF_BUSCA })).rows.some((r) => String(r.nome).startsWith('Ana Souza')));
+  assert.ok((await listar({ q: CPF_BUSCA_MASCARADO })).rows.some((r) => String(r.nome).startsWith('Ana Souza')));
 
   // q por cargo, região, telefone, WhatsApp e e-mail.
   assert.equal((await listar({ q: `Vendedora ${sufixo}` })).rows.length, 1);

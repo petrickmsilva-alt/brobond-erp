@@ -10,10 +10,12 @@
 //   • a lista vem do servidor (GET /representantes) com busca (q), paginação
 //     server-side, ordenação (sort/dir) e filtros (f.ativo, f.usuario_id) — sem
 //     SQL paralelo no front;
-//   • as colunas mostram só dado REAL: nome, CPF formatado, cargo, região,
-//     comissão padrão, usuário vinculado, contato (telefone · e-mail do próprio
-//     registro), status e utilização (pedidos de venda da empresa ativa,
-//     contagem agregada pelo servidor — nunca N+1);
+//   • as colunas mostram só dado REAL do cadastro mestre 2.0: código, nome,
+//     CPF/CNPJ (conforme PF/PJ), tipo de representante, cargo, território,
+//     equipe VIGENTE (projeção de equipe_membros), comissão padrão, usuário,
+//     contato (telefone/celular · e-mail do próprio registro), carteira
+//     (vínculos vigentes), status e utilização (pedidos de venda da empresa
+//     ativa) — tudo agregado pelo servidor em lote, nunca N+1;
 //   • DELETE bloqueado (409 dependencias_vinculadas) abre o "Ver vínculos" e a
 //     saída oferecida é DESATIVAR (preserva vendas/clientes/propostas/comissões);
 //   • operador não vê a ação de excluir (a autoridade real é a API).
@@ -73,20 +75,32 @@ vi.mock('../lib/meta', async (importOriginal) => {
     labelFields: ['nome'],
     // SEM minPerfilEscrita: cadastro por empresa, operável por quem já tem acesso.
     ops: { create: true, update: true, delete: true },
-    filterFields: ['usuario_id', 'ativo'],
+    // Filtros server-side do recurso 2.0 (`equipe_id` é VIRTUAL e resolvido no
+    // servidor a partir de equipe_membros).
+    filterFields: ['tipo_representante', 'tipo_pessoa', 'territorio_id', 'usuario_id', 'ativo'],
     notice:
       'Desligar ou desativar um representante NÃO apaga histórico: vendas, clientes, propostas e comissões apuradas continuam apontando para ele. Um representante em uso não é excluído — ele é DESATIVADO.',
     fields: [
+      { name: 'codigo', label: 'Código', type: 'text', search: true, maxLength: 24, section: 'Identificação' },
+      { name: 'tipo_pessoa', label: 'Tipo de pessoa', type: 'select', default: 'PF', section: 'Identificação' },
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, wide: true, section: 'Identificação' },
+      { name: 'razao_social', label: 'Razão social', type: 'text', search: true, maxLength: 160, section: 'Identificação' },
+      { name: 'nome_fantasia', label: 'Nome fantasia', type: 'text', search: true, maxLength: 160, section: 'Identificação' },
       { name: 'cpf', label: 'CPF', type: 'document', documento: 'cpf', search: true, maxLength: 14, section: 'Identificação' },
-      { name: 'cargo', label: 'Cargo', type: 'text', maxLength: 60, search: true, section: 'Identificação' },
-      { name: 'regiao', label: 'Região', type: 'text', search: true, maxLength: 80, section: 'Identificação' },
+      { name: 'cnpj', label: 'CNPJ', type: 'document', documento: 'cnpj', search: true, maxLength: 18, section: 'Identificação' },
+      { name: 'tipo_representante', label: 'Tipo de representante', type: 'select', default: 'REPRESENTANTE_COMERCIAL', section: 'Dados profissionais' },
+      { name: 'cargo', label: 'Cargo', type: 'text', maxLength: 60, search: true, section: 'Dados profissionais' },
+      { name: 'registro_profissional', label: 'Registro profissional', type: 'text', maxLength: 40, search: true, section: 'Dados profissionais' },
+      { name: 'orgao_registro', label: 'Órgão do registro', type: 'text', maxLength: 40, section: 'Dados profissionais' },
       { name: 'comissao_pct', label: 'Comissão padrão (%)', type: 'percent', min: 0, max: 100, default: 0, section: 'Comercial' },
+      { name: 'territorio_id', label: 'Território', type: 'ref', ref: 'territorios', search: true, section: 'Comercial' },
+      { name: 'regiao', label: 'Região (legado)', type: 'text', search: true, maxLength: 80, section: 'Comercial' },
       { name: 'usuario_id', label: 'Usuário do sistema', type: 'ref', ref: 'usuarios', list: false, search: true, section: 'Acesso ao ERP' },
-      { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 20, search: true, section: 'Contato' },
+      { name: 'telefone', label: 'Telefone comercial', type: 'phone', maxLength: 20, search: true, section: 'Contato' },
+      { name: 'celular', label: 'Celular', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
       { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
-      { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, search: true, section: 'Contato' },
-      { name: 'ativo', label: 'Ativo', type: 'boolean', default: true, section: 'Situação profissional' },
+      { name: 'email', label: 'E-mail comercial', type: 'email', maxLength: 160, search: true, section: 'Contato' },
+      { name: 'ativo', label: 'Ativo', type: 'boolean', default: true, section: 'Dados profissionais' },
     ],
   };
   return { ...actual, useMeta: () => ({ resources: { representantes }, modules: [] }) };
@@ -101,14 +115,27 @@ const LISTA = {
   rows: [
     {
       id: 1,
+      codigo: 'REP00001',
       nome: 'Ana Souza',
+      tipo_pessoa: 'PF',
+      tipo_representante: 'REPRESENTANTE_COMERCIAL',
       cpf: '52998224725',
+      cnpj: null,
+      razao_social: null,
+      nome_fantasia: null,
       cargo: 'Vendedora',
       regiao: 'Centro-Oeste',
       comissao_pct: 3.5,
+      territorio_id: 10,
+      territorio_id__label: 'Centro-Oeste',
+      equipe_label: 'Equipe Alfa',
+      equipe_count: 1,
+      carteira_vinculos: 4,
+      carteira_historico: 6,
       usuario_id: 7,
       usuario_id__label: 'Ana Souza',
       telefone: '6233334444',
+      celular: null,
       whatsapp: '62999998888',
       email: 'ana@brobond.com.br',
       ativo: true,
@@ -117,14 +144,27 @@ const LISTA = {
     },
     {
       id: 2,
+      codigo: 'REP00002',
       nome: 'Carlos Lima',
+      tipo_pessoa: 'PJ',
+      tipo_representante: 'PARCEIRO',
       cpf: null,
+      cnpj: '11222333000181',
+      razao_social: 'Carlos Lima Distribuidora Ltda',
+      nome_fantasia: 'Lima Representações',
       cargo: 'Representante',
       regiao: 'Norte',
       comissao_pct: 5,
+      territorio_id: null,
+      territorio_id__label: null,
+      equipe_label: null,
+      equipe_count: 0,
+      carteira_vinculos: 0,
+      carteira_historico: 0,
       usuario_id: null,
       usuario_id__label: null,
       telefone: null,
+      celular: null,
       whatsapp: null,
       email: null,
       ativo: false,
@@ -133,14 +173,27 @@ const LISTA = {
     },
     {
       id: 3,
+      codigo: 'REP00003',
       nome: 'Marina Alves',
+      tipo_pessoa: 'PF',
+      tipo_representante: 'GERENTE',
       cpf: '11144477735',
+      cnpj: null,
+      razao_social: null,
+      nome_fantasia: null,
       cargo: 'Gerente comercial',
       regiao: 'Sudeste',
       comissao_pct: 2,
+      territorio_id: 11,
+      territorio_id__label: 'Sudeste',
+      equipe_label: 'Equipe Beta',
+      equipe_count: 1,
+      carteira_vinculos: 2,
+      carteira_historico: 2,
       usuario_id: 9,
       usuario_id__label: 'Marina Alves',
       telefone: '1133334444',
+      celular: '11988887777',
       whatsapp: null,
       email: 'marina@brobond.com.br',
       ativo: true,
@@ -152,6 +205,11 @@ const LISTA = {
   page: 1,
   pageSize: 25,
 };
+
+const TERRITORIOS = [
+  { value: 10, label: 'Centro-Oeste' },
+  { value: 11, label: 'Sudeste' },
+];
 
 // Diagnóstico no formato REAL do servidor (server/src/dependencias.ts):
 // vendas do representante são histórico (FK NO ACTION) — bloqueiam a exclusão.
@@ -216,33 +274,56 @@ beforeEach(() => {
   mockUser.perfil = 'gerente';
   // O filtro de usuário usa o MESMO contrato `/usuarios/options` do ERP; a
   // listagem usa `/representantes?...`.
-  apiGet.mockImplementation(async (path: string) => (String(path).startsWith('/usuarios/options') ? (USUARIOS as never) : (LISTA as never)));
+  apiGet.mockImplementation(async (path: string) => {
+    if (String(path).startsWith('/usuarios/options')) return USUARIOS as never;
+    if (String(path).startsWith('/territorios/options')) return TERRITORIOS as never;
+    return LISTA as never;
+  });
   apiPut.mockResolvedValue({ id: 1 } as never);
   apiDel.mockResolvedValue({ ok: true } as never);
 });
 
 describe('Representantes — lista (A)', () => {
-  it('lê os representantes do servidor e mostra nome, CPF, cargo, região, comissão, usuário, contato, status e utilização', async () => {
+  it('lê os representantes do servidor e mostra código, documento, tipo, cargo, território, equipe, comissão, usuário, contato, carteira, status e utilização', async () => {
     montar();
     expect((await screen.findAllByText('Ana Souza')).length).toBeGreaterThan(0);
     expect(apiGet).toHaveBeenCalledWith(expect.stringContaining('/representantes?'));
 
     // Colunas do domínio — o cabeçalho mostra exatamente o que existe.
+    expect(screen.getByRole('columnheader', { name: /Código/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Representante/ })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: /CPF/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /CPF\/CNPJ/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Tipo/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Cargo/ })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: /Região/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Território/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Equipe/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Comissão/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Usuário/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Contato/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Carteira/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Status/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Utilização/ })).toBeInTheDocument();
 
-    // CPF formatado (máscara do ERP) e cargos/regiões reais.
+    // Código comercial e documento conforme o tipo de pessoa: CPF para PF e
+    // CNPJ para PJ (nunca os dois na mesma linha).
+    expect(screen.getByText('REP00001')).toBeInTheDocument();
     expect(screen.getByText('529.982.247-25')).toBeInTheDocument();
+    expect(screen.getByText('11.222.333/0001-81')).toBeInTheDocument();
+    expect(screen.queryByText('11222333000181')).toBeNull();
     expect(screen.getByText('111.444.777-35')).toBeInTheDocument();
+
+    // Tipo de representante é PAPEL comercial — o cargo continua aparecendo.
+    expect(screen.getByText('Representante comercial')).toBeInTheDocument();
+    // "Parceiro"/"Gerente" também são opções do filtro de tipo: o rótulo
+    // aparece na linha E no <option> do filtro.
+    expect(screen.getAllByText('Parceiro').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Gerente').length).toBeGreaterThan(0);
     expect(screen.getByText('Vendedora')).toBeInTheDocument();
-    expect(screen.getByText('Centro-Oeste')).toBeInTheDocument();
+
+    // Território (domínio) e equipe vigente (projeção de equipe_membros).
+    expect(screen.getAllByText('Centro-Oeste').length).toBeGreaterThan(0);
+    expect(screen.getByText('Equipe Alfa')).toBeInTheDocument();
+    expect(screen.getByText('Equipe Beta')).toBeInTheDocument();
 
     // Comissão padrão em % (valor real do cadastro).
     expect(screen.getByText('3,5%')).toBeInTheDocument();
@@ -254,6 +335,12 @@ describe('Representantes — lista (A)', () => {
 
     // Contato: telefone formatado · e-mail do próprio registro.
     expect(screen.getByText(/\+55 \(62\) 3333-4444 · ana@brobond\.com\.br/)).toBeInTheDocument();
+    // Celular é identificado como tal (não se confunde com o telefone fixo).
+    expect(screen.getByText(/\+55 \(11\) 98888-7777 \(celular\)/)).toBeInTheDocument();
+
+    // Carteira: vínculos VIGENTES projetados do domínio representante_cliente.
+    expect(screen.getByText('4')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
 
     // Status textual (não só cor).
     expect(screen.getAllByText(/Ativo/).length).toBeGreaterThan(0);
@@ -270,17 +357,20 @@ describe('Representantes — lista (A)', () => {
   });
 
   it('mostra estado vazio orientado quando não há representantes', async () => {
-    apiGet.mockImplementation(async (path: string) =>
-      String(path).startsWith('/usuarios/options') ? (USUARIOS as never) : ({ rows: [], total: 0, page: 1, pageSize: 25 } as never)
-    );
+    apiGet.mockImplementation(async (path: string) => {
+      if (String(path).startsWith('/usuarios/options')) return USUARIOS as never;
+      if (String(path).startsWith('/territorios/options')) return TERRITORIOS as never;
+      return { rows: [], total: 0, page: 1, pageSize: 25 } as never;
+    });
     montar();
     expect(await screen.findByText('Nenhum representante cadastrado')).toBeInTheDocument();
-    expect(screen.getByText(/Cadastre o primeiro representante para vincular vendas, clientes e comissões/)).toBeInTheDocument();
+    expect(screen.getByText(/Cadastre o primeiro representante para vincular vendas, clientes, metas e comissões/)).toBeInTheDocument();
   });
 
   it('mostra o estado de erro quando a API falha', async () => {
     apiGet.mockImplementation(async (path: string) => {
       if (String(path).startsWith('/usuarios/options')) return USUARIOS as never;
+      if (String(path).startsWith('/territorios/options')) return TERRITORIOS as never;
       throw new ApiError(500, 'Falha ao carregar representantes.') as never;
     });
     montar();
@@ -296,7 +386,8 @@ describe('Representantes — lista (A)', () => {
 
     expect(await screen.findByTestId('lista-cards')).toBeInTheDocument();
     expect(screen.getByText('Vendedora')).toBeInTheDocument();
-    expect(screen.getByText('12 vendas')).toBeInTheDocument();
+    expect(screen.getByText('Equipe Alfa')).toBeInTheDocument();
+    expect(screen.getByText('REP00001')).toBeInTheDocument();
     expect(apiGet.mock.calls.length).toBe(chamadasAntes);
   });
 });
@@ -328,6 +419,30 @@ describe('Representantes — busca, filtros e ordenação (B, C)', () => {
       const ultima = String(apiGet.mock.calls[apiGet.mock.calls.length - 1][0]);
       expect(ultima).not.toContain('f.ativo=');
     });
+  });
+
+  it('o filtro de tipo de representante envia f.tipo_representante ao servidor', async () => {
+    montar();
+    await screen.findByText('529.982.247-25');
+    const filtro = await screen.findByLabelText('Filtrar por tipo de representante');
+    fireEvent.change(filtro, { target: { value: 'GERENTE' } });
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith(expect.stringContaining('f.tipo_representante=GERENTE')));
+    fireEvent.change(filtro, { target: { value: '' } });
+    await waitFor(() => {
+      const ultima = String(apiGet.mock.calls[apiGet.mock.calls.length - 1][0]);
+      expect(ultima).not.toContain('f.tipo_representante=');
+    });
+  });
+
+  it('o filtro de território usa o DOMÍNIO de territórios (/territorios/options + f.territorio_id)', async () => {
+    montar();
+    await screen.findByText('529.982.247-25');
+    const filtro = await screen.findByLabelText('Filtrar por território');
+    expect(apiGet).toHaveBeenCalledWith('/territorios/options');
+    // As opções vêm do domínio (nada de lista digitada na tela).
+    expect(screen.getByRole('option', { name: 'Sudeste' })).toBeInTheDocument();
+    fireEvent.change(filtro, { target: { value: '11' } });
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith(expect.stringContaining('f.territorio_id=11')));
   });
 
   it('o filtro de usuário vinculado envia f.usuario_id ao servidor', async () => {
@@ -390,11 +505,11 @@ describe('Representantes — busca, filtros e ordenação (B, C)', () => {
 
 describe('Representantes — paginação server-side (C)', () => {
   it('pede page/pageSize ao servidor e preserva o recorte ao trocar de página', async () => {
-    apiGet.mockImplementation(async (path: string) =>
-      String(path).startsWith('/usuarios/options')
-        ? (USUARIOS as never)
-        : ({ ...LISTA, total: 40, pageSize: 25 } as never)
-    );
+    apiGet.mockImplementation(async (path: string) => {
+      if (String(path).startsWith('/usuarios/options')) return USUARIOS as never;
+      if (String(path).startsWith('/territorios/options')) return TERRITORIOS as never;
+      return { ...LISTA, total: 40, pageSize: 25 } as never;
+    });
     montar();
     await screen.findByText('529.982.247-25');
     expect(apiGet).toHaveBeenCalledWith(expect.stringContaining('page=1'));
@@ -437,6 +552,17 @@ describe('Representantes — navegação para a página própria (D, F)', () => 
     expect(document.querySelector('[aria-modal="true"]')).toBeNull();
   });
 
+  it('"Ver ficha e painel" NAVEGA para /representantes/:id (página, não modal)', async () => {
+    montar();
+    await screen.findByText('529.982.247-25');
+    fireEvent.click(screen.getByRole('button', { name: 'Ações do representante Ana Souza' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Ver ficha e painel' }));
+
+    expect(navigateMock).toHaveBeenCalledWith('/representantes/1');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.querySelector('[aria-modal="true"]')).toBeNull();
+  });
+
   it('duplo clique na linha abre a página de edição (atalho da listagem)', async () => {
     montar();
     await screen.findByText('529.982.247-25');
@@ -472,14 +598,14 @@ describe('Representantes — colunas visíveis (persistência)', () => {
   it('ocultar uma coluna vale para a tela e persiste no navegador', async () => {
     montar();
     await screen.findByText('529.982.247-25');
-    expect(screen.getByRole('columnheader', { name: /Região/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Território/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Colunas visíveis' }));
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Região' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Território' }));
 
-    await waitFor(() => expect(screen.queryByRole('columnheader', { name: /Região/ })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('columnheader', { name: /Território/ })).toBeNull());
     // A MESMA chave do CRUD genérico: a preferência do usuário sobrevive.
-    expect(localStorage.getItem('brobond_colunas_ocultas_representantes')).toContain('regiao');
+    expect(localStorage.getItem('brobond_colunas_ocultas_representantes')).toContain('territorio_id');
     expect(screen.getByRole('columnheader', { name: /Representante/ })).toBeInTheDocument();
   });
 });
