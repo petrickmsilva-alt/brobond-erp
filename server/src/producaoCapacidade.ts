@@ -38,6 +38,7 @@ const R_ORDEM = () => getResource('ordens')!;
 const R_RECURSO = () => getResource('producao_recursos')!;
 const R_PRODUTO = () => getResource('produtos')!;
 const R_ESTOQUE = () => getResource('estoques')!;
+const R_RESERVA = () => getResource('estoque_reservas')!;
 const R_VENDA = () => getResource('vendas')!;
 const R_ITEM_VENDA = () => getResource('itens_venda')!;
 const R_COMPRA = () => getResource('compras')!;
@@ -211,13 +212,44 @@ export async function capacidadeProducao(req: Request, res: Response) {
 // ----------------------------------------------------------------------------
 // GET /api/producao/mrp
 //
-// Estrutura de cálculo (tudo derivado, nada gravado):
-//   DEMANDA de produto   = vendas em aberto (itens) + estoque mínimo declarado
-//   OFERTA de produto    = estoque físico + OPs abertas (falta produzir)
-//   FALTA de produto     = max(0, demanda − oferta)
-//   NECESSIDADE de insumo= consumo da ficha (com perda) × (OPs abertas + falta)
-//   OFERTA de insumo     = saldo do insumo + compras em aberto (pedido − recebido)
-//   FALTA de insumo      = max(0, necessidade − oferta)
+// CLASSIFICAÇÃO (honesta, para não vender o que não é):
+//   **MRP 3.0 = MRP DE PLANEJAMENTO/NECESSIDADE.** Ele responde "quanto falta
+//   comprar/produzir para atender a demanda conhecida", a partir de demanda,
+//   estoque, OPs abertas, compras abertas e ficha técnica. NÃO é MRP industrial
+//   completo — ver `escopo_do_calculo.nao_coberto` na resposta.
+//
+// FÓRMULA (tudo derivado, nada gravado):
+//
+//   demanda_produto   = itens de venda em aberto (cotacao/aberta)
+//                       + falta de ESTOQUE MÍNIMO (só o que falta para chegar
+//                         ao mínimo, nunca o mínimo inteiro)
+//   oferta_produto    = disponível (físico − reservado − bloqueado − empenhado)
+//                       + em produção (o que ainda FALTA produzir nas OPs abertas)
+//   falta_produto     = max(0, demanda_produto − oferta_produto)
+//
+//   necessidade_insumo = consumo da ficha (com perda) × (falta das OPs abertas
+//                        + falta_produto que exigiria OP nova)
+//   oferta_insumo      = saldo do insumo + compras em aberto (pedido − recebido)
+//   falta_insumo       = max(0, necessidade_insumo − oferta_insumo)
+//
+// REGRAS ANTI-DUPLA-CONTAGEM (cada quantidade entra UMA vez):
+//   1) Estoque físico NÃO é somado ao "em produção": são ofertas distintas
+//      (um já existe, o outro ainda será produzido) — e a reserva ativa é
+//      DEDUZIDA do físico, porque já está comprometida com outro documento.
+//   2) OP aberta entra pela quantidade que ainda FALTA produzir
+//      (planejado − produzido), nunca pelo total; o que já foi produzido está
+//      no estoque e seria contado duas vezes.
+//   3) Compra aberta entra por (pedido − recebido): a parte recebida já virou
+//      saldo de insumo (movimentação de entrada).
+//   4) A falta de produto gera necessidade de insumo; a OP que já existe é
+//      contada no seu próprio `faltam` — nunca nos dois lugares.
+//   5) Estoque mínimo entra apenas como DEFICIT (mínimo − cobertura), nunca
+//      como demanda cheia em cima da demanda de venda.
+//   6) Cada venda/item entra uma única vez (o conjunto de ids de venda é
+//      único e os itens são filtrados por ele).
+//
+// MRP NÃO CRIA PEDIDO DE COMPRA. A saída é necessidade + recomendação; a
+// decisão continua humana (Compras › Sugestão de compra, com confirmação).
 // ----------------------------------------------------------------------------
 export async function mrpProducao(req: Request, res: Response) {
   const r = R_ORDEM();
@@ -246,15 +278,41 @@ export async function mrpProducao(req: Request, res: Response) {
     demanda.set(k, atual);
   }
 
-  // --- 2) Oferta de produto: saldo físico + OP aberta --------------------------
+  // --- 2) Oferta de produto: DISPONÍVEL (físico − comprometido) ---------------
+  //
+  // A oferta usa o DISPONÍVEL, não o físico bruto: quantidade reservada,
+  // empenhada ou bloqueada já está comprometida com outro documento e não
+  // pode cobrir esta demanda (senão a mesma peça cobriria duas necessidades).
   const estoques = (await s.list(R_ESTOQUE(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } })).rows;
-  const saldo = new Map<string, number>();
+  const saldoFisico = new Map<string, number>();
   const minimos = new Map<number, number>();
   for (const e of estoques) {
     const k = chave(Number(e.produto_id), e.tamanho_id ? Number(e.tamanho_id) : null);
-    saldo.set(k, (saldo.get(k) ?? 0) + Number(e.quantidade ?? 0));
+    saldoFisico.set(k, (saldoFisico.get(k) ?? 0) + Number(e.quantidade ?? 0));
     const pid = Number(e.produto_id);
     minimos.set(pid, (minimos.get(pid) ?? 0) + Number(e.estoque_min ?? 0));
+  }
+
+  // Comprometido = reservas ATIVAS (reserva + empenho + bloqueio).
+  const reservasAtivas = (
+    await s.list(R_RESERVA(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, status: 'ativa' } })
+  ).rows;
+  const comprometido = new Map<string, { reservado: number; empenhado: number; bloqueado: number }>();
+  for (const r of reservasAtivas) {
+    const k = chave(Number(r.produto_id), r.tamanho_id ? Number(r.tamanho_id) : null);
+    const atual = comprometido.get(k) ?? { reservado: 0, empenhado: 0, bloqueado: 0 };
+    const qtd = Number(r.quantidade ?? 0);
+    const tipo = String(r.tipo ?? 'reserva');
+    if (tipo === 'bloqueio') atual.bloqueado += qtd;
+    else if (tipo === 'empenho') atual.empenhado += qtd;
+    else atual.reservado += qtd;
+    comprometido.set(k, atual);
+  }
+  const saldo = new Map<string, number>();
+  for (const [k, fisico] of saldoFisico) {
+    const c = comprometido.get(k);
+    const disponivel = c ? fisico - c.reservado - c.empenhado - c.bloqueado : fisico;
+    saldo.set(k, round3(Math.max(0, disponivel)));
   }
 
   const ordens = (await s.list(R_ORDEM(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } })).rows.filter((o) => OP_ABERTAS.includes(String(o.status)));
@@ -277,25 +335,61 @@ export async function mrpProducao(req: Request, res: Response) {
     }
   }
 
-  // --- 3) Falta de produto (demanda inclui o estoque mínimo declarado) ---------
+  // --- 3) Falta de produto: demanda de venda + DÉFICIT de estoque mínimo -------
+  //
+  // O estoque mínimo entra só como o que FALTA para chegar nele (mínimo −
+  // cobertura). Somar o mínimo inteiro em cima da demanda de venda contaria
+  // duas vezes a mesma peça.
   const produtos = new Map<number, Row>(
     (await s.list(R_PRODUTO(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } })).rows.map((p) => [Number(p.id), p])
   );
+
+  const coberturaPorProduto = new Map<number, number>();
+  for (const [k, qtd] of saldo) coberturaPorProduto.set(Number(k.split('#')[0]), round3((coberturaPorProduto.get(Number(k.split('#')[0])) ?? 0) + qtd));
+  for (const [k, qtd] of emProducao) coberturaPorProduto.set(Number(k.split('#')[0]), round3((coberturaPorProduto.get(Number(k.split('#')[0])) ?? 0) + qtd));
+
+  const deficitMinimo = new Map<number, number>();
+  for (const [pid, minimo] of minimos) {
+    if (!(minimo > 0)) continue;
+    const deficit = round3(Math.max(0, minimo - (coberturaPorProduto.get(pid) ?? 0)));
+    if (deficit > 0) deficitMinimo.set(pid, deficit);
+  }
+
   const chaves = new Set<string>([...demanda.keys(), ...emProducao.keys()]);
   const faltasProduto: {
     produto_id: number;
     produto: string;
     tamanho_id: number | null;
+    demanda_vendas: number;
+    demanda_estoque_minimo: number;
     demanda: number;
+    estoque_fisico: number;
+    reservado: number;
+    empenhado: number;
+    bloqueado: number;
+    estoque_disponivel: number;
+    /** alias de `estoque_disponivel` (compatibilidade com o contrato anterior) */
     estoque: number;
     em_producao: number;
     falta: number;
   }[] = [];
+  // Déficit de mínimo de produto SEM venda nem OP também é necessidade.
+  for (const pid of deficitMinimo.keys()) {
+    const temLinha = [...chaves].some((k) => Number(k.split('#')[0]) === pid);
+    if (!temLinha) chaves.add(chave(pid, null));
+  }
+
   for (const k of chaves) {
     const d = demanda.get(k);
     const pid = d?.produto_id ?? Number(k.split('#')[0]);
     const tid = d?.tamanho_id ?? (Number(k.split('#')[1]) || null);
-    const dem = d?.quantidade ?? 0;
+    const demVendas = d?.quantidade ?? 0;
+    // Déficit de mínimo é por PRODUTO: fica na linha sem tamanho para não
+    // duplicar por grade.
+    const demMinimo = tid === null ? deficitMinimo.get(pid) ?? 0 : 0;
+    const dem = round3(demVendas + demMinimo);
+    const fisico = saldoFisico.get(k) ?? 0;
+    const c = comprometido.get(k) ?? { reservado: 0, empenhado: 0, bloqueado: 0 };
     const est = saldo.get(k) ?? 0;
     const prod = emProducao.get(k) ?? 0;
     const falta = Math.max(0, dem - est - prod);
@@ -304,8 +398,15 @@ export async function mrpProducao(req: Request, res: Response) {
       produto_id: pid,
       produto: String(produtos.get(pid)?.nome ?? `Produto #${pid}`),
       tamanho_id: tid,
-      demanda: dem,
-      estoque: est,
+      demanda_vendas: round3(demVendas),
+      demanda_estoque_minimo: round3(demMinimo),
+      demanda: round3(dem),
+      estoque_fisico: round3(fisico),
+      reservado: round3(c.reservado),
+      empenhado: round3(c.empenhado),
+      bloqueado: round3(c.bloqueado),
+      estoque_disponivel: round3(est),
+      estoque: round3(est),
       em_producao: round3(prod),
       falta: round3(falta),
     });
@@ -375,8 +476,42 @@ export async function mrpProducao(req: Request, res: Response) {
 
   return res.json({
     gerado_em: new Date().toISOString(),
+    /**
+     * CLASSIFICAÇÃO EXPLÍCITA — o que este cálculo é (e o que não é).
+     *
+     * O PR #92 chamou isto de "MRP"; a correção delimita: é MRP de
+     * PLANEJAMENTO/NECESSIDADE. Declarar "MRP industrial completo" seria
+     * mentira enquanto não houver lead time, lote, capacidade finita e datas
+     * de necessidade.
+     */
+    calculo: {
+      tipo: 'mrp_planejamento_necessidade',
+      titulo: 'MRP de planejamento/necessidade',
+      descricao:
+        'Deriva necessidade de produto e de insumo a partir de demanda, disponibilidade, OPs abertas, compras abertas e ficha técnica. Não é MRP industrial completo.',
+      cria_pedido_de_compra: false,
+      coberto: [
+        'demanda de vendas em aberto',
+        'déficit de estoque mínimo',
+        'disponibilidade (físico − reservado − empenhado − bloqueado)',
+        'OPs abertas pela quantidade que ainda falta produzir',
+        'compras abertas por (pedido − recebido)',
+        'explosão por ficha técnica com perda',
+        'produto sem ficha aparece em `sem_ficha`',
+      ],
+      nao_coberto: [
+        'lead time de compra e de produção',
+        'lote mínimo / múltiplo de compra / lote econômico',
+        'calendário produtivo (feriados) e capacidade finita',
+        'ordens planejadas e datas de necessidade por componente (pegging)',
+        'consumo real por OP (backflush) e reserva de material por OP',
+        'horizonte temporal com buckets (semana/mês)',
+        'planejamento por componente com nível (BOM multinível)',
+      ],
+      horizonte: 'demanda conhecida hoje (sem datas de necessidade)',
+    },
     regra:
-      'MRP sugere, não compra: nenhum pedido é criado por esta rota. Demanda = vendas em aberto; oferta = estoque físico + OPs abertas + compras em aberto.',
+      'MRP sugere, não compra: nenhum pedido é criado por esta rota. Demanda = vendas em aberto + déficit de estoque mínimo; oferta = disponível (físico − reservado − empenhado − bloqueado) + OPs abertas pelo que falta produzir; insumo = ficha com perda × (OPs abertas + falta de produto) contra saldo + compras em aberto (pedido − recebido).',
     resumo: {
       vendas_em_aberto: vendas.length,
       ordens_abertas: ordens.length,
@@ -384,6 +519,8 @@ export async function mrpProducao(req: Request, res: Response) {
       pecas_em_falta: round3(faltasProduto.reduce((a, f) => a + f.falta, 0)),
       insumos_em_falta: insumos.filter((i) => i.faltando > 0).length,
       produtos_sem_ficha: semFicha.size,
+      // Transparência do comprometido: o que saiu do físico e por quê.
+      reservas_ativas: reservasAtivas.length,
     },
     produtos: faltasProduto,
     insumos,
