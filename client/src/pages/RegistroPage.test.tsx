@@ -36,6 +36,8 @@ vi.mock('../auth/AuthContext', () => ({
     user: { id: 1, name: 'Gerente', email: 'gerente@brobond.com.br', perfil: 'gerente' },
     meta: { version: '0.6.0', mode: 'memory' },
     logout: vi.fn(),
+    // Opções dinâmicas (CRM 3.0): criar etapa/funil recarrega os metadados.
+    refreshMeta: vi.fn().mockResolvedValue(undefined),
     loading: false,
   }),
 }));

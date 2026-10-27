@@ -46,7 +46,7 @@ export default function RegistroPage({ module, modo }: { module: Module; modo: M
   const navigate = useNavigate();
   const toast = useToast();
   const meta = useMeta();
-  const { user } = useAuth();
+  const { user, refreshMeta } = useAuth();
   const resource = module.resource ? meta.resources[module.resource] : undefined;
   const editing = modo === 'editar';
   const registroId = Number(id);
@@ -157,6 +157,21 @@ export default function RegistroPage({ module, modo }: { module: Module; modo: M
     setFormError('');
   }
 
+  /**
+   * Cadastros que alimentam opções de OUTROS formulários precisam refletir na
+   * hora. `crm_etapas`/`crm_funis` são o caso do CRM 3.0: criar a etapa
+   * "Demonstração" tem de aparecer no seletor de estágio da oportunidade sem
+   * recarregar a página — as opções vêm de `/api/meta` (`optionsFrom`).
+   */
+  async function refletirNoMeta(chave: string) {
+    if (chave !== 'crm_etapas' && chave !== 'crm_funis') return;
+    try {
+      await refreshMeta();
+    } catch {
+      /* metadados são conveniência: a gravação já aconteceu e o próximo load corrige */
+    }
+  }
+
   function limpar() {
     setValues(initialValues(resource ?? ({ fields: [] } as unknown as ResourceMeta), null, defaultLocal));
     setErrors({});
@@ -181,12 +196,14 @@ export default function RegistroPage({ module, modo }: { module: Module; modo: M
       const payload = toPayload(resource, valores, editing);
       if (editing) {
         await api.put(`/${resource.key}/${registroId}`, payload);
+        await refletirNoMeta(resource.key);
         toast.success(`${resource.singular} salvo(a) com sucesso.`);
         navigate(`${listPath}/${registroId}/editar`, { replace: true });
         await carregar();
         return;
       }
       const criado = await api.post<Record<string, any>>(`/${resource.key}`, payload);
+      await refletirNoMeta(resource.key);
       toast.success(`${resource.singular} incluído(a) com sucesso.`);
       // Convite de acesso sem SMTP: o link volta na resposta e é exibido AQUI,
       // na própria página (nunca em modal).
