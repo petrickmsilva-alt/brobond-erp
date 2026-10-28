@@ -1148,6 +1148,18 @@ export const RESOURCES: Record<string, Resource> = {
       // Categoria de INSUMO (taxonomia própria, separada da categoria de produto).
       { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias_insumos', search: true, section: 'Identificação' },
       { name: 'unidade', label: 'Unidade', type: 'select', required: true, options: UNIDADES, default: 'un', section: 'Identificação' },
+      // UNIDADE DE COMPRA (P3-04/0060): só é usada quando existe CONVERSÃO
+      // DECLARADA em `unidade_conversoes`. Deixar vazio = compra na mesma
+      // unidade de uso (o caso comum).
+      {
+        name: 'unidade_compra',
+        label: 'Unidade de compra',
+        type: 'select',
+        options: UNIDADES,
+        list: false,
+        section: 'Identificação',
+        hint: 'Como o insumo é comprado (rolo, caixa...). A conversão para a unidade de uso precisa estar declarada em Unidades de medida — o ERP não estima fator.',
+      },
       ativo,
       // SUPRIMENTOS — o fornecedor principal do cadastro.
       { name: 'fornecedor_id', label: 'Fornecedor principal', type: 'ref', ref: 'fornecedores', search: true, section: 'Suprimentos' },
@@ -1472,7 +1484,24 @@ export const RESOURCES: Record<string, Resource> = {
       // SCORE — calculado pelo SERVIDOR (regras explicáveis). Readonly: um PUT
       // do cliente não forja pontuação. O motivo fica ao lado do número.
       { name: 'score', label: 'Score', type: 'integer', readonly: true, min: 0, max: 100 },
+      // CLASSIFICAÇÃO E FATORES — derivados do score pelo SERVIDOR (0058). O
+      // número sozinho não é auditável: `score_fatores` guarda cada parcela com
+      // a evidência que a gerou (origem, interação, recência...), e
+      // `score_classificacao` dá a faixa pronta para a lista.
+      {
+        name: 'score_classificacao',
+        label: 'Classificação',
+        type: 'select',
+        readonly: true,
+        options: [
+          { value: 'frio', label: 'Frio', tone: 'slate' },
+          { value: 'morno', label: 'Morno', tone: 'amber' },
+          { value: 'quente', label: 'Quente', tone: 'blue' },
+          { value: 'prioritario', label: 'Prioritário', tone: 'green' },
+        ],
+      },
       { name: 'score_motivo', label: 'Por que este score', type: 'text', readonly: true, list: false, wide: true },
+      { name: 'score_fatores', label: 'Fatores do score', type: 'json', readonly: true, list: false, form: false },
       { name: 'score_atualizado_em', label: 'Score calculado em', type: 'datetime', readonly: true, list: false },
       { name: 'status', label: 'Status', type: 'select', required: true, search: true, options: [
         { value: 'novo', label: 'Novo', tone: 'blue' },
@@ -1618,7 +1647,13 @@ export const RESOURCES: Record<string, Resource> = {
         { value: 'cancelada', label: 'Cancelada', tone: 'slate' },
       ] },
       { name: 'lembrete_em', label: 'Lembrete', type: 'datetime', hint: 'Quando este compromisso deve aparecer na agenda (hoje/atrasado/próximo).' },
+      // Carimbo do disparo do lembrete (0058). Readonly: quem grava é o
+      // scheduler, com UPDATE condicional — é a chave de idempotência que
+      // impede o mesmo lembrete ser notificado duas vezes.
+      { name: 'lembrete_enviado_em', label: 'Lembrete enviado em', type: 'datetime', readonly: true, list: false },
       { name: 'concluida_em', label: 'Concluída em', type: 'datetime' },
+      { name: 'cancelada_em', label: 'Cancelada em', type: 'datetime', readonly: true, list: false },
+      { name: 'motivo_cancelamento', label: 'Motivo do cancelamento', type: 'text', maxLength: 300, list: false, wide: true },
       { name: 'responsavel_id', label: 'Responsável', type: 'ref', ref: 'usuarios', search: true },
       ...auditFields,
     ],
@@ -1633,6 +1668,166 @@ export const RESOURCES: Record<string, Resource> = {
       ] },
     ],
   },
+  // --------------------------------------------------------------------------
+  // PRODUÇÃO 3.0 — CALENDÁRIO PRODUTIVO (migration 0062, P2-15)
+  //
+  // A capacidade conta dias úteis = seg–sex MENOS estes feriados. Feriado móvel
+  // (Carnaval, Sexta-feira Santa) não é derivado: entra como linha do ano.
+  // --------------------------------------------------------------------------
+  feriados: {
+    key: 'feriados',
+    table: 'feriados',
+    empresa: true,
+    minPerfil: 'gerente',
+    label: 'Feriados',
+    singular: 'Feriado',
+    labelFields: ['nome', 'data'],
+    ops: ALL_OPS,
+    notice:
+      'Calendário produtivo por empresa: a capacidade desconta estes dias dos dias úteis. Feriado de data fixa pode ser marcado como recorrente; feriado móvel precisa ser cadastrado no ano (não é calculado).',
+    fields: [
+      { name: 'data', label: 'Data', type: 'date', required: true, search: true },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 80, placeholder: 'Natal, Carnaval, Aniversário da cidade...' },
+      {
+        name: 'tipo',
+        label: 'Tipo',
+        type: 'select',
+        required: true,
+        default: 'nacional',
+        options: [
+          { value: 'nacional', label: 'Nacional' },
+          { value: 'estadual', label: 'Estadual' },
+          { value: 'municipal', label: 'Municipal' },
+          { value: 'empresa', label: 'Empresa (parada própria)' },
+        ],
+      },
+      { name: 'uf', label: 'UF', type: 'uf', maxLength: 2, list: false },
+      {
+        name: 'recorrente',
+        label: 'Repete todo ano',
+        type: 'boolean',
+        default: false,
+        hint: 'Data fixa anual (25/12, 01/01). Feriados móveis não são calculados: cadastre uma linha por ano.',
+      },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 300, list: false, wide: true },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'data', dir: 'asc' },
+    filterFields: ['tipo', 'recorrente', 'ativo'],
+  },
+
+  // --------------------------------------------------------------------------
+  // ESTOQUE 3.0 — UNIDADES DE MEDIDA E CONVERSÃO DECLARADA (migration 0060)
+  //
+  // Conversão é DADO da empresa, não conhecimento do ERP: comprar em rolo e
+  // consumir em metro só funciona se a empresa declarar 1 rolo = N metros.
+  // Sem regra, nada é convertido (estoque/compras/MRP declaram a ausência).
+  // --------------------------------------------------------------------------
+  unidades_medida: {
+    key: 'unidades_medida',
+    table: 'unidades_medida',
+    empresa: true,
+    minPerfil: 'gerente',
+    label: 'Unidades de medida',
+    singular: 'Unidade de medida',
+    labelFields: ['codigo', 'nome'],
+    ops: ALL_OPS,
+    notice:
+      'Catálogo de unidades da empresa. A GRANDEZA impede conversão sem sentido (metro ≠ quilo): a conversão só é aceita entre unidades da mesma grandeza.',
+    fields: [
+      { name: 'codigo', label: 'Código', type: 'text', required: true, uniqueEmpresa: true, search: true, maxLength: 12, placeholder: 'rolo, m, kg, cx...', hint: 'Sigla usada nos cadastros e nos arquivos. Única por empresa.' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 60 },
+      {
+        name: 'grandeza',
+        label: 'Grandeza',
+        type: 'select',
+        required: true,
+        default: 'contagem',
+        list: false,
+        options: [
+          { value: 'comprimento', label: 'Comprimento' },
+          { value: 'massa', label: 'Massa' },
+          { value: 'volume', label: 'Volume' },
+          { value: 'area', label: 'Área' },
+          { value: 'contagem', label: 'Contagem' },
+          { value: 'tempo', label: 'Tempo' },
+        ],
+        hint: 'Só se converte dentro da mesma grandeza.',
+      },
+      { name: 'casas_decimais', label: 'Casas decimais', type: 'integer', min: 0, max: 4, default: 2, list: false },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'codigo', dir: 'asc' },
+    filterFields: ['grandeza', 'ativo'],
+  },
+
+  unidade_conversoes: {
+    key: 'unidade_conversoes',
+    table: 'unidade_conversoes',
+    empresa: true,
+    minPerfil: 'gerente',
+    label: 'Conversões de unidade',
+    singular: 'Conversão de unidade',
+    labelFields: ['de_codigo', 'para_codigo'],
+    ops: ALL_OPS,
+    notice:
+      'Regra explícita: 1 [de] = [fator] [para]. O ERP converte SOMENTE o que está aqui — nunca estima fator por semelhança.',
+    fields: [
+      { name: 'de_codigo', label: 'De', type: 'text', required: true, search: true, maxLength: 12, placeholder: 'rolo' },
+      { name: 'para_codigo', label: 'Para', type: 'text', required: true, search: true, maxLength: 12, placeholder: 'm' },
+      { name: 'fator', label: 'Fator', type: 'number', required: true, min: 0.000001, hint: '1 [de] = fator [para]. Ex.: rolo → m, fator 50.' },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 300, list: false, wide: true },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'de_codigo', dir: 'asc' },
+    filterFields: ['ativo'],
+  },
+
+  // --------------------------------------------------------------------------
+  // FINANCEIRO 3.0 — LOTES DE IMPORTAÇÃO CONTÁBIL (migration 0059)
+  //
+  // O lote é o CABEÇALHO da importação; as partidas vivem no livro único
+  // (`lancamentos_financeiros`). Recurso READ-ONLY: quem cria é o endpoint
+  // POST /api/financeiro/importacao-contabil (transacional e idempotente).
+  // --------------------------------------------------------------------------
+  fin_importacoes_contabeis: {
+    key: 'fin_importacoes_contabeis',
+    table: 'fin_importacoes_contabeis',
+    empresa: true,
+    label: 'Importações contábeis',
+    singular: 'Importação contábil',
+    labelFields: ['arquivo', 'hash'],
+    ops: READ_ONLY,
+    minPerfil: 'gerente',
+    notice:
+      'Lote de lançamentos contábeis importado do contador. As partidas ficam no MESMO livro (Lançamentos financeiros) com a origem marcada — não existe segundo ledger.',
+    fields: [
+      { name: 'arquivo', label: 'Arquivo', type: 'text', maxLength: 240, search: true },
+      { name: 'hash', label: 'Hash do conteúdo', type: 'text', maxLength: 64, list: false, hint: 'Chave de idempotência: o mesmo lote não é importado duas vezes.' },
+      { name: 'competencia', label: 'Competência', type: 'date' },
+      { name: 'entradas', label: 'Lançamentos', type: 'integer', readonly: true },
+      { name: 'partidas', label: 'Partidas', type: 'integer', readonly: true },
+      { name: 'total_debitos', label: 'Total débitos', type: 'money', readonly: true },
+      { name: 'total_creditos', label: 'Total créditos', type: 'money', readonly: true },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        readonly: true,
+        options: [
+          { value: 'aplicada', label: 'Aplicada', tone: 'green' },
+          { value: 'estornada', label: 'Estornada', tone: 'slate' },
+        ],
+      },
+      { name: 'criado_em', label: 'Importado em', type: 'datetime', readonly: true },
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+    filterFields: ['status'],
+  },
+
   // --------------------------------------------------------------------------
   // CRM 3.0 — FUNIL CONFIGURÁVEL E ORIGEM/CAMPANHA (migration 0051)
   // --------------------------------------------------------------------------
@@ -1762,11 +1957,20 @@ export const RESOURCES: Record<string, Resource> = {
     notice: 'Trilha própria do funil: toda mudança de estágio é gravada aqui automaticamente, com usuário, data e observação.',
     fields: [
       { name: 'oportunidade_id', label: 'Oportunidade', type: 'ref', ref: 'crm_oportunidades', required: true, search: true },
-      { name: 'estagio_anterior', label: 'Estágio anterior', type: 'text', search: true },
-      { name: 'estagio_novo', label: 'Estágio novo', type: 'text', required: true, search: true },
+      { name: 'funil_id', label: 'Funil', type: 'ref', ref: 'crm_funis', list: false },
+      { name: 'estagio_anterior', label: 'Estágio anterior (chave)', type: 'text', search: true },
+      { name: 'estagio_anterior_id', label: 'Etapa anterior (id)', type: 'integer', list: false },
+      // SNAPSHOT: o rótulo gravado NA TRANSIÇÃO. Renomear a etapa depois não
+      // altera esta coluna — é o registro histórico, não o cadastro atual.
+      { name: 'estagio_anterior_nome', label: 'Nome anterior (histórico)', type: 'text', list: false },
+      { name: 'estagio_novo', label: 'Estágio novo (chave)', type: 'text', required: true, search: true },
+      { name: 'estagio_novo_id', label: 'Etapa nova (id)', type: 'integer', list: false },
+      { name: 'estagio_novo_nome', label: 'Nome novo (histórico)', type: 'text' },
+      { name: 'snapshot_versao', label: 'Versão do snapshot', type: 'integer', readonly: true, list: false },
       { name: 'status_anterior', label: 'Status anterior', type: 'text', list: false },
       { name: 'status_novo', label: 'Status novo', type: 'text', list: false },
       { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      { name: 'usuario_nome', label: 'Usuário (histórico)', type: 'text', list: false },
       { name: 'observacao', label: 'Observação', type: 'text', maxLength: 300, wide: true },
       { name: 'criado_em', label: 'Quando', type: 'datetime', readonly: true },
     ],
@@ -3638,6 +3842,7 @@ export const RESOURCES: Record<string, Resource> = {
       },
       { name: 'documento_origem_recurso', label: 'Documento de origem', type: 'text', maxLength: 60, list: false, section: 'Contábil', hint: 'Recurso que gerou o lançamento (vendas, compras, aportes...).' },
       { name: 'documento_origem_id', label: 'Documento (id)', type: 'integer', min: 1, list: false, section: 'Contábil' },
+      { name: 'partida_id', label: 'Partida (nº no lote)', type: 'integer', min: 1, list: false, section: 'Contábil', hint: 'Número do lançamento dentro do lote de importação contábil — agrupa débito e crédito da mesma entrada.' },
       { name: 'competencia', label: 'Competência', type: 'date', list: false, section: 'Contábil', hint: 'Mês de competência. Vazio = usa a data do lançamento no balancete.' },
       { name: 'descricao', label: 'Descrição', type: 'text', required: true, search: true, maxLength: 200, wide: true },
       { name: 'valor', label: 'Valor bruto (R$)', type: 'money', required: true, min: 0.01 },
@@ -3787,6 +3992,10 @@ export const RESOURCES: Record<string, Resource> = {
   fiscal_obrigacoes: {
     key: 'fiscal_obrigacoes',
     empresa: true,
+    // O módulo de menu já era gerente; o RECURSO não era — a API respondia a
+    // operador por outro caminho (RBAC_DERIVA_SOLTA). Obrigação fiscal é
+    // informação de gestão: o servidor passa a exigir gerente.
+    minPerfil: 'gerente',
     table: 'fiscal_obrigacoes',
     label: 'Obrigações fiscais',
     singular: 'Obrigação fiscal',
@@ -3795,7 +4004,7 @@ export const RESOURCES: Record<string, Resource> = {
     notice:
       'Cadastro da REGRA da obrigação (periodicidade, dia de vencimento). O vencimento de cada competência é calculado — não se digita data de vencimento por mês.',
     fields: [
-      { name: 'codigo', label: 'Código', type: 'text', required: true, unique: true, search: true, maxLength: 30, placeholder: 'SPED_FISCAL, DCTFWEB...' },
+      { name: 'codigo', label: 'Código', type: 'text', required: true, uniqueEmpresa: true, search: true, maxLength: 30, placeholder: 'SPED_FISCAL, DCTFWEB...', hint: 'Único por empresa (índice uq_fiscal_obrigacoes_empresa_codigo): duas empresas podem ter a mesma obrigação.' },
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
       {
         name: 'tipo',
@@ -3903,7 +4112,7 @@ export const RESOURCES: Record<string, Resource> = {
     notice:
       'Estrutura contábil da empresa. O BROBOND não é um sistema contábil: aqui mora a classificação que o contador usa, não apuração de imposto.',
     fields: [
-      { name: 'codigo', label: 'Código', type: 'text', required: true, unique: true, search: true, maxLength: 30, placeholder: '1.1.01, 4.01...' },
+      { name: 'codigo', label: 'Código', type: 'text', required: true, uniqueEmpresa: true, search: true, maxLength: 30, placeholder: '1.1.01, 4.01...', hint: 'Único por empresa (índice uq_plano_contas_empresa_codigo): o mesmo código existe em planos de empresas diferentes.' },
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
       {
         name: 'natureza',

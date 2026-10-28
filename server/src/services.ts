@@ -1107,6 +1107,47 @@ function probabilidadeFoiInformada(body: unknown): boolean {
   return bruto !== undefined && bruto !== null && bruto !== '';
 }
 
+/**
+ * P3-04/0060 — CONVERSÃO DE UNIDADE NÃO SE INVENTA.
+ *
+ * Regras (espelham os CHECKs da migration 0060 e acrescentam o que só a base
+ * sabe): fator positivo, unidades diferentes, as duas unidades precisam existir
+ * no catálogo DA EMPRESA e pertencer à MESMA GRANDEZA. Converter metro para
+ * quilo é erro de cadastro, não operação.
+ */
+async function validarConversaoDeUnidade(data: Row, empresaId: number, tx?: Tx): Promise<void> {
+  const de = String(data.de_codigo ?? '').trim().toLowerCase();
+  const para = String(data.para_codigo ?? '').trim().toLowerCase();
+  const fator = Number(data.fator ?? 0);
+  if (!Number.isFinite(fator) || fator <= 0) {
+    throw new HttpError(400, 'O fator de conversão precisa ser maior que zero.', { fator: 'Maior que zero' });
+  }
+  if (!de || !para) {
+    throw new HttpError(400, 'Informe a unidade de origem e a de destino.', { de_codigo: 'Obrigatório', para_codigo: 'Obrigatório' });
+  }
+  if (de === para) {
+    throw new HttpError(400, 'Origem e destino iguais não formam conversão.', { para_codigo: 'Precisa ser diferente de "De"' });
+  }
+  const s = getStore();
+  const { rows } = await s.list(getResource('unidades_medida')!, { page: 1, pageSize: 1000, filter: { empresa_id: empresaId } }, tx);
+  const porCodigo = new Map(rows.map((u) => [String(u.codigo ?? '').trim().toLowerCase(), u]));
+  const unidadeDe = porCodigo.get(de);
+  const unidadePara = porCodigo.get(para);
+  if (!unidadeDe || !unidadePara) {
+    throw new HttpError(400, 'A unidade informada não existe no catálogo desta empresa.', {
+      de_codigo: unidadeDe ? undefined : 'Não cadastrada',
+      para_codigo: unidadePara ? undefined : 'Não cadastrada',
+    });
+  }
+  if (String(unidadeDe.grandeza ?? '') !== String(unidadePara.grandeza ?? '')) {
+    throw new HttpError(
+      400,
+      `Grandezas diferentes (${unidadeDe.grandeza} × ${unidadePara.grandeza}): não há conversão possível entre elas.`,
+      { para_codigo: 'Mesma grandeza da origem' }
+    );
+  }
+}
+
 export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
   const s = getStore();
@@ -1130,6 +1171,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       if (r.key === 'usuarios') await prepareUserPayload(data, null, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, null, actor);
       if (r.key === 'politicas_comerciais') prepararPoliticaComercial(data, null);
+      if (r.key === 'unidade_conversoes') await validarConversaoDeUnidade(data, escopo.empresaId, tx);
       if (r.key === 'crm_atividades') normalizarAtividadeCrm(data, null);
       if (r.key === 'crm_oportunidades') {
         await resolverFunilPadrao(s, tx, escopo.empresaId, data);
@@ -1243,10 +1285,14 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
           empresaId: Number(row.empresa_id ?? escopo.empresaId),
           oportunidadeId: Number(row.id),
           estagioAnterior: null,
+          estagioAnteriorId: null,
           estagioNovo: String(row.etapa ?? ''),
+          estagioNovoId: row.etapa_id === null || row.etapa_id === undefined ? null : Number(row.etapa_id),
+          funilId: row.funil_id === null || row.funil_id === undefined ? null : Number(row.funil_id),
           statusAnterior: null,
           statusNovo: row.status ? String(row.status) : null,
           usuarioId: actor.id ?? null,
+          usuarioNome: actor.name ?? null,
           observacao: 'Abertura da oportunidade',
         });
       }
@@ -1449,10 +1495,14 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
             empresaId: Number(before.empresa_id ?? escopo.empresaId),
             oportunidadeId: id,
             estagioAnterior: before.etapa ? String(before.etapa) : null,
+            estagioAnteriorId: before.etapa_id === null || before.etapa_id === undefined ? null : Number(before.etapa_id),
             estagioNovo: String(row.etapa ?? ''),
+            estagioNovoId: row.etapa_id === null || row.etapa_id === undefined ? null : Number(row.etapa_id),
+            funilId: row.funil_id === null || row.funil_id === undefined ? (before.funil_id ?? null) : Number(row.funil_id),
             statusAnterior: before.status ? String(before.status) : null,
             statusNovo: row.status ? String(row.status) : null,
             usuarioId: actor.id ?? null,
+            usuarioNome: actor.name ?? null,
             observacao: statusMudou && !etapaMudou ? `Desfecho alterado para ${row.status}` : null,
           });
         }
