@@ -37,7 +37,7 @@ function criarRaiz({ arquivos = {}, baseline }: Fixture) {
     writeFileSync(abs, conteudo);
   };
   // Estrutura mínima que o gate sempre confere.
-  escrever('client/src/App.tsx', 'export const rotas = usaCrudGenerico;');
+  escrever('client/src/App.tsx', 'export const rotas = usaCrudGenerico; const novo = `${base}/novo`; const editar = `${base}/:id/editar`;');
   escrever('client/src/pages/RegistroPage.tsx', 'export const P = <RecordForm />;');
   escrever(
     'docs/ERP-3.0-UX-BASELINE.json',
@@ -85,6 +85,40 @@ async function comFixture(fixture: Fixture, fn: (r: Awaited<ReturnType<typeof au
 }
 
 describe('ZERO MODAL — baseline objetivo', () => {
+  it('bloqueia APIs de confirmação do navegador como fluxo operacional', async () => {
+    await comFixture({ arquivos: { 'client/src/pages/Operacao.tsx': 'window.confirm("Excluir?"); window.prompt("Motivo?"); window.alert("OK");' } }, (r) => {
+      expect(r.ok).toBe(false);
+      expect(r.violacoes.join(' ')).toContain('window.confirm/prompt/alert');
+    });
+  });
+
+  it('exige baseline v3 executável e rejeita exceção wildcard', async () => {
+    const baseline = {
+      version: 3, date: '2026-10-28', rules: ['ZERO MODAL'],
+      allowed_patterns: { resource_routes: { list: '/recurso', create: '/recurso/novo', detail: '/recurso/:id', edit: '/recurso/:id/editar' }, exception_categories: ['navegacao_global', 'menu_mobile', 'infraestrutura', 'portal_publico', 'catalogo_publico'] },
+      forbidden_patterns: ['Modal', 'Dialog', 'Drawer', 'Sheet', 'Overlay', 'createPortal(', 'window.confirm(', 'window.prompt(', 'window.alert('],
+      exceptions: [{ arquivo: 'client/src/pages/*.tsx', categoria: 'infraestrutura', motivo: 'Exceção ampla que não identifica arquivo ou ocorrência concreta e auditável.', padroes: {} }],
+      totais: {}
+    };
+    await comFixture({ baseline }, (r) => {
+      expect(r.ok).toBe(false);
+      expect(r.violacoes.join(' ')).toContain('wildcard não é permitido');
+    });
+  });
+
+  it('reconhece as rotas /novo e /:id/editar como fluxo válido quando ligadas ao CRUD', async () => {
+    const baseline = {
+      version: 3, date: '2026-10-28', rules: ['ZERO MODAL'],
+      allowed_patterns: { resource_routes: { list: '/recurso', create: '/recurso/novo', detail: '/recurso/:id', edit: '/recurso/:id/editar' }, exception_categories: ['navegacao_global', 'menu_mobile', 'infraestrutura', 'portal_publico', 'catalogo_publico'] },
+      forbidden_patterns: ['Modal', 'Dialog', 'Drawer', 'Sheet', 'Overlay', 'createPortal(', 'window.confirm(', 'window.prompt(', 'window.alert('],
+      exceptions: [], totais: {}
+    };
+    await comFixture({ baseline }, (r) => {
+      expect(r.violacoes).toEqual([]);
+      expect(r.ok).toBe(true);
+    });
+  });
+
   it('reprova arquivo NOVO com componente de sobreposição', async () => {
     await comFixture(
       { arquivos: { 'client/src/pages/ClientesPage.tsx': 'export const X = () => <Modal>oi</Modal>;' } },

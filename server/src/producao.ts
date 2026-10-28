@@ -1519,6 +1519,11 @@ export async function criarApontamento(req: Request, res: Response) {
         if (existente) return { ...existente, idempotente: true };
       }
 
+      const custodiaIdsRaw = req.body?.eventos_custodia_ids;
+      const custodiaIds = Array.isArray(custodiaIdsRaw) ? [...new Set(custodiaIdsRaw.map(Number))] : [];
+      if (custodiaIds.some((eventId) => !Number.isInteger(eventId) || eventId <= 0)) throw new HttpError(400, 'IDs de eventos de custódia inválidos.');
+      if (ordem.terceiro_id && !custodiaIds.length) throw new HttpError(409, 'Esta OP está vinculada a terceiro; associe os eventos de retorno de produto/perda ao apontamento.');
+
       // ---- validação ----------------------------------------------------
       const produzida = Number(req.body?.quantidade_produzida ?? 0);
       const perdida = Number(req.body?.quantidade_perdida ?? 0);
@@ -1530,6 +1535,20 @@ export async function criarApontamento(req: Request, res: Response) {
       }
       if (produzida <= 0 && perdida <= 0) {
         throw new HttpError(400, 'Informe peças produzidas ou perdidas — um apontamento vazio não registra nada.');
+      }
+      const eventosCustodia: Row[] = [];
+      for (const eventId of custodiaIds) {
+        const evento = await s.findOneWhere(getResource('terceirizacao_eventos')!, { id: eventId, empresa_id: escopo.empresaId, ordem_id: id }, tx);
+        if (!evento) throw new HttpError(404, 'Evento de custódia não encontrado para esta OP.');
+        if (Number(evento.terceiro_id) !== Number(ordem.terceiro_id) || Number(evento.produto_id) !== Number(ordem.produto_id)) throw new HttpError(409, 'O evento de retorno precisa pertencer ao terceiro e produto vinculados à OP.');
+        if (evento.apontamento_id) throw new HttpError(409, 'Este evento de custódia já foi associado a outro apontamento.');
+        if (!['RETORNO_PRODUTO', 'PERDA_PRODUTO'].includes(String(evento.evento))) throw new HttpError(400, 'Somente eventos de retorno/perda de produto podem ser associados ao apontamento.');
+        eventosCustodia.push(evento);
+      }
+      if (custodiaIds.length) {
+        const retorno = eventosCustodia.filter((evento) => evento.evento === 'RETORNO_PRODUTO').reduce((sum, evento) => sum + Number(evento.quantidade), 0);
+        const perda = eventosCustodia.filter((evento) => evento.evento === 'PERDA_PRODUTO').reduce((sum, evento) => sum + Number(evento.quantidade), 0);
+        if (retorno !== produzida || perda !== perdida) throw new HttpError(409, 'As quantidades dos eventos vinculados devem corresponder exatamente às quantidades produzida e perdida do apontamento.');
       }
       let tamanhoId = req.body?.tamanho_id ? Number(req.body.tamanho_id) : null;
       if (!tamanhoId) {
@@ -1570,6 +1589,8 @@ export async function criarApontamento(req: Request, res: Response) {
         },
         tx
       );
+
+      for (const evento of eventosCustodia) await s.update(getResource('terceirizacao_eventos')!, Number(evento.id), { apontamento_id: Number(apontamento.id) }, tx);
 
       // ---- acumula na OP e recalcula o custo real ------------------------
       const pecasPlanejadas = itensPlanejados.reduce((a, i) => a + i.quantidade, 0);
@@ -1616,7 +1637,7 @@ export async function criarApontamento(req: Request, res: Response) {
           recurso: 'ordens',
           registro_id: id,
           descricao: `OP #${id}: apontamento — ${resumo}; ${linhas.length} insumo(s) baixado(s); custo real R$ ${custoReal.toFixed(2)}${emFalta.length ? ` — CONSUMO FORÇADO por ${actor.name}` : ''}`,
-          dados: { produzida, perdida, tamanho_id: tamanhoId, insumos: linhas.length, custo_real: custoReal, forcar: emFalta.length > 0, divergencia },
+          dados: { produzida, perdida, tamanho_id: tamanhoId, insumos: linhas.length, custo_real: custoReal, forcar: emFalta.length > 0, divergencia, eventos_custodia_ids: eventosCustodia.map((evento) => Number(evento.id)) },
           empresa_id: empresaDoRegistroAudit(op, ordem, actor),
         },
         tx
@@ -1625,7 +1646,7 @@ export async function criarApontamento(req: Request, res: Response) {
         de,
         para: alvo,
         mensagem: resumo,
-        dados: { produzida, perdida, tamanho_id: tamanhoId, insumos: linhas.length, custo_real: custoReal, divergencia_insumos: divergencia },
+        dados: { produzida, perdida, tamanho_id: tamanhoId, insumos: linhas.length, custo_real: custoReal, divergencia_insumos: divergencia, eventos_custodia_ids: eventosCustodia.map((evento) => Number(evento.id)) },
         usuario_id: actor.id || null,
       }, tx, escopo);
       if (perdida > 0) {

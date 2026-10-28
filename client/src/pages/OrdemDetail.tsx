@@ -99,11 +99,15 @@ export default function OrdemDetail() {
 
   // apontamento de produção (chão de fábrica)
   const [apontOpen, setApontOpen] = useState(false);
-  const [apontForm, setApontForm] = useState({ tamanho_id: '', quantidade_produzida: '1', quantidade_perdida: '0', observacoes: '' });
+  const [apontForm, setApontForm] = useState({ tamanho_id: '', quantidade_produzida: '1', quantidade_perdida: '0', observacoes: '', eventos_custodia_ids: '' });
   const [apontErr, setApontErr] = useState('');
   const [savingApont, setSavingApont] = useState(false);
   const [apontamentos, setApontamentos] = useState<Record<string, any>[]>([]);
   const [eventos, setEventos] = useState<Record<string, any>[]>([]);
+  const [custodiaEventos, setCustodiaEventos] = useState<Record<string, any>[]>([]);
+  const [custodiaOpcoes, setCustodiaOpcoes] = useState<Option[]>([]);
+  const [custodiaForm, setCustodiaForm] = useState({ evento: 'ENVIO_INSUMO', insumo_id: '', quantidade: '1', referencia_evento_id: '', tipo_material: 'insumo', observacoes: '' });
+  const [savingCustodia, setSavingCustodia] = useState(false);
   const [trilhaAberta, setTrilhaAberta] = useState(false);
   // cancelar com motivo: a confirmação genérica não dá campo de texto
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -116,16 +120,18 @@ export default function OrdemDetail() {
     setLoading(true);
     setError('');
     try {
-      const [o, its, aps, evs] = await Promise.all([
+      const [o, its, aps, evs, custodia] = await Promise.all([
         api.get<Record<string, any>>(`/ordens/${ordemId}`),
         api.get<ItemOP[]>(`/ordens/${ordemId}/itens`),
         api.get<Record<string, any>[]>(`/ordens/${ordemId}/apontamentos`).catch(() => [] as Record<string, any>[]),
         api.get<Record<string, any>[]>(`/ordens/${ordemId}/eventos`).catch(() => [] as Record<string, any>[]),
+        api.get<Record<string, any>[]>(`/ordens/${ordemId}/custodia`).catch(() => [] as Record<string, any>[]),
       ]);
       setOrdem(o);
       setItens(its);
       setApontamentos(aps);
       setEventos(evs);
+      setCustodiaEventos(custodia);
       setError('');
     } catch (e: any) {
       setError(e.message || 'Erro ao carregar a ordem de fabricação.');
@@ -140,6 +146,10 @@ export default function OrdemDetail() {
 
   useEffect(() => {
     api.get<Option[]>('/tamanhos/options').then(setTamanhoOpts).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    api.get<Option[]>('/insumos/options').then(setCustodiaOpcoes).catch(() => {});
   }, []);
 
   const totalPecas = useMemo(() => {
@@ -250,9 +260,39 @@ export default function OrdemDetail() {
       quantidade_produzida: '1',
       quantidade_perdida: '0',
       observacoes: '',
+      eventos_custodia_ids: '',
     });
     setApontErr('');
     setApontOpen(true);
+  }
+
+  async function registrarCustodia() {
+    if (!ordem?.terceiro_id) return toast.error('Vincule um terceiro à OP antes de registrar custódia.');
+    if (!custodiaForm.quantidade || Number(custodiaForm.quantidade) <= 0) return toast.error('Informe uma quantidade maior que zero.');
+    if (custodiaForm.evento.includes('INSUMO') && !custodiaForm.insumo_id) return toast.error('Selecione o insumo.');
+    if (custodiaForm.evento === 'RETORNO_INSUMO' && !custodiaForm.referencia_evento_id) return toast.error('Informe o ID do evento ENVIO_INSUMO original.');
+    setSavingCustodia(true);
+    try {
+      const isCustodyOnly = custodiaForm.evento === 'CUSTODIA';
+      const isProduct = custodiaForm.evento.endsWith('PRODUTO');
+      const payload = {
+        terceiro_id: Number(ordem.terceiro_id), evento: custodiaForm.evento, tipo_material: isProduct ? 'produto' : isCustodyOnly ? custodiaForm.tipo_material : 'insumo',
+        insumo_id: isProduct || (isCustodyOnly && custodiaForm.tipo_material === 'produto') ? undefined : Number(custodiaForm.insumo_id),
+        produto_id: isProduct || (isCustodyOnly && custodiaForm.tipo_material === 'produto') ? Number(ordem.produto_id) : undefined,
+        proprietario_tipo: isCustodyOnly ? 'terceiro' : 'empresa', proprietario_terceiro_id: isCustodyOnly ? Number(ordem.terceiro_id) : null,
+        custodiante_anterior_tipo: custodiaForm.evento === 'ENVIO_INSUMO' ? 'empresa' : 'terceiro',
+        custodiante_anterior_terceiro_id: custodiaForm.evento === 'ENVIO_INSUMO' ? null : Number(ordem.terceiro_id),
+        custodiante_novo_tipo: custodiaForm.evento === 'ENVIO_INSUMO' ? 'terceiro' : 'empresa',
+        custodiante_novo_terceiro_id: custodiaForm.evento === 'ENVIO_INSUMO' ? Number(ordem.terceiro_id) : null,
+        quantidade: Number(custodiaForm.quantidade), referencia_evento_id: custodiaForm.evento === 'RETORNO_INSUMO' ? Number(custodiaForm.referencia_evento_id) : null,
+        observacoes: custodiaForm.observacoes, idempotency_key: crypto.randomUUID(),
+      };
+      const row = await api.post<Record<string, any>>(`/ordens/${ordemId}/custodia`, payload);
+      toast.success(`Evento ${row.evento} registrado (#${row.id}).`);
+      setCustodiaForm((v) => ({ ...v, quantidade: '1', referencia_evento_id: '', observacoes: '' }));
+      await load();
+    } catch (e: any) { toast.error(e instanceof ApiError ? e.message : 'Não foi possível registrar a custódia.'); }
+    finally { setSavingCustodia(false); }
   }
 
   async function salvarApontamento(forcar = false) {
@@ -274,6 +314,7 @@ export default function OrdemDetail() {
           quantidade_perdida: perdida,
           observacoes: apontForm.observacoes || undefined,
           idempotency_key: chaveIdem,
+          eventos_custodia_ids: apontForm.eventos_custodia_ids.split(/[\s,;]+/).filter(Boolean).map(Number),
         }
       );
       toast.success(
@@ -569,6 +610,20 @@ export default function OrdemDetail() {
               </table>
             )}
           </div>
+          <section className="card overflow-hidden">
+            <div className="border-b border-slate-200 px-4 py-3"><h2 className="text-sm font-bold text-navy-900">Custódia e faccionamento</h2><p className="mt-1 text-xs text-slate-500">Eventos distinguem empresa, proprietário, terceiro, custodiante e material. Saídas/retornos de insumos de propriedade da empresa usam o mesmo ledger movimentacoes_insumos; não há saldo paralelo.</p></div>
+            {!ordem.terceiro_id ? <div className="p-4 text-sm text-amber-800">Vincule um terceiro/facção à OP para registrar a cadeia de custódia.</div> : <>
+              {custodiaEventos.length === 0 ? <div className="p-4 text-sm text-slate-400">Nenhum evento de custódia registrado.</div> : <div className="overflow-x-auto"><table className="table"><thead><tr><th>ID</th><th>Evento</th><th>Material</th><th>Quantidade</th><th>Proprietário</th><th>Custódia</th><th>Vínculos</th></tr></thead><tbody>{custodiaEventos.map((ev) => <tr key={ev.id}><td className="font-mono text-xs">#{ev.id}</td><td className="font-medium">{ev.evento}</td><td>{ev.tipo_material === 'insumo' ? `Insumo #${ev.insumo_id}` : `Produto #${ev.produto_id}`}</td><td>{formatNumber(ev.quantidade)} {ev.unidade}</td><td>{ev.proprietario_tipo === 'empresa' ? `Empresa ${ordem.empresa_id ?? ''}` : `Terceiro #${ev.proprietario_terceiro_id}`}</td><td>{ev.custodiante_anterior_tipo === 'empresa' ? 'Empresa' : `Terceiro #${ev.custodiante_anterior_terceiro_id}`} → {ev.custodiante_novo_tipo === 'empresa' ? 'Empresa' : `Terceiro #${ev.custodiante_novo_terceiro_id}`}</td><td className="text-xs">{ev.movimentacao_insumo_id ? `Mov. insumo #${ev.movimentacao_insumo_id}` : ''}{ev.referencia_evento_id ? ` · ref. #${ev.referencia_evento_id}` : ''}{ev.apontamento_id ? ` · apont. #${ev.apontamento_id}` : ''}</td></tr>)}</tbody></table></div>}
+              {ehGerente && PODE_APONTAR.includes(status) && <div className="border-t border-slate-100 p-4"><h3 className="mb-3 text-sm font-semibold">Registrar evento</h3><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <label className="block"><span className="label">Evento</span><select className="input" value={custodiaForm.evento} onChange={(e) => setCustodiaForm((v) => ({ ...v, evento: e.target.value }))}><option value="ENVIO_INSUMO">Envio de insumo da empresa</option><option value="RETORNO_INSUMO">Retorno de insumo à empresa</option><option value="RETORNO_PRODUTO">Retorno de produto bom</option><option value="PERDA_PRODUTO">Perda de produto</option><option value="CUSTODIA">Custódia de material do terceiro (sem saldo da empresa)</option></select></label>
+                {(!custodiaForm.evento.endsWith('PRODUTO')) && <><label className="block"><span className="label">Tipo de material</span><select className="input" value={custodiaForm.tipo_material} onChange={(e) => setCustodiaForm((v) => ({ ...v, tipo_material: e.target.value }))} disabled={custodiaForm.evento !== 'CUSTODIA'}><option value="insumo">Insumo</option><option value="produto">Produto da OP</option></select></label>{(custodiaForm.tipo_material === 'insumo' || !['RETORNO_PRODUTO','PERDA_PRODUTO'].includes(custodiaForm.evento)) && <label className="block"><span className="label">Insumo</span><select className="input" value={custodiaForm.insumo_id} onChange={(e) => setCustodiaForm((v) => ({ ...v, insumo_id: e.target.value }))}><option value="">Selecione...</option>{custodiaOpcoes.map((op: any) => <option key={op.value} value={op.value}>{op.label}</option>)}</select></label>}</>}
+                <label className="block"><span className="label">Quantidade</span><input type="number" min="0.001" step="0.001" className="input" value={custodiaForm.quantidade} onChange={(e) => setCustodiaForm((v) => ({ ...v, quantidade: e.target.value }))} /></label>
+                {custodiaForm.evento === 'RETORNO_INSUMO' && <label className="block"><span className="label">ID do evento de envio</span><input type="number" min="1" className="input" value={custodiaForm.referencia_evento_id} onChange={(e) => setCustodiaForm((v) => ({ ...v, referencia_evento_id: e.target.value }))} /></label>}
+                <label className="block sm:col-span-2"><span className="label">Observações</span><input className="input" value={custodiaForm.observacoes} onChange={(e) => setCustodiaForm((v) => ({ ...v, observacoes: e.target.value }))} /></label>
+              </div><p className="mt-2 text-xs text-slate-500">Retorno/perda de produto: depois do evento, registre o apontamento padrão e vincule os IDs dos eventos. O apontamento/consumo/entrada de produto acabado continuam no fluxo canônico da OP.</p><button className="btn-primary mt-3" onClick={registrarCustodia} disabled={savingCustodia}>{savingCustodia ? 'Registrando…' : 'Registrar evento de custódia'}</button></div>}
+            </>}
+          </section>
+
           {ordem.observacoes && (
             <div className="card p-4 text-sm">
               <span className="label">Observações</span>
@@ -589,6 +644,7 @@ export default function OrdemDetail() {
                 <dt className="text-slate-500">Facção</dt>
                 <dd>{ordem.faccao || '—'}</dd>
               </div>
+              <div className="flex justify-between"><dt className="text-slate-500">Terceiro</dt><dd>{ordem.terceiro_id__label || (ordem.terceiro_id ? `#${ordem.terceiro_id}` : '—')}</dd></div>
               <div className="flex justify-between">
                 <dt className="text-slate-500">Início</dt>
                 <dd>{formatDate(ordem.inicio)}</dd>
@@ -912,6 +968,7 @@ export default function OrdemDetail() {
             />
             <span className="mt-1 block text-xs text-slate-400">Consome insumo da ficha e não gera estoque.</span>
           </label>
+          {ordem?.terceiro_id && <label className="block sm:col-span-2"><span className="label">Eventos de retorno/perda do terceiro (IDs, separados por vírgula)</span><input className="input" value={apontForm.eventos_custodia_ids} onChange={(e) => setApontForm((v) => ({ ...v, eventos_custodia_ids: e.target.value }))} placeholder="Ex.: 41, 42" /><span className="mt-1 block text-xs text-slate-500">Obrigatório para OP terceirizada. As quantidades dos eventos precisam fechar exatamente com as peças boas/refugadas deste apontamento.</span></label>}
           <label className="block sm:col-span-2">
             <span className="label">Observações (opcional)</span>
             <textarea

@@ -625,7 +625,7 @@ export async function mrpProducao(req: Request, res: Response) {
   // produzir; a falta de produto entra como OP que ainda não existe.
   const necessidadeProducao = new Map<number, number>();
   for (const info of infos) {
-    if (info.restante <= 0) continue;
+    if (info.restante <= 0 || !info.dentro_do_horizonte) continue;
     necessidadeProducao.set(info.produto_id, round3((necessidadeProducao.get(info.produto_id) ?? 0) + info.restante));
   }
   for (const f of faltasProduto) {
@@ -655,7 +655,7 @@ export async function mrpProducao(req: Request, res: Response) {
   }
   // Consumo REAL: só o que pertence a OPs que estão neste plano.
   for (const info of infos) {
-    if (info.restante <= 0) continue;
+    if (info.restante <= 0 || !info.dentro_do_horizonte) continue;
     for (const [insumoId, qtd] of info.consumo_liquido) {
       insumosPorOrdem.set(insumoId, round3((insumosPorOrdem.get(insumoId) ?? 0) + qtd));
     }
@@ -710,7 +710,7 @@ export async function mrpProducao(req: Request, res: Response) {
   // necessidade que vem de falta de produto é imediata.
   const dataNecessidade = new Map<number, string>();
   for (const info of infos) {
-    if (info.restante <= 0) continue;
+    if (info.restante <= 0 || !info.dentro_do_horizonte) continue;
     const ficha = await fichaDoProduto(info.produto_id, escopo);
     if (!ficha) continue;
     const linhas = await necessidadeDaFicha(ficha, info.restante, escopo);

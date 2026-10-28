@@ -480,3 +480,51 @@ test('E3: cancelar uma cotação aberta não cria pedido nem mexe em estoque', a
   await esperarErro(() => chamar(cc.cancelarCotacao, reqDe({}, { params: { id: cotacao.id } })), 409, /já está cancelada/);
   await esperarErro(() => chamar(cc.decidirCotacaoCompra, reqDe({}, { params: { id: cotacao.id } }), 201), 409, /Só se decide uma cotação aberta/);
 });
+
+test('P3-04/P3-07 cotação converte apenas por regra declarada e preserva snapshot histórico', async () => {
+  const unit = RESOURCES.unidades_medida!;
+  const conversions = RESOURCES.unidade_conversoes!;
+  await s().insert(unit, { empresa_id: 1, codigo: 'm', nome: 'Metro', grandeza: 'comprimento', casas_decimais: 3, ativo: true });
+  await s().insert(unit, { empresa_id: 1, codigo: 'rl', nome: 'Rolo', grandeza: 'comprimento', casas_decimais: 3, ativo: true });
+  const rule = await s().insert(conversions, { empresa_id: 1, de_codigo: 'm', para_codigo: 'rl', fator: 0.02, ativo: true });
+  const insumo = await s().insert(RESOURCES.insumos, { empresa_id: 1, nome: `Tecido conversão ${Date.now()}`, unidade: 'm', unidade_compra: 'rl', custo_medio: 4, ativo: true });
+  const cotacao = await s().insert(RESOURCES.cotacoes_compra, { empresa_id: 1, titulo: `Conversão ${Date.now()}`, status: 'rascunho', criterio: 'menor_preco' });
+
+  const created = await chamar(cc.criarItemCotacao, reqDe({ insumo_id: Number(insumo.id), quantidade: 120 }, { params: { id: cotacao.id } }), 201);
+  assert.equal(Number(created.quantidade), 2.4, '120 m × 0.02 rolo/m = 2.4 rolos');
+  assert.equal(created.unidade, 'rl');
+  assert.equal(Number(created.quantidade_original), 120);
+  assert.equal(created.unidade_original, 'm');
+  assert.equal(created.unidade_conversao_status, 'CONVERTIDA');
+  assert.equal(Number(created.unidade_conversao_fator), 0.02);
+  assert.equal(created.unidade_conversao_origem, 'direta');
+  assert.equal(created.unidade_conversao_snapshot.caminho[0].de, 'm');
+
+  // Trocar a regra ativa não reescreve cotação já criada. Alterar a quantidade
+  // reutiliza o fator que ficou congelado na linha, sem recalcular pela regra nova.
+  await s().update(conversions, Number(rule.id), { fator: 0.03 });
+  const compare1 = await chamar(cc.comparativoCotacao, reqDe({}, { params: { id: cotacao.id } }), 200);
+  assert.equal(compare1.itens[0].quantidade, 2.4);
+  assert.equal(Number(compare1.itens[0].unidade_conversao_fator), 0.02);
+  const updated = await chamar(cc.atualizarItemCotacao, reqDe({ quantidade: 200 }, { params: { id: cotacao.id, itemId: created.id } }), 200);
+  assert.equal(Number(updated.quantidade), 4);
+  assert.equal(Number(updated.quantidade_original), 200);
+  assert.equal(Number(updated.unidade_conversao_fator), 0.02);
+  assert.equal(updated.unidade_conversao_snapshot.caminho[0].fator, 0.02);
+
+  const semRegra = await s().insert(RESOURCES.insumos, { empresa_id: 1, nome: `Sem conversão ${Date.now()}`, unidade: 'kg', unidade_compra: 'rl', custo_medio: 1, ativo: true });
+  const error = await esperarErro(() => cc.criarItemCotacao(reqDe({ insumo_id: Number(semRegra.id), quantidade: 12 }, { params: { id: cotacao.id } }) as any, { status: () => ({ json: (body: any) => body }) } as any), 409, /Não há conversão declarada/);
+  assert.equal(error.fields?.unidade_conversao_status, 'NAO_CONVERTIDA');
+
+  const { convites } = await convidar(Number(cotacao.id), 1);
+  await chamar(cc.cotarFornecedor, reqDe({ convite_id: Number(convites[0].id), precos: [{ item_id: Number(created.id), preco_unitario: 12 }] }, { params: { id: cotacao.id } }), 201);
+  const decision = await chamar(cc.decidirCotacaoCompra, reqDe({}, { params: { id: cotacao.id } }), 201);
+  const purchaseLines = await s().list(RESOURCES.itens_compra, { page: 1, pageSize: 20, filter: { compra_id: Number(decision.compra_id) } });
+  assert.equal(purchaseLines.total, 1);
+  assert.equal(Number(purchaseLines.rows[0].quantidade), 4);
+  assert.equal(purchaseLines.rows[0].unidade, 'rl');
+  assert.equal(Number(purchaseLines.rows[0].quantidade_original), 200);
+  assert.equal(purchaseLines.rows[0].unidade_original, 'm');
+  assert.equal(Number(purchaseLines.rows[0].unidade_conversao_fator), 0.02);
+  assert.equal(purchaseLines.rows[0].unidade_conversao_status, 'CONVERTIDA');
+});

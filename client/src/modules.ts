@@ -1059,6 +1059,20 @@ export const MODULES: Module[] = [
     description: 'Ordens de produção (OP): liberar, apontar produção e perdas, concluir, cancelar e reabrir.',
   },
   {
+    id: 'terceiros-operacionais',
+    label: 'Terceiros e facções',
+    icon: Handshake,
+    space: 'erp',
+    area: 'Produção',
+    group: 'Execução',
+    subgroup: 'Terceirização e custódia',
+    keywords: 'terceiros facção faccionamento custódia propriedade material envio retorno',
+    path: '/terceiros-operacionais',
+    resource: 'terceiros_operacionais',
+    minPerfil: 'gerente',
+    description: 'Cadastro em página de facções/terceiros; as trilhas de envio/retorno ficam na OP e usam movimentações de insumo e apontamentos canônicos.',
+  },
+  {
     id: 'fichas',
     label: 'Ficha Técnica / BOM',
     icon: ClipboardList,
@@ -1828,6 +1842,7 @@ export const FORM_DIRETO = new Set([
   'fornecedores',
   'representantes',
   'categorias_insumos',
+  'terceiros_operacionais',
 ]);
 
 /**

@@ -53,6 +53,13 @@ type LinhaComparativo = {
   descricao: string;
   quantidade: number;
   unidade: string | null;
+  quantidade_original: number | null;
+  unidade_original: string | null;
+  unidade_conversao_origem: string | null;
+  unidade_conversao_fator: number | null;
+  unidade_conversao_status: string | null;
+  unidade_conversao_snapshot: Record<string, any> | null;
+  unidade_conversao_em: string | null;
   cotacoes_recebidas: number;
   precos: PrecoLinha[];
   menor_preco: number | null;
@@ -90,7 +97,7 @@ type Comparativo = {
 };
 
 type CotacaoResumo = { id: number; titulo: string; status: string; criterio: string | null; compra_id: number | null; criado_em: string };
-type Opcao = { id: number; nome: string };
+type Opcao = { id: number; nome: string; unidade?: string | null; unidade_compra?: string | null };
 
 const CRITERIOS = [
   { value: 'menor_preco', label: 'Menor preço por item', hint: 'Escolhe o fornecedor mais barato de cada item. Pode gerar pedido com mais de um fornecedor.' },
@@ -205,7 +212,7 @@ export default function CotacoesCompraPage() {
   useEffect(() => {
     api
       .get<ListResult<Opcao>>('/insumos?page=1&pageSize=500&sort=nome&dir=asc')
-      .then((d) => setInsumos(d.rows.map((r) => ({ id: Number(r.id), nome: String(r.nome ?? r.id) }))))
+      .then((d) => setInsumos(d.rows.map((r) => ({ id: Number(r.id), nome: String(r.nome ?? r.id), unidade: r.unidade ?? null, unidade_compra: r.unidade_compra ?? null }))))
       .catch(() => setInsumos([]));
     api
       .get<ListResult<Opcao>>('/fornecedores?page=1&pageSize=200&sort=nome&dir=asc')
@@ -652,6 +659,7 @@ export default function CotacoesCompraPage() {
                           <tr key={l.item_id} className="border-b border-slate-50 dark:border-navy-800">
                             <td className="px-3 py-2">
                               <div className="font-medium text-navy-900 dark:text-white">{l.descricao}</div>
+                              {l.unidade_conversao_status ? <div className="mt-0.5 text-[11px] text-slate-500"><Badge tone={l.unidade_conversao_status === 'CONVERTIDA' ? 'blue' : 'green'}>{l.unidade_conversao_status}</Badge> {formatNumber(l.quantidade_original ?? l.quantidade)} {l.unidade_original || l.unidade} → {formatNumber(l.quantidade)} {l.unidade} · fator {l.unidade_conversao_fator ?? 1} · origem {l.unidade_conversao_origem || 'identidade'}{l.unidade_conversao_snapshot?.caminho?.length ? ` · ${l.unidade_conversao_snapshot.caminho.map((step: any) => `${step.de} ${step.inversa ? '←' : '→'} ${step.para} (×${step.fator})`).join(' / ')}` : ''}</div> : <div className="mt-0.5 text-[11px] text-amber-700">Sem snapshot de conversão (item legado); unidade e quantidade históricas preservadas.</div>}
                               {l.escolhido_preco !== null ? (
                                 <div className="text-[11px] text-emerald-600">
                                   escolhido: {formatMoney(l.escolhido_preco)}
@@ -843,6 +851,7 @@ export default function CotacoesCompraPage() {
               ))}
             </select>
             {insumos.length === 0 ? <p className="mt-1 text-xs text-amber-600">Nenhum insumo cadastrado.</p> : null}
+            {itemInsumo && (() => { const selected = insumos.find((i) => i.id === Number(itemInsumo)); const source = selected?.unidade || '—'; const target = selected?.unidade_compra || source; return <p className="mt-1 text-xs text-slate-500">Origem: <strong>{source}</strong> · unidade de compra: <strong>{target}</strong>. Se forem diferentes, somente uma conversão declarada permite incluir; nenhum fator será estimado.</p>; })()}
           </div>
           <div>
             <label className="label" htmlFor="cot-item-qtd">Quantidade</label>
@@ -934,7 +943,8 @@ export default function CotacoesCompraPage() {
                     <tr key={l.item_id} className="border-t border-slate-100 dark:border-navy-700">
                       <td className="px-2 py-1.5">
                         <div className="text-navy-900 dark:text-white">{l.descricao}</div>
-                        <div className="text-[11px] text-slate-400">{formatNumber(l.quantidade)} {l.unidade}</div>
+                        <div className="text-[11px] text-slate-400">Cotação: {formatNumber(l.quantidade)} {l.unidade}</div>
+                        <div className="text-[11px] text-slate-500">Origem: {l.quantidade_original == null ? 'sem snapshot legado' : `${formatNumber(l.quantidade_original)} ${l.unidade_original || l.unidade}`} · {l.unidade_conversao_status || 'SEM_SNAPSHOT'} · fator {l.unidade_conversao_fator ?? '—'} · {l.unidade_conversao_origem || 'histórico indisponível'}</div>
                       </td>
                       <td className="px-2 py-1.5">
                         <input

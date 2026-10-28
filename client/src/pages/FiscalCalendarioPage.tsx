@@ -10,6 +10,7 @@
 // lista; dispensar idem, com motivo obrigatório no mesmo campo de texto.
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment } from 'react';
 import { CalendarClock, CheckCircle2, Loader2, RefreshCw, Upload } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
@@ -199,10 +200,10 @@ export default function FiscalCalendarioPage() {
                   {linhas.map((l) => {
                     const chave = `${l.obrigacao_id}#${l.competencia}`;
                     return (
-                      <>
-                        <tr key={chave} className={aberta === chave ? 'bg-slate-50' : undefined}>
+                      <Fragment key={chave}>
+                        <tr className={aberta === chave ? 'bg-slate-50' : undefined}>
                           <td className="px-4 py-2">
-                            <span className="block font-medium text-slate-700">{l.nome}</span>
+                            <a href={`/fiscal/obrigacoes/${l.obrigacao_id}`} className="block font-medium text-brand-700 hover:underline">{l.nome}</a>
                             <span className="text-xs text-slate-400">{l.codigo} · {l.periodicidade}</span>
                           </td>
                           <td className="px-4 py-2 text-slate-600">{l.competencia}</td>
@@ -263,7 +264,7 @@ export default function FiscalCalendarioPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })}
                 </tbody>

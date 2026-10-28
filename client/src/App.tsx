@@ -13,6 +13,8 @@ import { MODULES, usaCrudGenerico, visibleModules } from './modules';
 // pesadas (Usuários, Financeiro, dentro de ModulePage) — é baixado sob demanda,
 // quando a rota é realmente acessada.
 const ModulePage = lazy(() => import('./pages/ModulePage'));
+const FiscalObrigacaoDetalhePage = lazy(() => import('./pages/FiscalObrigacaoDetalhePage'));
+const FiscalExecucoesPage = lazy(() => import('./pages/FiscalExecucoesPage'));
 const Settings = lazy(() => import('./pages/Settings'));
 const ImpressaoPage = lazy(() => import('./pages/ImpressaoPage'));
 const ProductDetail = lazy(() => import('./pages/ProductDetail'));
@@ -407,6 +409,8 @@ export default function App() {
                 </AdminOnly>
               }
             />
+            <Route path="fiscal/obrigacoes/:id/execucoes" element={<ModuleAccess moduleId="fiscal-obrigacoes"><FiscalExecucoesPage /></ModuleAccess>} />
+            <Route path="fiscal/obrigacoes/:id" element={<ModuleAccess moduleId="fiscal-obrigacoes"><FiscalObrigacaoDetalhePage /></ModuleAccess>} />
             <Route path="compras/:id" element={<OrderPage tipo="compra" />} />
             <Route path="ordens/:id" element={<OrdemDetail />} />
             <Route path="fichas/:id" element={<FichaDetail />} />

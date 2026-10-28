@@ -23,7 +23,7 @@
 // `1 rolo = 50 m` já responde "quantos rolos são 120 m". O resultado SEMPRE
 // devolve o caminho percorrido — a conversão é auditável, não uma caixa-preta.
 // ============================================================================
-import type { Row } from './store';
+import type { Row, Tx } from './store';
 import { checkAccess, escopoDe, getStore } from './services';
 import { currentUser } from './auth';
 import { getResource } from './resources';
@@ -54,8 +54,8 @@ function normalizar(codigo: unknown): string {
 }
 
 /** Regras ativas da empresa (cacheadas por chamada de alto nível). */
-export async function regrasDeConversao(empresaId: number): Promise<Regra[]> {
-  const { rows } = await getStore().list(R_CONVERSAO(), { page: 1, pageSize: 2000, filter: { empresa_id: empresaId, ativo: true } });
+export async function regrasDeConversao(empresaId: number, tx?: Tx): Promise<Regra[]> {
+  const { rows } = await getStore().list(R_CONVERSAO(), { page: 1, pageSize: 2000, filter: { empresa_id: empresaId, ativo: true } }, tx);
   return rows
     .map((r: Row) => ({ de: normalizar(r.de_codigo), para: normalizar(r.para_codigo), fator: Number(r.fator) }))
     .filter((r) => r.de && r.para && Number.isFinite(r.fator) && r.fator > 0);
@@ -114,10 +114,11 @@ export async function converterQuantidade(
   empresaId: number,
   quantidade: number,
   de: string,
-  para: string
+  para: string,
+  tx?: Tx
 ): Promise<{ quantidade: number; conversao: ResultadoConversao } | null> {
   if (!Number.isFinite(quantidade)) return null;
-  const conversao = calcularConversao(de, para, await regrasDeConversao(empresaId));
+  const conversao = calcularConversao(de, para, await regrasDeConversao(empresaId, tx));
   if (!conversao) return null;
   return { quantidade: round3(quantidade * conversao.fator), conversao };
 }

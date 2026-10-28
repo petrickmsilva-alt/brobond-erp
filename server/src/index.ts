@@ -57,8 +57,10 @@ import { initSentry, reportarErro } from './log';
 import { smtpConfigurado } from './mail';
 import { carregarOrigemDoBanco, revisarConfiguracaoOrigem, statusOrigemAsync } from './urlPublica';
 import { obterEnderecoPublico, removerEnderecoPublico, salvarEnderecoPublico } from './configSistema';
-import { estoqueDisponivel, estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario } from './estoque';
+import { estoqueDisponivel, estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario, conferirContagemCiclica, aprovarContagemCiclica, cancelarContagemCiclica } from './estoque';
+import { criarContagemCiclica, listarPlanosContagemCiclica } from './contagemCiclica';
 import { getMedidasGrade, resumoMedidasGrades, saveMedidasGrade } from './medidas';
+import { listarEventosTerceirizacao, registrarEventoTerceirizacao } from './terceirizacao';
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
 import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
@@ -282,6 +284,7 @@ import {
   historicoObrigacaoFiscal,
   registrarEntregaFiscal,
 } from './fiscalObrigacoes';
+import { listarEvidenciasFiscais, listarExecucoesFiscais, executarObrigacaoFiscal, registrarEvidenciaFiscal } from './fiscalExecucoes';
 import { balanceteFinanceiro, resumoPlanoContas } from './financeiroContabil';
 import {
   confirmarImportacaoContabil,
@@ -966,6 +969,10 @@ app.post('/api/devolucoes/:id/cancelar', wrap(cancelarDevolucao));
 app.get('/api/fiscal/calendario', wrap(calendarioFiscal));
 app.get('/api/fiscal/obrigacoes/:id/historico', wrap(historicoObrigacaoFiscal));
 app.post('/api/fiscal/obrigacoes/:id/entregas', wrap(registrarEntregaFiscal));
+app.get('/api/fiscal/obrigacoes/:id/execucoes', wrap(listarExecucoesFiscais));
+app.post('/api/fiscal/obrigacoes/:id/execucoes', wrap(executarObrigacaoFiscal));
+app.get('/api/fiscal/execucoes/:id/evidencias', wrap(listarEvidenciasFiscais));
+app.post('/api/fiscal/execucoes/:id/evidencias', wrap(registrarEvidenciaFiscal));
 
 // ---- FINANCEIRO 3.0: estrutura contábil (não é contabilidade) ----
 // Balancete e resumo do plano de contas leem o MESMO livro-caixa; não existe
@@ -1061,6 +1068,8 @@ app.post('/api/ordens/:id/liberar', wrap(liberarOrdem));
 app.post('/api/ordens/:id/iniciar', wrap(iniciarOrdem));
 app.get('/api/ordens/:id/apontamentos', wrap(listApontamentos));
 app.post('/api/ordens/:id/apontamentos', wrap(criarApontamento));
+app.get('/api/ordens/:id/custodia', wrap(listarEventosTerceirizacao));
+app.post('/api/ordens/:id/custodia', wrap(registrarEventoTerceirizacao));
 app.get('/api/ordens/:id/eventos', wrap(listEventosOrdem));
 app.post('/api/ordens/:id/concluir', wrap(concluirOrdemHandler));
 app.post('/api/ordens/:id/cancelar', wrap(cancelarOrdem));
@@ -1077,9 +1086,14 @@ app.get('/api/estoques/disponivel', wrap(estoqueDisponivel));
 app.get('/api/grades/medidas-resumo', wrap(resumoMedidasGrades));
 app.get('/api/grades/:id/medidas', wrap(getMedidasGrade));
 app.put('/api/grades/:id/medidas', wrap(saveMedidasGrade));
+app.get('/api/inventarios/ciclicas', wrap(listarPlanosContagemCiclica));
+app.post('/api/inventarios/ciclicas', wrap(criarContagemCiclica));
 app.get('/api/inventarios/:id', wrap(getInventarioDetalhe));
 app.get('/api/inventarios/:id/itens', wrap(listItensInventario));
 app.put('/api/inventarios/:id/itens', wrap(updateItensInventario));
+app.post('/api/inventarios/:id/ciclica/conferir', wrap(conferirContagemCiclica));
+app.post('/api/inventarios/:id/ciclica/aprovar', wrap(aprovarContagemCiclica));
+app.post('/api/inventarios/:id/ciclica/cancelar', wrap(cancelarContagemCiclica));
 app.post('/api/inventarios/:id/fechar', wrap(fecharInventario));
 app.post('/api/movimentacoes/:id/estornar', wrap(estornarMovimentacao));
 

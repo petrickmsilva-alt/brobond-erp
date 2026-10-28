@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-10-28T02:08:03.601Z",
+  "gerado_em": "2026-10-28T12:18:07.264Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 62,
-    "sql_com_conteudo": 62,
+    "sql": 67,
+    "sql_com_conteudo": 67,
     "prisma": 7
   },
   "tabelas": {
-    "total": 135,
-    "com_empresa_id": 115,
+    "total": 139,
+    "com_empresa_id": 119,
     "sem_empresa_id": 20,
-    "fora_do_prisma": 124
+    "fora_do_prisma": 128
   },
-  "indices": 420,
-  "constraints": 232,
+  "indices": 435,
+  "constraints": 253,
   "recursos": {
-    "total": 120,
-    "com_tabela": 120,
-    "multiempresa": 102,
-    "somente_leitura": 52,
-    "rbac_restrito": 42,
-    "cobertura_tenant_pct": 85
+    "total": 124,
+    "com_tabela": 124,
+    "multiempresa": 106,
+    "somente_leitura": 55,
+    "rbac_restrito": 45,
+    "cobertura_tenant_pct": 85.5
   },
   "crm": [
     {
@@ -79,18 +79,18 @@
     }
   ],
   "modulos": {
-    "total": 104,
-    "navegaveis": 96,
+    "total": 105,
+    "navegaveis": 97,
     "planejados": 8,
     "areas": 11,
     "grupos": 28,
-    "com_recurso": 69
+    "com_recurso": 70
   },
   "rotas": {
-    "total": 367,
+    "total": 378,
     "por_metodo": {
-      "GET": 163,
-      "POST": 172,
+      "GET": 167,
+      "POST": 179,
       "PUT": 17,
       "DELETE": 12,
       "PATCH": 3
@@ -193,14 +193,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 163,
-      "casos": 1438
+      "arquivos": 165,
+      "casos": 1452
     },
     "client": {
       "arquivos": 75,
-      "casos": 846
+      "casos": 849
     },
-    "total": 2284
+    "total": 2301
   },
   "integracoes": {
     "arquivos_modules": 31,
@@ -336,6 +336,8 @@
     "fichas_tecnicas",
     "fin_extrato_transacoes",
     "fin_importacoes_contabeis",
+    "fiscal_execucao_evidencias",
+    "fiscal_execucoes",
     "fiscal_obrigacao_entregas",
     "fiscal_obrigacoes",
     "fornecedor_contatos",
@@ -396,6 +398,8 @@
     "representante_hierarquia",
     "representantes",
     "sessoes",
+    "terceirizacao_eventos",
+    "terceiros_operacionais",
     "territorios",
     "transferencias_financeiras",
     "unidade_conversoes",

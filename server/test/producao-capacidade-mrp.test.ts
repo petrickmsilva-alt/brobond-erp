@@ -20,7 +20,7 @@ process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
 
 const { RESOURCES } = await import('../src/resources');
-const { createRecord, listRecords, getStore } = await import('../src/services');
+const { createRecord, listRecords, getStore, lancarMovimentacaoInsumoDaOrdem } = await import('../src/services');
 const { capacidadeProducao, mrpProducao } = await import('../src/producaoCapacidade');
 const { criarAtor, garantirAdmin } = await import('./_p1util');
 
@@ -324,4 +324,91 @@ test('N) MRP não vaza dados de outra empresa', async () => {
 
   const outA = await chamar(mrpProducao, { actor: gerente });
   assert.ok(!outA.produtos.some((p: any) => p.produto_id === Number(produtoB.id)), 'demanda da empresa B não aparece no MRP de A');
+});
+
+
+test('O) MRP agregado: reconcilia demanda, reserva, OP, consumo, compra no horizonte, BOM, lead time, calendário e ciclo', async () => {
+  const de = '2030-01-07'; // segunda-feira
+  const ate = '2030-01-11'; // sexta-feira: cinco dias úteis
+  const root = await novoProduto(`Agregado raiz ${unico()}`);
+  const child = await novoProduto(`Agregado componente ${unico()}`);
+  const cycleA = await novoProduto(`Agregado ciclo A ${unico()}`);
+  const cycleB = await novoProduto(`Agregado ciclo B ${unico()}`);
+  const size = await createRecord(RESOURCES.tamanhos, { nome: `AG-${unico()}`, codigo: `AG${unico()}` }, admin);
+  const raw = await createRecord(RESOURCES.insumos, { nome: `Agregado insumo ${unico()}`, unidade: 'm', custo_medio: 2 }, admin);
+
+  // Demanda 30; saldo físico 7, dos quais 3 reservados; uma OP de 10, já
+  // produzida em 4. Disponível 4 + restante da OP 6 = 10; falta produzir 20.
+  await createRecord(RESOURCES.estoques, { produto_id: root, tamanho_id: Number(size.id), quantidade: 7 }, admin);
+  await createRecord(RESOURCES.estoque_reservas, { produto_id: root, tamanho_id: Number(size.id), tipo: 'reserva', quantidade: 3, status: 'ativa', motivo: `Agregado ${unico()}` }, admin);
+  const sale = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, status: 'aberta', data: de, total: 300 }, admin);
+  await createRecord(RESOURCES.itens_venda, { venda_id: Number(sale.id), produto_id: root, tamanho_id: Number(size.id), quantidade: 30, preco_unitario: 10 }, admin);
+  const op = await createRecord(RESOURCES.ordens, { produto_id: root, tipo: 'tamanho', tamanho_id: Number(size.id), quantidade: 10, status: 'em_producao', previsao: '2030-01-10' }, admin);
+  await getStore().update(RESOURCES.ordens, Number(op.id), { quantidade_produzida: 4 });
+
+  // BOM raiz: 0.5 m × 1.10 perda por peça. Componente: 2 por raiz; sua
+  // ficha usa 0.25 m × 1.20. Para 26 peças de necessidade: 14.3 + 15.6 = 29.9m.
+  const rootRecipe = await createRecord(RESOURCES.fichas, { produto_id: root, mao_obra: 0, custos_indiretos: 0, margem_pct: 0 }, admin);
+  await createRecord(RESOURCES.itens_ficha_tecnica, { ficha_id: Number(rootRecipe.id), insumo_id: Number(raw.id), consumo: 0.5, perda_pct: 10 }, admin);
+  const childRecipe = await createRecord(RESOURCES.fichas, { produto_id: child, mao_obra: 0, custos_indiretos: 0, margem_pct: 0 }, admin);
+  await createRecord(RESOURCES.itens_ficha_tecnica, { ficha_id: Number(childRecipe.id), insumo_id: Number(raw.id), consumo: 0.25, perda_pct: 20 }, admin);
+  await createRecord(RESOURCES.produto_composicao, { produto_id: root, componente_id: child, quantidade: 2 }, admin);
+  // Ciclo separado anexado à BOM para verificar corte determinístico do ramo.
+  await createRecord(RESOURCES.produto_composicao, { produto_id: root, componente_id: cycleA, quantidade: 1 }, admin);
+  await createRecord(RESOURCES.produto_composicao, { produto_id: cycleA, componente_id: cycleB, quantidade: 1 }, admin);
+  await createRecord(RESOURCES.produto_composicao, { produto_id: cycleB, componente_id: cycleA, quantidade: 1 }, admin);
+
+  // Estoque de insumo 5; a saída canônica associada à OP consome 3, deixando 2.
+  await createRecord(RESOURCES.movimentacoes_insumos, { tipo: 'entrada', insumo_id: Number(raw.id), quantidade: 5, custo_unitario: 2, motivo: 'Abertura do cenário agregado' }, admin);
+  await getStore().transaction((tx: any) => lancarMovimentacaoInsumoDaOrdem(
+    { tipo: 'saida', insumo_id: Number(raw.id), quantidade: 3, custo_unitario: 2, ordem_id: Number(op.id), motivo: 'Consumo real agregado' },
+    admin as any,
+    tx,
+    { kind: 'empresa', empresaId: 1 } as any,
+  ));
+
+  const supplier = await createRecord(RESOURCES.fornecedores, { nome: `Fornecedor lead ${unico()}`, pessoa: 'pj', indicador_ie: '1', prazo_entrega_dias: 2 }, admin);
+  const inHorizon = await createRecord(RESOURCES.compras, { fornecedor_id: Number(supplier.id), data: de, status: 'aprovado', total: 10 }, admin);
+  await createRecord(RESOURCES.itens_compra, { compra_id: Number(inHorizon.id), insumo_id: Number(raw.id), quantidade: 5, preco_unitario: 2 }, admin);
+  const late = await createRecord(RESOURCES.compras, { fornecedor_id: Number(supplier.id), data: ate, status: 'aprovado', total: 40 }, admin);
+  await createRecord(RESOURCES.itens_compra, { compra_id: Number(late.id), insumo_id: Number(raw.id), quantidade: 20, preco_unitario: 2 }, admin);
+
+  // OP fora do horizonte deve continuar listada, mas sua BOM não entra neste plano.
+  const outsideProduct = await novoProduto(`Agregado fora horizonte ${unico()}`);
+  const outsideRaw = await createRecord(RESOURCES.insumos, { nome: `Insumo fora horizonte ${unico()}`, unidade: 'm' }, admin);
+  const outsideRecipe = await createRecord(RESOURCES.fichas, { produto_id: outsideProduct, mao_obra: 0, custos_indiretos: 0, margem_pct: 0 }, admin);
+  await createRecord(RESOURCES.itens_ficha_tecnica, { ficha_id: Number(outsideRecipe.id), insumo_id: Number(outsideRaw.id), consumo: 1, perda_pct: 0 }, admin);
+  const outsideOrder = await createRecord(RESOURCES.ordens, { produto_id: outsideProduct, tipo: 'tamanho', tamanho_id: Number(size.id), quantidade: 100, status: 'planejada', previsao: '2030-01-12' }, admin);
+
+  const out = await chamar(mrpProducao, { actor: gerente, query: { de, ate } });
+  const productLine = out.produtos.find((p: any) => p.produto_id === root && p.tamanho_id === Number(size.id));
+  assert.ok(productLine);
+  assert.equal(productLine.demanda_vendas, 30);
+  assert.equal(productLine.estoque_fisico, 7);
+  assert.equal(productLine.reservado, 3);
+  assert.equal(productLine.estoque_disponivel, 4);
+  assert.equal(productLine.em_producao, 6);
+  assert.equal(productLine.falta, 20);
+  assert.equal(out.ordens.find((row: any) => row.ordem_id === Number(op.id)).restante, 6);
+  assert.equal(out.ordens.find((row: any) => row.ordem_id === Number(outsideOrder.id)).dentro_do_horizonte, false);
+  assert.ok(!out.insumos.some((row: any) => row.insumo_id === Number(outsideRaw.id)), 'a BOM da OP fora do horizonte não entra nas necessidades atuais');
+
+  const material = out.insumos.find((row: any) => row.insumo_id === Number(raw.id));
+  assert.ok(material);
+  assert.equal(material.necessaria, 29.9, '26 × (0.5×1.10 + 2×0.25×1.20) = 29.9');
+  assert.equal(material.consumo_real, 3);
+  assert.equal(material.necessario_comprar, 26.9);
+  assert.equal(material.disponivel, 2, 'entrada 5 − saída real 3');
+  assert.equal(material.em_compra, 5, 'somente a compra com recebimento esperado até 11/01 cobre');
+  assert.equal(material.em_compra_fora_do_horizonte, 20);
+  assert.equal(material.lead_time_dias, 2);
+  assert.equal(material.lead_time_fornecedor, supplier.nome);
+  assert.equal(material.cobertura, 7);
+  assert.equal(material.faltando, 19.9, '26.9 líquidos − 2 em saldo − 5 em compra');
+  assert.equal(out.calculo.horizonte.de, de);
+  assert.equal(out.calculo.horizonte.ate, ate);
+  assert.equal(out.calculo.calendario.dias_uteis, 5);
+  assert.equal(out.resumo.ciclos_bom, 1);
+  assert.equal(out.calculo.bom_multinivel.ciclos[0].produto_id, cycleA);
+  assert.equal(out.calculo.bom_multinivel.componentes.find((c: any) => c.produto_id === child).quantidade, 52);
 });
