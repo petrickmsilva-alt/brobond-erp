@@ -20,6 +20,7 @@ delete process.env.DATABASE_URL;
 const { RESOURCES } = await import('../src/resources');
 const { createRecord, listRecords, getStore } = await import('../src/services');
 const { calendarioFiscal, registrarEntregaFiscal, historicoObrigacaoFiscal, vencimentoDe } = await import('../src/fiscalObrigacoes');
+const { executarObrigacaoFiscal, listarExecucoesFiscais, registrarEvidenciaFiscal, listarEvidenciasFiscais } = await import('../src/fiscalExecucoes');
 const { criarAtor, garantirAdmin } = await import('./_p1util');
 
 await garantirAdmin();
@@ -138,4 +139,58 @@ test('H) periodicidade anual só aparece em dezembro', async () => {
   assert.equal(janeiro.obrigacoes.some((o: any) => o.obrigacao_id === id), false);
   const dezembro = await chamar(calendarioFiscal, { actor: gerente, query: { de: '2026-12', ate: '2026-12' } });
   assert.equal(dezembro.obrigacoes.some((o: any) => o.obrigacao_id === id), true);
+});
+
+
+test('SPED/EFD: execução idempotente falha fechada sem layout oficial e preserva histórico', async () => {
+  const id = await novaObrigacao();
+  let code = 0;
+  const invoke = async (handler: any, opts: { id?: number; body?: any; actor: any }) => {
+    let data: any;
+    const req: any = { params: opts.id ? { id: String(opts.id) } : {}, body: opts.body ?? {}, user: opts.actor, query: {} };
+    await handler(req, { status: (n: number) => { code = n; return { json: (v: any) => (data = v) }; }, json: (v: any) => (data = v) });
+    return data;
+  };
+  const first = await invoke(executarObrigacaoFiscal, { id, body: { periodo: '2026-08' }, actor: gerente });
+  assert.equal(code, 201);
+  assert.equal(first.status, 'NAO_SUPORTADO');
+  assert.equal(first.layout_suportado, false);
+  assert.match(first.resultado, /NAO_SUPORTADO/);
+  const retry = await invoke(executarObrigacaoFiscal, { id, body: { periodo: '2026-08' }, actor: gerente });
+  assert.equal(code, 200);
+  assert.equal(retry.id, first.id);
+  assert.equal(retry.execution_hash, first.execution_hash);
+  assert.equal(retry.idempotente, true);
+  const historico = await chamar(listarExecucoesFiscais, { id, actor: gerente });
+  assert.equal(historico.execucoes.length, 1);
+});
+
+// Empresa A cria a execução; Empresa B recebe 404 em leitura e escrita. Cobertura nominal: fiscal_execucoes e fiscal_execucao_evidencias.
+test('SPED/EFD: evidência append-only registra hash/tamanho e isola cross-tenant com 404', async () => {
+  const id = await novaObrigacao();
+  let code = 0;
+  const invoke = async (handler: any, opts: { id?: number; body?: any; actor: any }) => {
+    let data: any;
+    const req: any = { params: opts.id ? { id: String(opts.id) } : {}, body: opts.body ?? {}, user: opts.actor, query: {} };
+    await handler(req, { status: (n: number) => { code = n; return { json: (v: any) => (data = v) }; }, json: (v: any) => (data = v) });
+    return data;
+  };
+  const run = await invoke(executarObrigacaoFiscal, { id, body: { periodo: '2026-07' }, actor: gerente });
+  const evidence = await invoke(registrarEvidenciaFiscal, { id: run.id, body: { arquivo_ref: 'ext://sped/2026-07.txt', hash_sha256: 'a'.repeat(64), tamanho_bytes: 108 }, actor: gerente });
+  assert.equal(code, 201);
+  assert.equal(evidence.hash_sha256, 'a'.repeat(64));
+  const rows = await chamar(listarEvidenciasFiscais, { id: run.id, actor: gerente });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].tamanho_bytes, 108);
+  const cross = await erro(() => invoke(listarEvidenciasFiscais, { id: run.id, actor: gerenteB }));
+  assert.equal(cross.status, 404);
+  const crossWrite = await erro(() => invoke(registrarEvidenciaFiscal, { id: run.id, body: { arquivo_ref: 'x', hash_sha256: 'b'.repeat(64), tamanho_bytes: 2 }, actor: gerenteB }));
+  assert.equal(crossWrite.status, 404);
+});
+
+test('SPED/EFD: RBAC server-side bloqueia operador', async () => {
+  const id = await novaObrigacao();
+  const operador = await criarAtor(1, 'operador');
+  const e = await erro(() => executarObrigacaoFiscal({ params: { id: String(id) }, body: { periodo: '2026-06' }, user: operador } as any, { json() {} } as any));
+  assert.equal(e.status, 403);
 });

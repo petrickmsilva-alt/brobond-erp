@@ -43,6 +43,7 @@ import type { Row, Tx } from './store';
 import { parseId } from './validate';
 import { labelOf } from './store';
 import { round2, round3 } from './utils';
+import { calcularConversao, regrasDeConversao } from './unidades';
 
 const R = () => getResource('cotacoes_compra')!;
 const R_ITENS = () => getResource('cotacao_compra_itens')!;
@@ -163,6 +164,13 @@ export async function comparativoCotacao(req: Request, res: Response) {
         descricao: rotuloItem(item),
         quantidade: round3(num(item.quantidade)),
         unidade: item.unidade ?? null,
+        quantidade_original: item.quantidade_original === null || item.quantidade_original === undefined ? null : round3(num(item.quantidade_original)),
+        unidade_original: item.unidade_original ?? null,
+        unidade_conversao_origem: item.unidade_conversao_origem ?? null,
+        unidade_conversao_fator: item.unidade_conversao_fator === null || item.unidade_conversao_fator === undefined ? null : Number(item.unidade_conversao_fator),
+        unidade_conversao_status: item.unidade_conversao_status ?? null,
+        unidade_conversao_snapshot: item.unidade_conversao_snapshot ?? null,
+        unidade_conversao_em: item.unidade_conversao_em ?? null,
         cotacoes_recebidas: disponiveis.length,
         precos: todos,
         menor_preco: menor?.preco_unitario ?? null,
@@ -244,13 +252,25 @@ export async function criarItemCotacao(req: Request, res: Response) {
       const produtoId = req.body?.produto_id ? Number(req.body.produto_id) : null;
       if (!insumoId && !produtoId) throw new HttpError(400, 'Informe o insumo ou o produto do item.', { insumo_id: 'Obrigatório (ou produto_id)' });
       if (insumoId && produtoId) throw new HttpError(400, 'O item é um insumo OU um produto, não os dois.');
-      const quantidade = round3(num(req.body?.quantidade));
-      if (!(quantidade > 0)) throw new HttpError(400, 'A quantidade deve ser maior que zero.', { quantidade: 'Maior que zero' });
+      const quantidadeOriginal = round3(num(req.body?.quantidade));
+      if (!(quantidadeOriginal > 0)) throw new HttpError(400, 'A quantidade deve ser maior que zero.', { quantidade: 'Maior que zero' });
 
-      // Referência validada: insumo/produto de outra empresa não entra na cotação.
+      // Referência validada na transação; cotação de insumo usa a unidade de
+      // uso como origem e a unidade de compra declarada como destino.
       const alvo = insumoId
         ? assertRegistroDaEmpresa(getResource('insumos')!, await s.findOneWhere(getResource('insumos')!, { id: insumoId }, tx), escopo)
         : assertRegistroDaEmpresa(getResource('produtos')!, await s.findOneWhere(getResource('produtos')!, { id: produtoId }, tx), escopo);
+      const unidadeOriginal = String(alvo.unidade ?? '').trim();
+      const unidadeCompra = insumoId ? String(alvo.unidade_compra || unidadeOriginal).trim() : unidadeOriginal;
+      if (!unidadeOriginal || !unidadeCompra) throw new HttpError(409, 'O item precisa ter unidade de uso e unidade de compra cadastradas antes de cotar.');
+      if (req.body?.unidade !== undefined && String(req.body.unidade ?? '').trim().toLowerCase() !== unidadeCompra.toLowerCase()) throw new HttpError(409, 'A unidade do item é definida pelo cadastro e pela conversão declarada; não é possível informá-la manualmente.');
+      const conversao = calcularConversao(unidadeOriginal, unidadeCompra, await regrasDeConversao(escopo.empresaId, tx));
+      if (!conversao) throw new HttpError(409, `Não há conversão declarada de ${unidadeOriginal} para ${unidadeCompra}. Nenhum fator foi estimado; cadastre a regra em Unidades de medida e tente novamente.`, { unidade_conversao_status: 'NAO_CONVERTIDA', unidade_original: unidadeOriginal, unidade: unidadeCompra });
+      const quantidade = round3(quantidadeOriginal * conversao.fator);
+      if (!(quantidade > 0)) throw new HttpError(409, 'A conversão declarada resulta em quantidade abaixo da precisão suportada (0,001); ajuste a quantidade de origem ou a regra cadastrada.');
+      const conversaoEm = new Date().toISOString();
+      const conversaoStatus = conversao.origem === 'identica' ? 'IDENTICA' : 'CONVERTIDA';
+      const conversaoSnapshot = { de: unidadeOriginal, para: unidadeCompra, fator: conversao.fator, origem: conversao.origem, caminho: conversao.caminho, fonte: conversao.origem === 'identica' ? 'identidade de unidade' : 'unidade_conversoes', calculado_em: conversaoEm };
 
       const existente = await s.findOneWhere(R_ITENS(), { cotacao_id: id, ...(insumoId ? { insumo_id: insumoId } : { produto_id: produtoId }) }, tx);
       if (existente) throw new HttpError(409, `Este item já está na cotação (#${existente.id}). Edite a quantidade em vez de duplicar.`);
@@ -263,12 +283,19 @@ export async function criarItemCotacao(req: Request, res: Response) {
           insumo_id: insumoId,
           produto_id: produtoId,
           quantidade,
-          unidade: typeof req.body?.unidade === 'string' ? String(req.body.unidade).slice(0, 20) : (alvo.unidade ?? null),
+          unidade: unidadeCompra,
+          quantidade_original: quantidadeOriginal,
+          unidade_original: unidadeOriginal,
+          unidade_conversao_origem: conversao.origem,
+          unidade_conversao_fator: conversao.fator,
+          unidade_conversao_status: conversaoStatus,
+          unidade_conversao_snapshot: conversaoSnapshot,
+          unidade_conversao_em: conversaoEm,
         },
         tx
       );
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'cotacoes_compra', registro_id: id, descricao: `Cotação #${id}: item ${labelOf(insumoId ? getResource('insumos')! : getResource('produtos')!, alvo)} × ${quantidade} adicionado`, empresa_id: escopo.empresaId },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'cotacoes_compra', registro_id: id, descricao: `Cotação #${id}: item ${labelOf(insumoId ? getResource('insumos')! : getResource('produtos')!, alvo)} — ${quantidadeOriginal} ${unidadeOriginal} → ${quantidade} ${unidadeCompra} (fator ${conversao.fator}; ${conversao.origem})`, empresa_id: escopo.empresaId },
         tx
       );
       return item;
@@ -290,15 +317,19 @@ export async function atualizarItemCotacao(req: Request, res: Response) {
     const out = await s.transaction(async (tx) => {
       const cotacao = await getCotacao(id, escopo, tx);
       assertEditavel(cotacao, 'editar item');
-      const item = await s.findOneWhere(R_ITENS(), { id: itemId }, tx);
+      const item = await s.findOneWhere(R_ITENS(), { id: itemId, empresa_id: escopo.empresaId }, tx);
       if (!item || Number(item.cotacao_id) !== id) throw new HttpError(404, 'Item não encontrado nesta cotação.');
       const patch: Record<string, unknown> = {};
+      if (req.body?.unidade !== undefined && String(req.body.unidade ?? '') !== String(item.unidade ?? '')) throw new HttpError(409, 'A unidade de compra e o snapshot de conversão são históricos; remova e recrie o item se a base estiver incorreta.');
       if (req.body?.quantidade !== undefined) {
         const q = round3(num(req.body.quantidade));
         if (!(q > 0)) throw new HttpError(400, 'A quantidade deve ser maior que zero.', { quantidade: 'Maior que zero' });
-        patch.quantidade = q;
+        patch.quantidade_original = q;
+        const fator = item.unidade_conversao_fator === null || item.unidade_conversao_fator === undefined ? 1 : Number(item.unidade_conversao_fator);
+        if (!Number.isFinite(fator) || fator <= 0) throw new HttpError(409, 'O fator congelado neste item é inválido; remova e recrie o item com uma conversão declarada válida.');
+        patch.quantidade = round3(q * fator);
+        if (!(Number(patch.quantidade) > 0)) throw new HttpError(409, 'A conversão resulta em quantidade abaixo da precisão suportada (0,001); ajuste a quantidade original.');
       }
-      if (req.body?.unidade !== undefined) patch.unidade = req.body.unidade ? String(req.body.unidade).slice(0, 20) : null;
       const atualizado = await s.update(R_ITENS(), itemId, patch, tx);
       // Mexeu na quantidade: os preços continuam válidos (são unitários), mas os
       // totais do comparativo mudam — nada a invalidar no banco.
@@ -689,6 +720,13 @@ export async function decidirCotacaoCompra(req: Request, res: Response) {
           quantidade: round3(num(item.quantidade)),
           preco_unitario: e.preco,
           unidade: item.unidade ?? null,
+          quantidade_original: item.quantidade_original ?? item.quantidade,
+          unidade_original: item.unidade_original ?? item.unidade ?? null,
+          unidade_conversao_origem: item.unidade_conversao_origem ?? null,
+          unidade_conversao_fator: item.unidade_conversao_fator ?? null,
+          unidade_conversao_status: item.unidade_conversao_status ?? null,
+          unidade_conversao_snapshot: item.unidade_conversao_snapshot ?? null,
+          unidade_conversao_em: item.unidade_conversao_em ?? null,
         }, tx);
         // A escolha fica gravada no item da cotação: é a trilha de "por que este
         // fornecedor e este preço".

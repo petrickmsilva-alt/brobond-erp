@@ -39,6 +39,7 @@
 // ============================================================================
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Caminho do baseline, relativo à raiz do repositório. */
 export const CAMINHO_BASELINE = 'docs/ERP-3.0-UX-BASELINE.json';
@@ -89,6 +90,7 @@ export const ASSINATURAS = [
     descricao: 'componente de sobreposição (Modal/Dialog/Drawer/Sheet)',
   },
   { id: 'portal', regex: /\bcreatePortal\s*\(/g, descricao: 'createPortal (renderiza fora da árvore da página)' },
+  { id: 'browser-dialog-api', regex: /\bwindow\.(?:confirm|prompt|alert)\s*\(/g, descricao: 'window.confirm/prompt/alert (fluxo operacional bloqueante)' },
 ];
 
 /** Componentes proibidos no design system (o ERP não exporta sobreposição nenhuma). */
@@ -167,9 +169,26 @@ export function carregarBaseline(raiz) {
     };
   }
 
-  const excecoes = Array.isArray(baseline.excecoes) ? baseline.excecoes : [];
+  const excecoes = Array.isArray(baseline.exceptions) ? baseline.exceptions : Array.isArray(baseline.excecoes) ? baseline.excecoes : [];
   const ids = new Set(ASSINATURAS.map((a) => a.id));
   const vistos = new Set();
+
+  if (Number(baseline.version ?? baseline.versao) >= 3) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(baseline.date ?? ''))) violacoes.push(`${CAMINHO_BASELINE}: date ausente ou inválida (AAAA-MM-DD)`);
+    if (!Array.isArray(baseline.rules) || baseline.rules.length < 1 || baseline.rules.some((r) => typeof r !== 'string' || !r.trim())) violacoes.push(`${CAMINHO_BASELINE}: rules deve conter regras executáveis documentadas`);
+    if (!baseline.allowed_patterns || typeof baseline.allowed_patterns !== 'object') violacoes.push(`${CAMINHO_BASELINE}: allowed_patterns ausente`);
+    if (JSON.stringify(baseline.allowed_patterns?.exception_categories ?? []) !== JSON.stringify(CATEGORIAS_PERMITIDAS)) violacoes.push(`${CAMINHO_BASELINE}: exception_categories deve corresponder à lista fechada suportada pelo gate`);
+    if (!Array.isArray(baseline.forbidden_patterns) || baseline.forbidden_patterns.length < 1) violacoes.push(`${CAMINHO_BASELINE}: forbidden_patterns ausente`);
+    if (!Array.isArray(baseline.exceptions)) violacoes.push(`${CAMINHO_BASELINE}: exceptions deve ser a lista única e explícita de exceções`);
+    const resourceRoutes = baseline.allowed_patterns?.resource_routes;
+    for (const key of ['list', 'create', 'detail', 'edit']) {
+      if (typeof resourceRoutes?.[key] !== 'string' || !resourceRoutes[key].startsWith('/')) violacoes.push(`${CAMINHO_BASELINE}: padrão de rota '${key}' ausente/inválido`);
+    }
+    const declarados = new Set((baseline.forbidden_patterns ?? []).map((p) => String(p).toLowerCase()));
+    for (const proibido of ['modal', 'dialog', 'drawer', 'sheet', 'overlay', 'createportal(', 'window.confirm(', 'window.prompt(', 'window.alert(']) {
+      if (![...declarados].some((p) => p.includes(proibido))) violacoes.push(`${CAMINHO_BASELINE}: forbidden_patterns não declara '${proibido}'`);
+    }
+  }
 
   for (const [i, e] of excecoes.entries()) {
     const rotulo = `${CAMINHO_BASELINE}: exceção #${i + 1} (${e?.arquivo ?? 'sem arquivo'})`;
@@ -178,6 +197,7 @@ export function carregarBaseline(raiz) {
       continue;
     }
     if (!e.arquivo) violacoes.push(`${rotulo}: falta \`arquivo\``);
+    if (typeof e.arquivo === 'string' && /[*?]/.test(e.arquivo)) violacoes.push(`${rotulo}: wildcard não é permitido em exceções`);
     if (vistos.has(e.arquivo)) violacoes.push(`${rotulo}: arquivo duplicado no baseline`);
     vistos.add(e.arquivo);
     if (e.arquivo && !existsSync(path.join(raiz, e.arquivo))) {
@@ -229,7 +249,7 @@ export function auditarUx(raiz) {
   const { baseline, violacoes: violacoesBaseline } = carregarBaseline(raiz);
   const violacoes = [...violacoesBaseline];
   const avisos = [];
-  const excecoes = Array.isArray(baseline.excecoes) ? baseline.excecoes : [];
+  const excecoes = Array.isArray(baseline.exceptions) ? baseline.exceptions : Array.isArray(baseline.excecoes) ? baseline.excecoes : [];
   const excecoesPorArquivo = new Map(excecoes.map((e) => [e.arquivo, e]));
   const resumo = [];
   const totais = Object.fromEntries(ASSINATURAS.map((a) => [a.id, 0]));
@@ -285,6 +305,12 @@ export function auditarUx(raiz) {
 
   // Toda página/rota de módulo com CRUD genérico precisa existir como PÁGINA.
   const app = readFileSync(path.join(raiz, 'client', 'src', 'App.tsx'), 'utf8');
+  if (Number(baseline.version ?? baseline.versao) >= 3) {
+    if (!app.includes('`${base}/novo`')) violacoes.push('client/src/App.tsx: rota /recurso/novo não está ligada ao CRUD genérico');
+    if (!app.includes('`${base}/:id/editar`')) violacoes.push('client/src/App.tsx: rota /recurso/:id/editar não está ligada ao CRUD genérico');
+    const detail = baseline.allowed_patterns?.resource_routes?.detail;
+    if (detail !== '/recurso/:id') violacoes.push(`${CAMINHO_BASELINE}: rota de detalhe deve ser /recurso/:id`);
+  }
   if (!app.includes('usaCrudGenerico')) {
     violacoes.push('client/src/App.tsx: rotas genéricas de cadastro/edição ausentes (usaCrudGenerico) — o CRUD voltaria para a modal');
   }
@@ -299,8 +325,8 @@ export function auditarUx(raiz) {
 /** Compatibilidade: lista de exceções do baseline (usada pelo relatório). */
 export const EXCECOES = (() => {
   try {
-    const raiz = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-    return JSON.parse(readFileSync(path.join(raiz, CAMINHO_BASELINE), 'utf8')).excecoes ?? [];
+    const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    return JSON.parse(readFileSync(path.join(raiz, CAMINHO_BASELINE), 'utf8')).exceptions ?? [];
   } catch {
     return [];
   }

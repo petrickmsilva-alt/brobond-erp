@@ -51,6 +51,7 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   'depara-fornecedor': '/depara-fornecedor',
   'planejamento-producao': '/planejamento-producao',
   ordens: '/ordens',
+  'terceiros-operacionais': '/terceiros-operacionais',
   fichas: '/fichas',
   custo: '/custo',
   financeiro: '/financeiro',
@@ -88,7 +89,7 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
 };
 
 describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () => {
-  it('preserva exatamente os 104 módulos e todas as 104 URLs sem duplicidade nem remoção', () => {
+  it('preserva exatamente os 105 módulos e todas as 105 URLs sem duplicidade nem remoção', () => {
     // 70 da Árvore Master original + 10 da FUNDAÇÃO COMERCIAL (MASTER
     // MA-02..MA-08: territórios, equipes, hierarquia, carteira, atribuição,
     // metas, painel comercial e os dois cadastros do motor de comissão)
@@ -98,13 +99,13 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     // + 16 da EVOLUÇÃO ERP 3.0 (estoque: transferências, reservas; compras:
     //   homologação; produção: recursos, capacidade/MRP; fiscal: obrigações,
     //   calendário; financeiro: plano de contas, balancete)
-    // + 3 do hardening P2/P3 (P3-04: unidades de medida e conversões
-    //   declaradas; P2-13: importações contábeis).
-    expect(MODULES).toHaveLength(104);
+    // + 4 do hardening P2/P3 (P3-04: unidades de medida e conversões
+    //   declaradas; P2-13: importações contábeis; P3-05/06: terceiros e facções).
+    expect(MODULES).toHaveLength(105);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(104);
-    expect(new Set(paths).size).toBe(104);
+    expect(new Set(ids).size).toBe(105);
+    expect(new Set(paths).size).toBe(105);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -133,8 +134,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (90), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(90);
+  it('separa ERP CORE (91), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(91);
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(8);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
@@ -219,6 +220,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'producao-recursos',
       'producao-capacidade',
       'ordens',
+      'terceiros-operacionais',
       'fichas',
       'custo',
     ]);
@@ -474,6 +476,7 @@ describe('FORM_DIRETO (cadastro em página própria, nunca em modal)', () => {
       'representante_hierarquia',
       'representantes',
       'tamanhos',
+      'terceiros_operacionais',
       'territorios',
       'venda_atribuicao',
       'vendas',

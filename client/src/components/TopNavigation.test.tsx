@@ -265,11 +265,11 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
       .filter((a) => a !== '__mais__');
     expect(areasRenderizadas.sort()).toEqual([...MODULE_AREAS].sort());
     // Cada módulo da fonte única aparece exatamente uma vez no menu superior.
-    // O comprimento é o da fonte (104 após o hardening P2/P3: unidades de
-    // medida, conversões declaradas e importações contábeis). `modules.test.ts`
+    // O comprimento é o da fonte (105 após o hardening P2/P3: unidades de
+    // medida, conversões declaradas, importações contábeis e facções). `modules.test.ts`
     // trava o mesmo número e a lista canônica — aqui só se confirma que o menu
     // superior não perde nem duplica item.
-    expect(MODULES).toHaveLength(104);
+    expect(MODULES).toHaveLength(105);
     unmount();
   });
 

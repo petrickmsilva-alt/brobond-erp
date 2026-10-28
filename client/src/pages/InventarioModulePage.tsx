@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, ClipboardCheck, ClipboardList, Loader2, Lock, Plus, RefreshCw, Save, Search } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
 import { Thumb } from '../components/ImageField';
 import { ProductSelector } from '../components/ProductSelector';
 import { formatDateTime, formatNumber } from '../lib/format';
@@ -26,6 +26,9 @@ export default function InventarioModulePage() {
   const [locais, setLocais] = useState<{ value: number; label: string }[]>([]);
   const [novo, setNovo] = useState({ local_id: '', observacoes: '' });
   const [criando, setCriando] = useState(false);
+  const [cicloOpen, setCicloOpen] = useState(false);
+  const [ciclo, setCiclo] = useState({ local_id: '', periodo_inicio: '', periodo_fim: '', data_planejada: '', responsavel_id: '', faixa_a: '80', faixa_b: '95' });
+  const [criandoCiclo, setCriandoCiclo] = useState(false);
 
   const carregarLista = useCallback(async () => {
     setLoading(true);
@@ -47,6 +50,19 @@ export default function InventarioModulePage() {
       .then(setLocais)
       .catch(() => {});
   }, [carregarLista]);
+
+  async function criarPlanoCiclico() {
+    if (!ciclo.local_id || !ciclo.periodo_inicio || !ciclo.periodo_fim || !ciclo.data_planejada) return toast.error('Informe local, período ABC e data planejada.');
+    setCriandoCiclo(true);
+    try {
+      const plano = await api.post<Inv>('/inventarios/ciclicas', { ...ciclo, local_id: Number(ciclo.local_id), responsavel_id: ciclo.responsavel_id ? Number(ciclo.responsavel_id) : null, faixa_a: Number(ciclo.faixa_a), faixa_b: Number(ciclo.faixa_b), idempotency_key: crypto.randomUUID() });
+      toast.success(`Plano ABC #${plano.id} criado com snapshot do saldo de sistema.`);
+      setCicloOpen(false);
+      setCiclo({ local_id: '', periodo_inicio: '', periodo_fim: '', data_planejada: '', responsavel_id: '', faixa_a: '80', faixa_b: '95' });
+      await carregarLista();
+    } catch (e: any) { toast.error(e.message || 'Não foi possível criar o plano cíclico.'); }
+    finally { setCriandoCiclo(false); }
+  }
 
   async function abrirNovo() {
     if (!novo.local_id) return toast.error('Selecione o local da contagem.');
@@ -100,6 +116,7 @@ export default function InventarioModulePage() {
             <button className="btn-accent" onClick={() => setNovoOpen(true)}>
               <Plus className="h-4 w-4" /> Abrir contagem
             </button>
+            {podeFechar && <button className="btn-secondary" onClick={() => setCicloOpen((v) => !v)}><ClipboardList className="h-4 w-4" /> Planejar ciclo ABC</button>}
           </>
         }
       />
@@ -121,7 +138,8 @@ export default function InventarioModulePage() {
               <tr>
                 <th>#</th>
                 <th>Local</th>
-                <th>Status</th>
+                <th>Tipo / classe</th>
+                <th>Estado</th>
                 <th>Aberto</th>
                 <th>Fechado</th>
                 <th className="text-right">Ações</th>
@@ -132,9 +150,8 @@ export default function InventarioModulePage() {
                 <tr key={inv.id}>
                   <td className="font-mono text-xs text-slate-400">#{inv.id}</td>
                   <td className="font-medium text-slate-800">{inv.local_id__label || inv.local}</td>
-                  <td>
-                    {inv.status === 'aberto' ? <Badge tone="amber">Em contagem</Badge> : <Badge tone="green">Fechado</Badge>}
-                  </td>
+                  <td>{inv.modalidade === 'ciclica_abc' ? <span className="text-xs font-medium">Cíclica ABC · {inv.classificacao_abc || '—'}</span> : <span className="text-xs">Inventário</span>}</td>
+                  <td>{inv.contagem_status === 'CANCELADA' ? <Badge tone="red">Cancelada</Badge> : inv.status === 'fechado' ? <Badge tone="green">Fechado</Badge> : <Badge tone="amber">{inv.contagem_status || 'Em contagem'}</Badge>}</td>
                   <td className="text-slate-500">{formatDateTime(inv.aberto_em)}</td>
                   <td className="text-slate-500">{inv.fechado_em ? formatDateTime(inv.fechado_em) : '—'}</td>
                   <td className="text-right">
@@ -149,7 +166,7 @@ export default function InventarioModulePage() {
         </div>
       )}
 
-      <PainelInline open={novoOpen} onClose={() => setNovoOpen(false)} title="Abrir contagem" subtitle="O saldo do sistema é congelado neste momento (foto instantânea)." size="sm">
+      {novoOpen && <section className="card mb-4 p-5"><h2 className="text-base font-semibold text-navy-900">Abrir contagem simples</h2><p className="mb-4 mt-1 text-sm text-slate-500">O saldo do sistema é congelado neste momento (snapshot).</p>
         <div className="space-y-4">
           <label className="block">
             <span className="label">Local</span>
@@ -174,7 +191,19 @@ export default function InventarioModulePage() {
             </button>
           </div>
         </div>
-      </PainelInline>
+      </section>}
+      {cicloOpen && <section className="card mb-4 p-5"><h2 className="text-base font-semibold text-navy-900">Plano de contagem cíclica ABC</h2><p className="mb-4 mt-1 text-sm text-slate-500">A classe é calculada pelas saídas registradas no local durante o período informado; faixas cumulativas configuráveis: A até o percentual informado, B até o segundo percentual, C restante; os valores usados ficam registrados no plano.</p>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <label className="block"><span className="label">Local</span><select className="input" value={ciclo.local_id} onChange={(e) => setCiclo((v) => ({ ...v, local_id: e.target.value }))}><option value="">Selecione...</option>{locais.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select></label>
+          <label className="block"><span className="label">Início do período ABC</span><input type="date" className="input" value={ciclo.periodo_inicio} onChange={(e) => setCiclo((v) => ({ ...v, periodo_inicio: e.target.value }))} /></label>
+          <label className="block"><span className="label">Fim do período ABC</span><input type="date" className="input" value={ciclo.periodo_fim} onChange={(e) => setCiclo((v) => ({ ...v, periodo_fim: e.target.value }))} /></label>
+          <label className="block"><span className="label">Data planejada</span><input type="date" className="input" value={ciclo.data_planejada} onChange={(e) => setCiclo((v) => ({ ...v, data_planejada: e.target.value }))} /></label>
+          <label className="block"><span className="label">Responsável (opcional; ID do usuário)</span><input type="number" min="1" className="input" value={ciclo.responsavel_id} onChange={(e) => setCiclo((v) => ({ ...v, responsavel_id: e.target.value }))} /></label>
+          <label className="block"><span className="label">Faixa acumulada A (%)</span><input type="number" min="0.01" max="99.98" step="0.01" className="input" value={ciclo.faixa_a} onChange={(e) => setCiclo((v) => ({ ...v, faixa_a: e.target.value }))} /></label>
+          <label className="block"><span className="label">Faixa acumulada B (%)</span><input type="number" min="0.02" max="99.99" step="0.01" className="input" value={ciclo.faixa_b} onChange={(e) => setCiclo((v) => ({ ...v, faixa_b: e.target.value }))} /></label>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2"><button className="btn-primary" onClick={criarPlanoCiclico} disabled={criandoCiclo}>{criandoCiclo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Criar plano e congelar saldos</button><button className="btn-secondary" onClick={() => setCicloOpen(false)}>Cancelar</button></div>
+      </section>}
 
       {!aberto && (
         <button className="btn-accent fixed bottom-5 right-5 z-40 rounded-full px-4 py-3.5 shadow-modal md:hidden" onClick={() => setNovoOpen(true)} aria-label="Abrir contagem">
@@ -192,8 +221,11 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
   const toast = useToast();
   const { user } = useAuth();
   const podeFechar = user?.perfil === 'admin' || user?.perfil === 'gerente';
-  const id = inventario.id;
-  const aberto = inventario.status === 'aberto';
+  const [registro, setRegistro] = useState(inventario);
+  const id = registro.id;
+  const aberto = registro.status === 'aberto';
+  const ciclica = registro.modalidade === 'ciclica_abc';
+  const contagemEditavel = aberto && !(ciclica && registro.contagem_status === 'APROVADA');
 
   const [itens, setItens] = useState<ItemCont[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -202,6 +234,7 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
   const [editado, setEditado] = useState<Map<number, string>>(new Map());
   const [salvando, setSalvando] = useState(false);
   const [fecharOpen, setFecharOpen] = useState(false);
+  const [cancelarOpen, setCancelarOpen] = useState(false);
   const [fechando, setFechando] = useState(false);
   const [achadoOpen, setAchadoOpen] = useState(false);
   const [achado, setAchado] = useState<{ produto_id: string; tamanho_id: string; contado: string }>({ produto_id: '', tamanho_id: '', contado: '1' });
@@ -242,7 +275,8 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
     setLoading(true);
     setError('');
     try {
-      const [, rows] = await Promise.all([api.get<Inv>(`/inventarios/${id}`), api.get<ItemCont[]>(`/inventarios/${id}/itens`)]);
+      const [detail, rows] = await Promise.all([api.get<Inv>(`/inventarios/${id}`), api.get<ItemCont[]>(`/inventarios/${id}/itens`)]);
+      setRegistro(detail);
       setItens(rows);
       setEditado(new Map());
     } catch (e: any) {
@@ -292,10 +326,11 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
           <Thumb src={it.produto_id__foto} alt={it.produto_id__label || ''} size={32} />
         </td>
         <td className="font-medium text-slate-800">{it.produto_id__label || `#${it.produto_id}`}</td>
-        <td className="text-center">{it.tamanho_id__label || `#${it.tamanho_id}`}</td>
+        <td className="text-center">{it.tamanho_id__label || (it.tamanho_id ? `#${it.tamanho_id}` : '—')}</td>
+        {ciclica && <td className="text-center"><span className="font-semibold">{it.classificacao_abc || '—'}</span>{it.prioridade ? <span className="ml-1 text-xs text-slate-400">#{it.prioridade}</span> : null}</td>}
         <td className="text-right tabular-nums text-slate-600">{formatNumber(saldo)}</td>
         <td className="text-right">
-          {aberto ? (
+          {contagemEditavel ? (
             <input
               type="number"
               min={0}
@@ -355,10 +390,10 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
   }
 
   async function adicionarAchado() {
-    if (!achado.produto_id || !achado.tamanho_id) return toast.error('Selecione o produto e o tamanho.');
+    if (!achado.produto_id) return toast.error('Selecione o produto.');
     if (!(Number(achado.contado) >= 0)) return toast.error('Informe a quantidade contada.');
     try {
-      await api.put(`/inventarios/${id}/itens`, { itens: [{ produto_id: Number(achado.produto_id), tamanho_id: Number(achado.tamanho_id), contado: Number(achado.contado) }] });
+      await api.put(`/inventarios/${id}/itens`, { itens: [{ produto_id: Number(achado.produto_id), tamanho_id: achado.tamanho_id ? Number(achado.tamanho_id) : null, contado: Number(achado.contado) }] });
       toast.success('Produto adicionado à contagem.');
       setAchadoOpen(false);
       setAchado({ produto_id: '', tamanho_id: '', contado: '1' });
@@ -366,6 +401,21 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
     } catch (e: any) {
       toast.error(e instanceof ApiError ? e.message : 'Não foi possível adicionar.');
     }
+  }
+
+  async function conferir() {
+    try { await api.post(`/inventarios/${id}/ciclica/conferir`, {}); toast.success('Contagem conferida.'); await carregar(); }
+    catch (e: any) { toast.error(e.message || 'Não foi possível conferir a contagem.'); }
+  }
+
+  async function aprovar() {
+    try { await api.post(`/inventarios/${id}/ciclica/aprovar`, {}); toast.success('Contagem aprovada. Agora os ajustes podem ser aplicados.'); await carregar(); }
+    catch (e: any) { toast.error(e.message || 'Não foi possível aprovar a contagem.'); }
+  }
+
+  async function cancelar() {
+    try { await api.post(`/inventarios/${id}/ciclica/cancelar`, {}); toast.success('Plano cancelado; nenhum ajuste foi aplicado.'); setCancelarOpen(false); await carregar(); }
+    catch (e: any) { toast.error(e.message || 'Não foi possível cancelar o plano.'); }
   }
 
   async function fechar() {
@@ -382,7 +432,7 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
     }
   }
 
-  const idEsc = String(inventario.id);
+  const idEsc = String(registro.id);
   if (loading && !itens) return <Spinner />;
   if (error && !itens)
     return (
@@ -404,37 +454,41 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
             </button>
             <ClipboardList className="h-5 w-5 text-navy-600" />
             Contagem #{idEsc}
-            {inventario.status === 'aberto' ? <Badge tone="amber">Em contagem</Badge> : <Badge tone="green">Fechado</Badge>}
+            {registro.contagem_status === 'CANCELADA' ? <Badge tone="red">Cancelada</Badge> : registro.status === 'aberto' ? <Badge tone="amber">{ciclica ? registro.contagem_status : 'Em contagem'}</Badge> : <Badge tone="green">Fechado</Badge>}
           </span>
         }
-        description={`Local: ${inventario.local_id__label || inventario.local} · aberto ${formatDateTime(inventario.aberto_em)}${inventario.aberto_por ? ` por ${inventario.aberto_por}` : ''}`}
+        description={`Local: ${registro.local_id__label || registro.local} · aberto ${formatDateTime(registro.aberto_em)}${registro.aberto_por ? ` por ${registro.aberto_por}` : ''}${ciclica ? ` · ABC ${registro.abc_periodo_inicio} a ${registro.abc_periodo_fim}` : ''}`}
         actions={
           <>
-            {aberto && (
+            {contagemEditavel && (
               <button className="btn-secondary" onClick={() => setAchadoOpen(true)}>
                 <Plus className="h-4 w-4" /> Produto sem saldo
               </button>
             )}
-            {aberto && (
+            {contagemEditavel && (
               <button className="btn-primary" onClick={salvarContagem} disabled={salvando || !editado.size}>
                 {salvando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Salvar contagem ({editado.size})
               </button>
             )}
-            {aberto && podeFechar && (
-              <button className="btn-accent" onClick={() => setFecharOpen(true)}>
-                <Lock className="h-4 w-4" /> Fechar e gerar ajustes
-              </button>
+            {aberto && ciclica && podeFechar && ['PLANEJADA', 'EM_CONTAGEM'].includes(String(registro.contagem_status)) && !editado.size && resumo && resumo.contados === resumo.itens && (
+              <button className="btn-secondary" onClick={conferir}><ClipboardCheck className="h-4 w-4" /> Conferir</button>
+            )}
+            {aberto && ciclica && podeFechar && registro.contagem_status === 'CONFERIDA' && <button className="btn-secondary" onClick={aprovar}><Lock className="h-4 w-4" /> Aprovar ajustes</button>}
+            {aberto && ciclica && podeFechar && registro.contagem_status !== 'APROVADA' && <button className="btn-secondary" onClick={() => setCancelarOpen(true)}>Cancelar plano</button>}
+            {aberto && podeFechar && (!ciclica || registro.contagem_status === 'APROVADA') && (
+              <button className="btn-accent" onClick={() => setFecharOpen(true)}><Lock className="h-4 w-4" /> Fechar e gerar ajustes</button>
             )}
           </>
         }
       />
 
-      {!aberto && inventario.fechado_em && (
+      {!aberto && registro.fechado_em && (
         <div className="mb-4">
-          <Alert tone="green">Fechado em {formatDateTime(inventario.fechado_em)} por {inventario.fechado_por || '—'}. Os ajustes já foram aplicados e a contagem não pode mais mudar.</Alert>
+          <Alert tone="green">Fechado em {formatDateTime(registro.fechado_em)} por {registro.fechado_por || '—'}. Os ajustes já foram aplicados e a contagem não pode mais mudar.</Alert>
         </div>
       )}
 
+      {ciclica && <div className="mb-4"><Alert tone="blue">Classe ABC baseada em quantidade de saídas registradas no período. Saldo de sistema é snapshot imutável; diferença exibida = contado − sistema. Ajustes só ocorrem após conferência e aprovação explícitas.</Alert></div>}
       {resumo && (
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <CardResumo label="Linhas" valor={formatNumber(resumo.itens)} />
@@ -473,6 +527,7 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
                       <th className="w-14">Foto</th>
                       <th>Produto</th>
                       <th className="text-center">Tam.</th>
+                      {ciclica && <th className="text-center">ABC</th>}
                       <th className="text-right">Saldo no sistema</th>
                       <th className="text-right">Contado</th>
                       <th className="text-right">Diferença</th>
@@ -486,13 +541,13 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
         </div>
       )}
 
-      {aberto && (
+      {contagemEditavel && (
         <button className="btn-primary fixed bottom-5 right-5 z-40 rounded-full px-4 py-3.5 shadow-modal md:hidden" onClick={salvarContagem} disabled={salvando || !editado.size}>
           {salvando ? <Loader2 className="h-5 w-5 animate-spin" /> : <Save className="h-5 w-5" />}
         </button>
       )}
 
-      <PainelInline open={achadoOpen} onClose={() => setAchadoOpen(false)} title="Produto sem saldo no sistema" subtitle="Adiciona uma linha de contagem mesmo sem estoque registrado." size="sm">
+      {achadoOpen && <section className="card mt-5 p-5"><h2 className="text-base font-semibold text-navy-900">Produto sem saldo no sistema</h2><p className="mb-4 mt-1 text-sm text-slate-500">Adiciona uma linha à contagem, com saldo de sistema zero.</p>
         <div className="space-y-4">
           <label className="block">
             <span className="label">Produto</span>
@@ -531,22 +586,11 @@ function ContagemView({ inventario, onBack }: { inventario: Inv; onBack: () => v
             <button className="btn-primary" onClick={adicionarAchado}>Adicionar</button>
           </div>
         </div>
-      </PainelInline>
+      </section>}
 
-      <ConfirmacaoInline
-        open={fecharOpen}
-        title="Fechar inventário e gerar ajustes?"
-        danger
-        confirmLabel="Fechar e ajustar"
-        busy={fechando}
-        onCancel={() => setFecharOpen(false)}
-        onConfirm={fechar}
-        message={
-          <p>
-            As <strong>{resumo?.divergencias ?? 0} divergência(s)</strong> serão aplicadas ao estoque como movimentações de ajuste com motivo “Inventário #{idEsc}”. Esta ação só pode ser feita uma vez.
-          </p>
-        }
-      />
+      {cancelarOpen && <section className="card mt-5 border-red-200 bg-red-50/40 p-5"><h2 className="text-base font-semibold text-red-900">Cancelar plano cíclico?</h2><p className="mt-2 text-sm text-slate-700">O inventário será encerrado sem movimentações de ajuste. A trilha e o snapshot serão preservados.</p><div className="mt-4 flex gap-2"><button className="btn-secondary" onClick={() => setCancelarOpen(false)}>Voltar</button><button className="btn-danger" onClick={cancelar}>Confirmar cancelamento</button></div></section>}
+
+      {fecharOpen && <section className="card mt-5 border-amber-200 bg-amber-50/40 p-5"><h2 className="text-base font-semibold text-navy-900">Confirmar fechamento</h2><p className="mt-2 text-sm text-slate-700">{resumo?.divergencias ?? 0} divergência(s) serão aplicadas ao estoque pelo motor de movimentação como ajustes do inventário. A ação é única e não pode ser desfeita.</p><div className="mt-4 flex gap-2"><button className="btn-secondary" onClick={() => setFecharOpen(false)}>Voltar</button><button className="btn-accent" onClick={fechar} disabled={fechando}>{fechando ? 'Fechando…' : 'Fechar e gerar ajustes'}</button></div></section>}
     </div>
   );
 }

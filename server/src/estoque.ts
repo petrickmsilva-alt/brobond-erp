@@ -339,6 +339,7 @@ export async function updateItensInventario(req: Request, res: Response) {
     const out = await s.transaction(async (tx) => {
       const inv = await getInventario(id, escopo.empresaId, tx);
       if (String(inv.status) !== 'aberto') throw new HttpError(409, 'Este inventário já foi fechado e a contagem não pode mais mudar.');
+      if (inv.modalidade === 'ciclica_abc' && inv.contagem_status === 'APROVADA') throw new HttpError(409, 'A contagem aprovada é imutável; cancele o plano e abra nova contagem para corrigir.');
       const itensExistentes = await s.list(RESOURCES.itens_inventario, { page: 1, pageSize: 5000, filter: { inventario_id: id, empresa_id: escopo.empresaId } }, tx);
       if (itensExistentes.total > itensExistentes.rows.length) throw new HttpError(409, 'O inventário excede o limite seguro de atualização. Nenhuma contagem foi alterada.');
       validarItensInventarioUnicos(itensExistentes.rows);
@@ -366,7 +367,7 @@ export async function updateItensInventario(req: Request, res: Response) {
             escopo
           );
           const diferenca = contado === null ? 0 : contado - Number(before.saldo_sistema || 0);
-          await s.update(RESOURCES.itens_inventario, itemId, { contado, diferenca }, tx);
+          await s.update(RESOURCES.itens_inventario, itemId, { contado, diferenca, contado_por: actor.id || null, contado_em: new Date().toISOString() }, tx);
           alterados++;
           continue;
         }
@@ -393,11 +394,14 @@ export async function updateItensInventario(req: Request, res: Response) {
         }
         const existente = await s.findOneWhere(RESOURCES.itens_inventario, filtroExistente, tx);
         if (existente) {
-          await s.update(RESOURCES.itens_inventario, Number(existente.id), { contado, diferenca: contado - Number(existente.saldo_sistema || 0) }, tx);
+          await s.update(RESOURCES.itens_inventario, Number(existente.id), { contado, diferenca: contado - Number(existente.saldo_sistema || 0), contado_por: actor.id || null, contado_em: new Date().toISOString() }, tx);
         } else {
-          await s.insert(RESOURCES.itens_inventario, { empresa_id: escopo.empresaId, inventario_id: id, produto_id: produtoId, tamanho_id: tamanhoId, saldo_sistema: 0, contado, diferenca: contado }, tx);
+          await s.insert(RESOURCES.itens_inventario, { empresa_id: escopo.empresaId, inventario_id: id, produto_id: produtoId, tamanho_id: tamanhoId, saldo_sistema: 0, contado, diferenca: contado, contado_por: actor.id || null, contado_em: new Date().toISOString() }, tx);
         }
         alterados++;
+      }
+      if (alterados > 0 && inv.modalidade === 'ciclica_abc') {
+        await s.update(RESOURCES.inventarios, id, { contagem_status: 'EM_CONTAGEM', conferido_por: null, conferido_em: null, aprovado_por: null, aprovado_em: null }, tx);
       }
       if (alterados > 0) {
         await s.audit(
@@ -411,6 +415,79 @@ export async function updateItensInventario(req: Request, res: Response) {
   } catch (e) {
     throw toHttpError(e, RESOURCES.itens_inventario);
   }
+}
+
+/** A conferência é uma transição explícita; saldo congelado nunca é editável. */
+export async function conferirContagemCiclica(req: Request, res: Response) {
+  const actor = currentUser(req);
+  if (actor.perfil !== 'admin' && actor.perfil !== 'gerente') throw new HttpError(403, 'Somente gerentes e administradores podem conferir uma contagem cíclica.');
+  checkAccess(RESOURCES.inventarios, actor, 'update');
+  const escopo = escopoDe(actor);
+  const id = parseId(req.params.id);
+  const s = getStore();
+  try {
+    const result = await s.transaction(async (tx) => {
+      const inv = await getInventario(id, escopo.empresaId, tx);
+      if (inv.modalidade !== 'ciclica_abc') throw new HttpError(409, 'O inventário não é uma contagem cíclica ABC.');
+      if (inv.status !== 'aberto') throw new HttpError(409, 'O inventário não está aberto.');
+      if (!['EM_CONTAGEM', 'PLANEJADA', 'CONFERIDA'].includes(String(inv.contagem_status))) throw new HttpError(409, 'Estado inválido para conferência.');
+      const itens = await s.list(RESOURCES.itens_inventario, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, inventario_id: id } }, tx);
+      if (!itens.rows.length || itens.total > itens.rows.length) throw new HttpError(409, 'A contagem está vazia ou excede o limite seguro.');
+      if (itens.rows.some((item) => item.contado === null || item.contado === undefined)) throw new HttpError(409, 'Todos os itens do snapshot precisam ser contados antes da conferência.');
+      const agora = new Date().toISOString();
+      await s.update(RESOURCES.inventarios, id, { contagem_status: 'CONFERIDA', conferido_por: actor.id || null, conferido_em: agora, aprovado_por: null, aprovado_em: null }, tx);
+      await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'inventarios', registro_id: id, descricao: `Contagem cíclica #${id} conferida (${itens.rows.length} itens)`, dados: { itens: itens.rows.length }, empresa_id: empresaDoRegistroAudit(RESOURCES.inventarios, inv, actor) }, tx);
+      return { ok: true, contagem_status: 'CONFERIDA', itens: itens.rows.length, conferido_em: agora };
+    });
+    res.json(result);
+  } catch (error) { throw toHttpError(error, RESOURCES.inventarios); }
+}
+
+/** Aprovação explícita por gerente/admin antecede o motor canônico de fechamento. */
+export async function aprovarContagemCiclica(req: Request, res: Response) {
+  const actor = currentUser(req);
+  if (actor.perfil !== 'admin' && actor.perfil !== 'gerente') throw new HttpError(403, 'Somente gerentes e administradores podem aprovar uma contagem cíclica.');
+  checkAccess(RESOURCES.inventarios, actor, 'update');
+  const escopo = escopoDe(actor);
+  const id = parseId(req.params.id);
+  const s = getStore();
+  try {
+    const result = await s.transaction(async (tx) => {
+      const inv = await getInventario(id, escopo.empresaId, tx);
+      if (inv.modalidade !== 'ciclica_abc') throw new HttpError(409, 'O inventário não é uma contagem cíclica ABC.');
+      if (inv.status !== 'aberto' || inv.contagem_status !== 'CONFERIDA') throw new HttpError(409, 'Somente uma contagem conferida e aberta pode ser aprovada.');
+      const itens = await s.list(RESOURCES.itens_inventario, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, inventario_id: id } }, tx);
+      if (!itens.rows.length || itens.total > itens.rows.length || itens.rows.some((item) => item.contado === null || item.contado === undefined)) throw new HttpError(409, 'A contagem foi alterada ou está incompleta; confira novamente.');
+      const agora = new Date().toISOString();
+      await s.update(RESOURCES.inventarios, id, { contagem_status: 'APROVADA', aprovado_por: actor.id || null, aprovado_em: agora }, tx);
+      await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'inventarios', registro_id: id, descricao: `Contagem cíclica #${id} aprovada para ajuste de estoque`, dados: { itens: itens.rows.length }, empresa_id: empresaDoRegistroAudit(RESOURCES.inventarios, inv, actor) }, tx);
+      return { ok: true, contagem_status: 'APROVADA', aprovado_em: agora };
+    });
+    res.json(result);
+  } catch (error) { throw toHttpError(error, RESOURCES.inventarios); }
+}
+
+/** Cancelamento explícito do plano antes da aprovação; não toca saldo nem movimentos. */
+export async function cancelarContagemCiclica(req: Request, res: Response) {
+  const actor = currentUser(req);
+  if (actor.perfil !== 'admin' && actor.perfil !== 'gerente') throw new HttpError(403, 'Somente gerentes e administradores podem cancelar uma contagem cíclica.');
+  checkAccess(RESOURCES.inventarios, actor, 'update');
+  const escopo = escopoDe(actor);
+  const id = parseId(req.params.id);
+  const s = getStore();
+  try {
+    const result = await s.transaction(async (tx) => {
+      const inv = await getInventario(id, escopo.empresaId, tx);
+      if (inv.modalidade !== 'ciclica_abc') throw new HttpError(409, 'O inventário não é uma contagem cíclica ABC.');
+      if (inv.contagem_status === 'CANCELADA') return { ok: true, idempotente: true, contagem_status: 'CANCELADA' };
+      if (inv.status !== 'aberto' || inv.contagem_status === 'APROVADA') throw new HttpError(409, 'Somente plano aberto ainda não aprovado pode ser cancelado.');
+      const agora = new Date().toISOString();
+      await s.update(RESOURCES.inventarios, id, { status: 'fechado', fechado_por: actor.name, fechado_em: agora, contagem_status: 'CANCELADA' }, tx);
+      await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'inventarios', registro_id: id, descricao: `Plano de contagem cíclica #${id} cancelado; nenhum ajuste de estoque foi aplicado`, empresa_id: empresaDoRegistroAudit(RESOURCES.inventarios, inv, actor) }, tx);
+      return { ok: true, contagem_status: 'CANCELADA', fechado_em: agora };
+    });
+    res.json(result);
+  } catch (error) { throw toHttpError(error, RESOURCES.inventarios); }
 }
 
 /** POST /api/inventarios/:id/fechar — gera os ajustes de estoque (1ª e única vez). */
@@ -427,7 +504,16 @@ export async function fecharInventario(req: Request, res: Response) {
     const out = await s.transaction(async (tx) => {
       const inv = await getInventario(id, escopo.empresaId, tx);
       if (String(inv.status) === 'fechado') {
+        if (inv.modalidade === 'ciclica_abc' && inv.contagem_status === 'CANCELADA') throw new HttpError(409, 'Este plano foi cancelado e não pode gerar ajustes de estoque.');
+        if (inv.modalidade === 'ciclica_abc') {
+          const existentes = await s.list(RESOURCES.movimentacoes, { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId, inventario_id: id } }, tx);
+          if (existentes.total > existentes.rows.length) throw new HttpError(409, 'O histórico de ajustes deste inventário excede o limite seguro.');
+          return { ok: true, idempotente: true, ajustes: existentes.total, fechado_em: inv.fechado_em };
+        }
         throw new HttpError(409, `O inventário #${id} já foi fechado em ${String(inv.fechado_em || '').slice(0, 16)}. Os ajustes só podem ser gerados uma vez.`);
+      }
+      if (inv.modalidade === 'ciclica_abc' && inv.contagem_status !== 'APROVADA') {
+        throw new HttpError(409, 'A contagem cíclica precisa ser conferida e aprovada explicitamente antes de gerar ajustes.');
       }
       const localId = Number(inv.local_id);
       if (!Number.isInteger(localId) || localId <= 0) {
@@ -493,11 +579,12 @@ export async function fecharInventario(req: Request, res: Response) {
         } else {
           await s.adjustStock(produtoId, tamanhoId, local, delta, tx, localId, escopo.empresaId);
         }
-        await s.insert(
+        const movimentacao = await s.insert(
           RESOURCES.movimentacoes,
-          { empresa_id: escopo.empresaId, tipo: 'ajuste', produto_id: produtoId, tamanho_id: tamanhoId, local, local_id: localId, quantidade: delta, motivo: `Inventário #${id}`, usuario_id: actor.id || null },
+          { empresa_id: escopo.empresaId, tipo: 'ajuste', produto_id: produtoId, tamanho_id: tamanhoId, local, local_id: localId, quantidade: delta, motivo: `Inventário #${id}`, inventario_id: inv.modalidade === 'ciclica_abc' ? id : null, usuario_id: actor.id || null },
           tx
         );
+        if (inv.modalidade === 'ciclica_abc') await s.update(RESOURCES.itens_inventario, Number(it.id), { movimentacao_id: Number(movimentacao.id) }, tx);
         detalhes.push(`${nome}: ${saldoAtual} → ${contado}`);
         ajustes++;
       }

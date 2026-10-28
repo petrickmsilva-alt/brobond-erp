@@ -1148,7 +1148,7 @@ async function validarConversaoDeUnidade(data: Row, empresaId: number, tx?: Tx):
   }
 }
 
-export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor } = {}): Promise<Row> {
+export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor; cyclicCounting?: Record<string, unknown> } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
   const s = getStore();
   // CRM 3.0: oportunidade perdida exige motivo de perda (espelha o CHECK
@@ -1163,6 +1163,9 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
   // MULTIEMPRESA: a empresa do novo registro é decidida pelo SERVIDOR.
   const escopo = ctx.escopo === undefined ? escopoDe(actor) : (comoEscopo(ctx.escopo) ?? escopoDeSistema());
   carimbarEmpresa(r, data, escopo);
+  // Metadados da contagem cíclica são sempre derivados pelo endpoint de fluxo,
+  // nunca aceitos de campos do formulário genérico.
+  if (r.key === 'inventarios' && ctx.cyclicCounting) Object.assign(data, ctx.cyclicCounting);
   let conviteLink: string | undefined;
   let conviteEntregue = false;
   try {
@@ -1361,6 +1364,12 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
         }
       }
       await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
+      if (r.key === 'ordens' && data.terceiro_id !== undefined && Number(data.terceiro_id || 0) !== Number(before.terceiro_id || 0)) {
+        const eventosCustodia = getResource('terceirizacao_eventos');
+        if (eventosCustodia && await s.countWhere(eventosCustodia, { empresa_id: escopo.empresaId, ordem_id: id }, tx) > 0) {
+          throw new HttpError(409, 'O terceiro da OP não pode ser trocado após o registro de eventos de custódia; encerre e crie outra OP.');
+        }
+      }
       await validarRegrasComerciais(r, data, before, s, escopo, tx);
 
       if (r.key === 'usuarios') await prepareUserPayload(data, before, actor);
@@ -2592,10 +2601,15 @@ export async function lancarMovimentacaoDentro(data: Payload, actor: Actor, tx: 
   return createMovimentacao(data, actor, tx, escopo);
 }
 
-async function createMovimentacaoInsumo(data: Payload, actor: Actor, tx: Tx, escopo: EscopoEmpresa): Promise<Row> {
+/** Baixa/estorno de insumo vinculada a OP, chamada só por fluxos internos validados. */
+export async function lancarMovimentacaoInsumoDaOrdem(data: Payload, actor: Actor, tx: Tx, escopo: EscopoEmpresa): Promise<Row> {
+  return createMovimentacaoInsumo(data, actor, tx, escopo, false);
+}
+
+async function createMovimentacaoInsumo(data: Payload, actor: Actor, tx: Tx, escopo: EscopoEmpresa, manual = true): Promise<Row> {
   const s = getStore();
   const mov = getResource('movimentacoes_insumos')!;
-  await validarReferenciasMovimentacaoManual(mov, data, escopo, tx);
+  if (manual) await validarReferenciasMovimentacaoManual(mov, data, escopo, tx);
   const qtd = Number(data.quantidade);
   const tipo = String(data.tipo);
   if (qtd === 0) throw new HttpError(400, 'A quantidade não pode ser zero.', { quantidade: 'Não pode ser zero' });
@@ -2621,7 +2635,7 @@ async function createMovimentacaoInsumo(data: Payload, actor: Actor, tx: Tx, esc
 }
 
 /** Abrir inventário: congela apenas os saldos da empresa/local canônicos. */
-async function abrirInventarioSnapshot(row: Row, actor: Actor, tx: Tx, escopo: EscopoEmpresa) {
+export async function abrirInventarioSnapshot(row: Row, actor: Actor, tx: Tx, escopo: EscopoEmpresa) {
   const s = getStore();
   const local = String(row.local);
   const localId = Number(row.local_id);
@@ -2664,24 +2678,38 @@ async function abrirInventarioSnapshot(row: Row, actor: Actor, tx: Tx, escopo: E
     throw new HttpError(409, `O local "${local}" tem ${estoques.total} saldos e o snapshot só suporta ${estoques.rows.length} por inventário. Abra um inventário por produto/categoria.`);
   }
   const itensR = getResource('itens_inventario')!;
+  const abcResult = Array.isArray(row.abc_resultado) ? row.abc_resultado as Array<Record<string, unknown>> : [];
+  const abcByProduct = new Map(abcResult.map((x) => [Number(x.produto_id), x]));
+  const unidadePorProduto = new Map<number, string>();
+  if (row.modalidade === 'ciclica_abc') {
+    const produtosSnapshot = await s.list(getResource('produtos')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }, tx);
+    if (produtosSnapshot.total > produtosSnapshot.rows.length) throw new HttpError(409, 'O cadastro de produtos excede o limite seguro do snapshot.');
+    for (const produto of produtosSnapshot.rows) unidadePorProduto.set(Number(produto.id), String(produto.unidade || 'un'));
+  }
   const linhas = estoques.rows
     .filter((e) => Number(e.quantidade) !== 0 || Number(e.estoque_min || 0) !== 0)
-    .map((e) => ({
-      empresa_id: escopo.empresaId,
-      inventario_id: Number(row.id),
-      produto_id: e.produto_id,
-      tamanho_id: e.tamanho_id,
-      saldo_sistema: Number(e.quantidade),
-      contado: null,
-      diferenca: 0,
-    }));
+    .map((e) => {
+      const abc = abcByProduct.get(Number(e.produto_id));
+      return {
+        empresa_id: escopo.empresaId,
+        inventario_id: Number(row.id),
+        produto_id: e.produto_id,
+        tamanho_id: e.tamanho_id,
+        saldo_sistema: Number(e.quantidade),
+        contado: null,
+        diferenca: 0,
+        unidade: String((e as Row).unidade || unidadePorProduto.get(Number(e.produto_id)) || 'un'),
+        classificacao_abc: abc?.classe ?? null,
+        prioridade: abc?.prioridade ?? null,
+      };
+    });
   // Um INSERT por linha tornava abrir a contagem O(n) em round-trips (2 mil saldos
   // = 2 mil ida-e-volta no Postgres). Em lote é um statement só.
   await s.insertMany(itensR, linhas, tx);
   const n = linhas.length;
   await s.update(getResource('inventarios')!, Number(row.id), { aberto_por: actor.name }, tx);
   await s.audit(
-    { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'inventarios', registro_id: Number(row.id), descricao: `Inventário #${row.id} aberto no local "${local}" — ${n} itens com saldo congelado`, dados: { itens: n }, empresa_id: empresaDoRegistroAudit(getResource('inventarios')!, row, actor) },
+    { usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: 'inventarios', registro_id: Number(row.id), descricao: `Inventário #${row.id} aberto no local "${local}" — ${n} itens com saldo congelado${row.modalidade === 'ciclica_abc' ? ' e classificados pelo plano ABC' : ''}`, dados: { itens: n, modalidade: row.modalidade || 'inventario', classificacao_abc: row.abc_resultado || null }, empresa_id: empresaDoRegistroAudit(getResource('inventarios')!, row, actor) },
     tx
   );
 }

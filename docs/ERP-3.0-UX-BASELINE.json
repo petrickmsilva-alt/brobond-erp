@@ -1,28 +1,4 @@
 {
-  "_comentario": [
-    "BASELINE OBJETIVO DO GATE DE UX (ZERO MODAL) — BROBOND ERP 3.0.",
-    "Este arquivo é a ÚNICA fonte de exceções do gate `npm run audit:ux`.",
-    "Regra: LISTA → DETALHE → NOVO (/recurso/novo) → EDIÇÃO (/recurso/:id/editar).",
-    "Nenhuma superfície sobreposta (Modal/Dialog/Drawer/Sheet, role=dialog,",
-    "aria-modal, <dialog>, showModal(), backdrop fixed inset-0) é permitida em",
-    "fluxo de módulo.",
-    "",
-    "COMO ADICIONAR UMA EXCEÇÃO (exige edição deliberada deste arquivo):",
-    "  1. `categoria` precisa ser uma de: navegacao_global, menu_mobile,",
-    "     infraestrutura, portal_publico, catalogo_publico.",
-    "  2. `motivo` precisa explicar por que NÃO é cadastro/edição/confirmação de",
-    "     exclusão/detalhe/seleção/formulário/workflow (mínimo 40 caracteres).",
-    "  3. `padroes` declara a contagem EXATA tolerada por assinatura.",
-    "  4. Atualize `totais` para os números novos.",
-    "Categorias de conteúdo (cadastro, edição, exclusão, detalhe, seleção,",
-    "formulário, workflow) NÃO existem e não podem ser criadas: isso é a regra,",
-    "não uma configuração.",
-    "",
-    "O gate falha em: baseline + QUALQUER ocorrência nova (arquivo novo ou",
-    "contagem maior) e em totais acima do declarado."
-  ],
-  "versao": 2,
-  "regra": "ZERO MODAL — LISTA → DETALHE → NOVO → EDIÇÃO",
   "assinaturas": {
     "role-dialog": "role=\"dialog\"",
     "role-alertdialog": "role=\"alertdialog\"",
@@ -33,14 +9,52 @@
     "componente-modal": "<Modal>/<Dialog>/<Drawer>/<Sheet>",
     "portal": "createPortal (renderização fora da árvore da página)"
   },
-  "categorias_permitidas": [
-    "navegacao_global",
-    "menu_mobile",
-    "infraestrutura",
-    "portal_publico",
-    "catalogo_publico"
+  "totais": {
+    "role-dialog": 2,
+    "role-alertdialog": 0,
+    "aria-modal": 2,
+    "overlay-fixo": 7,
+    "elemento-dialog": 0,
+    "show-modal": 0,
+    "componente-modal": 0,
+    "portal": 0,
+    "browser-dialog-api": 0
+  },
+  "version": 3,
+  "date": "2026-10-28",
+  "rules": [
+    "ZERO MODAL em todos os fluxos de módulo: navegação por páginas, nunca superfície sobreposta.",
+    "Fluxo de recurso: lista → novo (/recurso/novo) → detalhe (/recurso/:id) → edição (/recurso/:id/editar).",
+    "Exceções precisam ser explícitas, justificadas, versionadas, limitadas por assinatura e auditadas neste arquivo.",
+    "O gate falha diante de qualquer nova ocorrência, exceção wildcard ou quebra do fluxo de rotas CRUD."
   ],
-  "excecoes": [
+  "allowed_patterns": {
+    "resource_routes": {
+      "list": "/recurso",
+      "create": "/recurso/novo",
+      "detail": "/recurso/:id",
+      "edit": "/recurso/:id/editar"
+    },
+    "exception_categories": [
+      "navegacao_global",
+      "menu_mobile",
+      "infraestrutura",
+      "portal_publico",
+      "catalogo_publico"
+    ]
+  },
+  "forbidden_patterns": [
+    "Modal",
+    "Dialog",
+    "Drawer",
+    "Sheet",
+    "Overlay",
+    "createPortal(",
+    "window.confirm(",
+    "window.prompt(",
+    "window.alert("
+  ],
+  "exceptions": [
     {
       "arquivo": "client/src/components/CommandPalette.tsx",
       "categoria": "navegacao_global",
@@ -92,14 +106,5 @@
       }
     }
   ],
-  "totais": {
-    "role-dialog": 2,
-    "role-alertdialog": 0,
-    "aria-modal": 2,
-    "overlay-fixo": 7,
-    "elemento-dialog": 0,
-    "show-modal": 0,
-    "componente-modal": 0,
-    "portal": 0
-  }
+  "version_notes": "Versionamento do contrato executável ZERO MODAL; as exceções e contagens continuam declaradas neste documento."
 }

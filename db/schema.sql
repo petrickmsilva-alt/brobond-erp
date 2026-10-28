@@ -6432,3 +6432,189 @@ CREATE TABLE IF NOT EXISTS feriados (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_feriados_empresa_data ON feriados (empresa_id, data);
 CREATE INDEX IF NOT EXISTS feriados_empresa_recorrente_idx ON feriados (empresa_id, ativo, recorrente);
+
+-- Snapshot mirror of migration 0063 (SPED/EFD run history and evidence).
+-- Keep the versioned migration as the upgrade path for existing databases.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fiscal_obrigacoes_empresa_id
+  ON fiscal_obrigacoes (empresa_id, id);
+
+CREATE TABLE IF NOT EXISTS fiscal_execucoes (
+  id BIGSERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  obrigacao_id INTEGER NOT NULL,
+  periodo TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL,
+  finished_at TIMESTAMPTZ NOT NULL,
+  executed_by INTEGER REFERENCES usuarios(id),
+  versao TEXT NOT NULL,
+  execution_hash CHAR(64) NOT NULL,
+  resultado TEXT NOT NULL,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT fiscal_execucoes_obrigacao_empresa_fk FOREIGN KEY (empresa_id, obrigacao_id) REFERENCES fiscal_obrigacoes(empresa_id, id),
+  CONSTRAINT fiscal_execucoes_periodo_formato CHECK (periodo ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),
+  CONSTRAINT fiscal_execucoes_status_valido CHECK (status IN ('PENDENTE','EM_PROCESSAMENTO','VALIDADO','ERRO','ENTREGUE','NAO_SUPORTADO')),
+  CONSTRAINT fiscal_execucoes_versao_nao_vazia CHECK (btrim(versao) <> ''),
+  CONSTRAINT fiscal_execucoes_hash_formato CHECK (execution_hash ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT fiscal_execucoes_chave_idempotente UNIQUE (empresa_id, obrigacao_id, periodo, versao)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fiscal_execucoes_empresa_id ON fiscal_execucoes (empresa_id, id);
+CREATE INDEX IF NOT EXISTS fiscal_execucoes_empresa_periodo_idx ON fiscal_execucoes (empresa_id, obrigacao_id, periodo, criado_em DESC);
+
+CREATE TABLE IF NOT EXISTS fiscal_execucao_evidencias (
+  id BIGSERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  execucao_id BIGINT NOT NULL,
+  arquivo_ref TEXT NOT NULL,
+  hash_sha256 CHAR(64) NOT NULL,
+  tamanho_bytes BIGINT NOT NULL,
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+  usuario_id INTEGER REFERENCES usuarios(id),
+  resultado TEXT NOT NULL,
+  CONSTRAINT fiscal_execucao_evidencias_execucao_empresa_fk FOREIGN KEY (empresa_id, execucao_id) REFERENCES fiscal_execucoes(empresa_id, id),
+  CONSTRAINT fiscal_execucao_evidencias_hash_formato CHECK (hash_sha256 ~ '^[0-9a-f]{64}$'),
+  CONSTRAINT fiscal_execucao_evidencias_tamanho_positivo CHECK (tamanho_bytes > 0),
+  CONSTRAINT fiscal_execucao_evidencias_resultado_valido CHECK (btrim(resultado) <> '')
+);
+CREATE INDEX IF NOT EXISTS fiscal_execucao_evidencias_execucao_idx ON fiscal_execucao_evidencias (empresa_id, execucao_id, timestamp);
+
+-- Snapshot mirror of migration 0064 (ABC/cyclic counting metadata on canonical inventory).
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS inventario_id INTEGER REFERENCES inventarios(id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_movimentacoes_inventario_celula ON movimentacoes (empresa_id, inventario_id, produto_id, COALESCE(tamanho_id, 0)) WHERE inventario_id IS NOT NULL;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS modalidade TEXT NOT NULL DEFAULT 'inventario';
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS contagem_status TEXT;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS classificacao_abc TEXT;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS prioridade INTEGER;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS data_planejada DATE;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS responsavel_id INTEGER REFERENCES usuarios(id);
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS abc_periodo_inicio DATE;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS abc_periodo_fim DATE;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS abc_criterio TEXT;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS abc_faixas JSONB;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS abc_calculado_em TIMESTAMPTZ;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS abc_resultado JSONB;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS conferido_por INTEGER REFERENCES usuarios(id);
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS conferido_em TIMESTAMPTZ;
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS aprovado_por INTEGER REFERENCES usuarios(id);
+ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS aprovado_em TIMESTAMPTZ;
+DO $$ BEGIN ALTER TABLE inventarios ADD CONSTRAINT inventarios_modalidade_valida CHECK (modalidade IN ('inventario','ciclica_abc')); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE inventarios ADD CONSTRAINT inventarios_contagem_ciclica_status_valido CHECK (contagem_status IS NULL OR contagem_status IN ('PLANEJADA','EM_CONTAGEM','CONFERIDA','APROVADA','CANCELADA')); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE inventarios ADD CONSTRAINT inventarios_abc_class_valida CHECK (classificacao_abc IS NULL OR classificacao_abc IN ('A','B','C')); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_inventarios_empresa_idempotency ON inventarios (empresa_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS inventarios_ciclica_empresa_status_data ON inventarios (empresa_id, modalidade, contagem_status, data_planejada);
+ALTER TABLE itens_inventario ADD COLUMN IF NOT EXISTS unidade TEXT NOT NULL DEFAULT 'un';
+ALTER TABLE itens_inventario ADD COLUMN IF NOT EXISTS contado_por INTEGER REFERENCES usuarios(id);
+ALTER TABLE itens_inventario ADD COLUMN IF NOT EXISTS contado_em TIMESTAMPTZ;
+ALTER TABLE itens_inventario ADD COLUMN IF NOT EXISTS motivo_divergencia TEXT;
+ALTER TABLE itens_inventario ADD COLUMN IF NOT EXISTS classificacao_abc TEXT;
+ALTER TABLE itens_inventario ADD COLUMN IF NOT EXISTS prioridade INTEGER;
+ALTER TABLE itens_inventario ADD COLUMN IF NOT EXISTS movimentacao_id INTEGER REFERENCES movimentacoes(id);
+DO $$ BEGIN ALTER TABLE itens_inventario ADD CONSTRAINT itens_inventario_abc_class_valida CHECK (classificacao_abc IS NULL OR classificacao_abc IN ('A','B','C')); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS itens_inventario_abc_classe_idx ON itens_inventario (empresa_id, classificacao_abc, prioridade);
+COMMENT ON COLUMN movimentacoes.inventario_id IS 'Vínculo canônico do ajuste ao inventário que o originou; unicidade por célula torna fechamento repetível sem novo movimento.';
+COMMENT ON COLUMN inventarios.abc_criterio IS 'Critério reproduzível implementado: soma das quantidades de movimentações do tipo saída, no período e local informados, agrupadas por produto.';
+COMMENT ON COLUMN inventarios.abc_faixas IS 'Faixas cumulativas registradas na data do cálculo; os valores efetivamente usados são armazenados pelo serviço junto ao resultado.';
+COMMENT ON COLUMN itens_inventario.saldo_sistema IS 'Snapshot original imutável da abertura; quantidade contada fica em contado.';
+-- 0065 — custódia e faccionamento rastreável usando o estoque canônico.
+-- Eventos são trilha operacional, não saldo nem mecanismo de consumo paralelo.
+CREATE TABLE IF NOT EXISTS terceiros_operacionais (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  nome TEXT NOT NULL,
+  documento TEXT,
+  contato TEXT,
+  telefone TEXT,
+  email TEXT,
+  fornecedor_id INTEGER REFERENCES fornecedores(id),
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS terceiros_operacionais_empresa_idx ON terceiros_operacionais (empresa_id, ativo, nome);
+CREATE UNIQUE INDEX IF NOT EXISTS terceiros_operacionais_documento_empresa_uq
+  ON terceiros_operacionais (empresa_id, documento) WHERE documento IS NOT NULL AND documento <> '';
+
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS terceiro_id INTEGER REFERENCES terceiros_operacionais(id);
+CREATE INDEX IF NOT EXISTS ordens_fabricacao_terceiro_idx ON ordens_fabricacao (empresa_id, terceiro_id);
+
+CREATE TABLE IF NOT EXISTS terceirizacao_eventos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  ordem_id INTEGER NOT NULL REFERENCES ordens_fabricacao(id),
+  terceiro_id INTEGER NOT NULL REFERENCES terceiros_operacionais(id),
+  evento TEXT NOT NULL CHECK (evento IN ('ENVIO_INSUMO','RETORNO_INSUMO','RETORNO_PRODUTO','PERDA_PRODUTO','CUSTODIA')),
+  tipo_material TEXT NOT NULL CHECK (tipo_material IN ('insumo','produto')),
+  insumo_id INTEGER REFERENCES insumos(id),
+  produto_id INTEGER REFERENCES produtos(id),
+  proprietario_tipo TEXT NOT NULL CHECK (proprietario_tipo IN ('empresa','terceiro')),
+  proprietario_terceiro_id INTEGER REFERENCES terceiros_operacionais(id),
+  custodiante_anterior_tipo TEXT NOT NULL CHECK (custodiante_anterior_tipo IN ('empresa','terceiro')),
+  custodiante_anterior_terceiro_id INTEGER REFERENCES terceiros_operacionais(id),
+  custodiante_novo_tipo TEXT NOT NULL CHECK (custodiante_novo_tipo IN ('empresa','terceiro')),
+  custodiante_novo_terceiro_id INTEGER REFERENCES terceiros_operacionais(id),
+  quantidade NUMERIC(14,3) NOT NULL CHECK (quantidade > 0),
+  unidade TEXT NOT NULL,
+  referencia_evento_id INTEGER REFERENCES terceirizacao_eventos(id),
+  movimentacao_insumo_id INTEGER REFERENCES movimentacoes_insumos(id),
+  apontamento_id INTEGER REFERENCES ordens_apontamentos(id),
+  idempotency_key TEXT NOT NULL,
+  observacoes TEXT,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT terceirizacao_eventos_material_coerente CHECK (
+    (tipo_material = 'insumo' AND insumo_id IS NOT NULL AND produto_id IS NULL) OR
+    (tipo_material = 'produto' AND produto_id IS NOT NULL AND insumo_id IS NULL)
+  ),
+  CONSTRAINT terceirizacao_eventos_proprietario_coerente CHECK (
+    (proprietario_tipo = 'empresa' AND proprietario_terceiro_id IS NULL) OR
+    (proprietario_tipo = 'terceiro' AND proprietario_terceiro_id IS NOT NULL)
+  ),
+  CONSTRAINT terceirizacao_eventos_custodiante_anterior_coerente CHECK (
+    (custodiante_anterior_tipo = 'empresa' AND custodiante_anterior_terceiro_id IS NULL) OR
+    (custodiante_anterior_tipo = 'terceiro' AND custodiante_anterior_terceiro_id IS NOT NULL)
+  ),
+  CONSTRAINT terceirizacao_eventos_custodiante_novo_coerente CHECK (
+    (custodiante_novo_tipo = 'empresa' AND custodiante_novo_terceiro_id IS NULL) OR
+    (custodiante_novo_tipo = 'terceiro' AND custodiante_novo_terceiro_id IS NOT NULL)
+  ),
+  CONSTRAINT terceirizacao_eventos_idem_uq UNIQUE (empresa_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS terceirizacao_eventos_ordem_idx ON terceirizacao_eventos (empresa_id, ordem_id, id);
+CREATE INDEX IF NOT EXISTS terceirizacao_eventos_terceiro_idx ON terceirizacao_eventos (empresa_id, terceiro_id, criado_em);
+CREATE INDEX IF NOT EXISTS terceirizacao_eventos_referencia_idx ON terceirizacao_eventos (empresa_id, referencia_evento_id);
+CREATE INDEX IF NOT EXISTS terceirizacao_eventos_apontamento_idx ON terceirizacao_eventos (empresa_id, apontamento_id);
+COMMENT ON TABLE terceirizacao_eventos IS 'Trilha imutável de custódia e faccionamento. Não é saldo; consumo de insumos é movimentacoes_insumos e entrada do acabado segue o fluxo de apontamento/conclusão da OP.';
+COMMENT ON COLUMN ordens_fabricacao.terceiro_id IS 'Terceiro operacional responsável por facção/terceirização; a custódia detalhada fica em terceirizacao_eventos.';
+-- 0066 — snapshot histórico da conversão usada em cada item de cotação.
+-- Quantidade cotada fica na unidade de compra; origem/fator/caminho ficam congelados.
+ALTER TABLE cotacao_compra_itens ADD COLUMN IF NOT EXISTS quantidade_original NUMERIC(14,3);
+ALTER TABLE cotacao_compra_itens ADD COLUMN IF NOT EXISTS unidade_original TEXT;
+ALTER TABLE cotacao_compra_itens ADD COLUMN IF NOT EXISTS unidade_conversao_origem TEXT;
+ALTER TABLE cotacao_compra_itens ADD COLUMN IF NOT EXISTS unidade_conversao_fator NUMERIC(18,9);
+ALTER TABLE cotacao_compra_itens ADD COLUMN IF NOT EXISTS unidade_conversao_status TEXT;
+ALTER TABLE cotacao_compra_itens ADD COLUMN IF NOT EXISTS unidade_conversao_snapshot JSONB;
+ALTER TABLE cotacao_compra_itens ADD COLUMN IF NOT EXISTS unidade_conversao_em TIMESTAMPTZ;
+DO $$ BEGIN
+  ALTER TABLE cotacao_compra_itens ADD CONSTRAINT cotacao_compra_conversao_status_valido
+    CHECK (unidade_conversao_status IS NULL OR unidade_conversao_status IN ('IDENTICA','CONVERTIDA','NAO_CONVERTIDA'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+COMMENT ON COLUMN cotacao_compra_itens.unidade_conversao_snapshot IS 'Regra(s) declarada(s) e caminho exatos usados no instante de inclusão; não recalcular itens históricos quando o cadastro mudar.';
+COMMENT ON COLUMN cotacao_compra_itens.quantidade IS 'Quantidade convertida e cotada na unidade de compra registrada em unidade.';
+
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS quantidade_original NUMERIC(14,3);
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS unidade_original TEXT;
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS unidade_conversao_origem TEXT;
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS unidade_conversao_fator NUMERIC(18,9);
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS unidade_conversao_status TEXT;
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS unidade_conversao_snapshot JSONB;
+ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS unidade_conversao_em TIMESTAMPTZ;
+DO $$ BEGIN
+  ALTER TABLE itens_compra ADD CONSTRAINT itens_compra_conversao_status_valido
+    CHECK (unidade_conversao_status IS NULL OR unidade_conversao_status IN ('IDENTICA','CONVERTIDA','NAO_CONVERTIDA'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+COMMENT ON COLUMN itens_compra.unidade_conversao_snapshot IS 'Cópia do snapshot de conversão herdado do item de cotação; não recalcular compras históricas.';
+
+-- 0067 — status explícito para executor fiscal sem manifesto oficial.
+COMMENT ON COLUMN fiscal_execucoes.status IS 'Estado explícito; NAO_SUPORTADO indica ausência de manifesto/leiaute oficial e que nenhum arquivo/validação foi produzido.';
