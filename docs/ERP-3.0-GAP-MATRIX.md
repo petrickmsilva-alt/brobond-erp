@@ -303,3 +303,80 @@ entender MRP industrial. Agora:
 | GAP-P2-19 | P2 | CRM | Etapa não é "congelada" por versão: renomear `nome` de etapa antiga muda o rótulo em relatórios históricos | Histórico grava a **chave** (`estagio_novo`), que é estável; o rótulo é resolvido no cadastro atual | Baixo — relatório mostra `nome` atual |
 | GAP-P2-20 | P2 | CRM | `crm_etapas.chave` de linha legada não é revalidada (`CHECK ... NOT VALID`) | Validar exigiria reescrever dados antigos (destrutivo) | Baixo — `NOT VALID` impede linha nova inválida |
 | GAP-P3-07 | P3 | Produção | MRP não tem unidade de medida por componente nem conversão | Depende de `insumos.unidade` virar catálogo (GAP-P3-04) | Baixo |
+
+---
+
+## 10. Rodada *PR #95 — AUDITORIA INTEGRAL E HARDENING FINAL* (migration 0063..0067)
+
+**Branch:** `arena/b87f2f6e-brobond-erp` · **Baseline:** `main` (`6da5aa4`) · **Data:** 2026-10-28
+**Relatório completo:** [`docs/RELATORIO-PR95-AUDITORIA-INTEGRAL.md`](RELATORIO-PR95-AUDITORIA-INTEGRAL.md)
+
+### 10.1 Resumo desta rodada
+
+| Nível | Abertos | Fechados nesta execução |
+|---|---:|---:|
+| **P0** | **0** | 0 (auditado — nenhum encontrado) |
+| **P1** | **0** | 3 |
+| **P2** | **7** | 4 |
+| **P3** | **5** | 1 |
+
+### 10.2 Gaps corrigidos (P1)
+
+| ID | Nível | Domínio | Gap | Como foi fechado |
+|---|---|---|---|---|
+| GAP-P1-21 | P1 | Inventário | `Contagem Cíclica ABC` existia no backend (`/api/inventarios/ciclicas`) mas **não tinha entrada no menu** — invisível no ERP | Módulo próprio `contagem-ciclica-abc` (`Inventário` → `Contagem Cíclica ABC`), rota `/contagem-ciclica-abc`, página `ContagemCiclicaPage`, `ModulePage` rastreado, testes |
+| GAP-P1-22 | P1 | UX/Menu | Rota `/ordens` tinha rótulo `Cadeias de Fabricação` — incoerente com o módulo `ordens` e `Ordens de Produção` | Rótulo passa a `Ordens de Produção` (rota/recurso/backend/fluxos inalterados); palavra-chave `cadeias de fabricacao` mantida |
+| GAP-P1-23 | P1 | Compras | `Nova cotação` era **criada dentro de um `PainelInline`** na listagem — violava LISTA → PÁGINA e o P2-01 | Página própria `/cotacoes-compra/novo` (`CotacoesCompraFormPage`); botão navega; edição em `/cotacoes-compra/:id`; painel de criação removido |
+
+### 10.3 Mecanismo de auditoria de capacidades (novo)
+
+`docs/ERP-3.0-CAPACITIES.json` (134 capacidades) + `scripts/capacidades-audit.ts` + `scripts/auditar-menu.ts` §8.
+
+Regra aplicada (cada capacidade é **CAPACIDADE → API → RECURSO → TABELA → PÁGINA → ROTA → MENU → RBAC → TENANCY → TESTE**):
+
+| Regra | Quando falha |
+|---|---|
+| `CAPACIDADE_SEM_MENU` | capacidade operacional declarada sem entrada na árvore de menu |
+| `CAPACIDADE_ROTA_DIFERENTE` / `CAPACIDADE_RBAC_DIFERENTE` | rota/RBAC da capacidade diverge do módulo |
+| `ROTA_SEM_PAGINA` | rota sem página válida (PAGES_ESPECIAIS, módulo com rota direta no App.tsx, conector, branch do ModulePage ou módulo com resource) |
+| `INFRA_NO_MENU` | infra/CSI aparece no menu |
+| `CAPACIDADE_SEM_JUSTIFICATIVA` | capacidade sem `justificativa` |
+| `CAPACIDADE_RECURSO_INVALIDO` / `CAPACIDADE_TABELA_INVALIDA` | resource/tabela declarada não existe |
+| `CAPACIDADE_SEM_TESTE` (AVISO) | capability sem teste |
+| `RECURSO_SEM_DONO` | resource operacional sem módulo que o dono (ou `recursos_sem_dono_permitido`) |
+| `PLANNED_OBSOLETO` | módulo `planned` com `resource` (backend funcional) |
+
+Prova: `server/test/capacidades-audit.test.ts` (6 casos — cada regra acima dispara deliberadamente).
+
+### 10.4 PainelInline (~57 ocorrências em 24 arquivos) — classificação
+
+Ver detalhe e tabela completa em [`docs/RELATORIO-PR95-AUDITORIA-INTEGRAL.md`](RELATORIO-PR95-AUDITORIA-INTEGRAL.md) §4.
+
+| Classe | Contagem | Tratamento |
+|---|---:|---|
+| Bloco auxiliar legítimo (leitura, impressão, diagnóstico, segredo único, ajuda) | 25 | manter |
+| Child-flow do detalhe de documento (o documento já é uma página própria) | 21 | manter |
+| **Fluxo de módulo em painel** (criação/edição de entidade na listagem) | 12 | **Cotações de Compra convertida**; as demais registradas como residual P2 |
+
+### 10.5 Gaps abertos após a rodada
+
+| ID | Nível | Domínio | Gap | Status |
+|---|---|---|---|---|
+| GAP-P2-21 | P2 | Ficha | `CustoPage` cria/edita a ficha técnica em `PainelInline` | registrado (residual) |
+| GAP-P2-22 | P2 | Devoluções | `Solicitar devolução` na listagem é um `PainelInline` | registrado (residual) |
+| GAP-P2-23 | P2 | Empresas | cadastro/edição de empresa em `PainelInline` | registrado (residual) |
+| GAP-P2-24 | P2 | NCM | cadastro/edição de alíquota por NCM em `PainelInline` | registrado (residual) |
+| GAP-P2-25 | P2 | Webhooks | cadastro/edição de webhook em `PainelInline` | registrado (residual) |
+| GAP-P2-26 | P2 | Inventário | `Lançar movimentação` na grade é filho do detalhe (grade é a página) | registrado — child-flow |
+| GAP-P2-27 | P2 | Compras | `RecebimentoCompraModal` é um painel de transação na compra | registrado (residual) |
+| GAP-P3-08 | P3 | Importação | `ImportModal` é um painel de carga de dados | registrado — P3 |
+| GAP-P3-09 | P3 | Impressão | agentes/terminais têm formulário em painel no `/config/impressao` | registrado — P3 |
+| GAP-P3-10 | P3 | PDV | caixa/movimentação/scanner vivem no PDV (balcão) | registrado — P3 |
+
+### 10.6 Evidências
+
+* `npm run audit:menu` — **OK** (106 módulos, 134 capacidades; 1 AVISO `feriados`)
+* `npm run audit:ux` — **OK** (zero sobreposição nova; 6 exceções declaradas)
+* `npm run architecture:audit` — **OK** (10 AVISO de tabela sem resource — por endpoint próprio)
+* `npm test` — server **1399 pass / 0 fail** · client **880 pass / 0 fail**
+* `npm run build` / `lint` / `typecheck` — ver relatório §5

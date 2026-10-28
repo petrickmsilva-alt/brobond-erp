@@ -1,0 +1,1178 @@
+{
+  "versao": "1.0",
+  "capacidades": [
+    {
+      "id": "dashboard",
+      "label": "Meu Negócio",
+      "tipo": "modulo",
+      "rota": "/",
+      "menu": true
+    },
+    {
+      "id": "relatorios",
+      "label": "Relatórios",
+      "tipo": "modulo",
+      "rota": "/relatorios",
+      "menu": true
+    },
+    {
+      "id": "painel-comercial",
+      "label": "Painel comercial",
+      "tipo": "modulo",
+      "rota": "/comercial/painel",
+      "menu": true
+    },
+    {
+      "id": "produtos",
+      "label": "Produtos",
+      "tipo": "modulo",
+      "recurso": "produtos",
+      "tabela": "produtos",
+      "rota": "/produtos",
+      "menu": true
+    },
+    {
+      "id": "categorias",
+      "label": "Categorias",
+      "tipo": "modulo",
+      "recurso": "categorias",
+      "tabela": "categorias",
+      "rota": "/categorias",
+      "menu": true
+    },
+    {
+      "id": "cores",
+      "label": "Cores",
+      "tipo": "modulo",
+      "recurso": "cores",
+      "tabela": "cores",
+      "rota": "/cores",
+      "menu": true
+    },
+    {
+      "id": "colecoes",
+      "label": "Coleções",
+      "tipo": "modulo",
+      "recurso": "colecoes",
+      "tabela": "colecoes",
+      "rota": "/colecoes",
+      "menu": true
+    },
+    {
+      "id": "grades",
+      "label": "Grades",
+      "tipo": "modulo",
+      "recurso": "grades",
+      "tabela": "grades",
+      "rota": "/grades",
+      "menu": true
+    },
+    {
+      "id": "tamanhos",
+      "label": "Tamanhos",
+      "tipo": "modulo",
+      "recurso": "tamanhos",
+      "tabela": "tamanhos",
+      "rota": "/tamanhos",
+      "menu": true
+    },
+    {
+      "id": "medidas",
+      "label": "Tabela de Medidas",
+      "tipo": "modulo",
+      "rota": "/medidas",
+      "menu": true
+    },
+    {
+      "id": "insumos",
+      "label": "Insumos",
+      "tipo": "modulo",
+      "recurso": "insumos",
+      "tabela": "insumos",
+      "rota": "/insumos",
+      "menu": true
+    },
+    {
+      "id": "categorias-insumos",
+      "label": "Categorias de Insumos",
+      "tipo": "submodulo",
+      "recurso": "categorias_insumos",
+      "tabela": "categorias_insumos",
+      "rota": "/categorias-insumos",
+      "menu": true
+    },
+    {
+      "id": "unidades-medida",
+      "label": "Unidades de medida",
+      "tipo": "submodulo",
+      "recurso": "unidades_medida",
+      "tabela": "unidades_medida",
+      "rota": "/unidades-medida",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "conversoes-unidade",
+      "label": "Conversões de unidade",
+      "tipo": "submodulo",
+      "recurso": "unidade_conversoes",
+      "tabela": "unidade_conversoes",
+      "rota": "/conversoes-unidade",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "clientes",
+      "label": "Clientes",
+      "tipo": "modulo",
+      "recurso": "clientes",
+      "tabela": "clientes",
+      "rota": "/clientes",
+      "menu": true
+    },
+    {
+      "id": "fornecedores",
+      "label": "Fornecedores",
+      "tipo": "modulo",
+      "recurso": "fornecedores",
+      "tabela": "fornecedores",
+      "rota": "/fornecedores",
+      "menu": true
+    },
+    {
+      "id": "representantes",
+      "label": "Representantes",
+      "tipo": "modulo",
+      "recurso": "representantes",
+      "tabela": "representantes",
+      "rota": "/representantes",
+      "menu": true
+    },
+    {
+      "id": "vendas",
+      "label": "Vendas",
+      "tipo": "modulo",
+      "recurso": "vendas",
+      "tabela": "vendas",
+      "rota": "/vendas",
+      "menu": true
+    },
+    {
+      "id": "propostas",
+      "label": "Propostas comerciais",
+      "tipo": "modulo",
+      "recurso": "propostas",
+      "tabela": "propostas",
+      "rota": "/propostas",
+      "menu": true
+    },
+    {
+      "id": "catalogos",
+      "label": "Catálogos públicos",
+      "tipo": "modulo",
+      "recurso": "catalogos",
+      "tabela": "catalogos",
+      "rota": "/catalogos",
+      "menu": true
+    },
+    {
+      "id": "politicas-comerciais",
+      "label": "Políticas comerciais",
+      "tipo": "modulo",
+      "recurso": "politicas_comerciais",
+      "tabela": "politicas_comerciais",
+      "rota": "/politicas-comerciais",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "listas-preco",
+      "label": "Listas de preço",
+      "tipo": "modulo",
+      "recurso": "listas_preco",
+      "tabela": "listas_preco",
+      "rota": "/listas-preco",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "territorios",
+      "label": "Territórios",
+      "tipo": "modulo",
+      "recurso": "territorios",
+      "tabela": "territorios",
+      "rota": "/territorios",
+      "menu": true
+    },
+    {
+      "id": "equipes_comerciais",
+      "label": "Equipes comerciais",
+      "tipo": "modulo",
+      "recurso": "equipes_comerciais",
+      "tabela": "equipes_comerciais",
+      "rota": "/equipes-comerciais",
+      "menu": true
+    },
+    {
+      "id": "equipe_membros",
+      "label": "Membros de equipe",
+      "tipo": "modulo",
+      "recurso": "equipe_membros",
+      "tabela": "equipe_membros",
+      "rota": "/equipe-membros",
+      "menu": true
+    },
+    {
+      "id": "representante_hierarquia",
+      "label": "Hierarquia comercial",
+      "tipo": "modulo",
+      "recurso": "representante_hierarquia",
+      "tabela": "representante_hierarquia",
+      "rota": "/hierarquia-comercial",
+      "menu": true
+    },
+    {
+      "id": "representante_cliente",
+      "label": "Carteira de clientes",
+      "tipo": "modulo",
+      "recurso": "representante_cliente",
+      "tabela": "representante_cliente",
+      "rota": "/carteira-clientes",
+      "menu": true
+    },
+    {
+      "id": "venda_atribuicao",
+      "label": "Atribuição comercial",
+      "tipo": "modulo",
+      "recurso": "venda_atribuicao",
+      "tabela": "venda_atribuicao",
+      "rota": "/atribuicao-comercial",
+      "menu": true
+    },
+    {
+      "id": "crm-leads",
+      "label": "Leads",
+      "tipo": "modulo",
+      "recurso": "crm_leads",
+      "tabela": "crm_leads",
+      "rota": "/crm/leads",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "crm-oportunidades",
+      "label": "Oportunidades",
+      "tipo": "modulo",
+      "recurso": "crm_oportunidades",
+      "tabela": "crm_oportunidades",
+      "rota": "/crm/oportunidades",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "crm-atividades",
+      "label": "Atividades",
+      "tipo": "modulo",
+      "recurso": "crm_atividades",
+      "tabela": "crm_atividades",
+      "rota": "/crm/atividades",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "crm-motivos-perda",
+      "label": "Motivos de perda",
+      "tipo": "modulo",
+      "recurso": "crm_motivos_perda",
+      "tabela": "crm_motivos_perda",
+      "rota": "/crm/motivos-perda",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "crm-painel",
+      "label": "Painel do CRM",
+      "tipo": "modulo",
+      "rota": "/crm/painel",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "crm-agenda",
+      "label": "Agenda do CRM",
+      "tipo": "modulo",
+      "rota": "/crm/agenda",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "crm-estagio-historico",
+      "label": "Histórico de estágio",
+      "tipo": "modulo",
+      "recurso": "crm_estagio_historico",
+      "tabela": "crm_oportunidade_estagio_historico",
+      "rota": "/crm/estagio-historico",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "crm-funis",
+      "label": "Funis",
+      "tipo": "modulo",
+      "recurso": "crm_funis",
+      "tabela": "crm_funis",
+      "rota": "/crm/funis",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "crm-etapas",
+      "label": "Etapas do funil",
+      "tipo": "modulo",
+      "recurso": "crm_etapas",
+      "tabela": "crm_etapas",
+      "rota": "/crm/etapas",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "crm-origens",
+      "label": "Origens",
+      "tipo": "modulo",
+      "recurso": "crm_origens",
+      "tabela": "crm_origens",
+      "rota": "/crm/origens",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "crm-campanhas",
+      "label": "Campanhas",
+      "tipo": "modulo",
+      "recurso": "crm_campanhas",
+      "tabela": "crm_campanhas",
+      "rota": "/crm/campanhas",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "metas",
+      "label": "Metas",
+      "tipo": "modulo",
+      "recurso": "metas",
+      "tabela": "metas",
+      "rota": "/metas",
+      "menu": true
+    },
+    {
+      "id": "pdv",
+      "label": "PDV — venda balcão",
+      "tipo": "modulo",
+      "rota": "/pdv",
+      "menu": true
+    },
+    {
+      "id": "pdv-caixas",
+      "label": "Caixas do PDV",
+      "tipo": "modulo",
+      "recurso": "pdv_caixas",
+      "tabela": "pdv_caixas",
+      "rota": "/pdv-caixas",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "expedicao",
+      "label": "Expedição",
+      "tipo": "modulo",
+      "rota": "/expedicao",
+      "menu": true
+    },
+    {
+      "id": "divergencias",
+      "label": "Divergências de conferência",
+      "tipo": "submodulo",
+      "recurso": "divergencias_conferencia",
+      "tabela": "divergencias_conferencia",
+      "rota": "/divergencias",
+      "menu": true
+    },
+    {
+      "id": "envios",
+      "label": "Logística e envios",
+      "tipo": "modulo",
+      "recurso": "envios",
+      "tabela": "envios",
+      "rota": "/envios",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "devolucoes",
+      "label": "Devoluções e reversa",
+      "tipo": "modulo",
+      "recurso": "devolucoes",
+      "tabela": "devolucoes",
+      "rota": "/devolucoes",
+      "menu": true
+    },
+    {
+      "id": "estoque",
+      "label": "Estoque Físico",
+      "tipo": "modulo",
+      "rota": "/estoque",
+      "menu": true
+    },
+    {
+      "id": "movimentacoes",
+      "label": "Movimentações",
+      "tipo": "modulo",
+      "recurso": "movimentacoes",
+      "tabela": "movimentacoes",
+      "rota": "/movimentacoes",
+      "menu": true
+    },
+    {
+      "id": "inventario",
+      "label": "Inventário",
+      "tipo": "modulo",
+      "rota": "/inventario",
+      "menu": true
+    },
+    {
+      "id": "contagem-ciclica-abc",
+      "label": "Contagem Cíclica ABC",
+      "tipo": "submodulo",
+      "recurso": "inventarios",
+      "tabela": "inventarios",
+      "rota": "/contagem-ciclica-abc",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "locais",
+      "label": "Locais de Estoque",
+      "tipo": "submodulo",
+      "recurso": "locais",
+      "tabela": "locais",
+      "rota": "/locais",
+      "menu": true
+    },
+    {
+      "id": "transferencias-estoque",
+      "label": "Transferências",
+      "tipo": "modulo",
+      "recurso": "estoque_transferencias",
+      "tabela": "estoque_transferencias",
+      "rota": "/estoque/transferencias",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "reservas-estoque",
+      "label": "Reservas de estoque",
+      "tipo": "modulo",
+      "recurso": "estoque_reservas",
+      "tabela": "estoque_reservas",
+      "rota": "/estoque/reservas",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "compras",
+      "label": "Compras",
+      "tipo": "modulo",
+      "recurso": "compras",
+      "tabela": "compras",
+      "rota": "/compras",
+      "menu": true
+    },
+    {
+      "id": "cotacoes-compra",
+      "label": "Cotação de compra",
+      "tipo": "modulo",
+      "recurso": "cotacoes_compra",
+      "tabela": "cotacoes_compra",
+      "rota": "/cotacoes-compra",
+      "menu": true
+    },
+    {
+      "id": "compra-recebimentos",
+      "label": "Recebimentos de compra",
+      "tipo": "submodulo",
+      "recurso": "compra_recebimentos",
+      "tabela": "compra_recebimentos",
+      "rota": "/compra-recebimentos",
+      "menu": true
+    },
+    {
+      "id": "importar-nfe-compra",
+      "label": "Importar NF-e de entrada",
+      "tipo": "modulo",
+      "rota": "/importar-nfe-compra",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "sugestao-compra",
+      "label": "Sugestão de compra",
+      "tipo": "modulo",
+      "rota": "/sugestao-compra",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "depara-fornecedor",
+      "label": "De-Para de produtos",
+      "tipo": "submodulo",
+      "recurso": "produto_fornecedor_skus",
+      "tabela": "produto_fornecedor_skus",
+      "rota": "/depara-fornecedor",
+      "menu": true
+    },
+    {
+      "id": "homologacao-fornecedores",
+      "label": "Homologação de fornecedores",
+      "tipo": "modulo",
+      "recurso": "fornecedores",
+      "tabela": "fornecedores",
+      "rota": "/compras/fornecedores",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "planejamento-producao",
+      "label": "Planejamento de Produção",
+      "tipo": "modulo",
+      "rota": "/planejamento-producao",
+      "menu": true
+    },
+    {
+      "id": "producao-recursos",
+      "label": "Recursos de produção",
+      "tipo": "modulo",
+      "recurso": "producao_recursos",
+      "tabela": "producao_recursos",
+      "rota": "/producao/recursos",
+      "menu": true
+    },
+    {
+      "id": "producao-capacidade",
+      "label": "Capacidade e MRP",
+      "tipo": "modulo",
+      "rota": "/producao/capacidade",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "ordens",
+      "label": "Ordens de Produção",
+      "tipo": "modulo",
+      "recurso": "ordens",
+      "tabela": "ordens_fabricacao",
+      "rota": "/ordens",
+      "menu": true
+    },
+    {
+      "id": "terceiros-operacionais",
+      "label": "Terceiros e facções",
+      "tipo": "modulo",
+      "recurso": "terceiros_operacionais",
+      "tabela": "terceiros_operacionais",
+      "rota": "/terceiros-operacionais",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "fichas",
+      "label": "Ficha Técnica / BOM",
+      "tipo": "modulo",
+      "recurso": "fichas",
+      "tabela": "fichas_tecnicas",
+      "rota": "/fichas",
+      "menu": true
+    },
+    {
+      "id": "custo",
+      "label": "Custos",
+      "tipo": "modulo",
+      "rota": "/custo",
+      "menu": true
+    },
+    {
+      "id": "financeiro",
+      "label": "Financeiro",
+      "tipo": "modulo",
+      "rota": "/financeiro",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "lancamentos",
+      "label": "Lançamentos",
+      "tipo": "modulo",
+      "recurso": "lancamentos_financeiros",
+      "tabela": "lancamentos_financeiros",
+      "rota": "/lancamentos",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "plano-contas",
+      "label": "Plano de contas",
+      "tipo": "modulo",
+      "recurso": "plano_contas",
+      "tabela": "plano_contas",
+      "rota": "/financeiro/plano-contas",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "balancete",
+      "label": "Balancete",
+      "tipo": "modulo",
+      "rota": "/financeiro/balancete",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "importacoes-contabeis",
+      "label": "Importações contábeis",
+      "tipo": "submodulo",
+      "recurso": "fin_importacoes_contabeis",
+      "tabela": "fin_importacoes_contabeis",
+      "rota": "/financeiro/importacoes-contabeis",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "contas-financeiras",
+      "label": "Contas",
+      "tipo": "modulo",
+      "recurso": "contas_financeiras",
+      "tabela": "contas_financeiras",
+      "rota": "/contas-financeiras",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "transferencias",
+      "label": "Transferências",
+      "tipo": "modulo",
+      "recurso": "transferencias_financeiras",
+      "tabela": "transferencias_financeiras",
+      "rota": "/transferencias",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "comissoes",
+      "label": "Comissões",
+      "tipo": "modulo",
+      "rota": "/comissoes",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "planos_comissao",
+      "label": "Planos de comissão",
+      "tipo": "modulo",
+      "recurso": "planos_comissao",
+      "tabela": "planos_comissao",
+      "rota": "/planos-comissao",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "regras_comissao",
+      "label": "Regras de comissão",
+      "tipo": "modulo",
+      "recurso": "regras_comissao",
+      "tabela": "regras_comissao",
+      "rota": "/regras-comissao",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "investidores",
+      "label": "Investidores / Sócios",
+      "tipo": "modulo",
+      "recurso": "investidores",
+      "tabela": "investidores",
+      "rota": "/investidores",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "aportes",
+      "label": "Aportes",
+      "tipo": "modulo",
+      "recurso": "aportes",
+      "tabela": "aportes",
+      "rota": "/aportes",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "categorias-financeiras",
+      "label": "Categorias",
+      "tipo": "submodulo",
+      "recurso": "categorias_financeiras",
+      "tabela": "categorias_financeiras",
+      "rota": "/categorias-financeiras",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "centros-custo",
+      "label": "Centros de custo",
+      "tipo": "submodulo",
+      "recurso": "centros_custo",
+      "tabela": "centros_custo",
+      "rota": "/centros-custo",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "recorrencias-financeiras",
+      "label": "Recolhimentos e recorrências",
+      "tipo": "submodulo",
+      "recurso": "recorrencias_financeiras",
+      "tabela": "recorrencias_financeiras",
+      "rota": "/recorrencias-financeiras",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "documentos-fiscais",
+      "label": "Documentos fiscais",
+      "tipo": "modulo",
+      "recurso": "documentos_fiscais",
+      "tabela": "documentos_fiscais",
+      "rota": "/documentos-fiscais",
+      "menu": true
+    },
+    {
+      "id": "inutilizacoes",
+      "label": "Inutilizações",
+      "tipo": "modulo",
+      "recurso": "inutilizacoes_fiscais",
+      "tabela": "inutilizacoes_fiscais",
+      "rota": "/inutilizacoes",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "regras-fiscais",
+      "label": "Regras fiscais",
+      "tipo": "modulo",
+      "recurso": "regras_fiscais",
+      "tabela": "regras_fiscais",
+      "rota": "/regras-fiscais",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "ncm",
+      "label": "NCM / Tributação",
+      "tipo": "modulo",
+      "recurso": "impostos_ncm",
+      "tabela": "impostos_ncm",
+      "rota": "/ncm",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "fiscal-obrigacoes",
+      "label": "Obrigações fiscais",
+      "tipo": "modulo",
+      "recurso": "fiscal_obrigacoes",
+      "tabela": "fiscal_obrigacoes",
+      "rota": "/fiscal/obrigacoes",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "fiscal-calendario",
+      "label": "Calendário fiscal",
+      "tipo": "modulo",
+      "rota": "/fiscal/calendario",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "empresas",
+      "label": "Empresas",
+      "tipo": "modulo",
+      "rota": "/empresas",
+      "menu": true,
+      "rbac": "admin"
+    },
+    {
+      "id": "usuarios",
+      "label": "Usuários",
+      "tipo": "modulo",
+      "recurso": "usuarios",
+      "tabela": "usuarios",
+      "rota": "/usuarios",
+      "menu": true
+    },
+    {
+      "id": "auditoria",
+      "label": "Auditoria",
+      "tipo": "modulo",
+      "recurso": "auditoria",
+      "tabela": "auditoria",
+      "rota": "/auditoria",
+      "menu": true
+    },
+    {
+      "id": "webhooks",
+      "label": "Webhooks",
+      "tipo": "modulo",
+      "rota": "/webhooks",
+      "menu": true
+    },
+    {
+      "id": "conector-mercadolivre",
+      "label": "Mercado Livre",
+      "tipo": "modulo",
+      "rota": "/conectores/mercado-livre",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "conector-mercadopago",
+      "label": "Mercado Pago",
+      "tipo": "modulo",
+      "rota": "/conectores/mercado-pago",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "conector-nuvemshop",
+      "label": "Nuvemshop",
+      "tipo": "modulo",
+      "rota": "/conectores/nuvemshop",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "conector-instagram",
+      "label": "Instagram Shopping",
+      "tipo": "modulo",
+      "rota": "/conectores/instagram",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "commerce-produtos",
+      "label": "Produtos",
+      "tipo": "modulo",
+      "rota": "/commerce/produtos",
+      "menu": true
+    },
+    {
+      "id": "commerce-pedidos",
+      "label": "Pedidos",
+      "tipo": "modulo",
+      "rota": "/commerce/pedidos",
+      "menu": true
+    },
+    {
+      "id": "commerce-trends",
+      "label": "Trends",
+      "tipo": "modulo",
+      "rota": "/commerce/trends",
+      "menu": true
+    },
+    {
+      "id": "commerce-delivery",
+      "label": "📦 Delivery",
+      "tipo": "modulo",
+      "rota": "/commerce/delivery",
+      "menu": true
+    },
+    {
+      "id": "creators",
+      "label": "Creators",
+      "tipo": "modulo",
+      "rota": "/creators",
+      "menu": true
+    },
+    {
+      "id": "creator-matches",
+      "label": "Matches",
+      "tipo": "modulo",
+      "rota": "/matches",
+      "menu": true
+    },
+    {
+      "id": "outreach-ai",
+      "label": "Outreach AI",
+      "tipo": "modulo",
+      "rota": "/outreach-ai",
+      "menu": true
+    },
+    {
+      "id": "campanhas",
+      "label": "Campanhas",
+      "tipo": "modulo",
+      "rota": "/campanhas",
+      "menu": true
+    },
+    {
+      "id": "config",
+      "label": "Configurações",
+      "tipo": "modulo",
+      "rota": "/config",
+      "menu": true
+    },
+    {
+      "id": "ajuda",
+      "label": "Ajuda",
+      "tipo": "modulo",
+      "rota": "/ajuda",
+      "menu": true
+    },
+    {
+      "id": "cap-empresas",
+      "label": "Empresas",
+      "tipo": "submodulo",
+      "recurso": "empresas",
+      "tabela": "empresas",
+      "menu": false,
+      "justificativa": "Recurso operacional sem superfície de produto própria (consumido internamente por módulos pai)."
+    },
+    {
+      "id": "cap-estoques",
+      "label": "Estoque Físico",
+      "tipo": "submodulo",
+      "recurso": "estoques",
+      "tabela": "estoques",
+      "menu": false,
+      "justificativa": "Recurso operacional sem superfície de produto própria (consumido internamente por módulos pai)."
+    },
+    {
+      "id": "cap-estoque_insumos",
+      "label": "Estoque de Insumos",
+      "tipo": "submodulo",
+      "recurso": "estoque_insumos",
+      "tabela": "estoque_insumos",
+      "menu": false,
+      "justificativa": "Recurso operacional sem superfície de produto própria (consumido internamente por módulos pai)."
+    },
+    {
+      "id": "cap-movimentacoes_insumos",
+      "label": "Movimentações de Insumos",
+      "tipo": "submodulo",
+      "recurso": "movimentacoes_insumos",
+      "tabela": "movimentacoes_insumos",
+      "menu": false,
+      "justificativa": "Recurso operacional sem superfície de produto própria (consumido internamente por módulos pai)."
+    },
+    {
+      "id": "cap-estoque_transferencia_itens",
+      "label": "Itens da transferência",
+      "tipo": "submodulo",
+      "recurso": "estoque_transferencia_itens",
+      "tabela": "estoque_transferencia_itens",
+      "menu": false,
+      "justificativa": "Recurso operacional sem superfície de produto própria (consumido internamente por módulos pai)."
+    },
+    {
+      "id": "cap-estoque_transferencia_eventos",
+      "label": "Eventos da transferência",
+      "tipo": "submodulo",
+      "recurso": "estoque_transferencia_eventos",
+      "tabela": "estoque_transferencia_eventos",
+      "menu": false,
+      "justificativa": "Recurso operacional sem superfície de produto própria (consumido internamente por módulos pai)."
+    },
+    {
+      "id": "cap-feriados",
+      "label": "Feriados",
+      "tipo": "submodulo",
+      "recurso": "feriados",
+      "tabela": "feriados",
+      "menu": false,
+      "justificativa": "Recurso operacional sem superfície de produto própria (consumido internamente por módulos pai)."
+    },
+    {
+      "id": "cotacoes-compra-nova",
+      "label": "Nova cotação de compra",
+      "tipo": "acao",
+      "parente": "cotacoes-compra",
+      "rota": "/cotacoes-compra/novo",
+      "menu": false,
+      "justificativa": "Ação acessada pelo botão da listagem; o formulário vive em página própria (zero modal).",
+      "teste": "client/src/pages/CotacoesCompraFormPage.test.tsx"
+    },
+    {
+      "id": "cotacoes-compra-detalhe",
+      "label": "Cotação de compra (documento)",
+      "tipo": "detalhe",
+      "parente": "cotacoes-compra",
+      "rota": "/cotacoes-compra/:id",
+      "menu": false,
+      "justificativa": "Detalhe do documento em rota própria; acessado pela listagem e pela criação.",
+      "teste": "client/src/pages/CotacoesCompraPage.test.tsx"
+    },
+    {
+      "id": "ordens-detalhe",
+      "label": "Ordem de produção (documento)",
+      "tipo": "detalhe",
+      "parente": "ordens",
+      "rota": "/ordens/:id",
+      "menu": false,
+      "justificativa": "Detalhe da OP em rota própria.",
+      "teste": "client/src/pages/OrdemDetail.test.tsx"
+    },
+    {
+      "id": "ordens-apontamento",
+      "label": "Apontamento de produção",
+      "tipo": "acao",
+      "parente": "ordens",
+      "menu": false,
+      "justificativa": "Ação dentro do detalhe da OP (página própria, seção inline)."
+    },
+    {
+      "id": "ordens-concluir",
+      "label": "Conclusão da OP",
+      "tipo": "acao",
+      "parente": "ordens",
+      "menu": false,
+      "justificativa": "Ação dentro do detalhe da OP."
+    },
+    {
+      "id": "ordens-reabrir",
+      "label": "Reabertura/estorno da OP",
+      "tipo": "acao",
+      "parente": "ordens",
+      "menu": false,
+      "justificativa": "Ação dentro do detalhe da OP."
+    },
+    {
+      "id": "fiscal-obrigacao-detalhe",
+      "label": "Obrigação fiscal (detalhe)",
+      "tipo": "detalhe",
+      "parente": "fiscal-obrigacoes",
+      "rota": "/fiscal/obrigacoes/:id",
+      "menu": false,
+      "justificativa": "Detalhe da obrigação em rota própria.",
+      "teste": "client/src/pages/FiscalObrigacaoDetalhePage.test.tsx"
+    },
+    {
+      "id": "fiscal-obrigacao-execucoes",
+      "label": "Execuções de uma obrigação",
+      "tipo": "detalhe",
+      "parente": "fiscal-obrigacoes",
+      "rota": "/fiscal/obrigacoes/:id/execucoes",
+      "menu": false,
+      "justificativa": "Execuções acessadas em um clique do detalhe da obrigação.",
+      "teste": "client/src/pages/FiscalExecucoesPage.test.tsx"
+    },
+    {
+      "id": "fiscal-obrigacao-evidencias",
+      "label": "Evidências da execução",
+      "tipo": "detalhe",
+      "parente": "fiscal-obrigacoes",
+      "menu": false,
+      "justificativa": "Evidências dentro da página de execuções."
+    },
+    {
+      "id": "fiscal-sped-efd",
+      "label": "SPED/EFD",
+      "tipo": "acao",
+      "parente": "fiscal-obrigacoes",
+      "menu": false,
+      "justificativa": "Sem manifesto/leiaute oficial disponível — estado NAO_SUPORTADO; nenhum arquivo fabricado."
+    },
+    {
+      "id": "estoque-movimentacao",
+      "label": "Lançar movimentação de estoque",
+      "tipo": "acao",
+      "parente": "movimentacoes",
+      "menu": false,
+      "justificativa": "Ação dentro da grade de estoque."
+    },
+    {
+      "id": "estoque-transferencia",
+      "label": "Transferência entre locais",
+      "tipo": "acao",
+      "parente": "transferencias-estoque",
+      "menu": false,
+      "justificativa": "Ação dentro do documento de transferência."
+    },
+    {
+      "id": "estoque-reserva",
+      "label": "Reserva de estoque",
+      "tipo": "acao",
+      "parente": "reservas-estoque",
+      "menu": false,
+      "justificativa": "Ação dentro do módulo de reservas."
+    },
+    {
+      "id": "compras-recebimento",
+      "label": "Receber compra",
+      "tipo": "acao",
+      "parente": "compra-recebimentos",
+      "menu": false,
+      "justificativa": "Ação dentro do recebimento."
+    },
+    {
+      "id": "compras-homologacao",
+      "label": "Homologar fornecedor",
+      "tipo": "acao",
+      "parente": "homologacao-fornecedores",
+      "menu": false,
+      "justificativa": "Ação dentro do módulo de homologação."
+    },
+    {
+      "id": "producao-mrp",
+      "label": "MRP / necessidade de insumos",
+      "tipo": "acao",
+      "parente": "producao-capacidade",
+      "menu": false,
+      "justificativa": "Ação de leitura dentro do módulo de capacidade."
+    },
+    {
+      "id": "producao-terceiros",
+      "label": "Envio/retorno de terceiros",
+      "tipo": "acao",
+      "parente": "terceiros-operacionais",
+      "menu": false,
+      "justificativa": "Ação dentro do módulo de terceiros."
+    },
+    {
+      "id": "infra-healthcheck",
+      "label": "Healthcheck da plataforma",
+      "tipo": "infra",
+      "menu": false,
+      "justificativa": "Infraestrutura: probe de disponibilidade (Render)."
+    },
+    {
+      "id": "infra-webhook",
+      "label": "Webhook interno de entregas",
+      "tipo": "infra",
+      "parente": "webhooks",
+      "menu": false,
+      "justificativa": "Infraestrutura: recebimento de eventos externos."
+    },
+    {
+      "id": "infra-print-agent",
+      "label": "Agente de impressão",
+      "tipo": "infra",
+      "menu": false,
+      "justificativa": "Infraestrutura: agente instalado na máquina do cliente."
+    },
+    {
+      "id": "infra-auth",
+      "label": "Auth/MFA/convites",
+      "tipo": "infra",
+      "menu": false,
+      "justificativa": "Infraestrutura: sessão e autenticação."
+    }
+  ],
+  "recursos_sem_dono_permitido": {}
+}

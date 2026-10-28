@@ -867,6 +867,21 @@ export const MODULES: Module[] = [
     description: 'Contagem física e acerto de saldos. Abra uma contagem por local, digite as quantidades e gere os ajustes.',
   },
   {
+    id: 'contagem-ciclica-abc',
+    label: 'Contagem Cíclica ABC',
+    icon: Repeat,
+    space: 'erp',
+    area: 'Estoque & Suprimentos',
+    group: 'Estoque',
+    subgroup: 'Contagem cíclica',
+    kind: 'subitem',
+    keywords: 'contagem ciclica abc rotatividade giro classificacao classe a b c inspecao inventario fisica',
+    path: '/contagem-ciclica-abc',
+    resource: 'inventarios',
+    minPerfil: 'gerente',
+    description: 'Contagem rotativa por classe ABC: classifica os itens pelo giro real do período e roda a contagem continuamente.',
+  },
+  {
     id: 'locais',
     label: 'Locais de Estoque',
     icon: Building2,
@@ -1047,13 +1062,13 @@ export const MODULES: Module[] = [
   },
   {
     id: 'ordens',
-    label: 'Cadeias de Fabricação',
+    label: 'Ordens de Produção',
     icon: Cog,
     space: 'erp',
     area: 'Produção',
     group: 'Execução',
     subgroup: 'Ordens de produção',
-    keywords: 'ordens de producao op apontamentos perdas refugo faccao',
+    keywords: 'ordens de producao op cadeias de fabricacao apontamentos perdas refugo faccao',
     path: '/ordens',
     resource: 'ordens',
     description: 'Ordens de produção (OP): liberar, apontar produção e perdas, concluir, cancelar e reabrir.',
@@ -1794,6 +1809,7 @@ export const PAGES_ESPECIAIS = [
   'empresas',
   'colecoes',
   'painel-comercial',
+  'contagem-ciclica-abc',
 ] as const;
 
 /** Módulos cuja listagem abre diretamente a página de detalhe. */
@@ -1899,6 +1915,7 @@ export const MODULOS_PAGINA_PROPRIA = new Set<string>([
   'producao-capacidade',
   'fiscal-calendario',
   'balancete',
+  'contagem-ciclica-abc',
 ]);
 
 /**
