@@ -209,7 +209,7 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
   it('o breadcrumb reflete as novas áreas da Árvore Master (Vendas, Estoque & Suprimentos, Produção, Fiscal, Administração, Commerce, Creators, Utilidades Globais)', async () => {
     const casos = [
       { rota: '/vendas/123', area: 'Vendas', modulo: 'Vendas', id: '#123' },
-      { rota: '/ordens/45', area: 'Produção', modulo: 'Cadeias de Fabricação', id: '#45' },
+      { rota: '/ordens/45', area: 'Produção', modulo: 'Ordens de Produção', id: '#45' },
       { rota: '/compras/88', area: 'Estoque & Suprimentos', modulo: 'Compras', id: '#88' },
       { rota: '/fornecedores', area: 'Cadastros', modulo: 'Fornecedores' },
       { rota: '/expedicao', area: 'Vendas', modulo: 'Expedição' },
@@ -261,7 +261,7 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     // Busca sem acento por sinônimo de domínio ("ordens de producao")
     await user.clear(input);
     await user.type(input, 'ordens de producao');
-    const optOrdens = screen.getByRole('option', { name: /Cadeias de Fabricação/ });
+    const optOrdens = screen.getByRole('option', { name: /Ordens de Produção/ });
     expect(within(optOrdens).getByText('Produção → Execução')).toBeInTheDocument();
 
     // Busca por "Produtos" prioriza o módulo operacional (Cadastros) antes do planned (Commerce)

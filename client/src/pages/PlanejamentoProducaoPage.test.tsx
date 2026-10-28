@@ -138,7 +138,7 @@ describe('PlanejamentoProducaoPage', () => {
     render(<PlanejamentoProducaoPage />);
     expect(await screen.findByText('Nenhuma OP no período')).toBeInTheDocument();
     expect(screen.getByText(/Nenhuma ordem planejada/)).toBeInTheDocument();
-    expect(screen.getByText('Ir para Cadeias de Fabricação')).toBeInTheDocument();
+    expect(screen.getByText('Ir para Ordens de Produção')).toBeInTheDocument();
     expect(screen.getByText('Nenhuma necessidade de insumo')).toBeInTheDocument();
     expect(screen.queryByText(/insumo\(s\) em falta/)).not.toBeInTheDocument();
   });

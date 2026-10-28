@@ -8,6 +8,7 @@ import {
   FORM_DIRETO,
   NAV_SECTIONS,
   PAGES_ESPECIAIS,
+  MODULOS_PAGINA_PROPRIA,
   buildNavigationTree,
   moduleOfPath,
   visibleModules,
@@ -42,6 +43,7 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   estoque: '/estoque',
   movimentacoes: '/movimentacoes',
   inventario: '/inventario',
+  'contagem-ciclica-abc': '/contagem-ciclica-abc',
   locais: '/locais',
   compras: '/compras',
   'cotacoes-compra': '/cotacoes-compra',
@@ -101,11 +103,13 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     //   calendário; financeiro: plano de contas, balancete)
     // + 4 do hardening P2/P3 (P3-04: unidades de medida e conversões
     //   declaradas; P2-13: importações contábeis; P3-05/06: terceiros e facções).
-    expect(MODULES).toHaveLength(105);
+    // + 1 do PR #95 — capacidade própria "Contagem Cíclica ABC" (P2-16) sob
+    //   Estoque & Suprimentos → Estoque, com página e rota próprias.
+    expect(MODULES).toHaveLength(106);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(105);
-    expect(new Set(paths).size).toBe(105);
+    expect(new Set(ids).size).toBe(106);
+    expect(new Set(paths).size).toBe(106);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -135,7 +139,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
   });
 
   it('separa ERP CORE (91), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(91);
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(92);
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(8);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
@@ -201,6 +205,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'estoque',
       'movimentacoes',
       'inventario',
+      // CONTAGEM CÍCLICA ABC (P2-16) — capacidade própria sob Estoque.
+      'contagem-ciclica-abc',
       'locais',
       // ESTOQUE 3.0 — transferência formal (documento) e reservas
       'transferencias-estoque',
@@ -274,7 +280,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       s.areas.flatMap((a) => a.groups.flatMap((g) => g.subgroups.flatMap((sub) => sub.modules.map((m) => m.id))))
     );
     expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
-    expect(PAGES_ESPECIAIS).toHaveLength(23);
+    expect(PAGES_ESPECIAIS).toHaveLength(24);
   });
 });
 
@@ -595,5 +601,53 @@ describe('moduleOfPath (regra única de rota → módulo)', () => {
     const visiveisOperador = visibleModules({ perfil: 'operador' });
     expect(moduleOfPath('/regras-fiscais', visiveisOperador)).toBeUndefined();
     expect(moduleOfPath('/documentos-fiscais', visiveisOperador)?.id).toBe('documentos-fiscais');
+  });
+});
+
+describe('PR #95 — auditoria de capacidades (menu × árvore)', () => {
+  it('muda o label principal de Produção para "Ordens de Produção" (rota e recurso preservados)', () => {
+    const ordens = MODULES.find((m) => m.id === 'ordens');
+    expect(ordens?.label).toBe('Ordens de Produção');
+    expect(ordens?.path).toBe('/ordens');
+    expect(ordens?.resource).toBe('ordens');
+    expect(ordens?.area).toBe('Produção');
+    expect(ordens?.group).toBe('Execução');
+    expect(ordens?.subgroup).toBe('Ordens de produção');
+  });
+
+  it('adiciona a capacidade "Contagem Cíclica ABC" sob Estoque & Suprimentos → Estoque', () => {
+    const ciclo = MODULES.find((m) => m.id === 'contagem-ciclica-abc');
+    expect(ciclo?.label).toBe('Contagem Cíclica ABC');
+    expect(ciclo?.area).toBe('Estoque & Suprimentos');
+    expect(ciclo?.group).toBe('Estoque');
+    expect(ciclo?.subgroup).toBe('Contagem cíclica');
+    expect(ciclo?.path).toBe('/contagem-ciclica-abc');
+    expect(ciclo?.resource).toBe('inventarios');
+    expect(ciclo?.minPerfil).toBe('gerente');
+    expect(ciclo?.description).toBeTruthy();
+    expect(ciclo?.keywords).toContain('abc');
+    expect(PAGES_ESPECIAIS).toContain('contagem-ciclica-abc');
+    expect(MODULOS_PAGINA_PROPRIA).toContain('contagem-ciclica-abc');
+  });
+
+  it('a capacidade é descoberta pelo Command Palette (via MODULES) e pelo breadcrumb', () => {
+    // Command Palette e Breadcrumb derivam de MODULES/moduleOfPath.
+    const ciclo = MODULES.find((m) => m.id === 'contagem-ciclica-abc')!;
+    expect(moduleOfPath(ciclo.path)?.id).toBe('contagem-ciclica-abc');
+    expect(moduleOfPath('/contagem-ciclica-abc')).toBeDefined();
+    expect(MODULES.filter((m) => m.group === 'Estoque').some((m) => m.id === 'contagem-ciclica-abc')).toBe(true);
+  });
+
+  it('RBAC da capacidade: gerente descobre, operador não', () => {
+    expect(visibleModules({ perfil: 'gerente' }).map((m) => m.id)).toContain('contagem-ciclica-abc');
+    expect(visibleModules({ perfil: 'admin' }).map((m) => m.id)).toContain('contagem-ciclica-abc');
+    expect(visibleModules({ perfil: 'operador' }).map((m) => m.id)).not.toContain('contagem-ciclica-abc');
+  });
+
+  it('nenhuma rota operacional fica órfã: toda rota de módulo tem módulo dono', () => {
+    const rotas = MODULES.map((m) => m.path);
+    for (const rota of rotas) {
+      expect(moduleOfPath(rota), `rota ${rota} precisa de módulo dono`).toBeDefined();
+    }
   });
 });

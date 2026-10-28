@@ -27,6 +27,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GROUP_META, MODULES, MODULE_GROUPS, PAGES_ESPECIAIS } from '../client/src/modules';
 import { RESOURCES } from '../server/src/resources';
+import { auditarCapacidades, carregarRegistro } from './capacidades-audit';
 
 const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ler = (...p: string[]) => readFileSync(path.join(raiz, ...p), 'utf8');
@@ -132,6 +133,11 @@ const ALCADA_POR_PERMISSAO_COMERCIAL = new Set(['catalogos', 'politicas_comercia
  * "solto" de verdade e o aviso volta.
  */
 const ALCADA_POR_GUARDA_PROPRIA: Record<string, string> = {
+  // CONTAGEM CÍCLICA ABC — a leitura dos planos é aberta (checkAccess inventarios
+  // 'read'), mas PLANEJAR um novo plano exige gerente/admin. A alçada fica na
+  // guarda do endpoint, não no recurso genérico:
+  // `exigirGestor(actor)` em server/src/contagemCiclica.ts (criarContagemCiclica).
+  'contagem-ciclica-abc': 'exigirGestor em contagemCiclica.ts (criarContagemCiclica) + checkAccess(RESOURCES.inventarios) na leitura',
   // Homologar fornecedor é decisão de gestão, mas LER o cadastro de fornecedores
   // é operação do dia a dia (comprador precisa do fornecedor na cotação e no
   // pedido). Restringir o recurso `fornecedores` no servidor quebraria compras
@@ -295,6 +301,15 @@ for (const r of Object.values(RESOURCES)) {
 }
 
 // ---------------------------------------------------------------------------
+// 8. AUDITORIA DE CAPACIDADES (seção 7 — CAPACIDADE → API → RECURSO → TABELA
+//    → PÁGINA → ROTA → MENU → RBAC → TENANCY → TESTE)
+// ---------------------------------------------------------------------------
+const regCap = carregarRegistro();
+const cap = auditarCapacidades(regCap);
+for (const a of cap.erros) achados.push(a);
+for (const a of cap.avisos) achados.push(a);
+
+// ---------------------------------------------------------------------------
 // Relatório
 // ---------------------------------------------------------------------------
 const erros = achados.filter((a) => a.nivel === 'ERRO');
@@ -306,6 +321,9 @@ console.log(`│ grupos de navegação ..... ${MODULE_GROUPS.length}`);
 console.log(`│ recursos de API ......... ${Object.keys(RESOURCES).length}`);
 console.log(`│ recursos navegáveis ..... ${recursosNavegaveis.size}`);
 console.log(`│ tabelas com empresa_id .. ${tabelasComEmpresaId.size}`);
+console.log(`│ capacidades declaradas .. ${cap.contadores.capacidades}`);
+console.log(`│ capacidades no menu ..... ${cap.contadores.capacidades_menu}`);
+console.log(`│ capacidades de infra .... ${cap.contadores.capacidades_infra}`);
 console.log(`│ rotas públicas (pré-auth) ${linhaAuth >= 0 ? 'verificadas' : 'NÃO VERIFICADAS'}`);
 console.log('╰───────────────────────────────────────────────────────────────────');
 

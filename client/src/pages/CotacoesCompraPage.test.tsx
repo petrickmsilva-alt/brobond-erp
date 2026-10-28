@@ -37,6 +37,14 @@ vi.mock('../auth/AuthContext', () => ({
   useAuth: () => authMock,
 }));
 
+// A página navega para a PÁGINA PRÓPRIA de criação (ZERO MODAL) — nunca abre
+// um painel sobreposto à listagem.
+const navigateMock = vi.fn();
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => navigateMock,
+  useParams: () => ({}),
+}));
+
 const apiGet = vi.mocked(api.get);
 const apiPost = vi.mocked(api.post);
 
@@ -252,19 +260,15 @@ describe('CotacoesCompraPage', () => {
     expect(screen.getByRole('button', { name: /Tentar de novo/ })).toBeTruthy();
   });
 
-  it('nova cotação exige título antes do POST', async () => {
+  it('o botão "Nova cotação" NAVEGAR para a página própria (zero modal, sem formulário na listagem)', async () => {
     mockGet(COMPARATIVO, { rows: [], total: 0, page: 1, pageSize: 100 });
     montar();
-    fireEvent.click(await screen.findByRole('button', { name: /Nova cotação/ }));
-    expect(await screen.findByText('Nova cotação de compra')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Criar cotação/ }));
-    await waitFor(() => expect(screen.getByText('Dê um título à cotação.')).toBeTruthy());
+    const botoes = await screen.findAllByRole('button', { name: /Nova cotação/ });
+    fireEvent.click(botoes[0]);
+    expect(navigateMock).toHaveBeenCalledWith('/cotacoes-compra/novo');
+    // Nenhum formulário de criação é aberto sobreposto à listagem.
+    expect(screen.queryByText('Nova cotação de compra')).not.toBeInTheDocument();
     expect(apiPost).not.toHaveBeenCalled();
-
-    fireEvent.change(screen.getByLabelText('Título'), { target: { value: 'Cotação de linhas' } });
-    apiPost.mockResolvedValue({ id: 55 } as never);
-    fireEvent.click(screen.getByRole('button', { name: /Criar cotação/ }));
-    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/cotacoes_compra', { titulo: 'Cotação de linhas', criterio: 'menor_preco', prazo_validade: null }));
   });
 
   it('registrar cotação de fornecedor envia só os itens com preço preenchido', async () => {

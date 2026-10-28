@@ -211,7 +211,7 @@ export default function ProducaoCapacidadePage() {
                 <AlertTriangle className="h-4 w-4" /> {capacidade.sem_recurso.length} ordem(ns) sem recurso alocado ({formatNumber(capacidade.resumo.pecas_sem_recurso)} peças)
               </h3>
               <p className="mt-1 text-xs text-amber-700">
-                Sem recurso a carga não entra em nenhum recurso — o gargalo pareceria menor do que é. Aloque a OP em Produção › Cadeias de Fabricação.
+                Sem recurso a carga não entra em nenhum recurso — o gargalo pareceria menor do que é. Aloque a OP em Produção › Ordens de Produção.
               </p>
               <ul className="mt-2 grid gap-1 text-sm text-amber-800 sm:grid-cols-2">
                 {capacidade.sem_recurso.slice(0, 12).map((o) => (

@@ -1,5 +1,5 @@
 import { Fragment, lazy, Suspense } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from './auth/AuthContext';
 import Layout from './components/Layout';
@@ -35,6 +35,8 @@ const CadastroComercialFormPage = lazy(() => import('./pages/CadastroComercialFo
 const MetaAcompanhamentoPage = lazy(() => import('./pages/MetaAcompanhamentoPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
+const CotacoesCompraPage = lazy(() => import('./pages/CotacoesCompraPage'));
+const CotacoesCompraFormPage = lazy(() => import('./pages/CotacoesCompraFormPage'));
 const FichaDetail = lazy(() => import('./pages/FichaDetail'));
 const ForgotPage = lazy(() => import('./pages/ForgotReset').then((m) => ({ default: m.ForgotPage })));
 const ResetPage = lazy(() => import('./pages/ForgotReset').then((m) => ({ default: m.ResetPage })));
@@ -88,6 +90,12 @@ function ModuleAccess({ moduleId, children }: { moduleId: string; children: JSX.
   const { user } = useAuth();
   if (!visibleModules(user).some((m) => m.id === moduleId)) return <Navigate to="/" replace />;
   return children;
+}
+
+/** Cotações de compra — documento em rota própria (/cotacoes-compra/:id). */
+function CotacoesCompraDetalhe() {
+  const { id } = useParams();
+  return <CotacoesCompraPage initialId={id ? Number(id) : null} />;
 }
 
 export default function App() {
@@ -413,6 +421,24 @@ export default function App() {
             <Route path="fiscal/obrigacoes/:id" element={<ModuleAccess moduleId="fiscal-obrigacoes"><FiscalObrigacaoDetalhePage /></ModuleAccess>} />
             <Route path="compras/:id" element={<OrderPage tipo="compra" />} />
             <Route path="ordens/:id" element={<OrdemDetail />} />
+            {/* Cotações de compra — ZERO MODAL: criação em /cotacoes-compra/novo
+                e o documento em /cotacoes-compra/:id. Nenhum formulário sobreposto. */}
+            <Route
+              path="cotacoes-compra/novo"
+              element={
+                <ModuleAccess moduleId="cotacoes-compra">
+                  <CotacoesCompraFormPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="cotacoes-compra/:id"
+              element={
+                <ModuleAccess moduleId="cotacoes-compra">
+                  <CotacoesCompraDetalhe />
+                </ModuleAccess>
+              }
+            />
             <Route path="fichas/:id" element={<FichaDetail />} />
             <Route path="dev/componentes" element={<AdminOnly><ComponentCatalog /></AdminOnly>} />
             {/* ZERO MODAL — LISTA → PÁGINA em todo o ERP.

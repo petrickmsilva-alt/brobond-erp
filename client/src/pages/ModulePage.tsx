@@ -84,6 +84,8 @@ import {
 const EstoqueGradePage = lazy(() => import('./EstoqueGradePage'));
 const MedidasPage = lazy(() => import('./MedidasPage'));
 const InventarioModulePage = lazy(() => import('./InventarioModulePage'));
+// Contagem Cíclica ABC — capacidade própria sob Estoque & Suprimentos → Estoque.
+const ContagemCiclicaPage = lazy(() => import('./ContagemCiclicaPage'));
 const CustoPage = lazy(() => import('./CustoPage'));
 const PlanejamentoProducaoPage = lazy(() => import('./PlanejamentoProducaoPage'));
 const RelatoriosPage = lazy(() => import('./RelatoriosPage'));
@@ -148,6 +150,7 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'estoque') return <Suspense fallback={<SubPageLoading />}><EstoqueGradePage /></Suspense>;
   if (module.id === 'medidas') return <Suspense fallback={<SubPageLoading />}><MedidasPage /></Suspense>;
   if (module.id === 'inventario') return <Suspense fallback={<SubPageLoading />}><InventarioModulePage /></Suspense>;
+  if (module.id === 'contagem-ciclica-abc') return <Suspense fallback={<SubPageLoading />}><ContagemCiclicaPage /></Suspense>;
   if (module.id === 'custo') return <Suspense fallback={<SubPageLoading />}><CustoPage /></Suspense>;
   if (module.id === 'planejamento-producao') return <Suspense fallback={<SubPageLoading />}><PlanejamentoProducaoPage /></Suspense>;
   if (module.id === 'relatorios') return <Suspense fallback={<SubPageLoading />}><RelatoriosPage /></Suspense>;

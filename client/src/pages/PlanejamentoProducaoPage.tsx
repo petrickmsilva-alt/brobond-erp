@@ -244,7 +244,7 @@ export default function PlanejamentoProducaoPage() {
                     description="Nenhuma ordem planejada, liberada, em produção ou parcial entre as datas escolhidas. Ajuste o período ou crie uma OP."
                     action={
                       <Link to="/ordens" className="btn-primary">
-                        Ir para Cadeias de Fabricação
+                        Ir para Ordens de Produção
                       </Link>
                     }
                   />

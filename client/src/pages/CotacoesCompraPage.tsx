@@ -15,7 +15,9 @@
 //    desabilitados com explicação, não simplesmente escondidos.
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import {
+  ArrowLeft,
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
@@ -99,7 +101,8 @@ type Comparativo = {
 type CotacaoResumo = { id: number; titulo: string; status: string; criterio: string | null; compra_id: number | null; criado_em: string };
 type Opcao = { id: number; nome: string; unidade?: string | null; unidade_compra?: string | null };
 
-const CRITERIOS = [
+/** Critérios de decisão — fonte única, compartilhada com a página de criação. */
+export const CRITERIOS = [
   { value: 'menor_preco', label: 'Menor preço por item', hint: 'Escolhe o fornecedor mais barato de cada item. Pode gerar pedido com mais de um fornecedor.' },
   { value: 'menor_preco_total', label: 'Menor preço total (fornecedor único)', hint: 'Compara só quem cotou TODOS os itens, já considerando o frete.' },
   { value: 'prazo', label: 'Menor prazo de entrega', hint: 'Prefere quem entrega antes; desempate por preço.' },
@@ -130,9 +133,10 @@ function podeDecidir(perfil?: string): boolean {
   return perfil === 'admin' || perfil === 'gerente';
 }
 
-export default function CotacoesCompraPage() {
+export default function CotacoesCompraPage({ initialId }: { initialId?: number | null } = {}) {
   const toast = useToast();
   const auth = useAuth();
+  const navigate = useNavigate();
   const perfil = auth.user?.perfil;
   const gerente = podeDecidir(perfil);
 
@@ -147,12 +151,6 @@ export default function CotacoesCompraPage() {
 
   const [insumos, setInsumos] = useState<Opcao[]>([]);
   const [fornecedores, setFornecedores] = useState<Opcao[]>([]);
-
-  const [novaAberta, setNovaAberta] = useState(false);
-  const [novoTitulo, setNovoTitulo] = useState('');
-  const [novoCriterio, setNovoCriterio] = useState<string>('menor_preco');
-  const [novoPrazo, setNovoPrazo] = useState('');
-  const [salvando, setSalvando] = useState(false);
 
   const [addItemAberto, setAddItemAberto] = useState(false);
   const [itemInsumo, setItemInsumo] = useState('');
@@ -179,13 +177,14 @@ export default function CotacoesCompraPage() {
     try {
       const d = await api.get<ListResult<CotacaoResumo>>('/cotacoes_compra?page=1&pageSize=100&sort=id&dir=desc');
       setLista(d.rows);
-      setSelecionada((atual) => atual ?? (d.rows[0] ? Number(d.rows[0].id) : null));
+      const preferida = initialId ? Number(initialId) : null;
+      setSelecionada((atual) => atual ?? preferida ?? (d.rows[0] ? Number(d.rows[0].id) : null));
     } catch (e) {
       setErroLista(mensagemErro(e, 'Não foi possível carregar as cotações.'));
     } finally {
       setCarregandoLista(false);
     }
-  }, []);
+  }, [initialId]);
 
   const carregarComparativo = useCallback(async (id: number) => {
     setCarregandoComp(true);
@@ -231,31 +230,6 @@ export default function CotacoesCompraPage() {
   // -------------------------------------------------------------------------
   // Ações
   // -------------------------------------------------------------------------
-  async function criarCotacao() {
-    if (!novoTitulo.trim()) {
-      toast.error('Dê um título à cotação.');
-      return;
-    }
-    setSalvando(true);
-    try {
-      const criada = await api.post<{ id: number }>('/cotacoes_compra', {
-        titulo: novoTitulo.trim(),
-        criterio: novoCriterio,
-        prazo_validade: novoPrazo || null,
-      });
-      toast.success('Cotação criada. Adicione os itens e convide os fornecedores.');
-      setNovaAberta(false);
-      setNovoTitulo('');
-      setNovoPrazo('');
-      await carregarLista();
-      setSelecionada(Number(criada.id));
-    } catch (e) {
-      toast.error(mensagemErro(e, 'Não foi possível criar a cotação.'));
-    } finally {
-      setSalvando(false);
-    }
-  }
-
   async function adicionarItem() {
     if (!selecionada) return;
     if (!itemInsumo) {
@@ -435,7 +409,8 @@ export default function CotacoesCompraPage() {
             <button type="button" className="btn btn-secondary" onClick={() => void recarregar()}>
               <RefreshCw className="h-4 w-4" aria-hidden /> Recarregar
             </button>
-            <button type="button" className="btn btn-accent" onClick={() => setNovaAberta(true)}>
+            {/* ZERO MODAL — criação de cotação vive em PÁGINA própria (/cotacoes-compra/novo). */}
+            <button type="button" className="btn btn-accent" onClick={() => navigate('/cotacoes-compra/novo')}>
               <Plus className="h-4 w-4" aria-hidden /> Nova cotação
             </button>
           </div>
@@ -472,7 +447,7 @@ export default function CotacoesCompraPage() {
               title="Nenhuma cotação ainda"
               description="Crie a primeira cotação para comparar preços entre fornecedores antes de emitir o pedido."
               action={
-                <button type="button" className="btn btn-accent" onClick={() => setNovaAberta(true)}>
+                <button type="button" className="btn btn-accent" onClick={() => navigate('/cotacoes-compra/novo')}>
                   <Plus className="h-4 w-4" aria-hidden /> Nova cotação
                 </button>
               }
@@ -534,6 +509,14 @@ export default function CotacoesCompraPage() {
               <div className="card p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
+                    {initialId != null && (
+                      <Link
+                        to="/cotacoes-compra"
+                        className="mb-1 inline-flex items-center gap-1 text-xs font-medium text-slate-400 hover:text-navy-700"
+                      >
+                        <ArrowLeft className="h-3.5 w-3.5" /> Voltar para as cotações
+                      </Link>
+                    )}
                     <h2 className="text-base font-semibold text-navy-900 dark:text-white">
                       #{comp.cotacao.id} {comp.cotacao.titulo}
                     </h2>
@@ -784,49 +767,6 @@ export default function CotacoesCompraPage() {
           )}
         </div>
       </div>
-
-      {/* ------------------------------------------------------- nova cotação */}
-      <PainelInline
-        open={novaAberta}
-        onClose={() => setNovaAberta(false)}
-        title="Nova cotação de compra"
-        footer={
-          <>
-            <button type="button" className="btn-secondary" onClick={() => setNovaAberta(false)} disabled={salvando}>Cancelar</button>
-            <button type="button" className="btn-accent" disabled={salvando} onClick={() => void criarCotacao()}>
-              {salvando ? 'Criando...' : 'Criar cotação'}
-            </button>
-          </>
-        }
-      >
-        <div className="space-y-3">
-          <div>
-            <label className="label" htmlFor="cot-titulo">Título</label>
-            <input
-              id="cot-titulo"
-              className="input w-full"
-              value={novoTitulo}
-              onChange={(e) => setNovoTitulo(e.target.value)}
-              placeholder="Ex.: Cotação de tecidos — outubro"
-              autoFocus
-            />
-          </div>
-          <div>
-            <label className="label" htmlFor="cot-criterio">Critério de decisão</label>
-            <select id="cot-criterio" className="input w-full" value={novoCriterio} onChange={(e) => setNovoCriterio(e.target.value)}>
-              {CRITERIOS.map((c) => (
-                <option key={c.value} value={c.value}>{c.label}</option>
-              ))}
-            </select>
-            <p className="mt-1 text-xs text-slate-400">{CRITERIOS.find((c) => c.value === novoCriterio)?.hint}</p>
-          </div>
-          <div>
-            <label className="label" htmlFor="cot-prazo">Validade das propostas</label>
-            <input id="cot-prazo" type="date" className="input w-full" value={novoPrazo} onChange={(e) => setNovoPrazo(e.target.value)} />
-          </div>
-          <Alert tone="blue">Depois de criada, adicione os itens e convide os fornecedores. Convidar já abre a cotação para respostas.</Alert>
-        </div>
-      </PainelInline>
 
       {/* ------------------------------------------------------- adicionar item */}
       <PainelInline
