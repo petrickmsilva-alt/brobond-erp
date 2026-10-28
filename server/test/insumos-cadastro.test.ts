@@ -99,9 +99,14 @@ test('os campos do formulário são exatamente os que existem em `insumos` — n
   const nomes = r.fields.map((f) => f.name);
   assert.deepEqual(
     nomes,
-    ['codigo_insumo', 'nome', 'categoria_id', 'unidade', 'ativo', 'fornecedor_id', 'custo_medio', 'criado_em', 'atualizado_em'],
+    ['codigo_insumo', 'nome', 'categoria_id', 'unidade', 'unidade_compra', 'ativo', 'fornecedor_id', 'custo_medio', 'criado_em', 'atualizado_em'],
     'o formulário usa os campos reais da tabela insumos'
   );
+  // `unidade_compra` EXISTE em `insumos` (migration 0060, P3-04): é como o
+  // insumo é COMPRADO (rolo) quando difere da unidade de uso (metro). A
+  // conversão correspondente é declarada em `unidade_conversoes` — o ERP não
+  // estima fator, e o campo é opcional (vazio = compra na unidade de uso).
+  assert.equal(nomes.includes('unidade_compra'), true, 'unidade de compra (0060)');
   // `codigo_insumo` e `categoria_id` EXISTEM em `insumos` (migration 0041) e são
   // identificador operacional e agrupamento — não são campos inventados.
   assert.ok(nomes.includes('codigo_insumo'), 'código operacional do insumo (0041)');

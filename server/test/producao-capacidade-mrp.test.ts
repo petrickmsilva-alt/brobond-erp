@@ -276,9 +276,27 @@ test('M) MRP declara o que é, o que cobre e o que NÃO cobre — e não cria co
   assert.equal(out.calculo.tipo, 'mrp_planejamento_necessidade');
   assert.equal(out.calculo.cria_pedido_de_compra, false);
   assert.ok(String(out.calculo.titulo).includes('planejamento/necessidade'));
-  assert.ok(out.calculo.nao_coberto.includes('lead time de compra e de produção'));
-  assert.ok(out.calculo.nao_coberto.some((x: string) => x.includes('capacidade finita')));
+  // A declaração de escopo é o contrato do MRP: se a implementação passa a
+  // cobrir algo, o texto muda JUNTO — e o teste exige a lista NOVA, mais
+  // específica. Nada aqui foi afrouxado: os itens que continuam fora do escopo
+  // seguem declarados (e são justamente os que exigiriam APS/lote econômico).
+  assert.ok(out.calculo.nao_coberto.some((x: string) => x.includes('lote mínimo')), 'lote econômico segue declarado como fora do escopo');
+  assert.ok(out.calculo.nao_coberto.some((x: string) => x.includes('sequenciamento')), 'APS/sequenciamento segue declarado como fora do escopo');
+  // P2-15: o calendário de feriados passou a ser COBERTO (migration 0062) — o
+  // que sai do escopo agora é o feriado MÓVEL derivado (Carnaval etc.), que a
+  // empresa cadastra por ano.
+  assert.ok(out.calculo.coberto.some((x: string) => x.includes('feriados')), 'calendário de feriados passou a ser COBERTO');
+  assert.ok(out.calculo.calendario, 'o MRP devolve o calendário que usou');
+  assert.equal(typeof out.calculo.calendario.dias_uteis, 'number');
   assert.ok(out.calculo.coberto.some((x: string) => x.includes('compras abertas')));
+  assert.ok(out.calculo.coberto.some((x: string) => x.includes('lead time')), 'lead time passou a ser COBERTO (fornecedores.prazo_entrega_dias)');
+  assert.ok(out.calculo.coberto.some((x: string) => x.includes('consumo REAL')), 'consumo real da OP passou a ser COBERTO');
+  assert.ok(out.calculo.coberto.some((x: string) => x.includes('multinível')), 'BOM multinível passou a ser COBERTO');
+  assert.ok(out.calculo.coberto.some((x: string) => x.includes('capacidade produtiva')), 'capacidade passou a ser sinalizada no MRP');
+  assert.equal(out.calculo.cria_pedido_de_compra, false);
+  assert.ok(out.calculo.bom_multinivel, 'a resposta declara a explosão multinível');
+  assert.ok(out.calculo.bom_multinivel.limite_de_profundidade > 0);
+  assert.deepEqual(out.calculo.bom_multinivel.ciclos, [], 'sem BOM circular na base de teste');
 });
 
 test('N) MRP não vaza dados de outra empresa', async () => {

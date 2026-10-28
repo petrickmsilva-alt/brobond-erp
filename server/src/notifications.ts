@@ -22,7 +22,14 @@ import { labelOf } from './store';
 
 const fmtMoney = (n: number) => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-type Evento = 'estoque_minimo' | 'insumo_minimo' | 'op_concluida' | 'pedido_faturado' | 'compra_recebida' | 'estoque_zerado';
+type Evento =
+  | 'estoque_minimo'
+  | 'insumo_minimo'
+  | 'op_concluida'
+  | 'pedido_faturado'
+  | 'compra_recebida'
+  | 'estoque_zerado'
+  | 'crm_lembrete';
 
 type NotifOpts = {
   assunto: string;
@@ -49,6 +56,11 @@ function habilitado(evento: Evento): boolean {
     case 'pedido_faturado':
     case 'compra_recebida':
       return process.env.NOTIFICAR_PEDIDO === 'true';
+    // Lembrete de CRM é OPCIONAL e vem desligado: sem SMTP configurado, o
+    // lembrete continua aparecendo na Agenda (hoje/atrasadas/próximas) e não
+    // faz sentido carimbar "enviado" o que não foi enviado.
+    case 'crm_lembrete':
+      return process.env.NOTIFICAR_CRM_LEMBRETE === 'true';
     default:
       return false;
   }
@@ -192,6 +204,51 @@ export async function notificarCompraRecebida(compraId: number, fornecedorId: nu
   });
 }
 
+/** O canal de lembrete do CRM está ligado? (o agendador consulta ANTES de carimbar) */
+export function crmLembreteHabilitado(): boolean {
+  return habilitado('crm_lembrete');
+}
+
+/**
+ * Lembrete de atividade do CRM (chamado pelo agendador, não pela tela).
+ *
+ * O disparo é IDEMPOTENTE por construção: quem chama já reivindicou a atividade
+ * com `UPDATE ... WHERE lembrete_enviado_em IS NULL` (ver
+ * `dispararLembretesCrm` em `crm.ts`). Aqui só resta notificar — e o canal é o
+ * mesmo dos outros avisos do ERP (SMTP configurado em Configurações).
+ *
+ * Sem SMTP configurado a função termina sem erro: o carimbo já foi gravado e o
+ * lembrete continua visível em CRM › Agenda (hoje/atrasadas/próximas).
+ */
+export async function notificarLembreteCrm(params: {
+  empresaId: number;
+  atividadeId: number;
+  tipo: string;
+  resumo: string;
+  quando: unknown;
+  prioridade: string;
+  lead: string | null;
+  oportunidade: string | null;
+}): Promise<void> {
+  const quando = params.quando ? new Date(String(params.quando)) : null;
+  const quandoTxt = quando && !Number.isNaN(quando.getTime()) ? quando.toLocaleString('pt-BR') : '—';
+  const alvo = params.oportunidade ?? params.lead ?? 'sem vínculo';
+  await enviar({
+    evento: 'crm_lembrete',
+    assunto: `⏰ Lembrete CRM: ${params.tipo} — ${alvo}`,
+    html: `
+      <h3 style="color:#1B2A4A;margin-top:0;">Lembrete de atividade</h3>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr><td style="padding:4px 0;color:#666;">Atividade:</td><td style="padding:4px 0;font-weight:bold;">#${params.atividadeId} · ${params.tipo}</td></tr>
+        <tr><td style="padding:4px 0;color:#666;">Vínculo:</td><td style="padding:4px 0;">${alvo}</td></tr>
+        <tr><td style="padding:4px 0;color:#666;">Quando:</td><td style="padding:4px 0;">${quandoTxt}</td></tr>
+        <tr><td style="padding:4px 0;color:#666;">Prioridade:</td><td style="padding:4px 0;">${params.prioridade}</td></tr>
+        <tr><td style="padding:4px 0;color:#666;">Resumo:</td><td style="padding:4px 0;">${params.resumo || '—'}</td></tr>
+      </table>
+      <p style="margin-top:16px;">Abra <strong>CRM › Agenda</strong> para concluir ou remarcar.</p>`,
+  });
+}
+
 /** Verificação periódica de estoques mínimos (chamada pelo dashboard ou cron). */
 export async function verificarAlertasEstoque(): Promise<{ produtos: number; insumos: number }> {
   const s = getStore();
@@ -228,6 +285,7 @@ export function notificacoesStatus() {
       op_concluida: habilitado('op_concluida'),
       pedido_faturado: habilitado('pedido_faturado'),
       compra_recebida: habilitado('compra_recebida'),
+      crm_lembrete: habilitado('crm_lembrete'),
     },
   };
 }

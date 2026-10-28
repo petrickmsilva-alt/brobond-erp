@@ -6318,3 +6318,117 @@ UPDATE crm_oportunidades o
    AND e.empresa_id = o.empresa_id
    AND f.padrao
    AND e.chave = o.etapa;
+
+-- ----------------------------------------------------------------------------
+-- CRM 3.0 — FECHAMENTO DO HARDENING P2/P3 (espelho da migration 0058)
+--
+-- O schema base precisa conhecer estas colunas: o recurso declara o campo e a
+-- API grava nele. A regra de dados (normalização de `chave`, renumeração de
+-- `ordem`, VALIDATE da constraint) continua exclusiva da cadeia versionada —
+-- aqui entra apenas a ESTRUTURA, idempotente como o resto deste arquivo.
+-- ----------------------------------------------------------------------------
+ALTER TABLE crm_oportunidade_estagio_historico ADD COLUMN IF NOT EXISTS funil_id INTEGER;
+ALTER TABLE crm_oportunidade_estagio_historico ADD COLUMN IF NOT EXISTS estagio_anterior_id INTEGER;
+ALTER TABLE crm_oportunidade_estagio_historico ADD COLUMN IF NOT EXISTS estagio_novo_id INTEGER;
+ALTER TABLE crm_oportunidade_estagio_historico ADD COLUMN IF NOT EXISTS estagio_anterior_nome TEXT;
+ALTER TABLE crm_oportunidade_estagio_historico ADD COLUMN IF NOT EXISTS estagio_novo_nome TEXT;
+ALTER TABLE crm_oportunidade_estagio_historico ADD COLUMN IF NOT EXISTS usuario_nome TEXT;
+ALTER TABLE crm_oportunidade_estagio_historico ADD COLUMN IF NOT EXISTS snapshot_versao SMALLINT NOT NULL DEFAULT 0;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_crm_funis_empresa_id
+  ON crm_funis (empresa_id, id);
+
+CREATE INDEX IF NOT EXISTS crm_estagio_hist_etapa_nova_idx
+  ON crm_oportunidade_estagio_historico (empresa_id, estagio_novo_id);
+
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS score_classificacao TEXT;
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS score_fatores JSONB;
+
+ALTER TABLE crm_atividades ADD COLUMN IF NOT EXISTS lembrete_enviado_em TIMESTAMPTZ;
+ALTER TABLE crm_atividades ADD COLUMN IF NOT EXISTS cancelada_em TIMESTAMPTZ;
+ALTER TABLE crm_atividades ADD COLUMN IF NOT EXISTS motivo_cancelamento TEXT;
+
+CREATE INDEX IF NOT EXISTS crm_atividades_lembrete_pendente_idx
+  ON crm_atividades (empresa_id, lembrete_em)
+  WHERE status = 'pendente' AND lembrete_enviado_em IS NULL;
+
+-- ============================================================================
+-- FINANCEIRO 3.0 — IMPORTAÇÃO CONTÁBIL (espelho da migration 0059)
+-- Cabeçalho do lote + agrupamento das partidas no livro único.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS fin_importacoes_contabeis (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  hash TEXT NOT NULL,
+  arquivo TEXT,
+  competencia DATE,
+  entradas INTEGER NOT NULL DEFAULT 0,
+  partidas INTEGER NOT NULL DEFAULT 0,
+  total_debitos NUMERIC(14,2) NOT NULL DEFAULT 0,
+  total_creditos NUMERIC(14,2) NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'aplicada',
+  observacoes TEXT,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS fin_importacoes_contabeis_hash_unico ON fin_importacoes_contabeis (empresa_id, hash);
+CREATE INDEX IF NOT EXISTS fin_importacoes_contabeis_empresa_idx ON fin_importacoes_contabeis (empresa_id, competencia DESC, criado_em DESC);
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS partida_id INTEGER;
+CREATE INDEX IF NOT EXISTS lancamentos_financeiros_partida_idx ON lancamentos_financeiros (empresa_id, documento_origem_recurso, documento_origem_id, partida_id);
+
+-- ============================================================================
+-- ESTOQUE 3.0 — UNIDADES DE MEDIDA E CONVERSÃO DECLARADA (espelho da 0060)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS unidades_medida (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  codigo TEXT NOT NULL,
+  nome TEXT NOT NULL,
+  grandeza TEXT NOT NULL DEFAULT 'contagem',
+  casas_decimais SMALLINT NOT NULL DEFAULT 2,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_unidades_medida_empresa_codigo ON unidades_medida (empresa_id, codigo);
+
+CREATE TABLE IF NOT EXISTS unidade_conversoes (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  de_codigo TEXT NOT NULL,
+  para_codigo TEXT NOT NULL,
+  fator NUMERIC(16,6) NOT NULL,
+  observacoes TEXT,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_unidade_conversoes_empresa_par ON unidade_conversoes (empresa_id, de_codigo, para_codigo);
+ALTER TABLE insumos ADD COLUMN IF NOT EXISTS unidade_compra TEXT;
+
+-- ============================================================================
+-- P2-10 — CONTRATO TIPO × COLUNA (espelho da migration 0061)
+-- Nome de funil é único por empresa (case-insensitive), como o recurso declara.
+-- ============================================================================
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_funis_empresa_nome
+  ON crm_funis (empresa_id, nome);
+
+-- ============================================================================
+-- P2-15 — CALENDÁRIO PRODUTIVO: FERIADOS POR EMPRESA (espelho da 0062)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS feriados (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  data DATE NOT NULL,
+  nome TEXT NOT NULL,
+  tipo TEXT NOT NULL DEFAULT 'nacional',
+  uf TEXT,
+  recorrente BOOLEAN NOT NULL DEFAULT FALSE,
+  observacoes TEXT,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_feriados_empresa_data ON feriados (empresa_id, data);
+CREATE INDEX IF NOT EXISTS feriados_empresa_recorrente_idx ON feriados (empresa_id, ativo, recorrente);

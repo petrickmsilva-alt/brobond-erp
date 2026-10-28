@@ -43,6 +43,7 @@ import { currentUser } from './auth';
 import {
   assertRegistroDaEmpresa,
   carimbarEmpresa,
+  EMPRESA_PADRAO,
   empresaDoRegistroAudit,
   escopoDoAtor,
   validarReferenciasDaEmpresa,
@@ -597,6 +598,27 @@ export async function aplicarEtapaNaOportunidade(
  * Grava uma linha no histórico de estágio. Chamada DENTRO da transação que
  * mudou a oportunidade (create/update do CRUD e transição explícita), para que
  * histórico e mudança vivam ou morram juntos.
+ *
+ * SNAPSHOT HISTÓRICO (migration 0058)
+ * -----------------------------------
+ * A trilha gravava só a CHAVE (`estagio_novo`). Como o rótulo exibido era
+ * resolvido no cadastro ATUAL, renomear a etapa reescrevia o passado: uma
+ * transição registrada quando a etapa se chamava "Proposta" passava a aparecer
+ * como "Proposta Comercial" depois da renomeação. Aqui o registro passa a
+ * guardar a fotografia do momento:
+ *
+ *   • `estagio_anterior_id` / `estagio_novo_id` — ids da etapa na transição;
+ *   • `estagio_anterior_nome` / `estagio_novo_nome` — rótulo NAQUELE momento;
+ *   • `funil_id` — o funil em que a transição aconteceu;
+ *   • `usuario_nome` — o nome do usuário naquele momento;
+ *   • `snapshot_versao = 1` — marca "esta linha TEM snapshot".
+ *
+ * Linha antiga (`snapshot_versao = 0`) NÃO é preenchida por inferência: o nome
+ * de hoje não é o nome de ontem. A API diz que o snapshot não existe
+ * (`nome_historico_indisponivel`) em vez de inventar.
+ *
+ * O nome é lido do CADASTRO dentro da MESMA transação da mudança — é
+ * exatamente o valor vigente no instante da transição, não uma cópia futura.
  */
 export async function registrarHistoricoEstagio(
   s: ReturnType<typeof getStore>,
@@ -606,23 +628,57 @@ export async function registrarHistoricoEstagio(
     oportunidadeId: number;
     estagioAnterior: string | null;
     estagioNovo: string;
+    estagioAnteriorId?: number | null;
+    estagioNovoId?: number | null;
+    funilId?: number | null;
     statusAnterior?: string | null;
     statusNovo?: string | null;
     usuarioId: number | null;
+    usuarioNome?: string | null;
     observacao?: string | null;
   }
 ): Promise<void> {
+  // Nome e funil da etapa: lidos do cadastro DA EMPRESA, na mesma transação.
+  const etapaDaEmpresa = async (id: unknown): Promise<Row | null> => {
+    const alvo = num(id);
+    if (alvo === null || alvo <= 0) return null;
+    return s.findOneWhere(R_ETAPA(), { id: alvo, empresa_id: params.empresaId }, tx);
+  };
+
+  const anterior = await etapaDaEmpresa(params.estagioAnteriorId);
+  const nova = await etapaDaEmpresa(params.estagioNovoId);
+
+  const nomeDe = (etapa: Row | null): string | null => {
+    if (!etapa) return null;
+    const nome = etapa.nome === null || etapa.nome === undefined ? '' : String(etapa.nome).trim();
+    return nome || null;
+  };
+
+  const funilId =
+    num(params.funilId) ??
+    (nova ? num(nova.funil_id) : null) ??
+    (anterior ? num(anterior.funil_id) : null);
+
   await s.insert(
     R_ESTAGIO_HIST(),
     {
       empresa_id: params.empresaId,
       oportunidade_id: params.oportunidadeId,
+      funil_id: funilId,
       estagio_anterior: params.estagioAnterior ?? null,
+      estagio_anterior_id: anterior ? Number(anterior.id) : null,
+      estagio_anterior_nome: nomeDe(anterior),
       estagio_novo: params.estagioNovo,
+      estagio_novo_id: nova ? Number(nova.id) : null,
+      estagio_novo_nome: nomeDe(nova),
       status_anterior: params.statusAnterior ?? null,
       status_novo: params.statusNovo ?? null,
       usuario_id: params.usuarioId ?? null,
+      usuario_nome: params.usuarioNome ? String(params.usuarioNome).slice(0, 120) : null,
       observacao: params.observacao ?? null,
+      // 1 = linha COM snapshot. A coluna tem default 0 justamente para que
+      // linha antiga seja distinguível sem heurística.
+      snapshot_versao: 1,
     },
     tx
   );
@@ -631,7 +687,27 @@ export async function registrarHistoricoEstagio(
 // ----------------------------------------------------------------------------
 // LEAD SCORING — regra explicável
 // ----------------------------------------------------------------------------
-export type ScoreLead = { score: number; motivo: string };
+export type FatorScore = { criterio: string; rotulo: string; pontos: number; evidencia: string };
+export type ScoreLead = { score: number; motivo: string; classificacao: string; fatores: FatorScore[] };
+
+/**
+ * Faixas de classificação do score.
+ *
+ * São DERIVADAS do número, não uma segunda pontuação: a mesma entrada sempre
+ * produz a mesma faixa. Os limites são explícitos aqui (e repetidos no CHECK de
+ * `crm_leads.score_classificacao`) para que a API e o banco concordem.
+ */
+export const CLASSIFICACAO_SCORE = [
+  { chave: 'prioritario', minimo: 75 },
+  { chave: 'quente', minimo: 50 },
+  { chave: 'morno', minimo: 25 },
+  { chave: 'frio', minimo: 0 },
+] as const;
+
+export function classificarScore(score: number): string {
+  const alvo = Math.max(0, Math.min(100, Math.round(score)));
+  return CLASSIFICACAO_SCORE.find((f) => alvo >= f.minimo)!.chave;
+}
 
 /**
  * Calcula o score de um lead (0–100) com regras SIMPLES e EXPLICÁVEIS.
@@ -648,12 +724,15 @@ export function calcularScoreLead(
   lead: Row,
   ctx: { atividades: number; ultimaInteracao?: string | null; agora?: Date } = { atividades: 0 }
 ): ScoreLead {
-  const partes: string[] = [];
+  const fatores: FatorScore[] = [];
   let score = 0;
-  const somar = (valor: number, texto: string) => {
+  // `criterio` é a CHAVE estável (para programa); `rotulo` é o texto humano
+  // que aparece no motivo. Os dois existem porque o número precisa ser
+  // auditável por código e legível por gente.
+  const somar = (valor: number, criterio: string, rotulo: string, evidencia: string) => {
     if (!valor) return;
     score += valor;
-    partes.push(`${texto} ${valor > 0 ? '+' : ''}${valor}`);
+    fatores.push({ criterio, rotulo, pontos: valor, evidencia });
   };
 
   // 1) ORIGEM / CANAL
@@ -663,50 +742,59 @@ export function calcularScoreLead(
   const pesoCanal: Record<string, number> = { marketplace: 12, evento: 10, site: 10, loja_fisica: 12, indicacao: 15, outbound: 5, outro: 0 };
   const o = pesoOrigem[origem] ?? 0;
   const c = pesoCanal[canal] ?? 0;
-  if (o || c) somar(Math.max(o, c), `origem/canal (${canal || origem || 'não informado'})`);
+  if (o || c) {
+    // Vale o MAIOR dos dois: origem e canal descrevem a mesma procedência e
+    // somar os dois premiaria o mesmo sinal duas vezes.
+    const rotulo = canal || origem || 'não informado';
+    somar(Math.max(o, c), 'origem_canal', `origem/canal (${rotulo})`, `origem=${origem || '—'}, canal=${canal || '—'}`);
+  }
 
-  // 2) DADOS PREENCHIDOS
-  if (lead.documento) somar(10, 'documento informado');
-  if (lead.email) somar(5, 'e-mail informado');
-  if (lead.telefone) somar(5, 'telefone informado');
+  // 2) DADOS PREENCHIDOS — dado de contato é o que permite agir.
+  if (lead.documento) somar(10, 'documento', 'documento', 'CPF/CNPJ informado');
+  if (lead.email) somar(5, 'email', 'e-mail', 'e-mail informado');
+  if (lead.telefone) somar(5, 'telefone', 'telefone', 'telefone informado');
 
   // 3) VALOR POTENCIAL
   const valor = num(lead.valor_estimado);
   if (valor !== null && valor > 0) {
-    if (valor >= 5000) somar(15, 'valor potencial alto');
-    else if (valor >= 1000) somar(8, 'valor potencial médio');
-    else somar(4, 'valor potencial informado');
+    if (valor >= 5000) somar(15, 'valor_potencial', 'valor potencial alto', `valor estimado ${valor} ≥ 5000`);
+    else if (valor >= 1000) somar(8, 'valor_potencial', 'valor potencial médio', `valor estimado ${valor} entre 1000 e 5000`);
+    else somar(4, 'valor_potencial', 'valor potencial informado', `valor estimado ${valor} < 1000`);
   }
 
-  // 4) INTERAÇÃO (atividades registradas)
+  // 4) INTERAÇÃO (atividades registradas) — teto de 20 pontos.
   const atividades = Math.max(0, Number(ctx.atividades) || 0);
-  if (atividades > 0) somar(Math.min(20, atividades * 5), `${atividades} interação(ões)`);
+  if (atividades > 0) somar(Math.min(20, atividades * 5), 'interacao', `${atividades} interação(ões)`, `${atividades} atividade(s) registrada(s) (5 cada, teto 20)`);
 
   // 5) ATIVIDADE RECENTE (últimos 30 dias)
   const agora = ctx.agora ?? new Date();
   const ultima = ctx.ultimaInteracao ? new Date(String(ctx.ultimaInteracao)) : null;
   if (ultima && !Number.isNaN(ultima.getTime())) {
     const dias = Math.floor((agora.getTime() - ultima.getTime()) / 86_400_000);
-    if (dias <= 30) somar(10, 'interação nos últimos 30 dias');
+    if (dias >= 0 && dias <= 30) somar(10, 'atividade_recente', 'interação nos últimos 30 dias', `última atividade há ${dias} dia(s) (≤ 30)`);
   }
 
   // 6) RECÊNCIA DO CADASTRO
   const criado = lead.criado_em ? new Date(String(lead.criado_em)) : null;
   if (criado && !Number.isNaN(criado.getTime())) {
     const dias = Math.floor((agora.getTime() - criado.getTime()) / 86_400_000);
-    if (dias <= 7) somar(10, 'lead recente');
-    else if (dias <= 30) somar(5, 'lead do mês');
+    if (dias >= 0 && dias <= 7) somar(10, 'regencia_cadastro', 'lead recente', `lead criado há ${dias} dia(s) (≤ 7)`);
+    else if (dias >= 0 && dias <= 30) somar(5, 'regencia_cadastro', 'lead do mês', `lead criado há ${dias} dia(s) (≤ 30)`);
   }
 
   // 7) AVANÇO NO FUNIL
   const status = String(lead.status ?? '');
-  if (status === 'proposta') somar(10, 'proposta em andamento');
-  else if (status === 'qualificacao') somar(5, 'lead qualificado');
+  if (status === 'proposta') somar(10, 'avanco_funil', 'proposta em andamento', 'status "proposta"');
+  else if (status === 'qualificacao') somar(5, 'avanco_funil', 'lead qualificado', 'status "qualificacao"');
 
   const final = Math.max(0, Math.min(100, Math.round(score)));
   return {
     score: final,
-    motivo: partes.length ? `${partes.join('; ')} = ${final}` : 'sem critérios de pontuação aplicáveis',
+    motivo: fatores.length
+      ? `${fatores.map((f) => `${f.rotulo} ${f.pontos > 0 ? '+' : ''}${f.pontos}`).join('; ')} = ${final}`
+      : 'sem critérios de pontuação aplicáveis',
+    classificacao: classificarScore(final),
+    fatores,
   };
 }
 
@@ -723,23 +811,31 @@ export async function recalcularScoreDoLead(
   base?: Row
 ): Promise<ScoreLead> {
   const lead = base ?? (await s.findOneWhere(R_LEAD(), { id: leadId, empresa_id: empresaId }, tx));
-  if (!lead) return { score: 0, motivo: 'lead não encontrado' };
+  if (!lead) return { score: 0, motivo: 'lead não encontrado', classificacao: classificarScore(0), fatores: [] };
   const atividades = await s.list(
     R_ATIVIDADE(),
     { page: 1, pageSize: 500, filter: { empresa_id: empresaId, lead_id: leadId } },
     tx
   );
-  const datas = atividades.rows
+  // Só atividade NÃO CANCELADA conta como interação: cancelamento é desfazer a
+  // intenção, então não é sinal comercial.
+  const validas = atividades.rows.filter((a) => String(a.status ?? 'pendente') !== 'cancelada');
+  const datas = validas
     .map((a) => (a.data_atividade ? new Date(String(a.data_atividade)).getTime() : 0))
     .filter((n) => n > 0);
   const ultima = datas.length ? new Date(Math.max(...datas)).toISOString() : null;
-  const resultado = calcularScoreLead(lead, { atividades: atividades.rows.length, ultimaInteracao: ultima });
+  const resultado = calcularScoreLead(lead, { atividades: validas.length, ultimaInteracao: ultima });
   await s.update(
     R_LEAD(),
     leadId,
     {
       score: resultado.score,
       score_motivo: resultado.motivo,
+      score_classificacao: resultado.classificacao,
+      // Fatores ESTRUTURADOS: o número continua auditável depois, sem
+      // reexecutar a regra (que depende de "agora" e por isso não é
+      // reproduzível a posteriori).
+      score_fatores: JSON.stringify(resultado.fatores),
       score_atualizado_em: new Date().toISOString(),
     },
     tx
@@ -856,10 +952,14 @@ export async function mudarEstagioOportunidade(req: Request, res: Response) {
       empresaId: escopo.empresaId,
       oportunidadeId: id,
       estagioAnterior: etapaAtual || null,
+      estagioAnteriorId: num(antes.etapa_id),
       estagioNovo: destino.chave,
+      estagioNovoId: destino.etapa_id,
+      funilId: destino.funil_id ?? num(antes.funil_id),
       statusAnterior: antes.status ? String(antes.status) : null,
       statusNovo: depois?.status ? String(depois.status) : null,
       usuarioId: actor.id ?? null,
+      usuarioNome: actor.name ?? null,
       observacao,
     });
     return {
@@ -893,28 +993,224 @@ export async function historicoDaOportunidade(req: Request, res: Response) {
   );
   const linhas = await listarTudo(s, 'crm_estagio_historico', escopo.empresaId, { oportunidade_id: id });
   const usuarios = await listarTudo(s, 'usuarios', escopo.empresaId);
+  // Cadastro ATUAL: serve só para rotular o que a trilha não fotografou. Nunca
+  // é usado como se fosse o nome da época (ver `nome_historico_indisponivel`).
+  const etapas = await listarTudo(s, 'crm_etapas', escopo.empresaId);
+  const nomeAtualDaChave = new Map(etapas.map((e) => [String(e.chave), String(e.nome ?? e.chave)]));
+
   res.json({
     oportunidade_id: id,
+    // Contrato explícito do snapshot: quem lê sabe quando o nome é HISTÓRICO
+    // (gravado na transição) e quando é apenas o rótulo ATUAL do cadastro.
+    contrato_snapshot: {
+      versao: 1,
+      gravado_desde: 'migration 0058',
+      legado: 'linhas com snapshot_versao=0 foram criadas antes do snapshot; o nome da etapa NÃO é recuperável e não é inferido do cadastro atual',
+    },
     historico: linhas
       .slice()
       .sort((a, b) => String(a.criado_em ?? '').localeCompare(String(b.criado_em ?? '')))
-      .map((h) => ({
-        id: Number(h.id),
-        estagio_anterior: h.estagio_anterior ?? null,
-        estagio_novo: h.estagio_novo ?? null,
-        status_anterior: h.status_anterior ?? null,
-        status_novo: h.status_novo ?? null,
-        usuario_id: num(h.usuario_id),
-        usuario: nomeDoUsuario(usuarios, h.usuario_id),
-        observacao: h.observacao ?? null,
-        criado_em: h.criado_em ?? null,
-      })),
+      .map((h) => {
+        const versao = Number(h.snapshot_versao ?? 0);
+        const temSnapshot = versao >= 1;
+        const chaveNova = h.estagio_novo === null || h.estagio_novo === undefined ? null : String(h.estagio_novo);
+        const chaveAnterior = h.estagio_anterior === null || h.estagio_anterior === undefined ? null : String(h.estagio_anterior);
+        return {
+          id: Number(h.id),
+          oportunidade_id: num(h.oportunidade_id),
+          empresa_id: num(h.empresa_id),
+          funil_id: num(h.funil_id),
+          estagio_anterior: chaveAnterior,
+          estagio_anterior_id: num(h.estagio_anterior_id),
+          estagio_anterior_nome: h.estagio_anterior_nome ?? null,
+          estagio_novo: chaveNova,
+          estagio_novo_id: num(h.estagio_novo_id),
+          estagio_novo_nome: h.estagio_novo_nome ?? null,
+          // Rótulo do cadastro ATUAL — separado de propósito. Não substitui o
+          // snapshot: é informação de hoje sobre uma chave histórica.
+          estagio_novo_nome_atual: chaveNova ? (nomeAtualDaChave.get(chaveNova) ?? null) : null,
+          estagio_anterior_nome_atual: chaveAnterior ? (nomeAtualDaChave.get(chaveAnterior) ?? null) : null,
+          snapshot_versao: versao,
+          /** true quando ESTA linha não tem o nome histórico gravado. */
+          nome_historico_indisponivel: !temSnapshot,
+          status_anterior: h.status_anterior ?? null,
+          status_novo: h.status_novo ?? null,
+          usuario_id: num(h.usuario_id),
+          // Nome do usuário: snapshot quando existe; senão o cadastro atual
+          // (o usuário é uma identidade viva, não um rótulo de estágio).
+          usuario: (h.usuario_nome ? String(h.usuario_nome) : null) ?? nomeDoUsuario(usuarios, h.usuario_id),
+          usuario_nome_historico: h.usuario_nome ?? null,
+          observacao: h.observacao ?? null,
+          criado_em: h.criado_em ?? null,
+        };
+      }),
   });
 }
 
 // ----------------------------------------------------------------------------
-// GET /api/crm/atividades/agenda — hoje / atrasadas / próximas
+// POST /api/crm/funis/:id/etapas/reordenar — reordenação TRANSACIONAL do funil
+//
+// O QUE ESTA ROTA GARANTE (e por quê)
+// -----------------------------------
+// `ordem` é a posição da etapa no funil. Antes dela ser única por funil
+// (migration 0058), "reordenar" era um PUT por etapa: duas chamadas
+// concorrentes deixavam duas etapas na mesma posição e a tela mostrava uma
+// ordem que o banco não tinha. Esta rota trata a reordenação como o que ela é —
+// UMA operação sobre o funil inteiro:
+//
+//   1) TENANT — todas as etapas são lidas com `empresa_id` da sessão. Etapa de
+//      outra empresa responde 404 (o ERP não confirma existência de dado
+//      alheio), nunca 200.
+//   2) FUNIL — etapa de outro funil da MESMA empresa responde 422: é engano de
+//      tela, não vazamento.
+//   3) COMPLETUDE — o corpo precisa listar TODAS as etapas do funil, cada uma
+//      uma única vez. Lista parcial é recusada (400): renumerar 1..N com um
+//      subconjunto embaralharia as etapas que ficaram de fora.
+//   4) SEM DUPLICATA — id repetido ou ordem repetida no corpo é 400. O índice
+//      único do banco é a segunda barreira.
+//   5) TRANSACIONAL — a renumeração inteira vive numa transação. Falha no meio
+//      → rollback: nenhuma etapa fica "meio reordenada".
+//   6) AUDITÁVEL — uma entrada na trilha com a ordem ANTES e DEPOIS.
+//
+// COMO A RENUMERAÇÃO EVITA COLISÃO TRANSITÓRIA
+// --------------------------------------------
+// Trocar duas posições (1↔2) colidiria com o índice único no meio do caminho.
+// Por isso a renumeração é feita em DUAS passadas: primeiro todas as etapas do
+// funil recebem `ordem + deslocamento` (uma translação — preserva a unicidade e
+// deixa todo mundo acima de N), depois cada uma recebe sua posição final 1..N.
+// Nenhum estado intermediário viola a unicidade, sem precisar de constraint
+// adiada.
 // ----------------------------------------------------------------------------
+export async function reordenarEtapasDoFunil(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(R_ETAPA(), actor, 'update');
+  const escopo = escopoDoAtor(actor);
+  const funilId = parseId(req.params.id);
+  const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+
+  // Aceita os dois formatos: `{ ordem: [id, id, ...] }` (sequência direta) e
+  // `{ etapas: [{ id | etapa_id, ordem }] }` (posição explícita).
+  const alvo = new Map<number, number>();
+  const sequencia = Array.isArray(body.ordem) ? body.ordem : Array.isArray(body.etapas) ? body.etapas : null;
+  if (!sequencia) {
+    throw new HttpError(400, 'Informe a nova ordem das etapas em `ordem` (lista de ids) ou `etapas` (lista de {id, ordem}).', {
+      ordem: 'Obrigatório',
+    });
+  }
+  if (Array.isArray(body.etapas) && !Array.isArray(body.ordem)) {
+    body.etapas.forEach((item: unknown, indice: number) => {
+      const linha = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+      const id = Number(linha.id ?? linha.etapa_id);
+      const ordem = linha.ordem === undefined ? indice + 1 : Number(linha.ordem);
+      if (!Number.isInteger(id) || id <= 0) {
+        throw new HttpError(400, 'Item de `etapas` sem `id`/`etapa_id` válido.', { etapas: `Item ${indice + 1} inválido` });
+      }
+      if (!Number.isInteger(ordem) || ordem <= 0) {
+        throw new HttpError(400, 'A posição (`ordem`) precisa ser um inteiro maior que zero.', { etapas: `Item ${indice + 1}: ordem inválida` });
+      }
+      if (alvo.has(id)) throw new HttpError(400, `A etapa #${id} aparece mais de uma vez na reordenação.`, { etapas: 'Id repetido' });
+      alvo.set(id, ordem);
+    });
+  } else {
+    (sequencia as unknown[]).forEach((valor, indice) => {
+      const id = Number(valor);
+      if (!Number.isInteger(id) || id <= 0) {
+        throw new HttpError(400, 'A lista `ordem` deve conter apenas ids de etapa.', { ordem: `Item ${indice + 1} inválido` });
+      }
+      if (alvo.has(id)) throw new HttpError(400, `A etapa #${id} aparece mais de uma vez na reordenação.`, { ordem: 'Id repetido' });
+      alvo.set(id, indice + 1);
+    });
+  }
+  if (alvo.size === 0) throw new HttpError(400, 'A reordenação precisa de pelo menos uma etapa.', { ordem: 'Lista vazia' });
+
+  const posicoes = [...alvo.values()];
+  if (new Set(posicoes).size !== posicoes.length) {
+    throw new HttpError(400, 'Há duas etapas na mesma posição. Cada etapa ocupa uma posição distinta.', { etapas: 'Ordem duplicada' });
+  }
+
+  const s = getStore();
+  const resultado = await s.transaction(async (tx) => {
+    // 1) Funil do TENANT — 404 para funil de outra empresa.
+    const funil = assertRegistroDaEmpresa(
+      R_FUNIL(),
+      await s.findOneWhere(R_FUNIL(), { id: funilId, empresa_id: escopo.empresaId }, tx),
+      escopo
+    );
+
+    // 2) Todas as etapas do funil (o conjunto que a reordenação precisa cobrir).
+    const doFunil = await listarTudo(s, 'crm_etapas', escopo.empresaId, { funil_id: funilId }, tx);
+    const idsDoFunil = new Set(doFunil.map((e) => Number(e.id)));
+
+    // 3) Etapa informada que não é deste funil.
+    for (const id of alvo.keys()) {
+      if (!idsDoFunil.has(id)) {
+        // Existe em OUTRO tenant? Então 404 (não confirmamos existência alheia).
+        const daEmpresa = await s.findOneWhere(R_ETAPA(), { id, empresa_id: escopo.empresaId }, tx);
+        if (!daEmpresa) throw new HttpError(404, `A etapa #${id} não existe nesta empresa.`);
+        throw new HttpError(422, `A etapa #${id} pertence a outro funil. Reordene cada funil separadamente.`, {
+          etapas: 'Etapa de outro funil',
+        });
+      }
+    }
+
+    // 4) Completude: reordenar um subconjunto renumeraria 1..N e embaralharia
+    //    as etapas omitidas.
+    const faltando = [...idsDoFunil].filter((id) => !alvo.has(id));
+    if (faltando.length) {
+      throw new HttpError(
+        400,
+        `A reordenação precisa listar TODAS as ${idsDoFunil.size} etapas do funil. Faltaram: ${faltando.map((id) => `#${id}`).join(', ')}.`,
+        { etapas: 'Lista incompleta' }
+      );
+    }
+
+    const antes = doFunil
+      .slice()
+      .sort((a, b) => (num(a.ordem) ?? 0) - (num(b.ordem) ?? 0))
+      .map((e) => ({ id: Number(e.id), chave: String(e.chave), nome: String(e.nome ?? ''), ordem: num(e.ordem) ?? 0 }));
+
+    // 5) Duas passadas (ver comentário da função): translação e depois posição.
+    const deslocamento = Math.max(0, ...antes.map((e) => e.ordem)) + idsDoFunil.size + 1;
+    for (const e of antes) {
+      await s.update(R_ETAPA(), e.id, { ordem: e.ordem + deslocamento }, tx);
+    }
+    for (const e of antes) {
+      await s.update(R_ETAPA(), e.id, { ordem: alvo.get(e.id)! }, tx);
+    }
+
+    const depois = (await listarTudo(s, 'crm_etapas', escopo.empresaId, { funil_id: funilId }, tx))
+      .slice()
+      .sort((a, b) => (num(a.ordem) ?? 0) - (num(b.ordem) ?? 0))
+      .map((e) => ({ id: Number(e.id), chave: String(e.chave), nome: String(e.nome ?? ''), ordem: num(e.ordem) ?? 0 }));
+
+    await s.audit(
+      {
+        usuario_id: actor.id || null,
+        usuario: actor.name,
+        acao: 'editar',
+        recurso: 'crm_etapas',
+        registro_id: funilId,
+        descricao: `Funil "${String(funil.nome)}" reordenado (${depois.length} etapa(s))`,
+        dados: { funil_id: funilId, antes, depois },
+        empresa_id: escopo.empresaId,
+      },
+      tx
+    );
+
+    return { funil, antes, depois };
+  });
+
+  res.json({
+    ok: true,
+    funil_id: funilId,
+    funil: String(resultado.funil.nome),
+    etapas: resultado.depois,
+    antes: resultado.antes,
+    depois: resultado.depois,
+  });
+}
+
+
 export async function agendaDeAtividades(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_ATIVIDADE(), actor, 'read');
@@ -941,7 +1237,13 @@ export async function agendaDeAtividades(req: Request, res: Response) {
       data_atividade: a.data_atividade ?? null,
       lembrete_em: a.lembrete_em ?? null,
       dia,
+      // Estado do LEMBRETE: `lembrete_enviado_em` só é gravado quando houve
+      // notificação de verdade (0058). NULL = ainda não disparado.
+      lembrete_enviado_em: a.lembrete_enviado_em ?? null,
+      lembrete_pendente: !a.lembrete_enviado_em && String(a.status ?? 'pendente') === 'pendente',
       concluida_em: a.concluida_em ?? null,
+      cancelada_em: a.cancelada_em ?? null,
+      motivo_cancelamento: a.motivo_cancelamento ?? null,
       responsavel_id: num(a.responsavel_id),
       responsavel: nomeDoUsuario(usuarios, a.responsavel_id),
       lead_id: num(a.lead_id),
@@ -962,13 +1264,107 @@ export async function agendaDeAtividades(req: Request, res: Response) {
     atrasadas: pendentes.filter((a) => a.vencida).sort((a, b) => String(a.dia ?? '').localeCompare(String(b.dia ?? ''))),
     proximas: pendentes.filter((a) => !a.hoje && !a.vencida && !!a.dia && String(a.dia) > hoje),
     concluidas: todas.filter((a) => a.status === 'concluida').sort((a, b) => String(b.concluida_em ?? '').localeCompare(String(a.concluida_em ?? ''))),
+    /** Canceladas continuam listadas: cancelar não é excluir. */
+    canceladas: todas
+      .filter((a) => a.status === 'cancelada')
+      .sort((a, b) => String(b.cancelada_em ?? '').localeCompare(String(a.cancelada_em ?? ''))),
     totais: {
       pendentes: pendentes.length,
       hoje: pendentes.filter((a) => a.hoje).length,
       atrasadas: pendentes.filter((a) => a.vencida).length,
       concluidas: todas.filter((a) => a.status === 'concluida').length,
+      canceladas: todas.filter((a) => a.status === 'cancelada').length,
+      lembretes_pendentes: pendentes.filter((a) => a.lembrete_pendente).length,
+    },
+    /** Como o lembrete é entregue — o frontend não dispara nada. */
+    lembretes: {
+      canal: 'agendador (POST /api/admin/scheduled/run | /cron) + e-mail opcional',
+      idempotente: true,
+      marcador: 'lembrete_enviado_em',
     },
   });
+}
+
+// ----------------------------------------------------------------------------
+// LEMBRETES DE ATIVIDADE — disparo idempotente, pelo AGENDADOR EXISTENTE
+//
+// Sem marca de envio, uma varredura a cada minuto reenviaria o mesmo lembrete
+// para sempre. A idempotência aqui é a mesma do resto do ERP: UPDATE
+// CONDICIONAL (compare-and-swap) em `lembrete_enviado_em`. Quem consegue gravar
+// o carimbo é quem dispara; quem perde a corrida não notifica.
+//
+// Não há infraestrutura paralela: o canal é o mesmo `notifications.ts` usado
+// por estoque/produção, e a execução é a mesma de `scheduled.ts`. Nada de
+// polling no navegador.
+// ----------------------------------------------------------------------------
+export async function dispararLembretesCrm(
+  agora: Date = new Date()
+): Promise<{ analisados: number; disparados: number; empresas: number; canal: string }> {
+  // Import dinâmico: `notifications` depende de `services`, que depende deste
+  // módulo — importar no topo criaria ciclo.
+  const canal = await import('./notifications');
+  // Canal DESLIGADO: não carimbamos `lembrete_enviado_em`, senão a trilha
+  // diria "enviado" para algo que nunca saiu. O lembrete segue visível na
+  // Agenda; o carimbo só acontece quando há entrega de verdade.
+  if (!canal.crmLembreteHabilitado()) {
+    return { analisados: 0, disparados: 0, empresas: 0, canal: 'desabilitado' };
+  }
+
+  const s = getStore();
+  const limite = agora.getTime();
+  // `empresas` é o cadastro de TENANTS — não tem `empresa_id`, então usa a
+  // listagem crua (sem o filtro de escopo dos recursos multiempresa).
+  const empresas = (await s.list(getResource('empresas')!, { page: 1, pageSize: 1000 })).rows;
+  const ids = empresas.length ? empresas.map((e) => Number(e.id)) : [EMPRESA_PADRAO];
+
+  let analisados = 0;
+  let disparados = 0;
+  const notificacoes: { empresaId: number; atividade: Row; lead: Row | null; oportunidade: Row | null }[] = [];
+
+  for (const empresaId of ids) {
+    const pendentes = await listarTudo(s, 'crm_atividades', empresaId, { status: 'pendente' });
+    for (const atividade of pendentes) {
+      const lembrete = atividade.lembrete_em ? new Date(String(atividade.lembrete_em)) : null;
+      // Sem lembrete explícito, a própria data da atividade é o lembrete.
+      const quando = lembrete ?? (atividade.data_atividade ? new Date(String(atividade.data_atividade)) : null);
+      if (!quando || Number.isNaN(quando.getTime())) continue;
+      if (quando.getTime() > limite) continue; // ainda não venceu
+      if (atividade.lembrete_enviado_em) continue;
+      analisados += 1;
+
+      const reivindicado = await s.tryUpdateIf(
+        R_ATIVIDADE(),
+        Number(atividade.id),
+        { lembrete_enviado_em: null },
+        { lembrete_enviado_em: agora.toISOString() }
+      );
+      if (!reivindicado) continue; // outra execução já notificou
+      disparados += 1;
+
+      const leadId = num(atividade.lead_id);
+      const oppId = num(atividade.oportunidade_id);
+      const lead = leadId === null ? null : await s.findOneWhere(R_LEAD(), { id: leadId, empresa_id: empresaId });
+      const oportunidade = oppId === null ? null : await s.findOneWhere(R_OPORTUNIDADE(), { id: oppId, empresa_id: empresaId });
+      notificacoes.push({ empresaId, atividade: reivindicado, lead, oportunidade });
+    }
+  }
+
+  if (notificacoes.length) {
+    for (const n of notificacoes) {
+      await canal.notificarLembreteCrm({
+        empresaId: n.empresaId,
+        atividadeId: Number(n.atividade.id),
+        tipo: String(n.atividade.tipo ?? 'tarefa'),
+        resumo: String(n.atividade.resumo ?? ''),
+        quando: n.atividade.lembrete_em ?? n.atividade.data_atividade ?? null,
+        prioridade: String(n.atividade.prioridade ?? 'media'),
+        lead: n.lead ? String(n.lead.nome ?? `#${n.atividade.lead_id}`) : null,
+        oportunidade: n.oportunidade ? String(n.oportunidade.nome ?? `#${n.atividade.oportunidade_id}`) : null,
+      }).catch(() => undefined); // canal indisponível nunca derruba o agendador
+    }
+  }
+
+  return { analisados, disparados, empresas: ids.length, canal: 'habilitado' };
 }
 
 // ----------------------------------------------------------------------------
@@ -1073,13 +1469,82 @@ export async function forecastCrm(req: Request, res: Response) {
 // ----------------------------------------------------------------------------
 // GET /api/crm/painel — dashboard comercial do CRM
 // ----------------------------------------------------------------------------
+/**
+ * Filtros do painel de conversão.
+ *
+ * Todos são OPCIONAIS e todos são aplicados no SERVIDOR: a tela não recalcula
+ * nada (nada de duplicar a regra no frontend). Os parâmetros chegam por query
+ * string e são validados aqui — valor inválido é 400, não é ignorado em
+ * silêncio (filtro que "não filtra" produz relatório errado sem avisar).
+ */
+export type FiltrosPainelCrm = {
+  de: string | null;
+  ate: string | null;
+  funilId: number | null;
+  origem: string | null;
+  origemId: number | null;
+  etapa: string | null;
+  etapaId: number | null;
+  status: string | null;
+  responsavelId: number | null;
+};
+
+const DATA_ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+function inteiroOpcional(valor: unknown, campo: string): number | null {
+  if (valor === undefined || valor === null || valor === '') return null;
+  const n = Number(valor);
+  if (!Number.isInteger(n) || n <= 0) throw new HttpError(400, `O filtro "${campo}" precisa ser um id inteiro positivo.`);
+  return n;
+}
+
+export function filtrosDoPainel(req: Request): FiltrosPainelCrm {
+  const q = req.query as Record<string, unknown>;
+  const texto = (v: unknown): string | null => {
+    if (v === undefined || v === null) return null;
+    const t = String(v).trim();
+    return t === '' ? null : t;
+  };
+  const de = texto(q.de);
+  const ate = texto(q.ate);
+  if (de !== null && !DATA_ISO.test(de)) throw new HttpError(400, 'A data inicial (`de`) precisa estar no formato AAAA-MM-DD.');
+  if (ate !== null && !DATA_ISO.test(ate)) throw new HttpError(400, 'A data final (`ate`) precisa estar no formato AAAA-MM-DD.');
+  if (de && ate && ate < de) throw new HttpError(400, 'A data final não pode ser anterior à inicial.');
+  const status = texto(q.status);
+  if (status !== null && !['aberta', 'ganha', 'perdida'].includes(status)) {
+    throw new HttpError(400, 'O filtro "status" aceita apenas aberta, ganha ou perdida.');
+  }
+  return {
+    de,
+    ate,
+    funilId: inteiroOpcional(q.funil_id, 'funil_id'),
+    origem: texto(q.origem),
+    origemId: inteiroOpcional(q.origem_id, 'origem_id'),
+    etapa: texto(q.etapa),
+    etapaId: inteiroOpcional(q.etapa_id, 'etapa_id'),
+    status,
+    responsavelId: inteiroOpcional(q.responsavel_id, 'responsavel_id'),
+  };
+}
+
+/** `data` dentro da janela [de, ate] (comparação por dia, inclusiva). */
+function dentroDaJanela(valor: unknown, de: string | null, ate: string | null): boolean {
+  if (!de && !ate) return true;
+  const dia = diaISO(valor);
+  if (!dia) return false;
+  if (de && dia < de) return false;
+  if (ate && dia > ate) return false;
+  return true;
+}
+
 export async function painelCrm(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_LEAD(), actor, 'read');
   checkAccess(R_OPORTUNIDADE(), actor, 'read');
   const escopo = escopoDoAtor(actor);
   const s = getStore();
-  const [leads, oportunidades, atividades, etapas, origens, campanhas, usuarios] = await Promise.all([
+  const filtros = filtrosDoPainel(req);
+  const [todosLeads, todasOportunidades, todasAtividades, etapas, origens, campanhas, usuarios, motivosPerda] = await Promise.all([
     listarTudo(s, 'crm_leads', escopo.empresaId),
     listarTudo(s, 'crm_oportunidades', escopo.empresaId),
     listarTudo(s, 'crm_atividades', escopo.empresaId),
@@ -1087,7 +1552,108 @@ export async function painelCrm(req: Request, res: Response) {
     listarTudo(s, 'crm_origens', escopo.empresaId),
     listarTudo(s, 'crm_campanhas', escopo.empresaId),
     listarTudo(s, 'usuarios', escopo.empresaId),
+    listarTudo(s, 'crm_motivos_perda', escopo.empresaId),
   ]);
+
+  // ---------------------------------------------------------------------------
+  // APLICAÇÃO DOS FILTROS (documentada na resposta, em `filtros.aplicacao`)
+  //
+  //   período  → LEADS por `criado_em` (captação) e OPORTUNIDADES por
+  //              `data_fechamento` quando encerrada, senão `criado_em`
+  //              (entrada no pipeline). Um único recorte temporal para os dois
+  //              lados: comparar janelas diferentes é o jeito mais fácil de
+  //              produzir uma taxa de conversão que não existe.
+  //   funil    → oportunidades do funil (e, quando informado, o pipeline é
+  //              desenhado só com as etapas desse funil).
+  //   origem   → leads por origem controlada (`origem_id`) ou texto (`origem`);
+  //              a oportunidade herda a origem do lead de origem.
+  //   etapa    → oportunidades naquela etapa (chave ou id).
+  //   status   → aberta / ganha / perdida.
+  //   resp.    → `responsavel_id` em leads E oportunidades.
+  // ---------------------------------------------------------------------------
+  const etapaIdPorChave = new Map(etapas.map((e) => [String(e.chave), Number(e.id)]));
+  const chavePorEtapaId = new Map(etapas.map((e) => [Number(e.id), String(e.chave)]));
+
+  const leads = todosLeads.filter((l) => {
+    if (!dentroDaJanela(l.criado_em, filtros.de, filtros.ate)) return false;
+    if (filtros.origemId !== null && num(l.origem_id) !== filtros.origemId) return false;
+    if (filtros.origem !== null) {
+      const alvo = filtros.origem.toLowerCase();
+      const textoOrigem = String(l.origem ?? '').toLowerCase();
+      const nomeOrigem = (() => {
+        const id = num(l.origem_id);
+        if (id === null) return '';
+        const o = origens.find((x) => Number(x.id) === id);
+        return String(o?.nome ?? '').toLowerCase();
+      })();
+      if (textoOrigem !== alvo && nomeOrigem !== alvo) return false;
+    }
+    if (filtros.responsavelId !== null && num(l.responsavel_id) !== filtros.responsavelId) return false;
+    return true;
+  });
+  const idsLeads = new Set(leads.map((l) => Number(l.id)));
+
+  const oportunidades = todasOportunidades.filter((o) => {
+    const encerrada = String(o.status) !== 'aberta';
+    const referencia = encerrada && o.data_fechamento ? o.data_fechamento : o.criado_em;
+    if (!dentroDaJanela(referencia, filtros.de, filtros.ate)) return false;
+    if (filtros.funilId !== null && num(o.funil_id) !== filtros.funilId) return false;
+    if (filtros.status !== null && String(o.status ?? 'aberta') !== filtros.status) return false;
+    if (filtros.responsavelId !== null && num(o.responsavel_id) !== filtros.responsavelId) return false;
+    if (filtros.etapaId !== null) {
+      if (num(o.etapa_id) !== filtros.etapaId) return false;
+    } else if (filtros.etapa !== null) {
+      const alvo = filtros.etapa.toLowerCase();
+      const chave = String(o.etapa ?? '').toLowerCase();
+      const id = num(o.etapa_id);
+      const chaveDoId = id === null ? '' : String(chavePorEtapaId.get(id) ?? '').toLowerCase();
+      if (chave !== alvo && chaveDoId !== alvo) return false;
+    }
+    // Filtro de origem: a oportunidade vale se o lead de origem passou no
+    // recorte de leads — ou se ela própria tem origem declarada via lead.
+    if (filtros.origem !== null || filtros.origemId !== null) {
+      const leadId = num(o.lead_id);
+      if (leadId === null) return false;
+      if (!idsLeads.has(leadId)) return false;
+    }
+    return true;
+  });
+
+  const atividades = todasAtividades.filter((a) => {
+    if (filtros.responsavelId !== null && num(a.responsavel_id) !== filtros.responsavelId) return false;
+    const leadId = num(a.lead_id);
+    const oppId = num(a.oportunidade_id);
+    if ((filtros.origem !== null || filtros.origemId !== null) && leadId !== null && !idsLeads.has(leadId)) return false;
+    if (filtros.funilId !== null && oppId !== null) {
+      const opp = todasOportunidades.find((o) => Number(o.id) === oppId);
+      if (opp && num(opp.funil_id) !== filtros.funilId) return false;
+    }
+    return true;
+  });
+
+  const filtrosAplicados = {
+    de: filtros.de,
+    ate: filtros.ate,
+    funil_id: filtros.funilId,
+    origem: filtros.origem,
+    origem_id: filtros.origemId,
+    etapa: filtros.etapa,
+    etapa_id: filtros.etapaId,
+    status: filtros.status,
+    responsavel_id: filtros.responsavelId,
+    aplicacao: {
+      periodo:
+        'leads por criado_em (captação); oportunidades por data_fechamento quando encerradas, senão por criado_em — o MESMO recorte nos dois lados',
+      universo: {
+        leads_na_empresa: todosLeads.length,
+        leads_no_filtro: leads.length,
+        oportunidades_na_empresa: todasOportunidades.length,
+        oportunidades_no_filtro: oportunidades.length,
+        atividades_na_empresa: todasAtividades.length,
+        atividades_no_filtro: atividades.length,
+      },
+    },
+  };
 
   const hoje = hojeISO();
   const abertas = oportunidades.filter((o) => String(o.status ?? 'aberta') === 'aberta');
@@ -1204,8 +1770,33 @@ export async function painelCrm(req: Request, res: Response) {
     .sort((a, b) => b.forecast - a.forecast);
 
   const investimento = campanhas.reduce((t, c) => t + (num(c.investimento) ?? 0), 0);
+
+  // PERDAS POR MOTIVO — perda sem motivo declarado aparece como "não
+  // informado" em vez de desaparecer da contagem (escondê-la faria o total de
+  // perdas do painel não fechar com a lista de oportunidades).
+  const motivos = new Map<string, { motivo_id: number | null; motivo: string; perdas: number; valor_perdido: number }>();
+  for (const o of perdidas) {
+    const id = num(o.motivo_perda_id);
+    const cadastro = id === null ? null : motivosPerda.find((m) => Number(m.id) === id);
+    const chave = cadastro ? `id:${id}` : 'sem_motivo';
+    const atual = motivos.get(chave) ?? {
+      motivo_id: id,
+      motivo: cadastro ? String(cadastro.nome ?? `#${id}`) : 'não informado',
+      perdas: 0,
+      valor_perdido: 0,
+    };
+    atual.perdas += 1;
+    atual.valor_perdido += valorDe(o);
+    motivos.set(chave, atual);
+  }
+  const perdasPorMotivo = [...motivos.values()]
+    .map((m) => ({ ...m, valor_perdido: round2(m.valor_perdido) }))
+    .sort((a, b) => b.perdas - a.perdas || a.motivo.localeCompare(b.motivo));
+
   res.json({
     gerado_em: new Date().toISOString(),
+    /** Recorte aplicado — a tela mostra, não recalcula. */
+    filtros: filtrosAplicados,
     leads: {
       total: leads.length,
       abertos: leads.filter((l) => !['ganho', 'perdido'].includes(String(l.status))).length,
@@ -1229,7 +1820,23 @@ export async function painelCrm(req: Request, res: Response) {
       forecast_ponderado: round2(abertas.reduce((t, o) => t + valorDe(o) * (probabilidade(o) / 100), 0)),
     },
     pipeline: funil,
+    /** Motivos de perda — inclui "não informado" para o total fechar. */
+    perdas: {
+      total: perdidas.length,
+      valor_perdido: round2(perdidas.reduce((t, o) => t + valorDe(o), 0)),
+      por_motivo: perdasPorMotivo,
+    },
     conversao_por_origem: porOrigem,
+    conversao_por_etapa: funil.map((f) => ({
+      etapa: f.etapa,
+      etapa_id: f.etapa_id,
+      nome: f.nome,
+      ordem: f.ordem,
+      // Avanços REGISTRADOS no histórico (transições que ENTRARAM na etapa).
+      avancos: f.avancos_registrados,
+      oportunidades_abertas: f.oportunidades,
+      valor_aberto: f.valor,
+    })),
     campanhas: {
       total: campanhas.length,
       investimento: round2(investimento),

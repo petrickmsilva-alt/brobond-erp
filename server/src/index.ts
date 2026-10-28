@@ -175,6 +175,7 @@ import {
   historicoDaOportunidade,
   mudarEstagioOportunidade,
   painelCrm,
+  reordenarEtapasDoFunil,
 } from './crm';
 import {
   abrirCaixa,
@@ -282,6 +283,13 @@ import {
   registrarEntregaFiscal,
 } from './fiscalObrigacoes';
 import { balanceteFinanceiro, resumoPlanoContas } from './financeiroContabil';
+import {
+  confirmarImportacaoContabil,
+  confirmarImportacaoPlano,
+  previewImportacaoContabil,
+  previewImportacaoPlano,
+} from './financeiroImportacao';
+import { listarConversoes } from './unidades';
 import {
   alterarHomologacao,
   desempenhoDoFornecedor,
@@ -629,6 +637,18 @@ app.get(
 
 // Financeiro — resumo do fluxo de caixa, lançamento manual e recorrências
 app.get('/api/financeiro/resumo', wrap(resumoFinanceiro));
+// ---- FINANCEIRO 3.0: importação contábil (preview → confirmação) ------------
+// Nada é gravado no preview. A confirmação é transacional, idempotente pelo
+// hash do conteúdo e grava as partidas no LIVRO ÚNICO (lancamentos_financeiros).
+app.post('/api/financeiro/importacao-contabil/preview', wrap(previewImportacaoContabil));
+app.post('/api/financeiro/importacao-contabil', wrap(confirmarImportacaoContabil));
+// ---- P2-13: importação do PLANO DE CONTAS (preview → aplicação) --------------
+// A importação de partidas só funciona se as contas existirem; esta rota fecha
+// o caminho (o contador entrega plano + razão). Nunca apaga conta.
+app.post('/api/financeiro/plano-contas/importar/preview', wrap(previewImportacaoPlano));
+app.post('/api/financeiro/plano-contas/importar', wrap(confirmarImportacaoPlano));
+// ---- ESTOQUE 3.0: conversões de unidade DECLARADAS (P3-04) -------------------
+app.get('/api/estoque/unidades/conversoes', wrap(listarConversoes));
 app.post('/api/financeiro/lancamentos', wrap(criarLancamentoManual));
 app.post('/api/financeiro/lancamentos/:id/baixar', wrap(baixarLancamento));
 app.post('/api/financeiro/recorrencias/gerar', wrap(gerarRecorrencias));
@@ -837,7 +857,12 @@ app.get('/api/crm/atividades/agenda', wrap(agendaDeAtividades));
 // Previsão comercial ponderada por probabilidade (derivada, nunca persistida).
 app.get('/api/crm/forecast', wrap(forecastCrm));
 // Painel comercial do CRM (leads, pipeline, conversão, atividades, pessoas).
+// Filtros (período, funil, origem, etapa, status, responsável) são resolvidos
+// no SERVIDOR — a tela só exibe.
 app.get('/api/crm/painel', wrap(painelCrm));
+// Reordenação TRANSACIONAL das etapas do funil (0058). Lista completa do funil,
+// sem duplicata, com auditoria e rollback.
+app.post('/api/crm/funis/:id/etapas/reordenar', wrap(reordenarEtapasDoFunil));
 
 // ---- ESTOQUE 3.0: transferência formal, reserva e disponibilidade ----
 // Documento com máquina de estados — o saldo só muda na expedição e no
