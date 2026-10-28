@@ -88,7 +88,7 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
 };
 
 describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () => {
-  it('preserva exatamente os 101 módulos e todas as 101 URLs sem duplicidade nem remoção', () => {
+  it('preserva exatamente os 104 módulos e todas as 104 URLs sem duplicidade nem remoção', () => {
     // 70 da Árvore Master original + 10 da FUNDAÇÃO COMERCIAL (MASTER
     // MA-02..MA-08: territórios, equipes, hierarquia, carteira, atribuição,
     // metas, painel comercial e os dois cadastros do motor de comissão)
@@ -97,12 +97,14 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     // + 2 do CRM 3.0 evolução (painel e agenda de atividades)
     // + 16 da EVOLUÇÃO ERP 3.0 (estoque: transferências, reservas; compras:
     //   homologação; produção: recursos, capacidade/MRP; fiscal: obrigações,
-    //   calendário; financeiro: plano de contas, balancete).
-    expect(MODULES).toHaveLength(101);
+    //   calendário; financeiro: plano de contas, balancete)
+    // + 3 do hardening P2/P3 (P3-04: unidades de medida e conversões
+    //   declaradas; P2-13: importações contábeis).
+    expect(MODULES).toHaveLength(104);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(101);
-    expect(new Set(paths).size).toBe(101);
+    expect(new Set(ids).size).toBe(104);
+    expect(new Set(paths).size).toBe(104);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -131,8 +133,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (87), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(87);
+  it('separa ERP CORE (90), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(90);
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(8);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
@@ -152,6 +154,9 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'medidas',
       'insumos',
       'categorias-insumos',
+      // ESTOQUE 3.0 / P3-04 — unidade de medida e conversão declarada
+      'unidades-medida',
+      'conversoes-unidade',
       'clientes',
       'fornecedores',
       'representantes',
@@ -223,6 +228,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       // FINANCEIRO 3.0 — estrutura contábil (não é contabilidade)
       'plano-contas',
       'balancete',
+      // FINANCEIRO 3.0 / P2-13 — lote de importação contábil (mesmo livro)
+      'importacoes-contabeis',
       'contas-financeiras',
       'transferencias',
       'comissoes',

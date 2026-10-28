@@ -81,8 +81,20 @@ for (const m of MODULES) {
 // Uma rota absoluta que não é de módulo só é alcançável por link direto — não é
 // erro (login, convite, portal, catálogo público), mas fica registrado.
 const ROTAS_DE_TOPO_ESPERADAS = new Set(['/', '/login', '/esqueci', '/dev/componentes', '/config/impressao']);
+
+/**
+ * Rotas de FORMULÁRIO do padrão ZERO MODAL (`/clientes/novo`, `/cores/:id/editar`...).
+ * Elas não têm — e não devem ter — entrada de menu: quem chega nelas é o botão
+ * "Novo"/"Editar" da LISTAGEM do módulo pai. Exigir menu aqui empurraria o
+ * sistema de volta para o modal. O vínculo continua verificável: a rota precisa
+ * existir e o módulo pai precisa existir (checado em MENU_ROTA acima).
+ */
+const rotaDeFormularioDoModulo = (rota: string) =>
+  /\/(novo|editar)$/.test(rota) || /^\/[^/]+\/:id\/editar$/.test(rota);
+
 for (const rota of rotasExplicitas) {
   if (/:|\*/.test(rota) || ROTAS_DE_TOPO_ESPERADAS.has(rota)) continue;
+  if (rotaDeFormularioDoModulo(rota)) continue;
   if (!MODULES.some((m) => m.path === rota)) {
     aviso('ROTA_SEM_MENU', `A rota "${rota}" existe mas nenhum módulo do menu aponta para ela (acesso só por link direto).`);
   }
@@ -112,6 +124,23 @@ for (const g of MODULE_GROUPS) {
  */
 const ALCADA_POR_PERMISSAO_COMERCIAL = new Set(['catalogos', 'politicas_comerciais']);
 
+/**
+ * Módulos cuja restrição é aplicada por uma GUARDA PRÓPRIA, não pelo recurso
+ * genérico — e que por isso não podem ser derivados mecanicamente.
+ *
+ * Cada entrada precisa dizer ONDE a alçada é aplicada; sem isso o módulo fica
+ * "solto" de verdade e o aviso volta.
+ */
+const ALCADA_POR_GUARDA_PROPRIA: Record<string, string> = {
+  // Homologar fornecedor é decisão de gestão, mas LER o cadastro de fornecedores
+  // é operação do dia a dia (comprador precisa do fornecedor na cotação e no
+  // pedido). Restringir o recurso `fornecedores` no servidor quebraria compras
+  // para operador; por isso a alçada fica na guarda de escrita:
+  // `exigirGestor(actor)` em server/src/comprasFornecedor.ts (alterarHomologacao)
+  // + `validarFornecedorParaNovoPedido` em server/src/fornecedorHomologacaoGuard.ts.
+  'homologacao-fornecedores': 'exigirGestor em comprasFornecedor.ts + fornecedorHomologacaoGuard.ts',
+};
+
 for (const m of MODULES) {
   if (!m.resource) continue;
   const r = RESOURCES[m.resource];
@@ -130,7 +159,7 @@ for (const m of MODULES) {
     erro('RBAC_DERIVA_ADMIN', `O recurso "${r.key}" é adminOnly/minPerfil=admin no servidor, mas o módulo "${m.id}" não declara adminOnly — operador e gerente veem o menu e recebem 403.`);
   } else if (exigeGerente && !declaraGerente && !declaraAdmin) {
     erro('RBAC_DERIVA_GERENTE', `O recurso "${r.key}" exige minPerfil=gerente no servidor, mas o módulo "${m.id}" não declara minPerfil — o operador vê o menu e recebe 403.`);
-  } else if (!exigeAdmin && !exigeGerente && (declaraAdmin || declaraGerente)) {
+  } else if (!exigeAdmin && !exigeGerente && (declaraAdmin || declaraGerente) && !ALCADA_POR_GUARDA_PROPRIA[m.id]) {
     aviso('RBAC_DERIVA_SOLTA', `O módulo "${m.id}" restringe o menu (${declaraAdmin ? 'adminOnly' : 'minPerfil=' + m.minPerfil}) mas o recurso "${r.key}" não restringe no servidor — a API continua acessível por outro caminho.`);
   }
 }
@@ -197,7 +226,23 @@ if (linhaAuth < 0) {
 } else {
   const antes = indexSrc.split('\n').slice(0, linhaAuth).join('\n');
   const publicas = [...antes.matchAll(/app\.(?:get|post|put|delete)\(\s*'([^']+)'/g)].map((m) => m[1]);
-  const permitidas = [/^\/api\/(health|auth|convites|files|portal|publico)\//];
+  /**
+   * Rotas que PODEM ficar antes do requireAuth:
+   *   • /api/health            — healthcheck da plataforma (Render usa como probe);
+   *   • /api/auth/*            — login, refresh, MFA, recuperação (obviamente pré-sessão);
+   *   • /api/convites/*        — aceite de convite (quem aceita ainda não tem sessão);
+   *   • /api/files/*           — download assinado por token;
+   *   • /api/portal/*, /api/publico/* — páginas públicas por token;
+   *   • /api/print/agent/*     — agente de impressão instalado na máquina do cliente:
+   *                              ele NÃO tem sessão de usuário, autentica por token de
+   *                              pareamento próprio (print_agentes.token). Sem isso o
+   *                              agente não consegue parear nem reportar job.
+   * Qualquer outra rota pré-auth continua sendo aviso.
+   */
+  const permitidas = [
+    /^\/api\/(health|auth|convites|files|portal|publico)(\/|$)/,
+    /^\/api\/print\/agent(\/|$)/,
+  ];
   for (const p of publicas) {
     if (!permitidas.some((re) => re.test(p))) aviso('ROTA_PUBLICA', `A rota "${p}" é registrada antes do requireAuth global — confirme que é intencionalmente pública.`);
   }

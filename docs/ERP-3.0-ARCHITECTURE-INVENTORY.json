@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-10-27T23:45:18.224Z",
+  "gerado_em": "2026-10-28T02:08:03.601Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 57,
-    "sql_com_conteudo": 57,
+    "sql": 62,
+    "sql_com_conteudo": 62,
     "prisma": 7
   },
   "tabelas": {
-    "total": 131,
-    "com_empresa_id": 111,
+    "total": 135,
+    "com_empresa_id": 115,
     "sem_empresa_id": 20,
-    "fora_do_prisma": 120
+    "fora_do_prisma": 124
   },
-  "indices": 408,
-  "constraints": 219,
+  "indices": 420,
+  "constraints": 232,
   "recursos": {
-    "total": 116,
-    "com_tabela": 116,
-    "multiempresa": 98,
-    "somente_leitura": 51,
-    "rbac_restrito": 37,
-    "cobertura_tenant_pct": 84.5
+    "total": 120,
+    "com_tabela": 120,
+    "multiempresa": 102,
+    "somente_leitura": 52,
+    "rbac_restrito": 42,
+    "cobertura_tenant_pct": 85
   },
   "crm": [
     {
@@ -79,18 +79,18 @@
     }
   ],
   "modulos": {
-    "total": 101,
-    "navegaveis": 93,
+    "total": 104,
+    "navegaveis": 96,
     "planejados": 8,
     "areas": 11,
     "grupos": 28,
-    "com_recurso": 66
+    "com_recurso": 69
   },
   "rotas": {
-    "total": 361,
+    "total": 367,
     "por_metodo": {
-      "GET": 162,
-      "POST": 167,
+      "GET": 163,
+      "POST": 172,
       "PUT": 17,
       "DELETE": 12,
       "PATCH": 3
@@ -193,14 +193,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 160,
-      "casos": 1406
+      "arquivos": 163,
+      "casos": 1438
     },
     "client": {
       "arquivos": 75,
       "casos": 846
     },
-    "total": 2252
+    "total": 2284
   },
   "integracoes": {
     "arquivos_modules": 31,
@@ -332,8 +332,10 @@
     "estoque_transferencias",
     "estoques",
     "expedicao_eventos",
+    "feriados",
     "fichas_tecnicas",
     "fin_extrato_transacoes",
+    "fin_importacoes_contabeis",
     "fiscal_obrigacao_entregas",
     "fiscal_obrigacoes",
     "fornecedor_contatos",
@@ -396,6 +398,8 @@
     "sessoes",
     "territorios",
     "transferencias_financeiras",
+    "unidade_conversoes",
+    "unidades_medida",
     "usuario_empresas",
     "venda_atribuicao",
     "vendas",
