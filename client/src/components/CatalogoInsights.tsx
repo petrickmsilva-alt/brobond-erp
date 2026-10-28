@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { BarChart3, Eye, Link2, Link2Off, RefreshCw, ShoppingBag, Users } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatMoney } from '../lib/format';
-import { Alert, Badge, ConfirmDialog, useToast } from './ui';
+import { Alert, Badge, ConfirmacaoInline, useToast } from './ui';
 
 type Insight = {
   periodo_dias: number;
@@ -69,7 +69,7 @@ export default function CatalogoInsights() {
         </div>
       </>}
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={revogando != null}
         title="Revogar link"
         message="Revogar este link? O cliente perderá o acesso imediatamente."

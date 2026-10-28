@@ -143,6 +143,12 @@ function coerce(f: Field, raw: unknown): [unknown, string | null] {
     }
     case 'select': {
       const s = String(raw).trim();
+      // Opções que vivem no BANCO (`optionsFrom`): a lista estática é só
+      // semente/compatibilidade e NÃO pode ser a autoridade — validar contra
+      // ela reintroduziria o bloqueio de "etapa nova não pode ser usada". A
+      // validação de domínio (existe? é da empresa? do funil? está ativa?)
+      // acontece no serviço, dentro da transação, com a lista real.
+      if (f.optionsFrom) return [s, null];
       if (f.options && !f.options.some((o) => o.value === s)) return [s, 'Opção inválida'];
       return [s, null];
     }

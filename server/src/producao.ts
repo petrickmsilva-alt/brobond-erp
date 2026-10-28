@@ -209,7 +209,7 @@ export async function validarOrdemPayload(data: Payload, before: Row | null): Pr
 }
 
 /** Itens efetivos de produção (grade → itens_ordem; tamanho → linha única). */
-async function itensProducao(op: Row, escopo: EscopoEmpresa, tx?: Tx): Promise<{ tamanho_id: number; quantidade: number }[]> {
+export async function itensProducao(op: Row, escopo: EscopoEmpresa, tx?: Tx): Promise<{ tamanho_id: number; quantidade: number }[]> {
   const tipo = String(op.tipo || 'tamanho');
   if (tipo === 'grade') {
     const itens = await listarTodos(recursoOrdem().itens, { empresa_id: escopo.empresaId, ordem_id: Number(op.id) }, tx);
@@ -228,7 +228,7 @@ async function itensProducao(op: Row, escopo: EscopoEmpresa, tx?: Tx): Promise<{
 }
 
 /** Encontra a ficha técnica do produto (única por produto). */
-async function fichaDoProduto(produtoId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row | null> {
+export async function fichaDoProduto(produtoId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row | null> {
   const s = getStore();
   const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId, empresa_id: escopo.empresaId }, tx);
   if (!produto) throw new HttpError(404, 'Produto não encontrado.');
@@ -254,7 +254,7 @@ async function fichaDoProduto(produtoId: number, escopo: EscopoEmpresa, tx?: Tx)
 //     resultado é exatamente o que a OP fazia antes da E2.
 // ============================================================================
 
-type LinhaConsumo = {
+export type LinhaConsumo = {
   insumo_id: number;
   necessidade: number;
   custo_unitario: number;
@@ -299,7 +299,7 @@ function produzidasPorTamanho(apontamentos: Row[]): Map<number, number> {
  * O que a ficha técnica exige para `pecas` peças, já com a perda de insumo de
  * cada linha. Chave: insumo_id.
  */
-async function necessidadeDaFicha(ficha: Row | null, pecas: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Map<number, LinhaConsumo>> {
+export async function necessidadeDaFicha(ficha: Row | null, pecas: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Map<number, LinhaConsumo>> {
   const s = getStore();
   const mapa = new Map<number, LinhaConsumo>();
   if (!ficha || pecas <= 0) return mapa;
@@ -1743,7 +1743,7 @@ export async function reabrirOrdem(req: Request, res: Response) {
 // vazio em vez de inventar número.
 // ============================================================================
 
-function segundaDaSemana(iso: string): string {
+export function segundaDaSemana(iso: string): string {
   const d = new Date(`${iso}T12:00:00Z`);
   const dia = (d.getUTCDay() + 6) % 7; // segunda = 0
   d.setUTCDate(d.getUTCDate() - dia);

@@ -88,17 +88,21 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
 };
 
 describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () => {
-  it('preserva exatamente os 85 módulos e todas as 85 URLs sem duplicidade nem remoção', () => {
+  it('preserva exatamente os 101 módulos e todas as 101 URLs sem duplicidade nem remoção', () => {
     // 70 da Árvore Master original + 10 da FUNDAÇÃO COMERCIAL (MASTER
     // MA-02..MA-08: territórios, equipes, hierarquia, carteira, atribuição,
     // metas, painel comercial e os dois cadastros do motor de comissão)
     // + 1 do cadastro mestre de Insumos (Categorias de Insumos)
-    // + 4 do CRM 3.0 (leads, oportunidades, atividades, motivos de perda).
-    expect(MODULES).toHaveLength(85);
+    // + 4 do CRM 3.0 (leads, oportunidades, atividades, motivos de perda)
+    // + 2 do CRM 3.0 evolução (painel e agenda de atividades)
+    // + 16 da EVOLUÇÃO ERP 3.0 (estoque: transferências, reservas; compras:
+    //   homologação; produção: recursos, capacidade/MRP; fiscal: obrigações,
+    //   calendário; financeiro: plano de contas, balancete).
+    expect(MODULES).toHaveLength(101);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(85);
-    expect(new Set(paths).size).toBe(85);
+    expect(new Set(ids).size).toBe(101);
+    expect(new Set(paths).size).toBe(101);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -127,8 +131,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (71), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(71);
+  it('separa ERP CORE (87), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(87);
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(8);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
@@ -171,6 +175,14 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'crm-oportunidades',
       'crm-atividades',
       'crm-motivos-perda',
+      // CRM 3.0 — evolução: painel, agenda, configuração do funil e trilha
+      'crm-painel',
+      'crm-agenda',
+      'crm-estagio-historico',
+      'crm-funis',
+      'crm-etapas',
+      'crm-origens',
+      'crm-campanhas',
       'metas',
       'pdv',
       'pdv-caixas',
@@ -184,17 +196,33 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'movimentacoes',
       'inventario',
       'locais',
+      // ESTOQUE 3.0 — transferência formal (documento) e reservas
+      'transferencias-estoque',
+      'reservas-estoque',
       'compras',
       'cotacoes-compra',
       'compra-recebimentos',
       'importar-nfe-compra',
       'sugestao-compra',
       'depara-fornecedor',
+      // COMPRAS 3.0 — homologação de fornecedor (processo sobre o cadastro)
+      'homologacao-fornecedores',
     ]);
-    expect(porArea('Produção')).toEqual(['planejamento-producao', 'ordens', 'fichas', 'custo']);
+    expect(porArea('Produção')).toEqual([
+      'planejamento-producao',
+      // PRODUÇÃO 3.0 — recursos produtivos e capacidade/MRP
+      'producao-recursos',
+      'producao-capacidade',
+      'ordens',
+      'fichas',
+      'custo',
+    ]);
     expect(porArea('Financeiro')).toEqual([
       'financeiro',
       'lancamentos',
+      // FINANCEIRO 3.0 — estrutura contábil (não é contabilidade)
+      'plano-contas',
+      'balancete',
       'contas-financeiras',
       'transferencias',
       'comissoes',
@@ -207,7 +235,15 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'centros-custo',
       'recorrencias-financeiras',
     ]);
-    expect(porArea('Fiscal')).toEqual(['documentos-fiscais', 'inutilizacoes', 'regras-fiscais', 'ncm']);
+    expect(porArea('Fiscal')).toEqual([
+      'documentos-fiscais',
+      'inutilizacoes',
+      'regras-fiscais',
+      'ncm',
+      // FISCAL 3.0 — obrigações acessórias: cadastro da regra + calendário
+      'fiscal-obrigacoes',
+      'fiscal-calendario',
+    ]);
     expect(porArea('Administração')).toEqual(['empresas', 'usuarios', 'auditoria', 'webhooks']);
     expect(porArea('Commerce')).toEqual([
       'conector-mercadolivre',
@@ -315,7 +351,15 @@ describe('visibleModules', () => {
   it('ERP-05 / UX-03: a área Fiscal concentra documentos, inutilizações, regras e NCM', () => {
     expect(MODULE_AREAS).toContain('Fiscal');
     const fiscal = MODULES.filter((m) => m.area === 'Fiscal').map((m) => m.id);
-    expect(fiscal).toEqual(['documentos-fiscais', 'inutilizacoes', 'regras-fiscais', 'ncm']);
+    expect(fiscal).toEqual([
+      'documentos-fiscais',
+      'inutilizacoes',
+      'regras-fiscais',
+      'ncm',
+      // FISCAL 3.0 — obrigações acessórias continuam em Fiscal (casa canônica).
+      'fiscal-obrigacoes',
+      'fiscal-calendario',
+    ]);
     expect(MODULES.filter((m) => m.area === 'Vendas').map((m) => m.id)).not.toContain('documentos-fiscais');
     expect(MODULES.filter((m) => m.area === 'Vendas').map((m) => m.id)).not.toContain('regras-fiscais');
 

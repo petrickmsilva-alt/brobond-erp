@@ -1041,8 +1041,9 @@ await (async () => {
   check('fornecedores: RBAC preservado — SEM minPerfilEscrita (é cadastro por empresa)', forn?.minPerfilEscrita === undefined, `minPerfilEscrita=${forn?.minPerfilEscrita}`);
   check('fornecedores: /meta entrega os filtros rápidos Todos/Ativos/Inativos',
     JSON.stringify(forn?.quickFilters?.[0]?.options?.map((o) => o.label)) === JSON.stringify(['Todos', 'Ativos', 'Inativos']));
-  check('fornecedores: /meta declara os filtros reais (pessoa, uf, ativo)',
-    JSON.stringify(forn?.filterFields) === JSON.stringify(['pessoa', 'uf', 'ativo']),
+  // migration 0053 acrescentou o filtro de homologação na frente dos históricos.
+  check('fornecedores: /meta declara os filtros reais (homologacao_status, pessoa, uf, ativo)',
+    JSON.stringify(forn?.filterFields) === JSON.stringify(['homologacao_status', 'pessoa', 'uf', 'ativo']),
     `filterFields=${JSON.stringify(forn?.filterFields)}`);
   check('fornecedores: /meta declara a utilização real pelos pedidos de compra',
     forn?.uso?.recurso === 'compras' && forn?.uso?.campo === 'fornecedor_id',
@@ -1488,6 +1489,238 @@ check('sem token → 401', semToken.status === 401, `status ${semToken.status}`)
 
 const ticketComoBearer = await req('GET', '/logistica/config', null, ticket);
 check('ticket de MFA não vale como token de acesso → 401', ticketComoBearer.status === 401, `status ${ticketComoBearer.status}`);
+
+// ---------------------------------------------------------------- ERP 3.0 (migrations 0051..0056)
+// Superfície HTTP real dos cinco domínios evoluídos. O objetivo é provar o que
+// a documentação promete: transferência é DOCUMENTO com estados, disponível é
+// CALCULADO, homologação é PROCESSO no cadastro, MRP/fiscal/balancete são
+// LEITURA (nenhum deles cria fato por conta própria).
+{
+  const sufixo = Date.now().toString().slice(-6);
+
+  // --- massa mínima: produto, dois locais e fornecedor
+  const prod30 = await req('POST', '/produtos', { sku: `SMK30-${sufixo}`, nome: `Produto smoke 3.0 ${sufixo}` });
+  check('3.0: POST /produtos cria produto para a massa', [200, 201].includes(prod30.status), `status ${prod30.status} ${msg(prod30.json)}`);
+  const prod30Id = prod30.json?.id;
+  const l1 = await req('POST', '/locais', { nome: `Depósito A ${sufixo}`, tipo: 'loja' });
+  const l2 = await req('POST', '/locais', { nome: `Expedição B ${sufixo}`, tipo: 'expedicao' });
+  check('3.0: POST /locais cria os dois locais da transferência', [200, 201].includes(l1.status) && [200, 201].includes(l2.status), `status ${l1.status}/${l2.status}`);
+  const forn30 = await req('POST', '/fornecedores', { nome: `Fornecedor smoke 3.0 ${sufixo}`, pessoa: 'pj', indicador_ie: '1' });
+  check('3.0: fornecedor nasce em homologação PENDENTE (default do servidor)', forn30.json?.homologacao_status === 'pendente', `status_homolog=${forn30.json?.homologacao_status}`);
+  const forn30Id = forn30.json?.id;
+
+  // --- ESTOQUE: disponível calculado, reserva, transferência como documento
+  const disp = await req('GET', `/estoque/disponibilidade?produto_id=${prod30Id}`);
+  check('3.0 estoque: GET /estoque/disponibilidade devolve a regra do disponível',
+    disp.status === 200 && String(disp.json?.regra || '').includes('disponivel = fisico'),
+    `status ${disp.status}`);
+  const reservaSemSaldo = await req('POST', '/estoque/reservas', { produto_id: prod30Id, quantidade: 5, tipo: 'reserva' });
+  check('3.0 estoque: reserva sem saldo é recusada com 409 (não reserva negativo)',
+    reservaSemSaldo.status === 409, `status ${reservaSemSaldo.status} ${msg(reservaSemSaldo.json)}`);
+  // Saldo no local de ORIGEM: sem isso a aprovação da transferência é recusada
+  // (é exatamente a regra que queremos provar três linhas abaixo).
+  const mov30 = await req('POST', '/movimentacoes', {
+    tipo: 'entrada', produto_id: prod30Id, local_id: l1.json?.id, local: `Depósito A ${sufixo}`, quantidade: 10,
+  });
+  check('3.0 estoque: entrada oficial de saldo no local de origem', [200, 201].includes(mov30.status), `status ${mov30.status} ${msg(mov30.json)}`);
+  const transfMesmoLocal = await req('POST', '/estoque/transferencias', {
+    origem_local_id: l1.json?.id, destino_local_id: l1.json?.id, itens: [{ produto_id: prod30Id, quantidade: 1 }],
+  });
+  check('3.0 estoque: transferência com origem = destino → 400', transfMesmoLocal.status === 400, `status ${transfMesmoLocal.status}`);
+  const transfSemItem = await req('POST', '/estoque/transferencias', { origem_local_id: l1.json?.id, destino_local_id: l2.json?.id, itens: [] });
+  check('3.0 estoque: transferência sem item → 400', transfSemItem.status === 400, `status ${transfSemItem.status}`);
+  const transf = await req('POST', '/estoque/transferencias', {
+    origem_local_id: l1.json?.id, destino_local_id: l2.json?.id,
+    itens: [{ produto_id: prod30Id, quantidade: 2 }],
+  });
+  check('3.0 estoque: POST /estoque/transferencias cria documento em SOLICITADA',
+    [200, 201].includes(transf.status) && transf.json?.status === 'solicitada',
+    `status ${transf.status} doc=${transf.json?.status} ${msg(transf.json)}`);
+  const transfId = transf.json?.id;
+  const receberAntes = await req('POST', `/estoque/transferencias/${transfId}/receber`, {});
+  check('3.0 estoque: receber antes de expedir é recusado (409)', receberAntes.status === 409, `status ${receberAntes.status}`);
+  const aprovar = await req('POST', `/estoque/transferencias/${transfId}/aprovar`, {});
+  check('3.0 estoque: aprovar → status APROVADA', aprovar.json?.status === 'aprovada', `doc=${aprovar.json?.status}`);
+  const expedir = await req('POST', `/estoque/transferencias/${transfId}/expedir`, {});
+  check('3.0 estoque: expedir → status EM_TRANSITO', expedir.json?.status === 'em_transito', `doc=${expedir.json?.status}`);
+  const receber = await req('POST', `/estoque/transferencias/${transfId}/receber`, {});
+  check('3.0 estoque: receber → status RECEBIDA', receber.json?.status === 'recebida', `doc=${receber.json?.status}`);
+  const cancelarSemMotivo = await req('POST', `/estoque/transferencias/${transfId}/cancelar`, {});
+  check('3.0 estoque: cancelar sem motivo → 400 (motivo é obrigatório)', cancelarSemMotivo.status === 400, `status ${cancelarSemMotivo.status}`);
+  const cancelarRecebida = await req('POST', `/estoque/transferencias/${transfId}/cancelar`, { motivo: 'Tentativa após recebimento (smoke)' });
+  check('3.0 estoque: cancelar documento já recebido → 409', cancelarRecebida.status === 409, `status ${cancelarRecebida.status}`);
+  const detailTransf = await req('GET', `/estoque/transferencias/${transfId}`);
+  check('3.0 estoque: o detalhe traz itens e trilha de eventos',
+    detailTransf.status === 200 && Array.isArray(detailTransf.json?.itens) && detailTransf.json.itens.length > 0
+      && Array.isArray(detailTransf.json?.eventos) && detailTransf.json.eventos.length >= 3,
+    `itens=${detailTransf.json?.itens?.length} eventos=${detailTransf.json?.eventos?.length}`);
+  const transfSemToken = await fetch(`${BASE}/estoque/transferencias`, { method: 'GET' });
+  check('3.0 estoque: sem token → 401', transfSemToken.status === 401, `status ${transfSemToken.status}`);
+
+  // --- COMPRAS: homologação como processo, com guard e score explicável
+  const homolog = await req('GET', `/compras/fornecedores/${forn30Id}/homologacao`);
+  check('3.0 compras: GET homologação devolve estado e próximos passos',
+    homolog.status === 200 && homolog.json?.status === 'pendente', `status ${homolog.status} ${homolog.json?.status}`);
+  const statusInvalido = await req('POST', `/compras/fornecedores/${forn30Id}/homologacao`, { status: 'aprovado' });
+  check('3.0 compras: status fora do vocabulário → 400 (não inventa estado)', statusInvalido.status === 400, `status ${statusInvalido.status}`);
+  const puloDeEtapa = await req('POST', `/compras/fornecedores/${forn30Id}/homologacao`, { status: 'homologado' });
+  check('3.0 compras: pendente → homologado direto é recusado (422)', puloDeEtapa.status === 422, `status ${puloDeEtapa.status}`);
+  const emAnalise = await req('POST', `/compras/fornecedores/${forn30Id}/homologacao`, { status: 'em_analise' });
+  check('3.0 compras: pendente → em_analise é permitido', emAnalise.json?.status === 'em_analise', `doc=${emAnalise.json?.status}`);
+  const homologarSemDoc = await req('POST', `/compras/fornecedores/${forn30Id}/homologacao`, { status: 'homologado' });
+  check('3.0 compras: homologar sem categoria/documento é recusado (422 com pendências)',
+    homologarSemDoc.status === 422 && Boolean(homologarSemDoc.json?.fields?.pendencias),
+    `status ${homologarSemDoc.status} pendencias=${JSON.stringify(homologarSemDoc.json?.fields?.pendencias)}`);
+  const bloquearSemMotivo = await req('POST', `/compras/fornecedores/${forn30Id}/homologacao`, { status: 'bloqueado' });
+  check('3.0 compras: bloquear sem motivo → 400', bloquearSemMotivo.status === 400, `status ${bloquearSemMotivo.status}`);
+  const suspenderDeAnalise = await req('POST', `/compras/fornecedores/${forn30Id}/homologacao`, { status: 'suspenso', motivo: 'Documentação vencida (smoke)' });
+  check('3.0 compras: em_analise → suspenso não existe na máquina de estados (422)', suspenderDeAnalise.status === 422, `status ${suspenderDeAnalise.status}`);
+  const suspender = await req('POST', `/compras/fornecedores/${forn30Id}/homologacao`, { status: 'bloqueado', motivo: 'Documentação vencida (smoke)' });
+  check('3.0 compras: em_analise → bloqueado com motivo → BLOQUEADO', suspender.json?.status === 'bloqueado', `doc=${suspender.json?.status}`);
+  const desempenho = await req('GET', `/compras/fornecedores/${forn30Id}/desempenho`);
+  check('3.0 compras: desempenho devolve score + fatores explicáveis (nada gravado)',
+    desempenho.status === 200 && typeof desempenho.json?.score === 'number' && Array.isArray(desempenho.json?.fatores),
+    `score=${desempenho.json?.score} fatores=${desempenho.json?.fatores?.length}`);
+  const painelCompras = await req('GET', '/compras/painel');
+  check('3.0 compras: GET /compras/painel traz pedidos e homologação derivados',
+    painelCompras.status === 200 && Boolean(painelCompras.json?.homologacao?.por_status), `status ${painelCompras.status}`);
+
+  // --- PRODUÇÃO: capacidade e MRP são LEITURA
+  const capacidade = await req('GET', `/producao/capacidade`);
+  check('3.0 produção: GET /producao/capacidade calcula ocupação e gargalo',
+    capacidade.status === 200 && 'ocupacao_pct' in (capacidade.json?.resumo ?? {}) && 'gargalo' in (capacidade.json?.resumo ?? {}),
+    `status ${capacidade.status}`);
+  const mrp = await req('GET', '/producao/mrp');
+  check('3.0 produção: GET /producao/mrp devolve necessidade sem criar pedido de compra',
+    mrp.status === 200 && String(mrp.json?.regra || '').includes('não compra') && Array.isArray(mrp.json?.produtos),
+    `status ${mrp.status}`);
+  const mrpPost = await req('POST', '/producao/mrp', {});
+  check('3.0 produção: MRP é somente leitura (POST não existe) → 404', mrpPost.status === 404, `status ${mrpPost.status}`);
+
+  // --- FISCAL: obrigação acessória, prazo derivado e prova de entrega
+  const obrig = await req('POST', '/fiscal_obrigacoes', {
+    codigo: `SMK-${sufixo}`, nome: `Obrigação smoke ${sufixo}`, tipo: 'sped_fiscal', periodicidade: 'mensal', dia_vencimento: 15,
+  });
+  check('3.0 fiscal: POST /fiscal_obrigacoes cria a obrigação', [200, 201].includes(obrig.status), `status ${obrig.status} ${msg(obrig.json)}`);
+  const obrigId = obrig.json?.id;
+  const calendario = await req('GET', '/fiscal/calendario?de=2026-03&ate=2026-04');
+  const linhaCal = (calendario.json?.obrigacoes ?? []).find((l) => Number(l.obrigacao_id) === Number(obrigId));
+  check('3.0 fiscal: calendário calcula o vencimento no mês SEGUINTE com o dia da obrigação',
+    calendario.status === 200 && linhaCal?.competencia === '2026-03' && linhaCal?.vencimento === '2026-04-15',
+    `vencimento=${linhaCal?.vencimento}`);
+  check('3.0 fiscal: competência passada sem entrega aparece como ATRASADA (status derivado)',
+    linhaCal?.status === 'atrasada', `status=${linhaCal?.status}`);
+  const entregaSemProtocolo = await req('POST', `/fiscal/obrigacoes/${obrigId}/entregas`, { competencia: '2026-03', status: 'entregue' });
+  check('3.0 fiscal: "entregue" sem protocolo → 400 (prova é obrigatória)', entregaSemProtocolo.status === 400, `status ${entregaSemProtocolo.status}`);
+  const dispensaSemMotivo = await req('POST', `/fiscal/obrigacoes/${obrigId}/entregas`, { competencia: '2026-03', status: 'dispensada' });
+  check('3.0 fiscal: "dispensada" sem motivo → 400', dispensaSemMotivo.status === 400, `status ${dispensaSemMotivo.status}`);
+  const entrega = await req('POST', `/fiscal/obrigacoes/${obrigId}/entregas`, {
+    competencia: '2026-03', status: 'entregue', protocolo: `PROT-${sufixo}`, arquivo_ref: 'sped-2026-03.txt',
+  });
+  check('3.0 fiscal: entrega com protocolo é registrada', entrega.status === 200, `status ${entrega.status} ${msg(entrega.json)}`);
+  const entregaDenovo = await req('POST', `/fiscal/obrigacoes/${obrigId}/entregas`, {
+    competencia: '2026-03', status: 'entregue', protocolo: `PROT2-${sufixo}`,
+  });
+  const historicoObrig = await req('GET', `/fiscal/obrigacoes/${obrigId}/historico`);
+  check('3.0 fiscal: reenviar a mesma competência faz UPSERT (uma linha só)',
+    entregaDenovo.status === 200 && (historicoObrig.json?.entregas ?? []).length === 1,
+    `entregas=${(historicoObrig.json?.entregas ?? []).length}`);
+  const calendarioDepois = await req('GET', '/fiscal/calendario?de=2026-03&ate=2026-03');
+  const linhaDepois = (calendarioDepois.json?.obrigacoes ?? []).find((l) => Number(l.obrigacao_id) === Number(obrigId));
+  check('3.0 fiscal: com entrega registrada o status derivado vira ENTREGUE',
+    linhaDepois?.status === 'entregue', `status=${linhaDepois?.status}`);
+
+  // --- FINANCEIRO: balancete é leitura do MESMO livro-caixa
+  const balancete = await req('GET', '/financeiro/balancete?de=2026-01&ate=2026-12');
+  check('3.0 financeiro: GET /financeiro/balancete devolve resumo, contas e sem_classificacao',
+    balancete.status === 200 && Array.isArray(balancete.json?.contas) && Array.isArray(balancete.json?.sem_classificacao)
+      && 'diferenca' in (balancete.json?.resumo ?? {}),
+    `status ${balancete.status}`);
+  check('3.0 financeiro: o balancete declara a regra (soma o livro-caixa, não gera partida dobrada)',
+    String(balancete.json?.regra || '').includes('SOMA o livro-caixa'), '');
+  const balancetePost = await req('POST', '/financeiro/balancete', {});
+  check('3.0 financeiro: balancete é somente leitura (POST não existe) → 404', balancetePost.status === 404, `status ${balancetePost.status}`);
+  const resumoPlano = await req('GET', '/financeiro/plano-contas/resumo');
+  check('3.0 financeiro: GET /financeiro/plano-contas/resumo responde', resumoPlano.status === 200, `status ${resumoPlano.status}`);
+
+  // --- CRM 3.0: painel, funil configurável e histórico de estágio
+  const painelCrm30 = await req('GET', '/crm/painel');
+  check('3.0 CRM: GET /crm/painel responde (indicadores derivados)', painelCrm30.status === 200, `status ${painelCrm30.status}`);
+  const funil = await req('POST', '/crm_funis', { nome: `Funil smoke ${sufixo}` });
+  check('3.0 CRM: POST /crm_funis cria funil configurável', [200, 201].includes(funil.status), `status ${funil.status} ${msg(funil.json)}`);
+  const etapa = await req('POST', '/crm_etapas', {
+    funil_id: funil.json?.id, nome: `Etapa smoke ${sufixo}`, chave: 'prospeccao', ordem: 1, probabilidade: 30,
+  });
+  check('3.0 CRM: POST /crm_etapas cria etapa com ordem e probabilidade', [200, 201].includes(etapa.status), `status ${etapa.status} ${msg(etapa.json)}`);
+  const origem30 = await req('POST', '/crm_origens', { nome: `Origem smoke ${sufixo}` });
+  check('3.0 CRM: POST /crm_origens cria origem estruturada', [200, 201].includes(origem30.status), `status ${origem30.status}`);
+  const lead30 = await req('POST', '/crm_leads', {
+    nome: `Lead smoke 3.0 ${sufixo}`, status: 'novo', origem_id: origem30.json?.id, utm_source: 'google', utm_campaign: 'smoke30',
+  });
+  check('3.0 CRM: lead aceita origem estruturada + UTM ao lado do texto livre',
+    [200, 201].includes(lead30.status) && Number(lead30.json?.origem_id) === Number(origem30.json?.id),
+    `status ${lead30.status} origem_id=${lead30.json?.origem_id} ${msg(lead30.json)}`);
+  const oport30 = await req('POST', '/crm_oportunidades', {
+    nome: `Oportunidade smoke ${sufixo}`, etapa: 'qualificacao', status: 'aberta', valor: 1000, lead_id: lead30.json?.id,
+  });
+  check('3.0 CRM: oportunidade vinculada ao lead é criada', [200, 201].includes(oport30.status), `status ${oport30.status} ${msg(oport30.json)}`);
+  await req('PUT', `/crm_oportunidades/${oport30.json?.id}`, { etapa: 'proposta' });
+  const historicoOport = await req('GET', `/crm/oportunidades/${oport30.json?.id}/historico`);
+  check('3.0 CRM: a mudança de estágio entra no histórico da oportunidade',
+    historicoOport.status === 200 && (historicoOport.json?.historico ?? historicoOport.json ?? []).length >= 1,
+    `status ${historicoOport.status}`);
+  const painelCrm30SemToken = await fetch(`${BASE}/crm/painel`);
+  check('3.0 CRM: painel exige autenticação → 401', painelCrm30SemToken.status === 401, `status ${painelCrm30SemToken.status}`);
+
+  // --- CRM 3.0 / 0057: ETAPA REALMENTE CONFIGURÁVEL (ponta a ponta por HTTP)
+  //
+  // O gate anterior só provava que o CADASTRO de etapa funcionava. Aqui a etapa
+  // criada pela empresa é USADA numa oportunidade, muda de etapa por id e a
+  // probabilidade vem do cadastro — exatamente o que estava quebrado.
+  const etapaDemo = await req('POST', '/crm_etapas', {
+    funil_id: funil.json?.id, nome: `Demonstração ${sufixo}`, chave: `demonstracao_${sufixo}`, ordem: 2, probabilidade: 45,
+  });
+  check('0057 CRM: etapa CUSTOMIZADA é cadastrada (chave própria, probabilidade 45)',
+    [200, 201].includes(etapaDemo.status), `status ${etapaDemo.status} ${msg(etapaDemo.json)}`);
+  const etapaJuridico = await req('POST', '/crm_etapas', {
+    funil_id: funil.json?.id, nome: `Aprovação Jurídica ${sufixo}`, chave: `aprovacao_juridica_${sufixo}`, ordem: 3, probabilidade: 65,
+  });
+  check('0057 CRM: segunda etapa customizada é cadastrada (65%)',
+    [200, 201].includes(etapaJuridico.status), `status ${etapaJuridico.status} ${msg(etapaJuridico.json)}`);
+
+  const oportEtapa = await req('POST', '/crm_oportunidades', {
+    nome: `Oportunidade etapa custom ${sufixo}`, funil_id: funil.json?.id, etapa_id: etapaDemo.json?.id,
+    status: 'aberta', valor: 10000,
+  });
+  check('0057 CRM: oportunidade USA a etapa customizada (etapa_id aceito no cadastro)',
+    [200, 201].includes(oportEtapa.status) && Number(oportEtapa.json?.etapa_id) === Number(etapaDemo.json?.id)
+      && String(oportEtapa.json?.etapa) === `demonstracao_${sufixo}`,
+    `status ${oportEtapa.status} etapa=${oportEtapa.json?.etapa} etapa_id=${oportEtapa.json?.etapa_id} ${msg(oportEtapa.json)}`);
+  check('0057 CRM: probabilidade da etapa cadastrada é aplicada na criação (45%)',
+    Number(oportEtapa.json?.probabilidade) === 45, `probabilidade=${oportEtapa.json?.probabilidade}`);
+
+  const transicao = await req('POST', `/crm/oportunidades/${oportEtapa.json?.id}/estagio`, { etapa_id: etapaJuridico.json?.id });
+  check('0057 CRM: POST /crm/oportunidades/:id/estagio aceita etapa por ID e responde',
+    transicao.status === 200 && Number(transicao.json?.etapa_id) === Number(etapaJuridico.json?.id),
+    `status ${transicao.status} ${msg(transicao.json)}`);
+  check('0057 CRM: a transição usa a probabilidade da etapa de destino (65%)',
+    Number(transicao.json?.probabilidade) === 65, `probabilidade=${transicao.json?.probabilidade}`);
+  const histTransicao = await req('GET', `/crm/oportunidades/${oportEtapa.json?.id}/historico`);
+  check('0057 CRM: a transição gravou histórico com a etapa anterior',
+    histTransicao.status === 200 && JSON.stringify(histTransicao.json ?? {}).includes(`demonstracao_${sufixo}`),
+    `status ${histTransicao.status}`);
+
+  const etapaAlheia = await req('PUT', `/crm_oportunidades/${oportEtapa.json?.id}`, { etapa_id: 999999 });
+  check('0057 CRM: etapa inexistente é recusada (404, sem vazar existência) → não 200',
+    etapaAlheia.status === 404, `status ${etapaAlheia.status} ${msg(etapaAlheia.json)}`);
+
+  const metaCrm = await req('GET', '/meta');
+  const campoEtapa = (metaCrm.json?.resources?.crm_oportunidades?.fields ?? []).find((f) => f.name === 'etapa');
+  const opcoesEtapa = (campoEtapa?.options ?? []).map((o) => o.value);
+  check('0057 CRM: /api/meta devolve as etapas do CADASTRO (a etapa nova aparece nas opções)',
+    metaCrm.status === 200 && opcoesEtapa.includes(`demonstracao_${sufixo}`),
+    `status ${metaCrm.status} opções=${opcoesEtapa.length}`);
+}
 
 console.log(out.join('\n'));
 console.log(`\n${out.length - falhas}/${out.length} verificações OK`);

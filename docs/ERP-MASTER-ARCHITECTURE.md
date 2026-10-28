@@ -134,7 +134,7 @@ e âncoras). A fonte de verdade do banco é `db/schema.sql` + `db/migrations/`.
 | **Serviço de domínio** | `server/src/services.ts` + um arquivo por domínio (`vendas`→`itens.ts`, `financeiro.ts`, `producao.ts`, `compras.ts`, `estoque.ts`, `fiscal.ts`, `comissoes.ts`, `expedicao.ts`…) | Regra de negócio, transação, RBAC efetivo (`checkAccess`), escopo de empresa (`empresa.ts`) | `checkAccess` em `services.ts:174` |
 | **Rotas HTTP** | `server/src/index.ts` | `app.use('/api', wrap(requireAuth))` na linha **457**: tudo registrado depois é autenticado. Antes disso só há público por intenção (auth, convite, portal, catálogo público, health) + routers de webhook | `index.ts:457`, `index.ts:1077` (404 final) |
 | **Menu + rotas do front** | `client/src/modules.ts` (1.483 linhas, 70 módulos, 11 áreas) → `client/src/App.tsx` | **Fonte única** de navegação, breadcrumb, Command Palette, RBAC declarado na UI e `audit:menu` | `scripts/auditar-menu.ts` |
-| **Diagnóstico de vínculos** | `server/src/dependencias.ts` (877 linhas) | Descobre quem depende de um cadastro, classifica o vínculo e devolve **409** com diagnóstico + orientação; base do modal "Ver vínculos" | `montarDiagnostico`, `erroDependencias` |
+| **Diagnóstico de vínculos** | `server/src/dependencias.ts` (877 linhas) | Descobre quem depende de um cadastro, classifica o vínculo e devolve **409** com diagnóstico + orientação; renderizado **inline** em `DependenciasModal.tsx` (nome legado; o componente usa `PainelInline`, não sobreposição) | `montarDiagnostico`, `erroDependencias` |
 | **Trilha de auditoria** | `auditoria` + `server/src/auditChain.ts` | Registro por ação/entidade/empresa + **cadeia de hashes verificável** (`/admin/auditoria/verificar`) | `hashCadeiaAuditoria`, `verificarCadeiaAuditoria` |
 | **Conectores** | `modules/connectors/` (núcleo próprio: OAuth, cripto, sync, ingestão) | Integrações externas, fora do núcleo do ERP | `modules/connectors/README.md` |
 | **Impressão** | `packages/domain/src/print` (PrintIR) + `print_*` + `print-agent/` | Fila persistente + agente local | migrations `0037`, `0038` |
@@ -176,8 +176,8 @@ arquitetural** e o **dono do dado**.
 | 6 | **Produtos** | 🟢 | `produtos`, `produto_composicao`, `produto_fornecedor_skus`, `produto_abc`, `fichas_tecnicas`, `itens_ficha_tecnica` | produto é o **centro** do cadastro; ficha técnica é engenharia (Produção) |
 | 7 | **Financeiro** | 🟢 | `lancamentos_financeiros`, `contas_financeiras`, `categorias_financeiras`, `centros_custo`, `recorrencias_financeiras`, `transferencias_financeiras`, `fin_extrato_transacoes`, `gateway_cobrancas`, `gateway_webhook_events`, `gateway_configs`, `investidores`, `aportes` | contas a pagar/receber são `lancamentos_financeiros` + `fin_status` da origem; gateway e conciliação (OFX/CNAB) |
 | 8 | **Fiscal** | 🟠 | `documentos_fiscais`, `documentos_fiscais_eventos`, `inutilizacoes_fiscais`, `regras_fiscais`, `impostos_ncm`, `empresa_fiscal_config` | motor e operação prontos; transmissão real depende de credencial (Focus NFe / PlugNotas) |
-| 9 | **Produção** | 🟢 | `ordens_fabricacao`, `itens_ordem`, `ordens_apontamentos`, `ordens_eventos`, `fichas_tecnicas`, `itens_ficha_tecnica` | estados, perdas, custo real, reabertura e estorno (`0026`). O saldo/movimento de insumo é do **Estoque** (`estoque_insumos`, `movimentacoes_insumos`); a OP apenas os solicita |
-| 10 | **CRM** | ⏳ | — | não existe lead/oportunidade/interação. O que existe é **pós-venda operacional** (proposta, portal, catálogo). Não confundir |
+| 9 | **Produção** | 🟢 | `ordens_fabricacao`, `itens_ordem`, `ordens_apontamentos`, `ordens_eventos`, `fichas_tecnicas`, `itens_ficha_tecnica`, `producao_recursos` (0054) | estados, perdas, custo real, reabertura e estorno (`0026`). O saldo/movimento de insumo é do **Estoque** (`estoque_insumos`, `movimentacoes_insumos`); a OP apenas os solicita |
+| 10 | **CRM** | 🟢 | `crm_leads`, `crm_oportunidades`, `crm_atividades`, `crm_funis`, `crm_etapas`, `crm_origens`, `crm_campanhas`, `crm_oportunidade_estagio_historico` (0049/0050/0051/0057) | lead → oportunidade com **funil e etapas configuráveis por empresa** (`etapa_id` é a referência operacional; `etapa` textual é a chave, mantida para histórico/integrações), histórico de estágio transacional, agenda de atividades, score explicável, forecast e painel. O pós-venda (proposta, portal, catálogo) continua sendo **outro** processo |
 | 11 | **Comissões** | 🟢 (apuração/efetivação) · ⏳ (motor de regras) | `vendas.comissao_pct`/`comissao_valor` (apuração), `comissoes_eventos` (livro de efetivação), `representantes.comissao_pct` (default) | efetiva no **recebimento**, pró-rata, com estorno e idempotência; regras com prioridade ainda ⏳ (§11) |
 | 12 | **Metas** | ⏳ | — | nenhuma tabela. Modelo conceitual em §10 |
 | 13 | **Territórios** | ⏳ | — | hoje só `representantes.regiao TEXT` e `clientes` com endereço. Modelo em §9 |
@@ -925,3 +925,62 @@ que permanece idêntico após as alterações (dois arquivos `.md` novos).
 | [`docs/EXCLUSAO-E-VINCULOS.md`](EXCLUSAO-E-VINCULOS.md) | exclusão, desativação, 409 |
 | [`docs/ADR-001-FONTE-UNICA-FATURAMENTO.md`](ADR-001-FONTE-UNICA-FATURAMENTO.md) | fonte única do faturamento |
 | [`docs/ESTOQUE-CANONICO.md`](ESTOQUE-CANONICO.md) | semântica canônica de estoque |
+
+---
+
+## 20. Correções de estado (PR #92 — 2026-10-27)
+
+Esta seção corrige três afirmações deste documento que **não** estavam
+sustentadas pelo código. A regra é a mesma de sempre: documento sem prova é
+dívida.
+
+### 20.1 CRM — "configurável" era meia verdade
+
+Até a migration 0057, `crm_oportunidades.etapa` tinha CHECK de vocabulário fixo
+(`prospeccao|qualificacao|proposta|negociacao|fechamento`). Mesmo com
+`crm_funis`/`crm_etapas` cadastráveis (0051), **etapa nova não podia ser usada
+em oportunidade** — o cadastro aceitava, o uso falhava.
+
+Agora (`docs/ERP-3.0-CRM-FUNIL-CONFIGURAVEL.md`):
+
+```
+crm_oportunidades.etapa_id  → crm_etapas.id   (operacional; FK composta por empresa)
+crm_oportunidades.etapa     → crm_etapas.chave (texto; histórico/compatibilidade)
+```
+
+* validação por cadastro: **tenant** + **funil** + **ativa**;
+* transição, validação e histórico em **uma** transação (rollback provado);
+* probabilidade vem de `crm_etapas.probabilidade` (fallback legado só quando a
+  empresa não tem cadastro);
+* UI sem lista fixa: `/api/meta` resolve as opções por empresa (`optionsFrom`).
+
+`ETAPAS_CRM` continua no código apenas como **semente, fallback e
+compatibilidade histórica**.
+
+### 20.2 Produção — o MRP é de planejamento/necessidade
+
+`GET /api/producao/mrp` **não** é MRP industrial completo. A rota agora declara
+isso na própria resposta (`calculo.tipo = 'mrp_planejamento_necessidade'`,
+`coberto[]`, `nao_coberto[]`, `cria_pedido_de_compra: false`) e a fórmula fecha
+dupla contagem:
+
+* oferta = **disponível** (físico − reservado − empenhado − bloqueado);
+* OP aberta = **planejado − produzido**;
+* compra aberta = **pedido − recebido**;
+* estoque mínimo = apenas **déficit**;
+* falta de produto → necessidade de insumo (a OP existente responde pelo seu
+  próprio `faltam`).
+
+Não coberto (declarado): lead time, lote mínimo/econômico, calendário,
+capacidade finita, ordens planejadas, consumo real por OP, reservas de material
+por OP, pegging/datas de necessidade, horizonte e BOM multinível.
+
+### 20.3 UX — o gate ZERO MODAL agora tem baseline
+
+O gate deixou de ter exceções no código e passou a comparar com
+`docs/ERP-3.0-UX-BASELINE.json`. Ele falha em **baseline + qualquer ocorrência
+nova**, mede 10 assinaturas (incluindo `<dialog>`, `showModal()`,
+`createPortal`, `aria-modal`, `fixed inset-0` em qualquer ordem) e **recusa**
+exceção cuja categoria seja fluxo de módulo (cadastro, edição, exclusão,
+detalhe, seleção, formulário, workflow). Comentário/texto que menciona modal
+continua não sendo violação.

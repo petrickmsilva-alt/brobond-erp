@@ -54,7 +54,7 @@ import {
   type StatusAgenteLocal,
   type TerminalConfigCliente,
 } from '../lib/printAgent';
-import { Modal, useToast } from '../components/ui';
+import { PainelInline, useToast } from '../components/ui';
 
 const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   QUEUED: { label: 'Na fila', cls: 'bg-slate-100 text-slate-700 dark:bg-navy-800 dark:text-navy-200' },
@@ -1095,8 +1095,8 @@ export default function ImpressaoPage() {
       {/* MODAIS OPERACIONAIS                                                 */}
       {/* =================================================================== */}
 
-      {/* Modal Detalhes + PrintIR */}
-      <Modal
+      {/* PainelInline Detalhes + PrintIR */}
+      <PainelInline
         open={Boolean(jobDetalhe)}
         onClose={() => setJobDetalhe(null)}
         title={`Job ${jobDetalhe?.job.public_id.slice(0, 8) || ''}`}
@@ -1127,10 +1127,10 @@ export default function ImpressaoPage() {
             </div>
           </div>
         )}
-      </Modal>
+      </PainelInline>
 
-      {/* Modal Reimpressão Auditada */}
-      <Modal
+      {/* PainelInline Reimpressão Auditada */}
+      <PainelInline
         open={Boolean(reprintAlvo)}
         onClose={() => setReprintAlvo(null)}
         title="Reimpressão Auditada"
@@ -1186,10 +1186,10 @@ export default function ImpressaoPage() {
             </div>
           </div>
         )}
-      </Modal>
+      </PainelInline>
 
-      {/* Modal Criar/Editar Terminal */}
-      <Modal
+      {/* PainelInline Criar/Editar Terminal */}
+      <PainelInline
         open={Boolean(modalTerminal)}
         onClose={() => setModalTerminal(null)}
         title={modalTerminal?.id ? `Editar Terminal ${modalTerminal.codigo}` : 'Novo Terminal de Impressão'}
@@ -1393,10 +1393,10 @@ export default function ImpressaoPage() {
             </div>
           </div>
         )}
-      </Modal>
+      </PainelInline>
 
-      {/* Modal Gerar Código de Pareamento */}
-      <Modal
+      {/* PainelInline Gerar Código de Pareamento */}
+      <PainelInline
         open={Boolean(modalPareamento)}
         onClose={() => setModalPareamento(null)}
         title="Parear Novo Agente Local"
@@ -1462,10 +1462,10 @@ export default function ImpressaoPage() {
             )}
           </div>
         )}
-      </Modal>
+      </PainelInline>
 
-      {/* Modal Editar Agente */}
-      <Modal
+      {/* PainelInline Editar Agente */}
+      <PainelInline
         open={Boolean(agenteEditando)}
         onClose={() => setAgenteEditando(null)}
         title="Configurar Agente"
@@ -1516,10 +1516,10 @@ export default function ImpressaoPage() {
             </div>
           </div>
         )}
-      </Modal>
+      </PainelInline>
 
-      {/* Modal Exibição Única de Token Rotacionado/Reativado */}
-      <Modal
+      {/* PainelInline Exibição Única de Token Rotacionado/Reativado */}
+      <PainelInline
         open={Boolean(segredoUnico)}
         onClose={() => setSegredoUnico(null)}
         title={segredoUnico?.titulo || 'Credencial de Máquina'}
@@ -1547,7 +1547,7 @@ export default function ImpressaoPage() {
             </div>
           </div>
         )}
-      </Modal>
+      </PainelInline>
     </div>
   );
 }

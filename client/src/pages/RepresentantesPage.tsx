@@ -68,7 +68,7 @@ import { BarChart3, Download, Handshake, Pencil, Plus, Power, RefreshCw, Trash2 
 import { api, ApiError, downloadFile } from '../lib/api';
 import { useMeta, type Field, type ListResult, type Option } from '../lib/meta';
 import { formatPhone } from '../lib/format';
-import { Alert, ConfirmDialog, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
 import { Dropdown, Pagination } from '../components/ui-kit';
 import { ListaTabela, type OrdenacaoLista } from '../components/ListaTabela';
 import { ListaCards } from '../components/ListaCards';
@@ -785,7 +785,7 @@ export default function RepresentantesPage() {
       </div>
 
       {/* ---- Confirmação de exclusão (componente padrão do ERP) ---- */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!alvoExclusao}
         danger
         busy={excluindo}

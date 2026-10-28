@@ -5367,3 +5367,954 @@ CREATE INDEX IF NOT EXISTS crm_leads_empresa_origem_idx
   ON crm_leads (empresa_id, origem);
 CREATE INDEX IF NOT EXISTS crm_oportunidades_empresa_lead_idx
   ON crm_oportunidades (empresa_id, lead_id);
+
+-- ============================================================================
+-- ESPELHO DAS MIGRATIONS 0051..0057 (ERP 3.0)
+--
+-- O schema.sql é aplicado a cada boot em bancos NOVOS (server/src/db.ts) e é a
+-- referência de "coluna existe" para o teste `api.test.ts`. Toda migration
+-- versionada precisa do seu espelho aqui — senão um banco novo nasce sem a
+-- tabela e o teste de contrato acusa a divergência.
+--
+-- As migrations continuam sendo a FONTE DE VERDADE: o texto abaixo é o mesmo
+-- DDL idempotente (IF NOT EXISTS / DO $$ ... EXCEPTION duplicate_object).
+-- ============================================================================
+
+
+-- ----------------------------------------------------------------------------
+-- ESPELHO DE db/migrations/0051_crm_3_0_evolucao.sql
+-- ----------------------------------------------------------------------------
+-- ============================================================================
+-- 0051 — CRM 3.0 EVOLUÇÃO: funil configurável, histórico de estágio,
+--        origem/campanha controlada, lembretes de atividade e lead scoring
+--
+-- POR QUE ESTA MIGRAÇÃO EXISTE
+-- ----------------------------
+-- A 0049 entregou o CRM mínimo (leads, oportunidades, atividades, motivos de
+-- perda) com estágios FIXOS no CHECK do banco e a auditoria genérica como único
+-- rastro de mudança. Quatro lacunas ficaram abertas:
+--
+--   1) FUNIL NÃO CONFIGURÁVEL — as etapas eram uma lista fechada em código.
+--      Nenhuma empresa podia renomear, reordenar, desativar ou usar
+--      probabilidade própria por etapa.
+--   2) SEM HISTÓRICO DE ESTÁGIO — dava para saber que a oportunidade mudou de
+--      etapa (auditoria genérica), mas não consultar "quando passou de proposta
+--      para negociação, por quem, com qual observação" como uma trilha do
+--      próprio funil.
+--   3) ORIGEM ERA TEXTO LIVRE — impossível medir conversão por campanha.
+--   4) ATIVIDADE SEM LEMBRETE/STATUS/PRIORIDADE — não havia como responder
+--      "o que vence hoje", "o que está atrasado", "o que é urgente".
+--   (5) Sem score explicável do lead.
+--
+-- DECISÕES ARQUITETURAIS (o que é e o que NÃO é)
+-- ----------------------------------------------
+--   • ADITIVA e IDEMPOTENTE. Nenhuma coluna existente é removida, nenhum dado é
+--     reescrito. `crm_leads.origem` (texto) CONTINUA existindo e continua sendo
+--     gravada: `origem_id` é a referência controlada, adicionada ao lado.
+--   • `crm_oportunidades.etapa` (texto) continua sendo a coluna de leitura do
+--     funil corrente, pelo mesmo motivo: o CHECK da 0049 não é ampliado nem
+--     afrouxado — apenas as etapas canônicas são semeadas em `crm_etapas`.
+--   • Multiempresa REAL: TODA tabela nova carrega `empresa_id` NOT NULL.
+--   • Nenhum CASCADE: o histórico referencia a oportunidade com
+--     ON DELETE RESTRICT (nada é apagado; registro se cancela).
+--   • Vocabulário fechado via CHECK onde existe domínio real (prioridade,
+--     status da atividade, canal).
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 1) FUNIS — um por operação comercial, com um padrão por empresa
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS crm_funis (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  nome TEXT NOT NULL,
+  descricao TEXT,
+  padrao BOOLEAN NOT NULL DEFAULT false,
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS crm_funis_empresa_idx ON crm_funis (empresa_id, ativo);
+-- Um único funil padrão por empresa (índice parcial: o banco garante a regra,
+-- não só o serviço).
+CREATE UNIQUE INDEX IF NOT EXISTS crm_funis_padrao_unico
+  ON crm_funis (empresa_id) WHERE padrao;
+
+-- ----------------------------------------------------------------------------
+-- 2) ETAPAS — ordem, probabilidade e disponibilidade por funil
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS crm_etapas (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  funil_id INTEGER NOT NULL REFERENCES crm_funis(id),
+  nome TEXT NOT NULL,
+  -- `chave` mantém compatibilidade com `crm_oportunidades.etapa` (texto) e com
+  -- o CHECK da 0049; `nome` é o rótulo humano editável.
+  chave TEXT NOT NULL,
+  ordem INTEGER NOT NULL DEFAULT 0,
+  probabilidade INTEGER NOT NULL DEFAULT 0,
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS crm_etapas_funil_chave_unico ON crm_etapas (funil_id, chave);
+CREATE INDEX IF NOT EXISTS crm_etapas_empresa_ordem_idx ON crm_etapas (empresa_id, funil_id, ordem);
+
+DO $$ BEGIN
+  ALTER TABLE crm_etapas ADD CONSTRAINT crm_etapas_probabilidade_range
+    CHECK (probabilidade >= 0 AND probabilidade <= 100);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE crm_etapas ADD CONSTRAINT crm_etapas_ordem_nao_negativa
+    CHECK (ordem >= 0);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Semente: um funil padrão por empresa cadastrada, com as CINCO etapas
+-- canônicas que o CHECK da 0049 já aceita (nenhuma etapa nova é inventada).
+INSERT INTO crm_funis (empresa_id, nome, descricao, padrao, ativo)
+SELECT e.id, 'Funil comercial', 'Funil padrão criado pela evolução do CRM 3.0.', true, true
+  FROM empresas e
+ WHERE NOT EXISTS (SELECT 1 FROM crm_funis f WHERE f.empresa_id = e.id AND f.padrao);
+
+INSERT INTO crm_etapas (empresa_id, funil_id, nome, chave, ordem, probabilidade, ativo)
+SELECT f.empresa_id, f.id, v.nome, v.chave, v.ordem, v.probabilidade, true
+  FROM crm_funis f
+  JOIN (VALUES
+    ('Prospecção',   'prospeccao',   1, 10),
+    ('Qualificação', 'qualificacao', 2, 25),
+    ('Proposta',     'proposta',     3, 50),
+    ('Negociação',   'negociacao',   4, 75),
+    ('Fechamento',   'fechamento',   5, 90)
+  ) AS v(nome, chave, ordem, probabilidade) ON true
+ WHERE NOT EXISTS (
+   SELECT 1 FROM crm_etapas x WHERE x.funil_id = f.id AND x.chave = v.chave
+ );
+
+-- Oportunidades passam a apontar para o funil corrente (o estágio textual
+-- continua sendo a verdade de leitura; `funil_id` diz a qual desenho ele
+-- pertence quando houver mais de um funil).
+ALTER TABLE crm_oportunidades ADD COLUMN IF NOT EXISTS funil_id INTEGER REFERENCES crm_funis(id);
+CREATE INDEX IF NOT EXISTS crm_oportunidades_empresa_funil_idx
+  ON crm_oportunidades (empresa_id, funil_id);
+
+-- Backfill conservador: só preenche o funil PADRÃO da empresa onde está nulo.
+UPDATE crm_oportunidades o
+   SET funil_id = f.id
+  FROM crm_funis f
+ WHERE o.funil_id IS NULL
+   AND f.empresa_id = o.empresa_id
+   AND f.padrao;
+
+-- ----------------------------------------------------------------------------
+-- 3) HISTÓRICO DE ESTÁGIO — trilha própria do funil
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS crm_oportunidade_estagio_historico (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  oportunidade_id INTEGER NOT NULL REFERENCES crm_oportunidades(id),
+  estagio_anterior TEXT,
+  estagio_novo TEXT NOT NULL,
+  status_anterior TEXT,
+  status_novo TEXT,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  observacao TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS crm_estagio_hist_oportunidade_idx
+  ON crm_oportunidade_estagio_historico (empresa_id, oportunidade_id, criado_em DESC);
+CREATE INDEX IF NOT EXISTS crm_estagio_hist_data_idx
+  ON crm_oportunidade_estagio_historico (empresa_id, criado_em DESC);
+
+-- ----------------------------------------------------------------------------
+-- 4) ORIGEM / CANAL / CAMPANHA — estrutura controlada, dado antigo preservado
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS crm_origens (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  nome TEXT NOT NULL,
+  canal TEXT,          -- site, marketplace, loja_fisica, indicacao, evento, outbound, outro
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS crm_origens_empresa_nome_unico ON crm_origens (empresa_id, nome);
+
+DO $$ BEGIN
+  ALTER TABLE crm_origens ADD CONSTRAINT crm_origens_canal_valido
+    CHECK (canal IS NULL OR canal IN ('site', 'marketplace', 'loja_fisica', 'indicacao', 'evento', 'outbound', 'outro'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS crm_campanhas (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  nome TEXT NOT NULL,
+  origem_id INTEGER REFERENCES crm_origens(id),
+  inicio DATE,
+  fim DATE,
+  investimento NUMERIC(14,2),
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS crm_campanhas_empresa_nome_unico ON crm_campanhas (empresa_id, nome);
+CREATE INDEX IF NOT EXISTS crm_campanhas_empresa_origem_idx ON crm_campanhas (empresa_id, origem_id);
+
+DO $$ BEGIN
+  ALTER TABLE crm_campanhas ADD CONSTRAINT crm_campanhas_periodo_valido
+    CHECK (inicio IS NULL OR fim IS NULL OR fim >= inicio);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- O texto livre da 0049 permanece (compatibilidade e histórico); as colunas
+-- novas são a referência controlada e a atribuição de mídia (UTM).
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS origem_id INTEGER REFERENCES crm_origens(id);
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS campanha_id INTEGER REFERENCES crm_campanhas(id);
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS canal TEXT;
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS utm_source TEXT;
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS utm_medium TEXT;
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS utm_campaign TEXT;
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS utm_content TEXT;
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS utm_term TEXT;
+
+DO $$ BEGIN
+  ALTER TABLE crm_leads ADD CONSTRAINT crm_leads_canal_valido
+    CHECK (canal IS NULL OR canal IN ('site', 'marketplace', 'loja_fisica', 'indicacao', 'evento', 'outbound', 'outro'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE INDEX IF NOT EXISTS crm_leads_empresa_origem_id_idx ON crm_leads (empresa_id, origem_id);
+CREATE INDEX IF NOT EXISTS crm_leads_empresa_campanha_idx ON crm_leads (empresa_id, campanha_id);
+
+-- Semente de origens canônicas (as mesmas do vocabulário textual da 0049).
+INSERT INTO crm_origens (empresa_id, nome, canal, ativo)
+SELECT e.id, v.nome, v.canal, true
+  FROM empresas e
+  JOIN (VALUES
+    ('Indicação', 'indicacao'),
+    ('Site', 'site'),
+    ('Feira / evento', 'evento'),
+    ('Outbound', 'outbound'),
+    ('Outro', 'outro')
+  ) AS v(nome, canal) ON true
+ WHERE NOT EXISTS (SELECT 1 FROM crm_origens o WHERE o.empresa_id = e.id AND o.nome = v.nome);
+
+-- ----------------------------------------------------------------------------
+-- 5) LEAD SCORING — explicável, recalculável e auditável
+-- ----------------------------------------------------------------------------
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS score INTEGER;
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS score_motivo TEXT;
+ALTER TABLE crm_leads ADD COLUMN IF NOT EXISTS score_atualizado_em TIMESTAMPTZ;
+
+DO $$ BEGIN
+  ALTER TABLE crm_leads ADD CONSTRAINT crm_leads_score_range
+    CHECK (score IS NULL OR (score >= 0 AND score <= 100));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE INDEX IF NOT EXISTS crm_leads_empresa_score_idx ON crm_leads (empresa_id, score DESC);
+
+-- ----------------------------------------------------------------------------
+-- 6) ATIVIDADES — lembrete, prioridade, status e conclusão
+-- ----------------------------------------------------------------------------
+ALTER TABLE crm_atividades ADD COLUMN IF NOT EXISTS prioridade TEXT NOT NULL DEFAULT 'media';
+ALTER TABLE crm_atividades ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pendente';
+ALTER TABLE crm_atividades ADD COLUMN IF NOT EXISTS lembrete_em TIMESTAMPTZ;
+ALTER TABLE crm_atividades ADD COLUMN IF NOT EXISTS concluida_em TIMESTAMPTZ;
+
+DO $$ BEGIN
+  ALTER TABLE crm_atividades ADD CONSTRAINT crm_atividades_prioridade_valida
+    CHECK (prioridade IN ('baixa', 'media', 'alta', 'urgente'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE crm_atividades ADD CONSTRAINT crm_atividades_status_valido
+    CHECK (status IN ('pendente', 'concluida', 'cancelada'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Conclusão coerente: concluída exige carimbo de conclusão.
+DO $$ BEGIN
+  ALTER TABLE crm_atividades ADD CONSTRAINT crm_atividades_conclusao_coerente
+    CHECK (status <> 'concluida' OR concluida_em IS NOT NULL);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Agenda do CRM (hoje / atrasadas / próximas) filtra por status + lembrete.
+CREATE INDEX IF NOT EXISTS crm_atividades_empresa_status_lembrete_idx
+  ON crm_atividades (empresa_id, status, lembrete_em);
+CREATE INDEX IF NOT EXISTS crm_atividades_empresa_responsavel_status_idx
+  ON crm_atividades (empresa_id, responsavel_id, status);
+
+
+-- ----------------------------------------------------------------------------
+-- ESPELHO DE db/migrations/0052_estoque_transferencia_reserva.sql
+-- ----------------------------------------------------------------------------
+-- ============================================================================
+-- 0052 — ESTOQUE: TRANSFERÊNCIA FORMAL, RESERVA E DISPONIBILIDADE
+--
+-- POR QUE ESTA MIGRAÇÃO EXISTE
+-- ----------------------------
+-- O ERP já movimentava estoque entre locais, mas só por um ÚNICO lançamento
+-- (`movimentacoes.tipo = 'transferencia'`): não havia documento, não havia
+-- aprovação, não havia "em trânsito" e não havia como saber o que está
+-- RESERVADO (venda em separação, OP programada, bloqueio de qualidade).
+--
+-- Esta migração adiciona três coisas — e NENHUMA delas altera o saldo por
+-- conta própria:
+--
+--   1) TRANSFERÊNCIA FORMAL (documento + itens + eventos)
+--      Estados: SOLICITADA → APROVADA → EM_TRANSITO → RECEBIDA
+--               (ou CANCELADA, antes da expedição)
+--      O saldo só muda em DOIS eventos, pelos lançamentos oficiais:
+--        • expedir  → movimentação de SAÍDA no local de origem;
+--        • receber  → movimentação de ENTRADA no local de destino.
+--      "Em trânsito" é o estado do documento, não um saldo paralelo.
+--
+--   2) RESERVA / EMPENHO / BLOQUEIO (`estoque_reservas`)
+--      Quantidade comprometida por um documento (venda, OP, qualidade),
+--      com tipo explícito. Liberar a reserva NÃO movimenta estoque — só
+--      devolve a quantidade ao disponível.
+--
+--   3) DISPONIBILIDADE derivada (sem tabela nova)
+--      disponível = físico − reservado − bloqueado − empenhado
+--      Calculada por consulta (server/src/estoqueDisponibilidade.ts). Nenhum
+--      saldo é duplicado: `estoques.quantidade` continua sendo o FÍSICO.
+--
+-- REGRAS QUE NÃO MUDAM
+--   • multiempresa: toda tabela tem `empresa_id` NOT NULL;
+--   • nada é apagado (CANCELADA é estado, não DELETE);
+--   • vocabulário fechado por CHECK (defesa em profundidade no banco);
+--   • o saldo continua sendo movimentado APENAS por `movimentacoes`.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 1) DOCUMENTO DE TRANSFERÊNCIA
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS estoque_transferencias (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  origem_local_id INTEGER NOT NULL REFERENCES locais(id),
+  destino_local_id INTEGER NOT NULL REFERENCES locais(id),
+  status TEXT NOT NULL DEFAULT 'solicitada',
+  solicitante_id INTEGER REFERENCES usuarios(id),
+  aprovador_id INTEGER REFERENCES usuarios(id),
+  solicitada_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  aprovada_em TIMESTAMPTZ,
+  expedida_em TIMESTAMPTZ,
+  recebida_em TIMESTAMPTZ,
+  cancelada_em TIMESTAMPTZ,
+  motivo_cancelamento TEXT,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS estoque_transferencias_empresa_status_idx
+  ON estoque_transferencias (empresa_id, status);
+CREATE INDEX IF NOT EXISTS estoque_transferencias_empresa_origem_idx
+  ON estoque_transferencias (empresa_id, origem_local_id);
+CREATE INDEX IF NOT EXISTS estoque_transferencias_empresa_destino_idx
+  ON estoque_transferencias (empresa_id, destino_local_id);
+
+DO $$ BEGIN
+  ALTER TABLE estoque_transferencias ADD CONSTRAINT estoque_transferencias_status_valido
+    CHECK (status IN ('solicitada', 'aprovada', 'em_transito', 'recebida', 'cancelada'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE estoque_transferencias ADD CONSTRAINT estoque_transferencias_locais_diferentes
+    CHECK (origem_local_id <> destino_local_id);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE estoque_transferencias ADD CONSTRAINT estoque_transferencias_cancelamento_coerente
+    CHECK (status <> 'cancelada' OR (cancelada_em IS NOT NULL AND motivo_cancelamento IS NOT NULL));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ----------------------------------------------------------------------------
+-- 2) ITENS DO DOCUMENTO
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS estoque_transferencia_itens (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  transferencia_id INTEGER NOT NULL REFERENCES estoque_transferencias(id),
+  produto_id INTEGER NOT NULL REFERENCES produtos(id),
+  tamanho_id INTEGER REFERENCES tamanhos(id),
+  quantidade INTEGER NOT NULL,
+  quantidade_recebida INTEGER,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS estoque_transf_itens_transferencia_idx
+  ON estoque_transferencia_itens (empresa_id, transferencia_id);
+CREATE INDEX IF NOT EXISTS estoque_transf_itens_produto_idx
+  ON estoque_transferencia_itens (empresa_id, produto_id, tamanho_id);
+
+DO $$ BEGIN
+  ALTER TABLE estoque_transferencia_itens ADD CONSTRAINT estoque_transf_itens_quantidade_positiva
+    CHECK (quantidade > 0);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE estoque_transferencia_itens ADD CONSTRAINT estoque_transf_itens_recebida_valida
+    CHECK (quantidade_recebida IS NULL OR (quantidade_recebida >= 0 AND quantidade_recebida <= quantidade));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ----------------------------------------------------------------------------
+-- 3) EVENTOS DO DOCUMENTO (trilha própria da transferência)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS estoque_transferencia_eventos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  transferencia_id INTEGER NOT NULL REFERENCES estoque_transferencias(id),
+  status_anterior TEXT,
+  status_novo TEXT NOT NULL,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  observacao TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS estoque_transf_eventos_transferencia_idx
+  ON estoque_transferencia_eventos (empresa_id, transferencia_id, criado_em);
+
+-- ----------------------------------------------------------------------------
+-- 4) RESERVAS / EMPENHOS / BLOQUEIOS
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS estoque_reservas (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  produto_id INTEGER NOT NULL REFERENCES produtos(id),
+  tamanho_id INTEGER REFERENCES tamanhos(id),
+  local_id INTEGER REFERENCES locais(id),
+  tipo TEXT NOT NULL DEFAULT 'reserva',
+  quantidade INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ativa',
+  -- Documento de origem da reserva (venda, OP, transferência, qualidade...).
+  -- `origem_recurso` é o nome do RECURSO (não da tabela) para reusar o
+  -- diagnóstico de dependências e o vocabulário do ERP.
+  origem_recurso TEXT,
+  origem_id INTEGER,
+  motivo TEXT,
+  criado_por INTEGER REFERENCES usuarios(id),
+  expira_em DATE,
+  liberada_em TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS estoque_reservas_saldo_idx
+  ON estoque_reservas (empresa_id, produto_id, tamanho_id, local_id, status);
+CREATE INDEX IF NOT EXISTS estoque_reservas_origem_idx
+  ON estoque_reservas (empresa_id, origem_recurso, origem_id);
+
+DO $$ BEGIN
+  ALTER TABLE estoque_reservas ADD CONSTRAINT estoque_reservas_tipo_valido
+    CHECK (tipo IN ('reserva', 'empenho', 'bloqueio'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE estoque_reservas ADD CONSTRAINT estoque_reservas_status_valido
+    CHECK (status IN ('ativa', 'liberada', 'consumida', 'expirada'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE estoque_reservas ADD CONSTRAINT estoque_reservas_quantidade_positiva
+    CHECK (quantidade > 0);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Liberação coerente: liberada/expirada exigem carimbo.
+DO $$ BEGIN
+  ALTER TABLE estoque_reservas ADD CONSTRAINT estoque_reservas_liberacao_coerente
+    CHECK (status NOT IN ('liberada', 'expirada') OR liberada_em IS NOT NULL);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+
+-- ----------------------------------------------------------------------------
+-- ESPELHO DE db/migrations/0053_compras_fornecedor_homologacao.sql
+-- ----------------------------------------------------------------------------
+-- ============================================================================
+-- 0053 — COMPRAS: HOMOLOGAÇÃO DE FORNECEDOR, DOCUMENTOS E HISTÓRICO
+--
+-- POR QUE ESTA MIGRAÇÃO EXISTE
+-- ----------------------------
+-- O cadastro de fornecedores já existia (razão social, documento, contato,
+-- endereço, prazo e condição de pagamento). O que NÃO existia era o processo
+-- de HOMOLOGAÇÃO: saber se o fornecedor está apto a receber pedido, com que
+-- abrangência, com quais documentos e até quando. Sem isso, qualquer cadastro
+-- podia comprar — inclusive um fornecedor suspenso por qualidade.
+--
+-- O que entra aqui:
+--   1) ESTADO DE HOMOLOGAÇÃO no próprio fornecedor (uma coluna, não um
+--      cadastro paralelo): PENDENTE → EM_ANALISE → HOMOLOGADO →
+--      SUSPENSO → BLOQUEADO. A transição é registrada na trilha (item 3).
+--   2) DOCUMENTOS do fornecedor (validade, número, arquivo/referência), cada
+--      um com situação própria. "Vencido" é DERIVADO da validade — não é
+--      coluna, para não existir status que envelhece sozinho no banco.
+--   3) TRILHA DE HOMOLOGAÇÃO (append-only): quem mudou, de qual estado para
+--      qual, quando e por quê.
+--
+-- REGRAS QUE NÃO MUDAM
+--   • `fornecedores` continua sendo UMA tabela, por empresa (empresa_id),
+--     e continua sendo o único cadastro de fornecedor do ERP;
+--   • nada é apagado: SUSPENSO/BLOQUEADO são estados, não DELETE;
+--   • nenhum pedido de compra é criado automaticamente por esta migração;
+--   • o desempenho do fornecedor (prazo, atendimento, preço) é CALCULADO a
+--     partir de compras/itens/recebimentos já existentes — nenhum número é
+--     copiado nem duplicado em coluna.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 1) ESTADO DE HOMOLOGAÇÃO
+-- ----------------------------------------------------------------------------
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS homologacao_status TEXT NOT NULL DEFAULT 'pendente';
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS homologacao_categoria TEXT;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS homologacao_responsavel_id INTEGER REFERENCES usuarios(id);
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS homologado_em TIMESTAMPTZ;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS homologacao_atualizada_em TIMESTAMPTZ;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS validade_documentos DATE;
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS avaliacao_manual NUMERIC(3,1);
+ALTER TABLE fornecedores ADD COLUMN IF NOT EXISTS homologacao_motivo TEXT;
+
+DO $$ BEGIN
+  ALTER TABLE fornecedores ADD CONSTRAINT fornecedores_homologacao_status_valido
+    CHECK (homologacao_status IN ('pendente', 'em_analise', 'homologado', 'suspenso', 'bloqueado'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE fornecedores ADD CONSTRAINT fornecedores_homologacao_categoria_valida
+    CHECK (homologacao_categoria IS NULL OR homologacao_categoria IN
+      ('materia_prima', 'embalagem', 'acabamento', 'servico', 'logistica', 'quimico', 'outro'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE fornecedores ADD CONSTRAINT fornecedores_avaliacao_manual_valida
+    CHECK (avaliacao_manual IS NULL OR (avaliacao_manual >= 0 AND avaliacao_manual <= 5));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Homologado exige carimbo de data; suspenso/bloqueado exigem motivo (a
+-- decisão precisa ser explicável — mesma lógica de "motivo da perda" no CRM).
+DO $$ BEGIN
+  ALTER TABLE fornecedores ADD CONSTRAINT fornecedores_homologacao_coerente
+    CHECK (
+      (homologacao_status <> 'homologado' OR homologado_em IS NOT NULL)
+      AND (homologacao_status NOT IN ('suspenso', 'bloqueado') OR (homologacao_motivo IS NOT NULL AND btrim(homologacao_motivo) <> ''))
+    );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE INDEX IF NOT EXISTS fornecedores_homologacao_idx
+  ON fornecedores (empresa_id, homologacao_status);
+
+-- ----------------------------------------------------------------------------
+-- 2) DOCUMENTOS DO FORNECEDOR
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS fornecedor_documentos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  fornecedor_id INTEGER NOT NULL REFERENCES fornecedores(id) ON DELETE CASCADE,
+  tipo TEXT NOT NULL,
+  numero TEXT,
+  emissao DATE,
+  validade DATE,
+  arquivo_ref TEXT,
+  observacoes TEXT,
+  situacao TEXT NOT NULL DEFAULT 'pendente',
+  validado_por INTEGER REFERENCES usuarios(id),
+  validado_em TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS fornecedor_documentos_fornecedor_idx
+  ON fornecedor_documentos (empresa_id, fornecedor_id, tipo);
+CREATE INDEX IF NOT EXISTS fornecedor_documentos_validade_idx
+  ON fornecedor_documentos (empresa_id, validade);
+
+DO $$ BEGIN
+  ALTER TABLE fornecedor_documentos ADD CONSTRAINT fornecedor_documentos_tipo_valido
+    CHECK (tipo IN ('contrato_social', 'cartao_cnpj', 'certidao_federal', 'certidao_estadual',
+                    'certidao_municipal', 'certidao_fgts', 'certidao_trabalhista', 'alvara', 'outro'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE fornecedor_documentos ADD CONSTRAINT fornecedor_documentos_situacao_valida
+    CHECK (situacao IN ('pendente', 'aprovado', 'reprovado'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE fornecedor_documentos ADD CONSTRAINT fornecedor_documentos_validade_coerente
+    CHECK (validade IS NULL OR emissao IS NULL OR validade >= emissao);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ----------------------------------------------------------------------------
+-- 3) TRILHA DE HOMOLOGAÇÃO (append-only)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS fornecedor_homologacao_eventos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  fornecedor_id INTEGER NOT NULL REFERENCES fornecedores(id),
+  status_anterior TEXT,
+  status_novo TEXT NOT NULL,
+  motivo TEXT,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS fornecedor_homologacao_eventos_idx
+  ON fornecedor_homologacao_eventos (empresa_id, fornecedor_id, criado_em);
+
+-- ----------------------------------------------------------------------------
+-- 4) BACKFILL CONSERVADOR
+--    Fornecedor que JÁ tem pedido de compra comprovadamente aprovado/recebido
+--    não pode nascer "pendente" e travar a operação: ele é marcado como já
+--    homologado (com data do primeiro pedido). Quem nunca comprou continua
+--    pendente — o estado inicial honesto.
+--    Nenhum fornecedor é suspenso/bloqueado por backfill: bloqueio é decisão
+--    humana, nunca inferência de migração.
+-- ----------------------------------------------------------------------------
+UPDATE fornecedores f
+   SET homologacao_status = 'homologado',
+       homologado_em = COALESCE(f.homologado_em, sub.primeiro),
+       homologacao_atualizada_em = now()
+  FROM (
+    SELECT fornecedor_id, MIN(data)::timestamptz AS primeiro
+      FROM compras
+     WHERE fornecedor_id IS NOT NULL
+       AND status IN ('aprovado', 'parcial', 'recebido')
+     GROUP BY fornecedor_id
+  ) sub
+ WHERE f.id = sub.fornecedor_id
+   AND f.homologacao_status = 'pendente'
+   AND f.homologado_em IS NULL;
+
+-- A trilha registra o backfill (sem usuário: foi o sistema).
+INSERT INTO fornecedor_homologacao_eventos (empresa_id, fornecedor_id, status_anterior, status_novo, motivo)
+SELECT f.empresa_id, f.id, 'pendente', 'homologado',
+       'Homologação registrada na implantação: fornecedor já possui pedido de compra aprovado/recebido.'
+  FROM fornecedores f
+ WHERE f.homologacao_status = 'homologado'
+   AND NOT EXISTS (SELECT 1 FROM fornecedor_homologacao_eventos e WHERE e.fornecedor_id = f.id);
+
+
+-- ----------------------------------------------------------------------------
+-- ESPELHO DE db/migrations/0054_producao_recurso_capacidade.sql
+-- ----------------------------------------------------------------------------
+-- ============================================================================
+-- 0054 — PRODUÇÃO: RECURSO PRODUTIVO, CAPACIDADE E CARGA (MRP 3.0)
+--
+-- POR QUE ESTA MIGRAÇÃO EXISTE
+-- ----------------------------
+-- A produção já sabia O QUE fabricar (OP, ficha técnica, apontamento, MRP de
+-- insumos a partir das OPs em aberto). Não sabia ONDE fabricar nem QUANTO cabe:
+-- não havia recurso produtivo (costura, corte, estamparia, bordado, facção),
+-- nem capacidade diária, nem forma de responder "qual é o gargalo da semana?".
+--
+-- O que entra aqui:
+--   1) `producao_recursos` — o recurso produtivo POR EMPRESA: nome, tipo,
+--      capacidade diária (peças/dia), eficiência e ativo. É um CADASTRO, não um
+--      indicador: capacidade é dado de engenharia, informado por quem produz.
+--   2) `ordens_fabricacao.recurso_id` — a ligação OP → recurso. NULA de
+--      propósito: OP sem recurso continua válida (o gargalo é DERIVADO, e uma
+--      OP sem alocação aparece como "sem recurso", nunca como zero).
+--
+-- REGRAS QUE NÃO MUDAM
+--   • a carga NÃO é coluna: é Σ do que falta produzir nas OPs do recurso no
+--     período (server/src/producaoCapacidade.ts). Nenhum número é duplicado;
+--   • MRP é SUGESTÃO DE LEITURA — esta migração e o endpoint não criam pedido
+--     de compra. Gerar compra continua exigindo ação explícita do usuário;
+--   • nada é apagado: recurso sai de uso por `ativo = false`.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS producao_recursos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  nome TEXT NOT NULL,
+  tipo TEXT NOT NULL DEFAULT 'costura',
+  capacidade_diaria INTEGER NOT NULL DEFAULT 0,
+  eficiencia_pct NUMERIC(5,2) NOT NULL DEFAULT 100,
+  dias_uteis_semana INTEGER NOT NULL DEFAULT 5,
+  local_id INTEGER REFERENCES locais(id),
+  responsavel_id INTEGER REFERENCES usuarios(id),
+  observacoes TEXT,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS producao_recursos_empresa_idx
+  ON producao_recursos (empresa_id, ativo, nome);
+
+DO $$ BEGIN
+  ALTER TABLE producao_recursos ADD CONSTRAINT producao_recursos_tipo_valido
+    CHECK (tipo IN ('corte', 'costura', 'estamparia', 'bordado', 'acabamento', 'embalagem', 'faccao', 'outro'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE producao_recursos ADD CONSTRAINT producao_recursos_capacidade_valida
+    CHECK (capacidade_diaria >= 0 AND eficiencia_pct >= 0 AND eficiencia_pct <= 200
+           AND dias_uteis_semana BETWEEN 1 AND 7);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ----------------------------------------------------------------------------
+-- OP → RECURSO (a alocação é decisão do planejador; sem recurso é válido)
+-- ----------------------------------------------------------------------------
+ALTER TABLE ordens_fabricacao ADD COLUMN IF NOT EXISTS recurso_id INTEGER REFERENCES producao_recursos(id);
+
+CREATE INDEX IF NOT EXISTS ordens_fabricacao_recurso_idx
+  ON ordens_fabricacao (empresa_id, recurso_id, previsao);
+
+
+-- ----------------------------------------------------------------------------
+-- ESPELHO DE db/migrations/0055_fiscal_obrigacoes.sql
+-- ----------------------------------------------------------------------------
+-- ============================================================================
+-- 0055 — FISCAL: OBRIGAÇÕES ACESSÓRIAS, CALENDÁRIO E ENTREGAS
+--
+-- POR QUE ESTA MIGRAÇÃO EXISTE
+-- ----------------------------
+-- O módulo fiscal já emite NF-e/NFC-e (documento, evento, cancelamento,
+-- inutilização, config por empresa). O que NÃO existia era o controle das
+-- OBRIGAÇÕES ACESSÓRIAS: quais declarações a empresa entrega, em que
+-- periodicidade, até que dia, com que protocolo e onde está o arquivo. Sem
+-- isso, "estamos em dia com o SPED?" não tem resposta no sistema.
+--
+-- O QUE ENTRA
+--   1) `fiscal_obrigacoes` — a REGRA da obrigação por empresa: código, nome,
+--      tipo, periodicidade, dia de vencimento, ativo. É cadastro: quem sabe a
+--      regra é o contador da empresa, não o código.
+--   2) `fiscal_obrigacao_entregas` — a ENTREGA de uma competência: status,
+--      protocolo, arquivo de referência, data e responsável.
+--
+-- O QUE NÃO ENTRA (de propósito)
+--   • NENHUMA alíquota, NENHUM cálculo de imposto, NENHUM layout de SPED é
+--     embutido aqui. Alíquota hard-coded é erro fiscal esperando acontecer; o
+--     motor tributário continua sendo `fiscalRegras.ts`, alimentado por regra
+--     cadastrada, e o SPED é arquivo gerado fora do ERP (referenciado por
+--     `arquivo_ref`).
+--   • Nada é apagado: obrigação sai de uso por `ativo = false`, entrega por
+--     `dispensada` (com motivo).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS fiscal_obrigacoes (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  codigo TEXT NOT NULL,
+  nome TEXT NOT NULL,
+  tipo TEXT NOT NULL,
+  periodicidade TEXT NOT NULL DEFAULT 'mensal',
+  dia_vencimento INTEGER NOT NULL DEFAULT 15,
+  -- Competência em que a obrigação passa a valer (permite cadastrar histórico
+  -- sem reescrever o passado).
+  inicio_competencia DATE,
+  responsavel_id INTEGER REFERENCES usuarios(id),
+  observacoes TEXT,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS fiscal_obrigacoes_codigo_unico
+  ON fiscal_obrigacoes (empresa_id, codigo);
+
+CREATE INDEX IF NOT EXISTS fiscal_obrigacoes_empresa_idx
+  ON fiscal_obrigacoes (empresa_id, ativo, tipo);
+
+DO $$ BEGIN
+  ALTER TABLE fiscal_obrigacoes ADD CONSTRAINT fiscal_obrigacoes_tipo_valido
+    CHECK (tipo IN ('sped_fiscal', 'sped_contribuicoes', 'efd_reinf', 'dctfweb', 'esocial',
+                    'sitfis', 'defis', 'das', 'nfe_mensal', 'outro'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE fiscal_obrigacoes ADD CONSTRAINT fiscal_obrigacoes_periodicidade_valida
+    CHECK (periodicidade IN ('mensal', 'trimestral', 'anual', 'eventual'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE fiscal_obrigacoes ADD CONSTRAINT fiscal_obrigacoes_vencimento_valido
+    CHECK (dia_vencimento BETWEEN 1 AND 31);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS fiscal_obrigacao_entregas (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  obrigacao_id INTEGER NOT NULL REFERENCES fiscal_obrigacoes(id),
+  -- Competência normalizada AAAA-MM: uma entrega por competência.
+  competencia TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pendente',
+  protocolo TEXT,
+  arquivo_ref TEXT,
+  entregue_em TIMESTAMPTZ,
+  responsavel_id INTEGER REFERENCES usuarios(id),
+  motivo_dispensa TEXT,
+  observacoes TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS fiscal_entregas_competencia_unica
+  ON fiscal_obrigacao_entregas (empresa_id, obrigacao_id, competencia);
+
+CREATE INDEX IF NOT EXISTS fiscal_entregas_empresa_idx
+  ON fiscal_obrigacao_entregas (empresa_id, competencia, status);
+
+DO $$ BEGIN
+  ALTER TABLE fiscal_obrigacao_entregas ADD CONSTRAINT fiscal_entregas_competencia_formato
+    CHECK (competencia ~ '^[0-9]{4}-(0[1-9]|1[0-2])$');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE fiscal_obrigacao_entregas ADD CONSTRAINT fiscal_entregas_status_valido
+    CHECK (status IN ('pendente', 'entregue', 'atrasada', 'dispensada'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Entrega marcada como ENTREGUE exige protocolo e data (nada de "entregue"
+-- sem prova); dispensada exige motivo.
+DO $$ BEGIN
+  ALTER TABLE fiscal_obrigacao_entregas ADD CONSTRAINT fiscal_entregas_coerente
+    CHECK (
+      (status <> 'entregue' OR (entregue_em IS NOT NULL AND protocolo IS NOT NULL AND btrim(protocolo) <> ''))
+      AND (status <> 'dispensada' OR (motivo_dispensa IS NOT NULL AND btrim(motivo_dispensa) <> ''))
+    );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+
+-- ----------------------------------------------------------------------------
+-- ESPELHO DE db/migrations/0056_financeiro_estrutura_contabil.sql
+-- ----------------------------------------------------------------------------
+-- ============================================================================
+-- 0056 — FINANCEIRO: ESTRUTURA PARA CONTABILIDADE (SEM VIRAR CONTABILIDADE)
+--
+-- ESCOPO — o que esta migração É e o que ela NÃO É
+-- ------------------------------------------------
+-- O BROBOND tem UM financeiro: `lancamentos_financeiros` (livro-caixa),
+-- `contas_financeiras`, `categorias_financeiras`, `centros_custo`. Esta
+-- migração NÃO cria um segundo financeiro nem um motor contábil paralelo.
+-- Ela prepara a ESTRUTURA para que, quando a contabilidade real for ligada,
+-- cada lançamento já tenha a informação que o contador vai pedir:
+--
+--   • PLANO DE CONTAS (`plano_contas`) — cadastro por empresa, com código,
+--     natureza (ativo/passivo/PL/receita/despesa), sintética/analítica e pai;
+--   • DÉBITO / CRÉDITO no lançamento — `conta_contabil_id` + `natureza_lancamento`;
+--   • DOCUMENTO DE ORIGEM — `documento_origem_recurso` / `documento_origem_id`
+--     (a venda, a compra, o aporte, a transferência que gerou o lançamento);
+--   • COMPETÊNCIA — `competencia` separada da `data` (regime de competência vs.
+--     caixa). Sem competência preenchida, a data é usada no balancete.
+--
+-- O QUE NÃO ENTRA
+--   • NENHUM lançamento contábil automático e NENHUMA partida dobrada gerada
+--     por código: sem plano de contas mapeado, o lançamento fica SEM
+--     classificação e aparece assim no balancete (honesto, não inventado);
+--   • NENHUM plano de contas "padrão" é semeado: o plano é da empresa/contador;
+--   • nada é apagado e nenhuma coluna existente muda de significado.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS plano_contas (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  codigo TEXT NOT NULL,
+  nome TEXT NOT NULL,
+  natureza TEXT NOT NULL,
+  tipo TEXT NOT NULL DEFAULT 'analitica',
+  pai_id INTEGER REFERENCES plano_contas(id),
+  descricao TEXT,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS plano_contas_codigo_unico
+  ON plano_contas (empresa_id, codigo);
+
+CREATE INDEX IF NOT EXISTS plano_contas_empresa_idx
+  ON plano_contas (empresa_id, natureza, ativo);
+
+DO $$ BEGIN
+  ALTER TABLE plano_contas ADD CONSTRAINT plano_contas_natureza_valida
+    CHECK (natureza IN ('ativo', 'passivo', 'patrimonio_liquido', 'receita', 'despesa', 'custo'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE plano_contas ADD CONSTRAINT plano_contas_tipo_valido
+    CHECK (tipo IN ('sintetica', 'analitica'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ----------------------------------------------------------------------------
+-- CLASSIFICAÇÃO CONTÁBIL NO LANÇAMENTO (opcional por desenho)
+-- ----------------------------------------------------------------------------
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS conta_contabil_id INTEGER REFERENCES plano_contas(id);
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS natureza_lancamento TEXT;
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS documento_origem_recurso TEXT;
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS documento_origem_id INTEGER;
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS competencia DATE;
+
+CREATE INDEX IF NOT EXISTS lancamentos_financeiros_conta_contabil_idx
+  ON lancamentos_financeiros (empresa_id, conta_contabil_id, competencia);
+
+CREATE INDEX IF NOT EXISTS lancamentos_financeiros_origem_idx
+  ON lancamentos_financeiros (empresa_id, documento_origem_recurso, documento_origem_id);
+
+DO $$ BEGIN
+  ALTER TABLE lancamentos_financeiros ADD CONSTRAINT lancamentos_natureza_contabil_valida
+    CHECK (natureza_lancamento IS NULL OR natureza_lancamento IN ('debito', 'credito'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Natureza e conta andam juntas: uma sem a outra não classifica nada.
+DO $$ BEGIN
+  ALTER TABLE lancamentos_financeiros ADD CONSTRAINT lancamentos_classificacao_coerente
+    CHECK ((conta_contabil_id IS NULL) = (natureza_lancamento IS NULL));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+
+-- ----------------------------------------------------------------------------
+-- ESPELHO DE db/migrations/0057_crm_etapa_configuravel.sql
+--
+-- CRM: etapa da oportunidade realmente configurável por empresa.
+-- `etapa_id` é a referência operacional (FK composta por empresa); `etapa`
+-- (texto) continua como chave de leitura/compatibilidade/histórico.
+-- ----------------------------------------------------------------------------
+
+ALTER TABLE crm_oportunidades ADD COLUMN IF NOT EXISTS etapa_id INTEGER;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_crm_etapas_empresa_id
+  ON crm_etapas (empresa_id, id);
+
+DO $$ BEGIN
+  ALTER TABLE crm_oportunidades
+    ADD CONSTRAINT fk_e42_crm_oportunidades_empresa_etapa
+    FOREIGN KEY (empresa_id, etapa_id) REFERENCES crm_etapas (empresa_id, id)
+    ON DELETE RESTRICT;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE INDEX IF NOT EXISTS crm_oportunidades_empresa_etapa_id_idx
+  ON crm_oportunidades (empresa_id, etapa_id);
+
+DO $$ BEGIN
+  ALTER TABLE crm_etapas ADD CONSTRAINT crm_etapas_chave_formato
+    CHECK (chave ~ '^[a-z][a-z0-9_]{0,39}$') NOT VALID;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+ALTER TABLE crm_oportunidades DROP CONSTRAINT IF EXISTS crm_oportunidades_etapa_valido;
+
+DO $$ BEGIN
+  ALTER TABLE crm_oportunidades ADD CONSTRAINT crm_oportunidades_etapa_nao_vazia
+    CHECK (etapa IS NOT NULL AND btrim(etapa) <> '');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+UPDATE crm_oportunidades o
+   SET etapa_id = e.id
+  FROM crm_etapas e
+ WHERE o.etapa_id IS NULL
+   AND e.empresa_id = o.empresa_id
+   AND e.chave = o.etapa
+   AND (o.funil_id IS NULL OR e.funil_id = o.funil_id);
+
+UPDATE crm_oportunidades o
+   SET etapa_id = e.id,
+       funil_id = COALESCE(o.funil_id, e.funil_id)
+  FROM crm_etapas e
+  JOIN crm_funis f ON f.id = e.funil_id AND f.empresa_id = e.empresa_id
+ WHERE o.etapa_id IS NULL
+   AND e.empresa_id = o.empresa_id
+   AND f.padrao
+   AND e.chave = o.etapa;

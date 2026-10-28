@@ -20,7 +20,7 @@ import { AlertTriangle, CheckCircle2, Package, RotateCcw, Truck } from 'lucide-r
 import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
 import type { ListResult } from '../lib/meta';
-import { Alert, Badge, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 
 type StatusDevolucao = 'solicitada' | 'autorizada' | 'em_transito' | 'recebida' | 'recusada' | 'cancelada';
 
@@ -457,7 +457,7 @@ export default function DevolucoesPage() {
       </div>
 
       {/* --------------------------------------------------------- modais */}
-      <Modal open={novaAberta} onClose={() => setNovaAberta(false)} title="Solicitar devolução">
+      <PainelInline open={novaAberta} onClose={() => setNovaAberta(false)} title="Solicitar devolução">
         <div className="space-y-3">
           <label className="label">
             Pedido (venda)
@@ -504,9 +504,9 @@ export default function DevolucoesPage() {
             Solicitar
           </button>
         </div>
-      </Modal>
+      </PainelInline>
 
-      <Modal
+      <PainelInline
         open={acaoAberta === 'autorizar'}
         onClose={() => setAcaoAberta(null)}
         title="Autorizar devolução"
@@ -551,9 +551,9 @@ export default function DevolucoesPage() {
             Autorizar
           </button>
         </div>
-      </Modal>
+      </PainelInline>
 
-      <Modal
+      <PainelInline
         open={acaoAberta === 'registrar_rastreamento'}
         onClose={() => setAcaoAberta(null)}
         title="Registrar rastreamento"
@@ -595,9 +595,9 @@ export default function DevolucoesPage() {
             Registrar
           </button>
         </div>
-      </Modal>
+      </PainelInline>
 
-      <Modal
+      <PainelInline
         open={acaoAberta === 'receber'}
         onClose={() => setAcaoAberta(null)}
         title="Receber mercadoria"
@@ -644,9 +644,9 @@ export default function DevolucoesPage() {
             Confirmar recebimento
           </button>
         </div>
-      </Modal>
+      </PainelInline>
 
-      <Modal
+      <PainelInline
         open={acaoAberta === 'recusar' || acaoAberta === 'cancelar'}
         onClose={() => setAcaoAberta(null)}
         title={acaoAberta === 'recusar' ? 'Recusar devolução' : 'Cancelar devolução'}
@@ -673,7 +673,7 @@ export default function DevolucoesPage() {
             Confirmar
           </button>
         </div>
-      </Modal>
+      </PainelInline>
 
       {detalhe?.status === 'autorizada' && !detalhe.codigo_rastreamento && (
         <div className="pointer-events-none fixed bottom-4 left-1/2 -translate-x-1/2 lg:hidden">

@@ -12,7 +12,7 @@ import {
   type TerminalConfigCliente,
   type TipoDocumentoImprimivel,
 } from '../lib/printAgent';
-import { Modal, useToast } from './ui';
+import { PainelInline, useToast } from './ui';
 
 export function DocumentPrintButton({
   tipo,
@@ -108,7 +108,7 @@ export function DocumentPrintButton({
         <span>{label}</span>
       </button>
 
-      <Modal
+      <PainelInline
         open={open}
         onClose={() => setOpen(false)}
         title="Impressão do Documento"
@@ -219,7 +219,7 @@ export function DocumentPrintButton({
             </button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
     </>
   );
 }

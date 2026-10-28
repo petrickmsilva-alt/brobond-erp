@@ -678,8 +678,9 @@ describe('Nova Venda Profissional PF/CNPJ — Motor Único de Vendas', () => {
     // Cancela o pedido com diálogo de confirmação
     apiPut.mockResolvedValueOnce({ id: 88, status: 'cancelada' });
     await user.click(screen.getByRole('button', { name: /Cancelar pedido/i }));
-    const dialog = await screen.findByRole('dialog');
-    await user.click(within(dialog).getByRole('button', { name: /Confirmar cancelamento/i }));
+    // ZERO MODAL: a confirmação é um bloco inline na página.
+    const confirmacao = await screen.findByRole('group', { name: /Cancelar/i });
+    await user.click(within(confirmacao).getByRole('button', { name: /Confirmar cancelamento/i }));
 
     await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/vendas/88', { status: 'cancelada' }));
   });

@@ -1,9 +1,9 @@
-// Modal de reautenticação (step-up): confirma a senha do usuário logado para
+// PainelInline de reautenticação (step-up): confirma a senha do usuário logado para
 // liberar ações sensíveis por 5 minutos no servidor (rate limited + auditado).
 import { useState } from 'react';
 import { Loader2, ShieldCheck } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
-import { Alert, Modal } from './ui';
+import { Alert, PainelInline } from './ui';
 
 type Props = {
   open: boolean;
@@ -35,7 +35,7 @@ export default function ReauthModal({ open, onClose, onConfirmed, titulo = 'Auto
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={titulo} subtitle="Confirme a sua senha para executar esta ação sensível." size="sm">
+    <PainelInline open={open} onClose={onClose} title={titulo} subtitle="Confirme a sua senha para executar esta ação sensível." size="sm">
       <div className="space-y-4">
         <div>
           <label className="label" htmlFor="reauth-senha">
@@ -67,6 +67,6 @@ export default function ReauthModal({ open, onClose, onConfirmed, titulo = 'Auto
           </div>
         </div>
       </div>
-    </Modal>
+    </PainelInline>
   );
 }

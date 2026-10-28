@@ -48,6 +48,7 @@ import {
   optionsFor,
   toHttpError,
   updateRecord,
+  metaComOpcoesDinamicas,
 } from './services';
 import { parseId } from './validate';
 import { HttpError } from './errors';
@@ -155,7 +156,26 @@ import {
   recusarProposta,
   reescreverItens as reescreverItensProposta,
 } from './propostas';
-import { converterLead } from './crm';
+import {
+  aprovarTransferencia,
+  calcularDisponibilidade as _calcularDisponibilidade,
+  cancelarTransferencia,
+  criarReserva,
+  criarTransferencia,
+  detalharTransferencia,
+  disponibilidadeHandler,
+  expedirTransferencia,
+  liberarReserva,
+  receberTransferencia,
+} from './estoqueTransferencia';
+import {
+  agendaDeAtividades,
+  converterLead,
+  forecastCrm,
+  historicoDaOportunidade,
+  mudarEstagioOportunidade,
+  painelCrm,
+} from './crm';
 import {
   abrirCaixa,
   buscarProduto as pdvBuscarProduto,
@@ -255,6 +275,19 @@ import {
   receberParcial,
   sugestaoCompra,
 } from './compras';
+import { capacidadeProducao, mrpProducao } from './producaoCapacidade';
+import {
+  calendarioFiscal,
+  historicoObrigacaoFiscal,
+  registrarEntregaFiscal,
+} from './fiscalObrigacoes';
+import { balanceteFinanceiro, resumoPlanoContas } from './financeiroContabil';
+import {
+  alterarHomologacao,
+  desempenhoDoFornecedor,
+  homologacaoDoFornecedor,
+  painelDeCompras,
+} from './comprasFornecedor';
 import {
   abrirCotacao,
   atualizarItemCotacao,
@@ -563,8 +596,12 @@ app.get('/api/admin/auditoria/verificar', wrap(verificarAuditoriaHandler));
 app.get(
   '/api/meta',
   wrap(async (req, res) => {
+    const ator = currentUser(req);
     res.json({
-      resources: publicMeta(),
+      // `metaComOpcoesDinamicas` resolve os campos `optionsFrom` (ex.: etapa do
+      // funil do CRM) para a EMPRESA da sessão — a lista de etapas que o
+      // formulário mostra é a do cadastro, não uma constante do código.
+      resources: await metaComOpcoesDinamicas(escopoDe(ator)),
       mode: getStore().kind,
       uploads: uploadProvider(),
       uploadsConfigError: uploadsConfigError(),
@@ -790,6 +827,31 @@ app.post('/api/propostas/:id/converter', wrap(converterProposta));
 
 // ---- CRM 3.0 — Lead → Oportunidade (transacional, idempotente, auditável) ----
 app.post('/api/crm/leads/:id/converter', wrap(converterLead));
+// ---- CRM 3.0 evolução (migration 0051): funil, histórico, agenda, forecast ----
+// Transição explícita de estágio (idempotente, grava histórico na transação).
+app.post('/api/crm/oportunidades/:id/estagio', wrap(mudarEstagioOportunidade));
+// Trilha do funil da própria oportunidade.
+app.get('/api/crm/oportunidades/:id/historico', wrap(historicoDaOportunidade));
+// Agenda de atividades: hoje / atrasadas / próximas / concluídas.
+app.get('/api/crm/atividades/agenda', wrap(agendaDeAtividades));
+// Previsão comercial ponderada por probabilidade (derivada, nunca persistida).
+app.get('/api/crm/forecast', wrap(forecastCrm));
+// Painel comercial do CRM (leads, pipeline, conversão, atividades, pessoas).
+app.get('/api/crm/painel', wrap(painelCrm));
+
+// ---- ESTOQUE 3.0: transferência formal, reserva e disponibilidade ----
+// Documento com máquina de estados — o saldo só muda na expedição e no
+// recebimento, pelos lançamentos oficiais de movimentação.
+app.get('/api/estoque/disponibilidade', wrap(disponibilidadeHandler));
+app.post('/api/estoque/transferencias', wrap(criarTransferencia));
+app.get('/api/estoque/transferencias/:id', wrap(detalharTransferencia));
+app.post('/api/estoque/transferencias/:id/aprovar', wrap(aprovarTransferencia));
+app.post('/api/estoque/transferencias/:id/expedir', wrap(expedirTransferencia));
+app.post('/api/estoque/transferencias/:id/receber', wrap(receberTransferencia));
+app.post('/api/estoque/transferencias/:id/cancelar', wrap(cancelarTransferencia));
+// Reserva/empenho/bloqueio: comprometimento com checagem de disponível.
+app.post('/api/estoque/reservas', wrap(criarReserva));
+app.post('/api/estoque/reservas/:id/liberar', wrap(liberarReserva));
 
 // ---- PDV ----
 app.get('/api/pdv/caixas/aberto', wrap(caixaAberto));
@@ -872,6 +934,33 @@ app.post('/api/devolucoes/:id/rastreamento', wrap(registrarRastreamento));
 app.post('/api/devolucoes/:id/receber', wrap(receberDevolucao));
 app.post('/api/devolucoes/:id/recusar', wrap(recusarDevolucao));
 app.post('/api/devolucoes/:id/cancelar', wrap(cancelarDevolucao));
+
+// ---- FISCAL 3.0: calendário de obrigações acessórias ----
+// O ERP controla prazo e prova (protocolo/arquivo); NÃO calcula imposto nem
+// escreve alíquota — o motor tributário continua em fiscalRegras.ts.
+app.get('/api/fiscal/calendario', wrap(calendarioFiscal));
+app.get('/api/fiscal/obrigacoes/:id/historico', wrap(historicoObrigacaoFiscal));
+app.post('/api/fiscal/obrigacoes/:id/entregas', wrap(registrarEntregaFiscal));
+
+// ---- FINANCEIRO 3.0: estrutura contábil (não é contabilidade) ----
+// Balancete e resumo do plano de contas leem o MESMO livro-caixa; não existe
+// segundo financeiro nem partida dobrada gerada por código.
+app.get('/api/financeiro/balancete', wrap(balanceteFinanceiro));
+app.get('/api/financeiro/plano-contas/resumo', wrap(resumoPlanoContas));
+
+// ---- PRODUÇÃO 3.0: capacidade/carga e MRP (somente leitura) ----
+// Nenhuma rota aqui cria OP ou pedido de compra: capacidade e MRP são leitura.
+app.get('/api/producao/capacidade', wrap(capacidadeProducao));
+app.get('/api/producao/mrp', wrap(mrpProducao));
+
+// ---- COMPRAS 3.0: homologação de fornecedor + painel ----
+// A homologação é um PROCESSO sobre o cadastro existente: estado em
+// `fornecedores`, documentos em `fornecedor_documentos`, trilha em
+// `fornecedor_homologacao_eventos`. Nenhum cadastro paralelo.
+app.get('/api/compras/painel', wrap(painelDeCompras));
+app.get('/api/compras/fornecedores/:id/homologacao', wrap(homologacaoDoFornecedor));
+app.post('/api/compras/fornecedores/:id/homologacao', wrap(alterarHomologacao));
+app.get('/api/compras/fornecedores/:id/desempenho', wrap(desempenhoDoFornecedor));
 
 // ---- Compras: aprovação e recebimento parcial ----
 app.post('/api/compras/:id/aprovar', wrap(aprovarCompra));

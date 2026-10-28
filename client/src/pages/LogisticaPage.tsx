@@ -17,7 +17,7 @@ import { AlertTriangle, ExternalLink, KeyRound, Package, RefreshCw, Search, Sett
 import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatMoney, formatNumber } from '../lib/format';
 import type { ListResult } from '../lib/meta';
-import { Alert, Badge, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
 
 type StatusEnvio = 'pendente' | 'cotado' | 'gerado' | 'postado' | 'em_transito' | 'entregue' | 'cancelado' | 'erro';
@@ -712,7 +712,7 @@ export default function LogisticaPage() {
       )}
 
       {/* ---------------------------------------------------------- modais */}
-      <Modal
+      <PainelInline
         open={eventosDe !== null}
         onClose={() => setEventosDe(null)}
         title={`Eventos do envio #${eventosDe?.id ?? ''}`}
@@ -733,9 +733,9 @@ export default function LogisticaPage() {
             ))}
           </ul>
         )}
-      </Modal>
+      </PainelInline>
 
-      <Modal
+      <PainelInline
         open={statusAberto !== null}
         onClose={() => setStatusAberto(null)}
         title={`Atualizar status do envio #${statusAberto?.id ?? ''}`}
@@ -769,7 +769,7 @@ export default function LogisticaPage() {
             Atualizar
           </button>
         </div>
-      </Modal>
+      </PainelInline>
     </div>
   );
 }

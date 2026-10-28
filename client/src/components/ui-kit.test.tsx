@@ -263,7 +263,8 @@ describe('DatePicker', () => {
     const onChange = vi.fn();
     render(<DatePicker label="Data" value="2026-10-08" onChange={onChange} />);
     await user.click(screen.getByRole('button', { name: /Data/ }));
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    // Popover do calendário é inline (role=group), não modal.
+    expect(screen.getByRole('group', { name: /Escolher data/i })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /quinta-feira, 15 de outubro de 2026/ }));
     expect(onChange).toHaveBeenCalledWith('2026-10-15');
   });

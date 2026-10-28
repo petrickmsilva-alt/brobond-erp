@@ -762,10 +762,10 @@ export default function FinanceiroPage() {
             </section>
           )}
 
-          {/* ---------------- MODAL DE BAIXA ---------------- */}
+          {/* Baixa de título: painel INLINE na própria página (ZERO MODAL). */}
           {baixaAlvo && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/40 p-4" onClick={() => !baixando && setBaixaAlvo(null)}>
-              <div className="card w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+            <section className="mt-4 rounded-xl border border-navy-200 bg-navy-50/40 p-4" aria-label="Baixa de título">
+<div className="card w-full p-5">
                 <h2 className="text-sm font-bold text-navy-900">{baixaAlvo.lado === 'receita' ? 'Receber' : 'Pagar'} — {formatMoney(baixaAlvo.lanc.valor)}</h2>
                 <p className="mt-0.5 truncate text-xs text-slate-400">
                   {baixaAlvo.lanc.nome}
@@ -844,7 +844,7 @@ export default function FinanceiroPage() {
                   </button>
                 </div>
               </div>
-            </div>
+            </section>
           )}
         </>
       )}

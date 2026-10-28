@@ -23,7 +23,7 @@ import { Building2, KeyRound, Pencil, Plus, Power, Trash2, Users } from 'lucide-
 import { api, ApiError } from '../lib/api';
 import { maskDocument } from '../lib/format';
 import type { ListResult } from '../lib/meta';
-import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 
 type Empresa = {
   id: number;
@@ -337,7 +337,7 @@ export default function EmpresasPage() {
       </div>
 
       {/* ------------------------------------------------ criar / editar ----- */}
-      <Modal
+      <PainelInline
         open={criando || editando !== null}
         onClose={() => {
           setCriando(false);
@@ -391,10 +391,10 @@ export default function EmpresasPage() {
             </label>
           )}
         </div>
-      </Modal>
+      </PainelInline>
 
       {/* ------------------------------------------------------- exclusão ---- */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={excluindo !== null}
         title={`Excluir ${excluindo?.nome ?? ''}?`}
         message={
@@ -410,7 +410,7 @@ export default function EmpresasPage() {
       />
 
       {/* -------------------------------------------------------- acessos ---- */}
-      <Modal
+      <PainelInline
         open={acessosDe !== null}
         onClose={() => setAcessosDe(null)}
         title={acessosDe ? `Quem entra em ${acessosDe.nome}` : 'Acessos'}
@@ -463,7 +463,7 @@ export default function EmpresasPage() {
             </table>
           </div>
         )}
-      </Modal>
+      </PainelInline>
     </div>
   );
 }

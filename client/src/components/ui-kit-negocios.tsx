@@ -241,81 +241,20 @@ export function SearchInput({ value, onChange, placeholder = 'Buscar…', label 
 // ----------------------------------------------------------------------------
 
 /**
- * Painel lateral (drawer) para filtros avançados e detalhes rápidos.
- * Fecha com Esc e com o botão; ao fechar devolve o foco a quem o abriu.
+ * PAINEL LATERAL REMOVIDO (ZERO MODAL / ZERO DRAWER).
+ *
+ * Este componente era um drawer sobreposto (`fixed inset-0` + `role="dialog"`),
+ * ou seja, exatamente o padrão que o BROBOND ERP proíbe: usado como página
+ * disfarçada para filtros e cadastros rápidos.
+ *
+ * Não existe substituto com o mesmo nome de propósito. Quem precisa de
+ * formulário usa PÁGINA (`/recurso/novo`, `/recurso/:id/editar`, ver
+ * `pages/RegistroPage.tsx`); quem precisa de confirmação usa
+ * `ConfirmacaoInline`; quem precisa de um bloco auxiliar usa `PainelInline`
+ * (`components/ui.tsx`), que ocupa faixa do layout e não sobrepõe a tela.
+ *
+ * O gate `npm run audit:ux` falha se um drawer/sheet/modal voltar ao código.
  */
-export function Drawer({
-  open,
-  onClose,
-  title,
-  description,
-  children,
-  footer,
-  size = 'md',
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  description?: ReactNode;
-  children: ReactNode;
-  footer?: ReactNode;
-  /**
-   * Largura em telas a partir de `sm`. `md` (28rem) para filtros/detalhes;
-   * `lg` (32rem) para cadastro — cabe formulário e prévia sem apertar campos.
-   * No celular o painel continua ocupando a largura toda (`w-full`).
-   */
-  size?: 'md' | 'lg';
-}) {
-  const titleId = useId();
-  const panelRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const anterior = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      anterior?.focus?.();
-    };
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-[1px]" onClick={onClose} aria-hidden="true" />
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className={`relative flex h-full w-full flex-col bg-surface shadow-modal outline-none animate-slide-in ${size === 'lg' ? 'max-w-lg' : 'max-w-md'}`}
-      >
-        <header className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
-          <div className="min-w-0">
-            <h2 id={titleId} className="text-base font-semibold text-ink">
-              {title}
-            </h2>
-            {description && <p className="mt-0.5 text-xs text-muted">{description}</p>}
-          </div>
-          <button type="button" onClick={onClose} className="btn-icon shrink-0" aria-label="Fechar painel">
-            <X className="h-4 w-4" />
-          </button>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <footer className="flex items-center justify-end gap-2 border-t border-line px-5 py-3">{footer}</footer>}
-      </div>
-    </div>
-  );
-}
 
 /** Dica de texto ao passar o mouse ou focar. Para ícones e abreviações; o texto também vai ao aria-describedby. */
 export function Tooltip({ content, children }: { content: string; children: ReactNode }) {

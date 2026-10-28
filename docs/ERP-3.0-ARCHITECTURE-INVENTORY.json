@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-10-27T21:12:06.572Z",
+  "gerado_em": "2026-10-27T23:45:18.224Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 50,
-    "sql_com_conteudo": 50,
+    "sql": 57,
+    "sql_com_conteudo": 57,
     "prisma": 7
   },
   "tabelas": {
-    "total": 116,
-    "com_empresa_id": 96,
+    "total": 131,
+    "com_empresa_id": 111,
     "sem_empresa_id": 20,
-    "fora_do_prisma": 105
+    "fora_do_prisma": 120
   },
-  "indices": 369,
-  "constraints": 179,
+  "indices": 408,
+  "constraints": 219,
   "recursos": {
-    "total": 101,
-    "com_tabela": 101,
-    "multiempresa": 83,
-    "somente_leitura": 44,
-    "rbac_restrito": 27,
-    "cobertura_tenant_pct": 82.2
+    "total": 116,
+    "com_tabela": 116,
+    "multiempresa": 98,
+    "somente_leitura": 51,
+    "rbac_restrito": 37,
+    "cobertura_tenant_pct": 84.5
   },
   "crm": [
     {
@@ -46,21 +46,51 @@
       "empresa": true,
       "minPerfil": "gerente",
       "adminOnly": false
+    },
+    {
+      "key": "crm_funis",
+      "empresa": true,
+      "minPerfil": "gerente",
+      "adminOnly": false
+    },
+    {
+      "key": "crm_etapas",
+      "empresa": true,
+      "minPerfil": "gerente",
+      "adminOnly": false
+    },
+    {
+      "key": "crm_origens",
+      "empresa": true,
+      "minPerfil": "gerente",
+      "adminOnly": false
+    },
+    {
+      "key": "crm_campanhas",
+      "empresa": true,
+      "minPerfil": "gerente",
+      "adminOnly": false
+    },
+    {
+      "key": "crm_estagio_historico",
+      "empresa": true,
+      "minPerfil": "gerente",
+      "adminOnly": false
     }
   ],
   "modulos": {
-    "total": 85,
-    "navegaveis": 77,
+    "total": 101,
+    "navegaveis": 93,
     "planejados": 8,
     "areas": 11,
     "grupos": 28,
-    "com_recurso": 55
+    "com_recurso": 66
   },
   "rotas": {
-    "total": 336,
+    "total": 361,
     "por_metodo": {
-      "GET": 147,
-      "POST": 157,
+      "GET": 162,
+      "POST": 167,
       "PUT": 17,
       "DELETE": 12,
       "PATCH": 3
@@ -163,14 +193,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 152,
-      "casos": 1320
+      "arquivos": 160,
+      "casos": 1406
     },
     "client": {
-      "arquivos": 71,
-      "casos": 822
+      "arquivos": 75,
+      "casos": 846
     },
-    "total": 2142
+    "total": 2252
   },
   "integracoes": {
     "arquivos_modules": 31,
@@ -277,9 +307,14 @@
     "cotacao_decisoes",
     "cotacoes_compra",
     "crm_atividades",
+    "crm_campanhas",
+    "crm_etapas",
+    "crm_funis",
     "crm_leads",
     "crm_motivos_perda",
+    "crm_oportunidade_estagio_historico",
     "crm_oportunidades",
+    "crm_origens",
     "devolucao_itens",
     "devolucoes",
     "divergencias_conferencia",
@@ -291,11 +326,19 @@
     "equipe_membros",
     "equipes_comerciais",
     "estoque_insumos",
+    "estoque_reservas",
+    "estoque_transferencia_eventos",
+    "estoque_transferencia_itens",
+    "estoque_transferencias",
     "estoques",
     "expedicao_eventos",
     "fichas_tecnicas",
     "fin_extrato_transacoes",
+    "fiscal_obrigacao_entregas",
+    "fiscal_obrigacoes",
     "fornecedor_contatos",
+    "fornecedor_documentos",
+    "fornecedor_homologacao_eventos",
     "fornecedores",
     "gateway_cobrancas",
     "gateway_configs",
@@ -329,6 +372,7 @@
     "pdv_caixa_movimentos",
     "pdv_caixas",
     "pdv_pagamentos",
+    "plano_contas",
     "planos_comissao",
     "politicas_comerciais",
     "portal_acessos",
@@ -337,6 +381,7 @@
     "print_jobs",
     "print_pairing_codes",
     "print_terminals",
+    "producao_recursos",
     "produto_composicao",
     "produto_fornecedor_skus",
     "proposta_eventos",

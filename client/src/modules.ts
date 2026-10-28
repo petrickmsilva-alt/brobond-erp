@@ -43,6 +43,7 @@ import {
   Cloud,
   Instagram,
   Package,
+  PackageOpen,
   Plug,
   ShoppingBag,
   Bot,
@@ -61,6 +62,9 @@ import {
   Percent,
   IdCard,
   MapPinned,
+  ShieldCheck,
+  CalendarClock,
+  BookOpen,
 } from 'lucide-react';
 
 export type ModuleSpace = 'erp' | 'commerce' | 'creators' | 'utilidades';
@@ -597,6 +601,105 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Catálogo de motivos pelos quais uma oportunidade foi perdida. Oportunidade perdida exige motivo.',
   },
+  // --------------------------------------------------------------------------
+  // CRM 3.0 — evolução (migration 0051): painel, agenda, funil e origem/campanha
+  // --------------------------------------------------------------------------
+  {
+    id: 'crm-painel',
+    label: 'Painel do CRM',
+    icon: TrendingUp,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'CRM — Inteligência',
+    keywords: 'crm painel dashboard leads conversao pipeline forecast previsao atividades atrasos representante',
+    path: '/crm/painel',
+    minPerfil: 'gerente',
+    description: 'Leads, conversão, pipeline, forecast ponderado, conversão por origem, atividades atrasadas e desempenho por responsável.',
+  },
+  {
+    id: 'crm-agenda',
+    label: 'Agenda do CRM',
+    icon: Clock,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'CRM — Inteligência',
+    keywords: 'agenda lembretes hoje atrasadas proximas atividades vencidas follow-up',
+    path: '/crm/agenda',
+    minPerfil: 'gerente',
+    description: 'Compromissos de hoje, atrasados e próximos — com lembrete, prioridade e responsável.',
+  },
+  {
+    id: 'crm-estagio-historico',
+    label: 'Histórico de estágio',
+    icon: History,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'CRM — Inteligência',
+    keywords: 'historico estagio mudanca trilha funil auditoria oportunidade',
+    path: '/crm/estagio-historico',
+    resource: 'crm_estagio_historico',
+    minPerfil: 'gerente',
+    description: 'Trilha do funil: toda mudança de estágio, com usuário, data e observação. Gravada pelo servidor — não é editável.',
+  },
+  {
+    id: 'crm-funis',
+    label: 'Funis',
+    icon: GitBranch,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'CRM — Configuração',
+    keywords: 'funil configuracao etapas ordem probabilidade pipeline padrao',
+    path: '/crm/funis',
+    resource: 'crm_funis',
+    minPerfil: 'gerente',
+    description: 'Funis comerciais da empresa. O funil padrão é único por empresa (garantido pelo banco).',
+  },
+  {
+    id: 'crm-etapas',
+    label: 'Etapas do funil',
+    icon: Layers,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'CRM — Configuração',
+    keywords: 'etapa estagio ordem probabilidade funil configuracao',
+    path: '/crm/etapas',
+    resource: 'crm_etapas',
+    minPerfil: 'gerente',
+    description: 'Ordem, nome e probabilidade de cada etapa do funil. A chave é o vocabulário aceito pelo banco.',
+  },
+  {
+    id: 'crm-origens',
+    label: 'Origens',
+    icon: Share2,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'CRM — Configuração',
+    keywords: 'origem canal indicacao site feira outbound campanha aquisicao',
+    path: '/crm/origens',
+    resource: 'crm_origens',
+    minPerfil: 'gerente',
+    description: 'Catálogo controlado de origens de lead — base da conversão por origem no painel.',
+  },
+  {
+    id: 'crm-campanhas',
+    label: 'Campanhas',
+    icon: Megaphone,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'CRM — Configuração',
+    keywords: 'campanha utm investimento midia aquisicao custo por lead',
+    path: '/crm/campanhas',
+    resource: 'crm_campanhas',
+    minPerfil: 'gerente',
+    description: 'Campanhas de aquisição vinculadas a uma origem, com investimento e período.',
+  },
   {
     id: 'metas',
     label: 'Metas',
@@ -748,6 +851,34 @@ export const MODULES: Module[] = [
     description: 'Loja, expedição e facção onde as peças ficam guardadas.',
   },
   {
+    id: 'transferencias-estoque',
+    label: 'Transferências',
+    icon: ArrowRightLeft,
+    space: 'erp',
+    area: 'Estoque & Suprimentos',
+    group: 'Estoque',
+    subgroup: 'Movimentação',
+    keywords: 'transferencia local origem destino transito aprovacao recebimento documento',
+    path: '/estoque/transferencias',
+    resource: 'estoque_transferencias',
+    minPerfil: 'gerente',
+    description: 'Documento de transferência entre locais: solicitar, aprovar, expedir e receber — com rastro de cada evento.',
+  },
+  {
+    id: 'reservas-estoque',
+    label: 'Reservas de estoque',
+    icon: PackageOpen,
+    space: 'erp',
+    area: 'Estoque & Suprimentos',
+    group: 'Estoque',
+    subgroup: 'Movimentação',
+    keywords: 'reserva empenho bloqueio disponivel comprometido',
+    path: '/estoque/reservas',
+    resource: 'estoque_reservas',
+    minPerfil: 'gerente',
+    description: 'Reservas, empenhos e bloqueios que reduzem o disponível sem movimentar o saldo físico.',
+  },
+  {
     id: 'compras',
     label: 'Compras',
     icon: ShoppingCart,
@@ -828,6 +959,20 @@ export const MODULES: Module[] = [
     resource: 'produto_fornecedor_skus',
     description: 'Traduz o código que o fornecedor usa na NF-e para o SKU interno do ERP. É só associação: não cria produto.',
   },
+  {
+    id: 'homologacao-fornecedores',
+    label: 'Homologação de fornecedores',
+    icon: ShieldCheck,
+    space: 'erp',
+    area: 'Estoque & Suprimentos',
+    group: 'Compras',
+    subgroup: 'Fornecedores',
+    keywords: 'homologacao fornecedor documento certidao avaliacao desempenho score bloqueio suspensao',
+    path: '/compras/fornecedores',
+    resource: 'fornecedores',
+    minPerfil: 'gerente',
+    description: 'Quem pode receber pedido de compra: estado de homologação, documentos com validade, trilha de decisões e desempenho calculado das compras reais.',
+  },
 
   // ==========================================================================
   // 5. PRODUÇÃO (ERP CORE)
@@ -843,6 +988,32 @@ export const MODULES: Module[] = [
     keywords: 'pcp cronograma necessidade de insumos ordens planejadas',
     path: '/planejamento-producao',
     description: 'Ordens planejadas por semana, atrasos e os insumos que faltam para cumprir o plano.',
+  },
+  {
+    id: 'producao-recursos',
+    label: 'Recursos de produção',
+    icon: Factory,
+    space: 'erp',
+    area: 'Produção',
+    group: 'Planejamento',
+    subgroup: 'Capacidade',
+    keywords: 'recurso produtivo capacidade diaria costura corte estamparia faccao eficiencia',
+    path: '/producao/recursos',
+    resource: 'producao_recursos',
+    description: 'Onde a peça é feita: capacidade diária informada, eficiência e responsável. A carga e a ocupação são calculadas das ordens.',
+  },
+  {
+    id: 'producao-capacidade',
+    label: 'Capacidade e MRP',
+    icon: BarChart3,
+    space: 'erp',
+    area: 'Produção',
+    group: 'Planejamento',
+    subgroup: 'Capacidade',
+    keywords: 'capacidade carga ocupacao gargalo mrp necessidade insumos planejamento',
+    path: '/producao/capacidade',
+    minPerfil: 'gerente',
+    description: 'Ocupação por recurso, gargalo do período e MRP: o que falta produzir e comprar, cruzando vendas em aberto, estoque, OPs, ficha técnica e compras em aberto.',
   },
   {
     id: 'ordens',
@@ -912,6 +1083,33 @@ export const MODULES: Module[] = [
     resource: 'lancamentos_financeiros',
     minPerfil: 'gerente',
     description: 'Livro-caixa: receitas, despesas, investimentos e estornos.',
+  },
+  {
+    id: 'plano-contas',
+    label: 'Plano de contas',
+    icon: BookOpen,
+    space: 'erp',
+    area: 'Financeiro',
+    group: 'Operação financeira',
+    subgroup: 'Contabilidade',
+    keywords: 'plano de contas contabil codigo natureza ativo passivo receita despesa',
+    path: '/financeiro/plano-contas',
+    resource: 'plano_contas',
+    minPerfil: 'gerente',
+    description: 'Contas contábeis da empresa (código, natureza, sintética/analítica). Estrutura para a contabilidade — não é apuração de imposto.',
+  },
+  {
+    id: 'balancete',
+    label: 'Balancete',
+    icon: BarChart3,
+    space: 'erp',
+    area: 'Financeiro',
+    group: 'Operação financeira',
+    subgroup: 'Contabilidade',
+    keywords: 'balancete debito credito competencia classificacao pendentes contabil',
+    path: '/financeiro/balancete',
+    minPerfil: 'gerente',
+    description: 'Débito e crédito por conta, competência e documento de origem — somando o MESMO livro-caixa, com o que está sem classificação à vista.',
   },
   {
     id: 'contas-financeiras',
@@ -1116,6 +1314,34 @@ export const MODULES: Module[] = [
     resource: 'impostos_ncm',
     minPerfil: 'gerente',
     description: 'Alíquotas por NCM usadas pelo motor de impostos de cada venda: chave mais longa vence, chave vazia é a padrão.',
+  },
+
+  {
+    id: 'fiscal-obrigacoes',
+    label: 'Obrigações fiscais',
+    icon: ClipboardCheck,
+    space: 'erp',
+    area: 'Fiscal',
+    group: 'Parâmetros fiscais',
+    subgroup: 'Cadastro e prazos',
+    keywords: 'sped obrigacao acessoria dctf reinf esocial defis das vencimento competencia',
+    path: '/fiscal/obrigacoes',
+    resource: 'fiscal_obrigacoes',
+    minPerfil: 'gerente',
+    description: 'Regra de cada obrigação acessória da empresa: periodicidade, dia de vencimento e responsável. O vencimento de cada competência é calculado.',
+  },
+  {
+    id: 'fiscal-calendario',
+    label: 'Calendário fiscal',
+    icon: CalendarClock,
+    space: 'erp',
+    area: 'Fiscal',
+    group: 'Parâmetros fiscais',
+    subgroup: 'Cadastro e prazos',
+    keywords: 'calendario fiscal pendencias atrasadas protocolo arquivo entrega sped',
+    path: '/fiscal/calendario',
+    minPerfil: 'gerente',
+    description: 'O que vence quando, o que está atrasado e a prova de cada entrega (protocolo e arquivo). O ERP controla prazo — não calcula imposto.',
   },
 
   // ==========================================================================
@@ -1558,6 +1784,78 @@ export const FORM_DIRETO = new Set([
   'representantes',
   'categorias_insumos',
 ]);
+
+/**
+ * Módulos cuja LISTAGEM é uma página dedicada (não o CRUD genérico).
+ *
+ * Esta lista é a fonte única usada por:
+ *   • `pages/ModulePage.tsx` — decide qual página montar;
+ *   • `App.tsx` — decide para quais módulos gerar as rotas genéricas
+ *     `/:modulo/novo` e `/:modulo/:id/editar` (padrão LISTA → PÁGINA).
+ *
+ * Consequência: TODO recurso que usa o CRUD genérico tem, obrigatoriamente,
+ * rota própria de cadastro e de edição. Não existe "formulário na listagem".
+ */
+export const MODULOS_PAGINA_PROPRIA = new Set<string>([
+  'usuarios',
+  'webhooks',
+  'estoque',
+  'medidas',
+  'inventario',
+  'custo',
+  'planejamento-producao',
+  'relatorios',
+  'financeiro',
+  'ajuda',
+  'pdv',
+  'expedicao',
+  'cotacoes-compra',
+  'importar-nfe-compra',
+  'sugestao-compra',
+  'devolucoes',
+  'envios',
+  'ncm',
+  'comissoes',
+  'empresas',
+  'inutilizacoes',
+  'colecoes',
+  'insumos',
+  'fornecedores',
+  'representantes',
+  'territorios',
+  'metas',
+  'painel-comercial',
+  'equipes_comerciais',
+  'equipe_membros',
+  'representante_hierarquia',
+  'representante_cliente',
+  'venda_atribuicao',
+  'planos_comissao',
+  'regras_comissao',
+  'crm-painel',
+  'crm-agenda',
+  'transferencias-estoque',
+  'homologacao-fornecedores',
+  'producao-capacidade',
+  'fiscal-calendario',
+  'balancete',
+]);
+
+/**
+ * O módulo usa o CRUD genérico (lista + páginas de novo/editar)?
+ *
+ * Regra do ERP 3.0: quem usa o CRUD genérico NUNCA abre superfície sobreposta —
+ * o cadastro vive em `/recurso/novo` e a edição em `/recurso/:id/editar`.
+ */
+export function usaCrudGenerico(m: Module): boolean {
+  return (
+    !!m.resource &&
+    m.space === 'erp' &&
+    !m.connector &&
+    !MODULOS_PAGINA_PROPRIA.has(m.id) &&
+    !DETALHE_DIRETO.has(m.id)
+  );
+}
 
 export type NavSection = {
   id: NavSectionId;

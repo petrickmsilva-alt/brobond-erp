@@ -51,6 +51,29 @@ export type Field = {
   /** valor único dentro da empresa (`empresa_id`, valor), sem globalizar cadastros. */
   uniqueEmpresa?: boolean;
   options?: FieldOption[];
+  /**
+   * Opções de um `select` que vivem no BANCO, não no código.
+   *
+   * `GET /api/meta` resolve este campo para a empresa da sessão (ver
+   * `metaComOpcoesDinamicas` em services.ts) e entrega as opções prontas no
+   * campo `options`. Quando a empresa ainda não cadastrou nada, as `options`
+   * estáticas acima funcionam como SEMENTE/COMPATIBILIDADE — nunca como
+   * autoridade sobre o que existe.
+   *
+   * Usado pelo funil do CRM (`crm_oportunidades.etapa` ← `crm_etapas.chave`):
+   * cadastrar uma etapa nova passa a permitir usá-la em uma oportunidade sem
+   * alterar código.
+   */
+  optionsFrom?: {
+    /** recurso de onde vêm as opções (ex.: 'crm_etapas') */
+    resource: string;
+    /** campo do recurso usado como `value` (padrão: 'id') */
+    value?: string;
+    /** campo do recurso usado como `label` (padrão: labelFields) */
+    label?: string;
+    /** só oferece registros ativos (padrão: true) */
+    onlyActive?: boolean;
+  };
   /** chave do recurso referenciado (type = 'ref') */
   ref?: string;
   min?: number;
@@ -227,6 +250,37 @@ export const INDICADOR_IE: FieldOption[] = [
   { value: '1', label: '1 — Contribuinte de ICMS', tone: 'green' },
   { value: '2', label: '2 — Isento de Inscrição Estadual', tone: 'amber' },
   { value: '9', label: '9 — Não contribuinte', tone: 'slate' },
+];
+
+/** COMPRAS 3.0 — vocabulário fechado da homologação de fornecedor. */
+export const HOMOLOGACAO_STATUS: FieldOption[] = [
+  { value: 'pendente', label: 'Pendente', tone: 'amber' },
+  { value: 'em_analise', label: 'Em análise', tone: 'blue' },
+  { value: 'homologado', label: 'Homologado', tone: 'green' },
+  { value: 'suspenso', label: 'Suspenso', tone: 'red' },
+  { value: 'bloqueado', label: 'Bloqueado', tone: 'red' },
+];
+
+export const HOMOLOGACAO_CATEGORIA: FieldOption[] = [
+  { value: 'materia_prima', label: 'Matéria-prima', tone: 'blue' },
+  { value: 'embalagem', label: 'Embalagem', tone: 'slate' },
+  { value: 'acabamento', label: 'Acabamento / beneficiamento', tone: 'slate' },
+  { value: 'servico', label: 'Serviço', tone: 'amber' },
+  { value: 'logistica', label: 'Logística / transporte', tone: 'blue' },
+  { value: 'quimico', label: 'Químico', tone: 'amber' },
+  { value: 'outro', label: 'Outro', tone: 'slate' },
+];
+
+export const DOCUMENTO_FORNECEDOR: FieldOption[] = [
+  { value: 'contrato_social', label: 'Contrato social', tone: 'slate' },
+  { value: 'cartao_cnpj', label: 'Cartão CNPJ', tone: 'slate' },
+  { value: 'certidao_federal', label: 'Certidão federal', tone: 'blue' },
+  { value: 'certidao_estadual', label: 'Certidão estadual', tone: 'blue' },
+  { value: 'certidao_municipal', label: 'Certidão municipal', tone: 'blue' },
+  { value: 'certidao_fgts', label: 'Certidão FGTS', tone: 'blue' },
+  { value: 'certidao_trabalhista', label: 'Certidão trabalhista', tone: 'blue' },
+  { value: 'alvara', label: 'Alvará', tone: 'amber' },
+  { value: 'outro', label: 'Outro', tone: 'slate' },
 ];
 
 export const PESSOA: FieldOption[] = [
@@ -876,6 +930,18 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'whatsapp', label: 'WhatsApp', type: 'phone', maxLength: 20, list: false, search: true, section: 'Contato' },
       { name: 'email', label: 'E-mail', type: 'email', maxLength: 160, search: true, section: 'Contato' },
 
+      // ---------------- Homologação (COMPRAS 3.0) ----------------
+      // O estado vive NO fornecedor — não existe cadastro paralelo de
+      // "fornecedor homologado". A transição tem trilha própria
+      // (`fornecedor_homologacao_eventos`) e regras no servidor.
+      { name: 'homologacao_status', label: 'Homologação', type: 'select', required: true, default: 'pendente', options: HOMOLOGACAO_STATUS, section: 'Homologação', hint: 'Suspenso ou bloqueado não recebe pedido novo — o pedido em andamento continua.' },
+      { name: 'homologacao_categoria', label: 'Categoria de fornecimento', type: 'select', options: HOMOLOGACAO_CATEGORIA, section: 'Homologação' },
+      { name: 'homologacao_responsavel_id', label: 'Responsável pela homologação', type: 'ref', ref: 'usuarios', list: false, section: 'Homologação' },
+      { name: 'homologado_em', label: 'Homologado em', type: 'datetime', readonly: true, form: false, list: false, section: 'Homologação' },
+      { name: 'validade_documentos', label: 'Validade dos documentos', type: 'date', list: false, section: 'Homologação', hint: 'Data-limite da documentação do fornecedor. O sistema avisa antes de vencer — não bloqueia sozinho.' },
+      { name: 'avaliacao_manual', label: 'Avaliação manual (0–5)', type: 'number', min: 0, max: 5, list: false, section: 'Homologação', hint: 'Nota do comprador. O desempenho calculado (prazo, atendimento, preço) é outro número e não se confunde com este.' },
+      { name: 'homologacao_motivo', label: 'Motivo do status', type: 'textarea', maxLength: 500, list: false, wide: true, section: 'Homologação', hint: 'Obrigatório para suspender ou bloquear.' },
+
       // ---------------- Comercial ----------------
       { name: 'prazo_entrega_dias', label: 'Prazo de entrega (dias)', type: 'integer', min: 0, list: false, section: 'Comercial' },
       { name: 'condicao_pagamento', label: 'Condição de pagamento', type: 'text', maxLength: 60, list: false, section: 'Comercial', placeholder: '30/60/90 dias' },
@@ -888,7 +954,7 @@ export const RESOURCES: Record<string, Resource> = {
     // Filtros da LISTAGEM (server-side, mesmo mecanismo dos demais recursos):
     // tipo de pessoa, UF e status — as três perguntas que se faz ao revisar os
     // fornecedores. Todos os campos EXISTEM em `fornecedores`.
-    filterFields: ['pessoa', 'uf', 'ativo'],
+    filterFields: ['homologacao_status', 'pessoa', 'uf', 'ativo'],
     // Recorte de um clique acima da tabela — mesmo contrato `f.ativo` de Cores,
     // Grades e Insumos (nenhum SQL novo).
     quickFilters: [
@@ -931,6 +997,76 @@ export const RESOURCES: Record<string, Resource> = {
       ...auditFields,
     ],
     orderBy: { field: 'nome', dir: 'asc' },
+  },
+
+  /**
+   * DOCUMENTOS DO FORNECEDOR (COMPRAS 3.0) — o que a homologação exige.
+   *
+   * Cada linha é um documento com número, emissão, validade e situação. O
+   * vencimento NÃO é coluna: é comparação com `validade` na leitura, para não
+   * existir status que envelhece no banco sem ninguém escrever.
+   *
+   * Cadastro POR EMPRESA, escrita aberta a quem já opera fornecedores (mesma
+   * régua do cadastro-pai — não se cria restrição nova aqui).
+   */
+  fornecedor_documentos: {
+    key: 'fornecedor_documentos',
+    table: 'fornecedor_documentos',
+    label: 'Documentos do fornecedor',
+    singular: 'Documento do fornecedor',
+    labelFields: ['tipo', 'numero'],
+    empresa: true,
+    ops: ALL_OPS,
+    internal: true,
+    fields: [
+      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores', required: true, search: true },
+      { name: 'tipo', label: 'Tipo de documento', type: 'select', required: true, options: DOCUMENTO_FORNECEDOR },
+      { name: 'numero', label: 'Número', type: 'text', maxLength: 60, search: true },
+      { name: 'emissao', label: 'Emissão', type: 'date', list: false },
+      { name: 'validade', label: 'Validade', type: 'date', hint: 'Documento vencido aparece em vermelho na homologação — nenhum processo é bloqueado automaticamente por ele.' },
+      { name: 'arquivo_ref', label: 'Arquivo / referência', type: 'text', maxLength: 240, list: false, hint: 'Link ou caminho do arquivo no repositório documental da empresa.' },
+      {
+        name: 'situacao', label: 'Situação', type: 'select', required: true, default: 'pendente',
+        options: [
+          { value: 'pendente', label: 'Pendente', tone: 'amber' },
+          { value: 'aprovado', label: 'Aprovado', tone: 'green' },
+          { value: 'reprovado', label: 'Reprovado', tone: 'red' },
+        ],
+      },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 1000, list: false, wide: true },
+      { name: 'validado_por', label: 'Validado por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
+      { name: 'validado_em', label: 'Validado em', type: 'datetime', readonly: true, form: false, list: false },
+      ...auditFields,
+    ],
+    orderBy: { field: 'validade', dir: 'asc' },
+  },
+
+  /**
+   * TRILHA DE HOMOLOGAÇÃO (COMPRAS 3.0) — append-only.
+   *
+   * Só o endpoint `POST /api/compras/fornecedores/:id/homologacao` escreve
+   * aqui: a mudança de estado e o evento nascem na MESMA transação. Não há
+   * edição nem exclusão — a pergunta "por que este fornecedor está bloqueado?"
+   * tem resposta no histórico, não na memória de quem decidiu.
+   */
+  fornecedor_homologacao_eventos: {
+    key: 'fornecedor_homologacao_eventos',
+    table: 'fornecedor_homologacao_eventos',
+    label: 'Histórico de homologação',
+    singular: 'Evento de homologação',
+    labelFields: ['status_novo'],
+    empresa: true,
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores', required: true, search: true },
+      { name: 'status_anterior', label: 'De', type: 'select', options: HOMOLOGACAO_STATUS },
+      { name: 'status_novo', label: 'Para', type: 'select', required: true, options: HOMOLOGACAO_STATUS },
+      { name: 'motivo', label: 'Motivo', type: 'textarea', maxLength: 500, list: false, wide: true },
+      { name: 'usuario_id', label: 'Por', type: 'ref', ref: 'usuarios' },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
   },
 
   /**
@@ -1307,13 +1443,37 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'documento', label: 'CPF/CNPJ', type: 'document', documento: 'ambos', maxLength: 20, search: true, placeholder: 'apenas dígitos' },
       { name: 'email', label: 'E-mail', type: 'email', maxLength: 160 },
       { name: 'telefone', label: 'Telefone', type: 'phone', maxLength: 30 },
-      { name: 'origem', label: 'Origem', type: 'select', search: true, options: [
+      // ORIGEM — o texto original (0049) é PRESERVADO e continua sendo gravado.
+      // A referência controlada (`origem_id`) entra ao lado, para medir conversão
+      // por origem/campanha sem quebrar o dado histórico.
+      { name: 'origem', label: 'Origem (texto)', type: 'select', search: true, options: [
         { value: 'indicacao', label: 'Indicação' },
         { value: 'site', label: 'Site' },
         { value: 'feira', label: 'Feira / evento' },
         { value: 'outbound', label: 'Outbound' },
         { value: 'outro', label: 'Outro' },
       ] },
+      { name: 'origem_id', label: 'Origem (cadastro)', type: 'ref', ref: 'crm_origens', search: true, hint: 'Origem controlada — permite medir conversão por origem.' },
+      { name: 'canal', label: 'Canal', type: 'select', search: true, options: [
+        { value: 'site', label: 'Site' },
+        { value: 'marketplace', label: 'Marketplace' },
+        { value: 'loja_fisica', label: 'Loja física' },
+        { value: 'indicacao', label: 'Indicação' },
+        { value: 'evento', label: 'Evento' },
+        { value: 'outbound', label: 'Outbound' },
+        { value: 'outro', label: 'Outro' },
+      ] },
+      { name: 'campanha_id', label: 'Campanha', type: 'ref', ref: 'crm_campanhas', search: true },
+      { name: 'utm_source', label: 'UTM source', type: 'text', maxLength: 120, list: false },
+      { name: 'utm_medium', label: 'UTM medium', type: 'text', maxLength: 120, list: false },
+      { name: 'utm_campaign', label: 'UTM campaign', type: 'text', maxLength: 120, list: false },
+      { name: 'utm_content', label: 'UTM content', type: 'text', maxLength: 120, list: false },
+      { name: 'utm_term', label: 'UTM term', type: 'text', maxLength: 120, list: false },
+      // SCORE — calculado pelo SERVIDOR (regras explicáveis). Readonly: um PUT
+      // do cliente não forja pontuação. O motivo fica ao lado do número.
+      { name: 'score', label: 'Score', type: 'integer', readonly: true, min: 0, max: 100 },
+      { name: 'score_motivo', label: 'Por que este score', type: 'text', readonly: true, list: false, wide: true },
+      { name: 'score_atualizado_em', label: 'Score calculado em', type: 'datetime', readonly: true, list: false },
       { name: 'status', label: 'Status', type: 'select', required: true, search: true, options: [
         { value: 'novo', label: 'Novo', tone: 'blue' },
         { value: 'contato', label: 'Contato', tone: 'amber' },
@@ -1336,7 +1496,7 @@ export const RESOURCES: Record<string, Resource> = {
       ...auditFields,
     ],
     orderBy: { field: 'criado_em', dir: 'desc' },
-    filterFields: ['status', 'origem', 'responsavel_id', 'ativo'],
+    filterFields: ['status', 'origem', 'origem_id', 'canal', 'campanha_id', 'responsavel_id', 'ativo'],
     quickFilters: [
       { field: 'ativo', label: 'Status', options: [
         { value: '', label: 'Todos' },
@@ -1355,12 +1515,36 @@ export const RESOURCES: Record<string, Resource> = {
     empresa: true,
     ops: ALL_OPS,
     minPerfil: 'gerente',
-    notice: 'Negociação em pipeline, com estágio, valor, probabilidade e previsão de fechamento. Oportunidade perdida exige motivo.',
+    notice:
+      'Negociação em pipeline. O estágio vem do funil CADASTRADO da empresa (Etapas do funil) — a lista abaixo é apenas a semente inicial. Oportunidade perdida exige motivo.',
     fields: [
       { name: 'nome', label: 'Oportunidade', type: 'text', required: true, search: true, maxLength: 160, placeholder: 'Nome da negociação' },
       { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes', search: true, hint: 'Cliente já cadastrado (ou deixe o lead como origem).' },
       { name: 'lead_id', label: 'Lead de origem', type: 'ref', ref: 'crm_leads', search: true, hint: 'Lead que originou esta oportunidade.' },
-      { name: 'etapa', label: 'Estágio', type: 'select', required: true, search: true, options: [
+      { name: 'funil_id', label: 'Funil', type: 'ref', ref: 'crm_funis', search: true, hint: 'Funil configurável a que esta oportunidade pertence (padrão: o funil padrão da empresa).' },
+      {
+        name: 'etapa_id',
+        label: 'Estágio (etapa do funil)',
+        type: 'ref',
+        ref: 'crm_etapas',
+        search: true,
+        hint: 'Etapa cadastrada no funil da empresa. É a referência operacional — vale a etapa, sua probabilidade e o histórico.',
+      },
+      {
+        name: 'etapa',
+        label: 'Estágio',
+        type: 'select',
+        // Não é `required` no schema: a etapa pode chegar por `etapa_id` (que é
+        // a referência operacional) ou ser resolvida pelo cadastro do funil.
+        // O servidor SEMPRE grava uma chave válida — ver
+        // `aplicarEtapaNaOportunidade()` em crm.ts.
+        search: true,
+        hint: 'Chave da etapa (preenchida pelo cadastro do funil). A lista canônica só aparece enquanto a empresa não cadastrar etapas próprias.',
+        // A AUTORIDADE é o cadastro da empresa (crm_etapas). As opções abaixo
+        // são semente/compatibilidade: `GET /api/meta` as substitui pelas
+        // etapas reais da empresa (ver `optionsFrom`).
+        optionsFrom: { resource: 'crm_etapas', value: 'chave', label: 'nome' },
+        options: [
         { value: 'prospeccao', label: 'Prospecção', tone: 'blue' },
         { value: 'qualificacao', label: 'Qualificação', tone: 'amber' },
         { value: 'proposta', label: 'Proposta', tone: 'blue' },
@@ -1382,7 +1566,7 @@ export const RESOURCES: Record<string, Resource> = {
       ...auditFields,
     ],
     orderBy: { field: 'criado_em', dir: 'desc' },
-    filterFields: ['etapa', 'status', 'responsavel_id', 'cliente_id', 'ativo'],
+    filterFields: ['etapa', 'etapa_id', 'status', 'funil_id', 'responsavel_id', 'cliente_id', 'ativo'],
     quickFilters: [
       { field: 'ativo', label: 'Status', options: [
         { value: '', label: 'Todos' },
@@ -1422,11 +1606,172 @@ export const RESOURCES: Record<string, Resource> = {
       ] },
       { name: 'resumo', label: 'Resumo', type: 'text', maxLength: 500, wide: true },
       { name: 'proxima_acao', label: 'Próxima ação', type: 'date' },
+      { name: 'prioridade', label: 'Prioridade', type: 'select', search: true, default: 'media', options: [
+        { value: 'baixa', label: 'Baixa', tone: 'slate' },
+        { value: 'media', label: 'Média', tone: 'blue' },
+        { value: 'alta', label: 'Alta', tone: 'amber' },
+        { value: 'urgente', label: 'Urgente', tone: 'red' },
+      ] },
+      { name: 'status', label: 'Status', type: 'select', search: true, default: 'pendente', options: [
+        { value: 'pendente', label: 'Pendente', tone: 'amber' },
+        { value: 'concluida', label: 'Concluída', tone: 'green' },
+        { value: 'cancelada', label: 'Cancelada', tone: 'slate' },
+      ] },
+      { name: 'lembrete_em', label: 'Lembrete', type: 'datetime', hint: 'Quando este compromisso deve aparecer na agenda (hoje/atrasado/próximo).' },
+      { name: 'concluida_em', label: 'Concluída em', type: 'datetime' },
       { name: 'responsavel_id', label: 'Responsável', type: 'ref', ref: 'usuarios', search: true },
       ...auditFields,
     ],
     orderBy: { field: 'data_atividade', dir: 'desc' },
-    filterFields: ['tipo', 'resultado', 'responsavel_id', 'ativo'],
+    filterFields: ['tipo', 'resultado', 'prioridade', 'status', 'responsavel_id', 'ativo'],
+    quickFilters: [
+      { field: 'status', label: 'Status', options: [
+        { value: '', label: 'Todas' },
+        { value: 'pendente', label: 'Pendentes' },
+        { value: 'concluida', label: 'Concluídas' },
+        { value: 'cancelada', label: 'Canceladas' },
+      ] },
+    ],
+  },
+  // --------------------------------------------------------------------------
+  // CRM 3.0 — FUNIL CONFIGURÁVEL E ORIGEM/CAMPANHA (migration 0051)
+  // --------------------------------------------------------------------------
+  crm_funis: {
+    key: 'crm_funis',
+    table: 'crm_funis',
+    label: 'Funis',
+    singular: 'Funil',
+    labelFields: ['nome'],
+    empresa: true,
+    ops: ALL_OPS,
+    minPerfil: 'gerente',
+    notice: 'Um funil por operação comercial. O funil PADRÃO da empresa é único (garantido por índice parcial no banco).',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, uniqueEmpresa: true },
+      { name: 'descricao', label: 'Descrição', type: 'text', maxLength: 300, wide: true },
+      { name: 'padrao', label: 'Funil padrão', type: 'boolean', default: false, hint: 'Só pode haver um por empresa.' },
+      { name: 'ativo', label: 'Ativo', type: 'boolean', default: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+    uso: { recurso: 'crm_etapas', campo: 'funil_id', singular: 'etapa', plural: 'etapas' },
+    // SEMENTE de demonstração — espelha exatamente o INSERT da migration 0051.
+    // Não é funil oculto: é o mesmo funil padrão que a empresa recebe no banco.
+    mock: [{ id: 1, nome: 'Funil comercial', descricao: 'Funil padrão (semente da migration 0051).', padrao: true, ativo: true, empresa_id: 1 }],
+  },
+  crm_etapas: {
+    key: 'crm_etapas',
+    table: 'crm_etapas',
+    label: 'Etapas do funil',
+    singular: 'Etapa',
+    labelFields: ['nome'],
+    empresa: true,
+    ops: ALL_OPS,
+    minPerfil: 'gerente',
+    notice:
+      'ESTA é a autoridade do funil: etapa cadastrada aqui pode ser usada imediatamente nas oportunidades (ordem, probabilidade e ativo valem para o CRM inteiro).',
+    fields: [
+      { name: 'funil_id', label: 'Funil', type: 'ref', ref: 'crm_funis', required: true, search: true },
+      { name: 'nome', label: 'Nome da etapa', type: 'text', required: true, search: true, maxLength: 80 },
+      {
+        name: 'chave',
+        label: 'Chave',
+        type: 'text',
+        required: true,
+        maxLength: 40,
+        pattern: '^[a-z][a-z0-9_]{0,39}$',
+        patternMessage: 'Use minúsculas, sem acento nem espaço (ex.: demonstracao, aprovacao_juridica)',
+        hint: 'Identificador técnico da etapa (é o valor gravado na oportunidade). Livre: crie a etapa que a sua operação usa.',
+      },
+      { name: 'ordem', label: 'Ordem', type: 'integer', required: true, min: 0, default: 0 },
+      { name: 'probabilidade', label: 'Probabilidade (%)', type: 'percent', min: 0, max: 100, default: 0 },
+      { name: 'ativo', label: 'Ativa', type: 'boolean', default: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'ordem', dir: 'asc' },
+    filterFields: ['funil_id', 'ativo'],
+    // SEMENTE de demonstração — mesmas 5 etapas que a 0051 cria por empresa.
+    mock: [
+      { id: 1, funil_id: 1, nome: 'Prospecção', chave: 'prospeccao', ordem: 1, probabilidade: 10, ativo: true, empresa_id: 1 },
+      { id: 2, funil_id: 1, nome: 'Qualificação', chave: 'qualificacao', ordem: 2, probabilidade: 25, ativo: true, empresa_id: 1 },
+      { id: 3, funil_id: 1, nome: 'Proposta', chave: 'proposta', ordem: 3, probabilidade: 50, ativo: true, empresa_id: 1 },
+      { id: 4, funil_id: 1, nome: 'Negociação', chave: 'negociacao', ordem: 4, probabilidade: 75, ativo: true, empresa_id: 1 },
+      { id: 5, funil_id: 1, nome: 'Fechamento', chave: 'fechamento', ordem: 5, probabilidade: 90, ativo: true, empresa_id: 1 },
+    ],
+  },
+  crm_origens: {
+    key: 'crm_origens',
+    table: 'crm_origens',
+    label: 'Origens',
+    singular: 'Origem',
+    labelFields: ['nome'],
+    empresa: true,
+    ops: ALL_OPS,
+    minPerfil: 'gerente',
+    notice: 'Catálogo controlado de origens de lead. O texto original do lead continua preservado — a referência é adicionada ao lado.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, uniqueEmpresa: true },
+      { name: 'canal', label: 'Canal', type: 'select', search: true, options: [
+        { value: 'site', label: 'Site' },
+        { value: 'marketplace', label: 'Marketplace' },
+        { value: 'loja_fisica', label: 'Loja física' },
+        { value: 'indicacao', label: 'Indicação' },
+        { value: 'evento', label: 'Evento' },
+        { value: 'outbound', label: 'Outbound' },
+        { value: 'outro', label: 'Outro' },
+      ] },
+      { name: 'ativo', label: 'Ativa', type: 'boolean', default: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+    filterFields: ['canal', 'ativo'],
+  },
+  crm_campanhas: {
+    key: 'crm_campanhas',
+    table: 'crm_campanhas',
+    label: 'Campanhas',
+    singular: 'Campanha',
+    labelFields: ['nome'],
+    empresa: true,
+    ops: ALL_OPS,
+    minPerfil: 'gerente',
+    notice: 'Campanha de aquisição vinculada a uma origem. O investimento permite calcular custo por lead/oportunidade no painel.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120, uniqueEmpresa: true },
+      { name: 'origem_id', label: 'Origem', type: 'ref', ref: 'crm_origens', search: true },
+      { name: 'inicio', label: 'Início', type: 'date' },
+      { name: 'fim', label: 'Fim', type: 'date' },
+      { name: 'investimento', label: 'Investimento', type: 'money', min: 0, list: false },
+      { name: 'ativo', label: 'Ativa', type: 'boolean', default: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+    filterFields: ['origem_id', 'ativo'],
+  },
+  crm_estagio_historico: {
+    key: 'crm_estagio_historico',
+    table: 'crm_oportunidade_estagio_historico',
+    label: 'Histórico de estágio',
+    singular: 'Mudança de estágio',
+    labelFields: ['estagio_novo'],
+    empresa: true,
+    // Histórico é ESCRITO PELO SERVIDOR (hook transacional na mudança de etapa).
+    // Ninguém cria, edita ou apaga uma linha de histórico pela API.
+    ops: READ_ONLY,
+    minPerfil: 'gerente',
+    notice: 'Trilha própria do funil: toda mudança de estágio é gravada aqui automaticamente, com usuário, data e observação.',
+    fields: [
+      { name: 'oportunidade_id', label: 'Oportunidade', type: 'ref', ref: 'crm_oportunidades', required: true, search: true },
+      { name: 'estagio_anterior', label: 'Estágio anterior', type: 'text', search: true },
+      { name: 'estagio_novo', label: 'Estágio novo', type: 'text', required: true, search: true },
+      { name: 'status_anterior', label: 'Status anterior', type: 'text', list: false },
+      { name: 'status_novo', label: 'Status novo', type: 'text', list: false },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      { name: 'observacao', label: 'Observação', type: 'text', maxLength: 300, wide: true },
+      { name: 'criado_em', label: 'Quando', type: 'datetime', readonly: true },
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+    filterFields: ['oportunidade_id', 'estagio_novo'],
   },
 
   clientes: {
@@ -2025,6 +2370,56 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   // Produção
   // ----------------------------------------------------------------
+  /**
+   * RECURSOS PRODUTIVOS (PRODUÇÃO 3.0) — onde a peça é feita.
+   *
+   * Cadastro POR EMPRESA com a capacidade DIÁRIA informada pela engenharia
+   * (peças/dia), eficiência e dias úteis/semana. A capacidade é dado de
+   * entrada; a CARGA e a OCUPAÇÃO são calculadas das OPs alocadas e nunca
+   * gravadas aqui (ver server/src/producaoCapacidade.ts).
+   */
+  producao_recursos: {
+    key: 'producao_recursos',
+    table: 'producao_recursos',
+    empresa: true,
+    label: 'Recursos de produção',
+    singular: 'Recurso de produção',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    notice:
+      'A capacidade aqui é a CAPACIDADE INFORMADA (peças/dia). A carga e a ocupação são calculadas das ordens alocadas a este recurso — não se digitam.',
+    fields: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
+      {
+        name: 'tipo',
+        label: 'Tipo',
+        type: 'select',
+        required: true,
+        default: 'costura',
+        options: [
+          { value: 'corte', label: 'Corte' },
+          { value: 'costura', label: 'Costura' },
+          { value: 'estamparia', label: 'Estamparia' },
+          { value: 'bordado', label: 'Bordado' },
+          { value: 'acabamento', label: 'Acabamento' },
+          { value: 'embalagem', label: 'Embalagem' },
+          { value: 'faccao', label: 'Facção' },
+          { value: 'outro', label: 'Outro' },
+        ],
+      },
+      { name: 'capacidade_diaria', label: 'Capacidade diária (peças)', type: 'integer', required: true, min: 0, default: 0, hint: 'Quantas peças o recurso entrega por dia útil, na prática.' },
+      { name: 'eficiencia_pct', label: 'Eficiência (%)', type: 'number', min: 0, max: 200, default: 100, hint: 'Desconto de realidade sobre a capacidade nominal (paradas, setup, retrabalho).' },
+      { name: 'dias_uteis_semana', label: 'Dias úteis por semana', type: 'integer', min: 1, max: 7, default: 5 },
+      { name: 'local_id', label: 'Local', type: 'ref', ref: 'locais' },
+      { name: 'responsavel_id', label: 'Responsável', type: 'ref', ref: 'usuarios' },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 1000, list: false, wide: true },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+    filterFields: ['tipo', 'ativo'],
+  },
+
   ordens: {
     key: 'ordens',
     empresa: true,
@@ -2051,6 +2446,10 @@ export const RESOURCES: Record<string, Resource> = {
       },
       { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos', search: true, hint: 'Obrigatório em OP "por tamanho".' },
       { name: 'quantidade', label: 'Quantidade', type: 'integer', min: 1, hint: 'Obrigatório em OP "por tamanho".' },
+      // PRODUÇÃO 3.0: alocação no recurso produtivo. Opcional de propósito —
+      // OP sem recurso continua válida e aparece como "sem recurso" na
+      // capacidade (esconder isso faria o gargalo parecer menor).
+      { name: 'recurso_id', label: 'Recurso produtivo', type: 'ref', ref: 'producao_recursos', search: true, hint: 'Onde a peça será feita. Usado para calcular carga e gargalo.' },
       {
         name: 'status',
         label: 'Status',
@@ -2720,6 +3119,146 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   // Fase 4 — Inventário
   // ----------------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // ESTOQUE 3.0 — TRANSFERÊNCIA FORMAL E RESERVA (migration 0052)
+  //
+  // Estas tabelas são SOMENTE LEITURA no CRUD genérico de propósito: quem
+  // escreve é o documento (endpoints de estado em server/src/estoqueTransferencia.ts),
+  // para que nenhuma tela consiga "pular" a máquina de estados ou mexer no
+  // saldo por fora das movimentações oficiais.
+  // --------------------------------------------------------------------------
+  estoque_transferencias: {
+    key: 'estoque_transferencias',
+    table: 'estoque_transferencias',
+    label: 'Transferências entre locais',
+    singular: 'Transferência',
+    labelFields: ['id'],
+    empresa: true,
+    ops: READ_ONLY,
+    minPerfil: 'gerente',
+    notice:
+      'Documento de transferência: SOLICITADA → APROVADA → EM_TRANSITO → RECEBIDA (ou CANCELADA antes da expedição). O saldo só muda na expedição (saída na origem) e no recebimento (entrada no destino).',
+    fields: [
+      { name: 'origem_local_id', label: 'Origem', type: 'ref', ref: 'locais', required: true, search: true },
+      { name: 'destino_local_id', label: 'Destino', type: 'ref', ref: 'locais', required: true, search: true },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        required: true,
+        search: true,
+        options: [
+          { value: 'solicitada', label: 'Solicitada', tone: 'amber' },
+          { value: 'aprovada', label: 'Aprovada', tone: 'blue' },
+          { value: 'em_transito', label: 'Em trânsito', tone: 'blue' },
+          { value: 'recebida', label: 'Recebida', tone: 'green' },
+          { value: 'cancelada', label: 'Cancelada', tone: 'red' },
+        ],
+      },
+      { name: 'solicitante_id', label: 'Solicitante', type: 'ref', ref: 'usuarios', search: true },
+      { name: 'aprovador_id', label: 'Aprovador', type: 'ref', ref: 'usuarios', list: false },
+      { name: 'solicitada_em', label: 'Solicitada em', type: 'datetime', readonly: true },
+      { name: 'aprovada_em', label: 'Aprovada em', type: 'datetime', readonly: true, list: false },
+      { name: 'expedida_em', label: 'Expedida em', type: 'datetime', readonly: true, list: false },
+      { name: 'recebida_em', label: 'Recebida em', type: 'datetime', readonly: true, list: false },
+      { name: 'cancelada_em', label: 'Cancelada em', type: 'datetime', readonly: true, list: false },
+      { name: 'motivo_cancelamento', label: 'Motivo do cancelamento', type: 'text', readonly: true, list: false, wide: true },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', readonly: true, list: false, wide: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+    filterFields: ['status', 'origem_local_id', 'destino_local_id'],
+    uso: { recurso: 'estoque_transferencia_itens', campo: 'transferencia_id', singular: 'item', plural: 'itens' },
+  },
+  estoque_transferencia_itens: {
+    key: 'estoque_transferencia_itens',
+    table: 'estoque_transferencia_itens',
+    label: 'Itens da transferência',
+    singular: 'Item',
+    labelFields: ['produto_id'],
+    empresa: true,
+    ops: READ_ONLY,
+    minPerfil: 'gerente',
+    notice: 'Itens pertencem ao documento de transferência e são gravados com ele.',
+    fields: [
+      { name: 'transferencia_id', label: 'Transferência', type: 'ref', ref: 'estoque_transferencias', required: true, search: true },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
+      { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, min: 1 },
+      { name: 'quantidade_recebida', label: 'Recebida', type: 'integer', min: 0 },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false },
+    ],
+    orderBy: { field: 'id', dir: 'asc' },
+  },
+  estoque_transferencia_eventos: {
+    key: 'estoque_transferencia_eventos',
+    table: 'estoque_transferencia_eventos',
+    label: 'Eventos da transferência',
+    singular: 'Evento',
+    labelFields: ['status_novo'],
+    empresa: true,
+    ops: READ_ONLY,
+    minPerfil: 'gerente',
+    notice: 'Trilha da transferência: cada mudança de estado com usuário, data e observação.',
+    fields: [
+      { name: 'transferencia_id', label: 'Transferência', type: 'ref', ref: 'estoque_transferencias', required: true, search: true },
+      { name: 'status_anterior', label: 'De', type: 'text' },
+      { name: 'status_novo', label: 'Para', type: 'text', required: true, search: true },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      { name: 'observacao', label: 'Observação', type: 'text', maxLength: 300, wide: true },
+      { name: 'criado_em', label: 'Quando', type: 'datetime', readonly: true },
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+    filterFields: ['transferencia_id', 'status_novo'],
+  },
+  estoque_reservas: {
+    key: 'estoque_reservas',
+    table: 'estoque_reservas',
+    label: 'Reservas de estoque',
+    singular: 'Reserva',
+    labelFields: ['motivo'],
+    empresa: true,
+    // A reserva é criada pelo endpoint /api/estoque/reservas, que VALIDA o
+    // disponível (físico − comprometido). O CRUD genérico não pode abrir um
+    // caminho paralelo que reserve acima do estoque.
+    ops: READ_ONLY,
+    minPerfil: 'gerente',
+    notice:
+      'Quantidade comprometida (reserva, empenho ou bloqueio). Liberar devolve ao disponível — reserva NUNCA movimenta estoque. disponível = físico − reservado − bloqueado − empenhado.',
+    fields: [
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
+      { name: 'local_id', label: 'Local', type: 'ref', ref: 'locais' },
+      { name: 'tipo', label: 'Tipo', type: 'select', required: true, default: 'reserva', options: [
+        { value: 'reserva', label: 'Reserva', tone: 'blue' },
+        { value: 'empenho', label: 'Empenho', tone: 'amber' },
+        { value: 'bloqueio', label: 'Bloqueio', tone: 'red' },
+      ] },
+      { name: 'quantidade', label: 'Quantidade', type: 'integer', required: true, min: 1 },
+      { name: 'status', label: 'Status', type: 'select', search: true, default: 'ativa', options: [
+        { value: 'ativa', label: 'Ativa', tone: 'amber' },
+        { value: 'liberada', label: 'Liberada', tone: 'slate' },
+        { value: 'consumida', label: 'Consumida', tone: 'green' },
+        { value: 'expirada', label: 'Expirada', tone: 'slate' },
+      ] },
+      { name: 'origem_recurso', label: 'Documento de origem', type: 'text', maxLength: 60, hint: 'Recurso que comprometeu a quantidade (vendas, ordens, transferências...).' },
+      { name: 'origem_id', label: 'Documento (id)', type: 'integer', min: 1 },
+      { name: 'motivo', label: 'Motivo', type: 'text', maxLength: 300, wide: true },
+      { name: 'criado_por', label: 'Criado por', type: 'ref', ref: 'usuarios' },
+      { name: 'expira_em', label: 'Expira em', type: 'date' },
+      { name: 'liberada_em', label: 'Liberada em', type: 'datetime' },
+      ...auditFields,
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+    filterFields: ['produto_id', 'local_id', 'tipo', 'status'],
+    quickFilters: [
+      { field: 'status', label: 'Status', options: [
+        { value: '', label: 'Todas' },
+        { value: 'ativa', label: 'Ativas' },
+        { value: 'liberada', label: 'Liberadas' },
+      ] },
+    ],
+  },
   inventarios: {
     key: 'inventarios',
     empresa: true,
@@ -3082,6 +3621,24 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias_financeiras', search: true },
       { name: 'conta_id', label: 'Conta', type: 'ref', ref: 'contas_financeiras', search: true },
       { name: 'centro_custo_id', label: 'Centro de custo', type: 'ref', ref: 'centros_custo', search: true, list: false, section: 'Gerencial', hint: 'Rateio gerencial: Loja, Produção, Administrativo...' },
+      // FINANCEIRO 3.0 — classificação contábil OPCIONAL: sem ela o lançamento
+      // aparece em "sem classificação" no balancete, e nunca numa conta inventada.
+      { name: 'conta_contabil_id', label: 'Conta contábil', type: 'ref', ref: 'plano_contas', search: true, list: false, section: 'Contábil', hint: 'Conta analítica do plano de contas da empresa.' },
+      {
+        name: 'natureza_lancamento',
+        label: 'Débito / crédito',
+        type: 'select',
+        list: false,
+        section: 'Contábil',
+        options: [
+          { value: 'debito', label: 'Débito', tone: 'blue' },
+          { value: 'credito', label: 'Crédito', tone: 'green' },
+        ],
+        hint: 'Obrigatório junto com a conta contábil (o banco confere os dois).',
+      },
+      { name: 'documento_origem_recurso', label: 'Documento de origem', type: 'text', maxLength: 60, list: false, section: 'Contábil', hint: 'Recurso que gerou o lançamento (vendas, compras, aportes...).' },
+      { name: 'documento_origem_id', label: 'Documento (id)', type: 'integer', min: 1, list: false, section: 'Contábil' },
+      { name: 'competencia', label: 'Competência', type: 'date', list: false, section: 'Contábil', hint: 'Mês de competência. Vazio = usa a data do lançamento no balancete.' },
       { name: 'descricao', label: 'Descrição', type: 'text', required: true, search: true, maxLength: 200, wide: true },
       { name: 'valor', label: 'Valor bruto (R$)', type: 'money', required: true, min: 0.01 },
       { name: 'taxa_pct', label: 'Taxa da operadora (%)', type: 'percent', min: 0, max: 99.99, default: 0, list: false, section: 'Gerencial', hint: 'Mercado Pago, cartão etc. O líquido (bruto − taxa) é o que entra na conta.' },
@@ -3220,6 +3777,170 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   // FINANÇAS — Centros de custo (rateio gerencial) e transferências
   // ----------------------------------------------------------------
+  /**
+   * FISCAL 3.0 — OBRIGAÇÕES ACESSÓRIAS (cadastro da REGRA, por empresa).
+   *
+   * O que o ERP controla aqui é PRAZO e PROVA (competência, vencimento,
+   * protocolo, arquivo). Nenhuma alíquota e nenhuma apuração: o motor
+   * tributário continua em `fiscalRegras.ts`, alimentado por regra cadastrada.
+   */
+  fiscal_obrigacoes: {
+    key: 'fiscal_obrigacoes',
+    empresa: true,
+    table: 'fiscal_obrigacoes',
+    label: 'Obrigações fiscais',
+    singular: 'Obrigação fiscal',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    notice:
+      'Cadastro da REGRA da obrigação (periodicidade, dia de vencimento). O vencimento de cada competência é calculado — não se digita data de vencimento por mês.',
+    fields: [
+      { name: 'codigo', label: 'Código', type: 'text', required: true, unique: true, search: true, maxLength: 30, placeholder: 'SPED_FISCAL, DCTFWEB...' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
+      {
+        name: 'tipo',
+        label: 'Tipo',
+        type: 'select',
+        required: true,
+        default: 'sped_fiscal',
+        options: [
+          { value: 'sped_fiscal', label: 'SPED Fiscal (EFD ICMS/IPI)' },
+          { value: 'sped_contribuicoes', label: 'SPED Contribuições (EFD PIS/COFINS)' },
+          { value: 'efd_reinf', label: 'EFD-Reinf' },
+          { value: 'dctfweb', label: 'DCTFWeb' },
+          { value: 'esocial', label: 'eSocial' },
+          { value: 'sitfis', label: 'SITFIS' },
+          { value: 'defis', label: 'DEFIS' },
+          { value: 'das', label: 'DAS / Simples Nacional' },
+          { value: 'nfe_mensal', label: 'NF-e (envio mensal)' },
+          { value: 'outro', label: 'Outro' },
+        ],
+      },
+      {
+        name: 'periodicidade',
+        label: 'Periodicidade',
+        type: 'select',
+        required: true,
+        default: 'mensal',
+        options: [
+          { value: 'mensal', label: 'Mensal' },
+          { value: 'trimestral', label: 'Trimestral' },
+          { value: 'anual', label: 'Anual' },
+          { value: 'eventual', label: 'Eventual' },
+        ],
+      },
+      { name: 'dia_vencimento', label: 'Dia de vencimento', type: 'integer', required: true, default: 15, min: 1, max: 31, hint: 'Dia do mês SEGUINTE à competência (padrão das obrigações mensais).' },
+      { name: 'inicio_competencia', label: 'Válida a partir de', type: 'date', list: false, hint: 'Competência inicial. Deixe em branco para valer em todas.' },
+      { name: 'responsavel_id', label: 'Responsável', type: 'ref', ref: 'usuarios', list: false },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 1000, list: false, wide: true },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'nome', dir: 'asc' },
+    filterFields: ['tipo', 'periodicidade', 'ativo'],
+  },
+
+  /**
+   * FISCAL 3.0 — ENTREGAS DAS OBRIGAÇÕES (fato consumado, uma por competência).
+   *
+   * Escrita exclusivamente pelos endpoints de calendário
+   * (`POST /api/fiscal/obrigacoes/:id/entregas`): a entrega e o status nascem
+   * juntos, e "atrasada" nunca é gravada — é derivada do vencimento.
+   */
+  fiscal_obrigacao_entregas: {
+    key: 'fiscal_obrigacao_entregas',
+    table: 'fiscal_obrigacao_entregas',
+    label: 'Entregas de obrigações',
+    singular: 'Entrega de obrigação',
+    labelFields: ['competencia'],
+    empresa: true,
+    internal: true,
+    ops: READ_ONLY,
+    fields: [
+      { name: 'obrigacao_id', label: 'Obrigação', type: 'ref', ref: 'fiscal_obrigacoes', required: true, search: true },
+      { name: 'competencia', label: 'Competência', type: 'text', required: true, maxLength: 7, placeholder: 'AAAA-MM' },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        required: true,
+        default: 'pendente',
+        options: [
+          { value: 'pendente', label: 'Pendente', tone: 'amber' },
+          { value: 'entregue', label: 'Entregue', tone: 'green' },
+          { value: 'atrasada', label: 'Atrasada', tone: 'red' },
+          { value: 'dispensada', label: 'Dispensada', tone: 'slate' },
+        ],
+      },
+      { name: 'protocolo', label: 'Protocolo', type: 'text', maxLength: 80, search: true },
+      { name: 'arquivo_ref', label: 'Arquivo / referência', type: 'text', maxLength: 240, list: false },
+      { name: 'entregue_em', label: 'Entregue em', type: 'datetime', readonly: true, list: false },
+      { name: 'responsavel_id', label: 'Responsável', type: 'ref', ref: 'usuarios' },
+      { name: 'motivo_dispensa', label: 'Motivo da dispensa', type: 'textarea', maxLength: 500, list: false, wide: true },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 1000, list: false, wide: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'competencia', dir: 'desc' },
+  },
+
+  /**
+   * FINANCEIRO 3.0 — PLANO DE CONTAS (estrutura para contabilidade).
+   *
+   * Cadastro da EMPRESA (o plano é do contador, não do código): código,
+   * natureza, sintética/analítica e conta-pai. NÃO existe plano padrão semeado
+   * e NENHUM lançamento é classificado automaticamente — sem conta mapeada, o
+   * lançamento aparece em “sem classificação” no balancete.
+   */
+  plano_contas: {
+    key: 'plano_contas',
+    empresa: true,
+    minPerfil: 'gerente',
+    table: 'plano_contas',
+    label: 'Plano de Contas',
+    singular: 'Conta contábil',
+    labelFields: ['codigo', 'nome'],
+    ops: ALL_OPS,
+    notice:
+      'Estrutura contábil da empresa. O BROBOND não é um sistema contábil: aqui mora a classificação que o contador usa, não apuração de imposto.',
+    fields: [
+      { name: 'codigo', label: 'Código', type: 'text', required: true, unique: true, search: true, maxLength: 30, placeholder: '1.1.01, 4.01...' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
+      {
+        name: 'natureza',
+        label: 'Natureza',
+        type: 'select',
+        required: true,
+        default: 'despesa',
+        options: [
+          { value: 'ativo', label: 'Ativo', tone: 'blue' },
+          { value: 'passivo', label: 'Passivo', tone: 'red' },
+          { value: 'patrimonio_liquido', label: 'Patrimônio líquido', tone: 'slate' },
+          { value: 'receita', label: 'Receita', tone: 'green' },
+          { value: 'despesa', label: 'Despesa', tone: 'amber' },
+          { value: 'custo', label: 'Custo', tone: 'amber' },
+        ],
+      },
+      {
+        name: 'tipo',
+        label: 'Tipo',
+        type: 'select',
+        required: true,
+        default: 'analitica',
+        options: [
+          { value: 'sintetica', label: 'Sintética (agrupa)' },
+          { value: 'analitica', label: 'Analítica (recebe lançamento)' },
+        ],
+        hint: 'Só conta analítica pode receber lançamento; a sintética existe para totalizar.',
+      },
+      { name: 'pai_id', label: 'Conta-pai', type: 'ref', ref: 'plano_contas', list: false },
+      { name: 'descricao', label: 'Descrição', type: 'textarea', maxLength: 500, list: false, wide: true },
+      ativo,
+      ...auditFields,
+    ],
+    orderBy: { field: 'codigo', dir: 'asc' },
+    filterFields: ['natureza', 'tipo', 'ativo'],
+  },
+
   centros_custo: {
     key: 'centros_custo',
     empresa: true,

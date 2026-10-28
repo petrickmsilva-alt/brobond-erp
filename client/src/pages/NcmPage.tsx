@@ -18,7 +18,7 @@ import { Calculator, Info, Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucid
 import { api, ApiError } from '../lib/api';
 import { formatDateTime } from '../lib/format';
 import type { ListResult } from '../lib/meta';
-import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
 
 type ImpostoNcm = {
@@ -271,7 +271,7 @@ export default function NcmPage() {
       </div>
 
       {editando && (
-        <Modal
+        <PainelInline
           open
           onClose={() => setEditando(null)}
           title={editando === 'novo' ? 'Nova alíquota por NCM' : `Editar chave ${chaveDe(editando)}`}
@@ -324,10 +324,10 @@ export default function NcmPage() {
               </button>
             </div>
           </div>
-        </Modal>
+        </PainelInline>
       )}
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!excluindo}
         danger
         busy={ocupado}

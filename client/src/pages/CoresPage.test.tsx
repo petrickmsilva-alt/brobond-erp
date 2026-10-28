@@ -180,15 +180,18 @@ function renderPagina() {
 }
 
 /**
- * Modal do ERP com título: o `Modal` genérico não liga o título ao `role=dialog`
+ * PainelInline do ERP com título: o `PainelInline` genérico não liga o título ao `role=dialog`
  * por aria-labelledby (comportamento histórico), então localizamos pelo texto e
  * subimos até o diálogo.
  */
-function dialogPorTitulo(titulo: string): HTMLElement {
+function blocoPorTitulo(titulo: string): HTMLElement {
+  // ZERO MODAL: confirmação e diagnóstico são blocos INLINE na página (role=group
+  // ou <section>), nunca role="dialog". Localizamos pelo texto e subimos até o
+  // bloco de decisão.
   const el = screen.getByText(titulo);
-  const dlg = el.closest('[role="dialog"]');
-  if (!dlg) throw new Error(`diálogo "${titulo}" não encontrado`);
-  return dlg as HTMLElement;
+  const bloco = el.closest('[role="group"], section');
+  if (!bloco) throw new Error(`bloco "${titulo}" não encontrado`);
+  return bloco as HTMLElement;
 }
 
 /** Botão "Nova cor" do cabeçalho (o FAB mobile é o segundo, oculto no desktop). */
@@ -357,13 +360,13 @@ describe('Cores — exclusão com diagnóstico de vínculos', () => {
     await screen.findByText('Azul marinho');
 
     fireEvent.click(within(linha('Azul marinho')).getByLabelText('Excluir'));
-    const confirmacao = dialogPorTitulo('Excluir cor?');
+    const confirmacao = blocoPorTitulo('Excluir cor?');
     fireEvent.click(within(confirmacao).getByRole('button', { name: 'Excluir' }));
 
     // O DELETE foi tentado e recusado pelo servidor (FK é a proteção final).
     await waitFor(() => expect(apiDel).toHaveBeenCalledWith('/cores/3'));
     await screen.findByText('Exclusão bloqueada por vínculos');
-    const diagnostico = dialogPorTitulo('Exclusão bloqueada por vínculos');
+    const diagnostico = blocoPorTitulo('Exclusão bloqueada por vínculos');
     // Frase do padrão: a voz do cadastro, não o resumo técnico do servidor.
     expect(
       within(diagnostico).getByText('Não é possível excluir esta cor porque existem registros vinculados.')
@@ -385,7 +388,7 @@ describe('Cores — exclusão com diagnóstico de vínculos', () => {
     await screen.findByText('Preto');
 
     fireEvent.click(within(linha('Preto')).getByLabelText('Excluir'));
-    const confirmacao = dialogPorTitulo('Excluir cor?');
+    const confirmacao = blocoPorTitulo('Excluir cor?');
     fireEvent.click(within(confirmacao).getByRole('button', { name: 'Excluir' }));
 
     await waitFor(() => expect(apiDel).toHaveBeenCalledWith('/cores/1'));

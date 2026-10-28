@@ -25,7 +25,7 @@ import { useNavigate } from 'react-router-dom';
 import { Download, Pencil, Plus, Power, ShieldAlert, Trash2 } from 'lucide-react';
 import { api, ApiError, downloadFile } from '../lib/api';
 import { useMeta, type ListResult, type ResourceMeta } from '../lib/meta';
-import { Alert, Badge, ConfirmDialog, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
 import { DataTable, FilterBar, SearchInput, type DataTableColumn } from '../components/ui-kit-negocios';
 import { Pagination } from '../components/ui-kit';
 import { DependenciasModal, type DiagnosticoDependencias } from '../components/DependenciasModal';
@@ -433,7 +433,7 @@ export default function CadastroComercialPage({
         )}
       </div>
 
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!alvoExclusao}
         danger
         busy={excluindo}

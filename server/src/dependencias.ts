@@ -405,6 +405,22 @@ export const REGRAS_RELACAO: RegraRelacao[] = [
   { alvo: 'catalogos', tabela: 'catalogo_eventos', tipo: 'composicao', politica: 'seguir' },
   { alvo: 'catalogo_compartilhamentos', tabela: 'catalogo_eventos', tipo: 'composicao', politica: 'seguir' },
   { alvo: 'sales', tabela: 'sale_items', tipo: 'composicao', politica: 'seguir' },
+
+  // ---- ERP 3.0: composições dos documentos das migrations 0051..0056 --------
+  // Histórico de estágio do CRM é parte da oportunidade (nasce com ela e só
+  // existe por causa dela). Sem esta regra, a própria trilha que o CRM 3.0
+  // criou impediria excluir uma oportunidade criada por engano.
+  { alvo: 'crm_oportunidades', tabela: 'crm_oportunidade_estagio_historico', tipo: 'composicao', politica: 'seguir' },
+  // Documento de transferência: itens e eventos são o próprio documento.
+  { alvo: 'estoque_transferencias', tabela: 'estoque_transferencia_itens', tipo: 'composicao', politica: 'seguir' },
+  { alvo: 'estoque_transferencias', tabela: 'estoque_transferencia_eventos', tipo: 'composicao', politica: 'seguir' },
+  // Homologação: documentos e trilha pertencem ao cadastro do fornecedor.
+  // (Fornecedor em uso continua sendo DESATIVADO, não excluído — ver services.)
+  { alvo: 'fornecedores', tabela: 'fornecedor_documentos', tipo: 'composicao', politica: 'seguir' },
+  { alvo: 'fornecedores', tabela: 'fornecedor_homologacao_eventos', tipo: 'composicao', politica: 'seguir' },
+  // Obrigação fiscal: a entrega pertence à obrigação.
+  { alvo: 'fiscal_obrigacoes', tabela: 'fiscal_obrigacao_entregas', tipo: 'composicao', politica: 'seguir' },
+
   { alvo: 'usuarios', tabela: 'usuario_empresas', tipo: 'operacional', politica: 'seguir', motivo: 'concessões de acesso a empresas (revogadas junto)' },
   { alvo: 'usuarios', tabela: 'connector_oauth_states', tipo: 'operacional', politica: 'seguir' },
   { alvo: 'empresas', tabela: 'empresa_fiscal_config', tipo: 'operacional', politica: 'seguir', motivo: 'configuração fiscal da empresa' },
@@ -424,6 +440,14 @@ export const RELACOES_FK: RelacaoFkDeclarada[] = [
   // descobre sozinho no catálogo; esta declaração existe para o MemStore
   // responder EXATAMENTE o mesmo diagnóstico (paridade declarada, não fingida).
   { alvo: 'territorios', tabela: 'territorios', colunas: ['territorio_pai_id'], acao: 'NO_ACTION' },
+  // ERP 3.0 — FKs declaradas das migrations 0051..0056.
+  // OP alocada a um recurso produtivo: o recurso em uso é desativado, não
+  // excluído (histórico de carga depende dele).
+  { alvo: 'producao_recursos', tabela: 'ordens_fabricacao', colunas: ['recurso_id'], acao: 'NO_ACTION' },
+  // Plano de contas hierárquico (auto-referência).
+  { alvo: 'plano_contas', tabela: 'plano_contas', colunas: ['pai_id'], acao: 'NO_ACTION' },
+  // Classificação contábil do lançamento: apagar a conta em uso é bloqueado.
+  { alvo: 'plano_contas', tabela: 'lancamentos_financeiros', colunas: ['conta_contabil_id'], acao: 'NO_ACTION' },
   { alvo: 'territorios', tabela: 'representante_cliente', colunas: ['territorio_id'], acao: 'NO_ACTION' },
   { alvo: 'territorios', tabela: 'metas', colunas: ['territorio_id'], acao: 'NO_ACTION' },
   { alvo: 'territorios', tabela: 'regras_comissao', colunas: ['territorio_id'], acao: 'NO_ACTION' },

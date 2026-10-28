@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, Copy, FlaskConical, History, Loader2, Plus, Power, RefreshCw, RotateCcw, Trash2, Webhook as WebhookIcon, XCircle } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatRelative } from '../lib/format';
-import { Alert, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
 import ReauthModal from '../components/ReauthModal';
 
 type Webhook = {
@@ -308,7 +308,7 @@ export default function WebhooksPage() {
       </p>
 
       {/* Cadastro / edição */}
-      <Modal
+      <PainelInline
         open={!!form}
         onClose={() => !salvando && setForm(null)}
         title={form?.id ? `Editar ${form.nome}` : 'Novo webhook'}
@@ -364,10 +364,10 @@ export default function WebhooksPage() {
             </div>
           </div>
         )}
-      </Modal>
+      </PainelInline>
 
       {/* Segredo: exibição única */}
-      <Modal open={!!segredoNovo} onClose={() => setSegredoNovo(null)} title="Segredo do webhook" subtitle={segredoNovo?.nome || ''} size="md">
+      <PainelInline open={!!segredoNovo} onClose={() => setSegredoNovo(null)} title="Segredo do webhook" subtitle={segredoNovo?.nome || ''} size="md">
         <div className="space-y-4">
           <Alert tone="amber">
             <strong>Guarde agora:</strong> este segredo aparece <strong>uma única vez</strong>. O receptor usa ele para validar o header{' '}
@@ -391,10 +391,10 @@ export default function WebhooksPage() {
             </button>
           </div>
         </div>
-      </Modal>
+      </PainelInline>
 
       {/* Exclusão */}
-      <ConfirmDialog
+      <ConfirmacaoInline
         open={!!toDelete && reauth?.acao !== 'alternar'}
         title="Excluir webhook?"
         danger
@@ -437,7 +437,7 @@ export default function WebhooksPage() {
   );
 }
 
-/** Modal do log de entregas de um webhook, com filtro e reenvio. */
+/** PainelInline do log de entregas de um webhook, com filtro e reenvio. */
 function LogEntregas({ webhook, onClose }: { webhook: Webhook; onClose: () => void }) {
   const toast = useToast();
   const [entregas, setEntregas] = useState<Entrega[]>([]);
@@ -478,7 +478,7 @@ function LogEntregas({ webhook, onClose }: { webhook: Webhook; onClose: () => vo
   }
 
   return (
-    <Modal open onClose={onClose} title={`Log — ${webhook.nome}`} subtitle={`${total} entrega(s) registrada(s)`} size="lg">
+    <PainelInline open onClose={onClose} title={`Log — ${webhook.nome}`} subtitle={`${total} entrega(s) registrada(s)`} size="lg">
       <div className="mb-3 flex items-center gap-2">
         <select className="input w-auto" value={filtro} onChange={(e) => setFiltro(e.target.value)} aria-label="Filtrar por estado">
           <option value="">Todas</option>
@@ -529,6 +529,6 @@ function LogEntregas({ webhook, onClose }: { webhook: Webhook; onClose: () => vo
           ))}
         </ul>
       )}
-    </Modal>
+    </PainelInline>
   );
 }

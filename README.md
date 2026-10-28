@@ -334,8 +334,9 @@ npm run smoke:pg                # smoke E2E contra PostgreSQL real, em banco cri
 npm run typecheck
 npm run lint                    # erros param o CI; avisos (any em handlers) não
 npm run audit:menu              # menu × rotas × recursos × RBAC × tenant
+npm run audit:ux                # ZERO MODAL: falha se aparecer modal/drawer/sheet em fluxo de módulo
 npm run architecture:audit      # inventário ERP 3.0 lido do código (falha se houver incoerência)
-npm run smoke                   # HTTP real contra a API em modo demonstração (327 verificações)
+npm run smoke                   # HTTP real contra a API em modo demonstração (377 verificações)
 ```
 
 O GitHub Actions (`.github/workflows/ci.yml`) roda typecheck, testes, lint e build
@@ -348,6 +349,16 @@ existente. **Esse job não usa `continue-on-error`** — verde nele é condiçã
 merge. Para reproduzir localmente é preciso um PostgreSQL 16.14 e o cliente `psql`
 no `PATH` (ou em `PSQL_BIN`): sem o `psql`, os testes do wrapper E4.2 se
 auto-pulam e o gate acusa a falta, porque skip não é aprovação.
+
+### Regra de interface: ZERO MODAL
+
+Nenhum fluxo de módulo usa modal, dialog, drawer, sheet ou overlay. Todo cadastro
+é **LISTA → DETALHE → `/recurso/novo` → `/recurso/:id/editar`**, e confirmação
+crítica acontece **na própria página** (`ConfirmacaoInline`). A regra é verificada
+por código, não por acordo: `npm run audit:ux` (falha o CI) e
+`client/src/test/zero-modal.test.ts`. O inventário completo — inclusive as 6
+exceções declaradas, todas de navegação ou do ambiente público do cliente — está
+em [`docs/ERP-3.0-MODAL-AUDIT.md`](docs/ERP-3.0-MODAL-AUDIT.md).
 
 ### Como adicionar um campo a um módulo
 
@@ -377,3 +388,28 @@ Ver [`docs/AUDITORIA-EVOLUCOES.md`](docs/AUDITORIA-EVOLUCOES.md). Situação:
 - [x] **v0.6.0 — Fluxo profissional de autenticação** — fim do cofre de senhas (sem visualização nem armazenamento reversível; coluna `senha_cifrada` destruída); hash **Argon2id** com migração gradual do bcrypt no login; **convites por token** (48 h) para o usuário definir a própria senha; **senha temporária de exibição única** gerada pelo servidor; **MFA/TOTP obrigatório para administradores** (segredo cifrado em repouso, cadastro guiado com QR); **reautenticação (step-up)** para ações sensíveis; **sessões por dispositivo** com revogação individual; **rate limit persistente** no banco; **auditoria com cadeia de hashes** verificável; correção latente: tokens de redefinição não eram persistidos pelos stores. Detalhes em `docs/AUTENTICACAO.md`
 - [x] **v0.5.0 — Auditoria + cockpit** — versão unificada em 0.5.0; coluna "Senha" (estado) e troca de senha no Editar de Usuários; cockpit em Estoque e Produção; relatórios de faturamento (comparação mensal/anual), comissões com gráfico mensal, estoque abaixo do mínimo por local, DRE e razão financeiro (gerente/admin); exportação XLSX completa do sistema; correção do 409 falso ao editar estoque mínimo de outro local; API do financeiro restrita a gerente/admin (igual ao menu)
 - [x] **1. MEU NEGÓCIO — motor analítico** — fim dos mocks: lucro bruto real por pedido (líquido − CMV da ficha técnica − impostos por NCM − frete pago) materializado nas colunas de `sales`; curva ABC nativa 80/15/5 persistida em `produto_abc` (contínua, com janela De/Até); dashboard de BI com filtros estritos (período, `empresa_id`, canal/grupo); venda manual transacional (Loja Física/checkouts); tabela editável `impostos_ncm` (prefixo 8/6/4/2 + alíquota padrão única) e multi-empresa (`empresas`, BROBOND = 1). Detalhes em `docs/MEU-NEGOCIO-MOTOR-ANALITICO.md`
+
+## ERP 3.0 — evolução e auditorias
+
+| Documento | Conteúdo |
+|---|---|
+| [`docs/ERP-3.0-ARCHITECTURE-BASELINE.md`](docs/ERP-3.0-ARCHITECTURE-BASELINE.md) | Fotografia verificável do código (números lidos de `architecture:audit`), incluindo a evolução 0051..0056 |
+| [`docs/ERP-3.0-GAP-MATRIX.md`](docs/ERP-3.0-GAP-MATRIX.md) | Gaps P0–P3 com evidência executada e o que **não** foi feito |
+| [`docs/ERP-3.0-MODAL-AUDIT.md`](docs/ERP-3.0-MODAL-AUDIT.md) | Inventário de modais e a regra ZERO MODAL |
+| [`docs/ERP-3.0-DUPLICITY-AUDIT.md`](docs/ERP-3.0-DUPLICITY-AUDIT.md) | Duplicidades reais × read model × bounded context × legado |
+| [`docs/ERP-3.0-MASTER-DATA-AUDIT.md`](docs/ERP-3.0-MASTER-DATA-AUDIT.md) | Qualidade de campos e master data por domínio |
+
+**Estado atual (branch `arena/72895db5-brobond-erp`, baseline `main`):**
+56 migrations · 131 tabelas (111 com `empresa_id`) · 116 recursos de API ·
+361 rotas HTTP · 101 módulos de navegação · testes **1.330 server + 849 client,
+zero falhas** · smoke HTTP **377/377** · `typecheck`, `lint`, `build`,
+`audit:menu`, `audit:ux` e `architecture:audit` verdes. `test:pg`, `smoke:pg` e `db:validate` **bloqueados
+neste ambiente** (sem PostgreSQL/`psql`; o CI cobre os três).
+
+**Domínios evoluídos no 3.0:** CRM (funil/etapas configuráveis, histórico de
+estágio, origem/campanha/UTM, lembretes, score explicável, forecast e painel),
+Estoque (transferência como documento com estados, reservas e disponível
+calculado), Compras (homologação de fornecedor com score), Produção (recursos,
+capacidade/gargalo e MRP de leitura) e Fiscal/Financeiro (estrutura de
+obrigações acessórias e de contabilidade — **sem** segunda contabilidade e
+**sem** regra tributária inventada).

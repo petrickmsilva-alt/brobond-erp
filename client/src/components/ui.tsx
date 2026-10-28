@@ -71,11 +71,25 @@ export function useToast() {
 }
 
 // ----------------------------------------------------------------------------
-// Modal
+// Painel INLINE (nunca modal, nunca drawer, nunca sheet)
 // ----------------------------------------------------------------------------
-export function Modal({
+/**
+ * ZERO MODAL — regra de produto do BROBOND ERP.
+ *
+ * `PainelInline` é o substituto DIRETO do antigo componente de modal. Ele
+ * ocupa uma faixa do próprio conteúdo da página (sem `position: fixed`, sem
+ * `inset-0`, sem backdrop, sem prender o foco, sem ESC para fechar) e mantém a
+ * MESMA API (`open`, `title`, `subtitle`, `footer`), de modo que nenhum fluxo
+ * de negócio precisou ser reescrito — só a superfície mudou.
+ *
+ * Regra: se o conteúdo é um cadastro/edição/detalhe de verdade, ele pertence a
+ * uma PÁGINA (`/recurso/novo`, `/recurso/:id/editar`). O painel inline serve a
+ * blocos auxiliares do próprio fluxo (leitura de código, conferência, ajuda,
+ * exibição única de um segredo) — nunca como página disfarçada.
+ */
+export function PainelInline({
   open,
-  onClose,
+  onClose: _onClose,
   title,
   subtitle,
   children,
@@ -83,58 +97,67 @@ export function Modal({
   size = 'md',
 }: {
   open: boolean;
-  onClose: () => void;
+  onClose?: () => void;
   title: ReactNode;
   subtitle?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
 }) {
+  const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    document.addEventListener('keydown', onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prev;
-    };
-  }, [open, onClose]);
-
+    if (open) box.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [open]);
   if (!open) return null;
-  const width = size === 'sm' ? 'max-w-md' : size === 'lg' ? 'max-w-4xl' : 'max-w-2xl';
-
+  const largura = size === 'sm' ? 'max-w-xl' : size === 'lg' ? 'max-w-4xl' : size === 'xl' ? 'max-w-6xl' : 'max-w-3xl';
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true">
-      <div className="absolute inset-0 bg-navy-950/50 backdrop-blur-[2px]" onClick={onClose} />
-      <div
-        className={`relative flex max-h-[92vh] w-full ${width} flex-col rounded-t-2xl bg-white shadow-modal animate-fade-in sm:rounded-2xl dark:bg-navy-900`}
-      >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4 dark:border-navy-800">
-          <div>
-            <h2 className="text-lg font-bold text-navy-900 dark:text-white">{title}</h2>
-            {subtitle && <p className="mt-0.5 text-sm text-slate-500 dark:text-navy-300">{subtitle}</p>}
-          </div>
-          <button className="btn-icon -mr-2" onClick={onClose} aria-label="Fechar">
+    <section
+      ref={box}
+      aria-label={typeof title === 'string' ? title : undefined}
+      className={`mt-4 w-full ${largura} rounded-xl border border-slate-200 bg-white shadow-sm dark:border-navy-800 dark:bg-navy-900`}
+    >
+      <header className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-3 dark:border-navy-800">
+        <div>
+          <h2 className="text-base font-bold text-navy-900 dark:text-white">{title}</h2>
+          {subtitle && <p className="mt-0.5 text-sm text-slate-500 dark:text-navy-300">{subtitle}</p>}
+        </div>
+        {_onClose && (
+          <button className="btn-icon -mr-2" onClick={_onClose} aria-label="Fechar painel" type="button">
             <X className="h-5 w-5" />
           </button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
-        {footer && <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-3 rounded-b-2xl dark:border-navy-800 dark:bg-navy-800/40">{footer}</div>}
-      </div>
-    </div>
+        )}
+      </header>
+      <div className="px-5 py-4">{children}</div>
+      {footer && (
+        <footer className="flex flex-wrap items-center justify-end gap-2 rounded-b-xl border-t border-slate-200 bg-slate-50 px-5 py-3 dark:border-navy-800 dark:bg-navy-800/40">
+          {footer}
+        </footer>
+      )}
+    </section>
   );
 }
 
 // ----------------------------------------------------------------------------
-// Confirmação
+// Confirmação INLINE (nunca modal)
 // ----------------------------------------------------------------------------
-export function ConfirmDialog({
+/**
+ * ZERO MODAL — regra de produto do BROBOND ERP.
+ *
+ * Não existe `PainelInline`, `Dialog`, `Drawer` nem `Sheet` no ERP. Confirmações de
+ * ação crítica acontecem **na própria página**, como um bloco de decisão no
+ * fluxo do conteúdo: sem sobreposição, sem prender o foco, sem bloquear o
+ * resto da tela. O bloco aparece onde foi declarado e é trazido para a área
+ * visível quando abre.
+ *
+ * A decisão de negócio não muda: quem cancela não executa nada, quem confirma
+ * dispara a mesma ação que antes. O que muda é a superfície.
+ */
+export function ConfirmacaoInline({
   open,
   title,
   message,
   confirmLabel = 'Confirmar',
+  cancelLabel = 'Cancelar',
   danger = false,
   busy = false,
   onConfirm,
@@ -144,38 +167,48 @@ export function ConfirmDialog({
   title: string;
   message: ReactNode;
   confirmLabel?: string;
+  cancelLabel?: string;
   danger?: boolean;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open) box.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [open]);
+  if (!open) return null;
   return (
-    <Modal
-      open={open}
-      onClose={onCancel}
-      title={title}
-      size="sm"
-      footer={
-        <>
-          <button className="btn-secondary" onClick={onCancel} disabled={busy}>
-            Cancelar
+    <div
+      ref={box}
+      role="group"
+      aria-live="polite"
+      aria-label={title}
+      className={`mt-3 rounded-xl border-2 p-4 ${
+        danger ? 'border-red-200 bg-red-50/70 dark:border-red-900/60 dark:bg-red-950/30' : 'border-navy-200 bg-navy-50/70 dark:border-navy-700 dark:bg-navy-900/40'
+      }`}
+    >
+      <div className="flex flex-wrap items-start gap-3">
+        {danger && (
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-950/60">
+            <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400" />
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-navy-900 dark:text-white">{title}</p>
+          <div className="mt-1 text-sm text-slate-600 dark:text-navy-300">{message}</div>
+        </div>
+        <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+          <button className="btn-secondary" onClick={onCancel} disabled={busy} type="button">
+            {cancelLabel}
           </button>
-          <button className={danger ? 'btn-danger' : 'btn-primary'} onClick={onConfirm} disabled={busy}>
+          <button className={danger ? 'btn-danger' : 'btn-primary'} onClick={onConfirm} disabled={busy} type="button">
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
             {confirmLabel}
           </button>
-        </>
-      }
-    >
-      <div className="flex gap-3">
-        {danger && (
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-50">
-            <AlertTriangle className="h-5 w-5 text-red-600" />
-          </div>
-        )}
-        <div className="text-sm text-slate-600">{message}</div>
+        </div>
       </div>
-    </Modal>
+    </div>
   );
 }
 

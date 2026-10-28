@@ -776,8 +776,7 @@ export function DatePicker({
       {aberto && (
         <div
           id={dialogoId}
-          role="dialog"
-          aria-modal="false"
+          role="group"
           aria-label={`Escolher data: ${label}`}
           className="absolute z-40 mt-1 w-72 rounded-xl border border-slate-200 bg-white p-3 shadow-xl dark:border-navy-800 dark:bg-navy-900"
         >
