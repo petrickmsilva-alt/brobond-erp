@@ -769,10 +769,17 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     return c ? String(c.nome || '—') : '—';
   };
 
-  const confirmados = lancR.rows.filter((l) => String(l.status) === 'confirmado');
+  // IMPORTAÇÃO CONTÁBIL (0059): as partidas dobradas do contador vivem no MESMO
+  // livro, mas NÃO são movimento de caixa — a receita/despesa já entrou pelo
+  // documento de origem (venda/compra). Somá-las aqui contaria duas vezes.
+  // Elas continuam visíveis no balancete, que é onde elas pertencem.
+  const ehImportacaoContabil = (l: Row) => String(l.documento_origem_recurso || '') === 'fin_importacoes_contabeis';
+  const contabilIgnorado = lancR.rows.filter(ehImportacaoContabil);
+  const doCaixa = lancR.rows.filter((l) => !ehImportacaoContabil(l));
+  const confirmados = doCaixa.filter((l) => String(l.status) === 'confirmado');
   // Resultado ignora transferências: elas só mudam o dinheiro de conta.
   const operacionais = confirmados.filter((l) => !ehTransferencia(l));
-  const pendentesOper = lancR.rows.filter((l) => String(l.status) === 'pendente' && !ehTransferencia(l));
+  const pendentesOper = doCaixa.filter((l) => String(l.status) === 'pendente' && !ehTransferencia(l));
   const doMes = (l: Row) => String(l.data || '').slice(0, 7) === mes;
 
   // Saldo por conta = saldo inicial + entradas (líquidas, já sem taxa) − saídas.
@@ -937,7 +944,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
   }));
 
   const saldoBase = saldoContasTotal;
-  const fluxoProjetado = montarFluxoProjetado(lancR.rows, recorrenciasR.rows, saldoBase);
+  const fluxoProjetado = montarFluxoProjetado(doCaixa, recorrenciasR.rows, saldoBase);
 
   // Semáforo de caixa: pior acumulado das próximas 12 semanas de projeção.
   // vermelho = caixa negativa; amarelo = queda de mais de 30% do saldo atual.
@@ -1003,7 +1010,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     if (item) item.valor = r2(item.valor + Number(v.total || 0));
   }
 
-  const recentes = lancR.rows.slice(0, 24).map((l) => ({
+  const recentes = doCaixa.slice(0, 24).map((l) => ({
     id: Number(l.id),
     data: String(l.data || ''),
     tipo: String(l.tipo || ''),
@@ -1052,6 +1059,13 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     recorrencias,
     fluxoProjetado,
     recentes,
+    // Transparência: quantas partidas de importação contábil foram deixadas de
+    // fora do caixa (elas contam no balancete, não no fluxo).
+    contabil_ignorado: {
+      partidas: contabilIgnorado.length,
+      valor: r2(contabilIgnorado.reduce((a, l) => a + Number(l.valor || 0), 0)),
+      motivo: 'Partidas de importação contábil (0059) são competência, não caixa — contam no balancete.',
+    },
     contasTotal: contasR.rows.filter((c) => c.ativo !== false).length,
     aportesTotal: aportesR.rows.filter((a) => String(a.status) === 'confirmado').reduce((s, a) => s + Number(a.valor || 0), 0),
   });
