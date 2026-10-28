@@ -39,7 +39,7 @@ import { Pagination } from '../components/ui-kit';
 // o formulário de cadastro vive em página própria — ver RegistroPage).
 import { useRefOptions } from '../components/RecordForm';
 import { DependenciasModal, type DiagnosticoDependencias } from '../components/DependenciasModal';
-import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
+import { rotaImportacaoDoRecurso } from '../lib/importacao';
 import { useLocalStorageChoice, useLocalStorageInt, useLocalStorageSet } from '../lib/useLocalStorage';
 import PlannedModule from './PlannedModule';
 import CatalogoShareModal from '../components/CatalogoShareModal';
@@ -250,8 +250,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   // navega para a PÁGINA do recurso (`/recurso/novo` e `/recurso/:id/editar`,
   // ver pages/RegistroPage.tsx). A lista nunca abre superfície sobreposta.
   // Fase 5 — exportação, importação e filtros avançados
-  const importTipo = IMPORT_TIPOS.find((t) => t.recurso === resource.key);
-  const [importOpen, setImportOpen] = useState(false);
+  const importRota = rotaImportacaoDoRecurso(resource.key);
   const [showFiltros, setShowFiltros] = useState(false);
   const [filtros, setFiltros] = useState<Record<string, string>>({});
 
@@ -717,8 +716,8 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
               <Download className="h-4 w-4 text-emerald-600" />
               <span className="hidden md:inline">XLSX</span>
             </button>
-            {importTipo && !isOperador && (
-              <button className="btn-secondary" onClick={() => setImportOpen(true)} title={`Importar ${importTipo.label.toLowerCase()} de CSV/XLSX`}>
+            {importRota && !isOperador && (
+              <button className="btn-secondary" onClick={() => navigate(importRota)} title="Importar de CSV/XLSX">
                 <FileUp className="h-4 w-4" />
                 <span className="hidden sm:inline">Importar</span>
               </button>
@@ -973,9 +972,6 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
       <PortalAccessModal cliente={clientePortal} onClose={() => setClientePortal(null)} />
       <CatalogoShareModal catalogo={catalogoCompartilhar} onClose={() => setCatalogoCompartilhar(null)} />
 
-      {importTipo && (
-        <ImportModal open={importOpen} onClose={() => setImportOpen(false)} tipoConfig={importTipo} onDone={() => load()} />
-      )}
 
       {zoom && <Lightbox file={zoom.file} files={zoom.files} onClose={() => setZoom(null)} onNav={(f) => setZoom({ ...zoom, file: f })} />}
 

@@ -49,7 +49,7 @@ import { ListaCards } from '../components/ListaCards';
 import { ColunasMenu, DensidadeMenu, ModoVisualizacaoControl } from '../components/ListaControles';
 import { FiltroRapido } from '../components/ListaFiltros';
 import { DependenciasModal, type DiagnosticoDependencias } from '../components/DependenciasModal';
-import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
+import { rotaImportacaoDoRecurso } from '../lib/importacao';
 import { findModuleByResource } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 import { useLocalStorageChoice, useLocalStorageInt, useLocalStorageSet } from '../lib/useLocalStorage';
@@ -180,8 +180,7 @@ export default function FornecedoresPage() {
 
   // Importação (CSV/XLSX) — o MESMO ImportModal do CRUD genérico, com o tipo
   // `fornecedores` já declarado em IMPORT_TIPOS. Nenhum endpoint novo.
-  const importTipo = IMPORT_TIPOS.find((t) => t.recurso === 'fornecedores');
-  const [importOpen, setImportOpen] = useState(false);
+  const importRota = rotaImportacaoDoRecurso('fornecedores');
 
   // Preferências de apresentação (persistidas no navegador), como no resto
   // do ERP: modo de visualização, densidade e colunas visíveis. A chave de
@@ -409,8 +408,8 @@ export default function FornecedoresPage() {
               <Download className="h-4 w-4 text-emerald-600" />
               <span className="hidden md:inline">XLSX</span>
             </button>
-            {importTipo && !isOperador && (
-              <button className="btn-secondary" onClick={() => setImportOpen(true)} title="Importar fornecedores de CSV/XLSX">
+            {importRota && !isOperador && (
+              <button className="btn-secondary" onClick={() => navigate(importRota)} title="Importar fornecedores de CSV/XLSX">
                 <FileUp className="h-4 w-4" />
                 <span className="hidden sm:inline">Importar</span>
               </button>
@@ -639,10 +638,6 @@ export default function FornecedoresPage() {
         )}
       </div>
 
-      {/* ---- Importação (o MESMO ImportModal do CRUD genérico) ---- */}
-      {importTipo && (
-        <ImportModal open={importOpen} onClose={() => setImportOpen(false)} tipoConfig={importTipo} onDone={() => void carregar()} />
-      )}
 
       {/* ---- Confirmação de exclusão (componente padrão do ERP) ---- */}
       <ConfirmacaoInline

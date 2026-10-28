@@ -51,6 +51,18 @@ const RegistroPage = lazy(() => import('./pages/RegistroPage'));
 const UsuarioRegistroPage = lazy(() =>
   import('./pages/UsuariosPage').then((m) => ({ default: m.UsuarioRegistroPage }))
 );
+// ERP 3.0 — homologação final: os 11 fluxos de módulo que viviam em painel
+// inline agora são PÁGINAS próprias (LISTA → NOVO/EDITAR).
+const NcmFormPage = lazy(() => import('./pages/NcmFormPage'));
+const WebhookFormPage = lazy(() => import('./pages/WebhookFormPage'));
+const EmpresaFormPage = lazy(() => import('./pages/EmpresaFormPage'));
+const NovaFichaPage = lazy(() => import('./pages/NovaFichaPage'));
+const DevolucaoNovaPage = lazy(() => import('./pages/DevolucaoNovaPage'));
+const ImportarPage = lazy(() => import('./pages/ImportarPage'));
+const RecebimentoCompraPage = lazy(() => import('./pages/RecebimentoCompraPage'));
+const ImpressaoTerminalFormPage = lazy(() => import('./pages/ImpressaoTerminalFormPage'));
+const ImpressaoAgenteNovaPage = lazy(() => import('./pages/ImpressaoAgenteNovaPage'));
+const ImpressaoAgenteEdicaoPage = lazy(() => import('./pages/ImpressaoAgenteEdicaoPage'));
 
 function Loading() {
   return (
@@ -400,6 +412,66 @@ export default function App() {
                 </ModuleAccess>
               }
             />
+            {/* =============================================================
+                HOMOLOGAÇÃO FINAL — fluxos de módulo que eram painel inline
+                agora são PÁGINAS. Cada rota abaixo tem teste de rota e é
+                exigida pelo gate `npm run audit:ux` (não podem voltar).
+                ============================================================= */}
+            <Route
+              path="ncm/novo"
+              element={
+                <ModuleAccess moduleId="ncm">
+                  <NcmFormPage modo="novo" />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="ncm/:id/editar"
+              element={
+                <ModuleAccess moduleId="ncm">
+                  <NcmFormPage modo="editar" />
+                </ModuleAccess>
+              }
+            />
+            <Route path="empresas/novo" element={<AdminOnly><EmpresaFormPage modo="novo" /></AdminOnly>} />
+            <Route path="empresas/:id/editar" element={<AdminOnly><EmpresaFormPage modo="editar" /></AdminOnly>} />
+            <Route
+              path="custo/nova"
+              element={
+                <ModuleAccess moduleId="custo">
+                  <NovaFichaPage />
+                </ModuleAccess>
+              }
+            />
+            <Route
+              path="devolucoes/nova"
+              element={
+                <ModuleAccess moduleId="devolucoes">
+                  <DevolucaoNovaPage />
+                </ModuleAccess>
+              }
+            />
+            <Route path="importar/:tipo" element={<ImportarPage />} />
+            <Route
+              path="compras/:id/receber"
+              element={
+                <ModuleAccess moduleId="compras">
+                  <RecebimentoCompraPage />
+                </ModuleAccess>
+              }
+            />
+            <Route path="webhooks/novo" element={<AdminOnly><WebhookFormPage modo="novo" /></AdminOnly>} />
+            <Route path="webhooks/:id/editar" element={<AdminOnly><WebhookFormPage modo="editar" /></AdminOnly>} />
+            <Route
+              path="config/impressao/terminais/novo"
+              element={<ImpressaoTerminalFormPage modo="novo" />}
+            />
+            <Route
+              path="config/impressao/terminais/:id/editar"
+              element={<ImpressaoTerminalFormPage modo="editar" />}
+            />
+            <Route path="config/impressao/agentes/novo" element={<ImpressaoAgenteNovaPage />} />
+            <Route path="config/impressao/agentes/:machineId/editar" element={<ImpressaoAgenteEdicaoPage />} />
             {/* Usuários: LISTA → PÁGINA (formulário em rota própria). */}
             <Route
               path="usuarios/novo"

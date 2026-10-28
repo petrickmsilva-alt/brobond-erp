@@ -293,13 +293,46 @@ test('PROD-DB-01.5.3 — o executor recusa cópia defasada do script 005', async
     assert.notEqual(semRevisao.status, 0, 'cópia sem o marcador de revisão deve ser recusada');
     assert.match(semRevisao.stderr, /revisão esperada 'PROD-DB-01.5.3' ausente/);
 
-    // (3) Fora de um repositório git, um arquivo íntegro é executado (DRY-RUN).
+    console.log('\n=== PROD-DB-01.5.3 — executor recusa cópia defasada (gate/versão ausentes) ===');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ============================================================================
+// PROD-DB-01.5.3 — o arquivo ÍNTEGRO (HEAD) precisa EXECUTAR.
+//
+// Este passo é o único do bloco que chega ao `psql` (os dois de recusa abortam
+// antes). Fica em teste próprio, com a MESMA guarda dos demais testes deste
+// arquivo: sem o binário `psql` o teste não tem como provar a execução — e no
+// CI (`postgresql-client-16` instalado) ele roda de verdade. Sem DATABASE_URL
+// o arquivo inteiro falha no topo, então a guarda não esconde ausência de banco.
+// ============================================================================
+test('PROD-DB-01.5.3 — arquivo íntegro do script 005 executa (DRY-RUN) pelo executor', async (t) => {
+  if (!PSQL) {
+    t.skip('binário psql indisponível; no CI ele é instalado (postgresql-client-16).');
+    return;
+  }
+  const RUNNER = fileURLToPath(new URL('../../../db/admin/run-005-e42.sh', import.meta.url));
+  const SCRIPT_SRC = fileURLToPath(
+    new URL('../../../db/admin/005-propagar-nomes-locais-e42.sql', import.meta.url)
+  );
+  const origem = readFileSync(SCRIPT_SRC, 'utf8');
+
+  const tmp = mkdtempSync(path.join(tmpdir(), 'e42run-'));
+  const runnerCopy = path.join(tmp, 'run-005-e42.sh');
+  const scriptCopy = path.join(tmp, '005-propagar-nomes-locais-e42.sql');
+  writeFileSync(runnerCopy, readFileSync(RUNNER, 'utf8'), { mode: 0o755 });
+
+  try {
+    // Fora de um repositório git, um arquivo íntegro é executado (DRY-RUN).
     writeFileSync(scriptCopy, origem);
-    const ok = executar();
+    const ok = spawnSync(runnerCopy, [], {
+      encoding: 'utf8',
+      env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL, PGPASSWORD: process.env.PGPASSWORD || 'brobond' },
+    });
     assert.equal(ok.status, 0, `arquivo íntegro deve executar:\n${ok.stderr}`);
     assert.match(ok.stderr, /revisão do script: reconhece normalizar_classe_c=/);
-
-    console.log('\n=== PROD-DB-01.5.3 — executor recusa cópia defasada (gate/versão ausentes) ===');
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

@@ -12,6 +12,7 @@
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import DevolucoesPage from './DevolucoesPage';
 import { ToastProvider } from '../components/ui';
 import { api } from '../lib/api';
@@ -65,11 +66,17 @@ function mockRotas(rotas: Record<string, unknown>) {
   }) as never);
 }
 
+// ZERO MODAL: "Solicitar devolução" NAVEGA para /devolucoes/nova.
 function renderPage() {
   return render(
-    <ToastProvider>
-      <DevolucoesPage />
-    </ToastProvider>
+    <MemoryRouter initialEntries={['/devolucoes']}>
+      <ToastProvider>
+        <Routes>
+          <Route path="/devolucoes" element={<DevolucoesPage />} />
+          <Route path="/devolucoes/nova" element={<div>PÁGINA NOVA DEVOLUÇÃO</div>} />
+        </Routes>
+      </ToastProvider>
+    </MemoryRouter>
   );
 }
 
@@ -220,32 +227,12 @@ describe('Devoluções — tela', () => {
     expect(screen.queryByText('Receber mercadoria')).not.toBeInTheDocument();
   });
 
-  it('solicitar exige pedido e motivo com pelo menos 5 caracteres', async () => {
+  it('"Solicitar devolução" NAVEGA para /devolucoes/nova (página própria, nunca painel)', async () => {
     mockRotas({ '/devolucoes?': { rows: [], total: 0, page: 1, pageSize: 50 } });
-    apiPost.mockResolvedValue({ id: 44 } as never);
     renderPage();
-
     fireEvent.click(await screen.findByText('Solicitar devolução'));
-    expect(await screen.findByText('Solicitar devolução', { selector: 'h2, h3' })).toBeInTheDocument();
-    expect((screen.getByText('Solicitar', { selector: 'button' }) as HTMLButtonElement).disabled).toBe(true);
-
-    fireEvent.change(screen.getByLabelText(/Pedido \(venda\)/i), { target: { value: '55' } });
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 5 caracteres.'), { target: { value: 'no' } });
-    expect((screen.getByText('Solicitar', { selector: 'button' }) as HTMLButtonElement).disabled).toBe(true);
-
-    fireEvent.change(screen.getByPlaceholderText('Mínimo 5 caracteres.'), {
-      target: { value: 'Cliente desistiu da compra' },
-    });
-    fireEvent.click(screen.getByText('Solicitar', { selector: 'button' }));
-
-    await waitFor(() =>
-      expect(apiPost).toHaveBeenCalledWith('/devolucoes', {
-        venda_id: 55,
-        motivo: 'Cliente desistiu da compra',
-        // O formulário nasce em 'devolucao'; o tipo só muda se o operador escolher.
-        tipo: 'devolucao',
-      })
-    );
+    expect(await screen.findByText('PÁGINA NOVA DEVOLUÇÃO')).toBeInTheDocument();
+    expect(apiPost).not.toHaveBeenCalled();
   });
 
   it('registrar rastreio exige código com pelo menos 5 caracteres', async () => {

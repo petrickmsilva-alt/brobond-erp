@@ -29,7 +29,7 @@ import { labelOf } from './store';
 import { attachImages } from './uploads';
 import { notificarVendaErpAlterada } from './eventosVenda';
 import { round2, round3 } from './utils';
-import { locaisDeSaida, saldoCelula } from './estoqueCanonico';
+import { locaisDeSaida, saldoCelula, saldoDisponivelCelula } from './estoqueCanonico';
 import { precoDe } from './listasPreco';
 import { descontoUnitarioDe, normalizarPct, normalizarPrecoVenda, precoLiquidoDe } from './precoVenda';
 
@@ -482,14 +482,31 @@ export async function recalcularTotal(tipo: TipoPedido, pedidoId: number, tx?: T
 type LocalEstoque = { id: number; nome: string };
 
 /**
- * Saldo da célula canônica (empresa + produto + tamanho + local).
+ * Saldo FÍSICO da célula canônica (empresa + produto + tamanho + local).
  *
- * A leitura é a MESMA que o PDV/Vendas usam para exibir disponibilidade
+ * A leitura é a MESMA que o PDV/Vendas usam para exibir estoque físico
  * (`estoqueCanonico.ts`), inclusive na resolução de linhas históricas sem
  * `local_id`. Não existe um segundo cálculo de saldo no faturamento.
  */
 async function saldo(produtoId: number, tamanhoId: number | null, local: LocalEstoque, escopo: EscopoEmpresa, tx?: Tx): Promise<number | null> {
   return saldoCelula(escopo, produtoId, tamanhoId, local.id, tx);
+}
+
+/**
+ * Saldo DISPONÍVEL da célula = físico − reservado − empenhado − bloqueado.
+ *
+ * É o que o faturamento pode baixar. Usar o físico aqui permitia vender peça
+ * com bloqueio de qualidade ou empenhada em OP — a tela de disponibilidade já
+ * descontava (`saldoVendavel`), o faturamento não: duas regras concorrentes.
+ */
+async function saldoDisponivel(
+  produtoId: number,
+  tamanhoId: number | null,
+  local: LocalEstoque,
+  escopo: EscopoEmpresa,
+  tx?: Tx
+): Promise<{ fisico: number; reservado: number; disponivel: number }> {
+  return saldoDisponivelCelula(escopo, produtoId, tamanhoId, local.id, tx);
 }
 
 async function faturarVenda(pedido: Row, actor: { id: number | null; name: string }, tx: Tx, escopo: EscopoEmpresa) {
@@ -533,17 +550,25 @@ async function faturarVenda(pedido: Row, actor: { id: number | null; name: strin
     await validarTamanhoNaGrade(produtoId, tamanhoId, tx, escopo);
 
     let local = localSaida;
-    let disp = await saldo(produtoId, tamanhoId, localSaida, escopo, tx);
-    if ((disp === null || disp < qtd) && alternativo) {
-      const alt = await saldo(produtoId, tamanhoId, alternativo, escopo, tx);
-      if (alt !== null && alt >= qtd && (disp === null || alt >= disp)) {
+    let celula = await saldoDisponivel(produtoId, tamanhoId, localSaida, escopo, tx);
+    if (celula.disponivel < qtd && alternativo) {
+      const alt = await saldoDisponivel(produtoId, tamanhoId, alternativo, escopo, tx);
+      if (alt.disponivel >= qtd && alt.disponivel >= celula.disponivel) {
         local = alternativo;
-        disp = alt;
+        celula = alt;
       }
     }
     const nome = labelOf(getResource('produtos')!, prod);
-    if (disp === null || disp < qtd) {
-      faltas.push(`${nome}${tam ? ` tam. ${tam.codigo}` : ''}: precisa de ${qtd}, há ${Math.max(0, disp ?? 0)} em "${local.nome}"`);
+    if (celula.disponivel < qtd) {
+      // A mensagem separa FÍSICO de RESERVADO: sem isso o operador lê "há 10"
+      // e não entende por que a venda de 4 é recusada.
+      const detalheReserva =
+        celula.reservado > 0
+          ? ` (físico ${celula.fisico}, ${celula.reservado} reservado/empenhado/bloqueado)`
+          : '';
+      faltas.push(
+        `${nome}${tam ? ` tam. ${tam.codigo}` : ''}: precisa de ${qtd}, há ${Math.max(0, celula.disponivel)} disponível em "${local.nome}"${detalheReserva}`
+      );
       continue;
     }
     plano.push({ item: it, local, qtd, tamanhoId });

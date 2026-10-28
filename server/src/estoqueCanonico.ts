@@ -42,9 +42,19 @@
 //     `itens.ts`). Logo o vendável é o MAIOR entre essas duas células — nunca a
 //     soma dos locais, e nunca um local escolhido pela tela.
 //
-// Não existe tabela de reservas neste ERP: o físico e o vendável diferem apenas
-// pelo escopo de local. Se um dia existir reserva, ela entra AQUI (uma vez) e
-// todas as telas passam a vê-la.
+// RESERVAS — desde a migration 0052 (`estoque_reservas`) existem quantidades
+// COMPROMETIDAS que não podem ser vendidas: `reserva` (venda em separação),
+// `empenho` (OP programada) e `bloqueio` (qualidade). A regra canônica passou a
+// ser
+//
+//     disponível = físico − reservado − empenhado − bloqueado
+//
+// e ela é aplicada AQUI, uma única vez, em `reservasAtivasPorCelula` +
+// `saldoDisponivelCelula` + `saldoVendavel`. O faturamento usa exatamente a
+// mesma função (`itens.ts` → `saldoDisponivelCelula`), então a tela não promete
+// saldo que a baixa recusa — e estoque bloqueado/empenhado não é vendido.
+// `saldoCelula` continua sendo o FÍSICO puro, para quem precisa dele (estorno,
+// transferência, conferência).
 // ============================================================================
 import { HttpError } from './errors';
 import type { EscopoEmpresa } from './empresa';
@@ -74,7 +84,10 @@ export type SaldoTamanho = { tamanho_id: number | null; quantidade: number; esto
 /** Resposta canônica de "quanto posso vender deste tamanho". */
 export type SaldoVendavel = {
   tamanho_id: number | null;
-  /** Quantidade que UMA linha de venda consegue baixar (maior célula dos locais de saída). */
+  /**
+   * Quantidade que UMA linha de venda consegue baixar (maior célula DISPONÍVEL
+   * dos locais de saída, já descontados reserva/empenho/bloqueio).
+   */
   quantidade: number;
   /** Local que fornece essa quantidade (o de saída quando ele cobre, senão o padrão). */
   local_id: number | null;
@@ -167,6 +180,90 @@ export async function locaisDeSaida(
   }
   const candidatos = padrao && padrao.id !== preferidoAtivo.id ? [preferidoAtivo, padrao] : [preferidoAtivo];
   return { preferido: preferidoAtivo, padrao, candidatos };
+}
+
+// ---------------------------------------------------------------------------
+// RESERVAS / EMPENHO / BLOQUEIO — a parte variável do "disponível"
+// ---------------------------------------------------------------------------
+
+/** Chave da célula usada pelo mapa de reservas. */
+function chaveCelula(produtoId: number, tamanhoId: number | null, localId: number | null): string {
+  return `${produtoId}:${tamanhoId === null ? 'null' : tamanhoId}:${localId === null ? 'null' : localId}`;
+}
+
+export type ReservasAtivas = {
+  /** Total ativo por célula exata (produto + tamanho + local). */
+  porCelula: Map<string, number>;
+  /** Total ativo SEM local definido (produto + tamanho) — vale para qualquer local. */
+  semLocal: Map<string, number>;
+};
+
+/**
+ * Reservas ATIVAS (`status = 'ativa'`) da empresa, agregadas por célula.
+ *
+ * Uma reserva sem `local_id` é um compromisso do produto+tamanho como um todo;
+ * ela é descontada de QUALQUER local candidato (critério conservador: melhor
+ * recusar uma venda a prometer peça já comprometida).
+ */
+export async function reservasAtivasPorCelula(
+  escopo: EscopoEmpresa,
+  filtro: { produtoId?: number } = {},
+  tx?: Tx
+): Promise<ReservasAtivas> {
+  const s = getStore();
+  const where: Record<string, unknown> = { empresa_id: escopo.empresaId, status: 'ativa' };
+  if (filtro.produtoId !== undefined) where.produto_id = filtro.produtoId;
+  const lista = await s.list(getResource('estoque_reservas')!, { page: 1, pageSize: 100_000, filter: where }, tx);
+  const porCelula = new Map<string, number>();
+  const semLocal = new Map<string, number>();
+  for (const r of lista.rows) {
+    const qtd = quantidade(r.quantidade);
+    if (!(qtd > 0)) continue;
+    const produtoId = Number(r.produto_id);
+    const tamanhoId = normalizarTamanho(r.tamanho_id);
+    const localId = r.local_id === null || r.local_id === undefined || r.local_id === '' ? null : Number(r.local_id);
+    if (localId === null) {
+      const chave = chaveCelula(produtoId, tamanhoId, null);
+      semLocal.set(chave, (semLocal.get(chave) ?? 0) + qtd);
+    } else {
+      const chave = chaveCelula(produtoId, tamanhoId, localId);
+      porCelula.set(chave, (porCelula.get(chave) ?? 0) + qtd);
+    }
+  }
+  return { porCelula, semLocal };
+}
+
+/** Reservado ativo de uma célula (inclui as reservas sem local do produto+tamanho). */
+export function reservadoDaCelula(
+  reservas: ReservasAtivas,
+  produtoId: number,
+  tamanhoId: number | null,
+  localId: number
+): number {
+  return (
+    (reservas.porCelula.get(chaveCelula(produtoId, tamanhoId, localId)) ?? 0) +
+    (reservas.semLocal.get(chaveCelula(produtoId, tamanhoId, null)) ?? 0)
+  );
+}
+
+/**
+ * DISPONÍVEL da célula = físico − reservado − empenhado − bloqueado.
+ *
+ * Nunca negativo: um bloqueio maior que o saldo torna a célula indisponível
+ * (0), não um crédito para vender.
+ */
+export async function saldoDisponivelCelula(
+  escopo: EscopoEmpresa,
+  produtoId: number,
+  tamanhoId: number | null,
+  localId: number,
+  tx?: Tx
+): Promise<{ fisico: number; reservado: number; disponivel: number }> {
+  const alvo = normalizarTamanho(tamanhoId);
+  const fisico = await saldoCelula(escopo, produtoId, alvo, localId, tx);
+  const reservas = await reservasAtivasPorCelula(escopo, { produtoId }, tx);
+  const reservado = reservadoDaCelula(reservas, produtoId, alvo, localId);
+  return { fisico, reservado, disponivel: Math.max(0, fisico - reservado) };
 }
 
 // ---------------------------------------------------------------------------
@@ -337,10 +434,18 @@ export async function saldoVendavel(
   const celulas = await celulasDoProduto(escopo, produtoId, tx).then((todas) =>
     todas.filter((celula) => chaveTamanho(celula.tamanho_id) === chaveTamanho(alvo))
   );
+  // DISPONÍVEL = físico − reservado/empenhado/bloqueado, por local candidato.
+  // Sem isso a tela oferecia peça já comprometida (bloqueio de qualidade, OP
+  // empenhada) e o faturamento recusava depois — duas regras de disponibilidade.
+  const reservas = await reservasAtivasPorCelula(escopo, { produtoId }, tx);
   const porLocal = candidatos.map((local) => ({
     local_id: local.id,
     local: local.nome,
-    quantidade: celulas.filter((celula) => celula.local_id === local.id).reduce((soma, celula) => soma + celula.quantidade, 0),
+    quantidade: Math.max(
+      0,
+      celulas.filter((celula) => celula.local_id === local.id).reduce((soma, celula) => soma + celula.quantidade, 0) -
+        reservadoDaCelula(reservas, produtoId, alvo, local.id)
+    ),
   }));
   const fisico = celulas.reduce((soma, celula) => soma + celula.quantidade, 0);
   let melhor = porLocal[0];

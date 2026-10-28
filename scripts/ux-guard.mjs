@@ -319,7 +319,220 @@ export function auditarUx(raiz) {
     violacoes.push('client/src/pages/RegistroPage.tsx: a página de cadastro precisa reutilizar o mesmo RecordForm (sem formulário duplicado)');
   }
 
-  return { ok: violacoes.length === 0, violacoes, resumo, excecoes, totais, avisos };
+  // ERP 3.0 — homologação final: fluxos convertidos + teto de PainelInline.
+  violacoes.push(...auditarFluxosPagina(raiz));
+
+  return { ok: violacoes.length === 0, violacoes, resumo, excecoes, totais, avisos, fluxosPagina: FLUXOS_PAGINA.length };
+}
+
+// ============================================================================
+// FLUXOS DE MÓDULO EM PÁGINA (ERP 3.0 — homologação final)
+// ----------------------------------------------------------------------------
+// Os fluxos abaixo eram PainelInline transacional. Agora são PÁGINAS, e este
+// gate impede a regressão por três provas independentes:
+//
+//   1. ROTA — a rota precisa estar registrada em `client/src/App.tsx`;
+//   2. PÁGINA — o arquivo da página precisa existir;
+//   3. AUSÊNCIA — o padrão antigo (componente/painel do fluxo) não pode existir
+//      mais em NENHUM arquivo do client.
+//
+// Também vale para TODO o repositório: um componente novo `*Modal.tsx` em
+// `components/` só passa se estiver na lista fechada de infraestrutura
+// (reautenticação, diagnóstico, portal público, catálogo público).
+// ============================================================================
+export const FLUXOS_PAGINA = [
+  {
+    id: 'recebimento-compra',
+    nome: 'Recebimento de compra',
+    rota: 'compras/:id/receber',
+    pagina: 'client/src/pages/RecebimentoCompraPage.tsx',
+    proibido: [/<RecebimentoCompraModal\b/, /components\/RecebimentoCompraModal/],
+  },
+  {
+    id: 'ficha-tecnica-nova',
+    nome: 'Nova ficha técnica (custo)',
+    rota: 'custo/nova',
+    pagina: 'client/src/pages/NovaFichaPage.tsx',
+    proibido: [/title="Nova ficha técnica"/],
+  },
+  {
+    id: 'devolucao-nova',
+    nome: 'Solicitar devolução',
+    rota: 'devolucoes/nova',
+    pagina: 'client/src/pages/DevolucaoNovaPage.tsx',
+    proibido: [/title="Solicitar devolução"/],
+  },
+  {
+    id: 'empresa-editar',
+    nome: 'Editar empresa',
+    rota: 'empresas/:id/editar',
+    pagina: 'client/src/pages/EmpresaFormPage.tsx',
+    proibido: [/title=\{editando \? `Editar \$\{editando\.nome\}`/],
+  },
+  {
+    id: 'ncm-criar',
+    nome: 'Nova alíquota por NCM',
+    rota: 'ncm/novo',
+    pagina: 'client/src/pages/NcmFormPage.tsx',
+    proibido: [/title=\{editando === 'novo' \? 'Nova alíquota por NCM'/],
+  },
+  {
+    id: 'ncm-editar',
+    nome: 'Editar alíquota por NCM',
+    rota: 'ncm/:id/editar',
+    pagina: 'client/src/pages/NcmFormPage.tsx',
+    proibido: [/Editar chave \$\{chaveDe\(editando\)\}/],
+  },
+  {
+    id: 'impressao-terminal',
+    nome: 'Terminal de impressão',
+    rota: 'config/impressao/terminais/:id/editar',
+    pagina: 'client/src/pages/ImpressaoTerminalFormPage.tsx',
+    proibido: [/PainelInline Criar\/Editar Terminal/],
+  },
+  {
+    id: 'impressao-agente-novo',
+    nome: 'Parear novo agente local',
+    rota: 'config/impressao/agentes/novo',
+    pagina: 'client/src/pages/ImpressaoAgenteNovaPage.tsx',
+    proibido: [/title="Parear Novo Agente Local"/],
+  },
+  {
+    id: 'impressao-agente-editar',
+    nome: 'Configurar agente de impressão',
+    rota: 'config/impressao/agentes/:machineId/editar',
+    pagina: 'client/src/pages/ImpressaoAgenteEdicaoPage.tsx',
+    proibido: [/title="Configurar Agente"/],
+  },
+  {
+    id: 'webhook-criar',
+    nome: 'Novo webhook',
+    rota: 'webhooks/novo',
+    pagina: 'client/src/pages/WebhookFormPage.tsx',
+    proibido: [/title=\{form\?\.id \? `Editar \$\{form\.nome\}` : 'Novo webhook'\}/],
+  },
+  {
+    id: 'webhook-editar',
+    nome: 'Editar webhook',
+    rota: 'webhooks/:id/editar',
+    pagina: 'client/src/pages/WebhookFormPage.tsx',
+    proibido: [/\{form && \(\s*<div className="space-y-3">/],
+  },
+  {
+    id: 'importacao',
+    nome: 'Importação de planilhas (fluxo de módulo)',
+    rota: 'importar/:tipo',
+    pagina: 'client/src/pages/ImportarPage.tsx',
+    proibido: [/<ImportModal\b/, /components\/ImportModal/],
+  },
+  {
+    id: 'usuario-criar',
+    nome: 'Novo usuário',
+    rota: 'usuarios/novo',
+    pagina: 'client/src/pages/UsuariosPage.tsx',
+    proibido: [/<UsuarioFormModal\b/],
+  },
+  {
+    id: 'usuario-editar',
+    nome: 'Editar usuário',
+    rota: 'usuarios/:id/editar',
+    pagina: 'client/src/pages/UsuariosPage.tsx',
+    proibido: [/function UsuarioFormModal\(/],
+  },
+];
+
+/**
+ * Componentes `*Modal.tsx` permitidos em `client/src/components/`.
+ * Todos são infraestrutura/auxiliar — nenhum é fluxo de cadastro ou edição.
+ */
+export const MODAIS_PERMITIDOS = [
+  'client/src/components/ReauthModal.tsx', // reautenticação (step-up)
+  'client/src/components/DependenciasModal.tsx', // diagnóstico de exclusão bloqueada
+  'client/src/components/CatalogoShareModal.tsx', // ação auxiliar de compartilhamento
+  'client/src/components/PortalAccessModal.tsx', // acesso ao portal do cliente (leitura/entrega)
+];
+
+/**
+ * Contagem máxima de `PainelInline` por arquivo. É um TETO imutável: qualquer
+ * painel novo (ou um legítimo trocado por um transacional) estoura a contagem e
+ * o gate falha. Reduzir é sempre permitido.
+ */
+export const TETO_PAINEIS_INLINE = {
+  'client/src/pages/UsuariosPage.tsx': 9,
+  'client/src/pages/PdvPage.tsx': 5,
+  'client/src/pages/OrdemDetail.tsx': 4,
+  'client/src/pages/DevolucoesPage.tsx': 4,
+  'client/src/pages/ImpressaoPage.tsx': 3,
+  'client/src/pages/CotacoesCompraPage.tsx': 3,
+  'client/src/pages/LogisticaPage.tsx': 2,
+  'client/src/pages/FichaDetail.tsx': 2,
+  'client/src/pages/ExpedicaoPage.tsx': 2,
+  'client/src/components/ui.test.tsx': 2,
+  'client/src/pages/dev/ComponentCatalog.tsx': 1,
+  'client/src/pages/WebhooksPage.tsx': 1,
+  'client/src/pages/Settings.tsx': 1,
+  'client/src/pages/MedidasPage.tsx': 1,
+  'client/src/pages/EstoqueGradePage.tsx': 1,
+  'client/src/pages/EmpresasPage.tsx': 1,
+  'client/src/pages/ComissoesPage.tsx': 1,
+  'client/src/pages/CatalogoPublico.tsx': 1,
+  'client/src/components/ReauthModal.tsx': 1,
+  'client/src/components/PortalAccessModal.tsx': 1,
+  'client/src/components/LabelSheet.tsx': 1,
+  'client/src/components/DocumentPrintButton.tsx': 1,
+  'client/src/components/DependenciasModal.tsx': 1,
+  'client/src/components/CatalogoShareModal.tsx': 1,
+};
+
+/**
+ * Auditoria dos fluxos convertidos (rota + página + ausência do padrão antigo)
+ * e do teto de PainelInline. Retorna lista de violações (vazia = OK).
+ */
+export function auditarFluxosPagina(raiz) {
+  const violacoes = [];
+  const app = readFileSync(path.join(raiz, 'client', 'src', 'App.tsx'), 'utf8');
+  const arquivos = walk(path.join(raiz, 'client', 'src')).filter((f) => /\.(tsx?|jsx?)$/.test(f));
+  const textos = new Map(arquivos.map((f) => [path.relative(raiz, f).split(path.sep).join('/'), readFileSync(f, 'utf8')]));
+
+  for (const fluxo of FLUXOS_PAGINA) {
+    if (!app.includes(fluxo.rota)) {
+      violacoes.push(`${fluxo.id}: fluxo "${fluxo.nome}" não tem rota "/${fluxo.rota}" em client/src/App.tsx — o formulário voltaria para um painel`);
+    }
+    if (!existsSync(path.join(raiz, fluxo.pagina))) {
+      violacoes.push(`${fluxo.id}: página "${fluxo.pagina}" não existe — fluxo sem destino`);
+    }
+    for (const [rel, texto] of textos) {
+      if (/\.test\.(tsx?|jsx?)$/.test(rel)) continue;
+      for (const padrao of fluxo.proibido) {
+        if (padrao.test(texto)) {
+          violacoes.push(`${fluxo.id}: padrão antigo reapareceu em ${rel} (${padrao}) — este fluxo é PÁGINA (/${fluxo.rota})`);
+        }
+      }
+    }
+  }
+
+  for (const [rel, texto] of textos) {
+    if (!rel.startsWith('client/src/components/') || !/Modal\.tsx$/.test(rel)) continue;
+    if (!MODAIS_PERMITIDOS.includes(rel)) {
+      violacoes.push(`${rel}: componente "*Modal" novo não é infraestrutura. Fluxo de módulo é PÁGINA (/recurso/novo, /recurso/:id/editar)`);
+    }
+  }
+
+  const contagem = new Map();
+  for (const [rel, texto] of textos) {
+    const qtd = (texto.match(/<PainelInline\b/g) ?? []).length;
+    if (qtd) contagem.set(rel, qtd);
+  }
+  for (const [rel, qtd] of contagem) {
+    const teto = TETO_PAINEIS_INLINE[rel];
+    if (teto === undefined) {
+      violacoes.push(`${rel}: ${qtd}× PainelInline em arquivo sem teto declarado — painel novo exige revisão de UX (fluxo de módulo é PÁGINA)`);
+    } else if (qtd > teto) {
+      violacoes.push(`${rel}: ${qtd}× PainelInline acima do teto ${teto} — painel transacional novo`);
+    }
+  }
+
+  return violacoes;
 }
 
 /** Compatibilidade: lista de exceções do baseline (usada pelo relatório). */

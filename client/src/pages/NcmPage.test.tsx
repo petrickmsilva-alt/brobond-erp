@@ -12,6 +12,7 @@
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import NcmPage from './NcmPage';
 import { ToastProvider } from '../components/ui';
 import { api } from '../lib/api';
@@ -46,11 +47,19 @@ const LINHAS = {
   ],
 };
 
-function montar() {
+// ZERO MODAL: a listagem NAVEGA para páginas próprias. O teste monta as rotas
+// de destino para provar que o clique chega na página (e não abre painel).
+function montar(rota = '/ncm') {
   return render(
-    <ToastProvider>
-      <NcmPage />
-    </ToastProvider>
+    <MemoryRouter initialEntries={[rota]}>
+      <ToastProvider>
+        <Routes>
+          <Route path="/ncm" element={<NcmPage />} />
+          <Route path="/ncm/novo" element={<div>PÁGINA NOVA ALÍQUOTA</div>} />
+          <Route path="/ncm/:id/editar" element={<div>PÁGINA EDITAR ALÍQUOTA</div>} />
+        </Routes>
+      </ToastProvider>
+    </MemoryRouter>
   );
 }
 
@@ -83,39 +92,21 @@ describe('NcmPage', () => {
     expect(await screen.findByText(/NÃO existe linha padrão/)).toBeInTheDocument();
   });
 
-  it('cadastra uma alíquota nova enviando a chave só com dígitos e o percentual numérico', async () => {
-    apiPost.mockResolvedValue({ id: 9 });
+  it('"Nova alíquota" NAVEGA para /ncm/novo (página própria, nunca painel)', async () => {
     montar();
     fireEvent.click(await screen.findByText('Nova alíquota'));
-    fireEvent.change(screen.getByPlaceholderText(/61091000/), { target: { value: '6109-10' } });
-    fireEvent.change(screen.getByPlaceholderText('12'), { target: { value: '7,5' } });
-    fireEvent.click(screen.getByText('Salvar'));
-
-    await waitFor(() =>
-      expect(apiPost).toHaveBeenCalledWith('/impostos_ncm', { ncm: '610910', descricao: null, aliquota_pct: 7.5 })
-    );
+    expect(await screen.findByText('PÁGINA NOVA ALÍQUOTA')).toBeInTheDocument();
   });
 
-  it('recusa alíquota fora de 0–100 sem chamar a API', async () => {
-    montar();
-    fireEvent.click(await screen.findByText('Nova alíquota'));
-    fireEvent.change(screen.getByPlaceholderText('12'), { target: { value: '150' } });
-    fireEvent.click(screen.getByText('Salvar'));
-    expect(await screen.findByText('Informe uma alíquota entre 0 e 100.')).toBeInTheDocument();
-    expect(apiPost).not.toHaveBeenCalled();
-  });
-
-  it('edita a linha existente com PUT no registro certo', async () => {
-    apiPut.mockResolvedValue({ id: 2 });
+  it('"Editar" NAVEGA para /ncm/:id/editar do registro certo', async () => {
     montar();
     await screen.findByText('6109');
     const botoes = screen.getAllByTitle('Editar');
     // A lista vem na ordem do servidor: [PADRÃO(7), 61091000(3), 6109(2)].
     fireEvent.click(botoes[2]);
-    expect(await screen.findByText('Editar chave 6109')).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText('12'), { target: { value: '9' } });
-    fireEvent.click(screen.getByText('Salvar'));
-    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/impostos_ncm/2', { ncm: '6109', descricao: 'Malha (prefixo)', aliquota_pct: 9 }));
+    expect(await screen.findByText('PÁGINA EDITAR ALÍQUOTA')).toBeInTheDocument();
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(apiPut).not.toHaveBeenCalled();
   });
 
   it('excluir exige confirmação e explica o efeito da linha PADRÃO antes de apagar', async () => {
@@ -150,12 +141,4 @@ describe('NcmPage', () => {
     expect(screen.queryAllByTitle('Excluir')).toHaveLength(0);
   });
 
-  it('erro do servidor ao salvar aparece na tela', async () => {
-    apiPost.mockRejectedValue(new Error('Banco indisponível'));
-    montar();
-    fireEvent.click(await screen.findByText('Nova alíquota'));
-    fireEvent.change(screen.getByPlaceholderText('12'), { target: { value: '5' } });
-    fireEvent.click(screen.getByText('Salvar'));
-    await waitFor(() => expect(screen.getByText('Não foi possível salvar.')).toBeInTheDocument());
-  });
-});
+})

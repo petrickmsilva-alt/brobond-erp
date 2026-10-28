@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Calculator, ClipboardList, Loader2, Plus, Search, Tag } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, EmptyState, PageHeader, Spinner } from '../components/ui';
 import { ProductSelector } from '../components/ProductSelector';
 import { formatMoney, formatNumber } from '../lib/format';
 
@@ -11,17 +11,12 @@ type Ficha = Record<string, any> & { id: number };
 
 export default function CustoPage() {
   const navigate = useNavigate();
-  const toast = useToast();
   const { user } = useAuth();
   const podeCriar = user?.perfil !== 'operador';
 
   const [fichas, setFichas] = useState<Ficha[] | null>(null);
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
-  const [novoOpen, setNovoOpen] = useState(false);
-  const [form, setForm] = useState({ produto_id: '', mao_obra: '0', custos_indiretos: '0', margem_pct: '0' });
-  const [formErr, setFormErr] = useState('');
-  const [criando, setCriando] = useState(false);
 
   const carregar = async () => {
     setError('');
@@ -51,23 +46,8 @@ export default function CustoPage() {
     return { itens, custo, preco };
   }, [fichas]);
 
-  async function criar() {
-    if (!form.produto_id) return setFormErr('Selecione o produto.');
-    const n = (v: string) => Number(String(v).replace(',', '.')) || 0;
-    setCriando(true);
-    setFormErr('');
-    try {
-      const criado = await api.post<Ficha>('/fichas', { produto_id: Number(form.produto_id), mao_obra: n(form.mao_obra), custos_indiretos: n(form.custos_indiretos), margem_pct: n(form.margem_pct) });
-      toast.success('Ficha criada. Adicione os insumos e aplique o preço ao produto.');
-      setNovoOpen(false);
-      setForm({ produto_id: '', mao_obra: '0', custos_indiretos: '0', margem_pct: '0' });
-      navigate(`/fichas/${criado.id}`);
-    } catch (e: any) {
-      setFormErr(e.message || 'Não foi possível criar a ficha (o produto pode já ter uma).');
-    } finally {
-      setCriando(false);
-    }
-  }
+  // ZERO MODAL: a criação de ficha é a página `/custo/nova`.
+  const abrirNova = () => navigate('/custo/nova');
 
   return (
     <div className="p-4 pb-24 sm:p-6 md:pb-6">
@@ -88,7 +68,7 @@ export default function CustoPage() {
               <input className="input pl-9" placeholder="Buscar produto..." value={q} onChange={(e) => setQ(e.target.value)} />
             </div>
             {podeCriar && (
-              <button className="btn-accent" onClick={() => setNovoOpen(true)}>
+              <button className="btn-accent" onClick={abrirNova}>
                 <Plus className="h-4 w-4" /> Nova ficha técnica
               </button>
             )}
@@ -123,7 +103,7 @@ export default function CustoPage() {
               description={q ? undefined : 'Crie a ficha de um produto para calcular custo e preço sugerido com os custos médios dos insumos.'}
               action={
                 !q && podeCriar ? (
-                  <button className="btn-accent" onClick={() => setNovoOpen(true)}>
+                  <button className="btn-accent" onClick={abrirNova}>
                     <Plus className="h-4 w-4" /> Nova ficha técnica
                   </button>
                 ) : undefined
@@ -162,42 +142,6 @@ export default function CustoPage() {
         </>
       )}
 
-      <PainelInline open={novoOpen} onClose={() => setNovoOpen(false)} title="Nova ficha técnica" subtitle="Depois de criar, você adiciona os insumos na página da ficha." size="sm">
-        {formErr && <Alert tone="red">{formErr}</Alert>}
-        <div className="space-y-4">
-          <label className="block">
-            <span className="label">Produto</span>
-            <ProductSelector
-              value={form.produto_id}
-              aria-label="Produto da ficha de custo"
-              onChange={(_id, product) => setForm((f) => ({
-                ...f,
-                produto_id: product ? String(product.produto_pai_id ?? product.id) : '',
-              }))}
-            />
-          </label>
-          <div className="grid grid-cols-3 gap-3">
-            <label className="block">
-              <span className="label">Mão de obra (R$)</span>
-              <input className="input" value={form.mao_obra} onChange={(e) => setForm((f) => ({ ...f, mao_obra: e.target.value }))} inputMode="decimal" />
-            </label>
-            <label className="block">
-              <span className="label">Indiretos (R$)</span>
-              <input className="input" value={form.custos_indiretos} onChange={(e) => setForm((f) => ({ ...f, custos_indiretos: e.target.value }))} inputMode="decimal" />
-            </label>
-            <label className="block">
-              <span className="label">Margem (%)</span>
-              <input className="input" value={form.margem_pct} onChange={(e) => setForm((f) => ({ ...f, margem_pct: e.target.value }))} inputMode="decimal" />
-            </label>
-          </div>
-          <div className="flex justify-end gap-2">
-            <button className="btn-secondary" onClick={() => setNovoOpen(false)}>Cancelar</button>
-            <button className="btn-primary" onClick={criar} disabled={criando}>
-              {criando && <Loader2 className="h-4 w-4 animate-spin" />} <Tag className="h-4 w-4" /> Criar ficha
-            </button>
-          </div>
-        </div>
-      </PainelInline>
     </div>
   );
 }

@@ -16,6 +16,7 @@
 // tela explica o porquê em vez de só mostrar o erro.
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, Package, RotateCcw, Truck } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
@@ -116,6 +117,7 @@ const FILTROS: Array<{ value: string; label: string }> = [
 ];
 
 export default function DevolucoesPage() {
+  const navigate = useNavigate();
   const toast = useToast();
 
   const [carregando, setCarregando] = useState(true);
@@ -125,11 +127,9 @@ export default function DevolucoesPage() {
   const [detalhe, setDetalhe] = useState<Detalhe | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState('');
-  const [novaAberta, setNovaAberta] = useState(false);
   const [acaoAberta, setAcaoAberta] = useState<string | null>(null);
 
   // Formulários
-  const [nova, setNova] = useState({ venda_id: '', motivo: '', tipo: 'devolucao' });
   const [autorizacao, setAutorizacao] = useState({ codigo: '', transportadora: '' });
   const [rastreio, setRastreio] = useState({ codigo: '', transportadora: '' });
   const [motivoRecusa, setMotivoRecusa] = useState('');
@@ -197,26 +197,6 @@ export default function DevolucoesPage() {
     }
   };
 
-  const criarDevolucao = async () => {
-    setOcupado(true);
-    try {
-      const r = await api.post<{ id: number }>('/devolucoes', {
-        venda_id: Number(nova.venda_id),
-        motivo: nova.motivo,
-        tipo: nova.tipo,
-      });
-      toast.success(`Devolução #${r.id} solicitada.`);
-      setNovaAberta(false);
-      setNova({ venda_id: '', motivo: '', tipo: 'devolucao' });
-      await carregarLista();
-      abrir(Number(r.id));
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : 'Não foi possível solicitar a devolução.');
-    } finally {
-      setOcupado(false);
-    }
-  };
-
   /** O que a conferência vai fazer com o estoque — calculado na tela só para exibir. */
   const resumoConferencia = useMemo(() => {
     if (!detalhe) return { volta: 0, naoVolta: 0, faltando: 0 };
@@ -238,7 +218,7 @@ export default function DevolucoesPage() {
         title="Devoluções e logística reversa"
         description="Solicitar → autorizar → rastrear → receber. Só item em bom estado volta ao estoque."
         actions={
-          <button className="btn-accent" onClick={() => setNovaAberta(true)}>
+          <button className="btn-accent" onClick={() => navigate('/devolucoes/nova')}>
             <RotateCcw className="h-4 w-4" /> Solicitar devolução
           </button>
         }
@@ -457,55 +437,6 @@ export default function DevolucoesPage() {
       </div>
 
       {/* --------------------------------------------------------- modais */}
-      <PainelInline open={novaAberta} onClose={() => setNovaAberta(false)} title="Solicitar devolução">
-        <div className="space-y-3">
-          <label className="label">
-            Pedido (venda)
-            <input
-              type="number"
-              min={1}
-              className="input"
-              value={nova.venda_id}
-              onChange={(e) => setNova((n) => ({ ...n, venda_id: e.target.value }))}
-            />
-          </label>
-          <label className="label">
-            Tipo
-            <select className="input" value={nova.tipo} onChange={(e) => setNova((n) => ({ ...n, tipo: e.target.value }))}>
-              {TIPOS.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="label">
-            Motivo
-            <textarea
-              className="input min-h-20"
-              value={nova.motivo}
-              onChange={(e) => setNova((n) => ({ ...n, motivo: e.target.value }))}
-              placeholder="Mínimo 5 caracteres."
-            />
-          </label>
-          <p className="text-[11px] text-slate-400">
-            Sem itens explícitos, a devolução cobre o pedido inteiro. Só pedido faturado ou entregue pode ser devolvido.
-          </p>
-        </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <button className="btn-ghost" onClick={() => setNovaAberta(false)}>
-            Cancelar
-          </button>
-          <button
-            className="btn-accent"
-            onClick={() => void criarDevolucao()}
-            disabled={ocupado || !Number(nova.venda_id) || nova.motivo.trim().length < 5}
-          >
-            Solicitar
-          </button>
-        </div>
-      </PainelInline>
-
       <PainelInline
         open={acaoAberta === 'autorizar'}
         onClose={() => setAcaoAberta(null)}

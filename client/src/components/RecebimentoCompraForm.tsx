@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Box, CheckCircle2, ChevronRight, History, Landmark, Loader2, RefreshCw, TriangleAlert, Warehouse, X } from 'lucide-react';
 import { api } from '../lib/api';
-import { Alert, Badge, PainelInline, Spinner, useToast } from './ui';
+import { Alert, Badge, Spinner, useToast } from './ui';
 import { formatDate, formatMoney, formatNumber } from '../lib/format';
 
 /**
@@ -98,7 +98,14 @@ const parseQtd = (texto: string): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-export default function RecebimentoCompraModal({
+/**
+ * Corpo do recebimento de compra — SEM sobreposição.
+ *
+ * Este componente é renderizado DENTRO da página `/compras/:id/receber`
+ * (`pages/RecebimentoCompraPage.tsx`). Ele não abre painel/modal: a tela é uma
+ * rota própria, como qualquer outro fluxo de módulo do ERP.
+ */
+export default function RecebimentoCompraForm({
   compraId,
   onClose,
   onRecebido,
@@ -245,7 +252,7 @@ export default function RecebimentoCompraModal({
   const podeConfirmar = Boolean(previsao) && errosQtd.length === 0 && linhasValidas.length > 0 && !confirmando;
 
   return (
-    <PainelInline open onClose={onClose} title={`Receber compra #${compraId}`} subtitle="Quantidade recebida, custo efetivo e impacto no estoque antes de confirmar." size="lg">
+    <div className="space-y-4">
       {carregando && <Spinner label="Carregando itens e histórico do pedido..." />}
 
       {!carregando && erro && (
@@ -384,7 +391,7 @@ export default function RecebimentoCompraModal({
           )}
         </div>
       )}
-    </PainelInline>
+    </div>
   );
 }
 

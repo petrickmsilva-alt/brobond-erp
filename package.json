@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "server", "client"],
+  "workspaces": [
+    "packages/*",
+    "server",
+    "client"
+  ],
   "scripts": {
     "dev": "concurrently -k -n SERVER,CLIENT -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "npm --workspace server run dev",
@@ -22,8 +26,22 @@
     "lint": "eslint 'server/src/**/*.ts' 'modules/**/*.ts' 'packages/*/src/**/*.ts' 'client/src/**/*.{ts,tsx}' 'scripts/**/*.ts'",
     "db:validate": "prisma validate",
     "db:generate": "prisma generate",
-    "db:deploy": "prisma migrate deploy"
+    "db:deploy": "prisma migrate deploy",
+    "go-live:audit": "node --import tsx scripts/final-go-live-audit.ts",
+    "test:server": "npm --workspace server test",
+    "test:client": "npm --workspace client test"
   },
-  "prisma": { "schema": "prisma/schema.prisma" },
-  "devDependencies": { "@typescript-eslint/eslint-plugin": "^8.69.0", "@typescript-eslint/parser": "^8.69.0", "concurrently": "^9.1.0", "eslint": "^9.39.5", "eslint-plugin-react": "^7.37.5", "eslint-plugin-react-hooks": "^7.1.1", "prettier": "^3.2.0", "prisma": "6.12.0" }
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.69.0",
+    "@typescript-eslint/parser": "^8.69.0",
+    "concurrently": "^9.1.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "prettier": "^3.2.0",
+    "prisma": "6.12.0"
+  }
 }

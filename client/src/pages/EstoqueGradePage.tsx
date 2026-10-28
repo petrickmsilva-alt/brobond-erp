@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { AlertTriangle, ArrowLeftRight, Boxes, ClipboardCheck, Download, FileUp, History, Loader2, Package, RefreshCw, RotateCcw, Search, Warehouse, Wallet } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
 import { useMeta } from '../lib/meta';
 import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
-import { IMPORT_TIPOS, ImportModal } from '../components/ImportModal';
+import { rotaImportacaoDoRecurso } from '../lib/importacao';
 import { formatMoney, formatNumber } from '../lib/format';
 import { formatDateTime } from '../lib/format';
 
@@ -43,6 +43,7 @@ function num(v: unknown): number {
 }
 
 export default function EstoqueGradePage() {
+  const navigate = useNavigate();
   const toast = useToast();
   const meta = useMeta();
   const [data, setData] = useState<GradeResp | null>(null);
@@ -57,8 +58,7 @@ export default function EstoqueGradePage() {
   const [soAlertas, setSoAlertas] = useState(false);
   const [opts, setOpts] = useState<Record<string, { value: number; label: string }[]>>({});
   const [cel, setCel] = useState<Cel | null>(null);
-  const tipoImport = IMPORT_TIPOS.find((t) => t.recurso === 'estoques');
-  const [importOpen, setImportOpen] = useState(false);
+  const importRota = rotaImportacaoDoRecurso('estoques');
   const [mov, setMov] = useState({ tipo: 'ajuste', quantidade: '1', motivo: 'Ajuste pela grade de estoque' });
   const [movErr, setMovErr] = useState('');
   const [salvando, setSalvando] = useState(false);
@@ -338,8 +338,8 @@ export default function EstoqueGradePage() {
             >
               <Download className="h-4 w-4" /> Exportar
             </button>
-            {tipoImport && (
-              <button className="btn-secondary" onClick={() => setImportOpen(true)} title="Importar saldos iniciais de CSV/XLSX">
+            {importRota && (
+              <button className="btn-secondary" onClick={() => navigate(importRota)} title="Importar saldos iniciais de CSV/XLSX">
                 <FileUp className="h-4 w-4" /> Importar saldos
               </button>
             )}
@@ -547,7 +547,6 @@ export default function EstoqueGradePage() {
         </>
       )}
 
-      {tipoImport && <ImportModal open={importOpen} onClose={() => setImportOpen(false)} tipoConfig={tipoImport} onDone={() => load()} />}
 
       {/* PainelInline de movimentação a partir da célula */}
       <PainelInline open={!!cel} onClose={() => setCel(null)} title="Lançar movimentação" subtitle={cel ? `${cel.produto.sku} — ${cel.produto.nome} · tam. ${cel.tamanho.codigo}` : ''} size="md">

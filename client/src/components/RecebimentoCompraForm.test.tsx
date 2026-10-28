@@ -19,7 +19,7 @@
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import RecebimentoCompraModal from '../components/RecebimentoCompraModal';
+import RecebimentoCompraForm from './RecebimentoCompraForm';
 import { ToastProvider } from './ui';
 import { api } from '../lib/api';
 
@@ -98,7 +98,7 @@ function montarGet(opts: { recebimentos?: any; itens?: any[]; compra?: any } = {
 function abrir() {
   return render(
     <ToastProvider>
-      <RecebimentoCompraModal compraId={12} onClose={vi.fn()} onRecebido={vi.fn()} />
+      <RecebimentoCompraForm compraId={12} onClose={vi.fn()} onRecebido={vi.fn()} />
     </ToastProvider>
   );
 }
@@ -118,7 +118,7 @@ beforeEach(() => {
   apiPost.mockResolvedValue(PREVIA);
 });
 
-describe('RecebimentoCompraModal', () => {
+describe('RecebimentoCompraForm', () => {
   it('mostra PEDIDO / RECEBIDO / AGORA / PENDENTE separados e corretos', async () => {
     abrir();
     await aguardarTabela();

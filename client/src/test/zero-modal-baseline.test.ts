@@ -24,6 +24,15 @@ import { fileURLToPath } from 'node:url';
 const raizRepo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const guardUrl = pathToFileURL(path.join(raizRepo, 'scripts', 'ux-guard.mjs')).href;
 
+/**
+ * A lista canônica de fluxos convertidos (rota → página) mora no próprio guard.
+ * O fixture é um "repo convertido" mínimo: precisa materializar essas páginas e
+ * rotas, senão o guard acusa — corretamente — fluxo sem destino.
+ */
+const { FLUXOS_PAGINA } = (await import(/* @vite-ignore */ guardUrl)) as {
+  FLUXOS_PAGINA: Array<{ id: string; rota: string; pagina: string }>;
+};
+
 type Fixture = {
   arquivos?: Record<string, string>;
   baseline?: any;
@@ -36,9 +45,16 @@ function criarRaiz({ arquivos = {}, baseline }: Fixture) {
     mkdirSync(path.dirname(abs), { recursive: true });
     writeFileSync(abs, conteudo);
   };
-  // Estrutura mínima que o gate sempre confere.
-  escrever('client/src/App.tsx', 'export const rotas = usaCrudGenerico; const novo = `${base}/novo`; const editar = `${base}/:id/editar`;');
+  // Estrutura mínima que o gate sempre confere: CRUD genérico + TODOS os fluxos
+  // convertidos (rota registrada em App.tsx e página existente).
+  const rotasFluxos = FLUXOS_PAGINA.map((f) => `'/${f.rota}'`).join(', ');
+  escrever(
+    'client/src/App.tsx',
+    'export const rotas = usaCrudGenerico; const novo = `${base}/novo`; const editar = `${base}/:id/editar`;' +
+      ` const fluxos = [${rotasFluxos}];`
+  );
   escrever('client/src/pages/RegistroPage.tsx', 'export const P = <RecordForm />;');
+  for (const fluxo of FLUXOS_PAGINA) escrever(fluxo.pagina, 'export const PaginaDoFluxo = () => null;');
   escrever(
     'docs/ERP-3.0-UX-BASELINE.json',
     JSON.stringify(

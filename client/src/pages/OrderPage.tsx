@@ -22,7 +22,6 @@ import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmacaoInline, PageHeader, Spinner, useToast } from '../components/ui';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Thumb } from '../components/ImageField';
-import RecebimentoCompraModal from '../components/RecebimentoCompraModal';
 import { ProductSelector } from '../components/ProductSelector';
 import { searchProducts } from '../lib/productSearch';
 import { formatDate, formatDocumento, formatMoney, formatNumber, parseMoneyInput } from '../lib/format';
@@ -2334,7 +2333,6 @@ function CompraOrderEngine() {
   const [busyItem, setBusyItem] = useState<number | 'new' | null>(null);
   const [toDelete, setToDelete] = useState<Item | null>(null);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
-  const [recebendo, setRecebendo] = useState(false);
 
   const [parceiroOpts, setParceiroOpts] = useState<Option[]>([]);
   const [insumoOpts, setInsumoOpts] = useState<Option[]>([]);
@@ -2482,7 +2480,7 @@ function CompraOrderEngine() {
               <Printer className="h-4 w-4" /> Imprimir PDF
             </button>
             {!fechado && !cancelado && (
-              <button className="btn-primary" onClick={() => setRecebendo(true)}>
+              <button className="btn-primary" onClick={() => navigate(`/compras/${pedidoId}/receber`)}>
                 <Save className="h-4 w-4" /> Receber compra
               </button>
             )}
@@ -2679,10 +2677,6 @@ function CompraOrderEngine() {
       </div>
 
       <ContasAPagarDaCompra compraId={Number(pedidoId)} pedido={pedido} />
-
-      {recebendo && (
-        <RecebimentoCompraModal compraId={Number(pedidoId)} onClose={() => setRecebendo(false)} onRecebido={() => void load()} />
-      )}
 
       <ConfirmacaoInline
         open={!!toDelete}

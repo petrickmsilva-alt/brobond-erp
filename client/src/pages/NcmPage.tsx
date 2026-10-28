@@ -14,11 +14,12 @@
 //   • os números exibidos vêm do servidor: a tela não calcula imposto.
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Calculator, Info, Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { formatDateTime } from '../lib/format';
 import type { ListResult } from '../lib/meta';
-import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
 
 type ImpostoNcm = {
@@ -29,10 +30,6 @@ type ImpostoNcm = {
   atualizado_em?: string | null;
   criado_em?: string | null;
 };
-
-type Formulario = { ncm: string; descricao: string; aliquota_pct: string };
-
-const FORM_VAZIO: Formulario = { ncm: '', descricao: '', aliquota_pct: '' };
 
 function ehPadrao(i: ImpostoNcm): boolean {
   return i.ncm === null || i.ncm === undefined || String(i.ncm) === '';
@@ -51,6 +48,7 @@ function pct(v: unknown): string {
 }
 
 export default function NcmPage() {
+  const navigate = useNavigate();
   const toast = useToast();
   const { user } = useAuth();
   const podeEscrever = user?.perfil === 'admin' || user?.perfil === 'gerente';
@@ -61,9 +59,6 @@ export default function NcmPage() {
   const [busca, setBusca] = useState('');
   const [ocupado, setOcupado] = useState(false);
 
-  const [editando, setEditando] = useState<ImpostoNcm | 'novo' | null>(null);
-  const [form, setForm] = useState<Formulario>(FORM_VAZIO);
-  const [erroForm, setErroForm] = useState<Record<string, string>>({});
   const [excluindo, setExcluindo] = useState<ImpostoNcm | null>(null);
 
   const carregar = useCallback(async () => {
@@ -89,60 +84,11 @@ export default function NcmPage() {
     return linhas.filter((i) => `${i.ncm ?? ''} ${i.descricao ?? ''}`.toLowerCase().includes(q));
   }, [linhas, busca]);
 
-  const abrirNova = () => {
-    setForm(FORM_VAZIO);
-    setErroForm({});
-    setEditando('novo');
-  };
-
-  const abrirEdicao = (i: ImpostoNcm) => {
-    setForm({
-      ncm: ehPadrao(i) ? '' : String(i.ncm),
-      descricao: i.descricao ?? '',
-      aliquota_pct: i.aliquota_pct === null || i.aliquota_pct === undefined ? '' : String(i.aliquota_pct),
-    });
-    setErroForm({});
-    setEditando(i);
-  };
-
-  const salvar = async () => {
-    const campos: Record<string, string> = {};
-    const ncm = form.ncm.replace(/\D/g, '');
-    if (form.ncm.trim() !== '' && !/^\d{2,8}$/.test(ncm)) {
-      campos.ncm = 'Use apenas dígitos (2 a 8) ou deixe vazio para a alíquota padrão.';
-    }
-    const aliquota = Number(String(form.aliquota_pct).replace(',', '.'));
-    if (!Number.isFinite(aliquota) || aliquota < 0 || aliquota > 100) {
-      campos.aliquota_pct = 'Informe uma alíquota entre 0 e 100.';
-    }
-    if (Object.keys(campos).length) {
-      setErroForm(campos);
-      return;
-    }
-
-    setOcupado(true);
-    try {
-      const corpo = {
-        ncm,
-        descricao: form.descricao.trim() || null,
-        aliquota_pct: aliquota,
-      };
-      if (editando && editando !== 'novo') await api.put(`/impostos_ncm/${editando.id}`, corpo);
-      else await api.post('/impostos_ncm', corpo);
-      toast.success(editando === 'novo' ? 'Alíquota cadastrada.' : 'Alíquota atualizada.');
-      setEditando(null);
-      await carregar();
-    } catch (e) {
-      if (e instanceof ApiError) {
-        setErroForm(e.fields ?? {});
-        toast.error(e.message);
-      } else {
-        toast.error('Não foi possível salvar.');
-      }
-    } finally {
-      setOcupado(false);
-    }
-  };
+  // ZERO MODAL: a criação e a edição de alíquota são PÁGINAS próprias
+  // (`/ncm/novo` e `/ncm/:id/editar`). A listagem nunca abre formulário
+  // sobreposto — ela navega.
+  const abrirNova = () => navigate('/ncm/novo');
+  const abrirEdicao = (i: ImpostoNcm) => navigate(`/ncm/${i.id}/editar`);
 
   const excluir = async () => {
     if (!excluindo) return;
@@ -269,63 +215,6 @@ export default function NcmPage() {
           </table>
         )}
       </div>
-
-      {editando && (
-        <PainelInline
-          open
-          onClose={() => setEditando(null)}
-          title={editando === 'novo' ? 'Nova alíquota por NCM' : `Editar chave ${chaveDe(editando)}`}
-        >
-          <div className="space-y-3">
-            <label className="label">
-              NCM (chave)
-              <input
-                className={`input font-mono ${erroForm.ncm ? 'input-error' : ''}`}
-                placeholder="61091000, 6109, 61... (vazio = padrão)"
-                maxLength={8}
-                value={form.ncm}
-                onChange={(e) => setForm((f) => ({ ...f, ncm: e.target.value }))}
-              />
-            </label>
-            {erroForm.ncm && <p className="text-xs text-red-600">{erroForm.ncm}</p>}
-            <p className="text-xs text-slate-400">
-              Somente dígitos (2 a 8). Vazio = alíquota padrão para os NCMs sem chave cadastrada.
-            </p>
-
-            <label className="label">
-              Descrição
-              <input
-                className="input"
-                placeholder="Camisetas de malha de algodão — carga tributária"
-                maxLength={120}
-                value={form.descricao}
-                onChange={(e) => setForm((f) => ({ ...f, descricao: e.target.value }))}
-              />
-            </label>
-
-            <label className="label">
-              Alíquota (%)
-              <input
-                className={`input ${erroForm.aliquota_pct ? 'input-error' : ''}`}
-                inputMode="decimal"
-                placeholder="12"
-                value={form.aliquota_pct}
-                onChange={(e) => setForm((f) => ({ ...f, aliquota_pct: e.target.value }))}
-              />
-            </label>
-            {erroForm.aliquota_pct && <p className="text-xs text-red-600">{erroForm.aliquota_pct}</p>}
-
-            <div className="flex justify-end gap-2 pt-1">
-              <button className="btn-ghost" onClick={() => setEditando(null)} disabled={ocupado}>
-                Cancelar
-              </button>
-              <button className="btn-accent" onClick={() => void salvar()} disabled={ocupado}>
-                {ocupado ? 'Salvando...' : 'Salvar'}
-              </button>
-            </div>
-          </div>
-        </PainelInline>
-      )}
 
       <ConfirmacaoInline
         open={!!excluindo}

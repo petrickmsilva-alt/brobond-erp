@@ -7,7 +7,8 @@
 //   • Criar/alterar/excluir exigem reautenticação (step-up)
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2, Copy, FlaskConical, History, Loader2, Plus, Power, RefreshCw, RotateCcw, Trash2, Webhook as WebhookIcon, XCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { CheckCircle2, FlaskConical, History, Loader2, Plus, Power, RefreshCw, RotateCcw, Trash2, Webhook as WebhookIcon, XCircle } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatRelative } from '../lib/format';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
@@ -42,23 +43,16 @@ type Entrega = {
   payload: Record<string, any> | null;
 };
 
-type FormWebhook = { id?: number; nome: string; url: string; eventos: string[]; ativo: boolean; regenerar?: boolean };
-
-const FORM_VAZIO: FormWebhook = { nome: '', url: '', eventos: [], ativo: true };
-
 export default function WebhooksPage() {
+  const navigate = useNavigate();
   const toast = useToast();
   const [webhooks, setWebhooks] = useState<Webhook[]>([]);
   const [eventos, setEventos] = useState<EventoInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [form, setForm] = useState<FormWebhook | null>(null);
-  const [formErro, setFormErro] = useState('');
-  const [salvando, setSalvando] = useState(false);
-  const [segredoNovo, setSegredoNovo] = useState<{ nome: string; segredo: string } | null>(null);
   const [toDelete, setToDelete] = useState<Webhook | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [reauth, setReauth] = useState<{ acao: 'salvar' | 'excluir' | 'alternar'; titulo: string } | null>(null);
+  const [reauth, setReauth] = useState<{ acao: 'excluir' | 'alternar'; titulo: string } | null>(null);
   const [testBusy, setTestBusy] = useState<number | null>(null);
   const [toggleBusy, setToggleBusy] = useState<number | null>(null);
   const [logDe, setLogDe] = useState<Webhook | null>(null);
@@ -85,44 +79,6 @@ export default function WebhooksPage() {
     return eventos.find((e) => e.id === id)?.label || id;
   }
 
-  function toggleEvento(id: string) {
-    setForm((f) => (f ? { ...f, eventos: f.eventos.includes(id) ? f.eventos.filter((e) => e !== id) : [...f.eventos, id] } : f));
-  }
-
-  /** Salva o formulário (chamado direto e após a reautenticação confirmar). */
-  async function salvarAtual() {
-    if (!form) return;
-    setFormErro('');
-    setSalvando(true);
-    try {
-      if (form.id) {
-        const d = await api.put<{ segredo?: string }>(`/webhooks/${form.id}`, {
-          nome: form.nome.trim(),
-          url: form.url.trim(),
-          eventos: form.eventos,
-          ativo: form.ativo,
-          ...(form.regenerar ? { regenerar_segredo: true } : {}),
-        });
-        setForm(null);
-        if (d.segredo) setSegredoNovo({ nome: form.nome.trim(), segredo: d.segredo });
-        else toast.success('Webhook salvo.');
-      } else {
-        const d = await api.post<{ segredo: string }>('/webhooks', { nome: form.nome.trim(), url: form.url.trim(), eventos: form.eventos, ativo: form.ativo });
-        setForm(null);
-        setSegredoNovo({ nome: form.nome.trim(), segredo: d.segredo });
-      }
-      await carregar();
-    } catch (e: any) {
-      if (e instanceof ApiError && e.code === 'reauth_necessaria') {
-        setReauth({ acao: 'salvar', titulo: form.id ? `Autorizar alteração — ${form.nome}` : 'Autorizar novo webhook' });
-        return;
-      }
-      setFormErro(e instanceof ApiError ? e.message : 'Não foi possível salvar.');
-    } finally {
-      setSalvando(false);
-    }
-  }
-
   async function alternarAtivo(w: Webhook) {
     setToggleBusy(w.id);
     try {
@@ -141,6 +97,11 @@ export default function WebhooksPage() {
       setToggleBusy(null);
     }
   }
+
+  // ZERO MODAL: criar/editar é PÁGINA própria (/webhooks/novo e
+  // /webhooks/:id/editar). O segredo de uso único é exibido lá, não aqui.
+  const abrirNovo = () => navigate('/webhooks/novo');
+  const abrirEdicao = (w: Webhook) => navigate(`/webhooks/${w.id}/editar`);
 
   async function excluirAtual() {
     if (!toDelete || reauth?.acao === 'alternar') return;
@@ -193,7 +154,7 @@ export default function WebhooksPage() {
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">Atualizar</span>
             </button>
-            <button className="btn-accent" onClick={() => { setForm({ ...FORM_VAZIO }); setFormErro(''); }}>
+            <button className="btn-accent" onClick={abrirNovo}>
               <Plus className="h-4 w-4" /> Novo webhook
             </button>
           </>
@@ -213,7 +174,7 @@ export default function WebhooksPage() {
             title="Nenhum webhook cadastrado"
             description="Cadastre a URL do sistema que deve ser avisado (ex.: SIEM da matriz) e escolha os eventos."
             action={
-              <button className="btn-accent" onClick={() => { setForm({ ...FORM_VAZIO }); setFormErro(''); }}>
+              <button className="btn-accent" onClick={abrirNovo}>
                 <Plus className="h-4 w-4" /> Novo webhook
               </button>
             }
@@ -284,7 +245,7 @@ export default function WebhooksPage() {
                     </button>
                     <button
                       className="btn-secondary !px-2.5 !py-1.5 text-xs"
-                      onClick={() => { setForm({ id: w.id, nome: w.nome, url: w.url, eventos: [...w.eventos], ativo: w.ativo }); setFormErro(''); }}
+                      onClick={() => abrirEdicao(w)}
                     >
                       Editar
                     </button>
@@ -306,92 +267,6 @@ export default function WebhooksPage() {
       <p className="mt-3 text-xs text-slate-400">
         Segurança: cada POST leva <span className="font-mono">X-Brobond-Signature: sha256=HMAC(segredo, corpo)</span> — o receptor valida a origem. O log guarda as 200 entregas mais recentes por webhook.
       </p>
-
-      {/* Cadastro / edição */}
-      <PainelInline
-        open={!!form}
-        onClose={() => !salvando && setForm(null)}
-        title={form?.id ? `Editar ${form.nome}` : 'Novo webhook'}
-        subtitle="Criar, alterar e excluir exigem a sua senha (reautenticação)."
-        size="md"
-        footer={
-          <>
-            <button className="btn-secondary" onClick={() => setForm(null)} disabled={salvando}>
-              Cancelar
-            </button>
-            <button className="btn-primary" onClick={salvarAtual} disabled={salvando || !form?.nome.trim() || !form?.url.trim() || !form?.eventos.length}>
-              {salvando && <Loader2 className="h-4 w-4 animate-spin" />} Salvar webhook
-            </button>
-          </>
-        }
-      >
-        {form && (
-          <div className="space-y-3">
-            {formErro && <Alert tone="red">{formErro}</Alert>}
-            <label className="block">
-              <span className="label">Nome *</span>
-              <input className="input" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} placeholder="Ex.: SIEM da matriz" maxLength={80} autoFocus />
-            </label>
-            <label className="block">
-              <span className="label">URL do receptor (POST JSON) *</span>
-              <input className="input font-mono text-sm" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://..." inputMode="url" />
-            </label>
-            <div>
-              <span className="label">Eventos *</span>
-              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                {eventos.map((e) => (
-                  <label key={e.id} className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm hover:border-brand-300">
-                    <input type="checkbox" className="h-4 w-4 rounded border-slate-300" checked={form.eventos.includes(e.id)} onChange={() => toggleEvento(e.id)} />
-                    <span>
-                      {e.label}
-                      <span className="block font-mono text-[11px] text-slate-400">{e.id}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-4">
-              <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
-                <input type="checkbox" className="h-4 w-4 rounded border-slate-300" checked={form.ativo} onChange={(e) => setForm({ ...form, ativo: e.target.checked })} />
-                Ativo (entregando)
-              </label>
-              {!!form.id && (
-                <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700" title="Troca o segredo HMAC. O receptor precisa atualizar a chave.">
-                  <input type="checkbox" className="h-4 w-4 rounded border-slate-300" checked={!!form.regenerar} onChange={(e) => setForm({ ...form, regenerar: e.target.checked })} />
-                  Regenerar o segredo
-                </label>
-              )}
-            </div>
-          </div>
-        )}
-      </PainelInline>
-
-      {/* Segredo: exibição única */}
-      <PainelInline open={!!segredoNovo} onClose={() => setSegredoNovo(null)} title="Segredo do webhook" subtitle={segredoNovo?.nome || ''} size="md">
-        <div className="space-y-4">
-          <Alert tone="amber">
-            <strong>Guarde agora:</strong> este segredo aparece <strong>uma única vez</strong>. O receptor usa ele para validar o header{' '}
-            <span className="font-mono">X-Brobond-Signature</span>. Se perder, regenere na edição (o antigo morre na hora).
-          </Alert>
-          <div className="flex gap-2">
-            <input className="input flex-1 font-mono text-sm" readOnly value={segredoNovo?.segredo || ''} onFocus={(e) => e.currentTarget.select()} />
-            <button
-              className="btn-secondary"
-              onClick={async () => {
-                await navigator.clipboard.writeText(segredoNovo?.segredo || '');
-                toast.success('Segredo copiado.');
-              }}
-            >
-              <Copy className="h-4 w-4" /> Copiar
-            </button>
-          </div>
-          <div className="flex justify-end">
-            <button className="btn-primary" onClick={() => setSegredoNovo(null)}>
-              Guardei — fechar
-            </button>
-          </div>
-        </div>
-      </PainelInline>
 
       {/* Exclusão */}
       <ConfirmacaoInline
@@ -423,8 +298,7 @@ export default function WebhooksPage() {
         onConfirmed={() => {
           const r = reauth;
           setReauth(null);
-          if (r?.acao === 'salvar') void salvarAtual();
-          else if (r?.acao === 'excluir') void excluirAtual();
+          if (r?.acao === 'excluir') void excluirAtual();
           else if (r?.acao === 'alternar' && toDelete) {
             const alvo = toDelete;
             setToDelete(null);

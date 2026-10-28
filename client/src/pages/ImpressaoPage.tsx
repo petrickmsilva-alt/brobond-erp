@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
@@ -24,10 +25,7 @@ import { api } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import {
   abrirContingenciaImpressao,
-  atualizarAgenteImpressao,
-  atualizarTerminalImpressao,
   cancelarImpressao,
-  criarTerminalImpressao,
   detalheJobImpressao,
   detectarAgenteLocal,
   executarManutencaoImpressao,
@@ -85,27 +83,8 @@ function fmtDataHora(iso?: string | null): string {
   return d.toLocaleString('pt-BR');
 }
 
-const TERMINAL_VAZIO: Partial<TerminalConfigCliente> = {
-  codigo: '',
-  nome: '',
-  agent_id: null,
-  default_printer: '',
-  receipt_printer: '',
-  receipt_protocol: 'escpos',
-  receipt_width_cols: 48,
-  label_printer: '',
-  label_protocol: 'zpl',
-  document_printer: '',
-  document_protocol: 'pdf',
-  fallback_mode: 'browser_pdf',
-  auto_print_pdv: true,
-  allow_operator_reprint: true,
-  copies_recibo: 1,
-  copies_documento: 1,
-  ativo: true,
-};
-
 export default function ImpressaoPage() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const toast = useToast();
   const toastRef = useRef(toast);
@@ -141,13 +120,10 @@ export default function ImpressaoPage() {
   // Terminais & Impressoras
   const [terminais, setTerminais] = useState<TerminalConfigCliente[]>([]);
   const [impressorasDetectadas, setImpressorasDetectadas] = useState<string[]>([]);
-  const [modalTerminal, setModalTerminal] = useState<Partial<TerminalConfigCliente> | null>(null);
 
   // Agentes
   const [agentes, setAgentes] = useState<AgenteRemotoCliente[]>([]);
-  const [modalPareamento, setModalPareamento] = useState<{ nome: string; terminal: string; codigo?: string; expiresAt?: string } | null>(null);
   const [segredoUnico, setSegredoUnico] = useState<{ titulo: string; valor: string } | null>(null);
-  const [agenteEditando, setAgenteEditando] = useState<AgenteRemotoCliente | null>(null);
 
   // Auditoria
   const [auditoriaRows, setAuditoriaRows] = useState<Record<string, any>[]>([]);
@@ -263,30 +239,6 @@ export default function ImpressaoPage() {
       carregarResumoELocal();
     } catch (e: any) {
       toast.error(e?.message || 'Falha na reimpressão.');
-    }
-  }
-
-  async function handleSalvarTerminal() {
-    if (!modalTerminal) return;
-    try {
-      const payload = {
-        ...modalTerminal,
-        default_printer: modalTerminal.default_printer || null,
-        receipt_printer: modalTerminal.receipt_printer || null,
-        label_printer: modalTerminal.label_printer || null,
-        document_printer: modalTerminal.document_printer || null,
-      };
-      if (modalTerminal.id) {
-        await atualizarTerminalImpressao(modalTerminal.id, payload);
-        toast.success(`Terminal ${modalTerminal.codigo} atualizado.`);
-      } else {
-        await criarTerminalImpressao(payload);
-        toast.success('Terminal cadastrado com sucesso.');
-      }
-      setModalTerminal(null);
-      carregarResumoELocal();
-    } catch (e: any) {
-      toast.error(e?.message || 'Falha ao salvar terminal.');
     }
   }
 
@@ -762,7 +714,7 @@ export default function ImpressaoPage() {
               Configure múltiplas impressoras por terminal (recibo térmico ESC/POS, etiqueta ZPL/EPL2, documentos A4/PDF e contingência).
             </p>
             {isGestor && (
-              <button type="button" className="btn-primary text-xs" onClick={() => setModalTerminal({ ...TERMINAL_VAZIO })}>
+              <button type="button" className="btn-primary text-xs" onClick={() => navigate('/config/impressao/terminais/novo')}>
                 <Plus className="h-4 w-4" />
                 Novo terminal
               </button>
@@ -801,7 +753,7 @@ export default function ImpressaoPage() {
                     </div>
                     {isGestor && (
                       <div className="flex gap-1">
-                        <button type="button" className="btn-secondary !px-2.5 !py-1 text-xs" onClick={() => setModalTerminal({ ...t })}>
+                        <button type="button" className="btn-secondary !px-2.5 !py-1 text-xs" onClick={() => navigate(`/config/impressao/terminais/${t.id}/editar`)}>
                           Editar
                         </button>
                         <button
@@ -921,7 +873,7 @@ export default function ImpressaoPage() {
               <button
                 type="button"
                 className="btn-secondary text-xs"
-                onClick={() => setModalPareamento({ nome: '', terminal: meuTerminal || '' })}
+                onClick={() => navigate('/config/impressao/agentes/novo')}
               >
                 <Plus className="h-4 w-4" />
                 Gerar código de pareamento
@@ -980,7 +932,7 @@ export default function ImpressaoPage() {
                           <button
                             type="button"
                             className="btn-secondary !px-2 !py-1 text-[11px]"
-                            onClick={() => setAgenteEditando({ ...a })}
+                            onClick={() => navigate(`/config/impressao/agentes/${encodeURIComponent(a.machine_id)}/editar`)}
                           >
                             Editar
                           </button>
@@ -1182,336 +1134,6 @@ export default function ImpressaoPage() {
               <button type="button" className="btn-primary" onClick={handleConfirmarReprint}>
                 <RefreshCw className="h-4 w-4" />
                 Confirmar reimpressão
-              </button>
-            </div>
-          </div>
-        )}
-      </PainelInline>
-
-      {/* PainelInline Criar/Editar Terminal */}
-      <PainelInline
-        open={Boolean(modalTerminal)}
-        onClose={() => setModalTerminal(null)}
-        title={modalTerminal?.id ? `Editar Terminal ${modalTerminal.codigo}` : 'Novo Terminal de Impressão'}
-        subtitle="Vincule impressoras térmicas e de documentos a este posto de trabalho"
-        size="lg"
-      >
-        {modalTerminal && (
-          <div className="space-y-4 text-xs">
-            <datalist id="impressoras-detectadas-list">
-              {todasImpressorasSugeridas.map((p) => (
-                <option key={p} value={p} />
-              ))}
-            </datalist>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div>
-                <label className="label">Código (ex.: CAIXA-1)</label>
-                <input
-                  type="text"
-                  className="input font-mono uppercase"
-                  value={modalTerminal.codigo || ''}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, codigo: e.target.value.toUpperCase() })}
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="label">Nome amigável</label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="Caixa Balcão Principal"
-                  value={modalTerminal.nome || ''}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, nome: e.target.value })}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label className="label">Agente vinculado (opcional)</label>
-                <select
-                  className="input"
-                  value={modalTerminal.agent_id ?? ''}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, agent_id: e.target.value ? Number(e.target.value) : null })}
-                >
-                  <option value="">Qualquer agente deste terminal</option>
-                  {agentes.filter((a) => a.status === 'ativo').map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.nome} ({a.machine_id.slice(0, 8)})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="label">Impressora padrão</label>
-                <input
-                  list="impressoras-detectadas-list"
-                  type="text"
-                  className="input"
-                  placeholder="Nome no spooler ou tcp://192.168.1.50:9100"
-                  value={modalTerminal.default_printer || ''}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, default_printer: e.target.value })}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div>
-                <label className="label">Impressora de Recibo (PDV)</label>
-                <input
-                  list="impressoras-detectadas-list"
-                  type="text"
-                  className="input"
-                  placeholder="Ex.: Elgin_i9"
-                  value={modalTerminal.receipt_printer || ''}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, receipt_printer: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="label">Protocolo Recibo</label>
-                <select
-                  className="input"
-                  value={modalTerminal.receipt_protocol || 'escpos'}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, receipt_protocol: e.target.value })}
-                >
-                  <option value="escpos">ESC/POS (Térmica)</option>
-                  <option value="text">Texto Puro</option>
-                </select>
-              </div>
-              <div>
-                <label className="label">Largura Bobina</label>
-                <select
-                  className="input"
-                  value={modalTerminal.receipt_width_cols || 48}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, receipt_width_cols: Number(e.target.value) })}
-                >
-                  <option value={48}>80 mm (48 colunas)</option>
-                  <option value={42}>72 mm (42 colunas)</option>
-                  <option value={32}>58 mm (32 colunas)</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label className="label">Impressora de Etiquetas</label>
-                <input
-                  list="impressoras-detectadas-list"
-                  type="text"
-                  className="input"
-                  placeholder="Ex.: Zebra_ZD220"
-                  value={modalTerminal.label_printer || ''}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, label_printer: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="label">Protocolo Etiquetas</label>
-                <select
-                  className="input"
-                  value={modalTerminal.label_protocol || 'zpl'}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, label_protocol: e.target.value })}
-                >
-                  <option value="zpl">ZPL II (Zebra / Compatível)</option>
-                  <option value="epl2">EPL2 (Elgin L42 / TLP2844)</option>
-                  <option value="a4">Folha A4 / Pimaco (Navegador)</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div>
-                <label className="label">Impressora Documentos</label>
-                <input
-                  list="impressoras-detectadas-list"
-                  type="text"
-                  className="input"
-                  value={modalTerminal.document_printer || ''}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, document_printer: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="label">Protocolo Documentos</label>
-                <select
-                  className="input"
-                  value={modalTerminal.document_protocol || 'pdf'}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, document_protocol: e.target.value })}
-                >
-                  <option value="pdf">PDF / Contingência</option>
-                  <option value="escpos">ESC/POS</option>
-                  <option value="text">Texto Puro</option>
-                </select>
-              </div>
-              <div>
-                <label className="label">Contingência (Fallback)</label>
-                <select
-                  className="input"
-                  value={modalTerminal.fallback_mode || 'browser_pdf'}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, fallback_mode: e.target.value })}
-                >
-                  <option value="browser_pdf">PDF no navegador</option>
-                  <option value="browser_html">HTML no navegador</option>
-                  <option value="queue_only">Somente fila</option>
-                  <option value="none">Desativado</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-6 pt-1">
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={modalTerminal.auto_print_pdv !== false}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, auto_print_pdv: e.target.checked })}
-                />
-                Enfileirar cupom automaticamente após venda no PDV
-              </label>
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={modalTerminal.allow_operator_reprint !== false}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, allow_operator_reprint: e.target.checked })}
-                />
-                Permitir reimpressão por perfil Operador
-              </label>
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={modalTerminal.ativo !== false}
-                  onChange={(e) => setModalTerminal({ ...modalTerminal, ativo: e.target.checked })}
-                />
-                Terminal ativo
-              </label>
-            </div>
-
-            <div className="flex justify-end gap-2 border-t border-slate-200 pt-3 dark:border-navy-800">
-              <button type="button" className="btn-secondary" onClick={() => setModalTerminal(null)}>
-                Cancelar
-              </button>
-              <button type="button" className="btn-primary" onClick={handleSalvarTerminal}>
-                Salvar terminal
-              </button>
-            </div>
-          </div>
-        )}
-      </PainelInline>
-
-      {/* PainelInline Gerar Código de Pareamento */}
-      <PainelInline
-        open={Boolean(modalPareamento)}
-        onClose={() => setModalPareamento(null)}
-        title="Parear Novo Agente Local"
-        subtitle="Código temporário de uso único (expira em 10 minutos)"
-      >
-        {modalPareamento && (
-          <div className="space-y-4">
-            {!modalPareamento.codigo ? (
-              <>
-                <div>
-                  <label className="label">Nome sugerido da máquina</label>
-                  <input
-                    type="text"
-                    className="input"
-                    placeholder="Ex.: PC Caixa 01"
-                    value={modalPareamento.nome}
-                    onChange={(e) => setModalPareamento({ ...modalPareamento, nome: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label className="label">Terminal (opcional)</label>
-                  <input
-                    type="text"
-                    className="input font-mono uppercase"
-                    placeholder="Ex.: CAIXA-1"
-                    value={modalPareamento.terminal}
-                    onChange={(e) => setModalPareamento({ ...modalPareamento, terminal: e.target.value.toUpperCase() })}
-                  />
-                </div>
-                <div className="flex justify-end gap-2">
-                  <button type="button" className="btn-secondary" onClick={() => setModalPareamento(null)}>
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    onClick={async () => {
-                      try {
-                        const out = await gerarCodigoPareamentoAgente({
-                          nome: modalPareamento.nome || undefined,
-                          terminal: modalPareamento.terminal || undefined,
-                        });
-                        setModalPareamento({ ...modalPareamento, codigo: out.codigo, expiresAt: out.expires_at });
-                      } catch (e: any) {
-                        toast.error(e?.message || 'Erro ao gerar código.');
-                      }
-                    }}
-                  >
-                    Gerar código
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="space-y-3 text-center">
-                <div className="rounded-xl border-2 border-dashed border-brand-400 bg-brand-50/40 p-4 font-mono text-2xl font-bold tracking-widest text-navy-900 dark:bg-navy-800 dark:text-white">
-                  {modalPareamento.codigo}
-                </div>
-                <p className="text-xs text-slate-600 dark:text-navy-300">
-                  Execute na máquina local: <code className="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-navy-800">brobond-print-agent --pair {modalPareamento.codigo}</code>
-                </p>
-                <p className="text-[11px] text-amber-700">Válido até {fmtDataHora(modalPareamento.expiresAt)} (exibido apenas uma vez).</p>
-              </div>
-            )}
-          </div>
-        )}
-      </PainelInline>
-
-      {/* PainelInline Editar Agente */}
-      <PainelInline
-        open={Boolean(agenteEditando)}
-        onClose={() => setAgenteEditando(null)}
-        title="Configurar Agente"
-      >
-        {agenteEditando && (
-          <div className="space-y-4">
-            <div>
-              <label className="label">Nome do agente</label>
-              <input
-                type="text"
-                className="input"
-                value={agenteEditando.nome}
-                onChange={(e) => setAgenteEditando({ ...agenteEditando, nome: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="label">Terminal vinculado (vazio = atende fila geral da empresa)</label>
-              <input
-                type="text"
-                className="input font-mono uppercase"
-                value={agenteEditando.terminal || ''}
-                onChange={(e) => setAgenteEditando({ ...agenteEditando, terminal: e.target.value.toUpperCase() || null })}
-              />
-            </div>
-            <div className="flex justify-end gap-2">
-              <button type="button" className="btn-secondary" onClick={() => setAgenteEditando(null)}>
-                Cancelar
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={async () => {
-                  try {
-                    await atualizarAgenteImpressao(agenteEditando.machine_id, {
-                      nome: agenteEditando.nome,
-                      terminal: agenteEditando.terminal || null,
-                    });
-                    toast.success('Agente atualizado.');
-                    setAgenteEditando(null);
-                    carregarAgentes();
-                  } catch (e: any) {
-                    toast.error(e?.message || 'Erro ao atualizar agente.');
-                  }
-                }}
-              >
-                Salvar
               </button>
             </div>
           </div>

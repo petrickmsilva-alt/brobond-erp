@@ -15,6 +15,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import EmpresasPage from './EmpresasPage';
 import { ToastProvider } from '../components/ui';
 import { api } from '../lib/api';
@@ -72,11 +73,19 @@ function responder(routes: Record<string, unknown> = {}) {
   });
 }
 
-function montar() {
+// ZERO MODAL: lista → PÁGINA. O teste registra as rotas de destino para provar
+// que "Nova empresa"/"Editar" NAVEGAM (não abrem painel sobreposto).
+function montar(rota = '/empresas') {
   return render(
-    <ToastProvider>
-      <EmpresasPage />
-    </ToastProvider>
+    <MemoryRouter initialEntries={[rota]}>
+      <ToastProvider>
+        <Routes>
+          <Route path="/empresas" element={<EmpresasPage />} />
+          <Route path="/empresas/novo" element={<div>PÁGINA NOVA EMPRESA</div>} />
+          <Route path="/empresas/:id/editar" element={<div>PÁGINA EDITAR EMPRESA</div>} />
+        </Routes>
+      </ToastProvider>
+    </MemoryRouter>
   );
 }
 
@@ -112,36 +121,25 @@ describe('EmpresasPage', () => {
     expect(excluir[1]).not.toBeDisabled();
   });
 
-  it('cria empresa pelo servidor', async () => {
-    apiPost.mockResolvedValue({ id: 9 } as any);
+  it('"Nova empresa" NAVEGA para /empresas/novo (página própria)', async () => {
     montar();
     await waitFor(() => expect(screen.getByText('FILIAL SUL')).toBeTruthy());
-
     await userEvent.click(screen.getByRole('button', { name: /Nova empresa/i }));
-    await userEvent.type(screen.getByLabelText(/Nome \*/i), 'FILIAL NORTE');
-    await userEvent.type(screen.getByLabelText('CNPJ'), '11222333000181');
-    await userEvent.click(screen.getByRole('button', { name: /^Salvar$/i }));
-
-    await waitFor(() =>
-      expect(apiPost).toHaveBeenCalledWith('/empresas', expect.objectContaining({ nome: 'FILIAL NORTE', cnpj: '11222333000181' }))
-    );
+    expect(await screen.findByText('PÁGINA NOVA EMPRESA')).toBeTruthy();
+    expect(apiPost).not.toHaveBeenCalled();
   });
 
-  it('edita empresa (PUT) e alterna a situação', async () => {
+  it('"Editar" NAVEGA para /empresas/:id/editar e a lista alterna a situação pelo servidor', async () => {
     apiPut.mockResolvedValue({} as any);
     montar();
     await waitFor(() => expect(screen.getByText('FILIAL SUL')).toBeTruthy());
 
-    await userEvent.click(screen.getAllByTitle('Editar')[1]);
-    const campoNome = screen.getByLabelText(/Nome \*/i);
-    await userEvent.clear(campoNome);
-    await userEvent.type(campoNome, 'FILIAL SUL II');
-    await userEvent.click(screen.getByRole('button', { name: /^Salvar$/i }));
-
-    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/empresas/7', expect.objectContaining({ nome: 'FILIAL SUL II' })));
-
+    // A REATIVAÇÃO continua na lista (é ação de linha, não formulário).
     await userEvent.click(screen.getAllByTitle('Reativar')[0]);
     await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/empresas/7', { ativo: true }));
+
+    await userEvent.click(screen.getAllByTitle('Editar')[1]);
+    expect(await screen.findByText('PÁGINA EDITAR EMPRESA')).toBeTruthy();
   });
 
   it('excluir: a RECUSA do servidor aparece como veio (guarda de empresa com dados)', async () => {

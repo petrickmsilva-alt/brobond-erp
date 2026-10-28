@@ -2354,7 +2354,7 @@ function MenuAcoes({ itens, aberto, onAbrir, onFechar }: { itens: MenuItem[]; ab
 // ----------------------------------------------------------------------------
 // Cadastro / edição de usuário
 // ----------------------------------------------------------------------------
-function UsuarioFormModal({ editing, onClose, onSaved }: { editing: Usuario | null; onClose: () => void; onSaved: (created?: Record<string, any>) => void }) {
+function UsuarioForm({ editing, onClose, onSaved }: { editing: Usuario | null; onClose: () => void; onSaved: (created?: Record<string, any>) => void }) {
   const [nome, setNome] = useState(editing?.nome || '');
   const [email, setEmail] = useState(editing?.email || '');
   const [perfil, setPerfil] = useState(editing?.perfil || 'operador');
@@ -3255,7 +3255,7 @@ export function UsuarioRegistroPage({ modo }: { modo: 'novo' | 'editar' }) {
 
       {!carregando && !erro && (
         <div className="mt-4">
-          <UsuarioFormModal
+          <UsuarioForm
             editing={modo === 'editar' ? registro : null}
             onClose={() => navigate('/usuarios')}
             onSaved={(created) => {

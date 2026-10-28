@@ -19,6 +19,7 @@
 // mensagem do servidor é o que aparece.
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Building2, KeyRound, Pencil, Plus, Power, Trash2, Users } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { maskDocument } from '../lib/format';
@@ -39,43 +40,13 @@ type Empresa = {
 type Usuario = { id: number; nome: string; email: string; perfil: string; ativo?: boolean | null };
 type Acesso = { id: number; nome?: string | null };
 
-const CAMPOS: Array<{ nome: keyof Empresa | 'razao_social' | 'nome_fantasia' | 'cnpj' | 'telefone' | 'email'; rotulo: string; tipo?: string; obrigatorio?: boolean }> = [
-  { nome: 'nome', rotulo: 'Nome', obrigatorio: true },
-  { nome: 'razao_social', rotulo: 'Razão social' },
-  { nome: 'nome_fantasia', rotulo: 'Nome fantasia' },
-  { nome: 'cnpj', rotulo: 'CNPJ' },
-  { nome: 'telefone', rotulo: 'Telefone' },
-  { nome: 'email', rotulo: 'E-mail', tipo: 'email' },
-];
-
-type Formulario = { nome: string; razao_social: string; nome_fantasia: string; cnpj: string; telefone: string; email: string; ativo: boolean };
-
-const VAZIO: Formulario = { nome: '', razao_social: '', nome_fantasia: '', cnpj: '', telefone: '', email: '', ativo: true };
-
-function paraFormulario(e: Empresa): Formulario {
-  return {
-    nome: String(e.nome || ''),
-    razao_social: String(e.razao_social || ''),
-    nome_fantasia: String(e.nome_fantasia || ''),
-    cnpj: String(e.cnpj || ''),
-    telefone: String(e.telefone || ''),
-    email: String(e.email || ''),
-    ativo: e.ativo !== false,
-  };
-}
-
 export default function EmpresasPage() {
+  const navigate = useNavigate();
   const toast = useToast();
 
   const [carregando, setCarregando] = useState(true);
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [erro, setErro] = useState('');
-
-  const [editando, setEditando] = useState<Empresa | null>(null);
-  const [criando, setCriando] = useState(false);
-  const [form, setForm] = useState<Formulario>(VAZIO);
-  const [salvando, setSalvando] = useState(false);
-  const [erroForm, setErroForm] = useState('');
 
   const [excluindo, setExcluindo] = useState<Empresa | null>(null);
   const [excluindoErro, setExcluindoErro] = useState('');
@@ -106,48 +77,10 @@ export default function EmpresasPage() {
     void carregar();
   }, [carregar]);
 
-  const abrirNovo = () => {
-    setForm(VAZIO);
-    setErroForm('');
-    setEditando(null);
-    setCriando(true);
-  };
-
-  const abrirEdicao = (e: Empresa) => {
-    setForm(paraFormulario(e));
-    setErroForm('');
-    setCriando(false);
-    setEditando(e);
-  };
-
-  const salvar = async () => {
-    if (!form.nome.trim()) {
-      setErroForm('Informe o nome da empresa.');
-      return;
-    }
-    const corpo: Record<string, unknown> = {
-      nome: form.nome.trim(),
-      razao_social: form.razao_social.trim() || null,
-      nome_fantasia: form.nome_fantasia.trim() || null,
-      cnpj: form.cnpj.trim() || null,
-      telefone: form.telefone.trim() || null,
-      email: form.email.trim() || null,
-    };
-    setSalvando(true);
-    setErroForm('');
-    try {
-      if (editando) await api.put(`/empresas/${editando.id}`, { ...corpo, ativo: form.ativo });
-      else await api.post('/empresas', corpo);
-      toast.success(editando ? 'Empresa atualizada.' : 'Empresa criada.');
-      setCriando(false);
-      setEditando(null);
-      await carregar();
-    } catch (e) {
-      setErroForm(e instanceof ApiError ? e.message : 'Não foi possível salvar a empresa.');
-    } finally {
-      setSalvando(false);
-    }
-  };
+  // ZERO MODAL: cadastro e edição de empresa são PÁGINAS
+  // (`/empresas/novo` e `/empresas/:id/editar`).
+  const abrirNovo = () => navigate('/empresas/novo');
+  const abrirEdicao = (e: Empresa) => navigate(`/empresas/${e.id}/editar`);
 
   const alternarAtivo = async (e: Empresa) => {
     const ativo = e.ativo === false;
@@ -335,63 +268,6 @@ export default function EmpresasPage() {
           </table>
         )}
       </div>
-
-      {/* ------------------------------------------------ criar / editar ----- */}
-      <PainelInline
-        open={criando || editando !== null}
-        onClose={() => {
-          setCriando(false);
-          setEditando(null);
-        }}
-        title={editando ? `Editar ${editando.nome}` : 'Nova empresa'}
-        subtitle="A empresa criada aqui entra no seletor do topo assim que o acesso for concedido a alguém."
-        size="lg"
-        footer={
-          <div className="flex justify-end gap-2">
-            <button
-              className="btn-secondary"
-              onClick={() => {
-                setCriando(false);
-                setEditando(null);
-              }}
-            >
-              Cancelar
-            </button>
-            <button className="btn-primary" onClick={() => void salvar()} disabled={salvando}>
-              {salvando ? 'Salvando…' : 'Salvar'}
-            </button>
-          </div>
-        }
-      >
-        {erroForm && (
-          <div className="mb-3">
-            <Alert tone="red">{erroForm}</Alert>
-          </div>
-        )}
-        <div className="grid gap-3 sm:grid-cols-2">
-          {CAMPOS.map((c) => (
-            <div key={c.nome} className={c.nome === 'nome' ? 'sm:col-span-2' : ''}>
-              <label className="label" htmlFor={`empresa-${c.nome}`}>
-                {c.rotulo}
-                {c.obrigatorio ? ' *' : ''}
-              </label>
-              <input
-                id={`empresa-${c.nome}`}
-                type={c.tipo || 'text'}
-                className="input"
-                value={String((form as unknown as Record<string, unknown>)[c.nome] ?? '')}
-                onChange={(ev) => setForm((f) => ({ ...f, [c.nome]: ev.target.value }))}
-              />
-            </div>
-          ))}
-          {editando && (
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.ativo} onChange={(ev) => setForm((f) => ({ ...f, ativo: ev.target.checked }))} />
-              Empresa ativa
-            </label>
-          )}
-        </div>
-      </PainelInline>
 
       {/* ------------------------------------------------------- exclusão ---- */}
       <ConfirmacaoInline

@@ -201,6 +201,12 @@ async function normalizarLinha(tipo: TipoImportacao, linha: Record<string, strin
 // ----------------------------------------------------------------------------
 // Handlers
 // ----------------------------------------------------------------------------
+/**
+ * Máximo de linhas que UMA importação grava. Acima disso a confirmação é
+ * recusada (o arquivo precisa ser dividido) — nunca truncada em silêncio.
+ */
+export const LIMITE_AMOSTRA = 5000;
+
 export async function previewImportacao(req: Request, res: Response) {
   const actor = currentUser(req);
   if (actor.perfil === 'operador') throw new HttpError(403, 'Somente gerentes e administradores importam planilhas.');
@@ -249,13 +255,19 @@ export async function previewImportacao(req: Request, res: Response) {
         erros.push({ linha: i + 2, mensagem: h.message, campos: h.fields });
       }
     }
+    // LIMITE explícito: a pré-visualização devolve no máximo LIMITE_AMOSTRA
+    // linhas. Sem o sinal `truncado`, um arquivo maior era importado só até o
+    // limite — perda silenciosa de dados. Agora o cliente recusa confirmar.
+    const amostra = validas.slice(0, LIMITE_AMOSTRA);
     res.json({
       tipo,
       total: linhas.length,
       validas: validas.length,
       erros,
-      amostra: validas.slice(0, 5000),
+      amostra,
       colunas: Object.keys(linhas[0] || {}),
+      limite: LIMITE_AMOSTRA,
+      truncado: validas.length > amostra.length,
     });
   } catch (e) {
     throw toHttpError(e, recurso);
@@ -272,6 +284,11 @@ export async function confirmarImportacao(req: Request, res: Response) {
   const recurso = recursoDoTipo(tipo);
   const linhas = Array.isArray((req.body || {}).linhas) ? ((req.body || {}).linhas as Payload[]) : [];
   if (!linhas.length) throw new HttpError(400, 'Nenhuma linha para importar.');
+  if (linhas.length > LIMITE_AMOSTRA) {
+    throw new HttpError(413, `A importação aceita no máximo ${LIMITE_AMOSTRA} linhas por vez. Divida a planilha e importe em partes.`, {
+      linhas: `Reduza para até ${LIMITE_AMOSTRA} linhas`,
+    });
+  }
   checkAccess(recurso, actor, 'create');
   const escopo = escopoDe(actor);
   const s = getStore();
