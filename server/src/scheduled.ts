@@ -29,6 +29,7 @@ import { atualizarMotorNegocios } from './negocios';
 import type { Request, Response } from 'express';
 import { currentUser } from './auth';
 import { diaISO } from './utils';
+import { dispararLembretesCrm } from './crm';
 
 const fmtMoney = (n: number) => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtNumber = (n: number) => n.toLocaleString('pt-BR');
@@ -283,6 +284,10 @@ export async function runScheduled(req: Request, res: Response) {
   if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrência(s) financeira(s)`);
   const pedidos = await recuperarPedidosPendentes();
   if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace recuperado(s)`);
+  // CRM — lembretes de atividade: disparo IDEMPOTENTE pelo agendador que já
+  // existe (nada de polling no navegador, nada de scheduler paralelo).
+  const lembretes = await dispararLembretesCrm();
+  if (lembretes.disparados > 0) resultados.push(`${lembretes.disparados} lembrete(s) de CRM`);
 
   // Motor 1. MEU NEGÓCIOS: margens e curva ABC sempre frescas — a rotina
   // roda junto com o cron de agendados (segunda via do ciclo contínuo).
@@ -311,6 +316,8 @@ export async function cronScheduled(req: Request, res: Response) {
   if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrencia(s)`);
   const pedidos = await recuperarPedidosPendentes();
   if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace`);
+  const lembretesCron = await dispararLembretesCrm();
+  if (lembretesCron.disparados > 0) resultados.push(`${lembretesCron.disparados} lembrete(s) de CRM`);
 
   res.json({ ok: true, executados: resultados });
 }
@@ -325,6 +332,12 @@ export async function scheduledStatus(_req: Request, res: Response) {
       vendas: getSchedule('VENDAS'),
       alertas: getSchedule('ALERTAS'),
       producao: getSchedule('PRODUCAO'),
+    },
+    crm_lembretes: {
+      canal_habilitado: process.env.NOTIFICAR_CRM_LEMBRETE === 'true',
+      idempotente: true,
+      marcador: 'crm_atividades.lembrete_enviado_em',
+      executa_em: 'run (admin) e cron (CRON_SECRET)',
     },
   });
 }
