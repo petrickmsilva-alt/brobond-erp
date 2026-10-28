@@ -52,7 +52,7 @@ function recursoEventos() {
 type OpcoesListaCompleta = { pageSize?: number; sort?: string; dir?: 'asc' | 'desc' };
 
 /** Lê todas as linhas do filtro, sem truncar o histórico por um limite de página. */
-async function listarTodos(r: Resource, filter: Record<string, unknown>, tx?: Tx, opcoes: OpcoesListaCompleta = {}): Promise<Row[]> {
+export async function listarTodos(r: Resource, filter: Record<string, unknown>, tx?: Tx, opcoes: OpcoesListaCompleta = {}): Promise<Row[]> {
   const pageSize = opcoes.pageSize && opcoes.pageSize > 0 ? Math.floor(opcoes.pageSize) : 1000;
   const linhas: Row[] = [];
   let total = 0;
@@ -324,7 +324,7 @@ export async function necessidadeDaFicha(ficha: Row | null, pecas: number, escop
   return mapa;
 }
 
-type ConsumoInsumo = { qtd: number; valor: number; custo_unitario: number };
+export type ConsumoInsumo = { qtd: number; valor: number; custo_unitario: number };
 
 /**
  * Consumo LÍQUIDO de insumos de uma OP: por insumo, Σ saídas − Σ entradas
@@ -347,7 +347,7 @@ type ConsumoInsumo = { qtd: number; valor: number; custo_unitario: number };
  * reabrir devolve, reconcluir baixa de novo e o segundo estorno devolve o que a
  * segunda conclusão baixou — sem duplicar movimento em nenhum dos ciclos.
  */
-async function consumoLiquidoDaOrdem(ordemId: number, escopo: EscopoEmpresa, tx: Tx): Promise<Map<number, ConsumoInsumo>> {
+export async function consumoLiquidoDaOrdem(ordemId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Map<number, ConsumoInsumo>> {
   const s = getStore();
   const r = getResource('movimentacoes_insumos')!;
   const movimentos = await listarTodos(r, { empresa_id: escopo.empresaId, ordem_id: ordemId }, tx, { pageSize: 1000 });
