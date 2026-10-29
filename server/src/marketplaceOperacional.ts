@@ -36,6 +36,7 @@ import { getResource } from './resources';
 import { empresaDoRegistroAudit, escopoDoAtor, type EscopoEmpresa } from './empresa';
 import { aplicarRegrasPedido, recalcularTotal } from './itens';
 import { syncLancamentoVenda } from './financeiro';
+import { executarGanchoConversao } from './conversion-hooks';
 import type { Row, Tx } from './store';
 
 /** Prefixo do canal externo na referência idempotente (rastreabilidade). */
@@ -302,6 +303,15 @@ export async function converterOrdemMarketplaceEmVenda(
           tx
         );
       }
+
+      // 6.5) GANCHO commerce (mesma transação SERIALIZABLE): consome a RESERVA
+      //     de checkout vinculada a esta ordem (senão o próprio disponível
+      //     recusaria o faturamento abaixo) e carimba frete/desconto do
+      //     checkout na venda. Hook nulo = comportamento legado intacto.
+      await executarGanchoConversao(
+        { saleId: id, empresaId, vendaId, canal, pedidoExternoId },
+        tx
+      );
 
       // 7) TOTAL canônico: recalculado pelo ERP a partir dos itens (os preços
       //    REAIS praticados no pedido), nunca copiado do total do marketplace —

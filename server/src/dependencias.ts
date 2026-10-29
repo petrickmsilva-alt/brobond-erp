@@ -490,6 +490,9 @@ export const RELACOES_FK: RelacaoFkDeclarada[] = [
   { alvo: 'vendas', tabela: 'sales', colunas: ['operational_venda_id'], acao: 'SET_NULL' },
   { alvo: 'vendas', tabela: 'catalogo_eventos', colunas: ['pedido_id'], acao: 'SET_NULL' },
   { alvo: 'vendas', tabela: 'cotacao_decisoes', colunas: ['venda_id'], acao: 'CASCADE' },
+  // COMMERCE OS (0068) — pedido omnichannel e rastreio presos à venda convertida.
+  { alvo: 'vendas', tabela: 'commerce_pedidos', colunas: ['venda_id'], acao: 'SET_NULL' },
+  { alvo: 'vendas', tabela: 'commerce_rastreio', colunas: ['venda_id'], acao: 'NO_ACTION' },
 
   // compras — todas as FKs de entrada
   { alvo: 'compras', tabela: 'itens_compra', colunas: ['compra_id'], acao: 'CASCADE' },

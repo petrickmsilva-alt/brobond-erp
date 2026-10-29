@@ -87,6 +87,51 @@ import {
 } from './producao';
 import { adminBackup, adminBackupXlsx, backupInfo } from './backup';
 import { catalogoEmbed, catalogoPublico, compartilharCatalogo, criarPedidoCatalogo, eventoCatalogo, inteligenciaCatalogos, rateLimitPublico, revogarCompartilhamento } from './catalogos';
+// ---- BROBOND COMMERCE OS (0068) — vitrine pública + operação omnichannel ----
+import {
+  listarProdutosCommerce,
+  obterProdutoCommerce,
+  projetarProdutoCommerce,
+  atualizarProdutoCommerce,
+  salvarPrecoCanal,
+  publicarProduto,
+  listarPublicacoes,
+  reprocessarPublicacao,
+  despublicarProduto,
+} from './commerce/catalogo';
+import {
+  lojaConfigPublica,
+  lojaProdutoPublico,
+  lojaPreview,
+  lojaCriarCheckout,
+  lojaPedidoPublico,
+  lojaProdutosPublicos,
+} from './commerce/vitrine';
+import {
+  cancelarPedidoCommerce,
+  converterPedidoCommerce,
+  detalharPedidoCommerce,
+  listarDeliveryCommerce,
+  listarEventosCommerce,
+  listarFulfillmentCommerce,
+  listarPagamentosCommerce,
+  listarPedidosCommerce,
+  listarReservasCommerce,
+  registrarHooksCommerce,
+  salvarRastreioCommerce,
+} from './commerce/pedidos';
+import {
+  criarCupom,
+  criarPromocao,
+  excluirCupom,
+  excluirPromocao,
+  atualizarCupom,
+  atualizarPromocao,
+  listarCupons,
+  listarPromocoes,
+} from './commerce/promocoes';
+import { analyticsCommerce, trendsCommerce } from './commerce/analytics';
+import { processarComercioAgendado } from './commerce/outbox';
 import { baixarLancamento, conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, recebiveisCartao, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
 import { comissoesDaVenda, resumoComissoes } from './comissoes';
 import {
@@ -477,6 +522,14 @@ app.get('/api/publico/catalogo/:token/embed', rateLimitPublico, wrap(catalogoEmb
 // Pedido pelo catálogo — cria uma cotação de venda no ERP (sem login, rate limit)
 app.post('/api/publico/catalogo/:token/pedido', rateLimitPublico, wrap(criarPedidoCatalogo));
 app.post('/api/publico/catalogo/:token/evento', rateLimitPublico, wrap(eventoCatalogo));
+// ---- VITRINE PRÓPRIA /loja (Commerce OS) — pública, rate limit próprio ----
+// Loja B2C do tenant resolvido por env/unicidade (nunca por dado do cliente).
+app.get('/api/loja/config', rateLimitPublico, wrap(lojaConfigPublica));
+app.get('/api/loja/produtos', rateLimitPublico, wrap(lojaProdutosPublicos));
+app.get('/api/loja/produtos/:slug', rateLimitPublico, wrap(lojaProdutoPublico));
+app.post('/api/loja/preview', rateLimitPublico, wrap(lojaPreview));
+app.post('/api/loja/checkout', rateLimitPublico, wrap(lojaCriarCheckout));
+app.get('/api/loja/pedidos/:token', rateLimitPublico, wrap(lojaPedidoPublico));
 // Portal do cliente (acompanhamento de pedidos por CPF/CNPJ)
 app.get('/api/portal/:token/pedidos', rateLimitPortal, wrap(portalPedidos));
 app.get('/api/portal/:token/pedido/:id', rateLimitPortal, wrap(portalPedidoDetalhe));
@@ -895,6 +948,41 @@ app.post('/api/pdv/vendas/:id/reimprimir', wrap(reimprimirCupomPdvHandler));
 app.get('/api/pdv/vendas/:id/cupom/html', wrap(cupomPdvHtmlHandler));
 app.get('/api/pdv/vendas/:id/cupom/pdf', wrap(cupomPdvPdfHandler));
 
+// ------------------------------------------------------------------------------
+// BROBOND COMMERCE OS — catálogo, publicação multicanal, pedidos omnichannel,
+// promoções/cupons, fulfillment/delivery/rastreio, trends e observabilidade.
+// RBAC por recurso (checkAccess/checkFluxo) — nada aqui depende de esconder botão.
+// ------------------------------------------------------------------------------
+app.get('/api/commerce/produtos', wrap(listarProdutosCommerce));
+app.post('/api/commerce/produtos', wrap(projetarProdutoCommerce));
+app.get('/api/commerce/produtos/:id', wrap(obterProdutoCommerce));
+app.put('/api/commerce/produtos/:id', wrap(atualizarProdutoCommerce));
+app.put('/api/commerce/produtos/:id/precos', wrap(salvarPrecoCanal));
+app.post('/api/commerce/produtos/:id/despublicar', wrap(despublicarProduto));
+app.get('/api/commerce/publicacoes', wrap(listarPublicacoes));
+app.post('/api/commerce/publicacoes', wrap(publicarProduto));
+app.post('/api/commerce/publicacoes/:id/reprocessar', wrap(reprocessarPublicacao));
+app.get('/api/commerce/pedidos', wrap(listarPedidosCommerce));
+app.get('/api/commerce/pedidos/:saleId', wrap(detalharPedidoCommerce));
+app.post('/api/commerce/pedidos/:saleId/converter', wrap(converterPedidoCommerce));
+app.post('/api/commerce/pedidos/:saleId/cancelar', wrap(cancelarPedidoCommerce));
+app.post('/api/commerce/pedidos/:saleId/rastreio', wrap(salvarRastreioCommerce));
+app.get('/api/commerce/reservas', wrap(listarReservasCommerce));
+app.get('/api/commerce/fulfillment', wrap(listarFulfillmentCommerce));
+app.get('/api/commerce/delivery', wrap(listarDeliveryCommerce));
+app.get('/api/commerce/pagamentos', wrap(listarPagamentosCommerce));
+app.get('/api/commerce/eventos', wrap(listarEventosCommerce));
+app.get('/api/commerce/promocoes', wrap(listarPromocoes));
+app.post('/api/commerce/promocoes', wrap(criarPromocao));
+app.put('/api/commerce/promocoes/:id', wrap(atualizarPromocao));
+app.delete('/api/commerce/promocoes/:id', wrap(excluirPromocao));
+app.get('/api/commerce/cupons', wrap(listarCupons));
+app.post('/api/commerce/cupons', wrap(criarCupom));
+app.put('/api/commerce/cupons/:id', wrap(atualizarCupom));
+app.delete('/api/commerce/cupons/:id', wrap(excluirCupom));
+app.get('/api/commerce/analytics', wrap(analyticsCommerce));
+app.get('/api/commerce/trends', wrap(trendsCommerce));
+
 // ----------------------------------------------------------------------------
 // IMPRESSÃO P0..P6 — fila, documentos, etiquetas, terminais e agentes.
 // ----------------------------------------------------------------------------
@@ -1310,6 +1398,19 @@ async function start() {
   // Motor analítico 1. MEU NEGÓCIOS: recalcula margens/curva ABC em segundo
   // plano (ciclo no boot + intervalo + pós-ingestão de marketplaces).
   initNegociosEngine();
+  // Commerce OS: gancho pré-faturamento da ponte (reservas + frete do
+  // checkout), ouvinte de cobrança do gateway (pagamento → conversão) e
+  // ouvinte de ingestão (projeção + conversão automática de canais pagos).
+  registrarHooksCommerce();
+  // Fila do commerce com cadência própria (backstop além do cron externo):
+  // publicações enfileiradas e conversões com retry não dependem de alguém
+  // abrir a tela. Sem efeito em teste (o runner controla o ciclo).
+  if (process.env.NODE_ENV !== 'test') {
+    const filaCommerce = setInterval(() => {
+      void processarComercioAgendado().catch(() => undefined);
+    }, 60_000);
+    filaCommerce.unref?.();
+  }
   await ensureAdmin();
   await migrarSenhasLegadas();
   // Endereço público salvo no banco (Configurações › Sistema): já entra no

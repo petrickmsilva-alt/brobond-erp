@@ -79,9 +79,14 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   'conector-nuvemshop': '/conectores/nuvemshop',
   'conector-instagram': '/conectores/instagram',
   'commerce-produtos': '/commerce/produtos',
+  'commerce-publicacoes': '/commerce/publicacoes',
+  'commerce-loja': '/commerce/loja',
+  'commerce-promocoes': '/commerce/promocoes',
+  'commerce-cupons': '/commerce/cupons',
   'commerce-pedidos': '/commerce/pedidos',
-  'commerce-trends': '/commerce/trends',
   'commerce-delivery': '/commerce/delivery',
+  'commerce-fila': '/commerce/fila',
+  'commerce-trends': '/commerce/trends',
   creators: '/creators',
   'creator-matches': '/matches',
   'outreach-ai': '/outreach-ai',
@@ -105,11 +110,14 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     //   declaradas; P2-13: importações contábeis; P3-05/06: terceiros e facções).
     // + 1 do PR #95 — capacidade própria "Contagem Cíclica ABC" (P2-16) sob
     //   Estoque & Suprimentos → Estoque, com página e rota próprias.
-    expect(MODULES).toHaveLength(106);
+    // + 5 do BROBOND COMMERCE OS (0068): Publicações, Loja própria, Promoções,
+    //   Cupons e Fila & sync — os 4 antigos "planned" do Multicanal continuam,
+    //   agora implementados e sem a marcação de planejamento.
+    expect(MODULES).toHaveLength(111);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(106);
-    expect(new Set(paths).size).toBe(106);
+    expect(new Set(ids).size).toBe(111);
+    expect(new Set(paths).size).toBe(111);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -138,9 +146,10 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (91), Commerce (8), Creators (4) e Utilidades Globais (2)', () => {
+  it('separa ERP CORE (92), Commerce (13), Creators (4) e Utilidades Globais (2)', () => {
     expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(92);
-    expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(8);
+    // 4 conectores de canal + 9 módulos do BROBOND COMMERCE OS
+    expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(13);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
   });
@@ -265,10 +274,16 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'conector-mercadopago',
       'conector-nuvemshop',
       'conector-instagram',
+      // BROBOND COMMERCE OS — ordem do menu (Catálogo → Loja e ofertas → Operação → Inteligência)
       'commerce-produtos',
+      'commerce-publicacoes',
+      'commerce-loja',
+      'commerce-promocoes',
+      'commerce-cupons',
       'commerce-pedidos',
-      'commerce-trends',
       'commerce-delivery',
+      'commerce-fila',
+      'commerce-trends',
     ]);
     expect(porArea('Creators')).toEqual(['creators', 'creator-matches', 'outreach-ai', 'campanhas']);
     expect(porArea('Utilidades Globais')).toEqual(['config', 'ajuda']);
@@ -280,7 +295,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       s.areas.flatMap((a) => a.groups.flatMap((g) => g.subgroups.flatMap((sub) => sub.modules.map((m) => m.id))))
     );
     expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
-    expect(PAGES_ESPECIAIS).toHaveLength(24);
+    // 24 legadas + 9 páginas do COMMERCE OS (lista/detalhe/novo/edição próprios)
+    expect(PAGES_ESPECIAIS).toHaveLength(33);
   });
 });
 
@@ -394,18 +410,32 @@ describe('visibleModules', () => {
     expect(visiveis).toContain('documentos-fiscais');
   });
 
-  it('registra Commerce (Canais + Multicanal) e Creators (Parcerias e campanhas) fora do Core', () => {
-    expect(MODULE_GROUPS).toEqual(expect.arrayContaining(['Canais', 'Multicanal', 'Parcerias e campanhas']));
+  it('registra Commerce (Canais + grupos do COMMERCE OS) e Creators fora do Core, sem planned indevido', () => {
+    // O grupo "Multicanal" (roadmap) saiu do menu; o sistema real entrou com
+    // 4 grupos operacionais.
+    expect(MODULE_GROUPS).toEqual(expect.arrayContaining(['Canais', 'Catálogo', 'Loja e ofertas', 'Operação', 'Inteligência', 'Parcerias e campanhas']));
+    expect(MODULE_GROUPS as readonly string[]).not.toContain('Multicanal');
+    // "Comercial" continua sendo o grupo da área Vendas (ERP); nenhum módulo
+    // do espaço commerce pode reivindicá-lo.
+    expect(MODULES.filter((m) => m.space === 'commerce' && m.group === 'Comercial')).toEqual([]);
 
-    const commercePlanned = MODULES.filter((m) => m.area === 'Commerce' && m.group === 'Multicanal');
-    expect(commercePlanned.map((m) => m.label)).toEqual(['Produtos', 'Pedidos', 'Trends', '📦 Delivery']);
-    expect(commercePlanned.map((m) => m.path)).toEqual([
-      '/commerce/produtos',
-      '/commerce/pedidos',
-      '/commerce/trends',
-      '/commerce/delivery',
+    const commerceOs = MODULES.filter(
+      (m) => m.area === 'Commerce' && ['Catálogo', 'Loja e ofertas', 'Operação', 'Inteligência'].includes(m.group)
+    );
+    expect(commerceOs.map((m) => m.id)).toEqual([
+      'commerce-produtos',
+      'commerce-publicacoes',
+      'commerce-loja',
+      'commerce-promocoes',
+      'commerce-cupons',
+      'commerce-pedidos',
+      'commerce-delivery',
+      'commerce-fila',
+      'commerce-trends',
     ]);
-    expect(commercePlanned.every((m) => m.planned && m.planned.length > 0)).toBe(true);
+    // NENHUM módulo commerce permanece "planned" — o sistema está implementado.
+    expect(MODULES.filter((m) => m.space === 'commerce' && m.planned?.length)).toEqual([]);
+    expect(MODULES.filter((m) => (m.group as string) === 'Multicanal')).toEqual([]);
 
     const creators = MODULES.filter((m) => m.area === 'Creators');
     expect(creators.map((m) => m.label)).toEqual(['Creators', 'Matches', 'Outreach AI', 'Campanhas']);

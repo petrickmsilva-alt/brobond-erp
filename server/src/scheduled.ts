@@ -30,6 +30,7 @@ import type { Request, Response } from 'express';
 import { currentUser } from './auth';
 import { diaISO } from './utils';
 import { dispararLembretesCrm } from './crm';
+import { processarComercioAgendado } from './commerce/outbox';
 
 const fmtMoney = (n: number) => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtNumber = (n: number) => n.toLocaleString('pt-BR');
@@ -296,6 +297,21 @@ export async function runScheduled(req: Request, res: Response) {
     resultados.push(`Motor MEU NEGÓCIOS: ${motor.margens} margem(ns), ${motor.abc} produto(s) na curva ABC`);
   }
 
+  // BACKSTOP do Commerce OS: fila de publicação + outbox de sincronização +
+  // expiração de checkouts pendentes (idempotente — rodar duas vezes não
+  // duplica efeito nem religa reserva liberada).
+  const commerce = await processarComercioAgendado();
+  const comercioItens = [
+    commerce.publicacoes.processadas,
+    commerce.outbox.processados,
+    commerce.expirados,
+  ].reduce((a, b) => a + b, 0);
+  if (comercioItens > 0 || commerce.outbox.erros > 0) {
+    resultados.push(
+      `Commerce: ${commerce.publicacoes.processadas} publicação(ões), ${commerce.outbox.processados} fila(s), ${commerce.expirados} expirado(s)${commerce.outbox.erros ? `, ${commerce.outbox.erros} erro(s)` : ''}`
+    );
+  }
+
   res.json({ ok: true, executados: resultados, smtp: smtpConfigurado() });
 }
 
@@ -318,6 +334,11 @@ export async function cronScheduled(req: Request, res: Response) {
   if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace`);
   const lembretesCron = await dispararLembretesCrm();
   if (lembretesCron.disparados > 0) resultados.push(`${lembretesCron.disparados} lembrete(s) de CRM`);
+  const commerceCron = await processarComercioAgendado();
+  const comercioCron = commerceCron.publicacoes.processadas + commerceCron.outbox.processados + commerceCron.expirados;
+  if (comercioCron > 0 || commerceCron.outbox.erros > 0) {
+    resultados.push(`commerce: ${comercioCron} item(ns) da fila${commerceCron.outbox.erros ? `, ${commerceCron.outbox.erros} erro(s)` : ''}`);
+  }
 
   res.json({ ok: true, executados: resultados });
 }

@@ -1,5 +1,19 @@
 import { ArrowUpRight, CheckCircle2, Clock3, Inbox, Layers3, Sparkles } from 'lucide-react';
 import type { Module } from '../modules';
+import CommerceProdutosPage from './commerce/ProdutosPage';
+import CommerceProdutoNovoPage from './commerce/ProdutoNovoPage';
+import CommerceProdutoDetalhePage from './commerce/ProdutoDetalhePage';
+import CommercePublicacoesPage from './commerce/PublicacoesPage';
+import CommercePedidosPage from './commerce/PedidosPage';
+import CommercePedidoDetalhePage from './commerce/PedidoDetalhePage';
+import CommerceTrendsPage from './commerce/TrendsPage';
+import CommerceDeliveryPage from './commerce/DeliveryPage';
+import CommerceFilaPage from './commerce/FilaPage';
+import CommerceLojaConfigPage from './commerce/LojaConfigPage';
+import CommercePromocoesPage from './commerce/PromocoesPage';
+import CommercePromocaoFormPage from './commerce/PromocaoFormPage';
+import CommerceCuponsPage from './commerce/CuponsPage';
+import CommerceCupomFormPage from './commerce/CupomFormPage';
 
 const GLASS = 'rounded-xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-md';
 
@@ -10,13 +24,49 @@ const DEFAULT_PLAN = [
 ];
 
 /**
- * Esqueleto comum do Commerce & Creators.
+ * Dispatcher do espaço Commerce & Creators.
  *
- * As rotas são deliberadamente somente de apresentação: não há dados fake,
- * nem chamadas para endpoints que ainda não existem. O mesmo shell mantém a
- * linguagem Dark Slate do Hub enquanto cada domínio ganha seu caso de uso.
+ * • SPACE `commerce`: BROBOND COMMERCE OS — cada id mapeia para a página real
+ *   (lista/detalhe/novo em rotas próprias, ZERO MODAL, só dado real do
+ *   servidor). O placeholder com “Em breve” NÃO existe mais para o Commerce.
+ * • SPACE `creators`: mantém o esqueleto de apresentação (fora do escopo do
+ *   Commerce OS).
  */
+const COMMERCE_PAGES: Record<string, () => JSX.Element> = {
+  'commerce-produtos': CommerceProdutosPage,
+  'commerce-produtos-novo': CommerceProdutoNovoPage,
+  'commerce-produtos-detalhe': CommerceProdutoDetalhePage,
+  'commerce-publicacoes': CommercePublicacoesPage,
+  'commerce-pedidos': CommercePedidosPage,
+  'commerce-pedido-detalhe': CommercePedidoDetalhePage,
+  'commerce-trends': CommerceTrendsPage,
+  'commerce-delivery': CommerceDeliveryPage,
+  'commerce-fila': CommerceFilaPage,
+  'commerce-loja': CommerceLojaConfigPage,
+  'commerce-promocoes': CommercePromocoesPage,
+  'commerce-promocao-nova': CommercePromocaoFormPage,
+  'commerce-promocao-editar': CommercePromocaoFormPage,
+  'commerce-cupons': CommerceCuponsPage,
+  'commerce-cupom-novo': CommerceCupomFormPage,
+  'commerce-cupom-editar': CommerceCupomFormPage,
+};
+
 export default function CommerceModulePage({ module }: { module: Module }) {
+  if (module.space === 'commerce') {
+    const Pagina = COMMERCE_PAGES[module.id];
+    if (Pagina) return <Pagina />;
+    // Módulo commerce sem página = erro honesto (nunca placeholder com métricas vazias).
+    return (
+      <div className="rounded-xl border border-line bg-surface p-6 text-sm text-muted">
+        Página do módulo “{module.label}” não registrada no dispatcher — corrija o deploy ou contate o suporte.
+      </div>
+    );
+  }
+  return <CreatorsModulePage module={module} />;
+}
+
+/** Esqueleto de apresentação (Creators — planejado por fora do Commerce OS). */
+function CreatorsModulePage({ module }: { module: Module }) {
   const Icon = module.icon;
   const plan = module.planned?.length ? module.planned : DEFAULT_PLAN;
 

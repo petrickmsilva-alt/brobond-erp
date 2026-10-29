@@ -264,15 +264,24 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     const optOrdens = screen.getByRole('option', { name: /Ordens de Produção/ });
     expect(within(optOrdens).getByText('Produção → Execução')).toBeInTheDocument();
 
-    // Busca por "Produtos" prioriza o módulo operacional (Cadastros) antes do planned (Commerce)
+    // Busca por "Produtos" prioriza o módulo operacional (Cadastros) e o
+    // módulo commerce correspondente — agora IMPLEMENTADO (sem selo planned).
     await user.clear(input);
     await user.type(input, 'Produtos');
     const opcoes = screen.getAllByRole('option');
     expect(opcoes[0]).toHaveAttribute('data-path', '/produtos');
     expect(opcoes[0]).not.toHaveAttribute('data-planned');
-    const plannedProdutos = opcoes.find((el) => el.getAttribute('data-path') === '/commerce/produtos');
-    expect(plannedProdutos).toHaveAttribute('data-planned', 'true');
-    expect(within(plannedProdutos!).getByText('Em breve')).toBeInTheDocument();
+    const produtosCommerce = opcoes.find((el) => el.getAttribute('data-path') === '/commerce/produtos');
+    expect(produtosCommerce).toBeTruthy();
+    expect(produtosCommerce).not.toHaveAttribute('data-planned', 'true');
+
+    // O selo "Em breve" continua exercitado pelos módulos realmente planejados.
+    await user.clear(input);
+    await user.type(input, 'Creators');
+    const opcoesCreators = screen.getAllByRole('option');
+    const plannedCreators = opcoesCreators.find((el) => el.getAttribute('data-path') === '/creators');
+    expect(plannedCreators).toHaveAttribute('data-planned', 'true');
+    expect(within(plannedCreators!).getByText('Em breve')).toBeInTheDocument();
   });
 
   it('Command Palette respeita RBAC: operador não encontra módulos de gerente ou admin', async () => {

@@ -207,14 +207,22 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
     const user = userEvent.setup();
     const { container, unmount } = renderTop('admin', '/');
 
+    // BROBOND COMMERCE OS: nenhum módulo do espaço Commerce é mais "planned".
     await user.click(botaoDaBarra(container, 'Commerce'));
-    const menu = container.querySelector(`#topnav-menu-${slug('Commerce')}`) as HTMLElement;
+    const menuCommerce = container.querySelector(`#topnav-menu-${slug('Commerce')}`) as HTMLElement;
+    expect(menuCommerce.querySelectorAll('a[data-planned="true"]')).toHaveLength(0);
+    unmount();
+
+    // Os planejados restantes são do esqueleto Creators — selo preservado.
+    const segunda = renderTop('admin', '/');
+    await user.click(botaoDaBarra(segunda.container, 'Creators'));
+    const menu = segunda.container.querySelector(`#topnav-menu-${slug('Creators')}`) as HTMLElement;
     const planned = menu.querySelectorAll('a[data-planned="true"]');
     expect(planned).toHaveLength(4);
     for (const link of planned) {
       expect(within(link as HTMLElement).getByText('Em breve')).toBeInTheDocument();
     }
-    unmount();
+    segunda.unmount();
   });
 
   it('submenus em cascata expõem Grupo, Subgrupo e Módulo sem duplicar cadastro', async () => {
@@ -265,11 +273,11 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
       .filter((a) => a !== '__mais__');
     expect(areasRenderizadas.sort()).toEqual([...MODULE_AREAS].sort());
     // Cada módulo da fonte única aparece exatamente uma vez no menu superior.
-    // O comprimento é o da fonte (106 após o PR #95: o hardening P2/P3 mais a
-    // capacidade própria "Contagem Cíclica ABC"). `modules.test.ts`
-    // trava o mesmo número e a lista canônica — aqui só se confirma que o menu
-    // superior não perde nem duplica item.
-    expect(MODULES).toHaveLength(106);
+    // O comprimento é o da fonte (111 após o BROBOND COMMERCE OS: 106 + 5
+    // módulos reais — Publicações, Loja própria, Promoções, Cupons e Fila).
+    // `modules.test.ts` trava o mesmo número e a lista canônica — aqui só se
+    // confirma que o menu superior não perde nem duplica item.
+    expect(MODULES).toHaveLength(111);
     unmount();
   });
 

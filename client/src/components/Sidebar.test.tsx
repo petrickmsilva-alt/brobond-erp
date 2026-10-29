@@ -221,23 +221,21 @@ describe('Sidebar — Árvore Master renderizada × fonte única', () => {
     unmount();
   });
 
-  it('identifica claramente todos os 8 itens planned com data-planned e badge Em breve', () => {
+  it('identifica claramente todos os 4 itens planned com data-planned e badge Em breve', () => {
     const { itens, container, unmount } = renderSidebar('admin');
     const plannedRenderizados = itens.filter((i) => i.planned);
-    expect(plannedRenderizados).toHaveLength(8);
+    // BROBOND COMMERCE OS: os módulos commerce saíram de "planned" (implementados);
+    // restam apenas os 4 do esqueleto Creators.
+    expect(plannedRenderizados).toHaveLength(4);
     expect(plannedRenderizados.map((i) => i.path).sort()).toEqual(
       [
-        '/commerce/produtos',
-        '/commerce/pedidos',
-        '/commerce/trends',
-        '/commerce/delivery',
         '/creators',
         '/matches',
         '/outreach-ai',
         '/campanhas',
       ].sort()
     );
-    expect(container.querySelectorAll('nav a[data-planned="true"] [data-planned-badge="Em breve"]')).toHaveLength(8);
+    expect(container.querySelectorAll('nav a[data-planned="true"] [data-planned-badge="Em breve"]')).toHaveLength(4);
     unmount();
   });
 

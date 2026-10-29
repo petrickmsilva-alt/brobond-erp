@@ -207,11 +207,7 @@ export function checkAccess(r: Resource, actor: Actor, op: 'read' | 'create' | '
   // a ESCRITA exige gerente/admin: um operador não reescreve a nomenclatura
   // que afeta as outras empresas. O perfil vem da identidade autenticada
   // (nunca de role/empresa_id enviados pelo cliente).
-  if (op !== 'read' && r.minPerfilEscrita && (PERFIL_RANK[perfil] ?? 0) < PERFIL_RANK[r.minPerfilEscrita]) {
-    throw new HttpError(403, r.minPerfilEscrita === 'admin'
-      ? 'Apenas administradores podem incluir, alterar ou excluir este cadastro compartilhado.'
-      : 'Apenas gerentes e administradores podem incluir, alterar ou excluir este cadastro compartilhado.');
-  }
+  if (op !== 'read') exigirPerfilDeEscrita(r, perfil);
   if (op !== 'read' && !r.ops[op]) {
     const verbo = op === 'create' ? 'incluir' : op === 'update' ? 'alterar' : 'excluir';
     throw new HttpError(405, `Não é possível ${verbo} registros em ${r.label}.`);
@@ -233,8 +229,33 @@ export function checkAccess(r: Resource, actor: Actor, op: 'read' | 'create' | '
  * o que vale é a alçada da pessoa: minPerfil, adminOnly e as permissões
  * comerciais continuam todas sendo conferidas (é o que o `read` já faz).
  */
+/** Regra ÚNICA de perfil mínimo de escrita (minPerfilEscrita). */
+function exigirPerfilDeEscrita(r: Resource, perfil: string): void {
+  if (r.minPerfilEscrita && (PERFIL_RANK[perfil] ?? 0) < PERFIL_RANK[r.minPerfilEscrita]) {
+    throw new HttpError(403, r.minPerfilEscrita === 'admin'
+      ? 'Apenas administradores podem incluir, alterar ou excluir este cadastro compartilhado.'
+      : 'Apenas gerentes e administradores podem incluir, alterar ou excluir este cadastro compartilhado.');
+  }
+}
+
 export function checkFluxo(r: Resource, actor: Actor): void {
   checkAccess(r, actor, 'read');
+}
+
+/**
+ * Alçada de ESCRITA para endpoints de fluxo com `r.ops` fechado (o CRUD
+ * genérico não pode mexer no recurso, mas o endpoint É o caminho legítimo):
+ * confere a mesma alçada do checkAccess — minPerfil/adminOnly/comercial via
+ * leitura + minPerfilEscrita + trava de exclusão do operador — sem consultar
+ * `r.ops`, que só existe para barra POST/PUT/DELETE genéricos.
+ */
+export function checkFluxoEscrita(r: Resource, actor: Actor, op: 'create' | 'update' | 'delete' = 'update'): void {
+  const perfil = actor.perfil || 'operador';
+  checkAccess(r, actor, 'read');
+  exigirPerfilDeEscrita(r, perfil);
+  if (op === 'delete' && perfil === 'operador') {
+    throw new HttpError(403, 'Operadores não podem excluir registros. Peça a um gerente ou administrador.');
+  }
 }
 
 const RECURSOS_COM_REFERENCIAS_ESTOQUE = new Set([

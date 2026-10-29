@@ -85,7 +85,7 @@ export function urlLoja(): string {
 const TIMEOUT_MS = Number(process.env.WOOCOMMERCE_TIMEOUT_MS) || 20_000;
 
 /** Chamada autenticada à REST API do WooCommerce (v3, Basic Auth sobre HTTPS). */
-async function wooFetch(cfg: ConfigLoja, caminho: string, init: Parameters<typeof fetch>[1] = {}): Promise<any> {
+export async function wooFetch(cfg: ConfigLoja, caminho: string, init: Parameters<typeof fetch>[1] = {}): Promise<any> {
   const auth = Buffer.from(`${cfg.ck}:${cfg.cs}`).toString('base64');
   let resp: globalThis.Response;
   try {
@@ -554,6 +554,18 @@ function chavesSku(skuProduto: string, codigoTamanho: string): string[] {
 export async function sincronizarEstoqueLoja(req: Request, res: Response) {
   const actor = exigirPermissaoVenda(req, 'update');
   const escopo = exigirEscopoWoo(actor);
+  exigirConfigurada();
+  const saida = await enviarEstoqueLojaInterno(escopo, { id: actor.id || null, name: actor.name });
+  res.json(saida);
+}
+
+/**
+ * NÚCLEO de envio de estoque para o WooCommerce — compartilhado pela rota e
+ * pelo outbox do Commerce (fila `sincronizacao`, retry com backoff). Lê o
+ * estoque CANÔNICO e publica o saldo nos produtos do site; o site nunca vira
+ * fonte de estoque.
+ */
+export async function enviarEstoqueLojaInterno(escopo: EscopoEmpresa, actor: { id: number | null; name: string }) {
   const cfg = exigirConfigurada();
   const s = getStore();
 
@@ -674,15 +686,17 @@ export async function sincronizarEstoqueLoja(req: Request, res: Response) {
       registro_id: null,
       descricao: `Estoque enviado para a loja (${cfg.url}): ${atualizados.length} SKU(s) atualizado(s), ${naoEncontrados.length} sem correspondência`,
       dados: { origem: 'woocommerce', atualizados: atualizados.length, nao_encontrados: naoEncontrados },
-      empresa_id: empresaDoAtorAudit(actor),
+      // Escopo explícito do chamador: a rota usa o do ator; o outbox usa o da
+      // empresa da fila — nunca a empresa "padrão" implícita.
+      empresa_id: escopo.empresaId,
     })
     .catch(() => undefined);
 
-  res.json({
+  return {
     ok: true,
     loja: cfg.url,
     atualizados,
     total_atualizados: atualizados.length,
     nao_encontrados: naoEncontrados,
-  });
+  };
 }

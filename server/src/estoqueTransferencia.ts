@@ -493,51 +493,115 @@ export async function detalharTransferencia(req: Request, res: Response) {
 // ----------------------------------------------------------------------------
 // RESERVAS — endpoint (a reserva precisa validar disponibilidade)
 // ----------------------------------------------------------------------------
+export type ReservaInternaPayload = {
+  produto_id: number;
+  tamanho_id?: number | null;
+  local_id?: number | null;
+  quantidade: number;
+  tipo?: string;
+  origem_recurso?: string | null;
+  origem_id?: number | null;
+  motivo?: string | null;
+  expira_em?: string | null;
+  criado_por?: number | null;
+};
+
+/**
+ * NÚCLEO de criação de reserva — compartilhado pelo endpoint de estoque e pelo
+ * checkout /loja (UMA regra de disponibilidade: soma dos locais candidatos,
+ * mesmas mensagens). Transação opcional: o chamador pode embutir no seu tx.
+ */
+export async function criarReservaInterna(escopo: EscopoEmpresa, payload: ReservaInternaPayload, tx?: Tx): Promise<Row> {
+  const produtoId = n(payload.produto_id);
+  const quantidade = n(payload.quantidade);
+  const tipo = String(payload.tipo ?? 'reserva');
+  if (!produtoId) throw new HttpError(400, 'Informe o produto.', { produto_id: 'Obrigatório' });
+  if (!quantidade || quantidade <= 0) throw new HttpError(400, 'A quantidade deve ser maior que zero.', { quantidade: 'Maior que zero' });
+  if (!['reserva', 'empenho', 'bloqueio'].includes(tipo)) throw new HttpError(400, 'Tipo de reserva inválido.', { tipo: 'reserva, empenho ou bloqueio' });
+  const localId = n(payload.local_id ?? null);
+  const tamanhoId = n(payload.tamanho_id ?? null);
+  const s = getStore();
+  const disponibilidade = await calcularDisponibilidade(s, escopo, { produto_id: produtoId, tamanho_id: tamanhoId, local_id: localId }, tx);
+  const disponivel = disponibilidade.reduce((t, l) => t + l.disponivel, 0);
+  if (disponivel < quantidade) {
+    throw new HttpError(409, `Disponível insuficiente: ${disponivel} peça(s) para reservar ${quantidade}.`, { quantidade: `Disponível: ${disponivel}` });
+  }
+  return s.insert(
+    R_RESERVA(),
+    {
+      empresa_id: escopo.empresaId,
+      produto_id: produtoId,
+      tamanho_id: tamanhoId,
+      local_id: localId,
+      tipo,
+      quantidade,
+      status: 'ativa',
+      origem_recurso: payload.origem_recurso ? String(payload.origem_recurso).slice(0, 60) : null,
+      origem_id: n(payload.origem_id ?? null),
+      motivo: payload.motivo ? String(payload.motivo).slice(0, 300) : null,
+      criado_por: payload.criado_por ?? null,
+      expira_em: payload.expira_em ? String(payload.expira_em).slice(0, 10) : null,
+    },
+    tx
+  );
+}
+
 export async function criarReserva(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_RESERVA(), actor, 'read');
   checkAccess(R_ESTOQUE(), actor, 'create');
   const escopo = escopoDoAtor(actor);
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, any>;
-  const produtoId = n(body.produto_id);
-  const quantidade = n(body.quantidade);
-  const tipo = String(body.tipo ?? 'reserva');
-  if (!produtoId) throw new HttpError(400, 'Informe o produto.', { produto_id: 'Obrigatório' });
-  if (!quantidade || quantidade <= 0) throw new HttpError(400, 'A quantidade deve ser maior que zero.', { quantidade: 'Maior que zero' });
-  if (!['reserva', 'empenho', 'bloqueio'].includes(tipo)) throw new HttpError(400, 'Tipo de reserva inválido.', { tipo: 'reserva, empenho ou bloqueio' });
-  const localId = n(body.local_id);
-  const tamanhoId = n(body.tamanho_id);
   const s = getStore();
   try {
-    const resultado = await s.transaction(async (tx) => {
-      const disponibilidade = await calcularDisponibilidade(s, escopo, { produto_id: produtoId, tamanho_id: tamanhoId, local_id: localId }, tx);
-      const disponivel = disponibilidade.reduce((t, l) => t + l.disponivel, 0);
-      if (disponivel < quantidade) {
-        throw new HttpError(409, `Disponível insuficiente: ${disponivel} peça(s) para reservar ${quantidade}.`, { quantidade: `Disponível: ${disponivel}` });
-      }
-      return s.insert(
-        R_RESERVA(),
+    const resultado = await s.transaction(async (tx) =>
+      criarReservaInterna(
+        escopo,
         {
-          empresa_id: escopo.empresaId,
-          produto_id: produtoId,
-          tamanho_id: tamanhoId,
-          local_id: localId,
-          tipo,
-          quantidade,
-          status: 'ativa',
-          origem_recurso: body.origem_recurso ? String(body.origem_recurso).slice(0, 60) : null,
-          origem_id: n(body.origem_id),
-          motivo: body.motivo ? String(body.motivo).slice(0, 300) : null,
+          produto_id: body.produto_id,
+          tamanho_id: body.tamanho_id,
+          local_id: body.local_id,
+          quantidade: body.quantidade,
+          tipo: body.tipo,
+          origem_recurso: body.origem_recurso,
+          origem_id: body.origem_id,
+          motivo: body.motivo,
+          expira_em: body.expira_em,
           criado_por: actor.id ?? null,
-          expira_em: body.expira_em ? String(body.expira_em).slice(0, 10) : null,
         },
         tx
-      );
-    });
+      )
+    );
     return res.json(resultado);
   } catch (e) {
     throw toHttpError(e);
   }
+}
+
+/** NÚCLEO de liberação — idempotente por estado, usado também pelo commerce. */
+export async function liberarReservaInterna(escopo: EscopoEmpresa, id: number, tx?: Tx): Promise<Row | ({ idempotente: true } & Row)> {
+  const s = getStore();
+  const reserva = assertRegistroDaEmpresa(
+    R_RESERVA(),
+    await s.findOneWhere(R_RESERVA(), { id, empresa_id: escopo.empresaId }, tx),
+    escopo
+  );
+  if (String(reserva.status) === 'liberada') return { ...reserva, idempotente: true } as Row;
+  if (String(reserva.status) !== 'ativa') throw new HttpError(409, `Reserva em "${reserva.status}" não pode ser liberada.`);
+  // CAS sobre `ativa`: liberação × liberação vira idempotente, e liberação ×
+  // consumo da conversão NÃO sobrescreve `consumida` com um update cego.
+  const mudou = await s.tryUpdateIf(
+    R_RESERVA(),
+    id,
+    { status: 'ativa' },
+    { status: 'liberada', liberada_em: new Date().toISOString() },
+    tx
+  );
+  if (mudou) return mudou;
+  const deNovo = await s.findOneWhere(R_RESERVA(), { id, empresa_id: escopo.empresaId }, tx);
+  if (deNovo && String(deNovo.status) === 'liberada') return { ...deNovo, idempotente: true } as Row;
+  if (!deNovo) throw new HttpError(409, 'Reserva não existe mais.');
+  throw new HttpError(409, `Reserva em "${deNovo.status}" não pode ser liberada.`);
 }
 
 export async function liberarReserva(req: Request, res: Response) {
@@ -547,16 +611,7 @@ export async function liberarReserva(req: Request, res: Response) {
   const id = parseId(req.params.id);
   const s = getStore();
   try {
-    const resultado = await s.transaction(async (tx) => {
-      const reserva = assertRegistroDaEmpresa(
-        R_RESERVA(),
-        await s.findOneWhere(R_RESERVA(), { id, empresa_id: escopo.empresaId }, tx),
-        escopo
-      );
-      if (String(reserva.status) === 'liberada') return { ...reserva, idempotente: true };
-      if (String(reserva.status) !== 'ativa') throw new HttpError(409, `Reserva em "${reserva.status}" não pode ser liberada.`);
-      return s.update(R_RESERVA(), id, { status: 'liberada', liberada_em: new Date().toISOString() }, tx);
-    });
+    const resultado = await s.transaction(async (tx) => liberarReservaInterna(escopo, id, tx));
     return res.json(resultado);
   } catch (e) {
     throw toHttpError(e);

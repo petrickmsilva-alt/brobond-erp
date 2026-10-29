@@ -47,6 +47,18 @@ const PortalCliente = lazy(() => import('./pages/PortalCliente'));
 const ComponentCatalog = lazy(() => import('./pages/dev/ComponentCatalog'));
 // Página genérica de NOVO/EDITAR — destino de TODO recurso do CRUD genérico.
 const RegistroPage = lazy(() => import('./pages/RegistroPage'));
+// BROBOND COMMERCE OS — detalhe/novo/edição em rotas próprias (ZERO MODAL) e
+// vitrine B2C pública (/loja) fora do Layout do ERP.
+const CommerceProdutoNovoPage = lazy(() => import('./pages/commerce/ProdutoNovoPage'));
+const CommerceProdutoDetalhePage = lazy(() => import('./pages/commerce/ProdutoDetalhePage'));
+const CommercePedidoDetalhePage = lazy(() => import('./pages/commerce/PedidoDetalhePage'));
+const CommercePromocaoFormPage = lazy(() => import('./pages/commerce/PromocaoFormPage'));
+const CommerceCupomFormPage = lazy(() => import('./pages/commerce/CupomFormPage'));
+const LojaInicioPage = lazy(() => import('./pages/commerce/loja/LojaInicioPage'));
+const LojaProdutoPage = lazy(() => import('./pages/commerce/loja/LojaProdutoPage'));
+const LojaCarrinhoPage = lazy(() => import('./pages/commerce/loja/LojaCarrinhoPage'));
+const LojaCheckoutPage = lazy(() => import('./pages/commerce/loja/LojaCheckoutPage'));
+const LojaPedidoPage = lazy(() => import('./pages/commerce/loja/LojaPedidoPage'));
 // Usuários: cadastro/edição em PÁGINA própria (nunca em modal/drawer).
 const UsuarioRegistroPage = lazy(() =>
   import('./pages/UsuariosPage').then((m) => ({ default: m.UsuarioRegistroPage }))
@@ -121,6 +133,12 @@ export default function App() {
           <Route path="/convite/:token" element={<Convite />} />
           <Route path="/catalogo/:token" element={<CatalogoPublico />} />
           <Route path="/portal/:token" element={<PortalCliente />} />
+          {/* Vitrine B2C própria do BROBOND COMMERCE OS — pública, sem sessão ERP. */}
+          <Route path="/loja" element={<LojaInicioPage />} />
+          <Route path="/loja/produto/:slug" element={<LojaProdutoPage />} />
+          <Route path="/loja/carrinho" element={<LojaCarrinhoPage />} />
+          <Route path="/loja/checkout" element={<LojaCheckoutPage />} />
+          <Route path="/loja/pedido/:token" element={<LojaPedidoPage />} />
           <Route
             path="/"
             element={
@@ -491,6 +509,15 @@ export default function App() {
             />
             <Route path="fiscal/obrigacoes/:id/execucoes" element={<ModuleAccess moduleId="fiscal-obrigacoes"><FiscalExecucoesPage /></ModuleAccess>} />
             <Route path="fiscal/obrigacoes/:id" element={<ModuleAccess moduleId="fiscal-obrigacoes"><FiscalObrigacaoDetalhePage /></ModuleAccess>} />
+            {/* BROBOND COMMERCE OS — detalhe/novo/edição em rotas próprias (ZERO MODAL).
+                As rotas de lista (/commerce/...) vêm do loop de MODULES abaixo. */}
+            <Route path="commerce/produtos/novo" element={<ModuleAccess moduleId="commerce-produtos"><CommerceProdutoNovoPage /></ModuleAccess>} />
+            <Route path="commerce/produtos/:id" element={<ModuleAccess moduleId="commerce-produtos"><CommerceProdutoDetalhePage /></ModuleAccess>} />
+            <Route path="commerce/pedidos/:saleId" element={<ModuleAccess moduleId="commerce-pedidos"><CommercePedidoDetalhePage /></ModuleAccess>} />
+            <Route path="commerce/promocoes/nova" element={<ModuleAccess moduleId="commerce-promocoes"><CommercePromocaoFormPage /></ModuleAccess>} />
+            <Route path="commerce/promocoes/:id/editar" element={<ModuleAccess moduleId="commerce-promocoes"><CommercePromocaoFormPage /></ModuleAccess>} />
+            <Route path="commerce/cupons/novo" element={<ModuleAccess moduleId="commerce-cupons"><CommerceCupomFormPage /></ModuleAccess>} />
+            <Route path="commerce/cupons/:id/editar" element={<ModuleAccess moduleId="commerce-cupons"><CommerceCupomFormPage /></ModuleAccess>} />
             <Route path="compras/:id" element={<OrderPage tipo="compra" />} />
             <Route path="ordens/:id" element={<OrdemDetail />} />
             {/* Cotações de compra — ZERO MODAL: criação em /cotacoes-compra/novo

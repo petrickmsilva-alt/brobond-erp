@@ -39,6 +39,10 @@ jobs:
           npm run smoke
       - name: Auditoria do menu
         run: npm run audit:menu
+      # Gate BROBOND COMMERCE OS (P0/P1/P2): modelo, rotas, RBAC de fluxo,
+      # webhook assinado, zero modal, testes e docs. P0 aberto = exit 1.
+      - name: Gate Commerce go-live (READY/BLOCKED)
+        run: npm run commerce:go-live
       # ERP 3.0: inventário arquitetural automatizado (migrations, tabelas,
       # recursos × tenant × Prisma, rotas, RBAC, testes). Falha se um recurso
       # apontar para tabela inexistente, declarar empresa sem `empresa_id` ou

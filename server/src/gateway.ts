@@ -30,7 +30,7 @@ import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, exigirReautenticacao, type AuthUser } from './auth';
-import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, empresaDoRegistroAudit, empresaExplicitaAudit } from './empresa';
+import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, empresaDoRegistroAudit, empresaExplicitaAudit, type EscopoEmpresa } from './empresa';
 import { round2, diaISO } from './utils';
 import { calcularLiquido, efetuarBaixa } from './financeiro';
 import { registrarEstornoComissao } from './comissoes';
@@ -219,6 +219,37 @@ export function getProvider(id: string): PaymentProvider | null {
 
 export function listarProviders(): PaymentProvider[] {
   return [...registry.values()];
+}
+
+// ----------------------------------------------------------------------------
+// GANCHO pós-evento (Commerce OS)
+//
+// O checkout /loja precisa reagir quando a cobrança muda de estado — e SÓ
+// depois que o evento do webhook foi de fato processado (nunca antes, nunca
+// pelo frontend). O listener é best-effort: falha dele não derruba o
+// processamento financeiro; o commerce registra o próprio outbox de retry.
+// ----------------------------------------------------------------------------
+
+export type CobrancaAlteradaEvento = {
+  cobrancaId: number;
+  empresaId: number;
+  intencao: 'paga' | 'cancelada' | 'expirada' | 'estornada';
+};
+
+let onCobrancaAlterada: ((evento: CobrancaAlteradaEvento) => Promise<void>) | null = null;
+
+/** Registra (ou desliga com null) o ouvinte de mudança de cobrança. */
+export function setOnCobrancaAlterada(fn: ((evento: CobrancaAlteradaEvento) => Promise<void>) | null): void {
+  onCobrancaAlterada = fn;
+}
+
+async function notificarCobrancaAlterada(evento: CobrancaAlteradaEvento): Promise<void> {
+  if (!onCobrancaAlterada) return;
+  try {
+    await onCobrancaAlterada(evento);
+  } catch (e) {
+    console.warn('⚠️  Ouvinte de cobrança (commerce) indisponível:', e instanceof Error ? e.message : e);
+  }
 }
 
 /** SQLSTATE de um erro do driver, sem presumir o formato do que foi lançado. */
@@ -581,6 +612,149 @@ function metodoValido(m: unknown): MetodoCobranca {
   return metodo as MetodoCobranca;
 }
 
+// ----------------------------------------------------------------------------
+// Criação de cobrança — núcleo compartilhado (rota financeira + checkout /loja)
+// ----------------------------------------------------------------------------
+
+export type CriarCobrancaGatewayParams = {
+  provider: string;
+  metodo: MetodoCobranca;
+  valor: number;
+  taxaPct?: number;
+  parcelas?: number;
+  descricao?: string;
+  vencimento?: string | null;
+  expiraEm?: string | null;
+  payerEmail?: string | null;
+  token?: string | null;
+  idempotencyKey: string;
+  lancamento?: Row | null;
+  venda?: Row | null;
+  contaId?: number | null;
+  observacoes?: string | null;
+  actor: { id: number | null; name: string };
+};
+
+/**
+ * Normaliza um instante (Date, ISO ou `Date.prototype.toString`) para ISO —
+ * `gateway_cobrancas.expira_em` é `timestamptz` e o provedor também exige
+ * formato reconhecível. Inválido → 400 honesto (nunca 502 mudo).
+ */
+export function instanteIso(valor?: string | number | Date | null): string | null {
+  if (valor === null || valor === undefined || valor === '') return null;
+  const d = new Date(valor);
+  if (Number.isNaN(d.getTime())) throw new HttpError(400, `Data de expiração inválida: ${String(valor).slice(0, 60)}`);
+  return d.toISOString();
+}
+
+/**
+ * Núcleo idempotente de criação de cobrança (índice empresa+provider+chave).
+ * A rota financeira e o checkout da vitrine usam ESTE caminho — uma regra só.
+ * Não autoriza acessos: quem chama é responsável pelo RBAC do seu fluxo.
+ */
+export async function criarCobrancaGateway(
+  escopo: EscopoEmpresa,
+  params: CriarCobrancaGatewayParams
+): Promise<{ cobranca: Row; resultado: CobrancaProviderResult | null; idempotente: boolean }> {
+  const s = getStore();
+  const providerId = String(params.provider || '').toLowerCase();
+  const metodo = params.metodo;
+  const provider = getProvider(providerId);
+  if (!provider) throw new HttpError(404, `Provedor "${providerId}" não está registrado.`);
+
+  const lancamento = params.lancamento ?? null;
+  const venda = params.venda ?? null;
+  const valor = round2(lancamento ? Number(lancamento.valor || 0) : Number(params.valor || 0));
+  if (!(valor > 0)) throw new HttpError(400, 'Informe um valor maior que zero (ou vincule um lançamento).', { valor: 'Inválido' });
+  const taxaPct = Math.min(99.99, Math.max(0, params.taxaPct ?? 0));
+  const parcelas = metodo === 'cartao_credito' ? Math.max(1, Math.trunc(params.parcelas ?? 1)) : 1;
+  const idempotencyKey = params.idempotencyKey.slice(0, 120);
+
+  const existente = await s.findOneWhere(R_GATEWAY_COBRANCAS, {
+    empresa_id: escopo.empresaId,
+    provider: providerId,
+    idempotency_key: idempotencyKey,
+  });
+  if (existente && String(existente.status) !== 'falhou') {
+    return { cobranca: existente, resultado: null, idempotente: true };
+  }
+
+  const ctx = await contextoDoProvider(escopo.empresaId, providerId);
+  const input: CobrancaInput = {
+    valor,
+    metodo,
+    descricao: params.descricao
+      ? String(params.descricao).slice(0, 200)
+      : lancamento
+        ? String(lancamento.descricao)
+        : venda
+          ? `Venda #${venda.id}`
+          : 'Cobrança',
+    vencimento: params.vencimento
+      ? String(params.vencimento).slice(0, 10)
+      : lancamento?.vencimento
+        ? diaISO(lancamento.vencimento)
+        : null,
+    expira_em: instanteIso(params.expiraEm),
+    parcelas,
+    payer_email: params.payerEmail ? String(params.payerEmail) : null,
+    token: params.token ? String(params.token) : null,
+    referencia: idempotencyKey,
+  };
+
+  let resultado: CobrancaProviderResult;
+  try {
+    resultado = await provider.criaCobranca(ctx, input);
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(502, `O gateway "${providerId}" falhou ao criar a cobrança.`);
+  }
+
+  const dados: Row = {
+    empresa_id: escopo.empresaId,
+    provider: providerId,
+    metodo,
+    venda_id: venda ? Number(venda.id) : lancamento?.referencia_tipo === 'venda' ? Number(lancamento.referencia_id) : null,
+    lancamento_id: lancamento ? Number(lancamento.id) : null,
+    conta_id: params.contaId ?? null,
+    valor,
+    taxa_pct: taxaPct,
+    valor_liquido: calcularLiquido(valor, taxaPct),
+    parcelas,
+    status: resultado.status,
+    provider_ref: resultado.provider_ref,
+    idempotency_key: idempotencyKey,
+    expires_em: resultado.expires_em ?? null,
+    nosso_numero: resultado.nosso_numero ?? null,
+    linha_digitavel: resultado.linha_digitavel ?? null,
+    qr_code: resultado.qr_code ?? null,
+    copia_cola: resultado.copia_cola ?? null,
+    nsu: resultado.nsu ?? null,
+    payload: resultado.bruto ?? null,
+    observacoes: params.observacoes ? String(params.observacoes).slice(0, 500) : null,
+  };
+
+  let row: Row;
+  if (existente) {
+    row = (await s.update(R_GATEWAY_COBRANCAS, Number(existente.id), { ...dados, atualizado_em: new Date().toISOString() }))!;
+  } else {
+    row = await s.insert(R_GATEWAY_COBRANCAS, dados);
+  }
+  await s.audit({
+    usuario_id: params.actor.id,
+    usuario: params.actor.name,
+    acao: 'criar',
+    recurso: 'gateway_cobrancas',
+    registro_id: Number(row.id),
+    descricao: `Cobrança ${metodo} de ${valor.toFixed(2)} criada via ${providerId} (${resultado.provider_ref})`,
+    dados: { provider: providerId, metodo, valor, idempotency_key: idempotencyKey, lancamento_id: dados.lancamento_id, venda_id: dados.venda_id },
+    // row.empresa_id é a fonte (escopo passado pelo chamador); sem linha, o
+    // fallback nulo cai na empresa do registro — nunca em outra.
+    empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, row, null),
+  });
+  return { cobranca: row, resultado, idempotente: false };
+}
+
 /** POST /api/financeiro/gateway/cobrancas — cria uma cobrança via gateway. */
 export async function criarCobranca(req: Request, res: Response) {
   const actor = currentUser(req);
@@ -606,10 +780,6 @@ export async function criarCobranca(req: Request, res: Response) {
     assertRegistroDaEmpresa(getResource('contas_financeiras')!, await s.get(getResource('contas_financeiras')!, Number(body.conta_id)), escopo);
   }
 
-  const valor = round2(lancamento ? Number(lancamento.valor || 0) : Number(body.valor || 0));
-  if (!(valor > 0)) throw new HttpError(400, 'Informe um valor maior que zero (ou vincule um lançamento).', { valor: 'Inválido' });
-  const taxaPct = Math.min(99.99, Math.max(0, Number(body.taxa_pct || 0)));
-  const parcelas = metodo === 'cartao_credito' ? Math.max(1, Math.trunc(Number(body.parcelas || 1))) : 1;
   const idempotencyKey = body.idempotency_key
     ? String(body.idempotency_key).slice(0, 120)
     : lancamento
@@ -618,74 +788,26 @@ export async function criarCobranca(req: Request, res: Response) {
         ? `venda-${venda.id}-${metodo}`
         : `avulsa-${createHash('sha1').update(JSON.stringify(body)).digest('hex').slice(0, 20)}`;
 
-  const existente = await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: escopo.empresaId, provider: providerId, idempotency_key: idempotencyKey });
-  if (existente && String(existente.status) !== 'falhou') {
-    return res.json({ ok: true, idempotente: true, cobranca: publicaCobranca(existente) });
-  }
-
-  const ctx = await contextoDoProvider(escopo.empresaId, providerId);
-  const provider = getProvider(providerId)!;
-  const input: CobrancaInput = {
-    valor,
-    metodo,
-    descricao: body.descricao ? String(body.descricao).slice(0, 200) : lancamento ? String(lancamento.descricao) : venda ? `Venda #${venda.id}` : 'Cobrança',
-    vencimento: body.vencimento ? String(body.vencimento).slice(0, 10) : lancamento?.vencimento ? diaISO(lancamento.vencimento) : null,
-    expira_em: body.expira_em ? String(body.expira_em) : null,
-    parcelas,
-    payer_email: body.payer_email ? String(body.payer_email) : null,
-    token: body.token ? String(body.token) : null,
-    referencia: idempotencyKey,
-  };
-
-  let resultado: CobrancaProviderResult;
-  try {
-    resultado = await provider.criaCobranca(ctx, input);
-  } catch (e) {
-    if (e instanceof HttpError) throw e;
-    throw new HttpError(502, `O gateway "${providerId}" falhou ao criar a cobrança.`);
-  }
-
-  const dados: Row = {
-    empresa_id: escopo.empresaId,
+  const criada = await criarCobrancaGateway(escopo, {
     provider: providerId,
     metodo,
-    venda_id: venda ? Number(venda.id) : lancamento?.referencia_tipo === 'venda' ? Number(lancamento.referencia_id) : null,
-    lancamento_id: lancamento ? Number(lancamento.id) : null,
-    conta_id: contaId,
-    valor,
-    taxa_pct: taxaPct,
-    valor_liquido: calcularLiquido(valor, taxaPct),
-    parcelas,
-    status: resultado.status,
-    provider_ref: resultado.provider_ref,
-    idempotency_key: idempotencyKey,
-    expires_em: resultado.expires_em ?? null,
-    nosso_numero: resultado.nosso_numero ?? null,
-    linha_digitavel: resultado.linha_digitavel ?? null,
-    qr_code: resultado.qr_code ?? null,
-    copia_cola: resultado.copia_cola ?? null,
-    nsu: resultado.nsu ?? null,
-    payload: resultado.bruto ?? null,
-    observacoes: body.observacoes ? String(body.observacoes).slice(0, 500) : null,
-  };
-
-  let row: Row;
-  if (existente) {
-    row = (await s.update(R_GATEWAY_COBRANCAS, Number(existente.id), { ...dados, atualizado_em: new Date().toISOString() }))!;
-  } else {
-    row = await s.insert(R_GATEWAY_COBRANCAS, dados);
-  }
-  await s.audit({
-    usuario_id: actor.id || null,
-    usuario: actor.name,
-    acao: 'criar',
-    recurso: 'gateway_cobrancas',
-    registro_id: Number(row.id),
-    descricao: `Cobrança ${metodo} de ${valor.toFixed(2)} criada via ${providerId} (${resultado.provider_ref})`,
-    dados: { provider: providerId, metodo, valor, idempotency_key: idempotencyKey, lancamento_id: dados.lancamento_id, venda_id: dados.venda_id },
-    empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, row, actor),
+    valor: Number(body.valor || 0),
+    taxaPct: Number(body.taxa_pct || 0),
+    parcelas: body.parcelas ? Number(body.parcelas) : undefined,
+    descricao: body.descricao ? String(body.descricao) : undefined,
+    vencimento: body.vencimento ? String(body.vencimento) : null,
+    expiraEm: instanteIso(body.expira_em as string | null),
+    payerEmail: body.payer_email ? String(body.payer_email) : null,
+    token: body.token ? String(body.token) : null,
+    idempotencyKey,
+    lancamento,
+    venda,
+    contaId,
+    observacoes: body.observacoes ? String(body.observacoes) : null,
+    actor: { id: actor.id || null, name: actor.name },
   });
-  res.status(201).json({ ok: true, cobranca: publicaCobranca(row) });
+  if (criada.idempotente) return res.json({ ok: true, idempotente: true, cobranca: publicaCobranca(criada.cobranca) });
+  res.status(201).json({ ok: true, cobranca: publicaCobranca(criada.cobranca) });
 }
 
 /** GET /api/financeiro/gateway/cobrancas — lista do escopo. */
@@ -736,6 +858,7 @@ export async function cancelarCobranca(req: Request, res: Response) {
     empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, row, actor),
     dados: { status: 'cancelada' },
   });
+  await notificarCobrancaAlterada({ cobrancaId: Number(row.id), empresaId: Number(row.empresa_id), intencao: 'cancelada' });
   res.json({ ok: true, cobranca: publicaCobranca(atualizada) });
 }
 
@@ -771,6 +894,7 @@ export async function estornarCobranca(req: Request, res: Response) {
     }, tx);
     return { atualizada, estornoLancamentoId };
   });
+  await notificarCobrancaAlterada({ cobrancaId: Number(row.id), empresaId: Number(row.empresa_id), intencao: 'estornada' });
   res.json({ ok: true, cobranca: publicaCobranca(resultado.atualizada), estorno_lancamento_id: resultado.estornoLancamentoId });
 }
 
@@ -1063,6 +1187,13 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
       ultima_tentativa_em: new Date().toISOString(),
       processado_em: new Date().toISOString(),
       erro: null,
+    });
+    // PAGAMENTO NUNCA CONFIRMADO PELO FRONTEND: só aqui, após o evento
+    // processado, o commerce (checkout /loja) projeta o pedido e converte.
+    await notificarCobrancaAlterada({
+      cobrancaId: Number(cobranca.id),
+      empresaId: Number(cobranca.empresa_id),
+      intencao,
     });
     return { resultado: intencao };
   } catch (e: any) {

@@ -248,6 +248,10 @@ if (linhaAuth < 0) {
   const permitidas = [
     /^\/api\/(health|auth|convites|files|portal|publico)(\/|$)/,
     /^\/api\/print\/agent(\/|$)/,
+    // Vitrine B2C do Commerce OS (/loja) — storefront público no MESMO padrão
+    // do portal: só leitura de catálogo, preview, criação de checkout (que
+    // valida tudo no servidor) e acompanhamento por token aleatório de 256 bits.
+    /^\/api\/loja(\/|$)/,
   ];
   for (const p of publicas) {
     if (!permitidas.some((re) => re.test(p))) aviso('ROTA_PUBLICA', `A rota "${p}" é registrada antes do requireAuth global — confirme que é intencionalmente pública.`);
@@ -289,6 +293,10 @@ const SEM_TELA_PROPRIA = new Set([
   // tela de transferências (que lê o documento completo por
   // GET /api/estoque/transferencias/:id). Não são telas — são o documento.
   'estoque_transferencia_itens', 'estoque_transferencia_eventos',
+  // COMMERCE OS: o preço por canal é editado DENTRO da tela do produto
+  // commerce (GET/PUT /api/commerce/produtos/:id/precos) — mesmo padrão de
+  // lista_preco_itens: é um atributo da tela pai, não um menu próprio.
+  'commerce_precos',
 ]);
 const recursosNavegaveis = new Set<string>();
 for (const r of Object.values(RESOURCES)) {

@@ -26,20 +26,35 @@ export interface SaleIngestedEvent {
 export type SaleIngestedListener = (event: SaleIngestedEvent) => void | Promise<void>;
 
 let listener: SaleIngestedListener | null = null;
+/**
+ * Listadores ADICIONAIS (registram-se sem sobrescrever o principal).
+ * O Commerce OS usa este caminho para a conversão automática sales → vendas
+ * enquanto o listener principal continua sendo o motor 1. MEU NEGÓCIOS.
+ */
+const extras = new Set<SaleIngestedListener>();
 
 export function setOnSaleIngested(fn: SaleIngestedListener | null): void {
   listener = fn;
 }
 
-/** Notifica o servidor — "best effort", nunca lança. */
+/** Registra um ouvinte adicional (retorna função de remoção). */
+export function addOnSaleIngested(fn: SaleIngestedListener): () => void {
+  extras.add(fn);
+  return () => extras.delete(fn);
+}
+
+/** Notifica o(s) servidor(es) — "best effort", nunca lança. */
 export async function notifySaleIngested(event: SaleIngestedEvent): Promise<void> {
-  if (!listener) return;
-  try {
-    await listener(event);
-  } catch (error) {
-    console.warn(
-      '⚠️  Listener de pós-ingestão de vendas indisponível:',
-      error instanceof Error ? error.message : error
-    );
+  const alvos: SaleIngestedListener[] = listener ? [listener, ...extras] : [...extras];
+  if (!alvos.length) return;
+  for (const alvo of alvos) {
+    try {
+      await alvo(event);
+    } catch (error) {
+      console.warn(
+        '⚠️  Listener de pós-ingestão de vendas indisponível:',
+        error instanceof Error ? error.message : error
+      );
+    }
   }
 }

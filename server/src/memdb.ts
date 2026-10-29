@@ -260,8 +260,22 @@ export class MemStore implements Store {
   }
 
   async get(r: Resource, id: number): Promise<Row | null> {
-    const row = this.table(r.table).rows.get(id);
+    const t = this.table(r.table);
+    const row = t.rows.get(id) ?? this.linhaPorIdTexto(t.rows, id);
     return row ? this.decorate(r, row) : null;
+  }
+
+  /**
+   * Recursos com id TEXT (`sales`/`sale_items`, cuid da fusão commerce): a
+   * linha vive sob a chave numérica interna da tabela, então `rows.get(cuid)`
+   * nunca a encontra. Sem este fallback a ponte sales → vendas e o checkout
+   * da vitrine ficavam MUDOS no modo demonstração (update devolvia null).
+   */
+  private linhaPorIdTexto(rows: Map<number, Row>, id: number): Row | undefined {
+    const alvo = typeof id === 'string' ? id : Number.isNaN(Number(id)) ? String(id) : null;
+    if (alvo === null) return undefined;
+    for (const row of rows.values()) if (String(row.id) === alvo) return row;
+    return undefined;
   }
 
   async options(r: Resource): Promise<Option[]> {
@@ -454,7 +468,7 @@ export class MemStore implements Store {
 
   async update(r: Resource, id: number, data: Payload): Promise<Row | null> {
     const t = this.table(r.table);
-    const cur = t.rows.get(id);
+    const cur = t.rows.get(id) ?? this.linhaPorIdTexto(t.rows, id);
     if (!cur) return null;
     this.checkConstraints(r, data, id);
     const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));

@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-10-28T16:57:48.020Z",
+  "gerado_em": "2026-10-29T06:38:06.829Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 67,
-    "sql_com_conteudo": 67,
+    "sql": 68,
+    "sql_com_conteudo": 68,
     "prisma": 7
   },
   "tabelas": {
-    "total": 139,
-    "com_empresa_id": 119,
+    "total": 148,
+    "com_empresa_id": 128,
     "sem_empresa_id": 20,
-    "fora_do_prisma": 128
+    "fora_do_prisma": 137
   },
-  "indices": 435,
-  "constraints": 253,
+  "indices": 450,
+  "constraints": 273,
   "recursos": {
-    "total": 124,
-    "com_tabela": 124,
-    "multiempresa": 106,
-    "somente_leitura": 55,
-    "rbac_restrito": 45,
-    "cobertura_tenant_pct": 85.5
+    "total": 133,
+    "com_tabela": 133,
+    "multiempresa": 115,
+    "somente_leitura": 60,
+    "rbac_restrito": 50,
+    "cobertura_tenant_pct": 86.5
   },
   "crm": [
     {
@@ -79,20 +79,20 @@
     }
   ],
   "modulos": {
-    "total": 106,
-    "navegaveis": 98,
-    "planejados": 8,
+    "total": 111,
+    "navegaveis": 107,
+    "planejados": 4,
     "areas": 11,
-    "grupos": 28,
-    "com_recurso": 71
+    "grupos": 31,
+    "com_recurso": 79
   },
   "rotas": {
-    "total": 378,
+    "total": 413,
     "por_metodo": {
-      "GET": 167,
-      "POST": 179,
-      "PUT": 17,
-      "DELETE": 12,
+      "GET": 185,
+      "POST": 190,
+      "PUT": 21,
+      "DELETE": 14,
       "PATCH": 3
     },
     "publicas_por_desenho": 44,
@@ -193,14 +193,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 168,
-      "casos": 1483
+      "arquivos": 171,
+      "casos": 1520
     },
     "client": {
-      "arquivos": 81,
-      "casos": 884
+      "arquivos": 96,
+      "casos": 935
     },
-    "total": 2367
+    "total": 2455
   },
   "integracoes": {
     "arquivos_modules": 31,
@@ -256,6 +256,51 @@
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"produto_abc\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"commerce_configuracoes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"commerce_produtos\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"commerce_precos\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"commerce_publicacoes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"commerce_pedidos\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"commerce_outbox\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"commerce_promocoes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"commerce_cupons\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"commerce_rastreio\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     }
   ],
   "tabelas_sem_empresa_id": [
@@ -295,6 +340,15 @@
     "colecoes",
     "comissoes_apuradas",
     "comissoes_eventos",
+    "commerce_configuracoes",
+    "commerce_cupons",
+    "commerce_outbox",
+    "commerce_pedidos",
+    "commerce_precos",
+    "commerce_produtos",
+    "commerce_promocoes",
+    "commerce_publicacoes",
+    "commerce_rastreio",
     "compra_recebimento_itens",
     "compra_recebimentos",
     "compras",

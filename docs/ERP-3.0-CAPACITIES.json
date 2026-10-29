@@ -869,29 +869,43 @@
       "id": "commerce-produtos",
       "label": "Produtos",
       "tipo": "modulo",
+      "recurso": "commerce_produtos",
+      "tabela": "commerce_produtos",
       "rota": "/commerce/produtos",
-      "menu": true
+      "menu": true,
+      "rbac": "operador",
+      "teste": "client/src/pages/commerce/ProdutosPage.test.tsx"
     },
     {
       "id": "commerce-pedidos",
       "label": "Pedidos",
       "tipo": "modulo",
+      "recurso": "commerce_pedidos",
+      "tabela": "commerce_pedidos",
       "rota": "/commerce/pedidos",
-      "menu": true
+      "menu": true,
+      "rbac": "operador",
+      "teste": "client/src/pages/commerce/PedidosPage.test.tsx"
     },
     {
       "id": "commerce-trends",
       "label": "Trends",
       "tipo": "modulo",
       "rota": "/commerce/trends",
-      "menu": true
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "client/src/pages/commerce/TrendsPage.test.tsx"
     },
     {
       "id": "commerce-delivery",
       "label": "📦 Delivery",
       "tipo": "modulo",
+      "recurso": "commerce_rastreio",
+      "tabela": "commerce_rastreio",
       "rota": "/commerce/delivery",
-      "menu": true
+      "menu": true,
+      "rbac": "operador",
+      "teste": "client/src/pages/commerce/DeliveryPage.test.tsx"
     },
     {
       "id": "creators",
@@ -1172,6 +1186,152 @@
       "tipo": "infra",
       "menu": false,
       "justificativa": "Infraestrutura: sessão e autenticação."
+    },
+    {
+      "id": "commerce-publicacoes",
+      "label": "Publicações",
+      "tipo": "modulo",
+      "recurso": "commerce_publicacoes",
+      "tabela": "commerce_publicacoes",
+      "rota": "/commerce/publicacoes",
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "client/src/pages/commerce/PublicacoesPage.test.tsx"
+    },
+    {
+      "id": "commerce-loja",
+      "label": "Loja própria",
+      "tipo": "modulo",
+      "recurso": "commerce_configuracoes",
+      "tabela": "commerce_configuracoes",
+      "rota": "/commerce/loja",
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "client/src/pages/commerce/LojaConfigPage.test.tsx"
+    },
+    {
+      "id": "commerce-promocoes",
+      "label": "Promoções",
+      "tipo": "modulo",
+      "recurso": "commerce_promocoes",
+      "tabela": "commerce_promocoes",
+      "rota": "/commerce/promocoes",
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "client/src/pages/commerce/PromocoesPage.test.tsx"
+    },
+    {
+      "id": "commerce-cupons",
+      "label": "Cupons",
+      "tipo": "modulo",
+      "recurso": "commerce_cupons",
+      "tabela": "commerce_cupons",
+      "rota": "/commerce/cupons",
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "client/src/pages/commerce/CuponsPage.test.tsx"
+    },
+    {
+      "id": "commerce-fila",
+      "label": "Fila & sync",
+      "tipo": "modulo",
+      "recurso": "commerce_outbox",
+      "tabela": "commerce_outbox",
+      "rota": "/commerce/fila",
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "client/src/pages/commerce/FilaPage.test.tsx"
+    },
+    {
+      "id": "commerce-precos",
+      "label": "Preços por canal",
+      "tipo": "submodulo",
+      "parente": "commerce-produtos",
+      "recurso": "commerce_precos",
+      "tabela": "commerce_precos",
+      "menu": false,
+      "justificativa": "O preço por canal é editado dentro do detalhe do produto commerce (formulário em rota própria /commerce/produtos/:id). Não há árvore de navegação separada — uma entrada de menu duplicaria a capacidade.",
+      "teste": "client/src/pages/commerce/ProdutoDetalhePage.test.tsx"
+    },
+    {
+      "id": "commerce-produto-novo",
+      "label": "Novo produto commerce",
+      "tipo": "acao",
+      "parente": "commerce-produtos",
+      "rota": "/commerce/produtos/novo",
+      "menu": false,
+      "justificativa": "Ação acessada pelo botão da listagem; formulário em página própria (zero modal).",
+      "teste": "client/src/pages/commerce/ProdutoNovoPage.test.tsx"
+    },
+    {
+      "id": "commerce-produto-detalhe",
+      "label": "Produto commerce (documento)",
+      "tipo": "detalhe",
+      "parente": "commerce-produtos",
+      "rota": "/commerce/produtos/:id",
+      "menu": false,
+      "justificativa": "Detalhe do produto commerce em rota própria; acessado pela listagem e pela criação.",
+      "teste": "client/src/pages/commerce/ProdutoDetalhePage.test.tsx"
+    },
+    {
+      "id": "commerce-pedido-detalhe",
+      "label": "Pedido omnichannel (documento)",
+      "tipo": "detalhe",
+      "parente": "commerce-pedidos",
+      "rota": "/commerce/pedidos/:saleId",
+      "menu": false,
+      "justificativa": "Detalhe do pedido em rota própria (lista/detalhe nunca em modal), acessado da inbox, do delivery e do rastreio.",
+      "teste": "client/src/pages/commerce/PedidoDetalhePage.test.tsx"
+    },
+    {
+      "id": "commerce-promocao-nova",
+      "label": "Nova promoção",
+      "tipo": "acao",
+      "parente": "commerce-promocoes",
+      "rota": "/commerce/promocoes/nova",
+      "menu": false,
+      "justificativa": "Ação acessada pelo botão da listagem; formulário em página própria (zero modal).",
+      "teste": "client/src/pages/commerce/PromocaoFormPage.test.tsx"
+    },
+    {
+      "id": "commerce-promocao-editar",
+      "label": "Editar promoção",
+      "tipo": "acao",
+      "parente": "commerce-promocoes",
+      "rota": "/commerce/promocoes/:id/editar",
+      "menu": false,
+      "justificativa": "Edição do documento em rota própria (zero modal).",
+      "teste": "client/src/pages/commerce/PromocaoFormPage.test.tsx"
+    },
+    {
+      "id": "commerce-cupom-novo",
+      "label": "Novo cupom",
+      "tipo": "acao",
+      "parente": "commerce-cupons",
+      "rota": "/commerce/cupons/novo",
+      "menu": false,
+      "justificativa": "Ação acessada pelo botão da listagem; formulário em página própria (zero modal).",
+      "teste": "client/src/pages/commerce/CupomFormPage.test.tsx"
+    },
+    {
+      "id": "commerce-cupom-editar",
+      "label": "Editar cupom",
+      "tipo": "acao",
+      "parente": "commerce-cupons",
+      "rota": "/commerce/cupons/:id/editar",
+      "menu": false,
+      "justificativa": "Edição do documento em rota própria (zero modal).",
+      "teste": "client/src/pages/commerce/CupomFormPage.test.tsx"
+    },
+    {
+      "id": "commerce-vitrine",
+      "label": "Vitrine B2C (/loja)",
+      "tipo": "submodulo",
+      "parente": "commerce-loja",
+      "rota": "/loja",
+      "menu": false,
+      "justificativa": "Vitrine pública do checkout B2C (início/produto/carrinho/checkout/pedido) acessada por clientes finais sem sessão do ERP — nunca é entrada da árvore de navegação interna.",
+      "teste": "client/src/pages/commerce/LojaFluxoPages.test.tsx"
     }
   ],
   "recursos_sem_dono_permitido": {}

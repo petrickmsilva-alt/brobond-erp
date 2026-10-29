@@ -1722,6 +1722,50 @@ check('ticket de MFA não vale como token de acesso → 401', ticketComoBearer.s
     `status ${metaCrm.status} opções=${opcoesEtapa.length}`);
 }
 
+// ------------------------------------------------------ COMMERCE OS (smoke)
+{
+  const sfxCom = Date.now().toString().slice(-6);
+  const prodCom = await req('POST', '/produtos', { sku: `COM-SMOKE-${sfxCom}`, nome: `Commerce Smoke ${sfxCom}`, preco_venda: 149.9, custo: 60 });
+  check('0058 COMMERCE: produto ERP criado para a vitrine', [200, 201].includes(prodCom.status), `status ${prodCom.status} ${msg(prodCom.json)}`);
+  const projCom = await req('POST', '/commerce/produtos', { produto_id: prodCom.json?.id });
+  const slugCom = String(projCom.json?.produto_commerce?.slug || projCom.json?.slug || '');
+  check('0058 COMMERCE: projeção na vitrine devolve slug público', [200, 201].includes(projCom.status) && slugCom.length > 3, `status ${projCom.status} ${msg(projCom.json)}`);
+  const pcCom = Number(projCom.json?.produto_commerce?.id || projCom.json?.id || 0);
+  const precoCom = await req('PUT', `/commerce/produtos/${prodCom.json?.id}/precos`, { canal: 'BROBOND', preco: 139.9, preco_promo: null });
+  check('0058 COMMERCE: preço por canal gravado (BROBOND)', [200, 201].includes(precoCom.status), `status ${precoCom.status} ${msg(precoCom.json)}`);
+  const filaCom = await req('POST', '/commerce/publicacoes', { produto_id: prodCom.json?.id, canais: ['BROBOND'] });
+  check('0058 COMMERCE: publicação enfileirada (idempotente por canal/versão)', [200, 201].includes(filaCom.status), `status ${filaCom.status} ${msg(filaCom.json)}`);
+  let estadoPub = '';
+  for (let i = 0; i < 25 && !['PUBLISHED', 'ERROR', 'REJECTED'].includes(estadoPub); i += 1) {
+    await new Promise((r) => setTimeout(r, 150));
+    const lst = await req('GET', '/commerce/publicacoes');
+    const minhas = (lst.json?.publicacoes || []).filter((p) => Number(p.produto_id) === Number(prodCom.json?.id));
+    estadoPub = String(minhas[0]?.estado || '');
+  }
+  check('0058 COMMERCE: processador real da fila publica BROBOND (PUBLISHED)', estadoPub === 'PUBLISHED', `estado=${estadoPub}`);
+  const cfgLista = await req('GET', '/commerce_configuracoes');
+  const cfgId = Number(cfgLista.json?.rows?.[0]?.id ?? (Array.isArray(cfgLista.json) ? cfgLista.json[0]?.id : 0) ?? 0);
+  if (cfgId > 0) await req('PUT', `/commerce_configuracoes/${cfgId}`, { frete_provedor: 'nenhum', frete_valor: 0 });
+  else await req('POST', '/commerce_configuracoes', { loja_nome: `Loja Smoke ${sfxCom}`, frete_provedor: 'nenhum', checkout_expira_minutos: 60 });
+  const cfgPub = await req('GET', '/loja/config', undefined, null);
+  check('0058 COMMERCE: config da loja existe e é pública', cfgPub.status === 200 && cfgPub.json?.frete?.provedor === 'nenhum', `status ${cfgPub.status} provedor=${cfgPub.json?.frete?.provedor}`);
+  const vitCom = await req('GET', '/loja/produtos?page=1&pageSize=48', undefined, null);
+  const naVit = (vitCom.json?.produtos || []).some((p) => p.slug === slugCom);
+  check('0058 COMMERCE: vitrine pública sem token lista o produto projetado', vitCom.status === 200 && naVit, `status ${vitCom.status} naVitrine=${naVit}`);
+  const prevCom = await req('POST', '/loja/preview', { itens: [{ produto_id: prodCom.json?.id, tamanho_id: null, quantidade: 1 }] }, null);
+  const fretePrev = prevCom.json?.frete || {};
+  const freteMotivo = String(fretePrev.motivo || prevCom.json?.frete_motivo || '');
+  check('0058 COMMERCE: frete fail-closed responde "Frete não configurado"',
+    prevCom.status === 200 && fretePrev.disponivel === false && /frete não configurado/i.test(freteMotivo),
+    `status ${prevCom.status} motivo="${freteMotivo}"`);
+  const trendsCom = await req('GET', '/commerce/trends?dias=30');
+  check('0058 COMMERCE: trends com totais numéricos reais', trendsCom.status === 200 && typeof trendsCom.json?.totais?.pedidos === 'number', `status ${trendsCom.status}`);
+  const eventosCom = await req('GET', '/commerce/eventos');
+  check('0058 COMMERCE: observabilidade responde (outbox + publicações + webhooks)',
+    eventosCom.status === 200 && Array.isArray(eventosCom.json?.outbox) && Array.isArray(eventosCom.json?.publicacoes) && Array.isArray(eventosCom.json?.webhooks),
+    `status ${eventosCom.status} ${msg(eventosCom.json)}`);
+}
+
 console.log(out.join('\n'));
 console.log(`\n${out.length - falhas}/${out.length} verificações OK`);
 process.exit(falhas ? 1 : 0);
