@@ -74,6 +74,23 @@ function mpExtraiInstrumento(p: Record<string, unknown>, metodo: MetodoCobranca)
   return { nsu: (td.payment_method_reference_id as string) || null };
 }
 
+/** Interpret the same authoritative response that was checked against the local charge. */
+export function intencaoMercadoPago(atual: CobrancaProviderResult): IntencaoWebhook {
+  const st = String(atual.bruto?.status || '');
+  const devolvido = Number(atual.bruto?.transaction_amount_refunded || 0);
+  if (st === 'approved' && devolvido > 0) throw new HttpError(409, 'Estorno parcial em cobrança legada requer conciliação manual.');
+  if (st === 'approved') return 'paga';
+  if (st === 'cancelled' || st === 'rejected') return 'cancelada';
+  if (st === 'charged_back') throw new HttpError(409, 'Chargeback em cobrança legada requer revisão; não é estorno.');
+  if (st === 'refunded') {
+    const total = Number(atual.bruto?.transaction_amount);
+    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(devolvido) || round2(devolvido) !== round2(total))
+      throw new HttpError(409, 'Valor integral do estorno legado não pôde ser confirmado.');
+    return 'estornada';
+  }
+  return null;
+}
+
 export const mercadopagoProvider: PaymentProvider = {
   id: 'mercadopago',
   nome: 'Mercado Pago',
@@ -194,10 +211,6 @@ export const mercadopagoProvider: PaymentProvider = {
     // O Mercado Pago manda só a referência: o estado real vem da consulta.
     const atual = await this.consultaCobranca(ctx, parsed.provider_ref!);
     if (!atual) return null;
-    const st = String(atual.bruto?.status || '');
-    if (st === 'approved') return 'paga';
-    if (st === 'cancelled' || st === 'rejected') return 'cancelada';
-    if (st === 'refunded' || st === 'charged_back') return 'estornada';
-    return null;
+    return intencaoMercadoPago(atual);
   },
 };

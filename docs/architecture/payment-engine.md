@@ -266,3 +266,7 @@ CODE_READY (estrutura), PROVIDER_CONFIGURED (configuração), EXTERNAL_HOMOLOGAT
 (teste financeiro real) e FULL_GO_LIVE são etapas distintas. A auditoria de
 arquitetura não substitui execução dos gates, nem certifica as lacunas de escopo
 expressamente documentadas acima.
+
+## Atualização de ondas 1–3 (2026-10-29)
+
+A revisão de pagamento tardio, o tratamento de refund incerto e as limitações atuais estão documentados em `../payments/enterprise-payments.md` e `../BROBOND-ENTERPRISE-WAVES-1-2-3-AUDIT.md`. As evidências anteriores desta página não substituem os resultados mais recentes nem constituem homologação externa.

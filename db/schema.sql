@@ -7211,3 +7211,42 @@ CREATE TABLE IF NOT EXISTS creator_commands (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (empresa_id, idempotency_key)
 );
+
+-- Mirror of migration 0076_payment_late_reviews.sql
+-- A late review is an operational exception, not a second payment ledger.
+-- The original order, charge and payment intent remain the sources of truth.
+CREATE TABLE IF NOT EXISTS payment_late_reviews (
+  id BIGSERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  order_id BIGINT NOT NULL,
+  cobranca_id BIGINT NOT NULL,
+  payment_intent_id BIGINT,
+  status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'REFUNDED')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,
+  UNIQUE (empresa_id, id),
+  UNIQUE (empresa_id, order_id),
+  FOREIGN KEY (empresa_id, order_id) REFERENCES commerce_pedidos (empresa_id, id),
+  FOREIGN KEY (empresa_id, cobranca_id) REFERENCES gateway_cobrancas (empresa_id, id),
+  FOREIGN KEY (empresa_id, payment_intent_id) REFERENCES payment_intents (empresa_id, id),
+  CHECK ((status = 'OPEN' AND resolved_at IS NULL) OR (status = 'REFUNDED' AND resolved_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS payment_late_reviews_queue_idx
+  ON payment_late_reviews (empresa_id, status, id DESC);
+
+-- 0077: receipt command idempotency without rewriting legacy documents.
+ALTER TABLE compra_recebimentos ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE compra_recebimentos ADD COLUMN IF NOT EXISTS request_hash TEXT;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'compra_recebimentos_idempotencia_formato_ck'
+                 AND conrelid = 'compra_recebimentos'::regclass) THEN
+    ALTER TABLE compra_recebimentos ADD CONSTRAINT compra_recebimentos_idempotencia_formato_ck CHECK (
+      (idempotency_key IS NULL AND request_hash IS NULL)
+      OR (idempotency_key IS NOT NULL AND length(idempotency_key) BETWEEN 1 AND 160
+          AND request_hash IS NOT NULL AND request_hash ~ '^[a-f0-9]{64}$')
+    );
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS compra_recebimentos_comando_uq
+  ON compra_recebimentos (empresa_id, compra_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;

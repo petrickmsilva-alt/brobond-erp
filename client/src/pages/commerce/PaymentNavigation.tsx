@@ -6,6 +6,7 @@ export const paymentSections = [
   ['regras', 'Roteamento'],
   ['transacoes', 'Transações'],
   ['reembolsos', 'Reembolsos'],
+  ['atrasados', 'Pagamentos tardios'],
   ['disputas', 'Disputas'],
   ['reconciliacao', 'Reconciliação'],
   ['webhooks', 'Webhooks'],

@@ -245,6 +245,14 @@ export async function converterOrdemMarketplaceEmVenda(
         };
       }
 
+      // Recheck termination INSIDE the serializable conversion transaction.
+      // This covers direct marketplace callers and expiry/cancellation races;
+      // a previously converted sale may still be returned idempotently above.
+      const pedido = await s.findOneWhere(getResource('commerce_pedidos')!, { empresa_id: empresaId, sale_id: id }, tx);
+      if (['CANCELLED', 'REFUNDED'].includes(String(sale.status)) ||
+          (pedido && ['CANCELADO', 'EXPIRADO', 'ESTORNADO'].includes(String(pedido.estado))))
+        throw new HttpError(409, 'Pedido encerrado não pode gerar uma nova venda operacional.');
+
       // 3) Itens da ordem analítica, resolvidos no catálogo da empresa.
       const itensAnaliticos = await s.list(getResource('sale_items')!, { page: 1, pageSize: 500, filter: { sale_id: id } }, tx);
       if (!itensAnaliticos.rows.length) {

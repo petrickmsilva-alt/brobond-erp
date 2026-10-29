@@ -77,6 +77,10 @@ export const R_ROUTING = resource('payment_routing_rules', [
   ['conditions', 'json'],
   ['updated_at', 'datetime'],
 ]);
+export const R_LATE_REVIEWS = resource('payment_late_reviews', [
+  ['order_id', 'integer'], ['cobranca_id', 'integer'], ['payment_intent_id', 'integer'],
+  ['status', 'text'], ['created_at', 'datetime'], ['resolved_at', 'datetime'],
+]);
 export const R_REFUNDS = resource('payment_refunds', [
   ['payment_intent_id', 'integer'],
   ['operation_id', 'integer'],
@@ -141,4 +145,4 @@ export const R_PAYOUT_UNLINKS = resource('payment_payout_unlinks', [
   ['idempotency_key', 'text'], ['request_hash', 'text'], ['created_by', 'integer'], ['created_at', 'datetime'],
 ]);
 export const PAYMENT_RESOURCES = [R_INTENTS, R_ATTEMPTS, R_OPERATIONS, R_METHODS, R_ROUTING, R_REFUNDS, R_DISPUTES,
-  R_DISPUTE_EVIDENCE, R_DISPUTE_EVENTS, R_SETTLEMENTS, R_PAYOUTS, R_PAYOUT_REVISIONS, R_PAYOUT_UNLINKS];
+  R_DISPUTE_EVIDENCE, R_DISPUTE_EVENTS, R_SETTLEMENTS, R_PAYOUTS, R_PAYOUT_REVISIONS, R_PAYOUT_UNLINKS, R_LATE_REVIEWS];

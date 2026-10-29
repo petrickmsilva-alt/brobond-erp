@@ -17,6 +17,7 @@ import type { Request, Response } from 'express';
 import { randomBytes } from 'node:crypto';
 import { HttpError } from '../errors';
 import { getStore } from '../services';
+import { listarTodos } from '../paginacaoCompleta';
 import { escopoDeSistema } from '../empresa';
 import { getResource } from '../resources';
 import { paymentEngine } from '../../../modules/payments/orchestration/payment-orchestrator';
@@ -64,18 +65,24 @@ type VisiveisVitrine = {
 
 async function carregarVitrine(empresaId: number): Promise<VisiveisVitrine> {
   const s = getStore();
-  const [produtos, projecoes, precos, publicacoes] = await Promise.all([
-    s.list(R_PRODUTOS(), { page: 1, pageSize: 1000, filter: { empresa_id: empresaId }, sort: 'nome', dir: 'asc' }),
-    s.list(R_PROD_COM(), { page: 1, pageSize: 2000, filter: { empresa_id: empresaId } }),
-    s.list(R_PRECOS(), { page: 1, pageSize: 4000, filter: { empresa_id: empresaId, canal: 'BROBOND' } }),
-    s.list(R_PUBLICACOES(), { page: 1, pageSize: 4000, filter: { empresa_id: empresaId, canal: 'BROBOND' } }),
-  ]);
+  // A snapshot prevents price/publication pages from shifting between reads.
+  // Silently truncating the price table would fall back to the base price and
+  // can charge the customer an incorrect amount at checkout.
+  const [produtos, projecoes, precos, publicacoes] = await s.transaction(async (tx) => {
+    // A pg client executes one query at a time; keep the shared snapshot and
+    // avoid concurrent client.query calls (deprecated in pg 8, removed in 9).
+    const produtos = await listarTodos(R_PRODUTOS(), { empresa_id: empresaId }, tx, { sort: 'id', dir: 'asc' });
+    const projecoes = await listarTodos(R_PROD_COM(), { empresa_id: empresaId }, tx, { sort: 'id', dir: 'asc' });
+    const precos = await listarTodos(R_PRECOS(), { empresa_id: empresaId, canal: 'BROBOND' }, tx, { sort: 'id', dir: 'asc' });
+    const publicacoes = await listarTodos(R_PUBLICACOES(), { empresa_id: empresaId, canal: 'BROBOND' }, tx, { sort: 'id', dir: 'asc' });
+    return [produtos, projecoes, precos, publicacoes];
+  }, { isolation: 'repeatable read' });
   const pubPpublished = new Set<number>();
-  for (const p of publicacoes.rows) if (String(p.estado) === 'PUBLISHED') pubPpublished.add(Number(p.produto_id));
+  for (const p of publicacoes) if (String(p.estado) === 'PUBLISHED') pubPpublished.add(Number(p.produto_id));
   const visiveis = new Map<number, Row>();
   const projMap = new Map<number, Row>();
-  for (const pj of projecoes.rows) projMap.set(Number(pj.produto_id), pj);
-  for (const prod of produtos.rows) {
+  for (const pj of projecoes) projMap.set(Number(pj.produto_id), pj);
+  for (const prod of produtos) {
     const pid = Number(prod.id);
     if (prod.ativo === false) continue;
     if (!projMap.has(pid)) continue;
@@ -83,7 +90,7 @@ async function carregarVitrine(empresaId: number): Promise<VisiveisVitrine> {
     visiveis.set(pid, prod);
   }
   const precoMap = new Map<string, Row>();
-  for (const pr of precos.rows) precoMap.set(`${Number(pr.produto_id)}:${String(pr.canal)}`, pr);
+  for (const pr of precos) precoMap.set(`${Number(pr.produto_id)}:${String(pr.canal)}`, pr);
   return { empresaId, visiveis, projecoes: projMap, precos: precoMap };
 }
 
@@ -137,6 +144,7 @@ export async function lojaProdutosPublicos(req: Request, res: Response) {
   const tamanho = Math.max(1, Math.min(60, Math.trunc(Number(req.query.pageSize)) || 24));
 
   let lista = [...visiveis.values()].map((p) => ({ produto: p, proj: projecoes.get(Number(p.id))! }));
+  lista.sort((a, b) => String(a.produto.nome || '').localeCompare(String(b.produto.nome || ''), 'pt-BR') || Number(a.produto.id) - Number(b.produto.id));
   if (somenteDestaques) lista = lista.filter((l) => l.produto.destaque === true);
   if (q) {
     lista = lista.filter((l) =>

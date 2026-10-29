@@ -11,9 +11,11 @@ export async function runPaymentJobs() {
   const intents = await s.list(R_INTENTS, { page: 1, pageSize: 100, sort: 'updated_at', dir: 'asc' });
   for (const i of intents.rows) {
     if (
-      ['CREATED', 'PENDING', 'REQUIRES_ACTION', 'AUTHORIZED', 'CAPTURE_PENDING', 'PAID', 'PARTIALLY_REFUNDED', 'DISPUTED'].includes(
+      // An expired/canceled provider payment can still settle late; a refund
+      // operation may also be uncertain after its intent became REFUNDED.
+      (['CREATED', 'PENDING', 'REQUIRES_ACTION', 'AUTHORIZED', 'CAPTURE_PENDING', 'PAID', 'PARTIALLY_REFUNDED', 'DISPUTED', 'EXPIRED', 'CANCELED'].includes(
         i.status
-      ) &&
+      ) || Boolean(i.active_operation)) &&
       Date.now() - new Date(i.updated_at).getTime() > 60_000
     ) {
       try {

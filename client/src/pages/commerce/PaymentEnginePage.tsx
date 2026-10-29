@@ -13,6 +13,7 @@ const endpoints: Record<string, string> = {
   regras: 'routing',
   transacoes: 'transactions',
   reembolsos: 'refunds',
+  atrasados: 'late-reviews',
   disputas: 'disputes',
   reconciliacao: 'reconciliation',
   webhooks: 'webhooks',
@@ -45,6 +46,8 @@ const labels: Record<string, string> = {
   enabled: 'Habilitado',
   priority: 'Prioridade',
   payment_intent_id: 'Payment Intent',
+  cobranca_id: 'Cobrança',
+  resolved_at: 'Estorno confirmado em',
   provider_reference: 'Referência',
   gross_amount: 'Bruto',
   net_amount: 'Líquido',
@@ -78,6 +81,7 @@ const columns: Record<string, string[]> = {
   regras: ['method', 'provider', 'priority', 'conditions', 'enabled'],
   transacoes: ['id', 'order_id', 'customer_ref', 'method', 'provider', 'amount', 'status', 'created_at', 'updated_at'],
   reembolsos: ['id', 'payment_intent_id', 'amount', 'status', 'created_at'],
+  atrasados: ['id', 'order_id', 'cobranca_id', 'payment_intent_id', 'status', 'created_at', 'resolved_at'],
   disputas: ['id', 'payment_intent_id', 'provider_reference', 'amount', 'status', 'created_at'],
   reconciliacao: ['id', 'payment_intent_id', 'provider', 'gross_amount', 'provider_fee', 'net_amount', 'status'],
   webhooks: ['id', 'provider', 'event_id', 'signature_ok', 'status', 'retry_count', 'received_at', 'processed_at'],
@@ -106,7 +110,7 @@ function Status({ status }: { status: unknown }) {
   return (
     <Badge
       tone={
-        ['CONNECTED', 'PAID', 'MATCHED', 'RESOLVED', 'COMPLETED', 'UP'].includes(s)
+        ['CONNECTED', 'PAID', 'MATCHED', 'RESOLVED', 'REFUNDED', 'COMPLETED', 'UP'].includes(s)
           ? 'green'
           : ['FAILED', 'ERROR', 'DOWN', 'DIVERGENT', 'CHARGEBACK'].includes(s)
             ? 'red'
@@ -148,12 +152,15 @@ function Records({ rows, fields, section }: { rows: RecordData[]; fields: string
               ))}
               {section && (
                 <td className="px-4 py-3">
-                  <Link
+                  {section === 'atrasados' ? (
+                    r.payment_intent_id ? <Link className="font-medium text-blue-700 hover:underline" to={`/commerce/pagamentos/transacoes/${r.payment_intent_id}`}>Revisar pagamento</Link>
+                      : <span className="text-muted">Revisar no gateway legado</span>
+                  ) : <Link
                     className="font-medium text-blue-700 hover:underline"
                     to={`/commerce/pagamentos/${section}/${r.id || r.code}${['metodos', 'regras'].includes(section) ? '/editar' : ''}`}
                   >
                     {['metodos', 'regras'].includes(section) ? 'Configurar' : 'Detalhes'}
-                  </Link>
+                  </Link>}
                 </td>
               )}
             </tr>
@@ -584,7 +591,7 @@ export default function PaymentEnginePage() {
       ) : (
         <>
           <div className="flex flex-wrap items-end gap-3">
-            <label className="text-sm">
+            {section !== 'atrasados' && <label className="text-sm">
               Busca
               <input
                 className="input mt-1"
@@ -594,17 +601,19 @@ export default function PaymentEnginePage() {
                   setPage(1);
                 }}
               />
-            </label>
+            </label>}
             <label className="text-sm">
               Status
-              <input
+              {section === 'atrasados' ? <select className="input mt-1" value={filter} onChange={(e) => { setFilter(e.target.value); setPage(1); }}>
+                <option value="">Todos</option><option value="OPEN">Em revisão</option><option value="REFUNDED">Estornado</option>
+              </select> : <input
                 className="input mt-1"
                 value={filter}
                 onChange={(e) => {
                   setFilter(e.target.value);
                   setPage(1);
                 }}
-              />
+              />}
             </label>
             <button className="btn-secondary" onClick={() => void load()}>
               <RefreshCw size={16} />
@@ -617,10 +626,11 @@ export default function PaymentEnginePage() {
               </Link>
             )}
           </div>
+          {section === 'atrasados' && <p className="text-sm text-muted">O pedido permanece encerrado. A revisão só é concluída quando o estorno integral for confirmado pelo provedor; estornos parciais ou incertos permanecem abertos.</p>}
           <Records
             rows={data?.rows || data?.methods || []}
             fields={columns[section] || ['id', 'status']}
-            section={['transacoes', 'metodos', 'regras'].includes(section) ? section : undefined}
+            section={['transacoes', 'metodos', 'regras', 'atrasados'].includes(section) ? section : undefined}
           />
           {section === 'reconciliacao' &&
             canManage &&

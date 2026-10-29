@@ -156,7 +156,7 @@ describe('Produção › Capacidade e MRP', () => {
           sem_recurso: [{ ordem_id: 77, produto: 'Camisa', faltam: 7, previsao: '2026-03-10' }],
         };
       }
-      if (caminho === '/producao/mrp') {
+      if (caminho.startsWith('/producao/mrp?')) {
         return {
           resumo: { vendas_em_aberto: 2, ordens_abertas: 3, produtos_em_falta: 1, pecas_em_falta: 20, insumos_em_falta: 1, produtos_sem_ficha: 0 },
           produtos: [{ produto_id: 1, produto: 'Camisa', tamanho_id: 2, demanda: 25, estoque: 5, em_producao: 0, falta: 20 }],
@@ -178,6 +178,23 @@ describe('Produção › Capacidade e MRP', () => {
     expect(screen.getAllByText('44').length).toBeGreaterThan(0);
     semModal(container);
     expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('aplica datas ao MRP, mostra apenas as ressalvas presentes e pagina além dos primeiros vinte insumos', async () => {
+    apiGet.mockImplementation(async (caminho: string) => {
+      if (caminho.startsWith('/producao/capacidade')) return { dias_uteis: 1, resumo: { recursos: 0, capacidade_periodo: 0, carga: 0, ocupacao_pct: null, gargalo: null, ordens_sem_recurso: 0, pecas_sem_recurso: 0, ordens_fora_do_periodo: 0 }, recursos: [], sem_recurso: [] };
+      return { resumo: { vendas_em_aberto: 0, ordens_abertas: 0, produtos_em_falta: 0, pecas_em_falta: 0, insumos_em_falta: 21, produtos_sem_ficha: 0, insumos_com_compras_sem_previsao: 1 }, produtos: [],
+        insumos: Array.from({ length: 21 }, (_, i) => ({ insumo_id: i + 1, nome: `Insumo ${i + 1}`, unidade: 'm', necessaria: 1, disponivel: 0, em_compra: 0, cobertura: 0, faltando: 1 })), sem_ficha: [], proxima_acao: 'Revisar' };
+    });
+    const { container } = montar(<ProducaoCapacidadePage />);
+    expect(await screen.findByText(/compras sem previsão não foram usadas/i)).toBeTruthy();
+    expect(screen.queryByText(/há consumo sem alocação/i)).toBeNull();
+    expect(String(apiGet.mock.calls.find(([path]) => String(path).startsWith('/producao/mrp'))?.[0])).toMatch(/\?de=\d{4}-\d{2}-\d{2}&ate=/);
+    expect(screen.queryByText('Insumo 21')).toBeNull();
+    const nav = screen.getByRole('navigation', { name: 'Paginação de insumos' });
+    fireEvent.click(nav.querySelectorAll('button')[1]);
+    expect(await screen.findByText('Insumo 21')).toBeTruthy();
+    semModal(container); expect(apiPost).not.toHaveBeenCalled();
   });
 
   it('sem recursos cadastrados, explica onde cadastrar em vez de mostrar zero', async () => {

@@ -298,15 +298,23 @@ describe('RecebimentoCompraForm', () => {
     expect(screen.getByRole('button', { name: /continuar/i })).toBeDisabled();
   });
 
-  it('erro na confirmação volta para a edição com a mensagem', async () => {
+  it('erro incerto mantém confirmação, oferece edição e repete a mesma chave sem duplicar', async () => {
     abrir();
     await aguardarTabela();
     await calcularPrevia();
-    apiPost.mockRejectedValueOnce(new Error('Estoque insuficiente para o estorno.'));
+    apiPost.mockRejectedValueOnce(new Error('Falha de conexão.'));
     fireEvent.click(screen.getByRole('button', { name: /continuar/i }));
     fireEvent.click(await screen.findByRole('button', { name: /confirmar recebimento/i }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /calcular impacto/i })).toBeTruthy());
-    expect(screen.queryByText(/resumo do que será gravado/i)).toBeNull();
+    expect(await screen.findByText(/consulte o histórico antes de enviar outro lote/i)).toBeTruthy();
+    expect(screen.getByText(/resumo do que será gravado/i)).toBeTruthy();
+    const first = apiPost.mock.calls[1][1] as { idempotency_key: string };
+    expect(first.idempotency_key).toBeTruthy();
+    apiPost.mockResolvedValueOnce({ recebimento_id: 9, idempotente: true });
+    fireEvent.click(screen.getByRole('button', { name: /confirmar recebimento/i }));
+    expect(await screen.findByText(/já estava registrado.*nenhuma nova entrada/i)).toBeTruthy();
+    const second = apiPost.mock.calls[2][1] as { idempotency_key: string };
+    expect(second.idempotency_key).toBe(first.idempotency_key);
+    expect(screen.queryByText('Estoque movimentado')).toBeNull();
   });
 });

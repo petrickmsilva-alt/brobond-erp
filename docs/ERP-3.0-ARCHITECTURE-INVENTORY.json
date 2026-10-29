@@ -1,19 +1,19 @@
 {
-  "gerado_em": "2026-10-29T21:48:09.934Z",
+  "gerado_em": "2026-10-29T23:21:47.643Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 75,
-    "sql_com_conteudo": 75,
+    "sql": 77,
+    "sql_com_conteudo": 77,
     "prisma": 7
   },
   "tabelas": {
-    "total": 167,
-    "com_empresa_id": 139,
+    "total": 168,
+    "com_empresa_id": 140,
     "sem_empresa_id": 28,
-    "fora_do_prisma": 156
+    "fora_do_prisma": 157
   },
-  "indices": 478,
-  "constraints": 283,
+  "indices": 480,
+  "constraints": 284,
   "recursos": {
     "total": 134,
     "com_tabela": 134,
@@ -197,17 +197,17 @@
   },
   "testes": {
     "server": {
-      "arquivos": 190,
-      "casos": 1606
+      "arquivos": 197,
+      "casos": 1647
     },
     "client": {
-      "arquivos": 118,
-      "casos": 1009
+      "arquivos": 119,
+      "casos": 1021
     },
-    "total": 2615
+    "total": 2668
   },
   "integracoes": {
-    "arquivos_modules": 53,
+    "arquivos_modules": 54,
     "arquivos_server_modules": 1
   },
   "achados": [
@@ -290,6 +290,11 @@
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"payment_dispute_evidence\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_late_reviews\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
     },
     {
       "nivel": "AVISO",
@@ -505,6 +510,7 @@
     "payment_dispute_evidence",
     "payment_disputes",
     "payment_intents",
+    "payment_late_reviews",
     "payment_methods",
     "payment_operations",
     "payment_payout_revisions",

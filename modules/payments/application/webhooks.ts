@@ -22,9 +22,13 @@ export async function processEngineWebhook(event: Row, legacyId: string, referen
       lerPayloadWebhook(event.payload)
     );
     if (intention) {
+      // The mock exists only in NODE_ENV=test; its estornada fixture represents
+      // a complete refund. Production adapters must supply provider evidence.
+      const mockIntent = intention === 'estornada' ? await paymentEngine.intent(Number(event.empresa_id), Number(attempt.payment_intent_id)) : null;
       await paymentEngine.apply(Number(event.empresa_id), Number(attempt.payment_intent_id), {
         reference,
         status: intention === 'paga' ? 'PAID' : intention === 'estornada' ? 'REFUNDED' : intention === 'expirada' ? 'EXPIRED' : 'CANCELED',
+        ...(mockIntent ? { refunded: Number(mockIntent.amount) } : {}),
       });
       await s.update(R_GATEWAY_WEBHOOK_EVENTS, Number(event.id), { status: 'processado', processado_em: new Date().toISOString() });
       return { resultado: intention };

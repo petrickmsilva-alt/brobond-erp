@@ -24,7 +24,7 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, escopoDe, getStore } from './services';
 import { necessidadeNaUnidadeDeCompra } from './unidades';
-import { calendarioDoPeriodo, type CalendarioPeriodo } from './calendario';
+import { calendarioDoPeriodo } from './calendario';
 import { currentUser } from './auth';
 import { diaISO, round2, round3 } from './utils';
 import {
@@ -61,17 +61,26 @@ const COMPRA_EM_ABERTO = ['pendente', 'aprovado', 'parcial'];
 // A lista de feriados usada volta na resposta (`calendario`), então o número é
 // auditável.
 
+const dataPlanejamento = (value: unknown, fallback: string, campo: string): string => {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new HttpError(400, `\`${campo}\` deve ser uma data válida AAAA-MM-DD.`);
+  const parsed = new Date(`${value}T12:00:00Z`);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) throw new HttpError(400, `\`${campo}\` deve ser uma data válida AAAA-MM-DD.`);
+  return value;
+};
+const duracaoPlanejamento = (de: string, ate: string): number => {
+  const dias = Math.round((new Date(`${ate}T12:00:00Z`).getTime() - new Date(`${de}T12:00:00Z`).getTime()) / 86400000);
+  if (dias < 0) throw new HttpError(400, 'A data final não pode ser anterior à inicial.');
+  if (dias > 730) throw new HttpError(400, 'O período de planejamento não pode exceder 730 dias.');
+  return dias;
+};
+
 const periodoPadrao = (req: Request): { de: string; ate: string } => {
   const hoje = diaISO(new Date().toISOString()) || new Date().toISOString().slice(0, 10);
-  const de = typeof req.query.de === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.de) ? req.query.de : segundaDaSemana(hoje);
-  const ate = typeof req.query.ate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.ate)
-    ? req.query.ate
-    : (() => {
-        const d = new Date(`${de}T12:00:00Z`);
-        d.setUTCDate(d.getUTCDate() + 55);
-        return d.toISOString().slice(0, 10);
-      })();
-  if (ate < de) throw new HttpError(400, 'A data final não pode ser anterior à inicial.');
+  const de = dataPlanejamento(req.query.de, segundaDaSemana(hoje), 'de');
+  const fallback = new Date(`${de}T12:00:00Z`); fallback.setUTCDate(fallback.getUTCDate() + 55);
+  const ate = dataPlanejamento(req.query.ate, fallback.toISOString().slice(0, 10), 'ate');
+  duracaoPlanejamento(de, ate);
   return { de, ate };
 };
 
@@ -94,13 +103,12 @@ export async function capacidadeProducao(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(r, actor, 'read');
   const escopo = escopoDe(actor);
-  const s = getStore();
   const { de, ate } = periodoPadrao(req);
 
   const calendario = await calendarioDoPeriodo(escopo.empresaId, de, ate);
   const uteis = calendario.dias_uteis;
-  const recursos = (await s.list(R_RECURSO(), { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, ativo: true }, sort: 'nome', dir: 'asc' })).rows;
-  const ordens = (await s.list(R_ORDEM(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId }, sort: 'id', dir: 'desc' })).rows.filter((o) =>
+  const recursos = await listarTodos(R_RECURSO(), { empresa_id: escopo.empresaId, ativo: true }, undefined, { sort: 'id', dir: 'asc' });
+  const ordens = (await listarTodos(R_ORDEM(), { empresa_id: escopo.empresaId }, undefined, { sort: 'id', dir: 'asc' })).filter((o) =>
     OP_ABERTAS.includes(String(o.status))
   );
 
@@ -232,7 +240,9 @@ export async function capacidadeProducao(req: Request, res: Response) {
 //
 //   necessidade_insumo = Σ explosão (bruta)
 //   consumo_real       = Σ já baixado nas OPs (movimentações ligadas por ordem_id)
-//   necessidade_liquida = max(0, necessidade_insumo − consumo_real)
+//   consumo_aplicado   = somente consumo atribuível à OP ainda sem produção,
+//                        limitado à necessidade daquela própria OP
+//   necessidade_liquida = max(0, necessidade_insumo − consumo_aplicado)
 //
 //   oferta_insumo   = saldo do insumo + compras abertas (pedido − recebido)
 //                     cuja data ESPERADA de recebimento cai no horizonte
@@ -251,8 +261,9 @@ export async function capacidadeProducao(req: Request, res: Response) {
 //      contada no `faltam` dela — nunca nos dois lugares.
 //   5) Estoque mínimo entra só como DÉFICIT (mínimo − cobertura).
 //   6) Cada venda/item entra uma única vez (ids de venda únicos).
-//   7) O consumo real da OP é o consumo LÍQUIDO (saídas − devoluções de
-//      estorno). Sem isso, material já baixado seria pedido de novo.
+//   7) Consumo líquido de OP parcialmente produzida não tem alocação por
+//      peça apontada. Não é deduzido automaticamente do restante; aparece
+//      como não alocado para revisão, evitando falta subestimada.
 //   8) Componente compartilhado (usado por dois produtos) soma quantidades;
 //      ele NÃO é duplicado por caminho — soma é legítima, repetição não.
 //   9) Ciclo de BOM não explode: o ramo é cortado e denunciado em `ciclos`.
@@ -287,6 +298,7 @@ type ExplosaoBom = {
   sem_ficha: Set<number>;
   /** ciclos detectados (ramo cortado, nada é somado além do ponto). */
   ciclos: { produto_id: number; caminho: number[] }[];
+  cortes_profundidade: { produto_id: number; caminho: number[] }[];
   /** maior nível efetivamente alcançado. */
   profundidade: number;
 };
@@ -312,13 +324,13 @@ async function explodirBom(
   quantidade: number,
   escopo: EscopoEmpresa
 ): Promise<ExplosaoBom> {
-  const s = getStore();
   const resultado: ExplosaoBom = {
     insumos: new Map(),
     componentes: new Map(),
     niveis: new Map(),
     sem_ficha: new Set(),
     ciclos: [],
+    cortes_profundidade: [],
     profundidade: 0,
   };
   if (!(quantidade > 0)) return resultado;
@@ -326,7 +338,10 @@ async function explodirBom(
   const visitados = new Set<number>();
 
   const visitar = async (produtoId: number, qtd: number, nivel: number, caminho: number[]): Promise<void> => {
-    if (nivel > BOM_PROFUNDIDADE_MAXIMA) return;
+    if (nivel > BOM_PROFUNDIDADE_MAXIMA) {
+      resultado.cortes_profundidade.push({ produto_id: produtoId, caminho: [...caminho, produtoId] });
+      return;
+    }
     if (caminho.includes(produtoId)) {
       // Ciclo: registra UMA vez e corta o ramo.
       if (!resultado.ciclos.some((c) => c.produto_id === produtoId)) {
@@ -408,24 +423,17 @@ export async function mrpProducao(req: Request, res: Response) {
     }
     return n;
   })();
-  const de = typeof req.query.de === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.de) ? req.query.de : hoje;
-  const ate = (() => {
-    if (typeof req.query.ate === 'string') {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(req.query.ate)) throw new HttpError(400, '`ate` deve estar no formato AAAA-MM-DD.');
-      return req.query.ate;
-    }
-    const d = new Date(`${de}T12:00:00Z`);
-    d.setUTCDate(d.getUTCDate() + horizonteDias);
-    return d.toISOString().slice(0, 10);
-  })();
-  if (ate < de) throw new HttpError(400, 'A data final não pode ser anterior à inicial.');
+  const de = dataPlanejamento(req.query.de, hoje, 'de');
+  const fallback = new Date(`${de}T12:00:00Z`); fallback.setUTCDate(fallback.getUTCDate() + horizonteDias);
+  const ate = dataPlanejamento(req.query.ate, fallback.toISOString().slice(0, 10), 'ate');
+  const duracaoReal = duracaoPlanejamento(de, ate);
 
   // --- 1) Demanda de produtos: vendas em aberto --------------------------------
-  const vendas = (await s.list(R_VENDA(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } })).rows.filter((v) =>
+  const vendas = (await listarTodos(R_VENDA(), { empresa_id: escopo.empresaId }, undefined, { sort: 'id', dir: 'asc' })).filter((v) =>
     VENDA_EM_ABERTO.includes(String(v.status))
   );
   const vendaIds = new Set(vendas.map((v) => Number(v.id)));
-  const itensVenda = (await s.list(R_ITEM_VENDA(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } })).rows.filter((i) => vendaIds.has(Number(i.venda_id)));
+  const itensVenda = (await listarTodos(R_ITEM_VENDA(), { empresa_id: escopo.empresaId }, undefined, { sort: 'id', dir: 'asc' })).filter((i) => vendaIds.has(Number(i.venda_id)));
 
   type Demanda = { produto_id: number; tamanho_id: number | null; quantidade: number; vendas: number };
   const demanda = new Map<string, Demanda>();
@@ -446,7 +454,7 @@ export async function mrpProducao(req: Request, res: Response) {
   // empenhada ou bloqueada já está comprometida com outro documento e não pode
   // cobrir esta demanda. Mas só conta o compromisso VIGENTE: reserva liberada,
   // consumida ou vencida não reduz disponibilidade (ela já não existe).
-  const estoques = (await s.list(R_ESTOQUE(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } })).rows;
+  const estoques = await listarTodos(R_ESTOQUE(), { empresa_id: escopo.empresaId }, undefined, { sort: 'id', dir: 'asc' });
   const saldoFisico = new Map<string, number>();
   const minimos = new Map<number, number>();
   for (const e of estoques) {
@@ -456,7 +464,7 @@ export async function mrpProducao(req: Request, res: Response) {
     minimos.set(pid, (minimos.get(pid) ?? 0) + Number(e.estoque_min ?? 0));
   }
 
-  const reservas = (await s.list(R_RESERVA(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } })).rows;
+  const reservas = await listarTodos(R_RESERVA(), { empresa_id: escopo.empresaId }, undefined, { sort: 'id', dir: 'asc' });
   const reservasAtivas = reservas.filter((r) => {
     if (String(r.status) !== 'ativa') return false;
     // Reserva 'ativa' com validade vencida não compromete: a data manda.
@@ -487,7 +495,7 @@ export async function mrpProducao(req: Request, res: Response) {
   }
 
   // --- 3) ORDENS DE PRODUÇÃO: planejado × produzido × restante ------------------
-  const ordens = (await s.list(R_ORDEM(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } })).rows.filter((o) =>
+  const ordens = (await listarTodos(R_ORDEM(), { empresa_id: escopo.empresaId }, undefined, { sort: 'id', dir: 'asc' })).filter((o) =>
     OP_ABERTAS.includes(String(o.status))
   );
 
@@ -512,8 +520,9 @@ export async function mrpProducao(req: Request, res: Response) {
     const consumo = await consumoLiquidoDaOrdem(Number(op.id), escopo);
     const consumoLiquido = new Map<number, number>();
     for (const [insumoId, c] of consumo) if (c.qtd > 0) consumoLiquido.set(insumoId, round3(c.qtd));
-    // OP sem previsão conta como necessidade IMEDIATA (não desaparece do plano).
-    const dentro = previsao === null || (previsao >= de && previsao <= ate);
+    // OP atrasada ou sem previsão permanece no horizonte. OP futura após `ate`
+    // NÃO pode cobrir a demanda antes de sua conclusão prevista.
+    const dentro = previsao === null || previsao <= ate;
     infos.push({
       ordem_id: Number(op.id),
       produto_id: Number(op.produto_id),
@@ -529,7 +538,7 @@ export async function mrpProducao(req: Request, res: Response) {
 
   const emProducao = new Map<string, number>();
   for (const info of infos) {
-    if (info.restante <= 0) continue;
+    if (info.restante <= 0 || !info.dentro_do_horizonte) continue;
     const op = ordens.find((o) => Number(o.id) === info.ordem_id)!;
     if (op.tipo === 'grade') {
       const itens = await itensProducao(op, escopo);
@@ -547,7 +556,7 @@ export async function mrpProducao(req: Request, res: Response) {
 
   // --- 4) Falta de produto: demanda de venda + DÉFICIT de estoque mínimo --------
   const produtos = new Map<number, Row>(
-    (await s.list(R_PRODUTO(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } })).rows.map((p) => [Number(p.id), p])
+    (await listarTodos(R_PRODUTO(), { empresa_id: escopo.empresaId }, undefined, { sort: 'id', dir: 'asc' })).map((p) => [Number(p.id), p])
   );
 
   const coberturaPorProduto = new Map<number, number>();
@@ -635,10 +644,12 @@ export async function mrpProducao(req: Request, res: Response) {
   // --- 6) EXPLOSÃO MULTINÍVEL da BOM -------------------------------------------
   const necessidadeInsumos = new Map<number, number>();
   const insumosPorOrdem = new Map<number, number>(); // consumo real acumulado por insumo
+  const consumoAplicado = new Map<number, number>(); // apenas consumo atribuível à própria OP
   const componentesNecessarios = new Map<number, number>();
   const niveisProduto = new Map<number, number>();
   const semFicha = new Set<number>();
   const ciclos: { produto_id: number; caminho: number[] }[] = [];
+  const cortesProfundidade: { produto_id: number; caminho: number[] }[] = [];
   let profundidadeMaxima = 0;
 
   for (const [produtoId, qtd] of necessidadeProducao) {
@@ -651,31 +662,40 @@ export async function mrpProducao(req: Request, res: Response) {
     }
     for (const id of explo.sem_ficha) semFicha.add(id);
     for (const c of explo.ciclos) if (!ciclos.some((x) => x.produto_id === c.produto_id)) ciclos.push(c);
+    for (const c of explo.cortes_profundidade) if (!cortesProfundidade.some((x) => x.produto_id === c.produto_id)) cortesProfundidade.push(c);
     profundidadeMaxima = Math.max(profundidadeMaxima, explo.profundidade);
   }
-  // Consumo REAL: só o que pertence a OPs que estão neste plano.
+  // Material de uma OP não pode cobrir a falta de outra. Em OP já
+  // parcialmente produzida não existe alocação entre as peças prontas e as
+  // restantes: subtrair todo o consumo da BOM do restante subestima a compra.
+  // Nesses casos o plano é conservador e mostra o consumo não alocado.
   for (const info of infos) {
     if (info.restante <= 0 || !info.dentro_do_horizonte) continue;
+    const necessidadeDaOp = info.produzido <= 0 && info.consumo_liquido.size
+      ? (await explodirBom(info.produto_id, info.restante, escopo)).insumos : new Map<number, number>();
     for (const [insumoId, qtd] of info.consumo_liquido) {
       insumosPorOrdem.set(insumoId, round3((insumosPorOrdem.get(insumoId) ?? 0) + qtd));
+      const aplicavel = Math.min(qtd, necessidadeDaOp.get(insumoId) ?? 0);
+      if (aplicavel > 0) consumoAplicado.set(insumoId, round3((consumoAplicado.get(insumoId) ?? 0) + aplicavel));
     }
   }
 
   // --- 7) Oferta de insumos: compras abertas com data esperada ------------------
-  const comprasAbertas = (await s.list(R_COMPRA(), { page: 1, pageSize: 5000, filter: { empresa_id: escopo.empresaId } })).rows.filter((c) =>
+  const comprasAbertas = (await listarTodos(R_COMPRA(), { empresa_id: escopo.empresaId }, undefined, { sort: 'id', dir: 'asc' })).filter((c) =>
     COMPRA_EM_ABERTO.includes(String(c.status))
   );
   const comprasIds = new Set(comprasAbertas.map((c) => Number(c.id)));
-  const itensCompra = (await s.list(R_ITEM_COMPRA(), { page: 1, pageSize: 10000, filter: { empresa_id: escopo.empresaId } })).rows.filter((i) =>
+  const itensCompra = (await listarTodos(R_ITEM_COMPRA(), { empresa_id: escopo.empresaId }, undefined, { sort: 'id', dir: 'asc' })).filter((i) =>
     comprasIds.has(Number(i.compra_id))
   );
 
   const fornecedores = new Map<number, Row>(
-    (await s.list(R_FORNECEDOR(), { page: 1, pageSize: 2000, filter: { empresa_id: escopo.empresaId } })).rows.map((f) => [Number(f.id), f])
+    (await listarTodos(R_FORNECEDOR(), { empresa_id: escopo.empresaId }, undefined, { sort: 'id', dir: 'asc' })).map((f) => [Number(f.id), f])
   );
 
   const aCaminho = new Map<number, number>();
   const aCaminhoForaDoHorizonte = new Map<number, number>();
+  const aCaminhoSemPrevisao = new Map<number, number>();
   const leadTimePorInsumo = new Map<number, { dias: number; fornecedor: string }>();
   for (const it of itensCompra) {
     const insumoId = Number(it.insumo_id ?? 0);
@@ -689,16 +709,16 @@ export async function mrpProducao(req: Request, res: Response) {
     const leadTime = fornecedor && fornecedor.prazo_entrega_dias !== null && fornecedor.prazo_entrega_dias !== undefined
       ? Number(fornecedor.prazo_entrega_dias)
       : null;
-    // Data esperada = data do pedido + prazo de entrega do fornecedor (quando
-    // o cadastro tem esse dado). Sem prazo cadastrado, a data é a do pedido —
-    // e a resposta diz que o lead time é desconhecido.
-    const dataBase = diaISO(compra?.data) ?? hoje;
-    const esperada = (() => {
-      if (leadTime === null || !Number.isFinite(leadTime)) return dataBase;
-      const d = new Date(`${dataBase}T12:00:00Z`);
-      d.setUTCDate(d.getUTCDate() + leadTime);
-      return d.toISOString().slice(0, 10);
-    })();
+    // Sem data do pedido OU prazo cadastrado não se presume entrega imediata.
+    // A oferta incerta permanece visível, mas não cobre a necessidade.
+    const dataBase = diaISO(compra?.data);
+    if (!dataBase || leadTime === null || !Number.isFinite(leadTime) || leadTime < 0) {
+      aCaminhoSemPrevisao.set(insumoId, round3((aCaminhoSemPrevisao.get(insumoId) ?? 0) + aberto));
+      continue;
+    }
+    const d = new Date(`${dataBase}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + leadTime);
+    const esperada = d.toISOString().slice(0, 10);
     if (leadTime !== null && !leadTimePorInsumo.has(insumoId)) {
       leadTimePorInsumo.set(insumoId, { dias: leadTime, fornecedor: String(fornecedor?.nome ?? `#${compra?.fornecedor_id}`) });
     }
@@ -736,10 +756,13 @@ export async function mrpProducao(req: Request, res: Response) {
     unidade: string;
     necessaria: number;
     consumo_real: number;
+    consumo_aplicado: number;
+    consumo_nao_alocado: number;
     necessario_comprar: number;
     disponivel: number;
     em_compra: number;
     em_compra_fora_do_horizonte: number;
+    em_compra_sem_previsao: number;
     lead_time_dias: number | null;
     lead_time_fornecedor: string | null;
     data_necessidade: string | null;
@@ -760,8 +783,8 @@ export async function mrpProducao(req: Request, res: Response) {
     if (!insumo) continue;
     const bruta = necessidadeInsumos.get(insumoId) ?? 0;
     const consumida = insumosPorOrdem.get(insumoId) ?? 0;
-    // Material JÁ BAIXADO pela OP não é pedido de novo.
-    const liquida = round3(Math.max(0, bruta - consumida));
+    const aplicado = consumoAplicado.get(insumoId) ?? 0;
+    const liquida = round3(Math.max(0, bruta - aplicado));
     const disponivel = round3(await s.insumoStock(insumoId, undefined, escopo.empresaId));
     const emTransito = aCaminho.get(insumoId) ?? 0;
     const cobertura = round3(disponivel + emTransito);
@@ -785,10 +808,13 @@ export async function mrpProducao(req: Request, res: Response) {
       unidade: String(insumo.unidade || 'un'),
       necessaria: round3(bruta),
       consumo_real: round3(consumida),
+      consumo_aplicado: round3(aplicado),
+      consumo_nao_alocado: round3(Math.max(0, consumida - aplicado)),
       necessario_comprar: liquida,
       disponivel,
       em_compra: round3(emTransito),
       em_compra_fora_do_horizonte: round3(aCaminhoForaDoHorizonte.get(insumoId) ?? 0),
+      em_compra_sem_previsao: round3(aCaminhoSemPrevisao.get(insumoId) ?? 0),
       lead_time_dias: lead ? lead.dias : null,
       lead_time_fornecedor: lead ? lead.fornecedor : null,
       data_necessidade: dia,
@@ -807,7 +833,7 @@ export async function mrpProducao(req: Request, res: Response) {
   insumos.sort((a, b) => b.faltando - a.faltando || a.nome.localeCompare(b.nome));
 
   // --- 8) CAPACIDADE: necessidade acima do que cabe produzir -------------------
-  const recursos = (await s.list(R_RECURSO(), { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, ativo: true } })).rows;
+  const recursos = await listarTodos(R_RECURSO(), { empresa_id: escopo.empresaId, ativo: true }, undefined, { sort: 'id', dir: 'asc' });
   const calendarioHorizonte = await calendarioDoPeriodo(escopo.empresaId, de, ate);
   const diasUteisHorizonte = calendarioHorizonte.dias_uteis;
   const cargaPorRecurso = new Map<number, { carga: number; ordens: number }>();
@@ -845,7 +871,7 @@ export async function mrpProducao(req: Request, res: Response) {
       tipo: 'mrp_planejamento_necessidade',
       titulo: 'MRP de planejamento/necessidade',
       descricao:
-        'Deriva necessidade de produto e de insumo a partir de demanda, disponibilidade, OPs abertas (planejado − produzido − consumido), compras abertas, BOM multinível e lead time cadastrado. Não é MRP industrial completo.',
+        'Deriva necessidades a partir de demanda, disponibilidade, OPs abertas, compras com previsão, BOM multinível e lead time cadastrado. Consumo não alocado exige revisão; não é MRP industrial completo.',
       cria_pedido_de_compra: false,
       calendario: calendarioHorizonte,
       coberto: [
@@ -853,7 +879,7 @@ export async function mrpProducao(req: Request, res: Response) {
         'déficit de estoque mínimo',
         'disponibilidade (físico − reservado − empenhado − bloqueado, só reserva vigente)',
         'OPs abertas pelo que falta produzir (planejado − produzido)',
-        'consumo REAL de insumos por OP (consumo líquido: saídas − estornos)',
+        'consumo REAL líquido por OP (saídas − estornos), descontado apenas quando atribuível ao restante ainda não produzido',
         'compras abertas por (pedido − recebido), com data esperada de recebimento',
         'explosão por ficha técnica com perda',
         'explosão multinível por composição de produto (níveis 0..N) com controle de ciclo',
@@ -866,9 +892,12 @@ export async function mrpProducao(req: Request, res: Response) {
         'lote mínimo / múltiplo de compra / lote econômico',
         'sequenciamento e otimização de fila (APS)',
         'ordens planejadas sugeridas com pegging por documento',
-        'reserva de material por OP (o MRP deduz consumo real, não reserva de insumo)',
+        'reserva de material por OP',
+        'alocação de consumo em OP parcialmente produzida: não deduzido automaticamente; revisar antes de comprar',
+        'compras sem data ou prazo cadastrado não cobrem necessidade no horizonte',
+        'estoque e ordens dos subcomponentes não são abatidos na explosão da BOM',
       ],
-      horizonte: { de, ate, dias: horizonteDias },
+      horizonte: { de, ate, dias: duracaoReal },
       bom_multinivel: {
         profundidade_maxima_alcancada: profundidadeMaxima,
         limite_de_profundidade: BOM_PROFUNDIDADE_MAXIMA,
@@ -882,11 +911,13 @@ export async function mrpProducao(req: Request, res: Response) {
           nivel: niveisProduto.get(produtoId) ?? null,
         })),
         ciclos,
+        cortes_profundidade: cortesProfundidade,
+        incompleto: ciclos.length > 0 || cortesProfundidade.length > 0 || semFicha.size > 0,
       },
     },
     regra:
-      'MRP sugere, não compra: nenhum pedido é criado por esta rota. Necessidade de produção = falta das OPs abertas (planejado − produzido) + falta de produto; necessidade de insumo = explosão multinível da BOM menos o que a OP JÁ consumiu; oferta = saldo + compras abertas dentro do horizonte.',
-    filtros: { de, ate, horizonte_dias: horizonteDias },
+      'MRP sugere, não compra: nenhum pedido é criado por esta rota. Necessidade de produção = falta das OPs abertas (planejado − produzido) + falta de produto; necessidade de insumo = BOM menos consumo atribuível à própria OP ainda sem produção; consumo não alocado exige revisão; oferta = saldo + compras com previsão dentro do horizonte.',
+    filtros: { de, ate, horizonte_dias: duracaoReal },
     resumo: {
       vendas_em_aberto: vendas.length,
       ordens_abertas: ordens.length,
@@ -896,9 +927,12 @@ export async function mrpProducao(req: Request, res: Response) {
       insumos_em_falta: insumos.filter((i) => i.faltando > 0).length,
       produtos_sem_ficha: semFicha.size,
       ciclos_bom: ciclos.length,
+      cortes_profundidade_bom: cortesProfundidade.length,
       reservas_ativas: reservasAtivas.length,
       reservas_expiradas_ignoradas: reservasExpiradas,
       consumo_real_considerado: round3([...insumosPorOrdem.values()].reduce((a, b) => a + b, 0)),
+      insumos_com_consumo_nao_alocado: insumos.filter((i) => i.consumo_nao_alocado > 0).length,
+      insumos_com_compras_sem_previsao: insumos.filter((i) => i.em_compra_sem_previsao > 0).length,
       acima_da_capacidade: acimaDaCapacidade.length,
     },
     ordens: infos.map((i) => ({

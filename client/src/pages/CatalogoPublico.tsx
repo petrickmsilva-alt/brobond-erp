@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ChevronLeft,
   ChevronRight,
@@ -69,9 +69,21 @@ type CatResp = {
 
 type CartItem = { key: string; produto: ProdutoCatalogo; qtd: number; tamanho_id: number; tamanho_codigo: string };
 
+// Tokens identificam contextos distintos; trocar de link desmonta o estado anterior.
 export default function CatalogoPublico() {
-  const toast = useToast();
   const { token } = useParams();
+  return <CatalogoPublicoConteudo key={token} />;
+}
+
+function CatalogoPublicoConteudo() {
+  const toast = useToast();
+  const { token, '*': subpath = '' } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const base = `/catalogo/${encodeURIComponent(token ?? '')}`;
+  const productMatch = /^produto\/(\d+)\/?$/.exec(subpath);
+  const detalheId = productMatch ? Number(productMatch[1]) : null;
+  const pedidoOpen = /^pedido\/?$/.test(subpath);
   const [senha, setSenha] = useState('');
   const [precisaSenha, setPrecisaSenha] = useState(false);
   const [err, setErr] = useState('');
@@ -81,11 +93,8 @@ export default function CatalogoPublico() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selTamanho, setSelTamanho] = useState<Record<number, number>>({});
   const [medidasAbertas, setMedidasAbertas] = useState<Record<number, boolean>>({});
-  const [pedidoOpen, setPedidoOpen] = useState(false);
   const [pedidoEnviado, setPedidoEnviado] = useState(false);
   const [portalUrl, setPortalUrl] = useState('');
-  // Detalhe do produto (tudo que o cliente precisa em um só lugar)
-  const [detalheId, setDetalheId] = useState<number | null>(null);
   const [linkParaCopiar, setLinkParaCopiar] = useState('');
   const [busca, setBusca] = useState('');
   const [ordenacao, setOrdenacao] = useState<'nome' | 'menor_preco' | 'maior_preco'>('nome');
@@ -120,29 +129,18 @@ export default function CatalogoPublico() {
     carregar('');
   }, [carregar]);
 
-  // Deep link: o link do produto (#p-<id>) abre o detalhe direto — dá para
-  // compartilhar a peça específica com o cliente.
+  // Links antigos com #p-ID continuam abrindo a nova rota de detalhe.
   useEffect(() => {
-    if (!data) return;
-    const m = /#p-(\d+)/.exec(window.location.hash);
-    if (m) {
-      const id = Number(m[1]);
-      if (data.produtos.some((p) => p.id === id)) setDetalheId(id);
+    if (!data || subpath) return;
+    const m = /^#p-(\d+)$/.exec(location.hash);
+    if (m && data.produtos.some((p) => p.id === Number(m[1]))) {
+      navigate(`${base}/produto/${Number(m[1])}`, { replace: true });
     }
-  }, [data]);
-
-  useEffect(() => {
-    if (!data) return;
-    if (detalheId !== null) {
-      history.replaceState(null, '', `#p-${detalheId}`);
-    } else {
-      history.replaceState(null, '', window.location.pathname + window.location.search);
-    }
-  }, [detalheId, data]);
+  }, [data, subpath, location.hash, base, navigate]);
 
   function abrirDetalhe(id: number, medidasAberta: boolean) {
     if (detalheId !== id) api.post(`/publico/catalogo/${token}/evento`, { tipo: 'produto_visualizado', produto_id: id }).catch(() => {});
-    setDetalheId(id);
+    navigate(`${base}/produto/${id}`);
     if (medidasAberta) setMedidasAbertas((prev) => ({ ...prev, [id]: true }));
   }
 
@@ -284,7 +282,7 @@ export default function CatalogoPublico() {
         {pedidoHabilitado && (
           <button
             className="mx-auto mt-4 inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-brand-600"
-            onClick={() => setPedidoOpen(true)}
+            onClick={() => { setPedidoEnviado(false); navigate(`${base}/pedido`); }}
             disabled={!cart.length}
           >
             <ShoppingBag className="h-4 w-4" /> Montar pedido {cart.length > 0 && `(${cart.length})`}
@@ -292,7 +290,7 @@ export default function CatalogoPublico() {
         )}
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-6 pb-24 sm:px-6">
+      {detalheId === null && !pedidoOpen && <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
         {data.politica_comercial && (
           <section className="mb-4 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-900">
             <p className="font-bold">Condição comercial: {data.politica_comercial.nome}</p>
@@ -341,9 +339,9 @@ export default function CatalogoPublico() {
             {produtosVisiveis.map((p) => (
               <article
                 key={p.id}
-                className="card cursor-pointer overflow-hidden !p-0 transition-shadow hover:shadow-lg"
-                onClick={() => abrirDetalhe(p.id, true)}
+                className="card overflow-hidden !p-0 transition-shadow hover:shadow-lg"
               >
+                <button type="button" className="block w-full text-left" onClick={() => abrirDetalhe(p.id, true)} aria-label={`Ver detalhes de ${p.nome}`}>
                 {p.fotos?.[0]?.url ? (
                   <img src={p.fotos[0].url} alt={p.nome} className="aspect-[3/4] w-full object-cover" loading="lazy" />
                 ) : (
@@ -351,9 +349,10 @@ export default function CatalogoPublico() {
                     <Shirt className="h-10 w-10 text-slate-300" />
                   </div>
                 )}
+                </button>
                 <div className="p-3">
                   <div className="flex items-start justify-between gap-2">
-                    <h2 className="text-sm font-semibold leading-snug text-navy-900">{p.nome}</h2>
+                    <h2 className="text-sm font-semibold leading-snug text-navy-900"><button type="button" onClick={() => abrirDetalhe(p.id, true)}>{p.nome}</button></h2>
                     {p.sku && <span className="shrink-0 font-mono text-[10px] text-slate-400">{p.sku}</span>}
                   </div>
                   {p.cor && (
@@ -473,99 +472,87 @@ export default function CatalogoPublico() {
         <p className="mt-8 text-center text-[11px] text-slate-400">
           Catálogo gerado no BROBOND ERP · preços sujeitos a alteração sem aviso
         </p>
-      </main>
+      </main>}
 
-      {cart.length > 0 && (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white px-4 py-3 shadow-[0_-8px_24px_rgba(0,0,0,.08)]">
+      {detalheId === null && !pedidoOpen && cart.length > 0 && (
+        <div className="border-t border-slate-200 bg-white px-4 py-3">
           <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-navy-900">{cart.length} produto(s)</p>
               <p className="text-xs text-slate-400">Total {formatMoney(totalPedido)}</p>
             </div>
-            <button className="btn-accent" onClick={() => setPedidoOpen(true)}>
+            <button className="btn-accent" onClick={() => { setPedidoEnviado(false); navigate(`${base}/pedido`); }}>
               <ShoppingBag className="h-4 w-4" /> Enviar pedido
             </button>
           </div>
         </div>
       )}
 
-      {detalhe && (
-        <ProdutoDetalhe
-          p={detalhe}
-          data={data}
-          medidasAberta={!!medidasAbertas[detalhe.id]}
-          onToggleMedidas={() => setMedidasAbertas((prev) => ({ ...prev, [detalhe.id]: !prev[detalhe.id] }))}
-          selTamanho={selTamanho[detalhe.id] ?? detalhe.tamanhos[0]?.tamanho_id}
-          onSelTamanho={(tid) => setSelTamanho((prev) => ({ ...prev, [detalhe.id]: tid }))}
-          onAdd={() => {
-            const selected = detalhe.tamanhos.find((t) => t.tamanho_id === (selTamanho[detalhe.id] ?? detalhe.tamanhos[0]?.tamanho_id));
-            addToCart(detalhe, selected);
-          }}
-          onShare={async () => {
-            const url = `${window.location.origin}${window.location.pathname}#p-${detalhe.id}`;
-            try {
-              await navigator.clipboard.writeText(url);
-              toast.success('Link do produto copiado — envie para o cliente.');
-            } catch {
-              setLinkParaCopiar(url);
-            }
-          }}
-          onClose={() => setDetalheId(null)}
-        />
+      {detalheId !== null && (
+        <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+          {detalhe ? (
+            <ProdutoDetalhe
+              p={detalhe}
+              data={data}
+              medidasAberta={!!medidasAbertas[detalhe.id]}
+              onToggleMedidas={() => setMedidasAbertas((prev) => ({ ...prev, [detalhe.id]: !prev[detalhe.id] }))}
+              selTamanho={selTamanho[detalhe.id] ?? detalhe.tamanhos[0]?.tamanho_id}
+              onSelTamanho={(tid) => setSelTamanho((prev) => ({ ...prev, [detalhe.id]: tid }))}
+              onAdd={() => {
+                const selected = detalhe.tamanhos.find((t) => t.tamanho_id === (selTamanho[detalhe.id] ?? detalhe.tamanhos[0]?.tamanho_id));
+                addToCart(detalhe, selected);
+              }}
+              onShare={async () => {
+                const url = `${window.location.origin}${base}/produto/${detalhe.id}`;
+                try {
+                  await navigator.clipboard.writeText(url);
+                  toast.success('Link do produto copiado — envie para o cliente.');
+                } catch {
+                  setLinkParaCopiar(url);
+                }
+              }}
+              onClose={() => navigate(base)}
+            />
+          ) : (
+            <section className="card"><h2 className="font-bold">Produto não encontrado</h2><button className="btn-secondary mt-4" onClick={() => navigate(base)}>Voltar ao catálogo</button></section>
+          )}
+          <PainelInline
+            open={!!linkParaCopiar}
+            onClose={() => setLinkParaCopiar('')}
+            title="Link do produto"
+            subtitle="Não foi possível copiar automaticamente. Selecione e copie o link abaixo."
+            size="sm"
+            footer={<button className="btn-secondary" onClick={() => setLinkParaCopiar('')}>Fechar</button>}
+          >
+            <input className="input select-all font-mono text-xs" aria-label="Link do produto" readOnly value={linkParaCopiar} onFocus={(e) => e.currentTarget.select()} />
+          </PainelInline>
+        </main>
       )}
-
-      <PainelInline
-        open={!!linkParaCopiar}
-        onClose={() => setLinkParaCopiar('')}
-        title="Link do produto"
-        subtitle="Não foi possível copiar automaticamente. Selecione e copie o link abaixo."
-        size="sm"
-        footer={
-          <button className="btn-secondary" onClick={() => setLinkParaCopiar('')}>
-            Fechar
-          </button>
-        }
-      >
-        <input className="input select-all font-mono text-xs" readOnly value={linkParaCopiar} onFocus={(e) => e.currentTarget.select()} />
-      </PainelInline>
 
       {pedidoOpen && (
-        <CatalogoPedidoModal
-          cart={cart}
-          total={totalPedido}
-          canal={data.canal}
-          senha={senha}
-          onQty={changeQtd}
-          onRemove={removeFromCart}
-          onClose={() => setPedidoOpen(false)}
-          onEnviado={(url) => {
-            setPortalUrl(url);
-            setPedidoOpen(false);
-            setPedidoEnviado(true);
-            setCart([]);
-          }}
-        />
-      )}
-
-      {pedidoEnviado && (
-        <div
-          className="pointer-events-none fixed inset-0 z-40 flex items-end justify-center bg-black/30 p-4 sm:items-center"
-          onClick={() => setPedidoEnviado(false)}
-        >
-          <div className="pointer-events-auto card max-w-md !p-6 text-center" onClick={(e) => e.stopPropagation()}>
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
-              <Send className="h-6 w-6" />
-            </div>
-            <h2 className="mt-3 text-lg font-bold text-navy-900">Pedido enviado!</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Recebemos sua solicitação. Nossa equipe entra em contato para confirmar disponibilidade e finalizar.
-            </p>
-            {portalUrl && <a className="btn-accent mt-4 w-full justify-center" href={portalUrl}><ShoppingBag className="h-4 w-4" /> Acompanhar no portal</a>}
-            <button className="btn-primary mt-2 w-full justify-center" onClick={() => setPedidoEnviado(false)}>
-              Fechar
-            </button>
-          </div>
-        </div>
+        <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+          {pedidoEnviado ? (
+            <section className="card max-w-xl p-6" role="status">
+              <h2 className="text-lg font-bold text-navy-900">Pedido enviado!</h2>
+              <p className="mt-1 text-sm text-slate-500">Recebemos sua solicitação. Nossa equipe entra em contato para confirmar disponibilidade e finalizar.</p>
+              {portalUrl && <a className="btn-accent mt-4" href={portalUrl}><ShoppingBag className="h-4 w-4" /> Acompanhar no portal</a>}
+              <button className="btn-secondary mt-4" onClick={() => { setPedidoEnviado(false); navigate(base); }}>Voltar ao catálogo</button>
+            </section>
+          ) : !pedidoHabilitado ? (
+            <section className="card"><h2 className="font-bold">Pedidos não estão disponíveis neste catálogo.</h2><button className="btn-secondary mt-4" onClick={() => navigate(base)}>Voltar ao catálogo</button></section>
+          ) : (
+            <CatalogoPedidoPage
+              cart={cart}
+              total={totalPedido}
+              canal={data.canal}
+              senha={senha}
+              onQty={changeQtd}
+              onRemove={removeFromCart}
+              onClose={() => navigate(base)}
+              onEnviado={(url) => { setPortalUrl(url); setPedidoEnviado(true); setCart([]); }}
+            />
+          )}
+        </main>
       )}
     </div>
   );
@@ -605,20 +592,9 @@ function ProdutoDetalhe({
   const medShow = data.mostrar_medidas && p.medidas && p.medidas.medidas.length > 0;
   const sel = p.tamanhos.find((t) => t.tamanho_id === selTamanho);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    document.addEventListener('keydown', onKey);
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = '';
-    };
-  }, [onClose]);
-
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true">
-      <div className="absolute inset-0 bg-navy-950/50 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-2xl bg-white shadow-modal animate-fade-in sm:rounded-2xl">
+    <div>
+      <section className="w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
           <div className="flex items-center gap-2">
             <h2 className="truncate text-base font-bold text-navy-900">{p.nome}</h2>
@@ -628,9 +604,7 @@ function ProdutoDetalhe({
             <button className="btn-icon" onClick={onShare} title="Copiar link deste produto" aria-label="Copiar link deste produto">
               <Link2 className="h-4 w-4" />
             </button>
-            <button className="btn-icon" onClick={onClose} aria-label="Fechar">
-              <X className="h-5 w-5" />
-            </button>
+            <button className="btn-secondary" onClick={onClose}>Voltar ao catálogo</button>
           </div>
         </div>
 
@@ -825,12 +799,12 @@ function ProdutoDetalhe({
             </div>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   );
 }
 
-function CatalogoPedidoModal({
+function CatalogoPedidoPage({
   cart,
   total,
   canal,
@@ -886,18 +860,16 @@ function CatalogoPedidoModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-navy-950/50 p-0 sm:items-center sm:p-4">
-      <div className="card max-h-[92vh] w-full max-w-lg overflow-y-auto !rounded-b-none !rounded-t-2xl sm:!rounded-2xl !p-0">
+    <div>
+      <section className="card w-full max-w-lg !p-0">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <h2 className="text-lg font-bold text-navy-900">Montar pedido</h2>
             <p className="text-xs text-slate-400">Envie sua solicitação — a equipe confirma o pedido.</p>
           </div>
-          <button className="btn-icon" onClick={onClose} aria-label="Fechar">
-            <X className="h-5 w-5" />
-          </button>
+          <button className="btn-secondary" onClick={onClose}>Voltar ao catálogo</button>
         </div>
-        <div className="max-h-[38vh] space-y-2 overflow-y-auto px-5 py-4">
+        <div className="space-y-2 px-5 py-4">
           {cart.length === 0 && <p className="py-6 text-center text-sm text-slate-400">Seu pedido está vazio.</p>}
           {cart.map((i) => (
             <div key={i.key} className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2">
@@ -934,16 +906,18 @@ function CatalogoPedidoModal({
         </div>
         <div className="space-y-3 border-t border-slate-100 px-5 py-4">
           {erro && <p className="text-sm text-red-600">{erro}</p>}
-          <input className="input" placeholder="Seu nome *" value={nome} onChange={(e) => setNome(e.target.value)} />
-          <input className="input" placeholder="E-mail (opcional)" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input className="input" aria-label="Seu nome" placeholder="Seu nome *" value={nome} onChange={(e) => setNome(e.target.value)} />
+          <input className="input" aria-label="E-mail (opcional)" placeholder="E-mail (opcional)" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
           <input
             className="input"
+            aria-label="Telefone / WhatsApp (opcional)"
             placeholder="Telefone / WhatsApp (opcional)"
             value={telefone}
             onChange={(e) => setTelefone(e.target.value)}
           />
           <textarea
             className="input"
+            aria-label="Observações (opcional)"
             placeholder="Observações (opcional)"
             rows={2}
             value={observacoes}
@@ -960,7 +934,7 @@ function CatalogoPedidoModal({
             Ao enviar, você autoriza o contato para confirmação. Não é pagamento online — a cobrança é combinada com a equipe.
           </p>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

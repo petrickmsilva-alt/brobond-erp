@@ -22,7 +22,7 @@
 // entraram no cálculo, para o número ser auditável.
 // ============================================================================
 import { getResource } from './resources';
-import { getStore } from './services';
+import { listarTodos } from './paginacaoCompleta';
 
 const R_FERIADO = () => getResource('feriados')!;
 
@@ -66,7 +66,7 @@ export const ehFimDeSemana = (dia: string): boolean => {
  * cadastrado (o dia/mês é o que vale) e os pontuais dentro da janela.
  */
 export async function feriadosDoPeriodo(empresaId: number, de: string, ate: string): Promise<Feriado[]> {
-  const { rows } = await getStore().list(R_FERIADO(), { page: 1, pageSize: 2000, filter: { empresa_id: empresaId, ativo: true } });
+  const rows = await listarTodos(R_FERIADO(), { empresa_id: empresaId, ativo: true }, undefined, { sort: 'id', dir: 'asc' });
   const dias = new Set(diasEntre(de, ate));
   const achados: Feriado[] = [];
   for (const linha of rows) {
@@ -74,13 +74,11 @@ export async function feriadosDoPeriodo(empresaId: number, de: string, ate: stri
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dataISO)) continue;
     const recorrente = linha.recorrente === true;
     const diaMes = dataISO.slice(5);
-    const bate = recorrente ? [...dias].some((d) => d.slice(5) === diaMes) : dias.has(dataISO);
-    if (!bate) continue;
-    achados.push({
+    const ocorrencias = recorrente ? [...dias].filter((d) => d.slice(5) === diaMes) : dias.has(dataISO) ? [dataISO] : [];
+    for (const data of ocorrencias) achados.push({
       id: Number(linha.id),
-      // No recorrente a data devolvida é a do ANO do período (a cadastrada pode
-      // ser de outro ano) — é a data que efetivamente entrou no cálculo.
-      data: recorrente ? (dias.has(dataISO) ? dataISO : [...dias].find((d) => d.slice(5) === diaMes)!) : dataISO,
+      // One occurrence per calendar year in the requested interval.
+      data,
       nome: String(linha.nome ?? 'Feriado'),
       tipo: String(linha.tipo ?? 'nacional'),
       recorrente,

@@ -1,6 +1,6 @@
 import { providerRegistry } from '../../modules/payments/providers/registry';
 import { webhookCompatibility } from '../../modules/payments/providers/legacy-webhook';
-import { mercadopagoProvider } from '../../modules/payments/providers/mercado-pago/legacy';
+import { intencaoMercadoPago, mercadopagoProvider } from '../../modules/payments/providers/mercado-pago/legacy';
 // ============================================================================
 // GATEWAY DE PAGAMENTO (P2 §7–§9) — arquitetura de ADAPTER.
 //
@@ -258,8 +258,8 @@ async function notificarCobrancaAlterada(evento: CobrancaAlteradaEvento): Promis
   if (!onCobrancaAlterada) return;
   try {
     await onCobrancaAlterada(evento);
-  } catch (e) {
-    console.warn('⚠️  Ouvinte de cobrança (commerce) indisponível:', e instanceof Error ? e.message : e);
+  } catch {
+    console.warn('⚠️  Ouvinte de cobrança (commerce) indisponível; detalhes sensíveis omitidos.');
   }
 }
 
@@ -718,7 +718,8 @@ export async function cancelarCobranca(req: Request, res: Response) {
   const ctx = await contextoDoProvider(escopo.empresaId, String(row.provider));
   const provider = getProvider(String(row.provider))!;
   await provider.cancelaCobranca(ctx, String(row.provider_ref));
-  const atualizada = (await s.update(R_GATEWAY_COBRANCAS, Number(row.id), { status: 'cancelada', atualizado_em: new Date().toISOString() }))!;
+  const atualizada = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(row.id), { empresa_id: escopo.empresaId, status: row.status }, { status: 'cancelada', atualizado_em: new Date().toISOString() });
+  if (!atualizada) throw new HttpError(409, 'Cobrança mudou durante o cancelamento externo; concilie antes de continuar.');
   await s.audit({
     usuario_id: actor.id || null,
     usuario: actor.name,
@@ -731,6 +732,16 @@ export async function cancelarCobranca(req: Request, res: Response) {
   });
   await notificarCobrancaAlterada({ cobrancaId: Number(row.id), empresaId: Number(row.empresa_id), intencao: 'cancelada' });
   res.json({ ok: true, cobranca: publicaCobranca(atualizada) });
+}
+
+/** Called only after an authoritative provider response proved a full refund. */
+async function resolverRevisaoLegadaComprovada(cobranca: Row, tx: Tx): Promise<void> {
+  const order = await getStore().findOneWhere(getResource('commerce_pedidos')!,
+    { empresa_id: Number(cobranca.empresa_id), cobranca_id: Number(cobranca.id) }, tx);
+  if (order && ['EXPIRADO', 'CANCELADO'].includes(String(order.estado))) {
+    const { resolveLateRefund } = await import('../../modules/payments/application/late-reviews');
+    await resolveLateRefund(Number(cobranca.empresa_id), order, tx);
+  }
 }
 
 /** POST /api/financeiro/gateway/cobrancas/:id/estornar — devolve dinheiro. */
@@ -746,28 +757,57 @@ export async function estornarCobranca(req: Request, res: Response) {
   if (String(row.status) !== 'paga') throw new HttpError(409, 'Só se estorna cobrança paga.');
   const ctx = await contextoDoProvider(escopo.empresaId, String(row.provider));
   const provider = getProvider(String(row.provider))!;
-  const valor = req.body?.valor ? Number(req.body.valor) : undefined;
+  const valor = req.body?.valor != null && req.body.valor !== '' ? Number(req.body.valor) : undefined;
   if (valor !== undefined && (!Number.isFinite(valor) || valor <= 0 || valor > Number(row.valor) + 0.009)) {
     throw new HttpError(400, 'Valor de estorno inválido (deve estar entre 0 e o valor da cobrança).', { valor: 'Inválido' });
   }
-  await provider.estornaCobranca(ctx, String(row.provider_ref), valor);
+  if (valor !== undefined && round2(valor) !== round2(Number(row.valor))) {
+    throw new HttpError(409, 'Estorno parcial de cobrança legada não é suportado com segurança; use o Payment Engine ou concilie manualmente.');
+  }
+  // Legacy refunds lack an operation ledger. For Mercado Pago, use one
+  // deterministic provider key and reconcile before and after the write;
+  // ambiguous/partial outcomes are never projected as complete. Other real
+  // legacy adapters must use the engine or manual reconciliation instead.
+  const testeMock = process.env.NODE_ENV === 'test' && provider.id === 'mock';
+  if (!testeMock && provider.id !== 'mercadopago')
+    throw new HttpError(409, 'Estorno legado sem confirmação de valor não é suportado; use o Payment Engine ou concilie manualmente.');
+  const legacyCtx = { ...ctx, operationKey: `legacy-refund:${escopo.empresaId}:${row.id}` };
+  const verificar = async (): Promise<'paga' | 'estornada'> => {
+    const remote = await provider.consultaCobranca(legacyCtx, String(row.provider_ref));
+    const bruto = remote?.bruto;
+    const total = Number(bruto?.transaction_amount);
+    const devolvido = Number(bruto?.transaction_amount_refunded);
+    if (!bruto || String(bruto.id) !== String(row.provider_ref) || bruto.currency_id !== 'BRL' || !Number.isFinite(total) || round2(total) !== round2(Number(row.valor)) ||
+        !Number.isFinite(devolvido) || devolvido < 0 || devolvido > total)
+      throw new HttpError(409, 'Valor do estorno legado não pôde ser confirmado; concilie antes de continuar.');
+    if (bruto.status === 'refunded' && round2(devolvido) === round2(total)) return 'estornada';
+    if (bruto.status === 'approved' && devolvido === 0) return 'paga';
+    throw new HttpError(409, 'Estorno legado parcial, pendente ou contestado exige conciliação manual.');
+  };
+  if (testeMock) await provider.estornaCobranca(legacyCtx, String(row.provider_ref), Number(row.valor));
+  else if (await verificar() === 'paga') {
+    await provider.estornaCobranca(legacyCtx, String(row.provider_ref), Number(row.valor));
+    if (await verificar() !== 'estornada')
+      throw new HttpError(409, 'Estorno enviado, mas ainda sem confirmação integral; concilie antes de repetir.');
+  }
 
   const resultado = await s.transaction(async (tx) => {
     const atualizada = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(row.id), { status: 'paga' }, { status: 'estornada', atualizado_em: new Date().toISOString() }, tx);
     if (!atualizada) throw new HttpError(409, 'A cobrança mudou durante o estorno.');
     const estornoLancamentoId = await reverterFinanceiroDaCobranca(row, round2(valor ?? Number(row.valor)), { id: actor.id || null, name: actor.name }, tx);
+    if (provider.id === 'mercadopago') await resolverRevisaoLegadaComprovada(atualizada, tx);
     await s.audit({
       usuario_id: actor.id || null,
       usuario: actor.name,
       acao: 'editar',
       recurso: 'gateway_cobrancas',
       registro_id: Number(row.id),
-      descricao: `Cobrança #${row.id} ESTORNADA no ${row.provider} (${row.provider_ref})${valor ? ` — valor parcial ${round2(valor).toFixed(2)}` : ''}`,
+      descricao: `Cobrança #${row.id} ESTORNADA integralmente no ${row.provider} (${row.provider_ref})`,
       empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, row, actor),
       dados: { status: 'estornada', valor: valor ?? Number(row.valor), estorno_lancamento_id: estornoLancamentoId },
     }, tx);
     return { atualizada, estornoLancamentoId };
-  });
+  }, { isolation: 'serializable' });
   await notificarCobrancaAlterada({ cobrancaId: Number(row.id), empresaId: Number(row.empresa_id), intencao: 'estornada' });
   res.json({ ok: true, cobranca: publicaCobranca(resultado.atualizada), estorno_lancamento_id: resultado.estornoLancamentoId });
 }
@@ -974,17 +1014,14 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
       // `processado` reflete o efeito real: evento sem efeito financeiro é
       // ignorado, não "processado" (antes o ACK dizia true em qualquer caso).
       return res.json({ ok: true, evento_id: parsed.evento_id, resultado, processado: !['ignorado', 'erro'].includes(resultado) });
-    } catch (e: any) {
-      // O evento JÁ está persistido com status 'erro' e entra no retry. O
-      // detalhe técnico vai para o log estruturado — nunca para a resposta de
-      // um endpoint anônimo (mensagem de driver expõe tabela/coluna/constraint).
-      reportarErro(e, { rota: 'POST /api/gateway/webhooks/:provider', evento_id: parsed.evento_id });
+    } catch {
+      // Do not send arbitrary provider/driver messages or raw event IDs to logs.
+      reportarErro(new Error('Falha ao processar webhook de pagamento.'), { rota: 'POST /api/gateway/webhooks/:provider', empresa_id: empresaId, correlation_id: evento.correlation_id });
       return res.json({ ok: true, evento_id: parsed.evento_id, resultado: 'erro', processado: false });
     }
-  } catch (e: any) {
-    // Nunca derruba o ack com 500 por erro interno não mapeado — e nunca
-    // devolve a mensagem do driver ao provedor.
-    reportarErro(e, { rota: 'POST /api/gateway/webhooks/:provider' });
+  } catch {
+    // Neither the public response nor logs may expose driver/provider secrets.
+    reportarErro(new Error('Falha ao registrar webhook de pagamento.'), { rota: 'POST /api/gateway/webhooks/:provider' });
     return res.status(202).json({ ok: false, erro: 'Falha interna ao registrar o evento. A próxima tentativa do provedor reprocessa.' });
   }
 });
@@ -1054,7 +1091,14 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
     let intencao: IntencaoWebhook = null;
     // Provedor com consulta oficial é a autoridade, inclusive quando retorna
     // null (pendente). Nunca promover status de um campo não assinado do body.
-    if (provider.resolveWebhook) intencao = await provider.resolveWebhook(ctx, parsed, payload);
+    if (providerId === 'mercadopago') {
+      const remote = await provider.consultaCobranca(ctx, String(parsed.provider_ref));
+      const bruto = remote?.bruto;
+      if (!remote || !bruto || String(bruto.id) !== String(parsed.provider_ref) || bruto.currency_id !== 'BRL' ||
+          !Number.isFinite(Number(bruto.transaction_amount)) || round2(Number(bruto.transaction_amount)) !== round2(Number(cobranca.valor)))
+        throw new HttpError(409, 'Valor, moeda ou referência divergente; conciliação necessária.');
+      intencao = intencaoMercadoPago(remote);
+    } else if (provider.resolveWebhook) intencao = await provider.resolveWebhook(ctx, parsed, payload);
     else intencao = intencaoDoPayload(payload);
     if (!intencao) {
       await s.update(R_GATEWAY_WEBHOOK_EVENTS, Number(evento.id), { status: 'ignorado', erro: 'Evento sem efeito financeiro (status irrelevante).', tentativas, ultima_tentativa_em: new Date().toISOString(), cobranca_id: Number(cobranca.id) });
@@ -1062,7 +1106,12 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
     }
 
     const efeito = await s.transaction(async (tx) => {
-      return aplicarIntencao(providerId, cobranca!, intencao!, Number(evento.id), tx);
+      const atual = await s.findOneWhere(R_GATEWAY_COBRANCAS, { id: Number(cobranca!.id), empresa_id: Number(cobranca!.empresa_id) }, tx);
+      if (!atual) throw new HttpError(404, 'Cobrança não encontrada.');
+      if (round2(Number(atual.valor)) !== round2(Number(cobranca!.valor))) throw new HttpError(409, 'Cobrança mudou durante a consulta; conciliação necessária.');
+      const applied = await aplicarIntencao(providerId, atual, intencao!, Number(evento.id), tx);
+      if (providerId === 'mercadopago' && intencao === 'estornada') await resolverRevisaoLegadaComprovada(atual, tx);
+      return applied;
     }, { isolation: 'serializable' });
 
     await s.update(R_GATEWAY_WEBHOOK_EVENTS, Number(evento.id), {
@@ -1084,8 +1133,9 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
     });
     return { resultado: intencao };
   } catch (e: any) {
-    await marcarErro(String(e?.message || e), tentativas);
-    throw e;
+    const mensagem = 'Não foi possível processar o evento; revise a configuração e a conciliação.';
+    await marcarErro(mensagem, tentativas);
+    throw new HttpError(e instanceof HttpError ? e.status : 502, mensagem);
   }
 }
 
@@ -1147,7 +1197,7 @@ function intencaoDoPayload(payload: Record<string, unknown>): IntencaoWebhook {
   const status = String(payload.status || '').toLowerCase();
   if (['pago', 'paga', 'paid', 'approved'].includes(status)) return 'paga';
   if (['cancelado', 'cancelled', 'rejected'].includes(status)) return 'cancelada';
-  if (['estornado', 'refunded', 'charged_back'].includes(status)) return 'estornada';
+  if (['estornado', 'refunded'].includes(status)) return 'estornada';
   if (['expirado', 'expired'].includes(status)) return 'expirada';
   return null;
 }
@@ -1164,6 +1214,21 @@ async function aplicarIntencao(providerId: string, cobranca: Row, intencao: Inte
 
   if (intencao === 'paga') {
     if (statusAtual === 'paga') return { lancamento_id: lancId || null }; // já aplicado
+    if (['cancelada', 'expirada'].includes(statusAtual)) {
+      // A verified late legacy payment must be visible without reviving the
+      // order or settling a financial title automatically.
+      const order = await s.findOneWhere(getResource('commerce_pedidos')!, { empresa_id: Number(cobranca.empresa_id), cobranca_id: Number(cobranca.id) }, tx);
+      if (!order || !['CANCELADO', 'EXPIRADO'].includes(String(order.estado)))
+        throw new HttpError(409, 'Pagamento tardio requer conciliação manual.');
+      const atualizada = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(cobranca.id), { empresa_id: Number(cobranca.empresa_id), status: statusAtual },
+        { status: 'paga', webhook_evento_id: String(eventoId), atualizado_em: new Date().toISOString() }, tx);
+      if (!atualizada) throw new HttpError(409, 'A cobrança mudou durante o processamento do webhook.');
+      const { recordLatePayment } = await import('../../modules/payments/application/late-reviews');
+      await recordLatePayment(Number(cobranca.empresa_id), order, Number(cobranca.id), tx);
+      await s.audit({ usuario_id: null, usuario: `webhook:${providerId}`, acao: 'ajuste', recurso: 'gateway_cobrancas', registro_id: Number(cobranca.id),
+        descricao: 'Pagamento tardio confirmado; conciliação necessária, sem baixa automática', dados: { evento_id: eventoId }, empresa_id: Number(cobranca.empresa_id) }, tx);
+      return { lancamento_id: lancId || null };
+    }
     if (!['pendente', 'autorizada'].includes(statusAtual)) {
       throw new HttpError(409, `Cobrança "${statusAtual}" não pode ser paga.`);
     }
@@ -1196,8 +1261,10 @@ async function aplicarIntencao(providerId: string, cobranca: Row, intencao: Inte
 
   if (intencao === 'cancelada' || intencao === 'expirada') {
     if (['cancelada', 'expirada', 'estornada'].includes(statusAtual)) return { lancamento_id: lancId || null };
+    if (statusAtual === 'paga') throw new HttpError(409, 'Cobrança paga não pode ser cancelada por notificação; requer conciliação.');
     const novoStatus = intencao === 'expirada' ? 'expirada' : 'cancelada';
-    await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(cobranca.id), { status: statusAtual }, { status: novoStatus, webhook_evento_id: String(eventoId), atualizado_em: new Date().toISOString() }, tx);
+    const cancelada = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(cobranca.id), { status: statusAtual }, { status: novoStatus, webhook_evento_id: String(eventoId), atualizado_em: new Date().toISOString() }, tx);
+    if (!cancelada) throw new HttpError(409, 'A cobrança mudou durante o processamento do webhook.');
     // O título segue pendente no financeiro: a cobrança expirou, a dívida não.
     await s.audit({ usuario_id: null, usuario: `webhook:${providerId}`, acao: 'editar', recurso: 'gateway_cobrancas', registro_id: Number(cobranca.id), descricao: `Cobrança #${cobranca.id} marcada ${novoStatus.toUpperCase()} pelo webhook ${providerId}`, dados: { intencao, evento_id: eventoId }, empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, cobranca, null) }, tx);
     return { lancamento_id: lancId || null };
@@ -1207,6 +1274,7 @@ async function aplicarIntencao(providerId: string, cobranca: Row, intencao: Inte
   // estornado (fluxo explícito), aplica a reversão financeira agora.
   if (statusAtual === 'estornada') return { lancamento_id: lancId || null };
   const estornada = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(cobranca.id), { status: 'paga' }, { status: 'estornada', webhook_evento_id: String(eventoId), atualizado_em: new Date().toISOString() }, tx);
+  if (!estornada) throw new HttpError(409, 'Estorno sem cobrança paga exige conciliação.');
   if (estornada) {
     await reverterFinanceiroDaCobranca(cobranca, Number(cobranca.valor), { id: null, name: `webhook:${providerId}` }, tx);
     await s.audit({ usuario_id: null, usuario: `webhook:${providerId}`, acao: 'editar', recurso: 'gateway_cobrancas', registro_id: Number(cobranca.id), descricao: `Cobrança #${cobranca.id} ESTORNADA notificada pelo webhook ${providerId}`, dados: { intencao, evento_id: eventoId }, empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, cobranca, null) }, tx);

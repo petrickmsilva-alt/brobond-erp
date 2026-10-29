@@ -60,6 +60,10 @@ type Mrp = {
     pecas_em_falta: number;
     insumos_em_falta: number;
     produtos_sem_ficha: number;
+    insumos_com_consumo_nao_alocado?: number;
+    insumos_com_compras_sem_previsao?: number;
+    ciclos_bom?: number;
+    cortes_profundidade_bom?: number;
   };
   produtos: { produto_id: number; produto: string; tamanho_id: number | null; demanda: number; estoque: number; em_producao: number; falta: number }[];
   insumos: { insumo_id: number; nome: string; unidade: string; necessaria: number; disponivel: number; em_compra: number; cobertura: number; faltando: number }[];
@@ -88,6 +92,8 @@ export default function ProducaoCapacidadePage() {
   const [ate, setAte] = useState(somarDias(semanaISO(hoje), 55));
   const [capacidade, setCapacidade] = useState<Capacidade | null>(null);
   const [mrp, setMrp] = useState<Mrp | null>(null);
+  const [paginaProdutos, setPaginaProdutos] = useState(0);
+  const [paginaInsumos, setPaginaInsumos] = useState(0);
   const [erro, setErro] = useState('');
   const [carregando, setCarregando] = useState(true);
 
@@ -97,10 +103,12 @@ export default function ProducaoCapacidadePage() {
     try {
       const [cap, plano] = await Promise.all([
         api.get<Capacidade>(`/producao/capacidade?de=${de}&ate=${ate}`),
-        api.get<Mrp>('/producao/mrp'),
+        api.get<Mrp>(`/producao/mrp?de=${de}&ate=${ate}`),
       ]);
       setCapacidade(cap);
       setMrp(plano);
+      setPaginaProdutos(0);
+      setPaginaInsumos(0);
     } catch (e) {
       setErro(e instanceof ApiError ? e.message : 'Não foi possível carregar capacidade e MRP.');
     } finally {
@@ -241,18 +249,28 @@ export default function ProducaoCapacidadePage() {
               <StatCard label="Produtos sem ficha técnica" value={String(mrp?.resumo.produtos_sem_ficha ?? 0)} hint="Sem BOM não há explosão honesta de insumos." />
             </div>
 
+            {mrp && ((mrp.resumo.insumos_com_consumo_nao_alocado ?? 0) > 0 || (mrp.resumo.insumos_com_compras_sem_previsao ?? 0) > 0 || (mrp.resumo.ciclos_bom ?? 0) > 0 || (mrp.resumo.cortes_profundidade_bom ?? 0) > 0) && (
+              <div className="px-4 pt-4"><Alert tone="amber">
+                Planejamento requer revisão antes de comprar.
+                {(mrp.resumo.insumos_com_consumo_nao_alocado ?? 0) > 0 && ' Há consumo sem alocação segura à necessidade restante.'}
+                {(mrp.resumo.insumos_com_compras_sem_previsao ?? 0) > 0 && ' Compras sem previsão não foram usadas como cobertura.'}
+                {((mrp.resumo.ciclos_bom ?? 0) > 0 || (mrp.resumo.cortes_profundidade_bom ?? 0) > 0) && ' Ciclos ou limite de profundidade tornam a explosão incompleta.'}
+              </Alert></div>
+            )}
+
             <div className="grid gap-4 p-4 lg:grid-cols-2">
               <div>
                 <h3 className="mb-2 text-sm font-semibold text-slate-700">Produtos a produzir</h3>
                 {!mrp || mrp.produtos.length === 0 ? (
                   <p className="text-sm text-slate-500">Nenhuma falta de produto: a demanda em aberto está coberta por estoque e OPs.</p>
                 ) : (
-                  <table className="w-full text-sm">
+                  <>
+                  <div className="overflow-x-auto"><table className="w-full min-w-[32rem] text-sm">
                     <thead className="text-left text-xs uppercase tracking-wide text-slate-400">
                       <tr><th className="py-1">Produto</th><th className="py-1 text-right">Demanda</th><th className="py-1 text-right">Estoque</th><th className="py-1 text-right">Em OP</th><th className="py-1 text-right">Falta</th></tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {mrp.produtos.slice(0, 20).map((p) => (
+                      {mrp.produtos.slice(paginaProdutos * 20, (paginaProdutos + 1) * 20).map((p) => (
                         <tr key={`${p.produto_id}-${p.tamanho_id ?? 0}`}>
                           <td className="py-1.5 text-slate-700">{p.produto}{p.tamanho_id ? ` · #${p.tamanho_id}` : ''}</td>
                           <td className="py-1.5 text-right text-slate-600">{formatNumber(p.demanda)}</td>
@@ -262,7 +280,9 @@ export default function ProducaoCapacidadePage() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </table></div>
+                  <PaginacaoMrp nome="produtos" pagina={paginaProdutos} total={mrp.produtos.length} mudar={setPaginaProdutos} />
+                  </>
                 )}
               </div>
 
@@ -271,12 +291,13 @@ export default function ProducaoCapacidadePage() {
                 {!mrp || mrp.insumos.length === 0 ? (
                   <p className="text-sm text-slate-500">Nenhuma necessidade de insumo calculada.</p>
                 ) : (
-                  <table className="w-full text-sm">
+                  <>
+                  <div className="overflow-x-auto"><table className="w-full min-w-[32rem] text-sm">
                     <thead className="text-left text-xs uppercase tracking-wide text-slate-400">
                       <tr><th className="py-1">Insumo</th><th className="py-1 text-right">Necessário</th><th className="py-1 text-right">Disponível</th><th className="py-1 text-right">Em compra</th><th className="py-1 text-right">Faltando</th></tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {mrp.insumos.slice(0, 20).map((i) => (
+                      {mrp.insumos.slice(paginaInsumos * 20, (paginaInsumos + 1) * 20).map((i) => (
                         <tr key={i.insumo_id}>
                           <td className="py-1.5 text-slate-700">{i.nome} <span className="text-xs text-slate-400">({i.unidade})</span></td>
                           <td className="py-1.5 text-right text-slate-600">{formatNumber(i.necessaria)}</td>
@@ -286,7 +307,9 @@ export default function ProducaoCapacidadePage() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </table></div>
+                  <PaginacaoMrp nome="insumos" pagina={paginaInsumos} total={mrp.insumos.length} mudar={setPaginaInsumos} />
+                  </>
                 )}
               </div>
             </div>
@@ -312,4 +335,14 @@ export default function ProducaoCapacidadePage() {
       )}
     </div>
   );
+}
+
+/** The API supplies the full calculated result; paginate the rendered rows. */
+function PaginacaoMrp({ nome, pagina, total, mudar }: { nome: string; pagina: number; total: number; mudar: (page: number) => void }) {
+  if (total <= 20) return null;
+  return <nav aria-label={`Paginação de ${nome}`} className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+    <button type="button" className="btn-secondary" disabled={pagina === 0} onClick={() => mudar(pagina - 1)}>Anterior</button>
+    <span>Página {pagina + 1} de {Math.ceil(total / 20)}</span>
+    <button type="button" className="btn-secondary" disabled={(pagina + 1) * 20 >= total} onClick={() => mudar(pagina + 1)}>Próxima</button>
+  </nav>;
 }

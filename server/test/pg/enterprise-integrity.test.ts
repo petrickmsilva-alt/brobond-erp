@@ -106,12 +106,12 @@ async function seedPayoutPayment(ref: string) {
   return { intentId: Number(intent.id), payoutId: Number(r.get().body.payout.id), bankId: Number(bank.id) };
 }
 
-test('PG payment: estorno integral sem valor explícito invalida repasse e mantém vínculo histórico', { skip }, async () => {
+test('PG payment: estorno integral comprovado invalida repasse e mantém vínculo histórico', { skip }, async () => {
   const { query } = await boot(); const { matchPayout } = await import('../../../modules/payments/application/payouts');
   const { paymentEngine } = await import('../../../modules/payments/orchestration/payment-orchestrator');
   const ref = `pg-total-refund-${Date.now()}-${process.pid}`; const x = await seedPayoutPayment(ref);
   await matchPayout(req({ bank_transaction_id: x.bankId }, { id: x.payoutId }), res().out);
-  await paymentEngine.apply(1, x.intentId, { reference: ref, status: 'REFUNDED' });
+  await paymentEngine.apply(1, x.intentId, { reference: ref, status: 'REFUNDED', refunded: 10000 });
   const payout = (await query('SELECT status, bank_transaction_id FROM payment_payouts WHERE id=$1', [x.payoutId])).rows[0];
   const settlement = (await query('SELECT status, refund_amount FROM payment_settlements WHERE payment_intent_id=$1', [x.intentId])).rows[0];
   const attempt = (await query('SELECT status, refunded_amount FROM payment_attempts WHERE payment_intent_id=$1', [x.intentId])).rows[0];

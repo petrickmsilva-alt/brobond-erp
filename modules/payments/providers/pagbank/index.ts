@@ -47,9 +47,16 @@ export class PagBankProvider extends GenericPaymentProvider {
   }
   async getPayment(ctx: ProviderContext, reference: string): Promise<PaymentResult> {
     const r = await this.call(ctx, `/orders/${encodeURIComponent(reference)}`);
-    const paid = (r.charges || []).filter((c: any) => ['PAID', 'CANCELED'].includes(c.status));
-    const amount = (r.items || []).reduce((n: number, i: any) => n + Number(i.unit_amount) * Number(i.quantity), 0);
-    const refunded = paid.reduce((n: number, c: any) => n + Number(c.amount?.summary?.refunded || 0), 0);
+    type Charge = { status?: string; amount?: { summary?: { paid?: number; refunded?: number } } };
+    type Item = { unit_amount?: number; quantity?: number };
+    const paid: Charge[] = (r.charges || []).filter((c: Charge) => ['PAID', 'CANCELED'].includes(String(c.status)));
+    const amount = (r.items || []).reduce((n: number, i: Item) => n + Number(i.unit_amount) * Number(i.quantity), 0);
+    const refunded = paid.reduce((n, c) => n + Number(c.amount?.summary?.refunded || 0), 0);
+    if ((refunded > 0 || paid.some((c) => c.status === 'PAID')) &&
+        (!Number.isSafeInteger(amount) || amount <= 0 ||
+         paid.some((c) => !Number.isSafeInteger(c.amount?.summary?.paid)) ||
+         paid.reduce((n, c) => n + Number(c.amount?.summary?.paid), 0) !== amount))
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true); // no proof of full capture
     return {
       reference,
       amount,
@@ -60,7 +67,7 @@ export class PagBankProvider extends GenericPaymentProvider {
           ? 'REFUNDED'
           : refunded > 0
             ? 'PARTIALLY_REFUNDED'
-            : paid.some((c: any) => c.status === 'PAID')
+            : paid.some((c) => c.status === 'PAID')
               ? 'PAID'
               : 'PENDING',
     };

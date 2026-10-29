@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Box, CheckCircle2, ChevronRight, History, Landmark, Loader2, RefreshCw, TriangleAlert, Warehouse, X } from 'lucide-react';
 import { api } from '../lib/api';
 import { Alert, Badge, Spinner, useToast } from './ui';
@@ -77,6 +77,7 @@ type Previsao = {
 
 type Resultado = {
   recebimento_id?: number;
+  idempotente?: boolean;
   status?: string;
   custos?: CustoDaLinha[];
   entradas?: unknown[];
@@ -115,6 +116,7 @@ export default function RecebimentoCompraForm({
   onRecebido: () => void;
 }) {
   const toast = useToast();
+  const comando = useRef<{ corpo: string; chave: string } | null>(null);
   const [compra, setCompra] = useState<Record<string, any> | null>(null);
   const [itens, setItens] = useState<ItemCompra[]>([]);
   const [historico, setHistorico] = useState<RecebimentoAnterior[]>([]);
@@ -125,6 +127,7 @@ export default function RecebimentoCompraForm({
   const [prevendo, setPrevendo] = useState(false);
   const [erroPrevisao, setErroPrevisao] = useState<string | null>(null);
   const [confirmando, setConfirmando] = useState(false);
+  const [erroConfirmacao, setErroConfirmacao] = useState<string | null>(null);
   const [etapa, setEtapa] = useState<'edicao' | 'confirmacao' | 'sucesso'>('edicao');
   const [resultado, setResultado] = useState<Resultado | null>(null);
 
@@ -218,15 +221,18 @@ export default function RecebimentoCompraForm({
   const confirmar = useCallback(async () => {
     if (!previsao) return;
     setConfirmando(true);
+    setErroConfirmacao(null);
     try {
-      const r = await api.post<Resultado>(`/compras/${compraId}/receber`, { itens: linhasValidas });
+      const corpo = JSON.stringify({ compraId, itens: linhasValidas });
+      if (!comando.current || comando.current.corpo !== corpo) comando.current = { corpo, chave: crypto.randomUUID() };
+      const r = await api.post<Resultado>(`/compras/${compraId}/receber`, { itens: linhasValidas, idempotency_key: comando.current.chave });
+      comando.current = null;
       setResultado(r);
       setEtapa('sucesso');
       toast.success(`Recebimento #${r.recebimento_id ?? '—'} registrado.`);
       onRecebido();
     } catch (e: any) {
-      toast.error(e?.message || 'Não foi possível registrar o recebimento.');
-      setEtapa('edicao');
+      setErroConfirmacao(`${e?.message || 'Não foi possível confirmar o recebimento.'} Se houve falha de conexão, tente novamente com os mesmos itens ou consulte o histórico antes de enviar outro lote.`);
     } finally {
       setConfirmando(false);
     }
@@ -279,6 +285,8 @@ export default function RecebimentoCompraForm({
           </div>
 
           {etapa === 'confirmacao' && previsao ? (
+            <>
+            {erroConfirmacao && <Alert tone="red">{erroConfirmacao}</Alert>}
             <Confirmacao
               previsao={previsao}
               compra={compra}
@@ -292,6 +300,7 @@ export default function RecebimentoCompraForm({
               onConfirmar={() => void confirmar()}
               confirmando={confirmando}
             />
+            </>
           ) : (
             <>
               {itens.length === 0 ? (
@@ -578,6 +587,10 @@ function ResultadoRecebimento({ resultado, onFechar, onNovo }: { resultado: Resu
   const custos = resultado.custos || [];
   const totalQtde = custos.reduce((a, c) => a + num(c.quantidade), 0);
   const valor = custos.reduce((a, c) => a + num(c.quantidade) * num(c.custo_unitario_efetivo), 0);
+  if (resultado.idempotente) return <div className="space-y-4">
+    <Alert tone="green">Recebimento #{resultado.recebimento_id ?? '—'} já estava registrado. Nenhuma nova entrada de estoque foi feita. Consulte o histórico do pedido para o detalhamento.</Alert>
+    <button className="btn-primary" onClick={onFechar}>Concluir</button>
+  </div>;
   return (
     <div className="space-y-4">
       <Alert tone="green">

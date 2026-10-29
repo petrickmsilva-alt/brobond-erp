@@ -419,9 +419,11 @@ test('pg E3.1 CORRIDA B: dois parciais simultâneos do MESMO pedido nunca passam
     receber(ctx, compraId, [{ item_compra_id: itens[0], quantidade: 40 }]),
   ]);
   const ok = resultados.filter((r) => r.status === 'fulfilled' && (r as any).value.status === 201).length;
+  const replay = resultados.filter((r) => r.status === 'fulfilled' && (r as any).value.status === 200 && (r as any).value.body.idempotente === true).length;
   const rejeitado = resultados.filter((r) => r.status === 'rejected').length;
 
-  assert.equal(ok + rejeitado, 2, 'os dois disparos precisam terminar');
+  assert.equal(ok, 1, 'um único recebimento novo');
+  assert.equal(ok + replay + rejeitado, 2, 'cada disputa termina em criação, replay ou conflito');
   assert.equal(await saldo(ctx), 40, 'os dois parciais entraram e o pedido foi estourado');
   const rec = await um<{ recebido: string; comprado: string }>(
     `SELECT COALESCE(SUM(quantidade_recebida),0) AS recebido, COALESCE(SUM(quantidade),0) AS comprado FROM itens_compra WHERE compra_id=$1`,

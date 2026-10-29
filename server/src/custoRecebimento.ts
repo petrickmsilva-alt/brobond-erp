@@ -63,6 +63,7 @@
 // RECUSA com 409 em vez de zerar o custo ou negativar o estoque.
 // ============================================================================
 import { HttpError } from './errors';
+import { listarTodos } from './paginacaoCompleta';
 import { assertRegistroDaEmpresa, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
 import { getResource } from './resources';
 import { getStore, resolveLocal, resolveLocalParaEstorno, validarTamanhoNaGrade } from './services';
@@ -211,9 +212,8 @@ async function travarParaCusto(tabela: 'insumos' | 'produtos', id: number, tx: T
 
 /** Saldo da empresa do produto somando TODOS os locais (semântica já adotada). */
 async function saldoProduto(produtoId: number, empresaId: number, tx?: Tx): Promise<number> {
-  const s = getStore();
-  const r = await s.list(getResource('estoques')!, { page: 1, pageSize: 10000, filter: { empresa_id: empresaId, produto_id: produtoId } }, tx);
-  return round3(r.rows.reduce((acc, row) => acc + Number(row.quantidade || 0), 0));
+  const rows = await listarTodos(getResource('estoques')!, { empresa_id: empresaId, produto_id: produtoId }, tx, { sort: 'id', dir: 'asc' });
+  return round3(rows.reduce((acc, row) => acc + Number(row.quantidade || 0), 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +271,7 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
   // Regra: freteDesteLote = frete × (valor deste lote / valor do pedido).
   // A soma sobre todos os lotes dá exatamente o frete. O ÚLTIMO lote absorve o
   // resíduo de arredondamento, e nunca se rateia mais do que falta.
-  const itensDaCompra = (await s.list(R_ITENS(), { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, compra_id: compraId } }, tx)).rows;
+  const itensDaCompra = await listarTodos(R_ITENS(), { empresa_id: escopo.empresaId, compra_id: compraId }, tx, { sort: 'id', dir: 'asc' });
   const n2 = (v: unknown) => Number(v || 0);
   const valorDoPedido = round2(itensDaCompra.reduce((a, i) => a + round3(n2(i.quantidade)) * round2(n2(i.preco_unitario)), 0));
   const freteJaRateado = round2(itensDaCompra.reduce((a, i) => a + round2(n2(i.custo_frete_rateado)), 0));
@@ -496,9 +496,8 @@ export async function estornarEntradasDeCompra(args: {
   const out: EstornarResultado = { insumos: 0, produtos: 0, custoRestaurado: [] };
 
   // ---- produtos acabados ---------------------------------------------------
-  const movProdutos = (
-    await s.list(R_MOV(), { page: 1, pageSize: 2000, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId, tipo: 'entrada', compra_id: compraId } }, tx)
-  ).rows.filter((m) => String(m.tipo) === 'entrada' && Number(m.compra_id) === compraId && !m.estornado);
+  const movProdutos = (await listarTodos(R_MOV(), { empresa_id: escopo.empresaId, tipo: 'entrada', compra_id: compraId }, tx,
+    { sort: 'id', dir: 'desc' })).filter((m) => String(m.tipo) === 'entrada' && Number(m.compra_id) === compraId && !m.estornado);
 
   for (const m of movProdutos) {
     const produtoId = Number(m.produto_id);
@@ -573,9 +572,8 @@ export async function estornarEntradasDeCompra(args: {
 
   // ---- insumos -------------------------------------------------------------
   // Agora por VÍNCULO (compra_id), não por texto de motivo.
-  const movInsumos = (
-    await s.list(R_MOV_INSUMO(), { page: 1, pageSize: 2000, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId, tipo: 'entrada', compra_id: compraId } }, tx)
-  ).rows.filter((m) => String(m.tipo) === 'entrada' && Number(m.compra_id) === compraId);
+  const movInsumos = (await listarTodos(R_MOV_INSUMO(), { empresa_id: escopo.empresaId, tipo: 'entrada', compra_id: compraId }, tx,
+    { sort: 'id', dir: 'desc' })).filter((m) => String(m.tipo) === 'entrada' && Number(m.compra_id) === compraId);
 
   for (const m of movInsumos) {
     const insumoId = Number(m.insumo_id);

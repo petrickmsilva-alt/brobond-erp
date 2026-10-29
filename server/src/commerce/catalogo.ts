@@ -21,7 +21,9 @@ import { getStore, checkAccess, checkFluxoEscrita } from '../services';
 import { currentUser } from '../auth';
 import { escopoDoAtor, escopoDeSistema, empresaDoRegistroAudit, type EscopoEmpresa } from '../empresa';
 import { getResource } from '../resources';
-import { configLoja, wooFetch } from '../loja';
+import { configLoja, wooFetch, empresaVinculadaWoo } from '../loja';
+import { domainLock } from '../domainLock';
+import { listarTodos } from '../producao';
 import { celulasDaEmpresa, locaisDeSaida, reservadoDaCelula, reservasAtivasPorCelula } from '../estoqueCanonico';
 import { attachImages } from '../uploads';
 import { gradeTamanhosDoProduto, nomesProdutos } from './grade';
@@ -66,13 +68,15 @@ async function chamarApi(url: string, init: RequestInit): Promise<any> {
   let resp: globalThis.Response;
   try {
     resp = await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_PUBLICACAO) });
-  } catch (e) {
-    throw new PublicacaoFalha(`Falha de rede ao falar com o canal: ${sanitizarErro(e)}`);
+  } catch {
+    // Network exceptions can contain URLs, credentials and customer data.
+    throw new PublicacaoFalha('Falha de rede ao falar com o canal.');
+  }
+  if (!resp.ok) {
+    // Remote response bodies are untrusted and can echo tokens or PII.
+    throw new PublicacaoFalha(`O canal respondeu HTTP ${resp.status}.`);
   }
   const texto = await resp.text();
-  if (!resp.ok) {
-    throw new PublicacaoFalha(`O canal respondeu ${resp.status}: ${texto.replace(/\s+/g, ' ').slice(0, 300)}`);
-  }
   try {
     return JSON.parse(texto);
   } catch {
@@ -298,16 +302,26 @@ export async function enfileirarPublicacao(
   criadoPor: number | null,
   tx?: Tx
 ): Promise<Row> {
+  const key = `publicacao:${canal}:${produtoId}`;
+  if (tx) {
+    // Honor the caller's transaction while taking the same cross-process lock.
+    await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`domain:${empresaId}:${key}`]);
+    return enfileirarPublicacaoInterna(empresaId, produtoId, canal, payload, criadoPor, tx);
+  }
+  return domainLock(empresaId, key, (lockedTx) => enfileirarPublicacaoInterna(empresaId, produtoId, canal, payload, criadoPor, lockedTx));
+}
+
+async function enfileirarPublicacaoInterna(
+  empresaId: number, produtoId: number, canal: CanalPublicacao,
+  payload: PayloadPublicacao, criadoPor: number | null, tx: Tx
+): Promise<Row> {
   const s = getStore();
   const hash = hashPayload(payload);
-  const existentes = await s.list(
-    R_PUBLICACOES(),
-    { page: 1, pageSize: 500, filter: { empresa_id: empresaId, produto_id: produtoId, canal } },
-    tx
-  );
-  const ativa = existentes.rows.find((r) => ESTADOS_PIPELINE.has(String(r.estado))) ?? null;
+  const existentes = await listarTodos(R_PUBLICACOES(), { empresa_id: empresaId, produto_id: produtoId, canal }, tx, { sort: 'id', dir: 'asc' });
+  const ativa = existentes.find((r) => ESTADOS_PIPELINE.has(String(r.estado))) ?? null;
   if (ativa) {
     if (String(ativa.payload_hash || '') === hash) return ativa;
+    if (String(ativa.estado) === 'PUBLISHING') throw new HttpError(409, 'Publicação em andamento; aguarde e tente novamente com as alterações.');
     return (await s.update(
       R_PUBLICACOES(),
       Number(ativa.id),
@@ -321,7 +335,7 @@ export async function enfileirarPublicacao(
     ))!;
   }
   let versao = 0;
-  for (const r of existentes.rows) versao = Math.max(versao, Number(r.versao || 0));
+  for (const r of existentes) versao = Math.max(versao, Number(r.versao || 0));
   try {
     return await s.insert(
       R_PUBLICACOES(),
@@ -391,7 +405,7 @@ export async function processarPublicacao(
         : await montarPayloadPublicacao(empresaId, produtoId, canal)
     ) as PayloadPublicacao;
     const externalId = await publicarNoCanal(empresaId, canal, payload);
-    await s.update(R_PUBLICACOES(), id, {
+    const concluida = await s.tryUpdateIf(R_PUBLICACOES(), id, { estado: 'PUBLISHING' }, {
       estado: 'PUBLISHED',
       external_id: externalId,
       ultimo_erro: null,
@@ -399,19 +413,21 @@ export async function processarPublicacao(
       tentativas: Number(reivindicada.tentativas || 0) + 1,
       proxima_tentativa_em: null,
     });
-    return 'processada';
+    return concluida ? 'processada' : 'ignorada';
   } catch (e) {
     const rejeitada = e instanceof PublicacaoFalha && e.rejeitada;
     const tentativas = Number(reivindicada.tentativas || 0) + 1;
     const esgotou = tentativas >= MAX_TENTATIVAS;
-    const mensagem = sanitizarErro(e);
-    await s.update(R_PUBLICACOES(), id, {
+    // Only controlled messages may be stored; arbitrary exceptions can carry
+    // provider responses, tokens or customer data.
+    const mensagem = e instanceof PublicacaoFalha ? sanitizarErro(e) : 'Falha ao publicar no canal; revise a integração.';
+    const falhou = await s.tryUpdateIf(R_PUBLICACOES(), id, { estado: 'PUBLISHING' }, {
       estado: rejeitada ? 'REJECTED' : 'ERROR',
       ultimo_erro: esgotou && !rejeitada ? `Tentativas esgotadas (${MAX_TENTATIVAS}): ${mensagem}` : mensagem,
       tentativas,
       proxima_tentativa_em: rejeitada || esgotou ? null : new Date(Date.now() + backoffMs(tentativas)).toISOString(),
     });
-    return rejeitada ? 'rejeitada' : 'falhou';
+    return !falhou ? 'ignorada' : rejeitada ? 'rejeitada' : 'falhou';
   }
 }
 
@@ -458,6 +474,7 @@ async function publicarNoCanal(empresaId: number, canal: CanalPublicacao, payloa
       );
 
     case 'WOOCOMMERCE':
+      if (empresaVinculadaWoo() !== empresaId) throw new PublicacaoFalha('WooCommerce não vinculado à empresa desta publicação.');
       return publicarWooCommerce(payload);
 
     case 'MERCADOLIVRE':
@@ -542,17 +559,24 @@ async function tokenDoConector(
   } catch {
     throw new PublicacaoFalha('Conectores exigem PostgreSQL — o modo demonstração não publica em marketplaces.');
   }
-  const { rows } = await db.query<{ access_token: string | null; shop_id: string | null }>(
-    `SELECT access_token, shop_id FROM connectors
+  const { rows } = await db.query<{ usuario_id: number }>(
+    `SELECT usuario_id FROM connectors
       WHERE empresa_id = $1 AND provider = $2 AND status = 'CONNECTED'
       ORDER BY id LIMIT 1`,
     [empresaId, provider]
   );
   const row = rows[0];
-  if (!row?.access_token) {
+  if (!row?.usuario_id) {
     throw new PublicacaoFalha(`Canal ${provider} não conectado: conecte-o em Commerce → Canais antes de publicar.`);
   }
-  return { accessToken: String(row.access_token), shopId: row.shop_id ? String(row.shop_id) : null };
+  // Reuse the connector's encrypted credential and refresh lifecycle. Never send
+  // the ciphertext as an access token, nor persist/log the decrypted value here.
+  try {
+    const { connectorService } = await import('../../../modules/connectors/index');
+    return await connectorService.getValidAccessToken(empresaId, Number(row.usuario_id), provider);
+  } catch {
+    throw new PublicacaoFalha(`Credencial do canal ${provider} inválida ou expirada; revise a conexão.`);
+  }
 }
 
 async function publicarMercadoLivre(empresaId: number, payload: PayloadPublicacao): Promise<string> {
@@ -994,6 +1018,7 @@ export async function reprocessarPublicacao(req: Request, res: Response) {
   if (!linha) throw new HttpError(404, 'Publicação não encontrada.');
   const estado = String(linha.estado);
   if (estado === 'PUBLISHED') throw new HttpError(409, 'Publicação já confirmada pelo canal.');
+  if (estado === 'UNPUBLISHED') throw new HttpError(409, 'Publicação desativada: publique o produto novamente de forma explícita.');
   if (estado === 'REJECTED') throw new HttpError(409, String(linha.ultimo_erro || 'Canal não suporta publicação automática.'));
   if (estado === 'PUBLISHING') throw new HttpError(409, 'Há uma publicação em andamento.');
   const reativada = await s.update(R_PUBLICACOES(), id, {
@@ -1177,23 +1202,17 @@ export async function despublicarProduto(req: Request, res: Response) {
     );
   }
   const s = getStore();
-  const linha = await s.findOneWhere(R_PUBLICACOES(), {
-    empresa_id: escopo.empresaId,
-    produto_id: produtoId,
-    canal: 'BROBOND',
-    estado: 'PUBLISHED',
-  });
-  if (!linha) throw new HttpError(409, 'O produto não está publicado na vitrine.');
-  await s.update(R_PUBLICACOES(), Number(linha.id), { estado: 'UNPUBLISHED', proxima_tentativa_em: null });
-  await s.audit({
-    usuario_id: actor.id || null,
-    usuario: actor.name,
-    acao: 'editar',
-    recurso: 'commerce_publicacoes',
-    registro_id: Number(linha.id),
-    descricao: `Produto ${produtoId} despublicado da vitrine própria`,
-    empresa_id: escopo.empresaId,
-    dados: { produto_id: produtoId, canal },
+  await domainLock(escopo.empresaId, `publicacao:BROBOND:${produtoId}`, async (tx) => {
+    const rows = await listarTodos(R_PUBLICACOES(), { empresa_id: escopo.empresaId, produto_id: produtoId, canal: 'BROBOND' }, tx, { sort: 'id', dir: 'asc' });
+    const candidates = rows.filter((row) => ['PUBLISHED', 'DRAFT', 'READY', 'QUEUED', 'PUBLISHING', 'UPDATE_QUEUED', 'ERROR'].includes(String(row.estado)));
+    if (!candidates.length) throw new HttpError(409, 'O produto não está publicado ou em publicação na vitrine.');
+    for (const row of candidates) await s.update(R_PUBLICACOES(), Number(row.id), { estado: 'UNPUBLISHED', proxima_tentativa_em: null, atualizado_em: new Date().toISOString() }, tx);
+    await s.audit({
+      usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'commerce_publicacoes',
+      registro_id: Number(candidates[candidates.length - 1].id),
+      descricao: `Produto ${produtoId} despublicado da vitrine própria`, empresa_id: escopo.empresaId,
+      dados: { produto_id: produtoId, canal, versoes_encerradas: candidates.length },
+    }, tx);
   });
   res.json({ ok: true });
 }

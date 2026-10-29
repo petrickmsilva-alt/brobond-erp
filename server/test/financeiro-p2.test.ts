@@ -380,6 +380,9 @@ test('P2 gateway: cancelamento e estorno com reversão financeira', async () => 
   const app = express();
   app.use(gateway.publicGatewayRouter);
   await request(app).post('/api/gateway/webhooks/mock').send({ event: 'payment.paid', data: { id: cobE.cobranca.provider_ref }, status: 'pago' });
+  await esperarErro(() => gateway.estornarCobranca(reqDe({ valor: 0 }, { params: { id: cobE.cobranca.id } }), null as any), 400, /inválido/i);
+  await esperarErro(() => gateway.estornarCobranca(reqDe({ valor: 30 }, { params: { id: cobE.cobranca.id } }), null as any), 409, /parcial/i);
+  assert.equal((await s.get(gateway.R_GATEWAY_COBRANCAS, Number(cobE.cobranca.id)))?.status, 'paga');
   const estorno = await chamar(gateway.estornarCobranca, reqDe({}, { params: { id: cobE.cobranca.id } }));
   assert.equal(estorno.cobranca.status, 'estornada');
   assert.ok(estorno.estorno_lancamento_id, 'o dinheiro devolvido vira lançamento de estorno');

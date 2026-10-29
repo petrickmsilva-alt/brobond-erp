@@ -18,6 +18,7 @@ import {
   R_REFUNDS,
   R_DISPUTES,
   R_SETTLEMENTS,
+  R_LATE_REVIEWS,
 } from '../infrastructure/resources';
 import { locked } from '../infrastructure/locking';
 import { listPayouts, payoutDetail, importPayout, matchPayout, correctPayout, unlinkPayout } from '../application/payouts';
@@ -302,6 +303,33 @@ for (const [path, resource] of [
     })
   );
 }
+// A review is resolved only by a confirmed full refund through the existing
+// Payment Engine or verified full legacy refund; unproven reviews remain open.
+paymentsRouter.get('/late-reviews', wrap(async (req, res) => {
+  const { empresaId } = authorize(req, true);
+  const filter: Record<string, unknown> = { empresa_id: empresaId };
+  if (req.query.status) {
+    const status = String(req.query.status);
+    if (!['OPEN', 'REFUNDED'].includes(status)) throw invalid();
+    filter.status = status;
+  }
+  const result = await getStore().list(R_LATE_REVIEWS, {
+    page: Math.max(1, Math.trunc(Number(req.query.page)) || 1),
+    pageSize: Math.min(100, Math.max(1, Math.trunc(Number(req.query.pageSize)) || 25)),
+    sort: 'id', dir: 'desc', filter,
+  });
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json(result);
+}));
+paymentsRouter.get('/late-reviews/:id', wrap(async (req, res) => {
+  const { empresaId } = authorize(req, true);
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) throw invalid();
+  const review = await getStore().findOneWhere(R_LATE_REVIEWS, { empresa_id: empresaId, id });
+  if (!review) throw new HttpError(404, 'Revisão não encontrada.');
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({ review });
+}));
 paymentsRouter.get(
   '/transactions/:id',
   wrap(async (req, res) => {

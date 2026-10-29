@@ -152,8 +152,8 @@ export default function App() {
           <Route path="/esqueci" element={<ForgotPage />} />
           <Route path="/redefinir/:token" element={<ResetPage />} />
           <Route path="/convite/:token" element={<Convite />} />
-          <Route path="/catalogo/:token" element={<CatalogoPublico />} />
-          <Route path="/portal/:token" element={<PortalCliente />} />
+          <Route path="/catalogo/:token/*" element={<CatalogoPublico />} />
+          <Route path="/portal/:token/*" element={<PortalCliente />} />
           {/* Vitrine B2C própria do BROBOND COMMERCE OS — pública, sem sessão ERP. */}
           <Route path="/loja" element={<LojaInicioPage />} />
           <Route path="/loja/produto/:slug" element={<LojaProdutoPage />} />

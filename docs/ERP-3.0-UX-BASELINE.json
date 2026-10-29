@@ -10,18 +10,18 @@
     "portal": "createPortal (renderização fora da árvore da página)"
   },
   "totais": {
-    "role-dialog": 2,
+    "role-dialog": 1,
     "role-alertdialog": 0,
-    "aria-modal": 2,
-    "overlay-fixo": 7,
+    "aria-modal": 1,
+    "overlay-fixo": 3,
     "elemento-dialog": 0,
     "show-modal": 0,
     "componente-modal": 0,
     "portal": 0,
     "browser-dialog-api": 0
   },
-  "version": 3,
-  "date": "2026-10-28",
+  "version": 4,
+  "date": "2026-10-29",
   "rules": [
     "ZERO MODAL em todos os fluxos de módulo: navegação por páginas, nunca superfície sobreposta.",
     "Fluxo de recurso: lista → novo (/recurso/novo) → detalhe (/recurso/:id) → edição (/recurso/:id/editar).",
@@ -86,25 +86,7 @@
       "padroes": {
         "overlay-fixo": 1
       }
-    },
-    {
-      "arquivo": "client/src/pages/PortalCliente.tsx",
-      "categoria": "portal_publico",
-      "motivo": "Portal PÚBLICO do cliente (fora do ERP, rota /portal/:token): página do cliente final, que lê o pedido e responde a proposta. Não é módulo do ERP nem cadastro interno.",
-      "padroes": {
-        "overlay-fixo": 1
-      }
-    },
-    {
-      "arquivo": "client/src/pages/CatalogoPublico.tsx",
-      "categoria": "catalogo_publico",
-      "motivo": "Catálogo PÚBLICO compartilhável (rota /catalogo/:token): visualização de produtos e carrinho do cliente final — fora do ERP e sem cadastro interno. A ampliação da foto do produto e o carrinho continuam sobrepostos de propósito: é a experiência de compra do cliente, não um fluxo de módulo.",
-      "padroes": {
-        "overlay-fixo": 3,
-        "role-dialog": 1,
-        "aria-modal": 1
-      }
     }
   ],
-  "version_notes": "Versionamento do contrato executável ZERO MODAL; as exceções e contagens continuam declaradas neste documento."
+  "version_notes": "Removidas exceções operacionais do catálogo e portal públicos; detalhes, pedido e confirmação agora usam rotas e conteúdo inline. Permanecem apenas exceções de navegação e infraestrutura."
 }

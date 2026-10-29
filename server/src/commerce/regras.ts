@@ -110,12 +110,14 @@ const TRANSICOES: Record<EstadoPedido, Partial<Record<EventoPedido, EstadoPedido
     pago: 'PAGO',
     cancelado: 'CANCELADO',
     expirado: 'EXPIRADO',
+    estornado: 'ESTORNADO',
     erro: 'ERRO',
   },
   PAGAMENTO_AUTORIZADO: {
     pago: 'PAGO',
     cancelado: 'CANCELADO',
     expirado: 'EXPIRADO',
+    estornado: 'ESTORNADO',
     pagamento_pendente: 'AGUARDANDO_PAGAMENTO',
     erro: 'ERRO',
   },
@@ -143,6 +145,7 @@ const TRANSICOES: Record<EstadoPedido, Partial<Record<EventoPedido, EstadoPedido
     pago: 'PAGO',
     cancelado: 'CANCELADO',
     expirado: 'EXPIRADO',
+    estornado: 'ESTORNADO',
     reprocessado: 'AGUARDANDO_PAGAMENTO',
   },
 };

@@ -119,3 +119,15 @@ describe('Commerce — Detalhe do pedido (/commerce/pedidos/:saleId)', () => {
     expect(await screen.findByText('Pedido não encontrado neste tenant.')).toBeInTheDocument();
   });
 });
+
+describe('pagamento tardio em pedido encerrado', () => {
+  it('não oferece conversão e encaminha para revisão do pagamento', async () => {
+    fetchMock.mockResolvedValue({ ...VISAO, pedido: { ...VISAO.pedido!, estado: 'EXPIRADO', erro: 'Pagamento tardio em revisão' },
+      pagamento: { ...VISAO.pagamento, engine_intent_id: 42, late_review_status: 'OPEN' } });
+    renderPagina();
+    expect(await screen.findByText('Pagamento tardio em revisão')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Converter em venda' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Revisar pagamento e eventual estorno' })).toHaveAttribute('href', '/commerce/pagamentos/transacoes/42');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});

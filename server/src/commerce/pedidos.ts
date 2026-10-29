@@ -1,4 +1,5 @@
-import { R_INTENTS, R_ATTEMPTS } from '../../../modules/payments/infrastructure/resources';
+import { R_INTENTS, R_ATTEMPTS, R_LATE_REVIEWS } from '../../../modules/payments/infrastructure/resources';
+import { recordLatePayment, resolveLateRefund } from '../../../modules/payments/application/late-reviews';
 // ============================================================================
 // COMMERCE OS — PEDIDOS OMNICHANNEL (inbox, conversão, pagamento, fulfillment).
 //
@@ -164,6 +165,18 @@ export type ResultadoConversao = {
  * projeção do pedido atualizada. 409 de item sem casamento →
  * AGUARDANDO_CORRECAO + mensagem honesta (nunca adivinha o produto).
  */
+/** A later cancellation/refund must not be overwritten by a stale converter. */
+async function concluirProjecaoConversao(empresaId: number, pedido: Row, vendaId: number): Promise<ResultadoConversao> {
+  const s = getStore();
+  const saved = await s.tryUpdateIf(R_PEDIDOS(), Number(pedido.id), { empresa_id: empresaId, estado: pedido.estado }, {
+    estado: 'CONVERTIDO', convertido_em: pedido.convertido_em ?? new Date().toISOString(), venda_id: vendaId, erro: null,
+  });
+  if (saved) return { estado: 'CONVERTIDO', venda_id: vendaId };
+  const atual = await s.findOneWhere(R_PEDIDOS(), { empresa_id: empresaId, id: Number(pedido.id) });
+  if (atual?.estado === 'CONVERTIDO') return { estado: 'CONVERTIDO', venda_id: Number(atual.venda_id || vendaId) };
+  throw new HttpError(409, 'Pedido mudou durante a conversão; revise seu estado antes de tentar novamente.');
+}
+
 export async function converterPedidoSale(empresaId: number, saleId: string): Promise<ResultadoConversao> {
   const s = getStore();
   const sale = await s.findOneWhere(R_SALES(), { id: saleId, empresa_id: empresaId });
@@ -171,16 +184,12 @@ export async function converterPedidoSale(empresaId: number, saleId: string): Pr
   const pedido = await garantirPedidoDaSale(empresaId, sale);
   const pedidoId = Number(pedido.id);
 
+  if (['CANCELADO', 'EXPIRADO'].includes(String(pedido.estado)))
+    throw new HttpError(409, 'Pedido encerrado não pode ser convertido; revise qualquer pagamento tardio.');
   if (sale.operational_venda_id) {
-    if (String(pedido.estado) !== 'CONVERTIDO' && String(pedido.estado) !== 'ESTORNADO') {
-      await s.update(R_PEDIDOS(), pedidoId, {
-        estado: 'CONVERTIDO',
-        convertido_em: (pedido.convertido_em as string | null) ?? new Date().toISOString(),
-        venda_id: Number(sale.operational_venda_id),
-        erro: null,
-      });
-    }
-    return { estado: 'CONVERTIDO', venda_id: Number(sale.operational_venda_id) };
+    if (String(pedido.estado) === 'ESTORNADO') return { estado: 'ESTORNADO', venda_id: Number(sale.operational_venda_id) };
+    if (String(pedido.estado) === 'CONVERTIDO') return { estado: 'CONVERTIDO', venda_id: Number(sale.operational_venda_id) };
+    return concluirProjecaoConversao(empresaId, pedido, Number(sale.operational_venda_id));
   }
   if (String(pedido.estado) === 'CONVERTIDO' || String(pedido.estado) === 'ESTORNADO') {
     return { estado: String(pedido.estado) as EstadoPedido, venda_id: pedido.venda_id ? Number(pedido.venda_id) : null };
@@ -202,18 +211,19 @@ export async function converterPedidoSale(empresaId: number, saleId: string): Pr
     // lá dentro, antes do faturamento) — aqui só orquecionamos a projeção.
     const resultado = await converterOrdemMarketplaceEmVenda(String(sale.id), escopo);
     const vendaId = resultado.vendaId;
-    await s.update(R_PEDIDOS(), pedidoId, {
-      estado: 'CONVERTIDO',
-      convertido_em: new Date().toISOString(),
-      venda_id: vendaId,
-      erro: null,
-    });
+    const projecao = await concluirProjecaoConversao(empresaId, pedido, vendaId);
     await agendarMargemSale(String(sale.id), empresaId);
-    return { estado: 'CONVERTIDO', venda_id: vendaId };
+    return projecao;
   } catch (e) {
     const pendencia = e instanceof HttpError ? e.message : null;
     if (e instanceof HttpError && e.status === 409) {
-      await s.update(R_PEDIDOS(), pedidoId, { estado: 'AGUARDANDO_CORRECAO', erro: pendencia?.slice(0, 500) ?? null });
+      const saved = await s.tryUpdateIf(R_PEDIDOS(), pedidoId, { empresa_id: empresaId, estado: pedido.estado },
+        { estado: 'AGUARDANDO_CORRECAO', erro: pendencia?.slice(0, 500) ?? null });
+      if (!saved) {
+        const atual = await s.findOneWhere(R_PEDIDOS(), { empresa_id: empresaId, id: pedidoId });
+        if (atual?.estado === 'CONVERTIDO') return { estado: 'CONVERTIDO', venda_id: atual.venda_id ? Number(atual.venda_id) : null };
+        throw new HttpError(409, 'Pedido mudou durante a conversão; revise seu estado antes de tentar novamente.');
+      }
       return { estado: 'AGUARDANDO_CORRECAO', venda_id: null, pendencia: pendencia ?? undefined };
     }
     throw e;
@@ -274,23 +284,36 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
   const pedido = pedidos.rows[0];
   if (!pedido) return; // cobrança avulsa do financeiro — sem projeção commerce
   const pedidoId = Number(pedido.id);
-  const pagamento = mapearEstadoPagamento(cobranca.status);
-  const evento = evt.intencao === 'paga' ? 'pago' : evt.intencao === 'cancelada' ? 'cancelado' : evt.intencao === 'expirada' ? 'expirado' : 'estornado';
-
   // Re-read and recalculate inside EACH serializable retry. Reusing a snapshot
   // from before a serialization failure could resurrect an expired checkout.
   const resultado = await repetirSerial(() => s.transaction(async (tx) => {
-    const atual = await s.findOneWhere(R_PEDIDOS(), { id: pedidoId, empresa_id: evt.empresaId }, tx);
-    if (!atual) return null;
+    const atual = await s.findOneWhere(R_PEDIDOS(), { id: pedidoId, empresa_id: evt.empresaId, cobranca_id: evt.cobrancaId }, tx);
+    const cobrancaAtual = await s.findOneWhere(R_GATEWAY_COBRANCAS, { id: evt.cobrancaId, empresa_id: evt.empresaId }, tx);
+    if (!atual || !cobrancaAtual) return null;
+    const pagamento = mapearEstadoPagamento(cobrancaAtual.status);
+    const eventos: Record<string, 'pago' | 'cancelado' | 'expirado' | 'estornado'> = { paga: 'pago', cancelada: 'cancelado', expirada: 'expirado', estornada: 'estornado' };
+    const evento = eventos[String(cobrancaAtual.status)];
+    if (!evento) return null;
     const novo = transicaoPedido(atual.estado, evento);
     if (!novo || novo === atual.estado) {
-      if (pagamento && atual.pagamento_estado !== pagamento) {
-        const tardio = evento === 'pago' && ['EXPIRADO', 'CANCELADO'].includes(String(atual.estado));
-        await s.update(R_PEDIDOS(), pedidoId, { pagamento_estado: pagamento, ...(tardio ? { erro: 'Pagamento confirmado após expiração/cancelamento; revisão manual necessária.' } : {}) }, tx);
-        if (tardio) await s.audit({ empresa_id: evt.empresaId, usuario_id: null, usuario: 'Sistema', acao: 'ajuste', recurso: 'commerce_pedidos', registro_id: pedidoId,
-          descricao: 'Pagamento confirmado depois do encerramento do pedido; requer revisão', dados: { antes: { estado: atual.estado, pagamento_estado: atual.pagamento_estado }, depois: { estado: atual.estado, pagamento_estado: pagamento } } }, tx);
+      const encerrado = ['EXPIRADO', 'CANCELADO'].includes(String(atual.estado));
+      if (encerrado && evento === 'pago' && pagamento === 'APPROVED') {
+        await recordLatePayment(evt.empresaId, atual, evt.cobrancaId, tx);
+      } else if (encerrado && evento === 'estornado' && pagamento === 'REFUNDED') {
+        // A historical legacy label alone is not sufficient. A review already
+        // resolved by a verified full legacy refund is safe to leave resolved.
+        const intent = await s.findOneWhere(R_INTENTS, { empresa_id: evt.empresaId, order_id: pedidoId }, tx);
+        const review = await s.findOneWhere(R_LATE_REVIEWS, { empresa_id: evt.empresaId, order_id: pedidoId }, tx);
+        if (intent?.status === 'REFUNDED' || review?.status === 'REFUNDED') {
+          await resolveLateRefund(evt.empresaId, atual, tx);
+          if (atual.pagamento_estado !== pagamento) await s.update(R_PEDIDOS(), pedidoId, { pagamento_estado: pagamento }, tx);
+        } else {
+          await s.update(R_PEDIDOS(), pedidoId, { erro: 'Estorno legado requer conciliação manual do valor; revisão permanece aberta.' }, tx);
+        }
+      } else if (pagamento && atual.pagamento_estado !== pagamento) {
+        await s.update(R_PEDIDOS(), pedidoId, { pagamento_estado: pagamento }, tx);
       }
-      return { pedido: atual, estado: String(atual.estado) };
+      return { pedido: atual, estado: String(atual.estado), evento };
     }
     const agora = new Date().toISOString();
     const mudancas: Record<string, unknown> = { estado: novo, atualizado_em: agora };
@@ -298,7 +321,7 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
     if (evento === 'pago') mudancas.pago_em = agora;
     if (['cancelado', 'expirado'].includes(evento)) mudancas.erro = null;
     await s.update(R_PEDIDOS(), pedidoId, mudancas, tx);
-    const saleStatus = evento === 'pago' ? 'PAID' : evt.intencao === 'estornada' ? 'REFUNDED' : evento === 'cancelado' || evento === 'expirado' ? 'CANCELLED' : null;
+    const saleStatus = evento === 'pago' ? 'PAID' : evento === 'estornado' ? 'REFUNDED' : evento === 'cancelado' || evento === 'expirado' ? 'CANCELLED' : null;
     if (saleStatus && atual.sale_id) {
       const sale = await s.findOneWhere(R_SALES(), { id: String(atual.sale_id), empresa_id: evt.empresaId }, tx);
       if (sale && String(sale.status) !== saleStatus && !(String(sale.status) === 'PAID' && saleStatus === 'CANCELLED' && sale.operational_venda_id))
@@ -312,16 +335,16 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
     }
     await s.audit({ empresa_id: evt.empresaId, usuario_id: null, usuario: 'Gateway', acao: 'ajuste', recurso: 'commerce_pedidos', registro_id: pedidoId,
       descricao: 'Transição por evento de pagamento', dados: { antes: { estado: atual.estado, pagamento_estado: atual.pagamento_estado }, depois: { estado: novo, pagamento_estado: pagamento } } }, tx);
-    return { pedido: atual, estado: novo };
+    return { pedido: atual, estado: novo, evento };
   }, { isolation: 'serializable' }));
 
-  if (evt.intencao === 'paga' && resultado && ['PAGO', 'AGUARDANDO_CORRECAO'].includes(resultado.estado) && resultado.pedido.sale_id) {
+  if (resultado?.evento === 'pago' && ['PAGO', 'AGUARDANDO_CORRECAO'].includes(resultado.estado) && resultado.pedido.sale_id) {
     await agendarMargemSale(String(resultado.pedido.sale_id), evt.empresaId);
     try {
       const r = await converterPedidoSale(evt.empresaId, String(resultado.pedido.sale_id));
       if (r.estado === 'AGUARDANDO_CORRECAO') await enfileirarOutbox(evt.empresaId, 'conversao', `sale:${resultado.pedido.sale_id}`, { sale_id: resultado.pedido.sale_id, pedido_id: pedidoId });
-    } catch (e) {
-      await enfileirarOutbox(evt.empresaId, 'conversao', `sale:${resultado.pedido.sale_id}`, { sale_id: resultado.pedido.sale_id, pedido_id: pedidoId, erro: String(e instanceof Error ? e.message : e).slice(0, 300) }).catch(() => undefined);
+    } catch {
+      await enfileirarOutbox(evt.empresaId, 'conversao', `sale:${resultado.pedido.sale_id}`, { sale_id: resultado.pedido.sale_id, pedido_id: pedidoId, erro: 'Conversão pendente; consulte o estado do pedido.' }).catch(() => undefined);
     }
   }
 }
@@ -544,6 +567,7 @@ export async function montarVisaoDaSale(
 
   const engineIntent = pedido ? await s.findOneWhere(R_INTENTS,{empresa_id:empresaId,order_id:Number(pedido.id)}) : null;
   const engineAttempt = engineIntent ? (await s.list(R_ATTEMPTS,{page:1,pageSize:1,sort:'id',dir:'desc',filter:{empresa_id:empresaId,payment_intent_id:Number(engineIntent.id)}})).rows[0] : null;
+  const lateReview = pedido && !opcoes.publico ? await s.findOneWhere(R_LATE_REVIEWS, { empresa_id: empresaId, order_id: Number(pedido.id) }) : null;
 
   const itens = itensBrutos.rows.map((i) => ({
     produto_id: Number(i.product_id || 0),
@@ -592,6 +616,8 @@ export async function montarVisaoDaSale(
       : null,
     pagamento: {
       engine_status: engineIntent?.status || null,
+      engine_intent_id: !opcoes.publico && engineIntent ? Number(engineIntent.id) : null,
+      late_review_status: lateReview?.status || null,
       action: engineAttempt?.safe_reference?.action || null,
       status: cobranca
         ? mapearEstadoPagamento(cobranca.status) ?? String(cobranca.status)
@@ -1023,7 +1049,7 @@ export async function listarErrosCommerce(req: Request, res: Response) {
       mensagem: p.erro ? String(p.erro) : 'Falha sem mensagem registrada.',
       quando: p.atualizado_em ? String(p.atualizado_em) : null,
       acao: 'detalhe',
-      link: p.sale_id ? `/commerce/pedidos/${String(p.sale_id)}` : '/commerce/pedidos',
+      link: p.sale_id ? `/commerce/pedidos/${encodeURIComponent(String(p.sale_id))}` : '/commerce/pedidos',
     });
   }
   for (const w of webhooks.rows) {

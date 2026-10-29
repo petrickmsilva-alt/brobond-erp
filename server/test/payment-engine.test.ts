@@ -470,3 +470,18 @@ test('Payment Engine: provider configuration preserves environment credentials o
     }
   }
 });
+
+test('Stripe e PagBank não projetam pagamento integral quando captura externa é parcial ou desconhecida', async (t) => {
+  let amountReceived: number | undefined = 4000; let pagPaid = 4000;
+  t.mock.method(globalThis, 'fetch', async (url: unknown) => {
+    if (String(url).includes('stripe.com')) return new Response(JSON.stringify({ amount_total: 10000, currency: 'brl', payment_status: 'paid', payment_intent: { status: 'succeeded', amount_received: amountReceived } }));
+    return new Response(JSON.stringify({ items: [{ unit_amount: 10000, quantity: 1 }], charges: [{ status: 'PAID', amount: { summary: { paid: pagPaid, refunded: 0 } } }] }));
+  });
+  const stripe = new StripeProvider(); const sc = { ...ctx, credentials: { secret_key: 'test-only' } };
+  await assert.rejects(() => stripe.getPayment(sc, 'cs-test'), (e: any) => e instanceof PaymentError);
+  amountReceived = undefined; await assert.rejects(() => stripe.getPayment(sc, 'cs-test'), (e: any) => e instanceof PaymentError);
+  amountReceived = 10000; assert.equal((await stripe.getPayment(sc, 'cs-test')).status, 'PAID');
+  const pagbank = new PagBankProvider(); const pc = { ...ctx, credentials: { access_token: 'test-only' } };
+  await assert.rejects(() => pagbank.getPayment(pc, 'ORDE-test'), (e: any) => e instanceof PaymentError);
+  pagPaid = 10000; assert.equal((await pagbank.getPayment(pc, 'ORDE-test')).status, 'PAID');
+});

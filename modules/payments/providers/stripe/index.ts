@@ -91,6 +91,11 @@ export class StripeProvider extends GenericPaymentProvider {
   async getPayment(ctx: ProviderContext, reference: string): Promise<PaymentResult> {
     const r = await this.call(ctx, `/checkout/sessions/${encodeURIComponent(reference)}?expand[]=payment_intent`);
     const pi = typeof r.payment_intent === 'object' && r.payment_intent ? r.payment_intent : {};
+    const total = Number(r.amount_total);
+    const captured = Number(pi.amount_received);
+    if ((r.payment_status === 'paid' || pi.status === 'succeeded') &&
+        (!Number.isSafeInteger(total) || total <= 0 || !Number.isSafeInteger(captured) || captured !== total))
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true); // partial/unknown capture is not a paid order
     let refunded = 0;
     if (pi.latest_charge) {
       const charge = await this.call(ctx, `/charges/${encodeURIComponent(String(pi.latest_charge))}`);

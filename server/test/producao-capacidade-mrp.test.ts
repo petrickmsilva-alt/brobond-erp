@@ -151,7 +151,7 @@ test('F) compra em aberto cobre a necessidade sem dar entrada no estoque', async
   assert.equal(antes.insumos.find((i: any) => i.insumo_id === Number(insumo.id)).faltando, 10);
 
   // compra aprovada de 6 m (não recebida) reduz a falta para 4
-  const fornecedor = await createRecord(RESOURCES.fornecedores, { nome: `Forn Cobertura ${unico()}`, pessoa: 'pj', indicador_ie: '1' }, admin);
+  const fornecedor = await createRecord(RESOURCES.fornecedores, { nome: `Forn Cobertura ${unico()}`, pessoa: 'pj', indicador_ie: '1', prazo_entrega_dias: 0 }, admin);
   const compra = await createRecord(RESOURCES.compras, { fornecedor_id: Number(fornecedor.id), data: '2026-08-01', status: 'aprovado', total: 30 }, admin);
   await createRecord(RESOURCES.itens_compra, { compra_id: Number(compra.id), insumo_id: Number(insumo.id), quantidade: 6, preco_unitario: 5 }, admin);
 
@@ -397,18 +397,82 @@ test('O) MRP agregado: reconcilia demanda, reserva, OP, consumo, compra no horiz
   assert.ok(material);
   assert.equal(material.necessaria, 29.9, '26 × (0.5×1.10 + 2×0.25×1.20) = 29.9');
   assert.equal(material.consumo_real, 3);
-  assert.equal(material.necessario_comprar, 26.9);
+  assert.equal(material.consumo_aplicado, 0, 'OP parcialmente produzida: alocação do consumo é desconhecida');
+  assert.equal(material.consumo_nao_alocado, 3);
+  assert.equal(material.necessario_comprar, 29.9);
   assert.equal(material.disponivel, 2, 'entrada 5 − saída real 3');
   assert.equal(material.em_compra, 5, 'somente a compra com recebimento esperado até 11/01 cobre');
   assert.equal(material.em_compra_fora_do_horizonte, 20);
   assert.equal(material.lead_time_dias, 2);
   assert.equal(material.lead_time_fornecedor, supplier.nome);
   assert.equal(material.cobertura, 7);
-  assert.equal(material.faltando, 19.9, '26.9 líquidos − 2 em saldo − 5 em compra');
+  assert.equal(material.faltando, 22.9, '29.9 conservadores − 2 em saldo − 5 em compra');
   assert.equal(out.calculo.horizonte.de, de);
   assert.equal(out.calculo.horizonte.ate, ate);
   assert.equal(out.calculo.calendario.dias_uteis, 5);
   assert.equal(out.resumo.ciclos_bom, 1);
   assert.equal(out.calculo.bom_multinivel.ciclos[0].produto_id, cycleA);
   assert.equal(out.calculo.bom_multinivel.componentes.find((c: any) => c.produto_id === child).quantidade, 52);
+});
+
+test('P) OP fora do horizonte não cobre venda; atrasada continua no horizonte, inclusive após paginação', async () => {
+  const size = await createRecord(RESOURCES.tamanhos, { nome: `Horizonte ${unico()}`, codigo: `HZ${unico()}` }, admin);
+  const future = await novoProduto(`Futura ${unico()}`); const overdue = await novoProduto(`Atrasada ${unico()}`);
+  for (const product of [future, overdue]) {
+    const sale = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, status: 'aberta', data: '2030-01-01', total: 10 }, admin);
+    await createRecord(RESOURCES.itens_venda, { venda_id: Number(sale.id), produto_id: product, tamanho_id: Number(size.id), quantidade: 10, preco_unitario: 1 }, admin);
+  }
+  const opFuture = await createRecord(RESOURCES.ordens, { produto_id: future, tipo: 'tamanho', quantidade: 10, status: 'planejada', tamanho_id: Number(size.id), previsao: '2030-03-01' }, admin);
+  const opOverdue = await createRecord(RESOURCES.ordens, { produto_id: overdue, tipo: 'tamanho', quantidade: 10, status: 'planejada', tamanho_id: Number(size.id), previsao: '2029-12-01' }, admin);
+  const store = getStore(); const original = store.list.bind(store);
+  // Force one row per page to prove late pages are included, without thousands of fixtures.
+  store.list = async (r, opts, tx) => original(r, r.key === 'ordens' ? { ...opts, pageSize: 1 } : opts, tx);
+  try {
+    const out = await chamar(mrpProducao, { actor: gerente, query: { de: '2030-01-01', ate: '2030-01-31' } });
+    assert.equal(out.produtos.find((p: any) => p.produto_id === future)?.falta, 10);
+    assert.equal(out.produtos.find((p: any) => p.produto_id === overdue), undefined);
+    assert.equal(out.ordens.find((o: any) => o.ordem_id === Number(opFuture.id)).dentro_do_horizonte, false);
+    assert.equal(out.ordens.find((o: any) => o.ordem_id === Number(opOverdue.id)).dentro_do_horizonte, true);
+  } finally { store.list = original; }
+});
+
+test('Q) consumo de uma OP não cobre outra; compra sem prazo não é entrega inventada', async () => {
+  const size = await createRecord(RESOURCES.tamanhos, { nome: `Consumo ${unico()}`, codigo: `CS${unico()}` }, admin);
+  const a = await novoProduto(`OP A ${unico()}`); const b = await novoProduto(`OP B ${unico()}`);
+  const raw = await createRecord(RESOURCES.insumos, { nome: `Comum ${unico()}`, unidade: 'm' }, admin);
+  for (const product of [a, b]) {
+    const recipe = await createRecord(RESOURCES.fichas, { produto_id: product, mao_obra: 0, custos_indiretos: 0, margem_pct: 0 }, admin);
+    await createRecord(RESOURCES.itens_ficha_tecnica, { ficha_id: Number(recipe.id), insumo_id: Number(raw.id), consumo: 1, perda_pct: 0 }, admin);
+  }
+  const opA = await createRecord(RESOURCES.ordens, { produto_id: a, tipo: 'tamanho', quantidade: 1, status: 'em_producao', tamanho_id: Number(size.id) }, admin);
+  await createRecord(RESOURCES.ordens, { produto_id: b, tipo: 'tamanho', quantidade: 10, status: 'planejada', tamanho_id: Number(size.id) }, admin);
+  await createRecord(RESOURCES.movimentacoes_insumos, { tipo: 'entrada', insumo_id: Number(raw.id), quantidade: 10, custo_unitario: 1, motivo: 'Estoque de cenário' }, admin);
+  await getStore().transaction((tx: any) => lancarMovimentacaoInsumoDaOrdem({ tipo: 'saida', insumo_id: Number(raw.id), quantidade: 10, custo_unitario: 1, ordem_id: Number(opA.id), motivo: 'Consumo excedente da OP A' }, admin as any, tx, { kind: 'empresa', empresaId: 1 } as any));
+  const supplier = await createRecord(RESOURCES.fornecedores, { nome: `Sem prazo ${unico()}`, pessoa: 'pj', indicador_ie: '1' }, admin);
+  const purchase = await createRecord(RESOURCES.compras, { fornecedor_id: Number(supplier.id), status: 'aprovado', data: '2030-01-01' }, admin);
+  await createRecord(RESOURCES.itens_compra, { compra_id: Number(purchase.id), insumo_id: Number(raw.id), quantidade: 8, preco_unitario: 1 }, admin);
+  const out = await chamar(mrpProducao, { actor: gerente, query: { de: '2030-01-01', ate: '2030-01-31' } });
+  const line = out.insumos.find((x: any) => x.insumo_id === Number(raw.id));
+  assert.equal(line.necessaria, 11); assert.equal(line.consumo_real, 10); assert.equal(line.consumo_aplicado, 1);
+  assert.equal(line.consumo_nao_alocado, 9); assert.equal(line.necessario_comprar, 10);
+  assert.equal(line.em_compra, 0); assert.equal(line.em_compra_sem_previsao, 8); assert.equal(line.faltando, 10);
+});
+
+test('R) corte de profundidade da BOM é reportado como plano incompleto', async () => {
+  const products: number[] = [];
+  for (let i = 0; i < 14; i++) products.push(await novoProduto(`Nivel ${i} ${unico()}`));
+  for (let i = 0; i < products.length - 1; i++) await createRecord(RESOURCES.produto_composicao, { produto_id: products[i], componente_id: products[i + 1], quantidade: 1 }, admin);
+  const size = await createRecord(RESOURCES.tamanhos, { nome: `Profundidade ${unico()}`, codigo: `P${unico()}`.slice(0, 10) }, admin);
+  const sale = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, status: 'aberta', data: '2030-01-01', total: 1 }, admin);
+  await createRecord(RESOURCES.itens_venda, { venda_id: Number(sale.id), produto_id: products[0], tamanho_id: Number(size.id), quantidade: 1, preco_unitario: 1 }, admin);
+  const out = await chamar(mrpProducao, { actor: gerente, query: { de: '2030-01-01', ate: '2030-01-31' } });
+  assert.equal(out.calculo.bom_multinivel.incompleto, true);
+  assert.ok(out.calculo.bom_multinivel.cortes_profundidade.some((cut: any) => cut.produto_id === products[13]));
+});
+
+test('MRP e capacidade recusam datas inválidas e intervalo excessivo; duração reflete o horizonte escolhido', async () => {
+  await assert.rejects(() => chamar(mrpProducao, { actor: gerente, query: { de: '2030-02-31', ate: '2030-03-10' } }), (e: any) => e.status === 400);
+  await assert.rejects(() => chamar(capacidadeProducao, { actor: gerente, query: { de: '2030-01-01', ate: '2033-01-01' } }), (e: any) => e.status === 400);
+  const mrp = await chamar(mrpProducao, { actor: gerente, query: { de: '2030-01-01', ate: '2030-01-10' } });
+  assert.equal(mrp.calculo.horizonte.dias, 9); assert.equal(mrp.filtros.horizonte_dias, 9);
 });

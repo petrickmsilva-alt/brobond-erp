@@ -70,3 +70,7 @@ Logo, `CODE_STRUCTURE_READY=YES` da auditoria **não** deve ser confundido com
 Ausência de credencial é **EXTERNAL CONFIGURATION PENDING**; as lacunas de código
 listadas acima são lacunas de implementação, não são escondidas como pendências
 externas.
+
+## Atualização posterior
+
+Para os resultados e limites das ondas 1–3 em 2026-10-29, consulte `../BROBOND-ENTERPRISE-WAVES-1-2-3-AUDIT.md`. Os números acima são históricos da rodada indicada, não os resultados desta branch.

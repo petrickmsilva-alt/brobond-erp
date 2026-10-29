@@ -48,6 +48,8 @@ type Visao = {
   } | null;
   pagamento: {
     status: string;
+    engine_intent_id?: number | null;
+    late_review_status?: string | null;
     provider: string | null;
     metodo: string | null;
     valor: number | null;
@@ -183,7 +185,7 @@ export default function CommercePedidoDetalhePage() {
   const convertido = estado === 'CONVERTIDO' || estado === 'ESTORNADO' || !!visao.venda;
   const bloqueadoPAGAMENTO = ['PAGO', 'PAGAMENTO_AUTORIZADO'].includes(estado) && !convertido;
   const terminado = ['CANCELADO', 'EXPIRADO'].includes(estado);
-  const podeConverter = !!p && !convertido && estado !== 'AGUARDANDO_PAGAMENTO';
+  const podeConverter = !!p && !convertido && !terminado && estado !== 'AGUARDANDO_PAGAMENTO';
   const podeCancelar = !!p && !convertido && !bloqueadoPAGAMENTO && !terminado;
 
   return (
@@ -305,6 +307,12 @@ export default function CommercePedidoDetalhePage() {
               </div>
             )}
             {p?.erro && <Alert tone="amber">{p.erro}</Alert>}
+            {visao.pagamento.late_review_status === 'OPEN' && (
+              <p className="text-sm">O pedido não será reaberto automaticamente.{' '}
+                {visao.pagamento.engine_intent_id ? <Link className="font-medium text-blue-700 underline" to={`/commerce/pagamentos/transacoes/${visao.pagamento.engine_intent_id}`}>Revisar pagamento e eventual estorno</Link>
+                  : 'Revise a cobrança no gateway legado.'}
+              </p>
+            )}
           </div>
         </section>
 

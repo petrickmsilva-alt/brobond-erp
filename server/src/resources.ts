@@ -4838,6 +4838,8 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'data', label: 'Data', type: 'datetime' },
       { name: 'local', label: 'Armazém', type: 'text', maxLength: 60 },
       { name: 'documento', label: 'Chave de idempotência', type: 'text', maxLength: 60, list: false, form: false },
+      { name: 'idempotency_key', label: 'Chave completa', type: 'text', maxLength: 160, readonly: true, list: false, form: false },
+      { name: 'request_hash', label: 'Assinatura do comando', type: 'text', readonly: true, list: false, form: false },
       { name: 'total', label: 'Total (R$)', type: 'money', readonly: true },
       { name: 'usuario_id', label: 'Recebido por', type: 'ref', ref: 'usuarios' },
       { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false, wide: true },

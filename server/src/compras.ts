@@ -22,16 +22,18 @@
 // gerar exige uma ação explícita do usuário (POST com a lista revisada).
 // ============================================================================
 import type { Request, Response } from 'express';
+import { createHash, randomUUID } from 'node:crypto';
 import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, escopoDe, getDefaultLocalInfo, getStore, resolveLocal, toHttpError, validarTamanhoNaGrade } from './services';
 import { currentUser } from './auth';
-import { assertRegistroDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
+import { assertRegistroDaEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2, round3 } from './utils';
 import { syncLancamentoCompra } from './financeiro';
 import { aplicarEntradaDeCompra } from './custoRecebimento';
-import type { Row, Tx } from './store';
+import { domainLock } from './domainLock';
+import { listarTodos } from './paginacaoCompleta';
 
 export const R_RECEBIMENTO = () => getResource('compra_recebimentos')!;
 export const R_RECEBIMENTO_ITEM = () => getResource('compra_recebimento_itens')!;
@@ -88,12 +90,15 @@ function normalizarLinhas(bruto: unknown): LinhaRecebimento[] {
   if (!Array.isArray(bruto) || !bruto.length) {
     throw new HttpError(400, 'Envie `itens` com item_compra_id e quantidade recebida.');
   }
+  const seen = new Set<number>();
   return bruto.map((raw, index) => {
     const linha = (raw || {}) as Record<string, unknown>;
     const itemId = Number(linha.item_compra_id ?? linha.id);
     if (!Number.isInteger(itemId) || itemId <= 0) {
       throw new HttpError(400, `Linha ${index + 1}: item_compra_id inválido.`, { [`itens[${index}].item_compra_id`]: 'Inválido' });
     }
+    if (seen.has(itemId)) throw new HttpError(400, `O item #${itemId} está repetido no recebimento.`);
+    seen.add(itemId);
     const quantidade = round3(num(linha.quantidade ?? linha.qtd));
     if (!(quantidade > 0)) {
       throw new HttpError(400, `Linha ${index + 1}: a quantidade recebida deve ser maior que zero.`, { [`itens[${index}].quantidade`]: 'Deve ser > 0' });
@@ -120,6 +125,14 @@ class PrevisaoRecebimento extends Error {
   }
 }
 
+async function retryRecebimento<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await operation(); } catch (error: unknown) {
+      if ((error as { code?: unknown } | null)?.code !== '40001' || attempt >= 3) throw error;
+    }
+  }
+}
+
 export async function receberParcial(req: Request, res: Response) {
   const actor = currentUser(req);
   const r = getResource('compras')!;
@@ -135,25 +148,48 @@ export async function receberParcial(req: Request, res: Response) {
   const previsao = body.previsao === true || req.query?.previsao === '1' || req.query?.previsao === 'true';
   const s = getStore();
 
-  const chave = String(
-    body.idempotency_key ||
-      req.header('idempotency-key') ||
-      `recebimento:compra:${id}:${linhas.map((l) => `${l.item_compra_id}x${l.quantidade}`).join(',')}`
-  ).slice(0, 160);
+  const chaveDerivada = `recebimento:compra:${id}:${linhas.map((l) => `${l.item_compra_id}x${l.quantidade}`).join(',')}`;
+  const chaveBruta = body.idempotency_key ?? req.header('idempotency-key') ?? (chaveDerivada.length <= 160
+    ? chaveDerivada : `recebimento:compra:${id}:sha256:${createHash('sha256').update(chaveDerivada).digest('hex')}`);
+  if (typeof chaveBruta !== 'string' || !chaveBruta.trim() || chaveBruta.length > 160 || Array.from(chaveBruta).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {
+    throw new HttpError(400, 'Chave de idempotência inválida; informe de 1 a 160 caracteres.');
+  }
+  // Preview is always rolled back; it must never be mistaken for a prior command.
+  const chave = previsao ? `previsao:${randomUUID()}` : chaveBruta.trim();
+  // Before migration 0077 even a very long generated key was truncated as
+  // plain text, not hashed. Search that original prefix before any new receipt.
+  const chaveHistorica = previsao ? chave.slice(0, 60) : String(body.idempotency_key || req.header('idempotency-key') || chaveDerivada).slice(0, 60);
+  const dataInformada = body.data ? new Date(String(body.data)) : null;
+  if (dataInformada && !Number.isFinite(dataInformada.getTime())) throw new HttpError(400, 'Data de recebimento inválida.');
+  const observacoes = body.observacoes ? String(body.observacoes).slice(0, 500) : null;
+  const requestHash = createHash('sha256').update(JSON.stringify({
+    itens: [...linhas].sort((a, b) => a.item_compra_id - b.item_compra_id),
+    local_id: body.local_id == null || body.local_id === '' ? null : String(body.local_id),
+    local: body.local ? String(body.local).trim().slice(0, 60) : null,
+    data: dataInformada?.toISOString() ?? null,
+    observacoes,
+  })).digest('hex');
 
   try {
-    const out = await s.transaction(async (tx) => {
+    // No network calls are inside this retry: serialization failures roll back
+    // stock, financial posting and receipt together before the local retry.
+    const out = await retryRecebimento(() => domainLock(escopo.empresaId, `recebimento:${id}`, async (tx) => {
       const compra = assertRegistroDaEmpresa(r, await s.findOneWhere(r, { id, empresa_id: escopo.empresaId }, tx), escopo);
+      const jaExiste = await s.findOneWhere(R_RECEBIMENTO(), { empresa_id: escopo.empresaId, compra_id: id, idempotency_key: chave }, tx);
+      if (jaExiste) {
+        if (jaExiste.request_hash !== requestHash) throw new HttpError(409, 'Esta chave de idempotência já foi usada com outros dados.');
+        return { recebimento: jaExiste, idempotente: true, entradas: [], total: num(jaExiste.total) };
+      }
+      // Historic rows stored only the first 60 characters and no request hash.
+      // Their identity/payload cannot be proven, so never replay or duplicate.
+      const historico = await s.findOneWhere(R_RECEBIMENTO(), { empresa_id: escopo.empresaId, compra_id: id, documento: chaveHistorica, idempotency_key: null }, tx);
+      if (historico) throw new HttpError(409, 'Chave histórica sem assinatura completa; confira o recebimento existente antes de continuar.');
       if (String(compra.status) === 'cancelado') throw new HttpError(409, 'Compra cancelada não pode ser recebida.');
       if (String(compra.status) === 'recebido') throw new HttpError(409, 'Esta compra já foi totalmente recebida.');
 
-      // ---- idempotência: mesma chave devolve o mesmo recebimento ----
-      const jaExiste = await s.findOneWhere(R_RECEBIMENTO(), { empresa_id: escopo.empresaId, compra_id: id, documento: chave.slice(0, 60) }, tx);
-      if (jaExiste) return { recebimento: jaExiste, idempotente: true, entradas: [], total: num(jaExiste.total) };
-
-      const itens = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, compra_id: id }, sort: 'id', dir: 'asc' }, tx);
-      if (!itens.rows.length) throw new HttpError(409, 'A compra não tem itens para receber.');
-      const porId = new Map(itens.rows.map((i) => [Number(i.id), i]));
+      const itens = await listarTodos(getResource('itens_compra')!, { empresa_id: escopo.empresaId, compra_id: id }, tx, { sort: 'id', dir: 'asc' });
+      if (!itens.length) throw new HttpError(409, 'A compra não tem itens para receber.');
+      const porId = new Map(itens.map((i) => [Number(i.id), i]));
 
       const localData: Record<string, unknown> = {};
       const localIdInformado = body.local_id ?? compra.local_entrada_id;
@@ -217,13 +253,14 @@ export async function receberParcial(req: Request, res: Response) {
         {
           empresa_id: escopo.empresaId,
           compra_id: id,
-          data: body.data ? new Date(String(body.data)).toISOString() : new Date().toISOString(),
+          data: dataInformada?.toISOString() ?? new Date().toISOString(),
           local,
-          // `documento` guarda a chave de idempotência — é o que permite
-          // reconhecer a repetição sem coluna nova.
+          // Keep the historic display field, but do not rely on its 60-char prefix.
           documento: chave.slice(0, 60),
+          idempotency_key: chave,
+          request_hash: requestHash,
           total,
-          observacoes: body.observacoes ? String(body.observacoes).slice(0, 500) : null,
+          observacoes,
           usuario_id: actor.id || null,
         },
         tx
@@ -265,7 +302,7 @@ export async function receberParcial(req: Request, res: Response) {
       });
 
       if (previsao) {
-        const itensProjetados = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, compra_id: id } }, tx);
+        const itensProjetados = await listarTodos(getResource('itens_compra')!, { empresa_id: escopo.empresaId, compra_id: id }, tx, { sort: 'id', dir: 'asc' });
         throw new PrevisaoRecebimento({
           ok: true,
           previsao: true,
@@ -274,7 +311,7 @@ export async function receberParcial(req: Request, res: Response) {
           local,
           custos: custosAplicados,
           total,
-          itens: itensProjetados.rows.map((i) => ({
+          itens: itensProjetados.map((i) => ({
             item_compra_id: Number(i.id),
             quantidade: num(i.quantidade),
             quantidade_recebida: num(i.quantidade_recebida),
@@ -282,13 +319,13 @@ export async function receberParcial(req: Request, res: Response) {
           })),
           // O financeiro só nasce quando a compra fica completa — dizer isso na
           // prévia evita a surpresa de a conta aparecer depois.
-          completo: itensProjetados.rows.every((i) => round3(num(i.quantidade_recebida)) >= round3(num(i.quantidade)) - 1e-6),
+          completo: itensProjetados.every((i) => round3(num(i.quantidade_recebida)) >= round3(num(i.quantidade)) - 1e-6),
         });
       }
 
       // ---- status: parcial até tudo chegar ----
-      const itensDepois = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, compra_id: id } }, tx);
-      const completo = itensDepois.rows.every((i) => round3(num(i.quantidade_recebida)) >= round3(num(i.quantidade)) - 1e-6);
+      const itensDepois = await listarTodos(getResource('itens_compra')!, { empresa_id: escopo.empresaId, compra_id: id }, tx, { sort: 'id', dir: 'asc' });
+      const completo = itensDepois.every((i) => round3(num(i.quantidade_recebida)) >= round3(num(i.quantidade)) - 1e-6);
       const novoStatus = completo ? 'recebido' : 'parcial';
       const patchCompra: Record<string, unknown> = { status: novoStatus };
       if (completo) patchCompra.recebida_em = new Date().toISOString();
@@ -315,12 +352,13 @@ export async function receberParcial(req: Request, res: Response) {
         tx
       );
       return { recebimento, idempotente: false, entradas, total, completo, status: novoStatus, custos: custosAplicados };
-    }, { isolation: 'serializable' });
+    }, { isolation: 'serializable' }));
 
     res.status(out.idempotente ? 200 : 201).json({
       ok: true,
       idempotente: out.idempotente,
       recebimento: out.recebimento,
+      recebimento_id: Number(out.recebimento.id),
       entradas_estoque: out.entradas,
       custos: out.idempotente ? undefined : out.custos,
       total: out.total,

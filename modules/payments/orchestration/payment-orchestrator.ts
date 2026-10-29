@@ -18,10 +18,21 @@ import {
 } from '../domain/payment';
 import type { PaymentInput, PaymentResult } from '../providers/payment-provider';
 import { account, candidates } from '../application/configuration';
+import { recordLatePayment, resolveLateRefund } from '../application/late-reviews';
 import { R_INTENTS, R_ATTEMPTS, R_OPERATIONS, R_REFUNDS, R_SETTLEMENTS, R_DISPUTES, R_PAYOUTS } from '../infrastructure/resources';
 import { locked } from '../infrastructure/locking';
 const now = () => new Date().toISOString();
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
+// Retry only database-only transactions. Never retry a provider write here.
+async function retrySerialization<T>(work: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await work(); }
+    catch (error: unknown) {
+      if ((error as { code?: unknown } | null)?.code !== '40001' || attempt >= 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 15 * (attempt + 1)));
+    }
+  }
+}
 const requireKey = (key: string) => {
   if (!/^[\w:.-]{8,120}$/.test(key)) throw new HttpError(400, 'Chave de idempotência inválida.');
   return key;
@@ -195,9 +206,9 @@ export class PaymentOrchestrator {
       await s.update(getResource('commerce_pedidos')!, Number(i.order_id), { cobranca_id: charge.id }, tx);
     });
   }
-  async apply(empresaId: number, intentId: number, result: PaymentResult) {
+  async apply(empresaId: number, intentId: number, result: PaymentResult, source: 'event' | 'provider-refresh' = 'event') {
     const s = getStore();
-    await locked(empresaId, `intent:${intentId}`, async (tx) => {
+    await retrySerialization(() => locked(empresaId, `intent:${intentId}`, async (tx) => {
       const i = await this.intent(empresaId, intentId, tx);
       const attempts = await s.list(
         R_ATTEMPTS,
@@ -209,21 +220,30 @@ export class PaymentOrchestrator {
       if ((result.amount != null && result.amount !== Number(i.amount)) || (result.currency && result.currency !== i.currency))
         throw new HttpError(409, 'Valor/moeda do provider diverge do pedido.');
       let status: PaymentStatus;
+      let lateRecovery = false;
       try {
         status = transition(i.status, result.status);
       } catch {
-        return;
-      } // stale async notification cannot regress state
+        // A terminal intent cannot be resurrected by an event. Only a direct,
+        // authenticated provider refresh with exact money and a CLOSED order
+        // can establish that funds arrived after cancellation/expiration.
+        const order = await s.findOneWhere(getResource('commerce_pedidos')!, { empresa_id: empresaId, id: Number(i.order_id) }, tx);
+        if (source !== 'provider-refresh' || !['EXPIRED', 'CANCELED'].includes(String(i.status)) ||
+            result.status !== 'PAID' || result.amount !== Number(i.amount) || result.currency !== i.currency ||
+            !order || !['EXPIRADO', 'CANCELADO'].includes(String(order.estado))) return;
+        status = 'PAID';
+        lateRecovery = true;
+      }
       const total = Number(i.amount);
       const previousRefund = Number(a.refunded_amount || 0);
-      // REFUNDED means the entire amount was refunded. Some webhook adapters
-      // provide only that terminal status; a partial refund, in contrast, needs
-      // an explicit amount and cannot safely be inferred.
-      const refunded = result.refunded ?? (status === 'REFUNDED' ? total : previousRefund);
+      // A terminal label alone is not proof of the amount refunded. Providers
+      // must return the cumulative amount, even when claiming a full refund.
+      const refunded = result.refunded ?? previousRefund;
       if (!Number.isSafeInteger(total) || total <= 0 || !Number.isSafeInteger(previousRefund) || previousRefund < 0 ||
           !Number.isSafeInteger(refunded) || refunded < previousRefund || refunded > total ||
-          (status === 'REFUNDED' && refunded !== total) ||
-          (status === 'PARTIALLY_REFUNDED' && (result.refunded == null || refunded <= 0 || refunded >= total)))
+          (status === 'REFUNDED' && (result.refunded == null || refunded !== total)) ||
+          (status === 'PARTIALLY_REFUNDED' && (result.refunded == null || refunded <= 0 || refunded >= total)) ||
+          (['PAID', 'CAPTURED'].includes(status) && refunded > 0))
         throw new HttpError(409, 'Reembolso divergente ou sem valor suficiente para conciliação.');
       const refundDelta = refunded - previousRefund;
       if (refundDelta > 0 && i.cobranca_id) {
@@ -245,25 +265,15 @@ export class PaymentOrchestrator {
         tx
       );
       await s.update(R_INTENTS, intentId, { status, updated_at: now() }, tx);
-      if (i.cobranca_id)
-        await s.update(
-          R_GATEWAY_COBRANCAS,
-          Number(i.cobranca_id),
-          {
-            status: ['PAID', 'CAPTURED', 'PARTIALLY_REFUNDED'].includes(status)
-              ? 'paga'
-              : status === 'REFUNDED'
-                ? 'estornada'
-                : status === 'CANCELED'
-                  ? 'cancelada'
-                  : status === 'EXPIRED'
-                    ? 'expirada'
-                    : status === 'AUTHORIZED'
-                      ? 'autorizada'
-                      : 'pendente',
-          },
-          tx
-        );
+      // Disputes/chargebacks have no equivalent legacy gateway status. Preserve
+      // the last charge state instead of falsely resetting it to 'pendente'.
+      const legacyStatus: Partial<Record<PaymentStatus, string>> = {
+        CREATED: 'pendente', PENDING: 'pendente', PENDING_MANUAL_CONFIRMATION: 'pendente', REQUIRES_ACTION: 'pendente',
+        AUTHORIZED: 'autorizada', CAPTURE_PENDING: 'autorizada', CAPTURED: 'paga', PAID: 'paga', PARTIALLY_REFUNDED: 'paga',
+        REFUNDED: 'estornada', CANCELED: 'cancelada', EXPIRED: 'expirada', FAILED: 'falhou',
+      };
+      if (i.cobranca_id && legacyStatus[status])
+        await s.update(R_GATEWAY_COBRANCAS, Number(i.cobranca_id), { status: legacyStatus[status] }, tx);
       if (['CAPTURED', 'PAID', 'PARTIALLY_REFUNDED', 'REFUNDED', 'CHARGEBACK'].includes(status)) {
         const existing = await s.findOneWhere(
           R_SETTLEMENTS,
@@ -333,6 +343,18 @@ export class PaymentOrchestrator {
             tx
           );
       }
+      // Persist the exception in the same transaction as the provider fact.
+      // Do not rely on the later asynchronous Commerce delivery: a refund can
+      // race that delivery, and a crash must not lose the review.
+      if ((status === 'PAID' || status === 'REFUNDED') && i.cobranca_id) {
+        const order = await s.findOneWhere(getResource('commerce_pedidos')!, { empresa_id: empresaId, id: Number(i.order_id) }, tx);
+        if (order && ['EXPIRADO', 'CANCELADO'].includes(String(order.estado))) {
+          if (status === 'PAID') await recordLatePayment(empresaId, order, Number(i.cobranca_id), tx);
+          else await resolveLateRefund(empresaId, order, tx);
+        }
+      }
+      if (lateRecovery) await this.audit(empresaId, intentId, 'late payment confirmed by provider refresh',
+        { previous_status: i.status, correlation_id: i.correlation_id }, tx);
       await this.audit(
         empresaId,
         intentId,
@@ -340,7 +362,7 @@ export class PaymentOrchestrator {
         { attempt_id: a.id, provider: i.provider, correlation_id: i.correlation_id },
         tx
       );
-    });
+    }));
     await this.deliverToCommerce(empresaId, intentId);
   }
   async deliverToCommerce(empresaId: number, intentId: number) {
@@ -350,13 +372,19 @@ export class PaymentOrchestrator {
     const { confirmarPagamentoCobranca } = await import('../../../server/src/commerce/pedidos');
     await confirmarPagamentoCobranca({ empresaId, cobrancaId: Number(i.cobranca_id), intencao: intention });
     if (i.status === 'PAID')
-      await locked(empresaId, `finance:${intentId}`, async (tx) => {
+      await retrySerialization(() => locked(empresaId, `finance:${intentId}`, async (tx) => {
+        // The callback may have been overtaken by a refund. Re-read the intent
+        // and charge in the same serializable transaction as the financial
+        // posting; never settle a title from a stale PAID snapshot.
+        const current = await this.intent(empresaId, intentId, tx);
+        const charge = await getStore().findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: empresaId, id: Number(i.cobranca_id) }, tx);
+        if (current.status !== 'PAID' || charge?.status !== 'paga') return;
         const order = await getStore().findOneWhere(
           getResource('commerce_pedidos')!,
           { empresa_id: empresaId, id: Number(i.order_id) },
           tx
         );
-        if (!order?.venda_id) return; // Conversion pending correction stays in existing Commerce outbox.
+        if (!order?.venda_id || !['PAGO', 'CONVERTIDO', 'AGUARDANDO_CORRECAO'].includes(String(order.estado))) return;
         const title = await getStore().findOneWhere(
           getResource('lancamentos_financeiros')!,
           { empresa_id: empresaId, referencia_tipo: 'venda', referencia_id: Number(order.venda_id) },
@@ -377,7 +405,7 @@ export class PaymentOrchestrator {
             { valor: Number(i.amount) / 100, origem: 'webhook', nota: `Payment Intent ${intentId} / ${i.correlation_id}` },
             tx
           );
-      });
+      }));
   }
   async mutate(empresaId: number, id: number, operation: 'refund' | 'capture' | 'cancel' | 'manual-confirm', key: string, amount?: number) {
     requireKey(key);
@@ -408,6 +436,8 @@ export class PaymentOrchestrator {
       )
         throw new HttpError(409, 'Valor excede saldo reembolsável.');
       if (operation === 'capture' && i.status !== 'AUTHORIZED') throw new HttpError(409, 'Pagamento não autorizado.');
+      if (operation === 'capture' && requested !== Number(i.amount)) throw new HttpError(409, 'Captura parcial não é suportada para este pedido.');
+      if ((operation === 'cancel' || operation === 'manual-confirm') && requested !== Number(i.amount)) throw new HttpError(400, 'Esta operação não aceita valor parcial.');
       if (operation === 'cancel' && !['PENDING', 'AUTHORIZED', 'REQUIRES_ACTION', 'PENDING_MANUAL_CONFIRMATION'].includes(i.status))
         throw new HttpError(409, 'Pagamento não cancelável.');
       if (operation === 'manual-confirm' && (i.provider !== 'MANUAL' || i.status !== 'PENDING_MANUAL_CONFIRMATION'))
@@ -448,14 +478,18 @@ export class PaymentOrchestrator {
     });
     if (!claim.fresh) return claim.op.result;
     const { i, op, attempt } = claim;
-    const ctx = await account(empresaId, i.provider as ProviderCode, hash(`${empresaId}:${operation}:${id}:${op.id}`));
-    const cap = ctx.capabilities.find((c) => c.method === i.method);
+    let effectStarted = false;
     try {
+      const ctx = await account(empresaId, i.provider as ProviderCode, hash(`${empresaId}:${operation}:${id}:${op.id}`));
+      const cap = ctx.capabilities.find((c) => c.method === i.method);
       if (operation === 'refund' && (!cap?.refund || (Number(op.amount) < Number(i.amount) && !cap.partialRefund)))
         throw new PaymentError('INVALID_PAYMENT_METHOD');
       if (operation === 'capture' && !cap?.capture) throw new PaymentError('INVALID_PAYMENT_METHOD');
       if (operation === 'cancel' && i.provider !== 'MANUAL' && !cap?.cancel) throw new PaymentError('INVALID_PAYMENT_METHOD');
       const ref = String(attempt!.provider_transaction_id);
+      // From here an external write (or local manual confirmation) may have
+      // happened. Errors must stay UNCERTAIN until reconciled.
+      effectStarted = true;
       const result: PaymentResult =
         operation === 'manual-confirm'
           ? { reference: ref, status: 'PAID', amount: Number(i.amount), currency: i.currency }
@@ -472,6 +506,12 @@ export class PaymentOrchestrator {
         throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
       if (operation === 'capture' && !['CAPTURED', 'PAID'].includes(result.status)) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
       await this.apply(empresaId, id, result);
+      if (operation === 'refund' && (!Number.isSafeInteger(result.refunded) ||
+          Number(result.refunded) < Number(op.result?.baseline_refunded || 0) + Number(op.amount))) {
+        // Record any confirmed partial amount above, but do not declare the
+        // requested operation complete or repeat its external write.
+        throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+      }
       await locked(empresaId, `intent:${id}`, async (tx) => {
         await s.update(R_OPERATIONS, Number(op.id), { status: 'SUCCEEDED', result: { status: result.status }, updated_at: now() }, tx);
         await s.update(R_INTENTS, id, { active_operation: null }, tx);
@@ -482,13 +522,21 @@ export class PaymentOrchestrator {
       });
       return { status: result.status };
     } catch (e) {
-      const uncertain = !(e instanceof PaymentError) || e.ambiguous;
-      await s.update(R_OPERATIONS, Number(op.id), {
-        status: uncertain ? 'UNCERTAIN' : 'FAILED',
-        result: { ...op.result, code: e instanceof PaymentError ? e.code : 'UNKNOWN_PROVIDER_ERROR' },
-        updated_at: now(),
+      const uncertain = effectStarted && (!(e instanceof PaymentError) || e.ambiguous);
+      await locked(empresaId, `intent:${id}`, async (tx) => {
+        await s.update(R_OPERATIONS, Number(op.id), {
+          status: uncertain ? 'UNCERTAIN' : 'FAILED',
+          result: { ...op.result, code: e instanceof PaymentError ? e.code : 'UNKNOWN_PROVIDER_ERROR' },
+          updated_at: now(),
+        }, tx);
+        if (!uncertain) await s.update(R_INTENTS, id, { active_operation: null }, tx);
+        if (operation === 'refund') {
+          const refund = await s.findOneWhere(R_REFUNDS, { empresa_id: empresaId, operation_id: op.id }, tx);
+          if (refund) await s.update(R_REFUNDS, Number(refund.id), { status: uncertain ? 'UNCERTAIN' : 'FAILED', updated_at: now() }, tx);
+        }
+        await this.audit(empresaId, id, `${operation} ${uncertain ? 'uncertain' : 'failed'}`,
+          { operation_id: op.id }, tx);
       });
-      if (!uncertain) await s.update(R_INTENTS, id, { active_operation: null });
       throw new HttpError(
         uncertain ? 409 : 422,
         uncertain ? 'Operação pendente de confirmação pelo provider.' : 'Operação não suportada ou recusada.'
@@ -526,7 +574,7 @@ export class PaymentOrchestrator {
       return;
     }
     const result = await ctx.provider.getPayment(ctx.context, String(a.provider_transaction_id));
-    await this.apply(empresaId, id, result);
+    await this.apply(empresaId, id, result, 'provider-refresh');
     if (i.active_operation) {
       await locked(empresaId, `intent:${id}`, async (tx) => {
         const current = await this.intent(empresaId, id, tx);
@@ -535,7 +583,8 @@ export class PaymentOrchestrator {
         if (!op || !['PROCESSING', 'UNCERTAIN'].includes(op.status)) return;
         const confirmed =
           op.operation === 'refund'
-            ? Number(result.refunded || 0) >= Number(op.result?.baseline_refunded || 0) + Number(op.amount)
+            ? ['REFUNDED', 'PARTIALLY_REFUNDED'].includes(result.status) && Number.isSafeInteger(result.refunded) &&
+              Number(result.refunded) >= Number(op.result?.baseline_refunded || 0) + Number(op.amount)
             : op.operation === 'capture'
               ? ['PAID', 'CAPTURED'].includes(result.status)
               : op.operation === 'cancel'

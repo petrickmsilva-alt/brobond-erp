@@ -428,3 +428,37 @@ test('compras: o item de outra empresa não entra num recebimento da empresa A',
   );
   assert.equal(Number((await s.get(RESOURCES.itens_compra, Number(itemB.id))).quantidade_recebida), 0);
 });
+
+test('compras: replay após total, mudança de corpo na mesma chave e prefixos longos distintos', async () => {
+  const { compra, itens } = await novaCompra([10]);
+  const itemId = Number(itens[0].item.id); const keyA = `${'k'.repeat(70)}a`; const keyB = `${'k'.repeat(70)}b`;
+  const bodyA = { itens: [{ item_compra_id: itemId, quantidade: 5 }], idempotency_key: keyA };
+  const bodyB = { itens: [{ item_compra_id: itemId, quantidade: 5 }], idempotency_key: keyB };
+  await chamar(compras.receberParcial, reqDe(bodyA, { params: { id: compra.id } }), 201);
+  const final = await chamar(compras.receberParcial, reqDe(bodyB, { params: { id: compra.id } }), 201);
+  const replay = await chamar(compras.receberParcial, reqDe(bodyB, { params: { id: compra.id } }), 200);
+  assert.equal(replay.idempotente, true); assert.equal(replay.recebimento_id, final.recebimento_id);
+  await esperarErro(() => compras.receberParcial(reqDe({ ...bodyB, itens: [{ item_compra_id: itemId, quantidade: 4 }] }, { params: { id: compra.id } }), resFake().res), 409, /outros dados/);
+  const receipts = await getStore().list(RESOURCES.compra_recebimentos, { page: 1, pageSize: 10, filter: { compra_id: Number(compra.id) } });
+  assert.equal(receipts.rows.length, 2); assert.equal(receipts.rows[0].documento, receipts.rows[1].documento);
+});
+
+test('compras: prévia de lote igual ao anterior calcula e não duplica; legado ambíguo bloqueia', async () => {
+  const { compra, itens } = await novaCompra([10]); const itemId = Number(itens[0].item.id);
+  const body = { itens: [{ item_compra_id: itemId, quantidade: 2 }] };
+  await chamar(compras.receberParcial, reqDe(body, { params: { id: compra.id } }), 201);
+  const preview = await chamar(compras.receberParcial, reqDe({ ...body, previsao: true }, { params: { id: compra.id } }), 200);
+  assert.equal(preview.previsao, true); assert.equal(preview.aplicado, false);
+  assert.equal(Number((await getStore().get(RESOURCES.itens_compra, itemId))?.quantidade_recebida), 2);
+  await getStore().insert(RESOURCES.compra_recebimentos, { empresa_id: 1, compra_id: Number(compra.id), documento: 'legacy', total: 0 });
+  await esperarErro(() => compras.receberParcial(reqDe({ ...body, idempotency_key: 'legacy' }, { params: { id: compra.id } }), resFake().res), 409, /histórica/);
+});
+
+test('compras: chave padrão histórica maior que 160 caracteres usa prefixo original, não o hash novo', async () => {
+  const { compra } = await novaCompra([1]);
+  const itens = Array.from({ length: 40 }, (_, n) => ({ item_compra_id: 100000 + n, quantidade: 1 }));
+  const legacyKey = `recebimento:compra:${compra.id}:${itens.map((l) => `${l.item_compra_id}x${l.quantidade}`).join(',')}`;
+  assert.ok(legacyKey.length > 160);
+  await getStore().insert(RESOURCES.compra_recebimentos, { empresa_id: 1, compra_id: Number(compra.id), documento: legacyKey.slice(0, 60), total: 0 });
+  await esperarErro(() => compras.receberParcial(reqDe({ itens }, { params: { id: compra.id } }), resFake().res), 409, /histórica/);
+});

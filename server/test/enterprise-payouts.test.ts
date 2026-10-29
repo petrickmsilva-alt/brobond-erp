@@ -55,7 +55,7 @@ test('payment: valor divergente é evidência, não MATCHED', async () => {
   assert.equal((await s.get(R_PAYOUTS, r.get().body.payout.id))?.bank_transaction_id, null);
 });
 
-test('payment: estorno total sem valor explícito invalida repasse conciliado', async () => {
+test('payment: estorno total comprovado invalida repasse conciliado', async () => {
   const { R_INTENTS, R_ATTEMPTS } = await import('../../modules/payments/infrastructure/resources');
   const { paymentEngine } = await import('../../modules/payments/orchestration/payment-orchestrator');
   const s = getStore(); const ref = 'full-refund-fixture';
@@ -63,7 +63,7 @@ test('payment: estorno total sem valor explícito invalida repasse conciliado', 
   const attempt = await s.insert(R_ATTEMPTS, { empresa_id: 1, payment_intent_id: intent.id, provider: 'PAGBANK', provider_transaction_id: ref, method: 'PIX', requested_amount: 10000, authorized_amount: 10000, captured_amount: 10000, refunded_amount: 0, status: 'PAID', idempotency_key: ref, correlation_id: ref });
   const payout = await s.insert(R_PAYOUTS, { empresa_id: 1, provider: 'PAGBANK', payout_reference: ref, net_amount: 9800, status: 'MATCHED' });
   const settlement = await s.insert(R_SETTLEMENTS, { empresa_id: 1, payment_intent_id: intent.id, provider: 'PAGBANK', provider_reference: ref, gross_amount: 10000, refund_amount: 0, chargeback_amount: 0, payout_id: payout.id, status: 'MATCHED' });
-  await paymentEngine.apply(1, Number(intent.id), { reference: ref, status: 'REFUNDED' });
+  await paymentEngine.apply(1, Number(intent.id), { reference: ref, status: 'REFUNDED', refunded: 10000 });
   assert.equal((await s.get(R_ATTEMPTS, attempt.id))?.refunded_amount, 10000);
   assert.equal((await s.get(R_SETTLEMENTS, settlement.id))?.refund_amount, 10000);
   assert.equal((await s.get(R_SETTLEMENTS, settlement.id))?.status, 'DIVERGENT');
@@ -77,6 +77,7 @@ test('payment: estorno parcial sem centavos ou total com valor contraditório fa
   const intent = await s.insert(R_INTENTS, { empresa_id: 1, order_id: 999, channel: 'OWN_STORE', currency: 'BRL', amount: 10000, method: 'PIX', provider: 'PAGBANK', status: 'PAID', idempotency_key: ref, correlation_id: ref });
   await s.insert(R_ATTEMPTS, { empresa_id: 1, payment_intent_id: intent.id, provider: 'PAGBANK', provider_transaction_id: ref, method: 'PIX', requested_amount: 10000, authorized_amount: 10000, captured_amount: 10000, refunded_amount: 0, status: 'PAID', idempotency_key: ref, correlation_id: ref });
   await assert.rejects(() => paymentEngine.apply(1, Number(intent.id), { reference: ref, status: 'PARTIALLY_REFUNDED' }), (e: any) => e.status === 409);
+  await assert.rejects(() => paymentEngine.apply(1, Number(intent.id), { reference: ref, status: 'REFUNDED' }), (e: any) => e.status === 409);
   await assert.rejects(() => paymentEngine.apply(1, Number(intent.id), { reference: ref, status: 'REFUNDED', refunded: 0 }), (e: any) => e.status === 409);
   await assert.rejects(() => paymentEngine.apply(1, Number(intent.id), { reference: ref, status: 'PARTIALLY_REFUNDED', refunded: 1.5 }), (e: any) => e.status === 409);
   assert.equal((await s.get(R_INTENTS, intent.id))?.status, 'PAID');

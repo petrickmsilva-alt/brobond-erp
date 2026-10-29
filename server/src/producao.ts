@@ -26,7 +26,7 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { assertRegistroDaEmpresa, assertRegistroDaEmpresaParaEscrita, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
-import { getResource, type Resource } from './resources';
+import { getResource } from './resources';
 import { checkAccess, escopoDe, getStore, resolveLocal, resolveLocalParaEstorno, toHttpError, updateRecord, validarTamanhoNaGrade } from './services';
 import { currentUser } from './auth';
 import type { Payload, Row, Tx } from './store';
@@ -49,27 +49,8 @@ function recursoEventos() {
   return { eventos: getResource('ordens_eventos')!, apontamentos: getResource('ordens_apontamentos')! };
 }
 
-type OpcoesListaCompleta = { pageSize?: number; sort?: string; dir?: 'asc' | 'desc' };
-
-/** Lê todas as linhas do filtro, sem truncar o histórico por um limite de página. */
-export async function listarTodos(r: Resource, filter: Record<string, unknown>, tx?: Tx, opcoes: OpcoesListaCompleta = {}): Promise<Row[]> {
-  const pageSize = opcoes.pageSize && opcoes.pageSize > 0 ? Math.floor(opcoes.pageSize) : 1000;
-  const linhas: Row[] = [];
-  let total = 0;
-  for (let page = 1; page === 1 || linhas.length < total; page++) {
-    const resultado = await getStore().list(
-      r,
-      { page, pageSize, sort: opcoes.sort, dir: opcoes.dir, filter },
-      tx
-    );
-    if (page === 1) total = resultado.total;
-    if (!resultado.rows.length && linhas.length < total) {
-      throw new Error(`Leitura paginada incompleta do recurso ${r.key}: ${linhas.length} de ${total} linhas.`);
-    }
-    linhas.push(...resultado.rows);
-  }
-  return linhas;
-}
+export { listarTodos } from './paginacaoCompleta';
+import { listarTodos } from './paginacaoCompleta';
 
 // ============================================================================
 // MÁQUINA DE ESTADOS DA OP (E2)

@@ -147,3 +147,12 @@ test('metadados: feriado é cadastro da empresa, com RBAC de gerente', () => {
   const recorrente = r.fields.find((f) => f.name === 'recorrente');
   assert.match(String(recorrente!.hint), /móve(is|l)/i, 'o campo explica que feriado móvel não é calculado');
 });
+
+test('feriados recorrentes aparecem em cada ano e leitura inclui páginas posteriores', async () => {
+  const s = getStore(); const original = s.list.bind(s);
+  s.list = async (r, opts, tx) => original(r, r.key === 'feriados' ? { ...opts, pageSize: 1 } : opts, tx);
+  try {
+    const lista = await feriadosDoPeriodo(1, '2026-12-20', '2028-12-31');
+    for (const ano of ['2026', '2027', '2028']) assert.ok(lista.some((f) => f.data === `${ano}-12-25` && f.recorrente));
+  } finally { s.list = original; }
+});
