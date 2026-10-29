@@ -203,7 +203,7 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
     unmount();
   });
 
-  it('identifica módulos planejados com o selo "Em breve"', async () => {
+  it('Commerce e Creators não apresentam selo de planejamento', async () => {
     const user = userEvent.setup();
     const { container, unmount } = renderTop('admin', '/');
 
@@ -213,15 +213,14 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
     expect(menuCommerce.querySelectorAll('a[data-planned="true"]')).toHaveLength(0);
     unmount();
 
-    // Os planejados restantes são do esqueleto Creators — selo preservado.
+    // Creators utiliza os quatro destinos sem classificação de roadmap.
     const segunda = renderTop('admin', '/');
     await user.click(botaoDaBarra(segunda.container, 'Creators'));
     const menu = segunda.container.querySelector(`#topnav-menu-${slug('Creators')}`) as HTMLElement;
     const planned = menu.querySelectorAll('a[data-planned="true"]');
-    expect(planned).toHaveLength(4);
-    for (const link of planned) {
-      expect(within(link as HTMLElement).getByText('Em breve')).toBeInTheDocument();
-    }
+    expect(planned).toHaveLength(0);
+    expect(menu.querySelectorAll('a[href]')).toHaveLength(4);
+    expect(within(menu).queryByText('Em breve')).not.toBeInTheDocument();
     segunda.unmount();
   });
 

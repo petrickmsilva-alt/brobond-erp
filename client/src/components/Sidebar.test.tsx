@@ -221,21 +221,12 @@ describe('Sidebar — Árvore Master renderizada × fonte única', () => {
     unmount();
   });
 
-  it('identifica claramente todos os 4 itens planned com data-planned e badge Em breve', () => {
+  it('Creators possui quatro destinos acessíveis sem selo de planejamento', () => {
     const { itens, container, unmount } = renderSidebar('admin');
-    const plannedRenderizados = itens.filter((i) => i.planned);
-    // BROBOND COMMERCE OS: os módulos commerce saíram de "planned" (implementados);
-    // restam apenas os 4 do esqueleto Creators.
-    expect(plannedRenderizados).toHaveLength(4);
-    expect(plannedRenderizados.map((i) => i.path).sort()).toEqual(
-      [
-        '/creators',
-        '/matches',
-        '/outreach-ai',
-        '/campanhas',
-      ].sort()
-    );
-    expect(container.querySelectorAll('nav a[data-planned="true"] [data-planned-badge="Em breve"]')).toHaveLength(4);
+    const creators = itens.filter((i) => ['/creators', '/matches', '/outreach-ai', '/campanhas'].includes(i.path));
+    expect(creators).toHaveLength(4);
+    expect(creators.every((i) => !i.planned)).toBe(true);
+    expect(container.querySelectorAll('nav a[data-planned="true"]')).toHaveLength(0);
     unmount();
   });
 

@@ -912,28 +912,36 @@
       "label": "Creators",
       "tipo": "modulo",
       "rota": "/creators",
-      "menu": true
+      "menu": true,
+      "rbac": "operador",
+      "teste": "client/src/pages/creators/CreatorsModulePage.test.tsx"
     },
     {
       "id": "creator-matches",
       "label": "Matches",
       "tipo": "modulo",
       "rota": "/matches",
-      "menu": true
+      "menu": true,
+      "rbac": "operador",
+      "teste": "client/src/pages/creators/CreatorsModulePage.test.tsx"
     },
     {
       "id": "outreach-ai",
       "label": "Outreach AI",
       "tipo": "modulo",
       "rota": "/outreach-ai",
-      "menu": true
+      "menu": true,
+      "rbac": "operador",
+      "teste": "client/src/pages/creators/CreatorsModulePage.test.tsx"
     },
     {
       "id": "campanhas",
       "label": "Campanhas",
       "tipo": "modulo",
       "rota": "/campanhas",
-      "menu": true
+      "menu": true,
+      "rbac": "operador",
+      "teste": "client/src/pages/creators/CreatorsModulePage.test.tsx"
     },
     {
       "id": "config",

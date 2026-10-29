@@ -134,6 +134,7 @@ import {
   listarCupons,
   listarPromocoes,
 } from './commerce/promocoes';
+import { capacidadesCreators } from './creators';
 import { analyticsCommerce, trendsCommerce } from './commerce/analytics';
 import { processarComercioAgendado } from './commerce/outbox';
 import { baixarLancamento, conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, recebiveisCartao, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
@@ -951,6 +952,9 @@ app.post('/api/pdv/vendas/:id/cupom', wrap(emitirCupomPdvHandler));
 app.post('/api/pdv/vendas/:id/reimprimir', wrap(reimprimirCupomPdvHandler));
 app.get('/api/pdv/vendas/:id/cupom/html', wrap(cupomPdvHtmlHandler));
 app.get('/api/pdv/vendas/:id/cupom/pdf', wrap(cupomPdvPdfHandler));
+
+// Creators: capacidades reais, sem simular dados ou operações ausentes.
+app.get('/api/creators/capabilities', wrap(capacidadesCreators));
 
 // ------------------------------------------------------------------------------
 // BROBOND COMMERCE OS — catálogo, publicação multicanal, pedidos omnichannel,

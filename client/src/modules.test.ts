@@ -295,8 +295,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       s.areas.flatMap((a) => a.groups.flatMap((g) => g.subgroups.flatMap((sub) => sub.modules.map((m) => m.id))))
     );
     expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
-    // 24 legadas + 9 páginas do COMMERCE OS (lista/detalhe/novo/edição próprios)
-    expect(PAGES_ESPECIAIS).toHaveLength(33);
+    // 24 legadas + 9 páginas Commerce + 4 páginas Creators.
+    expect(PAGES_ESPECIAIS).toHaveLength(37);
   });
 });
 
@@ -439,7 +439,7 @@ describe('visibleModules', () => {
 
     const creators = MODULES.filter((m) => m.area === 'Creators');
     expect(creators.map((m) => m.label)).toEqual(['Creators', 'Matches', 'Outreach AI', 'Campanhas']);
-    expect(creators.every((m) => m.planned && m.planned.length > 0)).toBe(true);
+    expect(creators.every((m) => !m.planned && m.subgroup === 'Gestão de parcerias')).toBe(true);
   });
 
   it('sem usuário logado, aplica as mesmas regras de um perfil não-admin/gerente', () => {

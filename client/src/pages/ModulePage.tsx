@@ -101,6 +101,7 @@ const LogisticaPage = lazy(() => import('./LogisticaPage'));
 const UsuariosPage = lazy(() => import('./UsuariosPage'));
 const WebhooksPage = lazy(() => import('./WebhooksPage'));
 const ConectorPage = lazy(() => import('./ConectorPage'));
+const CreatorsModulePage = lazy(() => import('./creators/CreatorsModulePage'));
 const CommerceModulePage = lazy(() => import('./CommerceModulePage'));
 const NcmPage = lazy(() => import('./NcmPage'));
 const ComissoesPage = lazy(() => import('./ComissoesPage'));
@@ -142,7 +143,10 @@ export default function ModulePage({ module }: { module: Module }) {
   const resource = module.resource ? meta.resources[module.resource] : undefined;
 
   if (module.connector) return <Suspense fallback={<SubPageLoading />}><ConectorPage module={module} /></Suspense>;
-  if (module.space === 'commerce' || module.space === 'creators') {
+  if (module.space === 'creators') {
+    return <Suspense fallback={<SubPageLoading />}><CreatorsModulePage module={module} /></Suspense>;
+  }
+  if (module.space === 'commerce') {
     return <Suspense fallback={<SubPageLoading />}><CommerceModulePage module={module} /></Suspense>;
   }
   if (module.id === 'usuarios') return <Suspense fallback={<SubPageLoading />}><UsuariosPage /></Suspense>;

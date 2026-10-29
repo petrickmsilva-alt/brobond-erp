@@ -217,6 +217,9 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
       { rota: '/empresas', area: 'Administração', modulo: 'Empresas' },
       { rota: '/conectores/mercado-livre', area: 'Commerce', modulo: 'Mercado Livre' },
       { rota: '/creators', area: 'Creators', modulo: 'Creators' },
+      { rota: '/matches', area: 'Creators', modulo: 'Matches' },
+      { rota: '/outreach-ai', area: 'Creators', modulo: 'Outreach AI' },
+      { rota: '/campanhas', area: 'Creators', modulo: 'Campanhas' },
       { rota: '/config', area: 'Utilidades Globais', modulo: 'Configurações' },
     ];
 
@@ -275,13 +278,13 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     expect(produtosCommerce).toBeTruthy();
     expect(produtosCommerce).not.toHaveAttribute('data-planned', 'true');
 
-    // O selo "Em breve" continua exercitado pelos módulos realmente planejados.
+    // Creators também deixou a classificação de roadmap.
     await user.clear(input);
     await user.type(input, 'Creators');
     const opcoesCreators = screen.getAllByRole('option');
     const plannedCreators = opcoesCreators.find((el) => el.getAttribute('data-path') === '/creators');
-    expect(plannedCreators).toHaveAttribute('data-planned', 'true');
-    expect(within(plannedCreators!).getByText('Em breve')).toBeInTheDocument();
+    expect(plannedCreators).not.toHaveAttribute('data-planned', 'true');
+    expect(within(plannedCreators!).queryByText('Em breve')).not.toBeInTheDocument();
   });
 
   it('Command Palette respeita RBAC: operador não encontra módulos de gerente ou admin', async () => {

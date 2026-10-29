@@ -73,7 +73,9 @@ export default function Layout() {
     const link = (label: string, href: string): BreadcrumbItem => ({ label, href, onNavigate: () => navigate(href) });
     if (!rota) return [{ label: 'BROBOND ERP' }]; // rota sem módulo (ex.: /dev/componentes)
     const itens: BreadcrumbItem[] = [link('BROBOND ERP', '/')];
-    if (rota.area && rota.area !== rota.label && rota.path !== '/') itens.push({ label: rota.area, semLink: true });
+    if (rota.area && rota.area !== rota.label && rota.path !== '/') {
+      itens.push(rota.space === 'creators' ? link('Creators', '/creators') : { label: rota.area, semLink: true });
+    }
     const descendente = location.pathname !== rota.path;
     itens.push(descendente ? link(rota.label, rota.path) : { label: rota.label });
     if (descendente) itens.push({ label: rotuloDoRegistro(location.pathname) });

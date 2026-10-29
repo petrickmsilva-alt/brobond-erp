@@ -1675,11 +1675,10 @@ export const MODULES: Module[] = [
     space: 'creators',
     area: 'Creators',
     group: 'Parcerias e campanhas',
-    subgroup: 'Roadmap',
-    keywords: 'influenciadores creators parcerias planejado',
+    subgroup: 'Gestão de parcerias',
+    keywords: 'influenciadores creators parcerias',
     path: '/creators',
-    description: 'Base de creators, perfis, nichos e métricas de audiência.',
-    planned: ['Cadastro e enriquecimento de perfis.', 'Métricas de alcance, afinidade e performance.', 'Histórico de parcerias e entregas.'],
+    description: 'Gerencie criadores, parceiros e oportunidades comerciais.',
   },
   {
     id: 'creator-matches',
@@ -1688,11 +1687,10 @@ export const MODULES: Module[] = [
     space: 'creators',
     area: 'Creators',
     group: 'Parcerias e campanhas',
-    subgroup: 'Roadmap',
-    keywords: 'afinidades matching creators planejado',
+    subgroup: 'Gestão de parcerias',
+    keywords: 'afinidades matching creators',
     path: '/matches',
-    description: 'Matching entre creators e campanhas com inteligência de afinidade.',
-    planned: ['Recomendação de creators por objetivo e público.', 'Score de afinidade por campanha.', 'Aprovação e histórico dos matches.'],
+    description: 'Encontre oportunidades entre creators e campanhas.',
   },
   {
     id: 'outreach-ai',
@@ -1701,11 +1699,10 @@ export const MODULES: Module[] = [
     space: 'creators',
     area: 'Creators',
     group: 'Parcerias e campanhas',
-    subgroup: 'Roadmap',
-    keywords: 'contato assistido ia briefing creators planejado',
+    subgroup: 'Gestão de parcerias',
+    keywords: 'contato assistido ia briefing creators',
     path: '/outreach-ai',
-    description: 'Abordagens assistidas por IA para iniciar conversas com creators.',
-    planned: ['Briefing contextual por creator.', 'Mensagens assistidas com aprovação humana.', 'Histórico de contatos e respostas.'],
+    description: 'Gerencie contatos, oportunidades e interações com creators.',
   },
   {
     id: 'campanhas',
@@ -1714,11 +1711,10 @@ export const MODULES: Module[] = [
     space: 'creators',
     area: 'Creators',
     group: 'Parcerias e campanhas',
-    subgroup: 'Roadmap',
-    keywords: 'campanhas marketing influenciadores roi planejado',
+    subgroup: 'Gestão de parcerias',
+    keywords: 'campanhas marketing influenciadores roi',
     path: '/campanhas',
-    description: 'Planejamento e acompanhamento de campanhas com creators.',
-    planned: ['Briefing, cronograma e orçamento.', 'Entregáveis e aprovações por campanha.', 'Resultados, conversões e ROI.'],
+    description: 'Planeje, acompanhe e gerencie campanhas com creators.',
   },
 
   // ==========================================================================
@@ -1900,6 +1896,11 @@ export const PAGES_ESPECIAIS = [
   'commerce-promocoes',
   'commerce-cupons',
   'commerce-fila',
+  // Creators: páginas dedicadas com capacidades verificadas no servidor.
+  'creators',
+  'creator-matches',
+  'outreach-ai',
+  'campanhas',
 ] as const;
 
 /** Módulos cuja listagem abre diretamente a página de detalhe. */
