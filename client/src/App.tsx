@@ -64,6 +64,7 @@ const CommerceOfertasPage = lazy(() => import('./pages/commerce/OfertasPage'));
 const CommerceOfertaDetalhePage = lazy(() => import('./pages/commerce/OfertaDetalhePage'));
 const CommerceOfertaFormPage = lazy(() => import('./pages/commerce/OfertaFormPage'));
 // Painéis operacionais consumindo APIs reais do commerce.
+const PaymentEnginePage = lazy(() => import('./pages/commerce/PaymentEnginePage'));
 const CommercePagamentosPage = lazy(() => import('./pages/commerce/PagamentosPage'));
 const CommerceReservasPage = lazy(() => import('./pages/commerce/ReservasPage'));
 const CommerceFulfillmentPage = lazy(() => import('./pages/commerce/FulfillmentPage'));
@@ -544,6 +545,14 @@ export default function App() {
             <Route path="commerce/ofertas/:id/editar" element={<ModuleAccess moduleId="commerce-promocoes"><CommerceOfertaFormPage /></ModuleAccess>} />
             <Route path="commerce/ofertas/:id" element={<ModuleAccess moduleId="commerce-promocoes"><CommerceOfertaDetalhePage /></ModuleAccess>} />
             {/* Painéis operacionais — APIs reais, dados reais, ZERO MODAL. */}
+            <Route path="commerce/pagamentos/:section" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/provedores/:code/editar" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/metodos/:code/editar" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/regras/:id/editar" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/regras/novo" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/transacoes/:id" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/transacoes/:id/:action" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/reconciliacao/:id/resolver" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
             <Route path="commerce/pagamentos" element={<ModuleAccess moduleId="commerce-pedidos"><CommercePagamentosPage /></ModuleAccess>} />
             <Route path="commerce/reservas" element={<ModuleAccess moduleId="commerce-pedidos"><CommerceReservasPage /></ModuleAccess>} />
             <Route path="commerce/fulfillment" element={<ModuleAccess moduleId="commerce-pedidos"><CommerceFulfillmentPage /></ModuleAccess>} />

@@ -25,6 +25,7 @@ type ItemPreview = {
 };
 
 export type Preview = {
+  payment_methods?: {code:string;max_installments:number;required_fields?:string[]}[];
   itens: ItemPreview[];
   subtotal: number;
   cupom: { codigo: string; valido: boolean; aplicado: boolean; desconto: number; erro?: string } | null;

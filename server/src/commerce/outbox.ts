@@ -227,6 +227,8 @@ export async function processarComercioAgendado(): Promise<{
   outbox: { processados: number; erros: number };
   expirados: number;
 }> {
+  const { runPaymentJobs } = await import('../../../modules/payments/application/jobs');
+  await runPaymentJobs().catch(() => undefined);
   const { processarFilaPublicacoes } = await import('./catalogo');
   const { expirarCheckoutsPendentes } = await import('./pedidos');
   const publicacoes = await processarFilaPublicacoes(20).catch(() => ({ processadas: 0, falhas: 0 }));

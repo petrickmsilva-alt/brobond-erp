@@ -2,9 +2,8 @@ import type { Request, Response } from 'express';
 import { currentUser } from '../auth';
 import { escopoDoAtor } from '../empresa';
 import { HttpError } from '../errors';
-import { configDaEmpresa } from '../gateway';
+import { readiness } from '../../../modules/payments/application/configuration';
 import { getResource } from '../resources';
-import { decifrarSegredo } from '../segredos';
 import { checkAccess } from '../services';
 import { configDaLoja, empresaDaVitrine, freteDaConfig, responsavelCheckout } from './loja-base';
 import { configuracaoFreteValida } from './frete';
@@ -15,24 +14,12 @@ import { configuracaoFreteValida } from './frete';
  * Credenciais do canal de relatórios não substituem o gateway de cobrança.
  */
 export async function pagamentoDaLoja(empresaId: number) {
-  const config = await configDaEmpresa(empresaId, 'mercadopago');
-  let temToken = false;
-  try {
-    const credenciais = JSON.parse(decifrarSegredo(config?.credenciais_cifradas) || '{}');
-    temToken = !!String(credenciais?.access_token || credenciais?.accessToken || '').trim();
-  } catch { /* cifra inválida é erro de configuração, não conexão ativa */ }
-  const temWebhook = !!decifrarSegredo(config?.webhook_segredo_cifrado);
-  return {
-    provider: 'mercadopago',
-    origem: config?.origem === 'ambiente_commerce' ? 'ambiente_commerce' : 'banco',
-    configurado: !!config && config.ativo !== false && temToken && temWebhook,
-    ativo: !!config && config.ativo !== false,
-    tem_token: temToken,
-    tem_webhook: temWebhook,
-    ambiente: config?.ambiente ? String(config.ambiente) : null,
-    conexao_validada: false,
-    credenciais_ambiente_detectadas: !!process.env.MERCADOPAGO_ACCESS_TOKEN?.trim(),
-  };
+  const ready = await readiness(empresaId);
+  const configured = ready.providers.filter(p=>!['NOT_CONFIGURED','DISABLED'].includes(p.status));
+  return { origem:configured.some(p=>p.origin==='ambiente_commerce')?'ambiente_commerce':'banco', provider:'Payment Engine', configurado:ready.configured, ativo:ready.configured,
+    tem_token:configured.length>0, tem_webhook:configured.some(p=>p.webhook), ambiente:configured[0]?.environment||null,
+    conexao_validada:configured.some(p=>p.status==='CONNECTED'), credenciais_ambiente_detectadas:false, ...ready };
+
 }
 
 export async function estadoLoja(req: Request, res: Response) {
@@ -55,7 +42,7 @@ export async function estadoLoja(req: Request, res: Response) {
     if (!(error instanceof HttpError) || error.status !== 409) throw error;
     pendencias.push({ codigo: 'responsavel', mensagem: error.message, caminho: '/commerce/loja#responsavel' });
   }
-  if (!pagamento.configurado) pendencias.push({ codigo: 'pagamento', mensagem: 'Mercado Pago: o gateway de checkout desta empresa precisa estar ativo, com Access Token e segredo de webhook válidos. A conexão de relatórios do canal não habilita cobranças automaticamente.', caminho: '/commerce/loja#pagamento' });
+  if (!pagamento.configurado) pendencias.push({ codigo: 'pagamento', mensagem: 'Payment Engine: configure um provider, métodos e regras de roteamento para esta empresa.', caminho: '/commerce/loja#pagamento' });
   res.setHeader('Cache-Control', 'private, no-store');
   res.json({ configuracao: config, empresa_id: empresaId, status: pendencias.length ? 'PENDENTE_DE_CONFIGURACAO' : 'CONFIGURADO', abrir_loja: pendencias.length === 0, vitrine_disponivel: !!config && publica === empresaId, frete_configurado: freteOk, responsavel_checkout_id: responsavel, pagamento, pendencias });
 }

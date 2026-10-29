@@ -31,6 +31,8 @@ type Visao = {
     valor: number | null;
     qr_code: string | null;
     copia_cola: string | null;
+    engine_status?:string;
+    action?: { type:string;url?:string };
     expira_em: string | null;
   };
   venda: { id: number; numero: string; status: string | null; faturada_em: string | null; expedicao_etapa: string | null } | null;
@@ -149,12 +151,16 @@ export default function LojaPedidoPage() {
             </p>
           )}
 
+          {visao.pagamento.engine_status === 'REQUIRES_ACTION' && visao.pagamento.action?.url?.startsWith('https://') && <a className="btn-primary" href={visao.pagamento.action.url} rel="noreferrer">Concluir pagamento em ambiente seguro</a>}
+          {visao.pagamento.engine_status === 'PENDING_MANUAL_CONFIRMATION' && <p className="text-sm">Aguardando confirmação manual por um responsável autorizado.</p>}
           {visao.pagamento.copia_cola && !pagoAprovado && (
             <div className="mt-4">
               <div className="text-xs font-medium uppercase tracking-wide text-muted">PIX copia e cola</div>
               <div className="mt-1 flex items-start gap-2">
                 <code className="block max-h-24 flex-1 overflow-auto rounded-lg bg-canvas p-3 text-xs break-all">
-                  {visao.pagamento.copia_cola}
+                  {visao.pagamento.engine_status === 'REQUIRES_ACTION' && visao.pagamento.action?.url?.startsWith('https://') && <a className="btn-primary" href={visao.pagamento.action.url} rel="noreferrer">Concluir pagamento em ambiente seguro</a>}
+          {visao.pagamento.engine_status === 'PENDING_MANUAL_CONFIRMATION' && <p className="text-sm">Aguardando confirmação manual por um responsável autorizado.</p>}
+          {visao.pagamento.copia_cola}
                 </code>
                 <button
                   type="button"

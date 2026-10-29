@@ -19,14 +19,16 @@ import { HttpError } from '../errors';
 import { getStore } from '../services';
 import { escopoDeSistema } from '../empresa';
 import { getResource } from '../resources';
-import { criarCobrancaGateway, R_GATEWAY_CONFIGS } from '../gateway';
+import { paymentEngine } from '../../../modules/payments/orchestration/payment-orchestrator';
+import { availableMethods, candidates } from '../../../modules/payments/application/configuration';
+import { METHODS, type PaymentMethod } from '../../../modules/payments/domain/payment';
 import { criarReservaInterna, liberarReservaInterna } from '../estoqueTransferencia';
 import { saldoVendavel } from '../estoqueCanonico';
 import { attachImages } from '../uploads';
 import { marketplaceSaleReference } from '../../../modules/connectors/ingestion/sales.service';
 import { connectorCuid } from '../../../modules/connectors/core/id';
 import { configuracaoFreteValida, cotarFrete } from './frete';
-import { freteDaConfig, exigirVitrine, responsavelCheckout } from './loja-base';
+import { configDaLoja, freteDaConfig, exigirVitrine, responsavelCheckout } from './loja-base';
 import { pagamentoDaLoja } from './estado-loja';
 import { disponibilidadesPorTamanho, normalizarMetadados } from './catalogo';
 import { montarVisaoDaSale, ORIGEM_CHECKOUT } from './pedidos';
@@ -300,7 +302,12 @@ async function resolverItensCarrinho(
 // ----------------------------------------------------------------------------
 
 export async function lojaPreview(req: Request, res: Response) {
-  const { empresaId, config } = await exigirVitrine();
+  const { empresaId } = await exigirVitrine();
+  const quote = await quotePaymentMethods(empresaId, req);
+  res.json(quote);
+}
+export async function quotePaymentMethods(empresaId: number, req: Request) {
+  const config = await configDaLoja(empresaId);
   const corpo = (req.body || {}) as Record<string, unknown>;
   const itens = await resolverItensCarrinho(empresaId, corpo);
   const subtotal = round2(itens.reduce((soma, i) => soma + i.preco_unitario * i.quantidade, 0));
@@ -315,7 +322,10 @@ export async function lojaPreview(req: Request, res: Response) {
     cep: corpo.cep ? String(corpo.cep) : null,
   });
 
-  res.json({
+  const total = calcularTotaisCheckout({ itens:itens.map(i=>({quantidade:i.quantidade,precoUnitario:i.preco_unitario})), frete:frete.disponivel?frete.valor:0, desconto:desconto.desconto }).total;
+  const methods = frete.disponivel && itens.every(i=>i.disponivel>=i.quantidade) && total>0 ? await availableMethods({empresaId,amount:paraCentavos(total),currency:'BRL',country:'BR',channel:'OWN_STORE',installments:1}) : [];
+  return {
+    payment_methods: methods,
     itens: itens.map((i) => ({
       ...i,
       subtotal: round2(i.preco_unitario * i.quantidade),
@@ -343,7 +353,7 @@ export async function lojaPreview(req: Request, res: Response) {
     }),
     frete_indisponivel: !frete.disponivel,
     ...(frete.disponivel ? {} : { frete_motivo: frete.motivo }),
-  });
+  };
 }
 
 // ----------------------------------------------------------------------------
@@ -418,9 +428,8 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
 
   const dono = await responsavelCheckout(empresaId, config);
   const escopo = escopoDeSistema(empresaId);
-  // Provedor escolhido ANTES de criar qualquer linha: gateway sem configuração
-  // não pode gerar "pedidos órfãos" no banco.
-  const provider = await escolherProvedorPagamento(empresaId);
+  const method = String(corpo.payment_method || 'PIX') as PaymentMethod;
+  if (!METHODS.includes(method) || !(await candidates({empresaId, method, amount:paraCentavos(totais.total), currency:'BRL',country:'BR',channel:'OWN_STORE',installments:1})).length) throw new HttpError(409,'Método indisponível no Payment Engine.');
   const { externalOrderId, token } = gerarIdentificadores();
 
   const criado = await s.transaction(
@@ -546,18 +555,7 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
 
   // COBRANÇA via gateway (backend; falhou → desfaz reserva/cupom com estado ERRO).
   try {
-    const criada = await criarCobrancaGateway(escopo, {
-      provider,
-      metodo: 'pix',
-      valor: totais.total,
-      idempotencyKey: `checkout:${criado.pedido.id}`,
-      expiraEm: String(criado.pedido.expira_em),
-      descricao: `Pedido ${externalOrderId} — vitrine BROBOND`,
-      payerEmail: email,
-      observacoes: `checkout:/loja pedido ${externalOrderId}`,
-      actor: { id: dono, name: 'Checkout /loja' },
-    });
-    await s.update(R_PEDIDOS(), Number(criado.pedido.id), { cobranca_id: Number(criada.cobranca.id) });
+    await paymentEngine.createForOrder(empresaId, Number(criado.pedido.id), method, `checkout:${criado.pedido.id}`, {taxId: comprador.documento ? String(comprador.documento).replace(/\D/g,'') : undefined});
   } catch (e) {
     await falharCheckout(empresaId, criado.pedido, criado.sale, e instanceof Error ? e.message : String(e));
     throw e instanceof HttpError ? e : new HttpError(502, 'Não foi possível iniciar o pagamento do pedido. Tente novamente.');
@@ -600,26 +598,6 @@ async function falharCheckout(empresaId: number, pedido: Row, sale: Row, motivo:
       }
     },
     { isolation: 'serializable' }
-  );
-}
-
-/**
- * Provedor de pagamento do checkout: Mercado Pago em produção (go-live P0);
- * mock só fora de produção para a suíte determinística.
- */
-async function escolherProvedorPagamento(empresaId: number): Promise<string> {
-  const s = getStore();
-  const configs = await s.list(R_GATEWAY_CONFIGS, { page: 1, pageSize: 20, filter: { empresa_id: empresaId, ativo: true } });
-  const mp = configs.rows.find((c) => String(c.provider) === 'mercadopago');
-  const estadoPagamento = await pagamentoDaLoja(empresaId);
-  if (mp || estadoPagamento.configurado) {
-    if (!estadoPagamento.configurado) throw new HttpError(409, 'Mercado Pago com configuração pendente: revise Access Token e webhook do gateway de checkout em Commerce → Loja própria.');
-    return 'mercadopago';
-  }
-  if (process.env.NODE_ENV !== 'production' && configs.rows.find((c) => String(c.provider) === 'mock')) return 'mock';
-  throw new HttpError(
-    409,
-    'Pagamento não disponível: configure o Mercado Pago em Financeiro → Gateway (o go-live do commerce exige Mercado Pago).'
   );
 }
 

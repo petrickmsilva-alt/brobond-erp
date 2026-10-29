@@ -1,3 +1,4 @@
+import { paymentsRouter, checkoutMethods } from '../../modules/payments/api/routes';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import path from 'node:path';
@@ -534,6 +535,8 @@ app.get('/api/loja/config', rateLimitPublico, wrap(lojaConfigPublica));
 app.get('/api/loja/produtos', rateLimitPublico, wrap(lojaProdutosPublicos));
 app.get('/api/loja/produtos/:slug', rateLimitPublico, wrap(lojaProdutoPublico));
 app.post('/api/loja/preview', rateLimitPublico, wrap(lojaPreview));
+app.post('/api/loja/payment-methods', rateLimitPublico, wrap(checkoutMethods));
+app.post('/api/commerce/checkout/payment-intent', rateLimitPublico, wrap(lojaCriarCheckout));
 app.post('/api/loja/checkout', rateLimitPublico, wrap(lojaCriarCheckout));
 app.get('/api/loja/pedidos/:token', rateLimitPublico, wrap(lojaPedidoPublico));
 // Portal do cliente (acompanhamento de pedidos por CPF/CNPJ)
@@ -983,6 +986,7 @@ app.post('/api/commerce/pedidos/:saleId/rastreio', wrap(salvarRastreioCommerce))
 app.get('/api/commerce/reservas', wrap(listarReservasCommerce));
 app.get('/api/commerce/fulfillment', wrap(listarFulfillmentCommerce));
 app.get('/api/commerce/delivery', wrap(listarDeliveryCommerce));
+app.use('/api/commerce/payments', paymentsRouter);
 app.get('/api/commerce/pagamentos', wrap(listarPagamentosCommerce));
 app.get('/api/commerce/eventos', wrap(listarEventosCommerce));
 app.get('/api/commerce/erros', wrap(listarErrosCommerce));

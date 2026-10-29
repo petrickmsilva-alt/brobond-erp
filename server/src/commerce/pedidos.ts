@@ -1,3 +1,4 @@
+import { R_INTENTS, R_ATTEMPTS } from '../../../modules/payments/infrastructure/resources';
 // ============================================================================
 // COMMERCE OS — PEDIDOS OMNICHANNEL (inbox, conversão, pagamento, fulfillment).
 //
@@ -574,6 +575,9 @@ export async function montarVisaoDaSale(
     : { rows: [] as Row[], total: 0 };
   const cobranca = pedido?.cobranca_id ? await s.get(R_GATEWAY_COBRANCAS, Number(pedido.cobranca_id)) : null;
 
+  const engineIntent = pedido ? await s.findOneWhere(R_INTENTS,{empresa_id:empresaId,order_id:Number(pedido.id)}) : null;
+  const engineAttempt = engineIntent ? (await s.list(R_ATTEMPTS,{page:1,pageSize:1,sort:'id',dir:'desc',filter:{empresa_id:empresaId,payment_intent_id:Number(engineIntent.id)}})).rows[0] : null;
+
   const itens = itensBrutos.rows.map((i) => ({
     produto_id: Number(i.product_id || 0),
     produto: nomes.get(Number(i.product_id || 0)) ?? `#${i.product_id}`,
@@ -620,6 +624,8 @@ export async function montarVisaoDaSale(
         }
       : null,
     pagamento: {
+      engine_status: engineIntent?.status || null,
+      action: engineAttempt?.safe_reference?.action || null,
       status: cobranca
         ? mapearEstadoPagamento(cobranca.status) ?? String(cobranca.status)
         : pedido?.pagamento_estado

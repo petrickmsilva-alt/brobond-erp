@@ -109,7 +109,7 @@ p0(
   gateway.includes('uq_gateway_webhook_evento') || ler('db/migrations/0025_p2_financeiro_gateways.sql').includes('uq_gateway_webhook_evento'),
   'idempotência de webhook (UNIQUE provider + evento_id) no modelo',
 );
-p0(vitrine.includes('criarCobrancaGateway'), 'checkout cria cobrança pelo BACKEND (nunca pelo frontend)');
+p0(vitrine.includes('paymentEngine.createForOrder') && ler('modules/payments/orchestration/payment-orchestrator.ts').includes('createPaymentIntent') && !/from ['"][^'"]*(?:mercado-pago|pagbank|stripe)/i.test(vitrine), 'checkout cria intenção via Payment Engine no BACKEND (nunca provider no frontend)');
 p0(
   vitrine.includes('instanteIso') === false || gateway.includes('instanteIso'),
   'normalização de instante na cobrança (timestamptz honesto)',

@@ -1,18 +1,18 @@
 {
-  "gerado_em": "2026-10-29T14:58:18.976Z",
+  "gerado_em": "2026-10-29T18:37:07.391Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 68,
-    "sql_com_conteudo": 68,
+    "sql": 69,
+    "sql_com_conteudo": 69,
     "prisma": 7
   },
   "tabelas": {
-    "total": 148,
+    "total": 156,
     "com_empresa_id": 128,
-    "sem_empresa_id": 20,
-    "fora_do_prisma": 137
+    "sem_empresa_id": 28,
+    "fora_do_prisma": 145
   },
-  "indices": 450,
+  "indices": 455,
   "constraints": 273,
   "recursos": {
     "total": 133,
@@ -80,17 +80,17 @@
   ],
   "modulos": {
     "total": 111,
-    "navegaveis": 107,
-    "planejados": 4,
+    "navegaveis": 111,
+    "planejados": 0,
     "areas": 11,
     "grupos": 31,
     "com_recurso": 79
   },
   "rotas": {
-    "total": 417,
+    "total": 421,
     "por_metodo": {
-      "GET": 189,
-      "POST": 190,
+      "GET": 191,
+      "POST": 192,
       "PUT": 21,
       "DELETE": 14,
       "PATCH": 3
@@ -100,6 +100,10 @@
       {
         "base": "/api",
         "router": "bloquearSenhaProvisoria"
+      },
+      {
+        "base": "/api/commerce/payments",
+        "router": "paymentsRouter"
       },
       {
         "base": "/api/connectors",
@@ -193,17 +197,17 @@
   },
   "testes": {
     "server": {
-      "arquivos": 173,
-      "casos": 1529
+      "arquivos": 177,
+      "casos": 1557
     },
     "client": {
-      "arquivos": 108,
-      "casos": 975
+      "arquivos": 112,
+      "casos": 995
     },
-    "total": 2504
+    "total": 2552
   },
   "integracoes": {
-    "arquivos_modules": 31,
+    "arquivos_modules": 51,
     "arquivos_server_modules": 1
   },
   "achados": [
@@ -318,6 +322,14 @@
     "login_tentativas",
     "medida_valores",
     "medidas",
+    "payment_attempts",
+    "payment_disputes",
+    "payment_intents",
+    "payment_methods",
+    "payment_operations",
+    "payment_refunds",
+    "payment_routing_rules",
+    "payment_settlements",
     "portal_acessos",
     "sale_items",
     "sessoes",
@@ -427,6 +439,14 @@
     "ordens_apontamentos",
     "ordens_eventos",
     "ordens_fabricacao",
+    "payment_attempts",
+    "payment_disputes",
+    "payment_intents",
+    "payment_methods",
+    "payment_operations",
+    "payment_refunds",
+    "payment_routing_rules",
+    "payment_settlements",
     "pdv_caixa_movimentos",
     "pdv_caixas",
     "pdv_pagamentos",

@@ -37,7 +37,8 @@ export default function LojaCheckoutPage() {
   const navigate = useNavigate();
   const carrinho = useCarrinho();
   const [config, setConfig] = useState<ConfigLoja | null>(null);
-  const [comprador, setComprador] = useState({ nome: '', email: '', telefone: '' });
+  const [comprador, setComprador] = useState({ nome: '', email: '', telefone: '', documento: '' });
+  const [method, setMethod] = useState('PIX');
   const [preview, setPreview] = useState<Preview | null>(null);
   const [validando, setValidando] = useState(true);
   const [endereco, setEndereco] = useState<Endereco>(ENDERECO_VAZIO);
@@ -50,7 +51,7 @@ export default function LojaCheckoutPage() {
     setValidando(true);
     setPreview(null);
     Promise.all([apiFetch<ConfigLoja>('/loja/config'), apiFetch<Preview>('/loja/preview', { method: 'POST', body: JSON.stringify({ itens: carrinho.itens, cupom: carrinho.cupom || undefined }) })])
-      .then(([cfg, cotacao]) => { if (ativo) { setConfig(cfg); setPreview(cotacao); setErro(''); } })
+      .then(([cfg, cotacao]) => { if (ativo) { setConfig(cfg); setPreview(cotacao); if(cotacao.payment_methods?.length)setMethod(cotacao.payment_methods[0].code); setErro(''); } })
       .catch((e) => { if (ativo) setErro(e instanceof Error ? e.message : 'Não foi possível validar o checkout. Volte ao carrinho e tente novamente.'); })
       .finally(() => { if (ativo) setValidando(false); });
     return () => { ativo = false; };
@@ -63,7 +64,7 @@ export default function LojaCheckoutPage() {
   const freteRetirada = config?.frete.provedor === 'retirada';
   const freteManual = config?.frete.provedor === 'manual';
   const exigeEndereco = freteManual;
-  const checkoutOk = !validando && config?.frete.disponivel && config.checkout_disponivel !== false && preview?.itens?.length && !preview.frete_indisponivel && preview.itens.every((i) => i.ok) && Number.isFinite(preview.totais?.total) && preview.totais.total > 0 && (!preview.cupom || preview.cupom.valido);
+  const checkoutOk = (preview?.payment_methods === undefined || preview.payment_methods.some(m=>m.code===method)) && !validando && config?.frete.disponivel && config.checkout_disponivel !== false && preview?.itens?.length && !preview.frete_indisponivel && preview.itens.every((i) => i.ok) && Number.isFinite(preview.totais?.total) && preview.totais.total > 0 && (!preview.cupom || preview.cupom.valido);
 
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,6 +75,7 @@ export default function LojaCheckoutPage() {
       const r = await apiFetch<RespostaCheckout>('/loja/checkout', {
         method: 'POST',
         body: JSON.stringify({
+          payment_method: method,
           chave: lerCarrinho().chave,
           itens: carrinho.itens.map((i) => ({ produto_id: i.produto_id, tamanho_id: i.tamanho_id, quantidade: i.quantidade })),
           cupom: carrinho.cupom || undefined,
@@ -81,6 +83,7 @@ export default function LojaCheckoutPage() {
             nome: comprador.nome.trim(),
             email: comprador.email.trim(),
             telefone: comprador.telefone.trim() || undefined,
+            documento: comprador.documento.trim() || undefined,
           },
           endereco:
             freteRetirada
@@ -179,6 +182,13 @@ export default function LojaCheckoutPage() {
             </div>
           </fieldset>
 
+          <fieldset className="rounded-2xl border border-line bg-surface p-5 space-y-3">
+            <legend className="px-1 text-sm font-semibold text-ink">Pagamento</legend>
+            <label className="block text-sm">Método de pagamento<select className="input mt-1" value={method} onChange={e=>setMethod(e.target.value)}>{preview?.payment_methods?.map(m=><option key={m.code} value={m.code}>{({PIX:'Pix',CREDIT_CARD:'Cartão de crédito',BOLETO:'Boleto',MANUAL_PAYMENT:'Pagamento manual'} as Record<string,string>)[m.code]||m.code}</option>)}</select></label>
+            {preview?.payment_methods?.length===0&&<p className="text-sm text-muted">Nenhum método disponível para este pedido.</p>}
+            <label className="block text-sm">CPF/CNPJ (quando exigido pelo método)<input className="input mt-1" required={preview?.payment_methods?.find(m=>m.code===method)?.required_fields?.includes('tax_id')} inputMode="numeric" maxLength={18} value={comprador.documento} onChange={e=>setComprador(c=>({...c,documento:e.target.value}))}/></label>
+            <p className="text-xs text-muted">Dados de cartão são fornecidos exclusivamente no ambiente seguro do provider. A confirmação é feita pelo servidor.</p>
+          </fieldset>
           <fieldset className="rounded-2xl border border-line bg-surface p-5">
             <legend className="px-1 text-sm font-semibold text-ink">Entrega</legend>
             {freteRetirada && <p className="mt-2 text-sm">Retirada na loja — frete grátis, sem entrega no endereço.</p>}
@@ -234,7 +244,7 @@ export default function LojaCheckoutPage() {
           </p>
           <p className="mt-3 flex items-start gap-2 text-xs text-muted">
             <Lock className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            Pagamento via gateway (Mercado Pago). A confirmação chega por webhook assinado — a loja nunca marca “pago”
+            Pagamento via Payment Engine. A confirmação chega por webhook assinado — a loja nunca marca “pago”
             por conta própria.
           </p>
           <button type="submit" className="btn-accent mt-4 w-full" disabled={enviando || !checkoutOk}>

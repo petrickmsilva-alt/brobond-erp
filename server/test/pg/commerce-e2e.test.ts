@@ -152,6 +152,11 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
           console.error('cleanup:', sql.slice(0, 80), String(e));
         }
       };
+      // Payment Engine adds durable intent/attempt history; fixture cleanup must respect its FKs.
+      for(const table of ['payment_refunds','payment_disputes','payment_settlements','payment_operations','payment_attempts']){
+        await limpar(`DELETE FROM ${table} WHERE payment_intent_id IN (SELECT pi.id FROM payment_intents pi JOIN commerce_pedidos p ON p.empresa_id=pi.empresa_id AND p.id=pi.order_id WHERE p.chave_checkout LIKE $1)`,[`%${RODADA}%`]);
+      }
+      await limpar(`DELETE FROM payment_intents WHERE order_id IN (SELECT id FROM commerce_pedidos WHERE chave_checkout LIKE $1)`,[`%${RODADA}%`]);
       await limpar(`DELETE FROM gateway_webhook_events WHERE cobranca_id IN (SELECT cobranca_id FROM commerce_pedidos WHERE chave_checkout LIKE $1 AND cobranca_id IS NOT NULL)`, [`%${RODADA}%`]);
       await limpar(`DELETE FROM gateway_webhook_events WHERE payload->>'event_id' LIKE $1`, [`%${RODADA}%`]);
       await limpar(`DELETE FROM gateway_cobrancas WHERE id IN (SELECT cobranca_id FROM commerce_pedidos WHERE chave_checkout LIKE $1 AND cobranca_id IS NOT NULL)`, [`%${RODADA}%`]);

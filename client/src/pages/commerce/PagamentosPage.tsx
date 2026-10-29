@@ -1,3 +1,5 @@
+import { PaymentNavigation } from './PaymentNavigation';
+import { PaymentOverview } from './PaymentOverview';
 // ============================================================================
 // COMMERCE — PAGAMENTOS (cobranças do gateway × pedido). Rota /commerce/pagamentos.
 //
@@ -111,6 +113,8 @@ export default function CommercePagamentosPage() {
           </button>
         }
       />
+      <PaymentNavigation />
+      <PaymentOverview />
       <FilterBar>
         <label className="text-sm">
           <span className="mr-2 text-ink-soft">Estado</span>

@@ -28,7 +28,7 @@ type Config = {
 type EstadoLoja = {
   configuracao: Config | null;
   empresa_id: number; status: string; abrir_loja: boolean; vitrine_disponivel: boolean; frete_configurado: boolean; responsavel_checkout_id: number | null;
-  pagamento: { origem?: string; configurado: boolean; ativo: boolean; tem_token: boolean; tem_webhook: boolean; ambiente: string | null; conexao_validada: boolean; credenciais_ambiente_detectadas: boolean };
+  pagamento: { providers?: {code:string;name:string;status:string;methods:string[]}[]; methods?: {code:string}[]; routing?:string; origem?: string; configurado: boolean; ativo: boolean; tem_token: boolean; tem_webhook: boolean; ambiente: string | null; conexao_validada: boolean; credenciais_ambiente_detectadas: boolean };
   pendencias: { codigo: string; mensagem: string; caminho: string | null }[];
 };
 
@@ -280,13 +280,14 @@ export default function CommerceLojaConfigPage() {
       </div>
 
       <section id="pagamento" className="rounded-xl border border-line bg-surface p-4 space-y-3">
-        <h2 className="font-semibold">Mercado Pago — gateway do checkout</h2>
-        <Badge tone={estado?.pagamento.configurado ? 'green' : 'amber'}>{estado?.pagamento.configurado ? 'CONFIGURADO' : 'PENDENTE DE CONFIGURAÇÃO'}</Badge>
-        {estado && <p className="text-sm text-muted">Origem {estado.pagamento.origem === 'ambiente_commerce' ? 'ambiente seguro do servidor' : 'configuração por empresa'} · Gateway {estado.pagamento.ativo ? 'ativo' : 'inativo/ausente'} · Access Token {estado.pagamento.tem_token ? 'reconhecido' : 'ausente ou inválido'} · Webhook {estado.pagamento.tem_webhook ? 'configurado' : 'pendente'} · Ambiente {estado.pagamento.ambiente ?? 'não definido'}.</p>}
-        <p className="text-sm text-muted">Nenhuma credencial é exibida ou alterada aqui. O canal de relatórios e o gateway de cobrança são configurações distintas. {estado?.pagamento.credenciais_ambiente_detectadas ? 'Credencial de ambiente detectada. O servidor a reutiliza somente para a empresa vinculada à vitrine e com o segredo de webhook presente; a configuração persistida tem prioridade.' : ''}</p>
-        <a className="btn-secondary" href="/conectores/mercado-pago">Consultar integração Mercado Pago</a>
-        <p className="text-sm text-muted">Webhook do checkout: <code>/api/gateway/webhooks/mercadopago</code> no domínio público do ERP. Confirme no painel do Mercado Pago que os eventos de pagamento são enviados para esse endereço, não somente ao webhook de relatórios do canal.</p>
-        <p className="text-xs text-muted">Se o gateway estiver pendente, o responsável pelo deploy deve verificar o vínculo COMMERCE_LOJA_EMPRESA_ID e as variáveis já provisionadas MERCADOPAGO_ACCESS_TOKEN e MERCADOPAGO_WEBHOOK_SECRET. Para configuração persistida por empresa, a API existente é PUT /api/financeiro/gateway/config (admin com reautenticação). Esta instalação não possui tela financeira de configuração do gateway. Não recrie credenciais. A validação de conexão e o teste financeiro devem ser feitos no ambiente autorizado.</p>
+        <h2 className="font-semibold">Payment Engine</h2>
+        <Badge tone={estado?.pagamento.configurado ? 'green' : 'amber'}>{estado?.pagamento.configurado ? 'CONFIGURADO' : 'NOT_CONFIGURED'}</Badge>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {estado?.pagamento.providers?.map(p=><div key={p.code} className="rounded-lg border border-line p-3"><strong>{p.name}</strong><p className="text-sm text-muted">{p.status} · {p.methods.join(', ') || 'Nenhum método habilitado'}</p></div>)}
+        </div>
+        <p className="text-sm text-muted">Métodos ativos: {estado?.pagamento.methods?.map(m=>m.code).join(', ')||'Nenhum'} · Roteamento: {estado?.pagamento.routing||'NOT_CONFIGURED'} · Webhook: {estado?.pagamento.tem_webhook?'configurado':'não configurado'} · Ambiente: {estado?.pagamento.ambiente||'Não configurado'}.</p>
+        <a className="btn-secondary" href="/commerce/pagamentos/provedores">Gerenciar Payment Engine</a>
+        <p className="text-xs text-muted">Conexão, configuração e homologação são etapas distintas. Nenhuma credencial é exibida nesta página.</p>
       </section>
       <div className="flex items-center gap-3">
         {podeGerir ? (
