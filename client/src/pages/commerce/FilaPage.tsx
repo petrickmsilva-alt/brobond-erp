@@ -6,6 +6,7 @@
 // se reprocessa “no escuro”: o retry real é o agendador/outbox.
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Activity, RefreshCw } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
 import { Alert, EmptyState, PageHeader, Spinner, Badge } from '../../components/ui';
@@ -111,9 +112,17 @@ export default function CommerceFilaPage() {
         title="Fila de sincronização"
         description="Outbox do commerce (conversões, publicações e sincronizações) com idempotência por chave e retry automático, mais as últimas confirmações dos webhooks de pagamento."
         actions={
-          <button type="button" className="btn-ghost" onClick={() => void carregar()}>
-            <RefreshCw className="h-4 w-4" aria-hidden="true" /> Atualizar
-          </button>
+          <>
+            <Link className="btn-ghost" to="/commerce/eventos">
+              <Activity className="h-4 w-4" aria-hidden="true" /> Eventos
+            </Link>
+            <Link className="btn-ghost" to="/commerce/erros">
+              Erros
+            </Link>
+            <button type="button" className="btn-ghost" onClick={() => void carregar()}>
+              <RefreshCw className="h-4 w-4" aria-hidden="true" /> Atualizar
+            </button>
+          </>
         }
       />
 

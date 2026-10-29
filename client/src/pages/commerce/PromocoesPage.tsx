@@ -5,7 +5,7 @@
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BadgePercent, Pencil, Plus } from 'lucide-react';
+import { BadgePercent, Pencil, Percent, Plus } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../../components/ui';
 import { DataTable, FilterBar, type DataTableColumn } from '../../components/ui-kit-negocios';
@@ -122,11 +122,16 @@ export default function CommercePromocoesPage() {
         title="Promoções"
         description="Descontos automáticos por período e pedido mínimo no carrinho da loja própria. Promoção e cupom não acumulam — vence o maior desconto."
         actions={
-          podeGerir ? (
-            <button type="button" className="btn-primary" onClick={() => navigate('/commerce/promocoes/nova')}>
-              <Plus className="h-4 w-4" aria-hidden="true" /> Nova promoção
+          <>
+            <button type="button" className="btn-ghost" onClick={() => navigate('/commerce/ofertas')}>
+              <Percent className="h-4 w-4" aria-hidden="true" /> Ofertas por canal
             </button>
-          ) : undefined
+            {podeGerir && (
+              <button type="button" className="btn-primary" onClick={() => navigate('/commerce/promocoes/nova')}>
+                <Plus className="h-4 w-4" aria-hidden="true" /> Nova promoção
+              </button>
+            )}
+          </>
         }
       />
       <FilterBar>

@@ -5,7 +5,8 @@
 // A escrita aqui é de gerente (recurso + módulo exigem gerente no servidor).
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
-import { RefreshCw, Rocket } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, RefreshCw, Rocket } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
 import { Alert, EmptyState, PageHeader, Spinner, useToast } from '../../components/ui';
 import { DataTable, FilterBar, SearchInput, type DataTableColumn } from '../../components/ui-kit-negocios';
@@ -32,6 +33,7 @@ const ESTADOS_FILTRO = ['', 'QUEUED', 'PUBLISHED', 'ERROR', 'REJECTED', 'UNPUBLI
 
 export default function CommercePublicacoesPage() {
   const toast = useToast();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const podeGerir = user?.perfil === 'gerente' || user?.perfil === 'admin';
 
@@ -140,6 +142,15 @@ export default function CommercePublicacoesPage() {
           <span className="text-muted">—</span>
         ),
     },
+    {
+      key: 'acoes',
+      header: '',
+      render: (p) => (
+        <button type="button" className="btn-ghost" onClick={() => navigate(`/commerce/publicacoes/${p.id}`)}>
+          Abrir
+        </button>
+      ),
+    },
   ];
 
   return (
@@ -147,6 +158,11 @@ export default function CommercePublicacoesPage() {
       <PageHeader
         title="Fila de publicação"
         description="Estado por canal e versão com idempotência (empresa + produto + canal + versão). Nada é marcado como publicado sem a confirmação da API externa."
+        actions={
+          <button type="button" className="btn-primary" onClick={() => navigate('/commerce/publicacoes/novo')}>
+            <Plus className="h-4 w-4" aria-hidden="true" /> Nova publicação
+          </button>
+        }
       />
       <FilterBar>
         <SearchInput value={busca} onChange={setBusca} placeholder="Buscar por produto ou ID externo…" label="Buscar publicações" />

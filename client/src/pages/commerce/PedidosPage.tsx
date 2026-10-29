@@ -7,7 +7,7 @@
 // Detalhe, conversão manual e cancelamento em /commerce/pedidos/:saleId.
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Inbox, RefreshCw } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
 import { Alert, EmptyState, PageHeader, Spinner } from '../../components/ui';
@@ -155,9 +155,23 @@ export default function CommercePedidosPage() {
         title="Pedidos omnichannel"
         description="Caixa única da loja própria e dos canais conectados. O estado combina a venda analítica (sales), a projeção do pedido e a venda operacional."
         actions={
-          <button type="button" className="btn-ghost" onClick={() => void carregar()}>
-            <RefreshCw className="h-4 w-4" aria-hidden="true" /> Atualizar
-          </button>
+          <>
+            <Link className="btn-ghost" to="/commerce/pagamentos">
+              Pagamentos
+            </Link>
+            <Link className="btn-ghost" to="/commerce/reservas">
+              Reservas
+            </Link>
+            <Link className="btn-ghost" to="/commerce/fulfillment">
+              Fulfillment
+            </Link>
+            <Link className="btn-ghost" to="/commerce/devolucoes">
+              Devoluções
+            </Link>
+            <button type="button" className="btn-ghost" onClick={() => void carregar()}>
+              <RefreshCw className="h-4 w-4" aria-hidden="true" /> Atualizar
+            </button>
+          </>
         }
       />
       <FilterBar>

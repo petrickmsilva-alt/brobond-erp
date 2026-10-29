@@ -54,6 +54,22 @@ const CommerceProdutoDetalhePage = lazy(() => import('./pages/commerce/ProdutoDe
 const CommercePedidoDetalhePage = lazy(() => import('./pages/commerce/PedidoDetalhePage'));
 const CommercePromocaoFormPage = lazy(() => import('./pages/commerce/PromocaoFormPage'));
 const CommerceCupomFormPage = lazy(() => import('./pages/commerce/CupomFormPage'));
+// Publicações: fila → nova/detalhe/editar em rota própria (CRIAR→EDITAR→SALVAR
+// →PUBLICAR→DESPUBLICAR→REPROCESSAR sem modal).
+const CommercePublicacaoNovaPage = lazy(() => import('./pages/commerce/PublicacaoNovaPage'));
+const CommercePublicacaoDetalhePage = lazy(() => import('./pages/commerce/PublicacaoDetalhePage'));
+const CommercePublicacaoEditarPage = lazy(() => import('./pages/commerce/PublicacaoEditarPage'));
+// Ofertas por canal (preço/promo/vigência — precedência server-side).
+const CommerceOfertasPage = lazy(() => import('./pages/commerce/OfertasPage'));
+const CommerceOfertaDetalhePage = lazy(() => import('./pages/commerce/OfertaDetalhePage'));
+const CommerceOfertaFormPage = lazy(() => import('./pages/commerce/OfertaFormPage'));
+// Painéis operacionais consumindo APIs reais do commerce.
+const CommercePagamentosPage = lazy(() => import('./pages/commerce/PagamentosPage'));
+const CommerceReservasPage = lazy(() => import('./pages/commerce/ReservasPage'));
+const CommerceFulfillmentPage = lazy(() => import('./pages/commerce/FulfillmentPage'));
+const CommerceEventosPage = lazy(() => import('./pages/commerce/EventosPage'));
+const CommerceErrosPage = lazy(() => import('./pages/commerce/ErrosPage'));
+const CommerceDevolucoesPage = lazy(() => import('./pages/commerce/DevolucoesPage'));
 const LojaInicioPage = lazy(() => import('./pages/commerce/loja/LojaInicioPage'));
 const LojaProdutoPage = lazy(() => import('./pages/commerce/loja/LojaProdutoPage'));
 const LojaCarrinhoPage = lazy(() => import('./pages/commerce/loja/LojaCarrinhoPage'));
@@ -518,6 +534,22 @@ export default function App() {
             <Route path="commerce/promocoes/:id/editar" element={<ModuleAccess moduleId="commerce-promocoes"><CommercePromocaoFormPage /></ModuleAccess>} />
             <Route path="commerce/cupons/novo" element={<ModuleAccess moduleId="commerce-cupons"><CommerceCupomFormPage /></ModuleAccess>} />
             <Route path="commerce/cupons/:id/editar" element={<ModuleAccess moduleId="commerce-cupons"><CommerceCupomFormPage /></ModuleAccess>} />
+            {/* Publicações — fluxo completo em rotas próprias (ZERO MODAL). */}
+            <Route path="commerce/publicacoes/novo" element={<ModuleAccess moduleId="commerce-publicacoes"><CommercePublicacaoNovaPage /></ModuleAccess>} />
+            <Route path="commerce/publicacoes/:id/editar" element={<ModuleAccess moduleId="commerce-publicacoes"><CommercePublicacaoEditarPage /></ModuleAccess>} />
+            <Route path="commerce/publicacoes/:id" element={<ModuleAccess moduleId="commerce-publicacoes"><CommercePublicacaoDetalhePage /></ModuleAccess>} />
+            {/* Ofertas por canal — preço/promo/vigência com precedência server-side. */}
+            <Route path="commerce/ofertas" element={<ModuleAccess moduleId="commerce-promocoes"><CommerceOfertasPage /></ModuleAccess>} />
+            <Route path="commerce/ofertas/novo" element={<ModuleAccess moduleId="commerce-promocoes"><CommerceOfertaFormPage /></ModuleAccess>} />
+            <Route path="commerce/ofertas/:id/editar" element={<ModuleAccess moduleId="commerce-promocoes"><CommerceOfertaFormPage /></ModuleAccess>} />
+            <Route path="commerce/ofertas/:id" element={<ModuleAccess moduleId="commerce-promocoes"><CommerceOfertaDetalhePage /></ModuleAccess>} />
+            {/* Painéis operacionais — APIs reais, dados reais, ZERO MODAL. */}
+            <Route path="commerce/pagamentos" element={<ModuleAccess moduleId="commerce-pedidos"><CommercePagamentosPage /></ModuleAccess>} />
+            <Route path="commerce/reservas" element={<ModuleAccess moduleId="commerce-pedidos"><CommerceReservasPage /></ModuleAccess>} />
+            <Route path="commerce/fulfillment" element={<ModuleAccess moduleId="commerce-pedidos"><CommerceFulfillmentPage /></ModuleAccess>} />
+            <Route path="commerce/devolucoes" element={<ModuleAccess moduleId="commerce-pedidos"><CommerceDevolucoesPage /></ModuleAccess>} />
+            <Route path="commerce/eventos" element={<ModuleAccess moduleId="commerce-fila"><CommerceEventosPage /></ModuleAccess>} />
+            <Route path="commerce/erros" element={<ModuleAccess moduleId="commerce-fila"><CommerceErrosPage /></ModuleAccess>} />
             <Route path="compras/:id" element={<OrderPage tipo="compra" />} />
             <Route path="ordens/:id" element={<OrdemDetail />} />
             {/* Cotações de compra — ZERO MODAL: criação em /cotacoes-compra/novo

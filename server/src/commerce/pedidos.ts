@@ -1002,6 +1002,76 @@ export async function listarEventosCommerce(req: Request, res: Response) {
 }
 
 
+/** GET /api/commerce/erros — só as FALHAS reais (publicações, outbox, pedidos, webhooks) da empresa. */
+export async function listarErrosCommerce(req: Request, res: Response) {
+  const actor = currentUser(req);
+  const escopo = escopoDoAtor(actor);
+  checkAccess(getResource('commerce_outbox')!, actor, 'read');
+  const s = getStore();
+  const [publicacoes, outbox, pedidos, webhooks] = await Promise.all([
+    s.list(getResource('commerce_publicacoes')!, { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId }, sort: 'id', dir: 'desc' }),
+    s.list(getResource('commerce_outbox')!, { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId, estado: 'ERRO' }, sort: 'id', dir: 'desc' }),
+    s.list(R_PEDIDOS(), { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId, estado: 'ERRO' }, sort: 'id', dir: 'desc' }),
+    s.list(R_GATEWAY_WEBHOOK_EVENTS, { page: 1, pageSize: 200, filter: { empresa_id: escopo.empresaId }, sort: 'id', dir: 'desc' }),
+  ]);
+  const erros: Record<string, unknown>[] = [];
+  for (const p of publicacoes.rows) {
+    const estado = String(p.estado);
+    if (!['ERROR', 'REJECTED'].includes(estado)) continue;
+    erros.push({
+      origem: 'publicacao',
+      id: Number(p.id),
+      referencia: `Produto #${p.produto_id} · ${String(p.canal)}`,
+      estado,
+      mensagem: p.ultimo_erro ? String(p.ultimo_erro) : 'Falha sem mensagem registrada.',
+      quando: p.atualizado_em ? String(p.atualizado_em) : p.criado_em ? String(p.criado_em) : null,
+      acao: 'reprocessar',
+      link: `/commerce/publicacoes/${Number(p.id)}`,
+    });
+  }
+  for (const o of outbox.rows) {
+    erros.push({
+      origem: 'outbox',
+      id: Number(o.id),
+      referencia: `${String(o.tipo)} · ${String(o.chave)}`,
+      estado: String(o.estado),
+      mensagem: o.ultimo_erro ? String(o.ultimo_erro) : 'Falha sem mensagem registrada.',
+      quando: o.atualizado_em ? String(o.atualizado_em) : null,
+      acao: 'fila',
+      link: '/commerce/fila',
+    });
+  }
+  for (const p of pedidos.rows) {
+    erros.push({
+      origem: 'pedido',
+      id: Number(p.id),
+      referencia: `${String(p.canal)} · ${String(p.pedido_externo)}`,
+      estado: 'ERRO',
+      mensagem: p.erro ? String(p.erro) : 'Falha sem mensagem registrada.',
+      quando: p.atualizado_em ? String(p.atualizado_em) : null,
+      acao: 'detalhe',
+      link: p.sale_id ? `/commerce/pedidos/${String(p.sale_id)}` : '/commerce/pedidos',
+    });
+  }
+  for (const w of webhooks.rows) {
+    const status = String(w.status || '');
+    const assinaturaInvalida = w.assinatura_ok === false;
+    if (status !== 'erro' && !assinaturaInvalida) continue;
+    erros.push({
+      origem: 'webhook',
+      id: Number(w.id),
+      referencia: `${String(w.provider || 'gateway')} · ${String(w.evento_id || w.evento || '')}`.trim(),
+      estado: assinaturaInvalida ? 'ASSINATURA_INVALIDA' : status,
+      mensagem: w.erro ? String(w.erro) : assinaturaInvalida ? 'Assinatura inválida — evento rejeitado.' : 'Falha sem mensagem registrada.',
+      quando: w.processado_em ? String(w.processado_em) : w.recebido_em ? String(w.recebido_em) : w.criado_em ? String(w.criado_em) : null,
+      acao: 'eventos',
+      link: '/commerce/eventos',
+    });
+  }
+  erros.sort((a, b) => String(b.quando ?? '').localeCompare(String(a.quando ?? '')));
+  res.json({ total: erros.length, erros: erros.slice(0, 300) });
+}
+
 /** Estados do vocabulário (front monta os filtros a partir daqui). */
 export function estadosPedidoDisponiveis(): { valor: string; rotulo: string }[] {
   return ESTADOS_PEDIDO.map((e) => ({ valor: e, rotulo: rotuloEstado(e) }));

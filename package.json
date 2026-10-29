@@ -29,6 +29,7 @@
     "db:deploy": "prisma migrate deploy",
     "go-live:audit": "node --import tsx scripts/final-go-live-audit.ts",
     "commerce:go-live": "node --import tsx scripts/commerce-go-live-audit.ts",
+    "commerce:final-go-live": "node --import tsx scripts/commerce-final-go-live-audit.ts",
     "test:server": "npm --workspace server test",
     "test:client": "npm --workspace client test"
   },

@@ -96,6 +96,9 @@ import {
   salvarPrecoCanal,
   publicarProduto,
   listarPublicacoes,
+  obterPublicacaoCommerce,
+  listarOfertasCommerce,
+  obterOfertaCommerce,
   reprocessarPublicacao,
   despublicarProduto,
 } from './commerce/catalogo';
@@ -112,6 +115,7 @@ import {
   converterPedidoCommerce,
   detalharPedidoCommerce,
   listarDeliveryCommerce,
+  listarErrosCommerce,
   listarEventosCommerce,
   listarFulfillmentCommerce,
   listarPagamentosCommerce,
@@ -960,8 +964,11 @@ app.put('/api/commerce/produtos/:id', wrap(atualizarProdutoCommerce));
 app.put('/api/commerce/produtos/:id/precos', wrap(salvarPrecoCanal));
 app.post('/api/commerce/produtos/:id/despublicar', wrap(despublicarProduto));
 app.get('/api/commerce/publicacoes', wrap(listarPublicacoes));
+app.get('/api/commerce/publicacoes/:id', wrap(obterPublicacaoCommerce));
 app.post('/api/commerce/publicacoes', wrap(publicarProduto));
 app.post('/api/commerce/publicacoes/:id/reprocessar', wrap(reprocessarPublicacao));
+app.get('/api/commerce/ofertas', wrap(listarOfertasCommerce));
+app.get('/api/commerce/ofertas/:id', wrap(obterOfertaCommerce));
 app.get('/api/commerce/pedidos', wrap(listarPedidosCommerce));
 app.get('/api/commerce/pedidos/:saleId', wrap(detalharPedidoCommerce));
 app.post('/api/commerce/pedidos/:saleId/converter', wrap(converterPedidoCommerce));
@@ -972,6 +979,7 @@ app.get('/api/commerce/fulfillment', wrap(listarFulfillmentCommerce));
 app.get('/api/commerce/delivery', wrap(listarDeliveryCommerce));
 app.get('/api/commerce/pagamentos', wrap(listarPagamentosCommerce));
 app.get('/api/commerce/eventos', wrap(listarEventosCommerce));
+app.get('/api/commerce/erros', wrap(listarErrosCommerce));
 app.get('/api/commerce/promocoes', wrap(listarPromocoes));
 app.post('/api/commerce/promocoes', wrap(criarPromocao));
 app.put('/api/commerce/promocoes/:id', wrap(atualizarPromocao));

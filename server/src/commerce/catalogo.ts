@@ -33,6 +33,7 @@ import {
   precoEfetivo,
   slugUnico,
   slugify,
+  vigenciaEstaAtiva,
   type CanalPublicacao,
 } from './regras';
 
@@ -800,7 +801,10 @@ export async function atualizarProdutoCommerce(req: Request, res: Response) {
   checkFluxoEscrita(R_PROD_COM(), actor);
   const id = Number(req.params.id);
   const s = getStore();
-  const projecao = await s.findOneWhere(R_PROD_COM(), { id, empresa_id: escopo.empresaId });
+  // O parâmetro da rota é o ID do PRODUTO canônico (mesmo contrato do GET
+  // /api/commerce/produtos/:id) — nunca o id da projeção, que tem sequência
+  // própria. Editar pela projeção atualizava a linha errada (ou dava 404).
+  const projecao = await s.findOneWhere(R_PROD_COM(), { produto_id: id, empresa_id: escopo.empresaId });
   if (!projecao) throw new HttpError(404, 'Produto commerce não encontrado.');
   const body = (req.body || {}) as Record<string, unknown>;
   const patch: Record<string, unknown> = {};
@@ -815,12 +819,12 @@ export async function atualizarProdutoCommerce(req: Request, res: Response) {
   if (body.slug !== undefined && String(body.slug).trim()) {
     const candidato = slugify(String(body.slug));
     const dono = await s.findOneWhere(R_PROD_COM(), { empresa_id: escopo.empresaId, slug: candidato });
-    if (dono && Number(dono.id) !== id) throw new HttpError(409, 'Já existe um produto com este slug na vitrine.', { slug: 'Em uso' });
+    if (dono && Number(dono.id) !== Number(projecao.id)) throw new HttpError(409, 'Já existe um produto com este slug na vitrine.', { slug: 'Em uso' });
     patch.slug = candidato;
   }
   if (!Object.keys(patch).length) return res.json({ ok: true, produto_commerce: projecao });
 
-  const atualizado = await s.update(R_PROD_COM(), id, patch);
+  const atualizado = await s.update(R_PROD_COM(), Number(projecao.id), patch);
   // Mudou conteúdo → os canais com histórico ganham nova versão na fila.
   await reenfileirarPublicacoesAfetadas(escopo.empresaId, Number(projecao.produto_id), actor.id ?? null);
   await s.audit({
@@ -828,7 +832,7 @@ export async function atualizarProdutoCommerce(req: Request, res: Response) {
     usuario: actor.name,
     acao: 'editar',
     recurso: 'commerce_produtos',
-    registro_id: id,
+    registro_id: Number(projecao.id),
     descricao: `Conteúdo da vitrine atualizado (produto ${Number(projecao.produto_id)})`,
     empresa_id: empresaDoRegistroAudit(R_PROD_COM(), projecao, actor),
     dados: patch,
@@ -995,6 +999,163 @@ export async function reprocessarPublicacao(req: Request, res: Response) {
   });
   void processarFilaPublicacoes(5).catch(() => undefined);
   res.json({ ok: true, publicacao: reativada });
+}
+
+/** GET /api/commerce/publicacoes/:id — detalhe de UMA publicação (produto + preço do canal + metadados). */
+export async function obterPublicacaoCommerce(req: Request, res: Response) {
+  const actor = currentUser(req);
+  const escopo = escopoDoAtor(actor);
+  checkAccess(R_PUBLICACOES(), actor, 'read');
+  const id = Number(req.params.id);
+  const s = getStore();
+  const linha = await s.findOneWhere(R_PUBLICACOES(), { id, empresa_id: escopo.empresaId });
+  if (!linha) throw new HttpError(404, 'Publicação não encontrada.');
+  const produto = await s.findOneWhere(R_PRODUTOS(), { id: Number(linha.produto_id), empresa_id: escopo.empresaId });
+  if (!produto) throw new HttpError(404, 'Produto da publicação não encontrado.');
+  const canal = String(linha.canal);
+  const precoLinha = await s.findOneWhere(R_PRECOS(), {
+    empresa_id: escopo.empresaId,
+    produto_id: Number(linha.produto_id),
+    canal,
+  });
+  const projecao = await s.findOneWhere(R_PROD_COM(), {
+    empresa_id: escopo.empresaId,
+    produto_id: Number(linha.produto_id),
+  });
+  const precoEf = precoEfetivoDeProduto(Number(produto.preco_venda ?? 0), precoLinha);
+  res.json({
+    publicacao: {
+      id: Number(linha.id),
+      produto_id: Number(linha.produto_id),
+      canal,
+      versao: Number(linha.versao),
+      estado: String(linha.estado),
+      external_id: linha.external_id ? String(linha.external_id) : null,
+      tentativas: Number(linha.tentativas || 0),
+      ultimo_erro: linha.ultimo_erro ? String(linha.ultimo_erro) : null,
+      proxima_tentativa_em: linha.proxima_tentativa_em ? String(linha.proxima_tentativa_em) : null,
+      publicado_em: linha.publicado_em ? String(linha.publicado_em) : null,
+      criado_em: linha.criado_em ? String(linha.criado_em) : null,
+      atualizado_em: linha.atualizado_em ? String(linha.atualizado_em) : null,
+    },
+    produto: {
+      id: Number(produto.id),
+      sku: String(produto.sku || ''),
+      nome: String(produto.nome || ''),
+      preco_base: Number(produto.preco_venda ?? 0),
+      na_vitrine: !!projecao,
+    },
+    preco: {
+      preco: precoEf.preco,
+      promo: precoEf.promo,
+      origem: precoEf.origem,
+      linha: precoLinha
+        ? {
+            preco: Number(precoLinha.preco ?? 0),
+            preco_promo: precoLinha.preco_promo != null ? Number(precoLinha.preco_promo) : null,
+            vigencia_inicio: precoLinha.vigencia_inicio ? String(precoLinha.vigencia_inicio).slice(0, 10) : null,
+            vigencia_fim: precoLinha.vigencia_fim ? String(precoLinha.vigencia_fim).slice(0, 10) : null,
+          }
+        : null,
+    },
+    metadados: normalizarMetadados(projecao?.canal_metadados),
+    publicado_na_vitrine: String(linha.estado) === 'PUBLISHED' && canal === 'BROBOND',
+  });
+}
+
+// ---------------------------------------------------------------------------- 
+// OFERTAS — preço por canal (preço, preço promocional, vigência, canal,
+// precedência e publicação). LINHA é `commerce_precos`; o preço final é sempre
+// calculado AQUI no servidor (`precoEfetivo`: vigente canal > tabela; promo só
+// quando menor que o preço) — o cliente nunca decide dinheiro.
+// ----------------------------------------------------------------------------
+
+async function ofertasDaEmpresa(
+  escopo: { empresaId: number },
+  filtro: { canal?: string; vigentes?: boolean; q?: string } = {}
+): Promise<Record<string, unknown>[]> {
+  const s = getStore();
+  const [precos, produtos, publicacoes] = await Promise.all([
+    s.list(R_PRECOS(), { page: 1, pageSize: 4000, filter: { empresa_id: escopo.empresaId }, sort: 'id', dir: 'desc' }),
+    s.list(R_PRODUTOS(), { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId }, sort: 'nome', dir: 'asc' }),
+    s.list(R_PUBLICACOES(), { page: 1, pageSize: 4000, filter: { empresa_id: escopo.empresaId } }),
+  ]);
+  const prodPorId = new Map<number, Row>();
+  for (const p of produtos.rows) prodPorId.set(Number(p.id), p);
+  const pubPorChave = new Map<string, Row>();
+  for (const p of publicacoes.rows) {
+    const chave = `${Number(p.produto_id)}:${String(p.canal)}`;
+    const atual = pubPorChave.get(chave);
+    if (!atual || Number(p.versao) >= Number(atual.versao)) pubPorChave.set(chave, p);
+  }
+  const hoje = new Date();
+  const q = (filtro.q ?? '').trim().toLowerCase();
+  const linhas: Record<string, unknown>[] = [];
+  for (const preco of precos.rows) {
+    const produtoId = Number(preco.produto_id);
+    const canal = String(preco.canal);
+    if (filtro.canal && canal !== filtro.canal) continue;
+    const produto = prodPorId.get(produtoId);
+    if (!produto) continue;
+    const vigente = vigenciaEstaAtiva(vigenciaDe(preco, 'vigencia_inicio'), vigenciaDe(preco, 'vigencia_fim'), hoje);
+    if (filtro.vigentes && !vigente) continue;
+    const nome = String(produto.nome || '');
+    const sku = String(produto.sku || '');
+    if (q && !nome.toLowerCase().includes(q) && !sku.toLowerCase().includes(q)) continue;
+    const efetivo = precoEfetivoDeProduto(Number(produto.preco_venda ?? 0), preco);
+    const pub = pubPorChave.get(`${produtoId}:${canal}`);
+    linhas.push({
+      id: Number(preco.id),
+      produto_id: produtoId,
+      sku,
+      nome,
+      preco_base: Number(produto.preco_venda ?? 0),
+      canal,
+      preco: Number(preco.preco ?? 0),
+      preco_promo: preco.preco_promo != null ? Number(preco.preco_promo) : null,
+      vigencia_inicio: vigenciaDe(preco, 'vigencia_inicio'),
+      vigencia_fim: vigenciaDe(preco, 'vigencia_fim'),
+      vigente,
+      preco_efetivo: { preco: efetivo.preco, promo: efetivo.promo, origem: efetivo.origem },
+      publicacao_estado: pub ? String(pub.estado) : null,
+      publicacao_id: pub ? Number(pub.id) : null,
+      atualizado_em: preco.atualizado_em ? String(preco.atualizado_em) : null,
+    });
+  }
+  return linhas;
+}
+
+function vigenciaDe(row: Row, campo: 'vigencia_inicio' | 'vigencia_fim'): string | null {
+  const v = row[campo];
+  return v ? String(v).slice(0, 10) : null;
+}
+
+/** GET /api/commerce/ofertas — ofertas por canal da empresa (vigência + precedência server-side). */
+export async function listarOfertasCommerce(req: Request, res: Response) {
+  const actor = currentUser(req);
+  const escopo = escopoDoAtor(actor);
+  checkAccess(R_PRECOS(), actor, 'read');
+  const linhas = await ofertasDaEmpresa(escopo, {
+    canal: req.query.canal ? String(req.query.canal) : undefined,
+    vigentes: String(req.query.vigentes || '') === '1',
+    q: req.query.q ? String(req.query.q) : undefined,
+  });
+  res.json({ total: linhas.length, ofertas: linhas });
+}
+
+/** GET /api/commerce/ofertas/:id — detalhe de uma oferta (linha de `commerce_precos`). */
+export async function obterOfertaCommerce(req: Request, res: Response) {
+  const actor = currentUser(req);
+  const escopo = escopoDoAtor(actor);
+  checkAccess(R_PRECOS(), actor, 'read');
+  const id = Number(req.params.id);
+  const s = getStore();
+  const linha = await s.findOneWhere(R_PRECOS(), { id, empresa_id: escopo.empresaId });
+  if (!linha) throw new HttpError(404, 'Oferta não encontrada.');
+  const todas = await ofertasDaEmpresa(escopo);
+  const oferta = todas.find((o) => Number(o.id) === id);
+  if (!oferta) throw new HttpError(404, 'Oferta não encontrada.');
+  res.json({ oferta });
 }
 
 /** POST /api/commerce/produtos/:id/despublicar — sai da vitrine (BROBOND). */
