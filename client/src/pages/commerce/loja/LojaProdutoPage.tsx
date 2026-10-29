@@ -92,7 +92,7 @@ export default function LojaProdutoPage() {
   const comTamanho = detalhe.tamanhos.some((t) => t.tamanho_id != null);
   const tamanhoEscolhido = detalhe.tamanhos.find((t) => t.tamanho_id === (tamanhoSel ?? null)) ?? null;
   const disponivelDoSelecionado = comTamanho ? (tamanhoEscolhido?.disponivel ?? 0) : detalhe.tamanhos.reduce((s, t) => s + t.disponivel, 0);
-  const podeAdicionar = (!comTamanho || (tamanhoSel != null && tamanhoSel !== null)) && disponivelDoSelecionado >= qtd && disponivelDoSelecionado > 0;
+  const podeAdicionar = Number.isFinite(detalhe.produto.preco) && detalhe.produto.preco > 0 && (!comTamanho || (tamanhoSel != null && tamanhoSel !== null)) && disponivelDoSelecionado >= qtd && disponivelDoSelecionado > 0;
   const precisaTamanho = comTamanho && (tamanhoSel === null || tamanhoSel === undefined);
 
   const adicionar = () => {

@@ -22,8 +22,9 @@ const R_USUARIO_EMPRESAS = () => getResource('usuario_empresas')!;
  * só env ou unicidade da configuração.
  */
 export async function empresaDaVitrine(): Promise<number | null> {
-  const env = Number(String(process.env.COMMERCE_LOJA_EMPRESA_ID || '').trim());
-  if (Number.isSafeInteger(env) && env > 0) return env;
+  const valor = String(process.env.COMMERCE_LOJA_EMPRESA_ID || '').trim();
+  const env = Number(valor);
+  if (valor) return Number.isSafeInteger(env) && env > 0 ? env : null;
   const s = getStore();
   const configs = await s.list(R_CONFIG(), { page: 1, pageSize: 5, filter: {} });
   if (configs.total === 1) return Number(configs.rows[0].empresa_id);
@@ -69,10 +70,11 @@ export async function responsavelCheckout(empresaId: number, config: Row | null)
   const s = getStore();
   if (config?.checkout_usuario_id) {
     const dono = await s.get(R_USUARIOS(), Number(config.checkout_usuario_id));
-    if (dono && dono.ativo !== false) return Number(dono.id);
+    const concessao = dono && await s.findOneWhere(R_USUARIO_EMPRESAS(), { usuario_id: Number(dono.id), empresa_id: empresaId });
+    if (dono && dono.ativo !== false && (Number(dono.empresa_id) === empresaId || concessao)) return Number(dono.id);
     throw new HttpError(
       409,
-      'O responsável pelo checkout configurado está inativo. Ajuste em Commerce → Loja Própria antes de vender.'
+      'O responsável pelo checkout configurado está inativo ou não tem acesso à empresa. Ajuste em Commerce → Loja Própria antes de vender.'
     );
   }
   const admins = await s.list(R_USUARIOS(), { page: 1, pageSize: 500, sort: 'id', dir: 'asc', filter: { perfil: 'admin', ativo: true } });

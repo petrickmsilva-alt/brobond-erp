@@ -13,6 +13,7 @@
 // continua sendo o motor de COTAÇÃO de transportadora; ele entra aqui quando a
 // empresa configurar esse provedor — nunca é chamado "para encher tela".
 // ============================================================================
+import { HttpError } from '../errors';
 import { round2 } from './regras';
 
 export type ConfigFrete = {
@@ -58,11 +59,30 @@ export const freteRetirada: FreightProvider = {
   },
 };
 
+/** Configuração inválida nunca vira frete zero/NaN, mesmo em linhas legadas. */
+export function configuracaoFreteValida(cfg: ConfigFrete | null | undefined): boolean {
+  if (cfg?.frete_provedor === 'retirada') return true;
+  if (cfg?.frete_provedor !== 'manual') return false;
+  const valor = Number(cfg.frete_valor);
+  const limite = cfg.frete_gratis_acima;
+  const prazo = cfg.frete_prazo_dias;
+  return Number.isFinite(valor) && round2(valor) > 0
+    && (limite == null || limite === '' || (Number.isFinite(Number(limite)) && Number(limite) >= 0))
+    && (prazo == null || prazo === '' || (Number.isInteger(Number(prazo)) && Number(prazo) >= 0 && Number(prazo) <= 120));
+}
+
+export function validarConfiguracaoFrete(cfg: ConfigFrete): void {
+  if (cfg.frete_provedor !== 'nenhum' && !configuracaoFreteValida(cfg)) {
+    throw new HttpError(400, 'Configuração de frete inválida: informe uma tabela com valor positivo, limite válido e prazo de 0 a 120 dias, ou selecione retirada.', { frete_valor: 'Revise a configuração de frete.' });
+  }
+}
+
 /** Tabela manual da empresa (frete CIF com valor e prazo configurados). */
 export function freteManual(cfg: ConfigFrete): FreightProvider {
   return {
     id: 'manual',
     async cotar({ subtotal }) {
+      if (!configuracaoFreteValida(cfg) || !Number.isFinite(subtotal) || subtotal < 0) return freteNaoConfigurado.cotar({ subtotal });
       const valor = Math.max(0, round2(Number(cfg.frete_valor ?? 0)));
       const gratisAcima = cfg.frete_gratis_acima == null || cfg.frete_gratis_acima === '' ? null : Math.max(0, round2(Number(cfg.frete_gratis_acima)));
       const gratis = gratisAcima != null && subtotal >= gratisAcima;

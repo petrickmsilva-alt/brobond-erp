@@ -25,10 +25,10 @@ export function capacidadesCreators(req: Request, res: Response) {
   res.json({
     empresa_id: escopo.empresaId,
     modulos: {
-      creators: { fonte: null, consulta: false, criacao: false },
-      'creator-matches': { fonte: null, consulta: false, recomendacao: false },
-      'outreach-ai': { fonte: null, consulta: false, geracao: false, envio: false },
-      campanhas: { fonte: null, consulta: false, criacao: false },
+      creators: { estado: 'PENDENTE_DE_CONFIGURACAO', motivo: 'PERSISTENCIA_NAO_INSTALADA', fonte: null, consulta: false, criacao: false },
+      'creator-matches': { estado: 'PENDENTE_DE_CONFIGURACAO', motivo: 'PERSISTENCIA_NAO_INSTALADA', fonte: null, consulta: false, recomendacao: false },
+      'outreach-ai': { estado: 'PENDENTE_DE_CONFIGURACAO', motivo: 'PERSISTENCIA_NAO_INSTALADA', fonte: null, consulta: false, geracao: false, envio: false },
+      campanhas: { estado: 'PENDENTE_DE_CONFIGURACAO', motivo: 'PERSISTENCIA_NAO_INSTALADA', fonte: null, consulta: false, criacao: false },
     },
   });
 }

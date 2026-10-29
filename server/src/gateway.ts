@@ -26,6 +26,7 @@
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Request, Response, Router } from 'express';
 import express from 'express';
+import { gatewayAmbienteDaVitrine } from './commerce/pagamento-ambiente';
 import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
 import { checkAccess, getStore } from './services';
@@ -363,6 +364,7 @@ async function mpFetch(caminho: string, init: RequestInit, ctx: GatewayContext):
       ...init,
       headers: { accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${mpToken(ctx)}`, ...(init.headers || {}) },
       cache: 'no-store',
+      signal: init.signal ?? AbortSignal.timeout(20_000),
     });
   } catch {
     throw new HttpError(503, 'Falha de rede ao contatar o Mercado Pago.');
@@ -430,7 +432,8 @@ export const mercadopagoProvider: PaymentProvider = {
       body.installments = Math.max(1, Math.trunc(input.parcelas || 1));
       body.capture = true; // autorização + captura
     }
-    const p = await mpFetch('/v1/payments', { method: 'POST', body: JSON.stringify(body) }, ctx);
+    const p = await mpFetch('/v1/payments', { method: 'POST', headers: { 'X-Idempotency-Key': input.referencia || randomBytes(16).toString('hex') }, body: JSON.stringify(body) }, ctx);
+    if (!p.id) throw new HttpError(502, 'Mercado Pago não retornou o identificador do pagamento.');
     return {
       provider_ref: String(p.id),
       status: mpMapeiaStatus(String(p.status || 'pending')),
@@ -462,7 +465,7 @@ export const mercadopagoProvider: PaymentProvider = {
       const data = (body.data && typeof body.data === 'object' ? (body.data as Record<string, unknown>) : {}) as Record<string, unknown>;
       const ref = String(data.id || body.id || '');
       if (!ref || !/^payment/i.test(tipo)) return null;
-      return { evento_id: String(body['x-request-id'] || body.request_id || `${tipo}:${ref}`), evento: tipo, provider_ref: ref };
+      return { evento_id: String(body.id || body['x-request-id'] || body.request_id || `${tipo}:${ref}:${body.action || ''}:${body.date_created || ''}`), evento: tipo, provider_ref: ref };
     } catch {
       return null;
     }
@@ -483,7 +486,7 @@ export const mercadopagoProvider: PaymentProvider = {
       return false;
     }
     const reqId = String(headers['x-request-id'] || '');
-    const manifest = `id:${id.toLowerCase()};request-id:${reqId.toLowerCase()};ts:${ts}`;
+    const manifest = `id:${id.toLowerCase()};request-id:${reqId};ts:${ts};`;
     return compararConstante(v1.toLowerCase(), hmacHex(segredo, manifest));
   },
   async resolveWebhook(ctx: GatewayContext, parsed: WebhookParse): Promise<IntencaoWebhook> {
@@ -505,9 +508,12 @@ registrarProvider(mercadopagoProvider);
 // Configuração por empresa
 // ----------------------------------------------------------------------------
 
-async function configDaEmpresa(empresaId: number, provider: string, tx?: Tx): Promise<Row | null> {
+export async function configDaEmpresa(empresaId: number, provider: string, tx?: Tx): Promise<Row | null> {
   const s = getStore();
-  return s.findOneWhere(R_GATEWAY_CONFIGS, { empresa_id: empresaId, provider: String(provider || '').toLowerCase() }, tx);
+  const id = String(provider || '').toLowerCase();
+  const persistida = await s.findOneWhere(R_GATEWAY_CONFIGS, { empresa_id: empresaId, provider: id }, tx);
+  if (persistida || id !== 'mercadopago') return persistida;
+  return gatewayAmbienteDaVitrine(empresaId);
 }
 
 async function contextoDoProvider(empresaId: number, provider: string): Promise<GatewayContext> {
@@ -580,7 +586,8 @@ export async function configurarGateway(req: Request, res: Response) {
   }
   if (body.ativo !== undefined) patch.ativo = body.ativo !== false;
 
-  const existente = await configDaEmpresa(escopo.empresaId, provider);
+  // Escrita considera apenas a linha persistida, nunca o fallback transitório do deploy.
+  const existente = await s.findOneWhere(R_GATEWAY_CONFIGS, { empresa_id: escopo.empresaId, provider });
   let row: Row;
   if (existente) {
     row = (await s.update(R_GATEWAY_CONFIGS, Number(existente.id), patch))!;
@@ -1167,8 +1174,10 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
     }
 
     let intencao: IntencaoWebhook = null;
+    // Provedor com consulta oficial é a autoridade, inclusive quando retorna
+    // null (pendente). Nunca promover status de um campo não assinado do body.
     if (provider.resolveWebhook) intencao = await provider.resolveWebhook(ctx, parsed, payload);
-    if (!intencao) intencao = intencaoDoPayload(payload);
+    else intencao = intencaoDoPayload(payload);
     if (!intencao) {
       await s.update(R_GATEWAY_WEBHOOK_EVENTS, Number(evento.id), { status: 'ignorado', erro: 'Evento sem efeito financeiro (status irrelevante).', tentativas, ultima_tentativa_em: new Date().toISOString(), cobranca_id: Number(cobranca.id) });
       return { resultado: 'ignorado' };

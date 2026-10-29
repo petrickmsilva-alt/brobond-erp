@@ -22,10 +22,10 @@ const capabilities = {
   },
 };
 const emptyTitles = [
-  'Você ainda não possui creators cadastrados.',
-  'Não existem matches disponíveis no momento.',
-  'Nenhuma oportunidade de outreach encontrada.',
-  'Nenhuma campanha cadastrada.',
+  'Cadastro de creators indisponível.',
+  'Matching não configurado.',
+  'Outreach sem integração configurada.',
+  'Campanhas sem persistência instalada.',
 ];
 
 function renderPage(path = '/creators') {

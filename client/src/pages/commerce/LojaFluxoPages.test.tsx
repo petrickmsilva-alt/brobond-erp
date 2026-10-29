@@ -7,7 +7,7 @@
 // frontend) e ZERO MODAL em todo o fluxo.
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ToastProvider } from '../../components/ui';
@@ -16,7 +16,7 @@ import LojaProdutoPage from './loja/LojaProdutoPage';
 import LojaCarrinhoPage from './loja/LojaCarrinhoPage';
 import LojaCheckoutPage from './loja/LojaCheckoutPage';
 import LojaPedidoPage from './loja/LojaPedidoPage';
-import { adicionarAoCarrinho, limparCarrinho } from './loja/carinho';
+import { adicionarAoCarrinho, alterarQuantidade, definirCupom, limparCarrinho } from './loja/carinho';
 
 vi.mock('../../lib/api', () => ({
   apiFetch: vi.fn(),
@@ -38,6 +38,12 @@ const CONFIG = {
   loja_descricao: 'Vitrine oficial BROBOND',
   frete: { provedor: 'manual', valor: 20, gratis_acima: 300, prazo_dias: 5, disponivel: true },
   checkout_expira_minutos: 60,
+};
+
+const PREVIEW = {
+  itens: [{ produto_id: 7, tamanho_id: null, quantidade: 1, nome: 'Camiseta Brobond', sku: 'CAM-001', preco_unitario: 89.9, preco_original: null, disponivel: 8, subtotal: 89.9, ok: true }],
+  subtotal: 89.9, cupom: null, promocao: null, frete: { disponivel: true, provedor: 'manual', valor: 20, gratis: false, prazoDias: 5 },
+  desconto: 0, desconto_origem: null, totais: { subtotal: 89.9, desconto: 0, frete: 20, total: 109.9 }, frete_indisponivel: false,
 };
 
 const PRODUTO = {
@@ -195,11 +201,34 @@ describe('Loja — Carrinho (/loja/carrinho)', () => {
   });
 });
 
+describe('Loja — revalidação concorrente do carrinho', () => {
+  it('resposta atrasada não substitui os totais da quantidade mais recente', async () => {
+    adicionarAoCarrinho({ produto_id: 7, tamanho_id: null, quantidade: 1 });
+    let antiga!: (value: typeof PREVIEW) => void;
+    let consultas = 0;
+    fetchMock.mockImplementation(async (path: string) => {
+      if (path === '/loja/config') return CONFIG;
+      consultas++;
+      if (consultas === 1) return new Promise((resolve) => { antiga = resolve; });
+      return { ...PREVIEW, itens: [{ ...PREVIEW.itens[0], quantidade: 2, subtotal: 179.8 }], totais: { ...PREVIEW.totais, subtotal: 179.8, total: 199.8 } };
+    });
+    render(montar('/loja/carrinho', <Routes><Route path="/loja/carrinho" element={<LojaCarrinhoPage />} /></Routes>));
+    await waitFor(() => expect(consultas).toBe(1));
+    act(() => alterarQuantidade(7, null, 2));
+    expect(await screen.findByText('R$ 199,80')).toBeInTheDocument();
+    await act(async () => { antiga(PREVIEW); });
+    expect(screen.getByText('R$ 199,80')).toBeInTheDocument();
+    expect(screen.queryByText('R$ 109,90')).toBeNull();
+  });
+});
+
 describe('Loja — Checkout (/loja/checkout)', () => {
   it('POST /loja/checkout → navega só com o token do BACKEND (/loja/pedido/:token)', async () => {
     adicionarAoCarrinho({ produto_id: 7, tamanho_id: null, quantidade: 1 });
+    definirCupom('OFERTA-TESTE');
     fetchMock.mockImplementation(async (caminho: string, init?: RequestInit) => {
       if (caminho.startsWith('/loja/config')) return CONFIG;
+      if (caminho === '/loja/preview') return { ...PREVIEW, cupom: { codigo: 'OFERTA-TESTE', valido: true, aplicado: true, desconto: 10 }, totais: { ...PREVIEW.totais, desconto: 10, total: 99.9 } };
       if (caminho === '/loja/checkout' && init?.method === 'POST') {
         return {
           ok: true,
@@ -239,8 +268,34 @@ describe('Loja — Checkout (/loja/checkout)', () => {
     expect(submit).toBeTruthy();
     await user.click(submit!);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/loja/checkout', expect.objectContaining({ method: 'POST' })));
+    expect(fetchMock).toHaveBeenCalledWith('/loja/checkout', expect.objectContaining({ body: expect.stringContaining('"cupom":"OFERTA-TESTE"') }));
     expect(await screen.findByText('rota-pedido-token')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('acesso direto com frete indisponível não permite confirmar pedido', async () => {
+    adicionarAoCarrinho({ produto_id: 7, tamanho_id: null, quantidade: 1 });
+    fetchMock.mockImplementation(async (path: string) => path === '/loja/preview'
+      ? { ...PREVIEW, frete_indisponivel: true }
+      : { ...CONFIG, frete: { ...CONFIG.frete, disponivel: false } });
+    render(montar('/loja/checkout', <Routes><Route path="/loja/checkout" element={<LojaCheckoutPage />} /></Routes>));
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    expect(screen.getByRole('button', { name: 'Confirmar pedido' })).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalledWith('/loja/checkout', expect.anything());
+  });
+
+  it('retirada não oferece entrega gratuita no endereço nem exige endereço', async () => {
+    adicionarAoCarrinho({ produto_id: 7, tamanho_id: null, quantidade: 1 });
+    definirCupom('PROMO');
+    fetchMock.mockImplementation(async (path: string) => path === '/loja/preview'
+      ? { ...PREVIEW, cupom: { codigo: 'PROMO', valido: true, aplicado: true, desconto: 10 }, totais: { ...PREVIEW.totais, desconto: 10, frete: 0, total: 79.9 } }
+      : { ...CONFIG, frete: { ...CONFIG.frete, provedor: 'retirada', valor: 0 } });
+    render(montar('/loja/checkout', <Routes><Route path="/loja/checkout" element={<LojaCheckoutPage />} /></Routes>));
+    expect(await screen.findByText('Retirada na loja — frete grátis, sem entrega no endereço.')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('00000-000')).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.getByText('R$ 79,90')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/loja/preview', expect.objectContaining({ body: expect.stringContaining('"cupom":"PROMO"') }));
   });
 
   it('carrinho vazio redireciona para /loja/carrinho (replace) — sem tela fantasma', async () => {

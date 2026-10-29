@@ -134,6 +134,7 @@ import {
   listarCupons,
   listarPromocoes,
 } from './commerce/promocoes';
+import { estadoLoja } from './commerce/estado-loja';
 import { capacidadesCreators } from './creators';
 import { analyticsCommerce, trendsCommerce } from './commerce/analytics';
 import { processarComercioAgendado } from './commerce/outbox';
@@ -961,6 +962,7 @@ app.get('/api/creators/capabilities', wrap(capacidadesCreators));
 // promoções/cupons, fulfillment/delivery/rastreio, trends e observabilidade.
 // RBAC por recurso (checkAccess/checkFluxo) — nada aqui depende de esconder botão.
 // ------------------------------------------------------------------------------
+app.get('/api/commerce/loja/estado', wrap(estadoLoja));
 app.get('/api/commerce/produtos', wrap(listarProdutosCommerce));
 app.post('/api/commerce/produtos', wrap(projetarProdutoCommerce));
 app.get('/api/commerce/produtos/:id', wrap(obterProdutoCommerce));

@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Lock, ShieldCheck } from 'lucide-react';
 import { apiFetch, ApiError } from '../../../lib/api';
+import type { Preview } from './LojaCarrinhoPage';
 import { LojaShell, precoLoja, type ConfigLoja } from './LojaShell';
 import { lerCarrinho, limparCarrinho, useCarrinho } from './carinho';
 
@@ -37,15 +38,23 @@ export default function LojaCheckoutPage() {
   const carrinho = useCarrinho();
   const [config, setConfig] = useState<ConfigLoja | null>(null);
   const [comprador, setComprador] = useState({ nome: '', email: '', telefone: '' });
-  const [retirada, setRetirada] = useState(false);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [validando, setValidando] = useState(true);
   const [endereco, setEndereco] = useState<Endereco>(ENDERECO_VAZIO);
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState('');
   const [resposta, setResposta] = useState<RespostaCheckout | null>(null);
 
   useEffect(() => {
-    apiFetch<ConfigLoja>('/loja/config').then(setConfig).catch(() => undefined);
-  }, []);
+    let ativo = true;
+    setValidando(true);
+    setPreview(null);
+    Promise.all([apiFetch<ConfigLoja>('/loja/config'), apiFetch<Preview>('/loja/preview', { method: 'POST', body: JSON.stringify({ itens: carrinho.itens, cupom: carrinho.cupom || undefined }) })])
+      .then(([cfg, cotacao]) => { if (ativo) { setConfig(cfg); setPreview(cotacao); setErro(''); } })
+      .catch((e) => { if (ativo) setErro(e instanceof Error ? e.message : 'Não foi possível validar o checkout. Volte ao carrinho e tente novamente.'); })
+      .finally(() => { if (ativo) setValidando(false); });
+    return () => { ativo = false; };
+  }, [carrinho]);
 
   useEffect(() => {
     if (!carrinho.itens.length && !resposta) navigate('/loja/carrinho', { replace: true });
@@ -53,10 +62,12 @@ export default function LojaCheckoutPage() {
 
   const freteRetirada = config?.frete.provedor === 'retirada';
   const freteManual = config?.frete.provedor === 'manual';
-  const exigeEndereco = freteManual && !retirada;
+  const exigeEndereco = freteManual;
+  const checkoutOk = !validando && config?.frete.disponivel && config.checkout_disponivel !== false && preview?.itens?.length && !preview.frete_indisponivel && preview.itens.every((i) => i.ok) && Number.isFinite(preview.totais?.total) && preview.totais.total > 0 && (!preview.cupom || preview.cupom.valido);
 
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!checkoutOk || enviando) return;
     setEnviando(true);
     setErro('');
     try {
@@ -65,14 +76,14 @@ export default function LojaCheckoutPage() {
         body: JSON.stringify({
           chave: lerCarrinho().chave,
           itens: carrinho.itens.map((i) => ({ produto_id: i.produto_id, tamanho_id: i.tamanho_id, quantidade: i.quantidade })),
-          cupom: undefined,
+          cupom: carrinho.cupom || undefined,
           comprador: {
             nome: comprador.nome.trim(),
             email: comprador.email.trim(),
             telefone: comprador.telefone.trim() || undefined,
           },
           endereco:
-            freteRetirada && retirada
+            freteRetirada
               ? null
               : {
                   nome: endereco.nome || comprador.nome,
@@ -129,7 +140,7 @@ export default function LojaCheckoutPage() {
             )}
           </div>
           <p className="text-center text-xs text-muted">
-            Guarde o link do pedido — ele chega no e-mail informado e ficará disponível para acompanhar.
+            Guarde o link do pedido para acompanhar o pagamento e a entrega.
           </p>
         </div>
       </LojaShell>
@@ -170,13 +181,8 @@ export default function LojaCheckoutPage() {
 
           <fieldset className="rounded-2xl border border-line bg-surface p-5">
             <legend className="px-1 text-sm font-semibold text-ink">Entrega</legend>
-            {freteRetirada && (
-              <label className="mt-2 flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={retirada} onChange={(e) => setRetirada(e.target.checked)} />
-                Retirar na loja (frete grátis, sem endereço)
-              </label>
-            )}
-            {(!freteRetirada || !retirada) && (
+            {freteRetirada && <p className="mt-2 text-sm">Retirada na loja — frete grátis, sem entrega no endereço.</p>}
+            {!freteRetirada && (
               <div className="mt-3 grid gap-3 sm:grid-cols-6">
                 <label className="block text-sm sm:col-span-6">
                   <span className="text-ink-soft">CEP *</span>
@@ -217,9 +223,6 @@ export default function LojaCheckoutPage() {
                 </label>
               </div>
             )}
-            {freteRetirada && !retirada && (
-              <p className="mt-2 text-xs text-muted">Frete de retirada na loja — deixe o endereço para receber em casa (configure na loja o frete de entrega).</p>
-            )}
           </fieldset>
         </div>
 
@@ -234,10 +237,18 @@ export default function LojaCheckoutPage() {
             Pagamento via gateway (Mercado Pago). A confirmação chega por webhook assinado — a loja nunca marca “pago”
             por conta própria.
           </p>
-          <button type="submit" className="btn-accent mt-4 w-full" disabled={enviando || !carrinho.itens.length}>
+          <button type="submit" className="btn-accent mt-4 w-full" disabled={enviando || !checkoutOk}>
             {enviando ? 'Criando pedido…' : 'Confirmar pedido'}
           </button>
-          <p className="mt-3 text-center text-xs text-muted">Total exibido no carrinho · revalidado no servidor</p>
+          {validando && <p role="status" className="mt-3 text-sm text-muted">Validando preço, estoque e frete…</p>}
+          {!validando && !checkoutOk && <p role="alert" className="mt-3 text-sm text-warning">Checkout indisponível: volte ao carrinho para revisar os itens ou aguarde a configuração de frete/pagamento da loja.</p>}
+          {preview?.totais && <dl className="mt-4 space-y-2 text-sm">
+            <div className="flex justify-between"><dt>Subtotal</dt><dd>{precoLoja(preview.totais.subtotal)}</dd></div>
+            <div className="flex justify-between"><dt>Desconto</dt><dd>{precoLoja(preview.totais.desconto)}</dd></div>
+            <div className="flex justify-between"><dt>Frete</dt><dd>{preview.frete_indisponivel ? 'Frete não configurado' : precoLoja(preview.totais.frete)}</dd></div>
+            <div className="flex justify-between font-semibold border-t border-line pt-2"><dt>Total</dt><dd>{precoLoja(preview.totais.total)}</dd></div>
+          </dl>}
+          <p className="mt-3 text-center text-xs text-muted">Total revalidado no servidor ao confirmar.</p>
         </aside>
       </form>
     </LojaShell>

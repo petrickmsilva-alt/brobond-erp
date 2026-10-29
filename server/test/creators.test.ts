@@ -33,6 +33,8 @@ describe('Creators — capacidades, identidade e escopo', () => {
       assert.equal(headers['Cache-Control'], 'private, no-store');
       assert.deepEqual(Object.keys(body.modulos), ['creators', 'creator-matches', 'outreach-ai', 'campanhas']);
       for (const capability of Object.values(body.modulos) as any[]) {
+        assert.equal(capability.estado, 'PENDENTE_DE_CONFIGURACAO');
+        assert.equal(capability.motivo, 'PERSISTENCIA_NAO_INSTALADA');
         assert.equal(capability.fonte, null);
         assert.equal(capability.consulta, false);
         assert.ok(!Object.values(capability).includes(true));

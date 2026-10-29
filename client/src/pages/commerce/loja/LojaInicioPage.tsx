@@ -24,6 +24,7 @@ type ProdutoPublico = {
 
 export default function LojaInicioPage() {
   const [produtos, setProdutos] = useState<ProdutoPublico[]>([]);
+  const [pagina, setPagina] = useState(1);
   const [total, setTotal] = useState(0);
   const [busca, setBusca] = useState('');
   const [termo, setTermo] = useState('');
@@ -31,14 +32,15 @@ export default function LojaInicioPage() {
   const [erro, setErro] = useState('');
 
   useEffect(() => {
-    const t = window.setTimeout(() => setTermo(busca.trim()), 300);
+    const t = window.setTimeout(() => { setTermo(busca.trim()); setPagina(1); }, 300);
     return () => window.clearTimeout(t);
   }, [busca]);
 
   useEffect(() => {
     let vivo = true;
     setCarregando(true);
-    apiFetch<{ total: number; produtos: ProdutoPublico[] }>(`/loja/produtos?page=1&pageSize=48${termo ? `&q=${encodeURIComponent(termo)}` : ''}`)
+    setErro('');
+    apiFetch<{ total: number; produtos: ProdutoPublico[] }>(`/loja/produtos?page=${pagina}&pageSize=48${termo ? `&q=${encodeURIComponent(termo)}` : ''}`)
       .then((r) => {
         if (!vivo) return;
         setProdutos(r.produtos);
@@ -53,7 +55,7 @@ export default function LojaInicioPage() {
     return () => {
       vivo = false;
     };
-  }, [termo]);
+  }, [termo, pagina]);
 
   return (
     <LojaShell>
@@ -90,14 +92,14 @@ export default function LojaInicioPage() {
             ))}
             <span className="sr-only">Carregando produtos…</span>
           </div>
-        ) : produtos.length === 0 ? (
+        ) : erro ? null : produtos.length === 0 ? (
           <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-line bg-surface p-10 text-center">
             <PackageSearch className="h-8 w-8 text-muted" aria-hidden="true" />
-            <h2 className="font-medium">{termo ? 'Nada encontrado' : 'Nenhum produto publicado'}</h2>
+            <h2 className="font-medium">{termo ? 'Nada encontrado' : 'Nenhum produto disponível na loja.'}</h2>
             <p className="max-w-md text-sm text-muted">
               {termo
                 ? 'Tente outro termo ou limpe a busca.'
-                : 'Os produtos aparecem aqui assim que a equipe publicá-los na vitrine. Volte em breve!'}
+                : 'A equipe pode publicar um produto existente em Commerce → Produtos → Publicar no canal BROBOND. A disponibilidade depende do estoque real.'}
             </p>
           </div>
         ) : (
@@ -135,8 +137,12 @@ export default function LojaInicioPage() {
             </ul>
             <p className="text-center text-xs text-muted">
               {total} produto(s) publicado(s)
-              {total > produtos.length ? ` · mostrando os ${produtos.length} primeiros` : ''}
+              {total > 48 ? ` · página ${pagina} de ${Math.ceil(total / 48)}` : ''}
             </p>
+            {total > 48 && <nav aria-label="Paginação da vitrine" className="flex justify-center gap-3">
+              <button type="button" className="btn-secondary" disabled={pagina <= 1} onClick={() => setPagina((p) => p - 1)}>Anterior</button>
+              <button type="button" className="btn-secondary" disabled={pagina * 48 >= total} onClick={() => setPagina((p) => p + 1)}>Próxima</button>
+            </nav>}
           </>
         )}
       </div>

@@ -13,6 +13,7 @@ export type ConfigLoja = {
   loja_descricao: string | null;
   frete: { provedor: string; valor: number; gratis_acima: number | null; prazo_dias: number | null; disponivel: boolean; motivo?: string };
   checkout_expira_minutos: number;
+  checkout_disponivel?: boolean;
 };
 
 export function useConfigLoja(): { config: ConfigLoja | null; erro: string | null } {

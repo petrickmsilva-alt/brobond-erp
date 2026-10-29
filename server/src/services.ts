@@ -1,3 +1,4 @@
+import { validarConfiguracaoFrete, type ConfigFrete } from './commerce/frete';
 // Camada de serviço: CRUD genérico + regras de negócio por módulo
 // (estoque, movimentações, ordens, usuários) + auditoria.
 import { randomBytes } from 'node:crypto';
@@ -1172,6 +1173,7 @@ async function validarConversaoDeUnidade(data: Row, empresaId: number, tx?: Tx):
 export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor; cyclicCounting?: Record<string, unknown> } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
   const s = getStore();
+  if (r.key === 'commerce_configuracoes') validarConfiguracaoFrete(data as ConfigFrete);
   // CRM 3.0: oportunidade perdida exige motivo de perda (espelha o CHECK
   // `crm_oportunidades_perda_exige_motivo` do banco; aqui falha rápido com 400
   // e campo identificado, em vez de deixar o PostgreSQL rejeitar no commit).
@@ -1191,6 +1193,10 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
   let conviteEntregue = false;
   try {
     const criado = await s.transaction(async (tx) => {
+      if (r.key === 'commerce_configuracoes' && data.checkout_usuario_id) {
+        const { responsavelCheckout } = await import('./commerce/loja-base');
+        await responsavelCheckout(escopo.empresaId, data);
+      }
       // Regras específicas
       if (r.key === 'usuarios') await prepareUserPayload(data, null, actor);
       if (r.key === 'catalogos') await prepareCatalogosPayload(data, null, actor);
@@ -1370,6 +1376,11 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       const before = await s.findOneWhere(r, filtroAntes, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
       assertRegistroDaEmpresaParaEscrita(r, before, escopo);
+      if (r.key === 'commerce_configuracoes') validarConfiguracaoFrete({ ...before, ...data } as ConfigFrete);
+      if (r.key === 'commerce_configuracoes' && data.checkout_usuario_id) {
+        const { responsavelCheckout } = await import('./commerce/loja-base');
+        await responsavelCheckout(escopo.empresaId, { ...before, ...data });
+      }
       // CRM 3.0: depende do desfecho ATUAL da oportunidade (estágio congelado
       // depois do fechamento, motivo de perda só em perdida, data de fechamento).
       if (r.key === 'crm_oportunidades') {

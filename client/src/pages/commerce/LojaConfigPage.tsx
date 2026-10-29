@@ -8,7 +8,7 @@
 // Escrita: gerente/admin (recurso + módulo exigem gerente no backend).
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
-import { ExternalLink, Save, Store, Truck } from 'lucide-react';
+import { ExternalLink, RefreshCw, Save, Store, Truck } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../../components/ui';
 import { useAuth } from '../../auth/AuthContext';
@@ -25,7 +25,15 @@ type Config = {
   checkout_expira_minutos: number | null;
 };
 
+type EstadoLoja = {
+  configuracao: Config | null;
+  empresa_id: number; status: string; abrir_loja: boolean; vitrine_disponivel: boolean; frete_configurado: boolean; responsavel_checkout_id: number | null;
+  pagamento: { origem?: string; configurado: boolean; ativo: boolean; tem_token: boolean; tem_webhook: boolean; ambiente: string | null; conexao_validada: boolean; credenciais_ambiente_detectadas: boolean };
+  pendencias: { codigo: string; mensagem: string; caminho: string | null }[];
+};
+
 type Formulario = {
+  checkout_usuario_id: string;
   loja_nome: string;
   loja_descricao: string;
   frete_provedor: string;
@@ -36,6 +44,7 @@ type Formulario = {
 };
 
 const VAZIO: Formulario = {
+  checkout_usuario_id: '',
   loja_nome: '',
   loja_descricao: '',
   frete_provedor: 'nenhum',
@@ -53,17 +62,21 @@ export default function CommerceLojaConfigPage() {
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState('');
+  const [estado, setEstado] = useState<EstadoLoja | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
   const [form, setForm] = useState<Formulario>(VAZIO);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
     setErro('');
+    setEstado(null);
     try {
-      const r = await apiFetch<{ rows?: Config[] }>(`/commerce_configuracoes?page=1&pageSize=5`);
-      const linha = r.rows?.[0] ?? null;
+      const situacao = await apiFetch<EstadoLoja>('/commerce/loja/estado');
+      if (!Array.isArray(situacao.pendencias) || typeof situacao.abrir_loja !== 'boolean' || !('configuracao' in situacao)) throw new Error('Estado da loja inválido.');
+      const linha = situacao.configuracao;
       setConfig(linha);
       setForm({
+        checkout_usuario_id: linha?.checkout_usuario_id != null ? String(linha.checkout_usuario_id) : '',
         loja_nome: linha?.loja_nome ?? '',
         loja_descricao: linha?.loja_descricao ?? '',
         frete_provedor: linha?.frete_provedor ?? 'nenhum',
@@ -72,6 +85,7 @@ export default function CommerceLojaConfigPage() {
         frete_prazo_dias: linha?.frete_prazo_dias != null ? String(linha.frete_prazo_dias) : '',
         checkout_expira_minutos: linha?.checkout_expira_minutos != null ? String(linha.checkout_expira_minutos) : '60',
       });
+      setEstado(situacao);
     } catch (e) {
       setErro(e instanceof ApiError ? e.message : 'Não foi possível carregar a configuração da loja.');
     } finally {
@@ -84,11 +98,12 @@ export default function CommerceLojaConfigPage() {
   }, [carregar]);
 
   const salvar = async () => {
-    if (!podeGerir) return;
+    if (!podeGerir || !estado) return;
     setSalvando(true);
     setErro('');
     try {
       const corpo = {
+        checkout_usuario_id: form.checkout_usuario_id.trim() ? Number(form.checkout_usuario_id) : null,
         loja_nome: form.loja_nome.trim() || null,
         loja_descricao: form.loja_descricao.trim() || null,
         frete_provedor: form.frete_provedor,
@@ -117,7 +132,7 @@ export default function CommerceLojaConfigPage() {
 
   if (carregando) return <Spinner label="Carregando configuração da loja…" />;
 
-  const freteOk = form.frete_provedor !== 'nenhum';
+  const freteOk = estado?.frete_configurado === true;
 
   return (
     <div className="space-y-6">
@@ -125,13 +140,25 @@ export default function CommerceLojaConfigPage() {
         title="Loja própria"
         description="Configuração da vitrine em /loja: identidade, frete (FreightProvider), expiração do carrinho e responsável pelas linhas de checkout."
         actions={
-          <a className="btn-secondary" href="/loja" target="_blank" rel="noreferrer">
-            <ExternalLink className="h-4 w-4" aria-hidden="true" /> Abrir a loja
-          </a>
+          estado?.abrir_loja ? <a className="btn-secondary" href="/loja" target="_blank" rel="noreferrer">
+            <ExternalLink className="h-4 w-4" aria-hidden="true" /> Abrir a Loja
+          </a> : <button type="button" className="btn-secondary" disabled aria-describedby="estado-loja">Abrir a Loja</button>
         }
       />
 
-      {erro && <Alert tone="red">{erro}</Alert>}
+      {erro && <Alert tone="red">{erro} <button type="button" className="btn-secondary" onClick={() => void carregar()}>Tentar novamente</button></Alert>}
+      <section id="estado-loja" className="rounded-xl border border-line bg-surface p-4 space-y-3" aria-live="polite">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-semibold">Estado operacional salvo</h2>
+          <Badge tone={estado?.abrir_loja ? 'green' : 'amber'}>{estado?.abrir_loja ? 'CONFIGURADO' : 'PENDENTE DE CONFIGURAÇÃO'}</Badge>
+          <button type="button" className="btn-secondary" onClick={() => void carregar()}><RefreshCw className="h-4 w-4" aria-hidden="true" /> Verificar novamente</button>
+        </div>
+        {!estado ? <p className="text-sm text-muted">Não foi possível verificar a prontidão. Abrir a Loja permanece bloqueado até a verificação.</p> : <>
+          <p className="text-sm text-muted">Vitrine: {estado.vitrine_disponivel ? 'DISPONÍVEL' : 'CONFIGURAÇÃO PENDENTE'} · Responsável resolvido: {estado.responsavel_checkout_id ? `#${estado.responsavel_checkout_id}` : 'pendente'} · Empresa #{estado.empresa_id}</p>
+          {estado.pendencias.length > 0 && <ul className="list-disc pl-5 space-y-2 text-sm">{estado.pendencias.map((p) => <li key={p.codigo}>{p.mensagem} {p.caminho && <a className="text-primary underline" href={p.caminho}>Ver configuração</a>}</li>)}</ul>}
+          <p className="text-xs text-muted">O estado reflete dados persistidos, não alterações ainda não salvas. Configurado não comprova conexão externa ou pagamento aprovado.</p>
+        </>}
+      </section>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <section className="rounded-xl border border-line bg-surface p-4" aria-labelledby="identidade">
@@ -173,11 +200,11 @@ export default function CommerceLojaConfigPage() {
                 onChange={(e) => setForm((f) => ({ ...f, checkout_expira_minutos: e.target.value }))}
               />
             </label>
-            <p className="rounded-lg bg-canvas p-3 text-xs text-muted">
-              Responsável pelo checkout: {config?.checkout_usuario_id ? `usuário #${config.checkout_usuario_id}` : 'resolvido automaticamente (admin ativo da empresa)'}.
-              O servidor recusa o checkout com instrução clara caso não exista ninguém elegível — nunca escolhe usuário
-              de outra empresa.
-            </p>
+            <label id="responsavel" className="block text-sm">
+              <span className="text-ink-soft">Responsável pelo checkout (ID do usuário)</span>
+              <input className="input mt-1" type="number" min={1} step={1} value={form.checkout_usuario_id} disabled={!podeGerir} placeholder="Automático: administrador ativo da empresa" onChange={(e) => setForm((f) => ({ ...f, checkout_usuario_id: e.target.value }))} />
+            </label>
+            <p className="rounded-lg bg-canvas p-3 text-xs text-muted">Vazio = administrador ativo desta empresa. Um responsável explícito deve estar ativo e autorizado na empresa; o checkout nunca usa um usuário de outro tenant.</p>
           </div>
         </section>
 
@@ -201,8 +228,7 @@ export default function CommerceLojaConfigPage() {
             </label>
             {form.frete_provedor === 'nenhum' && (
               <Alert tone="amber">
-                “Frete não configurado”: o carrinho mostra esta mensagem exata e o checkout recusa — nenhum valor de
-                frete é inventado.
+                Frete não configurado — CONFIGURAÇÃO PENDENTE. Selecione retirada na loja, se a operação oferece retirada, ou informe a tabela real de entrega da empresa e salve. Sem isso, o checkout permanece bloqueado.
               </Alert>
             )}
             {form.frete_provedor === 'retirada' && (
@@ -247,22 +273,31 @@ export default function CommerceLojaConfigPage() {
             )}
             <div className="flex items-center gap-2 text-sm">
               <span className="text-muted">Estado atual:</span>
-              <Badge tone={freteOk ? 'green' : 'red'}>{freteOk ? 'cotação ativa' : 'não configurado'}</Badge>
+              <Badge tone={freteOk ? 'green' : 'red'}>{freteOk ? 'CONFIGURADO' : 'PENDENTE DE CONFIGURAÇÃO'}</Badge>
             </div>
           </div>
         </section>
       </div>
 
+      <section id="pagamento" className="rounded-xl border border-line bg-surface p-4 space-y-3">
+        <h2 className="font-semibold">Mercado Pago — gateway do checkout</h2>
+        <Badge tone={estado?.pagamento.configurado ? 'green' : 'amber'}>{estado?.pagamento.configurado ? 'CONFIGURADO' : 'PENDENTE DE CONFIGURAÇÃO'}</Badge>
+        {estado && <p className="text-sm text-muted">Origem {estado.pagamento.origem === 'ambiente_commerce' ? 'ambiente seguro do servidor' : 'configuração por empresa'} · Gateway {estado.pagamento.ativo ? 'ativo' : 'inativo/ausente'} · Access Token {estado.pagamento.tem_token ? 'reconhecido' : 'ausente ou inválido'} · Webhook {estado.pagamento.tem_webhook ? 'configurado' : 'pendente'} · Ambiente {estado.pagamento.ambiente ?? 'não definido'}.</p>}
+        <p className="text-sm text-muted">Nenhuma credencial é exibida ou alterada aqui. O canal de relatórios e o gateway de cobrança são configurações distintas. {estado?.pagamento.credenciais_ambiente_detectadas ? 'Credencial de ambiente detectada. O servidor a reutiliza somente para a empresa vinculada à vitrine e com o segredo de webhook presente; a configuração persistida tem prioridade.' : ''}</p>
+        <a className="btn-secondary" href="/conectores/mercado-pago">Consultar integração Mercado Pago</a>
+        <p className="text-sm text-muted">Webhook do checkout: <code>/api/gateway/webhooks/mercadopago</code> no domínio público do ERP. Confirme no painel do Mercado Pago que os eventos de pagamento são enviados para esse endereço, não somente ao webhook de relatórios do canal.</p>
+        <p className="text-xs text-muted">Se o gateway estiver pendente, o responsável pelo deploy deve verificar o vínculo COMMERCE_LOJA_EMPRESA_ID e as variáveis já provisionadas MERCADOPAGO_ACCESS_TOKEN e MERCADOPAGO_WEBHOOK_SECRET. Para configuração persistida por empresa, a API existente é PUT /api/financeiro/gateway/config (admin com reautenticação). Esta instalação não possui tela financeira de configuração do gateway. Não recrie credenciais. A validação de conexão e o teste financeiro devem ser feitos no ambiente autorizado.</p>
+      </section>
       <div className="flex items-center gap-3">
         {podeGerir ? (
-          <button type="button" className="btn-primary" disabled={salvando} onClick={() => void salvar()}>
+          <button type="button" className="btn-primary" disabled={salvando || !estado} onClick={() => void salvar()}>
             <Save className="h-4 w-4" aria-hidden="true" /> {salvando ? 'Salvando…' : 'Salvar configuração'}
           </button>
         ) : (
           <Badge tone="slate">Somente leitura para o seu perfil</Badge>
         )}
         <span className="text-xs text-muted">
-          Pagamentos da vitrine: Mercado Pago configurado em Financeiro → Gateway (obrigatório para o go-live).
+          Salve e confira as pendências acima para habilitar a abertura da loja.
         </span>
       </div>
     </div>

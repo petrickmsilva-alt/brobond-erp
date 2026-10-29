@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { RefreshCw } from 'lucide-react';
 import type { Module } from '../../modules';
 import { MODULES } from '../../modules';
-import { Alert, EmptyState, PageHeader, Spinner } from '../../components/ui';
+import { Alert, Badge, EmptyState, PageHeader, Spinner } from '../../components/ui';
 import { apiFetch, ApiError } from '../../lib/api';
 
 type Capability = {
@@ -19,25 +19,25 @@ type Capabilities = { empresa_id: number; modulos: Record<string, Capability> };
 const CONTENT: Record<string, { title: string; empty: string; description: string; source: string }> = {
   creators: {
     title: 'CREATORS',
-    empty: 'Você ainda não possui creators cadastrados.',
+    empty: 'Cadastro de creators indisponível.',
     description: 'O cadastro de creators não possui persistência conectada nesta instalação. Por isso, não há ação de cadastro disponível nesta página.',
     source: 'Perfis e parcerias precisam de uma fonte própria de creators. Clientes e representantes do ERP não são convertidos automaticamente em creators.',
   },
   'creator-matches': {
     title: 'MATCHES',
-    empty: 'Não existem matches disponíveis no momento.',
+    empty: 'Matching não configurado.',
     description: 'Para iniciar o processo, é necessário conectar uma base de creators, campanhas e um mecanismo de matching. Esta instalação não possui esse mecanismo.',
     source: 'Scores e recomendações só podem ser apresentados quando fornecidos por um mecanismo real de matching. Nenhuma afinidade é simulada.',
   },
   'outreach-ai': {
     title: 'OUTREACH AI',
-    empty: 'Nenhuma oportunidade de outreach encontrada.',
+    empty: 'Outreach sem integração configurada.',
     description: 'Quando houver creators ou oportunidades elegíveis em uma fonte conectada, elas poderão ser consultadas aqui. Não há pipeline de outreach conectado nesta instalação.',
     source: 'Não há integração de mensagens, geração por IA ou envio para creators nesta instalação. Nenhuma mensagem ou interação é simulada.',
   },
   campanhas: {
     title: 'CAMPANHAS',
-    empty: 'Nenhuma campanha cadastrada.',
+    empty: 'Campanhas sem persistência instalada.',
     description: 'O cadastro de campanhas com creators não possui persistência conectada nesta instalação. Nenhuma ação de criação ou edição é oferecida sem esse fluxo.',
     source: 'Campanhas de aquisição do CRM pertencem a outro domínio e não são tratadas como campanhas com creators. Resultados e ROI não são estimados sem dados.',
   },
@@ -122,6 +122,7 @@ export default function CreatorsModulePage({ module }: { module: Module }) {
         {state.status === 'success' && (
           <>
             <div className="px-4 pt-4">
+              <div className="mb-3"><Badge tone="amber">PENDENTE DE CONFIGURAÇÃO</Badge></div>
               <Alert tone="blue">
                 <strong>Sem fonte de dados conectada.</strong> Os recursos de dados deste módulo não estão instalados no servidor. Esta informação não representa uma consulta com total zero.
               </Alert>
@@ -130,7 +131,7 @@ export default function CreatorsModulePage({ module }: { module: Module }) {
             <div className="border-t border-line p-4 text-sm text-slate-700 dark:text-slate-200">
               <p className="font-semibold">Origem dos dados</p>
               <p className="mt-1 break-words">{content.source}</p>
-              <p className="mt-2">Solicite ao responsável pela implantação a conexão da fonte de dados deste domínio.</p>
+              <p className="mt-2">Não existe um fluxo de configuração ou cadastro instalado para este domínio. O responsável pela implantação precisa disponibilizar a persistência e as APIs antes de habilitar criação, edição ou consulta de registros. Não é possível resolver esta dependência com credenciais de outros módulos.</p>
             </div>
           </>
         )}

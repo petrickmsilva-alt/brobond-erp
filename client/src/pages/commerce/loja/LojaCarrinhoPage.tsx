@@ -3,12 +3,12 @@
 // Revalida PREÇO/ESTOQUE/CUPOM/FRETE no servidor (/api/loja/preview) a cada
 // mudança — os números exibidos são sempre os do backend.
 // ============================================================================
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Minus, Plus, ShoppingBag, Trash2 } from 'lucide-react';
 import { apiFetch, ApiError } from '../../../lib/api';
 import { LojaShell, precoLoja, type ConfigLoja } from './LojaShell';
-import { alterarQuantidade, limparCarrinho, removerDoCarrinho, useCarrinho } from './carinho';
+import { alterarQuantidade, definirCupom, limparCarrinho, removerDoCarrinho, useCarrinho } from './carinho';
 
 type ItemPreview = {
   produto_id: number;
@@ -24,7 +24,7 @@ type ItemPreview = {
   aviso?: string;
 };
 
-type Preview = {
+export type Preview = {
   itens: ItemPreview[];
   subtotal: number;
   cupom: { codigo: string; valido: boolean; aplicado: boolean; desconto: number; erro?: string } | null;
@@ -43,8 +43,8 @@ export default function LojaCarrinhoPage() {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [erro, setErro] = useState('');
   const [carregando, setCarregando] = useState(true);
-  const [cupomInput, setCupomInput] = useState('');
-  const [cupomAplicado, setCupomAplicado] = useState('');
+  const [cupomInput, setCupomInput] = useState(carrinho.cupom || '');
+  const sequencia = useRef(0);
   const [config, setConfig] = useState<ConfigLoja | null>(null);
 
   useEffect(() => {
@@ -53,6 +53,7 @@ export default function LojaCarrinhoPage() {
 
   const revalidar = useCallback(
     async (codigoCupom?: string) => {
+      const atual = ++sequencia.current;
       if (!carrinho.itens.length) {
         setPreview(null);
         setCarregando(false);
@@ -68,25 +69,26 @@ export default function LojaCarrinhoPage() {
             cupom: codigoCupom || undefined,
           }),
         });
-        setPreview(r);
-        setCupomAplicado(codigoCupom || '');
+        if (atual === sequencia.current) setPreview(r);
       } catch (e) {
+        if (atual !== sequencia.current) return;
         setErro(e instanceof ApiError ? e.message : 'Não foi possível validar o carrinho.');
         setPreview(null);
       } finally {
-        setCarregando(false);
+        if (atual === sequencia.current) setCarregando(false);
       }
     },
     [carrinho.itens]
   );
 
   useEffect(() => {
-    void revalidar(cupomAplicado || undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [carrinho]);
+    void revalidar(carrinho.cupom || undefined);
+    return () => { sequencia.current++; };
+  }, [carrinho.cupom, revalidar]);
 
   const aplicarCupom = () => {
-    void revalidar(cupomInput.trim().toUpperCase() || undefined);
+    if ((carrinho.cupom || '') === cupomInput.trim().toUpperCase()) void revalidar(carrinho.cupom);
+    else definirCupom(cupomInput);
   };
 
   const temItens = carrinho.itens.length > 0;
@@ -234,10 +236,11 @@ export default function LojaCarrinhoPage() {
             {config && !config.frete.disponivel && (
               <p className="mt-3 rounded-lg bg-canvas p-2 text-xs text-warning">{config.frete.motivo ?? 'Frete não configurado'} — a entrega precisa ser configurada antes do checkout.</p>
             )}
+            {config?.checkout_disponivel === false && <p className="mt-3 text-sm text-warning">Pagamento com configuração pendente. O checkout está temporariamente indisponível.</p>}
             <button
               type="button"
               className="btn-accent mt-4 w-full"
-              disabled={!preview || carregando || preview.itens.some((i) => !i.ok) || preview.frete_indisponivel}
+              disabled={!preview || carregando || preview.itens.some((i) => !i.ok) || preview.frete_indisponivel || !!erro || config?.checkout_disponivel === false || !!(preview.cupom && !preview.cupom.valido)}
               onClick={() => navigate('/loja/checkout')}
             >
               Continuar para o checkout

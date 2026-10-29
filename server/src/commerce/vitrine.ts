@@ -25,8 +25,9 @@ import { saldoVendavel } from '../estoqueCanonico';
 import { attachImages } from '../uploads';
 import { marketplaceSaleReference } from '../../../modules/connectors/ingestion/sales.service';
 import { connectorCuid } from '../../../modules/connectors/core/id';
-import { cotarFrete } from './frete';
+import { configuracaoFreteValida, cotarFrete } from './frete';
 import { freteDaConfig, exigirVitrine, responsavelCheckout } from './loja-base';
+import { pagamentoDaLoja } from './estado-loja';
 import { disponibilidadesPorTamanho, normalizarMetadados } from './catalogo';
 import { montarVisaoDaSale, ORIGEM_CHECKOUT } from './pedidos';
 import {
@@ -103,7 +104,9 @@ function precoPublico(produto: Row, precos: Map<string, Row>): { preco: number; 
 
 export async function lojaConfigPublica(req: Request, res: Response) {
   const { empresaId, config } = await exigirVitrine();
-  void empresaId;
+  let responsavelOk = false;
+  try { await responsavelCheckout(empresaId, config); responsavelOk = true; }
+  catch (error) { if (!(error instanceof HttpError) || error.status !== 409) throw error; }
   res.json({
     loja_nome: config?.loja_nome ? String(config.loja_nome) : 'BROBOND',
     loja_descricao: config?.loja_descricao ? String(config.loja_descricao) : null,
@@ -112,9 +115,10 @@ export async function lojaConfigPublica(req: Request, res: Response) {
       valor: config?.frete_valor != null ? Number(config.frete_valor) : 0,
       gratis_acima: config?.frete_gratis_acima != null ? Number(config.frete_gratis_acima) : null,
       prazo_dias: config?.frete_prazo_dias != null ? Number(config.frete_prazo_dias) : null,
-      disponivel: String(config?.frete_provedor || 'nenhum') !== 'nenhum',
-      ...(String(config?.frete_provedor || 'nenhum') === 'nenhum' ? { motivo: 'Frete não configurado' } : {}),
+      disponivel: configuracaoFreteValida(freteDaConfig(config)),
+      ...(!configuracaoFreteValida(freteDaConfig(config)) ? { motivo: 'Frete não configurado' } : {}),
     },
+    checkout_disponivel: responsavelOk && configuracaoFreteValida(freteDaConfig(config)) && (await pagamentoDaLoja(empresaId)).configurado,
     checkout_expira_minutos: config?.checkout_expira_minutos != null ? Number(config.checkout_expira_minutos) : 60,
   });
 }
@@ -127,8 +131,8 @@ export async function lojaProdutosPublicos(req: Request, res: Response) {
   const { empresaId, visiveis, projecoes, precos } = await carregarVitrine(await exigirEmpresa());
   const q = String(req.query.q || '').trim().toLowerCase();
   const somenteDestaques = req.query.destaque === '1';
-  const pagina = Math.max(1, Number(req.query.page) || 1);
-  const tamanho = Math.min(60, Number(req.query.pageSize) || 24);
+  const pagina = Math.max(1, Math.trunc(Number(req.query.page)) || 1);
+  const tamanho = Math.max(1, Math.min(60, Math.trunc(Number(req.query.pageSize)) || 24));
 
   let lista = [...visiveis.values()].map((p) => ({ produto: p, proj: projecoes.get(Number(p.id))! }));
   if (somenteDestaques) lista = lista.filter((l) => l.produto.destaque === true);
@@ -236,12 +240,13 @@ async function resolverItensCarrinho(
   const { visiveis, projecoes, precos } = await carregarVitrine(empresaId);
   void projecoes;
   const out: ItemResolvido[] = [];
+  const chaves = new Set<string>();
   for (const bruto2 of bruto) {
     const item = (bruto2 && typeof bruto2 === 'object' ? bruto2 : {}) as Record<string, unknown>;
     const produtoId = Number(item.produto_id);
-    const quantidade = Math.trunc(Number(item.quantidade || 0));
-    if (!produtoId) throw new HttpError(400, 'Item do carrinho sem produto.', { itens: 'Inválido' });
-    if (!quantidade || quantidade < 1 || quantidade > 99) {
+    const quantidade = Number(item.quantidade);
+    if (!Number.isSafeInteger(produtoId) || produtoId <= 0) throw new HttpError(400, 'Item do carrinho sem produto.', { itens: 'Inválido' });
+    if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 99) {
       throw new HttpError(400, 'Quantidade inválida (1 a 99) no carrinho.', { itens: 'Quantidade inválida' });
     }
     const produto = visiveis.get(produtoId);
@@ -250,8 +255,12 @@ async function resolverItensCarrinho(
       throw new HttpError(409, 'Um dos itens não está mais disponível na vitrine.');
     }
     const tamanhoId = item.tamanho_id == null || item.tamanho_id === '' ? null : Number(item.tamanho_id);
-    if (tamanhoId !== null && !Number.isInteger(tamanhoId)) throw new HttpError(400, 'Tamanho inválido no carrinho.');
+    if (tamanhoId !== null && (!Number.isSafeInteger(tamanhoId) || tamanhoId <= 0)) throw new HttpError(400, 'Tamanho inválido no carrinho.');
+    const chave = `${produtoId}:${tamanhoId ?? ''}`;
+    if (chaves.has(chave)) throw new HttpError(400, 'Item duplicado no carrinho. Atualize a quantidade na mesma linha.');
+    chaves.add(chave);
     const preco = precoPublico(produto, precos);
+    if (!Number.isFinite(preco.preco) || preco.preco <= 0) throw new HttpError(409, 'Um dos itens está sem preço válido na vitrine.');
     const escopo = escopoDeSistema(empresaId);
     const grade = await disponibilidadesPorTamanho(escopo, produtoId);
     const comTamanho = grade.filter((g) => g.tamanho_id != null);
@@ -369,6 +378,7 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'E-mail inválido.', { comprador: 'E-mail obrigatório' });
 
   const itens = await resolverItensCarrinho(empresaId, corpo);
+  if (itens.some((i) => i.disponivel < i.quantidade)) throw new HttpError(409, 'Estoque insuficiente para um dos itens. Atualize o carrinho.');
   const subtotal = round2(itens.reduce((soma, i) => soma + i.preco_unitario * i.quantidade, 0));
 
   // FRETE: sem provedor configurado o checkout recusa com a mensagem exata.
@@ -403,6 +413,8 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
     frete: frete.valor,
     desconto: desconto.desconto,
   });
+
+  if (!Number.isFinite(totais.total) || totais.total <= 0) throw new HttpError(409, 'Total inválido para pagamento. Revise o carrinho.');
 
   const dono = await responsavelCheckout(empresaId, config);
   const escopo = escopoDeSistema(empresaId);
@@ -599,7 +611,11 @@ async function escolherProvedorPagamento(empresaId: number): Promise<string> {
   const s = getStore();
   const configs = await s.list(R_GATEWAY_CONFIGS, { page: 1, pageSize: 20, filter: { empresa_id: empresaId, ativo: true } });
   const mp = configs.rows.find((c) => String(c.provider) === 'mercadopago');
-  if (mp) return 'mercadopago';
+  const estadoPagamento = await pagamentoDaLoja(empresaId);
+  if (mp || estadoPagamento.configurado) {
+    if (!estadoPagamento.configurado) throw new HttpError(409, 'Mercado Pago com configuração pendente: revise Access Token e webhook do gateway de checkout em Commerce → Loja própria.');
+    return 'mercadopago';
+  }
   if (process.env.NODE_ENV !== 'production' && configs.rows.find((c) => String(c.provider) === 'mock')) return 'mock';
   throw new HttpError(
     409,

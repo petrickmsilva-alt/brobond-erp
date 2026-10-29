@@ -16,6 +16,7 @@ export type ItemCarrinho = {
 
 export type Carrinho = {
   chave: string;
+  cupom?: string;
   itens: ItemCarrinho[];
 };
 
@@ -41,7 +42,7 @@ function ler(): Carrinho {
             quantidade: Math.max(1, Math.min(99, Math.trunc(i.quantidade || 1))),
           }))
       : [];
-    return { chave: typeof parsed.chave === 'string' && parsed.chave.length >= 8 ? parsed.chave : novaChave(), itens };
+    return { chave: typeof parsed.chave === 'string' && parsed.chave.length >= 8 ? parsed.chave : novaChave(), itens, cupom: typeof parsed.cupom === 'string' ? parsed.cupom.slice(0, 40) : '' };
   } catch {
     return { chave: novaChave(), itens: [] };
   }
@@ -76,11 +77,9 @@ export function adicionarAoCarrinho(item: ItemCarrinho): void {
   const existente = estado.itens.find(
     (i) => i.produto_id === item.produto_id && (i.tamanho_id ?? null) === (item.tamanho_id ?? null)
   );
-  if (existente) {
-    existente.quantidade = Math.min(99, existente.quantidade + item.quantidade);
-  } else {
-    estado = { ...estado, itens: [...estado.itens, { ...item }] };
-  }
+  estado = { ...estado, chave: novaChave(), itens: existente
+    ? estado.itens.map((i) => i === existente ? { ...i, quantidade: Math.min(99, i.quantidade + item.quantidade) } : i)
+    : [...estado.itens, { ...item }] };
   persistir();
 }
 
@@ -88,6 +87,7 @@ export function alterarQuantidade(produtoId: number, tamanhoId: number | null, q
   const qtd = Math.trunc(quantidade);
   estado = {
     ...estado,
+    chave: novaChave(),
     itens: estado.itens
       .map((i) => (i.produto_id === produtoId && (i.tamanho_id ?? null) === tamanhoId ? { ...i, quantidade: qtd } : i))
       .filter((i) => i.quantidade > 0),
@@ -96,7 +96,7 @@ export function alterarQuantidade(produtoId: number, tamanhoId: number | null, q
 }
 
 export function removerDoCarrinho(produtoId: number, tamanhoId: number | null): void {
-  estado = { ...estado, itens: estado.itens.filter((i) => !(i.produto_id === produtoId && (i.tamanho_id ?? null) === tamanhoId)) };
+  estado = { ...estado, chave: novaChave(), itens: estado.itens.filter((i) => !(i.produto_id === produtoId && (i.tamanho_id ?? null) === tamanhoId)) };
   persistir();
 }
 
@@ -107,4 +107,11 @@ export function limparCarrinho(): void {
 
 export function totalItens(c: Carrinho): number {
   return c.itens.reduce((s, i) => s + i.quantidade, 0);
+}
+
+export function definirCupom(codigo: string): void {
+  const cupom = codigo.trim().toUpperCase().slice(0, 40);
+  if ((estado.cupom || '') === cupom) return;
+  estado = { ...estado, chave: novaChave(), cupom };
+  persistir();
 }
