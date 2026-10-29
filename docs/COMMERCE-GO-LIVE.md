@@ -41,7 +41,7 @@ O script audita e classifica:
 - **P2 (melhoria)**: extensões futuras (carrier de frete externo, imagens do
   marketplace, sync de estoque ida-e-volta além da leitura do canônico).
 
-Saída: `COMMERCE GO-LIVE: READY` ou `COMMERCE GO-LIVE: BLOCKED (…)`.
+Saída atual: `COMMERCE STRUCTURAL CHECK: PASS` ou `COMMERCE STRUCTURAL CHECK: BLOCKED (…)`. O script verifica estrutura/código/banco, não autentica providers nem autoriza go-live. O aceite integral e as lacunas atuais estão em [BROBOND-ENTERPRISE-FINAL-AUDIT.md](BROBOND-ENTERPRISE-FINAL-AUDIT.md).
 
 ## 3. Checklist antes de aceitar o primeiro pedido real
 

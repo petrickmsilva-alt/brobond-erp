@@ -9,10 +9,11 @@
 // aparecer aqui dentro.
 //
 // SMTP opcional (nodemailer — dependência instalada em server/package.json):
-//   SMTP_HOST=smtp.gmail.com  SMTP_PORT=587  SMTP_USER=jjustino.sousa@gmail.com
-//   SMTP_PASS=<senha de app>  SMTP_FROM=JJustino <jjustino.sousa@gmail.com>
-// Sem SMTP configurado, o link é logado no console (dev/preview) e a tela de
-// Configurações avisa. Nenhuma exceção quebra o fluxo do "esqueci minha senha".
+//   SMTP_HOST=<servidor SMTP>  SMTP_PORT=587  SMTP_USER=<usuário SMTP>
+//   SMTP_PASS=<senha de app>  SMTP_FROM=<remetente>
+// Sem SMTP, nenhuma mensagem ou link secreto é registrado no console. Convites
+// podem ser entregues manualmente pelo administrador autenticado; recuperação
+// de senha exige SMTP ou suporte administrativo.
 // ============================================================
 import { createRequire } from 'node:module';
 import { hostInterno } from './urlPublica';
@@ -61,8 +62,8 @@ export function corpoEmail(paragrafos: string[]): string {
  *   • relativos ("/convite/abc") — o cliente de e-mail não tem de onde partir;
  *   • apontando para endereço interno (localhost, IP privado, nome sem
  *     domínio) — abrem na máquina de quem lê, não no servidor.
- * Usado só para avisar: o e-mail sai mesmo assim, mas o log diz o endereço
- * exato que foi parar na caixa de entrada (é o que o suporte precisa).
+ * Usado só para avisar: o e-mail sai mesmo assim, mas URLs nunca são
+ * registradas no log, pois podem conter tokens de acesso de uso único.
  */
 export function linksQueNaoAbrem(html: string): string[] {
   const achados = new Set<string>();
@@ -82,22 +83,21 @@ export function linksQueNaoAbrem(html: string): string[] {
   return [...achados];
 }
 
-/** Envia e-mail via SMTP. Sem SMTP, registra a mensagem no console. */
-export async function enviarEmail(msg: EmailMsg): Promise<'enviado' | 'console'> {
+/** Envia por SMTP; sem transporte funcional, não registra mensagem nem destinatário. */
+export async function enviarEmail(msg: EmailMsg): Promise<'enviado' | 'nao_enviado'> {
   const cfg = smtpConfigurado();
   const quebrados = linksQueNaoAbrem(msg.html);
   if (quebrados.length) {
     console.warn(
-      `⚠️  [mail] Link que não abre para quem recebe (${quebrados.join(', ')}) — ` +
+      `⚠️  [mail] ${quebrados.length} link(s) relativo(s) ou interno(s) podem não abrir — ` +
         'defina APP_URL com o endereço público do ERP (ex.: https://erp.brobond.com.br). ' +
         'Sem isso o destinatário vê "URL inválida" ao clicar.'
     );
   }
   const texto = msg.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   if (!cfg) {
-    console.log(`[mail:sem-smtp] Para: ${msg.to} — ${msg.assunto}`);
-    console.log(texto);
-    return 'console';
+    console.warn('[mail] SMTP não configurado; mensagem não enviada.');
+    return 'nao_enviado';
   }
   try {
     let nodemailer: any = null;
@@ -107,9 +107,8 @@ export async function enviarEmail(msg: EmailMsg): Promise<'enviado' | 'console'>
       nodemailer = null;
     }
     if (!nodemailer) {
-      console.warn('⚠️  SMTP configurado, mas o pacote nodemailer não está instalado. Rode: npm --prefix server install nodemailer');
-      console.log(`[mail] Para: ${msg.to} — ${msg.assunto}\n${texto}`);
-      return 'console';
+      console.warn('[mail] Transporte SMTP indisponível; mensagem não enviada.');
+      return 'nao_enviado';
     }
     const port = Number(process.env.SMTP_PORT) || 587;
     const transporter = nodemailer.createTransport({
@@ -126,9 +125,9 @@ export async function enviarEmail(msg: EmailMsg): Promise<'enviado' | 'console'>
       text: texto,
     });
     return 'enviado';
-  } catch (e: any) {
-    console.warn('⚠️  Falha ao enviar e-mail (SMTP):', e?.message || e);
-    console.log(`[mail] Para: ${msg.to} — ${msg.assunto}\n${texto}`);
-    return 'console';
+  } catch {
+    // SMTP errors may contain credentials, recipients and response contents.
+    console.warn('[mail] Falha no transporte SMTP; mensagem não enviada.');
+    return 'nao_enviado';
   }
 }

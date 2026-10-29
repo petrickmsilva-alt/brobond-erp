@@ -51,7 +51,7 @@ export function lojaConfigurada(): boolean {
 }
 
 /** A única integração WooCommerce deve pertencer explicitamente a um tenant. */
-function empresaVinculadaWoo(): number | null {
+export function empresaVinculadaWoo(): number | null {
   const raw = String(process.env.WOOCOMMERCE_EMPRESA_ID || '').trim();
   const id = Number(raw);
   return raw && Number.isInteger(id) && id > 0 ? id : null;
@@ -99,15 +99,16 @@ export async function wooFetch(cfg: ConfigLoja, caminho: string, init: Parameter
         ...((init.headers as Record<string, string>) || {}),
       },
     });
-  } catch (e: any) {
+  } catch {
     throw new HttpError(
       502,
-      `Não foi possível falar com a loja (${cfg.url}). Verifique se o site está no ar e se WOOCOMMERCE_URL está correta. Detalhe: ${e?.message || e}`
+      'Não foi possível falar com a loja. Verifique a configuração e a conectividade.'
     );
   }
   const texto = await resp.text();
   if (!resp.ok) {
-    const detalhe = String(texto).replace(/\s+/g, ' ').slice(0, 180);
+    // Nunca propagar o corpo remoto: pode conter tokens, PII ou dados do pedido.
+    const detalhe = '';
     if (resp.status === 401 || resp.status === 403) {
       throw new HttpError(
         502,
@@ -567,6 +568,7 @@ export async function sincronizarEstoqueLoja(req: Request, res: Response) {
  */
 export async function enviarEstoqueLojaInterno(escopo: EscopoEmpresa, actor: { id: number | null; name: string }) {
   const cfg = exigirConfigurada();
+  if (!empresaVinculadaWoo() || empresaVinculadaWoo() !== escopo.empresaId) throw new HttpError(409, 'A integração WooCommerce não está vinculada a esta empresa.');
   const s = getStore();
 
   const [produtosR, tamanhosR, estoquesR] = await Promise.all([
@@ -627,54 +629,61 @@ export async function enviarEstoqueLojaInterno(escopo: EscopoEmpresa, actor: { i
   }
 
   const atualizados: { sku: string; saldo: number; onde: string }[] = [];
-  const naoEncontrados: string[] = [...indice.keys()].filter((sku) => !sku.includes('-'));
+  const naoEncontrados = new Set(skusAtivos);
+  const conferirLote = (resposta: any, esperado: { id: number }[]) => {
+    if (!Array.isArray(resposta?.update) || resposta.update.length !== esperado.length || resposta.update.some((item: any) => item?.error || !esperado.some((e) => Number(e.id) === Number(item?.id))) || new Set(resposta.update.map((item: any) => Number(item?.id))).size !== esperado.length)
+      throw new HttpError(502, 'A loja não confirmou todas as atualizações de estoque do lote.');
+  };
   const atualizacoesSimples: { id: number; stock_quantity: number; manage_stock: boolean }[] = [];
 
   for (let pagina = 1; pagina <= 10; pagina++) {
     const produtos = await wooFetch(cfg, `/products?per_page=100&page=${pagina}&status=publish`);
-    if (!Array.isArray(produtos) || !produtos.length) break;
+    if (!Array.isArray(produtos)) throw new HttpError(502, 'Resposta de produtos inválida.');
+    if (!produtos.length) break;
 
     for (const p of produtos) {
       const sku = String(p.sku || '')
         .trim()
         .toUpperCase();
       if (p.type === 'variable') {
-        const variacoes = await wooFetch(cfg, `/products/${Number(p.id)}/variations?per_page=100`);
-        if (!Array.isArray(variacoes) || !variacoes.length) continue;
-        const update: { id: number; stock_quantity: number; manage_stock: boolean }[] = [];
-        for (const v of variacoes) {
-          const vsku = String(v.sku || '')
-            .trim()
-            .toUpperCase();
-          const chaves = [vsku, sku && vsku ? `${sku}-${vsku}` : ''].filter(Boolean);
-          const saldo = chaves.map((c) => indice.get(c)).find((q) => typeof q === 'number');
-          if (typeof saldo === 'number') {
-            update.push({ id: Number(v.id), stock_quantity: Math.max(0, Math.trunc(saldo)), manage_stock: true });
-            atualizados.push({ sku: vsku || sku, saldo, onde: `variação ${v.id} do produto ${p.id}` });
-            naoEncontrados.splice(naoEncontrados.indexOf(sku), 1);
+        for (let paginaVariacoes = 1; paginaVariacoes <= 10; paginaVariacoes++) {
+          const variacoes = await wooFetch(cfg, `/products/${Number(p.id)}/variations?per_page=100&page=${paginaVariacoes}`);
+          if (!Array.isArray(variacoes)) throw new HttpError(502, 'Resposta de variações inválida.');
+          if (!variacoes.length) break;
+          const update: { id: number; stock_quantity: number; manage_stock: boolean }[] = [];
+          const confirmados: { sku: string; saldo: number; onde: string }[] = [];
+          for (const v of variacoes) {
+            const vsku = String(v.sku || '').trim().toUpperCase();
+            const chaves = [vsku, sku && vsku ? `${sku}-${vsku}` : ''].filter(Boolean);
+            const saldo = chaves.map((c) => indice.get(c)).find((q) => typeof q === 'number');
+            if (typeof saldo === 'number') {
+              update.push({ id: Number(v.id), stock_quantity: Math.max(0, Math.trunc(saldo)), manage_stock: true });
+              confirmados.push({ sku: vsku || sku, saldo, onde: `variação ${v.id} do produto ${p.id}` });
+            }
           }
-        }
-        if (update.length) {
-          await wooFetch(cfg, `/products/${Number(p.id)}/variations/batch`, {
-            method: 'POST',
-            body: JSON.stringify({ update }),
-          });
+          if (update.length) {
+            const resultado = await wooFetch(cfg, `/products/${Number(p.id)}/variations/batch`, { method: 'POST', body: JSON.stringify({ update }) });
+            conferirLote(resultado, update);
+            atualizados.push(...confirmados); naoEncontrados.delete(sku);
+          }
+          if (variacoes.length < 100) break;
+          if (paginaVariacoes === 10) throw new HttpError(409, 'Limite de paginação de variações atingido; sincronização incompleta.');
         }
       } else if (sku && indice.has(sku)) {
         atualizacoesSimples.push({ id: Number(p.id), stock_quantity: Math.max(0, Math.trunc(indice.get(sku)!)), manage_stock: true });
         atualizados.push({ sku, saldo: indice.get(sku)!, onde: `produto ${p.id}` });
-        naoEncontrados.splice(naoEncontrados.indexOf(sku), 1);
+        naoEncontrados.delete(sku);
       }
     }
     if (produtos.length < 100) break;
+    if (pagina === 10) throw new HttpError(409, 'Limite de paginação de produtos atingido; sincronização incompleta.');
   }
 
   // Produtos simples em lote (até 100 por chamada)
   for (let i = 0; i < atualizacoesSimples.length; i += 100) {
-    await wooFetch(cfg, '/products/batch', {
-      method: 'POST',
-      body: JSON.stringify({ update: atualizacoesSimples.slice(i, i + 100) }),
-    });
+    const lote = atualizacoesSimples.slice(i, i + 100);
+    const resposta = await wooFetch(cfg, '/products/batch', { method: 'POST', body: JSON.stringify({ update: lote }) });
+    conferirLote(resposta, lote);
   }
 
   await s
@@ -684,19 +693,18 @@ export async function enviarEstoqueLojaInterno(escopo: EscopoEmpresa, actor: { i
       acao: 'importar',
       recurso: 'marketplace',
       registro_id: null,
-      descricao: `Estoque enviado para a loja (${cfg.url}): ${atualizados.length} SKU(s) atualizado(s), ${naoEncontrados.length} sem correspondência`,
-      dados: { origem: 'woocommerce', atualizados: atualizados.length, nao_encontrados: naoEncontrados },
+      descricao: `Estoque enviado para a loja (${cfg.url}): ${atualizados.length} SKU(s) atualizado(s), ${naoEncontrados.size} sem correspondência`,
+      dados: { origem: 'woocommerce', atualizados: atualizados.length, nao_encontrados: [...naoEncontrados] },
       // Escopo explícito do chamador: a rota usa o do ator; o outbox usa o da
       // empresa da fila — nunca a empresa "padrão" implícita.
       empresa_id: escopo.empresaId,
-    })
-    .catch(() => undefined);
+    });
 
   return {
     ok: true,
     loja: cfg.url,
     atualizados,
     total_atualizados: atualizados.length,
-    nao_encontrados: naoEncontrados,
+    nao_encontrados: [...naoEncontrados],
   };
 }

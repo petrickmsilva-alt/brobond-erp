@@ -34,6 +34,7 @@ Prisma não é o dono destas tabelas (assim como o financeiro operacional).
 - `payment_refunds`: solicitação e conclusão, inclusive parcial.
 - `payment_disputes`: estado e referência da disputa; sem inventar evidência externa.
 - `payment_settlements`: realidade de liquidação/reconciliação; não movimenta caixa.
+- `payment_payouts` (0073): relatório manual normalizado e vínculo opcional à linha do extrato da mesma empresa; evidência, não lançamento de caixa.
 
 Todas possuem `empresa_id`. FKs compostas impedem vincular intent/attempt/refund
 entre empresas. As APIs por ID consultam empresa + ID, nunca apenas ID. Uma
@@ -185,11 +186,24 @@ cancelamento/devolução operacional já estabelecido.
 
 ## 10. Settlement e reconciliação
 
+**Evolução de 2026-10-29:** a API `/api/commerce/payments/payouts` aceita
+relatório manual normalizado, em centavos, com replay por hash e vínculo manual
+a uma entrada de extrato do mesmo tenant e valor exato. O relatório é comparado
+com liquidações já existentes; divergências não viram `MATCHED`. Reembolso ou
+chargeback posterior torna a evidência divergente. As páginas de lista, nova,
+detalhe e conciliação ficam em `/commerce/pagamentos/repasses`. Não há
+interpretação de layout de provider, ingestão automática, baixa de caixa nem
+correção operacional completa de divergências. Detalhes e resultados atuais:
+[`BROBOND-ENTERPRISE-FINAL-AUDIT.md`](../BROBOND-ENTERPRISE-FINAL-AUDIT.md).
+
+
 Captura/pagamento confirmado cria registro UNRECONCILED. Bruto, refunds e
 chargeback confirmados são observáveis; taxas e líquido desconhecidos ficam
 **NULL**, nunca zero inventado. Os estados são UNRECONCILED, MATCHED, PARTIAL,
 DIVERGENT e RESOLVED. A tela registra resolução/evidência por usuário autorizado,
 com auditoria e sem alterar o ledger.
+
+**Estornos:** o estado terminal `REFUNDED` sem valor explícito representa o valor integral; valores incompatíveis e estornos parciais sem centavos são recusados. Um estorno posterior invalida a conciliação e preserva o vínculo bancário como histórico divergente. Testes em PostgreSQL exercitam concorrência de estorno com importação e conciliação, inclusive reprocessamento após aborto de serialização; não equivalem a homologação dos provedores.
 
 **Limite real:** não há importador automático de extrato/payout/MDR específico dos
 três providers neste round. A estrutura de settlement/reconciliation existe; a

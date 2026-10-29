@@ -430,7 +430,7 @@ export default function PaymentEnginePage() {
               )}
               {section === 'reconciliacao' && (
                 <>
-                  {select('status', 'Resultado', ['MATCHED', 'PARTIAL', 'DIVERGENT', 'RESOLVED'])}
+                  {select('status', 'Resultado', ['PARTIAL', 'DIVERGENT', 'RESOLVED'])}
                   {input('note', 'Evidência / justificativa (mínimo 8 caracteres)')}
                 </>
               )}
@@ -610,6 +610,7 @@ export default function PaymentEnginePage() {
               <RefreshCw size={16} />
               Atualizar
             </button>
+            {section === 'reconciliacao' && canManage && <Link className="btn-secondary" to="/commerce/pagamentos/repasses">Repasses e extrato</Link>}
             {section === 'regras' && canManage && (
               <Link className="btn-primary" to="/commerce/pagamentos/regras/novo">
                 Nova regra

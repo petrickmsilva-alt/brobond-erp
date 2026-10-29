@@ -38,74 +38,61 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 // Helper de fetch que injeta o token JWT, trata 401 (desloga), timeout e retry.
 export async function apiFetch<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken();
-  let res: Response;
-
-  // AbortController para timeout
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-
-  // Retry para erros de rede ou 5xx (máximo 2 tentativas)
-  const maxRetries = 2;
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      res = await fetch(`/api${path}`, {
-        ...opts,
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          ...(opts.headers || {}),
-        },
-      });
-      clearTimeout(timeoutId);
-
-      // Não faz retry para 4xx (erro do cliente)
-      if (res.status >= 400 && res.status < 500) break;
-
-      // Faz retry apenas para 5xx ou erros de rede
-      if (res.ok || res.status < 500 || attempt === maxRetries) break;
-
-      // Aguarda antes de retry (exponential backoff: 1s, 2s)
-      await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
-    } catch (e: any) {
-      clearTimeout(timeoutId);
-      lastError = e;
-      if (e.name === 'AbortError') {
-        throw new ApiError(0, 'Tempo limite da requisição excedido. Verifique sua conexão e tente novamente.');
+  let timedOut = false;
+  const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, DEFAULT_TIMEOUT_MS);
+  const external = opts.signal;
+  const onAbort = () => controller.abort();
+  if (external?.aborted) onAbort();
+  else external?.addEventListener('abort', onAbort, { once: true });
+  const aborted = () => timedOut
+    ? new ApiError(0, 'Tempo limite da requisição excedido. Verifique sua conexão e tente novamente.')
+    : new DOMException('Requisição cancelada.', 'AbortError');
+  const wait = (ms: number) => new Promise<void>((resolve, reject) => {
+    if (controller.signal.aborted) return reject(aborted());
+    const stop = () => { clearTimeout(timer); reject(aborted()); };
+    const timer = setTimeout(() => { controller.signal.removeEventListener('abort', stop); resolve(); }, ms);
+    controller.signal.addEventListener('abort', stop, { once: true });
+  });
+  const method = String(opts.method || 'GET').toUpperCase();
+  const maxRetries = ['GET', 'HEAD', 'OPTIONS'].includes(method) ? 2 : 0;
+  const headers = new Headers(opts.headers);
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+  let res: Response | undefined;
+  try {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (controller.signal.aborted) throw aborted();
+      try {
+        res = await fetch(`/api${path}`, { ...opts, signal: controller.signal, headers });
+        if (res.status < 500 || res.ok || attempt === maxRetries) break;
+      } catch (e: any) {
+        if (controller.signal.aborted || e?.name === 'AbortError') throw aborted();
+        if (attempt === maxRetries) throw new ApiError(0, 'Sem conexão com o servidor. Verifique sua internet e tente novamente.');
       }
-      if (attempt === maxRetries) {
-        throw new ApiError(0, 'Sem conexão com o servidor. Verifique sua internet e tente novamente.');
+      // Apenas leituras seguras são repetidas; abortar durante o backoff
+      // interrompe imediatamente em vez de iniciar outra requisição.
+      await wait(1000 * Math.pow(2, attempt));
+    }
+    if (!res) throw new ApiError(0, 'Sem conexão com o servidor.');
+    const data = await res.json().catch(() => ({}));
+    if (controller.signal.aborted) throw aborted();
+    if (res.status === 401) {
+      const isLoginRequest = path.includes('/auth/login');
+      const isOnLoginPage = window.location.pathname === '/login';
+      const isPublicRequest = path.startsWith('/publico/') || path.startsWith('/loja/');
+      if (!isLoginRequest && !isPublicRequest && token) {
+        clearToken();
+        if (!isOnLoginPage) window.location.href = '/login';
       }
-      // Aguarda antes de retry
-      await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+      throw new ApiError(401, data?.error || (isLoginRequest ? 'E-mail ou senha incorretos' : 'Sessão expirada'), data?.fields, data?.code, data?.details);
     }
+    if (!res.ok) throw new ApiError(res.status, data?.error || 'Erro na requisição', data?.fields, data?.code, data?.details);
+    return data as T;
+  } finally {
+    clearTimeout(timeoutId);
+    external?.removeEventListener('abort', onAbort);
   }
-
-  if (!res!) {
-    throw lastError || new ApiError(0, 'Sem conexão com o servidor.');
-  }
-
-  const data = await res.json().catch(() => ({}));
-
-  if (res.status === 401) {
-    const isLoginRequest = path.includes('/auth/login');
-    const isOnLoginPage = window.location.pathname === '/login';
-    const isPublicRequest = path.startsWith('/publico/') || path.startsWith('/loja/');
-    // Endpoints públicos também usam 401 para senha de catálogo. Não apague a
-    // sessão nem redirecione o visitante para o login nesse caso.
-    if (!isLoginRequest && !isPublicRequest && token) {
-      clearToken();
-      if (!isOnLoginPage) window.location.href = '/login';
-    }
-    throw new ApiError(401, data?.error || (isLoginRequest ? 'E-mail ou senha incorretos' : 'Sessão expirada'), data?.fields, data?.code, data?.details);
-  }
-
-  if (!res.ok) {
-    throw new ApiError(res.status, data?.error || 'Erro na requisição', data?.fields, data?.code, data?.details);
-  }
-  return data as T;
 }
 
 export const api = {

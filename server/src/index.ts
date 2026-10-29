@@ -54,7 +54,8 @@ import {
 import { parseId } from './validate';
 import { HttpError } from './errors';
 import { assertProductionSecrets, bloquearSenhaProvisoria, corsOrigin, loginRateLimit, securityHeaders, trustProxySetting } from './security';
-import { initSentry, reportarErro } from './log';
+import { initSentry, log, reportarErro } from './log';
+import { requestObservability } from './observability';
 import { smtpConfigurado } from './mail';
 import { carregarOrigemDoBanco, revisarConfiguracaoOrigem, statusOrigemAsync } from './urlPublica';
 import { obterEnderecoPublico, removerEnderecoPublico, salvarEnderecoPublico } from './configSistema';
@@ -138,7 +139,7 @@ import {
 import { estadoLoja } from './commerce/estado-loja';
 import { capacidadesCreators } from './creators';
 import { analyticsCommerce, trendsCommerce } from './commerce/analytics';
-import { processarComercioAgendado } from './commerce/outbox';
+import { processarComercioAgendado, reprocessarOutbox } from './commerce/outbox';
 import { baixarLancamento, conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, recebiveisCartao, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
 import { comissoesDaVenda, resumoComissoes } from './comissoes';
 import {
@@ -338,6 +339,7 @@ import {
 } from './fiscalObrigacoes';
 import { listarEvidenciasFiscais, listarExecucoesFiscais, executarObrigacaoFiscal, registrarEvidenciaFiscal } from './fiscalExecucoes';
 import { balanceteFinanceiro, resumoPlanoContas } from './financeiroContabil';
+import { listarPeriodos, obterPeriodo, alterarPeriodo } from './financeiroPeriodos';
 import {
   confirmarImportacaoContabil,
   confirmarImportacaoPlano,
@@ -399,6 +401,7 @@ app.disable('x-powered-by');
 // define TRUST_PROXY=1 no render.yaml (um proxy confiável).
 app.set('trust proxy', trustProxySetting());
 app.use(securityHeaders);
+app.use(requestObservability);
 // Endpoints públicos também são consumidos por FORA do ERP: o site de varejo
 // (brobond.com.br) busca o catálogo por JavaScript e o incorpora em iframe.
 // Liberamos a leitura por CORS (sem credenciais, sem cookie) — os dados do
@@ -416,7 +419,8 @@ app.use(
     origin: corsOrigin(),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-ID', 'X-Correlation-ID'],
+    exposedHeaders: ['X-Request-ID', 'X-Correlation-ID'],
   })
 );
 // O cors() global roda depois do middleware público e recoloca
@@ -443,14 +447,6 @@ app.use(publicGatewayRouter);
 
 app.use(express.json({ limit: '4mb' })); // fotos chegam em base64 (já reduzidas no navegador)
 app.use(express.urlencoded({ extended: true }));
-
-// Log simples de requisições em dev
-if (process.env.NODE_ENV !== 'production') {
-  app.use((req, _res, next) => {
-    if (req.path.startsWith('/api')) console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-    next();
-  });
-}
 
 /** Envolve handlers async e encaminha erros para o middleware global. */
 const wrap =
@@ -989,6 +985,7 @@ app.get('/api/commerce/delivery', wrap(listarDeliveryCommerce));
 app.use('/api/commerce/payments', paymentsRouter);
 app.get('/api/commerce/pagamentos', wrap(listarPagamentosCommerce));
 app.get('/api/commerce/eventos', wrap(listarEventosCommerce));
+app.post('/api/commerce/outbox/:id/reprocessar', wrap(reprocessarOutbox));
 app.get('/api/commerce/erros', wrap(listarErrosCommerce));
 app.get('/api/commerce/promocoes', wrap(listarPromocoes));
 app.post('/api/commerce/promocoes', wrap(criarPromocao));
@@ -1084,6 +1081,9 @@ app.post('/api/fiscal/execucoes/:id/evidencias', wrap(registrarEvidenciaFiscal))
 // Balancete e resumo do plano de contas leem o MESMO livro-caixa; não existe
 // segundo financeiro nem partida dobrada gerada por código.
 app.get('/api/financeiro/balancete', wrap(balanceteFinanceiro));
+app.get('/api/financeiro/periodos', wrap(listarPeriodos));
+app.get('/api/financeiro/periodos/:competencia', wrap(obterPeriodo));
+app.post('/api/financeiro/periodos/:competencia/:acao', wrap(alterarPeriodo));
 app.get('/api/financeiro/plano-contas/resumo', wrap(resumoPlanoContas));
 
 // ---- PRODUÇÃO 3.0: capacidade/carga e MRP (somente leitura) ----
@@ -1354,7 +1354,7 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     return res.status(400).json({ error: 'JSON inválido no corpo da requisição' });
   }
   const httpErr = toHttpError(err, (req as any).resource);
-  if (httpErr.status >= 500) reportarErro(err, { rota: `${req.method} ${req.path}` });
+  if (httpErr.status >= 500) reportarErro(new Error('Erro interno de requisição HTTP'), { method: req.method, rota: typeof req.route?.path === 'string' ? req.route.path : '(middleware)', request_id: res.locals.requestId, status: httpErr.status });
   res.status(httpErr.status).json({
     error: httpErr.message,
     fields: httpErr.fields,
@@ -1425,7 +1425,9 @@ async function start() {
   // abrir a tela. Sem efeito em teste (o runner controla o ciclo).
   if (process.env.NODE_ENV !== 'test') {
     const filaCommerce = setInterval(() => {
-      void processarComercioAgendado().catch(() => undefined);
+      void processarComercioAgendado().then((result) => {
+        if (result.falhas.length) log.warn('commerce_scheduled_failures', { etapas: result.falhas });
+      }).catch(() => log.error('commerce_scheduled_unavailable'));
     }, 60_000);
     filaCommerce.unref?.();
   }

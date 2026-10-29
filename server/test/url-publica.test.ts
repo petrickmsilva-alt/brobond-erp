@@ -12,6 +12,7 @@
 // ============================================================
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 
 process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
@@ -27,18 +28,25 @@ const { linkPublico, normalizarOrigem, origemDaRequisicao, origemPublica, status
 const APP_URL_TESTE = 'https://erp.brobond.com.br';
 const SENHA_FORTE = () => `Reset#Seguro${Date.now()}`;
 
-/** Captura o que o mail.ts escreve no console quando não há SMTP. */
-async function capturarConsole(fn: () => Promise<unknown>): Promise<string> {
-  const linhas: string[] = [];
-  const original = console.log;
-  console.log = (...args: unknown[]) => {
-    linhas.push(args.map(String).join(' '));
-  };
+/** Transporte de teste captura o envelope SMTP, sem colocar links secretos no log. */
+async function capturarEmail(fn: () => Promise<unknown>): Promise<{ html: string; text: string }> {
+  const nodemailer = createRequire(import.meta.url)('nodemailer');
+  const original = nodemailer.createTransport;
+  const keys = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS'];
+  const before = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, { SMTP_HOST: 'smtp.test', SMTP_PORT: '587', SMTP_USER: 'fixture', SMTP_PASS: 'fixture' });
+  const messages: { html: string; text: string }[] = [];
+  nodemailer.createTransport = () => ({ sendMail: async (message: { html: string; text: string }) => { messages.push(message); } });
   try {
     await fn();
-    return linhas.join('\n');
+    assert.equal(messages.length, 1);
+    return messages[0];
   } finally {
-    console.log = original;
+    nodemailer.createTransport = original;
+    for (const key of keys) {
+      if (before[key] === undefined) delete process.env[key];
+      else process.env[key] = before[key];
+    }
   }
 }
 
@@ -245,11 +253,12 @@ describe('Convite de acesso — link que abre no e-mail', () => {
     await comAppUrl(APP_URL_TESTE, async () => {
       const { gerarConvite } = await import('../src/usuariosAdmin');
       const row = await novoUsuario({ nome: '<script>alert(1)</script> Sócio', email: `socio.html${Date.now()}@brobond.com.br` });
-      const saida = await capturarConsole(async () => {
+      const saida = await capturarEmail(async () => {
         await gerarConvite(row as any, { id: 1, name: 'Admin' }, undefined, reqPublico());
       });
-      assert.ok(saida.includes('https://erp.brobond.com.br/convite/'), 'endereço completo também em texto');
-      assert.ok(!saida.includes('<script>'), 'nome nunca é injetado como HTML');
+      assert.ok(saida.html.includes('https://erp.brobond.com.br/convite/'), 'endereço completo no HTML');
+      assert.ok(saida.text.includes('https://erp.brobond.com.br/convite/'), 'endereço copiável também em texto');
+      assert.ok(!saida.html.includes('<script>'), 'nome nunca é injetado como HTML');
     });
   });
 
@@ -280,12 +289,12 @@ describe('Redefinição de senha — mesmo contrato de link', () => {
       let respondido: any;
       const res: any = { json: (d: any) => ((respondido = d), res) };
       const req = { ...reqPublico(), body: { email: row.email } };
-      const saida = await capturarConsole(async () => {
+      const saida = await capturarEmail(async () => {
         await forgotPassword(req as any, res);
       });
       assert.equal(respondido.ok, true, 'resposta sempre ok (não revela se o e-mail existe)');
-      assert.match(saida, /https:\/\/erp\.brobond\.com\.br\/redefinir\/[a-f0-9]{64}/, 'link absoluto no e-mail de reset');
-      assert.ok(!/(?:^|\s)\/redefinir\//.test(saida), 'nunca sai link pela metade');
+      assert.match(saida.html, /https:\/\/erp\.brobond\.com\.br\/redefinir\/[a-f0-9]{64}/, 'link absoluto no e-mail de reset');
+      assert.ok(!/(?:^|\s)\/redefinir\//.test(saida.html), 'nunca sai link pela metade');
     });
   });
 });

@@ -987,7 +987,10 @@ export class PgStore implements Store {
     // cadeia quebrava na releitura.
     const dadosBrutos = entry.dados;
     const dados = dadosBrutos === undefined ? undefined : normalizarPayloadAuditoria(dadosBrutos);
-    const assinavel = { ...entry, dados };
+    const empresaId = entry.empresa_id ?? EMPRESA_PADRAO;
+    // Gera o instante antes da assinatura e persiste exatamente o mesmo valor.
+    const data = new Date().toISOString();
+    const assinavel = { ...entry, dados, empresa_id: empresaId, data, hash_versao: 2 };
     // Cadeia de hashes: preciso do hash do último evento; com lock para não
     // bifurcar a cadeia quando dois eventos são gravados ao mesmo tempo.
     const escrever = async (t: Tx) => {
@@ -995,12 +998,9 @@ export class PgStore implements Store {
       const prev = await q(`SELECT hash FROM auditoria WHERE hash IS NOT NULL ORDER BY id DESC LIMIT 1`, [], t);
       const hash_anterior = prev.rows[0]?.hash ? String(prev.rows[0].hash) : '';
       const hash = hashCadeiaAuditoria(hash_anterior, assinavel);
-      // O tipo exige empresa_id; o fallback protege chamadas legadas/diretas
-      // em runtime (a coluna é NOT NULL desde a migration 0017).
-      const empresaId = entry.empresa_id ?? EMPRESA_PADRAO;
       await q(
-        `INSERT INTO auditoria (usuario_id, usuario, acao, recurso, registro_id, descricao, dados, hash_anterior, hash, empresa_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        `INSERT INTO auditoria (usuario_id, usuario, acao, recurso, registro_id, descricao, dados, hash_anterior, hash, empresa_id, data, hash_versao)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 2)`,
         [
           entry.usuario_id,
           entry.usuario,
@@ -1012,6 +1012,7 @@ export class PgStore implements Store {
           hash_anterior,
           hash,
           empresaId,
+          data,
         ],
         t
       );
@@ -1021,8 +1022,24 @@ export class PgStore implements Store {
   }
 
   async verificarAuditoria(): Promise<AuditoriaVerificacao> {
-    const res = await q(`SELECT * FROM auditoria ORDER BY id ASC LIMIT 100000`);
-    return verificarCadeiaAuditoria(res.rows);
+    // Freeze the upper ID and scan the entire chain in bounded pages. The old
+    // LIMIT 100000 could report OK while never checking newer audit entries.
+    const limite = Number((await q(`SELECT COALESCE(MAX(id), 0) AS ultimo FROM auditoria`)).rows[0].ultimo);
+    const resultado: AuditoriaVerificacao = { ok: true, total: 0, verificadas: 0, quebras: [] };
+    let cursor = 0;
+    let anterior = '';
+    while (cursor < limite) {
+      const pagina = await q(`SELECT * FROM auditoria WHERE id > $1 AND id <= $2 ORDER BY id ASC LIMIT 5000`, [cursor, limite]);
+      if (!pagina.rows.length) break;
+      const trecho = verificarCadeiaAuditoria(pagina.rows, anterior);
+      resultado.total += trecho.total;
+      resultado.verificadas += trecho.verificadas;
+      resultado.quebras.push(...trecho.quebras);
+      if (!trecho.ok) resultado.ok = false;
+      for (const row of pagina.rows) if (row.hash) anterior = String(row.hash);
+      cursor = Number(pagina.rows[pagina.rows.length - 1].id);
+    }
+    return resultado;
   }
 
   /**

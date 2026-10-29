@@ -18,7 +18,7 @@ import {
 } from '../domain/payment';
 import type { PaymentInput, PaymentResult } from '../providers/payment-provider';
 import { account, candidates } from '../application/configuration';
-import { R_INTENTS, R_ATTEMPTS, R_OPERATIONS, R_REFUNDS, R_SETTLEMENTS, R_DISPUTES } from '../infrastructure/resources';
+import { R_INTENTS, R_ATTEMPTS, R_OPERATIONS, R_REFUNDS, R_SETTLEMENTS, R_DISPUTES, R_PAYOUTS } from '../infrastructure/resources';
 import { locked } from '../infrastructure/locking';
 const now = () => new Date().toISOString();
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -214,9 +214,18 @@ export class PaymentOrchestrator {
       } catch {
         return;
       } // stale async notification cannot regress state
-      if (result.refunded != null && (result.refunded < Number(a.refunded_amount) || result.refunded > Number(i.amount)))
-        throw new HttpError(409, 'Reembolso divergente.');
-      const refundDelta = Number(result.refunded || 0) - Number(a.refunded_amount || 0);
+      const total = Number(i.amount);
+      const previousRefund = Number(a.refunded_amount || 0);
+      // REFUNDED means the entire amount was refunded. Some webhook adapters
+      // provide only that terminal status; a partial refund, in contrast, needs
+      // an explicit amount and cannot safely be inferred.
+      const refunded = result.refunded ?? (status === 'REFUNDED' ? total : previousRefund);
+      if (!Number.isSafeInteger(total) || total <= 0 || !Number.isSafeInteger(previousRefund) || previousRefund < 0 ||
+          !Number.isSafeInteger(refunded) || refunded < previousRefund || refunded > total ||
+          (status === 'REFUNDED' && refunded !== total) ||
+          (status === 'PARTIALLY_REFUNDED' && (result.refunded == null || refunded <= 0 || refunded >= total)))
+        throw new HttpError(409, 'Reembolso divergente ou sem valor suficiente para conciliação.');
+      const refundDelta = refunded - previousRefund;
       if (refundDelta > 0 && i.cobranca_id) {
         const charge = await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: empresaId, id: Number(i.cobranca_id) }, tx);
         if (charge) await reverterFinanceiroDaCobranca(charge, refundDelta / 100, { id: null, name: 'Payment Engine' }, tx);
@@ -230,7 +239,7 @@ export class PaymentOrchestrator {
             ? i.amount
             : a.authorized_amount,
           captured_amount: ['CAPTURED', 'PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'].includes(status) ? i.amount : a.captured_amount,
-          refunded_amount: result.refunded ?? a.refunded_amount,
+          refunded_amount: refunded,
           completed_at: ['PAID', 'REFUNDED', 'FAILED', 'CANCELED'].includes(status) ? now() : null,
         },
         tx
@@ -270,7 +279,7 @@ export class PaymentOrchestrator {
               provider: i.provider,
               provider_reference: result.reference,
               gross_amount: i.amount,
-              refund_amount: result.refunded || 0,
+              refund_amount: refunded,
               chargeback_amount: status === 'CHARGEBACK' ? i.amount : 0,
               status: 'UNRECONCILED',
               evidence: {},
@@ -279,18 +288,26 @@ export class PaymentOrchestrator {
             },
             tx
           );
-        else if (result.refunded != null || status === 'CHARGEBACK')
-          await s.update(
-            R_SETTLEMENTS,
-            Number(existing.id),
-            {
-              refund_amount: result.refunded ?? existing.refund_amount,
-              chargeback_amount: status === 'CHARGEBACK' ? i.amount : existing.chargeback_amount,
-              status: 'UNRECONCILED',
-              updated_at: now(),
-            },
-            tx
-          );
+        else {
+          const chargedBack = Number(status === 'CHARGEBACK' ? i.amount : existing.chargeback_amount ?? 0);
+          const changed = refunded !== Number(existing.refund_amount || 0) || chargedBack !== Number(existing.chargeback_amount || 0);
+          if (changed) {
+            // A later refund/chargeback invalidates the imported reconciliation;
+            // preserve the historical bank link, but never claim it is still matched.
+            if (existing.payout_id) {
+              const payout = await s.findOneWhere(R_PAYOUTS, { empresa_id: empresaId, id: Number(existing.payout_id) }, tx);
+              if (payout && payout.status !== 'DIVERGENT') {
+                await s.update(R_PAYOUTS, Number(payout.id), { status: 'DIVERGENT', updated_at: now() }, tx);
+                await s.audit({ empresa_id: empresaId, usuario_id: null, usuario: 'Payment Engine', acao: 'ajuste', recurso: 'payment_payouts', registro_id: Number(payout.id),
+                  descricao: 'Repasse divergente após reembolso ou chargeback', dados: { antes: { status: payout.status }, depois: { status: 'DIVERGENT' } } }, tx);
+              }
+            }
+            await s.update(R_SETTLEMENTS, Number(existing.id), {
+              refund_amount: refunded, chargeback_amount: chargedBack,
+              status: existing.payout_id ? 'DIVERGENT' : 'UNRECONCILED', updated_at: now(),
+            }, tx);
+          }
+        }
       }
       if (['DISPUTED', 'CHARGEBACK'].includes(status)) {
         const d = await s.findOneWhere(R_DISPUTES, { empresa_id: empresaId, provider_reference: result.reference }, tx);

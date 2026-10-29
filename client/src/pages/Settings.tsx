@@ -184,7 +184,7 @@ export default function Settings() {
               </div>
               <div className="flex items-center justify-between">
                 <dt className="text-slate-500">E-mail (recuperação)</dt>
-                <dd>{meta?.smtp?.configurado ? <Badge tone="green">SMTP configurado</Badge> : <Badge tone="slate">Sem SMTP (link no console)</Badge>}</dd>
+                <dd>{meta?.smtp?.configurado ? <Badge tone="green">SMTP configurado</Badge> : <Badge tone="slate">Sem SMTP (envio indisponível)</Badge>}</dd>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <dt className="text-slate-500">Links de e-mail (convite)</dt>

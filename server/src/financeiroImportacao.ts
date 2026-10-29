@@ -39,7 +39,8 @@ import { getResource } from './resources';
 import { checkAccess, escopoDe, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
 import { round2 } from './utils';
-import type { Row } from './store';
+import type { Row, Tx } from './store';
+import { assertPeriodosAbertos, comTravaContabil, competenciaValida } from './financeiroPeriodos';
 
 const R_LANCAMENTO = () => getResource('lancamentos_financeiros')!;
 const R_PLANO = () => getResource('plano_contas')!;
@@ -103,16 +104,14 @@ export function normalizarImportacao(body: unknown): { arquivo: string | null; c
   const competencia = dados.competencia === undefined || dados.competencia === null || dados.competencia === ''
     ? null
     : String(dados.competencia);
-  if (competencia !== null && !/^\d{4}-\d{2}$/.test(competencia)) {
-    throw new HttpError(400, 'A competência precisa estar no formato AAAA-MM.', { competencia: 'Formato AAAA-MM' });
-  }
+  if (competencia !== null) competenciaValida(competencia);
   const arquivo = dados.arquivo === undefined || dados.arquivo === null ? null : String(dados.arquivo).slice(0, 240);
 
   const entradas: EntradaContabil[] = bruto.map((item, indice) => {
     const e = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
     const numero = indice + 1;
     const data = String(e.data ?? '').trim();
-    if (!DATA_ISO.test(data)) {
+    if (!DATA_ISO.test(data) || Number.isNaN(Date.parse(`${data}T00:00:00Z`)) || new Date(`${data}T00:00:00Z`).toISOString().slice(0, 10) !== data) {
       throw new HttpError(400, `Entrada ${numero}: \`data\` deve estar no formato AAAA-MM-DD.`, { entradas: `Entrada ${numero}: data inválida` });
     }
     const historico = texto(e.historico, 'historico', 300);
@@ -120,7 +119,7 @@ export function normalizarImportacao(body: unknown): { arquivo: string | null; c
     const partidasBrutas: PartidaEntrada[] = [];
     const push = (conta: unknown, natureza: NaturezaPartida, valor: unknown) => {
       const valorNum = Number(String(valor ?? '').replace(',', '.'));
-      if (!Number.isFinite(valorNum) || valorNum <= 0) {
+      if (!Number.isFinite(valorNum) || valorNum < 0.01 || valorNum > 9999999999.99 || Math.abs(valorNum * 100 - Math.round(valorNum * 100)) > 1e-7) {
         throw new HttpError(400, `Entrada ${numero}: valor da partida precisa ser maior que zero.`, {
           entradas: `Entrada ${numero}: valor inválido`,
         });
@@ -190,9 +189,9 @@ export function normalizarImportacao(body: unknown): { arquivo: string | null; c
 }
 
 /** Plano de contas da empresa, indexado por código (só contas ANALÍTICAS). */
-export async function planoDaEmpresa(empresaId: number): Promise<PlanoDaEmpresa> {
+export async function planoDaEmpresa(empresaId: number, tx?: Tx): Promise<PlanoDaEmpresa> {
   const s = getStore();
-  const { rows } = await s.list(R_PLANO(), { page: 1, pageSize: 5000, filter: { empresa_id: empresaId } });
+  const { rows } = await s.list(R_PLANO(), { page: 1, pageSize: 5000, filter: { empresa_id: empresaId } }, tx);
   const mapa: PlanoDaEmpresa = new Map();
   for (const conta of rows) mapa.set(String(conta.codigo), conta);
   return mapa;
@@ -302,6 +301,7 @@ export async function previewImportacaoContabil(req: Request, res: Response) {
     const { arquivo, competencia, entradas } = normalizarImportacao(req.body);
     const plano = await planoDaEmpresa(escopo.empresaId);
     validarContas(entradas, plano);
+    await assertPeriodosAbertos(escopo.empresaId, entradas.map((e) => competencia ?? e.data.slice(0, 7)));
     const totais = totaisDaImportacao(entradas);
     const hash = hashDaImportacao(entradas, competencia);
     const jaImportado = await getStore().findOneWhere(R_IMPORTACAO(), { empresa_id: escopo.empresaId, hash });
@@ -335,7 +335,7 @@ export async function confirmarImportacaoContabil(req: Request, res: Response) {
     const { arquivo, competencia, entradas } = normalizarImportacao(req.body);
     const hash = hashDaImportacao(entradas, competencia);
 
-    const resultado = await s.transaction(async (tx) => {
+    const resultado = await comTravaContabil(escopo.empresaId, async (tx) => {
       // IDEMPOTÊNCIA (camada 1): lote já aplicado com este conteúdo.
       const existente = await s.findOneWhere(R_IMPORTACAO(), { empresa_id: escopo.empresaId, hash }, tx);
       if (existente) {
@@ -344,42 +344,23 @@ export async function confirmarImportacaoContabil(req: Request, res: Response) {
 
       // Validação de contas DENTRO da transação: o plano pode ter mudado entre
       // o preview e a confirmação.
-      const plano = await planoDaEmpresa(escopo.empresaId);
+      await assertPeriodosAbertos(escopo.empresaId, entradas.map((e) => competencia ?? e.data.slice(0, 7)), tx);
+      const plano = await planoDaEmpresa(escopo.empresaId, tx);
       validarContas(entradas, plano);
       const totais = totaisDaImportacao(entradas);
       if (totais.total_debitos !== totais.total_creditos) {
         throw new HttpError(400, 'O lote não fecha: Σ débitos ≠ Σ créditos.', { totais });
       }
 
-      // IDEMPOTÊNCIA (camada 2): o INSERT do cabeçalho carrega o unique
-      // (empresa_id, hash). Dois pedidos simultâneos com o mesmo conteúdo: um
-      // grava, o outro estoura a unique e o catch devolve o lote vencedor.
-      let cabecalho: Row;
-      try {
-        cabecalho = await s.insert(
-          R_IMPORTACAO(),
-          {
-            empresa_id: escopo.empresaId,
-            hash,
-            arquivo,
-            competencia: competencia ? `${competencia}-01` : null,
-            entradas: totais.entradas,
-            partidas: totais.partidas,
-            total_debitos: totais.total_debitos,
-            total_creditos: totais.total_creditos,
-            status: 'aplicada',
-            criado_por: actor.id || null,
-          },
-          tx
-        );
-      } catch (e: any) {
-        const codigo = String(e?.code ?? '');
-        if (codigo === '23505' || /duplicate key/i.test(String(e?.message ?? ''))) {
-          const vencedor = await s.findOneWhere(R_IMPORTACAO(), { empresa_id: escopo.empresaId, hash }, tx);
-          if (vencedor) return { importacao: vencedor, idempotente: true, gravadas: 0 };
-        }
-        throw e;
-      }
+      // A trava por empresa serializa confirmação, fechamento e reabertura;
+      // o índice único continua sendo a barreira de defesa no banco.
+      const cabecalho = await s.insert(R_IMPORTACAO(), {
+        empresa_id: escopo.empresaId, hash, arquivo,
+        competencia: competencia ? `${competencia}-01` : null,
+        entradas: totais.entradas, partidas: totais.partidas,
+        total_debitos: totais.total_debitos, total_creditos: totais.total_creditos,
+        status: 'aplicada', criado_por: actor.id || null,
+      }, tx);
 
       const importacaoId = Number(cabecalho.id);
       let gravadas = 0;

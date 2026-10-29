@@ -749,15 +749,13 @@ export class MemStore implements Store {
     // P2-01: o payload é normalizado para o formato persistido (Date → ISO UTC
     // com ms) ANTES de assinar — assim memória e PostgreSQL gravam o mesmo
     // instante e a cadeia não quebra na releitura.
-    const normalizada = { ...entry, dados: normalizarPayloadAuditoria(entry.dados ?? null) };
+    const empresa_id = entry.empresa_id ?? EMPRESA_PADRAO;
+    const normalizada = { ...entry, dados: normalizarPayloadAuditoria(entry.dados ?? null), empresa_id, data: new Date().toISOString(), hash_versao: 2 };
     // Cadeia de hashes (tamper-evidence): hash_i = SHA-256(hash_{i-1} | payload).
     const anterior = t.rows.get(t.rows.size ? Math.max(...t.rows.keys()) : 0);
     const hash_anterior = anterior?.hash ? String(anterior.hash) : '';
     const hash = hashCadeiaAuditoria(hash_anterior, normalizada);
-    // O tipo exige empresa_id, mas chamadas legadas/diretas (testes, jobs)
-    // podem omitir em runtime: nunca grava sem empresa (coluna NOT NULL).
-    const empresa_id = entry.empresa_id ?? EMPRESA_PADRAO;
-    t.rows.set(id, { id, data: new Date().toISOString(), ...normalizada, empresa_id, hash_anterior, hash });
+    t.rows.set(id, { id, ...normalizada, hash_anterior, hash });
     // mantém só os últimos 2000 eventos em memória
     if (t.rows.size > 2000) t.rows.delete(Math.min(...t.rows.keys()));
   }

@@ -633,6 +633,9 @@ export async function listarProdutosCommerce(req: Request, res: Response) {
     prepararDisponibilidade(escopo),
   ]);
 
+  if (projecoes.total > projecoes.rows.length || precos.total > precos.rows.length || publicacoes.total > publicacoes.rows.length)
+    throw new HttpError(409, 'Catálogo excede o limite seguro para cruzamento de preços/publicações.');
+
   const projPorProduto = new Map<number, Row>();
   for (const p of projecoes.rows) projPorProduto.set(Number(p.produto_id), p);
   const precosPorChave = new Map<string, Row>();
@@ -1080,6 +1083,8 @@ async function ofertasDaEmpresa(
     s.list(R_PRODUTOS(), { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId }, sort: 'nome', dir: 'asc' }),
     s.list(R_PUBLICACOES(), { page: 1, pageSize: 4000, filter: { empresa_id: escopo.empresaId } }),
   ]);
+  if (precos.total > precos.rows.length || produtos.total > produtos.rows.length || publicacoes.total > publicacoes.rows.length)
+    throw new HttpError(409, 'Ofertas excedem o limite seguro para cruzamento; aplique filtros ou amplie a paginação.');
   const prodPorId = new Map<number, Row>();
   for (const p of produtos.rows) prodPorId.set(Number(p.id), p);
   const pubPorChave = new Map<string, Row>();

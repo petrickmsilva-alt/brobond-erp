@@ -94,8 +94,10 @@ probe(
       assert.ok(sql.includes(`CREATE TABLE IF NOT EXISTS ${t}`));
     assert.ok(engine.includes('refundDelta'));
     assert.ok(api.includes('reconciliation resolved'));
+    assert.ok(read('modules/payments/application/payouts.ts').includes('export async function importPayout'));
+    assert.ok(read('db/migrations/0073_payment_payouts.sql').includes('payment_payout_bank_once_uq'));
   },
-  'Incremental refunds and persisted settlement/dispute domain; payout import not implemented'
+  'Incremental refunds, persisted disputes and manual payout reports; automated provider ingestion remains absent'
 );
 probe(
   'ERP / Finance',
@@ -156,7 +158,8 @@ if (process.env.DATABASE_URL) {
     const tables = await pool.query(
       `SELECT table_name FROM information_schema.columns WHERE table_schema='public' AND column_name='empresa_id' AND table_name LIKE 'payment_%'`
     );
-    assert.equal(tables.rows.length, 8);
+    const found = new Set(tables.rows.map((row: { table_name: string }) => row.table_name));
+    for (const name of ['payment_intents', 'payment_attempts', 'payment_operations', 'payment_methods', 'payment_routing_rules', 'payment_refunds', 'payment_disputes', 'payment_settlements', 'payment_payouts']) assert.ok(found.has(name), `Tabela empresarial ausente: ${name}`);
     database = 'PASS';
   } catch (e) {
     database = 'FAIL';

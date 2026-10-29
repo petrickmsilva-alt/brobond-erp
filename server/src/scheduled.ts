@@ -75,8 +75,8 @@ async function enviarRelatorio(assunto: string, html: string): Promise<void> {
     </div>`;
 
   for (const email of emails) {
-    await enviarEmail({ to: email, assunto: `📊 ${assunto}`, html: htmlBase }).catch((e: any) => {
-      console.warn(`⚠️  Falha ao enviar relatório para ${email}:`, e?.message);
+    await enviarEmail({ to: email, assunto: `📊 ${assunto}`, html: htmlBase }).catch(() => {
+      console.warn('⚠️  Falha ao preparar relatório por e-mail.');
     });
   }
 }
@@ -312,7 +312,7 @@ export async function runScheduled(req: Request, res: Response) {
     );
   }
 
-  res.json({ ok: true, executados: resultados, smtp: smtpConfigurado() });
+  res.status(commerce.falhas.length ? 503 : 200).json({ ok: commerce.falhas.length === 0, executados: resultados, falhas_commerce: commerce.falhas, smtp: smtpConfigurado() });
 }
 
 /** POST /api/admin/scheduled/cron — endpoint para cron externo. */
@@ -340,7 +340,7 @@ export async function cronScheduled(req: Request, res: Response) {
     resultados.push(`commerce: ${comercioCron} item(ns) da fila${commerceCron.outbox.erros ? `, ${commerceCron.outbox.erros} erro(s)` : ''}`);
   }
 
-  res.json({ ok: true, executados: resultados });
+  res.status(commerceCron.falhas.length ? 503 : 200).json({ ok: commerceCron.falhas.length === 0, executados: resultados, falhas_commerce: commerceCron.falhas });
 }
 
 /** GET /api/admin/scheduled/status — mostra config e próximo agendamento. */

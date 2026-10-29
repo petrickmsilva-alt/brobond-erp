@@ -558,6 +558,18 @@ export const RESOURCES: Record<string, Resource> = {
         ],
       },
       {
+        name: 'nivel_wms', label: 'Nível de endereçamento', type: 'select', default: 'local',
+        options: [
+          { value: 'local', label: 'Local sem hierarquia' },
+          { value: 'armazem', label: 'Armazém' },
+          { value: 'zona', label: 'Zona' },
+          { value: 'endereco', label: 'Endereço / bin' },
+        ],
+        hint: 'Endereçamento no próprio cadastro de locais; não cria outro saldo de estoque.',
+      },
+      { name: 'local_pai_id', label: 'Local pai', type: 'ref', ref: 'locais', list: false,
+        hint: 'Zona exige um armazém; endereço exige uma zona da mesma empresa.' },
+      {
         name: 'padrao',
         label: 'Local padrão',
         type: 'boolean',
@@ -1793,6 +1805,20 @@ export const RESOURCES: Record<string, Resource> = {
   // (`lancamentos_financeiros`). Recurso READ-ONLY: quem cria é o endpoint
   // POST /api/financeiro/importacao-contabil (transacional e idempotente).
   // --------------------------------------------------------------------------
+  fin_periodos_contabeis: {
+    key: 'fin_periodos_contabeis', table: 'fin_periodos_contabeis', empresa: true,
+    internal: true, label: 'Períodos de escrituração contábil', singular: 'Período contábil',
+    labelFields: ['competencia'], ops: READ_ONLY, minPerfil: 'gerente',
+    fields: [
+      { name: 'competencia', label: 'Competência', type: 'date', readonly: true },
+      { name: 'estado', label: 'Estado', type: 'text', readonly: true },
+      { name: 'motivo', label: 'Motivo', type: 'text', readonly: true },
+      { name: 'alterado_por', label: 'Responsável', type: 'integer', readonly: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'competencia', dir: 'desc' },
+  },
+
   fin_importacoes_contabeis: {
     key: 'fin_importacoes_contabeis',
     table: 'fin_importacoes_contabeis',
@@ -5983,7 +6009,7 @@ export const RESOURCES: Record<string, Resource> = {
     minPerfil: 'gerente',
     ops: { create: false, update: false, delete: false },
     notice:
-      'Outbox at-le-once do Commerce: conversão, publicação e sincronizações que falharam ficam aqui com backoff — nada some, nada duplica (chave única empresa + tipo + chave).',
+      'Outbox at-least-once: a chave única evita duplicar o registro; a entrega externa pode ser repetida e exige consumidor idempotente.',
     fields: [
       {
         name: 'tipo',
@@ -6012,6 +6038,7 @@ export const RESOURCES: Record<string, Resource> = {
         ],
       },
       { name: 'tentativas', label: 'Tentativas', type: 'integer', readonly: true },
+      { name: 'claim_versao', label: 'Versão do claim', type: 'integer', readonly: true, default: 0, list: false, form: false },
       { name: 'ultimo_erro', label: 'Último erro', type: 'textarea', readonly: true, wide: true },
       { name: 'proxima_tentativa_em', label: 'Próxima tentativa', type: 'datetime', readonly: true },
       { name: 'processado_em', label: 'Processado em', type: 'datetime', readonly: true },

@@ -342,12 +342,12 @@ const erros = [...P0, ...P1];
 const warnings = [...P2, ...P3];
 
 if (process.argv.includes('--json')) {
-  console.log(JSON.stringify({ P0, P1, P2, P3, erros, warnings, veredito: erros.length ? 'BLOCKED' : 'READY FOR MERGE' }, null, 2));
+  console.log(JSON.stringify({ P0, P1, P2, P3, erros, warnings, veredito: erros.length ? 'BLOCKED' : 'STRUCTURAL_CHECKS_PASSED', FULL_GO_LIVE: false }, null, 2));
   process.exit(erros.length ? 1 : 0);
 }
 
 const linha = (a: Achado) => `   · [${a.id}] ${a.mensagem}${a.onde ? ` — ${a.onde}` : ''}`;
-console.log('BROBOND ERP 3.0 — GATE FINAL DE GO-LIVE\n');
+console.log('BROBOND ERP 3.0 — VERIFICAÇÃO ESTRUTURAL\n');
 console.log('Gates executados: audit:ux · audit:menu · architecture:audit');
 console.log(`Fluxos de página exigidos: ${FLUXOS_ESPERADOS.length}`);
 console.log(`Cálculos críticos exigidos: ${CALCULOS.length}`);
@@ -371,4 +371,4 @@ if (erros.length) {
   console.error('\nGATE BLOCKED — há P0/P1 abertos. Nenhum é convertido em skip.');
   process.exit(1);
 }
-console.log('\nGATE PASS — sem P0/P1. Homologação com evidência técnica.');
+console.log('\nVERIFICAÇÃO ESTRUTURAL PASSOU — não executa toda a homologação; FULL_GO_LIVE: NÃO.');

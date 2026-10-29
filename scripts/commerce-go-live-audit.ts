@@ -1,12 +1,12 @@
 // ============================================================================
-// BROBOND COMMERCE OS — GATE DE GO-LIVE (scripts/commerce-go-live-audit.ts)
+// BROBOND COMMERCE OS — CHECAGEM ESTRUTURAL (scripts/commerce-go-live-audit.ts)
 //
 // Roda:  npm run commerce:go-live
 //
 // Classifica cada item em P0 (bloqueia), P1 (aviso — provisionamento do
 // cliente/limitações documentadas) e P2 (melhoria futura). Qualquer P0
-// falhando → saída 1 e `COMMERCE GO-LIVE: BLOCKED`. P0 zerados →
-// `COMMERCE GO-LIVE: READY` (saída 0).
+// falhando → saída 1; P0 estruturais zerados → saída 0.
+// Isto NÃO confirma credenciais, testes externos ou autorização de go-live.
 //
 // O gate é HONESTO: verifica o código/banco de verdade (arquivos nomeados,
 // contagens, padrões), não a presença de mocks. P1 não bloqueia porque é
@@ -192,8 +192,8 @@ p0(modules.includes("space: 'commerce'"), 'espaço commerce no menu');
 p0(existsSync(join(RAIZ, 'client/src/pages/commerce/shared.tsx')), 'páginas commerce existem');
 
 // ----------------------------------------------------- 9. P1 (provisionamento)
-p1(modules.includes("connector: 'MERCADOLIVRE'"), 'conector Mercado Livre no menu (OAuth provisionado em produção)', 'credencial do cliente');
-p1(modules.includes("connector: 'MERCADOPAGO'"), 'conector Mercado Pago no menu (token + webhook secret em produção)', 'credencial do cliente');
+p1(modules.includes("connector: 'MERCADOLIVRE'"), 'conector Mercado Livre no menu (OAuth e homologação não verificados)', 'credencial do cliente');
+p1(modules.includes("connector: 'MERCADOPAGO'"), 'conector Mercado Pago no menu (token e webhook não verificados)', 'credencial do cliente');
 p1(mig.includes('INSTAGRAM_SHOPPING'), 'Instagram Shopping: publicação de item individual REJECTED por design (Graph API) — documentado', 'limitação da API da Meta');
 p1(!/connector: 'WOOCOMMERCE'/.test(modules), 'WooCommerce: canal implementado (wooFetch) sem tela connector dedicada', 'gap de UX documentada');
 p1(existsSync(join(RAIZ, 'docs/COMMERCE-GAP-AUDIT.md')), 'GAP-AUDIT documenta lacunas conhecidas');
@@ -231,10 +231,10 @@ await verificarBanco();
 // -------------------------------------------------------------- Resultado
 console.log(`\nP0: ${okP0} ok, ${falhasP0.length} falha(s) | P1: ${avisosP1.length} aviso(s) | P2: ${futurosP2.length} item(ns)`);
 if (falhasP0.length) {
-  console.log(`\nCOMMERCE GO-LIVE: BLOCKED (${falhasP0.length} P0 em aberto)`);
+  console.log(`\nCOMMERCE STRUCTURAL CHECK: BLOCKED (${falhasP0.length} P0 em aberto)`);
   for (const f of falhasP0) console.log(`  - ${f}`);
   process.exit(1);
 }
-console.log('\nCOMMERCE GO-LIVE: READY');
+console.log('\nCOMMERCE STRUCTURAL CHECK: PASS — não certifica homologação externa nem go-live integral.');
 if (avisosP1.length) console.log(`(${avisosP1.length} P1 de provisionamento/limitação documentada — não bloqueia)`);
 process.exit(0);

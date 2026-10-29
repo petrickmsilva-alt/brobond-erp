@@ -17,6 +17,7 @@
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import ComprasFornecedoresPage from './ComprasFornecedoresPage';
 import ProducaoCapacidadePage from './ProducaoCapacidadePage';
 import FiscalCalendarioPage from './FiscalCalendarioPage';
@@ -46,7 +47,7 @@ const META = { resources: {}, mode: 'memory' } as unknown as Meta;
 function montar(ui: React.ReactElement) {
   return render(
     <MetaContext.Provider value={META}>
-      <ToastProvider>{ui}</ToastProvider>
+      <MemoryRouter><ToastProvider>{ui}</ToastProvider></MemoryRouter>
     </MetaContext.Provider>
   );
 }

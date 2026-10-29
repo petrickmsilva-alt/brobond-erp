@@ -11,6 +11,7 @@ import { R_INTENTS, R_ATTEMPTS } from '../../../modules/payments/infrastructure/
 import type { Request, Response } from 'express';
 import { randomBytes } from 'node:crypto';
 import { HttpError } from '../errors';
+import { query } from '../db';
 import { getStore, checkAccess, checkFluxo } from '../services';
 import { currentUser } from '../auth';
 import { escopoDoAtor, escopoDeSistema, empresaDoRegistroAudit, type EscopoEmpresa } from '../empresa';
@@ -273,81 +274,54 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
   const pedido = pedidos.rows[0];
   if (!pedido) return; // cobrança avulsa do financeiro — sem projeção commerce
   const pedidoId = Number(pedido.id);
-  const atual = String(pedido.estado) as EstadoPedido;
   const pagamento = mapearEstadoPagamento(cobranca.status);
+  const evento = evt.intencao === 'paga' ? 'pago' : evt.intencao === 'cancelada' ? 'cancelado' : evt.intencao === 'expirada' ? 'expirado' : 'estornado';
 
-  const evento =
-    evt.intencao === 'paga'
-      ? 'pago'
-      : evt.intencao === 'cancelada'
-        ? 'cancelado'
-        : evt.intencao === 'expirada'
-          ? 'expirado'
-          : 'estornado';
-  const novo = transicaoPedido(atual, evento);
-
-  // Atualiza projeção quando a transição faz sentido (idempotente: repetir o
-  // mesmo webhook não altera nada).
-  if (novo && novo !== atual) {
+  // Re-read and recalculate inside EACH serializable retry. Reusing a snapshot
+  // from before a serialization failure could resurrect an expired checkout.
+  const resultado = await repetirSerial(() => s.transaction(async (tx) => {
+    const atual = await s.findOneWhere(R_PEDIDOS(), { id: pedidoId, empresa_id: evt.empresaId }, tx);
+    if (!atual) return null;
+    const novo = transicaoPedido(atual.estado, evento);
+    if (!novo || novo === atual.estado) {
+      if (pagamento && atual.pagamento_estado !== pagamento) {
+        const tardio = evento === 'pago' && ['EXPIRADO', 'CANCELADO'].includes(String(atual.estado));
+        await s.update(R_PEDIDOS(), pedidoId, { pagamento_estado: pagamento, ...(tardio ? { erro: 'Pagamento confirmado após expiração/cancelamento; revisão manual necessária.' } : {}) }, tx);
+        if (tardio) await s.audit({ empresa_id: evt.empresaId, usuario_id: null, usuario: 'Sistema', acao: 'ajuste', recurso: 'commerce_pedidos', registro_id: pedidoId,
+          descricao: 'Pagamento confirmado depois do encerramento do pedido; requer revisão', dados: { antes: { estado: atual.estado, pagamento_estado: atual.pagamento_estado }, depois: { estado: atual.estado, pagamento_estado: pagamento } } }, tx);
+      }
+      return { pedido: atual, estado: String(atual.estado) };
+    }
     const agora = new Date().toISOString();
     const mudancas: Record<string, unknown> = { estado: novo, atualizado_em: agora };
     if (pagamento) mudancas.pagamento_estado = pagamento;
     if (evento === 'pago') mudancas.pago_em = agora;
     if (['cancelado', 'expirado'].includes(evento)) mudancas.erro = null;
+    await s.update(R_PEDIDOS(), pedidoId, mudancas, tx);
+    const saleStatus = evento === 'pago' ? 'PAID' : evt.intencao === 'estornada' ? 'REFUNDED' : evento === 'cancelado' || evento === 'expirado' ? 'CANCELLED' : null;
+    if (saleStatus && atual.sale_id) {
+      const sale = await s.findOneWhere(R_SALES(), { id: String(atual.sale_id), empresa_id: evt.empresaId }, tx);
+      if (sale && String(sale.status) !== saleStatus && !(String(sale.status) === 'PAID' && saleStatus === 'CANCELLED' && sale.operational_venda_id))
+        await s.update(R_SALES(), sale.id as unknown as number, { status: saleStatus } as never, tx);
+    }
+    if (['cancelado', 'expirado', 'estornado'].includes(evento) && estadoSeguraReserva(atual.estado)) {
+      const reservas = await s.list(R_RESERVAS(), { page: 1, pageSize: 500, filter: { empresa_id: evt.empresaId, origem_recurso: ORIGEM_CHECKOUT, origem_id: pedidoId, status: 'ativa' } }, tx);
+      if (reservas.total > reservas.rows.length) throw new HttpError(409, 'Reservas excedem o limite seguro para liberação.');
+      for (const r of reservas.rows) await liberarReservaInterna(escopoDeSistema(evt.empresaId), Number(r.id), tx);
+      await liberarUsoCupom(evt.empresaId, atual.cupom_codigo ? String(atual.cupom_codigo) : null, tx);
+    }
+    await s.audit({ empresa_id: evt.empresaId, usuario_id: null, usuario: 'Gateway', acao: 'ajuste', recurso: 'commerce_pedidos', registro_id: pedidoId,
+      descricao: 'Transição por evento de pagamento', dados: { antes: { estado: atual.estado, pagamento_estado: atual.pagamento_estado }, depois: { estado: novo, pagamento_estado: pagamento } } }, tx);
+    return { pedido: atual, estado: novo };
+  }, { isolation: 'serializable' }));
 
-    await repetirSerial(() =>
-      s.transaction(
-      async (tx) => {
-        await s.update(R_PEDIDOS(), pedidoId, mudancas, tx);
-        // `sales` acompanha o dinheiro (estado analítico segue a verdade do canal).
-        const saleStatus =
-          evento === 'pago'
-            ? 'PAID'
-            : evt.intencao === 'estornada'
-              ? 'REFUNDED'
-              : evento === 'cancelado' || evento === 'expirado'
-                ? 'CANCELLED'
-                : null;
-        if (saleStatus && pedido.sale_id) {
-          const sale = await s.findOneWhere(R_SALES(), { id: String(pedido.sale_id), empresa_id: evt.empresaId }, tx);
-          if (sale && String(sale.status) !== saleStatus && !(String(sale.status) === 'PAID' && saleStatus === 'CANCELLED' && sale.operational_venda_id)) {
-            await s.update(R_SALES(), sale.id as unknown as number, { status: saleStatus } as never, tx);
-          }
-        }
-        // Dinheiro morto (cancelado/expirado/estornado sem conversão) devolve a
-        // peça: libera as reservas do checkout e o cupom (se houver).
-        if (['cancelado', 'expirado', 'estornado'].includes(evento) && estadoSeguraReserva(atual)) {
-          const reservas = await s.list(
-            R_RESERVAS(),
-            { page: 1, pageSize: 500, filter: { empresa_id: evt.empresaId, origem_recurso: ORIGEM_CHECKOUT, origem_id: pedidoId, status: 'ativa' } },
-            tx
-          );
-          for (const r of reservas.rows) {
-            await liberarReservaInterna(escopoDeSistema(evt.empresaId), Number(r.id), tx).catch(() => undefined);
-          }
-          await liberarUsoCupom(evt.empresaId, pedido.cupom_codigo ? String(pedido.cupom_codigo) : null, tx);
-        }
-      },
-      { isolation: 'serializable' }
-      )
-    );
-  } else if (pagamento) {
-    await s.update(R_PEDIDOS(), pedidoId, { pagamento_estado: pagamento }).catch(() => undefined);
-  }
-
-  // PAGOU → converte (ponte canônica). Falha honesta vira outbox com retry.
-  if (evt.intencao === 'paga') {
-    if (pedido.sale_id) await agendarMargemSale(String(pedido.sale_id), evt.empresaId);
-    const estadoAtual = String(pedido.estado);
-    if (estadoAtual === 'PAGO' || estadoAtual === 'AGUARDANDO_CORRECAO' || novo === 'PAGO') {
-      try {
-        const r = await converterPedidoSale(evt.empresaId, String(pedido.sale_id));
-        if (r.estado === 'AGUARDANDO_CORRECAO') {
-          await enfileirarOutbox(evt.empresaId, 'conversao', `sale:${pedido.sale_id}`, { sale_id: pedido.sale_id, pedido_id: pedidoId });
-        }
-      } catch (e) {
-        await enfileirarOutbox(evt.empresaId, 'conversao', `sale:${pedido.sale_id}`, { sale_id: pedido.sale_id, pedido_id: pedidoId, erro: String(e instanceof Error ? e.message : e).slice(0, 300) }).catch(() => undefined);
-      }
+  if (evt.intencao === 'paga' && resultado && ['PAGO', 'AGUARDANDO_CORRECAO'].includes(resultado.estado) && resultado.pedido.sale_id) {
+    await agendarMargemSale(String(resultado.pedido.sale_id), evt.empresaId);
+    try {
+      const r = await converterPedidoSale(evt.empresaId, String(resultado.pedido.sale_id));
+      if (r.estado === 'AGUARDANDO_CORRECAO') await enfileirarOutbox(evt.empresaId, 'conversao', `sale:${resultado.pedido.sale_id}`, { sale_id: resultado.pedido.sale_id, pedido_id: pedidoId });
+    } catch (e) {
+      await enfileirarOutbox(evt.empresaId, 'conversao', `sale:${resultado.pedido.sale_id}`, { sale_id: resultado.pedido.sale_id, pedido_id: pedidoId, erro: String(e instanceof Error ? e.message : e).slice(0, 300) }).catch(() => undefined);
     }
   }
 }
@@ -358,47 +332,40 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
  */
 export async function expirarCheckoutsPendentes(agora = new Date()): Promise<number> {
   const s = getStore();
-  const candidatos = await s.list(R_PEDIDOS(), { page: 1, pageSize: 500, filter: {}, sort: 'id', dir: 'asc' });
+  // SQL filters before LIMIT, so terminal/non-expired orders cannot starve
+  // due checkouts. Memory mode scans pages until it collects a bounded batch.
+  let candidatos: Row[] = [];
+  if (s.kind === 'postgres') {
+    const result = await query(`SELECT * FROM commerce_pedidos WHERE estado IN ('AGUARDANDO_PAGAMENTO', 'PAGAMENTO_AUTORIZADO') AND expira_em <= $1 ORDER BY expira_em, id LIMIT 500`, [agora.toISOString()]);
+    candidatos = result.rows;
+  } else {
+    for (let page = 1; ; page += 1) {
+      const batch = await s.list(R_PEDIDOS(), { page, pageSize: 500, filter: {}, sort: 'id', dir: 'asc' });
+      candidatos.push(...batch.rows.filter((r) => ['AGUARDANDO_PAGAMENTO', 'PAGAMENTO_AUTORIZADO'].includes(String(r.estado)) && r.expira_em && Date.parse(String(r.expira_em)) <= agora.getTime()));
+      if (candidatos.length >= 500 || page * 500 >= batch.total) break;
+    }
+    candidatos = candidatos.slice(0, 500);
+  }
   let expirados = 0;
-  for (const pedido of candidatos.rows) {
-    const estado = String(pedido.estado);
-    if (estado !== 'AGUARDANDO_PAGAMENTO' && estado !== 'PAGAMENTO_AUTORIZADO') continue;
-    if (!pedido.expira_em || Date.parse(String(pedido.expira_em)) > agora.getTime()) continue;
-    const pedidoId = Number(pedido.id);
-    const mudou = await repetirSerial(() =>
-      s.tryUpdateIf(
-        R_PEDIDOS(),
-        pedidoId,
-        { estado },
-        { estado: 'EXPIRADO', atualizado_em: new Date().toISOString() }
-      )
-    );
-    if (!mudou) continue;
-    // Reivindicou → o release PRECISA concluir: retry de 40001 aqui é o que
-    // impede reserva órfã quando duas varreduras se sobrepõem.
-    await repetirSerial(() =>
-      s.transaction(
-      async (tx) => {
-        const reservas = await s.list(
-          R_RESERVAS(),
-          { page: 1, pageSize: 500, filter: { empresa_id: Number(pedido.empresa_id), origem_recurso: ORIGEM_CHECKOUT, origem_id: pedidoId, status: 'ativa' } },
-          tx
-        );
-        for (const r of reservas.rows) {
-          await liberarReservaInterna(escopoDeSistema(Number(pedido.empresa_id)), Number(r.id), tx).catch(() => undefined);
-        }
-        await liberarUsoCupom(Number(pedido.empresa_id), pedido.cupom_codigo ? String(pedido.cupom_codigo) : null, tx);
-        if (pedido.sale_id) {
-          const sale = await s.findOneWhere(R_SALES(), { id: String(pedido.sale_id), empresa_id: Number(pedido.empresa_id) }, tx);
-          if (sale && String(sale.status) === 'PENDING') {
-            await s.update(R_SALES(), sale.id as unknown as number, { status: 'CANCELLED' } as never, tx);
-          }
-        }
-      },
-      { isolation: 'serializable' }
-      )
-    );
-    expirados += 1;
+  for (const pedido of candidatos) {
+    const pedidoId = Number(pedido.id); const empresaId = Number(pedido.empresa_id);
+    const mudou = await repetirSerial(() => s.transaction(async (tx) => {
+      const atual = await s.findOneWhere(R_PEDIDOS(), { id: pedidoId, empresa_id: empresaId }, tx);
+      if (!atual || !['AGUARDANDO_PAGAMENTO', 'PAGAMENTO_AUTORIZADO'].includes(String(atual.estado)) || !atual.expira_em || Date.parse(String(atual.expira_em)) > agora.getTime()) return false;
+      const sale = atual.sale_id ? await s.findOneWhere(R_SALES(), { id: String(atual.sale_id), empresa_id: empresaId }, tx) : null;
+      if (sale && String(sale.status) !== 'PENDING') return false;
+      const claim = await s.tryUpdateIf(R_PEDIDOS(), pedidoId, { estado: atual.estado }, { estado: 'EXPIRADO', atualizado_em: new Date().toISOString() }, tx);
+      if (!claim) return false;
+      const reservas = await s.list(R_RESERVAS(), { page: 1, pageSize: 500, filter: { empresa_id: empresaId, origem_recurso: ORIGEM_CHECKOUT, origem_id: pedidoId, status: 'ativa' } }, tx);
+      if (reservas.total > reservas.rows.length) throw new HttpError(409, 'Reservas excedem o limite seguro para liberação.');
+      for (const r of reservas.rows) await liberarReservaInterna(escopoDeSistema(empresaId), Number(r.id), tx);
+      await liberarUsoCupom(empresaId, atual.cupom_codigo ? String(atual.cupom_codigo) : null, tx);
+      if (sale) await s.update(R_SALES(), sale.id as unknown as number, { status: 'CANCELLED' } as never, tx);
+      await s.audit({ empresa_id: empresaId, usuario_id: null, usuario: 'Sistema', acao: 'ajuste', recurso: 'commerce_pedidos', registro_id: pedidoId,
+        descricao: 'Checkout expirado e reservas liberadas', dados: { antes: { estado: atual.estado }, depois: { estado: 'EXPIRADO' } } }, tx);
+      return true;
+    }, { isolation: 'serializable' }));
+    if (mudou) expirados += 1;
   }
   return expirados;
 }

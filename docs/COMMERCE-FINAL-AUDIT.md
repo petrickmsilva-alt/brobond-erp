@@ -1,5 +1,7 @@
 # COMMERCE — AUDITORIA FINAL POR MÓDULO (reconstruída do código real)
 
+> **Nota de 2026-10-29:** este documento é um retrato histórico. As antigas afirmações de `CODE_READY`/exit 0 não certificam a plataforma atual; credenciais presentes não são homologação. Para a decisão vigente, consulte [BROBOND-ENTERPRISE-FINAL-AUDIT.md](BROBOND-ENTERPRISE-FINAL-AUDIT.md).
+
 > Reconstruído em 2026-10-29 verificando cada célula contra o código e testes
 > existentes no checkout. **Nenhuma célula é "✅" sem artefato verificável.**
 > Colunas: LISTA / NOVO / DETALHE / EDITAR / API / PERSISTÊNCIA / RBAC /

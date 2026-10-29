@@ -6857,3 +6857,91 @@ CREATE INDEX IF NOT EXISTS ix_commerce_rastreio_empresa_status ON commerce_rastr
 CREATE UNIQUE INDEX IF NOT EXISTS uq_estoque_reservas_checkout
   ON estoque_reservas (origem_recurso, origem_id, produto_id, COALESCE(tamanho_id, 0), COALESCE(local_id, 0))
   WHERE origem_recurso = 'commerce_checkout' AND status = 'ativa';
+
+-- Mirror of migration 0070_foundation_integrity.sql
+-- Foundation: new audit signatures cover tenant and event time. Historical
+-- signatures remain version 1; no historical row is rewritten or re-signed.
+ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS hash_versao SMALLINT NOT NULL DEFAULT 1;
+DO $$ BEGIN
+  ALTER TABLE auditoria ADD CONSTRAINT auditoria_hash_versao_ck CHECK (hash_versao IN (1, 2));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Monotonically increasing fencing token survives manual retries; it is not a
+-- retry counter and therefore never resets when an operator requeues an event.
+ALTER TABLE commerce_outbox ADD COLUMN IF NOT EXISTS claim_versao INTEGER NOT NULL DEFAULT 0;
+DO $$ BEGIN
+  ALTER TABLE commerce_outbox ADD CONSTRAINT commerce_outbox_claim_versao_ck CHECK (claim_versao >= 0);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Due work and expired leases can be found without scanning unrelated rows.
+CREATE INDEX IF NOT EXISTS ix_commerce_outbox_devida
+  ON commerce_outbox (proxima_tentativa_em, id) WHERE estado = 'PENDENTE';
+CREATE INDEX IF NOT EXISTS ix_commerce_outbox_lease
+  ON commerce_outbox (atualizado_em, id) WHERE estado = 'PROCESSANDO';
+
+-- Mirror of migration 0071_periodos_contabeis.sql
+-- Períodos controlam somente a escrituração importada no livro financeiro
+-- existente; não são um segundo ledger nem um fechamento fiscal automático.
+CREATE TABLE IF NOT EXISTS fin_periodos_contabeis (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  competencia DATE NOT NULL CHECK (EXTRACT(DAY FROM competencia) = 1),
+  estado TEXT NOT NULL CHECK (estado IN ('aberto', 'fechado')),
+  motivo TEXT NOT NULL CHECK (length(trim(motivo)) BETWEEN 8 AND 500),
+  alterado_por INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT fin_periodos_empresa_competencia_uq UNIQUE (empresa_id, competencia)
+);
+CREATE INDEX IF NOT EXISTS fin_periodos_empresa_estado_idx ON fin_periodos_contabeis (empresa_id, estado, competencia DESC);
+
+-- Mirror of migration 0072_wms_enderecamento.sql
+-- WMS: endereçamento no cadastro canônico de locais. Não cria saldo ou movimento.
+ALTER TABLE locais ADD COLUMN IF NOT EXISTS nivel_wms TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE locais ADD COLUMN IF NOT EXISTS local_pai_id INTEGER;
+DO $$ BEGIN
+  ALTER TABLE locais ADD CONSTRAINT locais_nivel_wms_ck CHECK (nivel_wms IN ('local', 'armazem', 'zona', 'endereco'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE locais ADD CONSTRAINT locais_pai_wms_ck CHECK (
+    (nivel_wms IN ('local', 'armazem') AND local_pai_id IS NULL) OR
+    (nivel_wms IN ('zona', 'endereco') AND local_pai_id IS NOT NULL AND local_pai_id <> id)
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE locais ADD CONSTRAINT locais_pai_empresa_fk
+    FOREIGN KEY (empresa_id, local_pai_id) REFERENCES locais (empresa_id, id);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS locais_wms_pai_idx ON locais (empresa_id, local_pai_id, nivel_wms);
+
+-- Mirror of migration 0073_payment_payouts.sql
+-- Repasses declarados por relatório do provedor. São evidência de liquidação,
+-- não lançamentos financeiros ou um segundo livro-caixa.
+CREATE UNIQUE INDEX IF NOT EXISTS fin_extrato_empresa_id_uq ON fin_extrato_transacoes (empresa_id, id);
+CREATE TABLE IF NOT EXISTS payment_payouts (
+  id BIGSERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  provider TEXT NOT NULL,
+  payout_reference TEXT NOT NULL,
+  settlement_date DATE NOT NULL,
+  currency VARCHAR(3) NOT NULL CHECK (currency = 'BRL'),
+  net_amount BIGINT NOT NULL CHECK (net_amount >= 0),
+  content_hash TEXT NOT NULL CHECK (length(content_hash) = 64),
+  status TEXT NOT NULL CHECK (status IN ('IMPORTED', 'DIVERGENT', 'MATCHED')),
+  bank_transaction_id INTEGER,
+  created_by INTEGER REFERENCES usuarios(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (empresa_id, id),
+  UNIQUE (empresa_id, provider, payout_reference),
+  FOREIGN KEY (empresa_id, bank_transaction_id) REFERENCES fin_extrato_transacoes (empresa_id, id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS payment_payout_bank_once_uq
+  ON payment_payouts (empresa_id, bank_transaction_id) WHERE bank_transaction_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS payment_payout_status_idx ON payment_payouts (empresa_id, status, settlement_date DESC);
+ALTER TABLE payment_settlements ADD COLUMN IF NOT EXISTS payout_id BIGINT;
+DO $$ BEGIN
+  ALTER TABLE payment_settlements ADD CONSTRAINT payment_settlement_payout_empresa_fk
+    FOREIGN KEY (empresa_id, payout_id) REFERENCES payment_payouts (empresa_id, id);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS payment_settlement_payout_idx ON payment_settlements (empresa_id, payout_id);

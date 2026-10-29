@@ -86,7 +86,7 @@ export function jsonCanônico(v: unknown): string {
     .join(',') + '}';
 }
 
-/** Campos que entram na assinatura (id, data, hash* ficam de fora). */
+/** V1 preserva hashes históricos. V2 assina também empresa e instante do evento. */
 function payloadAssinavel(e: AuditEntry | Record<string, any>): string {
   return jsonCanônico({
     usuario_id: e.usuario_id ?? null,
@@ -96,6 +96,9 @@ function payloadAssinavel(e: AuditEntry | Record<string, any>): string {
     registro_id: e.registro_id ?? null,
     descricao: e.descricao ?? '',
     dados: e.dados ?? null,
+    ...(Number(('hash_versao' in e ? e.hash_versao : 1) ?? 1) === 2
+      ? { hash_versao: 2, empresa_id: e.empresa_id, data: 'data' in e ? e.data : null }
+      : {}),
   });
 }
 
@@ -106,10 +109,10 @@ export function hashCadeiaAuditoria(hashAnterior: string, entry: AuditEntry | Re
 type LinhaAuditoria = Record<string, any>;
 
 /** Percorre a trilha em ordem de id e devolve o resultado da verificação. */
-export function verificarCadeiaAuditoria(rows: LinhaAuditoria[]): AuditoriaVerificacao {
+export function verificarCadeiaAuditoria(rows: LinhaAuditoria[], hashAnterior = ''): AuditoriaVerificacao {
   const ordenadas = [...rows].sort((a, b) => Number(a?.id ?? 0) - Number(b?.id ?? 0));
   const quebras: number[] = [];
-  let anterior = '';
+  let anterior = hashAnterior;
   let verificadas = 0;
   for (const row of ordenadas) {
     const esperado = hashCadeiaAuditoria(anterior, row);

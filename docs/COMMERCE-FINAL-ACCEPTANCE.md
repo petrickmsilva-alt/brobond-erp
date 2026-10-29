@@ -1,5 +1,7 @@
 # COMMERCE — ACEITAÇÃO FINAL (reconstruída a partir do código real)
 
+> **Nota de 2026-10-29:** este documento é um retrato histórico. As antigas afirmações de `CODE_READY`/exit 0 não certificam a plataforma atual; credenciais presentes não são homologação. Para a decisão vigente, consulte [BROBOND-ENTERPRISE-FINAL-AUDIT.md](BROBOND-ENTERPRISE-FINAL-AUDIT.md).
+
 > **Este documento foi reconstruído em 2026-10-29 a partir do código, dos testes
 > e das execuções realizadas nesta rodada. Nenhum item aqui foi declarado sem
 > ter sido executado; tudo que não pôde ser executado aparece como NÃO

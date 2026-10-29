@@ -962,8 +962,8 @@ export async function forgotPassword(req: Request, res: Response) {
         });
       }
     }
-  } catch (e: any) {
-    console.warn('⚠️  Falha ao processar "esqueci minha senha":', e?.message || e);
+  } catch {
+    console.warn('⚠️  Falha ao processar solicitação de recuperação de senha.');
   }
   // Resposta idêntica existindo ou não o e-mail (evita descoberta de contas).
   res.json({ ok: true });

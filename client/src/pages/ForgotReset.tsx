@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, ShieldCheck } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
-import { useAuth } from '../auth/AuthContext';
 import { Alert } from '../components/ui';
 import { Logo } from '../components/Logo';
 import ForcaSenha, { type PoliticaPublica } from '../components/ForcaSenha';
@@ -27,12 +26,10 @@ function PublicShell({ children }: { children: React.ReactNode }) {
 }
 
 export function ForgotPage() {
-  const { meta } = useAuth();
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [err, setErr] = useState('');
-  const [consoleLink, setConsoleLink] = useState('');
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -41,9 +38,6 @@ export function ForgotPage() {
     try {
       await api.post('/auth/forgot', { email });
       setDone(true);
-      if (!meta?.smtp?.configurado) {
-        setConsoleLink('Neste ambiente o link de redefinição aparece no console do servidor (em desenvolvimento) ou você pode pedir ao administrador para redefinir a senha.');
-      }
     } catch (ex: any) {
       setErr(ex instanceof ApiError ? ex.message : 'Falha ao enviar. Tente novamente.');
     } finally {
@@ -62,13 +56,11 @@ export function ForgotPage() {
             <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-500" />
             <h2 className="mt-4 text-xl font-bold text-navy-900">Verifique seu e-mail</h2>
             <p className="mt-2 text-sm text-slate-500">
-              Se existir uma conta para <strong>{email}</strong>, enviamos um link de redefinição válido por 1 hora.
+              Se existir uma conta para <strong>{email}</strong> e o serviço de e-mail estiver disponível, você receberá um link de redefinição válido por 1 hora.
             </p>
-            {consoleLink && (
-              <div className="mt-4">
-                <Alert tone="amber">{consoleLink}</Alert>
-              </div>
-            )}
+            <div className="mt-4">
+              <Alert tone="amber">Se não receber o e-mail, peça ajuda ao administrador para recuperar seu acesso.</Alert>
+            </div>
             <Link to="/login" className="btn-primary mt-6 w-full justify-center">
               Voltar para o login
             </Link>

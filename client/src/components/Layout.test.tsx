@@ -206,36 +206,32 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     }
   });
 
-  it('o breadcrumb reflete as novas áreas da Árvore Master (Vendas, Estoque & Suprimentos, Produção, Fiscal, Administração, Commerce, Creators, Utilidades Globais)', async () => {
-    const casos = [
-      { rota: '/vendas/123', area: 'Vendas', modulo: 'Vendas', id: '#123' },
-      { rota: '/ordens/45', area: 'Produção', modulo: 'Ordens de Produção', id: '#45' },
-      { rota: '/compras/88', area: 'Estoque & Suprimentos', modulo: 'Compras', id: '#88' },
-      { rota: '/fornecedores', area: 'Cadastros', modulo: 'Fornecedores' },
-      { rota: '/expedicao', area: 'Vendas', modulo: 'Expedição' },
-      { rota: '/documentos-fiscais', area: 'Fiscal', modulo: 'Documentos fiscais' },
-      { rota: '/empresas', area: 'Administração', modulo: 'Empresas' },
-      { rota: '/conectores/mercado-livre', area: 'Commerce', modulo: 'Mercado Livre' },
-      { rota: '/creators', area: 'Creators', modulo: 'Creators' },
-      { rota: '/matches', area: 'Creators', modulo: 'Matches' },
-      { rota: '/outreach-ai', area: 'Creators', modulo: 'Outreach AI' },
-      { rota: '/campanhas', area: 'Creators', modulo: 'Campanhas' },
-      { rota: '/config', area: 'Utilidades Globais', modulo: 'Configurações' },
-    ];
-
-    for (const c of casos) {
-      const view = await renderShell(c.rota);
-      const nav = trilha();
-      expect(within(nav).getAllByText(c.area).length, `Área ${c.area} ausente no breadcrumb de ${c.rota}`).toBeGreaterThanOrEqual(1);
-      expect(within(nav).getAllByText(c.modulo).length, `Módulo ${c.modulo} ausente no breadcrumb de ${c.rota}`).toBeGreaterThanOrEqual(1);
-      if (c.id) {
-        expect(within(nav).getByText(c.id)).toHaveAttribute('aria-current', 'page');
-      } else {
-        const candidatos = within(nav).getAllByText(c.modulo);
-        expect(candidatos[candidatos.length - 1]).toHaveAttribute('aria-current', 'page');
-      }
-      view.unmount();
+  it.each([
+    { rota: '/vendas/123', area: 'Vendas', modulo: 'Vendas', id: '#123' },
+    { rota: '/ordens/45', area: 'Produção', modulo: 'Ordens de Produção', id: '#45' },
+    { rota: '/compras/88', area: 'Estoque & Suprimentos', modulo: 'Compras', id: '#88' },
+    { rota: '/fornecedores', area: 'Cadastros', modulo: 'Fornecedores' },
+    { rota: '/expedicao', area: 'Vendas', modulo: 'Expedição' },
+    { rota: '/documentos-fiscais', area: 'Fiscal', modulo: 'Documentos fiscais' },
+    { rota: '/empresas', area: 'Administração', modulo: 'Empresas' },
+    { rota: '/conectores/mercado-livre', area: 'Commerce', modulo: 'Mercado Livre' },
+    { rota: '/creators', area: 'Creators', modulo: 'Creators' },
+    { rota: '/matches', area: 'Creators', modulo: 'Matches' },
+    { rota: '/outreach-ai', area: 'Creators', modulo: 'Outreach AI' },
+    { rota: '/campanhas', area: 'Creators', modulo: 'Campanhas' },
+    { rota: '/config', area: 'Utilidades Globais', modulo: 'Configurações' },
+  ])('breadcrumb da Árvore Master em $rota', async (c) => {
+    const view = await renderShell(c.rota);
+    const nav = trilha();
+    expect(within(nav).getAllByText(c.area).length, `Área ${c.area} ausente no breadcrumb de ${c.rota}`).toBeGreaterThanOrEqual(1);
+    expect(within(nav).getAllByText(c.modulo).length, `Módulo ${c.modulo} ausente no breadcrumb de ${c.rota}`).toBeGreaterThanOrEqual(1);
+    if (c.id) {
+      expect(within(nav).getByText(c.id)).toHaveAttribute('aria-current', 'page');
+    } else {
+      const candidatos = within(nav).getAllByText(c.modulo);
+      expect(candidatos[candidatos.length - 1]).toHaveAttribute('aria-current', 'page');
     }
+    view.unmount();
   });
 
   it('a busca global (Ctrl/Cmd+K) usa a mesma fonte, exibe contexto Área → Grupo, busca por rota/sinônimo e respeita planned e RBAC', async () => {

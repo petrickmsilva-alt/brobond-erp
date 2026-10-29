@@ -48,10 +48,16 @@ export async function melhorPromocaoAtiva(
   tx?: Tx
 ): Promise<{ regra: RegraDesconto; nome: string } | null> {
   const s = getStore();
-  const out = await s.list(R_PROMOS(), { page: 1, pageSize: 500, filter: { empresa_id: empresaId, ativo: true } }, tx);
+  const all: Row[] = [];
+  for (let page = 1; ; page += 1) {
+    const out = await s.list(R_PROMOS(), { page, pageSize: 500, filter: { empresa_id: empresaId, ativo: true }, sort: 'id', dir: 'asc' }, tx);
+    if (out.total > 10000) throw new HttpError(409, 'Promoções ativas excedem o limite seguro para cálculo.');
+    all.push(...out.rows);
+    if (all.length >= out.total || out.rows.length === 0) break;
+  }
   const dia = hoje.toISOString().slice(0, 10);
   let melhor: { regra: RegraDesconto; nome: string; desconto: number } | null = null;
-  for (const row of out.rows) {
+  for (const row of all) {
     const inicio = row.data_inicio ? String(row.data_inicio).slice(0, 10) : null;
     const fim = row.data_fim ? String(row.data_fim).slice(0, 10) : null;
     if (inicio && inicio > dia) continue;
@@ -164,6 +170,7 @@ export async function liberarUsoCupom(empresaId: number, codigo: string | null |
     );
     if (ok) return;
   }
+  throw new HttpError(409, 'Não foi possível liberar o uso do cupom; tente novamente.');
 }
 
 /** Normaliza o código digitado (maúsculas, sem espaços). */

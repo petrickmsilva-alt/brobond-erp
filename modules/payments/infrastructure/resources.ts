@@ -108,9 +108,16 @@ export const R_SETTLEMENTS = resource('payment_settlements', [
   ['refund_amount', 'integer'],
   ['chargeback_amount', 'integer'],
   ['payout_reference', 'text'],
+  ['payout_id', 'integer'],
   ['status', 'text'],
   ['evidence', 'json'],
   ['created_at', 'datetime'],
   ['updated_at', 'datetime'],
 ]);
-export const PAYMENT_RESOURCES = [R_INTENTS, R_ATTEMPTS, R_OPERATIONS, R_METHODS, R_ROUTING, R_REFUNDS, R_DISPUTES, R_SETTLEMENTS];
+export const R_PAYOUTS = resource('payment_payouts', [
+  ['provider', 'text'], ['payout_reference', 'text'], ['settlement_date', 'date'],
+  ['currency', 'text'], ['net_amount', 'integer'], ['content_hash', 'text'],
+  ['status', 'text'], ['bank_transaction_id', 'integer'], ['created_by', 'integer'],
+  ['created_at', 'datetime'], ['updated_at', 'datetime'],
+]);
+export const PAYMENT_RESOURCES = [R_INTENTS, R_ATTEMPTS, R_OPERATIONS, R_METHODS, R_ROUTING, R_REFUNDS, R_DISPUTES, R_SETTLEMENTS, R_PAYOUTS];

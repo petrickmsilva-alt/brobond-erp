@@ -86,8 +86,8 @@ async function enviar(opts: NotifOpts): Promise<void> {
     </div>`;
 
   for (const email of emails) {
-    await enviarEmail({ to: email, assunto: opts.assunto, html: htmlBase }).catch((e: any) => {
-      console.warn(`⚠️  Falha ao enviar notificação para ${email}:`, e?.message);
+    await enviarEmail({ to: email, assunto: opts.assunto, html: htmlBase }).catch(() => {
+      console.warn('⚠️  Falha ao preparar notificação de e-mail.');
     });
   }
 }

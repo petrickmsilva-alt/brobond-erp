@@ -1,4 +1,5 @@
 import { validarConfiguracaoFrete, type ConfigFrete } from './commerce/frete';
+import { validarEnderecoWms } from './wmsEnderecamento';
 // Camada de serviço: CRUD genérico + regras de negócio por módulo
 // (estoque, movimentações, ordens, usuários) + auditoria.
 import { randomBytes } from 'node:crypto';
@@ -78,7 +79,8 @@ export function toHttpError(e: any, r?: Resource): HttpError {
   const pg = translatePgError(e, r);
   if (pg) return pg;
   if (e?.message === 'NO_DB') return new HttpError(503, 'Banco de dados indisponível.');
-  console.error('Erro inesperado:', e);
+  // Erros de drivers e provedores podem conter SQL, tokens ou dados pessoais.
+  console.error('Erro inesperado; detalhes sensíveis omitidos.');
   return new HttpError(500, 'Erro interno do servidor');
 }
 
@@ -357,6 +359,8 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   // Equipe vigente e carteira: projeção em lote (uma consulta por tabela),
   // recortada pela empresa ativa — nunca um N+1.
   if (r.key === 'representantes') await anotarComercialRepresentantes(getStore(), out.rows, escopo);
+  // Outbox payload é de processamento interno e pode conter dados sensíveis.
+  if (r.key === 'commerce_outbox') for (const row of out.rows) delete row.payload;
   return out;
 }
 
@@ -671,6 +675,7 @@ export async function getRecord(r: Resource, id: number, escopoOuAtor?: EscopoOu
   await anotarGrades(r, [row], escopo);
   await anotarEstoqueInsumos(r, [row], escopo);
   if (r.key === 'representantes') await anotarComercialRepresentantes(getStore(), [row], escopo);
+  if (r.key === 'commerce_outbox') delete row.payload;
   return row;
 }
 
@@ -1172,6 +1177,7 @@ async function validarConversaoDeUnidade(data: Row, empresaId: number, tx?: Tx):
 
 export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor; cyclicCounting?: Record<string, unknown> } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
+  if (r.key === 'lancamentos_financeiros' && data.documento_origem_recurso === 'fin_importacoes_contabeis') throw new HttpError(409, 'Partidas importadas só podem ser criadas pelo fluxo contábil.');
   const s = getStore();
   if (r.key === 'commerce_configuracoes') validarConfiguracaoFrete(data as ConfigFrete);
   // CRM 3.0: oportunidade perdida exige motivo de perda (espelha o CHECK
@@ -1256,6 +1262,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       // Nenhum id enviado pelo cliente fura o escopo: toda referência para um
       // recurso com empresa precisa pertencer à MESMA empresa ativa.
       await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
+      if (r.key === 'locais') await validarEnderecoWms(s, escopo.empresaId, data, null, tx);
 
       // MASTER (MA-02..MA-07): integridade de domínio comercial — hierarquia sem
       // ciclo, carteira sem sobreposição, meta sem período ambíguo, participações
@@ -1376,6 +1383,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       const before = await s.findOneWhere(r, filtroAntes, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
       assertRegistroDaEmpresaParaEscrita(r, before, escopo);
+      if (r.key === 'lancamentos_financeiros' && (before.documento_origem_recurso === 'fin_importacoes_contabeis' || data.documento_origem_recurso === 'fin_importacoes_contabeis')) throw new HttpError(409, 'Partidas contábeis importadas são imutáveis; use uma nova escrituração de ajuste.');
       if (r.key === 'commerce_configuracoes') validarConfiguracaoFrete({ ...before, ...data } as ConfigFrete);
       if (r.key === 'commerce_configuracoes' && data.checkout_usuario_id) {
         const { responsavelCheckout } = await import('./commerce/loja-base');
@@ -1396,6 +1404,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
         }
       }
       await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
+      if (r.key === 'locais') await validarEnderecoWms(s, escopo.empresaId, data, before, tx);
       if (r.key === 'ordens' && data.terceiro_id !== undefined && Number(data.terceiro_id || 0) !== Number(before.terceiro_id || 0)) {
         const eventosCustodia = getResource('terceirizacao_eventos');
         if (eventosCustodia && await s.countWhere(eventosCustodia, { empresa_id: escopo.empresaId, ordem_id: id }, tx) > 0) {
@@ -1677,6 +1686,7 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
       const before = await s.findOneWhere(r, filtroAntes, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
       assertRegistroDaEmpresaParaEscrita(r, before, escopo);
+      if (r.key === 'lancamentos_financeiros' && before.documento_origem_recurso === 'fin_importacoes_contabeis') throw new HttpError(409, 'Partidas contábeis importadas não podem ser excluídas; use uma nova escrituração de ajuste.');
 
       if (r.key === 'usuarios') {
         if (Number(before.id) === Number(actor.id)) throw new HttpError(400, 'Você não pode excluir o seu próprio usuário.');
@@ -1699,6 +1709,7 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
       }
       let usoLocal: UsoLocal | null = null;
       if (r.key === 'locais') {
+        if (await s.countWhere(r, { empresa_id: escopo.empresaId, local_pai_id: id }, tx)) throw new HttpError(409, 'Local possui endereços dependentes; remova os vínculos antes de excluir.');
         // A decisão é do administrador: o local pode ser excluído mesmo que o
         // sistema o use (saldos, movimentações, inventários) — o histórico não é
         // apagado, apenas o vínculo (FK) e o registro do cadastro. Gerente só

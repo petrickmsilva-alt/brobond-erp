@@ -1,7 +1,7 @@
 // ============================================================================
 // COMMERCE — FILA DE SINCRONIZAÇÃO & OBSERVABILIDADE. Rota /commerce/fila.
 //
-// Outbox at-le-once (empresa + tipo + chave) com backoff visível, falhas de
+// Outbox at-least-once (empresa + tipo + chave) com backoff visível, falhas de
 // publicação recentes e webhooks do gateway — tudo lido do servidor; aqui não
 // se reprocessa “no escuro”: o retry real é o agendador/outbox.
 // ============================================================================
@@ -46,6 +46,7 @@ const ROTULO_TIPO: Record<string, string> = {
 export default function CommerceFilaPage() {
   const [dados, setDados] = useState<Eventos | null>(null);
   const [carregando, setCarregando] = useState(true);
+  const [reenfileirando, setReenfileirando] = useState<number | null>(null);
   const [erro, setErro] = useState('');
   const [tipo, setTipo] = useState('');
 
@@ -68,6 +69,18 @@ export default function CommerceFilaPage() {
   const outbox = (dados?.outbox ?? []).filter((o) => !tipo || o.tipo === tipo);
   const pendentes = (dados?.outbox ?? []).filter((o) => ['PENDENTE', 'PROCESSANDO'].includes(o.estado)).length;
   const erros = (dados?.outbox ?? []).filter((o) => o.estado === 'ERRO').length;
+
+  async function reprocessar(id: number) {
+    setReenfileirando(id);
+    try {
+      await apiFetch(`/commerce/outbox/${id}/reprocessar`, { method: 'POST' });
+      await carregar();
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : 'Não foi possível reenfileirar o evento.');
+    } finally {
+      setReenfileirando(null);
+    }
+  }
 
   const colunasOutbox: DataTableColumn<Eventos['outbox'][number]>[] = [
     {
@@ -104,13 +117,19 @@ export default function CommerceFilaPage() {
         ),
     },
     { key: 'atualizado', header: 'Atualizado', render: (o) => <span className="text-sm text-muted">{dataHora(o.atualizado_em)}</span> },
+    { key: 'acao', header: 'Recuperação', render: (o) => o.estado === 'ERRO' ? (
+      <button type="button" className="btn-secondary" disabled={reenfileirando !== null}
+        onClick={() => void reprocessar(o.id)} aria-label={`Reenfileirar evento ${o.id}`}>
+        {reenfileirando === o.id ? 'Reenfileirando…' : 'Reenfileirar'}
+      </button>
+    ) : <span className="text-muted">—</span> },
   ];
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Fila de sincronização"
-        description="Outbox do commerce (conversões, publicações e sincronizações) com idempotência por chave e retry automático, mais as últimas confirmações dos webhooks de pagamento."
+        description="Outbox do commerce com registro único por chave e retry automático. Entregas externas podem ser repetidas; consumidores precisam ser idempotentes."
         actions={
           <>
             <Link className="btn-ghost" to="/commerce/eventos">
@@ -229,8 +248,7 @@ export default function CommerceFilaPage() {
 
       <p className="flex items-center gap-2 text-xs text-muted">
         <Activity className="h-4 w-4" aria-hidden="true" />
-        Retry é do servidor (backoff exponencial até 10 tentativas): abrir a tela não dispara processamento — o
-        agendador e a fila são a autoridade.
+        Retry é do servidor (backoff exponencial até 10 tentativas). Reenfileirar registra a recuperação; o agendador continua responsável pelo processamento.
       </p>
     </div>
   );

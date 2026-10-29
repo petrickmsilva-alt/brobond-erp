@@ -323,7 +323,7 @@ describe('Estoque: ERP → loja', () => {
           return [{ id: 321, sku: 'CALCA-JEANS-CLARA', type: 'simple', permalink: `${LOJA}/produto/calca-jeans-clara/` }];
         if (url.includes('/products/batch')) {
           enviados.push({ url, corpo: JSON.parse(String((init as any)?.body || '{}')) });
-          return { update: [] };
+          return { update: JSON.parse(String((init as any)?.body || '{}')).update.map((u: any) => ({ id: u.id })) };
         }
         return [];
       });
@@ -360,7 +360,7 @@ describe('Estoque: ERP → loja', () => {
           ];
         if (url.includes('/variations/batch')) {
           enviados.push(JSON.parse(String((init as any)?.body || '{}')));
-          return { update: [] };
+          return { update: JSON.parse(String((init as any)?.body || '{}')).update.map((u: any) => ({ id: u.id })) };
         }
         return [];
       });
@@ -375,5 +375,19 @@ describe('Estoque: ERP → loja', () => {
         restaurar();
       }
     });
+  });
+});
+
+test('estoque Woo: erro por item no lote não é registrado como sucesso', async () => {
+  await comLoja(async () => {
+    const produto = await novoProduto({ sku: 'LOTE-FALHO', nome: 'Produto lote falho' });
+    const tamanho = await novoTamanho('GG'); await inserirSaldo(produto, tamanho, 2);
+    const { restaurar } = espionarFetch((url) => {
+      if (url.includes('/products?')) return [{ id: 777, sku: 'LOTE-FALHO', type: 'simple' }];
+      if (url.includes('/products/batch')) return { update: [{ id: 777, error: { code: 'invalid', message: 'falhou' } }] };
+      return [];
+    });
+    try { await assert.rejects(() => sincronizarEstoqueLoja(reqDe('admin'), resFake().res), (e: any) => e.status === 502); }
+    finally { restaurar(); }
   });
 });

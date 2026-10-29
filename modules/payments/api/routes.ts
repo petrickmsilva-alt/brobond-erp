@@ -20,10 +20,15 @@ import {
   R_SETTLEMENTS,
 } from '../infrastructure/resources';
 import { locked } from '../infrastructure/locking';
+import { listPayouts, payoutDetail, importPayout, matchPayout } from '../application/payouts';
 const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => {
   Promise.resolve(fn(req, res)).catch(next);
 };
 export const paymentsRouter = express.Router();
+paymentsRouter.get('/payouts', wrap(listPayouts));
+paymentsRouter.get('/payouts/:id', wrap(payoutDetail));
+paymentsRouter.post('/payouts/import', wrap(importPayout));
+paymentsRouter.post('/payouts/:id/match', wrap(matchPayout));
 function authorize(req: Request, manage = false) {
   const actor = currentUser(req);
   if (!actor) throw new HttpError(401, 'Autenticação necessária.');
@@ -336,6 +341,7 @@ paymentsRouter.post(
     await locked(empresaId, `settlement:${id}`, async (tx) => {
       const old = await getStore().findOneWhere(R_SETTLEMENTS, { empresa_id: empresaId, id }, tx);
       if (!old) throw new HttpError(404, 'Liquidação não encontrada.');
+      if (b.status === 'MATCHED') throw new HttpError(409, 'Conciliação MATCHED exige vínculo do repasse ao extrato bancário.');
       await getStore().update(
         R_SETTLEMENTS,
         id,

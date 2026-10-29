@@ -16,21 +16,12 @@
 //
 //   P2/P3 — relatados, não bloqueiam (docs, dívida cosmética).
 //
-//   EXTERNAL_HOMOLOGATION_READY — frente SEPARADA: depende de credenciais
-//   oficiais dos conectores (Mercado Livre, Nuvemshop, Mercado Pago,
-//   Instagram). Sem credenciais → EXTERNAL_HOMOLOGATION_BLOCKED, nunca
-//   mascarado, e FULL_GO_LIVE permanece false. A ausência de credencial
-//   externa NÃO vira P0/P1 de código (CODE_READY é independente).
-//
-//   Vereditos emitidos (todos no mesmo relatório):
-//     · CODE_READY                    = 0 achados P0 e P1 de código;
-//     · EXTERNAL_HOMOLOGATION_READY   = as 4 credenciais oficiais presentes;
-//                                       caso contrário EXTERNAL_HOMOLOGATION_BLOCKED;
-//     · FULL_GO_LIVE                  = CODE_READY && EXTERNAL_HOMOLOGATION_READY.
-//
-// Nenhum achado é convertido em skip, nenhum falha vira warning, nenhum
-// resultado não executado é declarado como executado. Exit 1 quando há
-// P0/P1 de código (CODE_READY false).
+//   Este verificador encontra padrões estruturais e executa apenas os três
+//   gates listados abaixo; não executa toda a suíte, nem homologação de parceiros.
+//   Presença de credencial NÃO prova contrato válido nem habilita go-live.
+//   CODE_READY, EXTERNAL_HOMOLOGATION_READY e FULL_GO_LIVE permanecem false
+//   até existirem evidências completas externas a esta verificação.
+//   A aprovação estrutural é reportada separadamente e o gate final sai 1.
 //
 // Uso:  node --import tsx scripts/commerce-final-go-live-audit.ts [--json]
 // ============================================================================
@@ -407,7 +398,7 @@ const envPresente = (nome: string) => Boolean(process.env[nome] && process.env[n
 if (envPresente('MERCADOLIVRE_TOKEN')) {
   conectorStatus.push({ provider: 'mercadolivre', status: 'CREDENCIAL_PRESENTE', motivo: 'MERCADOLIVRE_TOKEN presente (valor não exibido)' });
 } else {
-  conectorStatus.push({ provider: 'mercadolivre', status: 'CREDENCIAL_AUSENTE', motivo: 'MERCADOLIVRE_TOKEN ausente e credencial oficial não homologada' });
+  conectorStatus.push({ provider: 'mercadolivre', status: 'CREDENCIAL_AUSENTE', motivo: 'MERCADOLIVRE_TOKEN ausente no ambiente; homologação não verificada' });
 }
 
 if (process.env.DATABASE_URL) {
@@ -419,10 +410,12 @@ import { query } from './server/src/db';
 try {
   const r = await query("SELECT DISTINCT provider FROM connectors WHERE access_token IS NOT NULL AND status IN ('CONNECTED','SANDBOX_ACTIVE')", []);
   console.log(JSON.stringify(r.rows.map((x: any) => String(x.provider))));
-} catch { console.log('[]'); }
+  process.exit(0);
+} catch { console.error('CONNECTORS_QUERY_FAILED'); process.exit(1); }
 `],
       { cwd: raiz, encoding: 'utf8', timeout: 30_000 }
     );
+    if (r.status !== 0 || r.error) throw new Error('Consulta de conectores indisponível.');
     const achadosDb = JSON.parse((r.stdout ?? '[]').trim() || '[]') as string[];
     for (const p of ['nuvemshop', 'mercadopago', 'instagram'] as const) {
       const tem = achadosDb.some((x) => x.toLowerCase().includes(p) || (p === 'instagram' && x.toLowerCase().includes('meta')));
@@ -439,12 +432,13 @@ try {
   }
 } else {
   for (const p of ['nuvemshop', 'mercadopago', 'instagram'] as const) {
-    conectorStatus.push({ provider: p, status: 'CREDENCIAL_AUSENTE', motivo: 'sem DATABASE_URL para verificar + sem credencial oficial homologada' });
+    conectorStatus.push({ provider: p, status: 'NAO_VERIFICAVEL', motivo: 'sem DATABASE_URL para verificar configuração' });
   }
 }
 
-const EXTERNAL_HOMOLOGATION_READY = conectorStatus.every((c) => c.status === 'CREDENCIAL_PRESENTE');
-const EXTERNAL_MOTIVOS = conectorStatus.filter((c) => c.status !== 'CREDENCIAL_PRESENTE').map((c) => `${c.provider}: ${c.motivo}`);
+// Presença de configuração não é evidência de homologação nem de prontidão.
+const EXTERNAL_HOMOLOGATION_READY = false;
+const EXTERNAL_MOTIVOS = ['O script não executa homologação externa nem verifica contratos com parceiros.', ...conectorStatus.filter((c) => c.status !== 'CREDENCIAL_PRESENTE').map((c) => `${c.provider}: ${c.motivo}`)];
 
 // ---------------------------------------------------------------------------
 // RELATÓRIO
@@ -457,12 +451,15 @@ const P3a = porSeveridade('P3');
 const erros = [...P0a, ...P1a];
 const warnings = [...P2a, ...P3a];
 
-const CODE_READY = erros.length === 0;
-const FULL_GO_LIVE = CODE_READY && EXTERNAL_HOMOLOGATION_READY;
-const veredito = CODE_READY ? 'CODE_READY' : 'BLOCKED';
+const STRUCTURAL_CHECKS_PASSED = erros.length === 0;
+// Este script não prova o escopo integral, testes obrigatórios ou capacidades ausentes.
+const CODE_READY = false;
+const FULL_GO_LIVE = false;
+const veredito = 'BLOCKED';
 
 const saidaJson = {
   veredito,
+  STRUCTURAL_CHECKS_PASSED,
   CODE_READY,
   EXTERNAL_HOMOLOGATION_READY,
   EXTERNAL_HOMOLOGATION_STATUS: EXTERNAL_HOMOLOGATION_READY ? 'READY' : 'EXTERNAL_HOMOLOGATION_BLOCKED',
@@ -478,7 +475,7 @@ const saidaJson = {
 };
 if (process.argv.includes('--json')) {
   console.log(JSON.stringify(saidaJson, null, 2));
-  process.exit(erros.length ? 1 : 0);
+  process.exit(1);
 }
 
 const linha = (a: Achado) => `   · [${a.id}] ${a.mensagem}${a.onde ? ` — ${a.onde}` : ''}`;
@@ -504,16 +501,10 @@ console.log();
 
 console.log(`ERROS (P0+P1 de código): ${erros.length}`);
 console.log(`WARNINGS (P2+P3): ${warnings.length}`);
-console.log(`CODE_READY: ${CODE_READY ? 'SIM' : 'NÃO'}`);
-console.log(
-  EXTERNAL_HOMOLOGATION_READY
-    ? 'EXTERNAL_HOMOLOGATION_READY: SIM (4/4 credenciais oficiais)'
-    : `EXTERNAL_HOMOLOGATION_BLOCKED: ${EXTERNAL_MOTIVOS.length} conector(es) sem credencial oficial homologada (bloqueia apenas FULL_GO_LIVE, não CODE_READY)`
-);
-console.log(`FULL_GO_LIVE: ${FULL_GO_LIVE ? 'SIM' : 'NÃO'}`);
-
-if (erros.length) {
-  console.error('\nGATE BLOCKED — há P0/P1 de código abertos. Nenhum é convertido em skip nem em warning.');
-  process.exit(1);
-}
-console.log('\nGATE CODE_READY — sem P0/P1 de código. FULL_GO_LIVE continua NÃO até a homologação externa.');
+console.log(`STRUCTURAL_CHECKS_PASSED: ${STRUCTURAL_CHECKS_PASSED ? 'SIM' : 'NÃO'}`);
+console.log('CODE_READY: NÃO — verificações estruturais não demonstram o escopo completo.');
+console.log('EXTERNAL_HOMOLOGATION_BLOCKED: o script não executa homologação com parceiros.');
+for (const motivo of EXTERNAL_MOTIVOS) console.log(`   · ${motivo}`);
+console.log('FULL_GO_LIVE: NÃO');
+console.error('\nGATE BLOCKED — evidências completas e homologação externa não verificadas.');
+process.exit(1);

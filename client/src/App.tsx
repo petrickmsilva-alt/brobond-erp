@@ -13,6 +13,7 @@ import { MODULES, usaCrudGenerico, visibleModules } from './modules';
 // pesadas (Usuários, Financeiro, dentro de ModulePage) — é baixado sob demanda,
 // quando a rota é realmente acessada.
 const ModulePage = lazy(() => import('./pages/ModulePage'));
+const FinanceiroPeriodosPage = lazy(() => import('./pages/FinanceiroPeriodosPage'));
 const FiscalObrigacaoDetalhePage = lazy(() => import('./pages/FiscalObrigacaoDetalhePage'));
 const FiscalExecucoesPage = lazy(() => import('./pages/FiscalExecucoesPage'));
 const Settings = lazy(() => import('./pages/Settings'));
@@ -65,6 +66,7 @@ const CommerceOfertaDetalhePage = lazy(() => import('./pages/commerce/OfertaDeta
 const CommerceOfertaFormPage = lazy(() => import('./pages/commerce/OfertaFormPage'));
 // Painéis operacionais consumindo APIs reais do commerce.
 const PaymentEnginePage = lazy(() => import('./pages/commerce/PaymentEnginePage'));
+const PaymentPayoutsPage = lazy(() => import('./pages/commerce/PaymentPayoutsPage'));
 const CommercePagamentosPage = lazy(() => import('./pages/commerce/PagamentosPage'));
 const CommerceReservasPage = lazy(() => import('./pages/commerce/ReservasPage'));
 const CommerceFulfillmentPage = lazy(() => import('./pages/commerce/FulfillmentPage'));
@@ -545,6 +547,10 @@ export default function App() {
             <Route path="commerce/ofertas/:id/editar" element={<ModuleAccess moduleId="commerce-promocoes"><CommerceOfertaFormPage /></ModuleAccess>} />
             <Route path="commerce/ofertas/:id" element={<ModuleAccess moduleId="commerce-promocoes"><CommerceOfertaDetalhePage /></ModuleAccess>} />
             {/* Painéis operacionais — APIs reais, dados reais, ZERO MODAL. */}
+            <Route path="commerce/pagamentos/repasses" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/repasses/novo" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/repasses/:id" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/repasses/:id/conciliar" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />
             <Route path="commerce/pagamentos/:section" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
             <Route path="commerce/pagamentos/provedores/:code/editar" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
             <Route path="commerce/pagamentos/metodos/:code/editar" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
@@ -559,6 +565,10 @@ export default function App() {
             <Route path="commerce/devolucoes" element={<ModuleAccess moduleId="commerce-pedidos"><CommerceDevolucoesPage /></ModuleAccess>} />
             <Route path="commerce/eventos" element={<ModuleAccess moduleId="commerce-fila"><CommerceEventosPage /></ModuleAccess>} />
             <Route path="commerce/erros" element={<ModuleAccess moduleId="commerce-fila"><CommerceErrosPage /></ModuleAccess>} />
+            <Route path="financeiro/periodos" element={<ModuleAccess moduleId="balancete"><FinanceiroPeriodosPage modo="lista" /></ModuleAccess>} />
+            <Route path="financeiro/periodos/novo" element={<ModuleAccess moduleId="balancete"><FinanceiroPeriodosPage modo="novo" /></ModuleAccess>} />
+            <Route path="financeiro/periodos/:competencia" element={<ModuleAccess moduleId="balancete"><FinanceiroPeriodosPage modo="detalhe" /></ModuleAccess>} />
+            <Route path="financeiro/periodos/:competencia/reabrir" element={<ModuleAccess moduleId="balancete"><FinanceiroPeriodosPage modo="reabrir" /></ModuleAccess>} />
             <Route path="compras/:id" element={<OrderPage tipo="compra" />} />
             <Route path="ordens/:id" element={<OrdemDetail />} />
             {/* Cotações de compra — ZERO MODAL: criação em /cotacoes-compra/novo

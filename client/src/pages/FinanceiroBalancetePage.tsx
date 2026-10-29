@@ -12,6 +12,7 @@
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
 import { BookOpen, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { Alert, EmptyState, PageHeader, Spinner } from '../components/ui';
 import { StatCard } from '../components/ui-kit-negocios';
@@ -78,9 +79,9 @@ export default function FinanceiroBalancetePage() {
         title="Balancete e classificação"
         description="Estrutura contábil já preparada: débito/crédito por conta, competência e documento de origem. O ERP soma o livro-caixa existente — não apura imposto nem gera partida dobrada."
         actions={
-          <button type="button" onClick={() => void carregar()} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+          <><Link to="/financeiro/periodos" className="btn-secondary">Períodos de escrituração</Link><button type="button" onClick={() => void carregar()} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
             <RefreshCw className="h-4 w-4" /> Atualizar
-          </button>
+          </button></>
         }
       />
 

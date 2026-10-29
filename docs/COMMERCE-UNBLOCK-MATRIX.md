@@ -1,5 +1,7 @@
 # COMMERCE — MATRIZ DE DESBLOQUEIO (reconstruída a partir do código real)
 
+> **Nota de 2026-10-29:** este documento é um retrato histórico. As antigas afirmações de `CODE_READY`/exit 0 não certificam a plataforma atual; credenciais presentes não são homologação. Para a decisão vigente, consulte [BROBOND-ENTERPRISE-FINAL-AUDIT.md](BROBOND-ENTERPRISE-FINAL-AUDIT.md).
+
 > Reconstruído em 2026-10-29. Cada linha é um bloqueio que **existia ou podia
 > existir**, com o estado REAL resolvido vs. pendente. Nada foi convertdo em
 > "warning" para obter READY.
