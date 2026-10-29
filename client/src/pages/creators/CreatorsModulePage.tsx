@@ -17,38 +17,19 @@ type Capability = {
 type Capabilities = { empresa_id: number; modulos: Record<string, Capability> };
 
 const CONTENT: Record<string, { title: string; empty: string; description: string; source: string }> = {
-  creators: {
-    title: 'CREATORS',
-    empty: 'Cadastro de creators indisponível.',
-    description: 'O cadastro de creators não possui persistência conectada nesta instalação. Por isso, não há ação de cadastro disponível nesta página.',
-    source: 'Perfis e parcerias precisam de uma fonte própria de creators. Clientes e representantes do ERP não são convertidos automaticamente em creators.',
-  },
-  'creator-matches': {
-    title: 'MATCHES',
-    empty: 'Matching não configurado.',
-    description: 'Para iniciar o processo, é necessário conectar uma base de creators, campanhas e um mecanismo de matching. Esta instalação não possui esse mecanismo.',
-    source: 'Scores e recomendações só podem ser apresentados quando fornecidos por um mecanismo real de matching. Nenhuma afinidade é simulada.',
-  },
   'outreach-ai': {
     title: 'OUTREACH AI',
     empty: 'Outreach sem integração configurada.',
-    description: 'Quando houver creators ou oportunidades elegíveis em uma fonte conectada, elas poderão ser consultadas aqui. Não há pipeline de outreach conectado nesta instalação.',
+    description: 'Não há pipeline de outreach conectado nesta instalação.',
     source: 'Não há integração de mensagens, geração por IA ou envio para creators nesta instalação. Nenhuma mensagem ou interação é simulada.',
-  },
-  campanhas: {
-    title: 'CAMPANHAS',
-    empty: 'Campanhas sem persistência instalada.',
-    description: 'O cadastro de campanhas com creators não possui persistência conectada nesta instalação. Nenhuma ação de criação ou edição é oferecida sem esse fluxo.',
-    source: 'Campanhas de aquisição do CRM pertencem a outro domínio e não são tratadas como campanhas com creators. Resultados e ROI não são estimados sem dados.',
   },
 };
 
 const NAVIGATION = MODULES.filter((item) => item.space === 'creators');
 
 /**
- * Páginas do domínio Creators no layout nativo ERP/Commerce.
- * As capacidades vêm da API autenticada, não do antigo status de roadmap.
- * Sem persistência instalada, não se fabricam colunas, KPIs, registros ou CTAs.
+ * Estado honesto do Outreach: perfis, campanhas e parcerias têm páginas
+ * próprias; geração por IA e envio externo permanecem não suportados.
  */
 export default function CreatorsModulePage({ module }: { module: Module }) {
   const [attempt, setAttempt] = useState(0);
@@ -131,7 +112,7 @@ export default function CreatorsModulePage({ module }: { module: Module }) {
             <div className="border-t border-line p-4 text-sm text-slate-700 dark:text-slate-200">
               <p className="font-semibold">Origem dos dados</p>
               <p className="mt-1 break-words">{content.source}</p>
-              <p className="mt-2">Não existe um fluxo de configuração ou cadastro instalado para este domínio. O responsável pela implantação precisa disponibilizar a persistência e as APIs antes de habilitar criação, edição ou consulta de registros. Não é possível resolver esta dependência com credenciais de outros módulos.</p>
+              <p className="mt-2">Não existe um fluxo de geração ou envio de outreach instalado. Perfis, campanhas e parcerias manuais podem ser gerenciados nos módulos próprios; eles não habilitam mensagens externas automaticamente.</p>
             </div>
           </>
         )}

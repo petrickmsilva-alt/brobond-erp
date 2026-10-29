@@ -28,19 +28,25 @@ describe('Creators — capacidades, identidade e escopo', () => {
   });
 
   for (const perfil of ['admin', 'gerente', 'operador']) {
-    test(`${perfil} consulta metadados sem ganhar permissão de escrita`, () => {
+    test(`${perfil} consulta metadados com escrita restrita ao perfil autorizado`, () => {
       const { body, headers } = consultar({ ...actor, perfil });
       assert.equal(headers['Cache-Control'], 'private, no-store');
       assert.deepEqual(Object.keys(body.modulos), ['creators', 'creator-matches', 'outreach-ai', 'campanhas']);
-      for (const capability of Object.values(body.modulos) as any[]) {
-        assert.equal(capability.estado, 'PENDENTE_DE_CONFIGURACAO');
-        assert.equal(capability.motivo, 'PERSISTENCIA_NAO_INSTALADA');
-        assert.equal(capability.fonte, null);
-        assert.equal(capability.consulta, false);
-        assert.ok(!Object.values(capability).includes(true));
+      for (const nome of ['creators', 'creator-matches', 'campanhas']) {
+        const capability = body.modulos[nome];
+        assert.equal(capability.consulta, true);
+        assert.equal(capability.criacao, perfil !== 'operador');
+        assert.ok(capability.fonte);
         assert.ok(!('rows' in capability));
         assert.ok(!('total' in capability));
       }
+      assert.equal(body.modulos['creator-matches'].recomendacao, false);
+      const outreach = body.modulos['outreach-ai'];
+      assert.equal(outreach.estado, 'PENDENTE_DE_CONFIGURACAO');
+      assert.equal(outreach.motivo, 'PERSISTENCIA_NAO_INSTALADA');
+      assert.equal(outreach.fonte, null);
+      assert.equal(outreach.consulta, false);
+      assert.ok(!Object.values(outreach).includes(true));
     });
   }
 

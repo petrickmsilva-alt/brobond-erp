@@ -176,6 +176,11 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
         `DELETE FROM estoque_reservas WHERE origem_recurso = 'commerce_checkout' AND origem_id IN (SELECT id FROM commerce_pedidos WHERE chave_checkout LIKE $1)`,
         [`%${RODADA}%`],
       );
+      await limpar(`DELETE FROM creator_attributions WHERE order_id IN (SELECT id FROM commerce_pedidos WHERE chave_checkout LIKE $1)`, [`%${RODADA}%`]);
+      await limpar(`DELETE FROM creator_commands WHERE idempotency_key LIKE $1`, [`ce2e-${RODADA}-%`]);
+      await limpar(`DELETE FROM creator_partnerships WHERE created_by IN (SELECT id FROM usuarios WHERE email LIKE $1)`, [`%@ce2e.example.test`]);
+      await limpar(`DELETE FROM creator_campaigns WHERE created_by IN (SELECT id FROM usuarios WHERE email LIKE $1)`, [`%@ce2e.example.test`]);
+      await limpar(`DELETE FROM creator_profiles WHERE created_by IN (SELECT id FROM usuarios WHERE email LIKE $1)`, [`%@ce2e.example.test`]);
       await limpar(`DELETE FROM commerce_pedidos WHERE chave_checkout LIKE $1`, [`%${RODADA}%`]);
       if (idsVendas.length > 0) {
         await limpar(`DELETE FROM itens_venda WHERE venda_id = ANY($1::int[])`, [idsVendas]);
@@ -324,6 +329,25 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   const cupom = await req('POST', '/commerce/cupons', { codigo: codigoCupom, tipo: 'percentual', valor: 10, minimo_pedido: 0, uso_maximo: 1, validade: null, ativo: true }, tokenA, baseUrl);
   assert.ok([200, 201].includes(cupom.status), `cupom: ${msg(cupom)}`);
 
+  // Parceria manual conectada ao mesmo cupom/checkout, sem simular comissão.
+  const creatorReq = (method: string, route: string, body: object, suffix: string, token = tokenA) =>
+    req(method, route, body, token, baseUrl, { 'Idempotency-Key': `ce2e-${RODADA}-${suffix}` });
+  const creator = await creatorReq('POST', '/creators/perfis', { name: `Creator ${RODADA}`, platform: 'INSTAGRAM', handle: RODADA }, 'creator');
+  assert.equal(creator.status, 201, `creator: ${msg(creator)}`);
+  const campaignData = { name: `Campanha ${RODADA}`, objective: 'Divulgação por parceiro real', starts_on: '2020-01-01', ends_on: '2099-12-31' };
+  const campaign = await creatorReq('POST', '/creators/campanhas', campaignData, 'campaign');
+  assert.equal(campaign.status, 201, `campanha: ${msg(campaign)}`);
+  const campaignActive = await creatorReq('PUT', `/creators/campanhas/${campaign.body.row.id}`, { ...campaignData, status: 'ACTIVE', expected_version: 0 }, 'campaign-active');
+  assert.equal(campaignActive.status, 200, `ativação da campanha: ${msg(campaignActive)}`);
+  const partnership = await creatorReq('POST', '/creators/parcerias', { creator_id: Number(creator.body.row.id), campaign_id: Number(campaign.body.row.id), coupon_id: Number(cupom.body.cupom.id) }, 'partner');
+  assert.equal(partnership.status, 201, `parceria: ${msg(partnership)}`);
+  const partnerActive = await creatorReq('PUT', `/creators/parcerias/${partnership.body.row.id}`, { status: 'ACTIVE', expected_version: 0 }, 'partner-active');
+  assert.equal(partnerActive.status, 200, `ativação da parceria: ${msg(partnerActive)}`);
+  const opWrite = await creatorReq('POST', '/creators/perfis', { name: 'Operador proibido', platform: 'OTHER', handle: 'operador' }, 'op-denied', tokenOp);
+  assert.equal(opWrite.status, 403, 'operador não cria creator');
+  const foreignCreator = await req('GET', `/creators/perfis/${creator.body.row.id}`, undefined, tokenB, baseUrl);
+  assert.equal(foreignCreator.status, 404, 'outro tenant não acessa creator');
+
   // ---- 5) config pública da loja espelha o frete manual ---------------------
   const configPublica = await req('GET', '/loja/config', undefined, null, baseUrl);
   assert.equal(configPublica.status, 200, `config pública: ${msg(configPublica)}`);
@@ -362,6 +386,11 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   }, null, baseUrl);
   assert.equal(checkout2.status, 200, `reenvio idempotente: ${msg(checkout2)}`);
   assert.equal(checkout2.body?.idempotente, true, 'mesma chave devolve o MESMO pedido');
+  const attributed = await req('GET', `/creators/parcerias/${partnership.body.row.id}/atribuicoes`, undefined, tokenA, baseUrl);
+  assert.equal(attributed.status, 200, `atribuição: ${msg(attributed)}`);
+  assert.equal(attributed.body.total, 1, 'replay não duplica atribuição do mesmo checkout');
+  assert.equal(attributed.body.rows[0].estado, 'AGUARDANDO_PAGAMENTO');
+  assert.ok(!attributed.texto.includes('cliente@ce2e.example.test'), 'atribuição não expõe dados de comprador');
 
   const linhaSale = await cliente.query(`SELECT empresa_id, status FROM sales WHERE id = $1`, [saleId]);
   assert.equal(Number(linhaSale.rows[0].empresa_id), 1, 'sale nasce na empresa do ator (empresa_id explícito)');

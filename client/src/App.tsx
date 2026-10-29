@@ -67,6 +67,8 @@ const CommerceOfertaFormPage = lazy(() => import('./pages/commerce/OfertaFormPag
 // Painéis operacionais consumindo APIs reais do commerce.
 const PaymentEnginePage = lazy(() => import('./pages/commerce/PaymentEnginePage'));
 const PaymentPayoutsPage = lazy(() => import('./pages/commerce/PaymentPayoutsPage'));
+const PaymentDisputesPage = lazy(() => import('./pages/commerce/PaymentDisputesPage'));
+const CreatorsRecordsPage = lazy(() => import('./pages/creators/CreatorsRecordsPage'));
 const CommercePagamentosPage = lazy(() => import('./pages/commerce/PagamentosPage'));
 const CommerceReservasPage = lazy(() => import('./pages/commerce/ReservasPage'));
 const CommerceFulfillmentPage = lazy(() => import('./pages/commerce/FulfillmentPage'));
@@ -546,11 +548,27 @@ export default function App() {
             <Route path="commerce/ofertas/novo" element={<ModuleAccess moduleId="commerce-promocoes"><CommerceOfertaFormPage /></ModuleAccess>} />
             <Route path="commerce/ofertas/:id/editar" element={<ModuleAccess moduleId="commerce-promocoes"><CommerceOfertaFormPage /></ModuleAccess>} />
             <Route path="commerce/ofertas/:id" element={<ModuleAccess moduleId="commerce-promocoes"><CommerceOfertaDetalhePage /></ModuleAccess>} />
+            <Route path="creators/novo" element={<ModuleAccess moduleId="creators"><CreatorsRecordsPage kind="profile" /></ModuleAccess>} />
+            <Route path="creators/:id" element={<ModuleAccess moduleId="creators"><CreatorsRecordsPage kind="profile" /></ModuleAccess>} />
+            <Route path="creators/:id/editar" element={<ModuleAccess moduleId="creators"><CreatorsRecordsPage kind="profile" /></ModuleAccess>} />
+            <Route path="campanhas/novo" element={<ModuleAccess moduleId="campanhas"><CreatorsRecordsPage kind="campaign" /></ModuleAccess>} />
+            <Route path="campanhas/:id" element={<ModuleAccess moduleId="campanhas"><CreatorsRecordsPage kind="campaign" /></ModuleAccess>} />
+            <Route path="campanhas/:id/editar" element={<ModuleAccess moduleId="campanhas"><CreatorsRecordsPage kind="campaign" /></ModuleAccess>} />
+            <Route path="matches/novo" element={<ModuleAccess moduleId="creator-matches"><CreatorsRecordsPage kind="partnership" /></ModuleAccess>} />
+            <Route path="matches/:id" element={<ModuleAccess moduleId="creator-matches"><CreatorsRecordsPage kind="partnership" /></ModuleAccess>} />
+            <Route path="matches/:id/editar" element={<ModuleAccess moduleId="creator-matches"><CreatorsRecordsPage kind="partnership" /></ModuleAccess>} />
             {/* Painéis operacionais — APIs reais, dados reais, ZERO MODAL. */}
             <Route path="commerce/pagamentos/repasses" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />
             <Route path="commerce/pagamentos/repasses/novo" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />
             <Route path="commerce/pagamentos/repasses/:id" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/repasses/:id/corrigir" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/repasses/:id/desvincular" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />
             <Route path="commerce/pagamentos/repasses/:id/conciliar" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/disputas" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentDisputesPage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/disputas/novo" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentDisputesPage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/disputas/:id" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentDisputesPage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/disputas/:id/evidencias/nova" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentDisputesPage /></ModuleAccess>} />
+            <Route path="commerce/pagamentos/disputas/:id/alterar" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentDisputesPage /></ModuleAccess>} />
             <Route path="commerce/pagamentos/:section" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
             <Route path="commerce/pagamentos/provedores/:code/editar" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />
             <Route path="commerce/pagamentos/metodos/:code/editar" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentEnginePage /></ModuleAccess>} />

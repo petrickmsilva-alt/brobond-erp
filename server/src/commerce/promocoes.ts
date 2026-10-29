@@ -402,23 +402,26 @@ export async function excluirCupom(req: Request, res: Response) {
   const escopo = escopoDoAtor(actor);
   checkAccess(R_CUPONS(), actor, 'delete');
   const s = getStore();
-  const existente = await s.findOneWhere(R_CUPONS(), { id: Number(req.params.id), empresa_id: escopo.empresaId });
-  if (!existente) throw new HttpError(404, 'Cupom não encontrado.');
-  if (Number(existente.uso_atual || 0) > 0) {
-    // Nunca apagar histórico que afetou pedidos — desativa em vez de excluir.
-    const atualizado = await s.update(R_CUPONS(), Number(existente.id), { ativo: false });
-    return res.json({ ok: true, desativado: true, cupom: atualizado ?? existente });
-  }
-  await s.remove(R_CUPONS(), Number(existente.id));
-  await s.audit({
-    usuario_id: actor.id || null,
-    usuario: actor.name,
-    acao: 'excluir',
-    recurso: 'commerce_cupons',
-    registro_id: Number(existente.id),
-    descricao: `Cupom ${String(existente.codigo || '')} excluído (sem usos)`,
-    empresa_id: escopo.empresaId,
-    dados: { codigo: existente.codigo },
+  const { R_CREATOR_PARTNERSHIPS } = await import('../creatorsResources');
+  const { domainLock } = await import('../domainLock');
+  const result = await domainLock(escopo.empresaId, 'creators', async (tx) => {
+    const existente = await s.findOneWhere(R_CUPONS(), { id: Number(req.params.id), empresa_id: escopo.empresaId }, tx);
+    if (!existente) throw new HttpError(404, 'Cupom não encontrado.');
+    const vinculado = await s.findOneWhere(R_CREATOR_PARTNERSHIPS, { empresa_id: escopo.empresaId, coupon_id: Number(existente.id) }, tx);
+    if (Number(existente.uso_atual || 0) > 0 || vinculado) {
+      // O mesmo lock da criação de parceria impede excluir o cupom entre a
+      // verificação e o vínculo. Histórico e FK são preservados.
+      const atualizado = await s.update(R_CUPONS(), Number(existente.id), { ativo: false }, tx);
+      await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'commerce_cupons',
+        registro_id: Number(existente.id), descricao: 'Cupom desativado para preservar histórico ou parceria',
+        empresa_id: escopo.empresaId, dados: { partnership_id: vinculado?.id || null } }, tx);
+      return { ok: true, desativado: true, cupom: atualizado ?? existente };
+    }
+    await s.remove(R_CUPONS(), Number(existente.id), tx);
+    await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'excluir', recurso: 'commerce_cupons',
+      registro_id: Number(existente.id), descricao: 'Cupom sem usos excluído',
+      empresa_id: escopo.empresaId, dados: { codigo: existente.codigo } }, tx);
+    return { ok: true };
   });
-  res.json({ ok: true });
+  res.json(result);
 }

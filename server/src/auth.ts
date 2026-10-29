@@ -815,7 +815,10 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
         userCache.set(payload.id, { user, sid: String(payload.sid), at: Date.now() });
         payload = { ...user, sid: payload.sid } as typeof payload;
       } catch {
-        // banco indisponível: segue com os dados do token
+        // Um token antigo não prova que o usuário, sessão ou permissões ainda são válidos.
+        // A falha é fechada, sem propagar detalhes do banco ou prosseguir com claims obsoletos.
+        userCache.delete(payload.id);
+        return res.status(503).json({ error: 'Não foi possível validar a sessão. Tente novamente.' });
       }
     }
   }

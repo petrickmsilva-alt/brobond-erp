@@ -20,7 +20,8 @@ import {
   R_SETTLEMENTS,
 } from '../infrastructure/resources';
 import { locked } from '../infrastructure/locking';
-import { listPayouts, payoutDetail, importPayout, matchPayout } from '../application/payouts';
+import { listPayouts, payoutDetail, importPayout, matchPayout, correctPayout, unlinkPayout } from '../application/payouts';
+import { listDisputes, disputeDetail, registerDispute, addDisputeEvidence, transitionDispute } from '../application/disputes';
 const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => {
   Promise.resolve(fn(req, res)).catch(next);
 };
@@ -29,6 +30,13 @@ paymentsRouter.get('/payouts', wrap(listPayouts));
 paymentsRouter.get('/payouts/:id', wrap(payoutDetail));
 paymentsRouter.post('/payouts/import', wrap(importPayout));
 paymentsRouter.post('/payouts/:id/match', wrap(matchPayout));
+paymentsRouter.post('/payouts/:id/correct', wrap(correctPayout));
+paymentsRouter.post('/payouts/:id/unlink', wrap(unlinkPayout));
+paymentsRouter.get('/disputes', wrap(listDisputes));
+paymentsRouter.get('/disputes/:id', wrap(disputeDetail));
+paymentsRouter.post('/disputes', wrap(registerDispute));
+paymentsRouter.post('/disputes/:id/evidence', wrap(addDisputeEvidence));
+paymentsRouter.post('/disputes/:id/transition', wrap(transitionDispute));
 function authorize(req: Request, manage = false) {
   const actor = currentUser(req);
   if (!actor) throw new HttpError(401, 'Autenticação necessária.');
@@ -259,7 +267,6 @@ paymentsRouter.put(
 for (const [path, resource] of [
   ['transactions', R_INTENTS],
   ['refunds', R_REFUNDS],
-  ['disputes', R_DISPUTES],
   ['reconciliation', R_SETTLEMENTS],
   ['webhooks', R_GATEWAY_WEBHOOK_EVENTS],
 ] as const) {
@@ -308,7 +315,10 @@ paymentsRouter.get(
       attempts: (await fetch(R_ATTEMPTS)).map(({ request_cifradas: _request, ...safe }) => safe),
       operations: await fetch(R_OPERATIONS),
       refunds: await fetch(R_REFUNDS),
-      disputes: await fetch(R_DISPUTES),
+      // Operadores podem acompanhar o estado do pagamento, mas não os motivos
+      // ou identificadores externos de uma disputa gerenciada pelo financeiro.
+      disputes: (await fetch(R_DISPUTES)).map((d) => ['admin', 'gerente'].includes(currentUser(req).perfil) ? d :
+        { id: d.id, payment_intent_id: d.payment_intent_id, status: d.status, amount: d.amount, created_at: d.created_at }),
       settlements: await fetch(R_SETTLEMENTS),
     });
   })

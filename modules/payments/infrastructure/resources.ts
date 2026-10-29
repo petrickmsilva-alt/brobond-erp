@@ -91,6 +91,8 @@ export const R_DISPUTES = resource('payment_disputes', [
   ['status', 'text'],
   ['amount', 'integer'],
   ['reason', 'text'],
+  ['provider', 'text'], ['external_dispute_id', 'text'], ['due_date', 'date'],
+  ['origin', 'text'], ['version', 'integer'], ['resolved_at', 'datetime'],
   ['created_at', 'datetime'],
   ['updated_at', 'datetime'],
 ]);
@@ -120,4 +122,23 @@ export const R_PAYOUTS = resource('payment_payouts', [
   ['status', 'text'], ['bank_transaction_id', 'integer'], ['created_by', 'integer'],
   ['created_at', 'datetime'], ['updated_at', 'datetime'],
 ]);
-export const PAYMENT_RESOURCES = [R_INTENTS, R_ATTEMPTS, R_OPERATIONS, R_METHODS, R_ROUTING, R_REFUNDS, R_DISPUTES, R_SETTLEMENTS, R_PAYOUTS];
+export const R_DISPUTE_EVIDENCE = resource('payment_dispute_evidence', [
+  ['dispute_id', 'integer'], ['kind', 'text'], ['description', 'text'], ['content', 'text'],
+  ['idempotency_key', 'text'], ['request_hash', 'text'], ['created_by', 'integer'], ['created_at', 'datetime'],
+]);
+export const R_DISPUTE_EVENTS = resource('payment_dispute_events', [
+  ['dispute_id', 'integer'], ['kind', 'text'], ['from_status', 'text'], ['to_status', 'text'],
+  ['note', 'text'], ['external_reference', 'text'], ['idempotency_key', 'text'], ['request_hash', 'text'],
+  ['created_by', 'integer'], ['created_at', 'datetime'],
+]);
+export const R_PAYOUT_REVISIONS = resource('payment_payout_revisions', [
+  ['payout_id', 'integer'], ['revision', 'integer'], ['content_hash', 'text'], ['report', 'json'],
+  ['reason', 'text'], ['previous_hash', 'text'], ['idempotency_key', 'text'], ['request_hash', 'text'],
+  ['created_by', 'integer'], ['created_at', 'datetime'],
+]);
+export const R_PAYOUT_UNLINKS = resource('payment_payout_unlinks', [
+  ['payout_id', 'integer'], ['bank_transaction_id', 'integer'], ['reason', 'text'],
+  ['idempotency_key', 'text'], ['request_hash', 'text'], ['created_by', 'integer'], ['created_at', 'datetime'],
+]);
+export const PAYMENT_RESOURCES = [R_INTENTS, R_ATTEMPTS, R_OPERATIONS, R_METHODS, R_ROUTING, R_REFUNDS, R_DISPUTES,
+  R_DISPUTE_EVIDENCE, R_DISPUTE_EVENTS, R_SETTLEMENTS, R_PAYOUTS, R_PAYOUT_REVISIONS, R_PAYOUT_UNLINKS];

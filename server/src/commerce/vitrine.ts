@@ -544,7 +544,13 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
         }
       }
 
-      if (usarCupom && cupom && cupom.ok) await consumirUsoCupom(empresaId, codigoCupom, subtotal, tx);
+      if (usarCupom && cupom && cupom.ok) {
+        const consumido = await consumirUsoCupom(empresaId, codigoCupom, subtotal, tx);
+        // Atribuição é um vínculo imutável ao mesmo checkout; sem duplicar a venda
+        // ou inferir receita/comissão. Só existe se a parceria já estiver ativa.
+        const { atribuirCheckoutCreator } = await import('../creators');
+        await atribuirCheckoutCreator(empresaId, Number(consumido.id), Number(pedido.id), tx);
+      }
 
       return { pedido, sale };
     },

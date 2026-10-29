@@ -137,7 +137,7 @@ import {
   listarPromocoes,
 } from './commerce/promocoes';
 import { estadoLoja } from './commerce/estado-loja';
-import { capacidadesCreators } from './creators';
+import { capacidadesCreators, listCreatorsEntity, detailCreatorsEntity, createCreatorsEntity, updateCreatorsEntity, listCreatorAttributions } from './creators';
 import { analyticsCommerce, trendsCommerce } from './commerce/analytics';
 import { processarComercioAgendado, reprocessarOutbox } from './commerce/outbox';
 import { baixarLancamento, conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, recebiveisCartao, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
@@ -955,6 +955,13 @@ app.get('/api/pdv/vendas/:id/cupom/pdf', wrap(cupomPdvPdfHandler));
 
 // Creators: capacidades reais, sem simular dados ou operações ausentes.
 app.get('/api/creators/capabilities', wrap(capacidadesCreators));
+for (const [path, entity] of [['perfis', 'profile'], ['campanhas', 'campaign'], ['parcerias', 'partnership']] as const) {
+  app.get(`/api/creators/${path}`, wrap(listCreatorsEntity(entity)));
+  app.post(`/api/creators/${path}`, wrap(createCreatorsEntity(entity)));
+  app.get(`/api/creators/${path}/:id`, wrap(detailCreatorsEntity(entity)));
+  app.put(`/api/creators/${path}/:id`, wrap(updateCreatorsEntity(entity)));
+}
+app.get('/api/creators/parcerias/:id/atribuicoes', wrap(listCreatorAttributions));
 
 // ------------------------------------------------------------------------------
 // BROBOND COMMERCE OS — catálogo, publicação multicanal, pedidos omnichannel,

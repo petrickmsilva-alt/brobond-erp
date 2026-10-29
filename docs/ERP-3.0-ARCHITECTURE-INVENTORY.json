@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-10-29T18:37:07.391Z",
+  "gerado_em": "2026-10-29T21:48:09.934Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 69,
-    "sql_com_conteudo": 69,
+    "sql": 75,
+    "sql_com_conteudo": 75,
     "prisma": 7
   },
   "tabelas": {
-    "total": 156,
-    "com_empresa_id": 128,
+    "total": 167,
+    "com_empresa_id": 139,
     "sem_empresa_id": 28,
-    "fora_do_prisma": 145
+    "fora_do_prisma": 156
   },
-  "indices": 455,
-  "constraints": 273,
+  "indices": 478,
+  "constraints": 283,
   "recursos": {
-    "total": 133,
-    "com_tabela": 133,
-    "multiempresa": 115,
-    "somente_leitura": 60,
-    "rbac_restrito": 50,
-    "cobertura_tenant_pct": 86.5
+    "total": 134,
+    "com_tabela": 134,
+    "multiempresa": 116,
+    "somente_leitura": 61,
+    "rbac_restrito": 51,
+    "cobertura_tenant_pct": 86.6
   },
   "crm": [
     {
@@ -87,10 +87,10 @@
     "com_recurso": 79
   },
   "rotas": {
-    "total": 421,
+    "total": 426,
     "por_metodo": {
-      "GET": 191,
-      "POST": 192,
+      "GET": 194,
+      "POST": 194,
       "PUT": 21,
       "DELETE": 14,
       "PATCH": 3
@@ -197,17 +197,17 @@
   },
   "testes": {
     "server": {
-      "arquivos": 177,
-      "casos": 1557
+      "arquivos": 190,
+      "casos": 1606
     },
     "client": {
-      "arquivos": 112,
-      "casos": 995
+      "arquivos": 118,
+      "casos": 1009
     },
-    "total": 2552
+    "total": 2615
   },
   "integracoes": {
-    "arquivos_modules": 51,
+    "arquivos_modules": 53,
     "arquivos_server_modules": 1
   },
   "achados": [
@@ -239,6 +239,31 @@
     {
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"creator_attributions\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"creator_campaigns\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"creator_commands\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"creator_partnerships\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"creator_profiles\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"fin_extrato_transacoes\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
     },
     {
@@ -259,7 +284,37 @@
     {
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_dispute_events\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_dispute_evidence\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_payout_revisions\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_payout_unlinks\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_payouts\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"produto_abc\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"fin_periodos_contabeis\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
       "nivel": "AVISO",
@@ -372,6 +427,11 @@
     "cotacao_compra_precos",
     "cotacao_decisoes",
     "cotacoes_compra",
+    "creator_attributions",
+    "creator_campaigns",
+    "creator_commands",
+    "creator_partnerships",
+    "creator_profiles",
     "crm_atividades",
     "crm_campanhas",
     "crm_etapas",
@@ -402,6 +462,7 @@
     "fichas_tecnicas",
     "fin_extrato_transacoes",
     "fin_importacoes_contabeis",
+    "fin_periodos_contabeis",
     "fiscal_execucao_evidencias",
     "fiscal_execucoes",
     "fiscal_obrigacao_entregas",
@@ -440,10 +501,15 @@
     "ordens_eventos",
     "ordens_fabricacao",
     "payment_attempts",
+    "payment_dispute_events",
+    "payment_dispute_evidence",
     "payment_disputes",
     "payment_intents",
     "payment_methods",
     "payment_operations",
+    "payment_payout_revisions",
+    "payment_payout_unlinks",
+    "payment_payouts",
     "payment_refunds",
     "payment_routing_rules",
     "payment_settlements",

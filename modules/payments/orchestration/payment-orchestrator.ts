@@ -296,7 +296,10 @@ export class PaymentOrchestrator {
             // preserve the historical bank link, but never claim it is still matched.
             if (existing.payout_id) {
               const payout = await s.findOneWhere(R_PAYOUTS, { empresa_id: empresaId, id: Number(existing.payout_id) }, tx);
-              if (payout && payout.status !== 'DIVERGENT') {
+              if (payout) {
+                // Sempre bloqueia/atualiza o repasse antes da liquidação, até se
+                // já estava divergente: uma correção concorrente pode ter
+                // acabado de torná-lo conciliável desde a leitura anterior.
                 await s.update(R_PAYOUTS, Number(payout.id), { status: 'DIVERGENT', updated_at: now() }, tx);
                 await s.audit({ empresa_id: empresaId, usuario_id: null, usuario: 'Payment Engine', acao: 'ajuste', recurso: 'payment_payouts', registro_id: Number(payout.id),
                   descricao: 'Repasse divergente após reembolso ou chargeback', dados: { antes: { status: payout.status }, depois: { status: 'DIVERGENT' } } }, tx);
@@ -318,6 +321,9 @@ export class PaymentOrchestrator {
               empresa_id: empresaId,
               payment_intent_id: intentId,
               provider_reference: result.reference,
+              provider: a.provider,
+              origin: 'ENGINE',
+              version: 0,
               status: status === 'CHARGEBACK' ? 'LOST' : 'DISPUTE_OPENED',
               amount: i.amount,
               reason: 'Provider confirmation',

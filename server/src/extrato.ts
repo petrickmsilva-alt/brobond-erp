@@ -205,20 +205,29 @@ export async function marcarDivergencia(req: Request, res: Response) {
   checkAccess(getResource('lancamentos_financeiros')!, actor, 'update');
   const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const s = getStore();
-  const linha = assertRegistroDaEmpresa(R_EXTRATO, await s.get(R_EXTRATO, Number(req.params.id)), escopo);
-  if (String(linha.status) === 'conciliada') throw new HttpError(409, 'Linha já conciliada — o caminho é o estorno, não divergência.');
   const motivo = String((req.body || {}).motivo || '').trim();
   if (motivo.length < 5) throw new HttpError(400, 'Descreva a divergência (mínimo 5 caracteres).', { motivo: 'Mínimo 5 caracteres' });
-  await s.update(R_EXTRATO, Number(linha.id), { status: 'divergente', motivo });
-  await s.audit({
-    usuario_id: actor.id || null,
-    usuario: actor.name,
-    acao: 'editar',
-    recurso: 'fin_extrato_transacoes',
-    registro_id: Number(linha.id),
-    descricao: `Divergência registrada na linha de extrato #${linha.id} (${Number(linha.valor || 0).toFixed(2)} — ${String(linha.descricao || '').slice(0, 60)})`,
-    empresa_id: empresaDoRegistroAudit(R_EXTRATO, linha, actor),
-    dados: { motivo },
-  });
-  res.json({ ok: true, extrato_id: Number(linha.id), status: 'divergente' });
+  const linhaId = Number(req.params.id);
+  if (!Number.isSafeInteger(linhaId) || linhaId <= 0) throw new HttpError(400, 'Identificador inválido.');
+  // Mesmo lock da conciliação Payment: o extrato não pode se tornar
+  // divergente entre a validação e o vínculo. Não altera nenhum lançamento.
+  const { locked } = await import('../../modules/payments/infrastructure/locking');
+  const { R_PAYOUTS } = await import('../../modules/payments/infrastructure/resources');
+  await locked(escopo.empresaId, 'payout-bank-match', async (tx) => {
+    const linha = await s.findOneWhere(R_EXTRATO, { empresa_id: escopo.empresaId, id: linhaId }, tx);
+    if (!linha) throw new HttpError(404, 'Linha de extrato não encontrada.');
+    if (String(linha.status) === 'conciliada') throw new HttpError(409, 'Linha já conciliada — o caminho é o estorno, não divergência.');
+    await s.update(R_EXTRATO, linhaId, { status: 'divergente', motivo }, tx);
+    const payout = await s.findOneWhere(R_PAYOUTS, { empresa_id: escopo.empresaId, bank_transaction_id: linhaId }, tx);
+    if (payout && payout.status !== 'DIVERGENT') {
+      await s.update(R_PAYOUTS, Number(payout.id), { status: 'DIVERGENT', updated_at: new Date().toISOString() }, tx);
+      await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'ajuste', recurso: 'payment_payouts',
+        registro_id: Number(payout.id), descricao: 'Repasse divergente após divergência no extrato',
+        empresa_id: escopo.empresaId, dados: { bank_transaction_id: linhaId, antes: payout.status, depois: 'DIVERGENT' } }, tx);
+    }
+    await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'fin_extrato_transacoes',
+      registro_id: linhaId, descricao: `Divergência registrada na linha de extrato #${linhaId}`,
+      empresa_id: escopo.empresaId, dados: { motivo } }, tx);
+  }, 'read committed');
+  res.json({ ok: true, extrato_id: linhaId, status: 'divergente' });
 }
