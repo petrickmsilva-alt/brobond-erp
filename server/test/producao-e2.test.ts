@@ -327,7 +327,8 @@ test('E2: sem saldo de insumo o apontamento bloqueia com 409 e ?forcar libera pa
   const { tecido } = await novaFicha(Number(p.id), { consumo: 5, perdaPct: 0, maoObra: 0, indiretos: 0 });
   await saldoInsumo(Number(tecido.id), 4); // só 4 m; cada peça pede 5 m
   const op = await novaOp(Number(p.id), 10);
-  await chamar(producao.liberarOrdem, reqDe({}, { params: { id: op.id }, user: GERENTE }));
+  await esperarErro(() => chamar(producao.liberarOrdem, reqDe({}, { params: { id: op.id }, user: GERENTE })), 409, /Sem saldo disponível/);
+  await chamar(producao.liberarOrdem, reqDe({}, { params: { id: op.id }, query: { forcar: 'true' }, user: GERENTE }));
 
   const err = await esperarErro(
     () => chamar(producao.criarApontamento, reqDe({ quantidade_produzida: 1 }, { params: { id: op.id }, user: OPERADOR })),

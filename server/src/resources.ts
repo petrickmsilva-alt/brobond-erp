@@ -2713,6 +2713,8 @@ export const RESOURCES: Record<string, Resource> = {
     notice:
       'OP "por tamanho": uma OP para um único tamanho. OP "por grade": quantidades de PP a GG na mesma OP. Ao concluir, as peças entram no Estoque Físico (no Local padrão) e o consumo de insumos da ficha técnica é baixado.',
     fields: [
+      { name: 'reservas_componentes', label: 'Componentes reservados', type: 'json', readonly: true, form: false, list: false },
+      { name: 'demanda_item_id', label: 'Item de demanda', type: 'integer', readonly: true, form: false, list: false },
       { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
       {
         name: 'tipo',
@@ -4754,6 +4756,9 @@ export const RESOURCES: Record<string, Resource> = {
     notice:
       'Solicitada → Autorizada → Em trânsito → Recebida. Mercadoria sem código de rastreamento NÃO entra no estoque, e o estoque só sobe uma vez por devolução.',
     fields: [
+      { name: 'payment_intent_id', label: 'Pagamento original', type: 'integer', readonly: true, form: false },
+      { name: 'refund_amount', label: 'Refund (centavos)', type: 'integer', readonly: true, form: false },
+      { name: 'refund_estado', label: 'Estado do refund', type: 'text', readonly: true, form: false },
       { name: 'numero', label: 'Número', type: 'text', maxLength: 40, search: true },
       { name: 'venda_id', label: 'Pedido original', type: 'ref', ref: 'vendas', search: true },
       // E4.2.1: chave de idempotência da criação (índice único parcial por empresa). Sem
@@ -4891,6 +4896,10 @@ export const RESOURCES: Record<string, Resource> = {
     notice:
       'Convite a fornecedores para orçar o mesmo carrinho. A decisão escolhe por item e gera o pedido de compra — uma vez gerado, não gera de novo.',
     fields: [
+      { name: 'requisicao_estado', label: 'Requisição', type: 'text', readonly: true, form: false },
+      { name: 'requisitada_por', label: 'Solicitante', type: 'ref', ref: 'usuarios', readonly: true, form: false },
+      { name: 'requisicao_aprovada_por', label: 'Aprovador', type: 'ref', ref: 'usuarios', readonly: true, form: false },
+      { name: 'requisicao_aprovada_em', label: 'Aprovada em', type: 'datetime', readonly: true, form: false },
       { name: 'titulo', label: 'Título', type: 'text', required: true, maxLength: 160, search: true },
       {
         name: 'status',

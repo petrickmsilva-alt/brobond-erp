@@ -23,7 +23,7 @@ import type { Row, Tx } from '../store';
 
 const R_OUTBOX = () => getResource('commerce_outbox')!;
 
-export type TipoOutbox = 'conversao' | 'publicacao' | 'sincronizacao' | 'alerta';
+export type TipoOutbox = 'conversao' | 'publicacao' | 'sincronizacao' | 'alerta' | 'refund_devolucao';
 
 /**
  * Enfileira um trabalho (idempotente pela chave). Se já existe, mantém a
@@ -79,6 +79,12 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
   const empresaId = Number(row.empresa_id);
   const tipo = String(row.tipo);
   const payload = (row.payload && typeof row.payload === 'object' ? row.payload : {}) as Record<string, unknown>;
+
+  if (tipo === 'refund_devolucao') {
+    const { processarRefundDevolucao } = await import('../devolucaoRefund');
+    await processarRefundDevolucao(empresaId, Number(payload.devolucao_id));
+    return { status: 'processado' };
+  }
 
   if (tipo === 'alerta') {
     console.error('[commerce:outbox:alerta]', { empresa_id: empresaId, event_id: Number(row.id) });

@@ -25,6 +25,12 @@ test('PG compras: cotação → pedido → aprovação → estoque/custo → AP 
   const f = await fixture();
   const item = await call(cc.criarItemCotacao, f, { insumo_id: f.supply, quantidade: 2 });
   assert.equal(item.status, 201);
+  await call(cc.requisitarCotacao, f, {});
+  await assert.rejects(() => call(cc.convidarFornecedores, f, { fornecedor_ids: [f.supplier] }), (e: any) => e.status === 409);
+  await assert.rejects(() => call(cc.aprovarRequisicao, f, {}, f.quote, { ...f.actor, perfil: 'operador' as any }), (e: any) => e.status === 403);
+  await call(cc.aprovarRequisicao, f, {});
+  await call(cc.aprovarRequisicao, f, {});
+  await assert.rejects(() => call(cc.criarItemCotacao, f, { insumo_id: f.supply, quantidade: 1 }), (e: any) => e.status === 409);
   await call(cc.convidarFornecedores, f, { fornecedor_ids: [f.supplier] });
   const invite = (await q.query('SELECT id FROM cotacao_compra_fornecedores WHERE empresa_id=$1 AND cotacao_id=$2', [f.company, f.quote])).rows[0];
   await call(cc.cotarFornecedor, f, { convite_id: invite.id, frete: 7, precos: [{ item_id: item.body.id, preco_unitario: 4 }] });

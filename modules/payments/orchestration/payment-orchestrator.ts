@@ -205,6 +205,12 @@ export class PaymentOrchestrator {
   }
   async apply(empresaId: number, intentId: number, result: PaymentResult, source: 'event' | 'provider-refresh' = 'event') {
     const s = getStore();
+    // Flush a previously captured payment before its reversal can overtake the
+    // Commerce/financial delivery. The provider write is never retried here.
+    if (Number(result.refunded || 0) > 0) {
+      const before = await this.intent(empresaId, intentId);
+      if (before.status === 'PAID' && before.cobranca_id) await this.deliverToCommerce(empresaId, intentId);
+    }
     await retrySerialization(() => locked(empresaId, `intent:${intentId}`, async (tx) => {
       const i = await this.intent(empresaId, intentId, tx);
       const attempts = await s.list(
@@ -242,6 +248,8 @@ export class PaymentOrchestrator {
           (status === 'PARTIALLY_REFUNDED' && (result.refunded == null || refunded <= 0 || refunded >= total)) ||
           (['PAID', 'CAPTURED'].includes(status) && refunded > 0))
         throw new HttpError(409, 'Reembolso divergente ou sem valor suficiente para conciliação.');
+      const priorSettlement = await s.findOneWhere(R_SETTLEMENTS, { empresa_id: empresaId, payment_intent_id: intentId, provider_reference: result.reference }, tx);
+      if (refunded + Number(priorSettlement?.chargeback_amount || 0) > total) throw new HttpError(409, 'Refund e chargeback excedem o valor capturado.');
       const refundDelta = refunded - previousRefund;
       if (refundDelta > 0 && i.cobranca_id) {
         const charge = await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: empresaId, id: Number(i.cobranca_id) }, tx);
@@ -278,7 +286,8 @@ export class PaymentOrchestrator {
           tx
         );
         const recordedDispute = await s.findOneWhere(R_DISPUTES, { empresa_id: empresaId, payment_intent_id: intentId, provider_reference: result.reference }, tx);
-        const needsReview = !!recordedDispute || ['DISPUTED', 'CHARGEBACK'].includes(status);
+        const resolvedDispute = recordedDispute && ['WON', 'LOST', 'CLOSED'].includes(String(recordedDispute.status)) && Number(recordedDispute.amount) > 0;
+        const needsReview = (!!recordedDispute || ['DISPUTED', 'CHARGEBACK'].includes(status)) && !resolvedDispute;
         if (!existing)
           await s.insert(
             R_SETTLEMENTS,
@@ -370,24 +379,30 @@ export class PaymentOrchestrator {
   }
   async deliverToCommerce(empresaId: number, intentId: number) {
     const i = await this.intent(empresaId, intentId);
-    const intention = ({ PAID: 'paga', CANCELED: 'cancelada', EXPIRED: 'expirada', REFUNDED: 'estornada' } as const)[i.status as 'PAID'];
+    const intention = ({ PAID: 'paga', PARTIALLY_REFUNDED: 'paga', CANCELED: 'cancelada', EXPIRED: 'expirada', REFUNDED: 'estornada' } as const)[i.status as 'PAID'];
     if (!intention || !i.cobranca_id) return;
     const { confirmarPagamentoCobranca } = await import('../../../server/src/commerce/pedidos');
     await confirmarPagamentoCobranca({ empresaId, cobrancaId: Number(i.cobranca_id), intencao: intention });
-    if (i.status === 'PAID')
+    if (['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'].includes(String(i.status)))
       await retrySerialization(() => locked(empresaId, `finance:${intentId}`, async (tx) => {
         // The callback may have been overtaken by a refund. Re-read the intent
         // and charge in the same serializable transaction as the financial
         // posting; never settle a title from a stale PAID snapshot.
         const current = await this.intent(empresaId, intentId, tx);
         const charge = await getStore().findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: empresaId, id: Number(i.cobranca_id) }, tx);
-        if (current.status !== 'PAID' || charge?.status !== 'paga') return;
+        if (!['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'].includes(String(current.status)) || !['paga', 'estornada'].includes(String(charge?.status))) return;
+        const attempt = await getStore().findOneWhere(R_ATTEMPTS, { empresa_id: empresaId, payment_intent_id: intentId, provider: current.provider }, tx);
+        // A terminal intent label alone is not evidence of captured/refunded
+        // money. Late callback delivery must not turn an unproved label into AR.
+        if (!attempt || Number(attempt.captured_amount) !== Number(current.amount) ||
+            (current.status === 'REFUNDED' && Number(attempt.refunded_amount) !== Number(current.amount)) ||
+            (current.status === 'PARTIALLY_REFUNDED' && !(Number(attempt.refunded_amount) > 0 && Number(attempt.refunded_amount) < Number(current.amount)))) return;
         const order = await getStore().findOneWhere(
           getResource('commerce_pedidos')!,
           { empresa_id: empresaId, id: Number(i.order_id) },
           tx
         );
-        if (!order?.venda_id || !['PAGO', 'CONVERTIDO', 'AGUARDANDO_CORRECAO'].includes(String(order.estado))) return;
+        if (!order?.venda_id) return;
         const title = await getStore().findOneWhere(
           getResource('lancamentos_financeiros')!,
           { empresa_id: empresaId, referencia_tipo: 'venda', referencia_id: Number(order.venda_id) },
@@ -408,6 +423,12 @@ export class PaymentOrchestrator {
             { valor: Number(i.amount) / 100, origem: 'webhook', nota: `Payment Intent ${intentId} / ${i.correlation_id}` },
             tx
           );
+        const expenses = await getStore().list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 1000,
+          filter: { empresa_id: empresaId, referencia_tipo: 'estorno', referencia_id: Number(title.id), status: 'confirmado' } }, tx);
+        if (expenses.total !== expenses.rows.length) throw new HttpError(409, 'Reversões excedem limite seguro de conciliação.');
+        const reversed = expenses.rows.reduce((n, e) => n + Math.round(Number(e.valor) * 100), 0);
+        const missing = Number(attempt?.refunded_amount || 0) - reversed;
+        if (missing > 0 && charge) await reverterFinanceiroDaCobranca(charge, missing / 100, { id: null, name: 'Payment Engine' }, tx);
       }));
   }
   /** Persiste a evidência do refund específico antes de concluir qualquer operação local. */
@@ -489,10 +510,11 @@ export class PaymentOrchestrator {
       );
       const a = attempts.rows[0];
       if (!a?.provider_transaction_id) throw new HttpError(409, 'Referência do provider indisponível.');
+      const settlement = await s.findOneWhere(R_SETTLEMENTS, { empresa_id: empresaId, payment_intent_id: id, provider_reference: a.provider_transaction_id }, tx);
       if (
         operation === 'refund' &&
         (!['PAID', 'CAPTURED', 'PARTIALLY_REFUNDED'].includes(i.status) ||
-          requested > Number(a.captured_amount) - Number(a.refunded_amount))
+          requested > Number(a.captured_amount) - Number(a.refunded_amount) - Number(settlement?.chargeback_amount || 0))
       )
         throw new HttpError(409, 'Valor excede saldo reembolsável.');
       if (operation === 'capture' && i.status !== 'AUTHORIZED') throw new HttpError(409, 'Pagamento não autorizado.');

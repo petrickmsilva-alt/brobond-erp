@@ -1,3 +1,4 @@
+import { agendarRefundDevolucao } from './devolucaoRefund';
 // ============================================================================
 // EXPEDIÇÃO E LOGÍSTICA REVERSA — P1
 //
@@ -109,9 +110,30 @@ async function documentoFiscalAutorizado(vendaId: number, escopo: EscopoEmpresa,
  * logístico (é o faturamento que precede a expedição). Com o documento
  * autorizado, entra: nota emitida e mercadoria no galpão é o caso legítimo.
  */
+async function commerceFaturadoComprovado(venda: Row, escopo: EscopoEmpresa, tx: Tx): Promise<boolean> {
+  const s = getStore();
+  const order = await s.findOneWhere(getResource('commerce_pedidos')!, { empresa_id: escopo.empresaId, venda_id: Number(venda.id), estado: 'CONVERTIDO' }, tx);
+  if (!order || order.pagamento_estado !== 'APPROVED') return false;
+  const lines = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId, venda_id: Number(venda.id) } }, tx);
+  const moves = await s.list(getResource('movimentacoes')!, { page: 1, pageSize: 10000, filter: { empresa_id: escopo.empresaId, venda_id: Number(venda.id) } }, tx);
+  if (!lines.rows.length || lines.total !== lines.rows.length || moves.total !== moves.rows.length) return false;
+  const required = new Map<string, number>();
+  for (const line of lines.rows) {
+    const key = `${line.produto_id}:${line.tamanho_id ?? ''}`;
+    required.set(key, (required.get(key) || 0) + Number(line.quantidade));
+  }
+  const shipped = new Map<string, number>();
+  for (const move of moves.rows) {
+    const key = `${move.produto_id}:${move.tamanho_id ?? ''}`;
+    shipped.set(key, (shipped.get(key) || 0) + (move.tipo === 'saida' ? Number(move.quantidade) : -Number(move.quantidade)));
+  }
+  return [...required].every(([key, quantity]) => (shipped.get(key) || 0) >= quantity);
+}
+
 async function assertPodeEntrarNaExpedicao(venda: Row, escopo: EscopoEmpresa, tx: Tx, etapa: 'separação' | 'conferência'): Promise<void> {
   if (!['faturada', 'entregue'].includes(String(venda.status))) return;
   if (await documentoFiscalAutorizado(Number(venda.id), escopo, tx)) return;
+  if (await commerceFaturadoComprovado(venda, escopo, tx)) return;
   throw new HttpError(409, `Este pedido já foi faturado — a ${etapa} acontece antes do faturamento.`);
 }
 
@@ -431,7 +453,7 @@ export async function expedirPedido(req: Request, res: Response) {
       // Faturada SEM documento autorizado = faturamento que precede a expedição
       // (comportamento preservado). Faturada PELA autorização da nota = a
       // mercadoria ainda vai sair — é o caso que o P1-03 destrava.
-      if (jaFaturado && !fiscal.autorizado) {
+      if (jaFaturado && !fiscal.autorizado && !await commerceFaturadoComprovado(venda, escopo, tx)) {
         throw new HttpError(409, 'Este pedido já está faturado.');
       }
       const etapaAtual = (String(venda.expedicao_etapa || 'pendente') || 'pendente') as Etapa;
@@ -463,6 +485,16 @@ export async function expedirPedido(req: Request, res: Response) {
         tx,
         efeitosAplicados ? 'Pedido expedido (faturamento já aplicado pela autorização da nota).' : 'Pedido expedido e faturado.'
       );
+      const codigo = req.body?.codigo_rastreamento;
+      const transportadora = req.body?.transportadora;
+      if (codigo !== undefined || transportadora !== undefined) {
+        if (typeof codigo !== 'string' || !codigo.trim() || codigo.length > 80 || typeof transportadora !== 'string' || !transportadora.trim() || transportadora.length > 80)
+          throw new HttpError(400, 'Informe transportadora e rastreamento válidos.');
+        const tracking = await s.findOneWhere(getResource('commerce_rastreio')!, { empresa_id: escopo.empresaId, venda_id: vendaId }, tx);
+        const fields = { codigo: codigo.trim(), transportadora: transportadora.trim(), status: 'postado' };
+        if (tracking) await s.update(getResource('commerce_rastreio')!, Number(tracking.id), fields, tx);
+        else await s.insert(getResource('commerce_rastreio')!, { empresa_id: escopo.empresaId, venda_id: vendaId, ...fields }, tx);
+      }
       return comEtapa;
     }, { isolation: 'serializable' });
     res.json({
@@ -734,6 +766,7 @@ function acoesDaDevolucao(status: string): string[] {
 /** POST /api/devolucoes/:id/autorizar */
 export async function autorizarDevolucao(req: Request, res: Response) {
   const actor = currentUser(req);
+  if (!['admin', 'gerente'].includes(actor.perfil)) throw new HttpError(403, 'Somente gerentes e administradores aprovam devoluções e seu refund.');
   checkFluxo(R_DEVOLUCAO(), actor);
   const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
@@ -907,7 +940,9 @@ export async function receberDevolucao(req: Request, res: Response) {
       const vendaTotalmenteDevolvida = vendidoPorItem.size > 0
         && [...vendidoPorItem.entries()].every(([chave, vendido]) => (recebidoPorItem.get(chave) ?? 0) >= vendido);
       let ajusteFinanceiro: { aplicado: boolean; motivo: string } = { aplicado: false, motivo: 'Devolução parcial: o financeiro da venda não é revertido automaticamente.' };
-      if (vendaTotalmenteDevolvida) {
+      const refundAgendado = await agendarRefundDevolucao(recebida, tx);
+      if (refundAgendado) ajusteFinanceiro = { aplicado: false, motivo: 'Refund eletrônico pendente no Payment Engine/outbox; financeiro somente após prova do provedor.' };
+      if (vendaTotalmenteDevolvida && !refundAgendado) {
         const venda = await s.get(getResource('vendas')!, Number(dev.venda_id), tx);
         if (venda && !['cancelada'].includes(String(venda.status))) {
           const cancelada = await s.update(getResource('vendas')!, Number(venda.id), { status: 'cancelada' }, tx);

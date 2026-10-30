@@ -95,6 +95,9 @@ export default function ProducaoCapacidadePage() {
   const [paginaProdutos, setPaginaProdutos] = useState(0);
   const [paginaInsumos, setPaginaInsumos] = useState(0);
   const [erro, setErro] = useState('');
+  const [demandaId, setDemandaId] = useState('');
+  const [planejando, setPlanejando] = useState(false);
+  const [resultadoPlano, setResultadoPlano] = useState('');
   const [carregando, setCarregando] = useState(true);
 
   const carregar = useCallback(async () => {
@@ -122,6 +125,18 @@ export default function ProducaoCapacidadePage() {
 
   return (
     <div className="space-y-5">
+      <form className="mb-4 flex flex-wrap items-end gap-3" onSubmit={async (event) => {
+        event.preventDefault(); setPlanejando(true); setErro(''); setResultadoPlano('');
+        try {
+          const result = await api.post<{ ordens: { id: number }[] }>('/producao/mrp/planejar', { venda_id: Number(demandaId) });
+          await carregar(); setResultadoPlano(result.ordens.length ? `OPs planejadas: ${result.ordens.map((op) => '#' + op.id).join(', ')}` : 'Demanda coberta pelo estoque e produção existentes.');
+        } catch (error) { setErro(error instanceof Error ? error.message : 'Falha ao planejar demanda.'); }
+        finally { setPlanejando(false); }
+      }}>
+        <label>Pedido de venda (demanda)<input className="input" type="number" min="1" required value={demandaId} onChange={(event) => setDemandaId(event.target.value)} /></label>
+        <button className="btn btn-primary" disabled={planejando} type="submit">{planejando ? 'Planejando…' : 'Gerar OPs pelo MRP'}</button>
+        {resultadoPlano && <p role="status">{resultadoPlano}</p>}
+      </form>
       <PageHeader
         title="Capacidade e MRP"
         description="Quanto cabe na fábrica no período (e onde está o gargalo) e o que falta comprar para atender a demanda em aberto — números calculados, nenhum pedido criado automaticamente."

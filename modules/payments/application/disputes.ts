@@ -1,6 +1,6 @@
 // Gestão interna de disputas: fatos declarados manualmente não são chamadas ao
 // provedor. Bloqueiam conciliação automática, mas não alteram saldos,
-// cobranças, intent ou livro financeiro.
+// cobranças ou intent. Perda confirmada com prova gera efeito no livro oficial.
 import { createHash } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { currentUser } from '../../../server/src/auth';
@@ -218,6 +218,27 @@ export async function transitionDispute(req: Request, res: Response) {
       if (target === 'EVIDENCE_SUBMITTED') {
         const evidence = await s.list(R_DISPUTE_EVIDENCE, { page: 1, pageSize: 1, filter: { empresa_id: empresaId, dispute_id: disputeId } }, tx);
         if (!evidence.total) throw new HttpError(409, 'Registre ao menos uma evidência antes de informar envio externo.');
+      }
+      if (['WON', 'LOST'].includes(target)) {
+        if (!Number.isSafeInteger(Number(row.amount)) || Number(row.amount) <= 0 || !row.external_dispute_id || !row.provider_reference)
+          throw new HttpError(409, 'Disputa sem valor e referência comprovados não pode ser resolvida financeiramente.');
+        const intent = await s.findOneWhere(R_INTENTS, { empresa_id: empresaId, id: Number(row.payment_intent_id) }, tx);
+        const settlement = await s.findOneWhere(R_SETTLEMENTS, { empresa_id: empresaId, payment_intent_id: Number(row.payment_intent_id), provider_reference: row.provider_reference }, tx);
+        if (!intent || !settlement || Number(row.amount) + Number(settlement.refund_amount || 0) > Number(intent.amount))
+          throw new HttpError(409, 'Disputa excede o valor ainda capturado ou está sem liquidação comprovada.');
+        if (target === 'LOST') {
+          const { R_GATEWAY_COBRANCAS } = await import('../../../server/src/gateway');
+          const charge = intent.cobranca_id && await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: empresaId, id: Number(intent.cobranca_id) }, tx);
+          const title = charge?.lancamento_id && await s.findOneWhere(getResource('lancamentos_financeiros')!, { empresa_id: empresaId, id: Number(charge.lancamento_id) }, tx);
+          if (!title || title.status !== 'confirmado') throw new HttpError(409, 'Chargeback exige título financeiro confirmado.');
+          await s.insert(getResource('lancamentos_financeiros')!, { empresa_id: empresaId, tipo: 'despesa', status: 'confirmado',
+            data: new Date().toISOString().slice(0, 10), data_baixa: new Date().toISOString().slice(0, 10), conta_id: title.conta_id,
+            descricao: `Chargeback disputa #${disputeId}`, valor: Number(row.amount) / 100, valor_liquido: Number(row.amount) / 100, taxa_pct: 0,
+            referencia_tipo: 'chargeback_dispute', referencia_id: disputeId, observacoes: externalReference }, tx);
+        }
+        if (settlement.payout_id) await s.update(R_PAYOUTS, Number(settlement.payout_id), { status: 'DIVERGENT' }, tx);
+        await s.update(R_SETTLEMENTS, Number(settlement.id), { chargeback_amount: target === 'LOST' ? Number(row.amount) : Number(settlement.chargeback_amount || 0),
+          dispute_review_required: false, status: 'DIVERGENT', updated_at: new Date().toISOString() }, tx);
       }
       const now = new Date().toISOString();
       const changed = await s.tryUpdateIf(R_DISPUTES, disputeId, { empresa_id: empresaId, status: row.status, version: row.version ?? null },

@@ -1,3 +1,4 @@
+import { travarInsumos, reservadoEmOutrasOrdens } from './producaoReservas';
 // ============================================================
 // Fase 3 — Produção e custo real.
 //
@@ -295,7 +296,7 @@ export async function necessidadeDaFicha(ficha: Row | null, pecas: number, escop
     if (!insumo) throw new HttpError(404, 'Insumo não encontrado.');
     mapa.set(insumoId, {
       insumo_id: insumoId,
-      necessidade: round3(pecas * consumo * (1 + perdaPct / 100)),
+      necessidade: round3((mapa.get(insumoId)?.necessidade || 0) + pecas * consumo * (1 + perdaPct / 100)),
       custo_unitario: Number(insumo.custo_medio || 0),
       nome: labelOf(getResource('insumos')!, insumo),
       unidade: insumo.unidade || 'un',
@@ -421,6 +422,7 @@ async function baixarInsumos(
   const linhas: LinhaConsumo[] = [];
   const divergencia: { insumo_id: number; nome: string; excesso: number }[] = [];
 
+  await travarInsumos(escopo.empresaId, [...necessidade.keys()], tx);
   for (const linha of necessidade.values()) {
     const ja = round3(jaConsumido.get(linha.insumo_id) || 0);
     const resto = round3(linha.necessidade - ja);
@@ -430,7 +432,7 @@ async function baixarInsumos(
       continue;
     }
     if (resto === 0) continue;
-    const saldo = round3(await s.insumoStock(linha.insumo_id, tx, escopo.empresaId));
+    const saldo = round3(await s.insumoStock(linha.insumo_id, tx, escopo.empresaId) - await reservadoEmOutrasOrdens(escopo.empresaId, linha.insumo_id, id, tx));
     linhas.push({ ...linha, necessidade: resto, faltando: saldo < resto ? round3(resto - saldo) : 0 });
   }
 
@@ -788,6 +790,12 @@ export async function aplicarRegrasOrdem(
     );
   }
   if (statusAnterior === statusNovo) return; // PUT que repete o status não é transição
+  if (statusNovo === 'planejada') await s.update(recursoOrdem().op, id, { reservas_componentes: null }, tx);
+  if (before && !after.reservas_componentes && ['liberada', 'em_producao'].includes(statusNovo)) {
+    const reservas = await reservarComponentesOrdem(after, escopo, tx, opts.forcar === true && ['admin', 'gerente'].includes(String(actor.perfil)));
+    await s.update(recursoOrdem().op, id, { reservas_componentes: reservas }, tx);
+  }
+
 
   // --- 2) marcos de tempo do fluxo --------------------------------------------
   const agora = new Date().toISOString();
@@ -875,11 +883,13 @@ export async function aplicarRegrasOrdem(
  * Responde 404 (não 403): 403 confirmaria que o registro existe.
  */
 async function getOrdem(id: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row> {
+  if (tx) await tx.query('SELECT id FROM ordens_fabricacao WHERE empresa_id=$1 AND id=$2 FOR UPDATE', [escopo.empresaId, id]);
   const row = await getStore().findOneWhere(recursoOrdem().op, { id, empresa_id: escopo.empresaId }, tx);
   return assertRegistroDaEmpresa(recursoOrdem().op, row, escopo);
 }
 
 function assertOrdemEditavel(op: Row) {
+  if (op.reservas_componentes && op.status !== 'planejada') throw new HttpError(409, 'Retorne a OP para planejada antes de alterar componentes/quantidades reservadas.');
   const status = String(op.status);
   // `parcial` entrou na lista na E2: a partir do primeiro apontamento existe
   // produção real registrada, e mudar a grade ali descolaria o produzido do
@@ -1326,6 +1336,22 @@ function erroEstado(op: Row, acao: string, esperados: StatusOp[]): HttpError {
   );
 }
 
+async function reservarComponentesOrdem(ordem: Row, escopo: EscopoEmpresa, tx: Tx, forcar = false): Promise<Record<string, number>> {
+  const s = getStore(); const id = Number(ordem.id);
+  const itens = await itensProducao(ordem, escopo, tx);
+  const pecas = itens.reduce((n, item) => n + item.quantidade, 0);
+  const ficha = await fichaDoProduto(Number(ordem.produto_id), escopo, tx);
+  const materiais = await necessidadeDaFicha(ficha, pecas, escopo, tx);
+  await travarInsumos(escopo.empresaId, [...materiais.keys()], tx);
+  const reservas: Record<string, number> = {};
+  for (const l of materiais.values()) {
+    const disponivel = await s.insumoStock(l.insumo_id, tx, escopo.empresaId) - await reservadoEmOutrasOrdens(escopo.empresaId, l.insumo_id, id, tx);
+    if (disponivel < l.necessidade && !forcar) throw new HttpError(409, `Sem saldo disponível para reservar ${l.nome}: necessário ${l.necessidade}, disponível ${disponivel}.`);
+    reservas[String(l.insumo_id)] = Math.max(0, Math.min(disponivel, l.necessidade));
+  }
+  return reservas;
+}
+
 /** POST /api/ordens/:id/liberar */
 export async function liberarOrdem(req: Request, res: Response) {
   const { op } = recursoOrdem();
@@ -1347,11 +1373,13 @@ export async function liberarOrdem(req: Request, res: Response) {
       // Fica congelado de propósito: editar a ficha depois não reescreve o que
       // foi orçado quando a OP foi para o chão de fábrica.
       const ficha = await fichaDoProduto(Number(ordem.produto_id), escopo, tx);
+      const reservas = await reservarComponentesOrdem(ordem, escopo, tx, req.query.forcar === 'true');
       const custoUnitario = ficha ? Number(ficha.custo_calculado || 0) : 0;
       const custoPrevisto = round2(pecas * custoUnitario);
 
       const atualizada = await transicionar(id, 'planejada', 'liberada', {
         custo_previsto: custoPrevisto,
+        reservas_componentes: reservas,
         liberada_em: new Date().toISOString(),
         liberada_por: actor.id || null,
       }, tx);
@@ -1365,7 +1393,7 @@ export async function liberarOrdem(req: Request, res: Response) {
           recurso: 'ordens',
           registro_id: id,
           descricao: `OP #${id} liberada para produção — ${pecas} peça(s), custo previsto R$ ${custoPrevisto.toFixed(2)}`,
-          dados: { pecas, custo_previsto: custoPrevisto, custo_unitario_ficha: custoUnitario, tem_ficha: !!ficha },
+          dados: { pecas, custo_previsto: custoPrevisto, custo_unitario_ficha: custoUnitario, tem_ficha: !!ficha, reserva_parcial_forcada: req.query.forcar === 'true', reservas_componentes: reservas },
           empresa_id: empresaDoRegistroAudit(op, ordem, actor),
         },
         tx
@@ -1406,6 +1434,7 @@ export async function iniciarOrdem(req: Request, res: Response) {
       const de = String(ordem.status);
       if (de !== 'planejada' && de !== 'liberada' && de !== 'parcial') throw erroEstado(ordem, 'iniciar a OP', ['planejada', 'liberada', 'parcial']);
       const extra: Payload = ordem.iniciada_em ? {} : { iniciada_em: new Date().toISOString() };
+      if (!ordem.reservas_componentes) extra.reservas_componentes = await reservarComponentesOrdem(ordem, escopo, tx);
       // `parcial` volta para `em_producao` (retomar o chão de fábrica); as outras
       // vão para `em_producao` pela primeira vez.
       const atualizada = await transicionar(id, de as StatusOp, 'em_producao', extra, tx);

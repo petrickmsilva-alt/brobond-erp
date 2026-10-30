@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 process.env.NODE_ENV = 'test'; delete process.env.DATABASE_URL;
 const { getStore } = await import('../src/services');
 const { R_EXTRATO } = await import('../src/extrato');
-const { R_SETTLEMENTS, R_PAYOUTS } = await import('../../modules/payments/infrastructure/resources');
+const { R_SETTLEMENTS, R_PAYOUTS, R_INTENTS } = await import('../../modules/payments/infrastructure/resources');
 const { normalizePayout, importPayout, matchPayout, payoutDetail } = await import('../../modules/payments/application/payouts');
 const admin = { id: 1, name: 'Admin', perfil: 'admin', empresa_id: 1, empresas: [1] };
 const req = (body: object, params: object = {}, user = admin) => ({ body, params, user, query: {} } as any);
@@ -27,7 +27,8 @@ test('payment: normalização valida centavos, totais, data e linhas duplicadas'
 
 test('payment: importação é idempotente e conciliação exige linha bancária exata da empresa', async () => {
   const s = getStore();
-  await s.insert(R_SETTLEMENTS, { empresa_id: 1, payment_intent_id: 91, provider: 'PAGBANK', provider_reference: 'TRANS-001', gross_amount: 10000, refund_amount: 0, chargeback_amount: 0, status: 'UNRECONCILED', evidence: {} });
+  const payment91 = await s.insert(R_INTENTS, { empresa_id: 1, order_id: 9999, amount: 10000, status: 'PAID', provider: 'PAGBANK' });
+  await s.insert(R_SETTLEMENTS, { empresa_id: 1, payment_intent_id: payment91.id, provider: 'PAGBANK', provider_reference: 'TRANS-001', gross_amount: 10000, refund_amount: 0, chargeback_amount: 0, status: 'UNRECONCILED', evidence: {} });
   const r = res(); await importPayout(req(report()), r.out);
   assert.equal(r.get().status, 201); const payoutId = r.get().body.payout.id;
   const replay = res(); await importPayout(req(report()), replay.out);
@@ -52,7 +53,8 @@ test('payment: importação é idempotente e conciliação exige linha bancária
 
 test('payment: valor divergente é evidência, não MATCHED', async () => {
   const s = getStore();
-  await s.insert(R_SETTLEMENTS, { empresa_id: 1, payment_intent_id: 92, provider: 'PAGBANK', provider_reference: 'DIVERGENT-TRANS', gross_amount: 5000, refund_amount: 0, chargeback_amount: 0, status: 'UNRECONCILED', evidence: {} });
+  const payment92 = await s.insert(R_INTENTS, { empresa_id: 1, order_id: 9999, amount: 10000, status: 'PAID', provider: 'PAGBANK' });
+  await s.insert(R_SETTLEMENTS, { empresa_id: 1, payment_intent_id: payment92.id, provider: 'PAGBANK', provider_reference: 'DIVERGENT-TRANS', gross_amount: 5000, refund_amount: 0, chargeback_amount: 0, status: 'UNRECONCILED', evidence: {} });
   const body = { ...report('DIVERGENT-PAYOUT'), transactions: [{ ...report().transactions[0], provider_reference: 'DIVERGENT-TRANS' }] };
   const r = res(); await importPayout(req(body), r.out);
   assert.equal(r.get().body.payout.status, 'DIVERGENT');
@@ -93,7 +95,8 @@ test('payment: correção preserva versões, só libera match coerente e desvinc
   const { correctPayout, unlinkPayout } = await import('../../modules/payments/application/payouts');
   const { marcarDivergencia } = await import('../src/extrato');
   const s = getStore(); const ref = 'CORRECTION-TRANSACTION';
-  await s.insert(R_SETTLEMENTS, { empresa_id: 1, payment_intent_id: 93, provider: 'PAGBANK', provider_reference: ref, gross_amount: 5000, refund_amount: 0, chargeback_amount: 0, status: 'UNRECONCILED', evidence: {} });
+  const payment93 = await s.insert(R_INTENTS, { empresa_id: 1, order_id: 9999, amount: 10000, status: 'PAID', provider: 'PAGBANK' });
+  await s.insert(R_SETTLEMENTS, { empresa_id: 1, payment_intent_id: payment93.id, provider: 'PAGBANK', provider_reference: ref, gross_amount: 5000, refund_amount: 0, chargeback_amount: 0, status: 'UNRECONCILED', evidence: {} });
   const incorrect = { provider: 'PAGBANK', payout_reference: 'CORRECTION-PAYOUT', currency: 'BRL', settlement_date: '2028-05-10', net_amount: 9800,
     transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 0, chargeback_amount: 0, net_amount: 9800 }] };
   const r = res(); await importPayout(req(incorrect), r.out); const payout = r.get().body.payout;

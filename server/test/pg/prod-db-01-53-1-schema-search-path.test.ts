@@ -110,15 +110,16 @@ test('PROD-DB-01.5.3/hotfix — com current_schema() != schema das tabelas, a co
     // Definido no nível do DATABASE descartável (não vaza para outros testes).
     // ----------------------------------------------------------------------
     const role = (await db.query(`SELECT current_user AS u`)).rows[0].u as string;
-    await db.query(`CREATE SCHEMA ${role}`);
-    await db.query(`ALTER DATABASE ${scratch} SET search_path = ${role}, public`);
+    const quotedRole = `"${role.replaceAll('"', '""')}"`;
+    await db.query(`CREATE SCHEMA ${quotedRole}`);
+    await db.query(`ALTER DATABASE ${scratch} SET search_path = ${quotedRole}, public`);
 
     // Nova conexão para herdar o search_path definido no banco.
     db2 = new Client({ connectionString: scratchUrl });
     await db2.connect();
     const sess = await db2.query(`SELECT current_schema() AS cs, current_setting('search_path') AS sp`);
     assert.equal(sess.rows[0].cs, role, 'current_schema() deve ser o schema da role (não public)');
-    assert.match(sess.rows[0].sp, new RegExp(`^${role}, ?public$`));
+    assert.equal(sess.rows[0].sp, `${quotedRole}, public`);
 
     // ----------------------------------------------------------------------
     // FIXTURE — o CASO EXATO de produção: produto_id=7, tamanho_id=5.

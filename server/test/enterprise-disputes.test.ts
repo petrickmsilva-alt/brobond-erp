@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 process.env.NODE_ENV = 'test'; delete process.env.DATABASE_URL;
 const { getStore } = await import('../src/services');
-const { R_INTENTS, R_ATTEMPTS, R_DISPUTES, R_DISPUTE_EVIDENCE, R_DISPUTE_EVENTS } = await import('../../modules/payments/infrastructure/resources');
+const { R_INTENTS, R_ATTEMPTS, R_DISPUTES, R_DISPUTE_EVIDENCE, R_DISPUTE_EVENTS, R_SETTLEMENTS } = await import('../../modules/payments/infrastructure/resources');
 const { registerDispute, disputeDetail, addDisputeEvidence, transitionDispute } = await import('../../modules/payments/application/disputes');
 const actor = { id: 1, name: 'Admin', perfil: 'admin', empresa_id: 1, empresas: [1] };
 const req = (body: object = {}, params: object = {}, key = 'testing-key-0001', user: any = actor) => ({ body, params, user, query: {}, get: () => key } as any);
@@ -15,6 +15,7 @@ async function fixture(ref: string, company = 1) {
   const s = getStore();
   const intent = await s.insert(R_INTENTS, { empresa_id: company, order_id: 1, currency: 'BRL', amount: 10000, method: 'CREDIT_CARD', provider: 'STRIPE', status: 'PAID', idempotency_key: ref, correlation_id: ref });
   await s.insert(R_ATTEMPTS, { empresa_id: company, payment_intent_id: intent.id, provider: 'STRIPE', provider_transaction_id: ref, requested_amount: 10000, authorized_amount: 10000, captured_amount: 10000, refunded_amount: 0, status: 'PAID' });
+  await s.insert(R_SETTLEMENTS, { empresa_id: company, payment_intent_id: intent.id, provider: 'STRIPE', provider_reference: ref, gross_amount: 10000, refund_amount: 0, chargeback_amount: 0, status: 'UNRECONCILED' });
   return { intent, data: { payment_intent_id: intent.id, provider_reference: ref, external_dispute_id: `DIS-${ref}`, reason: 'Motivo informado pelo provedor', amount: 3000, due_date: '2029-05-10' } };
 }
 

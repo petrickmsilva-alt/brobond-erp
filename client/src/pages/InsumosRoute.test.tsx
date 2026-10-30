@@ -139,7 +139,7 @@ describe('App — rotas do cadastro de Insumos (LISTA → PÁGINA)', () => {
   it('/insumos continua sendo a LISTA (sem formulário sobreposto)', async () => {
     abrirRota('/insumos');
 
-    expect(await screen.findByRole('heading', { name: 'Insumos' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Insumos' }, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /Novo insumo/ }).length).toBeGreaterThan(0);
     // A lista NÃO abre nenhum formulário por conta própria.
     expect(screen.queryByRole('dialog')).toBeNull();

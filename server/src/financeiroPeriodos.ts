@@ -51,30 +51,15 @@ async function pendenciasFinanceiras(empresaId: number, competencia: string, tx:
     const { rows: [r] } = await tx.query(`SELECT
       (SELECT count(*)::int FROM fin_extrato_transacoes e WHERE e.empresa_id=$1 AND e.status IN ('importada','divergente')
         AND (e.data IS NULL OR (e.data >= $2::date AND e.data < $2::date + interval '1 month'))
-        -- A baixa já existente só cobre o extrato de um repasse com UMA
-        -- transação e nenhuma dedução, e com vínculo financeiro inequívoco.
         AND NOT (e.status='importada' AND EXISTS (
-          SELECT 1 FROM payment_payouts p
-          JOIN payment_settlements s ON s.empresa_id=p.empresa_id AND s.payout_id=p.id
-          JOIN payment_intents i ON i.empresa_id=s.empresa_id AND i.id=s.payment_intent_id
-          JOIN gateway_cobrancas g ON g.empresa_id=i.empresa_id AND g.id=i.cobranca_id
-          JOIN commerce_pedidos o ON o.empresa_id=i.empresa_id AND o.id=i.order_id
-          JOIN lancamentos_financeiros l ON l.empresa_id=g.empresa_id AND l.id=g.lancamento_id
-          WHERE p.empresa_id=e.empresa_id AND p.bank_transaction_id=e.id AND p.status='MATCHED'
-            AND (SELECT count(*) FROM payment_settlements s2 WHERE s2.empresa_id=p.empresa_id AND s2.payout_id=p.id)=1
-            AND s.status='MATCHED' AND NOT s.dispute_review_required AND s.provider_fee=0 AND s.gateway_fee=0
-            AND s.installment_fee=0 AND s.antifraud_fee=0 AND s.refund_amount=0 AND s.chargeback_amount=0
-            AND s.gross_amount=i.amount AND s.net_amount=i.amount AND p.net_amount=i.amount
-            AND round(e.valor*100)=p.net_amount AND e.direcao='entrada' AND e.data IS NOT NULL
-            AND g.status='paga' AND g.venda_id=o.venda_id AND l.referencia_tipo='venda' AND l.referencia_id=o.venda_id
-            AND l.status='confirmado' AND round(l.valor*100)=i.amount AND round(l.valor_liquido*100)=i.amount AND coalesce(l.taxa_pct,0)=0
-            AND l.conta_id=e.conta_id AND l.data_baixa=e.data
+          SELECT 1 FROM payment_payouts p WHERE p.empresa_id=e.empresa_id AND p.bank_transaction_id=e.id
+          AND fin_repasse_comprovado(p.empresa_id,p.id)
         ))) AS extratos,
       (SELECT count(*)::int FROM payment_payouts WHERE empresa_id=$1 AND status IN ('IMPORTED','DIVERGENT')
         AND (settlement_date IS NULL OR (settlement_date >= $2::date AND settlement_date < $2::date + interval '1 month'))) AS repasses,
       (SELECT count(*)::int FROM payment_settlements s WHERE s.empresa_id=$1 AND
         (s.status <> 'MATCHED' OR s.dispute_review_required OR NOT EXISTS (
-          SELECT 1 FROM payment_payouts p WHERE p.empresa_id=s.empresa_id AND p.id=s.payout_id AND p.status='MATCHED' AND p.bank_transaction_id IS NOT NULL))
+          SELECT 1 FROM payment_payouts p WHERE p.empresa_id=s.empresa_id AND p.id=s.payout_id AND p.status='MATCHED' AND p.bank_transaction_id IS NOT NULL AND fin_repasse_comprovado(p.empresa_id,p.id)))
         AND (s.settlement_date IS NULL OR (s.settlement_date >= $2::date AND s.settlement_date < $2::date + interval '1 month'))) AS liquidacoes,
       ((SELECT count(*)::int FROM payment_operations WHERE empresa_id=$1 AND status IN ('PROCESSING','UNCERTAIN')) +
        (SELECT count(*)::int FROM gateway_cobrancas WHERE empresa_id=$1 AND (estorno_operacao_estado IN ('PROCESSING','UNCERTAIN') OR criacao_operacao_estado IN ('PROCESSING','UNCERTAIN') OR cancelamento_operacao_estado IN ('PROCESSING','UNCERTAIN'))) +
@@ -151,6 +136,7 @@ export async function obterPeriodo(req: Request, res: Response) {
 }
 export async function alterarPeriodo(req: Request, res: Response) {
   const { actor, empresaId } = ator(req);
+  if (!['admin', 'gerente'].includes(actor.perfil)) throw new HttpError(403, 'Somente gerentes e administradores fecham períodos.');
   const competencia = competenciaValida(req.params.competencia);
   const estado = req.params.acao === 'fechar' ? 'fechado' : req.params.acao === 'reabrir' ? 'aberto' : null;
   if (!estado) throw new HttpError(404, 'Ação não encontrada.');

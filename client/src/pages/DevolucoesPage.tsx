@@ -70,6 +70,9 @@ type ItemDevolucao = {
 };
 
 type Detalhe = {
+  refund_estado?: string | null;
+  refund_amount?: number | null;
+  payment_intent_id?: number | null;
   id: number;
   numero: string | null;
   venda_id: number;
@@ -296,6 +299,11 @@ export default function DevolucoesPage() {
                 </div>
 
                 <p className="text-sm text-slate-600 dark:text-navy-200">{detalhe.motivo}</p>
+                {detalhe.refund_estado && <p role="status" className="mt-2 text-sm">
+                  Refund: {detalhe.refund_estado === 'CONCLUIDO' ? 'comprovado pelo Payment Engine' : 'pendente de confirmação no Payment Engine (retry pela fila Commerce)'}
+                  {' · '}{formatNumber(Number(detalhe.refund_amount || 0) / 100)} BRL · pagamento #{detalhe.payment_intent_id}
+                </p>}
+
 
                 <dl className="mt-3 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
                   <Info rotulo="Rastreamento" valor={detalhe.codigo_rastreamento ?? '—'} />
@@ -546,7 +554,7 @@ export default function DevolucoesPage() {
             </div>
           )}
           <p className="text-[11px] text-slate-400">
-            Devolução total cancela o pedido e reverte o financeiro. Parcial não. Quem decide é o servidor, a partir do
+            Pagamentos eletrônicos geram refund rastreável no Payment Engine após o recebimento. Vendas legadas mantêm a reversão total. O servidor calcula a partir do
             que você conferir aqui.
           </p>
         </div>

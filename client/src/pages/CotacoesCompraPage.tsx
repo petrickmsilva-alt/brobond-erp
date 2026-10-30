@@ -86,7 +86,7 @@ type FornecedorComparativo = {
 };
 
 type Comparativo = {
-  cotacao: { id: number; titulo: string; status: string; criterio: string | null; prazo_validade: string | null; compra_id: number | null };
+  cotacao: { requisicao_estado?: string | null; id: number; titulo: string; status: string; criterio: string | null; prazo_validade: string | null; compra_id: number | null };
   resumo: {
     itens: number;
     fornecedores: number;
@@ -224,7 +224,7 @@ export default function CotacoesCompraPage({ initialId }: { initialId?: number |
     if (selecionada !== null) await carregarComparativo(selecionada);
   }, [carregarLista, carregarComparativo, selecionada]);
 
-  const editavel = comp ? comp.cotacao.status === 'rascunho' || comp.cotacao.status === 'cotando' : false;
+  const editavel = comp && !comp.cotacao.requisicao_estado ? comp.cotacao.status === 'rascunho' || comp.cotacao.status === 'cotando' : false;
   const cotando = comp?.cotacao.status === 'cotando';
 
   // -------------------------------------------------------------------------
@@ -528,6 +528,21 @@ export default function CotacoesCompraPage({ initialId }: { initialId?: number |
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge tone={TOM_STATUS[comp.cotacao.status] ?? 'slate'}>{ROTULO_STATUS[comp.cotacao.status] ?? comp.cotacao.status}</Badge>
+                    {comp.cotacao.status === 'rascunho' && !comp.cotacao.requisicao_estado && (
+                      <button type="button" className="btn btn-secondary" onClick={async () => {
+                        try { await api.post(`/cotacoes-compra/${selecionada}/requisitar`, {}); await carregarComparativo(Number(selecionada)); }
+                        catch (e) { toast.error(mensagemErro(e, 'Não foi possível requisitar.')); }
+                      }}>Enviar requisição</button>
+                    )}
+                    {comp.cotacao.requisicao_estado === 'solicitada' && <>
+                      <span>Aguardando aprovação da requisição</span>
+                      {gerente && <button type="button" className="btn btn-primary" onClick={async () => {
+                        try { await api.post(`/cotacoes-compra/${selecionada}/aprovar-requisicao`, {}); await carregarComparativo(Number(selecionada)); }
+                        catch (e) { toast.error(mensagemErro(e, 'Não foi possível aprovar.')); }
+                      }}>Aprovar requisição</button>}
+                    </>}
+                    {comp.cotacao.requisicao_estado === 'aprovada' && comp.cotacao.status === 'rascunho' &&
+                      <button type="button" className="btn btn-secondary" onClick={() => setAddConviteAberto(true)}>Convidar fornecedores</button>}
                     <DocumentPrintButton tipo="cotacoes-compra" documentoId={Number(comp.cotacao.id)} label="Imprimir" compact />
                     {editavel && (
                       <button type="button" className="btn btn-secondary" onClick={() => setAddItemAberto(true)}>

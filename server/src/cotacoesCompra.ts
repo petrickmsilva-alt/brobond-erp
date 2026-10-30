@@ -69,6 +69,7 @@ type Criterio = (typeof CRITERIOS)[number];
 // Carga com escopo — obrigatório, não opcional (ver cabeçalho, regra 3).
 // ---------------------------------------------------------------------------
 async function getCotacao(id: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row> {
+  if (tx) await tx.query('SELECT id FROM cotacoes_compra WHERE empresa_id=$1 AND id=$2 FOR UPDATE', [escopo.empresaId, id]);
   const row = await getStore().findOneWhere(R(), { id }, tx);
   return assertRegistroDaEmpresa(R(), row, escopo);
 }
@@ -194,6 +195,7 @@ export async function comparativoCotacao(req: Request, res: Response) {
 
     res.json({
       cotacao: {
+        requisicao_estado: cotacao.requisicao_estado ?? null,
         id: Number(cotacao.id),
         titulo: cotacao.titulo,
         status: String(cotacao.status),
@@ -220,6 +222,7 @@ export async function comparativoCotacao(req: Request, res: Response) {
 // Itens do carrinho — só enquanto a cotação não foi decidida
 // ---------------------------------------------------------------------------
 function assertEditavel(cotacao: Row, acao: string): void {
+  if (cotacao.requisicao_estado) throw new HttpError(409, 'O carrinho requisitado é imutável; crie nova requisição para mudar itens.');
   const st = String(cotacao.status);
   if (st === 'decidida' || st === 'cancelada') {
     throw new HttpError(409, `Não dá para ${acao}: a cotação #${cotacao.id} está "${ROTULO[st] || st}".`);
@@ -363,7 +366,8 @@ export async function convidarFornecedores(req: Request, res: Response) {
   try {
     const out = await s.transaction(async (tx) => {
       const cotacao = await getCotacao(id, escopo, tx);
-      assertEditavel(cotacao, 'convidar fornecedores');
+      if (cotacao.requisicao_estado === 'solicitada') throw new HttpError(409, 'Aprovação da requisição pendente.');
+      assertEditavel({ ...cotacao, requisicao_estado: null }, 'convidar fornecedores');
       const ids = Array.isArray(req.body?.fornecedor_ids) ? req.body.fornecedor_ids.map((x: unknown) => Number(x)).filter((n: number) => n > 0) : [];
       if (!ids.length) throw new HttpError(400, 'Informe ao menos um fornecedor para convidar.', { fornecedor_ids: 'Lista vazia' });
 
@@ -421,6 +425,7 @@ export async function abrirCotacao(req: Request, res: Response) {
   try {
     const out = await s.transaction(async (tx) => {
       const cotacao = await getCotacao(id, escopo, tx);
+      if (cotacao.requisicao_estado === 'solicitada') throw new HttpError(409, 'Aprovação da requisição pendente.');
       if (String(cotacao.status) !== 'rascunho') throw new HttpError(409, `Só se abre uma cotação em rascunho (status atual: ${ROTULO[String(cotacao.status)] || cotacao.status}).`);
       const itens = await itensDaCotacao(id, escopo.empresaId, tx);
       if (!itens.length) throw new HttpError(409, 'Adicione ao menos um item antes de abrir a cotação.');
@@ -451,6 +456,7 @@ export async function cotarFornecedor(req: Request, res: Response) {
   try {
     const out = await s.transaction(async (tx) => {
       const cotacao = await getCotacao(id, escopo, tx);
+      if (cotacao.requisicao_estado === 'solicitada') throw new HttpError(409, 'Aprovação da requisição pendente.');
       if (String(cotacao.status) !== 'cotando') {
         throw new HttpError(409, `Só se registra cotação com a cotação aberta (status atual: ${ROTULO[String(cotacao.status)] || cotacao.status}).`);
       }
@@ -600,6 +606,7 @@ export async function decidirCotacaoCompra(req: Request, res: Response) {
         if (cotacao.decisao_hash !== hash) throw new HttpError(409, 'Esta cotação já foi decidida com outros dados; consulte o pedido existente.');
         return { cotacao, compra_id: Number(cotacao.compra_id), idempotente: true, linhas: [] as Escolha[] };
       }
+      if (cotacao.requisicao_estado === 'solicitada') throw new HttpError(409, 'Aprovação da requisição pendente.');
       if (String(cotacao.status) !== 'cotando') {
         throw new HttpError(409, `Só se decide uma cotação aberta (status atual: ${ROTULO[String(cotacao.status)] || cotacao.status}).`);
       }
@@ -707,6 +714,7 @@ export async function decidirCotacaoCompra(req: Request, res: Response) {
       const compra = await s.insert(getResource('compras')!, {
         empresa_id: escopo.empresaId,
         fornecedor_id: fornecedorPrincipal,
+        condicao_pagamento: conviteVencedor.condicao_pagamento ?? null,
         data: new Date().toISOString().slice(0, 10),
         status: 'pendente',
         total,
@@ -813,4 +821,34 @@ export async function cancelarCotacao(req: Request, res: Response) {
 /** Exportado para teste: resolve o recurso sem expor o helper interno. */
 export function recursoCotacao(): Resource {
   return R();
+}
+
+/** The quotation cart is also the requisition document: no parallel orders/items. */
+export async function requisitarCotacao(req: Request, res: Response) {
+  const actor = currentUser(req); checkAccess(R(), actor, 'update');
+  const escopo = escopoDoAtor(actor); const id = parseId(req.params.id); const s = getStore();
+  const result = await s.transaction(async (tx) => {
+    const quote = await getCotacao(id, escopo, tx);
+    if (quote.requisicao_estado) return { cotacao: quote, idempotente: true };
+    if (quote.status !== 'rascunho') throw new HttpError(409, 'Requisite o carrinho antes de convidar fornecedores.');
+    if (!(await itensDaCotacao(id, escopo.empresaId, tx)).length) throw new HttpError(409, 'A requisição precisa de itens.');
+    const updated = await s.update(R(), id, { requisicao_estado: 'solicitada', requisitada_por: actor.id }, tx);
+    await s.audit({ empresa_id: escopo.empresaId, usuario_id: actor.id, usuario: actor.name, acao: 'editar', recurso: R().key, registro_id: id,
+      descricao: 'Requisição enviada para aprovação', dados: { estado: 'solicitada' } }, tx);
+    return { cotacao: updated, idempotente: false };
+  }, { isolation: 'read committed' }); res.json(result);
+}
+export async function aprovarRequisicao(req: Request, res: Response) {
+  const actor = currentUser(req); checkAccess(R(), actor, 'update'); exigirGerente(actor, 'aprovar requisições');
+  const escopo = escopoDoAtor(actor); const id = parseId(req.params.id); const s = getStore();
+  const result = await s.transaction(async (tx) => {
+    const quote = await getCotacao(id, escopo, tx);
+    if (quote.requisicao_estado === 'aprovada') return { cotacao: quote, idempotente: true };
+    if (quote.requisicao_estado !== 'solicitada') throw new HttpError(409, 'Envie a requisição antes de aprovar.');
+    // Monetary approval happens on the priced PO using exigirAlcadaCompra.
+    const updated = await s.update(R(), id, { requisicao_estado: 'aprovada', requisicao_aprovada_por: actor.id, requisicao_aprovada_em: new Date().toISOString() }, tx);
+    await s.audit({ empresa_id: escopo.empresaId, usuario_id: actor.id, usuario: actor.name, acao: 'editar', recurso: R().key, registro_id: id,
+      descricao: 'Requisição aprovada para cotação (alçada monetária exigida no pedido)', dados: { estado: 'aprovada' } }, tx);
+    return { cotacao: updated, idempotente: false };
+  }, { isolation: 'read committed' }); res.json(result);
 }

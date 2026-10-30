@@ -1,3 +1,4 @@
+import { validarDisponivelInsumo } from './producaoReservas';
 import { validarConfiguracaoFrete, type ConfigFrete } from './commerce/frete';
 import { validarEnderecoWms } from './wmsEnderecamento';
 // Camada de serviço: CRUD genérico + regras de negócio por módulo
@@ -1380,6 +1381,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
   const escopo = opts.escopo === undefined ? escopoDe(actor) : (comoEscopo(opts.escopo) ?? escopoDeSistema());
   try {
     return await s.transaction(async (tx) => {
+      if (r.key === 'ordens' && tx) await tx.query('SELECT id FROM ordens_fabricacao WHERE empresa_id=$1 AND id=$2 FOR UPDATE', [escopo.empresaId, id]);
       const filtroAntes = temEscopoEmpresa(r) ? { id, empresa_id: escopo.empresaId } : { id };
       const before = await s.findOneWhere(r, filtroAntes, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
@@ -1412,6 +1414,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
           throw new HttpError(409, 'O terceiro da OP não pode ser trocado após o registro de eventos de custódia; encerre e crie outra OP.');
         }
       }
+      if (r.key === 'cotacoes_compra' && before.requisicao_estado) throw new HttpError(409, 'Requisição enviada é imutável; use o fluxo de aprovação.');
       await validarRegrasComerciais(r, data, before, s, escopo, tx);
 
       if (r.key === 'usuarios') await prepareUserPayload(data, before, actor);
@@ -1527,6 +1530,9 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
         if (data.fornecedor_id !== undefined && Number(data.fornecedor_id) !== Number(before.fornecedor_id))
           await validarFornecedorParaNovoPedido(s, data.fornecedor_id ? Number(data.fornecedor_id) : null, escopo.empresaId, tx);
       }
+      if (r.key === 'ordens' && before.reservas_componentes && before.status !== 'planejada' &&
+          ['produto_id', 'tipo', 'tamanho_id', 'quantidade'].some((k) => data[k] !== undefined && String(data[k]) !== String(before[k])))
+        throw new HttpError(409, 'Retorne a OP para planejada antes de alterar o plano reservado.');
       if (r.key === 'ordens') await validarOrdemPayload(data, before);
       if (r.key === 'clientes') await validarRegrasCliente(data, before, Number(before.empresa_id ?? escopo.empresaId), { body, tx });
       if (r.key === 'representantes') await validarRegrasRepresentante(s, data, before, Number(before.empresa_id ?? escopo.empresaId), { body, tx });
@@ -1699,6 +1705,7 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
   const escopo = escopoOpt === undefined ? escopoDe(actor) : (comoEscopo(escopoOpt) ?? escopoDeSistema());
   try {
     await s.transaction(async (tx) => {
+      if (r.key === 'ordens' && tx) await tx.query('SELECT id FROM ordens_fabricacao WHERE empresa_id=$1 AND id=$2 FOR UPDATE', [escopo.empresaId, id]);
       const filtroAntes = temEscopoEmpresa(r) ? { id, empresa_id: escopo.empresaId } : { id };
       const before = await s.findOneWhere(r, filtroAntes, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
@@ -2681,6 +2688,7 @@ async function createMovimentacaoInsumo(data: Payload, actor: Actor, tx: Tx, esc
   const insumo = await s.findOneWhere(getResource('insumos')!, { id: insumoId, empresa_id: escopo.empresaId }, tx);
   if (!insumo) throw new HttpError(404, 'Insumo não encontrado.');
   const delta = tipo === 'saida' ? -qtd : qtd;
+  if (delta < 0) await validarDisponivelInsumo(escopo.empresaId, insumoId, -delta, data.ordem_id ? Number(data.ordem_id) : null, tx);
   const atual = await s.insumoStock(insumoId, tx, escopo.empresaId);
   if (atual + delta < 0) {
     const nome = labelOf(getResource('insumos')!, insumo);

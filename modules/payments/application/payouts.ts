@@ -1,3 +1,4 @@
+import { aplicarTaxasSettlement } from './financial-posting';
 // Manual ingestion of provider settlement reports. This is reconciliation
 // evidence over existing payment intents + bank statement lines, never cash.
 import { createHash } from 'node:crypto';
@@ -162,6 +163,7 @@ export async function matchPayout(req: Request, res: Response) {
       if (!bankMatches(currentBank, Number(payout.net_amount)) || !currentReport || currentSettlements.total !== currentSettlements.rows.length ||
           currentSettlements.rows.some((row) => row.status !== 'MATCHED' || !lines.has(String(row.provider_reference)) || mismatch(row, lines.get(String(row.provider_reference))!)))
         throw new HttpError(409, 'Conciliação anterior não corresponde mais às evidências atuais.');
+      for (const settlement of currentSettlements.rows) await aplicarTaxasSettlement(empresaId, settlement, currentBank!, tx);
       return { payout, idempotente: true };
     }
     if (payout.status === 'DIVERGENT') throw new HttpError(409, 'Resolva as divergências do provedor antes de conciliar.');
@@ -179,6 +181,7 @@ export async function matchPayout(req: Request, res: Response) {
     const updated = await s.tryUpdateIf(R_PAYOUTS, payoutId, { empresa_id: empresaId, status: 'IMPORTED', bank_transaction_id: null }, { bank_transaction_id: bankId, status: 'MATCHED', updated_at: new Date().toISOString() }, tx);
     if (!updated) throw new HttpError(409, 'Repasse mudou durante a conciliação; atualize e tente novamente.');
     for (const settlement of settlements.rows) {
+      await aplicarTaxasSettlement(empresaId, settlement, bank, tx);
       const applied = await s.tryUpdateIf(R_SETTLEMENTS, Number(settlement.id), { empresa_id: empresaId, payout_id: payoutId, status: settlement.status, refund_amount: settlement.refund_amount, chargeback_amount: settlement.chargeback_amount, dispute_review_required: settlement.dispute_review_required ?? null }, { status: 'MATCHED', updated_at: new Date().toISOString() }, tx);
       if (!applied) throw new HttpError(409, 'Liquidação mudou durante a conciliação; atualize e tente novamente.');
     }

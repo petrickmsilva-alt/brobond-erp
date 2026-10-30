@@ -63,21 +63,30 @@ test('PG produção: demanda visível no MRP, OP revisada, consumo idempotente, 
   const customer = await create(RESOURCES.clientes, { nome: 'Cliente demanda', pessoa: 'pf', documento: '52998224725' });
   const raw = await create(RESOURCES.insumos, { nome: 'Insumo jornada', unidade: 'm', custo_medio: 5 });
   const recipe = await create(RESOURCES.fichas, { produto_id: Number(product.id), mao_obra: 0, custos_indiretos: 0, margem_pct: 0 });
-  await create(RESOURCES.itens_ficha_tecnica, { ficha_id: Number(recipe.id), insumo_id: Number(raw.id), consumo: 2, perda_pct: 0 });
+  // Repeated BOM components must sum, never overwrite one another.
+  for (let i = 0; i < 2; i++) await create(RESOURCES.itens_ficha_tecnica, { ficha_id: Number(recipe.id), insumo_id: Number(raw.id), consumo: 1, perda_pct: 0 });
   await production.recalcularFichaValores(Number(recipe.id), undefined, { empresaId: company, consolidado: false, permitidas: [company] });
   await create(RESOURCES.movimentacoes_insumos, { tipo: 'entrada', insumo_id: Number(raw.id), quantidade: 10, custo_unitario: 5, motivo: 'Saldo comprovado da jornada' });
   const sale = await create(RESOURCES.vendas, { cliente_id: Number(customer.id), status: 'aberta', data: '2030-01-01' });
   await create(RESOURCES.itens_venda, { venda_id: Number(sale.id), produto_id: Number(product.id), tamanho_id: Number(size.id), quantidade: 3, preco_unitario: 20 });
   let mrp: any; await mrpProducao({ user: actor, query: { de: '2030-01-01', ate: '2030-01-31' } } as any, { json(v: any) { mrp = v; } } as any);
   assert.equal(mrp.produtos.find((p: any) => p.produto_id === Number(product.id)).falta, 3);
-  // A criação ainda é decisão humana; este teste não afirma reserva automática.
-  const op = await create(RESOURCES.ordens, { produto_id: Number(product.id), tipo: 'tamanho', tamanho_id: Number(size.id), quantidade: 3, status: 'planejada' });
+  const { planejarDemanda } = await import('../../src/producaoPlanejamento');
+  const plan = async () => { const r = resFake(); await planejarDemanda(reqDe({ venda_id: sale.id }, { user: actor }), r.res); return r.saida.json; };
+  const plans = await Promise.all([plan(), plan()]);
+  assert.equal(plans[0].ordens.length, 1); assert.equal(plans[0].ordens[0].id, plans[1].ordens[0].id);
+  const op = plans[0].ordens[0];
+  assert.equal(Number(op.demanda_item_id), Number((await pool.query('SELECT id FROM itens_venda WHERE venda_id=$1', [sale.id])).rows[0].id));
   const invoke = async (handler: any, body: any = {}) => { const r = resFake(); await handler(reqDe(body, { params: { id: op.id }, user: actor }), r.res); return r.saida.json; };
   await invoke(production.liberarOrdem);
+  const reserved = (await pool.query('SELECT reservas_componentes FROM ordens_fabricacao WHERE id=$1', [op.id])).rows[0].reservas_componentes;
+  assert.equal(Number(reserved[String(raw.id)]), 6);
+  await assert.rejects(() => create(RESOURCES.movimentacoes_insumos, { tipo: 'saida', insumo_id: Number(raw.id), quantidade: 5, motivo: 'Não pode consumir reserva alheia' }), (e: any) => e.status === 409);
   const first = await invoke(production.criarApontamento, { quantidade_produzida: 3, idempotency_key: 'production-pg-one' });
   const replay = await invoke(production.criarApontamento, { quantidade_produzida: 3, idempotency_key: 'production-pg-one' });
   assert.equal(first.idempotente, false); assert.equal(replay.idempotente, true);
-  await invoke(production.concluirOrdemHandler);
+  const completed = await Promise.allSettled([invoke(production.concluirOrdemHandler), invoke(production.concluirOrdemHandler)]);
+  assert.ok(completed.some((r) => r.status === 'fulfilled'));
   const stored = (await pool.query('SELECT status,quantidade_produzida,custo_real FROM ordens_fabricacao WHERE empresa_id=$1 AND id=$2', [company, op.id])).rows[0];
   assert.equal(stored.status, 'concluida'); assert.equal(Number(stored.quantidade_produzida), 3); assert.equal(Number(stored.custo_real), 30);
   const consumed = (await pool.query("SELECT count(*)::int n,sum(quantidade) q FROM movimentacoes_insumos WHERE empresa_id=$1 AND ordem_id=$2 AND tipo='saida'", [company, op.id])).rows[0];
@@ -86,4 +95,12 @@ test('PG produção: demanda visível no MRP, OP revisada, consumo idempotente, 
   assert.equal(Number(stock.q), 3);
   const movement = (await pool.query("SELECT count(*)::int n FROM movimentacoes WHERE empresa_id=$1 AND ordem_id=$2 AND tipo='entrada'", [company, op.id])).rows[0];
   assert.equal(movement.n, 1);
+  // Finished stock belongs to the older demand even when its OP is completed.
+  // Replanning another sale must not allocate the same three units twice.
+  const nextSale = await create(RESOURCES.vendas, { cliente_id: Number(customer.id), status: 'aberta', data: '2030-01-02' });
+  await create(RESOURCES.itens_venda, { venda_id: Number(nextSale.id), produto_id: Number(product.id), tamanho_id: Number(size.id), quantidade: 5, preco_unitario: 20 });
+  const next = resFake(); await planejarDemanda(reqDe({ venda_id: nextSale.id }, { user: actor }), next.res);
+  assert.equal(Number(next.saida.json.ordens[0].quantidade), 5);
+  const retry = resFake(); await planejarDemanda(reqDe({ venda_id: nextSale.id }, { user: actor }), retry.res);
+  assert.equal(retry.saida.json.ordens[0].id, next.saida.json.ordens[0].id);
 });

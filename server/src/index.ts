@@ -1,3 +1,5 @@
+import { requisitarCotacao, aprovarRequisicao } from './cotacoesCompra';
+import { planejarDemanda } from './producaoPlanejamento';
 import { paymentsRouter, checkoutMethods } from '../../modules/payments/api/routes';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
@@ -1098,6 +1100,9 @@ app.get('/api/financeiro/plano-contas/resumo', wrap(resumoPlanoContas));
 // Nenhuma rota aqui cria OP ou pedido de compra: capacidade e MRP são leitura.
 app.get('/api/producao/capacidade', wrap(capacidadeProducao));
 app.get('/api/producao/mrp', wrap(mrpProducao));
+app.post('/api/producao/mrp/planejar', wrap(planejarDemanda));
+app.post('/api/cotacoes-compra/:id/requisitar', wrap(requisitarCotacao));
+app.post('/api/cotacoes-compra/:id/aprovar-requisicao', wrap(aprovarRequisicao));
 
 // ---- COMPRAS 3.0: homologação de fornecedor + painel ----
 // A homologação é um PROCESSO sobre o cadastro existente: estado em

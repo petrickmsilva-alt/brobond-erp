@@ -245,7 +245,7 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   configsCriadas.push(Number(cfgRow.rows[0].id));
 
   // ---- 1) catálogo: produto + estoque + projeção + preço por canal -----------
-  const prod = await req('POST', '/produtos', { sku: SKUP, nome: `Camiseta ${RODADA}`, preco_venda: 100, custo: 40 }, tokenA, baseUrl);
+  const prod = await req('POST', '/produtos', { sku: SKUP, nome: `Camiseta ${RODADA}`, preco_venda: 100, custo: 40, codigo_barras: '7891234567895' }, tokenA, baseUrl);
   assert.ok([200, 201].includes(prod.status), `produto ERP: ${msg(prod)}`);
   const produtoId = Number(prod.body.id);
 
@@ -462,6 +462,23 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
 
   const pedidoFinal = await req('GET', `/commerce/pedidos/${saleId}`, undefined, tokenA, baseUrl);
   assert.equal(pedidoFinal.body?.pedido?.estado, 'CONVERTIDO', 'pedido no estado CONVERTIDO');
+
+  // Checkout paid/converted used to be billed too early for WMS. Verify the
+  // SAME order proceeds through picking/packing/shipping without billing twice.
+  const beforeShipping = await cliente.query("SELECT count(*)::int n FROM movimentacoes WHERE venda_id=$1 AND tipo='saida'", [vendaId]);
+  for (const [action, body] of [
+    ['separar', {}], ['conferir', { codigos: ['7891234567895'] }], ['embalar', {}],
+    ['expedir', { transportadora: 'Retirada controlada', codigo_rastreamento: `SHIP-${RODADA}` }],
+  ] as const) {
+    const result = await req('POST', `/vendas/${vendaId}/expedicao/${action}`, body, tokenA, baseUrl);
+    assert.equal(result.status, 200, `${action}: ${msg(result)}`);
+  }
+  const shipped = (await cliente.query('SELECT expedicao_etapa FROM vendas WHERE id=$1', [vendaId])).rows[0];
+  assert.equal(shipped.expedicao_etapa, 'expedida');
+  assert.equal((await cliente.query("SELECT count(*)::int n FROM movimentacoes WHERE venda_id=$1 AND tipo='saida'", [vendaId])).rows[0].n, beforeShipping.rows[0].n);
+  assert.equal((await cliente.query('SELECT codigo FROM commerce_rastreio WHERE venda_id=$1', [vendaId])).rows[0].codigo, `SHIP-${RODADA}`);
+  const duplicateShipment = await req('POST', `/vendas/${vendaId}/expedicao/expedir`, {}, tokenA, baseUrl);
+  assert.equal(duplicateShipment.status, 409);
 
   // ---- 10) frete fail-closed -------------------------------------------------
   const cfgUpdate = await cliente.query(`UPDATE commerce_configuracoes SET frete_provedor = 'nenhum' WHERE loja_nome LIKE $1`, [`Loja ${RODADA}%`]);
