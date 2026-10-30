@@ -6,7 +6,13 @@ export async function locked<T>(empresaId: number, key: string, fn: (tx: Tx) => 
   const name = `payments:${empresaId}:${key}`;
   const execute = () =>
     getStore().transaction(async (tx) => {
-      if (tx) await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [name]);
+      // Global order: financial-period fence before payment-specific locks and rows.
+      // The DB triggers are the final defense; acquiring it here prevents a
+      // payout row lock ↔ period-fence deadlock with dispute/refund writers.
+      if (tx) {
+        await tx.query('SELECT fin_travar_empresa_periodo($1)', [empresaId]);
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [name]);
+      }
       return fn(tx);
     }, { isolation });
   const previous = queues.get(name) || Promise.resolve();

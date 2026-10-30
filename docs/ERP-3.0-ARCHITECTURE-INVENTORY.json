@@ -1,19 +1,19 @@
 {
-  "gerado_em": "2026-10-30T11:28:28.838Z",
+  "gerado_em": "2026-10-30T13:18:36.957Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 82,
-    "sql_com_conteudo": 82,
+    "sql": 88,
+    "sql_com_conteudo": 88,
     "prisma": 7
   },
   "tabelas": {
-    "total": 168,
-    "com_empresa_id": 140,
+    "total": 169,
+    "com_empresa_id": 141,
     "sem_empresa_id": 28,
-    "fora_do_prisma": 157
+    "fora_do_prisma": 158
   },
   "indices": 485,
-  "constraints": 290,
+  "constraints": 297,
   "recursos": {
     "total": 134,
     "com_tabela": 134,
@@ -87,11 +87,11 @@
     "com_recurso": 79
   },
   "rotas": {
-    "total": 427,
+    "total": 428,
     "por_metodo": {
       "GET": 195,
       "POST": 194,
-      "PUT": 21,
+      "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
     },
@@ -197,14 +197,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 203,
-      "casos": 1698
+      "arquivos": 204,
+      "casos": 1718
     },
     "client": {
       "arquivos": 120,
-      "casos": 1026
+      "casos": 1028
     },
-    "total": 2724
+    "total": 2746
   },
   "integracoes": {
     "arquivos_modules": 54,
@@ -265,6 +265,11 @@
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"fin_extrato_transacoes\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"fin_periodos_travas_empresa\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
     },
     {
       "nivel": "AVISO",
@@ -463,6 +468,7 @@
     "fin_extrato_transacoes",
     "fin_importacoes_contabeis",
     "fin_periodos_contabeis",
+    "fin_periodos_travas_empresa",
     "fiscal_execucao_evidencias",
     "fiscal_execucoes",
     "fiscal_obrigacao_entregas",

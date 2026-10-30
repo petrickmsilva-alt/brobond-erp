@@ -70,6 +70,7 @@ async function novaCompra(linhas: { qtd: number; preco: number }[], opts: { fret
       }),
     });
   }
+  await chamar(compras.aprovarCompra, reqDe({}, { params: { id: compra.id }, user: { id: 1, name: 'Admin Teste', perfil: 'admin', empresa_id: empresaId, empresas: [empresaId] } as any }));
   return { compra, itens, fornecedor };
 }
 

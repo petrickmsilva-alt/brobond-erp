@@ -148,6 +148,8 @@ Esta seção atualiza o diagnóstico anterior; os resultados históricos das se�
 
 ### 12.2 Readiness recalculado — não aprovado
 
+> Registro histórico da passagem §12: o estado atual está em §14. Os limites de aprovação e de fechamento aqui descritos foram parcialmente alterados depois; não tomar esta tabela como a descrição do código atual.
+
 | Gate | Resultado | Motivo e módulo | Risco | Ação para fechar |
 |---|---|---|---|---|
 | `WAVE1_CODE_READY` | **NO** | `server/src/financeiroPeriodos.ts`, `modules/payments/application/{payouts,disputes}.ts`: fechamento é só de escrituração importada; repasse/contabilidade/fiscal/disputas não estão integrados de ponta a ponta. | Fechar com pendência ou estado financeiro/fiscal divergente. | Implementar preflight determinístico, bloqueio de todos os movimentos e reabertura auditada, integrar impactos comprovados e provar corrida/isolamento. |
@@ -257,6 +259,8 @@ corrigem riscos pontuais; **não zeram o escopo P0/P1 nem fecham as ondas**.
 
 ### 13.2 Gates recalculados e jornadas integrais
 
+> Registro histórico da passagem §13. O estado e as provas atuais estão em §14.
+
 Permanecem **NO** os seis gates de §12.2. O motivo, módulo, risco e ação de
 cada um continuam válidos: Wave 1 depende do fechamento global e impactos
 financeiro/contábil/fiscal; Wave 2 de compras com aprovação em todos os caminhos,
@@ -297,3 +301,138 @@ nenhuma credencial real foi inspecionada. Auditoria local e redaction não
 constituem âncora externa imutável; autorização e isolamento foram verificados
 nos testes existentes, não certificados para toda a superfície. Visualização
 em navegador nas resoluções exigidas, WCAG AA, DR e carga não foram comprovados.
+
+
+## 14. Execução de fechamento sobre `2164290` — resultado atual
+
+**Base:** `2164290c4b215606add170109c7810719063d188`. **Branch:**
+`arena/5e0b7882-brobond-erp`. As seções anteriores preservam resultados de
+passagens anteriores; esta seção prevalece sobre elas para o estado atual.
+A pasta `backups/` não foi modificada ou incluída. Esta execução acrescenta
+proteções e evidência; **não conclui o escopo integral nem autoriza go-live**.
+
+### 14.1 Implementação e proteção efetivamente adicionadas
+
+- **Período financeiro:** `0083` amplia o controle de escrituração existente
+  com abrangência financeira explícita, `aberto → fechando → fechado`, preflight
+  de extratos, repasses, liquidações, operações e pagamentos tardios, motivo e
+  auditoria. Reabertura exige administrador. Fechamentos antigos continuam
+  apenas de escrituração; não há fechamento fiscal presumido. Uma trava por
+  empresa e triggers em títulos financeiros, extratos, settlements, payouts,
+  operações e intenções impedem a alteração de datas financeiras fechadas.
+  O fence é obtido antes das travas específicas do Payment Engine. Datas não
+  comprovadas e operações externas incertas bloqueiam conservadoramente.
+- **Vínculos e rede:** `0085–0088` acrescentam reserva persistente para estorno,
+  criação e cancelamento no gateway legado e proteções para datas financeiras
+  vinculadas a intenções/settlements/payouts. A reserva é gravada antes da rede;
+  timeout/crash não autorizam reenvio cego. Atualizações locais não sobrescrevem
+  um webhook tardio, e webhook/cancelamento não modificam título em mês fechado.
+  O adapter legado de cancelamento do Mercado Pago exige comprovação. Não se
+  presumiu sucesso em nenhum provider. Não há procedimento universal completo
+  para resolver todas as operações `PROCESSING`/`UNCERTAIN` ou dados históricos.
+- **Repasse e disputa:** um repasse `MATCHED` só dispensa pendência do extrato
+  quando uma única transação sem deduções tem baixa canônica inequívoca por
+  título/conta/data/valor. Taxas, reembolsos e múltiplas transações continuam
+  bloqueados em vez de serem contabilizados por presunção. Revisão de disputa
+  não pode ser encerrada por nota; atualização usa CAS. Isso **não implementa**
+  resolução financeira/contábil/fiscal integral de chargeback/disputa.
+- **Compra e XML:** `0084` guarda alçada no vínculo usuário × empresa; somente
+  admin altera, gerentes são conferidos no servidor com valor integral da
+  compra, e operador não aprova. Compra pendente exige itens, aprovação usa
+  CAS/transação e registra auditoria; nos caminhos testados, edição, transição direta e recebimento
+  não podem contornar a aprovação. Importação XML verifica a mesma alçada e
+  rejeita total inferior a itens + frete − desconto declarado; prévia avisa a
+  inconsistência e não grava AP. Isso é validação financeira mínima, **não**
+  homologação fiscal/SEFAZ. Interfaces usadas nesta alteração são inline ou
+  páginas próprias, com teste de ausência de `dialog` nesses recortes.
+- **Correções adicionais:** senha temporária usa geração criptográfica; a
+  auditoria de conciliação distingue revisão de resolução e usa CAS; retry de
+  serialização envolve apenas transações locais, nunca repete write externo.
+  O scanner estrutural de payment foi atualizado para verificar a nova
+  auditoria de revisão, o bloqueio de resolução por nota e o CAS; continua
+  sendo uma checagem estática, não aceite funcional.
+
+### 14.2 Jornadas A–E e gates
+
+| Jornada | Evidência em PostgreSQL real | Aceite integral |
+|---|---|---|
+| A Commerce | `commerce-e2e.test.ts`: catálogo/preço/cupom, checkout, reserva, webhook com provider de teste e conversão; expedição/WMS e financeiro têm provas separadas. | **PARCIAL / FAIL**: não há cadeia única até OMS/WMS/remessa e Finance. |
+| B Procurement | `closure-procurement.test.ts`: cotação → pedido → aprovação → recebimento/estoque/custo → AP → baixa, replay, limite, isolamento, 1.001 itens, XML e corrida de revogação. | **PARCIAL / FAIL**: não prova requisição inicial, desmembramento multifornecedor e todos os fluxos empresariais. |
+| C Manufacturing | `enterprise-wave2-mrp.test.ts`: demanda visível no MRP, OP criada manualmente, apontamento/replay, consumo, custo e entrada no estoque canônico. | **PARCIAL / FAIL**: não há geração de OP planejada e reserva de insumo integradas ao MRP. |
+| D Payment/Finance | `gateway-cadeia-pagamento-e2e`, `closure-payment-safety` e `final-period-control`: webhook, baixa, liquidação, repasse simples, período, reabertura, idempotência e concorrência em recortes. | **PARCIAL / FAIL**: falta cadeia única integral, MDR/taxas e impacto comprovado de disputas/chargeback. |
+| E Returns | `devolucao-e2e.test.ts`: retorno parcial, qualidade, estoque e reversão local; refund eletrônico tem testes próprios. | **PARCIAL / FAIL**: inspeção até refund eletrônico vinculado e financeiro não foi demonstrada como uma cadeia. |
+
+| Gate | Estado | Razão decisiva |
+|---|---|---|
+| `WAVE1_CODE_READY` | **NO** | Conciliação de taxa/múltiplas transações e impacto financeiro de disputas incompletos; recuperação de incerteza não é universal. |
+| `WAVE1_INTERNAL_GO_LIVE` | **NO** | Jornada D integral e aceite de fechamento, segurança, recuperação e carga não demonstrados. |
+| `WAVE2_CODE_READY` | **NO** | Requisição/multifornecedor, WMS e MRP→OP/reserva industrial incompletos. |
+| `WAVE2_INTERNAL_GO_LIVE` | **NO** | Jornadas B e C integrais não comprovadas. |
+| `WAVE3_CODE_READY` | **NO** | OMS/expedição e returns→refund/financeiro não fecham toda a cadeia. |
+| `WAVE3_INTERNAL_GO_LIVE` | **NO** | Jornadas A e E integrais não comprovadas. |
+| `EXTERNAL_HOMOLOGATION_READY` | **NO** | Sem homologação efetiva de providers, bancos, canais, fiscal e transportadoras; fixtures não são aceite externo. |
+| `FULL_ENTERPRISE_GO_LIVE` | **NO — WAVES 4 AND 5 NOT EXECUTED** | Fora do escopo desta execução. |
+
+### 14.3 Verificações executadas
+
+| Verificação | Resultado e limites |
+|---|---|
+| `npm run test:pg` | **PASS 400/400**, 0 falhas/skips/TODOs, PostgreSQL real 16.14 e banco inicialmente vazio. Inclui HTTP autenticado, tenant/RBAC e concorrência multiprocessos em recortes. |
+| `npm test` | **PASS**: server **1.559 PASS, 0 FAIL, 68 SKIP** (exigem `DATABASE_URL` e constam no gate PG); client **1.053 PASS em 120 arquivos**. Não se ocultaram os skips nem warnings React. |
+| `npm run smoke:pg -- --keep` | **PASS 398/398** por HTTP em banco PostgreSQL descartável criado vazio pelo smoke. |
+| `npm run typecheck`, `npm run build` | **PASS / PASS**. |
+| `npm run lint` | **PASS**, 0 erros, **585 warnings** sem supressão. |
+| `npm run test:payments` | **PASS 27/27**; doubles internos não homologam provedores. |
+| Auditorias de menu, UX, arquitetura, ERP, Commerce e payment | **PASS estrutural**, sem certificar jornadas nem homologação. A auditoria ERP emite dois avisos P3 sobre tenancy; UX conserva exceções de navegação/infraestrutura. `commerce:final-go-live` ficou **BLOCKED** (exit 1), como deve permanecer sem as evidências integrais. |
+| `npm run db:validate` | **BLOCKED** (exit 1): download oficial do engine Prisma em `binaries.prisma.sh` falhou antes da conexão TLS, por restrição de rede. Não há PASS presumido; SQL operacional é evidência separada. |
+| `npm audit` / `npm audit --omit=dev` | Ambos exit 1: **8 pacotes afetados, 4 moderados e 4 baixos; 0 altos/críticos**. Caminhos, impacto e correções sugeridas potencialmente breaking constam em §9; não foi executado `audit fix --force`. |
+| `node scripts/gerar-bootstrap.mjs --check`, `git diff --check` | **PASS**. |
+
+**Upgrade aditivo:** em banco isolado, carregou-se o `db/schema.sql` da base
+`2164290`, inseriram-se dados legados de empresa, usuário, acesso, venda,
+título, cobrança, intenção, settlement, extrato e período de escrituração, e
+aplicaram-se `0083–0088` em ordem **duas vezes**. Título/cobrança/settlement
+foram preservados, alçada e estados novos ficaram desconhecidos, período antigo
+manteve abrangência `escrituracao`, seis triggers ficaram ativos e um movimento
+em período financeiro fechado foi recusado (`P2001`). O schema corrente também
+foi executado duas vezes em outro banco vazio. Não se ensaiou uma cópia de
+produção nem performance de índices com volume real.
+
+**Histórico desta execução:** um gate PG anterior registrou 392/394 e falhou
+em duas regressões, corrigidas antes do gate acima; a corrida de serialização
+foi reproduzida e o retry limitado a transações locais. Uma execução completa teve falha intermitente numa asserção de UI que
+verificava o mock antes de o efeito React executar; a asserção foi preservada
+e movida para depois da renderização do dado. Na execução seguinte houve um
+timeout em jornada de venda e falha na seleção seguinte; o teste focal passou
+13/13 e uma nova execução completa isolada passou como acima, sem aumentar
+prazos ou reduzir asserções. Avisos React `act` e Router permanecem. Alguns testes registram avisos de limpeza de fixtures; não
+são falhas de asserção nem prova de limpeza em produção.
+
+### 14.4 Segurança e inventário de achados desta execução
+
+O recorte de RBAC/tenancy foi testado no servidor, inclusive usuário × empresa,
+alçada, A/B, corrida de revogação e perfis; não certifica todas as rotas. A
+cadeia local de auditoria/redaction não é âncora externa imutável. Scanner
+limitado dos arquivos alterados não encontrou padrões típicos de chave privada,
+JWT, token GitHub ou chave AWS; não é scanner abrangente. Não foram usados
+dados reais de cartão ou credenciais externas. ZERO MODAL foi verificado por
+testes estruturais e de componentes nos recortes alterados, mas não houve
+inspeção de toda a aplicação nem ensaio real de responsividade/WCAG AA.
+
+Contagem **agrupada por achados desta execução**, não um censo de todos os
+possíveis defeitos da aplicação:
+
+- **P0: 2** — (1) efeito financeiro/contábil/fiscal de taxas, repasse complexo
+  e disputa/chargeback incompleto; (2) recuperação operacional segura de todas
+  as operações externas ambíguas e prova de fechamento integral incompletas.
+- **P1: 5** — (1) requisição e compra multifornecedor; (2) WMS e MRP→OP com
+  reserva de material; (3) cadeia Commerce/OMS/expedição; (4) returns até
+  refund eletrônico/financeiro; (5) provas integrais A–E e aceite transversal.
+- **P2: 5** — (1) homologações externas; (2) oito pacotes do npm audit;
+  (3) responsividade, ZERO MODAL global e WCAG AA; (4) escala/DR/carga;
+  (5) cobertura global de tenancy/RBAC e âncora externa de auditoria.
+- **P3: 1** — redução de warnings e refinamento técnico/operacional.
+
+Esses achados não são prova de que não existam outros. P0/P1 impedem declarar
+qualquer gate das ondas pronto para uso interno; não é seguro contornar bloqueios
+para concluir fechamento ou simular sucesso financeiro.

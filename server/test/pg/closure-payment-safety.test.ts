@@ -336,3 +336,80 @@ test('PG refund histórico concluído sem evidência não é confirmado nem repe
   const row = (await q.query('SELECT status,provider_refund_id FROM payment_refunds WHERE operation_id=$1', [op])).rows[0];
   assert.equal(row.status, 'COMPLETED'); assert.equal(row.provider_refund_id, null, 'preserva o legado sem inventar prova');
 });
+
+test('PG período: refund do Payment Engine sem data não chama provider depois de um fechamento', async (t) => {
+  const { alterarPeriodo } = await import('../../src/financeiroPeriodos');
+  const a = await company(), f = await intent(a.id); const p = providerRegistry.get('MERCADO_PAGO'); let writes = 0;
+  t.mock.method(p, 'refund', async () => { writes++; throw new Error('não deveria alcançar o provider'); });
+  await alterarPeriodo(request({ motivo: 'Fechamento financeiro validado' }, { competencia: '2039-02', acao: 'fechar' }, a.actor), response().out);
+  await assert.rejects(() => paymentEngine.mutate(a.id, f.id, 'refund', 'closed-undated-refund', 1000), (e: any) => e.status === 409 || e.code === 'P2001');
+  assert.equal(writes, 0);
+  assert.equal(Number((await q.query('SELECT count(*) FROM payment_operations WHERE empresa_id=$1 AND payment_intent_id=$2', [a.id, f.id])).rows[0].count), 0);
+});
+
+test('PG período: repasse simples só é aceito com baixa canônica comprovada; disputa e refund posteriores são bloqueados', async (t) => {
+  const { alterarPeriodo } = await import('../../src/financeiroPeriodos');
+  const a = await company(), f = await intent(a.id), p = providerRegistry.get('MERCADO_PAGO'); let writes = 0;
+  t.mock.method(p, 'refund', async () => { writes++; throw new Error('não deveria alcançar o provider'); });
+  const account = Number((await q.query("INSERT INTO contas_financeiras(empresa_id,nome,tipo) VALUES($1,$2,'banco') RETURNING id", [a.id, `Conta payout ${a.id}`])).rows[0].id);
+  const sale = Number((await q.query("INSERT INTO vendas(empresa_id,data,status,total) VALUES($1,'2039-01-02','faturada',100) RETURNING id", [a.id])).rows[0].id);
+  await q.query('UPDATE commerce_pedidos SET venda_id=$1 WHERE empresa_id=$2 AND id=(SELECT order_id FROM payment_intents WHERE id=$3)', [sale, a.id, f.id]);
+  const title = Number((await q.query(`INSERT INTO lancamentos_financeiros(empresa_id,data,data_baixa,tipo,descricao,valor,valor_liquido,status,conta_id,referencia_tipo,referencia_id)
+    VALUES($1,'2039-01-02','2039-01-02','receita','Título canônico de venda',100,100,'confirmado',$2,'venda',$3) RETURNING id`, [a.id, account, sale])).rows[0].id);
+  const charge = Number((await q.query(`INSERT INTO gateway_cobrancas(empresa_id,provider,metodo,venda_id,lancamento_id,conta_id,valor,valor_liquido,status,provider_ref)
+    VALUES($1,'mercadopago','pix',$2,$3,$4,100,100,'paga',$5) RETURNING id`, [a.id, sale, title, account, f.ref])).rows[0].id);
+  await q.query('UPDATE payment_intents SET cobranca_id=$1 WHERE empresa_id=$2 AND id=$3', [charge, a.id, f.id]);
+  await paymentEngine.apply(a.id, f.id, { reference: f.ref, status: 'PAID', amount: 10000, currency: 'BRL', refunded: 0 });
+  const report = { provider: 'MERCADO_PAGO', payout_reference: `payout-close-${f.ref}`, currency: 'BRL', settlement_date: '2039-01-02', net_amount: 10000,
+    transactions: [{ provider_reference: f.ref, gross_amount: 10000, provider_fee: 0, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 0, chargeback_amount: 0, net_amount: 10000 }] };
+  const imported = response(); await importPayout(request(report, {}, a.actor), imported.out); const payout = imported.get().body.payout;
+  const bank = Number((await q.query(`INSERT INTO fin_extrato_transacoes(empresa_id,conta_id,linha_hash,data,valor,direcao,status)
+    VALUES($1,$2,$3,'2039-01-02',100,'entrada','importada') RETURNING id`, [a.id, account, f.ref])).rows[0].id);
+  await matchPayout(request({ bank_transaction_id: bank }, { id: payout.id }, a.actor), response().out);
+  const close = response(); await alterarPeriodo(request({ motivo: 'Fechamento financeiro validado' }, { competencia: '2039-01', acao: 'fechar' }, a.actor), close.out);
+  assert.equal(close.get().body.periodo.estado, 'fechado');
+  await assert.rejects(() => paymentEngine.mutate(a.id, f.id, 'refund', 'closed-proven-refund', 1000), (e: any) => e.status === 409 || e.code === 'P2001');
+  await assert.rejects(() => paymentEngine.apply(a.id, f.id, { reference: f.ref, status: 'DISPUTED', amount: 10000, currency: 'BRL', refunded: 0 }), (e: any) => e.status === 409 || e.code === 'P2001');
+  await assert.rejects(() => q.query("UPDATE payment_payouts SET settlement_date='2039-03-01' WHERE empresa_id=$1 AND id=$2", [a.id, payout.id]), (e: any) => e.code === 'P2001');
+  assert.equal(writes, 0); assert.equal((await paymentEngine.intent(a.id, f.id)).status, 'PAID');
+});
+
+test('PG período: intenção pendente bloqueia fechamento e intenção do mês fechado não muda', async () => {
+  const { alterarPeriodo } = await import('../../src/financeiroPeriodos');
+  const a = await company(), f = await intent(a.id); const month = new Date().toISOString().slice(0, 7);
+  await q.query("UPDATE payment_intents SET status='PENDING' WHERE empresa_id=$1 AND id=$2", [a.id, f.id]);
+  await assert.rejects(() => alterarPeriodo(request({ motivo: 'Fechamento financeiro validado' }, { competencia: month, acao: 'fechar' }, a.actor), response().out),
+    (e: any) => e.code === 'CLOSE_BLOCKED' && e.details.pendencias.operacoes === 1);
+  await q.query("UPDATE payment_intents SET status='FAILED' WHERE empresa_id=$1 AND id=$2", [a.id, f.id]);
+  await alterarPeriodo(request({ motivo: 'Fechamento financeiro validado' }, { competencia: month, acao: 'fechar' }, a.actor), response().out);
+  await assert.rejects(() => q.query("UPDATE payment_intents SET status='PAID' WHERE empresa_id=$1 AND id=$2", [a.id, f.id]), (e: any) => e.code === 'P2001');
+  assert.equal((await paymentEngine.intent(a.id, f.id)).status, 'FAILED');
+});
+
+test('PG revisão: disputa não pode ser resolvida por nota; tenant, RBAC e corrida preservam revisão', async () => {
+  const express = (await import('express')).default; const supertest = (await import('supertest')).default;
+  const { paymentsRouter } = await import('../../../modules/payments/api/routes');
+  const { registerDispute } = await import('../../../modules/payments/application/disputes');
+  const a = await company(), b = await company(), f = await intent(a.id);
+  await paymentEngine.apply(a.id, f.id, { reference: f.ref, status: 'PAID', amount: 10000, currency: 'BRL', refunded: 0 });
+  const settlement = (await q.query('SELECT id FROM payment_settlements WHERE empresa_id=$1 AND payment_intent_id=$2', [a.id, f.id])).rows[0];
+  const app = express(); app.use(express.json()); app.use((req: any, _res: any, next: any) => {
+    req.user = req.headers['x-test-actor'] === 'other' ? b.actor : req.headers['x-test-actor'] === 'operator' ? { ...a.actor, perfil: 'operador' } : a.actor; next();
+  }); app.use(paymentsRouter); app.use((error: any, _req: any, res: any, _next: any) => res.status(error.status || 500).json({ error: 'request failed' }));
+  const route = `/reconciliation/${settlement.id}/resolve`; const data = { status: 'RESOLVED', note: 'Revisão informada pelo operador' };
+  await supertest(app).post(route).set('x-test-actor', 'operator').send(data).expect(403);
+  await supertest(app).post(route).set('x-test-actor', 'other').send(data).expect(404);
+  const dispute = { payment_intent_id: f.id, provider_reference: f.ref, external_dispute_id: `resolve-race-${f.ref}`, amount: 2000, reason: 'Disputa informada pelo operador' };
+  const outcomes = await Promise.allSettled([
+    supertest(app).post(route).send(data),
+    registerDispute(request(dispute, {}, a.actor, `resolve-race-${f.ref}`), response().out),
+  ]);
+  if (outcomes[1].status === 'rejected') {
+    assert.ok(outcomes[1].reason?.code === '40001' || outcomes[1].reason?.status === 409);
+    await registerDispute(request(dispute, {}, a.actor, `resolve-race-${f.ref}`), response().out);
+  }
+  await supertest(app).post(route).send(data).expect(409);
+  await supertest(app).post(route).send({ ...data, status: 'MATCHED' }).expect(409);
+  const after = (await q.query('SELECT status,dispute_review_required FROM payment_settlements WHERE empresa_id=$1 AND id=$2', [a.id, settlement.id])).rows[0];
+  assert.equal(after.status, 'DIVERGENT'); assert.equal(after.dispute_review_required, true);
+});

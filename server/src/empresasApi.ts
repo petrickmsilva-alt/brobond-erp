@@ -16,12 +16,13 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { currentUser, signToken } from './auth';
-import { escopoDoAtor, exigirEmpresaPermitida } from './empresa';
+import { escopoDoAtor, exigirEmpresaPermitida, podeAcessarEmpresa } from './empresa';
 import { empresasDoUsuario, invalidarCacheEmpresas } from './empresasAcesso';
 import { getResource } from './resources';
 import { getStore } from './services';
 import { parseId } from './validate';
 import type { Row } from './store';
+import { listarTodos } from './paginacaoCompleta';
 
 function exigirAdmin(req: Request) {
   const actor = currentUser(req);
@@ -94,7 +95,7 @@ export async function trocarEmpresaAtiva(req: Request, res: Response) {
 
 /** GET /api/usuarios/:id/empresas — concessões vigentes. */
 export async function listarEmpresasDoUsuario(req: Request, res: Response) {
-  exigirAdmin(req);
+  const actor = exigirAdmin(req);
   const usuarioId = parseId(req.params.id);
   const usuario = await getStore().findOneWhere(getResource('usuarios')!, { id: usuarioId });
   if (!usuario) throw new HttpError(404, 'Usuário não encontrado.');
@@ -102,6 +103,7 @@ export async function listarEmpresasDoUsuario(req: Request, res: Response) {
   const padrao = Number(usuario.empresa_id) || 1;
   const ids = await empresasDoUsuario(usuarioId, padrao);
   const mapa = await empresasPorId(ids);
+  const vinculos = await listarTodos(getResource('usuario_empresas')!, { usuario_id: usuarioId });
 
   res.json({
     usuario_id: usuarioId,
@@ -111,6 +113,7 @@ export async function listarEmpresasDoUsuario(req: Request, res: Response) {
       id,
       nome: mapa.get(id)?.nome ?? `Empresa #${id}`,
       padrao: id === padrao,
+      limite_aprovacao_compra: podeAcessarEmpresa(actor, id) ? (vinculos.find((v) => Number(v.empresa_id) === id)?.limite_aprovacao_compra ?? null) : null,
     })),
   });
 }
@@ -147,6 +150,30 @@ export async function concederEmpresa(req: Request, res: Response) {
   }
   invalidarCacheEmpresas(usuarioId);
   res.status(existente ? 200 : 201).json({ ok: true, usuario_id: usuarioId, empresa_id: empresaId });
+}
+
+/** PUT: só administrador configura/revoga a alçada financeira do vínculo existente. */
+export async function configurarAlcadaCompra(req: Request, res: Response) {
+  const actor = exigirAdmin(req);
+  const usuarioId = parseId(req.params.id);
+  const empresaId = parseId(req.params.empresaId);
+  exigirEmpresaPermitida(actor, empresaId);
+  const body = (req.body || {}) as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(body, 'limite_aprovacao_compra')) throw new HttpError(400, 'Informe a alçada ou null para removê-la.');
+  const raw = body.limite_aprovacao_compra;
+  if (raw !== null && (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 999_999_999_999.99 || Math.abs(raw * 100 - Math.round(raw * 100)) > 1e-5))
+    throw new HttpError(400, 'Alçada inválida: informe valor não negativo em reais com até dois decimais.');
+  const s = getStore(); const r = getResource('usuario_empresas')!;
+  const updated = await s.transaction(async (tx) => {
+    const link = await s.findOneWhere(r, { usuario_id: usuarioId, empresa_id: empresaId }, tx);
+    if (!link) throw new HttpError(404, 'Concessão de empresa não encontrada.');
+    const row = await s.tryUpdateIf(r, Number(link.id), { usuario_id: usuarioId, empresa_id: empresaId, limite_aprovacao_compra: link.limite_aprovacao_compra ?? null }, { limite_aprovacao_compra: raw }, tx);
+    if (!row) throw new HttpError(409, 'Alçada alterada por outra pessoa; atualize e tente novamente.');
+    await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'seguranca', recurso: 'usuario_empresas', registro_id: Number(link.id), empresa_id: empresaId,
+      descricao: 'Alçada de aprovação de compra alterada', dados: { usuario_id: usuarioId, antes: link.limite_aprovacao_compra ?? null, depois: raw } }, tx);
+    return row;
+  });
+  res.json({ ok: true, usuario_id: usuarioId, empresa_id: empresaId, limite_aprovacao_compra: updated.limite_aprovacao_compra ?? null });
 }
 
 /** DELETE /api/usuarios/:id/empresas/:empresaId — revoga acesso. */

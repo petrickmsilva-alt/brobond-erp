@@ -1236,6 +1236,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       // COMPRAS 3.0 — fornecedor suspenso/bloqueado não recebe pedido NOVO.
       // (A regra vale só na criação: pedido existente segue o curso.)
       if (r.key === 'compras') {
+        if (data.status !== undefined && data.status !== 'pendente') throw new HttpError(409, 'A compra deve nascer pendente; aprovação e recebimento têm operações próprias.');
         await validarFornecedorParaNovoPedido(s, data.fornecedor_id ? Number(data.fornecedor_id) : null, escopo.empresaId, tx);
       }
       // O estado fiscal pertence aos endpoints de NF-e: o formulário não cria nota.
@@ -1507,8 +1508,24 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
           throw new HttpError(400, 'O saldo do insumo só muda por movimentações (compra, ajuste ou consumo de OP). Apenas o estoque mínimo pode ser editado aqui.', { quantidade: 'Use uma movimentação de insumo' });
         }
       }
-      if (r.key === 'compras' && data.fornecedor_id !== undefined && Number(data.fornecedor_id) !== Number(before.fornecedor_id)) {
-        await validarFornecedorParaNovoPedido(s, data.fornecedor_id ? Number(data.fornecedor_id) : null, escopo.empresaId, tx);
+      if (r.key === 'compras') {
+        if (data.status !== undefined && String(data.status) !== String(before.status) && data.status !== 'cancelado')
+          throw new HttpError(409, 'Use as operações de aprovação e recebimento; o status não pode ser alterado diretamente.');
+        if (String(before.status) !== 'pendente') {
+          const iguais = (a: unknown, b: unknown) => {
+            if ((a === null || a === undefined || a === '') && (b === null || b === undefined || b === '')) return true;
+            if (a instanceof Date) a = a.toISOString().slice(0, 10);
+            if (b instanceof Date) b = b.toISOString().slice(0, 10);
+            if (typeof a === 'number' || typeof b === 'number') return Number(a) === Number(b);
+            if (typeof a === 'object' || typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b);
+            return String(a) === String(b);
+          };
+          const imutaveis = ['fornecedor_id', 'data', 'frete', 'local_entrada', 'condicao_pagamento', 'fin_conta_id', 'fin_forma_pagamento', 'fin_vencimento', 'fin_parcelas', 'fin_parcelas_detalhes'];
+          if (imutaveis.some((key) => data[key] !== undefined && !iguais(data[key], before[key])))
+            throw new HttpError(409, 'As condições aprovadas não podem ser alteradas. Cancele e crie outra compra para nova aprovação.');
+        }
+        if (data.fornecedor_id !== undefined && Number(data.fornecedor_id) !== Number(before.fornecedor_id))
+          await validarFornecedorParaNovoPedido(s, data.fornecedor_id ? Number(data.fornecedor_id) : null, escopo.empresaId, tx);
       }
       if (r.key === 'ordens') await validarOrdemPayload(data, before);
       if (r.key === 'clientes') await validarRegrasCliente(data, before, Number(before.empresa_id ?? escopo.empresaId), { body, tx });

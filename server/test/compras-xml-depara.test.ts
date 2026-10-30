@@ -281,6 +281,7 @@ test('E3.2: a prévia de recebimento calcula o custo e NÃO grava nada', async (
   const compra = await s().insert(RESOURCES.compras, { empresa_id: 1, fornecedor_id: Number(forn.id), data: '2026-10-09', status: 'pendente', total: 5000, frete: 400 });
   const item = await s().insert(RESOURCES.itens_compra, { empresa_id: 1, compra_id: Number(compra.id), insumo_id: Number(insumo.id), quantidade: 100, quantidade_recebida: 0, preco_unitario: 50 });
   const compras = await import('../src/compras');
+  await chamar(compras.aprovarCompra, reqDe({}, { params: { id: compra.id } }));
 
   const antes = {
     saldo: await s().insumoStock(Number(insumo.id)),

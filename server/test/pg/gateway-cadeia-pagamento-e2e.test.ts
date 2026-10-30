@@ -246,9 +246,12 @@ test('ERP-01: PAGAMENTO → WEBHOOK → COBRANÇA → RECEBIMENTO → CONCILIAÇ
   assert.equal(Number(cobranca?.lancamento_id), tituloId, 'a cobrança precisa apontar para o título');
   assert.equal(Number(cobranca?.valor), 120);
   assert.match(String(cobranca?.qr_code), /^MOCK-PIX-QR-/, 'PIX do provedor mock devolve QR');
-  // O payload BRUTO do provedor não vai para o cliente (só o indicador).
+  // Payload arbitrário do provider não é exposto nem persistido: pode conter
+  // cartão, tokens ou credenciais. O indicador informa a ausência com honestidade.
   assert.equal(cobranca?.payload, undefined, 'a resposta não pode carregar o payload bruto do provedor');
-  assert.equal(cobranca?.bruto_disponivel, true);
+  assert.equal(cobranca?.bruto_disponivel, false);
+  const persistedCharge = await query('SELECT payload FROM gateway_cobrancas WHERE empresa_id=$1 AND id=$2', [a.empresaId, cobrancaId]);
+  assert.equal(persistedCharge.rows[0].payload, null, 'nenhum payload arbitrário do provider é armazenado');
 
   // Idempotência da CRIAÇÃO (mesma chave): devolve a mesma cobrança, não uma segunda.
   const repetida = await http(baseUrl, 'POST', '/financeiro/gateway/cobrancas', tokenA, {

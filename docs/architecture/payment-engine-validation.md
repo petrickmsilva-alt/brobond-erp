@@ -84,3 +84,12 @@ específicos e resultado confirmado; o total cumulativo isolado é insuficiente.
 Disputa sem valor conhecido bloqueia conciliação em vez de inventar perda;
 continua sem fechamento financeiro/contábil/fiscal completo. Fixtures de
 providers são internas, não homologação financeira externa.
+
+
+## Execução posterior sobre `2164290`
+
+O estado, as migrations `0083–0088`, os testes PG e os gates atuais constam
+na [seção 14 da auditoria existente](../BROBOND-ENTERPRISE-WAVES-1-2-3-AUDIT.md#14-execução-de-fechamento-sobre-2164290--resultado-atual).
+O preflight financeiro e a trava por empresa melhoram o fechamento, mas taxa,
+repasse complexo, disputa e recuperação de incerteza não estão integralmente
+resolvidos. `CODE_STRUCTURE_READY` não é aceite das ondas nem homologação.

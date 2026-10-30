@@ -12,7 +12,7 @@
 //     senha é recuperável depois (hash Argon2id irreversível).
 // ============================================================
 import type { Request, Response } from 'express';
-import { randomBytes } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 import { HttpError } from './errors';
 import { empresaDoAtorAudit, empresaExplicitaAudit } from './empresa';
 import { limparToken } from './validate';
@@ -61,14 +61,14 @@ function dadosConta(row: Record<string, any>, actor: { name?: string }, extra: R
 /** Gera uma senha temporária forte (sem caracteres ambíguos). */
 export function gerarSenhaTemporaria(bytes = 12): string {
   const alfabeto = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*';
-  const buf = randomBytes(bytes);
-  let out = '';
-  for (const b of buf) out += alfabeto[b % alfabeto.length];
-  // Garante as classes mínimas da política.
-  if (!/[a-z]/.test(out)) out = 'a' + out.slice(1);
-  if (!/[A-Z]/.test(out)) out = out.slice(0, -1) + 'K';
-  if (!/\d/.test(out)) out = out.slice(0, -2) + '7' + out.slice(-1);
-  return out;
+  const tamanho = Math.max(8, Math.floor(bytes));
+  // Rejeição evita que substituir uma classe apague a única ocorrência de outra;
+  // randomInt também evita o viés de módulo de bytes com alfabeto de tamanho 63.
+  for (;;) {
+    let out = '';
+    for (let i = 0; i < tamanho; i++) out += alfabeto[randomInt(alfabeto.length)];
+    if (/[a-z]/.test(out) && /[A-Z]/.test(out) && /\d/.test(out)) return out;
+  }
 }
 
 /**

@@ -22,6 +22,7 @@
 // gerar exige uma ação explícita do usuário (POST com a lista revisada).
 // ============================================================================
 import type { Request, Response } from 'express';
+import type { Tx } from './store';
 import { createHash, randomUUID } from 'node:crypto';
 import { HttpError } from './errors';
 import { getResource } from './resources';
@@ -34,6 +35,7 @@ import { syncLancamentoCompra } from './financeiro';
 import { aplicarEntradaDeCompra } from './custoRecebimento';
 import { domainLock } from './domainLock';
 import { listarTodos } from './paginacaoCompleta';
+import { recalcularTotal } from './itens';
 
 export const R_RECEBIMENTO = () => getResource('compra_recebimentos')!;
 export const R_RECEBIMENTO_ITEM = () => getResource('compra_recebimento_itens')!;
@@ -47,29 +49,42 @@ function num(v: unknown, padrao = 0): number {
 // APROVAÇÃO
 // ----------------------------------------------------------------------------
 
+/** Política autoritativa por vínculo; ausência nunca significa alçada ilimitada. */
+export async function exigirAlcadaCompra(actor: { id: number; perfil: string }, empresaId: number, total: number, tx: Tx): Promise<number | null> {
+  if (!['admin', 'gerente'].includes(actor.perfil)) throw new HttpError(403, 'Somente gerentes e administradores aprovam pedidos de compra.');
+  if (!Number.isFinite(total) || total < 0) throw new HttpError(409, 'Valor de compra inválido para aprovação.');
+  if (actor.perfil === 'admin') return null;
+  if (tx) await tx.query('SELECT id FROM usuario_empresas WHERE usuario_id=$1 AND empresa_id=$2 FOR SHARE', [actor.id, empresaId]);
+  const link = await getStore().findOneWhere(getResource('usuario_empresas')!, { usuario_id: actor.id, empresa_id: empresaId }, tx);
+  const limite = link?.limite_aprovacao_compra == null ? null : Number(link.limite_aprovacao_compra);
+  if (limite === null || !Number.isFinite(limite)) throw new HttpError(403, 'Alçada de compra não configurada para esta empresa; solicite a um administrador.');
+  if (total > limite) throw new HttpError(403, `Este pedido (${total.toFixed(2)}) está acima da sua alçada de ${limite.toFixed(2)}. Encaminhe para um administrador.`);
+  return limite;
+}
+
 /** POST /api/compras/:id/aprovar — alçada: gerente ou admin. */
 export async function aprovarCompra(req: Request, res: Response) {
   const actor = currentUser(req);
   const r = getResource('compras')!;
   checkAccess(r, actor, 'update');
-  if (actor.perfil === 'operador') throw new HttpError(403, 'Somente gerentes e administradores aprovam pedidos de compra.');
+  if (!['admin', 'gerente'].includes(actor.perfil)) throw new HttpError(403, 'Somente gerentes e administradores aprovam pedidos de compra.');
+  if (req.body?.limite_alcada !== undefined) throw new HttpError(400, 'A alçada é configurada pelo administrador na concessão da empresa, nunca pelo pedido.');
   const escopo = escopoDe(actor);
   const id = parseId(req.params.id);
-  const limite = req.body?.limite_alcada !== undefined ? round2(num(req.body.limite_alcada)) : null;
   const s = getStore();
   try {
     const out = await s.transaction(async (tx) => {
       const compra = assertRegistroDaEmpresa(r, await s.findOneWhere(r, { id, empresa_id: escopo.empresaId }, tx), escopo);
       if (String(compra.status) !== 'pendente') throw new HttpError(409, `Só se aprova um pedido pendente (status atual: ${compra.status}).`);
-      // Alçada: se a compra passou do limite do usuário, a aprovação para aqui
-      // em vez de seguir silenciosamente.
-      if (limite !== null && num(compra.total) > limite) {
-        throw new HttpError(403, `Este pedido (${num(compra.total).toFixed(2)}) está acima da sua alçada de ${limite.toFixed(2)}. Encaminhe para um administrador.`);
-      }
+      const itens = await listarTodos(getResource('itens_compra')!, { empresa_id: escopo.empresaId, compra_id: id }, tx);
+      if (!itens.length) throw new HttpError(409, 'Adicione itens antes de aprovar a compra.');
+      // Recalcula TODAS as linhas no servidor antes de comparar a alçada.
+      const total = await recalcularTotal('compra', id, tx);
+      const limite = await exigirAlcadaCompra(actor, escopo.empresaId, total, tx);
       const atualizada = await s.tryUpdateIf(r, id, { status: 'pendente' }, { status: 'aprovado', aprovada_em: new Date().toISOString(), aprovada_por: actor.id || null }, tx);
       if (!atualizada) throw new HttpError(409, 'O pedido mudou durante a aprovação. Recarregue.');
       await s.audit(
-        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'compras', registro_id: id, descricao: `Pedido de compra #${id} aprovado (total ${num(compra.total).toFixed(2)})`, dados: { total: num(compra.total) }, empresa_id: empresaDoRegistroAudit(r, compra, actor) },
+        { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'compras', registro_id: id, descricao: `Pedido de compra #${id} aprovado (total ${total.toFixed(2)})`, dados: { total, limite_aprovacao: limite }, empresa_id: empresaDoRegistroAudit(r, compra, actor) },
         tx
       );
       return atualizada;
@@ -186,6 +201,7 @@ export async function receberParcial(req: Request, res: Response) {
       if (historico) throw new HttpError(409, 'Chave histórica sem assinatura completa; confira o recebimento existente antes de continuar.');
       if (String(compra.status) === 'cancelado') throw new HttpError(409, 'Compra cancelada não pode ser recebida.');
       if (String(compra.status) === 'recebido') throw new HttpError(409, 'Esta compra já foi totalmente recebida.');
+      if (!['aprovado', 'parcial'].includes(String(compra.status))) throw new HttpError(409, 'A compra precisa estar aprovada antes do recebimento.');
 
       const itens = await listarTodos(getResource('itens_compra')!, { empresa_id: escopo.empresaId, compra_id: id }, tx, { sort: 'id', dir: 'asc' });
       if (!itens.length) throw new HttpError(409, 'A compra não tem itens para receber.');

@@ -220,8 +220,10 @@ describe('App — Fundação comercial (LISTA → PÁGINA)', () => {
     abrirRota('/metas/5/acompanhamento');
 
     expect(await screen.findByRole('heading', { name: /Acompanhamento/i })).toBeInTheDocument();
-    expect(apiGet).toHaveBeenCalledWith('/comercial/metas/5/acompanhamento');
+    // O título aparece antes do efeito assíncrono; espere o dado derivado do
+    // servidor antes de verificar a chamada, sem depender do agendamento do React.
     expect(await screen.findByText('25%')).toBeInTheDocument();
+    expect(apiGet).toHaveBeenCalledWith('/comercial/metas/5/acompanhamento');
     // Realizado é número exibido — não há campo de formulário para digitá-lo.
     expect(screen.queryByLabelText(/Realizado/i)).toBeNull();
   });

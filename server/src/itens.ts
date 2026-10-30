@@ -29,6 +29,7 @@ import { labelOf } from './store';
 import { attachImages } from './uploads';
 import { notificarVendaErpAlterada } from './eventosVenda';
 import { round2, round3 } from './utils';
+import { listarTodos } from './paginacaoCompleta';
 import { locaisDeSaida, saldoCelula, saldoDisponivelCelula } from './estoqueCanonico';
 import { precoDe } from './listasPreco';
 import { descontoUnitarioDe, normalizarPct, normalizarPrecoVenda, precoLiquidoDe } from './precoVenda';
@@ -77,6 +78,8 @@ async function getPedido(tipo: TipoPedido, id: number, escopo?: EscopoEmpresa, t
 
 function assertPedidoAberto(tipo: TipoPedido, pedido: Row) {
   const { statusFechado } = pedidoConfig(tipo);
+  if (tipo === 'compra' && String(pedido.status) !== 'pendente')
+    throw new HttpError(409, 'Os itens da compra só podem ser alterados enquanto ela estiver pendente de aprovação.');
   if (statusFechado.includes(String(pedido.status))) {
     if (tipo === 'venda') {
       throw new HttpError(409, 'Este pedido já foi faturado e os itens não podem mais ser alterados. Cancele o pedido para estornar ou cadastre um novo pedido.');
@@ -457,16 +460,17 @@ async function itemLabel(tipo: TipoPedido, item: Row | null, tx?: Tx): Promise<s
 export async function recalcularTotal(tipo: TipoPedido, pedidoId: number, tx?: Tx): Promise<number> {
   const cfg = pedidoConfig(tipo);
   const s = getStore();
-  const itens = await s.list(cfg.itens, { page: 1, pageSize: 1000, filter: { [cfg.parentCol]: pedidoId } }, tx);
+  const pedido = await s.findOneWhere(cfg.parent, { id: pedidoId }, tx);
+  if (!pedido) throw new HttpError(404, 'Pedido não encontrado.');
+  const itens = await listarTodos(cfg.itens, { [cfg.parentCol]: pedidoId, empresa_id: Number(pedido.empresa_id) }, tx);
   let total = 0;
-  for (const it of itens.rows) {
+  for (const it of itens) {
     if (tipo === 'venda') {
       total += Number(it.subtotal || 0);
     } else {
       total += Number(it.quantidade) * Number(it.preco_unitario);
     }
   }
-  const pedido = await s.findOneWhere(cfg.parent, { id: pedidoId }, tx);
   total += Number(pedido?.frete || 0);
   if (tipo === 'venda') total -= Number(pedido?.desconto || 0);
   total = round2(Math.max(0, total));

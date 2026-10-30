@@ -13,6 +13,7 @@ const { createRecord, updateRecord, getRecord, listRecords, getStore } = await i
 const { HttpError } = await import('../src/errors');
 
 const admin = { id: 1, name: 'Admin', perfil: 'admin' as const };
+await (await import('./_p1util')).garantirAdmin();
 
 async function expectHttp(fn: () => Promise<unknown>, status: number, re?: RegExp) {
   try {
@@ -36,6 +37,13 @@ async function addItem(vendaId: number, item: Record<string, unknown>) {
     await recalcularTotal('venda', vendaId, tx);
     return row;
   });
+}
+
+async function receberPedido(compraId: number, itemId: number, quantidade: number) {
+  const { aprovarCompra, receberParcial } = await import('../src/compras');
+  const { reqDe, chamar } = await import('./_p1util');
+  await chamar(aprovarCompra, reqDe({}, { params: { id: compraId }, user: admin }));
+  await chamar(receberParcial, reqDe({ itens: [{ item_compra_id: itemId, quantidade }] }, { params: { id: compraId }, user: admin }), 201);
 }
 
 async function addItemCompra(compraId: number, item: Record<string, unknown>) {
@@ -151,16 +159,16 @@ test('compra: receber atualiza custo médio ponderado (saldo zero e saldo existe
   await ensureSetup();
   // Caso 1: saldo zero → custo médio vira o preço da compra
   const c1 = await createRecord(RESOURCES.compras, { fornecedor_id: fornecedorId, data: '2026-09-01' }, admin);
-  await addItemCompra(Number(c1.id), { insumo_id: insumoId, quantidade: 10, preco_unitario: 20 });
-  await updateRecord(RESOURCES.compras, Number(c1.id), { status: 'recebido' }, admin);
+  const itemC1 = await addItemCompra(Number(c1.id), { insumo_id: insumoId, quantidade: 10, preco_unitario: 20 });
+  await receberPedido(Number(c1.id), Number(itemC1.id), 10);
   const ins1 = await getRecord(RESOURCES.insumos, insumoId);
   assert.equal(Number(ins1.custo_medio), 20);
   assert.equal(await getStore().insumoStock(insumoId), 10);
 
   // Caso 2: saldo existente → média ponderada
   const c2 = await createRecord(RESOURCES.compras, { fornecedor_id: fornecedorId, data: '2026-09-02' }, admin);
-  await addItemCompra(Number(c2.id), { insumo_id: insumoId, quantidade: 10, preco_unitario: 30 });
-  await updateRecord(RESOURCES.compras, Number(c2.id), { status: 'recebido' }, admin);
+  const itemC2 = await addItemCompra(Number(c2.id), { insumo_id: insumoId, quantidade: 10, preco_unitario: 30 });
+  await receberPedido(Number(c2.id), Number(itemC2.id), 10);
   const ins2 = await getRecord(RESOURCES.insumos, insumoId);
   // (10×20 + 10×30) / 20 = 25
   assert.equal(Number(ins2.custo_medio), 25);
@@ -172,8 +180,8 @@ test('compra: receber atualiza custo médio ponderado (saldo zero e saldo existe
 test('compra: cancelar recebida estorna o estoque e reverte o custo médio', async () => {
   await ensureSetup();
   const c = await createRecord(RESOURCES.compras, { fornecedor_id: fornecedorId, data: '2026-09-03' }, admin);
-  await addItemCompra(Number(c.id), { insumo_id: insumoId, quantidade: 5, preco_unitario: 40 });
-  await updateRecord(RESOURCES.compras, Number(c.id), { status: 'recebido' }, admin);
+  const itemC = await addItemCompra(Number(c.id), { insumo_id: insumoId, quantidade: 5, preco_unitario: 40 });
+  await receberPedido(Number(c.id), Number(itemC.id), 5);
   assert.equal(await getStore().insumoStock(insumoId), 25);
   await updateRecord(RESOURCES.compras, Number(c.id), { status: 'cancelado' }, admin);
   assert.equal(await getStore().insumoStock(insumoId), 20);
@@ -185,7 +193,9 @@ test('compra: cancelar recebida estorna o estoque e reverte o custo médio', asy
 test('compra: receber sem itens é bloqueado', async () => {
   await ensureSetup();
   const c = await createRecord(RESOURCES.compras, { fornecedor_id: fornecedorId, data: '2026-09-01' }, admin);
-  await expectHttp(() => updateRecord(RESOURCES.compras, Number(c.id), { status: 'recebido' }, admin), 409, /item/i);
+  const { aprovarCompra } = await import('../src/compras');
+  const { reqDe, chamar } = await import('./_p1util');
+  await expectHttp(() => chamar(aprovarCompra, reqDe({}, { params: { id: c.id }, user: admin })), 409, /iten/i);
 });
 
 test('relatório de comissões soma apenas vendas faturadas/entregues no período', async () => {

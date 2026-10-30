@@ -2343,6 +2343,8 @@ function CompraOrderEngine() {
   const fechado = String(pedido?.status) === 'recebido';
   const cancelado = pedido?.status === 'cancelado';
   const podeExcluir = user?.perfil !== 'operador';
+  const pendente = pedido?.status === 'pendente';
+  const podeAprovar = user?.perfil === 'gerente' || user?.perfil === 'admin';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2429,6 +2431,16 @@ function CompraOrderEngine() {
     }
   }
 
+  async function aprovar() {
+    setActionStatus('aprovado');
+    try {
+      await api.post(`/compras/${pedidoId}/aprovar`, {});
+      toast.success('Compra aprovada.');
+      await load();
+    } catch (e: any) { toast.error(e.message || 'Não foi possível aprovar a compra.'); }
+    finally { setActionStatus(null); }
+  }
+
   async function mudarStatus(status: string) {
     setActionStatus(status);
     try {
@@ -2479,7 +2491,12 @@ function CompraOrderEngine() {
             <button className="btn-secondary" onClick={() => window.open(`/api/compras/${pedido.id}/pdf`, '_blank')}>
               <Printer className="h-4 w-4" /> Imprimir PDF
             </button>
-            {!fechado && !cancelado && (
+            {pendente && podeAprovar && (
+              <button className="btn-primary" disabled={!!actionStatus || itens.length === 0} onClick={() => void aprovar()}>
+                <Check className="h-4 w-4" /> Aprovar compra
+              </button>
+            )}
+            {['aprovado', 'parcial'].includes(String(pedido.status)) && (
               <button className="btn-primary" onClick={() => navigate(`/compras/${pedidoId}/receber`)}>
                 <Save className="h-4 w-4" /> Receber compra
               </button>
@@ -2494,6 +2511,8 @@ function CompraOrderEngine() {
         }
       />
 
+      {pendente && <div className="mb-4"><Alert tone="amber">A compra precisa ser aprovada antes do recebimento. Gerentes dependem da alçada configurada para esta empresa.</Alert></div>}
+      {['aprovado', 'parcial'].includes(String(pedido.status)) && <div className="mb-4"><Alert tone="blue">Condições e itens aprovados ficam bloqueados para edição.</Alert></div>}
       {fechado && (
         <div className="mb-4">
           <Alert tone="green">
@@ -2515,13 +2534,13 @@ function CompraOrderEngine() {
             label="Fornecedor"
             value={pedido.fornecedor_id}
             options={parceiroOpts}
-            disabled={fechado || cancelado || saving}
+            disabled={!pendente || saving}
             onChange={(v) => saveHeader('fornecedor_id', v)}
           />
           <HeaderDate
             label="Data"
             value={String(pedido.data || '').slice(0, 10)}
-            disabled={fechado || cancelado || saving}
+            disabled={!pendente || saving}
             onChange={(v) => saveHeader('data', v)}
           />
           <HeaderDate
@@ -2534,7 +2553,7 @@ function CompraOrderEngine() {
           <HeaderText
             label="Condição de pagamento"
             value={pedido.condicao_pagamento || ''}
-            disabled={fechado || cancelado || saving}
+            disabled={!pendente || saving}
             onChange={(v) => saveHeader('condicao_pagamento', v || null)}
             placeholder="À vista, 30/60 dias..."
           />
@@ -2548,7 +2567,7 @@ function CompraOrderEngine() {
           <HeaderMoney
             label="Frete (R$)"
             value={pedido.frete ?? ''}
-            disabled={fechado || cancelado || saving}
+            disabled={!pendente || saving}
             onChange={(v) => saveHeader('frete', v)}
             optional
           />
@@ -2593,7 +2612,7 @@ function CompraOrderEngine() {
                     {formatMoney(Number(it.quantidade) * Number(it.preco_unitario))}
                   </td>
                   <td className="text-right">
-                    {!fechado && !cancelado && podeExcluir && (
+                    {pendente && podeExcluir && (
                       <button
                         className="btn-icon hover:!bg-red-50 hover:!text-red-600"
                         disabled={busyItem === it.id}
@@ -2607,7 +2626,7 @@ function CompraOrderEngine() {
                 </tr>
               ))}
 
-              {!fechado && !cancelado && (
+              {pendente && (
                 <tr className="bg-navy-50/40">
                   <td>
                     <select

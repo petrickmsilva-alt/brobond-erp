@@ -196,3 +196,20 @@ describe('EmpresasPage', () => {
     await waitFor(() => expect(screen.getByText('Apenas administradores acessam este módulo.')).toBeTruthy());
   });
 });
+
+describe('Alçada de compra por empresa', () => {
+  beforeEach(() => { vi.clearAllMocks(); responder({
+    '/usuarios/12/empresas': { usuario_id: 12, empresas: [{ id: 1, nome: 'BROBOND', limite_aprovacao_compra: 100.5 }] },
+  }); });
+  it('apresenta e envia o limite ao servidor sem modal', async () => {
+    apiPut.mockResolvedValue({} as never); montar();
+    await waitFor(() => expect(screen.getByText('FILIAL SUL')).toBeTruthy());
+    await userEvent.click(screen.getAllByTitle('Acessos')[0]);
+    const campo = await screen.findByLabelText('Alçada de compra de Bruno Gerente');
+    expect(campo).toHaveValue('100.5');
+    await userEvent.clear(campo); await userEvent.type(campo, '250,20');
+    await userEvent.click(screen.getByRole('button', { name: 'Salvar alçada' }));
+    await waitFor(() => expect(apiPut).toHaveBeenCalledWith('/usuarios/12/empresas/1/alcada-compra', { limite_aprovacao_compra: 250.2 }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});

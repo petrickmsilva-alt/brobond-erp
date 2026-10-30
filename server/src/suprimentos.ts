@@ -192,6 +192,8 @@ function parseXml(xml: string): ParsedNfe {
     return { numero: tag(d, 'nDup'), vencimento: tag(d, 'dVenc'), valor: numberXml(tag(d, 'vDup')) };
   });
   const dhEmi = tag(ide, 'dhEmi') || tag(ide, 'dEmi');
+  const freteNota = numberXml(tag(total, 'vFrete')) || round2(itens.reduce((sum, item) => sum + item.frete, 0));
+  const descontoNota = numberXml(tag(total, 'vDesc')) || round2(itens.reduce((sum, item) => sum + item.desconto, 0));
   return {
     chaveAcesso: chave || createHash('sha256').update(clean, 'utf8').digest('hex'),
     numero: tag(ide, 'nNF'),
@@ -199,9 +201,9 @@ function parseXml(xml: string): ParsedNfe {
     emitenteCnpj: digits(tag(emit, 'CNPJ') || tag(emit, 'CPF')) || null,
     emitenteNome: tag(emit, 'xNome') || tag(emit, 'xFant'),
     emissao: dhEmi ? dhEmi.slice(0, 10) : null,
-    totalNota: numberXml(tag(total, 'vNF')) || round2(itens.reduce((sum, item) => sum + item.valorProduto, 0)),
-    frete: numberXml(tag(total, 'vFrete')) || round2(itens.reduce((sum, item) => sum + item.frete, 0)),
-    desconto: numberXml(tag(total, 'vDesc')) || round2(itens.reduce((sum, item) => sum + item.desconto, 0)),
+    totalNota: numberXml(tag(total, 'vNF')) || round2(itens.reduce((sum, item) => sum + item.valorProduto, 0) + freteNota - descontoNota),
+    frete: freteNota,
+    desconto: descontoNota,
     itens,
     duplicatas,
   };
@@ -442,6 +444,15 @@ export async function importarXmlCompra(req: Request, res: Response) {
     }
 
     const total = parsed.totalNota || round2(resolved.reduce((sum, line) => sum + line.item.quantidade * line.item.valorUnitario, 0) + parsed.frete - parsed.desconto);
+    // Consistência financeira mínima, não homologação fiscal: um total menor
+    // que itens + frete − descontos declarados não sustenta a conta a pagar.
+    const brutoLinhas = round2(parsed.itens.reduce((sum, item) => sum + Math.max(item.valorProduto, item.quantidade * item.valorUnitario), 0) + Math.max(0, parsed.frete || 0));
+    const minimoDocumento = round2(Math.max(0, brutoLinhas - Math.max(0, parsed.desconto || 0)));
+    if (total + 0.001 < minimoDocumento) {
+      const motivo = 'Total do documento inferior a itens e frete líquidos dos descontos declarados; revise antes de importar.';
+      if (previsualizando) pendencias.push({ numero: 0, codigo_fornecedor: '', descricao: 'Total do documento', motivo });
+      else throw new HttpError(422, motivo);
+    }
 
     // ---- PRÉ-VALIDAÇÃO: devolve o que ACONTECERIA e desfaz tudo ------------
     // A transação é abortada de propósito — nada é gravado. É o mesmo parser, o
@@ -483,8 +494,17 @@ export async function importarXmlCompra(req: Request, res: Response) {
       });
     }
 
+    // Importação aplicada também aprova e recebe: não é um caminho para
+    // operador contornar a alçada. A prévia acima permanece sem efeitos.
+    // Um total de nota menor que a soma das linhas não reduz a alçada exigida.
+    const valorAprovacao = Math.max(total, brutoLinhas);
+    const { exigirAlcadaCompra } = await import('./compras');
+    const limiteAprovacao = await exigirAlcadaCompra(actor, escopo.empresaId, valorAprovacao, tx);
+    const aprovadaEm = new Date().toISOString();
     const compra = await s.insert(compras, {
       empresa_id: escopo.empresaId,
+      aprovada_em: aprovadaEm,
+      aprovada_por: actor.id || null,
       fornecedor_id: Number(supplier.id),
       data: parsed.emissao || new Date().toISOString(),
       status: 'recebido',
@@ -570,7 +590,7 @@ export async function importarXmlCompra(req: Request, res: Response) {
       recurso: 'compras',
       registro_id: Number(compra.id),
       descricao: `NF-e ${parsed.numero || parsed.chaveAcesso} importada — ${resolved.length} produto(s), entrada em "${local}"`,
-      dados: { importacao_id: imported.id, chave_acesso: parsed.chaveAcesso, compra_id: compra.id, itens: createdItems.map((item) => item.id) },
+      dados: { importacao_id: imported.id, chave_acesso: parsed.chaveAcesso, compra_id: compra.id, itens: createdItems.map((item) => item.id), aprovacao: { valor_considerado: valorAprovacao, limite: limiteAprovacao, usuario_id: actor.id, data: aprovadaEm } },
       empresa_id: empresaDoRegistroAudit(compras, compra, actor),
     }, tx);
     return { compra, imported, supplier, local, resolved, parsed };

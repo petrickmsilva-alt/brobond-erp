@@ -189,10 +189,11 @@ test('I) desempenho é calculado a partir de dados existentes', async () => {
   const insumo = await createRecord(RESOURCES.insumos, { nome: `Tecido Desemp ${Date.now() % 100000}`, unidade: 'm' }, admin);
   const compra = await createRecord(
     RESOURCES.compras,
-    { fornecedor_id: id, data: '2026-01-05', status: 'aprovado', total: 100, previsao_entrega: '2026-01-10' },
+    { fornecedor_id: id, data: '2026-01-05', status: 'pendente', total: 100, previsao_entrega: '2026-01-10' },
     admin
   );
   await createRecord(RESOURCES.itens_compra, { compra_id: Number(compra.id), insumo_id: Number(insumo.id), quantidade: 10, preco_unitario: 10 }, admin);
+  await chamar((await import('../src/compras')).aprovarCompra, { id: Number(compra.id), actor: admin });
   await getStore().update(RESOURCES.compras, Number(compra.id), { status: 'recebido', recebida_em: '2026-01-12' });
 
   const d = await chamar(desempenhoDoFornecedor, { id, actor: gerente });

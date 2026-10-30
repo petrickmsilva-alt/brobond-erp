@@ -37,7 +37,7 @@ export class PaymentOrchestrator {
     requireKey(key);
     if (!METHODS.includes(method)) throw new HttpError(400, 'Método inválido.');
     const s = getStore();
-    const claim = await locked(empresaId, `order:${orderId}`, async (tx) => {
+    const claim = await retrySerialization(() => locked(empresaId, `order:${orderId}`, async (tx) => {
       const order = await s.findOneWhere(getResource('commerce_pedidos')!, { empresa_id: empresaId, id: orderId }, tx);
       if (!order) throw new HttpError(404, 'Pedido não encontrado.');
       const existing = await s.findOneWhere(R_INTENTS, { empresa_id: empresaId, order_id: orderId }, tx);
@@ -75,9 +75,16 @@ export class PaymentOrchestrator {
         tx
       );
       return { intent, fresh: true, order };
-    });
+    }));
     if (!claim.fresh) return { intent: claim.intent, idempotent: true };
     const i = claim.intent;
+    // Period fence precedes the row lock even for short, local-only status
+    // updates. A late webhook must not be overwritten by a failed create.
+    const updatePendingIntent = async (patch: Record<string, unknown>) => retrySerialization(() => locked(empresaId, `intent:${i.id}`, async (tx) => {
+      const current = await this.intent(empresaId, Number(i.id), tx);
+      if (!['CREATED', 'PENDING'].includes(String(current.status))) return current;
+      return getStore().update(R_INTENTS, Number(i.id), patch, tx);
+    }, 'read committed'));
     const routes = await candidates({
       empresaId,
       method,
@@ -88,7 +95,7 @@ export class PaymentOrchestrator {
       installments: 1,
     });
     if (!routes.length) {
-      await s.update(R_INTENTS, Number(i.id), { status: 'FAILED', updated_at: now() });
+      await updatePendingIntent({ status: 'FAILED', updated_at: now() });
       throw new HttpError(409, 'Método indisponível no Payment Engine.');
     }
     const payer = claim.order.comprador || {};
@@ -111,7 +118,7 @@ export class PaymentOrchestrator {
         correlation_id: i.correlation_id,
         safe_reference: { rule_id: route.ruleId, fallback_from: n > 0 ? routes[n - 1].provider.code : null },
       });
-      await s.update(R_INTENTS, Number(i.id), { provider: route.provider.code, status: 'PENDING', updated_at: now() });
+      await updatePendingIntent({ provider: route.provider.code, status: 'PENDING', updated_at: now() });
       try {
         const input: PaymentInput = {
           amount: Number(i.amount),
@@ -153,19 +160,19 @@ export class PaymentOrchestrator {
           correlation_id: i.correlation_id,
         });
         if (!canFallback(e) || n === routes.length - 1) {
-          if (!ambiguous) await s.update(R_INTENTS, Number(i.id), { status: 'FAILED', updated_at: now() });
+          if (!ambiguous) await updatePendingIntent({ status: 'FAILED', updated_at: now() });
           // Unknown writes are retained pending. Do NOT release stock or start another provider.
           if (ambiguous) return { intent: await this.intent(empresaId, Number(i.id)), idempotent: false };
           throw new HttpError(502, 'Provider recusou o pagamento. Consulte a transação.');
         }
       }
     }
-    await s.update(R_INTENTS, Number(i.id), { status: 'FAILED', updated_at: now() });
+    await updatePendingIntent({ status: 'FAILED', updated_at: now() });
     throw new HttpError(502, 'Nenhuma rota elegível para pagamento.');
   }
   private async bridge(empresaId: number, i: Row, a: Row, provider: string, r: PaymentResult) {
     const s = getStore();
-    await locked(empresaId, `intent:${i.id}`, async (tx) => {
+    await retrySerialization(() => locked(empresaId, `intent:${i.id}`, async (tx) => {
       const current = await this.intent(empresaId, Number(i.id), tx);
       if (current.cobranca_id) return;
       const charge = await s.insert(
@@ -194,7 +201,7 @@ export class PaymentOrchestrator {
       );
       await s.update(R_INTENTS, Number(i.id), { cobranca_id: charge.id }, tx);
       await s.update(getResource('commerce_pedidos')!, Number(i.order_id), { cobranca_id: charge.id }, tx);
-    });
+    }));
   }
   async apply(empresaId: number, intentId: number, result: PaymentResult, source: 'event' | 'provider-refresh' = 'event') {
     const s = getStore();

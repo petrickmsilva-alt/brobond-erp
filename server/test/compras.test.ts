@@ -89,14 +89,19 @@ test('compras: aprovação é de gerente/admin e só vale sobre pedido pendente'
   assert.equal((await s.get(RESOURCES.compras, Number(compra.id))).status, 'aprovado');
 });
 
-test('compras: acima da alçada, a aprovação para em vez de seguir', async () => {
+test('compras: alçada vem do vínculo usuário×empresa, e não do cliente', async () => {
   const s = getStore();
   const { compra } = await novaCompra([10], { preco: 100 }); // total 1000
-  await esperarErro(() => compras.aprovarCompra(reqDe({ limite_alcada: 500 }, { params: { id: compra.id } }), resFake().res), 403, /acima da sua alçada/);
-  assert.equal((await s.get(RESOURCES.compras, Number(compra.id))).status, 'pendente', 'nada foi aprovado');
-
-  // Dentro da alçada, passa.
-  const ok = await chamar(compras.aprovarCompra, reqDe({ limite_alcada: 1500 }, { params: { id: compra.id } }));
+  const gerente = await criarAtor(1, 'gerente');
+  const link = await s.findOneWhere(RESOURCES.usuario_empresas, { usuario_id: gerente.id, empresa_id: 1 });
+  if (!link) await s.insert(RESOURCES.usuario_empresas, { usuario_id: gerente.id, empresa_id: 1, limite_aprovacao_compra: 500 });
+  else await s.update(RESOURCES.usuario_empresas, Number(link.id), { limite_aprovacao_compra: 500 });
+  await esperarErro(() => compras.aprovarCompra(reqDe({ limite_alcada: 999999 }, { user: gerente, params: { id: compra.id } }), resFake().res), 400, /nunca pelo pedido/);
+  await esperarErro(() => compras.aprovarCompra(reqDe({}, { user: gerente, params: { id: compra.id } }), resFake().res), 403, /acima da sua alçada/);
+  assert.equal((await s.get(RESOURCES.compras, Number(compra.id))).status, 'pendente');
+  const vinculo = await s.findOneWhere(RESOURCES.usuario_empresas, { usuario_id: gerente.id, empresa_id: 1 });
+  await s.update(RESOURCES.usuario_empresas, Number(vinculo!.id), { limite_aprovacao_compra: 1500 });
+  const ok = await chamar(compras.aprovarCompra, reqDe({}, { user: gerente, params: { id: compra.id } }));
   assert.equal(ok.status, 'aprovado');
 });
 
@@ -432,6 +437,7 @@ test('compras: o item de outra empresa não entra num recebimento da empresa A',
 test('compras: replay após total, mudança de corpo na mesma chave e prefixos longos distintos', async () => {
   const { compra, itens } = await novaCompra([10]);
   const itemId = Number(itens[0].item.id); const keyA = `${'k'.repeat(70)}a`; const keyB = `${'k'.repeat(70)}b`;
+  await chamar(compras.aprovarCompra, reqDe({}, { params: { id: compra.id } }));
   const bodyA = { itens: [{ item_compra_id: itemId, quantidade: 5 }], idempotency_key: keyA };
   const bodyB = { itens: [{ item_compra_id: itemId, quantidade: 5 }], idempotency_key: keyB };
   await chamar(compras.receberParcial, reqDe(bodyA, { params: { id: compra.id } }), 201);
@@ -446,6 +452,7 @@ test('compras: replay após total, mudança de corpo na mesma chave e prefixos l
 test('compras: prévia de lote igual ao anterior calcula e não duplica; legado ambíguo bloqueia', async () => {
   const { compra, itens } = await novaCompra([10]); const itemId = Number(itens[0].item.id);
   const body = { itens: [{ item_compra_id: itemId, quantidade: 2 }] };
+  await chamar(compras.aprovarCompra, reqDe({}, { params: { id: compra.id } }));
   await chamar(compras.receberParcial, reqDe(body, { params: { id: compra.id } }), 201);
   const preview = await chamar(compras.receberParcial, reqDe({ ...body, previsao: true }, { params: { id: compra.id } }), 200);
   assert.equal(preview.previsao, true); assert.equal(preview.aplicado, false);

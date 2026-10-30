@@ -123,6 +123,8 @@ async function novaCompra(ctx: Awaited<ReturnType<typeof cenario>>, linhas: { qt
       })
     );
   }
+  const { reqDe, resFake } = await import('./_p1util');
+  await ctx.compras.aprovarCompra(reqDe({}, { params: { id: compra.id }, user: ctx.actor as any }), resFake().res);
   return { compraId: Number(compra.id), itens: itens.map((i) => Number(i.id)) };
 }
 

@@ -7336,3 +7336,258 @@ UPDATE payment_payouts p SET status = 'DIVERGENT'
 WHERE p.status <> 'DIVERGENT' AND EXISTS (
   SELECT 1 FROM payment_settlements s WHERE s.empresa_id = p.empresa_id AND s.payout_id = p.id AND s.dispute_review_required
 );
+
+-- Mirror of migration 0083_financial_period_guard.sql
+-- Explicit financial close expands the existing accounting-period control; it
+-- does not create a second ledger. Legacy closes remain accounting-only until
+-- an authorised actor explicitly performs the financial close.
+ALTER TABLE fin_periodos_contabeis ADD COLUMN IF NOT EXISTS abrangencia TEXT NOT NULL DEFAULT 'escrituracao';
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='fin_periodos_contabeis'::regclass AND conname='fin_periodos_abrangencia_ck') THEN
+    ALTER TABLE fin_periodos_contabeis ADD CONSTRAINT fin_periodos_abrangencia_ck CHECK (abrangencia IN ('escrituracao','financeiro'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='fin_periodos_contabeis'::regclass AND conname='fin_periodos_estado_v2_ck') THEN
+    ALTER TABLE fin_periodos_contabeis ADD CONSTRAINT fin_periodos_estado_v2_ck CHECK (estado IN ('aberto','fechando','fechado'));
+  END IF;
+END $$;
+-- Replace the old state check only after the compatible check is in place.
+ALTER TABLE fin_periodos_contabeis DROP CONSTRAINT IF EXISTS fin_periodos_contabeis_estado_check;
+
+-- One fencing row per company. The update also makes a stale SERIALIZABLE
+-- writer abort instead of accepting a snapshot from before a completed close.
+CREATE TABLE IF NOT EXISTS fin_periodos_travas_empresa (
+  empresa_id INTEGER PRIMARY KEY REFERENCES empresas(id),
+  versao BIGINT NOT NULL DEFAULT 0
+);
+CREATE OR REPLACE FUNCTION fin_travar_empresa_periodo(p_empresa INTEGER) RETURNS VOID
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF p_empresa IS NULL OR p_empresa <= 0 THEN
+    RAISE EXCEPTION 'Empresa obrigatória para controle de período' USING ERRCODE='23514';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('contabil:' || p_empresa::text, 0));
+  INSERT INTO fin_periodos_travas_empresa(empresa_id,versao) VALUES(p_empresa,1)
+    ON CONFLICT (empresa_id) DO UPDATE SET versao=fin_periodos_travas_empresa.versao+1;
+END $$;
+CREATE OR REPLACE FUNCTION fin_exigir_periodo_financeiro_aberto(p_empresa INTEGER, p_data DATE) RETURNS VOID
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF p_data IS NOT NULL AND EXISTS (
+    SELECT 1 FROM fin_periodos_contabeis p
+    WHERE p.empresa_id=p_empresa AND p.competencia=date_trunc('month',p_data)::date
+      AND p.abrangencia='financeiro' AND p.estado IN ('fechando','fechado')
+  ) THEN
+    RAISE EXCEPTION 'Período financeiro fechado' USING ERRCODE='P2001';
+  END IF;
+END $$;
+CREATE OR REPLACE FUNCTION fin_proteger_movimento_periodo() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE old_emp INTEGER; new_emp INTEGER; emp INTEGER; old_date DATE; new_date DATE;
+BEGIN
+  IF TG_OP <> 'INSERT' THEN old_emp := OLD.empresa_id; END IF;
+  IF TG_OP <> 'DELETE' THEN new_emp := NEW.empresa_id; END IF;
+  -- Consistent order even for an (otherwise disallowed) cross-company change.
+  FOR emp IN SELECT DISTINCT x FROM unnest(ARRAY[old_emp,new_emp]) AS x WHERE x IS NOT NULL ORDER BY x LOOP
+    PERFORM fin_travar_empresa_periodo(emp);
+  END LOOP;
+  IF TG_TABLE_NAME='lancamentos_financeiros' THEN
+    IF TG_OP <> 'INSERT' THEN
+      PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,OLD.data);
+      PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,OLD.competencia);
+      PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,OLD.data_baixa);
+    END IF;
+    IF TG_OP <> 'DELETE' THEN
+      PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,NEW.data);
+      PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,NEW.competencia);
+      PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,NEW.data_baixa);
+    END IF;
+  ELSIF TG_TABLE_NAME='fin_extrato_transacoes' THEN
+    IF TG_OP <> 'INSERT' THEN PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,OLD.data); END IF;
+    IF TG_OP <> 'DELETE' THEN PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,NEW.data); END IF;
+  ELSIF TG_TABLE_NAME IN ('payment_settlements','payment_payouts') THEN
+    IF TG_OP <> 'INSERT' THEN PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,OLD.settlement_date); END IF;
+    IF TG_OP <> 'DELETE' THEN PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,NEW.settlement_date); END IF;
+  ELSIF TG_TABLE_NAME='payment_operations' THEN
+    IF TG_OP <> 'INSERT' THEN
+      SELECT settlement_date INTO old_date FROM payment_settlements WHERE empresa_id=old_emp AND payment_intent_id=OLD.payment_intent_id;
+      PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,old_date);
+    END IF;
+    IF TG_OP <> 'DELETE' THEN
+      SELECT settlement_date INTO new_date FROM payment_settlements WHERE empresa_id=new_emp AND payment_intent_id=NEW.payment_intent_id;
+      PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,new_date);
+    END IF;
+  END IF;
+  IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END $$;
+DO $$
+DECLARE tabela TEXT; nome TEXT;
+BEGIN
+  FOREACH tabela IN ARRAY ARRAY['lancamentos_financeiros','fin_extrato_transacoes','payment_settlements','payment_payouts','payment_operations'] LOOP
+    nome := 'fin_periodo_guard_' || tabela;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass(tabela) AND tgname=nome AND NOT tgisinternal) THEN
+      EXECUTE format('CREATE TRIGGER %I BEFORE INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION fin_proteger_movimento_periodo()',nome,tabela);
+    END IF;
+  END LOOP;
+END $$;
+
+-- Migração 0084: alçada de aprovação de compra por usuário e empresa.
+-- Alçada de compra é por usuário × empresa, nunca fornecida pelo cliente.
+-- NULL preserva os vínculos legados sem presumir uma autorização monetária.
+ALTER TABLE usuario_empresas ADD COLUMN IF NOT EXISTS limite_aprovacao_compra NUMERIC(14,2);
+DO $$ BEGIN
+  ALTER TABLE usuario_empresas ADD CONSTRAINT usuario_empresa_limite_compra_valido
+    CHECK (limite_aprovacao_compra IS NULL OR limite_aprovacao_compra >= 0);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Migração 0085: reserva durável de estorno legado.
+-- Durable reservation of legacy gateway refunds: a close sees in-flight and
+-- uncertain external writes, without creating another financial ledger.
+ALTER TABLE gateway_cobrancas ADD COLUMN IF NOT EXISTS estorno_operacao_estado TEXT;
+ALTER TABLE gateway_cobrancas ADD COLUMN IF NOT EXISTS estorno_operacao_em TIMESTAMPTZ;
+DO $$ BEGIN
+  ALTER TABLE gateway_cobrancas ADD CONSTRAINT gateway_estorno_operacao_estado_ck
+    CHECK (estorno_operacao_estado IS NULL OR estorno_operacao_estado IN ('PROCESSING','UNCERTAIN','SUCCEEDED','FAILED'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Migração 0086: proteção dos vínculos de pagamento no fechamento.
+-- A operação financeira deve validar todos os elos datados, não apenas a
+-- primeira liquidação de um intent ou a data declarada do repasse.
+CREATE OR REPLACE FUNCTION fin_validar_payment_intent(p_empresa INTEGER, p_intent BIGINT, p_exigir_data BOOLEAN) RETURNS VOID
+LANGUAGE plpgsql AS $$
+DECLARE reg RECORD;
+BEGIN
+  FOR reg IN SELECT settlement_date FROM payment_settlements WHERE empresa_id=p_empresa AND payment_intent_id=p_intent LOOP
+    PERFORM fin_exigir_periodo_financeiro_aberto(p_empresa, reg.settlement_date);
+  END LOOP;
+  FOR reg IN
+    SELECT l.data, l.competencia, l.data_baixa
+    FROM payment_intents i JOIN gateway_cobrancas g ON g.empresa_id=i.empresa_id AND g.id=i.cobranca_id
+    JOIN lancamentos_financeiros l ON l.empresa_id=g.empresa_id AND l.id=g.lancamento_id
+    WHERE i.empresa_id=p_empresa AND i.id=p_intent
+  LOOP
+    PERFORM fin_exigir_periodo_financeiro_aberto(p_empresa, reg.data::date);
+    PERFORM fin_exigir_periodo_financeiro_aberto(p_empresa, reg.competencia::date);
+    PERFORM fin_exigir_periodo_financeiro_aberto(p_empresa, reg.data_baixa::date);
+  END LOOP;
+  IF p_exigir_data AND EXISTS (SELECT 1 FROM fin_periodos_contabeis WHERE empresa_id=p_empresa AND abrangencia='financeiro' AND estado IN ('fechando','fechado'))
+    AND (EXISTS (SELECT 1 FROM payment_settlements WHERE empresa_id=p_empresa AND payment_intent_id=p_intent AND settlement_date IS NULL)
+      OR (NOT EXISTS (SELECT 1 FROM payment_settlements WHERE empresa_id=p_empresa AND payment_intent_id=p_intent AND settlement_date IS NOT NULL)
+        AND NOT EXISTS (
+          SELECT 1 FROM payment_intents i JOIN gateway_cobrancas g ON g.empresa_id=i.empresa_id AND g.id=i.cobranca_id
+          JOIN lancamentos_financeiros l ON l.empresa_id=g.empresa_id AND l.id=g.lancamento_id
+          WHERE i.empresa_id=p_empresa AND i.id=p_intent AND l.data_baixa IS NOT NULL
+        ))) THEN
+    RAISE EXCEPTION 'Operação sem data financeira comprovada com período fechado' USING ERRCODE='P2001';
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION fin_validar_repasse(p_empresa INTEGER, p_repasse BIGINT) RETURNS VOID
+LANGUAGE plpgsql AS $$
+DECLARE reg RECORD;
+BEGIN
+  FOR reg IN SELECT p.settlement_date, e.data AS data_extrato FROM payment_payouts p
+    LEFT JOIN fin_extrato_transacoes e ON e.empresa_id=p.empresa_id AND e.id=p.bank_transaction_id
+    WHERE p.empresa_id=p_empresa AND p.id=p_repasse LOOP
+    PERFORM fin_exigir_periodo_financeiro_aberto(p_empresa, reg.settlement_date);
+    PERFORM fin_exigir_periodo_financeiro_aberto(p_empresa, reg.data_extrato);
+  END LOOP;
+  FOR reg IN SELECT settlement_date FROM payment_settlements WHERE empresa_id=p_empresa AND payout_id=p_repasse LOOP
+    PERFORM fin_exigir_periodo_financeiro_aberto(p_empresa, reg.settlement_date);
+  END LOOP;
+END $$;
+
+CREATE OR REPLACE FUNCTION fin_proteger_movimento_periodo() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE old_emp INTEGER; new_emp INTEGER; emp INTEGER; bank_date DATE;
+BEGIN
+  IF TG_OP <> 'INSERT' THEN old_emp := OLD.empresa_id; END IF;
+  IF TG_OP <> 'DELETE' THEN new_emp := NEW.empresa_id; END IF;
+  FOR emp IN SELECT DISTINCT x FROM unnest(ARRAY[old_emp,new_emp]) AS x WHERE x IS NOT NULL ORDER BY x LOOP
+    PERFORM fin_travar_empresa_periodo(emp);
+  END LOOP;
+  IF TG_TABLE_NAME='lancamentos_financeiros' THEN
+    IF TG_OP <> 'INSERT' THEN
+      PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,OLD.data);
+      PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,OLD.competencia);
+      PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,OLD.data_baixa);
+    END IF;
+    IF TG_OP <> 'DELETE' THEN
+      PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,NEW.data);
+      PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,NEW.competencia);
+      PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,NEW.data_baixa);
+    END IF;
+  ELSIF TG_TABLE_NAME='fin_extrato_transacoes' THEN
+    IF TG_OP <> 'INSERT' THEN PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,OLD.data); END IF;
+    IF TG_OP <> 'DELETE' THEN PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,NEW.data); END IF;
+  ELSIF TG_TABLE_NAME='payment_settlements' THEN
+    IF TG_OP <> 'INSERT' THEN
+      PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,OLD.settlement_date);
+      PERFORM fin_validar_payment_intent(old_emp,OLD.payment_intent_id,false);
+      IF OLD.payout_id IS NOT NULL THEN PERFORM fin_validar_repasse(old_emp,OLD.payout_id); END IF;
+    END IF;
+    IF TG_OP <> 'DELETE' THEN
+      PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,NEW.settlement_date);
+      PERFORM fin_validar_payment_intent(new_emp,NEW.payment_intent_id,false);
+      IF NEW.settlement_date IS NULL AND (NEW.refund_amount > 0 OR NEW.chargeback_amount > 0 OR NEW.dispute_review_required) THEN
+        PERFORM fin_validar_payment_intent(new_emp,NEW.payment_intent_id,true);
+      END IF;
+      IF NEW.payout_id IS NOT NULL THEN PERFORM fin_validar_repasse(new_emp,NEW.payout_id); END IF;
+    END IF;
+  ELSIF TG_TABLE_NAME='payment_payouts' THEN
+    IF TG_OP <> 'INSERT' THEN
+      PERFORM fin_exigir_periodo_financeiro_aberto(old_emp,OLD.settlement_date);
+      PERFORM fin_validar_repasse(old_emp,OLD.id);
+    END IF;
+    IF TG_OP <> 'DELETE' THEN
+      PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,NEW.settlement_date);
+      IF NEW.bank_transaction_id IS NOT NULL THEN
+        SELECT data INTO bank_date FROM fin_extrato_transacoes WHERE empresa_id=new_emp AND id=NEW.bank_transaction_id;
+        PERFORM fin_exigir_periodo_financeiro_aberto(new_emp,bank_date);
+      END IF;
+    END IF;
+  ELSIF TG_TABLE_NAME='payment_operations' THEN
+    IF TG_OP <> 'INSERT' THEN PERFORM fin_validar_payment_intent(old_emp,OLD.payment_intent_id,true); END IF;
+    IF TG_OP <> 'DELETE' THEN PERFORM fin_validar_payment_intent(new_emp,NEW.payment_intent_id,true); END IF;
+  END IF;
+  IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END $$;
+
+-- Migração 0087: reserva de criação e fence de intenções.
+-- Reserva persistente de criação legada e trava do ciclo de intenção. Dados
+-- antigos não são presumidos como prova e nenhum segredo é armazenado aqui.
+ALTER TABLE gateway_cobrancas ADD COLUMN IF NOT EXISTS criacao_operacao_estado TEXT;
+ALTER TABLE gateway_cobrancas ADD COLUMN IF NOT EXISTS criacao_operacao_hash TEXT;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='gateway_cobrancas'::regclass AND conname='gateway_criacao_estado_ck') THEN
+    ALTER TABLE gateway_cobrancas ADD CONSTRAINT gateway_criacao_estado_ck CHECK (criacao_operacao_estado IS NULL OR criacao_operacao_estado IN ('PROCESSING','UNCERTAIN','SUCCEEDED','FAILED')) NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='gateway_cobrancas'::regclass AND conname='gateway_criacao_hash_ck') THEN
+    ALTER TABLE gateway_cobrancas ADD CONSTRAINT gateway_criacao_hash_ck CHECK (criacao_operacao_hash IS NULL OR criacao_operacao_hash ~ '^[0-9a-f]{64}$') NOT VALID;
+  END IF;
+END $$;
+ALTER TABLE gateway_cobrancas VALIDATE CONSTRAINT gateway_criacao_estado_ck;
+ALTER TABLE gateway_cobrancas VALIDATE CONSTRAINT gateway_criacao_hash_ck;
+CREATE OR REPLACE FUNCTION fin_proteger_intencao_periodo() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE old_emp INTEGER; new_emp INTEGER; emp INTEGER;
+BEGIN
+  IF TG_OP <> 'INSERT' THEN old_emp := OLD.empresa_id; END IF;
+  IF TG_OP <> 'DELETE' THEN new_emp := NEW.empresa_id; END IF;
+  FOR emp IN SELECT DISTINCT x FROM unnest(ARRAY[old_emp,new_emp]) AS x WHERE x IS NOT NULL ORDER BY x LOOP
+    PERFORM fin_travar_empresa_periodo(emp);
+  END LOOP;
+  IF TG_OP <> 'INSERT' THEN PERFORM fin_exigir_periodo_financeiro_aberto(old_emp, OLD.created_at::date); END IF;
+  IF TG_OP <> 'DELETE' THEN PERFORM fin_exigir_periodo_financeiro_aberto(new_emp, NEW.created_at::date); END IF;
+  IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END $$;
+DROP TRIGGER IF EXISTS fin_periodo_payment_intents ON payment_intents;
+CREATE TRIGGER fin_periodo_payment_intents BEFORE INSERT OR UPDATE OR DELETE ON payment_intents FOR EACH ROW EXECUTE FUNCTION fin_proteger_intencao_periodo();
+
+-- Migração 0088: reserva de cancelamento legado.
+-- Cancelamentos legados não podem perder uma chamada externa incerta.
+ALTER TABLE gateway_cobrancas ADD COLUMN IF NOT EXISTS cancelamento_operacao_estado TEXT;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='gateway_cobrancas'::regclass AND conname='gateway_cancelamento_estado_ck') THEN
+    ALTER TABLE gateway_cobrancas ADD CONSTRAINT gateway_cancelamento_estado_ck CHECK (cancelamento_operacao_estado IS NULL OR cancelamento_operacao_estado IN ('PROCESSING','UNCERTAIN','SUCCEEDED','FAILED')) NOT VALID;
+  END IF;
+END $$;
+ALTER TABLE gateway_cobrancas VALIDATE CONSTRAINT gateway_cancelamento_estado_ck;

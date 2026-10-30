@@ -446,6 +446,32 @@ export class MemStore implements Store {
     }
   }
 
+  /** Espelho da proteção PG para o modo demonstração, sem alegar multiprocesso. */
+  private verificarPeriodoFinanceiro(r: Resource, ...rows: (Row | null | undefined)[]): void {
+    if (!['lancamentos_financeiros', 'fin_extrato_transacoes', 'payment_settlements', 'payment_payouts', 'payment_operations', 'payment_intents'].includes(r.table)) return;
+    for (const row of rows) {
+      if (!row) continue;
+      const empresaId = Number(row.empresa_id ?? EMPRESA_PADRAO);
+      const campos = r.table === 'lancamentos_financeiros' ? ['data', 'competencia', 'data_baixa'] :
+        r.table === 'fin_extrato_transacoes' ? ['data'] : r.table === 'payment_operations' ? [] :
+        r.table === 'payment_intents' ? ['created_at'] : ['settlement_date'];
+      const datas = campos.map((campo) => row[campo]);
+      if (r.table === 'payment_operations') {
+        const settlement = [...this.table('payment_settlements').rows.values()].find((v) => Number(v.empresa_id) === empresaId && Number(v.payment_intent_id) === Number(row.payment_intent_id));
+        datas.push(settlement?.settlement_date);
+      }
+      for (const raw of datas) {
+        if (raw === null || raw === undefined || raw === '') continue;
+        const data = raw instanceof Date ? raw.toISOString() : String(raw);
+        const mes = data.slice(0, 7);
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) throw new HttpError(409, 'Data financeira inválida; revise antes de continuar.');
+        const fechado = [...this.table('fin_periodos_contabeis').rows.values()].some((p) => Number(p.empresa_id) === empresaId &&
+          String(p.competencia).slice(0, 7) === mes && p.abrangencia === 'financeiro' && ['fechando', 'fechado'].includes(String(p.estado)));
+        if (fechado) throw new HttpError(409, 'Período financeiro fechado: reabra-o antes de alterar este movimento.', undefined, 'PERIODO_FECHADO');
+      }
+    }
+  }
+
   async insert(r: Resource, data: Payload): Promise<Row> {
     this.checkConstraints(r, data);
     const t = this.table(r.table);
@@ -462,6 +488,7 @@ export class MemStore implements Store {
       row.data = row.data || new Date().toISOString();
     }
     this.herdarEmpresa(r, row);
+    this.verificarPeriodoFinanceiro(r, row);
     t.rows.set(id, row);
     return { ...row };
   }
@@ -472,9 +499,12 @@ export class MemStore implements Store {
     if (!cur) return null;
     this.checkConstraints(r, data, id);
     const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
-    for (const [k, v] of Object.entries(data)) if (allowed.has(k) && k !== 'id') cur[k] = v;
-    if (r.fields.some((f) => f.name === 'atualizado_em')) cur.atualizado_em = new Date().toISOString();
-    this.herdarEmpresa(r, cur);
+    const next = { ...cur };
+    for (const [k, v] of Object.entries(data)) if (allowed.has(k) && k !== 'id') next[k] = v;
+    if (r.fields.some((f) => f.name === 'atualizado_em')) next.atualizado_em = new Date().toISOString();
+    this.herdarEmpresa(r, next);
+    this.verificarPeriodoFinanceiro(r, cur, next);
+    Object.assign(cur, next);
     return { ...cur };
   }
 
@@ -564,6 +594,7 @@ export class MemStore implements Store {
     const t = this.table(r.table);
     const row = t.rows.get(id);
     if (!row) return false;
+    this.verificarPeriodoFinanceiro(r, row);
     const empresaId = Number(row.empresa_id ?? EMPRESA_PADRAO);
     const relacoes = await this.dependenciasDe(r, id, empresaId);
     const bloqueantes = relacoes.filter((rel) => rel.quantidade > 0 && (rel.acao === 'NO_ACTION' || rel.acao === 'RESTRICT'));

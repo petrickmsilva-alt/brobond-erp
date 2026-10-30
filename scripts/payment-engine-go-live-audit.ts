@@ -93,7 +93,13 @@ probe(
     for (const t of ['payment_refunds', 'payment_disputes', 'payment_settlements'])
       assert.ok(sql.includes(`CREATE TABLE IF NOT EXISTS ${t}`));
     assert.ok(engine.includes('refundDelta'));
-    assert.ok(api.includes('reconciliation resolved'));
+    // Review can mark several outcomes, so the audit event is "reviewed",
+    // not a blanket claim that the financial reconciliation was resolved.
+    // An unresolved dispute cannot be cleared by a note and the write is CAS.
+    assert.ok(api.includes("'/reconciliation/:id/resolve'"));
+    assert.ok(api.includes('reconciliation reviewed'));
+    assert.match(api, /b\.status === 'RESOLVED' && old\.dispute_review_required === true/);
+    assert.ok(api.includes('tryUpdateIf'));
     assert.ok(read('modules/payments/application/payouts.ts').includes('export async function importPayout'));
     assert.ok(read('db/migrations/0073_payment_payouts.sql').includes('payment_payout_bank_once_uq'));
   },

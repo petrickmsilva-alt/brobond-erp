@@ -380,13 +380,14 @@ paymentsRouter.post(
       const old = await getStore().findOneWhere(R_SETTLEMENTS, { empresa_id: empresaId, id }, tx);
       if (!old) throw new HttpError(404, 'Liquidação não encontrada.');
       if (b.status === 'MATCHED') throw new HttpError(409, 'Conciliação MATCHED exige vínculo do repasse ao extrato bancário.');
-      await getStore().update(
-        R_SETTLEMENTS,
-        id,
-        { status: b.status, evidence: { ...old.evidence, note: b.note, actor: currentUser(req).id }, updated_at: new Date().toISOString() },
-        tx
+      if (b.status === 'RESOLVED' && old.dispute_review_required === true)
+        throw new HttpError(409, 'Disputa financeira pendente não pode ser encerrada por uma nota; exige revisão comprovada.');
+      const changed = await getStore().tryUpdateIf(
+        R_SETTLEMENTS, id, { empresa_id: empresaId, status: old.status, dispute_review_required: old.dispute_review_required ?? null },
+        { status: b.status, evidence: { ...old.evidence, note: b.note, actor: currentUser(req).id }, updated_at: new Date().toISOString() }, tx
       );
-      await audit(req, 'reconciliation resolved', id, tx);
+      if (!changed) throw new HttpError(409, 'Liquidação mudou durante a revisão; atualize e tente novamente.');
+      await audit(req, 'reconciliation reviewed', id, tx);
     });
     res.json({ ok: true });
   })

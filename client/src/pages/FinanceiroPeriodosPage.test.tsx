@@ -12,11 +12,11 @@ function page(path: string) { return render(<MemoryRouter initialEntries={[path]
 </Routes></MemoryRouter>); }
 describe('Períodos da escrituração — rotas próprias', () => {
   beforeEach(() => { vi.mocked(api.get).mockReset(); vi.mocked(api.post).mockReset(); });
-  it('lista dados reais e explica o alcance limitado do fechamento', async () => {
+  it('lista dados reais e explica o alcance e o limite fiscal', async () => {
     vi.mocked(api.get).mockResolvedValue({ rows: [{ id: 1, competencia: '2028-05-01', estado: 'fechado', motivo: 'Conferido' }], pageSize: 30, total: 1 });
     page('/financeiro/periodos');
     expect(await screen.findByRole('link', { name: '2028-05' })).toHaveAttribute('href', '/financeiro/periodos/2028-05');
-    expect(screen.getByText(/Controla somente a importação/)).toBeInTheDocument();
+    expect(screen.getByText(/não substitui o fechamento fiscal/i)).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
   it('envia fechamento com competência e motivo à API', async () => {
@@ -24,8 +24,8 @@ describe('Períodos da escrituração — rotas próprias', () => {
     page('/financeiro/periodos/novo');
     fireEvent.change(screen.getByLabelText('Competência'), { target: { value: '2028-05' } });
     fireEvent.change(screen.getByLabelText('Motivo da ação'), { target: { value: 'Fechamento validado' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Fechar escrituração' }));
-    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/financeiro/periodos/2028-05/fechar', { motivo: 'Fechamento validado' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Fechar período' }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/financeiro/periodos/2028-05/fechar', { motivo: 'Fechamento validado', abrangencia: 'financeiro' }));
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

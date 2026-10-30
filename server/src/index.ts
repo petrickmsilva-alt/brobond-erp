@@ -380,7 +380,7 @@ import {
   negociosVendaManual,
 } from './negocios';
 import { initWebSocket, wsStatus } from './websocket';
-import { concederEmpresa, empresaAtiva, listarEmpresasDoUsuario, revogarEmpresa, trocarEmpresaAtiva } from './empresasApi';
+import { concederEmpresa, configurarAlcadaCompra, empresaAtiva, listarEmpresasDoUsuario, revogarEmpresa, trocarEmpresaAtiva } from './empresasApi';
 import { createServer } from 'node:http';
 
 assertProductionSecrets();
@@ -1138,6 +1138,7 @@ app.post('/api/empresas/ativa', wrap(trocarEmpresaAtiva));
 app.get('/api/usuarios/:id/empresas', wrap(listarEmpresasDoUsuario));
 app.post('/api/usuarios/:id/empresas', wrap(concederEmpresa));
 app.delete('/api/usuarios/:id/empresas/:empresaId', wrap(revogarEmpresa));
+app.put('/api/usuarios/:id/empresas/:empresaId/alcada-compra', wrap(configurarAlcadaCompra));
 
 // Conectores oficiais (Mercado Livre, Mercado Pago, Nuvemshop)
 app.use('/api/connectors', connectorsRouter);

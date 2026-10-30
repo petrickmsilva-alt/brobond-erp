@@ -265,3 +265,25 @@ describe('OrderPage — formação profissional do preço', () => {
     );
   });
 });
+
+describe('OrderPage — aprovação de compra', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiGet.mockImplementation(((path: string) => {
+      if (path === '/compras/7') return Promise.resolve({ id: 7, status: 'pendente', data: '2026-10-22', frete: 0, total: 10 });
+      if (path === '/compras/7/itens') return Promise.resolve([{ id: 20, insumo_id: 3, quantidade: 1, preco_unitario: 10 }]);
+      if (path.endsWith('/options')) return Promise.resolve([]);
+      return Promise.reject(new Error(`rota não mockada: ${path}`));
+    }) as never);
+    apiPost.mockResolvedValue({});
+  });
+  it('aprova pela rota específica e não oferece recebimento antes da aprovação', async () => {
+    render(<ToastProvider><OrderPage tipo="compra" /></ToastProvider>);
+    const botao = await screen.findByRole('button', { name: 'Aprovar compra' });
+    expect(screen.queryByRole('button', { name: 'Receber compra' })).toBeNull();
+    expect(screen.getByText(/alçada configurada para esta empresa/i)).toBeInTheDocument();
+    fireEvent.click(botao);
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/compras/7/aprovar', {}));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});

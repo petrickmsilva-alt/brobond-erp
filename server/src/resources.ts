@@ -684,6 +684,7 @@ export const RESOURCES: Record<string, Resource> = {
     fields: [
       { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios', required: true },
       { name: 'empresa_id', label: 'Empresa', type: 'ref', ref: 'empresas', required: true },
+      { name: 'limite_aprovacao_compra', label: 'Alçada de compra', type: 'money', min: 0, list: false },
       ...auditFields,
     ],
     orderBy: { field: 'id', dir: 'asc' },
@@ -1812,6 +1813,7 @@ export const RESOURCES: Record<string, Resource> = {
     fields: [
       { name: 'competencia', label: 'Competência', type: 'date', readonly: true },
       { name: 'estado', label: 'Estado', type: 'text', readonly: true },
+      { name: 'abrangencia', label: 'Abrangência', type: 'text', readonly: true, default: 'escrituracao' },
       { name: 'motivo', label: 'Motivo', type: 'text', readonly: true },
       { name: 'alterado_por', label: 'Responsável', type: 'integer', readonly: true },
       ...auditFields,

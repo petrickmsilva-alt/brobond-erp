@@ -33,7 +33,7 @@ test('PG contábil: importações concorrentes idempotentes, período fechado e 
   const runs = await Promise.all(Array.from({ length: 4 }, async () => { const r = res(); await confirmarImportacaoContabil(req(lote), r.out); return r.get(); }));
   assert.equal(runs.filter((x) => x.status === 201).length, 1);
   assert.equal(new Set(runs.map((x) => x.body.importacao_id)).size, 1);
-  await alterarPeriodo(req({ motivo: 'Fechamento de teste' }, { competencia: '2034-05', acao: 'fechar' }), res().out);
+  await alterarPeriodo(req({ motivo: 'Fechamento contábil de teste', abrangencia: 'escrituracao' }, { competencia: '2034-05', acao: 'fechar' }), res().out);
   const replay = res(); await confirmarImportacaoContabil(req(lote), replay.out); assert.equal(replay.get().body.idempotente, true);
   await assert.rejects(() => confirmarImportacaoContabil(req({ ...lote, entradas: [{ ...lote.entradas[0], historico: 'outro' }] }), res().out), (e: any) => e.status === 409);
 });

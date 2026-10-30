@@ -156,7 +156,7 @@ export const mercadopagoProvider: PaymentProvider = {
     return { provider_ref: String(p.id || providerRef), status: mpMapeiaStatus(String(p.status || '')), bruto: p };
   },
   async cancelaCobranca(ctx: GatewayContext, providerRef: string): Promise<{ status: string }> {
-    await mpFetch(
+    const result = await mpFetch(
       `/v1/payments/${encodeURIComponent(providerRef)}`,
       {
         method: 'PUT',
@@ -165,6 +165,8 @@ export const mercadopagoProvider: PaymentProvider = {
       },
       ctx
     );
+    if (String(result.id || '') !== providerRef || result.status !== 'cancelled')
+      throw new HttpError(409, 'Cancelamento sem confirmação verificável do provider.');
     return { status: 'cancelada' };
   },
   async estornaCobranca(ctx: GatewayContext, providerRef: string, valor?: number): Promise<{ status: string; bruto: Record<string, unknown> }> {

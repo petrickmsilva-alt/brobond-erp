@@ -76,7 +76,7 @@ async function cenario(tag: string) {
 
 async function novaCompra(
   ctx: Ctx,
-  opts: { qtd: number; preco: number; frete?: number; fin?: Record<string, unknown> }
+  opts: { qtd: number; preco: number; frete?: number; fin?: Record<string, unknown>; aprovar?: boolean }
 ) {
   const total = opts.qtd * opts.preco + (opts.frete ?? 0);
   const compra = await ctx.s.insert(ctx.RESOURCES.compras, {
@@ -96,6 +96,8 @@ async function novaCompra(
     quantidade_recebida: 0,
     preco_unitario: opts.preco,
   });
+  const { reqDe, resFake } = await import('./_p1util');
+  if (opts.aprovar !== false) await ctx.compras.aprovarCompra(reqDe({}, { params: { id: compra.id }, user: ctx.actor as any }), resFake().res);
   return { compraId: Number(compra.id), itemId: Number(item.id), total };
 }
 
@@ -205,6 +207,8 @@ test('pg E3.2: compra de valor zero não gera parcela de R$ 0,00', { skip }, asy
     quantidade_recebida: 0,
     preco_unitario: 0,
   });
+  const { reqDe, resFake } = await import('./_p1util');
+  await ctx.compras.aprovarCompra(reqDe({}, { params: { id: compra.id }, user: ctx.actor as any }), resFake().res);
   const r = await receber(ctx, Number(compra.id), Number(item.id), 5);
   assert.equal(r.status, 201, `receber compra de valor zero falhou: ${JSON.stringify(r.body)}`);
   assert.equal((await parcelasDaCompra(Number(compra.id))).length, 0);
@@ -273,6 +277,7 @@ test('pg E3.2 E2E: fornecedor → compra → recebimento → estoque → custo �
     qtd: 100,
     preco: 50,
     frete: 400,
+    aprovar: false,
     fin: { condicao_pagamento: '28 dias', fin_parcelas: 2, fin_vencimento: '2026-11-09', fin_forma_pagamento: 'boleto', fin_conta_id: null },
   });
 
@@ -281,6 +286,8 @@ test('pg E3.2 E2E: fornecedor → compra → recebimento → estoque → custo �
   assert.equal(compra!.status, 'pendente');
   assert.equal(Number(compra!.empresa_id), ctx.empresaId);
   assert.ok(Number(compra!.fornecedor_id) > 0, 'a compra precisa ter FK de fornecedor, não só o nome');
+  const { reqDe, resFake } = await import('./_p1util');
+  await ctx.compras.aprovarCompra(reqDe({}, { params: { id: compraId }, user: ctx.actor as any }), resFake().res);
 
   // 2) recebimento parcial
   const r1 = await receber(ctx, compraId, itemId, 40);

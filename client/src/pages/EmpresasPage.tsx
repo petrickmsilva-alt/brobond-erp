@@ -38,7 +38,7 @@ type Empresa = {
 };
 
 type Usuario = { id: number; nome: string; email: string; perfil: string; ativo?: boolean | null };
-type Acesso = { id: number; nome?: string | null };
+type Acesso = { id: number; nome?: string | null; limite_aprovacao_compra?: number | string | null };
 
 export default function EmpresasPage() {
   const navigate = useNavigate();
@@ -55,6 +55,7 @@ export default function EmpresasPage() {
   const [acessosDe, setAcessosDe] = useState<Empresa | null>(null);
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
   const [acessos, setAcessos] = useState<Record<number, number[]>>({});
+  const [alcadas, setAlcadas] = useState<Record<number, string>>({});
   const [ocupadoAcesso, setOcupadoAcesso] = useState<number | null>(null);
   const [carregandoAcessos, setCarregandoAcessos] = useState(false);
 
@@ -115,12 +116,14 @@ export default function EmpresasPage() {
     setAcessosDe(e);
     setCarregandoAcessos(true);
     setAcessos({});
+    setAlcadas({});
     try {
       const d = await api.get<ListResult<Usuario>>('/usuarios?page=1&pageSize=100&sort=nome&dir=asc');
       setUsuarios(d.rows);
       // Uma consulta por usuário (o endpoint de concessões é por usuário). Em
       // lote para não abrir 100 conexões de uma vez.
       const mapa: Record<number, number[]> = {};
+      const limites: Record<number, string> = {};
       const lote = 8;
       for (let i = 0; i < d.rows.length; i += lote) {
         const fatia = d.rows.slice(i, i + lote);
@@ -128,15 +131,17 @@ export default function EmpresasPage() {
           fatia.map(async (u) => {
             try {
               const r = await api.get<{ empresas: Acesso[] }>(`/usuarios/${u.id}/empresas`);
-              return [u.id, (r.empresas || []).map((x) => Number(x.id))] as const;
+              const vinculo = (r.empresas || []).find((x) => Number(x.id) === Number(e.id));
+              return [u.id, (r.empresas || []).map((x) => Number(x.id)), vinculo?.limite_aprovacao_compra == null ? '' : String(vinculo.limite_aprovacao_compra)] as const;
             } catch {
-              return [u.id, [] as number[]] as const;
+              return [u.id, [] as number[], ''] as const;
             }
           })
         );
-        for (const [id, ids] of respostas) mapa[id] = ids;
+        for (const [id, ids, limite] of respostas) { mapa[id] = ids; limites[id] = limite; }
       }
       setAcessos(mapa);
+      setAlcadas(limites);
     } catch (e2) {
       toast.error(e2 instanceof ApiError ? e2.message : 'Não foi possível carregar os usuários.');
     } finally {
@@ -156,6 +161,21 @@ export default function EmpresasPage() {
     } finally {
       setOcupadoAcesso(null);
     }
+  };
+
+  const salvarAlcada = async (usuarioId: number) => {
+    if (!acessosDe) return;
+    const texto = (alcadas[usuarioId] || '').trim().replace(',', '.');
+    const limite = texto === '' ? null : Number(texto);
+    if (limite !== null && (!Number.isFinite(limite) || limite < 0 || Math.abs(limite * 100 - Math.round(limite * 100)) > 1e-5)) {
+      toast.error('Informe uma alçada não negativa com até dois decimais, ou deixe vazia.'); return;
+    }
+    setOcupadoAcesso(usuarioId);
+    try {
+      await api.put(`/usuarios/${usuarioId}/empresas/${acessosDe.id}/alcada-compra`, { limite_aprovacao_compra: limite });
+      toast.success('Alçada de compra atualizada.');
+    } catch (e) { toast.error(e instanceof ApiError ? e.message : 'Não foi possível salvar a alçada.'); }
+    finally { setOcupadoAcesso(null); }
   };
 
   const revogar = async (usuarioId: number) => {
@@ -307,6 +327,7 @@ export default function EmpresasPage() {
                   <th>Usuário</th>
                   <th>Perfil</th>
                   <th>Acesso</th>
+                  <th>Alçada de compra (R$)</th>
                   <th />
                 </tr>
               </thead>
@@ -323,6 +344,15 @@ export default function EmpresasPage() {
                         <Badge tone={u.perfil === 'admin' ? 'blue' : u.perfil === 'gerente' ? 'amber' : 'slate'}>{u.perfil}</Badge>
                       </td>
                       <td>{tem ? <Badge tone="green">com acesso</Badge> : <span className="text-xs text-slate-400">sem acesso</span>}</td>
+                      <td>
+                        {tem && u.perfil === 'gerente' ? (
+                          <div className="flex flex-wrap gap-2">
+                            <input className="input w-32" aria-label={`Alçada de compra de ${u.nome}`} inputMode="decimal"
+                              placeholder="Não configurada" value={alcadas[u.id] ?? ''} onChange={(e) => setAlcadas((a) => ({ ...a, [u.id]: e.target.value }))} />
+                            <button className="btn-secondary" disabled={ocupadoAcesso === u.id} onClick={() => void salvarAlcada(u.id)}>Salvar alçada</button>
+                          </div>
+                        ) : <span className="text-xs text-slate-500">{u.perfil === 'admin' && tem ? 'Administrador' : '—'}</span>}
+                      </td>
                       <td className="text-right">
                         <button
                           className={tem ? 'btn-secondary' : 'btn-primary'}

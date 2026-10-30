@@ -22,7 +22,9 @@ delete process.env.DATABASE_URL;
 const { RESOURCES } = await import('../src/resources');
 const { createRecord, listRecords, getStore, lancarMovimentacaoInsumoDaOrdem } = await import('../src/services');
 const { capacidadeProducao, mrpProducao } = await import('../src/producaoCapacidade');
-const { criarAtor, garantirAdmin } = await import('./_p1util');
+const { criarAtor, garantirAdmin, reqDe, chamar: chamarFluxo } = await import('./_p1util');
+const { aprovarCompra } = await import('../src/compras');
+async function aprovarPedido(id: number) { await chamarFluxo(aprovarCompra, reqDe({}, { params: { id }, user: admin })); }
 
 await garantirAdmin();
 const admin = { id: 1, name: 'Admin', perfil: 'admin' as const };
@@ -152,8 +154,9 @@ test('F) compra em aberto cobre a necessidade sem dar entrada no estoque', async
 
   // compra aprovada de 6 m (não recebida) reduz a falta para 4
   const fornecedor = await createRecord(RESOURCES.fornecedores, { nome: `Forn Cobertura ${unico()}`, pessoa: 'pj', indicador_ie: '1', prazo_entrega_dias: 0 }, admin);
-  const compra = await createRecord(RESOURCES.compras, { fornecedor_id: Number(fornecedor.id), data: '2026-08-01', status: 'aprovado', total: 30 }, admin);
+  const compra = await createRecord(RESOURCES.compras, { fornecedor_id: Number(fornecedor.id), data: '2026-08-01', total: 30 }, admin);
   await createRecord(RESOURCES.itens_compra, { compra_id: Number(compra.id), insumo_id: Number(insumo.id), quantidade: 6, preco_unitario: 5 }, admin);
+  await aprovarPedido(Number(compra.id));
 
   const depois = await chamar(mrpProducao, { actor: gerente });
   const ins = depois.insumos.find((i: any) => i.insumo_id === Number(insumo.id));
@@ -254,12 +257,14 @@ test('L) compra aberta entra por (pedido − recebido): recebido já está no sa
   await createRecord(RESOURCES.itens_ficha_tecnica, { ficha_id: Number(ficha.id), insumo_id: Number(insumo.id), consumo: 1, perda_pct: 0 }, admin);
   const venda = await createRecord(RESOURCES.vendas, { cliente_id: clienteId, status: 'aberta', data: '2026-09-03', total: 100 }, admin);
   await createRecord(RESOURCES.itens_venda, { venda_id: Number(venda.id), produto_id: produto, tamanho_id: Number(tamanho.id), quantidade: 10, preco_unitario: 10 }, admin);
-  const compra = await createRecord(RESOURCES.compras, { fornecedor_id: 1, status: 'parcial', data: '2026-09-01' }, admin);
+  const compra = await createRecord(RESOURCES.compras, { fornecedor_id: 1, status: 'pendente', data: '2026-09-01' }, admin);
   // 10 pedidas, 4 já recebidas (e já refletidas no saldo) → só 6 estão a caminho.
   await createRecord(RESOURCES.itens_compra, { compra_id: Number(compra.id), insumo_id: Number(insumo.id), quantidade: 10, preco_unitario: 2 }, admin);
   const itemCompra = (await listRecords(RESOURCES.itens_compra, { page: 1, pageSize: 5, filter: { compra_id: Number(compra.id) } }, { kind: 'empresa', empresaId: 1 } as any)).rows[0];
   // 4 já recebidas (readonly na API; o recebimento é quem escreve).
+  await aprovarPedido(Number(compra.id));
   await getStore().update(RESOURCES.itens_compra, Number(itemCompra.id), { quantidade_recebida: 4 });
+  await getStore().update(RESOURCES.compras, Number(compra.id), { status: 'parcial' });
 
   const out = await chamar(mrpProducao, { actor: gerente });
   const ins = out.insumos.find((i: any) => i.insumo_id === Number(insumo.id));
@@ -368,10 +373,12 @@ test('O) MRP agregado: reconcilia demanda, reserva, OP, consumo, compra no horiz
   ));
 
   const supplier = await createRecord(RESOURCES.fornecedores, { nome: `Fornecedor lead ${unico()}`, pessoa: 'pj', indicador_ie: '1', prazo_entrega_dias: 2 }, admin);
-  const inHorizon = await createRecord(RESOURCES.compras, { fornecedor_id: Number(supplier.id), data: de, status: 'aprovado', total: 10 }, admin);
+  const inHorizon = await createRecord(RESOURCES.compras, { fornecedor_id: Number(supplier.id), data: de, total: 10 }, admin);
   await createRecord(RESOURCES.itens_compra, { compra_id: Number(inHorizon.id), insumo_id: Number(raw.id), quantidade: 5, preco_unitario: 2 }, admin);
-  const late = await createRecord(RESOURCES.compras, { fornecedor_id: Number(supplier.id), data: ate, status: 'aprovado', total: 40 }, admin);
+  await aprovarPedido(Number(inHorizon.id));
+  const late = await createRecord(RESOURCES.compras, { fornecedor_id: Number(supplier.id), data: ate, total: 40 }, admin);
   await createRecord(RESOURCES.itens_compra, { compra_id: Number(late.id), insumo_id: Number(raw.id), quantidade: 20, preco_unitario: 2 }, admin);
+  await aprovarPedido(Number(late.id));
 
   // OP fora do horizonte deve continuar listada, mas sua BOM não entra neste plano.
   const outsideProduct = await novoProduto(`Agregado fora horizonte ${unico()}`);
@@ -449,8 +456,9 @@ test('Q) consumo de uma OP não cobre outra; compra sem prazo não é entrega in
   await createRecord(RESOURCES.movimentacoes_insumos, { tipo: 'entrada', insumo_id: Number(raw.id), quantidade: 10, custo_unitario: 1, motivo: 'Estoque de cenário' }, admin);
   await getStore().transaction((tx: any) => lancarMovimentacaoInsumoDaOrdem({ tipo: 'saida', insumo_id: Number(raw.id), quantidade: 10, custo_unitario: 1, ordem_id: Number(opA.id), motivo: 'Consumo excedente da OP A' }, admin as any, tx, { kind: 'empresa', empresaId: 1 } as any));
   const supplier = await createRecord(RESOURCES.fornecedores, { nome: `Sem prazo ${unico()}`, pessoa: 'pj', indicador_ie: '1' }, admin);
-  const purchase = await createRecord(RESOURCES.compras, { fornecedor_id: Number(supplier.id), status: 'aprovado', data: '2030-01-01' }, admin);
+  const purchase = await createRecord(RESOURCES.compras, { fornecedor_id: Number(supplier.id), status: 'pendente', data: '2030-01-01' }, admin);
   await createRecord(RESOURCES.itens_compra, { compra_id: Number(purchase.id), insumo_id: Number(raw.id), quantidade: 8, preco_unitario: 1 }, admin);
+  await aprovarPedido(Number(purchase.id));
   const out = await chamar(mrpProducao, { actor: gerente, query: { de: '2030-01-01', ate: '2030-01-31' } });
   const line = out.insumos.find((x: any) => x.insumo_id === Number(raw.id));
   assert.equal(line.necessaria, 11); assert.equal(line.consumo_real, 10); assert.equal(line.consumo_aplicado, 1);

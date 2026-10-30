@@ -386,6 +386,8 @@ check('E3: /cotacoes_compra sem token → 401', cotSemAuth.status === 401, `stat
   const item = await req('POST', `/compras/${compraId}/itens`, { insumo_id: insumoId, quantidade: 100, preco_unitario: 50 });
   const itemId = item.json?.id;
   check('E3.1: item adicionado', item.status === 201 && Boolean(itemId), `status ${item.status} ${msg(item.json)}`);
+  const aprovacao = await req('POST', `/compras/${compraId}/aprovar`, {});
+  check('E3.1: pedido aprovado antes do recebimento', aprovacao.status === 200 && aprovacao.json?.status === 'aprovado', `status ${aprovacao.status} ${msg(aprovacao.json)}`);
 
   const r1 = await req('POST', `/compras/${compraId}/receber`, { itens: [{ item_compra_id: itemId, quantidade: 40 }] });
   const custos1 = r1.json?.custos?.[0];
@@ -451,6 +453,8 @@ await (async () => {
   // Antes de receber não existe obrigação financeira.
   const antes = await req('GET', `/lancamentos_financeiros?f.referencia_tipo=compra&f.referencia_id=${compraId}&pageSize=50`);
   check('E3.2: compra pendente não gera conta a pagar', (antes.json?.rows || []).length === 0, `parcelas=${(antes.json?.rows || []).length}`);
+  const aprovacao = await req('POST', `/compras/${compraId}/aprovar`, {});
+  check('E3.2: pedido aprovado antes do recebimento', aprovacao.status === 200 && aprovacao.json?.status === 'aprovado', `status ${aprovacao.status} ${msg(aprovacao.json)}`);
 
   // Prévia: calcula sem gravar.
   const previa = await req('POST', `/compras/${compraId}/receber`, { previsao: true, itens: [{ item_compra_id: itemId, quantidade: 40 }] });

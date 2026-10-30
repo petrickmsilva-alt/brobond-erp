@@ -110,6 +110,11 @@ export const R_GATEWAY_COBRANCAS: Resource = {
     { name: 'observacoes', label: 'Observações', type: 'text' },
     { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true },
     { name: 'atualizado_em', label: 'Atualizado em', type: 'datetime', readonly: true },
+    { name: 'criacao_operacao_estado', label: 'Estado da criação', type: 'text', readonly: true },
+    { name: 'criacao_operacao_hash', label: 'Hash da criação', type: 'text', readonly: true },
+    { name: 'cancelamento_operacao_estado', label: 'Estado do cancelamento', type: 'text', readonly: true },
+    { name: 'estorno_operacao_estado', label: 'Estado da operação de estorno', type: 'text', readonly: true },
+    { name: 'estorno_operacao_em', label: 'Operação de estorno em', type: 'datetime', readonly: true },
   ],
 };
 
@@ -538,89 +543,100 @@ export async function criarCobrancaGateway(
   const parcelas = metodo === 'cartao_credito' ? Math.max(1, Math.trunc(params.parcelas ?? 1)) : 1;
   const idempotencyKey = params.idempotencyKey.slice(0, 120);
 
-  const existente = await s.findOneWhere(R_GATEWAY_COBRANCAS, {
-    empresa_id: escopo.empresaId,
-    provider: providerId,
-    idempotency_key: idempotencyKey,
-  });
-  if (existente && String(existente.status) !== 'falhou') {
-    return { cobranca: existente, resultado: null, idempotente: true };
-  }
-
+  // Configuration errors happen before reserving an external effect.
   const ctx = await contextoDoProvider(escopo.empresaId, providerId);
   const input: CobrancaInput = {
-    valor,
-    metodo,
-    descricao: params.descricao
-      ? String(params.descricao).slice(0, 200)
-      : lancamento
-        ? String(lancamento.descricao)
-        : venda
-          ? `Venda #${venda.id}`
-          : 'Cobrança',
-    vencimento: params.vencimento
-      ? String(params.vencimento).slice(0, 10)
-      : lancamento?.vencimento
-        ? diaISO(lancamento.vencimento)
-        : null,
-    expira_em: instanteIso(params.expiraEm),
-    parcelas,
+    valor, metodo,
+    descricao: params.descricao ? String(params.descricao).slice(0, 200) : lancamento ? String(lancamento.descricao) : venda ? `Venda #${venda.id}` : 'Cobrança',
+    vencimento: params.vencimento ? String(params.vencimento).slice(0, 10) : lancamento?.vencimento ? diaISO(lancamento.vencimento) : null,
+    expira_em: instanteIso(params.expiraEm), parcelas,
     payer_email: params.payerEmail ? String(params.payerEmail) : null,
     token: params.token ? String(params.token) : null,
     referencia: idempotencyKey,
   };
-
-  let resultado: CobrancaProviderResult;
-  try {
-    resultado = await provider.criaCobranca(ctx, input);
-  } catch (e) {
-    if (e instanceof HttpError) throw e;
-    throw new HttpError(502, `O gateway "${providerId}" falhou ao criar a cobrança.`);
-  }
-
-  const dados: Row = {
-    empresa_id: escopo.empresaId,
-    provider: providerId,
-    metodo,
+  // Apenas o digest é persistido. Nenhum token, e-mail, cartão ou conteúdo
+  // arbitrário do provider é escrito na reserva ou na trilha de auditoria.
+  const requestHash = createHash('sha256').update(JSON.stringify({ provider: providerId, metodo, valor, taxaPct, parcelas,
     venda_id: venda ? Number(venda.id) : lancamento?.referencia_tipo === 'venda' ? Number(lancamento.referencia_id) : null,
-    lancamento_id: lancamento ? Number(lancamento.id) : null,
-    conta_id: params.contaId ?? null,
-    valor,
-    taxa_pct: taxaPct,
-    valor_liquido: calcularLiquido(valor, taxaPct),
-    parcelas,
-    status: resultado.status,
-    provider_ref: resultado.provider_ref,
-    idempotency_key: idempotencyKey,
-    expires_em: resultado.expires_em ?? null,
-    nosso_numero: resultado.nosso_numero ?? null,
-    linha_digitavel: resultado.linha_digitavel ?? null,
-    qr_code: resultado.qr_code ?? null,
-    copia_cola: resultado.copia_cola ?? null,
-    nsu: resultado.nsu ?? null,
-    payload: resultado.bruto ?? null,
-    observacoes: params.observacoes ? String(params.observacoes).slice(0, 500) : null,
-  };
-
-  let row: Row;
-  if (existente) {
-    row = (await s.update(R_GATEWAY_COBRANCAS, Number(existente.id), { ...dados, atualizado_em: new Date().toISOString() }))!;
-  } else {
-    row = await s.insert(R_GATEWAY_COBRANCAS, dados);
-  }
-  await s.audit({
-    usuario_id: params.actor.id,
-    usuario: params.actor.name,
-    acao: 'criar',
-    recurso: 'gateway_cobrancas',
-    registro_id: Number(row.id),
-    descricao: `Cobrança ${metodo} de ${valor.toFixed(2)} criada via ${providerId} (${resultado.provider_ref})`,
-    dados: { provider: providerId, metodo, valor, idempotency_key: idempotencyKey, lancamento_id: dados.lancamento_id, venda_id: dados.venda_id },
-    // row.empresa_id é a fonte (escopo passado pelo chamador); sem linha, o
-    // fallback nulo cai na empresa do registro — nunca em outra.
-    empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, row, null),
+    lancamento_id: lancamento ? Number(lancamento.id) : null, conta_id: params.contaId ?? null,
+    descricao: input.descricao, vencimento: input.vencimento, expira_em: input.expira_em, payer_email: input.payer_email, token: input.token,
+  })).digest('hex');
+  const { comTravaContabil } = await import('./financeiroPeriodos');
+  const { listarTodos } = await import('./paginacaoCompleta');
+  const reserva = await comTravaContabil(escopo.empresaId, async (tx) => {
+    const existente = await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: escopo.empresaId, provider: providerId, idempotency_key: idempotencyKey }, tx);
+    if (existente) {
+      const mesmaOperacao = existente.criacao_operacao_hash ? existente.criacao_operacao_hash === requestHash :
+        existente.metodo === metodo && round2(Number(existente.valor)) === round2(valor) && Number(existente.taxa_pct || 0) === taxaPct &&
+        Number(existente.parcelas || 1) === parcelas && Number(existente.lancamento_id || 0) === Number(lancamento?.id || 0) &&
+        Number(existente.venda_id || 0) === Number(venda?.id || (lancamento?.referencia_tipo === 'venda' ? lancamento.referencia_id : 0) || 0) &&
+        Number(existente.conta_id || 0) === Number(params.contaId || 0);
+      if (!mesmaOperacao) throw new HttpError(409, 'Chave de idempotência reutilizada com dados diferentes.');
+      if (['PROCESSING', 'UNCERTAIN', 'FAILED'].includes(String(existente.criacao_operacao_estado)) || !existente.provider_ref || existente.status === 'falhou')
+        throw new HttpError(409, 'Criação anterior sem confirmação conclusiva; concilie antes de tentar novamente.');
+      return { row: existente, fresh: false };
+    }
+    const titulo = lancamento ? await s.findOneWhere(getResourceLancamentos(), { empresa_id: escopo.empresaId, id: Number(lancamento.id) }, tx) : null;
+    if (lancamento && (!titulo || titulo.status !== 'pendente' || round2(Number(titulo.valor)) !== round2(valor)))
+      throw new HttpError(409, 'Título mudou antes da criação da cobrança. Atualize e revise.');
+    const vendaAtual = venda ? await s.findOneWhere(getResource('vendas')!, { empresa_id: escopo.empresaId, id: Number(venda.id) }, tx) : null;
+    if (venda && !vendaAtual) throw new HttpError(404, 'Venda não encontrada.');
+    const periodosFechados = (await listarTodos(getResource('fin_periodos_contabeis')!, { empresa_id: escopo.empresaId }, tx))
+      .filter((p) => p.abrangencia === 'financeiro' && ['fechando', 'fechado'].includes(String(p.estado)));
+    const datas = [new Date(), titulo?.data, titulo?.competencia, titulo?.data_baixa, vendaAtual?.data].filter(Boolean).map(diaISO);
+    if (datas.some((d) => !d)) throw new HttpError(409, 'Data financeira inválida; revise antes de criar a cobrança.');
+    if (periodosFechados.some((p) => datas.some((d) => d.slice(0, 7) === diaISO(p.competencia).slice(0, 7))))
+      throw new HttpError(409, 'Período financeiro fechado: reabra-o antes de criar a cobrança.', undefined, 'PERIODO_FECHADO');
+    const row = await s.insert(R_GATEWAY_COBRANCAS, {
+      empresa_id: escopo.empresaId, provider: providerId, metodo,
+      venda_id: venda ? Number(venda.id) : titulo?.referencia_tipo === 'venda' ? Number(titulo.referencia_id) : null,
+      lancamento_id: titulo ? Number(titulo.id) : null, conta_id: params.contaId ?? null, valor, taxa_pct: taxaPct,
+      valor_liquido: calcularLiquido(valor, taxaPct), parcelas, status: 'pendente', idempotency_key: idempotencyKey,
+      criacao_operacao_estado: 'PROCESSING', criacao_operacao_hash: requestHash,
+      observacoes: params.observacoes ? String(params.observacoes).slice(0, 500) : null,
+    }, tx);
+    await s.audit({ empresa_id: escopo.empresaId, usuario_id: params.actor.id, usuario: params.actor.name, acao: 'criar', recurso: 'gateway_cobrancas',
+      registro_id: Number(row.id), descricao: 'Criação de cobrança reservada', dados: { provider: providerId, metodo, valor, estado: 'PROCESSING' } }, tx);
+    return { row, fresh: true };
   });
-  return { cobranca: row, resultado, idempotente: false };
+  if (!reserva.fresh) return { cobranca: reserva.row, resultado: null, idempotente: true };
+
+  try {
+    // Nenhuma transação é mantida durante a rede. O estado PROCESSING impede
+    // fechamento/reenvio mesmo se o processo cair depois do efeito externo.
+    const resultado = await provider.criaCobranca(ctx, input);
+    if (!resultado.provider_ref || !['pendente', 'autorizada', 'paga', 'cancelada', 'falhou', 'expirada'].includes(String(resultado.status)))
+      throw new HttpError(409, 'Provider não retornou referência e estado verificáveis.');
+    const row = await comTravaContabil(escopo.empresaId, async (tx) => {
+      const current = await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: escopo.empresaId, id: Number(reserva.row.id) }, tx);
+      if (!current || current.criacao_operacao_estado !== 'PROCESSING' || current.criacao_operacao_hash !== requestHash)
+        throw new HttpError(409, 'Reserva de criação mudou; concilie antes de continuar.');
+      const updated = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(current.id),
+        { empresa_id: escopo.empresaId, criacao_operacao_estado: 'PROCESSING', criacao_operacao_hash: requestHash },
+        { status: resultado.status, provider_ref: resultado.provider_ref, expires_em: resultado.expires_em ?? null,
+          nosso_numero: resultado.nosso_numero ?? null, linha_digitavel: resultado.linha_digitavel ?? null,
+          qr_code: resultado.qr_code ?? null, copia_cola: resultado.copia_cola ?? null, nsu: resultado.nsu ?? null,
+          payload: null, criacao_operacao_estado: 'SUCCEEDED', atualizado_em: new Date().toISOString() }, tx);
+      if (!updated) throw new HttpError(409, 'Reserva de criação mudou; concilie antes de continuar.');
+      await s.audit({ empresa_id: escopo.empresaId, usuario_id: params.actor.id, usuario: params.actor.name, acao: 'editar', recurso: 'gateway_cobrancas',
+        registro_id: Number(updated.id), descricao: 'Criação de cobrança confirmada pelo provider', dados: { provider: providerId, metodo, valor, estado: 'SUCCEEDED' } }, tx);
+      return updated;
+    });
+    return { cobranca: row, resultado, idempotente: false };
+  } catch (erro) {
+    // Timeout, falha de rede ou crash não provam que o provider deixou de
+    // criar a cobrança. O replay jamais emite outra chamada às cegas.
+    await comTravaContabil(escopo.empresaId, async (tx) => {
+      const row = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(reserva.row.id),
+        { empresa_id: escopo.empresaId, criacao_operacao_estado: 'PROCESSING', criacao_operacao_hash: requestHash },
+        { criacao_operacao_estado: 'UNCERTAIN', atualizado_em: new Date().toISOString() }, tx);
+      if (row) await s.audit({ empresa_id: escopo.empresaId, usuario_id: params.actor.id, usuario: params.actor.name, acao: 'ajuste', recurso: 'gateway_cobrancas',
+        registro_id: Number(row.id), descricao: 'Criação de cobrança sem confirmação', dados: { provider: providerId, estado: 'UNCERTAIN' } }, tx);
+    }).catch(() => {}); // PROCESSING persistente continua bloqueando caso a própria gravação falhe.
+    if (erro instanceof HttpError && erro.status === 409) throw erro;
+    throw new HttpError(409, 'Criação sem confirmação do provider; concilie antes de tentar novamente.');
+  }
+
 }
 
 /** POST /api/financeiro/gateway/cobrancas — cria uma cobrança via gateway. */
@@ -712,26 +728,75 @@ export async function cancelarCobranca(req: Request, res: Response) {
   const { R_INTENTS } = await import('../../modules/payments/infrastructure/resources');
   const intent = await s.findOneWhere(R_INTENTS,{empresa_id:escopo.empresaId,cobranca_id:Number(row.id)});
   if(intent){const {paymentEngine}=await import('../../modules/payments/orchestration/payment-orchestrator');res.json(await paymentEngine.mutate(escopo.empresaId,Number(intent.id),'cancel',String(req.get('Idempotency-Key')||'')));return;}
-  if (!['pendente', 'autorizada'].includes(String(row.status))) {
+  if (row.status === 'cancelada' && row.cancelamento_operacao_estado === 'SUCCEEDED')
+    return res.json({ ok: true, idempotente: true, cobranca: publicaCobranca(row) });
+  if (!['pendente', 'autorizada'].includes(String(row.status)))
     throw new HttpError(409, `Cobrança "${row.status}" não pode ser cancelada (só pendente/autorizada).`);
-  }
   const ctx = await contextoDoProvider(escopo.empresaId, String(row.provider));
-  const provider = getProvider(String(row.provider))!;
-  await provider.cancelaCobranca(ctx, String(row.provider_ref));
-  const atualizada = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(row.id), { empresa_id: escopo.empresaId, status: row.status }, { status: 'cancelada', atualizado_em: new Date().toISOString() });
-  if (!atualizada) throw new HttpError(409, 'Cobrança mudou durante o cancelamento externo; concilie antes de continuar.');
-  await s.audit({
-    usuario_id: actor.id || null,
-    usuario: actor.name,
-    acao: 'editar',
-    recurso: 'gateway_cobrancas',
-    registro_id: Number(row.id),
-    descricao: `Cobrança #${row.id} cancelada no ${row.provider} (${row.provider_ref})`,
-    empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, row, actor),
-    dados: { status: 'cancelada' },
+  const provider = getProvider(String(row.provider));
+  if (!provider) throw new HttpError(409, 'Provider não registrado.');
+  const { comTravaContabil } = await import('./financeiroPeriodos');
+  const { listarTodos } = await import('./paginacaoCompleta');
+  const reserva = await comTravaContabil(escopo.empresaId, async (tx) => {
+    const current = await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: escopo.empresaId, id: Number(row.id) }, tx);
+    if (!current || !['pendente', 'autorizada'].includes(String(current.status)) || !current.provider_ref ||
+        ['PROCESSING', 'UNCERTAIN', 'FAILED'].includes(String(current.criacao_operacao_estado)))
+      throw new HttpError(409, 'Cobrança sem criação confirmada; concilie antes do cancelamento.');
+    if (current.cancelamento_operacao_estado === 'PROCESSING') throw new HttpError(409, 'Cancelamento em andamento.');
+    if (current.cancelamento_operacao_estado === 'SUCCEEDED') throw new HttpError(409, 'Cancelamento já concluído; atualize a cobrança.');
+    const fechados = (await listarTodos(getResource('fin_periodos_contabeis')!, { empresa_id: escopo.empresaId }, tx))
+      .filter((p) => p.abrangencia === 'financeiro' && ['fechando', 'fechado'].includes(String(p.estado)));
+    const titulo = current.lancamento_id ? await s.findOneWhere(getResourceLancamentos(), { empresa_id: escopo.empresaId, id: Number(current.lancamento_id) }, tx) : null;
+    if (fechados.length && !titulo) throw new HttpError(409, 'Cobrança sem data financeira comprovada; concilie antes do cancelamento.');
+    const datas = [new Date(), titulo?.data, titulo?.competencia, titulo?.data_baixa].filter(Boolean).map(diaISO);
+    if (datas.some((d) => !d) || fechados.some((p) => datas.some((d) => d.slice(0, 7) === diaISO(p.competencia).slice(0, 7))))
+      throw new HttpError(409, 'Período financeiro fechado: reabra-o antes do cancelamento.', undefined, 'PERIODO_FECHADO');
+    const apenasConsulta = current.cancelamento_operacao_estado === 'UNCERTAIN';
+    const reserved = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(current.id),
+      { empresa_id: escopo.empresaId, status: current.status, cancelamento_operacao_estado: current.cancelamento_operacao_estado ?? null },
+      { cancelamento_operacao_estado: 'PROCESSING', atualizado_em: new Date().toISOString() }, tx);
+    if (!reserved) throw new HttpError(409, 'Cobrança mudou durante a reserva de cancelamento.');
+    await s.audit({ empresa_id: escopo.empresaId, usuario_id: actor.id || null, usuario: actor.name, acao: 'ajuste', recurso: 'gateway_cobrancas',
+      registro_id: Number(current.id), descricao: apenasConsulta ? 'Reconciliação de cancelamento iniciada' : 'Cancelamento reservado',
+      dados: { estado: 'PROCESSING', apenas_consulta: apenasConsulta } }, tx);
+    return { status: current.status, referencia: String(current.provider_ref), apenasConsulta };
   });
+  let atualizada: Row;
+  try {
+    if (reserva.apenasConsulta) {
+      // Apenas a consulta autenticada de uma referência já conhecida pode
+      // confirmar um resultado anterior; nunca repetimos a escrita incerta.
+      if (provider.id !== 'mercadopago') throw new HttpError(409, 'Cancelamento incerto exige conciliação manual.');
+      const remote = await provider.consultaCobranca(ctx, reserva.referencia);
+      if (String(remote?.bruto?.id || '') !== reserva.referencia || remote?.bruto?.status !== 'cancelled')
+        throw new HttpError(409, 'Cancelamento anterior ainda não foi comprovado; concilie antes de continuar.');
+    } else {
+      const result = await provider.cancelaCobranca({ ...ctx, operationKey: `legacy-cancel:${escopo.empresaId}:${row.id}` }, reserva.referencia);
+      if (result.status !== 'cancelada') throw new HttpError(409, 'Provider não confirmou o cancelamento.');
+    }
+    atualizada = await comTravaContabil(escopo.empresaId, async (tx) => {
+      const result = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(row.id),
+        { empresa_id: escopo.empresaId, status: reserva.status, provider_ref: reserva.referencia, cancelamento_operacao_estado: 'PROCESSING' },
+        { status: 'cancelada', cancelamento_operacao_estado: 'SUCCEEDED', atualizado_em: new Date().toISOString() }, tx);
+      if (!result) throw new HttpError(409, 'Cobrança mudou durante o cancelamento; concilie antes de continuar.');
+      await s.audit({ empresa_id: escopo.empresaId, usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'gateway_cobrancas',
+        registro_id: Number(row.id), descricao: 'Cancelamento confirmado pelo provider', dados: { status: 'cancelada', estado: 'SUCCEEDED' } }, tx);
+      return result;
+    });
+  } catch (error) {
+    await comTravaContabil(escopo.empresaId, async (tx) => {
+      const result = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(row.id),
+        { empresa_id: escopo.empresaId, cancelamento_operacao_estado: 'PROCESSING' },
+        { cancelamento_operacao_estado: 'UNCERTAIN', atualizado_em: new Date().toISOString() }, tx);
+      if (result) await s.audit({ empresa_id: escopo.empresaId, usuario_id: actor.id || null, usuario: actor.name, acao: 'ajuste', recurso: 'gateway_cobrancas',
+        registro_id: Number(row.id), descricao: 'Cancelamento sem confirmação', dados: { estado: 'UNCERTAIN' } }, tx);
+    }).catch(() => {});
+    if (error instanceof HttpError && error.status === 409) throw error;
+    throw new HttpError(409, 'Cancelamento sem confirmação do provider; concilie antes de tentar novamente.');
+  }
   await notificarCobrancaAlterada({ cobrancaId: Number(row.id), empresaId: Number(row.empresa_id), intencao: 'cancelada' });
   res.json({ ok: true, cobranca: publicaCobranca(atualizada) });
+
 }
 
 /** Called only after an authoritative provider response proved a full refund. */
@@ -785,30 +850,81 @@ export async function estornarCobranca(req: Request, res: Response) {
     if (bruto.status === 'approved' && devolvido === 0) return 'paga';
     throw new HttpError(409, 'Estorno legado parcial, pendente ou contestado exige conciliação manual.');
   };
-  if (testeMock) await provider.estornaCobranca(legacyCtx, String(row.provider_ref), Number(row.valor));
-  else if (await verificar() === 'paga') {
-    await provider.estornaCobranca(legacyCtx, String(row.provider_ref), Number(row.valor));
-    if (await verificar() !== 'estornada')
-      throw new HttpError(409, 'Estorno enviado, mas ainda sem confirmação integral; concilie antes de repetir.');
-  }
+  // A reserva é gravada ANTES de qualquer escrita externa e compartilha a
+  // trava do fechamento. O fechamento não pode passar enquanto o provedor ou
+  // a projeção local estiverem em andamento/incertos.
+  const { comTravaContabil } = await import('./financeiroPeriodos');
+  const { listarTodos } = await import('./paginacaoCompleta');
+  const reserva = await comTravaContabil(escopo.empresaId, async (tx) => {
+    const atual = await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: escopo.empresaId, id: Number(row.id) }, tx);
+    if (!atual || atual.status !== 'paga') throw new HttpError(409, 'A cobrança mudou durante o estorno.');
+    if (atual.estorno_operacao_estado === 'PROCESSING') throw new HttpError(409, 'Estorno em andamento; aguarde a conciliação.');
+    if (atual.estorno_operacao_estado === 'SUCCEEDED') throw new HttpError(409, 'Estorno já concluído; atualize a cobrança.');
+    const fechado = (await listarTodos(getResource('fin_periodos_contabeis')!, { empresa_id: escopo.empresaId }, tx))
+      .filter((p) => p.abrangencia === 'financeiro' && ['fechando', 'fechado'].includes(String(p.estado)));
+    const titulo = atual.lancamento_id ? await s.findOneWhere(getResourceLancamentos(), { empresa_id: escopo.empresaId, id: Number(atual.lancamento_id) }, tx) : null;
+    const mes = (v: unknown) => v instanceof Date ? v.toISOString().slice(0, 7) : String(v ?? '').slice(0, 7);
+    if (fechado.length && (!titulo || !titulo.data_baixa))
+      throw new HttpError(409, 'A cobrança legada não possui baixa datada comprovada; reabra o período ou concilie manualmente.');
+    if (titulo && fechado.some((p) => [titulo.data, titulo.competencia, titulo.data_baixa].filter(Boolean).some((d) => mes(d) === mes(p.competencia))))
+      throw new HttpError(409, 'Período financeiro fechado: reabra-o antes do estorno.', undefined, 'PERIODO_FECHADO');
+    const apenasConsulta = atual.estorno_operacao_estado === 'UNCERTAIN';
+    const reservado = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(atual.id),
+      { empresa_id: escopo.empresaId, status: 'paga', estorno_operacao_estado: atual.estorno_operacao_estado ?? null },
+      { estorno_operacao_estado: 'PROCESSING', estorno_operacao_em: new Date().toISOString() }, tx);
+    if (!reservado) throw new HttpError(409, 'Estorno mudou durante a reserva; atualize e tente novamente.');
+    await s.audit({ empresa_id: escopo.empresaId, usuario_id: actor.id || null, usuario: actor.name, acao: 'ajuste', recurso: 'gateway_cobrancas', registro_id: Number(atual.id),
+      descricao: apenasConsulta ? 'Reconciliação de estorno legado iniciada' : 'Estorno legado reservado', dados: { estado: 'PROCESSING', apenas_consulta: apenasConsulta } }, tx);
+    return { apenasConsulta, lancamentoId: atual.lancamento_id, referencia: atual.provider_ref };
+  });
+  let efeitoExternoPossivel = reserva.apenasConsulta;
+  let resultado: { atualizada: Row; estornoLancamentoId: number | null };
+  try {
+    if (testeMock) {
+      if (reserva.apenasConsulta) throw new HttpError(409, 'Estorno legado incerto exige conciliação manual.');
+      efeitoExternoPossivel = true;
+      await provider.estornaCobranca(legacyCtx, String(row.provider_ref), Number(row.valor));
+    } else if (await verificar() === 'paga') {
+      if (reserva.apenasConsulta) throw new HttpError(409, 'Estorno anterior ainda incerto; concilie antes de qualquer reenvio.');
+      efeitoExternoPossivel = true; // marcar antes da chamada: timeout não prova falha
+      await provider.estornaCobranca(legacyCtx, String(row.provider_ref), Number(row.valor));
+      if (await verificar() !== 'estornada') throw new HttpError(409, 'Estorno enviado, mas ainda sem confirmação integral; concilie antes de repetir.');
+    } else {
+      efeitoExternoPossivel = true; // o provider já confirmou um estorno anterior
+    }
 
-  const resultado = await s.transaction(async (tx) => {
-    const atualizada = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(row.id), { status: 'paga' }, { status: 'estornada', atualizado_em: new Date().toISOString() }, tx);
-    if (!atualizada) throw new HttpError(409, 'A cobrança mudou durante o estorno.');
-    const estornoLancamentoId = await reverterFinanceiroDaCobranca(row, round2(valor ?? Number(row.valor)), { id: actor.id || null, name: actor.name }, tx);
-    if (provider.id === 'mercadopago') await resolverRevisaoLegadaComprovada(atualizada, tx);
-    await s.audit({
-      usuario_id: actor.id || null,
-      usuario: actor.name,
-      acao: 'editar',
-      recurso: 'gateway_cobrancas',
-      registro_id: Number(row.id),
-      descricao: `Cobrança #${row.id} ESTORNADA integralmente no ${row.provider} (${row.provider_ref})`,
-      empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, row, actor),
-      dados: { status: 'estornada', valor: valor ?? Number(row.valor), estorno_lancamento_id: estornoLancamentoId },
-    }, tx);
-    return { atualizada, estornoLancamentoId };
-  }, { isolation: 'serializable' });
+    resultado = await comTravaContabil(escopo.empresaId, async (tx) => {
+      const current = await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: escopo.empresaId, id: Number(row.id) }, tx);
+      if (!current || current.status !== 'paga' || current.estorno_operacao_estado !== 'PROCESSING' ||
+          String(current.provider_ref) !== String(reserva.referencia) || String(current.lancamento_id ?? '') !== String(reserva.lancamentoId ?? ''))
+        throw new HttpError(409, 'A cobrança mudou durante o estorno; concilie antes de continuar.');
+      const atualizada = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(row.id),
+        { empresa_id: escopo.empresaId, status: 'paga', estorno_operacao_estado: 'PROCESSING' },
+        { status: 'estornada', estorno_operacao_estado: 'SUCCEEDED', atualizado_em: new Date().toISOString() }, tx);
+      if (!atualizada) throw new HttpError(409, 'A cobrança mudou durante o estorno.');
+      const estornoLancamentoId = await reverterFinanceiroDaCobranca(current, round2(valor ?? Number(current.valor)), { id: actor.id || null, name: actor.name }, tx);
+      if (provider.id === 'mercadopago') await resolverRevisaoLegadaComprovada(atualizada, tx);
+      await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: 'gateway_cobrancas', registro_id: Number(row.id),
+        descricao: `Cobrança #${row.id} ESTORNADA integralmente no ${row.provider} (${row.provider_ref})`,
+        empresa_id: empresaDoRegistroAudit(R_GATEWAY_COBRANCAS, row, actor),
+        dados: { status: 'estornada', valor: valor ?? Number(row.valor), estorno_lancamento_id: estornoLancamentoId, operacao: 'SUCCEEDED' } }, tx);
+      return { atualizada, estornoLancamentoId };
+    });
+  } catch (erro) {
+    // Mesmo se a gravação da incerteza falhar, PROCESSING persiste e impede o
+    // fechamento; nunca se apaga o claim para tentar novamente às cegas.
+    await comTravaContabil(escopo.empresaId, async (tx) => {
+      const estado = efeitoExternoPossivel ? 'UNCERTAIN' : 'FAILED';
+      const changed = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(row.id),
+        { empresa_id: escopo.empresaId, estorno_operacao_estado: 'PROCESSING' },
+        { estorno_operacao_estado: estado, estorno_operacao_em: new Date().toISOString() }, tx);
+      if (changed) await s.audit({ empresa_id: escopo.empresaId, usuario_id: actor.id || null, usuario: actor.name, acao: 'ajuste', recurso: 'gateway_cobrancas', registro_id: Number(row.id),
+        descricao: 'Operação de estorno legado requer acompanhamento', dados: { estado } }, tx);
+    }).catch(() => undefined);
+    if (efeitoExternoPossivel) throw new HttpError(409, 'Estorno sem confirmação do provider; concilie antes de tentar novamente.');
+    if (erro instanceof HttpError) throw erro;
+    throw new HttpError(502, 'Não foi possível consultar o estorno; tente novamente após revisar a conexão.');
+  }
   await notificarCobrancaAlterada({ cobrancaId: Number(row.id), empresaId: Number(row.empresa_id), intencao: 'estornada' });
   res.json({ ok: true, cobranca: publicaCobranca(resultado.atualizada), estorno_lancamento_id: resultado.estornoLancamentoId });
 }
@@ -1109,9 +1225,21 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
     }
 
     const efeito = await s.transaction(async (tx) => {
-      const atual = await s.findOneWhere(R_GATEWAY_COBRANCAS, { id: Number(cobranca!.id), empresa_id: Number(cobranca!.empresa_id) }, tx);
+      // Mesma ordem de locks de fechamento, criação e estorno: fence antes da
+      // linha da cobrança e antes da baixa/reversão financeira.
+      const empresaId = Number(cobranca!.empresa_id);
+      if (tx) await tx.query('SELECT fin_travar_empresa_periodo($1)', [empresaId]);
+      const atual = await s.findOneWhere(R_GATEWAY_COBRANCAS, { id: Number(cobranca!.id), empresa_id: empresaId }, tx);
       if (!atual) throw new HttpError(404, 'Cobrança não encontrada.');
       if (round2(Number(atual.valor)) !== round2(Number(cobranca!.valor))) throw new HttpError(409, 'Cobrança mudou durante a consulta; conciliação necessária.');
+      const { listarTodos } = await import('./paginacaoCompleta');
+      const fechados = (await listarTodos(getResource('fin_periodos_contabeis')!, { empresa_id: empresaId }, tx))
+        .filter((p) => p.abrangencia === 'financeiro' && ['fechando', 'fechado'].includes(String(p.estado)));
+      const titulo = atual.lancamento_id ? await s.findOneWhere(getResourceLancamentos(), { id: Number(atual.lancamento_id), empresa_id: empresaId }, tx) : null;
+      if (fechados.length && !titulo) throw new HttpError(409, 'Evento sem data financeira comprovada; concilie antes de aplicar.');
+      const datas = [new Date(), titulo?.data, titulo?.competencia, titulo?.data_baixa].filter(Boolean).map(diaISO);
+      if (datas.some((d) => !d) || fechados.some((p) => datas.some((d) => d.slice(0, 7) === diaISO(p.competencia).slice(0, 7))))
+        throw new HttpError(409, 'Período financeiro fechado: reabra-o antes de processar o evento.', undefined, 'PERIODO_FECHADO');
       const applied = await aplicarIntencao(providerId, atual, intencao!, Number(evento.id), tx);
       if (providerId === 'mercadopago' && intencao === 'estornada') await resolverRevisaoLegadaComprovada(atual, tx);
       return applied;

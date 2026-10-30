@@ -126,6 +126,8 @@ async function canonicalStockCell(
 export function translatePgError(e: any, r?: Resource): HttpError | null {
   if (!e || typeof e.code !== 'string') return null;
   switch (e.code) {
+    case 'P2001':
+      return new HttpError(409, 'Período financeiro fechado: reabra-o antes de alterar este movimento.', undefined, 'PERIODO_FECHADO');
     case '23505': {
       // unique_violation — descobre o campo pelo nome do constraint / detail
       const constraint = String(e.constraint || e.detail || '');
