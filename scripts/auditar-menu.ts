@@ -297,6 +297,10 @@ const SEM_TELA_PROPRIA = new Set([
   // commerce (GET/PUT /api/commerce/produtos/:id/precos) — mesmo padrão de
   // lista_preco_itens: é um atributo da tela pai, não um menu próprio.
   'commerce_precos',
+  // ONDA 4 / D1: a interação do ticket é a TRILHA append-only exibida DENTRO do
+  // detalhe do ticket e do Customer 360 (mesmo padrão de envio_eventos). Não é
+  // uma tela própria — o documento é o ticket.
+  'service_ticket_interacoes',
 ]);
 const recursosNavegaveis = new Set<string>();
 for (const r of Object.values(RESOURCES)) {

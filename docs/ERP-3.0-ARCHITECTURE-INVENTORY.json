@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-10-30T14:18:43.072Z",
+  "gerado_em": "2026-10-30T16:49:41.322Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 91,
-    "sql_com_conteudo": 91,
+    "sql": 92,
+    "sql_com_conteudo": 92,
     "prisma": 7
   },
   "tabelas": {
-    "total": 169,
-    "com_empresa_id": 141,
+    "total": 176,
+    "com_empresa_id": 148,
     "sem_empresa_id": 28,
-    "fora_do_prisma": 158
+    "fora_do_prisma": 165
   },
-  "indices": 488,
-  "constraints": 301,
+  "indices": 499,
+  "constraints": 311,
   "recursos": {
-    "total": 134,
-    "com_tabela": 134,
-    "multiempresa": 116,
-    "somente_leitura": 61,
-    "rbac_restrito": 51,
-    "cobertura_tenant_pct": 86.6
+    "total": 141,
+    "com_tabela": 141,
+    "multiempresa": 123,
+    "somente_leitura": 62,
+    "rbac_restrito": 58,
+    "cobertura_tenant_pct": 87.2
   },
   "crm": [
     {
@@ -87,10 +87,10 @@
     "com_recurso": 79
   },
   "rotas": {
-    "total": 431,
+    "total": 437,
     "por_metodo": {
-      "GET": 195,
-      "POST": 197,
+      "GET": 198,
+      "POST": 200,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -329,6 +329,41 @@
     {
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"service_sla_politicas\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"service_ticket_categorias\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"service_tickets\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"service_ticket_interacoes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"customer_segments\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"customer_consents\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"customer_preferences\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"commerce_configuracoes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
@@ -446,6 +481,9 @@
     "crm_oportunidade_estagio_historico",
     "crm_oportunidades",
     "crm_origens",
+    "customer_consents",
+    "customer_preferences",
+    "customer_segments",
     "devolucao_itens",
     "devolucoes",
     "divergencias_conferencia",
@@ -544,6 +582,10 @@
     "representante_cliente",
     "representante_hierarquia",
     "representantes",
+    "service_sla_politicas",
+    "service_ticket_categorias",
+    "service_ticket_interacoes",
+    "service_tickets",
     "sessoes",
     "terceirizacao_eventos",
     "terceiros_operacionais",

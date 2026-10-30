@@ -1340,6 +1340,102 @@
       "menu": false,
       "justificativa": "Vitrine pública do checkout B2C (início/produto/carrinho/checkout/pedido) acessada por clientes finais sem sessão do ERP — nunca é entrada da árvore de navegação interna.",
       "teste": "client/src/pages/commerce/LojaFluxoPages.test.tsx"
+    },
+    {
+      "id": "service-tickets",
+      "label": "Atendimento",
+      "tipo": "modulo",
+      "recurso": "service_tickets",
+      "tabela": "service_tickets",
+      "rota": "/service/tickets",
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "server/test/d1-customer-service.test.ts"
+    },
+    {
+      "id": "service-painel",
+      "label": "Painel de atendimento",
+      "tipo": "submodulo",
+      "parente": "service-tickets",
+      "rota": "/service/painel",
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "server/test/d1-customer-service.test.ts"
+    },
+    {
+      "id": "service-sla",
+      "label": "Políticas de SLA",
+      "tipo": "submodulo",
+      "parente": "service-tickets",
+      "recurso": "service_sla_politicas",
+      "tabela": "service_sla_politicas",
+      "rota": "/service/sla",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "service-categorias",
+      "label": "Categorias de atendimento",
+      "tipo": "submodulo",
+      "parente": "service-tickets",
+      "recurso": "service_ticket_categorias",
+      "tabela": "service_ticket_categorias",
+      "rota": "/service/categorias",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "service-interacoes",
+      "label": "Interações do ticket (histórico)",
+      "tipo": "detalhe",
+      "parente": "service-tickets",
+      "recurso": "service_ticket_interacoes",
+      "tabela": "service_ticket_interacoes",
+      "menu": false,
+      "justificativa": "Trilha append-only do ticket, exibida DENTRO do detalhe do ticket (Customer 360 e histórico). Não é tela própria nem entrada de menu — quem grava é o servidor a cada nota/resposta/transição."
+    },
+    {
+      "id": "customer-segments",
+      "label": "Segmentos de cliente",
+      "tipo": "modulo",
+      "recurso": "customer_segments",
+      "tabela": "customer_segments",
+      "rota": "/customer-segments",
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "server/test/d1-customer-service.test.ts"
+    },
+    {
+      "id": "customer-consents",
+      "label": "Consentimentos",
+      "tipo": "submodulo",
+      "parente": "customer-segments",
+      "recurso": "customer_consents",
+      "tabela": "customer_consents",
+      "rota": "/customer-consents",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "customer-preferences",
+      "label": "Preferências do cliente",
+      "tipo": "submodulo",
+      "parente": "customer-segments",
+      "recurso": "customer_preferences",
+      "tabela": "customer_preferences",
+      "rota": "/customer-preferences",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "customer-360",
+      "label": "Customer 360",
+      "tipo": "detalhe",
+      "parente": "clientes",
+      "rota": "/clientes/:id/360",
+      "menu": false,
+      "justificativa": "Visão 360 do cliente em rota própria (leitura derivada, zero modal), acessada do cadastro do cliente. Não é entrada de menu: o cliente é a entrada.",
+      "teste": "client/src/pages/Customer360Page.test.tsx"
     }
   ],
   "recursos_sem_dono_permitido": {}

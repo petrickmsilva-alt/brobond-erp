@@ -235,6 +235,14 @@ import {
   reordenarEtapasDoFunil,
 } from './crm';
 import {
+  abrirTicket,
+  avaliarSegmento,
+  customer360,
+  interagirTicket,
+  painelAtendimento,
+  transicionarTicket,
+} from './service';
+import {
   abrirCaixa,
   buscarProduto as pdvBuscarProduto,
   caixaAberto,
@@ -927,6 +935,20 @@ app.get('/api/crm/painel', wrap(painelCrm));
 // Reordenação TRANSACIONAL das etapas do funil (0058). Lista completa do funil,
 // sem duplicata, com auditoria e rollback.
 app.post('/api/crm/funis/:id/etapas/reordenar', wrap(reordenarEtapasDoFunil));
+
+// ---- ONDA 4 / D1 — ATENDIMENTO (SERVICE) e CUSTOMER 360 ----
+// Abertura de ticket com SLA resolvido e número sequencial por empresa.
+app.post('/api/service/tickets', wrap(abrirTicket));
+// Transição de situação (grava histórico na mesma transação).
+app.post('/api/service/tickets/:id/status', wrap(transicionarTicket));
+// Nota/resposta (trilha append-only; marca a primeira resposta).
+app.post('/api/service/tickets/:id/interacoes', wrap(interagirTicket));
+// Painel do atendimento (contagens, SLA estourado, tempo médio de resolução).
+app.get('/api/service/painel', wrap(painelAtendimento));
+// Customer 360 — visão derivada com dados reais (sem tabela própria).
+app.get('/api/customer360/:id', wrap(customer360));
+// Avaliação de segmento (contagem e clientes que casam a regra).
+app.get('/api/customer-segments/:id/avaliar', wrap(avaliarSegmento));
 
 // ---- ESTOQUE 3.0: transferência formal, reserva e disponibilidade ----
 // Documento com máquina de estados — o saldo só muda na expedição e no

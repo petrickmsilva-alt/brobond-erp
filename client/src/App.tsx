@@ -21,6 +21,7 @@ const Settings = lazy(() => import('./pages/Settings'));
 const ImpressaoPage = lazy(() => import('./pages/ImpressaoPage'));
 const ProductDetail = lazy(() => import('./pages/ProductDetail'));
 const ClienteFormPage = lazy(() => import('./pages/ClienteFormPage'));
+const Customer360Page = lazy(() => import('./pages/Customer360Page'));
 const ProdutoFormPage = lazy(() => import('./pages/ProdutoFormPage'));
 const CategoriaFormPage = lazy(() => import('./pages/CategoriaFormPage'));
 const CorFormPage = lazy(() => import('./pages/CorFormPage'));
@@ -187,6 +188,15 @@ export default function App() {
               element={
                 <ModuleAccess moduleId="clientes">
                   <ClienteFormPage />
+                </ModuleAccess>
+              }
+            />
+            {/* Customer 360 — visão derivada do cliente (leitura pura, sem modal). */}
+            <Route
+              path="clientes/:id/360"
+              element={
+                <ModuleAccess moduleId="clientes">
+                  <Customer360Page />
                 </ModuleAccess>
               }
             />
