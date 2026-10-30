@@ -4,7 +4,7 @@
 
 ## Instalação e verificações
 
-1. Confirme commit e empresa, faça backup e ensaie restauração. Verifique que as migrations versionadas até `0077` ainda não têm deriva; aplique-as pelo boot/migrador existente em ambiente isolado antes de produção. Não altere nem regrave dados históricos para fazer o gate passar.
+1. Confirme commit e empresa, faça backup e ensaie restauração. Verifique que as migrations versionadas até `0080` ainda não têm deriva; aplique-as pelo boot/migrador existente em ambiente isolado antes de produção. Não altere nem regrave dados históricos para fazer o gate passar.
 2. `npm test` executa servidor e cliente; o runner de memória pula testes PG por desenho. `DATABASE_URL=<banco novo e vazio> npm run test:pg` exige PostgreSQL **16.14**, `psql` e zero skips; o runner do gate não aceita banco reutilizado. `DATABASE_URL=<banco administrativo de testes> npm run smoke:pg -- --keep` cria e mantém um banco descartável próprio. Não usar URLs/segredos reais em logs ou commits.
 3. Execute `npm run typecheck`, `npm run lint`, `npm run build`, `npm run audit:menu`, `npm run audit:ux`, `npm run architecture:audit`, os gates de comércio/pagamentos e `npm audit`. Diferencie verificação estrutural de homologação financeira. Os resultados desta rodada constam no relatório da auditoria.
 
@@ -18,3 +18,11 @@
 - **Período:** o comando `/api/financeiro/periodos/:competencia/fechar` atua somente na escrituração importada. Não anunciar como fechamento contábil/fiscal/financeiro completo. Reabertura é administrativa e auditada.
 
 Migrations `0070`–`0077` são detalhadas na auditoria. Mantenha `backups/`, credenciais, dados de produção, dumps e artefatos gerados fora do commit. Segredos de providers devem ser configurados por responsável autorizado no ambiente de destino, nunca nesta documentação.
+
+### Closure Pass — operação de extrato e recorrências (2026-10-29)
+
+Importar extrato não baixa títulos. Use `/financeiro/extrato` para revisar cada linha e confirmar um título do mesmo tenant/conta e direção; o sistema registra o efeito da baixa. Uma linha já vinculada a repasse não pode baixar título. A repetição sem identificador bancário pode retornar 409 por ambiguidade: confira a linha anterior e a fonte bancária, não crie uma movimentação para contornar o bloqueio. CSV suportado é simples (`AAAA-MM-DD;valor;descrição`), não CSV entre aspas; dados inválidos rejeitam o arquivo. Confira a moeda quando o OFX não a trouxer.
+
+CNAB com valor pago/data ausentes, conta diferente ou identificação não comprovada fica divergente. As novas baixas e vínculos de CNAB são transacionais por linha; registros antigos `importada` podem precisar de conferência manual. Nenhum banco foi homologado. Não use este processo como evidência de fechamento integrado.
+
+A data de baixa é preservada para novas operações; eventos históricos sem essa data não foram preenchidos artificialmente. Para callbacks sem data do provedor, a data é a da operação local. Recorrências agora gravam título e avanço de agenda juntos e podem recuperar agenda antiga com título já persistido. Monitore erros e backlog; uma execução não comprova SLA nem garante processamento de períodos antigos em um só ciclo.

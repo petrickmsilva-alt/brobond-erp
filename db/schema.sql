@@ -7250,3 +7250,32 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS compra_recebimentos_comando_uq
   ON compra_recebimentos (empresa_id, compra_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
+
+-- 0078_extrato_baixa_atomica.sql
+ALTER TABLE fin_extrato_transacoes ADD COLUMN IF NOT EXISTS baixa_lancamento_id INTEGER;
+CREATE UNIQUE INDEX IF NOT EXISTS lancamentos_financeiros_empresa_id_uq ON lancamentos_financeiros (empresa_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS fin_extrato_baixa_unica_uq ON fin_extrato_transacoes (empresa_id, baixa_lancamento_id) WHERE baixa_lancamento_id IS NOT NULL;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'fin_extrato_transacoes'::regclass AND conname = 'fin_extrato_baixa_empresa_fk') THEN
+    ALTER TABLE fin_extrato_transacoes ADD CONSTRAINT fin_extrato_baixa_empresa_fk FOREIGN KEY (empresa_id, baixa_lancamento_id) REFERENCES lancamentos_financeiros (empresa_id, id) NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'fin_extrato_transacoes'::regclass AND conname = 'fin_extrato_baixa_coerente_ck') THEN
+    ALTER TABLE fin_extrato_transacoes ADD CONSTRAINT fin_extrato_baixa_coerente_ck CHECK (baixa_lancamento_id IS NULL OR (status = 'conciliada' AND lancamento_id IS NOT NULL)) NOT VALID;
+  END IF;
+END $$;
+ALTER TABLE fin_extrato_transacoes VALIDATE CONSTRAINT fin_extrato_baixa_empresa_fk;
+ALTER TABLE fin_extrato_transacoes VALIDATE CONSTRAINT fin_extrato_baixa_coerente_ck;
+
+-- 0079_cotacao_decisao_idempotencia.sql
+ALTER TABLE cotacoes_compra ADD COLUMN IF NOT EXISTS decisao_hash TEXT;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'cotacoes_compra'::regclass AND conname = 'cotacao_decisao_hash_ck') THEN
+    ALTER TABLE cotacoes_compra ADD CONSTRAINT cotacao_decisao_hash_ck CHECK (decisao_hash IS NULL OR decisao_hash ~ '^[0-9a-f]{64}$') NOT VALID;
+  END IF;
+END $$;
+ALTER TABLE cotacoes_compra VALIDATE CONSTRAINT cotacao_decisao_hash_ck;
+
+-- 0080_financeiro_data_baixa.sql
+ALTER TABLE lancamentos_financeiros ADD COLUMN IF NOT EXISTS data_baixa DATE;
+CREATE INDEX IF NOT EXISTS lancamentos_financeiros_empresa_data_baixa_idx
+  ON lancamentos_financeiros (empresa_id, data_baixa) WHERE data_baixa IS NOT NULL;

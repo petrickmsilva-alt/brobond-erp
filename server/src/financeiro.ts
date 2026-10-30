@@ -17,7 +17,9 @@ import { currentUser, type AuthUser } from './auth';
 import type { Row, Tx } from './store';
 import { labelOf } from './store';
 import { round2, somaMoeda, diaISO } from './utils';
-import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, EMPRESA_PADRAO, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
+import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, EMPRESA_PADRAO, type EscopoEmpresa, empresaDoRegistroAudit, validarReferenciasDaEmpresa } from './empresa';
+import { listarTodos } from './paginacaoCompleta';
+import { domainLock } from './domainLock';
 import { estornarComissoesDaVenda, registrarComissaoPorRecebimento } from './comissoes';
 
 /**
@@ -132,34 +134,31 @@ function faturados(v: Row): boolean {
 }
 
 /** Busca a primeira categoria de um tipo (mocks/decorres no Postgres) — ou null. */
-async function categoriaPadrao(tipo: 'receita' | 'despesa' | 'investimento', tx?: Tx): Promise<Row | null> {
+async function categoriaPadrao(tipo: 'receita' | 'despesa' | 'investimento', empresaId: number, tx?: Tx): Promise<Row | null> {
   const s = getStore();
   const r = getResource('categorias_financeiras')!;
-  const lista = await s.list(r, { page: 1, pageSize: 1, filter: { tipo } }, tx);
+  const lista = await s.list(r, { page: 1, pageSize: 1, filter: { empresa_id: empresaId, tipo } }, tx);
   return lista.rows[0] ?? null;
 }
 
 /** Busca a primeira categoria de uma classe do DRE (ex.: receitas_financeiras). */
-async function categoriaPorClasse(classe: string, tx?: Tx): Promise<Row | null> {
+async function categoriaPorClasse(classe: string, empresaId: number, tx?: Tx): Promise<Row | null> {
   const s = getStore();
   const r = getResource('categorias_financeiras')!;
-  const lista = await s.list(r, { page: 1, pageSize: 1, filter: { classificacao_dre: classe } }, tx);
+  const lista = await s.list(r, { page: 1, pageSize: 1, filter: { empresa_id: empresaId, classificacao_dre: classe } }, tx);
   return lista.rows[0] ?? null;
 }
 
-async function lancamentoExistente(tipo: string, refId: number, tx?: Tx): Promise<Row | null> {
+async function lancamentoExistente(tipo: string, refId: number, empresaId: number, tx?: Tx): Promise<Row | null> {
   const s = getStore();
   const r = getResource('lancamentos_financeiros')!;
-  const lista = await s.list(r, { page: 1, pageSize: 10, filter: { referencia_tipo: tipo, referencia_id: refId } }, tx);
+  const lista = await s.list(r, { page: 1, pageSize: 10, filter: { empresa_id: empresaId, referencia_tipo: tipo, referencia_id: refId } }, tx);
   return lista.rows[0] ?? null;
 }
 
 /** Todas as parcelas (lançamentos) de uma origem — base da reconciliação. */
-async function parcelasDaOrigem(tipo: string, refId: number, tx?: Tx): Promise<Row[]> {
-  const s = getStore();
-  const r = getResource('lancamentos_financeiros')!;
-  const lista = await s.list(r, { page: 1, pageSize: 500, filter: { referencia_tipo: tipo, referencia_id: refId } }, tx);
-  return lista.rows;
+async function parcelasDaOrigem(tipo: string, refId: number, empresaId: number, tx?: Tx): Promise<Row[]> {
+  return listarTodos(getResource('lancamentos_financeiros')!, { empresa_id: empresaId, referencia_tipo: tipo, referencia_id: refId }, tx);
 }
 
 /** Soma meses à data preservando o dia (31 jan + 1m = 28/29 fev, não 3 mar). */
@@ -353,7 +352,7 @@ async function reconciliarParcelasPedido(
   // vencimento. `dataISO` já trata os dois formatos.
   const baseVenc = dataISO(after.fin_vencimento) || dataBase;
   const detalhes = Array.isArray(after.fin_parcelas_detalhes) ? after.fin_parcelas_detalhes as Row[] : [];
-  const existentes = await parcelasDaOrigem(referencia, id, tx);
+  const existentes = await parcelasDaOrigem(referencia, id, empresaDe(after), tx);
   const parcelasFinais: { lancamento_id: number; valor: number }[] = [];
 
   if (total <= 0) {
@@ -545,12 +544,12 @@ export async function syncLancamentoVenda(
 ): Promise<void> {
   const id = Number(after.id);
   const s = getStore();
-  const cliente = after.cliente_id ? await s.findOneWhere(getResource('clientes')!, { id: Number(after.cliente_id) }, tx) : null;
+  const cliente = after.cliente_id ? await s.findOneWhere(getResource('clientes')!, { id: Number(after.cliente_id), empresa_id: empresaDe(after) }, tx) : null;
   const descricao = `Venda #${id} — ${cliente ? labelOf(getResource('clientes')!, cliente) : ''}`;
-  const tinha = await lancamentoExistente('venda', id, tx);
+  const tinha = await lancamentoExistente('venda', id, empresaDe(after), tx);
   if (!tinha && !faturados(after)) return;
 
-  const cat = await categoriaPadrao('receita', tx);
+  const cat = await categoriaPadrao('receita', empresaDe(after), tx);
   await reconciliarParcelasPedido(
     'venda',
     after,
@@ -576,12 +575,12 @@ export async function syncLancamentoCompra(
 ): Promise<void> {
   const id = Number(after.id);
   const s = getStore();
-  const fornecedor = after.fornecedor_id ? await s.findOneWhere(getResource('fornecedores')!, { id: Number(after.fornecedor_id) }, tx) : null;
+  const fornecedor = after.fornecedor_id ? await s.findOneWhere(getResource('fornecedores')!, { id: Number(after.fornecedor_id), empresa_id: empresaDe(after) }, tx) : null;
   const descricao = `Compra #${id} — ${fornecedor ? labelOf(getResource('fornecedores')!, fornecedor) : ''}`;
-  const tinha = await lancamentoExistente('compra', id, tx);
+  const tinha = await lancamentoExistente('compra', id, empresaDe(after), tx);
   if (!tinha && String(after.status) !== 'recebido') return;
 
-  const cat = await categoriaPadrao('despesa', tx);
+  const cat = await categoriaPadrao('despesa', empresaDe(after), tx);
   await reconciliarParcelasPedido('compra', after, descricao, dataISO(after.recebida_em) || dataISO(after.data) || hoje(), 'despesa', cat?.id ?? null, actor, tx, null);
 }
 
@@ -597,10 +596,10 @@ export async function syncAporte(
 ): Promise<void> {
   const id = Number(after.id);
   const s = getStore();
-  const investidor = after.investidor_id ? await s.findOneWhere(getResource('investidores')!, { id: Number(after.investidor_id) }, tx) : null;
+  const investidor = after.investidor_id ? await s.findOneWhere(getResource('investidores')!, { id: Number(after.investidor_id), empresa_id: empresaDe(after) }, tx) : null;
   const descricao = `Aporte #${id} — ${investidor ? labelOf(getResource('investidores')!, investidor) : ''}`;
   const referencia = 'aporte';
-  const existente = await lancamentoExistente(referencia, id, tx);
+  const existente = await lancamentoExistente(referencia, id, empresaDe(after), tx);
 
   if (existente) {
     const status = after.status === 'confirmado' ? 'confirmado' : after.status === 'estornado' ? 'cancelado' : 'pendente';
@@ -621,7 +620,7 @@ export async function syncAporte(
   }
 
   if (String(after.status) !== 'confirmado') return;
-  const cat = await categoriaPadrao('investimento', tx);
+  const cat = await categoriaPadrao('investimento', empresaDe(after), tx);
   const lanc = await criarLancamento(
     {
       empresa_id: empresaDe(after),
@@ -665,8 +664,9 @@ export async function syncTransferencia(before: Row | null, after: Row, actor: {
   const data = dataISO(after.data) || hoje();
   const status = String(after.status) === 'cancelado' ? 'cancelado' : 'confirmado';
   const nomeConta = async (cid: number) => {
-    const c = await s.findOneWhere(rContas, { id: cid }, tx);
-    return c ? String(c.nome || `Conta #${cid}`) : `Conta #${cid}`;
+    const c = await s.findOneWhere(rContas, { id: cid, empresa_id: empresaDe(after) }, tx);
+    if (!c) throw new HttpError(409, 'Conta da transferência não pertence à empresa ou não existe.');
+    return String(c.nome || `Conta #${cid}`);
   };
   const [nomeOrigem, nomeDestino] = [await nomeConta(origemId), await nomeConta(destinoId)];
   const descBase = String(after.descricao || '').trim() || `Transferência #${id} — ${nomeOrigem} → ${nomeDestino}`;
@@ -697,7 +697,8 @@ export async function syncTransferencia(before: Row | null, after: Row, actor: {
   const dadosEntrada: Row = { ...dadosSaida, tipo: 'receita', conta_id: destinoId, descricao: `${descBase} · entrada ⇐ ${nomeOrigem}` };
 
   if (saidaId) {
-    const atual = await s.get(rLanc, saidaId, tx);
+    const atual = await s.findOneWhere(rLanc, { id: saidaId, empresa_id: empresaDe(after) }, tx);
+    if (!atual) throw new HttpError(409, 'Lançamento de saída da transferência inválido para esta empresa.');
     if (atual) await atualizarLancamento(saidaId, { ...atual, ...dadosSaida }, actor, tx);
     else saidaId = null;
   }
@@ -706,7 +707,8 @@ export async function syncTransferencia(before: Row | null, after: Row, actor: {
     saidaId = Number(saida.id);
   }
   if (entradaId) {
-    const atual = await s.get(rLanc, entradaId, tx);
+    const atual = await s.findOneWhere(rLanc, { id: entradaId, empresa_id: empresaDe(after) }, tx);
+    if (!atual) throw new HttpError(409, 'Lançamento de entrada da transferência inválido para esta empresa.');
     if (atual) await atualizarLancamento(entradaId, { ...atual, ...dadosEntrada }, actor, tx);
     else entradaId = null;
   }
@@ -738,18 +740,19 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     aplicarFiltroEmpresa(getResource(key)!, extra, escopo);
 
   const s = getStore();
-  const [lancR, vendasR, comprasR, aportesR, contasR, categoriasR, clientesR, fornecedoresR, recorrenciasR, centrosR] = await Promise.all([
-    s.list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 10000, sort: 'data', dir: 'desc', filter: filtroDe('lancamentos_financeiros') }),
-    s.list(getResource('vendas')!, { page: 1, pageSize: 10000, filter: filtroDe('vendas') }),
-    s.list(getResource('compras')!, { page: 1, pageSize: 10000, filter: filtroDe('compras') }),
-    s.list(getResource('aportes')!, { page: 1, pageSize: 10000, filter: filtroDe('aportes') }),
-    s.list(getResource('contas_financeiras')!, { page: 1, pageSize: 1000, filter: filtroDe('contas_financeiras') }),
-    s.list(getResource('categorias_financeiras')!, { page: 1, pageSize: 1000, filter: filtroDe('categorias_financeiras') }),
-    s.list(getResource('clientes')!, { page: 1, pageSize: 2000, filter: filtroDe('clientes') }),
-    s.list(getResource('fornecedores')!, { page: 1, pageSize: 2000, filter: filtroDe('fornecedores') }),
-    s.list(getResource('recorrencias_financeiras')!, { page: 1, pageSize: 1000, filter: filtroDe('recorrencias_financeiras', { status: 'ativo' }) }),
-    s.list(getResource('centros_custo')!, { page: 1, pageSize: 1000, filter: filtroDe('centros_custo') }),
-  ]);
+  // Um snapshot consistente e leitura integral: limites da API não podem
+  // truncar silenciosamente somas e saldos financeiros.
+  const [lancR, vendasR, comprasR, aportesR, contasR, categoriasR, clientesR, fornecedoresR, recorrenciasR, centrosR] =
+    await s.transaction(async (tx) => {
+      const ler = async (key: string, extra?: Record<string, unknown>, sort?: string, dir?: 'asc' | 'desc') =>
+        ({ rows: await listarTodos(getResource(key)!, filtroDe(key, extra) || {}, tx, { sort, dir }) });
+      // O PoolClient do snapshot não suporta consultas simultâneas.
+      return [
+        await ler('lancamentos_financeiros', undefined, 'data', 'desc'), await ler('vendas'), await ler('compras'), await ler('aportes'),
+        await ler('contas_financeiras'), await ler('categorias_financeiras'), await ler('clientes'), await ler('fornecedores'),
+        await ler('recorrencias_financeiras', { status: 'ativo' }), await ler('centros_custo'),
+      ];
+    }, { isolation: 'repeatable read' });
 
   const mes = new Date().toISOString().slice(0, 7);
   const catPorId = new Map<number, Row>(categoriasR.rows.map((c) => [Number(c.id), c]));
@@ -780,7 +783,10 @@ export async function resumoFinanceiro(req: Request, res: Response) {
   // Resultado ignora transferências: elas só mudam o dinheiro de conta.
   const operacionais = confirmados.filter((l) => !ehTransferencia(l));
   const pendentesOper = doCaixa.filter((l) => String(l.status) === 'pendente' && !ehTransferencia(l));
-  const doMes = (l: Row) => String(l.data || '').slice(0, 7) === mes;
+  // Caixa usa a data registrada da baixa; legados sem evidência preservam
+  // o comportamento histórico com a data original, sem backfill presumido.
+  const dataCaixa = (l: Row) => dataISO(l.data_baixa) || dataISO(l.data) || '';
+  const doMes = (l: Row) => dataCaixa(l).slice(0, 7) === mes;
 
   // Saldo por conta = saldo inicial + entradas (líquidas, já sem taxa) − saídas.
   // "Previsto" soma o que está pendente (bruto) — a visão do caixa futuro.
@@ -963,7 +969,7 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     const alvo = primeiroDiaMes(new Date());
     alvo.setUTCMonth(alvo.getUTCMonth() - k);
     const chave = alvo.toISOString().slice(0, 7);
-    const doMesK = operacionais.filter((l) => String(l.data || '').slice(0, 7) === chave);
+    const doMesK = operacionais.filter((l) => dataCaixa(l).slice(0, 7) === chave);
     const rec = somaMoeda(doMesK.filter((l) => l.tipo === 'receita').map((l) => liquidoDe(l)));
     const desp = somaMoeda(doMesK.filter((l) => l.tipo === 'despesa').map((l) => Number(l.valor || 0)));
     const inv = somaMoeda(doMesK.filter((l) => l.tipo === 'investimento').map((l) => liquidoDe(l)));
@@ -1010,9 +1016,9 @@ export async function resumoFinanceiro(req: Request, res: Response) {
     if (item) item.valor = r2(item.valor + Number(v.total || 0));
   }
 
-  const recentes = doCaixa.slice(0, 24).map((l) => ({
+  const recentes = [...doCaixa].sort((a, b) => dataCaixa(b).localeCompare(dataCaixa(a)) || Number(b.id) - Number(a.id)).slice(0, 24).map((l) => ({
     id: Number(l.id),
-    data: String(l.data || ''),
+    data: dataCaixa(l),
     tipo: String(l.tipo || ''),
     descricao: String(l.descricao || ''),
     status: String(l.status || ''),
@@ -1078,28 +1084,21 @@ export async function resumoFinanceiro(req: Request, res: Response) {
 function calcularProximaGeracao(r: Row, base?: Date): string {
   const frequencia = String(r.frequencia || 'mensal');
   const dia = Math.min(31, Math.max(1, Number(r.dia || 1)));
-  const baseD = base || new Date();
-  const d = new Date(Date.UTC(baseD.getUTCFullYear(), baseD.getUTCMonth(), dia, 12));
+  const data = base || new Date();
   if (frequencia === 'semanal') {
-    // Semanal: mantém a próxima geração dentro dos próximos 7 dias.
-    const hoje = new Date();
-    const t = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth(), hoje.getUTCDate(), 12));
-    let n = new Date(t.getTime());
-    // programa para o próximo dia da semana correspondente a `dia` (1=segunda..7=domingo)
-    const alvo = dia > 7 ? 1 : dia;
-    const atual = (n.getUTCDay() + 6) % 7 + 1; // 1=segunda..7=domingo
-    let diff = alvo - atual;
-    if (diff < 0) diff += 7;
-    n = new Date(t.getTime() + diff * 86400000);
-    return n.toISOString().slice(0, 10);
+    const inicio = new Date(Date.UTC(data.getUTCFullYear(), data.getUTCMonth(), data.getUTCDate(), 12));
+    if (base) inicio.setUTCDate(inicio.getUTCDate() + 7);
+    else {
+      const alvo = dia > 7 ? 1 : dia;
+      const atual = (inicio.getUTCDay() + 6) % 7 + 1;
+      inicio.setUTCDate(inicio.getUTCDate() + ((alvo - atual + 7) % 7));
+    }
+    return inicio.toISOString().slice(0, 10);
   }
-  if (frequencia === 'anual') {
-    const mesAno = d.getUTCMonth() === 1 ? d.getUTCFullYear() + 1 : d.getUTCFullYear();
-    return new Date(Date.UTC(mesAno, d.getUTCMonth(), Math.min(28, dia), 12)).toISOString().slice(0, 10);
-  }
-  // Mensal: primeiro dia do mês seguinte, na data `dia`.
-  const m = new Date(Date.UTC(baseD.getUTCFullYear(), baseD.getUTCMonth() + 1, Math.min(28, dia), 12));
-  return m.toISOString().slice(0, 10);
+  const ano = data.getUTCFullYear() + (frequencia === 'anual' ? 1 : 0);
+  const mes = data.getUTCMonth() + (frequencia === 'anual' ? 0 : 1);
+  const ultimoDia = new Date(Date.UTC(ano, mes + 1, 0, 12)).getUTCDate();
+  return new Date(Date.UTC(ano, mes, Math.min(ultimoDia, dia), 12)).toISOString().slice(0, 10);
 }
 
 /**
@@ -1111,70 +1110,53 @@ function calcularProximaGeracao(r: Row, base?: Date): string {
 export async function processarRecorrencias(actor: { id: number | null; name: string }, escopo?: EscopoEmpresa): Promise<{ gerados: number; descricoes: string[] }> {
   const s = getStore();
   const r = getResource('recorrencias_financeiras')!;
-  const lista = await s.list(r, { page: 1, pageSize: 1000, filter: aplicarFiltroEmpresa(r, { status: 'ativo' }, escopo) });
+  const lista = await listarTodos(r, aplicarFiltroEmpresa(r, { status: 'ativo' }, escopo) || {}, undefined, { sort: 'id', dir: 'asc' });
   const hojeS = hoje();
   const gerados: string[] = [];
   let total = 0;
 
-  for (const rec of lista.rows) {
-    const proxima = dataISO(rec.proxima_geracao || calcularProximaGeracao(rec)) || '';
-    if (proxima > hojeS) continue;
-
-    // Data do lançamento: usa o vencimento da recorrência.
-    const data = proxima;
-    const categoria = rec.categoria_id ?? null;
-    const conta = rec.conta_id ?? null;
-    // P2-04: recorrência legada com valor <= 0 não gera lançamento — o banco
-    // exige valor > 0 (ck_lanc_fin_valor_positivo) e uma parcela de R$ 0 não é
-    // obrigação financeira. Pular aqui mantém MemStore e PostgreSQL idênticos e
-    // evita que uma única recorrência inválida aborte a geração das demais.
-    if (!(Number(rec.valor || 0) > 0)) continue;
-    try {
-      await s.transaction(async (tx) => {
-        const r2 = getResource('lancamentos_financeiros')!;
-        const row = await s.insert(
-          r2,
-          {
-            empresa_id: empresaDe(rec),
-            data,
-            tipo: String(rec.tipo || 'despesa'),
-            categoria_id: categoria,
-            conta_id: conta,
-            centro_custo_id: rec.centro_custo_id ?? null,
-            descricao: String(rec.descricao || 'Lançamento recorrente'),
-            valor: Number(rec.valor || 0),
-            taxa_pct: 0,
-            valor_liquido: Number(rec.valor || 0),
-            forma_pagamento: rec.forma_pagamento ?? null,
-            status: 'pendente',
-            vencimento: data,
-            parcela: 1,
-            total_parcelas: 1,
-            referencia_tipo: 'recorrencia',
-            referencia_id: Number(rec.id),
-            referencia_recorrencia_id: Number(rec.id),
-            observacoes: `Gerado automaticamente (${rec.frequencia})`,
-          },
-          tx
-        );
-        await s.audit(
-          { usuario_id: actor.id || null, usuario: actor.name || 'Sistema', acao: 'criar', recurso: 'lancamentos_financeiros', registro_id: Number(row.id), descricao: `Lançamento recorrente — ${rec.descricao}`, dados: { recorrencia_id: Number(rec.id), valor: Number(rec.valor || 0) }, empresa_id: empresaDe(rec) },
-          tx
-        );
-      });
-    } catch (e: any) {
-      // Outra execução (cron + botão) gerou a mesma competência primeiro:
-      // o índice único (recorrencia, vencimento) barra a duplicata — segue.
-      if (e?.code === '23505') continue;
-      throw e;
-    }
-
-    // Calcula a próxima geração e atualiza a recorrência.
-    const prox = calcularProximaGeracao(rec, new Date(`${proxima}T12:00:00Z`));
-    await s.update(r, Number(rec.id), { proxima_geracao: prox, ultimo_gerado_em: new Date().toISOString() });
-
-    gerados.push(String(rec.descricao || 'Recorrência'));
-    total++;
+  for (const anterior of lista) {
+    const empresaId = empresaDe(anterior); const recId = Number(anterior.id);
+    const resultado = await domainLock(empresaId, `recorrencia:${recId}`, async (tx) => {
+      const rec = await s.findOneWhere(r, { id: recId, empresa_id: empresaId }, tx);
+      if (!rec || rec.status !== 'ativo') return null;
+      const proxima = dataISO(rec.proxima_geracao || calcularProximaGeracao(rec));
+      if (!proxima || proxima > hojeS || !Number.isFinite(Number(rec.valor)) || !(Number(rec.valor) > 0)) return null;
+      const lancR = getResource('lancamentos_financeiros')!;
+      const existente = await s.findOneWhere(lancR, { empresa_id: empresaId, referencia_recorrencia_id: recId, vencimento: proxima }, tx);
+      if (existente && (existente.referencia_tipo !== 'recorrencia' || Number(existente.referencia_id) !== recId))
+        throw new HttpError(409, 'Lançamento histórico da recorrência tem origem incompatível; revisão necessária.');
+      let criado = false;
+      if (!existente) {
+        const dados: Row = { empresa_id: empresaId, data: proxima, tipo: String(rec.tipo || 'despesa'),
+          categoria_id: rec.categoria_id ?? null, conta_id: rec.conta_id ?? null, centro_custo_id: rec.centro_custo_id ?? null,
+          descricao: String(rec.descricao || 'Lançamento recorrente'), valor: Number(rec.valor || 0), taxa_pct: 0,
+          valor_liquido: Number(rec.valor || 0), forma_pagamento: rec.forma_pagamento ?? null,
+          status: 'pendente', vencimento: proxima, parcela: 1, total_parcelas: 1,
+          referencia_tipo: 'recorrencia', referencia_id: recId, referencia_recorrencia_id: recId,
+          observacoes: `Gerado automaticamente (${rec.frequencia})` };
+        const empresaEscopo: EscopoEmpresa = { empresaId, consolidado: false, permitidas: [empresaId] };
+        await validarReferenciasDaEmpresa(lancR, dados, empresaEscopo,
+          (alvo, alvoId, idEmpresa, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: idEmpresa }, t), tx);
+        const row = await s.insert(lancR, dados, tx);
+        await s.audit({ usuario_id: actor.id || null, usuario: actor.name || 'Sistema', acao: 'criar', recurso: 'lancamentos_financeiros',
+          registro_id: Number(row.id), descricao: `Lançamento recorrente — ${rec.descricao}`,
+          dados: { recorrencia_id: recId, valor: Number(rec.valor || 0) }, empresa_id: empresaId }, tx);
+        criado = true;
+      }
+      const seguinte = calcularProximaGeracao(rec, new Date(`${proxima}T12:00:00Z`));
+      if (seguinte <= proxima) throw new HttpError(409, 'Próxima recorrência não avança; revisão necessária.');
+      const atualizada = await s.tryUpdateIf(r, recId, { empresa_id: empresaId, status: 'ativo', proxima_geracao: rec.proxima_geracao ?? null,
+        valor: rec.valor, tipo: rec.tipo ?? null, frequencia: rec.frequencia ?? null, dia: rec.dia ?? null, descricao: rec.descricao,
+        conta_id: rec.conta_id ?? null, categoria_id: rec.categoria_id ?? null, centro_custo_id: rec.centro_custo_id ?? null,
+        forma_pagamento: rec.forma_pagamento ?? null },
+        { proxima_geracao: seguinte, ultimo_gerado_em: new Date().toISOString() }, tx);
+      if (!atualizada) throw new HttpError(409, 'A recorrência mudou durante a geração; tente novamente.');
+      if (!criado) await s.audit({ usuario_id: actor.id || null, usuario: actor.name || 'Sistema', acao: 'ajuste', recurso: r.key,
+        registro_id: recId, descricao: 'Agenda de recorrência recuperada de lançamento existente', dados: { vencimento: proxima }, empresa_id: empresaId }, tx);
+      return criado ? String(rec.descricao || 'Recorrência') : null;
+    }, { isolation: 'read committed' });
+    if (resultado) { gerados.push(resultado); total++; }
   }
 
   return { gerados: total, descricoes: gerados };
@@ -1209,12 +1191,10 @@ export async function rentabilidade(req: Request, res: Response) {
   checkAccess(getResource('fichas')!, actor, 'read');
   const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const s = getStore();
-  const [vendasR, produtosR, fichasR, itensR] = await Promise.all([
-    s.list(getResource('vendas')!, { page: 1, pageSize: 10000, filter: aplicarFiltroEmpresa(getResource('vendas')!, undefined, escopo) }),
-    s.list(getResource('produtos')!, { page: 1, pageSize: 10000, filter: aplicarFiltroEmpresa(getResource('produtos')!, undefined, escopo) }),
-    s.list(getResource('fichas')!, { page: 1, pageSize: 10000, filter: aplicarFiltroEmpresa(getResource('fichas')!, undefined, escopo) }),
-    s.list(getResource('itens_venda')!, { page: 1, pageSize: 100000, filter: aplicarFiltroEmpresa(getResource('itens_venda')!, undefined, escopo) }),
-  ]);
+  const [vendasR, produtosR, fichasR, itensR] = await s.transaction(async (tx) => {
+    const ler = async (key: string) => ({ rows: await listarTodos(getResource(key)!, aplicarFiltroEmpresa(getResource(key)!, undefined, escopo) || {}, tx) });
+    return [await ler('vendas'), await ler('produtos'), await ler('fichas'), await ler('itens_venda')];
+  }, { isolation: 'repeatable read' });
 
   const custoPorProduto = new Map<number, number>();
   for (const p of produtosR.rows) custoPorProduto.set(Number(p.id), Number(p.custo || 0));
@@ -1284,10 +1264,10 @@ export async function resumoInvestidores(req: Request, res: Response) {
   checkAccess(getResource('aportes')!, actor, 'read');
   const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const s = getStore();
-  const [investR, aportesR] = await Promise.all([
-    s.list(getResource('investidores')!, { page: 1, pageSize: 5000, filter: aplicarFiltroEmpresa(getResource('investidores')!, undefined, escopo) }),
-    s.list(getResource('aportes')!, { page: 1, pageSize: 10000, filter: aplicarFiltroEmpresa(getResource('aportes')!, undefined, escopo) }),
-  ]);
+  const [investR, aportesR] = await s.transaction(async (tx) => {
+    const ler = async (key: string) => ({ rows: await listarTodos(getResource(key)!, aplicarFiltroEmpresa(getResource(key)!, undefined, escopo) || {}, tx) });
+    return [await ler('investidores'), await ler('aportes')];
+  }, { isolation: 'repeatable read' });
 
   const confirmados = aportesR.rows.filter((a) => String(a.status) === 'confirmado');
   const porInvestidor = investR.rows.map((inv) => {
@@ -1329,20 +1309,38 @@ export type LinhaExtrato = { data: string; valor: number; descricao: string; fit
  * O FITID (identificador da transação no banco) é preservado — é ele que
  * impede a mesma transação de ser importada/conciliada duas vezes.
  */
+/** Datas e quantias bancárias não podem ser adivinhadas ou parcialmente lidas. */
+function dataBancaria(value: unknown): string {
+  const data = typeof value === 'string' ? value.trim() : '';
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(data) ? new Date(`${data}T12:00:00.000Z`) : null;
+  if (!parsed || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== data)
+    throw new HttpError(400, 'Data bancária inválida ou ausente; informe AAAA-MM-DD.');
+  return data;
+}
+function valorBancario(value: unknown, ofx = false): number {
+  const texto = typeof value === 'number' || typeof value === 'string' ? String(value).trim() : '';
+  const formato = ofx ? /^[+-]?\d+(?:\.\d{1,2})?$/ : /^[+-]?\d+(?:[.,]\d{1,2})?$/;
+  if (!formato.test(texto)) throw new HttpError(400, 'Valor bancário inválido; use um número com até duas casas decimais.');
+  const valor = Number(texto.replace(',', '.'));
+  if (!Number.isFinite(valor) || valor === 0 || Math.abs(valor) * 100 > Number.MAX_SAFE_INTEGER)
+    throw new HttpError(400, 'Valor bancário inválido ou fora do limite.');
+  return valor;
+}
+
 export function parseOFX(conteudo: string): LinhaExtrato[] {
+  const moeda = conteudo.match(/<CURDEF>([^<\r\n]+)/i)?.[1]?.trim().toUpperCase();
+  if (moeda && moeda !== 'BRL') throw new HttpError(400, 'Extrato em moeda diferente de BRL não é suportado.');
   const linhas: LinhaExtrato[] = [];
   const blocos = conteudo.match(/<STMTTRN>[\s\S]*?(?=<STMTTRN>|<\/STMTTRN>|$)/gi) || [];
   for (const bloco of blocos) {
-    const dataM = bloco.match(/<DTPOSTED>(\d{8})/i);
-    const valorM = bloco.match(/<TRNAMT>(-?[\d]+(?:\.\d+)?)/i);
-    const descM = bloco.match(/<NAME>([^<]+)/i) || bloco.match(/<MEMO>([^<]+)/i);
+    const posted = bloco.match(/<DTPOSTED>([^<\r\n]+)/i)?.[1]?.trim() || '';
+    const dataM = /^(\d{8})(?:\d{0,6}(?:\.\d+)?(?:\[[^\]\r\n]+\])?)?$/.exec(posted);
+    if (!dataM) throw new HttpError(400, 'Transação OFX sem data válida.');
+    const data = dataBancaria(`${dataM[1].slice(0, 4)}-${dataM[1].slice(4, 6)}-${dataM[1].slice(6, 8)}`);
+    const bruto = valorBancario(bloco.match(/<TRNAMT>([^<\r\n]+)/i)?.[1], true);
+    const descM = bloco.match(/<NAME>([^<\r\n]+)/i) || bloco.match(/<MEMO>([^<\r\n]+)/i);
     const fitidM = bloco.match(/<FITID>([^<\r\n]+)/i);
-    if (!valorM) continue;
-    const bruto = Number(valorM[1]);
-    const valor = Math.abs(bruto);
-    if (!Number.isFinite(valor) || valor <= 0) continue;
-    const data = dataM ? `${dataM[1].slice(0, 4)}-${dataM[1].slice(4, 6)}-${dataM[1].slice(6, 8)}` : '';
-    linhas.push({ data, valor: r2(valor), descricao: descM ? descM[1].trim() : '', fitid: fitidM ? fitidM[1].trim() : null, direcao: bruto >= 0 ? 'entrada' : 'saida' });
+    linhas.push({ data, valor: Math.abs(bruto), descricao: descM ? descM[1].trim() : '', fitid: fitidM ? fitidM[1].trim() : null, direcao: bruto >= 0 ? 'entrada' : 'saida' });
   }
   return linhas;
 }
@@ -1356,102 +1354,55 @@ export function parseLinhasExtrato(body: Record<string, unknown>): LinhaExtrato[
   const textoCompleto = String(body.texto || body.csv || body.extrato || body.ofx || '');
   if (pareceOFX(textoCompleto)) return parseOFX(textoCompleto);
   const linhas: LinhaExtrato[] = [];
-  const add = (d: unknown, v: unknown, desc: unknown) => {
-    const valor = Math.abs(Number(String(v).replace(',', '.').replace(/[^\d.-]/g, '')));
-    if (!isFinite(valor) || valor <= 0) return;
-    const data = String(d || '').trim().slice(0, 10);
-    linhas.push({ data, valor: r2(valor), descricao: String(desc || '').trim() });
+  const add = (d: unknown, v: unknown, desc: unknown, explicitDirection?: unknown) => {
+    const data = dataBancaria(d);
+    const signed = valorBancario(v);
+    if (explicitDirection != null && explicitDirection !== 'entrada' && explicitDirection !== 'saida')
+      throw new HttpError(400, 'Direção bancária inválida.');
+    if (signed < 0 && explicitDirection === 'entrada') throw new HttpError(400, 'Valor negativo conflita com a direção de entrada.');
+    const direcao = explicitDirection === 'saida' || signed < 0 ? 'saida' : 'entrada';
+    linhas.push({ data, valor: Math.abs(signed), direcao, descricao: String(desc || '').trim() });
   };
 
   const raw = body.linhas;
   if (Array.isArray(raw)) {
-    for (const l of raw as Record<string, unknown>[]) add(l.data, l.valor, l.descricao || l.desc || l.texto);
+    for (const linha of raw) {
+      if (!linha || typeof linha !== 'object' || Array.isArray(linha)) throw new HttpError(400, 'Linha de extrato inválida.');
+      const l = linha as Record<string, unknown>; add(l.data, l.valor, l.descricao || l.desc || l.texto, l.direcao);
+    }
     return linhas;
   }
   const texto = String(body.texto || body.csv || body.extrato || '');
   for (const line of texto.split(/\r?\n/)) {
     const t = line.trim();
     if (!t) continue;
-    // formato flexível: data;valor;descricao  ou  valor;descricao  ou valor,descricao
-    const parts = t.split(/[;,\t]/).map((x) => x.trim()).filter(Boolean);
-    if (parts.length >= 3) add(parts[0], parts[1], parts.slice(2).join(' '));
-    else if (parts.length === 2) {
-      const v = Number(parts[0].replace(',', '.'));
-      if (isFinite(v) && /^[\d.,]+$/.test(parts[0])) add(hoje(), parts[0], parts[1]);
-      else add(parts[0], parts[1], '');
-    }
+    // Formato simples: data;valor;descrição (aceita vírgula decimal), ou
+    // data,valor,descrição (vírgula só separadora e ponto decimal). Não é um
+    // parser de CSV entre aspas; rejeitar formatos ambíguos é melhor que perder
+    // ou transformar silenciosamente centavos.
+    if (t.includes('"')) throw new HttpError(400, 'CSV entre aspas não é suportado; use data;valor;descrição.');
+    const separador = t.includes(';') ? ';' : t.includes('\t') ? '\t' : ',';
+    const parts = t.split(separador).map((x) => x.trim());
+    if (parts.length < 2 || (separador === ',' && parts.length > 3))
+      throw new HttpError(400, 'Linha de extrato inválida; use data;valor;descrição.');
+    add(parts[0], parts[1], parts.slice(2).join(separador));
   }
   return linhas;
 }
 
 /**
- * Matching de conciliação (P2 §14): casa UMA linha do extrato com lançamentos
- * pendentes por valor (ou líquido, para extrato de operadora), data e
- * descrição. Critério confiável = candidato ÚNICO; ambiguidade não casa
- * (vai para conferência manual — nunca conciliação automática).
+ * Compatibilidade da rota antiga: ela agora usa a importação persistente e
+ * nunca baixa por aproximação. Conta e confirmação explícita são obrigatórias.
  */
-export function casarLinhaExtrato(linha: { data?: string; valor: number; descricao?: string }, pendentes: Row[]): Row | null {
-  const valor = Number(linha.valor);
-  const buscaDesc = String(linha.descricao || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim();
-  let cand = pendentes.filter((l) => Math.abs(Number(l.valor || 0) - valor) < 0.01);
-  // Extrato de operadora (Mercado Pago/cartão) mostra o valor já sem taxa:
-  // casa também pelo valor líquido registrado no lançamento.
-  if (cand.length === 0) cand = pendentes.filter((l) => Math.abs(liquidoDe(l) - valor) < 0.01);
-  // Data é critério eliminatório (não sugestivo): linha com data só casa com
-  // título vencendo/emitido NAQUELA data. Menos que isso é conciliar no chute.
-  if (linha.data) cand = cand.filter((l) => dataISO(l.vencimento || l.data) === linha.data);
-  if (buscaDesc && cand.length > 1) {
-    const sobreDesc = cand.filter((l) => buscaDesc.includes(String(l.descricao || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim()) || String(l.descricao || '').toLowerCase().includes(buscaDesc));
-    if (sobreDesc.length) cand = sobreDesc;
-  }
-  return cand.length === 1 ? cand[0] : null;
-}
-
 export async function conciliarExtrato(req: Request, res: Response) {
-  const actor = currentUser(req);
-  checkAccess(getResource('lancamentos_financeiros')!, actor, 'update');
-  const escopo = escopoDoAtor(actor as unknown as AuthUser);
-  const s = getStore();
-  const conteudoBruto = String(req.body?.texto || req.body?.csv || req.body?.extrato || req.body?.ofx || '');
-  const fonte = pareceOFX(conteudoBruto) ? 'OFX' : 'texto/CSV';
-  const linhas = parseLinhasExtrato(req.body || {});
-  if (linhas.length === 0) throw new HttpError(400, 'Nenhuma linha válida. Use: data;valor;descrição — ou cole um extrato OFX do Internet Banking.');
-
-  const contaId = req.body.conta_id ?? null;
-  if (contaId) {
-    // Conta informada precisa ser da empresa do ator.
-    assertRegistroDaEmpresa(getResource('contas_financeiras')!, await s.get(getResource('contas_financeiras')!, Number(contaId)), escopo);
-  }
-  const formaPagamento = req.body.forma_pagamento ?? null;
-  // MULTIEMPRESA: só casa com títulos do escopo do ator.
-  const lancR = await s.list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 100000, filter: aplicarFiltroEmpresa(getResource('lancamentos_financeiros')!, undefined, escopo) });
-  const pendentes = lancR.rows.filter((l) => String(l.status) === 'pendente' && ['receita', 'despesa'].includes(String(l.tipo)));
-
-  const confirmados: { data: string; valor: number; descricao: string; lancamento_id: number }[] = [];
-  const naoConfirmados: { data: string; valor: number; descricao: string; motivo: string }[] = [];
-
-  for (const linha of linhas) {
-    const valor = Number(linha.valor);
-    const l = casarLinhaExtrato(linha, pendentes);
-    if (!l) {
-      const cand = pendentes.filter((x) => Math.abs(Number(x.valor || 0) - valor) < 0.01 || Math.abs(liquidoDe(x) - valor) < 0.01);
-      naoConfirmados.push({ data: linha.data, valor, descricao: linha.descricao || '', motivo: cand.length === 0 ? 'Nenhum lançamento pendente com esse valor/data.' : 'Mais de um lançamento compatível — confira manualmente.' });
-      continue;
-    }
-
-    const id = Number(l.id);
-    // Baixa total atômica (guarda `pendente`) + origem consistente + comissão.
-    await efetuarBaixa(
-      { id: actor.id || null, name: actor.name },
-      id,
-      { data: linha.data || hoje(), conta_id: contaId ?? l.conta_id ?? null, forma_pagamento: formaPagamento ?? l.forma_pagamento ?? null, origem: 'conciliacao', nota: `Conciliado em ${hoje()} (extrato ${fonte})` }
-    );
-
-    pendentes.splice(pendentes.indexOf(l), 1);
-    confirmados.push({ data: linha.data || String(l.data || ''), valor, descricao: String(l.descricao || ''), lancamento_id: id });
-  }
-
-  res.json({ ok: true, totalLinhas: linhas.length, confirmados, naoConfirmados });
+  const { importarExtrato } = await import('./extrato');
+  let out: any;
+  const captura = { json(value: unknown) { out = value; return this; } } as unknown as Response;
+  await importarExtrato(req, captura);
+  res.json({ ok: true, totalLinhas: out.totalLinhas, confirmados: [], duplicadas: out.duplicadas,
+    naoConfirmados: out.pendentes.map((linha: any) => ({ data: linha.data || '', valor: linha.valor,
+      descricao: linha.descricao || '', extrato_id: linha.extrato_id,
+      motivo: 'Importada; confirme a identidade do título ou do repasse antes de conciliar.' })) });
 }
 
 // ----------------------------------------------------------------------------
@@ -1464,8 +1415,8 @@ export async function recebiveisCartao(req: Request, res: Response) {
   checkAccess(getResource('lancamentos_financeiros')!, actor, 'read');
   const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const s = getStore();
-  const lancR = await s.list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 50000, filter: aplicarFiltroEmpresa(getResource('lancamentos_financeiros')!, undefined, escopo) });
-  const cartao = lancR.rows.filter(
+  const lancamentos = await s.transaction((tx) => listarTodos(getResource('lancamentos_financeiros')!, aplicarFiltroEmpresa(getResource('lancamentos_financeiros')!, undefined, escopo) || {}, tx), { isolation: 'repeatable read' });
+  const cartao = lancamentos.filter(
     (l) => String(l.status) === 'pendente' && ['cartao_credito', 'cartao_debito'].includes(String(l.forma_pagamento || '')) && ['receita', 'despesa'].includes(String(l.tipo)) && !ehTransferencia(l)
   );
   const porDia = new Map<string, { vencimento: string; bruto: number; taxas: number; liquido: number; titulos: number }>();
@@ -1543,8 +1494,13 @@ export async function efetuarBaixa(
     if (ehTransferencia(lanc)) throw new HttpError(400, 'Transferências são gerenciadas pelo módulo Transferências.');
 
     const contaBaixa = opcoes.conta_id ?? lanc.conta_id ?? null;
+    if (contaBaixa != null && contaBaixa !== '') {
+      const contaId = Number(contaBaixa);
+      if (!Number.isSafeInteger(contaId) || contaId <= 0 || !await s.findOneWhere(getResource('contas_financeiras')!, { id: contaId, empresa_id: empresaDe(lanc) }, txi))
+        throw new HttpError(404, 'Conta financeira não encontrada.');
+    }
     const formaBaixa = opcoes.forma_pagamento ?? lanc.forma_pagamento ?? null;
-    const dataBaixa = dataISO(opcoes.data) || hoje();
+    const dataBaixa = opcoes.data === undefined || opcoes.data === '' ? hoje() : dataBancaria(opcoes.data);
     const origem = opcoes.origem || 'manual';
     const jurosMulta = r2(juros + multa);
     const filhos: number[] = [];
@@ -1572,8 +1528,11 @@ export async function efetuarBaixa(
     ].filter(Boolean);
     const patch: Row = ehParcial
       ? { ...lanc, valor: restante, valor_liquido: calcularLiquido(restante, Number(lanc.taxa_pct || 0)), conta_id: contaBaixa, forma_pagamento: formaBaixa, observacoes: notas.join('\n') + notaExtra }
-      : { ...lanc, status: 'confirmado', conta_id: contaBaixa, forma_pagamento: formaBaixa, observacoes: notas.join('\n') + notaExtra };
-    const atualizado = await s.tryUpdateIf(lancR, lancamentoId, { status: 'pendente' }, patch, txi);
+      : { ...lanc, status: 'confirmado', data_baixa: dataBaixa, conta_id: contaBaixa, forma_pagamento: formaBaixa, observacoes: notas.join('\n') + notaExtra };
+    // Uma baixa parcial mantém o status pendente. O saldo observado também
+    // deve participar do CAS, senão duas parciais concorrentes criam filhos
+    // confirmados e a última sobrescreve o saldo calculado pela primeira.
+    const atualizado = await s.tryUpdateIf(lancR, lancamentoId, { empresa_id: lanc.empresa_id, status: 'pendente', valor: lanc.valor }, patch, txi);
     if (!atualizado) throw new HttpError(409, 'Este título foi baixado por outra operação. Recarregue e confira.');
     await s.audit(
       { usuario_id: actor.id || null, usuario: actor.name, acao: 'editar', recurso: lancR.key, registro_id: lancamentoId, descricao: ehParcial ? `Baixa parcial em andamento — ${String(lanc.descricao)}` : `Lançamento confirmado pela baixa — ${String(lanc.descricao)}`, dados: { origem, parcial: ehParcial }, empresa_id: empresaDoRegistroAudit(lancR, lanc, actor) },
@@ -1586,6 +1545,7 @@ export async function efetuarBaixa(
       const parcial = await criarLancamento(
         {
           data: dataBaixa,
+          data_baixa: dataBaixa,
           tipo,
           categoria_id: lanc.categoria_id ?? null,
           centro_custo_id: lanc.centro_custo_id ?? null,
@@ -1608,8 +1568,8 @@ export async function efetuarBaixa(
     }
 
     // 2) Filhotes do acerto: caixa e DRE batem com o extrato.
-    const catRecFin = (await categoriaPorClasse('receitas_financeiras', txi)) ?? (await categoriaPadrao('receita', txi));
-    const catDespFin = (await categoriaPorClasse('despesas_financeiras', txi)) ?? (await categoriaPadrao('despesa', txi));
+    const catRecFin = (await categoriaPorClasse('receitas_financeiras', empresaDe(lanc), txi)) ?? (await categoriaPadrao('receita', empresaDe(lanc), txi));
+    const catDespFin = (await categoriaPorClasse('despesas_financeiras', empresaDe(lanc), txi)) ?? (await categoriaPadrao('despesa', empresaDe(lanc), txi));
     if (jurosMulta > 0) {
       const filho = await criarLancamento(
         {
@@ -1671,8 +1631,10 @@ export async function efetuarBaixa(
       const refTipo = String(lanc.referencia_tipo || '');
       const refId = Number(lanc.referencia_id || 0);
       if (refTipo === 'venda' && refId) {
+        if (!await s.findOneWhere(getResource('vendas')!, { id: refId, empresa_id: empresaDe(lanc) }, txi)) throw new HttpError(409, 'Origem da venda inválida para esta empresa.');
         await s.update(getResource('vendas')!, refId, { fin_status: 'recebido', fin_recebido_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, txi);
       } else if (refTipo === 'compra' && refId) {
+        if (!await s.findOneWhere(getResource('compras')!, { id: refId, empresa_id: empresaDe(lanc) }, txi)) throw new HttpError(409, 'Origem da compra inválida para esta empresa.');
         await s.update(getResource('compras')!, refId, { fin_status: 'pago', fin_pago_em: dataBaixa, fin_conta_id: contaBaixa, fin_forma_pagamento: formaBaixa }, txi);
       }
     }
@@ -1703,7 +1665,9 @@ export async function efetuarBaixa(
     );
     return { lancamento: atualizado, filhos, parcial: ehParcial, restante };
   };
-  if (tx) return executar(tx);
+  // null é a transação explícita do store em memória; só undefined significa
+  // que o chamador não forneceu transação.
+  if (tx !== undefined) return executar(tx);
   try {
     return await s.transaction(executar);
   } catch (e) {
@@ -1786,6 +1750,14 @@ export async function criarLancamentoManual(req: Request, res: Response) {
         referencia_id: body.referencia_id ?? null,
         observacoes: body.observacoes ?? null,
       };
+      if (['venda', 'compra', 'baixa', 'aporte', 'transferencia', 'fin_importacoes_contabeis'].includes(String(data.referencia_tipo)))
+        throw new HttpError(400, 'Referência operacional deve ser gerada pelo fluxo de origem, não por lançamento manual.');
+      for (const campo of ['conta_id', 'categoria_id', 'centro_custo_id']) {
+        if (data[campo] != null && data[campo] !== '' && (!Number.isSafeInteger(Number(data[campo])) || Number(data[campo]) <= 0))
+          throw new HttpError(400, `Identificador inválido em ${campo}.`);
+      }
+      await validarReferenciasDaEmpresa(getResource('lancamentos_financeiros')!, data, escopo,
+        (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
       if (body.valor_liquido !== undefined && body.valor_liquido !== null && body.valor_liquido !== '') data.valor_liquido = Number(body.valor_liquido);
       hookTaxaLancamento(data);
       const inserted = await s.insert(getResource('lancamentos_financeiros')!, data, tx);

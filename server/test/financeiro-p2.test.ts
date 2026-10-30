@@ -81,9 +81,11 @@ test('P2 multiempresa: baixa em título de outra empresa responde 404', async ()
 
 test('P2 multiempresa: conciliação só casa títulos do próprio escopo', async () => {
   const lancB = await novoLancamento({ descricao: 'Somente da B 555', valor: 555.55, vencimento: '2026-11-05' }, atorE2);
-  const fora = await chamar(fin.conciliarExtrato, reqDe({ texto: '2026-11-05;555.55;Somente da B 555' }));
-  assert.equal(fora.confirmados.length, 0, 'a empresa A não pode conciliar título da B');
+  const contaA = await createRecord(RESOURCES.contas_financeiras, { nome: 'Banco conciliação E1', tipo: 'banco', saldo_inicial: 0 }, ADMIN);
+  const fora = await chamar(fin.conciliarExtrato, reqDe({ conta_id: contaA.id, texto: '2026-11-05;555.55;Somente da B 555' }));
+  assert.equal(fora.confirmados.length, 0, 'não há baixa automática');
   assert.equal(fora.naoConfirmados.length, 1);
+  await esperarErro(() => extrato.conciliarLinhaManual(reqDe({ lancamento_id: lancB.id }, { params: { id: fora.naoConfirmados[0].extrato_id } }), null as any), 404);
   const intacto = await s.get(RESOURCES.lancamentos_financeiros, Number(lancB.id));
   assert.equal(intacto!.status, 'pendente');
 });
@@ -417,8 +419,10 @@ test('P2 OFX: importação persiste FITID e não duplica na reimportação', asy
   assert.equal(out1.fonte, 'ofx');
   assert.equal(out1.importadas, 1);
   assert.equal(out1.duplicadas, 0);
-  assert.equal(out1.conciliadas, 1, 'match único por valor+data concilia sozinho');
-  assert.equal(out1.conciliadas_detalhe[0].lancamento_id, Number(lanc.id));
+  assert.equal(out1.conciliadas, 0, 'valor e data não identificam um título sem confirmação');
+  assert.equal((await s.get(RESOURCES.lancamentos_financeiros, Number(lanc.id)))!.status, 'pendente');
+  const confirmacao = await chamar(extrato.conciliarLinhaManual, reqDe({ lancamento_id: lanc.id }, { params: { id: out1.pendentes[0].extrato_id } }));
+  assert.equal(confirmacao.baixa_lancamento_id, Number(lanc.id));
   const baixado = await s.get(RESOURCES.lancamentos_financeiros, Number(lanc.id));
   assert.equal(baixado!.status, 'confirmado');
 

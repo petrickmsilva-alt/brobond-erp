@@ -14,6 +14,7 @@ import { MODULES, usaCrudGenerico, visibleModules } from './modules';
 // quando a rota é realmente acessada.
 const ModulePage = lazy(() => import('./pages/ModulePage'));
 const FinanceiroPeriodosPage = lazy(() => import('./pages/FinanceiroPeriodosPage'));
+const FinanceiroExtratoPage = lazy(() => import('./pages/FinanceiroExtratoPage'));
 const FiscalObrigacaoDetalhePage = lazy(() => import('./pages/FiscalObrigacaoDetalhePage'));
 const FiscalExecucoesPage = lazy(() => import('./pages/FiscalExecucoesPage'));
 const Settings = lazy(() => import('./pages/Settings'));
@@ -583,6 +584,9 @@ export default function App() {
             <Route path="commerce/devolucoes" element={<ModuleAccess moduleId="commerce-pedidos"><CommerceDevolucoesPage /></ModuleAccess>} />
             <Route path="commerce/eventos" element={<ModuleAccess moduleId="commerce-fila"><CommerceEventosPage /></ModuleAccess>} />
             <Route path="commerce/erros" element={<ModuleAccess moduleId="commerce-fila"><CommerceErrosPage /></ModuleAccess>} />
+            <Route path="financeiro/extrato" element={<ModuleAccess moduleId="financeiro"><FinanceiroExtratoPage modo="lista" /></ModuleAccess>} />
+            <Route path="financeiro/extrato/:id" element={<ModuleAccess moduleId="financeiro"><FinanceiroExtratoPage modo="detalhe" /></ModuleAccess>} />
+            <Route path="financeiro/extrato/:id/editar" element={<ModuleAccess moduleId="financeiro"><FinanceiroExtratoPage modo="editar" /></ModuleAccess>} />
             <Route path="financeiro/periodos" element={<ModuleAccess moduleId="balancete"><FinanceiroPeriodosPage modo="lista" /></ModuleAccess>} />
             <Route path="financeiro/periodos/novo" element={<ModuleAccess moduleId="balancete"><FinanceiroPeriodosPage modo="novo" /></ModuleAccess>} />
             <Route path="financeiro/periodos/:competencia" element={<ModuleAccess moduleId="balancete"><FinanceiroPeriodosPage modo="detalhe" /></ModuleAccess>} />

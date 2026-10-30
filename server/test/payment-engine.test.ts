@@ -485,3 +485,18 @@ test('Stripe e PagBank não projetam pagamento integral quando captura externa �
   await assert.rejects(() => pagbank.getPayment(pc, 'ORDE-test'), (e: any) => e instanceof PaymentError);
   pagPaid = 10000; assert.equal((await pagbank.getPayment(pc, 'ORDE-test')).status, 'PAID');
 });
+
+test('Mercado Pago não projeta pagamento com referência, total ou estorno remoto desconhecidos', async (t) => {
+  const { MercadoPagoProvider } = await import('../../modules/payments/providers/mercado-pago');
+  let payload: Record<string, unknown> = { id: 'mp-proof', status: 'approved', transaction_amount: 100, currency_id: 'BRL', transaction_amount_refunded: 0 };
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(payload)));
+  const provider = new MercadoPagoProvider(); const pc = { ...ctx, credentials: { access_token: 'fixture-only' } };
+  for (const bad of [
+    { ...payload, id: 'other' }, { ...payload, id: null }, { ...payload, transaction_amount: null },
+    { ...payload, currency_id: null }, { ...payload, transaction_amount_refunded: null },
+    { ...payload, transaction_amount_refunded: undefined }, { ...payload, transaction_amount_refunded: -1 },
+    { ...payload, transaction_amount_refunded: 101 },
+  ]) { payload = bad; await assert.rejects(() => provider.getPayment(pc, 'mp-proof'), (e: any) => e instanceof PaymentError && e.ambiguous); }
+  payload = { id: 'mp-proof', status: 'approved', transaction_amount: 100, currency_id: 'BRL', transaction_amount_refunded: 0 };
+  assert.equal((await provider.getPayment(pc, 'mp-proof')).status, 'PAID');
+});

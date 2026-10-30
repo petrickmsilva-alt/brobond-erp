@@ -55,7 +55,7 @@ type RentabilidadeItem = { produto: string; receita: number; cmv: number; margem
 type Rentabilidade = { receitaTotal: number; cmvTotal: number; margemTotal: number; margemPctTotal: number; quantidadeTotal: number; porProduto: RentabilidadeItem[]; porCanal: RentabilidadeItem[] };
 type InvestidorResumo = { id: number; nome: string; tipo: string; participacao_pct: number; totalAportado: number; totalDistribuido: number; posicao: number; quantidadeAportes: number; ultimoAporte: string | null };
 type InvestidoresResumo = { totalInvestido: number; totalDistribuido: number; aportesNoMes: number; porInvestidor: InvestidorResumo[] };
-type ConciliacaoResult = { ok: boolean; totalLinhas: number; confirmados: { data: string; valor: number; descricao: string; lancamento_id: number }[]; naoConfirmados: { data: string; valor: number; descricao: string; motivo: string }[] };
+type ConciliacaoResult = { ok: boolean; totalLinhas: number; duplicadas?: number; confirmados: { data: string; valor: number; descricao: string; lancamento_id: number }[]; naoConfirmados: { data: string; valor: number; descricao: string; motivo: string }[] };
 
 type Resumo = {
   mes: string;
@@ -122,6 +122,7 @@ export default function FinanceiroPage() {
   const [loading, setLoading] = useState(true);
   const [gerando, setGerando] = useState(false);
   const [concTexto, setConcTexto] = useState('');
+  const [concConta, setConcConta] = useState('');
   const [conciliando, setConciliando] = useState(false);
   const [concResult, setConcResult] = useState<ConciliacaoResult | null>(null);
   const [baixaAlvo, setBaixaAlvo] = useState<{ lanc: ContaPendente; lado: 'receita' | 'despesa' } | null>(null);
@@ -200,9 +201,9 @@ export default function FinanceiroPage() {
     setConciliando(true);
     setConcResult(null);
     try {
-      const r = await api.post<ConciliacaoResult>('/financeiro/conciliacao', { texto: concTexto });
+      const r = await api.post<ConciliacaoResult>('/financeiro/conciliacao', { texto: concTexto, conta_id: Number(concConta) });
       setConcResult(r);
-      toast.success(r.confirmados.length > 0 ? `${r.confirmados.length} lançamento(s) conciliado(s).` : 'Nenhum lançamento conciliado.');
+      toast.success(r.duplicadas && !r.naoConfirmados.length ? `${r.duplicadas} linha(s) já importadas; nenhuma baixa nova.` : 'Extrato importado. Revise as linhas antes de conciliar.');
       if (r.confirmados.length > 0) await load();
     } catch (e: any) {
       toast.error(e.message || 'Não foi possível conciliar o extrato.');
@@ -735,21 +736,29 @@ export default function FinanceiroPage() {
                 <ScanLine className="h-4 w-4 text-navy-500" /> Conciliação bancária
               </h2>
               <p className="mt-0.5 text-xs text-slate-400">
-                Cole o extrato em texto (data;valor;descrição) <strong>ou o arquivo OFX do Internet Banking</strong> (Banco Inter, Nubank, Sicoob...) — o ERP casa com os lançamentos pendentes.
+                Selecione a conta e importe texto (data;valor;descrição) ou OFX. Valor e data não identificam um título: nenhuma baixa automática será feita. No CSV, use valor negativo para saídas; sem identificador bancário, linhas idênticas exigem revisão e não são reimportadas automaticamente.
               </p>
-              <textarea
-                className="input mt-3 h-28 resize-none font-mono text-xs"
+              <label className="mt-3 block text-sm font-medium">Conta bancária
+                <select className="input mt-1" required value={concConta} onChange={(e) => setConcConta(e.target.value)}>
+                  <option value="">Selecione uma conta</option>
+                  {data.saldoContas.map((c) => <option key={c.conta_id} value={c.conta_id}>{c.nome}</option>)}
+                </select>
+              </label>
+              <label htmlFor="extrato-conteudo" className="mt-3 block text-sm font-medium">Conteúdo do extrato</label>
+              <textarea id="extrato-conteudo"
+                className="input mt-1 h-28 resize-none font-mono text-xs"
                 placeholder={'2026-09-04;1800,00;ALUGUEL\n2026-09-04;320,00;ENERGIA'}
                 value={concTexto}
                 onChange={(e) => setConcTexto(e.target.value)}
               />
-              <button className="btn-accent mt-2 w-full justify-center" onClick={conciliar} disabled={conciliando || !concTexto.trim()}>
-                <RefreshCw className={`h-4 w-4 ${conciliando ? 'animate-spin' : ''}`} /> Conciliar extrato
+              <button className="btn-accent mt-2 w-full justify-center" onClick={conciliar} disabled={conciliando || !concTexto.trim() || !concConta}>
+                <RefreshCw className={`h-4 w-4 ${conciliando ? 'animate-spin' : ''}`} /> Importar extrato
               </button>
+              <Link className="mt-3 inline-block text-sm text-blue-700 underline" to="/financeiro/extrato">Revisar linhas de extrato</Link>
               {concResult && (
                 <div className="mt-3 space-y-1.5 text-xs">
                   <div className="flex items-center justify-between gap-2">
-                    <p className={`font-semibold ${concResult.confirmados.length > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>{concResult.confirmados.length} conciliado(s) · {concResult.naoConfirmados.length} pendente(s) de revisão</p>
+                    <p className={`font-semibold ${concResult.confirmados.length > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>{concResult.confirmados.length} conciliado(s) · {concResult.naoConfirmados.length} pendente(s) de revisão · {concResult.duplicadas || 0} já importada(s)</p>
                     <button className="btn-secondary !px-2 !py-1 text-[11px]" onClick={exportarConciliacao} title="Baixar o resultado em CSV">
                       <Download className="h-3.5 w-3.5" /> Exportar
                     </button>

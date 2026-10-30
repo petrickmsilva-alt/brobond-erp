@@ -191,7 +191,7 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
     const { confirmarPagamentoCobranca } = await import('../src/commerce/pedidos');
     let status = 'pending';
     registrarProvider({ ...mercadopagoProvider, async consultaCobranca(_ctx, ref) {
-      return { provider_ref: ref, status: status === 'approved' ? 'paga' : 'pendente', bruto: { status, transaction_amount: 80, currency_id:'BRL' } };
+      return { provider_ref: ref, status: status === 'approved' ? 'paga' : 'pendente', bruto: { id: ref, status, transaction_amount: 80, transaction_amount_refunded: 0, currency_id:'BRL' } };
     } });
     setOnCobrancaAlterada(confirmarPagamentoCobranca);
     const enviar = (id: string, assinado = true) => {

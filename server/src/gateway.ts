@@ -776,7 +776,8 @@ export async function estornarCobranca(req: Request, res: Response) {
     const remote = await provider.consultaCobranca(legacyCtx, String(row.provider_ref));
     const bruto = remote?.bruto;
     const total = Number(bruto?.transaction_amount);
-    const devolvido = Number(bruto?.transaction_amount_refunded);
+    const rawRefund = bruto?.transaction_amount_refunded;
+    const devolvido = rawRefund === null || rawRefund === undefined || rawRefund === '' || typeof rawRefund === 'boolean' ? NaN : Number(rawRefund);
     if (!bruto || String(bruto.id) !== String(row.provider_ref) || bruto.currency_id !== 'BRL' || !Number.isFinite(total) || round2(total) !== round2(Number(row.valor)) ||
         !Number.isFinite(devolvido) || devolvido < 0 || devolvido > total)
       throw new HttpError(409, 'Valor do estorno legado não pôde ser confirmado; concilie antes de continuar.');

@@ -130,3 +130,71 @@ Não foi usado `npm audit fix --force` nem upgrade indiscriminado. Verificar nov
 ## 11. Documentação adicional
 
 Arquitetura: `architecture/enterprise-waves-1-2-3.md`; operação: `operations/enterprise-operations.md`; pagamentos: `payments/enterprise-payments.md`; supply chain: `supply-chain/enterprise-supply-chain.md`; commerce: `commerce/enterprise-commerce.md`. Evidências brutas de execução ficaram no ambiente de teste, não em Git. Este relatório não contém credenciais reais.
+
+## 12. Closure Pass sobre `d28f33a` — atualização de 2026-10-29
+
+Esta seção atualiza o diagnóstico anterior; os resultados históricos das seções anteriores continuam identificados como tais. O ponto de partida exato desta passagem é `d28f33a2a2cc914e8f15abc12593d4cde1c3a518`, na branch `arena/5e0b7882-brobond-erp`. Nenhum dado existente ou arquivo em `backups/` foi resetado. As migrations `0078`, `0079` e `0080` são aditivas e não inferem fatos para registros antigos.
+
+### 12.1 Correções implementadas e limites
+
+- **Extrato e baixa:** `server/src/extrato.ts`, `financeiro.ts`, `modules/payments/application/payouts.ts` e `0078` ligam linha bancária ao efeito financeiro específico, incluindo filho de baixa parcial; baixa, vínculo e auditoria são uma transação. A mesma trava PG por empresa protege vínculo de repasse, conciliação e divergência; o CAS de baixa também compara saldo observado. Replay só retorna idempotente se estado, título/filho, conta, direção, valor e data da baixa ainda conferirem. Não há baixa automática por valor/data. Linhas históricas sem prova do efeito ou da data devem ser revisadas; não foram retroativamente marcadas como corretas.
+- **Entrada bancária:** OFX/CSV exige data e valor válidos, rejeita conteúdo malformado sem importar parte do arquivo e preserva centavos com vírgula no formato `data;valor;descrição`. Moeda OFX explicitamente diferente de BRL é recusada; ausência de moeda não a comprova. CSV entre aspas não é suportado. Uma linha sem identificador cujo conteúdo coincide com outra bloqueia com `409 EXTRATO_SEM_IDENTIFICADOR_AMBIGUO`, pois não é possível saber se é replay ou outra operação; duplicação indistinguível no próprio arquivo e FITIDs que só diferem em caixa também exigem revisão. Não se afirma que hash de conteúdo identifica uma transação bancária.
+- **CNAB:** cada linha nova, a baixa e seu vínculo/auditoria são atômicos; caso a baixa falhe, a transação reverte antes de tentar registrar divergência. Em liquidação, valor pago e data válidos são obrigatórios; o número da cobrança deve ser único e pertencer à conta informada. Um número de documento coincidente com o ID interno e valor não é prova de identidade. O parser FEBRABAN existente é um contrato interno de teste, sem homologação por banco. Linhas `importada` deixadas por versões antigas podem demandar revisão manual; não são automaticamente reaplicadas no replay.
+- **Tenancy e recorrências:** referências de conta/categoria/centro na criação manual e conta de baixa são checadas por empresa; uma baixa não atualiza compra/venda de outra empresa. Busca de categorias, parcelas e origem na sincronização financeira foi recortada por empresa. A geração de recorrências usa trava, CAS e transação conjunta para lançamento/avanço/auditoria; recupera agenda histórica cujo lançamento já exista e avança semanal/mensal/anualmente. O escopo do botão respeita a empresa ativa; o cron administrativo existente continua sujeito ao guard de admin. `pgstore.audit` usa READ COMMITTED após a trava para não fixar snapshot anterior ao escritor concorrente.
+- **Data e volumes:** `0080` registra `data_baixa` sem reescrever dados legados. O resumo de caixa usa a data da baixa quando conhecida; para dados antigos sem ela mantém fallback para a data histórica do lançamento, que não prova quando o dinheiro entrou. Para webhook sem data externa, a data da baixa é a data da operação local, **não prova a data efetiva do provedor**. Resumo financeiro, investidores, rentabilidade e recebíveis deixam de truncar silenciosamente em limites fixos e leem sob snapshot; o resumo ainda materializa listas em memória e precisa de paginação/agregação eficiente e ensaio de carga.
+- **Mercado Pago:** respostas com referência, moeda, total ou refund ausentes/inválidos não são transformadas em sucesso; `null` não vira estorno zero. Testes usam fixtures internas, não demonstram que cada resposta real do provedor terá esses campos nem constituem homologação externa.
+- **Cotação:** `server/src/cotacoesCompra.ts` lê todas as páginas da empresa, rejeita propostas recusadas, preço/frete/prazo inválidos e escolhas repetidas, inclui frete no pedido e verifica fornecedor. Um pedido canônico não mistura vencedores de fornecedores distintos: a operação bloqueia e o usuário deve separar a cotação ou escolher um fornecedor. `0079` registra SHA-256 da decisão para replay equivalente; pedido histórico sem assinatura e replay alterado retornam 409. Não foi implementado desmembramento automático multi-fornecedor. `compras.ts` e CRUD legado ainda permitem transições/recebimento sem comprovação de aprovação em todos os caminhos; não afirmar que aprovação é obrigatória.
+- **UI de extrato:** lista e revisão em `/financeiro/extrato`, `/financeiro/extrato/:id` e `/financeiro/extrato/:id/editar`, sem diálogo operacional, com paginação e erros explícitos. A API valida perfil/tenant e usa `private, no-store` em detalhe/lista. Há testes focais React e HTTP com sessão; não substituem ensaio visual real em 1440/1280/768/390/320 nem auditoria WCAG AA.
+
+### 12.2 Readiness recalculado — não aprovado
+
+| Gate | Resultado | Motivo e módulo | Risco | Ação para fechar |
+|---|---|---|---|---|
+| `WAVE1_CODE_READY` | **NO** | `server/src/financeiroPeriodos.ts`, `modules/payments/application/{payouts,disputes}.ts`: fechamento é só de escrituração importada; repasse/contabilidade/fiscal/disputas não estão integrados de ponta a ponta. | Fechar com pendência ou estado financeiro/fiscal divergente. | Implementar preflight determinístico, bloqueio de todos os movimentos e reabertura auditada, integrar impactos comprovados e provar corrida/isolamento. |
+| `WAVE1_INTERNAL_GO_LIVE` | **NO** | Os mesmos módulos e operações financeiras; jornadas de provider, chargeback e fechamento integral não foram aceitas. | Caixa, fiscal ou razão não refletirem corretamente eventos tardios. | Executar jornada D e aceite operacional, segurança, carga e recuperação com evidências. |
+| `WAVE2_CODE_READY` | **NO** | `server/src/{compras,cotacoesCompra,wmsEnderecamento,producaoCapacidade}.ts`: requisição e desmembramento de compras, aprovação obrigatória, putaway/replenishment e ordem planejada integrada permanecem incompletos. | Compra indevida, saldo/local incorreto ou plano insuficiente. | Fechar transições canônicas, requisição→cotação, WMS e MRP→OP com invariantes e RBAC. |
+| `WAVE2_INTERNAL_GO_LIVE` | **NO** | `server/test/pg/closure-procurement.test.ts` prova somente cotação→pedido→recebimento→AP; manufacturing/WMS não têm jornada integral. | Falha operacional entre departamentos mesmo com testes isolados verdes. | Executar jornadas B/C completas em PG, incluindo replays, concorrência e Empresa A/B. |
+| `WAVE3_CODE_READY` | **NO** | `server/src/commerce`, `server/src/logistica.ts` e adapters de canais: OMS/WMS, devolução/refund eletrônico e integrações não fecham a cadeia. | Pedido expedido ou devolução paga sem sincronização correta de estoque/financeiro. | Integrar estados e efeitos canônicos com idempotência e evidência de provider. |
+| `WAVE3_INTERNAL_GO_LIVE` | **NO** | `server/test/pg/{commerce-e2e,devolucao-e2e}.test.ts` são jornadas parciais. | Falha não observada entre checkout, expedição, retorno e financeiro. | Executar jornadas A/E integrais com retries/tenant e aceite dos canais. |
+| `EXTERNAL_HOMOLOGATION_READY` | **NO** | Adapters de pagamento, bancos, fiscal e canais não certificados. | Resposta de teste ser confundida com contrato/aceite real. | Resolver lacunas internas e homologar cada provider/SEFAZ/carrier com ambiente e credenciais autorizados. |
+| `FULL_ENTERPRISE_GO_LIVE` | **NO — WAVES 4 AND 5 NOT EXECUTED** | Ondas 4/5 fora de escopo. | Escopo empresarial restante não foi implementado/testado nesta passagem. | Planejar e executar ondas 4/5 separadamente após fechar os gates anteriores. |
+
+### 12.3 E2E solicitado — critério integral
+
+| Jornada | Evidência da passagem | Resultado integral |
+|---|---|---|
+| A Commerce | `commerce-e2e.test.ts` cobre catálogo/checkout/reserva/webhook de teste; WMS, remessa e financeiro ainda não compõem a mesma prova integral. | **FAIL / parcial** |
+| B Procurement | `closure-procurement.test.ts` em PG prova cotação→pedido aprovado→recebimento→estoque/custo→AP→baixa, frete e replay; testa 501 itens e concorrência. Requisição e todos os caminhos de aprovação ainda faltam. | **FAIL / parcial** |
+| C Manufacturing | Testes PG de MRP e OP existem, mas não foi provada cadeia única demanda→ordem planejada→OP→consumo→output→custo. | **FAIL / parcial** |
+| D Payment→fechamento | Provas focais de baixa/extrato/CNAB/repasse e testes PG de payment/contábil existem separadamente; fechamento integrado e impacto de disputa faltam. | **FAIL / parcial** |
+| E Returns | `devolucao-e2e.test.ts` cobre retorno/estoque/reversão local, não encadeia refund eletrônico comprovado e financeiro completo. | **FAIL / parcial** |
+
+### 12.4 Pendências e operação segura
+
+- **P0:** fechamento global com pendências determinísticas e `CLOSE_BLOCKED`/`CLOSED`; bloqueio transacional de todos os movimentos e reabertura auditada; contabilização/fiscal de eventos de pagamento, disputa, chargeback, MDR e ajustes; atribuição de refunds concorrentes. Sem isso não há autorização de fechamento empresarial. Referências bancárias/financeiras legadas sem evidência exigem revisão humana.
+- **P1:** WMS avançado, procurement com requisição e compra multifornecedor, aprovação em todos os caminhos, manufacturing planejado, OMS e returns integrados; provar as cinco jornadas completas e limites de job, concorrência e tenant. Testes de partes não são aprovação das jornadas.
+- **P2:** homologar providers, bancos, canais e fiscal sem simular sucesso; acessibilidade e layout em dispositivos reais; paginação eficiente/agregações de grandes resumos; observabilidade, DR e carga. A auditoria UX registra exceções de navegação/infraestrutura e não prova ZERO MODAL global ou WCAG AA.
+- **P3:** reduzir warnings e otimizar planejamento/operação. As ondas 4/5 não foram executadas.
+
+### 12.5 Execução final, migrations e segurança
+
+Os seguintes comandos foram executados em série sobre o mesmo código. Os testes PG usaram PostgreSQL **16.14** e `brobond_closure_gate_20261029d` **vazio**; o migrador operacional aplicou todas as migrations até `0080`. Resultado:
+
+| Verificação | Resultado real |
+|---|---|
+| `npm run test:pg` | **PASS 365/365**, 0 falhas, 0 skips, 0 TODOs. Inclui banco, concorrência de processos, retry, rollback, auditoria e recortes A/B; não transforma provas parciais nas jornadas integrais da §12.3. |
+| `npm test` — server | **PASS 1.552**, 0 falhas e **68 skips**: os testes marcados exigem `DATABASE_URL`; todos os arquivos identificados têm prefixo `pg-` e foram executados no gate PG separado. |
+| `npm test` — client | **PASS 1.049/1.049**, em 120 arquivos. |
+| `npm run smoke:pg -- --keep` | **PASS 396/396**, contra PG real em banco de teste criado pelo próprio smoke. |
+| `npm run typecheck` / `npm run build` | **PASS / PASS** (domain, server e client). |
+| `npm run lint` | **PASS com 0 erros e 585 warnings**; warnings não foram desabilitados. |
+| `npm run test:payments` | **PASS 22/22** (mocks internos não são homologação). |
+| `audit:menu`, `audit:ux`, `architecture:audit`, `go-live:audit` | **PASS estrutural**. O menu registra avisos de rotas sem entrada direta, incluindo extrato (acessível por link em Financeiro); UX mantém quatro exceções de navegação/infraestrutura. Não são ensaios de WCAG, layout ou operação completa. O inventário arquitetural foi regenerado. |
+| `commerce:go-live`, `payment:go-live` | **PASS estrutural/banco**, não constituem go-live funcional ou externo. |
+| `commerce:final-go-live` | **BLOCKED / exit 1**: testes estruturais não provam escopo completo e o script não executa homologação externa. |
+| `db:validate` / `db:deploy` (Prisma) | **BLOCKED / exit 1**: o download do `schema-engine` em `binaries.prisma.sh` falhou pela restrição de rede. O `db:deploy` foi tentado apenas em banco de teste. A execução operacional de SQL acima não equivale à validação ou deploy Prisma. |
+| `npm audit` e `npm audit --omit=dev` | **exit 1** em ambos: 8 pacotes afetados, 4 moderados e 4 baixos, 0 altos/críticos. A análise por pacote, caminho, impacto e sugestão breaking permanece na §9; sem `audit fix --force`. |
+
+**Upgrade isolado:** além do boot em banco vazio, foi aplicado o `db/schema.sql` da base `d28f33a` em outro banco de teste, inseridas linhas legadas de lançamento, extrato e cotação, e executadas individualmente `0078`, `0079` e `0080` **duas vezes**. Os campos anteriores permaneceram iguais, os campos novos ficaram `NULL` sem fatos presumidos, e testes transacionais recusaram baixa duplicada, vínculo de empresa diferente, status incompatível e hash de cotação inválido. Isso não substitui ensaio em cópia de produção nem prova de performance de índices sobre grande volume.
+
+**Histórico de falhas antes do gate final:** a primeira execução PG desta passagem teve 356 aprovações e três falhas de fixtures de cotação; as fixtures foram corrigidas e a bateria repetida. Uma corrida CNAB expôs `40001` em auditoria avulsa depois do efeito financeiro; a auditoria foi corrigida, com teste concorrente de cadeia e repetição PG final. A primeira execução de `npm test` desta passagem teve uma falha em fixture do webhook Commerce que não fornecia identidade/refund exigidos pela nova validação; a fixture foi corrigida sem retirar a asserção e a suíte integral foi repetida. Nenhum desses resultados anteriores é apresentado como o gate final.

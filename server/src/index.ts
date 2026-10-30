@@ -161,7 +161,7 @@ import {
   listarGateways,
   reprocessarEvento,
 } from './gateway';
-import { conciliarLinhaManual, importarExtrato, listarExtrato, marcarDivergencia } from './extrato';
+import { conciliarLinhaManual, detalheExtrato, importarExtrato, listarExtrato, marcarDivergencia } from './extrato';
 import { importarCnab, listarParsersHandler } from './cnab';
 import { vendaPDF, compraPDF } from './pdf';
 import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
@@ -753,6 +753,7 @@ app.post('/api/admin/financeiro/gateway/webhooks/processar', wrap(cronWebhooks))
 // P2 — extrato bancário persistente (OFX/CSV) e conciliação
 app.post('/api/financeiro/extrato/importar', wrap(importarExtrato));
 app.get('/api/financeiro/extrato', wrap(listarExtrato));
+app.get('/api/financeiro/extrato/:id', wrap(detalheExtrato));
 app.post('/api/financeiro/extrato/:id/conciliar', wrap(conciliarLinhaManual));
 app.post('/api/financeiro/extrato/:id/divergir', wrap(marcarDivergencia));
 

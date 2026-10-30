@@ -14,3 +14,7 @@ O Engine trabalha em centavos, roteia por empresa/método/capacidade e registra 
 ## Limitações
 
 Não existem ingestão automática completa de repasses/MDR por provider, envio externo de evidências de disputa, todos os meios por todos os adapters, nem sincronização automática de toda mudança posterior de disputa. A identificação do refund apenas pelo saldo cumulativo pode não atribuir um estorno externo concorrente à operação local. A política de captura integral e pagamentos parciais precisa de evolução de domínio para suportar captura parcial. Reconciliação de timeout e concorrências entre provedor e ERP requer operação supervisionada. Ver `../BROBOND-ENTERPRISE-WAVES-1-2-3-AUDIT.md` para gaps e evidências.
+
+### Closure Pass — evidências bancárias
+
+Baixa financeira, vínculo de extrato e auditoria são atômicos; payout e baixa não podem disputar a mesma linha por coincidência de valor. CSV sem identificador bancário igual a uma linha anterior é ambíguo e bloqueado. CNAB novo usa uma transação por linha e não presume valor nominal pago nem associação por ID interno; os layouts e provedores não foram homologados. As respostas de Mercado Pago com identidade ou valor de refund desconhecidos permanecem inconclusivas, sem sucesso fabricado. O fechamento integrado, a atribuição de refunds concorrentes e os efeitos financeiros completos de disputas permanecem abertos.

@@ -79,7 +79,7 @@ async function convidar(cotacaoId: number, n = 2) {
 // ---------------------------------------------------------------------------
 // 1) FLUXO COMPLETO — rascunho → cotando → decidida → pedido de compra
 // ---------------------------------------------------------------------------
-test('E3: cotação decidida por menor_preco gera pedido com o menor preço de cada item', async () => {
+test('E3: fornecedores distintos bloqueiam pedido inconsistente; fornecedor único preserva a trilha', async () => {
   const { cotacao, itens } = await novaCotacao([{ qtd: 10 }, { qtd: 5 }]);
   const { convites } = await convidar(Number(cotacao.id), 2);
   const [a, b] = convites;
@@ -121,33 +121,23 @@ test('E3: cotação decidida por menor_preco gera pedido com o menor preço de c
   assert.equal(comp.resumo.economia_potencial_total, 45, 'economia potencial calculada errado');
   assert.equal(comp.fornecedores[1].total_cotado, 9 * 10 + 12 * 5, 'total cotado do fornecedor B errado');
 
-  const decidido = await chamar(cc.decidirCotacaoCompra, reqDe({ criterio: 'menor_preco' }, { params: { id: cotacao.id } }), 201);
-  assert.equal(decidido.idempotente, false);
-  assert.equal(decidido.multi_fornecedor, true, 'escolha item a item com vencedores diferentes deve ser sinalizada');
-  assert.equal(decidido.total, 8.5 * 10 + 12 * 5, 'total do pedido = 85 + 60');
-
+  await esperarErro(() => chamar(cc.decidirCotacaoCompra, reqDe({ criterio: 'menor_preco' }, { params: { id: cotacao.id } }), 201), 409, /mais de um fornecedor/);
+  const bloqueada = await s().get(RESOURCES.cotacoes_compra, Number(cotacao.id));
+  assert.equal(bloqueada!.status, 'cotando'); assert.equal(bloqueada!.compra_id, null);
+  const decidido = await chamar(cc.decidirCotacaoCompra, reqDe({ criterio: 'menor_preco_total' }, { params: { id: cotacao.id } }), 201);
+  assert.equal(decidido.idempotente, false); assert.equal(decidido.multi_fornecedor, false);
+  assert.equal(decidido.total, 185, 'fornecedor A: 10×8,50 + 5×20');
   const compra = await s().get(RESOURCES.compras, decidido.compra_id);
-  assert.ok(compra, 'pedido de compra não foi criado');
-  assert.equal(compra!.status, 'pendente', 'pedido gerado por cotação nasce pendente, não recebido');
-  assert.equal(Number(compra!.total), 145);
-  assert.ok(/cotação #/.test(String(compra!.observacoes)), 'o pedido deve dizer de qual cotação veio');
-  assert.ok(/2 fornecedores diferentes/.test(String(compra!.observacoes)), 'divergência de fornecedor precisa estar visível no pedido');
-
+  assert.equal(compra!.status, 'pendente'); assert.equal(Number(compra!.fornecedor_id), Number(a.fornecedor_id));
+  assert.equal(Number(compra!.total), 185); assert.ok(/cotação #/.test(String(compra!.observacoes)));
   const linhas = await s().list(RESOURCES.itens_compra, { page: 1, pageSize: 50, filter: { compra_id: decidido.compra_id } });
-  assert.equal(linhas.rows.length, 2, 'pedido deve ter uma linha por item cotado');
+  assert.equal(linhas.rows.length, 2);
   const porItem = new Map(linhas.rows.map((l) => [Number(l.insumo_id), Number(l.preco_unitario)]));
-  assert.equal(porItem.get(Number(itens[0].insumo.id)), 8.5);
-  assert.equal(porItem.get(Number(itens[1].insumo.id)), 12);
-
-  // A trilha da escolha fica gravada no item da cotação.
+  assert.equal(porItem.get(Number(itens[0].insumo.id)), 8.5); assert.equal(porItem.get(Number(itens[1].insumo.id)), 20);
   const itemCot = await s().get(RESOURCES.cotacao_compra_itens, itens[0].id);
-  assert.equal(Number(itemCot!.escolhido_fornecedor_id), Number(a.fornecedor_id), 'a escolha do item 1 deveria ser o fornecedor A');
-  assert.equal(Number(itemCot!.escolhido_preco), 8.5);
-
+  assert.equal(Number(itemCot!.escolhido_fornecedor_id), Number(a.fornecedor_id)); assert.equal(Number(itemCot!.escolhido_preco), 8.5);
   const depois = await s().get(RESOURCES.cotacoes_compra, Number(cotacao.id));
-  assert.equal(depois!.status, 'decidida');
-  assert.equal(Number(depois!.compra_id), decidido.compra_id);
-  assert.ok(depois!.decidida_em, 'decidida_em deveria ser carimbado');
+  assert.equal(depois!.status, 'decidida'); assert.equal(Number(depois!.compra_id), decidido.compra_id); assert.ok(depois!.decidida_em);
 });
 
 // ---------------------------------------------------------------------------
@@ -291,6 +281,11 @@ test('E3: critério "qualidade" exige escolha explícita de CADA item', async ()
     () => chamar(cc.decidirCotacaoCompra, reqDe({ criterio: 'qualidade', escolhas: [{ item_id: itens[0].id, convite_id: convite }] }, { params: { id: cotacao.id } }), 201),
     400,
     /exige a escolha explícita/
+  );
+  await esperarErro(
+    () => chamar(cc.decidirCotacaoCompra, reqDe({ criterio: 'qualidade', escolhas: [
+      { item_id: itens[0].id, convite_id: convite }, { item_id: itens[0].id, convite_id: convite },
+    ] }, { params: { id: cotacao.id } }), 201), 400, /exatamente uma vez/
   );
   await esperarErro(
     () => chamar(cc.decidirCotacaoCompra, reqDe({ criterio: 'inexistente' }, { params: { id: cotacao.id } }), 201),
@@ -527,4 +522,44 @@ test('P3-04/P3-07 cotação converte apenas por regra declarada e preserva snaps
   assert.equal(purchaseLines.rows[0].unidade_original, 'm');
   assert.equal(Number(purchaseLines.rows[0].unidade_conversao_fator), 0.02);
   assert.equal(purchaseLines.rows[0].unidade_conversao_status, 'CONVERTIDA');
+});
+
+
+test('E3: preço ausente ou inválido nunca vira zero e fornecedor recusado não pode vencer', async () => {
+  const { cotacao, itens } = await novaCotacao([{ qtd: 2 }]); const { convites } = await convidar(Number(cotacao.id), 2);
+  const [a, b] = convites;
+  for (const preco of [undefined, null, '', 'não-numérico', false, -1])
+    await esperarErro(() => chamar(cc.cotarFornecedor, reqDe({ convite_id: a.id, precos: [{ item_id: itens[0].id, preco_unitario: preco }] }, { params: { id: cotacao.id } }), 201), 400, /Preço inválido/);
+  await chamar(cc.cotarFornecedor, reqDe({ convite_id: a.id, precos: [{ item_id: itens[0].id, preco_unitario: 1 }] }, { params: { id: cotacao.id } }), 201);
+  await chamar(cc.cotarFornecedor, reqDe({ convite_id: b.id, frete: 7, precos: [{ item_id: itens[0].id, preco_unitario: 4 }] }, { params: { id: cotacao.id } }), 201);
+  await chamar(cc.recusarCotacao, reqDe({ convite_id: a.id }, { params: { id: cotacao.id } }));
+  const comp = await chamar(cc.comparativoCotacao, reqDe({}, { params: { id: cotacao.id } }));
+  assert.equal(comp.itens[0].menor_preco, 4);
+  await esperarErro(() => chamar(cc.decidirCotacaoCompra, reqDe({ fornecedor_id: a.fornecedor_id }, { params: { id: cotacao.id } }), 201), 409, /não corresponde/);
+  const decidido = await chamar(cc.decidirCotacaoCompra, reqDe({}, { params: { id: cotacao.id } }), 201);
+  assert.equal(decidido.total, 15, '2×4 + frete 7');
+  const compra = await s().get(RESOURCES.compras, decidido.compra_id);
+  assert.equal(Number(compra!.fornecedor_id), Number(b.fornecedor_id)); assert.equal(Number(compra!.frete), 7); assert.equal(Number(compra!.total), 15);
+});
+
+test('E3: replay com outros dados ou decisão histórica sem assinatura não é aceito como idempotente', async () => {
+  const { cotacao, itens } = await novaCotacao([{ qtd: 1 }]); const { convites } = await convidar(Number(cotacao.id), 1);
+  await chamar(cc.cotarFornecedor, reqDe({ convite_id: convites[0].id, precos: [{ item_id: itens[0].id, preco_unitario: 9 }] }, { params: { id: cotacao.id } }), 201);
+  const data = { criterio: 'menor_preco', observacoes: 'Primeira decisão' };
+  const first = await chamar(cc.decidirCotacaoCompra, reqDe(data, { params: { id: cotacao.id } }), 201);
+  const replay = await chamar(cc.decidirCotacaoCompra, reqDe(data, { params: { id: cotacao.id } }));
+  assert.equal(replay.compra_id, first.compra_id); assert.equal(replay.idempotente, true);
+  await esperarErro(() => chamar(cc.decidirCotacaoCompra, reqDe({ ...data, observacoes: 'Dados alterados' }, { params: { id: cotacao.id } })), 409, /outros dados/);
+  await s().update(RESOURCES.cotacoes_compra, Number(cotacao.id), { decisao_hash: null });
+  await esperarErro(() => chamar(cc.decidirCotacaoCompra, reqDe(data, { params: { id: cotacao.id } })), 409, /histórica/);
+});
+
+test('E3: frete inválido, prazo inválido e itens duplicados não alteram a proposta', async () => {
+  const { cotacao, itens } = await novaCotacao([{ qtd: 1 }]); const { convites } = await convidar(Number(cotacao.id), 1);
+  const base = { convite_id: convites[0].id, precos: [{ item_id: itens[0].id, preco_unitario: 1 }] };
+  for (const body of [{ ...base, frete: 'inválido' }, { ...base, frete: -1 }, { ...base, prazo_entrega_dias: 1.5 },
+    { ...base, precos: [...base.precos, ...base.precos] }, { ...base, precos: [{ ...base.precos[0], prazo_entrega_dias: 'inválido' }] }])
+    await esperarErro(() => chamar(cc.cotarFornecedor, reqDe(body, { params: { id: cotacao.id } }), 201), 400);
+  const prices = await s().list(RESOURCES.cotacao_compra_precos, { page: 1, pageSize: 20, filter: { convite_id: convites[0].id } });
+  assert.equal(prices.rows.length, 0, 'a proposta é revertida integralmente');
 });

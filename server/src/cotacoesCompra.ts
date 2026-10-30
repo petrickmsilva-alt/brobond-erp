@@ -33,6 +33,7 @@
 //   4) DECIDIR É ATO DE GERENTE. Cotação vira pedido de compra, que vira conta
 //      a pagar. Operador monta a cotação, não a decide.
 // ============================================================================
+import { createHash } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { assertRegistroDaEmpresa, empresaDoRegistroAudit, escopoDoAtor, type EscopoEmpresa } from './empresa';
@@ -44,6 +45,7 @@ import { parseId } from './validate';
 import { labelOf } from './store';
 import { round2, round3 } from './utils';
 import { calcularConversao, regrasDeConversao } from './unidades';
+import { listarTodos } from './paginacaoCompleta';
 
 const R = () => getResource('cotacoes_compra')!;
 const R_ITENS = () => getResource('cotacao_compra_itens')!;
@@ -83,29 +85,16 @@ function num(v: unknown, padrao = 0): number {
 }
 
 /** Itens do carrinho, com o rótulo do insumo/produto resolvido para exibição. */
-async function itensDaCotacao(cotacaoId: number, tx?: Tx): Promise<Row[]> {
-  const s = getStore();
-  const out = await s.list(R_ITENS(), { page: 1, pageSize: 500, sort: 'id', dir: 'asc', filter: { cotacao_id: cotacaoId } }, tx);
-  return out.rows;
+async function itensDaCotacao(cotacaoId: number, empresaId: number, tx?: Tx): Promise<Row[]> {
+  return listarTodos(R_ITENS(), { empresa_id: empresaId, cotacao_id: cotacaoId }, tx, { sort: 'id', dir: 'asc' });
 }
 
-/**
- * Preços de uma cotação, já anotados com o fornecedor do convite.
- *
- * Uma consulta por convite, e não a tabela inteira: `filter` do store é
- * igualdade pura (sem IN), e varrer `cotacao_compra_precos` sem filtro
- * arrastaria preços de outras empresas para a memória só para descartá-los
- * depois. Os convites já vêm escopados pela cotação, então isto é ao mesmo
- * tempo mais barato e sem janela de vazamento.
- */
-async function precosDaCotacao(convites: Row[], tx?: Tx): Promise<Row[]> {
-  const s = getStore();
+/** Lê TODAS as propostas, preservando a empresa e o convite de origem. */
+async function precosDaCotacao(convites: Row[], empresaId: number, tx?: Tx): Promise<Row[]> {
   const out: Row[] = [];
   for (const c of convites) {
-    const res = await s.list(R_PRECOS(), { page: 1, pageSize: 1000, sort: 'id', dir: 'asc', filter: { convite_id: Number(c.id) } }, tx);
-    for (const p of res.rows) {
-      out.push({ ...p, fornecedor_id: c.fornecedor_id, fornecedor: c.fornecedor_id__label, convite_status: c.status });
-    }
+    const precos = await listarTodos(R_PRECOS(), { empresa_id: empresaId, convite_id: Number(c.id) }, tx, { sort: 'id', dir: 'asc' });
+    for (const p of precos) out.push({ ...p, fornecedor_id: c.fornecedor_id, fornecedor: c.fornecedor_id__label, convite_status: c.status });
   }
   return out;
 }
@@ -128,12 +117,11 @@ export async function comparativoCotacao(req: Request, res: Response) {
   checkAccess(R(), actor, 'read');
   const escopo = escopoDoAtor(actor);
   const id = parseId(req.params.id);
-  const s = getStore();
   try {
     const cotacao = await getCotacao(id, escopo);
-    const itens = await itensDaCotacao(id);
-    const convites = await s.list(R_FORN(), { page: 1, pageSize: 200, sort: 'id', dir: 'asc', filter: { cotacao_id: id } });
-    const todosPrecos = await precosDaCotacao(convites.rows);
+    const itens = await itensDaCotacao(id, escopo.empresaId);
+    const convites = await listarTodos(R_FORN(), { empresa_id: escopo.empresaId, cotacao_id: id }, undefined, { sort: 'id', dir: 'asc' });
+    const todosPrecos = await precosDaCotacao(convites, escopo.empresaId);
     const porItem = new Map<number, Row[]>();
     for (const p of todosPrecos) {
       const lista = porItem.get(Number(p.item_id)) || [];
@@ -152,7 +140,7 @@ export async function comparativoCotacao(req: Request, res: Response) {
         preco_unitario: round2(num(p.preco_unitario)),
         prazo_entrega_dias: p.prazo_entrega_dias === null || p.prazo_entrega_dias === undefined ? null : Number(p.prazo_entrega_dias),
         total: round2(num(p.preco_unitario) * num(item.quantidade)),
-        disponivel: p.disponivel !== false,
+        disponivel: p.disponivel !== false && p.convite_status === 'cotado',
       }));
       const disponiveis = todos
         .filter((p) => p.disponivel)
@@ -182,7 +170,7 @@ export async function comparativoCotacao(req: Request, res: Response) {
       };
     });
 
-    const fornecedores = convites.rows.map((c) => {
+    const fornecedores = convites.map((c) => {
       const meus = todosPrecos.filter((p) => Number(p.convite_id) === Number(c.id) && itens.some((i) => Number(i.id) === Number(p.item_id)));
       const total = round2(
         meus.reduce((acc, p) => {
@@ -379,7 +367,7 @@ export async function convidarFornecedores(req: Request, res: Response) {
       const ids = Array.isArray(req.body?.fornecedor_ids) ? req.body.fornecedor_ids.map((x: unknown) => Number(x)).filter((n: number) => n > 0) : [];
       if (!ids.length) throw new HttpError(400, 'Informe ao menos um fornecedor para convidar.', { fornecedor_ids: 'Lista vazia' });
 
-      const itens = await itensDaCotacao(id, tx);
+      const itens = await itensDaCotacao(id, escopo.empresaId, tx);
       if (!itens.length) throw new HttpError(409, 'Adicione ao menos um item antes de convidar fornecedores — convite sem carrinho não tem o que orçar.');
 
       const criados: Row[] = [];
@@ -434,10 +422,10 @@ export async function abrirCotacao(req: Request, res: Response) {
     const out = await s.transaction(async (tx) => {
       const cotacao = await getCotacao(id, escopo, tx);
       if (String(cotacao.status) !== 'rascunho') throw new HttpError(409, `Só se abre uma cotação em rascunho (status atual: ${ROTULO[String(cotacao.status)] || cotacao.status}).`);
-      const itens = await itensDaCotacao(id, tx);
+      const itens = await itensDaCotacao(id, escopo.empresaId, tx);
       if (!itens.length) throw new HttpError(409, 'Adicione ao menos um item antes de abrir a cotação.');
-      const convites = await s.list(R_FORN(), { page: 1, pageSize: 200, filter: { cotacao_id: id } }, tx);
-      if (!convites.rows.length) throw new HttpError(409, 'Convide ao menos um fornecedor antes de abrir a cotação.');
+      const convites = await listarTodos(R_FORN(), { empresa_id: escopo.empresaId, cotacao_id: id }, tx, { sort: 'id', dir: 'asc' });
+      if (!convites.length) throw new HttpError(409, 'Convide ao menos um fornecedor antes de abrir a cotação.');
       const atualizada = await s.tryUpdateIf(R(), id, { status: 'rascunho' }, { status: 'cotando' }, tx);
       if (!atualizada) throw new HttpError(409, 'A cotação mudou enquanto você operava. Recarregue.');
       return atualizada;
@@ -471,20 +459,26 @@ export async function cotarFornecedor(req: Request, res: Response) {
       if (!convite || Number(convite.cotacao_id) !== id) throw new HttpError(404, 'Convite não encontrado nesta cotação.');
       assertRegistroDaEmpresa(R_FORN(), convite, escopo);
 
-      const itens = await itensDaCotacao(id, tx);
+      const itens = await itensDaCotacao(id, escopo.empresaId, tx);
       const porId = new Map(itens.map((i) => [Number(i.id), i]));
       const precos = Array.isArray(req.body?.precos) ? (req.body.precos as Record<string, unknown>[]) : [];
       if (!precos.length) throw new HttpError(400, 'Envie ao menos um preço.', { precos: 'Lista vazia' });
 
       const gravados: Row[] = [];
+      const itensEnviados = new Set<number>();
       for (const linha of precos) {
         const itemId = Number(linha.item_id);
+        if (itensEnviados.has(itemId)) throw new HttpError(400, 'Um item não pode aparecer duas vezes na mesma proposta.');
+        itensEnviados.add(itemId);
         const item = porId.get(itemId);
         if (!item) throw new HttpError(404, `O item #${itemId} não pertence a esta cotação.`);
-        const preco = round2(num(linha.preco_unitario));
-        if (!(preco >= 0)) throw new HttpError(400, `Preço inválido no item #${itemId}.`, { preco_unitario: 'Número >= 0' });
-        const prazo = linha.prazo_entrega_dias === undefined || linha.prazo_entrega_dias === null ? null : Math.trunc(num(linha.prazo_entrega_dias));
-        if (prazo !== null && prazo < 0) throw new HttpError(400, `Prazo inválido no item #${itemId}.`, { prazo_entrega_dias: 'Inteiro >= 0' });
+        const bruto = linha.preco_unitario;
+        const precoInformado = bruto === undefined || bruto === null || bruto === '' || typeof bruto === 'boolean' ? NaN : Number(String(bruto).replace(',', '.'));
+        const preco = round2(precoInformado);
+        if (!Number.isFinite(precoInformado) || precoInformado < 0) throw new HttpError(400, `Preço inválido no item #${itemId}.`, { preco_unitario: 'Número >= 0' });
+        if (linha.disponivel !== undefined && typeof linha.disponivel !== 'boolean') throw new HttpError(400, 'Disponibilidade deve ser verdadeira ou falsa.');
+        const prazo = linha.prazo_entrega_dias === undefined || linha.prazo_entrega_dias === null ? null : Number(linha.prazo_entrega_dias);
+        if (prazo !== null && (!Number.isSafeInteger(prazo) || prazo < 0)) throw new HttpError(400, `Prazo inválido no item #${itemId}.`, { prazo_entrega_dias: 'Inteiro >= 0' });
 
         const existente = await s.findOneWhere(R_PRECOS(), { convite_id: conviteId, item_id: itemId }, tx);
         const payload = {
@@ -499,14 +493,20 @@ export async function cotarFornecedor(req: Request, res: Response) {
         gravados.push(existente ? (await s.update(R_PRECOS(), Number(existente.id), payload, tx))! : await s.insert(R_PRECOS(), payload, tx));
       }
 
+      const freteInformado = req.body?.frete === undefined ? Number(convite.frete || 0) :
+        req.body.frete === null || req.body.frete === '' || typeof req.body.frete === 'boolean' ? NaN : Number(String(req.body.frete).replace(',', '.'));
+      if (!Number.isFinite(freteInformado) || freteInformado < 0) throw new HttpError(400, 'Frete inválido; informe um valor não negativo.');
+      const prazoInformado = req.body?.prazo_entrega_dias === undefined ? convite.prazo_entrega_dias : req.body.prazo_entrega_dias;
+      if (prazoInformado !== null && prazoInformado !== undefined && (!Number.isSafeInteger(Number(prazoInformado)) || Number(prazoInformado) < 0))
+        throw new HttpError(400, 'Prazo de entrega inválido; informe um número inteiro não negativo.');
       const conviteAtualizado = await s.update(
         R_FORN(),
         conviteId,
         {
           status: 'cotado',
           respondeu_em: new Date().toISOString(),
-          frete: req.body?.frete === undefined ? num(convite.frete) : round2(num(req.body.frete)),
-          prazo_entrega_dias: req.body?.prazo_entrega_dias === undefined ? convite.prazo_entrega_dias : Math.trunc(num(req.body.prazo_entrega_dias)),
+          frete: round2(freteInformado),
+          prazo_entrega_dias: prazoInformado == null ? null : Number(prazoInformado),
           condicao_pagamento: req.body?.condicao_pagamento === undefined ? convite.condicao_pagamento : (req.body.condicao_pagamento ? String(req.body.condicao_pagamento).slice(0, 120) : null),
           validade_proposta: req.body?.validade_proposta === undefined ? convite.validade_proposta : (req.body.validade_proposta ? String(req.body.validade_proposta).slice(0, 10) : null),
         },
@@ -581,24 +581,35 @@ export async function decidirCotacaoCompra(req: Request, res: Response) {
     const out = await s.transaction(async (tx) => {
       const cotacao = await getCotacao(id, escopo, tx);
 
-      // Repetição: devolve o pedido já gerado em vez de criar outro.
+      const criterio = (req.body?.criterio || cotacao.criterio || 'menor_preco') as Criterio;
+      if (!CRITERIOS.includes(criterio)) {
+        throw new HttpError(400, `Critério inválido: "${criterio}". Use ${CRITERIOS.join(', ')}.`, { criterio: 'Inválido' });
+      }
+      const escolhasDoPedido = Array.isArray(req.body?.escolhas)
+        ? (req.body.escolhas as Record<string, unknown>[]).map((e) => ({ item_id: Number(e.item_id), convite_id: Number(e.convite_id) })).sort((a, b) => a.item_id - b.item_id || a.convite_id - b.convite_id)
+        : [];
+      const hash = createHash('sha256').update(JSON.stringify({ criterio, escolhas: escolhasDoPedido,
+        fornecedor_id: req.body?.fornecedor_id == null ? null : Number(req.body.fornecedor_id),
+        local_entrada: req.body?.local_entrada ? String(req.body.local_entrada).slice(0, 60) : null,
+        previsao_entrega: req.body?.previsao_entrega ? String(req.body.previsao_entrega).slice(0, 10) : null,
+        observacoes: req.body?.observacoes ? String(req.body.observacoes).slice(0, 400) : null })).digest('hex');
+      // A chave natural é a cotação. Sem hash histórico não se pode provar que
+      // uma nova requisição é a mesma decisão; consultar o pedido existente.
       if (cotacao.compra_id) {
+        if (!cotacao.decisao_hash) throw new HttpError(409, 'Decisão histórica sem assinatura do pedido; consulte a compra existente antes de repetir.');
+        if (cotacao.decisao_hash !== hash) throw new HttpError(409, 'Esta cotação já foi decidida com outros dados; consulte o pedido existente.');
         return { cotacao, compra_id: Number(cotacao.compra_id), idempotente: true, linhas: [] as Escolha[] };
       }
       if (String(cotacao.status) !== 'cotando') {
         throw new HttpError(409, `Só se decide uma cotação aberta (status atual: ${ROTULO[String(cotacao.status)] || cotacao.status}).`);
       }
 
-      const criterio = (req.body?.criterio || cotacao.criterio || 'menor_preco') as Criterio;
-      if (!CRITERIOS.includes(criterio)) {
-        throw new HttpError(400, `Critério inválido: "${criterio}". Use ${CRITERIOS.join(', ')}.`, { criterio: 'Inválido' });
-      }
-
-      const itens = await itensDaCotacao(id, tx);
+      const itens = await itensDaCotacao(id, escopo.empresaId, tx);
       if (!itens.length) throw new HttpError(409, 'A cotação não tem itens.');
-      const convites = await s.list(R_FORN(), { page: 1, pageSize: 200, filter: { cotacao_id: id } }, tx);
-      const convitePorId = new Map(convites.rows.map((c) => [Number(c.id), c]));
-      const precos = await precosDaCotacao(convites.rows, tx);
+      const convites = await listarTodos(R_FORN(), { empresa_id: escopo.empresaId, cotacao_id: id }, tx, { sort: 'id', dir: 'asc' });
+      const convitePorId = new Map(convites.map((c) => [Number(c.id), c]));
+      // Preços preservados de fornecedores que recusaram não são propostas válidas.
+      const precos = (await precosDaCotacao(convites, escopo.empresaId, tx)).filter((p) => p.convite_status === 'cotado');
 
       // ---- escolha por item ------------------------------------------------
       const escolhas: Escolha[] = [];
@@ -608,7 +619,8 @@ export async function decidirCotacaoCompra(req: Request, res: Response) {
         // Fornecedor único: só entra quem cotou TODOS os itens e tem tudo
         // disponível. Sem isso a comparação de "total" seria entre coisas
         // diferentes — melhor recusar do que escolher errado.
-        const completos = convites.rows.filter((c) => {
+        const completos = convites.filter((c) => {
+          if (c.status !== 'cotado') return false;
           const meus = precos.filter((p) => Number(p.convite_id) === Number(c.id));
           return meus.length === itens.length && meus.every((p) => p.disponivel !== false);
         });
@@ -635,8 +647,11 @@ export async function decidirCotacaoCompra(req: Request, res: Response) {
         if (pedidas.length !== itens.length) {
           throw new HttpError(400, `O critério "qualidade" exige a escolha explícita de cada item (${itens.length} itens, ${pedidas.length} escolhas recebidas).`, { escolhas: 'Um por item' });
         }
+        const escolhidos = new Set<number>();
         for (const e of pedidas) {
           const itemId = Number(e.item_id);
+          if (escolhidos.has(itemId)) throw new HttpError(400, 'Cada item deve ser escolhido exatamente uma vez.');
+          escolhidos.add(itemId);
           const item = itens.find((i) => Number(i.id) === itemId);
           if (!item) throw new HttpError(404, `O item #${itemId} não pertence a esta cotação.`);
           const conviteId = Number(e.convite_id);
@@ -673,23 +688,21 @@ export async function decidirCotacaoCompra(req: Request, res: Response) {
         }
       }
 
-      // ---- pedido de compra -------------------------------------------------
-      // Fornecedor do pedido: quando a escolha é por item pode haver mais de um
-      // vencedor. Nesse caso o pedido fica com o fornecedor de maior valor e a
-      // divergência vai nas observações — o comprador precisa ver, não descobrir.
-      const porFornecedor = new Map<number, number>();
-      for (const e of escolhas) {
-        const item = itens.find((i) => Number(i.id) === e.item_id);
-        porFornecedor.set(e.fornecedor_id, round2((porFornecedor.get(e.fornecedor_id) || 0) + e.preco * num(item?.quantidade || 0)));
-      }
-      const fornecedoresOrdenados = [...porFornecedor.entries()].sort((a, b) => b[1] - a[1]);
-      const fornecedorPrincipal = req.body?.fornecedor_id ? Number(req.body.fornecedor_id) : fornecedoresOrdenados[0][0];
-      const multiFornecedor = porFornecedor.size > 1;
-
-      const total = round2(escolhas.reduce((acc, e) => {
+      // Uma compra tem UM fornecedor canônico. Agregar vencedores distintos
+      // numa única compra adulteraria fornecedor, frete, custo e contas a pagar.
+      const fornecedores = new Set(escolhas.map((e) => e.fornecedor_id));
+      if (fornecedores.size !== 1) throw new HttpError(409, 'A escolha tem mais de um fornecedor; use fornecedor único ou separe a cotação antes de gerar pedidos.');
+      const fornecedorPrincipal = escolhas[0].fornecedor_id;
+      if (req.body?.fornecedor_id !== undefined && Number(req.body.fornecedor_id) !== fornecedorPrincipal)
+        throw new HttpError(409, 'O fornecedor informado não corresponde ao fornecedor escolhido.');
+      const conviteVencedor = convitePorId.get(escolhas[0].convite_id)!;
+      const frete = round2(num(conviteVencedor.frete));
+      const subtotal = round2(escolhas.reduce((acc, e) => {
         const item = itens.find((i) => Number(i.id) === e.item_id);
         return acc + e.preco * num(item?.quantidade || 0);
       }, 0));
+      const total = round2(subtotal + frete);
+      const multiFornecedor = false;
 
       const compra = await s.insert(getResource('compras')!, {
         empresa_id: escopo.empresaId,
@@ -697,13 +710,11 @@ export async function decidirCotacaoCompra(req: Request, res: Response) {
         data: new Date().toISOString().slice(0, 10),
         status: 'pendente',
         total,
+        frete,
         previsao_entrega: req.body?.previsao_entrega ? String(req.body.previsao_entrega).slice(0, 10) : null,
         local_entrada: req.body?.local_entrada ? String(req.body.local_entrada).slice(0, 60) : null,
         observacoes: [
           `Gerado pela cotação #${id} (critério: ${criterio})`,
-          multiFornecedor
-            ? `ATENÇÃO: escolha por item resultou em ${porFornecedor.size} fornecedores diferentes; este pedido ficou com o de maior valor (${fornecedoresOrdenados.map(([f, v]) => `#${f} R$ ${v.toFixed(2)}`).join(', ')}). Desmembre se precisar.`
-            : null,
           req.body?.observacoes ? String(req.body.observacoes).slice(0, 400) : null,
         ].filter(Boolean).join(' · '),
       }, tx);
@@ -740,7 +751,7 @@ export async function decidirCotacaoCompra(req: Request, res: Response) {
         R(),
         id,
         { status: 'cotando', compra_id: null },
-        { status: 'decidida', compra_id: Number(compra.id), decidida_em: new Date().toISOString(), decidida_por: actor.id || null, criterio },
+        { status: 'decidida', compra_id: Number(compra.id), decisao_hash: hash, decidida_em: new Date().toISOString(), decidida_por: actor.id || null, criterio },
         tx
       );
       if (!decidida) throw new HttpError(409, 'A cotação foi decidida por outra operação ao mesmo tempo. Recarregue.');

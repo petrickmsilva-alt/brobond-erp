@@ -21,10 +21,9 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getStore } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { aplicarFiltroEmpresa, assertRegistroDaEmpresa, escopoDoAtor, empresaDoAtorAudit } from './empresa';
+import { assertRegistroDaEmpresa, escopoDoAtor, empresaDoAtorAudit } from './empresa';
 import { round2 } from './utils';
-import { efetuarBaixa } from './financeiro';
-import { hashLinhaExtrato, R_EXTRATO } from './extrato';
+import { conciliarExtratoComLancamento, hashLinhaExtrato, R_EXTRATO } from './extrato';
 import { R_GATEWAY_COBRANCAS } from './gateway';
 import type { Row } from './store';
 
@@ -78,16 +77,19 @@ export function detectarParser(conteudo: string): CnabParser | null {
 
 /** Converte campo numérico com 2 decimais implícitos ("0000000012345" → 123.45). */
 function num2(campo: string): number {
-  const limpo = campo.replace(/\D/g, '');
+  const limpo = campo.trim();
   if (!limpo) return 0;
+  if (!/^\d+$/.test(limpo)) throw new HttpError(400, 'Valor numérico inválido no retorno CNAB.');
   const n = Number(limpo) / 100;
   return Number.isFinite(n) ? round2(n) : 0;
 }
 
 function dataBr(campo: string): string | null {
-  const d = campo.replace(/\D/g, '');
-  if (d.length !== 8 || d === '00000000') return null;
-  return `${d.slice(4, 8)}-${d.slice(2, 4)}-${d.slice(0, 2)}`;
+  const d = campo.trim();
+  if (!/^\d{8}$/.test(d) || d === '00000000') return null;
+  const iso = `${d.slice(4, 8)}-${d.slice(2, 4)}-${d.slice(0, 2)}`;
+  const parsed = new Date(`${iso}T12:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === iso ? iso : null;
 }
 
 /** Classificação CONSERVADORA do código de movimento (FEBRABAN C004). */
@@ -194,6 +196,7 @@ export async function importarCnab(req: Request, res: Response) {
   }
 
   const s = getStore();
+  const { locked } = await import('../../modules/payments/infrastructure/locking');
   const conta = assertRegistroDaEmpresa(getResource('contas_financeiras')!, await s.get(getResource('contas_financeiras')!, contaId), escopo);
   const linhas = parser.parseRetorno(conteudo);
   if (!linhas.length) throw new HttpError(400, 'O arquivo não contém linhas de detalhe (segmentos T/U).');
@@ -204,113 +207,75 @@ export async function importarCnab(req: Request, res: Response) {
   let liquidadas = 0;
   let divergentes = 0;
 
-  // Títulos pendentes do escopo (para o matching por valor+data).
-  const lancR = await s.list(getResource('lancamentos_financeiros')!, { page: 1, pageSize: 100000, filter: aplicarFiltroEmpresa(getResource('lancamentos_financeiros')!, undefined, escopo) });
-  const pendentes = lancR.rows.filter((l) => String(l.status) === 'pendente' && ['receita', 'despesa'].includes(String(l.tipo)));
-
   for (const linha of linhas) {
-    const hash = hashLinhaExtrato({ data: linha.data_ocorrencia || '', valor: linha.valor_pago || linha.valor_titulo, direcao: 'entrada', descricao: linha.documento, documento: linha.nosso_numero, codigo_movimento: linha.codigo_movimento });
-    const existente = await s.findOneWhere(R_EXTRATO, { conta_id: contaId, linha_hash: hash });
-    if (existente) {
-      duplicadas++;
-      continue;
-    }
-    novas++;
-
-    // Identificação do título: NUNCA por posição presumida.
+    const valor = linha.valor_pago > 0 ? linha.valor_pago : linha.valor_titulo;
+    const hash = hashLinhaExtrato({ data: linha.data_ocorrencia || '', valor, direcao: 'entrada', descricao: linha.documento, documento: linha.nosso_numero, codigo_movimento: linha.codigo_movimento });
+    const rowData = {
+      empresa_id: escopo.empresaId, conta_id: contaId, origem: 'cnab', linha_hash: hash,
+      data: linha.data_ocorrencia || null, valor: round2(valor), direcao: 'entrada',
+      descricao: `CNAB ${parser.id} · mov ${linha.codigo_movimento}${linha.nosso_numero ? ` · NN ${linha.nosso_numero}` : ''}`,
+      documento: linha.nosso_numero || linha.documento || null, codigo_movimento: linha.codigo_movimento,
+    };
     let lancAlvo: Row | null = null;
     let viaIdentificacao = '';
-    if (linha.nosso_numero) {
-      const cobrancas = await s.list(R_GATEWAY_COBRANCAS, { page: 1, pageSize: 5, filter: { empresa_id: escopo.empresaId, nosso_numero: linha.nosso_numero } });
-      const cobranca = cobrancas.rows[0];
-      if (cobranca?.lancamento_id) {
-        lancAlvo = await s.get(getResource('lancamentos_financeiros')!, Number(cobranca.lancamento_id));
-        viaIdentificacao = `nosso número ${linha.nosso_numero} (cobrança #${cobranca.id})`;
-      }
-    }
-    if (!lancAlvo && linha.documento && /^\d+$/.test(linha.documento)) {
-      // documento numérico pode ser o id da venda/compra de origem do título
-      for (const ref of ['venda', 'compra']) {
-        const origem = await s.findOneWhere(getResource(ref === 'venda' ? 'vendas' : 'compras')!, { id: Number(linha.documento), empresa_id: escopo.empresaId });
-        if (origem) {
-          const parcelas = pendentes.filter((l) => String(l.referencia_tipo) === ref && Number(l.referencia_id) === Number(linha.documento));
-          const porValor = parcelas.filter((l) => Math.abs(Number(l.valor || 0) - (linha.valor_pago || linha.valor_titulo)) < 0.01);
-          if (porValor.length === 1) {
-            lancAlvo = porValor[0];
-            viaIdentificacao = `documento ${linha.documento} (${ref} #${linha.documento})`;
-          }
-          break;
-        }
-      }
-    }
-
-    const statusBase = linha.tipo === 'liquidacao' ? 'importada' : linha.tipo === 'rejeicao' ? 'divergente' : 'importada';
-    const row = await s.insert(R_EXTRATO, {
-      empresa_id: escopo.empresaId,
-      conta_id: contaId,
-      origem: 'cnab',
-      linha_hash: hash,
-      data: linha.data_ocorrencia || null,
-      valor: round2(linha.valor_pago || linha.valor_titulo),
-      direcao: 'entrada',
-      descricao: `CNAB ${parser.id} · mov ${linha.codigo_movimento}${linha.nosso_numero ? ` · NN ${linha.nosso_numero}` : ''}`,
-      documento: linha.nosso_numero || linha.documento || null,
-      codigo_movimento: linha.codigo_movimento,
-      status: statusBase,
-      motivo: linha.tipo === 'rejeicao' ? `Movimento ${linha.codigo_movimento}: entrada rejeitada pelo banco.` : null,
-    });
-
-    // Só LIQUIDAÇÃO baixa título — e só com título identificado.
-    if (linha.tipo !== 'liquidacao') {
-      if (linha.tipo === 'rejeicao') divergentes++;
-      if (linha.tipo === 'baixa' || linha.tipo === 'desconhecido') {
-        // Movimento ambíguo: divergência para decisão humana (nunca baixa automática).
-        await s.update(R_EXTRATO, Number(row.id), { status: 'divergente', motivo: `Movimento ${linha.codigo_movimento} não é liquidação inequívoca — exige conferência manual.` });
-        divergentes++;
-      }
-      detalhes.push({ nosso_numero: linha.nosso_numero, movimento: linha.codigo_movimento, tipo: linha.tipo, valor: round2(linha.valor_pago || linha.valor_titulo), resultado: 'registrada sem baixa', lancamento_id: null });
-      continue;
-    }
-
-    if (!lancAlvo) {
-      await s.update(R_EXTRATO, Number(row.id), { status: 'divergente', motivo: 'Liquidação sem título identificado (nosso número/documento não casou) — conferir manualmente.' });
-      divergentes++;
-      detalhes.push({ nosso_numero: linha.nosso_numero, movimento: linha.codigo_movimento, tipo: linha.tipo, valor: round2(linha.valor_pago || linha.valor_titulo), resultado: 'divergente: título não identificado', lancamento_id: null });
-      continue;
-    }
-
-    if (String(lancAlvo.status) !== 'pendente') {
-      // Já baixado (arquivo repetido ou baixa manual): idempotência.
-      await s.update(R_EXTRATO, Number(row.id), { status: 'conciliada', lancamento_id: Number(lancAlvo.id), conciliado_em: new Date().toISOString(), motivo: 'Título já estava baixado.' });
-      liquidadas++;
-      detalhes.push({ nosso_numero: linha.nosso_numero, movimento: linha.codigo_movimento, tipo: linha.tipo, valor: round2(linha.valor_pago || linha.valor_titulo), resultado: 'título já baixado', lancamento_id: Number(lancAlvo.id) });
-      continue;
-    }
-
-    const valorPago = linha.valor_pago > 0 ? linha.valor_pago : linha.valor_titulo;
-    const valorTitulo = Number(lancAlvo.valor || 0);
     try {
-      await efetuarBaixa(
-        { id: actor.id || null, name: actor.name },
-        Number(lancAlvo.id),
-        {
-          valor: valorPago > 0 && valorPago < valorTitulo - 0.009 ? valorPago : null,
-          data: linha.data_ocorrencia || undefined,
-          conta_id: contaId,
-          origem: 'cnab',
-          nota: `CNAB ${parser.id} — movimento ${linha.codigo_movimento} · ${viaIdentificacao || 'matching por valor/documento'}`,
+      const resultado = await locked(escopo.empresaId, 'payout-bank-match', async (tx) => {
+        const existente = await s.findOneWhere(R_EXTRATO, { empresa_id: escopo.empresaId, conta_id: contaId, linha_hash: hash }, tx);
+        if (existente) return { duplicada: true, liquidada: false, divergente: false, texto: 'já importada', lancamento: null as number | null };
+        let identificacaoAmbigua = false;
+        if (linha.nosso_numero) {
+          const cobrancas = await s.list(R_GATEWAY_COBRANCAS, { page: 1, pageSize: 2, filter: { empresa_id: escopo.empresaId, nosso_numero: linha.nosso_numero } }, tx);
+          if (cobrancas.total > 1) identificacaoAmbigua = true;
+          const cobranca = cobrancas.total === 1 ? cobrancas.rows[0] : null;
+          if (cobranca && Number(cobranca.conta_id || 0) !== contaId) identificacaoAmbigua = true;
+          if (cobranca?.lancamento_id && !identificacaoAmbigua) {
+            lancAlvo = await s.findOneWhere(getResource('lancamentos_financeiros')!, { empresa_id: escopo.empresaId, id: Number(cobranca.lancamento_id) }, tx);
+            viaIdentificacao = `nosso número ${linha.nosso_numero} (cobrança #${cobranca.id})`;
+          }
         }
-      );
+        // Número de documento + valor não prova que o banco o atribuiu ao
+        // ID interno de venda/compra. Sem vínculo explícito de cobrança, vai
+        // para revisão humana, mesmo se houver um único candidato aparente.
+        // Sem valor pago e data reais, valor nominal não é prova de dinheiro.
+        const motivo = linha.tipo === 'rejeicao' ? `Movimento ${linha.codigo_movimento}: entrada rejeitada pelo banco.` :
+          ['baixa', 'desconhecido'].includes(linha.tipo) ? `Movimento ${linha.codigo_movimento} não é liquidação inequívoca — exige conferência manual.` :
+          linha.tipo === 'liquidacao' && (!linha.data_ocorrencia || !(linha.valor_pago > 0)) ? 'Liquidação sem data de ocorrência ou valor pago válido — conferir manualmente.' :
+          linha.tipo === 'liquidacao' && !lancAlvo ? 'Liquidação sem título identificado ou identificação ambígua — conferir manualmente.' : null;
+        const row = await s.insert(R_EXTRATO, { ...rowData, status: motivo ? 'divergente' : 'importada', motivo }, tx);
+        let liquidada = false;
+        if (linha.tipo === 'liquidacao' && lancAlvo && !motivo) {
+          await conciliarExtratoComLancamento(escopo.empresaId, Number(row.id), Number(lancAlvo.id),
+            { id: actor.id || null, name: actor.name }, 'cnab', `CNAB ${parser.id} — movimento ${linha.codigo_movimento} · ${viaIdentificacao}`, tx);
+          liquidada = true;
+        }
+        await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: R_EXTRATO.key,
+          registro_id: Number(row.id), descricao: `Linha CNAB ${liquidada ? 'conciliada' : motivo ? 'divergente' : 'registrada'}`,
+          dados: { conta_id: contaId, parser: parser.id, codigo_movimento: linha.codigo_movimento }, empresa_id: escopo.empresaId }, tx);
+        return { duplicada: false, liquidada, divergente: !!motivo,
+          texto: liquidada ? `liquidado via ${viaIdentificacao}` : motivo ? 'divergente: exige revisão' : 'registrada sem baixa',
+          lancamento: liquidada ? Number(lancAlvo!.id) : null };
+      }, 'read committed');
+      if (resultado.duplicada) { duplicadas++; continue; }
+      novas++; if (resultado.liquidada) liquidadas++; if (resultado.divergente) divergentes++;
+      detalhes.push({ nosso_numero: linha.nosso_numero, movimento: linha.codigo_movimento, tipo: linha.tipo,
+        valor: round2(valor), resultado: resultado.texto, lancamento_id: resultado.lancamento });
     } catch (e: any) {
-      await s.update(R_EXTRATO, Number(row.id), { status: 'divergente', motivo: `Falha na baixa: ${String(e?.message || e).slice(0, 160)}` });
-      divergentes++;
-      detalhes.push({ nosso_numero: linha.nosso_numero, movimento: linha.codigo_movimento, tipo: linha.tipo, valor: round2(valorPago), resultado: `erro: ${String(e?.message || e).slice(0, 100)}`, lancamento_id: Number(lancAlvo.id) });
-      continue;
+      // Qualquer erro de baixa REVERTE a inserção e o efeito financeiro. Só
+      // depois tentamos registrar uma divergência em outra transação; uma
+      // concorrente pode já ter concluído a operação e nunca é sobrescrita.
+      const motivo = `Falha na conciliação: ${String(e?.message || 'revise o título').slice(0, 160)}`;
+      const registro = await locked(escopo.empresaId, 'payout-bank-match', async (tx) => {
+        if (await s.findOneWhere(R_EXTRATO, { empresa_id: escopo.empresaId, conta_id: contaId, linha_hash: hash }, tx)) return null;
+        const row = await s.insert(R_EXTRATO, { ...rowData, status: 'divergente', motivo }, tx);
+        await s.audit({ usuario_id: actor.id || null, usuario: actor.name, acao: 'criar', recurso: R_EXTRATO.key, registro_id: Number(row.id),
+          descricao: 'Linha CNAB divergente após reversão da conciliação', dados: { conta_id: contaId, parser: parser.id }, empresa_id: escopo.empresaId }, tx);
+        return row;
+      }, 'read committed');
+      if (!registro) { duplicadas++; continue; }
+      novas++; divergentes++;
+      detalhes.push({ nosso_numero: linha.nosso_numero, movimento: linha.codigo_movimento, tipo: linha.tipo, valor: round2(valor),
+        resultado: `erro: ${String(e?.message || 'revise o título').slice(0, 100)}`, lancamento_id: lancAlvo ? Number((lancAlvo as Row).id) : null });
     }
-    await s.update(R_EXTRATO, Number(row.id), { status: 'conciliada', lancamento_id: Number(lancAlvo.id), conciliado_em: new Date().toISOString() });
-    pendentes.splice(pendentes.indexOf(lancAlvo), 1);
-    liquidadas++;
-    detalhes.push({ nosso_numero: linha.nosso_numero, movimento: linha.codigo_movimento, tipo: linha.tipo, valor: round2(valorPago), resultado: `liquidado via ${viaIdentificacao || 'matching'}`, lancamento_id: Number(lancAlvo.id) });
   }
 
   await s.audit({

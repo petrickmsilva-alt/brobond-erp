@@ -119,7 +119,7 @@ test('baixa do saldo restante quita o título', async () => {
   assert.equal(Number(principal!.valor), 300, 'a quitação ocorreu sobre o saldo restante');
 });
 
-test('conciliação OFX: extrato de Internet Banking casa com pendente', async () => {
+test('conciliação OFX: a rota legada importa sem baixa e exige confirmação persistente', async () => {
   const lanc = await createRecord(
     RESOURCES.lancamentos_financeiros,
     { data: hoje, tipo: 'receita', conta_id: 2, descricao: 'Cliente OFX', valor: 777.13, status: 'pendente', vencimento: '2026-09-10' },
@@ -153,17 +153,18 @@ DATA:OFXSGML
 </BANKMSGSRSV1>
 </OFX>`;
   const res = mockRes();
-  await conciliarExtrato(mockReq({ texto: ofx }), res);
-  assert.equal(res.data.confirmados.length, 1, 'uma linha casou pelo valor líquido abaixo');
-
+  await conciliarExtrato(mockReq({ texto: ofx, conta_id: 2 }), res);
+  assert.equal(res.data.confirmados.length, 0, 'nenhuma baixa automática');
+  assert.equal(res.data.naoConfirmados.length, 2);
   const s = getStore();
+  assert.equal((await s.get(getResource('lancamentos_financeiros')!, Number(lanc.id)))!.status, 'pendente');
+  const { conciliarLinhaManual } = await import('../src/extrato');
+  const linha = res.data.naoConfirmados.find((l: any) => l.valor === 777.13);
+  await conciliarLinhaManual(mockReq({ lancamento_id: lanc.id }, { id: String(linha.extrato_id) }), mockRes());
   const principal = await s.get(getResource('lancamentos_financeiros')!, Number(lanc.id));
   assert.equal(principal!.status, 'confirmado');
-  assert.match(String(principal!.observacoes), /extrato OFX/);
-
-  // a tarifa (única no extrato, sem pendente) volta como não confirmada
-  assert.equal(res.data.naoConfirmados.length, 1);
-  assert.equal(res.data.naoConfirmados[0].valor, 45.9);
+  const tarifa = res.data.naoConfirmados.find((l: any) => l.valor === 45.9);
+  assert.ok(tarifa, 'tarifa fica pendente de revisão');
 });
 
 test('comparativo mensal: série de 6 meses reflete receita/despesa confirmadas', async () => {

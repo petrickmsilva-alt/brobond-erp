@@ -77,7 +77,10 @@ function mpExtraiInstrumento(p: Record<string, unknown>, metodo: MetodoCobranca)
 /** Interpret the same authoritative response that was checked against the local charge. */
 export function intencaoMercadoPago(atual: CobrancaProviderResult): IntencaoWebhook {
   const st = String(atual.bruto?.status || '');
-  const devolvido = Number(atual.bruto?.transaction_amount_refunded || 0);
+  const rawRefund = atual.bruto?.transaction_amount_refunded;
+  const devolvido = rawRefund === null || rawRefund === undefined || rawRefund === '' || typeof rawRefund === 'boolean' ? NaN : Number(rawRefund);
+  if (['approved', 'refunded'].includes(st) && (!Number.isFinite(devolvido) || devolvido < 0))
+    throw new HttpError(409, 'Valor de estorno legado ausente ou inválido; requer conciliação manual.');
   if (st === 'approved' && devolvido > 0) throw new HttpError(409, 'Estorno parcial em cobrança legada requer conciliação manual.');
   if (st === 'approved') return 'paga';
   if (st === 'cancelled' || st === 'rejected') return 'cancelada';

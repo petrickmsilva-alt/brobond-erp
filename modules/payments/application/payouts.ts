@@ -212,7 +212,9 @@ function mismatch(settlement: Row, line: Line) {
     Number(settlement.chargeback_amount || 0) !== line.chargeback_amount;
 }
 function bankMatches(bank: Row | null, netAmount: number) {
-  return !!bank && bank.direcao === 'entrada' && ['importada', 'conciliada'].includes(String(bank.status)) && Math.round(Number(bank.valor) * 100) === netAmount;
+  // Uma linha já aplicada a um título financeiro não pode virar também
+  // repasse por mera coincidência de valor. Vínculos legados exigem revisão.
+  return !!bank && bank.direcao === 'entrada' && bank.status === 'importada' && !bank.lancamento_id && !bank.baixa_lancamento_id && Math.round(Number(bank.valor) * 100) === netAmount;
 }
 function requestDigest(value: object) { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 function duplicateConflict(error: unknown): never {

@@ -103,7 +103,7 @@ type Opcao = { id: number; nome: string; unidade?: string | null; unidade_compra
 
 /** Critérios de decisão — fonte única, compartilhada com a página de criação. */
 export const CRITERIOS = [
-  { value: 'menor_preco', label: 'Menor preço por item', hint: 'Escolhe o fornecedor mais barato de cada item. Pode gerar pedido com mais de um fornecedor.' },
+  { value: 'menor_preco', label: 'Menor preço por item', hint: 'Escolhe o fornecedor mais barato por item. A geração é bloqueada se os vencedores forem diferentes; use fornecedor único ou separe a cotação.' },
   { value: 'menor_preco_total', label: 'Menor preço total (fornecedor único)', hint: 'Compara só quem cotou TODOS os itens, já considerando o frete.' },
   { value: 'prazo', label: 'Menor prazo de entrega', hint: 'Prefere quem entrega antes; desempate por preço.' },
   { value: 'qualidade', label: 'Escolha manual por qualidade', hint: 'Você escolhe o fornecedor de cada item.' },
@@ -589,7 +589,7 @@ export default function CotacoesCompraPage({ initialId }: { initialId?: number |
                 {[
                   ['Itens', formatNumber(comp.resumo.itens)],
                   ['Fornecedores que cotaram', `${comp.resumo.fornecedores_que_cotaram}/${comp.resumo.fornecedores}`],
-                  ['Total estimado (menores preços)', formatMoney(totalEscolhido)],
+                  ['Estimativa dos itens (sem frete)', formatMoney(totalEscolhido)],
                   ['Economia potencial', formatMoney(comp.resumo.economia_potencial_total)],
                 ].map(([rotulo, valor]) => (
                   <div key={rotulo} className="card p-3">
@@ -932,7 +932,7 @@ export default function CotacoesCompraPage({ initialId }: { initialId?: number |
         title="Decidir cotação e gerar pedido de compra"
         message={
           comp
-            ? `Será criado um pedido de compra com ${comp.resumo.itens} item(ns) pelo critério "${criterioInfo?.label ?? comp.cotacao.criterio}", totalizando aproximadamente ${formatMoney(totalEscolhido)}. O pedido nasce como "Pendente" e passa pelo fluxo normal de aprovação e recebimento.`
+            ? `O pedido terá ${comp.resumo.itens} item(ns), pelo critério "${criterioInfo?.label ?? comp.cotacao.criterio}". A estimativa de ${formatMoney(totalEscolhido)} considera apenas itens com menores preços, sem frete; o total real depende do fornecedor selecionado e inclui seu frete. O pedido nasce pendente; revise e aprove antes de receber.`
             : ''
         }
         confirmLabel={decidindo ? 'Gerando...' : 'Gerar pedido de compra'}

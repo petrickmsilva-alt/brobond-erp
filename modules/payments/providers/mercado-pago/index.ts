@@ -66,9 +66,19 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
   async getPayment(ctx: ProviderContext, reference: string): Promise<PaymentResult> {
     const r = await (await legacy()).consultaCobranca(legacyContext(ctx), reference);
     const b = r?.bruto || {};
-    const refunded = Math.round(Number(b.transaction_amount_refunded || 0) * 100);
+    const state = String(b.status || '');
+    // Não substitua a referência retornada pela solicitada nem transforme
+    // null/ausência em zero: ambos poderiam confirmar um fato inexistente.
+    const rawRefund = b.transaction_amount_refunded;
+    const refundValue = rawRefund === null || rawRefund === undefined || rawRefund === '' || typeof rawRefund === 'boolean' ? NaN : Number(rawRefund);
+    const rawAmount = b.transaction_amount;
+    const total = rawAmount === null || rawAmount === undefined || rawAmount === '' || typeof rawAmount === 'boolean' ? NaN : Number(rawAmount);
+    if (!b.id || String(b.id) !== reference || !Number.isFinite(total) || total <= 0 || typeof b.currency_id !== 'string' || !b.currency_id ||
+        (['approved', 'refunded'].includes(state) && (!Number.isFinite(refundValue) || refundValue < 0 || refundValue > total)))
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    const refunded = Number.isFinite(refundValue) ? Math.round(refundValue * 100) : undefined;
     const states: Record<string, PaymentResult['status']> = {
-      approved: refunded > 0 ? 'PARTIALLY_REFUNDED' : 'PAID',
+      approved: (refunded ?? 0) > 0 ? 'PARTIALLY_REFUNDED' : 'PAID',
       authorized: 'AUTHORIZED',
       cancelled: 'CANCELED',
       rejected: 'FAILED',
@@ -79,9 +89,9 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
       in_process: 'PENDING',
     };
     return {
-      reference,
-      status: states[String(b.status)] || 'PENDING',
-      amount: Math.round(Number(b.transaction_amount) * 100),
+      reference: String(b.id),
+      status: states[state] || 'PENDING',
+      amount: Math.round(total * 100),
       currency: String(b.currency_id || ''),
       refunded,
     };

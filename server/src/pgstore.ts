@@ -1018,7 +1018,10 @@ export class PgStore implements Store {
       );
     };
     if (tx) await escrever(tx);
-    else await withTransaction((client) => escrever(client));
+    // Esperar a trava deve preceder um snapshot novo; SERIALIZABLE fixaria
+    // um snapshot anterior ao commit do escritor e poderia abortar a auditoria
+    // depois de o efeito de negócio já ter sido confirmado.
+    else await withTransaction((client) => escrever(client), 'read committed');
   }
 
   async verificarAuditoria(): Promise<AuditoriaVerificacao> {

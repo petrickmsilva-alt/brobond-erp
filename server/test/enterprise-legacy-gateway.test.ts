@@ -107,3 +107,18 @@ test('revisão legada fecha somente após consulta comprovar estorno integral de
   const end = await s.get(RESOURCES.commerce_pedidos, Number(order.id));
   assert.equal(end?.estado, 'EXPIRADO'); assert.equal(end?.pagamento_estado, 'REFUNDED'); assert.match(end!.erro, /estornado/);
 });
+
+test('Mercado Pago legado não presume zero para estorno ausente/nulo antes de enviar refund', async (t) => {
+  const c = await charge('mercadopago', 'paga'); let posts = 0;
+  let refundValue: unknown = null;
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    if (init.method === 'POST') posts++;
+    return new Response(JSON.stringify({ id: c.provider_ref, status: 'approved', transaction_amount: 100, currency_id: 'BRL', transaction_amount_refunded: refundValue }));
+  });
+  for (const bad of [null, undefined, '', false, -1]) {
+    refundValue = bad;
+    await assert.rejects(() => chamar(gateway.estornarCobranca, reqDe({}, { params: { id: c.id } })), (e: any) => e.status === 409);
+    assert.throws(() => intencaoMercadoPago({ provider_ref: String(c.provider_ref), status: 'paga', bruto: { status: 'approved', transaction_amount: 100, transaction_amount_refunded: bad } }), (e: any) => e.status === 409);
+  }
+  assert.equal(posts, 0); assert.equal((await s.get(gateway.R_GATEWAY_COBRANCAS, Number(c.id)))?.status, 'paga');
+});

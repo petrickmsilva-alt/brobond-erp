@@ -198,6 +198,7 @@ test('E3-PG: UNIQUE de convite por fornecedor e de preço por item', { skip }, a
   assert.equal(conviteDup, '23505', 'o mesmo fornecedor foi convidado duas vezes para a mesma cotação');
 
   await q(`INSERT INTO cotacao_compra_precos (empresa_id, convite_id, item_id, preco_unitario) VALUES ($1, $2, $3, 5)`, [emp, c.conviteId, c.itemId]);
+  await q(`UPDATE cotacao_compra_fornecedores SET status='cotado' WHERE id=$1`, [c.conviteId]);
   const precoDup = await sqlstateDe(
     `INSERT INTO cotacao_compra_precos (empresa_id, convite_id, item_id, preco_unitario) VALUES ($1, $2, $3, 7)`,
     [emp, c.conviteId, c.itemId]
@@ -254,6 +255,7 @@ test('E3-PG: decidir gera um pedido real com itens, e repetir não duplica', { s
   const gerente = await usuarioDa(emp, 'gerente', `fluxo-${SUFIXO}`);
   const c = await cenario(emp, `fluxo-${SUFIXO}`);
   await q(`INSERT INTO cotacao_compra_precos (empresa_id, convite_id, item_id, preco_unitario) VALUES ($1, $2, $3, 12.34)`, [emp, c.conviteId, c.itemId]);
+  await q(`UPDATE cotacao_compra_fornecedores SET status='cotado' WHERE id=$1`, [c.conviteId]);
 
   const antes = await q(`SELECT COUNT(*)::int AS n FROM compras WHERE empresa_id = $1`, [emp]);
   const decidido = await chamar(cc.decidirCotacaoCompra, {}, { id: c.cotacaoId }, gerente, 201);
@@ -292,6 +294,7 @@ test('E3-PG: decisões simultâneas da mesma cotação geram UM único pedido', 
   const gerente = await usuarioDa(emp, 'gerente', `race-${SUFIXO}`);
   const c = await cenario(emp, `race-${SUFIXO}`);
   await q(`INSERT INTO cotacao_compra_precos (empresa_id, convite_id, item_id, preco_unitario) VALUES ($1, $2, $3, 5)`, [emp, c.conviteId, c.itemId]);
+  await q(`UPDATE cotacao_compra_fornecedores SET status='cotado' WHERE id=$1`, [c.conviteId]);
 
   const antes = await q(`SELECT COUNT(*)::int AS n FROM compras WHERE empresa_id = $1`, [emp]);
   const resultados = await Promise.allSettled([
@@ -323,6 +326,7 @@ test('E3-PG: a empresa B não lê nem decide a cotação da A', { skip }, async 
   const gerenteB = await usuarioDa(empB, 'gerente', `isoB-${SUFIXO}`);
   const c = await cenario(empA, `iso-${SUFIXO}`);
   await q(`INSERT INTO cotacao_compra_precos (empresa_id, convite_id, item_id, preco_unitario) VALUES ($1, $2, $3, 5)`, [empA, c.conviteId, c.itemId]);
+  await q(`UPDATE cotacao_compra_fornecedores SET status='cotado' WHERE id=$1`, [c.conviteId]);
 
   // 404, nunca 403: a existência de um id alheio não é informação a vazar.
   for (const [nome, fn, esperado] of [

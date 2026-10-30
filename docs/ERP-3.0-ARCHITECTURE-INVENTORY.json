@@ -1,9 +1,9 @@
 {
-  "gerado_em": "2026-10-29T23:21:47.643Z",
+  "gerado_em": "2026-10-30T00:43:53.532Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 77,
-    "sql_com_conteudo": 77,
+    "sql": 80,
+    "sql_com_conteudo": 80,
     "prisma": 7
   },
   "tabelas": {
@@ -12,8 +12,8 @@
     "sem_empresa_id": 28,
     "fora_do_prisma": 157
   },
-  "indices": 480,
-  "constraints": 284,
+  "indices": 483,
+  "constraints": 287,
   "recursos": {
     "total": 134,
     "com_tabela": 134,
@@ -87,9 +87,9 @@
     "com_recurso": 79
   },
   "rotas": {
-    "total": 426,
+    "total": 427,
     "por_metodo": {
-      "GET": 194,
+      "GET": 195,
       "POST": 194,
       "PUT": 21,
       "DELETE": 14,
@@ -197,14 +197,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 197,
-      "casos": 1647
+      "arquivos": 202,
+      "casos": 1676
     },
     "client": {
-      "arquivos": 119,
-      "casos": 1021
+      "arquivos": 120,
+      "casos": 1024
     },
-    "total": 2668
+    "total": 2700
   },
   "integracoes": {
     "arquivos_modules": 54,
@@ -340,11 +340,6 @@
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"commerce_publicacoes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"commerce_pedidos\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
       "nivel": "AVISO",
