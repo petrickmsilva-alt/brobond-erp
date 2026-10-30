@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-10-30T16:49:41.322Z",
+  "gerado_em": "2026-10-30T17:14:12.073Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 92,
-    "sql_com_conteudo": 92,
+    "sql": 93,
+    "sql_com_conteudo": 93,
     "prisma": 7
   },
   "tabelas": {
-    "total": 176,
-    "com_empresa_id": 148,
+    "total": 199,
+    "com_empresa_id": 171,
     "sem_empresa_id": 28,
-    "fora_do_prisma": 165
+    "fora_do_prisma": 188
   },
-  "indices": 499,
-  "constraints": 311,
+  "indices": 521,
+  "constraints": 359,
   "recursos": {
-    "total": 141,
-    "com_tabela": 141,
-    "multiempresa": 123,
-    "somente_leitura": 62,
-    "rbac_restrito": 58,
-    "cobertura_tenant_pct": 87.2
+    "total": 169,
+    "com_tabela": 169,
+    "multiempresa": 151,
+    "somente_leitura": 74,
+    "rbac_restrito": 81,
+    "cobertura_tenant_pct": 89.3
   },
   "crm": [
     {
@@ -79,18 +79,18 @@
     }
   ],
   "modulos": {
-    "total": 111,
-    "navegaveis": 111,
+    "total": 141,
+    "navegaveis": 141,
     "planejados": 0,
     "areas": 11,
     "grupos": 31,
-    "com_recurso": 79
+    "com_recurso": 108
   },
   "rotas": {
-    "total": 437,
+    "total": 453,
     "por_metodo": {
-      "GET": 198,
-      "POST": 200,
+      "GET": 202,
+      "POST": 212,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -197,14 +197,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 205,
-      "casos": 1723
+      "arquivos": 207,
+      "casos": 1740
     },
     "client": {
-      "arquivos": 120,
-      "casos": 1028
+      "arquivos": 121,
+      "casos": 1033
     },
-    "total": 2751
+    "total": 2773
   },
   "integracoes": {
     "arquivos_modules": 55,
@@ -235,31 +235,6 @@
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"connectors\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TABELA_SEM_RECURSO",
-      "mensagem": "A tabela \"creator_attributions\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TABELA_SEM_RECURSO",
-      "mensagem": "A tabela \"creator_campaigns\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TABELA_SEM_RECURSO",
-      "mensagem": "A tabela \"creator_commands\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TABELA_SEM_RECURSO",
-      "mensagem": "A tabela \"creator_partnerships\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TABELA_SEM_RECURSO",
-      "mensagem": "A tabela \"creator_profiles\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
     },
     {
       "nivel": "AVISO",
@@ -324,12 +299,12 @@
     {
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"fin_periodos_contabeis\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+      "mensagem": "O recurso \"creator_commands\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"service_sla_politicas\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+      "mensagem": "O recurso \"fin_periodos_contabeis\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
       "nivel": "AVISO",
@@ -340,21 +315,6 @@
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"service_tickets\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"service_ticket_interacoes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"customer_segments\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"customer_consents\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
       "nivel": "AVISO",
@@ -400,6 +360,96 @@
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"commerce_rastreio\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"marketing_automation_runs\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"loyalty_tiers\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"loyalty_movements\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"affiliate_commissions\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"creator_matches\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"creator_outreach\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"bi_read_models\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"ai_providers\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"ai_prompts\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"ai_executions\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"ai_recommendations\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"demand_forecasts\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"supply_plans\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"envio_ocorrencias\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"fornecedor_scorecards\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"epm_assets\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"epm_projects\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"epm_project_tasks\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     }
   ],
   "tabelas_sem_empresa_id": [
@@ -433,9 +483,15 @@
     "webhooks"
   ],
   "tabelas_fora_do_prisma": [
+    "affiliate_commissions",
+    "ai_executions",
+    "ai_prompts",
+    "ai_providers",
+    "ai_recommendations",
     "aportes",
     "arquivos",
     "auditoria",
+    "bi_read_models",
     "catalogo_compartilhamentos",
     "catalogo_eventos",
     "catalogos",
@@ -470,6 +526,8 @@
     "creator_attributions",
     "creator_campaigns",
     "creator_commands",
+    "creator_matches",
+    "creator_outreach",
     "creator_partnerships",
     "creator_profiles",
     "crm_atividades",
@@ -484,6 +542,7 @@
     "customer_consents",
     "customer_preferences",
     "customer_segments",
+    "demand_forecasts",
     "devolucao_itens",
     "devolucoes",
     "divergencias_conferencia",
@@ -491,7 +550,13 @@
     "documentos_fiscais_eventos",
     "empresa_fiscal_config",
     "envio_eventos",
+    "envio_ocorrencias",
     "envios",
+    "epm_assets",
+    "epm_budgets",
+    "epm_project_tasks",
+    "epm_projects",
+    "epm_scenarios",
     "equipe_membros",
     "equipes_comerciais",
     "estoque_insumos",
@@ -514,6 +579,7 @@
     "fornecedor_contatos",
     "fornecedor_documentos",
     "fornecedor_homologacao_eventos",
+    "fornecedor_scorecards",
     "fornecedores",
     "gateway_cobrancas",
     "gateway_configs",
@@ -536,6 +602,11 @@
     "listas_preco_historico",
     "locais",
     "login_tentativas",
+    "loyalty_movements",
+    "loyalty_programs",
+    "loyalty_tiers",
+    "marketing_automation_runs",
+    "marketing_automations",
     "medida_valores",
     "medidas",
     "metas",
@@ -587,6 +658,8 @@
     "service_ticket_interacoes",
     "service_tickets",
     "sessoes",
+    "sop_scenarios",
+    "supply_plans",
     "terceirizacao_eventos",
     "terceiros_operacionais",
     "territorios",

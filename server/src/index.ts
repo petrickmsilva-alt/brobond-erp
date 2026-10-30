@@ -243,6 +243,24 @@ import {
   transicionarTicket,
 } from './service';
 import {
+  apurarComissaoAfiliado,
+  aprovarSop,
+  calcularScorecardFornecedor,
+  creditarPontosVenda,
+  decidirRecomendacao,
+  dispararAutomacao,
+  forecastCenario,
+  gerarForecastDemanda,
+  gerarPlanoSuprimento,
+  gerarRecomendacoes,
+  pagarComissaoAfiliado,
+  painelBi,
+  reconstruirBi,
+  roiCampanha,
+  saldoFidelidade,
+  varianceEpm,
+} from './enterprise45';
+import {
   abrirCaixa,
   buscarProduto as pdvBuscarProduto,
   caixaAberto,
@@ -949,6 +967,40 @@ app.get('/api/service/painel', wrap(painelAtendimento));
 app.get('/api/customer360/:id', wrap(customer360));
 // Avaliação de segmento (contagem e clientes que casam a regra).
 app.get('/api/customer-segments/:id/avaliar', wrap(avaliarSegmento));
+
+// ---- ONDAS 4–5 / D2 — GROWTH (marketing, loyalty, affiliate, ROI) ----
+// Dispara uma automação (execução idempotente por Idempotency-Key).
+app.post('/api/marketing-automations/:id/disparar', wrap(dispararAutomacao));
+// Credita pontos por venda paga (idempotente por venda+cliente+programa).
+app.post('/api/loyalty/creditar-venda', wrap(creditarPontosVenda));
+// Saldo e extrato de pontos do cliente (saldo = soma dos movimentos).
+app.get('/api/loyalty/clientes/:clienteId/saldo', wrap(saldoFidelidade));
+// Apura comissões de afiliado a partir da ATRIBUIÇÃO real (sem duplicar).
+app.post('/api/affiliate/parcerias/:partnershipId/apurar', wrap(apurarComissaoAfiliado));
+// Encaminha uma comissão apurada ao financeiro existente.
+app.post('/api/affiliate/comissoes/:id/pagar', wrap(pagarComissaoAfiliado));
+// ROI/ROAS real da campanha (custo × receita atribuída).
+app.get('/api/campanhas/:id/roi', wrap(roiCampanha));
+
+// ---- ONDAS 4–5 / D3 — DATA/BI ----
+app.post('/api/bi/reconstruir', wrap(reconstruirBi));
+app.get('/api/bi/painel', wrap(painelBi));
+
+// ---- ONDAS 4–5 / D4 — AI PLATFORM ----
+app.post('/api/ai/recomendacoes/gerar', wrap(gerarRecomendacoes));
+app.post('/api/ai/recomendacoes/:id/decidir', wrap(decidirRecomendacao));
+
+// ---- ONDAS 4–5 / D5 — DEMAND / SUPPLY / S&OP ----
+app.post('/api/demand/forecast/gerar', wrap(gerarForecastDemanda));
+app.post('/api/supply/plano/gerar', wrap(gerarPlanoSuprimento));
+app.post('/api/sop/cenarios/:id/aprovar', wrap(aprovarSop));
+
+// ---- ONDAS 4–5 / D6 — SUPPLIER COLLABORATION ----
+app.post('/api/fornecedores/:fornecedorId/scorecard', wrap(calcularScorecardFornecedor));
+
+// ---- ONDAS 4–5 / D7 — ENTERPRISE FINANCE / EPM ----
+app.get('/api/epm/variance', wrap(varianceEpm));
+app.post('/api/epm/cenarios/:id/forecast', wrap(forecastCenario));
 
 // ---- ESTOQUE 3.0: transferência formal, reserva e disponibilidade ----
 // Documento com máquina de estados — o saldo só muda na expedição e no
