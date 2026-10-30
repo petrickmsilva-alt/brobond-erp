@@ -24,7 +24,7 @@ async function fixture(t: any) {
   }
   let refunded = 0; let refunds = 0;
   t.mock.method(globalThis, 'fetch', async (url: unknown, init: RequestInit) => {
-    if (String(url).endsWith('/refunds')) { refunds++; refunded += JSON.parse(String(init.body)).amount; return new Response(JSON.stringify({ status: 'approved' })); }
+    if (String(url).endsWith('/refunds')) { refunds++; const amount = JSON.parse(String(init.body)).amount; refunded += amount; return new Response(JSON.stringify({ id: `${ref}-refund-${refunds}`, payment_id: ref, amount, status: 'approved' })); }
     if (init.method === 'POST') return new Response(JSON.stringify({ id: ref, status: 'pending', transaction_amount: 100, currency_id: 'BRL' }));
     return new Response(JSON.stringify({ id: ref, status: refunded === 100 ? 'refunded' : 'approved', transaction_amount: 100,
       currency_id: 'BRL', transaction_amount_refunded: refunded }));
@@ -89,7 +89,7 @@ test('fila de revisão: RBAC, empresa e cache privado', async (t) => {
 test('reembolso inferior ao solicitado permanece UNCERTAIN até atingir o acumulado; nunca repete chamada externa', async (t) => {
   const f = await fixture(t); await paymentEngine.synchronize(1, f.id);
   const provider = providerRegistry.get('MERCADO_PAGO'); let externalCalls = 0; let confirmed = 2000;
-  t.mock.method(provider, 'refund', async () => { externalCalls++; return { reference: f.ref, status: 'PARTIALLY_REFUNDED' as const, amount: 10000, currency: 'BRL', refunded: confirmed }; });
+  t.mock.method(provider, 'refund', async () => { externalCalls++; return { reference: f.ref, status: 'PARTIALLY_REFUNDED' as const, amount: 10000, currency: 'BRL', refunded: confirmed, refundEvidence: { reference: 'refund-confirmed', paymentReference: f.ref, amount: 5000, status: 'SUCCEEDED' as const } }; });
   t.mock.method(provider, 'getPayment', async () => ({ reference: f.ref, status: 'PARTIALLY_REFUNDED' as const, amount: 10000, currency: 'BRL', refunded: confirmed }));
   await assert.rejects(() => paymentEngine.mutate(1, f.id, 'refund', 'insufficient-refund', 5000), (e: any) => e.status === 409);
   const op = await f.s.findOneWhere(R_OPERATIONS, { empresa_id: 1, payment_intent_id: f.id, idempotency_key: 'insufficient-refund' });
@@ -176,10 +176,47 @@ test('job reconcilia operação incerta mesmo quando a intenção já está REFU
   await paymentEngine.apply(1, f.id, { reference: f.ref, status: 'REFUNDED', amount: 10000, currency: 'BRL', refunded: 10000 });
   const op = await f.s.insert(R_OPERATIONS, { empresa_id: 1, payment_intent_id: f.id, operation: 'refund', idempotency_key: 'crash-after-apply',
     request_hash: 'fixture', amount: 10000, status: 'UNCERTAIN', result: { baseline_refunded: 0 }, created_at: '2000-01-01T00:00:00.000Z' });
-  await f.s.insert(R_REFUNDS, { empresa_id: 1, payment_intent_id: f.id, operation_id: op.id, amount: 10000, status: 'UNCERTAIN' });
+  await f.s.insert(R_REFUNDS, { empresa_id: 1, payment_intent_id: f.id, operation_id: op.id, amount: 10000, status: 'UNCERTAIN', provider: 'MERCADO_PAGO', provider_refund_id: 'refund-after-crash', provider_refund_status: 'SUCCEEDED' });
   await f.s.update((await import('../../modules/payments/infrastructure/resources')).R_INTENTS, f.id, { active_operation: op.id, updated_at: '2000-01-01T00:00:00.000Z' });
   t.mock.method(providerRegistry.get('MERCADO_PAGO'), 'getPayment', async () => ({ reference: f.ref, status: 'REFUNDED' as const, amount: 10000, currency: 'BRL', refunded: 10000 }));
   const { runPaymentJobs } = await import('../../modules/payments/application/jobs'); await runPaymentJobs();
   assert.equal((await f.s.get(R_OPERATIONS, Number(op.id)))?.status, 'SUCCEEDED');
   assert.equal((await paymentEngine.intent(1, f.id)).active_operation, null);
+});
+
+test('refund externo concorrente com mesmo total não confirma operação sem identidade individual', async (t) => {
+  const f = await fixture(t); await paymentEngine.synchronize(1, f.id);
+  const provider = providerRegistry.get('MERCADO_PAGO'); let writes = 0;
+  t.mock.method(provider, 'refund', async () => { writes++; return { reference: f.ref, status: 'PARTIALLY_REFUNDED' as const, amount: 10000, currency: 'BRL', refunded: 5000 }; });
+  t.mock.method(provider, 'getPayment', async () => ({ reference: f.ref, status: 'PARTIALLY_REFUNDED' as const, amount: 10000, currency: 'BRL', refunded: 5000 }));
+  await assert.rejects(() => paymentEngine.mutate(1, f.id, 'refund', 'ambiguous-refund-key', 5000), (e: any) => e.status === 409);
+  const op = await f.s.findOneWhere(R_OPERATIONS, { empresa_id: 1, payment_intent_id: f.id, idempotency_key: 'ambiguous-refund-key' });
+  for (let n = 0; n < 3; n++) await paymentEngine.synchronize(1, f.id);
+  assert.equal((await f.s.get(R_OPERATIONS, Number(op?.id)))?.status, 'UNCERTAIN');
+  assert.equal(Number((await paymentEngine.intent(1, f.id)).active_operation), Number(op?.id));
+  const refund = await f.s.findOneWhere(R_REFUNDS, { empresa_id: 1, operation_id: op?.id });
+  assert.equal(refund?.status, 'UNCERTAIN'); assert.equal(refund?.provider_refund_id ?? null, null);
+  assert.equal(writes, 1, 'reconciliação não repete o write externo');
+});
+
+test('refund com identidade pendente consulta a mesma operação e termina apenas com prova individual e saldo', async (t) => {
+  const f = await fixture(t); await paymentEngine.synchronize(1, f.id);
+  const provider = providerRegistry.get('MERCADO_PAGO'); let writes = 0; let settled = false; let reads = 0;
+  const proof = () => ({ reference: 'individual-refund-01', paymentReference: f.ref, amount: 3000, status: settled ? 'SUCCEEDED' as const : 'PENDING' as const });
+  t.mock.method(provider, 'refund', async () => { writes++; return { reference: f.ref, status: 'PAID' as const, amount: 10000, currency: 'BRL', refunded: 0, refundEvidence: proof() }; });
+  t.mock.method(provider, 'getPayment', async () => settled
+    ? { reference: f.ref, status: 'PARTIALLY_REFUNDED' as const, amount: 10000, currency: 'BRL', refunded: 3000 }
+    : { reference: f.ref, status: 'PAID' as const, amount: 10000, currency: 'BRL', refunded: 0 });
+  t.mock.method(provider, 'getRefund', async (_ctx, payment, refund) => { reads++; assert.equal(payment, f.ref); assert.equal(refund, 'individual-refund-01'); return proof(); });
+  await assert.rejects(() => paymentEngine.mutate(1, f.id, 'refund', 'pending-proof-key', 3000), (e: any) => e.status === 409);
+  const op = await f.s.findOneWhere(R_OPERATIONS, { empresa_id: 1, payment_intent_id: f.id, idempotency_key: 'pending-proof-key' });
+  await paymentEngine.synchronize(1, f.id);
+  assert.equal((await f.s.get(R_OPERATIONS, Number(op?.id)))?.status, 'UNCERTAIN');
+  assert.equal((await f.s.findOneWhere(R_REFUNDS, { empresa_id: 1, operation_id: op?.id }))?.provider_refund_status, 'PENDING');
+  settled = true; await paymentEngine.synchronize(1, f.id);
+  assert.equal((await f.s.get(R_OPERATIONS, Number(op?.id)))?.status, 'SUCCEEDED');
+  assert.equal((await f.s.findOneWhere(R_REFUNDS, { empresa_id: 1, operation_id: op?.id }))?.provider_refund_status, 'SUCCEEDED');
+  assert.equal((await paymentEngine.intent(1, f.id)).active_operation, null);
+  await paymentEngine.mutate(1, f.id, 'refund', 'pending-proof-key', 3000);
+  assert.equal(writes, 1); assert.equal(reads, 2);
 });

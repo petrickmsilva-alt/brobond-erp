@@ -1,6 +1,6 @@
 import { providerRegistry } from '../../modules/payments/providers/registry';
 import { webhookCompatibility } from '../../modules/payments/providers/legacy-webhook';
-import { intencaoMercadoPago, mercadopagoProvider } from '../../modules/payments/providers/mercado-pago/legacy';
+import { intencaoMercadoPago, mercadopagoProvider, valorMercadoPagoEmCentavos } from '../../modules/payments/providers/mercado-pago/legacy';
 // ============================================================================
 // GATEWAY DE PAGAMENTO (P2 §7–§9) — arquitetura de ADAPTER.
 //
@@ -205,7 +205,7 @@ export interface PaymentProvider {
   criaCobranca(ctx: GatewayContext, input: CobrancaInput): Promise<CobrancaProviderResult>;
   consultaCobranca(ctx: GatewayContext, providerRef: string): Promise<CobrancaProviderResult | null>;
   cancelaCobranca(ctx: GatewayContext, providerRef: string): Promise<{ status: string }>;
-  estornaCobranca(ctx: GatewayContext, providerRef: string, valor?: number): Promise<{ status: string }>;
+  estornaCobranca(ctx: GatewayContext, providerRef: string, valor?: number): Promise<{ status: string; bruto?: Record<string, unknown> }>;
   /** Identifica o evento no corpo cru. NÃO valida assinatura. */
   parseWebhook(corpo: string): WebhookParse | null;
   /** Assinatura válida OU segredo não configurado (validação opcional, P2 §8). */
@@ -775,13 +775,13 @@ export async function estornarCobranca(req: Request, res: Response) {
   const verificar = async (): Promise<'paga' | 'estornada'> => {
     const remote = await provider.consultaCobranca(legacyCtx, String(row.provider_ref));
     const bruto = remote?.bruto;
-    const total = Number(bruto?.transaction_amount);
-    const rawRefund = bruto?.transaction_amount_refunded;
-    const devolvido = rawRefund === null || rawRefund === undefined || rawRefund === '' || typeof rawRefund === 'boolean' ? NaN : Number(rawRefund);
-    if (!bruto || String(bruto.id) !== String(row.provider_ref) || bruto.currency_id !== 'BRL' || !Number.isFinite(total) || round2(total) !== round2(Number(row.valor)) ||
-        !Number.isFinite(devolvido) || devolvido < 0 || devolvido > total)
+    const total = valorMercadoPagoEmCentavos(bruto?.transaction_amount);
+    const devolvido = valorMercadoPagoEmCentavos(bruto?.transaction_amount_refunded);
+    const expected = valorMercadoPagoEmCentavos(row.valor);
+    if (!bruto || String(bruto.id) !== String(row.provider_ref) || bruto.currency_id !== 'BRL' || total === null || total <= 0 || total !== expected ||
+        devolvido === null || devolvido > total)
       throw new HttpError(409, 'Valor do estorno legado não pôde ser confirmado; concilie antes de continuar.');
-    if (bruto.status === 'refunded' && round2(devolvido) === round2(total)) return 'estornada';
+    if (bruto.status === 'refunded' && devolvido === total) return 'estornada';
     if (bruto.status === 'approved' && devolvido === 0) return 'paga';
     throw new HttpError(409, 'Estorno legado parcial, pendente ou contestado exige conciliação manual.');
   };
@@ -1095,8 +1095,10 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
     if (providerId === 'mercadopago') {
       const remote = await provider.consultaCobranca(ctx, String(parsed.provider_ref));
       const bruto = remote?.bruto;
+      const remoteCents = valorMercadoPagoEmCentavos(bruto?.transaction_amount);
+      const localCents = valorMercadoPagoEmCentavos(cobranca.valor);
       if (!remote || !bruto || String(bruto.id) !== String(parsed.provider_ref) || bruto.currency_id !== 'BRL' ||
-          !Number.isFinite(Number(bruto.transaction_amount)) || round2(Number(bruto.transaction_amount)) !== round2(Number(cobranca.valor)))
+          remoteCents === null || remoteCents <= 0 || localCents === null || remoteCents !== localCents)
         throw new HttpError(409, 'Valor, moeda ou referência divergente; conciliação necessária.');
       intencao = intencaoMercadoPago(remote);
     } else if (provider.resolveWebhook) intencao = await provider.resolveWebhook(ctx, parsed, payload);

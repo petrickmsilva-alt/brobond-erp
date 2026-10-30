@@ -43,8 +43,8 @@ test('PG pagamentos: correção de repasse, JSON preservado, desvinculação e e
   const { query } = await boot(); const { importPayout, correctPayout, matchPayout, unlinkPayout, payoutDetail } = await import('../../../modules/payments/application/payouts');
   const { marcarDivergencia } = await import('../../src/extrato');
   const ref = `payout-correct-pg-${Date.now()}-${process.pid}`; const { actor } = await fixture(ref);
-  const original = { provider: 'PAGBANK', payout_reference: ref, settlement_date: '2036-01-02', net_amount: 8800,
-    transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, refund_amount: 1000, net_amount: 8800 }] };
+  const original = { provider: 'PAGBANK', payout_reference: ref, currency: 'BRL', settlement_date: '2036-01-02', net_amount: 8800,
+    transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 1000, chargeback_amount: 0, net_amount: 8800 }] };
   const r = res(); await importPayout(req(original, {}, '', actor), r.out); const payout = r.get().body.payout; assert.equal(payout.status, 'DIVERGENT');
   const corrected = { ...original, net_amount: 9800, transactions: [{ ...original.transactions[0], refund_amount: 0, net_amount: 9800 }] };
   const body = { expected_hash: payout.content_hash, reason: 'Valor transcrito incorretamente', report: corrected };
@@ -68,8 +68,8 @@ test('PG pagamentos: correção concorrente com novo estorno não termina concil
   const { paymentEngine } = await import('../../../modules/payments/orchestration/payment-orchestrator');
   for (let run = 0; run < 5; run++) {
     const ref = `correction-refund-pg-${Date.now()}-${process.pid}-${run}`; const { intent, actor } = await fixture(ref);
-    const original = { provider: 'PAGBANK', payout_reference: ref, settlement_date: '2036-01-02', net_amount: 8800,
-      transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, refund_amount: 1000, net_amount: 8800 }] };
+    const original = { provider: 'PAGBANK', payout_reference: ref, currency: 'BRL', settlement_date: '2036-01-02', net_amount: 8800,
+      transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 1000, chargeback_amount: 0, net_amount: 8800 }] };
     const r = res(); await importPayout(req(original, {}, '', actor), r.out); const payout = r.get().body.payout;
     const corrected = { ...original, net_amount: 9800, transactions: [{ ...original.transactions[0], refund_amount: 0, net_amount: 9800 }] };
     const [correction, refund] = await Promise.allSettled([
@@ -137,7 +137,12 @@ test('PG + HTTP pagamentos: sessão, RBAC, isolamento, disputa, correção e des
   await request(app).post(`${base}/disputes/${disputeId}/transition`).set('Authorization', `Bearer ${a}`).set('Idempotency-Key', `${ref}-transition`).send({ status: 'UNDER_REVIEW', note: 'Revisão interna iniciada', expected_version: 0 }).expect(200);
   const detail = await request(app).get(`${base}/disputes/${disputeId}`).set('Authorization', `Bearer ${a}`).expect(200);
   assert.equal(detail.body.dispute.version, 1); assert.equal(detail.body.evidence.total, 1); assert.equal(detail.headers['cache-control'], 'private, no-store');
-  const report = { provider: 'PAGBANK', payout_reference: ref, settlement_date: '2036-01-02', net_amount: 8800, transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, refund_amount: 1000, net_amount: 8800 }] };
+  const payoutRef = `${ref}-independent`; await fixture(payoutRef);
+  const report = { provider: 'PAGBANK', payout_reference: payoutRef, currency: 'BRL', settlement_date: '2036-01-02', net_amount: 8800, transactions: [{ provider_reference: payoutRef, gross_amount: 10000, provider_fee: 200, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 1000, chargeback_amount: 0, net_amount: 8800 }] };
+  await request(app).post(`${base}/payouts/import`).set('Authorization', `Bearer ${a}`).send({ ...report, currency: undefined }).expect(400);
+  await request(app).post(`${base}/payouts/import`).set('Authorization', `Bearer ${a}`).send({ ...report, transactions: [{ ...report.transactions[0], refund_amount: undefined }] }).expect(400);
+  await request(app).post(`${base}/payouts/import`).set('Authorization', `Bearer ${op}`).send(report).expect(403);
+  await request(app).post(`${base}/payouts/import`).set('Authorization', `Bearer ${b}`).send(report).expect(422);
   const imported = await request(app).post(`${base}/payouts/import`).set('Authorization', `Bearer ${a}`).send(report).expect(201);
   const payoutId = imported.body.payout.id; assert.equal(imported.body.payout.status, 'DIVERGENT');
   const corrected = { ...report, net_amount: 9800, transactions: [{ ...report.transactions[0], refund_amount: 0, net_amount: 9800 }] };

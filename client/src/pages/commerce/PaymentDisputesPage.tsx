@@ -8,11 +8,12 @@ import { PaymentNavigation } from './PaymentNavigation';
 import { dataHora, grana } from './shared';
 
 type Page<T> = { rows: T[]; total: number; page: number; pageSize: number };
-type Dispute = { id: number; payment_intent_id: number; provider_reference: string; provider: string | null; external_dispute_id: string | null; origin: string; status: string; version: number; amount: number; reason: string | null; due_date: string | null };
+type Dispute = { id: number; payment_intent_id: number; provider_reference: string; provider: string | null; external_dispute_id: string | null; origin: string; status: string; version: number; amount: number | null; amount_source?: string; reason: string | null; due_date: string | null };
 type Evidence = { id: number; kind: string; description: string; content: string; created_at: string };
 type Event = { id: number; kind: string; from_status: string | null; to_status: string; note: string | null; external_reference: string | null; created_at: string };
 type Detail = { dispute: Dispute; evidence: Page<Evidence>; events: Page<Event>; provider_submission: string; source: string };
 const BASE = '/commerce/pagamentos/disputas';
+const disputeAmount = (row: Dispute) => row.amount == null ? 'não informado' : `${grana(Number(row.amount) / 100)}${row.amount_source === 'LEGACY_UNVERIFIED' ? ' (legado sem comprovação)' : row.amount_source === 'MANUAL_REPORTED' ? ' (informado manualmente)' : ''}`;
 const names: Record<string, string> = { DISPUTE_OPENED: 'Aberta', UNDER_REVIEW: 'Em análise', EVIDENCE_REQUIRED: 'Evidências solicitadas', EVIDENCE_SUBMITTED: 'Envio externo registrado', WON: 'Ganha', LOST: 'Perdida', CLOSED: 'Encerrada' };
 const edges: Record<string, string[]> = {
   DISPUTE_OPENED: ['UNDER_REVIEW', 'EVIDENCE_REQUIRED', 'EVIDENCE_SUBMITTED', 'WON', 'LOST', 'CLOSED'],
@@ -72,7 +73,7 @@ export default function PaymentDisputesPage() {
     <PageHeader title={creating ? 'Registrar disputa' : id ? `Disputa #${id}` : 'Disputas e chargebacks'} description="Registros internos vinculados a pagamentos existentes." />
     <PaymentNavigation />
     <Link className="text-sm text-blue-700 hover:underline" to={id && !detailView ? `${BASE}/${id}` : id || creating ? BASE : '/commerce/pagamentos'}>← Voltar</Link>
-    <Alert tone="blue">O sistema não envia evidências nem consulta o desfecho no provedor. Registros externos são declarações manuais e não alteram pagamentos ou caixa.</Alert>
+    <Alert tone="blue">O sistema não envia evidências nem consulta o desfecho no provedor. Registros externos são declarações manuais; bloqueiam conciliação automática, mas não alteram pagamentos ou caixa.</Alert>
     {error && <Alert tone="red">{error}</Alert>}
     {loading && !creating && <Spinner label="Carregando disputas…" />}
     {creating && <form className="space-y-4 rounded-xl border border-line bg-surface p-4" onSubmit={submit}>
@@ -89,14 +90,14 @@ export default function PaymentDisputesPage() {
     {!creating && !id && !loading && list && <section className="space-y-4">
       <Link className="btn-primary" to={`${BASE}/novo`}>Registrar disputa</Link>
       <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th>ID</th><th>Pagamento</th><th>Transação</th><th>Valor</th><th>Estado</th><th>Ação</th></tr></thead><tbody>
-        {list.rows.map((row) => <tr key={row.id}><td>{row.id}</td><td>{row.payment_intent_id}</td><td>{row.provider_reference}</td><td>{grana(Number(row.amount) / 100)}</td><td>{names[row.status] || row.status}</td><td><Link className="text-blue-700 hover:underline" to={`${BASE}/${row.id}`}>Detalhes</Link></td></tr>)}
+        {list.rows.map((row) => <tr key={row.id}><td>{row.id}</td><td>{row.payment_intent_id}</td><td>{row.provider_reference}</td><td>{disputeAmount(row)}</td><td>{names[row.status] || row.status}</td><td><Link className="text-blue-700 hover:underline" to={`${BASE}/${row.id}`}>Detalhes</Link></td></tr>)}
         {!list.rows.length && <tr><td colSpan={6}>Nenhuma disputa encontrada.</td></tr>}</tbody></table></div>
       <Pagination label="disputas" page={listPage} total={list.total} pageSize={list.pageSize} setPage={setListPage} />
     </section>}
     {id && !loading && detail && <>
       <section className="space-y-2 rounded-xl border border-line bg-surface p-4"><h2 className="font-semibold">Dados da disputa</h2>
         <p>Pagamento #{detail.dispute.payment_intent_id} · {detail.dispute.provider || 'Provedor não informado'} · transação {detail.dispute.provider_reference}</p>
-        <p>Situação: <strong>{names[detail.dispute.status] || detail.dispute.status}</strong> · Valor: {grana(Number(detail.dispute.amount) / 100)} · Origem: {detail.dispute.origin === 'ENGINE' ? 'Payment Engine' : 'registro manual'}</p>
+        <p>Situação: <strong>{names[detail.dispute.status] || detail.dispute.status}</strong> · Valor: {disputeAmount(detail.dispute)} · Origem: {detail.dispute.origin === 'ENGINE' ? 'Payment Engine' : 'registro manual'}</p>
         <p>Disputa externa: {detail.dispute.external_dispute_id || 'não informada'} · Prazo: {detail.dispute.due_date ? String(detail.dispute.due_date).slice(0, 10) : 'não informado'}</p>
         <p>Motivo: {detail.dispute.reason || 'não informado'}</p>
         {detailView && <div className="flex flex-wrap gap-2">{!terminal && <Link className="btn-primary" to={`${BASE}/${id}/evidencias/nova`}>Registrar evidência</Link>}{(edges[detail.dispute.status] || []).length > 0 && <Link className="btn-secondary" to={`${BASE}/${id}/alterar`}>Alterar situação</Link>}</div>}

@@ -167,8 +167,9 @@ test('Payment Engine: checkout intent → adapter → inbox/state → order; con
     const path = String(url);
     if (path.endsWith('/refunds')) {
       refunds++;
-      refunded += JSON.parse(String(init.body)).amount;
-      return new Response(JSON.stringify({ status: 'approved' }));
+      const amount = JSON.parse(String(init.body)).amount;
+      refunded += amount;
+      return new Response(JSON.stringify({ id: `mp-refund-${refunds}`, payment_id: 'mp_fixture', amount, status: 'approved' }));
     }
     if (init.method === 'POST') {
       creates++;
@@ -474,8 +475,9 @@ test('Payment Engine: provider configuration preserves environment credentials o
 test('Stripe e PagBank não projetam pagamento integral quando captura externa é parcial ou desconhecida', async (t) => {
   let amountReceived: number | undefined = 4000; let pagPaid = 4000;
   t.mock.method(globalThis, 'fetch', async (url: unknown) => {
-    if (String(url).includes('stripe.com')) return new Response(JSON.stringify({ amount_total: 10000, currency: 'brl', payment_status: 'paid', payment_intent: { status: 'succeeded', amount_received: amountReceived } }));
-    return new Response(JSON.stringify({ items: [{ unit_amount: 10000, quantity: 1 }], charges: [{ status: 'PAID', amount: { summary: { paid: pagPaid, refunded: 0 } } }] }));
+    if (String(url).includes('stripe.com') && String(url).includes('/charges/')) return new Response(JSON.stringify({ id: 'ch-test', payment_intent: 'pi-test', currency: 'brl', amount_captured: 10000, amount_refunded: 0 }));
+    if (String(url).includes('stripe.com')) return new Response(JSON.stringify({ id: 'cs-test', amount_total: 10000, currency: 'brl', payment_status: 'paid', payment_intent: { id: 'pi-test', status: 'succeeded', amount_received: amountReceived, latest_charge: 'ch-test' } }));
+    return new Response(JSON.stringify({ id: 'ORDE-test', items: [{ unit_amount: 10000, quantity: 1 }], charges: [{ id: 'CHAR-test', status: 'PAID', amount: { currency: 'BRL', summary: { paid: pagPaid, refunded: 0 } } }] }));
   });
   const stripe = new StripeProvider(); const sc = { ...ctx, credentials: { secret_key: 'test-only' } };
   await assert.rejects(() => stripe.getPayment(sc, 'cs-test'), (e: any) => e instanceof PaymentError);
@@ -495,8 +497,103 @@ test('Mercado Pago não projeta pagamento com referência, total ou estorno remo
     { ...payload, id: 'other' }, { ...payload, id: null }, { ...payload, transaction_amount: null },
     { ...payload, currency_id: null }, { ...payload, transaction_amount_refunded: null },
     { ...payload, transaction_amount_refunded: undefined }, { ...payload, transaction_amount_refunded: -1 },
-    { ...payload, transaction_amount_refunded: 101 },
+    { ...payload, transaction_amount_refunded: 101 }, { ...payload, transaction_amount: 100.001 },
+    { ...payload, transaction_amount_refunded: 0.001 },
   ]) { payload = bad; await assert.rejects(() => provider.getPayment(pc, 'mp-proof'), (e: any) => e instanceof PaymentError && e.ambiguous); }
   payload = { id: 'mp-proof', status: 'approved', transaction_amount: 100, currency_id: 'BRL', transaction_amount_refunded: 0 };
   assert.equal((await provider.getPayment(pc, 'mp-proof')).status, 'PAID');
+});
+
+test('Stripe e PagBank rejeitam identidade e valor de refund ausentes, divergentes ou impossíveis', async (t) => {
+  let session: Record<string, any> = { id: 'cs-proof', amount_total: 10000, currency: 'brl', payment_status: 'paid',
+    payment_intent: { id: 'pi-proof', status: 'succeeded', amount_received: 10000, latest_charge: 'ch-proof' } };
+  let charge: Record<string, any> = { id: 'ch-proof', payment_intent: 'pi-proof', currency: 'brl', amount_captured: 10000, amount_refunded: 0 };
+  let order: Record<string, any> = { id: 'ORDE-proof', items: [{ unit_amount: 10000, quantity: 1 }],
+    charges: [{ id: 'CHAR-proof', status: 'PAID', amount: { currency: 'BRL', summary: { paid: 10000, refunded: 0 } } }] };
+  t.mock.method(globalThis, 'fetch', async (url: unknown) => new Response(JSON.stringify(String(url).includes('/charges/') ? charge : String(url).includes('stripe.com') ? session : order)));
+  const stripe = new StripeProvider(); const sc = { ...ctx, credentials: { secret_key: 'test-only' } };
+  for (const bad of [null, undefined, -1, 10001, '0']) {
+    charge = { ...charge, amount_refunded: bad };
+    await assert.rejects(() => stripe.getPayment(sc, 'cs-proof'), (e: any) => e instanceof PaymentError && e.ambiguous);
+  }
+  charge = { id: 'outro', payment_intent: 'pi-proof', currency: 'brl', amount_captured: 10000, amount_refunded: 0 };
+  await assert.rejects(() => stripe.getPayment(sc, 'cs-proof'), (e: any) => e instanceof PaymentError);
+  charge.id = 'ch-proof'; session = { ...session, id: 'outra' };
+  await assert.rejects(() => stripe.getPayment(sc, 'cs-proof'), (e: any) => e instanceof PaymentError);
+  session.id = 'cs-proof'; assert.equal((await stripe.getPayment(sc, 'cs-proof')).status, 'PAID');
+  const pag = new PagBankProvider(); const pc = { ...ctx, credentials: { access_token: 'test-only' } };
+  for (const bad of [null, undefined, -1, 10001, '0']) {
+    order.charges[0].amount.summary.refunded = bad;
+    await assert.rejects(() => pag.getPayment(pc, 'ORDE-proof'), (e: any) => e instanceof PaymentError && e.ambiguous);
+  }
+  order.charges[0].amount.summary.refunded = 0; order.id = 'ORDE-other';
+  await assert.rejects(() => pag.getPayment(pc, 'ORDE-proof'), (e: any) => e instanceof PaymentError);
+  order.id = 'ORDE-proof'; order.charges[0].amount.currency = 'USD';
+  await assert.rejects(() => pag.getPayment(pc, 'ORDE-proof'), (e: any) => e instanceof PaymentError);
+  order.charges[0].amount.currency = 'BRL'; assert.equal((await pag.getPayment(pc, 'ORDE-proof')).status, 'PAID');
+  order.charges[0].amount.summary.paid = 5000;
+  order.charges.push({ ...order.charges[0], amount: { ...order.charges[0].amount, summary: { paid: 5000, refunded: 0 } } });
+  await assert.rejects(() => pag.getPayment(pc, 'ORDE-proof'), (e: any) => e instanceof PaymentError && e.ambiguous);
+
+});
+
+test('refund Stripe só retorna evidência individual se identidade, pagamento e valor coincidirem', async (t) => {
+  let refund: Record<string, unknown> = { id: 're-proof', payment_intent: 'pi-proof', amount: 2500, currency: 'brl', status: 'succeeded' };
+  t.mock.method(globalThis, 'fetch', async (url: unknown) => {
+    const path = String(url);
+    if (path.endsWith('/refunds') || path.endsWith('/refunds/re-proof')) return new Response(JSON.stringify(refund));
+    if (path.includes('/charges/')) return new Response(JSON.stringify({ id: 'ch-proof', payment_intent: 'pi-proof', currency: 'brl', amount_captured: 10000, amount_refunded: 2500 }));
+    if (path.includes('?expand')) return new Response(JSON.stringify({ id: 'cs-proof', amount_total: 10000, currency: 'brl', payment_status: 'paid',
+      payment_intent: { id: 'pi-proof', status: 'succeeded', amount_received: 10000, latest_charge: 'ch-proof' } }));
+    return new Response(JSON.stringify({ id: 'cs-proof', payment_intent: 'pi-proof' }));
+  });
+  const stripe = new StripeProvider(); const sc = { ...ctx, credentials: { secret_key: 'test-only' } };
+  let response = await stripe.refund(sc, 'cs-proof', 2500);
+  assert.deepEqual(response.refundEvidence, { reference: 're-proof', paymentReference: 'cs-proof', amount: 2500, status: 'SUCCEEDED' });
+  assert.equal((await stripe.getRefund(sc, 'cs-proof', 're-proof')).amount, 2500);
+  for (const bad of [{ ...refund, id: null }, { ...refund, id: ' re-proof ' }, { ...refund, payment_intent: 'pi-other' }, { ...refund, currency: 'usd' }, { ...refund, amount: null }, { ...refund, amount: 2400 }]) {
+    refund = bad; response = await stripe.refund(sc, 'cs-proof', 2500); assert.equal(response.refundEvidence, undefined);
+  }
+});
+
+test('Mercado Pago não liquida resposta de criação sem leitura autoritativa', async (t) => {
+  let read = false;
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    if (init.method === 'POST') return new Response(JSON.stringify({ id: 'created-mp', status: 'approved' }));
+    read = true; return new Response(JSON.stringify({ id: 'created-mp', status: 'approved', transaction_amount: 100, currency_id: 'BRL', transaction_amount_refunded: 0 }));
+  });
+  const mp = new MercadoPagoProvider(); const mc = { ...ctx, credentials: { access_token: 'fixture-only' }, webhookSecret: 'fixture-only' };
+  const created = await mp.createPaymentIntent(mc, { amount: 10000, currency: 'BRL', method: 'PIX', reference: 'create-test', email: 'fixture@example.invalid', installments: 1 }); assert.equal(created.reference, 'created-mp');
+  assert.equal(created.status, 'PENDING'); assert.equal(read, false);
+  assert.equal((await mp.getPayment(mc, 'created-mp')).status, 'PAID'); assert.equal(read, true);
+});
+
+test('Mercado Pago preserva refund individual só com identidade, pagamento, valor exato e status conhecidos', async (t) => {
+  let refund: Record<string, unknown> = { id: 'refund-123', payment_id: 'pay-123', amount: 25, status: 'approved' }; let writes = 0;
+  t.mock.method(globalThis, 'fetch', async (url: unknown, init: RequestInit) => {
+    const path = String(url);
+    if (init.method === 'POST' && path.endsWith('/refunds')) { writes++; return new Response(JSON.stringify(refund)); }
+    if (path.endsWith('/refunds/refund-123')) return new Response(JSON.stringify(refund));
+    return new Response(JSON.stringify({ id: 'pay-123', status: 'approved', transaction_amount: 100, currency_id: 'BRL', transaction_amount_refunded: 25 }));
+  });
+  const mp = new MercadoPagoProvider(); const mc = { ...ctx, credentials: { access_token: 'fixture-only' } };
+  assert.deepEqual((await mp.refund(mc, 'pay-123', 2500)).refundEvidence, { reference: 'refund-123', paymentReference: 'pay-123', amount: 2500, status: 'SUCCEEDED' });
+  assert.equal((await mp.getRefund(mc, 'pay-123', 'refund-123')).amount, 2500);
+  for (const invalid of [{ ...refund, id: null }, { ...refund, id: ' refund-123 ' }, { ...refund, payment_id: 'wrong' },
+    { ...refund, amount: 24 }, { ...refund, amount: 25.001 }, { ...refund, status: 'unknown' }]) {
+    refund = invalid; assert.equal((await mp.refund(mc, 'pay-123', 2500)).refundEvidence, undefined);
+  }
+  assert.equal(writes, 7);
+});
+
+test('Stripe não captura nem cancela PaymentIntent de uma sessão com identidade diferente', async (t) => {
+  let writes = 0;
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    if (init.method === 'POST') writes++;
+    return new Response(JSON.stringify({ id: 'other-session', status: 'open', payment_intent: { id: 'pi-other', status: 'requires_capture' } }));
+  });
+  const stripe = new StripeProvider(); const sc = { ...ctx, credentials: { secret_key: 'fixture-only' } };
+  await assert.rejects(() => stripe.capture(sc, 'cs-expected', 10000), (e: any) => e instanceof PaymentError && e.ambiguous);
+  await assert.rejects(() => stripe.cancel(sc, 'cs-expected'), (e: any) => e instanceof PaymentError && e.ambiguous);
+  assert.equal(writes, 0);
 });

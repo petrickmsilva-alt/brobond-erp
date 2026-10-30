@@ -198,3 +198,102 @@ Os seguintes comandos foram executados em série sobre o mesmo código. Os teste
 **Upgrade isolado:** além do boot em banco vazio, foi aplicado o `db/schema.sql` da base `d28f33a` em outro banco de teste, inseridas linhas legadas de lançamento, extrato e cotação, e executadas individualmente `0078`, `0079` e `0080` **duas vezes**. Os campos anteriores permaneceram iguais, os campos novos ficaram `NULL` sem fatos presumidos, e testes transacionais recusaram baixa duplicada, vínculo de empresa diferente, status incompatível e hash de cotação inválido. Isso não substitui ensaio em cópia de produção nem prova de performance de índices sobre grande volume.
 
 **Histórico de falhas antes do gate final:** a primeira execução PG desta passagem teve 356 aprovações e três falhas de fixtures de cotação; as fixtures foram corrigidas e a bateria repetida. Uma corrida CNAB expôs `40001` em auditoria avulsa depois do efeito financeiro; a auditoria foi corrigida, com teste concorrente de cadeia e repetição PG final. A primeira execução de `npm test` desta passagem teve uma falha em fixture do webhook Commerce que não fornecia identidade/refund exigidos pela nova validação; a fixture foi corrigida sem retirar a asserção e a suíte integral foi repetida. Nenhum desses resultados anteriores é apresentado como o gate final.
+
+## 13. Closure Pass posterior — evidência por operação e disputas
+
+**Base solicitada:** `d28f33a2a2cc914e8f15abc12593d4cde1c3a518`. A execução
+partiu do descendente publicado `47b9269535e87c156d5b7bb468880716aa64d0a7`,
+na mesma branch, preservando §12 e todo o trabalho anterior. As alterações abaixo
+corrigem riscos pontuais; **não zeram o escopo P0/P1 nem fecham as ondas**.
+
+### 13.1 Alterações implementadas e limites
+
+1. **Refund não é identificado pelo acumulado.** `0081` acrescenta identidade
+   e estado do refund em `payment_refunds`, FK composta empresa/intenção/provider,
+   check e unicidade parcial por empresa/provider/ID. Mercado Pago e Stripe
+   verificam identificação, pagamento, valor e estado da resposta individual;
+   uma resposta pendente pode ser consultada por ID e promovida a confirmada.
+   `payment-orchestrator.ts` exige prova individual `SUCCEEDED` **e** acumulado
+   consistente, protege o claim por CAS e não repete o write externo. Refunds
+   `UNCERTAIN` sem ID — incluindo PagBank e falha após POST antes de persistir
+   resposta — continuam bloqueados para revisão, não são recuperados por
+   inferência de saldo. Refund histórico `COMPLETED` sem prova é preservado,
+   mas seu replay retorna 409 e não repete a chamada; não é certificado.
+2. **Disputa/chargeback sem valor não equivale à perda integral.** `0082`
+   permite quantia `NULL`/`UNKNOWN`, preserva valores históricos com origem
+   `LEGACY_UNVERIFIED` e rotula informação manual `MANUAL_REPORTED`. Disputas
+   automáticas ou manuais invalidam a conciliação do settlement/repasse sem
+   alterar valores ou vínculos bancários, com auditoria nas operações novas. A
+   migration torna divergentes os repasses/settlements históricos afetados,
+   inclusive disputas manuais com intent `PAID`; exige revisão operacional.
+   Marcar WON/LOST/CLOSED na fila manual não comprova débito ou restituição e
+   **não libera a trava financeira**. Não existe ainda procedimento completo,
+   comprovado e auditado de resolução financeira/contábil/fiscal da disputa.
+3. **Adapters e repasses fail-closed.** Stripe verifica identidade da sessão,
+   PaymentIntent, charge, captura, moeda e `amount_refunded` explícito; PagBank
+   verifica pedido, itens, moeda, somas de captura/refund e charges sem IDs
+   duplicados. Mercado Pago não liquida apenas pela resposta de criação e não
+   arredonda fração de centavo em prova de dinheiro no Engine nem no gateway
+   legado. Um provider que omita dados necessários poderá ficar bloqueado;
+   fixtures não comprovam o contrato real. Em `/api/commerce/payments/payouts`
+   moeda `BRL` e os seis componentes de taxas/refund/chargeback devem ser
+   informados explicitamente em centavos. Isso é uma **mudança de contrato**:
+   chamadas antigas que omitiam campos retornam 400; a UI exige preenchimento e
+   informa que zero só deve ser declarado quando constar no relatório.
+4. **Concorrência de disputa.** Registro manual e projeção usam serialização,
+   advisory lock e retry apenas da transação local. Match/correção/importação
+   guardam o indicador de revisão no CAS. Uma prova em dois processos reproduziu
+   snapshot antigo com settlement incorretamente conciliável; a correção foi
+   exercitada nas duas ordens, além de importação concorrente. A prova não
+   garante ausência de todas as intercalações nem substitui ensaio de carga.
+5. **Migrations/upgrade isolado.** PostgreSQL 16.14 aplicou a cadeia completa
+   até `0082` em banco novo. Em outro banco, `db/schema.sql` de `47b9269` foi
+   carregado com dados legados em quatro empresas e as migrations `0081`/`0082`
+   foram aplicadas duas vezes: identidade de refunds permaneceu desconhecida,
+   valores legados foram preservados, três repasses afetados foram bloqueados
+   e o pagamento não afetado permaneceu conciliado. O espelho atual
+   `db/schema.sql` também foi executado duas vezes em banco vazio. Isto não é
+   ensaio em cópia de produção nem prova de performance da indexação.
+
+### 13.2 Gates recalculados e jornadas integrais
+
+Permanecem **NO** os seis gates de §12.2. O motivo, módulo, risco e ação de
+cada um continuam válidos: Wave 1 depende do fechamento global e impactos
+financeiro/contábil/fiscal; Wave 2 de compras com aprovação em todos os caminhos,
+WMS e MRP→OP; Wave 3 de OMS/expedição/returns integrados. As provas A Commerce,
+B Procurement, C Manufacturing, D Payment→fechamento e E Returns permanecem
+**FAIL/parciais** segundo o critério integral de §12.3. Os testes de recortes
+não são substitutos dessas cinco cadeias. `EXTERNAL_HOMOLOGATION_READY=NO`;
+`FULL_ENTERPRISE_GO_LIVE=NO — WAVES 4 AND 5 NOT EXECUTED`.
+
+**P0 restante:** fechamento global, bloqueios transacionais em todos os
+escritores, pendências/reabertura, reconciliação completa e impacto comprovado
+de chargeback/disputa/taxas/ajustes. Refund sem ID ou legado sem prova não tem
+recuperação automática segura. **P1 restante:** requisição/aprovação e compra
+multifornecedor; WMS completo; plano MRP→OP→custo; OMS/returns e cinco E2Es.
+**P2:** homologação externa, desempenho, DR, acessibilidade e responsividade
+reais; **P3:** redução de warnings e otimizações. Não há autorização de uso
+financeiro empresarial com base apenas nos testes estruturais.
+
+### 13.3 Execução final nesta árvore
+
+| Gate | Resultado e escopo |
+|---|---|
+| `npm run test:pg` | **PASS** PostgreSQL real 16.14 (`160014`), banco inicialmente vazio: **380 PASS, 0 FAIL, 0 SKIP, 0 TODO**. A suíte inclui os arquivos `test/pg-*.test.ts` e `test/pg/*.test.ts`; foram exercitados HTTP, RBAC/tenant e concorrência, inclusive processos independentes. Não prova todos os percursos ou interleavings. O teste Commerce registrou dois avisos de limpeza de fixtures por FK; não foram falhas de asserção e o banco é descartável, mas a limpeza merece correção. |
+| `npm run smoke:pg -- --keep` | **PASS 396/396**, banco temporário novo e servidor/HTTP reais; dados de teste preservados no ambiente de execução. |
+| `npm test` | **PASS**: server **1.559 PASS, 68 SKIP, 0 FAIL**; client **1.051 PASS** em 120 arquivos. Os 68 skips são arquivos PG por ausência de `DATABASE_URL` neste comando, e os mesmos arquivos são incluídos no gate `test:pg` acima, sem skips. Testes client emitiram avisos React `act`/flags do router. |
+| `npm run test:payments` | **PASS 27/27** sem skips. Fixtures simulam contratos, não pagamentos externos. |
+| `npm run typecheck`, `npm run build` | **PASS**, domínios/server/client e build PWA respectivamente. |
+| `npm run lint` | **PASS**, 0 erros e **584 warnings**, não suprimidos. |
+| `audit:menu`, `audit:ux`, `architecture:audit`, `go-live:audit`, `commerce:go-live`, `payment:go-live` | **PASS estrutural**, não certificação do produto. Commerce também verificou 9/9 tabelas no banco descartável; o auditor de menu aponta avisos de navegação/acesso. O de UX tem exceções de navegação/infraestrutura e não substitui inspeção responsiva/WCAG. |
+| `commerce:final-go-live` | **BLOCKED** (exit 1). Os padrões estruturais passaram, mas o próprio gate não verifica homologação externa ou escopo integral. No banco de teste sem credenciais, não há configuração oficial; isso não inspeciona ambiente de produção. |
+| `node scripts/gerar-bootstrap.mjs --check`, `git diff --check` | **PASS**; bootstrap e espelho do schema sincronizados. |
+| `npm run db:validate`, `npm run db:deploy` | **BLOCKED** (exit 1): o engine Prisma não estava instalado e o download de `binaries.prisma.sh` falhou no estabelecimento TLS neste ambiente. O deploy Prisma não executou migrations; a aplicação SQL real acima é evidência separada, não substituto desses comandos. Reexecutar com acesso ao engine oficial em ambiente autorizado. |
+| `npm audit`, `npm audit --omit=dev` | Ambos exit 1: **8 pacotes afetados, 4 moderados, 4 baixos, 0 altos/críticos**. Impacto, caminho e alternativa potencialmente breaking por pacote estão em §9; não houve `audit fix --force` nem alteração cega de dependências. |
+
+A análise estática local das alterações não encontrou padrões de chave privada,
+JWT, token GitHub ou chave AWS, mas não substitui scanner completo de segredos;
+nenhuma credencial real foi inspecionada. Auditoria local e redaction não
+constituem âncora externa imutável; autorização e isolamento foram verificados
+nos testes existentes, não certificados para toda a superfície. Visualização
+em navegador nas resoluções exigidas, WCAG AA, DR e carga não foram comprovados.

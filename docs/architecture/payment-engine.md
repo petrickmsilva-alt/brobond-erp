@@ -197,13 +197,35 @@ correção operacional completa de divergências. Detalhes e resultados atuais:
 [`BROBOND-ENTERPRISE-FINAL-AUDIT.md`](../BROBOND-ENTERPRISE-FINAL-AUDIT.md).
 
 
-Captura/pagamento confirmado cria registro UNRECONCILED. Bruto, refunds e
-chargeback confirmados são observáveis; taxas e líquido desconhecidos ficam
-**NULL**, nunca zero inventado. Os estados são UNRECONCILED, MATCHED, PARTIAL,
-DIVERGENT e RESOLVED. A tela registra resolução/evidência por usuário autorizado,
-com auditoria e sem alterar o ledger.
+Captura/pagamento confirmado cria registro UNRECONCILED. Taxas e líquido ainda
+não informados no settlement ficam **NULL**. O relatório manual agora exige
+`currency: BRL` e todos os componentes de taxa, estorno e chargeback explícitos
+em centavos: campo ausente/nulo não vira zero. A UI pede que zero seja informado
+somente se constar da evidência. Isso é uma declaração manual, não um arquivo ou
+layout homologado do provider. Repasses com disputa pendente ficam `DIVERGENT`.
 
-**Estornos:** o estado terminal `REFUNDED` sem valor explícito representa o valor integral; valores incompatíveis e estornos parciais sem centavos são recusados. Um estorno posterior invalida a conciliação e preserva o vínculo bancário como histórico divergente. Testes em PostgreSQL exercitam concorrência de estorno com importação e conciliação, inclusive reprocessamento após aborto de serialização; não equivalem a homologação dos provedores.
+**Estornos:** `REFUNDED` sem valor explícito é recusado; o acumulado sozinho
+não identifica a operação solicitada. A migration `0081` conserva no refund a
+identidade e o status da operação individual retornada por Mercado Pago ou
+Stripe, valida payment/valor e impõe unicidade por empresa/provedor/ID. Prova
+`PENDING` pode ser consultada pelo ID; somente `SUCCEEDED` mais saldo acumulado
+consistente conclui a operação. Consultas/retries locais não repetem o write
+externo; sem prova identificável (inclusive PagBank ou crash antes de persistir
+ID), permanece `UNCERTAIN` e bloqueado para revisão. Dados legados não recebem
+identidade presumida. A criação MP mantém a referência como pendente até uma
+leitura autenticada validar valores. Não há prova de homologação dos adapters.
+
+**Disputa/chargeback:** estado do provider sem valor não cria perda integral:
+`0082` registra quantia desconhecida como `NULL`/`UNKNOWN`, mantém valores
+legados como `LEGACY_UNVERIFIED` e identifica quantia declarada manualmente
+como `MANUAL_REPORTED`. Disputa automática ou manual marca settlement e eventual
+repasse como divergentes, preservando valores e vínculo bancário; o registro não
+é confirmação do débito nem altera caixa. A trava não é liberada só porque um
+operador mudou o estado interno: faltam fluxo de comprovação/revisão financeira,
+impacto contábil/fiscal e resolução autorizada integrada. A migration bloqueia
+conciliações legadas afetadas sem sobrescrever valores anteriores. Testes PG
+cobrem disputa/repasse, snapshot concorrente em processos distintos, replay e
+isolamento; não substituem homologação, carga ou fechamento empresarial.
 
 **Limite real:** não há importador automático de extrato/payout/MDR específico dos
 três providers neste round. A estrutura de settlement/reconciliation existe; a

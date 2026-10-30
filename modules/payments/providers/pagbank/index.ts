@@ -47,35 +47,37 @@ export class PagBankProvider extends GenericPaymentProvider {
   }
   async getPayment(ctx: ProviderContext, reference: string): Promise<PaymentResult> {
     const r = await this.call(ctx, `/orders/${encodeURIComponent(reference)}`);
-    type Charge = { status?: string; amount?: { summary?: { paid?: number; refunded?: number } } };
+    type Charge = { id?: string; status?: string; amount?: { currency?: string; summary?: { paid?: number; refunded?: number } } };
     type Item = { unit_amount?: number; quantity?: number };
-    const paid: Charge[] = (r.charges || []).filter((c: Charge) => ['PAID', 'CANCELED'].includes(String(c.status)));
-    const amount = (r.items || []).reduce((n: number, i: Item) => n + Number(i.unit_amount) * Number(i.quantity), 0);
-    const refunded = paid.reduce((n, c) => n + Number(c.amount?.summary?.refunded || 0), 0);
-    if ((refunded > 0 || paid.some((c) => c.status === 'PAID')) &&
-        (!Number.isSafeInteger(amount) || amount <= 0 ||
-         paid.some((c) => !Number.isSafeInteger(c.amount?.summary?.paid)) ||
-         paid.reduce((n, c) => n + Number(c.amount?.summary?.paid), 0) !== amount))
-      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true); // no proof of full capture
+    if (r.id !== reference || !Array.isArray(r.items) || !Array.isArray(r.charges))
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    const items = r.items as Item[];
+    if (!items.length || items.some((i) => !Number.isSafeInteger(i.unit_amount) || Number(i.unit_amount) < 0 ||
+        !Number.isSafeInteger(i.quantity) || Number(i.quantity) <= 0)) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    const amount = items.reduce((n, i) => n + Number(i.unit_amount) * Number(i.quantity), 0);
+    if (!Number.isSafeInteger(amount) || amount <= 0) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    const charges = (r.charges as Charge[]).filter((c) => ['PAID', 'CANCELED'].includes(String(c.status)));
+    if (new Set(charges.map((c) => c.id)).size !== charges.length) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    if (charges.some((c) => !c.id || c.amount?.currency !== 'BRL' || !Number.isSafeInteger(c.amount?.summary?.paid) ||
+        Number(c.amount?.summary?.paid) < 0 || !Number.isSafeInteger(c.amount?.summary?.refunded) ||
+        Number(c.amount?.summary?.refunded) < 0 || Number(c.amount?.summary?.refunded) > Number(c.amount?.summary?.paid)))
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    const paid = charges.reduce((n, c) => n + Number(c.amount!.summary!.paid), 0);
+    const refunded = charges.reduce((n, c) => n + Number(c.amount!.summary!.refunded), 0);
+    if (!Number.isSafeInteger(paid) || !Number.isSafeInteger(refunded) || (paid !== 0 && paid !== amount) ||
+        (charges.some((c) => c.status === 'PAID') && paid !== amount)) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
     return {
-      reference,
-      amount,
-      currency: 'BRL',
-      refunded,
-      status:
-        refunded >= amount && amount > 0
-          ? 'REFUNDED'
-          : refunded > 0
-            ? 'PARTIALLY_REFUNDED'
-            : paid.some((c) => c.status === 'PAID')
-              ? 'PAID'
-              : 'PENDING',
+      reference: String(r.id), amount, currency: 'BRL', refunded: charges.length ? refunded : undefined,
+      status: refunded === amount ? 'REFUNDED' : refunded > 0 ? 'PARTIALLY_REFUNDED' :
+        charges.some((c) => c.status === 'PAID') ? 'PAID' : 'PENDING',
     };
   }
   async refund(ctx: ProviderContext, reference: string, amount: number): Promise<PaymentResult> {
     const order = await this.call(ctx, `/orders/${encodeURIComponent(reference)}`);
-    const charge = order.charges?.find((c: any) => c.status === 'PAID');
-    if (!charge?.id) throw new PaymentError('INVALID_REQUEST');
+    if (order.id !== reference || !Array.isArray(order.charges)) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    const paid = order.charges.filter((c: { status?: string }) => c.status === 'PAID');
+    if (paid.length !== 1 || !paid[0]?.id) throw new PaymentError('INVALID_REQUEST');
+    const charge = paid[0];
     await this.call(ctx, `/charges/${encodeURIComponent(charge.id)}/cancel`, { amount: { value: amount } });
     return this.getPayment(ctx, reference);
   }

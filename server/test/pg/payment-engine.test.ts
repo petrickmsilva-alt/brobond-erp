@@ -65,8 +65,9 @@ test('Payment Engine PostgreSQL: concurrent checkout, signed inbox, duplicate we
   const reference = `spec-ref-${suffix}`;
   t.mock.method(globalThis, 'fetch', async (url: unknown, init: RequestInit) => {
     if (String(url).endsWith('/refunds')) {
-      refunded += Number(JSON.parse(String(init.body)).amount);
-      return new Response('{"status":"approved"}');
+      const amount = Number(JSON.parse(String(init.body)).amount);
+      refunded += amount;
+      return new Response(JSON.stringify({ id: `pg-refund-${suffix}`, payment_id: reference, amount, status: 'approved' }));
     }
     if (init.method === 'POST') {
       creates++;

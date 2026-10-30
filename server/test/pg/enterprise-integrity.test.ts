@@ -52,7 +52,7 @@ test('PG payment: repasse idempotente e extrato conciliado sem alterar livro fin
   const order = (await query("INSERT INTO commerce_pedidos (empresa_id,canal,pedido_externo) VALUES (1,'BROBOND',$1) RETURNING id", [k])).rows[0];
   const intent = (await query(`INSERT INTO payment_intents (empresa_id,order_id,channel,currency,amount,method,provider,status,idempotency_key,correlation_id) VALUES (1,$1,'OWN_STORE','BRL',10000,'PIX','PAGBANK','PAID',$2,$2) RETURNING id`, [order.id, k])).rows[0];
   await query("INSERT INTO payment_settlements (empresa_id,payment_intent_id,provider,provider_reference,gross_amount,status) VALUES (1,$1,'PAGBANK',$2,10000,'UNRECONCILED')", [intent.id, k]);
-  const body = { provider: 'PAGBANK', payout_reference: k, settlement_date: '2034-05-02', net_amount: 9800, transactions: [{ provider_reference: k, gross_amount: 10000, provider_fee: 200, net_amount: 9800 }] };
+  const body = { provider: 'PAGBANK', payout_reference: k, currency: 'BRL', settlement_date: '2034-05-02', net_amount: 9800, transactions: [{ provider_reference: k, gross_amount: 10000, provider_fee: 200, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 0, chargeback_amount: 0, net_amount: 9800 }] };
   const results = await Promise.all(Array.from({ length: 4 }, async () => { const r = res(); await importPayout(req(body), r.out); return r.get(); }));
   assert.equal(results.filter((x) => x.status === 201).length, 1); assert.equal(new Set(results.map((x) => x.body.payout.id)).size, 1);
   const payoutId = results[0].body.payout.id;
@@ -99,8 +99,8 @@ async function seedPayoutPayment(ref: string) {
   await query(`INSERT INTO payment_attempts (empresa_id,payment_intent_id,provider,provider_transaction_id,method,requested_amount,authorized_amount,captured_amount,refunded_amount,status,idempotency_key,correlation_id)
     VALUES (1,$1,'PAGBANK',$2,'PIX',10000,10000,10000,0,'PAID',$2,$2)`, [intent.id, ref]);
   await query("INSERT INTO payment_settlements (empresa_id,payment_intent_id,provider,provider_reference,gross_amount,status) VALUES (1,$1,'PAGBANK',$2,10000,'UNRECONCILED')", [intent.id, ref]);
-  const report = { provider: 'PAGBANK', payout_reference: ref, settlement_date: '2035-01-02', net_amount: 9800,
-    transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, net_amount: 9800 }] };
+  const report = { provider: 'PAGBANK', payout_reference: ref, currency: 'BRL', settlement_date: '2035-01-02', net_amount: 9800,
+    transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 0, chargeback_amount: 0, net_amount: 9800 }] };
   const r = res(); await importPayout(req(report), r.out);
   const bank = (await query("INSERT INTO fin_extrato_transacoes (empresa_id,linha_hash,valor,direcao,status) VALUES (1,$1,98,'entrada','importada') RETURNING id", [ref])).rows[0];
   return { intentId: Number(intent.id), payoutId: Number(r.get().body.payout.id), bankId: Number(bank.id) };
@@ -152,8 +152,8 @@ test('PG payment: importação concorrente com estorno não conserva repasse nã
     await query(`INSERT INTO payment_attempts (empresa_id,payment_intent_id,provider,provider_transaction_id,method,requested_amount,authorized_amount,captured_amount,refunded_amount,status,idempotency_key,correlation_id)
       VALUES (1,$1,'PAGBANK',$2,'PIX',10000,10000,10000,0,'PAID',$2,$2)`, [intent.id, ref]);
     await query("INSERT INTO payment_settlements (empresa_id,payment_intent_id,provider,provider_reference,gross_amount,status) VALUES (1,$1,'PAGBANK',$2,10000,'UNRECONCILED')", [intent.id, ref]);
-    const report = { provider: 'PAGBANK', payout_reference: ref, settlement_date: '2035-01-02', net_amount: 9800,
-      transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, net_amount: 9800 }] };
+    const report = { provider: 'PAGBANK', payout_reference: ref, currency: 'BRL', settlement_date: '2035-01-02', net_amount: 9800,
+      transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 0, chargeback_amount: 0, net_amount: 9800 }] };
     const [imported, refunded] = await Promise.allSettled([
       importPayout(req(report), res().out),
       paymentEngine.apply(1, Number(intent.id), { reference: ref, status: 'PARTIALLY_REFUNDED', refunded: 2000 }),

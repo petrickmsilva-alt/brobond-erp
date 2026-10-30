@@ -74,20 +74,27 @@ function mpExtraiInstrumento(p: Record<string, unknown>, metodo: MetodoCobranca)
   return { nsu: (td.payment_method_reference_id as string) || null };
 }
 
+/** Parse monetary evidence without rounding a fractional cent into a fact. */
+export function valorMercadoPagoEmCentavos(value: unknown): number | null {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean' || (typeof value !== 'string' && typeof value !== 'number')) return null;
+  if (typeof value === 'string' && !value.trim()) return null;
+  const amount = Number(value), cents = Math.round(amount * 100);
+  return Number.isSafeInteger(cents) && cents >= 0 && Math.abs(amount * 100 - cents) <= 1e-6 ? cents : null;
+}
+
 /** Interpret the same authoritative response that was checked against the local charge. */
 export function intencaoMercadoPago(atual: CobrancaProviderResult): IntencaoWebhook {
   const st = String(atual.bruto?.status || '');
-  const rawRefund = atual.bruto?.transaction_amount_refunded;
-  const devolvido = rawRefund === null || rawRefund === undefined || rawRefund === '' || typeof rawRefund === 'boolean' ? NaN : Number(rawRefund);
-  if (['approved', 'refunded'].includes(st) && (!Number.isFinite(devolvido) || devolvido < 0))
+  const devolvido = valorMercadoPagoEmCentavos(atual.bruto?.transaction_amount_refunded);
+  if (['approved', 'refunded'].includes(st) && devolvido === null)
     throw new HttpError(409, 'Valor de estorno legado ausente ou inválido; requer conciliação manual.');
-  if (st === 'approved' && devolvido > 0) throw new HttpError(409, 'Estorno parcial em cobrança legada requer conciliação manual.');
+  if (st === 'approved' && devolvido !== null && devolvido > 0) throw new HttpError(409, 'Estorno parcial em cobrança legada requer conciliação manual.');
   if (st === 'approved') return 'paga';
   if (st === 'cancelled' || st === 'rejected') return 'cancelada';
   if (st === 'charged_back') throw new HttpError(409, 'Chargeback em cobrança legada requer revisão; não é estorno.');
   if (st === 'refunded') {
-    const total = Number(atual.bruto?.transaction_amount);
-    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(devolvido) || round2(devolvido) !== round2(total))
+    const total = valorMercadoPagoEmCentavos(atual.bruto?.transaction_amount);
+    if (total === null || total <= 0 || devolvido === null || devolvido !== total)
       throw new HttpError(409, 'Valor integral do estorno legado não pôde ser confirmado.');
     return 'estornada';
   }
@@ -160,9 +167,9 @@ export const mercadopagoProvider: PaymentProvider = {
     );
     return { status: 'cancelada' };
   },
-  async estornaCobranca(ctx: GatewayContext, providerRef: string, valor?: number): Promise<{ status: string }> {
+  async estornaCobranca(ctx: GatewayContext, providerRef: string, valor?: number): Promise<{ status: string; bruto: Record<string, unknown> }> {
     const body = valor && valor > 0 ? { amount: round2(valor) } : {};
-    await mpFetch(
+    const bruto = await mpFetch(
       `/v1/payments/${encodeURIComponent(providerRef)}/refunds`,
       {
         method: 'POST',
@@ -171,7 +178,7 @@ export const mercadopagoProvider: PaymentProvider = {
       },
       ctx
     );
-    return { status: 'estornada' };
+    return { status: String(bruto.status || ''), bruto };
   },
   parseWebhook(corpo: string): WebhookParse | null {
     try {
@@ -217,3 +224,8 @@ export const mercadopagoProvider: PaymentProvider = {
     return intencaoMercadoPago(atual);
   },
 };
+
+/** Consulta autenticada ao refund individual; não deduz identidade pelo total. */
+export async function consultarEstornoMercadoPago(ctx: GatewayContext, paymentReference: string, refundReference: string) {
+  return mpFetch(`/v1/payments/${encodeURIComponent(paymentReference)}/refunds/${encodeURIComponent(refundReference)}`, { method: 'GET' }, ctx);
+}

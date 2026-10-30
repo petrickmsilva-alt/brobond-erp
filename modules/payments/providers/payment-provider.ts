@@ -37,12 +37,20 @@ export type PaymentInput = {
   installments: number;
   expiresAt?: string;
 };
+/** Evidência da operação específica retornada pelo mesmo provider autenticado. */
+export type RefundEvidence = {
+  reference: string;
+  paymentReference: string;
+  amount: number;
+  status: 'PENDING' | 'SUCCEEDED';
+};
 export type PaymentResult = {
   reference: string;
   status: PaymentStatus;
   amount?: number;
   currency?: string;
   refunded?: number;
+  refundEvidence?: RefundEvidence;
   action?: { type: string; url?: string; code?: string; qrCode?: string; expiresAt?: string };
   risk?: string;
 };
@@ -57,6 +65,7 @@ export interface PaymentProvider {
   capture(ctx: ProviderContext, reference: string, amount: number): Promise<PaymentResult>;
   cancel(ctx: ProviderContext, reference: string): Promise<PaymentResult>;
   refund(ctx: ProviderContext, reference: string, amount: number): Promise<PaymentResult>;
+  getRefund?(ctx: ProviderContext, paymentReference: string, refundReference: string): Promise<RefundEvidence>;
   partialRefund(ctx: ProviderContext, reference: string, amount: number): Promise<PaymentResult>;
   getPayment(ctx: ProviderContext, reference: string): Promise<PaymentResult>;
   getPaymentStatus(ctx: ProviderContext, reference: string): Promise<PaymentStatus>;

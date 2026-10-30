@@ -67,6 +67,10 @@ test('webhook legado rejeita valor remoto divergente e sanitiza erros arbitrári
   await assert.rejects(() => gateway.processarEvento(e), (err: any) => err.status === 409 && !err.message.includes('99'));
   assert.equal((await s.get(gateway.R_GATEWAY_COBRANCAS, Number(c.id)))?.status, 'pendente');
   assert.equal((await s.get(gateway.R_GATEWAY_WEBHOOK_EVENTS, Number(e.id)))?.status, 'erro');
+  const fraction = await event(c, 'pago', 'fractional-cent');
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ id: c.provider_ref, status: 'approved', currency_id: 'BRL', transaction_amount: 100.001, transaction_amount_refunded: 0 })));
+  await assert.rejects(() => gateway.processarEvento(fraction), (err: any) => err.status === 409);
+  assert.equal((await s.get(gateway.R_GATEWAY_COBRANCAS, Number(c.id)))?.status, 'pendente');
   const m = await charge('mock', 'pendente'); const bad = await event(m, 'pago', 'secret');
   t.mock.method(gateway.mockProvider, 'resolveWebhook', async () => { throw new Error('SENSITIVE-TOKEN-fixture'); });
   await assert.rejects(() => gateway.processarEvento(bad), (err: any) => err.status === 502 && !err.message.includes('SENSITIVE'));
@@ -115,7 +119,7 @@ test('Mercado Pago legado não presume zero para estorno ausente/nulo antes de e
     if (init.method === 'POST') posts++;
     return new Response(JSON.stringify({ id: c.provider_ref, status: 'approved', transaction_amount: 100, currency_id: 'BRL', transaction_amount_refunded: refundValue }));
   });
-  for (const bad of [null, undefined, '', false, -1]) {
+  for (const bad of [null, undefined, '', false, -1, 0.001]) {
     refundValue = bad;
     await assert.rejects(() => chamar(gateway.estornarCobranca, reqDe({}, { params: { id: c.id } })), (e: any) => e.status === 409);
     assert.throws(() => intencaoMercadoPago({ provider_ref: String(c.provider_ref), status: 'paga', bruto: { status: 'approved', transaction_amount: 100, transaction_amount_refunded: bad } }), (e: any) => e.status === 409);

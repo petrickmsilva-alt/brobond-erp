@@ -43,6 +43,7 @@ export function normalizePayout(raw: unknown) {
   if (!PROVIDERS.includes(provider as (typeof PROVIDERS)[number]) || ['MANUAL', 'PIX_DIRECT', 'ACQUIRER_GENERIC', 'BOLETO_GENERIC'].includes(provider))
     throw new HttpError(400, 'Provedor do relatório não suportado.');
   const payout_reference = identifier(b.payout_reference, 'Referência do repasse');
+  if (b.currency !== 'BRL') throw new HttpError(400, 'Informe explicitamente a moeda BRL do relatório.');
   const settlement_date = date(b.settlement_date);
   const net_amount = integer(b.net_amount, 'Líquido do repasse');
   if (!Array.isArray(b.transactions) || b.transactions.length < 1 || b.transactions.length > 1000) throw new HttpError(400, 'Informe de 1 a 1000 transações.');
@@ -54,12 +55,12 @@ export function normalizePayout(raw: unknown) {
     if (seen.has(provider_reference)) throw new HttpError(400, 'Referência de transação duplicada no relatório.');
     seen.add(provider_reference);
     const gross_amount = integer(l.gross_amount, 'Bruto');
-    const provider_fee = integer(l.provider_fee ?? 0, 'Taxa do provedor');
-    const gateway_fee = integer(l.gateway_fee ?? 0, 'Taxa do gateway');
-    const installment_fee = integer(l.installment_fee ?? 0, 'Taxa de parcelas');
-    const antifraud_fee = integer(l.antifraud_fee ?? 0, 'Taxa antifraude');
-    const refund_amount = integer(l.refund_amount ?? 0, 'Reembolso');
-    const chargeback_amount = integer(l.chargeback_amount ?? 0, 'Chargeback');
+    const provider_fee = integer(l.provider_fee, 'Taxa do provedor');
+    const gateway_fee = integer(l.gateway_fee, 'Taxa do gateway');
+    const installment_fee = integer(l.installment_fee, 'Taxa de parcelas');
+    const antifraud_fee = integer(l.antifraud_fee, 'Taxa antifraude');
+    const refund_amount = integer(l.refund_amount, 'Reembolso');
+    const chargeback_amount = integer(l.chargeback_amount, 'Chargeback');
     const net = integer(l.net_amount, 'Líquido');
     if (gross_amount - provider_fee - gateway_fee - installment_fee - antifraud_fee - refund_amount - chargeback_amount !== net)
       throw new HttpError(400, `Valores da transação ${provider_reference} não fecham.`);
@@ -122,7 +123,7 @@ export async function importPayout(req: Request, res: Response) {
       const settlement = byReference.get(line.provider_reference);
       if (!settlement) throw new HttpError(422, `Transação ${line.provider_reference} não existe no Payment Engine desta empresa.`);
       if (settlement.payout_id) throw new HttpError(409, `Transação ${line.provider_reference} já pertence a outro repasse.`);
-      const divergent = Number(settlement.gross_amount) !== line.gross_amount || Number(settlement.refund_amount || 0) !== line.refund_amount || Number(settlement.chargeback_amount || 0) !== line.chargeback_amount;
+      const divergent = mismatch(settlement, line);
       targets.push({ line, settlement, divergent });
     }
     const now = new Date().toISOString();
@@ -131,7 +132,7 @@ export async function importPayout(req: Request, res: Response) {
       status: targets.some((t) => t.divergent) ? 'DIVERGENT' : 'IMPORTED', created_by: actor.id || null, created_at: now, updated_at: now }, tx);
     for (const { line, settlement, divergent } of targets) {
       const applied = await s.tryUpdateIf(R_SETTLEMENTS, Number(settlement.id),
-        { empresa_id: empresaId, payout_id: null, gross_amount: settlement.gross_amount, refund_amount: settlement.refund_amount, chargeback_amount: settlement.chargeback_amount, status: settlement.status },
+        { empresa_id: empresaId, payout_id: null, gross_amount: settlement.gross_amount, refund_amount: settlement.refund_amount, chargeback_amount: settlement.chargeback_amount, dispute_review_required: settlement.dispute_review_required ?? null, status: settlement.status },
         { payout_id: payout.id, payout_reference: report.payout_reference,
           settlement_date: report.settlement_date, provider_fee: line.provider_fee, gateway_fee: line.gateway_fee,
           installment_fee: line.installment_fee, antifraud_fee: line.antifraud_fee, net_amount: line.net_amount,
@@ -178,7 +179,7 @@ export async function matchPayout(req: Request, res: Response) {
     const updated = await s.tryUpdateIf(R_PAYOUTS, payoutId, { empresa_id: empresaId, status: 'IMPORTED', bank_transaction_id: null }, { bank_transaction_id: bankId, status: 'MATCHED', updated_at: new Date().toISOString() }, tx);
     if (!updated) throw new HttpError(409, 'Repasse mudou durante a conciliação; atualize e tente novamente.');
     for (const settlement of settlements.rows) {
-      const applied = await s.tryUpdateIf(R_SETTLEMENTS, Number(settlement.id), { empresa_id: empresaId, payout_id: payoutId, status: settlement.status, refund_amount: settlement.refund_amount, chargeback_amount: settlement.chargeback_amount }, { status: 'MATCHED', updated_at: new Date().toISOString() }, tx);
+      const applied = await s.tryUpdateIf(R_SETTLEMENTS, Number(settlement.id), { empresa_id: empresaId, payout_id: payoutId, status: settlement.status, refund_amount: settlement.refund_amount, chargeback_amount: settlement.chargeback_amount, dispute_review_required: settlement.dispute_review_required ?? null }, { status: 'MATCHED', updated_at: new Date().toISOString() }, tx);
       if (!applied) throw new HttpError(409, 'Liquidação mudou durante a conciliação; atualize e tente novamente.');
     }
     await audit(req, payoutId, 'Repasse conciliado com extrato', { antes: { status: payout.status, bank_transaction_id: null }, depois: { status: 'MATCHED', bank_transaction_id: bankId } }, tx);
@@ -192,7 +193,7 @@ function reportFromSettlements(payout: Row, settlements: Row[]) {
   if (!settlements.length || settlements.some((r) => !r.evidence?.provider_report)) return null;
   try {
     const { report, hash } = normalizePayout({ provider: payout.provider, payout_reference: payout.payout_reference,
-      settlement_date: String(payout.settlement_date).slice(0, 10), net_amount: Number(payout.net_amount),
+      settlement_date: String(payout.settlement_date).slice(0, 10), currency: payout.currency, net_amount: Number(payout.net_amount),
       transactions: settlements.map((r) => r.evidence.provider_report) });
     return hash === payout.content_hash ? report : null;
   } catch { return null; }
@@ -208,7 +209,7 @@ function reasonText(value: unknown) {
   return value.trim();
 }
 function mismatch(settlement: Row, line: Line) {
-  return Number(settlement.gross_amount) !== line.gross_amount || Number(settlement.refund_amount || 0) !== line.refund_amount ||
+  return settlement.dispute_review_required === true || Number(settlement.gross_amount) !== line.gross_amount || Number(settlement.refund_amount || 0) !== line.refund_amount ||
     Number(settlement.chargeback_amount || 0) !== line.chargeback_amount;
 }
 function bankMatches(bank: Row | null, netAmount: number) {
@@ -277,7 +278,7 @@ export async function correctPayout(req: Request, res: Response) {
       for (const { line, settlement, divergent } of targets) {
         const applied = await s.tryUpdateIf(R_SETTLEMENTS, Number(settlement.id),
           { empresa_id: empresaId, payout_id: payoutId, gross_amount: settlement.gross_amount, refund_amount: settlement.refund_amount,
-            chargeback_amount: settlement.chargeback_amount, status: settlement.status },
+            chargeback_amount: settlement.chargeback_amount, dispute_review_required: settlement.dispute_review_required ?? null, status: settlement.status },
           { settlement_date: report.settlement_date, provider_fee: line.provider_fee, gateway_fee: line.gateway_fee,
             installment_fee: line.installment_fee, antifraud_fee: line.antifraud_fee, net_amount: line.net_amount,
             status: divergent ? 'DIVERGENT' : status === 'MATCHED' ? 'MATCHED' : 'UNRECONCILED',
@@ -321,7 +322,7 @@ export async function unlinkPayout(req: Request, res: Response) {
       if (!changed) throw new HttpError(409, 'Repasse mudou durante a desvinculação; atualize e tente novamente.');
       for (const { settlement, divergent } of targets) {
         const applied = await s.tryUpdateIf(R_SETTLEMENTS, Number(settlement.id),
-          { empresa_id: empresaId, payout_id: payoutId, status: settlement.status, refund_amount: settlement.refund_amount, chargeback_amount: settlement.chargeback_amount },
+          { empresa_id: empresaId, payout_id: payoutId, status: settlement.status, refund_amount: settlement.refund_amount, chargeback_amount: settlement.chargeback_amount, dispute_review_required: settlement.dispute_review_required ?? null },
           { status: divergent ? 'DIVERGENT' : 'UNRECONCILED', updated_at: now }, tx);
         if (!applied) throw new HttpError(409, 'Liquidação mudou durante a desvinculação; atualize e tente novamente.');
       }

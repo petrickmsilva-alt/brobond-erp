@@ -25,6 +25,12 @@ describe('Disputas de pagamentos — fluxos sem modal', () => {
     expect(screen.getByText(/não envia evidências nem consulta/)).toBeInTheDocument();
     expect(container.querySelector('[role="dialog"],dialog,[aria-modal]')).toBeNull();
   });
+  it('distingue valor desconhecido e valor legado não comprovado', async () => {
+    api.mockResolvedValue({ ...detail, dispute: { ...d, amount: null, amount_source: 'UNKNOWN', origin: 'ENGINE' } });
+    page('/commerce/pagamentos/disputas/7');
+    expect(await screen.findByText(/Valor: não informado/)).toBeInTheDocument();
+    expect(screen.queryByText(/R\$ 0,00/)).toBeNull();
+  });
   it('registra evidência com chave idempotente e nunca faz envio externo', async () => {
     api.mockImplementation(async (_path, opts) => opts?.method === 'POST' ? { evidence: { id: 1 } } : detail);
     page('/commerce/pagamentos/disputas/7/evidencias/nova');

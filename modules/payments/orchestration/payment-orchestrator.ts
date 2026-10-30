@@ -16,23 +16,13 @@ import {
   type PaymentStatus,
   type ProviderCode,
 } from '../domain/payment';
-import type { PaymentInput, PaymentResult } from '../providers/payment-provider';
+import type { PaymentInput, PaymentResult, RefundEvidence } from '../providers/payment-provider';
 import { account, candidates } from '../application/configuration';
 import { recordLatePayment, resolveLateRefund } from '../application/late-reviews';
 import { R_INTENTS, R_ATTEMPTS, R_OPERATIONS, R_REFUNDS, R_SETTLEMENTS, R_DISPUTES, R_PAYOUTS } from '../infrastructure/resources';
-import { locked } from '../infrastructure/locking';
+import { locked, retrySerialization } from '../infrastructure/locking';
 const now = () => new Date().toISOString();
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
-// Retry only database-only transactions. Never retry a provider write here.
-async function retrySerialization<T>(work: () => Promise<T>): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    try { return await work(); }
-    catch (error: unknown) {
-      if ((error as { code?: unknown } | null)?.code !== '40001' || attempt >= 4) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 15 * (attempt + 1)));
-    }
-  }
-}
 const requireKey = (key: string) => {
   if (!/^[\w:.-]{8,120}$/.test(key)) throw new HttpError(400, 'Chave de idempotência inválida.');
   return key;
@@ -274,12 +264,14 @@ export class PaymentOrchestrator {
       };
       if (i.cobranca_id && legacyStatus[status])
         await s.update(R_GATEWAY_COBRANCAS, Number(i.cobranca_id), { status: legacyStatus[status] }, tx);
-      if (['CAPTURED', 'PAID', 'PARTIALLY_REFUNDED', 'REFUNDED', 'CHARGEBACK'].includes(status)) {
+      if (['CAPTURED', 'PAID', 'PARTIALLY_REFUNDED', 'REFUNDED', 'DISPUTED', 'CHARGEBACK'].includes(status)) {
         const existing = await s.findOneWhere(
           R_SETTLEMENTS,
           { empresa_id: empresaId, provider: i.provider, provider_reference: result.reference },
           tx
         );
+        const recordedDispute = await s.findOneWhere(R_DISPUTES, { empresa_id: empresaId, payment_intent_id: intentId, provider_reference: result.reference }, tx);
+        const needsReview = !!recordedDispute || ['DISPUTED', 'CHARGEBACK'].includes(status);
         if (!existing)
           await s.insert(
             R_SETTLEMENTS,
@@ -290,8 +282,9 @@ export class PaymentOrchestrator {
               provider_reference: result.reference,
               gross_amount: i.amount,
               refund_amount: refunded,
-              chargeback_amount: status === 'CHARGEBACK' ? i.amount : 0,
-              status: 'UNRECONCILED',
+              chargeback_amount: 0, // nenhuma quantia de chargeback foi comprovada pelo status
+              dispute_review_required: needsReview,
+              status: needsReview ? 'DIVERGENT' : 'UNRECONCILED',
               evidence: {},
               created_at: now(),
               updated_at: now(),
@@ -299,8 +292,10 @@ export class PaymentOrchestrator {
             tx
           );
         else {
-          const chargedBack = Number(status === 'CHARGEBACK' ? i.amount : existing.chargeback_amount ?? 0);
-          const changed = refunded !== Number(existing.refund_amount || 0) || chargedBack !== Number(existing.chargeback_amount || 0);
+          const chargedBack = Number(existing.chargeback_amount ?? 0);
+          // Mesmo uma disputa sem débito confirmado impede conciliação automática.
+          const reviewRequired = existing.dispute_review_required === true || needsReview;
+          const changed = refunded !== Number(existing.refund_amount || 0) || reviewRequired !== (existing.dispute_review_required === true);
           if (changed) {
             // A later refund/chargeback invalidates the imported reconciliation;
             // preserve the historical bank link, but never claim it is still matched.
@@ -316,8 +311,8 @@ export class PaymentOrchestrator {
               }
             }
             await s.update(R_SETTLEMENTS, Number(existing.id), {
-              refund_amount: refunded, chargeback_amount: chargedBack,
-              status: existing.payout_id ? 'DIVERGENT' : 'UNRECONCILED', updated_at: now(),
+              refund_amount: refunded, chargeback_amount: chargedBack, dispute_review_required: reviewRequired,
+              status: existing.payout_id || reviewRequired ? 'DIVERGENT' : 'UNRECONCILED', updated_at: now(),
             }, tx);
           }
         }
@@ -334,9 +329,10 @@ export class PaymentOrchestrator {
               provider: a.provider,
               origin: 'ENGINE',
               version: 0,
-              status: status === 'CHARGEBACK' ? 'LOST' : 'DISPUTE_OPENED',
-              amount: i.amount,
-              reason: 'Provider confirmation',
+              status: 'DISPUTE_OPENED',
+              amount: null,
+              amount_source: 'UNKNOWN',
+              reason: 'Provider sinalizou disputa ou chargeback; valor e resultado requerem revisão.',
               created_at: now(),
               updated_at: now(),
             },
@@ -407,6 +403,58 @@ export class PaymentOrchestrator {
           );
       }));
   }
+  /** Persiste a evidência do refund específico antes de concluir qualquer operação local. */
+  private async recordRefundEvidence(empresaId: number, id: number, operationId: number, provider: string,
+    paymentReference: string, expectedAmount: number, proof: RefundEvidence | undefined): Promise<boolean> {
+    if (!proof || typeof proof.reference !== 'string' || !proof.reference.trim() || proof.reference !== proof.reference.trim() ||
+        proof.reference.length > 160 || Array.from(proof.reference).some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) || proof.paymentReference !== paymentReference ||
+        !Number.isSafeInteger(proof.amount) || proof.amount !== expectedAmount || !['PENDING', 'SUCCEEDED'].includes(proof.status)) return false;
+    const s = getStore();
+    return retrySerialization(() => locked(empresaId, `intent:${id}`, async (tx) => {
+      const current = await this.intent(empresaId, id, tx);
+      const op = await s.findOneWhere(R_OPERATIONS, { empresa_id: empresaId, id: operationId, payment_intent_id: id, operation: 'refund' }, tx);
+      const refund = await s.findOneWhere(R_REFUNDS, { empresa_id: empresaId, operation_id: operationId, payment_intent_id: id }, tx);
+      if (!op || !refund || current.provider !== provider || Number(op.amount) !== expectedAmount ||
+          (!['PROCESSING', 'UNCERTAIN', 'SUCCEEDED'].includes(String(op.status))) ||
+          (op.status !== 'SUCCEEDED' && Number(current.active_operation) !== operationId))
+        throw new HttpError(409, 'Operação de refund mudou durante a confirmação.');
+      if (refund.provider_refund_id && (refund.provider_refund_id !== proof.reference || refund.provider !== provider))
+        throw new HttpError(409, 'Identidade do refund mudou; requer revisão.');
+      const used = await s.findOneWhere(R_REFUNDS, { empresa_id: empresaId, provider, provider_refund_id: proof.reference }, tx);
+      if (used && Number(used.id) !== Number(refund.id)) throw new HttpError(409, 'Refund do provider já vinculado a outra operação.');
+      const proofStatus = refund.provider_refund_status === 'SUCCEEDED' ? 'SUCCEEDED' : proof.status;
+      if (refund.provider_refund_id !== proof.reference || refund.provider_refund_status !== proofStatus) {
+        await s.update(R_REFUNDS, Number(refund.id), { provider, provider_refund_id: proof.reference, provider_refund_status: proofStatus, updated_at: now() }, tx);
+        await this.audit(empresaId, id, 'refund evidence recorded', { operation_id: operationId, provider, proof_status: proofStatus }, tx);
+      }
+      return true;
+    }, 'read committed'));
+  }
+
+  /** A conclusão só limpa a operação que ainda possui o claim deste pagamento. */
+  private async finishOperation(empresaId: number, id: number, operationId: number, status: string, paymentReference: string): Promise<boolean> {
+    const s = getStore();
+    return retrySerialization(() => locked(empresaId, `intent:${id}`, async (tx) => {
+      const current = await this.intent(empresaId, id, tx);
+      const op = await s.findOneWhere(R_OPERATIONS, { empresa_id: empresaId, id: operationId, payment_intent_id: id }, tx);
+      if (!op) throw new HttpError(409, 'Operação não encontrada.');
+      if (op.status === 'SUCCEEDED') return true;
+      if (!['PROCESSING', 'UNCERTAIN'].includes(String(op.status)) || Number(current.active_operation) !== operationId) return false;
+      if (op.operation === 'refund') {
+        const refund = await s.findOneWhere(R_REFUNDS, { empresa_id: empresaId, operation_id: operationId, payment_intent_id: id }, tx);
+        const attempt = await s.findOneWhere(R_ATTEMPTS, { empresa_id: empresaId, payment_intent_id: id, provider_transaction_id: paymentReference }, tx);
+        if (!refund || refund.provider !== current.provider || !refund.provider_refund_id || refund.provider_refund_status !== 'SUCCEEDED' ||
+            !attempt || Number(attempt.refunded_amount) < Number(op.result?.baseline_refunded || 0) + Number(op.amount)) return false;
+        await s.update(R_REFUNDS, Number(refund.id), { status: 'COMPLETED', updated_at: now() }, tx);
+      }
+      const released = await s.tryUpdateIf(R_INTENTS, id, { empresa_id: empresaId, active_operation: operationId }, { active_operation: null }, tx);
+      if (!released) throw new HttpError(409, 'Operação mudou durante a confirmação.');
+      await s.update(R_OPERATIONS, operationId, { status: 'SUCCEEDED', result: { ...op.result, status }, updated_at: now() }, tx);
+      await this.audit(empresaId, id, `${op.operation} confirmed`, { operation_id: operationId }, tx);
+      return true;
+    }, 'read committed'));
+  }
+
   async mutate(empresaId: number, id: number, operation: 'refund' | 'capture' | 'cancel' | 'manual-confirm', key: string, amount?: number) {
     requireKey(key);
     const s = getStore();
@@ -419,6 +467,11 @@ export class PaymentOrchestrator {
       if (old) {
         if (old.request_hash !== requestHash) throw new HttpError(409, 'Chave reutilizada com dados diferentes.');
         if (old.status !== 'SUCCEEDED') throw new HttpError(409, 'Operação já solicitada; aguarde reconciliação.');
+        if (operation === 'refund') {
+          const evidence = await s.findOneWhere(R_REFUNDS, { empresa_id: empresaId, payment_intent_id: id, operation_id: old.id }, tx);
+          if (!evidence || evidence.provider !== i.provider || !evidence.provider_refund_id || evidence.provider_refund_status !== 'SUCCEEDED')
+            throw new HttpError(409, 'Refund histórico sem prova individual; exige revisão e não será repetido.');
+        }
         return { i, op: old, fresh: false, attempt: null };
       }
       if (i.active_operation) throw new HttpError(409, 'Pagamento possui operação em andamento.');
@@ -475,7 +528,7 @@ export class PaymentOrchestrator {
         );
       await this.audit(empresaId, id, `${operation} requested`, { operation_id: op.id, amount: requested }, tx);
       return { i, op, fresh: true, attempt: a };
-    });
+    }, 'read committed');
     if (!claim.fresh) return claim.op.result;
     const { i, op, attempt } = claim;
     let effectStarted = false;
@@ -500,8 +553,12 @@ export class PaymentOrchestrator {
               : i.provider === 'MANUAL'
                 ? { reference: ref, status: 'CANCELED' }
                 : await ctx.provider.cancel(ctx.context, ref);
-      if (operation === 'refund' && !['REFUNDED', 'PARTIALLY_REFUNDED'].includes(result.status))
-        throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+      if (operation === 'refund') {
+        // O total cumulativo pode incluir outro refund externo. Só a resposta
+        // individual do mesmo POST, com pagamento e valor, identifica esta operação.
+        await this.recordRefundEvidence(empresaId, id, Number(op.id), String(i.provider), ref, Number(op.amount), result.refundEvidence);
+        if (!['REFUNDED', 'PARTIALLY_REFUNDED'].includes(result.status)) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+      }
       if (operation === 'cancel' && !['CANCELED', 'EXPIRED'].includes(result.status))
         throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
       if (operation === 'capture' && !['CAPTURED', 'PAID'].includes(result.status)) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
@@ -512,31 +569,31 @@ export class PaymentOrchestrator {
         // requested operation complete or repeat its external write.
         throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
       }
-      await locked(empresaId, `intent:${id}`, async (tx) => {
-        await s.update(R_OPERATIONS, Number(op.id), { status: 'SUCCEEDED', result: { status: result.status }, updated_at: now() }, tx);
-        await s.update(R_INTENTS, id, { active_operation: null }, tx);
-        if (operation === 'refund') {
-          const r = await s.findOneWhere(R_REFUNDS, { empresa_id: empresaId, operation_id: op.id }, tx);
-          if (r) await s.update(R_REFUNDS, Number(r.id), { status: 'COMPLETED', updated_at: now() }, tx);
-        }
-      });
+      if (!await this.finishOperation(empresaId, id, Number(op.id), result.status, ref))
+        throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
       return { status: result.status };
     } catch (e) {
       const uncertain = effectStarted && (!(e instanceof PaymentError) || e.ambiguous);
-      await locked(empresaId, `intent:${id}`, async (tx) => {
+      const completed = await retrySerialization(() => locked(empresaId, `intent:${id}`, async (tx) => {
+        const current = await this.intent(empresaId, id, tx);
+        const actual = await s.findOneWhere(R_OPERATIONS, { empresa_id: empresaId, id: Number(op.id), payment_intent_id: id }, tx);
+        if (actual?.status === 'SUCCEEDED') return actual.result;
+        if (!actual || !['PROCESSING', 'UNCERTAIN'].includes(String(actual.status)) || Number(current.active_operation) !== Number(op.id))
+          throw new HttpError(409, 'Operação mudou durante o processamento; atualize e revise.');
         await s.update(R_OPERATIONS, Number(op.id), {
           status: uncertain ? 'UNCERTAIN' : 'FAILED',
-          result: { ...op.result, code: e instanceof PaymentError ? e.code : 'UNKNOWN_PROVIDER_ERROR' },
+          result: { ...actual.result, code: e instanceof PaymentError ? e.code : 'UNKNOWN_PROVIDER_ERROR' },
           updated_at: now(),
         }, tx);
-        if (!uncertain) await s.update(R_INTENTS, id, { active_operation: null }, tx);
+        if (!uncertain) await s.tryUpdateIf(R_INTENTS, id, { empresa_id: empresaId, active_operation: Number(op.id) }, { active_operation: null }, tx);
         if (operation === 'refund') {
           const refund = await s.findOneWhere(R_REFUNDS, { empresa_id: empresaId, operation_id: op.id }, tx);
           if (refund) await s.update(R_REFUNDS, Number(refund.id), { status: uncertain ? 'UNCERTAIN' : 'FAILED', updated_at: now() }, tx);
         }
-        await this.audit(empresaId, id, `${operation} ${uncertain ? 'uncertain' : 'failed'}`,
-          { operation_id: op.id }, tx);
-      });
+        await this.audit(empresaId, id, `${operation} ${uncertain ? 'uncertain' : 'failed'}`, { operation_id: op.id }, tx);
+        return null;
+      }, 'read committed'));
+      if (completed) return completed;
       throw new HttpError(
         uncertain ? 409 : 422,
         uncertain ? 'Operação pendente de confirmação pelo provider.' : 'Operação não suportada ou recusada.'
@@ -575,29 +632,27 @@ export class PaymentOrchestrator {
     }
     const result = await ctx.provider.getPayment(ctx.context, String(a.provider_transaction_id));
     await this.apply(empresaId, id, result, 'provider-refresh');
-    if (i.active_operation) {
-      await locked(empresaId, `intent:${id}`, async (tx) => {
-        const current = await this.intent(empresaId, id, tx);
-        if (!current.active_operation) return;
-        const op = await s.findOneWhere(R_OPERATIONS, { empresa_id: empresaId, id: Number(current.active_operation) }, tx);
-        if (!op || !['PROCESSING', 'UNCERTAIN'].includes(op.status)) return;
-        const confirmed =
-          op.operation === 'refund'
-            ? ['REFUNDED', 'PARTIALLY_REFUNDED'].includes(result.status) && Number.isSafeInteger(result.refunded) &&
-              Number(result.refunded) >= Number(op.result?.baseline_refunded || 0) + Number(op.amount)
-            : op.operation === 'capture'
-              ? ['PAID', 'CAPTURED'].includes(result.status)
-              : op.operation === 'cancel'
-                ? result.status === 'CANCELED'
-                : false;
-        if (!confirmed) return;
-        await s.update(R_OPERATIONS, Number(op.id), { status: 'SUCCEEDED', result: { status: result.status }, updated_at: now() }, tx);
-        await s.update(R_INTENTS, id, { active_operation: null }, tx);
-        if (op.operation === 'refund') {
-          const refund = await s.findOneWhere(R_REFUNDS, { empresa_id: empresaId, operation_id: op.id }, tx);
-          if (refund) await s.update(R_REFUNDS, Number(refund.id), { status: 'COMPLETED', updated_at: now() }, tx);
+    // Uma mudança do total de estornos, por si só, não identifica o refund
+    // solicitado: outro operador/provider pode ter estornado em paralelo.
+    const current = await this.intent(empresaId, id);
+    if (current.active_operation) {
+      const op = await s.findOneWhere(R_OPERATIONS, { empresa_id: empresaId, id: Number(current.active_operation), payment_intent_id: id });
+      if (!op || !['PROCESSING', 'UNCERTAIN'].includes(String(op.status))) return;
+      if (op.operation === 'refund') {
+        const refund = await s.findOneWhere(R_REFUNDS, { empresa_id: empresaId, operation_id: op.id, payment_intent_id: id });
+        if (!refund?.provider_refund_id || refund.provider !== current.provider) return;
+        if (refund.provider_refund_status === 'PENDING' && ctx.provider.getRefund) {
+          const proof = await ctx.provider.getRefund(ctx.context, String(a.provider_transaction_id), String(refund.provider_refund_id));
+          await this.recordRefundEvidence(empresaId, id, Number(op.id), String(current.provider), String(a.provider_transaction_id), Number(op.amount), proof);
         }
-      });
+        if (['REFUNDED', 'PARTIALLY_REFUNDED'].includes(result.status) && Number.isSafeInteger(result.refunded) &&
+            Number(result.refunded) >= Number(op.result?.baseline_refunded || 0) + Number(op.amount))
+          await this.finishOperation(empresaId, id, Number(op.id), result.status, String(a.provider_transaction_id));
+      } else {
+        const confirmed = op.operation === 'capture' ? ['PAID', 'CAPTURED'].includes(result.status) :
+          op.operation === 'cancel' ? result.status === 'CANCELED' : false;
+        if (confirmed) await this.finishOperation(empresaId, id, Number(op.id), result.status, String(a.provider_transaction_id));
+      }
     }
   }
   async audit(empresaId: number, id: number, event: string, data: Record<string, unknown>, tx?: Tx) {

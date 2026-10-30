@@ -101,7 +101,7 @@ test('PG extrato: repasse e título competem pela linha; isolamento, direção e
   const order = (await q.query("INSERT INTO commerce_pedidos(empresa_id,canal,pedido_externo) VALUES($1,'BROBOND',$2) RETURNING id", [f.company, f.ref])).rows[0];
   const intent = (await q.query("INSERT INTO payment_intents(empresa_id,order_id,channel,currency,amount,method,provider,status,idempotency_key,correlation_id) VALUES($1,$2,'OWN_STORE','BRL',10000,'PIX','PAGBANK','PAID',$3,$3) RETURNING id", [f.company, order.id, f.ref])).rows[0];
   await q.query("INSERT INTO payment_settlements(empresa_id,payment_intent_id,provider,provider_reference,gross_amount,status) VALUES($1,$2,'PAGBANK',$3,10000,'UNRECONCILED')", [f.company, intent.id, f.ref]);
-  const report = { provider: 'PAGBANK', payout_reference: f.ref, settlement_date: '2035-05-10', net_amount: 9800, transactions: [{ provider_reference: f.ref, gross_amount: 10000, provider_fee: 200, net_amount: 9800 }] };
+  const report = { provider: 'PAGBANK', payout_reference: f.ref, currency: 'BRL', settlement_date: '2035-05-10', net_amount: 9800, transactions: [{ provider_reference: f.ref, gross_amount: 10000, provider_fee: 200, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 0, chargeback_amount: 0, net_amount: 9800 }] };
   const p = response(); await importPayout(req(f.actor, report), p.out); const pid = Number(p.body().payout.id);
   const result = await Promise.allSettled([reconcile(f, bid, tid), matchPayout(req(f.actor, { bank_transaction_id: bid }, { id: pid }), response().out)]);
   assert.equal(result.filter((r) => r.status === 'fulfilled').length, 1);

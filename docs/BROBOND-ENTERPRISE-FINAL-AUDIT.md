@@ -175,3 +175,10 @@ O gate PG inicial desta sessão havia dado 298 pass e 13 skips por ausência de 
 - Dependências: `server/package.json`, `client/package.json`, `package-lock.json`.
 - Scripts/documentação: `docs/AUTENTICACAO.md`, `scripts/{commerce-go-live-audit,commerce-final-go-live-audit,final-go-live-audit,payment-engine-go-live-audit}.ts`, `docs/{COMMERCE-GO-LIVE,COMMERCE-FINAL-ACCEPTANCE,COMMERCE-FINAL-AUDIT,COMMERCE-UNBLOCK-MATRIX}.md`, `docs/architecture/payment-engine.md`.
 - Inventário gerado: `docs/ERP-3.0-ARCHITECTURE-INVENTORY.json`. Relatório: este arquivo. Nenhum dado de teste, dependência, build ou credencial é parte intencional do commit.
+
+### Atualização de Closure Pass posterior
+
+Consulte a §13 de [BROBOND-ENTERPRISE-WAVES-1-2-3-AUDIT.md](BROBOND-ENTERPRISE-WAVES-1-2-3-AUDIT.md#13-closure-pass-posterior--evidência-por-operação-e-disputas)
+para os resultados mais recentes de refund individual, disputa/chargeback,
+repasses e gates. A correção desses riscos pontuais não equivale ao fechamento
+integrado das ondas nem à homologação externa.

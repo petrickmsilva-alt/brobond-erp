@@ -1,5 +1,6 @@
 // Gestão interna de disputas: fatos declarados manualmente não são chamadas ao
-// provedor. Não altera saldos, cobranças, intent ou livro financeiro.
+// provedor. Bloqueiam conciliação automática, mas não alteram saldos,
+// cobranças, intent ou livro financeiro.
 import { createHash } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { currentUser } from '../../../server/src/auth';
@@ -8,8 +9,8 @@ import { HttpError } from '../../../server/src/errors';
 import { getResource } from '../../../server/src/resources';
 import { checkAccess, getStore } from '../../../server/src/services';
 import type { Row, Tx } from '../../../server/src/store';
-import { R_ATTEMPTS, R_DISPUTES, R_DISPUTE_EVENTS, R_DISPUTE_EVIDENCE, R_INTENTS } from '../infrastructure/resources';
-import { locked } from '../infrastructure/locking';
+import { R_ATTEMPTS, R_DISPUTES, R_DISPUTE_EVENTS, R_DISPUTE_EVIDENCE, R_INTENTS, R_SETTLEMENTS, R_PAYOUTS } from '../infrastructure/resources';
+import { locked, retrySerialization } from '../infrastructure/locking';
 
 function actorOf(req: Request) {
   const actor = currentUser(req);
@@ -106,7 +107,7 @@ export async function registerDispute(req: Request, res: Response) {
   const operationKey = key(req);
   const requestHash = hash({ kind: 'REGISTER', intentId, reference, externalId, reason, due, amount });
   try {
-    const result = await locked(empresaId, `intent:${intentId}`, async (tx) => {
+    const result = await retrySerialization(() => locked(empresaId, `intent:${intentId}`, async (tx) => {
       const previous = await s.findOneWhere(R_DISPUTE_EVENTS, { empresa_id: empresaId, idempotency_key: operationKey }, tx);
       if (previous) {
         if (previous.request_hash !== requestHash) throw new HttpError(409, 'Chave de idempotência usada com outros dados.');
@@ -119,6 +120,12 @@ export async function registerDispute(req: Request, res: Response) {
       if (!['CAPTURED', 'PAID', 'PARTIALLY_REFUNDED', 'REFUNDED', 'DISPUTED', 'CHARGEBACK'].includes(String(intent.status)) || amount > Number(intent.amount))
         throw new HttpError(409, 'Pagamento ou valor incompatível com registro de disputa.');
       const provider = String(attempt.provider);
+      // Same transaction locks as payout matching/import prevent a manual
+      // dispute from racing a report into MATCHED. Lock order is global.
+      if (tx) {
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`payments:${empresaId}:payout-bank-match`]);
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`payments:${empresaId}:payout-import:${provider}`]);
+      }
       const external = await s.findOneWhere(R_DISPUTES, { empresa_id: empresaId, provider, external_dispute_id: externalId }, tx);
       if (external) throw new HttpError(409, 'Identificador externo já registrado neste provedor.');
       const old = await s.findOneWhere(R_DISPUTES, { empresa_id: empresaId, provider_reference: reference }, tx);
@@ -127,19 +134,33 @@ export async function registerDispute(req: Request, res: Response) {
         if (Number(old.payment_intent_id) !== intentId || old.external_dispute_id) throw new HttpError(409, 'Transação já possui disputa registrada.');
         const changed = await s.tryUpdateIf(R_DISPUTES, Number(old.id),
           { empresa_id: empresaId, external_dispute_id: null, version: old.version ?? null },
-          { provider, external_dispute_id: externalId, due_date: due, reason, amount, version: Number(old.version || 0) + 1, updated_at: now }, tx);
+          { provider, external_dispute_id: externalId, due_date: due, reason, amount, amount_source: 'MANUAL_REPORTED', version: Number(old.version || 0) + 1, updated_at: now }, tx);
         if (!changed) throw new HttpError(409, 'Disputa mudou durante o registro; atualize e tente novamente.');
         row = changed;
       } else {
         row = await s.insert(R_DISPUTES, { empresa_id: empresaId, payment_intent_id: intentId, provider_reference: reference,
-          provider, external_dispute_id: externalId, due_date: due, reason, amount, origin: 'MANUAL', version: 0,
+          provider, external_dispute_id: externalId, due_date: due, reason, amount, amount_source: 'MANUAL_REPORTED', origin: 'MANUAL', version: 0,
           status: 'DISPUTE_OPENED', created_at: now, updated_at: now }, tx);
+      }
+      // A manual report is not a confirmed debit. Preserve all amounts and
+      // bank links, but invalidate any reconciliation until independently reviewed.
+      const settlement = await s.findOneWhere(R_SETTLEMENTS, { empresa_id: empresaId, provider, provider_reference: reference }, tx);
+      if (settlement) {
+        if (settlement.payout_id) {
+          const payout = await s.findOneWhere(R_PAYOUTS, { empresa_id: empresaId, id: Number(settlement.payout_id) }, tx);
+          if (payout && payout.status !== 'DIVERGENT') {
+            await s.update(R_PAYOUTS, Number(payout.id), { status: 'DIVERGENT', updated_at: now }, tx);
+            await s.audit({ empresa_id: empresaId, usuario_id: actor.id, usuario: actor.name, acao: 'ajuste', recurso: 'payment_payouts',
+              registro_id: Number(payout.id), descricao: 'Repasse bloqueado após registro de disputa', dados: { dispute_id: row.id, before_status: payout.status, after_status: 'DIVERGENT' } }, tx);
+          }
+        }
+        await s.update(R_SETTLEMENTS, Number(settlement.id), { dispute_review_required: true, status: 'DIVERGENT', updated_at: now }, tx);
       }
       await s.insert(R_DISPUTE_EVENTS, { empresa_id: empresaId, dispute_id: row.id, kind: 'REGISTER', from_status: old?.status || null,
         to_status: row.status, idempotency_key: operationKey, request_hash: requestHash, created_by: actor.id, created_at: now }, tx);
       await audit(req, Number(row.id), 'Disputa registrada manualmente', { provider, origin: row.origin, status: row.status }, tx);
       return { dispute: row, idempotente: false };
-    }, 'read committed');
+    }));
     noCache(res); res.status(result.idempotente ? 200 : 201).json(result);
   } catch (error) { rethrowConflict(error); }
 }

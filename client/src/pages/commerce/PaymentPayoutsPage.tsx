@@ -11,12 +11,12 @@ type Line = { provider_reference: string; gross_amount: string; provider_fee: st
 type Payout = { id: number; provider: string; payout_reference: string; settlement_date: string; net_amount: number | string; status: string; bank_transaction_id: number | string | null; content_hash: string };
 type Settlement = { id: number; provider_reference: string; gross_amount: number | string; net_amount: number | string; status: string; evidence?: { provider_report?: { gross_amount: number | string } } };
 type ReportLine = { [K in keyof Line]: K extends 'provider_reference' ? string : number };
-type Report = { provider: string; payout_reference: string; settlement_date: string; net_amount: number; transactions: ReportLine[] };
+type Report = { provider: string; payout_reference: string; settlement_date: string; currency: string; net_amount: number; transactions: ReportLine[] };
 type Revision = { id: number; revision: number; created_at: string; reason: string; content_hash: string };
 type Unlink = { id: number; bank_transaction_id: number; created_at: string; reason: string };
 type Page<T> = { rows: T[]; total: number; pageSize: number };
 type Detail = { payout: Payout; settlements: Settlement[]; report: Report | null; revisions?: Page<Revision>; unlinks?: Page<Unlink> };
-const emptyLine = (): Line => ({ provider_reference: '', gross_amount: '', provider_fee: '0', gateway_fee: '0', installment_fee: '0', antifraud_fee: '0', refund_amount: '0', chargeback_amount: '0', net_amount: '' });
+const emptyLine = (): Line => ({ provider_reference: '', gross_amount: '', provider_fee: '', gateway_fee: '', installment_fee: '', antifraud_fee: '', refund_amount: '', chargeback_amount: '', net_amount: '' });
 const fields: [keyof Line, string][] = [['provider_reference', 'Referência da transação'], ['gross_amount', 'Bruto (centavos)'], ['provider_fee', 'Taxa do provedor'], ['gateway_fee', 'Taxa de gateway'], ['installment_fee', 'Taxa de parcelas'], ['antifraud_fee', 'Taxa antifraude'], ['refund_amount', 'Reembolso'], ['chargeback_amount', 'Chargeback'], ['net_amount', 'Líquido (centavos)']];
 const base = '/commerce/pagamentos/repasses';
 export default function PaymentPayoutsPage() {
@@ -31,6 +31,7 @@ export default function PaymentPayoutsPage() {
   const [page, setPage] = useState(1); const [revisionsPage, setRevisionsPage] = useState(1); const [unlinksPage, setUnlinksPage] = useState(1); const [total, setTotal] = useState(0);
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [loading, setLoading] = useState(!novo);
   const [provider, setProvider] = useState('PAGBANK'); const [reference, setReference] = useState(''); const [date, setDate] = useState(''); const [net, setNet] = useState('');
+  const [currency, setCurrency] = useState('');
   const [lines, setLines] = useState<Line[]>([emptyLine()]); const [bankId, setBankId] = useState(''); const [reason, setReason] = useState('');
   const keyFor = useIdempotencyKey();
   useEffect(() => {
@@ -42,7 +43,7 @@ export default function PaymentPayoutsPage() {
         const data = response as Detail;
         setPayout(data.payout); setSettlements(data.settlements || []); setCurrentReport(data.report || null); setRevisions(data.revisions || null); setUnlinks(data.unlinks || null);
         if (corrigir && data.report) {
-          setProvider(data.report.provider); setReference(data.report.payout_reference); setDate(data.report.settlement_date); setNet(String(data.report.net_amount));
+          setProvider(data.report.provider); setCurrency(data.report.currency); setReference(data.report.payout_reference); setDate(data.report.settlement_date); setNet(String(data.report.net_amount));
           setLines(data.report.transactions.map((line) =>
             Object.fromEntries(fields.map(([key]) => [key, String(line[key] ?? (key === 'provider_reference' ? '' : 0))])) as Line));
         }
@@ -55,8 +56,9 @@ export default function PaymentPayoutsPage() {
     e.preventDefault(); setError(''); setBusy(true);
     try {
       if (novo || corrigir) {
+        if (currency !== 'BRL' || !net.trim() || lines.some((line) => fields.some(([field]) => !line[field].trim()))) throw new Error('Informe a moeda e todos os valores conhecidos do relatório.');
         const transactions = lines.map((line) => Object.fromEntries(Object.entries(line).map(([key, val]) => [key, key === 'provider_reference' ? val : Number(val)])));
-        const report = { provider, payout_reference: reference, settlement_date: date, net_amount: Number(net), transactions };
+        const report = { provider, payout_reference: reference, settlement_date: date, currency, net_amount: Number(net), transactions };
         if (novo) {
           const result = await apiFetch<{ payout: Payout }>('/commerce/payments/payouts/import', { method: 'POST', body: JSON.stringify(report) });
           navigate(`${base}/${result.payout.id}`);
@@ -85,10 +87,11 @@ export default function PaymentPayoutsPage() {
     <Link className="text-sm text-blue-700 hover:underline" to={id && !detailView ? `${base}/${id}` : novo || id ? base : '/commerce/pagamentos/reconciliacao'}>← Voltar</Link>
     {error && <Alert tone="red">{error}</Alert>}{loading && !novo && <Spinner label="Carregando repasses…" />}
     {showReportForm ? <form className="space-y-4" onSubmit={submit}>
-      <p className="text-sm text-muted">{novo ? 'Transcreva valores efetivamente fornecidos pelo provedor. Valores são inteiros em centavos; nenhum arquivo ou layout é presumido.' : 'Corrija uma transcrição do mesmo repasse e das mesmas transações. O histórico anterior será preservado; nenhuma consulta ao provedor será feita.'}</p>
+      <p className="text-sm text-muted">{novo ? 'Transcreva valores efetivamente fornecidos pelo provedor. Valores são inteiros em centavos; informe zero apenas quando constar do relatório. Campos desconhecidos não podem ser importados; nenhum arquivo ou layout é presumido.' : 'Corrija uma transcrição do mesmo repasse e das mesmas transações. O histórico anterior será preservado; nenhuma consulta ao provedor será feita.'}</p>
       <div className="grid gap-3 md:grid-cols-2">
         <label>Provedor<select className="input mt-1" disabled={corrigir} value={provider} onChange={(e) => setProvider(e.target.value)}><option>PAGBANK</option><option>MERCADO_PAGO</option><option>STRIPE</option></select></label>
         <label>Referência do repasse<input className="input mt-1" required maxLength={160} readOnly={corrigir} value={reference} onChange={(e) => setReference(e.target.value)} /></label>
+        <label>Moeda do relatório<select className="input mt-1" required value={currency} onChange={(e) => setCurrency(e.target.value)}><option value="">Selecione</option><option value="BRL">BRL</option></select></label>
         <label>Data de liquidação<input className="input mt-1" type="date" required value={date} onChange={(e) => setDate(e.target.value)} /></label>
         <label>Total líquido (centavos)<input className="input mt-1" type="number" min="0" step="1" required value={net} onChange={(e) => setNet(e.target.value)} /></label>
       </div>

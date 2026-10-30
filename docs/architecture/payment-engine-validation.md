@@ -74,3 +74,13 @@ externas.
 ## Atualização posterior
 
 Para os resultados e limites das ondas 1–3 em 2026-10-29, consulte `../BROBOND-ENTERPRISE-WAVES-1-2-3-AUDIT.md`. Os números acima são históricos da rodada indicada, não os resultados desta branch.
+
+## Closure Pass posterior — recorte de segurança financeira
+
+A seção 13 de [`BROBOND-ENTERPRISE-WAVES-1-2-3-AUDIT.md`](../BROBOND-ENTERPRISE-WAVES-1-2-3-AUDIT.md#13-closure-pass-posterior--evidência-por-operação-e-disputas)
+contém a execução mais recente, resultados, limites e gates. Ela não substitui
+as evidências históricas acima. Atribuição de estorno exige ID/valor/pagamento
+específicos e resultado confirmado; o total cumulativo isolado é insuficiente.
+Disputa sem valor conhecido bloqueia conciliação em vez de inventar perda;
+continua sem fechamento financeiro/contábil/fiscal completo. Fixtures de
+providers são internas, não homologação financeira externa.

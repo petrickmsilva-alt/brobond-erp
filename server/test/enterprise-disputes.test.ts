@@ -74,9 +74,11 @@ test('disputas: webhook anterior é enriquecido sem duplicação nem reescrita d
   await paymentEngine.apply(1, Number(intent.id), { reference: 'engine-dispute', status: 'DISPUTED' });
   const existing = await s.findOneWhere(R_DISPUTES, { empresa_id: 1, provider_reference: 'engine-dispute' }); assert.ok(existing);
   assert.equal(existing.origin, 'ENGINE'); assert.equal(existing.version, 0);
+  assert.equal(existing.amount, null); assert.equal(existing.amount_source, 'UNKNOWN');
   const r = res(); await registerDispute(req(data, {}, 'register-engine-01'), r.out);
   assert.equal(r.get().body.dispute.id, existing.id); assert.equal(r.get().body.dispute.version, 1);
   assert.equal(r.get().body.dispute.origin, 'ENGINE'); assert.equal(r.get().body.dispute.status, 'DISPUTE_OPENED');
+  assert.equal(r.get().body.dispute.amount_source, 'MANUAL_REPORTED');
   assert.equal((await s.list(R_DISPUTES, { page: 1, pageSize: 20, filter: { empresa_id: 1, provider_reference: 'engine-dispute' } })).total, 1);
   assert.equal((await s.list(R_DISPUTE_EVENTS, { page: 1, pageSize: 20, filter: { empresa_id: 1, dispute_id: existing.id } })).total, 1);
 });

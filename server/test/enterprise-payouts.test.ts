@@ -8,11 +8,17 @@ const { normalizePayout, importPayout, matchPayout, payoutDetail } = await impor
 const admin = { id: 1, name: 'Admin', perfil: 'admin', empresa_id: 1, empresas: [1] };
 const req = (body: object, params: object = {}, user = admin) => ({ body, params, user, query: {} } as any);
 function res() { let body: any, status = 200; const headers: Record<string, string> = {}; const out: any = { json(v: any) { body = v; return out; }, status(v: number) { status = v; return out; }, setHeader(k: string, v: string) { headers[k] = v; } }; return { out, get: () => ({ body, status, headers }) }; }
-const report = (payout_reference = 'REPASSE-001', gross_amount = 10000) => ({ provider: 'PAGBANK', payout_reference, settlement_date: '2028-05-10', net_amount: gross_amount - 200,
-  transactions: [{ provider_reference: 'TRANS-001', gross_amount, provider_fee: 200, net_amount: gross_amount - 200 }] });
+const report = (payout_reference = 'REPASSE-001', gross_amount = 10000) => ({ provider: 'PAGBANK', payout_reference, currency: 'BRL', settlement_date: '2028-05-10', net_amount: gross_amount - 200,
+  transactions: [{ provider_reference: 'TRANS-001', gross_amount, provider_fee: 200, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 0, chargeback_amount: 0, net_amount: gross_amount - 200 }] });
 
 test('payment: normalização valida centavos, totais, data e linhas duplicadas', () => {
   assert.equal(normalizePayout(report()).hash.length, 64);
+  assert.throws(() => normalizePayout({ ...report(), currency: undefined }));
+  assert.throws(() => normalizePayout({ ...report(), currency: 'USD' }));
+  for (const field of ['provider_fee', 'gateway_fee', 'installment_fee', 'antifraud_fee', 'refund_amount', 'chargeback_amount']) {
+    assert.throws(() => normalizePayout({ ...report(), transactions: [{ ...report().transactions[0], [field]: undefined }] }));
+    assert.throws(() => normalizePayout({ ...report(), transactions: [{ ...report().transactions[0], [field]: null }] }));
+  }
   assert.throws(() => normalizePayout({ ...report(), net_amount: 1 }));
   assert.throws(() => normalizePayout({ ...report(), settlement_date: '2028-02-30' }));
   assert.throws(() => normalizePayout({ ...report(), transactions: [{ ...report().transactions[0], gross_amount: 100.5 }] }));
@@ -88,8 +94,8 @@ test('payment: correção preserva versões, só libera match coerente e desvinc
   const { marcarDivergencia } = await import('../src/extrato');
   const s = getStore(); const ref = 'CORRECTION-TRANSACTION';
   await s.insert(R_SETTLEMENTS, { empresa_id: 1, payment_intent_id: 93, provider: 'PAGBANK', provider_reference: ref, gross_amount: 5000, refund_amount: 0, chargeback_amount: 0, status: 'UNRECONCILED', evidence: {} });
-  const incorrect = { provider: 'PAGBANK', payout_reference: 'CORRECTION-PAYOUT', settlement_date: '2028-05-10', net_amount: 9800,
-    transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, net_amount: 9800 }] };
+  const incorrect = { provider: 'PAGBANK', payout_reference: 'CORRECTION-PAYOUT', currency: 'BRL', settlement_date: '2028-05-10', net_amount: 9800,
+    transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 0, chargeback_amount: 0, net_amount: 9800 }] };
   const r = res(); await importPayout(req(incorrect), r.out); const payout = r.get().body.payout;
   assert.equal(payout.status, 'DIVERGENT');
   const corrected = { ...incorrect, net_amount: 4800, transactions: [{ ...incorrect.transactions[0], gross_amount: 5000, net_amount: 4800 }] };
@@ -130,8 +136,8 @@ test('payment: correção após estorno não concilia com valor bancário obsole
   const intent = await s.insert(R_INTENTS, { empresa_id: 1, order_id: 1004, channel: 'OWN_STORE', currency: 'BRL', amount: 10000, method: 'PIX', provider: 'PAGBANK', status: 'PAID', idempotency_key: ref, correlation_id: ref });
   await s.insert(R_ATTEMPTS, { empresa_id: 1, payment_intent_id: intent.id, provider: 'PAGBANK', provider_transaction_id: ref, method: 'PIX', requested_amount: 10000, authorized_amount: 10000, captured_amount: 10000, refunded_amount: 0, status: 'PAID', idempotency_key: ref, correlation_id: ref });
   await s.insert(R_SETTLEMENTS, { empresa_id: 1, payment_intent_id: intent.id, provider: 'PAGBANK', provider_reference: ref, gross_amount: 10000, refund_amount: 0, chargeback_amount: 0, status: 'UNRECONCILED', evidence: {} });
-  const original = { provider: 'PAGBANK', payout_reference: 'refund-correction-payout', settlement_date: '2028-05-10', net_amount: 9800,
-    transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, net_amount: 9800 }] };
+  const original = { provider: 'PAGBANK', payout_reference: 'refund-correction-payout', currency: 'BRL', settlement_date: '2028-05-10', net_amount: 9800,
+    transactions: [{ provider_reference: ref, gross_amount: 10000, provider_fee: 200, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 0, chargeback_amount: 0, net_amount: 9800 }] };
   const r = res(); await importPayout(req(original), r.out); const payout = r.get().body.payout;
   const bank = await s.insert(R_EXTRATO, { empresa_id: 1, valor: 98, direcao: 'entrada', status: 'importada', linha_hash: ref });
   await matchPayout(req({ bank_transaction_id: bank.id }, { id: payout.id }), res().out);

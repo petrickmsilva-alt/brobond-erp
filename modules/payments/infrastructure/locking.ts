@@ -18,3 +18,14 @@ export async function locked<T>(empresaId: number, key: string, fn: (tx: Tx) => 
     if (queues.get(name) === next) queues.delete(name);
   }
 }
+
+/** Retry database-only serializable transactions, never an external provider write. */
+export async function retrySerialization<T>(work: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await work(); }
+    catch (error: unknown) {
+      if ((error as { code?: unknown } | null)?.code !== '40001' || attempt >= 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 15 * (attempt + 1)));
+    }
+  }
+}

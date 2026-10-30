@@ -21,6 +21,16 @@ describe('Repasses de pagamentos — páginas dedicadas', () => {
     expect(screen.getByRole('link', { name: 'Importar relatório' })).toHaveAttribute('href', '/commerce/pagamentos/repasses/novo');
     expect(screen.queryByRole('dialog')).toBeNull();
   });
+  it('exige moeda e valores explícitos sem preencher taxas e estornos com zero', () => {
+    page('/commerce/pagamentos/repasses/novo');
+    expect(screen.getByLabelText('Moeda do relatório')).toHaveValue('');
+    for (const label of ['Taxa do provedor', 'Taxa de gateway', 'Taxa de parcelas', 'Taxa antifraude', 'Reembolso', 'Chargeback']) {
+      expect(screen.getByLabelText(label)).toHaveValue(null);
+      expect(screen.getByLabelText(label)).toBeRequired();
+    }
+    expect(screen.getByText(/informe zero apenas quando constar do relatório/i)).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
   it('vincula a linha de extrato selecionada na rota própria', async () => {
     api.mockImplementation(async (_path, opts) => opts?.method === 'POST' ? {} : { payout: { id: 7, provider: 'PAGBANK', payout_reference: 'R1', status: 'IMPORTED', net_amount: 1000, settlement_date: '2029-01-01' }, settlements: [] });
     page('/commerce/pagamentos/repasses/7/conciliar');
@@ -43,7 +53,7 @@ describe('Repasses de pagamentos — páginas dedicadas', () => {
     expect(screen.getByText(/Extrato vinculado: 12/)).toBeInTheDocument();
   });
   it('corrige relatório na rota dedicada e preserva referência e chave idempotente', async () => {
-    const report = { provider: 'PAGBANK', payout_reference: 'R1', settlement_date: '2029-01-01', net_amount: 1000,
+    const report = { provider: 'PAGBANK', payout_reference: 'R1', settlement_date: '2029-01-01', currency: 'BRL', net_amount: 1000,
       transactions: [{ provider_reference: 'T1', gross_amount: 1000, provider_fee: 0, gateway_fee: 0, installment_fee: 0, antifraud_fee: 0, refund_amount: 0, chargeback_amount: 0, net_amount: 1000 }] };
     api.mockImplementation(async (_path, opts) => opts?.method === 'POST' ? {} : { payout: { id: 7, content_hash: 'a'.repeat(64) }, report, settlements: [] });
     page('/commerce/pagamentos/repasses/7/corrigir');

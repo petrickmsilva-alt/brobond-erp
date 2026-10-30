@@ -29,7 +29,7 @@ test('PG: confirmação tardia comprovada, conciliação de reembolso parcial/in
     expira_em: new Date(Date.now() + 600000).toISOString() });
   let refunded = 0; let calls = 0; let amount = 100;
   t.mock.method(globalThis, 'fetch', async (url: unknown, init: RequestInit) => {
-    if (String(url).endsWith('/refunds')) { calls++; refunded += calls === 1 ? 10 : Number(JSON.parse(String(init.body)).amount); return new Response('{"status":"approved"}'); }
+    if (String(url).endsWith('/refunds')) { calls++; const requested = Number(JSON.parse(String(init.body)).amount); refunded += calls === 1 ? 10 : requested; return new Response(JSON.stringify({ id: `pg-refund-${calls}-${suffix}`, payment_id: saleId, amount: requested, status: 'approved' })); }
     if (init.method === 'POST') return new Response(JSON.stringify({ id: saleId, status: 'pending', transaction_amount: 100, currency_id: 'BRL' }));
     return new Response(JSON.stringify({ id: saleId, status: refunded === 100 ? 'refunded' : 'approved', transaction_amount: amount,
       currency_id: 'BRL', transaction_amount_refunded: refunded }));

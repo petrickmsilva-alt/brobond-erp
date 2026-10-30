@@ -1,7 +1,15 @@
 import { GenericPaymentProvider } from '../generic';
-import { capability, type PaymentInput, type PaymentResult, type ProviderContext } from '../payment-provider';
+import { capability, type PaymentInput, type PaymentResult, type ProviderContext, type RefundEvidence } from '../payment-provider';
 import { PaymentError } from '../../domain/payment';
 import { providerRequest, validHmac } from '../http';
+function refundEvidence(raw: Record<string, unknown>, paymentReference: string, paymentIntent: string): RefundEvidence | undefined {
+  const id = typeof raw.id === 'string' ? raw.id : '';
+  const remoteIntent = typeof raw.payment_intent === 'string' ? raw.payment_intent : '';
+  const status = String(raw.status || '');
+  if (!id || id !== id.trim() || id.length > 160 || Array.from(id).some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) || remoteIntent !== paymentIntent ||
+      raw.currency !== 'brl' || !Number.isSafeInteger(raw.amount) || Number(raw.amount) <= 0 || !['succeeded', 'pending'].includes(status)) return undefined;
+  return { reference: id, paymentReference, amount: Number(raw.amount), status: status === 'succeeded' ? 'SUCCEEDED' : 'PENDING' };
+}
 /** Official Checkout Sessions / PaymentIntents / Refunds APIs. Account opt-in is mandatory. */
 export class StripeProvider extends GenericPaymentProvider {
   constructor() {
@@ -66,7 +74,8 @@ export class StripeProvider extends GenericPaymentProvider {
   }
   async capture(ctx: ProviderContext, reference: string, amount: number): Promise<PaymentResult> {
     const session = await this.call(ctx, `/checkout/sessions/${encodeURIComponent(reference)}`);
-    if (!session.payment_intent) throw new PaymentError('INVALID_REQUEST');
+    if (session.id !== reference || typeof session.payment_intent !== 'string' || !session.payment_intent)
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
     await this.call(
       ctx,
       `/payment_intents/${encodeURIComponent(String(session.payment_intent))}/capture`,
@@ -76,9 +85,10 @@ export class StripeProvider extends GenericPaymentProvider {
   }
   async cancel(ctx: ProviderContext, reference: string): Promise<PaymentResult> {
     const session = await this.call(ctx, `/checkout/sessions/${encodeURIComponent(reference)}?expand[]=payment_intent`);
+    if (session.id !== reference) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
     const pi = session.payment_intent;
     if (
-      pi &&
+      pi && typeof pi.id === 'string' && pi.id &&
       typeof pi === 'object' &&
       ['requires_capture', 'requires_payment_method', 'requires_confirmation', 'requires_action'].includes(pi.status)
     ) {
@@ -90,49 +100,51 @@ export class StripeProvider extends GenericPaymentProvider {
   }
   async getPayment(ctx: ProviderContext, reference: string): Promise<PaymentResult> {
     const r = await this.call(ctx, `/checkout/sessions/${encodeURIComponent(reference)}?expand[]=payment_intent`);
-    const pi = typeof r.payment_intent === 'object' && r.payment_intent ? r.payment_intent : {};
-    const total = Number(r.amount_total);
-    const captured = Number(pi.amount_received);
-    if ((r.payment_status === 'paid' || pi.status === 'succeeded') &&
-        (!Number.isSafeInteger(total) || total <= 0 || !Number.isSafeInteger(captured) || captured !== total))
-      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true); // partial/unknown capture is not a paid order
-    let refunded = 0;
-    if (pi.latest_charge) {
-      const charge = await this.call(ctx, `/charges/${encodeURIComponent(String(pi.latest_charge))}`);
-      refunded = Number(charge.amount_refunded || 0);
+    const pi = typeof r.payment_intent === 'object' && r.payment_intent ? r.payment_intent : null;
+    const total = r.amount_total;
+    if (r.id !== reference || !Number.isSafeInteger(total) || total <= 0 || typeof r.currency !== 'string' || !r.currency)
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    const reportsPaid = r.payment_status === 'paid' || pi?.status === 'succeeded';
+    if (reportsPaid && (!pi || typeof pi.id !== 'string' || !pi.id || !Number.isSafeInteger(pi.amount_received) || pi.amount_received !== total))
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true); // a captura integral precisa ser comprovada
+    let refunded: number | undefined;
+    const latestCharge = typeof pi?.latest_charge === 'string' ? pi.latest_charge : pi?.latest_charge?.id;
+    if (latestCharge) {
+      const charge = await this.call(ctx, `/charges/${encodeURIComponent(String(latestCharge))}`);
+      if (!pi?.id || charge.id !== latestCharge || charge.payment_intent !== pi.id || charge.currency !== r.currency ||
+          !Number.isSafeInteger(charge.amount_captured) || charge.amount_captured !== total ||
+          !Number.isSafeInteger(charge.amount_refunded) || charge.amount_refunded < 0 || charge.amount_refunded > total)
+        throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+      refunded = charge.amount_refunded;
+    } else if (reportsPaid) {
+      // Falta o valor autoritativo de estorno; não transformar ausência em zero.
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
     }
     return {
-      reference,
-      amount: Number(r.amount_total),
-      currency: String(r.currency).toUpperCase(),
-      refunded,
-      status:
-        refunded >= Number(r.amount_total) && refunded > 0
-          ? 'REFUNDED'
-          : refunded > 0
-            ? 'PARTIALLY_REFUNDED'
-            : r.payment_status === 'paid' || pi.status === 'succeeded'
-              ? 'PAID'
-              : pi.status === 'requires_capture'
-                ? 'AUTHORIZED'
-                : pi.status === 'canceled'
-                  ? 'CANCELED'
-                  : r.status === 'expired'
-                    ? 'EXPIRED'
-                    : 'PENDING',
+      reference: String(r.id), amount: total, currency: r.currency.toUpperCase(), refunded,
+      status: refunded === total ? 'REFUNDED' : (refunded ?? 0) > 0 ? 'PARTIALLY_REFUNDED' : reportsPaid ? 'PAID' :
+        pi?.status === 'requires_capture' ? 'AUTHORIZED' : pi?.status === 'canceled' ? 'CANCELED' : r.status === 'expired' ? 'EXPIRED' : 'PENDING',
     };
   }
   async refund(ctx: ProviderContext, reference: string, amount: number): Promise<PaymentResult> {
     const session = await this.call(ctx, `/checkout/sessions/${encodeURIComponent(reference)}`);
-    if (!session.payment_intent) throw new PaymentError('INVALID_REQUEST');
-    const r = await this.call(
-      ctx,
-      '/refunds',
-      new URLSearchParams({ payment_intent: String(session.payment_intent), amount: String(amount) })
-    );
-    // A pending refund is NOT a completed refund. Reconciliation polls the authoritative charge.
-    if (r.status !== 'succeeded') return { reference, status: 'PENDING' };
-    return this.getPayment(ctx, reference);
+    if (session.id !== reference || typeof session.payment_intent !== 'string' || !session.payment_intent)
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    const r = await this.call(ctx, '/refunds', new URLSearchParams({ payment_intent: session.payment_intent, amount: String(amount) }));
+    const candidate = refundEvidence(r, reference, session.payment_intent);
+    const evidence = candidate?.amount === amount ? candidate : undefined;
+    // A resposta da operação é conservada mesmo se a leitura seguinte falhar.
+    try { return { ...await this.getPayment(ctx, reference), ...(evidence ? { refundEvidence: evidence } : {}) }; }
+    catch { return { reference, status: 'PENDING', ...(evidence ? { refundEvidence: evidence } : {}) }; }
+  }
+  async getRefund(ctx: ProviderContext, paymentReference: string, refundReference: string): Promise<RefundEvidence> {
+    const session = await this.call(ctx, `/checkout/sessions/${encodeURIComponent(paymentReference)}`);
+    if (session.id !== paymentReference || typeof session.payment_intent !== 'string' || !session.payment_intent)
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    const r = await this.call(ctx, `/refunds/${encodeURIComponent(refundReference)}`);
+    const evidence = refundEvidence(r, paymentReference, session.payment_intent);
+    if (!evidence || evidence.reference !== refundReference) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    return evidence;
   }
   verifyWebhook(ctx: ProviderContext, raw: string, headers: Record<string, string | undefined>) {
     const signature = headers['stripe-signature'] || '';
