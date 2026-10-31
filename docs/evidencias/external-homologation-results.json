@@ -1,0 +1,488 @@
+{
+  "date": "2026-10-31",
+  "baseMainSha": "d9f29ddf52eee99c4019e43f03fd0e88b0107653",
+  "branch": "arena/50a466c4-brobond-erp",
+  "scope": "Execução local; nenhum provider externo homologado; hashes referem logs locais não publicados para evitar vazamento.",
+  "server": {
+    "tests": 1658,
+    "pass": 1582,
+    "fail": 0,
+    "skipped": 76,
+    "todo": 0
+  },
+  "client": {
+    "filesPassed": 123,
+    "testsPassed": 1067
+  },
+  "smoke": {
+    "pass": 398,
+    "total": 398,
+    "database": "memória"
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 597
+  },
+  "security": {
+    "info": 0,
+    "low": 2,
+    "moderate": 27,
+    "high": 0,
+    "critical": 0,
+    "total": 29
+  },
+  "advisories": [
+    {
+      "package": "@eslint-community/eslint-utils",
+      "severity": "moderate",
+      "fixAvailable": false,
+      "advisories": []
+    },
+    {
+      "package": "@eslint/config-array",
+      "severity": "moderate",
+      "fixAvailable": false,
+      "advisories": []
+    },
+    {
+      "package": "@eslint/eslintrc",
+      "severity": "moderate",
+      "fixAvailable": false,
+      "advisories": []
+    },
+    {
+      "package": "@rollup/plugin-node-resolve",
+      "severity": "low",
+      "fixAvailable": {
+        "name": "vite-plugin-pwa",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "@trickfilm400/rollup-plugin-off-main-thread",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "vite-plugin-pwa",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "@typescript-eslint/eslint-plugin",
+      "severity": "moderate",
+      "fixAvailable": false,
+      "advisories": []
+    },
+    {
+      "package": "@typescript-eslint/parser",
+      "severity": "moderate",
+      "fixAvailable": false,
+      "advisories": []
+    },
+    {
+      "package": "@typescript-eslint/type-utils",
+      "severity": "moderate",
+      "fixAvailable": false,
+      "advisories": []
+    },
+    {
+      "package": "@typescript-eslint/typescript-estree",
+      "severity": "moderate",
+      "fixAvailable": false,
+      "advisories": []
+    },
+    {
+      "package": "@typescript-eslint/utils",
+      "severity": "moderate",
+      "fixAvailable": false,
+      "advisories": []
+    },
+    {
+      "package": "archiver",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "exceljs",
+        "version": "3.4.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "archiver-utils",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "exceljs",
+        "version": "3.4.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "deepmerge",
+      "severity": "low",
+      "fixAvailable": {
+        "name": "vite-plugin-pwa",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "advisories": [
+        {
+          "title": "deepmerge mergeObject() allows prototype poisoning of returned objects",
+          "url": "https://github.com/advisories/GHSA-gcqx-w48m-w2h4"
+        }
+      ]
+    },
+    {
+      "package": "ejs",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "vite-plugin-pwa",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "eslint",
+      "severity": "moderate",
+      "fixAvailable": false,
+      "advisories": []
+    },
+    {
+      "package": "eslint-plugin-react",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "eslint-plugin-react",
+        "version": "7.22.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "exceljs",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "exceljs",
+        "version": "3.4.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "filelist",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "vite-plugin-pwa",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "glob",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "vite-plugin-pwa",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "advisories": [
+        {
+          "title": "Glob: AbortSignal cancellation bypass allows post-timeout filesystem traversal",
+          "url": "https://github.com/advisories/GHSA-3g3m-2fjr-6pw4"
+        }
+      ]
+    },
+    {
+      "package": "jake",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "vite-plugin-pwa",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "minimatch",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "vite-plugin-pwa",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "advisories": [
+        {
+          "title": "minimatch has potential denial of service via globparts amplification",
+          "url": "https://github.com/advisories/GHSA-g3hv-75wg-m249"
+        }
+      ]
+    },
+    {
+      "package": "react-router",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "react-router-dom",
+        "version": "7.18.5",
+        "isSemVerMajor": true
+      },
+      "advisories": [
+        {
+          "title": "React Router: Open redirect via backslash in <Link> and useNavigate (CVE-2025-68470 bypass)",
+          "url": "https://github.com/advisories/GHSA-wrjc-x8rr-h8h6"
+        },
+        {
+          "title": "React Router: Arbitrary Constructor Injection via deserializeErrors() in React Router SSR Hydration",
+          "url": "https://github.com/advisories/GHSA-337j-9hxr-rhxg"
+        }
+      ]
+    },
+    {
+      "package": "react-router-dom",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "react-router-dom",
+        "version": "7.18.5",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "readdir-glob",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "exceljs",
+        "version": "3.4.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "rimraf",
+      "severity": "moderate",
+      "fixAvailable": true,
+      "advisories": []
+    },
+    {
+      "package": "uuid",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "exceljs",
+        "version": "3.4.0",
+        "isSemVerMajor": true
+      },
+      "advisories": [
+        {
+          "title": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided",
+          "url": "https://github.com/advisories/GHSA-w5hq-g745-h8pq"
+        }
+      ]
+    },
+    {
+      "package": "vite-plugin-pwa",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "vite-plugin-pwa",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "workbox-build",
+      "severity": "moderate",
+      "fixAvailable": {
+        "name": "vite-plugin-pwa",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "advisories": []
+    },
+    {
+      "package": "zip-stream",
+      "severity": "moderate",
+      "fixAvailable": true,
+      "advisories": []
+    }
+  ],
+  "commands": [
+    {
+      "command": "npm test",
+      "exit": 0,
+      "seconds": 310.6,
+      "log": "01.log",
+      "sha256": "0b5918a4844425cd16160130dcdb8348b38f47ac9a1e7fb8aca7299be83de9ec"
+    },
+    {
+      "command": "npm run typecheck",
+      "exit": 0,
+      "seconds": 40.2,
+      "log": "02.log",
+      "sha256": "b4c7d97221fc99cf02284ee3bda3e6283010f7e0aa9feeed5e3adfe3fc879c2f"
+    },
+    {
+      "command": "npm run build",
+      "exit": 0,
+      "seconds": 21.1,
+      "log": "03.log",
+      "sha256": "7b4e892ad1972348a2bfbad4265d851ae76c30a9b85f21f4982033693e2e272b"
+    },
+    {
+      "command": "npm run lint",
+      "exit": 0,
+      "seconds": 19.9,
+      "log": "04.log",
+      "sha256": "4af167408e8c9882a49dd625c94f89c1591b10a7ae49e8b79fff4b0f1ef93f41"
+    },
+    {
+      "command": "npm audit --json",
+      "exit": 1,
+      "seconds": 30.5,
+      "log": "05.log",
+      "sha256": "1786cd9c0e494b5623bb258309c91c2832d89d894088d5dc8a65b95f7f2caf86"
+    },
+    {
+      "command": "npm run test:pg",
+      "exit": 2,
+      "seconds": 0.2,
+      "log": "06.log",
+      "sha256": "9b8795e2dc28e370eb629af7b7b8486362c7bbcaf49298eea741a6e6222eafcd"
+    },
+    {
+      "command": "npm run smoke",
+      "exit": 0,
+      "seconds": 1.8,
+      "log": "07.log",
+      "sha256": "055c86adffd3d40ddeeb7383bb8549f45ddac7639a759e354f1f393f3c461b90"
+    },
+    {
+      "command": "npm run smoke:pg",
+      "exit": 2,
+      "seconds": 0.2,
+      "log": "08.log",
+      "sha256": "d9737e9054f9f4b29526493d80f0ea86b77a37fa47d89410e37e0cc3d536787a"
+    },
+    {
+      "command": "npm run recovery:check",
+      "exit": 2,
+      "seconds": 0.3,
+      "log": "09.log",
+      "sha256": "f43989236cb97a6fba4183b973dc70c1c1fe9f283e7854777943ce0879852ece"
+    },
+    {
+      "command": "npm run audit:menu",
+      "exit": 0,
+      "seconds": 0.7,
+      "log": "10.log",
+      "sha256": "939317dc2bbea802c1b949389a617fa34c0e3c47f849088a053b309fa285cd05"
+    },
+    {
+      "command": "npm run architecture:audit",
+      "exit": 0,
+      "seconds": 0.8,
+      "log": "11.log",
+      "sha256": "2994d8704225e694d25f3cb0e1b5e188bd63e1e1efa939ed55302251a4b8bcd9"
+    },
+    {
+      "command": "npm run audit:ux",
+      "exit": 0,
+      "seconds": 0.3,
+      "log": "12.log",
+      "sha256": "66111227ec393e47c74abaa6c941b3bcea1f5c954d6e3c1c5e520b725e1227e3"
+    },
+    {
+      "command": "npm run go-live:audit",
+      "exit": 0,
+      "seconds": 1.9,
+      "log": "13.log",
+      "sha256": "b3f55b276a0a25f53ce6ef2df73f59a75d1ac9b24797d3ece5a16ae97f5aa517"
+    },
+    {
+      "command": "npm run commerce:go-live",
+      "exit": 0,
+      "seconds": 0.3,
+      "log": "14.log",
+      "sha256": "8a95154f78b2da48d727fbb99059ed29b9cb4eb245c1e48a0d05e3c75174a947"
+    },
+    {
+      "command": "npm run commerce:final-go-live",
+      "exit": 1,
+      "seconds": 1.6,
+      "log": "15.log",
+      "sha256": "b2b6b22469716a908498f6cf54adc318ae941dbc179adb9d50b3f251631a680a"
+    },
+    {
+      "command": "npm run payment:go-live",
+      "exit": 0,
+      "seconds": 0.4,
+      "log": "16.log",
+      "sha256": "382a485bd60b1f153ec314a8a3e8ef8589778f37d0dcf32f594ff67b30579d75"
+    },
+    {
+      "command": "npm run db:validate",
+      "exit": 1,
+      "seconds": 3.9,
+      "log": "17.log",
+      "sha256": "10010c936a79e77d9c3cb749e328a22c84d304e86c79a711bdac136cac98e459"
+    },
+    {
+      "command": "node --import tsx --test server/test/multiempresa-p1.test.ts",
+      "exit": 0,
+      "seconds": 1.2,
+      "log": "18.log",
+      "sha256": "aa690395602f0e9ced39d8137994839dd0632453ab1f87f5fb6177229686dbf2"
+    },
+    {
+      "command": "node --import tsx scripts/capacidades-audit.ts",
+      "exit": 0,
+      "seconds": 0.5,
+      "log": "19.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "node scripts/smoke-dependencias.mjs",
+      "exit": 0,
+      "seconds": 0.6,
+      "log": "20.log",
+      "sha256": "1320c133e210487577979cc481988d5f11805152e342bd083d8362b2f0e2c11e"
+    },
+    {
+      "command": "SMOKE_BASE=http://127.0.0.1:3012/api node scripts/smoke-creators.mjs",
+      "exit": 1,
+      "seconds": 0.5,
+      "log": "21.log",
+      "sha256": "fb8a02cd491c157896ab342bd694e62769a3f65430300f80ef2e1237104468fb"
+    },
+    {
+      "command": "node scripts/ux05-browser-check.mjs",
+      "exit": 1,
+      "seconds": 0.1,
+      "log": "22.log",
+      "sha256": "98aafdd31e0840f54f93e7091666c05948183bab4433229ea8c14387aad5820a"
+    },
+    {
+      "command": "node scripts/ux05-drawer-check.mjs",
+      "exit": 1,
+      "seconds": 0.1,
+      "log": "23.log",
+      "sha256": "2642be3f7a58ce1affe586411b47e704f57ba581eb1b4da2bb2cf10025ad2525"
+    },
+    {
+      "command": "node scripts/ux05-rbac-check.mjs",
+      "exit": 1,
+      "seconds": 0.1,
+      "log": "24.log",
+      "sha256": "e5aa5c422f8e1be871b37829ead07bc53f224a457e3af9b81ebf3ee8a678b840"
+    },
+    {
+      "command": "SMOKE_BASE=http://127.0.0.1:3012/api node scripts/smoke-creators.mjs (API nova + Vite ativo)",
+      "exit": 0,
+      "log": "25.log",
+      "sha256": "8504632dff982cc6febfa1291b2323d1219c78641283706e1920f657240c1c86"
+    }
+  ],
+  "automaticFixAttempt": "npm audit fix --ignore-scripts --no-fund --json: exit 1, 29 vulnerabilidades permanecem. Lockfile restaurado sem reset/rebase/clean; npm ci reinstalou a base exata."
+}
