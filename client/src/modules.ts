@@ -193,10 +193,7 @@ export type Module = {
 
 // Fonte única de verdade para a Árvore Master: Sidebar, Command Palette, Breadcrumb e Rotas.
 export const MODULES: Module[] = [
-  // ==========================================================================
-  // 1. MEU NEGÓCIO (ERP CORE)
-  // ==========================================================================
-  {
+{
     id: 'dashboard',
     label: 'Meu Negócio',
     icon: LayoutDashboard,
@@ -208,7 +205,7 @@ export const MODULES: Module[] = [
     path: '/',
     description: 'Visão geral do negócio: estoque, produção, compras e vendas.',
   },
-  {
+{
     id: 'relatorios',
     label: 'Relatórios',
     icon: BarChart3,
@@ -220,8 +217,7 @@ export const MODULES: Module[] = [
     path: '/relatorios',
     description: 'Posição de estoque, movimentações, produção, vendas, curva ABC e insumos mínimos.',
   },
-
-  {
+{
     id: 'painel-comercial',
     label: 'Painel comercial',
     icon: BarChart3,
@@ -233,11 +229,109 @@ export const MODULES: Module[] = [
     path: '/comercial/painel',
     description: 'Indicadores derivados por representante, equipe e território, com meta e atingimento.',
   },
-
-  // ==========================================================================
-  // 2. CADASTROS (ERP CORE)
-  // ==========================================================================
-  {
+{
+    id: 'marketing-automations',
+    label: 'Automações de marketing',
+    icon: Megaphone,
+    space: 'erp',
+    area: 'Meu Negócio',
+    group: 'Análises',
+    subgroup: 'Marketing e IA',
+    keywords: 'automacao marketing trigger condicao acao campanha gatilho',
+    path: '/marketing/automacoes',
+    resource: 'marketing_automations',
+    minPerfil: 'gerente',
+    description: 'Gatilho → condição → ação. Cada disparo grava execução idempotente e respeita o consentimento de marketing.',
+  },
+{
+    id: 'marketing-runs',
+    label: 'Execuções de automação',
+    icon: Webhook,
+    space: 'erp',
+    area: 'Meu Negócio',
+    group: 'Análises',
+    subgroup: 'Marketing e IA',
+    kind: 'subitem',
+    keywords: 'automacao execucao disparo entrega interacao conversao',
+    path: '/marketing/execucoes',
+    resource: 'marketing_automation_runs',
+    minPerfil: 'gerente',
+    description: 'Trilha append-only dos disparos: estado, entrega, interação e conversão por automação.',
+  },
+{
+    id: 'ai-providers',
+    label: 'Provedores de IA',
+    icon: Bot,
+    space: 'erp',
+    area: 'Meu Negócio',
+    group: 'Análises',
+    subgroup: 'Marketing e IA',
+    keywords: 'ia ai provider modelo limite custo fallback camada central',
+    path: '/ai/provedores',
+    resource: 'ai_providers',
+    minPerfil: 'admin',
+    description: 'Camada central de IA: provedor, modelo, limite de custo e fallback. Nenhuma integração de IA fora daqui.',
+  },
+{
+    id: 'ai-prompts',
+    label: 'Prompts de IA',
+    icon: FileText,
+    space: 'erp',
+    area: 'Meu Negócio',
+    group: 'Análises',
+    subgroup: 'Marketing e IA',
+    kind: 'subitem',
+    keywords: 'ia ai prompt versao conteudo',
+    path: '/ai/prompts',
+    resource: 'ai_prompts',
+    minPerfil: 'admin',
+    description: 'Prompt versionado. A execução registra qual versão usou — versão nova não sobrescreve a antiga.',
+  },
+{
+    id: 'ai-recommendations',
+    label: 'Recomendações de IA',
+    icon: Rocket,
+    space: 'erp',
+    area: 'Meu Negócio',
+    group: 'Análises',
+    subgroup: 'Marketing e IA',
+    kind: 'subitem',
+    keywords: 'ia ai recomendacao score evidencia decisao sales customer marketing inventory demand',
+    path: '/ai/recomendacoes',
+    resource: 'ai_recommendations',
+    minPerfil: 'gerente',
+    description: 'Recomendações com score e evidência. Nunca alteram estoque, pagamento, financeiro ou pedido — exigem decisão humana registrada.',
+  },
+{
+    id: 'ai-executions',
+    label: 'Execuções de IA',
+    icon: Clock,
+    space: 'erp',
+    area: 'Meu Negócio',
+    group: 'Análises',
+    subgroup: 'Marketing e IA',
+    kind: 'subitem',
+    keywords: 'ia ai execucao custo estado fallback auditoria',
+    path: '/ai/execucoes',
+    resource: 'ai_executions',
+    minPerfil: 'gerente',
+    description: 'Registro auditável de cada execução: provedor, prompt, custo, estado e fallback.',
+  },
+{
+    id: 'bi-read-models',
+    label: 'Projeções de BI',
+    icon: BarChart3,
+    space: 'erp',
+    area: 'Meu Negócio',
+    group: 'Análises',
+    subgroup: 'Data e BI',
+    keywords: 'bi projecao read model receita margem pedidos clientes periodo dimensao metrica',
+    path: '/bi/projecoes',
+    resource: 'bi_read_models',
+    minPerfil: 'gerente',
+    description: 'Projeções reconstruídas dos documentos canônicos: empresa, origem, período, dimensão, métrica e timestamp.',
+  },
+{
     id: 'produtos',
     label: 'Produtos',
     icon: Shirt,
@@ -250,7 +344,7 @@ export const MODULES: Module[] = [
     resource: 'produtos',
     description: 'Catálogo de peças acabadas: fotos, SKU, categoria, cor, coleção, custo e preço.',
   },
-  {
+{
     id: 'categorias',
     label: 'Categorias',
     icon: Layers,
@@ -263,7 +357,7 @@ export const MODULES: Module[] = [
     resource: 'categorias',
     description: 'Tipos de peça: camisa, camiseta, calça, bermuda...',
   },
-  {
+{
     id: 'cores',
     label: 'Cores',
     icon: Palette,
@@ -276,7 +370,7 @@ export const MODULES: Module[] = [
     resource: 'cores',
     description: 'Cores padronizadas usadas no catálogo de produtos.',
   },
-  {
+{
     id: 'colecoes',
     label: 'Coleções',
     icon: Tags,
@@ -289,7 +383,7 @@ export const MODULES: Module[] = [
     resource: 'colecoes',
     description: 'Coleções e temporadas.',
   },
-  {
+{
     id: 'grades',
     label: 'Grades',
     icon: LayoutGrid,
@@ -302,7 +396,7 @@ export const MODULES: Module[] = [
     resource: 'grades',
     description: 'Conjuntos nomeados de tamanhos (Camiseta PP-GG, Calça 36-48, Calçado 34-44...) vinculados a produtos e categorias.',
   },
-  {
+{
     id: 'tamanhos',
     label: 'Tamanhos',
     icon: Ruler,
@@ -315,7 +409,7 @@ export const MODULES: Module[] = [
     resource: 'tamanhos',
     description: 'Dicionário de tamanhos: PP, P, M, G, GG, 36, 38, 40...',
   },
-  {
+{
     id: 'medidas',
     label: 'Tabela de Medidas',
     icon: Ruler,
@@ -327,7 +421,7 @@ export const MODULES: Module[] = [
     path: '/medidas',
     description: 'Medidas por tamanho de cada grade, com painel de completude, modelos prontos, cópia entre grades, instruções para o cliente e impressão.',
   },
-  {
+{
     id: 'insumos',
     label: 'Insumos',
     icon: Scissors,
@@ -340,7 +434,7 @@ export const MODULES: Module[] = [
     resource: 'insumos',
     description: 'Matéria-prima: tecido, botão, zíper, etiqueta e afins.',
   },
-  {
+{
     id: 'categorias-insumos',
     label: 'Categorias de Insumos',
     icon: Layers,
@@ -354,7 +448,7 @@ export const MODULES: Module[] = [
     resource: 'categorias_insumos',
     description: 'Agrupamento da matéria-prima: Matéria-prima, Aviamentos, Identidade de marca, Embalagem...',
   },
-  {
+{
     id: 'unidades-medida',
     label: 'Unidades de medida',
     icon: Ruler,
@@ -369,7 +463,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Catálogo de unidades da empresa com grandeza. A grandeza impede conversão sem sentido (metro não vira quilo).',
   },
-  {
+{
     id: 'conversoes-unidade',
     label: 'Conversões de unidade',
     icon: Scale,
@@ -384,7 +478,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Regras explícitas de conversão (1 rolo = N metros). O ERP converte somente o que está declarado aqui — nunca estima fator.',
   },
-  {
+{
     id: 'clientes',
     label: 'Clientes',
     icon: Store,
@@ -397,7 +491,7 @@ export const MODULES: Module[] = [
     resource: 'clientes',
     description: 'Lojas e atacadistas que compram de você.',
   },
-  {
+{
     id: 'fornecedores',
     label: 'Fornecedores',
     icon: Factory,
@@ -410,7 +504,7 @@ export const MODULES: Module[] = [
     resource: 'fornecedores',
     description: 'Empresas de quem você compra insumos.',
   },
-  {
+{
     id: 'representantes',
     label: 'Representantes',
     icon: Handshake,
@@ -423,8 +517,7 @@ export const MODULES: Module[] = [
     resource: 'representantes',
     description: 'Vendedores externos, regiões e comissões.',
   },
-
-  {
+{
     id: 'vendas',
     label: 'Vendas',
     icon: Receipt,
@@ -437,7 +530,7 @@ export const MODULES: Module[] = [
     resource: 'vendas',
     description: 'Pedidos de venda com itens; ao faturar, as peças saem do estoque e a comissão é calculada.',
   },
-  {
+{
     id: 'propostas',
     label: 'Propostas comerciais',
     icon: FileText,
@@ -450,7 +543,7 @@ export const MODULES: Module[] = [
     resource: 'propostas',
     description: 'Rascunho → enviada → aprovada → convertida em pedido. A conversão é idempotente: uma proposta nunca vira dois pedidos.',
   },
-  {
+{
     id: 'catalogos',
     label: 'Catálogos públicos',
     icon: Share2,
@@ -463,7 +556,7 @@ export const MODULES: Module[] = [
     resource: 'catalogos',
     description: 'Compartilhe produtos com preço por link — sem login para o cliente.',
   },
-  {
+{
     id: 'politicas-comerciais',
     label: 'Políticas comerciais',
     icon: Tags,
@@ -477,7 +570,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Preços, mínimos, múltiplos e regras sazonais por canal, coleção, catálogo ou cliente.',
   },
-  {
+{
     id: 'listas-preco',
     label: 'Listas de preço',
     icon: Tags,
@@ -491,16 +584,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Tabelas de preço por produto e variação, com vigência, prioridade e histórico. O preço usado na venda é gravado no item e nunca recalculado.',
   },
-
-  // ==========================================================================
-  // ESTRUTURA COMERCIAL (MASTER MA-02 · MA-03 · MA-06 · MA-07)
-  //
-  // Território, equipe, hierarquia, carteira e atribuição são ESTRUTURA
-  // ORGANIZACIONAL — não colunas do cadastro de representantes. Cada um tem
-  // cadastro próprio, com vigência e histórico, e todos passam pelo padrão
-  // LISTA → PÁGINA (formulário em rota própria, nunca em modal/drawer).
-  // ==========================================================================
-  {
+{
     id: 'territorios',
     label: 'Territórios',
     icon: MapPinned,
@@ -513,7 +597,7 @@ export const MODULES: Module[] = [
     resource: 'territorios',
     description: 'Hierarquia comercial (Brasil → Estado → Região → Cidade → Zona) ou recortes não geográficos.',
   },
-  {
+{
     id: 'equipes_comerciais',
     label: 'Equipes comerciais',
     icon: UsersRound,
@@ -526,7 +610,7 @@ export const MODULES: Module[] = [
     resource: 'equipes_comerciais',
     description: 'Equipes comerciais com líder, território e composição por vigência.',
   },
-  {
+{
     id: 'equipe_membros',
     label: 'Membros de equipe',
     icon: UsersRound,
@@ -539,7 +623,7 @@ export const MODULES: Module[] = [
     resource: 'equipe_membros',
     description: 'Composição da equipe com papel, participação e período (histórico preservado).',
   },
-  {
+{
     id: 'representante_hierarquia',
     label: 'Hierarquia comercial',
     icon: Network,
@@ -552,7 +636,7 @@ export const MODULES: Module[] = [
     resource: 'representante_hierarquia',
     description: 'Diretor → Gerente → Supervisor → Representante, com vigência e sem ciclo.',
   },
-  {
+{
     id: 'representante_cliente',
     label: 'Carteira de clientes',
     icon: IdCard,
@@ -565,7 +649,7 @@ export const MODULES: Module[] = [
     resource: 'representante_cliente',
     description: 'Quem atende cada cliente, de quando até quando — trocar não apaga o histórico.',
   },
-  {
+{
     id: 'venda_atribuicao',
     label: 'Atribuição comercial',
     icon: GitBranch,
@@ -578,11 +662,7 @@ export const MODULES: Module[] = [
     resource: 'venda_atribuicao',
     description: 'Participação de cada representante na venda (contribuição ≠ comissão).',
   },
-
-  // ==========================================================================
-  // CRM 3.0 — funil de vendas (leads, oportunidades, atividades, motivos)
-  // ==========================================================================
-  {
+{
     id: 'crm-leads',
     label: 'Leads',
     icon: Mail,
@@ -596,7 +676,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Topo do funil: contato potencial ainda não convertido em cliente, com origem, status, valor estimado e responsável.',
   },
-  {
+{
     id: 'crm-oportunidades',
     label: 'Oportunidades',
     icon: Target,
@@ -610,7 +690,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Negociação em pipeline, com estágio, valor, probabilidade e previsão de fechamento. Perdida exige motivo.',
   },
-  {
+{
     id: 'crm-atividades',
     label: 'Atividades',
     icon: Clock,
@@ -624,7 +704,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Registro de interações com leads, oportunidades e clientes — chamada, visita, e-mail, reunião, tarefa e follow-up.',
   },
-  {
+{
     id: 'crm-motivos-perda',
     label: 'Motivos de perda',
     icon: Flag,
@@ -638,10 +718,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Catálogo de motivos pelos quais uma oportunidade foi perdida. Oportunidade perdida exige motivo.',
   },
-  // --------------------------------------------------------------------------
-  // CRM 3.0 — evolução (migration 0051): painel, agenda, funil e origem/campanha
-  // --------------------------------------------------------------------------
-  {
+{
     id: 'crm-painel',
     label: 'Painel do CRM',
     icon: TrendingUp,
@@ -654,7 +731,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Leads, conversão, pipeline, forecast ponderado, conversão por origem, atividades atrasadas e desempenho por responsável.',
   },
-  {
+{
     id: 'crm-agenda',
     label: 'Agenda do CRM',
     icon: Clock,
@@ -667,7 +744,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Compromissos de hoje, atrasados e próximos — com lembrete, prioridade e responsável.',
   },
-  {
+{
     id: 'crm-estagio-historico',
     label: 'Histórico de estágio',
     icon: History,
@@ -681,7 +758,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Trilha do funil: toda mudança de estágio, com usuário, data e observação. Gravada pelo servidor — não é editável.',
   },
-  {
+{
     id: 'crm-funis',
     label: 'Funis',
     icon: GitBranch,
@@ -695,7 +772,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Funis comerciais da empresa. O funil padrão é único por empresa (garantido pelo banco).',
   },
-  {
+{
     id: 'crm-etapas',
     label: 'Etapas do funil',
     icon: Layers,
@@ -709,7 +786,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Ordem, nome e probabilidade de cada etapa do funil. A chave é o vocabulário aceito pelo banco.',
   },
-  {
+{
     id: 'crm-origens',
     label: 'Origens',
     icon: Share2,
@@ -723,7 +800,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Catálogo controlado de origens de lead — base da conversão por origem no painel.',
   },
-  {
+{
     id: 'crm-campanhas',
     label: 'Campanhas',
     icon: Megaphone,
@@ -737,7 +814,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Campanhas de aquisição vinculadas a uma origem, com investimento e período.',
   },
-  {
+{
     id: 'metas',
     label: 'Metas',
     icon: Target,
@@ -750,10 +827,7 @@ export const MODULES: Module[] = [
     resource: 'metas',
     description: 'Metas por representante, equipe, território ou empresa — o realizado é sempre calculado.',
   },
-  // ==========================================================================
-  // 3. VENDAS (ERP CORE)
-  // ==========================================================================
-  {
+{
     id: 'pdv',
     label: 'PDV — venda balcão',
     icon: Receipt,
@@ -765,7 +839,7 @@ export const MODULES: Module[] = [
     path: '/pdv',
     description: 'Venda de balcão por código de barras, SKU, desconto e pagamento. O servidor recalcula preço, desconto, frete, impostos e total — a tela mostra apenas prévia.',
   },
-  {
+{
     id: 'pdv-caixas',
     label: 'Caixas do PDV',
     icon: CreditCard,
@@ -779,7 +853,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Abertura e fechamento de caixa, suprimentos, sangrias e a diferença entre o esperado e o contado.',
   },
-  {
+{
     id: 'expedicao',
     label: 'Expedição',
     icon: ClipboardList,
@@ -791,7 +865,7 @@ export const MODULES: Module[] = [
     path: '/expedicao',
     description: 'Separação → conferência → embalagem → expedição. Conferência por código de barras, com divergência registrada e auditada.',
   },
-  {
+{
     id: 'divergencias',
     label: 'Divergências de conferência',
     icon: ClipboardCheck,
@@ -805,7 +879,7 @@ export const MODULES: Module[] = [
     resource: 'divergencias_conferencia',
     description: 'Itens faltando ou sobrando na conferência, com o esperado, o lido e a resolução aplicada.',
   },
-  {
+{
     id: 'envios',
     label: 'Logística e envios',
     icon: Truck,
@@ -819,379 +893,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Cotação, geração de envio, etiqueta e rastreio por transportadora. Credenciais só em configuração segura — nunca no código.',
   },
-  {
-    id: 'devolucoes',
-    label: 'Devoluções e reversa',
-    icon: Repeat,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Devoluções',
-    keywords: 'pos-venda devolucoes logistica reversa trocas estorno',
-    path: '/devolucoes',
-    resource: 'devolucoes',
-    description: 'Solicitação → autorização → rastreio → recebimento → conferência. Só item em bom estado volta ao estoque. As ações disponíveis vêm do servidor.',
-  },
-
-  // --------------------------------------------------------------------------
-  // ONDA 4 / D1 — ATENDIMENTO (SERVICE) e SEGMENTAÇÃO.
-  // O atendimento referencia pedido/devolução/pagamento REAIS; não cria pedido
-  // nem cobra. O Customer 360 é leitura derivada. ZERO MODAL: tudo em página.
-  // --------------------------------------------------------------------------
-  {
-    id: 'service-tickets',
-    label: 'Atendimento',
-    icon: Headphones,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Atendimento ao cliente',
-    keywords: 'atendimento ticket chamado sla suporte reclamacao pos-venda service',
-    path: '/service/tickets',
-    resource: 'service_tickets',
-    minPerfil: 'gerente',
-    description: 'Tickets com categoria, prioridade, SLA, responsável e histórico. Vincula pedido, devolução e pagamento reais — não cria cobrança nem estorno.',
-  },
-  {
-    id: 'service-painel',
-    label: 'Painel de atendimento',
-    icon: Gauge,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Atendimento ao cliente',
-    kind: 'subitem',
-    keywords: 'atendimento indicadores sla estourado tempo medio resolucao',
-    path: '/service/painel',
-    minPerfil: 'gerente',
-    description: 'Contagens por situação, tickets fora do SLA e tempo médio de resolução — calculados sobre os tickets reais da empresa.',
-  },
-  {
-    id: 'service-sla',
-    label: 'Políticas de SLA',
-    icon: Timer,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Atendimento ao cliente',
-    kind: 'subitem',
-    keywords: 'sla prazo resposta resolucao politica prioridade',
-    path: '/service/sla',
-    resource: 'service_sla_politicas',
-    minPerfil: 'gerente',
-    description: 'Prazo de resposta e de resolução por prioridade. O ticket copia os prazos vigentes ao ser aberto.',
-  },
-  {
-    id: 'service-categorias',
-    label: 'Categorias de atendimento',
-    icon: Tags,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Atendimento ao cliente',
-    kind: 'subitem',
-    keywords: 'categoria atendimento classificacao ticket',
-    path: '/service/categorias',
-    resource: 'service_ticket_categorias',
-    minPerfil: 'gerente',
-    description: 'Classificação do ticket. Alimenta os indicadores por categoria no painel.',
-  },
-  {
-    id: 'customer-segments',
-    label: 'Segmentos de cliente',
-    icon: UsersRound,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Customer 360 e CDP',
-    keywords: 'segmento segmentacao cdp rfv recencia frequencia valor cohort cliente',
-    path: '/customer-segments',
-    resource: 'customer_segments',
-    minPerfil: 'gerente',
-    description: 'Regras de segmentação avaliadas contra dados reais (recência, frequência, valor, consentimento). A contagem vem do servidor.',
-  },
-  {
-    id: 'customer-consents',
-    label: 'Consentimentos',
-    icon: ShieldCheck,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Customer 360 e CDP',
-    kind: 'subitem',
-    keywords: 'lgpd consentimento marketing comunicacao privacidade',
-    path: '/customer-consents',
-    resource: 'customer_consents',
-    minPerfil: 'gerente',
-    description: 'Consentimento LGPD por cliente e finalidade. Comunicações só alcançam quem consentiu.',
-  },
-  {
-    id: 'customer-preferences',
-    label: 'Preferências do cliente',
-    icon: Cog,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Customer 360 e CDP',
-    kind: 'subitem',
-    keywords: 'preferencia canal idioma cliente cdp',
-    path: '/customer-preferences',
-    resource: 'customer_preferences',
-    minPerfil: 'gerente',
-    description: 'Canal preferido, idioma e observações por cliente. Uma preferência por cliente.',
-  },
-
-  // --------------------------------------------------------------------------
-  // ONDAS 4–5 / D2 — GROWTH: fidelidade, afiliados, campanhas e automação.
-  // ZERO MODAL: cadastro/listagem em página própria via CRUD genérico.
-  // --------------------------------------------------------------------------
-  {
-    id: 'loyalty-programs',
-    label: 'Programas de fidelidade',
-    icon: Coins,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Fidelidade e growth',
-    keywords: 'fidelidade loyalty pontos programa niveis resgate beneficio',
-    path: '/loyalty/programas',
-    resource: 'loyalty_programs',
-    minPerfil: 'gerente',
-    description: 'Programa de pontos com níveis e benefícios. O saldo é a soma dos movimentos — nunca um campo editável.',
-  },
-  {
-    id: 'loyalty-movements',
-    label: 'Movimentos de pontos',
-    icon: History,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Fidelidade e growth',
-    kind: 'subitem',
-    keywords: 'fidelidade pontos credito resgate expiracao estorno extrato',
-    path: '/loyalty/movimentos',
-    resource: 'loyalty_movements',
-    minPerfil: 'gerente',
-    description: 'Crédito, resgate, expiração e estorno. Append-only e idempotente por chave — sem crédito duplicado.',
-  },
-  {
-    id: 'loyalty-tiers',
-    label: 'Níveis de fidelidade',
-    icon: Layers,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Fidelidade e growth',
-    kind: 'subitem',
-    keywords: 'fidelidade nivel faixa pontos beneficio',
-    path: '/loyalty/niveis',
-    resource: 'loyalty_tiers',
-    minPerfil: 'gerente',
-    description: 'Faixas de pontos do programa e o benefício de cada faixa.',
-  },
-  {
-    id: 'affiliate-commissions',
-    label: 'Comissões de afiliado',
-    icon: BadgeDollarSign,
-    space: 'erp',
-    area: 'Vendas',
-    group: 'Pós-venda',
-    subgroup: 'Fidelidade e growth',
-    kind: 'subitem',
-    keywords: 'afiliado affiliate comissao atribuicao tracking roi creator',
-    path: '/affiliate/comissoes',
-    resource: 'affiliate_commissions',
-    minPerfil: 'gerente',
-    description: 'Comissão derivada da atribuição real do pedido. Sem atribuição elegível não há comissão; a chave idempotente impede duplicidade.',
-  },
-  {
-    id: 'marketing-automations',
-    label: 'Automações de marketing',
-    icon: Megaphone,
-    space: 'erp',
-    area: 'Administração',
-    group: 'Automações',
-    subgroup: 'Marketing e IA',
-    keywords: 'automacao marketing trigger condicao acao campanha gatilho',
-    path: '/marketing/automacoes',
-    resource: 'marketing_automations',
-    minPerfil: 'gerente',
-    description: 'Gatilho → condição → ação. Cada disparo grava execução idempotente e respeita o consentimento de marketing.',
-  },
-  {
-    id: 'marketing-runs',
-    label: 'Execuções de automação',
-    icon: Webhook,
-    space: 'erp',
-    area: 'Administração',
-    group: 'Automações',
-    subgroup: 'Marketing e IA',
-    kind: 'subitem',
-    keywords: 'automacao execucao disparo entrega interacao conversao',
-    path: '/marketing/execucoes',
-    resource: 'marketing_automation_runs',
-    minPerfil: 'gerente',
-    description: 'Trilha append-only dos disparos: estado, entrega, interação e conversão por automação.',
-  },
-  {
-    id: 'creator-matches',
-    label: 'Matches de creators',
-    icon: Target,
-    space: 'creators',
-    area: 'Creators',
-    group: 'Parcerias e campanhas',
-    subgroup: 'Matches e outreach',
-    keywords: 'creator match afinidade categoria score evidencia parceria',
-    path: '/creator-matches',
-    resource: 'creator_matches',
-    minPerfil: 'gerente',
-    description: 'Afinidade real entre creator, campanha e categoria, com score e evidência — sem recomendação fabricada.',
-  },
-  {
-    id: 'creator-outreach',
-    label: 'Outreach de creators',
-    icon: Mail,
-    space: 'creators',
-    area: 'Creators',
-    group: 'Parcerias e campanhas',
-    subgroup: 'Matches e outreach',
-    kind: 'subitem',
-    keywords: 'creator outreach contato mensagem canal rascunho resposta',
-    path: '/creator-outreach',
-    resource: 'creator_outreach',
-    minPerfil: 'gerente',
-    description: 'Registro do contato com o creator. O envio real depende de provedor homologado — aqui o estado é registrado sem simular entrega.',
-  },
-
-  // --------------------------------------------------------------------------
-  // ONDAS 4–5 / D3–D4 — DATA/BI e AI PLATFORM.
-  // --------------------------------------------------------------------------
-  {
-    id: 'bi-read-models',
-    label: 'Projeções de BI',
-    icon: BarChart3,
-    space: 'erp',
-    area: 'Meu Negócio',
-    group: 'Análises',
-    subgroup: 'Data e BI',
-    keywords: 'bi projecao read model receita margem pedidos clientes periodo dimensao metrica',
-    path: '/bi/projecoes',
-    resource: 'bi_read_models',
-    minPerfil: 'gerente',
-    description: 'Projeções reconstruídas dos documentos canônicos: empresa, origem, período, dimensão, métrica e timestamp.',
-  },
-  {
-    id: 'ai-providers',
-    label: 'Provedores de IA',
-    icon: Bot,
-    space: 'erp',
-    area: 'Administração',
-    group: 'Automações',
-    subgroup: 'Marketing e IA',
-    keywords: 'ia ai provider modelo limite custo fallback camada central',
-    path: '/ai/provedores',
-    resource: 'ai_providers',
-    minPerfil: 'admin',
-    description: 'Camada central de IA: provedor, modelo, limite de custo e fallback. Nenhuma integração de IA fora daqui.',
-  },
-  {
-    id: 'ai-prompts',
-    label: 'Prompts de IA',
-    icon: FileText,
-    space: 'erp',
-    area: 'Administração',
-    group: 'Automações',
-    subgroup: 'Marketing e IA',
-    kind: 'subitem',
-    keywords: 'ia ai prompt versao conteudo',
-    path: '/ai/prompts',
-    resource: 'ai_prompts',
-    minPerfil: 'admin',
-    description: 'Prompt versionado. A execução registra qual versão usou — versão nova não sobrescreve a antiga.',
-  },
-  {
-    id: 'ai-recommendations',
-    label: 'Recomendações de IA',
-    icon: Rocket,
-    space: 'erp',
-    area: 'Administração',
-    group: 'Automações',
-    subgroup: 'Marketing e IA',
-    kind: 'subitem',
-    keywords: 'ia ai recomendacao score evidencia decisao sales customer marketing inventory demand',
-    path: '/ai/recomendacoes',
-    resource: 'ai_recommendations',
-    minPerfil: 'gerente',
-    description: 'Recomendações com score e evidência. Nunca alteram estoque, pagamento, financeiro ou pedido — exigem decisão humana registrada.',
-  },
-  {
-    id: 'ai-executions',
-    label: 'Execuções de IA',
-    icon: Clock,
-    space: 'erp',
-    area: 'Administração',
-    group: 'Automações',
-    subgroup: 'Marketing e IA',
-    kind: 'subitem',
-    keywords: 'ia ai execucao custo estado fallback auditoria',
-    path: '/ai/execucoes',
-    resource: 'ai_executions',
-    minPerfil: 'gerente',
-    description: 'Registro auditável de cada execução: provedor, prompt, custo, estado e fallback.',
-  },
-
-  // --------------------------------------------------------------------------
-  // ONDAS 4–5 / D5 — DEMAND / SUPPLY / S&OP.
-  // --------------------------------------------------------------------------
-  {
-    id: 'demand-forecasts',
-    label: 'Previsão de demanda',
-    icon: TrendingUp,
-    space: 'erp',
-    area: 'Produção',
-    group: 'Planejamento',
-    subgroup: 'Demanda e suprimento',
-    keywords: 'demanda forecast previsao sazonalidade tendencia historico excecao',
-    path: '/demand/forecasts',
-    resource: 'demand_forecasts',
-    minPerfil: 'gerente',
-    description: 'Forecast derivado do histórico real de vendas: histórico, sazonalidade, tendência e exceção por produto e período.',
-  },
-  {
-    id: 'supply-plans',
-    label: 'Planos de suprimento',
-    icon: Package,
-    space: 'erp',
-    area: 'Produção',
-    group: 'Planejamento',
-    subgroup: 'Demanda e suprimento',
-    kind: 'subitem',
-    keywords: 'supply suprimento plano mrp necessidade demanda estoque reposicao',
-    path: '/supply/planos',
-    resource: 'supply_plans',
-    minPerfil: 'gerente',
-    description: 'DEMAND → SUPPLY PLAN → MRP. Necessidade = demanda − estoque atual; a execução gera ordens no MRP existente.',
-  },
-  {
-    id: 'sop-scenarios',
-    label: 'Cenários S&OP',
-    icon: Scale,
-    space: 'erp',
-    area: 'Produção',
-    group: 'Planejamento',
-    subgroup: 'Demanda e suprimento',
-    kind: 'subitem',
-    keywords: 'sop s&op cenario demanda capacidade impacto financeiro aprovacao',
-    path: '/sop/cenarios',
-    resource: 'sop_scenarios',
-    minPerfil: 'gerente',
-    description: 'DEMAND → SUPPLY → CAPACITY → FINANCIAL IMPACT → SCENARIO → APPROVAL, com aprovação registrada.',
-  },
-
-  // --------------------------------------------------------------------------
-  // ONDAS 4–5 / D6 — TMS e SUPPLIER COLLABORATION.
-  // --------------------------------------------------------------------------
-  {
+{
     id: 'envio-ocorrencias',
     label: 'Ocorrências de envio',
     icon: Truck,
@@ -1206,104 +908,181 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Ocorrências do TMS sobre o envio existente: atraso, avaria, extravio, tentativa e entrega. Não é um segundo OMS.',
   },
-  {
-    id: 'fornecedor-scorecards',
-    label: 'Scorecard de fornecedor',
-    icon: ClipboardCheck,
+{
+    id: 'devolucoes',
+    label: 'Devoluções e reversa',
+    icon: Repeat,
     space: 'erp',
-    area: 'Estoque & Suprimentos',
-    group: 'Compras',
-    subgroup: 'Fornecedores',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Devoluções',
+    keywords: 'pos-venda devolucoes logistica reversa trocas estorno',
+    path: '/devolucoes',
+    resource: 'devolucoes',
+    description: 'Solicitação → autorização → rastreio → recebimento → conferência. Só item em bom estado volta ao estoque. As ações disponíveis vêm do servidor.',
+  },
+{
+    id: 'service-tickets',
+    label: 'Atendimento',
+    icon: Headphones,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Atendimento ao cliente',
+    keywords: 'atendimento ticket chamado sla suporte reclamacao pos-venda service',
+    path: '/service/tickets',
+    resource: 'service_tickets',
+    minPerfil: 'gerente',
+    description: 'Tickets com categoria, prioridade, SLA, responsável e histórico. Vincula pedido, devolução e pagamento reais — não cria cobrança nem estorno.',
+  },
+{
+    id: 'service-painel',
+    label: 'Painel de atendimento',
+    icon: Gauge,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Atendimento ao cliente',
     kind: 'subitem',
-    keywords: 'fornecedor scorecard otif lead time qualidade entrega preco ocorrencia',
-    path: '/fornecedores/scorecards',
-    resource: 'fornecedor_scorecards',
+    keywords: 'atendimento indicadores sla estourado tempo medio resolucao',
+    path: '/service/painel',
     minPerfil: 'gerente',
-    description: 'Desempenho real do fornecedor no período: lead time, qualidade, entrega, OTIF, preço e ocorrências.',
+    description: 'Contagens por situação, tickets fora do SLA e tempo médio de resolução — calculados sobre os tickets reais da empresa.',
   },
-
-  // --------------------------------------------------------------------------
-  // ONDAS 4–5 / D7 — ENTERPRISE FINANCE / EPM.
-  // --------------------------------------------------------------------------
-  {
-    id: 'epm-budgets',
-    label: 'Orçamentos (EPM)',
-    icon: Calculator,
+{
+    id: 'service-sla',
+    label: 'Políticas de SLA',
+    icon: Timer,
     space: 'erp',
-    area: 'Financeiro',
-    group: 'Operação financeira',
-    subgroup: 'EPM e controle',
-    keywords: 'epm orcamento budget realizado variacao conta centro custo',
-    path: '/epm/orcamentos',
-    resource: 'epm_budgets',
-    minPerfil: 'gerente',
-    description: 'Orçado por conta e centro de custo existentes. O realizado vem do financeiro real; a variação é calculada, nunca digitada.',
-  },
-  {
-    id: 'epm-scenarios',
-    label: 'Cenários financeiros',
-    icon: PieChart,
-    space: 'erp',
-    area: 'Financeiro',
-    group: 'Operação financeira',
-    subgroup: 'EPM e controle',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Atendimento ao cliente',
     kind: 'subitem',
-    keywords: 'epm cenario forecast premissa receita custo resultado projecao',
-    path: '/epm/cenarios',
-    resource: 'epm_scenarios',
+    keywords: 'sla prazo resposta resolucao politica prioridade',
+    path: '/service/sla',
+    resource: 'service_sla_politicas',
     minPerfil: 'gerente',
-    description: 'Cenário de forecast com premissas e resultado projetado — complementa Budget × Actual × Variance.',
+    description: 'Prazo de resposta e de resolução por prioridade. O ticket copia os prazos vigentes ao ser aberto.',
   },
-  {
-    id: 'epm-assets',
-    label: 'Ativos',
-    icon: Building2,
+{
+    id: 'service-categorias',
+    label: 'Categorias de atendimento',
+    icon: Tags,
     space: 'erp',
-    area: 'Financeiro',
-    group: 'Operação financeira',
-    subgroup: 'EPM e controle',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Atendimento ao cliente',
     kind: 'subitem',
-    keywords: 'ativo imobilizado localizacao status manutencao valor depreciacao',
-    path: '/epm/ativos',
-    resource: 'epm_assets',
+    keywords: 'categoria atendimento classificacao ticket',
+    path: '/service/categorias',
+    resource: 'service_ticket_categorias',
     minPerfil: 'gerente',
-    description: 'Ativo imobilizado com localização, status e valor de aquisição/depreciação.',
+    description: 'Classificação do ticket. Alimenta os indicadores por categoria no painel.',
   },
-  {
-    id: 'epm-projects',
-    label: 'Projetos',
-    icon: Briefcase,
+{
+    id: 'customer-segments',
+    label: 'Segmentos de cliente',
+    icon: UsersRound,
     space: 'erp',
-    area: 'Financeiro',
-    group: 'Operação financeira',
-    subgroup: 'EPM e controle',
-    kind: 'subitem',
-    keywords: 'projeto orcamento custo real status cronograma tarefa etapa',
-    path: '/epm/projetos',
-    resource: 'epm_projects',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Customer 360 e CDP',
+    keywords: 'segmento segmentacao cdp rfv recencia frequencia valor cohort cliente',
+    path: '/customer-segments',
+    resource: 'customer_segments',
     minPerfil: 'gerente',
-    description: 'Projeto com orçamento, custo real, status e cronograma. As etapas ficam em Tarefas do projeto.',
+    description: 'Regras de segmentação avaliadas contra dados reais (recência, frequência, valor, consentimento). A contagem vem do servidor.',
   },
-  {
-    id: 'epm-project-tasks',
-    label: 'Tarefas do projeto',
-    icon: ClipboardList,
+{
+    id: 'customer-consents',
+    label: 'Consentimentos',
+    icon: ShieldCheck,
     space: 'erp',
-    area: 'Financeiro',
-    group: 'Operação financeira',
-    subgroup: 'EPM e controle',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Customer 360 e CDP',
     kind: 'subitem',
-    keywords: 'projeto tarefa etapa responsavel custo prazo status',
-    path: '/epm/tarefas',
-    resource: 'epm_project_tasks',
+    keywords: 'lgpd consentimento marketing comunicacao privacidade',
+    path: '/customer-consents',
+    resource: 'customer_consents',
     minPerfil: 'gerente',
-    description: 'Etapa/tarefa do projeto com responsável, custo, prazo e situação.',
+    description: 'Consentimento LGPD por cliente e finalidade. Comunicações só alcançam quem consentiu.',
   },
-
-  // ==========================================================================
-  // 4. ESTOQUE & SUPRIMENTOS (ERP CORE)
-  // ==========================================================================
-  {
+{
+    id: 'customer-preferences',
+    label: 'Preferências do cliente',
+    icon: Cog,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Customer 360 e CDP',
+    kind: 'subitem',
+    keywords: 'preferencia canal idioma cliente cdp',
+    path: '/customer-preferences',
+    resource: 'customer_preferences',
+    minPerfil: 'gerente',
+    description: 'Canal preferido, idioma e observações por cliente. Uma preferência por cliente.',
+  },
+{
+    id: 'loyalty-programs',
+    label: 'Programas de fidelidade',
+    icon: Coins,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Fidelidade e growth',
+    keywords: 'fidelidade loyalty pontos programa niveis resgate beneficio',
+    path: '/loyalty/programas',
+    resource: 'loyalty_programs',
+    minPerfil: 'gerente',
+    description: 'Programa de pontos com níveis e benefícios. O saldo é a soma dos movimentos — nunca um campo editável.',
+  },
+{
+    id: 'loyalty-movements',
+    label: 'Movimentos de pontos',
+    icon: History,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Fidelidade e growth',
+    kind: 'subitem',
+    keywords: 'fidelidade pontos credito resgate expiracao estorno extrato',
+    path: '/loyalty/movimentos',
+    resource: 'loyalty_movements',
+    minPerfil: 'gerente',
+    description: 'Crédito, resgate, expiração e estorno. Append-only e idempotente por chave — sem crédito duplicado.',
+  },
+{
+    id: 'loyalty-tiers',
+    label: 'Níveis de fidelidade',
+    icon: Layers,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Fidelidade e growth',
+    kind: 'subitem',
+    keywords: 'fidelidade nivel faixa pontos beneficio',
+    path: '/loyalty/niveis',
+    resource: 'loyalty_tiers',
+    minPerfil: 'gerente',
+    description: 'Faixas de pontos do programa e o benefício de cada faixa.',
+  },
+{
+    id: 'affiliate-commissions',
+    label: 'Comissões de afiliado',
+    icon: BadgeDollarSign,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Pós-venda',
+    subgroup: 'Fidelidade e growth',
+    kind: 'subitem',
+    keywords: 'afiliado affiliate comissao atribuicao tracking roi creator',
+    path: '/affiliate/comissoes',
+    resource: 'affiliate_commissions',
+    minPerfil: 'gerente',
+    description: 'Comissão derivada da atribuição real do pedido. Sem atribuição elegível não há comissão; a chave idempotente impede duplicidade.',
+  },
+{
     id: 'estoque',
     label: 'Estoque Físico',
     icon: Warehouse,
@@ -1315,7 +1094,7 @@ export const MODULES: Module[] = [
     path: '/estoque',
     description: 'Grade de saldo por produto × tamanho × local, com estoque mínimo.',
   },
-  {
+{
     id: 'movimentacoes',
     label: 'Movimentações',
     icon: ArrowLeftRight,
@@ -1328,7 +1107,7 @@ export const MODULES: Module[] = [
     resource: 'movimentacoes',
     description: 'Entradas, saídas, ajustes e transferências — cada lançamento atualiza o saldo.',
   },
-  {
+{
     id: 'inventario',
     label: 'Inventário',
     icon: ClipboardCheck,
@@ -1340,7 +1119,7 @@ export const MODULES: Module[] = [
     path: '/inventario',
     description: 'Contagem física e acerto de saldos. Abra uma contagem por local, digite as quantidades e gere os ajustes.',
   },
-  {
+{
     id: 'contagem-ciclica-abc',
     label: 'Contagem Cíclica ABC',
     icon: Repeat,
@@ -1355,7 +1134,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Contagem rotativa por classe ABC: classifica os itens pelo giro real do período e roda a contagem continuamente.',
   },
-  {
+{
     id: 'locais',
     label: 'Locais de Estoque',
     icon: Building2,
@@ -1369,7 +1148,7 @@ export const MODULES: Module[] = [
     resource: 'locais',
     description: 'Loja, expedição e facção onde as peças ficam guardadas.',
   },
-  {
+{
     id: 'transferencias-estoque',
     label: 'Transferências',
     icon: ArrowRightLeft,
@@ -1383,7 +1162,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Documento de transferência entre locais: solicitar, aprovar, expedir e receber — com rastro de cada evento.',
   },
-  {
+{
     id: 'reservas-estoque',
     label: 'Reservas de estoque',
     icon: PackageOpen,
@@ -1397,88 +1176,22 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Reservas, empenhos e bloqueios que reduzem o disponível sem movimentar o saldo físico.',
   },
-  {
-    id: 'compras',
-    label: 'Compras',
-    icon: ShoppingCart,
+{
+    id: 'fornecedor-scorecards',
+    label: 'Scorecard de fornecedor',
+    icon: ClipboardCheck,
     space: 'erp',
     area: 'Estoque & Suprimentos',
     group: 'Compras',
-    subgroup: 'Pedidos e negociação',
-    keywords: 'pedidos de compra suprimentos aquisicao insumos',
-    path: '/compras',
-    resource: 'compras',
-    description: 'Pedidos de compra de insumos; ao receber, os insumos entram no estoque.',
-  },
-  {
-    id: 'cotacoes-compra',
-    label: 'Cotação de compra',
-    icon: Scale,
-    space: 'erp',
-    area: 'Estoque & Suprimentos',
-    group: 'Compras',
-    subgroup: 'Pedidos e negociação',
-    keywords: 'cotacoes tomada de preco comparativo fornecedores',
-    path: '/cotacoes-compra',
-    resource: 'cotacoes_compra',
-    description: 'Peça preço a vários fornecedores, compare lado a lado e gere o pedido de compra uma única vez. Nenhum preço é estimado: item sem resposta bloqueia a decisão.',
-  },
-  {
-    id: 'compra-recebimentos',
-    label: 'Recebimentos de compra',
-    icon: Warehouse,
-    space: 'erp',
-    area: 'Estoque & Suprimentos',
-    group: 'Compras',
-    subgroup: 'Recebimentos',
+    subgroup: 'Fornecedores',
     kind: 'subitem',
-    keywords: 'recebimento parcial total entrada de mercadoria',
-    path: '/compra-recebimentos',
-    resource: 'compra_recebimentos',
-    description: 'Recebimentos parciais e totais dos pedidos de compra. O estoque sobe exatamente pelo recebido — nunca pelo pedido.',
-  },
-  {
-    id: 'importar-nfe-compra',
-    label: 'Importar NF-e de entrada',
-    icon: FileUp,
-    space: 'erp',
-    area: 'Estoque & Suprimentos',
-    group: 'Compras',
-    subgroup: 'Entrada por XML',
-    kind: 'acao',
-    keywords: 'xml nfe entrada nota fiscal fornecedor',
-    path: '/importar-nfe-compra',
+    keywords: 'fornecedor scorecard otif lead time qualidade entrega preco ocorrencia',
+    path: '/fornecedores/scorecards',
+    resource: 'fornecedor_scorecards',
     minPerfil: 'gerente',
-    description: 'Leia o XML da nota do fornecedor, confira o de-para dos SKUs e crie a compra já recebida. Validar não grava nada.',
+    description: 'Desempenho real do fornecedor no período: lead time, qualidade, entrega, OTIF, preço e ocorrências.',
   },
-  {
-    id: 'sugestao-compra',
-    label: 'Sugestão de compra',
-    icon: Calculator,
-    space: 'erp',
-    area: 'Estoque & Suprimentos',
-    group: 'Compras',
-    subgroup: 'Reposição',
-    keywords: 'reposicao necessidade de compra estoque minimo',
-    path: '/sugestao-compra',
-    minPerfil: 'gerente',
-    description: 'O que comprar a partir do estoque atual, mínimo e máximo, do consumo, dos pedidos em aberto e das compras em trânsito. Nunca gera pedido sozinha.',
-  },
-  {
-    id: 'depara-fornecedor',
-    label: 'De-Para de produtos',
-    icon: ArrowLeftRight,
-    space: 'erp',
-    area: 'Estoque & Suprimentos',
-    group: 'Compras',
-    subgroup: 'Parâmetros do fornecedor',
-    kind: 'subitem',
-    keywords: 'codigos do fornecedor associacao sku xml',
-    path: '/depara-fornecedor',
-    resource: 'produto_fornecedor_skus',
-    description: 'Traduz o código que o fornecedor usa na NF-e para o SKU interno do ERP. É só associação: não cria produto.',
-  },
-  {
+{
     id: 'homologacao-fornecedores',
     label: 'Homologação de fornecedores',
     icon: ShieldCheck,
@@ -1492,11 +1205,132 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Quem pode receber pedido de compra: estado de homologação, documentos com validade, trilha de decisões e desempenho calculado das compras reais.',
   },
-
-  // ==========================================================================
-  // 5. PRODUÇÃO (ERP CORE)
-  // ==========================================================================
-  {
+{
+    id: 'compras',
+    label: 'Compras',
+    icon: ShoppingCart,
+    space: 'erp',
+    area: 'Estoque & Suprimentos',
+    group: 'Compras',
+    subgroup: 'Pedidos e negociação',
+    keywords: 'pedidos de compra suprimentos aquisicao insumos',
+    path: '/compras',
+    resource: 'compras',
+    description: 'Pedidos de compra de insumos; ao receber, os insumos entram no estoque.',
+  },
+{
+    id: 'cotacoes-compra',
+    label: 'Cotação de compra',
+    icon: Scale,
+    space: 'erp',
+    area: 'Estoque & Suprimentos',
+    group: 'Compras',
+    subgroup: 'Pedidos e negociação',
+    keywords: 'cotacoes tomada de preco comparativo fornecedores',
+    path: '/cotacoes-compra',
+    resource: 'cotacoes_compra',
+    description: 'Peça preço a vários fornecedores, compare lado a lado e gere o pedido de compra uma única vez. Nenhum preço é estimado: item sem resposta bloqueia a decisão.',
+  },
+{
+    id: 'compra-recebimentos',
+    label: 'Recebimentos de compra',
+    icon: Warehouse,
+    space: 'erp',
+    area: 'Estoque & Suprimentos',
+    group: 'Compras',
+    subgroup: 'Recebimentos',
+    kind: 'subitem',
+    keywords: 'recebimento parcial total entrada de mercadoria',
+    path: '/compra-recebimentos',
+    resource: 'compra_recebimentos',
+    description: 'Recebimentos parciais e totais dos pedidos de compra. O estoque sobe exatamente pelo recebido — nunca pelo pedido.',
+  },
+{
+    id: 'importar-nfe-compra',
+    label: 'Importar NF-e de entrada',
+    icon: FileUp,
+    space: 'erp',
+    area: 'Estoque & Suprimentos',
+    group: 'Compras',
+    subgroup: 'Entrada por XML',
+    kind: 'acao',
+    keywords: 'xml nfe entrada nota fiscal fornecedor',
+    path: '/importar-nfe-compra',
+    minPerfil: 'gerente',
+    description: 'Leia o XML da nota do fornecedor, confira o de-para dos SKUs e crie a compra já recebida. Validar não grava nada.',
+  },
+{
+    id: 'sugestao-compra',
+    label: 'Sugestão de compra',
+    icon: Calculator,
+    space: 'erp',
+    area: 'Estoque & Suprimentos',
+    group: 'Compras',
+    subgroup: 'Reposição',
+    keywords: 'reposicao necessidade de compra estoque minimo',
+    path: '/sugestao-compra',
+    minPerfil: 'gerente',
+    description: 'O que comprar a partir do estoque atual, mínimo e máximo, do consumo, dos pedidos em aberto e das compras em trânsito. Nunca gera pedido sozinha.',
+  },
+{
+    id: 'depara-fornecedor',
+    label: 'De-Para de produtos',
+    icon: ArrowLeftRight,
+    space: 'erp',
+    area: 'Estoque & Suprimentos',
+    group: 'Compras',
+    subgroup: 'Parâmetros do fornecedor',
+    kind: 'subitem',
+    keywords: 'codigos do fornecedor associacao sku xml',
+    path: '/depara-fornecedor',
+    resource: 'produto_fornecedor_skus',
+    description: 'Traduz o código que o fornecedor usa na NF-e para o SKU interno do ERP. É só associação: não cria produto.',
+  },
+{
+    id: 'demand-forecasts',
+    label: 'Previsão de demanda',
+    icon: TrendingUp,
+    space: 'erp',
+    area: 'Produção',
+    group: 'Planejamento',
+    subgroup: 'Demanda e suprimento',
+    keywords: 'demanda forecast previsao sazonalidade tendencia historico excecao',
+    path: '/demand/forecasts',
+    resource: 'demand_forecasts',
+    minPerfil: 'gerente',
+    description: 'Forecast derivado do histórico real de vendas: histórico, sazonalidade, tendência e exceção por produto e período.',
+  },
+{
+    id: 'supply-plans',
+    label: 'Planos de suprimento',
+    icon: Package,
+    space: 'erp',
+    area: 'Produção',
+    group: 'Planejamento',
+    subgroup: 'Demanda e suprimento',
+    kind: 'subitem',
+    keywords: 'supply suprimento plano mrp necessidade demanda estoque reposicao',
+    path: '/supply/planos',
+    resource: 'supply_plans',
+    minPerfil: 'gerente',
+    description: 'DEMAND → SUPPLY PLAN → MRP. Necessidade = demanda − estoque atual; a execução gera ordens no MRP existente.',
+  },
+{
+    id: 'sop-scenarios',
+    label: 'Cenários S&OP',
+    icon: Scale,
+    space: 'erp',
+    area: 'Produção',
+    group: 'Planejamento',
+    subgroup: 'Demanda e suprimento',
+    kind: 'subitem',
+    keywords: 'sop s&op cenario demanda capacidade impacto financeiro aprovacao',
+    path: '/sop/cenarios',
+    resource: 'sop_scenarios',
+    minPerfil: 'gerente',
+    description: 'DEMAND → SUPPLY → CAPACITY → FINANCIAL IMPACT → SCENARIO → APPROVAL, com aprovação registrada.',
+  },
+{
     id: 'planejamento-producao',
     label: 'Planejamento de Produção',
     icon: Factory,
@@ -1508,7 +1342,7 @@ export const MODULES: Module[] = [
     path: '/planejamento-producao',
     description: 'Ordens planejadas por semana, atrasos e os insumos que faltam para cumprir o plano.',
   },
-  {
+{
     id: 'producao-recursos',
     label: 'Recursos de produção',
     icon: Factory,
@@ -1521,7 +1355,7 @@ export const MODULES: Module[] = [
     resource: 'producao_recursos',
     description: 'Onde a peça é feita: capacidade diária informada, eficiência e responsável. A carga e a ocupação são calculadas das ordens.',
   },
-  {
+{
     id: 'producao-capacidade',
     label: 'Capacidade e MRP',
     icon: BarChart3,
@@ -1534,7 +1368,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Ocupação por recurso, gargalo do período e MRP: o que falta produzir e comprar, cruzando vendas em aberto, estoque, OPs, ficha técnica e compras em aberto.',
   },
-  {
+{
     id: 'ordens',
     label: 'Ordens de Produção',
     icon: Cog,
@@ -1547,7 +1381,7 @@ export const MODULES: Module[] = [
     resource: 'ordens',
     description: 'Ordens de produção (OP): liberar, apontar produção e perdas, concluir, cancelar e reabrir.',
   },
-  {
+{
     id: 'terceiros-operacionais',
     label: 'Terceiros e facções',
     icon: Handshake,
@@ -1561,7 +1395,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Cadastro em página de facções/terceiros; as trilhas de envio/retorno ficam na OP e usam movimentações de insumo e apontamentos canônicos.',
   },
-  {
+{
     id: 'fichas',
     label: 'Ficha Técnica / BOM',
     icon: ClipboardList,
@@ -1574,7 +1408,7 @@ export const MODULES: Module[] = [
     resource: 'fichas',
     description: 'Mão de obra, custos indiretos e margem por produto.',
   },
-  {
+{
     id: 'custo',
     label: 'Custos',
     icon: Calculator,
@@ -1586,11 +1420,81 @@ export const MODULES: Module[] = [
     path: '/custo',
     description: 'Insumos + mão de obra + indiretos → preço de custo e preço sugerido de venda.',
   },
-
-  // ==========================================================================
-  // 6. FINANCEIRO (ERP CORE)
-  // ==========================================================================
-  {
+{
+    id: 'epm-budgets',
+    label: 'Orçamentos (EPM)',
+    icon: Calculator,
+    space: 'erp',
+    area: 'Financeiro',
+    group: 'Operação financeira',
+    subgroup: 'EPM e controle',
+    keywords: 'epm orcamento budget realizado variacao conta centro custo',
+    path: '/epm/orcamentos',
+    resource: 'epm_budgets',
+    minPerfil: 'gerente',
+    description: 'Orçado por conta e centro de custo existentes. O realizado vem do financeiro real; a variação é calculada, nunca digitada.',
+  },
+{
+    id: 'epm-scenarios',
+    label: 'Cenários financeiros',
+    icon: PieChart,
+    space: 'erp',
+    area: 'Financeiro',
+    group: 'Operação financeira',
+    subgroup: 'EPM e controle',
+    kind: 'subitem',
+    keywords: 'epm cenario forecast premissa receita custo resultado projecao',
+    path: '/epm/cenarios',
+    resource: 'epm_scenarios',
+    minPerfil: 'gerente',
+    description: 'Cenário de forecast com premissas e resultado projetado — complementa Budget × Actual × Variance.',
+  },
+{
+    id: 'epm-assets',
+    label: 'Ativos',
+    icon: Building2,
+    space: 'erp',
+    area: 'Financeiro',
+    group: 'Operação financeira',
+    subgroup: 'EPM e controle',
+    kind: 'subitem',
+    keywords: 'ativo imobilizado localizacao status manutencao valor depreciacao',
+    path: '/epm/ativos',
+    resource: 'epm_assets',
+    minPerfil: 'gerente',
+    description: 'Ativo imobilizado com localização, status e valor de aquisição/depreciação.',
+  },
+{
+    id: 'epm-projects',
+    label: 'Projetos',
+    icon: Briefcase,
+    space: 'erp',
+    area: 'Financeiro',
+    group: 'Operação financeira',
+    subgroup: 'EPM e controle',
+    kind: 'subitem',
+    keywords: 'projeto orcamento custo real status cronograma tarefa etapa',
+    path: '/epm/projetos',
+    resource: 'epm_projects',
+    minPerfil: 'gerente',
+    description: 'Projeto com orçamento, custo real, status e cronograma. As etapas ficam em Tarefas do projeto.',
+  },
+{
+    id: 'epm-project-tasks',
+    label: 'Tarefas do projeto',
+    icon: ClipboardList,
+    space: 'erp',
+    area: 'Financeiro',
+    group: 'Operação financeira',
+    subgroup: 'EPM e controle',
+    kind: 'subitem',
+    keywords: 'projeto tarefa etapa responsavel custo prazo status',
+    path: '/epm/tarefas',
+    resource: 'epm_project_tasks',
+    minPerfil: 'gerente',
+    description: 'Etapa/tarefa do projeto com responsável, custo, prazo e situação.',
+  },
+{
     id: 'financeiro',
     label: 'Financeiro',
     icon: Wallet,
@@ -1603,7 +1507,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Fluxo de caixa, receitas, despesas, custos, contas a receber/pagar e aportes de investidores.',
   },
-  {
+{
     id: 'lancamentos',
     label: 'Lançamentos',
     icon: Coins,
@@ -1617,7 +1521,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Livro-caixa: receitas, despesas, investimentos e estornos.',
   },
-  {
+{
     id: 'plano-contas',
     label: 'Plano de contas',
     icon: BookOpen,
@@ -1631,7 +1535,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Contas contábeis da empresa (código, natureza, sintética/analítica). Estrutura para a contabilidade — não é apuração de imposto.',
   },
-  {
+{
     id: 'balancete',
     label: 'Balancete',
     icon: BarChart3,
@@ -1644,7 +1548,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Débito e crédito por conta, competência e documento de origem — somando o MESMO livro-caixa, com o que está sem classificação à vista.',
   },
-  {
+{
     id: 'importacoes-contabeis',
     label: 'Importações contábeis',
     icon: FileUp,
@@ -1659,7 +1563,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Lotes de lançamentos contábeis importados do contador. As partidas entram no MESMO livro do financeiro, com a origem marcada.',
   },
-  {
+{
     id: 'contas-financeiras',
     label: 'Contas',
     icon: Landmark,
@@ -1673,7 +1577,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Caixa, banco, Pix, cartão e boleto.',
   },
-  {
+{
     id: 'transferencias',
     label: 'Transferências',
     icon: ArrowRightLeft,
@@ -1687,7 +1591,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Mova dinheiro entre contas (Caixa → Banco Inter, Mercado Pago → Banco Inter) sem poluir receitas e despesas.',
   },
-  {
+{
     id: 'comissoes',
     label: 'Comissões',
     icon: BadgeDollarSign,
@@ -1701,8 +1605,7 @@ export const MODULES: Module[] = [
     description:
       'Apuração por representante, efetivada conforme o recebimento da venda, com estornos e livro por venda.',
   },
-
-  {
+{
     id: 'planos_comissao',
     label: 'Planos de comissão',
     icon: BadgeDollarSign,
@@ -1716,7 +1619,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Política de comissão: vigência, base de cálculo e momento de efetivação.',
   },
-  {
+{
     id: 'regras_comissao',
     label: 'Regras de comissão',
     icon: Percent,
@@ -1730,7 +1633,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Regra por escopo com prioridade e vigência; a mais específica vence.',
   },
-  {
+{
     id: 'investidores',
     label: 'Investidores / Sócios',
     icon: PiggyBank,
@@ -1744,7 +1647,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Quem aporta capital, participação e distribuição de lucros.',
   },
-  {
+{
     id: 'aportes',
     label: 'Aportes',
     icon: Wallet,
@@ -1758,7 +1661,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Capital inicial, aportes, reinvestimento e empréstimo de sócio.',
   },
-  {
+{
     id: 'categorias-financeiras',
     label: 'Categorias',
     icon: CircleDollarSign,
@@ -1773,7 +1676,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Classificação dos lançamentos financeiros.',
   },
-  {
+{
     id: 'centros-custo',
     label: 'Centros de custo',
     icon: PieChart,
@@ -1788,7 +1691,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Rateio gerencial por área: Loja, Produção/Facção, Administrativo, Marketing.',
   },
-  {
+{
     id: 'recorrencias-financeiras',
     label: 'Recolhimentos e recorrências',
     icon: Repeat,
@@ -1803,12 +1706,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Despesas/receitas fixas: aluguel, energia, folha, facção, assinaturas — geradas automaticamente.',
   },
-
-
-  // ==========================================================================
-  // 7. FISCAL (ERP CORE)
-  // ==========================================================================
-  {
+{
     id: 'documentos-fiscais',
     label: 'Documentos fiscais',
     icon: FileText,
@@ -1821,7 +1719,7 @@ export const MODULES: Module[] = [
     resource: 'documentos_fiscais',
     description: 'NF-e e NFC-e emitidas, rejeitadas ou pendentes, com chave, protocolo e DANFE.',
   },
-  {
+{
     id: 'inutilizacoes',
     label: 'Inutilizações',
     icon: FileMinus,
@@ -1835,7 +1733,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Comunicação à SEFAZ das faixas de numeração que não serão usadas, com protocolo e status reais.',
   },
-  {
+{
     id: 'regras-fiscais',
     label: 'Regras fiscais',
     icon: Scale,
@@ -1849,7 +1747,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'CFOP, CST/CSOSN e alíquotas por NCM, UF e operação — sem alíquota escrita no código.',
   },
-  {
+{
     id: 'ncm',
     label: 'NCM / Tributação',
     icon: Calculator,
@@ -1863,8 +1761,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Alíquotas por NCM usadas pelo motor de impostos de cada venda: chave mais longa vence, chave vazia é a padrão.',
   },
-
-  {
+{
     id: 'fiscal-obrigacoes',
     label: 'Obrigações fiscais',
     icon: ClipboardCheck,
@@ -1878,7 +1775,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Regra de cada obrigação acessória da empresa: periodicidade, dia de vencimento e responsável. O vencimento de cada competência é calculado.',
   },
-  {
+{
     id: 'fiscal-calendario',
     label: 'Calendário fiscal',
     icon: CalendarClock,
@@ -1891,11 +1788,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'O que vence quando, o que está atrasado e a prova de cada entrega (protocolo e arquivo). O ERP controla prazo — não calcula imposto.',
   },
-
-  // ==========================================================================
-  // 8. ADMINISTRAÇÃO (ERP CORE)
-  // ==========================================================================
-  {
+{
     id: 'empresas',
     label: 'Empresas',
     icon: Building2,
@@ -1909,7 +1802,7 @@ export const MODULES: Module[] = [
     description:
       'Empresas do grupo: cadastro, situação, acessos por usuário. A empresa ativa da sessão é escolhida no seletor do topo.',
   },
-  {
+{
     id: 'usuarios',
     label: 'Usuários',
     icon: Users,
@@ -1923,7 +1816,7 @@ export const MODULES: Module[] = [
     description: 'Quem acessa o sistema, perfis de permissão e senhas.',
     adminOnly: true,
   },
-  {
+{
     id: 'auditoria',
     label: 'Auditoria',
     icon: History,
@@ -1937,7 +1830,7 @@ export const MODULES: Module[] = [
     description: 'Histórico de inclusões, alterações, exclusões e logins.',
     adminOnly: true,
   },
-  {
+{
     id: 'webhooks',
     label: 'Webhooks',
     icon: Webhook,
@@ -1950,11 +1843,7 @@ export const MODULES: Module[] = [
     description: 'Integrações: avise sistemas externos sobre eventos de usuários.',
     adminOnly: true,
   },
-
-  // ==========================================================================
-  // 9. COMMERCE — FORA DO ERP CORE
-  // ==========================================================================
-  {
+{
     id: 'conector-mercadolivre',
     label: 'Mercado Livre',
     icon: ShoppingBag,
@@ -1968,7 +1857,7 @@ export const MODULES: Module[] = [
     connector: 'MERCADOLIVRE',
     description: 'Conexão OAuth2 oficial com o Mercado Livre: importação de pedidos e sincronização de vendas.',
   },
-  {
+{
     id: 'conector-mercadopago',
     label: 'Mercado Pago',
     icon: CreditCard,
@@ -1982,7 +1871,7 @@ export const MODULES: Module[] = [
     connector: 'MERCADOPAGO',
     description: 'Checkout e faturamento via credenciais provisionadas no ambiente seguro do servidor.',
   },
-  {
+{
     id: 'conector-nuvemshop',
     label: 'Nuvemshop',
     icon: Cloud,
@@ -1997,7 +1886,7 @@ export const MODULES: Module[] = [
     description:
       'Plataforma-ponte do Hub: conexão OAuth2 oficial com a Nuvemshop para triangulação de vendas (catálogo e pedidos, inclusive os da vitrine do TikTok).',
   },
-  {
+{
     id: 'conector-instagram',
     label: 'Instagram Shopping',
     icon: Instagram,
@@ -2012,7 +1901,7 @@ export const MODULES: Module[] = [
     description:
       'Conexão direta com a Graph API da Meta: catálogo da sacolinha, webhook assinado de interações em tempo real e ingestão de pedido no canal INSTAGRAM_SHOPPING.',
   },
-  {
+{
     id: 'commerce-produtos',
     label: 'Produtos',
     icon: Package,
@@ -2025,7 +1914,7 @@ export const MODULES: Module[] = [
     resource: 'commerce_produtos',
     description: 'Catálogo omnichannel com preço por canal, disponibilidade canônica e publicação em cada canal.',
   },
-  {
+{
     id: 'commerce-publicacoes',
     label: 'Publicações',
     icon: Rocket,
@@ -2039,7 +1928,7 @@ export const MODULES: Module[] = [
     resource: 'commerce_publicacoes',
     description: 'Fila de publicação por canal com estados, versões idempotentes e erros reais das APIs externas.',
   },
-  {
+{
     id: 'commerce-loja',
     label: 'Loja própria',
     icon: Store,
@@ -2053,7 +1942,7 @@ export const MODULES: Module[] = [
     resource: 'commerce_configuracoes',
     description: 'Configuração da vitrine /loja: identidade, frete (FreightProvider), expiração do carrinho e responsável pelo checkout.',
   },
-  {
+{
     id: 'commerce-promocoes',
     label: 'Promoções',
     icon: Percent,
@@ -2067,7 +1956,7 @@ export const MODULES: Module[] = [
     resource: 'commerce_promocoes',
     description: 'Promoções automáticas por período e pedido mínimo no carrinho — sem acúmulo com cupom (maior desconto vence).',
   },
-  {
+{
     id: 'commerce-cupons',
     label: 'Cupons',
     icon: Receipt,
@@ -2081,7 +1970,7 @@ export const MODULES: Module[] = [
     resource: 'commerce_cupons',
     description: 'Cupons por código com validade, mínimo e limite de uso atômico — validados no servidor, no checkout.',
   },
-  {
+{
     id: 'commerce-pedidos',
     label: 'Pedidos',
     icon: ShoppingCart,
@@ -2094,7 +1983,7 @@ export const MODULES: Module[] = [
     resource: 'commerce_pedidos',
     description: 'Inbox único da loja própria e dos canais: pagamento, conversão para venda, itens, rastreio e linha do tempo.',
   },
-  {
+{
     id: 'commerce-delivery',
     label: '📦 Delivery',
     icon: Truck,
@@ -2107,7 +1996,7 @@ export const MODULES: Module[] = [
     resource: 'commerce_rastreio',
     description: 'Fila de envios com etapa de expedição, rastreio e SLA real de pós-faturamento.',
   },
-  {
+{
     id: 'commerce-fila',
     label: 'Fila & sync',
     icon: Repeat,
@@ -2121,7 +2010,7 @@ export const MODULES: Module[] = [
     resource: 'commerce_outbox',
     description: 'Outbox de conversões/publicações com backoff, erros de publicação recentes e webhooks de pagamento.',
   },
-  {
+{
     id: 'commerce-trends',
     label: 'Trends',
     icon: TrendingUp,
@@ -2134,11 +2023,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     description: 'Série diária real de pedidos e receita, tendência por mínimos quadrados e crescimento de SKUs por período.',
   },
-
-  // ==========================================================================
-  // 10. CREATORS — FORA DO ERP CORE
-  // ==========================================================================
-  {
+{
     id: 'creators',
     label: 'Creators',
     icon: Users,
@@ -2150,7 +2035,7 @@ export const MODULES: Module[] = [
     path: '/creators',
     description: 'Gerencie criadores, parceiros e oportunidades comerciais.',
   },
-  {
+{
     id: 'creator-matches',
     label: 'Matches',
     icon: Handshake,
@@ -2162,7 +2047,7 @@ export const MODULES: Module[] = [
     path: '/matches',
     description: 'Encontre oportunidades entre creators e campanhas.',
   },
-  {
+{
     id: 'outreach-ai',
     label: 'Outreach AI',
     icon: Bot,
@@ -2174,7 +2059,7 @@ export const MODULES: Module[] = [
     path: '/outreach-ai',
     description: 'Gerencie contatos, oportunidades e interações com creators.',
   },
-  {
+{
     id: 'campanhas',
     label: 'Campanhas',
     icon: Megaphone,
@@ -2186,11 +2071,7 @@ export const MODULES: Module[] = [
     path: '/campanhas',
     description: 'Planeje, acompanhe e gerencie campanhas com creators.',
   },
-
-  // ==========================================================================
-  // 11. UTILIDADES GLOBAIS
-  // ==========================================================================
-  {
+{
     id: 'config',
     label: 'Configurações',
     icon: Settings,
@@ -2202,7 +2083,7 @@ export const MODULES: Module[] = [
     path: '/config',
     description: 'Sua conta, senha, preferências e informações do sistema.',
   },
-  {
+{
     id: 'ajuda',
     label: 'Ajuda',
     icon: HelpCircle,

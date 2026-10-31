@@ -19,6 +19,8 @@ import type { Request, Response } from 'express';
 import { getResource } from '../resources';
 import { escopoDeSistema } from '../empresa';
 import { MAX_TENTATIVAS, backoffMs } from './regras';
+import { randomUUID } from 'node:crypto';
+import { log } from '../log';
 import type { Row, Tx } from '../store';
 
 const R_OUTBOX = () => getResource('commerce_outbox')!;
@@ -146,6 +148,10 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
  */
 export async function processarOutbox(limite = 10): Promise<{ processados: number; erros: number }> {
   const s = getStore();
+  // job_id correlaciona todas as linhas desta varredura; event_id identifica
+  // cada entrada. Nem o payload nem o segredo da integração entram no log.
+  const jobId = randomUUID();
+  const inicio = Date.now();
   const capacidade = Math.max(1, Math.min(100, Math.trunc(limite) || 10));
   const agora = Date.now();
   let candidatas: Row[];
@@ -222,9 +228,13 @@ export async function processarOutbox(limite = 10): Promise<{ processados: numbe
         proxima_tentativa_em: esgotou ? null : new Date(Date.now() + backoffMs(tentativas)).toISOString(),
         atualizado_em: new Date().toISOString(),
       });
-      if (esgotou && falha) erros += 1;
+      if (esgotou && falha) {
+        erros += 1;
+        log.error('outbox_entrada_esgotada', { job_id: jobId, event_id: Number(row.id), tipo: String(row.tipo), empresa_id: Number(row.empresa_id), tentativas, erro: mensagem });
+      }
     }
   }
+  log.info('outbox_varredura', { job_id: jobId, candidatas: candidatas.length, processados, erros, latencia_ms: Date.now() - inicio });
   return { processados, erros };
 }
 

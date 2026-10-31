@@ -71,6 +71,8 @@ const PaymentEnginePage = lazy(() => import('./pages/commerce/PaymentEnginePage'
 const PaymentPayoutsPage = lazy(() => import('./pages/commerce/PaymentPayoutsPage'));
 const PaymentDisputesPage = lazy(() => import('./pages/commerce/PaymentDisputesPage'));
 const CreatorsRecordsPage = lazy(() => import('./pages/creators/CreatorsRecordsPage'));
+const CreatorMatchesPage = lazy(() => import('./pages/creators/CreatorMatchesPage'));
+const CreatorOutreachPage = lazy(() => import('./pages/creators/CreatorOutreachPage'));
 const CommercePagamentosPage = lazy(() => import('./pages/commerce/PagamentosPage'));
 const CommerceReservasPage = lazy(() => import('./pages/commerce/ReservasPage'));
 const CommerceFulfillmentPage = lazy(() => import('./pages/commerce/FulfillmentPage'));
@@ -565,9 +567,19 @@ export default function App() {
             <Route path="campanhas/novo" element={<ModuleAccess moduleId="campanhas"><CreatorsRecordsPage kind="campaign" /></ModuleAccess>} />
             <Route path="campanhas/:id" element={<ModuleAccess moduleId="campanhas"><CreatorsRecordsPage kind="campaign" /></ModuleAccess>} />
             <Route path="campanhas/:id/editar" element={<ModuleAccess moduleId="campanhas"><CreatorsRecordsPage kind="campaign" /></ModuleAccess>} />
-            <Route path="matches/novo" element={<ModuleAccess moduleId="creator-matches"><CreatorsRecordsPage kind="partnership" /></ModuleAccess>} />
-            <Route path="matches/:id" element={<ModuleAccess moduleId="creator-matches"><CreatorsRecordsPage kind="partnership" /></ModuleAccess>} />
-            <Route path="matches/:id/editar" element={<ModuleAccess moduleId="creator-matches"><CreatorsRecordsPage kind="partnership" /></ModuleAccess>} />
+            {/* Matches = afinidades (creator_matches), com parcerias manuais em
+                sub-rota própria. LISTA → PÁGINA em ambas: nenhuma sobreposição. */}
+            <Route path="matches/novo" element={<ModuleAccess moduleId="creator-matches"><CreatorMatchesPage /></ModuleAccess>} />
+            <Route path="matches/:id" element={<ModuleAccess moduleId="creator-matches"><CreatorMatchesPage /></ModuleAccess>} />
+            <Route path="matches/:id/editar" element={<ModuleAccess moduleId="creator-matches"><CreatorMatchesPage /></ModuleAccess>} />
+            <Route path="matches/parcerias" element={<ModuleAccess moduleId="creator-matches"><CreatorsRecordsPage kind="partnership" /></ModuleAccess>} />
+            <Route path="matches/parcerias/novo" element={<ModuleAccess moduleId="creator-matches"><CreatorsRecordsPage kind="partnership" /></ModuleAccess>} />
+            <Route path="matches/parcerias/:id" element={<ModuleAccess moduleId="creator-matches"><CreatorsRecordsPage kind="partnership" /></ModuleAccess>} />
+            <Route path="matches/parcerias/:id/editar" element={<ModuleAccess moduleId="creator-matches"><CreatorsRecordsPage kind="partnership" /></ModuleAccess>} />
+            {/* Outreach = registro manual do contato (creator_outreach). */}
+            <Route path="outreach-ai/novo" element={<ModuleAccess moduleId="outreach-ai"><CreatorOutreachPage /></ModuleAccess>} />
+            <Route path="outreach-ai/:id" element={<ModuleAccess moduleId="outreach-ai"><CreatorOutreachPage /></ModuleAccess>} />
+            <Route path="outreach-ai/:id/editar" element={<ModuleAccess moduleId="outreach-ai"><CreatorOutreachPage /></ModuleAccess>} />
             {/* Painéis operacionais — APIs reais, dados reais, ZERO MODAL. */}
             <Route path="commerce/pagamentos/repasses" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />
             <Route path="commerce/pagamentos/repasses/novo" element={<ModuleAccess moduleId="commerce-pedidos"><PaymentPayoutsPage /></ModuleAccess>} />

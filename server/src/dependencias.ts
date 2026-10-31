@@ -300,6 +300,9 @@ export const REGRAS_RELACAO: RegraRelacao[] = [
   { alvo: '', tabela: 'territorios', tipo: 'operacional', politica: 'proteger', motivo: 'território comercial (a exclusão deixaria vínculos órfãos)' },
   // Marketing: evento de catálogo não é histórico do pedido.
   { alvo: 'vendas', tabela: 'catalogo_eventos', tipo: 'operacional', politica: 'seguir', motivo: 'evento de catálogo que originou o pedido' },
+  // Ondas 4–5: fidelidade e atendimento apontam para o pedido canônico.
+  { alvo: 'vendas', tabela: 'loyalty_movements', tipo: 'historico', politica: 'proteger', motivo: 'movimento de pontos de fidelidade originado no pedido' },
+  { alvo: 'vendas', tabela: 'service_tickets', tipo: 'historico', politica: 'proteger', motivo: 'ticket de atendimento vinculado ao pedido' },
 
   // ---- COMPRAS ------------------------------------------------------------
   { alvo: 'compras', tabela: 'itens_compra', tipo: 'composicao', politica: 'seguir' },
@@ -493,6 +496,10 @@ export const RELACOES_FK: RelacaoFkDeclarada[] = [
   // COMMERCE OS (0068) — pedido omnichannel e rastreio presos à venda convertida.
   { alvo: 'vendas', tabela: 'commerce_pedidos', colunas: ['venda_id'], acao: 'SET_NULL' },
   { alvo: 'vendas', tabela: 'commerce_rastreio', colunas: ['venda_id'], acao: 'NO_ACTION' },
+  // Ondas 4–5: o pedido faturado é a origem do crédito de fidelidade e do
+  // ticket de atendimento — vínculo histórico protegido, nunca apagado.
+  { alvo: 'vendas', tabela: 'loyalty_movements', colunas: ['venda_id'], acao: 'NO_ACTION' },
+  { alvo: 'vendas', tabela: 'service_tickets', colunas: ['venda_id'], acao: 'NO_ACTION' },
 
   // compras — todas as FKs de entrada
   { alvo: 'compras', tabela: 'itens_compra', colunas: ['compra_id'], acao: 'CASCADE' },

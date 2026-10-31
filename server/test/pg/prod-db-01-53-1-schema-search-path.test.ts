@@ -119,7 +119,14 @@ test('PROD-DB-01.5.3/hotfix — com current_schema() != schema das tabelas, a co
     await db2.connect();
     const sess = await db2.query(`SELECT current_schema() AS cs, current_setting('search_path') AS sp`);
     assert.equal(sess.rows[0].cs, role, 'current_schema() deve ser o schema da role (não public)');
-    assert.equal(sess.rows[0].sp, `${quotedRole}, public`);
+    // O Postgres guarda o search_path como string e, ao EXIBIR, omite as aspas
+    // de identificadores que não precisam delas (ex.: role `postgres`, que é
+    // não-reservada). Comparar com o texto exibido pelo próprio servidor evita
+    // depender dessa normalização — o que importa é o PRIMEIRO schema do path
+    // ser o da role, não a grafia das aspas.
+    const primeiroSchema = String(sess.rows[0].sp).split(',')[0].trim();
+    assert.equal(primeiroSchema.replaceAll('"', ''), role, 'o schema da role vem primeiro no search_path');
+    assert.ok(String(sess.rows[0].sp).includes('public'), 'public continua no search_path');
 
     // ----------------------------------------------------------------------
     // FIXTURE — o CASO EXATO de produção: produto_id=7, tamanho_id=5.

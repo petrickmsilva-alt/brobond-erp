@@ -163,6 +163,18 @@ jobs:
       # estoque ativo"). O runner cria um BANCO NOVO, sobe a API de verdade
       # (migrate + ensureAdmin automáticos, ZERO SQL manual) e roda o smoke
       # contra ela, devolvendo o código de saída do smoke.
+      # RECOVERY (D8): prova que o backup RESTAURA. Gera o SQL pelo MESMO
+      # gerador do endpoint, migra um banco-alvo vazio, aplica o arquivo e
+      # confere os marcadores — e reaplica para provar idempotência.
+      - name: Recovery — backup restaura em banco vazio (D8)
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          npm run recovery:check 2>&1 | tee /tmp/recovery.log || {
+            DIAG="$( { grep -E "❌|Error|error:|restauração|violates" /tmp/recovery.log | head -30; echo "--- cauda ---"; tail -30 /tmp/recovery.log; } | sed 's/%/%25/g' )"
+            echo "::error title=recovery falhou::${DIAG//$'\n'/%0A}"
+            exit 1
+          }
       - name: Smoke E2E contra PostgreSQL novo (gate ERP-03)
         if: ${{ !cancelled() }}
         run: |

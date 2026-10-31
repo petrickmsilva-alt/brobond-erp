@@ -61,6 +61,21 @@ export function toPayload(r: ResourceMeta, values: FormValues, editing: boolean)
       else if (!editing) out[f.name] = '';
       continue;
     }
+    if (f.type === 'json') {
+      // Vazio vira `null` (o servidor aceita). Texto é parseado; o payload
+      // leva o OBJETO (o store serializa com JSON.stringify) — o formulário
+      // só chega aqui depois de `validarFormulario` aprovar o JSON.
+      if (s === '') {
+        out[f.name] = null;
+        continue;
+      }
+      try {
+        out[f.name] = JSON.parse(s);
+      } catch {
+        out[f.name] = s;
+      }
+      continue;
+    }
     out[f.name] = s === '' ? null : s;
   }
   return out;
@@ -110,6 +125,16 @@ export function validarFormulario(
       errors[f.name] = 'Campo obrigatório';
     }
     if (f.type === 'password' && typeof v === 'string' && v && f.min && v.length < f.min) errors[f.name] = `Mínimo de ${f.min} caracteres`;
+    // JSON: vazio é permitido; valor preenchido precisa ser JSON válido (o
+    // servidor guarda a coluna JSONB — texto inválido seria recusado lá, mas
+    // aqui o erro aparece antes, junto do campo).
+    if (f.type === 'json' && typeof v === 'string' && v.trim() !== '') {
+      try {
+        JSON.parse(v);
+      } catch {
+        errors[f.name] = 'JSON inválido — confira a sintaxe';
+      }
+    }
     // HEX: vazio é permitido pelo contrato; valor preenchido precisa ser
     // #RRGGBB. Inválido NÃO vai para a API (o servidor recusaria de qualquer
     // forma — aqui o erro aparece antes, no campo certo).
@@ -507,6 +532,30 @@ function FieldInput({
             </button>
           )}
         </div>
+        {help}
+      </div>
+    );
+  }
+
+  if (f.type === 'json') {
+    // Editor de coluna JSONB: o valor é texto JSON (objeto/lista). Vazio é
+    // permitido; inválido é barrado em `validarFormulario` antes de chegar aqui.
+    const texto = String(value ?? '');
+    const valido = texto.trim() === '' || (() => { try { JSON.parse(texto); return true; } catch { return false; } })();
+    return (
+      <div>
+        {label}
+        <textarea
+          id={id}
+          className={`${cls} min-h-[120px] font-mono text-xs`}
+          value={texto}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={f.placeholder ?? '{\n  "chave": "valor"\n}'}
+          disabled={disabled}
+          autoFocus={autoFocus}
+          spellCheck={false}
+          aria-invalid={error || !valido ? true : undefined}
+        />
         {help}
       </div>
     );

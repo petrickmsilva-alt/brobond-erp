@@ -10,10 +10,13 @@ import { checkAccess, getStore } from './services';
 import type { Row, Tx } from './store';
 import { diaCivil } from './fuso';
 import { domainLock } from './domainLock';
-import { R_CREATORS, R_CREATOR_CAMPAIGNS, R_CREATOR_PARTNERSHIPS, R_CREATOR_ATTRIBUTIONS, R_CREATOR_COMMANDS } from './creatorsResources';
+import { R_CREATORS, R_CREATOR_CAMPAIGNS, R_CREATOR_PARTNERSHIPS, R_CREATOR_ATTRIBUTIONS, R_CREATOR_MATCHES, R_CREATOR_OUTREACH, R_CREATOR_COMMANDS } from './creatorsResources';
 
-type Entity = 'profile' | 'campaign' | 'partnership';
-const resources: Record<Entity, Resource> = { profile: R_CREATORS, campaign: R_CREATOR_CAMPAIGNS, partnership: R_CREATOR_PARTNERSHIPS };
+type Entity = 'profile' | 'campaign' | 'partnership' | 'match' | 'outreach';
+const resources: Record<Entity, Resource> = {
+  profile: R_CREATORS, campaign: R_CREATOR_CAMPAIGNS, partnership: R_CREATOR_PARTNERSHIPS,
+  match: R_CREATOR_MATCHES, outreach: R_CREATOR_OUTREACH,
+};
 function actorOf(req: Request, manage = false) {
   const actor = currentUser(req);
   if (!actor) throw new HttpError(401, 'Autenticação necessária.');
@@ -27,8 +30,8 @@ export function capacidadesCreators(req: Request, res: Response) {
   res.setHeader('Cache-Control', 'private, no-store');
   res.json({ empresa_id: empresaId, modulos: {
     creators: { estado: 'ATIVO', fonte: 'creator_profiles', consulta: true, criacao: manage },
-    'creator-matches': { estado: 'ATIVO_MANUAL', fonte: 'creator_partnerships', consulta: true, criacao: manage, recomendacao: false },
-    'outreach-ai': { estado: 'PENDENTE_DE_CONFIGURACAO', motivo: 'PERSISTENCIA_NAO_INSTALADA', fonte: null, consulta: false, geracao: false, envio: false },
+    'creator-matches': { estado: 'ATIVO_MANUAL', fonte: 'creator_matches', consulta: true, criacao: manage, recomendacao: false },
+    'outreach-ai': { estado: 'ATIVO_MANUAL', fonte: 'creator_outreach', consulta: true, criacao: manage, geracao: false, envio: false, motivo: 'ENVIO_DEPENDE_DE_PROVEDOR_HOMOLOGADO' },
     campanhas: { estado: 'ATIVO', fonte: 'creator_campaigns', consulta: true, criacao: manage },
   } });
 }
@@ -71,10 +74,37 @@ function bodyFor(entity: Entity, b: Record<string, unknown>, creating: boolean) 
     if (!['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETED'].includes(status)) throw new HttpError(400, 'Situação inválida.');
     return { name, objective, starts_on, ends_on, status };
   }
-  if (creating) return { creator_id: id(b.creator_id), campaign_id: id(b.campaign_id), coupon_id: b.coupon_id == null || b.coupon_id === '' ? null : id(b.coupon_id), status: 'PLANNED' };
+  if (entity === 'partnership') {
+    if (creating) return { creator_id: id(b.creator_id), campaign_id: id(b.campaign_id), coupon_id: b.coupon_id == null || b.coupon_id === '' ? null : id(b.coupon_id), status: 'PLANNED' };
+    const status = text(b.status, 'Situação', 3, 20);
+    if (!['PLANNED', 'ACTIVE', 'PAUSED', 'ENDED'].includes(status)) throw new HttpError(400, 'Situação inválida.');
+    return { status };
+  }
+  if (entity === 'match') {
+    // A afinidade é REGISTRADA por uma pessoa (não gerada por algoritmo). O
+    // score é informado explicitamente e a evidência é o lastro factual.
+    const status = text(b.status, 'Situação', 3, 20);
+    if (!['sugerido', 'aceito', 'descartado'].includes(status)) throw new HttpError(400, 'Situação inválida.');
+    if (!creating) return { status };
+    const evidencia = b.evidencia == null || b.evidencia === '' ? {} : b.evidencia;
+    if (typeof evidencia !== 'object' || Array.isArray(evidencia)) throw new HttpError(400, 'Evidência inválida.');
+    const score = b.score == null || b.score === '' ? 0 : Number(b.score);
+    if (!Number.isFinite(score) || score < 0) throw new HttpError(400, 'Score inválido.');
+    return { creator_id: id(b.creator_id), campaign_id: b.campaign_id == null || b.campaign_id === '' ? null : id(b.campaign_id),
+      categoria_id: b.categoria_id == null || b.categoria_id === '' ? null : id(b.categoria_id), score, evidencia, status };
+  }
+  // outreach
   const status = text(b.status, 'Situação', 3, 20);
-  if (!['PLANNED', 'ACTIVE', 'PAUSED', 'ENDED'].includes(status)) throw new HttpError(400, 'Situação inválida.');
-  return { status };
+  if (!['rascunho', 'enviado', 'respondido', 'sem_resposta'].includes(status)) throw new HttpError(400, 'Situação inválida.');
+  if (!creating) return { status, ...(status === 'enviado' ? { enviado_em: new Date().toISOString() } : {}), ...(status === 'respondido' ? { respondido_em: new Date().toISOString() } : {}) };
+  const canal = text(b.canal, 'Canal', 3, 20);
+  if (!['email', 'whatsapp', 'instagram', 'telefone', 'outro'].includes(canal)) throw new HttpError(400, 'Canal inválido.');
+  const assunto = b.assunto == null || b.assunto === '' ? null : text(b.assunto, 'Assunto', 1, 160);
+  const mensagem = b.mensagem == null || b.mensagem === '' ? null : text(b.mensagem, 'Mensagem', 1, 4000);
+  // O envio REAL depende de provedor homologado: registrar "enviado" aqui é o
+  // humano afirmando que contatou por fora — nunca uma entrega simulada.
+  return { creator_id: id(b.creator_id), partnership_id: b.partnership_id == null || b.partnership_id === '' ? null : id(b.partnership_id),
+    canal, assunto, mensagem, status, ...(status === 'enviado' ? { enviado_em: new Date().toISOString() } : {}), ...(status === 'respondido' ? { enviado_em: new Date().toISOString(), respondido_em: new Date().toISOString() } : {}) };
 }
 const transitions: Record<string, string[]> = {
   DRAFT: ['DRAFT', 'ACTIVE'], ACTIVE: ['ACTIVE', 'PAUSED', 'COMPLETED', 'ENDED'], PAUSED: ['PAUSED', 'ACTIVE', 'COMPLETED', 'ENDED'],
@@ -131,13 +161,46 @@ export function createCreatorsEntity(entity: Entity) { return async (req: Reques
         if (await s.findOneWhere(R_CREATOR_PARTNERSHIPS, { empresa_id: empresaId, coupon_id: p.coupon_id }, tx)) throw new HttpError(409, 'Cupom já pertence a outra parceria.');
       }
     }
+    if (entity === 'match') {
+      const m = data as { creator_id: number; campaign_id: number | null; categoria_id: number | null };
+      await find(empresaId, 'profile', m.creator_id, tx);
+      if (m.campaign_id) await find(empresaId, 'campaign', m.campaign_id, tx);
+      if (m.categoria_id) {
+        const categoria = await s.findOneWhere(getResource('categorias')!, { id: m.categoria_id }, tx);
+        if (!categoria) throw new HttpError(404, 'Categoria não encontrada.');
+      }
+      if (await s.findOneWhere(R_CREATOR_MATCHES, { empresa_id: empresaId, creator_id: m.creator_id, campaign_id: m.campaign_id }, tx))
+        throw new HttpError(409, 'Já existe um match deste creator para esta campanha.');
+    }
+    if (entity === 'outreach') {
+      const o = data as { creator_id: number; partnership_id: number | null };
+      await find(empresaId, 'profile', o.creator_id, tx);
+      if (o.partnership_id) {
+        const partnership = await find(empresaId, 'partnership', o.partnership_id, tx);
+        if (Number(partnership.creator_id) !== o.creator_id) throw new HttpError(409, 'A parceria não pertence a este creator.');
+      }
+    }
     const now = new Date().toISOString();
+    if (entity === 'match') return s.insert(resources[entity], { empresa_id: empresaId, ...data, criado_em: now }, tx);
+    if (entity === 'outreach') return s.insert(resources[entity], { empresa_id: empresaId, ...data, criado_por: actorId, criado_em: now }, tx);
     return s.insert(resources[entity], { empresa_id: empresaId, ...data, version: 0, created_by: actorId, updated_by: actorId, created_at: now, updated_at: now }, tx);
   });
   noCache(res); res.status(result.idempotente ? 200 : 201).json(result);
 }; }
 export function updateCreatorsEntity(entity: Entity) { return async (req: Request, res: Response) => {
-  const entityId = id(req.params.id); const v = version(req.body?.expected_version); const data = bodyFor(entity, req.body || {}, false); const s = getStore();
+  const entityId = id(req.params.id); const s = getStore();
+  // MATCH/OUTREACH não têm coluna `version` (não são documentos com concorrência
+  // otimista): a atualização muda apenas o estado, validado por domínio.
+  if (entity === 'match' || entity === 'outreach') {
+    const data = bodyFor(entity, req.body || {}, false);
+    const result = await command(req, entity, { operation: 'update', entityId, data }, async (empresaId, actorId, tx) => {
+      const old = await find(empresaId, entity, entityId, tx);
+      if (entity === 'match' && old.status === 'descartado' && data.status !== 'descartado') throw new HttpError(409, 'Match descartado não pode ser reaberto.');
+      return (await s.update(resources[entity], entityId, { ...data, atualizado_em: new Date().toISOString() }, tx)) ?? old;
+    });
+    noCache(res); res.json(result); return;
+  }
+  const v = version(req.body?.expected_version); const data = bodyFor(entity, req.body || {}, false);
   const result = await command(req, entity, { operation: 'update', entityId, expected_version: v, data }, async (empresaId, actorId, tx) => {
     const old = await find(empresaId, entity, entityId, tx);
     if (Number(old.version || 0) !== v) throw new HttpError(409, 'Registro mudou; atualize antes de salvar.');

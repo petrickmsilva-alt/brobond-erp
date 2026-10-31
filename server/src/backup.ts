@@ -27,6 +27,19 @@ async function colunasDaTabela(tabela: string): Promise<string[]> {
   return res.rows.map((r: any) => String(r.column_name));
 }
 
+/**
+ * Gera o SQL de backup (o mesmo conteúdo servido por GET /api/admin/backup).
+ * Extraído do handler para que o script de recuperação (`scripts/recovery-check.mjs`)
+ * prove que o arquivo gerado RESTAURA — backup que nunca foi restaurado é fé, não
+ * evidência.
+ */
+export async function gerarBackupSql(usuario: string): Promise<string> {
+  const { pool } = await import('./db');
+  if (!pool) throw new HttpError(503, 'Banco indisponível.');
+  const tabelas = Array.from(new Set(Object.values(RESOURCES).map((r) => r.table))).sort();
+  return montarBackupSql(pool, tabelas, usuario);
+}
+
 export async function adminBackup(req: Request, res: Response) {
   const actor = currentUser(req);
   if (actor.perfil !== 'admin') throw new HttpError(403, 'Somente administradores fazem backup.');
@@ -38,23 +51,84 @@ export async function adminBackup(req: Request, res: Response) {
   if (!pool) throw new HttpError(503, 'Banco indisponível.');
 
   const tabelas = Array.from(new Set(Object.values(RESOURCES).map((r) => r.table))).sort();
+  const sql = await montarBackupSql(pool, tabelas, actor.name);
+  const data = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Type', 'application/sql; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="brobond-backup-${data}.sql"`);
+  res.end(sql);
+}
+
+/**
+ * Monta o SQL de backup/restauração. O arquivo é AUTO-CONTIDO: além dos
+ * INSERTs, traz o TRUNCATE de cada tabela em ordem reversa de dependência, de
+ * modo que aplicá-lo num banco já migrado (mas vazio) restaura o estado sem
+ * violar FK — e reaplicá-lo é idempotente (recomeça do zero). As colunas
+ * secretas (`senha_hash`, `mfa_secret`, tokens) ficam FORA, por política.
+ */
+/**
+ * Ordena tabelas por dependência de FK (mães antes das filhas) usando as FKs
+ * reais do catálogo. Ciclos (auto-referência ou mútuos) são resolvidos mantendo
+ * a ordem de descoberta — a reinserção ainda funciona porque os ciclos reais
+ * deste schema são anuláveis e o Postgres valida a FK no fim da instrução.
+ */
+async function ordemPorDependencia(pool: any, tabelas: string[]): Promise<string[]> {
+  const alvo = new Set(tabelas);
+  const { rows } = await pool.query(
+    `SELECT c.conrelid::regclass::text AS filha, c.confrelid::regclass::text AS mae
+       FROM pg_constraint c
+      WHERE c.contype = 'f'`
+  );
+  const arestas = rows
+    .map((r: any) => ({ filha: String(r.filha).replace(/^public\./, '').replace(/"/g, ''), mae: String(r.mae).replace(/^public\./, '').replace(/"/g, '') }))
+    .filter((e: any) => alvo.has(e.filha) && alvo.has(e.mae) && e.filha !== e.mae);
+  const visitado = new Set<string>();
+  const ordenado: string[] = [];
+  const visitar = (t: string) => {
+    if (visitado.has(t)) return;
+    visitado.add(t);
+    for (const e of arestas.filter((a: any) => a.filha === t)) visitar(e.mae);
+    ordenado.push(t);
+  };
+  for (const t of [...tabelas].sort()) visitar(t);
+  return ordenado;
+}
+
+async function montarBackupSql(pool: any, tabelas: string[], usuario: string): Promise<string> {
   const linhas: string[] = [];
   linhas.push('-- ============================================');
   linhas.push('-- BROBOND ERP — backup automático');
-  linhas.push(`-- Gerado em: ${new Date().toISOString()} por ${actor.name}`);
-  linhas.push('-- Aplicar:  psql "$DATABASE_URL" -f este-arquivo');
+  linhas.push(`-- Gerado em: ${new Date().toISOString()} por ${usuario}`);
+  linhas.push('-- Aplicar num banco já migrado:  psql "$DATABASE_URL" -f este-arquivo');
+  linhas.push('-- O arquivo TRUNCA e reinsere (restauração idempotente).');
   linhas.push('-- (fotos ficam fora: use UPLOAD_PROVIDER=cloudinary ou o banco guarda as suas)');
   linhas.push('-- ============================================');
   linhas.push('BEGIN;');
 
+  // Coleta primeiro (um SELECT por tabela) para saber quais têm linhas.
+  const conteudo: { tabela: string; colunas: string[]; rows: any[] }[] = [];
   for (const tabela of tabelas) {
     const colunas = (await colunasDaTabela(tabela)).filter((c) => !EXCLUIR_COLUNAS.has(c));
     if (!colunas.length) continue;
     const resQ = await pool.query(`SELECT ${colunas.map((c) => `"${c}"`).join(', ')} FROM "${tabela}"`);
     if (!resQ.rows.length) continue;
+    conteudo.push({ tabela, colunas, rows: resQ.rows });
+  }
+  // Ordena as tabelas de acordo com as FKs REAIS (mães antes das filhas), para
+  // que a reinserção não esbarre em constraint. A ordem alfabética não serve:
+  // `crm_funis` < `empresas`, mas a filha não pode vir antes da mãe.
+  const ordem = await ordemPorDependencia(pool, conteudo.map((c) => c.tabela));
+  const conteudoOrdenado = ordem.map((t) => conteudo.find((c) => c.tabela === t)!).filter(Boolean);
+
+  // Limpa com TRUNCATE ... CASCADE: uma única instrução que resolve a teia de
+  // FKs sem depender de ordem, e é idempotente na reaplicação.
+  linhas.push('');
+  linhas.push('-- Limpeza: restauração idempotente (reaplicar não duplica).');
+  linhas.push(`TRUNCATE TABLE ${conteudoOrdenado.map((c) => `"${c.tabela}"`).join(', ')} CASCADE;`);
+
+  for (const { tabela, colunas, rows } of conteudoOrdenado) {
     linhas.push('');
-    linhas.push(`-- ${tabela}: ${resQ.rows.length} registro(s)`);
-    for (const row of resQ.rows) {
+    linhas.push(`-- ${tabela}: ${rows.length} registro(s)`);
+    for (const row of rows) {
       const valores = colunas.map((c) => {
         const v = row[c];
         if (v === null || v === undefined) return 'NULL';
@@ -70,10 +144,7 @@ export async function adminBackup(req: Request, res: Response) {
   }
   linhas.push('');
   linhas.push('COMMIT;');
-  const data = new Date().toISOString().slice(0, 10);
-  res.setHeader('Content-Type', 'application/sql; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="brobond-backup-${data}.sql"`);
-  res.end(linhas.join('\n'));
+  return linhas.join('\n');
 }
 
 /** GET /api/admin/backup/info — resumo para a tela de Configurações. */

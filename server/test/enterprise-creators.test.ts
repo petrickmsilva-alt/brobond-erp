@@ -56,3 +56,34 @@ test('creators: parceria manual atribui somente cupom aplicado e nunca expõe co
   assert.equal(deleted.get().body.desativado, true); assert.equal((await s.get(getResource('commerce_cupons')!, coupon.id))?.ativo, false);
   assert.equal((await s.get(R_CREATOR_PARTNERSHIPS, partner.body.row.id))?.coupon_id, coupon.id);
 });
+
+test('creators: match e outreach são registros REAIS, idempotentes e isolados por empresa', async () => {
+  const s = getStore();
+  const p = await create('profile', { name: 'Creator Match', platform: 'YOUTUBE', handle: 'match.teste' }, 'match-profile-01');
+  const campData = { name: 'Campanha Match', objective: 'Afinidade editorial', starts_on: '2020-01-01', ends_on: '2099-12-31' };
+  const c = await create('campaign', campData, 'match-campaign-01');
+  const categoria = await s.insert(getResource('categorias')!, { nome: 'Vestidos' });
+
+  // Match: a afinidade é registrada por uma pessoa com score e evidência.
+  const matchData = { creator_id: p.body.row.id, campaign_id: c.body.row.id, categoria_id: categoria.id, score: 7.5, evidencia: { publicos: ['moda', 'verao'] }, status: 'sugerido' };
+  const m = await create('match', matchData, 'match-key-0001'); assert.equal(m.status, 201);
+  assert.equal(m.body.row.score, 7.5); assert.equal(m.body.row.status, 'sugerido');
+  const replay = await create('match', matchData, 'match-key-0001'); assert.equal(replay.body.idempotente, true); assert.equal(replay.body.row.id, m.body.row.id);
+  // Duplicidade real (creator × campanha) é recusada, não silenciada.
+  await assert.rejects(() => create('match', matchData, 'match-key-0002'), (e: any) => e.status === 409);
+  // Isolamento por empresa: outra empresa não enxerga o match.
+  await assert.rejects(() => detailCreatorsEntity('match')(req({}, { id: m.body.row.id }, '', { ...actor, empresa_id: 2, empresas: [2] }), res().out), (e: any) => e.status === 404);
+  // Operador não cria (RBAC de escrita espelhado no servidor).
+  await assert.rejects(() => create('match', matchData, 'match-key-0003', { ...actor, perfil: 'operador' }), (e: any) => e.status === 403);
+
+  // Outreach: registro manual do contato. Não há geração nem envio simulados.
+  const outreachData = { creator_id: p.body.row.id, canal: 'email', assunto: 'Convite', mensagem: 'Olá, temos uma campanha.', status: 'rascunho' };
+  const o = await create('outreach', outreachData, 'outreach-key-001'); assert.equal(o.status, 201);
+  assert.equal(o.body.row.status, 'rascunho'); assert.equal(o.body.row.enviado_em, null);
+  // Transição para "enviado" grava o carimbo do humano que afirmou contatar.
+  const sent = await update('outreach', o.body.row.id, { status: 'enviado' }, 'outreach-key-002');
+  assert.equal(sent.body.row.status, 'enviado'); assert.ok(sent.body.row.enviado_em);
+  await assert.rejects(() => create('outreach', { ...outreachData, canal: 'pombo' }, 'outreach-key-003'), (e: any) => e.status === 400);
+  const lista = res(); await listCreatorsEntity('outreach')(req({}, {}, '', { ...actor, perfil: 'operador' }), lista.out);
+  assert.equal(lista.get().body.total, 1);
+});

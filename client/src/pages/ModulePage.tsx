@@ -101,8 +101,9 @@ const LogisticaPage = lazy(() => import('./LogisticaPage'));
 const UsuariosPage = lazy(() => import('./UsuariosPage'));
 const WebhooksPage = lazy(() => import('./WebhooksPage'));
 const ConectorPage = lazy(() => import('./ConectorPage'));
-const CreatorsModulePage = lazy(() => import('./creators/CreatorsModulePage'));
 const CreatorsRecordsPage = lazy(() => import('./creators/CreatorsRecordsPage'));
+const CreatorMatchesPage = lazy(() => import('./creators/CreatorMatchesPage'));
+const CreatorOutreachPage = lazy(() => import('./creators/CreatorOutreachPage'));
 const CommerceModulePage = lazy(() => import('./CommerceModulePage'));
 const NcmPage = lazy(() => import('./NcmPage'));
 const ComissoesPage = lazy(() => import('./ComissoesPage'));
@@ -147,8 +148,10 @@ export default function ModulePage({ module }: { module: Module }) {
 
   if (module.connector) return <Suspense fallback={<SubPageLoading />}><ConectorPage module={module} /></Suspense>;
   if (module.space === 'creators') {
-    const kind = module.id === 'creators' ? 'profile' : module.id === 'campanhas' ? 'campaign' : module.id === 'creator-matches' ? 'partnership' : null;
-    return <Suspense fallback={<SubPageLoading />}>{kind ? <CreatorsRecordsPage kind={kind} /> : <CreatorsModulePage module={module} />}</Suspense>;
+    if (module.id === 'creator-matches') return <Suspense fallback={<SubPageLoading />}><CreatorMatchesPage /></Suspense>;
+    if (module.id === 'outreach-ai') return <Suspense fallback={<SubPageLoading />}><CreatorOutreachPage /></Suspense>;
+    const kind = module.id === 'creators' ? 'profile' : 'campaign';
+    return <Suspense fallback={<SubPageLoading />}><CreatorsRecordsPage kind={kind} /></Suspense>;
   }
   if (module.space === 'commerce') {
     return <Suspense fallback={<SubPageLoading />}><CommerceModulePage module={module} /></Suspense>;

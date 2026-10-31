@@ -41,12 +41,16 @@ describe('Creators — capacidades, identidade e escopo', () => {
         assert.ok(!('total' in capability));
       }
       assert.equal(body.modulos['creator-matches'].recomendacao, false);
+      // Outreach: registro MANUAL do contato (creator_outreach) — a persistência
+      // existe, mas a GERAÇÃO e o ENVIO continuam desligados até haver provedor
+      // homologado. Honestidade: nada é simulado.
       const outreach = body.modulos['outreach-ai'];
-      assert.equal(outreach.estado, 'PENDENTE_DE_CONFIGURACAO');
-      assert.equal(outreach.motivo, 'PERSISTENCIA_NAO_INSTALADA');
-      assert.equal(outreach.fonte, null);
-      assert.equal(outreach.consulta, false);
-      assert.ok(!Object.values(outreach).includes(true));
+      assert.equal(outreach.estado, 'ATIVO_MANUAL');
+      assert.equal(outreach.fonte, 'creator_outreach');
+      assert.equal(outreach.consulta, true);
+      assert.equal(outreach.geracao, false);
+      assert.equal(outreach.envio, false);
+      assert.equal(outreach.motivo, 'ENVIO_DEPENDE_DE_PROVEDOR_HOMOLOGADO');
     });
   }
 

@@ -21,7 +21,8 @@ export type FieldType =
   | 'color'
   | 'uf'
   | 'cep'
-  | 'images';
+  | 'images'
+  | 'json';
 
 export type Tone = 'green' | 'red' | 'amber' | 'blue' | 'slate';
 export type FieldOption = { value: string; label: string; tone?: Tone };

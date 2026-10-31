@@ -162,7 +162,7 @@ test('pg W45: forecast → plano de suprimento → S&OP aprovado com autor', { s
   const local = await ctx.s.insert(ctx.RESOURCES.locais, { empresa_id: ctx.empresaId, codigo: 'DEP', nome: `Dep ${SUFIXO}`, tipo: 'deposito', ativo: true, padrao: true });
   const venda = await ctx.s.insert(ctx.RESOURCES.vendas, { empresa_id: ctx.empresaId, cliente_id: Number(cliente.id), status: 'faturada', total: 300, faturada_em: '2026-06-10T00:00:00.000Z' });
   await ctx.s.insert(ctx.RESOURCES.itens_venda, { empresa_id: ctx.empresaId, venda_id: Number(venda.id), produto_id: Number(produto.id), quantidade: 3, preco_unitario: 100, subtotal: 300 });
-  await ctx.s.insert(ctx.RESOURCES.estoques, { empresa_id: ctx.empresaId, produto_id: Number(produto.id), local_id: Number(local.id), quantidade: 1, custo_medio: 10 });
+  await ctx.s.insert(ctx.RESOURCES.estoques, { empresa_id: ctx.empresaId, produto_id: Number(produto.id), local_id: Number(local.id), local: `Dep ${SUFIXO}`, quantidade: 1, custo_medio: 10 });
 
   const fc = await chamar(gerarForecastDemanda, ctx, { periodo: '2026-06' });
   assert.ok(fc.json.linhas >= 1);

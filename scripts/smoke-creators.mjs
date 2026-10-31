@@ -99,10 +99,18 @@ check('API Creators recusa acesso anônimo', anon.status === 401, `HTTP ${anon.s
 const caps = await req('GET', '/creators/capabilities');
 check('API Creators autenticada', caps.status === 200 && caps.json?.empresa_id > 0, `HTTP ${caps.status}`);
 const ids = ['creators', 'creator-matches', 'outreach-ai', 'campanhas'];
-check('quatro capacidades explícitas, sem consulta ou escrita fictícia', ids.every((id) => {
+// As quatro capacidades agora têm FONTE REAL (perfis, afinidades, contatos e
+// campanhas). O que permanece desligado é a GERAÇÃO/ENVIO do outreach — nada
+// é simulado, e nenhuma capacidade devolve registros fabricados.
+check('quatro capacidades com fonte real e sem registros fictícios', ids.every((id) => {
   const cap = caps.json?.modulos?.[id];
-  return cap && cap.fonte === null && cap.consulta === false && !Object.values(cap).includes(true) && !('rows' in cap) && !('total' in cap);
+  return cap && cap.fonte && cap.consulta === true && !('rows' in cap) && !('total' in cap);
 }));
+check('outreach não promete geração nem envio', (() => {
+  const cap = caps.json?.modulos?.['outreach-ai'];
+  return cap?.geracao === false && cap?.envio === false;
+})());
+check('matches não promete recomendação automática', caps.json?.modulos?.['creator-matches']?.recomendacao === false);
 const injected = await req('GET', '/creators/capabilities?empresa_id=999&consolidado=true');
 check('query não troca o tenant da sessão', injected.status === 200 && injected.json?.empresa_id === caps.json?.empresa_id);
 const paths = ['/creators', '/matches', '/outreach-ai', '/campanhas'];
@@ -127,7 +135,6 @@ if (process.env.SMOKE_BROWSER === '1') {
       for (let index = 0; index < paths.length; index++) {
         const response = await page.goto(FRONT + paths[index]);
         await page.getByRole('heading', { level: 1, name: titles[index], exact: true }).waitFor();
-        await page.getByText('Sem fonte de dados conectada.', { exact: true }).waitFor();
         const content = page.locator('#conteudo-principal');
         const text = await content.innerText();
         check(`${width}px ${paths[index]}: página autenticada`, response.status() === 200 && !page.url().includes('/login'));

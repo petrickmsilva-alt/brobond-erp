@@ -6623,8 +6623,11 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Match',
     labelFields: ['status'],
     empresa: true,
-    ops: ALL_OPS,
-    minPerfil: 'gerente',
+    // Recurso INTERNO do bounded context CREATORS (como creator_profiles): o
+    // CRUD real passa pelos handlers dedicados de `creators.ts` — idempotentes,
+    // auditados e recortados por empresa. Não aparece na API genérica nem no menu.
+    internal: true,
+    ops: READ_ONLY,
     notice: 'Afinidade real entre creator, campanha e categoria, com score e evidência. Não é recomendação algorítmica fabricada.',
     fields: [
       { name: 'creator_id', label: 'Creator', type: 'ref', ref: 'creator_profiles', required: true, search: true },
@@ -6649,8 +6652,11 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Contato',
     labelFields: ['assunto'],
     empresa: true,
-    ops: ALL_OPS,
-    minPerfil: 'gerente',
+    // Recurso INTERNO do bounded context CREATORS (como creator_profiles): o
+    // CRUD real passa pelos handlers dedicados de `creators.ts` — idempotentes,
+    // auditados e recortados por empresa. Não aparece na API genérica nem no menu.
+    internal: true,
+    ops: READ_ONLY,
     notice: 'Registro do contato com o creator. O ENVIO real depende de provedor homologado — aqui a mensagem é rascunhada e seu estado registrado, sem simular entrega.',
     fields: [
       { name: 'creator_id', label: 'Creator', type: 'ref', ref: 'creator_profiles', required: true, search: true },

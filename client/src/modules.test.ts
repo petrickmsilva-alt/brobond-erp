@@ -113,11 +113,14 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     // + 5 do BROBOND COMMERCE OS (0068): Publicações, Loja própria, Promoções,
     //   Cupons e Fila & sync — os 4 antigos "planned" do Multicanal continuam,
     //   agora implementados e sem a marcação de planejamento.
-    expect(MODULES).toHaveLength(111);
+    // + 28 das ONDAS 4–5 (D1 atendimento/CDP, D2 fidelidade/afiliados,
+    //   D3 Data/BI, D4 IA, D5 demanda/suprimento, D6 ocorrências/scorecard,
+    //   D7 EPM) — todos com página e rota próprias, ZERO MODAL.
+    expect(MODULES).toHaveLength(139);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(111);
-    expect(new Set(paths).size).toBe(111);
+    expect(new Set(ids).size).toBe(139);
+    expect(new Set(paths).size).toBe(139);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -147,7 +150,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
   });
 
   it('separa ERP CORE (92), Commerce (13), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(92);
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(120);
     // 4 conectores de canal + 9 módulos do BROBOND COMMERCE OS
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(13);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
@@ -157,7 +160,21 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
   it('garante casa canônica única por módulo (Pessoas em Cadastros, Entrega/Pós-venda em Vendas, Compras em Estoque & Suprimentos, Webhooks em Administração, Conta/Ajuda em Utilidades Globais)', () => {
     const porArea = (area: string) => MODULES.filter((m) => m.area === area).map((m) => m.id);
 
-    expect(porArea('Meu Negócio')).toEqual(['dashboard', 'relatorios', 'painel-comercial']);
+    expect(porArea('Meu Negócio')).toEqual([
+      'dashboard',
+      'relatorios',
+      'painel-comercial',
+      // ONDAS 4–5 / D2+D4 — growth e IA na casa gerencial (não em Administração:
+      // Administração é exclusiva de admin).
+      'marketing-automations',
+      'marketing-runs',
+      'ai-providers',
+      'ai-prompts',
+      'ai-recommendations',
+      'ai-executions',
+      // ONDAS 4–5 / D3 — Data e BI.
+      'bi-read-models',
+    ]);
     expect(porArea('Cadastros')).toEqual([
       'produtos',
       'categorias',
@@ -208,7 +225,22 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'expedicao',
       'divergencias',
       'envios',
+      // ONDAS 4–5 / D6 — ocorrência de envio (TMS) na Logística.
+      'envio-ocorrencias',
       'devolucoes',
+      // ONDAS 4–5 / D1 — atendimento (Service), segmentação/CDP.
+      'service-tickets',
+      'service-painel',
+      'service-sla',
+      'service-categorias',
+      'customer-segments',
+      'customer-consents',
+      'customer-preferences',
+      // ONDAS 4–5 / D2 — fidelidade e afiliados.
+      'loyalty-programs',
+      'loyalty-movements',
+      'loyalty-tiers',
+      'affiliate-commissions',
     ]);
     expect(porArea('Estoque & Suprimentos')).toEqual([
       'estoque',
@@ -220,16 +252,22 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       // ESTOQUE 3.0 — transferência formal (documento) e reservas
       'transferencias-estoque',
       'reservas-estoque',
+      // ONDAS 4–5 / D6 — scorecard de fornecedor (supplier collaboration).
+      'fornecedor-scorecards',
+      // COMPRAS 3.0 — homologação de fornecedor (processo sobre o cadastro)
+      'homologacao-fornecedores',
       'compras',
       'cotacoes-compra',
       'compra-recebimentos',
       'importar-nfe-compra',
       'sugestao-compra',
       'depara-fornecedor',
-      // COMPRAS 3.0 — homologação de fornecedor (processo sobre o cadastro)
-      'homologacao-fornecedores',
     ]);
     expect(porArea('Produção')).toEqual([
+      // ONDAS 4–5 / D5 — demanda, suprimento e S&OP.
+      'demand-forecasts',
+      'supply-plans',
+      'sop-scenarios',
       'planejamento-producao',
       // PRODUÇÃO 3.0 — recursos produtivos e capacidade/MRP
       'producao-recursos',
@@ -240,6 +278,13 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'custo',
     ]);
     expect(porArea('Financeiro')).toEqual([
+      // ONDAS 4–5 / D7 — EPM (orçamento, cenário, ativo, projeto) no MESMO
+      // financeiro existente (sem segundo ledger).
+      'epm-budgets',
+      'epm-scenarios',
+      'epm-assets',
+      'epm-projects',
+      'epm-project-tasks',
       'financeiro',
       'lancamentos',
       // FINANCEIRO 3.0 — estrutura contábil (não é contabilidade)

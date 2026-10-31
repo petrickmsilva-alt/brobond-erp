@@ -59,6 +59,10 @@ export async function predicaoDemanda(req: Request, res: Response) {
 
   // Busca vendas faturadas dos últimos 6 meses
   const seisMesesAtras = new Date();
+  // `setMonth(getMonth() - 6)` "transborda" em dias no fim do mês (ex.: 31/03
+  // vira 01/04 ao voltar para fevereiro), encurtando a janela. Fixar o dia em 1
+  // mantém a janela exata de 6 meses.
+  seisMesesAtras.setDate(1);
   seisMesesAtras.setMonth(seisMesesAtras.getMonth() - 6);
   const seisMesesStr = seisMesesAtras.toISOString().slice(0, 10);
 
@@ -95,6 +99,11 @@ export async function predicaoDemanda(req: Request, res: Response) {
     const vendasPorMes: number[] = [];
     for (let m = 0; m < 6; m++) {
       const mesRef = new Date();
+      // Fixar o dia em 1 antes de recuar: sem isso, num dia 29–31 o
+      // `setMonth` transborda para o mês seguinte e o MESMO mês entra duas
+      // vezes na série (ex.: em 31/10, m=0 e m=1 davam ambos "2026-10"),
+      // dobrando o histórico do produto.
+      mesRef.setDate(1);
       mesRef.setMonth(mesRef.getMonth() - m);
       const mesStr = mesRef.toISOString().slice(0, 7); // YYYY-MM
       let totalMes = 0;

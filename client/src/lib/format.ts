@@ -120,6 +120,17 @@ export function toInputValue(f: Field, v: unknown): string {
       const n = Number(v);
       return Number.isFinite(n) ? String(n).replace('.', ',') : '';
     }
+    case 'json': {
+      // A coluna JSONB volta como objeto/lista do driver: o editor mostra o
+      // texto JSON canônico (identado), que é o que o usuário edita e o que o
+      // `toPayload` devolve ao servidor.
+      if (typeof v === 'string') return v;
+      try {
+        return JSON.stringify(v, null, 2);
+      } catch {
+        return '';
+      }
+    }
     default:
       return String(v);
   }

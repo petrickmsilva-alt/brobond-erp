@@ -12,7 +12,7 @@ function page(path: string) { return render(<MemoryRouter initialEntries={[path]
   <Route path="/creators/:id" element={<CreatorsRecordsPage kind="profile" />} />
   <Route path="/campanhas/:id/editar" element={<CreatorsRecordsPage kind="campaign" />} />
   <Route path="/campanhas/:id" element={<CreatorsRecordsPage kind="campaign" />} />
-  <Route path="/matches/:id" element={<CreatorsRecordsPage kind="partnership" />} />
+  <Route path="/matches/parcerias/:id" element={<CreatorsRecordsPage kind="partnership" />} />
 </Routes></MemoryRouter>); }
 beforeEach(() => { api.mockReset(); perfil = 'gerente'; });
 describe('Creators — páginas com persistência e sem modal', () => {
@@ -36,7 +36,7 @@ describe('Creators — páginas com persistência e sem modal', () => {
   });
   it('parceria mostra status do checkout sem fabricar comissão', async () => {
     api.mockImplementation(async (path) => path.includes('/atribuicoes') ? { rows: [{ id: 1, order_id: 10, estado: 'AGUARDANDO_PAGAMENTO', pagamento_estado: 'PENDING', total: 100 }], total: 1, pageSize: 25 } : { id: 5, creator_id: 2, campaign_id: 3, coupon_id: 4, status: 'ACTIVE' });
-    page('/matches/5'); expect(await screen.findByText('AGUARDANDO_PAGAMENTO')).toBeInTheDocument();
+    page('/matches/parcerias/5'); expect(await screen.findByText('AGUARDANDO_PAGAMENTO')).toBeInTheDocument();
     expect(screen.getByText(/não representam receita líquida nem comissão/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '#2' })).toHaveAttribute('href', '/creators/2');
   });

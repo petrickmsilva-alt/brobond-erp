@@ -155,13 +155,20 @@ test('CONTRATO: o inspetor REPROVA a declaração errada do P0-02 (prova de muta
   assert.equal(achadosU[0].regra, 'unicidade');
   assert.match(achadosU[0].detalhe, /uniqueEmpresa|empresa_id/);
 
-  // (4) Interface: campo json editável em recurso público.
+  // (4) Interface: campo json editável em recurso público. O cliente TEM editor
+  // de JSON (RecordForm), então a declaração é aceita; o inspetor só a
+  // reprovaria se o renderizador deixasse de existir (CLIENTE_SUPORTA_JSON).
   const mutanteInterface = {
     ...mutante,
     internal: false,
     fields: [{ name: 'payload', label: 'Payload', type: 'json' }],
   } as any;
   const achadosI = inspecionar([{ recurso: mutanteInterface, colunas, indices }]);
-  assert.equal(achadosI.length, 1);
-  assert.equal(achadosI[0].regra, 'interface');
+  assert.deepEqual(
+    achadosI,
+    [],
+    'com o editor de JSON no cliente, campo json público editável é válido'
+  );
+  const { CLIENTE_SUPORTA_JSON } = await import('./contratoTipos');
+  assert.equal(CLIENTE_SUPORTA_JSON, true, 'o cliente declara suporte a json — RecordForm.json.test.tsx prova o editor');
 });

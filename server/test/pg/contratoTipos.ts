@@ -63,6 +63,19 @@ export type ExcecaoContrato = {
   motivo: string;
 };
 
+/**
+ * O cliente renderiza o tipo `json`?
+ *
+ * Enquanto o `RecordForm` genérico não tinha editor de JSON, um campo `json`
+ * editável em recurso PÚBLICO gravava `"[object Object]"` (o input de texto
+ * chamava `String(objeto)`). O editor foi implementado em
+ * `client/src/components/RecordForm.tsx` e provado por
+ * `client/src/components/RecordForm.json.test.tsx`; por isso a regra de
+ * interface abaixo deixa de reprovar esses campos. Se o renderizador for
+ * removido, mude este flag para `false` e a regra volta a proteger o contrato.
+ */
+export const CLIENTE_SUPORTA_JSON = true;
+
 // ---------------------------------------------------------------------------
 // EXCEÇÕES CONHECIDAS — cada uma é uma dívida declarada, não uma tolerância.
 // ---------------------------------------------------------------------------
@@ -138,12 +151,12 @@ export function inspecionar(entrada: RecursoInspecionado[]): Achado[] {
         });
       }
 
-      // 4. interface: campo `json` editável em recurso público. O cliente não
-      // tem renderizador para o tipo `json` (RecordForm cai no input de texto e
-      // `String(objeto)` vira "[object Object]"), então editar um JSONB pelo
-      // formulário genérico grava lixo. Campos `json` de recursos públicos
-      // devem ser `form: false` (só leitura) — como `compras.fin_parcelas_detalhes`.
-      if (f.type === 'json' && !r.internal && f.form !== false) {
+      // 4. interface: campo `json` editável em recurso público. Enquanto o
+      // cliente não renderiza o tipo `json`, o formulário genérico cai no input
+      // de texto e `String(objeto)` vira "[object Object]" — editar um JSONB
+      // gravaria lixo. Com o editor de JSON implementado (CLIENTE_SUPORTA_JSON),
+      // o campo é editável de verdade; sem ele, precisa ser `form: false`.
+      if (f.type === 'json' && !r.internal && f.form !== false && !CLIENTE_SUPORTA_JSON) {
         achados.push({
           recurso: r.key,
           tabela: r.table,

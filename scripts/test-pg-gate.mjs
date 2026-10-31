@@ -46,7 +46,10 @@ const code = await new Promise((resolve) => {
   child.once('error', (error) => { console.error(error); resolve(1); });
   child.once('exit', (status) => resolve(status ?? 1));
 });
-const counts = Object.fromEntries([...tail.matchAll(/^# (pass|fail|cancelled|skipped|todo) (\d+)\s*$/gm)].map(([, k, n]) => [k, Number(n)]));
+// O Node reporta o resumo em TAP (`# pass 12`) ou no reporter spec
+// (`ℹ pass 12`), conforme a versão/flags. Aceitar os dois formatos evita um
+// falso BLOCKED quando o resultado real é 0 fail/skip/todo.
+const counts = Object.fromEntries([...tail.matchAll(/^(?:#|ℹ) (pass|fail|cancelled|skipped|todo) (\d+)\s*$/gm)].map(([, k, n]) => [k, Number(n)]));
 if (code !== 0 || !('pass' in counts) || counts.fail || counts.cancelled || counts.skipped || counts.todo) {
   console.error(`ERP-03 GATE BLOCKED: runner exit=${code}, resumo=${JSON.stringify(counts)}. TODO/skip crítico não é aprovação.`);
   process.exitCode = 1;

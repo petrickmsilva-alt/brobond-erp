@@ -1032,7 +1032,7 @@ app.get('/api/pdv/vendas/:id/cupom/pdf', wrap(cupomPdvPdfHandler));
 
 // Creators: capacidades reais, sem simular dados ou operações ausentes.
 app.get('/api/creators/capabilities', wrap(capacidadesCreators));
-for (const [path, entity] of [['perfis', 'profile'], ['campanhas', 'campaign'], ['parcerias', 'partnership']] as const) {
+for (const [path, entity] of [['perfis', 'profile'], ['campanhas', 'campaign'], ['parcerias', 'partnership'], ['matches', 'match'], ['outreach', 'outreach']] as const) {
   app.get(`/api/creators/${path}`, wrap(listCreatorsEntity(entity)));
   app.post(`/api/creators/${path}`, wrap(createCreatorsEntity(entity)));
   app.get(`/api/creators/${path}/:id`, wrap(detailCreatorsEntity(entity)));

@@ -11,7 +11,7 @@ export type CreatorKind = 'profile' | 'campaign' | 'partnership';
 const config = {
   profile: { base: '/creators', api: 'perfis', label: 'Creators', singular: 'creator' },
   campaign: { base: '/campanhas', api: 'campanhas', label: 'Campanhas com creators', singular: 'campanha' },
-  partnership: { base: '/matches', api: 'parcerias', label: 'Parcerias manuais', singular: 'parceria' },
+  partnership: { base: '/matches/parcerias', api: 'parcerias', label: 'Parcerias manuais', singular: 'parceria' },
 } as const;
 type CreatorRow = { id: number; name: string; platform: string; handle: string; niche: string | null; status: string; version: number;
   objective: string; starts_on: string; ends_on: string; creator_id: number; campaign_id: number; coupon_id: number | null };

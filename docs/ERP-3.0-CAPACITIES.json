@@ -914,7 +914,7 @@
       "rota": "/creators",
       "menu": true,
       "rbac": "operador",
-      "teste": "client/src/pages/creators/CreatorsModulePage.test.tsx"
+      "teste": "client/src/pages/creators/CreatorsRecordsPage.test.tsx"
     },
     {
       "id": "creator-matches",
@@ -923,7 +923,7 @@
       "rota": "/matches",
       "menu": true,
       "rbac": "operador",
-      "teste": "client/src/pages/creators/CreatorsModulePage.test.tsx"
+      "teste": "client/src/pages/creators/CreatorMatchesPage.test.tsx"
     },
     {
       "id": "outreach-ai",
@@ -932,7 +932,7 @@
       "rota": "/outreach-ai",
       "menu": true,
       "rbac": "operador",
-      "teste": "client/src/pages/creators/CreatorsModulePage.test.tsx"
+      "teste": "client/src/pages/creators/CreatorOutreachPage.test.tsx"
     },
     {
       "id": "campanhas",
@@ -941,7 +941,7 @@
       "rota": "/campanhas",
       "menu": true,
       "rbac": "operador",
-      "teste": "client/src/pages/creators/CreatorsModulePage.test.tsx"
+      "teste": "client/src/pages/creators/CreatorsRecordsPage.test.tsx"
     },
     {
       "id": "config",
