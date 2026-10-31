@@ -1,122 +1,150 @@
-# Homologação externa final — relatório de execução
+# Homologação externa final — execução e continuação
 
-Data: 2026-10-31 (UTC).
+Data: 2026-10-31.
 
 BASE_MAIN_SHA=d9f29ddf52eee99c4019e43f03fd0e88b0107653
 
-Branch fixa: `arena/50a466c4-brobond-erp`. HEAD inicial igual a `origin/main` após fetch. A branch solicitada no roteiro não foi criada por restrição da sessão. Não houve merge nem alteração em `backups/`.
+Branch fixa: `arena/50a466c4-brobond-erp`. A execução inicial confirmou HEAD igual a origin/main após fetch. A continuação parte de `42b652dd54a5780f11ffa3f3c7bce2bc59fdce57`. Não houve merge, troca de branch ou alteração em `backups/`.
 
-## Resultado executivo
+## Decisão
 
 **FULL_ENTERPRISE_GO_LIVE = NO. EXTERNAL_HOMOLOGATION_READY = NO.**
 
-A aprovação interna anterior é histórica, não foi revogada por defeito funcional novo, mas **INTERNAL_ENTERPRISE_READY não é recertificado como YES nesta rodada**: PostgreSQL, recovery e browser responsivo não foram comprovados. O valor conservador do gate é NO. Nenhum teste foi transformado em skip; os 76 skips são os já existentes sem PostgreSQL.
+Os bloqueios locais de PostgreSQL e Chromium descritos na primeira entrega foram removidos. Os gates operacionais internos abaixo estão verdes. Ainda não há evidência de operação externa real nem validação Prisma concluída; por conservadorismo, **INTERNAL_ENTERPRISE_READY = NO (recertificação integral pendente)**. Isso não revoga a homologação histórica nem significa que os testes internos falharam.
 
-Não foram criados domínios, ledgers, estoques, clientes ou catálogos paralelos. Não houve alteração de código operacional ou secrets. Não foi adicionado teste novo: não houve correção de comportamento com necessidade de regressão nova.
+Nenhuma cobrança de produção foi efetuada. Nenhum parceiro recebeu PASS com base em mock, presença de adapter ou configuração. A matriz externa permanece em `EXTERNAL-HOMOLOGATION-MATRIX.md`.
 
-## Evidências executadas
+## Correções implementadas
 
-| Comando | Exit | Interpretação |
-|---|---:|---|
-| `npm test` | 0 | PASS local (não é homologação externa) |
-| `npm run typecheck` | 0 | PASS local (não é homologação externa) |
-| `npm run build` | 0 | PASS local (não é homologação externa) |
-| `npm run lint` | 0 | PASS local (não é homologação externa) |
-| `npm audit --json` | 1 | Não aprovado; diagnóstico abaixo |
-| `npm run test:pg` | 2 | Não aprovado; diagnóstico abaixo |
-| `npm run smoke` | 0 | PASS local (não é homologação externa) |
-| `npm run smoke:pg` | 2 | Não aprovado; diagnóstico abaixo |
-| `npm run recovery:check` | 2 | Não aprovado; diagnóstico abaixo |
-| `npm run audit:menu` | 0 | PASS local (não é homologação externa) |
-| `npm run architecture:audit` | 0 | PASS local (não é homologação externa) |
-| `npm run audit:ux` | 0 | PASS local (não é homologação externa) |
-| `npm run go-live:audit` | 0 | PASS local (não é homologação externa) |
-| `npm run commerce:go-live` | 0 | PASS local (não é homologação externa) |
-| `npm run commerce:final-go-live` | 1 | Não aprovado; diagnóstico abaixo |
-| `npm run payment:go-live` | 0 | PASS local (não é homologação externa) |
-| `npm run db:validate` | 1 | Não aprovado; diagnóstico abaixo |
-| `node --import tsx --test server/test/multiempresa-p1.test.ts` | 0 | PASS local (não é homologação externa) |
-| `node --import tsx scripts/capacidades-audit.ts` | 0 | PASS local (não é homologação externa) |
-| `node scripts/smoke-dependencias.mjs` | 0 | PASS local (não é homologação externa) |
-| `SMOKE_BASE=http://127.0.0.1:3012/api node scripts/smoke-creators.mjs` | 1 | Não aprovado; diagnóstico abaixo |
-| `node scripts/ux05-browser-check.mjs` | 1 | Não aprovado; diagnóstico abaixo |
-| `node scripts/ux05-drawer-check.mjs` | 1 | Não aprovado; diagnóstico abaixo |
-| `node scripts/ux05-rbac-check.mjs` | 1 | Não aprovado; diagnóstico abaixo |
-| `SMOKE_BASE=http://127.0.0.1:3012/api node scripts/smoke-creators.mjs (API nova + Vite ativo)` | 0 | PASS local (não é homologação externa) |
+### 1. Vazamento em fixtures UX-05
 
-### Métricas
+Defeito encontrado: `scripts/ux05-fixtures.mjs` imprimia senhas em exports de shell e corpos completos de respostas de autenticação, além de gravar TOTP em caminho compartilhado previsível sem proteção explícita.
 
-- Servidor: 1.658 testes, 1.582 PASS, 0 FAIL, 76 SKIP, 0 TODO. Skips PG não contam como evidência de banco real.
-- Cliente: 123 arquivos / 1.067 testes PASS (Vitest/jsdom; não substitui browser real).
-- Smoke HTTP: 398/398 PASS; demonstração em memória. Smoke de dependências: 20/20 PASS.
-- Creators: primeira tentativa sem Vite falhou por ECONNREFUSED; repetida em API nova com Vite ativo: 15/15 PASS. Browser opcional não foi habilitado; não há aprovação responsiva implícita.
-- Typecheck, build e lint: exit 0. Lint: 0 erros, 597 warnings preexistentes. Build mantém avisos de chunks/bundle, sem erro.
-- Multiempresa P1 isolado: 9/9 PASS; também incluído na suíte completa.
-- Go-live estrutural: P0=0, P1=0, P3=2 informativos de tenancy. Esses números **não são** contagem certificada de defeitos de produção.
-- Audit UX estático: nenhuma sobreposição nova de módulo. Quatro exceções declaradas preexistentes (navegação global/mobile/infraestrutura); não corresponde a zero overlay absoluto no repositório.
+Correção:
 
-### Gates não aprovados e motivo
+- Não imprime senhas, tokens ou corpos de autenticação em sucesso/erro.
+- Diagnósticos de erro mostram somente status HTTP.
+- Arquivo TOTP em diretório temporário exclusivo ou caminho explicitamente configurado, com `mode=0600` e criação exclusiva `wx`.
+- Variáveis de senha permanecem no ambiente; não são gerados exports com seus valores.
+- Na execução dos checks, a senha local foi gerada somente em memória; o TOTP temporário foi removido ao terminar. Nenhuma credencial externa foi inventada.
 
-- `test:pg`, `smoke:pg`, `recovery:check`: exit 2 por DATABASE_URL ausente. Não foi conectado, reiniciado ou alterado banco externo. Não há prova de DB restart/outbox recovery PostgreSQL nesta rodada.
-- `db:validate`: exit 1 porque o engine exige download de `binaries.prisma.sh`, host indisponível pela política de egress. Não é uma validação negativa do schema nem um PASS.
-- `commerce:final-go-live`: exit 1 deliberado pelo próprio gate quando faltam evidências externas completas; verificações estruturais verdes. Mantido sem mascarar exit.
-- `ux05-browser-check`, `ux05-drawer-check`, `ux05-rbac-check`: exit 1, pacote `puppeteer-core` não instalado; Chromium também não disponível. Desktop/tablet/mobile, teclado e auditoria visual completa permanecem NÃO TESTADOS em navegador.
+Regressões: `server/test/ux05-fixtures-security.test.ts`, dois testes executados: caminho de sucesso/permissões e caminho de falha de autenticação. Respostas de um servidor **local simulado** servem exclusivamente para detectar vazamento, não homologar provedores.
 
-## Blocos A–I e jornadas F1–F8
+### 2. Backup que não restaurava dados operacionais
 
-| Bloco | Evidência realizada | Limite não superado |
+O recovery real falhou inicialmente por FK `documentos_fiscais → vendas`. Após resolver os ciclos, revelou ausência de pais fora de RESOURCES e, ao incluir recursos de pagamentos, os guards de períodos financeiros expuseram ordem incorreta de restore.
+
+Correções no gerador canônico `server/src/backup.ts`:
+
+- Snapshot de leitura `REPEATABLE READ`, em uma conexão, para o backup servido pelo endpoint e pelo recovery.
+- Inventário inclui recursos canônicos de pagamentos e fechamento transitivo das tabelas-pai por FKs reais.
+- Ciclos anuláveis e autorreferências são restaurados em duas fases: INSERT com referência temporariamente nula e UPDATE após os registros existirem. Constraints permanecem habilitadas.
+- Períodos financeiros são inseridos ao final, depois do histórico e dos vínculos: não se desabilitam guards e não se reabrem períodos existentes.
+- Strings numéricas preservam zeros iniciais; escaping SQL e comentário de usuário não permitem inserir nova instrução pelo nome do ator.
+- Tabelas vazias também são truncadas no destino; reaplicação não preserva resíduos antigos.
+- Sequences são alinhadas aos IDs restaurados para não colidir no próximo cadastro.
+- Senhas, MFA, credenciais cifradas e campos de segredo não são exportados. Tokens públicos e hashes de token são substituídos por marcadores **inválidos/revogados**, não por novas credenciais utilizáveis. Rotas públicas exigem formato hexadecimal e/ou comparação com hash calculado.
+- Restore não pretende recuperar credenciais: reprovisionamento de acessos, links públicos, agentes, integrações e eventual reconciliação de operações externas pendentes continua obrigatório.
+
+`recovery-check.mjs` agora confere a contagem **exata de todas as tabelas do snapshot**, incluindo as vazias, além dos marcadores multiempresa e da reaplicação idempotente.
+
+Regressão: `server/test/pg/backup-recovery.test.ts`, PostgreSQL real em schema isolado. Exercita pai fora do inventário, ciclo obrigatório/anulável, autorreferência fora de ordem, texto com zeros, tokens revogados, tabela vazia, sequence e fechamento financeiro com trigger ativo. Não há segunda arquitetura, ledger ou estoque operacional.
+
+Limite: backup administrativo de recursos canônicos/pais não é substituto de backup físico/PITR da instância, fotos/bytes e credenciais. Ciclos não anuláveis não suportados falham explicitamente, não são silenciosamente ignorados.
+
+## Evidências finais
+
+| Gate | Resultado efetivamente executado |
+|---|---|
+| npm test | Exit 0: servidor 1.660 testes, 1.584 PASS, 0 FAIL, 76 skips PG preexistentes; cliente 123 arquivos / 1.067 PASS |
+| npm run test:pg | **414 PASS, 0 FAIL, 0 SKIP, 0 TODO**, banco vazio novo, PostgreSQL 16.14; psql real 16.14 |
+| npm run smoke:pg | **398/398**, API real contra PostgreSQL descartável |
+| npm run smoke (primeira execução) | 398/398 contra memória; não usado como substituto do smoke PG |
+| npm run recovery:check | Exit 0: **185 tabelas** com contagem exata, restore em banco novo e reaplicação sem duplicar |
+| UX-05 browser | Exit 0: desktop/tablet/mobile, teclado, overflow, menus e deep links previstos no script |
+| UX-05 drawer | Exit 0: navegação mobile/tablet e CompanySwitcher/multiempresa |
+| UX-05 RBAC | Exit 0: ADMIN/GERENTE/OPERADOR com fixtures locais provisionadas e expectativas explícitas |
+| Regressões adicionadas | 2 testes de segurança local + 1 teste PG de restore: 3/3 PASS na repetição final |
+| multiempresa-p1 isolado | 9/9 PASS; demais testes multiempresa também nas suites completas |
+| npm run typecheck | Exit 0, repetido depois das alterações finais |
+| npm run build | Exit 0; avisos de bundle preexistentes |
+| npm run lint | Exit 0: 0 erros, 600 warnings; não se afirma lint sem warnings |
+| npm audit --json | Exit 1 preservado: **0 HIGH, 0 CRITICAL, 27 MODERATE, 2 LOW** |
+| audit:ux / audit:menu / architecture:audit | Exit 0 |
+| go-live:audit / commerce:go-live / payment:go-live | Exit 0; são verificações estruturais, não aprovação externa |
+| commerce:final-go-live | Exit 1 preservado: faltam evidências externas; estrutural verde |
+| capacidades-audit | Exit 0 |
+| db:validate | Não aprovado: engine exige download de binaries.prisma.sh, bloqueado pelo egress |
+
+Checks UX-05 validam a navegação e as rotas declaradas, não uma auditoria visual de todas as telas do ERP. O audit estático aceita quatro exceções preexistentes de navegação/infraestrutura; não foram introduzidos modais de módulo.
+
+### Restart real e recuperação de outbox
+
+Banco local dedicado: evento `alerta` persistido em PROCESSANDO com lease expirado, seguido de parada real do processo PostgreSQL e novo boot com o mesmo diretório de dados. Um novo processo de worker, após o bootstrap canônico, recuperou e concluiu o evento; um segundo processo verificou 0 novos processamentos e uma única linha/versão de claim.
+
+Resultado: PASS para persistência após DB restart, recuperação de lease e não repetição de evento concluído. O efeito testado é um alerta interno, não uma cobrança/refund externo. A primeira tentativa do probe sem bootstrap foi corretamente rejeitada com 503 e foi repetida com inicialização correta; esse erro de montagem do teste não foi tratado como aprovação.
+
+### Infraestrutura de teste
+
+Ferramentas provisionadas fora do Git via hosts permitidos:
+
+- PostgreSQL 16.14: pacote npm `@embedded-postgres/linux-x64@16.14.0-beta.17`.
+- psql: compilado do código oficial PostgreSQL tag `REL_16_14` obtido no GitHub; ferramentas auxiliares fora do projeto.
+- Chromium 153.0.8010.0 via pacote npm, Puppeteer/Playwright disponíveis temporariamente para checks existentes.
+- PostgreSQL escuta somente em loopback; autenticação local trust, sem secret externo e sem `.env`. Bancos são descartáveis e não representam ambiente do usuário.
+
+Nenhum binário, SQL com dados, pacote de infraestrutura ou credencial foi adicionado ao Git. As dependências extras foram ligadas apenas dentro de node_modules ignorado. O manifesto e o lockfile do projeto não foram alterados.
+
+## Blocos A–I e jornadas
+
+| Bloco | Evidência | Limite |
 |---|---|---|
-| A Payments | payment-engine, commerce-exposure, enterprise-disputes/payouts/late-payments/legacy-gateway na suíte; payment:go-live estrutural | Sem pagamento, refund, disputa ou settlement real |
-| B Marketplaces | connectors, commerce-oracle, webhooks e testes de tenancy locais | Sem OAuth, seller/loja e pedido reais |
-| C Meta | Contratos oficiais Graph/OAuth e segurança exercitados localmente em connectors/webhooks | Sem app Business autorizado, permissões e token reais |
-| D Logistics | logistica, expedicao, enterprise-periodos-wms e fulfillment local | Sem transportadora real; SIGEP não implementado |
-| E ERP integration | golive-02-e2e, enterprise-wave3-commerce, enterprise-oms, financeiro e projeções canônicas | Sem pedido externo atravessando toda a cadeia |
-| F Multi-company/RBAC | multiempresa-p1 9/9 e demais suites de tenancy/auth/guard; D2–D7 cross-company | Não prova tenant no webhook real nem concorrência PG |
-| G Resilience/Security | outbox, observabilidade, assinaturas, duplicatas e estados locais; npm audit | Recovery/DB restart sem PostgreSQL; 29 avisos de dependências |
-| H Enterprise E2E | Jornadas internas abaixo; smoke HTTP real contra memória | Cadeia externa integral não comprovada |
-| I Final audit | typecheck/build/lint e audits existentes executados; matriz, relatório e revisão do diff | Bloqueios listados impedem recertificação total |
+| A Payments | payment-engine, testes PG de operações/concorrência, refund/disputes/payouts e routing | Sem operação de provider real |
+| B Marketplaces | connectors, ingestion/webhook e PG marketplace→venda | Sem OAuth, seller/loja, publicação ou pedido real |
+| C Meta | Contratos oficiais Graph/OAuth e testes de segurança | Sem conta Business/permissões reais |
+| D Logistics | logistica, WMS/expedição e jornadas PG | Sem carrier real; SIGEP não implementado |
+| E ERP | Journeys PG, vendas canônicas, estoque/financeiro e projections | Sem cadeia externa integral |
+| F Tenancy/RBAC | Testes PG A×B e browser ADMIN/GERENTE/OPERADOR | Sem webhook externo real |
+| G Recovery/Security | Restore, reaplicação, DB restart/outbox e correções de vazamento | Sem timeout/retry/reconciliation reais do provider |
+| H Enterprise E2E | Suites internas completas e smoke PG | F1–F8 externos não comprovados integralmente |
+| I Final audit | Gates existentes, revisões e documentos atualizados | Prisma bloqueado por egress |
 
-| Jornada | Evidência interna executada | Evidência externa |
+| Jornada | Evidência interna | Resultado externo |
 |---|---|---|
-| F1 Loja | commerce-oracle, loja, golive-02-e2e e smoke catálogo/publicação/checkout | BLOCKED_EXTERNAL_CREDENTIAL (pagamento/frete/entrega reais) |
-| F2 Payment | payment-engine, estados/routing/fallback/assinatura/idempotência locais | BLOCKED_EXTERNAL_CREDENTIAL |
-| F3 Marketplace | connectors + inbox/ingestion locais | BLOCKED_EXTERNAL_CREDENTIAL |
-| F4 Omnichannel | enterprise-wave3-commerce, enterprise-oms e isolamento locais | BLOCKED_EXTERNAL_CREDENTIAL |
-| F5 Refund | enterprise-late-payments/disputes e payment-engine locais | BLOCKED_EXTERNAL_CREDENTIAL |
-| F6 CRM | d1-customer-service, crm-3-0, conversão e D2–D7 locais | Customer 360 alimentado por venda externa não comprovado |
-| F7 Supply | D2–D7, WMS/expedição/logística locais | BLOCKED_EXTERNAL_CREDENTIAL; PG não executado |
-| F8 Finance | financeiro-oracle/contábil e enterprise-payouts locais | Sem extrato/fees/payout automático real |
+| F1 Loja | Loja/catálogo/checkout/pedido/ERP nos testes e smoke PG | BLOCKED_EXTERNAL_CREDENTIAL |
+| F2 Payment | Engine/estado/financeiro/concorrência/idempotência PG | BLOCKED_EXTERNAL_CREDENTIAL |
+| F3 Marketplace | Connector/inbox/marketplace→venda PG | BLOCKED_EXTERNAL_CREDENTIAL |
+| F4 Omnichannel | OMS e Commerce ondas 1–3 e PG | BLOCKED_EXTERNAL_CREDENTIAL |
+| F5 Refund | Refund/disputa/financeiro e operações PG | BLOCKED_EXTERNAL_CREDENTIAL |
+| F6 CRM | Customer 360 e D1–D8 exercitados em suites locais/PG | CODE_READY_EXTERNAL_UNTESTED para origem externa real |
+| F7 Supply | Supply/WMS/expedição/TMS interno e PG | BLOCKED_EXTERNAL_CREDENTIAL para carrier real |
+| F8 Finance | Contábil/settlement/reconciliation interno e PG; restore com guards ativos | BLOCKED_EXTERNAL_CREDENTIAL para extratos/payouts reais |
 
-D1–D8 continuam com testes locais verdes; isso não reexecuta a matriz DB/API/UI/Jornada completa da homologação anterior. ADMIN/MANAGER/MEMBER e papéis existentes são cobertos pelos testes locais de autorização; não houve auditoria manual de cada endpoint em ambiente externo. Idempotência, concorrência e webhooks locais não equivalem a prova contra múltiplos workers e PostgreSQL.
+D1–D8: testes internos/PG verdes, não reexecução manual de toda a matriz UI de homologação anterior. Idempotência/concorrência/webhooks em PostgreSQL são evidências internas reais, mas eventos de parceiros continuam simulados nos testes de contrato.
 
-## Segurança e tentativa de correção
+## Segurança e falhas históricas preservadas
 
-npm audit: **0 HIGH, 0 CRITICAL, 27 MODERATE, 2 LOW**. Exit 1 foi preservado. A lista completa de pacotes e advisories públicos consta no JSON de evidências. Todos são preexistentes (manifesto/lockfile finais idênticos à base).
+A lista de advisories e comandos está no JSON de evidências. Os 29 LOW/MODERATE são preexistentes: cadeias glob/minimatch, uuid, deepmerge, React Router, ESLint, ExcelJS e PWA/workbox. Na primeira execução, `npm audit fix --ignore-scripts` atualizou dependências transitivas sem reduzir os achados; mudanças sem benefício foram descartadas e o lockfile original reinstalado. Não foi usado --force, downgrade major ou migração incompatível para fabricar audit verde. Ausência de HIGH/CRITICAL não significa ausência de explorabilidade; a dívida permanece documentada.
 
-Tentativa: `npm audit fix --ignore-scripts --no-fund --json`, sem --force. Resultado: 10 atualizações transitivas, mas os mesmos 29 achados. Mudanças sem benefício foram descartadas apenas nos arquivos gerados e as dependências originais reinstaladas com npm ci. Nenhum npm audit fix --force ou downgrade foi aplicado.
-
-Raízes remanescentes: glob/minimatch (DoS de traversal/matching), uuid (bounds em geração com buffer), deepmerge (prototype poisoning) e React Router (redirect/SSR hydration). Cadeias transitivas incluem ESLint/TypeScript ESLint, ExcelJS/archiver e PWA/workbox. O resolver automático recomenda em vários casos downgrade major (ExcelJS 3.4.0, PWA 1.1.0, eslint-plugin-react 7.22.0) ou migração React Router 7.18.5; outras entradas não oferecem fix. Não há remediação automática segura comprovada nesta rodada. Não é declaração de ausência de explorabilidade; permanece dívida de segurança documentada para revisão específica, não aprovação irrestrita.
-
-Secrets: verificadas somente presença/ausência; nenhuma credencial real foi solicitada, inventada, impressa, alterada ou persistida em artefatos. Logs brutos não foram adicionados ao Git porque podem conter detalhes internos de testes. Resultados e hashes estão em `docs/evidencias/external-homologation-results.json`.
+Falhas de recovery intermediárias estão registradas com exit 1 nas evidências, seguidas pelas correções e repetições aprovadas. Skips não foram introduzidos para esconder falhas; o teste PG novo também foi executado explicitamente contra banco real. Logs brutos não são versionados para evitar dados internos; o JSON contém resultados e hashes dos logs locais.
 
 ## Bloqueios restantes
 
-1. Credenciais de teste e contas autorizadas de Mercado Pago, PagBank, Stripe, Mercado Livre, Nuvemshop e Meta não disponíveis; configuração de carrier em banco não verificável.
-2. Egress para parceiros e callback público de webhook homologado indisponíveis no executor.
-3. PostgreSQL de teste 16.14, banco vazio/CREATE DATABASE indisponíveis; recovery e concorrência PG não comprovados.
-4. Engine Prisma bloqueado por egress; infraestrutura de browser real indisponível para os scripts UX-05.
-5. Limites explícitos de código, não corrigíveis só com credencial: PagBank cartão/boleto; Correios SIGEP; ingestão automática de extratos de payout/fees e envio de evidência de disputa específicos de provider. Necessitam implementação/contrato quando essenciais ao escopo de lançamento; o audit de payments os reconhece como SCOPE_GAPS.
+1. Credenciais/contas autorizadas sandbox de Mercado Pago, PagBank, Stripe, Mercado Livre, Nuvemshop e Meta indisponíveis; configurações reais de carrier no banco do usuário não acessíveis.
+2. Egress aos provedores e callback público de webhook homologado indisponíveis. Não há OAuth, transação, webhook, cancelamento, refund, disputa ou payout real comprovado.
+3. Prisma: host do engine bloqueado. Não foi substituído por engine falso nem declarada validação concluída.
+4. Gaps explícitos existentes de escopo, independentes de credencial: PagBank cartão/boleto; Correios SIGEP; ingestão automática de payout/fees e submissão de evidência de disputa específicos de provider. Exigem implementação/contrato quando essenciais ao go-live; não foram inventadas APIs nem assumido suporte.
 
-Não se afirma que todos os defeitos possíveis foram encontrados ou corrigidos: os blocos externos não puderam ser executados. A aprovação não foi fabricada. Nenhum bloqueio foi convertido em PASS.
+PostgreSQL, psql, Chromium, recovery e teste de restart **não são mais bloqueios locais**.
 
 ## Gate final
 
-O SHA final é o commit que contém este relatório; o valor literal é entregue após commit/push para evitar autorreferência de hash. A confirmação remota é realizada com git ls-remote.
+O SHA literal do commit desta continuação é informado na entrega após commit/push, evitando autorreferência de hash no arquivo.
 
 ```text
 BASE_MAIN_SHA: d9f29ddf52eee99c4019e43f03fd0e88b0107653
 BRANCH: arena/50a466c4-brobond-erp
-FINAL_COMMIT: commit que contém este relatório; SHA literal na entrega final
+FINAL_COMMIT: commit que contém este relatório; SHA literal na entrega
 
 PAYMENTS: BLOCKED_EXTERNAL_CREDENTIAL
 MERCADO_PAGO: BLOCKED_EXTERNAL_CREDENTIAL
@@ -131,14 +159,14 @@ INSTAGRAM_META: BLOCKED_EXTERNAL_CREDENTIAL
 LOGISTICS: BLOCKED_EXTERNAL_CREDENTIAL
 CARRIERS: BLOCKED_EXTERNAL_CREDENTIAL
 
-D1_CUSTOMER: PASS (testes locais; PG não recertificado)
-D2_GROWTH: PASS (testes locais; PG não recertificado)
-D3_DATA_BI: PASS (testes locais; PG não recertificado)
-D4_AI: PASS (testes locais; PG não recertificado)
-D5_SUPPLY: PASS (testes locais; PG não recertificado)
-D6_WMS_TMS_SUPPLIER: PASS (testes locais; PG não recertificado)
-D7_FINANCE_EPM: PASS (testes locais; PG não recertificado)
-D8_GOVERNANCE: PASS (testes locais; PG não recertificado)
+D1_CUSTOMER: PASS — interno/PG
+D2_GROWTH: PASS — interno/PG
+D3_DATA_BI: PASS — interno/PG
+D4_AI: PASS — interno/PG
+D5_SUPPLY: PASS — interno/PG
+D6_WMS_TMS_SUPPLIER: PASS — interno/PG
+D7_FINANCE_EPM: PASS — interno/PG
+D8_GOVERNANCE: PASS — interno/PG
 
 F1_LOJA: BLOCKED_EXTERNAL_CREDENTIAL
 F2_PAYMENT: BLOCKED_EXTERNAL_CREDENTIAL
@@ -149,27 +177,27 @@ F6_CRM: CODE_READY_EXTERNAL_UNTESTED
 F7_SUPPLY: BLOCKED_EXTERNAL_CREDENTIAL
 F8_FINANCE: BLOCKED_EXTERNAL_CREDENTIAL
 
-P0: 0 no audit estrutural; total externo NÃO TESTADO
-P1: 0 no audit estrutural; total externo NÃO TESTADO
+P0: 0 detectados no audit estrutural final; externo NÃO TESTADO
+P1: 0 detectados no audit estrutural final; externo NÃO TESTADO
 
-POSTGRES: NÃO TESTADO (DATABASE_URL ausente; gates exit 2)
-SERVER: PASS (1582 PASS; 76 SKIP PG; 0 FAIL)
-CLIENT: PASS (1067 testes)
-SMOKE: PASS (398/398, memória; PG bloqueado)
+POSTGRES: PASS — 414/414, sem skip
+SERVER: PASS — 1584 PASS; 76 skips sem DB, cobertos pelo gate PG separado
+CLIENT: PASS — 1067 testes
+SMOKE: PASS — 398/398 PostgreSQL
 TYPECHECK: PASS
 BUILD: PASS
-LINT: PASS (0 erros; 597 warnings)
-SECURITY: 0 HIGH/CRITICAL; audit exit 1 (27 MODERATE; 2 LOW)
-RECOVERY: NÃO TESTADO (PostgreSQL ausente)
-TENANCY: PASS local; PG/externo NÃO TESTADO
-RBAC: PASS local; browser/externo NÃO TESTADO
-IDEMPOTENCY: PASS local; PG/externo NÃO TESTADO
-CONCURRENCY: PASS local; PG/externo NÃO TESTADO
+LINT: PASS — 0 erros, 600 warnings
+SECURITY: 0 HIGH/CRITICAL; audit exit 1, 27 MODERATE e 2 LOW
+RECOVERY: PASS — 185 tabelas, reaplicação e restart/outbox locais
+TENANCY: PASS — interno/PG/browser; externo NÃO TESTADO
+RBAC: PASS — interno/PG/browser; externo NÃO TESTADO
+IDEMPOTENCY: PASS — interno/PG; externo NÃO TESTADO
+CONCURRENCY: PASS — interno/PG; externo NÃO TESTADO
 WEBHOOKS: CODE_READY_EXTERNAL_UNTESTED
 
 EXTERNAL_HOMOLOGATION_READY: NO
-INTERNAL_ENTERPRISE_READY: NO (não recertificado nesta rodada)
+INTERNAL_ENTERPRISE_READY: NO — recertificação integral pendente do Prisma
 FULL_ENTERPRISE_GO_LIVE: NO
 
-BLOCKERS: credenciais/contas sandbox; egress/callback externos; PostgreSQL 16.14; engine Prisma; browser UX-05; gaps de escopo de providers explicitados acima.
+BLOCKERS: credenciais/contas e rede/callback externos; engine Prisma; gaps de escopo de providers descritos no relatório.
 ```

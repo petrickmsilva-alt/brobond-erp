@@ -6,9 +6,11 @@
 //
 // Uso:
 //   node scripts/ux05-fixtures.mjs
-// Saída: exporta as variáveis de ambiente que os scripts de check consomem.
+// Saída: informa somente configuração não sensível; senhas nunca são impressas.
 import { createHmac } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { totpAgora } from './ux05-totp.mjs';
 
 const API = process.env.UX05_API || 'http://localhost:3001';
@@ -91,30 +93,31 @@ function cnpjValido(base12) {
 // ---------------------------------------------------------------------------
 const passo1 = await chamar('POST', '/api/auth/login', { email: ADMIN_EMAIL, password: ADMIN_INICIAL });
 if (passo1.status !== 200 || !passo1.dados?.mfa_ticket) {
-  console.error('❌ Login inicial do admin falhou:', passo1.status, passo1.dados);
+  console.error('❌ Login inicial do admin falhou:', passo1.status);
   process.exit(1);
 }
 const ticket = passo1.dados.mfa_ticket;
 
+const segredoArquivo = process.env.UX05_TOTP_SECRET_FILE || join(mkdtempSync(join(tmpdir(), 'brobond-ux05-')), 'totp');
 let segredo = null;
 if (passo1.dados.mfa_setup_required) {
   const desafio = await chamar('POST', '/api/auth/mfa/desafio', { mfa_ticket: ticket });
   if (desafio.status !== 200) {
-    console.error('❌ Desafio MFA falhou:', desafio.status, desafio.dados);
+    console.error('❌ Desafio MFA falhou:', desafio.status);
     process.exit(1);
   }
   segredo = desafio.dados.segredo;
-  writeFileSync('/tmp/segredo.txt', segredo);
-  console.log('✅ Segredo TOTP do admin gerado → /tmp/segredo.txt');
+  writeFileSync(segredoArquivo, segredo, { mode: 0o600, flag: 'wx' });
+  console.log('✅ Segredo TOTP do admin protegido em arquivo temporário (remova após os checks)');
 } else {
   // MFA já ativo: o segredo veio de uma execução anterior.
-  segredo = process.env.UX05_TOTP_SECRET || readFileSync('/tmp/segredo.txt', 'utf8').trim();
+  segredo = process.env.UX05_TOTP_SECRET || readFileSync(segredoArquivo, 'utf8').trim();
 }
 process.env.UX05_TOTP_SECRET = segredo;
 
 const passo2 = await chamar('POST', '/api/auth/login/mfa', { mfa_ticket: ticket, codigo: totpAgora() });
 if (passo2.status !== 200 || !passo2.dados?.token) {
-  console.error('❌ Segundo fator falhou:', passo2.status, passo2.dados);
+  console.error('❌ Segundo fator falhou:', passo2.status);
   process.exit(1);
 }
 let tokenAdmin = passo2.dados.token;
@@ -124,7 +127,7 @@ console.log('✅ Admin autenticado (MFA ativo)');
 if (passo2.dados.user?.trocar_senha || passo2.dados.trocar_senha) {
   const troca = await chamar('POST', '/api/auth/change-password', { senha_atual: ADMIN_INICIAL, senha_nova: SENHA_NOVA }, tokenAdmin);
   if (troca.status !== 200) {
-    console.error('❌ Troca de senha do admin falhou:', troca.status, troca.dados);
+    console.error('❌ Troca de senha do admin falhou:', troca.status);
     process.exit(1);
   }
   // A sessão antiga é invalidada; refaz o login completo.
@@ -152,7 +155,7 @@ if (!temFilial) {
     tokenAdmin
   );
   console.log(
-    criar.status < 300 ? '✅ Empresa filial criada (id 2)' : `⚠️  Empresa filial: ${criar.status} ${JSON.stringify(criar.dados)}`
+    criar.status < 300 ? '✅ Empresa filial criada (id 2)' : `⚠️  Empresa filial: ${criar.status}`
   );
 }
 const conceder = await chamar('POST', '/api/usuarios/1/empresas', { empresa_id: 2 }, tokenAdmin);
@@ -168,7 +171,7 @@ async function garantirPerfil(email, nome, perfil) {
   if (!id) {
     const criar = await chamar('POST', '/api/usuarios', { nome, email, perfil, ativo: true, empresa_id: 1 }, tokenAdmin);
     if (criar.status >= 300) {
-      console.error(`❌ Criar ${perfil}:`, criar.status, criar.dados);
+      console.error(`❌ Criar ${perfil}:`, criar.status);
       return null;
     }
     id = criar.dados?.id || criar.dados?.row?.id;
@@ -182,18 +185,18 @@ async function garantirPerfil(email, nome, perfil) {
   const temp = await chamar('POST', `/api/usuarios/${id}/senha-temporaria`, {}, tokenAdmin);
   const senhaTemp = temp.dados?.senha_temporaria;
   if (!senhaTemp) {
-    console.error(`❌ Senha temporária de ${perfil} falhou:`, temp.status, temp.dados);
+    console.error(`❌ Senha temporária de ${perfil} falhou:`, temp.status);
     return id;
   }
   // Define uma senha estável: login com a provisória + troca.
   const l1 = await chamar('POST', '/api/auth/login', { email, password: senhaTemp });
   if (!l1.dados?.token) {
-    console.error(`❌ Login provisório de ${perfil} falhou:`, l1.status, l1.dados);
+    console.error(`❌ Login provisório de ${perfil} falhou:`, l1.status);
     return id;
   }
   const troca = await chamar('POST', '/api/auth/change-password', { senha_atual: senhaTemp, senha_nova: SENHA_TEMP_FIXA }, l1.dados.token);
   if (troca.status >= 300) {
-    console.error(`❌ Troca de senha de ${perfil} falhou:`, troca.status, troca.dados);
+    console.error(`❌ Troca de senha de ${perfil} falhou:`, troca.status);
   } else {
     console.log(`✅ ${perfil}: senha estável definida`);
   }
@@ -204,10 +207,10 @@ const idGerente = await garantirPerfil('gerente@brobond.com.br', 'Gerente Teste'
 const idOperador = await garantirPerfil('operador@brobond.com.br', 'Operador Teste', 'operador');
 
 console.log('\n--- Variáveis para os scripts de check ---');
-console.log(`export UX05_TOTP_SECRET_FILE=/tmp/segredo.txt`);
-console.log(`export UX05_PASS='${SENHA_NOVA}'`);
-console.log(`export UX05_SENHA_GERENTE='${SENHA_TEMP_FIXA}'`);
-console.log(`export UX05_SENHA_OPERADOR='${SENHA_TEMP_FIXA}'`);
+console.log(`UX05_TOTP_SECRET_FILE: ${segredoArquivo}`);
+console.log('UX05_PASS: PRESENTE (valor não exibido)');
+console.log('UX05_SENHA_GERENTE: use UX05_SENHA_PERFIL ou UX05_PASS no ambiente');
+console.log('UX05_SENHA_OPERADOR: use UX05_SENHA_PERFIL ou UX05_PASS no ambiente');
 console.log(
   `export UX05_ESPERADO='{"GERENTE":{"proibidos":["/empresas","/usuarios","/auditoria"]},"OPERADOR":{"proibidos":["/empresas","/usuarios","/auditoria","/politicas-comerciais"]}}'`
 );

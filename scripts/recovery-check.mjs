@@ -73,6 +73,15 @@ try {
   await alvo.query(sql);
 
   passo('conferindo a restauração');
+  // Counts from the actual snapshot, including zero-row tables. Checking only
+  // a newly seeded customer missed lost operational data and stale target rows.
+  const tabelasSnapshot = [...sql.matchAll(/^-- ([a-z_][a-z_0-9]*): (\d+) registro\(s\)$/gm)];
+  if (!tabelasSnapshot.length) throw new Error('backup sem inventário verificável');
+  for (const [, tabela, quantidade] of tabelasSnapshot) {
+    const { rows } = await alvo.query(`SELECT count(*)::int n FROM "${tabela}"`);
+    if (rows[0].n !== Number(quantidade)) throw new Error(`restauração divergente em ${tabela}`);
+  }
+  passo(`${tabelasSnapshot.length} tabelas restauradas com contagem exata`);
   for (const tabela of TABELAS_MARCADOR) {
     const esperado = await fonte.query(`SELECT count(*)::int n FROM "${tabela}" WHERE empresa_id = $1`, [empresaId]).catch(async () =>
       ({ rows: [{ n: Number((await fonte.query(`SELECT count(*)::int n FROM "${tabela}"`)).rows[0].n) }] }));

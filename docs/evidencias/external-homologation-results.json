@@ -2,7 +2,7 @@
   "date": "2026-10-31",
   "baseMainSha": "d9f29ddf52eee99c4019e43f03fd0e88b0107653",
   "branch": "arena/50a466c4-brobond-erp",
-  "scope": "Execução local; nenhum provider externo homologado; hashes referem logs locais não publicados para evitar vazamento.",
+  "scope": "Histórico da primeira execução e continuação; resultados mais recentes em continuation. Nenhum provedor externo homologado.",
   "server": {
     "tests": 1658,
     "pass": 1582,
@@ -484,5 +484,409 @@
       "sha256": "8504632dff982cc6febfa1291b2323d1219c78641283706e1920f657240c1c86"
     }
   ],
-  "automaticFixAttempt": "npm audit fix --ignore-scripts --no-fund --json: exit 1, 29 vulnerabilidades permanecem. Lockfile restaurado sem reset/rebase/clean; npm ci reinstalou a base exata."
+  "automaticFixAttempt": "npm audit fix --ignore-scripts --no-fund --json: exit 1, 29 vulnerabilidades permanecem. Lockfile restaurado sem reset/rebase/clean; npm ci reinstalou a base exata.",
+  "continuation": {
+    "date": "2026-10-31",
+    "previousCommit": "42b652dd54a5780f11ffa3f3c7bce2bc59fdce57",
+    "postgresVersion": "16.14",
+    "psqlVersion": "16.14",
+    "chromiumVersion": "153.0.8010.0",
+    "server": {
+      "tests": 1660,
+      "pass": 1584,
+      "fail": 0,
+      "skipped": 76
+    },
+    "client": {
+      "filesPassed": 123,
+      "testsPassed": 1067
+    },
+    "postgres": {
+      "tests": 414,
+      "pass": 414,
+      "fail": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    "smokePostgres": {
+      "pass": 398,
+      "total": 398
+    },
+    "restore": {
+      "tablesExactCount": 185,
+      "reapplicationIdempotent": true,
+      "revokesCredentials": true,
+      "financialPeriodGuardsEnabled": true
+    },
+    "browser": {
+      "ux05Browser": 0,
+      "ux05Drawer": 0,
+      "ux05Rbac": 0,
+      "scope": "Navegação global, viewports/teclado, multiempresa e papéis previstos nos checks existentes; não auditoria visual de todas as telas do ERP."
+    },
+    "newRegressions": {
+      "localSecurity": 2,
+      "postgresRestore": 1
+    },
+    "databaseRestartOutbox": {
+      "persistedExpiredLease": true,
+      "processedByNewWorker": 1,
+      "processedBySecondWorker": 0
+    },
+    "lint": {
+      "errors": 0,
+      "warnings": 600
+    },
+    "security": {
+      "info": 0,
+      "low": 2,
+      "moderate": 27,
+      "high": 0,
+      "critical": 0,
+      "total": 29
+    },
+    "commands": [
+      {
+        "command": "npm run test:pg",
+        "exit": 0,
+        "seconds": 363.1,
+        "log": "26.log",
+        "sha256": "5d32848e12fc197b5a354b37a7e5b386033a11967a6422549105b6405b58ae68"
+      },
+      {
+        "command": "npm run smoke:pg",
+        "exit": 0,
+        "seconds": 10.1,
+        "log": "27.log",
+        "sha256": "fba506de68a6cb18bf55c2de46bafde39823f0e0b3aeaefc453e5a4adb9a2187"
+      },
+      {
+        "command": "npm run recovery:check",
+        "exit": 1,
+        "seconds": 66.3,
+        "log": "28.log",
+        "sha256": "b1190101774e994d860541b1c91985056b76af684e4ea6954d3a909d73790e24"
+      },
+      {
+        "command": "node scripts/ux05-fixtures.mjs",
+        "exit": 0,
+        "seconds": 0.9,
+        "log": "29.log",
+        "sha256": "0f8234b9ffa9b763b3c9a8689e6f479024064caf59510bc0fafd556f1338725c"
+      },
+      {
+        "command": "node scripts/ux05-browser-check.mjs http://127.0.0.1:5173",
+        "exit": 0,
+        "seconds": 59.9,
+        "log": "30.log",
+        "sha256": "caee89bcb90f6616e54f25e0103cb5022c3fdd26b2e1b3e54b3ed6cd093abb78"
+      },
+      {
+        "command": "node scripts/ux05-drawer-check.mjs http://127.0.0.1:5173",
+        "exit": 0,
+        "seconds": 37.1,
+        "log": "31.log",
+        "sha256": "790236a5c0bbc30220eed8a63a1f59ec9199c942f90091a548e755597eed311a"
+      },
+      {
+        "command": "node scripts/ux05-rbac-check.mjs http://127.0.0.1:5173",
+        "exit": 0,
+        "seconds": 66.1,
+        "log": "32.log",
+        "sha256": "742eaf0c1fb95dd9b76139aebef7771bf46afe18d78820aea6e8edc27d0432c7"
+      },
+      {
+        "command": "npm test",
+        "exit": 0,
+        "seconds": 310.7,
+        "log": "34.log",
+        "sha256": "5629c291ac087bf5321a3a686e672e27557c154c3d9a0ca4ae253745fb49bcff"
+      },
+      {
+        "command": "npm run typecheck",
+        "exit": 0,
+        "seconds": 37.8,
+        "log": "35.log",
+        "sha256": "b4c7d97221fc99cf02284ee3bda3e6283010f7e0aa9feeed5e3adfe3fc879c2f"
+      },
+      {
+        "command": "npm run build",
+        "exit": 0,
+        "seconds": 22.5,
+        "log": "36.log",
+        "sha256": "82f69a3638c93a82f823e3cd2636aa4c53fa3478afdf05bd1d06068fcfbcf474"
+      },
+      {
+        "command": "npm run lint",
+        "exit": 0,
+        "seconds": 18.8,
+        "log": "37.log",
+        "sha256": "f5771b01e0cb67a8e4a51945528125b154ba4217d6145bd64c9b91c19fd5615b"
+      },
+      {
+        "command": "npm audit --json",
+        "exit": 1,
+        "seconds": 2.7,
+        "log": "38.log",
+        "sha256": "10508605af30d89640565f033300e05e203536423d16df9c4d527a271a8c9f13"
+      },
+      {
+        "command": "npm run audit:ux",
+        "exit": 0,
+        "seconds": 0.3,
+        "log": "39.log",
+        "sha256": "66111227ec393e47c74abaa6c941b3bcea1f5c954d6e3c1c5e520b725e1227e3"
+      },
+      {
+        "command": "npm run audit:menu",
+        "exit": 0,
+        "seconds": 0.5,
+        "log": "40.log",
+        "sha256": "939317dc2bbea802c1b949389a617fa34c0e3c47f849088a053b309fa285cd05"
+      },
+      {
+        "command": "npm run architecture:audit",
+        "exit": 0,
+        "seconds": 0.6,
+        "log": "41.log",
+        "sha256": "5ddaf2b0fd7623571223cba7f8b08d6abdff1eefd50d9215c5c240be586d51b4"
+      },
+      {
+        "command": "npm run go-live:audit",
+        "exit": 0,
+        "seconds": 1.7,
+        "log": "42.log",
+        "sha256": "b3f55b276a0a25f53ce6ef2df73f59a75d1ac9b24797d3ece5a16ae97f5aa517"
+      },
+      {
+        "command": "npm run commerce:go-live",
+        "exit": 0,
+        "seconds": 0.4,
+        "log": "43.log",
+        "sha256": "8a95154f78b2da48d727fbb99059ed29b9cb4eb245c1e48a0d05e3c75174a947"
+      },
+      {
+        "command": "npm run payment:go-live",
+        "exit": 0,
+        "seconds": 0.2,
+        "log": "44.log",
+        "sha256": "382a485bd60b1f153ec314a8a3e8ef8589778f37d0dcf32f594ff67b30579d75"
+      },
+      {
+        "command": "npm run commerce:final-go-live",
+        "exit": 1,
+        "seconds": 1.5,
+        "log": "45.log",
+        "sha256": "b2b6b22469716a908498f6cf54adc318ae941dbc179adb9d50b3f251631a680a"
+      },
+      {
+        "command": "npm run test:pg",
+        "exit": 0,
+        "seconds": 412.8,
+        "log": "52.log",
+        "sha256": "fc6c2c29a9f8e565a1083b53f884aebc75adc0377af7e8a8af5293f7c92e8072"
+      },
+      {
+        "command": "npm run smoke:pg",
+        "exit": 0,
+        "seconds": 8.2,
+        "log": "53.log",
+        "sha256": "cce66a99ef0af4d7b3ac90f88934dc4fe8fead632633ba30c807ae3cd846daaf"
+      },
+      {
+        "command": "npm run recovery:check",
+        "exit": 0,
+        "seconds": 82.5,
+        "log": "54.log",
+        "sha256": "efdf505e1d2e6c16d3e3418c747a1ee32896c5bd4453963c07f97369c714110d"
+      },
+      {
+        "command": "npm test",
+        "exit": 0,
+        "seconds": 383.7,
+        "log": "55.log",
+        "sha256": "631d484db9b2dfff842e44718920633275d650663d83253d8486dd62256bf78b"
+      },
+      {
+        "command": "npm run typecheck",
+        "exit": 0,
+        "seconds": 48.0,
+        "log": "56.log",
+        "sha256": "b4c7d97221fc99cf02284ee3bda3e6283010f7e0aa9feeed5e3adfe3fc879c2f"
+      },
+      {
+        "command": "npm run build",
+        "exit": 0,
+        "seconds": 21.3,
+        "log": "57.log",
+        "sha256": "ef1a9d92f0bc9faaa030db67ad87b23cd92d7296fe645d159fc091bb04d5f053"
+      },
+      {
+        "command": "npm run lint",
+        "exit": 0,
+        "seconds": 19.7,
+        "log": "58.log",
+        "sha256": "4f5af96ab14ff17e2e5afab106a9b93bfa5b0d71266c838a002c32ace9761cc3"
+      },
+      {
+        "command": "npm audit --json",
+        "exit": 1,
+        "seconds": 2.7,
+        "log": "59.log",
+        "sha256": "10508605af30d89640565f033300e05e203536423d16df9c4d527a271a8c9f13"
+      },
+      {
+        "command": "npm run audit:ux",
+        "exit": 0,
+        "seconds": 0.3,
+        "log": "60.log",
+        "sha256": "66111227ec393e47c74abaa6c941b3bcea1f5c954d6e3c1c5e520b725e1227e3"
+      },
+      {
+        "command": "npm run audit:menu",
+        "exit": 0,
+        "seconds": 0.5,
+        "log": "61.log",
+        "sha256": "939317dc2bbea802c1b949389a617fa34c0e3c47f849088a053b309fa285cd05"
+      },
+      {
+        "command": "npm run architecture:audit",
+        "exit": 0,
+        "seconds": 0.7,
+        "log": "62.log",
+        "sha256": "85279fdb18d04936b16c2b8610d5753bb12157d3b4b80f470dc15b2784143db2"
+      },
+      {
+        "command": "npm run go-live:audit",
+        "exit": 0,
+        "seconds": 1.8,
+        "log": "63.log",
+        "sha256": "b3f55b276a0a25f53ce6ef2df73f59a75d1ac9b24797d3ece5a16ae97f5aa517"
+      },
+      {
+        "command": "npm run commerce:go-live",
+        "exit": 0,
+        "seconds": 0.4,
+        "log": "64.log",
+        "sha256": "8a95154f78b2da48d727fbb99059ed29b9cb4eb245c1e48a0d05e3c75174a947"
+      },
+      {
+        "command": "npm run payment:go-live",
+        "exit": 0,
+        "seconds": 0.2,
+        "log": "65.log",
+        "sha256": "382a485bd60b1f153ec314a8a3e8ef8589778f37d0dcf32f594ff67b30579d75"
+      },
+      {
+        "command": "npm run commerce:final-go-live",
+        "exit": 1,
+        "seconds": 1.5,
+        "log": "66.log",
+        "sha256": "b2b6b22469716a908498f6cf54adc318ae941dbc179adb9d50b3f251631a680a"
+      },
+      {
+        "command": "npm run typecheck",
+        "exit": 0,
+        "seconds": 36.6,
+        "log": "76.log",
+        "sha256": "b4c7d97221fc99cf02284ee3bda3e6283010f7e0aa9feeed5e3adfe3fc879c2f"
+      },
+      {
+        "command": "npm run lint",
+        "exit": 0,
+        "seconds": 16.7,
+        "log": "77.log",
+        "sha256": "4f5af96ab14ff17e2e5afab106a9b93bfa5b0d71266c838a002c32ace9761cc3"
+      },
+      {
+        "command": "DATABASE_URL=<banco local descartável> node --import tsx --test server/test/pg/backup-recovery.test.ts server/test/ux05-fixtures-security.test.ts",
+        "exit": 0,
+        "seconds": 0.9,
+        "log": "78.log",
+        "sha256": "81b29bae7737c540a98a840951e1d5d9f59b7e7f9718c8089503d0ba9fa033b3"
+      },
+      {
+        "command": "node --import tsx --test server/test/multiempresa-p1.test.ts",
+        "exit": 0,
+        "seconds": 0.5,
+        "log": "79.log",
+        "sha256": "5137d94babd03b386d1cd0b62914d87e1c147e9937449b21206a91eab0276339"
+      },
+      {
+        "command": "node --import tsx scripts/capacidades-audit.ts",
+        "exit": 0,
+        "seconds": 0.4,
+        "log": "80.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": "Regressão UX-05 (2 testes)",
+        "exit": 0,
+        "log": "33.log",
+        "sha256": "6a63d3373880c2e7b92770454dc343d676c7a8c396b745b8010bd7edff981318"
+      },
+      {
+        "command": "recovery:check — tentativa intermediária",
+        "exit": 1,
+        "log": "46.log",
+        "sha256": "762e35d107587625eb2983250efd7f26ce9c2a2cd212bc84e45a7711c4378f90"
+      },
+      {
+        "command": "recovery:check — tentativa intermediária",
+        "exit": 1,
+        "log": "47.log",
+        "sha256": "7928fda13bd1841c1db0ba11b2a9fded2cc9d0adbbe504c621e1f5e1ef14581b"
+      },
+      {
+        "command": "recovery:check — tentativa intermediária",
+        "exit": 1,
+        "log": "48.log",
+        "sha256": "7739cc22fa0018109c3321cff2e6c6103a264487baa0d2e18f6ba33c5f199303"
+      },
+      {
+        "command": "recovery:check — ciclos/FKs iniciais corrigidos",
+        "exit": 0,
+        "log": "49.log",
+        "sha256": "04e17dff69bc5382e4912e8c6e06243ebd0d022911113b4e2544a523d785bbf3"
+      },
+      {
+        "command": "recovery:check — inclusão de pagamentos expôs período fechado",
+        "exit": 1,
+        "log": "69.log",
+        "sha256": "c8357783d57050061709100a668e407ef88f3f65463a2d0623c7d52a4ea37d2c"
+      },
+      {
+        "command": "Regressão PG do restore com períodos e tokens",
+        "exit": 0,
+        "log": "70.log",
+        "sha256": "68e997e81bd2042b6ff854a07f2b3b347fe2d5eba36a2be8ab6089e22cef3721"
+      },
+      {
+        "command": "recovery:check — final, 185 tabelas",
+        "exit": 0,
+        "log": "71.log",
+        "sha256": "efdf505e1d2e6c16d3e3418c747a1ee32896c5bd4453963c07f97369c714110d"
+      },
+      {
+        "command": "Probe de worker sem bootstrap — setup rejeitado com 503",
+        "exit": 1,
+        "log": "74.log",
+        "sha256": "56e8c416cfe0fee0a9b249151da09d232a31682253a2725f5af9e04afd2956aa"
+      },
+      {
+        "command": "Probe DB restart + dois processos worker com bootstrap correto",
+        "exit": 0,
+        "log": "75.log",
+        "sha256": "30dd7b30e47e4822759c108be13f19feb4816744740bdbe53d5877248c5b914c"
+      },
+      {
+        "command": "npm run db:validate (banco local configurado)",
+        "exit": 1,
+        "log": "81.log",
+        "sha256": "3361f58845ac20db08a6b19a3f25589c9d854eeb2e0336937153932f12fdc6e5",
+        "diagnosis": "engine Prisma bloqueado pelo egress; não é falha de conexão PostgreSQL"
+      }
+    ],
+    "tools": "Instaladas fora do Git via npm/PyPI/GitHub. psql compilado da tag oficial PostgreSQL REL_16_14; banco ligado só em loopback, sem senha. Bibliotecas e binários não foram adicionados ao projeto."
+  }
 }
