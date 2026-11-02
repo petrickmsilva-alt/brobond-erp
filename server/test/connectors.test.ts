@@ -50,6 +50,7 @@ const {
   normalizeSaleCurrency,
   matchCatalogItem,
   isSaleIngestionEvent,
+  createWebhookHandlers,
   appUrl,
   connectorCallbackPath,
   connectorWebhookPath,
@@ -585,6 +586,38 @@ describe('Conectores — casamento com o catálogo do ERP', () => {
     };
     const match = await matchCatalogItem(db, 1, { sku: 'A', title: 'B' });
     assert.deepEqual(match, { productId: null, sizeId: null });
+  });
+});
+
+describe('Mercado Livre — webhook fail-closed', () => {
+  const TEST_ONLY_WEBHOOK_KEY = 'fixture-only-not-a-provider-secret';
+  const handlers = createWebhookHandlers({
+    repository: { findByShopId: async () => null } as any,
+  });
+  const request = (secret?: string) => ({
+    headers: {},
+    rawBody: JSON.stringify({ topic: 'orders_v2', user_id: 123, _id: 'event-test-1', resource: '/orders/1' }),
+    url: 'https://erp.example.test/api/webhooks/mercadolivre',
+    query: secret === undefined ? {} : { secret },
+  });
+
+  test('recusa antes do lookup quando o segredo não está configurado', async () => {
+    await comEnv({ MERCADOLIVRE_WEBHOOK_SECRET: undefined }, async () => {
+      await assert.rejects(handlers.handleProviderWebhook('MERCADOLIVRE', request(TEST_ONLY_WEBHOOK_KEY)), {
+        name: 'WebhookSignatureError',
+      });
+    });
+  });
+
+  test('recusa segredo ausente/incorreto e só passa a validação com o fixture explicitamente configurado', async () => {
+    await comEnv({ MERCADOLIVRE_WEBHOOK_SECRET: TEST_ONLY_WEBHOOK_KEY }, async () => {
+      await assert.rejects(handlers.handleProviderWebhook('MERCADOLIVRE', request()), { name: 'WebhookSignatureError' });
+      await assert.rejects(handlers.handleProviderWebhook('MERCADOLIVRE', request('wrong-fixture')), { name: 'WebhookSignatureError' });
+      assert.deepEqual(await handlers.handleProviderWebhook('MERCADOLIVRE', request(TEST_ONLY_WEBHOOK_KEY)), {
+        received: true,
+        ignored: true,
+      });
+    });
   });
 });
 

@@ -89,18 +89,16 @@ function parseJsonBody(rawBody: string): JsonObject {
 // ------------------------------------------------------------------
 
 /**
- * Mercado Livre: as notificações não têm HMAC. A integridade é garantida
- * por um segredo compartilhado na própria URL registrada (`?secret=…`).
- * Com `MERCADOLIVRE_WEBHOOK_SECRET` definido, segredo ausente ou errado
- * recusa a entrega.
+ * Mercado Livre: a validação configurada pelo BROBOND usa um segredo
+ * compartilhado na própria URL registrada (`?secret=…`). A validação é
+ * fail-closed: sem `MERCADOLIVRE_WEBHOOK_SECRET`, ou com valor ausente/
+ * incorreto na notificação, a entrega é recusada antes de qualquer lookup.
  */
 function parseMercadoLivreEvent(request: WebhookRequest): ParsedWebhookEvent {
   const secret = process.env.MERCADOLIVRE_WEBHOOK_SECRET?.trim();
-  if (secret) {
-    const presented = request.query.secret ?? '';
-    if (!presented || !safeEqual(presented, secret)) {
-      throw new WebhookSignatureError('MERCADOLIVRE');
-    }
+  const presented = request.query.secret ?? '';
+  if (!secret || !presented || !safeEqual(presented, secret)) {
+    throw new WebhookSignatureError('MERCADOLIVRE');
   }
   const body = parseJsonBody(request.rawBody);
   const topic = typeof body.topic === 'string' ? body.topic.trim().toLowerCase() : 'unknown';
