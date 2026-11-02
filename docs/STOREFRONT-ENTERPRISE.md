@@ -343,6 +343,27 @@ da Orders API. Os 7 fixtures receberam também `documento: '529.982.247-25'`
 **sem alterar nenhuma asserção** de estoque/frete/tenancy/SEO/idempotência.
 O teste unitário novo trava o formato completo (nome, e-mail, WhatsApp E.164,
 CPF válido e recusa de CPF inválido/ausente) para evitar regressão silenciosa.
+
+Em `a8c1acb` os dois testes de commerce **passaram** (`ok 128`, `ok 141`) e
+restou apenas 1 de 415 falhas no job PG, além de uma falha nova no `verificar`:
+
+* `commerce-concorrencia.test.ts:475` — `11 !== 6` em
+  `processarOutbox ×4`. O worker de outbox é **global**: agora que o checkout
+  emite eventos `sincronizacao`/`acao='notificacao'`, as 4 corridas também
+  reclamaram trabalhos PENDENTES deixados por outras suítes no mesmo banco.
+  A asserção foi tornada hermética (`processados >= N`) e a garantia de
+  "exatamente uma vez" passou a ser medida **no tenant do teste** — N linhas,
+  todas `PROCESSADO`, `tentativas = 1` e soma das tentativas `= N`. Nenhuma
+  asserção de concorrência foi removida.
+* `verificar / Testes client` — `ReferenceError: window is not defined`
+  originado em `src/components/ui.tsx:23` (`VendaFlow.test.tsx`). O
+  `ToastProvider` agendava `window.setTimeout(..., 3000)` sem cancelar no
+  unmount; o callback disparava depois do teardown do jsdom e o React lia
+  `window` em `getCurrentEventPriority`. Corrigido com registro e cancelamento
+  dos timers no `useEffect` de limpeza, usando `globalThis`. A suíte client
+  completa (129 arquivos / 1112 testes) passou duas vezes localmente depois
+  da correção.
+
 As duas mensagens de migração `0030/E4.2` e `9999_prod_db_01_falha_intencional`
 que aparecem no log são cenários de falha **intencionais** dos testes de
 degradação/recuperação, não defeitos da cadeia de migrations.
@@ -385,8 +406,9 @@ Gates locais verdes **não** significam homologação. Antes de
 5. **PG 16.14 do CI**: confirmar `testes-postgres` PASS no commit final (o
    gate local de `DATABASE_URL` continua indisponível no sandbox). Histórico
    real: `580a01c` FAIL na cadeia de migrations; `44cb44d` e `97cd2b5`
-   `verificar` PASS + `testes-postgres` FAIL apenas nos 2 fixtures de comprador
-   (nome/WhatsApp e depois CPF) descritos em §9.1.
+   `verificar` PASS + `testes-postgres` FAIL nos 2 fixtures de comprador
+   (nome/WhatsApp e depois CPF); `a8c1acb` já teve `ok 128`/`ok 141` e
+   falhou só no teste global de outbox + no timer de toast (§9.1).
 6. **Tela de consulta** de `commerce_notificacoes` no backoffice (aviso
    informativo de `audit:menu`; a fila e o orchestrator já funcionam).
 
@@ -394,7 +416,7 @@ Gates locais verdes **não** significam homologação. Antes de
 
 | Rótulo | Valor | Motivo |
 | --- | --- | --- |
-| `CODE_READY` | **PENDENTE até `verificar` + `testes-postgres` PASS** | todos os gates locais verdes; `verificar` PASS em `44cb44d` e `97cd2b5`; causa dos 2 testes PG diagnosticada no log do job em duas rodadas e corrigida (§9.1); veredito do commit final a confirmar |
+| `CODE_READY` | **PENDENTE até `verificar` + `testes-postgres` PASS** | todos os gates locais verdes; 3 rodadas de CI diagnosticadas pelo log completo do job e corrigidas (§9.1); `ok 128`/`ok 141` já comprovados em PostgreSQL 16.14 no `a8c1acb`; veredito do commit final a confirmar |
 | `INTERNAL_COMMERCE_READY` | **PENDENTE até CI verde** | cadeia única STOREFRONT → CHECKOUT → PAYMENT ENGINE/MP/PIX → OMS/PEDIDO → VENDA ERP/ESTOQUE/FINANCEIRO/FULFILLMENT → COMUNICAÇÃO → GOVERNANÇA; galeria admin concluída; migrations validadas; `smoke` 398/398 |
 | `EXTERNAL_HOMOLOGATION_READY` | **NO** | falta loja publicada, credenciais MP/SMTP/Meta e métricas de browser |
 | `REAL_PIX_HOMOLOGATION` | **BLOCKED** | `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET`, `/v1/orders` habilitado e ambiente publicado ausentes |

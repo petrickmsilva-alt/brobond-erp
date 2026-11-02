@@ -14,13 +14,27 @@ const ToastContext = createContext<ToastCtx | null>(null);
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const seq = useRef(0);
+  // Cada toast agenda um timer de 3s. Sem cancelar esses timers no unmount, o
+  // callback dispara DEPOIS que o ambiente de teste (jsdom) foi derrubado e o
+  // React lê `window` em getCurrentEventPriority → "ReferenceError: window is
+  // not defined" (unhandled error que derruba a suíte inteira mesmo com todos
+  // os testes passando). `globalThis` evita depender de `window` no cleanup.
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => {
+    for (const timer of timers.current) globalThis.clearTimeout(timer);
+    timers.current = [];
+  }, []);
 
   const push = useCallback((kind: ToastKind, message: string) => {
     const id = ++seq.current;
     setToasts((t) => [...t, { id, kind, message }]);
     // Todo aviso é efêmero e desaparece após 3s (inclusive erros). O
     // botão de fechar continua disponível para dispensar antes do prazo.
-    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3000);
+    const timer = globalThis.setTimeout(() => {
+      timers.current = timers.current.filter((x) => x !== timer);
+      setToasts((t) => t.filter((x) => x.id !== id));
+    }, 3000);
+    timers.current.push(timer);
   }, []);
 
   const value = useMemo(() => ({ push }), [push]);
