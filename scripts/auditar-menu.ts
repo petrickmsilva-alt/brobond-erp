@@ -63,7 +63,7 @@ const rotasExplicitas = new Set<string>(
 if (/<Route\s+index\s+element/.test(appSrc)) rotasExplicitas.add('/'); // Meu Negócio (rota raiz)
 
 /** O App.tsx gera uma rota para cada módulo, exceto a raiz e as tratadas à mão. */
-const geraRotaParaModulo = /MODULES\.filter\(\(m\) => m\.path !== '\/' && m\.id !== 'config'\)/.test(appSrc);
+const geraRotaParaModulo = /MODULES\.filter\(\(m\) => m\.path !== '\/'[^)]*m\.id !== 'config'[^)]*\)/.test(appSrc);
 
 const pathsVistos = new Map<string, string>();
 for (const m of MODULES) {
