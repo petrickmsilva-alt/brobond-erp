@@ -366,7 +366,7 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   const chave = `chave-${RODADA}-${randomUUID().slice(0, 8)}`.slice(0, 64);
   const checkout = await req('POST', '/loja/checkout', {
     chave,
-    comprador: { nome: 'Cliente CE2E', email: 'cliente@ce2e.example.test' },
+    comprador: { nome: 'Cliente CE2E', email: 'cliente@ce2e.example.test', whatsapp: '62999991234', documento: '529.982.247-25' },
     itens,
     cupom: codigoCupom,
     endereco: { nome: 'Cliente CE2E', rua: 'Rua das Flores', numero: '10', bairro: 'Centro', cidade: 'Goiânia', uf: 'GO', cep: '74000-000', complemento: null },
@@ -381,7 +381,7 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   // reenvio do MESMO carrinho → idempotente (mesmo pedido)
   const checkout2 = await req('POST', '/loja/checkout', {
     chave,
-    comprador: { nome: 'Cliente CE2E', email: 'cliente@ce2e.example.test' },
+    comprador: { nome: 'Cliente CE2E', email: 'cliente@ce2e.example.test', whatsapp: '62999991234', documento: '529.982.247-25' },
     itens,
   }, null, baseUrl);
   assert.equal(checkout2.status, 200, `reenvio idempotente: ${msg(checkout2)}`);
@@ -490,7 +490,7 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   assert.match(motivo, /frete não configurado/i, `mensagem exata de frete não configurado: "${motivo}"`);
   const checkoutSemFrete = await req('POST', '/loja/checkout', {
     chave: `chave2-${RODADA}-${randomUUID().slice(0, 8)}`.slice(0, 64),
-    comprador: { nome: 'Sem Frete', email: 'semfrete@ce2e.example.test' },
+    comprador: { nome: 'Sem Frete', email: 'semfrete@ce2e.example.test', whatsapp: '62999991234', documento: '529.982.247-25' },
     itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 1 }],
   }, null, baseUrl);
   assert.equal(checkoutSemFrete.status, 409, `checkout sem frete recusa com 409: ${msg(checkoutSemFrete)}`);

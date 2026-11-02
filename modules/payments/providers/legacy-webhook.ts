@@ -24,8 +24,8 @@ export function webhookCompatibility(provider: PaymentProvider): LegacyProvider 
       const e = provider.parseWebhook(raw);
       return e ? { evento_id: e.id, evento: e.type, provider_ref: e.reference } : null;
     },
-    verificaAssinatura(ctx, raw, headers) {
-      return provider.verifyWebhook(context(ctx), raw, headers);
+    verificaAssinatura(ctx, raw, headers, query) {
+      return provider.verifyWebhook(context(ctx), raw, headers, query);
     },
     resolveWebhook: async () => null,
   };

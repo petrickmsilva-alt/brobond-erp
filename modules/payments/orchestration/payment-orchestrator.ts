@@ -127,7 +127,9 @@ export class PaymentOrchestrator {
           reference: `payment:${empresaId}:${i.id}`,
           email: String(payer.email || ''),
           customerName: String(payer.nome || ''),
-          taxId: route.capability.requiredCustomerFields.includes('tax_id') ? customer.taxId : undefined,
+          // PIX via Orders API exige identification do pagador; o CPF já foi
+          // validado e normalizado no servidor pelo checkout (nunca browser).
+          taxId: route.capability.requiredCustomerFields.includes('tax_id') || method === 'PIX' ? customer.taxId : undefined,
           installments: 1,
           expiresAt: claim.order.expira_em ? new Date(claim.order.expira_em).toISOString() : undefined,
         };

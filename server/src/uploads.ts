@@ -48,6 +48,10 @@ export type PublicFile = {
   thumb_url: string;
   principal: boolean;
   ordem: number;
+  /** STOREFRONT ENTERPRISE — galeria profissional (aditivo, compatível com fotos antigas). */
+  alt_text: string | null;
+  ativo: boolean;
+  variante_id: number | null;
   criado_em: string;
 };
 
@@ -172,6 +176,11 @@ export function toPublicFile(f: FileMeta | Row): PublicFile {
     thumb_url: f.thumb_url || `${local}?thumb=1`,
     principal: !!f.principal,
     ordem: Number(f.ordem || 0),
+    // Fotos antigas não têm esses campos: ativas, sem variação e sem alt text.
+    // O texto alternativo real é aplicado na visão pública (nome do produto).
+    alt_text: f.alt_text == null ? null : String(f.alt_text).slice(0, 180),
+    ativo: f.ativo !== false,
+    variante_id: f.variante_id == null ? null : Number(f.variante_id) || null,
     criado_em: f.criado_em,
   };
 }
@@ -182,16 +191,50 @@ export async function attachImages(r: Resource, rows: Row[], tx?: Tx): Promise<R
   const files = await getStore().filesFor(r.key, rows.map((x) => Number(x.id)), tx);
   const byId = new Map<number, PublicFile[]>();
   for (const f of files) {
+    // Mídia desativada ainda existe no cadastro (não foi apagada), mas nunca
+    // aparece na vitrine pública — evita servir imagem antiga por engano.
+    if (f.ativo === false) continue;
     const list = byId.get(Number(f.registro_id)) || [];
     list.push(toPublicFile(f));
     byId.set(Number(f.registro_id), list);
   }
   for (const row of rows) {
-    const list = byId.get(Number(row.id)) || [];
+    const list = (byId.get(Number(row.id)) || []).sort(
+      (a, b) => Number(!!b.principal) - Number(!!a.principal) || a.ordem - b.ordem || a.id - b.id
+    );
     row.fotos = list;
+    // Cards usam a miniatura (240 px). A página de produto usa `fotos[].url`
+    // (resolução cheia) — nunca amplia o thumb em tela de 500 px.
     row.foto_url = list[0]?.thumb_url ?? null;
   }
   return rows;
+}
+
+/** Normaliza os metadados opcionais de galeria vindos do admin (fail-closed). */
+export function metadadosGaleria(body: Record<string, unknown>): { alt_text?: string | null; ativo?: boolean; variante_id?: number | null } {
+  const dados: { alt_text?: string | null; ativo?: boolean; variante_id?: number | null } = {};
+  // Tipos rígidos: lixo do cliente é IGNORADO, nunca convertido em metadado.
+  if ('alt_text' in body && (body.alt_text === null || typeof body.alt_text === 'string')) {
+    const v = body.alt_text === null ? null : body.alt_text.trim().slice(0, 180);
+    dados.alt_text = v || null;
+  }
+  if ('ativo' in body && (typeof body.ativo === 'boolean' || body.ativo === 'true' || body.ativo === 'false'))
+    dados.ativo = body.ativo === true || body.ativo === 'true';
+  if ('variante_id' in body && (body.variante_id === null || body.variante_id === '' || typeof body.variante_id === 'number' || typeof body.variante_id === 'string')) {
+    const n = Number(body.variante_id);
+    dados.variante_id = body.variante_id == null || body.variante_id === '' || !Number.isSafeInteger(n) || n <= 0 ? null : n;
+  }
+  return dados;
+}
+
+/**
+ * Variação de mídia precisa existir no catálogo compartilhado de tamanhos.
+ * Não confia no id enviado pelo navegador: recusa 400 com chave inexistente,
+ * preservando a integridade da FK sem depender de uma exception do banco.
+ */
+async function validarVariante(s: ReturnType<typeof getStore>, varianteId: number): Promise<void> {
+  const tamanho = await s.findOneWhere(getResource('tamanhos')!, { id: varianteId });
+  if (!tamanho) throw new HttpError(400, 'Variação informada para a foto não existe.', { variante_id: 'Variação inválida' });
 }
 
 /** Remove todos os arquivos de um registro (chamado ao excluir o registro). */
@@ -279,9 +322,11 @@ export async function uploadFile(req: Request, res: Response) {
   const mime = sniffMime(dados);
   if (!mime || !ALLOWED.has(mime) || !sniffMime(thumb)) throw new HttpError(400, 'Envie uma imagem JPEG, PNG ou WebP.');
   const nome = String(body.nome || `foto.${ext(mime)}`).slice(0, 160);
+  const galeria = metadadosGaleria(body);
 
   const s = getStore();
   const arquivos = getResource('arquivos')!;
+  if (galeria.variante_id != null) await validarVariante(s, galeria.variante_id);
   try {
     const created = await s.transaction(async (tx) => {
       // SEC-01: só inclui anexo em registro da empresa ativa (escrita estrita).
@@ -301,6 +346,10 @@ export async function uploadFile(req: Request, res: Response) {
         principal: existing.length === 0,
         ordem: existing.length,
         criado_por: actor.id || null,
+        // Galeria: texto alternativo, ativação e vínculo opcional com variação.
+        alt_text: galeria.alt_text ?? null,
+        ativo: galeria.ativo ?? true,
+        variante_id: galeria.variante_id ?? null,
       };
       if (cfg) {
         const publicId = `${r.key}-${id}-${token}`;
@@ -331,11 +380,15 @@ export async function updateFile(req: Request, res: Response) {
   const body = (req.body || {}) as Record<string, unknown>;
   const s = getStore();
   const arquivos = getResource('arquivos')!;
+  const galeria = metadadosGaleria(body);
+  if (galeria.variante_id != null) await validarVariante(s, galeria.variante_id);
   try {
     const out = await s.transaction(async (tx) => {
       // SEC-01: reordenar/promover foto exige o pai na empresa ativa.
       await registroDoAtorParaEscrita(r, id, escopoDe(actor), tx);
       await ownedFile(r, id, fid, tx);
+      // Metadados de galeria: alt text, ativação e vínculo com variação.
+      if (Object.keys(galeria).length) await s.update(arquivos, fid, galeria, tx);
       if (body.principal === true) {
         const all = await s.filesFor(r.key, [id], tx);
         for (const f of all) if (f.principal && Number(f.id) !== fid) await s.update(arquivos, Number(f.id), { principal: false }, tx);

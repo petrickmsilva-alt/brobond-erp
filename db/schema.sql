@@ -216,6 +216,10 @@ CREATE TABLE IF NOT EXISTS arquivos (
   token TEXT NOT NULL,                       -- segredo aleatório usado na URL pública da imagem
   principal BOOLEAN DEFAULT FALSE,
   ordem INTEGER DEFAULT 0,
+  -- STOREFRONT ENTERPRISE: metadados de galeria (additivo, sem quebrar fotos atuais).
+  alt_text TEXT,                             -- texto alternativo real (acessibilidade/SEO)
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,       -- desativa sem apagar o arquivo
+  variante_id INTEGER REFERENCES tamanhos(id) ON DELETE SET NULL, -- mídia opcional por variação
   criado_por INTEGER,
   criado_em TIMESTAMPTZ DEFAULT now()
 );
@@ -6773,7 +6777,7 @@ CREATE TABLE IF NOT EXISTS commerce_outbox (
   id SERIAL PRIMARY KEY,
   empresa_id INTEGER NOT NULL REFERENCES empresas(id),
   tipo TEXT NOT NULL,
-  CONSTRAINT commerce_outbox_tipo_ck CHECK (tipo IN ('conversao', 'publicacao', 'sincronizacao', 'alerta')),
+  CONSTRAINT commerce_outbox_tipo_ck CHECK (tipo IN ('conversao', 'publicacao', 'sincronizacao', 'alerta', 'refund_devolucao')),
   chave TEXT NOT NULL,
   payload JSONB,
   estado TEXT NOT NULL DEFAULT 'PENDENTE',
@@ -8352,3 +8356,80 @@ CREATE TABLE IF NOT EXISTS epm_project_tasks (
 ALTER TABLE creator_partnerships ADD COLUMN IF NOT EXISTS crm_campanha_id INTEGER REFERENCES crm_campanhas(id);
 CREATE INDEX IF NOT EXISTS creator_partnerships_crm_campanha_idx
   ON creator_partnerships (empresa_id, crm_campanha_id) WHERE crm_campanha_id IS NOT NULL;
+
+-- ============================================================================
+-- STOREFRONT ENTERPRISE — evolução incremental (aditiva, reversível, sem DROP
+-- destrutivo). Reaproveita a tabela `arquivos` (galeria já existente) em vez de
+-- criar uma segunda tabela de mídia. Nenhuma linha existente é alterada: as
+-- novas colunas têm DEFAULT seguro e fotos antigas continuam ativas/sem
+-- variação, exibindo o fallback do produto.
+-- ============================================================================
+
+-- 1) Galeria profissional: alt text, ativação e mídia por variação.
+ALTER TABLE arquivos ADD COLUMN IF NOT EXISTS alt_text TEXT;
+ALTER TABLE arquivos ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE arquivos ADD COLUMN IF NOT EXISTS variante_id INTEGER REFERENCES tamanhos(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS ix_arquivos_galeria
+  ON arquivos (recurso, registro_id, ativo, principal DESC, ordem ASC, id ASC);
+CREATE INDEX IF NOT EXISTS ix_arquivos_variante
+  ON arquivos (recurso, registro_id, variante_id) WHERE variante_id IS NOT NULL;
+
+-- 2) NOTIFICATION ORCHESTRATOR — outbox de comunicação transacional.
+--    Um evento de domínio gera UMA linha por canal. A chave única é a
+--    idempotência: webhook duplicado / reprocessamento nunca reenvia.
+--    Marketing NÃO vive aqui: consentimento separado fica em
+--    commerce_pedidos.comprador (JSONB) e não gera evento nesta rodada.
+CREATE TABLE IF NOT EXISTS commerce_notificacoes (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  pedido_id INTEGER REFERENCES commerce_pedidos(id) ON DELETE SET NULL,
+  evento TEXT NOT NULL,
+  CONSTRAINT commerce_notificacoes_evento_ck CHECK (evento IN (
+    'ORDER_CREATED', 'PIX_GENERATED', 'PAYMENT_PENDING', 'PAYMENT_APPROVED',
+    'PAYMENT_REJECTED',
+    'ORDER_PROCESSING', 'ORDER_SHIPPED', 'ORDER_DELIVERED', 'ORDER_CANCELLED'
+  )),
+  canal TEXT NOT NULL,
+  CONSTRAINT commerce_notificacoes_canal_ck CHECK (canal IN ('EMAIL', 'WHATSAPP')),
+  destinatario TEXT NOT NULL,
+  template TEXT,
+  estado TEXT NOT NULL DEFAULT 'PENDENTE',
+  CONSTRAINT commerce_notificacoes_estado_ck CHECK (estado IN ('PENDENTE', 'PROCESSANDO', 'ENVIADO', 'ERRO', 'IGNORADO')),
+  tentativas INTEGER NOT NULL DEFAULT 0 CHECK (tentativas >= 0),
+  ultimo_erro TEXT,
+  chave_idempotencia TEXT NOT NULL,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  enviado_em TIMESTAMPTZ,
+  CONSTRAINT uq_commerce_notificacoes_idempotencia UNIQUE (empresa_id, chave_idempotencia)
+);
+CREATE INDEX IF NOT EXISTS ix_commerce_notificacoes_fila
+  ON commerce_notificacoes (empresa_id, estado, criado_em DESC);
+CREATE INDEX IF NOT EXISTS ix_commerce_notificacoes_pedido
+  ON commerce_notificacoes (empresa_id, pedido_id, evento);
+
+-- 3) NENHUMA alteração em `commerce_outbox`: os eventos de comunicação usam o
+--    tipo `sincronizacao` (acao='notificacao'), já aceito por 0068 e 0090.
+--    Trocar o CHECK aqui exigiria editar migrations aplicadas e quebraria a
+--    reaplicação da cadeia em bancos com dados (ADD CONSTRAINT da 0090 recusa
+--    linhas fora do conjunto original). Nenhum DDL destrutivo é executado.
+
+-- 4) Detalhe de produto por slug: antes cada /loja/produto/:slug fazia 4
+--    varreduras completas do catálogo. Índice funcional permite leitura por
+--    ponto (resolverProdutoVitrine) sem alterar nenhuma linha existente.
+CREATE INDEX IF NOT EXISTS ix_commerce_produtos_empresa_slug_lower
+  ON commerce_produtos (empresa_id, lower(slug));
+CREATE INDEX IF NOT EXISTS ix_commerce_publicacoes_canal_estado
+  ON commerce_publicacoes (empresa_id, canal, estado, produto_id);
+CREATE INDEX IF NOT EXISTS ix_produtos_categoria_ativo
+  ON produtos (empresa_id, categoria_id, ativo) WHERE categoria_id IS NOT NULL;
+
+-- ===========================================================================
+-- STOREFRONT ENTERPRISE / PIX via Mercado Pago Orders API
+-- Incremental ADITIVO (sem DROP, sem alteração de dados existentes):
+-- a URL oficial do ticket PIX devolvida por POST /v1/orders precisa ser
+-- persistida para a página pública do pedido. Cobranças legadas continuam
+-- com ticket_url = NULL (a tela omite o link, nunca fabrica um).
+-- ===========================================================================
+ALTER TABLE gateway_cobrancas ADD COLUMN IF NOT EXISTS ticket_url TEXT;
+COMMENT ON COLUMN gateway_cobrancas.ticket_url IS 'ticket_url real retornado pelo provedor (Orders API); NULL para cobranças legadas';

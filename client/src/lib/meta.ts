@@ -64,6 +64,10 @@ export type PublicFile = {
   principal: boolean;
   ordem: number;
   criado_em: string;
+  /** STOREFRONT ENTERPRISE — metadados de galeria (opcionais em fotos antigas). */
+  alt_text?: string | null;
+  ativo?: boolean;
+  variante_id?: number | null;
 };
 
 export type ResourceOps = { create: boolean; update: boolean; delete: boolean };

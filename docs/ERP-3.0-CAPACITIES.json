@@ -1251,6 +1251,17 @@
       "teste": "client/src/pages/commerce/FilaPage.test.tsx"
     },
     {
+      "id": "commerce-notificacoes",
+      "label": "Notificações transacionais do pedido",
+      "tipo": "submodulo",
+      "parente": "commerce-fila",
+      "recurso": "commerce_notificacoes",
+      "tabela": "commerce_notificacoes",
+      "menu": false,
+      "justificativa": "Registro de eventos de domínio (ORDER_CREATED → ORDER_DELIVERED) processados assincronamente pelo Outbox, com e-mail e WhatsApp Cloud API oficiais. É infraestrutura de comunicação do pedido, consultada no backoffice pela Fila & sync; não cria entrada própria na árvore de navegação nem rota pública.",
+      "teste": "server/test/commerce-notificacoes.test.ts"
+    },
+    {
       "id": "commerce-precos",
       "label": "Preços por canal",
       "tipo": "submodulo",

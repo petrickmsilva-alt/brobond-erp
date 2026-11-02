@@ -472,13 +472,24 @@ test('10. processarOutbox ×4 → cada entrada com tentativas = 1 e PROCESSADO',
     }
     const corridas = await Promise.all(Array.from({ length: 4 }, () => processarOutbox(20)));
     const processados = corridas.reduce((a, r) => a + r.processados, 0);
-    assert.equal(processados, N, 'cada entrada contada como processada EXATAMENTE uma vez entre as 4 corridas');
+    // `processarOutbox` é um worker GLOBAL: além das N linhas deste tenant ele
+    // pode reclamar trabalhos PENDENTES deixados por outras suítes no mesmo banco
+    // — por exemplo os eventos `sincronizacao`/`acao=notificacao` emitidos pelo
+    // checkout do Storefront Enterprise. A propriedade "exatamente uma vez"
+    // continua provada abaixo, escopada às linhas DESTE tenant: N linhas,
+    // todas PROCESSADO e com tentativas = 1 (nenhum duplo-claim).
+    assert.ok(processados >= N, 'todas as entradas deste tenant foram reclamadas');
     const linhas = await query(`SELECT estado, tentativas FROM commerce_outbox WHERE empresa_id = $1`, [t.empresaId]);
     assert.equal(linhas.rows.length, N);
     for (const r of linhas.rows) {
       assert.equal(String(r.estado), 'PROCESSADO', 'claim CAS → PROCESSADO');
       assert.equal(Number(r.tentativas), 1, 'nunca duplo-claim (tentativas = 1)');
     }
+    const soma = await query(
+      `SELECT COALESCE(SUM(tentativas), 0)::int AS n FROM commerce_outbox WHERE empresa_id = $1`,
+      [t.empresaId]
+    );
+    assert.equal(Number(soma.rows[0].n), N, 'soma das tentativas = N: nenhum duplo-claim neste tenant');
   } finally {
     await limpar(t);
   }

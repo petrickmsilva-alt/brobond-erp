@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-10-31T00:28:31.019Z",
+  "gerado_em": "2026-11-02T22:43:01.550Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 93,
-    "sql_com_conteudo": 93,
+    "sql": 94,
+    "sql_com_conteudo": 94,
     "prisma": 7
   },
   "tabelas": {
-    "total": 199,
-    "com_empresa_id": 171,
+    "total": 200,
+    "com_empresa_id": 172,
     "sem_empresa_id": 28,
-    "fora_do_prisma": 188
+    "fora_do_prisma": 189
   },
-  "indices": 521,
-  "constraints": 359,
+  "indices": 528,
+  "constraints": 363,
   "recursos": {
-    "total": 169,
-    "com_tabela": 169,
-    "multiempresa": 151,
-    "somente_leitura": 76,
-    "rbac_restrito": 79,
-    "cobertura_tenant_pct": 89.3
+    "total": 170,
+    "com_tabela": 170,
+    "multiempresa": 152,
+    "somente_leitura": 77,
+    "rbac_restrito": 80,
+    "cobertura_tenant_pct": 89.4
   },
   "crm": [
     {
@@ -79,18 +79,18 @@
     }
   ],
   "modulos": {
-    "total": 139,
-    "navegaveis": 139,
+    "total": 143,
+    "navegaveis": 143,
     "planejados": 0,
     "areas": 11,
-    "grupos": 31,
+    "grupos": 35,
     "com_recurso": 106
   },
   "rotas": {
-    "total": 453,
+    "total": 454,
     "por_metodo": {
       "GET": 202,
-      "POST": 212,
+      "POST": 213,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -197,14 +197,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 210,
-      "casos": 1754
+      "arquivos": 219,
+      "casos": 1796
     },
     "client": {
-      "arquivos": 123,
-      "casos": 1042
+      "arquivos": 129,
+      "casos": 1087
     },
-    "total": 2796
+    "total": 2883
   },
   "integracoes": {
     "arquivos_modules": 55,
@@ -304,11 +304,6 @@
     {
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"fin_periodos_contabeis\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"service_ticket_categorias\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
@@ -324,37 +319,7 @@
     {
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"commerce_configuracoes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"commerce_produtos\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"commerce_precos\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"commerce_publicacoes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"commerce_promocoes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"commerce_cupons\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"commerce_rastreio\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     }
   ],
   "tabelas_sem_empresa_id": [
@@ -410,6 +375,7 @@
     "comissoes_eventos",
     "commerce_configuracoes",
     "commerce_cupons",
+    "commerce_notificacoes",
     "commerce_outbox",
     "commerce_pedidos",
     "commerce_precos",

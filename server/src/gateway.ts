@@ -102,6 +102,7 @@ export const R_GATEWAY_COBRANCAS: Resource = {
     { name: 'linha_digitavel', label: 'Linha digitável', type: 'text' },
     { name: 'qr_code', label: 'QR Code', type: 'text' },
     { name: 'copia_cola', label: 'Copia e cola', type: 'text' },
+    { name: 'ticket_url', label: 'Ticket oficial do provedor', type: 'text' },
     { name: 'nsu', label: 'NSU', type: 'text' },
     { name: 'webhook_evento_id', label: 'Evento de confirmação', type: 'text' },
     // `gateway_cobrancas.payload` é JSONB no banco (db/schema.sql): declarar
@@ -178,6 +179,10 @@ export type CobrancaInput = {
   expira_em?: string | null;
   parcelas?: number;
   payer_email?: string | null;
+  /** Identificação do pagador (CPF/CNPJ) exigida pela Orders API em PIX. */
+  payer_documento?: string | null;
+  /** Nome do pagador, quando disponível no pedido (nunca vem do browser). */
+  payer_nome?: string | null;
   /** Token de cartão (gerado pelo SDK do provedor no front — PCI). */
   token?: string | null;
   referencia?: string;
@@ -188,6 +193,8 @@ export type CobrancaProviderResult = {
   status: 'pendente' | 'autorizada' | 'paga' | 'falhou';
   qr_code?: string | null;
   copia_cola?: string | null;
+  /** URL oficial do ticket/PIX devolvida pela Orders API (nunca inventada). */
+  ticket_url?: string | null;
   linha_digitavel?: string | null;
   nosso_numero?: string | null;
   nsu?: string | null;
@@ -214,7 +221,8 @@ export interface PaymentProvider {
   /** Identifica o evento no corpo cru. NÃO valida assinatura. */
   parseWebhook(corpo: string): WebhookParse | null;
   /** Assinatura válida OU segredo não configurado (validação opcional, P2 §8). */
-  verificaAssinatura(ctx: GatewayContext, corpo: string, headers: Record<string, string | undefined>): boolean;
+  /** `query` = req.query: o manifesto oficial usa o parâmetro `data.id` da URL. */
+  verificaAssinatura(ctx: GatewayContext, corpo: string, headers: Record<string, string | undefined>, query?: Record<string, unknown>): boolean;
   /** Resolve o estado final do evento (provedores que só mandam referência). */
   resolveWebhook?(ctx: GatewayContext, parsed: WebhookParse, payload: Record<string, unknown>): Promise<IntencaoWebhook>;
 }
@@ -615,7 +623,8 @@ export async function criarCobrancaGateway(
         { empresa_id: escopo.empresaId, criacao_operacao_estado: 'PROCESSING', criacao_operacao_hash: requestHash },
         { status: resultado.status, provider_ref: resultado.provider_ref, expires_em: resultado.expires_em ?? null,
           nosso_numero: resultado.nosso_numero ?? null, linha_digitavel: resultado.linha_digitavel ?? null,
-          qr_code: resultado.qr_code ?? null, copia_cola: resultado.copia_cola ?? null, nsu: resultado.nsu ?? null,
+          qr_code: resultado.qr_code ?? null, copia_cola: resultado.copia_cola ?? null,
+          ticket_url: resultado.ticket_url ?? null, nsu: resultado.nsu ?? null,
           payload: null, criacao_operacao_estado: 'SUCCEEDED', atualizado_em: new Date().toISOString() }, tx);
       if (!updated) throw new HttpError(409, 'Reserva de criação mudou; concilie antes de continuar.');
       await s.audit({ empresa_id: escopo.empresaId, usuario_id: params.actor.id, usuario: params.actor.name, acao: 'editar', recurso: 'gateway_cobrancas',
@@ -1040,7 +1049,7 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
     const ctxLocal: GatewayContext | null = config && empresaId !== null
       ? { empresaId, config, credenciais: (() => { try { return JSON.parse(decifrarSegredo(config.credenciais_cifradas) || '{}'); } catch { return null; } })(), webhookSegredo: segredo }
       : null;
-    const assinaturaOk = !!segredo && !!ctxLocal && provider.verificaAssinatura(ctxLocal, corpo, req.headers as Record<string, string | undefined>);
+    const assinaturaOk = !!segredo && !!ctxLocal && provider.verificaAssinatura(ctxLocal, corpo, req.headers as Record<string, string | undefined>, req.query as Record<string, unknown>);
 
     if (providerId !== 'mock' && !segredo) return res.status(401).json({error:'Assinatura inválida ou provider não configurado.'});
 
@@ -1213,7 +1222,9 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
       const bruto = remote?.bruto;
       const remoteCents = valorMercadoPagoEmCentavos(bruto?.transaction_amount);
       const localCents = valorMercadoPagoEmCentavos(cobranca.valor);
-      if (!remote || !bruto || String(bruto.id) !== String(parsed.provider_ref) || bruto.currency_id !== 'BRL' ||
+      // Orders API devolve `currency`; /v1/payments devolve `currency_id`.
+      const moeda = String(bruto?.currency_id ?? bruto?.currency ?? '').toUpperCase();
+      if (!remote || !bruto || String(bruto.id) !== String(parsed.provider_ref) || moeda !== 'BRL' ||
           remoteCents === null || remoteCents <= 0 || localCents === null || remoteCents !== localCents)
         throw new HttpError(409, 'Valor, moeda ou referência divergente; conciliação necessária.');
       intencao = intencaoMercadoPago(remote);

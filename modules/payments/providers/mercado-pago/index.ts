@@ -56,6 +56,8 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
         metodo: legacyMethods[input.method]!,
         referencia: ctx.operationKey,
         payer_email: input.email,
+        payer_documento: input.taxId ?? null,
+        payer_nome: input.customerName ?? null,
         token: input.token,
         parcelas: input.installments,
         expira_em: input.expiresAt,
@@ -69,6 +71,7 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
           type: input.method,
           code: r.copia_cola || r.linha_digitavel || undefined,
           qrCode: r.qr_code || undefined,
+          ticketUrl: r.ticket_url || undefined,
           expiresAt: r.expires_em || undefined,
         },
       };
@@ -134,8 +137,8 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
     if (!evidence || evidence.reference !== refundReference) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
     return evidence;
   }
-  verifyWebhook(ctx: ProviderContext, raw: string, headers: Record<string, string | undefined>) {
-    return !!ctx.webhookSecret && mercadopagoProvider.verificaAssinatura(legacyContext(ctx), raw, headers);
+  verifyWebhook(ctx: ProviderContext, raw: string, headers: Record<string, string | undefined>, query?: Record<string, unknown>) {
+    return !!ctx.webhookSecret && mercadopagoProvider.verificaAssinatura(legacyContext(ctx), raw, headers, query);
   }
   parseWebhook(raw: string) {
     const e = mercadopagoProvider.parseWebhook(raw);

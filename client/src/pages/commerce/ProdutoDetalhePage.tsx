@@ -1,11 +1,12 @@
 // ============================================================================
 // COMMERCE — DETALHE DO PRODUTO NA VITRINE. Rota /commerce/produtos/:id.
 //
-// Quatro blocos, todos em páginas (ZERO MODAL):
+// Cinco blocos, todos em páginas (ZERO MODAL):
 //   1. conteúdo da vitrine (slug/resumo/ordem/metadados de canal);
-//   2. preço por canal (linha própria, vigência opcional);
-//   3. publicação por canal (fila com estados + retry manual);
-//   4. disponibilidade por tamanho (somente leitura do estoque canônico).
+//   2. galeria administrativa (upload, ordem, principal, ATIVA/INATIVA, alt text e variação);
+//   3. preço por canal (linha própria, vigência opcional);
+//   4. publicação por canal (fila com estados + retry manual);
+//   5. disponibilidade por tamanho (somente leitura do estoque canônico).
 // Escrita exige gerente (espelhado do servidor: minPerfilEscrita/gerente na
 // publicação) — a API continua sendo a autoridade.
 // ============================================================================
@@ -16,6 +17,7 @@ import { apiFetch, ApiError } from '../../lib/api';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../../components/ui';
 import { EstadoBadge, TONE_PUBLICACAO, ROTULO_PUBLICACAO, CANAIS_PUBLICACAO, grana, rotuloCanal } from './shared';
 import { useAuth } from '../../auth/AuthContext';
+import GaleriaAdminProduto from './GaleriaAdminProduto';
 
 type Detalhe = {
   produto: {
@@ -286,7 +288,10 @@ export default function CommerceProdutoDetalhePage() {
         )}
       </section>
 
-      {/* 2. Preço por canal */}
+      {/* 2. Galeria administrativa (ZERO MODAL, infraestrutura de arquivos existente) */}
+      <GaleriaAdminProduto produtoId={Number(id)} canEdit={podeGerir} />
+
+      {/* 3. Preço por canal */}
       <section className="rounded-xl border border-line bg-surface p-4" aria-labelledby="precos-canal">
         <h2 id="precos-canal" className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
           <Globe className="h-4 w-4" aria-hidden="true" /> Preço por canal
@@ -374,7 +379,7 @@ export default function CommerceProdutoDetalhePage() {
         </div>
       </section>
 
-      {/* 3. Publicação por canal */}
+      {/* 4. Publicação por canal */}
       <section className="rounded-xl border border-line bg-surface p-4" aria-labelledby="publicacoes-canal">
         <h2 id="publicacoes-canal" className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
           <Rocket className="h-4 w-4" aria-hidden="true" /> Publicação por canal
@@ -451,7 +456,7 @@ export default function CommerceProdutoDetalhePage() {
         </div>
       </section>
 
-      {/* 4. Disponibilidade canônica */}
+      {/* 5. Disponibilidade canônica */}
       <section className="rounded-xl border border-line bg-surface p-4" aria-labelledby="disponibilidade">
         <h2 id="disponibilidade" className="text-sm font-semibold uppercase tracking-wide text-muted">
           Estoque disponível (canônico)

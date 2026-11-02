@@ -51,7 +51,7 @@ export type PaymentResult = {
   currency?: string;
   refunded?: number;
   refundEvidence?: RefundEvidence;
-  action?: { type: string; url?: string; code?: string; qrCode?: string; expiresAt?: string };
+  action?: { type: string; url?: string; code?: string; qrCode?: string; ticketUrl?: string; expiresAt?: string };
   risk?: string;
 };
 export type WebhookEvent = { id: string; reference: string; type: string };
@@ -70,7 +70,7 @@ export interface PaymentProvider {
   getPayment(ctx: ProviderContext, reference: string): Promise<PaymentResult>;
   getPaymentStatus(ctx: ProviderContext, reference: string): Promise<PaymentStatus>;
   createPaymentMethod(ctx: ProviderContext, token: string): Promise<{ reference: string }>;
-  verifyWebhook(ctx: ProviderContext, raw: string, headers: Record<string, string | undefined>): boolean;
+  verifyWebhook(ctx: ProviderContext, raw: string, headers: Record<string, string | undefined>, query?: Record<string, unknown>): boolean;
   parseWebhook(raw: string): WebhookEvent | null;
   healthCheck(ctx: ProviderContext): Promise<'UP' | 'DEGRADED' | 'DOWN' | 'NOT_CONFIGURED'>;
 }

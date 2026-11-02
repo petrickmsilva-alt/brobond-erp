@@ -60,6 +60,104 @@ function mpMapeiaStatus(status: string): CobrancaProviderResult['status'] {
   }
 }
 
+// ---------------------------------------------------------------------------
+// MERCADO PAGO ORDERS API (PIX) — https://api.mercadopago.com/v1/orders
+//
+// Contrato oficial (Checkout API Orders / Pix):
+//   POST /v1/orders   { type:"online", processing_mode:"automatic",
+//     total_amount:"<string com 2 decimais>", external_reference, payer,
+//     transactions.payments:[{ amount, payment_method:{ id:"pix",
+//                                                     type:"bank_transfer" } }] }
+//   resposta → transactions.payments[0].payment_method:
+//     qr_code (EMV "Copia e Cola"), qr_code_base64 (imagem), ticket_url
+//   GET /v1/orders/{id} → status "processed" + status_detail "accredited"
+//   Webhook: type="order", data.id=<order id>, assinatura x-signature/v1.
+//
+// Access Token, X-Idempotency-Key e segredo de webhook ficam EXCLUSIVAMENTE
+// no backend. Nenhum QR é gerado localmente: sem payload real, os campos
+// ficam null e a loja mostra estado honesto.
+// ---------------------------------------------------------------------------
+function ehOrdemMercadoPago(ref: unknown): boolean {
+  return /^ORD/i.test(String(ref ?? '').trim());
+}
+
+function pagamentosDaOrdem(r: Record<string, unknown>): Record<string, unknown>[] {
+  const transacoes = (r.transactions && typeof r.transactions === 'object' ? r.transactions : {}) as Record<string, unknown>;
+  return Array.isArray(transacoes.payments) ? (transacoes.payments as Record<string, unknown>[]) : [];
+}
+
+function metodoDoPrimeiroPagamento(r: Record<string, unknown>): Record<string, unknown> {
+  const primeiro = pagamentosDaOrdem(r)[0] || {};
+  return (primeiro.payment_method && typeof primeiro.payment_method === 'object' ? primeiro.payment_method : {}) as Record<string, unknown>;
+}
+
+function apenasTexto(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v : null;
+}
+
+function ticketUrlSegura(v: unknown): string | null {
+  const url = apenasTexto(v);
+  return url && /^https:\/\//i.test(url) ? url : null;
+}
+
+/** Duração ISO-8601 derivada do prazo REAL de expiração do pedido. */
+function duracaoOrders(expiraEm?: string | null): string | undefined {
+  if (!expiraEm) return undefined;
+  const restante = new Date(expiraEm).getTime() - Date.now();
+  if (!Number.isFinite(restante) || restante <= 0) return undefined;
+  const minutos = Math.max(1, Math.ceil(restante / 60_000));
+  return minutos < 1440 ? `PT${minutos}M` : `P${Math.ceil(minutos / 1440)}D`;
+}
+
+function documentoPagador(v?: string | null): { type: 'CPF' | 'CNPJ'; number: string } | null {
+  const digitos = String(v ?? '').replace(/\D/g, '');
+  if (digitos.length === 11) return { type: 'CPF', number: digitos };
+  if (digitos.length === 14) return { type: 'CNPJ', number: digitos };
+  return null;
+}
+
+/**
+ * Projeção do contrato Orders para o formato canônico já usado pelo domínio
+ * (status/transaction_amount/currency_id/...). É ADAPTAÇÃO de campos reais,
+ * não invenção: valores ausentes/ambíguos ficam undefined e as guardas
+ * existentes (409 de conciliação) continuam impedindo baixa sem prova.
+ */
+function projecaoOrdem(r: Record<string, unknown>): Record<string, unknown> {
+  const status = String(r.status || '');
+  const detalhe = String(r.status_detail || '');
+  const pm = metodoDoPrimeiroPagamento(r);
+  const total = Number(r.total_amount);
+  const totalValido = Number.isFinite(total) && total > 0 ? total : null;
+  const pagoBruto = r.total_paid_amount;
+  const pago = pagoBruto === null || pagoBruto === undefined || pagoBruto === '' ? null : Number(pagoBruto);
+  const pagoValido = pago !== null && Number.isFinite(pago) && pago >= 0 ? pago : null;
+
+  let statusCanonico = 'pending';
+  if (status === 'processed' && detalhe === 'accredited') statusCanonico = 'approved';
+  else if (status === 'processed' && /refunded/i.test(detalhe)) statusCanonico = 'refunded';
+  else if (status === 'cancelled' || status === 'expired') statusCanonico = 'cancelled';
+  else if (/rejected|failed|error/i.test(detalhe)) statusCanonico = 'rejected';
+
+  // `accredited` = valor integral creditado, sem estorno. Nos demais casos só
+  // afirmamos "devolvido" quando os dois valores vieram do provedor.
+  const devolvido = statusCanonico === 'approved' ? 0
+    : totalValido !== null && pagoValido !== null ? Math.max(0, totalValido - pagoValido) : null;
+
+  return {
+    ...r,
+    id: r.id,
+    ordem_api: 'orders',
+    status: statusCanonico,
+    status_detail: detalhe,
+    transaction_amount: totalValido ?? undefined,
+    transaction_amount_refunded: devolvido ?? undefined,
+    currency_id: apenasTexto(r.currency) ?? undefined,
+    payment_method_qr_code: apenasTexto(pm.qr_code),
+    payment_method_qr_code_base64: apenasTexto(pm.qr_code_base64),
+    payment_method_ticket_url: ticketUrlSegura(pm.ticket_url),
+  };
+}
+
 function mpExtraiInstrumento(p: Record<string, unknown>, metodo: MetodoCobranca): Partial<CobrancaProviderResult> {
   if (metodo === 'pix') {
     const poi = (p.point_of_interaction || {}) as Record<string, unknown>;
@@ -112,11 +210,55 @@ export const mercadopagoProvider: PaymentProvider = {
       external_reference: input.referencia || null,
     };
     if (input.metodo === 'pix') {
+      // ---------------- Orders API (PIX oficial) ----------------
+      // Mantém o MESMO adapter/gateway: não cria integração paralela.
       if (!input.payer_email)
         throw new HttpError(400, 'Cobrança PIX exige o e-mail do pagador (payer_email).', { payer_email: 'Obrigatório' });
-      body.payment_method_id = 'pix';
-      body.payer = { email: input.payer_email };
-      if (input.expira_em) body.date_of_expiration = input.expira_em;
+      const total = round2(input.valor).toFixed(2);
+      const partesNome = String(input.payer_nome ?? '').trim().split(/\s+/).filter(Boolean);
+      const payer: Record<string, unknown> = { email: input.payer_email };
+      if (partesNome.length) payer.first_name = partesNome[0].slice(0, 60);
+      if (partesNome.length > 1) payer.last_name = partesNome.slice(1).join(' ').slice(0, 60);
+      const identificacao = documentoPagador(input.payer_documento);
+      if (identificacao) payer.identification = identificacao;
+      const pagamento: Record<string, unknown> = {
+        amount: total,
+        payment_method: { id: 'pix', type: 'bank_transfer' },
+      };
+      const duracao = duracaoOrders(input.expira_em);
+      if (duracao) pagamento.expiration_time = duracao;
+      const ordem: Record<string, unknown> = {
+        type: 'online',
+        processing_mode: 'automatic',
+        total_amount: total,
+        description: input.descricao || 'Pedido BROBOND',
+        payer,
+        transactions: { payments: [pagamento] },
+      };
+      if (input.referencia) ordem.external_reference = input.referencia;
+      const r = await mpFetch(
+        '/v1/orders',
+        { method: 'POST', headers: { 'X-Idempotency-Key': input.referencia || randomBytes(16).toString('hex') }, body: JSON.stringify(ordem) },
+        ctx
+      );
+      if (!r.id) throw new HttpError(502, 'Mercado Pago Orders API não retornou o identificador da Order.');
+      // O valor ecoado pelo provedor precisa bater com o total autorizado no
+      // servidor. Quando o campo vem ausente, NÃO se inventa confirmação.
+      if (r.total_amount != null && Number.isFinite(Number(r.total_amount)) && Math.abs(Number(r.total_amount) - Number(total)) > 0.001)
+        throw new HttpError(409, 'Total retornado pela Orders API diverge do pedido; conciliação necessária.');
+      const pm = metodoDoPrimeiroPagamento(r);
+      const status = String(r.status || '');
+      const detalhe = String(r.status_detail || '');
+      return {
+        provider_ref: String(r.id),
+        status: status === 'processed' && detalhe === 'accredited' ? 'paga'
+          : status === 'cancelled' || /rejected|failed/i.test(detalhe) ? 'falhou' : 'pendente',
+        expires_em: input.expira_em ?? null,
+        qr_code: apenasTexto(pm.qr_code_base64),
+        copia_cola: apenasTexto(pm.qr_code),
+        ticket_url: ticketUrlSegura(pm.ticket_url),
+        bruto: projecaoOrdem(r),
+      };
     } else if (input.metodo === 'boleto') {
       if (!input.payer_email)
         throw new HttpError(400, 'Cobrança boleto exige o e-mail do pagador (payer_email).', { payer_email: 'Obrigatório' });
@@ -152,10 +294,38 @@ export const mercadopagoProvider: PaymentProvider = {
     };
   },
   async consultaCobranca(ctx: GatewayContext, providerRef: string): Promise<CobrancaProviderResult | null> {
+    // Orders API: a confirmação de mudanças assíncronas vem de GET /v1/orders.
+    // Cobranças legadas (/v1/payments) continuam consultadas como antes —
+    // histórico e regressões permanecem válidos, sem sistema paralelo.
+    if (ehOrdemMercadoPago(providerRef)) {
+      const r = await mpFetch(`/v1/orders/${encodeURIComponent(providerRef)}`, { method: 'GET' }, ctx);
+      if (String(r.id ?? '') !== providerRef)
+        throw new HttpError(409, 'Order consultada não corresponde à referência; conciliação necessária.');
+      const bruto = projecaoOrdem(r);
+      const status = String(bruto.status || '');
+      return {
+        provider_ref: providerRef,
+        status: status === 'approved' ? 'paga' : status === 'cancelled' || status === 'rejected' ? 'falhou' : 'pendente',
+        qr_code: bruto.payment_method_qr_code_base64 as string | null,
+        copia_cola: bruto.payment_method_qr_code as string | null,
+        ticket_url: bruto.payment_method_ticket_url as string | null,
+        bruto,
+      };
+    }
     const p = await mpFetch(`/v1/payments/${encodeURIComponent(providerRef)}`, { method: 'GET' }, ctx);
     return { provider_ref: String(p.id || providerRef), status: mpMapeiaStatus(String(p.status || '')), bruto: p };
   },
   async cancelaCobranca(ctx: GatewayContext, providerRef: string): Promise<{ status: string }> {
+    if (ehOrdemMercadoPago(providerRef)) {
+      const result = await mpFetch(
+        `/v1/orders/${encodeURIComponent(providerRef)}/cancel`,
+        { method: 'POST', headers: { 'X-Idempotency-Key': ctx.operationKey || `cancel:${providerRef}` }, body: JSON.stringify({}) },
+        ctx
+      );
+      if (String(result.id || '') !== providerRef || String(result.status || '') !== 'cancelled')
+        throw new HttpError(409, 'Cancelamento da Order sem confirmação verificável do provider.');
+      return { status: 'cancelada' };
+    }
     const result = await mpFetch(
       `/v1/payments/${encodeURIComponent(providerRef)}`,
       {
@@ -188,7 +358,9 @@ export const mercadopagoProvider: PaymentProvider = {
       const tipo = String(body.type || body.topic || '');
       const data = (body.data && typeof body.data === 'object' ? (body.data as Record<string, unknown>) : {}) as Record<string, unknown>;
       const ref = String(data.id || body.id || '');
-      if (!ref || !/^payment/i.test(tipo)) return null;
+      // Orders API notifica com type="order" (data.id = id da Order). O tópico
+      // legado "payment" continua aceito para cobranças históricas.
+      if (!ref || !/^(payment|order)/i.test(tipo)) return null;
       return {
         evento_id: String(
           body.id || body['x-request-id'] || body.request_id || `${tipo}:${ref}:${body.action || ''}:${body.date_created || ''}`
@@ -200,7 +372,12 @@ export const mercadopagoProvider: PaymentProvider = {
       return null;
     }
   },
-  verificaAssinatura(ctx: GatewayContext, corpo: string, headers: Record<string, string | undefined>): boolean {
+  verificaAssinatura(
+    ctx: GatewayContext,
+    corpo: string,
+    headers: Record<string, string | undefined>,
+    query?: Record<string, unknown>
+  ): boolean {
     const segredo = ctx.webhookSegredo;
     if (!segredo) return true;
     const assinatura = String(headers['x-signature'] || '');
@@ -215,9 +392,28 @@ export const mercadopagoProvider: PaymentProvider = {
     } catch {
       return false;
     }
+    // Manifesto OFICIAL do webhook `type=order`: o `id` vem do parâmetro de
+    // query `data.id` (e NÃO do corpo), junto com `x-request-id` e `ts`.
+    // https://www.mercadopago.com.br/developers/en/docs/checkout-api-orders/notifications
+    //   id:${dataID};request-id:${xRequestId};ts:${ts};
+    // Quando a query está presente (entrega HTTP real) ela é autoritativa:
+    // um `data.id` diferente no corpo NÃO pode trocar o manifesto assinado.
+    // O fallback pelo corpo só atende chamadas diretas/offline (testes e
+    // reprocessamento interno), que não têm URL de webhook.
+    const primeiro = (v: unknown): string => Array.isArray(v) ? String(v[0] ?? '') : String(v ?? '');
+    const idQuery = primeiro(query?.['data.id'] ?? query?.data_id ?? query?.id);
+    const idManifesto = idQuery || id;
+    if (!idManifesto) return false;
+    if (idQuery && id && idQuery !== id && idQuery.toLowerCase() !== id.toLowerCase())
+      return false; // divergência corpo/query: jamais confiar no corpo
     const reqId = String(headers['x-request-id'] || '');
-    const manifest = `id:${id.toLowerCase()};request-id:${reqId};ts:${ts};`;
-    return compararConstante(v1.toLowerCase(), hmacHex(segredo, manifest));
+    // O id da Order (ORD01...) é case-sensitive — validamos a caixa original
+    // e, por compatibilidade com notificações legadas, a versão minúscula.
+    const manifestos = [
+      `id:${idManifesto};request-id:${reqId};ts:${ts};`,
+      `id:${idManifesto.toLowerCase()};request-id:${reqId};ts:${ts};`,
+    ];
+    return manifestos.some((m) => compararConstante(v1.toLowerCase(), hmacHex(segredo, m)));
   },
   async resolveWebhook(ctx: GatewayContext, parsed: WebhookParse): Promise<IntencaoWebhook> {
     // O Mercado Pago manda só a referência: o estado real vem da consulta.

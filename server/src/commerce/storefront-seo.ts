@@ -23,7 +23,8 @@ import { attachImages } from '../uploads';
 import { urlBasePublicaAsync } from '../urlPublica';
 import { disponibilidadesPorTamanho } from './catalogo';
 import { configDaLoja, empresaDaVitrine } from './loja-base';
-import { carregarVitrine, precoPublico } from './vitrine';
+import { precoPublico, resolverProdutoVitrine } from './vitrine';
+import { selecionarGaleria, type MidiaGaleria } from './galeria';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -92,20 +93,15 @@ function resumir(texto: string, max = 160): string {
 }
 
 async function metasDoProduto(empresaId: number, slug: string, base: string): Promise<MetaPagina | null> {
-  const { visiveis, projecoes, precos } = await carregarVitrine(empresaId);
-  let produto: Record<string, unknown> | null = null;
-  let proj: Record<string, unknown> | null = null;
-  for (const [pid, p] of visiveis.entries()) {
-    const pj = projecoes.get(pid);
-    if (pj && String(pj.slug).toLowerCase() === slug) {
-      produto = p as Record<string, unknown>;
-      proj = pj as Record<string, unknown>;
-      break;
-    }
-  }
-  if (!produto || !proj) return null;
-  await attachImages(getResource('produtos')!, [produto as never]);
-  const preco = precoPublico(produto as never, precos);
+  // Mesma leitura por PONTO do detalhe público (não varre o catálogo inteiro
+  // para renderizar o <head>). Regra de tenant/PUBLISHED idêntica.
+  const resolvido = await resolverProdutoVitrine(empresaId, slug);
+  if (!resolvido) return null;
+  const { produto: linha, proj: linhaProj, precos } = resolvido;
+  const produto = linha as Record<string, unknown>;
+  const proj = linhaProj as Record<string, unknown>;
+  await attachImages(getResource('produtos')!, [linha as never]);
+  const preco = precoPublico(linha as never, precos);
   const grade = await disponibilidadesPorTamanho(escopoDeSistema(empresaId), Number(produto.id));
   const emEstoque = grade.some((g) => g.disponivel > 0);
   const nome = String(produto.nome || '');
@@ -113,7 +109,11 @@ async function metasDoProduto(empresaId: number, slug: string, base: string): Pr
   const loja = config?.loja_nome ? String(config.loja_nome) : 'BROBOND';
   const descricao = resumir(String(proj.resumo || produto.descricao_curta || produto.descricao || `${nome} — compre na loja ${loja}.`));
   const canonical = `${base}/loja/produto/${encodeURIComponent(String(proj.slug))}`;
-  const imagem = origemAbsoluta((produto as { foto_url?: string | null }).foto_url, base);
+  // Structured data usa a galeria REAL (resolução cheia), não a miniatura de
+  // 240 px. Nenhuma imagem é inventada quando o produto não tem mídia.
+  const galeria = selecionarGaleria(((produto as { fotos?: MidiaGaleria[] }).fotos ?? []) as MidiaGaleria[], null);
+  const imagens = galeria.map((f) => origemAbsoluta(f.url, base)).filter((v): v is string => !!v);
+  const imagem = imagens[0] ?? null;
   return {
     titulo: `${nome} — ${loja}`,
     descricao,
@@ -123,16 +123,20 @@ async function metasDoProduto(empresaId: number, slug: string, base: string): Pr
     jsonLd: {
       '@context': 'https://schema.org',
       '@type': 'Product',
+      '@id': canonical,
       name: nome,
       sku: String(produto.sku || ''),
       description: descricao,
-      ...(imagem ? { image: [imagem] } : {}),
+      brand: { '@type': 'Brand', name: loja },
+      ...(imagens.length ? { image: imagens } : {}),
       offers: {
         '@type': 'Offer',
         url: canonical,
         priceCurrency: 'BRL',
         price: preco.preco.toFixed(2),
         availability: emEstoque ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+        itemCondition: 'https://schema.org/NewCondition',
+        seller: { '@type': 'Organization', name: loja },
       },
     },
   };
