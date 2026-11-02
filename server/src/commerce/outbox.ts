@@ -5,7 +5,8 @@
 // duplicado, mas uma entrega externa pode ser repetida. Processadores REAIS:
 //   • conversao     → ponte sales → vendas (retentativa até o item casar);
 //   • publicacao    → fila de publicação do canal;
-//   • sincronizacao → envio de estoque ao WooCommerce (env);
+//   • sincronizacao → entrega externa: estoque WooCommerce (env) e eventos
+//                     transacionais de notificação (acao='notificacao');
 //   • alerta        → log estruturado (falhas que precisam de gente).
 // O claim é CAS (PENDENTE → PROCESSANDO): duas varreduras não processam a
 // mesma entrada duas vezes; entrada presa há 10min volta para a fila.
@@ -25,7 +26,14 @@ import type { Row, Tx } from '../store';
 
 const R_OUTBOX = () => getResource('commerce_outbox')!;
 
-export type TipoOutbox = 'conversao' | 'publicacao' | 'sincronizacao' | 'alerta' | 'refund_devolucao' | 'notificacao';
+// FECHAMENTO DO CICLO: este conjunto é o MESMO aceito por TODA a cadeia de
+// migrations (0068 cria o CHECK, 0090 o reaplica ao reconstruir o schema).
+// Introduzir um novo `tipo` aqui exigiria alterar migrations JÁ APLICADAS e
+// quebraria a reaplicação da cadeia em bancos com dados (o ADD CONSTRAINT da
+// 0090 recusa linhas fora do conjunto). Por isso eventos de comunicação usam
+// `sincronizacao` + `payload.acao='notificacao'`, que é uma entrega externa,
+// sem criar um segundo outbox e sem mexer em migration existente.
+export type TipoOutbox = 'conversao' | 'publicacao' | 'sincronizacao' | 'alerta' | 'refund_devolucao';
 
 /**
  * Enfileira um trabalho (idempotente pela chave). Se já existe, mantém a
@@ -93,9 +101,9 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
     return { status: 'processado' };
   }
 
+  // Compatibilidade com linhas `notificacao` porventura gravadas por uma versão
+  // anterior já implantada: mesmo despacho, sem exigir novo valor no CHECK.
   if (tipo === 'notificacao') {
-    // NOTIFICATION ORCHESTRATOR: import dinâmico evita ciclo com o módulo que
-    // enfileira eventos. O pedido NUNCA espera por este processamento.
     const { processarEventoNotificacao } = await import('./notificacoes');
     const r = await processarEventoNotificacao({ empresa_id: empresaId, ...payload });
     return r.status === 'retry' ? { status: 'retry', erro: r.erro } : { status: 'processado' };
@@ -130,6 +138,13 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
 
   if (tipo === 'sincronizacao') {
     const acao = String(payload.acao || '');
+    if (acao === 'notificacao') {
+      // NOTIFICATION ORCHESTRATOR: import dinâmico evita ciclo com o módulo que
+      // enfileira eventos. O pedido NUNCA espera por este processamento.
+      const { processarEventoNotificacao } = await import('./notificacoes');
+      const r = await processarEventoNotificacao({ empresa_id: empresaId, ...payload });
+      return r.status === 'retry' ? { status: 'retry', erro: r.erro } : { status: 'processado' };
+    }
     if (acao === 'woo-estoque') {
       const { enviarEstoqueLojaInterno, configLoja, empresaVinculadaWoo } = await import('../loja');
       if (!configLoja()) {

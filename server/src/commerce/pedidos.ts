@@ -318,7 +318,9 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
     const cobrancaAtual = await s.findOneWhere(R_GATEWAY_COBRANCAS, { id: evt.cobrancaId, empresa_id: evt.empresaId }, tx);
     if (!atual || !cobrancaAtual) return null;
     const pagamento = mapearEstadoPagamento(cobrancaAtual.status);
-    const eventos: Record<string, 'pago' | 'cancelado' | 'expirado' | 'estornado'> = { paga: 'pago', cancelada: 'cancelado', expirada: 'expirado', estornada: 'estornado' };
+    // `falhou` (provider recusou/rejeitou a cobrança) precisa encerrar o pedido
+    // e liberar reserva/cupom — antes ficava preso em AGUARDANDO_PAGAMENTO.
+    const eventos: Record<string, 'pago' | 'cancelado' | 'expirado' | 'estornado'> = { paga: 'pago', cancelada: 'cancelado', expirada: 'expirado', estornada: 'estornado', falhou: 'cancelado' };
     const evento = eventos[String(cobrancaAtual.status)];
     if (!evento) return null;
     const novo = transicaoPedido(atual.estado, evento);
@@ -340,7 +342,7 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
       } else if (pagamento && atual.pagamento_estado !== pagamento) {
         await s.update(R_PEDIDOS(), pedidoId, { pagamento_estado: pagamento }, tx);
       }
-      return { pedido: atual, estado: String(atual.estado), evento, transicao: false };
+      return { pedido: atual, estado: String(atual.estado), evento, transicao: false, pagamento };
     }
     const agora = new Date().toISOString();
     const mudancas: Record<string, unknown> = { estado: novo, atualizado_em: agora };
@@ -362,7 +364,7 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
     }
     await s.audit({ empresa_id: evt.empresaId, usuario_id: null, usuario: 'Gateway', acao: 'ajuste', recurso: 'commerce_pedidos', registro_id: pedidoId,
       descricao: 'Transição por evento de pagamento', dados: { antes: { estado: atual.estado, pagamento_estado: atual.pagamento_estado }, depois: { estado: novo, pagamento_estado: pagamento } } }, tx);
-    return { pedido: atual, estado: novo, evento, transicao: true };
+    return { pedido: atual, estado: novo, evento, transicao: true, pagamento };
   }, { isolation: 'serializable' }));
 
   // Webhook é a fonte principal de confirmação. Só emite evento em transição
@@ -372,6 +374,9 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
       emitirEventoPedido(resultado.pedido, 'PAYMENT_APPROVED');
       emitirEventoPedido(resultado.pedido, 'ORDER_PROCESSING');
     } else if (resultado.evento === 'cancelado' || resultado.evento === 'expirado') {
+      // Recusa real do provedor (`gateway_cobrancas.status='falhou'` →
+      // pagamento REJECTED) é PAGAMENTO_RECUSADO, não só cancelamento genérico.
+      if (resultado.pagamento === 'REJECTED') emitirEventoPedido(resultado.pedido, 'PAYMENT_REJECTED');
       emitirEventoPedido(resultado.pedido, 'ORDER_CANCELLED');
     }
   }

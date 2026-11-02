@@ -1,7 +1,7 @@
 // ============================================================================
 // NOTIFICATION ORCHESTRATOR — comunicação TRANSACIONAL do pedido.
 //
-//   DOMAIN EVENT → OUTBOX (commerce_outbox, tipo `notificacao`)
+//   DOMAIN EVENT → OUTBOX (commerce_outbox, `sincronizacao`/acao=notificacao)
 //                → commerce_notificacoes (1 linha por evento/canal/destinatário)
 //                → EMAIL ADAPTER (mail.ts / SMTP)
 //                → WHATSAPP ADAPTER (Meta WhatsApp Business Cloud API)
@@ -30,11 +30,28 @@ export const EVENTOS_NOTIFICACAO = [
   'PIX_GENERATED',
   'PAYMENT_PENDING',
   'PAYMENT_APPROVED',
+  'PAYMENT_REJECTED',
   'ORDER_PROCESSING',
   'ORDER_SHIPPED',
   'ORDER_DELIVERED',
   'ORDER_CANCELLED',
 ] as const;
+
+/**
+ * Vocabulário de negócio (português, usado na homologação) → constantes
+ * persistidas. Mantém UMA única lista canônica (`EVENTOS_NOTIFICACAO`), sem
+ * criar um segundo catálogo de eventos nem tabela paralela.
+ */
+export const MAPA_EVENTOS_HOMOLOGACAO = {
+  PEDIDO_CRIADO: 'ORDER_CREATED',
+  PIX_GENERATED: 'PIX_GENERATED',
+  PAGAMENTO_APROVADO: 'PAYMENT_APPROVED',
+  PAGAMENTO_RECUSADO: 'PAYMENT_REJECTED',
+  PEDIDO_PROCESSANDO: 'ORDER_PROCESSING',
+  PEDIDO_ENVIADO: 'ORDER_SHIPPED',
+  PEDIDO_ENTREGUE: 'ORDER_DELIVERED',
+  PEDIDO_CANCELADO: 'ORDER_CANCELLED',
+} as const satisfies Partial<Record<string, (typeof EVENTOS_NOTIFICACAO)[number]>>;
 export type EventoNotificacao = (typeof EVENTOS_NOTIFICACAO)[number];
 export type CanalNotificacao = 'EMAIL' | 'WHATSAPP';
 
@@ -46,6 +63,7 @@ export const MENSAGENS: Record<EventoNotificacao, string> = {
   PIX_GENERATED: 'Seu PIX foi gerado.',
   PAYMENT_PENDING: 'Estamos aguardando a confirmação do pagamento.',
   PAYMENT_APPROVED: 'Pagamento aprovado.',
+  PAYMENT_REJECTED: 'Não conseguimos confirmar o pagamento. Seu pedido foi cancelado e o estoque foi liberado.',
   ORDER_PROCESSING: 'Seu pedido está sendo preparado.',
   ORDER_SHIPPED: 'Seu pedido foi enviado.',
   ORDER_DELIVERED: 'Pedido entregue.',
@@ -138,7 +156,12 @@ export async function registrarEventoPedido(
   }
   // Um único trabalho no outbox por evento: o orchestrator resolve TODOS os
   // canais. A chave é estável → webhook duplicado não cria segundo trabalho.
-  await enfileirarOutbox(ctx.empresaId, 'notificacao', `pedido:${ctx.pedidoId}:${ctx.evento}`, {
+  // `sincronizacao` + `acao='notificacao'`: entrega externa dentro do conjunto
+  // de tipos aceito por TODA a cadeia de migrations (0068/0090). Um tipo novo
+  // faria a 0090 falhar ao ser reaplicada em banco com dados (CHECK mais
+  // estreito), degradando o ERP — causa real do FAIL `testes-postgres` no CI.
+  await enfileirarOutbox(ctx.empresaId, 'sincronizacao', `pedido:${ctx.pedidoId}:${ctx.evento}`, {
+    acao: 'notificacao',
     pedido_id: ctx.pedidoId,
     evento: ctx.evento,
     pedido_externo: ctx.pedidoExterno ?? null,

@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS commerce_notificacoes (
   evento TEXT NOT NULL,
   CONSTRAINT commerce_notificacoes_evento_ck CHECK (evento IN (
     'ORDER_CREATED', 'PIX_GENERATED', 'PAYMENT_PENDING', 'PAYMENT_APPROVED',
+    'PAYMENT_REJECTED',
     'ORDER_PROCESSING', 'ORDER_SHIPPED', 'ORDER_DELIVERED', 'ORDER_CANCELLED'
   )),
   canal TEXT NOT NULL,
@@ -61,12 +62,16 @@ CREATE INDEX IF NOT EXISTS ix_commerce_notificacoes_pedido
   ON commerce_notificacoes (empresa_id, pedido_id, evento);
 
 -- ---------------------------------------------------------------------------
--- 3) Outbox existente ganha o tipo `notificacao`. Troca de CHECK (não apaga
---    dados). Em bancos com linhas fora do novo conjunto, validar antes.
+-- 3) NENHUMA alteração no `commerce_outbox` (sem DROP CONSTRAINT aqui).
+--    Motivo técnico REAL (confirmado em PostgreSQL): a migração 0090, quando a
+--    cadeia é reaplicada num banco com dados (drift/recovery), executa
+--    DROP + ADD de `commerce_outbox_tipo_ck` com um conjunto MAIS ESTREITO.
+--    Um tipo novo (`notificacao`) faria esse ADD falhar com
+--    "check constraint ... is violated by some row" e degradaria o ERP.
+--    Os eventos de comunicação usam `sincronizacao` + payload.acao, valor já
+--    aceito por 0068 E por 0090 — sem editar migration aplicada e sem perder
+--    a semântica DOMAIN EVENT → OUTBOX → NOTIFICATION ORCHESTRATOR.
 -- ---------------------------------------------------------------------------
-ALTER TABLE commerce_outbox DROP CONSTRAINT IF EXISTS commerce_outbox_tipo_ck;
-ALTER TABLE commerce_outbox ADD CONSTRAINT commerce_outbox_tipo_ck
-  CHECK (tipo IN ('conversao', 'publicacao', 'sincronizacao', 'alerta', 'refund_devolucao', 'notificacao'));
 
 -- ---------------------------------------------------------------------------
 -- 4) Point lookup por slug e leitura de catálogo/categoria sem varredura

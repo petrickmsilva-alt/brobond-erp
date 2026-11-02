@@ -221,7 +221,8 @@ export interface PaymentProvider {
   /** Identifica o evento no corpo cru. NÃO valida assinatura. */
   parseWebhook(corpo: string): WebhookParse | null;
   /** Assinatura válida OU segredo não configurado (validação opcional, P2 §8). */
-  verificaAssinatura(ctx: GatewayContext, corpo: string, headers: Record<string, string | undefined>): boolean;
+  /** `query` = req.query: o manifesto oficial usa o parâmetro `data.id` da URL. */
+  verificaAssinatura(ctx: GatewayContext, corpo: string, headers: Record<string, string | undefined>, query?: Record<string, unknown>): boolean;
   /** Resolve o estado final do evento (provedores que só mandam referência). */
   resolveWebhook?(ctx: GatewayContext, parsed: WebhookParse, payload: Record<string, unknown>): Promise<IntencaoWebhook>;
 }
@@ -1048,7 +1049,7 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
     const ctxLocal: GatewayContext | null = config && empresaId !== null
       ? { empresaId, config, credenciais: (() => { try { return JSON.parse(decifrarSegredo(config.credenciais_cifradas) || '{}'); } catch { return null; } })(), webhookSegredo: segredo }
       : null;
-    const assinaturaOk = !!segredo && !!ctxLocal && provider.verificaAssinatura(ctxLocal, corpo, req.headers as Record<string, string | undefined>);
+    const assinaturaOk = !!segredo && !!ctxLocal && provider.verificaAssinatura(ctxLocal, corpo, req.headers as Record<string, string | undefined>, req.query as Record<string, unknown>);
 
     if (providerId !== 'mock' && !segredo) return res.status(401).json({error:'Assinatura inválida ou provider não configurado.'});
 

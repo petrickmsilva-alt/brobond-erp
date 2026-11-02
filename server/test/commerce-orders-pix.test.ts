@@ -156,6 +156,27 @@ describe('PIX via Mercado Pago Orders API — contrato real, sem simulação', (
     assert.equal(mercadopagoProvider.verificaAssinatura(ctx, corpo, { 'x-request-id': reqId, 'x-signature': `ts=${ts},v1=${'0'.repeat(64)}` }), false);
   });
 
+  test('x-signature usa data.id da QUERY (manifesto oficial) e recusa divergência com o corpo', () => {
+    const id = 'ORD01HRYFWNYRE1MR1E60MW3X0T2P';
+    const corpo = JSON.stringify({ id: 'notificacao-orders-2', type: 'order', action: 'order.processed', data: { id }, date_created: '2026-11-02T12:00:00Z' });
+    const ts = '1793293200';
+    const reqId = 'Request-ID-Orders-2';
+    const headers = { 'x-request-id': reqId, 'x-signature': '' };
+    const assinar = (manifestId: string) => createHmac('sha256', 'segredo-teste').update(`id:${manifestId};request-id:${reqId};ts:${ts};`).digest('hex');
+    // O provedor assina o id minúsculo da query ?data.id=<id>.
+    const query = { 'data.id': id.toLowerCase() };
+    headers['x-signature'] = `ts=${ts},v1=${assinar(id.toLowerCase())}`;
+    assert.equal(mercadopagoProvider.verificaAssinatura(ctx, corpo, headers, query), true);
+    // Assinatura calculada com o id do corpo (caixa alta) não basta quando a
+    // query traz outro id: o manifesto oficial é o da URL.
+    headers['x-signature'] = `ts=${ts},v1=${assinar(id)}`;
+    assert.equal(mercadopagoProvider.verificaAssinatura(ctx, corpo, headers, query), false);
+    // Query com id de OUTRA order não pode ser trocada pelo corpo assinado.
+    const corpoOutro = JSON.stringify({ type: 'order', data: { id: 'ORD-OUTRA' } });
+    headers['x-signature'] = `ts=${ts},v1=${assinar(id.toLowerCase())}`;
+    assert.equal(mercadopagoProvider.verificaAssinatura(ctx, corpoOutro, headers, query), false);
+  });
+
   test('Payment Engine expõe ticketUrl real na action (sem token no frontend)', async (t) => {
     const { MercadoPagoProvider } = await import('../../modules/payments/providers/mercado-pago');
     mockFetch(t, () => ordemPix());

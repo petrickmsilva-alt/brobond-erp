@@ -91,16 +91,39 @@ orders notifications" (Mercado Pago Developers).
 ## 4. Notificações (Outbox → E-mail / WhatsApp)
 
 ```
-DOMAIN EVENT → commerce_outbox (tipo `notificacao`)
+DOMAIN EVENT → commerce_outbox (`sincronizacao` + `payload.acao='notificacao'`)
   → commerce_notificacoes (1 linha por evento/canal/destinatário)
   → EMAIL ADAPTER (mail.ts / SMTP)
   → WHATSAPP ADAPTER (Meta WhatsApp Business Cloud API, template aprovado)
 ```
 
-Eventos: `ORDER_CREATED`, `PIX_GENERATED`, `PAYMENT_PENDING`,
-`PAYMENT_APPROVED`, `ORDER_PROCESSING`, `ORDER_SHIPPED`, `ORDER_DELIVERED`,
-`ORDER_CANCELLED`. Cada linha registra `evento`, `canal`, `destinatário`,
-`estado`, `tentativas`, `ultimo_erro`, `enviado_em` e
+**Correção real do ciclo de fechamento**: um `tipo='notificacao'` novo exigiria
+alterar `commerce_outbox_tipo_ck`, cuja migração `0090` RECRIA com conjunto mais
+estreito ao ser reaplicada em banco com dados. Isso derrubava o job
+`testes-postgres` do PR #99 com `check constraint "commerce_outbox_tipo_ck" ...
+is violated by some row`. Mantivemos o conjunto de tipos aceito por TODA a cadeia
+(`0068` + `0090`) e despachamos a comunicação por `payload.acao`; nenhuma
+migration existente foi editada, nenhuma constraint foi trocada.
+
+Eventos canônicos (constantes persistidas) e o vocabulário de homologação:
+
+| Homologação | Constante |
+| --- | --- |
+| `PEDIDO_CRIADO` | `ORDER_CREATED` |
+| `PIX_GENERATED` | `PIX_GENERATED` |
+| `PAGAMENTO_APROVADO` | `PAYMENT_APPROVED` |
+| `PAGAMENTO_RECUSADO` | `PAYMENT_REJECTED` |
+| `PEDIDO_PROCESSANDO` | `ORDER_PROCESSING` |
+| `PEDIDO_ENVIADO` | `ORDER_SHIPPED` |
+| `PEDIDO_ENTREGUE` | `ORDER_DELIVERED` |
+| `PEDIDO_CANCELADO` | `ORDER_CANCELLED` |
+
+`PAYMENT_PENDING` também existe (aguardando transferência PIX).
+`PAYMENT_REJECTED` é emitido quando `gateway_cobrancas.status='falhou'` vira
+`pagamento_estado=REJECTED`: o pedido é cancelado, a reserva/cupom são liberados
+e o comprador é avisado — antes o pedido ficava preso em
+`AGUARDANDO_PAGAMENTO` sem aviso. Cada linha registra `evento`, `canal`,
+`destinatário`, `estado`, `tentativas`, `ultimo_erro`, `enviado_em` e
 `chave_idempotencia` (`pedido:evento:canal:hash(destinatário)`). O outbox
 usa uma única chave `pedido:<id>:<evento>` — webhook duplicado não reenvia.
 
@@ -154,10 +177,19 @@ já existiam. `uploads.ts` filtra inativas, ordena
 produto passou de 5 para 20. Nenhum binário gigante é gravado no PostgreSQL;
 as miniaturas usam a infraestrutura de otimização JPEG já existente.
 
-**Pendência honesta**: a UI administrativa de `/commerce/produtos/17` ainda
-não expõe ordenar/definir principal/excluir/desativar/vincular variação/editar
-alt text. A API e o domínio já suportam; a tela não foi concluída nesta
-rodada.
+**Galeria administrativa concluída** em `/commerce/produtos/:id`
+(`GaleriaAdminProduto.tsx`, seção inline da própria rota, ZERO MODAL):
+adicionar imagens pela infraestrutura existente (`prepareImage` + validação de
+tipo/tamanho no servidor, tenant por `SEC-01`), definir **imagem principal**
+com `PUT {principal:true}` sem duplicar arquivo, persistir a ordem completa
+`1..n` com `PUT {ordem:[ids]}`, alternar **ATIVA/INATIVA** com `PUT {ativo}`
+sem apagar, salvar `Texto alternativo` em `arquivos.alt_text`, vincular
+produto → variação → imagem via `variante_id` (validado contra `tamanhos` no
+servidor) e excluir **somente** após confirmação inline explícita
+(`ConfirmacaoInline`; sem `window.confirm`, sem modal). A tela só mostra as
+URLs públicas tokenizadas — nenhum caminho interno, token, mime ou byte é
+exposto. Cobertura: `GaleriaAdminProduto.test.tsx` (7 testes) +
+`ProdutoDetalhePage.test.tsx`.
 
 ## 7. Banco — migração incremental
 
@@ -174,15 +206,35 @@ verdade do inventário) e `db/bootstrap.sql` (**regenerado** por
   idempotência;
 * índices `ix_commerce_produtos_empresa_slug_lower`,
   `ix_commerce_publicacoes_canal_estado`, `ix_produtos_categoria_ativo`;
-* ampliação do `CHECK` de `commerce_outbox.tipo` para aceitar `notificacao`.
+* `PAYMENT_REJECTED` no `CHECK` de `commerce_notificacoes.evento`.
 
-⚠️ **Atenção para bancos existentes**: a ampliação do `CHECK` usa
-`DROP CONSTRAINT` + `ADD CONSTRAINT` (não apaga dados, mas é uma troca de
-restrição). Validar em homologação com `DATABASE_URL` real antes de aplicar;
-há `NOT VALID`/`VALIDATE` condicional no mesmo padrão das migrações P2-04.
-Rollback das colunas é `DROP COLUMN` — **destrutivo**, portanto só após
-confirmação de que nenhuma linha depende delas; não é executado
-automaticamente. Nenhum dado foi apagado, renomeado ou alterado em silêncio.
+**`commerce_outbox` NÃO é alterado por `0094`** (sem `DROP CONSTRAINT`). Causa
+raiz do FAIL do CI, reproduzida em PostgreSQL real: a migração `0090` faz
+`DROP CONSTRAINT commerce_outbox_tipo_ck` + `ADD CONSTRAINT` com conjunto mais
+estreito; ao reaplicar a cadeia num banco com dados (cenários de
+drift/recovery cobertos por `PROD-DB-01`), linhas com um tipo novo fazem o
+`ADD` falhar e o ERP sobe **degradado**. Os eventos de comunicação usam
+`sincronizacao` + `payload.acao`, valor aceito por `0068` E por `0090`.
+Nenhuma migration já aplicada foi editada, removida ou reordenada.
+
+⚠️ **Bancos existentes**: `0094` é 100% aditiva (`ADD COLUMN IF NOT EXISTS`,
+`CREATE TABLE/INDEX IF NOT EXISTS`) — sem `DROP`, `TRUNCATE`, `DELETE` ou
+`UPDATE`. Rollback das colunas/tabela seria `DROP COLUMN`/`DROP TABLE`
+(**destrutivo**) e só pode ocorrer após conferência manual de dados; não é
+executado automaticamente. Nenhum dado foi apagado, renomeado ou alterado em
+silêncio. `node scripts/gerar-bootstrap.mjs --check` confirma que
+`db/bootstrap.sql` continua sincronizado com `db/schema.sql`.
+
+**Validação SQL em PostgreSQL real (complementar ao CI)**: `bootstrap.sql` +
+as **94 migrations em ordem lexical** foram aplicadas num engine PostgreSQL
+real (PGlite 18.6/WASM — **não** é o PostgreSQL 16.14 do CI) com 29 checagens
+PASS/0 FAIL: colunas/defaults/NOT NULL de `arquivos`, 14 colunas e 5
+constraints de `commerce_notificacoes` (PK, 2 FK, 3 CHECK, UNIQUE), 7 índices
+novos, `ticket_url TEXT`, `commerce_outbox_tipo_ck` intacto, reexecução de
+`0094` preservando dados, reaplicação de `0090` **com dados** agora OK, insert
+real de `PAYMENT_REJECTED`, bloqueio de duplicata pela UNIQUE e recusa de
+evento fora do catálogo pelo CHECK. O gate oficial de PostgreSQL 16.14 é o job
+`testes-postgres` do CI (`npm run test:pg` + `npm run smoke:pg`).
 
 `docs/ERP-3.0-CAPACITIES.json` ganhou a capacidade
 `commerce-notificacoes` (dono funcional do recurso, com teste nominal).
@@ -194,13 +246,28 @@ automaticamente. Nenhum dado foi apagado, renomeado ou alterado em silêncio.
 | `GET /loja/config` por montagem do checkout | 2 | **1** | teste `performance: UMA requisição de /loja/config no fluxo` em `LojaFluxoPages.test.tsx` (contagem real de `apiFetch`) |
 | Resolução de produto no SEO/detalhe | varredura completa do catálogo | **point lookup indexado** `lower(slug)` + 3 consultas em paralelo | `resolverProdutoVitrine` + índice `ix_commerce_produtos_empresa_slug_lower` |
 | Imagem de card | original | **miniatura 240 px** com dimensões explícitas e lazy loading | `uploads.ts` + `CardProduto.tsx` |
-| Bundle inicial (`index-*.js`) | — | **425,73 kB / 120,74 kB gzip** | saída real de `npm run build` (Vite 6) |
-| Chunks da loja | — | `CatalogoPublico` 33,02 kB, `CommerceModulePage` 54,97 kB | saída real de `npm run build` |
+| Bundle inicial (`index-*.js`) | — | **425,85 kB / 120,76 kB gzip** | saída real de `npm run build` (Vite 6) |
+| Chunks da loja | — | `CatalogoPublico` 33,02 kB / 9,51 kB gzip, `CommerceModulePage` 55,06 kB / 13,70 kB gzip | saída real de `npm run build` |
 
-**Não medido (sem browser no sandbox)**: LCP, INP, CLS, TTFB de produção,
-waterfall de rede e cold start do Render. Não há números inventados nestas
-linhas. O alvo `LCP < 2,5 s / INP < 200 ms / CLS < 0,1` permanece como meta
-de homologação externa, não como resultado aprovado.
+**NÃO MEDIDO (sem browser no sandbox)**: LCP, INP, CLS, TTFB, contagem de
+requisições na rede, tamanho de imagens transferidas, JS inicial efetivo,
+duplicatas na waterfall, tempos nas viewports `1440/1280/1024/768/390/375/320`
+e cold start do Render. Não há números inventados nestas linhas. O alvo
+`LCP < 2,5 s / INP < 200 ms / CLS < 0,1` permanece como **meta**, não como
+resultado aprovado. O que está na tabela acima é **MEDIDO** apenas em
+artefato de build e em teste de contagem de chamadas (sem navegador).
+
+**Análise estática (sem browser)**: `preload` ausente para thumbnails além do
+primeiro viewport, `loading=lazy` + `decoding=async` nas miniaturas, dimensões
+explícitas (`width`/`height`) evitando reflow, `AbortController` na busca com
+debounce, `useSyncExternalStore` eliminando a 2ª chamada de `/loja/config`,
+`lazy()` por rota (`CatalogoPublico`, `CommerceModulePage`), consultas em
+paralelo no detalhe do produto e índice funcional `lower(slug)` para point
+lookup (sem varredura/N+1). `fetch_page` em
+`https://brobond-erp.onrender.com/loja` e `/api/health` retornou a página
+"Application loading" da Render (instância free suspensa) — **não** foi
+possível validar a loja publicada; além disso o deploy publicado reflete
+`main`, não este branch (nenhum deploy foi feito).
 
 Decisão de ouro mantida: pode cachear **conteúdo/catálogo/categorias/imagens**;
 `PREÇO FINAL`, `ESTOQUE`, `RESERVA`, `TOTAL DO PEDIDO` e `PAGAMENTO` são
@@ -211,28 +278,39 @@ de catálogo/preço/checkout).
 
 | Gate | Resultado |
 | --- | --- |
-| `npm test` | **EXIT 0** — node:test 1694 testes (1618 pass / 0 fail / 76 skipped) + Vitest 128 arquivos / 1105 testes |
+| `npm test` | **EXIT 0** — node:test 1695 testes (1619 pass / 0 fail / 76 skipped) + Vitest 129 arquivos / 1112 testes |
 | `npm run typecheck` | **EXIT 0** (domain + server + client) |
-| `npm run build` | **EXIT 0** (Vite + PWA) |
-| `npm run lint` | **EXIT 0** (0 erros; 606 avisos preexistentes de `no-explicit-any` / unused) |
+| `npm run build` | **EXIT 0** (Vite + PWA, 170 entradas no precache) |
+| `npm run lint` | **EXIT 0** (0 erros; 606 avisos preexistentes) |
+| `npm run smoke` | **EXIT 0** — 398/398 com servidor em memória (mesmo fluxo do job `verificar`) |
 | `npm run commerce:enterprise-audit` | **EXIT 0** — 32/32, P0=P1=P2=0 |
 | `npm run architecture:audit` | **EXIT 0** — sem erros de coerência |
-| `npm run payment:go-live` | **EXIT 0** — `CODE_STRUCTURE_READY: YES`, `EXTERNAL_HOMOLOGATION: NO` |
-| `npm run audit:ux` | **EXIT 0** — nenhuma sobreposição nova em fluxo de módulo |
-| `npm run db:validate` | **BLOQUEADO** — `binaries.prisma.sh` fora da allowlist de rede do sandbox |
-| PG gate | **`PG GATE BLOCKED — DATABASE_URL indisponível`** — nenhuma afirmação sobre PostgreSQL real |
+| `npm run payment:go-live` | **EXIT 0** — `CODE_STRUCTURE_READY: YES`, `EXTERNAL_HOMOLOGATION: NO`, `FULL_GO_LIVE: NO` |
+| `npm run commerce:go-live` | **EXIT 0** — P0: 41 ok / 0 falha |
+| `npm run audit:ux` | **EXIT 0** — nenhuma sobreposição nova |
+| `npm run audit:menu` | **EXIT 0** — sem erros (aviso informativo: `commerce_notificacoes` sem tela de consulta) |
+| `npm run test:payments` | **EXIT 0** — 27/27 |
+| `node scripts/gerar-bootstrap.mjs --check` | **EXIT 0** — bootstrap sincronizado |
+| `npm run test:pg` / `npm run smoke:pg` | **BLOQUEADO local** — `DATABASE_URL` ausente; executados de fato pelo job `testes-postgres` do CI com PostgreSQL 16.14 |
+| `npm run db:validate` | **BLOQUEADO** — engine Prisma em `binaries.prisma.sh` fora da allowlist de rede |
+| Validação SQL de `0094` | **EXIT 0** — 29/29 em engine PostgreSQL real (PGlite 18.6/WASM), complementar ao CI |
 
 Novos testes: `server/test/commerce-orders-pix.test.ts` (7),
 `server/test/commerce-notificacoes.test.ts` (6),
 `server/test/commerce-galeria.test.ts` (9),
-`client/.../GaleriaProduto.test.tsx` (5) e um teste de performance de
-requisição única em `LojaFluxoPages.test.tsx`.
+`client/.../GaleriaProduto.test.tsx` (5),
+`client/.../GaleriaAdminProduto.test.tsx` (7), teste de `x-signature` com
+`data.id` da query em `commerce-orders-pix.test.ts` e um teste de performance
+de requisição única em `LojaFluxoPages.test.tsx`.
 
 ## 10. Segurança e multiempresa
 
 * Token/secret de webhook/CPF completo nunca no frontend nem em logs.
-* Assinatura do webhook validada antes de qualquer efeito; consulta da Order
-  é a autoridade, não o corpo não assinado.
+* Assinatura do webhook validada antes de qualquer efeito; o manifesto
+  `id:<data.id>;request-id:<x-request-id>;ts:<ts>;` usa **`data.id` da QUERY**
+  (especificação oficial de `type=order`), e divergência com o `data.id` do
+  corpo é recusada. A consulta `GET /v1/orders/{id}` é a autoridade, não o
+  corpo não assinado.
 * Idempotência em `X-Idempotency-Key`, `commerce_outbox.chave`,
   `commerce_notificacoes.chave_idempotencia` e no checkout — webhook duplicado
   não duplica pagamento, pedido, venda, baixa, reserva ou notificação.
@@ -242,24 +320,40 @@ requisição única em `LojaFluxoPages.test.tsx`.
 
 ## 11. Homologação externa — **pendente e obrigatória**
 
-Testes locais verdes **não** significam homologação. Antes de `FULL_GO_LIVE`:
+Gates locais verdes **não** significam homologação. Antes de
+`FULL_COMMERCE_GO_LIVE`:
 
-1. Aplicar `db/schema.sql` em PostgreSQL real com `DATABASE_URL`, rodar
-   `npm run test:pg` / `npm run smoke:pg` e validar a troca do `CHECK` do
-   outbox em banco com dados.
-2. Cadastrar credenciais reais de produção do Mercado Pago no backoffice e
-   configurar o webhook de **Orders** (`type=order`) com o secret;`/v1/orders`
-   precisa estar habilitado na conta.
-3. Executar **uma transação PIX real** e comprovar: QR/Copia e Cola vindos do
-   provedor, `order.processed`, baixa da venda, reserva convertida e
-   notificação entregue.
-4. Configurar SMTP e template aprovado da Meta WhatsApp Cloud API; validar
-   retry/backoff e ausência de mensagem promocional sem consentimento.
-5. Medir LCP/INP/CLS nas viewports `1440, 1280, 1024, 768, 390, 375, 320`
-   em ambiente com cold start do Render, com antes/depois reais.
-6. Concluir a UI administrativa de galeria em `/commerce/produtos/17`.
-7. Verificar CI do PR (nenhum status de CI foi consultado nesta execução).
+1. **Compra PIX real** de R$ 80,00 de `COTTON "B"`
+   (`CAM-BAS-PREM-VERM-"B" LOGO BRANCA`): exige
+   `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET`, conta com
+   `/v1/orders` habilitado e webhook `type=order` apontando para o ambiente
+   publicado. Nenhuma compra foi simulada nem executada.
+2. **E-mail/SMTP** (`SMTP_HOST`, `SMTP_USER`, …) e **WhatsApp oficial**
+   (`WHATSAPP_CLOUD_API_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, template aprovado
+   na Meta): sem credenciais não há envio real, apenas linhas `PENDENTE` com
+   retry/backoff. Nenhum envio foi alegado.
+3. **Loja publicada**: a URL `https://brobond-erp.onrender.com/loja` respondeu
+   "Application loading" da Render (serviço free suspenso) e não contém as
+   alterações deste branch — não houve merge nem deploy. Validar galeria,
+   COTTON "B", touch/mobile e zoom inline no ambiente que receber o branch.
+4. **Métricas de browser** LCP/INP/CLS/TTFB nas viewports
+   `1440/1280/1024/768/390/375/320`, com cold start e antes/depois reais.
+5. **PG 16.14 do CI**: confirmar `testes-postgres` PASS após o push (o gate
+   local de `DATABASE_URL` continua indisponível no sandbox).
+6. **Tela de consulta** de `commerce_notificacoes` no backoffice (aviso
+   informativo de `audit:menu`; a fila e o orchestrator já funcionam).
 
-**Status**: `CODE_READY = SIM` (gates locais) ·
-`EXTERNAL_HOMOLOGATION_READY = NÃO` · `FULL_GO_LIVE = NÃO`.
-Nenhum pagamento real foi comprovado nesta execução.
+## 12. Fechamento do ciclo — status exatos
+
+| Rótulo | Valor | Motivo |
+| --- | --- | --- |
+| `CODE_READY` | **PENDENTE até `verificar` + `testes-postgres` PASS** | gates locais verdes + correção da causa raiz do `testes-postgres` |
+| `INTERNAL_COMMERCE_READY` | **PENDENTE até CI verde** | cadeia única STOREFRONT → CHECKOUT → PAYMENT ENGINE/MP/PIX → OMS/PEDIDO → VENDA ERP/ESTOQUE/FINANCEIRO/FULFILLMENT → COMUNICAÇÃO → GOVERNANÇA; galeria admin concluída; migrations validadas |
+| `EXTERNAL_HOMOLOGATION_READY` | **NO** | falta loja publicada, credenciais MP/SMTP/Meta e métricas de browser |
+| `REAL_PIX_HOMOLOGATION` | **BLOCKED** | `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET`, `/v1/orders` habilitado e ambiente publicado ausentes |
+| `EMAIL_EXTERNAL_HOMOLOGATION` | **BLOCKED** | credenciais SMTP ausentes |
+| `WHATSAPP_EXTERNAL_HOMOLOGATION` | **BLOCKED** | token/phone id/template aprovado da Meta ausentes |
+| `PG_EXTERNAL_VALIDATION` | **NÃO BLOQUEADO** | validado via PostgreSQL real (PGlite) + job `testes-postgres` 16.14 do CI; `TEST_PG`/`SMOKE_PG` locais indisponíveis apenas por `DATABASE_URL` |
+| `FULL_COMMERCE_GO_LIVE` | **NO** | sem evidência de venda E2E real (compra PIX + webhook + baixa + envio) |
+
+**Sem merge, sem deploy, sem alteração de `main`, sem `backups/`.**

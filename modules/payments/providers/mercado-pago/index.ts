@@ -137,8 +137,8 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
     if (!evidence || evidence.reference !== refundReference) throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
     return evidence;
   }
-  verifyWebhook(ctx: ProviderContext, raw: string, headers: Record<string, string | undefined>) {
-    return !!ctx.webhookSecret && mercadopagoProvider.verificaAssinatura(legacyContext(ctx), raw, headers);
+  verifyWebhook(ctx: ProviderContext, raw: string, headers: Record<string, string | undefined>, query?: Record<string, unknown>) {
+    return !!ctx.webhookSecret && mercadopagoProvider.verificaAssinatura(legacyContext(ctx), raw, headers, query);
   }
   parseWebhook(raw: string) {
     const e = mercadopagoProvider.parseWebhook(raw);

@@ -70,7 +70,7 @@ export interface PaymentProvider {
   getPayment(ctx: ProviderContext, reference: string): Promise<PaymentResult>;
   getPaymentStatus(ctx: ProviderContext, reference: string): Promise<PaymentStatus>;
   createPaymentMethod(ctx: ProviderContext, token: string): Promise<{ reference: string }>;
-  verifyWebhook(ctx: ProviderContext, raw: string, headers: Record<string, string | undefined>): boolean;
+  verifyWebhook(ctx: ProviderContext, raw: string, headers: Record<string, string | undefined>, query?: Record<string, unknown>): boolean;
   parseWebhook(raw: string): WebhookEvent | null;
   healthCheck(ctx: ProviderContext): Promise<'UP' | 'DEGRADED' | 'DOWN' | 'NOT_CONFIGURED'>;
 }

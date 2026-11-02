@@ -6316,10 +6316,9 @@ export const RESOURCES: Record<string, Resource> = {
         options: [
           { value: 'conversao', label: 'Conversão de pedido', tone: 'blue' },
           { value: 'publicacao', label: 'Publicação', tone: 'amber' },
-          { value: 'sincronizacao', label: 'Sincronização de canal', tone: 'green' },
+          { value: 'sincronizacao', label: 'Entrega externa / sincronização', tone: 'green' },
           { value: 'alerta', label: 'Alerta', tone: 'red' },
           { value: 'refund_devolucao', label: 'Estorno de devolução', tone: 'blue' },
-          { value: 'notificacao', label: 'Notificação transacional', tone: 'blue' },
         ],
       },
       { name: 'chave', label: 'Chave', type: 'text', readonly: true, search: true },

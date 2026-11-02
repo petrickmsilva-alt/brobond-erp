@@ -6777,7 +6777,7 @@ CREATE TABLE IF NOT EXISTS commerce_outbox (
   id SERIAL PRIMARY KEY,
   empresa_id INTEGER NOT NULL REFERENCES empresas(id),
   tipo TEXT NOT NULL,
-  CONSTRAINT commerce_outbox_tipo_ck CHECK (tipo IN ('conversao', 'publicacao', 'sincronizacao', 'alerta', 'refund_devolucao', 'notificacao')),
+  CONSTRAINT commerce_outbox_tipo_ck CHECK (tipo IN ('conversao', 'publicacao', 'sincronizacao', 'alerta', 'refund_devolucao')),
   chave TEXT NOT NULL,
   payload JSONB,
   estado TEXT NOT NULL DEFAULT 'PENDENTE',
@@ -8386,6 +8386,7 @@ CREATE TABLE IF NOT EXISTS commerce_notificacoes (
   evento TEXT NOT NULL,
   CONSTRAINT commerce_notificacoes_evento_ck CHECK (evento IN (
     'ORDER_CREATED', 'PIX_GENERATED', 'PAYMENT_PENDING', 'PAYMENT_APPROVED',
+    'PAYMENT_REJECTED',
     'ORDER_PROCESSING', 'ORDER_SHIPPED', 'ORDER_DELIVERED', 'ORDER_CANCELLED'
   )),
   canal TEXT NOT NULL,
@@ -8407,12 +8408,11 @@ CREATE INDEX IF NOT EXISTS ix_commerce_notificacoes_fila
 CREATE INDEX IF NOT EXISTS ix_commerce_notificacoes_pedido
   ON commerce_notificacoes (empresa_id, pedido_id, evento);
 
--- 3) O outbox existente ganha o tipo `notificacao` (e regulariza
---    `refund_devolucao`, que o código já usava). Drop + add é idempotente e
---    NÃO descarta dados: só troca a restrição de validação por uma mais ampla.
-ALTER TABLE commerce_outbox DROP CONSTRAINT IF EXISTS commerce_outbox_tipo_ck;
-ALTER TABLE commerce_outbox ADD CONSTRAINT commerce_outbox_tipo_ck
-  CHECK (tipo IN ('conversao', 'publicacao', 'sincronizacao', 'alerta', 'refund_devolucao', 'notificacao'));
+-- 3) NENHUMA alteração em `commerce_outbox`: os eventos de comunicação usam o
+--    tipo `sincronizacao` (acao='notificacao'), já aceito por 0068 e 0090.
+--    Trocar o CHECK aqui exigiria editar migrations aplicadas e quebraria a
+--    reaplicação da cadeia em bancos com dados (ADD CONSTRAINT da 0090 recusa
+--    linhas fora do conjunto original). Nenhum DDL destrutivo é executado.
 
 -- 4) Detalhe de produto por slug: antes cada /loja/produto/:slug fazia 4
 --    varreduras completas do catálogo. Índice funcional permite leitura por

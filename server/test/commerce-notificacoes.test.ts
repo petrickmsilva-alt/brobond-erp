@@ -54,11 +54,12 @@ describe('Notificações transacionais — eventos, idempotência, retry e priva
   });
 
   test('8 eventos transacionais têm mensagem curta e NENHUM evento de marketing', () => {
-    assert.equal(EVENTOS_NOTIFICACAO.length, 8);
+    assert.equal(EVENTOS_NOTIFICACAO.length, 9);
     for (const e of EVENTOS_NOTIFICACAO) assert.ok(MENSAGENS[e].length > 0, `sem mensagem para ${e}`);
     assert.ok(!EVENTOS_NOTIFICACAO.some((e) => /MARKETING|PROMOC/.test(e)));
     assert.ok(EVENTOS_NOTIFICACAO.includes('PIX_GENERATED'));
     assert.ok(EVENTOS_NOTIFICACAO.includes('PAYMENT_APPROVED'));
+    assert.ok(EVENTOS_NOTIFICACAO.includes('PAYMENT_REJECTED'), 'PAGAMENTO_RECUSADO deve existir');
     assert.ok(EVENTOS_NOTIFICACAO.includes('ORDER_DELIVERED'));
     assert.ok(EVENTOS_NOTIFICACAO.includes('ORDER_CANCELLED'));
   });
@@ -81,7 +82,9 @@ describe('Notificações transacionais — eventos, idempotência, retry e priva
       assert.ok(!String(row.destinatario).includes('@example') || String(row.canal) === 'EMAIL');
     }
     const outbox = await s.list(RESOURCES.commerce_outbox, { page: 1, pageSize: 50, filter: { empresa_id: 1 } });
-    assert.equal(outbox.rows.filter((r) => r.tipo === 'notificacao').length, 1);
+    const trabalhos = outbox.rows.filter((r) => r.tipo === 'sincronizacao' && (r.payload as Record<string, unknown>)?.acao === 'notificacao');
+    assert.equal(trabalhos.length, 1);
+    assert.equal((trabalhos[0].payload as Record<string, unknown>).evento, 'ORDER_CREATED');
 
     // Webhook duplicado / replay do mesmo evento: zero linhas novas.
     const repetido = await registrarEventoPedido(contato, ctx);

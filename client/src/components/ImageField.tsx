@@ -158,7 +158,7 @@ export function ImageField({
 
         {files.map((f, i) => (
           <figure key={f.id} className={`group relative ${tile} overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm`}>
-            <img src={f.thumb_url} alt={f.nome || 'Foto'} className="h-full w-full cursor-zoom-in object-cover" loading="lazy" onClick={() => setZoom(f)} />
+            <img src={f.thumb_url} alt={f.alt_text || f.nome || 'Foto'} className="h-full w-full cursor-zoom-in object-cover" loading="lazy" onClick={() => setZoom(f)} />
             {f.principal && (
               <span className="absolute left-1 top-1 inline-flex items-center gap-0.5 rounded bg-brand-500 px-1.5 py-0.5 text-[10px] font-bold uppercase text-white shadow">
                 <Star className="h-3 w-3 fill-current" /> principal

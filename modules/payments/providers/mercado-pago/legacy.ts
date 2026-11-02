@@ -372,7 +372,12 @@ export const mercadopagoProvider: PaymentProvider = {
       return null;
     }
   },
-  verificaAssinatura(ctx: GatewayContext, corpo: string, headers: Record<string, string | undefined>): boolean {
+  verificaAssinatura(
+    ctx: GatewayContext,
+    corpo: string,
+    headers: Record<string, string | undefined>,
+    query?: Record<string, unknown>
+  ): boolean {
     const segredo = ctx.webhookSegredo;
     if (!segredo) return true;
     const assinatura = String(headers['x-signature'] || '');
@@ -387,13 +392,26 @@ export const mercadopagoProvider: PaymentProvider = {
     } catch {
       return false;
     }
+    // Manifesto OFICIAL do webhook `type=order`: o `id` vem do parâmetro de
+    // query `data.id` (e NÃO do corpo), junto com `x-request-id` e `ts`.
+    // https://www.mercadopago.com.br/developers/en/docs/checkout-api-orders/notifications
+    //   id:${dataID};request-id:${xRequestId};ts:${ts};
+    // Quando a query está presente (entrega HTTP real) ela é autoritativa:
+    // um `data.id` diferente no corpo NÃO pode trocar o manifesto assinado.
+    // O fallback pelo corpo só atende chamadas diretas/offline (testes e
+    // reprocessamento interno), que não têm URL de webhook.
+    const primeiro = (v: unknown): string => Array.isArray(v) ? String(v[0] ?? '') : String(v ?? '');
+    const idQuery = primeiro(query?.['data.id'] ?? query?.data_id ?? query?.id);
+    const idManifesto = idQuery || id;
+    if (!idManifesto) return false;
+    if (idQuery && id && idQuery !== id && idQuery.toLowerCase() !== id.toLowerCase())
+      return false; // divergência corpo/query: jamais confiar no corpo
     const reqId = String(headers['x-request-id'] || '');
-    // Manifesto oficial: `id:<data.id>;request-id:...;ts:...;`. O id da Order
-    // (ORD01...) é case-sensitive — validamos a caixa original e, por
-    // compatibilidade com notificações legadas, também a versão minúscula.
+    // O id da Order (ORD01...) é case-sensitive — validamos a caixa original
+    // e, por compatibilidade com notificações legadas, a versão minúscula.
     const manifestos = [
-      `id:${id};request-id:${reqId};ts:${ts};`,
-      `id:${id.toLowerCase()};request-id:${reqId};ts:${ts};`,
+      `id:${idManifesto};request-id:${reqId};ts:${ts};`,
+      `id:${idManifesto.toLowerCase()};request-id:${reqId};ts:${ts};`,
     ];
     return manifestos.some((m) => compararConstante(v1.toLowerCase(), hmacHex(segredo, m)));
   },
