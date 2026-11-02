@@ -89,8 +89,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Instalar dependências da API
-        run: npm --prefix server install
+      - name: Instalar dependências (raiz)
+        run: npm install
       # O wrapper real do script E4.2 (PROD-DB-01.5.1) executa o arquivo via
       # psql, com o mesmo `\if :apply / BEGIN / COMMIT / ROLLBACK` do operador.
       # Sem o binário o teste se auto-pula e o gate REPROVA (skip não é
@@ -134,12 +134,21 @@ jobs:
             echo "::error title=testpg falhou::${DIAG//$'\n'/%0A}"
             exit 1
           }
-      # Dual-track da fusão: o boot do ERP já criou as tabelas do commerce
-      # (db/schema.sql + db/migrations/0012); a migration Prisma precisa
-      # aplicar por cima sem erro (SQL idempotente) e ser registrada em
-      # _prisma_migrations.
-      # Coletar também as evidências dual-track/smoke quando test:pg falha.
-      # O job permanece vermelho: estes passos NÃO usam continue-on-error.
+      # Recovery ANTES das migrações Prisma: source e target devem ter o
+      # mesmo schema (apenas SQL). Se rodar depois do prisma migrate deploy,
+      # o source teria tenant_id em sales (via Prisma migration
+      # 20261005130000_unified_order) mas o target não, fazendo o restore
+      # falhar com "column tenant_id of relation sales does not exist".
+      - name: Recovery — backup restaura em banco vazio (D8)
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          npm run recovery:check 2>&1 | tee /tmp/recovery.log || {
+            DIAG="$( { grep -E "❌|Error|error:|restauração|violates" /tmp/recovery.log | head -30; echo "--- cauda ---"; tail -30 /tmp/recovery.log; } | sed 's/%/%25/g' )"
+            echo "::error title=recovery falhou::${DIAG//$'\n'/%0A}"
+            exit 1
+          }
+
       - name: Instalar CLI Prisma (raiz)
         if: ${{ !cancelled() }}
         run: npm install --include=dev --no-audit --no-fund
@@ -163,18 +172,6 @@ jobs:
       # estoque ativo"). O runner cria um BANCO NOVO, sobe a API de verdade
       # (migrate + ensureAdmin automáticos, ZERO SQL manual) e roda o smoke
       # contra ela, devolvendo o código de saída do smoke.
-      # RECOVERY (D8): prova que o backup RESTAURA. Gera o SQL pelo MESMO
-      # gerador do endpoint, migra um banco-alvo vazio, aplica o arquivo e
-      # confere os marcadores — e reaplica para provar idempotência.
-      - name: Recovery — backup restaura em banco vazio (D8)
-        if: ${{ !cancelled() }}
-        run: |
-          set -o pipefail
-          npm run recovery:check 2>&1 | tee /tmp/recovery.log || {
-            DIAG="$( { grep -E "❌|Error|error:|restauração|violates" /tmp/recovery.log | head -30; echo "--- cauda ---"; tail -30 /tmp/recovery.log; } | sed 's/%/%25/g' )"
-            echo "::error title=recovery falhou::${DIAG//$'\n'/%0A}"
-            exit 1
-          }
       - name: Smoke E2E contra PostgreSQL novo (gate ERP-03)
         if: ${{ !cancelled() }}
         run: |
