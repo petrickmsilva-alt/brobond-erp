@@ -210,6 +210,15 @@ export default function LojaProdutoPage() {
                 aria-label="Quantidade"
               />
             </label>
+          </div>
+
+          {!precisaTamanho && (
+            <p className={`mt-2 text-xs ${classeDisponibilidade(disponivelDoSelecionado)}`} aria-live="polite">
+              {rotuloDisponibilidade(disponivelDoSelecionado)}
+            </p>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3">
             <button type="button" className="btn-accent" disabled={!podeAdicionar} onClick={adicionar}>
               {adicionado ? (
                 <>
@@ -225,12 +234,6 @@ export default function LojaProdutoPage() {
               Ir para o carrinho
             </button>
           </div>
-
-          {!precisaTamanho && (
-            <p className={`mt-2 text-xs ${classeDisponibilidade(disponivelDoSelecionado)}`} aria-live="polite">
-              {rotuloDisponibilidade(disponivelDoSelecionado)}
-            </p>
-          )}
 
           {detalhe.produto.descricao && (
             <section className="border-t border-line pt-4" aria-labelledby="descricao">
