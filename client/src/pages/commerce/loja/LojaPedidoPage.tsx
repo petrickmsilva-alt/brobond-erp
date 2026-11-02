@@ -233,6 +233,12 @@ export default function LojaPedidoPage() {
                     <ExternalLink className="h-4 w-4" aria-hidden="true" /> Abrir pagamento no Mercado Pago
                   </a>
                 )}
+                {/* Identificador REAL devolvido pelo provedor (Orders API); nunca fabricado. */}
+                {pag.provider_order_id && (
+                  <p className="break-all text-[11px] text-muted">
+                    Order ID no provedor: <span className="font-mono">{pag.provider_order_id}</span>
+                  </p>
+                )}
                 <p className="text-[11px] leading-relaxed text-muted">
                   Após pagar, o status é atualizado pelo webhook assinado do provider. Esta página consulta o servidor em intervalos controlados apenas como complemento.
                 </p>

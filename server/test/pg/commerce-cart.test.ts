@@ -242,6 +242,10 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   assert.equal(mTamper.status, 200, `campos monetários/de tenant do browser são ignorados: ${msg(mTamper)}`);
   assert.equal(mTamper.body.cotacao.totais.total, 160);
 
+  // CONTATO DO CHECKOUT: o contrato Storefront Enterprise exige nome completo,
+  // e-mail e WhatsApp normalizado para E.164 (comunicação transacional do pedido).
+  // Os fixtures abaixo foram atualizados para esse contrato; as asserções de
+  // estoque/frete/tenancy/SEO/idempotência permanecem exatamente as mesmas.
   // ---- 4) estoque -------------------------------------------------------------------
   const q9 = await req('POST', '/loja/preview', { itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 9 }] });
   assert.equal(q9.status, 200);
@@ -249,7 +253,7 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   assert.equal(q9.body.itens[0].aviso, 'Só 8 em estoque.');
   assert.equal(q9.body.pronto_para_checkout, false);
   assert.deepEqual(q9.body.payment_methods, [], 'sem estoque → nenhum método oferecido');
-  const co9 = await req('POST', '/loja/checkout', { chave: `chave-${RODADA}-9`, comprador: { nome: 'X', email: `x${EMAIL_DOMINIO}` }, itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 9 }] });
+  const co9 = await req('POST', '/loja/checkout', { chave: `chave-${RODADA}-9`, comprador: { nome: 'Cliente X', email: `x${EMAIL_DOMINIO}`, whatsapp: '62999991234' }, itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 9 }] });
   assert.equal(co9.status, 409, `checkout com estoque insuficiente: ${msg(co9)}`);
 
   // ---- 5) cupom -----------------------------------------------------------------------
@@ -274,7 +278,7 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   assert.equal(qb.body.itens[0].nome, 'Item indisponível');
   assert.ok(!qb.texto.includes('filial') && !qb.texto.includes(`OUTRA-${RS}`), 'nada do tenant B vaza');
   assert.equal(qb.body.pronto_para_checkout, false);
-  const cob = await req('POST', '/loja/checkout', { chave: `chave-${RODADA}-b`, comprador: { nome: 'X', email: `x${EMAIL_DOMINIO}` }, itens: [{ produto_id: produtoIdB, tamanho_id: null, quantidade: 1 }] });
+  const cob = await req('POST', '/loja/checkout', { chave: `chave-${RODADA}-b`, comprador: { nome: 'Cliente X', email: `x${EMAIL_DOMINIO}`, whatsapp: '62999991234' }, itens: [{ produto_id: produtoIdB, tamanho_id: null, quantidade: 1 }] });
   assert.equal(cob.status, 409, `checkout com item de outro tenant: ${msg(cob)}`);
 
   // ---- 7) SEO + status HTTP real ----------------------------------------------------
@@ -306,7 +310,7 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   const chave = `chave-${RODADA}-${randomUUID().slice(0, 8)}`.slice(0, 64);
   const corpoCheckout = {
     chave,
-    comprador: { nome: 'Cliente Cart', email: `cliente${EMAIL_DOMINIO}` },
+    comprador: { nome: 'Cliente Cart', email: `cliente${EMAIL_DOMINIO}`, whatsapp: '62999991234' },
     itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 1, preco_unitario: 1, subtotal: 1 }],
     total: 1, totais: { total: 1 }, frete: 0, desconto: 79,
     endereco: null,
@@ -372,7 +376,7 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   assert.equal((await paginaHtml(baseUrl, `/loja/produto/${encodeURIComponent(slug)}`)).status, 404, 'HTML: produto despublicado → 404 real');
   const lista = await req('GET', '/loja/produtos?page=1&pageSize=60');
   assert.ok(!(lista.body.produtos || []).some((p: any) => p.slug === slug), 'produto despublicado não aparece na vitrine');
-  const coDesp = await req('POST', '/loja/checkout', { chave: `chave-${RODADA}-d`, comprador: { nome: 'X', email: `x${EMAIL_DOMINIO}` }, itens: itens1 });
+  const coDesp = await req('POST', '/loja/checkout', { chave: `chave-${RODADA}-d`, comprador: { nome: 'Cliente X', email: `x${EMAIL_DOMINIO}`, whatsapp: '62999991234' }, itens: itens1 });
   assert.equal(coDesp.status, 409, `checkout de item despublicado: ${msg(coDesp)}`);
 
   // ---- 12) RBAC ------------------------------------------------------------------------

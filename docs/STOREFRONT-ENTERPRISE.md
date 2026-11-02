@@ -278,9 +278,9 @@ de catálogo/preço/checkout).
 
 | Gate | Resultado |
 | --- | --- |
-| `npm test` | **EXIT 0** — node:test 1695 testes (1619 pass / 0 fail / 76 skipped) + Vitest 129 arquivos / 1112 testes |
+| `npm test` | **EXIT 0** — node:test 1698 testes (1622 pass / 0 fail / 76 skipped) + Vitest 129 arquivos / 1112 testes |
 | `npm run typecheck` | **EXIT 0** (domain + server + client) |
-| `npm run build` | **EXIT 0** (Vite + PWA, 170 entradas no precache) |
+| `npm run build` | **EXIT 0** (Vite + PWA, 170 entradas / 2109,37 KiB no precache) |
 | `npm run lint` | **EXIT 0** (0 erros; 606 avisos preexistentes) |
 | `npm run smoke` | **EXIT 0** — 398/398 com servidor em memória (mesmo fluxo do job `verificar`) |
 | `npm run commerce:enterprise-audit` | **EXIT 0** — 32/32, P0=P1=P2=0 |
@@ -298,10 +298,41 @@ de catálogo/preço/checkout).
 Novos testes: `server/test/commerce-orders-pix.test.ts` (7),
 `server/test/commerce-notificacoes.test.ts` (6),
 `server/test/commerce-galeria.test.ts` (9),
+`server/test/commerce-pagamento-recusado.test.ts` (3: contrato do comprador
+usado nos E2E PG, vocabulário `PAGAMENTO_RECUSADO` e a transição real
+`falhou` → `REJECTED` + liberação de reserva + outbox idempotente),
 `client/.../GaleriaProduto.test.tsx` (5),
 `client/.../GaleriaAdminProduto.test.tsx` (7), teste de `x-signature` com
 `data.id` da query em `commerce-orders-pix.test.ts` e um teste de performance
 de requisição única em `LojaFluxoPages.test.tsx`.
+
+### 9.1 Diagnóstico do CI (evidência do log do job `testes-postgres`)
+
+O primeiro push do ciclo (`580a01c`) falhou na reaplicação da migração `0090`:
+o CHECK `commerce_outbox_tipo_ck` (4 tipos) rejeitava linhas `notificacao`
+criadas por `0094`. Corrigido em `44cb44d`: comunicação passou a usar
+`sincronizacao` + `payload.acao='notificacao'`, `0094` ficou 100% aditiva e o
+bootstrap foi sincronizado. Nesse commit o job `verificar` ficou **PASS**
+(4m57s, 16/16 steps) e `testes-postgres` **FAIL** (7m0s) com apenas 2 de 415
+testes falhando: `CARRINHO PG` (128) e `COMMERCE E2E` (141). As anotações
+do check-run não traziam a mensagem do `AssertionError`; o log completo do job
+mostrou a causa exata:
+
+* `commerce-cart.test.ts:253` — `400 !== 409`, corpo
+  `{"error":"Informe o nome completo do comprador."}`;
+* `commerce-e2e.test.ts:374` — `400 !== 201`, corpo
+  `{"error":"Informe um WhatsApp válido para as atualizações do pedido."}`.
+
+Ou seja, o novo contrato de `normalizarComprador` (nome completo, e-mail e
+WhatsApp normalizado para E.164, exigido também pelo formulário do checkout)
+passou a rejeitar os fixtures antigos, que tinham só `{ nome, email }` e, em
+três casos, `nome: 'X'`. Foram atualizados os 7 fixtures de `comprador` nos
+dois arquivos (`nome` completo + `whatsapp: '62999991234'` → `5562999991234`),
+**sem alterar nenhuma asserção** de estoque/frete/tenancy/SEO/idempotência.
+Um teste unitário novo trava esse formato para evitar regressão silenciosa.
+As duas mensagens de migração `0030/E4.2` e `9999_prod_db_01_falha_intencional`
+que aparecem no log são cenários de falha **intencionais** dos testes de
+degradação/recuperação, não defeitos da cadeia de migrations.
 
 ## 10. Segurança e multiempresa
 
@@ -338,8 +369,10 @@ Gates locais verdes **não** significam homologação. Antes de
    COTTON "B", touch/mobile e zoom inline no ambiente que receber o branch.
 4. **Métricas de browser** LCP/INP/CLS/TTFB nas viewports
    `1440/1280/1024/768/390/375/320`, com cold start e antes/depois reais.
-5. **PG 16.14 do CI**: confirmar `testes-postgres` PASS após o push (o gate
-   local de `DATABASE_URL` continua indisponível no sandbox).
+5. **PG 16.14 do CI**: confirmar `testes-postgres` PASS no commit final (o
+   gate local de `DATABASE_URL` continua indisponível no sandbox). Histórico
+   real: `580a01c` FAIL na cadeia de migrations; `44cb44d` `verificar` PASS +
+   `testes-postgres` FAIL apenas nos 2 fixtures de comprador descritos em §9.1.
 6. **Tela de consulta** de `commerce_notificacoes` no backoffice (aviso
    informativo de `audit:menu`; a fila e o orchestrator já funcionam).
 
@@ -347,8 +380,8 @@ Gates locais verdes **não** significam homologação. Antes de
 
 | Rótulo | Valor | Motivo |
 | --- | --- | --- |
-| `CODE_READY` | **PENDENTE até `verificar` + `testes-postgres` PASS** | gates locais verdes + correção da causa raiz do `testes-postgres` |
-| `INTERNAL_COMMERCE_READY` | **PENDENTE até CI verde** | cadeia única STOREFRONT → CHECKOUT → PAYMENT ENGINE/MP/PIX → OMS/PEDIDO → VENDA ERP/ESTOQUE/FINANCEIRO/FULFILLMENT → COMUNICAÇÃO → GOVERNANÇA; galeria admin concluída; migrations validadas |
+| `CODE_READY` | **PENDENTE até `verificar` + `testes-postgres` PASS** | todos os gates locais verdes; `verificar` PASS em `44cb44d`; causa dos 2 testes PG diagnosticada no log do job e corrigida (§9.1); veredito do commit final a confirmar |
+| `INTERNAL_COMMERCE_READY` | **PENDENTE até CI verde** | cadeia única STOREFRONT → CHECKOUT → PAYMENT ENGINE/MP/PIX → OMS/PEDIDO → VENDA ERP/ESTOQUE/FINANCEIRO/FULFILLMENT → COMUNICAÇÃO → GOVERNANÇA; galeria admin concluída; migrations validadas; `smoke` 398/398 |
 | `EXTERNAL_HOMOLOGATION_READY` | **NO** | falta loja publicada, credenciais MP/SMTP/Meta e métricas de browser |
 | `REAL_PIX_HOMOLOGATION` | **BLOCKED** | `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET`, `/v1/orders` habilitado e ambiente publicado ausentes |
 | `EMAIL_EXTERNAL_HOMOLOGATION` | **BLOCKED** | credenciais SMTP ausentes |
