@@ -95,6 +95,21 @@ export default function LojaProdutoPage() {
   const podeAdicionar = Number.isFinite(detalhe.produto.preco) && detalhe.produto.preco > 0 && (!comTamanho || (tamanhoSel != null && tamanhoSel !== null)) && disponivelDoSelecionado >= qtd && disponivelDoSelecionado > 0;
   const precisaTamanho = comTamanho && (tamanhoSel === null || tamanhoSel === undefined);
 
+  // Fonte server-side já existente e correta (detalhe vem de /loja/produtos/:slug).
+  // Não cria tabela, migration, rota nem módulo: só reexibe o que o servidor já devolve.
+  const ESTOQUE_BAIXO = 5;
+  const rotuloDisponibilidade = (disponivel: number): string => {
+    if (!Number.isFinite(disponivel) || disponivel <= 0) return 'Sem disponibilidade no momento.';
+    if (disponivel === 1) return 'Última unidade disponível';
+    if (disponivel <= ESTOQUE_BAIXO) return `Últimas ${disponivel} unidades disponíveis`;
+    return `${disponivel} unidades disponíveis`;
+  };
+  const classeDisponibilidade = (disponivel: number): string => {
+    if (!Number.isFinite(disponivel) || disponivel <= 0) return 'text-danger font-medium';
+    if (disponivel <= ESTOQUE_BAIXO) return 'text-amber-800 font-medium';
+    return 'text-muted';
+  };
+
   const adicionar = () => {
     if (!podeAdicionar) return;
     const ok = adicionarAoCarrinho({
@@ -175,13 +190,11 @@ export default function LojaProdutoPage() {
                 <span className="rounded-lg border border-line bg-canvas px-3 py-2 text-sm">Único</span>
               </div>
             )}
-            <p className="mt-2 text-xs text-muted" aria-live="polite">
-              {precisaTamanho
-                ? 'Selecione um tamanho para continuar.'
-                : disponivelDoSelecionado > 0
-                  ? `${disponivelDoSelecionado} peça(s) disponível(is) agora (estoque em tempo real).`
-                  : 'Sem disponibilidade no momento.'}
-            </p>
+            {precisaTamanho && (
+              <p className="mt-2 text-xs text-muted" aria-live="polite">
+                Selecione um tamanho para continuar.
+              </p>
+            )}
           </fieldset>
 
           <div className="flex flex-wrap items-center gap-3">
@@ -212,6 +225,12 @@ export default function LojaProdutoPage() {
               Ir para o carrinho
             </button>
           </div>
+
+          {!precisaTamanho && (
+            <p className={`mt-2 text-xs ${classeDisponibilidade(disponivelDoSelecionado)}`} aria-live="polite">
+              {rotuloDisponibilidade(disponivelDoSelecionado)}
+            </p>
+          )}
 
           {detalhe.produto.descricao && (
             <section className="border-t border-line pt-4" aria-labelledby="descricao">
