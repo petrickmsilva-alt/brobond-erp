@@ -17,6 +17,7 @@ import type { Request, Response } from 'express';
 import { randomBytes } from 'node:crypto';
 import { HttpError } from '../errors';
 import { getStore } from '../services';
+import { query } from '../db';
 import { listarTodos } from '../paginacaoCompleta';
 import { escopoDeSistema } from '../empresa';
 import { getResource } from '../resources';
@@ -34,6 +35,9 @@ import { configDaLoja, freteDaConfig, exigirVitrine, responsavelCheckout } from 
 import { pagamentoDaLoja } from './estado-loja';
 import { disponibilidadesPorTamanho, normalizarMetadados } from './catalogo';
 import { montarVisaoDaSale, ORIGEM_CHECKOUT } from './pedidos';
+import { normalizarComprador } from './cliente';
+import { registrarEventoSeguro, type ContatoPedido, type EventoNotificacao } from './notificacoes';
+import { galeriasPorVariante, midiaPublica, selecionarGaleria, type MidiaGaleria } from './galeria';
 import {
   avaliarCupomCodigo,
   consumirUsoCupom,
@@ -135,44 +139,135 @@ export async function lojaConfigPublica(req: Request, res: Response) {
 
 // ----------------------------------------------------------------------------
 // GET /api/loja/produtos + /:slug — catálogo público (só PUBLISHED)
+//
+// STOREFRONT ENTERPRISE:
+//   • seções da home com fonte REAL (destaque/promoção/criado_em/categoria);
+//   • busca por termo, SKU e categoria; filtro por categoria e ordenação;
+//   • galeria completa (mídia por produto e por variação), alt text e rendições;
+//   • relacionados pela MESMA categoria, ativos e publicados no canal;
+//   • detalhe por ponto (slug) em vez de 4 varreduras completas do catálogo.
+// Nenhuma seção inventa dado: sem fonte real ela vem vazia e a tela a oculta.
 // ----------------------------------------------------------------------------
 
+type CardPublico = {
+  id: number;
+  sku: string;
+  slug: string;
+  nome: string;
+  resumo: string | null;
+  destaque: boolean;
+  preco: number;
+  preco_original: number | null;
+  promocional: boolean;
+  foto_url: string | null;
+  categoria_id: number | null;
+  categoria: string | null;
+  criado_em: string | null;
+};
+
+function slugCategoria(nome: string): string {
+  return nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+/** Nomes REAIS das categorias do ERP (catálogo compartilhado, conteúdo estático). */
+async function categoriasDoCatalogo(): Promise<Map<number, string>> {
+  const categorias = await listarTodos(getResource('categorias')!, {}, undefined, { sort: 'nome', dir: 'asc' });
+  const mapa = new Map<number, string>();
+  for (const c of categorias) if (c.ativo !== false) mapa.set(Number(c.id), String(c.nome || ''));
+  return mapa;
+}
+
+function cardPublico(
+  produto: Row,
+  proj: Row,
+  precos: Map<string, Row>,
+  nomesCategorias: Map<number, string>
+): CardPublico {
+  const preco = precoPublico(produto, precos);
+  const categoriaId = produto.categoria_id == null ? null : Number(produto.categoria_id) || null;
+  return {
+    id: Number(produto.id),
+    sku: String(produto.sku || ''),
+    slug: String(proj.slug),
+    nome: String(produto.nome || ''),
+    resumo: proj.resumo ? String(proj.resumo) : produto.descricao_curta ? String(produto.descricao_curta) : null,
+    destaque: produto.destaque === true,
+    preco: preco.preco,
+    preco_original: preco.preco_original,
+    promocional: preco.promocional,
+    // Miniatura (240 px) para cards: nunca serve a imagem cheia num card.
+    foto_url: (produto as { foto_url?: string | null }).foto_url ?? null,
+    categoria_id: categoriaId,
+    categoria: categoriaId && nomesCategorias.has(categoriaId) ? nomesCategorias.get(categoriaId)! : null,
+    criado_em: produto.criado_em ? String(produto.criado_em) : null,
+  };
+}
+
 export async function lojaProdutosPublicos(req: Request, res: Response) {
-  const { empresaId, visiveis, projecoes, precos } = await carregarVitrine(await exigirEmpresa());
+  const empresaId = await exigirEmpresa();
+  const { visiveis, projecoes, precos } = await carregarVitrine(empresaId);
+  const nomesCategorias = await categoriasDoCatalogo();
   const q = String(req.query.q || '').trim().toLowerCase();
   const somenteDestaques = req.query.destaque === '1';
   const pagina = Math.max(1, Math.trunc(Number(req.query.page)) || 1);
   const tamanho = Math.max(1, Math.min(60, Math.trunc(Number(req.query.pageSize)) || 24));
+  const ordenar = String(req.query.ordenar || '').trim();
+  const filtroCategoria = String(req.query.categoria || '').trim().toLowerCase();
 
   let lista = [...visiveis.values()].map((p) => ({ produto: p, proj: projecoes.get(Number(p.id))! }));
-  lista.sort((a, b) => String(a.produto.nome || '').localeCompare(String(b.produto.nome || ''), 'pt-BR') || Number(a.produto.id) - Number(b.produto.id));
-  if (somenteDestaques) lista = lista.filter((l) => l.produto.destaque === true);
   if (q) {
     lista = lista.filter((l) =>
-      [l.produto.nome, l.produto.sku, l.proj?.resumo].some((v) => v && String(v).toLowerCase().includes(q))
+      [l.produto.nome, l.produto.sku, l.produto.descricao_curta, l.proj?.resumo, l.proj?.slug,
+        nomesCategorias.get(Number(l.produto.categoria_id) || 0)]
+        .some((v) => v && String(v).toLowerCase().includes(q))
     );
   }
+  if (filtroCategoria) {
+    lista = lista.filter((l) => {
+      const id = Number(l.produto.categoria_id) || 0;
+      const nome = nomesCategorias.get(id) || '';
+      return String(id) === filtroCategoria || slugCategoria(nome) === filtroCategoria || nome.toLowerCase() === filtroCategoria;
+    });
+  }
+  if (somenteDestaques) lista = lista.filter((l) => l.produto.destaque === true);
+
+  // Ordenação REAL: nome, data de cadastro, preço calculado no servidor.
+  if (ordenar === 'novidades') lista.sort((a, b) => String(b.produto.criado_em || '').localeCompare(String(a.produto.criado_em || '')) || Number(a.produto.id) - Number(b.produto.id));
+  else if (ordenar === 'preco-asc' || ordenar === 'preco-desc') {
+    const direcao = ordenar === 'preco-asc' ? 1 : -1;
+    lista.sort((a, b) => direcao * (precoPublico(a.produto, precos).preco - precoPublico(b.produto, precos).preco) || Number(a.produto.id) - Number(b.produto.id));
+  } else if (ordenar === 'destaque') lista.sort((a, b) => Number(!!b.produto.destaque) - Number(!!a.produto.destaque) || String(a.produto.nome || '').localeCompare(String(b.produto.nome || ''), 'pt-BR'));
+  else lista.sort((a, b) => String(a.produto.nome || '').localeCompare(String(b.produto.nome || ''), 'pt-BR') || Number(a.produto.id) - Number(b.produto.id));
+
+  const total = lista.length;
   const fatia = lista.slice((pagina - 1) * tamanho, (pagina - 1) * tamanho + tamanho);
+  // attachImages só na página visível (não no catálogo inteiro): 1 query de
+  // mídia para N cards, sem N+1.
   await attachImages(getResource('produtos')!, fatia.map((l) => l.produto));
+  const cards = fatia.map(({ produto, proj }) => cardPublico(produto, proj, precos, nomesCategorias));
+
+  // Seções da home: IDs/cards derivados dos MESMOS dados reais, calculados uma
+  // vez. Sem promoção → `ofertas` vazia; sem destaque → `destaques` vazia.
+  const todosCards = lista.map(({ produto, proj }) => cardPublico(produto, proj, precos, nomesCategorias));
+  const secoes = req.query.secoes === '1' ? {
+    destaques: todosCards.filter((c) => c.destaque).slice(0, 8),
+    novidades: [...todosCards].sort((a, b) => String(b.criado_em || '').localeCompare(String(a.criado_em || ''))).slice(0, 8),
+    ofertas: todosCards.filter((c) => c.promocional).slice(0, 8),
+  } : null;
+
+  const categorias = [...new Set(lista.map((l) => Number(l.produto.categoria_id) || 0).filter((id) => id > 0 && nomesCategorias.has(id)))]
+    .map((id) => ({ id, nome: nomesCategorias.get(id)!, slug: slugCategoria(nomesCategorias.get(id)!), total: lista.filter((l) => Number(l.produto.categoria_id) === id).length }))
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+  // Preço/estoque são server-authoritative: conteúdo de catálogo pode ser
+  // cacheado, mas estes endpoints nunca viram cache compartilhado de preço.
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
     empresa_id: empresaId,
-    total: lista.length,
-    produtos: fatia.map(({ produto, proj }) => {
-      const preco = precoPublico(produto, precos);
-      return {
-        id: Number(produto.id),
-        sku: String(produto.sku || ''),
-        slug: String(proj.slug),
-        nome: String(produto.nome || ''),
-        resumo: proj.resumo ? String(proj.resumo) : produto.descricao_curta ? String(produto.descricao_curta) : null,
-        destaque: produto.destaque === true,
-        preco: preco.preco,
-        preco_original: preco.preco_original,
-        promocional: preco.promocional,
-        foto_url: (produto as { foto_url?: string | null }).foto_url ?? null,
-        fotos: (produto as { fotos?: unknown }).fotos ?? [],
-      };
-    }),
+    total,
+    produtos: cards,
+    categorias,
+    ...(secoes ? { secoes } : {}),
   });
 }
 
@@ -181,40 +276,132 @@ async function exigirEmpresa(): Promise<number> {
   return empresaId;
 }
 
-export async function lojaProdutoPublico(req: Request, res: Response) {
-  const { empresaId, visiveis, projecoes, precos } = await carregarVitrine(await exigirEmpresa());
-  const slug = String(req.params.slug || '').trim().toLowerCase();
-  let produto: Row | null = null;
+/**
+ * Detalhe por PONTO (performance): antes, cada página de produto fazia 4
+ * varreduras completas (produtos + projeções + preços + publicações) só para
+ * achar UM slug. Aqui são 3 leituras indexadas + a checagem de publicação.
+ * A regra de visibilidade é IDÊNTICA à da vitrine (ativo + projetado +
+ * PUBLISHED no canal BROBOND + empresa dona da loja) → 404 idêntico para
+ * produto inexistente, despublicado ou de outro tenant.
+ */
+export async function resolverProdutoVitrine(empresaId: number, slug: string): Promise<{
+  produto: Row; proj: Row; precos: Map<string, Row>;
+} | null> {
+  const s = getStore();
   let proj: Row | null = null;
-  for (const [pid, p] of visiveis.entries()) {
-    const pj = projecoes.get(pid);
-    if (pj && String(pj.slug) === slug) {
-      produto = p;
-      proj = pj;
-      break;
+  if (s.kind === 'postgres') {
+    const r = await query(
+      `SELECT * FROM commerce_produtos WHERE empresa_id = $1 AND lower(slug) = $2 ORDER BY id LIMIT 1`,
+      [empresaId, slug]
+    );
+    proj = (r.rows[0] as Row) ?? null;
+  } else {
+    const lista = await s.list(R_PROD_COM(), { page: 1, pageSize: 10000, filter: { empresa_id: empresaId } });
+    proj = lista.rows.find((p) => String(p.slug).toLowerCase() === slug) ?? null;
+  }
+  if (!proj) return null;
+  const produtoId = Number(proj.produto_id);
+  if (!Number.isSafeInteger(produtoId) || produtoId <= 0) return null;
+  const [produto, publicacao, preco] = await Promise.all([
+    s.findOneWhere(R_PRODUTOS(), { id: produtoId, empresa_id: empresaId }),
+    s.findOneWhere(R_PUBLICACOES(), { empresa_id: empresaId, produto_id: produtoId, canal: 'BROBOND', estado: 'PUBLISHED' }),
+    s.findOneWhere(R_PRECOS(), { empresa_id: empresaId, produto_id: produtoId, canal: 'BROBOND' }),
+  ]);
+  if (!produto || produto.ativo === false || !publicacao) return null;
+  const precos = new Map<string, Row>();
+  if (preco) precos.set(`${produtoId}:BROBOND`, preco);
+  return { produto, proj, precos };
+}
+
+/** Relacionados REAIS: mesma categoria, ativos, publicados no canal da loja. */
+async function relacionadosDoProduto(
+  empresaId: number,
+  produto: Row,
+  precos: Map<string, Row>,
+  nomesCategorias: Map<number, string>,
+  limite = 4
+): Promise<CardPublico[]> {
+  const categoriaId = Number(produto.categoria_id) || 0;
+  if (!categoriaId) return [];
+  const s = getStore();
+  let candidatos: { produto: Row; proj: Row }[] = [];
+  if (s.kind === 'postgres') {
+    const r = await query(
+      `SELECT p.*, cp.id AS proj_id, cp.slug AS proj_slug, cp.resumo AS proj_resumo
+         FROM produtos p
+         JOIN commerce_produtos cp ON cp.produto_id = p.id AND cp.empresa_id = p.empresa_id
+        WHERE p.empresa_id = $1 AND p.ativo = TRUE AND p.categoria_id = $2 AND p.id <> $3
+          AND EXISTS (SELECT 1 FROM commerce_publicacoes pub
+                       WHERE pub.empresa_id = p.empresa_id AND pub.produto_id = p.id
+                         AND pub.canal = 'BROBOND' AND pub.estado = 'PUBLISHED')
+        ORDER BY p.id LIMIT $4`,
+      [empresaId, categoriaId, Number(produto.id), limite]
+    );
+    candidatos = r.rows.map((row: Record<string, unknown>) => ({
+      produto: row as Row,
+      proj: { id: row.proj_id, slug: row.proj_slug, resumo: row.proj_resumo } as Row,
+    }));
+  } else {
+    const lista = await s.list(R_PRODUTOS(), { page: 1, pageSize: 50, filter: { empresa_id: empresaId, categoria_id: categoriaId, ativo: true } });
+    for (const p of lista.rows) {
+      if (Number(p.id) === Number(produto.id) || candidatos.length >= limite) continue;
+      const [proj, pub] = await Promise.all([
+        s.findOneWhere(R_PROD_COM(), { empresa_id: empresaId, produto_id: Number(p.id) }),
+        s.findOneWhere(R_PUBLICACOES(), { empresa_id: empresaId, produto_id: Number(p.id), canal: 'BROBOND', estado: 'PUBLISHED' }),
+      ]);
+      if (proj && pub) candidatos.push({ produto: p, proj });
     }
   }
-  if (!produto || !proj) throw new HttpError(404, 'Produto não encontrado.');
+  if (!candidatos.length) return [];
+  await attachImages(getResource('produtos')!, candidatos.map((c) => c.produto));
+  return candidatos.map(({ produto: p, proj }) => cardPublico(p, proj, precos, nomesCategorias));
+}
+
+export async function lojaProdutoPublico(req: Request, res: Response) {
+  const empresaId = await exigirEmpresa();
+  const slug = String(req.params.slug || '').trim().toLowerCase();
+  const resolvido = slug ? await resolverProdutoVitrine(empresaId, slug) : null;
+  if (!resolvido) throw new HttpError(404, 'Produto não encontrado.');
+  const { produto, proj, precos } = resolvido;
+  const nomesCategorias = await categoriasDoCatalogo();
   await attachImages(getResource('produtos')!, [produto]);
   const preco = precoPublico(produto, precos);
-  const disponibilidade = await disponibilidadesPorTamanho(escopoDeSistema(empresaId), Number(produto.id));
+  const [disponibilidade, relacionados] = await Promise.all([
+    disponibilidadesPorTamanho(escopoDeSistema(empresaId), Number(produto.id)),
+    relacionadosDoProduto(empresaId, produto, precos, nomesCategorias),
+  ]);
+  const fotos = ((produto as { fotos?: MidiaGaleria[] }).fotos ?? []) as MidiaGaleria[];
+  const nome = String(produto.nome || '');
+  const galeria = selecionarGaleria(fotos, null).map((f) => midiaPublica(f, nome));
+  const categoriaId = produto.categoria_id == null ? null : Number(produto.categoria_id) || null;
+  const categoriaNome = categoriaId && nomesCategorias.has(categoriaId) ? nomesCategorias.get(categoriaId)! : null;
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
     empresa_id: empresaId,
     produto: {
       id: Number(produto.id),
       sku: String(produto.sku || ''),
       slug: String(proj.slug),
-      nome: String(produto.nome || ''),
+      nome,
       resumo: proj.resumo ? String(proj.resumo) : null,
       descricao: String(produto.descricao || ''),
+      composicao: produto.composicao ? String(produto.composicao) : null,
       destaque: produto.destaque === true,
       preco: preco.preco,
       preco_original: preco.preco_original,
       promocional: preco.promocional,
       foto_url: (produto as { foto_url?: string | null }).foto_url ?? null,
-      fotos: (produto as { fotos?: unknown }).fotos ?? [],
+      /** Resolução cheia da foto principal (o card usa só a miniatura). */
+      imagem_principal: galeria[0]?.url ?? null,
+      /** Galeria do produto, ordenada, com alt text real. */
+      fotos: galeria,
+      /** Mídia específica por tamanho; ausente → cliente usa `fotos`. */
+      galerias_por_variante: galeriasPorVariante(fotos, nome),
+      categoria: categoriaNome ? { id: categoriaId, nome: categoriaNome, slug: slugCategoria(categoriaNome) } : null,
+      criado_em: produto.criado_em ? String(produto.criado_em) : null,
       metadados: normalizarMetadados(proj.canal_metadados),
     },
+    relacionados,
     tamanhos: disponibilidade.map((d) => ({
       tamanho_id: d.tamanho_id,
       codigo: d.codigo,
@@ -548,11 +735,17 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
     if (sale) return res.status(200).json({ ok: true, idempotente: true, ...(await respostaPedido(empresaId, sale)) });
   }
 
-  const comprador = (corpo.comprador && typeof corpo.comprador === 'object' ? corpo.comprador : {}) as Record<string, unknown>;
-  const nome = String(comprador.nome || '').trim().slice(0, 120);
-  const email = String(comprador.email || '').trim().toLowerCase().slice(0, 160);
-  if (!nome) throw new HttpError(400, 'Informe o nome do comprador.', { comprador: 'Nome obrigatório' });
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'E-mail inválido.', { comprador: 'E-mail obrigatório' });
+  // IDENTIFICAÇÃO COMPLETA DO CLIENTE: nome, e-mail, WhatsApp, CPF (quando o
+  // meio de pagamento/fiscal exige) e consentimento de marketing separado.
+  // Decisão 100% server-side: o browser NÃO escolhe se o CPF é necessário.
+  const method = String(corpo.payment_method || 'PIX') as PaymentMethod;
+  const compradorValido = normalizarComprador(corpo.comprador, { exigirDocumento: method === 'PIX' });
+  if (!compradorValido.ok) {
+    throw new HttpError(400, compradorValido.mensagem, { comprador: `${compradorValido.campo}: ${compradorValido.mensagem}` });
+  }
+  const comprador = compradorValido.comprador;
+  const nome = comprador.nome;
+  const email = comprador.email;
 
   const itens = await resolverItensCarrinho(empresaId, corpo);
   if (itens.some((i) => i.disponivel < i.quantidade)) throw new HttpError(409, 'Estoque insuficiente para um dos itens. Atualize o carrinho.');
@@ -595,7 +788,6 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
 
   const dono = await responsavelCheckout(empresaId, config);
   const escopo = escopoDeSistema(empresaId);
-  const method = String(corpo.payment_method || 'PIX') as PaymentMethod;
   if (!METHODS.includes(method) || !(await candidates({empresaId, method, amount:paraCentavos(totais.total), currency:'BRL',country:'BR',channel:'OWN_STORE',installments:1})).length) throw new HttpError(409,'Método indisponível no Payment Engine.');
   const { externalOrderId, token } = gerarIdentificadores();
 
@@ -662,7 +854,9 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
           desconto: desconto.desconto,
           cupom_codigo: usarCupom && cupom && cupom.ok ? String(cupom.cupom.codigo || codigoCupom) : null,
           total: totais.total,
-          comprador: { nome, email, telefone: comprador.telefone ? String(comprador.telefone).slice(0, 40) : null },
+          // Contato completo do pedido (JSONB). CPF fica SOMENTE aqui, no
+          // backend — a visão pública devolve apenas a máscara.
+          comprador,
           endereco: endereco
             ? {
                 rua: String(endereco.rua || '').slice(0, 160),
@@ -728,14 +922,30 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
 
   // COBRANÇA via gateway (backend; falhou → desfaz reserva/cupom com estado ERRO).
   try {
-    await paymentEngine.createForOrder(empresaId, Number(criado.pedido.id), method, `checkout:${criado.pedido.id}`, {taxId: comprador.documento ? String(comprador.documento).replace(/\D/g,'') : undefined});
+    await paymentEngine.createForOrder(empresaId, Number(criado.pedido.id), method, `checkout:${criado.pedido.id}`, { taxId: comprador.documento ?? undefined });
   } catch (e) {
     await falharCheckout(empresaId, criado.pedido, criado.sale, e instanceof Error ? e.message : String(e));
     throw e instanceof HttpError ? e : new HttpError(502, 'Não foi possível iniciar o pagamento do pedido. Tente novamente.');
   }
 
+  // NOTIFICATION ORCHESTRATOR — só registra eventos no outbox. Nenhum adapter
+  // de e-mail/WhatsApp é chamado aqui: pedido criado NUNCA depende do provedor.
+  const contato: ContatoPedido = { nome, email, whatsapp: comprador.whatsapp, telefone: comprador.telefone };
+  const ctxEvento = {
+    empresaId,
+    pedidoId: Number(criado.pedido.id),
+    pedidoExterno: externalOrderId,
+    checkoutToken: token,
+  };
+  const eventos: EventoNotificacao[] = ['ORDER_CREATED', 'PAYMENT_PENDING'];
   const saleFinal = (await s.findOneWhere(R_SALES(), { id: String(criado.sale.id), empresa_id: empresaId })) ?? criado.sale;
-  res.status(201).json({ ok: true, ...(await respostaPedido(empresaId, saleFinal)) });
+  // Uma ÚNICA montagem da visão pública por checkout (antes eram duas: a
+  // resposta e uma leitura extra). Itens/rastreio/timeline lidos uma vez só.
+  const visao = await respostaPedido(empresaId, saleFinal);
+  const pagamento = visao.pagamento as Record<string, unknown> | undefined;
+  if (method === 'PIX' && (pagamento?.qr_code || pagamento?.copia_cola)) eventos.push('PIX_GENERATED');
+  for (const evento of eventos) void registrarEventoSeguro(contato, { ...ctxEvento, evento });
+  res.status(201).json({ ok: true, ...visao });
 }
 
 function gerarIdentificadores(): { externalOrderId: string; token: string } {

@@ -476,6 +476,12 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'token', label: 'Token', type: 'text' },
       { name: 'principal', label: 'Principal', type: 'boolean', default: false },
       { name: 'ordem', label: 'Ordem', type: 'integer', default: 0 },
+      // STOREFRONT ENTERPRISE — galeria: texto alternativo, ativação e mídia
+      // opcional por variação (tamanho). Fotos antigas ficam ativas e sem
+      // variação: continuam sendo o fallback do produto.
+      { name: 'alt_text', label: 'Texto alternativo', type: 'text', maxLength: 180 },
+      { name: 'ativo', label: 'Ativa', type: 'boolean', default: true },
+      { name: 'variante_id', label: 'Variação', type: 'integer' },
       { name: 'criado_por', label: 'Criado por', type: 'integer' },
       { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true },
     ],
@@ -2419,10 +2425,13 @@ export const RESOURCES: Record<string, Resource> = {
     singular: 'Produto',
     labelFields: ['sku', 'nome'],
     ops: ALL_OPS,
-    images: { max: 5 },
+    // STOREFRONT ENTERPRISE: galeria por produto E por variação — 20 mídias
+    // permitem, por exemplo, 3 cores × 3 fotos + fotos gerais. O limite ainda
+    // protege o upload; a vitrine só carrega a miniatura/rendição necessária.
+    images: { max: 20 },
     detail: true,
     fields: [
-      { name: 'fotos', label: 'Fotos', type: 'images', virtual: true, form: false, hint: 'Até 5 fotos por produto. A primeira é a principal.' },
+      { name: 'fotos', label: 'Fotos', type: 'images', virtual: true, form: false, hint: 'Até 20 fotos por produto. A primeira é a principal; fotos podem ser vinculadas a uma variação.' },
             // Unicidade POR EMPRESA: é o que o banco garante (uq_produtos_sku_empresa) e o
       // que a suíte pg-multiempresa já exigia. Declarar `unique` (global) fazia o
       // modo memória recusar o mesmo SKU em outra empresa — divergência
@@ -6309,6 +6318,8 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'publicacao', label: 'Publicação', tone: 'amber' },
           { value: 'sincronizacao', label: 'Sincronização de canal', tone: 'green' },
           { value: 'alerta', label: 'Alerta', tone: 'red' },
+          { value: 'refund_devolucao', label: 'Estorno de devolução', tone: 'blue' },
+          { value: 'notificacao', label: 'Notificação transacional', tone: 'blue' },
         ],
       },
       { name: 'chave', label: 'Chave', type: 'text', readonly: true, search: true },
@@ -6333,6 +6344,61 @@ export const RESOURCES: Record<string, Resource> = {
       ...auditFields,
     ],
     filterFields: ['tipo', 'estado'],
+    orderBy: { field: 'id', dir: 'desc' },
+  },
+
+  // ----------------------------------------------------------------
+  // NOTIFICATION ORCHESTRATOR — uma linha por (evento, canal, destinatário).
+  // `chave_idempotencia` é a dedupe: webhook repetido não reenvia mensagem.
+  // Somente comunicação TRANSACIONAL; marketing tem consentimento separado e
+  // não gera linhas aqui nesta rodada.
+  // ----------------------------------------------------------------
+  commerce_notificacoes: {
+    key: 'commerce_notificacoes',
+    empresa: true,
+    table: 'commerce_notificacoes',
+    label: 'Notificações do pedido',
+    singular: 'Notificação',
+    labelFields: ['evento', 'destinatario'],
+    minPerfil: 'gerente',
+    ops: { create: false, update: false, delete: false },
+    notice:
+      'Comunicação transacional do pedido (e-mail e WhatsApp). O pedido gera o evento no outbox; o envio é assíncrono, com retry e idempotência — falha do provedor nunca invalida o pedido.',
+    fields: [
+      { name: 'pedido_id', label: 'Pedido', type: 'integer', readonly: true, search: true },
+      { name: 'evento', label: 'Evento de origem', type: 'text', readonly: true, search: true },
+      {
+        name: 'canal',
+        label: 'Canal',
+        type: 'select',
+        readonly: true,
+        options: [
+          { value: 'EMAIL', label: 'E-mail', tone: 'blue' },
+          { value: 'WHATSAPP', label: 'WhatsApp', tone: 'green' },
+        ],
+      },
+      { name: 'destinatario', label: 'Destinatário', type: 'text', readonly: true, search: true },
+      { name: 'template', label: 'Template', type: 'text', readonly: true },
+      {
+        name: 'estado',
+        label: 'Estado',
+        type: 'select',
+        readonly: true,
+        options: [
+          { value: 'PENDENTE', label: 'Pendente', tone: 'amber' },
+          { value: 'PROCESSANDO', label: 'Processando', tone: 'blue' },
+          { value: 'ENVIADO', label: 'Enviado', tone: 'green' },
+          { value: 'ERRO', label: 'Erro', tone: 'red' },
+          { value: 'IGNORADO', label: 'Não configurado', tone: 'slate' },
+        ],
+      },
+      { name: 'tentativas', label: 'Tentativas', type: 'integer', readonly: true },
+      { name: 'ultimo_erro', label: 'Último erro', type: 'textarea', readonly: true, wide: true },
+      { name: 'chave_idempotencia', label: 'Chave de idempotência', type: 'text', readonly: true, list: false },
+      { name: 'enviado_em', label: 'Enviado em', type: 'datetime', readonly: true },
+      ...auditFields,
+    ],
+    filterFields: ['evento', 'canal', 'estado'],
     orderBy: { field: 'id', dir: 'desc' },
   },
 

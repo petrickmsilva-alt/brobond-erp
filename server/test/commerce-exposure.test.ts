@@ -36,7 +36,16 @@ let cobrancas = 0;
 let donoId: number;
 let gatewayId: number;
 const itens = () => [{ produto_id: produtoId, tamanho_id: null, quantidade: 2 }];
-const comprador = { nome: 'Comprador de teste isolado', email: 'teste@example.invalid' };
+// STOREFRONT ENTERPRISE: o checkout agora exige identificação completa
+// (nome, e-mail, WhatsApp e CPF para PIX). CPF abaixo é um dígito verificador
+// válido usado apenas como fixture — nenhum dado real de cliente.
+const comprador = {
+  nome: 'Comprador de teste isolado',
+  email: 'teste@example.invalid',
+  whatsapp: '(62) 99999-1234',
+  documento: '529.982.247-25',
+  marketing_opt_in: false,
+};
 
 describe('Commerce exposure — configuração persistida, HTTP público e checkout sem cobrança real', () => {
   test('nenhuma configuração não é confundida com loja pronta; RBAC', async () => {

@@ -56,6 +56,8 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
         metodo: legacyMethods[input.method]!,
         referencia: ctx.operationKey,
         payer_email: input.email,
+        payer_documento: input.taxId ?? null,
+        payer_nome: input.customerName ?? null,
         token: input.token,
         parcelas: input.installments,
         expira_em: input.expiresAt,
@@ -69,6 +71,7 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
           type: input.method,
           code: r.copia_cola || r.linha_digitavel || undefined,
           qrCode: r.qr_code || undefined,
+          ticketUrl: r.ticket_url || undefined,
           expiresAt: r.expires_em || undefined,
         },
       };

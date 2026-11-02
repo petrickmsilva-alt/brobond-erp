@@ -359,7 +359,10 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
 /** Colunas secretas que nunca saem em consultas genéricas da API. */
 const COLUNAS_SECRETAS = new Set(['t.senha_hash', 't.mfa_secret', 't.convite_token_hash', 't.reset_token_hash', 't.dados', 't.thumb']);
 
-const FILE_META_COLS = 'id, recurso, registro_id, nome, mime, tamanho_bytes, url, thumb_url, externo_id, token, principal, ordem, criado_em';
+// STOREFRONT ENTERPRISE: alt_text/ativo/variante_id são aditivos (migration em
+// db/schema.sql). `ativo` e `variante_id` NÃO entram na cláusula WHERE aqui — o
+// filtro de mídia inativa fica em uploads.ts e funciona igual nos dois stores.
+const FILE_META_COLS = 'id, recurso, registro_id, nome, mime, tamanho_bytes, url, thumb_url, externo_id, token, principal, ordem, alt_text, ativo, variante_id, criado_em';
 
 export class PgStore implements Store {
   readonly kind = 'postgres' as const;

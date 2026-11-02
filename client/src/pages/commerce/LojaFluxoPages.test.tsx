@@ -293,9 +293,28 @@ describe('Loja — Checkout (/loja/checkout)', () => {
     render(montar('/loja/checkout', <Routes><Route path="/loja/checkout" element={<LojaCheckoutPage />} /></Routes>));
     expect(await screen.findByText('Retirada na loja — frete grátis, sem entrega no endereço.')).toBeInTheDocument();
     expect(screen.queryByPlaceholderText('00000-000')).toBeNull();
-    expect(screen.queryByRole('checkbox')).toBeNull();
+    // A única opção marcável é o consentimento de MARKETING (separado e opcional):
+    // não existe checkbox de "entrega gratuita" nem endereço obrigatório na retirada.
+    expect(screen.getByRole('checkbox', { name: /novidades e ofertas da brobond/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/entrega grátis/i)).toBeNull();
     expect(screen.getByText('R$ 79,90')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/loja/preview', expect.objectContaining({ body: expect.stringContaining('"cupom":"PROMO"') }));
+  });
+
+  it('performance: UMA requisição de /loja/config no fluxo (LojaShell + página compartilham o store)', async () => {
+    adicionarAoCarrinho({ produto_id: 7, tamanho_id: null, quantidade: 1 });
+    fetchMock.mockImplementation(async (caminho: string) => {
+      if (caminho.startsWith('/loja/config')) return CONFIG;
+      if (caminho === '/loja/preview') return PREVIEW;
+      throw new Error(`rota inesperada ${caminho}`);
+    });
+    render(montar('/loja/checkout', <Routes><Route path="/loja/checkout" element={<LojaCheckoutPage />} /></Routes>));
+    await screen.findByRole('button', { name: 'Confirmar pedido' });
+    await waitFor(() => expect(screen.getByPlaceholderText('00000-000')).toHaveProperty('required', true));
+    const configs = fetchMock.mock.calls.filter((c) => String(c[0]).startsWith('/loja/config'));
+    expect(configs).toHaveLength(1);
+    // A cotação é a única outra chamada: sem waterfall de config duplicado.
+    expect(fetchMock.mock.calls.filter((c) => c[0] === '/loja/preview')).toHaveLength(1);
   });
 
   it('carrinho vazio redireciona para /loja/carrinho (replace) — sem tela fantasma', async () => {

@@ -24,6 +24,8 @@ import { liberarReservaInterna } from '../estoqueTransferencia';
 import { connectorCuid } from '../../../modules/connectors/core/id';
 import { addOnSaleIngested } from '../../../modules/connectors/core/sale-events';
 import { enfileirarOutbox } from './outbox';
+import { registrarEventoSeguro, type ContatoPedido, type EventoNotificacao } from './notificacoes';
+import { mascararWhatsApp, mascararCPF } from './cliente';
 import { liberarUsoCupom } from './promocoes';
 import { nomesProdutos } from './grade';
 import type { Row, Tx } from '../store';
@@ -45,6 +47,31 @@ const R_RESERVAS = () => getResource('estoque_reservas')!;
 const R_RASTREIO = () => getResource('commerce_rastreio')!;
 
 export const ORIGEM_CHECKOUT = 'commerce_checkout';
+
+// ----------------------------------------------------------------------------
+// NOTIFICATION ORCHESTRATOR — eventos de domínio do pedido.
+// O comprador é lido SEMPRE do pedido já persistido (nunca do navegador) e o
+// envio é assíncrono via outbox: nenhuma transição de estado espera provedor.
+// ----------------------------------------------------------------------------
+function contatoDoPedido(pedido: Row): ContatoPedido {
+  const c = (pedido.comprador && typeof pedido.comprador === 'object' ? pedido.comprador : {}) as Record<string, unknown>;
+  return {
+    nome: c.nome ? String(c.nome) : null,
+    email: c.email ? String(c.email) : null,
+    whatsapp: c.whatsapp ? String(c.whatsapp) : null,
+    telefone: c.telefone ? String(c.telefone) : null,
+  };
+}
+
+function emitirEventoPedido(pedido: Row, evento: EventoNotificacao): void {
+  void registrarEventoSeguro(contatoDoPedido(pedido), {
+    empresaId: Number(pedido.empresa_id),
+    pedidoId: Number(pedido.id),
+    evento,
+    pedidoExterno: pedido.pedido_externo ? String(pedido.pedido_externo) : null,
+    checkoutToken: pedido.checkout_token ? String(pedido.checkout_token) : null,
+  });
+}
 
 // ----------------------------------------------------------------------------
 // Projeção do pedido (upsert por empresa + canal + pedido_externo)
@@ -313,7 +340,7 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
       } else if (pagamento && atual.pagamento_estado !== pagamento) {
         await s.update(R_PEDIDOS(), pedidoId, { pagamento_estado: pagamento }, tx);
       }
-      return { pedido: atual, estado: String(atual.estado), evento };
+      return { pedido: atual, estado: String(atual.estado), evento, transicao: false };
     }
     const agora = new Date().toISOString();
     const mudancas: Record<string, unknown> = { estado: novo, atualizado_em: agora };
@@ -335,8 +362,19 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
     }
     await s.audit({ empresa_id: evt.empresaId, usuario_id: null, usuario: 'Gateway', acao: 'ajuste', recurso: 'commerce_pedidos', registro_id: pedidoId,
       descricao: 'Transição por evento de pagamento', dados: { antes: { estado: atual.estado, pagamento_estado: atual.pagamento_estado }, depois: { estado: novo, pagamento_estado: pagamento } } }, tx);
-    return { pedido: atual, estado: novo, evento };
+    return { pedido: atual, estado: novo, evento, transicao: true };
   }, { isolation: 'serializable' }));
+
+  // Webhook é a fonte principal de confirmação. Só emite evento em transição
+  // REAL — webhook repetido não gera nova linha (chave de idempotência).
+  if (resultado?.transicao) {
+    if (resultado.evento === 'pago') {
+      emitirEventoPedido(resultado.pedido, 'PAYMENT_APPROVED');
+      emitirEventoPedido(resultado.pedido, 'ORDER_PROCESSING');
+    } else if (resultado.evento === 'cancelado' || resultado.evento === 'expirado') {
+      emitirEventoPedido(resultado.pedido, 'ORDER_CANCELLED');
+    }
+  }
 
   if (resultado?.evento === 'pago' && ['PAGO', 'AGUARDANDO_CORRECAO'].includes(resultado.estado) && resultado.pedido.sale_id) {
     await agendarMargemSale(String(resultado.pedido.sale_id), evt.empresaId);
@@ -388,7 +426,10 @@ export async function expirarCheckoutsPendentes(agora = new Date()): Promise<num
         descricao: 'Checkout expirado e reservas liberadas', dados: { antes: { estado: atual.estado }, depois: { estado: 'EXPIRADO' } } }, tx);
       return true;
     }, { isolation: 'serializable' }));
-    if (mudou) expirados += 1;
+    if (mudou) {
+      expirados += 1;
+      emitirEventoPedido(pedido, 'ORDER_CANCELLED');
+    }
   }
   return expirados;
 }
@@ -588,6 +629,19 @@ export async function montarVisaoDaSale(
   timeline.sort((a, b) => String(a.em).localeCompare(String(b.em)));
 
   const itensPublicos = itens; // comprador vê os próprios itens (token é credencial)
+  const compradorBruto = (pedido?.comprador && typeof pedido.comprador === 'object' ? pedido.comprador : null) as Record<string, unknown> | null;
+  // Visão PÚBLICA nunca expõe CPF completo nem o telefone cru: só o contato
+  // necessário para o cliente confirmar onde receberá as atualizações.
+  const compradorVisao = opcoes.publico && compradorBruto
+    ? {
+        nome: compradorBruto.nome ? String(compradorBruto.nome) : null,
+        email: compradorBruto.email ? String(compradorBruto.email) : null,
+        whatsapp: mascararWhatsApp(compradorBruto.whatsapp as string | null) ?? mascararWhatsApp(compradorBruto.telefone as string | null),
+        documento_mascarado: mascararCPF(compradorBruto.documento as string | null),
+        marketing_opt_in: compradorBruto.marketing_opt_in === true,
+      }
+    : compradorBruto;
+  const acao = (engineAttempt?.safe_reference?.action || null) as Record<string, unknown> | null;
   return {
     sale_id: String(sale.id),
     pedido: pedido
@@ -602,7 +656,7 @@ export async function montarVisaoDaSale(
           frete: Number(pedido.frete_valor || 0),
           desconto: Number(pedido.desconto || 0),
           cupom: pedido.cupom_codigo ? String(pedido.cupom_codigo) : null,
-          comprador: (pedido.comprador && typeof pedido.comprador === 'object' ? pedido.comprador : null) as Record<string, unknown> | null,
+          comprador: compradorVisao,
           endereco: (pedido.endereco && typeof pedido.endereco === 'object' ? pedido.endereco : null) as Record<string, unknown> | null,
           expira_em: pedido.expira_em ? String(pedido.expira_em) : null,
           pago_em: pedido.pago_em ? String(pedido.pago_em) : null,
@@ -618,7 +672,7 @@ export async function montarVisaoDaSale(
       engine_status: engineIntent?.status || null,
       engine_intent_id: !opcoes.publico && engineIntent ? Number(engineIntent.id) : null,
       late_review_status: lateReview?.status || null,
-      action: engineAttempt?.safe_reference?.action || null,
+      action: acao,
       status: cobranca
         ? mapearEstadoPagamento(cobranca.status) ?? String(cobranca.status)
         : pedido?.pagamento_estado
@@ -628,7 +682,13 @@ export async function montarVisaoDaSale(
       metodo: cobranca ? String(cobranca.metodo) : null,
       valor: cobranca ? Number(cobranca.valor) : null,
       qr_code: cobranca?.qr_code ? String(cobranca.qr_code) : null,
+      // Dados REAIS retornados pelo Mercado Pago (Orders API / payments
+      // legado). Nenhum QR é gerado aqui: sem `qr_code_base64` a tela só
+      // mostra o Copia e Cola e um estado honesto de QR indisponível.
+      qr_code_base64: cobranca?.qr_code ? String(cobranca.qr_code) : acao?.qrCode ? String(acao.qrCode) : null,
+      ticket_url: cobranca?.ticket_url ? String(cobranca.ticket_url) : acao?.ticketUrl ? String(acao.ticketUrl) : null,
       copia_cola: cobranca?.copia_cola ? String(cobranca.copia_cola) : null,
+      provider_order_id: cobranca?.provider_ref ? String(cobranca.provider_ref) : null,
       expira_em: cobranca?.expires_em ? String(cobranca.expires_em) : pedido?.expira_em ? String(pedido.expira_em) : null,
       provider_ref: cobranca && !opcoes.publico ? String(cobranca.provider_ref || '') : null,
     },
@@ -748,6 +808,7 @@ export async function cancelarPedidoCommerce(req: Request, res: Response) {
     empresa_id: escopo.empresaId,
     dados: { motivo },
   });
+  emitirEventoPedido(pedido, 'ORDER_CANCELLED');
   res.json({ ok: true, estado: 'CANCELADO' });
 }
 
@@ -916,6 +977,10 @@ export async function salvarRastreioCommerce(req: Request, res: Response) {
     empresa_id: empresaDoRegistroAudit(R_RASTREIO(), linha, actor),
     dados,
   });
+  // Fulfillment real (código de rastreio gravado por um responsável autorizado)
+  // dispara a comunicação transacional — nunca um status inventado.
+  if (pedido && status === 'entregue') emitirEventoPedido(pedido, 'ORDER_DELIVERED');
+  else if (pedido && ['postado', 'em_transito', 'saiu_entrega'].includes(status)) emitirEventoPedido(pedido, 'ORDER_SHIPPED');
   res.json({ ok: true, rastreio: linha });
 }
 

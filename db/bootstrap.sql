@@ -246,6 +246,10 @@ CREATE TABLE IF NOT EXISTS arquivos (
   token TEXT NOT NULL,                       -- segredo aleatório usado na URL pública da imagem
   principal BOOLEAN DEFAULT FALSE,
   ordem INTEGER DEFAULT 0,
+  -- STOREFRONT ENTERPRISE: metadados de galeria (additivo, sem quebrar fotos atuais).
+  alt_text TEXT,                             -- texto alternativo real (acessibilidade/SEO)
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,       -- desativa sem apagar o arquivo
+  variante_id INTEGER REFERENCES tamanhos(id) ON DELETE SET NULL, -- mídia opcional por variação
   criado_por INTEGER,
   criado_em TIMESTAMPTZ DEFAULT now()
 );

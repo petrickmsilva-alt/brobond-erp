@@ -211,7 +211,13 @@ async function main() {
     assert.match(vitrine, /empresa_id|empresaId/);
     const seo = ler('server/src/commerce/storefront-seo.ts');
     assert.match(seo, /empresaDaVitrine\(\)/);
-    assert.match(seo, /carregarVitrine\(empresaId\)/, 'SEO deve usar a mesma regra de visibilidade da vitrine');
+    // O SEO usa a MESMA regra de visibilidade da vitrine. Antes fazia varredura
+    // completa via carregarVitrine(empresaId); agora usa point lookup indexado
+    // (resolverProdutoVitrine), que aplica os mesmos filtros de tenant/ativo/
+    // publicação. O gate continua P0 e exige prova explícita desses filtros.
+    assert.match(seo, /carregarVitrine\(empresaId\)|resolverProdutoVitrine\(empresaId/, 'SEO deve usar a mesma regra de visibilidade da vitrine');
+    assert.match(vitrine, /empresa_id = \$1 AND lower\(slug\) = \$2/, 'point lookup precisa ser isolado por tenant');
+    assert.match(vitrine, /canal: 'BROBOND', estado: 'PUBLISHED'/, 'publicação ativa no canal da loja');
     assert.doesNotMatch(seo, /req\.(query|body|params)\.empresa/);
   });
   await checar('P0', 'Sem organizationId em nenhum código-fonte (empresa = tenant)', () => {

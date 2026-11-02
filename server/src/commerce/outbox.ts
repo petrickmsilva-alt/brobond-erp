@@ -25,7 +25,7 @@ import type { Row, Tx } from '../store';
 
 const R_OUTBOX = () => getResource('commerce_outbox')!;
 
-export type TipoOutbox = 'conversao' | 'publicacao' | 'sincronizacao' | 'alerta' | 'refund_devolucao';
+export type TipoOutbox = 'conversao' | 'publicacao' | 'sincronizacao' | 'alerta' | 'refund_devolucao' | 'notificacao';
 
 /**
  * Enfileira um trabalho (idempotente pela chave). Se já existe, mantém a
@@ -91,6 +91,14 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
   if (tipo === 'alerta') {
     console.error('[commerce:outbox:alerta]', { empresa_id: empresaId, event_id: Number(row.id) });
     return { status: 'processado' };
+  }
+
+  if (tipo === 'notificacao') {
+    // NOTIFICATION ORCHESTRATOR: import dinâmico evita ciclo com o módulo que
+    // enfileira eventos. O pedido NUNCA espera por este processamento.
+    const { processarEventoNotificacao } = await import('./notificacoes');
+    const r = await processarEventoNotificacao({ empresa_id: empresaId, ...payload });
+    return r.status === 'retry' ? { status: 'retry', erro: r.erro } : { status: 'processado' };
   }
 
   if (tipo === 'conversao') {

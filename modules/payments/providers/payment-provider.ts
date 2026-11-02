@@ -51,7 +51,7 @@ export type PaymentResult = {
   currency?: string;
   refunded?: number;
   refundEvidence?: RefundEvidence;
-  action?: { type: string; url?: string; code?: string; qrCode?: string; expiresAt?: string };
+  action?: { type: string; url?: string; code?: string; qrCode?: string; ticketUrl?: string; expiresAt?: string };
   risk?: string;
 };
 export type WebhookEvent = { id: string; reference: string; type: string };

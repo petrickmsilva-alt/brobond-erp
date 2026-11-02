@@ -40,6 +40,10 @@ export type FileMeta = {
   token: string;
   principal: boolean;
   ordem: number;
+  /** STOREFRONT ENTERPRISE — metadados de galeria (opcionais em mídia antiga). */
+  alt_text?: string | null;
+  ativo?: boolean | null;
+  variante_id?: number | null;
   criado_em: string;
 };
 
