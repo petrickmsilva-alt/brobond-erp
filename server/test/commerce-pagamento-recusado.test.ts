@@ -37,19 +37,30 @@ async function aguardarEventos(pedidoId: number): Promise<string[]> {
   return [...new Set(lista.rows.map((r) => String(r.evento)))];
 }
 
-test('contrato do comprador: fixtures PG contêm nome completo e WhatsApp E.164', () => {
+test('contrato do comprador: fixtures PG contêm nome, WhatsApp E.164 e CPF para PIX', () => {
   // Exatamente o formato usado em server/test/pg/commerce-cart.test.ts e
   // commerce-e2e.test.ts. Se este teste falhar, os E2E PG voltam a responder
   // 400 ("Informe ...") antes de chegar às asserções de estoque/frete/409.
-  const fixture = { nome: 'Cliente X', email: 'x@example.invalid', whatsapp: '62999991234' };
-  const ok = normalizarComprador(fixture);
+  // O checkout usa `exigirDocumento: method === 'PIX'` — decisão server-side.
+  const fixture = {
+    nome: 'Cliente X', email: 'x@example.invalid', whatsapp: '62999991234',
+    documento: '529.982.247-25',
+  };
+  const ok = normalizarComprador(fixture, { exigirDocumento: true });
   assert.equal(ok.ok, true);
   assert.equal(ok.ok && ok.comprador.whatsapp, '5562999991234');
+  assert.equal(ok.ok && ok.comprador.documento, '52998224725');
   assert.equal(ok.ok && ok.comprador.marketing_opt_in, false);
   assert.equal(ok.ok && ok.comprador.consentimento_em, null);
   const semWhatsapp = normalizarComprador({ nome: 'Cliente X', email: 'x@example.invalid' });
   assert.equal(semWhatsapp.ok, false);
   assert.equal(semWhatsapp.ok === false && semWhatsapp.campo, 'whatsapp');
+  const semCpf = normalizarComprador({ nome: 'Cliente X', email: 'x@example.invalid', whatsapp: '62999991234' }, { exigirDocumento: true });
+  assert.equal(semCpf.ok, false);
+  assert.equal(semCpf.ok === false && semCpf.campo, 'documento');
+  const cpfInvalido = normalizarComprador({ ...fixture, documento: '111.111.111-11' }, { exigirDocumento: true });
+  assert.equal(cpfInvalido.ok, false);
+  assert.equal(cpfInvalido.ok === false && cpfInvalido.campo, 'documento');
   const nomeCurto = normalizarComprador({ ...fixture, nome: 'X' });
   assert.equal(nomeCurto.ok, false);
   assert.equal(nomeCurto.ok === false && nomeCurto.campo, 'nome');

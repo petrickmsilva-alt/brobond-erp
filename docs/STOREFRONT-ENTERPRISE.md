@@ -326,10 +326,23 @@ mostrou a causa exata:
 Ou seja, o novo contrato de `normalizarComprador` (nome completo, e-mail e
 WhatsApp normalizado para E.164, exigido também pelo formulário do checkout)
 passou a rejeitar os fixtures antigos, que tinham só `{ nome, email }` e, em
-três casos, `nome: 'X'`. Foram atualizados os 7 fixtures de `comprador` nos
-dois arquivos (`nome` completo + `whatsapp: '62999991234'` → `5562999991234`),
+três casos, `nome: 'X'`.
+
+O commit seguinte (`97cd2b5`) corrigiu nome/WhatsApp nos 7 fixtures, mas o
+job voltou a falhar **nos mesmos dois testes**, agora com a próxima barreira
+do contrato (comprovada de novo pelo log completo do job):
+
+* `commerce-cart.test.ts:257` — `400 !== 409`, corpo
+  `{"error":"CPF é necessário para este meio de pagamento."}`;
+* `commerce-e2e.test.ts:374` — `400 !== 201`, mesmo corpo.
+
+Causa: `lojaCriarCheckout` usa `exigirDocumento: method === 'PIX'` — decisão
+100% server-side, o navegador não escolhe — e o CPF é necessário ao `payer`
+da Orders API. Os 7 fixtures receberam também `documento: '529.982.247-25'`
+(CPF de fixture com dígitos verificadores válidos, sem dado real de cliente),
 **sem alterar nenhuma asserção** de estoque/frete/tenancy/SEO/idempotência.
-Um teste unitário novo trava esse formato para evitar regressão silenciosa.
+O teste unitário novo trava o formato completo (nome, e-mail, WhatsApp E.164,
+CPF válido e recusa de CPF inválido/ausente) para evitar regressão silenciosa.
 As duas mensagens de migração `0030/E4.2` e `9999_prod_db_01_falha_intencional`
 que aparecem no log são cenários de falha **intencionais** dos testes de
 degradação/recuperação, não defeitos da cadeia de migrations.
@@ -371,8 +384,9 @@ Gates locais verdes **não** significam homologação. Antes de
    `1440/1280/1024/768/390/375/320`, com cold start e antes/depois reais.
 5. **PG 16.14 do CI**: confirmar `testes-postgres` PASS no commit final (o
    gate local de `DATABASE_URL` continua indisponível no sandbox). Histórico
-   real: `580a01c` FAIL na cadeia de migrations; `44cb44d` `verificar` PASS +
-   `testes-postgres` FAIL apenas nos 2 fixtures de comprador descritos em §9.1.
+   real: `580a01c` FAIL na cadeia de migrations; `44cb44d` e `97cd2b5`
+   `verificar` PASS + `testes-postgres` FAIL apenas nos 2 fixtures de comprador
+   (nome/WhatsApp e depois CPF) descritos em §9.1.
 6. **Tela de consulta** de `commerce_notificacoes` no backoffice (aviso
    informativo de `audit:menu`; a fila e o orchestrator já funcionam).
 
@@ -380,7 +394,7 @@ Gates locais verdes **não** significam homologação. Antes de
 
 | Rótulo | Valor | Motivo |
 | --- | --- | --- |
-| `CODE_READY` | **PENDENTE até `verificar` + `testes-postgres` PASS** | todos os gates locais verdes; `verificar` PASS em `44cb44d`; causa dos 2 testes PG diagnosticada no log do job e corrigida (§9.1); veredito do commit final a confirmar |
+| `CODE_READY` | **PENDENTE até `verificar` + `testes-postgres` PASS** | todos os gates locais verdes; `verificar` PASS em `44cb44d` e `97cd2b5`; causa dos 2 testes PG diagnosticada no log do job em duas rodadas e corrigida (§9.1); veredito do commit final a confirmar |
 | `INTERNAL_COMMERCE_READY` | **PENDENTE até CI verde** | cadeia única STOREFRONT → CHECKOUT → PAYMENT ENGINE/MP/PIX → OMS/PEDIDO → VENDA ERP/ESTOQUE/FINANCEIRO/FULFILLMENT → COMUNICAÇÃO → GOVERNANÇA; galeria admin concluída; migrations validadas; `smoke` 398/398 |
 | `EXTERNAL_HOMOLOGATION_READY` | **NO** | falta loja publicada, credenciais MP/SMTP/Meta e métricas de browser |
 | `REAL_PIX_HOMOLOGATION` | **BLOCKED** | `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET`, `/v1/orders` habilitado e ambiente publicado ausentes |
