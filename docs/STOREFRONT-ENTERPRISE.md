@@ -291,9 +291,10 @@ de catálogo/preço/checkout).
 | `npm run audit:menu` | **EXIT 0** — sem erros (aviso informativo: `commerce_notificacoes` sem tela de consulta) |
 | `npm run test:payments` | **EXIT 0** — 27/27 |
 | `node scripts/gerar-bootstrap.mjs --check` | **EXIT 0** — bootstrap sincronizado |
-| `npm run test:pg` / `npm run smoke:pg` | **BLOQUEADO local** — `DATABASE_URL` ausente; executados de fato pelo job `testes-postgres` do CI com PostgreSQL 16.14 |
+| `npm run test:pg` / `npm run smoke:pg` | **BLOQUEADO local** (`DATABASE_URL` ausente), **PASS no CI** — job `testes-postgres`, PostgreSQL 16.14: `ERP-03 GATE PASS: 415 testes PostgreSQL reais; 0 fail/skip/todo`, recovery com 186 tabelas, Prisma deploy e `smoke:pg` em banco novo |
 | `npm run db:validate` | **BLOQUEADO** — engine Prisma em `binaries.prisma.sh` fora da allowlist de rede |
 | Validação SQL de `0094` | **EXIT 0** — 29/29 em engine PostgreSQL real (PGlite 18.6/WASM), complementar ao CI |
+| `gh pr checks 99 --watch` | **EXIT 0** em `faa10e0` (run `41538199451`) — `verificar` **PASS** 2m51s (16/16 steps) e `testes-postgres` **PASS** 8m32s (13/13 steps) |
 
 Novos testes: `server/test/commerce-orders-pix.test.ts` (7),
 `server/test/commerce-notificacoes.test.ts` (6),
@@ -368,6 +369,16 @@ As duas mensagens de migração `0030/E4.2` e `9999_prod_db_01_falha_intencional
 que aparecem no log são cenários de falha **intencionais** dos testes de
 degradação/recuperação, não defeitos da cadeia de migrations.
 
+**Veredito final (`faa10e0`, run `41538199451`)**: `gh pr checks 99 --watch`
+encerrou com `verificar` **PASS** (2m51s, 16/16 steps) e `testes-postgres`
+**PASS** (8m32s, 13/13 steps). O log do job registra
+`ERP-03 GATE PASS: 415 testes PostgreSQL reais; 0 fail/skip/todo.`,
+`RECOVERY: 186 tabelas restauradas` e `smoke:pg — db=postgres, banco novo,
+ZERO SQL manual`, com as 94 migrations aplicadas — inclusive a `0094`.
+`CARRINHO PG` (128) e `COMMERCE E2E` (141) aparecem como `ok` nesse run:
+o checkout completo do Storefront Enterprise está validado em PostgreSQL
+16.14 real, não apenas em memória.
+
 ## 10. Segurança e multiempresa
 
 * Token/secret de webhook/CPF completo nunca no frontend nem em logs.
@@ -403,12 +414,9 @@ Gates locais verdes **não** significam homologação. Antes de
    COTTON "B", touch/mobile e zoom inline no ambiente que receber o branch.
 4. **Métricas de browser** LCP/INP/CLS/TTFB nas viewports
    `1440/1280/1024/768/390/375/320`, com cold start e antes/depois reais.
-5. **PG 16.14 do CI**: confirmar `testes-postgres` PASS no commit final (o
-   gate local de `DATABASE_URL` continua indisponível no sandbox). Histórico
-   real: `580a01c` FAIL na cadeia de migrations; `44cb44d` e `97cd2b5`
-   `verificar` PASS + `testes-postgres` FAIL nos 2 fixtures de comprador
-   (nome/WhatsApp e depois CPF); `a8c1acb` já teve `ok 128`/`ok 141` e
-   falhou só no teste global de outbox + no timer de toast (§9.1).
+5. **PG 16.14 do CI**: **CONCLUÍDO** — `testes-postgres` PASS em `faa10e0`
+   (415/415, 0 fail/skip/todo); o gate local de `DATABASE_URL` continua
+   indisponível apenas no sandbox. Histórico das 3 rodadas em §9.1.
 6. **Tela de consulta** de `commerce_notificacoes` no backoffice (aviso
    informativo de `audit:menu`; a fila e o orchestrator já funcionam).
 
@@ -416,13 +424,13 @@ Gates locais verdes **não** significam homologação. Antes de
 
 | Rótulo | Valor | Motivo |
 | --- | --- | --- |
-| `CODE_READY` | **PENDENTE até `verificar` + `testes-postgres` PASS** | todos os gates locais verdes; 3 rodadas de CI diagnosticadas pelo log completo do job e corrigidas (§9.1); `ok 128`/`ok 141` já comprovados em PostgreSQL 16.14 no `a8c1acb`; veredito do commit final a confirmar |
-| `INTERNAL_COMMERCE_READY` | **PENDENTE até CI verde** | cadeia única STOREFRONT → CHECKOUT → PAYMENT ENGINE/MP/PIX → OMS/PEDIDO → VENDA ERP/ESTOQUE/FINANCEIRO/FULFILLMENT → COMUNICAÇÃO → GOVERNANÇA; galeria admin concluída; migrations validadas; `smoke` 398/398 |
+| `CODE_READY` | **PASS** | `gh pr checks 99 --watch` EXIT 0 em `faa10e0`: `verificar` PASS (16/16 steps) + `testes-postgres` PASS (13/13 steps); gates locais verdes: `npm test` 1698/1622 + 129 arquivos/1112 testes, typecheck, lint, build, auditoria 32/32, smoke 398/398 |
+| `INTERNAL_COMMERCE_READY` | **PASS** | cadeia única STOREFRONT → CHECKOUT → PAYMENT ENGINE/MP/PIX → OMS/PEDIDO → VENDA ERP/ESTOQUE/FINANCEIRO/FULFILLMENT → COMUNICAÇÃO → GOVERNANÇA; galeria admin concluída; 94/94 migrations + `ok 128`/`ok 141` + 415/415 em PostgreSQL 16.14 real; `smoke` 398/398 |
 | `EXTERNAL_HOMOLOGATION_READY` | **NO** | falta loja publicada, credenciais MP/SMTP/Meta e métricas de browser |
 | `REAL_PIX_HOMOLOGATION` | **BLOCKED** | `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET`, `/v1/orders` habilitado e ambiente publicado ausentes |
 | `EMAIL_EXTERNAL_HOMOLOGATION` | **BLOCKED** | credenciais SMTP ausentes |
 | `WHATSAPP_EXTERNAL_HOMOLOGATION` | **BLOCKED** | token/phone id/template aprovado da Meta ausentes |
-| `PG_EXTERNAL_VALIDATION` | **NÃO BLOQUEADO** | validado via PostgreSQL real (PGlite) + job `testes-postgres` 16.14 do CI; `TEST_PG`/`SMOKE_PG` locais indisponíveis apenas por `DATABASE_URL` |
+| `PG_EXTERNAL_VALIDATION` | **PASS** | PostgreSQL 16.14 real do CI: `test:pg` 415/415, recovery 186 tabelas, Prisma deploy e `smoke:pg` em banco novo; `TEST_PG`/`SMOKE_PG` locais indisponíveis apenas por `DATABASE_URL` |
 | `FULL_COMMERCE_GO_LIVE` | **NO** | sem evidência de venda E2E real (compra PIX + webhook + baixa + envio) |
 
 **Sem merge, sem deploy, sem alteração de `main`, sem `backups/`.**
