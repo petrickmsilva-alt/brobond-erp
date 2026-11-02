@@ -209,6 +209,39 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   assert.equal((await req('POST', '/loja/preview', { itens: [{ produto_id: 'x', quantidade: 1 }] })).status, 400);
   assert.equal((await req('POST', '/loja/preview', { itens: [...itens1, ...itens1] })).status, 400, 'linha duplicada → 400');
 
+  // ---- 3b) ENDPOINT DE QUANTIDADE (+ / −): confirmação server-side -------------
+  const mutacao = (quantidade: unknown, extra: Record<string, unknown> = {}) => ({
+    alvo: { produto_id: produtoId, tamanho_id: null, quantidade },
+    itens: [{ produto_id: produtoId, tamanho_id: null, quantidade }],
+    ...extra,
+  });
+  for (const qtd of [2, 3, 2]) {
+    const r = await req('POST', '/loja/carrinho/quantidade', mutacao(qtd));
+    assert.equal(r.status, 200, `quantidade ${qtd} confirmada: ${msg(r)}`);
+    assert.equal(r.body.quantidade, qtd, 'só a quantidade confirmada pelo servidor é devolvida');
+    assert.equal(r.body.cotacao.totais.subtotal, 80 * qtd, 'subtotal recalculado no servidor');
+    assert.equal(r.body.cotacao.totais.total, 80 * qtd, 'total recalculado no servidor');
+  }
+  for (const ruim of [0, -1, 1.5, 100, '2', 'abc', null, {}, [], [2], true, NaN, Infinity, -Infinity]) {
+    const r = await req('POST', '/loja/carrinho/quantidade', mutacao(ruim));
+    assert.equal(r.status, 400, `quantidade inválida ${JSON.stringify(ruim)} → 400: ${msg(r)}`);
+  }
+  const m9 = await req('POST', '/loja/carrinho/quantidade', mutacao(9));
+  assert.equal(m9.status, 409, `acima do estoque → 409: ${msg(m9)}`);
+  assert.equal(m9.body.error, 'Só há 8 unidades disponíveis.');
+  assert.equal(m9.body.quantidade, undefined, 'nunca confirma quantidade acima do estoque');
+  // Tenant: produto da empresa B não pode ser alterado pela loja da empresa A.
+  const mB = await req('POST', '/loja/carrinho/quantidade', {
+    alvo: { produto_id: produtoIdB, tamanho_id: null, quantidade: 2 },
+    itens: [{ produto_id: produtoIdB, tamanho_id: null, quantidade: 2 }],
+    empresa_id: 2, // forjado pelo browser: precisa ser ignorado
+  });
+  assert.equal(mB.status, 409, `item de outra empresa → 409: ${msg(mB)}`);
+  assert.ok(!mB.texto.includes('filial') && !mB.texto.includes(`OUTRA-${RS}`), 'nada do tenant B vaza');
+  const mTamper = await req('POST', '/loja/carrinho/quantidade', mutacao(2, { total: 1, unit_price: 1, discount: 79, freight: 9, empresa_id: 999 }));
+  assert.equal(mTamper.status, 200, `campos monetários/de tenant do browser são ignorados: ${msg(mTamper)}`);
+  assert.equal(mTamper.body.cotacao.totais.total, 160);
+
   // ---- 4) estoque -------------------------------------------------------------------
   const q9 = await req('POST', '/loja/preview', { itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 9 }] });
   assert.equal(q9.status, 200);

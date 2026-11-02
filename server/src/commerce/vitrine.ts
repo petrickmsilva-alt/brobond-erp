@@ -25,6 +25,7 @@ import { availableMethods, candidates } from '../../../modules/payments/applicat
 import { METHODS, type PaymentMethod } from '../../../modules/payments/domain/payment';
 import { criarReservaInterna, liberarReservaInterna } from '../estoqueTransferencia';
 import { saldoVendavel } from '../estoqueCanonico';
+import { chaveLinha, quantidadeValida, validarCorpoQuantidade } from './quantidade-carrinho';
 import { attachImages } from '../uploads';
 import { marketplaceSaleReference } from '../../../modules/connectors/ingestion/sales.service';
 import { connectorCuid } from '../../../modules/connectors/core/id';
@@ -270,14 +271,20 @@ async function resolverItensCarrinho(
   const out: ItemResolvido[] = [];
   const chaves = new Set<string>();
   for (const bruto2 of bruto) {
-    const item = (bruto2 && typeof bruto2 === 'object' ? bruto2 : {}) as Record<string, unknown>;
-    const produtoId = Number(item.produto_id);
-    const quantidade = Number(item.quantidade);
+    const item = (bruto2 && typeof bruto2 === 'object' && !Array.isArray(bruto2) ? bruto2 : {}) as Record<string, unknown>;
+    // STRICT: sem coerção. `Number([2]) === 2`, `Number(true) === 1` e
+    // `Number("2") === 2` permitiriam quantidade forjada por tipo; só NUMBER
+    // inteiro 1..99 é aceito (0, negativo, decimal, NaN, ±Infinity, string,
+    // null, undefined, objeto, array e boolean ⇒ 400).
+    const quantidade = quantidadeValida(item.quantidade);
+    if (quantidade === null) throw new HttpError(400, 'Quantidade inválida (1 a 99) no carrinho.', { itens: 'Quantidade inválida' });
+    const produtoId = typeof item.produto_id === 'number' && Number.isSafeInteger(item.produto_id) && item.produto_id > 0 ? item.produto_id : NaN;
     if (!Number.isSafeInteger(produtoId) || produtoId <= 0) throw new HttpError(400, 'Item do carrinho sem produto.', { itens: 'Inválido' });
-    if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 99) {
-      throw new HttpError(400, 'Quantidade inválida (1 a 99) no carrinho.', { itens: 'Quantidade inválida' });
-    }
-    const tamanhoId = item.tamanho_id == null || item.tamanho_id === '' ? null : Number(item.tamanho_id);
+    const tamanhoId = item.tamanho_id == null || item.tamanho_id === ''
+      ? null
+      : typeof item.tamanho_id === 'number' && Number.isSafeInteger(item.tamanho_id) && item.tamanho_id > 0
+        ? item.tamanho_id
+        : NaN;
     if (tamanhoId !== null && (!Number.isSafeInteger(tamanhoId) || tamanhoId <= 0)) throw new HttpError(400, 'Tamanho inválido no carrinho.');
     const chave = `${produtoId}:${tamanhoId ?? ''}`;
     if (chaves.has(chave)) throw new HttpError(400, 'Item duplicado no carrinho. Atualize a quantidade na mesma linha.');
@@ -377,6 +384,47 @@ export async function lojaPreview(req: Request, res: Response) {
   res.json(await quotePaymentMethods(empresaId, req));
 }
 
+// ----------------------------------------------------------------------------
+// POST /api/loja/carrinho/quantidade — MUTAÇÃO DE QUANTIDADE confirmada pelo
+// servidor. O browser NÃO escreve quantidade: ele propõe, o servidor valida
+// (tipo, faixa, tenant, estoque real) e só responde 200 com a quantidade
+// autorizada. O cliente persiste APENAS essa resposta no carrinho local.
+// ----------------------------------------------------------------------------
+export async function lojaAtualizarQuantidade(req: Request, res: Response) {
+  // Tenant: NUNCA vem do corpo. `exigirVitrine` resolve por env/unicidade e
+  // `carregarVitrine(empresaId)` filtra produtos/preços/publicações por empresa.
+  const { empresaId } = await exigirVitrine();
+  const corpo = validarCorpoQuantidade(req.body);
+  const cotacao = await cotarCarrinho(empresaId, { itens: corpo.itens, cupom: corpo.cupom });
+  const linha = cotacao.itens.find((i) => chaveLinha(i) === chaveLinha(corpo.alvo));
+  const aviso = linha && 'aviso' in linha && typeof linha.aviso === 'string' ? linha.aviso : undefined;
+  if (!linha || ('indisponivel' in linha && linha.indisponivel === true)) {
+    // Mesma resposta genérica para produto inexistente/fora da vitrine/de outro
+    // tenant: nunca revela nome, SKU ou estoque de outra empresa.
+    throw new HttpError(409, aviso ?? 'Este item não está mais disponível na loja.', { itens: 'Indisponível' });
+  }
+  if (!linha.ok || linha.quantidade !== corpo.alvo.quantidade) {
+    const disponivel = Math.max(0, Number(linha.disponivel) || 0);
+    throw new HttpError(
+      409,
+      disponivel > 0 ? `Só há ${disponivel} unidades disponíveis.` : 'Sem estoque no momento.',
+      { itens: 'Estoque insuficiente' },
+      'estoque_insuficiente',
+      { disponivel }
+    );
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    produto_id: linha.produto_id,
+    tamanho_id: linha.tamanho_id,
+    quantidade: linha.quantidade,
+    disponivel: linha.disponivel,
+    // Recálculo autoritativo do carrinho proposto (preço, desconto, cupom,
+    // frete e totais). O cliente nunca envia nem decide nenhum valor monetário.
+    cotacao,
+  });
+}
+
 /**
  * COTAÇÃO DO CARRINHO (domínio Comercial/Experiência) — preço, estoque, cupom,
  * promoção, frete e totais, SEMPRE recalculados no servidor. Não depende do
@@ -384,9 +432,8 @@ export async function lojaPreview(req: Request, res: Response) {
  * O browser só informa produto/tamanho/quantidade/cupom/cep; qualquer
  * `preco`, `total`, `desconto`, `frete` enviado é ignorado.
  */
-export async function cotarCarrinho(empresaId: number, req: Request) {
+export async function cotarCarrinho(empresaId: number, corpo: Record<string, unknown>) {
   const config = await configDaLoja(empresaId);
-  const corpo = (req.body || {}) as Record<string, unknown>;
   const itens = await resolverItensCarrinho(empresaId, corpo, { tolerante: true });
   const vendaveis = itens.filter((i) => !i.problema);
   const subtotal = round2(vendaveis.reduce((soma, i) => soma + i.preco_unitario * i.quantidade, 0));
@@ -455,7 +502,7 @@ export async function cotarCarrinho(empresaId: number, req: Request) {
  * `payment_methods_erro`) — o carrinho continua calculado e visível.
  */
 export async function quotePaymentMethods(empresaId: number, req: Request) {
-  const cotacao = await cotarCarrinho(empresaId, req);
+  const cotacao = await cotarCarrinho(empresaId, (req.body || {}) as Record<string, unknown>);
   let methods: Awaited<ReturnType<typeof availableMethods>> = [];
   let metodosErro = false;
   if (cotacao.pronto_para_checkout) {

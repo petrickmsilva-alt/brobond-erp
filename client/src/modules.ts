@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Cog,
   Clock,
+  ExternalLink,
   Factory,
   Flag,
   Handshake,
@@ -186,6 +187,13 @@ export type Module = {
   minPerfil?: 'gerente' | 'admin';
   /** módulo ainda sem funcionalidade (exibe página de planejamento) */
   planned?: string[];
+  /**
+   * Item de NAVEGAÇÃO que aponta para uma rota PÚBLICA já implementada FORA do
+   * Layout do ERP (ex.: /loja). Continua na fonte única (Sidebar, TopNav,
+   * Command Palette, breadcrumb), mas NÃO gera rota no loop de `App.tsx` —
+   * nunca existe segunda implementação nem rota paralela do storefront.
+   */
+  rotaPublica?: boolean;
   /**
    * Provedor do Hub Omnichannel quando o módulo é um conector multicanal.
    *
@@ -1932,6 +1940,23 @@ export const MODULES: Module[] = [
     description: 'Configuração da vitrine /loja: identidade, frete (FreightProvider), expiração do carrinho e responsável pelo checkout.',
   },
 {
+    // EXPERIÊNCIA → Abrir Loja: atalho de NAVEGAÇÃO para a experiência pública
+    // oficial. Não é módulo administrativo, não cria página e não duplica rota:
+    // /loja já existe (LojaInicioPage, fora do Layout/Protected do ERP).
+    id: 'commerce-abrir-loja',
+    label: 'Abrir Loja',
+    icon: ExternalLink,
+    space: 'commerce',
+    area: 'Commerce',
+    group: 'Experiência',
+    subgroup: 'Vitrine',
+    kind: 'acao',
+    keywords: 'abrir loja vitrine publica storefront ver loja /loja experiences',
+    path: '/loja',
+    rotaPublica: true,
+    description: 'Abre a experiência pública da loja em /loja (vitrine, produto, carrinho e checkout). A área administrativa continua em Loja própria → /commerce/loja.',
+  },
+{
     id: 'commerce-pedidos',
     label: 'Pedidos',
     icon: ShoppingCart,
@@ -2432,6 +2457,7 @@ export const MODULOS_PAGINA_PROPRIA = new Set<string>([
  */
 export function usaCrudGenerico(m: Module): boolean {
   return (
+    !m.rotaPublica &&
     !!m.resource &&
     m.space === 'erp' &&
     !m.connector &&

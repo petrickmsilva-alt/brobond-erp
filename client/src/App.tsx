@@ -667,7 +667,12 @@ export default function App() {
                 </Fragment>
               );
             })}
-            {MODULES.filter((m) => m.path !== '/' && m.id !== 'config').map((m) => {
+            {/* Itens `rotaPublica` (ex.: Commerce → Experiência → Abrir Loja)
+                apontam para rotas JÁ implementadas fora do Layout (a vitrine
+                pública /loja). Gerar rota aqui criaria uma segunda tela e um
+                ModuleAccess indevido sobre a experiência pública — por isso o
+                filtro. Nenhuma rota nova/paralela de storefront é criada. */}
+            {MODULES.filter((m) => m.path !== '/' && m.id !== 'config' && !m.rotaPublica).map((m) => {
               const el = <ModulePage module={m} />;
               return (
                 <Route

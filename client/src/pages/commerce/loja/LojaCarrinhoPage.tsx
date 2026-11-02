@@ -14,8 +14,9 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AlertTriangle, Minus, Plus, RefreshCw, ShoppingBag, Trash2 } from 'lucide-react';
 import { LojaShell, precoLoja, useConfigDoShell } from './LojaShell';
-import { QUANTIDADE_MAXIMA, alterarQuantidade, definirCupom, limparCarrinho, removerDoCarrinho, useCarrinho, type ItemCarrinho } from './carinho';
+import { QUANTIDADE_MAXIMA, definirCupom, limparCarrinho, removerDoCarrinho, useCarrinho, type ItemCarrinho } from './carinho';
 import { useCotacaoCarrinho, type Cotacao, type ItemCotacao } from './cotacao';
+import { useQuantidadeCarrinho } from './quantidade';
 
 export type Preview = Cotacao;
 
@@ -29,6 +30,8 @@ export default function LojaCarrinhoPage() {
   const carrinho = useCarrinho();
   const navigate = useNavigate();
   const { estado, cotacao, sincronizada, atualizando, erro, detalheErro, motivos, recarregar } = useCotacaoCarrinho(carrinho);
+  // + / −: a intenção só vira quantidade depois da resposta do servidor.
+  const quantidade = useQuantidadeCarrinho(carrinho);
   const configShell = useConfigDoShell();
   const config = configShell?.config ?? null;
   const [cupomInput, setCupomInput] = useState(carrinho.cupom || '');
@@ -100,13 +103,23 @@ export default function LojaCarrinhoPage() {
               const nome = l?.nome && !l.indisponivel ? l.nome : item.nome ?? (l ? l.nome : 'Carregando produto…');
               const sku = l && !l.indisponivel ? l.sku : item.sku;
               const foto = l?.foto_url ?? item.foto_url ?? null;
-              const maximo = l && !l.indisponivel ? Math.min(QUANTIDADE_MAXIMA, Math.max(l.disponivel, 1)) : QUANTIDADE_MAXIMA;
+              // Estoque vem SOMENTE da cotação confirmada pelo servidor. Sem
+              // cotação sincronizada não travamos o "+" por palpite: a decisão
+              // final é sempre do endpoint de quantidade (estoque real).
+              const maximo = l && !l.indisponivel && sincronizada ? Math.min(QUANTIDADE_MAXIMA, Math.max(0, l.disponivel)) : QUANTIDADE_MAXIMA;
+              const noLimite = l && !l.indisponivel && sincronizada && maximo < QUANTIDADE_MAXIMA && item.quantidade >= maximo;
               const subtotalServidor = l && sincronizada ? l.subtotal : undefined;
+              const estadoLinha = quantidade.estado(item);
+              // Durante uma mutação, os limites usam a ÚLTIMA INTENÇÃO (e não o
+              // número confirmado): assim cliques rápidos "+ + −" são tratados
+              // pelo controlador em vez de serem engolidos por um botão disabled.
+              const quantidadeControle = estadoLinha.desejada ?? item.quantidade;
               return (
                 <li
                   key={`${item.produto_id}-${item.tamanho_id ?? 'un'}`}
                   className="grid gap-4 rounded-2xl border border-line bg-surface p-4 sm:grid-cols-[96px_1fr]"
                   data-linha-carrinho={`${item.produto_id}:${item.tamanho_id ?? ''}`}
+                  aria-busy={estadoLinha.pendente}
                 >
                   <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-xl border border-line bg-canvas">
                     {foto ? (
@@ -150,8 +163,8 @@ export default function LojaCarrinhoPage() {
                             type="button"
                             className="btn-ghost h-9 w-9 p-0"
                             aria-label={`Diminuir quantidade de ${nome}`}
-                            disabled={item.quantidade <= 1}
-                            onClick={() => alterarQuantidade(item.produto_id, item.tamanho_id, item.quantidade - 1)}
+                            disabled={quantidadeControle <= 1}
+                            onClick={() => quantidade.alterar(item, -1)}
                           >
                             <Minus className="h-4 w-4" aria-hidden="true" />
                           </button>
@@ -162,8 +175,8 @@ export default function LojaCarrinhoPage() {
                             type="button"
                             className="btn-ghost h-9 w-9 p-0"
                             aria-label={`Aumentar quantidade de ${nome}`}
-                            disabled={item.quantidade >= maximo}
-                            onClick={() => alterarQuantidade(item.produto_id, item.tamanho_id, item.quantidade + 1)}
+                            disabled={quantidadeControle >= maximo}
+                            onClick={() => quantidade.alterar(item, 1)}
                           >
                             <Plus className="h-4 w-4" aria-hidden="true" />
                           </button>
@@ -174,6 +187,29 @@ export default function LojaCarrinhoPage() {
                         <dd className="font-semibold tabular-nums">{subtotalServidor !== undefined ? precoLoja(subtotalServidor) : '—'}</dd>
                       </div>
                     </dl>
+
+                    {/* Feedback INLINE da mutação — zero modal/drawer/overlay.
+                        O botão "+" travado por estoque agora EXPLICA o motivo. */}
+                    {estadoLinha.pendente && (
+                      <p role="status" className="text-xs text-ink-soft">
+                        Atualizando quantidade…
+                      </p>
+                    )}
+                    {noLimite && (
+                      <p className="text-xs font-medium text-amber-800" role="status">
+                        Só há {l?.disponivel} unidades disponíveis.
+                      </p>
+                    )}
+                    {(estadoLinha.erro || estadoLinha.aviso) && (
+                      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900" role="alert">
+                        <span>{estadoLinha.erro || estadoLinha.aviso}</span>
+                        {estadoLinha.temRetry && (
+                          <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => quantidade.tentarNovamente(item)}>
+                            Tentar novamente
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                     <button
                       type="button"

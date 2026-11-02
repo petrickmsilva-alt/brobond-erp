@@ -82,6 +82,7 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   'commerce-produtos': '/commerce/produtos',
   'commerce-publicacoes': '/commerce/publicacoes',
   'commerce-loja': '/commerce/loja',
+  'commerce-abrir-loja': '/loja',
   'commerce-promocoes': '/commerce/promocoes',
   'commerce-cupons': '/commerce/cupons',
   'commerce-pedidos': '/commerce/pedidos',
@@ -117,14 +118,15 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     // + 28 das ONDAS 4–5 (D1 atendimento/CDP, D2 fidelidade/afiliados,
     //   D3 Data/BI, D4 IA, D5 demanda/suprimento, D6 ocorrências/scorecard,
     //   D7 EPM) — todos com página e rota próprias, ZERO MODAL.
+    // + 1 do atalho de navegação Abrir Loja (/loja, rota pública já existente)
     // + 3 do COMMERCE ENTERPRISE: Preços (/commerce/precos), Payment Engine
     //   (/commerce/pagamentos) e Providers (/commerce/pagamentos/provedores) —
     //   páginas que já existiam ou leem dado real; entram no menu, sem rota nova "Em breve".
-    expect(MODULES).toHaveLength(142);
+    expect(MODULES).toHaveLength(143);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(142);
-    expect(new Set(paths).size).toBe(142);
+    expect(new Set(ids).size).toBe(143);
+    expect(new Set(paths).size).toBe(143);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -156,7 +158,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
   it('separa ERP CORE (92), Commerce (16), Creators (4) e Utilidades Globais (2)', () => {
     expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(120);
     // 4 conectores de canal + 9 módulos do BROBOND COMMERCE OS
-    expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(16);
+    expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(17);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
   });
@@ -327,6 +329,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'commerce-promocoes',
       'commerce-cupons',
       'commerce-loja',
+      'commerce-abrir-loja',
       'commerce-pedidos',
       'commerce-delivery',
       'commerce-pagamentos',
@@ -479,7 +482,7 @@ describe('visibleModules', () => {
     const porGrupo = (g: string) => commerce.filter((m) => m.group === g).map((m) => m.id);
     expect(porGrupo('Catálogo')).toEqual(['commerce-produtos', 'commerce-publicacoes']);
     expect(porGrupo('Comercial Commerce')).toEqual(['commerce-precos', 'commerce-promocoes', 'commerce-cupons']);
-    expect(porGrupo('Experiência')).toEqual(['commerce-loja']);
+    expect(porGrupo('Experiência')).toEqual(['commerce-loja', 'commerce-abrir-loja']);
     expect(porGrupo('Pedidos')).toEqual(['commerce-pedidos']);
     expect(porGrupo('Fulfillment')).toEqual(['commerce-delivery']);
     expect(porGrupo('Pagamentos')).toEqual(['commerce-pagamentos', 'commerce-providers', 'conector-mercadopago']);

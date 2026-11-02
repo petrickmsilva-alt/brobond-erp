@@ -68,7 +68,7 @@ async function main() {
   await checar('P0', 'Menu: estrutura Catálogo→Comercial→Experiência→Pedidos→Fulfillment→Pagamentos→Canais→Integrações→Inteligência', () => {
     assert.deepEqual(grupo('Catálogo'), ['commerce-produtos', 'commerce-publicacoes']);
     assert.deepEqual(grupo('Comercial Commerce'), ['commerce-precos', 'commerce-promocoes', 'commerce-cupons']);
-    assert.deepEqual(grupo('Experiência'), ['commerce-loja']);
+    assert.deepEqual(grupo('Experiência'), ['commerce-loja', 'commerce-abrir-loja']);
     assert.deepEqual(grupo('Pedidos'), ['commerce-pedidos']);
     assert.deepEqual(grupo('Fulfillment'), ['commerce-delivery']);
     assert.deepEqual(grupo('Pagamentos'), ['commerce-pagamentos', 'commerce-providers', 'conector-mercadopago']);
@@ -101,6 +101,25 @@ async function main() {
     assert.ok(explicitas.has('/commerce/produtos/:id'), 'rota /commerce/produtos/:id');
     for (const r of ['/loja', '/loja/produto/:slug', '/loja/carrinho', '/loja/checkout', '/loja/pedido/:token']) assert.ok(explicitas.has(r), `rota pública ausente: ${r}`);
     for (const alias of ['/providers', '/payment-engine']) assert.ok(explicitas.has(alias), `alias ausente: ${alias}`);
+  });
+  await checar('P0', 'Menu: Commerce → Experiência → Abrir Loja → /loja (sem rota paralela de storefront)', () => {
+    const abrir = MODULES.find((m) => m.id === 'commerce-abrir-loja');
+    assert.ok(abrir, 'item "Abrir Loja" ausente do menu');
+    assert.equal(abrir.label, 'Abrir Loja');
+    assert.equal(abrir.area, 'Commerce');
+    assert.equal(abrir.group, 'Experiência');
+    assert.equal(abrir.path, '/loja');
+    assert.equal(abrir.rotaPublica, true, 'Abrir Loja não pode gerar rota administrativa paralela');
+    assert.equal(MODULES.find((m) => m.id === 'commerce-loja')?.path, '/commerce/loja');
+    const experiencia = grupo('Experiência');
+    assert.equal(experiencia.indexOf('commerce-abrir-loja'), experiencia.indexOf('commerce-loja') + 1, 'Abrir Loja deve vir abaixo de Loja própria');
+    assert.ok(appSrc.includes('path="/loja" element={<LojaInicioPage />}'), 'rota pública oficial /loja ausente');
+    assert.ok(appSrc.includes('!m.rotaPublica'), 'App.tsx não pode gerar uma segunda rota para /loja');
+    for (const proibida of ['/commerce/loja-publica', '/commerce/storefront', '/commerce/vitrine-publica', '/commerce/abrir-loja']) {
+      assert.ok(!MODULES.some((m) => m.path === proibida), `rota duplicada proibida no menu: ${proibida}`);
+      assert.ok(!appSrc.includes(`path="${proibida}"`), `rota duplicada proibida no App: ${proibida}`);
+    }
+    assert.equal(MODULES.filter((m) => m.path === '/loja').length, 1, '/loja deve ter UM único item de menu');
   });
   await checar('P1', 'RBAC do menu: Payment Engine/Providers só para gerente+ (espelha a API)', () => {
     for (const id of ['commerce-pagamentos', 'commerce-providers']) {

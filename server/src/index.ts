@@ -111,6 +111,7 @@ import {
   lojaConfigPublica,
   lojaProdutoPublico,
   lojaPreview,
+  lojaAtualizarQuantidade,
   lojaCriarCheckout,
   lojaPedidoPublico,
   lojaProdutosPublicos,
@@ -560,6 +561,9 @@ app.get('/api/loja/config', rateLimitPublico, wrap(lojaConfigPublica));
 app.get('/api/loja/produtos', rateLimitPublico, wrap(lojaProdutosPublicos));
 app.get('/api/loja/produtos/:slug', rateLimitPublico, wrap(lojaProdutoPublico));
 app.post('/api/loja/preview', rateLimitPublico, wrap(lojaPreview));
+// + / − do carrinho: proposta validada no servidor (faixa, tenant, estoque real).
+// O cliente só persiste a quantidade que voltar confirmada nesta resposta.
+app.post('/api/loja/carrinho/quantidade', rateLimitPublico, wrap(lojaAtualizarQuantidade));
 app.post('/api/loja/payment-methods', rateLimitPublico, wrap(checkoutMethods));
 app.post('/api/commerce/checkout/payment-intent', rateLimitPublico, wrap(lojaCriarCheckout));
 app.post('/api/loja/checkout', rateLimitPublico, wrap(lojaCriarCheckout));
