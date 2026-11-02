@@ -13,6 +13,9 @@ import CommercePromocoesPage from './commerce/PromocoesPage';
 import CommercePromocaoFormPage from './commerce/PromocaoFormPage';
 import CommerceCuponsPage from './commerce/CuponsPage';
 import CommerceCupomFormPage from './commerce/CupomFormPage';
+import CommercePrecosPage from './commerce/PrecosPage';
+import CommercePagamentosPage from './commerce/PagamentosPage';
+import PaymentEnginePage from './commerce/PaymentEnginePage';
 
 /** Dispatcher das páginas operacionais de Commerce. */
 const COMMERCE_PAGES: Record<string, () => JSX.Element> = {
@@ -29,6 +32,9 @@ const COMMERCE_PAGES: Record<string, () => JSX.Element> = {
   'commerce-promocoes': CommercePromocoesPage,
   'commerce-promocao-nova': CommercePromocaoFormPage,
   'commerce-promocao-editar': CommercePromocaoFormPage,
+  'commerce-precos': CommercePrecosPage,
+  'commerce-pagamentos': CommercePagamentosPage,
+  'commerce-providers': PaymentEnginePage,
   'commerce-cupons': CommerceCuponsPage,
   'commerce-cupom-novo': CommerceCupomFormPage,
   'commerce-cupom-editar': CommerceCupomFormPage,

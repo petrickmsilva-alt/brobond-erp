@@ -12,7 +12,35 @@ export type ItemCarrinho = {
   produto_id: number;
   tamanho_id: number | null;
   quantidade: number;
+  /**
+   * Snapshot SÓ DE EXIBIÇÃO (mostrar a linha enquanto o servidor recalcula ou
+   * se a cotação falhar). Nunca é enviado como preço e nunca é autoridade:
+   * nome/SKU/preço/estoque reais vêm sempre de /api/loja/preview.
+   */
+  nome?: string;
+  sku?: string;
+  foto_url?: string | null;
 };
+
+export const QUANTIDADE_MAXIMA = 99;
+
+/**
+ * Quantidade válida de linha: inteiro de 1 a 99. Rejeita (null) 0, negativos,
+ * NaN, ±Infinity, decimais "quebrados" e strings que não sejam inteiros.
+ * Acima de 99 trava em 99 (limite do servidor).
+ */
+export function normalizarQuantidade(valor: unknown): number | null {
+  let n: number;
+  if (typeof valor === 'number') n = valor;
+  else if (typeof valor === 'string' && /^\s*\d+\s*$/.test(valor)) n = Number(valor);
+  else return null;
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) return null;
+  return Math.min(QUANTIDADE_MAXIMA, n);
+}
+
+function textoCurto(v: unknown, max: number): string | undefined {
+  return typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined;
+}
 
 export type Carrinho = {
   chave: string;
@@ -35,11 +63,14 @@ function ler(): Carrinho {
     const parsed = JSON.parse(bruto) as Partial<Carrinho>;
     const itens = Array.isArray(parsed.itens)
       ? parsed.itens
-          .filter((i): i is ItemCarrinho => !!i && typeof i.produto_id === 'number')
+          .filter((i): i is ItemCarrinho => !!i && typeof i.produto_id === 'number' && Number.isSafeInteger(i.produto_id) && i.produto_id > 0)
           .map((i) => ({
             produto_id: i.produto_id,
-            tamanho_id: i.tamanho_id ?? null,
-            quantidade: Math.max(1, Math.min(99, Math.trunc(i.quantidade || 1))),
+            tamanho_id: typeof i.tamanho_id === 'number' && Number.isSafeInteger(i.tamanho_id) && i.tamanho_id > 0 ? i.tamanho_id : null,
+            quantidade: normalizarQuantidade(i.quantidade) ?? 1,
+            nome: textoCurto(i.nome, 160),
+            sku: textoCurto(i.sku, 120),
+            foto_url: typeof i.foto_url === 'string' && /^(https?:)?\//.test(i.foto_url) ? i.foto_url.slice(0, 500) : null,
           }))
       : [];
     return { chave: typeof parsed.chave === 'string' && parsed.chave.length >= 8 ? parsed.chave : novaChave(), itens, cupom: typeof parsed.cupom === 'string' ? parsed.cupom.slice(0, 40) : '' };
@@ -60,6 +91,21 @@ function persistir() {
   for (const fn of ouvintes) fn();
 }
 
+/**
+ * Sincroniza abas: o carrinho vive no storage do navegador e outra aba pode
+ * ter alterado. Só relê quando o conteúdo realmente mudou (referência estável
+ * do snapshot para o useSyncExternalStore).
+ */
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', (ev) => {
+    if (ev.key !== null && ev.key !== CHAVE_STORAGE) return;
+    const lido = ler();
+    if (JSON.stringify(lido) === JSON.stringify(estado)) return;
+    estado = lido;
+    for (const fn of ouvintes) fn();
+  });
+}
+
 export function assinarCarrinho(fn: () => void): () => void {
   ouvintes.add(fn);
   return () => ouvintes.delete(fn);
@@ -73,26 +119,37 @@ export function useCarrinho(): Carrinho {
   return useSyncExternalStore(assinarCarrinho, lerCarrinho, lerCarrinho);
 }
 
-export function adicionarAoCarrinho(item: ItemCarrinho): void {
+/** Adiciona (ou soma) uma linha. Devolve false e NÃO altera o carrinho se a quantidade for inválida. */
+export function adicionarAoCarrinho(item: ItemCarrinho): boolean {
+  const qtd = normalizarQuantidade(item.quantidade);
+  if (qtd === null || !Number.isSafeInteger(item.produto_id) || item.produto_id <= 0) return false;
   const existente = estado.itens.find(
     (i) => i.produto_id === item.produto_id && (i.tamanho_id ?? null) === (item.tamanho_id ?? null)
   );
   estado = { ...estado, chave: novaChave(), itens: existente
-    ? estado.itens.map((i) => i === existente ? { ...i, quantidade: Math.min(99, i.quantidade + item.quantidade) } : i)
-    : [...estado.itens, { ...item }] };
+    ? estado.itens.map((i) => i === existente ? { ...i, ...(item.nome ? { nome: item.nome, sku: item.sku, foto_url: item.foto_url ?? null } : {}), quantidade: Math.min(QUANTIDADE_MAXIMA, i.quantidade + qtd) } : i)
+    : [...estado.itens, { ...item, tamanho_id: item.tamanho_id ?? null, quantidade: qtd }] };
   persistir();
+  return true;
 }
 
-export function alterarQuantidade(produtoId: number, tamanhoId: number | null, quantidade: number): void {
-  const qtd = Math.trunc(quantidade);
+/**
+ * Define a quantidade de uma linha (1–99). Valor inválido (0, negativo, NaN,
+ * Infinity, string) é IGNORADO — nunca remove nem corrompe a linha. Para
+ * remover use `removerDoCarrinho`.
+ */
+export function alterarQuantidade(produtoId: number, tamanhoId: number | null, quantidade: unknown): boolean {
+  const qtd = normalizarQuantidade(quantidade);
+  if (qtd === null) return false;
+  const alvo = estado.itens.find((i) => i.produto_id === produtoId && (i.tamanho_id ?? null) === tamanhoId);
+  if (!alvo || alvo.quantidade === qtd) return false;
   estado = {
     ...estado,
     chave: novaChave(),
-    itens: estado.itens
-      .map((i) => (i.produto_id === produtoId && (i.tamanho_id ?? null) === tamanhoId ? { ...i, quantidade: qtd } : i))
-      .filter((i) => i.quantidade > 0),
+    itens: estado.itens.map((i) => (i === alvo ? { ...i, quantidade: qtd } : i)),
   };
   persistir();
+  return true;
 }
 
 export function removerDoCarrinho(produtoId: number, tamanhoId: number | null): void {

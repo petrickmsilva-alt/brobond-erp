@@ -106,6 +106,7 @@ import {
   reprocessarPublicacao,
   despublicarProduto,
 } from './commerce/catalogo';
+import { storefrontSeo } from './commerce/storefront-seo';
 import {
   lojaConfigPublica,
   lojaProdutoPublico,
@@ -1421,6 +1422,11 @@ app.delete(
 
 // Rotas /api desconhecidas
 app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Rota não encontrada')));
+
+// Storefront público: SEO (title/description/canonical/JSON-LD) e 404 REAL para
+// produto inexistente/não publicado. Antes do fallback do SPA; sem loja
+// configurada cai no SPA normal.
+app.get(['/loja', '/loja/produto/:slug'], wrap(storefrontSeo));
 
 // ----------------------------------------------------------------------------
 // Front buildado (produção — mesmo serviço na Render). Depois das rotas /api.

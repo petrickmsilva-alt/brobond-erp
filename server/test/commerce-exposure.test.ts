@@ -129,7 +129,13 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
     await request(app).post('/api/loja/preview').send({ itens: [...itens(), ...itens()] }).expect(400);
     await request(app).post('/api/loja/checkout').send({ chave: 'teste-sem-estoque', comprador, itens: [{ ...itens()[0], quantidade: 11 }] }).expect(409);
     await s.update(RESOURCES.produtos, produtoId, { preco_venda: 0 });
-    await request(app).post('/api/loja/preview').send({ itens: itens() }).expect(409);
+    // Cotação tolerante: preço zero NÃO derruba o carrinho inteiro — a linha vem
+    // `ok:false` (o cliente ainda pode removê-la) e o checkout continua recusando.
+    const semPreco = await request(app).post('/api/loja/preview').send({ itens: itens() }).expect(200);
+    assert.equal(semPreco.body.itens[0].ok, false);
+    assert.equal(semPreco.body.pronto_para_checkout, false);
+    assert.deepEqual(semPreco.body.payment_methods, []);
+    await request(app).post('/api/loja/checkout').send({ chave: 'teste-sem-preco', comprador, itens: itens() }).expect(409);
     await s.update(RESOURCES.produtos, produtoId, { preco_venda: 40 });
     await updateRecord(RESOURCES.commerce_configuracoes, configId, { frete_provedor: 'nenhum' }, actor);
     await request(app).post('/api/loja/checkout').send({ chave: 'teste-sem-frete', comprador, itens: itens() }).expect(409);
@@ -226,7 +232,7 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
     const appSource = readFileSync(new URL('../../client/src/App.tsx', import.meta.url), 'utf8');
     for (const route of ['/loja', '/loja/produto/:slug', '/loja/carrinho', '/loja/checkout', '/loja/pedido/:token']) assert.ok(appSource.includes(`path="${route}"`));
     const modules = readFileSync(new URL('../../client/src/modules.ts', import.meta.url), 'utf8');
-    const scope = modules.slice(modules.indexOf("id: 'conector-mercadolivre'"), modules.indexOf('// 11. UTILIDADES GLOBAIS'));
+    const scope = modules.slice(modules.indexOf("id: 'commerce-produtos'"), modules.indexOf('// 11. UTILIDADES GLOBAIS'));
     assert.doesNotMatch(scope, /planned\s*:|em breve|coming_soon/i);
     for (const path of ['/commerce/loja', '/creators', '/matches', '/outreach-ai', '/campanhas']) assert.ok(scope.includes(`path: '${path}'`));
   });

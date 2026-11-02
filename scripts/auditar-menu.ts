@@ -93,9 +93,24 @@ const ROTAS_DE_TOPO_ESPERADAS = new Set(['/', '/login', '/esqueci', '/dev/compon
 const rotaDeFormularioDoModulo = (rota: string) =>
   /\/(novo|editar)$/.test(rota) || /^\/[^/]+\/:id\/editar$/.test(rota);
 
+/**
+ * ALIASES (<Route path="/providers" element={<Navigate to="..." replace />} />):
+ * URLs curtas/legadas que só redirecionam. Não são páginas (nada duplicado) e não
+ * pedem menu — mas o DESTINO precisa existir (módulo do menu ou rota explícita).
+ */
+const aliases = new Map<string, string>();
+for (const m of appSrc.matchAll(/<Route\s+path="([^"*]+)"\s+element=\{<Navigate\s+to="([^"]+)"/g)) {
+  aliases.set(m[1].startsWith('/') ? m[1] : '/' + m[1], m[2]);
+}
+for (const [alias, destino] of aliases) {
+  const existe = MODULES.some((m) => m.path === destino) || rotasExplicitas.has(destino) || destino === '/';
+  if (!existe) erro('ALIAS_QUEBRADO', `O alias "${alias}" redireciona para "${destino}", que não existe.`);
+}
+
 for (const rota of rotasExplicitas) {
   if (/:|\*/.test(rota) || ROTAS_DE_TOPO_ESPERADAS.has(rota)) continue;
   if (rotaDeFormularioDoModulo(rota)) continue;
+  if (aliases.has(rota)) continue;
   if (!MODULES.some((m) => m.path === rota)) {
     aviso('ROTA_SEM_MENU', `A rota "${rota}" existe mas nenhum módulo do menu aponta para ela (acesso só por link direto).`);
   }
@@ -293,9 +308,10 @@ const SEM_TELA_PROPRIA = new Set([
   // tela de transferências (que lê o documento completo por
   // GET /api/estoque/transferencias/:id). Não são telas — são o documento.
   'estoque_transferencia_itens', 'estoque_transferencia_eventos',
-  // COMMERCE OS: o preço por canal é editado DENTRO da tela do produto
-  // commerce (GET/PUT /api/commerce/produtos/:id/precos) — mesmo padrão de
-  // lista_preco_itens: é um atributo da tela pai, não um menu próprio.
+  // COMMERCE: o preço por canal é editado DENTRO da tela do produto
+  // commerce (GET/PUT /api/commerce/produtos/:id/precos). O item de menu
+  // "Preços" (/commerce/precos) é uma VISÃO de leitura sobre o mesmo dado
+  // (sem CRUD genérico próprio) — não cria segunda fonte de preço.
   'commerce_precos',
   // ONDA 4 / D1: a interação do ticket é a TRILHA append-only exibida DENTRO do
   // detalhe do ticket e do Customer 360 (mesmo padrão de envio_eventos). Não é

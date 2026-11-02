@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CornerDownLeft, KeyRound, LogOut, Search, UserRound } from 'lucide-react';
-import { visibleModules, type Module } from '../modules';
+import { rotuloGrupo, visibleModules, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 
 type Item = {
@@ -45,7 +45,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     const fromModules: Item[] = modules.map((m) => ({
       id: `mod-${m.id}`,
       label: m.label,
-      context: m.area === m.label ? `${m.area} → ${m.group}` : `${m.area} → ${m.group}`,
+      context: `${m.area} → ${rotuloGrupo(m.group)}`,
       area: m.area,
       group: m.group,
       subgroup: m.subgroup,
@@ -53,7 +53,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       planned: Boolean(m.planned?.length),
       description: m.description,
       icon: m.icon,
-      keywords: `${m.area} ${m.group} ${m.subgroup} ${m.path} ${m.keywords ?? ''} ${m.planned?.length ? 'planejado em breve roadmap' : ''}`,
+      keywords: `${m.area} ${m.group} ${rotuloGrupo(m.group)} ${m.subgroup} ${m.path} ${m.keywords ?? ''} ${m.planned?.length ? 'planejado em breve roadmap' : ''}`,
       action: () => navigate(m.path),
     }));
     const extras: Item[] = [

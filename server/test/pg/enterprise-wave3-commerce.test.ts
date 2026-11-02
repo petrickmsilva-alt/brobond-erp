@@ -18,7 +18,7 @@ async function company(prefix: string) {
 }
 const payload = (slug: string) => ({ sku: slug, titulo: slug, resumo: null, descricao: '', slug, preco: 20, preco_promo: null,
   condicao: 'novo', ativo: true, destaque: false, disponivel: 1, metadados: { ml_category_id: 'TESTE' } });
-function res() { let result: any; return { out: { json(v: any) { result = v; return this; } } as any, body: () => result }; }
+function res() { let result: any; return { out: { setHeader() { return this; }, json(v: any) { result = v; return this; } } as any, body: () => result }; }
 
 test('PG vitrine: catálogo com 1001 produtos não perde preço de canal após primeira página', async () => {
   const c = await company('wave3-list'); const old = process.env.COMMERCE_LOJA_EMPRESA_ID; process.env.COMMERCE_LOJA_EMPRESA_ID = String(c.id);

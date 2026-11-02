@@ -63,7 +63,7 @@ type VisiveisVitrine = {
   precos: Map<string, Row>;
 };
 
-async function carregarVitrine(empresaId: number): Promise<VisiveisVitrine> {
+export async function carregarVitrine(empresaId: number): Promise<VisiveisVitrine> {
   const s = getStore();
   // A snapshot prevents price/publication pages from shifting between reads.
   // Silently truncating the price table would fall back to the base price and
@@ -94,7 +94,7 @@ async function carregarVitrine(empresaId: number): Promise<VisiveisVitrine> {
   return { empresaId, visiveis, projecoes: projMap, precos: precoMap };
 }
 
-function precoPublico(produto: Row, precos: Map<string, Row>): { preco: number; preco_original: number | null; promocional: boolean } {
+export function precoPublico(produto: Row, precos: Map<string, Row>): { preco: number; preco_original: number | null; promocional: boolean } {
   const linha = precos.get(`${Number(produto.id)}:BROBOND`);
   const eff = precoEfetivo({
     base: Number(produto.preco_venda ?? 0),
@@ -238,11 +238,29 @@ type ItemResolvido = {
   preco_unitario: number;
   preco_original: number | null;
   disponivel: number;
+  /** Imagem principal vigente do produto (nunca enviada pelo browser). */
+  foto_url: string | null;
+  /** Rótulo da variante (tamanho) quando o item tem grade. */
+  variante: string | null;
+  /** Só no modo tolerante (preview): item que saiu da vitrine / precisa de ajuste. */
+  problema?: string;
+};
+
+type OpcoesResolucao = {
+  /**
+   * `true` (preview): problema DE ESTADO de uma linha (produto despublicado,
+   * tamanho ausente/inválido, sem preço) vira linha `ok:false` com aviso, para
+   * que o cliente consiga ver e REMOVER o item. O checkout usa `false` e
+   * continua recusando o carrinho inteiro. Estrutura malformada (quantidade
+   * 0/negativa/NaN/Infinity/string, produto inválido) é 400 nos dois modos.
+   */
+  tolerante?: boolean;
 };
 
 async function resolverItensCarrinho(
   empresaId: number,
-  corpo: Record<string, unknown>
+  corpo: Record<string, unknown>,
+  opcoes: OpcoesResolucao = {}
 ): Promise<ItemResolvido[]> {
   const bruto = Array.isArray(corpo.itens) ? corpo.itens : null;
   if (!bruto || !bruto.length) throw new HttpError(400, 'O carrinho está vazio.', { itens: 'Obrigatório' });
@@ -259,28 +277,63 @@ async function resolverItensCarrinho(
     if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 99) {
       throw new HttpError(400, 'Quantidade inválida (1 a 99) no carrinho.', { itens: 'Quantidade inválida' });
     }
-    const produto = visiveis.get(produtoId);
-    if (!produto) {
-      // mesma resposta do inexistente: nunca revelar produto de outro tenant
-      throw new HttpError(409, 'Um dos itens não está mais disponível na vitrine.');
-    }
     const tamanhoId = item.tamanho_id == null || item.tamanho_id === '' ? null : Number(item.tamanho_id);
     if (tamanhoId !== null && (!Number.isSafeInteger(tamanhoId) || tamanhoId <= 0)) throw new HttpError(400, 'Tamanho inválido no carrinho.');
     const chave = `${produtoId}:${tamanhoId ?? ''}`;
     if (chaves.has(chave)) throw new HttpError(400, 'Item duplicado no carrinho. Atualize a quantidade na mesma linha.');
     chaves.add(chave);
+    // Linha que não pode ser vendida: no preview ela continua VISÍVEL (sem
+    // vazar nome/SKU de produto fora da vitrine) para o cliente poder removê-la.
+    const linhaComProblema = (problema: string, parcial: Partial<ItemResolvido> = {}): ItemResolvido => ({
+      produto_id: produtoId,
+      tamanho_id: tamanhoId,
+      quantidade,
+      nome: 'Item indisponível',
+      sku: '',
+      preco_unitario: 0,
+      preco_original: null,
+      disponivel: 0,
+      foto_url: null,
+      variante: null,
+      problema,
+      ...parcial,
+    });
+    const produto = visiveis.get(produtoId);
+    if (!produto) {
+      // mesma resposta do inexistente: nunca revelar produto de outro tenant
+      if (opcoes.tolerante) {
+        out.push(linhaComProblema('Este item não está mais disponível na loja. Remova-o para continuar.'));
+        continue;
+      }
+      throw new HttpError(409, 'Um dos itens não está mais disponível na vitrine.');
+    }
     const preco = precoPublico(produto, precos);
-    if (!Number.isFinite(preco.preco) || preco.preco <= 0) throw new HttpError(409, 'Um dos itens está sem preço válido na vitrine.');
+    if (!Number.isFinite(preco.preco) || preco.preco <= 0) {
+      if (opcoes.tolerante) {
+        out.push(linhaComProblema('Item sem preço válido na loja. Remova-o para continuar.', { nome: String(produto.nome || ''), sku: String(produto.sku || '') }));
+        continue;
+      }
+      throw new HttpError(409, 'Um dos itens está sem preço válido na vitrine.');
+    }
     const escopo = escopoDeSistema(empresaId);
     const grade = await disponibilidadesPorTamanho(escopo, produtoId);
     const comTamanho = grade.filter((g) => g.tamanho_id != null);
+    const base = { nome: String(produto.nome || ''), sku: String(produto.sku || '') };
     if (comTamanho.length) {
       // produto com tamanhos: SEM exceção — item sem tamanho reservaria o
       // produto inteiro e o faturamento não saberia de onde sacar.
       if (tamanhoId == null) {
+        if (opcoes.tolerante) {
+          out.push(linhaComProblema(`Selecione o tamanho de ${produto.nome}.`, base));
+          continue;
+        }
         throw new HttpError(400, `Selecione o tamanho de ${produto.nome}.`, { itens: 'Tamanho obrigatório' });
       }
       if (!comTamanho.some((g) => g.tamanho_id === tamanhoId)) {
+        if (opcoes.tolerante) {
+          out.push(linhaComProblema('Tamanho indisponível para este produto.', base));
+          continue;
+        }
         throw new HttpError(400, 'Tamanho indisponível para este produto.', { itens: 'Tamanho inválido' });
       }
     }
@@ -295,12 +348,21 @@ async function resolverItensCarrinho(
       produto_id: produtoId,
       tamanho_id: tamanhoId,
       quantidade,
-      nome: String(produto.nome || ''),
-      sku: String(produto.sku || ''),
+      ...base,
       preco_unitario: preco.preco,
       preco_original: preco.preco_original,
       disponivel,
+      foto_url: null,
+      variante: tamanhoId != null ? grade.find((g) => g.tamanho_id === tamanhoId)?.codigo ?? null : null,
     });
+  }
+  // Imagem vigente vem do cadastro (uma consulta para o carrinho inteiro).
+  const comImagem = out.filter((i) => !i.problema).map((i) => visiveis.get(i.produto_id)!);
+  if (comImagem.length) {
+    const unicos = [...new Map(comImagem.map((p) => [Number(p.id), { ...p }])).values()];
+    await attachImages(getResource('produtos')!, unicos);
+    const fotos = new Map(unicos.map((p) => [Number(p.id), (p as { foto_url?: string | null }).foto_url ?? null]));
+    for (const i of out) if (!i.problema) i.foto_url = fotos.get(i.produto_id) ?? null;
   }
   return out;
 }
@@ -311,14 +373,23 @@ async function resolverItensCarrinho(
 
 export async function lojaPreview(req: Request, res: Response) {
   const { empresaId } = await exigirVitrine();
-  const quote = await quotePaymentMethods(empresaId, req);
-  res.json(quote);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await quotePaymentMethods(empresaId, req));
 }
-export async function quotePaymentMethods(empresaId: number, req: Request) {
+
+/**
+ * COTAÇÃO DO CARRINHO (domínio Comercial/Experiência) — preço, estoque, cupom,
+ * promoção, frete e totais, SEMPRE recalculados no servidor. Não depende do
+ * Payment Engine: uma falha de provider nunca pode esconder o carrinho.
+ * O browser só informa produto/tamanho/quantidade/cupom/cep; qualquer
+ * `preco`, `total`, `desconto`, `frete` enviado é ignorado.
+ */
+export async function cotarCarrinho(empresaId: number, req: Request) {
   const config = await configDaLoja(empresaId);
   const corpo = (req.body || {}) as Record<string, unknown>;
-  const itens = await resolverItensCarrinho(empresaId, corpo);
-  const subtotal = round2(itens.reduce((soma, i) => soma + i.preco_unitario * i.quantidade, 0));
+  const itens = await resolverItensCarrinho(empresaId, corpo, { tolerante: true });
+  const vendaveis = itens.filter((i) => !i.problema);
+  const subtotal = round2(vendaveis.reduce((soma, i) => soma + i.preco_unitario * i.quantidade, 0));
 
   const codigoCupom = corpo.cupom ? normalizarCodigo(corpo.cupom) : '';
   let cupom: Awaited<ReturnType<typeof avaliarCupomCodigo>> | null = null;
@@ -329,16 +400,31 @@ export async function quotePaymentMethods(empresaId: number, req: Request) {
     subtotal,
     cep: corpo.cep ? String(corpo.cep) : null,
   });
-
-  const total = calcularTotaisCheckout({ itens:itens.map(i=>({quantidade:i.quantidade,precoUnitario:i.preco_unitario})), frete:frete.disponivel?frete.valor:0, desconto:desconto.desconto }).total;
-  const methods = frete.disponivel && itens.every(i=>i.disponivel>=i.quantidade) && total>0 ? await availableMethods({empresaId,amount:paraCentavos(total),currency:'BRL',country:'BR',channel:'OWN_STORE',installments:1}) : [];
+  const totais = calcularTotaisCheckout({
+    itens: vendaveis.map((i) => ({ quantidade: i.quantidade, precoUnitario: i.preco_unitario })),
+    frete: frete.disponivel ? frete.valor : 0,
+    desconto: desconto.desconto,
+  });
+  const itensOk = itens.length > 0 && itens.every((i) => !i.problema && i.disponivel >= i.quantidade);
   return {
-    payment_methods: methods,
     itens: itens.map((i) => ({
-      ...i,
+      produto_id: i.produto_id,
+      tamanho_id: i.tamanho_id,
+      quantidade: i.quantidade,
+      nome: i.nome,
+      sku: i.sku,
+      variante: i.variante,
+      foto_url: i.foto_url,
+      preco_unitario: i.preco_unitario,
+      preco_original: i.preco_original,
+      disponivel: i.disponivel,
       subtotal: round2(i.preco_unitario * i.quantidade),
-      ok: i.disponivel >= i.quantidade,
-      ...(i.disponivel < i.quantidade ? { aviso: `Só ${i.disponivel} em estoque.` } : {}),
+      ok: !i.problema && i.disponivel >= i.quantidade,
+      ...(i.problema
+        ? { aviso: i.problema, indisponivel: true }
+        : i.disponivel < i.quantidade
+          ? { aviso: i.disponivel > 0 ? `Só ${i.disponivel} em estoque.` : 'Sem estoque no momento.' }
+          : {}),
     })),
     subtotal,
     cupom: codigoCupom
@@ -354,14 +440,40 @@ export async function quotePaymentMethods(empresaId: number, req: Request) {
     frete,
     desconto: desconto.desconto,
     desconto_origem: desconto.origem,
-    totais: calcularTotaisCheckout({
-      itens: itens.map((i) => ({ quantidade: i.quantidade, precoUnitario: i.preco_unitario })),
-      frete: frete.disponivel ? frete.valor : 0,
-      desconto: desconto.desconto,
-    }),
+    totais,
     frete_indisponivel: !frete.disponivel,
     ...(frete.disponivel ? {} : { frete_motivo: frete.motivo }),
+    /** Pode seguir para o checkout? (decisão do servidor; o cliente só reflete) */
+    pronto_para_checkout: itensOk && frete.disponivel && totais.total > 0 && !(cupom && !cupom.ok),
+    calculado_em: new Date().toISOString(),
   };
+}
+
+/**
+ * Cotação do carrinho + métodos de pagamento oferecidos PELO PAYMENT ENGINE.
+ * Falha do Payment Engine degrada apenas `payment_methods` (lista vazia +
+ * `payment_methods_erro`) — o carrinho continua calculado e visível.
+ */
+export async function quotePaymentMethods(empresaId: number, req: Request) {
+  const cotacao = await cotarCarrinho(empresaId, req);
+  let methods: Awaited<ReturnType<typeof availableMethods>> = [];
+  let metodosErro = false;
+  if (cotacao.pronto_para_checkout) {
+    try {
+      methods = await availableMethods({
+        empresaId,
+        amount: paraCentavos(cotacao.totais.total),
+        currency: 'BRL',
+        country: 'BR',
+        channel: 'OWN_STORE',
+        installments: 1,
+      });
+    } catch (e) {
+      metodosErro = true;
+      console.error('[loja] Payment Engine indisponível ao cotar métodos:', e instanceof Error ? e.message : String(e));
+    }
+  }
+  return { payment_methods: methods, ...(metodosErro ? { payment_methods_erro: true } : {}), ...cotacao };
 }
 
 // ----------------------------------------------------------------------------

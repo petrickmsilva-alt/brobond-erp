@@ -8,7 +8,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Check, ShoppingBag } from 'lucide-react';
 import { apiFetch, ApiError } from '../../../lib/api';
 import { LojaShell, precoLoja } from './LojaShell';
-import { adicionarAoCarrinho } from './carinho';
+import { adicionarAoCarrinho, normalizarQuantidade } from './carinho';
 
 type Detalhe = {
   empresa_id: number;
@@ -97,7 +97,15 @@ export default function LojaProdutoPage() {
 
   const adicionar = () => {
     if (!podeAdicionar) return;
-    adicionarAoCarrinho({ produto_id: detalhe.produto.id, tamanho_id: comTamanho ? (tamanhoSel as number | null) : null, quantidade: qtd });
+    const ok = adicionarAoCarrinho({
+      produto_id: detalhe.produto.id,
+      tamanho_id: comTamanho ? (tamanhoSel as number | null) : null,
+      quantidade: qtd,
+      nome: detalhe.produto.nome,
+      sku: detalhe.produto.sku,
+      foto_url: detalhe.produto.foto_url,
+    });
+    if (!ok) return;
     setAdicionado(true);
     window.setTimeout(() => setAdicionado(false), 2200);
   };
@@ -105,7 +113,7 @@ export default function LojaProdutoPage() {
   const fotoPrincipal = detalhe.produto.foto_url;
 
   return (
-    <LojaShell>
+    <LojaShell tituloDocumento={detalhe.produto.nome}>
       <button type="button" className="btn-ghost mb-4 -ml-2" onClick={() => navigate('/loja')}>
         <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Voltar
       </button>
@@ -185,7 +193,7 @@ export default function LojaProdutoPage() {
                 min={1}
                 max={Math.max(1, Math.min(99, disponivelDoSelecionado))}
                 value={qtd}
-                onChange={(e) => setQtd(Math.max(1, Math.trunc(Number(e.target.value) || 1)))}
+                onChange={(e) => setQtd(normalizarQuantidade(e.target.value) ?? 1)}
                 aria-label="Quantidade"
               />
             </label>

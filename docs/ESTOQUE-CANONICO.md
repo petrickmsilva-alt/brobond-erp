@@ -43,9 +43,16 @@ São duas perguntas diferentes; ambas são explícitas na API e na tela:
 
 O faturamento debita **um local por item** (`faturarVenda` em `itens.ts`):
 local de saída da venda → Local padrão. Por isso o disponível é o **maior**
-entre essas duas células e nunca a soma dos locais. Não existe tabela de
-reservas: se um dia existir, ela entra uma vez em `saldoVendavel` e todas as
-telas passam a vê-la.
+entre essas duas células e nunca a soma dos locais.
+
+**Reservas (migration 0052, `estoque_reservas`).** Desde a 0052 existe a tabela
+de reservas e o disponível canônico é
+`físico − reservado − empenhado − bloqueado` (`server/src/estoqueCanonico.ts`).
+O checkout da loja própria reserva em transação SERIALIZABLE, de forma
+idempotente por pedido (`uq_estoque_reservas_checkout`), e a cotação do
+carrinho já enxerga essa reserva — por isso, depois de um checkout, o disponível
+mostrado na vitrine cai sem que o estoque físico seja baixado (a baixa acontece
+no faturamento). Divergência na conversão vai para `AGUARDANDO_CORREÇÃO`.
 
 Consequência aceita por desenho: 1 peça na loja + 9 no depósito é **físico 10**
 e **disponível 1** quando a venda sai da loja. As duas telas mostram os dois

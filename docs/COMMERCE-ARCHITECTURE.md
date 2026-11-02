@@ -120,6 +120,47 @@ POST /commerce/publicacoes ──► enfileirarPublicacao (idempotente)
 - Conversão (`POST /commerce/pedidos/:saleId/converter`) usa a ponte
   sales→vendas (reuso do motor) e é idempotente.
 
+### 5.1 Carrinho profissional (contrato)
+
+O carrinho continua UM só (localStorage `brobond-loja-carrinho`, snapshot
+opcional de nome/SKU/foto para exibir a linha enquanto a cotação carrega); a
+**fonte de verdade de preço, estoque, desconto, frete e total é o servidor**
+(`POST /api/loja/preview`, `Cache-Control: no-store`).
+
+| Item | Regra |
+|---|---|
+| Quantidade | inteiro ≥ 1 e ≤ 99 (cliente: `normalizarQuantidade`; servidor: 400 para 0, negativo, NaN, Infinity, texto, decimal, `null`). Acima do estoque a linha vem `ok:false` + “Só N em estoque.” |
+| Valores do browser | `total`, `preco_unitario`, `subtotal`, `desconto`, `frete` enviados pelo cliente são **ignorados** (preview e checkout) |
+| Item despublicado/inexistente/de outro tenant | a cotação **não falha inteira**: a linha vem `ok:false`, `indisponivel:true`, sem vazar nome; o cliente continua podendo removê-la; o checkout recusa (409) |
+| Payment Engine fora do ar | só `payment_methods` degrada (`payment_methods_erro`); o carrinho continua cotando |
+| Frete | real (FreightProvider) ou fail-closed: “Frete indisponível para esta configuração.” e `pronto_para_checkout:false` — nunca inventado |
+| Cupom | validado no servidor a cada cotação, persistido no carrinho, removível; consumo atômico (CAS) só no checkout |
+| Estados da tela | `LOADING · READY · EMPTY · ERROR · INVALID` (`data-estado-carrinho`), com “Tentar novamente”; valores aparecem como “—” só enquanto não sincronizados — nunca `...` indefinido |
+| Concorrência | `AbortController` + número de sequência: resposta antiga nunca sobrescreve a nova |
+| Abas | evento `storage` mantém as abas sincronizadas; F5 preserva o carrinho |
+
+**Causa estrutural do bug “Carrinho 1 / itens vazios / totais `...`”.** Antes,
+o preview falhava inteiro (409/400) quando QUALQUER linha estava
+despublicada/sem tamanho/sem preço, ou quando o Payment Engine falhava (sem
+`try/catch`, com N+1 em `account()`). Sem `itens` na resposta a tela não tinha
+linhas para mostrar nem para remover, e os totais ficavam em `...`. O badge do
+topo lê o localStorage (por isso mostrava “1”). A falha em produção não pôde ser
+reproduzida neste ambiente; a causa estrutural acima foi corrigida e coberta por
+testes (`LojaCarrinhoPage.test.tsx` — o cenário ERROR reproduz o comportamento
+original no código antigo — e `commerce-cart.test.ts` em PG real).
+
+### 5.2 SEO e status HTTP da vitrine
+
+`server/src/commerce/storefront-seo.ts` responde `GET /loja` e
+`GET /loja/produto/:slug` **antes** do fallback do SPA, injetando no
+`index.html`: `<title>`, `description`, `canonical` (origem de `urlPublica`),
+`robots`, Open Graph e JSON-LD `Product` (preço e disponibilidade do servidor),
+tudo escapado. Visibilidade = a mesma regra da vitrine (ativo + projetado +
+publicação `PUBLISHED` no canal BROBOND, do tenant da loja). Produto
+inexistente, não publicado ou de outro tenant → **HTTP 404 real** (HTML do SPA
+com `noindex`, sem revelar nada). Produto publicado e sem estoque continua
+indexável (`OutOfStock`). Sem loja configurada, cai no SPA normal.
+
 ## 6. RBAC e camadas de alçada
 
 | Camada | Uso | O que confere |
@@ -151,8 +192,72 @@ a vitrine) — quem escreve é gerente/admin (espelhado no cliente).
 | Concorrência PG (12) | `server/test/pg/commerce-concorrencia.test.ts` | fila idempotente, claim único, versão única, cupom ×6, última peça ×6, mesmo checkout ×6, liberação ×6, garantir pedido ×6, expiração ×4, outbox ×4, preço ×6, expiração × pagamento |
 | E2E PG | `server/test/pg/commerce-e2e.test.ts` | cadeia HTTP real: catálogo→fila→vitrine→checkout→webhook→conversão, RBAC/403, tenancy/404, frete fail-closed |
 | Marketplace | `server/test/pg/pg-golive03-marketplace-venda.test.ts` | ingestão → venda operacional, idempotência, multiempresa, fail-closed de SKU |
+| Carrinho/Storefront PG | `server/test/pg/commerce-cart.test.ts` (+ `_commerce-harness.ts`) | cotação autoritativa, anti-tamper (total:1), quantidades inválidas, estoque/reserva, cupom, frete fail-closed, despublicação, tenancy, SEO/404, webhook duplicado, RBAC |
+| SEO unitário | `server/test/storefront-seo.test.ts` | escape HTML/JSON-LD, canonical, noindex |
 | Visuais (15) | `client/src/pages/commerce/*.test.tsx` + `LojaFluxoPages.test.tsx` | as 13 rotas do space `commerce` + subrotas + fluxo B2C completo — render real da API, ZERO MODAL, navegação por rota |
 
 Comandos oficiais: `npm run typecheck`, `test:server`, `test:client`,
 `audit:menu`, `test:pg` (PG 16.14, banco vazio), `smoke`, `smoke:pg`,
 `commerce:go-live` (ver `COMMERCE-GO-LIVE.md`).
+
+## 9. Menu Commerce (fonte única: `client/src/modules.ts`)
+
+| Grupo | Itens | Rota |
+|---|---|---|
+| Catálogo | Produtos · Publicações | `/commerce/produtos` · `/commerce/publicacoes` |
+| Comercial (chave interna `Comercial Commerce`) | Preços · Promoções · Cupons | `/commerce/precos` · `/commerce/promocoes` · `/commerce/cupons` |
+| Experiência | Loja própria | `/commerce/loja` |
+| Pedidos | Pedidos | `/commerce/pedidos` |
+| Fulfillment | Delivery | `/commerce/delivery` |
+| Pagamentos | Payment Engine · Providers · Mercado Pago | `/commerce/pagamentos` · `/commerce/pagamentos/provedores` · `/conectores/mercado-pago` |
+| Canais | Mercado Livre · Nuvemshop · Instagram | `/conectores/*` |
+| Integrações | Fila & sync | `/commerce/fila` |
+| Inteligência | Trends | `/commerce/trends` |
+
+- Mercado Pago saiu de Canais (é provider de pagamento) e **mantém** a rota
+  `/conectores/mercado-pago`; aparece uma única vez no menu.
+- “Preços” é uma visão de leitura sobre o mesmo dado de `/api/commerce/produtos`
+  (a edição continua no detalhe do produto) — não há segunda fonte de preço.
+- Aliases (apenas redirecionam, sem página duplicada): `/providers`,
+  `/commerce/providers` → `/commerce/pagamentos/provedores`; `/payment-engine`,
+  `/payments` → `/commerce/pagamentos`. As rotas `/commerce/pagamentos/*`
+  passaram a usar o módulo `commerce-pagamentos` (gerente+, igual à API).
+- Nenhuma rota “Em breve”: `scripts/auditar-menu.ts` e
+  `scripts/commerce-enterprise-audit.ts` verificam.
+
+## 10. Cadeia de pagamento e estado dos providers
+
+```
+Checkout (vitrine.ts) → Payment Engine (paymentEngine.createForOrder)
+   → Orchestrator (rotas configuradas, fallback determinístico, idempotência por operationKey)
+   → Provider Adapter (registry) → Mercado Pago
+```
+
+- O checkout **nunca** importa adapter nem fala com o Mercado Pago.
+- **Mercado Pago é o único provider operacional**: só anuncia método (PIX)
+  quando há `access_token` + segredo de webhook do tenant. Segredos ficam
+  cifrados no servidor; nunca no frontend nem em logs.
+- **PagBank e Stripe são arquitetura extensível** (adapters registrados que não
+  anunciam nenhum método sem credenciais e sem homologação). Não são
+  apresentados como conectados.
+- Webhook assinado → `gateway_webhook_events` (UNIQUE provider+evento) → estado
+  interno do pedido (`PAGO`, `EXPIRADO`…); webhook duplicado e reconversão
+  produzem UMA venda.
+- vendas é a fonte operacional; `sales` é a projeção. Pedido único por
+  `empresa_id + canal + pedido_externo` (`uq_commerce_pedidos_externo`) e
+  checkout idempotente por `chave_checkout`.
+- Estoque: disponível canônico = físico − reservado − empenhado − bloqueado
+  (ver `ESTOQUE-CANONICO.md`); reserva SERIALIZABLE e idempotente.
+
+## 11. DEPENDE DE HOMOLOGAÇÃO EXTERNA (não provado por testes locais)
+
+- Cobrança real/sandbox no Mercado Pago com credenciais do tenant e webhook
+  público com assinatura real.
+- Frete com transportadora real (hoje: retirada/tabela configurada, fail-closed).
+- PagBank e Stripe: adapters sem homologação.
+- Reprodução do bug do carrinho no ambiente de produção.
+- Imagem do produto COTTON “B”: a vitrine usa a foto cadastrada; a divergência
+  imagem/SKU de produção só pode ser corrigida com evidência do cadastro real.
+
+Auditoria: `npm run commerce:enterprise-audit` (verificações reais, sai com
+código 1 se houver qualquer P0/P1/P2).

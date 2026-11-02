@@ -34,7 +34,8 @@
     "test:client": "npm --workspace client test",
     "payment:go-live": "node --import tsx scripts/payment-engine-go-live-audit.ts",
     "test:payments": "node --import tsx --test server/test/payment-engine.test.ts server/test/commerce-exposure.test.ts",
-    "recovery:check": "node --import tsx scripts/recovery-check.mjs"
+    "recovery:check": "node --import tsx scripts/recovery-check.mjs",
+    "commerce:enterprise-audit": "node --import tsx scripts/commerce-enterprise-audit.ts"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"

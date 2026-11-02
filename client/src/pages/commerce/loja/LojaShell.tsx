@@ -2,7 +2,7 @@
 // VITRINE /loja — cabeçalho/rodapé comuns da loja pública da empresa.
 // Sem dependência do ERP logado: identidade vem de /api/loja/config.
 // ============================================================================
-import { useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { ShoppingBag } from 'lucide-react';
 import { apiFetch } from '../../../lib/api';
@@ -27,13 +27,28 @@ export function useConfigLoja(): { config: ConfigLoja | null; erro: string | nul
   return { config, erro };
 }
 
-export function LojaShell({ children, titulo }: { children: ReactNode; titulo?: string }) {
+const ConfigLojaContext = createContext<{ config: ConfigLoja | null; erro: string | null } | null>(null);
+
+/** Config pública já carregada pelo LojaShell (evita requisição duplicada nas páginas filhas). */
+export function useConfigDoShell(): { config: ConfigLoja | null; erro: string | null } | null {
+  return useContext(ConfigLojaContext);
+}
+
+export function LojaShell({ children, titulo, tituloDocumento }: { children: ReactNode; titulo?: string; tituloDocumento?: string }) {
   const carrinho = useCarrinho();
-  const { config, erro } = useConfigLoja();
+  const cfg = useConfigLoja();
+  const { config, erro } = cfg;
   const location = useLocation();
   const total = totalItens(carrinho);
 
+  useEffect(() => {
+    const nome = config?.loja_nome ?? 'BROBOND';
+    const parte = tituloDocumento ?? titulo;
+    document.title = parte ? `${parte} — ${nome}` : nome;
+  }, [config?.loja_nome, titulo, tituloDocumento]);
+
   return (
+    <ConfigLojaContext.Provider value={cfg}>
     <div className="flex min-h-screen flex-col bg-canvas text-ink">
       <header className="sticky top-0 z-20 border-b border-line bg-surface/95 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-3">
@@ -83,10 +98,12 @@ export function LojaShell({ children, titulo }: { children: ReactNode; titulo?: 
         </div>
       </footer>
     </div>
+    </ConfigLojaContext.Provider>
   );
 }
 
 /** Formata preço local (a vitrine mostra o número REAL vindo do servidor). */
 export function precoLoja(valor: number): string {
+  if (!Number.isFinite(Number(valor))) return '—';
   return Number(valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }

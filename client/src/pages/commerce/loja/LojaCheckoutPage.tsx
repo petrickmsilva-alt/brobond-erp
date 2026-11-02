@@ -185,7 +185,7 @@ export default function LojaCheckoutPage() {
           <fieldset className="rounded-2xl border border-line bg-surface p-5 space-y-3">
             <legend className="px-1 text-sm font-semibold text-ink">Pagamento</legend>
             <label className="block text-sm">Método de pagamento<select className="input mt-1" value={method} onChange={e=>setMethod(e.target.value)}>{preview?.payment_methods?.map(m=><option key={m.code} value={m.code}>{({PIX:'Pix',CREDIT_CARD:'Cartão de crédito',BOLETO:'Boleto',MANUAL_PAYMENT:'Pagamento manual'} as Record<string,string>)[m.code]||m.code}</option>)}</select></label>
-            {preview?.payment_methods?.length===0&&<p className="text-sm text-muted">Nenhum método disponível para este pedido.</p>}
+            {preview?.payment_methods?.length===0&&<p className="text-sm text-ink-soft" role={preview.payment_methods_erro ? 'alert' : undefined}>{preview.payment_methods_erro ? 'Pagamento temporariamente indisponível. Volte ao carrinho e tente novamente em instantes.' : 'Nenhum método disponível para este pedido.'}</p>}
             <label className="block text-sm">CPF/CNPJ (quando exigido pelo método)<input className="input mt-1" required={preview?.payment_methods?.find(m=>m.code===method)?.required_fields?.includes('tax_id')} inputMode="numeric" maxLength={18} value={comprador.documento} onChange={e=>setComprador(c=>({...c,documento:e.target.value}))}/></label>
             <p className="text-xs text-muted">Dados de cartão são fornecidos exclusivamente no ambiente seguro do provider. A confirmação é feita pelo servidor.</p>
           </fieldset>

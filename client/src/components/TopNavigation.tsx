@@ -32,6 +32,7 @@ import {
   type ModuleArea,
   type NavAreaNode,
   type NavGroupNode,
+  rotuloGrupo,
 } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 
@@ -391,7 +392,7 @@ function GroupHeading({ groupNode, destaque }: { groupNode: NavGroupNode; destaq
       }`}
     >
       <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
-      <span className="truncate">{groupNode.group}</span>
+      <span className="truncate">{rotuloGrupo(groupNode.group)}</span>
     </div>
   );
 }

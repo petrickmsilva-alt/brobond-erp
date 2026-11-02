@@ -26,6 +26,7 @@ import {
   type ModuleGroup,
   type NavAreaNode,
   type NavGroupNode,
+  rotuloGrupo,
 } from '../modules';
 import { Logo } from './Logo';
 import { useAuth } from '../auth/AuthContext';
@@ -284,7 +285,7 @@ function NavGroup({
           strokeWidth={1.9}
           aria-hidden="true"
         />
-        <span className="flex-1 truncate">{groupNode.group}</span>
+        <span className="flex-1 truncate">{rotuloGrupo(groupNode.group)}</span>
         <ChevronDown
           className={`h-3 w-3 shrink-0 text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
           aria-hidden="true"

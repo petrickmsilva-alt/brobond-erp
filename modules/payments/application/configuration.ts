@@ -52,8 +52,20 @@ export async function account(empresaId: number, code: ProviderCode, operationKe
   const capabilities = config?.ativo === true ? provider.capabilities(context) : [];
   return { provider, config, context, capabilities };
 }
-export async function candidates(input: RoutingContext): Promise<Candidate[]> {
+type AccountView = Awaited<ReturnType<typeof account>>;
+/** Memoização POR OPERAÇÃO (ex.: listar métodos): evita N+1 de provider × método. Nunca é global. */
+export type AccountCache = Map<ProviderCode, Promise<AccountView>>;
+export async function candidates(input: RoutingContext, cache?: AccountCache): Promise<Candidate[]> {
   const s = getStore();
+  const accountOf = (code: ProviderCode): Promise<AccountView> => {
+    if (!cache) return account(input.empresaId, code);
+    let hit = cache.get(code);
+    if (!hit) {
+      hit = account(input.empresaId, code);
+      cache.set(code, hit);
+    }
+    return hit;
+  };
   const [rules, method] = await Promise.all([
     s.list(R_ROUTING, { page: 1, pageSize: 1000, filter: { empresa_id: input.empresaId, method: input.method } }),
     s.findOneWhere(R_METHODS, { empresa_id: input.empresaId, code: input.method }),
@@ -71,7 +83,7 @@ export async function candidates(input: RoutingContext): Promise<Candidate[]> {
     return [];
   const out: Candidate[] = [];
   for (const p of providerRegistry.list()) {
-    const a = await account(input.empresaId, p.code);
+    const a = await accountOf(p.code);
     const cap = a.capabilities.find((c) => c.method === input.method);
     if (!cap) continue;
     // Compatibility rule is explicit and explainable; never silently picks a newly configured provider.
@@ -97,8 +109,9 @@ export async function candidates(input: RoutingContext): Promise<Candidate[]> {
 }
 export async function availableMethods(input: Omit<RoutingContext, 'method'>) {
   const out = [];
+  const cache: AccountCache = new Map();
   for (const method of METHODS) {
-    const routes = await candidates({ ...input, method });
+    const routes = await candidates({ ...input, method }, cache);
     if (routes.length)
       out.push({
         code: method,
