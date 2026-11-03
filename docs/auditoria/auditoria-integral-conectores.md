@@ -846,3 +846,16 @@ Um conector só pode ser declarado **CONFORME** quando todos os critérios aplic
 ## 16. Próximo passo
 
 Aguardando **aprovação expressa do Diretor** para iniciar qualquer implementação. Nenhuma correção, migration, alteração de variável, token, configuração da Meta, checkout, endpoint, commit, PR, merge, deploy ou disparo foi realizado.
+
+---
+
+## 17. Status de execução (atualizado após a execução das fases)
+
+Este relatório registra a auditoria em 2026-11-03 e **não foi reescrito** para refletir correções. O estado atual de cada fase está em:
+
+- Fases 0–1 (P0-01 e suspensão ML/Nuvemshop): `docs/auditoria/execucao-fase-0-1.md`, commit `0c0e6f5`.
+- Fases 2–3 (segredos, webhooks fail-closed, P2-10, placeholders e caminho canônico): `docs/auditoria/execucao-fases-2-3.md`, commits `300ba0c` e `1e5e57c`.
+- Plano de migração de segredos (não executado): `docs/seguranca/plano-migracao-segredos.md`.
+- Caminho canônico de pagamentos: `docs/pagamentos/ADR-001-motor-canonico.md`; homologação sandbox não executada: `docs/pagamentos/homologacao-sandbox.md`.
+
+Fases 4–7 aguardam decisões pendentes do Diretor (b, d, f) e evidências externas. Nada delas foi implementado. Todas as correções acima têm evidência **local** apenas; nenhuma foi verificada em homologação ou produção.
