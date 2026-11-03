@@ -28,6 +28,8 @@ import { celulasDaEmpresa, locaisDeSaida, reservadoDaCelula, reservadoDoProduto,
 import { attachImages } from '../uploads';
 import { gradeTamanhosDoProduto, nomesProdutos } from './grade';
 import type { Row, Tx } from '../store';
+import { PublicacaoFalha, publicarItemMercadoLivre, type ContextoCanal } from './publicacaoCanais';
+import { canalPublicacaoSuspenso } from './publicacaoSuspensao';
 import {
   CANAIS_PUBLICACAO,
   MAX_TENTATIVAS,
@@ -48,40 +50,11 @@ const R_PRODUTOS = () => getResource('produtos')!;
 // Erros de publicação (mensagem SEM token/segredo — só o essencial)
 // ----------------------------------------------------------------------------
 
-export class PublicacaoFalha extends Error {
-  readonly rejeitada: boolean;
-  constructor(mensagem: string, rejeitada = false) {
-    super(mensagem);
-    this.name = 'PublicacaoFalha';
-    this.rejeitada = rejeitada;
-  }
-}
+export { PublicacaoFalha } from './publicacaoCanais';
 
 function sanitizarErro(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
   return msg.replace(/(Bearer\s+|X-Auth-Token['"]?\s*[:=]\s*)[A-Za-z0-9._-]+/gi, '$1***').replace(/\s+/g, ' ').slice(0, 400);
-}
-
-const TIMEOUT_PUBLICACAO = 15_000;
-
-async function chamarApi(url: string, init: RequestInit): Promise<any> {
-  let resp: globalThis.Response;
-  try {
-    resp = await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_PUBLICACAO) });
-  } catch {
-    // Network exceptions can contain URLs, credentials and customer data.
-    throw new PublicacaoFalha('Falha de rede ao falar com o canal.');
-  }
-  if (!resp.ok) {
-    // Remote response bodies are untrusted and can echo tokens or PII.
-    throw new PublicacaoFalha(`O canal respondeu HTTP ${resp.status}.`);
-  }
-  const texto = await resp.text();
-  try {
-    return JSON.parse(texto);
-  } catch {
-    return null;
-  }
 }
 
 // ----------------------------------------------------------------------------
@@ -347,6 +320,11 @@ async function enfileirarPublicacaoInterna(
   }
   let versao = 0;
   for (const r of existentes) versao = Math.max(versao, Number(r.versao || 0));
+  // Vínculo com o anúncio já existente no canal: a versão mais recente que tem
+  // external_id. Sem isto a nova versão criaria um SEGUNDO anúncio (P0-01).
+  const vinculo = [...existentes]
+    .sort((a, b) => Number(b.versao || 0) - Number(a.versao || 0))
+    .find((r) => r.external_id != null && String(r.external_id) !== '');
   try {
     return await s.insert(
       R_PUBLICACOES(),
@@ -361,6 +339,7 @@ async function enfileirarPublicacaoInterna(
         tentativas: 0,
         proxima_tentativa_em: new Date().toISOString(),
         criado_por: criadoPor,
+        ...(vinculo ? { external_id: String(vinculo.external_id) } : {}),
       },
       tx
     );
@@ -397,6 +376,9 @@ export async function processarPublicacao(
     (linha.proxima_tentativa_em == null || Date.parse(String(linha.proxima_tentativa_em)) <= Date.now());
   const elegivel = estado === 'QUEUED' || estado === 'UPDATE_QUEUED' || estado === 'READY' || devido;
   if (!elegivel) return 'ignorada';
+  // Canal suspenso (ver publicacaoSuspensao.ts): nada é enviado e a linha
+  // permanece na fila, sem mudar de estado, até a liberação explícita.
+  if (canalPublicacaoSuspenso(String(linha.canal))) return 'ignorada';
 
   const reivindicada = await s.tryUpdateIf(
     R_PUBLICACOES(),
@@ -415,7 +397,7 @@ export async function processarPublicacao(
         ? reivindicada.payload
         : await montarPayloadPublicacao(empresaId, produtoId, canal)
     ) as PayloadPublicacao;
-    const externalId = await publicarNoCanal(empresaId, canal, payload);
+    const externalId = await publicarNoCanal(empresaId, canal, payload, reivindicada.external_id == null ? null : String(reivindicada.external_id));
     const concluida = await s.tryUpdateIf(R_PUBLICACOES(), id, { estado: 'PUBLISHING' }, {
       estado: 'PUBLISHED',
       external_id: externalId,
@@ -446,13 +428,16 @@ export async function processarPublicacao(
 export async function processarFilaPublicacoes(limite = 20): Promise<{ processadas: number; falhas: number }> {
   const s = getStore();
   const candidatas: Row[] = [];
+  // Linhas de canal suspenso são descartadas ANTES do limite: não podem
+  // ocupar as vagas dos canais liberados.
   for (const estado of ['QUEUED', 'UPDATE_QUEUED', 'READY'] as const) {
-    const out = await s.list(R_PUBLICACOES(), { page: 1, pageSize: limite, filter: { estado }, sort: 'id', dir: 'asc' });
-    candidatas.push(...out.rows);
+    const out = await s.list(R_PUBLICACOES(), { page: 1, pageSize: limite * 5, filter: { estado }, sort: 'id', dir: 'asc' });
+    candidatas.push(...out.rows.filter((r) => !canalPublicacaoSuspenso(String(r.canal))));
   }
-  const erros = await s.list(R_PUBLICACOES(), { page: 1, pageSize: limite * 2, filter: { estado: 'ERROR' }, sort: 'id', dir: 'asc' });
+  const erros = await s.list(R_PUBLICACOES(), { page: 1, pageSize: limite * 10, filter: { estado: 'ERROR' }, sort: 'id', dir: 'asc' });
   const agora = Date.now();
   for (const r of erros.rows) {
+    if (canalPublicacaoSuspenso(String(r.canal))) continue;
     const proxima = r.proxima_tentativa_em ? Date.parse(String(r.proxima_tentativa_em)) : null;
     if (proxima != null && proxima <= agora) candidatas.push(r);
   }
@@ -470,7 +455,12 @@ export async function processarFilaPublicacoes(limite = 20): Promise<{ processad
 // Processadores por canal
 // ----------------------------------------------------------------------------
 
-async function publicarNoCanal(empresaId: number, canal: CanalPublicacao, payload: PayloadPublicacao): Promise<string> {
+async function publicarNoCanal(
+  empresaId: number,
+  canal: CanalPublicacao,
+  payload: PayloadPublicacao,
+  externalIdAtual: string | null
+): Promise<string> {
   switch (canal) {
     case 'BROBOND':
       // A vitrine LÊ destas linhas: PUBLISHED + slug É a publicação real.
@@ -489,7 +479,7 @@ async function publicarNoCanal(empresaId: number, canal: CanalPublicacao, payloa
       return publicarWooCommerce(payload);
 
     case 'MERCADOLIVRE':
-      return publicarMercadoLivre(empresaId, payload);
+      return publicarMercadoLivre(empresaId, payload, externalIdAtual);
 
     case 'NUVEMSHOP':
       return publicarNuvemshop(empresaId, payload);
@@ -590,55 +580,46 @@ async function tokenDoConector(
   }
 }
 
-async function publicarMercadoLivre(empresaId: number, payload: PayloadPublicacao): Promise<string> {
-  const { accessToken } = await tokenDoConector(empresaId, 'MERCADOLIVRE');
-  const categoria = String(payload.metadados.ml_category_id || '').trim();
-  if (!categoria) {
-    throw new PublicacaoFalha(
-      'Categoria do Mercado Livre ausente: informe ml_category_id nos metadados do produto (ex.: MLB1234567) — o anúncio não é criado sem categoria.'
-    );
-  }
-  const listingType = String(payload.metadados.ml_listing_type_id || '').trim();
-  const item = await chamarApi('https://api.mercadolibre.com/items', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      title: payload.titulo.slice(0, 60),
-      category_id: categoria,
-      condition: payload.condicao === 'usado' ? 'used' : 'new',
-      currency_id: 'BRL',
-      price: payload.preco,
-      available_quantity: Math.max(0, Math.trunc(payload.disponivel)),
-      buying_mode: 'buy_it_now',
-      ...(listingType ? { listing_type_id: listingType } : {}),
-      free_shipping: { mode: 'not_allowed' },
-      ...(payload.sku ? { seller_custom_field: payload.sku, attributes: [{ id: 'SELLER_SKU', value_name: payload.sku }] } : {}),
-      ...(payload.descricao ? { description: payload.descricao } : {}),
-    }),
-  });
-  const id = item && typeof item === 'object' ? String((item as { id?: unknown }).id ?? '') : '';
-  if (!id) throw new PublicacaoFalha('O Mercado Livre não devolveu o id do anúncio.');
-  return id;
+/** Ponto de injeção para testes: token do conector sem credencial real. */
+export const dependenciasPublicacao = {
+  obterTokenCanal: (empresaId: number, provider: 'MERCADOLIVRE' | 'NUVEMSHOP') => tokenDoConector(empresaId, provider),
+};
+
+async function publicarMercadoLivre(
+  empresaId: number,
+  payload: PayloadPublicacao,
+  externalIdAtual: string | null
+): Promise<string> {
+  const { accessToken } = await dependenciasPublicacao.obterTokenCanal(empresaId, 'MERCADOLIVRE');
+  const ctx: ContextoCanal = { accessToken };
+  const resultado = await publicarItemMercadoLivre(
+    ctx,
+    {
+      sku: payload.sku,
+      titulo: payload.titulo,
+      descricao: payload.descricao,
+      preco: payload.preco,
+      disponivel: payload.disponivel,
+      condicao: payload.condicao,
+      categoria: String(payload.metadados.ml_category_id || '').trim(),
+      listingType: String(payload.metadados.ml_listing_type_id || '').trim(),
+    },
+    externalIdAtual
+  );
+  return resultado.externalId;
 }
 
-async function publicarNuvemshop(empresaId: number, payload: PayloadPublicacao): Promise<string> {
-  const { accessToken, shopId } = await tokenDoConector(empresaId, 'NUVEMSHOP');
-  if (!shopId) throw new PublicacaoFalha('Conexão Nuvemshop sem shop_id — reconecte o canal.');
-  const criado = await chamarApi(`https://api.nuvemshop.com.br/v1/${encodeURIComponent(shopId)}/products`, {
-    method: 'POST',
-    headers: { 'X-Auth-Token': accessToken, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: payload.titulo,
-      description: payload.descricao || payload.resumo || payload.titulo,
-      price: payload.preco,
-      ...(payload.sku ? { sku: payload.sku } : {}),
-      stock: Math.max(0, Math.trunc(payload.disponivel)),
-      status: payload.ativo ? 'open' : 'closed',
-    }),
-  });
-  const id = criado && typeof criado === 'object' ? String((criado as { id?: unknown }).id ?? '') : '';
-  if (!id) throw new PublicacaoFalha('A Nuvemshop não devolveu o id do produto.');
-  return id;
+/**
+ * Nuvemshop: publicação automática DESLIGADA. O código anterior usava o contrato
+ * legado v1 (preço e estoque no produto, sem variants), divergente da documentação
+ * 2025-03, e não tinha lookup nem atualização: criava duplicatas em retry.
+ * Religar exige decisão de migração de contrato (ver relatório de auditoria).
+ */
+async function publicarNuvemshop(_empresaId: number, _payload: PayloadPublicacao): Promise<string> {
+  throw new PublicacaoFalha(
+    'Publicação automática na Nuvemshop está desligada: o contrato de produtos precisa migrar para a versão 2025-03 antes de religar.',
+    true
+  );
 }
 
 // ----------------------------------------------------------------------------
