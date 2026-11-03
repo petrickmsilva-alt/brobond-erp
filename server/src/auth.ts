@@ -15,10 +15,11 @@ import { hashPassword, verifyPassword, verifyPasswordDetailed, hashAtualizado } 
 import { abrirSessao, revogarTodas, revogarUma, listSessoesAtivas as listarAtivas } from './sessoes';
 import { decifrarSegredoMfa, prepararDesafio, signMfaTicket, lerMfaTicket, cifrarSegredoMfa } from './mfa';
 import { EMPRESA_PADRAO, empresasDoUsuario } from './empresasAcesso';
+import { segredoJwt } from './chavesCifra';
 
 export { hashPassword, verifyPassword };
 
-const SECRET = process.env.JWT_SECRET || 'brobond-dev-secret';
+const SECRET = segredoJwt();
 if (!process.env.JWT_SECRET) {
   console.warn('⚠️  JWT_SECRET não definido — usando valor padrão (NÃO use em produção).');
 }
@@ -157,7 +158,8 @@ export function signToken(user: AuthUser, opts: SignOpts = {}): string {
 /** Verifica um JWT; devolve o payload ou null (nunca lança). */
 export function verifyToken(token: string): Record<string, any> | null {
   try {
-    return jwt.verify(token, SECRET) as Record<string, any>;
+    // Algoritmo fixado: o sistema só emite HS256; aceitar outro abre ataque de confusão.
+    return jwt.verify(token, SECRET, { algorithms: ['HS256'] }) as Record<string, any>;
   } catch {
     return null;
   }

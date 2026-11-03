@@ -12,8 +12,9 @@
 import { Server as SocketServer, type Socket } from 'socket.io';
 import type { Server as HttpServer } from 'node:http';
 import jwt from 'jsonwebtoken';
+import { segredoJwt } from './chavesCifra';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'brobond-dev-secret';
+const JWT_SECRET = segredoJwt();
 
 type AuthPayload = { id: number; name: string; email: string; perfil: string };
 
@@ -35,7 +36,7 @@ export function initWebSocket(httpServer: HttpServer): SocketServer {
     if (!token) return next(new Error('Token não informado'));
     let payload: any;
     try {
-      payload = jwt.verify(token, JWT_SECRET);
+      payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
     } catch {
       return next(new Error('Token inválido'));
     }

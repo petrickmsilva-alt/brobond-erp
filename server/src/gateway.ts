@@ -1069,8 +1069,12 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
     const anteriores = await s.list(R_GATEWAY_WEBHOOK_EVENTS, { page: 1, pageSize: 2, filter: { provider: providerId, evento_id: parsed.evento_id } });
     const anterior = anteriores.rows[0] ?? null;
     const rejeicaoLegadaSemEmpresa = anterior?.empresa_id == null && anterior?.status === 'ignorado';
-    if (anterior && ((!rejeicaoLegadaSemEmpresa && Number(anterior.empresa_id || 0) !== Number(empresaId || 0))
-      || extrairRefDoPayload(provider, lerPayloadWebhook(anterior.payload)) !== parsed.provider_ref)) {
+    const conflitoDeCobranca = !!anterior && ((!rejeicaoLegadaSemEmpresa && Number(anterior.empresa_id || 0) !== Number(empresaId || 0))
+      || extrairRefDoPayload(provider, lerPayloadWebhook(anterior.payload)) !== parsed.provider_ref);
+    if (conflitoDeCobranca) {
+      // P2-10: sem assinatura válida, o 409 revelaria a existência de evento_id
+      // de outra cobrança. Resposta uniforme 401, sem tocar no registro alheio.
+      if (!segredo || !assinaturaOk) return res.status(401).json({ error: 'Assinatura inválida.' });
       return res.status(409).json({ error: 'Evento já registrado para outra cobrança.' });
     }
     // Um evento que entrou em erro quando a empresa ainda não exigia assinatura

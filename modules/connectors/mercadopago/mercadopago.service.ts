@@ -282,8 +282,10 @@ export function mercadoPagoStatusToSaleStatus(status: string): 'PAID' | 'PENDING
  *
  * A plataforma envia `x-signature: ts=<ts>,v1=<hmac>` e `x-request-id`; o
  * manifesto assinado é `id:<data.id>;request-id:<request-id>;ts:<ts>;`
- * com HMAC-SHA256 do segredo configurado no painel. A verificação é
- * OBRIGATÓRIA sempre que `MERCADOPAGO_WEBHOOK_SECRET` estiver definida.
+ * com HMAC-SHA256 do segredo configurado no painel.
+ *
+ * FAIL-CLOSED: sem `MERCADOPAGO_WEBHOOK_SECRET` a entrega é recusada (antes
+ * retornava `true` e aceitava qualquer chamador — P1-02).
  */
 export function verifyMercadoPagoWebhookSignature(input: {
   dataId: string;
@@ -291,9 +293,7 @@ export function verifyMercadoPagoWebhookSignature(input: {
   xRequestId: string | null;
 }): boolean {
   const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET?.trim();
-  // Sem segredo configurado o endpoint ainda registra o evento — a
-  // aplicação da assinatura fica desligada por decisão de configuração.
-  if (!secret) return true;
+  if (!secret) return false;
   if (!input.xSignature || !input.xRequestId) return false;
 
   const parts = new Map<string, string>();
