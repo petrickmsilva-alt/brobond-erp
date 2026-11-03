@@ -488,9 +488,17 @@ Quando o Mercado Pago não confirma a criação da ordem, o Payment Engine devol
 - o servidor mantém o comportamento existente (pedido `ERRO`, reserva liberada) e o teste `provider PIX sem instrumento válido…` valida a mensagem honesta;
 - reabrir tentativas seguras exige prova de "não cobrado" do provedor e validação com o Mercado Pago real. **Pendência de homologação.**
 
-### 13.5 Carrossel da homepage — não implementado
+### 13.5 Carrossel da homepage — implementado com as imagens anexadas
 
-As imagens anexadas à tarefa (camiseta preta traseira, homens com camisetas vermelha/verde/preta, close de tecido, logo) **não estão no workspace**. Conforme a seção 34, nenhuma imagem foi inventada nem baixada. Manifesto de slots criado em `client/public/brand/hero/manifest.json` com status `ASSETS_NAO_RECEBIDOS`. O hero atual usa a foto real do catálogo.
+Componente `client/src/pages/commerce/loja/HeroCarrossel.tsx`, usado no topo de `/loja`. Imagens em `client/public/brand/hero/` (manifesto em `manifest.json`).
+
+- 5 slides: costas "Fala comigo", camiseta preta, branca, vermelha e bege. Logo BroBond sobreposta.
+- Imagens **excluídas** por marca d'água "Dola AI": `Fotos de catálogo.png` e `Fotos de catálogo (3).png`.
+- WebP 640w/1024w (`srcSet`), `object-cover` com `object-position` separado para mobile e desktop, sem distorção.
+- 1º slide `eager` + `fetchpriority=high`; demais `lazy` + `decoding=async`.
+- Setas, dots (`role=tab`), autoplay de 6 s, pausa em hover e foco, swipe no mobile, setas do teclado, `prefers-reduced-motion` desliga o autoplay. Sem modal e sem iframe.
+- **Limitação:** a foto de costas tem apenas 630x700 px, então fica suave em telas largas. Recomendado enviar a versão original em alta resolução.
+- **Não feito:** `<link rel=preload>` do primeiro slide (o `fetchpriority` cobre o caso principal).
 
 ### 13.6 Testes desta entrega
 
