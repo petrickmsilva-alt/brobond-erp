@@ -73,7 +73,7 @@ test('Payment Engine PostgreSQL: concurrent checkout, signed inbox, duplicate we
       creates++;
       return new Response(JSON.stringify({
         id: reference, status: 'pending', transaction_amount: 100, currency_id: 'BRL',
-        point_of_interaction: { transaction_data: { qr_code: `000201PIX-${reference}`, qr_code_base64: 'cGctZml4dHVyZS1xcg==' } },
+        transactions: { payments: [{ payment_method: { qr_code: `000201PIX-${reference}`, qr_code_base64: 'cGctZml4dHVyZS1xcg==' } }] },
       }));
     }
     return new Response(

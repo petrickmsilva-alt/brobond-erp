@@ -32,7 +32,7 @@ test('PG: confirmação tardia comprovada, conciliação de reembolso parcial/in
     if (String(url).endsWith('/refunds')) { calls++; const requested = Number(JSON.parse(String(init.body)).amount); refunded += calls === 1 ? 10 : requested; return new Response(JSON.stringify({ id: `pg-refund-${calls}-${suffix}`, payment_id: saleId, amount: requested, status: 'approved' })); }
     if (init.method === 'POST') return new Response(JSON.stringify({
       id: saleId, status: 'pending', transaction_amount: 100, currency_id: 'BRL',
-      point_of_interaction: { transaction_data: { qr_code: `000201PIX-${saleId}`, qr_code_base64: 'cGctZml4dHVyZS1xcg==' } },
+      transactions: { payments: [{ payment_method: { qr_code: `000201PIX-${saleId}`, qr_code_base64: 'cGctZml4dHVyZS1xcg==' } }] },
     }));
     return new Response(JSON.stringify({ id: saleId, status: refunded === 100 ? 'refunded' : 'approved', transaction_amount: amount,
       currency_id: 'BRL', transaction_amount_refunded: refunded }));
