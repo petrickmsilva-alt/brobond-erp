@@ -1,7 +1,7 @@
 import { configDaEmpresa } from '../../../server/src/gateway';
 import { decifrarSegredo, cifrarSegredo } from '../../../server/src/segredos';
 import { getStore } from '../../../server/src/services';
-import { providerRegistry } from '../providers/registry';
+import { providerRegistry, provedorImplementado } from '../providers/registry';
 import { R_METHODS, R_ROUTING } from '../infrastructure/resources';
 import { routePayment, type Candidate, type RoutingContext } from '../orchestration/provider-router';
 import { METHODS, type ProviderCode } from '../domain/payment';
@@ -136,6 +136,7 @@ export async function readiness(empresaId: number) {
       const configured = a.capabilities.length > 0;
       return {
         code: p.code,
+        implementado: provedorImplementado(p),
         name: (
           {
             MERCADO_PAGO: 'Mercado Pago',
