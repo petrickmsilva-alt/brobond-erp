@@ -16,6 +16,8 @@
 //   • Log aparado: 200 entregas por webhook (as mais recentes).
 // ============================================================
 import { createHmac, randomBytes } from 'node:crypto';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { empresaDoAtorAudit } from './empresa';
@@ -102,7 +104,75 @@ export function lerEventos(v: unknown): string[] {
   return [];
 }
 
-/** Valida a URL (em produção, barra rede interna — anti-SSRF básico). */
+/**
+ * Endereço que um webhook de saída não pode alcançar: loopback, rede privada,
+ * CGNAT, link-local (inclui metadados de nuvem 169.254.169.254), reservados,
+ * multicast e equivalentes IPv6 (inclusive IPv4 mapeado: ::ffff:10.0.0.1).
+ */
+export function enderecoInterno(endereco: string): boolean {
+  const a = String(endereco).toLowerCase().replace(/^\[|\]$/g, '');
+  const mapeado = a.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapeado) return enderecoInterno(mapeado[1]);
+  // O WHATWG URL normaliza ::ffff:a.b.c.d para a forma hexadecimal ::ffff:xxxx:yyyy.
+  const mapeadoHex = a.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mapeadoHex) {
+    const hi = parseInt(mapeadoHex[1], 16);
+    const lo = parseInt(mapeadoHex[2], 16);
+    return enderecoInterno(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+  }
+  const versao = isIP(a);
+  if (versao === 4) {
+    const [p1, p2] = a.split('.').map(Number);
+    return (
+      p1 === 0 || p1 === 10 || p1 === 127 ||
+      (p1 === 100 && p2 >= 64 && p2 <= 127) ||
+      (p1 === 169 && p2 === 254) ||
+      (p1 === 172 && p2 >= 16 && p2 <= 31) ||
+      (p1 === 192 && (p2 === 168 || p2 === 0)) ||
+      (p1 === 198 && (p2 === 18 || p2 === 19)) ||
+      p1 >= 224
+    );
+  }
+  if (versao === 6) {
+    return a === '::' || a === '::1' || /^f[cd]/.test(a) || /^fe[89ab]/.test(a) || a.startsWith('ff');
+  }
+  return false;
+}
+
+/** Nome de host que aponta para a rede interna por convenção (sem resolver DNS). */
+export function hostnameInterno(host: string): boolean {
+  const h = String(host).toLowerCase().replace(/\.$/, '');
+  if (isIP(h.replace(/^\[|\]$/g, ''))) return enderecoInterno(h);
+  return (
+    h === 'localhost' || h === 'metadata.google.internal' ||
+    /\.(localhost|local|internal|localdomain)$/.test(h)
+  );
+}
+
+export type ResolvedorDns = (host: string) => Promise<string[]>;
+const resolverPadrao: ResolvedorDns = async (host) =>
+  (await dnsLookup(host, { all: true, verbatim: true })).map((r) => r.address);
+
+/**
+ * Confere TODOS os endereços que o host resolve agora. Falha fechada: se não
+ * resolver, a entrega não acontece. Mensagem nunca revela o endereço.
+ * Limite conhecido: um DNS que mude depois desta checagem (rebinding) não é
+ * coberto aqui; a mitigação completa exige fixar o IP na conexão.
+ */
+export async function destinoInterno(host: string, resolver: ResolvedorDns = resolverPadrao): Promise<string | null> {
+  if (hostnameInterno(host)) return 'Em produção, webhooks não podem apontar para a rede interna.';
+  if (isIP(host.replace(/^\[|\]$/g, ''))) return null;
+  let enderecos: string[];
+  try {
+    enderecos = await resolver(host);
+  } catch {
+    return 'Não foi possível resolver o destino do webhook.';
+  }
+  if (!enderecos.length) return 'Não foi possível resolver o destino do webhook.';
+  return enderecos.some(enderecoInterno) ? 'O destino do webhook resolve para a rede interna.' : null;
+}
+
+/** Valida a URL (em produção, barra rede interna — anti-SSRF). */
 export function validarUrlWebhook(url: unknown): string | null {
   let u: URL;
   try {
@@ -112,11 +182,7 @@ export function validarUrlWebhook(url: unknown): string | null {
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'A URL deve começar com http:// ou https://.';
   if (process.env.NODE_ENV === 'production') {
-    const h = u.hostname.toLowerCase();
-    const interno =
-      h === 'localhost' || h.endsWith('.localhost') || h === '127.0.0.1' || h === '::1' || h === '[::1]' ||
-      /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h);
-    if (interno) return 'Em produção, webhooks não podem apontar para a rede interna.';
+    if (hostnameInterno(u.hostname)) return 'Em produção, webhooks não podem apontar para a rede interna.';
   }
   return null;
 }
@@ -170,10 +236,26 @@ function publicar(w: Row, contadores?: { entregas_24h: number; erros_24h: number
 // ----------------------------------------------------------------------------
 type ResultadoEntrega = { estado: 'ok' | 'erro'; status: number | null; corpo: string | null; erro: string | null; ms: number };
 
-async function postar(url: string, corpo: string, evento: string, segredo: string | null): Promise<ResultadoEntrega> {
+export type DepsPostagem = { fetch?: typeof fetch; resolver?: ResolvedorDns; producao?: boolean };
+
+export async function postar(
+  url: string,
+  corpo: string,
+  evento: string,
+  segredo: string | null,
+  deps: DepsPostagem = {}
+): Promise<ResultadoEntrega> {
   const inicio = Date.now();
   try {
-    const res = await fetch(url, {
+    const producao = deps.producao ?? process.env.NODE_ENV === 'production';
+    if (producao) {
+      const bloqueio = await destinoInterno(new URL(url).hostname, deps.resolver);
+      if (bloqueio) return { estado: 'erro', status: null, corpo: null, erro: bloqueio, ms: Date.now() - inicio };
+    }
+    const doFetch = deps.fetch ?? fetch;
+    // Redirecionamento NÃO é seguido: um 3xx poderia levar a um destino interno.
+    const res = await doFetch(url, {
+      redirect: 'manual',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -185,7 +267,8 @@ async function postar(url: string, corpo: string, evento: string, segredo: strin
     });
     const texto = await res.text().catch(() => '');
     const ok = res.status >= 200 && res.status < 300;
-    return { estado: ok ? 'ok' : 'erro', status: res.status, corpo: texto.slice(0, 2000) || null, erro: ok ? null : `HTTP ${res.status}`, ms: Date.now() - inicio };
+    const erro = ok ? null : res.status >= 300 && res.status < 400 ? `Redirecionamento não seguido (HTTP ${res.status})` : `HTTP ${res.status}`;
+    return { estado: ok ? 'ok' : 'erro', status: res.status, corpo: texto.slice(0, 2000) || null, erro, ms: Date.now() - inicio };
   } catch (e: any) {
     const msg = e?.name === 'TimeoutError' ? `Tempo esgotado (${TIMEOUT_MS / 1000}s)` : e?.message || 'Falha de rede';
     return { estado: 'erro', status: null, corpo: null, erro: String(msg).slice(0, 500), ms: Date.now() - inicio };
