@@ -12,7 +12,7 @@ const { PagBankProvider } = await import('../../modules/payments/providers/pagba
 const { MercadoPagoProvider } = await import('../../modules/payments/providers/mercado-pago');
 const { GenericPaymentProvider } = await import('../../modules/payments/providers/generic');
 const { capability } = await import('../../modules/payments/providers/payment-provider');
-const { paymentEngine } = await import('../../modules/payments/orchestration/payment-orchestrator');
+const { paymentEngine, validarCriacaoProvider } = await import('../../modules/payments/orchestration/payment-orchestrator');
 const { getStore } = await import('../src/services');
 const { RESOURCES } = await import('../src/resources');
 const { R_GATEWAY_CONFIGS } = await import('../src/gateway');
@@ -32,6 +32,16 @@ test('Payment Engine: formal lifecycle forbids paid cancellation, stale settleme
   assert.throws(() => transition('PAID', 'PENDING'));
   assert.equal(transition('PAID', 'DISPUTED'), 'DISPUTED');
 });
+test('Payment Engine: provider PIX contract rejects empty, missing identity/status, and missing PIX data', () => {
+  const valid = { reference: 'ORD-real-provider-id', status: 'PENDING' as const, action: { type: 'PIX', code: '000201-real-provider-code', qrCode: 'iVBOR-provider-image' } };
+  assert.doesNotThrow(() => validarCriacaoProvider('PIX', valid));
+  assert.doesNotThrow(() => validarCriacaoProvider('PIX', { ...valid, action: { type: 'PIX', code: '000201-real-provider-code', ticketUrl: 'https://www.mercadopago.com.br/ticket' } }));
+  for (const response of [null, undefined, {}, { ...valid, reference: '' }, { ...valid, status: undefined }, { ...valid, action: undefined }, { ...valid, action: { type: 'PIX', code: '', qrCode: 'iVBOR-provider-image' } }]) {
+    assert.throws(() => validarCriacaoProvider('PIX', response as any), (error: any) => error instanceof PaymentError && error.ambiguous);
+  }
+  assert.throws(() => validarCriacaoProvider('PIX', { ...valid, status: 'FAILED' } as any), (error: any) => error instanceof PaymentError && error.code === 'PAYMENT_DECLINED' && !error.ambiguous);
+});
+
 test('Payment Engine: money and bounded jitter retry', () => {
   assert.equal(minorUnits(109.9), 10990);
   assert.throws(() => minorUnits(NaN));
@@ -176,10 +186,11 @@ test('Payment Engine: checkout intent → adapter → inbox/state → order; con
       return new Response(
         JSON.stringify({
           id: 'mp_fixture',
-          status: 'pending',
-          transaction_amount: 100,
-          currency_id: 'BRL',
-          point_of_interaction: { transaction_data: { qr_code: 'test-code' } },
+          status: 'action_required',
+          status_detail: 'waiting_transfer',
+          total_amount: '100.00',
+          currency: 'BRL',
+          transactions: { payments: [{ payment_method: { qr_code: '000201-provider-code', qr_code_base64: 'iVBOR-provider-image' } }] },
         })
       );
     }
@@ -360,7 +371,10 @@ test('Payment Engine: actual orchestrated fallback records both attempts; busine
       });
     }
     mpCalls++;
-    return new Response(JSON.stringify({ id: `mp_fallback_${mpCalls}`, status: 'pending', transaction_amount: 10, currency_id: 'BRL' }));
+    return new Response(JSON.stringify({
+      id: `ORD-fallback-${mpCalls}`, status: 'action_required', total_amount: '10.00', currency: 'BRL',
+      transactions: { payments: [{ payment_method: { qr_code: '000201-provider-code', qr_code_base64: 'iVBOR-provider-image' } }] },
+    }));
   });
   async function order(suffix: string) {
     const id = `fallback-${suffix}`;
@@ -406,15 +420,19 @@ test('Payment Engine: actual orchestrated fallback records both attempts; busine
   assert.equal(mpCalls, 1);
   stripeStatus = 500;
   const c = await order('uncertain');
-  const pending = await paymentEngine.createForOrder(3, Number(c.id), 'PIX', 'fallback-uncertain-key');
-  assert.equal(pending.intent.status, 'PENDING');
+  await assert.rejects(
+    () => paymentEngine.createForOrder(3, Number(c.id), 'PIX', 'fallback-uncertain-key'),
+    (e: any) => e.status === 502
+  );
+  const pending = await s.findOneWhere(R_INTENTS, { empresa_id: 3, order_id: Number(c.id) });
+  assert.equal(pending?.status, 'PENDING');
   assert.equal(mpCalls, 1);
   const uncertainKey = keys.at(-1);
   stripeStatus = 200;
-  await paymentEngine.synchronize(3, Number(pending.intent.id));
+  await paymentEngine.synchronize(3, Number(pending?.id));
   assert.equal(keys.at(-1), uncertainKey);
   assert.equal(mpCalls, 1);
-  assert.equal((await paymentEngine.intent(3, Number(pending.intent.id))).status, 'REQUIRES_ACTION');
+  assert.equal((await paymentEngine.intent(3, Number(pending?.id))).status, 'REQUIRES_ACTION');
   const published = await s.list(R_ROUTING, { page: 1, pageSize: 10, filter: { empresa_id: 3 } });
   for (const rule of published.rows) await s.update(R_ROUTING, Number(rule.id), { enabled: false });
   const { candidates } = await import('../../modules/payments/application/configuration');

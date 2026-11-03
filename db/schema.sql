@@ -2960,6 +2960,7 @@ CREATE TABLE IF NOT EXISTS gateway_cobrancas (
   nosso_numero TEXT,
   linha_digitavel TEXT,
   qr_code TEXT,
+  qr_code_base64 TEXT,
   copia_cola TEXT,
   nsu TEXT,
   webhook_evento_id TEXT,
@@ -8401,12 +8402,17 @@ CREATE TABLE IF NOT EXISTS commerce_notificacoes (
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
   atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
   enviado_em TIMESTAMPTZ,
+  provider_message_id TEXT,
+  provider_status TEXT,
   CONSTRAINT uq_commerce_notificacoes_idempotencia UNIQUE (empresa_id, chave_idempotencia)
 );
 CREATE INDEX IF NOT EXISTS ix_commerce_notificacoes_fila
   ON commerce_notificacoes (empresa_id, estado, criado_em DESC);
 CREATE INDEX IF NOT EXISTS ix_commerce_notificacoes_pedido
   ON commerce_notificacoes (empresa_id, pedido_id, evento);
+CREATE INDEX IF NOT EXISTS ix_commerce_notificacoes_provider_message
+  ON commerce_notificacoes (empresa_id, provider_message_id)
+  WHERE provider_message_id IS NOT NULL;
 
 -- 3) NENHUMA alteração em `commerce_outbox`: os eventos de comunicação usam o
 --    tipo `sincronizacao` (acao='notificacao'), já aceito por 0068 e 0090.

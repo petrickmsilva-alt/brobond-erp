@@ -119,6 +119,47 @@ describe('Notificações transacionais — eventos, idempotência, retry e priva
     await assert.doesNotReject(() => registrarEventoSeguro(contato, { ...ctx, evento: 'PIX_GENERATED' }));
   });
 
+  test('WhatsApp Meta persiste message_id como REQUEST_ACCEPTED e concorrência não duplica envio', async (t) => {
+    await limpar();
+    const old = {
+      token: process.env.WHATSAPP_CLOUD_API_TOKEN,
+      phone: process.env.WHATSAPP_PHONE_NUMBER_ID,
+      template: process.env.WHATSAPP_TEMPLATE_TRANSACIONAL,
+    };
+    process.env.WHATSAPP_CLOUD_API_TOKEN = 'fixture-meta-token';
+    process.env.WHATSAPP_PHONE_NUMBER_ID = 'fixture-phone-number-id';
+    process.env.WHATSAPP_TEMPLATE_TRANSACIONAL = 'order_update_approved_fixture';
+    let calls = 0;
+    t.mock.method(globalThis, 'fetch', async () => {
+      calls++;
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      return new Response(JSON.stringify({ messaging_product: 'whatsapp', messages: [{ id: 'wamid.fixture-001' }] }), { status: 200 });
+    });
+    try {
+      await registrarEventoPedido(contato, ctx);
+      const wa = await s.findOneWhere(RESOURCES.commerce_notificacoes, {
+        empresa_id: 1, pedido_id: ctx.pedidoId, canal: 'WHATSAPP',
+      });
+      assert.ok(wa);
+      await s.update(RESOURCES.commerce_notificacoes, Number(wa.id), { estado: 'ERRO' });
+      const payload = { empresa_id: ctx.empresaId, pedido_id: ctx.pedidoId, evento: ctx.evento, pedido_externo: ctx.pedidoExterno };
+      await Promise.all([processarEventoNotificacao(payload), processarEventoNotificacao(payload)]);
+      assert.equal(calls, 1);
+      const rows = await s.list(RESOURCES.commerce_notificacoes, { page: 1, pageSize: 20, filter: { empresa_id: 1, pedido_id: ctx.pedidoId, canal: 'WHATSAPP' } });
+      assert.equal(rows.total, 1);
+      assert.equal(rows.rows[0]?.provider_message_id, 'wamid.fixture-001');
+      assert.equal(rows.rows[0]?.provider_status, 'REQUEST_ACCEPTED');
+      assert.equal(rows.rows[0]?.estado, 'ENVIADO');
+      // Reprocessing after Meta acceptance must not send the same notification again.
+      await processarEventoNotificacao(payload);
+      assert.equal(calls, 1);
+    } finally {
+      if (old.token === undefined) delete process.env.WHATSAPP_CLOUD_API_TOKEN; else process.env.WHATSAPP_CLOUD_API_TOKEN = old.token;
+      if (old.phone === undefined) delete process.env.WHATSAPP_PHONE_NUMBER_ID; else process.env.WHATSAPP_PHONE_NUMBER_ID = old.phone;
+      if (old.template === undefined) delete process.env.WHATSAPP_TEMPLATE_TRANSACIONAL; else process.env.WHATSAPP_TEMPLATE_TRANSACIONAL = old.template;
+    }
+  });
+
   test('isolamento multiempresa: evento da empresa A não aparece para B', async () => {
     await limpar();
     await registrarEventoPedido(contato, ctx);
