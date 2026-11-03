@@ -1,0 +1,17 @@
+{
+  "status": "ASSETS_RECEBIDOS",
+  "origem": "Anexos enviados pela equipe BroBond (2026-10-14). Imagens com marca d'água 'Dola AI' (Fotos de catálogo.png e Fotos de catálogo (3).png) foram EXCLUÍDAS.",
+  "processamento": "WebP, 640w e 1024w, sem distorção (object-cover com object-position por slide). Costas: única versão disponível (630x700), limitada para telas largas.",
+  "slides": [
+    { "id": 1, "arquivo": "costas-1x.webp", "descricao": "Camiseta preta BroBond, vista traseira, 'Fala comigo'", "mobile": "costas-1x.webp", "desktop": "costas-1x.webp", "resolucao": "630x700" },
+    { "id": 2, "arquivo": "preta-1024.webp", "descricao": "Homem com camiseta preta BroBond", "srcset": ["preta-640.webp", "preta-1024.webp"], "resolucao": "707x887" },
+    { "id": 3, "arquivo": "branca-1024.webp", "descricao": "Homem com camiseta branca BroBond", "srcset": ["branca-640.webp", "branca-1024.webp"], "resolucao": "1024x1536" },
+    { "id": 4, "arquivo": "vermelha-1024.webp", "descricao": "Homem com camiseta vermelha BroBond", "srcset": ["vermelha-640.webp", "vermelha-1024.webp"], "resolucao": "1024x1536" },
+    { "id": 5, "arquivo": "bege-1024.webp", "descricao": "Homem com camiseta bege BroBond e bermuda azul-marinho", "srcset": ["bege-640.webp", "bege-1024.webp"], "resolucao": "1024x1536" }
+  ],
+  "logo": { "arquivo": "logo.webp", "descricao": "Logo BroBond Wear colorida" },
+  "excluidos": [
+    { "arquivo": "Fotos de catálogo.png", "motivo": "marca d'água Dola AI" },
+    { "arquivo": "Fotos de catálogo (3).png", "motivo": "marca d'água Dola AI" }
+  ]
+}

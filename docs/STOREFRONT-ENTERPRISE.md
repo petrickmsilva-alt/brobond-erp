@@ -434,3 +434,126 @@ Gates locais verdes **não** significam homologação. Antes de
 | `FULL_COMMERCE_GO_LIVE` | **NO** | sem evidência de venda E2E real (compra PIX + webhook + baixa + envio) |
 
 **Sem merge, sem deploy, sem alteração de `main`, sem `backups/`.**
+
+---
+
+## 13. Ciclo final de venda — checkout por etapas, PIX e vitrine (esta entrega)
+
+Branch `arena/7d78aeec-brobond-erp`, base `main` `4d7380c` (PR #100 já incorporado). Reutiliza checkout (`server/src/commerce/vitrine.ts`), Payment Engine/Orchestrator (`modules/payments`), reserva (`estoque_reservas`), Outbox (`commerce_notificacoes`) e a vitrine existente. **Nenhuma arquitetura paralela, nenhuma migration, nenhum modal.**
+
+### 13.1 Auditoria — causa raiz encontrada
+
+| Tema | Estado encontrado | Ação |
+|---|---|---|
+| Checkout | Uma única tela; "Confirmar pedido" sempre visível, inclusive em Dados. Etapas eram apenas visuais. | Máquina de 4 etapas reais (Dados → Entrega → Pagamento → Revisão). Confirmação só na Revisão. Voltar permitido; avançar só com a etapa válida. |
+| Criação do pedido | Já idempotente por `chave_checkout`; reserva na mesma transação; cobrança depois; falha → `ERRO` + reserva liberada. | Mantido. |
+| Mensagem de falha do PIX | Genérica ("Tente novamente"). | Mensagem explícita para falha genérica: "Não foi possível gerar o PIX neste momento. Seu pedido não foi confirmado. Tente novamente." |
+| Carrinho após falha | Preservado (limpeza só após pedido criado). | Mantido e coberto por teste. |
+| Retry após falha | Mesma chave devolve o pedido em `ERRO`. | **Não alterado de propósito**: renovar a chave poderia gerar segunda cobrança quando o provedor responde de forma ambígua (ver 13.4). |
+| Adaptador Mercado Pago | `X-Idempotency-Key = checkout:<pedidoId>` determinística; mapeia `qr_code`, `qr_code_base64`, `ticket_url`. | Mantido. |
+| Homepage | Mesmo produto aparecia em Destaques, Ofertas e Novidades. | Deduplicação por `product_id` nas seções editoriais (`semRepeticaoEntreSecoes`). SKU **não** é chave, para não esconder produto legítimo. Coleção completa continua listando todos os produtos. |
+| "Abrir Loja" | Já abre `/loja` em nova aba. | `rel="noopener noreferrer"` explícito. |
+| Vitrine × ERP | `/loja/*` não tem links para `/commerce` nem "Voltar ao ERP". | Mantido (atende à seção 33). |
+
+### 13.2 Fluxo de checkout (cliente)
+
+```
+Dados (nome, e-mail, WhatsApp, telefone opcional, CPF quando exigido, marketing opt-in separado)
+  → "Continuar para entrega"
+Entrega (retirada: confirmação obrigatória | entrega: endereço completo quando frete manual)
+  → "Continuar para pagamento"
+Pagamento (somente métodos devolvidos pelo Payment Engine)
+  → "Continuar para revisão"
+Revisão (cliente, entrega, itens, método, total recalculado pelo servidor)
+  → "Confirmar pedido e pagar"  →  POST /api/loja/checkout  →  /loja/pedido/:token
+```
+
+O resumo de valores fica visível em todas as etapas. O navegador nunca envia preço, desconto, frete, estoque ou total.
+
+### 13.3 Estoque (regra mantida e testada)
+
+| Momento | Físico | Reservado | Disponível | Venda |
+|---|---|---|---|---|
+| Pedido pendente (PIX gerado) | 8 | 1 | 7 | 0 |
+| Pagamento aprovado (webhook) | 7 | 0 | 7 | 1 |
+| Expiração / falha | 8 | 0 | 8 | 0 |
+
+Nenhum caminho do checkout baixa estoque físico antes da aprovação. A regra acima é a mesma do motor canônico de estoque. A regra completa de 4 casos (físico/reservado/disponível/venda) tem regressão dedicada em PostgreSQL real: `server/test/pg/estoque-reserva-baixa-regressao.test.ts`, descrita na seção 14.
+
+### 13.4 Risco residual — falha ambígua do provedor
+
+Quando o Mercado Pago não confirma a criação da ordem, o Payment Engine devolve 502 "Criação do pagamento sem confirmação do provider". Nesse caso a cobrança **pode ter sido criada** do lado do provedor. Por isso:
+
+- o cliente **não** renova a chave de idempotência automaticamente;
+- o servidor mantém o comportamento existente (pedido `ERRO`, reserva liberada) e o teste `provider PIX sem instrumento válido…` valida a mensagem honesta;
+- reabrir tentativas seguras exige prova de "não cobrado" do provedor e validação com o Mercado Pago real. **Pendência de homologação.**
+
+### 13.5 Carrossel da homepage — implementado com as imagens anexadas
+
+Componente `client/src/pages/commerce/loja/HeroCarrossel.tsx`, usado no topo de `/loja`. Imagens em `client/public/brand/hero/` (manifesto em `manifest.json`).
+
+- 5 slides: costas "Fala comigo", camiseta preta, branca, vermelha e bege. Logo BroBond sobreposta.
+- Imagens **excluídas** por marca d'água "Dola AI": `Fotos de catálogo.png` e `Fotos de catálogo (3).png`.
+- WebP 640w/1024w (`srcSet`), `object-cover` com `object-position` separado para mobile e desktop, sem distorção.
+- 1º slide `eager` + `fetchpriority=high`; demais `lazy` + `decoding=async`.
+- Setas, dots (`role=tab`), autoplay de 6 s, pausa em hover e foco, swipe no mobile, setas do teclado, `prefers-reduced-motion` desliga o autoplay. Sem modal e sem iframe.
+- **Limitação:** a foto de costas tem apenas 630x700 px, então fica suave em telas largas. Recomendado enviar a versão original em alta resolução.
+- **Não feito:** `<link rel=preload>` do primeiro slide (o `fetchpriority` cobre o caso principal).
+
+### 13.6 Testes desta entrega
+
+- Front: `LojaFluxoPages.test.tsx` reescrito para as etapas (inclui: não confirmar sem passar pelas etapas; erro de pagamento preserva carrinho e chave; deduplicação da home).
+- Servidor: `commerce-exposure.test.ts` com asserção da falha ambígua do PIX.
+- PostgreSQL real: `npm run test:pg` executado localmente contra PostgreSQL 16.14 (binário oficial do pacote `@embedded-postgres`, banco vazio dedicado) com `psql` 16.2 no PATH. Resultado observado: 423 passam, 0 falham, 0 skips (`ERP-03 GATE PASS`; ver seção 14.4). O CI (`testes-postgres`) continua sendo a prova oficial do merge.
+- `smoke:pg` e a homologação com o Mercado Pago real continuam dependentes de execução no CI / ambiente externo.
+
+## 14. Reserva e baixa física — regressão em PostgreSQL real
+
+Teste: `server/test/pg/estoque-reserva-baixa-regressao.test.ts`. Sobe o servidor de verdade (HTTP), cria o pedido por `POST /loja/checkout`, paga por webhook assinado do provedor de teste, cancela/expira/converte pelas rotas e funções canônicas, e lê o estado **direto do banco**. Nenhum mock de estoque, transação, venda ou conversão.
+
+### 14.1 Definições (o que cada coluna significa)
+
+- **Físico** = soma de `estoques.quantidade` do produto na empresa (`/estoque`).
+- **Reservado** = soma de `estoque_reservas.quantidade` com `status = 'ativa'` e `tipo` em `reserva`/`empenho`/`bloqueio`.
+- **Disponível** = físico − reservado (regra de `estoqueCanonico.ts`).
+- **Vendas** = vendas operacionais distintas (`itens_venda`) do produto. O `sales` analítico existe desde o checkout (status `PENDING`), por isso não conta aqui.
+- **Saídas** = `movimentacoes` com `tipo = 'saida'` e `venda_id` preenchido.
+
+### 14.2 Regras provadas
+
+| Cenário | Físico | Reservado | Disponível | Vendas | Saídas | Reserva |
+|---|---|---|---|---|---|---|
+| C1 pedido pendente | 8 | 1 | 7 | 0 | 0 | `ativa` |
+| C2 pagamento aprovado (webhook) | 7 | 0 | 7 | 1 | 1 (qtd 1) | `consumida` |
+| C3a cancelado pelo operador | 8 | 0 | 8 | 0 | 0 | `liberada` |
+| C3b recusado pelo provedor (webhook) | 8 | 0 | 8 | 0 | 0 | `liberada` |
+| C3c expirado (varredura real) | 8 | 0 | 8 | 0 | 0 | `liberada` |
+| C4 webhook duplicado / novo event_id do mesmo pagamento | 7 | 0 | 7 | 1 | 1 | `consumida` |
+| C5 2 aprovações + 2 conversões simultâneas | 7 | 0 | 7 | 1 | 1 | `consumida` |
+| C6 tenant cruzado (empresa B) | 8 | 1 | 7 | 0 | 0 | `ativa` (intacta) |
+
+Os valores acima são os **observados** no PostgreSQL (linhas `ESTOQUE_REGRESSAO` no log do teste), não os esperados. Repetições (cancelamento, expiração, webhook de recusa) não mudam o estoque. A baixa física acontece **uma única vez**, na conversão do pagamento aprovado.
+
+### 14.3 Defeito encontrado e corrigido nesta entrega
+
+Na corrida de duas aprovações simultâneas (C5, antes da correção), os dois webhooks respondiam 200, mas o pedido terminava em `AGUARDANDO_CORRECAO` com a mensagem "Outra operação alterou estes dados ao mesmo tempo", a reserva continuava `ativa` e nenhuma venda era criada.
+
+Causa: a transação SERIALIZABLE da ponte (`converterOrdemMarketplaceEmVenda`) convertia o `40001` (conflito de serialização) em `409` de negócio. `converterPedidoSale` tratava esse 409 como pendência de correção, e nunca repetia a transação.
+
+Correção mínima, sem arquitetura paralela:
+- `server/src/marketplaceOperacional.ts`: o `40001` cru passa para o chamador (erros de negócio seguem traduzidos como antes);
+- `server/src/commerce/pedidos.ts`: `converterPedidoSale` repete a ponte com o `repetirSerial` que já existia.
+
+Nenhum dano financeiro ocorreu antes da correção (a baixa nunca foi duplicada; o pedido só ficava parado). Mas a conversão não convergia sozinha. Agora a corrida converge para `CONVERTIDO` com 1 venda e 1 saída.
+
+### 14.4 Execução local (PostgreSQL 16.14, banco vazio)
+
+- Regressão nova (`estoque-reserva-baixa-regressao.test.ts`): 8/8 passam, executada 3 vezes sem falha intermitente.
+- `npm run test:pg` completo: **423 pass, 0 fail, 0 skip** (`ERP-03 GATE PASS`), com `psql` 16.2 instalado para os 13 testes do wrapper.
+
+### 14.5 O que ainda NÃO está provado
+
+- Homologação com o Mercado Pago real (`REAL_PIX_HOMOLOGATION` = `PENDING_EXTERNAL`). A regressão usa o provedor de teste determinístico, fora de produção.
+- Reserva com tamanhos e múltiplos locais de saída (a regressão cobre produto sem variação de tamanho).
+- E-mail e WhatsApp: nenhum envio real foi testado.
+

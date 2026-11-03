@@ -236,7 +236,10 @@ export async function converterPedidoSale(empresaId: number, saleId: string): Pr
   try {
     // A ponte é DONA da sua transação SERIALIZABLE (o gancho de reservas roda
     // lá dentro, antes do faturamento) — aqui só orquecionamos a projeção.
-    const resultado = await converterOrdemMarketplaceEmVenda(String(sale.id), escopo);
+    // Corrida de aprovações: a transação SERIALIZABLE da ponte pode perder para
+    // outra (40001). Repete ANTES de decidir que o pedido precisa de correção;
+    // um 409 de negócio real não é repetido e segue o caminho abaixo.
+    const resultado = await repetirSerial(() => converterOrdemMarketplaceEmVenda(String(sale.id), escopo));
     const vendaId = resultado.vendaId;
     const projecao = await concluirProjecaoConversao(empresaId, pedido, vendaId);
     await agendarMargemSale(String(sale.id), empresaId);

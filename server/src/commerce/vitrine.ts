@@ -963,7 +963,14 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
     await paymentEngine.createForOrder(empresaId, Number(criado.pedido.id), method, `checkout:${criado.pedido.id}`, { taxId: comprador.documento ?? undefined });
   } catch (e) {
     await falharCheckout(empresaId, criado.pedido, criado.sale, e instanceof Error ? e.message : String(e));
-    throw e instanceof HttpError ? e : new HttpError(502, 'Não foi possível iniciar o pagamento do pedido. Tente novamente.');
+    throw e instanceof HttpError
+      ? e
+      : new HttpError(
+          502,
+          method === 'PIX'
+            ? 'Não foi possível gerar o PIX neste momento. Seu pedido não foi confirmado. Tente novamente.'
+            : 'Não foi possível iniciar o pagamento do pedido. Seu pedido não foi confirmado. Tente novamente.'
+        );
   }
 
   // NOTIFICATION ORCHESTRATOR — só registra eventos no outbox. Nenhum adapter

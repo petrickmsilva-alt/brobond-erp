@@ -18,6 +18,7 @@ import { PackageCheck, PackageSearch, ShieldCheck, Sparkles, Truck, X } from 'lu
 import { apiFetch, ApiError } from '../../../lib/api';
 import { LojaShell, precoLoja } from './LojaShell';
 import CardProduto, { EsqueletoCard, type CardProdutoDados } from './CardProduto';
+import HeroCarrossel from './HeroCarrossel';
 
 type Categoria = { id: number; nome: string; slug: string; total: number };
 type Secoes = { destaques: CardProdutoDados[]; novidades: CardProdutoDados[]; ofertas: CardProdutoDados[] };
@@ -47,6 +48,21 @@ function Secao({ id, titulo, subtitulo, produtos }: { id?: string; titulo: strin
       </ul>
     </section>
   );
+}
+
+/**
+ * Deduplica as seções editoriais por `product_id`: um mesmo produto que é
+ * destaque, oferta e novidade aparece UMA vez, na seção de maior prioridade
+ * (ordem da lista: Destaques → Ofertas → Novidades). Não usa SKU como chave
+ * para não esconder produto legítimo com código repetido.
+ */
+export function semRepeticaoEntreSecoes(listas: CardProdutoDados[][]): CardProdutoDados[][] {
+  const vistos = new Set<number>();
+  return listas.map((lista) => lista.filter((p) => {
+    if (vistos.has(p.id)) return false;
+    vistos.add(p.id);
+    return true;
+  }));
 }
 
 export default function LojaInicioPage() {
@@ -85,38 +101,16 @@ export default function LojaInicioPage() {
   const produtos = resposta?.produtos ?? [];
   const categorias = resposta?.categorias ?? [];
   const secoes = resposta?.secoes;
-  const hero = produtos.find((p) => !!p.foto_url)?.foto_url ?? (secoes?.destaques ?? []).find((p) => !!p.foto_url)?.foto_url ?? null;
   const temFiltro = !!(q || categoria || ordenar);
   const temProdutoNasSecoes = !!(secoes && Object.values(secoes).some((lista) => lista.length > 0));
   const totalColecao = resposta?.total_colecao ?? resposta?.total ?? 0;
+  const [destaquesUnicos, ofertasUnicas, novidadesUnicas] = semRepeticaoEntreSecoes([secoes?.destaques ?? [], secoes?.ofertas ?? [], secoes?.novidades ?? []]);
 
   return (
     <LojaShell>
       <div className="space-y-12">
-        {/* HERO — imagem REAL do catálogo quando houver; sem banner inventado. */}
-        <section className="relative overflow-hidden rounded-3xl bg-navy-900 text-white">
-          {hero && (
-            <img src={hero} alt="" aria-hidden="true" width={1200} height={600} loading="eager" {...({ fetchpriority: 'high' } as Record<string, string>)} decoding="async"
-              className="absolute inset-0 h-full w-full object-cover opacity-25" />
-          )}
-          <div className="relative flex min-h-[15rem] flex-col justify-center gap-4 px-6 py-10 sm:min-h-[20rem] sm:px-12">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.28em] text-brand-200">Coleção · Loja oficial</span>
-            <h1 className="max-w-2xl text-3xl font-semibold leading-tight tracking-tight sm:text-5xl">
-              Peças direto da fonte.
-            </h1>
-            <p className="max-w-xl text-sm leading-relaxed text-navy-100 sm:text-base">
-              Preço, disponibilidade e pagamento confirmados pelo servidor. Escolha sua peça e acompanhe o pedido do carrinho à entrega.
-            </p>
-            <div className="flex flex-wrap gap-3">
-              <a href="#colecao" className="inline-flex min-h-11 items-center rounded-full bg-white px-6 text-xs font-semibold uppercase tracking-wider text-navy-900 transition hover:bg-brand-100">
-                Ver coleção
-              </a>
-              <Link to="/loja/carrinho" className="inline-flex min-h-11 items-center rounded-full border border-white/50 px-6 text-xs font-semibold uppercase tracking-wider text-white transition hover:bg-white/10">
-                Meu carrinho
-              </Link>
-            </div>
-          </div>
-        </section>
+        {/* HERO — carrossel com imagens REAIS da marca (HeroCarrossel). */}
+        <HeroCarrossel />
 
         {/* CATEGORIAS REAIS */}
         {categorias.length > 0 && (
@@ -144,9 +138,9 @@ export default function LojaInicioPage() {
         {/* DESTAQUES / OFERTAS / NOVIDADES — só com dados reais */}
         {!temFiltro && (
           <div className="space-y-12">
-            <Secao titulo="Destaques" subtitulo="Peças marcadas como destaque no catálogo." produtos={secoes?.destaques ?? []} />
-            <Secao titulo="Ofertas" subtitulo="Preço promocional vigente, calculado pelo servidor." produtos={secoes?.ofertas ?? []} />
-            <Secao id="novidades" titulo="Novidades" subtitulo="Cadastros mais recentes publicados na loja." produtos={secoes?.novidades ?? []} />
+            <Secao titulo="Destaques" subtitulo="Peças marcadas como destaque no catálogo." produtos={destaquesUnicos} />
+            <Secao titulo="Ofertas" subtitulo="Preço promocional vigente, calculado pelo servidor." produtos={ofertasUnicas} />
+            <Secao id="novidades" titulo="Novidades" subtitulo="Cadastros mais recentes publicados na loja." produtos={novidadesUnicas} />
           </div>
         )}
 
