@@ -387,6 +387,10 @@ export async function converterOrdemMarketplaceEmVenda(
       };
     }, { isolation: 'serializable' })
     .catch((e) => {
+      // Conflito de serialização (40001) é RETENTÁVEL pelo chamador (repetirSerial
+      // em commerce/pedidos.ts). Traduzi-lo aqui para 409 de negócio fazia um
+      // pagamento aprovado cair em AGUARDANDO_CORRECAO sem nada a corrigir.
+      if (e?.code === '40001') throw e;
       throw toHttpError(e, getResource('vendas')!);
     });
 }
