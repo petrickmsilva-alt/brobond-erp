@@ -24,8 +24,9 @@ import { liberarReservaInterna } from '../estoqueTransferencia';
 import { connectorCuid } from '../../../modules/connectors/core/id';
 import { addOnSaleIngested } from '../../../modules/connectors/core/sale-events';
 import { enfileirarOutbox } from './outbox';
-import { registrarEventoSeguro, type ContatoPedido, type EventoNotificacao } from './notificacoes';
+import { registrarEventoSeguro, statusCanaisNotificacao, type ContatoPedido, type EventoNotificacao } from './notificacoes';
 import { mascararWhatsApp, mascararCPF } from './cliente';
+import { copiaColaPixValido, qrCodeBase64Valido, situacaoInstrumentosPix, ticketUrlPixValida } from '../../../modules/payments/domain/pix-instrument';
 import { liberarUsoCupom } from './promocoes';
 import { nomesProdutos } from './grade';
 import type { Row, Tx } from '../store';
@@ -376,7 +377,11 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
     if (resultado.evento === 'pago') {
       emitirEventoPedido(resultado.pedido, 'PAYMENT_APPROVED');
       emitirEventoPedido(resultado.pedido, 'ORDER_PROCESSING');
-    } else if (resultado.evento === 'cancelado' || resultado.evento === 'expirado') {
+    } else if (resultado.evento === 'expirado') {
+      // PIX vencido no provedor: o cliente recebe "pedido expirado" (não um
+      // cancelamento genérico) e a reserva já foi devolvida acima.
+      emitirEventoPedido(resultado.pedido, 'ORDER_EXPIRED');
+    } else if (resultado.evento === 'cancelado') {
       // Recusa real do provedor (`gateway_cobrancas.status='falhou'` →
       // pagamento REJECTED) é PAGAMENTO_RECUSADO, não só cancelamento genérico.
       if (resultado.pagamento === 'REJECTED') emitirEventoPedido(resultado.pedido, 'PAYMENT_REJECTED');
@@ -436,7 +441,7 @@ export async function expirarCheckoutsPendentes(agora = new Date()): Promise<num
     }, { isolation: 'serializable' }));
     if (mudou) {
       expirados += 1;
-      emitirEventoPedido(pedido, 'ORDER_CANCELLED');
+      emitirEventoPedido(pedido, 'ORDER_EXPIRED');
     }
   }
   return expirados;
@@ -649,7 +654,41 @@ export async function montarVisaoDaSale(
         marketing_opt_in: compradorBruto.marketing_opt_in === true,
       }
     : compradorBruto;
-  const acao = (engineAttempt?.safe_reference?.action || null) as Record<string, unknown> | null;
+  // Instrumentos PIX: SOMENTE das colunas próprias, validados no papel certo
+  // (EMV → copia_cola; imagem base64 real → qr_code_base64; https → ticket).
+  // Nada vem de `safe_reference`/payload e nada é gerado aqui.
+  const copiaCola = copiaColaPixValido(cobranca?.copia_cola) ? String(cobranca!.copia_cola).trim()
+    : copiaColaPixValido(cobranca?.qr_code) ? String(cobranca!.qr_code).trim() : null;
+  const qrBase64 = qrCodeBase64Valido(cobranca?.qr_code_base64) ? String(cobranca!.qr_code_base64).replace(/\s/g, '') : null;
+  const ticketUrl = ticketUrlPixValida(cobranca?.ticket_url) ? String(cobranca!.ticket_url).trim() : null;
+  const statusPagamento = cobranca
+    ? mapearEstadoPagamento(cobranca.status) ?? String(cobranca.status)
+    : pedido?.estado === 'ERRO'
+      ? 'ERROR'
+      : pedido?.estado === 'EXPIRADO'
+        ? 'EXPIRED'
+        : pedido?.estado === 'CANCELADO'
+          ? 'CANCELLED'
+          : pedido?.pagamento_estado
+            ? String(pedido.pagamento_estado)
+            : 'PENDING';
+  const acaoEngine = (engineAttempt?.safe_reference?.action || null) as Record<string, unknown> | null;
+  const redirectUrl = engineIntent?.status === 'REQUIRES_ACTION' && acaoEngine?.type === 'REDIRECT' &&
+    typeof acaoEngine.url === 'string' && /^https:\/\//i.test(acaoEngine.url) ? String(acaoEngine.url) : null;
+  const pagamentoBase = {
+    status: statusPagamento,
+    // Etapas do pagador que NÃO são PIX, sem expor status interno do engine:
+    // redirect seguro (cartão/checkout hospedado) e confirmação manual.
+    redirect_url: redirectUrl,
+    confirmacao_manual: engineIntent?.status === 'PENDING_MANUAL_CONFIRMATION',
+    provider: cobranca ? String(cobranca.provider) : null,
+    metodo: cobranca ? String(cobranca.metodo) : null,
+    valor: cobranca ? Number(cobranca.valor) : null,
+    copia_cola: copiaCola,
+    qr_code_base64: qrBase64,
+    ticket_url: ticketUrl,
+    expira_em: cobranca?.expires_em ? String(cobranca.expires_em) : pedido?.expira_em ? String(pedido.expira_em) : null,
+  };
   return {
     sale_id: String(sale.id),
     pedido: pedido
@@ -676,36 +715,31 @@ export async function montarVisaoDaSale(
           checkout_token: opcoes.publico && pedido.checkout_token ? String(pedido.checkout_token) : null,
         }
       : null,
-    pagamento: {
-      engine_status: engineIntent?.status || null,
-      engine_intent_id: !opcoes.publico && engineIntent ? Number(engineIntent.id) : null,
-      late_review_status: lateReview?.status || null,
-      action: acao,
-      status: cobranca
-        ? mapearEstadoPagamento(cobranca.status) ?? String(cobranca.status)
-        : pedido?.estado === 'ERRO'
-          ? 'ERROR'
-          : pedido?.estado === 'EXPIRADO'
-            ? 'EXPIRED'
-            : pedido?.estado === 'CANCELADO'
-              ? 'CANCELLED'
-              : pedido?.pagamento_estado
-                ? String(pedido.pagamento_estado)
-                : 'PENDING',
-      provider: cobranca ? String(cobranca.provider) : null,
-      metodo: cobranca ? String(cobranca.metodo) : null,
-      valor: cobranca ? Number(cobranca.valor) : null,
-      qr_code: cobranca?.qr_code ? String(cobranca.qr_code) : null,
-      // Dados REAIS retornados pelo Mercado Pago (Orders API / payments
-      // legado). Nenhum QR é gerado aqui: sem `qr_code_base64` a tela só
-      // mostra o Copia e Cola e um estado honesto de QR indisponível.
-      qr_code_base64: cobranca?.qr_code ? String(cobranca.qr_code) : acao?.qrCode ? String(acao.qrCode) : null,
-      ticket_url: cobranca?.ticket_url ? String(cobranca.ticket_url) : acao?.ticketUrl ? String(acao.ticketUrl) : null,
-      copia_cola: cobranca?.copia_cola ? String(cobranca.copia_cola) : null,
-      provider_order_id: cobranca?.provider_ref ? String(cobranca.provider_ref) : null,
-      expira_em: cobranca?.expires_em ? String(cobranca.expires_em) : pedido?.expira_em ? String(pedido.expira_em) : null,
-      provider_ref: cobranca && !opcoes.publico ? String(cobranca.provider_ref || '') : null,
-    },
+    // Visão PÚBLICA: só o que o comprador precisa para pagar/acompanhar.
+    // Nunca expõe status interno do engine, ids de intenção/Order do provider,
+    // revisão tardia, correlation_id ou a ação bruta do adapter (§24).
+    pagamento: opcoes.publico
+      ? pagamentoBase
+      : {
+          ...pagamentoBase,
+          engine_status: engineIntent?.status || null,
+          engine_intent_id: engineIntent ? Number(engineIntent.id) : null,
+          late_review_status: lateReview?.status || null,
+          provider_order_id: cobranca?.provider_ref ? String(cobranca.provider_ref) : null,
+          provider_ref: cobranca ? String(cobranca.provider_ref || '') : null,
+        },
+    ...(opcoes.publico
+      ? {}
+      : {
+          diagnostico: await diagnosticoPagamentoPedido(empresaId, {
+            pedido,
+            estado,
+            cobranca,
+            engineIntent,
+            engineAttempt,
+            lateReview,
+          }),
+        }),
     venda: venda
       ? {
           id: Number(venda.id),
@@ -727,6 +761,186 @@ export async function montarVisaoDaSale(
     })),
     timeline,
   };
+}
+
+type SituacaoNotificacao = {
+  estado: 'ENVIADO' | 'PENDENTE' | 'PROCESSANDO' | 'ERRO' | 'NAO_CONFIGURADO' | 'SEM_REGISTRO';
+  evento: string | null;
+  em: string | null;
+  motivo: string | null;
+};
+
+/** Última notificação real (não consolidada/ignorada) de um canal. */
+function situacaoDoCanal(linhas: Row[], canal: 'EMAIL' | 'WHATSAPP'): SituacaoNotificacao {
+  const ultima = linhas.filter((n) => String(n.canal) === canal && String(n.estado) !== 'IGNORADO').sort((a, b) => Number(b.id) - Number(a.id))[0];
+  if (!ultima) return { estado: 'SEM_REGISTRO', evento: null, em: null, motivo: null };
+  const naoConfigurado = String(ultima.estado) === 'PENDENTE' && String(ultima.provider_status || '') === 'NAO_CONFIGURADO';
+  return {
+    estado: naoConfigurado ? 'NAO_CONFIGURADO' : (String(ultima.estado) as SituacaoNotificacao['estado']),
+    evento: String(ultima.evento),
+    em: ultima.enviado_em ? String(ultima.enviado_em) : ultima.atualizado_em ? String(ultima.atualizado_em) : ultima.criado_em ? String(ultima.criado_em) : null,
+    // `ultimo_erro` só contém nomes de variáveis/mensagens normalizadas —
+    // nunca token, segredo ou payload do provedor.
+    motivo: ultima.ultimo_erro ? String(ultima.ultimo_erro).slice(0, 300) : null,
+  };
+}
+
+/**
+ * Diagnóstico operacional do pagamento (backoffice, sem modal): mostra o que
+ * EXISTE — nunca os valores sensíveis. PIX como DISPONÍVEL/AUSENTE, webhook
+ * RECEBIDO/NÃO RECEBIDO, e o estado real de cada canal de notificação.
+ */
+async function diagnosticoPagamentoPedido(
+  empresaId: number,
+  d: { pedido: Row | null; estado: string; cobranca: Row | null; engineIntent: Row | null; engineAttempt: Row | null | undefined; lateReview: Row | null }
+): Promise<Record<string, unknown>> {
+  const s = getStore();
+  const { pedido, cobranca, engineIntent, engineAttempt } = d;
+  let eventos: Row[] = [];
+  if (cobranca) {
+    if (s.kind === 'postgres') {
+      // Eventos vinculados à cobrança + históricos cujo id do evento carrega a
+      // referência (webhook `type=order` sem cobranca_id gravado).
+      const ref = String(cobranca.provider_ref || '');
+      const r = await query(
+        `SELECT id, evento, status, erro, recebido_em, processado_em FROM gateway_webhook_events
+          WHERE empresa_id = $1 AND (cobranca_id = $2 OR ($3 <> '' AND LOWER(provider) = LOWER($4) AND evento_id LIKE '%' || $3 || '%'))
+          ORDER BY id DESC LIMIT 20`,
+        [empresaId, Number(cobranca.id), ref, String(cobranca.provider || '')]
+      );
+      eventos = r.rows as Row[];
+    } else {
+      // Mesmo critério do PostgreSQL: vínculo explícito OU id do evento que
+      // carrega a referência do provedor (evento recebido ainda sem vínculo).
+      const ref = String(cobranca.provider_ref || '');
+      const provider = String(cobranca.provider || '').toLowerCase();
+      eventos = (await s.list(R_GATEWAY_WEBHOOK_EVENTS, { page: 1, pageSize: 500, sort: 'id', dir: 'desc', filter: { empresa_id: empresaId } })).rows
+        .filter((e) => Number(e.cobranca_id) === Number(cobranca.id) ||
+          (!!ref && String(e.provider || '').toLowerCase() === provider && String(e.evento_id || '').includes(ref)))
+        .slice(0, 20);
+    }
+  }
+  const ultimoEvento = eventos[0] ?? null;
+  const notificacoes = pedido
+    ? (await s.list(getResource('commerce_notificacoes')!, { page: 1, pageSize: 200, filter: { empresa_id: empresaId, pedido_id: Number(pedido.id) } })).rows
+    : [];
+  const pix = situacaoInstrumentosPix({
+    copia_cola: copiaColaPixValido(cobranca?.copia_cola) ? cobranca?.copia_cola : cobranca?.qr_code,
+    qr_code_base64: cobranca?.qr_code_base64,
+    ticket_url: cobranca?.ticket_url,
+  });
+  return {
+    pedido: pedido ? { id: Number(pedido.id), numero: String(pedido.pedido_externo || ''), estado: d.estado } : null,
+    pagamento: {
+      intent_id: engineIntent ? Number(engineIntent.id) : null,
+      provider: engineIntent?.provider ? String(engineIntent.provider) : cobranca ? String(cobranca.provider) : null,
+      metodo: engineIntent?.method ? String(engineIntent.method) : cobranca ? String(cobranca.metodo) : null,
+      status: engineIntent?.status ? String(engineIntent.status) : null,
+      cobranca_status: cobranca ? String(cobranca.status) : null,
+      provider_order_id: cobranca?.provider_ref ? String(cobranca.provider_ref) : engineAttempt?.provider_transaction_id ? String(engineAttempt.provider_transaction_id) : null,
+      falha: engineAttempt?.failure_code ? String(engineAttempt.failure_code) : null,
+      revisao_tardia: d.lateReview?.status ? String(d.lateReview.status) : null,
+    },
+    pix: { ...pix, expira_em: cobranca?.expires_em ? String(cobranca.expires_em) : null },
+    webhook: {
+      estado: eventos.length ? 'RECEBIDO' : 'NAO_RECEBIDO',
+      total: eventos.length,
+      ultimo: ultimoEvento
+        ? {
+            evento: ultimoEvento.evento ? String(ultimoEvento.evento) : null,
+            status: String(ultimoEvento.status || ''),
+            recebido_em: ultimoEvento.recebido_em ? String(ultimoEvento.recebido_em) : null,
+            processado_em: ultimoEvento.processado_em ? String(ultimoEvento.processado_em) : null,
+            erro: ultimoEvento.erro ? String(ultimoEvento.erro).slice(0, 300) : null,
+          }
+        : null,
+    },
+    notificacoes: { email: situacaoDoCanal(notificacoes, 'EMAIL'), whatsapp: situacaoDoCanal(notificacoes, 'WHATSAPP') },
+    canais: statusCanaisNotificacao(),
+    pode_atualizar: !!(engineIntent && engineIntent.provider && engineIntent.provider !== 'MANUAL' && engineAttempt?.provider_transaction_id),
+  };
+}
+
+// Consulta manual ao provider: no máximo 1 a cada 5 s por pedido (evita
+// rajadas de cliques/abas virando chamadas repetidas ao Mercado Pago).
+const ULTIMA_CONSULTA_MANUAL = new Map<string, number>();
+const INTERVALO_CONSULTA_MANUAL_MS = 5_000;
+
+/**
+ * POST /api/commerce/pedidos/:saleId/atualizar-pagamento — "Atualizar status
+ * do pagamento". Consulta o provider pela referência JÁ gravada (GET
+ * /v1/orders/{id}), completa QR/Copia e Cola/link e aplica o estado pela
+ * máquina canônica do Payment Engine. Idempotente: nunca cria cobrança, nunca
+ * cria segunda venda, nunca baixa estoque duas vezes.
+ */
+export async function atualizarPagamentoPedidoCommerce(req: Request, res: Response) {
+  const actor = currentUser(req);
+  const escopo = escopoDoAtor(actor);
+  // commerce_pedidos é somente leitura no CRUD: a ação usa a mesma alçada de
+  // endpoint de fluxo de converter/cancelar.
+  checkAccess(R_PEDIDOS(), actor, 'read');
+  checkFluxo(getResource('vendas')!, actor);
+  const saleId = String(req.params.saleId);
+  const s = getStore();
+  const sale = await s.findOneWhere(R_SALES(), { id: saleId, empresa_id: escopo.empresaId });
+  if (!sale) throw new HttpError(404, 'Pedido não encontrado.');
+  const pedido = await s.findOneWhere(R_PEDIDOS(), { empresa_id: escopo.empresaId, sale_id: saleId });
+  if (!pedido) throw new HttpError(409, 'Pedido sem projeção commerce.');
+  const intent = await s.findOneWhere(R_INTENTS, { empresa_id: escopo.empresaId, order_id: Number(pedido.id) });
+  if (!intent) throw new HttpError(409, 'Pedido sem pagamento no Payment Engine para consultar.');
+  const ultimaTentativa = (await s.list(R_ATTEMPTS, { page: 1, pageSize: 1, sort: 'id', dir: 'desc', filter: { empresa_id: escopo.empresaId, payment_intent_id: Number(intent.id) } })).rows[0];
+  if (!ultimaTentativa?.provider_transaction_id)
+    throw new HttpError(409, 'Pagamento sem referência do provider: a criação não foi confirmada. Nenhuma nova cobrança será criada.');
+
+  const chave = `${escopo.empresaId}:${Number(intent.id)}`;
+  const agora = Date.now();
+  const anterior = ULTIMA_CONSULTA_MANUAL.get(chave) ?? 0;
+  if (agora - anterior < INTERVALO_CONSULTA_MANUAL_MS) {
+    return res.json({ ok: true, atualizado: false, motivo: 'Consulta recente ao provedor; aguarde alguns segundos.', ...(await montarVisaoDaSale(escopo.empresaId, sale)) });
+  }
+  ULTIMA_CONSULTA_MANUAL.set(chave, agora);
+  if (ULTIMA_CONSULTA_MANUAL.size > 1000)
+    for (const [k, t] of ULTIMA_CONSULTA_MANUAL) if (agora - t > 60_000) ULTIMA_CONSULTA_MANUAL.delete(k);
+
+  const cobrancaAntes = pedido.cobranca_id ? await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: escopo.empresaId, id: Number(pedido.cobranca_id) }) : null;
+  const antes = {
+    pedido_estado: String(pedido.estado),
+    engine_status: String(intent.status),
+    cobranca_status: cobrancaAntes ? String(cobrancaAntes.status) : null,
+    pix: cobrancaAntes ? situacaoInstrumentosPix({ copia_cola: cobrancaAntes.copia_cola ?? cobrancaAntes.qr_code, qr_code_base64: cobrancaAntes.qr_code_base64, ticket_url: cobrancaAntes.ticket_url }) : null,
+  };
+  const { paymentEngine } = await import('../../../modules/payments/orchestration/payment-orchestrator');
+  try {
+    const sincronizado = await paymentEngine.synchronize(escopo.empresaId, Number(intent.id), { allowCreateReplay: false });
+    if (sincronizado === 'not-configured')
+      throw new HttpError(503, 'Gateway de pagamento não configurado (credencial ou segredo de webhook ausente). Nada foi consultado.');
+    if (sincronizado === 'manual') throw new HttpError(409, 'Pagamento manual: não há provedor para consultar.');
+    await paymentEngine.deliverToCommerce(escopo.empresaId, Number(intent.id));
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(502, 'O provedor de pagamento não respondeu de forma verificável. Nada foi alterado; tente novamente em instantes.');
+  }
+  const pedidoDepois = await s.findOneWhere(R_PEDIDOS(), { empresa_id: escopo.empresaId, id: Number(pedido.id) });
+  const intentDepois = await s.findOneWhere(R_INTENTS, { empresa_id: escopo.empresaId, id: Number(intent.id) });
+  const cobrancaDepois = pedidoDepois?.cobranca_id ? await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: escopo.empresaId, id: Number(pedidoDepois.cobranca_id) }) : null;
+  const depois = {
+    pedido_estado: String(pedidoDepois?.estado ?? pedido.estado),
+    engine_status: String(intentDepois?.status ?? intent.status),
+    cobranca_status: cobrancaDepois ? String(cobrancaDepois.status) : null,
+    pix: cobrancaDepois ? situacaoInstrumentosPix({ copia_cola: cobrancaDepois.copia_cola ?? cobrancaDepois.qr_code, qr_code_base64: cobrancaDepois.qr_code_base64, ticket_url: cobrancaDepois.ticket_url }) : null,
+  };
+  await s.audit({
+    empresa_id: escopo.empresaId,
+    usuario_id: actor.id || null,
+    usuario: actor.name,
+    acao: 'ajuste',
+    recurso: 'commerce_pedidos',
+    registro_id: Number(pedido.id),
+    descricao: 'Status do pagamento consultado no provedor (atualização manual)',
+    dados: { antes, depois },
+  });
+  const saleAtual = (await s.findOneWhere(R_SALES(), { id: saleId, empresa_id: escopo.empresaId })) ?? sale;
+  res.json({ ok: true, atualizado: true, ...(await montarVisaoDaSale(escopo.empresaId, saleAtual)) });
 }
 
 /** GET /api/commerce/pedidos/:saleId — detalhe completo. */

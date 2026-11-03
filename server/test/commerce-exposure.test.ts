@@ -16,6 +16,11 @@ const { cotarFrete } = await import('../src/commerce/frete');
 const vitrine = await import('../src/commerce/vitrine');
 const { R_GATEWAY_CONFIGS, R_GATEWAY_COBRANCAS, registrarProvider, mercadopagoProvider, publicGatewayRouter, setOnCobrancaAlterada } = await import('../src/gateway');
 const { cifrarSegredo } = await import('../src/segredos');
+const { PIX_REFRESH_DELAYS_MS } = await import('../../modules/payments/providers/mercado-pago');
+const { mensagemPixSemInstrumento } = await import('../../modules/payments/orchestration/payment-orchestrator');
+// Fixtures no formato do provedor: PNG 1x1 real e BR Code EMV de exemplo.
+const PIX_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const PIX_EMV = '00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D';
 const s = getStore();
 const actor = { id: 1, name: 'Teste isolado', perfil: 'admin' as const, empresa_id: 1 };
 const wrap = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => { Promise.resolve(fn(req, res)).catch(next); };
@@ -163,9 +168,10 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
       assert.equal(input.valor, 80, 'valor do cliente não é autoridade');
       const reservas = await s.list(RESOURCES.estoque_reservas, { page: 1, pageSize: 100, filter: { empresa_id: 1, produto_id: produtoId, status: 'ativa' } });
       assert.equal(reservas.total, 1, 'reserva existe antes do adapter de pagamento');
+      // Contrato canônico: qr_code/copia_cola = BR Code EMV; qr_code_base64 = imagem.
       return {
         provider_ref: 'somente-teste-sem-rede', status: 'pendente',
-        qr_code: 'iVBORw0KGgoAAAANSUhEUgABAAAA', copia_cola: 'fixture-pix-sem-valor-financeiro',
+        qr_code: PIX_EMV, copia_cola: PIX_EMV, qr_code_base64: PIX_PNG,
         ticket_url: 'https://www.mercadopago.com.br/fixture',
       };
     } });
@@ -182,15 +188,20 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
       const acompanhamento = await request(app).get(`/api/loja/pedidos/${criado.body.pedido.checkout_token}`).expect(200);
       assert.equal(acompanhamento.body.itens[0].quantidade, 2);
       assert.equal(acompanhamento.body.pagamento.provider, 'mercadopago');
-      assert.equal(acompanhamento.body.pagamento.copia_cola, 'fixture-pix-sem-valor-financeiro');
+      assert.equal(acompanhamento.body.pagamento.copia_cola, PIX_EMV);
       assert.equal(acompanhamento.body.pagamento.ticket_url, 'https://www.mercadopago.com.br/fixture');
-      assert.equal(acompanhamento.body.pagamento.qr_code_base64, 'iVBORw0KGgoAAAANSUhEUgABAAAA');
+      assert.equal(acompanhamento.body.pagamento.qr_code_base64, PIX_PNG);
+      // Página pública: nada de internals do engine nem campo ambíguo.
+      for (const interno of ['qr_code', 'engine_status', 'engine_intent_id', 'action', 'provider_order_id', 'provider_ref', 'diagnostico'])
+        assert.equal(interno in acompanhamento.body.pagamento, false, `campo interno ${interno} exposto na página pública`);
+      assert.equal('diagnostico' in acompanhamento.body, false);
       const orderRow = await s.findOneWhere(RESOURCES.commerce_pedidos, { empresa_id: 1, chave_checkout: body.chave });
       assert.ok(orderRow?.cobranca_id);
       const charge = await s.get(R_GATEWAY_COBRANCAS, Number(orderRow?.cobranca_id));
       assert.equal(charge?.ticket_url, 'https://www.mercadopago.com.br/fixture');
-      assert.equal(charge?.qr_code_base64, 'iVBORw0KGgoAAAANSUhEUgABAAAA');
-      assert.equal(charge?.copia_cola, 'fixture-pix-sem-valor-financeiro');
+      assert.equal(charge?.qr_code_base64, PIX_PNG);
+      assert.equal(charge?.copia_cola, PIX_EMV);
+      assert.equal(charge?.qr_code, PIX_EMV, 'qr_code guarda o BR Code, nunca a imagem');
       await new Promise((resolve) => setTimeout(resolve, 15));
       const pixEvent = await s.list(RESOURCES.commerce_notificacoes, { page: 1, pageSize: 20, filter: { empresa_id: 1, pedido_id: Number(orderRow?.id), evento: 'PIX_GENERATED' } });
       assert.ok(pixEvent.total > 0, 'PIX_GENERATED é enfileirado após cobrança válida ser persistida');
@@ -204,6 +215,8 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
   });
 
   test('provider PIX sem instrumento válido nunca completa checkout e devolve a reserva', async () => {
+    const atrasos = PIX_REFRESH_DELAYS_MS.valores;
+    PIX_REFRESH_DELAYS_MS.valores = []; // sem consultas de refresh (nenhuma rede)
     registrarProvider({ ...mercadopagoProvider, async criaCobranca() {
       cobrancas++;
       return { provider_ref: 'ord-sem-dados-pix', status: 'pendente' };
@@ -211,9 +224,11 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
     try {
       const body = { chave: 'checkout-pix-ambiguous-test', itens: itens(), comprador };
       const falha = await request(app).post('/api/loja/checkout').send(body).expect(502);
-      // Falha ambígua do provedor (cobrança possivelmente criada): mensagem honesta, sem "pago".
-      assert.match(JSON.stringify(falha.body), /Criação do pagamento sem confirmação/);
-      assert.doesNotMatch(JSON.stringify(falha.body), /pago|aprovad/i);
+      // Provedor respondeu sem QR, Copia e Cola e link: falha de integração
+      // honesta (referência já persistida, nenhuma nova cobrança), sem "pago".
+      assert.equal(falha.body.error, mensagemPixSemInstrumento('MERCADO_PAGO'));
+      // O nome do provedor ("Mercado Pago") não conta: a mensagem nunca diz pago/aprovado.
+      assert.doesNotMatch(JSON.stringify(falha.body).replace(/Mercado Pago/g, ''), /pago|aprovad/i);
       const pedido = await s.findOneWhere(RESOURCES.commerce_pedidos, { empresa_id: 1, chave_checkout: body.chave });
       assert.ok(pedido);
       assert.equal(pedido.estado, 'ERRO');
@@ -224,7 +239,9 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
       assert.equal(notificacoes.total, 0);
       const publico = await request(app).get(`/api/loja/pedidos/${pedido.checkout_token}`).expect(200);
       assert.equal(publico.body.pagamento.status, 'ERROR');
-    } finally { registrarProvider(mercadopagoProvider); }
+      assert.equal(publico.body.pagamento.copia_cola, null);
+      assert.equal(publico.body.pagamento.qr_code_base64, null);
+    } finally { registrarProvider(mercadopagoProvider); PIX_REFRESH_DELAYS_MS.valores = atrasos; }
   });
 
   test('Mercado Pago usa idempotência na API oficial e manifesto de assinatura com ponto e vírgula final', async (t) => {

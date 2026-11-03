@@ -22,6 +22,9 @@ type Linha = {
   nome: string;
   ativo: boolean;
   preco_base: number;
+  /** Físico total (todas as células) e reservas ativas — só exibição. */
+  fisico?: number;
+  reservado?: number;
   disponivel: number;
   na_vitrine: boolean;
   slug: string | null;
@@ -94,6 +97,20 @@ export default function CommerceProdutosPage() {
       header: 'Preço base',
       align: 'right',
       render: (r) => <span className="tabular-nums">{grana(r.preco_base)}</span>,
+    },
+    {
+      key: 'fisico',
+      header: 'Físico',
+      align: 'right',
+      render: (r) => <span className="tabular-nums">{r.fisico ?? '—'}</span>,
+    },
+    {
+      key: 'reservado',
+      header: 'Reservado',
+      align: 'right',
+      // Checkout pendente RESERVA (não baixa o físico); só o pagamento
+      // aprovado consome a reserva e baixa o estoque físico.
+      render: (r) => <span className={`tabular-nums ${(r.reservado ?? 0) > 0 ? 'text-warning' : 'text-muted'}`}>{r.reservado ?? '—'}</span>,
     },
     {
       key: 'disponivel',

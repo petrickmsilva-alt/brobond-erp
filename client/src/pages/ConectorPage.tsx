@@ -99,10 +99,16 @@ type PanelContent = {
   matched: boolean;
 };
 
+type StoreSales = { count: number; paidCount: number; paidRevenueCents: number; pendingCount: number };
+
 type ConnectorPanel = {
   provider: string;
+  /** Receita CONFIRMADA: somente vendas pagas (pendente/estornado/cancelado não contam). */
   revenueCents: number;
   salesCount: number;
+  paidSalesCount?: number;
+  /** Só Mercado Pago: vendas da loja própria processadas pelo Payment Engine. */
+  storeSales?: StoreSales | null;
   eventCount: number;
   sales: PanelSale[];
   events: PanelEvent[];
@@ -259,6 +265,7 @@ const EMPTY_PANEL: ConnectorPanel = {
 export default function ConectorPage({ module }: { module: Module }) {
   const provider = String(module.connector ?? '');
   const slug = PATH[provider] ?? provider.toLowerCase();
+  const isMercadoPago = provider === 'MERCADOPAGO';
 
   const [status, setStatus] = useState<ConnectorStatus | null>(null);
   const [panel, setPanel] = useState<ConnectorPanel>(EMPTY_PANEL);
@@ -449,10 +456,13 @@ export default function ConectorPage({ module }: { module: Module }) {
           {/* a) Bloco de KPIs superiores — 5 colunas                      */}
           {/* ------------------------------------------------------------ */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-            <Kpi label="Pedidos Importados" value={String(status?.importedCount ?? 0)} tone="emerald" />
+            {/* Mercado Pago: os pedidos SINCRONIZADOS da conta MP (importados em
+                `sales`) são outra coisa que as vendas da BroBond Store (loja
+                própria, Payment Engine) — rótulos explícitos para não somar. */}
+            <Kpi label={isMercadoPago ? 'Pedidos sincronizados do Mercado Pago' : 'Pedidos Importados'} value={String(status?.importedCount ?? 0)} tone="emerald" />
             <Kpi label="Pedidos Ignorados" value={String(status?.duplicatedCount ?? 0)} tone="amber" />
             <Kpi label="Falhas" value={String(status?.failedCount ?? 0)} tone="red" />
-            <Kpi label="Receita do Canal" value={formatMoney(panel.revenueCents)} tone="amber" />
+            <Kpi label="Receita confirmada (pagos)" value={formatMoney(panel.revenueCents)} tone="amber" />
             <Kpi label="Última Sincronização" value={formatDate(status?.lastSyncAt ?? null)} tone="cyan" />
           </div>
 
@@ -460,7 +470,10 @@ export default function ConectorPage({ module }: { module: Module }) {
           {/* b) Bloco central dividido — vendas | webhooks                */}
           {/* ------------------------------------------------------------ */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Panel title="Vendas do canal" subtitle={`${panel.salesCount} no total`}>
+            <Panel
+              title={isMercadoPago ? 'Pedidos sincronizados (conta Mercado Pago)' : 'Vendas do canal'}
+              subtitle={`${panel.salesCount} no total${panel.paidSalesCount != null ? ` · ${panel.paidSalesCount} pago(s)` : ''}`}
+            >
               {panel.sales.length === 0 ? (
                 <PanelEmpty
                   icon={<ShoppingCart className="h-6 w-6" />}
@@ -511,6 +524,25 @@ export default function ConectorPage({ module }: { module: Module }) {
               )}
             </Panel>
           </div>
+
+          {isMercadoPago && (
+            <Panel title="Vendas da BroBond Store" subtitle="Loja própria · pagamentos processados pelo Payment Engine">
+              {!panel.storeSales || panel.storeSales.count === 0 ? (
+                <PanelEmpty
+                  icon={<ShoppingCart className="h-6 w-6" />}
+                  message="Nenhuma venda da loja própria ainda"
+                  hint="Cada checkout da BroBond Store pago via PIX aparece aqui — separado dos pedidos sincronizados da conta."
+                />
+              ) : (
+                <div className="grid grid-cols-2 gap-3 p-5 sm:grid-cols-4">
+                  <Kpi label="Pedidos da loja" value={String(panel.storeSales.count)} tone="slate" />
+                  <Kpi label="Pagos" value={String(panel.storeSales.paidCount)} tone="emerald" />
+                  <Kpi label="Aguardando pagamento" value={String(panel.storeSales.pendingCount)} tone="amber" />
+                  <Kpi label="Receita confirmada da loja" value={formatMoney(panel.storeSales.paidRevenueCents)} tone="cyan" />
+                </div>
+              )}
+            </Panel>
+          )}
 
           {/* ------------------------------------------------------------ */}
           {/* c) Bloco inferior largo — conteúdo importado + sync neon     */}

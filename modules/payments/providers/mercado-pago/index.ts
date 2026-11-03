@@ -8,7 +8,8 @@ const legacy = async () => {
   return p;
 };
 import { PaymentError } from '../../domain/payment';
-import type { GatewayContext, MetodoCobranca } from '../../../../server/src/gateway';
+import { normalizarInstrumentosPix, temInstrumentoPix, type PixInstrumentos } from '../../domain/pix-instrument';
+import type { CobrancaProviderResult, GatewayContext, MetodoCobranca } from '../../../../server/src/gateway';
 import { providerRequest } from '../http';
 export const legacyMethods: Partial<Record<PaymentInput['method'], MetodoCobranca>> = {
   PIX: 'pix',
@@ -16,6 +17,14 @@ export const legacyMethods: Partial<Record<PaymentInput['method'], MetodoCobranc
   CREDIT_CARD: 'cartao_credito',
   DEBIT_CARD: 'cartao_debito',
 };
+/** Instrumentos PIX de um resultado legado — cada campo no seu papel. */
+function instrumentosDoLegado(r: CobrancaProviderResult | null | undefined): PixInstrumentos {
+  if (!r) return {};
+  return normalizarInstrumentosPix({ code: r.copia_cola ?? r.qr_code, qrCodeBase64: r.qr_code_base64, ticketUrl: r.ticket_url, expiresAt: r.expires_em });
+}
+const espera = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Consulta curta e LIMITADA de uma Order recém-criada (criação assíncrona do PSP). */
+export const PIX_REFRESH_DELAYS_MS = { valores: [500, 1000] };
 const legacyContext = (ctx: ProviderContext): GatewayContext => ({
   empresaId: ctx.empresaId,
   operationKey: ctx.operationKey,
@@ -62,17 +71,43 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
         parcelas: input.installments,
         expira_em: input.expiresAt,
       });
+      if (input.method !== 'PIX') {
+        return {
+          reference: r.provider_ref,
+          status: r.status === 'falhou' ? 'FAILED' : 'PENDING',
+          action: { type: input.method, code: r.linha_digitavel || undefined, ticketUrl: r.ticket_url || undefined, expiresAt: r.expires_em || undefined },
+        };
+      }
+      // PIX: payment_method.qr_code → code (Copia e Cola), qr_code_base64 →
+      // qrCodeBase64 (imagem), ticket_url → ticketUrl. Nenhum campo é gerado.
+      let instrumentos = instrumentosDoLegado(r);
+      let status: PaymentResult['status'] = r.status === 'falhou' ? 'FAILED' : 'PENDING';
+      // Criação ASSÍNCRONA documentada pela Orders API: a Order pode nascer
+      // `processing` sem os dados do PIX. Consulta curta e limitada pela MESMA
+      // Order (GET /v1/orders/{id}) — nunca uma nova cobrança. Falha de leitura
+      // não apaga a referência já devolvida (ela é persistida pelo engine).
+      for (const atraso of PIX_REFRESH_DELAYS_MS.valores) {
+        if (status === 'FAILED' || temInstrumentoPix(instrumentos)) break;
+        await espera(atraso);
+        try {
+          const atual = await (await legacy()).consultaCobranca(legacyContext(ctx), r.provider_ref);
+          if (atual?.status === 'falhou') status = 'FAILED';
+          instrumentos = { ...instrumentosDoLegado(atual), ...Object.fromEntries(Object.entries(instrumentos).filter(([, v]) => v)) };
+        } catch {
+          /* leitura falhou: segue com o que já foi devolvido */
+        }
+      }
       return {
         reference: r.provider_ref,
         // Preserve the returned reference immediately, but do not settle on a
         // create response lacking the authenticated money/refund read below.
-        status: r.status === 'falhou' ? 'FAILED' : 'PENDING',
+        status,
         action: {
-          type: input.method,
-          code: r.copia_cola || r.linha_digitavel || undefined,
-          qrCode: r.qr_code || undefined,
-          ticketUrl: r.ticket_url || undefined,
-          expiresAt: r.expires_em || undefined,
+          type: 'PIX',
+          code: instrumentos.code,
+          qrCodeBase64: instrumentos.qrCodeBase64,
+          ticketUrl: instrumentos.ticketUrl,
+          expiresAt: instrumentos.expiresAt || r.expires_em || undefined,
         },
       };
     } catch (e) {
@@ -104,18 +139,23 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
       authorized: 'AUTHORIZED',
       cancelled: 'CANCELED',
       rejected: 'FAILED',
+      expired: 'EXPIRED',
       refunded: 'REFUNDED',
       charged_back: 'CHARGEBACK',
       in_mediation: 'DISPUTED',
       pending: 'PENDING',
       in_process: 'PENDING',
     };
+    const pix = b.ordem_api === 'orders' || String(b.payment_method_id || '') === 'pix' ? instrumentosDoLegado(r) : {};
     return {
       reference: String(b.id),
       status: states[state] || 'PENDING',
       amount: totalCents,
       currency: String(b.currency_id || ''),
       refunded,
+      // Instrumentos atuais do PIX (Order assíncrona, reemissão): permitem
+      // completar a cobrança local sem criar outra.
+      ...(temInstrumentoPix(pix) || pix.expiresAt ? { action: { type: 'PIX', ...pix } } : {}),
     };
   }
   async cancel(ctx: ProviderContext, reference: string): Promise<PaymentResult> {

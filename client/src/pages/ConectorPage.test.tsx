@@ -78,7 +78,7 @@ describe('ConectorPage — gabarito analítico do Hub', () => {
     expect(await screen.findByText('Pedidos Importados')).toBeInTheDocument();
     expect(screen.getByText('Pedidos Ignorados')).toBeInTheDocument();
     expect(screen.getByText('Falhas')).toBeInTheDocument();
-    expect(screen.getByText('Receita do Canal')).toBeInTheDocument();
+    expect(screen.getByText('Receita confirmada (pagos)')).toBeInTheDocument();
     expect(screen.getByText('Última Sincronização')).toBeInTheDocument();
     expect(screen.getByText('R$ 0,00')).toBeInTheDocument();
 
@@ -105,7 +105,10 @@ describe('ConectorPage — gabarito analítico do Hub', () => {
 
     renderPage(moduleOf('conector-mercadopago'));
 
-    await screen.findByText('Pedidos Importados');
+    // Mercado Pago separa pedidos SINCRONIZADOS da conta das vendas da loja própria.
+    await screen.findByText('Pedidos sincronizados do Mercado Pago');
+    expect(screen.getByText('Vendas da BroBond Store')).toBeInTheDocument();
+    expect(screen.queryByText('Pedidos Importados')).toBeNull();
     expect(screen.queryByLabelText(/access token/i)).toBeNull();
     expect(screen.queryByLabelText(/public key/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /salvar credenciais/i })).toBeNull();
@@ -135,7 +138,7 @@ describe('ConectorPage — gabarito analítico do Hub', () => {
   it('o selo ocre de homologação da Meta não existe mais em nenhum canal', async () => {
     for (const id of ['conector-instagram', 'conector-mercadolivre', 'conector-mercadopago', 'conector-nuvemshop']) {
       const { unmount } = renderPage(moduleOf(id));
-      await screen.findByText('Pedidos Importados');
+      await screen.findByText('Pedidos Ignorados');
       expect(screen.queryByText(/HOMOLOGAÇÃO/i)).toBeNull();
       unmount();
     }
@@ -158,5 +161,20 @@ describe('ConectorPage — gabarito analítico do Hub', () => {
 
     expect(await screen.findByText('Desconectado')).toBeInTheDocument();
     expect(screen.queryByText('CONECTADO COM SUCESSO')).toBeNull();
+  });
+});
+
+describe('ConectorPage — Mercado Pago: receita só de pagos e vendas da loja separadas', () => {
+  it('mostra Vendas da BroBond Store com pagos/pendentes e receita confirmada', async () => {
+    apiGet.mockResolvedValue({
+      connector: statusFixture({ provider: 'MERCADOPAGO', authModel: 'credentials', importedCount: 10 }),
+      panel: { ...EMPTY_PANEL, provider: 'MERCADOPAGO', revenueCents: 0, paidSalesCount: 0, storeSales: { count: 3, paidCount: 1, paidRevenueCents: 8000, pendingCount: 1 } },
+    });
+    apiPost.mockResolvedValue({});
+    renderPage(moduleOf('conector-mercadopago'));
+    expect(await screen.findByText('Vendas da BroBond Store')).toBeInTheDocument();
+    expect(screen.getByText('Pedidos sincronizados do Mercado Pago')).toBeInTheDocument();
+    expect(screen.getByText('Aguardando pagamento')).toBeInTheDocument();
+    expect(screen.getByText('R$ 80,00')).toBeInTheDocument();
   });
 });

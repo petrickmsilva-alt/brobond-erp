@@ -24,7 +24,7 @@ import { getResource } from '../resources';
 import { configLoja, wooFetch, empresaVinculadaWoo } from '../loja';
 import { domainLock } from '../domainLock';
 import { listarTodos } from '../producao';
-import { celulasDaEmpresa, locaisDeSaida, reservadoDaCelula, reservasAtivasPorCelula } from '../estoqueCanonico';
+import { celulasDaEmpresa, locaisDeSaida, reservadoDaCelula, reservadoDoProduto, reservasAtivasPorCelula } from '../estoqueCanonico';
 import { attachImages } from '../uploads';
 import { gradeTamanhosDoProduto, nomesProdutos } from './grade';
 import type { Row, Tx } from '../store';
@@ -130,12 +130,19 @@ function disponivelDoProduto(ctx: DisponivelPorCelula, produtoId: number): numbe
   return total;
 }
 
+/** Físico total do produto (todas as células, todos os locais). Somente exibição. */
+function fisicoDoProduto(ctx: DisponivelPorCelula, produtoId: number): number {
+  let total = 0;
+  for (const c of ctx.celulas) if (Number(c.produto_id) === produtoId) total += c.quantidade;
+  return total;
+}
+
 /** Disponibilidade por tamanho do produto, com código do tamanho. */
 export async function disponibilidadesPorTamanho(
   escopo: EscopoEmpresa,
   produtoId: number,
   tx?: Tx
-): Promise<{ tamanho_id: number | null; codigo: string | null; fisico: number; disponivel: number; local: string | null }[]> {
+): Promise<{ tamanho_id: number | null; codigo: string | null; fisico: number; reservado: number; disponivel: number; local: string | null }[]> {
   const s = getStore();
   const ctx = await prepararDisponibilidade(escopo, tx);
   const produto = await s.findOneWhere(R_PRODUTOS(), { id: produtoId, empresa_id: escopo.empresaId }, tx);
@@ -170,6 +177,10 @@ export async function disponibilidadesPorTamanho(
         tamanho_id: tamanhoId,
         codigo: tamanhoId == null ? null : codigos.get(tamanhoId) ?? null,
         fisico,
+        // Exibição: Disponível = Físico − Reservado − Empenhado − Bloqueado
+        // (melhor local vendável). Checkout pendente RESERVA; só o pagamento
+        // aprovado baixa o físico.
+        reservado: reservadoDoProduto(ctx.reservas, produtoId, tamanhoId),
         disponivel: melhor.qtd,
         local: melhor.local != null ? nomeLocal.get(melhor.local) ?? null : null,
       };
@@ -697,6 +708,8 @@ export async function listarProdutosCommerce(req: Request, res: Response) {
       exibir_site: p.exibir_site === true,
       destaque: p.destaque === true,
       preco_base: Number(p.preco_venda ?? 0),
+      fisico: fisicoDoProduto(ctx, pid),
+      reservado: reservadoDoProduto(ctx.reservas, pid),
       disponivel: disponivelDoProduto(ctx, pid),
       na_vitrine: !!proj,
       slug: proj ? String(proj.slug) : null,

@@ -17,18 +17,56 @@ import {
   type ProviderCode,
 } from '../domain/payment';
 import type { PaymentInput, PaymentResult, RefundEvidence } from '../providers/payment-provider';
+import {
+  copiaColaPixValido,
+  normalizarInstrumentosPix,
+  qrCodeBase64Valido,
+  temInstrumentoPix,
+  ticketUrlPixValida,
+} from '../domain/pix-instrument';
 import { account, candidates } from '../application/configuration';
 import { recordLatePayment, resolveLateRefund } from '../application/late-reviews';
 import { R_INTENTS, R_ATTEMPTS, R_OPERATIONS, R_REFUNDS, R_SETTLEMENTS, R_DISPUTES, R_PAYOUTS } from '../infrastructure/resources';
 import { locked, retrySerialization } from '../infrastructure/locking';
 const now = () => new Date().toISOString();
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
+/**
+ * O que da ação do provider pode ficar em `payment_attempts.safe_reference`:
+ * só instrumentos públicos validados (o mesmo que o comprador vê) — nunca
+ * payload bruto, token ou dado de cartão.
+ */
+function acaoPersistivel(action: PaymentResult['action'] | undefined): Record<string, unknown> | null {
+  if (!action) return null;
+  if (action.type !== 'PIX') {
+    // Redirect (ex.: Stripe Checkout) só com https; boleto fica na cobrança.
+    const url = typeof action.url === 'string' && /^https:\/\//i.test(action.url.trim()) ? action.url.trim() : null;
+    return { type: action.type, ...(url ? { url } : {}), ...(action.expiresAt ? { expiresAt: action.expiresAt } : {}) };
+  }
+  const pix = normalizarInstrumentosPix(action);
+  return { type: 'PIX', ...pix };
+}
 const requireKey = (key: string) => {
   if (!/^[\w:.-]{8,120}$/.test(key)) throw new HttpError(400, 'Chave de idempotência inválida.');
   return key;
 };
 
-/** Strict creation response contract shared by every route through this engine. */
+/** Nome exibível do provider nas mensagens ao comprador (nunca código interno). */
+const NOME_PROVIDER: Record<string, string> = { MERCADO_PAGO: 'Mercado Pago', PAGBANK: 'PagBank', STRIPE: 'Stripe' };
+export function mensagemPixSemInstrumento(providerCode: string): string {
+  const nome = NOME_PROVIDER[providerCode] || 'O provedor de pagamento';
+  return `${nome} não retornou dados de pagamento PIX (QR Code, Copia e Cola ou link). Pedido não confirmado; nenhuma nova cobrança foi criada.`;
+}
+
+/**
+ * Strict creation response contract shared by every route through this engine.
+ *
+ * PIX: basta UM instrumento pagável e VÁLIDO devolvido pelo provider —
+ * Copia e Cola (BR Code `000201…`), imagem do QR (base64 de PNG/JPEG/GIF/WEBP)
+ * ou o link oficial (https). Base64 ausente com Copia e Cola/link presentes é
+ * sucesso; os três ausentes é FALHA DE INTEGRAÇÃO não ambígua
+ * (`PIX_INSTRUMENT_MISSING`): a referência já foi persistida e nenhuma nova
+ * cobrança é criada às cegas.
+ */
 export function validarCriacaoProvider(method: PaymentMethod, result: PaymentResult | null | undefined): asserts result is PaymentResult {
   const reference = typeof result?.reference === 'string' ? result.reference.trim() : '';
   if (result?.status === 'FAILED') throw new PaymentError('PAYMENT_DECLINED');
@@ -37,11 +75,8 @@ export function validarCriacaoProvider(method: PaymentMethod, result: PaymentRes
   }
   if (method === 'PIX') {
     const action = result.action;
-    const hasCopyPaste = typeof action?.code === 'string' && action.code.trim().length > 0;
-    const hasQrOrTicket = (typeof action?.qrCode === 'string' && action.qrCode.trim().length > 0) ||
-      (typeof action?.ticketUrl === 'string' && /^https:\/\//i.test(action.ticketUrl));
-    if (action?.type !== 'PIX' || !hasCopyPaste || !hasQrOrTicket) {
-      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    if (action?.type !== 'PIX' || !temInstrumentoPix(normalizarInstrumentosPix(action))) {
+      throw new PaymentError('PIX_INSTRUMENT_MISSING');
     }
   }
 }
@@ -177,30 +212,40 @@ export class PaymentOrchestrator {
           route.context.credentials.capture_mode === 'manual' && route.capability.authorize
             ? await route.provider.authorize({ ...route.context, operationKey }, input)
             : await route.provider.createPaymentIntent({ ...route.context, operationKey }, input);
-        // Validate the provider contract before persisting or returning success.
-        // A PIX payment needs a provider reference, a usable copy/paste value,
-        // and a QR image or provider-issued ticket URL. No fields are fabricated.
+        // A referência do provider é persistida ANTES da validação do contrato:
+        // se o PSP criou o objeto (ex.: Order assíncrona sem dados do PIX), ele
+        // fica vinculado a ESTA tentativa — nunca órfão, nunca recriado.
+        const returnedReference = typeof result?.reference === 'string' ? result.reference.trim() : '';
+        if (returnedReference)
+          await s.update(R_ATTEMPTS, Number(attempt.id), {
+            provider_transaction_id: returnedReference,
+            status: 'PENDING',
+            safe_reference: { ...attempt.safe_reference, action: acaoPersistivel(result?.action) },
+          });
+        // Validate the provider contract before bridging or returning success.
+        // A PIX payment needs a provider reference and at least ONE valid
+        // instrument (copy/paste, QR image or provider ticket). Nothing is fabricated.
         validarCriacaoProvider(method, result);
-        const reference = result.reference.trim();
-        // Persist reference before applying state. No provider payload/card/token is retained.
-        await s.update(R_ATTEMPTS, Number(attempt.id), {
-          provider_transaction_id: reference,
-          status: 'PENDING',
-          safe_reference: { ...attempt.safe_reference, action: result.action || null },
-        });
         await this.bridge(empresaId, i, attempt, route.provider.legacyId, result);
         await this.apply(empresaId, Number(i.id), result);
         return { intent: await this.intent(empresaId, Number(i.id)), action: result.action, idempotent: false };
       } catch (e) {
         const ambiguous = !(e instanceof PaymentError) || e.ambiguous;
+        const semInstrumento = e instanceof PaymentError && e.code === 'PIX_INSTRUMENT_MISSING';
         const persisted = await s.findOneWhere(R_ATTEMPTS, { empresa_id: empresaId, id: Number(attempt.id) });
+        const keepPersisted = ambiguous && !!persisted?.provider_transaction_id;
         await s.update(R_ATTEMPTS, Number(attempt.id), {
-          status: persisted?.provider_transaction_id ? persisted.status : ambiguous ? 'PENDING' : 'FAILED',
+          // Falha NÃO ambígua (recusa, contrato PIX sem instrumento) encerra a
+          // tentativa como FAILED mesmo com a referência já gravada (que é
+          // mantida para auditoria/consulta). Incerteza mantém o estado.
+          status: keepPersisted ? persisted!.status : ambiguous ? 'PENDING' : 'FAILED',
           failure_code: e instanceof PaymentError ? e.code : 'UNKNOWN_PROVIDER_ERROR',
-          failure_message: 'Falha normalizada; consultar correlação.',
-          completed_at: persisted?.provider_transaction_id ? persisted.completed_at : ambiguous ? null : now(),
+          failure_message: semInstrumento
+            ? 'Provider não devolveu QR Code, Copia e Cola nem link de pagamento.'
+            : 'Falha normalizada; consultar correlação.',
+          completed_at: keepPersisted ? persisted!.completed_at : ambiguous ? null : now(),
         });
-        await this.audit(empresaId, Number(i.id), ambiguous ? 'payment uncertain' : 'payment attempt failed', {
+        await this.audit(empresaId, Number(i.id), ambiguous ? 'payment uncertain' : semInstrumento ? 'payment pix instrument missing' : 'payment attempt failed', {
           attempt_id: attempt.id,
           provider: route.provider.code,
           correlation_id: i.correlation_id,
@@ -211,6 +256,7 @@ export class PaymentOrchestrator {
           // provider idempotency key is retained), but it is never checkout
           // success. The checkout must surface an error and release its hold.
           if (ambiguous) throw new HttpError(502, 'Criação do pagamento sem confirmação do provider. Consulte a transação antes de tentar novamente.');
+          if (semInstrumento) throw new HttpError(502, mensagemPixSemInstrumento(String(route.provider.code)));
           throw new HttpError(502, 'Provider recusou o pagamento. Consulte a transação.');
         }
       }
@@ -220,9 +266,16 @@ export class PaymentOrchestrator {
   }
   private async bridge(empresaId: number, i: Row, a: Row, provider: string, r: PaymentResult) {
     const s = getStore();
+    // Um campo, um significado: EMV → copia_cola e qr_code (BR Code em texto);
+    // imagem base64 validada → qr_code_base64; link https → ticket_url.
+    const pix = r.action?.type === 'PIX' ? normalizarInstrumentosPix(r.action) : {};
     await retrySerialization(() => locked(empresaId, `intent:${i.id}`, async (tx) => {
       const current = await this.intent(empresaId, Number(i.id), tx);
-      if (current.cobranca_id) return;
+      if (current.cobranca_id) {
+        // Replay/reconsulta: completa o que faltava, sem criar outra cobrança.
+        await this.preencherInstrumentosPix(empresaId, Number(current.cobranca_id), r, tx);
+        return;
+      }
       const charge = await s.insert(
         R_GATEWAY_COBRANCAS,
         {
@@ -239,12 +292,12 @@ export class PaymentOrchestrator {
           status: 'pendente',
           provider_ref: r.reference,
           idempotency_key: i.idempotency_key,
-          copia_cola: r.action?.type === 'PIX' ? (r.action.code || null) : null,
-          qr_code: r.action?.qrCode || null,
-          qr_code_base64: r.action?.qrCode || null,
-          ticket_url: r.action?.ticketUrl || null,
-          linha_digitavel: r.action?.type === 'BOLETO' ? r.action.code : null,
-          expires_em: r.action?.expiresAt || null,
+          copia_cola: pix.code ?? null,
+          qr_code: pix.code ?? null,
+          qr_code_base64: pix.qrCodeBase64 ?? null,
+          ticket_url: r.action?.type === 'PIX' ? (pix.ticketUrl ?? null) : (r.action?.ticketUrl && ticketUrlPixValida(r.action.ticketUrl) ? r.action.ticketUrl : null),
+          linha_digitavel: r.action?.type === 'BOLETO' ? (r.action.code ?? null) : null,
+          expires_em: pix.expiresAt ?? r.action?.expiresAt ?? null,
           payload: null,
         },
         tx
@@ -252,6 +305,29 @@ export class PaymentOrchestrator {
       await s.update(R_INTENTS, Number(i.id), { cobranca_id: charge.id }, tx);
       await s.update(getResource('commerce_pedidos')!, Number(i.order_id), { cobranca_id: charge.id }, tx);
     }));
+  }
+  /**
+   * Completa — sem sobrescrever dado válido — os instrumentos PIX da cobrança
+   * já vinculada (Order assíncrona, reconsulta manual, webhook). Também corrige
+   * linhas antigas em que a imagem ocupava `qr_code`: valor inválido para o
+   * papel é substituído pelo valor correto devolvido pelo provider.
+   */
+  private async preencherInstrumentosPix(empresaId: number, cobrancaId: number, r: PaymentResult, tx?: Tx): Promise<boolean> {
+    if (r.action?.type !== 'PIX') return false;
+    const pix = normalizarInstrumentosPix(r.action);
+    if (!temInstrumentoPix(pix) && !pix.expiresAt) return false;
+    const s = getStore();
+    const charge = await s.findOneWhere(R_GATEWAY_COBRANCAS, { empresa_id: empresaId, id: cobrancaId }, tx);
+    if (!charge || String(charge.provider_ref || '') !== String(r.reference || '')) return false;
+    const patch: Record<string, unknown> = {};
+    if (pix.code && !copiaColaPixValido(charge.copia_cola)) patch.copia_cola = pix.code;
+    if (pix.code && !copiaColaPixValido(charge.qr_code)) patch.qr_code = pix.code;
+    if (pix.qrCodeBase64 && !qrCodeBase64Valido(charge.qr_code_base64)) patch.qr_code_base64 = pix.qrCodeBase64;
+    if (pix.ticketUrl && !ticketUrlPixValida(charge.ticket_url)) patch.ticket_url = pix.ticketUrl;
+    if (pix.expiresAt && !charge.expires_em) patch.expires_em = pix.expiresAt;
+    if (!Object.keys(patch).length) return false;
+    await s.update(R_GATEWAY_COBRANCAS, cobrancaId, { ...patch, atualizado_em: now() }, tx);
+    return true;
   }
   async apply(empresaId: number, intentId: number, result: PaymentResult, source: 'event' | 'provider-refresh' = 'event') {
     const s = getStore();
@@ -288,7 +364,16 @@ export class PaymentOrchestrator {
         lateRecovery = true;
       }
       const total = Number(i.amount);
-      const previousRefund = Number(a.refunded_amount || 0);
+      // Estorno só existe sobre valor CAPTURADO. Uma tentativa nunca capturada
+      // com refunded_amount > 0 é evidência envenenada pela projeção antiga da
+      // Order (pendente lida como "estornada": total - total_paid_amount) e
+      // travava toda aprovação posterior em 409. Ela é descartada e auditada.
+      const storedRefund = Number(a.refunded_amount || 0);
+      const poisonedRefund = storedRefund > 0 && Number(a.captured_amount || 0) === 0;
+      const previousRefund = poisonedRefund ? 0 : storedRefund;
+      if (poisonedRefund)
+        await this.audit(empresaId, intentId, 'stale refund evidence discarded (never captured)',
+          { attempt_id: a.id, discarded_refunded_amount: storedRefund, correlation_id: i.correlation_id }, tx);
       // A terminal label alone is not proof of the amount refunded. Providers
       // must return the cumulative amount, even when claiming a full refund.
       const refunded = result.refunded ?? previousRefund;
@@ -429,7 +514,9 @@ export class PaymentOrchestrator {
   }
   async deliverToCommerce(empresaId: number, intentId: number) {
     const i = await this.intent(empresaId, intentId);
-    const intention = ({ PAID: 'paga', PARTIALLY_REFUNDED: 'paga', CANCELED: 'cancelada', EXPIRED: 'expirada', REFUNDED: 'estornada' } as const)[i.status as 'PAID'];
+    // FAILED (PIX recusado/falho no PSP) também encerra o pedido e libera a
+    // reserva — antes ficava preso em AGUARDANDO_PAGAMENTO até expirar.
+    const intention = ({ PAID: 'paga', PARTIALLY_REFUNDED: 'paga', CANCELED: 'cancelada', EXPIRED: 'expirada', REFUNDED: 'estornada', FAILED: 'cancelada' } as const)[i.status as 'PAID'];
     if (!intention || !i.cobranca_id) return;
     const { confirmarPagamentoCobranca } = await import('../../../server/src/commerce/pedidos');
     await confirmarPagamentoCobranca({ empresaId, cobrancaId: Number(i.cobranca_id), intencao: intention });
@@ -679,10 +766,15 @@ export class PaymentOrchestrator {
       );
     }
   }
-  async synchronize(empresaId: number, id: number) {
+  /**
+   * Reconciliação pela leitura do provider. Retorna o que de fato aconteceu
+   * (para a consulta manual ser honesta): `manual`, `no-attempt`,
+   * `not-configured`, `no-reference`, `replayed` ou `synchronized`.
+   */
+  async synchronize(empresaId: number, id: number, opts: { allowCreateReplay?: boolean } = {}): Promise<'manual' | 'no-attempt' | 'not-configured' | 'no-reference' | 'replayed' | 'synchronized'> {
     const s = getStore();
     const i = await this.intent(empresaId, id);
-    if (i.provider === 'MANUAL') return;
+    if (i.provider === 'MANUAL') return 'manual';
     const attempts = await s.list(R_ATTEMPTS, {
       page: 1,
       pageSize: 1,
@@ -691,35 +783,39 @@ export class PaymentOrchestrator {
       filter: { empresa_id: empresaId, payment_intent_id: id },
     });
     const a = attempts.rows[0];
-    if (!a) return;
+    if (!a) return 'no-attempt';
     const ctx = await account(empresaId, i.provider as ProviderCode, String(a.idempotency_key));
-    if (!ctx.capabilities.some((c) => c.method === i.method)) return;
+    if (!ctx.capabilities.some((c) => c.method === i.method)) return 'not-configured';
     if (!a.provider_transaction_id) {
+      // A consulta manual do backoffice só LÊ pela referência já gravada.
+      if (opts.allowCreateReplay === false) return 'no-reference';
       // Recover an interrupted create only on the SAME adapter with the SAME provider idempotency key.
       // Never replay beyond 20h (provider idempotency retention is finite).
-      if (!a.request_cifradas || Date.now() - new Date(a.started_at).getTime() > 20 * 3600_000) return;
+      if (!a.request_cifradas || Date.now() - new Date(a.started_at).getTime() > 20 * 3600_000) return 'no-reference';
       const input = JSON.parse(decifrarSegredo(a.request_cifradas) || 'null') as PaymentInput | null;
-      if (!input) return;
+      if (!input) return 'no-reference';
       const replay = await ctx.provider.createPaymentIntent(ctx.context, input);
       await s.update(R_ATTEMPTS, Number(a.id), {
         provider_transaction_id: replay.reference,
-        safe_reference: { ...a.safe_reference, action: replay.action || null },
+        safe_reference: { ...a.safe_reference, action: acaoPersistivel(replay.action) },
       });
       await this.bridge(empresaId, i, a, ctx.provider.legacyId, replay);
       await this.apply(empresaId, id, replay);
-      return;
+      return 'replayed';
     }
     const result = await ctx.provider.getPayment(ctx.context, String(a.provider_transaction_id));
+    if (i.cobranca_id && result.action?.type === 'PIX')
+      await retrySerialization(() => locked(empresaId, `intent:${id}`, (tx) => this.preencherInstrumentosPix(empresaId, Number(i.cobranca_id), result, tx)));
     await this.apply(empresaId, id, result, 'provider-refresh');
     // Uma mudança do total de estornos, por si só, não identifica o refund
     // solicitado: outro operador/provider pode ter estornado em paralelo.
     const current = await this.intent(empresaId, id);
     if (current.active_operation) {
       const op = await s.findOneWhere(R_OPERATIONS, { empresa_id: empresaId, id: Number(current.active_operation), payment_intent_id: id });
-      if (!op || !['PROCESSING', 'UNCERTAIN'].includes(String(op.status))) return;
+      if (!op || !['PROCESSING', 'UNCERTAIN'].includes(String(op.status))) return 'synchronized';
       if (op.operation === 'refund') {
         const refund = await s.findOneWhere(R_REFUNDS, { empresa_id: empresaId, operation_id: op.id, payment_intent_id: id });
-        if (!refund?.provider_refund_id || refund.provider !== current.provider) return;
+        if (!refund?.provider_refund_id || refund.provider !== current.provider) return 'synchronized';
         if (refund.provider_refund_status === 'PENDING' && ctx.provider.getRefund) {
           const proof = await ctx.provider.getRefund(ctx.context, String(a.provider_transaction_id), String(refund.provider_refund_id));
           await this.recordRefundEvidence(empresaId, id, Number(op.id), String(current.provider), String(a.provider_transaction_id), Number(op.amount), proof);
@@ -733,6 +829,7 @@ export class PaymentOrchestrator {
         if (confirmed) await this.finishOperation(empresaId, id, Number(op.id), result.status, String(a.provider_transaction_id));
       }
     }
+    return 'synchronized';
   }
   async audit(empresaId: number, id: number, event: string, data: Record<string, unknown>, tx?: Tx) {
     await getStore().audit(

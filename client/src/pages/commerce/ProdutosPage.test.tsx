@@ -73,6 +73,18 @@ describe('Commerce — Catálogo multicanal (/commerce/produtos)', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('checkout pendente: mostra Físico 8, Reservado 1 e Disponível 7 (reserva não baixa o físico)', async () => {
+    fetchMock.mockResolvedValue({ total: 1, produtos: [{ ...LINHA, nome: 'COTTON "B"', fisico: 8, reservado: 1, disponivel: 7 }] });
+    renderPagina();
+    expect(await screen.findByText('COTTON "B"')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Físico' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Reservado' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Disponível' })).toBeInTheDocument();
+    expect(screen.getByText('8')).toBeInTheDocument();
+    expect(screen.getByText('1')).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+  });
+
   it('“Projetar produto” navega para a ROTA PRÓPIA — nunca abre modal', async () => {
     fetchMock.mockResolvedValue({ total: 0, produtos: [] });
     const user = userEvent.setup();

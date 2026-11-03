@@ -131,3 +131,49 @@ describe('pagamento tardio em pedido encerrado', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });
+
+describe('diagnóstico do pagamento (sem modal, sem valores sensíveis)', () => {
+  const DIAGNOSTICO = {
+    pedido: { id: 101, numero: 'CHK-2026-001', estado: 'AGUARDANDO_PAGAMENTO' },
+    pagamento: { intent_id: 42, provider: 'MERCADO_PAGO', metodo: 'PIX', status: 'PENDING', cobranca_status: 'pendente', provider_order_id: 'ORD01ABC', falha: null, revisao_tardia: null },
+    pix: { copia_cola: 'DISPONIVEL', qr_code_base64: 'AUSENTE', ticket_url: 'DISPONIVEL', expira_em: null },
+    webhook: { estado: 'NAO_RECEBIDO', total: 0, ultimo: null },
+    notificacoes: {
+      email: { estado: 'NAO_CONFIGURADO', evento: 'ORDER_CREATED', em: null, motivo: 'NÃO CONFIGURADO: defina SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS para enviar e-mails.' },
+      whatsapp: { estado: 'ENVIADO', evento: 'ORDER_CREATED', em: '2026-11-03T12:00:05Z', motivo: null },
+    },
+    pode_atualizar: true,
+  };
+
+  it('mostra presença do PIX, webhook e notificações; o botão consulta o provedor via POST idempotente', async () => {
+    const pendente = { ...VISAO, pedido: { ...VISAO.pedido!, estado: 'AGUARDANDO_PAGAMENTO', estado_rotulo: 'Aguardando pagamento' }, diagnostico: DIAGNOSTICO };
+    fetchMock.mockImplementation(async (caminho: string, init?: RequestInit) => {
+      if (caminho.endsWith('/atualizar-pagamento') && init?.method === 'POST') {
+        return { ...pendente, atualizado: true, diagnostico: { ...DIAGNOSTICO, pix: { ...DIAGNOSTICO.pix, qr_code_base64: 'DISPONIVEL' }, webhook: { estado: 'RECEBIDO', total: 1, ultimo: { evento: 'order.processed', status: 'processado', recebido_em: '2026-11-03T12:01:00Z', processado_em: '2026-11-03T12:01:01Z', erro: null } } } };
+      }
+      return pendente;
+    });
+    const user = userEvent.setup();
+    renderPagina();
+    expect(await screen.findByText('Diagnóstico do pagamento')).toBeInTheDocument();
+    expect(screen.getByText('ORD01ABC')).toBeInTheDocument();
+    expect(screen.getByText('NÃO RECEBIDO')).toBeInTheDocument();
+    expect(screen.getByText('NÃO CONFIGURADO')).toBeInTheDocument();
+    expect(screen.getByText(/defina SMTP_HOST/)).toBeInTheDocument();
+    expect(screen.getAllByText('DISPONÍVEL')).toHaveLength(2);
+    expect(screen.getByText('AUSENTE')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Atualizar status do pagamento' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/commerce/pedidos/SAL3f00d0000000000000001/atualizar-pagamento', expect.objectContaining({ method: 'POST' })));
+    expect(await screen.findByText('RECEBIDO')).toBeInTheDocument();
+    expect(screen.getAllByText('DISPONÍVEL')).toHaveLength(3);
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/atualizar-pagamento'))).toHaveLength(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('sem referência do provedor o botão fica desabilitado (nunca cria cobrança)', async () => {
+    fetchMock.mockResolvedValue({ ...VISAO, diagnostico: { ...DIAGNOSTICO, pagamento: { ...DIAGNOSTICO.pagamento, provider_order_id: null }, pode_atualizar: false } });
+    renderPagina();
+    expect(await screen.findByText('Diagnóstico do pagamento')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Atualizar status do pagamento' })).toBeDisabled();
+  });
+});

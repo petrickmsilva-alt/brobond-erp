@@ -56,12 +56,34 @@ export interface ConnectorPanelContentDTO {
   matched: boolean;
 }
 
+export interface ConnectorStoreSalesDTO {
+  /** Pagamentos da BroBond Store (loja própria) processados por este provedor. */
+  count: number;
+  /** Pagos/conciliados (PAID ou parcialmente estornado). */
+  paidCount: number;
+  /** Receita CONFIRMADA (pagos/conciliados, líquida de estornos), em centavos. */
+  paidRevenueCents: number;
+  /** Aguardando pagamento (PIX gerado, ainda sem confirmação). */
+  pendingCount: number;
+}
+
 export interface ConnectorPanelDTO {
   provider: ConnectorProviderName;
-  /** Receita acumulada do canal, em CENTAVOS, exceto pedidos cancelados. */
+  /**
+   * Receita CONFIRMADA do canal, em CENTAVOS: somente vendas PAGAS
+   * (status PAID). Pendentes, estornadas e canceladas não são receita.
+   */
   revenueCents: number;
-  /** Quantidade de vendas do canal (mesmo recorte da receita). */
+  /** Quantidade de vendas/pedidos sincronizados do canal (qualquer status). */
   salesCount: number;
+  /** Quantidade de vendas pagas (mesmo recorte da receita). */
+  paidSalesCount: number;
+  /**
+   * Somente Mercado Pago: vendas da loja própria (BroBond Store) cujo
+   * pagamento passou pelo Payment Engine — separadas dos pagamentos
+   * importados da conta Mercado Pago (`sales`). `null` nos demais canais.
+   */
+  storeSales: ConnectorStoreSalesDTO | null;
   /** Eventos de webhook recebidos no total. */
   eventCount: number;
   sales: ConnectorPanelSaleDTO[];
@@ -121,13 +143,15 @@ export function createConnectorPanelService(deps: ConnectorPanelDependencies = {
       const channel = saleChannelFromConnectorProvider(provider);
       const take = clampLimit(limit);
 
-      const [totals, sales, content, events] = await Promise.all([
-        db.query<{ revenue_cents: string | number | null; sales_count: string | number | null; event_count: string | number | null }>(
+      const [totals, sales, content, events, store] = await Promise.all([
+        db.query<{ revenue_cents: string | number | null; sales_count: string | number | null; paid_count: string | number | null; event_count: string | number | null }>(
           `SELECT
              COALESCE((SELECT SUM(amount_cents) FROM sales
-                        WHERE empresa_id = $1 AND usuario_id = $2 AND channel = $3::sale_channel AND status <> 'CANCELLED'), 0) AS revenue_cents,
+                        WHERE empresa_id = $1 AND usuario_id = $2 AND channel = $3::sale_channel AND status = 'PAID'), 0) AS revenue_cents,
              COALESCE((SELECT COUNT(*) FROM sales
                         WHERE empresa_id = $1 AND usuario_id = $2 AND channel = $3::sale_channel), 0) AS sales_count,
+             COALESCE((SELECT COUNT(*) FROM sales
+                        WHERE empresa_id = $1 AND usuario_id = $2 AND channel = $3::sale_channel AND status = 'PAID'), 0) AS paid_count,
              COALESCE((SELECT COUNT(*) FROM connector_events
                         WHERE empresa_id = $1 AND usuario_id = $2 AND provider = $4::connector_provider), 0) AS event_count`,
           [empresaId, usuarioId, channel, provider]
@@ -160,14 +184,38 @@ export function createConnectorPanelService(deps: ConnectorPanelDependencies = {
           [empresaId, usuarioId, channel, take]
         ),
         repository.listRecentEvents(empresaId, usuarioId, provider, take),
+        provider === 'MERCADOPAGO'
+          ? db.query<{ total: string | number | null; pagos: string | number | null; receita: string | number | null; pendentes: string | number | null }>(
+              `SELECT COUNT(*) AS total,
+                      COUNT(*) FILTER (WHERE pi.status IN ('PAID','PARTIALLY_REFUNDED')) AS pagos,
+                      COALESCE(SUM(CASE WHEN pi.status IN ('PAID','PARTIALLY_REFUNDED')
+                                        THEN pi.amount - COALESCE((SELECT MAX(pa.refunded_amount) FROM payment_attempts pa
+                                                                    WHERE pa.empresa_id = pi.empresa_id AND pa.payment_intent_id = pi.id), 0)
+                                        ELSE 0 END), 0) AS receita,
+                      COUNT(*) FILTER (WHERE pi.status IN ('CREATED','PENDING','REQUIRES_ACTION','AUTHORIZED','CAPTURE_PENDING')) AS pendentes
+                 FROM payment_intents pi
+                WHERE pi.empresa_id = $1 AND pi.provider = 'MERCADO_PAGO' AND pi.channel = 'OWN_STORE'`,
+              [empresaId]
+            ).catch(() => null)
+          : Promise.resolve(null),
       ]);
 
       const totalsRow = totals.rows[0] ?? {};
+      const storeRow = store?.rows?.[0];
 
       return {
         provider,
         revenueCents: Number(totalsRow.revenue_cents ?? 0) || 0,
         salesCount: Number(totalsRow.sales_count ?? 0) || 0,
+        paidSalesCount: Number(totalsRow.paid_count ?? 0) || 0,
+        storeSales: storeRow
+          ? {
+              count: Number(storeRow.total ?? 0) || 0,
+              paidCount: Number(storeRow.pagos ?? 0) || 0,
+              paidRevenueCents: Number(storeRow.receita ?? 0) || 0,
+              pendingCount: Number(storeRow.pendentes ?? 0) || 0,
+            }
+          : null,
         eventCount: Number(totalsRow.event_count ?? 0) || 0,
         sales: sales.rows.map((row) => ({
           id: String(row.id),

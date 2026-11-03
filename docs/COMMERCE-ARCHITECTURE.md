@@ -111,12 +111,26 @@ POST /commerce/publicacoes ──► enfileirarPublicacao (idempotente)
   peça, consome cupom (CAS) e chama o gateway; responde `201` com
   `checkout_token` (64 hex).
 - Reenvio da mesma `chave` devolve o **mesmo** pedido (`idempotente:true`).
-- Estado só avança com webhook do provedor:
-  `payment.paid → gateway processa → onCobrancaAlterada →
-  confirmarPagamentoCobranca → PAGO (+ consumo de cupom)`.
+- Estado só avança com a confirmação do provedor:
+  `webhook type=order (assinado) → GET /v1/orders/{id} → Payment Engine
+  (máquina de estados) → gateway_cobrancas → onCobrancaAlterada →
+  confirmarPagamentoCobranca → PAGO → conversão → CONVERTIDO`. O webhook só
+  avisa; a verdade é a consulta autenticada da Order.
+- Estoque do checkout (regra única, sem exceção):
+  **Disponível = Físico − Reservado − Empenhado − Bloqueado**.
+  Pedido pendente RESERVA (Físico 8 / Reservado 1 / Disponível 7) e nunca
+  baixa o físico. Só o pagamento APROVADO consome a reserva, cria a venda
+  operacional e a saída (Físico 7 / Reservado 0 / Disponível 7). Cancelado,
+  recusado ou expirado devolve a reserva (8 / 0 / 8). Webhook duplicado ou
+  novo event_id do mesmo pagamento: 1 pagamento / 1 venda / 1 saída.
 - Expiração (`expirarCheckoutsPendentes`, roda no intervalo de 60 s):
   `AGUARDANDO_PAGAMENTO` vencido → `EXPIRADO`, reserva liberada, sale
-  `CANCELLED` — com retry de `40001` para corridas entre varreduras.
+  `CANCELLED`, notificação `ORDER_EXPIRED` — com retry de `40001` para
+  corridas entre varreduras. Order expirada/cancelada no provedor segue o
+  mesmo caminho pelo webhook.
+- Instrumentos PIX (`modules/payments/domain/pix-instrument.ts`): Copia e Cola
+  = BR Code EMV, QR = imagem base64 do provedor, link = `ticket_url` https.
+  Nada é gerado localmente; os três ausentes = falha de integração (502).
 - Conversão (`POST /commerce/pedidos/:saleId/converter`) usa a ponte
   sales→vendas (reuso do motor) e é idempotente.
 
@@ -246,8 +260,22 @@ Checkout (vitrine.ts) → Payment Engine (paymentEngine.createForOrder)
 - vendas é a fonte operacional; `sales` é a projeção. Pedido único por
   `empresa_id + canal + pedido_externo` (`uq_commerce_pedidos_externo`) e
   checkout idempotente por `chave_checkout`.
-- Estoque: disponível canônico = físico − reservado − empenhado − bloqueado
+- Estoque: Disponível = Físico − Reservado − Empenhado − Bloqueado
   (ver `ESTOQUE-CANONICO.md`); reserva SERIALIZABLE e idempotente.
+- Mercado Pago Orders API: `POST /v1/orders` (Bearer, `X-Idempotency-Key`
+  determinística = `external_reference`, `type=online`,
+  `processing_mode=automatic`, `pix`/`bank_transfer`, `payer.email` +
+  `identification`); `provider_order_id` persistido antes de validar a
+  resposta; criação assíncrona relê a MESMA Order. Reembolso só com evidência
+  (`refunded`/`partially_refunded`) — uma Order pendente nunca é projetada como
+  reembolsada.
+- Sem nova cobrança automática após erro HTTP: o replay reutiliza a intent e a
+  referência; a atualização manual (`POST /commerce/pedidos/:saleId/
+  atualizar-pagamento`) só consulta a referência gravada.
+- Notificações: evento de domínio → `commerce_notificacoes` (1 linha por
+  canal) + 1 trabalho no `commerce_outbox` → worker → e-mail (SMTP) /
+  WhatsApp (Meta Cloud API oficial). Credencial ausente = `NÃO CONFIGURADO`
+  com o nome das variáveis; nunca "ENVIADO" sem aceite do provedor.
 
 ## 11. DEPENDE DE HOMOLOGAÇÃO EXTERNA (não provado por testes locais)
 

@@ -53,8 +53,10 @@ describe('Notificações transacionais — eventos, idempotência, retry e priva
     assert.ok(!String(mascararWhatsApp('5562999991234')).includes('5562999991234'));
   });
 
-  test('8 eventos transacionais têm mensagem curta e NENHUM evento de marketing', () => {
-    assert.equal(EVENTOS_NOTIFICACAO.length, 9);
+  test('10 eventos transacionais têm mensagem curta e NENHUM evento de marketing', () => {
+    // +ORDER_EXPIRED: expiração do PIX não é "cancelado pelo cliente/loja".
+    assert.equal(EVENTOS_NOTIFICACAO.length, 10);
+    assert.ok(EVENTOS_NOTIFICACAO.includes('ORDER_EXPIRED'));
     for (const e of EVENTOS_NOTIFICACAO) assert.ok(MENSAGENS[e].length > 0, `sem mensagem para ${e}`);
     assert.ok(!EVENTOS_NOTIFICACAO.some((e) => /MARKETING|PROMOC/.test(e)));
     assert.ok(EVENTOS_NOTIFICACAO.includes('PIX_GENERATED'));
