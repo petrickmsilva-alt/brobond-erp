@@ -38,6 +38,30 @@ services:
       # vai para a tabela `configuracoes` e APP_URL continua com a precedência.
       - key: APP_URL
         sync: false
+      # SMTP transacional — configure apenas no painel; nenhum valor secreto é versionado.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: SMTP_SECURE
+        sync: false
+      # Meta WhatsApp Business Cloud API oficial. Templates precisam estar aprovados na Meta.
+      - key: WHATSAPP_CLOUD_API_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_API_VERSION
+        sync: false
+      - key: WHATSAPP_TEMPLATE_TRANSACIONAL
+        sync: false
+      - key: WHATSAPP_TEMPLATE_IDIOMA
+        sync: false
       # Fotos: "db" (no banco, padrão) ou "cloudinary" (+ CLOUDINARY_URL)
       - key: UPLOAD_PROVIDER
         value: db

@@ -130,6 +130,12 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
     await s.insert(RESOURCES.estoques, { empresa_id: 1, produto_id: produtoId, local_id: 1, local: 'Acabados', quantidade: 10 });
     const lista = await request(app).get('/api/loja/produtos').expect(200);
     assert.equal(lista.body.produtos[0].slug, 'fixture-isolada');
+    const home = await request(app).get('/api/loja/produtos?secoes=1').expect(200);
+    assert.equal(home.body.total, 1);
+    assert.equal(home.body.total_colecao, 0);
+    const idsSecao = Object.values(home.body.secoes).flat().map((produto: any) => produto.id);
+    assert.equal(new Set(idsSecao).size, idsSecao.length);
+    assert.equal(home.body.produtos.length, 0, 'produto mostrado numa seção não reaparece na coleção');
     const detalhe = await request(app).get('/api/loja/produtos/fixture-isolada').expect(200);
     assert.equal(detalhe.body.produto.preco, 40);
     const preview = await request(app).post('/api/loja/preview').send({ itens: itens() }).expect(200);
@@ -157,7 +163,11 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
       assert.equal(input.valor, 80, 'valor do cliente não é autoridade');
       const reservas = await s.list(RESOURCES.estoque_reservas, { page: 1, pageSize: 100, filter: { empresa_id: 1, produto_id: produtoId, status: 'ativa' } });
       assert.equal(reservas.total, 1, 'reserva existe antes do adapter de pagamento');
-      return { provider_ref: 'somente-teste-sem-rede', status: 'pendente', copia_cola: 'fixture-pix-sem-valor-financeiro' };
+      return {
+        provider_ref: 'somente-teste-sem-rede', status: 'pendente',
+        qr_code: 'iVBORw0KGgoAAAANSUhEUgABAAAA', copia_cola: 'fixture-pix-sem-valor-financeiro',
+        ticket_url: 'https://www.mercadopago.com.br/fixture',
+      };
     } });
     try {
       const body = { chave: 'checkout-exposure-teste', itens: itens(), comprador, total: 0.01, frete: 0, preco: 0.01 };
@@ -172,6 +182,18 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
       const acompanhamento = await request(app).get(`/api/loja/pedidos/${criado.body.pedido.checkout_token}`).expect(200);
       assert.equal(acompanhamento.body.itens[0].quantidade, 2);
       assert.equal(acompanhamento.body.pagamento.provider, 'mercadopago');
+      assert.equal(acompanhamento.body.pagamento.copia_cola, 'fixture-pix-sem-valor-financeiro');
+      assert.equal(acompanhamento.body.pagamento.ticket_url, 'https://www.mercadopago.com.br/fixture');
+      assert.equal(acompanhamento.body.pagamento.qr_code_base64, 'iVBORw0KGgoAAAANSUhEUgABAAAA');
+      const orderRow = await s.findOneWhere(RESOURCES.commerce_pedidos, { empresa_id: 1, chave_checkout: body.chave });
+      assert.ok(orderRow?.cobranca_id);
+      const charge = await s.get(R_GATEWAY_COBRANCAS, Number(orderRow?.cobranca_id));
+      assert.equal(charge?.ticket_url, 'https://www.mercadopago.com.br/fixture');
+      assert.equal(charge?.qr_code_base64, 'iVBORw0KGgoAAAANSUhEUgABAAAA');
+      assert.equal(charge?.copia_cola, 'fixture-pix-sem-valor-financeiro');
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      const pixEvent = await s.list(RESOURCES.commerce_notificacoes, { page: 1, pageSize: 20, filter: { empresa_id: 1, pedido_id: Number(orderRow?.id), evento: 'PIX_GENERATED' } });
+      assert.ok(pixEvent.total > 0, 'PIX_GENERATED é enfileirado após cobrança válida ser persistida');
       const pedidos = await s.list(RESOURCES.commerce_pedidos, { page: 1, pageSize: 100, filter: { empresa_id: 1 } });
       assert.equal(pedidos.total, 1);
       assert.equal((await s.get(R_GATEWAY_COBRANCAS, Number(pedidos.rows[0].cobranca_id)))?.valor, 80);
@@ -179,6 +201,27 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
       await s.insert(RESOURCES.commerce_configuracoes, { empresa_id: 2, loja_nome: 'Tenant teste 2', frete_provedor: 'retirada' });
       await request(app).get(`/api/loja/pedidos/${criado.body.pedido.checkout_token}`).expect(404);
     } finally { registrarProvider(mercadopagoProvider); process.env.COMMERCE_LOJA_EMPRESA_ID = '1'; }
+  });
+
+  test('provider PIX sem instrumento válido nunca completa checkout e devolve a reserva', async () => {
+    registrarProvider({ ...mercadopagoProvider, async criaCobranca() {
+      cobrancas++;
+      return { provider_ref: 'ord-sem-dados-pix', status: 'pendente' };
+    } });
+    try {
+      const body = { chave: 'checkout-pix-ambiguous-test', itens: itens(), comprador };
+      await request(app).post('/api/loja/checkout').send(body).expect(502);
+      const pedido = await s.findOneWhere(RESOURCES.commerce_pedidos, { empresa_id: 1, chave_checkout: body.chave });
+      assert.ok(pedido);
+      assert.equal(pedido.estado, 'ERRO');
+      assert.equal(pedido.pagamento_estado, 'ERROR');
+      const reservas = await s.list(RESOURCES.estoque_reservas, { page: 1, pageSize: 20, filter: { empresa_id: 1, origem_id: Number(pedido.id), status: 'ativa' } });
+      assert.equal(reservas.total, 0);
+      const notificacoes = await s.list(RESOURCES.commerce_notificacoes, { page: 1, pageSize: 50, filter: { empresa_id: 1, pedido_id: Number(pedido.id), evento: 'PIX_GENERATED' } });
+      assert.equal(notificacoes.total, 0);
+      const publico = await request(app).get(`/api/loja/pedidos/${pedido.checkout_token}`).expect(200);
+      assert.equal(publico.body.pagamento.status, 'ERROR');
+    } finally { registrarProvider(mercadopagoProvider); }
   });
 
   test('Mercado Pago usa idempotência na API oficial e manifesto de assinatura com ponto e vírgula final', async (t) => {
@@ -201,8 +244,8 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
   test('webhook assinado consulta status real, trata atualizações e duplicatas e mantém pedido rastreável', async () => {
     const webhookApp = express();
     webhookApp.use(publicGatewayRouter);
-    const pedidos = await s.list(RESOURCES.commerce_pedidos, { page: 1, pageSize: 10, filter: { empresa_id: 1 } });
-    const pedido = pedidos.rows[0];
+    const pedido = await s.findOneWhere(RESOURCES.commerce_pedidos, { empresa_id: 1, chave_checkout: 'checkout-exposure-teste' });
+    assert.ok(pedido?.cobranca_id, 'webhook fixture must target the successfully persisted payment');
     const { confirmarPagamentoCobranca } = await import('../src/commerce/pedidos');
     let status = 'pending';
     registrarProvider({ ...mercadopagoProvider, async consultaCobranca(_ctx, ref) {

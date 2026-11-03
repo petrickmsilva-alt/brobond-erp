@@ -165,6 +165,35 @@ type CardPublico = {
   criado_em: string | null;
 };
 
+/**
+ * Deterministically assign each product identity to at most one home section.
+ * Priority: featured, currently discounted, then newest. The remainder stays
+ * in the general collection grid; a Set keyed by real product ID prevents
+ * repeats across sections and the collection.
+ */
+export function distribuirSecoesCatalogo(cards: CardPublico[]) {
+  const usados = new Set<number>();
+  const selecionar = (candidatos: CardPublico[], limite = 8) => {
+    const escolhidos: CardPublico[] = [];
+    for (const card of candidatos) {
+      if (usados.has(card.id) || escolhidos.length >= limite) continue;
+      usados.add(card.id);
+      escolhidos.push(card);
+    }
+    return escolhidos;
+  };
+  const idAsc = (a: CardPublico, b: CardPublico) => a.id - b.id;
+  const destaques = selecionar(cards.filter((card) => card.destaque).sort(idAsc));
+  const ofertas = selecionar(cards.filter((card) => card.promocional).sort(idAsc));
+  const novidades = selecionar([...cards].sort((a, b) =>
+    String(b.criado_em || '').localeCompare(String(a.criado_em || '')) || idAsc(a, b)
+  ));
+  return {
+    secoes: { destaques, ofertas, novidades },
+    idsDistribuidos: usados,
+  };
+}
+
 function slugCategoria(nome: string): string {
   return nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
@@ -240,20 +269,28 @@ export async function lojaProdutosPublicos(req: Request, res: Response) {
   else lista.sort((a, b) => String(a.produto.nome || '').localeCompare(String(b.produto.nome || ''), 'pt-BR') || Number(a.produto.id) - Number(b.produto.id));
 
   const total = lista.length;
-  const fatia = lista.slice((pagina - 1) * tamanho, (pagina - 1) * tamanho + tamanho);
-  // attachImages só na página visível (não no catálogo inteiro): 1 query de
-  // mídia para N cards, sem N+1.
-  await attachImages(getResource('produtos')!, fatia.map((l) => l.produto));
-  const cards = fatia.map(({ produto, proj }) => cardPublico(produto, proj, precos, nomesCategorias));
-
-  // Seções da home: IDs/cards derivados dos MESMOS dados reais, calculados uma
-  // vez. Sem promoção → `ofertas` vazia; sem destaque → `destaques` vazia.
   const todosCards = lista.map(({ produto, proj }) => cardPublico(produto, proj, precos, nomesCategorias));
-  const secoes = req.query.secoes === '1' ? {
-    destaques: todosCards.filter((c) => c.destaque).slice(0, 8),
-    novidades: [...todosCards].sort((a, b) => String(b.criado_em || '').localeCompare(String(a.criado_em || ''))).slice(0, 8),
-    ofertas: todosCards.filter((c) => c.promocional).slice(0, 8),
-  } : null;
+  const ehHomeSemFiltro = req.query.secoes === '1' && !q && !filtroCategoria && !somenteDestaques && !ordenar;
+  const distribuicao = ehHomeSemFiltro ? distribuirSecoesCatalogo(todosCards) : null;
+  const colecao = distribuicao
+    ? lista.filter(({ produto }) => !distribuicao.idsDistribuidos.has(Number(produto.id)))
+    : lista;
+  const totalColecao = colecao.length;
+  const fatia = colecao.slice((pagina - 1) * tamanho, (pagina - 1) * tamanho + tamanho);
+  // Uma única consulta em lote para os cards visíveis e até 24 itens das
+  // seções. Nada de N+1 nem varredura de imagens do catálogo completo.
+  const idsSecoes = distribuicao?.idsDistribuidos ?? new Set<number>();
+  const rowsParaImagem = new Map<number, Row>();
+  for (const item of fatia) rowsParaImagem.set(Number(item.produto.id), item.produto);
+  if (distribuicao) for (const item of lista) {
+    if (idsSecoes.has(Number(item.produto.id))) rowsParaImagem.set(Number(item.produto.id), item.produto);
+  }
+  await attachImages(getResource('produtos')!, [...rowsParaImagem.values()]);
+  const cards = fatia.map(({ produto, proj }) => cardPublico(produto, proj, precos, nomesCategorias));
+  const todosCardsComImagem = ehHomeSemFiltro
+    ? lista.map(({ produto, proj }) => cardPublico(produto, proj, precos, nomesCategorias))
+    : [];
+  const secoes = ehHomeSemFiltro ? distribuirSecoesCatalogo(todosCardsComImagem).secoes : null;
 
   const categorias = [...new Set(lista.map((l) => Number(l.produto.categoria_id) || 0).filter((id) => id > 0 && nomesCategorias.has(id)))]
     .map((id) => ({ id, nome: nomesCategorias.get(id)!, slug: slugCategoria(nomesCategorias.get(id)!), total: lista.filter((l) => Number(l.produto.categoria_id) === id).length }))
@@ -265,6 +302,7 @@ export async function lojaProdutosPublicos(req: Request, res: Response) {
   res.json({
     empresa_id: empresaId,
     total,
+    total_colecao: totalColecao,
     produtos: cards,
     categorias,
     ...(secoes ? { secoes } : {}),
@@ -965,7 +1003,7 @@ async function falharCheckout(empresaId: number, pedido: Row, sale: Row, motivo:
         R_PEDIDOS(),
         Number(pedido.id),
         { estado: 'AGUARDANDO_PAGAMENTO' },
-        { estado: 'ERRO', erro: motivo.slice(0, 400), atualizado_em: new Date().toISOString() },
+        { estado: 'ERRO', pagamento_estado: 'ERROR', erro: motivo.slice(0, 400), atualizado_em: new Date().toISOString() },
         tx
       );
       if (!mudou) return;

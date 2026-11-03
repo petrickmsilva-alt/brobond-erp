@@ -27,6 +27,24 @@ const requireKey = (key: string) => {
   if (!/^[\w:.-]{8,120}$/.test(key)) throw new HttpError(400, 'Chave de idempotência inválida.');
   return key;
 };
+
+/** Strict creation response contract shared by every route through this engine. */
+export function validarCriacaoProvider(method: PaymentMethod, result: PaymentResult | null | undefined): asserts result is PaymentResult {
+  const reference = typeof result?.reference === 'string' ? result.reference.trim() : '';
+  if (result?.status === 'FAILED') throw new PaymentError('PAYMENT_DECLINED');
+  if (!reference || !result?.status) {
+    throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+  }
+  if (method === 'PIX') {
+    const action = result.action;
+    const hasCopyPaste = typeof action?.code === 'string' && action.code.trim().length > 0;
+    const hasQrOrTicket = (typeof action?.qrCode === 'string' && action.qrCode.trim().length > 0) ||
+      (typeof action?.ticketUrl === 'string' && /^https:\/\//i.test(action.ticketUrl));
+    if (action?.type !== 'PIX' || !hasCopyPaste || !hasQrOrTicket) {
+      throw new PaymentError('UNKNOWN_PROVIDER_ERROR', true);
+    }
+  }
+}
 export class PaymentOrchestrator {
   async intent(empresaId: number, id: number, tx?: Tx): Promise<Row> {
     const r = await getStore().findOneWhere(R_INTENTS, { empresa_id: empresaId, id }, tx);
@@ -76,7 +94,28 @@ export class PaymentOrchestrator {
       );
       return { intent, fresh: true, order };
     }));
-    if (!claim.fresh) return { intent: claim.intent, idempotent: true };
+    if (!claim.fresh) {
+      // A concurrent retry of the same key may observe the first worker between
+      // intent creation and bridge persistence. Wait for that one operation to
+      // settle; a durable provider uncertainty/failure is never reported as a
+      // successful idempotent checkout.
+      let current = claim.intent;
+      for (let poll = 0; !current.cobranca_id && poll < 250; poll++) {
+        if (current.status === 'FAILED') throw new HttpError(409, 'A tentativa de pagamento anterior falhou.');
+        const attempts = await s.list(R_ATTEMPTS, {
+          page: 1, pageSize: 1, sort: 'id', dir: 'desc',
+          filter: { empresa_id: empresaId, payment_intent_id: Number(current.id) },
+        });
+        const lastAttempt = attempts.rows[0];
+        if (lastAttempt?.failure_code || lastAttempt?.status === 'FAILED') {
+          throw new HttpError(409, 'Criação de pagamento sem confirmação; consulte a transação antes de continuar.');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        current = await this.intent(empresaId, Number(current.id));
+      }
+      if (!current.cobranca_id) throw new HttpError(409, 'Criação de pagamento ainda sem confirmação; consulte a transação antes de continuar.');
+      return { intent: current, idempotent: true };
+    }
     const i = claim.intent;
     // Period fence precedes the row lock even for short, local-only status
     // updates. A late webhook must not be overwritten by a failed create.
@@ -138,9 +177,14 @@ export class PaymentOrchestrator {
           route.context.credentials.capture_mode === 'manual' && route.capability.authorize
             ? await route.provider.authorize({ ...route.context, operationKey }, input)
             : await route.provider.createPaymentIntent({ ...route.context, operationKey }, input);
+        // Validate the provider contract before persisting or returning success.
+        // A PIX payment needs a provider reference, a usable copy/paste value,
+        // and a QR image or provider-issued ticket URL. No fields are fabricated.
+        validarCriacaoProvider(method, result);
+        const reference = result.reference.trim();
         // Persist reference before applying state. No provider payload/card/token is retained.
         await s.update(R_ATTEMPTS, Number(attempt.id), {
-          provider_transaction_id: result.reference,
+          provider_transaction_id: reference,
           status: 'PENDING',
           safe_reference: { ...attempt.safe_reference, action: result.action || null },
         });
@@ -163,8 +207,10 @@ export class PaymentOrchestrator {
         });
         if (!canFallback(e) || n === routes.length - 1) {
           if (!ambiguous) await updatePendingIntent({ status: 'FAILED', updated_at: now() });
-          // Unknown writes are retained pending. Do NOT release stock or start another provider.
-          if (ambiguous) return { intent: await this.intent(empresaId, Number(i.id)), idempotent: false };
+          // An unknown write remains fenced against retries/fallback (the same
+          // provider idempotency key is retained), but it is never checkout
+          // success. The checkout must surface an error and release its hold.
+          if (ambiguous) throw new HttpError(502, 'Criação do pagamento sem confirmação do provider. Consulte a transação antes de tentar novamente.');
           throw new HttpError(502, 'Provider recusou o pagamento. Consulte a transação.');
         }
       }
@@ -193,8 +239,10 @@ export class PaymentOrchestrator {
           status: 'pendente',
           provider_ref: r.reference,
           idempotency_key: i.idempotency_key,
-          copia_cola: r.action?.type === 'PIX' ? r.action.code : null,
+          copia_cola: r.action?.type === 'PIX' ? (r.action.code || null) : null,
           qr_code: r.action?.qrCode || null,
+          qr_code_base64: r.action?.qrCode || null,
+          ticket_url: r.action?.ticketUrl || null,
           linha_digitavel: r.action?.type === 'BOLETO' ? r.action.code : null,
           expires_em: r.action?.expiresAt || null,
           payload: null,

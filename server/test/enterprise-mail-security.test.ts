@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { enviarEmail } from '../src/mail';
 
-const keys = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM'] as const;
+const keys = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM', 'SMTP_SECURE'] as const;
 async function withEnv<T>(values: Record<string, string | undefined>, fn: () => Promise<T>) {
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   for (const key of keys) {
@@ -46,6 +46,20 @@ test('falha do SMTP: erro remoto e credenciais não são registrados', async () 
       const { value, output } = await captureLogs(() => enviarEmail(message));
       assert.equal(value, 'nao_enviado'); assertNoSecrets(output); assert.match(output, /Falha no transporte SMTP/);
     });
+  } finally { mailer.createTransport = original; }
+});
+
+test('SMTP_SECURE explícito é respeitado no transporte sem registrar segredo', async () => {
+  const mailer = createRequire(import.meta.url)('nodemailer'); const original = mailer.createTransport;
+  let options: Record<string, unknown> | null = null;
+  mailer.createTransport = (value: Record<string, unknown>) => { options = value; return { sendMail: async () => ({ accepted: ['recipient@example.test'] }) }; };
+  try {
+    await withEnv({ SMTP_HOST: 'smtp.example.test', SMTP_PORT: '587', SMTP_USER: 'fixture-user', SMTP_PASS: 'fixture-pass', SMTP_FROM: 'orders@example.test', SMTP_SECURE: 'true' }, async () => {
+      assert.equal(await enviarEmail({ to: 'recipient@example.test', assunto: 'Teste', html: '<p>Teste</p>' }), 'enviado');
+    });
+    assert.equal(options?.host, 'smtp.example.test');
+    assert.equal(options?.port, 587);
+    assert.equal(options?.secure, true);
   } finally { mailer.createTransport = original; }
 });
 

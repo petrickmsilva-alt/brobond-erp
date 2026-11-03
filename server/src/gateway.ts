@@ -101,6 +101,7 @@ export const R_GATEWAY_COBRANCAS: Resource = {
     { name: 'nosso_numero', label: 'Nosso número', type: 'text' },
     { name: 'linha_digitavel', label: 'Linha digitável', type: 'text' },
     { name: 'qr_code', label: 'QR Code', type: 'text' },
+    { name: 'qr_code_base64', label: 'QR Code (base64)', type: 'text' },
     { name: 'copia_cola', label: 'Copia e cola', type: 'text' },
     { name: 'ticket_url', label: 'Ticket oficial do provedor', type: 'text' },
     { name: 'nsu', label: 'NSU', type: 'text' },

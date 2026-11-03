@@ -210,7 +210,12 @@ function whatsappConfigurado(): { token: string; phoneId: string; versao: string
 
 // PENDENTE = provedor indisponível/não configurado: NÃO é desfecho terminal.
 // A linha volta para a fila com backoff; o pedido continua válido.
-type ResultadoAdapter = { estado: 'ENVIADO' | 'IGNORADO' | 'PENDENTE'; erro?: string };
+type ResultadoAdapter = {
+  estado: 'ENVIADO' | 'IGNORADO' | 'PENDENTE';
+  erro?: string;
+  providerMessageId?: string | null;
+  providerStatus?: string | null;
+};
 
 async function adapterEmail(row: Row, ctx: Record<string, unknown>): Promise<ResultadoAdapter> {
   if (!smtpConfigurado()) return { estado: 'PENDENTE', erro: 'SMTP não configurado — notificação permanece registrada para retry.' };
@@ -227,7 +232,7 @@ async function adapterEmail(row: Row, ctx: Record<string, unknown>): Promise<Res
   ]);
   const resultado = await enviarEmail({ to: String(row.destinatario), assunto: `${mensagem.replace(/&amp;/g, '&')} · Pedido ${String(ctx.pedido_externo || '')}`.trim(), html });
   if (resultado !== 'enviado') return { estado: 'PENDENTE', erro: 'Transporte SMTP indisponível no momento.' };
-  return { estado: 'ENVIADO' };
+  return { estado: 'ENVIADO', providerStatus: 'SMTP_ACCEPTED' };
 }
 
 /**
@@ -264,7 +269,18 @@ async function adapterWhatsApp(row: Row, ctx: Record<string, unknown>): Promise<
       signal: AbortSignal.timeout(12_000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return { estado: 'ENVIADO' };
+    const payload = await res.json().catch(() => null) as { messages?: Array<{ id?: unknown }>; message_status?: unknown } | null;
+    const messageId = payload?.messages?.[0]?.id;
+    if (typeof messageId !== 'string' || !messageId.trim()) {
+      throw new Error('Meta aceitou HTTP sem retornar messages[0].id; recibo não confirmado.');
+    }
+    return {
+      estado: 'ENVIADO',
+      providerMessageId: messageId,
+      // API accepted the request. Delivery/read are confirmed only by a
+      // provider status webhook, never inferred from HTTP 200.
+      providerStatus: 'REQUEST_ACCEPTED',
+    };
   } catch (e) {
     // Só o código/motivo genérico: nunca URL com phone id, token ou destinatário.
     const motivo = e instanceof Error ? e.message.slice(0, 160) : 'falha de rede';
@@ -298,26 +314,50 @@ export async function processarEventoNotificacao(payload: Record<string, unknown
   let falhas = 0;
   for (const row of lista.rows) {
     const estado = String(row.estado);
-    // ENVIADO/IGNORADO são terminais (idempotência por notificação).
-    // PENDENTE/ERRO/PROCESSANDO voltam a tentar com backoff controlado.
+    // An atomic claim keeps concurrent outbox workers from sending the same
+    // channel twice. A crashed PROCESSANDO lease is recoverable after 10 min.
     if (estado === 'ENVIADO' || estado === 'IGNORADO') continue;
+    const staleProcessing = estado === 'PROCESSANDO' &&
+      (!row.atualizado_em || Date.now() - Date.parse(String(row.atualizado_em)) > 10 * 60_000);
+    if (estado === 'PROCESSANDO' && !staleProcessing) continue;
+    if (!['PENDENTE', 'ERRO', 'PROCESSANDO'].includes(estado)) continue;
+    const antesTentativas = Number(row.tentativas || 0);
+    const claimed = await s.tryUpdateIf(R_NOTIFICACOES(), Number(row.id), {
+      empresa_id: empresaId,
+      estado,
+      tentativas: antesTentativas,
+    }, {
+      estado: 'PROCESSANDO',
+      tentativas: antesTentativas + 1,
+      atualizado_em: new Date().toISOString(),
+    });
+    if (!claimed) continue;
+    const tentativas = antesTentativas + 1;
     const canal = String(row.canal);
-    const tentativas = Number(row.tentativas || 0) + 1;
     try {
       const resultado = canal === 'EMAIL' ? await adapterEmail(row, ctx) : canal === 'WHATSAPP' ? await adapterWhatsApp(row, ctx) : { estado: 'IGNORADO' as const, erro: 'Canal desconhecido.' };
       if (resultado.estado === 'PENDENTE') falhas += 1;
-      await s.update(R_NOTIFICACOES(), Number(row.id), {
+      await s.tryUpdateIf(R_NOTIFICACOES(), Number(row.id), {
+        empresa_id: empresaId, estado: 'PROCESSANDO', tentativas,
+      }, {
         estado: resultado.estado,
-        tentativas,
         ultimo_erro: resultado.erro ?? null,
+        provider_message_id: resultado.providerMessageId ?? null,
+        provider_status: resultado.providerStatus ?? (resultado.estado === 'ENVIADO' ? 'REQUEST_ACCEPTED' : null),
         enviado_em: resultado.estado === 'ENVIADO' ? new Date().toISOString() : null,
         atualizado_em: new Date().toISOString(),
       });
     } catch (e) {
       falhas += 1;
       const mensagem = e instanceof Error ? e.message.slice(0, 300) : 'Falha no provedor de notificação.';
-      await s.update(R_NOTIFICACOES(), Number(row.id), {
-        estado: 'ERRO', tentativas, ultimo_erro: mensagem, atualizado_em: new Date().toISOString(),
+      // A notification failure remains re-drivable. Outbox retry/backoff
+      // governs automatic attempts; after exhaustion its administrative
+      // re-drive reuses this same idempotent notification row.
+      await s.tryUpdateIf(R_NOTIFICACOES(), Number(row.id), {
+        empresa_id: empresaId, estado: 'PROCESSANDO', tentativas,
+      }, {
+        estado: 'PENDENTE', ultimo_erro: mensagem, enviado_em: null,
+        provider_status: null, atualizado_em: new Date().toISOString(),
       });
     }
   }

@@ -48,6 +48,32 @@ editar conteúdo, `REPROCESSAR` controlado.
 Nenhum estado de pagamento vem do frontend. Cupom só é consumido no passo do
 backend (CAS) e devolvido em falha/expiração/cancelamento.
 
+## Notificações transacionais (`commerce_outbox` → `commerce_notificacoes`)
+
+Cada linha é idempotente por empresa/pedido/evento/canal/destinatário. EMAIL e
+WhatsApp são processados independentemente; erro de um canal não cancela o
+pedido nem interrompe o outro. Falha/transporte indisponível mantém a linha em
+retry; esgotado o outbox, o evento pode ser reenfileirado pelo fluxo
+administrativo já existente. `ENVIADO` significa aceito pelo transporte — no
+WhatsApp, HTTP 200 não significa entrega: `provider_status=REQUEST_ACCEPTED` e o
+`provider_message_id` da Meta são persistidos para auditoria/rastreamento.
+
+| Evento | E-mail | WhatsApp |
+|---|---|---|
+| `ORDER_CREATED` | Notificação transacional (SMTP configurado + destino válido) | Template oficial configurado/aprovado + destino válido |
+| `PIX_GENERATED` | Notificação transacional (SMTP configurado + destino válido) | Template oficial configurado/aprovado + destino válido |
+| `PAYMENT_PENDING` | Notificação transacional (SMTP configurado + destino válido) | Template oficial configurado/aprovado + destino válido |
+| `PAYMENT_APPROVED` | Notificação transacional (SMTP configurado + destino válido) | Template oficial configurado/aprovado + destino válido |
+| `PAYMENT_REJECTED` | Notificação transacional (SMTP configurado + destino válido) | Template oficial configurado/aprovado + destino válido |
+| `ORDER_PROCESSING` | Notificação transacional (SMTP configurado + destino válido) | Template oficial configurado/aprovado + destino válido |
+| `ORDER_SHIPPED` | Notificação transacional (SMTP configurado + destino válido) | Template oficial configurado/aprovado + destino válido |
+| `ORDER_DELIVERED` | Notificação transacional (SMTP configurado + destino válido) | Template oficial configurado/aprovado + destino válido |
+| `ORDER_CANCELLED` | Notificação transacional (SMTP configurado + destino válido) | Template oficial configurado/aprovado + destino válido |
+
+Não há eventos de marketing nessa fila. WHATSAPP usa exclusivamente Meta
+WhatsApp Business Cloud API; homologação externa permanece bloqueada até que
+credenciais e templates realmente aprovados estejam configurados.
+
 ## Frete (`commerce_configuracoes.frete`)
 
 | Provider | Comportamento |

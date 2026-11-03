@@ -680,9 +680,15 @@ export async function montarVisaoDaSale(
       action: acao,
       status: cobranca
         ? mapearEstadoPagamento(cobranca.status) ?? String(cobranca.status)
-        : pedido?.pagamento_estado
-          ? String(pedido.pagamento_estado)
-          : 'PENDING',
+        : pedido?.estado === 'ERRO'
+          ? 'ERROR'
+          : pedido?.estado === 'EXPIRADO'
+            ? 'EXPIRED'
+            : pedido?.estado === 'CANCELADO'
+              ? 'CANCELLED'
+              : pedido?.pagamento_estado
+                ? String(pedido.pagamento_estado)
+                : 'PENDING',
       provider: cobranca ? String(cobranca.provider) : null,
       metodo: cobranca ? String(cobranca.metodo) : null,
       valor: cobranca ? Number(cobranca.valor) : null,

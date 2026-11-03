@@ -25,7 +25,10 @@ async function fixture(t: any) {
   let refunded = 0; let refunds = 0;
   t.mock.method(globalThis, 'fetch', async (url: unknown, init: RequestInit) => {
     if (String(url).endsWith('/refunds')) { refunds++; const amount = JSON.parse(String(init.body)).amount; refunded += amount; return new Response(JSON.stringify({ id: `${ref}-refund-${refunds}`, payment_id: ref, amount, status: 'approved' })); }
-    if (init.method === 'POST') return new Response(JSON.stringify({ id: ref, status: 'pending', transaction_amount: 100, currency_id: 'BRL' }));
+    if (init.method === 'POST') return new Response(JSON.stringify({
+      id: ref, status: 'action_required', status_detail: 'waiting_transfer', total_amount: '100.00', currency: 'BRL',
+      transactions: { payments: [{ payment_method: { qr_code: '000201-provider-code', qr_code_base64: 'iVBOR-provider-image' } }] },
+    }));
     return new Response(JSON.stringify({ id: ref, status: refunded === 100 ? 'refunded' : 'approved', transaction_amount: 100,
       currency_id: 'BRL', transaction_amount_refunded: refunded }));
   });

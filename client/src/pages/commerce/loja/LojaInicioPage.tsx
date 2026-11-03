@@ -21,7 +21,7 @@ import CardProduto, { EsqueletoCard, type CardProdutoDados } from './CardProduto
 
 type Categoria = { id: number; nome: string; slug: string; total: number };
 type Secoes = { destaques: CardProdutoDados[]; novidades: CardProdutoDados[]; ofertas: CardProdutoDados[] };
-type RespostaCatalogo = { total: number; produtos: CardProdutoDados[]; categorias?: Categoria[]; secoes?: Secoes };
+type RespostaCatalogo = { total: number; total_colecao?: number; produtos: CardProdutoDados[]; categorias?: Categoria[]; secoes?: Secoes };
 
 const ORDENACOES = [
   { valor: '', rotulo: 'Ordem padrão' },
@@ -87,6 +87,8 @@ export default function LojaInicioPage() {
   const secoes = resposta?.secoes;
   const hero = produtos.find((p) => !!p.foto_url)?.foto_url ?? (secoes?.destaques ?? []).find((p) => !!p.foto_url)?.foto_url ?? null;
   const temFiltro = !!(q || categoria || ordenar);
+  const temProdutoNasSecoes = !!(secoes && Object.values(secoes).some((lista) => lista.length > 0));
+  const totalColecao = resposta?.total_colecao ?? resposta?.total ?? 0;
 
   return (
     <LojaShell>
@@ -187,7 +189,7 @@ export default function LojaInicioPage() {
               {[0, 1, 2, 3].map((i) => <EsqueletoCard key={i} />)}
               <span className="sr-only">Carregando produtos…</span>
             </div>
-          ) : erro ? null : produtos.length === 0 ? (
+          ) : erro ? null : produtos.length === 0 && !temProdutoNasSecoes ? (
             <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-line bg-surface p-10 text-center">
               <PackageSearch className="h-8 w-8 text-muted" aria-hidden="true" />
               <h3 className="font-medium">{temFiltro ? 'Nada encontrado' : 'Nenhum produto disponível na loja.'}</h3>
@@ -202,11 +204,11 @@ export default function LojaInicioPage() {
               <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
                 {produtos.map((p, i) => <li key={p.id}><CardProduto produto={p} prioritario={i < 2} /></li>)}
               </ul>
-              {(resposta?.total ?? 0) > 48 && (
+              {totalColecao > 48 && (
                 <nav aria-label="Paginação da vitrine" className="flex items-center justify-center gap-3 pt-2">
                   <button type="button" className="btn-secondary" disabled={pagina <= 1} onClick={() => atualizar('page', String(pagina - 1))}>Anterior</button>
-                  <span className="text-xs tabular-nums text-muted">Página {pagina} de {Math.ceil((resposta?.total ?? 0) / 48)}</span>
-                  <button type="button" className="btn-secondary" disabled={pagina * 48 >= (resposta?.total ?? 0)} onClick={() => atualizar('page', String(pagina + 1))}>Próxima</button>
+                <span className="text-xs tabular-nums text-muted">Página {pagina} de {Math.ceil(totalColecao / 48)}</span>
+                <button type="button" className="btn-secondary" disabled={pagina * 48 >= totalColecao} onClick={() => atualizar('page', String(pagina + 1))}>Próxima</button>
                 </nav>
               )}
             </>
