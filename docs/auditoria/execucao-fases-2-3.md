@@ -62,8 +62,8 @@ A cobrança avulsa sem `idempotency_key` gera a chave pelo hash do corpo da requ
 
 ## Pendências que dependem de decisão do Diretor
 
-- **(b) Migração Nuvemshop v1 → 2025-03:** bloqueia a Fase 4 (Nuvemshop) e a parte de Nuvemshop da Fase 5. Não executada.
-- **(d) Novas variáveis** (secret do WhatsApp, flag de suspensão em produção): bloqueia a verificação de assinatura do webhook de status do WhatsApp (Fase 4).
+- **(b) Migração Nuvemshop v1 → 2025-03:** **aprovada pelo Diretor depois desta execução.** A publicação migrou (commit `2c93e33`, ver `execucao-migracao-nuvemshop-2025.md`); a leitura de pedidos e produtos segue pendente.
+- **(d) Novas variáveis:** **não autorizada** pelo Diretor. Sem novo secret do WhatsApp, o webhook de status do WhatsApp não pode ter verificação de assinatura; fica pendente.
 - **(f) Liberação do ML em produção:** depende de homologação e reconciliação de anúncios duplicados por P0-01 (não feita).
 
 ## Limitações

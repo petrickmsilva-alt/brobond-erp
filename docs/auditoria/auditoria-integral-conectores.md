@@ -858,4 +858,7 @@ Este relatório registra a auditoria em 2026-11-03 e **não foi reescrito** para
 - Plano de migração de segredos (não executado): `docs/seguranca/plano-migracao-segredos.md`.
 - Caminho canônico de pagamentos: `docs/pagamentos/ADR-001-motor-canonico.md`; homologação sandbox não executada: `docs/pagamentos/homologacao-sandbox.md`.
 
-Fases 4–7 aguardam decisões pendentes do Diretor (b, d, f) e evidências externas. Nada delas foi implementado. Todas as correções acima têm evidência **local** apenas; nenhuma foi verificada em homologação ou produção.
+- Migração da publicação Nuvemshop para o contrato 2025-03 (decisão (b) aprovada): `docs/auditoria/execucao-migracao-nuvemshop-2025.md`, commit `2c93e33`. Parcial: a leitura de pedidos e produtos continua em v1.
+- Fase 6, parte P2-01 (anti-SSRF em webhooks de saída): `docs/auditoria/execucao-fase-6-antissrf.md`, commit `4b8dceb`. Rebinding de DNS permanece como risco residual.
+
+**Ainda não executado:** P1-05 e P1-06 (SMTP `verify()` e webhook de status do WhatsApp; este último depende da decisão (d), não autorizada); Central de Notificações; envio de estoque após venda (P1-03); WooCommerce (P1-08); fiscal (P2-04, homologação); alertas e runbooks da Fase 7; go-live (decisão formal do Diretor). Todas as correções acima têm evidência **local** apenas; nenhuma foi verificada em homologação ou produção.
