@@ -272,11 +272,10 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
       .filter((a) => a !== '__mais__');
     expect(areasRenderizadas.sort()).toEqual([...MODULE_AREAS].sort());
     // Cada módulo da fonte única aparece exatamente uma vez no menu superior.
-    // O comprimento é o da fonte (143 após as ONDAS 4–5 + COMMERCE ENTERPRISE: 111 + 28 módulos
-    // reais — atendimento/CDP, fidelidade/afiliados, Data/BI, IA, demanda,
-    // ocorrências, scorecard e EPM, mais Preços, Payment Engine e Providers). `modules.test.ts` trava o mesmo número e
-    // a lista canônica — aqui só se confirma que o menu não perde nem duplica.
-    expect(MODULES).toHaveLength(143);
+    // 143 módulos existentes + a Central de Notificações do Commerce.
+    // `modules.test.ts` trava o mesmo número e a lista canônica — aqui só se
+    // confirma que o menu não perde nem duplica a fonte única.
+    expect(MODULES).toHaveLength(144);
     unmount();
   });
 

@@ -88,6 +88,7 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   'commerce-pedidos': '/commerce/pedidos',
   'commerce-delivery': '/commerce/delivery',
   'commerce-fila': '/commerce/fila',
+  'commerce-notificacoes': '/commerce/notificacoes',
   'commerce-trends': '/commerce/trends',
   creators: '/creators',
   'creator-matches': '/matches',
@@ -98,7 +99,7 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
 };
 
 describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () => {
-  it('preserva exatamente os 105 módulos e todas as 105 URLs sem duplicidade nem remoção', () => {
+  it('preserva os módulos e todas as URLs canônicas, incluindo a Central de Notificações, sem duplicidade nem remoção', () => {
     // 70 da Árvore Master original + 10 da FUNDAÇÃO COMERCIAL (MASTER
     // MA-02..MA-08: territórios, equipes, hierarquia, carteira, atribuição,
     // metas, painel comercial e os dois cadastros do motor de comissão)
@@ -122,11 +123,12 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     // + 3 do COMMERCE ENTERPRISE: Preços (/commerce/precos), Payment Engine
     //   (/commerce/pagamentos) e Providers (/commerce/pagamentos/provedores) —
     //   páginas que já existiam ou leem dado real; entram no menu, sem rota nova "Em breve".
-    expect(MODULES).toHaveLength(143);
+    // + 1 da Central de Notificações (diagnóstico autenticado, somente leitura).
+    expect(MODULES).toHaveLength(144);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(143);
-    expect(new Set(paths).size).toBe(143);
+    expect(new Set(ids).size).toBe(144);
+    expect(new Set(paths).size).toBe(144);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -155,10 +157,10 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (92), Commerce (16), Creators (4) e Utilidades Globais (2)', () => {
+  it('separa ERP CORE (120), Commerce (18), Creators (4) e Utilidades Globais (2)', () => {
     expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(120);
     // 4 conectores de canal + 9 módulos do BROBOND COMMERCE OS
-    expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(17);
+    expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(18);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
   });
@@ -339,6 +341,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'conector-nuvemshop',
       'conector-instagram',
       'commerce-fila',
+      'commerce-notificacoes',
       'commerce-trends',
     ]);
     expect(porArea('Creators')).toEqual(['creators', 'creator-matches', 'outreach-ai', 'campanhas']);
@@ -351,8 +354,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       s.areas.flatMap((a) => a.groups.flatMap((g) => g.subgroups.flatMap((sub) => sub.modules.map((m) => m.id))))
     );
     expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
-    // 24 legadas + 12 páginas Commerce + 4 páginas Creators.
-    expect(PAGES_ESPECIAIS).toHaveLength(40);
+    // 24 legadas + 13 páginas Commerce (inclui notificações) + 4 páginas Creators.
+    expect(PAGES_ESPECIAIS).toHaveLength(41);
   });
 });
 
@@ -487,7 +490,7 @@ describe('visibleModules', () => {
     expect(porGrupo('Fulfillment')).toEqual(['commerce-delivery']);
     expect(porGrupo('Pagamentos')).toEqual(['commerce-pagamentos', 'commerce-providers', 'conector-mercadopago']);
     expect(porGrupo('Canais')).toEqual(['conector-mercadolivre', 'conector-nuvemshop', 'conector-instagram']);
-    expect(porGrupo('Integrações')).toEqual(['commerce-fila']);
+    expect(porGrupo('Integrações')).toEqual(['commerce-fila', 'commerce-notificacoes']);
     expect(porGrupo('Inteligência')).toEqual(['commerce-trends']);
     // Mercado Pago saiu de Canais e vive em Pagamentos/Providers, com a rota preservada.
     const mp = MODULES.find((m) => m.id === 'conector-mercadopago')!;

@@ -261,33 +261,64 @@ function whatsappConfigurado(): { token: string; phoneId: string; versao: string
 const vazio = (nome: string) => !String(process.env[nome] ?? '').trim();
 const EVENTOS_COM_MENSAGEM = EVENTOS_NOTIFICACAO.filter((e) => !EVENTOS_CONSOLIDADOS[e]);
 
-export type StatusCanal = 'CONFIGURADO' | 'CONECTADO' | 'ERRO' | 'NAO_CONFIGURADO';
+export type StatusConfiguracaoCanal = 'CONFIGURADO' | 'NAO_CONFIGURADO';
+export type StatusCanal = StatusConfiguracaoCanal | 'CONECTADO' | 'ERRO';
+
+const VARIAVEIS_MODELOS = [
+  'WHATSAPP_TEMPLATE_ORDER_CREATED',
+  'WHATSAPP_TEMPLATE_PAYMENT_APPROVED',
+  'WHATSAPP_TEMPLATE_TRANSACIONAL',
+] as const;
 
 /**
- * Situação de configuração dos canais. Só expõe NOMES de variáveis ausentes —
- * nunca valores, tokens, phone id ou remetente.
+ * Diagnóstico LOCAL e somente leitura: nenhuma conexão SMTP/Meta é aberta.
+ * `status_configuracao` não se confunde com o histórico de tentativas retornado
+ * por `situacaoCanaisNotificacao`. Preserva os campos legados e acrescenta
+ * presenças booleanas e NOMES de variáveis, nunca credenciais ou seus valores.
+ * A única informação textual do ambiente é o código de idioma, validado antes
+ * da exposição (uma configuração inválida não pode virar um segredo na UI).
  */
 export function statusCanaisNotificacao() {
   const faltandoEmail = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS'].filter(vazio);
   const faltandoWhats = ['WHATSAPP_CLOUD_API_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID'].filter(vazio);
   const templates = Object.fromEntries(EVENTOS_COM_MENSAGEM.map((e) => [e, !!templateWhatsApp(e)])) as Record<string, boolean>;
   const semTemplate = EVENTOS_COM_MENSAGEM.filter((e) => !templates[e]);
+  const statusEmail: StatusConfiguracaoCanal = faltandoEmail.length ? 'NAO_CONFIGURADO' : 'CONFIGURADO';
+  const statusWhats: StatusConfiguracaoCanal = faltandoWhats.length || semTemplate.length === EVENTOS_COM_MENSAGEM.length ? 'NAO_CONFIGURADO' : 'CONFIGURADO';
+  const statusLink: StatusConfiguracaoCanal = basePublica() ? 'CONFIGURADO' : 'NAO_CONFIGURADO';
+  // Mesmo padrão/default do adapter, sem alterar a resolução usada nos envios.
+  const idioma = String(process.env.WHATSAPP_TEMPLATE_IDIOMA || 'pt_BR');
   return {
     email: {
-      status: (faltandoEmail.length ? 'NAO_CONFIGURADO' : 'CONFIGURADO') as StatusCanal,
+      status: statusEmail as StatusCanal,
+      status_configuracao: statusEmail,
+      smtp_configurado: faltandoEmail.length === 0,
       faltando: faltandoEmail,
+      variaveis_ausentes: [...faltandoEmail, ...(vazio('SMTP_FROM') ? ['SMTP_FROM'] : [])],
       remetente_dedicado: !vazio('SMTP_FROM'),
     },
     whatsapp: {
-      status: (faltandoWhats.length || semTemplate.length === EVENTOS_COM_MENSAGEM.length ? 'NAO_CONFIGURADO' : 'CONFIGURADO') as StatusCanal,
+      status: statusWhats as StatusCanal,
+      status_configuracao: statusWhats,
+      token_configurado: !vazio('WHATSAPP_CLOUD_API_TOKEN'),
+      phone_number_id_configurado: !vazio('WHATSAPP_PHONE_NUMBER_ID'),
       faltando: [
         ...faltandoWhats,
         ...(semTemplate.length === EVENTOS_COM_MENSAGEM.length ? ['WHATSAPP_TEMPLATE_TRANSACIONAL (ou WHATSAPP_TEMPLATE_<EVENTO>)'] : []),
       ],
+      variaveis_ausentes: [...faltandoWhats, ...VARIAVEIS_MODELOS.filter(vazio), ...(vazio('WHATSAPP_TEMPLATE_IDIOMA') ? ['WHATSAPP_TEMPLATE_IDIOMA'] : [])],
+      modelos_configurados: Object.fromEntries(VARIAVEIS_MODELOS.map((nome) => [nome, !vazio(nome)])),
+      idioma: /^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(idioma) ? idioma : null,
+      idioma_configurado: !vazio('WHATSAPP_TEMPLATE_IDIOMA'),
       templates,
       eventos_sem_template: semTemplate,
     },
-    link_publico: { status: (basePublica() ? 'CONFIGURADO' : 'NAO_CONFIGURADO') as StatusCanal, faltando: basePublica() ? [] : ['APP_URL (ou PUBLIC_BASE_URL)'] },
+    link_publico: {
+      status: statusLink as StatusCanal,
+      status_configuracao: statusLink,
+      faltando: basePublica() ? [] : ['APP_URL (ou PUBLIC_BASE_URL)'],
+      variaveis_ausentes: basePublica() ? [] : ['APP_URL', 'PUBLIC_BASE_URL'],
+    },
   };
 }
 
@@ -627,8 +658,14 @@ export async function situacaoCanaisNotificacao(empresaId: number) {
   const evidencia = (canal: CanalNotificacao, base: StatusCanal): { status: StatusCanal; ultimo_envio_em: string | null; ultimo_erro: string | null } => {
     const ultima = recentes.find((r) => String(r.canal) === canal);
     if (base === 'NAO_CONFIGURADO' || !ultima) return { status: base, ultimo_envio_em: null, ultimo_erro: null };
-    if (String(ultima.estado) === 'ENVIADO') return { status: 'CONECTADO', ultimo_envio_em: ultima.enviado_em ? String(ultima.enviado_em) : null, ultimo_erro: null };
-    return { status: 'ERRO', ultimo_envio_em: null, ultimo_erro: ultima.ultimo_erro ? String(ultima.ultimo_erro).slice(0, 300) : null };
+    if (String(ultima.estado) === 'ENVIADO') {
+      const enviadoEm = new Date(String(ultima.enviado_em || ''));
+      return { status: 'CONECTADO', ultimo_envio_em: Number.isFinite(enviadoEm.getTime()) ? enviadoEm.toISOString() : null, ultimo_erro: null };
+    }
+    // Erros persistidos/provindos do provedor podem conter credenciais, URLs
+    // privadas ou dados de pedidos. Diagnóstico não é um endpoint de logs:
+    // devolve somente um resumo fixo, sem copiar o texto bruto para a resposta.
+    return { status: 'ERRO', ultimo_envio_em: null, ultimo_erro: 'A última tentativa de envio não foi concluída pelo provedor.' };
   };
   return {
     email: { ...config.email, ...evidencia('EMAIL', config.email.status) },
@@ -642,5 +679,7 @@ export async function statusNotificacoesCommerce(req: Request, res: Response) {
   const actor = currentUser(req);
   const escopo = escopoDoAtor(actor);
   checkAccess(R_NOTIFICACOES(), actor, 'read');
-  res.json({ ok: true, ...(await situacaoCanaisNotificacao(escopo.empresaId)) });
+  const canais = await situacaoCanaisNotificacao(escopo.empresaId);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, ...canais, consultado_em: new Date().toISOString() });
 }
