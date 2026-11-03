@@ -434,3 +434,66 @@ Gates locais verdes **não** significam homologação. Antes de
 | `FULL_COMMERCE_GO_LIVE` | **NO** | sem evidência de venda E2E real (compra PIX + webhook + baixa + envio) |
 
 **Sem merge, sem deploy, sem alteração de `main`, sem `backups/`.**
+
+---
+
+## 13. Ciclo final de venda — checkout por etapas, PIX e vitrine (esta entrega)
+
+Branch `arena/7d78aeec-brobond-erp`, base `main` `4d7380c` (PR #100 já incorporado). Reutiliza checkout (`server/src/commerce/vitrine.ts`), Payment Engine/Orchestrator (`modules/payments`), reserva (`estoque_reservas`), Outbox (`commerce_notificacoes`) e a vitrine existente. **Nenhuma arquitetura paralela, nenhuma migration, nenhum modal.**
+
+### 13.1 Auditoria — causa raiz encontrada
+
+| Tema | Estado encontrado | Ação |
+|---|---|---|
+| Checkout | Uma única tela; "Confirmar pedido" sempre visível, inclusive em Dados. Etapas eram apenas visuais. | Máquina de 4 etapas reais (Dados → Entrega → Pagamento → Revisão). Confirmação só na Revisão. Voltar permitido; avançar só com a etapa válida. |
+| Criação do pedido | Já idempotente por `chave_checkout`; reserva na mesma transação; cobrança depois; falha → `ERRO` + reserva liberada. | Mantido. |
+| Mensagem de falha do PIX | Genérica ("Tente novamente"). | Mensagem explícita para falha genérica: "Não foi possível gerar o PIX neste momento. Seu pedido não foi confirmado. Tente novamente." |
+| Carrinho após falha | Preservado (limpeza só após pedido criado). | Mantido e coberto por teste. |
+| Retry após falha | Mesma chave devolve o pedido em `ERRO`. | **Não alterado de propósito**: renovar a chave poderia gerar segunda cobrança quando o provedor responde de forma ambígua (ver 13.4). |
+| Adaptador Mercado Pago | `X-Idempotency-Key = checkout:<pedidoId>` determinística; mapeia `qr_code`, `qr_code_base64`, `ticket_url`. | Mantido. |
+| Homepage | Mesmo produto aparecia em Destaques, Ofertas e Novidades. | Deduplicação por `product_id` nas seções editoriais (`semRepeticaoEntreSecoes`). SKU **não** é chave, para não esconder produto legítimo. Coleção completa continua listando todos os produtos. |
+| "Abrir Loja" | Já abre `/loja` em nova aba. | `rel="noopener noreferrer"` explícito. |
+| Vitrine × ERP | `/loja/*` não tem links para `/commerce` nem "Voltar ao ERP". | Mantido (atende à seção 33). |
+
+### 13.2 Fluxo de checkout (cliente)
+
+```
+Dados (nome, e-mail, WhatsApp, telefone opcional, CPF quando exigido, marketing opt-in separado)
+  → "Continuar para entrega"
+Entrega (retirada: confirmação obrigatória | entrega: endereço completo quando frete manual)
+  → "Continuar para pagamento"
+Pagamento (somente métodos devolvidos pelo Payment Engine)
+  → "Continuar para revisão"
+Revisão (cliente, entrega, itens, método, total recalculado pelo servidor)
+  → "Confirmar pedido e pagar"  →  POST /api/loja/checkout  →  /loja/pedido/:token
+```
+
+O resumo de valores fica visível em todas as etapas. O navegador nunca envia preço, desconto, frete, estoque ou total.
+
+### 13.3 Estoque (regra mantida e testada)
+
+| Momento | Físico | Reservado | Disponível | Venda |
+|---|---|---|---|---|
+| Pedido pendente (PIX gerado) | 8 | 1 | 7 | 0 |
+| Pagamento aprovado (webhook) | 7 | 0 | 7 | 1 |
+| Expiração / falha | 8 | 0 | 8 | 0 |
+
+Nenhum caminho do checkout baixa estoque físico antes da aprovação. A regra acima é a mesma do motor canônico de estoque. Os testes existentes (`server/test/e421-estoque.test.ts` em memória; `server/test/pg/e421-estoque-integridade.test.ts` em PostgreSQL) **não foram reexecutados contra PostgreSQL nesta entrega** (ver 13.6); a regra completa de 4 casos (físico/reservado/disponível/venda) ainda não tem regressão dedicada.
+
+### 13.4 Risco residual — falha ambígua do provedor
+
+Quando o Mercado Pago não confirma a criação da ordem, o Payment Engine devolve 502 "Criação do pagamento sem confirmação do provider". Nesse caso a cobrança **pode ter sido criada** do lado do provedor. Por isso:
+
+- o cliente **não** renova a chave de idempotência automaticamente;
+- o servidor mantém o comportamento existente (pedido `ERRO`, reserva liberada) e o teste `provider PIX sem instrumento válido…` valida a mensagem honesta;
+- reabrir tentativas seguras exige prova de "não cobrado" do provedor e validação com o Mercado Pago real. **Pendência de homologação.**
+
+### 13.5 Carrossel da homepage — não implementado
+
+As imagens anexadas à tarefa (camiseta preta traseira, homens com camisetas vermelha/verde/preta, close de tecido, logo) **não estão no workspace**. Conforme a seção 34, nenhuma imagem foi inventada nem baixada. Manifesto de slots criado em `client/public/brand/hero/manifest.json` com status `ASSETS_NAO_RECEBIDOS`. O hero atual usa a foto real do catálogo.
+
+### 13.6 Testes desta entrega
+
+- Front: `LojaFluxoPages.test.tsx` reescrito para as etapas (inclui: não confirmar sem passar pelas etapas; erro de pagamento preserva carrinho e chave; deduplicação da home).
+- Servidor: `commerce-exposure.test.ts` com asserção da falha ambígua do PIX.
+- Não executado com PostgreSQL real neste sandbox (sem `DATABASE_URL`/PostgreSQL 16.14). `test:pg` e `smoke:pg` ficam dependentes de execução externa.

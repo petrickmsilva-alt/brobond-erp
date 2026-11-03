@@ -210,7 +210,10 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
     } });
     try {
       const body = { chave: 'checkout-pix-ambiguous-test', itens: itens(), comprador };
-      await request(app).post('/api/loja/checkout').send(body).expect(502);
+      const falha = await request(app).post('/api/loja/checkout').send(body).expect(502);
+      // Falha ambígua do provedor (cobrança possivelmente criada): mensagem honesta, sem "pago".
+      assert.match(JSON.stringify(falha.body), /Criação do pagamento sem confirmação/);
+      assert.doesNotMatch(JSON.stringify(falha.body), /pago|aprovad/i);
       const pedido = await s.findOneWhere(RESOURCES.commerce_pedidos, { empresa_id: 1, chave_checkout: body.chave });
       assert.ok(pedido);
       assert.equal(pedido.estado, 'ERRO');

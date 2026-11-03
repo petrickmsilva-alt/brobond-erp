@@ -140,7 +140,7 @@ export default function CommerceLojaConfigPage() {
         title="Loja própria"
         description="Configuração da vitrine em /loja: identidade, frete (FreightProvider), expiração do carrinho e responsável pelas linhas de checkout."
         actions={
-          estado?.abrir_loja ? <a className="btn-secondary" href="/loja" target="_blank" rel="noreferrer">
+          estado?.abrir_loja ? <a className="btn-secondary" href="/loja" target="_blank" rel="noopener noreferrer">
             <ExternalLink className="h-4 w-4" aria-hidden="true" /> Abrir a Loja
           </a> : <button type="button" className="btn-secondary" disabled aria-describedby="estado-loja">Abrir a Loja</button>
         }

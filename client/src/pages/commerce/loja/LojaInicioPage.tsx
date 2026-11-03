@@ -49,6 +49,21 @@ function Secao({ id, titulo, subtitulo, produtos }: { id?: string; titulo: strin
   );
 }
 
+/**
+ * Deduplica as seções editoriais por `product_id`: um mesmo produto que é
+ * destaque, oferta e novidade aparece UMA vez, na seção de maior prioridade
+ * (ordem da lista: Destaques → Ofertas → Novidades). Não usa SKU como chave
+ * para não esconder produto legítimo com código repetido.
+ */
+export function semRepeticaoEntreSecoes(listas: CardProdutoDados[][]): CardProdutoDados[][] {
+  const vistos = new Set<number>();
+  return listas.map((lista) => lista.filter((p) => {
+    if (vistos.has(p.id)) return false;
+    vistos.add(p.id);
+    return true;
+  }));
+}
+
 export default function LojaInicioPage() {
   const [params, setParams] = useSearchParams();
   const q = params.get('q') ?? '';
@@ -89,6 +104,7 @@ export default function LojaInicioPage() {
   const temFiltro = !!(q || categoria || ordenar);
   const temProdutoNasSecoes = !!(secoes && Object.values(secoes).some((lista) => lista.length > 0));
   const totalColecao = resposta?.total_colecao ?? resposta?.total ?? 0;
+  const [destaquesUnicos, ofertasUnicas, novidadesUnicas] = semRepeticaoEntreSecoes([secoes?.destaques ?? [], secoes?.ofertas ?? [], secoes?.novidades ?? []]);
 
   return (
     <LojaShell>
@@ -144,9 +160,9 @@ export default function LojaInicioPage() {
         {/* DESTAQUES / OFERTAS / NOVIDADES — só com dados reais */}
         {!temFiltro && (
           <div className="space-y-12">
-            <Secao titulo="Destaques" subtitulo="Peças marcadas como destaque no catálogo." produtos={secoes?.destaques ?? []} />
-            <Secao titulo="Ofertas" subtitulo="Preço promocional vigente, calculado pelo servidor." produtos={secoes?.ofertas ?? []} />
-            <Secao id="novidades" titulo="Novidades" subtitulo="Cadastros mais recentes publicados na loja." produtos={secoes?.novidades ?? []} />
+            <Secao titulo="Destaques" subtitulo="Peças marcadas como destaque no catálogo." produtos={destaquesUnicos} />
+            <Secao titulo="Ofertas" subtitulo="Preço promocional vigente, calculado pelo servidor." produtos={ofertasUnicas} />
+            <Secao id="novidades" titulo="Novidades" subtitulo="Cadastros mais recentes publicados na loja." produtos={novidadesUnicas} />
           </div>
         )}
 

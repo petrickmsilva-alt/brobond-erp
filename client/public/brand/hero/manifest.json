@@ -1,0 +1,12 @@
+{
+  "status": "ASSETS_NAO_RECEBIDOS",
+  "observacao": "Slots do carrossel da homepage. Nenhuma imagem foi criada, baixada ou inventada. Preencher os caminhos somente com arquivos licenciados e sem marca d'água de terceiros (ex.: Dola AI).",
+  "slides": [
+    { "id": 1, "prioridade": 1, "descricao": "Camiseta preta BroBond, vista traseira", "desktop": null, "mobile": null, "alt": "" },
+    { "id": 2, "prioridade": 2, "descricao": "Homem vestindo camiseta vermelha BroBond", "desktop": null, "mobile": null, "alt": "" },
+    { "id": 3, "prioridade": 3, "descricao": "Homem vestindo camiseta verde BroBond", "desktop": null, "mobile": null, "alt": "" },
+    { "id": 4, "prioridade": 4, "descricao": "Homem vestindo camiseta preta BroBond", "desktop": null, "mobile": null, "alt": "" },
+    { "id": 5, "prioridade": 5, "descricao": "Close de tecido/produto BroBond", "desktop": null, "mobile": null, "alt": "" }
+  ],
+  "logo": { "descricao": "Logo BroBond", "arquivo": "/logo-word-light.png" }
+}

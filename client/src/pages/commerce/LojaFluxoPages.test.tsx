@@ -11,12 +11,12 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ToastProvider } from '../../components/ui';
-import LojaInicioPage from './loja/LojaInicioPage';
+import LojaInicioPage, { semRepeticaoEntreSecoes } from './loja/LojaInicioPage';
 import LojaProdutoPage from './loja/LojaProdutoPage';
 import LojaCarrinhoPage from './loja/LojaCarrinhoPage';
 import LojaCheckoutPage from './loja/LojaCheckoutPage';
 import LojaPedidoPage from './loja/LojaPedidoPage';
-import { adicionarAoCarrinho, alterarQuantidade, definirCupom, limparCarrinho } from './loja/carinho';
+import { adicionarAoCarrinho, alterarQuantidade, definirCupom, lerCarrinho, limparCarrinho } from './loja/carinho';
 
 vi.mock('../../lib/api', () => ({
   apiFetch: vi.fn(),
@@ -222,6 +222,13 @@ describe('Loja — revalidação concorrente do carrinho', () => {
   });
 });
 
+async function preencherDados(user: ReturnType<typeof userEvent.setup>, nome = 'Maria Silva') {
+  await user.type(document.querySelector<HTMLInputElement>('input[autocomplete="name"]')!, nome);
+  await user.type(document.querySelector<HTMLInputElement>('input[type="email"]')!, 'maria@example.com');
+  await user.type(screen.getByPlaceholderText('(00) 00000-0000'), '62999990000');
+  await user.type(screen.getByPlaceholderText('000.000.000-00'), '12345678909');
+}
+
 describe('Loja — Checkout (/loja/checkout)', () => {
   it('POST /loja/checkout → navega só com o token do BACKEND (/loja/pedido/:token)', async () => {
     adicionarAoCarrinho({ produto_id: 7, tamanho_id: null, quantidade: 1 });
@@ -251,52 +258,77 @@ describe('Loja — Checkout (/loja/checkout)', () => {
         </Routes>
       )
     );
-    // espera a config carregar (frete manual exige endereço) e preenche o formulário
+    // Etapa 1 — dados
+    await screen.findByRole('button', { name: 'Continuar para entrega' });
+    await preencherDados(user);
+    await user.click(screen.getByRole('button', { name: 'Continuar para entrega' }));
+    // Etapa 2 — entrega por tabela: endereço obrigatório (frete manual)
     const cep = (await screen.findByPlaceholderText('00000-000')) as HTMLInputElement;
     await waitFor(() => expect(cep.required).toBe(true));
-    const nome = document.querySelector<HTMLInputElement>('input[autocomplete="name"]')!;
-    const email = document.querySelector<HTMLInputElement>('input[type="email"]')!;
-    fireEvent.change(nome, { target: { value: 'Maria Silva' } });
-    fireEvent.change(email, { target: { value: 'maria@example.com' } });
-    fireEvent.change(cep, { target: { value: '74000-000' } });
-    const obrigatorios = Array.from(document.querySelectorAll<HTMLInputElement>('input[required]')).filter(
-      (i) => i !== nome && i !== email && i !== cep
-    );
-    const valores = ['Rua das Flores', '10', 'Centro', 'Goiânia', 'GO'];
-    obrigatorios.forEach((input, idx) => fireEvent.change(input, { target: { value: valores[idx] ?? 'Goiânia' } }));
-    const submit = document.querySelector<HTMLButtonElement>('button[type="submit"]');
-    expect(submit).toBeTruthy();
-    await user.click(submit!);
+    await user.type(cep, '74000-000');
+    await user.type(screen.getByLabelText('Rua *'), 'Rua das Flores');
+    await user.type(screen.getByLabelText('Número *'), '10');
+    await user.type(screen.getByLabelText('Bairro *'), 'Centro');
+    await user.type(screen.getByLabelText('Cidade *'), 'Goiânia');
+    await user.type(screen.getByLabelText('UF *'), 'GO');
+    await user.click(screen.getByRole('button', { name: 'Continuar para pagamento' }));
+    // Etapa 3 — pagamento; Etapa 4 — revisão
+    await user.click(await screen.findByRole('button', { name: 'Continuar para revisão' }));
+    const confirmar = await screen.findByRole('button', { name: 'Confirmar pedido e pagar' });
+    await waitFor(() => expect(confirmar).toBeEnabled());
+    expect(fetchMock).not.toHaveBeenCalledWith('/loja/checkout', expect.objectContaining({ method: 'POST' }));
+    await user.click(confirmar);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/loja/checkout', expect.objectContaining({ method: 'POST' })));
     expect(fetchMock).toHaveBeenCalledWith('/loja/checkout', expect.objectContaining({ body: expect.stringContaining('"cupom":"OFERTA-TESTE"') }));
     expect(await screen.findByText('rota-pedido-token')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('não confirma sem passar pelas etapas: Dados não tem botão de confirmação e não avança com campos vazios', async () => {
+    adicionarAoCarrinho({ produto_id: 7, tamanho_id: null, quantidade: 1 });
+    fetchMock.mockImplementation(async (path: string) => path === '/loja/preview' ? PREVIEW : CONFIG);
+    const user = userEvent.setup();
+    render(montar('/loja/checkout', <Routes><Route path="/loja/checkout" element={<LojaCheckoutPage />} /></Routes>));
+    await screen.findByRole('button', { name: 'Continuar para entrega' });
+    expect(screen.queryByRole('button', { name: 'Confirmar pedido e pagar' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Continuar para entrega' }));
+    // campos obrigatórios vazios: continua na etapa Dados
+    expect(screen.getByRole('button', { name: 'Continuar para entrega' })).toBeInTheDocument();
+    expect(screen.queryByText('Retirada na loja — frete grátis, sem entrega no endereço.')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalledWith('/loja/checkout', expect.anything());
+  });
+
   it('acesso direto com frete indisponível não permite confirmar pedido', async () => {
     adicionarAoCarrinho({ produto_id: 7, tamanho_id: null, quantidade: 1 });
+    const user = userEvent.setup();
     fetchMock.mockImplementation(async (path: string) => path === '/loja/preview'
       ? { ...PREVIEW, frete_indisponivel: true }
-      : { ...CONFIG, frete: { ...CONFIG.frete, disponivel: false } });
+      : { ...CONFIG, frete: { ...CONFIG.frete, provedor: 'retirada', valor: 0, disponivel: false } });
     render(montar('/loja/checkout', <Routes><Route path="/loja/checkout" element={<LojaCheckoutPage />} /></Routes>));
     await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
-    expect(screen.getByRole('button', { name: 'Confirmar pedido' })).toBeDisabled();
+    await preencherDados(user);
+    await user.click(screen.getByRole('button', { name: 'Continuar para entrega' }));
+    await user.click(await screen.findByRole('button', { name: 'Continuar para pagamento' }));
+    await user.click(await screen.findByRole('button', { name: 'Continuar para revisão' }));
+    expect(await screen.findByRole('button', { name: 'Confirmar pedido e pagar' })).toBeDisabled();
     expect(fetchMock).not.toHaveBeenCalledWith('/loja/checkout', expect.anything());
   });
 
   it('retirada não oferece entrega gratuita no endereço nem exige endereço', async () => {
     adicionarAoCarrinho({ produto_id: 7, tamanho_id: null, quantidade: 1 });
     definirCupom('PROMO');
+    const user = userEvent.setup();
     fetchMock.mockImplementation(async (path: string) => path === '/loja/preview'
       ? { ...PREVIEW, cupom: { codigo: 'PROMO', valido: true, aplicado: true, desconto: 10 }, totais: { ...PREVIEW.totais, desconto: 10, frete: 0, total: 79.9 } }
       : { ...CONFIG, frete: { ...CONFIG.frete, provedor: 'retirada', valor: 0 } });
     render(montar('/loja/checkout', <Routes><Route path="/loja/checkout" element={<LojaCheckoutPage />} /></Routes>));
+    // A única opção marcável no Dados é o consentimento de MARKETING (separado e opcional).
+    expect(await screen.findByRole('checkbox', { name: /novidades e ofertas da brobond/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/entrega grátis/i)).toBeNull();
+    await preencherDados(user);
+    await user.click(screen.getByRole('button', { name: 'Continuar para entrega' }));
     expect(await screen.findByText('Retirada na loja — frete grátis, sem entrega no endereço.')).toBeInTheDocument();
     expect(screen.queryByPlaceholderText('00000-000')).toBeNull();
-    // A única opção marcável é o consentimento de MARKETING (separado e opcional):
-    // não existe checkbox de "entrega gratuita" nem endereço obrigatório na retirada.
-    expect(screen.getByRole('checkbox', { name: /novidades e ofertas da brobond/i })).toBeInTheDocument();
-    expect(screen.queryByLabelText(/entrega grátis/i)).toBeNull();
     expect(screen.getByText('R$ 79,90')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/loja/preview', expect.objectContaining({ body: expect.stringContaining('"cupom":"PROMO"') }));
   });
@@ -309,12 +341,37 @@ describe('Loja — Checkout (/loja/checkout)', () => {
       throw new Error(`rota inesperada ${caminho}`);
     });
     render(montar('/loja/checkout', <Routes><Route path="/loja/checkout" element={<LojaCheckoutPage />} /></Routes>));
-    await screen.findByRole('button', { name: 'Confirmar pedido' });
-    await waitFor(() => expect(screen.getByPlaceholderText('00000-000')).toHaveProperty('required', true));
+    await screen.findByRole('button', { name: 'Continuar para entrega' });
     const configs = fetchMock.mock.calls.filter((c) => String(c[0]).startsWith('/loja/config'));
     expect(configs).toHaveLength(1);
     // A cotação é a única outra chamada: sem waterfall de config duplicado.
     expect(fetchMock.mock.calls.filter((c) => c[0] === '/loja/preview')).toHaveLength(1);
+  });
+
+  it('erro do servidor no pagamento mostra a mensagem, preserva o carrinho e NÃO renova a chave (evita cobrança duplicada)', async () => {
+    adicionarAoCarrinho({ produto_id: 7, tamanho_id: null, quantidade: 1 });
+    const chaveAntes = lerCarrinho().chave;
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(async (caminho: string, init?: RequestInit) => {
+      if (caminho.startsWith('/loja/config')) return { ...CONFIG, frete: { ...CONFIG.frete, provedor: 'retirada', valor: 0 } };
+      if (caminho === '/loja/preview') return PREVIEW;
+      if (caminho === '/loja/checkout' && init?.method === 'POST') {
+        throw new ApiError(502, 'Não foi possível gerar o PIX neste momento. Seu pedido não foi confirmado. Tente novamente.');
+      }
+      return CONFIG;
+    });
+    render(montar('/loja/checkout', <Routes><Route path="/loja/checkout" element={<LojaCheckoutPage />} /><Route path="/loja/carrinho" element={<div>rota-carrinho</div>} /></Routes>));
+    await screen.findByRole('button', { name: 'Continuar para entrega' });
+    await preencherDados(user);
+    await user.click(screen.getByRole('button', { name: 'Continuar para entrega' }));
+    await user.click(await screen.findByRole('button', { name: 'Continuar para pagamento' }));
+    await user.click(await screen.findByRole('button', { name: 'Continuar para revisão' }));
+    await user.click(await screen.findByRole('button', { name: 'Confirmar pedido e pagar' }));
+    expect(await screen.findByText(/Não foi possível gerar o PIX neste momento/)).toBeInTheDocument();
+    expect(lerCarrinho().itens).toHaveLength(1);
+    expect(lerCarrinho().chave).toBe(chaveAntes);
+    expect(screen.queryByText('rota-carrinho')).toBeNull();
+    expect(fetchMock.mock.calls.filter((c) => c[0] === '/loja/checkout')).toHaveLength(1);
   });
 
   it('carrinho vazio redireciona para /loja/carrinho (replace) — sem tela fantasma', async () => {
@@ -359,5 +416,21 @@ describe('Loja — Acompanhamento (/loja/pedido/:token)', () => {
     expect(screen.getByText('Camiseta Brobond')).toBeInTheDocument();
     expect(screen.getByText('Pagamento confirmado')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('Loja — Home sem repetição de produto entre seções', () => {
+  const p = (id: number) => ({ id, slug: `p-${id}`, nome: `Produto ${id}`, preco: 10 });
+  it('um produto em Destaques, Ofertas e Novidades aparece uma vez, na seção de maior prioridade', () => {
+    const [destaques, ofertas, novidades] = semRepeticaoEntreSecoes([[p(1), p(2)], [p(2), p(3)], [p(1), p(3), p(4)]]);
+    expect(destaques.map((x) => x.id)).toEqual([1, 2]);
+    expect(ofertas.map((x) => x.id)).toEqual([3]);
+    expect(novidades.map((x) => x.id)).toEqual([4]);
+  });
+  it('produto único publicado continua visível (não é escondido por deduplicação)', () => {
+    const [destaques, ofertas, novidades] = semRepeticaoEntreSecoes([[p(9)], [p(9)], [p(9)]]);
+    expect(destaques.map((x) => x.id)).toEqual([9]);
+    expect(ofertas).toEqual([]);
+    expect(novidades).toEqual([]);
   });
 });
