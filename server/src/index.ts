@@ -117,6 +117,7 @@ import {
   lojaProdutosPublicos,
 } from './commerce/vitrine';
 import {
+  atualizarPagamentoPedidoCommerce,
   cancelarPedidoCommerce,
   converterPedidoCommerce,
   detalharPedidoCommerce,
@@ -130,6 +131,7 @@ import {
   registrarHooksCommerce,
   salvarRastreioCommerce,
 } from './commerce/pedidos';
+import { statusNotificacoesCommerce } from './commerce/notificacoes';
 import {
   criarCupom,
   criarPromocao,
@@ -1068,6 +1070,8 @@ app.get('/api/commerce/pedidos/:saleId', wrap(detalharPedidoCommerce));
 app.post('/api/commerce/pedidos/:saleId/converter', wrap(converterPedidoCommerce));
 app.post('/api/commerce/pedidos/:saleId/cancelar', wrap(cancelarPedidoCommerce));
 app.post('/api/commerce/pedidos/:saleId/rastreio', wrap(salvarRastreioCommerce));
+app.post('/api/commerce/pedidos/:saleId/atualizar-pagamento', wrap(atualizarPagamentoPedidoCommerce));
+app.get('/api/commerce/notificacoes/status', wrap(statusNotificacoesCommerce));
 app.get('/api/commerce/reservas', wrap(listarReservasCommerce));
 app.get('/api/commerce/fulfillment', wrap(listarFulfillmentCommerce));
 app.get('/api/commerce/delivery', wrap(listarDeliveryCommerce));

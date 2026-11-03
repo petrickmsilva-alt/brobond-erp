@@ -44,7 +44,7 @@ type Detalhe = {
     publicado_em: string | null;
     atualizado_em: string | null;
   }[];
-  disponibilidade: { tamanho_id: number | null; codigo: string | null; fisico: number; disponivel: number; local: string | null }[];
+  disponibilidade: { tamanho_id: number | null; codigo: string | null; fisico: number; reservado?: number; disponivel: number; local: string | null }[];
 };
 
 type LinhaPreco = { preco: string; preco_promo: string; vigencia_inicio: string; vigencia_fim: string };
@@ -462,7 +462,8 @@ export default function CommerceProdutoDetalhePage() {
           Estoque disponível (canônico)
         </h2>
         <p className="mt-1 text-xs text-muted">
-          Somente leitura: físico menos reservas/empenhos/bloqueios, escolhido pelo mesmo local que o faturamento usaria.
+          Somente leitura: Disponível = Físico − Reservado − Empenhado − Bloqueado, no mesmo local que o faturamento usaria.
+          Pedido aguardando pagamento reserva a peça; só o pagamento aprovado baixa o físico.
         </p>
         <div className="mt-3 overflow-x-auto">
           <table className="table">
@@ -471,6 +472,7 @@ export default function CommerceProdutoDetalhePage() {
               <tr>
                 <th scope="col">Tamanho</th>
                 <th scope="col" className="text-right">Físico</th>
+                <th scope="col" className="text-right">Reservado</th>
                 <th scope="col" className="text-right">Disponível</th>
                 <th scope="col">Local de saída</th>
               </tr>
@@ -480,6 +482,7 @@ export default function CommerceProdutoDetalhePage() {
                 <tr key={`${d.tamanho_id ?? 'un'}`}>
                   <td>{d.codigo ?? d.tamanho_id ?? 'Único'}</td>
                   <td className="text-right tabular-nums">{d.fisico}</td>
+                  <td className={`text-right tabular-nums ${(d.reservado ?? 0) > 0 ? 'text-warning' : 'text-muted'}`}>{d.reservado ?? '—'}</td>
                   <td className={`text-right tabular-nums ${d.disponivel > 0 ? '' : 'text-danger'}`}>{d.disponivel}</td>
                   <td className="text-muted">{d.local ?? '—'}</td>
                 </tr>

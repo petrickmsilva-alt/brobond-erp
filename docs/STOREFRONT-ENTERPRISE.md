@@ -69,21 +69,30 @@ criação de PIX migrou de `POST /v1/payments` para `POST /v1/orders`:
 
 * `Authorization: Bearer <ACCESS_TOKEN>` e `X-Idempotency-Key` **somente no
   backend**; o token nunca aparece no frontend nem em logs.
-* `qr_code_base64`, `qr_code` (EMV Copia e Cola), `ticket_url` e o `id` da
-  Order vêm **exclusivamente** da resposta do provedor. Se não vierem, ficam
-  `null` e a tela mostra estado honesto — **nenhum QR é gerado localmente**.
+* Contrato dos instrumentos (um campo, um significado — ver §15.2):
+  `payment_method.qr_code` (BR Code EMV, `000201…`) → `copia_cola` (e
+  `gateway_cobrancas.qr_code`); `payment_method.qr_code_base64` (imagem) →
+  `qr_code_base64`; `payment_method.ticket_url` → `ticket_url`. Tudo vem
+  **exclusivamente** da resposta do provedor e é validado no formato (EMV,
+  imagem real, `https`). Se não vier, fica `null` — **nenhum QR é gerado
+  localmente**. Os três ausentes = falha de integração (502 honesto), nunca
+  "pedido criado".
 * Confirmação primária: webhook `type="order"` com assinatura `x-signature`
   (`id:<data.id>;request-id:<x-request-id>;ts:<ts>;`), seguido de
   `GET /v1/orders/{id}`. Só `status=processed` + `status_detail=accredited`
-  projeta "pago". O polling do navegador é complemento controlado (45 s,
-  máximo de 8 consultas, pausa com aba oculta).
+  projeta "pago". O polling do navegador é complemento controlado (12 s, uma
+  requisição por vez, `AbortController`, backoff ×2 até 60 s em erro, pausa
+  com aba oculta, para nos estados finais).
 * Cobranças legadas (`/v1/payments`) continuam consultadas/canceladas pelo
   caminho antigo: histórico e regressões permanecem válidos.
 * Referências divergentes e valores/moeda que não batem com o pedido → `409`
   de conciliação, sem baixa financeira.
-* `server/src/gateway.ts` persiste `ticket_url` em `gateway_cobrancas`;
-  `server/src/commerce/pedidos.ts` expõe `qr_code_base64`, `ticket_url` e
-  `provider_order_id` na visão pública (token é a credencial).
+* `server/src/gateway.ts` persiste `qr_code`, `copia_cola`,
+  `qr_code_base64` e `ticket_url` em `gateway_cobrancas`;
+  `server/src/commerce/pedidos.ts` expõe na visão pública SOMENTE `status`,
+  `provider`, `metodo`, `valor`, `copia_cola`, `qr_code_base64`, `ticket_url`
+  e `expira_em` (token é a credencial). `provider_order_id`, status do engine
+  e diagnóstico ficam só na visão administrativa.
 
 Referências oficiais consultadas: Checkout API Orders / Pix e "Configure
 orders notifications" (Mercado Pago Developers).
@@ -117,8 +126,15 @@ Eventos canônicos (constantes persistidas) e o vocabulário de homologação:
 | `PEDIDO_ENVIADO` | `ORDER_SHIPPED` |
 | `PEDIDO_ENTREGUE` | `ORDER_DELIVERED` |
 | `PEDIDO_CANCELADO` | `ORDER_CANCELLED` |
+| `PEDIDO_EXPIRADO` | `ORDER_EXPIRED` |
 
-`PAYMENT_PENDING` também existe (aguardando transferência PIX).
+`PAYMENT_PENDING` também existe (aguardando transferência PIX); o alias
+`PAYMENT_FAILED` é gravado como `PAYMENT_REJECTED`. Eventos **consolidados**
+(registrados como `IGNORADO`/`CONSOLIDADO`, sem segunda mensagem):
+`PAYMENT_PENDING` e `PIX_GENERATED` → mensagem de `ORDER_CREATED`;
+`ORDER_PROCESSING` → mensagem de `PAYMENT_APPROVED`. Resultado: 1 mensagem
+por canal no pedido recebido e 1 no pagamento confirmado (antes eram 3 e-mails
++ 3 WhatsApps no checkout).
 `PAYMENT_REJECTED` é emitido quando `gateway_cobrancas.status='falhou'` vira
 `pagamento_estado=REJECTED`: o pedido é cancelado, a reserva/cupom são liberados
 e o comprador é avisado — antes o pedido ficava preso em
@@ -557,3 +573,113 @@ Nenhum dano financeiro ocorreu antes da correção (a baixa nunca foi duplicada;
 - Reserva com tamanhos e múltiplos locais de saída (a regressão cobre produto sem variação de tamanho).
 - E-mail e WhatsApp: nenhum envio real foi testado.
 
+## 15. Fechamento do commerce real — PIX, webhook, estoque e notificações
+
+Sintomas de produção que motivaram esta entrega: pedido `AGUARDANDO_PAGAMENTO`
+com Disponível 7 / Físico 8 (correto), mas sem QR utilizável na página; conector
+Mercado Pago com "10 pedidos importados", **0 webhooks** e receita **R$ 0**.
+
+### 15.1 Causas-raiz (antes → depois)
+
+| Área | Antes (defeito) | Depois |
+|---|---|---|
+| Contrato PIX | `legacy.ts` gravava a **imagem** em `qr_code` e o EMV em `copia_cola`; o adapter repassava `action.qrCode` (ambíguo) e a ponte gravava o mesmo valor em `qr_code` **e** `qr_code_base64`. `criarCobrancaGateway` nunca gravava `qr_code_base64`. A página pública usava `qr_code` (às vezes texto) como imagem. | Um campo, um significado (`modules/payments/domain/pix-instrument.ts`): `code` = EMV (`000201…`), `qrCodeBase64` = imagem real (assinatura PNG/JPEG/GIF/WEBP conferida), `ticketUrl` = `https`. `action.qrCode` foi removido. Valor fora do formato é descartado, nunca "consertado". |
+| Reembolso fantasma | `projecaoOrdem` calculava `refunded = total − total_paid` para **toda** Order não aprovada. Uma Order pendente virava "reembolsada" (ex.: 8000 centavos); ao aprovar, o engine recusava com `409 Reembolso divergente` para sempre: o pedido nunca chegava a PAGO, expirava, devolvia o estoque, e o dinheiro caía em revisão tardia sem venda → **receita R$ 0**. `canceled/expired` não cancelavam; `failed/expired` eram lidos como pendentes. | Reembolso só com evidência (`refunded`/`partially_refunded`). Status canônico pela tabela oficial `status/status_detail` da Orders API. O engine auto-corrige tentativas já envenenadas (`refunded_amount>0` com `captured_amount=0`), com auditoria. |
+| Criação assíncrona | A validação rodava antes de gravar a referência; Order criada "processing" sem dados virava falha ambígua e cobrança órfã no replay. | Referência gravada **antes** da validação; leitura curta e limitada da MESMA Order (`GET /v1/orders/{id}`); os três instrumentos ausentes → `PIX_INSTRUMENT_MISSING` (502 honesto, intent `FAILED`, reserva devolvida, nenhuma nova cobrança). |
+| Notificações | Checkout emitia 3 eventos → 3 e-mails + 3 WhatsApps; expiração emitia `ORDER_CANCELLED`; assunto genérico; WhatsApp com 2 parâmetros; credencial ausente ficava "PENDENTE" sem motivo. | 1 mensagem por marco (consolidação), `ORDER_EXPIRED`, e-mail completo "BroBond — Pedido #X recebido", WhatsApp com 5 parâmetros, `NÃO CONFIGURADO: defina <VARIÁVEIS>` explícito e endpoint de status. |
+| Conector Mercado Pago | Receita = `SUM(sales.amount_cents) WHERE status <> 'CANCELLED'` (contava pendentes/estornados) e as vendas da loja própria não apareciam. | Receita só `PAID`; "Pedidos sincronizados do Mercado Pago" separado de "Vendas da BroBond Store" (Payment Engine, líquido de estorno). |
+| Estoque | Regra correta; a UI não mostrava Físico/Reservado. | Colunas Físico / Reservado / Disponível no catálogo e no detalhe do produto. |
+
+### 15.2 Contrato dos instrumentos PIX (fixture do contrato)
+
+| Origem (Orders API) | Destino | Formato exigido |
+|---|---|---|
+| `payment_method.qr_code` | `copia_cola` e `gateway_cobrancas.qr_code` | BR Code EMV, começa em `000201` |
+| `payment_method.qr_code_base64` | `qr_code_base64` | imagem real em base64 (`iVBOR…` para PNG) — **nunca** `000201…` |
+| `payment_method.ticket_url` | `ticket_url` | `https://…` |
+| `payments[].date_of_expiration` | `expires_em` | ISO-8601 do provedor |
+
+Base64 ausente com Copia e Cola/ticket presentes = OK (a página mostra o
+Copia e Cola e o botão do Mercado Pago). Os três ausentes = falha de
+integração. A expiração enviada respeita o mínimo do provedor (30 min).
+
+### 15.3 Página pública `/loja/pedido/:token`
+
+Celular: Pedido → Valor → QR → Copiar → Abrir Mercado Pago → Status. Desktop:
+Resumo | PIX. Textos: "PEDIDO RECEBIDO", "Pedido #…", "Pagamento via PIX",
+"Escaneie o QR Code pelo aplicativo do seu banco", "PIX COPIA E COLA",
+"COPIAR CÓDIGO", "ABRIR PAGAMENTO DO MERCADO PAGO", "Pagamento aguardando
+confirmação" / "O pedido será confirmado automaticamente após a aprovação do
+pagamento." O QR só é desenhado a partir da imagem devolvida pelo provedor.
+Polling: 12 s, uma requisição por vez, `AbortController`, backoff ×2 até
+60 s, pausa com aba oculta, teto de ~400 consultas, para em PAGO /
+CONVERTIDO / CANCELADO / EXPIRADO / ESTORNADO / ERRO.
+
+### 15.4 Backoffice — diagnóstico e "Atualizar status do pagamento"
+
+`Commerce → Pedidos → detalhe` mostra, sem modal e sem valores sensíveis:
+Pedido, Pagamento, Provider, Método, Status, Provider Order; PIX Copia e Cola /
+QR Base64 / Ticket URL como DISPONÍVEL/AUSENTE; Webhook RECEBIDO/NÃO RECEBIDO
+e último evento; E-mail/WhatsApp ENVIADO/PENDENTE/ERRO/NÃO CONFIGURADO.
+
+`POST /api/commerce/pedidos/:saleId/atualizar-pagamento` consulta o provedor
+pela referência **já gravada** (`synchronize` com `allowCreateReplay:false`) e
+aplica pela máquina de estados canônica. Sem referência → 409 ("Nenhuma nova
+cobrança será criada"); consulta repetida em 5 s → `atualizado:false`;
+gateway não configurado → 503; provedor sem resposta verificável → 502. Nunca
+cria cobrança, venda ou baixa extra; a ação fica na trilha de auditoria.
+
+### 15.5 Variáveis de ambiente (somente nomes; nada é exibido)
+
+| Canal | Variáveis |
+|---|---|
+| Mercado Pago | `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET` (ou a configuração cifrada do gateway da empresa) |
+| Link do pedido | `APP_URL` (ou `PUBLIC_BASE_URL`) |
+| E-mail | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, opcional `SMTP_FROM`, `SMTP_SECURE`; nome da loja no assunto: `COMMERCE_STORE_NAME` (padrão "BroBond") |
+| WhatsApp (Meta Cloud API oficial) | `WHATSAPP_CLOUD_API_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, opcional `WHATSAPP_API_VERSION` (padrão `v21.0`), `WHATSAPP_TEMPLATE_<EVENTO>` ou `WHATSAPP_TEMPLATE_TRANSACIONAL`, `WHATSAPP_TEMPLATE_IDIOMA` (padrão `pt_BR`) |
+
+`GET /api/commerce/notificacoes/status` devolve CONFIGURADO / CONECTADO / ERRO /
+NAO_CONFIGURADO por canal e a lista de variáveis ausentes. Sem configuração, a
+linha fica `PENDENTE` com `provider_status='NAO_CONFIGURADO'` e o motivo — o
+painel nunca mostra "ENVIADO" para algo que só foi registrado.
+
+### 15.6 Templates do WhatsApp (aprovar na Meta)
+
+Os templates são do tipo **Utilidade**, idioma `pt_BR`, com 5 parâmetros na
+ordem `{{1}}` número do pedido · `{{2}}` valor · `{{3}}` método · `{{4}}`
+status · `{{5}}` link do pedido.
+
+- Pedido recebido (`WHATSAPP_TEMPLATE_ORDER_CREATED`):
+  "BROBOND STORE ✅ Recebemos seu pedido #{{1}}. Valor: {{2}} Pagamento: {{3}}
+  Status: {{4}} Acompanhe: {{5}}"
+- Pagamento confirmado (`WHATSAPP_TEMPLATE_PAYMENT_APPROVED`):
+  "BROBOND STORE Pagamento confirmado! Pedido #{{1}} · {{2}} via {{3}}. Status:
+  {{4}}. Acompanhe: {{5}}"
+- Demais eventos (`WHATSAPP_TEMPLATE_TRANSACIONAL`):
+  "BROBOND STORE Pedido #{{1}} ({{2}} · {{3}}): {{4}}. Detalhes: {{5}}"
+
+Sem link público configurado, `{{5}}` vira "link enviado no e-mail do
+pedido". Nenhum CPF completo ou token interno vai nas mensagens; o link do
+pedido usa o token público de acompanhamento do próprio comprador.
+
+### 15.7 Testes desta entrega
+
+- `server/test/commerce-pix-real-flow.test.ts` (novo, 18 testes): simulador da
+  Orders API no formato documentado; contrato do POST; instrumentos persistidos
+  cada um no seu campo; página pública sem internals; estoque 8/1/7 → 7/0/7;
+  webhook pendente sem reembolso fantasma; assinatura inválida; duplicado e
+  novo event_id sem efeito duplo; Order desconhecida não persistida; criação
+  assíncrona; instrumentos ausentes; expiração e cancelamento no provedor;
+  expiração local com `ORDER_EXPIRED`; atualização manual idempotente;
+  notificações configuradas / ausentes / SMTP indisponível / WhatsApp fora do
+  ar / idempotência; conteúdo do e-mail e 5 parâmetros do WhatsApp.
+- Atualizados ao contrato correto: `payment-engine`, `commerce-exposure`,
+  `commerce-orders-pix`, `commerce-notificacoes`, `pg/gateway-cadeia-pagamento-e2e`.
+- Cliente: `LojaPedidoPage.test.tsx` (QR real, sem QR fabricado, polling para no
+  estado final, aba oculta), `mascaras.test.ts`, diagnóstico em
+  `PedidoDetalhePage.test.tsx`, Físico/Reservado em `ProdutosPage.test.tsx`,
+  "Vendas da BroBond Store" em `ConectorPage.test.tsx`.
+
+**Homologação real continua obrigatória** (`REAL_PIX_HOMOLOGATION` =
+`PENDING_EXTERNAL`): nenhum PIX real, e-mail real ou WhatsApp real foi enviado
+nesta entrega.

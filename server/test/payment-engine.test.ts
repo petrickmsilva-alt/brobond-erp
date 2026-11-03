@@ -32,13 +32,35 @@ test('Payment Engine: formal lifecycle forbids paid cancellation, stale settleme
   assert.throws(() => transition('PAID', 'PENDING'));
   assert.equal(transition('PAID', 'DISPUTED'), 'DISPUTED');
 });
+// PNG real 1x1 (assinatura binária \x89PNG) — fixture de IMAGEM base64.
+const PNG_BASE64_FIXTURE = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const EMV_FIXTURE = '00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D';
 test('Payment Engine: provider PIX contract rejects empty, missing identity/status, and missing PIX data', () => {
-  const valid = { reference: 'ORD-real-provider-id', status: 'PENDING' as const, action: { type: 'PIX', code: '000201-real-provider-code', qrCode: 'iVBOR-provider-image' } };
+  const valid = { reference: 'ORD-real-provider-id', status: 'PENDING' as const, action: { type: 'PIX', code: EMV_FIXTURE, qrCodeBase64: PNG_BASE64_FIXTURE } };
   assert.doesNotThrow(() => validarCriacaoProvider('PIX', valid));
-  assert.doesNotThrow(() => validarCriacaoProvider('PIX', { ...valid, action: { type: 'PIX', code: '000201-real-provider-code', ticketUrl: 'https://www.mercadopago.com.br/ticket' } }));
-  for (const response of [null, undefined, {}, { ...valid, reference: '' }, { ...valid, status: undefined }, { ...valid, action: undefined }, { ...valid, action: { type: 'PIX', code: '', qrCode: 'iVBOR-provider-image' } }]) {
+  // Base64 ausente com Copia e Cola ou link presentes é SUCESSO.
+  assert.doesNotThrow(() => validarCriacaoProvider('PIX', { ...valid, action: { type: 'PIX', code: EMV_FIXTURE } }));
+  assert.doesNotThrow(() => validarCriacaoProvider('PIX', { ...valid, action: { type: 'PIX', ticketUrl: 'https://www.mercadopago.com.br/payments/123/ticket' } }));
+  assert.doesNotThrow(() => validarCriacaoProvider('PIX', { ...valid, action: { type: 'PIX', qrCodeBase64: PNG_BASE64_FIXTURE } }));
+  // Identidade/estado ausentes continuam AMBÍGUOS (nunca recriar às cegas).
+  for (const response of [null, undefined, {}, { ...valid, reference: '' }, { ...valid, status: undefined }]) {
     assert.throws(() => validarCriacaoProvider('PIX', response as any), (error: any) => error instanceof PaymentError && error.ambiguous);
   }
+  // Referência conhecida sem NENHUM instrumento válido = falha de integração
+  // não ambígua. Valores fora do papel (EMV como imagem, http, lixo) não contam.
+  for (const action of [
+    undefined,
+    { type: 'PIX', code: '' },
+    { type: 'PIX', code: 'texto-qualquer-sem-emv-0000' },
+    { type: 'PIX', qrCodeBase64: EMV_FIXTURE },
+    { type: 'PIX', qrCodeBase64: 'iVBOR-provider-image' },
+    { type: 'PIX', ticketUrl: 'http://inseguro.example/ticket' },
+    { type: 'BOLETO', code: EMV_FIXTURE },
+  ]) {
+    assert.throws(() => validarCriacaoProvider('PIX', { ...valid, action } as any),
+      (error: any) => error instanceof PaymentError && error.code === 'PIX_INSTRUMENT_MISSING' && !error.ambiguous);
+  }
+  assert.equal(canFallback(new PaymentError('PIX_INSTRUMENT_MISSING')), false, 'contrato violado nunca dispara fallback');
   assert.throws(() => validarCriacaoProvider('PIX', { ...valid, status: 'FAILED' } as any), (error: any) => error instanceof PaymentError && error.code === 'PAYMENT_DECLINED' && !error.ambiguous);
 });
 
@@ -577,7 +599,9 @@ test('refund Stripe só retorna evidência individual se identidade, pagamento e
 test('Mercado Pago não liquida resposta de criação sem leitura autoritativa', async (t) => {
   let read = false;
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
-    if (init.method === 'POST') return new Response(JSON.stringify({ id: 'created-mp', status: 'approved' }));
+    // A Order já nasce com o Copia e Cola (sem criação assíncrona): nenhuma
+    // reconsulta de instrumentos é necessária e a criação nunca liquida.
+    if (init.method === 'POST') return new Response(JSON.stringify({ id: 'created-mp', status: 'approved', transactions: { payments: [{ payment_method: { qr_code: EMV_FIXTURE } }] } }));
     read = true; return new Response(JSON.stringify({ id: 'created-mp', status: 'approved', transaction_amount: 100, currency_id: 'BRL', transaction_amount_refunded: 0 }));
   });
   const mp = new MercadoPagoProvider(); const mc = { ...ctx, credentials: { access_token: 'fixture-only' }, webhookSecret: 'fixture-only' };

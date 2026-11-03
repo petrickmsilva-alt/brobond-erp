@@ -77,6 +77,10 @@ export const ERROR_CODES = [
   'INVALID_REQUEST',
   'DUPLICATE_REQUEST',
   'UNKNOWN_PROVIDER_ERROR',
+  // Provider respondeu (referência conhecida), mas sem NENHUM instrumento PIX
+  // pagável (Copia e Cola, imagem do QR ou link oficial). Não ambíguo: nunca
+  // dispara fallback/retry de criação; a referência fica gravada.
+  'PIX_INSTRUMENT_MISSING',
 ] as const;
 export class PaymentError extends Error {
   constructor(

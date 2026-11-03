@@ -245,7 +245,11 @@ test('ERP-01: PAGAMENTO → WEBHOOK → COBRANÇA → RECEBIMENTO → CONCILIAÇ
   assert.equal(String(cobranca?.status), 'pendente');
   assert.equal(Number(cobranca?.lancamento_id), tituloId, 'a cobrança precisa apontar para o título');
   assert.equal(Number(cobranca?.valor), 120);
-  assert.match(String(cobranca?.qr_code), /^MOCK-PIX-QR-/, 'PIX do provedor mock devolve QR');
+  // Contrato PIX: `qr_code` é o BR Code EMV (texto 000201…) e `copia_cola` o
+  // mesmo código copiável; imagem só existe quando um provider real a devolve.
+  assert.match(String(cobranca?.qr_code), /^000201/, 'PIX do provedor mock devolve BR Code EMV (texto), nunca imagem');
+  assert.equal(String(cobranca?.copia_cola), String(cobranca?.qr_code), 'copia e cola = BR Code');
+  assert.equal(cobranca?.qr_code_base64 ?? null, null, 'mock não inventa imagem de QR Code');
   // Payload arbitrário do provider não é exposto nem persistido: pode conter
   // cartão, tokens ou credenciais. O indicador informa a ausência com honestidade.
   assert.equal(cobranca?.payload, undefined, 'a resposta não pode carregar o payload bruto do provedor');

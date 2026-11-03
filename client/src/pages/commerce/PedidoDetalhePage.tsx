@@ -53,16 +53,75 @@ type Visao = {
     provider: string | null;
     metodo: string | null;
     valor: number | null;
-    qr_code: string | null;
     copia_cola: string | null;
+    qr_code_base64?: string | null;
+    ticket_url?: string | null;
     expira_em: string | null;
     provider_ref: string | null;
   };
+  diagnostico?: Diagnostico;
   venda: { id: number; numero: string; status: string | null; faturada_em: string | null; expedicao_etapa: string | null; cliente_id: number | null } | null;
   itens: { produto_id: number; produto: string; tamanho: string | null; quantidade: number; preco_unitario: number; subtotal: number }[];
   rastreio: { transportadora: string | null; codigo: string | null; url: string | null; status: string | null; estimativa_em: string | null; atualizado_em: string | null }[];
   timeline: { em: string; rotulo: string }[];
 };
+
+type SituacaoCanal = { estado: string; evento: string | null; em: string | null; motivo: string | null };
+type Diagnostico = {
+  pedido: { id: number; numero: string; estado: string } | null;
+  pagamento: {
+    intent_id: number | null;
+    provider: string | null;
+    metodo: string | null;
+    status: string | null;
+    cobranca_status: string | null;
+    provider_order_id: string | null;
+    falha: string | null;
+    revisao_tardia: string | null;
+  };
+  pix: { copia_cola: 'DISPONIVEL' | 'AUSENTE'; qr_code_base64: 'DISPONIVEL' | 'AUSENTE'; ticket_url: 'DISPONIVEL' | 'AUSENTE'; expira_em: string | null };
+  webhook: { estado: 'RECEBIDO' | 'NAO_RECEBIDO'; total: number; ultimo: { evento: string | null; status: string; recebido_em: string | null; processado_em: string | null; erro: string | null } | null };
+  notificacoes: { email: SituacaoCanal; whatsapp: SituacaoCanal };
+  pode_atualizar: boolean;
+};
+
+const ROTULO_DIAG: Record<string, string> = {
+  DISPONIVEL: 'DISPONÍVEL',
+  AUSENTE: 'AUSENTE',
+  RECEBIDO: 'RECEBIDO',
+  NAO_RECEBIDO: 'NÃO RECEBIDO',
+  ENVIADO: 'ENVIADO',
+  PENDENTE: 'PENDENTE',
+  PROCESSANDO: 'PROCESSANDO',
+  ERRO: 'ERRO',
+  NAO_CONFIGURADO: 'NÃO CONFIGURADO',
+  SEM_REGISTRO: 'SEM REGISTRO',
+};
+const TONE_DIAG: Record<string, 'green' | 'amber' | 'red' | 'slate'> = {
+  DISPONIVEL: 'green',
+  AUSENTE: 'amber',
+  RECEBIDO: 'green',
+  NAO_RECEBIDO: 'amber',
+  ENVIADO: 'green',
+  PENDENTE: 'amber',
+  PROCESSANDO: 'slate',
+  ERRO: 'red',
+  NAO_CONFIGURADO: 'red',
+  SEM_REGISTRO: 'slate',
+};
+
+function LinhaDiag({ rotulo, children }: { rotulo: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line py-2 last:border-b-0">
+      <dt className="text-muted">{rotulo}</dt>
+      <dd className="text-right">{children}</dd>
+    </div>
+  );
+}
+
+function SeloDiag({ valor }: { valor: string }) {
+  return <Badge tone={TONE_DIAG[valor] ?? 'slate'}>{ROTULO_DIAG[valor] ?? valor}</Badge>;
+}
 
 const STATUS_RASTREIO = ['postado', 'em_transito', 'saiu_entrega', 'entregue', 'devolvido', 'extraviado'];
 
@@ -78,6 +137,7 @@ export default function CommercePedidoDetalhePage() {
   const [confirmando, setConfirmando] = useState(false);
   const [confirmandoCancel, setConfirmandoCancel] = useState(false);
 
+  const [atualizandoPagamento, setAtualizandoPagamento] = useState(false);
   const [rastreio, setRastreio] = useState({ transportadora: '', codigo: '', url: '', status: 'postado', estimativa_em: '' });
   const [salvandoRastreio, setSalvandoRastreio] = useState(false);
 
@@ -105,6 +165,29 @@ export default function CommercePedidoDetalhePage() {
   useEffect(() => {
     void carregar();
   }, [carregar]);
+
+  /**
+   * Consulta o provedor pela referência JÁ gravada e aplica pela máquina de
+   * estados canônica. Idempotente: nunca cria cobrança, venda ou baixa extra.
+   */
+  const atualizarPagamento = async () => {
+    if (atualizandoPagamento) return;
+    setAtualizandoPagamento(true);
+    setErro('');
+    try {
+      const r = await apiFetch<Visao & { atualizado?: boolean; motivo?: string }>(
+        `/commerce/pedidos/${encodeURIComponent(String(saleId))}/atualizar-pagamento`,
+        { method: 'POST' }
+      );
+      setVisao(r);
+      if (r.atualizado === false) toast.info?.(r.motivo ?? 'Consulta recente; aguarde alguns segundos.');
+      else toast.success('Status do pagamento consultado no provedor.');
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : 'Não foi possível consultar o provedor agora.');
+    } finally {
+      setAtualizandoPagamento(false);
+    }
+  };
 
   const converter = async () => {
     setConfirmando(true);
@@ -254,6 +337,66 @@ export default function CommercePedidoDetalhePage() {
               pedido.
             </p>
           )}
+        </section>
+      )}
+
+      {visao.diagnostico && (
+        <section className="rounded-xl border border-line bg-surface p-4" aria-labelledby="diagnostico-pagamento">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 id="diagnostico-pagamento" className="text-sm font-semibold uppercase tracking-wide text-muted">Diagnóstico do pagamento</h2>
+              <p className="mt-0.5 text-xs text-muted">Somente presença dos dados — nenhum código, token ou segredo é exibido aqui.</p>
+            </div>
+            <button
+              type="button"
+              className="btn-secondary min-h-10 text-sm"
+              onClick={() => void atualizarPagamento()}
+              disabled={!visao.diagnostico.pode_atualizar || atualizandoPagamento}
+              aria-busy={atualizandoPagamento}
+              title={visao.diagnostico.pode_atualizar ? 'Consulta o provedor pela referência gravada; não cria nova cobrança.' : 'Sem referência do provedor para consultar.'}
+            >
+              <RefreshCw className={`h-4 w-4 ${atualizandoPagamento ? 'animate-spin' : ''}`} aria-hidden="true" />
+              {atualizandoPagamento ? 'Consultando…' : 'Atualizar status do pagamento'}
+            </button>
+          </div>
+          <div className="mt-3 grid gap-x-8 text-sm md:grid-cols-2">
+            <dl>
+              <LinhaDiag rotulo="Pedido">{visao.diagnostico.pedido ? `#${visao.diagnostico.pedido.numero} · ${ROTULO_PEDIDO[visao.diagnostico.pedido.estado] ?? visao.diagnostico.pedido.estado}` : '—'}</LinhaDiag>
+              <LinhaDiag rotulo="Pagamento">{visao.diagnostico.pagamento.intent_id ? `#${visao.diagnostico.pagamento.intent_id}` : '—'}{visao.diagnostico.pagamento.status ? ` · ${visao.diagnostico.pagamento.status}` : ''}</LinhaDiag>
+              <LinhaDiag rotulo="Provider">{visao.diagnostico.pagamento.provider ?? '—'}</LinhaDiag>
+              <LinhaDiag rotulo="Método">{visao.diagnostico.pagamento.metodo ?? '—'}</LinhaDiag>
+              <LinhaDiag rotulo="Status da cobrança">{visao.diagnostico.pagamento.cobranca_status ?? '—'}</LinhaDiag>
+              <LinhaDiag rotulo="Provider Order">
+                <span className="break-all font-mono text-xs">{visao.diagnostico.pagamento.provider_order_id ?? 'AUSENTE'}</span>
+              </LinhaDiag>
+              {visao.diagnostico.pagamento.falha && <LinhaDiag rotulo="Falha registrada"><span className="font-mono text-xs">{visao.diagnostico.pagamento.falha}</span></LinhaDiag>}
+            </dl>
+            <dl>
+              <LinhaDiag rotulo="PIX Copia e Cola"><SeloDiag valor={visao.diagnostico.pix.copia_cola} /></LinhaDiag>
+              <LinhaDiag rotulo="QR Code Base64"><SeloDiag valor={visao.diagnostico.pix.qr_code_base64} /></LinhaDiag>
+              <LinhaDiag rotulo="Ticket URL"><SeloDiag valor={visao.diagnostico.pix.ticket_url} /></LinhaDiag>
+              <LinhaDiag rotulo="Webhook">
+                <SeloDiag valor={visao.diagnostico.webhook.estado} />
+                {visao.diagnostico.webhook.total > 0 && <span className="ml-2 text-xs text-muted">{visao.diagnostico.webhook.total} evento(s)</span>}
+              </LinhaDiag>
+              <LinhaDiag rotulo="Último evento">
+                {visao.diagnostico.webhook.ultimo ? (
+                  <span className="text-xs">
+                    {visao.diagnostico.webhook.ultimo.evento ?? 'evento'} · {visao.diagnostico.webhook.ultimo.status} · {dataHora(visao.diagnostico.webhook.ultimo.recebido_em)}
+                    {visao.diagnostico.webhook.ultimo.erro && <span className="block text-red-700">{visao.diagnostico.webhook.ultimo.erro}</span>}
+                  </span>
+                ) : '—'}
+              </LinhaDiag>
+              <LinhaDiag rotulo="E-mail">
+                <SeloDiag valor={visao.diagnostico.notificacoes.email.estado} />
+                {visao.diagnostico.notificacoes.email.motivo && <span className="block max-w-xs text-xs text-muted">{visao.diagnostico.notificacoes.email.motivo}</span>}
+              </LinhaDiag>
+              <LinhaDiag rotulo="WhatsApp">
+                <SeloDiag valor={visao.diagnostico.notificacoes.whatsapp.estado} />
+                {visao.diagnostico.notificacoes.whatsapp.motivo && <span className="block max-w-xs text-xs text-muted">{visao.diagnostico.notificacoes.whatsapp.motivo}</span>}
+              </LinhaDiag>
+            </dl>
+          </div>
         </section>
       )}
 

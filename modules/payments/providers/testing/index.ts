@@ -22,7 +22,9 @@ export class TestPaymentProvider extends GenericPaymentProvider {
     const result: PaymentResult = {
       reference: r.provider_ref,
       status: 'PENDING',
-      action: { type: 'PIX', code: r.copia_cola || undefined, qrCode: r.qr_code || undefined },
+      // Contrato canônico: Copia e Cola (BR Code). O mock não devolve imagem —
+      // e nada no sistema a fabrica a partir do texto.
+      action: { type: 'PIX', code: r.copia_cola || undefined, expiresAt: r.expires_em || undefined },
     };
     this.results.set(key, result);
     return result;

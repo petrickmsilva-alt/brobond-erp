@@ -34,6 +34,8 @@ function mockFetch(t: any, resposta: (c: Chamada) => unknown) {
   return chamadas;
 }
 
+const QR_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
 function ordemPix(overrides: Record<string, unknown> = {}) {
   return {
     id: 'ORD01HRYFWNYRE1MR1E60MW3X0T2P',
@@ -56,7 +58,8 @@ function ordemPix(overrides: Record<string, unknown> = {}) {
           type: 'bank_transfer',
           ticket_url: 'https://www.mercadopago.com.br/payments/123/ticket?caller_id=1&hash=abc',
           qr_code: '00020126580014br.gov.bcb.pix0136b76aa9c2-2ec4-4110-954e-ebfe34f05b61520400005303986540510.005802BR5912TESTPVBWOSBE6009SaoPaulo6304C3C0',
-          qr_code_base64: 'iVBORw0KGgoAAAANSUhEUgAABWQAAAVkAQAAAAB79i',
+          // PNG 1x1 real (assinatura \x89PNG): imagem, nunca o texto EMV.
+          qr_code_base64: QR_PNG,
         },
       }],
     },
@@ -84,7 +87,11 @@ describe('PIX via Mercado Pago Orders API — contrato real, sem simulação', (
     const body = JSON.parse(String(chamadas[0].init.body));
     assert.equal(body.type, 'online');
     assert.equal(body.total_amount, '109.90');
-    assert.equal(body.external_reference, 'checkout:pedido-1');
+    // Orders API aceita external_reference só com [A-Za-z0-9_-] (até 64). Em
+    // produção a referência é um sha256 hex (inalterado); aqui o ':' vira '-'.
+    // A chave de idempotência continua EXATAMENTE a referência da operação.
+    assert.equal(body.external_reference, 'checkout-pedido-1');
+    assert.equal(body.processing_mode, 'automatic');
     assert.equal(body.transactions.payments[0].payment_method.id, 'pix');
     assert.equal(body.transactions.payments[0].payment_method.type, 'bank_transfer');
     assert.deepEqual(body.payer.identification, { type: 'CPF', number: '52998224725' });
@@ -94,8 +101,11 @@ describe('PIX via Mercado Pago Orders API — contrato real, sem simulação', (
     // Nada de preço/empresa/status vindo do browser: só campos do servidor.
     assert.equal(r.provider_ref, 'ORD01HRYFWNYRE1MR1E60MW3X0T2P');
     assert.equal(r.status, 'pendente', 'action_required não é pagamento aprovado');
-    assert.equal(r.qr_code, 'iVBORw0KGgoAAAANSUhEUgAABWQAAAVkAQAAAAB79i');
+    // Um campo, um significado: qr_code/copia_cola = BR Code EMV; qr_code_base64 = imagem.
+    assert.match(String(r.qr_code), /^000201/);
     assert.match(String(r.copia_cola), /^000201/);
+    assert.equal(r.qr_code_base64, QR_PNG);
+    assert.doesNotMatch(String(r.qr_code_base64), /^000201/);
     assert.match(String(r.ticket_url), /^https:\/\/www\.mercadopago\.com\.br\//);
   });
 
@@ -192,7 +202,8 @@ describe('PIX via Mercado Pago Orders API — contrato real, sem simulação', (
     assert.equal(result.reference, 'ORD01HRYFWNYRE1MR1E60MW3X0T2P');
     assert.equal(result.status, 'PENDING');
     assert.match(String(result.action?.ticketUrl), /^https:\/\//);
-    assert.match(String(result.action?.qrCode), /^iVBOR/);
+    assert.equal(result.action?.qrCodeBase64, QR_PNG);
     assert.match(String(result.action?.code), /^000201/);
+    assert.equal((result.action as Record<string, unknown> | undefined)?.qrCode, undefined, 'campo ambíguo qrCode não existe mais');
   });
 });

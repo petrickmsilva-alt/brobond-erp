@@ -6388,7 +6388,9 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'PROCESSANDO', label: 'Processando', tone: 'blue' },
           { value: 'ENVIADO', label: 'Enviado', tone: 'green' },
           { value: 'ERRO', label: 'Erro', tone: 'red' },
-          { value: 'IGNORADO', label: 'Não configurado', tone: 'slate' },
+          // IGNORADO = evento consolidado em outra mensagem (sem envio duplicado).
+          // "Não configurado" é PENDENTE + provider_status NAO_CONFIGURADO.
+          { value: 'IGNORADO', label: 'Consolidado (sem envio)', tone: 'slate' },
         ],
       },
       { name: 'tentativas', label: 'Tentativas', type: 'integer', readonly: true },

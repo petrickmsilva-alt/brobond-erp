@@ -28,6 +28,12 @@ import { apiFetch, ApiError } from '../../../lib/api';
 import type { Preview } from './LojaCarrinhoPage';
 import { LojaShell, precoLoja, useConfigDoShell } from './LojaShell';
 import { lerCarrinho, limparCarrinho, useCarrinho } from './carinho';
+import { cpfValido, mascararCEP, mascararCPF, mascararTelefoneBR, normalizarEmail, normalizarNome, normalizarUF, soDigitos } from './mascaras';
+
+// Padrões HTML dos campos mascarados (o backend revalida e persiste dígitos).
+const PADRAO_TELEFONE = '\\(\\d{2}\\) \\d{4,5}-\\d{4}';
+const PADRAO_CEP = '\\d{5}-\\d{3}';
+const PADRAO_UF = '[A-Z]{2}';
 
 type RespostaCheckout = {
   ok: boolean;
@@ -72,6 +78,7 @@ export default function LojaCheckoutPage() {
   const [erroCotacao, setErroCotacao] = useState('');
   const [resposta, setResposta] = useState<RespostaCheckout | null>(null);
   const etapaRef = useRef<HTMLFieldSetElement | null>(null);
+  const cpfRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -105,6 +112,18 @@ export default function LojaCheckoutPage() {
   const exigeEndereco = freteManual;
   const cpfNecessario = method === 'PIX' || !!preview?.payment_methods?.find((m) => m.code === method)?.required_fields?.includes('tax_id');
   const metodoDisponivel = preview?.payment_methods === undefined || preview.payment_methods.some((m) => m.code === method);
+  const cpfDigitos = soDigitos(comprador.documento);
+  const cpfErro = !cpfDigitos
+    ? ''
+    : cpfDigitos.length < 11
+      ? 'CPF incompleto: informe os 11 dígitos.'
+      : !cpfValido(cpfDigitos)
+        ? 'CPF inválido: confira os números digitados.'
+        : '';
+  // Um CPF inválido nunca chega ao provedor: a própria etapa não avança.
+  useEffect(() => {
+    cpfRef.current?.setCustomValidity(cpfErro);
+  }, [cpfErro, etapa]);
   const checkoutOk = metodoDisponivel
     && !validando && !!config && config.frete.disponivel && config.checkout_disponivel !== false
     && !!preview?.itens?.length && !preview.frete_indisponivel && preview.itens.every((i) => i.ok)
@@ -158,12 +177,14 @@ export default function LojaCheckoutPage() {
           chave: lerCarrinho().chave,
           itens: carrinho.itens.map((i) => ({ produto_id: i.produto_id, tamanho_id: i.tamanho_id, quantidade: i.quantidade })),
           cupom: carrinho.cupom || undefined,
+          // Forma canônica: nome sem espaços extras, e-mail minúsculo e SOMENTE
+          // dígitos em WhatsApp/telefone/CPF/CEP (máscara é só visual).
           comprador: {
-            nome: comprador.nome.trim(),
-            email: comprador.email.trim(),
-            whatsapp: comprador.whatsapp.trim(),
-            telefone: comprador.telefone.trim() || undefined,
-            documento: comprador.documento.trim() || undefined,
+            nome: normalizarNome(comprador.nome),
+            email: normalizarEmail(comprador.email),
+            whatsapp: soDigitos(comprador.whatsapp),
+            telefone: soDigitos(comprador.telefone) || undefined,
+            documento: soDigitos(comprador.documento) || undefined,
             marketing_opt_in: comprador.marketing_opt_in,
           },
           endereco:
@@ -176,8 +197,8 @@ export default function LojaCheckoutPage() {
                   complemento: endereco.complemento || null,
                   bairro: endereco.bairro,
                   cidade: endereco.cidade,
-                  uf: endereco.uf,
-                  cep: endereco.cep,
+                  uf: normalizarUF(endereco.uf),
+                  cep: soDigitos(endereco.cep),
                 },
         }),
       });
@@ -279,15 +300,16 @@ export default function LojaCheckoutPage() {
                 </label>
                 <label className="block text-sm">
                   <span className="text-ink-soft">WhatsApp *</span>
-                  <input className="input mt-1" required maxLength={40} value={comprador.whatsapp} onChange={(e) => setComprador((c) => ({ ...c, whatsapp: e.target.value }))} autoComplete="tel" inputMode="tel" placeholder="(00) 00000-0000" />
+                  <input className="input mt-1" type="tel" required maxLength={20} pattern={PADRAO_TELEFONE} title="DDD + número, ex.: (62) 99999-9999" value={comprador.whatsapp} onChange={(e) => setComprador((c) => ({ ...c, whatsapp: mascararTelefoneBR(e.target.value) }))} autoComplete="tel-national" inputMode="tel" placeholder="(00) 00000-0000" />
                 </label>
                 <label className="block text-sm">
                   <span className="text-ink-soft">Telefone alternativo (opcional)</span>
-                  <input className="input mt-1" maxLength={40} value={comprador.telefone} onChange={(e) => setComprador((c) => ({ ...c, telefone: e.target.value }))} inputMode="tel" />
+                  <input className="input mt-1" type="tel" maxLength={20} pattern={PADRAO_TELEFONE} title="DDD + número, ex.: (62) 3333-4444" value={comprador.telefone} onChange={(e) => setComprador((c) => ({ ...c, telefone: mascararTelefoneBR(e.target.value) }))} inputMode="tel" placeholder="(00) 0000-0000" />
                 </label>
                 <label className="block text-sm">
                   <span className="text-ink-soft">CPF {cpfNecessario ? '*' : '(quando exigido)'}</span>
-                  <input className="input mt-1" required={cpfNecessario} inputMode="numeric" maxLength={18} value={comprador.documento} onChange={(e) => setComprador((c) => ({ ...c, documento: e.target.value }))} placeholder="000.000.000-00" autoComplete="off" />
+                  <input ref={cpfRef} className="input mt-1" required={cpfNecessario} inputMode="numeric" maxLength={14} value={comprador.documento} onChange={(e) => setComprador((c) => ({ ...c, documento: mascararCPF(e.target.value) }))} placeholder="000.000.000-00" autoComplete="off" aria-invalid={!!cpfErro && cpfDigitos.length === 11} aria-describedby={cpfErro ? 'cpf-erro' : undefined} />
+                  {cpfErro && cpfDigitos.length === 11 && <span id="cpf-erro" className="mt-1 block text-[11px] text-red-700" role="alert">{cpfErro}</span>}
                   {cpfNecessario && <span className="mt-1 block text-[11px] text-muted">Necessário para identificação do pagador no PIX. Mantido apenas no servidor.</span>}
                 </label>
               </div>
@@ -319,8 +341,8 @@ export default function LojaCheckoutPage() {
                 <div className="mt-3 grid gap-3 sm:grid-cols-6">
                   <label className="block text-sm sm:col-span-6">
                     <span className="text-ink-soft">CEP *</span>
-                    <input className="input mt-1 w-40" required={exigeEndereco} maxLength={9} inputMode="numeric" value={endereco.cep}
-                      onChange={(e) => setEndereco((en) => ({ ...en, cep: e.target.value }))} placeholder="00000-000" autoComplete="postal-code" />
+                    <input className="input mt-1 w-40" required={exigeEndereco} maxLength={9} inputMode="numeric" pattern={PADRAO_CEP} title="8 dígitos, ex.: 74000-000" value={endereco.cep}
+                      onChange={(e) => setEndereco((en) => ({ ...en, cep: mascararCEP(e.target.value) }))} placeholder="00000-000" autoComplete="postal-code" />
                   </label>
                   <label className="block text-sm sm:col-span-4">
                     <span className="text-ink-soft">Rua *</span>
@@ -344,7 +366,7 @@ export default function LojaCheckoutPage() {
                   </label>
                   <label className="block text-sm sm:col-span-2">
                     <span className="text-ink-soft">UF *</span>
-                    <input className="input mt-1 uppercase" required={exigeEndereco} maxLength={2} value={endereco.uf} onChange={(e) => setEndereco((en) => ({ ...en, uf: e.target.value.toUpperCase() }))} autoComplete="address-level1" />
+                    <input className="input mt-1 uppercase" required={exigeEndereco} maxLength={2} pattern={PADRAO_UF} title="Sigla do estado, ex.: GO" value={endereco.uf} onChange={(e) => setEndereco((en) => ({ ...en, uf: normalizarUF(e.target.value) }))} autoComplete="address-level1" />
                   </label>
                 </div>
               )}

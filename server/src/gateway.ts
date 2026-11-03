@@ -192,7 +192,11 @@ export type CobrancaInput = {
 export type CobrancaProviderResult = {
   provider_ref: string;
   status: 'pendente' | 'autorizada' | 'paga' | 'falhou';
+  /** BR Code EMV do PIX (texto `000201…`). NUNCA a imagem. */
   qr_code?: string | null;
+  /** Imagem do QR Code em base64 devolvida pelo provider (nunca gerada aqui). */
+  qr_code_base64?: string | null;
+  /** PIX Copia e Cola (o mesmo BR Code EMV, papel de texto copiável). */
   copia_cola?: string | null;
   /** URL oficial do ticket/PIX devolvida pela Orders API (nunca inventada). */
   ticket_url?: string | null;
@@ -311,7 +315,12 @@ export const mockProvider: PaymentProvider = {
     const ref = `mock-${randomBytes(6).toString('hex')}`;
     mockEstado.set(ref, 'pendente');
     const base: CobrancaProviderResult = { provider_ref: ref, status: 'pendente', expires_em: input.expira_em ?? null, bruto: { simulado: true, empresa: ctx.empresaId } };
-    if (input.metodo === 'pix') return { ...base, qr_code: `MOCK-PIX-QR-${ref}`, copia_cola: `000201MOCK${ref}6304` };
+    // Mock (somente teste/dev): BR Code de TEXTO, sem imagem — imagem só existe
+    // quando um provider real a devolve. Nada aqui é exibido como QR.
+    if (input.metodo === 'pix') {
+      const emv = `00020126360014br.gov.bcb.pix0114MOCK${ref.replace('mock-', '')}5204000053039865802BR6304ABCD`;
+      return { ...base, qr_code: emv, copia_cola: emv };
+    }
     if (input.metodo === 'boleto') return { ...base, linha_digitavel: `23790.00000 00000.000000 00000.000000 1 99990000${Math.trunc(input.valor).toFixed(2).replace(/\D/g, '').slice(0, 8)}`, nosso_numero: ref.replace('mock-', '') };
     return { ...base, status: 'autorizada', nsu: `NSU${ref.slice(-8)}` };
   },
@@ -624,7 +633,7 @@ export async function criarCobrancaGateway(
         { empresa_id: escopo.empresaId, criacao_operacao_estado: 'PROCESSING', criacao_operacao_hash: requestHash },
         { status: resultado.status, provider_ref: resultado.provider_ref, expires_em: resultado.expires_em ?? null,
           nosso_numero: resultado.nosso_numero ?? null, linha_digitavel: resultado.linha_digitavel ?? null,
-          qr_code: resultado.qr_code ?? null, copia_cola: resultado.copia_cola ?? null,
+          qr_code: resultado.qr_code ?? null, qr_code_base64: resultado.qr_code_base64 ?? null, copia_cola: resultado.copia_cola ?? null,
           ticket_url: resultado.ticket_url ?? null, nsu: resultado.nsu ?? null,
           payload: null, criacao_operacao_estado: 'SUCCEEDED', atualizado_em: new Date().toISOString() }, tx);
       if (!updated) throw new HttpError(409, 'Reserva de criação mudou; concilie antes de continuar.');
@@ -1213,7 +1222,14 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
 
     const { processEngineWebhook } = await import('../../modules/payments/application/webhooks');
     const engineResult = await processEngineWebhook(evento, providerId, String(parsed.provider_ref || ''));
-    if (engineResult) return engineResult;
+    if (engineResult) {
+      // `cobranca_id` no evento significa "processado contra esta cobrança":
+      // só é gravado DEPOIS do processamento bem-sucedido (evento em erro/retry
+      // nunca aponta a cobrança). O diagnóstico do pedido usa este vínculo.
+      if (evento.cobranca_id == null || Number(evento.cobranca_id) !== Number(cobranca.id))
+        await s.update(R_GATEWAY_WEBHOOK_EVENTS, Number(evento.id), { cobranca_id: Number(cobranca.id) });
+      return engineResult;
+    }
 
     let intencao: IntencaoWebhook = null;
     // Provedor com consulta oficial é a autoridade, inclusive quando retorna

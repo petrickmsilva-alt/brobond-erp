@@ -804,6 +804,16 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
   const usarCupom = desconto.origem === 'cupom' && cupom && cupom.ok;
 
   const endereco = (corpo.endereco && typeof corpo.endereco === 'object' ? corpo.endereco : null) as Record<string, unknown> | null;
+  // Forma canônica do endereço: CEP com EXATAMENTE 8 dígitos (a máscara
+  // 74000-000 é só visual) e UF com 2 letras maiúsculas. O backend revalida.
+  if (endereco) {
+    const cepBruto = String(endereco.cep ?? '').trim();
+    if (cepBruto && cepBruto.replace(/\D/g, '').length !== 8)
+      throw new HttpError(400, 'CEP inválido: informe os 8 dígitos (ex.: 74000-000).', { cep: 'CEP deve ter 8 dígitos.' });
+    const ufBruta = String(endereco.uf ?? '').trim();
+    if (ufBruta && !/^[A-Za-z]{2}$/.test(ufBruta))
+      throw new HttpError(400, 'UF inválida: use a sigla do estado com 2 letras (ex.: GO).', { uf: 'UF deve ter 2 letras.' });
+  }
   const provedorFrete = String(config?.frete_provedor || 'nenhum');
   if (provedorFrete === 'manual') {
     const obrigatorio = ['rua', 'numero', 'bairro', 'cidade', 'uf', 'cep'].filter(
@@ -982,14 +992,20 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
     pedidoExterno: externalOrderId,
     checkoutToken: token,
   };
+  // ORDER_CREATED gera A mensagem "Pedido recebido" (status aguardando
+  // pagamento + instruções do PIX real). PAYMENT_PENDING/PIX_GENERATED ficam
+  // registrados como consolidados — sem 3 e-mails/WhatsApps no mesmo segundo.
   const eventos: EventoNotificacao[] = ['ORDER_CREATED', 'PAYMENT_PENDING'];
   const saleFinal = (await s.findOneWhere(R_SALES(), { id: String(criado.sale.id), empresa_id: empresaId })) ?? criado.sale;
   // Uma ÚNICA montagem da visão pública por checkout (antes eram duas: a
   // resposta e uma leitura extra). Itens/rastreio/timeline lidos uma vez só.
   const visao = await respostaPedido(empresaId, saleFinal);
   const pagamento = visao.pagamento as Record<string, unknown> | undefined;
-  if (method === 'PIX' && (pagamento?.qr_code || pagamento?.copia_cola)) eventos.push('PIX_GENERATED');
-  for (const evento of eventos) void registrarEventoSeguro(contato, { ...ctxEvento, evento });
+  if (method === 'PIX' && (pagamento?.copia_cola || pagamento?.qr_code_base64 || pagamento?.ticket_url)) eventos.push('PIX_GENERATED');
+  // Em sequência (ordem determinística), fora do caminho crítico da resposta.
+  void (async () => {
+    for (const evento of eventos) await registrarEventoSeguro(contato, { ...ctxEvento, evento });
+  })();
   res.status(201).json({ ok: true, ...visao });
 }
 

@@ -44,6 +44,15 @@ export type RefundEvidence = {
   amount: number;
   status: 'PENDING' | 'SUCCEEDED';
 };
+/**
+ * Ação do pagador devolvida pelo provider. Cada campo tem UM significado:
+ *  - `code`: PIX Copia e Cola (BR Code EMV) ou linha digitável do boleto;
+ *  - `qrCodeBase64`: imagem do QR Code em base64 (nunca o EMV);
+ *  - `ticketUrl`: página oficial do provider (https);
+ *  - `expiresAt`: expiração informada pelo provider.
+ * O antigo `qrCode` (ambíguo: ora imagem, ora texto) foi removido.
+ */
+export type PaymentAction = { type: string; url?: string; code?: string; qrCodeBase64?: string; ticketUrl?: string; expiresAt?: string };
 export type PaymentResult = {
   reference: string;
   status: PaymentStatus;
@@ -51,7 +60,7 @@ export type PaymentResult = {
   currency?: string;
   refunded?: number;
   refundEvidence?: RefundEvidence;
-  action?: { type: string; url?: string; code?: string; qrCode?: string; ticketUrl?: string; expiresAt?: string };
+  action?: PaymentAction;
   risk?: string;
 };
 export type WebhookEvent = { id: string; reference: string; type: string };

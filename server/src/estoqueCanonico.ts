@@ -233,6 +233,26 @@ export async function reservasAtivasPorCelula(
   return { porCelula, semLocal };
 }
 
+/**
+ * Total RESERVADO (ativo) de um produto — ou de um tamanho dele — contando
+ * cada reserva UMA única vez (inclusive as sem local). Somente leitura: é o
+ * número exibido como "Reservado" ao lado de Físico e Disponível; a regra
+ * de disponibilidade continua em `reservadoDaCelula`/`saldoDisponivelCelula`.
+ */
+export function reservadoDoProduto(reservas: ReservasAtivas, produtoId: number, tamanhoId?: number | null): number {
+  const prefixo = `${produtoId}:`;
+  const tamanho = tamanhoId === undefined ? undefined : tamanhoId === null ? 'null' : String(tamanhoId);
+  let total = 0;
+  for (const mapa of [reservas.porCelula, reservas.semLocal]) {
+    for (const [chave, qtd] of mapa) {
+      if (!chave.startsWith(prefixo)) continue;
+      if (tamanho !== undefined && chave.split(':')[1] !== tamanho) continue;
+      total += qtd;
+    }
+  }
+  return total;
+}
+
 /** Reservado ativo de uma célula (inclui as reservas sem local do produto+tamanho). */
 export function reservadoDaCelula(
   reservas: ReservasAtivas,
