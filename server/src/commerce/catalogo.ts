@@ -29,6 +29,7 @@ import { attachImages } from '../uploads';
 import { gradeTamanhosDoProduto, nomesProdutos } from './grade';
 import type { Row, Tx } from '../store';
 import { PublicacaoFalha, publicarItemMercadoLivre, type ContextoCanal } from './publicacaoCanais';
+import { publicarItemNuvemshop } from './publicacaoNuvemshop';
 import { canalPublicacaoSuspenso } from './publicacaoSuspensao';
 import {
   CANAIS_PUBLICACAO,
@@ -482,7 +483,7 @@ async function publicarNoCanal(
       return publicarMercadoLivre(empresaId, payload, externalIdAtual);
 
     case 'NUVEMSHOP':
-      return publicarNuvemshop(empresaId, payload);
+      return publicarNuvemshop(empresaId, payload, externalIdAtual);
 
     default:
       throw new PublicacaoFalha(`Canal de publicação não suportado: ${canal}.`, true);
@@ -610,16 +611,23 @@ async function publicarMercadoLivre(
 }
 
 /**
- * Nuvemshop: publicação automática DESLIGADA. O código anterior usava o contrato
- * legado v1 (preço e estoque no produto, sem variants), divergente da documentação
- * 2025-03, e não tinha lookup nem atualização: criava duplicatas em retry.
- * Religar exige decisão de migração de contrato (ver relatório de auditoria).
+ * Nuvemshop: contrato 2025-03 (decisão (b) aprovada). A suspensão de canal
+ * (`publicacaoSuspensao`) continua valendo por padrão e é checada antes desta função.
  */
-async function publicarNuvemshop(_empresaId: number, _payload: PayloadPublicacao): Promise<string> {
-  throw new PublicacaoFalha(
-    'Publicação automática na Nuvemshop está desligada: o contrato de produtos precisa migrar para a versão 2025-03 antes de religar.',
-    true
+async function publicarNuvemshop(
+  empresaId: number,
+  payload: PayloadPublicacao,
+  externalIdAtual: string | null
+): Promise<string> {
+  const { accessToken, shopId } = await dependenciasPublicacao.obterTokenCanal(empresaId, 'NUVEMSHOP');
+  if (!shopId) throw new PublicacaoFalha('Loja Nuvemshop não identificada: reconecte a loja.', true);
+  const { userAgentNuvemshop } = await import('../../../modules/connectors/nuvemshop/nuvemshop.service');
+  const resultado = await publicarItemNuvemshop(
+    { accessToken, storeId: shopId, userAgent: userAgentNuvemshop() },
+    { sku: payload.sku, titulo: payload.titulo, preco: payload.preco, disponivel: payload.disponivel },
+    externalIdAtual
   );
+  return resultado.externalId;
 }
 
 // ----------------------------------------------------------------------------

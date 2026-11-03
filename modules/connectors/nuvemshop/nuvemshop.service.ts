@@ -48,6 +48,11 @@ export const NUVEMSHOP_AUTH_BASE_URL = 'https://www.nuvemshop.com.br';
 /** Identificação exigida pela plataforma em toda requisição. */
 const NUVEMSHOP_DEFAULT_USER_AGENT = 'Brobond AI ERP (contato@brobond.com.br)';
 
+/** User-Agent da aplicação (também usado pela publicação de produtos). */
+export function userAgentNuvemshop(env: AppUrlEnv = process.env): string {
+  return env.NUVEMSHOP_USER_AGENT?.trim() || NUVEMSHOP_DEFAULT_USER_AGENT;
+}
+
 const PROVIDER = 'NUVEMSHOP' as const;
 
 /** A única ação que resolve toda falha de autorização deste canal. */
@@ -81,7 +86,7 @@ export function getNuvemshopConfig(): NuvemshopConfig {
     clientSecret: requiredEnv('NUVEMSHOP_CLIENT_SECRET'),
     apiBaseUrl: normalizeBaseUrl(process.env.NUVEMSHOP_API_BASE_URL?.trim() || NUVEMSHOP_API_BASE_URL),
     authBaseUrl: normalizeBaseUrl(process.env.NUVEMSHOP_AUTH_BASE_URL?.trim() || NUVEMSHOP_AUTH_BASE_URL),
-    userAgent: process.env.NUVEMSHOP_USER_AGENT?.trim() || NUVEMSHOP_DEFAULT_USER_AGENT,
+    userAgent: userAgentNuvemshop(),
   };
 }
 

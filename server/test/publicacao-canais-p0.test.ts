@@ -140,7 +140,10 @@ test('suspensão: sem liberação explícita, ML não recebe chamada e a linha p
   }
 });
 
-test('Nuvemshop: publicação automática é recusada sem chamada HTTP (contrato 2025-03 pendente)', async (t) => {
+test('Nuvemshop liberada: publicação usa o contrato 2025-03 e nunca o v1 (decisão (b) aprovada)', async (t) => {
+  // Antes da migração este teste exigia recusa sem HTTP (stub desligado). Requisito atualizado:
+  // com a Nuvemshop liberada, a chamada vai à base 2025-03. Resposta sem identificador
+  // verificável NÃO é tratada como sucesso nem repetida: fica 'falhou'.
   tokenFalso(t);
   const calls: string[] = [];
   t.mock.method(globalThis, 'fetch', async (input: unknown) => { calls.push(String(input)); return new Response('{}', { status: 201 }); });
@@ -149,8 +152,11 @@ test('Nuvemshop: publicação automática é recusada sem chamada HTTP (contrato
   try {
     const p = await produto();
     const row = await enfileirarPublicacao(1, p.id, 'NUVEMSHOP', payloadMl(p.sku), null);
-    assert.equal(await processarPublicacao(await linha(Number(row.id))), 'rejeitada');
-    assert.equal(calls.length, 0);
+    assert.equal(await processarPublicacao(await linha(Number(row.id))), 'falhou');
+    assert.ok(calls.length > 0);
+    assert.ok(calls.every((u) => u.startsWith('https://api.tiendanube.com/2025-03/')), calls.join(' | '));
+    assert.ok(calls.every((u) => !u.includes('nuvemshop.com.br') && !u.includes('/v1/')));
+    assert.equal(calls.filter((u) => u.endsWith('/products')).length, 1, 'no máximo um cadastro por tentativa');
   } finally {
     if (original === undefined) delete process.env.PUBLICACAO_CANAIS_LIBERADOS; else process.env.PUBLICACAO_CANAIS_LIBERADOS = original;
   }
