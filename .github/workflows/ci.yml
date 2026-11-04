@@ -104,6 +104,9 @@ jobs:
           value="$(node -e "process.stdout.write('A!' + require('crypto').randomBytes(24).toString('hex'))")"
           echo "::add-mask::$value"
           echo "ADMIN_PASSWORD=$value" >> "$GITHUB_ENV"
+          jwt="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$jwt"
+          echo "JWT_SECRET=$jwt" >> "$GITHUB_ENV"
       # O wrapper real do script E4.2 (PROD-DB-01.5.1) executa o arquivo via
       # psql, com o mesmo `\if :apply / BEGIN / COMMIT / ROLLBACK` do operador.
       # Sem o binário o teste se auto-pula e o gate REPROVA (skip não é

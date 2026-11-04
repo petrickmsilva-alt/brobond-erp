@@ -221,15 +221,18 @@ async function executarProcessarOutbox(limite = 10, tipos?: readonly string[]): 
     // vencidos. A fila é global somente para este worker de sistema.
     const result = await query(`SELECT * FROM commerce_outbox
       WHERE ((estado = 'PENDENTE' AND (proxima_tentativa_em IS NULL OR proxima_tentativa_em <= now()))
-         OR (estado = 'PROCESSANDO' AND atualizado_em < now() - interval '10 minutes'))
+         OR (estado = 'PROCESSANDO' AND atualizado_em < now() - interval '10 minutes')
+         OR (estado = 'INDETERMINADO' AND (proxima_tentativa_em IS NULL OR proxima_tentativa_em <= now())))
         AND ($2::text[] IS NULL OR tipo = ANY($2::text[]))
       ORDER BY COALESCE(proxima_tentativa_em, atualizado_em), id LIMIT $1`, [capacidade, tipos ? [...tipos] : null]);
     candidatas = result.rows;
   } else {
     const pendentes = await s.list(R_OUTBOX(), { page: 1, pageSize: 10000, filter: { estado: 'PENDENTE' }, sort: 'id', dir: 'asc' });
     const presas = await s.list(R_OUTBOX(), { page: 1, pageSize: 10000, filter: { estado: 'PROCESSANDO' }, sort: 'id', dir: 'asc' });
+    const indeterminadas = await s.list(R_OUTBOX(), { page: 1, pageSize: 10000, filter: { estado: 'INDETERMINADO' }, sort: 'id', dir: 'asc' });
     candidatas = [...pendentes.rows.filter((r) => !r.proxima_tentativa_em || Date.parse(String(r.proxima_tentativa_em)) <= agora),
-      ...presas.rows.filter((r) => !r.atualizado_em || agora - Date.parse(String(r.atualizado_em)) > 10 * 60_000)]
+      ...presas.rows.filter((r) => !r.atualizado_em || agora - Date.parse(String(r.atualizado_em)) > 10 * 60_000),
+      ...indeterminadas.rows.filter((r) => !r.proxima_tentativa_em || Date.parse(String(r.proxima_tentativa_em)) <= agora)]
       .filter((r) => !tipos || tipos.includes(String(r.tipo)))
       .slice(0, capacidade);
   }
@@ -240,7 +243,12 @@ async function executarProcessarOutbox(limite = 10, tipos?: readonly string[]): 
     if (String(row.estado) === 'PROCESSANDO') {
       await s.tryUpdateIf(R_OUTBOX(), Number(row.id),
         { estado: 'PROCESSANDO', claim_versao: Number(row.claim_versao || 0), empresa_id: Number(row.empresa_id) },
-        { estado: 'INDETERMINADO', ultimo_erro: 'Execução interrompida antes da confirmação; reconciliação necessária.', atualizado_em: new Date().toISOString() });
+        { estado: 'INDETERMINADO', ultimo_erro: 'Execução interrompida antes da confirmação; reconciliação necessária.',
+          proxima_tentativa_em: new Date().toISOString(), atualizado_em: new Date().toISOString() });
+      continue;
+    }
+    if (String(row.estado) === 'INDETERMINADO') {
+      await withCronIdempotency(`outbox:reconciliar:${row.id}:${row.claim_versao}`, String(row.id), () => reconciliarLinhaIndeterminada(s, row, jobId));
       continue;
     }
     const processado = await withCronIdempotency(`outbox:${row.id}:${row.claim_versao}:${row.estado}`, String(row.id), () => processarLinhaOutbox(s, row, jobId));
@@ -315,7 +323,69 @@ async function processarLinhaOutbox(s: ReturnType<typeof getStore>, row: Row, jo
     }
 }
 
-/** Recoloca um erro da empresa ativa na fila, com auditoria transacional. */
+async function diagnosticarIndeterminado(s: ReturnType<typeof getStore>, row: Row): Promise<'confirmado' | 'reenfileirar' | 'aguardar'> {
+  const tipo = String(row.tipo);
+  const empresaId = Number(row.empresa_id);
+  const payload = (row.payload && typeof row.payload === 'object' ? row.payload : {}) as Record<string, unknown>;
+  if (tipo === 'alerta') return 'confirmado';
+  if (tipo === 'conversao') {
+    const saleId = String(payload.sale_id || '');
+    if (!saleId) return 'aguardar';
+    const pedido = await s.findOneWhere(getResource('commerce_pedidos')!, { sale_id: saleId, empresa_id: empresaId });
+    if (pedido && String(pedido.estado) === 'CONVERTIDO') return 'confirmado';
+    if (pedido) return 'reenfileirar';
+    return 'aguardar';
+  }
+  if (tipo === 'publicacao') {
+    const publicacaoId = Number(payload.publicacao_id);
+    if (!Number.isInteger(publicacaoId) || publicacaoId <= 0) return 'aguardar';
+    const pub = await s.findOneWhere(getResource('commerce_publicacoes')!, { id: publicacaoId, empresa_id: empresaId });
+    if (pub && String(pub.estado) === 'PUBLISHED') return 'confirmado';
+    return 'aguardar';
+  }
+  if (tipo === 'refund_devolucao') {
+    const devolucaoId = Number(payload.devolucao_id);
+    if (!Number.isInteger(devolucaoId) || devolucaoId <= 0) return 'aguardar';
+    const rec = getResource('commerce_devolucoes') || getResource('devolucoes');
+    if (!rec) return 'aguardar';
+    const dev = await s.findOneWhere(rec, { id: devolucaoId, empresa_id: empresaId });
+    const estado = String(dev?.estado_refund ?? dev?.refund_status ?? dev?.estado ?? '');
+    if (/refund|estorn/i.test(estado) && /ok|done|conclu|success|estornado/i.test(estado)) return 'confirmado';
+    return 'aguardar';
+  }
+  return 'aguardar';
+}
+
+async function reconciliarLinhaIndeterminada(s: ReturnType<typeof getStore>, row: Row, jobId: string): Promise<'confirmado' | 'reenfileirado' | 'indeterminado'> {
+  const diagnostico = await diagnosticarIndeterminado(s, row);
+  const esperado = { estado: 'INDETERMINADO', claim_versao: Number(row.claim_versao || 0), empresa_id: Number(row.empresa_id) };
+  const agora = new Date().toISOString();
+  if (diagnostico === 'confirmado') {
+    const ok = await s.tryUpdateIf(R_OUTBOX(), Number(row.id), esperado, {
+      estado: 'PROCESSADO', processado_em: agora, ultimo_erro: null, proxima_tentativa_em: null, atualizado_em: agora,
+    });
+    if (ok) log.info('outbox_indeterminado_confirmado', { job_id: jobId, event_id: Number(row.id), tipo: String(row.tipo), empresa_id: Number(row.empresa_id) });
+    return ok ? 'confirmado' : 'indeterminado';
+  }
+  if (diagnostico === 'reenfileirar') {
+    const ok = await s.tryUpdateIf(R_OUTBOX(), Number(row.id), esperado, {
+      estado: 'PENDENTE', tentativas: 0,
+      ultimo_erro: 'Reconciliação: efeito local não confirmado; reenfileirado sem chamar provedor externo.',
+      proxima_tentativa_em: agora, atualizado_em: agora,
+    });
+    if (ok) log.info('outbox_indeterminado_reenfileirado', { job_id: jobId, event_id: Number(row.id), tipo: String(row.tipo), empresa_id: Number(row.empresa_id) });
+    return ok ? 'reenfileirado' : 'indeterminado';
+  }
+  await s.tryUpdateIf(R_OUTBOX(), Number(row.id), esperado, {
+    ultimo_erro: 'Indeterminado: sem evidência local nem consulta de provedor; operador pode reenfileirar. Sem reenvio automático.',
+    proxima_tentativa_em: new Date(Date.now() + 30 * 60_000).toISOString(),
+    atualizado_em: agora,
+  });
+  log.info('outbox_indeterminado_aguardando', { job_id: jobId, event_id: Number(row.id), tipo: String(row.tipo), empresa_id: Number(row.empresa_id) });
+  return 'indeterminado';
+}
+
+/** Recoloca um erro ou indeterminado da empresa ativa na fila, com auditoria transacional. */
 export async function reprocessarOutbox(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_OUTBOX(), actor, 'read');
@@ -326,8 +396,11 @@ export async function reprocessarOutbox(req: Request, res: Response) {
   const resultado = await s.transaction(async (tx) => {
     const antes = await s.findOneWhere(R_OUTBOX(), { id, empresa_id: empresaId }, tx);
     if (!antes) throw new HttpError(404, 'Evento não encontrado.');
-    if (antes.estado !== 'ERRO') throw new HttpError(409, 'Somente eventos em erro podem ser reenfileirados.');
-    const depois = await s.tryUpdateIf(R_OUTBOX(), id, { empresa_id: empresaId, estado: 'ERRO', tentativas: antes.tentativas },
+    const estadoAntes = String(antes.estado);
+    if (estadoAntes !== 'ERRO' && estadoAntes !== 'INDETERMINADO') {
+      throw new HttpError(409, 'Somente eventos em erro ou indeterminados podem ser reenfileirados.');
+    }
+    const depois = await s.tryUpdateIf(R_OUTBOX(), id, { empresa_id: empresaId, estado: estadoAntes, tentativas: antes.tentativas },
       { estado: 'PENDENTE', tentativas: 0, ultimo_erro: null, proxima_tentativa_em: new Date().toISOString() }, tx);
     if (!depois) throw new HttpError(409, 'O evento mudou; atualize a fila.');
     await s.audit({ empresa_id: empresaId, usuario_id: actor.id, usuario: actor.name, acao: 'ajuste',

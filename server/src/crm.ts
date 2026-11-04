@@ -1297,6 +1297,19 @@ export async function agendaDeAtividades(req: Request, res: Response) {
 // por estoque/produção, e a execução é a mesma de `scheduled.ts`. Nada de
 // polling no navegador.
 // ----------------------------------------------------------------------------
+let entregaLembreteParaTeste: ((params: {
+  empresaId: number; atividadeId: number; tipo: string; resumo: string;
+  quando: unknown; prioridade: string; lead: string | null; oportunidade: string | null;
+}) => Promise<boolean>) | undefined;
+
+/** Somente em NODE_ENV=test: injeta o canal para provar carimbo vs entrega. */
+export function definirEntregaLembreteCrmParaTeste(
+  fn: NonNullable<typeof entregaLembreteParaTeste> | undefined,
+) {
+  if (process.env.NODE_ENV !== 'test') return;
+  entregaLembreteParaTeste = fn;
+}
+
 export async function dispararLembretesCrm(
   agora: Date = new Date()
 ): Promise<{ analisados: number; disparados: number; empresas: number; canal: string }> {
@@ -1341,12 +1354,14 @@ async function executarLembretesCrm(
       if (atividade.lembrete_enviado_em) continue;
       analisados += 1;
 
+      try {
       await withCronIdempotency(`crm:lembrete:${atividade.id}`, String(atividade.id), async () => {
         const leadId = num(atividade.lead_id);
         const oppId = num(atividade.oportunidade_id);
         const lead = leadId === null ? null : await s.findOneWhere(R_LEAD(), { id: leadId, empresa_id: empresaId });
         const oportunidade = oppId === null ? null : await s.findOneWhere(R_OPORTUNIDADE(), { id: oppId, empresa_id: empresaId });
-        const entregue = await canal.notificarLembreteCrm({
+        const entregar = entregaLembreteParaTeste ?? canal.notificarLembreteCrm;
+        const entregue = await entregar({
           empresaId,
           atividadeId: Number(atividade.id),
           tipo: String(atividade.tipo ?? 'tarefa'),
@@ -1370,6 +1385,9 @@ async function executarLembretesCrm(
         }
         disparados += 1;
       });
+      } catch {
+        // Uma entrega falha não aborta o lote: os demais lembretes seguem, e este permanece sem carimbo.
+      }
     }
   }
 
