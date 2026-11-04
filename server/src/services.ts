@@ -1356,11 +1356,11 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
         por: String(actor.name || ''),
       };
       void import('./webhooks')
-        .then((m) => m.disparar('usuario.criado', conta))
+        .then((m) => m.disparar('usuario.criado', conta, m.empresaDoContexto(actor)))
         .catch(() => undefined);
       if (conviteEntregue) {
         void import('./webhooks')
-          .then((m) => m.disparar('usuario.convite_enviado', conta))
+          .then((m) => m.disparar('usuario.convite_enviado', conta, m.empresaDoContexto(actor)))
           .catch(() => undefined);
       }
     }

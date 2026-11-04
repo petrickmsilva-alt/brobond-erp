@@ -9,6 +9,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createHmac } from 'node:crypto';
+const EMP = 1; // EMPRESA_PADRAO (server/src/empresa.ts)
 
 process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
@@ -50,7 +51,8 @@ async function criarAdmin(senha = 'HookAdm#1000x') {
     ativo: true,
   });
   const { reautenticar } = await import('../src/auth');
-  const ator = { id: Number(row.id), name: String(row.nome), email: String(row.email), perfil: 'admin' as const };
+  // R-14: o administrador tem vínculo com uma empresa; webhooks e eventos de empresa seguem esse contexto.
+  const ator = { id: Number(row.id), name: String(row.nome), email: String(row.email), perfil: 'admin' as const, empresa_id: EMP };
   const r = mockRes();
   await reautenticar(mockReq(ator, { senha }), r.res);
   assert.equal(r.code(), 200);
@@ -141,7 +143,7 @@ describe('Webhooks de eventos de usuário (Onda 4)', () => {
       const id = r.payload().id;
       const segredo = r.payload().segredo as string;
 
-      await disparar('usuario.criado', { usuario_id: 7, nome: 'Zé', email: 'ze@x.com', perfil: 'operador', por: 'Admin' });
+      await disparar('usuario.criado', { usuario_id: 7, nome: 'Zé', email: 'ze@x.com', perfil: 'operador', por: 'Admin' }, EMP);
       assert.equal(receptor.recebidos.length, 1, 'POST chegou ao receptor');
       const { headers, corpo } = receptor.recebidos[0];
       assert.equal(headers['x-brobond-event'], 'usuario.criado');
@@ -156,7 +158,7 @@ describe('Webhooks de eventos de usuário (Onda 4)', () => {
 
       const rMorto = mockRes();
       await criarWebhook(mockReq(ator, { nome: 'Morto', url: 'http://127.0.0.1:9/hook', eventos: ['usuario.criado'] }), rMorto.res);
-      await disparar('usuario.criado', { usuario_id: 8 });
+      await disparar('usuario.criado', { usuario_id: 8 }, EMP);
       const ent = await getStore().list(R_ENTREGAS, { page: 1, pageSize: 5, sort: 'id', dir: 'desc', filter: { webhook_id: Number(rMorto.payload().id) } });
       assert.equal(ent.rows[0].estado, 'erro');
       assert.ok(String(ent.rows[0].erro || '').length > 0, 'motivo registrado');
@@ -208,7 +210,7 @@ describe('Webhooks de eventos de usuário (Onda 4)', () => {
     const off = await mk('Desligado', ['usuario.bloqueado']);
     await atualizarWebhook(mockReq(ator, { ativo: false }, { id: String(off) }), mockRes().res);
 
-    await disparar('usuario.bloqueado', { usuario_id: 1 });
+    await disparar('usuario.bloqueado', { usuario_id: 1 }, EMP);
     for (const [wid, esperado] of [[sim, 1], [outro, 0], [off, 0]] as const) {
       const ent = await getStore().list(R_ENTREGAS, { page: 1, pageSize: 10, filter: { webhook_id: wid } });
       assert.equal(ent.total, esperado, `webhook ${wid}: ${esperado} entrega(s)`);
