@@ -179,7 +179,8 @@ export async function exchangeNuvemshopCode(code: string, config: NuvemshopConfi
     console.error('[nuvemshop.oauth.token] resposta rejeitada pela Nuvemshop', {
       status: response.status,
       statusText: response.statusText,
-      rawBody: response.ok ? '[omitido: a resposta pode conter credenciais]' : rawBody,
+      // Só o código curto de erro OAuth (ex.: invalid_grant). O corpo bruto nunca é logado.
+      erro: typeof payload?.error === 'string' ? payload.error.slice(0, 60) : undefined,
     });
     const status = response.status || 502;
     throw new ProviderApiError(payload?.error_description || payload?.error || 'A Nuvemshop rejeitou a troca de token.', status, PROVIDER, {

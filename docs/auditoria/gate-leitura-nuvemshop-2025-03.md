@@ -70,9 +70,14 @@ Evidência necessária para destravar: loja de teste, token obtido por OAuth par
 
 ## 7. Status na Fase 4.3 (R-15)
 
-- **BLOQUEADO.** Verificação de nomes de variáveis (sem valores): nenhuma variável de credencial Nuvemshop presente
+- **BLOQUEADO para prova com a API real (sem credencial de loja).** Verificação de nomes de variáveis (sem valores): nenhuma variável de credencial Nuvemshop presente
   (`NUVEMSHOP_CLIENT_ID`, `NUVEMSHOP_CLIENT_SECRET`, `NUVEMSHOP_*`). **Nenhuma leitura GET foi realizada.**
 - Nenhum POST, PATCH, PUT ou DELETE. Nenhum cabeçalho alterado. Nenhuma publicação reativada.
-- A divergência `Authorization` (código atual) vs. `Authentication` (documentação v1) **continua não resolvida**.
+- **Atualização (2026-11-04, Ordem Master, item 8) — fonte oficial consultada sem credencial:**
+  - Documentação oficial do Admin API (`https://nuvemshop.dev/api/getting-started`, versão 2025-03): todas as URLs são `https://api.tiendanube.com/2025-03/{store_id}` (ou `api.nuvemshop.com.br`); a autenticação é `Authorization: Bearer ACCESS_TOKEN`; `User-Agent` é obrigatório (sem ele, 400); corpos JSON exigem `Content-Type: application/json; charset=utf-8` (sem ele, 415).
+  - Autenticação OAuth (`https://nuvemshop.dev/api/authentication`): tokens não expiram; o token é trocado por POST em `https://www.tiendanube.com/apps/authorize/token`; o `user_id` é o id da loja.
+  - Conclusão para o **2025-03**: o código atual (`publicacaoNuvemshop.ts`: `Authorization: Bearer` e `User-Agent`) **está alinhado à documentação oficial do 2025-03**. A divergência de R-15 deixa de existir para o 2025-03.
+  - **Não resolvido e sem fonte oficial nesta execução:** o cabeçalho `Authentication: bearer` do conector v1 (`nuvemshop.service.ts`) só aparece em perfil de terceiro (`github.com/api-evangelist/nuvemshop`), não em página oficial. Não foi alterado: o v1 é escopo separado e não é usado pela publicação.
+  - Nenhuma leitura GET à loja foi executada. A prova com a API real do 2025-03 continua pendente de credencial de loja de teste (G6). Nenhuma publicação foi reativada.
 - Próximo passo quando houver credencial de loja de teste em ambiente seguro: executar apenas os GET do procedimento da seção 4,
   registrar a resposta (sem tokens) e decidir o cabeçalho com base nessa evidência. Matriz de decisão: seção 4 (procedimento).

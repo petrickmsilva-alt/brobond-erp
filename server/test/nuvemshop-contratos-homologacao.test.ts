@@ -26,7 +26,10 @@ test('v1: cabeçalho de autenticação é Authentication (contrato documentado)'
   assert.match(v1, /'user-agent':\s*config\.userAgent/);
 });
 
-test('2025-03 (R-15): cabeçalho Authorization ainda presente e divergente do v1 — não verificado', () => {
+// R-15 (Fase 4.3): a documentação oficial do 2025-03 (nuvemshop.dev, Getting Started) usa
+// `Authorization: Bearer` e exige User-Agent. Isso fecha a divergência para o 2025-03 por fonte
+// oficial. A homologação com credencial real continua pendente (G6).
+test('2025-03 (R-15): Authorization Bearer e User-Agent conforme a documentação oficial do 2025-03', () => {
   assert.match(pub, /Authorization: `Bearer \$\{ctx\.accessToken\}`/, 'CARACTERIZAÇÃO: se mudar, exigir homologação de leitura antes');
   assert.match(pub, /'User-Agent': ctx\.userAgent/);
 });
