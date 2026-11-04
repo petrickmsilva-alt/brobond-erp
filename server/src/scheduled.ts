@@ -349,6 +349,8 @@ export interface ResultadoProcessoCron extends ResultadoExecutorCron {
   status: number;
   inicio: string;
   fim: string;
+  /** Motivo quando ok=false: timeout, erro (exceção no executor) ou ja_em_execucao (409). */
+  motivo?: 'timeout' | 'erro' | 'ja_em_execucao';
 }
 
 /** Relatórios agendados: estoque, vendas e alertas (com a seção de falhas de envio). Cada um isolado. */
@@ -443,30 +445,74 @@ export function isProcessoCron(nome: string): nome is ProcessoCron {
 const emExecucao = new Set<ProcessoCron>();
 
 /**
- * Executa UM processo, com trava, tratamento de falha e registro de execução.
- * O registro (log estruturado) não contém payloads, e-mails, tokens nem mensagens de erro brutas.
+ * Timeout padrão por processo (Ordem Final, 2.1). Sobrescrevível por CRON_TIMEOUT_<PROCESSO>_MS
+ * (inteiro entre 10 000 e 1 800 000 ms; valor inválido usa o padrão).
  */
-export async function executarProcessoCron(processo: ProcessoCron): Promise<ResultadoProcessoCron> {
+export const TIMEOUT_PADRAO_MS: Record<ProcessoCron, number> = {
+  relatorios: 300_000,
+  pagamentos: 240_000,
+  publicacoes: 300_000,
+  pedidos: 240_000,
+  crm: 120_000,
+};
+
+export function timeoutProcessoMs(processo: ProcessoCron): number {
+  const bruto = process.env[`CRON_TIMEOUT_${processo.toUpperCase()}_MS`];
+  if (bruto !== undefined && /^\d+$/.test(bruto.trim())) {
+    const n = Number(bruto.trim());
+    if (Number.isInteger(n) && n >= 10_000 && n <= 1_800_000) return n;
+  }
+  return TIMEOUT_PADRAO_MS[processo];
+}
+
+/**
+ * Executa UM processo, com trava, timeout e registro.
+ * - Timeout: a resposta sai com 503 (motivo `timeout`), mas a TRAVA só é liberada quando o trabalho
+ *   realmente termina. Assim um timeout nunca abre espaço para execução concorrente do mesmo processo.
+ * - O registro (log estruturado) não contém payloads, e-mails, tokens nem mensagens de erro brutas.
+ * `opcoes.limiteMs` existe somente para testes.
+ */
+export async function executarProcessoCron(
+  processo: ProcessoCron,
+  opcoes: { limiteMs?: number } = {}
+): Promise<ResultadoProcessoCron> {
   const inicio = new Date();
   if (emExecucao.has(processo)) {
-    const recusa: ResultadoProcessoCron = { processo, ok: false, status: 409, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString() };
+    const recusa: ResultadoProcessoCron = { processo, ok: false, status: 409, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'ja_em_execucao' };
     console.warn(JSON.stringify({ evento: 'cron_processo_recusado', processo, motivo: 'ja_em_execucao' }));
     return recusa;
   }
   emExecucao.add(processo);
+  const limite = opcoes.limiteMs ?? timeoutProcessoMs(processo);
+  const trabalho = (async () => processosCron[processo]())();
+  // A trava acompanha o TRABALHO, não a resposta.
+  trabalho.then(
+    () => emExecucao.delete(processo),
+    () => emExecucao.delete(processo)
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limitado = new Promise<{ kind: 'timeout' }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: 'timeout' }), limite);
+  });
+  const desfecho = await Promise.race([
+    trabalho.then((r) => ({ kind: 'ok' as const, r }), () => ({ kind: 'erro' as const })),
+    limitado,
+  ]);
+  if (timer) clearTimeout(timer);
+
   let resultado: ResultadoProcessoCron;
-  try {
-    const r = await processosCron[processo]();
-    const falhas = r.falhas;
-    resultado = { processo, ok: falhas.length === 0, status: falhas.length ? 503 : 200, itens: r.itens, detalhes: r.detalhes, falhas, inicio: inicio.toISOString(), fim: new Date().toISOString() };
-  } catch (e: any) {
+  if (desfecho.kind === 'ok') {
+    const falhas = desfecho.r.falhas;
+    resultado = { processo, ok: falhas.length === 0, status: falhas.length ? 503 : 200, itens: desfecho.r.itens, detalhes: desfecho.r.detalhes, falhas, inicio: inicio.toISOString(), fim: new Date().toISOString() };
+  } else if (desfecho.kind === 'erro') {
     // Só o tipo do erro vai para o registro: mensagem bruta pode conter dados do provedor.
-    console.error(JSON.stringify({ evento: 'cron_processo_falhou', processo, tipo: String(e?.name || 'Error') }));
-    resultado = { processo, ok: false, status: 503, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString() };
-  } finally {
-    emExecucao.delete(processo);
+    console.error(JSON.stringify({ evento: 'cron_processo_falhou', processo, tipo: 'Error' }));
+    resultado = { processo, ok: false, status: 503, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'erro' };
+  } else {
+    console.error(JSON.stringify({ evento: 'cron_processo_timeout', processo, limite_ms: limite }));
+    resultado = { processo, ok: false, status: 503, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'timeout' };
   }
-  console.info(JSON.stringify({ evento: 'cron_processo', processo, ok: resultado.ok, status: resultado.status, itens: resultado.itens, falhas: resultado.falhas, inicio: resultado.inicio, fim: resultado.fim }));
+  console.info(JSON.stringify({ evento: 'cron_processo', processo, ok: resultado.ok, status: resultado.status, motivo: resultado.motivo ?? null, itens: resultado.itens, falhas: resultado.falhas, inicio: resultado.inicio, fim: resultado.fim }));
   return resultado;
 }
 
@@ -531,7 +577,7 @@ async function cronPara(req: Request, res: Response, processo: string): Promise<
     return;
   }
   const r = await executarProcessoCron(processo);
-  res.status(r.status).json({ ok: r.ok, processo: r.processo, itens: r.itens, detalhes: r.detalhes, falhas: r.falhas, inicio: r.inicio, fim: r.fim });
+  res.status(r.status).json({ ok: r.ok, processo: r.processo, itens: r.itens, detalhes: r.detalhes, falhas: r.falhas, inicio: r.inicio, fim: r.fim, ...(r.motivo ? { motivo: r.motivo } : {}) });
 }
 
 /** POST /api/admin/scheduled/cron — compatibilidade: executa SOMENTE o processo `relatorios`. */
