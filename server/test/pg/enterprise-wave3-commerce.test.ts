@@ -43,6 +43,8 @@ test('PG vitrine: catálogo com 1001 produtos não perde preço de canal após p
 
 test('PG marketplace: token cifrado é resolvido pelo conector e corpo de erro externo não é persistido', async (t) => {
   const c = await company('wave3-token'); const previous = process.env.CONNECTOR_ENCRYPTION_KEY; process.env.CONNECTOR_ENCRYPTION_KEY = '1'.repeat(64); initConnectors();
+  // Canal ML suspenso por padrão (P0-01). Este teste mocka o fetch (nenhuma chamada real): libera SÓ aqui, e restaura.
+  const previousCanais = process.env.PUBLICACAO_CANAIS_LIBERADOS; process.env.PUBLICACAO_CANAIS_LIBERADOS = 'MERCADOLIVRE';
   try {
     const product = (await pool!.query("INSERT INTO produtos (empresa_id,sku,nome,ativo,preco_venda) VALUES ($1,$2,'Teste',true,20) RETURNING id", [c.id, `sku-${c.suffix}`])).rows[0];
     const cipher = encryptConnectorSecret('fixture-private-token');
@@ -60,7 +62,10 @@ test('PG marketplace: token cifrado é resolvido pelo conector e corpo de erro e
     assert.match(String(saved?.ultimo_erro), /HTTP 400/);
     assert.doesNotMatch(JSON.stringify(saved), /fixture-private-token|private@example\.invalid/);
     assert.equal(saved?.estado, 'ERROR');
-  } finally { if (previous === undefined) delete process.env.CONNECTOR_ENCRYPTION_KEY; else process.env.CONNECTOR_ENCRYPTION_KEY = previous; }
+  } finally {
+    if (previous === undefined) delete process.env.CONNECTOR_ENCRYPTION_KEY; else process.env.CONNECTOR_ENCRYPTION_KEY = previous;
+    if (previousCanais === undefined) delete process.env.PUBLICACAO_CANAIS_LIBERADOS; else process.env.PUBLICACAO_CANAIS_LIBERADOS = previousCanais;
+  }
 });
 
 test('PG despublicação: versões históricas e worker em andamento são cercados', async () => {

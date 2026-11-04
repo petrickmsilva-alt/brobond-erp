@@ -468,7 +468,8 @@ export const mercadopagoProvider: PaymentProvider = {
     query?: Record<string, unknown>
   ): boolean {
     const segredo = ctx.webhookSegredo;
-    if (!segredo) return true;
+    // Fail-closed: sem segredo, nenhuma entrega é autenticada.
+    if (!segredo) return false;
     const assinatura = String(headers['x-signature'] || '');
     const m = assinatura.match(/ts=([^,]+),\s*v1=([a-f0-9]+)/i);
     if (!m) return false;

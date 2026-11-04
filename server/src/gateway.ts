@@ -1054,8 +1054,9 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
     let config = empresaId === null ? null : await configDaEmpresa(empresaId, providerId);
     if(empresaId!==null && !config && ['stripe','pagbank'].includes(providerId)){const {account}=await import('../../modules/payments/application/configuration');config=(await account(empresaId,providerId==='stripe'?'STRIPE':'PAGBANK')).config;}
     if (empresaId !== null && (!config || config.ativo === false)) return res.status(401).json({ error: 'Assinatura inválida.' });
-    let segredo = config ? decifrarSegredo(config.webhook_segredo_cifrado as string | null) : null;
-    if(!segredo && providerId==='pagbank' && config){try{segredo=JSON.parse(decifrarSegredo(config.credenciais_cifradas)||'{}').access_token||null;}catch{/* fail closed */}}
+    const segredo = config ? decifrarSegredo(config.webhook_segredo_cifrado as string | null) : null;
+    // R-10 (Fase 4.3): NUNCA usar o access token como segredo de webhook. Sem segredo próprio
+    // (PAGBANK_WEBHOOK_SECRET cadastrado), `segredo` fica nulo e a rota recusa (falha fechada).
     const ctxLocal: GatewayContext | null = config && empresaId !== null
       ? { empresaId, config, credenciais: (() => { try { return JSON.parse(decifrarSegredo(config.credenciais_cifradas) || '{}'); } catch { return null; } })(), webhookSegredo: segredo }
       : null;
@@ -1069,8 +1070,12 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
     const anteriores = await s.list(R_GATEWAY_WEBHOOK_EVENTS, { page: 1, pageSize: 2, filter: { provider: providerId, evento_id: parsed.evento_id } });
     const anterior = anteriores.rows[0] ?? null;
     const rejeicaoLegadaSemEmpresa = anterior?.empresa_id == null && anterior?.status === 'ignorado';
-    if (anterior && ((!rejeicaoLegadaSemEmpresa && Number(anterior.empresa_id || 0) !== Number(empresaId || 0))
-      || extrairRefDoPayload(provider, lerPayloadWebhook(anterior.payload)) !== parsed.provider_ref)) {
+    const conflitoDeCobranca = !!anterior && ((!rejeicaoLegadaSemEmpresa && Number(anterior.empresa_id || 0) !== Number(empresaId || 0))
+      || extrairRefDoPayload(provider, lerPayloadWebhook(anterior.payload)) !== parsed.provider_ref);
+    if (conflitoDeCobranca) {
+      // P2-10: sem assinatura válida, o 409 revelaria a existência de evento_id
+      // de outra cobrança. Resposta uniforme 401, sem tocar no registro alheio.
+      if (!segredo || !assinaturaOk) return res.status(401).json({ error: 'Assinatura inválida.' });
       return res.status(409).json({ error: 'Evento já registrado para outra cobrança.' });
     }
     // Um evento que entrou em erro quando a empresa ainda não exigia assinatura
@@ -1298,7 +1303,7 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
   }
 }
 
-function extrairRefDoPayload(provider: PaymentProvider, payload: Record<string, unknown>): string | null {
+export function extrairRefDoPayload(provider: PaymentProvider, payload: Record<string, unknown>): string | null {
   const parsed = provider.parseWebhook(JSON.stringify(payload));
   return parsed?.provider_ref ?? null;
 }

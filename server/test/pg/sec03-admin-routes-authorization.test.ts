@@ -167,7 +167,7 @@ const ROTAS_ADMIN: RotaAdmin[] = [
   { metodo: 'DELETE', rota: '/admin/config/endereco-publico', adminOnly: true, nota: 'apaga configuração do sistema' },
   { metodo: 'GET', rota: '/admin/scheduled/status', adminOnly: true, nota: 'config de agendamentos/destinatários' },
   { metodo: 'GET', rota: '/admin/scheduled/run', adminOnly: true, nota: 'dispara relatórios/rotinas (handler já exigia admin)' },
-  { metodo: 'POST', rota: '/admin/scheduled/cron', adminOnly: true, nota: 'cron externo (CRON_SECRET opcional)' },
+  // POST /admin/scheduled/cron: contrato PRÓPRIO (Bearer CRON_SECRET, fora do requireAuth). Testado abaixo.
   { metodo: 'GET', rota: '/admin/notificacoes/status', adminOnly: true, nota: 'status/infra de notificações' },
   { metodo: 'GET', rota: '/admin/ws/status', adminOnly: true, nota: 'status do WebSocket/salas' },
   { metodo: 'GET', rota: '/admin/backup/info', adminOnly: true, nota: 'resumo do banco/backup' },
@@ -245,6 +245,11 @@ test('SEC-03/P1-02: /api/admin/* exige administrador (HTTP real + PostgreSQL)', 
       // autorização do guard ("permiss").
       assert.equal(r.status, 403, `ADMIN ${metodo} ${rota} (config) → 403 do handler esperado: ${r.texto}`);
       assert.doesNotMatch(String(r.body?.error || ''), /permiss/i, `o 403 do config não pode ser o do guard: ${r.texto}`);
+    } else if (rota === '/admin/financeiro/recorrencias') {
+      // Recorrências financeiras exigem confirmação própria (PROCESSAR_RECORRENCIAS). Sem ela, o handler recusa
+      // com 400 e nada é processado. O teste NÃO envia a confirmação (isso executaria recorrências financeiras).
+      assert.equal(r.status, 400, `ADMIN ${metodo} ${rota} sem confirmação deve ser recusado: ${r.texto}`);
+      assert.match(String(r.body?.error || ''), /Confirmação explícita/, `recusa vem do handler de confirmação: ${r.texto}`);
     } else {
       assert.equal(r.status, 200, `ADMIN ${metodo} ${rota} deveria funcionar: ${r.texto}`);
     }
@@ -297,8 +302,12 @@ test('SEC-03/P1-02: /api/admin/* exige administrador (HTTP real + PostgreSQL)', 
   }
   // O mesmo token de gerente forjando o corpo numa rota POST administrativa.
   const spoofPost = await req(baseUrl, 'POST', '/admin/scheduled/cron', { perfil: 'admin', role: 'admin', empresa_id: 1, is_admin: true, consolidado: 1 }, gerenteToken, { 'x-perfil': 'admin', 'x-role': 'admin' });
-  assert.equal(spoofPost.status, 403, `POST admin com corpo forjado continua 403: ${spoofPost.texto}`);
-  registra('E) GERENTE POST /admin/scheduled/cron com corpo+headers forjados → 403');
+  // Contrato do cron (Fase 4.2, R-4): sem Bearer CRON_SECRET nunca executa. Sessão (admin ou gerente) recebe 401/503.
+  assert.ok([401, 503].includes(spoofPost.status), `POST cron com corpo forjado não executa: ${spoofPost.status} ${spoofPost.texto}`);
+  registra(`E) GERENTE POST /admin/scheduled/cron com corpo+headers forjados → ${spoofPost.status}`);
+  const cronAdmin = await req(baseUrl, 'POST', '/admin/scheduled/cron', {}, adminToken);
+  assert.ok([401, 503].includes(cronAdmin.status), `sessão de ADMIN não aciona o cron: ${cronAdmin.status} ${cronAdmin.texto}`);
+  registra(`A2) ADMIN POST /admin/scheduled/cron (sessão) → ${cronAdmin.status} (cron exige CRON_SECRET)`);
 
   // ------------------------------------------------------------------------
   // F) CROSS-TENANT — gerente de outra empresa não ganha o endpoint global.

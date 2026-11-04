@@ -1,14 +1,14 @@
 // ============================================================
 // MFA/TOTP — gerenciamento por usuário.
 //
-//   • O segredo TOTP é gravado CIFRADO (AES-256-GCM) com chave derivada de
-//     MFA_ENCRYPTION_KEY ou JWT_SECRET — nunca em texto puro no banco.
+//   • O segredo TOTP é gravado CIFRADO (AES-256-GCM) com a chave de MFA_ENCRYPTION_KEY
+//     (legado: derivada do JWT_SECRET, aceita só para leitura) — nunca em texto puro.
 //   • Administradores são OBRIGADOS a ativar: o login deles só termina depois
 //     do desafio TOTP (mfa_required) ou do cadastro (mfa_setup_required).
 //   • Desativar exige reautenticação (senha recente) + código válido.
 // ============================================================
 import type { Request, Response } from 'express';
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
+import { cifrarComDominio, decifrarComDominio } from './chavesCifra';
 import QRCode from 'qrcode';
 import { HttpError } from './errors';
 import { empresaDoAtorAudit } from './empresa';
@@ -21,30 +21,14 @@ import { gerarLoteCodigos, lerRegistro, restantesRegistro, serializarRegistro } 
 
 const TICKET_TTL = '10m';
 
-function chaveMfa(): Buffer {
-  const base = process.env.MFA_ENCRYPTION_KEY || process.env.JWT_SECRET || 'brobond-dev-secret';
-  return scryptSync(base, 'brobond-mfa-v1', 32);
-}
-
-/** AES-256-GCM; formato versionado v1.iv.tag.ciphertext (base64url). */
+/** AES-256-GCM; formato versionado v1.iv.tag.ciphertext (base64url). Chave: chavesCifra.ts. */
 export function cifrarSegredoMfa(segredo: string): string {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', chaveMfa(), iv);
-  const encrypted = Buffer.concat([cipher.update(segredo, 'utf8'), cipher.final()]);
-  return ['v1', iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), encrypted.toString('base64url')].join('.');
+  return cifrarComDominio(segredo, 'mfa');
 }
 
 export function decifrarSegredoMfa(payload: string | null | undefined): string | null {
   if (!payload) return null;
-  const [version, iv, tag, encrypted] = String(payload).split('.');
-  if (version !== 'v1' || !iv || !tag || !encrypted) return null;
-  try {
-    const decipher = createDecipheriv('aes-256-gcm', chaveMfa(), Buffer.from(iv, 'base64url'));
-    decipher.setAuthTag(Buffer.from(tag, 'base64url'));
-    return Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64url')), decipher.final()]).toString('utf8');
-  } catch {
-    return null;
-  }
+  return decifrarComDominio(String(payload), 'mfa');
 }
 
 // ------------------------------------------------------------------

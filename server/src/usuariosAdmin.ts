@@ -41,9 +41,10 @@ function precisaCertificar(u: Record<string, any>, agoraMs: number): boolean {
 }
 
 /** Disparo de webhooks (fire-and-forget — nunca derruba a ação). */
-function notificar(evento: string, dados: Record<string, unknown>): void {
+function notificar(evento: string, dados: Record<string, unknown>, actor: unknown): void {
+  // R-14: empresa do CONTEXTO do ator (sessão), nunca do payload. Sem empresa única = global.
   void import('./webhooks')
-    .then((m) => m.disparar(evento, dados))
+    .then((m) => m.disparar(evento, dados, m.empresaDoContexto(actor)))
     .catch(() => undefined);
 }
 
@@ -199,7 +200,7 @@ export async function reenviarConvite(req: Request, res: Response) {
   if (!row) throw new HttpError(404, 'Usuário não encontrado.');
   if (row.senha_hash) throw new HttpError(409, 'Este usuário já definiu a senha. Use "Gerar senha temporária" para redefinir o acesso.');
   const convite = await gerarConvite(row, actor, undefined, req);
-  if (convite.entregue) notificar('usuario.convite_enviado', dadosConta(row, actor));
+  if (convite.entregue) notificar('usuario.convite_enviado', dadosConta(row, actor), actor);
   res.json({ ok: true, ...(convite.link ? { convite_link: convite.link } : {}) });
 }
 
@@ -242,7 +243,7 @@ export async function senhaTemporaria(req: Request, res: Response) {
     empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(Number(row.id));
-  notificar('usuario.senha_temporaria', dadosConta(row, actor, { sessoes_encerradas: sessoes }));
+  notificar('usuario.senha_temporaria', dadosConta(row, actor, { sessoes_encerradas: sessoes }), actor);
   res.setHeader('Cache-Control', 'no-store');
   // Única exibição: a senha NÃO é armazenada em texto puro nem logada.
   res.json({ senha_temporaria: senha, trocar_senha: true, sessoes_encerradas: sessoes });
@@ -550,7 +551,7 @@ export async function desativarUsuario(req: Request, res: Response) {
     empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
-  notificar('usuario.desativado', dadosConta(row, actor, { motivo, sessoes_encerradas: sessoes }));
+  notificar('usuario.desativado', dadosConta(row, actor, { motivo, sessoes_encerradas: sessoes }), actor);
   res.json({ ok: true, sessoes_encerradas: sessoes });
 }
 
@@ -598,7 +599,7 @@ export async function ativarUsuario(req: Request, res: Response) {
     const convite = await gerarConvite(atual, actor, undefined, req);
     convite_link = convite.link;
   }
-  notificar('usuario.ativado', dadosConta(row, actor));
+  notificar('usuario.ativado', dadosConta(row, actor), actor);
   res.json({ ok: true, ...(convite_link ? { convite_link } : {}) });
 }
 
@@ -630,7 +631,7 @@ export async function desbloquearUsuario(req: Request, res: Response) {
     empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
-  notificar('usuario.desbloqueado', dadosConta(row, actor, { bloqueio_manual: eraManual }));
+  notificar('usuario.desbloqueado', dadosConta(row, actor, { bloqueio_manual: eraManual }), actor);
   res.json({ ok: true });
 }
 
@@ -675,7 +676,7 @@ export async function bloquearUsuario(req: Request, res: Response) {
     empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
-  notificar('usuario.bloqueado', dadosConta(row, actor, { motivo, manual: duracao === null, duracao_minutos: duracao }));
+  notificar('usuario.bloqueado', dadosConta(row, actor, { motivo, manual: duracao === null, duracao_minutos: duracao }), actor);
   res.json({ ok: true, manual: duracao === null });
 }
 
@@ -795,7 +796,7 @@ export async function resetarMfaUsuario(req: Request, res: Response) {
     dados: { sessoes_encerradas: sessoes },
   });
   invalidateUserCache(Number(row.id));
-  notificar('usuario.mfa_resetado', dadosConta(row, actor, { sessoes_encerradas: sessoes }));
+  notificar('usuario.mfa_resetado', dadosConta(row, actor, { sessoes_encerradas: sessoes }), actor);
   res.json({ ok: true });
 }
 
@@ -958,6 +959,6 @@ export async function certificarUsuario(req: Request, res: Response) {
     empresa_id: empresaDoAtorAudit(actor),
   });
   invalidateUserCache(id);
-  notificar('usuario.acesso_certificado', dadosConta(row, actor, { observacao: observacao || null }));
+  notificar('usuario.acesso_certificado', dadosConta(row, actor, { observacao: observacao || null }), actor);
   res.json({ ok: true, certificado_em: agora, certificado_por: actor.name });
 }

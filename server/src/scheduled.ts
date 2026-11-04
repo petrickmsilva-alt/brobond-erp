@@ -15,22 +15,27 @@
 //   SCHEDULE_PRODUCAO=weekly
 //
 // Execução: GET /api/admin/scheduled/run (admin) — executa manualmente
-//           POST /api/admin/scheduled/cron — chamado por cron externo (ex.: cron-job.org)
+//           POST /api/admin/scheduled/cron — cron externo: processo `relatorios`
+//           POST /api/admin/scheduled/cron/:processo — um processo por chamada (pagamentos, publicacoes, pedidos, crm)
+//           Recorrências financeiras NÃO são processo de cron (ver financeiro.ts).
 // ============================================================
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { coletarFalhasEntrega, htmlSecaoFalhasEntrega } from './alertasFalhas';
 import { enviarEmail, smtpConfigurado } from './mail';
 import { hasDatabaseUrl } from './db';
 import { instagramConnectorService, saleIngestionService } from '../../modules/connectors/index';
 import { getStore } from './services';
 import { getResource } from './resources';
+import { aplicarFiltroEmpresa, type EscopoEmpresa } from './empresa';
+import { destinosPorEmpresa, type DestinoEmpresa } from './destinatariosEmpresa';
 import { labelOf } from './store';
 import { HttpError } from './errors';
-import { processarRecorrencias } from './financeiro';
 import { atualizarMotorNegocios } from './negocios';
 import type { Request, Response } from 'express';
 import { currentUser } from './auth';
 import { diaISO } from './utils';
 import { dispararLembretesCrm } from './crm';
-import { processarComercioAgendado } from './commerce/outbox';
+import { processarOutbox, TIPOS_OUTBOX_POR_PROCESSO } from './commerce/outbox';
 
 const fmtMoney = (n: number) => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtNumber = (n: number) => n.toLocaleString('pt-BR');
@@ -54,12 +59,31 @@ function deveExecutar(frequencia: string): boolean {
   return false;
 }
 
-async function enviarRelatorio(assunto: string, html: string): Promise<void> {
-  const emails = scheduleEmails();
-  if (!emails.length) {
-    console.log('[schedule] Nenhum e-mail configurado para relatórios agendados.');
-    return;
-  }
+/** Envio injetável (testes). Em produção, é o `enviarEmail` real. */
+export type EnviadorRelatorio = (opts: { to: string; assunto: string; html: string }) => Promise<unknown>;
+
+/** Recorte do servidor para leitura de um relatório (mesmo padrão das rotas: `aplicarFiltroEmpresa`). */
+function escopoDaEmpresa(empresaId: number): EscopoEmpresa {
+  return { empresaId, consolidado: false, permitidas: [empresaId] };
+}
+
+async function listarDaEmpresa(
+  chave: string,
+  empresaId: number,
+  pageSize: number,
+  extra: { sort?: string; dir?: 'asc' | 'desc' } = {},
+) {
+  const r = getResource(chave)!;
+  return getStore().list(r, {
+    page: 1,
+    pageSize,
+    ...extra,
+    filter: aplicarFiltroEmpresa(r, undefined, escopoDaEmpresa(empresaId)),
+  });
+}
+
+async function enviarRelatorio(assunto: string, html: string, enviar: EnviadorRelatorio, emails: string[]): Promise<void> {
+  if (!emails.length) return;
 
   const htmlBase = `
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;">
@@ -75,7 +99,7 @@ async function enviarRelatorio(assunto: string, html: string): Promise<void> {
     </div>`;
 
   for (const email of emails) {
-    await enviarEmail({ to: email, assunto: `📊 ${assunto}`, html: htmlBase }).catch(() => {
+    await enviar({ to: email, assunto: `📊 ${assunto}`, html: htmlBase }).catch(() => {
       console.warn('⚠️  Falha ao preparar relatório por e-mail.');
     });
   }
@@ -85,11 +109,16 @@ async function enviarRelatorio(assunto: string, html: string): Promise<void> {
 // Relatórios individuais
 // ----------------------------------------------------------------------------
 
-async function relatorioPosicaoEstoque(): Promise<void> {
-  const s = getStore();
+export async function relatorioPosicaoEstoque(enviar: EnviadorRelatorio = enviarEmail): Promise<void> {
+  const destinos = await destinosPorEmpresa(scheduleEmails(), ['estoques', 'produtos']);
+  if (!destinos.length) return logSemDestinatario('posição de estoque');
+  for (const destino of destinos) await gerarPosicaoEstoque(destino, enviar);
+}
+
+async function gerarPosicaoEstoque(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
   const [produtos, estoques] = await Promise.all([
-    s.list(getResource('produtos')!, { page: 1, pageSize: 2000 }),
-    s.list(getResource('estoques')!, { page: 1, pageSize: 5000 }),
+    listarDaEmpresa('produtos', destino.empresaId, 2000),
+    listarDaEmpresa('estoques', destino.empresaId, 5000),
   ]);
 
   let valorTotal = 0;
@@ -135,17 +164,22 @@ async function relatorioPosicaoEstoque(): Promise<void> {
       </tbody>
     </table>`;
 
-  await enviarRelatorio(`Posição de Estoque — ${new Date().toLocaleDateString('pt-BR')}`, html);
+  await enviarRelatorio(`Posição de Estoque — ${new Date().toLocaleDateString('pt-BR')}`, html, enviar, destino.emails);
 }
 
-async function relatorioVendas(): Promise<void> {
-  const s = getStore();
+export async function relatorioVendas(enviar: EnviadorRelatorio = enviarEmail): Promise<void> {
+  const destinos = await destinosPorEmpresa(scheduleEmails(), ['vendas']);
+  if (!destinos.length) return logSemDestinatario('vendas');
+  for (const destino of destinos) await gerarVendas(destino, enviar);
+}
+
+async function gerarVendas(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
   const dias = getSchedule('VENDAS') === 'daily' ? 1 : 7;
   const desde = new Date();
   desde.setDate(desde.getDate() - dias);
   const desdeStr = desde.toISOString().slice(0, 10);
 
-  const vendas = await s.list(getResource('vendas')!, { page: 1, pageSize: 1000, sort: 'faturada_em', dir: 'desc' });
+  const vendas = await listarDaEmpresa('vendas', destino.empresaId, 1000, { sort: 'faturada_em', dir: 'desc' });
   const faturadas = vendas.rows.filter((v) => ['faturada', 'entregue'].includes(String(v.status)) && diaISO(v.faturada_em) >= desdeStr);
 
   const totalVendas = faturadas.reduce((s, v) => s + Number(v.total || 0), 0);
@@ -175,18 +209,29 @@ async function relatorioVendas(): Promise<void> {
       </tbody>
     </table>`;
 
-  await enviarRelatorio(`Vendas — últimos ${dias} dia${dias > 1 ? 's' : ''}`, html);
+  await enviarRelatorio(`Vendas — últimos ${dias} dia${dias > 1 ? 's' : ''}`, html, enviar, destino.emails);
 }
 
-async function relatorioAlertas(): Promise<void> {
-  const s = getStore();
-  const [estoques, insumosEst] = await Promise.all([
-    s.list(getResource('estoques')!, { page: 1, pageSize: 5000 }),
-    s.list(getResource('estoque_insumos')!, { page: 1, pageSize: 2000 }),
+export async function relatorioAlertas(enviar: EnviadorRelatorio = enviarEmail): Promise<void> {
+  const destinos = await destinosPorEmpresa(scheduleEmails(), [
+    'estoques', 'estoque_insumos', 'produtos', 'insumos', 'commerce_outbox', 'commerce_notificacoes',
   ]);
+  if (!destinos.length) return logSemDestinatario('alertas');
+  for (const destino of destinos) await gerarAlertas(destino, enviar);
+}
 
-  const produtos = await s.list(getResource('produtos')!, { page: 1, pageSize: 2000 });
-  const insumos = await s.list(getResource('insumos')!, { page: 1, pageSize: 2000 });
+function logSemDestinatario(relatorio: string): void {
+  // Sem dados e sem destinatário identificado: nada é lido para envio nem enviado. Só contagem no log.
+  console.log(`[schedule] ${relatorio}: nenhuma empresa com destinatário autorizado identificado; nada enviado.`);
+}
+
+async function gerarAlertas(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
+  const [estoques, insumosEst, produtos, insumos] = await Promise.all([
+    listarDaEmpresa('estoques', destino.empresaId, 5000),
+    listarDaEmpresa('estoque_insumos', destino.empresaId, 2000),
+    listarDaEmpresa('produtos', destino.empresaId, 2000),
+    listarDaEmpresa('insumos', destino.empresaId, 2000),
+  ]);
 
   const alertasProd = estoques.rows
     .filter((e) => Number(e.estoque_min) > 0 && Number(e.quantidade) <= Number(e.estoque_min))
@@ -221,7 +266,23 @@ async function relatorioAlertas(): Promise<void> {
         </tbody>
       </table>` : ''}`;
 
-  await enviarRelatorio(`Alertas de Estoque — ${new Date().toLocaleDateString('pt-BR')}`, html);
+  // Fase 7 (P2-08): falhas de envio entram no mesmo relatório. Falha isolada não derruba o alerta de estoque.
+  let secaoFalhas = '';
+  let temFalhas = false;
+  try {
+    const falhas = await coletarFalhasEntrega(new Date(), { empresaId: destino.empresaId });
+    temFalhas = falhas.total > 0;
+    secaoFalhas = htmlSecaoFalhasEntrega(falhas);
+  } catch (erro) {
+    console.error('[schedule] Falha ao ler falhas de envio para o relatório:', String((erro as Error)?.message ?? erro).slice(0, 200));
+  }
+
+  await enviarRelatorio(
+    `Alertas de Estoque${temFalhas ? ' e Falhas de Envio' : ''} — ${new Date().toLocaleDateString('pt-BR')}`,
+    html + secaoFalhas,
+    enviar,
+    destino.emails,
+  );
 }
 
 // ----------------------------------------------------------------------------
@@ -263,84 +324,270 @@ async function recuperarPedidosPendentes(): Promise<number> {
   return total;
 }
 
+/**
+ * R-4 (Fase 4.3) — processos do cron, cada um com responsabilidade delimitada.
+ *
+ * Cada processo é executado SOZINHO por `executarProcessoCron`: uma falha em um não interrompe os
+ * outros; não há processo que chame outro; e o relatório (`relatorios`) não dispara nenhum efeito
+ * financeiro, de publicação, de pedido ou de CRM. Recorrências financeiras NÃO são processo de cron:
+ * só existem na rota administrativa com confirmação explícita (financeiro.ts, `cronRecorrencias`).
+ *
+ * Autenticação: todos os processos usam o mesmo contrato de `CRON_SECRET` (Bearer) e nenhum aceita
+ * sessão de usuário. Não há segredo por processo, para não criar variável nova sem aprovação.
+ */
+export type ProcessoCron = 'relatorios' | 'pagamentos' | 'publicacoes' | 'pedidos' | 'crm';
+
+export interface ResultadoExecutorCron {
+  itens: number;
+  detalhes: string[];
+  falhas: string[];
+}
+
+export interface ResultadoProcessoCron extends ResultadoExecutorCron {
+  processo: ProcessoCron;
+  ok: boolean;
+  status: number;
+  inicio: string;
+  fim: string;
+  /** Motivo quando ok=false: timeout, erro (exceção no executor) ou ja_em_execucao (409). */
+  motivo?: 'timeout' | 'erro' | 'ja_em_execucao';
+}
+
+/** Relatórios agendados: estoque, vendas e alertas (com a seção de falhas de envio). Cada um isolado. */
+async function executarRelatoriosCron(): Promise<ResultadoExecutorCron> {
+  const detalhes: string[] = [];
+  const falhas: string[] = [];
+  const tentar = async (nome: string, rotulo: string, fn: () => Promise<void>) => {
+    try { await fn(); detalhes.push(rotulo); } catch { falhas.push(nome); }
+  };
+  if (deveExecutar(getSchedule('POSICAO_ESTOQUE'))) await tentar('relatorio_estoque', 'Posição de estoque', () => relatorioPosicaoEstoque());
+  if (deveExecutar(getSchedule('VENDAS'))) await tentar('relatorio_vendas', 'Vendas', () => relatorioVendas());
+  if (deveExecutar(getSchedule('ALERTAS'))) await tentar('relatorio_alertas', 'Alertas e falhas de envio', () => relatorioAlertas());
+  return { itens: detalhes.length, detalhes, falhas };
+}
+
+/** Sincronização de pagamentos, expiração de checkouts e reembolsos de devolução (fila `pagamentos`). */
+async function executarPagamentosCron(): Promise<ResultadoExecutorCron> {
+  const falhas: string[] = [];
+  let itens = 0;
+  try {
+    const { runPaymentJobs } = await import('../../modules/payments/application/jobs');
+    const r = await runPaymentJobs();
+    itens += Number(r.synchronized) || 0;
+    if (r.failed) falhas.push('sincronizacao_pagamentos');
+  } catch { falhas.push('sincronizacao_pagamentos'); }
+  try {
+    const { expirarCheckoutsPendentes } = await import('./commerce/pedidos');
+    itens += Number(await expirarCheckoutsPendentes()) || 0;
+  } catch { falhas.push('expiracao_checkout'); }
+  try {
+    const o = await processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.pagamentos);
+    itens += o.processados;
+    if (o.erros) falhas.push('reembolsos_devolucao');
+  } catch { falhas.push('reembolsos_devolucao'); }
+  return { itens, detalhes: [], falhas };
+}
+
+/** Fila de publicações (respeita a suspensão ML/Nuvemshop) e publicações pendentes na outbox. */
+async function executarPublicacoesCron(): Promise<ResultadoExecutorCron> {
+  const falhas: string[] = [];
+  let itens = 0;
+  try {
+    const { processarFilaPublicacoes } = await import('./commerce/catalogo');
+    const p = await processarFilaPublicacoes(20);
+    itens += p.processadas;
+    if (p.falhas) falhas.push('fila_publicacoes');
+  } catch { falhas.push('fila_publicacoes'); }
+  try {
+    const o = await processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.publicacoes);
+    itens += o.processados;
+    if (o.erros) falhas.push('outbox_publicacoes');
+  } catch { falhas.push('outbox_publicacoes'); }
+  return { itens, detalhes: [], falhas };
+}
+
+/** Recuperação de pedidos de marketplace e eventos de pedido (conversão, notificação, sincronização). */
+async function executarPedidosCron(): Promise<ResultadoExecutorCron> {
+  const falhas: string[] = [];
+  let itens = 0;
+  try { itens += await recuperarPedidosPendentes(); } catch { falhas.push('recuperacao_marketplace'); }
+  try {
+    const o = await processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.pedidos);
+    itens += o.processados;
+    if (o.erros) falhas.push('eventos_pedido');
+  } catch { falhas.push('eventos_pedido'); }
+  return { itens, detalhes: [], falhas };
+}
+
+/** Lembretes de CRM. Com o canal desligado, não grava nem envia (guarda em crm.ts). */
+async function executarCrmCron(): Promise<ResultadoExecutorCron> {
+  const r = await dispararLembretesCrm();
+  return { itens: r.disparados, detalhes: r.canal === 'desabilitado' ? ['canal de lembrete desabilitado'] : [], falhas: [] };
+}
+
+/**
+ * Registro dos processos. É um objeto mutável de propósito: os testes substituem executores
+ * por registradores (sem efeito externo). Não há entrada para recorrências financeiras.
+ */
+export const processosCron: Record<ProcessoCron, () => Promise<ResultadoExecutorCron>> = {
+  relatorios: executarRelatoriosCron,
+  pagamentos: executarPagamentosCron,
+  publicacoes: executarPublicacoesCron,
+  pedidos: executarPedidosCron,
+  crm: executarCrmCron,
+};
+
+export function isProcessoCron(nome: string): nome is ProcessoCron {
+  return Object.prototype.hasOwnProperty.call(processosCron, nome);
+}
+
+/** Trava por instância: impede execução concorrente do mesmo processo (409). */
+const emExecucao = new Set<ProcessoCron>();
+
+/**
+ * Timeout padrão por processo (Ordem Final, 2.1). Sobrescrevível por CRON_TIMEOUT_<PROCESSO>_MS
+ * (inteiro entre 10 000 e 1 800 000 ms; valor inválido usa o padrão).
+ */
+export const TIMEOUT_PADRAO_MS: Record<ProcessoCron, number> = {
+  relatorios: 300_000,
+  pagamentos: 240_000,
+  publicacoes: 300_000,
+  pedidos: 240_000,
+  crm: 120_000,
+};
+
+export function timeoutProcessoMs(processo: ProcessoCron): number {
+  const bruto = process.env[`CRON_TIMEOUT_${processo.toUpperCase()}_MS`];
+  if (bruto !== undefined && /^\d+$/.test(bruto.trim())) {
+    const n = Number(bruto.trim());
+    if (Number.isInteger(n) && n >= 10_000 && n <= 1_800_000) return n;
+  }
+  return TIMEOUT_PADRAO_MS[processo];
+}
+
+/**
+ * Executa UM processo, com trava, timeout e registro.
+ * - Timeout: a resposta sai com 503 (motivo `timeout`), mas a TRAVA só é liberada quando o trabalho
+ *   realmente termina. Assim um timeout nunca abre espaço para execução concorrente do mesmo processo.
+ * - O registro (log estruturado) não contém payloads, e-mails, tokens nem mensagens de erro brutas.
+ * `opcoes.limiteMs` existe somente para testes.
+ */
+export async function executarProcessoCron(
+  processo: ProcessoCron,
+  opcoes: { limiteMs?: number } = {}
+): Promise<ResultadoProcessoCron> {
+  const inicio = new Date();
+  if (emExecucao.has(processo)) {
+    const recusa: ResultadoProcessoCron = { processo, ok: false, status: 409, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'ja_em_execucao' };
+    console.warn(JSON.stringify({ evento: 'cron_processo_recusado', processo, motivo: 'ja_em_execucao' }));
+    return recusa;
+  }
+  emExecucao.add(processo);
+  const limite = opcoes.limiteMs ?? timeoutProcessoMs(processo);
+  const trabalho = (async () => processosCron[processo]())();
+  // A trava acompanha o TRABALHO, não a resposta.
+  trabalho.then(
+    () => emExecucao.delete(processo),
+    () => emExecucao.delete(processo)
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limitado = new Promise<{ kind: 'timeout' }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: 'timeout' }), limite);
+  });
+  const desfecho = await Promise.race([
+    trabalho.then((r) => ({ kind: 'ok' as const, r }), () => ({ kind: 'erro' as const })),
+    limitado,
+  ]);
+  if (timer) clearTimeout(timer);
+
+  let resultado: ResultadoProcessoCron;
+  if (desfecho.kind === 'ok') {
+    const falhas = desfecho.r.falhas;
+    resultado = { processo, ok: falhas.length === 0, status: falhas.length ? 503 : 200, itens: desfecho.r.itens, detalhes: desfecho.r.detalhes, falhas, inicio: inicio.toISOString(), fim: new Date().toISOString() };
+  } else if (desfecho.kind === 'erro') {
+    // Só o tipo do erro vai para o registro: mensagem bruta pode conter dados do provedor.
+    console.error(JSON.stringify({ evento: 'cron_processo_falhou', processo, tipo: 'Error' }));
+    resultado = { processo, ok: false, status: 503, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'erro' };
+  } else {
+    console.error(JSON.stringify({ evento: 'cron_processo_timeout', processo, limite_ms: limite }));
+    resultado = { processo, ok: false, status: 503, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'timeout' };
+  }
+  console.info(JSON.stringify({ evento: 'cron_processo', processo, ok: resultado.ok, status: resultado.status, motivo: resultado.motivo ?? null, itens: resultado.itens, falhas: resultado.falhas, inicio: resultado.inicio, fim: resultado.fim }));
+  return resultado;
+}
+
+/** GET /api/admin/scheduled/run — sessão de administrador. Executa SOMENTE relatórios e o motor de negócios. */
 export async function runScheduled(req: Request, res: Response) {
   const actor = currentUser(req);
   if (actor.perfil !== 'admin') throw new HttpError(403, 'Apenas administradores.');
 
-  const resultados: string[] = [];
+  const relatorios = await executarProcessoCron('relatorios');
+  const resultados = [...relatorios.detalhes];
 
-  if (deveExecutar(getSchedule('POSICAO_ESTOQUE'))) {
-    await relatorioPosicaoEstoque();
-    resultados.push('Posição de estoque');
-  }
-  if (deveExecutar(getSchedule('VENDAS'))) {
-    await relatorioVendas();
-    resultados.push('Vendas');
-  }
-  if (deveExecutar(getSchedule('ALERTAS'))) {
-    await relatorioAlertas();
-    resultados.push('Alertas');
-  }
-  const rec = await processarRecorrencias({ id: actor.id || null, name: actor.name });
-  if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrência(s) financeira(s)`);
-  const pedidos = await recuperarPedidosPendentes();
-  if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace recuperado(s)`);
-  // CRM — lembretes de atividade: disparo IDEMPOTENTE pelo agendador que já
-  // existe (nada de polling no navegador, nada de scheduler paralelo).
-  const lembretes = await dispararLembretesCrm();
-  if (lembretes.disparados > 0) resultados.push(`${lembretes.disparados} lembrete(s) de CRM`);
-
-  // Motor 1. MEU NEGÓCIOS: margens e curva ABC sempre frescas — a rotina
-  // roda junto com o cron de agendados (segunda via do ciclo contínuo).
+  // Motor 1. MEU NEGÓCIOS: margens e curva ABC. Cálculo derivado, sem efeito externo.
   const motor = await atualizarMotorNegocios();
   if (motor.margens > 0 || motor.abc > 0) {
     resultados.push(`Motor MEU NEGÓCIOS: ${motor.margens} margem(ns), ${motor.abc} produto(s) na curva ABC`);
   }
 
-  // BACKSTOP do Commerce OS: fila de publicação + outbox de sincronização +
-  // expiração de checkouts pendentes (idempotente — rodar duas vezes não
-  // duplica efeito nem religa reserva liberada).
-  const commerce = await processarComercioAgendado();
-  const comercioItens = [
-    commerce.publicacoes.processadas,
-    commerce.outbox.processados,
-    commerce.expirados,
-  ].reduce((a, b) => a + b, 0);
-  if (comercioItens > 0 || commerce.outbox.erros > 0) {
-    resultados.push(
-      `Commerce: ${commerce.publicacoes.processadas} publicação(ões), ${commerce.outbox.processados} fila(s), ${commerce.expirados} expirado(s)${commerce.outbox.erros ? `, ${commerce.outbox.erros} erro(s)` : ''}`
-    );
-  }
-
-  res.status(commerce.falhas.length ? 503 : 200).json({ ok: commerce.falhas.length === 0, executados: resultados, falhas_commerce: commerce.falhas, smtp: smtpConfigurado() });
+  res.status(relatorios.ok ? 200 : 503).json({
+    ok: relatorios.ok,
+    executados: resultados,
+    falhas: relatorios.falhas,
+    // Os demais processos não rodam nesta rota. Cada um tem endpoint próprio, protegido por CRON_SECRET.
+    processos_fora_desta_rota: ['pagamentos', 'publicacoes', 'pedidos', 'crm'],
+    smtp: smtpConfigurado(),
+  });
 }
 
-/** POST /api/admin/scheduled/cron — endpoint para cron externo. */
+/** O cron só funciona com CRON_SECRET definido. Sem a variável, nada é executado. */
+export function cronConfigurado(): boolean {
+  return (process.env.CRON_SECRET || '').length > 0;
+}
+
+/** Compara o Bearer com CRON_SECRET em tempo constante (hashes de tamanho fixo). */
+export function cronAutorizado(req: Request): boolean {
+  const esperado = process.env.CRON_SECRET || '';
+  if (!esperado) return false;
+  const cabecalho = String(req.headers?.authorization || '');
+  const recebido = cabecalho.startsWith('Bearer ') ? cabecalho.slice(7) : '';
+  if (!recebido) return false;
+  const a = createHash('sha256').update(recebido).digest();
+  const b = createHash('sha256').update(esperado).digest();
+  return timingSafeEqual(a, b);
+}
+
+/** Resposta de autenticação do cron. Falha fechada: 503 sem a variável, 401 sem token válido. */
+function recusarCron(req: Request, res: Response): boolean {
+  if (!cronConfigurado()) {
+    res.status(503).json({ ok: false, error: 'Cron desativado: CRON_SECRET não configurado.' });
+    return true;
+  }
+  if (!cronAutorizado(req)) {
+    res.status(401).json({ ok: false, error: 'Token inválido.' });
+    return true;
+  }
+  return false;
+}
+
+async function cronPara(req: Request, res: Response, processo: string): Promise<void> {
+  if (recusarCron(req, res)) return;
+  if (!isProcessoCron(processo)) {
+    res.status(404).json({ ok: false, error: 'Processo de cron desconhecido.' });
+    return;
+  }
+  const r = await executarProcessoCron(processo);
+  res.status(r.status).json({ ok: r.ok, processo: r.processo, itens: r.itens, detalhes: r.detalhes, falhas: r.falhas, inicio: r.inicio, fim: r.fim, ...(r.motivo ? { motivo: r.motivo } : {}) });
+}
+
+/** POST /api/admin/scheduled/cron — compatibilidade: executa SOMENTE o processo `relatorios`. */
 export async function cronScheduled(req: Request, res: Response) {
-  // Autenticação por token secreto (CRON_SECRET env var)
-  const token = String(req.headers.authorization || '').replace('Bearer ', '');
-  const secret = process.env.CRON_SECRET || '';
-  if (secret && token !== secret) {
-    throw new HttpError(401, 'Token inválido.');
-  }
+  return cronPara(req, res, 'relatorios');
+}
 
-  const resultados: string[] = [];
-  if (deveExecutar(getSchedule('POSICAO_ESTOQUE'))) { await relatorioPosicaoEstoque(); resultados.push('estoque'); }
-  if (deveExecutar(getSchedule('VENDAS'))) { await relatorioVendas(); resultados.push('vendas'); }
-  if (deveExecutar(getSchedule('ALERTAS'))) { await relatorioAlertas(); resultados.push('alertas'); }
-  const rec = await processarRecorrencias({ id: null, name: 'Agendador' });
-  if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrencia(s)`);
-  const pedidos = await recuperarPedidosPendentes();
-  if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace`);
-  const lembretesCron = await dispararLembretesCrm();
-  if (lembretesCron.disparados > 0) resultados.push(`${lembretesCron.disparados} lembrete(s) de CRM`);
-  const commerceCron = await processarComercioAgendado();
-  const comercioCron = commerceCron.publicacoes.processadas + commerceCron.outbox.processados + commerceCron.expirados;
-  if (comercioCron > 0 || commerceCron.outbox.erros > 0) {
-    resultados.push(`commerce: ${comercioCron} item(ns) da fila${commerceCron.outbox.erros ? `, ${commerceCron.outbox.erros} erro(s)` : ''}`);
-  }
-
-  res.status(commerceCron.falhas.length ? 503 : 200).json({ ok: commerceCron.falhas.length === 0, executados: resultados, falhas_commerce: commerceCron.falhas });
+/** POST /api/admin/scheduled/cron/:processo — um processo por chamada (montado antes da sessão, em index.ts). */
+export async function cronProcesso(req: Request, res: Response) {
+  return cronPara(req, res, String(req.params?.processo ?? ''));
 }
 
 /** GET /api/admin/scheduled/status — mostra config e próximo agendamento. */

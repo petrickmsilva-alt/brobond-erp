@@ -327,12 +327,33 @@ test('PROD-DB-01.5.3 — arquivo íntegro do script 005 executa (DRY-RUN) pelo e
   try {
     // Fora de um repositório git, um arquivo íntegro é executado (DRY-RUN).
     writeFileSync(scriptCopy, origem);
-    const ok = spawnSync(runnerCopy, [], {
-      encoding: 'utf8',
-      env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL, PGPASSWORD: process.env.PGPASSWORD || 'brobond' },
-    });
-    assert.equal(ok.status, 0, `arquivo íntegro deve executar:\n${ok.stderr}`);
-    assert.match(ok.stderr, /revisão do script: reconhece normalizar_classe_c=/);
+    // Pré-condição EXPLÍCITA: banco descartável migrado pelo código de produção. Antes, o teste
+    // executava contra o DATABASE_URL do ambiente e dependia de outro teste ter migrado o banco
+    // antes (ordem do gate). Em banco vazio, o script falhava com `relation "estoques" does not exist`.
+    const base = new URL(process.env.DATABASE_URL!);
+    const scratch = `e42_run_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
+    const admin = new Client({ connectionString: process.env.DATABASE_URL });
+    await admin.connect();
+    const scratchUrl = new URL(base.toString());
+    scratchUrl.pathname = `/${scratch}`;
+    try {
+      await admin.query(`CREATE DATABASE ${scratch}`);
+      const boot = spawnSync(
+        process.execPath,
+        ['--import', 'tsx', '--input-type=module', '-e', "await import('./src/db.ts').then((m) => m.migrate());"],
+        { cwd: process.cwd(), env: { ...process.env, DATABASE_URL: scratchUrl.toString() }, encoding: 'utf8' }
+      );
+      assert.equal(boot.status, 0, `bootstrap do banco descartável falhou:\n${boot.stdout}\n${boot.stderr}`);
+      const ok = spawnSync(runnerCopy, [], {
+        encoding: 'utf8',
+        env: { ...process.env, DATABASE_URL: scratchUrl.toString(), PGPASSWORD: process.env.PGPASSWORD || 'brobond' },
+      });
+      assert.equal(ok.status, 0, `arquivo íntegro deve executar:\n${ok.stderr}`);
+      assert.match(ok.stderr, /revisão do script: reconhece normalizar_classe_c=/);
+    } finally {
+      await admin.query(`DROP DATABASE IF EXISTS ${scratch} WITH (FORCE)`).catch(() => undefined);
+      await admin.end().catch(() => undefined);
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

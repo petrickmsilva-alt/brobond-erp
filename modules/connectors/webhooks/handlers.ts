@@ -23,7 +23,7 @@
  *   4. INGERE de forma idempotente em `connector_events`.
  */
 
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { connectorRepository, type ConnectorRepository } from '../core/connector.repository';
 import { connectorErrorMessage, WebhookSignatureError } from '../core/errors';
 import type { ConnectorProviderName } from '../core/providers';
@@ -91,21 +91,28 @@ function parseJsonBody(rawBody: string): JsonObject {
 /**
  * Mercado Livre: as notificações não têm HMAC. A integridade é garantida
  * por um segredo compartilhado na própria URL registrada (`?secret=…`).
- * Com `MERCADOLIVRE_WEBHOOK_SECRET` definido, segredo ausente ou errado
- * recusa a entrega.
+ *
+ * FAIL-CLOSED: sem `MERCADOLIVRE_WEBHOOK_SECRET` configurado, a entrega é
+ * recusada (antes aceitava qualquer chamador — P1-01).
+ *
+ * Deduplicação: usa `_id` quando a notificação o traz; senão o hash do corpo
+ * cru. A chave antiga `topic:resource` colapsava eventos distintos do mesmo
+ * recurso (ex.: pausa e reativação) em um só.
  */
 function parseMercadoLivreEvent(request: WebhookRequest): ParsedWebhookEvent {
   const secret = process.env.MERCADOLIVRE_WEBHOOK_SECRET?.trim();
-  if (secret) {
-    const presented = request.query.secret ?? '';
-    if (!presented || !safeEqual(presented, secret)) {
-      throw new WebhookSignatureError('MERCADOLIVRE');
-    }
+  if (!secret) throw new WebhookSignatureError('MERCADOLIVRE');
+  const presented = request.query.secret ?? '';
+  if (!presented || !safeEqual(presented, secret)) {
+    throw new WebhookSignatureError('MERCADOLIVRE');
   }
   const body = parseJsonBody(request.rawBody);
   const topic = typeof body.topic === 'string' ? body.topic.trim().toLowerCase() : 'unknown';
   const userId = body.user_id !== undefined ? String(body.user_id) : null;
-  const id = typeof body._id === 'string' ? body._id : `${topic}:${String(body.resource ?? '-')}`;
+  const id =
+    typeof body._id === 'string' && body._id.trim()
+      ? body._id.trim()
+      : `sha256:${createHash('sha256').update(request.rawBody, 'utf8').digest('hex')}`;
   return { externalEventId: `meli:${id}`, topic, shopId: userId, payload: body };
 }
 

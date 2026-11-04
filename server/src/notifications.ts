@@ -15,7 +15,10 @@
 //   NOTIFICAR_OP_CONCLUIDA=true (padrão: false)
 //   NOTIFICAR_PEDIDO=true       (padrão: false)
 // ============================================================
-import { enviarEmail, smtpConfigurado } from './mail';
+import { enviarEmail, smtpConfigurado, verificarConexaoSmtp } from './mail';
+import { destinosPorEmpresa } from './destinatariosEmpresa';
+import { currentUser } from './auth';
+import type { Request, Response } from 'express';
 import { getStore } from './services';
 import { getResource } from './resources';
 import { labelOf } from './store';
@@ -35,9 +38,22 @@ type NotifOpts = {
   assunto: string;
   html: string;
   evento: Evento;
+  /** Empresa dona dos dados do e-mail (obrigatória para envio). */
+  empresaId?: number;
+  /** Recursos cujos dados o e-mail contém: o destinatário precisa de leitura em todos. */
+  recursos?: string[];
 };
 
-/** Lista de e-mails que recebem notificações. */
+/**
+ * Empresa dona do registro, lida SOMENTE da própria linha (R-12). Sem `empresa_id` válido,
+ * devolve `undefined` e a notificação não é enviada: não há fallback para a lista global.
+ */
+function empresaDoRegistro(row: Record<string, unknown> | null | undefined): number | undefined {
+  const id = Number(row?.empresa_id);
+  return Number.isInteger(id) && id > 0 ? id : undefined;
+}
+
+/** Lista de e-mails configurada. É só um FILTRO de candidatos: nunca amplia destinatários. */
 function destinatarios(): string[] {
   return (process.env.NOTIFICAR_EMAILS || '')
     .split(',')
@@ -66,11 +82,22 @@ function habilitado(evento: Evento): boolean {
   }
 }
 
-/** Envia notificação para todos os destinatários configurados. */
-async function enviar(opts: NotifOpts): Promise<void> {
+/** Envio injetável (testes). Em produção, é o `enviarEmail` real. */
+export type EnviadorNotificacao = (opts: { to: string; assunto: string; html: string }) => Promise<unknown>;
+
+/**
+ * Envia notificação SOMENTE para os destinatários autorizados da empresa de `opts.empresaId`
+ * (R-12, Fase 4.2). Sem empresa explícita, não envia: a lista global (NOTIFICAR_EMAILS) não
+ * recebe dados de negócio de nenhuma empresa.
+ */
+async function enviar(opts: NotifOpts, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   if (!habilitado(opts.evento)) return;
-  const emails = destinatarios();
-  if (!emails.length) return;
+  if (!(Number(opts.empresaId) > 0) || !opts.recursos?.length) {
+    console.warn(`[notificacao] ${opts.evento}: sem empresa explícita ou recursos; não enviada.`);
+    return;
+  }
+  const destino = (await destinosPorEmpresa(destinatarios(), opts.recursos)).find((d) => d.empresaId === Number(opts.empresaId));
+  if (!destino || !destino.emails.length) return;
 
   const htmlBase = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
@@ -85,8 +112,8 @@ async function enviar(opts: NotifOpts): Promise<void> {
       </p>
     </div>`;
 
-  for (const email of emails) {
-    await enviarEmail({ to: email, assunto: opts.assunto, html: htmlBase }).catch(() => {
+  for (const email of destino.emails) {
+    await enviador({ to: email, assunto: opts.assunto, html: htmlBase }).catch(() => {
       console.warn('⚠️  Falha ao preparar notificação de e-mail.');
     });
   }
@@ -97,7 +124,7 @@ async function enviar(opts: NotifOpts): Promise<void> {
 // ----------------------------------------------------------------------------
 
 /** Notifica quando produto está abaixo do estoque mínimo. */
-export async function notificarEstoqueMinimo(produtoId: number, tamanhoId: number, local: string, quantidade: number, minimo: number): Promise<void> {
+export async function notificarEstoqueMinimo(produtoId: number, tamanhoId: number, local: string, quantidade: number, minimo: number, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const s = getStore();
   const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId });
   const tamanho = await s.findOneWhere(getResource('tamanhos')!, { id: tamanhoId });
@@ -106,6 +133,8 @@ export async function notificarEstoqueMinimo(produtoId: number, tamanhoId: numbe
 
   await enviar({
     evento: 'estoque_minimo',
+    empresaId: empresaDoRegistro(produto),
+    recursos: ['produtos', 'estoques'],
     assunto: `⚠️ Estoque mínimo: ${nome} (${tam}) em ${local}`,
     html: `
       <h3 style="color:#C53030;margin-top:0;">Estoque abaixo do mínimo</h3>
@@ -117,11 +146,11 @@ export async function notificarEstoqueMinimo(produtoId: number, tamanhoId: numbe
         <tr><td style="padding:4px 0;color:#666;">Estoque mínimo:</td><td style="padding:4px 0;">${minimo}</td></tr>
       </table>
       <p style="margin-top:16px;">Acesse o módulo <strong>Estoque Físico</strong> para regularizar.</p>`,
-  });
+  }, enviador);
 }
 
 /** Notifica quando insumo está abaixo do mínimo. */
-export async function notificarInsumoMinimo(insumoId: number, quantidade: number, minimo: number): Promise<void> {
+export async function notificarInsumoMinimo(insumoId: number, quantidade: number, minimo: number, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const s = getStore();
   const insumo = await s.findOneWhere(getResource('insumos')!, { id: insumoId });
   const nome = insumo ? labelOf(getResource('insumos')!, insumo) : `#${insumoId}`;
@@ -129,6 +158,8 @@ export async function notificarInsumoMinimo(insumoId: number, quantidade: number
 
   await enviar({
     evento: 'insumo_minimo',
+    empresaId: empresaDoRegistro(insumo),
+    recursos: ['insumos', 'estoque_insumos'],
     assunto: `⚠️ Insumo em alerta: ${nome}`,
     html: `
       <h3 style="color:#D97706;margin-top:0;">Insumo abaixo do mínimo</h3>
@@ -138,17 +169,19 @@ export async function notificarInsumoMinimo(insumoId: number, quantidade: number
         <tr><td style="padding:4px 0;color:#666;">Mínimo:</td><td style="padding:4px 0;">${minimo} ${un}</td></tr>
       </table>
       <p style="margin-top:16px;">Verifique a necessidade de compra no módulo <strong>Compras</strong>.</p>`,
-  });
+  }, enviador);
 }
 
 /** Notifica quando OP é concluída. */
-export async function notificarOPConcluida(ordemId: number, produtoId: number, totalPecas: number, usuario: string): Promise<void> {
+export async function notificarOPConcluida(ordemId: number, produtoId: number, totalPecas: number, usuario: string, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const s = getStore();
   const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId });
   const nome = produto ? labelOf(getResource('produtos')!, produto) : `#${produtoId}`;
 
   await enviar({
     evento: 'op_concluida',
+    empresaId: empresaDoRegistro(produto),
+    recursos: ['produtos'],
     assunto: `✅ OP #${ordemId} concluída — ${totalPecas} peça(s)`,
     html: `
       <h3 style="color:#059669;margin-top:0;">Ordem de Fabricação Concluída</h3>
@@ -159,17 +192,20 @@ export async function notificarOPConcluida(ordemId: number, produtoId: number, t
         <tr><td style="padding:4px 0;color:#666;">Concluída por:</td><td style="padding:4px 0;">${usuario}</td></tr>
       </table>
       <p style="margin-top:16px;">As peças já estão disponíveis no estoque (loja).</p>`,
-  });
+  }, enviador);
 }
 
 /** Notifica quando venda é faturada. */
-export async function notificarVendaFaturada(vendaId: number, clienteId: number | null, total: number, usuario: string): Promise<void> {
+export async function notificarVendaFaturada(vendaId: number, clienteId: number | null, total: number, usuario: string, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const s = getStore();
+  const venda = await s.findOneWhere(getResource('vendas')!, { id: vendaId });
   const cliente = clienteId ? await s.findOneWhere(getResource('clientes')!, { id: clienteId }) : null;
   const nomeCliente = cliente ? labelOf(getResource('clientes')!, cliente) : 'Cliente não informado';
 
   await enviar({
     evento: 'pedido_faturado',
+    empresaId: empresaDoRegistro(venda),
+    recursos: ['vendas', 'clientes'],
     assunto: `📦 Venda #${vendaId} faturada — R$ ${fmtMoney(total)}`,
     html: `
       <h3 style="color:#059669;margin-top:0;">Pedido de Venda Faturado</h3>
@@ -180,17 +216,20 @@ export async function notificarVendaFaturada(vendaId: number, clienteId: number 
         <tr><td style="padding:4px 0;color:#666;">Faturado por:</td><td style="padding:4px 0;">${usuario}</td></tr>
       </table>
       <p style="margin-top:16px;">As peças saíram do estoque automaticamente.</p>`,
-  });
+  }, enviador);
 }
 
 /** Notifica quando compra é recebida. */
-export async function notificarCompraRecebida(compraId: number, fornecedorId: number | null, total: number, usuario: string): Promise<void> {
+export async function notificarCompraRecebida(compraId: number, fornecedorId: number | null, total: number, usuario: string, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const s = getStore();
+  const compra = await s.findOneWhere(getResource('compras')!, { id: compraId });
   const fornecedor = fornecedorId ? await s.findOneWhere(getResource('fornecedores')!, { id: fornecedorId }) : null;
   const nomeForn = fornecedor ? labelOf(getResource('fornecedores')!, fornecedor) : 'Fornecedor não informado';
 
   await enviar({
     evento: 'compra_recebida',
+    empresaId: empresaDoRegistro(compra),
+    recursos: ['compras', 'fornecedores'],
     assunto: `📥 Compra #${compraId} recebida — R$ ${fmtMoney(total)}`,
     html: `
       <h3 style="color:#2563EB;margin-top:0;">Pedido de Compra Recebido</h3>
@@ -201,7 +240,7 @@ export async function notificarCompraRecebida(compraId: number, fornecedorId: nu
         <tr><td style="padding:4px 0;color:#666;">Recebido por:</td><td style="padding:4px 0;">${usuario}</td></tr>
       </table>
       <p style="margin-top:16px;">Os insumos entraram no estoque e o custo médio foi atualizado.</p>`,
-  });
+  }, enviador);
 }
 
 /** O canal de lembrete do CRM está ligado? (o agendador consulta ANTES de carimbar) */
@@ -229,12 +268,14 @@ export async function notificarLembreteCrm(params: {
   prioridade: string;
   lead: string | null;
   oportunidade: string | null;
-}): Promise<void> {
+}, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const quando = params.quando ? new Date(String(params.quando)) : null;
   const quandoTxt = quando && !Number.isNaN(quando.getTime()) ? quando.toLocaleString('pt-BR') : '—';
   const alvo = params.oportunidade ?? params.lead ?? 'sem vínculo';
   await enviar({
     evento: 'crm_lembrete',
+    empresaId: params.empresaId,
+    recursos: ['crm_atividades'],
     assunto: `⏰ Lembrete CRM: ${params.tipo} — ${alvo}`,
     html: `
       <h3 style="color:#1B2A4A;margin-top:0;">Lembrete de atividade</h3>
@@ -246,7 +287,7 @@ export async function notificarLembreteCrm(params: {
         <tr><td style="padding:4px 0;color:#666;">Resumo:</td><td style="padding:4px 0;">${params.resumo || '—'}</td></tr>
       </table>
       <p style="margin-top:16px;">Abra <strong>CRM › Agenda</strong> para concluir ou remarcar.</p>`,
-  });
+  }, enviador);
 }
 
 /** Verificação periódica de estoques mínimos (chamada pelo dashboard ou cron). */
@@ -278,7 +319,9 @@ export async function verificarAlertasEstoque(): Promise<{ produtos: number; ins
 export function notificacoesStatus() {
   return {
     smtp_configurado: smtpConfigurado(),
-    destinatarios: destinatarios(),
+    // R-12: a lista global não é exposta. Destinatários são por empresa (vínculo + vigência + RBAC).
+    escopo_destinatarios: 'por_empresa',
+    candidatos_configurados: destinatarios().length,
     habilitados: {
       estoque_minimo: habilitado('estoque_minimo'),
       insumo_minimo: habilitado('insumo_minimo'),
@@ -288,4 +331,28 @@ export function notificacoesStatus() {
       crm_lembrete: habilitado('crm_lembrete'),
     },
   };
+}
+
+/** POST /api/admin/notificacoes/smtp/verificar — prova a conexão SMTP sem enviar e-mail. */
+export async function verificarSmtpHandler(_req: Request, res: Response): Promise<void> {
+  res.json(await verificarConexaoSmtp());
+}
+
+/**
+ * POST /api/admin/notificacoes/smtp/teste — envia UMA mensagem de teste ao próprio
+ * administrador (nunca a destinatário informado na requisição, para não virar envio arbitrário).
+ */
+export async function enviarTesteSmtpHandler(req: Request, res: Response): Promise<void> {
+  const email = String(currentUser(req)?.email ?? '').trim().toLowerCase();
+  if (!email || !email.includes('@')) {
+    res.status(400).json({ error: 'Sua conta não tem e-mail cadastrado para receber o teste.' });
+    return;
+  }
+  const resultado = await enviarEmail({
+    to: email,
+    assunto: 'Teste de envio — Brobond ERP',
+    html: '<p>Mensagem de teste de envio SMTP, solicitada por um administrador.</p>',
+  });
+  const [usuario, dominio] = email.split('@');
+  res.json({ resultado, destino: `${usuario.slice(0, 2)}***@${dominio}` });
 }

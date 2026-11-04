@@ -22,6 +22,17 @@ export class ProviderRegistry {
   }
 }
 export const providerRegistry = new ProviderRegistry();
+
+/**
+ * Provedor sem adaptador real: instância DIRETA da base fail-closed
+ * (GenericPaymentProvider). Não pode ser oferecido para configuração nem para
+ * roteamento (P3-01). Atenção: todos os adaptadores reais (Mercado Pago,
+ * Stripe, PagBank, Manual) herdam da base — por isso a comparação é de classe
+ * exata, nunca `instanceof`.
+ */
+export function provedorImplementado(provider: PaymentProvider): boolean {
+  return provider.constructor !== GenericPaymentProvider;
+}
 for (const p of [
   new MercadoPagoProvider(),
   new StripeProvider(),

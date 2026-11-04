@@ -55,7 +55,8 @@ import {
 } from './services';
 import { parseId } from './validate';
 import { HttpError } from './errors';
-import { assertProductionSecrets, bloquearSenhaProvisoria, corsOrigin, loginRateLimit, securityHeaders, trustProxySetting } from './security';
+import { reconciliarWebhooksLegados } from './webhookReconciliacao';
+import { assertProductionSecrets, bancoAusenteEmProducao, bloquearSenhaProvisoria, corsOrigin, loginRateLimit, securityHeaders, trustProxySetting } from './security';
 import { initSentry, log, reportarErro } from './log';
 import { requestObservability } from './observability';
 import { smtpConfigurado } from './mail';
@@ -172,12 +173,12 @@ import { importarCnab, listarParsersHandler } from './cnab';
 import { vendaPDF, compraPDF } from './pdf';
 import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
 import { listAprovacoes, aprovarPedido, rejeitarPedido, countAprovacoes } from './approval';
-import { runScheduled, cronScheduled, scheduledStatus } from './scheduled';
+import { runScheduled, cronScheduled, cronProcesso, scheduledStatus } from './scheduled';
 import { listQualidade, createQualidade, relatorioQualidade } from './quality';
 import { predicaoDemanda, predicaoInsumos } from './prediction';
 import { rateLimitPortal, administrarAcessosPortal, decidirCotacao, gerarAcessoPortal, portalPedidos, portalPedidoDetalhe, recomprarPedido, revogarAcessoPortal } from './portal';
 import { clientePorDocumentoHandler } from './clientes';
-import { notificacoesStatus, verificarAlertasEstoque } from './notifications';
+import { enviarTesteSmtpHandler, notificacoesStatus, verificarAlertasEstoque, verificarSmtpHandler } from './notifications';
 import { openapiJSON, openapiUI } from './openapi';
 import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat';
 import { nfeDados, nfeEmitir, nfeStatus } from './nfe';
@@ -510,6 +511,10 @@ app.get('/api/health', (_req, res) => {
   // que falhou (PROD-DB-02: 'bootstrap' vs 'migrations') é exposta porque é
   // diagnóstico operacional, não dado sensível.
   const status = dbStatus();
+  // R-3: em produção sem banco, a instância NÃO é pronta (nunca 200 em memória).
+  if (bancoAusenteEmProducao(process.env, hasDatabaseUrl())) {
+    return res.status(503).json({ ok: false, db: 'ausente-em-producao', uploads: uploadProvider(), version: VERSION });
+  }
   const db = status === 'demo' ? 'memory' : status === 'ready' ? 'postgres' : 'postgres-degraded';
   const fase = status === 'degraded' ? bootFailure()?.fase : undefined;
   const body = { ok: status !== 'degraded', db, ...(fase ? { fase } : {}), uploads: uploadProvider(), version: VERSION };
@@ -531,8 +536,12 @@ app.get('/api/health', (_req, res) => {
 // ----------------------------------------------------------------------------
 const ROTAS_PERMITIDAS_SEM_BANCO_PRONTO = [/^\/api\/auth\//];
 function bloqueioDeProntidao(req: Request, res: Response, next: NextFunction) {
-  if (!isDbDegraded()) return next();
   if (req.path === '/api/health') return next();
+  // R-3: produção sem DATABASE_URL não atende negócio (defesa além do boot).
+  if (bancoAusenteEmProducao(process.env, hasDatabaseUrl())) {
+    return res.status(503).json({ error: 'Banco de dados obrigatório em produção não configurado.' });
+  }
+  if (!isDbDegraded()) return next();
   if (ROTAS_PERMITIDAS_SEM_BANCO_PRONTO.some((re) => re.test(req.path))) return next();
   return res.status(503).json({ error: 'Banco de dados não está pronto. O serviço está indisponível até a migração concluir.' });
 }
@@ -599,6 +608,15 @@ app.post('/api/print/agent/jobs/:id/lease', autenticarAgente, exigirNonceAgente,
 // ----------------------------------------------------------------------------
 // Autenticado
 // ----------------------------------------------------------------------------
+// R-4 (Fase 4.2/4.3): cron externo — autentica SOMENTE por CRON_SECRET (ver scheduled.ts).
+// Montado ANTES da guarda de sessão: sessão de usuário não entra aqui.
+// `/cron` executa só o processo `relatorios`; `/cron/:processo` executa um processo por chamada.
+// Recorrências financeiras não têm rota de cron (somente /api/admin/financeiro/recorrencias, com confirmação).
+// Reconciliação de webhooks legados (Fase 4.3): dry-run por padrão; aplicar exige confirmação.
+app.post('/api/admin/webhooks/reconciliacao', wrap(reconciliarWebhooksLegados));
+app.post('/api/admin/scheduled/cron', wrap(cronScheduled));
+app.post('/api/admin/scheduled/cron/:processo', wrap(cronProcesso));
+
 app.use('/api', wrap(requireAuth));
 // Conta com senha provisória (convite, reset ou admin padrão) só lê e só escreve
 // no próprio fluxo de troca de senha — ver bloquearSenhaProvisoria.
@@ -873,10 +891,11 @@ app.get('/api/predicao/insumos', wrap(predicaoInsumos));
 // Relatórios agendados (admin)
 app.get('/api/admin/scheduled/status', wrap(scheduledStatus));
 app.get('/api/admin/scheduled/run', wrap(runScheduled));
-app.post('/api/admin/scheduled/cron', wrap(cronScheduled));
 
 // Notificações (status)
 app.get('/api/admin/notificacoes/status', (_req, res) => res.json(notificacoesStatus()));
+app.post('/api/admin/notificacoes/smtp/verificar', wrap(verificarSmtpHandler));
+app.post('/api/admin/notificacoes/smtp/teste', wrap(enviarTesteSmtpHandler));
 
 // Documentação OpenAPI (pública)
 app.get('/api/docs/openapi.json', wrap(openapiJSON));

@@ -417,7 +417,7 @@ export default function PaymentEnginePage() {
               {section === 'regras' && (
                 <>
                   {select('method', 'Método', methods)}
-                  {select('provider', 'Provider', providers)}
+                  {select('provider', 'Provider', providers.filter((code) => !['PIX_DIRECT', 'ACQUIRER_GENERIC', 'BOLETO_GENERIC'].includes(code)))}
                   {input('priority', 'Prioridade (menor primeiro)', 'number')}
                   {select('channel', 'Canal', [
                     '',
@@ -466,7 +466,7 @@ export default function PaymentEnginePage() {
         </form>
       ) : section === 'provedores' ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {data?.providers?.map((p: RecordData) => (
+          {data?.providers?.filter((p: RecordData) => p.implementado !== false).map((p: RecordData) => (
             <article key={p.code} className="space-y-4 rounded-xl border border-line bg-surface p-5">
               <div className="flex items-center justify-between gap-2">
                 <h2 className="font-semibold">{p.name}</h2>

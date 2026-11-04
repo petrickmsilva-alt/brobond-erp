@@ -1,5 +1,6 @@
 // ============================================================================
-// COMMERCE REAL — fluxo PIX ponta a ponta pela arquitetura EXISTENTE.
+// COMMERCE MOCK — fluxo PIX ponta a ponta pela arquitetura EXISTENTE (MOCK, não sandbox).
+// Renomeado de commerce-pix-real-flow (Fase 4.3, item 11): o nome anterior sugeria integração real.
 //
 // Nada aqui substitui homologação real: o `fetch` é trocado por um simulador
 // da Mercado Pago ORDERS API que devolve EXATAMENTE o formato documentado
@@ -604,7 +605,7 @@ describe('Commerce real — notificações (outbox → worker → e-mail / Whats
       assert.match(String(whats.provider_message_id), /^wamid\./);
       assert.equal(mp.whatsapp.length, 1);
       const chamada = mp.whatsapp[0];
-      assert.equal(chamada.url, 'https://graph.facebook.com/v21.0/100000000000001/messages');
+      assert.equal(chamada.url, 'https://graph.facebook.com/v26.0/100000000000001/messages');
       assert.equal(chamada.headers.authorization, 'Bearer EAAG-fixture-sem-rede');
       assert.equal(chamada.body.messaging_product, 'whatsapp');
       assert.equal(chamada.body.to, '5562999991234');

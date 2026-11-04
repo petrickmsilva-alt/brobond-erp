@@ -47,8 +47,22 @@ export function trustProxySetting(): boolean | number | string {
 }
 
 /** Aborta a inicialização em produção sem segredo forte do JWT e sem ADMIN_PASSWORD. */
+/**
+ * R-3 (Fase 4.2): em produção o PostgreSQL é obrigatório. Sem DATABASE_URL o
+ * sistema não pode subir nem ficar pronto — o fallback em memória perderia dados
+ * e mascararia falhas. Fora de produção (testes, desenvolvimento) a memória segue
+ * permitida. Função pura: recebe o ambiente e se há banco configurado.
+ */
+export function bancoAusenteEmProducao(env: NodeJS.ProcessEnv = process.env, temBanco: boolean = !!(env.DATABASE_URL || '').trim()): boolean {
+  return env.NODE_ENV === 'production' && !temBanco;
+}
+
 export function assertProductionSecrets() {
   if (!isProd) return;
+  if (bancoAusenteEmProducao(process.env)) {
+    console.error('❌ DATABASE_URL ausente em produção. O sistema não sobe sem PostgreSQL (fallback em memória é proibido em produção).');
+    process.exit(1);
+  }
   const secret = process.env.JWT_SECRET || '';
   if (secret.length < 24 || secret === 'brobond-dev-secret') {
     console.error('❌ JWT_SECRET ausente ou fraco em produção. Defina um valor longo e aleatório (render.yaml já gera um).');

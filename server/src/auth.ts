@@ -9,22 +9,25 @@ import { avisarOrigemIndefinida, linkPublicoAsync, urlAbsoluta } from './urlPubl
 import { getStore } from './services';
 import { isDbDegraded } from './db';
 import type { Row, Store } from './store';
+import { senhaAdministradorConfigurada, senhasIguais } from './senhaAdmin';
 import { loginBucketKey, registerLoginFailure, registerLoginSuccess, registrarFalha, registrarSucesso, exigirRateLimit } from './security';
 import { validarPoliticaSenha } from './services';
 import { hashPassword, verifyPassword, verifyPasswordDetailed, hashAtualizado } from './password';
 import { abrirSessao, revogarTodas, revogarUma, listSessoesAtivas as listarAtivas } from './sessoes';
 import { decifrarSegredoMfa, prepararDesafio, signMfaTicket, lerMfaTicket, cifrarSegredoMfa } from './mfa';
 import { EMPRESA_PADRAO, empresasDoUsuario } from './empresasAcesso';
+import { segredoJwt } from './chavesCifra';
 
 export { hashPassword, verifyPassword };
 
-const SECRET = process.env.JWT_SECRET || 'brobond-dev-secret';
+const SECRET = segredoJwt();
 if (!process.env.JWT_SECRET) {
   console.warn('⚠️  JWT_SECRET não definido — usando valor padrão (NÃO use em produção).');
 }
 const TOKEN_TTL = process.env.JWT_TTL || '8h';
 export const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@brobond.com.br').trim().toLowerCase();
-export const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'brobond123').trim();
+// Fase 4.3: sem padrão inseguro em produção (ver senhaAdmin.ts). Vazio não autentica.
+export const ADMIN_PASSWORD = senhaAdministradorConfigurada(process.env);
 const RESET_TTL_MIN = Number(process.env.RESET_TTL_MINUTES) || 60;
 export const REAUTH_TTL_MS = Number(process.env.REAUTH_TTL_MS) || 5 * 60_000;
 // Bloqueio por usuário (além do rate limit por IP+e-mail): N senhas erradas
@@ -157,7 +160,8 @@ export function signToken(user: AuthUser, opts: SignOpts = {}): string {
 /** Verifica um JWT; devolve o payload ou null (nunca lança). */
 export function verifyToken(token: string): Record<string, any> | null {
   try {
-    return jwt.verify(token, SECRET) as Record<string, any>;
+    // Algoritmo fixado: o sistema só emite HS256; aceitar outro abre ataque de confusão.
+    return jwt.verify(token, SECRET, { algorithms: ['HS256'] }) as Record<string, any>;
   } catch {
     return null;
   }
@@ -192,6 +196,11 @@ export async function ensureAdmin(): Promise<void> {
   const store = getStore();
   const { RESOURCES } = await import('./resources');
   const r = RESOURCES.usuarios;
+  // Sem senha efetiva (produção sem ADMIN_PASSWORD forte), nunca cria administrador com senha vazia.
+  if (!ADMIN_PASSWORD) {
+    console.error('❌ Administrador não provisionado: ADMIN_PASSWORD ausente ou fraca.');
+    return;
+  }
   try {
     const existing = await store.findUserByEmail(ADMIN_EMAIL);
     if (!existing) {
@@ -352,7 +361,7 @@ export async function login(req: Request, res: Response) {
   // Acesso de emergência: banco indisponível e credenciais do administrador
   // configuradas nas variáveis de ambiente (sessão de 1 h, sem MFA — o banco
   // está fora; token carrega id 0 e não permite ações de escrita sensíveis).
-  if (lookupFailed && email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+  if (lookupFailed && ADMIN_PASSWORD && email === ADMIN_EMAIL && senhasIguais(password, ADMIN_PASSWORD)) {
     const user: AuthUser = { id: 0, name: 'Administrador', email, perfil: 'admin' };
     console.warn('⚠️  Login de emergência do administrador (banco indisponível).');
     return res.json({ token: signToken(user, { expiresIn: '1h' }), user });
@@ -613,7 +622,7 @@ export async function reautenticar(req: Request, res: Response) {
   if (!senha) throw new HttpError(400, 'Informe sua senha para confirmar.');
   let ok = false;
   if (u.id <= 0) {
-    ok = senha === ADMIN_PASSWORD;
+    ok = !!ADMIN_PASSWORD && senhasIguais(senha, ADMIN_PASSWORD);
   } else {
     const store = getStore();
     const { RESOURCES } = await import('./resources');

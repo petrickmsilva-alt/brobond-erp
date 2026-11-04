@@ -105,7 +105,8 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
   // anterior já implantada: mesmo despacho, sem exigir novo valor no CHECK.
   if (tipo === 'notificacao') {
     const { processarEventoNotificacao } = await import('./notificacoes');
-    const r = await processarEventoNotificacao({ empresa_id: empresaId, ...payload });
+    // empresa da LINHA prevalece sobre o payload (isolamento entre empresas).
+    const r = await processarEventoNotificacao({ ...payload, empresa_id: empresaId });
     return r.status === 'retry' ? { status: 'retry', erro: r.erro } : { status: 'processado' };
   }
 
@@ -142,7 +143,8 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
       // NOTIFICATION ORCHESTRATOR: import dinâmico evita ciclo com o módulo que
       // enfileira eventos. O pedido NUNCA espera por este processamento.
       const { processarEventoNotificacao } = await import('./notificacoes');
-      const r = await processarEventoNotificacao({ empresa_id: empresaId, ...payload });
+      // empresa da LINHA prevalece sobre o payload (isolamento entre empresas).
+      const r = await processarEventoNotificacao({ ...payload, empresa_id: empresaId });
       return r.status === 'retry' ? { status: 'retry', erro: r.erro } : { status: 'processado' };
     }
     if (acao === 'woo-estoque') {
@@ -169,7 +171,17 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
  * Processa entradas vencidas com claim CAS. `limite` por rodada (o cron
  * chama de novo — a fila é a autoridade, não o agendador).
  */
-export async function processarOutbox(limite = 10): Promise<{ processados: number; erros: number }> {
+/**
+ * R-4 (Fase 4.3): cada processo do cron só drena os tipos de evento que lhe pertencem.
+ * Evento de tipo fora do processo permanece na fila para o processo dono (sem perda, sem duplicidade).
+ */
+export const TIPOS_OUTBOX_POR_PROCESSO = {
+  pagamentos: ['refund_devolucao'],
+  publicacoes: ['publicacao'],
+  pedidos: ['conversao', 'notificacao', 'alerta', 'sincronizacao'],
+} as const;
+
+export async function processarOutbox(limite = 10, tipos?: readonly string[]): Promise<{ processados: number; erros: number }> {
   const s = getStore();
   // job_id correlaciona todas as linhas desta varredura; event_id identifica
   // cada entrada. Nem o payload nem o segredo da integração entram no log.
@@ -182,15 +194,18 @@ export async function processarOutbox(limite = 10): Promise<{ processados: numbe
     // Filtrar antes de LIMIT evita que pendências futuras escondam trabalhos
     // vencidos. A fila é global somente para este worker de sistema.
     const result = await query(`SELECT * FROM commerce_outbox
-      WHERE (estado = 'PENDENTE' AND (proxima_tentativa_em IS NULL OR proxima_tentativa_em <= now()))
-         OR (estado = 'PROCESSANDO' AND atualizado_em < now() - interval '10 minutes')
-      ORDER BY COALESCE(proxima_tentativa_em, atualizado_em), id LIMIT $1`, [capacidade]);
+      WHERE ((estado = 'PENDENTE' AND (proxima_tentativa_em IS NULL OR proxima_tentativa_em <= now()))
+         OR (estado = 'PROCESSANDO' AND atualizado_em < now() - interval '10 minutes'))
+        AND ($2::text[] IS NULL OR tipo = ANY($2::text[]))
+      ORDER BY COALESCE(proxima_tentativa_em, atualizado_em), id LIMIT $1`, [capacidade, tipos ? [...tipos] : null]);
     candidatas = result.rows;
   } else {
     const pendentes = await s.list(R_OUTBOX(), { page: 1, pageSize: 10000, filter: { estado: 'PENDENTE' }, sort: 'id', dir: 'asc' });
     const presas = await s.list(R_OUTBOX(), { page: 1, pageSize: 10000, filter: { estado: 'PROCESSANDO' }, sort: 'id', dir: 'asc' });
     candidatas = [...pendentes.rows.filter((r) => !r.proxima_tentativa_em || Date.parse(String(r.proxima_tentativa_em)) <= agora),
-      ...presas.rows.filter((r) => !r.atualizado_em || agora - Date.parse(String(r.atualizado_em)) > 10 * 60_000)].slice(0, capacidade);
+      ...presas.rows.filter((r) => !r.atualizado_em || agora - Date.parse(String(r.atualizado_em)) > 10 * 60_000)]
+      .filter((r) => !tipos || tipos.includes(String(r.tipo)))
+      .slice(0, capacidade);
   }
 
   let processados = 0;

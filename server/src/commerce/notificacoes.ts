@@ -255,11 +255,18 @@ function whatsappConfigurado(): { token: string; phoneId: string; versao: string
   const token = String(process.env.WHATSAPP_CLOUD_API_TOKEN || '').trim();
   const phoneId = String(process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
   if (!token || !phoneId) return null;
-  return { token, phoneId, versao: String(process.env.WHATSAPP_API_VERSION || 'v21.0').trim() };
+  return { token, phoneId, versao: String(process.env.WHATSAPP_API_VERSION || WHATSAPP_GRAPH_VERSION_PADRAO).trim() };
 }
 
 const vazio = (nome: string) => !String(process.env[nome] ?? '').trim();
 const EVENTOS_COM_MENSAGEM = EVENTOS_NOTIFICACAO.filter((e) => !EVENTOS_CONSOLIDADOS[e]);
+
+/**
+ * Versão padrão da Graph API para WhatsApp. Alinhada à do Instagram (v26.0).
+ * v21.0 deixa de ser atendida em 21/01/2027 (a Meta passa a responder com a versão
+ * mais antiga ainda em uso). `WHATSAPP_API_VERSION` continua valendo se estiver definida.
+ */
+export const WHATSAPP_GRAPH_VERSION_PADRAO = 'v26.0';
 
 export type StatusConfiguracaoCanal = 'CONFIGURADO' | 'NAO_CONFIGURADO';
 export type StatusCanal = StatusConfiguracaoCanal | 'CONECTADO' | 'ERRO';
