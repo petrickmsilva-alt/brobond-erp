@@ -64,14 +64,23 @@ export async function sincronizarPedidos(req: Request, res: Response) {
   const s = getStore();
   const resultados: Row[] = [];
 
-  // Simulacao: em producao, chamaria a API do marketplace
-  // Mercado Livre: GET https://api.mercadolibre.com/orders/search?seller={seller_id}
-
+  // Mercado Livre (Fase 4.3, R-1/item 13): primeiro a identidade real do token (/users/me),
+  // depois GET /orders/search?seller=<id>. Sem identidade, nenhuma busca é feita: o literal
+  // "seller_id" nunca mais sai para a API.
   if (provider === 'mercadolivre' && cfg.mercadolivre) {
     try {
-      const resp = await fetch('https://api.mercadolibre.com/orders/search?seller=seller_id', {
+      // Identidade do token: não depende das credenciais OAuth do conector (rota legada, token estático).
+      const idResp = await fetch('https://api.mercadolibre.com/users/me', {
         headers: { 'Authorization': `Bearer ${cfg.mercadolivre.token}` },
       });
+      const eu = idResp.ok ? ((await idResp.json()) as { id?: unknown }) : null;
+      if (eu?.id === undefined || eu?.id === null || String(eu.id).trim() === '') {
+        throw new Error('identidade do vendedor indisponível');
+      }
+      const resp = await fetch(
+        `https://api.mercadolibre.com/orders/search?seller=${encodeURIComponent(String(eu.id))}`,
+        { headers: { 'Authorization': `Bearer ${cfg.mercadolivre.token}` } }
+      );
       if (resp.ok) {
         const data = (await resp.json()) as any;
         if (data.results) {

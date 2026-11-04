@@ -21,9 +21,11 @@ function resDe() {
 }
 async function executar(user: any, t: any) {
   let chamadasExternas = 0;
-  t.mock.method(globalThis, 'fetch', async () => {
+  t.mock.method(globalThis, 'fetch', async (input: any) => {
     chamadasExternas++;
-    return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    const url = String(typeof input === 'string' ? input : input.url);
+    const corpo = url.includes('/users/me') ? { id: 555000111 } : { results: [] };
+    return new Response(JSON.stringify(corpo), { status: 200, headers: { 'content-type': 'application/json' } });
   });
   const res = resDe();
   let erro: any = null;
@@ -46,7 +48,8 @@ test('gerente é negado (403): a rota usa token estático da instalação, restr
 test('administrador com empresa definida é autorizado e a chamada ocorre', async (t) => {
   const { erro, res, chamadasExternas } = await executar({ id: 1, name: 'Admin', perfil: 'admin', empresa_id: 1 }, t);
   assert.equal(erro, null, erro?.message);
-  assert.equal(chamadasExternas, 1);
+  // Fase 4.3 (item 13): identidade (/users/me) + busca de pedidos (orders/search?seller=<id>).
+  assert.equal(chamadasExternas, 2);
   assert.equal(res.body?.provider, 'mercadolivre');
 });
 

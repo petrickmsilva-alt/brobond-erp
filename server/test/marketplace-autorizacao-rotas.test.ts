@@ -64,7 +64,10 @@ test('GET /api/marketplace/loja/status: operador é recusado; gerente da empresa
 
 test('POST /api/marketplace/sincronizar: não devolve identificadores externos de pedidos', async () => {
   process.env.MERCADOLIVRE_TOKEN = 'token-de-teste-nao-real';
-  globalThis.fetch = (async () => ({ ok: true, json: async () => ({ results: [{ id: 987654321, status: 'paid' }] }) })) as any;
+  // /users/me devolve a identidade do token; /orders/search devolve os pedidos (contrato real).
+  globalThis.fetch = (async (url: any) => String(url).includes('/users/me')
+    ? { ok: true, json: async () => ({ id: 555000111 }) }
+    : { ok: true, json: async () => ({ results: [{ id: 987654321, status: 'paid' }] }) }) as any;
   const r = await chamar(M.sincronizarPedidos, usuario('admin', 1), { body: { provider: 'mercadolivre' } });
   assert.equal(statusDe(r), 200);
   assert.equal(r.res.body.sincronizados, 1, 'contagem preservada');
