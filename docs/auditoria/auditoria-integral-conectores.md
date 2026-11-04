@@ -863,4 +863,8 @@ Este relatório registra a auditoria em 2026-11-03 e **não foi reescrito** para
 
 - Fases 4 e 7 (SMTP `verify()` e teste ao administrador, webhook de status WhatsApp fail-closed, versão Graph `v26.0`, alertas de falha no relatório diário, runbook, matriz de evidências e checklist de go-live): `docs/auditoria/execucao-fases-4-7.md`, commit `9b8c18c` (Fase 4) e commit da Fase 7. Parcial: somente local; homologação e provedor real NÃO EXECUTADOS; webhook WhatsApp inativo até a decisão (d); Central de Notificações (P2-07) e verificação de templates pendentes; decisão de go-live do Diretor pendente.
 
+**Decisões do Diretor recebidas em 2026-11-03:**
+- (e) **aceita** — caminho canônico = Payment Engine; gateway legado = adaptador de compatibilidade; cifra consolidada confirmada. Registrada em `docs/pagamentos/ADR-001-motor-canonico.md` (status *aceito*). Migração da cobrança avulsa MP continua pendente.
+- (d) e (f) e go-live: **ainda não executados.** (d) exige criação de variável no Render com nome a ser informado pelo Diretor; (f) exige homologação e reconciliação de duplicados ainda não registradas; o go-live não foi declarado.
+
 **Ainda não executado:** Central de Notificações (P2-07); verificação de modelo aprovado (WhatsApp); envio de estoque após venda (P1-03); WooCommerce (P1-08); fiscal (P2-04, homologação); Fase 5 inteira; homologações externas; go-live (decisão do Diretor).

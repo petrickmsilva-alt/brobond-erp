@@ -1,6 +1,6 @@
 # ADR-001 — Caminho canônico de pagamentos
 
-Status: **proposto nesta entrega, em cumprimento da ordem de execução da Fase 3**. Não há decisão específica do Diretor sobre o caminho canônico. Implementação parcial; a consolidação completa é pendência registrada.
+Status: **aceito pelo Diretor em 2026-11-03 (decisão (e))**. Escopo confirmado: (1) o Payment Engine (`modules/payments/`) é o caminho canônico de pagamentos; (2) o gateway legado (`server/src/gateway.ts`) passa a ser adaptador de compatibilidade, sem novas funcionalidades; (3) a cifra consolidada descrita em `docs/seguranca/plano-migracao-segredos.md` e na Fase 2 é o padrão. Pendente, fora desta decisão: migração da cobrança avulsa Mercado Pago do legado para o engine (não iniciada); reentrega do PagBank (P3-02); homologação sandbox (não executada).
 
 ## Contexto
 
