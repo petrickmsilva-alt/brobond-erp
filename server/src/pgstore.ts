@@ -3,6 +3,7 @@
 // todos os valores do usuário entram como parâmetros ($1, $2...).
 import type { PoolClient } from 'pg';
 import { isDbConnected, pool, query, withTransaction } from './db';
+import { CronLeaseLostError, assertCurrentLeaseAlive, currentCronLease, leaseHeldSql } from './cronLock';
 import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './resources';
 import { alvosDeBusca, campoPorDigitos, digitosDe, idDoTermo, termosDeBusca } from './busca';
@@ -40,6 +41,19 @@ import {
 
 function q(text: string, params: unknown[] = [], tx?: Tx) {
   return tx ? tx.query(text, params as any[]) : query(text, params);
+}
+
+/** Acrescenta fencing do lease vigente na cláusula WHERE da escrita. */
+function comFencing(sqlWhere: string, params: unknown[]): { sql: string; params: unknown[] } {
+  const held = leaseHeldSql(params.length + 1);
+  if (!held) return { sql: sqlWhere, params };
+  return { sql: `${sqlWhere} AND ${held.sql}`, params: [...params, ...held.params] };
+}
+
+async function recusarSeLeasePerdido<T>(resultado: T, vazio: boolean): Promise<T> {
+  if (!vazio || !currentCronLease()) return resultado;
+  await assertCurrentLeaseAlive();
+  return resultado;
 }
 
 /**
@@ -607,11 +621,20 @@ export class PgStore implements Store {
       cols.push('criado_em');
       vals.push('now()');
     }
-    const sql = cols.length
-      ? `INSERT INTO ${r.table} (${cols.join(', ')}) VALUES (${vals.join(', ')}) RETURNING *`
-      : `INSERT INTO ${r.table} DEFAULT VALUES RETURNING *`;
     const campos = camposPorNome(r);
-    const res = await q(sql, keys.map((k) => parametroJson(campos.get(k), data[k])), tx);
+    const valores = keys.map((k) => parametroJson(campos.get(k), data[k]));
+    const held = cols.length ? leaseHeldSql(valores.length + 1) : null;
+    if (!cols.length && currentCronLease()) await assertCurrentLeaseAlive();
+    const sql = held
+      ? `INSERT INTO ${r.table} (${cols.join(', ')}) SELECT ${vals.join(', ')} WHERE ${held.sql} RETURNING *`
+      : cols.length
+        ? `INSERT INTO ${r.table} (${cols.join(', ')}) VALUES (${vals.join(', ')}) RETURNING *`
+        : `INSERT INTO ${r.table} DEFAULT VALUES RETURNING *`;
+    const res = await q(sql, held ? [...valores, ...held.params] : valores, tx);
+    if (!res.rows[0]) {
+      if (currentCronLease()) throw new CronLeaseLostError();
+      throw new Error('INSERT sem retorno');
+    }
     return res.rows[0];
   }
 
@@ -625,17 +648,18 @@ export class PgStore implements Store {
     if (r.fields.some((f) => f.name === 'atualizado_em')) sets.push('atualizado_em = now()');
     if (!sets.length) return this.get(r, id, tx);
     const campos = camposPorNome(r);
-    const res = await q(
-      `UPDATE ${r.table} SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
-      [id, ...keys.map((k) => parametroJson(campos.get(k), data[k]))],
-      tx
-    );
-    return res.rows[0] ?? null;
+    const params = [id, ...keys.map((k) => parametroJson(campos.get(k), data[k]))];
+    const fenced = comFencing(`UPDATE ${r.table} SET ${sets.join(', ')} WHERE id = $1`, params);
+    const res = await q(`${fenced.sql} RETURNING *`, fenced.params, tx);
+    return recusarSeLeasePerdido(res.rows[0] ?? null, !res.rows[0]);
   }
 
   async remove(r: Resource, id: number, tx?: Tx): Promise<boolean> {
-    const res = await q(`DELETE FROM ${r.table} WHERE id = $1`, [id], tx);
-    return (res.rowCount ?? 0) > 0;
+    const fenced = comFencing(`DELETE FROM ${r.table} WHERE id = $1`, [id]);
+    const res = await q(fenced.sql, fenced.params, tx);
+    const ok = (res.rowCount ?? 0) > 0;
+    await recusarSeLeasePerdido(ok, !ok);
+    return ok;
   }
 
   async adjustStock(
@@ -868,12 +892,10 @@ export class PgStore implements Store {
     const sets = keys.map((k, i) => `${k} = $${params.length + 1 + i}`);
     if (r.fields.some((f) => f.name === 'atualizado_em')) sets.push('atualizado_em = now()');
     if (!sets.length) return this.get(r, id, tx);
-    const res = await q(
-      `UPDATE ${r.table} SET ${sets.join(', ')} WHERE ${conds.join(' AND ')} RETURNING *`,
-      [...params, ...keys.map((k) => data[k])],
-      tx
-    );
-    return res.rows[0] ?? null;
+    const allParams = [...params, ...keys.map((k) => data[k])];
+    const fenced = comFencing(`UPDATE ${r.table} SET ${sets.join(', ')} WHERE ${conds.join(' AND ')}`, allParams);
+    const res = await q(`${fenced.sql} RETURNING *`, fenced.params, tx);
+    return recusarSeLeasePerdido(res.rows[0] ?? null, !res.rows[0]);
   }
 
   async tryAdjustStock(

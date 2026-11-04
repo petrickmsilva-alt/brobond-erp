@@ -147,6 +147,20 @@ jobs:
             echo "::error title=testpg falhou::${DIAG//$'\n'/%0A}"
             exit 1
           }
+      - name: Coordenação de cron — processos independentes em banco descartável
+        run: |
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+          try {
+            await client.connect();
+            await client.query('CREATE DATABASE brobond_test_cron_lock');
+            await client.query('CREATE DATABASE brobond_test_cron_jobs');
+          } finally { await client.end(); }
+          NODE
+          export CRON_LOCK_TEST_DATABASE_URL="${DATABASE_URL%/*}/brobond_test_cron_lock"
+          export CRON_JOBS_TEST_DATABASE_URL="${DATABASE_URL%/*}/brobond_test_cron_jobs"
+          npm run test:cron-lock:pg
       # Recovery ANTES das migrações Prisma: source e target devem ter o
       # mesmo schema (apenas SQL). Se rodar depois do prisma migrate deploy,
       # o source teria tenant_id em sales (via Prisma migration

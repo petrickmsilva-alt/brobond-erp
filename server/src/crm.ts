@@ -1311,6 +1311,7 @@ export async function dispararLembretesCrm(
   }
 
   const s = getStore();
+  const { withCronIdempotency } = await import('./cronLock');
   const limite = agora.getTime();
   // `empresas` é o cadastro de TENANTS — não tem `empresa_id`, então usa a
   // listagem crua (sem o filtro de escopo dos recursos multiempresa).
@@ -1332,20 +1333,22 @@ export async function dispararLembretesCrm(
       if (atividade.lembrete_enviado_em) continue;
       analisados += 1;
 
-      const reivindicado = await s.tryUpdateIf(
-        R_ATIVIDADE(),
-        Number(atividade.id),
-        { lembrete_enviado_em: null },
-        { lembrete_enviado_em: agora.toISOString() }
-      );
-      if (!reivindicado) continue; // outra execução já notificou
-      disparados += 1;
+      await withCronIdempotency(`crm:lembrete:${atividade.id}`, String(atividade.id), async () => {
+        const reivindicado = await s.tryUpdateIf(
+          R_ATIVIDADE(),
+          Number(atividade.id),
+          { lembrete_enviado_em: null },
+          { lembrete_enviado_em: agora.toISOString() }
+        );
+        if (!reivindicado) return;
+        disparados += 1;
 
-      const leadId = num(atividade.lead_id);
-      const oppId = num(atividade.oportunidade_id);
-      const lead = leadId === null ? null : await s.findOneWhere(R_LEAD(), { id: leadId, empresa_id: empresaId });
-      const oportunidade = oppId === null ? null : await s.findOneWhere(R_OPORTUNIDADE(), { id: oppId, empresa_id: empresaId });
-      notificacoes.push({ empresaId, atividade: reivindicado, lead, oportunidade });
+        const leadId = num(atividade.lead_id);
+        const oppId = num(atividade.oportunidade_id);
+        const lead = leadId === null ? null : await s.findOneWhere(R_LEAD(), { id: leadId, empresa_id: empresaId });
+        const oportunidade = oppId === null ? null : await s.findOneWhere(R_OPORTUNIDADE(), { id: oppId, empresa_id: empresaId });
+        notificacoes.push({ empresaId, atividade: reivindicado, lead, oportunidade });
+      });
     }
   }
 

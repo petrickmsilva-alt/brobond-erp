@@ -23,6 +23,7 @@ import { MAX_TENTATIVAS, backoffMs } from './regras';
 import { randomUUID } from 'node:crypto';
 import { log } from '../log';
 import type { Row, Tx } from '../store';
+import { withCronIdempotency, withOptionalJobLease } from '../cronLock';
 
 const R_OUTBOX = () => getResource('commerce_outbox')!;
 
@@ -211,6 +212,15 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
   let processados = 0;
   let erros = 0;
   for (const row of candidatas) {
+    const processado = await withCronIdempotency(`outbox:${row.id}:${row.claim_versao}:${row.estado}`, String(row.id), () => processarLinhaOutbox(s, row, jobId));
+    if (processado === 'processado') processados += 1;
+    else if (processado === 'erro') erros += 1;
+  }
+  log.info('outbox_varredura', { job_id: jobId, candidatas: candidatas.length, processados, erros, latencia_ms: Date.now() - inicio });
+  return { processados, erros };
+}
+
+async function processarLinhaOutbox(s: ReturnType<typeof getStore>, row: Row, jobId: string): Promise<'processado' | 'erro' | 'outro'> {
     const estadoAtual = String(row.estado);
     const reivindicado = await s.tryUpdateIf(
       R_OUTBOX(),
@@ -220,7 +230,7 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
       { estado: estadoAtual, claim_versao: Number(row.claim_versao || 0), empresa_id: Number(row.empresa_id) },
       { estado: 'PROCESSANDO', claim_versao: Number(row.claim_versao || 0) + 1, tentativas: Number(row.tentativas || 0) + 1 }
     );
-    if (!reivindicado) continue;
+    if (!reivindicado) return 'outro';
 
     const tentativas = Number(reivindicado.tentativas);
     const esperado = { estado: 'PROCESSANDO', claim_versao: Number(reivindicado.claim_versao), empresa_id: Number(row.empresa_id) };
@@ -234,13 +244,13 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
           ultimo_erro: null,
           proxima_tentativa_em: null,
         });
-        if (concluida) processados += 1;
+        return concluida ? 'processado' : 'outro';
       } else if (desfecho.status === 'erro') {
         const falha = await s.tryUpdateIf(R_OUTBOX(), Number(row.id), esperado, {
           estado: 'ERRO', ultimo_erro: String(desfecho.erro || 'Falha permanente').slice(0, 500),
           proxima_tentativa_em: null, atualizado_em: new Date().toISOString(),
         });
-        if (falha) erros += 1;
+        return falha ? 'erro' : 'outro';
       } else {
         // retry com backoff — e ERRO honesto quando esgota
         const esgotou = tentativas >= MAX_TENTATIVAS;
@@ -254,7 +264,7 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
           proxima_tentativa_em: esgotou ? null : new Date(Date.now() + backoffMs(tentativas)).toISOString(),
           atualizado_em: new Date().toISOString(),
         });
-        if (esgotou && falha) erros += 1;
+        return esgotou && falha ? 'erro' : 'outro';
       }
     } catch (e) {
       const esgotou = tentativas >= MAX_TENTATIVAS;
@@ -267,13 +277,11 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
         atualizado_em: new Date().toISOString(),
       });
       if (esgotou && falha) {
-        erros += 1;
         log.error('outbox_entrada_esgotada', { job_id: jobId, event_id: Number(row.id), tipo: String(row.tipo), empresa_id: Number(row.empresa_id), tentativas, erro: mensagem });
+        return 'erro';
       }
+      return 'outro';
     }
-  }
-  log.info('outbox_varredura', { job_id: jobId, candidatas: candidatas.length, processados, erros, latencia_ms: Date.now() - inicio });
-  return { processados, erros };
 }
 
 /** Recoloca um erro da empresa ativa na fila, com auditoria transacional. */
@@ -312,18 +320,47 @@ export async function processarComercioAgendado(): Promise<{
 }> {
   const falhas: string[] = [];
   const { runPaymentJobs } = await import('../../../modules/payments/application/jobs');
-  try { const result = await runPaymentJobs(); if (result.failed) falhas.push('pagamentos'); }
-  catch { falhas.push('pagamentos'); }
   const { processarFilaPublicacoes } = await import('./catalogo');
   const { expirarCheckoutsPendentes } = await import('./pedidos');
   let publicacoes = { processadas: 0, falhas: 0 };
-  let outbox = { processados: 0, erros: 0 };
+  const outbox = { processados: 0, erros: 0 };
   let expirados = 0;
-  try { publicacoes = await processarFilaPublicacoes(20); if (publicacoes.falhas) falhas.push('publicacoes'); }
-  catch { falhas.push('publicacoes'); }
-  try { outbox = await processarOutbox(10); if (outbox.erros) falhas.push('outbox'); }
-  catch { falhas.push('outbox'); }
-  try { expirados = await expirarCheckoutsPendentes(); }
-  catch { falhas.push('expiracao'); }
+  try {
+    const pagamentos = await withOptionalJobLease('pagamentos', 30_000, async () => {
+      const result = await runPaymentJobs();
+      const n = await expirarCheckoutsPendentes();
+      const o = await processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.pagamentos);
+      return { result, n, o };
+    });
+    if (!pagamentos.skipped && pagamentos.result) {
+      if (pagamentos.result.result.failed) falhas.push('pagamentos');
+      expirados += pagamentos.result.n;
+      outbox.processados += pagamentos.result.o.processados;
+      outbox.erros += pagamentos.result.o.erros;
+      if (pagamentos.result.o.erros) falhas.push('reembolsos_devolucao');
+    }
+  } catch { falhas.push('pagamentos'); }
+  try {
+    const pubs = await withOptionalJobLease('publicacoes', 30_000, async () => {
+      const fila = await processarFilaPublicacoes(20);
+      const o = await processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.publicacoes);
+      return { fila, o };
+    });
+    if (!pubs.skipped && pubs.result) {
+      publicacoes = pubs.result.fila;
+      if (publicacoes.falhas) falhas.push('publicacoes');
+      outbox.processados += pubs.result.o.processados;
+      outbox.erros += pubs.result.o.erros;
+      if (pubs.result.o.erros) falhas.push('outbox_publicacoes');
+    }
+  } catch { falhas.push('publicacoes'); }
+  try {
+    const peds = await withOptionalJobLease('pedidos', 30_000, async () => processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.pedidos));
+    if (!peds.skipped && peds.result) {
+      outbox.processados += peds.result.processados;
+      outbox.erros += peds.result.erros;
+      if (peds.result.erros) falhas.push('outbox');
+    }
+  } catch { falhas.push('outbox'); }
   return { publicacoes, outbox, expirados, falhas };
 }

@@ -18,6 +18,7 @@
     "typecheck:domain": "npm --workspace @brobond/domain run typecheck",
     "test": "npm --workspace server test && npm --workspace client test",
     "test:pg": "node scripts/test-pg-gate.mjs",
+    "test:cron-lock:pg": "node --import tsx --test server/test/cron-lock-distributed-pg.ts server/test/cron-jobs-distributed-pg.ts",
     "audit:menu": "node --import tsx scripts/auditar-menu.ts",
     "architecture:audit": "node --import tsx scripts/arquitetura-audit.ts",
     "audit:ux": "node scripts/auditar-ux.mjs",

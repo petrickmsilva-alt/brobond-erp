@@ -19,7 +19,7 @@ Parâmetros abaixo são **propostos e implementados no cliente**, não ativados.
 | Sem `CRON_SECRET` | `503` com `{"ok":false,"error":"Cron desativado: CRON_SECRET não configurado."}` (sem campo `motivo`); nada é executado |
 | Token inválido | `401` |
 | Processo desconhecido | `404` (inclusive `recorrencias`, que não é processo de cron) |
-| Já em execução (mesma instância) | `409` com `motivo: "ja_em_execucao"` |
+| Já em execução (processo local ou lease PostgreSQL) | `409` com `motivo: "ja_em_execucao"` |
 | Timeout do processo | `503` com `motivo: "timeout"`; a trava só é liberada quando o trabalho realmente termina |
 | Erro no executor | `503` com `motivo: "erro"` (mensagem bruta não é exposta nem registrada) |
 | Falha parcial (itens com falha) | `503` sem `motivo` (ex.: `falhas` não vazio) |
@@ -35,11 +35,11 @@ Rota de compatibilidade: `POST /api/admin/scheduled/cron` (sem processo) executa
 
 | Processo | Endpoint | Método | Auth | Frequência proposta (BRT, UTC‑3) | Expressão cron (UTC) | Timeout servidor | Timeout cliente (servidor + 60 s) | Retentativa (cliente) | Concorrência | Idempotência | Critério de sucesso |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `relatorios` | `/api/admin/scheduled/cron/relatorios` | POST | Bearer `CRON_SECRET` | diária 06:00 | `0 9 * * *` | 300 s | 360 s | até 3 tentativas | trava por instância (409) | Relatórios são gerados por agenda devida; reexecução não envia efeito financeiro | 200 `ok:true` |
-| `pagamentos` | `/api/admin/scheduled/cron/pagamentos` | POST | Bearer `CRON_SECRET` | a cada 5 min | `*/5 * * * *` | 240 s | 300 s | até 3 tentativas | trava por instância (409) | Cobranças e reembolsos passam pelo motor canônico e pela outbox; reexecução não duplica cobrança | 200 `ok:true` |
-| `publicacoes` | `/api/admin/scheduled/cron/publicacoes` | POST | Bearer `CRON_SECRET` | a cada 10 min | `*/10 * * * *` | 300 s | 360 s | até 3 tentativas | trava por instância (409) | Fila de publicação com vínculo `produto:variante`; ML e Nuvemshop suspensos por padrão | 200 `ok:true` |
-| `pedidos` | `/api/admin/scheduled/cron/pedidos` | POST | Bearer `CRON_SECRET` | a cada 5 min | `*/5 * * * *` | 240 s | 300 s | até 3 tentativas | trava por instância (409) | Outbox de eventos de pedido com chave de evento | 200 `ok:true` |
-| `crm` | `/api/admin/scheduled/cron/crm` | POST | Bearer `CRON_SECRET` | diária 08:00 | `0 11 * * *` | 120 s | 180 s | até 3 tentativas | trava por instância (409) | Marcador `crm_atividades.lembrete_enviado_em` | 200 `ok:true` |
+| `relatorios` | `/api/admin/scheduled/cron/relatorios` | POST | Bearer `CRON_SECRET` | diária 06:00 | `0 9 * * *` | 300 s | 360 s | até 3 tentativas | lease PostgreSQL por job (409) | Relatórios por empresa/dia; e-mail at-least-once | 200 `ok:true` |
+| `pagamentos` | `/api/admin/scheduled/cron/pagamentos` | POST | Bearer `CRON_SECRET` | a cada 5 min | `*/5 * * * *` | 240 s | 300 s | até 3 tentativas | lease PostgreSQL por job (409) | Intent/webhook + outbox; provedor at-least-once | 200 `ok:true` |
+| `publicacoes` | `/api/admin/scheduled/cron/publicacoes` | POST | Bearer `CRON_SECRET` | a cada 10 min | `*/10 * * * *` | 300 s | 360 s | até 3 tentativas | lease PostgreSQL por job (409) | Fila com CAS + chave `publicacoes:{id}:{estado}`; ML e Nuvemshop suspensos | 200 `ok:true` |
+| `pedidos` | `/api/admin/scheduled/cron/pedidos` | POST | Bearer `CRON_SECRET` | a cada 5 min | `*/5 * * * *` | 240 s | 300 s | até 3 tentativas | lease PostgreSQL por job (409) | Outbox com claim_versao + chave persistente | 200 `ok:true` |
+| `crm` | `/api/admin/scheduled/cron/crm` | POST | Bearer `CRON_SECRET` | diária 08:00 | `0 11 * * *` | 120 s | 180 s | até 3 tentativas | lease PostgreSQL por job (409) | Marcador `lembrete_enviado_em` + chave `crm:lembrete:{id}` | 200 `ok:true` |
 
 Timeouts do servidor podem ser ajustados por `CRON_TIMEOUT_<PROCESSO>_MS` (inteiro entre 10 000 e 1 800 000 ms;
 valor inválido usa o padrão). `CRON_CLIENT_TIMEOUT_MS` ajusta o timeout do cliente (mínimo 5 000 ms).
@@ -64,8 +64,10 @@ BROBOND_BASE_URL=https://<host-do-erp> CRON_SECRET=<segredo> node scripts/cron-p
 
 ## 3. Limites declarados
 
-1. **Trava de concorrência é por instância.** Duas instâncias do serviço não compartilham a trava. Antes de
-   escalar horizontalmente, é preciso trava no banco (pendência técnica, não implementada).
+1. **Trava de concorrência.** Sem `DATABASE_URL` (demonstração) a trava continua só no processo. Com PostgreSQL,
+   `cron_job_locks` arbitra os cinco `job_id` entre instâncias (lease, heartbeat, fencing nas escritas do
+   `PgStore` e idempotência em `cron_work_items`). Efeito em provedor externo não é exatamente uma vez.
+   Detalhe e evidência: `docs/auditoria/conclusao-hardening-distribuido.md`. **Nenhum cron está ativo.**
 2. **Frequência e timeout** são propostas. Não foram aprovadas pelo Diretor; a ativação é G1.
 3. **Retentativa de efeito:** o cliente repete a chamada. A idempotência de cada efeito depende do próprio processo
    (outbox, chave de evento, marcadores). Um processo lento que estoura o timeout do cliente pode continuar rodando

@@ -36,6 +36,15 @@ import { currentUser } from './auth';
 import { diaISO } from './utils';
 import { dispararLembretesCrm } from './crm';
 import { processarOutbox, TIPOS_OUTBOX_POR_PROCESSO } from './commerce/outbox';
+import {
+  acquireCronLease,
+  leaseMsForTimeout,
+  releaseCronLease,
+  runWithCronLease,
+  startCronHeartbeat,
+  withCronIdempotency,
+  type CronLease,
+} from './cronLock';
 
 const fmtMoney = (n: number) => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtNumber = (n: number) => n.toLocaleString('pt-BR');
@@ -116,6 +125,10 @@ export async function relatorioPosicaoEstoque(enviar: EnviadorRelatorio = enviar
 }
 
 async function gerarPosicaoEstoque(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
+  await withCronIdempotency(`relatorios:posicao:${destino.empresaId}:${diaISO(new Date())}`, String(destino.empresaId), () => emitirPosicaoEstoque(destino, enviar));
+}
+
+async function emitirPosicaoEstoque(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
   const [produtos, estoques] = await Promise.all([
     listarDaEmpresa('produtos', destino.empresaId, 2000),
     listarDaEmpresa('estoques', destino.empresaId, 5000),
@@ -174,6 +187,10 @@ export async function relatorioVendas(enviar: EnviadorRelatorio = enviarEmail): 
 }
 
 async function gerarVendas(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
+  await withCronIdempotency(`relatorios:vendas:${destino.empresaId}:${diaISO(new Date())}`, String(destino.empresaId), () => emitirVendas(destino, enviar));
+}
+
+async function emitirVendas(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
   const dias = getSchedule('VENDAS') === 'daily' ? 1 : 7;
   const desde = new Date();
   desde.setDate(desde.getDate() - dias);
@@ -226,6 +243,10 @@ function logSemDestinatario(relatorio: string): void {
 }
 
 async function gerarAlertas(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
+  await withCronIdempotency(`relatorios:alertas:${destino.empresaId}:${diaISO(new Date())}`, String(destino.empresaId), () => emitirAlertas(destino, enviar));
+}
+
+async function emitirAlertas(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
   const [estoques, insumosEst, produtos, insumos] = await Promise.all([
     listarDaEmpresa('estoques', destino.empresaId, 5000),
     listarDaEmpresa('estoque_insumos', destino.empresaId, 2000),
@@ -444,6 +465,12 @@ export function isProcessoCron(nome: string): nome is ProcessoCron {
 /** Trava por instância: impede execução concorrente do mesmo processo (409). */
 const emExecucao = new Set<ProcessoCron>();
 
+/** Somente testes multiprocessos: mantém o lease o tempo suficiente para a disputa. */
+let holdDeTesteMs = 0;
+export function definirHoldDeTesteCron(ms: number): void {
+  holdDeTesteMs = process.env.NODE_ENV === 'test' && Number.isInteger(ms) && ms >= 0 && ms <= 10_000 ? ms : 0;
+}
+
 /**
  * Timeout padrão por processo (Ordem Final, 2.1). Sobrescrevível por CRON_TIMEOUT_<PROCESSO>_MS
  * (inteiro entre 10 000 e 1 800 000 ms; valor inválido usa o padrão).
@@ -465,10 +492,18 @@ export function timeoutProcessoMs(processo: ProcessoCron): number {
   return TIMEOUT_PADRAO_MS[processo];
 }
 
+function recusaEmExecucao(processo: ProcessoCron, inicio: Date): ResultadoProcessoCron {
+  const recusa: ResultadoProcessoCron = { processo, ok: false, status: 409, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'ja_em_execucao' };
+  console.warn(JSON.stringify({ evento: 'cron_processo_recusado', processo, motivo: 'ja_em_execucao' }));
+  return recusa;
+}
+
 /**
- * Executa UM processo, com trava, timeout e registro.
+ * Executa UM processo, com trava local, lock distribuído (PostgreSQL), timeout e registro.
  * - Timeout: a resposta sai com 503 (motivo `timeout`), mas a TRAVA só é liberada quando o trabalho
  *   realmente termina. Assim um timeout nunca abre espaço para execução concorrente do mesmo processo.
+ * - Com DATABASE_URL, a exclusão entre instâncias é arbitrada em `cron_job_locks`. Sem banco, permanece
+ *   só a trava do processo (modo demonstração).
  * - O registro (log estruturado) não contém payloads, e-mails, tokens nem mensagens de erro brutas.
  * `opcoes.limiteMs` existe somente para testes.
  */
@@ -477,19 +512,42 @@ export async function executarProcessoCron(
   opcoes: { limiteMs?: number } = {}
 ): Promise<ResultadoProcessoCron> {
   const inicio = new Date();
-  if (emExecucao.has(processo)) {
-    const recusa: ResultadoProcessoCron = { processo, ok: false, status: 409, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'ja_em_execucao' };
-    console.warn(JSON.stringify({ evento: 'cron_processo_recusado', processo, motivo: 'ja_em_execucao' }));
-    return recusa;
-  }
+  if (emExecucao.has(processo)) return recusaEmExecucao(processo, inicio);
   emExecucao.add(processo);
   const limite = opcoes.limiteMs ?? timeoutProcessoMs(processo);
-  const trabalho = (async () => processosCron[processo]())();
-  // A trava acompanha o TRABALHO, não a resposta.
-  trabalho.then(
-    () => emExecucao.delete(processo),
-    () => emExecucao.delete(processo)
-  );
+
+  let lease: CronLease | null = null;
+  if (hasDatabaseUrl()) {
+    try {
+      lease = await acquireCronLease(processo, leaseMsForTimeout(limite));
+    } catch {
+      emExecucao.delete(processo);
+      console.error(JSON.stringify({ evento: 'cron_processo_falhou', processo, tipo: 'Error', motivo: 'lock_indisponivel' }));
+      return { processo, ok: false, status: 503, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'erro' };
+    }
+    if (!lease) {
+      emExecucao.delete(processo);
+      return recusaEmExecucao(processo, inicio);
+    }
+  }
+
+  let stopHeartbeat = () => {};
+  if (lease) stopHeartbeat = startCronHeartbeat(lease, () => undefined);
+
+  const trabalho = (async () => {
+    try {
+      if (process.env.NODE_ENV === 'test' && holdDeTesteMs >= 50) {
+        await new Promise((r) => setTimeout(r, holdDeTesteMs));
+      }
+      const run = () => processosCron[processo]();
+      return lease ? await runWithCronLease(lease, run) : await run();
+    } finally {
+      stopHeartbeat();
+      if (lease) await releaseCronLease(lease).catch(() => undefined);
+      emExecucao.delete(processo);
+    }
+  })();
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   const limitado = new Promise<{ kind: 'timeout' }>((resolve) => {
     timer = setTimeout(() => resolve({ kind: 'timeout' }), limite);
