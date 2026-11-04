@@ -2049,7 +2049,7 @@ export const MODULES: Module[] = [
     minPerfil: 'gerente',
     connector: 'NUVEMSHOP',
     description:
-      'Plataforma-ponte do Hub: conexão OAuth2 oficial com a Nuvemshop para triangulação de vendas (catálogo e pedidos, inclusive os da vitrine do TikTok).',
+      'Plataforma-ponte do Hub: conexão OAuth2 oficial com a Nuvemshop para triangulação de vendas (catálogo e pedidos).',
   },
 {
     id: 'conector-instagram',

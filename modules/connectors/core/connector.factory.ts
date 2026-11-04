@@ -17,7 +17,7 @@
  *     ecossistema por causa das barreiras burocráticas das APIs deles —
  *     não há builder, import, slug, rótulo nem ramo de persistência
  *     sobrando para eles em lugar nenhum do módulo; a triangulação de
- *     vendas (inclusive o catálogo do TikTok) passa pela NUVEMSHOP;
+ *     vendas passa pela NUVEMSHOP;
  *   • o tipo do mapa é `Record<ConnectorProviderName, () =>
  *     ProviderConnector>`: esquecer um provedor OU acrescentar uma chave
  *     que não exista no registro QUEBRA A COMPILAÇÃO. A exaustividade é

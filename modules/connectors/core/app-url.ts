@@ -54,7 +54,7 @@ export function resolveAppBaseUrlOrLocal(env: AppUrlEnv = process.env): string {
 
 /**
  * Monta uma URL absoluta do ERP a partir de um caminho
- * (`/api/connectors/shopee/callback`).
+ * (`/api/connectors/nuvemshop/callback`).
  */
 export function appUrl(path: string, env: AppUrlEnv = process.env): string {
   const base = resolveAppBaseUrlOrLocal(env);
