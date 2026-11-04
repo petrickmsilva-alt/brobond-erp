@@ -34,6 +34,7 @@ import { getStore, checkAccess, escopoDe, toHttpError } from './services';
 import { currentUser } from './auth';
 import type { FileMeta, Row, Tx } from './store';
 import { parseId } from './validate';
+import { arquivoEhPublico, caminhoArquivoPrivado, verificarArquivoPrivado } from './arquivosPolitica';
 
 const MAX_IMAGE_BYTES = 1_800_000; // 1,8 MB (imagem já reduzida pelo navegador)
 const MAX_THUMB_BYTES = 150_000;
@@ -167,13 +168,21 @@ function ext(mime: string | null): string {
 export function toPublicFile(f: FileMeta | Row): PublicFile {
   const e = ext(f.mime);
   const local = `/api/files/${f.id}/${f.token}.${e}`;
+  // Arquivos PRIVADOS (qualquer recurso fora da lista pública) saem somente com URL
+  // assinada e temporária. A URL externa armazenada não é devolvida: passa pelo
+  // endpoint assinado, que a verifica antes do redirecionamento.
+  const publico = arquivoEhPublico(String((f as { recurso?: unknown }).recurso ?? ''));
+  const urlPublica = publico ? (f.url || local) : caminhoArquivoPrivado(Number(f.id), String(f.token), e, 'imagem');
+  const thumbPublica = publico
+    ? (f.thumb_url || `${local}?thumb=1`)
+    : caminhoArquivoPrivado(Number(f.id), String(f.token), e, 'miniatura');
   return {
     id: Number(f.id),
     nome: f.nome ?? null,
     mime: f.mime ?? null,
     tamanho_bytes: f.tamanho_bytes ?? null,
-    url: f.url || local,
-    thumb_url: f.thumb_url || `${local}?thumb=1`,
+    url: urlPublica,
+    thumb_url: thumbPublica,
     principal: !!f.principal,
     ordem: Number(f.ordem || 0),
     // Fotos antigas não têm esses campos: ativas, sem variação e sem alt text.
@@ -449,12 +458,23 @@ export async function serveFile(req: Request, res: Response) {
   if (!Number.isInteger(id) || id <= 0 || !/^[a-f0-9]{16,}$/i.test(token)) return res.status(404).end();
   const f = await getStore().fileById(id);
   if (!f || f.token !== token) return res.status(404).end();
+  // Política (arquivosPolitica.ts): público só para catálogo; privado exige URL assinada.
+  const publico = arquivoEhPublico(String(f.recurso ?? ''));
+  const variante = req.query.thumb ? 'miniatura' : 'imagem';
+  if (!publico) {
+    const ok = verificarArquivoPrivado(id, token, variante, req.query.exp, req.query.sig);
+    // 404 uniforme: não revela se o arquivo existe sem a assinatura correta.
+    if (!ok) return res.status(404).end();
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+  }
+  // Privado: o cabeçalho `no-store` já foi definido acima, inclusive para o redirecionamento.
   if (f.url && !f.dados) return res.redirect(302, req.query.thumb ? f.thumb_url || f.url : f.url);
   const buf: Buffer | null = req.query.thumb && f.thumb ? f.thumb : f.dados;
   if (!buf) return res.status(404).end();
   res.setHeader('Content-Type', f.mime || 'image/jpeg');
   res.setHeader('Content-Length', String(buf.length));
-  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  if (publico) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
   res.end(buf);
 }
 
