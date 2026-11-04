@@ -48,11 +48,14 @@ function materialDedicado(dominio: DominioCifra): string | null {
   return valor && valor.trim() ? valor : null;
 }
 
-/** Segredo do JWT (também base da derivação legada). Nunca usa o literal em produção. */
+let segredoEfêmero: string | undefined;
+
+/** Segredo do JWT. Sem literal conhecido. Produção falha fechada. */
 export function segredoJwt(): string {
   if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
   if (emProducao()) throw new ErroChaveCifra('JWT_SECRET ausente em produção.');
-  return SEGREDO_DESENVOLVIMENTO;
+  if (!segredoEfêmero) segredoEfêmero = randomBytes(32).toString('hex');
+  return segredoEfêmero;
 }
 
 const cache = new Map<string, Buffer>();
@@ -87,7 +90,7 @@ export function chavesDoDominio(dominio: DominioCifra): { primaria: CandidataCha
           : 'Nenhuma chave de cifra de MFA configurada em produção (MFA_ENCRYPTION_KEY).'
       );
     }
-    candidatas.push({ fonte: 'desenvolvimento', chave: derivar(SEGREDO_DESENVOLVIMENTO, dominio) });
+    candidatas.push({ fonte: 'desenvolvimento', chave: derivar(segredoJwt(), dominio) });
   }
   const [primaria, ...legadas] = candidatas;
   return { primaria, legadas };

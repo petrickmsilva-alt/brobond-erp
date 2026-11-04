@@ -21,8 +21,8 @@ import { segredoJwt } from './chavesCifra';
 export { hashPassword, verifyPassword };
 
 const SECRET = segredoJwt();
-if (!process.env.JWT_SECRET) {
-  console.warn('⚠️  JWT_SECRET não definido — usando valor padrão (NÃO use em produção).');
+if (!process.env.JWT_SECRET && process.env.NODE_ENV !== 'production') {
+  console.warn('⚠️  JWT_SECRET ausente — usando segredo efêmero do processo (não use em produção).');
 }
 const TOKEN_TTL = process.env.JWT_TTL || '8h';
 export const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@brobond.com.br').trim().toLowerCase();

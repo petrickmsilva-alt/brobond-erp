@@ -23,7 +23,8 @@ import { MAX_TENTATIVAS, backoffMs } from './regras';
 import { randomUUID } from 'node:crypto';
 import { log } from '../log';
 import type { Row, Tx } from '../store';
-import { withCronIdempotency, withOptionalJobLease } from '../cronLock';
+import { requireJobLease, withCronIdempotency, withOptionalJobLease } from '../cronLock';
+import type { ProcessoCronLock } from '../cronLock';
 
 const R_OUTBOX = () => getResource('commerce_outbox')!;
 
@@ -182,7 +183,31 @@ export const TIPOS_OUTBOX_POR_PROCESSO = {
   pedidos: ['conversao', 'notificacao', 'alerta', 'sincronizacao'],
 } as const;
 
+function jobDosTipos(tipos?: readonly string[]): ProcessoCronLock | null {
+  if (!tipos?.length) return null;
+  const set = new Set(tipos);
+  const jobs = (Object.entries(TIPOS_OUTBOX_POR_PROCESSO) as [ProcessoCronLock, readonly string[]][]).filter(([, lista]) => lista.some((t) => set.has(t)));
+  return jobs.length === 1 ? jobs[0][0] : null;
+}
+
 export async function processarOutbox(limite = 10, tipos?: readonly string[]): Promise<{ processados: number; erros: number }> {
+  const vazio = { processados: 0, erros: 0 };
+  const job = jobDosTipos(tipos);
+  if (job) {
+    const r = await requireJobLease(job, () => executarProcessarOutbox(limite, tipos), { busy: 'retry' });
+    return r.result ?? vazio;
+  }
+  let total = { processados: 0, erros: 0 };
+  for (const [nome, lista] of Object.entries(TIPOS_OUTBOX_POR_PROCESSO) as [ProcessoCronLock, readonly string[]][]) {
+    const r = await requireJobLease(nome, () => executarProcessarOutbox(limite, lista), { busy: 'retry' });
+    if (r.result) {
+      total = { processados: total.processados + r.result.processados, erros: total.erros + r.result.erros };
+    }
+  }
+  return total;
+}
+
+async function executarProcessarOutbox(limite = 10, tipos?: readonly string[]): Promise<{ processados: number; erros: number }> {
   const s = getStore();
   // job_id correlaciona todas as linhas desta varredura; event_id identifica
   // cada entrada. Nem o payload nem o segredo da integração entram no log.
@@ -212,6 +237,12 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
   let processados = 0;
   let erros = 0;
   for (const row of candidatas) {
+    if (String(row.estado) === 'PROCESSANDO') {
+      await s.tryUpdateIf(R_OUTBOX(), Number(row.id),
+        { estado: 'PROCESSANDO', claim_versao: Number(row.claim_versao || 0), empresa_id: Number(row.empresa_id) },
+        { estado: 'INDETERMINADO', ultimo_erro: 'Execução interrompida antes da confirmação; reconciliação necessária.', atualizado_em: new Date().toISOString() });
+      continue;
+    }
     const processado = await withCronIdempotency(`outbox:${row.id}:${row.claim_versao}:${row.estado}`, String(row.id), () => processarLinhaOutbox(s, row, jobId));
     if (processado === 'processado') processados += 1;
     else if (processado === 'erro') erros += 1;

@@ -9,7 +9,8 @@ delete process.env.DATABASE_URL;
 test('Token JWT malformado é rejeitado pelo jwt.verify', async () => {
   const jwtModule = await import('jsonwebtoken');
   const jwtVerify = jwtModule.default?.verify || jwtModule.verify;
-  const SECRET = process.env.JWT_SECRET || 'brobond-dev-secret';
+  const { segredoJwt } = await import('../src/chavesCifra');
+  const SECRET = segredoJwt();
 
   assert.throws(() => {
     jwtVerify('token-invalido', SECRET);
@@ -130,7 +131,8 @@ test('signToken: gera token JWT com dados do usuário', async () => {
   const { signToken } = await import('../src/auth');
   const jwtModule = await import('jsonwebtoken');
   const jwtVerify = jwtModule.default?.verify || jwtModule.verify;
-  const SECRET = process.env.JWT_SECRET || 'brobond-dev-secret';
+  const { segredoJwt } = await import('../src/chavesCifra');
+  const SECRET = segredoJwt();
 
   const user = { id: 42, name: 'Test User', email: 'test@test.com', perfil: 'admin' as const };
   const token = signToken(user);

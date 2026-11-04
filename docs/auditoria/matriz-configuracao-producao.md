@@ -48,7 +48,7 @@ Versão auditada: branch `arena/c0104925-brobond-erp`, commit `34bc655` (+ docs 
 
 | Variável | Arquivo:linha | Obrigatória | Quando ausente | Dependências | Render |
 |---|---|---|---|---|---|
-| `JWT_SECRET` | `server/src/auth.ts:23`, `server/src/chavesCifra.ts:53,80`, `server/src/security.ts:52` | **Sim em produção** | Produção: `process.exit(1)` se ausente, curto (<24) ou o literal de desenvolvimento. Desenvolvimento: usa literal de dev | Base da derivação legada das chaves de cifra. **Trocar invalida cifras derivadas** | `generateValue` |
+| `JWT_SECRET` | `server/src/auth.ts:23`, `server/src/chavesCifra.ts:53,80`, `server/src/security.ts:52` | **Sim em produção** | Produção: `process.exit(1)` se ausente, curto (<24) ou o literal de desenvolvimento. Fora de produção, sem variável: segredo **efêmero do processo** (nunca o literal `brobond-dev-secret`) | Base da derivação legada das chaves de cifra. **Trocar invalida cifras derivadas** | `generateValue` |
 | `JWT_TTL` | `server/src/auth.ts:26` | Não | `8h` | — | ausente |
 | `ADMIN_EMAIL` | `server/src/auth.ts:27` | Não | `admin@brobond.com.br` | Bootstrap do administrador | declarada |
 | `ADMIN_PASSWORD` | `server/src/auth.ts:28`, `server/src/security.ts:57` | **Sim em produção** | Produção: `process.exit(1)` se ausente, <8 caracteres ou igual ao valor padrão de desenvolvimento. Desenvolvimento: usa um valor padrão **literal no código** (R-8) | `ADMIN_FORCE_PASSWORD` | declarada (`sync:false`) |

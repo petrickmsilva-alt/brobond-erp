@@ -516,6 +516,12 @@ export async function executarProcessoCron(
   emExecucao.add(processo);
   const limite = opcoes.limiteMs ?? timeoutProcessoMs(processo);
 
+  if (!hasDatabaseUrl() && process.env.NODE_ENV === 'production') {
+    emExecucao.delete(processo);
+    console.error(JSON.stringify({ evento: 'cron_operacao_bloqueada_sem_postgres', processo }));
+    return { processo, ok: false, status: 503, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'erro' };
+  }
+
   let lease: CronLease | null = null;
   if (hasDatabaseUrl()) {
     try {

@@ -2,9 +2,14 @@ import { getStore } from '../../../server/src/services';
 import { processarEvento, R_GATEWAY_WEBHOOK_EVENTS } from '../../../server/src/gateway';
 import { R_INTENTS } from '../infrastructure/resources';
 import { paymentEngine } from '../orchestration/payment-orchestrator';
-import { withCronIdempotency } from '../../../server/src/cronLock';
+import { requireJobLease, withCronIdempotency } from '../../../server/src/cronLock';
 /** Bounded, scheduled reconciliation. Only reads provider state; never retries a business decline. */
 export async function runPaymentJobs() {
+  const r = await requireJobLease('pagamentos', () => executarPaymentJobs(), { busy: 'retry' });
+  return r.result ?? { synchronized: 0, failed: 0 };
+}
+
+async function executarPaymentJobs() {
   const s = getStore();
   let synchronized = 0,
     failed = 0;

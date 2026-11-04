@@ -143,6 +143,21 @@ test('PostgreSQL real: aquisição entre processos e fencing transacional de uni
   assert.equal((await pool!.query('SELECT 1 FROM cron_lock_test_effects WHERE id=45')).rowCount, 0);
   const afterExpiry = (await lock.acquireCronLease('publicacoes', 30000))!;
   assert.equal(await lock.releaseCronLease(afterExpiry), true);
+
+  const { query } = await import('../src/db');
+  const sqlLease = (await lock.acquireCronLease('pedidos', 200))!;
+  await delay(350);
+  await lock.runWithCronLease(sqlLease, async () => {
+    await assert.rejects(query('INSERT INTO cron_lock_test_effects(id) VALUES (99)'));
+  });
+  assert.equal((await pool!.query('SELECT 1 FROM cron_lock_test_effects WHERE id=99')).rowCount, 0);
+  const sqlOk = (await lock.acquireCronLease('pedidos', 30000))!;
+  await lock.runWithCronLease(sqlOk, async () => {
+    await query('INSERT INTO cron_lock_test_effects(id) VALUES (99)');
+  });
+  assert.equal((await pool!.query('SELECT 1 FROM cron_lock_test_effects WHERE id=99')).rowCount, 1);
+  assert.equal(await lock.releaseCronLease(sqlOk), true);
+
   await pool?.end();
   await assert.rejects(lock.acquireCronLease('crm', 300), 'falha de conexão impede adquirir');
 });

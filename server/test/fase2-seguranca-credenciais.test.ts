@@ -256,6 +256,7 @@ test('diagnóstico de chaves não expõe valores', async () => {
 test('desenvolvimento sem nenhuma chave: fallback documentado continua funcionando (fora de produção)', async () => {
   await comEnv({ JWT_SECRET: undefined, SEGREDOS_ENCRYPTION_KEY: undefined, APP_ENCRYPTION_KEY: undefined, MFA_ENCRYPTION_KEY: undefined }, () => {
     assert.equal(segredos.decifrarSegredo(segredos.cifrarSegredo('dev')), 'dev');
-    assert.equal(chaves.segredoJwt(), chaves.SEGREDO_DESENVOLVIMENTO);
+    assert.notEqual(chaves.segredoJwt(), chaves.SEGREDO_DESENVOLVIMENTO);
+    assert.ok(chaves.segredoJwt().length >= 32);
   });
 });

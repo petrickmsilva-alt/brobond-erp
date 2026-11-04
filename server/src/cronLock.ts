@@ -13,7 +13,7 @@ import { pool } from './db';
 export const PROCESSOS_CRON_LOCK = ['relatorios', 'pagamentos', 'publicacoes', 'pedidos', 'crm'] as const;
 export type ProcessoCronLock = (typeof PROCESSOS_CRON_LOCK)[number];
 
-export const CRON_UNIT_STATES = ['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'RETRYABLE', 'ABANDONED'] as const;
+export const CRON_UNIT_STATES = ['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'RETRYABLE', 'ABANDONED', 'UNKNOWN'] as const;
 export type CronUnitState = (typeof CRON_UNIT_STATES)[number];
 
 export const CRON_UNIT_MAX_ATTEMPTS = 8;
@@ -30,6 +30,13 @@ export class CronLeaseLostError extends Error {
   constructor() {
     super('Lease obsoleto');
     this.name = 'CronLeaseLostError';
+  }
+}
+
+export class CronCoordinationError extends Error {
+  constructor(message = 'Coordenação distribuída indisponível') {
+    super(message);
+    this.name = 'CronCoordinationError';
   }
 }
 
@@ -272,8 +279,9 @@ export async function claimCronUnit(lease: CronLease, key: string, entity: strin
     return 'claimed';
   }
   const existing = await db.query('SELECT state, entity_id FROM cron_work_items WHERE job_id=$1 AND idempotency_key=$2', [lease.job, key]);
-  if (existing.rows[0]?.state === 'COMPLETED' && existing.rows[0]?.entity_id === entity) {
-    evento('cron_trabalho_ja_concluido', lease, { chave: key });
+  const estado = existing.rows[0]?.state;
+  if ((estado === 'COMPLETED' || estado === 'UNKNOWN') && existing.rows[0]?.entity_id === entity) {
+    evento(estado === 'UNKNOWN' ? 'cron_trabalho_desconhecido' : 'cron_trabalho_ja_concluido', lease, { chave: key });
     return 'completed';
   }
   await assertCurrentLeaseAlive(lease);
@@ -321,9 +329,9 @@ async function persistUnitOutcome(lease: CronLease, key: string, entity: string,
 
 /**
  * Idempotência por unidade estável. Sem lease (modo demonstração / testes em
- * memória) executa o trabalho direto. Com lease, a chave concluída não roda de
- * novo. Efeito externo permanece no máximo at-least-once se o processo cair
- * depois do envio e antes de COMPLETED.
+ * memória) executa o trabalho direto. Com lease, a chave concluída ou UNKNOWN
+ * não reenvia. Efeito externo permanece no máximo at-least-once se o processo
+ * cair depois do envio e antes de COMPLETED.
  */
 export async function withCronIdempotency<T>(key: string, entity: string, fn: () => Promise<T>): Promise<T | undefined> {
   const lease = currentCronLease();
@@ -341,16 +349,49 @@ export async function withCronIdempotency<T>(key: string, entity: string, fn: ()
   }
 }
 
+export type CronBusyPolicy = 'skip' | 'fail' | 'retry';
+
+function demoSemPostgresPermitido(): boolean {
+  if (process.env.NODE_ENV === 'production') return false;
+  return !pool;
+}
+
+async function adquirirComPolitica(job: string, leaseMs: number, busy: CronBusyPolicy): Promise<CronLease | null> {
+  const tentativas = busy === 'retry' ? 40 : 1;
+  for (let i = 0; i < tentativas; i += 1) {
+    const lease = await acquireCronLease(job, leaseMs);
+    if (lease) return lease;
+    if (busy === 'fail') throw new CronCoordinationError('Lock do job já detido');
+    if (busy === 'skip') return null;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return null;
+}
+
 /**
- * Executa `fn` sob lease+heartbeat. Recusa se outro dono estiver vigente.
- * Caminhos oportunistas em NODE_ENV=test não disputam o lock (evita floco nas
- * suítes); o cron HTTP sempre disputa via `executarProcessoCron`.
+ * Garante o lease do job. Sem PostgreSQL em produção recusa. Em demonstração
+ * isolada (sem pool) executa sem lock distribuído — sem efeitos de provedor.
+ * NODE_ENV sozinho NÃO dispensa o lock quando o banco existe.
  */
-export async function withOptionalJobLease<T>(job: string, leaseMs: number, fn: () => Promise<T>): Promise<{ skipped: boolean; result?: T }> {
-  if (!pool || process.env.NODE_ENV === 'test') return { skipped: false, result: await fn() };
+export async function requireJobLease<T>(
+  job: string,
+  fn: () => Promise<T>,
+  opcoes: { leaseMs?: number; busy?: CronBusyPolicy } = {},
+): Promise<{ skipped: boolean; result?: T }> {
+  if (!isProcessoCronLock(job)) throw new CronCoordinationError('Job de cron desconhecido');
   const atual = currentCronLease();
   if (atual?.job === job) return { skipped: false, result: await fn() };
-  const lease = await acquireCronLease(job, leaseMs);
+  if (atual) throw new CronCoordinationError('Lease de outro job vigente');
+  if (!pool) {
+    if (!demoSemPostgresPermitido()) {
+      evento('cron_operacao_bloqueada_sem_postgres', { job, owner, execution: 'n/a' });
+      throw new CronCoordinationError('PostgreSQL obrigatório para operação coordenada');
+    }
+    evento('cron_coordenacao_memoria', { job, owner, execution: 'n/a' });
+    return { skipped: false, result: await fn() };
+  }
+  const leaseMs = opcoes.leaseMs ?? 30_000;
+  const lease = await adquirirComPolitica(job, leaseMs, opcoes.busy ?? 'fail');
   if (!lease) return { skipped: true };
   const stop = startCronHeartbeat(lease, () => undefined);
   try {
@@ -358,6 +399,38 @@ export async function withOptionalJobLease<T>(job: string, leaseMs: number, fn: 
   } finally {
     stop();
     await releaseCronLease(lease).catch(() => undefined);
+  }
+}
+
+/** Drenagem oportunista: se o job já está com outro dono, não executa. */
+export async function withOptionalJobLease<T>(job: string, leaseMs: number, fn: () => Promise<T>): Promise<{ skipped: boolean; result?: T }> {
+  return requireJobLease(job, fn, { leaseMs, busy: 'skip' });
+}
+
+export async function markUnknownCronUnit(lease: CronLease, key: string, entity: string): Promise<void> {
+  await persistUnitOutcome(lease, key, entity, 'UNKNOWN', new Error('PROVIDER_UNKNOWN'));
+}
+
+/** Escrita bruta no mesmo cliente, com o lease travado até o commit. */
+export async function fencedPoolQuery<T extends Record<string, unknown> = Record<string, unknown>>(
+  text: string,
+  params?: unknown[],
+): Promise<{ rows: T[]; rowCount: number | null }> {
+  const db = exigirPool();
+  const lease = currentCronLease();
+  if (!lease) return db.query(text, params as never);
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await assertLeaseHeld(client, lease);
+    const r = await client.query<T>(text, params as never);
+    await client.query('COMMIT');
+    return r;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    client.release();
   }
 }
 

@@ -31,3 +31,23 @@ test('senha legada não reaparece fora de listas de bloqueio e testes negativos 
   const resolver = readFileSync(`${root}/server/src/senhaAdmin.ts`, 'utf8');
   assert.doesNotMatch(resolver, /return\s+valor\s*\|\|/);
 });
+
+test('varredura de padrões de credencial em arquivos rastreados', () => {
+  const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root }).toString().split('\0').filter(Boolean);
+  const patterns: Array<{ name: string; re: RegExp }> = [
+    { name: 'aws-access-key', re: /AKIA[0-9A-Z]{16}/ },
+    { name: 'github-pat', re: /ghp_[A-Za-z0-9]{20,}/ },
+    { name: 'private-key', re: /-----BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY-----/ },
+  ];
+  const violations: string[] = [];
+  for (const path of files) {
+    if (path.endsWith('.md') || path.includes('test/')) continue;
+    const buf = readFileSync(`${root}/${path}`);
+    if (buf.includes(0)) continue;
+    const text = buf.toString('utf8');
+    for (const p of patterns) {
+      if (p.re.test(text)) violations.push(`${path}:${p.name}`);
+    }
+  }
+  assert.deepEqual(violations, [], `padrões de credencial: ${violations.join(', ')}`);
+});
