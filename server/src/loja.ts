@@ -162,6 +162,10 @@ function garantirLeituraCompleta(nome: string, ...resultados: { rows: unknown[];
 export async function statusLoja(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(RESOURCES.vendas, actor, 'read');
+  // R-1 (Fase 4.3): a integração e a URL da loja são gestão, como a sincronização (gerente e admin).
+  if (actor.perfil !== 'admin' && actor.perfil !== 'gerente') {
+    throw new HttpError(403, 'Apenas gerentes e administradores consultam a integração com a loja.');
+  }
   exigirEscopoWoo(actor);
   const cfg = configLoja();
   if (!cfg) {
@@ -179,7 +183,8 @@ export async function statusLoja(req: Request, res: Response) {
       const pedidos = await wooFetch(cfg, '/orders?per_page=1');
       saida.conexao = { ok: true, respondeu: Array.isArray(pedidos) };
     } catch (e: any) {
-      saida.conexao = { ok: false, erro: e?.message || String(e) };
+      // Só mensagem de domínio: erro bruto pode carregar URL com credenciais ou corpo remoto.
+      saida.conexao = { ok: false, erro: e instanceof HttpError ? e.message : 'Falha de conexão com a loja.' };
     }
   }
   res.json(saida);

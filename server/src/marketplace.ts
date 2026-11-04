@@ -27,7 +27,14 @@ function getConfig(): { mercadolivre: MarketplaceConfig | null } {
   };
 }
 
-export function marketplaceStatus(_req: Request, res: Response) {
+/**
+ * GET /api/marketplace/status — configuração da instalação (token estático e URL da loja).
+ * R-1 (Fase 4.3): é informação administrativa. Só administrador consulta; sem sessão, 401.
+ */
+export function marketplaceStatus(req: Request, res: Response) {
+  const actor = currentUser(req);
+  if (!actor) throw new HttpError(401, 'Não autenticado.');
+  if (actor.perfil !== 'admin') throw new HttpError(403, 'Apenas administradores consultam o status de marketplace.');
   const cfg = getConfig();
   const loja = configLoja();
   res.json({
@@ -89,5 +96,7 @@ export async function sincronizarPedidos(req: Request, res: Response) {
     empresa_id: empresaDoAtorAudit(actor),
   });
 
-  res.json({ provider, sincronizados: resultados.length, pedidos: resultados });
+  // R-1 (Fase 4.3): a resposta traz só a contagem. Os identificadores externos dos pedidos
+  // ficam fora da resposta: vêm do token estático da instalação, que não pertence à empresa.
+  res.json({ provider, sincronizados: resultados.length });
 }
