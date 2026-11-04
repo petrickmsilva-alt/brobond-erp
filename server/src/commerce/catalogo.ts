@@ -584,6 +584,12 @@ async function tokenDoConector(
 /** Ponto de injeção para testes: token do conector sem credencial real. */
 export const dependenciasPublicacao = {
   obterTokenCanal: (empresaId: number, provider: 'MERCADOLIVRE' | 'NUVEMSHOP') => tokenDoConector(empresaId, provider),
+  /**
+   * Ordem Final 2.5. Gancho SOMENTE de teste (padrão false, nunca alterado pela produção): liga o
+   * contrato de teste do adapter Nuvemshop para exercitar o pipeline com dublê de rede.
+   * O gate de escrita (ESCRITA_NUVEMSHOP_2025_LIBERADA) continua fechado em produção.
+   */
+  nuvemshopEvidenciaOficialEscrita: false,
 };
 
 async function publicarMercadoLivre(
@@ -623,7 +629,7 @@ async function publicarNuvemshop(
   if (!shopId) throw new PublicacaoFalha('Loja Nuvemshop não identificada: reconecte a loja.', true);
   const { userAgentNuvemshop } = await import('../../../modules/connectors/nuvemshop/nuvemshop.service');
   const resultado = await publicarItemNuvemshop(
-    { accessToken, storeId: shopId, userAgent: userAgentNuvemshop() },
+    { accessToken, storeId: shopId, userAgent: userAgentNuvemshop(), evidenciaOficialEscrita: dependenciasPublicacao.nuvemshopEvidenciaOficialEscrita },
     { sku: payload.sku, titulo: payload.titulo, preco: payload.preco, disponivel: payload.disponivel },
     externalIdAtual
   );

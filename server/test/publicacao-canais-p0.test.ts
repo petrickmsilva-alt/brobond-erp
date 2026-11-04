@@ -149,6 +149,9 @@ test('Nuvemshop liberada: publicação usa o contrato 2025-03 e nunca o v1 (deci
   t.mock.method(globalThis, 'fetch', async (input: unknown) => { calls.push(String(input)); return new Response('{}', { status: 201 }); });
   const original = process.env.PUBLICACAO_CANAIS_LIBERADOS;
   process.env.PUBLICACAO_CANAIS_LIBERADOS = 'MERCADOLIVRE,NUVEMSHOP';
+  // Ordem Final 2.5: gancho de TESTE liga o contrato 2025-03 com dublê de rede (produção segue bloqueada).
+  const escritaOriginal = dependenciasPublicacao.nuvemshopEvidenciaOficialEscrita;
+  dependenciasPublicacao.nuvemshopEvidenciaOficialEscrita = true;
   try {
     const p = await produto();
     const row = await enfileirarPublicacao(1, p.id, 'NUVEMSHOP', payloadMl(p.sku), null);
@@ -158,6 +161,7 @@ test('Nuvemshop liberada: publicação usa o contrato 2025-03 e nunca o v1 (deci
     assert.ok(calls.every((u) => !u.includes('nuvemshop.com.br') && !u.includes('/v1/')));
     assert.equal(calls.filter((u) => u.endsWith('/products')).length, 1, 'no máximo um cadastro por tentativa');
   } finally {
+    dependenciasPublicacao.nuvemshopEvidenciaOficialEscrita = escritaOriginal;
     if (original === undefined) delete process.env.PUBLICACAO_CANAIS_LIBERADOS; else process.env.PUBLICACAO_CANAIS_LIBERADOS = original;
   }
 });

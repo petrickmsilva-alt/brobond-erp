@@ -5,6 +5,8 @@
 //   auth  Authorization: Bearer <token> + User-Agent obrigatório
 //   POST /products (variants com price/stock/sku), GET /products/sku/{sku},
 //   PATCH /products/stock-price ([{id, variants:[{id, price, inventory_levels:[{stock}]}]}]).
+// Ordem Final 2.5: estes testes exercitam a LÓGICA do adapter com evidenciaOficialEscrita=true.
+// A produção segue bloqueada (ESCRITA_NUVEMSHOP_2025_LIBERADA=false); ver nuvemshop-escrita-bloqueada.test.ts.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -53,7 +55,7 @@ test('base 2025-03 é a documentada e não usa o contrato v1', () => {
 test('sem SKU: recusa antes de qualquer chamada', async () => {
   const sim = fetchSimulado([]);
   await assert.rejects(
-    publicarItemNuvemshop({ accessToken: 't', storeId: '9001', userAgent: 'App (x@y.com)', fetch: sim.fn }, item({ sku: ' ' }), null),
+    publicarItemNuvemshop({ accessToken: 't', storeId: '9001', userAgent: 'App (x@y.com)', evidenciaOficialEscrita: true, fetch: sim.fn }, item({ sku: ' ' }), null),
     (e: unknown) => e instanceof PublicacaoFalha && (e as PublicacaoFalha).rejeitada === true
   );
   assert.equal(sim.chamadas.length, 0);
@@ -64,7 +66,7 @@ test('sem vínculo e SKU inexistente: cria com POST 2025-03 (variants, preço em
     () => json(404, { message: 'Not found' }),
     () => json(201, { id: 555, variants: [{ id: 777, sku: 'SKU-001' }] }),
   ]);
-  const r = await publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', fetch: sim.fn }, item(), null);
+  const r = await publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', evidenciaOficialEscrita: true, fetch: sim.fn }, item(), null);
   assert.deepEqual(r, { externalId: '555:777', operacao: 'criado' });
   assert.equal(sim.chamadas[0].method, 'GET');
   assert.equal(sim.chamadas[0].url, `${BASE}/products/sku/SKU-001`);
@@ -80,7 +82,7 @@ test('sem vínculo e SKU inexistente: cria com POST 2025-03 (variants, preço em
 
 test('vínculo existente (externalId "produto:variante"): atualiza com PATCH stock-price e não cria', async () => {
   const sim = fetchSimulado([() => json(200, [{ id: 555, variants: [{ id: 777, success: true }] }])]);
-  const r = await publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', fetch: sim.fn }, item(), '555:777');
+  const r = await publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', evidenciaOficialEscrita: true, fetch: sim.fn }, item(), '555:777');
   assert.deepEqual(r, { externalId: '555:777', operacao: 'atualizado' });
   assert.equal(sim.chamadas.length, 1);
   assert.equal(sim.chamadas[0].method, 'PATCH');
@@ -95,7 +97,7 @@ test('SKU já existe na loja sem vínculo: adota o produto existente (não dupli
     () => json(200, { id: 555, variants: [{ id: 777, sku: 'SKU-001' }] }),
     () => json(200, [{ id: 555, variants: [{ id: 777, success: true }] }]),
   ]);
-  const r = await publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', fetch: sim.fn }, item(), null);
+  const r = await publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', evidenciaOficialEscrita: true, fetch: sim.fn }, item(), null);
   assert.deepEqual(r, { externalId: '555:777', operacao: 'vinculado_por_sku' });
   assert.ok(!sim.chamadas.some((c) => c.method === 'POST'), 'não pode criar outro produto');
 });
@@ -109,7 +111,7 @@ test('retry após timeout do POST: a próxima tentativa encontra o SKU e não cr
     },
   ]);
   await assert.rejects(
-    publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', fetch: sim1.fn }, item(), null),
+    publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', evidenciaOficialEscrita: true, fetch: sim1.fn }, item(), null),
     (e: unknown) => e instanceof PublicacaoFalha && (e as PublicacaoFalha).rejeitada === false
   );
   // 2ª tentativa: o produto já existe no provedor; o lookup por SKU o adota.
@@ -117,7 +119,7 @@ test('retry após timeout do POST: a próxima tentativa encontra o SKU e não cr
     () => json(200, { id: 555, variants: [{ id: 777, sku: 'SKU-001' }] }),
     () => json(200, [{ id: 555, variants: [{ id: 777, success: true }] }]),
   ]);
-  const r = await publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', fetch: sim2.fn }, item(), null);
+  const r = await publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', evidenciaOficialEscrita: true, fetch: sim2.fn }, item(), null);
   assert.equal(r.operacao, 'vinculado_por_sku');
   assert.ok(!sim2.chamadas.some((c) => c.method === 'POST'));
 });
@@ -125,7 +127,7 @@ test('retry após timeout do POST: a próxima tentativa encontra o SKU e não cr
 test('vínculo apontando para produto inexistente: recusa sem criar outro', async () => {
   const sim = fetchSimulado([() => json(404, {})]);
   await assert.rejects(
-    publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', fetch: sim.fn }, item(), '555:777'),
+    publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', evidenciaOficialEscrita: true, fetch: sim.fn }, item(), '555:777'),
     (e: unknown) => e instanceof PublicacaoFalha && (e as PublicacaoFalha).rejeitada === true
   );
   assert.equal(sim.chamadas.length, 1);
@@ -134,7 +136,7 @@ test('vínculo apontando para produto inexistente: recusa sem criar outro', asyn
 test('erro HTTP não vaza corpo da resposta (pode conter dados do lojista)', async () => {
   const sim = fetchSimulado([() => new Response('token=SEGREDO-123 cliente=fulano', { status: 500 })]);
   await assert.rejects(
-    publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', fetch: sim.fn }, item(), '555:777'),
+    publicarItemNuvemshop({ accessToken: 'tok', storeId: '9001', userAgent: 'App (x@y.com)', evidenciaOficialEscrita: true, fetch: sim.fn }, item(), '555:777'),
     (e: unknown) => {
       assert.ok(e instanceof PublicacaoFalha);
       assert.ok(!String((e as Error).message).includes('SEGREDO-123'));

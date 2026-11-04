@@ -10,6 +10,8 @@ const { getStore } = await import('../src/services');
 const { RESOURCES } = await import('../src/resources');
 const { dependenciasPublicacao, enfileirarPublicacao, processarPublicacao } = await import('../src/commerce/catalogo');
 const s = getStore();
+// Ordem Final 2.5: o gancho de teste liga o contrato 2025-03 com dublê de rede; a produção segue bloqueada.
+// Cada cenário restaura o valor original (ver t.after nos testes 'liberada').
 
 type Payload = Parameters<typeof enfileirarPublicacao>[3];
 let seq = 0;
@@ -67,6 +69,9 @@ function fakeNuvemshop() {
 
 test('liberada: primeira publicação cria no 2025-03 e grava o vínculo "produto:variante"', async (t) => {
   const original = dependenciasPublicacao.obterTokenCanal;
+  const escritaOriginal = dependenciasPublicacao.nuvemshopEvidenciaOficialEscrita;
+  dependenciasPublicacao.nuvemshopEvidenciaOficialEscrita = true;
+  t.after(() => { dependenciasPublicacao.nuvemshopEvidenciaOficialEscrita = escritaOriginal; });
   dependenciasPublicacao.obterTokenCanal = async () => ({ accessToken: 'TOKEN-FALSO-TESTE', shopId: '4242' });
   t.after(() => { dependenciasPublicacao.obterTokenCanal = original; });
   const nv = fakeNuvemshop();
@@ -87,6 +92,9 @@ test('liberada: primeira publicação cria no 2025-03 e grava o vínculo "produt
 
 test('edição posterior atualiza pelo vínculo (PATCH) e não cria outro produto', async (t) => {
   const original = dependenciasPublicacao.obterTokenCanal;
+  const escritaOriginal = dependenciasPublicacao.nuvemshopEvidenciaOficialEscrita;
+  dependenciasPublicacao.nuvemshopEvidenciaOficialEscrita = true;
+  t.after(() => { dependenciasPublicacao.nuvemshopEvidenciaOficialEscrita = escritaOriginal; });
   dependenciasPublicacao.obterTokenCanal = async () => ({ accessToken: 'TOKEN-FALSO-TESTE', shopId: '4242' });
   t.after(() => { dependenciasPublicacao.obterTokenCanal = original; });
   const nv = fakeNuvemshop();

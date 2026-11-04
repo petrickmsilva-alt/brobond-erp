@@ -24,8 +24,22 @@ import { PublicacaoFalha, type FetchLike, type ItemMercadoLivre } from './public
 export const BASE_NUVEMSHOP_2025 = 'https://api.tiendanube.com/2025-03';
 const TIMEOUT_PADRAO = 15_000;
 
+/**
+ * Ordem Final 2.5 — GATE DE ESCRITA. A publicação na Nuvemshop 2025-03 (POST /products,
+ * PATCH /products/stock-price, GET /products/sku/{sku} e o esquema de variantes/estoque) NÃO tem
+ * evidência na documentação oficial consultada. Enquanto esta constante for `false`, nenhuma chamada
+ * é feita e a publicação falha antes de qualquer rede. Liberar exige evidência oficial registrada
+ * em docs/auditoria/gate-leitura-nuvemshop-2025-03.md e alteração revisada deste arquivo.
+ */
+export const ESCRITA_NUVEMSHOP_2025_LIBERADA = false;
+
 export type ContextoNuvemshop = {
   accessToken: string;
+  /**
+   * SOMENTE testes de contrato: liga a lógica do adapter sem liberar a escrita em produção.
+   * A produção (catalogo.ts) não define este campo; um teste de guarda verifica isso.
+   */
+  evidenciaOficialEscrita?: boolean;
   /** Id da loja (`user_id` do OAuth). Compõe a URL de toda chamada. */
   storeId: string;
   /** Identificação da aplicação exigida pela plataforma (sem ela a API responde 400). */
@@ -158,6 +172,12 @@ export async function publicarItemNuvemshop(
   item: ItemNuvemshop,
   externalIdAtual: string | null
 ): Promise<ResultadoNuvemshop> {
+  if (!ESCRITA_NUVEMSHOP_2025_LIBERADA && ctx.evidenciaOficialEscrita !== true) {
+    throw new PublicacaoFalha(
+      'Publicação na Nuvemshop bloqueada: os endpoints de escrita da versão 2025-03 ainda não têm evidência oficial. Nenhuma alteração foi enviada à loja.',
+      true
+    );
+  }
   if (!item.sku.trim()) {
     throw new PublicacaoFalha(
       'Produto sem SKU: a Nuvemshop exige SKU para localizar o produto e impedir duplicidade. Informe o SKU antes de publicar.',
