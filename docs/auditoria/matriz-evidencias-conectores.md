@@ -49,3 +49,23 @@ Os níveis desta tabela seguem a legenda acima. Nada aqui é CONFORME por exist�
 | R-15 | Nuvemshop 2025-03 (gate de leitura) | Guarda (`nuvemshop-gate-leitura.test.ts`, 5). Não é prova de integração | Sim | **BLOQUEADO** (sem credencial de loja de teste) | NÃO EXECUTADO. Publicação suspensa |
 
 **Observação.** Testes de contrato dos conectores e testes locais não contam como homologação. A coluna "Provedor real / produção" permanece NÃO EXECUTADO em todas as linhas.
+
+## Atualização Fase 4.3 (R-1, R-4, R-10, R-14, R-15, R-3)
+
+Legenda de tipo: **L** = local/unitário; **I** = integração local (PostgreSQL 16.14 real); **M** = mock;
+**S** = sandbox de provedor; **P** = provedor real/produção.
+
+| Item | Tipo de evidência | Resultado | Situação |
+|---|---|---|---|
+| R-12 segregação de notificações | L | 10/10 (RED 2/10) | corrigido localmente |
+| R-4 cron por processo | L | 10/10 (RED 10/10); regressões 36/36 e 128/128 | corrigido localmente; reconfiguração do agendador pendente |
+| R-1 autorização marketplace | L | 11/11 (RED 4/6) | corrigido localmente |
+| R-14 webhooks com empresa | L + I | 11/11 (RED 9/9); PG 5/5 | corrigido localmente; entrega HTTP real pendente |
+| R-10 PagBank segredo e fallback | L | 2/2 (RED 1/2); regressão 164/164 | corrigido localmente; confirmação do algoritmo em sandbox pendente |
+| R-3 PostgreSQL obrigatório | L + I | 9/9; gate PG 16.14 (ver registro §C) | revalidado |
+| R-15 Nuvemshop gate | L (guarda) | 5/5; **nenhuma leitura GET** | **BLOQUEADO** (sem credencial de homologação) |
+| Suíte servidor (memória) | L | 1912 total; 1831 ok; 0 falhas; 81 ignorados | executada |
+| Gate PG 16.14 | I | 410 aprovados, 0 reprovados, 13 ignorados (`psql`) | executado; **gate BLOQUEADO pela própria política** (ignorados críticos) |
+| Conector PagBank homologado | — | — | **NÃO homologado** (sem evidência externa) |
+| Conector Nuvemshop homologado | — | — | **NÃO homologado** |
+| Conector Mercado Livre homologado | — | — | **NÃO homologado** |

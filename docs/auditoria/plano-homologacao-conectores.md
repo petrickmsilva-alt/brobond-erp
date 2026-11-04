@@ -358,3 +358,22 @@ Todos os itens abaixo são **pendentes**. Nenhum foi executado em homologação,
 - **Cron e fila de comércio**: o cron de relatórios (`cronScheduled`) ainda executa a fila de pagamentos (`runPaymentJobs`), a fila de publicações e lembretes de CRM. Não é recorrência, mas é fluxo financeiro/publicação. **Não alterado nesta fase** (fora da lista autorizada). Decisão do Diretor: manter, separar ou desligar esses passos do cron.
 
 **Regra mantida.** Nenhum passo acima autoriza execução financeira real, envio real, criação/edição de anúncio ou reativação de publicação ML/Nuvemshop.
+
+## 8. Atualização Fase 4.3 (R-1, R-4, R-10, R-14, R-15, R-3)
+
+> Registro: `docs/auditoria/fase-4-3-registro.md`. Nada aqui é homologação externa. Mock, teste local e PostgreSQL
+> local não contam como homologação de provedor.
+
+| ID | Item | Tipo | Estado em 2026-11-04 | Evidência local | Bloqueio |
+|---|---|---|---|---|---|
+| H-8 | PagBank: confirmar o algoritmo de `x-authenticity-token` (token da conta vs. token de notificação) com **notificação real em sandbox** | homologação externa | **PENDENTE** | teste de rota (rede simulada) e unitário | sem credencial de sandbox em ambiente seguro; sem acesso ao painel (proibido nesta fase) |
+| H-9 | Nuvemshop 2025-03: confirmar cabeçalho de autenticação (`Authorization` vs `Authentication`) | leitura GET | **BLOQUEADO (R-15)** | guarda `nuvemshop-gate-leitura.test.ts` (5/5) | sem credencial de loja de teste (nenhuma variável `NUVEMSHOP_*` de credencial no ambiente); nenhuma leitura realizada |
+| H-10 | Mercado Livre e Nuvemshop: publicações | reativação | **NÃO REALIZADA (suspensas)** | testes de suspensão (cron, catálogo, E2E) | decisão f: reativação só após homologação e reconciliação |
+| H-11 | Webhooks de saída com empresa: entrega HTTP real a endpoint de homologação do cliente | homologação | **PENDENTE** | teste de contrato estático e store em memória; PG 16.14 | sem endpoint de homologação definido pelo Diretor |
+| H-12 | Gate PostgreSQL 16.14 (`test:pg`, banco novo) | integração local | **EXECUTADO; gate BLOQUEADO** por 13 ignorados do wrapper `psql` (ver registro §C) | `scripts/test-pg-gate.mjs` | 13 testes do wrapper `psql` não executados localmente (binário ausente) |
+| H-13 | Agendador de produção com cinco jobs | operação | **PENDENTE** | rotas testadas localmente | configuração fora do repositório (decisão G1) |
+
+Limitações desta fase:
+- Nenhuma chamada a provedor (Mercado Livre, Nuvemshop, PagBank, Meta, SMTP) foi feita.
+- Nenhum acesso a Render, painel de provedor ou credencial de produção.
+- Nenhum conector foi marcado como homologado.

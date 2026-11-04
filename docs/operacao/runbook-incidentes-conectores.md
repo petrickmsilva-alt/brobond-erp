@@ -103,3 +103,31 @@ Nenhuma ação abaixo executa financeiro, publicação ou envio real. São proce
 | Nuvemshop: publicação falha com 401 | Cabeçalho da 2025-03 não confirmado (R-15, gate bloqueado) | Não alterar o cabeçalho sem leitura real e aprovação do Diretor. Manter publicação suspensa |
 
 **Contenção comum.** Suspender publicação ML/Nuvemshop segue a seção 3. Suspender o cron: remover ou rotacionar `CRON_SECRET` é ação de administrador, registrada, e exige decisão. Não apagar dados.
+
+## 7. Fase 4.3: operação e diagnóstico
+
+### 7.1 Cron: um job por processo
+- Processos: `relatorios`, `pagamentos`, `publicacoes`, `pedidos`, `crm` (`POST /api/admin/scheduled/cron/<processo>`).
+- Diagnóstico por resposta:
+  - **503** "CRON_SECRET não configurado": variável ausente no ambiente. Não há fallback.
+  - **401**: token incorreto. Sessão de usuário nunca autentica o cron.
+  - **404**: processo desconhecido. Conferir o nome do job.
+  - **409**: outra execução do mesmo processo está em curso nesta instância. Aguardar e repetir.
+- Registro: log estruturado por execução (processo, resultado, duração). Não contém segredo nem payload.
+- Se um processo falhar, os demais continuam. Não reexecutar `recorrencias` pelo cron: usar a rota financeira com confirmação.
+
+### 7.2 Webhooks de saída sem entrega para uma empresa
+1. Confirmar que o webhook tem `empresa_id` da empresa esperada (`webhooks.empresa_id`).
+2. Webhook legado (`empresa_id` NULL): não recebe eventos de empresa. É esperado.
+3. Associação manual (somente com decisão operacional): confirmar a empresa dona fora do payload e da URL, depois atualizar
+   `webhooks.empresa_id` em operação auditada.
+4. Entregas de empresas não aparecem para outras empresas nem para webhooks globais.
+
+### 7.3 PagBank: notificações recusadas (401)
+- Causa mais provável: segredo `PAGBANK_WEBHOOK_SECRET` ausente, igual ao access token, ou assinatura divergente.
+- Não usar o access token como segredo (removido na 4.3).
+- Não acessar o painel do provedor sem autorização. Verificar apenas a presença da variável (sem valor).
+
+### 7.4 Banco indisponível em produção
+- `/api/health` 503 com `db: "ausente-em-producao"`: `DATABASE_URL` ausente. Corrigir a variável; a instância não sobe sem banco.
+- `/api/health` 503 com `postgres-degraded`: banco configurado, mas não pronto. Consultar o campo `fase` (bootstrap ou migrations) e o log.

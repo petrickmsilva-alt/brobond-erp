@@ -186,3 +186,9 @@ Se o Diretor preferir outro comportamento (por exemplo, uma camada adicional com
 **Estado.** BLOQUEADO. Sem credencial de loja de teste no ambiente. Nenhuma leitura feita. Nenhuma escrita feita. Migração de publicação **não considerada homologada**. Não houve correção de cabeçalho: qualquer correção depende de leitura real e de aprovação do Diretor.
 
 **Natureza dos testes de R-15.** São guardas (estado atual) e não RED→GREEN de correção. O risco não é corrigido nesta fase; é bloqueado com evidência necessária registrada.
+
+## Atualização Fase 4.3 (ponteiro)
+
+Os riscos desta tabela foram tratados na Fase 4.3. Ver `docs/auditoria/fase-4-3-registro.md`:
+- R-12 (`f1cf8b8`), R-4 (`0503f82`), R-1 (`d66afb9`), R-14 (`99b9626`), R-10 (`fd8c64a`), R-3 (revalidado), R-15 (bloqueado).
+Este histórico da 4.2 foi preservado sem alteração.

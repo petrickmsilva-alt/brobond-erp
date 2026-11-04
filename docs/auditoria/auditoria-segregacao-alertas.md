@@ -170,3 +170,44 @@ As seções 1 a 3 acima descrevem o **estado anterior** à Fase 4.2 e continuam 
 - **D-D.** Cron (`cronScheduled`) ainda executa fila de pagamentos, fila de publicações, lembretes de CRM e recuperação de pedidos de marketplace. Não é recorrência. Decidir se permanece no cron.
 
 **Limitação.** O envio real por SMTP não foi testado. O isolamento foi verificado por testes locais com envio injetado, não por entrega de e-mail.
+
+## 9. Estado após a Fase 4.3 (R-12, R-14, auditoria transversal)
+
+### 9.1 Canais de notificação (R-12)
+
+| Canal | Conteúdo | Destinatários | Regra |
+|---|---|---|---|
+| **A — operacional** | alertas de estoque, vendas, falhas de entrega | usuários ativos, vinculados à empresa do registro | sempre segregado por empresa; sem destinatário vigente, nada é enviado; lista global não é usada |
+| **B — corporativo** | comunicações institucionais sem dados operacionais nem de clientes | administradores vigentes | finalidade fechada em `notificacoesCorporativas.ts`; sem chamador atual |
+
+Não há mistura: o canal A não usa a lista corporativa, e o canal B não recebe dados operacionais.
+
+### 9.2 Webhooks de saída (R-14)
+
+| Evento | Empresa | Destinatários |
+|---|---|---|
+| Com empresa (ex.: `usuario.*` do administrador) | contexto autenticado do ator | webhooks da mesma empresa |
+| Sem empresa (global) | NULL | webhooks globais (legados, sem associação) |
+
+- Listagem, edição, exclusão, teste, entregas e reenvio: somente da empresa do contexto; fora de escopo → 404.
+- Entregas herdam a empresa do webhook; entregas globais/legadas ficam ocultas a administradores de empresa.
+- A empresa **nunca** é inferida do payload.
+
+### 9.3 Outbox de notificações de pedido
+
+- Linhas gravadas com `empresa_id` do pedido; seleção e idempotência por empresa (`chave_idempotencia`).
+- Isolamento confirmado **por leitura de código**. Teste de regressão cross-tenant do outbox: **pendente**.
+
+### 9.4 Marketplace (R-1) — rotas revisadas
+
+| Rota | Autorização após 4.3 |
+|---|---|
+| `GET /api/marketplace/status` | admin |
+| `GET /api/marketplace/loja/status` | admin e gerente da própria empresa |
+| `POST /api/marketplace/sincronizar` | `vendas.create` + admin + empresa > 0; resposta sem identificadores externos |
+| `/api/loja/*` (vitrine) | pública, com rate limit (sem alteração) |
+
+### 9.5 Auditoria transversal (resumo)
+
+Ver `docs/auditoria/fase-4-3-registro.md`, seção B (auditoria transversal). Remanescentes: padrão de `ADMIN_PASSWORD` em
+código (bloqueado em produção); arquivos por token com cache público; `seller=seller_id`; teste do outbox pendente.

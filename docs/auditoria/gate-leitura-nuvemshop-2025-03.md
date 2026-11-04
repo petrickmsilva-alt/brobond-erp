@@ -67,3 +67,12 @@ Ele **não** é homologação. Não comprova que a integração funciona com a N
 | Decisão sobre cabeçalho | **pendente** (Diretor) |
 
 Evidência necessária para destravar: loja de teste, token obtido por OAuth para ela, e autorização expressa do Diretor para executar apenas as três leituras acima.
+
+## 7. Status na Fase 4.3 (R-15)
+
+- **BLOQUEADO.** Verificação de nomes de variáveis (sem valores): nenhuma variável de credencial Nuvemshop presente
+  (`NUVEMSHOP_CLIENT_ID`, `NUVEMSHOP_CLIENT_SECRET`, `NUVEMSHOP_*`). **Nenhuma leitura GET foi realizada.**
+- Nenhum POST, PATCH, PUT ou DELETE. Nenhum cabeçalho alterado. Nenhuma publicação reativada.
+- A divergência `Authorization` (código atual) vs. `Authentication` (documentação v1) **continua não resolvida**.
+- Próximo passo quando houver credencial de loja de teste em ambiente seguro: executar apenas os GET do procedimento da seção 4,
+  registrar a resposta (sem tokens) e decidir o cabeçalho com base nessa evidência. Matriz de decisão: seção 4 (procedimento).

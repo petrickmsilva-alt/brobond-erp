@@ -258,3 +258,54 @@ Nenhuma variável nova. Nenhuma alteração em `render.yaml`. Nenhuma alteraçã
 | Webhooks de saída (`webhooks`, `webhook_entregas`) | R-14: sem migração. Resolver puro criado, não ligado a rotas de entrada | Sem efeito | Teste local (`webhook-empresa-resolucao.test.ts`, 9 testes) |
 
 **Limitação.** Os valores reais de `CRON_SECRET`, `DATABASE_URL`, `<PREFIXO>_WEBHOOK_SECRET`, `SCHEDULE_EMAILS` e `NOTIFICAR_EMAILS` no Render não foram verificados. Nenhum valor foi lido ou impresso.
+
+## 13. Atualização Fase 4.3 (R-4, R-10, R-14, R-3)
+
+> Registro completo: `docs/auditoria/fase-4-3-registro.md`. Nenhuma variável nova foi criada nesta fase.
+> Nenhuma alteração em Render, em `render.yaml` ou em variáveis de produção.
+
+### 13.1 Cron externo — cinco jobs, um por processo (R-4)
+
+O agendador é **externo** ao repositório (`render.yaml` não declara cron). Cada job deve chamar **um** processo:
+
+| Job | Método e rota | Autenticação | Efeito |
+|---|---|---|---|
+| 1 | `POST /api/admin/scheduled/cron/relatorios` | `Authorization: Bearer <CRON_SECRET>` | estoque, vendas, alertas com falhas |
+| 2 | `POST /api/admin/scheduled/cron/pagamentos` | idem | sincronização de pagamentos, expiração de checkouts, outbox de estorno |
+| 3 | `POST /api/admin/scheduled/cron/publicacoes` | idem | fila de publicações (respeita suspensão ML/Nuvemshop) |
+| 4 | `POST /api/admin/scheduled/cron/pedidos` | idem | recuperação de pedidos de marketplace e outbox de pedidos |
+| 5 | `POST /api/admin/scheduled/cron/crm` | idem | lembretes CRM (só com canal habilitado) |
+
+- `POST /api/admin/scheduled/cron` (sem sufixo) executa **somente** `relatorios`. Um job legado que aponte para essa rota
+  **não** executa pagamentos, publicações, CRM nem recuperação de pedidos.
+- Respostas: 503 sem `CRON_SECRET`; 401 com token inválido (sessão de usuário não autentica o cron); 404 para processo
+  desconhecido (inclui `recorrencias`); 409 para execução concorrente na mesma instância.
+- **Frequência:** não definida neste repositório; a definir pela operação, por processo.
+- **Recorrências financeiras** ficam fora do cron: `POST /api/admin/financeiro/recorrencias`, com confirmação explícita.
+- Variável usada: apenas `CRON_SECRET` (existente). Nenhuma variável nova.
+
+**Decisão pendente do Diretor (G1):** configurar os cinco jobs ou manter um agregado com decisão expressa.
+
+### 13.2 Segredo de webhook PagBank (R-10)
+
+| Item | Situação |
+|---|---|
+| Fonte do segredo (empresa) | `webhook_segredo_cifrado` na configuração da empresa (cifrado, somente escrita; leitura mascarada). |
+| Fonte do segredo (vitrine, ambiente) | `PAGBANK_WEBHOOK_SECRET`, usado só junto de `PAGBANK_ACCESS_TOKEN` (`modules/payments/application/configuration.ts`). O nome já existe no código e segue a ordem R-10 (`${prefix}_WEBHOOK_SECRET`). |
+| Segredo ausente | Falha fechada: a rota `POST /api/gateway/webhooks/pagbank` responde 401 antes de qualquer efeito. |
+| Segredo igual ao access token | Tratado como ausente (`segredoWebhookEfetivo`). |
+| Fallback para access token na rota pública | **Removido** em `fd8c64a` (R-10), `server/src/gateway.ts`. |
+| Aprovação pendente (G2) | Criar `PAGBANK_WEBHOOK_SECRET` em qualquer ambiente exige aprovação expressa do Diretor (regra de nova variável). Não foi criada nem alterada nesta fase. |
+| Chave da verificação (limitação) | `SHA256(access_token + '-' + corpo)`: a chave continua sendo o access token. O segredo dedicado é **gate de presença**. Ver ADR-004 §3. |
+| Transição para produção | Só após G2 e confirmação do algoritmo e da chave com notificação real em sandbox (H-8). Sem acesso ao painel do provedor. |
+
+### 13.3 Banco obrigatório em produção (R-3, revalidado)
+
+- Produção sem `DATABASE_URL`: o boot encerra; `getStore()` não usa memória; `/api/health` responde 503 com `db: "ausente-em-producao"`.
+- Migração nova nesta fase: `db/migrations/0097_webhooks_empresa.sql` (aditiva, colunas NULL). Aplicada pelo runner no boot, em ordem.
+- Antes de qualquer deploy: aplicar a migração em um banco de homologação e confirmar `information_schema` (ver registro, §R-14).
+
+### 13.4 Webhooks de saída (R-14)
+
+- Nenhuma variável nova. Eventos sem empresa (globais) são entregues só a webhooks globais.
+- Webhooks legados (`empresa_id` NULL) não recebem eventos de empresa até associação manual (registro, §R-14).
