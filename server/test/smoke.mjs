@@ -28,12 +28,17 @@ const totpCode = (segredo) =>
     .trim();
 
 const adminEmail = 'admin@brobond.com.br';
-const adminSenha = 'SmokeSenha#2026x';
+const senhaInicial = process.env.BROBOND_TEST_ADMIN_PASSWORD;
+const adminSenha = process.env.BROBOND_TEST_NEW_PASSWORD;
+if (!senhaInicial?.trim() || !adminSenha?.trim()) {
+  console.error('Defina BROBOND_TEST_ADMIN_PASSWORD e BROBOND_TEST_NEW_PASSWORD para o ambiente de teste.');
+  process.exit(2);
+}
 
-// 0) garante admin com senha conhecida via ensureAdmin? O admin nasce com brobond123 + trocar_senha.
+// 0) Primeiro acesso do administrador de teste configurado explicitamente.
 // Login passo 1
 console.log('— Login do administrador (1º acesso: cadastro MFA obrigatório)');
-let r = await req('POST', '/api/auth/login', { email: adminEmail, password: 'brobond123' });
+let r = await req('POST', '/api/auth/login', { email: adminEmail, password: senhaInicial });
 ok(r.status === 200 && r.data.mfa_setup_required && r.data.mfa_ticket, 'mfa_setup_required + ticket');
 const ticket = r.data.mfa_ticket;
 
@@ -51,11 +56,11 @@ ok(Array.isArray(r.data.mfa_backup_codigos) && r.data.mfa_backup_codigos.length 
 const adminToken = r.data.token;
 
 // Próximo login pede mfa_required
-r = await req('POST', '/api/auth/login', { email: adminEmail, password: 'brobond123' });
+r = await req('POST', '/api/auth/login', { email: adminEmail, password: senhaInicial });
 ok(r.data.mfa_required === true, '2º login do admin pede mfa_required');
 
 // Troca a senha do admin (para não depender da padrão depois)
-r = await req('POST', '/api/auth/change-password', { senha_atual: 'brobond123', senha_nova: adminSenha }, adminToken);
+r = await req('POST', '/api/auth/change-password', { senha_atual: senhaInicial, senha_nova: adminSenha }, adminToken);
 ok(r.status === 200, 'troca de senha própria OK (sessão atual preservada)');
 
 // /auth/me
@@ -69,11 +74,11 @@ ok(r.status === 201 && r.data.convite_link, `usuário criado; convite_link devol
 const conviteToken = String(r.data.convite_link).split('/').pop();
 r = await req('GET', `/api/convites/${conviteToken}`);
 ok(r.status === 200 && r.data.email === 'maria@smoke.com.br' && !r.data.expirado, 'validação pública do convite');
-r = await req('POST', '/api/convites/aceitar', { token: conviteToken, senha: 'Fumaca#2026Senha' });
+r = await req('POST', '/api/convites/aceitar', { token: conviteToken, senha: adminSenha });
 ok(r.status === 200, 'convite aceito — senha definida pela própria usuária');
 
 // Login da usuária (sem MFA — operador)
-r = await req('POST', '/api/auth/login', { email: 'maria@smoke.com.br', password: 'Fumaca#2026Senha' });
+r = await req('POST', '/api/auth/login', { email: 'maria@smoke.com.br', password: adminSenha });
 ok(r.status === 200 && r.data.token && !r.data.mfa_required, 'operador entra sem MFA (não obrigatório)');
 const mariaToken = r.data.token;
 ok(!!(await req('GET', '/api/auth/sessoes', null, mariaToken)).data.sessoes?.length, 'sessão listada para a operadora');

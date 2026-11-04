@@ -18,8 +18,12 @@ import { createHmac } from 'node:crypto';
 
 const BASE = process.env.SMOKE_BASE || 'http://127.0.0.1:3011/api';
 const EMAIL = process.env.SMOKE_EMAIL || 'admin@brobond.com.br';
-const SENHA_INICIAL = process.env.SMOKE_SENHA || 'brobond123';
-const SENHA_NOVA = process.env.SMOKE_SENHA_NOVA || 'Brobond#2026SenhaForte';
+const SENHA_INICIAL = process.env.BROBOND_TEST_ADMIN_PASSWORD;
+const SENHA_NOVA = process.env.BROBOND_TEST_NEW_PASSWORD;
+if (!SENHA_INICIAL?.trim() || !SENHA_NOVA?.trim()) {
+  console.error('Defina BROBOND_TEST_ADMIN_PASSWORD e BROBOND_TEST_NEW_PASSWORD para um ambiente de teste descartável.');
+  process.exit(2);
+}
 
 let falhas = 0;
 let token = null;

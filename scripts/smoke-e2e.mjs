@@ -23,8 +23,12 @@ import { createHmac } from 'node:crypto';
 
 const BASE = process.env.SMOKE_BASE || 'http://127.0.0.1:3001/api';
 const EMAIL = process.env.SMOKE_EMAIL || 'admin@brobond.com.br';
-const SENHA_INICIAL = process.env.SMOKE_SENHA || 'brobond123';
-const SENHA_NOVA = process.env.SMOKE_SENHA_NOVA || 'Brobond#2026SenhaForte';
+const SENHA_INICIAL = process.env.BROBOND_TEST_ADMIN_PASSWORD;
+const SENHA_NOVA = process.env.BROBOND_TEST_NEW_PASSWORD;
+if (!SENHA_INICIAL?.trim() || !SENHA_NOVA?.trim()) {
+  console.error('Defina BROBOND_TEST_ADMIN_PASSWORD e BROBOND_TEST_NEW_PASSWORD para um ambiente de teste descartável.');
+  process.exit(2);
+}
 
 const out = [];
 let falhas = 0;
@@ -46,7 +50,8 @@ async function req(method, path, body, bearer = token) {
   return { status: r.status, json };
 }
 
-const msg = (j) => String(j?.erro || j?.error || '').slice(0, 70);
+// Respostas remotas podem refletir credenciais; registre apenas o status HTTP.
+const msg = () => '';
 
 // ---------------------------------------------------------------- TOTP (RFC 6238)
 function base32Decode(s) {

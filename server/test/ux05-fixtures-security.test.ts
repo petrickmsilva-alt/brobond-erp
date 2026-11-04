@@ -36,7 +36,7 @@ test('UX05 fixtures: never log passwords/tokens/auth bodies; temporary TOTP is o
     const script = fileURLToPath(new URL('../../scripts/ux05-fixtures.mjs', import.meta.url));
     const child = spawn(process.execPath, [script], { env: {
       ...process.env, NODE_ENV: 'test', UX05_API: `http://127.0.0.1:${address.port}`,
-      UX05_PASS: password, UX05_TOTP_SECRET_FILE: secretFile,
+      BROBOND_TEST_ADMIN_PASSWORD: password, UX05_PASS: password, UX05_TOTP_SECRET_FILE: secretFile,
     } });
     let output = '';
     child.stdout.on('data', (d) => { output += d; });
@@ -65,7 +65,7 @@ test('UX05 fixtures: authentication failure logs only HTTP status, never the res
   assert.ok(address && typeof address !== 'string');
   try {
     const child = spawn(process.execPath, [fileURLToPath(new URL('../../scripts/ux05-fixtures.mjs', import.meta.url))], {
-      env: { ...process.env, NODE_ENV: 'test', UX05_API: `http://127.0.0.1:${address.port}`, UX05_PASS: sensitive },
+      env: { ...process.env, NODE_ENV: 'test', UX05_API: `http://127.0.0.1:${address.port}`, BROBOND_TEST_ADMIN_PASSWORD: sensitive, UX05_PASS: sensitive },
     });
     let output = '';
     child.stdout.on('data', (d) => { output += d; });

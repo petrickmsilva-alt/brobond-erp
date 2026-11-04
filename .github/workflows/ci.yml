@@ -26,6 +26,11 @@ jobs:
         run: npm --prefix client test
       - name: Smoke em memória (não substitui o gate PG)
         run: |
+          export BROBOND_TEST_ADMIN_PASSWORD="$(node -e "process.stdout.write('A!' + require('crypto').randomBytes(24).toString('hex'))")"
+          export BROBOND_TEST_NEW_PASSWORD="$(node -e "process.stdout.write('B!' + require('crypto').randomBytes(24).toString('hex'))")"
+          echo "::add-mask::$BROBOND_TEST_ADMIN_PASSWORD"
+          echo "::add-mask::$BROBOND_TEST_NEW_PASSWORD"
+          export ADMIN_PASSWORD="$BROBOND_TEST_ADMIN_PASSWORD"
           env -u DATABASE_URL PORT=3001 node --import tsx server/src/index.ts > /tmp/smoke-demo.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
@@ -176,6 +181,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -o pipefail
+          export BROBOND_TEST_ADMIN_PASSWORD="$(node -e "process.stdout.write('A!' + require('crypto').randomBytes(24).toString('hex'))")"
+          export BROBOND_TEST_NEW_PASSWORD="$(node -e "process.stdout.write('B!' + require('crypto').randomBytes(24).toString('hex'))")"
+          echo "::add-mask::$BROBOND_TEST_ADMIN_PASSWORD"
+          echo "::add-mask::$BROBOND_TEST_NEW_PASSWORD"
           npm run smoke:pg 2>&1 | tee /tmp/smokepg.log || {
             DIAG="$( { grep -E "^FAIL|❌|error|Error" /tmp/smokepg.log | head -40; echo "--- cauda ---"; tail -40 /tmp/smokepg.log; } | sed 's/%/%25/g' )"
             echo "::error title=smoke:pg falhou::${DIAG//$'\n'/%0A}"
