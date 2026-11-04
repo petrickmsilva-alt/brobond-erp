@@ -86,7 +86,8 @@ export class PagBankProvider extends GenericPaymentProvider {
     const token = ctx.credentials.access_token;
     const supplied = headers['x-authenticity-token'] || '';
     // R-10: sem segredo de webhook próprio configurado, nada é aceito (falha fechada).
-    if (!ctx.webhookSecret) return false;
+    // Segredo vazio ou só espaços é ausente (defesa própria do verificador, sem depender da configuração).
+    if (!ctx.webhookSecret || !String(ctx.webhookSecret).trim()) return false;
     if (!token || !/^[a-f\d]{64}$/i.test(supplied)) return false;
     return timingSafeEqual(Buffer.from(createHash('sha256').update(`${token}-${raw}`).digest('hex')), Buffer.from(supplied.toLowerCase()));
   }

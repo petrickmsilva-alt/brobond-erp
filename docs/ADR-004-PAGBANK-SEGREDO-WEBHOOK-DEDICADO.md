@@ -1,6 +1,6 @@
 # ADR-004 — PagBank: segredo de webhook dedicado, falha fechada
 
-* **Status:** aceita em 2026-11-04 (Fase 4.3, risco **R-10**). Implementada localmente. **Algoritmo não confirmado no provedor** (H-8 pendente).
+* **Status:** aceita em 2026-11-04 (Fase 4.3, risco **R-10**). Implementada localmente. **Algoritmo confirmado pela documentação oficial** (atualização de 2026-11-04, seção 5); **homologação funcional com notificação real ainda pendente** (H-8).
 * **Escopo:** `server/src/gateway.ts` (rota pública `POST /api/gateway/webhooks/:provider`), `modules/payments/application/configuration.ts`, `modules/payments/providers/pagbank/index.ts`.
 * **Relacionados:** ADR-001; `docs/auditoria/matriz-configuracao-producao.md` §13.2; `docs/operacao/runbook-incidentes-conectores.md` §7.3.
 
@@ -33,3 +33,28 @@ Um fallback na rota pública usava o **access token** da conta PagBank como segr
 - Teste de rota (RED 1/2 → GREEN 2/2, `pagbank-webhook-rota-segredo.test.ts`, rede simulada).
 - Unitário 9/9 (`pagbank-webhook-segredo.test.ts`). Regressão 164/164 (incluindo PagBank).
 - **Nenhuma chamada financeira real.** Nenhuma notificação real recebida do provedor.
+
+## 5. Atualização — contrato oficial (Fase 4.3, Ordem Master)
+
+Fonte: documentação oficial do PagBank, "Confirmar autenticidade da notificação"
+(`https://developer.pagbank.com.br/reference/confirmar-autenticidade-da-notificacao`; índice em `https://developer.pagbank.com.br/llms.txt`).
+
+Conforme a documentação:
+
+- O cabeçalho `x-authenticity-token` é o SHA-256 em hexadecimal de `{token}-{corpo cru}`.
+- O `token` é o **token da conta** (obtido via iBanking/`obter-access-token`). A chave da verificação é, portanto, o token da conta, como o código já calculava.
+- O corpo deve ser usado **exatamente como recebido**; reformatar o JSON invalida a assinatura.
+- A documentação **não define timestamp nem janela de validade** no cabeçalho ou no corpo. Não há janela temporal a implementar por contrato.
+
+Consequências no código:
+
+- A verificação continua em `modules/payments/providers/pagbank/index.ts`. Agora é **comprovada por contrato** (`server/test/pagbank-webhook-contrato-oficial.test.ts`, 10 casos): assinatura oficial aceita; token da conta diferente recusado; corpo alterado recusado; corpo reformatado recusado; espaço extra recusado; cabeçalho malformado recusado sem exceção; segredo ausente ou só espaços recusado; identificador de evento determinístico; verificação independente da data no corpo.
+- Segredo dedicado (`webhook_segredo_cifrado` ou `PAGBANK_WEBHOOK_SECRET`) **continua** como gate de presença fail-closed. Ele **não** é chave criptográfica do contrato oficial. Isso é uma decisão de defesa em profundidade, e não uma exigência do PagBank.
+- Replay: sem timestamp no contrato, a proteção contra repetição fica na **idempotência por `evento_id`** e na verificação do corpo cru. Não se inventa janela de validade.
+- Trocar o segredo dedicado por chave única continua descartado (quebraria notificações legítimas).
+
+Pendências que permanecem:
+
+- **H-8 (homologação funcional):** nenhuma notificação real do PagBank foi recebida nesta sandbox. Sem egress e sem credencial de sandbox, a prova ponta a ponta não foi executada. Os testes acima são de contrato local e não contam como homologação.
+- **G2:** criar `PAGBANK_WEBHOOK_SECRET` em qualquer ambiente exige aprovação expressa do Diretor. Nenhum valor foi criado, impresso ou solicitado.
+
