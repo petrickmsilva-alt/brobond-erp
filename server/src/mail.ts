@@ -83,6 +83,46 @@ export function linksQueNaoAbrem(html: string): string[] {
   return [...achados];
 }
 
+/** Transporte SMTP a partir das variáveis SMTP_*; null se a dependência não carregar. */
+function criarTransporteSmtp(): any | null {
+  let nodemailer: any = null;
+  try {
+    nodemailer = require('nodemailer');
+  } catch {
+    return null;
+  }
+  const port = Number(process.env.SMTP_PORT) || 587;
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port,
+    secure: process.env.SMTP_SECURE == null
+      ? port === 465
+      : ['1', 'true', 'yes', 'on'].includes(String(process.env.SMTP_SECURE).trim().toLowerCase()),
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  });
+}
+
+export type VerificacaoSmtp =
+  | { ok: true }
+  | { ok: false; motivo: 'nao_configurado' | 'dependencia_ausente' | 'autenticacao_recusada' | 'falha_conexao' };
+
+/**
+ * Prova de conexão SMTP (`transporter.verify()`), sem enviar mensagem.
+ * O erro bruto do servidor pode conter usuário e resposta: só a categoria sai daqui.
+ */
+export async function verificarConexaoSmtp(): Promise<VerificacaoSmtp> {
+  if (!smtpConfigurado()) return { ok: false, motivo: 'nao_configurado' };
+  const transporter = criarTransporteSmtp();
+  if (!transporter) return { ok: false, motivo: 'dependencia_ausente' };
+  try {
+    await transporter.verify();
+    return { ok: true };
+  } catch (erro) {
+    const codigo = String((erro as { code?: unknown } | null)?.code ?? '');
+    return { ok: false, motivo: codigo === 'EAUTH' ? 'autenticacao_recusada' : 'falha_conexao' };
+  }
+}
+
 /** Envia por SMTP; sem transporte funcional, não registra mensagem nem destinatário. */
 export async function enviarEmail(msg: EmailMsg): Promise<'enviado' | 'nao_enviado'> {
   const cfg = smtpConfigurado();
@@ -100,25 +140,11 @@ export async function enviarEmail(msg: EmailMsg): Promise<'enviado' | 'nao_envia
     return 'nao_enviado';
   }
   try {
-    let nodemailer: any = null;
-    try {
-      nodemailer = require('nodemailer');
-    } catch {
-      nodemailer = null;
-    }
-    if (!nodemailer) {
+    const transporter = criarTransporteSmtp();
+    if (!transporter) {
       console.warn('[mail] Transporte SMTP indisponível; mensagem não enviada.');
       return 'nao_enviado';
     }
-    const port = Number(process.env.SMTP_PORT) || 587;
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port,
-      secure: process.env.SMTP_SECURE == null
-        ? port === 465
-        : ['1', 'true', 'yes', 'on'].includes(String(process.env.SMTP_SECURE).trim().toLowerCase()),
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    });
     await transporter.sendMail({
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to: msg.to,

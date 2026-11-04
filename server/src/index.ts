@@ -177,7 +177,7 @@ import { listQualidade, createQualidade, relatorioQualidade } from './quality';
 import { predicaoDemanda, predicaoInsumos } from './prediction';
 import { rateLimitPortal, administrarAcessosPortal, decidirCotacao, gerarAcessoPortal, portalPedidos, portalPedidoDetalhe, recomprarPedido, revogarAcessoPortal } from './portal';
 import { clientePorDocumentoHandler } from './clientes';
-import { notificacoesStatus, verificarAlertasEstoque } from './notifications';
+import { enviarTesteSmtpHandler, notificacoesStatus, verificarAlertasEstoque, verificarSmtpHandler } from './notifications';
 import { openapiJSON, openapiUI } from './openapi';
 import { listConversas, listMensagens, sendMessage, countNaoLidas } from './chat';
 import { nfeDados, nfeEmitir, nfeStatus } from './nfe';
@@ -877,6 +877,8 @@ app.post('/api/admin/scheduled/cron', wrap(cronScheduled));
 
 // Notificações (status)
 app.get('/api/admin/notificacoes/status', (_req, res) => res.json(notificacoesStatus()));
+app.post('/api/admin/notificacoes/smtp/verificar', wrap(verificarSmtpHandler));
+app.post('/api/admin/notificacoes/smtp/teste', wrap(enviarTesteSmtpHandler));
 
 // Documentação OpenAPI (pública)
 app.get('/api/docs/openapi.json', wrap(openapiJSON));

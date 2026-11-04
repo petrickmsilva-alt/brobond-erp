@@ -604,7 +604,7 @@ describe('Commerce real — notificações (outbox → worker → e-mail / Whats
       assert.match(String(whats.provider_message_id), /^wamid\./);
       assert.equal(mp.whatsapp.length, 1);
       const chamada = mp.whatsapp[0];
-      assert.equal(chamada.url, 'https://graph.facebook.com/v21.0/100000000000001/messages');
+      assert.equal(chamada.url, 'https://graph.facebook.com/v26.0/100000000000001/messages');
       assert.equal(chamada.headers.authorization, 'Bearer EAAG-fixture-sem-rede');
       assert.equal(chamada.body.messaging_product, 'whatsapp');
       assert.equal(chamada.body.to, '5562999991234');

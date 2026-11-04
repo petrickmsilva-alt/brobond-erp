@@ -636,7 +636,7 @@ cria cobrança, venda ou baixa extra; a ação fica na trilha de auditoria.
 | Mercado Pago | `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET` (ou a configuração cifrada do gateway da empresa) |
 | Link do pedido | `APP_URL` (ou `PUBLIC_BASE_URL`) |
 | E-mail | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, opcional `SMTP_FROM`, `SMTP_SECURE`; nome da loja no assunto: `COMMERCE_STORE_NAME` (padrão "BroBond") |
-| WhatsApp (Meta Cloud API oficial) | `WHATSAPP_CLOUD_API_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, opcional `WHATSAPP_API_VERSION` (padrão `v21.0`), `WHATSAPP_TEMPLATE_<EVENTO>` ou `WHATSAPP_TEMPLATE_TRANSACIONAL`, `WHATSAPP_TEMPLATE_IDIOMA` (padrão `pt_BR`) |
+| WhatsApp (Meta Cloud API oficial) | `WHATSAPP_CLOUD_API_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, opcional `WHATSAPP_API_VERSION` (padrão `v26.0`), `WHATSAPP_TEMPLATE_<EVENTO>` ou `WHATSAPP_TEMPLATE_TRANSACIONAL`, `WHATSAPP_TEMPLATE_IDIOMA` (padrão `pt_BR`) |
 
 `GET /api/commerce/notificacoes/status` devolve CONFIGURADO / CONECTADO / ERRO /
 NAO_CONFIGURADO por canal e a lista de variáveis ausentes. Sem configuração, a

@@ -31,6 +31,7 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { getStore } from './services';
 import { instagramWebhookRouter } from './modules/connectors/instagram/instagram.controller';
+import { criarRouterWebhookStatusWhatsApp } from './commerce/whatsappStatus';
 import { converterOrdemDoAtor } from './marketplaceOperacional';
 import {
   appUrl,
@@ -314,6 +315,8 @@ export const publicConnectorsRouter: Router = Router();
 // Ele responde apenas por `/api/webhooks/instagram`; todo o resto segue
 // o fluxo de sempre.
 publicConnectorsRouter.use(instagramWebhookRouter);
+// P1-05: webhook de status do WhatsApp (fail-closed). Antes de /api/webhooks/:provider.
+publicConnectorsRouter.use(criarRouterWebhookStatusWhatsApp());
 
 /**
  * Corpo CRU. Toda assinatura é calculada sobre os bytes exatos — depois

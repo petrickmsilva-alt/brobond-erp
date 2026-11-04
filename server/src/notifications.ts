@@ -15,7 +15,9 @@
 //   NOTIFICAR_OP_CONCLUIDA=true (padrão: false)
 //   NOTIFICAR_PEDIDO=true       (padrão: false)
 // ============================================================
-import { enviarEmail, smtpConfigurado } from './mail';
+import { enviarEmail, smtpConfigurado, verificarConexaoSmtp } from './mail';
+import { currentUser } from './auth';
+import type { Request, Response } from 'express';
 import { getStore } from './services';
 import { getResource } from './resources';
 import { labelOf } from './store';
@@ -288,4 +290,28 @@ export function notificacoesStatus() {
       crm_lembrete: habilitado('crm_lembrete'),
     },
   };
+}
+
+/** POST /api/admin/notificacoes/smtp/verificar — prova a conexão SMTP sem enviar e-mail. */
+export async function verificarSmtpHandler(_req: Request, res: Response): Promise<void> {
+  res.json(await verificarConexaoSmtp());
+}
+
+/**
+ * POST /api/admin/notificacoes/smtp/teste — envia UMA mensagem de teste ao próprio
+ * administrador (nunca a destinatário informado na requisição, para não virar envio arbitrário).
+ */
+export async function enviarTesteSmtpHandler(req: Request, res: Response): Promise<void> {
+  const email = String(currentUser(req)?.email ?? '').trim().toLowerCase();
+  if (!email || !email.includes('@')) {
+    res.status(400).json({ error: 'Sua conta não tem e-mail cadastrado para receber o teste.' });
+    return;
+  }
+  const resultado = await enviarEmail({
+    to: email,
+    assunto: 'Teste de envio — Brobond ERP',
+    html: '<p>Mensagem de teste de envio SMTP, solicitada por um administrador.</p>',
+  });
+  const [usuario, dominio] = email.split('@');
+  res.json({ resultado, destino: `${usuario.slice(0, 2)}***@${dominio}` });
 }
