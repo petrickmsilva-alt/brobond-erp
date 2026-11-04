@@ -17,15 +17,17 @@
 // Execução: GET /api/admin/scheduled/run (admin) — executa manualmente
 //           POST /api/admin/scheduled/cron — chamado por cron externo (ex.: cron-job.org)
 // ============================================================
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { coletarFalhasEntrega, htmlSecaoFalhasEntrega } from './alertasFalhas';
 import { enviarEmail, smtpConfigurado } from './mail';
 import { hasDatabaseUrl } from './db';
 import { instagramConnectorService, saleIngestionService } from '../../modules/connectors/index';
 import { getStore } from './services';
 import { getResource } from './resources';
+import { aplicarFiltroEmpresa, type EscopoEmpresa } from './empresa';
+import { destinosPorEmpresa, type DestinoEmpresa } from './destinatariosEmpresa';
 import { labelOf } from './store';
 import { HttpError } from './errors';
-import { processarRecorrencias } from './financeiro';
 import { atualizarMotorNegocios } from './negocios';
 import type { Request, Response } from 'express';
 import { currentUser } from './auth';
@@ -55,12 +57,31 @@ function deveExecutar(frequencia: string): boolean {
   return false;
 }
 
-async function enviarRelatorio(assunto: string, html: string): Promise<void> {
-  const emails = scheduleEmails();
-  if (!emails.length) {
-    console.log('[schedule] Nenhum e-mail configurado para relatórios agendados.');
-    return;
-  }
+/** Envio injetável (testes). Em produção, é o `enviarEmail` real. */
+export type EnviadorRelatorio = (opts: { to: string; assunto: string; html: string }) => Promise<unknown>;
+
+/** Recorte do servidor para leitura de um relatório (mesmo padrão das rotas: `aplicarFiltroEmpresa`). */
+function escopoDaEmpresa(empresaId: number): EscopoEmpresa {
+  return { empresaId, consolidado: false, permitidas: [empresaId] };
+}
+
+async function listarDaEmpresa(
+  chave: string,
+  empresaId: number,
+  pageSize: number,
+  extra: { sort?: string; dir?: 'asc' | 'desc' } = {},
+) {
+  const r = getResource(chave)!;
+  return getStore().list(r, {
+    page: 1,
+    pageSize,
+    ...extra,
+    filter: aplicarFiltroEmpresa(r, undefined, escopoDaEmpresa(empresaId)),
+  });
+}
+
+async function enviarRelatorio(assunto: string, html: string, enviar: EnviadorRelatorio, emails: string[]): Promise<void> {
+  if (!emails.length) return;
 
   const htmlBase = `
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;">
@@ -76,7 +97,7 @@ async function enviarRelatorio(assunto: string, html: string): Promise<void> {
     </div>`;
 
   for (const email of emails) {
-    await enviarEmail({ to: email, assunto: `📊 ${assunto}`, html: htmlBase }).catch(() => {
+    await enviar({ to: email, assunto: `📊 ${assunto}`, html: htmlBase }).catch(() => {
       console.warn('⚠️  Falha ao preparar relatório por e-mail.');
     });
   }
@@ -86,11 +107,16 @@ async function enviarRelatorio(assunto: string, html: string): Promise<void> {
 // Relatórios individuais
 // ----------------------------------------------------------------------------
 
-async function relatorioPosicaoEstoque(): Promise<void> {
-  const s = getStore();
+export async function relatorioPosicaoEstoque(enviar: EnviadorRelatorio = enviarEmail): Promise<void> {
+  const destinos = await destinosPorEmpresa(scheduleEmails(), ['estoques', 'produtos']);
+  if (!destinos.length) return logSemDestinatario('posição de estoque');
+  for (const destino of destinos) await gerarPosicaoEstoque(destino, enviar);
+}
+
+async function gerarPosicaoEstoque(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
   const [produtos, estoques] = await Promise.all([
-    s.list(getResource('produtos')!, { page: 1, pageSize: 2000 }),
-    s.list(getResource('estoques')!, { page: 1, pageSize: 5000 }),
+    listarDaEmpresa('produtos', destino.empresaId, 2000),
+    listarDaEmpresa('estoques', destino.empresaId, 5000),
   ]);
 
   let valorTotal = 0;
@@ -136,17 +162,22 @@ async function relatorioPosicaoEstoque(): Promise<void> {
       </tbody>
     </table>`;
 
-  await enviarRelatorio(`Posição de Estoque — ${new Date().toLocaleDateString('pt-BR')}`, html);
+  await enviarRelatorio(`Posição de Estoque — ${new Date().toLocaleDateString('pt-BR')}`, html, enviar, destino.emails);
 }
 
-async function relatorioVendas(): Promise<void> {
-  const s = getStore();
+export async function relatorioVendas(enviar: EnviadorRelatorio = enviarEmail): Promise<void> {
+  const destinos = await destinosPorEmpresa(scheduleEmails(), ['vendas']);
+  if (!destinos.length) return logSemDestinatario('vendas');
+  for (const destino of destinos) await gerarVendas(destino, enviar);
+}
+
+async function gerarVendas(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
   const dias = getSchedule('VENDAS') === 'daily' ? 1 : 7;
   const desde = new Date();
   desde.setDate(desde.getDate() - dias);
   const desdeStr = desde.toISOString().slice(0, 10);
 
-  const vendas = await s.list(getResource('vendas')!, { page: 1, pageSize: 1000, sort: 'faturada_em', dir: 'desc' });
+  const vendas = await listarDaEmpresa('vendas', destino.empresaId, 1000, { sort: 'faturada_em', dir: 'desc' });
   const faturadas = vendas.rows.filter((v) => ['faturada', 'entregue'].includes(String(v.status)) && diaISO(v.faturada_em) >= desdeStr);
 
   const totalVendas = faturadas.reduce((s, v) => s + Number(v.total || 0), 0);
@@ -176,18 +207,29 @@ async function relatorioVendas(): Promise<void> {
       </tbody>
     </table>`;
 
-  await enviarRelatorio(`Vendas — últimos ${dias} dia${dias > 1 ? 's' : ''}`, html);
+  await enviarRelatorio(`Vendas — últimos ${dias} dia${dias > 1 ? 's' : ''}`, html, enviar, destino.emails);
 }
 
-async function relatorioAlertas(): Promise<void> {
-  const s = getStore();
-  const [estoques, insumosEst] = await Promise.all([
-    s.list(getResource('estoques')!, { page: 1, pageSize: 5000 }),
-    s.list(getResource('estoque_insumos')!, { page: 1, pageSize: 2000 }),
+export async function relatorioAlertas(enviar: EnviadorRelatorio = enviarEmail): Promise<void> {
+  const destinos = await destinosPorEmpresa(scheduleEmails(), [
+    'estoques', 'estoque_insumos', 'produtos', 'insumos', 'commerce_outbox', 'commerce_notificacoes',
   ]);
+  if (!destinos.length) return logSemDestinatario('alertas');
+  for (const destino of destinos) await gerarAlertas(destino, enviar);
+}
 
-  const produtos = await s.list(getResource('produtos')!, { page: 1, pageSize: 2000 });
-  const insumos = await s.list(getResource('insumos')!, { page: 1, pageSize: 2000 });
+function logSemDestinatario(relatorio: string): void {
+  // Sem dados e sem destinatário identificado: nada é lido para envio nem enviado. Só contagem no log.
+  console.log(`[schedule] ${relatorio}: nenhuma empresa com destinatário autorizado identificado; nada enviado.`);
+}
+
+async function gerarAlertas(destino: DestinoEmpresa, enviar: EnviadorRelatorio): Promise<void> {
+  const [estoques, insumosEst, produtos, insumos] = await Promise.all([
+    listarDaEmpresa('estoques', destino.empresaId, 5000),
+    listarDaEmpresa('estoque_insumos', destino.empresaId, 2000),
+    listarDaEmpresa('produtos', destino.empresaId, 2000),
+    listarDaEmpresa('insumos', destino.empresaId, 2000),
+  ]);
 
   const alertasProd = estoques.rows
     .filter((e) => Number(e.estoque_min) > 0 && Number(e.quantidade) <= Number(e.estoque_min))
@@ -226,7 +268,7 @@ async function relatorioAlertas(): Promise<void> {
   let secaoFalhas = '';
   let temFalhas = false;
   try {
-    const falhas = await coletarFalhasEntrega();
+    const falhas = await coletarFalhasEntrega(new Date(), { empresaId: destino.empresaId });
     temFalhas = falhas.total > 0;
     secaoFalhas = htmlSecaoFalhasEntrega(falhas);
   } catch (erro) {
@@ -236,6 +278,8 @@ async function relatorioAlertas(): Promise<void> {
   await enviarRelatorio(
     `Alertas de Estoque${temFalhas ? ' e Falhas de Envio' : ''} — ${new Date().toLocaleDateString('pt-BR')}`,
     html + secaoFalhas,
+    enviar,
+    destino.emails,
   );
 }
 
@@ -296,8 +340,6 @@ export async function runScheduled(req: Request, res: Response) {
     await relatorioAlertas();
     resultados.push('Alertas');
   }
-  const rec = await processarRecorrencias({ id: actor.id || null, name: actor.name });
-  if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrência(s) financeira(s)`);
   const pedidos = await recuperarPedidosPendentes();
   if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace recuperado(s)`);
   // CRM — lembretes de atividade: disparo IDEMPOTENTE pelo agendador que já
@@ -330,21 +372,35 @@ export async function runScheduled(req: Request, res: Response) {
   res.status(commerce.falhas.length ? 503 : 200).json({ ok: commerce.falhas.length === 0, executados: resultados, falhas_commerce: commerce.falhas, smtp: smtpConfigurado() });
 }
 
-/** POST /api/admin/scheduled/cron — endpoint para cron externo. */
+/** O cron só funciona com CRON_SECRET definido. Sem a variável, nada é executado. */
+export function cronConfigurado(): boolean {
+  return (process.env.CRON_SECRET || '').length > 0;
+}
+
+/** Compara o Bearer com CRON_SECRET em tempo constante (hashes de tamanho fixo). */
+export function cronAutorizado(req: Request): boolean {
+  const esperado = process.env.CRON_SECRET || '';
+  if (!esperado) return false;
+  const cabecalho = String(req.headers?.authorization || '');
+  const recebido = cabecalho.startsWith('Bearer ') ? cabecalho.slice(7) : '';
+  if (!recebido) return false;
+  const a = createHash('sha256').update(recebido).digest();
+  const b = createHash('sha256').update(esperado).digest();
+  return timingSafeEqual(a, b);
+}
+
+/** POST /api/admin/scheduled/cron — endpoint para cron externo (montado antes da sessão, em index.ts). */
 export async function cronScheduled(req: Request, res: Response) {
-  // Autenticação por token secreto (CRON_SECRET env var)
-  const token = String(req.headers.authorization || '').replace('Bearer ', '');
-  const secret = process.env.CRON_SECRET || '';
-  if (secret && token !== secret) {
-    throw new HttpError(401, 'Token inválido.');
-  }
+  // R-4 (Fase 4.2) — contrato do cron externo (ver docs/auditoria/fase-4-2-correcoes.md):
+  // autentica SOMENTE por `Authorization: Bearer <CRON_SECRET>`; sem a variável, falha fechado (503);
+  // não aceita sessão de usuário; não executa recorrências financeiras (fluxo próprio).
+  if (!cronConfigurado()) throw new HttpError(503, 'Cron desativado: CRON_SECRET não configurado.');
+  if (!cronAutorizado(req)) throw new HttpError(401, 'Token inválido.');
 
   const resultados: string[] = [];
   if (deveExecutar(getSchedule('POSICAO_ESTOQUE'))) { await relatorioPosicaoEstoque(); resultados.push('estoque'); }
   if (deveExecutar(getSchedule('VENDAS'))) { await relatorioVendas(); resultados.push('vendas'); }
   if (deveExecutar(getSchedule('ALERTAS'))) { await relatorioAlertas(); resultados.push('alertas'); }
-  const rec = await processarRecorrencias({ id: null, name: 'Agendador' });
-  if (rec.gerados > 0) resultados.push(`${rec.gerados} recorrencia(s)`);
   const pedidos = await recuperarPedidosPendentes();
   if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace`);
   const lembretesCron = await dispararLembretesCrm();

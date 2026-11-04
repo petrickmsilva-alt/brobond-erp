@@ -57,6 +57,8 @@ test('PagBank (engine): sem token de credencial nenhuma entrega é aceita; com t
   const token = 'token-pagbank-teste-0123456789';
   const assinatura = createHash('sha256').update(`${token}-${raw}`).digest('hex');
   assert.equal(p.verifyWebhook(ctx(null, {}), raw, { 'x-authenticity-token': assinatura }), false);
-  assert.equal(p.verifyWebhook(ctx(null, { access_token: token }), raw, { 'x-authenticity-token': assinatura }), true);
+  // R-10 (Fase 4.2): sem segredo de webhook próprio, o access token NÃO basta (falha fechada).
+  assert.equal(p.verifyWebhook(ctx(null, { access_token: token }), raw, { 'x-authenticity-token': assinatura }), false);
+  assert.equal(p.verifyWebhook(ctx('segredo-webhook-dedicado-teste', { access_token: token }), raw, { 'x-authenticity-token': assinatura }), true);
   assert.equal(p.verifyWebhook(ctx(null, { access_token: token }), raw, { 'x-authenticity-token': '0'.repeat(64) }), false);
 });

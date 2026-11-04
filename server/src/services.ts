@@ -69,6 +69,8 @@ export function getStore(): Store {
   if (!store) {
     if (isPgAvailable()) store = new PgStore();
     else if (hasDatabaseUrl()) throw new HttpError(503, 'Banco de dados não está pronto.');
+    // R-3: produção nunca usa memória (ver bancoAusenteEmProducao em security.ts).
+    else if (process.env.NODE_ENV === 'production') throw new HttpError(503, 'Banco de dados obrigatório em produção.');
     else store = new MemStore();
   }
   return store;

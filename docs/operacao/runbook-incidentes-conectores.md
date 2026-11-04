@@ -85,3 +85,21 @@ A publicação em marketplace fica **suspensa por padrão** (`PUBLICACAO_CANAIS_
 - Reprocessamento em massa de outbox (decisão do operador, caso a caso).
 - Rotação de segredos (plano em `docs/seguranca/plano-migracao-segredos.md`, não executado).
 - Qualquer ação em conta real de marketplace ou provedor: deve ser feita pelo responsável da conta, com registro.
+
+## 6. Fase 4.2: ações por risco (quando aplicável)
+
+Nenhuma ação abaixo executa financeiro, publicação ou envio real. São procedimentos de triagem e contenção.
+
+| Sintoma | Causa provável | Ação segura |
+|---|---|---|
+| `POST /api/admin/scheduled/cron` responde **503** "CRON_SECRET não configurado" | Variável ausente no ambiente | Confirmar que a variável existe no Render (sem imprimir o valor). Não contornar a verificação |
+| Cron responde **401** "Token inválido" | Bearer diferente do `CRON_SECRET` do ambiente, ou sessão de usuário usada no lugar | Corrigir o agendador externo para enviar `Authorization: Bearer <CRON_SECRET>`. Sessão de usuário não é aceita |
+| Relatório diário não chega a alguém | Destinatário sem vínculo com a empresa (R-12) ou fora de `SCHEDULE_EMAILS` | Verificar se o usuário está vigente e vinculado à empresa. **Não** adicionar e-mail global para contornar |
+| Log `nenhuma empresa com destinatário autorizado identificado` | Nenhum destinatário válido ou sem vínculo | Esperado até a decisão D-A. Não é erro de envio |
+| PagBank responde **401** em notificação de webhook após a Fase 4.2 | `<PREFIXO>_WEBHOOK_SECRET` ausente ou igual ao token (R-10) | Gravar o segredo dedicado do webhook no painel do provedor e no ambiente. Não usar o token de API como chave |
+| Pedido de recorrências não gerado automaticamente | Esperado: o cron não executa recorrências (R-4) | Execução só por administrador: `POST /api/admin/financeiro/recorrencias` com `{"confirmar":"PROCESSAR_RECORRENCIAS"}`, após conferência do responsável financeiro |
+| Sincronização legada de marketplace responde 403 | Perfil não admin, ou admin sem empresa no contexto (R-1) | Esperado. Usar a conexão OAuth por empresa, não a rota legada |
+| Health responde 503 em produção | Banco ausente (R-3) | Restaurar `DATABASE_URL` antes de qualquer outra ação. Não subir em modo demo |
+| Nuvemshop: publicação falha com 401 | Cabeçalho da 2025-03 não confirmado (R-15, gate bloqueado) | Não alterar o cabeçalho sem leitura real e aprovação do Diretor. Manter publicação suspensa |
+
+**Contenção comum.** Suspender publicação ML/Nuvemshop segue a seção 3. Suspender o cron: remover ou rotacionar `CRON_SECRET` é ação de administrador, registrada, e exige decisão. Não apagar dados.

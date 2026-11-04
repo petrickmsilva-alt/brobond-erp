@@ -154,7 +154,9 @@ test('Payment Engine: Stripe verifies raw body and timestamp; PagBank verifies o
   assert.equal(stripe.parseWebhook(raw)?.reference, 'cs_1');
   const pctx = { ...ctx, credentials: { access_token: secret } };
   const token = createHash('sha256').update(`${secret}-${raw}`).digest('hex');
-  assert.equal(pagbank.verifyWebhook(pctx, raw, { 'x-authenticity-token': token }), true);
+  // R-10 (Fase 4.2): o segredo de webhook é próprio; sem ele, a assinatura não é aceita.
+  assert.equal(pagbank.verifyWebhook({ ...pctx, webhookSecret: null }, raw, { 'x-authenticity-token': token }), false);
+  assert.equal(pagbank.verifyWebhook({ ...pctx, webhookSecret: 'segredo-webhook-dedicado-teste' }, raw, { 'x-authenticity-token': token }), true);
   assert.equal(pagbank.verifyWebhook(pctx, raw, { 'x-authenticity-token': '0'.repeat(64) }), false);
 });
 test('Payment Engine: real adapter contract uses official Stripe endpoints; a session is not paid and refund can remain pending', async (t) => {

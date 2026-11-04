@@ -5,7 +5,7 @@
 // campos podem carregar dados pessoais ou credenciais do provedor.
 import { getResource } from './resources';
 import { getStore } from './services';
-import { R_ENTREGAS, R_WEBHOOKS } from './webhooks';
+import { aplicarFiltroEmpresa } from './empresa';
 
 export interface LinhaOutboxFalha {
   empresa_id: number | null;
@@ -103,26 +103,35 @@ export function htmlSecaoFalhasEntrega(resumo: ResumoFalhasEntrega): string {
 
 const TAMANHO_LEITURA = 5000;
 
-/** Lê as falhas do banco (sem escopo de sessão: job de sistema, como o relatório de estoque). */
-export async function coletarFalhasEntrega(agora: Date = new Date()): Promise<ResumoFalhasEntrega> {
+/**
+ * Lê as falhas de UMA empresa (R-12, Fase 4.2). Não existe leitura global: o escopo é obrigatório.
+ *
+ * Inclui: fila de sincronização em erro e notificações não entregues (ambas com `empresa_id`).
+ * NÃO inclui: entregas de webhook. `webhooks` e `webhook_entregas` não têm `empresa_id` no
+ * esquema (R-14), então a falha não pode ser atribuída a uma empresa com segurança. Ela
+ * permanece fora dos relatórios por empresa até a decisão de modelagem (ver fase-4-2-correcoes.md).
+ */
+export async function coletarFalhasEntrega(
+  agora: Date = new Date(),
+  escopo: { empresaId: number },
+): Promise<ResumoFalhasEntrega> {
+  if (!(Number(escopo?.empresaId) > 0)) throw new Error('coletarFalhasEntrega exige empresa explícita.');
   const s = getStore();
+  const R_OUTBOX = getResource('commerce_outbox')!;
   const R_NOTIF = getResource('commerce_notificacoes')!;
-  const [outboxRes, entregasRes, webhooksRes, notifErro, notifFailed] = await Promise.all([
-    s.list(getResource('commerce_outbox')!, { page: 1, pageSize: TAMANHO_LEITURA, filter: { estado: 'ERRO' } }),
-    s.list(R_ENTREGAS, { page: 1, pageSize: TAMANHO_LEITURA, filter: { estado: 'erro' } }),
-    s.list(R_WEBHOOKS, { page: 1, pageSize: 2000 }),
-    s.list(R_NOTIF, { page: 1, pageSize: TAMANHO_LEITURA, filter: { estado: 'ERRO' } }),
-    s.list(R_NOTIF, { page: 1, pageSize: TAMANHO_LEITURA, filter: { provider_status: 'FAILED' } }),
+  const recorte = { empresaId: escopo.empresaId, consolidado: false, permitidas: [escopo.empresaId] };
+  const [outboxRes, notifErro, notifFailed] = await Promise.all([
+    s.list(R_OUTBOX, { page: 1, pageSize: TAMANHO_LEITURA, filter: aplicarFiltroEmpresa(R_OUTBOX, { estado: 'ERRO' }, recorte) }),
+    s.list(R_NOTIF, { page: 1, pageSize: TAMANHO_LEITURA, filter: aplicarFiltroEmpresa(R_NOTIF, { estado: 'ERRO' }, recorte) }),
+    s.list(R_NOTIF, { page: 1, pageSize: TAMANHO_LEITURA, filter: aplicarFiltroEmpresa(R_NOTIF, { provider_status: 'FAILED' }, recorte) }),
   ]);
   // Mesma notificação pode estar nas duas listas: deduplica por id.
   const notifVistas = new Map<number, (typeof notifErro.rows)[number]>();
   for (const r of [...notifErro.rows, ...notifFailed.rows]) notifVistas.set(Number(r.id), r);
-  const empresaPorWebhook = new Map<number, number | null>();
-  for (const w of webhooksRes.rows) empresaPorWebhook.set(Number(w.id), w.empresa_id == null ? null : Number(w.empresa_id));
   const resumo = agruparFalhasEntrega(
     outboxRes.rows.map((r) => ({ empresa_id: r.empresa_id == null ? null : Number(r.empresa_id), tipo: (r.tipo as string) ?? null })),
-    entregasRes.rows.map((r) => ({ webhook_id: r.webhook_id == null ? null : Number(r.webhook_id), evento: (r.evento as string) ?? null, concluida_em: (r.concluida_em as string) ?? null })),
-    (id) => (empresaPorWebhook.has(id) ? empresaPorWebhook.get(id)! : null),
+    [],
+    () => null,
     agora,
     JANELA_PADRAO_HORAS,
     [...notifVistas.values()].map((r) => ({
@@ -131,7 +140,7 @@ export async function coletarFalhasEntrega(agora: Date = new Date()): Promise<Re
       quando: ((r.atualizado_em ?? r.criado_em ?? null) as string | null),
     })),
   );
-  const truncado = outboxRes.total > outboxRes.rows.length || entregasRes.total > entregasRes.rows.length
+  const truncado = outboxRes.total > outboxRes.rows.length
     || notifErro.total > notifErro.rows.length || notifFailed.total > notifFailed.rows.length;
   return { ...resumo, truncado };
 }

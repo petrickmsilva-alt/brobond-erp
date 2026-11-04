@@ -24,7 +24,7 @@ Correções que o código não sustentava e que foram tratadas:
 | Item | O que mudou | Nível de evidência |
 |---|---|---|
 | Alerta de outbox em `ERRO` (P2-08) | Seção "Falhas de envio nas últimas 24h" no relatório diário (`relatorioAlertas`). Agrupa por empresa e tipo. | Local e automatizado: `alertas-falhas-entrega.test.ts` 6/6. Disparo agendado de ponta a ponta: NÃO EXECUTADO. |
-| Alerta de falhas de webhook de saída | Mesma seção, agrupada por empresa e evento, com entregas `erro` nas últimas 24h. | Idem. |
+| Alerta de falhas de webhook de saída | Mesma seção, agrupada por evento, com entregas `erro` nas últimas 24h. **Correção (Fase 4.1):** a empresa sai sempre nula (“—”), porque `webhooks` e `webhook_entregas` não têm `empresa_id` (R-14). | Idem. |
 | Alerta de falhas de envio (WhatsApp/e-mail) | Mesma seção, agrupada por empresa e canal: `ERRO` ou `provider_status = FAILED`, deduplicado por registro. | Idem. |
 | Privacidade do alerta | Só contagens. Não entram payload, telefone, URL, segredo nem `ultimo_erro`/`erro` brutos. O teste verifica que um token e um telefone gravados nesses campos não aparecem no HTML. | Automatizado (local). |
 | Runbook por conector | `docs/operacao/runbook-incidentes-conectores.md` (rascunho, não revisado por operação). | Documental. |

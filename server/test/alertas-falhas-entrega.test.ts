@@ -61,8 +61,10 @@ test('leitura do banco: falha de outbox e entrega aparece no resumo; texto bruto
   await s.insert(R_ENTREGAS, { webhook_id: Number(webhook.id), evento: 'pedido.criado', payload: '{"telefone":"5562999990000"}', estado: 'erro', tentativas: 1, erro: `HTTP 500 ${segredoBruto}`, concluida_em: new Date().toISOString() } as any);
   await s.insert(getResource('commerce_outbox')!, { empresa_id: empresaId, tipo: 'publicacao', chave: `p7-outbox-${Date.now()}`, estado: 'ERRO', tentativas: 10, ultimo_erro: `falha ${segredoBruto}`, payload: { sku: 'X' }, proxima_tentativa_em: new Date().toISOString(), criado_em: new Date().toISOString(), atualizado_em: new Date().toISOString() } as any);
 
-  const resumo = await coletarFalhasEntrega();
-  assert.ok(resumo.total >= 2, `total=${resumo.total}`);
+  // R-12/R-14 (Fase 4.2): leitura por empresa. Falha de webhook (sem empresa no esquema) não entra no total.
+  const resumo = await coletarFalhasEntrega(new Date(), { empresaId });
+  assert.ok(resumo.total >= 1, `total=${resumo.total}`);
+  assert.equal(resumo.webhooks.length, 0, 'webhook sem empresa fica fora do relatório por empresa');
   const html = htmlSecaoFalhasEntrega(resumo);
   assert.ok(html.includes('Falhas de envio'));
   assert.ok(!html.includes(segredoBruto), 'texto bruto de erro não pode sair no e-mail');
@@ -86,7 +88,7 @@ test('leitura do banco: notificação em erro conta uma vez mesmo que apareça e
   const R = getResource('commerce_notificacoes')!;
   const textoBruto = 'resposta bruta com telefone 5562988880000 e token-zzz';
   await s.insert(R, { empresa_id: 1, canal: 'WHATSAPP', evento: 'PEDIDO_PAGO', estado: 'ERRO', provider_status: 'FAILED', provider_message_id: 'wamid.P7-1', ultimo_erro: textoBruto, chave_idempotencia: `p7-notif-${Date.now()}`, atualizado_em: new Date().toISOString() } as any);
-  const resumo = await coletarFalhasEntrega();
+  const resumo = await coletarFalhasEntrega(new Date(), { empresaId: 1 });
   const linhaWhats = resumo.notificacoes.find((x) => x.canal === 'WHATSAPP' && x.empresa_id === 1);
   assert.ok(linhaWhats && linhaWhats.total >= 1);
   const html = htmlSecaoFalhasEntrega(resumo);

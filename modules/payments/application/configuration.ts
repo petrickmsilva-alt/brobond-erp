@@ -6,34 +6,54 @@ import { R_METHODS, R_ROUTING } from '../infrastructure/resources';
 import { routePayment, type Candidate, type RoutingContext } from '../orchestration/provider-router';
 import { METHODS, type ProviderCode } from '../domain/payment';
 import type { ProviderContext } from '../providers/payment-provider';
+/**
+ * R-10 (Fase 4.2): o segredo de webhook é SEMPRE um segredo próprio. Nunca é o access
+ * token (fallback removido). Configuração legada gravada com o token é tratada como
+ * ausente, e o provedor falha fechado.
+ */
+export function segredoWebhookEfetivo(code: ProviderCode, segredoCadastrado: string | null | undefined, credentials: Record<string, string>): string | null {
+  const segredo = (segredoCadastrado || '').trim();
+  if (!segredo) return null;
+  if (code === 'PAGBANK' && credentials.access_token && segredo === credentials.access_token) return null;
+  return segredo;
+}
+
+/**
+ * Configuração de fallback por variáveis de ambiente (só para a vitrine). Exige o
+ * segredo de webhook próprio, para STRIPE e PAGBANK. Sem ele, não há configuração.
+ * Função pura, exceto pela cifra do próprio conteúdo.
+ */
+export function configuracaoAmbientePagamento(code: 'STRIPE' | 'PAGBANK', env: NodeJS.ProcessEnv, empresaId: number, legacyId: string) {
+  const prefix = code;
+  const token = env[`${prefix}_${code === 'STRIPE' ? 'SECRET_KEY' : 'ACCESS_TOKEN'}`]?.trim();
+  const webhook = env[`${prefix}_WEBHOOK_SECRET`]?.trim();
+  if (!token || !webhook) return null;
+  const credentials = {
+    [code === 'STRIPE' ? 'secret_key' : 'access_token']: token,
+    enabled_methods: env[`${prefix}_ENABLED_METHODS`] || '',
+    return_url: env[`${prefix}_RETURN_URL`] || '',
+    notification_url: env[`${prefix}_NOTIFICATION_URL`] || '',
+    capture_mode: env[`${prefix}_CAPTURE_MODE`] || 'automatic',
+  };
+  return {
+    id: null,
+    empresa_id: empresaId,
+    provider: legacyId,
+    ativo: true,
+    ambiente: env[`${prefix}_ENVIRONMENT`] === 'producao' ? 'producao' : 'teste',
+    origem: 'ambiente_commerce',
+    credenciais_cifradas: cifrarSegredo(JSON.stringify(credentials)),
+    webhook_segredo_cifrado: cifrarSegredo(webhook),
+  };
+}
+
 export async function account(empresaId: number, code: ProviderCode, operationKey = '') {
   const provider = providerRegistry.get(code);
   let config = await configDaEmpresa(empresaId, provider.legacyId);
   if (!config && ['STRIPE', 'PAGBANK'].includes(code)) {
     const { empresaDaVitrine } = await import('../../../server/src/commerce/loja-base');
     if ((await empresaDaVitrine()) === empresaId) {
-      const prefix = code;
-      const token = process.env[`${prefix}_${code === 'STRIPE' ? 'SECRET_KEY' : 'ACCESS_TOKEN'}`]?.trim();
-      const webhook = process.env[`${prefix}_WEBHOOK_SECRET`]?.trim();
-      if (token && (code === 'PAGBANK' || webhook)) {
-        const credentials = {
-          [code === 'STRIPE' ? 'secret_key' : 'access_token']: token,
-          enabled_methods: process.env[`${prefix}_ENABLED_METHODS`] || '',
-          return_url: process.env[`${prefix}_RETURN_URL`] || '',
-          notification_url: process.env[`${prefix}_NOTIFICATION_URL`] || '',
-          capture_mode: process.env[`${prefix}_CAPTURE_MODE`] || 'automatic',
-        };
-        config = {
-          id: null,
-          empresa_id: empresaId,
-          provider: provider.legacyId,
-          ativo: true,
-          ambiente: process.env[`${prefix}_ENVIRONMENT`] === 'producao' ? 'producao' : 'teste',
-          origem: 'ambiente_commerce',
-          credenciais_cifradas: cifrarSegredo(JSON.stringify(credentials)),
-          webhook_segredo_cifrado: cifrarSegredo(webhook || token),
-        };
-      }
+      config = configuracaoAmbientePagamento(code as 'STRIPE' | 'PAGBANK', process.env, empresaId, provider.legacyId) as any;
     }
   }
   let credentials: Record<string, string> = {};
@@ -46,7 +66,7 @@ export async function account(empresaId: number, code: ProviderCode, operationKe
     empresaId,
     credentials,
     operationKey,
-    webhookSecret: decifrarSegredo(config?.webhook_segredo_cifrado) || (code === 'PAGBANK' ? credentials.access_token || null : null),
+    webhookSecret: segredoWebhookEfetivo(code, decifrarSegredo(config?.webhook_segredo_cifrado), credentials),
     environment: config?.ambiente === 'producao' ? 'producao' : 'teste',
   };
   const capabilities = config?.ativo === true ? provider.capabilities(context) : [];

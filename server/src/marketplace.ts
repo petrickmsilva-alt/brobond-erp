@@ -13,8 +13,8 @@
 import type { Request, Response } from 'express';
 import { HttpError } from './errors';
 import { empresaDoAtorAudit } from './empresa';
-import { getStore } from './services';
-import { getResource } from './resources';
+import { checkAccess, getStore } from './services';
+import { getResource, RESOURCES } from './resources';
 import { currentUser } from './auth';
 import { configLoja } from './loja';
 import type { Row } from './store';
@@ -40,6 +40,14 @@ export function marketplaceStatus(_req: Request, res: Response) {
 
 export async function sincronizarPedidos(req: Request, res: Response) {
   const actor = currentUser(req);
+  // R-1 (Fase 4.2): esta rota usa o token ESTÁTICO da instalação (MERCADOLIVRE_TOKEN), que
+  // não pertence a nenhuma empresa. Por isso é restrita a administrador com empresa
+  // explícita no contexto. Gerente e operador não podem disparar chamadas nem receber
+  // pedidos de uma conta que não é da sua empresa. Não remover: a migração para o conector
+  // OAuth por empresa (modules/connectors) é o destino (ver docs/auditoria/fase-4-2-correcoes.md).
+  checkAccess(RESOURCES.vendas, actor, 'create');
+  if (actor?.perfil !== 'admin') throw new HttpError(403, 'Apenas administradores podem usar a sincronização legada de marketplace.');
+  if (!(Number(actor.empresa_id) > 0)) throw new HttpError(403, 'Contexto de empresa ausente para a sincronização legada.');
   const cfg = getConfig();
   const provider = String(req.body?.provider || '');
   if (!provider || !cfg.mercadolivre) {

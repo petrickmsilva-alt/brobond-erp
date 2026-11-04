@@ -16,6 +16,7 @@
 //   NOTIFICAR_PEDIDO=true       (padrão: false)
 // ============================================================
 import { enviarEmail, smtpConfigurado, verificarConexaoSmtp } from './mail';
+import { destinosPorEmpresa } from './destinatariosEmpresa';
 import { currentUser } from './auth';
 import type { Request, Response } from 'express';
 import { getStore } from './services';
@@ -37,6 +38,10 @@ type NotifOpts = {
   assunto: string;
   html: string;
   evento: Evento;
+  /** Empresa dona dos dados do e-mail (obrigatória para envio). */
+  empresaId?: number;
+  /** Recursos cujos dados o e-mail contém: o destinatário precisa de leitura em todos. */
+  recursos?: string[];
 };
 
 /** Lista de e-mails que recebem notificações. */
@@ -68,11 +73,22 @@ function habilitado(evento: Evento): boolean {
   }
 }
 
-/** Envia notificação para todos os destinatários configurados. */
-async function enviar(opts: NotifOpts): Promise<void> {
+/** Envio injetável (testes). Em produção, é o `enviarEmail` real. */
+export type EnviadorNotificacao = (opts: { to: string; assunto: string; html: string }) => Promise<unknown>;
+
+/**
+ * Envia notificação SOMENTE para os destinatários autorizados da empresa de `opts.empresaId`
+ * (R-12, Fase 4.2). Sem empresa explícita, não envia: a lista global (NOTIFICAR_EMAILS) não
+ * recebe dados de negócio de nenhuma empresa.
+ */
+async function enviar(opts: NotifOpts, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   if (!habilitado(opts.evento)) return;
-  const emails = destinatarios();
-  if (!emails.length) return;
+  if (!(Number(opts.empresaId) > 0) || !opts.recursos?.length) {
+    console.warn(`[notificacao] ${opts.evento}: sem empresa explícita ou recursos; não enviada.`);
+    return;
+  }
+  const destino = (await destinosPorEmpresa(destinatarios(), opts.recursos)).find((d) => d.empresaId === Number(opts.empresaId));
+  if (!destino || !destino.emails.length) return;
 
   const htmlBase = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
@@ -87,8 +103,8 @@ async function enviar(opts: NotifOpts): Promise<void> {
       </p>
     </div>`;
 
-  for (const email of emails) {
-    await enviarEmail({ to: email, assunto: opts.assunto, html: htmlBase }).catch(() => {
+  for (const email of destino.emails) {
+    await enviador({ to: email, assunto: opts.assunto, html: htmlBase }).catch(() => {
       console.warn('⚠️  Falha ao preparar notificação de e-mail.');
     });
   }
@@ -99,7 +115,7 @@ async function enviar(opts: NotifOpts): Promise<void> {
 // ----------------------------------------------------------------------------
 
 /** Notifica quando produto está abaixo do estoque mínimo. */
-export async function notificarEstoqueMinimo(produtoId: number, tamanhoId: number, local: string, quantidade: number, minimo: number): Promise<void> {
+export async function notificarEstoqueMinimo(produtoId: number, tamanhoId: number, local: string, quantidade: number, minimo: number, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const s = getStore();
   const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId });
   const tamanho = await s.findOneWhere(getResource('tamanhos')!, { id: tamanhoId });
@@ -119,7 +135,7 @@ export async function notificarEstoqueMinimo(produtoId: number, tamanhoId: numbe
         <tr><td style="padding:4px 0;color:#666;">Estoque mínimo:</td><td style="padding:4px 0;">${minimo}</td></tr>
       </table>
       <p style="margin-top:16px;">Acesse o módulo <strong>Estoque Físico</strong> para regularizar.</p>`,
-  });
+  }, enviador);
 }
 
 /** Notifica quando insumo está abaixo do mínimo. */
@@ -231,12 +247,14 @@ export async function notificarLembreteCrm(params: {
   prioridade: string;
   lead: string | null;
   oportunidade: string | null;
-}): Promise<void> {
+}, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const quando = params.quando ? new Date(String(params.quando)) : null;
   const quandoTxt = quando && !Number.isNaN(quando.getTime()) ? quando.toLocaleString('pt-BR') : '—';
   const alvo = params.oportunidade ?? params.lead ?? 'sem vínculo';
   await enviar({
     evento: 'crm_lembrete',
+    empresaId: params.empresaId,
+    recursos: ['crm_atividades'],
     assunto: `⏰ Lembrete CRM: ${params.tipo} — ${alvo}`,
     html: `
       <h3 style="color:#1B2A4A;margin-top:0;">Lembrete de atividade</h3>
@@ -248,7 +266,7 @@ export async function notificarLembreteCrm(params: {
         <tr><td style="padding:4px 0;color:#666;">Resumo:</td><td style="padding:4px 0;">${params.resumo || '—'}</td></tr>
       </table>
       <p style="margin-top:16px;">Abra <strong>CRM › Agenda</strong> para concluir ou remarcar.</p>`,
-  });
+  }, enviador);
 }
 
 /** Verificação periódica de estoques mínimos (chamada pelo dashboard ou cron). */

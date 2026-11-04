@@ -1171,12 +1171,23 @@ export async function gerarRecorrencias(req: Request, res: Response) {
   res.json({ ok: true, ...out });
 }
 
-/** Endpoint para o cron externo gerar recorrências (autentica por CRON_SECRET). */
+/** Confirmação explícita exigida para executar recorrências pela rota administrativa (R-4). */
+export const CONFIRMACAO_RECORRENCIAS = 'PROCESSAR_RECORRENCIAS';
+
+/**
+ * POST /api/admin/financeiro/recorrencias — execução ADMINISTRATIVA de recorrências (R-4, Fase 4.2).
+ * Não é agendador nem aceita CRON_SECRET: exige sessão de administrador (guarda em index.ts),
+ * confirmação explícita no corpo e atua somente no escopo de empresa do administrador.
+ * O relatório agendado NÃO executa recorrências.
+ */
 export async function cronRecorrencias(req: Request, res: Response) {
-  const token = String(req.headers.authorization || '').replace('Bearer ', '');
-  const secret = process.env.CRON_SECRET || '';
-  if (secret && token !== secret) throw new HttpError(401, 'Token inválido.');
-  const out = await processarRecorrencias({ id: null, name: 'Agendador' });
+  const actor = currentUser(req);
+  if (req.body?.confirmar !== CONFIRMACAO_RECORRENCIAS) {
+    throw new HttpError(400, `Confirmação explícita ausente: envie {"confirmar":"${CONFIRMACAO_RECORRENCIAS}"}.`);
+  }
+  checkAccess(getResource('lancamentos_financeiros')!, actor, 'create');
+  checkAccess(getResource('recorrencias_financeiras')!, actor, 'read');
+  const out = await processarRecorrencias({ id: actor.id || null, name: actor.name }, escopoDoAtor(actor as unknown as AuthUser));
   res.json({ ok: true, ...out });
 }
 

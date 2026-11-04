@@ -20,7 +20,7 @@ Resultado da suíte nesta rodada: servidor 1726 aprovados, 0 falhas, 76 ignorado
 | Nuvemshop (publicação) | Migração 2025-03; suspensa por padrão | `publicacao-nuvemshop-2025` (9/9), `-fluxo` (3/3) | NÃO EXECUTADO (condição da decisão (b)) | NÃO EXECUTADO. Leitura de pedidos ainda em v1 |
 | Instagram | Sem alteração nesta rodada | Webhook fail-closed (Fase 2) | NÃO EXECUTADO | NÃO EXECUTADO |
 | WhatsApp (envio) | Versão padrão Graph `v26.0` (P2-06) | `commerce-pix-real-flow` atualizado (URL v26.0) | NÃO EXECUTADO | NÃO EXECUTADO. Verificação de templates NÃO EXECUTADA |
-| WhatsApp (status / webhook) | Webhook fail-closed, HMAC, máquina de estados (P1-05) | `whatsapp-status-webhook.test.ts` (9/9); mutação derruba 3 testes | NÃO EXECUTADO | NÃO EXECUTADO. **Inativo**: segredo não autorizado (decisão (d)) |
+| WhatsApp (status / webhook) | Webhook fail-closed, HMAC, máquina de estados (P1-05) | `whatsapp-status-webhook.test.ts` (11/11 medido na Fase 4.1; a contagem 9/9 anterior estava desatualizada); mutação derruba 3 testes | NÃO EXECUTADO | NÃO EXECUTADO. **Inativo**: segredo não autorizado (decisão (d)) |
 | SMTP | Verificação `verify()` e teste ao admin (P1-06) | `smtp-verificacao-admin.test.ts` (5/5), `enterprise-mail-security` (4/4) | NÃO EXECUTADO (sem servidor SMTP nesta sandbox) | NÃO EXECUTADO |
 | Alerta de falhas (outbox / webhook / notificação) | Seção "Falhas de envio" no relatório diário (P2-08) | `alertas-falhas-entrega.test.ts` (6/6) | NÃO EXECUTADO | NÃO EXECUTADO. Envio agendado real não verificado |
 | WooCommerce | Sem alteração nesta rodada (Fase 5 não iniciada) | — | NÃO EXECUTADO | NÃO EXECUTADO |
@@ -33,3 +33,19 @@ Resultado da suíte nesta rodada: servidor 1726 aprovados, 0 falhas, 76 ignorado
 - Testes automatizados usam dublês (`fetch`, store em memória). Provam a lógica, não o contrato real do provedor.
 - Valores de variáveis no Render não foram verificados (exceto onde indicado como premissa, como `NOTIFICAR_EMAILS`, `WHATSAPP_API_VERSION` e os segredos de webhook, sempre marcados como **não verificados**).
 - O relatório diário de alertas foi alterado, mas o disparo agendado não foi executado de ponta a ponta (a função é interna ao agendador).
+
+## Atualização Fase 4.2 (riscos R-1, R-3, R-4, R-10, R-12, R-14, R-15)
+
+Os níveis desta tabela seguem a legenda acima. Nada aqui é CONFORME por existência de arquivo.
+
+| Risco | Conector / área | Local | Automatizado | Homologação | Provedor real / produção |
+|---|---|---|---|---|---|
+| R-1 | Marketplace legado (sincronização) | Teste de RBAC (`marketplace-legado-autorizacao.test.ts`, 5) | Sim (suíte local) | NÃO EXECUTADO | NÃO EXECUTADO |
+| R-3 | Banco obrigatório em produção | Teste (`banco-obrigatorio-producao.test.ts`, 4) | Sim | NÃO EXECUTADO | NÃO EXECUTADO |
+| R-4 | Cron de relatórios e recorrências | Teste (`cron-recorrencias-contrato.test.ts`) | Sim | NÃO EXECUTADO | NÃO EXECUTADO. Nenhuma recorrência real disparada |
+| R-10 | PagBank (webhook) | Teste (`pagbank-webhook-segredo.test.ts`, 9) | Sim | NÃO EXECUTADO | NÃO EXECUTADO. Sem notificação real |
+| R-12 | Relatório de alertas e falhas | Testes cross-tenant (`alertas-isolamento-empresa.test.ts`, 6) | Sim | NÃO EXECUTADO (SMTP real não testável) | NÃO EXECUTADO |
+| R-14 | Webhooks: resolução de empresa | Teste (`webhook-empresa-resolucao.test.ts`, 9). Sem migração | Sim | NÃO EXECUTADO | NÃO EXECUTADO |
+| R-15 | Nuvemshop 2025-03 (gate de leitura) | Guarda (`nuvemshop-gate-leitura.test.ts`, 5). Não é prova de integração | Sim | **BLOQUEADO** (sem credencial de loja de teste) | NÃO EXECUTADO. Publicação suspensa |
+
+**Observação.** Testes de contrato dos conectores e testes locais não contam como homologação. A coluna "Provedor real / produção" permanece NÃO EXECUTADO em todas as linhas.

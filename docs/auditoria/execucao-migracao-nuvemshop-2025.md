@@ -42,3 +42,5 @@ Suíte do servidor: 1698 aprovados / 0 falhas / 76 ignorados.
 
 - Nenhuma chamada real à Nuvemshop foi feita. Os testes usam fetch simulado e token falso.
 - Nada de produção foi alterado.
+
+> **Correção (Fase 4.1):** o cabeçalho `Authorization: Bearer` citado acima para o 2025-03 é **não verificado**. Outras fontes encontradas na Fase 4.1 dizem que a plataforma usa `Authentication: bearer` (o próprio v1 do código usa esse cabeçalho). Ver R-15 em `matriz-configuracao-producao.md` e o gate de leitura em `plano-homologacao-conectores.md` §2.2. Até a verificação, a publicação 2025-03 não deve ser considerada funcional.
