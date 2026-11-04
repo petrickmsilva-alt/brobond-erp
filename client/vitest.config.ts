@@ -11,5 +11,12 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     css: false,
     exclude: ['node_modules/**', 'dist/**'],
+    // Sob `--maxWorkers=8` o transform de chunks `lazy()` compete por CPU.
+    // 5 s (padrão) == asyncUtilTimeout antigo: o findBy nunca conclui. Este
+    // teto aborta hangs reais; não relaxa asserções.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
+    pool: 'forks',
+    isolate: true,
   },
 });

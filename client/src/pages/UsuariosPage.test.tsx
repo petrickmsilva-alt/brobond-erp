@@ -111,9 +111,7 @@ beforeEach(() => {
 describe('Usuários — painel de consulta', () => {
   it('abre com as visões rápidas prontas e o caixabox de filtros visível', async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByRole('tab', { name: /Administradores/ })).toBeInTheDocument());
-    // Contagem de cada recorte vem do resumo gerencial.
-    expect(screen.getByRole('tab', { name: /Administradores/ })).toHaveTextContent('3');
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Administradores/ })).toHaveTextContent('3'));
     expect(screen.getByRole('tab', { name: /Com MFA/ })).toHaveTextContent('7');
     // O caixabox de filtros nasce aberto e o botão reflete o estado.
     expect(screen.getByLabelText('Filtrar por perfil')).toBeInTheDocument();

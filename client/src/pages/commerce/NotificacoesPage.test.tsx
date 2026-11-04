@@ -411,7 +411,7 @@ describe('Central de Notificações — App, navegação e troca de empresa reai
   it('App abre /commerce/notificacoes no Layout autenticado, com link no menu Commerce e sem sobreposição', async () => {
     configurarApiEmpresas(async () => json(completo()));
     const { container } = abrirRota();
-    expect(await screen.findByRole('heading', { name: 'Central de Notificações' }, { timeout: 10_000 })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Central de Notificações' })).toBeInTheDocument();
     expect(await screen.findByRole('region', { name: 'E-mail' })).toBeInTheDocument();
     expect(window.location.pathname).toBe('/commerce/notificacoes');
     expect(container.querySelector('[role="dialog"], [aria-modal="true"]')).toBeNull();

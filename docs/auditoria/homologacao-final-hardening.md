@@ -10,7 +10,7 @@
 | Commit da entrega operacional anterior | `0d681c6` |
 | Branch efetivamente usada | `arena/615f44fd-brobond-erp` (fixa da sessão) |
 | Branch pedida | `arena/homologacao-final-hardening` — **não publicada**. Criada localmente por engano e apagada imediatamente; nenhum push. |
-| Force-push / merge / deploy | nenhum |
+| Force-push / merge / deploy | nenhum até o PR desta rodada |
 | Ancestralidade | `cf8b519` ⊂ `0d681c6` ⊂ HEAD desta entrega |
 
 O CI de `0d681c6` falhou em `testes-postgres` (1/428): disputa multiprocessos de refund. Hipótese: workers sem `JWT_SECRET` compartilhado após o segredo efêmero. Corrigido no gate e no workflow (segredo aleatório por execução, mas **o mesmo** entre processos).
@@ -23,8 +23,8 @@ O CI de `0d681c6` falhou em `testes-postgres` (1/428): disputa multiprocessos de
 | Segurança | JWT, AES, senhas, varredura | **Atendido internamente (E1+E2)** | `segredoJwt()` sem literal; produção fail-closed; `credential-scan.test.ts` |
 | Backend | Lock, fencing, idempotência, recuperação | **Atendido (E2+E3 local)** | `test:cron-lock:pg` 2/2; `fencedPoolQuery`; `withCronIdempotency` |
 | Integrações | Contratos, outbox, limites de provedor | **Atendido internamente; E4 bloqueado** | INDETERMINADO + reconciliação local; ML/Nuvemshop suspensos; PIX sem credencial |
-| Frontend | Suíte isolada; carga concorrente | **Isolado a confirmar nesta rodada; carga flaky (E2)** | Isolado histórico 1151; carga 8 workers: 19 falhas de timing |
-| Testes | Gates locais, PG, concorrência | **Parcial (E3)** | Servidor 1953/0/82; cron-lock PG 2/2; `test:pg` local sem `psql`; CI instala `psql` |
+| Frontend | Suíte isolada; carga concorrente | **Atendido (E2)** | Isolado 1151/1151; `--maxWorkers=8` 1151/1151 (2 execuções) |
+| Testes | Gates locais, PG, concorrência | **Atendido no CI (E3)** | `testes-postgres` em `62e3c33`: https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/41885665694 |
 | Homologação | E1–E5 separados | **Atendido no documento** | Sem E4/E5 |
 
 ## 3. Cinco jobs e pontos de entrada
@@ -156,15 +156,13 @@ A estabilidade sob carga concorrente **não** é 1151/1151. Causa: testes de UI 
 
 - At-least-once se o processo morrer após o provedor aceitar e antes de `PROCESSADO`/`COMPLETED`.
 - SMTP/Woo sem consulta de status: `INDETERMINADO` exige operador.
-- Cliente flaky sob workers paralelos.
+- Cliente sob carga: corrigido (hierarquia testTimeout > asyncUtilTimeout; findBy sem teto 5 s; espera do resumo em Usuários).
 - `tx.query` do chamador fora do `PgStore`/`query()` não passa por `fencedPoolQuery` (o `PgStore` cobre o caminho canônico).
 
 ## 17. Próximos passos estritamente necessários
 
-1. Acompanhar o CI `testes-postgres` desta branch (psql + JWT compartilhado).
-2. Credencial PIX sandbox **legítima** quando o Diretor autorizar E4.
-3. Isolar a suíte de cliente em CI com `--maxWorkers=1` se a carga paralela não for o gate.
-4. Sem merge, deploy, Render, cron de produção ou reativação ML/Nuvemshop.
+1. Credencial PIX sandbox **legítima** e app OAuth de provedor para E4.
+2. Sem deploy, Render, cron de produção ou reativação de publicação ML/Nuvemshop.
 
 ## 18. Testes desta missão (números)
 
@@ -175,5 +173,26 @@ A estabilidade sob carga concorrente **não** é 1151/1151. Causa: testes de UI 
 | `test:server` | **1953 pass / 0 fail / 82 skip** |
 | CRM + outbox INDETERMINADO | 14/14 |
 | `test:cron-lock:pg` | **2/2** |
-| Cliente isolado | **1151/1151** |
-| `test:pg` local | bloqueado sem `psql` (esperado) |
+| Cliente isolado | **1151/1151** (repetido) |
+| Cliente `--maxWorkers=8` | **1151/1151** (duas execuções seguidas) |
+| CI `testes-postgres` `62e3c33` | **success** — https://github.com/petrickmsilva-alt/brobond-erp/actions/runs/41885665694 |
+| `test:pg` local | sem `psql` no sandbox; coberto pelo CI |
+
+## 19. Causa raiz das 19 falhas de frontend
+
+18/19 eram `Test timed out in 5000ms` ao montar `App` com rotas `lazy()` sob 8 workers (transform compete por CPU). `asyncUtilTimeout` tinha sido elevado a 5 s **igual** ao `testTimeout`, então `findBy` nunca concluía. Um caso (`UsuariosPage`) afirmava a contagem do resumo antes do GET resolver (tab com `0`).
+
+Correção: `testTimeout`/`hookTimeout` 30 s > `asyncUtilTimeout` 15 s; remover `timeout: 5000` pontual em `InsumosRoute`; `waitFor` da contagem em Usuários; `findByRole` no Command Palette. Asserções mantidas. Zero skip novo.
+
+## 20. Conectores (E1–E5)
+
+| Canal | Implementação | Evidência máxima | E4/E5 |
+|---|---|---|---|
+| Mercado Livre | OAuth + leitura GET; **publicação suspensa** | E2 (`mercadolivre-*.test.ts`, `marketplace-*.test.ts`) | Bloqueado: suspensão + sem sandbox autorizado |
+| Nuvemshop | OAuth; **publicação suspensa** | E2 | Idem |
+| Instagram Shopping | OAuth Meta Graph v26; webhook interações; **Commerce Order API desligada pela Meta** | E2 (`connectors.test.ts`) | Sem pedido nativo; não inventar API |
+| Mercado Pago | webhook HMAC | E2 | PIX sandbox sem credencial |
+| Shopee | **Removido** (diretoria 2026-10-05, migration `drop_shopee_and_tiktok_connectors`) | E1 decisão | Não reimplementar |
+| TikTok Shop | **Removido**; triangulação via Nuvemshop | E1 decisão | Não reimplementar |
+
+Não houve publicação, pagamento, mensagem ou operação real. Rede desta sessão não alcança docs oficiais de provedor (só GitHub/npm/pypi).

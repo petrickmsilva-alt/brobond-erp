@@ -289,6 +289,7 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     await renderShell('/');
     await user.keyboard('{Control>}k{/Control}');
     await screen.findByRole('dialog', { name: 'Busca rápida' });
+    await screen.findByRole('option', { name: /PDV/i });
 
     const opcoes = await screen.findAllByRole('option');
     const paths = opcoes.map((o) => o.getAttribute('data-path')).filter(Boolean);
