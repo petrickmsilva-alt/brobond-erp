@@ -141,3 +141,40 @@ test('persistência: failed grava FAILED e o motivo em ultimo_erro', async () =>
   assert.equal(after.provider_status, 'FAILED');
   assert.equal(after.ultimo_erro, 'Meta: Mensagem não entregável (código 131026)');
 });
+
+// Decisão (d): fonte do segredo do app = variável WHATSAPP_SECRET (nome informado pelo Diretor).
+// Os testes usam um valor fictício e restauram o ambiente. Nenhum valor real é lido.
+test('segredo do app: lê WHATSAPP_SECRET; ausente ou só espaços = null (fail-closed)', async (t) => {
+  const anterior = process.env.WHATSAPP_SECRET;
+  t.after(() => { if (anterior === undefined) delete process.env.WHATSAPP_SECRET; else process.env.WHATSAPP_SECRET = anterior; });
+  delete process.env.WHATSAPP_SECRET;
+  assert.equal(W.segredoAppWhatsApp(), null);
+  process.env.WHATSAPP_SECRET = '   ';
+  assert.equal(W.segredoAppWhatsApp(), null);
+  process.env.WHATSAPP_SECRET = 'segredo-ficticio-para-teste';
+  assert.equal(W.segredoAppWhatsApp(), 'segredo-ficticio-para-teste');
+});
+
+test('router de produção: com WHATSAPP_SECRET definido, assinatura válida é aceita; sem ela, recusada', async (t) => {
+  const anterior = process.env.WHATSAPP_SECRET;
+  t.after(() => { if (anterior === undefined) delete process.env.WHATSAPP_SECRET; else process.env.WHATSAPP_SECRET = anterior; });
+  const app = express();
+  app.use(W.criarRouterWebhookStatusWhatsApp()); // dependências reais
+  const srv = app.listen(0, '127.0.0.1');
+  await new Promise((r) => srv.once('listening', r));
+  const base = `http://127.0.0.1:${(srv.address() as { port: number }).port}`;
+  try {
+    const corpo = JSON.stringify(corpoStatus([{ id: 'wamid.NAO-EXISTE-P5', status: 'read' }]));
+    const segredo = 'segredo-ficticio-para-teste';
+    delete process.env.WHATSAPP_SECRET;
+    const semSegredo = await fetch(`${base}/api/webhooks/whatsapp`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': assinar(corpo, segredo) }, body: corpo });
+    assert.equal(semSegredo.status, 401);
+    process.env.WHATSAPP_SECRET = segredo;
+    const comSegredo = await fetch(`${base}/api/webhooks/whatsapp`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': assinar(corpo, segredo) }, body: corpo });
+    assert.equal(comSegredo.status, 200);
+    const texto = await comSegredo.text();
+    assert.ok(!texto.includes(segredo), 'o segredo nunca aparece na resposta');
+    const errada = await fetch(`${base}/api/webhooks/whatsapp`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hub-signature-256': assinar(corpo, 'outro') }, body: corpo });
+    assert.equal(errada.status, 401);
+  } finally { await new Promise<void>((r) => srv.close(() => r())); }
+});

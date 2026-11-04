@@ -3,8 +3,8 @@
 // Regras de segurança:
 //  • fail-closed: sem segredo de app autorizado, GET responde 403 e POST responde 401;
 //  • POST só é aceito com `x-hub-signature-256` (HMAC-SHA256 do corpo bruto) válido;
-//  • o segredo NÃO é lido de variável nova: `segredoAppWhatsApp()` devolve null até a
-//    decisão (d) do Diretor autorizar a fonte do segredo. Enquanto isso o endpoint recusa tudo.
+//  • o segredo do app vem de `WHATSAPP_SECRET` (decisão (d)). Sem a variável, o endpoint recusa tudo.
+//  • o token de verificação do GET (`segredoVerificacaoWhatsApp`) NÃO tem nome autorizado: segue null.
 //
 // Regras de estado: a entrega só avança (REQUEST_ACCEPTED < SENT < DELIVERED < READ);
 // FAILED é terminal e não sobrescreve DELIVERED nem READ; evento atrasado é ignorado.
@@ -26,9 +26,13 @@ export interface EventoStatusWhatsApp {
 const ORDEM_PERSISTIDA: Record<string, number> = { REQUEST_ACCEPTED: 0, SENT: 1, DELIVERED: 2, READ: 3 };
 const ORDEM_EVENTO: Record<Exclude<StatusEntregaWhatsApp, 'failed'>, number> = { sent: 1, delivered: 2, read: 3 };
 
-/** Segredo do app Meta para validar assinaturas. Null = não autorizado (fail-closed). */
+/**
+ * Segredo do app Meta para validar assinaturas (decisão (d), nome `WHATSAPP_SECRET`).
+ * Ausente ou só espaços = null: o webhook recusa tudo (fail-closed). Nunca é logado nem devolvido.
+ */
 export function segredoAppWhatsApp(): string | null {
-  return null;
+  const valor = String(process.env.WHATSAPP_SECRET ?? '').trim();
+  return valor ? valor : null;
 }
 
 /** Token do desafio de verificação (GET). Null = não autorizado (fail-closed). */

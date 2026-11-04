@@ -18,7 +18,7 @@ Legenda: [ ] não feito · [~] feito só localmente · [x] feito com evidência 
 - [ ] SMTP real: executar a verificação e o teste no ambiente de produção pela rota admin (NÃO EXECUTADO).
 - [~] WhatsApp: padrão Graph `v26.0` (local). **Verificar** se `WHATSAPP_API_VERSION` no Render está definida como `v21.0`. Se estiver, a produção continuará em v21.0 até alteração aprovada.
 - [ ] WhatsApp: homologação de envio com template aprovado (NÃO EXECUTADA).
-- [~] WhatsApp: webhook de status implementado, fail-closed e **inativo**. Ativar depende da decisão (d): nenhuma variável nova foi autorizada.
+- [~] WhatsApp: webhook de status implementado e ligado à variável `WHATSAPP_SECRET` (decisão (d), nome informado pelo Diretor). Sem a variável no Render, o endpoint recusa tudo. **Pendente:** criar a variável no Render (ação do Diretor) e definir o token de verificação do GET, que ainda não tem nome autorizado.
 - [ ] Central de Notificações com os 8 estados e último envio/erro (P2-07, NÃO IMPLEMENTADO).
 
 ## C. Monitoramento
@@ -39,7 +39,7 @@ Legenda: [ ] não feito · [~] feito só localmente · [x] feito com evidência 
 ## E. Decisões que bloqueiam o go-live (somente o Diretor)
 
 1. Decisão (f): liberar ML e Nuvemshop em produção após homologação e reconciliação.
-2. Decisão (d): autorizar fonte do segredo do webhook WhatsApp (ativação de P1-05).
+2. Decisão (d): criar `WHATSAPP_SECRET` no Render e autorizar o nome do token de verificação do GET (ativação de P1-05).
 3. Decisão (e): confirmar a cifra consolidada e o motor canônico.
 4. Decisão de go-live em si, com base nos itens acima.
 
