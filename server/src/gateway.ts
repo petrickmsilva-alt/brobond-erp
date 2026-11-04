@@ -1303,7 +1303,7 @@ export async function processarEvento(evento: Row): Promise<{ resultado: string 
   }
 }
 
-function extrairRefDoPayload(provider: PaymentProvider, payload: Record<string, unknown>): string | null {
+export function extrairRefDoPayload(provider: PaymentProvider, payload: Record<string, unknown>): string | null {
   const parsed = provider.parseWebhook(JSON.stringify(payload));
   return parsed?.provider_ref ?? null;
 }

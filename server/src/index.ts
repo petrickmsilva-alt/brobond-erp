@@ -55,6 +55,7 @@ import {
 } from './services';
 import { parseId } from './validate';
 import { HttpError } from './errors';
+import { reconciliarWebhooksLegados } from './webhookReconciliacao';
 import { assertProductionSecrets, bancoAusenteEmProducao, bloquearSenhaProvisoria, corsOrigin, loginRateLimit, securityHeaders, trustProxySetting } from './security';
 import { initSentry, log, reportarErro } from './log';
 import { requestObservability } from './observability';
@@ -611,6 +612,8 @@ app.post('/api/print/agent/jobs/:id/lease', autenticarAgente, exigirNonceAgente,
 // Montado ANTES da guarda de sessão: sessão de usuário não entra aqui.
 // `/cron` executa só o processo `relatorios`; `/cron/:processo` executa um processo por chamada.
 // Recorrências financeiras não têm rota de cron (somente /api/admin/financeiro/recorrencias, com confirmação).
+// Reconciliação de webhooks legados (Fase 4.3): dry-run por padrão; aplicar exige confirmação.
+app.post('/api/admin/webhooks/reconciliacao', wrap(reconciliarWebhooksLegados));
 app.post('/api/admin/scheduled/cron', wrap(cronScheduled));
 app.post('/api/admin/scheduled/cron/:processo', wrap(cronProcesso));
 
