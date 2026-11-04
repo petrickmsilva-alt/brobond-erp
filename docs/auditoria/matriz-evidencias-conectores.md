@@ -1,0 +1,35 @@
+# Matriz de evidências por conector (Fase 7)
+
+Objetivo: separar o que foi **provado no código** do que foi **comunicado com o provedor**. Nenhuma linha abaixo pode ser lida como CONFORME. O critério de CONFORME está na seção 12 do relatório de auditoria e exige evidência de homologação ou produção com data, ambiente, identificador de transação e sem valores de segredo.
+
+Legenda das colunas:
+
+- **Local**: teste ou inspeção de código, sem rede. Mostra a lógica, não a integração.
+- **Automatizado**: suíte do servidor (`npm test`). Também é local.
+- **Homologação**: ambiente de teste do provedor. **Não executado** em nenhuma linha desta rodada.
+- **Provedor real / produção**: comunicação funcional com a conta real. **Não executado.**
+
+Resultado da suíte nesta rodada: servidor 1726 aprovados, 0 falhas, 76 ignorados (já ignorados antes); typecheck do cliente OK; gate `commerce:go-live` estrutural P0 41 OK. Essas execuções são locais.
+
+| Conector | Mudança nesta rodada | Evidência local / automatizada | Homologação | Provedor real / produção |
+|---|---|---|---|---|
+| Mercado Pago | Webhooks fail-closed (Fase 2) | Teste da Fase 2 (14/14) | NÃO EXECUTADO | NÃO EXECUTADO |
+| PagBank | Sem alteração de contrato; placeholder/registro (Fase 3) | Teste da Fase 3 (5/5). Reentrega P3-02 não verificada | NÃO EXECUTADO | NÃO EXECUTADO |
+| Stripe | Adaptador real presente; sem alteração nesta rodada | Registro de provedores (Fase 3) | NÃO EXECUTADO (`homologacao-sandbox.md`) | NÃO EXECUTADO |
+| Mercado Livre (publicação) | P0-01 corrigido; suspenso por padrão | `publicacao-canais-p0.test.ts` (5/5) | NÃO EXECUTADO | NÃO EXECUTADO. Reconciliação de duplicados NÃO EXECUTADA |
+| Nuvemshop (publicação) | Migração 2025-03; suspensa por padrão | `publicacao-nuvemshop-2025` (9/9), `-fluxo` (3/3) | NÃO EXECUTADO (condição da decisão (b)) | NÃO EXECUTADO. Leitura de pedidos ainda em v1 |
+| Instagram | Sem alteração nesta rodada | Webhook fail-closed (Fase 2) | NÃO EXECUTADO | NÃO EXECUTADO |
+| WhatsApp (envio) | Versão padrão Graph `v26.0` (P2-06) | `commerce-pix-real-flow` atualizado (URL v26.0) | NÃO EXECUTADO | NÃO EXECUTADO. Verificação de templates NÃO EXECUTADA |
+| WhatsApp (status / webhook) | Webhook fail-closed, HMAC, máquina de estados (P1-05) | `whatsapp-status-webhook.test.ts` (9/9); mutação derruba 3 testes | NÃO EXECUTADO | NÃO EXECUTADO. **Inativo**: segredo não autorizado (decisão (d)) |
+| SMTP | Verificação `verify()` e teste ao admin (P1-06) | `smtp-verificacao-admin.test.ts` (5/5), `enterprise-mail-security` (4/4) | NÃO EXECUTADO (sem servidor SMTP nesta sandbox) | NÃO EXECUTADO |
+| Alerta de falhas (outbox / webhook / notificação) | Seção "Falhas de envio" no relatório diário (P2-08) | `alertas-falhas-entrega.test.ts` (6/6) | NÃO EXECUTADO | NÃO EXECUTADO. Envio agendado real não verificado |
+| WooCommerce | Sem alteração nesta rodada (Fase 5 não iniciada) | — | NÃO EXECUTADO | NÃO EXECUTADO |
+| Melhor Envio | Sem alteração nesta rodada (Fase 5 não iniciada) | — | NÃO EXECUTADO | NÃO EXECUTADO |
+| Focus NFe / PlugNotas | Sem alteração nesta rodada (Fase 5 não iniciada) | — | NÃO EXECUTADO | NÃO EXECUTADO |
+
+## Limitações que valem para toda a matriz
+
+- Sem acesso a Render, Meta, provedores, marketplaces, SMTP real ou credenciais. Nada aqui consultou produção.
+- Testes automatizados usam dublês (`fetch`, store em memória). Provam a lógica, não o contrato real do provedor.
+- Valores de variáveis no Render não foram verificados (exceto onde indicado como premissa, como `NOTIFICAR_EMAILS`, `WHATSAPP_API_VERSION` e os segredos de webhook, sempre marcados como **não verificados**).
+- O relatório diário de alertas foi alterado, mas o disparo agendado não foi executado de ponta a ponta (a função é interna ao agendador).

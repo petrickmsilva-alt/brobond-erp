@@ -17,6 +17,7 @@
 // Execução: GET /api/admin/scheduled/run (admin) — executa manualmente
 //           POST /api/admin/scheduled/cron — chamado por cron externo (ex.: cron-job.org)
 // ============================================================
+import { coletarFalhasEntrega, htmlSecaoFalhasEntrega } from './alertasFalhas';
 import { enviarEmail, smtpConfigurado } from './mail';
 import { hasDatabaseUrl } from './db';
 import { instagramConnectorService, saleIngestionService } from '../../modules/connectors/index';
@@ -221,7 +222,21 @@ async function relatorioAlertas(): Promise<void> {
         </tbody>
       </table>` : ''}`;
 
-  await enviarRelatorio(`Alertas de Estoque — ${new Date().toLocaleDateString('pt-BR')}`, html);
+  // Fase 7 (P2-08): falhas de envio entram no mesmo relatório. Falha isolada não derruba o alerta de estoque.
+  let secaoFalhas = '';
+  let temFalhas = false;
+  try {
+    const falhas = await coletarFalhasEntrega();
+    temFalhas = falhas.total > 0;
+    secaoFalhas = htmlSecaoFalhasEntrega(falhas);
+  } catch (erro) {
+    console.error('[schedule] Falha ao ler falhas de envio para o relatório:', String((erro as Error)?.message ?? erro).slice(0, 200));
+  }
+
+  await enviarRelatorio(
+    `Alertas de Estoque${temFalhas ? ' e Falhas de Envio' : ''} — ${new Date().toLocaleDateString('pt-BR')}`,
+    html + secaoFalhas,
+  );
 }
 
 // ----------------------------------------------------------------------------
