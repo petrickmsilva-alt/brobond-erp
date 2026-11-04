@@ -96,7 +96,7 @@ Os webhooks de **saída** legados não são associados automaticamente (G3).
 ## 8. Segredos de administração
 
 - Em produção, o processo **não sobe** sem `DATABASE_URL`, sem `JWT_SECRET` forte (mínimo 24 caracteres, diferente do padrão
-  de desenvolvimento) ou sem `ADMIN_PASSWORD` forte (mínimo 8, diferente de `brobond123`). Verificado em processo filho.
+  de desenvolvimento) ou sem `ADMIN_PASSWORD` forte (mínimo 8, diferente de `[CREDENCIAL REDIGIDA]`). Verificado em processo filho.
 - `NODE_ENV=production` já está declarado em `render.yaml`. Não remover.
 - Nenhum valor de segredo deve ser colado em chat, issue, commit ou log.
 - Troca de `JWT_SECRET` invalida sessões e pode afetar a decifragem de segredos legados. Planejar antes.

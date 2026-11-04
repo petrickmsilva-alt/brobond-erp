@@ -105,10 +105,10 @@ cp server/.env.example server/.env
 npm run dev
 ```
 
-Abra http://localhost:5173 e entre com o administrador padrão:
+Defina `ADMIN_PASSWORD` no ambiente antes de iniciar a API. Abra http://localhost:5173 e entre com o administrador inicial:
 
 - e-mail: `admin@brobond.com.br`
-- senha: `brobond123` (ou o valor de `ADMIN_PASSWORD`)
+- senha: o valor configurado em `ADMIN_PASSWORD` (sem senha padrão)
 
 > **Sem `DATABASE_URL`** a API roda em **modo demonstração**: todos os módulos
 > cadastram, editam e excluem normalmente, mas os dados ficam em memória e são

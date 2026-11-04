@@ -73,9 +73,9 @@ log.ts (Sentry):      '0.4.0' (hardcoded fallback)
 #### 3.1.2 Senha padrão hardcoded no código-fonte
 ```typescript
 // auth.ts
-export const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'brobond123').trim();
+export const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || '[CREDENCIAL REDIGIDA]').trim();
 ```
-A senha `brobond123` está no código-fonte, visível em qualquer `git log`. Se um deploy acontecer sem `ADMIN_PASSWORD` configurado, o admin terá essa senha fraca.  
+A senha `[CREDENCIAL REDIGIDA]` está no código-fonte, visível em qualquer `git log`. Se um deploy acontecer sem `ADMIN_PASSWORD` configurado, o admin terá essa senha fraca.
 **Correção:** Em produção, recusar iniciar se `ADMIN_PASSWORD` não estiver definida OU exigir troca forçada no primeiro acesso (já implementado com `trocar_senha`, mas o default ainda é arriscado).
 
 #### 3.1.3 JWT Secret padrão no código

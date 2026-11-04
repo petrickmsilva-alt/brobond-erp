@@ -21,7 +21,10 @@ jobs:
       - name: Typecheck (front)
         run: npm --prefix client run typecheck
       - name: Testes das regras de negócio
-        run: npm --prefix server test
+        run: |
+          export ADMIN_PASSWORD="$(node -e "process.stdout.write('A!' + require('crypto').randomBytes(24).toString('hex'))")"
+          echo "::add-mask::$ADMIN_PASSWORD"
+          npm --prefix server test
       - name: Testes client
         run: npm --prefix client test
       - name: Smoke em memória (não substitui o gate PG)
@@ -96,6 +99,11 @@ jobs:
           node-version: 22
       - name: Instalar dependências (raiz)
         run: npm install
+      - name: Configurar credencial efêmera para testes PostgreSQL
+        run: |
+          value="$(node -e "process.stdout.write('A!' + require('crypto').randomBytes(24).toString('hex'))")"
+          echo "::add-mask::$value"
+          echo "ADMIN_PASSWORD=$value" >> "$GITHUB_ENV"
       # O wrapper real do script E4.2 (PROD-DB-01.5.1) executa o arquivo via
       # psql, com o mesmo `\if :apply / BEGIN / COMMIT / ROLLBACK` do operador.
       # Sem o binário o teste se auto-pula e o gate REPROVA (skip não é
