@@ -284,20 +284,22 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
     await processarFilaPublicacoes(50);
     const agora = await req('GET', '/commerce/publicacoes', undefined, tokenA, baseUrl);
     const minhas = (agora.body?.publicacoes || []).filter((p: any) => Number(p.produto_id) === produtoId);
+    // ML/Nuvemshop começam SUSPENSOS (P0-01): só o canal próprio (BROBOND) é aguardado até estado final.
     terminal =
       minhas.length >= 2 &&
-      minhas.every((p: any) => ['PUBLISHED', 'ERROR', 'REJECTED'].includes(String(p.estado)));
+      minhas.some((p: any) => p.canal === 'BROBOND' && ['PUBLISHED', 'ERROR', 'REJECTED'].includes(String(p.estado)));
     if (!terminal) await new Promise((r) => setTimeout(r, 100));
   }
-  assert.ok(terminal, 'processador real levou as publicações aos estados finais');
+  assert.ok(terminal, 'processador real levou a publicação do canal próprio ao estado final');
 
   const filaDepois = await req('GET', '/commerce/publicacoes', undefined, tokenA, baseUrl);
   const brobond = (filaDepois.body?.publicacoes || []).find((p: any) => Number(p.produto_id) === produtoId && p.canal === 'BROBOND');
   const ml = (filaDepois.body?.publicacoes || []).find((p: any) => Number(p.produto_id) === produtoId && p.canal === 'MERCADOLIVRE');
   assert.equal(brobond?.estado, 'PUBLISHED', `BROBOND publicado de verdade: ${JSON.stringify(brobond)}`);
   assert.equal(brobond?.external_id, slug, 'external_id do canal próprio = slug da vitrine');
-  assert.equal(ml?.estado, 'ERROR', 'ML sem credencial → ERROR honesto (nunca sucesso falso)');
-  assert.ok(String(ml?.ultimo_erro || '').length > 3, 'o erro do canal fica registrado');
+  // Suspensão ML/Nuvemshop: sem liberação explícita (PUBLICACAO_CANAIS_LIBERADOS) não há tentativa externa.
+  assert.notEqual(ml?.estado, 'PUBLISHED', 'ML suspenso nunca vira PUBLISHED sem liberação');
+  assert.equal(ml?.external_id ?? null, null, 'ML suspenso não recebe identificador externo');
 
   // ---- 3) config da loja (exigida pela vitrine, fail-closed) -----------------
   const gerRow = await cliente.query(`SELECT id FROM usuarios WHERE email = $1`, [emailGer]);
