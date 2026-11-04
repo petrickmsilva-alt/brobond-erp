@@ -405,6 +405,12 @@ export async function confirmarPagamentoCobranca(evt: CobrancaAlteradaEvento): P
  * a reserva e o cupom, e a `sale` analítica é cancelada (nunca some).
  */
 export async function expirarCheckoutsPendentes(agora = new Date()): Promise<number> {
+  const { requireJobLease } = await import('../cronLock');
+  const r = await requireJobLease('pagamentos', () => executarExpirarCheckoutsPendentes(agora), { busy: 'retry' });
+  return r.result ?? 0;
+}
+
+async function executarExpirarCheckoutsPendentes(agora = new Date()): Promise<number> {
   const s = getStore();
   // SQL filters before LIMIT, so terminal/non-expired orders cannot starve
   // due checkouts. Memory mode scans pages until it collects a bounded batch.

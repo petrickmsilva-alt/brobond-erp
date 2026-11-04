@@ -34,6 +34,11 @@ import { fileURLToPath } from 'node:url';
 const requireDoServer = createRequire(new URL('../server/package.json', import.meta.url));
 const { Client } = requireDoServer('pg');
 
+if (!process.env.BROBOND_TEST_ADMIN_PASSWORD?.trim() || !process.env.BROBOND_TEST_NEW_PASSWORD?.trim()) {
+  console.error('smoke:pg exige BROBOND_TEST_ADMIN_PASSWORD e BROBOND_TEST_NEW_PASSWORD.');
+  process.exit(2);
+}
+
 const RAIZ = fileURLToPath(new URL('..', import.meta.url));
 const MANTER = process.argv.includes('--keep');
 
@@ -73,7 +78,7 @@ const env = {
   DATABASE_URL: databaseUrl,
   JWT_SECRET: randomUUID(),
   ADMIN_EMAIL: 'admin@brobond.com.br',
-  ADMIN_PASSWORD: 'brobond123',
+  ADMIN_PASSWORD: process.env.BROBOND_TEST_ADMIN_PASSWORD,
 };
 // O gate roda o boot REAL (sem NODE_ENV=test): é o caminho que o usuário sobe.
 delete env.NODE_ENV;

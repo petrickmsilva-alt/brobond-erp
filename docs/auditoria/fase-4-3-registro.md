@@ -164,7 +164,7 @@ apenas relatórios rodarão. Ver seção G.
 ### Auditoria transversal (item 9) — resultados
 | Verificação | Resultado |
 |---|---|
-| Fallbacks de segredo (`\|\| 'valor'`) | `ADMIN_PASSWORD` tem padrão de desenvolvimento (`brobond123`). Em produção o boot é bloqueado sem senha forte (`security.ts`). **Remanescente baixo**: padrão existe no código. |
+| Fallbacks de segredo (`\|\| 'valor'`) | `ADMIN_PASSWORD` tem padrão de desenvolvimento (`[CREDENCIAL REDIGIDA]`). Em produção o boot é bloqueado sem senha forte (`security.ts`). **Remanescente baixo**: padrão existe no código. |
 | `error.message` em resposta 401 | `connectors.ts` e `instagram.controller.ts` devolvem a mensagem de `WebhookSignatureError`, que é fixa e não contém dados. Aceito. |
 | Logs com tokens | ML e Nuvemshop omitem o corpo em respostas 2xx. Rejeições (não 2xx) logam o corpo, que não contém credenciais em respostas de erro. Aceito; ver recomendação. |
 | Rotas sem `requireAuth` | Lista revisada: login/MFA, convites (token), vitrine (rate limit), portal (token), arquivos (token ≥16 hex), agente de impressão (autenticação própria), cron (`CRON_SECRET`), gateway público (assinatura). Intencionais. |

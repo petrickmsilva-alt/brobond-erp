@@ -15,9 +15,12 @@ import { totpAgora } from './ux05-totp.mjs';
 
 const API = process.env.UX05_API || 'http://localhost:3001';
 const ADMIN_EMAIL = 'admin@brobond.com.br';
-// A senha inicial do modo demonstração é pública (vem do seed). Ela só é usada
-// para o PRIMEIRO login local; a senha de teste real vem sempre de UX05_PASS.
-const ADMIN_INICIAL = process.env.ADMIN_PASSWORD || 'brobond123';
+// A senha inicial é fornecida explicitamente para o ambiente descartável.
+const ADMIN_INICIAL = process.env.BROBOND_TEST_ADMIN_PASSWORD;
+if (!ADMIN_INICIAL?.trim()) {
+  console.error('❌ Defina BROBOND_TEST_ADMIN_PASSWORD antes de provisionar.');
+  process.exit(1);
+}
 const SENHA_NOVA = process.env.UX05_PASS || process.env.UX05_SENHA_NOVA;
 const SENHA_TEMP_FIXA = process.env.UX05_SENHA_PERFIL || SENHA_NOVA;
 if (!SENHA_NOVA) {

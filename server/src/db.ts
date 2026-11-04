@@ -166,6 +166,10 @@ export async function query<T extends Record<string, any> = any>(
   params?: unknown[]
 ): Promise<QueryResult<T>> {
   if (!pool) throw new Error('NO_DB');
+  if (/^\s*(insert|update|delete)\b/i.test(text)) {
+    const { currentCronLease, fencedPoolQuery } = await import('./cronLock');
+    if (currentCronLease()) return fencedPoolQuery<T>(text, params) as Promise<QueryResult<T>>;
+  }
   return pool.query<T>(text, params as any[]);
 }
 

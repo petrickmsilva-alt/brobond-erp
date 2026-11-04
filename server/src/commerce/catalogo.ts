@@ -31,6 +31,7 @@ import type { Row, Tx } from '../store';
 import { PublicacaoFalha, publicarItemMercadoLivre, type ContextoCanal } from './publicacaoCanais';
 import { publicarItemNuvemshop } from './publicacaoNuvemshop';
 import { canalPublicacaoSuspenso } from './publicacaoSuspensao';
+import { requireJobLease, withCronIdempotency, withOptionalJobLease } from '../cronLock';
 import {
   CANAIS_PUBLICACAO,
   MAX_TENTATIVAS,
@@ -369,6 +370,13 @@ async function enfileirarPublicacaoInterna(
 export async function processarPublicacao(
   linha: Row
 ): Promise<'processada' | 'ignorada' | 'falhou' | 'rejeitada'> {
+  const r = await requireJobLease('publicacoes', () => executarProcessarPublicacao(linha), { busy: 'retry' });
+  return r.result ?? 'ignorada';
+}
+
+async function executarProcessarPublicacao(
+  linha: Row
+): Promise<'processada' | 'ignorada' | 'falhou' | 'rejeitada'> {
   const s = getStore();
   const id = Number(linha.id);
   const estado = String(linha.estado);
@@ -381,6 +389,16 @@ export async function processarPublicacao(
   // permanece na fila, sem mudar de estado, até a liberação explícita.
   if (canalPublicacaoSuspenso(String(linha.canal))) return 'ignorada';
 
+  const desfecho = await withCronIdempotency(`publicacoes:${id}:${estado}`, String(id), () => publicarLinhaReivindicada(linha, s, id, estado));
+  return desfecho ?? 'ignorada';
+}
+
+async function publicarLinhaReivindicada(
+  linha: Row,
+  s: ReturnType<typeof getStore>,
+  id: number,
+  estado: string,
+): Promise<'processada' | 'ignorada' | 'falhou' | 'rejeitada'> {
   const reivindicada = await s.tryUpdateIf(
     R_PUBLICACOES(),
     id,
@@ -427,6 +445,11 @@ export async function processarPublicacao(
 
 /** Varredura da fila (cron/rotina): processa o que está pronto, com limite. */
 export async function processarFilaPublicacoes(limite = 20): Promise<{ processadas: number; falhas: number }> {
+  const r = await requireJobLease('publicacoes', () => executarFilaPublicacoes(limite), { busy: 'retry' });
+  return r.result ?? { processadas: 0, falhas: 0 };
+}
+
+async function executarFilaPublicacoes(limite = 20): Promise<{ processadas: number; falhas: number }> {
   const s = getStore();
   const candidatas: Row[] = [];
   // Linhas de canal suspenso são descartadas ANTES do limite: não podem
@@ -974,7 +997,7 @@ export async function publicarProduto(req: Request, res: Response) {
     dados: { produto_id: produtoId, canais },
   });
   // Processa em segundo plano — a tela acompanha o estado na fila.
-  void processarFilaPublicacoes(10).catch(() => undefined);
+  void withOptionalJobLease('publicacoes', 30_000, () => processarFilaPublicacoes(10)).catch(() => undefined);
   res.status(201).json({ ok: true, publicacoes: linhas });
 }
 
@@ -1033,7 +1056,7 @@ export async function reprocessarPublicacao(req: Request, res: Response) {
     estado: 'QUEUED',
     proxima_tentativa_em: new Date().toISOString(),
   });
-  void processarFilaPublicacoes(5).catch(() => undefined);
+  void withOptionalJobLease('publicacoes', 30_000, () => processarFilaPublicacoes(5)).catch(() => undefined);
   res.json({ ok: true, publicacao: reativada });
 }
 

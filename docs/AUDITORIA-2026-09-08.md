@@ -42,7 +42,7 @@ A primeira versão deste relatório afirmou que `JWT_SECRET`/`ADMIN_PASSWORD` au
 geravam só `console.warn`. **Está errado.** A checagem já existia no `main`:
 `assertProductionSecrets()` (`server/src/security.ts:15`, chamada no boot em
 `index.ts:88`) aborta com `exit(1)` quando `JWT_SECRET` tem menos de 24 caracteres
-ou é o valor padrão, quando `ADMIN_PASSWORD` falta/é fraca/é `brobond123`, e avisa
+ou é o valor padrão, quando `ADMIN_PASSWORD` falta/é fraca/é `[CREDENCIAL REDIGIDA]`, e avisa
 sobre `MFA_ENCRYPTION_KEY`. O erro de método foi meu: procurei a constante dentro de
 `auth.ts` e generalizei a partir dali, sem rastrear o boot. O `throw` extra que eu
 tinha adicionado em `auth.ts` foi revertido neste PR (duplicaria a mesma regra em dois

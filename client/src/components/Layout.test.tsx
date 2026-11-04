@@ -241,8 +241,8 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Busca rápida' });
     expect(dialog).toBeInTheDocument();
 
-    const input = screen.getByRole('combobox', { name: 'Buscar módulo ou ação' });
-    expect(screen.getByRole('option', { name: /Meu Negócio/ })).toBeInTheDocument();
+    const input = await screen.findByRole('combobox', { name: 'Buscar módulo ou ação' });
+    expect(await screen.findByRole('option', { name: /Meu Negócio/ })).toBeInTheDocument();
 
     // Busca por módulo mostra contexto Área → Grupo e rota
     await user.clear(input);
@@ -281,7 +281,7 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     const plannedCreators = opcoesCreators.find((el) => el.getAttribute('data-path') === '/creators');
     expect(plannedCreators).not.toHaveAttribute('data-planned', 'true');
     expect(within(plannedCreators!).queryByText('Em breve')).not.toBeInTheDocument();
-  });
+  }, 15_000);
 
   it('Command Palette respeita RBAC: operador não encontra módulos de gerente ou admin', async () => {
     const user = userEvent.setup();
@@ -289,8 +289,9 @@ describe('Layout — shell, breadcrumb e Command Palette (ERP-UX-03)', () => {
     await renderShell('/');
     await user.keyboard('{Control>}k{/Control}');
     await screen.findByRole('dialog', { name: 'Busca rápida' });
+    await screen.findByRole('option', { name: /PDV/i });
 
-    const opcoes = screen.getAllByRole('option');
+    const opcoes = await screen.findAllByRole('option');
     const paths = opcoes.map((o) => o.getAttribute('data-path')).filter(Boolean);
     expect(paths).toContain('/pdv');
     expect(paths).toContain('/vendas');

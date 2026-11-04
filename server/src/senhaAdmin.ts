@@ -6,20 +6,12 @@
 // ============================================================================
 import { createHash, timingSafeEqual } from 'node:crypto';
 
-/** Padrão de DESENVOLVIMENTO da senha do administrador. Nunca vale em produção. */
-export const SENHA_ADMIN_DESENVOLVIMENTO = 'brobond123';
-
-/**
- * Senha efetiva do administrador. Fora de produção, ausente usa o padrão de
- * desenvolvimento (testes locais). Em produção, ausente, curta (< 8) ou igual ao padrão
- * resolve para vazio: vazio não autentica em nenhum caminho.
- */
+/** Sem fallback: ausência de configuração nunca autentica nem provisiona o administrador. */
 export function senhaAdministradorConfigurada(env: NodeJS.ProcessEnv = process.env): string {
   const valor = String(env.ADMIN_PASSWORD || '').trim();
-  if (env.NODE_ENV === 'production') {
-    return valor.length >= 8 && valor !== SENHA_ADMIN_DESENVOLVIMENTO ? valor : '';
-  }
-  return valor || SENHA_ADMIN_DESENVOLVIMENTO;
+  // O valor legado permanece rejeitado em produção pela guarda de boot.
+  if (env.NODE_ENV === 'production' && (valor.length < 8 || valor === 'brobond123')) return '';
+  return valor;
 }
 
 /** Comparação de senhas em tempo constante. Vazio nunca é igual a nada. */

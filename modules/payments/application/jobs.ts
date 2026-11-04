@@ -2,8 +2,14 @@ import { getStore } from '../../../server/src/services';
 import { processarEvento, R_GATEWAY_WEBHOOK_EVENTS } from '../../../server/src/gateway';
 import { R_INTENTS } from '../infrastructure/resources';
 import { paymentEngine } from '../orchestration/payment-orchestrator';
+import { requireJobLease, withCronIdempotency } from '../../../server/src/cronLock';
 /** Bounded, scheduled reconciliation. Only reads provider state; never retries a business decline. */
 export async function runPaymentJobs() {
+  const r = await requireJobLease('pagamentos', () => executarPaymentJobs(), { busy: 'retry' });
+  return r.result ?? { synchronized: 0, failed: 0 };
+}
+
+async function executarPaymentJobs() {
   const s = getStore();
   let synchronized = 0,
     failed = 0;
@@ -19,9 +25,12 @@ export async function runPaymentJobs() {
       Date.now() - new Date(i.updated_at).getTime() > 60_000
     ) {
       try {
-        await paymentEngine.synchronize(Number(i.empresa_id), Number(i.id));
-        await paymentEngine.deliverToCommerce(Number(i.empresa_id), Number(i.id));
-        synchronized++;
+        const feito = await withCronIdempotency(`pagamentos:intent:${i.id}:${i.status}`, String(i.id), async () => {
+          await paymentEngine.synchronize(Number(i.empresa_id), Number(i.id));
+          await paymentEngine.deliverToCommerce(Number(i.empresa_id), Number(i.id));
+          return true;
+        });
+        if (feito) synchronized++;
       } catch {
         failed++;
       }
@@ -38,7 +47,10 @@ export async function runPaymentJobs() {
       )
         continue;
       try {
-        await processarEvento(e);
+        await withCronIdempotency(`pagamentos:webhook:${e.id}:${e.tentativas}`, String(e.id), async () => {
+          await processarEvento(e);
+          return true;
+        });
       } catch {
         failed++;
       }

@@ -39,7 +39,8 @@ const { migrate, query } = await import('../../src/db');
 const { hashPassword } = await import('../../src/password');
 
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@brobond.com.br').trim().toLowerCase();
-const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || 'brobond123').trim();
+// Credencial efêmera exclusivamente para este processo de teste.
+const ADMIN_PASSWORD = `Test-${randomUUID()}-aA!`;
 
 const SERVER_DIR = fileURLToPath(new URL('../../', import.meta.url));
 type Child = ChildProcessByStdio<null, Readable, Readable>;
@@ -70,7 +71,7 @@ async function stopServer(child: Child): Promise<void> {
 async function startServer(port: number, env: NodeJS.ProcessEnv): Promise<{ child: Child; baseUrl: string; logs: () => string }> {
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
     cwd: SERVER_DIR,
-    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), JWT_SECRET: randomUUID(), ...env },
+    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), JWT_SECRET: randomUUID(), ADMIN_PASSWORD, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';

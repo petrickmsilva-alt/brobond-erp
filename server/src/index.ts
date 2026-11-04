@@ -417,6 +417,10 @@ import { concederEmpresa, configurarAlcadaCompra, empresaAtiva, listarEmpresasDo
 import { createServer } from 'node:http';
 
 assertProductionSecrets();
+if (!(process.env.ADMIN_PASSWORD || '').trim()) {
+  console.error('❌ ADMIN_PASSWORD ausente. Configure uma credencial explícita antes de iniciar.');
+  process.exit(1);
+}
 // Links de e-mail (convite de acesso, redefinição) só funcionam com origem absoluta.
 // Avisamos no boot em vez de deixar o usuário descobrir que o link é "URL inválida".
 const AVISO_ORIGEM = revisarConfiguracaoOrigem();

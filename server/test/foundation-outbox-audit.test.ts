@@ -82,6 +82,42 @@ test('outbox Woo: evento de outra empresa não pode publicar estoque na loja glo
   }
 });
 
+test('outbox INDETERMINADO: publicação confirmada localmente fecha; notificação não reenvia', async () => {
+  const produto = await s.insert(RESOURCES.produtos, { empresa_id: 1, nome: `Pub ${Date.now()}` } as any);
+  const pub = await s.insert(RESOURCES.commerce_publicacoes, {
+    empresa_id: 1, canal: 'BROBOND', estado: 'PUBLISHED', produto_id: Number(produto.id),
+  } as any);
+  const confirmada = await enfileirarOutbox(1, 'publicacao', `indet-ok-${Date.now()}`, { publicacao_id: Number(pub.id) });
+  await s.tryUpdateIf(RESOURCES.commerce_outbox, Number(confirmada.id),
+    { estado: 'PENDENTE', claim_versao: Number(confirmada.claim_versao || 0) },
+    { estado: 'INDETERMINADO', ultimo_erro: 'interrupção', proxima_tentativa_em: new Date().toISOString() });
+  const nua = await enfileirarOutbox(1, 'sincronizacao', `indet-smtp-${Date.now()}`, { acao: 'notificacao' });
+  await s.tryUpdateIf(RESOURCES.commerce_outbox, Number(nua.id),
+    { estado: 'PENDENTE', claim_versao: Number(nua.claim_versao || 0) },
+    { estado: 'INDETERMINADO', ultimo_erro: 'interrupção', proxima_tentativa_em: new Date().toISOString() });
+  await processarOutbox();
+  assert.equal((await s.get(RESOURCES.commerce_outbox, Number(confirmada.id)))?.estado, 'PROCESSADO');
+  const smtp = await s.get(RESOURCES.commerce_outbox, Number(nua.id));
+  assert.equal(smtp?.estado, 'INDETERMINADO');
+  assert.match(String(smtp?.ultimo_erro), /Sem reenvio automático/i);
+});
+
+test('outbox INDETERMINADO: operador reenfileira; PROCESSANDO preso não reprocessa o provedor', async () => {
+  const row = await enfileirarOutbox(1, 'sincronizacao', `indet-op-${Date.now()}`, { acao: 'notificacao' });
+  await s.tryUpdateIf(RESOURCES.commerce_outbox, Number(row.id),
+    { estado: 'PENDENTE', claim_versao: Number(row.claim_versao || 0) },
+    { estado: 'INDETERMINADO', tentativas: 1, ultimo_erro: 'interrupção' });
+  const r = response();
+  await reprocessarOutbox(request(gerente, Number(row.id)), r.res);
+  assert.equal(r.body().estado, 'PENDENTE');
+  const presa = await enfileirarOutbox(1, 'sincronizacao', `preso-${Date.now()}`, { acao: 'notificacao' });
+  const linha = (s as any).table('commerce_outbox').rows.get(Number(presa.id));
+  linha.estado = 'PROCESSANDO';
+  linha.atualizado_em = new Date(Date.now() - 11 * 60_000).toISOString();
+  await processarOutbox();
+  assert.equal((await s.get(RESOURCES.commerce_outbox, Number(presa.id)))?.estado, 'INDETERMINADO');
+});
+
 test('agendador informa falhas por etapa em vez de sucesso silencioso', async () => {
   const { processarComercioAgendado } = await import('../src/commerce/outbox');
   await enfileirarOutbox(1, 'sincronizacao', 'scheduled-failure', { acao: 'desconhecida' });

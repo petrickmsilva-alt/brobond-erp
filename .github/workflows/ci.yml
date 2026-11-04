@@ -21,11 +21,19 @@ jobs:
       - name: Typecheck (front)
         run: npm --prefix client run typecheck
       - name: Testes das regras de negócio
-        run: npm --prefix server test
+        run: |
+          export ADMIN_PASSWORD="$(node -e "process.stdout.write('A!' + require('crypto').randomBytes(24).toString('hex'))")"
+          echo "::add-mask::$ADMIN_PASSWORD"
+          npm --prefix server test
       - name: Testes client
         run: npm --prefix client test
       - name: Smoke em memória (não substitui o gate PG)
         run: |
+          export BROBOND_TEST_ADMIN_PASSWORD="$(node -e "process.stdout.write('A!' + require('crypto').randomBytes(24).toString('hex'))")"
+          export BROBOND_TEST_NEW_PASSWORD="$(node -e "process.stdout.write('B!' + require('crypto').randomBytes(24).toString('hex'))")"
+          echo "::add-mask::$BROBOND_TEST_ADMIN_PASSWORD"
+          echo "::add-mask::$BROBOND_TEST_NEW_PASSWORD"
+          export ADMIN_PASSWORD="$BROBOND_TEST_ADMIN_PASSWORD"
           env -u DATABASE_URL PORT=3001 node --import tsx server/src/index.ts > /tmp/smoke-demo.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
@@ -91,6 +99,14 @@ jobs:
           node-version: 22
       - name: Instalar dependências (raiz)
         run: npm install
+      - name: Configurar credencial efêmera para testes PostgreSQL
+        run: |
+          value="$(node -e "process.stdout.write('A!' + require('crypto').randomBytes(24).toString('hex'))")"
+          echo "::add-mask::$value"
+          echo "ADMIN_PASSWORD=$value" >> "$GITHUB_ENV"
+          jwt="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+          echo "::add-mask::$jwt"
+          echo "JWT_SECRET=$jwt" >> "$GITHUB_ENV"
       # O wrapper real do script E4.2 (PROD-DB-01.5.1) executa o arquivo via
       # psql, com o mesmo `\if :apply / BEGIN / COMMIT / ROLLBACK` do operador.
       # Sem o binário o teste se auto-pula e o gate REPROVA (skip não é
@@ -134,6 +150,20 @@ jobs:
             echo "::error title=testpg falhou::${DIAG//$'\n'/%0A}"
             exit 1
           }
+      - name: Coordenação de cron — processos independentes em banco descartável
+        run: |
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+          try {
+            await client.connect();
+            await client.query('CREATE DATABASE brobond_test_cron_lock');
+            await client.query('CREATE DATABASE brobond_test_cron_jobs');
+          } finally { await client.end(); }
+          NODE
+          export CRON_LOCK_TEST_DATABASE_URL="${DATABASE_URL%/*}/brobond_test_cron_lock"
+          export CRON_JOBS_TEST_DATABASE_URL="${DATABASE_URL%/*}/brobond_test_cron_jobs"
+          npm run test:cron-lock:pg
       # Recovery ANTES das migrações Prisma: source e target devem ter o
       # mesmo schema (apenas SQL). Se rodar depois do prisma migrate deploy,
       # o source teria tenant_id em sales (via Prisma migration
@@ -176,6 +206,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -o pipefail
+          export BROBOND_TEST_ADMIN_PASSWORD="$(node -e "process.stdout.write('A!' + require('crypto').randomBytes(24).toString('hex'))")"
+          export BROBOND_TEST_NEW_PASSWORD="$(node -e "process.stdout.write('B!' + require('crypto').randomBytes(24).toString('hex'))")"
+          echo "::add-mask::$BROBOND_TEST_ADMIN_PASSWORD"
+          echo "::add-mask::$BROBOND_TEST_NEW_PASSWORD"
           npm run smoke:pg 2>&1 | tee /tmp/smokepg.log || {
             DIAG="$( { grep -E "^FAIL|❌|error|Error" /tmp/smokepg.log | head -40; echo "--- cauda ---"; tail -40 /tmp/smokepg.log; } | sed 's/%/%25/g' )"
             echo "::error title=smoke:pg falhou::${DIAG//$'\n'/%0A}"

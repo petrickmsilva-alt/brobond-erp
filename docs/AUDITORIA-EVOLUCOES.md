@@ -107,7 +107,7 @@ As tabelas `itens_venda`, `itens_compra` e `itens_ficha_tecnica` **já existem n
 | Sem testes automatizados nem CI | Regressão silenciosa nas regras de estoque | GitHub Actions: typecheck + testes das regras de negócio a cada push |
 | Sem monitoramento de erros | Erro em produção só aparece se alguém reclamar | Sentry (free) ou ao menos log estruturado |
 | Versão inconsistente (`package.json` 0.1.0 / API 0.2.0 / tela "0.2") | Cosmético | Fonte única de versão |
-| `.env.example` com senha padrão `brobond123` | Baixa | Forçar troca no primeiro login |
+| `.env.example` com senha padrão `[CREDENCIAL REDIGIDA]` | Baixa | Forçar troca no primeiro login |
 
 ### 3.7 Usabilidade e apresentação
 

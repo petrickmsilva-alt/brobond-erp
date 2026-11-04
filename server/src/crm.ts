@@ -1297,6 +1297,19 @@ export async function agendaDeAtividades(req: Request, res: Response) {
 // por estoque/produção, e a execução é a mesma de `scheduled.ts`. Nada de
 // polling no navegador.
 // ----------------------------------------------------------------------------
+let entregaLembreteParaTeste: ((params: {
+  empresaId: number; atividadeId: number; tipo: string; resumo: string;
+  quando: unknown; prioridade: string; lead: string | null; oportunidade: string | null;
+}) => Promise<boolean>) | undefined;
+
+/** Somente em NODE_ENV=test: injeta o canal para provar carimbo vs entrega. */
+export function definirEntregaLembreteCrmParaTeste(
+  fn: NonNullable<typeof entregaLembreteParaTeste> | undefined,
+) {
+  if (process.env.NODE_ENV !== 'test') return;
+  entregaLembreteParaTeste = fn;
+}
+
 export async function dispararLembretesCrm(
   agora: Date = new Date()
 ): Promise<{ analisados: number; disparados: number; empresas: number; canal: string }> {
@@ -1310,7 +1323,17 @@ export async function dispararLembretesCrm(
     return { analisados: 0, disparados: 0, empresas: 0, canal: 'desabilitado' };
   }
 
+  const { requireJobLease } = await import('./cronLock');
+  const r = await requireJobLease('crm', () => executarLembretesCrm(agora, canal), { busy: 'retry' });
+  return r.result ?? { analisados: 0, disparados: 0, empresas: 0, canal: 'habilitado' };
+}
+
+async function executarLembretesCrm(
+  agora: Date,
+  canal: typeof import('./notifications'),
+): Promise<{ analisados: number; disparados: number; empresas: number; canal: string }> {
   const s = getStore();
+  const { withCronIdempotency, markUnknownCronUnit, currentCronLease } = await import('./cronLock');
   const limite = agora.getTime();
   // `empresas` é o cadastro de TENANTS — não tem `empresa_id`, então usa a
   // listagem crua (sem o filtro de escopo dos recursos multiempresa).
@@ -1319,7 +1342,6 @@ export async function dispararLembretesCrm(
 
   let analisados = 0;
   let disparados = 0;
-  const notificacoes: { empresaId: number; atividade: Row; lead: Row | null; oportunidade: Row | null }[] = [];
 
   for (const empresaId of ids) {
     const pendentes = await listarTudo(s, 'crm_atividades', empresaId, { status: 'pendente' });
@@ -1332,35 +1354,40 @@ export async function dispararLembretesCrm(
       if (atividade.lembrete_enviado_em) continue;
       analisados += 1;
 
-      const reivindicado = await s.tryUpdateIf(
-        R_ATIVIDADE(),
-        Number(atividade.id),
-        { lembrete_enviado_em: null },
-        { lembrete_enviado_em: agora.toISOString() }
-      );
-      if (!reivindicado) continue; // outra execução já notificou
-      disparados += 1;
-
-      const leadId = num(atividade.lead_id);
-      const oppId = num(atividade.oportunidade_id);
-      const lead = leadId === null ? null : await s.findOneWhere(R_LEAD(), { id: leadId, empresa_id: empresaId });
-      const oportunidade = oppId === null ? null : await s.findOneWhere(R_OPORTUNIDADE(), { id: oppId, empresa_id: empresaId });
-      notificacoes.push({ empresaId, atividade: reivindicado, lead, oportunidade });
-    }
-  }
-
-  if (notificacoes.length) {
-    for (const n of notificacoes) {
-      await canal.notificarLembreteCrm({
-        empresaId: n.empresaId,
-        atividadeId: Number(n.atividade.id),
-        tipo: String(n.atividade.tipo ?? 'tarefa'),
-        resumo: String(n.atividade.resumo ?? ''),
-        quando: n.atividade.lembrete_em ?? n.atividade.data_atividade ?? null,
-        prioridade: String(n.atividade.prioridade ?? 'media'),
-        lead: n.lead ? String(n.lead.nome ?? `#${n.atividade.lead_id}`) : null,
-        oportunidade: n.oportunidade ? String(n.oportunidade.nome ?? `#${n.atividade.oportunidade_id}`) : null,
-      }).catch(() => undefined); // canal indisponível nunca derruba o agendador
+      try {
+      await withCronIdempotency(`crm:lembrete:${atividade.id}`, String(atividade.id), async () => {
+        const leadId = num(atividade.lead_id);
+        const oppId = num(atividade.oportunidade_id);
+        const lead = leadId === null ? null : await s.findOneWhere(R_LEAD(), { id: leadId, empresa_id: empresaId });
+        const oportunidade = oppId === null ? null : await s.findOneWhere(R_OPORTUNIDADE(), { id: oppId, empresa_id: empresaId });
+        const entregar = entregaLembreteParaTeste ?? canal.notificarLembreteCrm;
+        const entregue = await entregar({
+          empresaId,
+          atividadeId: Number(atividade.id),
+          tipo: String(atividade.tipo ?? 'tarefa'),
+          resumo: String(atividade.resumo ?? ''),
+          quando: atividade.lembrete_em ?? atividade.data_atividade ?? null,
+          prioridade: String(atividade.prioridade ?? 'media'),
+          lead: lead ? String(lead.nome ?? `#${atividade.lead_id}`) : null,
+          oportunidade: oportunidade ? String(oportunidade.nome ?? `#${atividade.oportunidade_id}`) : null,
+        });
+        if (!entregue) throw new Error('entrega_nao_confirmada');
+        const reivindicado = await s.tryUpdateIf(
+          R_ATIVIDADE(),
+          Number(atividade.id),
+          { lembrete_enviado_em: null },
+          { lembrete_enviado_em: agora.toISOString() }
+        );
+        if (!reivindicado) {
+          const lease = currentCronLease();
+          if (lease) await markUnknownCronUnit(lease, `crm:lembrete:${atividade.id}`, String(atividade.id));
+          return;
+        }
+        disparados += 1;
+      });
+      } catch {
+        // Uma entrega falha não aborta o lote: os demais lembretes seguem, e este permanece sem carimbo.
+      }
     }
   }
 

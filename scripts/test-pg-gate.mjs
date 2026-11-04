@@ -11,6 +11,10 @@ if (!url || !/^postgres(?:ql)?:\/\//i.test(url)) {
   console.error('test:pg exige DATABASE_URL PostgreSQL de um banco de teste NOVO.');
   process.exit(2);
 }
+if (!process.env.JWT_SECRET) {
+  const { randomBytes } = await import('node:crypto');
+  process.env.JWT_SECRET = randomBytes(32).toString('hex');
+}
 
 const client = new Client({ connectionString: url, connectionTimeoutMillis: 5000 });
 try {

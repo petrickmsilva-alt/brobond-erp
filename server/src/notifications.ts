@@ -90,14 +90,14 @@ export type EnviadorNotificacao = (opts: { to: string; assunto: string; html: st
  * (R-12, Fase 4.2). Sem empresa explícita, não envia: a lista global (NOTIFICAR_EMAILS) não
  * recebe dados de negócio de nenhuma empresa.
  */
-async function enviar(opts: NotifOpts, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
-  if (!habilitado(opts.evento)) return;
+async function enviar(opts: NotifOpts, enviador: EnviadorNotificacao = enviarEmail): Promise<number> {
+  if (!habilitado(opts.evento)) return 0;
   if (!(Number(opts.empresaId) > 0) || !opts.recursos?.length) {
     console.warn(`[notificacao] ${opts.evento}: sem empresa explícita ou recursos; não enviada.`);
-    return;
+    return 0;
   }
   const destino = (await destinosPorEmpresa(destinatarios(), opts.recursos)).find((d) => d.empresaId === Number(opts.empresaId));
-  if (!destino || !destino.emails.length) return;
+  if (!destino || !destino.emails.length) return 0;
 
   const htmlBase = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
@@ -112,11 +112,16 @@ async function enviar(opts: NotifOpts, enviador: EnviadorNotificacao = enviarEma
       </p>
     </div>`;
 
+  let enviados = 0;
   for (const email of destino.emails) {
-    await enviador({ to: email, assunto: opts.assunto, html: htmlBase }).catch(() => {
+    try {
+      await enviador({ to: email, assunto: opts.assunto, html: htmlBase });
+      enviados += 1;
+    } catch {
       console.warn('⚠️  Falha ao preparar notificação de e-mail.');
-    });
+    }
   }
+  return enviados;
 }
 
 // ----------------------------------------------------------------------------
@@ -256,8 +261,8 @@ export function crmLembreteHabilitado(): boolean {
  * `dispararLembretesCrm` em `crm.ts`). Aqui só resta notificar — e o canal é o
  * mesmo dos outros avisos do ERP (SMTP configurado em Configurações).
  *
- * Sem SMTP configurado a função termina sem erro: o carimbo já foi gravado e o
- * lembrete continua visível em CRM › Agenda (hoje/atrasadas/próximas).
+ * Não carimba o lembrete: quem chama só confirma `lembrete_enviado_em` depois
+ * de um retorno verdadeiro (entrega pedida ao canal).
  */
 export async function notificarLembreteCrm(params: {
   empresaId: number;
@@ -268,11 +273,12 @@ export async function notificarLembreteCrm(params: {
   prioridade: string;
   lead: string | null;
   oportunidade: string | null;
-}, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
+}, enviador: EnviadorNotificacao = enviarEmail): Promise<boolean> {
+  if (enviador === enviarEmail && !smtpConfigurado()) return false;
   const quando = params.quando ? new Date(String(params.quando)) : null;
   const quandoTxt = quando && !Number.isNaN(quando.getTime()) ? quando.toLocaleString('pt-BR') : '—';
   const alvo = params.oportunidade ?? params.lead ?? 'sem vínculo';
-  await enviar({
+  const enviados = await enviar({
     evento: 'crm_lembrete',
     empresaId: params.empresaId,
     recursos: ['crm_atividades'],
@@ -288,6 +294,7 @@ export async function notificarLembreteCrm(params: {
       </table>
       <p style="margin-top:16px;">Abra <strong>CRM › Agenda</strong> para concluir ou remarcar.</p>`,
   }, enviador);
+  return enviados > 0;
 }
 
 /** Verificação periódica de estoques mínimos (chamada pelo dashboard ou cron). */

@@ -105,10 +105,10 @@ cp server/.env.example server/.env
 npm run dev
 ```
 
-Abra http://localhost:5173 e entre com o administrador padrão:
+Defina `ADMIN_PASSWORD` no ambiente antes de iniciar a API. Abra http://localhost:5173 e entre com o administrador inicial:
 
 - e-mail: `admin@brobond.com.br`
-- senha: `brobond123` (ou o valor de `ADMIN_PASSWORD`)
+- senha: o valor configurado em `ADMIN_PASSWORD` (sem senha padrão)
 
 > **Sem `DATABASE_URL`** a API roda em **modo demonstração**: todos os módulos
 > cadastram, editam e excluem normalmente, mas os dados ficam em memória e são
@@ -336,8 +336,18 @@ npm run lint                    # erros param o CI; avisos (any em handlers) nã
 npm run audit:menu              # menu × rotas × recursos × RBAC × tenant
 npm run audit:ux                # ZERO MODAL: falha se aparecer modal/drawer/sheet em fluxo de módulo
 npm run architecture:audit      # inventário ERP 3.0 lido do código (falha se houver incoerência)
-npm run smoke                   # HTTP real contra a API em modo demonstração (377 verificações)
+npm run smoke                   # HTTP real contra a API em modo demonstração
 ```
+
+Os scripts `smoke-e2e`, `smoke-creators`, `smoke-dependencias`, `smoke-pg` e
+`server/test/smoke.mjs` exigem `BROBOND_TEST_ADMIN_PASSWORD` (a senha inicial
+configurada no servidor descartável por `ADMIN_PASSWORD`) e
+`BROBOND_TEST_NEW_PASSWORD` (nova senha de teste). Configure ambas sem colocá-las
+no histórico do shell ou no código. `ux05-fixtures.mjs` exige
+`BROBOND_TEST_ADMIN_PASSWORD` e `UX05_PASS`; `UX05_SENHA_PERFIL` é opcional.
+Os scripts podem alterar usuários e dados: use somente ambiente descartável.
+O CI gera valores efêmeros e os mascara; o `smoke:pg` ainda exige banco de teste.
+As variáveis antigas `SMOKE_SENHA` e `SMOKE_SENHA_NOVA` não são fallback.
 
 O GitHub Actions (`.github/workflows/ci.yml`) roda typecheck, testes, lint e build
 a cada push — um PR com erro não passa. Há ainda um job `testes-postgres` que sobe

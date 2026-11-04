@@ -6333,6 +6333,7 @@ export const RESOURCES: Record<string, Resource> = {
           { value: 'PROCESSANDO', label: 'Processando', tone: 'blue' },
           { value: 'PROCESSADO', label: 'Processado', tone: 'green' },
           { value: 'ERRO', label: 'Erro', tone: 'red' },
+          { value: 'INDETERMINADO', label: 'Indeterminado', tone: 'amber' },
         ],
       },
       { name: 'tentativas', label: 'Tentativas', type: 'integer', readonly: true },

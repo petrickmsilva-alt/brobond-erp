@@ -23,6 +23,8 @@ import { MAX_TENTATIVAS, backoffMs } from './regras';
 import { randomUUID } from 'node:crypto';
 import { log } from '../log';
 import type { Row, Tx } from '../store';
+import { requireJobLease, withCronIdempotency, withOptionalJobLease } from '../cronLock';
+import type { ProcessoCronLock } from '../cronLock';
 
 const R_OUTBOX = () => getResource('commerce_outbox')!;
 
@@ -181,7 +183,31 @@ export const TIPOS_OUTBOX_POR_PROCESSO = {
   pedidos: ['conversao', 'notificacao', 'alerta', 'sincronizacao'],
 } as const;
 
+function jobDosTipos(tipos?: readonly string[]): ProcessoCronLock | null {
+  if (!tipos?.length) return null;
+  const set = new Set(tipos);
+  const jobs = (Object.entries(TIPOS_OUTBOX_POR_PROCESSO) as [ProcessoCronLock, readonly string[]][]).filter(([, lista]) => lista.some((t) => set.has(t)));
+  return jobs.length === 1 ? jobs[0][0] : null;
+}
+
 export async function processarOutbox(limite = 10, tipos?: readonly string[]): Promise<{ processados: number; erros: number }> {
+  const vazio = { processados: 0, erros: 0 };
+  const job = jobDosTipos(tipos);
+  if (job) {
+    const r = await requireJobLease(job, () => executarProcessarOutbox(limite, tipos), { busy: 'retry' });
+    return r.result ?? vazio;
+  }
+  let total = { processados: 0, erros: 0 };
+  for (const [nome, lista] of Object.entries(TIPOS_OUTBOX_POR_PROCESSO) as [ProcessoCronLock, readonly string[]][]) {
+    const r = await requireJobLease(nome, () => executarProcessarOutbox(limite, lista), { busy: 'retry' });
+    if (r.result) {
+      total = { processados: total.processados + r.result.processados, erros: total.erros + r.result.erros };
+    }
+  }
+  return total;
+}
+
+async function executarProcessarOutbox(limite = 10, tipos?: readonly string[]): Promise<{ processados: number; erros: number }> {
   const s = getStore();
   // job_id correlaciona todas as linhas desta varredura; event_id identifica
   // cada entrada. Nem o payload nem o segredo da integração entram no log.
@@ -195,15 +221,18 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
     // vencidos. A fila é global somente para este worker de sistema.
     const result = await query(`SELECT * FROM commerce_outbox
       WHERE ((estado = 'PENDENTE' AND (proxima_tentativa_em IS NULL OR proxima_tentativa_em <= now()))
-         OR (estado = 'PROCESSANDO' AND atualizado_em < now() - interval '10 minutes'))
+         OR (estado = 'PROCESSANDO' AND atualizado_em < now() - interval '10 minutes')
+         OR (estado = 'INDETERMINADO' AND (proxima_tentativa_em IS NULL OR proxima_tentativa_em <= now())))
         AND ($2::text[] IS NULL OR tipo = ANY($2::text[]))
       ORDER BY COALESCE(proxima_tentativa_em, atualizado_em), id LIMIT $1`, [capacidade, tipos ? [...tipos] : null]);
     candidatas = result.rows;
   } else {
     const pendentes = await s.list(R_OUTBOX(), { page: 1, pageSize: 10000, filter: { estado: 'PENDENTE' }, sort: 'id', dir: 'asc' });
     const presas = await s.list(R_OUTBOX(), { page: 1, pageSize: 10000, filter: { estado: 'PROCESSANDO' }, sort: 'id', dir: 'asc' });
+    const indeterminadas = await s.list(R_OUTBOX(), { page: 1, pageSize: 10000, filter: { estado: 'INDETERMINADO' }, sort: 'id', dir: 'asc' });
     candidatas = [...pendentes.rows.filter((r) => !r.proxima_tentativa_em || Date.parse(String(r.proxima_tentativa_em)) <= agora),
-      ...presas.rows.filter((r) => !r.atualizado_em || agora - Date.parse(String(r.atualizado_em)) > 10 * 60_000)]
+      ...presas.rows.filter((r) => !r.atualizado_em || agora - Date.parse(String(r.atualizado_em)) > 10 * 60_000),
+      ...indeterminadas.rows.filter((r) => !r.proxima_tentativa_em || Date.parse(String(r.proxima_tentativa_em)) <= agora)]
       .filter((r) => !tipos || tipos.includes(String(r.tipo)))
       .slice(0, capacidade);
   }
@@ -211,6 +240,26 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
   let processados = 0;
   let erros = 0;
   for (const row of candidatas) {
+    if (String(row.estado) === 'PROCESSANDO') {
+      await s.tryUpdateIf(R_OUTBOX(), Number(row.id),
+        { estado: 'PROCESSANDO', claim_versao: Number(row.claim_versao || 0), empresa_id: Number(row.empresa_id) },
+        { estado: 'INDETERMINADO', ultimo_erro: 'Execução interrompida antes da confirmação; reconciliação necessária.',
+          proxima_tentativa_em: new Date().toISOString(), atualizado_em: new Date().toISOString() });
+      continue;
+    }
+    if (String(row.estado) === 'INDETERMINADO') {
+      await withCronIdempotency(`outbox:reconciliar:${row.id}:${row.claim_versao}`, String(row.id), () => reconciliarLinhaIndeterminada(s, row, jobId));
+      continue;
+    }
+    const processado = await withCronIdempotency(`outbox:${row.id}:${row.claim_versao}:${row.estado}`, String(row.id), () => processarLinhaOutbox(s, row, jobId));
+    if (processado === 'processado') processados += 1;
+    else if (processado === 'erro') erros += 1;
+  }
+  log.info('outbox_varredura', { job_id: jobId, candidatas: candidatas.length, processados, erros, latencia_ms: Date.now() - inicio });
+  return { processados, erros };
+}
+
+async function processarLinhaOutbox(s: ReturnType<typeof getStore>, row: Row, jobId: string): Promise<'processado' | 'erro' | 'outro'> {
     const estadoAtual = String(row.estado);
     const reivindicado = await s.tryUpdateIf(
       R_OUTBOX(),
@@ -220,7 +269,7 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
       { estado: estadoAtual, claim_versao: Number(row.claim_versao || 0), empresa_id: Number(row.empresa_id) },
       { estado: 'PROCESSANDO', claim_versao: Number(row.claim_versao || 0) + 1, tentativas: Number(row.tentativas || 0) + 1 }
     );
-    if (!reivindicado) continue;
+    if (!reivindicado) return 'outro';
 
     const tentativas = Number(reivindicado.tentativas);
     const esperado = { estado: 'PROCESSANDO', claim_versao: Number(reivindicado.claim_versao), empresa_id: Number(row.empresa_id) };
@@ -234,13 +283,13 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
           ultimo_erro: null,
           proxima_tentativa_em: null,
         });
-        if (concluida) processados += 1;
+        return concluida ? 'processado' : 'outro';
       } else if (desfecho.status === 'erro') {
         const falha = await s.tryUpdateIf(R_OUTBOX(), Number(row.id), esperado, {
           estado: 'ERRO', ultimo_erro: String(desfecho.erro || 'Falha permanente').slice(0, 500),
           proxima_tentativa_em: null, atualizado_em: new Date().toISOString(),
         });
-        if (falha) erros += 1;
+        return falha ? 'erro' : 'outro';
       } else {
         // retry com backoff — e ERRO honesto quando esgota
         const esgotou = tentativas >= MAX_TENTATIVAS;
@@ -254,7 +303,7 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
           proxima_tentativa_em: esgotou ? null : new Date(Date.now() + backoffMs(tentativas)).toISOString(),
           atualizado_em: new Date().toISOString(),
         });
-        if (esgotou && falha) erros += 1;
+        return esgotou && falha ? 'erro' : 'outro';
       }
     } catch (e) {
       const esgotou = tentativas >= MAX_TENTATIVAS;
@@ -267,16 +316,76 @@ export async function processarOutbox(limite = 10, tipos?: readonly string[]): P
         atualizado_em: new Date().toISOString(),
       });
       if (esgotou && falha) {
-        erros += 1;
         log.error('outbox_entrada_esgotada', { job_id: jobId, event_id: Number(row.id), tipo: String(row.tipo), empresa_id: Number(row.empresa_id), tentativas, erro: mensagem });
+        return 'erro';
       }
+      return 'outro';
     }
-  }
-  log.info('outbox_varredura', { job_id: jobId, candidatas: candidatas.length, processados, erros, latencia_ms: Date.now() - inicio });
-  return { processados, erros };
 }
 
-/** Recoloca um erro da empresa ativa na fila, com auditoria transacional. */
+async function diagnosticarIndeterminado(s: ReturnType<typeof getStore>, row: Row): Promise<'confirmado' | 'reenfileirar' | 'aguardar'> {
+  const tipo = String(row.tipo);
+  const empresaId = Number(row.empresa_id);
+  const payload = (row.payload && typeof row.payload === 'object' ? row.payload : {}) as Record<string, unknown>;
+  if (tipo === 'alerta') return 'confirmado';
+  if (tipo === 'conversao') {
+    const saleId = String(payload.sale_id || '');
+    if (!saleId) return 'aguardar';
+    const pedido = await s.findOneWhere(getResource('commerce_pedidos')!, { sale_id: saleId, empresa_id: empresaId });
+    if (pedido && String(pedido.estado) === 'CONVERTIDO') return 'confirmado';
+    if (pedido) return 'reenfileirar';
+    return 'aguardar';
+  }
+  if (tipo === 'publicacao') {
+    const publicacaoId = Number(payload.publicacao_id);
+    if (!Number.isInteger(publicacaoId) || publicacaoId <= 0) return 'aguardar';
+    const pub = await s.findOneWhere(getResource('commerce_publicacoes')!, { id: publicacaoId, empresa_id: empresaId });
+    if (pub && String(pub.estado) === 'PUBLISHED') return 'confirmado';
+    return 'aguardar';
+  }
+  if (tipo === 'refund_devolucao') {
+    const devolucaoId = Number(payload.devolucao_id);
+    if (!Number.isInteger(devolucaoId) || devolucaoId <= 0) return 'aguardar';
+    const rec = getResource('commerce_devolucoes') || getResource('devolucoes');
+    if (!rec) return 'aguardar';
+    const dev = await s.findOneWhere(rec, { id: devolucaoId, empresa_id: empresaId });
+    const estado = String(dev?.estado_refund ?? dev?.refund_status ?? dev?.estado ?? '');
+    if (/refund|estorn/i.test(estado) && /ok|done|conclu|success|estornado/i.test(estado)) return 'confirmado';
+    return 'aguardar';
+  }
+  return 'aguardar';
+}
+
+async function reconciliarLinhaIndeterminada(s: ReturnType<typeof getStore>, row: Row, jobId: string): Promise<'confirmado' | 'reenfileirado' | 'indeterminado'> {
+  const diagnostico = await diagnosticarIndeterminado(s, row);
+  const esperado = { estado: 'INDETERMINADO', claim_versao: Number(row.claim_versao || 0), empresa_id: Number(row.empresa_id) };
+  const agora = new Date().toISOString();
+  if (diagnostico === 'confirmado') {
+    const ok = await s.tryUpdateIf(R_OUTBOX(), Number(row.id), esperado, {
+      estado: 'PROCESSADO', processado_em: agora, ultimo_erro: null, proxima_tentativa_em: null, atualizado_em: agora,
+    });
+    if (ok) log.info('outbox_indeterminado_confirmado', { job_id: jobId, event_id: Number(row.id), tipo: String(row.tipo), empresa_id: Number(row.empresa_id) });
+    return ok ? 'confirmado' : 'indeterminado';
+  }
+  if (diagnostico === 'reenfileirar') {
+    const ok = await s.tryUpdateIf(R_OUTBOX(), Number(row.id), esperado, {
+      estado: 'PENDENTE', tentativas: 0,
+      ultimo_erro: 'Reconciliação: efeito local não confirmado; reenfileirado sem chamar provedor externo.',
+      proxima_tentativa_em: agora, atualizado_em: agora,
+    });
+    if (ok) log.info('outbox_indeterminado_reenfileirado', { job_id: jobId, event_id: Number(row.id), tipo: String(row.tipo), empresa_id: Number(row.empresa_id) });
+    return ok ? 'reenfileirado' : 'indeterminado';
+  }
+  await s.tryUpdateIf(R_OUTBOX(), Number(row.id), esperado, {
+    ultimo_erro: 'Indeterminado: sem evidência local nem consulta de provedor; operador pode reenfileirar. Sem reenvio automático.',
+    proxima_tentativa_em: new Date(Date.now() + 30 * 60_000).toISOString(),
+    atualizado_em: agora,
+  });
+  log.info('outbox_indeterminado_aguardando', { job_id: jobId, event_id: Number(row.id), tipo: String(row.tipo), empresa_id: Number(row.empresa_id) });
+  return 'indeterminado';
+}
+
+/** Recoloca um erro ou indeterminado da empresa ativa na fila, com auditoria transacional. */
 export async function reprocessarOutbox(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(R_OUTBOX(), actor, 'read');
@@ -287,8 +396,11 @@ export async function reprocessarOutbox(req: Request, res: Response) {
   const resultado = await s.transaction(async (tx) => {
     const antes = await s.findOneWhere(R_OUTBOX(), { id, empresa_id: empresaId }, tx);
     if (!antes) throw new HttpError(404, 'Evento não encontrado.');
-    if (antes.estado !== 'ERRO') throw new HttpError(409, 'Somente eventos em erro podem ser reenfileirados.');
-    const depois = await s.tryUpdateIf(R_OUTBOX(), id, { empresa_id: empresaId, estado: 'ERRO', tentativas: antes.tentativas },
+    const estadoAntes = String(antes.estado);
+    if (estadoAntes !== 'ERRO' && estadoAntes !== 'INDETERMINADO') {
+      throw new HttpError(409, 'Somente eventos em erro ou indeterminados podem ser reenfileirados.');
+    }
+    const depois = await s.tryUpdateIf(R_OUTBOX(), id, { empresa_id: empresaId, estado: estadoAntes, tentativas: antes.tentativas },
       { estado: 'PENDENTE', tentativas: 0, ultimo_erro: null, proxima_tentativa_em: new Date().toISOString() }, tx);
     if (!depois) throw new HttpError(409, 'O evento mudou; atualize a fila.');
     await s.audit({ empresa_id: empresaId, usuario_id: actor.id, usuario: actor.name, acao: 'ajuste',
@@ -312,18 +424,47 @@ export async function processarComercioAgendado(): Promise<{
 }> {
   const falhas: string[] = [];
   const { runPaymentJobs } = await import('../../../modules/payments/application/jobs');
-  try { const result = await runPaymentJobs(); if (result.failed) falhas.push('pagamentos'); }
-  catch { falhas.push('pagamentos'); }
   const { processarFilaPublicacoes } = await import('./catalogo');
   const { expirarCheckoutsPendentes } = await import('./pedidos');
   let publicacoes = { processadas: 0, falhas: 0 };
-  let outbox = { processados: 0, erros: 0 };
+  const outbox = { processados: 0, erros: 0 };
   let expirados = 0;
-  try { publicacoes = await processarFilaPublicacoes(20); if (publicacoes.falhas) falhas.push('publicacoes'); }
-  catch { falhas.push('publicacoes'); }
-  try { outbox = await processarOutbox(10); if (outbox.erros) falhas.push('outbox'); }
-  catch { falhas.push('outbox'); }
-  try { expirados = await expirarCheckoutsPendentes(); }
-  catch { falhas.push('expiracao'); }
+  try {
+    const pagamentos = await withOptionalJobLease('pagamentos', 30_000, async () => {
+      const result = await runPaymentJobs();
+      const n = await expirarCheckoutsPendentes();
+      const o = await processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.pagamentos);
+      return { result, n, o };
+    });
+    if (!pagamentos.skipped && pagamentos.result) {
+      if (pagamentos.result.result.failed) falhas.push('pagamentos');
+      expirados += pagamentos.result.n;
+      outbox.processados += pagamentos.result.o.processados;
+      outbox.erros += pagamentos.result.o.erros;
+      if (pagamentos.result.o.erros) falhas.push('reembolsos_devolucao');
+    }
+  } catch { falhas.push('pagamentos'); }
+  try {
+    const pubs = await withOptionalJobLease('publicacoes', 30_000, async () => {
+      const fila = await processarFilaPublicacoes(20);
+      const o = await processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.publicacoes);
+      return { fila, o };
+    });
+    if (!pubs.skipped && pubs.result) {
+      publicacoes = pubs.result.fila;
+      if (publicacoes.falhas) falhas.push('publicacoes');
+      outbox.processados += pubs.result.o.processados;
+      outbox.erros += pubs.result.o.erros;
+      if (pubs.result.o.erros) falhas.push('outbox_publicacoes');
+    }
+  } catch { falhas.push('publicacoes'); }
+  try {
+    const peds = await withOptionalJobLease('pedidos', 30_000, async () => processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.pedidos));
+    if (!peds.skipped && peds.result) {
+      outbox.processados += peds.result.processados;
+      outbox.erros += peds.result.erros;
+      if (peds.result.erros) falhas.push('outbox');
+    }
+  } catch { falhas.push('outbox'); }
   return { publicacoes, outbox, expirados, falhas };
 }

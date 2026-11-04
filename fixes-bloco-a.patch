@@ -213,7 +213,7 @@ new file mode 100644
 +
 +| # | Problema | Impacto | Status |
 +| --- | --- | --- | --- |
-+| B1 | Credenciais padrão documentadas no README (`brobond123`) | Acesso total ao sistema | pendente |
++| B1 | Credenciais padrão documentadas no README (`[CREDENCIAL REDIGIDA]`) | Acesso total ao sistema | pendente |
 +| B2 | NF-e sem emissor real — `NFE_API_KEY` nunca consumida | Bloqueio de compliance fiscal | pendente |
 +| B3 | Sem backup automatizado + Postgres gratuito apaga dados em 30 dias | Perda irreversível | corrigido neste patch |
 +| B4 | Testes de integração com `continue-on-error` | Oversell, estoque negativo | pendente (bloco B) |
