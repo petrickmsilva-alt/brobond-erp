@@ -1054,8 +1054,9 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
     let config = empresaId === null ? null : await configDaEmpresa(empresaId, providerId);
     if(empresaId!==null && !config && ['stripe','pagbank'].includes(providerId)){const {account}=await import('../../modules/payments/application/configuration');config=(await account(empresaId,providerId==='stripe'?'STRIPE':'PAGBANK')).config;}
     if (empresaId !== null && (!config || config.ativo === false)) return res.status(401).json({ error: 'Assinatura inválida.' });
-    let segredo = config ? decifrarSegredo(config.webhook_segredo_cifrado as string | null) : null;
-    if(!segredo && providerId==='pagbank' && config){try{segredo=JSON.parse(decifrarSegredo(config.credenciais_cifradas)||'{}').access_token||null;}catch{/* fail closed */}}
+    const segredo = config ? decifrarSegredo(config.webhook_segredo_cifrado as string | null) : null;
+    // R-10 (Fase 4.3): NUNCA usar o access token como segredo de webhook. Sem segredo próprio
+    // (PAGBANK_WEBHOOK_SECRET cadastrado), `segredo` fica nulo e a rota recusa (falha fechada).
     const ctxLocal: GatewayContext | null = config && empresaId !== null
       ? { empresaId, config, credenciais: (() => { try { return JSON.parse(decifrarSegredo(config.credenciais_cifradas) || '{}'); } catch { return null; } })(), webhookSegredo: segredo }
       : null;
