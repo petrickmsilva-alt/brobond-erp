@@ -108,3 +108,8 @@ momento da redação ainda não havia commit ou push desta entrega. Não houve m
 deploy, alteração de Render, migração em produção, execução de job real ou
 chamada de escrita a provedor externo. O estado remoto do push deve ser conferido
 no resultado efetivo do comando, não inferido deste documento.
+
+Atualização posterior: o commit de implementação e relatório `06cfd67` foi
+publicado com sucesso em `origin/arena/615f44fd-brobond-erp`. Esta atualização
+será registrada em um commit adicional, identificável por `git log`; o resultado
+do push desse commit deve ser verificado no comando de entrega. Não foi aberto PR.
