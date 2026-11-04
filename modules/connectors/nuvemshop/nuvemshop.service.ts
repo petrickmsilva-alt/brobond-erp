@@ -4,10 +4,10 @@
  * PLATAFORMA-PONTE DO HUB OMNICHANNEL (decisão da diretoria, 2026-10-05)
  * ----------------------------------------------------------------------
  * Os conectores nativos de Shopee e TikTok Shop foram REMOVIDOS do
- * ecossistema (barreiras burocráticas das APIs). A triangulação de vendas
- * — inclusive o catálogo exibido no TikTok — passa a acontecer pela
- * Nuvemshop: a loja é a fonte do pedido e este módulo a traz para
- * `sales`/`sale_items` como qualquer outro canal.
+ * ecossistema (barreiras burocráticas das APIs) e estão fora do escopo
+ * oficial. A triangulação de vendas passa a acontecer pela Nuvemshop: a
+ * loja é a fonte do pedido e este módulo a traz para `sales`/`sale_items`
+ * como qualquer outro canal.
  *
  * OAuth2 (restrito ao grant `authorization_code`):
  *
@@ -446,8 +446,8 @@ interface NuvemshopProductResponse {
 
 /**
  * Lista os produtos da loja, normalizados no contrato do framework. É o
- * catálogo que a triangulação publica nos demais canais (inclusive a
- * vitrine do TikTok) — a guarda de autorização roda ANTES da rede.
+ * catálogo que a triangulação publica nos demais canais — a guarda de
+ * autorização roda ANTES da rede.
  */
 export async function fetchNuvemshopProducts(
   accessToken: string,

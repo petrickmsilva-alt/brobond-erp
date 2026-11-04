@@ -1,5 +1,12 @@
 # `modules/connectors` — conectores oficiais de marketplace
 
+> **Escopo oficial de integrações (4 canais).** Somente estes permanecem:
+> **Mercado Livre**, **Nuvemshop**, **Instagram Shopping / Meta Commerce** e
+> **Mercado Pago / PIX** (financeiro independente). **Shopee** e **TikTok Shop**
+> estão **definitivamente fora do escopo** — sem rota, serviço, adaptador,
+> webhook, job, permissão nem valor de enum. Nenhum conector novo é
+> introduzido por esta consolidação.
+
 Módulo portado do **brobond-ai-commerce** (`modules/marketplace`) para o
 **Brobond AI ERP** na Fase 2 da fusão. Ele concentra OAuth, credenciais
 cifradas, webhooks e ingestão de pedidos dos **quatro canais de produção**.
@@ -21,8 +28,7 @@ cifradas, webhooks e ingestão de pedidos dos **quatro canais de produção**.
 > menos **quebra a compilação**.
 >
 > A **Nuvemshop é a plataforma-ponte** da triangulação de vendas: o catálogo
-> publicado por ela (inclusive o exibido na vitrine do TikTok) e os pedidos
-> que ela fecha são a fonte desses canais.
+> publicado por ela e os pedidos que ela fecha são a fonte desses canais.
 
 ### Instagram Shopping — o que a Meta entrega HOJE (2026-10)
 

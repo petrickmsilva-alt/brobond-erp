@@ -12,8 +12,8 @@
  *     `connector_provider`/`sale_channel` na migration
  *     `drop_shopee_and_tiktok_connectors`).
  *   • A NUVEMSHOP é a PLATAFORMA-PONTE da triangulação de vendas: o
- *     catálogo que ela publica (inclusive o exibido no TikTok) e os
- *     pedidos que ela fecha são a fonte do canal.
+ *     catálogo que ela publica e os pedidos que ela fecha são a fonte do
+ *     canal.
  *   • INSTAGRAM SHOPPING (2026-10-06): o canal passou a ter conector
  *     PRÓPRIO e independente (`instagram/`), ligado direto à Graph API
  *     da Meta — OAuth2 oficial, webhook assinado e catálogo de Product

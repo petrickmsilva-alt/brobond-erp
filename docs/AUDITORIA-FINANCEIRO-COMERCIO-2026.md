@@ -233,7 +233,7 @@ ERP recebe COTAÇÃO (venda status=cotacao, canal site_varejo/site_atacado)
 | **Shopify** | Global, checkout forte, fácil de manter | API GraphQL + webhooks |
 | **WooCommerce** | Flexível, custo baixo, WordPress | REST API + webhook de pedido |
 | **VTEX** | Escala e B2B nativo (preço por cliente, pedido mínimo) | API + webhooks |
-| **Mercado Livre / Shopee** | Marketplace | Já há esqueleto `marketplace.ts`; ligar canal `marketplace` |
+| **Mercado Livre** | Marketplace | Já há esqueleto `marketplace.ts`; ligar canal `marketplace`. **Shopee saiu do escopo** (diretoria, 2026-10-05) |
 | **Bling / Tiny ERP** | B2B/atacado, NF-e, pedido por representante | API NFe + pedidos + conciliação |
 
 **Recomendação:** começar com **catálogo → cotação** (já implementado) e, quando houver tráfego, adicionar **Nuvemshop** ou **VTEX** (B2B) com webhook que cria `venda` no BROBOND com canal `site_varejo`/`site_atacado`. O financeiro já aceita receber esse pedido.

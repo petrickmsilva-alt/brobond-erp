@@ -2,8 +2,9 @@
  * Adaptador da Nuvemshop (contrato `ProviderConnector`).
  *
  * É a PLATAFORMA-PONTE do Hub Omnichannel: o catálogo que sai daqui é o
- * mesmo que alimenta a triangulação de vendas dos demais canais (inclusive
- * a vitrine do TikTok, cujo conector nativo foi removido do ecossistema).
+ * mesmo que alimenta a triangulação de vendas dos demais canais. O conector
+ * nativo do TikTok Shop foi removido do ecossistema e está fora do escopo
+ * oficial.
  */
 
 import type { ConnectorHealth, FetchCatalogOptions, NormalizedContent, ProviderConnector } from '../core/connector.interface';

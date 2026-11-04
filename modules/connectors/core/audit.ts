@@ -14,7 +14,7 @@
 import type { ConnectorProviderName } from './providers';
 
 export interface ConnectorAuditEntry {
-  /** Ex.: `MERCADOLIVRE_CONNECTED`, `SHOPEE_DISCONNECTED`. */
+  /** Ex.: `MERCADOLIVRE_CONNECTED`, `NUVEMSHOP_DISCONNECTED`. */
   action: string;
   usuarioId: number;
   provider: ConnectorProviderName;
