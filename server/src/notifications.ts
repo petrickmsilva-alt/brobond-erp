@@ -44,7 +44,16 @@ type NotifOpts = {
   recursos?: string[];
 };
 
-/** Lista de e-mails que recebem notificações. */
+/**
+ * Empresa dona do registro, lida SOMENTE da própria linha (R-12). Sem `empresa_id` válido,
+ * devolve `undefined` e a notificação não é enviada: não há fallback para a lista global.
+ */
+function empresaDoRegistro(row: Record<string, unknown> | null | undefined): number | undefined {
+  const id = Number(row?.empresa_id);
+  return Number.isInteger(id) && id > 0 ? id : undefined;
+}
+
+/** Lista de e-mails configurada. É só um FILTRO de candidatos: nunca amplia destinatários. */
 function destinatarios(): string[] {
   return (process.env.NOTIFICAR_EMAILS || '')
     .split(',')
@@ -124,6 +133,8 @@ export async function notificarEstoqueMinimo(produtoId: number, tamanhoId: numbe
 
   await enviar({
     evento: 'estoque_minimo',
+    empresaId: empresaDoRegistro(produto),
+    recursos: ['produtos', 'estoques'],
     assunto: `⚠️ Estoque mínimo: ${nome} (${tam}) em ${local}`,
     html: `
       <h3 style="color:#C53030;margin-top:0;">Estoque abaixo do mínimo</h3>
@@ -139,7 +150,7 @@ export async function notificarEstoqueMinimo(produtoId: number, tamanhoId: numbe
 }
 
 /** Notifica quando insumo está abaixo do mínimo. */
-export async function notificarInsumoMinimo(insumoId: number, quantidade: number, minimo: number): Promise<void> {
+export async function notificarInsumoMinimo(insumoId: number, quantidade: number, minimo: number, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const s = getStore();
   const insumo = await s.findOneWhere(getResource('insumos')!, { id: insumoId });
   const nome = insumo ? labelOf(getResource('insumos')!, insumo) : `#${insumoId}`;
@@ -147,6 +158,8 @@ export async function notificarInsumoMinimo(insumoId: number, quantidade: number
 
   await enviar({
     evento: 'insumo_minimo',
+    empresaId: empresaDoRegistro(insumo),
+    recursos: ['insumos', 'estoque_insumos'],
     assunto: `⚠️ Insumo em alerta: ${nome}`,
     html: `
       <h3 style="color:#D97706;margin-top:0;">Insumo abaixo do mínimo</h3>
@@ -156,17 +169,19 @@ export async function notificarInsumoMinimo(insumoId: number, quantidade: number
         <tr><td style="padding:4px 0;color:#666;">Mínimo:</td><td style="padding:4px 0;">${minimo} ${un}</td></tr>
       </table>
       <p style="margin-top:16px;">Verifique a necessidade de compra no módulo <strong>Compras</strong>.</p>`,
-  });
+  }, enviador);
 }
 
 /** Notifica quando OP é concluída. */
-export async function notificarOPConcluida(ordemId: number, produtoId: number, totalPecas: number, usuario: string): Promise<void> {
+export async function notificarOPConcluida(ordemId: number, produtoId: number, totalPecas: number, usuario: string, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const s = getStore();
   const produto = await s.findOneWhere(getResource('produtos')!, { id: produtoId });
   const nome = produto ? labelOf(getResource('produtos')!, produto) : `#${produtoId}`;
 
   await enviar({
     evento: 'op_concluida',
+    empresaId: empresaDoRegistro(produto),
+    recursos: ['produtos'],
     assunto: `✅ OP #${ordemId} concluída — ${totalPecas} peça(s)`,
     html: `
       <h3 style="color:#059669;margin-top:0;">Ordem de Fabricação Concluída</h3>
@@ -177,17 +192,20 @@ export async function notificarOPConcluida(ordemId: number, produtoId: number, t
         <tr><td style="padding:4px 0;color:#666;">Concluída por:</td><td style="padding:4px 0;">${usuario}</td></tr>
       </table>
       <p style="margin-top:16px;">As peças já estão disponíveis no estoque (loja).</p>`,
-  });
+  }, enviador);
 }
 
 /** Notifica quando venda é faturada. */
-export async function notificarVendaFaturada(vendaId: number, clienteId: number | null, total: number, usuario: string): Promise<void> {
+export async function notificarVendaFaturada(vendaId: number, clienteId: number | null, total: number, usuario: string, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const s = getStore();
+  const venda = await s.findOneWhere(getResource('vendas')!, { id: vendaId });
   const cliente = clienteId ? await s.findOneWhere(getResource('clientes')!, { id: clienteId }) : null;
   const nomeCliente = cliente ? labelOf(getResource('clientes')!, cliente) : 'Cliente não informado';
 
   await enviar({
     evento: 'pedido_faturado',
+    empresaId: empresaDoRegistro(venda),
+    recursos: ['vendas', 'clientes'],
     assunto: `📦 Venda #${vendaId} faturada — R$ ${fmtMoney(total)}`,
     html: `
       <h3 style="color:#059669;margin-top:0;">Pedido de Venda Faturado</h3>
@@ -198,17 +216,20 @@ export async function notificarVendaFaturada(vendaId: number, clienteId: number 
         <tr><td style="padding:4px 0;color:#666;">Faturado por:</td><td style="padding:4px 0;">${usuario}</td></tr>
       </table>
       <p style="margin-top:16px;">As peças saíram do estoque automaticamente.</p>`,
-  });
+  }, enviador);
 }
 
 /** Notifica quando compra é recebida. */
-export async function notificarCompraRecebida(compraId: number, fornecedorId: number | null, total: number, usuario: string): Promise<void> {
+export async function notificarCompraRecebida(compraId: number, fornecedorId: number | null, total: number, usuario: string, enviador: EnviadorNotificacao = enviarEmail): Promise<void> {
   const s = getStore();
+  const compra = await s.findOneWhere(getResource('compras')!, { id: compraId });
   const fornecedor = fornecedorId ? await s.findOneWhere(getResource('fornecedores')!, { id: fornecedorId }) : null;
   const nomeForn = fornecedor ? labelOf(getResource('fornecedores')!, fornecedor) : 'Fornecedor não informado';
 
   await enviar({
     evento: 'compra_recebida',
+    empresaId: empresaDoRegistro(compra),
+    recursos: ['compras', 'fornecedores'],
     assunto: `📥 Compra #${compraId} recebida — R$ ${fmtMoney(total)}`,
     html: `
       <h3 style="color:#2563EB;margin-top:0;">Pedido de Compra Recebido</h3>
@@ -219,7 +240,7 @@ export async function notificarCompraRecebida(compraId: number, fornecedorId: nu
         <tr><td style="padding:4px 0;color:#666;">Recebido por:</td><td style="padding:4px 0;">${usuario}</td></tr>
       </table>
       <p style="margin-top:16px;">Os insumos entraram no estoque e o custo médio foi atualizado.</p>`,
-  });
+  }, enviador);
 }
 
 /** O canal de lembrete do CRM está ligado? (o agendador consulta ANTES de carimbar) */
@@ -298,7 +319,9 @@ export async function verificarAlertasEstoque(): Promise<{ produtos: number; ins
 export function notificacoesStatus() {
   return {
     smtp_configurado: smtpConfigurado(),
-    destinatarios: destinatarios(),
+    // R-12: a lista global não é exposta. Destinatários são por empresa (vínculo + vigência + RBAC).
+    escopo_destinatarios: 'por_empresa',
+    candidatos_configurados: destinatarios().length,
     habilitados: {
       estoque_minimo: habilitado('estoque_minimo'),
       insumo_minimo: habilitado('insumo_minimo'),
