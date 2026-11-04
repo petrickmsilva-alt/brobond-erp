@@ -1,5 +1,6 @@
 // ============================================================================
-// COMMERCE REAL — fluxo PIX ponta a ponta pela arquitetura EXISTENTE.
+// COMMERCE MOCK — fluxo PIX ponta a ponta pela arquitetura EXISTENTE (MOCK, não sandbox).
+// Renomeado de commerce-pix-real-flow (Fase 4.3, item 11): o nome anterior sugeria integração real.
 //
 // Nada aqui substitui homologação real: o `fetch` é trocado por um simulador
 // da Mercado Pago ORDERS API que devolve EXATAMENTE o formato documentado

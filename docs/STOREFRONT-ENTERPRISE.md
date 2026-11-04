@@ -664,7 +664,7 @@ pedido usa o token público de acompanhamento do próprio comprador.
 
 ### 15.7 Testes desta entrega
 
-- `server/test/commerce-pix-real-flow.test.ts` (novo, 18 testes): simulador da
+- `server/test/commerce-pix-mock-flow.test.ts` (novo, 18 testes): simulador da
   Orders API no formato documentado; contrato do POST; instrumentos persistidos
   cada um no seu campo; página pública sem internals; estoque 8/1/7 → 7/0/7;
   webhook pendente sem reembolso fantasma; assinatura inválida; duplicado e

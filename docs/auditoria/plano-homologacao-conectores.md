@@ -54,7 +54,7 @@ Fonte da lista: `auditoria-integral-conectores.md` (C-01 a C-22). Estado de evid
 | C-02 | PagBank | `payment-engine` 19/19 (cita PagBank; cobertura por conector não medida) | Não | AGUARDA APROVAÇÃO | NÃO EXECUTADO | Não verificado |
 | C-03 | Stripe | `payment-engine` 19/19 (motor; cobertura por conector não medida) | Não | AGUARDA APROVAÇÃO | NÃO EXECUTADO | Não verificado |
 | C-04 | Provedores genéricos | — | — | NÃO APLICÁVEL | NÃO APLICÁVEL | Placeholder: **não homologar** |
-| C-05 | WhatsApp (envio e status) | `whatsapp-status-webhook` 11/11; `commerce-pix-real-flow` 18/18 | Não | AGUARDA APROVAÇÃO | NÃO EXECUTADO | Não verificado |
+| C-05 | WhatsApp (envio e status) | `whatsapp-status-webhook` 11/11; `commerce-pix-mock-flow` 18/18 | Não | AGUARDA APROVAÇÃO | NÃO EXECUTADO | Não verificado |
 | C-06 | SMTP | `smtp-verificacao-admin` 5/5; `enterprise-mail-security` 4/4 | Não | AGUARDA APROVAÇÃO | NÃO EXECUTADO | Não verificado |
 | C-07 | Mercado Livre | `publicacao-canais-p0` 5/5 | Não | AGUARDA APROVAÇÃO (publicação bloqueada) | NÃO EXECUTADO | Bloqueado para publicação |
 | C-08 | Nuvemshop | `publicacao-nuvemshop-2025` 9/9; `-fluxo` 3/3; `publicacao-canais-p0` 5/5 | Não | AGUARDA APROVAÇÃO (leitura e OAuth; escrita bloqueada) | NÃO EXECUTADO | Bloqueado para publicação; **R-15 aberto** |

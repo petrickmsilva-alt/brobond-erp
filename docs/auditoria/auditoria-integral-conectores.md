@@ -609,7 +609,7 @@ Foram identificados **três mecanismos de cifra** no mesmo sistema:
 - Central de Notificações: status, pendências e envio (`commerce-notificacoes-status.test.ts`, `commerce-notificacoes.test.ts`). Fetch do WhatsApp **mockado** (`t.mock.method(globalThis, 'fetch', ...)`).
 - Conectores: assinatura Nuvemshop, OAuth e state (`connectors.test.ts`).
 - Payment engine e gateway legado (`payment-engine.test.ts`, `enterprise-legacy-gateway.test.ts`).
-- PIX (`commerce-orders-pix.test.ts`, `commerce-pix-real-flow.test.ts`).
+- PIX (`commerce-orders-pix.test.ts`, `commerce-pix-mock-flow.test.ts`).
 - Segurança de e-mail (`enterprise-mail-security.test.ts`).
 - Ofertas por canal (`commerce-paineis-api.test.ts`).
 
