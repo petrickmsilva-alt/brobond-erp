@@ -19,7 +19,7 @@ Resultado da suíte nesta rodada: servidor 1726 aprovados, 0 falhas, 76 ignorado
 | Mercado Livre (publicação) | P0-01 corrigido; suspenso por padrão | `publicacao-canais-p0.test.ts` (5/5) | NÃO EXECUTADO | NÃO EXECUTADO. Reconciliação de duplicados NÃO EXECUTADA |
 | Nuvemshop (publicação) | Migração 2025-03; suspensa por padrão | `publicacao-nuvemshop-2025` (9/9), `-fluxo` (3/3) | NÃO EXECUTADO (condição da decisão (b)) | NÃO EXECUTADO. Leitura de pedidos ainda em v1 |
 | Instagram | Sem alteração nesta rodada | Webhook fail-closed (Fase 2) | NÃO EXECUTADO | NÃO EXECUTADO |
-| WhatsApp (envio) | Versão padrão Graph `v26.0` (P2-06) | `commerce-pix-real-flow` atualizado (URL v26.0) | NÃO EXECUTADO | NÃO EXECUTADO. Verificação de templates NÃO EXECUTADA |
+| WhatsApp (envio) | Versão padrão Graph `v26.0` (P2-06) | `commerce-pix-mock-flow` atualizado (URL v26.0) | NÃO EXECUTADO | NÃO EXECUTADO. Verificação de templates NÃO EXECUTADA |
 | WhatsApp (status / webhook) | Webhook fail-closed, HMAC, máquina de estados (P1-05) | `whatsapp-status-webhook.test.ts` (11/11 medido na Fase 4.1; a contagem 9/9 anterior estava desatualizada); mutação derruba 3 testes | NÃO EXECUTADO | NÃO EXECUTADO. **Inativo**: segredo não autorizado (decisão (d)) |
 | SMTP | Verificação `verify()` e teste ao admin (P1-06) | `smtp-verificacao-admin.test.ts` (5/5), `enterprise-mail-security` (4/4) | NÃO EXECUTADO (sem servidor SMTP nesta sandbox) | NÃO EXECUTADO |
 | Alerta de falhas (outbox / webhook / notificação) | Seção "Falhas de envio" no relatório diário (P2-08) | `alertas-falhas-entrega.test.ts` (6/6) | NÃO EXECUTADO | NÃO EXECUTADO. Envio agendado real não verificado |
@@ -65,8 +65,19 @@ Legenda de tipo: **L** = local/unitário; **I** = integração local (PostgreSQL
 | R-3 PostgreSQL obrigatório | L + I | 9/9; gate PG 16.14 (ver registro §C) | revalidado |
 | R-15 Nuvemshop gate | L (guarda) | 5/5; **nenhuma leitura GET** | **BLOQUEADO** (sem credencial de homologação) |
 | Suíte servidor (memória) | L | 1915 total; 1834 ok; 0 falhas; 81 ignorados (execução final) | executada; 1 falha de IPC do runner numa execução anterior, não reproduzida em duas execuções completas |
-| PIX Mercado Pago (`commerce-pix-real-flow`) | **M (mock)** | aprovado; `fetch` simulado | não é prova de integração com o provedor real |
+| PIX Mercado Pago (`commerce-pix-mock-flow`) | **M (mock)** | aprovado; `fetch` simulado | não é prova de integração com o provedor real |
 | Gate PG 16.14 | I | 410 aprovados, 0 reprovados, 13 ignorados (`psql`) | executado; **gate BLOQUEADO pela própria política** (ignorados críticos) |
 | Conector PagBank homologado | — | — | **NÃO homologado** (sem evidência externa) |
 | Conector Nuvemshop homologado | — | — | **NÃO homologado** |
 | Conector Mercado Livre homologado | — | — | **NÃO homologado** |
+
+## Atualização Fase 4.3 — Ordem Executiva Master
+
+| Conector / item | Código | Teste local | Sandbox | Operação real |
+|---|---|---|---|---|
+| PagBank — autenticidade do webhook (item 6) | Concluído (verificador oficial: SHA-256 de `{token}-{corpo cru}`) | 21/21 (`pagbank-webhook-contrato-oficial`, `-segredo`, `-rota-segredo`) | NÃO EXECUTADO (sem credencial de sandbox; sem egress) | NÃO EXECUTADO |
+| Mercado Livre — relatório de reconciliação (item 9) | Concluído (função pura, somente leitura; nunca exclui) | 8/8 (`mercadolivre-reconciliacao-relatorio`) | NÃO EXECUTADO | NÃO EXECUTADO (depende de credencial e de leitura da conta) |
+| Mercado Livre — seller_id real na sincronização legada (item 13) | Concluído (`/users/me` → `orders/search?seller=<id>`) | 14/14 nas três suítes de marketplace | NÃO EXECUTADO | NÃO EXECUTADO |
+| Nuvemshop 2025-03 — cabeçalho (R-15) | Código já alinhado à documentação oficial do 2025-03 (`Authorization: Bearer` e `User-Agent`) | `nuvemshop-contratos-homologacao` verde | NÃO EXECUTADO | NÃO EXECUTADO (G6: sem credencial de loja de teste) |
+| PIX (item 11) | Fluxo com simulador (MOCK), renomeado `commerce-pix-mock-flow` | 18/18 | NÃO EXECUTADO (sandbox do Mercado Pago não configurado no projeto) | NÃO EXECUTADO. Sem pagamento real. |
+| Logs OAuth (item 13) | Concluído (sem corpo bruto de resposta de erro) | 3/3 (`logs-oauth-sem-corpo`) | — | — |

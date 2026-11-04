@@ -323,3 +323,63 @@ Nenhum conector foi marcado como homologado. Nenhuma evidência de homologação
 - **Bloqueado por dependência externa:** R-15 (credencial de homologação ausente). Homologação externa de todos os conectores: não realizada.
 - **Não pronto para produção:** depende das pendências G1–G7 (seção G) e de homologação externa.
 - **Não enviado:** nenhum push, PR, merge ou deploy foi feito. Os commits estão somente no ambiente local.
+
+## I. Ordem Executiva Master — consolidação (itens 1–19)
+
+Execução local, no branch `arena/c0104925-brobond-erp`. Nenhum push, PR, merge, deploy, alteração em Render ou `render.yaml`, publicação na main, reativação de publicação, pagamento real ou segredo exibido.
+
+### I.1 Mapa dos itens
+
+| # | Item | Situação | Evidência local | Pendência externa |
+|---|---|---|---|---|
+| 1 | Preservação do repositório | Concluído: histórico preservado, sem reescrita, sem recriar o clone | `git log` com os commits anteriores intactos | — |
+| 2 | Isolamento de notificações (R-12, outbox, alertas) | Concluído | `outbox-notificacoes-cross-tenant` 3/3; `notificacoes-segregacao` | SMTP real não testável |
+| 3 | R-4, cinco contratos independentes | Concluído (código e teste). **Não agendado.** | `cron-processos-independentes`, `cron-recorrencias-contrato`, SEC-03 (PG) | G1: frequência, timeout e agendador |
+| 4 | R-1, rotas de marketplace | Concluído, inclusive `seller=seller_id` | 14/14 marketplace | Credencial ML para prova real |
+| 5 | R-14 e reconciliação de webhooks legados | Reconciliação **implementada** (dry-run padrão, confirmação, auditoria, rollback). **Não executada em produção.** | `webhook-reconciliacao-legados` 11/11; `procedimento-reconciliacao-webhooks.md` | G3: backup e execução |
+| 6 | R-10, contrato PagBank | Concluído: algoritmo oficial confirmado por documentação; testes de corpo alterado, reformatado, token errado, malformada, segredo ausente. **Replay:** o contrato não define janela; a proteção é idempotência por `evento_id`. | `pagbank-webhook-contrato-oficial` 10/10 (+9 e 2) | H-8: homologação funcional |
+| 7 | `PAGBANK_WEBHOOK_SECRET` | Preparado (verificação sem valores). **Não criado.** | `matriz-configuracao-producao.md` §14.2 | G2 |
+| 8 | Nuvemshop 2025-03 | Código alinhado à documentação oficial do 2025-03. **Sem escrita, sem reativação, sem GET à loja.** | `nuvemshop-contratos-homologacao`; `gate-leitura-nuvemshop-2025-03.md` §7 | G6: credencial de loja de teste |
+| 9 | Mercado Livre | Atualização, reuso de `external_id`, busca por SKU e idempotência: já cobertos (`publicacao-canais-p0`). Relatório de reconciliação **novo**, somente leitura. Publicação suspensa. | `mercadolivre-reconciliacao-relatorio` 8/8; `publicacao-canais-p0` | G5 e credencial ML |
+| 10 | Gate PostgreSQL 16.14 com `psql` | **Aprovado:** 428 testes, 0 falhas, 0 ignorados, 0 pendentes. Investigação 422/423 resolvida (ver I.3). | `/tmp/pggate-4-4.log` (EXIT 0) | — |
+| 11 | PIX mock × sandbox; instabilidade IPC | Separado: arquivo renomeado para `commerce-pix-mock-flow` (MOCK). Sandbox **não configurado** no projeto. IPC **não reproduzida** em 6 execuções (1 da suíte + 5 isoladas, 18/18 cada). | `commerce-pix-mock-flow` 18/18; loop IPC 5/5 | Credencial de sandbox |
+| 12 | Arquivos privados | Concluído: URL assinada com expiração (TTL 900 s), HMAC, comparação em tempo constante, 404 uniforme, `private, no-store`; público mantém cache longo só para catálogo. RED 9/14 → GREEN 14/14. | `arquivos-politica-privados` 14/14; `sec01-anexos-tenant` no gate | — |
+| 13 | `ADMIN_PASSWORD`, `seller_id`, logs | Concluído: sem padrão em produção, comparação em tempo constante; `seller` real; logs OAuth sem corpo bruto. | `admin-senha-producao` 5/5; `logs-oauth-sem-corpo` 3/3 | — |
+| 14 | Homologação por conector | Documentada com níveis separados (código, teste, sandbox, operação). **Nada declarado como homologado.** | `matriz-evidencias-conectores.md` (atualização 4.3) | G4, G6, G7 |
+| 15 | Cinco jobs | Documentados: URL, método, auth, códigos, lacunas declaradas (frequência e timeout não definidos; sem retentativa automática). | `docs/operacao/cinco-jobs-cron.md` | G1 |
+| 16 | Documentação consolidada | Concluído por acréscimo | Este registro; `matriz-configuracao-producao.md` §14; ADR-004 §5 | — |
+| 17 | Testes finais | Concluído (ver I.2) | — | — |
+| 18 | Commits por grupo | Concluído (ver I.4) | `git log` | — |
+| 19 | Relatório final | Entregue no chat, com os 15 itens | — | — |
+
+### I.2 Testes finais (medidos nesta execução)
+
+| Suíte | Resultado |
+|---|---|
+| Servidor (`npm --workspace server test`) | 1969 testes: **1888 pass, 0 fail, 81 skip** (os 81 são PG, "requer DATABASE_URL"; cobertos pelo gate PG) — EXIT 0 |
+| Gate PG 16.14 (`npm run test:pg`, banco novo) | **428 pass, 0 fail, 0 skip, 0 todo, 0 cancelled** — `ERP-03 GATE PASS` — EXIT 0 |
+| Wrapper psql (7 arquivos, banco novo) | 20/20 — EXIT 0 |
+| Cliente (`npm --workspace client test`) | 133 arquivos, **1151 testes pass** — EXIT 0 |
+| Typecheck (`npm run typecheck`) | EXIT 0 |
+| Lint (arquivos alterados) | **0 erros**, avisos pré-existentes |
+| Build (`npm run build`) | EXIT 0 |
+| Migrações | Executadas pelo gate PG (428/428), inclusive `0097_webhooks_empresa.sql`, em banco novo |
+
+Cobertura por área pedida (item 17): multiempresa, RBAC, pagamentos, webhooks, outbox, cron, arquivos privados e idempotência estão nos testes listados acima e no gate PG.
+
+### I.3 Investigação 422/423 (item 10)
+
+A diferença entre as execuções antigas (422 e 423 testes) era o subteste `evidência SEC-03`, que só executa se o teste pai passa inteiro, e os 13 testes ignorados por `psql` ausente. Com `psql` 16.2 disponível (cliente de terceiros, via pacote `pgserver`, usado só para testes locais) e banco novo, o gate roda 428 testes sem ignorados. Não houve redução de cobertura.
+
+### I.4 Commits desta execução
+
+Ver `git log` no branch. Organização por grupo: arquivos privados; senha do administrador; reconciliação de webhooks; contrato PagBank e ADR-004; marketplace (`seller`) e reconciliação ML; Nuvemshop (contrato, logs OAuth, gate); PIX mock (renomeação); documentação dos cinco jobs e consolidação.
+
+### I.5 Riscos residuais
+
+- **Frequência e timeout dos cinco jobs** não definidos (G1).
+- **Reconciliação de webhooks** não executada em produção (G3).
+- **Homologação funcional PagBank (H-8)** sem evidência real.
+- **Nuvemshop v1:** o cabeçalho `Authentication: bearer` do conector v1 só aparece em perfil de terceiro; não alterado (escopo separado).
+- **Rota legada de marketplace** (`POST /api/marketplace/sincronizar`) usa o token estático da instalação, que não pertence a uma empresa específica. A rota só registra a contagem na auditoria da empresa do ator e não grava pedidos. Os identificadores externos ficam fora da resposta. Se a rota vier a gravar pedidos, a origem do token precisará de decisão do Diretor.
+- **Ambiente:** `NODE_ENV` precisa ser `production` no deploy, senão o padrão de desenvolvimento vale para `ADMIN_PASSWORD` e `JWT_SECRET`.

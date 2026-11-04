@@ -309,3 +309,36 @@ O agendador é **externo** ao repositório (`render.yaml` não declara cron). Ca
 
 - Nenhuma variável nova. Eventos sem empresa (globais) são entregues só a webhooks globais.
 - Webhooks legados (`empresa_id` NULL) não recebem eventos de empresa até associação manual (registro, §R-14).
+
+## 14. Atualização Fase 4.3 — Ordem Executiva Master (itens 6, 7, 12, 13, 15)
+
+### 14.1 `ADMIN_PASSWORD` (item 13)
+
+- Fora de produção (`NODE_ENV` diferente de `production`), ausente usa o padrão de desenvolvimento. Isso preserva os testes e o ambiente local.
+- Em produção (`NODE_ENV=production`), ausente, com menos de 8 caracteres ou igual ao padrão de desenvolvimento **resolve para vazio**. Vazio **não autentica** em nenhum caminho: login normal, login de contingência com banco indisponível e reautenticação de sessão.
+- Comparação em tempo constante (`senhasIguais`).
+- A criação do administrador é recusada quando não há senha efetiva, para não criar conta com senha vazia.
+- Código: `server/src/senhaAdmin.ts`, `server/src/auth.ts`. Testes: `server/test/admin-senha-producao.test.ts` (5 casos).
+- Ação operacional: definir `ADMIN_PASSWORD` com pelo menos 8 caracteres e diferente do padrão, **sem colar o valor em canais públicos**. Nenhum valor foi criado nem impresso nesta execução.
+
+### 14.2 `PAGBANK_WEBHOOK_SECRET` (item 7) — preparação sem criação
+
+- Variável já lida em `modules/payments/application/configuration.ts`, junto de `PAGBANK_ACCESS_TOKEN`.
+- Verificação feita: nenhum arquivo `.env` na raiz; nenhuma variável `PAGBANK_*` definida no ambiente desta sandbox (somente nomes verificados); `render.yaml` **não** declara a variável.
+- Criar a variável em qualquer ambiente exige aprovação expressa do Diretor (**G2**). Nada foi criado, configurado nem solicitado.
+- Segredo cadastrado por empresa (`webhook_segredo_cifrado`) tem precedência no fluxo de empresa; a variável só serve à vitrine.
+- Verificador com segredo ausente ou só espaços: recusa (teste `pagbank-webhook-contrato-oficial.test.ts`).
+
+### 14.3 Não configurado nesta execução (sem autorização)
+
+- `render.yaml`, Render, agendador externo: não alterados.
+- `CRON_SECRET`: não criado nem alterado.
+
+### 14.4 Riscos residuais de configuração
+
+- `NODE_ENV` desconfigurado em produção faz o sistema usar o padrão de desenvolvimento para `ADMIN_PASSWORD` **e** para `JWT_SECRET`. Confirmar `NODE_ENV=production` antes de qualquer deploy.
+
+### 14.5 Cinco jobs (item 15)
+
+- Documentação completa: `docs/operacao/cinco-jobs-cron.md` (URL, método, autenticação, frequência, timeout, retentativa, códigos de resposta).
+- Frequência e timeout não estão definidos: pendência **G1**.
