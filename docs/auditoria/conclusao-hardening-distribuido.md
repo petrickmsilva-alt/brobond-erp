@@ -205,3 +205,7 @@ depende de sandbox externo e não executado.
 - **PG PASS** — PgStore: entregas filtradas por empresa excluem legado NULL e a outra empresa
 - **PG PASS** — PgStore: listagem de webhooks para admin de A não mostra B nem global
 - **BLOQUEADO** — PIX sandbox: cria uma cobrança PIX de teste no provedor declarado
+
+Atualização de entrega: o commit `7044a34` foi enviado com sucesso para
+`origin/arena/615f44fd-brobond-erp`. Esta nota é registrada em commit adicional;
+o resultado do seu push é informado no relatório de entrega. Nenhum PR foi aberto.
