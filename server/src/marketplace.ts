@@ -28,6 +28,18 @@ function getConfig(): { mercadolivre: MarketplaceConfig | null } {
 }
 
 /**
+ * Ordem Final 2.4 — contrato explícito para o token ESTÁTICO de instalação (MERCADOLIVRE_TOKEN).
+ * Formato: MERCADOLIVRE_TOKEN_ESTATICO_CONTRATO = "<empresa_id>:<referência do contrato>" (referência ≥ 8 caracteres).
+ * Sem contrato válido para a empresa do ator, a rota legada NÃO chama o Mercado Livre.
+ * A referência nunca é exibida nem registrada; só o resultado booleano sai.
+ */
+export function contratoTokenEstaticoMl(empresaId: number): boolean {
+  const bruto = String(process.env.MERCADOLIVRE_TOKEN_ESTATICO_CONTRATO || '').trim();
+  const m = /^(\d+):([^\s:]{8,})$/.exec(bruto);
+  return !!m && Number(m[1]) === Number(empresaId) && Number(empresaId) > 0;
+}
+
+/**
  * GET /api/marketplace/status — configuração da instalação (token estático e URL da loja).
  * R-1 (Fase 4.3): é informação administrativa. Só administrador consulta; sem sessão, 401.
  */
@@ -38,7 +50,7 @@ export function marketplaceStatus(req: Request, res: Response) {
   const cfg = getConfig();
   const loja = configLoja();
   res.json({
-    mercadolivre: cfg.mercadolivre ? { configurado: true, ativo: cfg.mercadolivre.ativo } : { configurado: false },
+    mercadolivre: cfg.mercadolivre ? { configurado: true, ativo: cfg.mercadolivre.ativo, contrato_token_estatico: contratoTokenEstaticoMl(Number(actor.empresa_id)) } : { configurado: false },
     // Loja própria (brobond.com.br): pedidos + estoque são sincronizados pelos
     // endpoints /api/marketplace/loja/* — ver loja.ts.
     loja: loja ? { configurado: true, ativo: true, url: loja.url } : { configurado: false },
@@ -59,6 +71,22 @@ export async function sincronizarPedidos(req: Request, res: Response) {
   const provider = String(req.body?.provider || '');
   if (!provider || !cfg.mercadolivre) {
     throw new HttpError(409, 'Nenhum marketplace configurado. Defina MERCADOLIVRE_TOKEN.');
+  }
+
+  // Ordem Final 2.4: o token estático da instalação só é usado com contrato válido para ESTA empresa.
+  // Bloqueio antes de qualquer chamada externa e com registro de auditoria da tentativa.
+  if (provider === 'mercadolivre' && !contratoTokenEstaticoMl(Number(actor.empresa_id))) {
+    await getStore().audit({
+      usuario_id: actor.id,
+      usuario: actor.name,
+      acao: 'seguranca',
+      recurso: 'marketplace',
+      registro_id: null,
+      descricao: 'Sincronização legada do Mercado Livre bloqueada: token estático sem contrato válido para a empresa.',
+      dados: { provider, motivo: 'contrato_token_estatico_ausente' },
+      empresa_id: empresaDoAtorAudit(actor),
+    });
+    throw new HttpError(409, 'Token estático de instalação sem contrato válido para esta empresa. Rota legada bloqueada até a declaração do contrato.');
   }
 
   const s = getStore();

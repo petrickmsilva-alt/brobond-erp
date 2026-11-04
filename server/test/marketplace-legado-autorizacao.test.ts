@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
 process.env.MERCADOLIVRE_TOKEN = 'fixture-token-legado-000';
+// Ordem Final 2.4: contrato declarado para a empresa 1 (cenário legítimo).
+process.env.MERCADOLIVRE_TOKEN_ESTATICO_CONTRATO = '1:contrato-teste-000';
 
 const { sincronizarPedidos } = await import('../src/marketplace');
 

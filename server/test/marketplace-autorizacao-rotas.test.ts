@@ -11,7 +11,7 @@ const M: any = await import('../src/marketplace');
 const L: any = await import('../src/loja');
 const ler = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
-const ENV_KEYS = ['MERCADOLIVRE_TOKEN', 'WOOCOMMERCE_URL', 'WOOCOMMERCE_CK', 'WOOCOMMERCE_CS', 'WOOCOMMERCE_EMPRESA_ID'];
+const ENV_KEYS = ['MERCADOLIVRE_TOKEN', 'MERCADOLIVRE_TOKEN_ESTATICO_CONTRATO', 'WOOCOMMERCE_URL', 'WOOCOMMERCE_CK', 'WOOCOMMERCE_CS', 'WOOCOMMERCE_EMPRESA_ID'];
 const envAnterior: Record<string, string | undefined> = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 const fetchAnterior = globalThis.fetch;
 test.after(() => {
@@ -64,6 +64,7 @@ test('GET /api/marketplace/loja/status: operador é recusado; gerente da empresa
 
 test('POST /api/marketplace/sincronizar: não devolve identificadores externos de pedidos', async () => {
   process.env.MERCADOLIVRE_TOKEN = 'token-de-teste-nao-real';
+  process.env.MERCADOLIVRE_TOKEN_ESTATICO_CONTRATO = '1:contrato-teste-000';
   // /users/me devolve a identidade do token; /orders/search devolve os pedidos (contrato real).
   globalThis.fetch = (async (url: any) => String(url).includes('/users/me')
     ? { ok: true, json: async () => ({ id: 555000111 }) }
@@ -77,6 +78,7 @@ test('POST /api/marketplace/sincronizar: não devolve identificadores externos d
 
 test('POST /api/marketplace/sincronizar: gerente e operador recusados (regressão R-1)', async () => {
   process.env.MERCADOLIVRE_TOKEN = 'token-de-teste-nao-real';
+  process.env.MERCADOLIVRE_TOKEN_ESTATICO_CONTRATO = '1:contrato-teste-000';
   for (const perfil of ['gerente', 'operador']) {
     const r = await chamar(M.sincronizarPedidos, usuario(perfil, 1), { body: { provider: 'mercadolivre' } });
     assert.equal(statusDe(r), 403, `${perfil}: 403`);
