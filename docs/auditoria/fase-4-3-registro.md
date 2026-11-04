@@ -197,7 +197,7 @@ Tipo de evidência: **local/unitário** (sem banco), **integração local** (Pos
 | R-10 pagamentos, gateway, PagBank, conectores, Nuvemshop, commerce | 164/164 | local/mock |
 | R-3 `banco-obrigatorio-producao` + inventário | 9/9 | local |
 | R-15 `nuvemshop-gate-leitura` | 5/5 (guarda local) | local |
-| **Suíte completa do servidor (memória)** | **1912 total; 1831 aprovados; 0 reprovados; 81 ignorados; EXIT 0** | local |
+| **Suíte completa do servidor (memória), execução final** | **1915 total; 1834 aprovados; 0 reprovados; 81 ignorados; EXIT 0** (1912 na execução anterior; +3 = testes do outbox) | local |
 | Typecheck servidor (`tsc --noEmit`) | EXIT 0 | local |
 | Typecheck cliente (`npm --workspace client run typecheck`) | EXIT 0 | local |
 | Typecheck domínio (`npm run typecheck:domain`) | EXIT 0 | local |
@@ -208,8 +208,12 @@ Tipo de evidência: **local/unitário** (sem banco), **integração local** (Pos
 de `pg-webhooks-empresa` (também `DATABASE_URL`). Estão cobertos pelo gate PG abaixo.
 
 **Instabilidade observada (não ocultada):** na primeira execução completa, `commerce-pix-real-flow.test.ts` falhou com
-`Unable to deserialize cloned data` (erro de IPC do runner, não uma asserção). Isolado: 18/18. Na reexecução
-completa: aprovado. **Causa não determinada**; permanece como instabilidade observada do runner.
+`Unable to deserialize cloned data` (erro de IPC do runner, não uma asserção). Isolado: 18/18. Nas duas execuções completas
+seguintes: aprovado (1912 e 1915 testes). **Causa não determinada**; ocorreu uma vez em três execuções completas.
+
+**Classificação do teste PIX (`commerce-pix-real-flow`):** o nome diz "contrato real, sem simulação", mas o arquivo **substitui
+`globalThis.fetch` por uma simulação** (`fetchSimulado`). É teste com **mock do provedor**. Não comprova comunicação com o
+Mercado Pago. A integração real depende de homologação externa (não realizada).
 
 ### Gate PostgreSQL 16.14 (`scripts/test-pg-gate.mjs`, banco novo)
 - Execução 1 (banco `erp_gate_*`): 422 testes; 406 aprovados; **3 reprovados**; 13 ignorados.

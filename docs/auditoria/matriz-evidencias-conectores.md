@@ -64,7 +64,8 @@ Legenda de tipo: **L** = local/unitário; **I** = integração local (PostgreSQL
 | R-10 PagBank segredo e fallback | L | 2/2 (RED 1/2); regressão 164/164 | corrigido localmente; confirmação do algoritmo em sandbox pendente |
 | R-3 PostgreSQL obrigatório | L + I | 9/9; gate PG 16.14 (ver registro §C) | revalidado |
 | R-15 Nuvemshop gate | L (guarda) | 5/5; **nenhuma leitura GET** | **BLOQUEADO** (sem credencial de homologação) |
-| Suíte servidor (memória) | L | 1912 total; 1831 ok; 0 falhas; 81 ignorados | executada |
+| Suíte servidor (memória) | L | 1915 total; 1834 ok; 0 falhas; 81 ignorados (execução final) | executada; 1 falha de IPC do runner numa execução anterior, não reproduzida em duas execuções completas |
+| PIX Mercado Pago (`commerce-pix-real-flow`) | **M (mock)** | aprovado; `fetch` simulado | não é prova de integração com o provedor real |
 | Gate PG 16.14 | I | 410 aprovados, 0 reprovados, 13 ignorados (`psql`) | executado; **gate BLOQUEADO pela própria política** (ignorados críticos) |
 | Conector PagBank homologado | — | — | **NÃO homologado** (sem evidência externa) |
 | Conector Nuvemshop homologado | — | — | **NÃO homologado** |
