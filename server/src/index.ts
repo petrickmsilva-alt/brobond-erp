@@ -172,7 +172,7 @@ import { importarCnab, listarParsersHandler } from './cnab';
 import { vendaPDF, compraPDF } from './pdf';
 import { produtoQRCode, produtoQRCodeSVG, produtoQRDados, produtoEtiquetaQR } from './qrcode';
 import { listAprovacoes, aprovarPedido, rejeitarPedido, countAprovacoes } from './approval';
-import { runScheduled, cronScheduled, scheduledStatus } from './scheduled';
+import { runScheduled, cronScheduled, cronProcesso, scheduledStatus } from './scheduled';
 import { listQualidade, createQualidade, relatorioQualidade } from './quality';
 import { predicaoDemanda, predicaoInsumos } from './prediction';
 import { rateLimitPortal, administrarAcessosPortal, decidirCotacao, gerarAcessoPortal, portalPedidos, portalPedidoDetalhe, recomprarPedido, revogarAcessoPortal } from './portal';
@@ -607,9 +607,12 @@ app.post('/api/print/agent/jobs/:id/lease', autenticarAgente, exigirNonceAgente,
 // ----------------------------------------------------------------------------
 // Autenticado
 // ----------------------------------------------------------------------------
-// R-4 (Fase 4.2): cron externo — autentica SOMENTE por CRON_SECRET (ver cronScheduled).
+// R-4 (Fase 4.2/4.3): cron externo — autentica SOMENTE por CRON_SECRET (ver scheduled.ts).
 // Montado ANTES da guarda de sessão: sessão de usuário não entra aqui.
+// `/cron` executa só o processo `relatorios`; `/cron/:processo` executa um processo por chamada.
+// Recorrências financeiras não têm rota de cron (somente /api/admin/financeiro/recorrencias, com confirmação).
 app.post('/api/admin/scheduled/cron', wrap(cronScheduled));
+app.post('/api/admin/scheduled/cron/:processo', wrap(cronProcesso));
 
 app.use('/api', wrap(requireAuth));
 // Conta com senha provisória (convite, reset ou admin padrão) só lê e só escreve

@@ -44,8 +44,9 @@ test('cron: sem CRON_SECRET configurado, falha fechado e não executa nada (503)
 test('cron: sessão de usuário (Bearer de sessão) não autentica o cron (401)', async (t) => {
   t.after(() => { delete process.env.CRON_SECRET; });
   process.env.CRON_SECRET = 'segredo-cron-de-teste-0123456789';
-  const { erro } = await chamar(S.cronScheduled as any, { headers: { authorization: 'Bearer sessao-do-admin-xyz' }, user: { id: 1, perfil: 'admin' } });
-  assert.equal(erro?.status, 401);
+  const { erro, res } = await chamar(S.cronScheduled as any, { headers: { authorization: 'Bearer sessao-do-admin-xyz' }, user: { id: 1, perfil: 'admin' } });
+  // R-4 (Fase 4.3): a recusa é respondida diretamente (res.status), sem exceção. Lê-se o status de qualquer canal.
+  assert.equal(erro?.status ?? res.statusCode, 401);
 });
 
 test('cron: com CRON_SECRET correto, responde 200 (controle do contrato)', async (t) => {

@@ -15,7 +15,9 @@
 //   SCHEDULE_PRODUCAO=weekly
 //
 // Execução: GET /api/admin/scheduled/run (admin) — executa manualmente
-//           POST /api/admin/scheduled/cron — chamado por cron externo (ex.: cron-job.org)
+//           POST /api/admin/scheduled/cron — cron externo: processo `relatorios`
+//           POST /api/admin/scheduled/cron/:processo — um processo por chamada (pagamentos, publicacoes, pedidos, crm)
+//           Recorrências financeiras NÃO são processo de cron (ver financeiro.ts).
 // ============================================================
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { coletarFalhasEntrega, htmlSecaoFalhasEntrega } from './alertasFalhas';
@@ -33,7 +35,7 @@ import type { Request, Response } from 'express';
 import { currentUser } from './auth';
 import { diaISO } from './utils';
 import { dispararLembretesCrm } from './crm';
-import { processarComercioAgendado } from './commerce/outbox';
+import { processarOutbox, TIPOS_OUTBOX_POR_PROCESSO } from './commerce/outbox';
 
 const fmtMoney = (n: number) => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtNumber = (n: number) => n.toLocaleString('pt-BR');
@@ -322,54 +324,174 @@ async function recuperarPedidosPendentes(): Promise<number> {
   return total;
 }
 
+/**
+ * R-4 (Fase 4.3) — processos do cron, cada um com responsabilidade delimitada.
+ *
+ * Cada processo é executado SOZINHO por `executarProcessoCron`: uma falha em um não interrompe os
+ * outros; não há processo que chame outro; e o relatório (`relatorios`) não dispara nenhum efeito
+ * financeiro, de publicação, de pedido ou de CRM. Recorrências financeiras NÃO são processo de cron:
+ * só existem na rota administrativa com confirmação explícita (financeiro.ts, `cronRecorrencias`).
+ *
+ * Autenticação: todos os processos usam o mesmo contrato de `CRON_SECRET` (Bearer) e nenhum aceita
+ * sessão de usuário. Não há segredo por processo, para não criar variável nova sem aprovação.
+ */
+export type ProcessoCron = 'relatorios' | 'pagamentos' | 'publicacoes' | 'pedidos' | 'crm';
+
+export interface ResultadoExecutorCron {
+  itens: number;
+  detalhes: string[];
+  falhas: string[];
+}
+
+export interface ResultadoProcessoCron extends ResultadoExecutorCron {
+  processo: ProcessoCron;
+  ok: boolean;
+  status: number;
+  inicio: string;
+  fim: string;
+}
+
+/** Relatórios agendados: estoque, vendas e alertas (com a seção de falhas de envio). Cada um isolado. */
+async function executarRelatoriosCron(): Promise<ResultadoExecutorCron> {
+  const detalhes: string[] = [];
+  const falhas: string[] = [];
+  const tentar = async (nome: string, rotulo: string, fn: () => Promise<void>) => {
+    try { await fn(); detalhes.push(rotulo); } catch { falhas.push(nome); }
+  };
+  if (deveExecutar(getSchedule('POSICAO_ESTOQUE'))) await tentar('relatorio_estoque', 'Posição de estoque', () => relatorioPosicaoEstoque());
+  if (deveExecutar(getSchedule('VENDAS'))) await tentar('relatorio_vendas', 'Vendas', () => relatorioVendas());
+  if (deveExecutar(getSchedule('ALERTAS'))) await tentar('relatorio_alertas', 'Alertas e falhas de envio', () => relatorioAlertas());
+  return { itens: detalhes.length, detalhes, falhas };
+}
+
+/** Sincronização de pagamentos, expiração de checkouts e reembolsos de devolução (fila `pagamentos`). */
+async function executarPagamentosCron(): Promise<ResultadoExecutorCron> {
+  const falhas: string[] = [];
+  let itens = 0;
+  try {
+    const { runPaymentJobs } = await import('../../modules/payments/application/jobs');
+    const r = await runPaymentJobs();
+    itens += Number(r.synchronized) || 0;
+    if (r.failed) falhas.push('sincronizacao_pagamentos');
+  } catch { falhas.push('sincronizacao_pagamentos'); }
+  try {
+    const { expirarCheckoutsPendentes } = await import('./commerce/pedidos');
+    itens += Number(await expirarCheckoutsPendentes()) || 0;
+  } catch { falhas.push('expiracao_checkout'); }
+  try {
+    const o = await processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.pagamentos);
+    itens += o.processados;
+    if (o.erros) falhas.push('reembolsos_devolucao');
+  } catch { falhas.push('reembolsos_devolucao'); }
+  return { itens, detalhes: [], falhas };
+}
+
+/** Fila de publicações (respeita a suspensão ML/Nuvemshop) e publicações pendentes na outbox. */
+async function executarPublicacoesCron(): Promise<ResultadoExecutorCron> {
+  const falhas: string[] = [];
+  let itens = 0;
+  try {
+    const { processarFilaPublicacoes } = await import('./commerce/catalogo');
+    const p = await processarFilaPublicacoes(20);
+    itens += p.processadas;
+    if (p.falhas) falhas.push('fila_publicacoes');
+  } catch { falhas.push('fila_publicacoes'); }
+  try {
+    const o = await processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.publicacoes);
+    itens += o.processados;
+    if (o.erros) falhas.push('outbox_publicacoes');
+  } catch { falhas.push('outbox_publicacoes'); }
+  return { itens, detalhes: [], falhas };
+}
+
+/** Recuperação de pedidos de marketplace e eventos de pedido (conversão, notificação, sincronização). */
+async function executarPedidosCron(): Promise<ResultadoExecutorCron> {
+  const falhas: string[] = [];
+  let itens = 0;
+  try { itens += await recuperarPedidosPendentes(); } catch { falhas.push('recuperacao_marketplace'); }
+  try {
+    const o = await processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.pedidos);
+    itens += o.processados;
+    if (o.erros) falhas.push('eventos_pedido');
+  } catch { falhas.push('eventos_pedido'); }
+  return { itens, detalhes: [], falhas };
+}
+
+/** Lembretes de CRM. Com o canal desligado, não grava nem envia (guarda em crm.ts). */
+async function executarCrmCron(): Promise<ResultadoExecutorCron> {
+  const r = await dispararLembretesCrm();
+  return { itens: r.disparados, detalhes: r.canal === 'desabilitado' ? ['canal de lembrete desabilitado'] : [], falhas: [] };
+}
+
+/**
+ * Registro dos processos. É um objeto mutável de propósito: os testes substituem executores
+ * por registradores (sem efeito externo). Não há entrada para recorrências financeiras.
+ */
+export const processosCron: Record<ProcessoCron, () => Promise<ResultadoExecutorCron>> = {
+  relatorios: executarRelatoriosCron,
+  pagamentos: executarPagamentosCron,
+  publicacoes: executarPublicacoesCron,
+  pedidos: executarPedidosCron,
+  crm: executarCrmCron,
+};
+
+export function isProcessoCron(nome: string): nome is ProcessoCron {
+  return Object.prototype.hasOwnProperty.call(processosCron, nome);
+}
+
+/** Trava por instância: impede execução concorrente do mesmo processo (409). */
+const emExecucao = new Set<ProcessoCron>();
+
+/**
+ * Executa UM processo, com trava, tratamento de falha e registro de execução.
+ * O registro (log estruturado) não contém payloads, e-mails, tokens nem mensagens de erro brutas.
+ */
+export async function executarProcessoCron(processo: ProcessoCron): Promise<ResultadoProcessoCron> {
+  const inicio = new Date();
+  if (emExecucao.has(processo)) {
+    const recusa: ResultadoProcessoCron = { processo, ok: false, status: 409, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString() };
+    console.warn(JSON.stringify({ evento: 'cron_processo_recusado', processo, motivo: 'ja_em_execucao' }));
+    return recusa;
+  }
+  emExecucao.add(processo);
+  let resultado: ResultadoProcessoCron;
+  try {
+    const r = await processosCron[processo]();
+    const falhas = r.falhas;
+    resultado = { processo, ok: falhas.length === 0, status: falhas.length ? 503 : 200, itens: r.itens, detalhes: r.detalhes, falhas, inicio: inicio.toISOString(), fim: new Date().toISOString() };
+  } catch (e: any) {
+    // Só o tipo do erro vai para o registro: mensagem bruta pode conter dados do provedor.
+    console.error(JSON.stringify({ evento: 'cron_processo_falhou', processo, tipo: String(e?.name || 'Error') }));
+    resultado = { processo, ok: false, status: 503, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString() };
+  } finally {
+    emExecucao.delete(processo);
+  }
+  console.info(JSON.stringify({ evento: 'cron_processo', processo, ok: resultado.ok, status: resultado.status, itens: resultado.itens, falhas: resultado.falhas, inicio: resultado.inicio, fim: resultado.fim }));
+  return resultado;
+}
+
+/** GET /api/admin/scheduled/run — sessão de administrador. Executa SOMENTE relatórios e o motor de negócios. */
 export async function runScheduled(req: Request, res: Response) {
   const actor = currentUser(req);
   if (actor.perfil !== 'admin') throw new HttpError(403, 'Apenas administradores.');
 
-  const resultados: string[] = [];
+  const relatorios = await executarProcessoCron('relatorios');
+  const resultados = [...relatorios.detalhes];
 
-  if (deveExecutar(getSchedule('POSICAO_ESTOQUE'))) {
-    await relatorioPosicaoEstoque();
-    resultados.push('Posição de estoque');
-  }
-  if (deveExecutar(getSchedule('VENDAS'))) {
-    await relatorioVendas();
-    resultados.push('Vendas');
-  }
-  if (deveExecutar(getSchedule('ALERTAS'))) {
-    await relatorioAlertas();
-    resultados.push('Alertas');
-  }
-  const pedidos = await recuperarPedidosPendentes();
-  if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace recuperado(s)`);
-  // CRM — lembretes de atividade: disparo IDEMPOTENTE pelo agendador que já
-  // existe (nada de polling no navegador, nada de scheduler paralelo).
-  const lembretes = await dispararLembretesCrm();
-  if (lembretes.disparados > 0) resultados.push(`${lembretes.disparados} lembrete(s) de CRM`);
-
-  // Motor 1. MEU NEGÓCIOS: margens e curva ABC sempre frescas — a rotina
-  // roda junto com o cron de agendados (segunda via do ciclo contínuo).
+  // Motor 1. MEU NEGÓCIOS: margens e curva ABC. Cálculo derivado, sem efeito externo.
   const motor = await atualizarMotorNegocios();
   if (motor.margens > 0 || motor.abc > 0) {
     resultados.push(`Motor MEU NEGÓCIOS: ${motor.margens} margem(ns), ${motor.abc} produto(s) na curva ABC`);
   }
 
-  // BACKSTOP do Commerce OS: fila de publicação + outbox de sincronização +
-  // expiração de checkouts pendentes (idempotente — rodar duas vezes não
-  // duplica efeito nem religa reserva liberada).
-  const commerce = await processarComercioAgendado();
-  const comercioItens = [
-    commerce.publicacoes.processadas,
-    commerce.outbox.processados,
-    commerce.expirados,
-  ].reduce((a, b) => a + b, 0);
-  if (comercioItens > 0 || commerce.outbox.erros > 0) {
-    resultados.push(
-      `Commerce: ${commerce.publicacoes.processadas} publicação(ões), ${commerce.outbox.processados} fila(s), ${commerce.expirados} expirado(s)${commerce.outbox.erros ? `, ${commerce.outbox.erros} erro(s)` : ''}`
-    );
-  }
-
-  res.status(commerce.falhas.length ? 503 : 200).json({ ok: commerce.falhas.length === 0, executados: resultados, falhas_commerce: commerce.falhas, smtp: smtpConfigurado() });
+  res.status(relatorios.ok ? 200 : 503).json({
+    ok: relatorios.ok,
+    executados: resultados,
+    falhas: relatorios.falhas,
+    // Os demais processos não rodam nesta rota. Cada um tem endpoint próprio, protegido por CRON_SECRET.
+    processos_fora_desta_rota: ['pagamentos', 'publicacoes', 'pedidos', 'crm'],
+    smtp: smtpConfigurado(),
+  });
 }
 
 /** O cron só funciona com CRON_SECRET definido. Sem a variável, nada é executado. */
@@ -389,29 +511,37 @@ export function cronAutorizado(req: Request): boolean {
   return timingSafeEqual(a, b);
 }
 
-/** POST /api/admin/scheduled/cron — endpoint para cron externo (montado antes da sessão, em index.ts). */
-export async function cronScheduled(req: Request, res: Response) {
-  // R-4 (Fase 4.2) — contrato do cron externo (ver docs/auditoria/fase-4-2-correcoes.md):
-  // autentica SOMENTE por `Authorization: Bearer <CRON_SECRET>`; sem a variável, falha fechado (503);
-  // não aceita sessão de usuário; não executa recorrências financeiras (fluxo próprio).
-  if (!cronConfigurado()) throw new HttpError(503, 'Cron desativado: CRON_SECRET não configurado.');
-  if (!cronAutorizado(req)) throw new HttpError(401, 'Token inválido.');
-
-  const resultados: string[] = [];
-  if (deveExecutar(getSchedule('POSICAO_ESTOQUE'))) { await relatorioPosicaoEstoque(); resultados.push('estoque'); }
-  if (deveExecutar(getSchedule('VENDAS'))) { await relatorioVendas(); resultados.push('vendas'); }
-  if (deveExecutar(getSchedule('ALERTAS'))) { await relatorioAlertas(); resultados.push('alertas'); }
-  const pedidos = await recuperarPedidosPendentes();
-  if (pedidos > 0) resultados.push(`${pedidos} pedido(s) de marketplace`);
-  const lembretesCron = await dispararLembretesCrm();
-  if (lembretesCron.disparados > 0) resultados.push(`${lembretesCron.disparados} lembrete(s) de CRM`);
-  const commerceCron = await processarComercioAgendado();
-  const comercioCron = commerceCron.publicacoes.processadas + commerceCron.outbox.processados + commerceCron.expirados;
-  if (comercioCron > 0 || commerceCron.outbox.erros > 0) {
-    resultados.push(`commerce: ${comercioCron} item(ns) da fila${commerceCron.outbox.erros ? `, ${commerceCron.outbox.erros} erro(s)` : ''}`);
+/** Resposta de autenticação do cron. Falha fechada: 503 sem a variável, 401 sem token válido. */
+function recusarCron(req: Request, res: Response): boolean {
+  if (!cronConfigurado()) {
+    res.status(503).json({ ok: false, error: 'Cron desativado: CRON_SECRET não configurado.' });
+    return true;
   }
+  if (!cronAutorizado(req)) {
+    res.status(401).json({ ok: false, error: 'Token inválido.' });
+    return true;
+  }
+  return false;
+}
 
-  res.status(commerceCron.falhas.length ? 503 : 200).json({ ok: commerceCron.falhas.length === 0, executados: resultados, falhas_commerce: commerceCron.falhas });
+async function cronPara(req: Request, res: Response, processo: string): Promise<void> {
+  if (recusarCron(req, res)) return;
+  if (!isProcessoCron(processo)) {
+    res.status(404).json({ ok: false, error: 'Processo de cron desconhecido.' });
+    return;
+  }
+  const r = await executarProcessoCron(processo);
+  res.status(r.status).json({ ok: r.ok, processo: r.processo, itens: r.itens, detalhes: r.detalhes, falhas: r.falhas, inicio: r.inicio, fim: r.fim });
+}
+
+/** POST /api/admin/scheduled/cron — compatibilidade: executa SOMENTE o processo `relatorios`. */
+export async function cronScheduled(req: Request, res: Response) {
+  return cronPara(req, res, 'relatorios');
+}
+
+/** POST /api/admin/scheduled/cron/:processo — um processo por chamada (montado antes da sessão, em index.ts). */
+export async function cronProcesso(req: Request, res: Response) {
+  return cronPara(req, res, String(req.params?.processo ?? ''));
 }
 
 /** GET /api/admin/scheduled/status — mostra config e próximo agendamento. */
