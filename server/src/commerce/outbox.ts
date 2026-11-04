@@ -105,7 +105,8 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
   // anterior já implantada: mesmo despacho, sem exigir novo valor no CHECK.
   if (tipo === 'notificacao') {
     const { processarEventoNotificacao } = await import('./notificacoes');
-    const r = await processarEventoNotificacao({ empresa_id: empresaId, ...payload });
+    // empresa da LINHA prevalece sobre o payload (isolamento entre empresas).
+    const r = await processarEventoNotificacao({ ...payload, empresa_id: empresaId });
     return r.status === 'retry' ? { status: 'retry', erro: r.erro } : { status: 'processado' };
   }
 
@@ -142,7 +143,8 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
       // NOTIFICATION ORCHESTRATOR: import dinâmico evita ciclo com o módulo que
       // enfileira eventos. O pedido NUNCA espera por este processamento.
       const { processarEventoNotificacao } = await import('./notificacoes');
-      const r = await processarEventoNotificacao({ empresa_id: empresaId, ...payload });
+      // empresa da LINHA prevalece sobre o payload (isolamento entre empresas).
+      const r = await processarEventoNotificacao({ ...payload, empresa_id: empresaId });
       return r.status === 'retry' ? { status: 'retry', erro: r.erro } : { status: 'processado' };
     }
     if (acao === 'woo-estoque') {
