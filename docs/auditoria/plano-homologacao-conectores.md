@@ -377,3 +377,22 @@ Limitações desta fase:
 - Nenhuma chamada a provedor (Mercado Livre, Nuvemshop, PagBank, Meta, SMTP) foi feita.
 - Nenhum acesso a Render, painel de provedor ou credencial de produção.
 - Nenhum conector foi marcado como homologado.
+
+## 9. Atualização Ordem Final (pendências 2.1 a 2.8)
+
+Este plano continua sem homologação declarada. Testes locais e sandbox não são homologação.
+
+| Conector / item | Pré-requisito externo | Teste local | Sandbox | Operação real |
+|---|---|---|---|---|
+| Cinco jobs de cron (2.1) | `CRON_SECRET` e autorização G1 para agendar | `cron-timeout-concorrencia`, `cron-cliente-retentativa`, `cron-cliente-integracao-local` | Não aplicável | Não ativado |
+| PagBank webhook (2.2) | `PAGBANK_WEBHOOK_SECRET` (G2) e token de conta | `pagbank-webhook-sem-vazamento` (3) e suítes existentes | Pendente de credencial | Não executado |
+| Reconciliação de webhooks legados (2.3) | Backup lógico e autorização G3 | `webhook-reconciliacao-legados` (11) | Não aplicável | Não executado |
+| Mercado Livre (2.4) | Contrato `MERCADOLIVRE_TOKEN_ESTATICO_CONTRATO`; credencial OAuth por empresa como destino | `marketplace-token-estatico-contrato` (6), `mercadolivre-leitura-somente-get` (8), `marketplace-seller-id`, `marketplace-legado-autorizacao`, `marketplace-autorizacao-rotas` | Pendente | Suspenso por padrão |
+| Nuvemshop 2025-03 (2.5) | Evidência oficial dos endpoints de escrita e credencial de loja de teste (G6) | `nuvemshop-escrita-bloqueada` (5), suítes de publicação com dublê | Pendente | **Escrita bloqueada** (ADR-006) |
+| PIX (2.6) | Credencial de sandbox declarada pelo Diretor | `commerce-pix-mock-flow` (mock), `commerce-orders-pix` (integração local), `pix-sandbox-opcional` (pulado) | Pendente | Não executado |
+| Arquivos privados (2.7) | Nenhuma | `arquivos-politica-privados` (14), `arquivos-privados-segregacao-empresa` (2) | Não aplicável | Não aplicável |
+| Admin, JWT_SECRET e ADMIN_PASSWORD (2.8) | Valores reais em produção (não lidos) | `admin-senha-producao` (5), `startup-producao-segredos` (8), `fase2-seguranca-credenciais` | Não aplicável | Não verificado no ambiente de produção |
+
+**Ordem sugerida, quando houver autorização:** (1) configuração de segredos e verificação de inicialização;
+(2) cron com `relatorios` apenas; (3) PagBank com credencial de sandbox; (4) Nuvemshop somente após evidência de escrita;
+(5) Mercado Livre somente após contrato e decisão de reativação. Nenhuma etapa é autorizada por esta documentação.

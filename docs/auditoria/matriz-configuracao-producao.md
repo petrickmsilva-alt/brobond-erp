@@ -342,3 +342,29 @@ O agendador é **externo** ao repositório (`render.yaml` não declara cron). Ca
 
 - Documentação completa: `docs/operacao/cinco-jobs-cron.md` (URL, método, autenticação, frequência, timeout, retentativa, códigos de resposta).
 - Frequência e timeout não estão definidos: pendência **G1**.
+
+## 15. Atualização Ordem Final (pendências 2.1 a 2.8)
+
+Nenhuma variável de produção foi criada, alterada ou lida. Os valores abaixo são **nomes declarados**, sem valor.
+
+| Variável | Quem usa | Obrigatória? | Padrão e comportamento |
+|---|---|---|---|
+| `CRON_SECRET` | `POST /api/admin/scheduled/cron/:processo`, `scripts/cron-processo.mjs` | Sim, para cron | Ausente: 503 sem executar |
+| `CRON_TIMEOUT_<PROCESSO>_MS` | servidor (`relatorios`, `pagamentos`, `publicacoes`, `pedidos`, `crm`) | Não | Padrão do processo; inteiro entre 10 000 e 1 800 000 |
+| `CRON_CLIENT_TIMEOUT_MS` | cliente `scripts/cron-processo.mjs` | Não | Padrão: timeout do servidor + 60 s; mínimo 5 000 |
+| `CRON_MAX_TENTATIVAS` | cliente | Não | 3; intervalo 1–5 |
+| `CRON_BACKOFF_MS` | cliente | Não | 60 000; espera `× 5^(n−1)`, teto 600 000 |
+| `BROBOND_BASE_URL` | cliente | Sim (cliente) | `https`; `http` só para localhost |
+| `MERCADOLIVRE_TOKEN_ESTATICO_CONTRATO` | `POST /api/marketplace/sincronizar` | Sim, para a rota legada com token estático | Formato `<empresa_id>:<referência ≥ 8>`; ausente: 409 sem chamada externa (ADR-005) |
+| `PIX_SANDBOX_PROVEDOR` | teste `pix-sandbox-opcional` | Não | `mercadopago` ou `pagbank`; ausente: teste pulado |
+| `PIX_SANDBOX_ACCESS_TOKEN` | teste `pix-sandbox-opcional` | Não | Token de **sandbox** do provedor escolhido; nunca o de produção |
+| `NODE_ENV` | servidor | Sim, em produção | `production` (já declarado em `render.yaml`). Fora de produção, há padrões de desenvolvimento |
+| `JWT_SECRET` | servidor | Sim, em produção | Sem padrão. Ausente ou curto (< 24) em produção: o processo não sobe (testado) |
+| `ADMIN_PASSWORD` | administrador inicial | Sim, em produção | Sem padrão. Ausente, curta (< 8) ou igual ao padrão de desenvolvimento: o processo não sobe (testado) |
+| `DATABASE_URL` | servidor | Sim, em produção | Ausente em produção: o processo não sobe (R-3) |
+
+**Verificação local:** `server/test/startup-producao-segredos.test.ts` (8) executa o guard em processo filho com
+`NODE_ENV=production` e confirma saída 1 nos casos inválidos e 0 no caso válido, sem imprimir valores.
+
+**Não configurado:** `CRON_SECRET`, `PAGBANK_WEBHOOK_SECRET`, `PIX_SANDBOX_*`, `MERCADOLIVRE_TOKEN_ESTATICO_CONTRATO` e
+qualquer agendador. Todos dependem de autorização do Diretor.

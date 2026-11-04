@@ -58,3 +58,16 @@ Pendências que permanecem:
 - **H-8 (homologação funcional):** nenhuma notificação real do PagBank foi recebida nesta sandbox. Sem egress e sem credencial de sandbox, a prova ponta a ponta não foi executada. Os testes acima são de contrato local e não contam como homologação.
 - **G2:** criar `PAGBANK_WEBHOOK_SECRET` em qualquer ambiente exige aprovação expressa do Diretor. Nenhum valor foi criado, impresso ou solicitado.
 
+
+## 6. Ordem Final (pendência 2.2) — evidências locais
+
+- **Algoritmo:** `x-authenticity-token` = SHA-256 hex de `{token}-{corpo cru}`, comparado com `timingSafeEqual` sobre
+  valores hexadecimais de 64 caracteres (`modules/payments/providers/pagbank/index.ts`). Formato ou tamanho inválido é
+  recusado antes da comparação.
+- **Falha fechada:** sem segredo dedicado não-vazio (`webhook_segredo_cifrado` ou `PAGBANK_WEBHOOK_SECRET`), nada é aceito.
+- **Sem segredo em saída:** `server/test/pagbank-webhook-sem-vazamento.test.ts` (3) captura `console.*` durante as requisições
+  e verifica que o segredo dedicado, o token da conta e o valor do cabeçalho não aparecem em log, resposta ou registros
+  de `gateway_webhook_events`. A auditoria de rejeição registra somente o provedor e o `evento_id`.
+- **Limitação mantida:** o algoritmo oficial usa o token da conta. Uma assinatura calculada com esse token é aceita quando
+  há segredo dedicado. O segredo é o gate de presença, não uma chave independente. Esta limitação segue declarada.
+- **Não realizado:** nenhuma credencial PagBank real, nenhuma chamada financeira, nenhum `PAGBANK_WEBHOOK_SECRET` criado (G2).

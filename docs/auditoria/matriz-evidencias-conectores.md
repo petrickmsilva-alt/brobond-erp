@@ -81,3 +81,22 @@ Legenda de tipo: **L** = local/unitário; **I** = integração local (PostgreSQL
 | Nuvemshop 2025-03 — cabeçalho (R-15) | Código já alinhado à documentação oficial do 2025-03 (`Authorization: Bearer` e `User-Agent`) | `nuvemshop-contratos-homologacao` verde | NÃO EXECUTADO | NÃO EXECUTADO (G6: sem credencial de loja de teste) |
 | PIX (item 11) | Fluxo com simulador (MOCK), renomeado `commerce-pix-mock-flow` | 18/18 | NÃO EXECUTADO (sandbox do Mercado Pago não configurado no projeto) | NÃO EXECUTADO. Sem pagamento real. |
 | Logs OAuth (item 13) | Concluído (sem corpo bruto de resposta de erro) | 3/3 (`logs-oauth-sem-corpo`) | — | — |
+
+## Atualização Ordem Final — evidências por item (pendências 2.1 a 2.8)
+
+Níveis: **código** (implementado), **teste local** (sem rede), **sandbox** (credencial de teste real), **operação real**.
+
+| Item | Código | Teste local | Sandbox | Operação real |
+|---|---|---|---|---|
+| 2.1 Cinco jobs | Concluído (timeout, trava, cliente com retentativa) | Sim (17 testes) | Não aplicável | **Não ativado** |
+| 2.2 PagBank webhook | Concluído (SHA-256 oficial, comparação segura, falha fechada) | Sim (3 novos + suítes existentes) | **Não executado** | **Não executado** |
+| 2.3 Webhooks legados | Concluído (dry-run, confirmação, auditoria, sem exclusão) | Sim (11) | Não aplicável | **Não executado em produção** (G3) |
+| 2.4 Mercado Livre | Concluído (contrato obrigatório para token estático; leitura somente GET) | Sim (6 + 8 + suítes de rota) | **Não executado** | **Suspenso**; nenhuma chamada real |
+| 2.5 Nuvemshop 2025-03 | Concluído (escrita bloqueada) | Sim (5 + suítes com dublê) | **Não executado** | **Escrita bloqueada**; nenhuma chamada à loja |
+| 2.6 PIX | Mock e contrato separados; teste sandbox opcional | Mock e integração local | **Pulado** (sem credencial declarada) | **Não executado** |
+| 2.7 Arquivos privados | Concluído (URL assinada, TTL, no-store, segregação) | Sim (14 + 2) | Não aplicável | Não aplicável |
+| 2.8 Admin e JWT | Concluído (sem padrão e sem fallback em produção) | Sim (8 + 5) | Não aplicável | **Não verificado** no ambiente de produção |
+
+**Limitação IPC (não resolvida):** o caso `commerce-pix-real-flow` (renomeado para `commerce-pix-mock-flow`)
+apresentou, em execuções anteriores, uma falha intermitente de IPC. Em 6 execuções isoladas, todas passaram (18/18),
+sem reprodução. **A causa não foi determinada.** Este registro não declara o problema resolvido.

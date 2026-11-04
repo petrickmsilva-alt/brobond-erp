@@ -81,3 +81,30 @@ Evidência necessária para destravar: loja de teste, token obtido por OAuth par
   - Nenhuma leitura GET à loja foi executada. A prova com a API real do 2025-03 continua pendente de credencial de loja de teste (G6). Nenhuma publicação foi reativada.
 - Próximo passo quando houver credencial de loja de teste em ambiente seguro: executar apenas os GET do procedimento da seção 4,
   registrar a resposta (sem tokens) e decidir o cabeçalho com base nessa evidência. Matriz de decisão: seção 4 (procedimento).
+
+## 8. Ordem Final (pendência 2.5) — escrita bloqueada
+
+Estado em 2026-11-04. Nenhuma chamada à loja foi feita nesta etapa.
+
+| Item | Situação | Evidência |
+|---|---|---|
+| Base `https://api.tiendanube.com/2025-03/{store_id}` | Confirmada na documentação oficial (getting-started) | Documentação oficial |
+| `Authorization: Bearer` | Confirmado na documentação oficial | Documentação oficial |
+| `User-Agent` obrigatório (sem ele, 400) | Confirmado na documentação oficial | Documentação oficial |
+| OAuth authorization code; token não expira; `user_id` = store id | Confirmado (chunk 0 da autenticação) | Documentação oficial |
+| `GET /products/sku/{sku}`, `POST /products`, `PATCH /products/stock-price` | **Sem evidência oficial consultada** | — |
+| Esquema de variantes, SKU, estoque (`inventory_levels`) e preço nessa versão | **Sem evidência oficial consultada** | — |
+| Erros e idempotência de escrita na versão 2025-03 | **Sem evidência oficial consultada** | — |
+
+**Decisão:** `ESCRITA_NUVEMSHOP_2025_LIBERADA = false` (`server/src/commerce/publicacaoNuvemshop.ts`). Com o gate fechado,
+publicar falha antes de qualquer chamada, inclusive a leitura por SKU. Ver ADR-006.
+
+**Testes locais:** `server/test/nuvemshop-escrita-bloqueada.test.ts` (5) prova que zero chamadas são feitas com o gate fechado
+e que a produção não liga o gancho de teste. Os testes de lógica (`publicacao-nuvemshop-2025`, `publicacao-nuvemshop-fluxo`,
+`publicacao-canais-p0`) usam dublê de rede com o gancho ligado somente no próprio teste.
+
+**Para liberar a escrita, é preciso:** (a) URL e exemplo oficial, da documentação 2025-03, de cada endpoint de escrita
+usado; (b) prova com credencial de loja de teste (G6), sem publicar produto real; (c) alteração revisada da constante
+e registro da decisão no registro de operação. Sem os três itens, a escrita permanece bloqueada.
+
+**Não realizado:** nenhum GET ou escrita na loja; nenhuma publicação reativada; nenhuma credencial inventada.

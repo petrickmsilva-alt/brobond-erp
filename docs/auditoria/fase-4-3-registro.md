@@ -383,3 +383,37 @@ Ver `git log` no branch. Organização por grupo: arquivos privados; senha do ad
 - **Nuvemshop v1:** o cabeçalho `Authentication: bearer` do conector v1 só aparece em perfil de terceiro; não alterado (escopo separado).
 - **Rota legada de marketplace** (`POST /api/marketplace/sincronizar`) usa o token estático da instalação, que não pertence a uma empresa específica. A rota só registra a contagem na auditoria da empresa do ator e não grava pedidos. Os identificadores externos ficam fora da resposta. Se a rota vier a gravar pedidos, a origem do token precisará de decisão do Diretor.
 - **Ambiente:** `NODE_ENV` precisa ser `production` no deploy, senão o padrão de desenvolvimento vale para `ADMIN_PASSWORD` e `JWT_SECRET`.
+
+## J. Ordem Executiva Final — pendências técnicas 2.1 a 2.8 (2026-11-04)
+
+Escopo: concluir as pendências locais, documentar, testar e integrar ao Git. **Não houve deploy, alteração no Render,
+ativação de cron, reativação de Mercado Livre ou Nuvemshop, operação real em provedor nem go-live.**
+
+### J.1 Itens
+
+| Item | Resultado | Commit(s) | Testes locais novos ou ajustados |
+|---|---|---|---|
+| 2.1 Cinco jobs | Parâmetros definidos (frequência, timeout, retentativa, concorrência, idempotência, critérios). Timeout no servidor e trava até o fim do trabalho. Cliente `scripts/cron-processo.mjs` com 3 tentativas e backoff 60 s/300 s. **Não ativado.** | `9fdd56c` | `cron-timeout-concorrencia` (5), `cron-cliente-retentativa` (7), `cron-cliente-integracao-local` (5) |
+| 2.2 PagBank | Já conforme (SHA-256 oficial, `timingSafeEqual`, falha fechada). Verificada ausência de segredo em log, resposta e registros. | `c517b89` | `pagbank-webhook-sem-vazamento` (3) |
+| 2.3 Webhooks legados | Já implementado (dry-run, confirmação, auditoria, sem exclusão). Procedimento com backup, execução e rollback documentado. **Não executado.** | — (`a94143e`, `99b9626`) | `webhook-reconciliacao-legados` (11) |
+| 2.4 Mercado Livre | Token estático só com `MERCADOLIVRE_TOKEN_ESTATICO_CONTRATO` válido para a empresa; sem contrato, 409 antes de qualquer chamada, com auditoria. Rota legítima e `seller` por `/users/me` preservados. Leitura somente GET de anúncios. | `5b25aeb` | `marketplace-token-estatico-contrato` (6), `mercadolivre-leitura-somente-get` (8); suítes de rota ajustadas com contrato declarado |
+| 2.5 Nuvemshop 2025-03 | Escrita bloqueada (`ESCRITA_NUVEMSHOP_2025_LIBERADA = false`): nenhuma chamada à loja. Auth e base confirmadas em doc oficial; endpoints de escrita sem evidência. | `7f52eda` | `nuvemshop-escrita-bloqueada` (5); suítes de publicação com gancho de teste |
+| 2.6 PIX | Camadas separadas (mock, contrato, integração local, sandbox). Sandbox pulado sem credencial declarada. IPC: limitação registrada, **não declarada resolvida**. | `27bc778` | `pix-sandbox-opcional` (1, pulado) |
+| 2.7 Arquivos privados | Já conforme (URL assinada, TTL 15 min, comparação em tempo constante, 404 uniforme, `no-store`, `nosniff`, cache público de catálogo). Segregação por empresa verificada. | `e62fea9` | `arquivos-privados-segregacao-empresa` (2); `arquivos-politica-privados` (14) |
+| 2.8 Admin e JWT | Já conforme (sem padrão nem fallback em produção). Bloqueio de inicialização verificado em processo filho. | `e62fea9` | `startup-producao-segredos` (8); `admin-senha-producao` (5) |
+
+### J.2 Documentação
+
+Acréscimos: `docs/operacao/cinco-jobs-cron.md` (reescrito com os parâmetros), `docs/operacao/runbook-operacional-final.md` (novo),
+`docs/ADR-005-MERCADOLIVRE-TOKEN-ESTATICO-CONTRATO.md`, `docs/ADR-006-NUVEMSHOP-GATE-ESCRITA-2025-03.md`,
+`docs/ADR-007-CLIENTE-CRON-RETENTATIVA.md` (novos), `docs/ADR-004` §6, `matriz-configuracao-producao` §15,
+`plano-homologacao-conectores` §9, `matriz-evidencias-conectores` (Ordem Final), `gate-leitura-nuvemshop-2025-03` §8.
+
+### J.3 Limitações mantidas
+
+- Trava de cron é por instância; não é global entre instâncias.
+- Nenhum agendador configurado; frequência e timeouts são propostas, sem aprovação (G1).
+- PagBank: o algoritmo oficial usa o token da conta; o segredo dedicado é gate de presença (ADR-004).
+- Nuvemshop: escrita bloqueada até evidência oficial dos endpoints de escrita e credencial de loja de teste (G4, G6).
+- Mercado Livre: token estático ainda existe; o caminho definitivo é OAuth por empresa (pendência).
+- PIX sandbox: nunca executado contra provedor real; causa do IPC não determinada.
