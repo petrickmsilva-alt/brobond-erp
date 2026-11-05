@@ -24,7 +24,7 @@ type Pagamento = {
   status: string;
   criado_em: string | null;
   atualizado_em: string | null;
-  pedido: { pedido_externo: string; estado: string; sale_id: string } | null;
+  pedido: { pedido_externo: string; estado: string; sale_id: string | null } | null;
   lancamento_id: number | null;
   venda_id: number | null;
 };
@@ -65,11 +65,15 @@ export default function CommercePagamentosPage() {
       render: (p) =>
         p.pedido ? (
           <div className="min-w-0">
-            <Link className="font-medium hover:underline" to={`/commerce/pedidos/${encodeURIComponent(p.pedido.sale_id)}`}>
-              {p.pedido.pedido_externo}
-            </Link>
+            {p.pedido.sale_id ? (
+              <Link className="font-medium hover:underline" to={`/commerce/pedidos/${encodeURIComponent(p.pedido.sale_id)}`}>
+                {p.pedido.pedido_externo}
+              </Link>
+            ) : (
+              <span className="font-medium">{p.pedido.pedido_externo}</span>
+            )}
             <div className="text-xs text-muted">
-              {rotuloCanal(p.pedido.estado.replace(/_/g, ' '))} · {p.pedido.sale_id}
+              {rotuloCanal(p.pedido.estado.replace(/_/g, ' '))} · {p.pedido.sale_id ?? 'sem venda vinculada'}
             </div>
           </div>
         ) : (

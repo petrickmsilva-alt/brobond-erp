@@ -82,6 +82,15 @@ describe('Commerce — Pagamentos (/commerce/pagamentos)', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('pedido sem venda não gera link para o literal null', async () => {
+    fetchMock.mockResolvedValue({ total: 1, pagamentos: [{ ...PAGAMENTO, pedido: { ...PAGAMENTO.pedido, sale_id: null } }] });
+    renderPagina();
+    expect(await screen.findByText('LOJA-ABC123')).toBeInTheDocument();
+    expect(screen.getByText('LOJA-ABC123').closest('a')).toBeNull();
+    expect(screen.getByText(/sem venda vinculada/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'LOJA-ABC123' })).toBeNull();
+  });
+
   it('estado vazio é honesto (sem inventar cobranças)', async () => {
     fetchMock.mockResolvedValue({ total: 0, pagamentos: [] });
     renderPagina();

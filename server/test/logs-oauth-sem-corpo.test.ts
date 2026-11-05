@@ -22,6 +22,13 @@ for (const arq of ARQUIVOS) {
   });
 }
 
+test('Mercado Livre: helper de rejeição não recebe nem copia o corpo OAuth para o console', () => {
+  const fonte = ler('modules/connectors/mercadolivre/mercadolivre.service.ts');
+  assert.match(fonte, /function logMeliTokenRejection\(status: number, statusText: string, errorCode\?: string, redirectUri\?: string\)/);
+  assert.doesNotMatch(fonte, /rawBody\s*,\s*redirectUri/);
+  assert.match(fonte, /erro: errorCode\.slice\(0, 60\)/);
+});
+
 test('Nuvemshop: erro OAuth registra apenas o código curto', () => {
   const fonte = ler('modules/connectors/nuvemshop/nuvemshop.service.ts');
   assert.match(fonte, /erro: typeof payload\?\.error === 'string'/);

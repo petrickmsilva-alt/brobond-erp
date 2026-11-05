@@ -385,8 +385,10 @@ test('Payment Engine: actual orchestrated fallback records both attempts; busine
     conditions: { channel: 'OWN_STORE', fallback: true },
   });
   let stripeStatus = 429,
+    mpStatus = 200,
     mpCalls = 0;
   const keys: string[] = [];
+  const mpKeys: string[] = [];
   t.mock.method(globalThis, 'fetch', async (url: unknown, init: RequestInit) => {
     if (String(url).includes('stripe.com')) {
       keys.push((init.headers as Record<string, string>)['Idempotency-Key']);
@@ -395,10 +397,11 @@ test('Payment Engine: actual orchestrated fallback records both attempts; busine
       });
     }
     mpCalls++;
-    return new Response(JSON.stringify({
+    mpKeys.push((init.headers as Record<string, string>)['x-idempotency-key']);
+    return new Response(JSON.stringify(mpStatus === 200 ? {
       id: `ORD-fallback-${mpCalls}`, status: 'action_required', total_amount: '10.00', currency: 'BRL',
       transactions: { payments: [{ payment_method: { qr_code: '000201-provider-code', qr_code_base64: 'iVBOR-provider-image' } }] },
-    }));
+    } : {}), { status: mpStatus });
   });
   async function order(suffix: string) {
     const id = `fallback-${suffix}`;
@@ -453,10 +456,30 @@ test('Payment Engine: actual orchestrated fallback records both attempts; busine
   assert.equal(mpCalls, 1);
   const uncertainKey = keys.at(-1);
   stripeStatus = 200;
-  await paymentEngine.synchronize(3, Number(pending?.id));
+  await assert.rejects(
+    () => paymentEngine.synchronize(3, Number(pending?.id)),
+    (e: any) => e instanceof PaymentError && e.code === 'PIX_INSTRUMENT_MISSING',
+    'replay sem instrumento Pix não pode contornar a validação da criação'
+  );
   assert.equal(keys.at(-1), uncertainKey);
   assert.equal(mpCalls, 1);
-  assert.equal((await paymentEngine.intent(3, Number(pending?.id))).status, 'REQUIRES_ACTION');
+  assert.equal((await paymentEngine.intent(3, Number(pending?.id))).status, 'PENDING');
+
+  // Replay legítimo no MESMO Mercado Pago: Stripe limita (fallback), o POST do
+  // MP fica ambíguo e a recuperação devolve um Pix válido sem trocar a chave.
+  const d = await order('valid-replay');
+  stripeStatus = 429;
+  mpStatus = 500;
+  await assert.rejects(() => paymentEngine.createForOrder(3, Number(d.id), 'PIX', 'fallback-valid-replay-key'));
+  const validPending = await s.findOneWhere(R_INTENTS, { empresa_id: 3, order_id: Number(d.id) });
+  const validKey = mpKeys.at(-1);
+  const postsAntes = mpCalls;
+  mpStatus = 200;
+  const replayed = await paymentEngine.synchronize(3, Number(validPending?.id));
+  assert.equal(replayed, 'replayed');
+  assert.equal(mpKeys.at(-1), validKey);
+  assert.equal(mpCalls, postsAntes + 1, 'um replay idempotente, nunca outra operação/chave');
+  assert.equal((await paymentEngine.intent(3, Number(validPending?.id))).status, 'PENDING', 'Pix aguardando transferência continua pendente, nunca pago');
   const published = await s.list(R_ROUTING, { page: 1, pageSize: 10, filter: { empresa_id: 3 } });
   for (const rule of published.rows) await s.update(R_ROUTING, Number(rule.id), { enabled: false });
   const { candidates } = await import('../../modules/payments/application/configuration');

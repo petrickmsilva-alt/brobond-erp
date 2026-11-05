@@ -168,7 +168,11 @@ describe('ConectorPage — Mercado Pago: receita só de pagos e vendas da loja s
   it('mostra Vendas da BroBond Store com pagos/pendentes e receita confirmada', async () => {
     apiGet.mockResolvedValue({
       connector: statusFixture({ provider: 'MERCADOPAGO', authModel: 'credentials', importedCount: 10 }),
-      panel: { ...EMPTY_PANEL, provider: 'MERCADOPAGO', revenueCents: 0, paidSalesCount: 0, storeSales: { count: 3, paidCount: 1, paidRevenueCents: 8000, pendingCount: 1 } },
+      panel: {
+        ...EMPTY_PANEL, provider: 'MERCADOPAGO', revenueCents: 0, paidSalesCount: 0,
+        storeSales: { count: 3, paidCount: 1, paidRevenueCents: 8000, pendingCount: 1 },
+        reconciliation: { settlementCount: 4, reconciledCount: 2, pendingSettlementCount: 1, divergentSettlementCount: 1, openDisputeCount: 1, pendingPayoutCount: 2, reconciledNetCents: 7550 },
+      },
     });
     apiPost.mockResolvedValue({});
     renderPage(moduleOf('conector-mercadopago'));
@@ -176,5 +180,10 @@ describe('ConectorPage — Mercado Pago: receita só de pagos e vendas da loja s
     expect(screen.getByText('Pedidos sincronizados do Mercado Pago')).toBeInTheDocument();
     expect(screen.getByText('Aguardando pagamento')).toBeInTheDocument();
     expect(screen.getByText('R$ 80,00')).toBeInTheDocument();
+    expect(screen.getByText('Conciliação financeira — Mercado Pago')).toBeInTheDocument();
+    expect(screen.getByText('Divergentes')).toBeInTheDocument();
+    expect(screen.getByText('Disputas abertas')).toBeInTheDocument();
+    expect(screen.getByText('Repasses pendentes')).toBeInTheDocument();
+    expect(screen.getByText('R$ 75,50')).toBeInTheDocument();
   });
 });

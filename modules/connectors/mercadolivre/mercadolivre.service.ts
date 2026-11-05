@@ -132,14 +132,16 @@ function parseMeliTokenResponse(rawBody: string): MeliTokenResponse | undefined 
   }
 }
 
-function logMeliTokenRejection(status: number, statusText: string, rawBody: string, redirectUri?: string): void {
+function logMeliTokenRejection(status: number, statusText: string, errorCode?: string, redirectUri?: string): void {
   console.error('[mercadolivre.oauth.token] resposta rejeitada pelo Mercado Livre', {
     status,
     statusText,
     // O redirect URI ESTÁTICO que este deploy repetiu — é o valor a
     // cadastrar verbatim no DevCenter quando a Meli recusa o grant.
     ...(redirectUri ? { redirectUri } : {}),
-    rawBody,
+    // Só o código curto. O corpo OAuth pode conter dados da conta, código de
+    // autorização ou credenciais e nunca deve ser copiado para logs.
+    ...(errorCode ? { erro: errorCode.slice(0, 60) } : {}),
   });
 }
 
@@ -177,7 +179,7 @@ async function meliTokenRequest(
     logMeliTokenRejection(
       response.status,
       response.statusText,
-      response.ok ? '[omitido: a resposta pode conter credenciais]' : rawBody,
+      typeof payload?.error === 'string' ? payload.error : undefined,
       redirectUri
     );
     const status = response.status || 502;

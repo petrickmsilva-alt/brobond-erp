@@ -21,7 +21,7 @@
 // ambígua (cobrança possivelmente criada) e gerar outro pedido duplicaria a
 // cobrança. Reabrir tentativas seguras depende de validação com o Mercado Pago real.
 // ============================================================================
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Check, Lock, MessageCircle, ShieldCheck } from 'lucide-react';
 import { apiFetch, ApiError } from '../../../lib/api';
@@ -60,6 +60,17 @@ const PAGAMENTO = 2;
 const REVISAO = 3;
 
 const ROTULO_METODO: Record<string, string> = { PIX: 'Pix', CREDIT_CARD: 'Cartão de crédito', BOLETO: 'Boleto', MANUAL_PAYMENT: 'Pagamento manual' };
+const CHECKOUT_PENDENTE_KEY = 'brobond-loja-checkout-pendente';
+const aguardar = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+function checkoutPendente(): string {
+  try { return localStorage.getItem(CHECKOUT_PENDENTE_KEY) || ''; } catch { return ''; }
+}
+function guardarCheckoutPendente(chave: string): void {
+  try {
+    if (chave) localStorage.setItem(CHECKOUT_PENDENTE_KEY, chave);
+    else localStorage.removeItem(CHECKOUT_PENDENTE_KEY);
+  } catch { /* storage indisponível: a idempotência do carrinho continua valendo */ }
+}
 
 export default function LojaCheckoutPage() {
   const navigate = useNavigate();
@@ -73,6 +84,10 @@ export default function LojaCheckoutPage() {
   const [validando, setValidando] = useState(true);
   const [endereco, setEndereco] = useState<Endereco>(ENDERECO_VAZIO);
   const [enviando, setEnviando] = useState(false);
+  const [fase, setFase] = useState<'criando' | 'recuperando'>('criando');
+  const [recuperandoInicial, setRecuperandoInicial] = useState(() => Boolean(checkoutPendente()));
+  const [temPendente, setTemPendente] = useState(() => Boolean(checkoutPendente()));
+  const enviandoRef = useRef(false);
   const [erro, setErro] = useState('');
   // Erro da COTAÇÃO é separado do erro de ENVIO: a revalidação não pode apagar a falha do pedido.
   const [erroCotacao, setErroCotacao] = useState('');
@@ -103,9 +118,67 @@ export default function LojaCheckoutPage() {
     return () => { ativo = false; controller.abort(); };
   }, [carrinho]);
 
+  const concluir = useCallback((r: RespostaCheckout, chave: string) => {
+    setResposta(r);
+    // Só limpa o carrinho que originou ESTE pedido. Um carrinho novo, montado
+    // em outra aba depois da falha, não pode ser apagado pela recuperação.
+    if (lerCarrinho().chave === chave) limparCarrinho();
+    if (checkoutPendente() === chave) {
+      guardarCheckoutPendente('');
+      setTemPendente(false);
+    }
+    if (r.pedido?.checkout_token) navigate(`/loja/pedido/${r.pedido.checkout_token}`, { replace: true });
+  }, [navigate]);
+
+  const recuperar = useCallback(async (chave: string) => {
+    if (!chave || enviandoRef.current) return;
+    enviandoRef.current = true;
+    setEnviando(true);
+    setFase('recuperando');
+    setErro('');
+    try {
+      let ultimoErro: unknown = null;
+      for (let tentativa = 0; tentativa < 4; tentativa += 1) {
+        try {
+          const r = await apiFetch<RespostaCheckout>(`/loja/checkout/${encodeURIComponent(chave)}`);
+          if (!r.pedido?.checkout_token || !r.pagamento) throw new Error('Resposta de recuperação incompleta.');
+          concluir(r, chave);
+          return;
+        } catch (e) {
+          ultimoErro = e;
+          if (!(e instanceof ApiError) || e.status !== 404 || tentativa === 3) break;
+          // O POST anterior pode ainda estar commitando quando houve reload.
+          await aguardar(500 * (tentativa + 1));
+        }
+      }
+      if (ultimoErro instanceof ApiError && ultimoErro.status === 404) {
+        if (checkoutPendente() === chave) {
+          guardarCheckoutPendente('');
+          setTemPendente(false);
+        }
+        setErro('Não localizamos um pedido para a tentativa anterior. Confira os dados e envie novamente; a mesma chave do carrinho evita duplicidade.');
+      } else {
+        setErro('A conexão caiu, mas a recuperação continua disponível. Não crie outro pedido: use “Recuperar pedido” para consultar a mesma operação.');
+      }
+    } finally {
+      enviandoRef.current = false;
+      setEnviando(false);
+      setFase('criando');
+      setRecuperandoInicial(false);
+    }
+  }, [concluir]);
+
   useEffect(() => {
-    if (!carrinho.itens.length && !resposta) navigate('/loja/carrinho', { replace: true });
-  }, [carrinho.itens.length, resposta, navigate]);
+    const chave = checkoutPendente();
+    if (chave) void recuperar(chave);
+    else setRecuperandoInicial(false);
+    // Recuperação de reload deve ocorrer uma única vez por montagem.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!carrinho.itens.length && !resposta && !recuperandoInicial) navigate('/loja/carrinho', { replace: true });
+  }, [carrinho.itens.length, resposta, recuperandoInicial, navigate]);
 
   const freteRetirada = config?.frete.provedor === 'retirada';
   const freteManual = config?.frete.provedor === 'manual';
@@ -166,15 +239,20 @@ export default function LojaCheckoutPage() {
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
     if (etapa !== REVISAO) return avancar();
-    if (!checkoutOk || enviando) return;
+    if (!checkoutOk || enviandoRef.current) return;
+    const chave = lerCarrinho().chave;
+    enviandoRef.current = true;
     setEnviando(true);
+    setFase('criando');
     setErro('');
+    guardarCheckoutPendente(chave);
+    setTemPendente(true);
     try {
       const r = await apiFetch<RespostaCheckout>('/loja/checkout', {
         method: 'POST',
         body: JSON.stringify({
           payment_method: method,
-          chave: lerCarrinho().chave,
+          chave,
           itens: carrinho.itens.map((i) => ({ produto_id: i.produto_id, tamanho_id: i.tamanho_id, quantidade: i.quantidade })),
           cupom: carrinho.cupom || undefined,
           // Forma canônica: nome sem espaços extras, e-mail minúsculo e SOMENTE
@@ -202,14 +280,24 @@ export default function LojaCheckoutPage() {
                 },
         }),
       });
-      setResposta(r);
-      limparCarrinho();
-      // segue para a página do acompanhamento com o token do pedido
-      const token = r.pedido?.checkout_token;
-      if (token) navigate(`/loja/pedido/${token}`, { replace: true });
-    } catch (e2) {
-      setErro(e2 instanceof ApiError ? e2.message : 'Não foi possível criar o pedido. Seu carrinho foi mantido. Tente novamente.');
+      concluir(r, chave);
+      enviandoRef.current = false;
       setEnviando(false);
+    } catch (e2) {
+      enviandoRef.current = false;
+      setEnviando(false);
+      // 0 = timeout/rede. O código explícito identifica escrita ambígua no
+      // provider. Um 502 comum pode ser falha COMPROVADA (ex.: Pix sem dados)
+      // e deve preservar a mensagem original, sem mascará-la com recuperação.
+      if (e2 instanceof ApiError && (e2.status === 0 || e2.code === 'PAYMENT_CREATION_UNCERTAIN')) {
+        await recuperar(chave);
+        return;
+      }
+      if (checkoutPendente() === chave) {
+        guardarCheckoutPendente('');
+        setTemPendente(false);
+      }
+      setErro(e2 instanceof ApiError ? e2.message : 'Não foi possível criar o pedido. Seu carrinho foi mantido. Tente novamente.');
     }
   };
 
@@ -280,7 +368,14 @@ export default function LojaCheckoutPage() {
       <form className="grid gap-6 lg:grid-cols-3" onSubmit={(e) => void enviar(e)}>
         <div className="space-y-6 lg:col-span-2">
           {(erro || erroCotacao) && (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700" role="alert">{erro || erroCotacao}</div>
+            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700" role="alert">
+              {erro || erroCotacao}
+              {temPendente && !enviando && (
+                <button type="button" className="mt-3 block font-semibold underline" onClick={() => void recuperar(checkoutPendente())}>
+                  Recuperar pedido
+                </button>
+              )}
+            </div>
           )}
 
           {/* ETAPA 1 — SEUS DADOS + CONTATO */}
@@ -433,7 +528,7 @@ export default function LojaCheckoutPage() {
               <div className="flex items-center justify-between gap-3">
                 <button type="button" className="btn-secondary min-h-11 text-sm" onClick={voltar} disabled={enviando}>Voltar</button>
                 <button type="submit" className="btn-accent min-h-12 px-6 text-sm uppercase tracking-wider" disabled={enviando || !checkoutOk}>
-                  {enviando ? 'Criando pedido…' : 'Confirmar pedido e pagar'}
+                  {enviando ? (fase === 'recuperando' ? 'Recuperando pedido…' : 'Criando pedido…') : 'Confirmar pedido e pagar'}
                 </button>
               </div>
               {!validando && !checkoutOk && <p role="alert" className="text-sm text-warning">Checkout indisponível: volte ao carrinho para revisar os itens ou aguarde a configuração de frete/pagamento da loja.</p>}

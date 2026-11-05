@@ -254,8 +254,14 @@ export class PaymentOrchestrator {
           if (!ambiguous) await updatePendingIntent({ status: 'FAILED', updated_at: now() });
           // An unknown write remains fenced against retries/fallback (the same
           // provider idempotency key is retained), but it is never checkout
-          // success. The checkout must surface an error and release its hold.
-          if (ambiguous) throw new HttpError(502, 'Criação do pagamento sem confirmação do provider. Consulte a transação antes de tentar novamente.');
+          // success. The checkout surfaces the uncertainty and RETAINS its hold
+          // until an authoritative provider result or the normal expiry policy.
+          if (ambiguous) throw new HttpError(
+            502,
+            'Criação do pagamento sem confirmação do provider. Consulte a transação antes de tentar novamente.',
+            undefined,
+            'PAYMENT_CREATION_UNCERTAIN'
+          );
           if (semInstrumento) throw new HttpError(502, mensagemPixSemInstrumento(String(route.provider.code)));
           throw new HttpError(502, 'Provider recusou o pagamento. Consulte a transação.');
         }
@@ -800,6 +806,9 @@ export class PaymentOrchestrator {
         safe_reference: { ...a.safe_reference, action: acaoPersistivel(replay.action) },
       });
       await this.bridge(empresaId, i, a, ctx.provider.legacyId, replay);
+      // Recuperação de create NÃO é exceção ao contrato do provedor: um Pix
+      // pendente sem QR/Copia e Cola/link continua falho e nunca vira sucesso.
+      validarCriacaoProvider(input.method, replay);
       await this.apply(empresaId, id, replay);
       return 'replayed';
     }

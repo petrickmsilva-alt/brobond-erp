@@ -1222,20 +1222,60 @@ export async function salvarRastreioCommerce(req: Request, res: Response) {
 export async function listarPagamentosCommerce(req: Request, res: Response) {
   const actor = currentUser(req);
   const escopo = escopoDoAtor(actor);
-  checkAccess(getResource('gateway_cobrancas')!, actor, 'read');
+  // gateway_cobrancas é um recurso INTERNO e, deliberadamente, não consta em
+  // RESOURCES/getResource. O `getResource(...)!` anterior passava undefined ao
+  // RBAC e derrubava esta rota com 500 antes de qualquer consulta.
+  checkAccess(R_GATEWAY_COBRANCAS, actor, 'read');
   const s = getStore();
-  const out = await s.list(R_GATEWAY_COBRANCAS, {
-    page: Math.max(1, Number(req.query.page) || 1),
-    pageSize: Math.min(200, Number(req.query.pageSize) || 50),
-    filter: { empresa_id: escopo.empresaId },
-    sort: 'id',
-    dir: 'desc',
-  });
-  const pedidos = await s.list(R_PEDIDOS(), { page: 1, pageSize: 1000, filter: { empresa_id: escopo.empresaId } });
+  const inteiroPositivo = (valor: unknown, padrao: number, maximo: number): number => {
+    if (valor === undefined || valor === '') return padrao;
+    const numero = Number(valor);
+    if (!Number.isSafeInteger(numero) || numero < 1) throw new HttpError(400, 'Paginação inválida.');
+    return Math.min(maximo, numero);
+  };
+  const page = inteiroPositivo(req.query.page, 1, Number.MAX_SAFE_INTEGER);
+  const pageSize = inteiroPositivo(req.query.pageSize, 50, 200);
+  const filter: Record<string, unknown> = { empresa_id: escopo.empresaId };
+  if (req.query.status) {
+    const status = String(req.query.status).trim();
+    const porProjecao: Record<string, string> = {
+      PENDING: 'pendente', AUTHORIZED: 'autorizada', APPROVED: 'paga', REJECTED: 'falhou',
+      CANCELLED: 'cancelada', REFUNDED: 'estornada', EXPIRED: 'expirada',
+    };
+    const gateway = porProjecao[status.toUpperCase()] ?? status.toLowerCase();
+    if (!Object.values(porProjecao).includes(gateway)) throw new HttpError(400, 'Estado de cobrança inválido.');
+    filter.status = gateway;
+  }
+  if (req.query.provider) filter.provider = String(req.query.provider).trim().toLowerCase().slice(0, 40);
+  if (req.query.metodo) {
+    const metodo = String(req.query.metodo).trim().toLowerCase();
+    if (!['pix', 'boleto', 'cartao_credito', 'cartao_debito'].includes(metodo)) throw new HttpError(400, 'Método de cobrança inválido.');
+    filter.metodo = metodo;
+  }
+  if (req.query.venda_id) filter.venda_id = inteiroPositivo(req.query.venda_id, 1, Number.MAX_SAFE_INTEGER);
+  const out = await s.list(R_GATEWAY_COBRANCAS, { page, pageSize, filter, sort: 'id', dir: 'desc' });
+  const cobrancaIds = out.rows.map((c) => Number(c.id)).filter((id) => Number.isSafeInteger(id) && id > 0);
+  // Associa SOMENTE a página retornada. Carregar "os primeiros 1000 pedidos"
+  // deixava cobranças antigas sem vínculo quando o tenant ultrapassava o corte.
+  let pedidos: Row[] = [];
+  if (cobrancaIds.length && s.kind === 'postgres') {
+    const vinculados = await query(
+      `SELECT * FROM commerce_pedidos WHERE empresa_id = $1 AND cobranca_id = ANY($2::bigint[])`,
+      [escopo.empresaId, cobrancaIds]
+    );
+    pedidos = vinculados.rows as Row[];
+  } else if (cobrancaIds.length) {
+    pedidos = (await Promise.all(
+      cobrancaIds.map((cobrancaId) => s.findOneWhere(R_PEDIDOS(), { empresa_id: escopo.empresaId, cobranca_id: cobrancaId }))
+    )).filter((p): p is Row => Boolean(p));
+  }
   const porCobranca = new Map<number, Row>();
-  for (const p of pedidos.rows) if (p.cobranca_id) porCobranca.set(Number(p.cobranca_id), p);
+  for (const p of pedidos) if (p.cobranca_id) porCobranca.set(Number(p.cobranca_id), p);
+  res.setHeader('Cache-Control', 'private, no-store');
   res.json({
     total: out.total,
+    page: out.page,
+    pageSize: out.pageSize,
     pagamentos: out.rows.map((c) => {
       const p = porCobranca.get(Number(c.id)) ?? null;
       return {
@@ -1248,7 +1288,7 @@ export async function listarPagamentosCommerce(req: Request, res: Response) {
         criado_em: c.criado_em ? String(c.criado_em) : null,
         atualizado_em: c.atualizado_em ? String(c.atualizado_em) : null,
         pedido: p
-          ? { pedido_externo: String(p.pedido_externo), estado: String(p.estado), sale_id: String(p.sale_id) }
+          ? { pedido_externo: String(p.pedido_externo), estado: String(p.estado), sale_id: p.sale_id ? String(p.sale_id) : null }
           : null,
         lancamento_id: c.lancamento_id ? Number(c.lancamento_id) : null,
         venda_id: c.venda_id ? Number(c.venda_id) : null,
