@@ -76,6 +76,7 @@ function montar(rota: string, rotas: React.ReactNode) {
 beforeEach(() => {
   fetchMock.mockReset();
   limparCarrinho();
+  localStorage.removeItem('brobond-loja-checkout-pendente');
 });
 
 describe('Loja — Vitrine (/loja)', () => {
@@ -126,6 +127,23 @@ describe('Loja — Página de produto (/loja/produto/:slug)', () => {
     await user.click(screen.getByRole('button', { name: /adicionar ao carrinho/i }));
     expect(await screen.findByLabelText(/carrinho com 1 item/i)).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('desabilita somente G com saldo zero e mantém M selecionável', async () => {
+    fetchMock.mockImplementation(async (caminho: string) => {
+      if (caminho.startsWith('/loja/config')) return CONFIG;
+      return {
+        ...PRODUTO,
+        tamanhos: [
+          { tamanho_id: 2, codigo: 'M', fisico: 8, disponivel: 7, local: 'loja', esgotado: false },
+          { tamanho_id: 3, codigo: 'G', fisico: 0, disponivel: 0, local: null, esgotado: true },
+        ],
+      };
+    });
+    render(montar('/loja/produto/camiseta-brobond', <Routes><Route path="/loja/produto/:slug" element={<LojaProdutoPage />} /></Routes>));
+    expect(await screen.findByRole('button', { name: 'M' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'G' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /adicionar ao carrinho/i })).toBeDisabled();
   });
 });
 
@@ -282,6 +300,39 @@ describe('Loja — Checkout (/loja/checkout)', () => {
     expect(fetchMock).toHaveBeenCalledWith('/loja/checkout', expect.objectContaining({ body: expect.stringContaining('"cupom":"OFERTA-TESTE"') }));
     expect(await screen.findByText('rota-pedido-token')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('timeout após o POST recupera pela MESMA chave, sem segundo pedido, e navega com o token recuperado', async () => {
+    adicionarAoCarrinho({ produto_id: 7, tamanho_id: null, quantidade: 1 });
+    const chaveAntes = lerCarrinho().chave;
+    fetchMock.mockImplementation(async (caminho: string, init?: RequestInit) => {
+      if (caminho.startsWith('/loja/config')) return { ...CONFIG, frete: { ...CONFIG.frete, provedor: 'retirada', valor: 0 } };
+      if (caminho === '/loja/preview') return PREVIEW;
+      if (caminho === '/loja/checkout' && init?.method === 'POST') throw new ApiError(0, 'Tempo de conexão esgotado.');
+      if (caminho === `/loja/checkout/${encodeURIComponent(chaveAntes)}` && !init?.method) {
+        return {
+          ok: true, recuperado: true, sale_id: 'SAL3f00d0000000000000001',
+          pedido: { pedido_externo: 'CHK-2026-REC', estado: 'AGUARDANDO_PAGAMENTO', total: 109.9, expira_em: '2026-10-28T13:00:00Z', checkout_token: 'tok-recuperado-123' },
+          pagamento: { status: 'PENDING', provider: 'mercadopago', qr_code: null, copia_cola: null, expira_em: null }, itens: [],
+        };
+      }
+      throw new Error(`rota inesperada ${caminho}`);
+    });
+    const user = userEvent.setup();
+    render(montar('/loja/checkout', <Routes>
+      <Route path="/loja/checkout" element={<LojaCheckoutPage />} />
+      <Route path="/loja/pedido/:token" element={<div>rota-pedido-recuperado</div>} />
+    </Routes>));
+    await screen.findByRole('button', { name: 'Continuar para entrega' });
+    await preencherDados(user);
+    await user.click(screen.getByRole('button', { name: 'Continuar para entrega' }));
+    await user.click(await screen.findByRole('button', { name: 'Continuar para pagamento' }));
+    await user.click(await screen.findByRole('button', { name: 'Continuar para revisão' }));
+    await user.click(await screen.findByRole('button', { name: 'Confirmar pedido e pagar' }));
+    expect(await screen.findByText('rota-pedido-recuperado')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter((c) => c[0] === '/loja/checkout' && (c[1] as RequestInit | undefined)?.method === 'POST')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(`/loja/checkout/${encodeURIComponent(chaveAntes)}`);
+    expect(localStorage.getItem('brobond-loja-checkout-pendente')).toBeNull();
   });
 
   it('não confirma sem passar pelas etapas: Dados não tem botão de confirmação e não avança com campos vazios', async () => {

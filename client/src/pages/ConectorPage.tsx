@@ -100,6 +100,15 @@ type PanelContent = {
 };
 
 type StoreSales = { count: number; paidCount: number; paidRevenueCents: number; pendingCount: number };
+type Reconciliation = {
+  settlementCount: number;
+  reconciledCount: number;
+  pendingSettlementCount: number;
+  divergentSettlementCount: number;
+  openDisputeCount: number;
+  pendingPayoutCount: number;
+  reconciledNetCents: number;
+};
 
 type ConnectorPanel = {
   provider: string;
@@ -109,6 +118,7 @@ type ConnectorPanel = {
   paidSalesCount?: number;
   /** Só Mercado Pago: vendas da loja própria processadas pelo Payment Engine. */
   storeSales?: StoreSales | null;
+  reconciliation?: Reconciliation | null;
   eventCount: number;
   sales: PanelSale[];
   events: PanelEvent[];
@@ -539,6 +549,34 @@ export default function ConectorPage({ module }: { module: Module }) {
                   <Kpi label="Pagos" value={String(panel.storeSales.paidCount)} tone="emerald" />
                   <Kpi label="Aguardando pagamento" value={String(panel.storeSales.pendingCount)} tone="amber" />
                   <Kpi label="Receita confirmada da loja" value={formatMoney(panel.storeSales.paidRevenueCents)} tone="cyan" />
+                </div>
+              )}
+            </Panel>
+          )}
+
+          {isMercadoPago && (
+            <Panel title="Conciliação financeira — Mercado Pago" subtitle="Liquidações · disputas · repasses bancários">
+              {!panel.reconciliation ? (
+                <PanelEmpty
+                  icon={<AlertTriangle className="h-6 w-6" />}
+                  message="Conciliação indisponível"
+                  hint="A indisponibilidade não é tratada como zero nem como ausência de divergências."
+                />
+              ) : panel.reconciliation.settlementCount === 0 && panel.reconciliation.pendingPayoutCount === 0 && panel.reconciliation.openDisputeCount === 0 ? (
+                <PanelEmpty
+                  icon={<ShieldCheck className="h-6 w-6" />}
+                  message="Nenhuma liquidação para conciliar"
+                  hint="Quando o provedor enviar liquidações ou repasses, os valores e divergências aparecerão aqui."
+                />
+              ) : (
+                <div className="grid grid-cols-2 gap-3 p-5 sm:grid-cols-3 xl:grid-cols-7">
+                  <Kpi label="Liquidações" value={String(panel.reconciliation.settlementCount)} tone="slate" />
+                  <Kpi label="Conciliadas" value={String(panel.reconciliation.reconciledCount)} tone="emerald" />
+                  <Kpi label="Pendentes" value={String(panel.reconciliation.pendingSettlementCount)} tone="amber" />
+                  <Kpi label="Divergentes" value={String(panel.reconciliation.divergentSettlementCount)} tone="red" />
+                  <Kpi label="Disputas abertas" value={String(panel.reconciliation.openDisputeCount)} tone="red" />
+                  <Kpi label="Repasses pendentes" value={String(panel.reconciliation.pendingPayoutCount)} tone="amber" />
+                  <Kpi label="Líquido conciliado" value={formatMoney(panel.reconciliation.reconciledNetCents)} tone="cyan" />
                 </div>
               )}
             </Panel>

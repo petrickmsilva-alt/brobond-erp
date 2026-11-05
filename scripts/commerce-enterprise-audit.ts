@@ -73,7 +73,7 @@ async function main() {
     assert.deepEqual(grupo('Fulfillment'), ['commerce-delivery']);
     assert.deepEqual(grupo('Pagamentos'), ['commerce-pagamentos', 'commerce-providers', 'conector-mercadopago']);
     assert.deepEqual(grupo('Canais'), ['conector-mercadolivre', 'conector-nuvemshop', 'conector-instagram']);
-    assert.deepEqual(grupo('Integrações'), ['commerce-fila']);
+    assert.deepEqual(grupo('Integrações'), ['commerce-fila', 'commerce-notificacoes']);
     assert.deepEqual(grupo('Inteligência'), ['commerce-trends']);
     const ordemGrupos = MODULE_GROUPS.filter((g) => commerce.some((m) => m.group === g));
     assert.deepEqual(ordemGrupos, ['Catálogo', 'Comercial Commerce', 'Experiência', 'Pedidos', 'Fulfillment', 'Pagamentos', 'Canais', 'Integrações', 'Inteligência']);

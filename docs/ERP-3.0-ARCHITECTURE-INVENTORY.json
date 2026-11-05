@@ -1,19 +1,19 @@
 {
-  "gerado_em": "2026-11-03T13:45:45.673Z",
+  "gerado_em": "2026-11-05T00:21:57.026Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 96,
-    "sql_com_conteudo": 96,
+    "sql": 99,
+    "sql_com_conteudo": 99,
     "prisma": 7
   },
   "tabelas": {
-    "total": 200,
-    "com_empresa_id": 172,
+    "total": 202,
+    "com_empresa_id": 174,
     "sem_empresa_id": 28,
-    "fora_do_prisma": 189
+    "fora_do_prisma": 191
   },
-  "indices": 529,
-  "constraints": 363,
+  "indices": 533,
+  "constraints": 364,
   "recursos": {
     "total": 170,
     "com_tabela": 170,
@@ -79,18 +79,18 @@
     }
   ],
   "modulos": {
-    "total": 143,
-    "navegaveis": 143,
+    "total": 144,
+    "navegaveis": 144,
     "planejados": 0,
     "areas": 11,
     "grupos": 35,
-    "com_recurso": 106
+    "com_recurso": 107
   },
   "rotas": {
-    "total": 456,
+    "total": 461,
     "por_metodo": {
-      "GET": 203,
-      "POST": 214,
+      "GET": 204,
+      "POST": 218,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -197,14 +197,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 222,
-      "casos": 1830
+      "arquivos": 274,
+      "casos": 2151
     },
     "client": {
-      "arquivos": 132,
-      "casos": 1107
+      "arquivos": 133,
+      "casos": 1129
     },
-    "total": 2937
+    "total": 3280
   },
   "integracoes": {
     "arquivos_modules": 56,
@@ -298,6 +298,16 @@
     },
     {
       "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"webhook_entregas\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"webhooks\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"creator_commands\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
@@ -330,6 +340,8 @@
     "configuracoes",
     "cores",
     "cotacao_decisoes",
+    "cron_job_locks",
+    "cron_work_items",
     "empresas",
     "grade_tamanhos",
     "grades",
@@ -348,9 +360,7 @@
     "portal_acessos",
     "sale_items",
     "sessoes",
-    "tamanhos",
-    "webhook_entregas",
-    "webhooks"
+    "tamanhos"
   ],
   "tabelas_fora_do_prisma": [
     "affiliate_commissions",
@@ -410,6 +420,8 @@
     "crm_oportunidade_estagio_historico",
     "crm_oportunidades",
     "crm_origens",
+    "cron_job_locks",
+    "cron_work_items",
     "customer_consents",
     "customer_preferences",
     "customer_segments",

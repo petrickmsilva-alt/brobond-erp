@@ -114,6 +114,7 @@ import {
   lojaPreview,
   lojaAtualizarQuantidade,
   lojaCriarCheckout,
+  lojaRecuperarCheckout,
   lojaPedidoPublico,
   lojaProdutosPublicos,
 } from './commerce/vitrine';
@@ -582,6 +583,7 @@ app.post('/api/loja/carrinho/quantidade', rateLimitPublico, wrap(lojaAtualizarQu
 app.post('/api/loja/payment-methods', rateLimitPublico, wrap(checkoutMethods));
 app.post('/api/commerce/checkout/payment-intent', rateLimitPublico, wrap(lojaCriarCheckout));
 app.post('/api/loja/checkout', rateLimitPublico, wrap(lojaCriarCheckout));
+app.get('/api/loja/checkout/:chave', rateLimitPublico, wrap(lojaRecuperarCheckout));
 app.get('/api/loja/pedidos/:token', rateLimitPublico, wrap(lojaPedidoPublico));
 // Portal do cliente (acompanhamento de pedidos por CPF/CNPJ)
 app.get('/api/portal/:token/pedidos', rateLimitPortal, wrap(portalPedidos));

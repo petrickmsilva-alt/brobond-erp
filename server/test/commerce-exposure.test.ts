@@ -31,6 +31,7 @@ app.get('/api/loja/produtos', wrap(vitrine.lojaProdutosPublicos));
 app.get('/api/loja/produtos/:slug', wrap(vitrine.lojaProdutoPublico));
 app.post('/api/loja/preview', wrap(vitrine.lojaPreview));
 app.post('/api/loja/checkout', wrap(vitrine.lojaCriarCheckout));
+app.get('/api/loja/checkout/:chave', wrap(vitrine.lojaRecuperarCheckout));
 app.get('/api/loja/pedidos/:token', wrap(vitrine.lojaPedidoPublico));
 app.get('/api/commerce/loja/estado', (req, _res, next) => { (req as any).user = actor; next(); }, wrap(estadoLoja));
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => { res.status(err.status || 500).json({ error: err.message }); });
@@ -162,6 +163,31 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
     await updateRecord(RESOURCES.commerce_configuracoes, configId, { frete_provedor: 'retirada' }, actor);
   });
 
+  test('disponibilidade por variante: M continua vendável e G zerado é público como esgotado e recusado no checkout', async () => {
+    const m = await s.findOneWhere(RESOURCES.tamanhos, { codigo: 'M' });
+    const g = await s.findOneWhere(RESOURCES.tamanhos, { codigo: 'G' });
+    assert.ok(m && g, 'fixtures canônicas M/G já existentes são reutilizadas');
+    const grade = await s.insert(RESOURCES.grades, { empresa_id: 1, nome: 'Grade M/G teste' });
+    await s.insert(RESOURCES.grade_tamanhos, { grade_id: grade.id, tamanho_id: m.id, ordem: 1 });
+    await s.insert(RESOURCES.grade_tamanhos, { grade_id: grade.id, tamanho_id: g.id, ordem: 2 });
+    const p = await s.insert(RESOURCES.produtos, { empresa_id: 1, sku: 'GRADE-M-G-TEST', nome: 'Grade M/G teste', preco_venda: 80, ativo: true, grade_id: grade.id });
+    await s.insert(RESOURCES.commerce_produtos, { empresa_id: 1, produto_id: p.id, slug: 'grade-m-g-teste' });
+    await s.insert(RESOURCES.commerce_publicacoes, { empresa_id: 1, produto_id: p.id, canal: 'BROBOND', estado: 'PUBLISHED', versao: 1 });
+    await s.insert(RESOURCES.estoques, { empresa_id: 1, produto_id: p.id, tamanho_id: m.id, local_id: 1, local: 'loja', quantidade: 8 });
+    // G existe na grade, mas propositalmente NÃO tem saldo físico.
+    const detalhe = await request(app).get('/api/loja/produtos/grade-m-g-teste').expect(200);
+    const tm = detalhe.body.tamanhos.find((x: any) => x.codigo === 'M');
+    const tg = detalhe.body.tamanhos.find((x: any) => x.codigo === 'G');
+    assert.equal(tm.disponivel, 8);
+    assert.equal(tm.esgotado, false);
+    assert.equal(tg.disponivel, 0);
+    assert.equal(tg.esgotado, true);
+    await request(app).post('/api/loja/checkout').send({ chave: 'grade-g-indisponivel', comprador, itens: [{ produto_id: Number(p.id), tamanho_id: Number(g.id), quantidade: 1 }] }).expect(409);
+    const previewM = await request(app).post('/api/loja/preview').send({ itens: [{ produto_id: Number(p.id), tamanho_id: Number(m.id), quantidade: 1 }] }).expect(200);
+    assert.equal(previewM.body.itens[0].ok, true);
+    assert.equal(previewM.body.itens[0].disponivel, 8);
+  });
+
   test('checkout com adapter SOMENTE de teste reserva antes do pagamento, persiste pedido, total e token, sem duplicar', async () => {
     registrarProvider({ ...mercadopagoProvider, async criaCobranca(_ctx, input) {
       cobrancas++;
@@ -185,6 +211,12 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
       assert.equal(repetido.body.idempotente, true);
       assert.equal(repetido.body.sale_id, criado.body.sale_id);
       assert.equal(cobrancas, 1);
+      const recuperado = await request(app).get(`/api/loja/checkout/${body.chave}`).expect(200);
+      assert.equal(recuperado.body.recuperado, true);
+      assert.equal(recuperado.body.sale_id, criado.body.sale_id);
+      assert.equal(recuperado.body.pedido.checkout_token, criado.body.pedido.checkout_token);
+      assert.equal(cobrancas, 1, 'recuperação somente lê e nunca cria outra cobrança');
+      await request(app).get('/api/loja/checkout/chave-inexistente').expect(404);
       const acompanhamento = await request(app).get(`/api/loja/pedidos/${criado.body.pedido.checkout_token}`).expect(200);
       assert.equal(acompanhamento.body.itens[0].quantidade, 2);
       assert.equal(acompanhamento.body.pagamento.provider, 'mercadopago');
@@ -212,6 +244,31 @@ describe('Commerce exposure — configuração persistida, HTTP público e check
       await s.insert(RESOURCES.commerce_configuracoes, { empresa_id: 2, loja_nome: 'Tenant teste 2', frete_provedor: 'retirada' });
       await request(app).get(`/api/loja/pedidos/${criado.body.pedido.checkout_token}`).expect(404);
     } finally { registrarProvider(mercadopagoProvider); process.env.COMMERCE_LOJA_EMPRESA_ID = '1'; }
+  });
+
+  test('timeout ambíguo preserva pedido pendente e reserva; recuperação usa a mesma operação sem nova cobrança', async () => {
+    registrarProvider({ ...mercadopagoProvider, async criaCobranca() {
+      cobrancas++;
+      throw new TypeError('fetch failed — fixture de escrita ambígua, sem rede');
+    } });
+    try {
+      const body = { chave: 'checkout-timeout-ambiguous-test', itens: itens(), comprador };
+      const falha = await request(app).post('/api/loja/checkout').send(body).expect(502);
+      assert.match(falha.body.error, /sem confirmação do provider/i);
+      const pedido = await s.findOneWhere(RESOURCES.commerce_pedidos, { empresa_id: 1, chave_checkout: body.chave });
+      assert.ok(pedido);
+      assert.equal(pedido.estado, 'AGUARDANDO_PAGAMENTO');
+      assert.equal(pedido.pagamento_estado, 'PENDING');
+      const sale = await s.get(RESOURCES.sales, String(pedido.sale_id));
+      assert.equal(sale?.status, 'PENDING');
+      const reservas = await s.list(RESOURCES.estoque_reservas, { page: 1, pageSize: 20, filter: { empresa_id: 1, origem_id: Number(pedido.id), status: 'ativa' } });
+      assert.equal(reservas.total, 1, 'resultado incerto não libera a peça para uma segunda venda');
+      const cobrancasAntes = cobrancas;
+      const recuperado = await request(app).get(`/api/loja/checkout/${body.chave}`).expect(200);
+      assert.equal(recuperado.body.sale_id, pedido.sale_id);
+      assert.equal(recuperado.body.pedido.estado, 'AGUARDANDO_PAGAMENTO');
+      assert.equal(cobrancas, cobrancasAntes, 'GET de recuperação nunca repete POST no provedor');
+    } finally { registrarProvider(mercadopagoProvider); }
   });
 
   test('provider PIX sem instrumento válido nunca completa checkout e devolve a reserva', async () => {

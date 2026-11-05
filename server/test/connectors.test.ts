@@ -56,7 +56,7 @@ const {
   resolveDynamicCallbackUri,
 } = await import('../../modules/connectors/index');
 
-const { buildNuvemshopAuthorizationUrl, resolveNuvemshopRedirectUri, verifyNuvemshopWebhookSignature } = await import(
+const { buildNuvemshopAuthorizationUrl, resolveNuvemshopRedirectUri, verifyNuvemshopWebhookSignature, nuvemshopOrderStatusToSaleStatus } = await import(
   '../../modules/connectors/nuvemshop/nuvemshop.service'
 );
 const { buildMercadoLivreAuthorizationUrl, resolveMercadoLivreRedirectUri } = await import('../../modules/connectors/mercadolivre/mercadolivre.service');
@@ -965,6 +965,13 @@ describe('Instagram — ingestão idempotente no canal INSTAGRAM_SHOPPING', () =
       assert.deepEqual({ accepted: result.accepted, ignored: result.ignored }, { accepted: 0, ignored: 1 });
     });
   });
+});
+
+test('Nuvemshop — autorização sem captura não é receita confirmada', () => {
+  assert.equal(nuvemshopOrderStatusToSaleStatus('open', 'authorized'), 'PENDING');
+  assert.equal(nuvemshopOrderStatusToSaleStatus('closed', 'paid'), 'PAID');
+  assert.equal(nuvemshopOrderStatusToSaleStatus('cancelled', 'paid'), 'CANCELLED');
+  assert.equal(nuvemshopOrderStatusToSaleStatus('closed', 'refunded'), 'REFUNDED');
 });
 
 describe('Instagram — consultas que alimentam o painel analítico', () => {

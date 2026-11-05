@@ -67,6 +67,17 @@ export interface ConnectorStoreSalesDTO {
   pendingCount: number;
 }
 
+export interface ConnectorReconciliationDTO {
+  settlementCount: number;
+  reconciledCount: number;
+  pendingSettlementCount: number;
+  divergentSettlementCount: number;
+  openDisputeCount: number;
+  pendingPayoutCount: number;
+  /** Líquido apenas de liquidações MATCHED/RESOLVED; não é receita de vendas. */
+  reconciledNetCents: number;
+}
+
 export interface ConnectorPanelDTO {
   provider: ConnectorProviderName;
   /**
@@ -84,6 +95,8 @@ export interface ConnectorPanelDTO {
    * importados da conta Mercado Pago (`sales`). `null` nos demais canais.
    */
   storeSales: ConnectorStoreSalesDTO | null;
+  /** Conciliação financeira do provedor, separada de conta MP e BroBond Store. */
+  reconciliation: ConnectorReconciliationDTO | null;
   /** Eventos de webhook recebidos no total. */
   eventCount: number;
   sales: ConnectorPanelSaleDTO[];
@@ -143,7 +156,7 @@ export function createConnectorPanelService(deps: ConnectorPanelDependencies = {
       const channel = saleChannelFromConnectorProvider(provider);
       const take = clampLimit(limit);
 
-      const [totals, sales, content, events, store] = await Promise.all([
+      const [totals, sales, content, events, store, reconciliation] = await Promise.all([
         db.query<{ revenue_cents: string | number | null; sales_count: string | number | null; paid_count: string | number | null; event_count: string | number | null }>(
           `SELECT
              COALESCE((SELECT SUM(amount_cents) FROM sales
@@ -196,12 +209,35 @@ export function createConnectorPanelService(deps: ConnectorPanelDependencies = {
                  FROM payment_intents pi
                 WHERE pi.empresa_id = $1 AND pi.provider = 'MERCADO_PAGO' AND pi.channel = 'OWN_STORE'`,
               [empresaId]
-            ).catch(() => null)
+            )
+          : Promise.resolve(null),
+        provider === 'MERCADOPAGO'
+          ? db.query<Record<string, unknown>>(
+              `SELECT
+                 (SELECT COUNT(*) FROM payment_settlements ps
+                   WHERE ps.empresa_id = $1 AND ps.provider = 'MERCADO_PAGO') AS settlements,
+                 (SELECT COUNT(*) FROM payment_settlements ps
+                   WHERE ps.empresa_id = $1 AND ps.provider = 'MERCADO_PAGO' AND ps.status IN ('MATCHED','RESOLVED')) AS reconciliadas,
+                 (SELECT COUNT(*) FROM payment_settlements ps
+                   WHERE ps.empresa_id = $1 AND ps.provider = 'MERCADO_PAGO' AND ps.status IN ('UNRECONCILED','PARTIAL')) AS pendentes,
+                 (SELECT COUNT(*) FROM payment_settlements ps
+                   WHERE ps.empresa_id = $1 AND ps.provider = 'MERCADO_PAGO' AND ps.status = 'DIVERGENT') AS divergentes,
+                 (SELECT COUNT(*) FROM payment_disputes pd
+                   JOIN payment_intents pi ON pi.empresa_id = pd.empresa_id AND pi.id = pd.payment_intent_id
+                   WHERE pd.empresa_id = $1 AND pi.provider = 'MERCADO_PAGO'
+                     AND pd.status NOT IN ('WON','LOST','CLOSED')) AS disputas_abertas,
+                 (SELECT COUNT(*) FROM payment_payouts pp
+                   WHERE pp.empresa_id = $1 AND pp.provider = 'MERCADO_PAGO' AND pp.status <> 'MATCHED') AS repasses_pendentes,
+                 (SELECT COALESCE(SUM(ps.net_amount), 0) FROM payment_settlements ps
+                   WHERE ps.empresa_id = $1 AND ps.provider = 'MERCADO_PAGO' AND ps.status IN ('MATCHED','RESOLVED')) AS liquido_conciliado`,
+              [empresaId]
+            )
           : Promise.resolve(null),
       ]);
 
       const totalsRow = totals.rows[0] ?? {};
       const storeRow = store?.rows?.[0];
+      const reconciliationRow = reconciliation?.rows?.[0];
 
       return {
         provider,
@@ -214,6 +250,17 @@ export function createConnectorPanelService(deps: ConnectorPanelDependencies = {
               paidCount: Number(storeRow.pagos ?? 0) || 0,
               paidRevenueCents: Number(storeRow.receita ?? 0) || 0,
               pendingCount: Number(storeRow.pendentes ?? 0) || 0,
+            }
+          : null,
+        reconciliation: reconciliationRow
+          ? {
+              settlementCount: Number(reconciliationRow.settlements ?? 0) || 0,
+              reconciledCount: Number(reconciliationRow.reconciliadas ?? 0) || 0,
+              pendingSettlementCount: Number(reconciliationRow.pendentes ?? 0) || 0,
+              divergentSettlementCount: Number(reconciliationRow.divergentes ?? 0) || 0,
+              openDisputeCount: Number(reconciliationRow.disputas_abertas ?? 0) || 0,
+              pendingPayoutCount: Number(reconciliationRow.repasses_pendentes ?? 0) || 0,
+              reconciledNetCents: Number(reconciliationRow.liquido_conciliado ?? 0) || 0,
             }
           : null,
         eventCount: Number(totalsRow.event_count ?? 0) || 0,

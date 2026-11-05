@@ -3,7 +3,7 @@
 //
 // ZERO MODAL: upload, ordem, principal, ATIVA/INATIVA, texto alternativo,
 // vínculo com variação e exclusão (com confirmação INLINE) vivem na própria
-// página. Não há Dialog/Drawer/Sheet/overlay/lightbox nem window.confirm().
+// página. Não há diálogo, painel sobreposto, lightbox nem confirmação nativa.
 //
 // Reaproveita a infraestrutura existente `server/src/uploads.ts`:
 //   GET    /api/produtos/:id/arquivos

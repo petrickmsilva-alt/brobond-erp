@@ -972,7 +972,19 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
   try {
     await paymentEngine.createForOrder(empresaId, Number(criado.pedido.id), method, `checkout:${criado.pedido.id}`, { taxId: comprador.documento ?? undefined });
   } catch (e) {
-    await falharCheckout(empresaId, criado.pedido, criado.sale, e instanceof Error ? e.message : String(e));
+    // Timeout/queda de rede não provam que o provider deixou de criar a
+    // cobrança. Cancelar pedido/reserva aqui permitia vender a mesma peça e
+    // depois receber um PIX já aprovado. Resultado incerto permanece PENDENTE,
+    // vinculado à mesma intent/chave; webhook ou reconciliação concluem o fluxo.
+    if (e instanceof HttpError && e.code === 'PAYMENT_CREATION_UNCERTAIN') {
+      await s.update(R_PEDIDOS(), Number(criado.pedido.id), {
+        estado: 'AGUARDANDO_PAGAMENTO', pagamento_estado: 'PENDING',
+        erro: 'Criação do pagamento aguardando confirmação do provedor; não repita a cobrança.',
+        atualizado_em: new Date().toISOString(),
+      });
+    } else {
+      await falharCheckout(empresaId, criado.pedido, criado.sale, e instanceof Error ? e.message : String(e));
+    }
     throw e instanceof HttpError
       ? e
       : new HttpError(
@@ -1043,6 +1055,25 @@ async function falharCheckout(empresaId: number, pedido: Row, sale: Row, motivo:
     },
     { isolation: 'serializable' }
   );
+}
+
+// ----------------------------------------------------------------------------
+// GET /api/loja/checkout/:chave — recuperação somente-leitura após timeout,
+// reload ou perda de conexão. A chave aleatória do carrinho funciona como
+// credencial de recuperação e NUNCA cria outro pedido/cobrança.
+// ----------------------------------------------------------------------------
+
+export async function lojaRecuperarCheckout(req: Request, res: Response) {
+  const { empresaId } = await exigirVitrine();
+  const chave = String(req.params.chave || '').trim();
+  if (chave.length < 8 || chave.length > 64) throw new HttpError(404, 'Checkout não encontrado.');
+  const s = getStore();
+  const pedido = await s.findOneWhere(R_PEDIDOS(), { empresa_id: empresaId, chave_checkout: chave });
+  if (!pedido) throw new HttpError(404, 'Checkout não encontrado.');
+  const sale = await s.findOneWhere(R_SALES(), { id: String(pedido.sale_id), empresa_id: empresaId });
+  if (!sale) throw new HttpError(404, 'Checkout não encontrado.');
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, recuperado: true, ...(await respostaPedido(empresaId, sale)) });
 }
 
 // ----------------------------------------------------------------------------

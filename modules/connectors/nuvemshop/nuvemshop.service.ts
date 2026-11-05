@@ -409,8 +409,10 @@ export function nuvemshopOrderStatusToSaleStatus(status: string, paymentStatus: 
   if (status.trim().toLowerCase() === 'cancelled') return 'CANCELLED';
   switch (paymentStatus.trim().toLowerCase()) {
     case 'paid':
-    case 'authorized':
       return 'PAID';
+    case 'authorized':
+      // Autorização reserva crédito, mas ainda não confirma captura/receita.
+      return 'PENDING';
     case 'refunded':
     case 'partially_refunded':
       return 'REFUNDED';
