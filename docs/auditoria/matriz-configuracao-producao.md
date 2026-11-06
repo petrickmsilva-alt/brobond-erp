@@ -176,6 +176,24 @@ Lidos por família de prefixo em `modules/payments/application/configuration.ts:
 | `CEP_PROVIDERS`, `CEP_TIMEOUT_MS` | CEP | `server/src/cep.ts:95,39` | Não | `brasilapi,viacep`; padrão | ausente |
 | `CEP_ORIGEM` | Frete | `server/src/frete.ts:37` | Condicional | Origem não definida | ausente |
 
+### WooCommerce MULTI-STORE (RETAIL / WHOLESALE) — migration 0100
+
+Uma empresa, um catálogo, DUAS lojas independentes. Com o modo desligado, vale
+exatamente o bloco single-store acima (`WOOCOMMERCE_*`).
+
+| Variável | Arquivo | Obrigatória | Quando ausente | Render |
+|---|---|---|---|---|
+| `WOOCOMMERCE_MULTI_STORE_ENABLED` | `server/src/commerce/woocommerce/registry.ts` | Não | Modo multi-loja DESLIGADO (fluxo single-store preservado) | ausente |
+| `WOOCOMMERCE_RETAIL_ENABLED` | `registry.ts` | Condicional | Loja RETAIL não configurada (`configStore('RETAIL')` = `null`) | ausente |
+| `WOOCOMMERCE_RETAIL_URL` | `registry.ts` | Condicional | Loja RETAIL incompleta | ausente |
+| `WOOCOMMERCE_RETAIL_CK`, `WOOCOMMERCE_RETAIL_CS` | `registry.ts` | Condicional | Loja RETAIL incompleta | ausente |
+| `WOOCOMMERCE_RETAIL_EMPRESA_ID` | `registry.ts` | Não | Cai em `WOOCOMMERCE_EMPRESA_ID` e, por fim, na empresa padrão (1) | ausente |
+| `WOOCOMMERCE_WHOLESALE_ENABLED` | `registry.ts` | Condicional | Loja WHOLESALE não configurada | ausente |
+| `WOOCOMMERCE_WHOLESALE_URL` | `registry.ts` | Condicional | Loja WHOLESALE incompleta | ausente |
+| `WOOCOMMERCE_WHOLESALE_CK`, `WOOCOMMERCE_WHOLESALE_CS` | `registry.ts` | Condicional | Loja WHOLESALE incompleta | ausente |
+| `WOOCOMMERCE_WHOLESALE_EMPRESA_ID` | `registry.ts` | Não | Igual à RETAIL | ausente |
+| `WOOCOMMERCE_SYNC_DRY_RUN` | `registry.ts` | Não | Escrita REAL nas lojas; `true` suprime toda escrita (homologação) | ausente |
+
 ## 9. Armazenamento, observabilidade e ajustes
 
 | Variável | Arquivo:linha | Obrigatória | Quando ausente | Render |

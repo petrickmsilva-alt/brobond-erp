@@ -427,11 +427,37 @@ async function executarPublicacoesCron(): Promise<ResultadoExecutorCron> {
   return { itens, detalhes: [], falhas };
 }
 
+/**
+ * Multi-loja: enfileira, para CADA loja habilitada, a sincronização de estoque
+ * e a importação incremental de pedidos. Nenhuma chamada de rede aqui — quem
+ * fala com a loja é o worker do outbox. O enfileiramento é idempotente pela
+ * chave por loja, então repetir o cron não acumula eventos. Devolve 0 quando o
+ * modo multi-loja está desligado.
+ */
+async function enfileirarSincronizacaoMultiLoja(): Promise<number> {
+  const { multiStoreHabilitado } = await import('./commerce/woocommerce/registry');
+  if (!multiStoreHabilitado()) return 0;
+  const { lojasDaEmpresa, enfileirarPedidosDaLoja, enfileirarEstoqueDaLoja } = await import('./commerce/woocommerce/outboxStore');
+  let enfileirados = 0;
+  for (const { cfg, empresaId } of lojasDaEmpresa()) {
+    // Uma loja indisponível não derruba as demais: o erro fica naquela loja.
+    try {
+      await enfileirarEstoqueDaLoja(empresaId, cfg.store_key);
+      await enfileirarPedidosDaLoja(empresaId, cfg.store_key);
+      enfileirados += 1;
+    } catch { /* segue para a próxima loja */ }
+  }
+  return enfileirados;
+}
+
 /** Recuperação de pedidos de marketplace e eventos de pedido (conversão, notificação, sincronização). */
 async function executarPedidosCron(): Promise<ResultadoExecutorCron> {
   const falhas: string[] = [];
   let itens = 0;
   try { itens += await recuperarPedidosPendentes(); } catch { falhas.push('recuperacao_marketplace'); }
+  try {
+    itens += await enfileirarSincronizacaoMultiLoja();
+  } catch { /* multi-loja desligado ou indisponível: o fluxo single-store segue */ }
   try {
     const o = await processarOutbox(10, TIPOS_OUTBOX_POR_PROCESSO.pedidos);
     itens += o.processados;

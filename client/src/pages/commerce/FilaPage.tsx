@@ -12,6 +12,7 @@ import { apiFetch, ApiError } from '../../lib/api';
 import { Alert, EmptyState, PageHeader, Spinner, Badge } from '../../components/ui';
 import { DataTable, FilterBar, type DataTableColumn } from '../../components/ui-kit-negocios';
 import { EstadoBadge, ROTULO_PUBLICACAO, TONE_OUTBOX, TONE_PUBLICACAO, dataHora, rotuloCanal } from './shared';
+import WooLojasPanel from './WooLojasPanel';
 
 type Eventos = {
   outbox: {
@@ -193,6 +194,8 @@ export default function CommerceFilaPage() {
           </div>
         </section>
       )}
+
+      <WooLojasPanel />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="rounded-xl border border-line bg-surface p-4" aria-labelledby="pub-recentes">

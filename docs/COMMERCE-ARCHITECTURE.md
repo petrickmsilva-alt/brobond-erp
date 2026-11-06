@@ -60,6 +60,27 @@ declará-lo — DEFAULT 1 seria cross-tenant).
 | `analytics.ts` | `/commerce/trends`, `/commerce/analytics` — métricas reais da operação (período, série, tendência, top crescimento), `vazio` honesto |
 | `outbox.ts` | Fila de eventos (`pedido.convertido`, `evento.enviado`…) com tentativas/backoff |
 
+### WooCommerce multi-store (`server/src/commerce/woocommerce/`)
+
+Uma empresa, UM catálogo, DUAS lojas independentes (RETAIL `brobond.com.br`,
+preço `preco_venda`; WHOLESALE `atacado.brobond.com.br`, preço `preco_atacado`).
+Os identificadores `RETAIL`/`WHOLESALE` são imutáveis e persistem em
+`store_key`. Guia operacional completo: [COMMERCE-WOOCOMMERCE-MULTI-STORE.md](COMMERCE-WOOCOMMERCE-MULTI-STORE.md).
+
+| Módulo | Responsabilidade |
+|---|---|
+| `registry.ts` | Identidades imutáveis, config por loja, validação de URL (SSRF/HTTPS), `dry_run`, diagnóstico sem credencial |
+| `cliente.ts` | Cliente HTTP autenticado por loja (Basic Auth, timeout, dry-run, erros sem corpo remoto) |
+| `precos.ts` | Preço por loja (`preco_venda` × `preco_atacado`), `atacado_min_qtd`, recusa de preço inválido |
+| `vinculos.ts` | Vínculo ERP ↔ loja (produto e variação), NULL-safe por loja, idempotente |
+| `publicacao.ts` | Publicação por loja: vínculo → SKU → criação; variável nunca vira simples; preço da variação |
+| `estoque.ts` | ERP → loja: disponível vendável, IDs externos da loja, lote confirmado, sem operação destrutiva |
+| `pedidos.ts` | Importação por loja (`WOO-<store>-<id>`), incremental por água-marca, idempotente sob concorrência |
+| `estado.ts` | `woocommerce_sync_state`: água-marca e último erro REAL por loja |
+| `outboxStore.ts` | Eventos por loja na fila única (`store_key` na chave de idempotência) |
+| `painel.ts` | Painel por loja, reconciliação (ERP × vínculos) e visão de vínculo |
+| `rotas.ts` | Rotas administrativas por loja (RBAC gerente/admin, loja do path, sem credencial) |
+
 ### Integrações fora do pacote commerce
 
 - `gateway.ts`: `criarCobrancaGateway` idempotente por
@@ -206,6 +227,9 @@ a vitrine) — quem escreve é gerente/admin (espelhado no cliente).
 | Concorrência PG (12) | `server/test/pg/commerce-concorrencia.test.ts` | fila idempotente, claim único, versão única, cupom ×6, última peça ×6, mesmo checkout ×6, liberação ×6, garantir pedido ×6, expiração ×4, outbox ×4, preço ×6, expiração × pagamento |
 | E2E PG | `server/test/pg/commerce-e2e.test.ts` | cadeia HTTP real: catálogo→fila→vitrine→checkout→webhook→conversão, RBAC/403, tenancy/404, frete fail-closed |
 | Marketplace | `server/test/pg/pg-golive03-marketplace-venda.test.ts` | ingestão → venda operacional, idempotência, multiempresa, fail-closed de SKU |
+| WooCommerce multi-store (unitário) | `server/test/woocommerce-multistore.test.ts` | registry/SSRF, preço por loja, publicação idempotente, variações, estoque sem atualização cruzada, pedidos por loja, ausência de credencial |
+| WooCommerce multi-store (rotas) | `server/test/woocommerce-multistore-rotas.test.ts` | RBAC gerente/admin, isolamento por empresa, loja do path, respostas sem CK/CS, inventário pós-guarda |
+| WooCommerce multi-store (PG) | `server/test/pg/woocommerce-multistore-pg.test.ts` | migration 0100, unicidade NULL-safe por loja, CHECK/FK, importação concorrente, publicações por loja |
 | Carrinho/Storefront PG | `server/test/pg/commerce-cart.test.ts` (+ `_commerce-harness.ts`) | cotação autoritativa, anti-tamper (total:1), quantidades inválidas, estoque/reserva, cupom, frete fail-closed, despublicação, tenancy, SEO/404, webhook duplicado, RBAC |
 | SEO unitário | `server/test/storefront-seo.test.ts` | escape HTML/JSON-LD, canonical, noindex |
 | Visuais (15) | `client/src/pages/commerce/*.test.tsx` + `LojaFluxoPages.test.tsx` | as 13 rotas do space `commerce` + subrotas + fluxo B2C completo — render real da API, ZERO MODAL, navegação por rota |

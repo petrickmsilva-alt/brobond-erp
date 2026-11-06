@@ -8440,3 +8440,88 @@ CREATE INDEX IF NOT EXISTS ix_produtos_categoria_ativo
 -- ===========================================================================
 ALTER TABLE gateway_cobrancas ADD COLUMN IF NOT EXISTS ticket_url TEXT;
 COMMENT ON COLUMN gateway_cobrancas.ticket_url IS 'ticket_url real retornado pelo provedor (Orders API); NULL para cobranças legadas';
+
+-- ===========================================================================
+-- BLOCO WOOCOMMERCE MULTI-STORE (RETAIL / WHOLESALE) — migration 0100
+--
+-- Espelha db/migrations/0100_woocommerce_multistore.sql (idempotente para
+-- bancos existentes). Uma empresa, um catálogo, DUAS lojas WooCommerce:
+--   RETAIL     https://brobond.com.br          preço = produtos.preco_venda
+--   WHOLESALE  https://atacado.brobond.com.br  preço = produtos.preco_atacado
+--
+-- Aditivo e não destrutivo: `store_key` nasce NULL nas linhas legadas; a
+-- unicidade das publicações passa a considerar a loja via COALESCE(store_key,'')
+-- (o comportamento das linhas antigas é exatamente o de antes). Nenhum DROP de
+-- tabela, nenhum DELETE, nenhum backfill silencioso.
+-- ===========================================================================
+
+-- 1) Vínculos externos por loja (ERP ↔ WooCommerce).
+CREATE TABLE IF NOT EXISTS woocommerce_product_links (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  store_key TEXT NOT NULL,
+  CONSTRAINT woocommerce_product_links_store_ck CHECK (store_key IN ('RETAIL', 'WHOLESALE')),
+  produto_id INTEGER NOT NULL REFERENCES produtos(id),
+  external_product_id TEXT NOT NULL,
+  external_variation_id TEXT,
+  sku TEXT,
+  status TEXT NOT NULL DEFAULT 'LINKED',
+  CONSTRAINT woocommerce_product_links_status_ck CHECK (status IN ('PENDING', 'LINKED', 'ERROR', 'UNLINKED')),
+  synced_at TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_woo_links_produto_simples
+  ON woocommerce_product_links (empresa_id, store_key, produto_id)
+  WHERE external_variation_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_woo_links_produto_variacao
+  ON woocommerce_product_links (empresa_id, store_key, produto_id, external_variation_id)
+  WHERE external_variation_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_woo_links_external_produto
+  ON woocommerce_product_links (empresa_id, store_key, external_product_id)
+  WHERE external_variation_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_woo_links_external_variacao
+  ON woocommerce_product_links (empresa_id, store_key, external_product_id, external_variation_id)
+  WHERE external_variation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_woo_links_empresa_loja
+  ON woocommerce_product_links (empresa_id, store_key, status, atualizado_em DESC);
+CREATE INDEX IF NOT EXISTS ix_woo_links_sku
+  ON woocommerce_product_links (empresa_id, store_key, sku) WHERE sku IS NOT NULL;
+
+-- 2) Estado de sincronização por loja (água-marca incremental + último erro).
+CREATE TABLE IF NOT EXISTS woocommerce_sync_state (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  store_key TEXT NOT NULL,
+  CONSTRAINT woocommerce_sync_state_store_ck CHECK (store_key IN ('RETAIL', 'WHOLESALE')),
+  ultimo_pedido_em TIMESTAMPTZ,
+  ultima_sincronizacao_estoque_em TIMESTAMPTZ,
+  ultima_publicacao_em TIMESTAMPTZ,
+  ultimo_erro TEXT,
+  tentativas INTEGER NOT NULL DEFAULT 0 CHECK (tentativas >= 0),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_woocommerce_sync_state UNIQUE (empresa_id, store_key)
+);
+
+-- 3) `store_key` no pipeline de publicação e na fila (outbox).
+ALTER TABLE commerce_publicacoes ADD COLUMN IF NOT EXISTS store_key TEXT;
+ALTER TABLE commerce_publicacoes DROP CONSTRAINT IF EXISTS uq_commerce_publicacoes_versao;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_commerce_publicacoes_versao_loja
+  ON commerce_publicacoes (empresa_id, produto_id, canal, COALESCE(store_key, ''), versao);
+DROP INDEX IF EXISTS uq_commerce_publicacoes_ativa;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_commerce_publicacoes_ativa
+  ON commerce_publicacoes (empresa_id, produto_id, canal, COALESCE(store_key, ''))
+  WHERE estado IN ('DRAFT', 'READY', 'QUEUED', 'PUBLISHING', 'UPDATE_QUEUED');
+CREATE INDEX IF NOT EXISTS ix_commerce_publicacoes_loja
+  ON commerce_publicacoes (empresa_id, canal, store_key, estado, atualizado_em DESC);
+
+ALTER TABLE commerce_outbox ADD COLUMN IF NOT EXISTS store_key TEXT;
+CREATE INDEX IF NOT EXISTS ix_commerce_outbox_loja
+  ON commerce_outbox (empresa_id, store_key, estado, id DESC) WHERE store_key IS NOT NULL;
+
+-- 4) Índice da referência do pedido importado (leitura do "já importado").
+-- A idempotência FORTE vem da 0034: uq_vendas_pedido_externo por
+-- (empresa_id, pedido_externo_canal, pedido_externo_id), com canal por loja.
+CREATE INDEX IF NOT EXISTS ix_vendas_pedido_cliente
+  ON vendas (empresa_id, pedido_cliente) WHERE pedido_cliente IS NOT NULL;

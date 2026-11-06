@@ -123,6 +123,33 @@ services:
         sync: false
       - key: MERCADOPAGO_WEBHOOK_SECRET
         sync: false
+      # ── WooCommerce MULTI-STORE (RETAIL / WHOLESALE) ──
+      # Catálogo ÚNICO, duas lojas independentes. Sem estas variáveis o modo
+      # multi-loja fica DESLIGADO e o fluxo single-store (WOOCOMMERCE_URL/CK/CS)
+      # continua valendo. Nenhuma credencial é versionada: preencha no painel.
+      #   RETAIL     https://brobond.com.br          preço = produtos.preco_venda
+      #   WHOLESALE  https://atacado.brobond.com.br  preço = produtos.preco_atacado
+      - key: WOOCOMMERCE_MULTI_STORE_ENABLED
+        sync: false
+      - key: WOOCOMMERCE_RETAIL_ENABLED
+        sync: false
+      - key: WOOCOMMERCE_RETAIL_URL
+        sync: false
+      - key: WOOCOMMERCE_RETAIL_CK
+        sync: false
+      - key: WOOCOMMERCE_RETAIL_CS
+        sync: false
+      - key: WOOCOMMERCE_WHOLESALE_ENABLED
+        sync: false
+      - key: WOOCOMMERCE_WHOLESALE_URL
+        sync: false
+      - key: WOOCOMMERCE_WHOLESALE_CK
+        sync: false
+      - key: WOOCOMMERCE_WHOLESALE_CS
+        sync: false
+      # Homologação: true suprime TODA escrita nas lojas (nada é criado/alterado).
+      - key: WOOCOMMERCE_SYNC_DRY_RUN
+        sync: false
 
 # databases:
 #   - name: brobond-db

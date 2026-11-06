@@ -404,6 +404,15 @@ import { connectorsRouter, initConnectors, publicConnectorsRouter } from './conn
 import { publicGatewayRouter } from './gateway';
 import { importarPedidosLoja, produtosLoja, sincronizarEstoqueLoja, statusLoja } from './loja';
 import {
+  painelLojas,
+  painelLoja,
+  sincronizarEstoqueDaLojaRota,
+  importarPedidosDaLojaRota,
+  publicarProdutoNaLojaRota,
+  reconciliarLojaRota,
+  statusLojas,
+} from './commerce/woocommerce/rotas';
+import {
   initNegociosEngine,
   negociosABC,
   negociosABCRecalcular,
@@ -1275,6 +1284,17 @@ app.get('/api/marketplace/loja/status', wrap(statusLoja));
 app.get('/api/marketplace/loja/produtos', wrap(produtosLoja));
 app.post('/api/marketplace/loja/pedidos', wrap(importarPedidosLoja));
 app.post('/api/marketplace/loja/estoque', wrap(sincronizarEstoqueLoja));
+
+// WooCommerce MULTI-STORE (RETAIL / WHOLESALE) — catálogo único, duas lojas.
+// O fluxo single-store acima (WOOCOMMERCE_*) continua valendo quando o modo
+// multi-loja está desligado; estas rotas são o painel e as ações POR LOJA.
+app.get('/api/commerce/woocommerce/status', wrap(statusLojas));
+app.get('/api/commerce/woocommerce/lojas', wrap(painelLojas));
+app.get('/api/commerce/woocommerce/lojas/:store', wrap(painelLoja));
+app.get('/api/commerce/woocommerce/lojas/:store/reconciliacao', wrap(reconciliarLojaRota));
+app.post('/api/commerce/woocommerce/lojas/:store/estoque', wrap(sincronizarEstoqueDaLojaRota));
+app.post('/api/commerce/woocommerce/lojas/:store/pedidos', wrap(importarPedidosDaLojaRota));
+app.post('/api/commerce/woocommerce/lojas/:store/produtos/:id/publicar', wrap(publicarProdutoNaLojaRota));
 
 // WebSocket status
 app.get('/api/admin/ws/status', (_req, res) => res.json(wsStatus()));

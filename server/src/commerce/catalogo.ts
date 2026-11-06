@@ -23,6 +23,7 @@ import { escopoDoAtor, escopoDeSistema, empresaDoRegistroAudit, type EscopoEmpre
 import { getResource } from '../resources';
 import { configLoja, wooFetch, empresaVinculadaWoo } from '../loja';
 import { domainLock } from '../domainLock';
+import type { StoreKey } from './woocommerce/registry';
 import { listarTodos } from '../producao';
 import { celulasDaEmpresa, locaisDeSaida, reservadoDaCelula, reservadoDoProduto, reservasAtivasPorCelula } from '../estoqueCanonico';
 import { attachImages } from '../uploads';
@@ -53,6 +54,17 @@ const R_PRODUTOS = () => getResource('produtos')!;
 // ----------------------------------------------------------------------------
 
 export { PublicacaoFalha } from './publicacaoCanais';
+
+/**
+ * Lojas WooCommerce habilitadas E configuradas para a publicação multi-loja,
+ * restritas à empresa dona do produto. Vazio quando o modo multi-loja está
+ * desligado — nesse caso o canal WOOCOMMERCE usa o fluxo single-store legado.
+ */
+async function lojasHabilitadas(empresaId: number): Promise<StoreKey[]> {
+  const { multiStoreHabilitado, storesConfiguradas } = await import('./woocommerce/registry');
+  if (!multiStoreHabilitado()) return [];
+  return storesConfiguradas().filter((c) => c.empresaId === empresaId).map((c) => c.store_key);
+}
 
 function sanitizarErro(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
@@ -207,6 +219,7 @@ export async function precoNoCanal(
 // ----------------------------------------------------------------------------
 
 export type PayloadPublicacao = {
+  produto_id: number;
   sku: string;
   titulo: string;
   resumo: string | null;
@@ -250,6 +263,7 @@ export async function montarPayloadPublicacao(
   const escopo = escopoDeSistema(empresaId);
   const disponivel = await disponivelTotalProduto(escopo, produtoId, tx);
   return {
+    produto_id: produtoId,
     sku: String(produto.sku || ''),
     titulo: String(produto.nome || ''),
     resumo: projecao?.resumo ? String(projecao.resumo) : produto.descricao_curta ? String(produto.descricao_curta) : null,
@@ -286,24 +300,31 @@ export async function enfileirarPublicacao(
   canal: CanalPublicacao,
   payload: PayloadPublicacao,
   criadoPor: number | null,
-  tx?: Tx
+  tx?: Tx,
+  opcoes: { storeKey?: string | null } = {}
 ): Promise<Row> {
-  const key = `publicacao:${canal}:${produtoId}`;
+  const storeKey = opcoes.storeKey ?? null;
+  // A LOJA faz parte da identidade do trabalho: publicar o mesmo produto na
+  // RETAIL e na WHOLESALE são dois enfileiramentos distintos (chave + lock).
+  const key = `publicacao:${canal}:${storeKey ?? ''}:${produtoId}`;
   if (tx) {
     // Honor the caller's transaction while taking the same cross-process lock.
     await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`domain:${empresaId}:${key}`]);
-    return enfileirarPublicacaoInterna(empresaId, produtoId, canal, payload, criadoPor, tx);
+    return enfileirarPublicacaoInterna(empresaId, produtoId, canal, payload, criadoPor, tx, storeKey);
   }
-  return domainLock(empresaId, key, (lockedTx) => enfileirarPublicacaoInterna(empresaId, produtoId, canal, payload, criadoPor, lockedTx));
+  return domainLock(empresaId, key, (lockedTx) => enfileirarPublicacaoInterna(empresaId, produtoId, canal, payload, criadoPor, lockedTx, storeKey));
 }
 
 async function enfileirarPublicacaoInterna(
   empresaId: number, produtoId: number, canal: CanalPublicacao,
-  payload: PayloadPublicacao, criadoPor: number | null, tx: Tx
+  payload: PayloadPublicacao, criadoPor: number | null, tx: Tx, storeKey: string | null = null
 ): Promise<Row> {
   const s = getStore();
   const hash = hashPayload(payload);
-  const existentes = await listarTodos(R_PUBLICACOES(), { empresa_id: empresaId, produto_id: produtoId, canal }, tx, { sort: 'id', dir: 'asc' });
+  const todas = await listarTodos(R_PUBLICACOES(), { empresa_id: empresaId, produto_id: produtoId, canal }, tx, { sort: 'id', dir: 'asc' });
+  // Recorte por loja em memória: o filtro do store não distingue NULL de '' e
+  // as linhas legadas (store_key NULL) precisam continuar isoladas das novas.
+  const existentes = todas.filter((r) => (r.store_key == null ? null : String(r.store_key)) === storeKey);
   const ativa = existentes.find((r) => ESTADOS_PIPELINE.has(String(r.estado))) ?? null;
   if (ativa) {
     if (String(ativa.payload_hash || '') === hash) return ativa;
@@ -338,6 +359,7 @@ async function enfileirarPublicacaoInterna(
         estado: 'QUEUED',
         payload,
         payload_hash: hash,
+        ...(storeKey ? { store_key: storeKey } : {}),
         tentativas: 0,
         proxima_tentativa_em: new Date().toISOString(),
         criado_por: criadoPor,
@@ -355,9 +377,10 @@ async function enfileirarPublicacaoInterna(
       { page: 1, pageSize: 500, filter: { empresa_id: empresaId, produto_id: produtoId, canal } },
       tx
     );
-    const ativaDepois = deNovo.rows.find((r) => ESTADOS_PIPELINE.has(String(r.estado))) ?? null;
+    const daLoja = deNovo.rows.filter((r) => (r.store_key == null ? null : String(r.store_key)) === storeKey);
+    const ativaDepois = daLoja.find((r) => ESTADOS_PIPELINE.has(String(r.estado))) ?? null;
     if (ativaDepois) return ativaDepois;
-    const ultima = [...deNovo.rows].sort((a, b) => Number(b.versao || 0) - Number(a.versao || 0))[0];
+    const ultima = [...daLoja].sort((a, b) => Number(b.versao || 0) - Number(a.versao || 0))[0];
     if (ultima) return ultima;
     throw e;
   }
@@ -416,7 +439,13 @@ async function publicarLinhaReivindicada(
         ? reivindicada.payload
         : await montarPayloadPublicacao(empresaId, produtoId, canal)
     ) as PayloadPublicacao;
-    const externalId = await publicarNoCanal(empresaId, canal, payload, reivindicada.external_id == null ? null : String(reivindicada.external_id));
+    const externalId = await publicarNoCanal(
+      empresaId,
+      canal,
+      payload,
+      reivindicada.external_id == null ? null : String(reivindicada.external_id),
+      reivindicada.store_key == null ? null : String(reivindicada.store_key)
+    );
     const concluida = await s.tryUpdateIf(R_PUBLICACOES(), id, { estado: 'PUBLISHING' }, {
       estado: 'PUBLISHED',
       external_id: externalId,
@@ -483,7 +512,8 @@ async function publicarNoCanal(
   empresaId: number,
   canal: CanalPublicacao,
   payload: PayloadPublicacao,
-  externalIdAtual: string | null
+  externalIdAtual: string | null,
+  storeKey: string | null = null
 ): Promise<string> {
   switch (canal) {
     case 'BROBOND':
@@ -499,6 +529,17 @@ async function publicarNoCanal(
       );
 
     case 'WOOCOMMERCE':
+      // MULTI-LOJA: a linha da publicação diz QUAL loja. Sem `store_key` é o
+      // fluxo single-store legado (WOOCOMMERCE_*), preservado.
+      if (storeKey === 'RETAIL' || storeKey === 'WHOLESALE') {
+        const { configStore } = await import('./woocommerce/registry');
+        const cfg = configStore(storeKey);
+        if (!cfg) throw new PublicacaoFalha(`A loja ${storeKey} não está habilitada/configurada.`);
+        if (cfg.empresaId !== empresaId) throw new PublicacaoFalha('A loja não pertence à empresa desta publicação.');
+        const { publicarProdutoNaLoja } = await import('./woocommerce/publicacao');
+        const r = await publicarProdutoNaLoja(cfg, empresaId, Number(payload.produto_id ?? 0));
+        return r.external_product_id;
+      }
       if (empresaVinculadaWoo() !== empresaId) throw new PublicacaoFalha('WooCommerce não vinculado à empresa desta publicação.');
       return publicarWooCommerce(payload);
 
@@ -898,7 +939,7 @@ export async function atualizarProdutoCommerce(req: Request, res: Response) {
   res.json({ ok: true, produto_commerce: atualizado ?? projecao });
 }
 
-/** Enfileira nova versão para os canais que já têm histórico de publicação. */
+/** Enfileira nova versão para os canais/lojas que já têm histórico de publicação. */
 async function reenfileirarPublicacoesAfetadas(empresaId: number, produtoId: number, criadoPor: number | null): Promise<void> {
   const s = getStore();
   const historico = await s.list(R_PUBLICACOES(), {
@@ -906,13 +947,18 @@ async function reenfileirarPublicacoesAfetadas(empresaId: number, produtoId: num
     pageSize: 200,
     filter: { empresa_id: empresaId, produto_id: produtoId },
   });
-  const canais = new Set<string>();
+  // A chave inclui a LOJA: uma publicação da RETAIL e outra da WHOLESALE são
+  // alvos distintos e as duas precisam ser reenfileiradas (nunca uma só).
+  const alvos = new Map<string, { canal: CanalPublicacao; storeKey: string | null }>();
   for (const r of historico.rows) {
-    if (['PUBLISHED', 'ERROR', 'UPDATE_QUEUED', 'QUEUED'].includes(String(r.estado))) canais.add(String(r.canal));
+    if (!['PUBLISHED', 'ERROR', 'UPDATE_QUEUED', 'QUEUED'].includes(String(r.estado))) continue;
+    const canal = String(r.canal) as CanalPublicacao;
+    const storeKey = r.store_key == null ? null : String(r.store_key);
+    alvos.set(`${canal}:${storeKey ?? ''}`, { canal, storeKey });
   }
-  for (const canal of canais) {
-    const payload = await montarPayloadPublicacao(empresaId, produtoId, canal as CanalPublicacao);
-    await enfileirarPublicacao(empresaId, produtoId, canal as CanalPublicacao, payload, criadoPor);
+  for (const { canal, storeKey } of alvos.values()) {
+    const payload = await montarPayloadPublicacao(empresaId, produtoId, canal);
+    await enfileirarPublicacao(empresaId, produtoId, canal, payload, criadoPor, undefined, { storeKey });
   }
 }
 
@@ -984,6 +1030,16 @@ export async function publicarProduto(req: Request, res: Response) {
   const linhas: Row[] = [];
   for (const canal of canais) {
     const payload = await montarPayloadPublicacao(escopo.empresaId, produtoId, canal as CanalPublicacao);
+    // MULTI-LOJA: com o modo ligado, publicar no canal WOOCOMMERCE enfileira UMA
+    // publicação por loja habilitada (RETAIL e WHOLESALE são independentes). Sem
+    // loja configurada, o enfileiramento legado (single-store) segue valendo.
+    const lojas = canal === 'WOOCOMMERCE' ? await lojasHabilitadas(escopo.empresaId) : [];
+    if (lojas.length) {
+      for (const store of lojas) {
+        linhas.push(await enfileirarPublicacao(escopo.empresaId, produtoId, 'WOOCOMMERCE', payload, actor.id ?? null, undefined, { storeKey: store }));
+      }
+      continue;
+    }
     linhas.push(await enfileirarPublicacao(escopo.empresaId, produtoId, canal as CanalPublicacao, payload, actor.id ?? null));
   }
   await s.audit({

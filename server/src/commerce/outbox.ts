@@ -150,6 +150,16 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
       return r.status === 'retry' ? { status: 'retry', erro: r.erro } : { status: 'processado' };
     }
     if (acao === 'woo-estoque') {
+      // MULTI-LOJA: o payload carrega `store_key`. A loja é resolvida pela
+      // config DELA (nunca a global) e a falha de uma não toca a outra — o
+      // desfecho é gravado no estado daquela loja.
+      if (row.store_key != null || typeof payload.store_key === 'string') {
+        const { processarEventoStore } = await import('./woocommerce/outboxStore');
+        const r = await processarEventoStore(payload, empresaId);
+        if (r === 'ignorado') return { status: 'erro', erro: 'Loja desconhecida ou desabilitada para este evento.' };
+        console.log(`[commerce:outbox] estoque multi-loja processado (${String(payload.store_key)})`);
+        return { status: 'processado' };
+      }
       const { enviarEstoqueLojaInterno, configLoja, empresaVinculadaWoo } = await import('../loja');
       if (!configLoja()) {
         return { status: 'erro', erro: 'WooCommerce não configurado (WOOCOMMERCE_URL/CK/CS) — sincronização recusada sem site alvo.' };
@@ -160,6 +170,12 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
       console.log(
         `[commerce:outbox] estoque woo enviado (${saida.total_atualizados} SKUs, ${saida.nao_encontrados.length} sem correspondência)`
       );
+      return { status: 'processado' };
+    }
+    if (acao === 'woo-pedidos' || acao === 'woo-publicacao') {
+      const { processarEventoStore } = await import('./woocommerce/outboxStore');
+      const r = await processarEventoStore(payload, empresaId);
+      if (r === 'ignorado') return { status: 'erro', erro: 'Loja desconhecida ou desabilitada para este evento.' };
       return { status: 'processado' };
     }
     return { status: 'erro', erro: 'Ação de sincronização desconhecida.' };

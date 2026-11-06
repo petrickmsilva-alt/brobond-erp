@@ -6193,6 +6193,7 @@ export const RESOURCES: Record<string, Resource> = {
       },
       { name: 'payload', label: 'Payload', type: 'json', readonly: true, list: false, form: false },
       { name: 'payload_hash', label: 'Hash do payload', type: 'text', readonly: true, list: false, form: false },
+      { name: 'store_key', label: 'Loja', type: 'text', readonly: true, hint: 'RETAIL/WHOLESALE no modo multi-loja; vazio no fluxo single-store legado.' },
       { name: 'external_id', label: 'ID externo', type: 'text', readonly: true, hint: 'Item publicado no canal (ou slug na vitrine própria).' },
       { name: 'tentativas', label: 'Tentativas', type: 'integer', readonly: true },
       { name: 'ultimo_erro', label: 'Último erro', type: 'textarea', readonly: true, wide: true, list: true },
@@ -6322,6 +6323,17 @@ export const RESOURCES: Record<string, Resource> = {
         ],
       },
       { name: 'chave', label: 'Chave', type: 'text', readonly: true, search: true },
+      {
+        name: 'store_key',
+        label: 'Loja',
+        type: 'select',
+        readonly: true,
+        hint: 'RETAIL/WHOLESALE no modo multi-loja; vazio no fluxo single-store legado.',
+        options: [
+          { value: 'RETAIL', label: 'Varejo (brobond.com.br)' },
+          { value: 'WHOLESALE', label: 'Atacado (atacado.brobond.com.br)' },
+        ],
+      },
       { name: 'payload', label: 'Payload', type: 'json', readonly: true, list: false, form: false },
       {
         name: 'estado',
@@ -6345,6 +6357,73 @@ export const RESOURCES: Record<string, Resource> = {
     ],
     filterFields: ['tipo', 'estado'],
     orderBy: { field: 'id', dir: 'desc' },
+  },
+
+  // ----------------------------------------------------------------
+  // WOOCOMMERCE MULTI-STORE — RETAIL / WHOLESALE (migration 0100).
+  //
+  // Recursos INTERNOS (sem CRUD genérico): quem grava é a publicação e a
+  // sincronização — o operador lê o painel por loja, nunca digita o vínculo.
+  // `woocommerce_product_links` guarda a memória externa por loja (produto e
+  // variação); `woocommerce_sync_state` guarda a água-marca incremental e o
+  // último erro REAL de cada loja.
+  // ----------------------------------------------------------------
+  woocommerce_product_links: {
+    key: 'woocommerce_product_links',
+    empresa: true,
+    table: 'woocommerce_product_links',
+    label: 'Vínculos WooCommerce',
+    singular: 'Vínculo WooCommerce',
+    labelFields: ['sku'],
+    internal: true,
+    ops: { create: false, update: false, delete: false },
+    orderBy: { field: 'id', dir: 'asc' },
+    fields: [
+      { name: 'empresa_id', label: 'Empresa', type: 'integer', readonly: true },
+      { name: 'store_key', label: 'Loja', type: 'select', readonly: true, options: [
+        { value: 'RETAIL', label: 'Varejo (brobond.com.br)' },
+        { value: 'WHOLESALE', label: 'Atacado (atacado.brobond.com.br)' },
+      ] },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', readonly: true },
+      { name: 'external_product_id', label: 'ID do produto na loja', type: 'text', readonly: true },
+      { name: 'external_variation_id', label: 'ID da variação na loja', type: 'text', readonly: true },
+      { name: 'sku', label: 'SKU', type: 'text', readonly: true, search: true },
+      { name: 'status', label: 'Status', type: 'select', readonly: true, options: [
+        { value: 'PENDING', label: 'Pendente', tone: 'amber' },
+        { value: 'LINKED', label: 'Vinculado', tone: 'green' },
+        { value: 'ERROR', label: 'Erro', tone: 'red' },
+        { value: 'UNLINKED', label: 'Desvinculado', tone: 'slate' },
+      ] },
+      { name: 'synced_at', label: 'Sincronizado em', type: 'datetime', readonly: true },
+      ...auditFields,
+    ],
+    filterFields: ['store_key', 'status', 'produto_id'],
+  },
+
+  woocommerce_sync_state: {
+    key: 'woocommerce_sync_state',
+    empresa: true,
+    table: 'woocommerce_sync_state',
+    label: 'Estado de sincronização WooCommerce',
+    singular: 'Estado de sincronização WooCommerce',
+    labelFields: ['store_key'],
+    internal: true,
+    ops: { create: false, update: false, delete: false },
+    orderBy: { field: 'id', dir: 'asc' },
+    fields: [
+      { name: 'empresa_id', label: 'Empresa', type: 'integer', readonly: true },
+      { name: 'store_key', label: 'Loja', type: 'select', readonly: true, options: [
+        { value: 'RETAIL', label: 'Varejo (brobond.com.br)' },
+        { value: 'WHOLESALE', label: 'Atacado (atacado.brobond.com.br)' },
+      ] },
+      { name: 'ultimo_pedido_em', label: 'Último pedido em', type: 'datetime', readonly: true },
+      { name: 'ultima_sincronizacao_estoque_em', label: 'Última sincronização de estoque', type: 'datetime', readonly: true },
+      { name: 'ultima_publicacao_em', label: 'Última publicação', type: 'datetime', readonly: true },
+      { name: 'ultimo_erro', label: 'Último erro', type: 'textarea', readonly: true, wide: true },
+      { name: 'tentativas', label: 'Tentativas', type: 'integer', readonly: true },
+      ...auditFields,
+    ],
+    filterFields: ['store_key'],
   },
 
   // ----------------------------------------------------------------

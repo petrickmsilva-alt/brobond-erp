@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-11-05T00:21:57.026Z",
+  "gerado_em": "2026-11-06T20:02:59.960Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 99,
-    "sql_com_conteudo": 99,
+    "sql": 100,
+    "sql_com_conteudo": 100,
     "prisma": 7
   },
   "tabelas": {
-    "total": 202,
-    "com_empresa_id": 174,
+    "total": 204,
+    "com_empresa_id": 176,
     "sem_empresa_id": 28,
-    "fora_do_prisma": 191
+    "fora_do_prisma": 193
   },
-  "indices": 533,
-  "constraints": 364,
+  "indices": 543,
+  "constraints": 368,
   "recursos": {
-    "total": 170,
-    "com_tabela": 170,
-    "multiempresa": 152,
-    "somente_leitura": 77,
+    "total": 172,
+    "com_tabela": 172,
+    "multiempresa": 154,
+    "somente_leitura": 79,
     "rbac_restrito": 80,
-    "cobertura_tenant_pct": 89.4
+    "cobertura_tenant_pct": 89.5
   },
   "crm": [
     {
@@ -87,10 +87,10 @@
     "com_recurso": 107
   },
   "rotas": {
-    "total": 461,
+    "total": 468,
     "por_metodo": {
-      "GET": 204,
-      "POST": 218,
+      "GET": 208,
+      "POST": 221,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -197,14 +197,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 274,
-      "casos": 2151
+      "arquivos": 277,
+      "casos": 2194
     },
     "client": {
       "arquivos": 133,
-      "casos": 1129
+      "casos": 1132
     },
-    "total": 3280
+    "total": 3326
   },
   "integracoes": {
     "arquivos_modules": 56,
@@ -325,6 +325,16 @@
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"customer_preferences\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"woocommerce_product_links\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"woocommerce_sync_state\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
       "nivel": "AVISO",
@@ -553,6 +563,8 @@
     "venda_atribuicao",
     "vendas",
     "webhook_entregas",
-    "webhooks"
+    "webhooks",
+    "woocommerce_product_links",
+    "woocommerce_sync_state"
   ]
 }
