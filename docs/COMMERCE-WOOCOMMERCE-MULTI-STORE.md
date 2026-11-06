@@ -164,10 +164,94 @@ Todas exigem identidade, recorte pela empresa do ator e perfil de gestão
 | POST | `/api/commerce/woocommerce/lojas/:store/estoque` | Sincroniza estoque (`?enfileirar=1` só enfileira) |
 | POST | `/api/commerce/woocommerce/lojas/:store/pedidos` | Importa pedidos (`?enfileirar=1` só enfileira) |
 | POST | `/api/commerce/woocommerce/lojas/:store/produtos/:id/publicar` | Publica um produto |
+| GET | `/api/commerce/woocommerce/lojas/:store/webhooks` | Estado do inbox, pendentes e falhas |
+| POST | `/api/commerce/woocommerce/lojas/:store/webhooks/reprocessar` | Re-enfileira entregas presas |
+| POST | `/api/commerce/woocommerce/lojas/:store/webhooks/:id/reprocessar` | Reprocessa UMA entrega |
+| POST | `/api/commerce/woocommerce/lojas/:store/reconciliar` | Executa a reconciliação ERP × loja |
+| GET | `/api/commerce/woocommerce/lojas/:store/divergencias` | Painel de divergências (`?categoria=`/`?status=`) |
+| POST | `/api/commerce/woocommerce/lojas/:store/divergencias/:id/corrigir` | Correção controlada de uma divergência |
 
 Nenhuma resposta carrega CK/CS, URL com usuário/senha ou corpo remoto da loja.
 O painel do cliente (`WooLojasPanel`) vive dentro de `/commerce/fila` — sem menu
 paralelo.
+
+## 9.1 Webhooks (migration 0101) — notificação, nunca fonte de verdade
+
+O WooCommerce **notifica**; o ERP **confirma pela API** antes de aplicar
+qualquer alteração sensível. O webhook nunca substitui o polling — é o caminho
+rápido ao lado dele.
+
+| Loja | Endpoint público | Segredo |
+|---|---|---|
+| RETAIL | `POST /api/commerce/woocommerce/webhooks/RETAIL` | `WOOCOMMERCE_RETAIL_WEBHOOK_SECRET` |
+| WHOLESALE | `POST /api/commerce/woocommerce/webhooks/WHOLESALE` | `WOOCOMMERCE_WHOLESALE_WEBHOOK_SECRET` |
+
+**Segurança (falha fechada):**
+
+- Assinatura **HMAC-SHA256** calculada sobre os **bytes crus** do corpo
+  (`X-WC-Webhook-Signature`), comparada em tempo constante
+  (`crypto.timingSafeEqual`). O parser JSON só roda **depois** da validação —
+  a rota é montada antes de `express.json()`.
+- Segredo **independente por loja**; sem segredo configurado o endpoint daquela
+  loja recusa **toda** entrega (401). A loja vem do **path**, nunca do corpo —
+  um `store_key` no payload é ignorado para escolher o segredo.
+- Teto de corpo (`WOOCOMMERCE_WEBHOOK_MAX_BYTES`, 1 MiB), rate limit por IP
+  (`WOOCOMMERCE_WEBHOOK_RATE_MAX`/`_RATE_WINDOW_MS`) e janela de timestamp
+  opcional (`WOOCOMMERCE_WEBHOOK_TOLERANCE_S`; 0 desliga).
+- Logs sem segredo e sem payload pessoal: grava-se o **hash** do corpo, o
+  tópico e o recurso externo — nunca a credencial.
+
+**Idempotência (inbox `woocommerce_webhook_events`):**
+
+- `uq_woo_webhook_delivery` — único por (empresa, loja, `external_delivery_id`).
+- `uq_woo_webhook_dedupe` — quando a plataforma **não** envia ID de entrega, a
+  identidade é (empresa, loja, tópico, recurso externo, **hash do corpo**): a
+  mesma reentrega é descartada, mas um corpo **diferente** (atualização
+  legítima) nunca é perdido.
+- Receber é rápido: grava a entrega e **enfileira** no `commerce_outbox`
+  (`woo-webhook:<loja>:<entrega>`); o worker processa fora da requisição HTTP.
+  RETAIL e WHOLESALE têm filas independentes — a falha de uma não bloqueia a
+  outra.
+
+**Worker:** claim atômico por CAS (`claim_versao`), retry com backoff, limite
+de tentativas, estado terminal e recuperação de eventos presos
+(`recuperarEntregasPendentes`). O botão **Reprocessar pendentes** e o
+**reprocessar** por entrega usam a **mesma** chave idempotente (reusam a linha
+do outbox).
+
+**Ordem e reconciliação de pedidos:** o pedido é relido na API oficial antes de
+gravar; evento atrasado (fora de ordem) **não** sobrescreve estado mais novo. A
+referência lógica continua `WOO-RETAIL-<id>` / `WOO-WHOLESALE-<id>` com
+idempotência forte da 0034. Nenhum pagamento, estorno ou cancelamento é
+executado automaticamente.
+
+## 9.2 Reconciliação ERP × loja (migration 0101)
+
+A reconciliação compara o ERP (autoridade) com o que está publicado em **cada**
+loja e registra **divergências** em `woocommerce_reconciliacao_divergencias` —
+nunca exclui produto ou vínculo automaticamente.
+
+| Categoria | Detecta | Classificação típica |
+|---|---|---|
+| `CATALOGO` | Vínculo órfão, produto excluído externamente, SKU divergente, variação ausente/duplicada, produto visível sem vínculo | Humana (decisão) |
+| `PRECO` | Preço externo divergente/ausente/inválido, preço de variação divergente | Automática (corrigível) ou humana |
+| `ESTOQUE` | Saldo da loja ≠ disponível vendável do ERP (produto e variação) | Automática (corrigível) |
+| `PEDIDOS` | Pedido na loja ausente no ERP, status/valor divergente, importação incompleta | Humana |
+
+- **Classificação:** `LEGITIMA` (diferença esperada), `AUTOMATICA` (corrigível
+  pela sincronização) e `HUMANA` (exige decisão — ex.: republicar excluído).
+- **Idempotência:** `uq_woo_divergencia_fingerprint` por (empresa, loja,
+  fingerprint). Reabrir a mesma divergência **não** empilha linha; reaparecer
+  reabre a existente.
+- **Correção controlada:** só divergência `AUTOMATICA` e `ABERTA` é corrigível
+  pela rota; a correção **enfileira** a operação no outbox (o ERP empurra o
+  valor **canônico** — preço do ERP, disponibilidade do ERP) e registra a
+  resolução. Divergência `HUMANA` permanece para análise.
+- **Correção automática:** o preço canônico do ERP **nunca** é sobrescrito pelo
+  valor externo; a loja é que recebe o valor do ERP.
+- A execução roda no cron (`WOOCOMMERCE_RECONCILIACAO_INTERVALO_MIN`) **apenas**
+  com o modo multi-loja ligado e a loja configurada; também há a rota manual
+  `POST /lojas/:store/reconciliar`.
 
 ## 10. Homologação (antes de habilitar escrita)
 
@@ -189,16 +273,24 @@ afirmar que as lojas estão sincronizadas sem credenciais e evidências reais.
 |---|---|
 | `server/test/woocommerce-multistore.test.ts` | Registry, preço por loja, publicação idempotente, variações, estoque sem atualização cruzada, pedidos por loja, painel/segurança |
 | `server/test/woocommerce-multistore-rotas.test.ts` | RBAC, isolamento por empresa, loja do path, ausência de credencial, inventário de rotas |
-| `server/test/pg/woocommerce-multistore-pg.test.ts` | Migration 0100, unicidade NULL-safe por loja, CHECK/FK, concorrência de importação, publicações por loja |
+| `server/test/woocommerce-webhooks-reconciliacao.test.ts` | Assinatura HMAC (válida/inválida/corpo alterado/segredo trocado/replay/payload excessivo/inválido), idempotência por entrega, worker/retry, pedidos fora de ordem, reconciliação (catálogo/preço/estoque/pedido), RBAC e isolamento |
+| `server/test/woocommerce-webhook-rota.test.ts` | A ROTA pública de ponta a ponta (express + supertest): assinatura sobre os BYTES CRUS (corpo reformatado é recusado), segredo de outra loja recusado, loja sem segredo falha fechada, replay por timestamp, teto de corpo (413), duplicata (202), loja desconhecida cai no 404, e nenhuma resposta vaza CK/CS/segredo |
+| `server/test/pg/woocommerce-multistore-pg.test.ts` | Migration 0100 e **0101**, unicidade NULL-safe por loja, CHECK/FK, índice parcial de idempotência sob corrida, dedupe alternativa por hash, **reaplicação idempotente da 0101 (caminho legado)**, concorrência de importação, publicações por loja |
 
 ## 12. Pendências externas
 
 - Credenciais reais das duas lojas (CK/CS) — provisionadas pelo cliente no
   Render; sem elas o painel mostra exatamente o que falta e nenhuma escrita é
   feita.
-- Webhooks do WooCommerce: não habilitados nesta entrega (a importação é
-  incremental por polling). Se forem habilitados, validar assinatura antes de
-  processar.
+- **Webhooks do WooCommerce:** o código está completo e testado, mas os
+  endpoints só aceitam entregas depois que o cliente cadastrar o webhook em
+  **cada** loja e informar o segredo (`WOOCOMMERCE_RETAIL_WEBHOOK_SECRET` /
+  `WOOCOMMERCE_WHOLESALE_WEBHOOK_SECRET`) no Render. Sem o segredo a rota
+  recusa a entrega (falha fechada) — é homologação externa pendente, não código
+  faltando. O polling incremental continua sendo o caminho ativo até lá.
+- Nenhuma entrega de teste real foi recebida das lojas: não há credencial nem
+  segredo provisionados neste ambiente. A prova é estrutural (HMAC sobre bytes
+  crus, idempotência, worker, reconciliação).
 
 ## 13. Endurecimento (auditoria de produção)
 
@@ -214,3 +306,5 @@ Defeitos reais corrigidos, cada um com teste de regressão (`WS-7` em
 | Paginação `order=desc` na importação incremental pulava pedidos quando a janela excedia o limite | `order=asc`: o truncamento deixa de fora só os mais novos, que a próxima execução pega |
 | Cron recorrente sincronizava UMA vez e nunca mais (chave idempotente já `PROCESSADO`) | evento terminal é re-armado para `PENDENTE` na mesma linha; `PENDENTE`/`PROCESSANDO` não são tocados |
 | Lote de estoque podia exceder o máximo de 100 itens por chamada da API do WooCommerce | envio fatiado em blocos de 100 (variações e produtos) |
+| Lista de produtos da loja vazia era lida como leitura truncada (falso positivo de `RECONCILIACAO_TRUNCADA`) | a paginação distingue “vazio” de “truncado” pela quantidade de páginas |
+| Coluna `dados` (json) some da API por ser coluna protegida — a divergência parecia não guardar o valor canônico | o teste prova pelo registro bruto; o valor canônico também fica no `detalhe` legível |

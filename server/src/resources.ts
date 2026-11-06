@@ -6419,11 +6419,109 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'ultimo_pedido_em', label: 'Último pedido em', type: 'datetime', readonly: true },
       { name: 'ultima_sincronizacao_estoque_em', label: 'Última sincronização de estoque', type: 'datetime', readonly: true },
       { name: 'ultima_publicacao_em', label: 'Última publicação', type: 'datetime', readonly: true },
+      { name: 'ultima_reconciliacao_em', label: 'Última reconciliação', type: 'datetime', readonly: true },
       { name: 'ultimo_erro', label: 'Último erro', type: 'textarea', readonly: true, wide: true },
       { name: 'tentativas', label: 'Tentativas', type: 'integer', readonly: true },
       ...auditFields,
     ],
     filterFields: ['store_key'],
+  },
+
+  // ----------------------------------------------------------------
+  // WOOCOMMERCE MULTI-STORE — WEBHOOKS E RECONCILIAÇÃO (migration 0101).
+  //
+  // Recursos INTERNOS (sem CRUD genérico): quem grava é a recepção do webhook
+  // e a reconciliação. O operador LÊ o painel por loja; nunca digita a entrega
+  // nem a divergência. `payload` guarda o corpo MINIMIZADO (sem PII de pedido).
+  // ----------------------------------------------------------------
+  woocommerce_webhook_events: {
+    key: 'woocommerce_webhook_events',
+    empresa: true,
+    table: 'woocommerce_webhook_events',
+    label: 'Entregas de webhook WooCommerce',
+    singular: 'Entrega de webhook',
+    labelFields: ['topic'],
+    internal: true,
+    ops: { create: false, update: false, delete: false },
+    orderBy: { field: 'id', dir: 'desc' },
+    fields: [
+      { name: 'empresa_id', label: 'Empresa', type: 'integer', readonly: true },
+      { name: 'store_key', label: 'Loja', type: 'select', readonly: true, options: [
+        { value: 'RETAIL', label: 'Varejo (brobond.com.br)' },
+        { value: 'WHOLESALE', label: 'Atacado (atacado.brobond.com.br)' },
+      ] },
+      { name: 'topic', label: 'Tópico', type: 'text', readonly: true, search: true },
+      { name: 'recurso', label: 'Recurso', type: 'text', readonly: true },
+      { name: 'external_delivery_id', label: 'ID de entrega', type: 'text', readonly: true },
+      { name: 'external_resource_id', label: 'Recurso externo', type: 'text', readonly: true },
+      { name: 'payload', label: 'Payload (minimizado)', type: 'json', readonly: true, list: false, form: false },
+      { name: 'payload_hash', label: 'Hash do payload', type: 'text', readonly: true, list: false, form: false },
+      { name: 'assinatura_ok', label: 'Assinatura OK', type: 'boolean', readonly: true },
+      { name: 'status', label: 'Status', type: 'select', readonly: true, options: [
+        { value: 'recebido', label: 'Recebido', tone: 'blue' },
+        { value: 'enfileirado', label: 'Na fila', tone: 'amber' },
+        { value: 'processado', label: 'Processado', tone: 'green' },
+        { value: 'erro', label: 'Erro', tone: 'red' },
+        { value: 'rejeitado', label: 'Rejeitado', tone: 'red' },
+        { value: 'duplicado', label: 'Duplicado', tone: 'slate' },
+      ] },
+      { name: 'attempts', label: 'Tentativas', type: 'integer', readonly: true },
+      { name: 'correlation_id', label: 'Correlação', type: 'text', readonly: true, list: false },
+      { name: 'received_at', label: 'Recebido em', type: 'datetime', readonly: true },
+      { name: 'processed_at', label: 'Processado em', type: 'datetime', readonly: true },
+      { name: 'last_error', label: 'Último erro', type: 'textarea', readonly: true, wide: true },
+      ...auditFields,
+    ],
+    filterFields: ['store_key', 'status', 'topic'],
+  },
+
+  woocommerce_reconciliacao_divergencias: {
+    key: 'woocommerce_reconciliacao_divergencias',
+    empresa: true,
+    table: 'woocommerce_reconciliacao_divergencias',
+    label: 'Divergências de reconciliação WooCommerce',
+    singular: 'Divergência de reconciliação',
+    labelFields: ['tipo'],
+    internal: true,
+    ops: { create: false, update: false, delete: false },
+    orderBy: { field: 'id', dir: 'desc' },
+    fields: [
+      { name: 'empresa_id', label: 'Empresa', type: 'integer', readonly: true },
+      { name: 'store_key', label: 'Loja', type: 'select', readonly: true, options: [
+        { value: 'RETAIL', label: 'Varejo (brobond.com.br)' },
+        { value: 'WHOLESALE', label: 'Atacado (atacado.brobond.com.br)' },
+      ] },
+      { name: 'categoria', label: 'Categoria', type: 'select', readonly: true, options: [
+        { value: 'CATALOGO', label: 'Catálogo', tone: 'blue' },
+        { value: 'PRECO', label: 'Preço', tone: 'amber' },
+        { value: 'ESTOQUE', label: 'Estoque', tone: 'green' },
+        { value: 'PEDIDOS', label: 'Pedidos', tone: 'red' },
+      ] },
+      { name: 'tipo', label: 'Tipo', type: 'text', readonly: true, search: true },
+      { name: 'classificacao', label: 'Classificação', type: 'select', readonly: true, options: [
+        { value: 'LEGITIMA', label: 'Legítima (informativa)', tone: 'slate' },
+        { value: 'AUTOMATICA', label: 'Corrigível automaticamente', tone: 'amber' },
+        { value: 'HUMANA', label: 'Intervenção humana', tone: 'red' },
+      ] },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', readonly: true },
+      { name: 'sku', label: 'SKU', type: 'text', readonly: true, search: true },
+      { name: 'external_product_id', label: 'ID externo', type: 'text', readonly: true, list: false },
+      { name: 'external_variation_id', label: 'ID variação externa', type: 'text', readonly: true, list: false },
+      { name: 'pedido_ref', label: 'Pedido', type: 'text', readonly: true },
+      { name: 'detalhe', label: 'Detalhe', type: 'textarea', readonly: true, wide: true },
+      { name: 'dados', label: 'Dados', type: 'json', readonly: true, list: false, form: false },
+      { name: 'fingerprint', label: 'Identidade', type: 'text', readonly: true, list: false, form: false },
+      { name: 'status', label: 'Status', type: 'select', readonly: true, options: [
+        { value: 'ABERTA', label: 'Aberta', tone: 'amber' },
+        { value: 'CORRIGIDA', label: 'Corrigida', tone: 'green' },
+        { value: 'IGNORADA', label: 'Ignorada', tone: 'slate' },
+      ] },
+      { name: 'resolucao', label: 'Resolução', type: 'textarea', readonly: true, list: false, wide: true },
+      { name: 'detectada_em', label: 'Detectada em', type: 'datetime', readonly: true },
+      { name: 'resolvida_em', label: 'Resolvida em', type: 'datetime', readonly: true },
+      ...auditFields,
+    ],
+    filterFields: ['store_key', 'categoria', 'status'],
   },
 
   // ----------------------------------------------------------------

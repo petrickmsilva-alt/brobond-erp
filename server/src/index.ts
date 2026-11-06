@@ -411,7 +411,14 @@ import {
   publicarProdutoNaLojaRota,
   reconciliarLojaRota,
   statusLojas,
+  painelWebhooks,
+  reprocessarWebhooksRota,
+  reprocessarEntregaRota,
+  executarReconciliacaoRota,
+  listarDivergenciasRota,
+  corrigirDivergenciaRota,
 } from './commerce/woocommerce/rotas';
+import { publicWoocommerceWebhookRouter } from './commerce/woocommerce/webhookRouter';
 import {
   initNegociosEngine,
   negociosABC,
@@ -491,6 +498,10 @@ app.use(publicConnectorsRouter);
 // antes do express.json() e do requireAuth. Provedor desconhecido cai no 404
 // do próprio router; nada aqui afeta as rotas autenticadas.
 app.use(publicGatewayRouter);
+// MULTI-LOJA: webhooks das lojas WooCommerce (RETAIL / WHOLESALE) também chegam
+// de fora, com assinatura HMAC sobre os bytes crus. Mesmo padrão: monta antes
+// do express.json() e do requireAuth. Loja desconhecida no path cai no next().
+app.use(publicWoocommerceWebhookRouter);
 
 app.use(express.json({ limit: '4mb' })); // fotos chegam em base64 (já reduzidas no navegador)
 app.use(express.urlencoded({ extended: true }));
@@ -1295,6 +1306,14 @@ app.get('/api/commerce/woocommerce/lojas/:store/reconciliacao', wrap(reconciliar
 app.post('/api/commerce/woocommerce/lojas/:store/estoque', wrap(sincronizarEstoqueDaLojaRota));
 app.post('/api/commerce/woocommerce/lojas/:store/pedidos', wrap(importarPedidosDaLojaRota));
 app.post('/api/commerce/woocommerce/lojas/:store/produtos/:id/publicar', wrap(publicarProdutoNaLojaRota));
+// Webhooks e reconciliação (evolução multi-store): painel de entregas,
+// reprocessamento controlado e painel de divergências por loja.
+app.get('/api/commerce/woocommerce/lojas/:store/webhooks', wrap(painelWebhooks));
+app.post('/api/commerce/woocommerce/lojas/:store/webhooks/reprocessar', wrap(reprocessarWebhooksRota));
+app.post('/api/commerce/woocommerce/lojas/:store/webhooks/:id/reprocessar', wrap(reprocessarEntregaRota));
+app.post('/api/commerce/woocommerce/lojas/:store/reconciliar', wrap(executarReconciliacaoRota));
+app.get('/api/commerce/woocommerce/lojas/:store/divergencias', wrap(listarDivergenciasRota));
+app.post('/api/commerce/woocommerce/lojas/:store/divergencias/:id/corrigir', wrap(corrigirDivergenciaRota));
 
 // WebSocket status
 app.get('/api/admin/ws/status', (_req, res) => res.json(wsStatus()));

@@ -433,21 +433,58 @@ async function executarPublicacoesCron(): Promise<ResultadoExecutorCron> {
  * fala com a loja é o worker do outbox. O enfileiramento é idempotente pela
  * chave por loja, então repetir o cron não acumula eventos. Devolve 0 quando o
  * modo multi-loja está desligado.
+ *
+ * Também RECUPERA entregas de webhook presas (gravadas mas nunca enfileiradas,
+ * ou em erro): o webhook é a via rápida, o polling é a contingência. As duas
+ * vias convivem sem duplicar — a chave idempotente e a importação por loja
+ * arbitram.
  */
 async function enfileirarSincronizacaoMultiLoja(): Promise<number> {
   const { multiStoreHabilitado } = await import('./commerce/woocommerce/registry');
   if (!multiStoreHabilitado()) return 0;
   const { lojasDaEmpresa, enfileirarPedidosDaLoja, enfileirarEstoqueDaLoja } = await import('./commerce/woocommerce/outboxStore');
+  const { recuperarEntregasPendentes } = await import('./commerce/woocommerce/webhookInbox');
   let enfileirados = 0;
   for (const { cfg, empresaId } of lojasDaEmpresa()) {
     // Uma loja indisponível não derruba as demais: o erro fica naquela loja.
     try {
       await enfileirarEstoqueDaLoja(empresaId, cfg.store_key);
       await enfileirarPedidosDaLoja(empresaId, cfg.store_key);
+      await recuperarEntregasPendentes(empresaId, cfg.store_key);
       enfileirados += 1;
     } catch { /* segue para a próxima loja */ }
   }
   return enfileirados;
+}
+
+/**
+ * Reconciliação periódica (contingência): compara ERP × loja por loja e
+ * registra divergências. NÃO escreve nas lojas e não corrige nada — apenas
+ * detecta e classifica; a correção é decisão do operador pelo painel.
+ *
+ * Throttle por loja: só reconcilia quando `ultima_reconciliacao_em` está mais
+ * velha que `WOOCOMMERCE_RECONCILIACAO_INTERVALO_MIN` (default 60 min), então o
+ * cron pode rodar com a frequência que for sem multiplicar chamadas à API. O
+ * erro de uma loja fica registrado naquela loja e não interrompe a outra.
+ */
+async function reconciliarMultiLojaSeVencida(): Promise<number> {
+  const { multiStoreHabilitado } = await import('./commerce/woocommerce/registry');
+  if (!multiStoreHabilitado()) return 0;
+  const intervaloMin = Math.max(5, Number(process.env.WOOCOMMERCE_RECONCILIACAO_INTERVALO_MIN) || 60);
+  const { lojasDaEmpresa } = await import('./commerce/woocommerce/outboxStore');
+  const { estadoDaStore } = await import('./commerce/woocommerce/estado');
+  const { reconciliarLojaCompleta } = await import('./commerce/woocommerce/reconciliacao');
+  let detectadas = 0;
+  for (const { cfg, empresaId } of lojasDaEmpresa()) {
+    try {
+      const estado = await estadoDaStore(empresaId, cfg.store_key);
+      const ultima = estado.ultima_reconciliacao_em ? Date.parse(estado.ultima_reconciliacao_em) : 0;
+      if (ultima && Date.now() - ultima < intervaloMin * 60_000) continue;
+      const r = await reconciliarLojaCompleta(cfg, empresaId);
+      detectadas += r.detectadas;
+    } catch { /* a loja falhou; as outras seguem */ }
+  }
+  return detectadas;
 }
 
 /** Recuperação de pedidos de marketplace e eventos de pedido (conversão, notificação, sincronização). */
@@ -463,6 +500,9 @@ async function executarPedidosCron(): Promise<ResultadoExecutorCron> {
     itens += o.processados;
     if (o.erros) falhas.push('eventos_pedido');
   } catch { falhas.push('eventos_pedido'); }
+  // Contingência: reconciliação periódica (throttled por loja) — detecta o que o
+  // webhook/polling não alcançaram. Nunca escreve nas lojas.
+  try { itens += await reconciliarMultiLojaSeVencida(); } catch { falhas.push('reconciliacao_multi_loja'); }
   return { itens, detalhes: [], falhas };
 }
 

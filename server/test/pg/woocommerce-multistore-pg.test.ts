@@ -56,6 +56,8 @@ async function novoProdutoPg(empresaId: number, dados: { sku: string; preco_vend
 async function limpar(t: Tenant): Promise<void> {
   const { query } = await import('../../src/db');
   const apagar = async (sql: string) => query(sql, [t.empresaId]).catch(() => undefined);
+  await apagar(`DELETE FROM woocommerce_reconciliacao_divergencias WHERE empresa_id = $1`);
+  await apagar(`DELETE FROM woocommerce_webhook_events WHERE empresa_id = $1`);
   await apagar(`DELETE FROM woocommerce_product_links WHERE empresa_id = $1`);
   await apagar(`DELETE FROM woocommerce_sync_state WHERE empresa_id = $1`);
   await apagar(`DELETE FROM commerce_publicacoes WHERE empresa_id = $1`);
@@ -351,4 +353,240 @@ test('10. cron recorrente re-arma o evento PROCESSADO sem duplicar a linha', { s
   } finally {
     await limpar(t);
   }
+});
+
+// ---------------------------------------------------------------------------
+// 11–16. WEBHOOKS E RECONCILIAÇÃO EM POSTGRESQL REAL (migration 0101).
+//
+// O MemStore não tem índice único PARCIAL, CHECK constraint nem corrida de
+// verdade. Aqui se prova o que só o PostgreSQL prova:
+//   • o índice parcial de idempotência arbitra entregas simultâneas;
+//   • o mesmo delivery id em LOJAS diferentes convive;
+//   • a dedupe alternativa (sem delivery id) usa o hash do corpo;
+//   • a unicidade da divergência é por (empresa, loja, fingerprint);
+//   • CHECK recusa loja/categoria/classificação/status fora do conjunto;
+//   • a FK recusa empresa inexistente.
+// ---------------------------------------------------------------------------
+test('11. migration 0101 — inbox e divergências existem com índices e constraints', { skip }, async () => {
+  const { migrate, query } = await import('../../src/db');
+  await migrate();
+  const tabelas = await query(
+    `SELECT table_name FROM information_schema.tables
+      WHERE table_schema='public' AND table_name IN ('woocommerce_webhook_events','woocommerce_reconciliacao_divergencias')`
+  );
+  assert.equal(tabelas.rows.length, 2, 'as duas tabelas novas existem');
+
+  const colunas = await query(
+    `SELECT table_name, column_name FROM information_schema.columns
+      WHERE column_name IN ('criado_em','atualizado_em')
+        AND table_name IN ('woocommerce_webhook_events','woocommerce_reconciliacao_divergencias')`
+  );
+  assert.equal(colunas.rows.length, 4, 'criado_em/atualizado_em nas duas tabelas (convenção do repo)');
+
+  const syncState = await query(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_name='woocommerce_sync_state' AND column_name='ultima_reconciliacao_em'`
+  );
+  assert.equal(syncState.rows.length, 1, 'água-marca de reconciliação adicionada ao sync_state');
+
+  const indices = await query(
+    `SELECT indexname FROM pg_indexes WHERE indexname IN
+      ('uq_woo_webhook_delivery','uq_woo_webhook_dedupe','ix_woo_webhook_loja_status','ix_woo_webhook_pendentes',
+       'uq_woo_divergencia_fingerprint','ix_woo_divergencia_aberta')`
+  );
+  assert.equal(indices.rows.length, 6, 'os índices de idempotência/leitura existem');
+});
+
+test('12. idempotência FORTE: o índice parcial arbitra entregas SIMULTÂNEAS', { skip }, async () => {
+  const { migrate, query } = await import('../../src/db');
+  await migrate();
+  const t = await novoTenant();
+  try {
+    const inserir = (store: string) =>
+      query(
+        `INSERT INTO woocommerce_webhook_events
+           (empresa_id, store_key, topic, recurso, external_delivery_id, payload_hash, assinatura_ok, status)
+         VALUES ($1,$2,'order.created','order','dlv-race','hash-a',true,'recebido') RETURNING id`,
+        [t.empresaId, store]
+      );
+    const tentativas = await Promise.allSettled(Array.from({ length: 6 }, () => inserir('RETAIL')));
+    const vencedoras = tentativas.filter((r) => r.status === 'fulfilled');
+    assert.equal(vencedoras.length, 1, 'exatamente uma entrega vence');
+    const perdedoras = tentativas.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+    assert.ok(perdedoras.every((r) => r.reason?.code === '23505'), 'as demais recebem 23505 (idempotência, nunca erro genérico)');
+
+    // O MESMO delivery id na OUTRA loja é permitido (lojas independentes).
+    const outra = await inserir('WHOLESALE');
+    assert.ok(outra.rows[0].id);
+    const n = await query(`SELECT COUNT(*)::int AS n FROM woocommerce_webhook_events WHERE empresa_id=$1`, [t.empresaId]);
+    assert.equal(Number(n.rows[0].n), 2, 'uma entrega por loja');
+  } finally {
+    await limpar(t);
+  }
+});
+
+test('13. dedupe ALTERNATIVA (sem delivery id): hash do corpo arbitra a identidade', { skip }, async () => {
+  const { migrate, query } = await import('../../src/db');
+  await migrate();
+  const t = await novoTenant();
+  try {
+    const inserir = (hash: string) =>
+      query(
+        `INSERT INTO woocommerce_webhook_events
+           (empresa_id, store_key, topic, recurso, external_delivery_id, external_resource_id, payload_hash, assinatura_ok, status)
+         VALUES ($1,'RETAIL','order.updated','order',NULL,'700',$2,true,'recebido') RETURNING id`,
+        [t.empresaId, hash]
+      );
+    await inserir('hash-igual');
+    // Corpo IDÊNTICO (mesmo hash) = mesma entrega reentregue → recusado.
+    await assert.rejects(() => inserir('hash-igual'), (e: any) => e.code === '23505', 'corpo idêntico é a mesma entrega');
+    // Corpo DIFERENTE (hash novo) = atualização legítima → aceito.
+    const nova = await inserir('hash-novo');
+    assert.ok(nova.rows[0].id);
+    const n = await query(`SELECT COUNT(*)::int AS n FROM woocommerce_webhook_events WHERE empresa_id=$1`, [t.empresaId]);
+    assert.equal(Number(n.rows[0].n), 2, 'um corpo diferente nunca é descartado');
+  } finally {
+    await limpar(t);
+  }
+});
+
+test('14. CHECK recusa loja/categoria/classificação/status fora do conjunto', { skip }, async () => {
+  const { migrate, query } = await import('../../src/db');
+  await migrate();
+  const t = await novoTenant();
+  try {
+    await assert.rejects(
+      () =>
+        query(
+          `INSERT INTO woocommerce_webhook_events (empresa_id, store_key, topic, recurso, payload_hash, status)
+           VALUES ($1,'LOJA1','x','x','h','recebido')`,
+          [t.empresaId]
+        ),
+      (e: any) => e.code === '23514',
+      'a loja do webhook é um identificador fechado'
+    );
+    await assert.rejects(
+      () =>
+        query(
+          `INSERT INTO woocommerce_reconciliacao_divergencias
+             (empresa_id, store_key, categoria, tipo, classificacao, detalhe, fingerprint)
+           VALUES ($1,'RETAIL','OUTRA','t','AUTOMATICA','d','fp')`,
+          [t.empresaId]
+        ),
+      (e: any) => e.code === '23514',
+      'a categoria é fechada'
+    );
+    await assert.rejects(
+      () =>
+        query(
+          `INSERT INTO woocommerce_reconciliacao_divergencias
+             (empresa_id, store_key, categoria, tipo, classificacao, detalhe, fingerprint)
+           VALUES ($1,'RETAIL','PRECO','t','QUALQUER','d','fp')`,
+          [t.empresaId]
+        ),
+      (e: any) => e.code === '23514',
+      'a classificação é fechada'
+    );
+    await assert.rejects(
+      () =>
+        query(
+          `INSERT INTO woocommerce_reconciliacao_divergencias
+             (empresa_id, store_key, categoria, tipo, classificacao, detalhe, fingerprint, status)
+           VALUES ($1,'RETAIL','PRECO','t','AUTOMATICA','d','fp','PENDENTE')`,
+          [t.empresaId]
+        ),
+      (e: any) => e.code === '23514',
+      'o status é fechado'
+    );
+  } finally {
+    await limpar(t);
+  }
+});
+
+test('15. divergência é única por (empresa, loja, fingerprint) e a FK recusa empresa inexistente', { skip }, async () => {
+  const { migrate, query } = await import('../../src/db');
+  await migrate();
+  const t = await novoTenant();
+  try {
+    const inserir = (store: string, fp: string) =>
+      query(
+        `INSERT INTO woocommerce_reconciliacao_divergencias
+           (empresa_id, store_key, categoria, tipo, classificacao, detalhe, fingerprint)
+         VALUES ($1,$2,'ESTOQUE','ESTOQUE_DIVERGENTE','AUTOMATICA','d',$3) RETURNING id`,
+        [t.empresaId, store, fp]
+      );
+    await inserir('RETAIL', 'fp-1');
+    await assert.rejects(() => inserir('RETAIL', 'fp-1'), (e: any) => e.code === '23505', 'mesma divergência não empilha');
+    // O MESMO fingerprint em lojas diferentes é permitido (identidade por loja).
+    const outra = await inserir('WHOLESALE', 'fp-1');
+    assert.ok(outra.rows[0].id);
+
+    await assert.rejects(
+      () =>
+        query(
+          `INSERT INTO woocommerce_reconciliacao_divergencias
+             (empresa_id, store_key, categoria, tipo, classificacao, detalhe, fingerprint)
+           VALUES (999999999,'RETAIL','PRECO','t','AUTOMATICA','d','fp-x')`
+        ),
+      (e: any) => e.code === '23503',
+      'não existe divergência para empresa inexistente'
+    );
+  } finally {
+    await limpar(t);
+  }
+});
+
+test('16. o inbox do webhook é recuperável: status/attempts/processed_at persistem', { skip }, async () => {
+  const { migrate, query } = await import('../../src/db');
+  await migrate();
+  const t = await novoTenant();
+  try {
+    const r = await query(
+      `INSERT INTO woocommerce_webhook_events
+         (empresa_id, store_key, topic, recurso, external_delivery_id, payload_hash, assinatura_ok, status, attempts, received_at)
+       VALUES ($1,'RETAIL','order.created','order','dlv-1','h',true,'enfileirado',0,now()) RETURNING id`,
+      [t.empresaId]
+    );
+    const id = Number(r.rows[0].id);
+    await query(
+      `UPDATE woocommerce_webhook_events
+         SET status='processado', attempts=attempts+1, processed_at=now(), atualizado_em=now()
+       WHERE id=$1`,
+      [id]
+    );
+    const lida = await query(`SELECT status, attempts, processed_at FROM woocommerce_webhook_events WHERE id=$1`, [id]);
+    assert.equal(lida.rows[0].status, 'processado');
+    assert.equal(Number(lida.rows[0].attempts), 1);
+    assert.ok(lida.rows[0].processed_at, 'a conclusão é registrada para o painel');
+  } finally {
+    await limpar(t);
+  }
+});
+
+test('17. migration 0101 é idempotente num banco já migrado (caminho legado)', { skip }, async () => {
+  const { migrate, query } = await import('../../src/db');
+  // Primeira aplicação: o banco já tem a 0100 e recebe a 0101.
+  await migrate();
+  // Segunda aplicação (banco legado que já rodou a cadeia): nada quebra e o
+  // schema permanece — CREATE TABLE/INDEX IF NOT EXISTS e ADD COLUMN IF NOT
+  // EXISTS tornam a 0101 segura de reaplicar.
+  await migrate();
+  await migrate();
+
+  const tabelas = await query(
+    `SELECT table_name FROM information_schema.tables
+      WHERE table_schema='public' AND table_name IN ('woocommerce_webhook_events','woocommerce_reconciliacao_divergencias')`
+  );
+  assert.equal(tabelas.rows.length, 2, 'as duas tabelas existem após reaplicar');
+
+  const coluna = await query(
+    `SELECT COUNT(*)::int AS n FROM information_schema.columns
+      WHERE table_name='woocommerce_sync_state' AND column_name='ultima_reconciliacao_em'`
+  );
+  assert.equal(Number(coluna.rows[0].n), 1, 'ADD COLUMN IF NOT EXISTS não duplica a coluna');
+
+  const registro = await query(
+    `SELECT COUNT(*)::int AS n FROM schema_migrations WHERE id = '0101_woocommerce_webhooks_reconciliacao.sql'`
+  );
+  assert.equal(Number(registro.rows[0].n), 1, 'a migration é registrada UMA única vez');
 });

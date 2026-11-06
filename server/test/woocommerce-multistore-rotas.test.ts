@@ -174,6 +174,75 @@ describe('Multi-store — autorização das rotas', () => {
     }
   });
 
+  test('webhooks e divergências: operador recebe 403; gerente/admin passam a guarda', async () => {
+    configurarLojas(1);
+    try {
+      const rotas = [R.painelWebhooks, R.reprocessarWebhooksRota, R.executarReconciliacaoRota, R.listarDivergenciasRota];
+      for (const fn of rotas) {
+        const op = await chamar(fn, usuario('operador', 1), { params: { store: 'RETAIL' } });
+        assert.equal(statusDe(op), 403, `operador não opera ${fn.name}`);
+        // O admin passa a guarda: o desfecho pode ser 200 ou uma falha de
+        // dependência (a loja não existe no teste), mas NUNCA 403/401.
+        const adm = await chamar(fn, usuario('admin', 1), { params: { store: 'RETAIL' } });
+        assert.notEqual(statusDe(adm), 403, `admin não é barrado em ${fn.name}`);
+        assert.notEqual(statusDe(adm), 401, `admin autenticado em ${fn.name}`);
+      }
+      // As rotas de LEITURA respondem 200 (não dependem de rede).
+      for (const fn of [R.painelWebhooks, R.listarDivergenciasRota]) {
+        const adm = await chamar(fn, usuario('admin', 1), { params: { store: 'RETAIL' } });
+        assert.equal(statusDe(adm), 200, `${fn.name} responde 200 ao admin`);
+      }
+    } finally {
+      limparLojas();
+    }
+  });
+
+  test('webhooks e divergências: gerente de OUTRA empresa não opera a loja (404)', async () => {
+    configurarLojas(1);
+    try {
+      for (const fn of [R.painelWebhooks, R.listarDivergenciasRota, R.reprocessarWebhooksRota]) {
+        const outra = await chamar(fn, usuario('gerente', 2), { params: { store: 'RETAIL' } });
+        assert.equal(statusDe(outra), 404, `${fn.name}: a loja pertence a outra empresa`);
+      }
+    } finally {
+      limparLojas();
+    }
+  });
+
+  test('webhooks e divergências: loja inválida é 400 e a loja vem do PATH', async () => {
+    configurarLojas(1);
+    try {
+      const invalida = await chamar(R.painelWebhooks, usuario('admin', 1), { params: { store: 'loja-x' } });
+      assert.equal(statusDe(invalida), 400, 'loja fora de RETAIL/WHOLESALE é 400');
+      const valida = await chamar(R.listarDivergenciasRota, usuario('admin', 1), { params: { store: 'WHOLESALE' } });
+      assert.equal(statusDe(valida), 200);
+      assert.equal(valida.res.body.store_key, 'WHOLESALE');
+    } finally {
+      limparLojas();
+    }
+  });
+
+  test('webhooks e divergências: nenhuma resposta carrega credencial nem segredo do webhook', async () => {
+    configurarLojas(1);
+    process.env.WOOCOMMERCE_RETAIL_WEBHOOK_SECRET = 'whsec_retail_nao_real';
+    process.env.WOOCOMMERCE_WHOLESALE_WEBHOOK_SECRET = 'whsec_wholesale_nao_real';
+    try {
+      const rotas = [
+        () => chamar(R.painelWebhooks, usuario('admin', 1), { params: { store: 'RETAIL' } }),
+        () => chamar(R.listarDivergenciasRota, usuario('admin', 1), { params: { store: 'RETAIL' } }),
+      ];
+      for (const executar of rotas) {
+        const r = await executar();
+        const texto = JSON.stringify(r.res.body ?? {});
+        assert.ok(!texto.includes('ck_retail_segredo'), 'nenhuma CK na resposta');
+        assert.ok(!texto.includes('cs_retail_segredo'), 'nenhum CS na resposta');
+        assert.ok(!texto.includes('whsec_retail_nao_real'), 'nenhum segredo de webhook na resposta');
+      }
+    } finally {
+      limparLojas();
+    }
+  });
+
   test('inventário: toda rota /api/commerce/woocommerce está depois da guarda de sessão', () => {
     const src = ler('../src/index.ts');
     const guarda = src.indexOf("app.use('/api', wrap(requireAuth));");

@@ -147,6 +147,15 @@ services:
         sync: false
       - key: WOOCOMMERCE_WHOLESALE_CS
         sync: false
+      # Segredo do webhook de CADA loja (copiado do WooCommerce ao cadastrar o
+      # webhook). Ausente = endpoint daquela loja DESABILITADO (falha fechada).
+      # Nunca é derivado da CK/CS. Endpoints públicos:
+      #   POST /api/commerce/woocommerce/webhooks/RETAIL
+      #   POST /api/commerce/woocommerce/webhooks/WHOLESALE
+      - key: WOOCOMMERCE_RETAIL_WEBHOOK_SECRET
+        sync: false
+      - key: WOOCOMMERCE_WHOLESALE_WEBHOOK_SECRET
+        sync: false
       # Homologação: true suprime TODA escrita nas lojas (nada é criado/alterado).
       - key: WOOCOMMERCE_SYNC_DRY_RUN
         sync: false

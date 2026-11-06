@@ -20,6 +20,7 @@ export type EstadoSincronizacao = {
   ultimo_pedido_em: string | null;
   ultima_sincronizacao_estoque_em: string | null;
   ultima_publicacao_em: string | null;
+  ultima_reconciliacao_em: string | null;
   ultimo_erro: string | null;
   tentativas: number;
 };
@@ -38,6 +39,7 @@ export async function estadoDaStore(empresaId: number, store: StoreKey, tx?: Tx)
     ultimo_pedido_em: linha.ultimo_pedido_em ? String(linha.ultimo_pedido_em) : null,
     ultima_sincronizacao_estoque_em: linha.ultima_sincronizacao_estoque_em ? String(linha.ultima_sincronizacao_estoque_em) : null,
     ultima_publicacao_em: linha.ultima_publicacao_em ? String(linha.ultima_publicacao_em) : null,
+    ultima_reconciliacao_em: linha.ultima_reconciliacao_em ? String(linha.ultima_reconciliacao_em) : null,
     ultimo_erro: linha.ultimo_erro ? String(linha.ultimo_erro) : null,
     tentativas: Number(linha.tentativas || 0),
   };
@@ -50,7 +52,7 @@ export async function estadoDaStore(empresaId: number, store: StoreKey, tx?: Tx)
 export async function registrarSincronizacao(
   empresaId: number,
   store: StoreKey,
-  patch: Partial<Pick<EstadoSincronizacao, 'ultimo_pedido_em' | 'ultima_sincronizacao_estoque_em' | 'ultima_publicacao_em'>> & { erro?: string | null },
+  patch: Partial<Pick<EstadoSincronizacao, 'ultimo_pedido_em' | 'ultima_sincronizacao_estoque_em' | 'ultima_publicacao_em' | 'ultima_reconciliacao_em'>> & { erro?: string | null },
   tx?: Tx
 ): Promise<void> {
   const s = getStore();
@@ -59,6 +61,7 @@ export async function registrarSincronizacao(
   if (patch.ultimo_pedido_em !== undefined) dados.ultimo_pedido_em = patch.ultimo_pedido_em;
   if (patch.ultima_sincronizacao_estoque_em !== undefined) dados.ultima_sincronizacao_estoque_em = patch.ultima_sincronizacao_estoque_em;
   if (patch.ultima_publicacao_em !== undefined) dados.ultima_publicacao_em = patch.ultima_publicacao_em;
+  if (patch.ultima_reconciliacao_em !== undefined) dados.ultima_reconciliacao_em = patch.ultima_reconciliacao_em;
   if (patch.erro !== undefined) {
     dados.ultimo_erro = patch.erro ? String(patch.erro).slice(0, 500) : null;
     dados.tentativas = patch.erro ? atual.tentativas + 1 : 0;

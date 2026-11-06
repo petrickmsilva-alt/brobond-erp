@@ -178,6 +178,16 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
       if (r === 'ignorado') return { status: 'erro', erro: 'Loja desconhecida ou desabilitada para este evento.' };
       return { status: 'processado' };
     }
+    if (acao === 'woo-webhook') {
+      // WEBHOOK MULTI-LOJA: o evento do inbox é processado AQUI, no worker do
+      // outbox de sempre — nenhuma fila paralela. O webhook é NOTIFICAÇÃO: o
+      // pedido é confirmado na API oficial antes de importar. A falha de uma
+      // loja não bloqueia a outra (eventos distintos, chaves distintas).
+      const { processarEventoWebhook } = await import('./woocommerce/outboxStore');
+      const r = await processarEventoWebhook(payload, empresaId);
+      if (r === 'ignorado') return { status: 'erro', erro: 'Entrega de webhook desconhecida ou loja desabilitada.' };
+      return { status: 'processado' };
+    }
     return { status: 'erro', erro: 'Ação de sincronização desconhecida.' };
   }
 

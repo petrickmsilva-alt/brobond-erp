@@ -194,6 +194,22 @@ exatamente o bloco single-store acima (`WOOCOMMERCE_*`).
 | `WOOCOMMERCE_WHOLESALE_EMPRESA_ID` | `registry.ts` | Não | Igual à RETAIL | ausente |
 | `WOOCOMMERCE_SYNC_DRY_RUN` | `registry.ts` | Não | Escrita REAL nas lojas; `true` suprime toda escrita (homologação) | ausente |
 
+### WooCommerce MULTI-STORE — WEBHOOKS E RECONCILIAÇÃO — migration 0101
+
+Evolução da 0100: webhooks assinados por loja, inbox idempotente e
+reconciliação. Todas opcionais; sem elas os padrões seguros valem.
+
+| Variável | Arquivo | Obrigatória | Quando ausente | Render |
+|---|---|---|---|---|
+| `WOOCOMMERCE_RETAIL_WEBHOOK_SECRET` | `server/src/commerce/woocommerce/webhookSeguranca.ts` | Condicional (webhook RETAIL) | Endpoint da RETAIL recusa toda entrega (falha fechada) | ausente |
+| `WOOCOMMERCE_WHOLESALE_WEBHOOK_SECRET` | `webhookSeguranca.ts` | Condicional (webhook WHOLESALE) | Endpoint da WHOLESALE recusa toda entrega | ausente |
+| `WOOCOMMERCE_WEBHOOK_MAX_BYTES` | `webhookSeguranca.ts` | Não | 1 MiB (teto 8 MiB) | ausente |
+| `WOOCOMMERCE_WEBHOOK_TOLERANCE_S` | `webhookSeguranca.ts` | Não | 300 s (0 desliga a checagem de timestamp) | ausente |
+| `WOOCOMMERCE_WEBHOOK_RATE_WINDOW_MS` | `webhookSeguranca.ts` | Não | 60 000 ms | ausente |
+| `WOOCOMMERCE_WEBHOOK_RATE_MAX` | `webhookSeguranca.ts` | Não | 120 entregas por janela/IP | ausente |
+| `WOOCOMMERCE_RECONCILIACAO_MAX_PAGINAS` | `reconciliacao.ts` | Não | 10 páginas de 100 produtos por loja | ausente |
+| `WOOCOMMERCE_RECONCILIACAO_INTERVALO_MIN` | `server/src/scheduled.ts` | Não | 60 min (mínimo 5) | ausente |
+
 ## 9. Armazenamento, observabilidade e ajustes
 
 | Variável | Arquivo:linha | Obrigatória | Quando ausente | Render |

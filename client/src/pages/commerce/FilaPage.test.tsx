@@ -65,9 +65,38 @@ const LOJAS = {
 };
 
 /** Roteia por caminho: cada tela só recebe o formato que sabe ler. */
-function rota(respostas: { eventos?: unknown; lojas?: unknown } = {}) {
+const WEBHOOKS = {
+  webhook_habilitado: true,
+  total: 3,
+  por_status: { enfileirado: 1, processado: 1, erro: 1 },
+  entregas: [
+    { id: 21, topic: 'order.created', recurso: 'order', external_resource_id: '8801', status: 'processado', attempts: 1, assinatura_ok: true, received_at: '2026-10-28T12:00:00Z', processed_at: '2026-10-28T12:00:01Z', last_error: null },
+    { id: 22, topic: 'order.updated', recurso: 'order', external_resource_id: '8802', status: 'erro', attempts: 3, assinatura_ok: true, received_at: '2026-10-28T12:05:00Z', processed_at: null, last_error: 'A loja respondeu 502.' },
+  ],
+};
+
+const DIVERGENCIAS = {
+  total: 2,
+  por_categoria: { CATALOGO: 1, PRECO: 1, ESTOQUE: 0, PEDIDOS: 0 },
+  divergencias: [
+    { id: 31, categoria: 'CATALOGO', tipo: 'PRODUTO_SEM_VINCULO', classificacao: 'AUTOMATICA', produto_id: 7, sku: 'BB-7', pedido_ref: null, detalhe: 'Produto visível no site sem vínculo nesta loja.', status: 'ABERTA', detectada_em: '2026-10-28T12:00:00Z' },
+    { id: 32, categoria: 'PRECO', tipo: 'PRECO_AUSENTE', classificacao: 'HUMANA', produto_id: 8, sku: 'BB-8', pedido_ref: null, detalhe: 'O anúncio está sem preço na loja — republicar exige decisão humana.', status: 'ABERTA', detectada_em: '2026-10-28T12:00:00Z' },
+  ],
+};
+
+function rota(respostas: { eventos?: unknown; lojas?: unknown; webhooks?: unknown; divergencias?: unknown } = {}) {
   return async (caminho: string) => {
     const alvo = String(caminho);
+    if (alvo.includes('/webhooks')) {
+      const r = respostas.webhooks ?? WEBHOOKS;
+      if (r instanceof Error) throw r;
+      return r;
+    }
+    if (alvo.includes('/divergencias')) {
+      const r = respostas.divergencias ?? DIVERGENCIAS;
+      if (r instanceof Error) throw r;
+      return r;
+    }
     if (alvo.includes('/commerce/woocommerce/lojas')) {
       const r = respostas.lojas ?? LOJAS;
       if (r instanceof Error) throw r;
@@ -152,5 +181,34 @@ describe('Commerce — painel WooCommerce multi-loja (dentro de /commerce/fila)'
     expect(await screen.findByText('Apenas gerentes e administradores operam as lojas.')).toBeInTheDocument();
     // A fila continua renderizando o próprio dado.
     expect(await screen.findByText('pedido.convertido')).toBeInTheDocument();
+  });
+});
+
+describe('Commerce — webhooks e divergências no painel multi-loja', () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+  });
+
+  it('mostra estado dos webhooks, último evento, pendentes e falhas por loja', async () => {
+    fetchMock.mockImplementation(rota());
+    renderPagina();
+    await screen.findByText('Varejo (brobond.com.br)');
+    expect(await screen.findAllByText('Webhooks')).not.toHaveLength(0);
+    expect(screen.getAllByText('order.created').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Habilitado').length).toBeGreaterThan(0);
+  });
+
+  it('lista divergências por categoria com a classificação (automática × humana)', async () => {
+    fetchMock.mockImplementation(rota());
+    renderPagina();
+    await screen.findByText('Varejo (brobond.com.br)');
+    expect((await screen.findAllByText(/Produto visível no site sem vínculo/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('requer análise humana').length).toBeGreaterThan(0);
+  });
+
+  it('falha ao carregar webhooks/divergências não derruba o painel das lojas', async () => {
+    fetchMock.mockImplementation(rota({ webhooks: new ApiError(500, 'Inbox fora do ar.'), divergencias: new ApiError(500, 'Divergências fora do ar.') }));
+    renderPagina();
+    expect(await screen.findByText('Varejo (brobond.com.br)')).toBeInTheDocument();
   });
 });

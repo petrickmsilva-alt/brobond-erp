@@ -49,7 +49,7 @@ type LinhaWoo = {
   total?: string;
   meta_data?: { key?: string; value?: unknown }[];
 };
-type PedidoWoo = {
+export type PedidoWoo = {
   id?: number;
   number?: string;
   status?: string;
@@ -71,6 +71,22 @@ export type ResultadoPedidosLoja = {
   pendentes: { pedido: string; motivo: string; itens: string[] }[];
   total_encontrados: number;
   erro?: string;
+};
+
+/** Desfecho da importação de UM pedido (usado pelo lote e pelo webhook). */
+export type DesfechoPedido =
+  | { tipo: 'importado'; pedido: string; venda_id: number; total: number; pendentes: string[] }
+  | { tipo: 'ignorado'; pedido: string }
+  | { tipo: 'pendente'; pedido: string; motivo: string; itens: string[] };
+
+/** Índices do ERP carregados uma vez por operação (SKU → produto, código → tamanho). */
+export type ContextoImportacao = {
+  empresaId: number;
+  escopo: EscopoEmpresa;
+  produtoPorSku: Map<string, Row>;
+  tamanhoPorCodigo: Map<string, Row>;
+  primeiroTamanhoComSaldo: (produtoId: number) => number | null;
+  tamanhoFallback: number;
 };
 
 /** Referência lógica imutável do pedido da loja. */
@@ -152,6 +168,192 @@ async function buscarPedidos(
 }
 
 /**
+ * Confirma UM pedido na API oficial da loja. O webhook é NOTIFICAÇÃO, não
+ * fonte de verdade: antes de aplicar qualquer atualização sensível, o ERP lê o
+ * estado REAL do pedido na loja. `null` quando o pedido não existe lá.
+ */
+export async function buscarPedidoDaLoja(cfg: ConfigStore, pedidoId: number | string): Promise<PedidoWoo | null> {
+  const id = String(pedidoId).trim();
+  if (!id) return null;
+  const resposta = await wooStoreFetch<PedidoWoo>(cfg, `/orders/${encodeURIComponent(id)}`);
+  if (ehDryRun(resposta)) return null;
+  return resposta && typeof resposta === 'object' && !Array.isArray(resposta) ? resposta : null;
+}
+
+/**
+ * Carrega os índices do ERP uma vez por operação (SKU → produto, código →
+ * tamanho, primeiro tamanho com saldo). Duplicidade de SKU ou de código de
+ * tamanho BLOQUEIA a importação — associar o pedido ao produto errado é pior
+ * que não importar.
+ */
+export async function carregarContextoImportacao(empresaId: number): Promise<ContextoImportacao> {
+  const s = getStore();
+  const [produtosR, tamanhosR, estoquesR] = await Promise.all([
+    s.list(R_PRODUTOS(), { page: 1, pageSize: 20000, filter: { empresa_id: empresaId } }),
+    s.list(R_TAMANHOS(), { page: 1, pageSize: 20000, sort: 'ordem', dir: 'asc' }),
+    s.list(R_ESTOQUES(), { page: 1, pageSize: 20000, filter: { empresa_id: empresaId } }),
+  ]);
+  const produtoPorSku = new Map<string, Row>();
+  for (const p of produtosR.rows) {
+    const sku = String(p.sku || '').trim().toUpperCase();
+    if (sku && produtoPorSku.has(sku)) {
+      throw new HttpError(409, 'Há SKUs duplicados nesta empresa. A importação WooCommerce foi bloqueada para não associar o pedido ao produto errado.');
+    }
+    if (sku) produtoPorSku.set(sku, p);
+  }
+  const tamanhoPorCodigo = new Map<string, Row>();
+  for (const t of tamanhosR.rows) {
+    const codigo = String(t.codigo || '').trim().toUpperCase();
+    if (codigo && tamanhoPorCodigo.has(codigo)) throw new HttpError(409, 'Há códigos de tamanho duplicados. A importação WooCommerce foi bloqueada.');
+    if (codigo) tamanhoPorCodigo.set(codigo, t);
+  }
+  const primeiroTamanhoComSaldo = (produtoId: number): number | null => {
+    const comSaldo = estoquesR.rows.find((e) => Number(e.produto_id) === produtoId && Number(e.quantidade || 0) > 0);
+    return comSaldo ? Number(comSaldo.tamanho_id) : null;
+  };
+  return {
+    empresaId,
+    escopo: escopoDeSistema(empresaId),
+    produtoPorSku,
+    tamanhoPorCodigo,
+    primeiroTamanhoComSaldo,
+    tamanhoFallback: Number(tamanhosR.rows[0]?.id ?? 0),
+  };
+}
+
+/**
+ * Importa UM pedido da loja. Extraído do lote para que o WEBHOOK reusa
+ * exatamente a mesma lógica — o webhook não reimplementa a importação, ele
+ * confirma o pedido na API oficial e chama isto.
+ *
+ * Idempotente: pedido já importado (referência nova ou legada) volta
+ * `ignorado`; corrida com o índice único parcial também vira `ignorado`.
+ */
+export async function importarUmPedido(cfg: ConfigStore, ctx: ContextoImportacao, pedido: PedidoWoo): Promise<DesfechoPedido> {
+  const s = getStore();
+  const empresaId = ctx.empresaId;
+  const canal = cfg.canal;
+  const numero = String(pedido.number ?? pedido.id ?? '').trim();
+  const referencia = referenciaPedido(cfg.store_key, pedido.id ?? numero);
+  const legada = referenciaLegada(pedido.id ?? numero);
+  const jaExiste = await vendaExistente(empresaId, referencia, legada);
+  if (jaExiste) {
+    // Pedido já importado. Reimportar não duplica e NÃO altera pagamento,
+    // status ou valores — mudanças de status externas são apenas reportadas.
+    return { tipo: 'ignorado', pedido: numero || referencia };
+  }
+
+  const itensResolvidos: { produto: Row; tamanhoId: number; quantidade: number; preco: number }[] = [];
+  const itensPendentes: string[] = [];
+  for (const linha of pedido.line_items || []) {
+    const sku = String(linha.sku || '').trim().toUpperCase();
+    const produto = sku ? ctx.produtoPorSku.get(sku) : undefined;
+    if (!produto) {
+      itensPendentes.push(`${rotuloLinha(linha)}${sku ? ` (SKU ${sku})` : ' (sem SKU)'}`);
+      continue;
+    }
+    const pedidoTamanho = extrairTamanho(linha);
+    const tamanho = pedidoTamanho ? ctx.tamanhoPorCodigo.get(pedidoTamanho) : undefined;
+    const tamanhoId = tamanho ? Number(tamanho.id) : (ctx.primeiroTamanhoComSaldo(Number(produto.id)) ?? ctx.tamanhoFallback);
+    if (!tamanhoId) {
+      itensPendentes.push(`${rotuloLinha(linha)} (sem tamanho no ERP)`);
+      continue;
+    }
+    await validarTamanhoNaGrade(Number(produto.id), tamanhoId, undefined, ctx.escopo);
+    const quantidade = Math.max(1, Math.trunc(Number(linha.quantity) || 1));
+    const precoInformado = Number(linha.price);
+    const totalLinha = Number(String(linha.total ?? '').replace(',', '.'));
+    const preco =
+      Number.isFinite(precoInformado) && precoInformado > 0
+        ? precoInformado
+        : Number.isFinite(totalLinha) && totalLinha > 0
+          ? Math.round((totalLinha / quantidade) * 100) / 100
+          : Number(canal === 'site_atacado' ? produto.preco_atacado || produto.preco_venda || 0 : produto.preco_venda || 0);
+    itensResolvidos.push({ produto, tamanhoId, quantidade, preco });
+  }
+
+  if (!itensResolvidos.length) {
+    return { tipo: 'pendente', pedido: numero || referencia, motivo: 'nenhum item com SKU cadastrado no ERP', itens: itensPendentes };
+  }
+
+  try {
+    const criado = await s.transaction(async (tx) => {
+      const billing = pedido.billing || {};
+      const email = String(billing.email || '').trim().toLowerCase();
+      const nome = [billing.first_name, billing.last_name].filter(Boolean).join(' ').trim() || email || `Cliente loja ${numero || referencia}`;
+      let cliente = email ? await s.findOneWhere(R_CLIENTES(), { email, empresa_id: empresaId }, tx) : null;
+      if (!cliente) cliente = await s.findOneWhere(R_CLIENTES(), { nome, empresa_id: empresaId }, tx);
+      if (!cliente) {
+        cliente = await s.insert(
+          R_CLIENTES(),
+          {
+            empresa_id: empresaId,
+            nome,
+            email: email || null,
+            telefone: billing.phone ? String(billing.phone) : null,
+            tipo: canal === 'site_atacado' ? 'atacadista' : 'varejo',
+            ativo: true,
+          },
+          tx
+        );
+      }
+      const venda = await s.insert(
+        R_VENDAS(),
+        {
+          empresa_id: empresaId,
+          cliente_id: Number(cliente.id),
+          data: String(pedido.date_created || new Date().toISOString()).slice(0, 10),
+          // "Cotação / Pedido do site": entra para conferência, não baixa estoque.
+          status: 'cotacao',
+          canal_venda: canal,
+          pedido_cliente: referencia,
+          pedido_externo_canal: `WOOCOMMERCE_${cfg.store_key}`,
+          pedido_externo_id: String(pedido.id ?? numero),
+          frete: Math.max(0, Number(pedido.shipping_total || 0)),
+          desconto: Math.max(0, Number(pedido.discount_total || 0)),
+          condicao_pagamento: pedido.payment_method_title ? String(pedido.payment_method_title) : null,
+          fin_status: 'a_receber',
+          observacoes: [
+            `Pedido importado da loja ${cfg.store_key} (${cfg.url}) — nº ${numero || referencia}`,
+            pedido.customer_note ? `Observação do cliente: ${String(pedido.customer_note).trim()}` : null,
+            itensPendentes.length ? `Itens NÃO importados (conferir cadastro de SKU): ${itensPendentes.join('; ')}` : null,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        },
+        tx
+      );
+      for (const item of itensResolvidos) {
+        await s.insert(
+          R_ITENS(),
+          {
+            empresa_id: empresaId,
+            venda_id: Number(venda.id),
+            produto_id: Number(item.produto.id),
+            tamanho_id: item.tamanhoId,
+            quantidade: item.quantidade,
+            preco_unitario: item.preco,
+            desconto_pct: 0,
+            subtotal: Math.round(item.quantidade * item.preco * 100) / 100,
+          },
+          tx
+        );
+      }
+      const total = await recalcularTotal('venda', Number(venda.id), tx);
+      return { vendaId: Number(venda.id), total };
+    });
+    return { tipo: 'importado', pedido: numero || referencia, venda_id: criado.vendaId, total: criado.total, pendentes: itensPendentes };
+  } catch (e) {
+    // Corrida: duas importações simultâneas gravaram a MESMA referência e o
+    // índice único parcial arbitrou. Idempotência manda tratar como já
+    // importado, nunca como erro.
+    const pg = e as { code?: string; cause?: { code?: string }; message?: string };
+    if (pg?.code === '23505' || pg?.cause?.code === '23505') return { tipo: 'ignorado', pedido: numero || referencia };
+    return { tipo: 'pendente', pedido: numero || referencia, motivo: pg?.message || 'falha ao gravar o pedido', itens: itensPendentes };
+  }
+}
+
+/**
  * Importa os pedidos de UMA loja.
  *
  * `dias` define a janela da primeira carga; `incremental` usa a água-marca da
@@ -179,161 +381,22 @@ export async function importarPedidosDaLoja(
     return { store_key: cfg.store_key, ok: true, importados: [], ignorados: [], pendentes: [], total_encontrados: 0 };
   }
 
-  const [produtosR, tamanhosR, estoquesR] = await Promise.all([
-    s.list(R_PRODUTOS(), { page: 1, pageSize: 20000, filter: { empresa_id: empresaId } }),
-    s.list(R_TAMANHOS(), { page: 1, pageSize: 20000, sort: 'ordem', dir: 'asc' }),
-    s.list(R_ESTOQUES(), { page: 1, pageSize: 20000, filter: { empresa_id: empresaId } }),
-  ]);
-  const produtoPorSku = new Map<string, Row>();
-  for (const p of produtosR.rows) {
-    const sku = String(p.sku || '').trim().toUpperCase();
-    if (sku && produtoPorSku.has(sku)) {
-      throw new HttpError(409, 'Há SKUs duplicados nesta empresa. A importação WooCommerce foi bloqueada para não associar o pedido ao produto errado.');
-    }
-    if (sku) produtoPorSku.set(sku, p);
-  }
-  const tamanhoPorCodigo = new Map<string, Row>();
-  for (const t of tamanhosR.rows) {
-    const codigo = String(t.codigo || '').trim().toUpperCase();
-    if (codigo && tamanhoPorCodigo.has(codigo)) throw new HttpError(409, 'Há códigos de tamanho duplicados. A importação WooCommerce foi bloqueada.');
-    if (codigo) tamanhoPorCodigo.set(codigo, t);
-  }
-  const primeiroTamanhoComSaldo = (produtoId: number): number | null => {
-    const comSaldo = estoquesR.rows.find((e) => Number(e.produto_id) === produtoId && Number(e.quantidade || 0) > 0);
-    return comSaldo ? Number(comSaldo.tamanho_id) : null;
-  };
-
+  const contexto = await carregarContextoImportacao(empresaId);
   const importados: { pedido: string; venda_id: number; total: number }[] = [];
   const ignorados: string[] = [];
   const pendentes: { pedido: string; motivo: string; itens: string[] }[] = [];
-  const canal = cfg.canal;
 
   for (const pedido of pedidos) {
-    const numero = String(pedido.number ?? pedido.id ?? '').trim();
-    const referencia = referenciaPedido(cfg.store_key, pedido.id ?? numero);
-    const legada = referenciaLegada(pedido.id ?? numero);
-    const jaExiste = await vendaExistente(empresaId, referencia, legada);
-    if (jaExiste) {
-      // Pedido já importado. Reimportar não duplica e NÃO altera pagamento,
-      // status ou valores — mudanças de status externas são apenas reportadas.
-      ignorados.push(numero || referencia);
-      continue;
-    }
-
-    const itensResolvidos: { produto: Row; tamanhoId: number; quantidade: number; preco: number }[] = [];
-    const itensPendentes: string[] = [];
-    for (const linha of pedido.line_items || []) {
-      const sku = String(linha.sku || '').trim().toUpperCase();
-      const produto = sku ? produtoPorSku.get(sku) : undefined;
-      if (!produto) {
-        itensPendentes.push(`${rotuloLinha(linha)}${sku ? ` (SKU ${sku})` : ' (sem SKU)'}`);
-        continue;
+    const desfecho = await importarUmPedido(cfg, contexto, pedido);
+    if (desfecho.tipo === 'importado') {
+      importados.push({ pedido: desfecho.pedido, venda_id: desfecho.venda_id, total: desfecho.total });
+      if (desfecho.pendentes.length) {
+        pendentes.push({ pedido: desfecho.pedido, motivo: 'itens sem SKU no ERP ficaram de fora', itens: desfecho.pendentes });
       }
-      const pedidoTamanho = extrairTamanho(linha);
-      const tamanho = pedidoTamanho ? tamanhoPorCodigo.get(pedidoTamanho) : undefined;
-      const tamanhoId = tamanho ? Number(tamanho.id) : (primeiroTamanhoComSaldo(Number(produto.id)) ?? Number(tamanhosR.rows[0]?.id ?? 0));
-      if (!tamanhoId) {
-        itensPendentes.push(`${rotuloLinha(linha)} (sem tamanho no ERP)`);
-        continue;
-      }
-      await validarTamanhoNaGrade(Number(produto.id), tamanhoId, undefined, escopo);
-      const quantidade = Math.max(1, Math.trunc(Number(linha.quantity) || 1));
-      const precoInformado = Number(linha.price);
-      const totalLinha = Number(String(linha.total ?? '').replace(',', '.'));
-      const preco =
-        Number.isFinite(precoInformado) && precoInformado > 0
-          ? precoInformado
-          : Number.isFinite(totalLinha) && totalLinha > 0
-            ? Math.round((totalLinha / quantidade) * 100) / 100
-            : Number(canal === 'site_atacado' ? produto.preco_atacado || produto.preco_venda || 0 : produto.preco_venda || 0);
-      itensResolvidos.push({ produto, tamanhoId, quantidade, preco });
-    }
-
-    if (!itensResolvidos.length) {
-      pendentes.push({ pedido: numero || referencia, motivo: 'nenhum item com SKU cadastrado no ERP', itens: itensPendentes });
-      continue;
-    }
-
-    try {
-      const criado = await s.transaction(async (tx) => {
-        const billing = pedido.billing || {};
-        const email = String(billing.email || '').trim().toLowerCase();
-        const nome = [billing.first_name, billing.last_name].filter(Boolean).join(' ').trim() || email || `Cliente loja ${numero || referencia}`;
-        let cliente = email ? await s.findOneWhere(R_CLIENTES(), { email, empresa_id: empresaId }, tx) : null;
-        if (!cliente) cliente = await s.findOneWhere(R_CLIENTES(), { nome, empresa_id: empresaId }, tx);
-        if (!cliente) {
-          cliente = await s.insert(
-            R_CLIENTES(),
-            {
-              empresa_id: empresaId,
-              nome,
-              email: email || null,
-              telefone: billing.phone ? String(billing.phone) : null,
-              tipo: canal === 'site_atacado' ? 'atacadista' : 'varejo',
-              ativo: true,
-            },
-            tx
-          );
-        }
-        const venda = await s.insert(
-          R_VENDAS(),
-          {
-            empresa_id: empresaId,
-            cliente_id: Number(cliente.id),
-            data: String(pedido.date_created || new Date().toISOString()).slice(0, 10),
-            // "Cotação / Pedido do site": entra para conferência, não baixa estoque.
-            status: 'cotacao',
-            canal_venda: canal,
-            pedido_cliente: referencia,
-            pedido_externo_canal: `WOOCOMMERCE_${cfg.store_key}`,
-            pedido_externo_id: String(pedido.id ?? numero),
-            frete: Math.max(0, Number(pedido.shipping_total || 0)),
-            desconto: Math.max(0, Number(pedido.discount_total || 0)),
-            condicao_pagamento: pedido.payment_method_title ? String(pedido.payment_method_title) : null,
-            fin_status: 'a_receber',
-            observacoes: [
-              `Pedido importado da loja ${cfg.store_key} (${cfg.url}) — nº ${numero || referencia}`,
-              pedido.customer_note ? `Observação do cliente: ${String(pedido.customer_note).trim()}` : null,
-              itensPendentes.length ? `Itens NÃO importados (conferir cadastro de SKU): ${itensPendentes.join('; ')}` : null,
-            ]
-              .filter(Boolean)
-              .join('\n'),
-          },
-          tx
-        );
-        for (const item of itensResolvidos) {
-          await s.insert(
-            R_ITENS(),
-            {
-              empresa_id: empresaId,
-              venda_id: Number(venda.id),
-              produto_id: Number(item.produto.id),
-              tamanho_id: item.tamanhoId,
-              quantidade: item.quantidade,
-              preco_unitario: item.preco,
-              desconto_pct: 0,
-              subtotal: Math.round(item.quantidade * item.preco * 100) / 100,
-            },
-            tx
-          );
-        }
-        const total = await recalcularTotal('venda', Number(venda.id), tx);
-        return { vendaId: Number(venda.id), total };
-      });
-      importados.push({ pedido: numero || referencia, venda_id: criado.vendaId, total: criado.total });
-      if (itensPendentes.length) {
-        pendentes.push({ pedido: numero || referencia, motivo: 'itens sem SKU no ERP ficaram de fora', itens: itensPendentes });
-      }
-    } catch (e) {
-      // Corrida: duas importações simultâneas gravaram a MESMA referência e o
-      // índice único parcial arbitrou. Idempotência manda tratar como já
-      // importado, nunca como erro.
-      const pg = e as { code?: string; cause?: { code?: string }; message?: string };
-      if (pg?.code === '23505' || pg?.cause?.code === '23505') {
-        ignorados.push(numero || referencia);
-        continue;
-      }
-      pendentes.push({ pedido: numero || referencia, motivo: pg?.message || 'falha ao gravar o pedido', itens: itensPendentes });
+    } else if (desfecho.tipo === 'ignorado') {
+      ignorados.push(desfecho.pedido);
+    } else {
+      pendentes.push({ pedido: desfecho.pedido, motivo: desfecho.motivo, itens: desfecho.itens });
     }
   }
 
